@@ -32,6 +32,10 @@ pub struct PendingMessage {
     pub reply_to: Option<MessageId>,
     pub created_at: i64,
     pub failed: Option<String>,
+    /// Images being uploaded with it: (file name, bytes) for the preview.
+    pub files: Vec<(String, Arc<Vec<u8>>)>,
+    /// "Uploading 1 of 2…" while the images go up.
+    pub progress: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -81,6 +85,10 @@ pub struct ServerView {
     pub mentions: HashMap<ChannelId, u32>,
     pub last_invite: Option<String>,
     pub rtt_ms: u32,
+    /// Custom roles, highest first.
+    pub roles: Vec<RoleDef>,
+    /// Features the server has beyond protocol v1 (roles, files, avatars).
+    pub features: Vec<String>,
 }
 
 impl ServerView {
@@ -101,7 +109,55 @@ impl ServerView {
             mentions: HashMap::new(),
             last_invite: None,
             rtt_ms: 0,
+            roles: Vec::new(),
+            features: Vec::new(),
         }
+    }
+
+    pub fn has(&self, feature: &str) -> bool {
+        self.features.iter().any(|f| f == feature)
+    }
+
+    pub fn role(&self, id: RoleId) -> Option<&RoleDef> {
+        self.roles.iter().find(|r| r.id == id)
+    }
+
+    /// A member's roles, highest first.
+    pub fn roles_of(&self, uid: &str) -> Vec<&RoleDef> {
+        let Some(m) = self.members.get(uid) else { return Vec::new() };
+        self.roles.iter().filter(|r| m.roles.contains(&r.id)).collect()
+    }
+
+    /// The color a member's name shows in: their highest colored role's.
+    pub fn name_color(&self, uid: &str) -> Option<u32> {
+        self.roles_of(uid).into_iter().find(|r| r.color != 0).map(|r| r.color)
+    }
+
+    /// What I may do here (see `perm`).
+    pub fn my_perms(&self) -> u64 {
+        let Some(me) = &self.me else { return 0 };
+        if me.role.is_admin() {
+            return perm::ALL;
+        }
+        self.roles.iter().filter(|r| me.roles.contains(&r.id)).fold(0, |a, r| a | r.perms)
+    }
+
+    pub fn can(&self, p: u64) -> bool {
+        self.my_perms() & p == p
+    }
+
+    /// Where someone stands (owner > admins > custom roles by position > no roles).
+    pub fn rank(&self, uid: &str) -> i64 {
+        match self.members.get(uid).map(|m| m.role) {
+            Some(Role::Owner) => i64::MAX,
+            Some(Role::Admin) => i64::MAX - 1,
+            _ => self.roles_of(uid).first().map(|r| r.position as i64).unwrap_or(i64::MIN),
+        }
+    }
+
+    /// Whether I can hand out or take away this role (it's below my highest).
+    pub fn can_manage_role(&self, r: &RoleDef) -> bool {
+        self.can(perm::MANAGE_ROLES) && (self.is_admin() || (r.position as i64) < self.me.as_ref().map(|m| self.rank(&m.user_id)).unwrap_or(i64::MIN))
     }
 
     pub fn member_name(&self, uid: &str) -> String {

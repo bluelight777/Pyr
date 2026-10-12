@@ -226,3 +226,56 @@ pub async fn connect_and_login(
         _ => bail!("unexpected reply to login"),
     }
 }
+
+// ------------------------------------------------------------------ file streams
+
+/// Download a file (an attachment or a profile picture) from the server.
+pub async fn file_get(conn: &quinn::Connection, id: &str) -> Result<(String, Vec<u8>)> {
+    use ingle_proto::control::{FILE_PREAMBLE, FileReply, FileRequest, MAX_ATTACHMENT_BYTES};
+    let (mut send, mut recv) = conn.open_bi().await?;
+    send.write_all(FILE_PREAMBLE).await?;
+    send.write_all(&framing::encode(&FileRequest::Get { id: id.to_string() })).await?;
+    send.finish()?;
+    let reply: FileReply = tokio::time::timeout(Duration::from_secs(20), read_frame(&mut recv))
+        .await
+        .map_err(|_| anyhow!("timed out"))??
+        .ok_or_else(|| anyhow!("no reply"))?;
+    if !reply.ok {
+        bail!("{}", reply.error);
+    }
+    if reply.size > MAX_ATTACHMENT_BYTES {
+        bail!("file too large");
+    }
+    let bytes = tokio::time::timeout(Duration::from_secs(120), recv.read_to_end(reply.size as usize + 1))
+        .await
+        .map_err(|_| anyhow!("download timed out"))??;
+    if bytes.len() as u64 != reply.size {
+        bail!("download cut short");
+    }
+    Ok((reply.mime, bytes))
+}
+
+/// Upload an image; returns its id on the server.
+pub async fn file_put(
+    conn: &quinn::Connection,
+    kind: ingle_proto::control::FileKind,
+    name: &str,
+    mime: &str,
+    bytes: &[u8],
+) -> Result<String> {
+    use ingle_proto::control::{FILE_PREAMBLE, FileReply, FileRequest};
+    let (mut send, mut recv) = conn.open_bi().await?;
+    send.write_all(FILE_PREAMBLE).await?;
+    let req = FileRequest::Put { kind, name: name.to_string(), mime: mime.to_string(), size: bytes.len() as u64 };
+    send.write_all(&framing::encode(&req)).await?;
+    send.write_all(bytes).await?;
+    send.finish()?;
+    let reply: FileReply = tokio::time::timeout(Duration::from_secs(300), read_frame(&mut recv))
+        .await
+        .map_err(|_| anyhow!("upload timed out"))??
+        .ok_or_else(|| anyhow!("the server didn't answer the upload"))?;
+    if !reply.ok {
+        bail!("{}", reply.error);
+    }
+    Ok(reply.id)
+}

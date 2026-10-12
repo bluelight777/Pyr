@@ -151,7 +151,17 @@ pub async fn start(cfg: ServerConfig) -> Result<RunningServer> {
     let public_host = configured.clone().unwrap_or_else(|| {
         if local_addr.ip().is_loopback() { local_addr.ip().to_string() } else { detect_lan_ip().unwrap_or_else(|| "127.0.0.1".into()) }
     });
-    let hub = Hub::new(db, tls_id.fingerprint, public_host, local_addr.port());
+    let hub = Hub::new(db, tls_id.fingerprint, public_host, local_addr.port(), cfg.data_dir.join("files"));
+
+    // Attachments that were uploaded but never sent, and unused profile pictures.
+    let h = hub.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+            let ids = h.db.take_unused_files(60 * 60 * 1000);
+            h.wipe_files(&ids);
+        }
+    });
 
     let ep = endpoint.clone();
     let h = hub.clone();

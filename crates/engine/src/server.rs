@@ -167,6 +167,7 @@ async fn session(
 ) -> SessionEnd {
     let net::LoggedIn { conn, mut send, mut recv, ready } = li;
     apply_ready(shared, key, ready);
+    crate::sync_avatar(shared.clone(), key.to_string());
     {
         // Membership is established; the invite is no longer needed.
         let mut cfg = shared.config.lock();
@@ -257,7 +258,8 @@ fn sort_channels(v: &mut [Channel]) {
 }
 
 fn apply_ready(shared: &Shared, key: &str, ready: Event) {
-    let Event::Ready { me, server, mut channels, members, voice } = ready else { return };
+    let Event::Ready { me, server, mut channels, members, voice, mut roles, features } = ready else { return };
+    roles.sort_by_key(|r| (std::cmp::Reverse(r.position), r.id));
     sort_channels(&mut channels);
     let mut st = shared.state.write();
     let s = match st.server_mut(key) {
@@ -274,6 +276,8 @@ fn apply_ready(shared: &Shared, key: &str, ready: Event) {
     s.channels = channels;
     s.members = members.into_iter().map(|m| (m.user_id.clone(), m)).collect();
     s.voice = voice.into_iter().map(|p| (p.session, p)).collect();
+    s.roles = roles;
+    s.features = features;
     // History may have changed while we were away; reload lazily.
     for log in s.logs.values_mut() {
         log.loaded = false;
@@ -326,6 +330,13 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
             }
             Event::MessageDeleted { channel_id, message_id } => {
                 if let Some(log) = s.logs.get_mut(&channel_id) {
+                    // Drop its images from memory too.
+                    if let Some(m) = log.find(message_id) {
+                        let mut files = shared.files.lock();
+                        for a in &m.attachments {
+                            files.forget(&a.id);
+                        }
+                    }
                     log.remove(message_id);
                 }
             }
@@ -355,6 +366,23 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
             Event::MemberRemoved { user_id } => {
                 s.members.remove(&user_id);
             }
+            Event::RoleUpserted { role } => {
+                match s.roles.iter_mut().find(|r| r.id == role.id) {
+                    Some(r) => *r = role,
+                    None => s.roles.push(role),
+                }
+                s.roles.sort_by_key(|r| (std::cmp::Reverse(r.position), r.id));
+            }
+            Event::RoleDeleted { role_id } => {
+                s.roles.retain(|r| r.id != role_id);
+                for m in s.members.values_mut() {
+                    m.roles.retain(|r| *r != role_id);
+                }
+                if let Some(me) = s.me.as_mut() {
+                    me.roles.retain(|r| *r != role_id);
+                }
+            }
+            Event::Unknown => {}
             Event::ServerUpdated { server } => {
                 s.name = server.name.clone();
                 s.info = server;

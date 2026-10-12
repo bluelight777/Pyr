@@ -8,7 +8,7 @@ use eframe::egui::{self, Align, Color32, CornerRadius, Layout, Rect, RichText, S
 use ingle_engine::Engine;
 use ingle_engine::config::Settings;
 use ingle_engine::state::{AppState, ConnStatus, ServerView, VideoKey};
-use ingle_proto::control::{ChannelId, ChannelKind, MessageId, Role, SessionId};
+use ingle_proto::control::{Attachment, ChannelId, ChannelKind, MessageId, Role, RoleId, SessionId, perm};
 
 use crate::{icons, theme};
 
@@ -20,7 +20,7 @@ pub enum Act {
     OpenJoin,
     RemoveServer(String),
     Retry(String),
-    Send { key: String, channel: ChannelId, text: String, reply_to: Option<MessageId> },
+    Send { key: String, channel: ChannelId, text: String, reply_to: Option<MessageId>, files: Vec<(String, Vec<u8>)> },
     Edit { key: String, id: MessageId, text: String },
     Delete { key: String, id: MessageId },
     React { key: String, id: MessageId, emoji: String, add: bool },
@@ -50,6 +50,24 @@ pub enum Act {
     RefreshDevices,
     DiscardPending { key: String, channel: ChannelId, nonce: String },
     Copy(String),
+    CreateRole { key: String, name: String, color: u32, perms: u64, hoist: bool },
+    UpdateRole { key: String, id: RoleId, name: Option<String>, color: Option<u32>, perms: Option<u64>, hoist: Option<bool>, shift: i32 },
+    DeleteRole { key: String, id: RoleId },
+    SetMemberRoles { key: String, uid: String, roles: Vec<RoleId> },
+    /// A new profile picture (any image; it's cropped and resized), or none.
+    SetAvatar(Option<Vec<u8>>),
+    SaveImage { name: String, bytes: Arc<Vec<u8>> },
+    Toast(String, bool),
+}
+
+/// The role being edited in server settings.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RoleEdit {
+    pub id: RoleId,
+    pub name: String,
+    pub color: [u8; 3],
+    pub perms: u64,
+    pub hoist: bool,
 }
 
 #[derive(Clone)]
@@ -63,7 +81,8 @@ pub enum Dialog {
     CreateChannel { key: String, kind: ChannelKind, name: String },
     EditChannel { key: String, channel: ChannelId, name: String, topic: String },
     Invite { key: String },
-    ServerSettings { key: String, name: String },
+    /// Tab 0: overview; 1: roles.
+    ServerSettings { key: String, name: String, tab: u8 },
     LeaveServer { key: String, name: String },
     Settings { tab: u8 },
     ScreenPicker { selected: Option<String> },
@@ -94,6 +113,13 @@ pub struct UiState {
     pub name_draft: String,
     pub welcome_name: String,
     pub create: Option<crate::create::CreateState>,
+    /// Images waiting to be sent, per channel: (file name, bytes).
+    pub attach: HashMap<(String, ChannelId), Vec<(String, Vec<u8>)>>,
+    /// An image open in the full-size viewer: (server key, the image).
+    pub viewer: Option<(String, Attachment)>,
+    pub role_edit: Option<RoleEdit>,
+    /// Ctrl+V was down last frame (to catch an image paste once).
+    pub paste_down: bool,
 }
 
 pub struct IngleApp {
@@ -111,6 +137,8 @@ pub struct IngleApp {
     _tray: Option<crate::tray::Tray>,
     /// Showing the one-time note about the close button hiding Ingle to the tray.
     pub tray_note: bool,
+    /// Decoded images and profile pictures.
+    pub images: crate::images::Images,
     pub updater: crate::update::Updater,
     /// The update we last told the person about (pinged once per version).
     update_seen: Option<ingle_proto::release::Manifest>,
@@ -139,6 +167,7 @@ impl IngleApp {
             initial_join,
             _tray: tray,
             tray_note: false,
+            images: crate::images::Images::default(),
             updater,
             update_seen: None,
             resume,
@@ -174,7 +203,7 @@ impl IngleApp {
                 }
             }
             Act::Retry(k) => e.retry_server(&k),
-            Act::Send { key, channel, text, reply_to } => e.send_message(&key, channel, &text, reply_to),
+            Act::Send { key, channel, text, reply_to, files } => e.send_message_with(&key, channel, &text, reply_to, files),
             Act::Edit { key, id, text } => e.edit_message(&key, id, &text),
             Act::Delete { key, id } => e.delete_message(&key, id),
             Act::React { key, id, emoji, add } => e.react(&key, id, &emoji, add),
@@ -228,7 +257,42 @@ impl IngleApp {
             Act::RefreshDevices => e.refresh_devices(),
             Act::DiscardPending { key, channel, nonce } => e.discard_pending(&key, channel, &nonce),
             Act::Copy(text) => ctx.copy_text(text),
+            Act::CreateRole { key, name, color, perms, hoist } => e.create_role(&key, &name, color, perms, hoist),
+            Act::UpdateRole { key, id, name, color, perms, hoist, shift } => e.update_role(&key, id, name, color, perms, hoist, shift),
+            Act::DeleteRole { key, id } => e.delete_role(&key, id),
+            Act::SetMemberRoles { key, uid, roles } => e.set_member_roles(&key, &uid, roles),
+            Act::SetAvatar(bytes) => match bytes.map(|b| crate::images::make_avatar(&b)).transpose() {
+                Ok(png) => e.set_avatar(png),
+                Err(err) => self.toast(err, true),
+            },
+            Act::SaveImage { name, bytes } => {
+                if let Err(err) = crate::images::save_as(&name, &bytes) {
+                    self.toast(format!("Couldn't save the image: {err}"), true);
+                }
+            }
+            Act::Toast(text, error) => self.toast(text, error),
         }
+    }
+
+    fn toast(&self, text: impl Into<String>, error: bool) {
+        self.engine.shared.state.write().toast(text, error);
+    }
+
+    /// Someone's profile picture as a texture, if they have one and it's loaded.
+    pub fn face(&mut self, ctx: &egui::Context, s: &ServerView, uid: &str) -> Option<egui::TextureId> {
+        let id = s.members.get(uid)?.avatar.clone()?;
+        let bytes = match self.engine.file(&s.key, &id) {
+            ingle_engine::files::FileState::Ready(b) => Some(b),
+            _ => None,
+        };
+        self.images.get(ctx, &format!("av:{id}"), bytes, 256).frame(0.0).map(|f| f.0)
+    }
+
+    /// My own profile picture (from this PC), as a texture.
+    pub fn my_face(&mut self, ctx: &egui::Context) -> Option<egui::TextureId> {
+        let bytes = self.engine.my_avatar()?;
+        let key = format!("av:me:{}", ingle_proto::release::sha256_hex(&bytes));
+        self.images.get(ctx, &key, Some(Arc::new(bytes)), 256).frame(0.0).map(|f| f.0)
     }
 
     /// Upload new video frames to textures; returns the texture for a tile.
@@ -431,11 +495,27 @@ impl IngleApp {
 
 // ------------------------------------------------------------------- helpers
 
-pub fn avatar(p: &egui::Painter, center: egui::Pos2, radius: f32, uid: &str, name: &str, speaking: bool, ring_bg: Color32) {
+#[allow(clippy::too_many_arguments)]
+pub fn avatar(
+    p: &egui::Painter,
+    center: egui::Pos2,
+    radius: f32,
+    uid: &str,
+    name: &str,
+    speaking: bool,
+    ring_bg: Color32,
+    face: Option<egui::TextureId>,
+) {
     if speaking {
         p.circle_filled(center, radius + 4.0, theme::GLOW.gamma_multiply(0.25));
         p.circle_stroke(center, radius + 2.5, Stroke::new(2.5f32, theme::GLOW));
         p.circle_stroke(center, radius + 0.5, Stroke::new(1.5f32, ring_bg));
+    }
+    if let Some(tex) = face {
+        let rect = Rect::from_center_size(center, vec2(radius * 2.0, radius * 2.0));
+        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+        p.add(egui::epaint::RectShape::filled(rect, CornerRadius::same(radius.min(255.0) as u8), Color32::WHITE).with_texture(tex, uv));
+        return;
     }
     p.circle_filled(center, radius, theme::avatar_color(uid));
     let initial: String = name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_else(|| "?".into());
@@ -471,6 +551,15 @@ pub fn icon_button(
     let color = if active { theme::EMBER2 } else if resp.hovered() { theme::TEXT } else { theme::MUTED };
     draw(ui.painter(), rect.shrink(size * 0.2), color);
     resp.on_hover_text(tooltip)
+}
+
+pub fn rgb(c: u32) -> Color32 {
+    Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
+}
+
+/// A member's name color: their highest colored role's, else by owner/admin.
+pub fn name_color(s: &ServerView, uid: &str, role: Role) -> Color32 {
+    s.name_color(uid).map(rgb).unwrap_or_else(|| role_color(role))
 }
 
 pub fn role_color(role: Role) -> Color32 {
@@ -566,7 +655,48 @@ impl IngleApp {
 
         self.dialogs(ctx, st, acts);
         self.tray_note(ctx, st, acts);
+        self.viewer(ctx, acts);
+        self.drop_files(ctx, st, acts);
         self.toasts(ctx, st);
+    }
+
+    /// Images dragged onto the window go to the open channel's composer.
+    fn drop_files(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
+        let Some(server) = self.ui.server.clone().and_then(|k| st.server(&k).cloned()) else { return };
+        if !server.has(ingle_proto::control::FILES_FEATURE) {
+            return;
+        }
+        let channel = if self.ui.call_view {
+            st.call.as_ref().filter(|c| c.server_key == server.key && self.ui.call_chat_open).map(|c| c.channel_id)
+        } else {
+            self.current_channel(&server)
+        };
+        let Some(channel) = channel else { return };
+        let hovering = ctx.input(|i| !i.raw.hovered_files.is_empty());
+        if hovering {
+            let screen = ctx.content_rect();
+            egui::Area::new(egui::Id::new("drop-overlay")).order(egui::Order::Foreground).fixed_pos(screen.min).interactable(false).show(ctx, |ui| {
+                let (r, _) = ui.allocate_exact_size(screen.size(), Sense::hover());
+                ui.painter().rect_filled(r, CornerRadius::ZERO, Color32::from_black_alpha(160));
+                let name = server.channel(channel).map(|c| c.name.clone()).unwrap_or_default();
+                let b = Rect::from_center_size(r.center(), vec2(420.0, 120.0));
+                ui.painter().rect_filled(b, CornerRadius::same(14), theme::EMBER);
+                ui.painter().text(b.center() - vec2(0.0, 12.0), egui::Align2::CENTER_CENTER, "Drop images to send", theme::bold_font(20.0), Color32::from_rgb(0x1b, 0x14, 0x11));
+                ui.painter().text(b.center() + vec2(0.0, 18.0), egui::Align2::CENTER_CENTER, format!("in #{name}"), theme::font(14.0), Color32::from_rgb(0x3a, 0x22, 0x14));
+            });
+        }
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        let draft = (server.key.clone(), channel);
+        for f in dropped {
+            let item = match (&f.bytes, &f.path) {
+                (Some(b), _) => Some((f.name.clone(), b.to_vec())),
+                (None, Some(p)) => crate::images::read_files(std::slice::from_ref(p)).into_iter().next(),
+                _ => None,
+            };
+            if let Some((name, bytes)) = item {
+                crate::chat::add_attachment(&mut self.ui.attach, &draft, name, bytes, acts);
+            }
+        }
     }
 
     fn current_channel(&mut self, server: &ServerView) -> Option<ChannelId> {
@@ -642,7 +772,7 @@ impl IngleApp {
                 }
                 let name = s.name.clone();
                 let key = s.key.clone();
-                let admin = s.is_admin();
+                let admin = s.can(perm::MANAGE_SERVER) || s.can(perm::MANAGE_ROLES);
                 let resp = resp.on_hover_text(&name);
                 resp.context_menu(|ui| {
                     if ui.button("Invite people").clicked() {
@@ -651,7 +781,7 @@ impl IngleApp {
                         ui.close();
                     }
                     if admin && ui.button("Server settings").clicked() {
-                        self.ui.dialog = Some(Dialog::ServerSettings { key: key.clone(), name: name.clone() });
+                        self.ui.dialog = Some(Dialog::ServerSettings { key: key.clone(), name: name.clone(), tab: 0 });
                         ui.close();
                     }
                     if ui.button("Reconnect").clicked() {
@@ -706,8 +836,9 @@ impl IngleApp {
                             self.ui.dialog = Some(Dialog::Invite { key: s.key.clone() });
                         }
                     });
-                    if title.clicked() && s.is_admin() {
-                        self.ui.dialog = Some(Dialog::ServerSettings { key: s.key.clone(), name: s.name.clone() });
+                    if title.clicked() && (s.can(perm::MANAGE_SERVER) || s.can(perm::MANAGE_ROLES)) {
+                        let tab = if s.can(perm::MANAGE_SERVER) { 0 } else { 1 };
+                        self.ui.dialog = Some(Dialog::ServerSettings { key: s.key.clone(), name: s.name.clone(), tab });
                     }
                 });
                 let r = ui.max_rect();
@@ -731,7 +862,7 @@ impl IngleApp {
                     ui.add_space(16.0);
                     let label = if kind == ChannelKind::Text { "TEXT CHANNELS" } else { "VOICE CHANNELS" };
                     ui.label(RichText::new(label).font(theme::bold_font(11.5)).color(theme::DIM));
-                    if s.is_admin() {
+                    if s.can(perm::MANAGE_CHANNELS) {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             ui.add_space(8.0);
                             if icon_button(ui, 20.0, "Create channel", false, |p, r, c| icons::plus(p, r, c, 1.8)).clicked() {
@@ -797,7 +928,7 @@ impl IngleApp {
                         }
                     }
                     let (key, cid, cname, ctopic) = (s.key.clone(), c.id, c.name.clone(), c.topic.clone());
-                    if s.is_admin() {
+                    if s.can(perm::MANAGE_CHANNELS) {
                         resp.context_menu(|ui| {
                             if ui.button("Edit channel").clicked() {
                                 self.ui.dialog = Some(Dialog::EditChannel { key: key.clone(), channel: cid, name: cname.clone(), topic: ctopic.clone() });
@@ -819,7 +950,8 @@ impl IngleApp {
                                 ui.painter().rect_filled(r.translate(vec2(8.0, 0.0)).with_max_x(r.right()), CornerRadius::same(6), theme::HOVER);
                             }
                             let center = pos2(r.left() + 46.0, r.center().y);
-                            avatar(ui.painter(), center, 11.0, &p.user_id, &name, speaking.contains(&p.session), theme::SIDE);
+                            let face = self.face(ui.ctx(), s, &p.user_id);
+                            avatar(ui.painter(), center, 11.0, &p.user_id, &name, speaking.contains(&p.session), theme::SIDE, face);
                             let col = if speaking.contains(&p.session) { theme::TEXT } else { theme::MUTED };
                             ui.painter().text(pos2(r.left() + 64.0, r.center().y), egui::Align2::LEFT_CENTER, &name, theme::font(13.5), col);
                             let mut x = r.right() - 10.0;
@@ -841,7 +973,7 @@ impl IngleApp {
                             if p.user_id != st.my_uid {
                                 let uid = p.user_id.clone();
                                 let vol = st.user_volumes.get(&uid).copied().unwrap_or(1.0);
-                                let admin_can = s.is_admin();
+                                let admin_can = s.can(perm::KICK) && s.rank(&uid) < s.rank(&st.my_uid);
                                 let key = s.key.clone();
                                 presp.context_menu(|ui| {
                                     ui.label(RichText::new(format!("{name} volume")).color(theme::MUTED).size(12.0));
@@ -927,7 +1059,8 @@ impl IngleApp {
         ui.horizontal_centered(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());
             let speaking = st.call.as_ref().map(|c| c.speaking.contains(&c.session)).unwrap_or(false);
-            avatar(ui.painter(), r.center(), 16.0, &st.my_uid, &st.my_name, speaking, theme::SIDE_DARK);
+            let face = self.my_face(ui.ctx());
+            avatar(ui.painter(), r.center(), 16.0, &st.my_uid, &st.my_name, speaking, theme::SIDE_DARK, face);
             status_dot(ui.painter(), r.right_bottom() - vec2(3.0, 3.0), true, theme::SIDE_DARK);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
@@ -961,15 +1094,33 @@ impl IngleApp {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.add_space(14.0);
             let mut members: Vec<_> = s.members.values().collect();
-            members.sort_by(|a, b| b.role.cmp(&a.role).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
-            for online in [true, false] {
-                let group: Vec<_> = members.iter().filter(|m| m.online == online).collect();
-                if group.is_empty() {
-                    continue;
+            members.sort_by(|a, b| s.rank(&b.user_id).cmp(&s.rank(&a.user_id)).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+            // Like Discord: online people with a "shown separately" role are grouped under
+            // their highest such role, other online people under Online, then Offline.
+            let group_of = |m: &ingle_proto::control::Member| -> Option<RoleId> {
+                if !m.online {
+                    return None;
                 }
+                s.roles_of(&m.user_id).into_iter().find(|r| r.hoist).map(|r| r.id)
+            };
+            let mut groups: Vec<(String, Vec<&ingle_proto::control::Member>, bool)> = Vec::new();
+            for r in s.roles.iter().filter(|r| r.hoist) {
+                let g: Vec<_> = members.iter().copied().filter(|m| group_of(m) == Some(r.id)).collect();
+                if !g.is_empty() {
+                    groups.push((r.name.to_uppercase(), g, true));
+                }
+            }
+            let online: Vec<_> = members.iter().copied().filter(|m| m.online && group_of(m).is_none()).collect();
+            if !online.is_empty() {
+                groups.push(("ONLINE".into(), online, true));
+            }
+            let offline: Vec<_> = members.iter().copied().filter(|m| !m.online).collect();
+            if !offline.is_empty() {
+                groups.push(("OFFLINE".into(), offline, false));
+            }
+            for (label, group, online) in groups {
                 ui.horizontal(|ui| {
                     ui.add_space(16.0);
-                    let label = if online { "ONLINE" } else { "OFFLINE" };
                     ui.label(RichText::new(format!("{label} — {}", group.len())).font(theme::bold_font(11.5)).color(theme::DIM));
                 });
                 for m in group {
@@ -980,7 +1131,8 @@ impl IngleApp {
                     }
                     let alpha = if online { 1.0 } else { 0.45 };
                     let c = pos2(r.left() + 22.0, r.center().y);
-                    avatar(ui.painter(), c, 16.0, &m.user_id, &m.name, false, theme::SIDE);
+                    let face = self.face(ui.ctx(), s, &m.user_id);
+                    avatar(ui.painter(), c, 16.0, &m.user_id, &m.name, false, theme::SIDE, face);
                     if online {
                         status_dot(ui.painter(), c + vec2(12.0, 12.0), true, theme::SIDE);
                     }
@@ -989,23 +1141,47 @@ impl IngleApp {
                         egui::Align2::LEFT_CENTER,
                         &m.name,
                         theme::bold_font(14.0),
-                        role_color(m.role).gamma_multiply(alpha),
+                        name_color(s, &m.user_id, m.role).gamma_multiply(alpha),
                     );
                     if m.role == Role::Owner {
                         let w = ui.fonts_mut(|f| f.layout_no_wrap(m.name.clone(), theme::bold_font(14.0), Color32::WHITE).size().x);
                         icons::crown(ui.painter(), Rect::from_center_size(pos2(r.left() + 58.0 + w, r.center().y), vec2(14.0, 14.0)), theme::OWNER);
                     }
-                    if !online {
-                        ui.painter().rect_filled(r, CornerRadius::same(6), Color32::TRANSPARENT);
-                    }
                     let (uid, name, role) = (m.user_id.clone(), m.name.clone(), m.role);
                     let me = st.my_uid == uid;
                     let my_role = s.me.as_ref().map(|x| x.role).unwrap_or(Role::Member);
+                    let below_me = s.rank(&uid) < s.rank(&st.my_uid);
                     let key = s.key.clone();
-                    resp.on_hover_text(format!("{name}\nSafety code: {}", ingle_proto::crypto::safety_code(&uid))).context_menu(|ui| {
+                    let their_roles: Vec<String> = s.roles_of(&uid).iter().map(|r| r.name.clone()).collect();
+                    let mut hover = format!("{name}\nSafety code: {}", ingle_proto::crypto::safety_code(&uid));
+                    if !their_roles.is_empty() {
+                        hover.push_str(&format!("\nRoles: {}", their_roles.join(", ")));
+                    }
+                    resp.on_hover_text(hover).context_menu(|ui| {
                         if ui.button("Copy safety code").clicked() {
                             acts.push(Act::Copy(ingle_proto::crypto::safety_code(&uid)));
                             ui.close();
+                        }
+                        // Roles you can hand out (below your own highest), for people below you
+                        // (or yourself).
+                        let manageable: Vec<_> = s.roles.iter().filter(|r| s.can_manage_role(r)).collect();
+                        if !manageable.is_empty() && (me || below_me || s.is_admin()) && !(role == Role::Owner && my_role != Role::Owner) {
+                            ui.menu_button("Roles", |ui| {
+                                let current: Vec<RoleId> = s.members.get(&uid).map(|m| m.roles.clone()).unwrap_or_default();
+                                for r in &manageable {
+                                    let mut on = current.contains(&r.id);
+                                    let col = if r.color != 0 { rgb(r.color) } else { theme::TEXT };
+                                    if ui.checkbox(&mut on, RichText::new(&r.name).color(col)).changed() {
+                                        let mut next = current.clone();
+                                        if on {
+                                            next.push(r.id);
+                                        } else {
+                                            next.retain(|x| *x != r.id);
+                                        }
+                                        acts.push(Act::SetMemberRoles { key: key.clone(), uid: uid.clone(), roles: next });
+                                    }
+                                }
+                            });
                         }
                         if !me && my_role == Role::Owner && role != Role::Owner {
                             let (label, new_role) = if role == Role::Admin { ("Remove admin", Role::Member) } else { ("Make admin", Role::Admin) };
@@ -1014,13 +1190,13 @@ impl IngleApp {
                                 ui.close();
                             }
                         }
-                        if !me && my_role > role && my_role.is_admin() {
+                        if !me && below_me && (s.can(perm::KICK) || s.can(perm::BAN)) {
                             ui.separator();
-                            if ui.button(RichText::new(format!("Kick {name}")).color(theme::LIVE)).clicked() {
+                            if s.can(perm::KICK) && ui.button(RichText::new(format!("Kick {name}")).color(theme::LIVE)).clicked() {
                                 acts.push(Act::Kick { key: key.clone(), uid: uid.clone(), ban: false });
                                 ui.close();
                             }
-                            if ui.button(RichText::new(format!("Ban {name}")).color(theme::LIVE)).clicked() {
+                            if s.can(perm::BAN) && ui.button(RichText::new(format!("Ban {name}")).color(theme::LIVE)).clicked() {
                                 acts.push(Act::Kick { key: key.clone(), uid: uid.clone(), ban: true });
                                 ui.close();
                             }

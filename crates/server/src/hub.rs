@@ -29,6 +29,8 @@ pub struct Hub {
     pub fingerprint: [u8; 32],
     pub public_host: String,
     pub port: u16,
+    /// Where attachments and profile pictures are kept (one file per id).
+    pub files_dir: std::path::PathBuf,
     inner: Mutex<Inner>,
     next_conn: AtomicU64,
     next_session: AtomicU32,
@@ -141,12 +143,14 @@ pub fn frame(re: u64, ev: Event) -> Bytes {
 }
 
 impl Hub {
-    pub fn new(db: Db, fingerprint: [u8; 32], public_host: String, port: u16) -> Arc<Hub> {
+    pub fn new(db: Db, fingerprint: [u8; 32], public_host: String, port: u16, files_dir: std::path::PathBuf) -> Arc<Hub> {
+        let _ = std::fs::create_dir_all(&files_dir);
         Arc::new(Hub {
             db,
             fingerprint,
             public_host,
             port,
+            files_dir,
             inner: Mutex::new(Inner::default()),
             next_conn: AtomicU64::new(1),
             next_session: AtomicU32::new(1),
@@ -214,6 +218,8 @@ impl Hub {
             role: u.role,
             online: Self::is_online_locked(inner, uid),
             joined_at: u.joined_at,
+            roles: self.db.member_roles(uid),
+            avatar: u.avatar,
         })
     }
 
@@ -286,6 +292,8 @@ impl Hub {
             role: Role::Member,
             online: true,
             joined_at: now_ms(),
+            roles: Vec::new(),
+            avatar: None,
         });
         let ready = Event::Ready {
             me: me.clone(),
@@ -293,6 +301,8 @@ impl Hub {
             channels: self.db.channels(),
             members,
             voice: inner.voice.values().map(|v| v.p.clone()).collect(),
+            roles: self.db.roles(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE].iter().map(|s| s.to_string()).collect(),
         };
         let _ = tx.send(frame(re, ready));
         if !was_online {
@@ -639,6 +649,21 @@ impl Hub {
         self.member_locked(&inner, uid)
     }
 
+    pub fn file_path(&self, id: &str) -> Option<std::path::PathBuf> {
+        // Ids are hex we made ourselves; anything else never touches the disk.
+        (id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())).then(|| self.files_dir.join(id))
+    }
+
+    /// Overwrite files with zeros before removing them, so deleted images don't linger on
+    /// the disk (as far as the disk allows: SSDs and backups may still keep old blocks).
+    pub fn wipe_files(&self, ids: &[String]) {
+        for id in ids {
+            if let Some(path) = self.file_path(id) {
+                wipe_file(&path);
+            }
+        }
+    }
+
     /// Voice sessions currently in a channel (used when deleting it).
     pub fn evict_channel(&self, channel_id: ChannelId) {
         let mut inner = self.inner.lock();
@@ -647,5 +672,25 @@ impl Hub {
         for s in sessions {
             Self::remove_session_locked(&mut inner, s);
         }
+    }
+}
+
+pub fn wipe_file(path: &std::path::Path) {
+    use std::io::{Seek, Write};
+    if let Ok(meta) = std::fs::metadata(path) {
+        if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open(path) {
+            let zeros = vec![0u8; 64 * 1024];
+            let mut left = meta.len();
+            let _ = f.seek(std::io::SeekFrom::Start(0));
+            while left > 0 {
+                let n = left.min(zeros.len() as u64) as usize;
+                if f.write_all(&zeros[..n]).is_err() {
+                    break;
+                }
+                left -= n as u64;
+            }
+            let _ = f.sync_all();
+        }
+        let _ = std::fs::remove_file(path);
     }
 }

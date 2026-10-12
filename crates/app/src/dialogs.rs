@@ -1,13 +1,13 @@
 //! Modal dialogs: join server, invites, channels, settings, screen picker.
 
-use eframe::egui::{self, Align, Color32, CornerRadius, Layout, RichText, Sense, vec2};
+use eframe::egui::{self, Align, Color32, CornerRadius, Layout, RichText, Sense, pos2, vec2};
 use ingle_engine::config::{CameraQuality, InputMode, NoiseSuppression, ScreenPreset};
 use ingle_engine::hotkey;
 use ingle_engine::state::AppState;
 use ingle_engine::video::SourceKind;
-use ingle_proto::control::ChannelKind;
+use ingle_proto::control::{ChannelKind, FILES_FEATURE, ROLES_FEATURE, perm};
 
-use crate::app::{Act, Dialog, IngleApp};
+use crate::app::{Act, Dialog, IngleApp, RoleEdit, avatar, rgb};
 use crate::{icons, theme};
 
 fn modal_frame() -> egui::Frame {
@@ -199,23 +199,42 @@ impl IngleApp {
                         }
                     }
                 }
-                Dialog::ServerSettings { key, mut name } => {
-                    ui.set_width(420.0);
-                    title(ui, "Server settings");
-                    field_label(ui, "Server name");
-                    input(ui, &mut name, "");
-                    ui.add_space(14.0);
+                Dialog::ServerSettings { key, mut name, mut tab } => {
+                    let server = st.server(&key).cloned();
+                    let can_server = server.as_ref().map(|s| s.can(perm::MANAGE_SERVER)).unwrap_or(false);
+                    let can_roles = server.as_ref().map(|s| s.can(perm::MANAGE_ROLES) && s.has(ROLES_FEATURE)).unwrap_or(false);
+                    ui.set_width(if tab == 1 { 680.0 } else { 440.0 });
                     ui.horizontal(|ui| {
-                        if ui.add(theme::primary_button("Save").min_size(vec2(100.0, 34.0))).clicked() && !name.trim().is_empty() {
-                            acts.push(Act::RenameServer { key: key.clone(), name: name.trim().to_string() });
-                            close = true;
+                        title(ui, "Server settings");
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.button("Done").clicked() {
+                                close = true;
+                            }
+                        });
+                    });
+                    ui.horizontal(|ui| {
+                        if can_server && ui.add(egui::Button::selectable(tab == 0, "Overview")).clicked() {
+                            tab = 0;
                         }
-                        if ui.button("Cancel").clicked() {
-                            close = true;
+                        if can_roles && ui.add(egui::Button::selectable(tab == 1, "Roles")).clicked() {
+                            tab = 1;
                         }
                     });
+                    ui.separator();
+                    if tab == 1 {
+                        if let Some(s) = &server {
+                            self.roles_editor(ui, s, acts);
+                        }
+                    } else {
+                        field_label(ui, "Server name");
+                        input(ui, &mut name, "");
+                        ui.add_space(14.0);
+                        if ui.add(theme::primary_button("Save").min_size(vec2(100.0, 34.0))).clicked() && !name.trim().is_empty() {
+                            acts.push(Act::RenameServer { key: key.clone(), name: name.trim().to_string() });
+                        }
+                    }
                     if !close {
-                        self.ui.dialog = Some(Dialog::ServerSettings { key, name });
+                        self.ui.dialog = Some(Dialog::ServerSettings { key, name, tab });
                     }
                 }
                 Dialog::LeaveServer { key, name } => {
@@ -369,6 +388,38 @@ impl IngleApp {
         ui.separator();
         egui::ScrollArea::vertical().max_height(470.0).min_scrolled_height(470.0).show(ui, |ui| match t {
             0 => {
+                field_label(ui, "Profile picture");
+                ui.horizontal(|ui| {
+                    let (r, _) = ui.allocate_exact_size(vec2(80.0, 80.0), Sense::hover());
+                    let face = self.my_face(ui.ctx());
+                    avatar(ui.painter(), r.center(), 40.0, &st.my_uid, &st.my_name, false, theme::SIDE, face);
+                    ui.add_space(12.0);
+                    ui.vertical(|ui| {
+                        ui.add_space(14.0);
+                        ui.horizontal(|ui| {
+                            if ui.add(theme::primary_button("Upload a picture")).clicked() {
+                                if let Some((_, bytes)) = crate::images::pick_image() {
+                                    acts.push(Act::SetAvatar(Some(bytes)));
+                                }
+                            }
+                            if face.is_some() && ui.button("Remove").clicked() {
+                                acts.push(Act::SetAvatar(None));
+                            }
+                        });
+                        ui.label(
+                            RichText::new("PNG, JPEG, GIF or WebP. The middle square is used. It shows on every server you're in.")
+                                .size(12.0)
+                                .color(theme::DIM),
+                        );
+                    });
+                });
+                if st.servers.iter().any(|s| s.status.is_connected() && !s.has(FILES_FEATURE)) {
+                    ui.label(
+                        RichText::new("Some of your servers run an older Ingle Server and won't show it until they're updated.")
+                            .size(12.0)
+                            .color(theme::DIM),
+                    );
+                }
                 field_label(ui, "Display name");
                 ui.horizontal(|ui| {
                     ui.add(egui::TextEdit::singleline(&mut self.ui.name_draft).desired_width(260.0).margin(egui::Margin::symmetric(10, 8)));
@@ -648,5 +699,124 @@ fn meter(ui: &mut egui::Ui, level_db: f32, threshold: Option<f32>) {
     if let Some(t) = threshold {
         let x = r.left() + r.width() * ((t + 80.0) / 80.0).clamp(0.0, 1.0);
         ui.painter().line_segment([egui::pos2(x, r.top() - 3.0), egui::pos2(x, r.bottom() + 3.0)], egui::Stroke::new(2.0f32, theme::EMBER2));
+    }
+}
+
+impl IngleApp {
+    /// Server settings → Roles: the list on the left, the selected role on the right.
+    fn roles_editor(&mut self, ui: &mut egui::Ui, s: &ingle_engine::state::ServerView, acts: &mut Vec<Act>) {
+        let key = s.key.clone();
+        // Keep the edited role in step with the server (it may have changed, or be gone).
+        if let Some(e) = &self.ui.role_edit {
+            if s.role(e.id).is_none() {
+                self.ui.role_edit = None;
+            }
+        }
+        ui.columns(2, |cols| {
+            let ui = &mut cols[0];
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Roles are listed highest first. People get every permission of every role they have; colors and groups come from their highest role.").size(12.0).color(theme::DIM));
+            });
+            ui.add_space(6.0);
+            if ui.add(theme::primary_button("Create role")).clicked() {
+                acts.push(Act::CreateRole { key: key.clone(), name: "new role".into(), color: 0x99aab5, perms: 0, hoist: false });
+            }
+            ui.add_space(6.0);
+            egui::ScrollArea::vertical().id_salt("roles-list").max_height(380.0).show(ui, |ui| {
+                if s.roles.is_empty() {
+                    ui.label(RichText::new("No roles yet.").color(theme::MUTED));
+                }
+                for r in &s.roles {
+                    let count = s.members.values().filter(|m| m.roles.contains(&r.id)).count();
+                    let selected = self.ui.role_edit.as_ref().map(|e| e.id == r.id).unwrap_or(false);
+                    let resp = ui.add(egui::Button::selectable(selected, "").min_size(vec2(ui.available_width(), 34.0)));
+                    let rect = resp.rect;
+                    let col = if r.color != 0 { rgb(r.color) } else { theme::MUTED };
+                    ui.painter().circle_filled(pos2(rect.left() + 14.0, rect.center().y), 6.0, col);
+                    ui.painter().text(pos2(rect.left() + 28.0, rect.center().y), egui::Align2::LEFT_CENTER, &r.name, theme::bold_font(13.5), theme::TEXT);
+                    let people = if count == 1 { "1 person".to_string() } else { format!("{count} people") };
+                    ui.painter().text(pos2(rect.right() - 10.0, rect.center().y), egui::Align2::RIGHT_CENTER, people, theme::font(12.0), theme::DIM);
+                    if resp.clicked() {
+                        let [rr, gg, bb] = [(r.color >> 16) as u8, (r.color >> 8) as u8, r.color as u8];
+                        self.ui.role_edit = Some(RoleEdit { id: r.id, name: r.name.clone(), color: [rr, gg, bb], perms: r.perms, hoist: r.hoist });
+                    }
+                }
+            });
+
+            let ui = &mut cols[1];
+            let Some(mut e) = self.ui.role_edit.clone() else {
+                ui.add_space(30.0);
+                ui.label(RichText::new("Pick a role to edit it.").color(theme::MUTED));
+                return;
+            };
+            let Some(role) = s.role(e.id).cloned() else { return };
+            let editable = s.can_manage_role(&role);
+            if !editable {
+                ui.label(RichText::new("This role is at or above your own highest role, so you can't change it.").size(12.0).color(theme::LIVE));
+            }
+            ui.add_enabled_ui(editable, |ui| {
+                field_label(ui, "Name");
+                ui.add(egui::TextEdit::singleline(&mut e.name).desired_width(f32::INFINITY).char_limit(32));
+                field_label(ui, "Color");
+                ui.horizontal(|ui| {
+                    ui.color_edit_button_srgb(&mut e.color);
+                    for c in [0x1abc9c, 0x2ecc71, 0x3498db, 0x9b59b6, 0xe91e63, 0xf1c40f, 0xe67e22, 0xe74c3c, 0x95a5a6] {
+                        let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+                        ui.painter().rect_filled(r, CornerRadius::same(4), rgb(c));
+                        if resp.clicked() {
+                            e.color = [(c >> 16) as u8, (c >> 8) as u8, c as u8];
+                        }
+                    }
+                });
+                ui.checkbox(&mut e.hoist, "Show members with this role separately in the member list");
+                field_label(ui, "Permissions");
+                let mine = s.my_perms();
+                for (bit, name, what) in perm::LIST {
+                    let mut on = e.perms & bit != 0;
+                    let allowed = mine & bit != 0;
+                    let resp = ui.add_enabled(allowed, egui::Checkbox::new(&mut on, name)).on_hover_text(what);
+                    if !allowed {
+                        resp.on_disabled_hover_text("You can only give permissions you have yourself.");
+                    }
+                    if on {
+                        e.perms |= bit;
+                    } else {
+                        e.perms &= !bit;
+                    }
+                }
+                ui.label(RichText::new("Everyone can chat, react, join voice, share and create invites.").size(11.5).color(theme::DIM));
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    let changed = e.name.trim() != role.name
+                        || u32::from(e.color[0]) << 16 | u32::from(e.color[1]) << 8 | u32::from(e.color[2]) != role.color
+                        || e.perms != role.perms
+                        || e.hoist != role.hoist;
+                    if ui.add_enabled(changed && !e.name.trim().is_empty(), theme::primary_button("Save changes")).clicked() {
+                        acts.push(Act::UpdateRole {
+                            key: key.clone(),
+                            id: e.id,
+                            name: Some(e.name.trim().to_string()),
+                            color: Some(u32::from(e.color[0]) << 16 | u32::from(e.color[1]) << 8 | u32::from(e.color[2])),
+                            perms: Some(e.perms),
+                            hoist: Some(e.hoist),
+                            shift: 0,
+                        });
+                    }
+                    if ui.button("Move up").clicked() {
+                        acts.push(Act::UpdateRole { key: key.clone(), id: e.id, name: None, color: None, perms: None, hoist: None, shift: 1 });
+                    }
+                    if ui.button("Move down").clicked() {
+                        acts.push(Act::UpdateRole { key: key.clone(), id: e.id, name: None, color: None, perms: None, hoist: None, shift: -1 });
+                    }
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.add(theme::danger_button("Delete")).clicked() {
+                            acts.push(Act::DeleteRole { key: key.clone(), id: e.id });
+                        }
+                    });
+                });
+                ui.label(RichText::new("Give someone a role by right-clicking them in the member list.").size(11.5).color(theme::DIM));
+            });
+            self.ui.role_edit = Some(e);
+        });
     }
 }

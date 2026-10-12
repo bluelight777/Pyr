@@ -6,6 +6,7 @@ mod chat;
 mod create;
 mod dialogs;
 mod icons;
+mod images;
 mod instance;
 mod markdown;
 mod stage;

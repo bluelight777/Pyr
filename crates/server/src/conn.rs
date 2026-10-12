@@ -103,6 +103,7 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection) -> Result<()> {
 
     let dg = tokio::spawn(datagram_loop(hub.clone(), conn.clone(), session_cell.clone()));
     let uni = tokio::spawn(uni_loop(hub.clone(), conn.clone(), session_cell.clone()));
+    let files = tokio::spawn(file_loop(hub.clone(), conn.clone(), user_id.clone()));
 
     let mut ctx = Ctx { hub: &hub, conn_id, uid: user_id.clone(), msg_tokens: 10.0, last_refill: Instant::now() };
     let result = async {
@@ -121,6 +122,7 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection) -> Result<()> {
     hub.unregister(conn_id);
     dg.abort();
     uni.abort();
+    files.abort();
     drop(tx);
     let _ = timeout(Duration::from_secs(1), writer).await;
     result
@@ -177,6 +179,106 @@ async fn uni_loop(hub: Arc<Hub>, conn: quinn::Connection, session: Arc<AtomicU32
     }
 }
 
+/// File streams: uploads and downloads of images (see [`FILE_PREAMBLE`]).
+async fn file_loop(hub: Arc<Hub>, conn: quinn::Connection, uid: String) {
+    // At most a few transfers at once per connection.
+    let slots = Arc::new(tokio::sync::Semaphore::new(4));
+    while let Ok((send, recv)) = conn.accept_bi().await {
+        let (hub, uid, slots) = (hub.clone(), uid.clone(), slots.clone());
+        tokio::spawn(async move {
+            let Ok(_permit) = slots.acquire_owned().await else { return };
+            if let Err(e) = file_stream(&hub, &uid, send, recv).await {
+                debug!("file stream ended: {e:#}");
+            }
+        });
+    }
+}
+
+async fn file_stream(hub: &Hub, uid: &str, mut send: quinn::SendStream, mut recv: quinn::RecvStream) -> Result<()> {
+    let mut preamble = [0u8; 4];
+    timeout(Duration::from_secs(10), recv.read_exact(&mut preamble)).await??;
+    if &preamble != FILE_PREAMBLE {
+        bail!("not a file stream");
+    }
+    let req: FileRequest = timeout(Duration::from_secs(10), read_frame(&mut recv)).await??.ok_or_else(|| anyhow!("no request"))?;
+    let reply = |r: FileReply| framing::encode(&r);
+    let fail = |msg: &str| reply(FileReply { ok: false, id: String::new(), mime: String::new(), size: 0, error: msg.to_string() });
+    match req {
+        FileRequest::Get { id } => {
+            let (Some(row), Some(path)) = (hub.db.file(&id), hub.file_path(&id)) else {
+                send.write_all(&fail("That file is gone.")).await?;
+                let _ = send.finish();
+                return Ok(());
+            };
+            let bytes = tokio::fs::read(&path).await.unwrap_or_default();
+            if bytes.len() as u64 != row.size {
+                send.write_all(&fail("That file is gone.")).await?;
+                let _ = send.finish();
+                return Ok(());
+            }
+            send.write_all(&reply(FileReply { ok: true, id, mime: row.mime, size: row.size, error: String::new() })).await?;
+            send.write_all(&bytes).await?;
+            let _ = send.finish();
+        }
+        FileRequest::Put { kind, name, mime: _, size } => {
+            let limit = match kind {
+                FileKind::Attachment => MAX_ATTACHMENT_BYTES,
+                FileKind::Avatar => MAX_AVATAR_BYTES,
+            };
+            if size == 0 || size > limit {
+                send.write_all(&fail(&format!("Images can be up to {} MB.", limit >> 20))).await?;
+                let _ = send.finish();
+                return Ok(());
+            }
+            let cap: u64 = std::env::var("INGLE_STORAGE_MB").ok().and_then(|v| v.parse().ok()).unwrap_or(5 * 1024) << 20;
+            if hub.db.files_total() + size > cap {
+                send.write_all(&fail("This server's storage for images is full.")).await?;
+                let _ = send.finish();
+                return Ok(());
+            }
+            let bytes = timeout(Duration::from_secs(300), recv.read_to_end(size as usize + 1)).await??;
+            if bytes.len() as u64 != size {
+                send.write_all(&fail("The upload was cut short.")).await?;
+                let _ = send.finish();
+                return Ok(());
+            }
+            let Some(mime) = sniff_image(&bytes) else {
+                send.write_all(&fail("Only PNG, JPEG, GIF and WebP images can be sent.")).await?;
+                let _ = send.finish();
+                return Ok(());
+            };
+            let (width, height) = image_size(&bytes).unwrap_or((0, 0));
+            let id = match kind {
+                // Profile pictures are named by their content, so an app can tell whether the
+                // server already has its current one.
+                FileKind::Avatar => avatar_id(uid, &bytes),
+                FileKind::Attachment => crypto::random_bytes::<16>().iter().map(|b| format!("{b:02x}")).collect(),
+            };
+            let path = hub.file_path(&id).ok_or_else(|| anyhow!("bad id"))?;
+            let tmp = path.with_extension("part");
+            tokio::fs::write(&tmp, &bytes).await?;
+            tokio::fs::rename(&tmp, &path).await?;
+            let name: String = name.chars().filter(|c| !c.is_control() && !matches!(c, '/' | '\\')).take(100).collect();
+            hub.db.insert_file(&crate::db::FileRow {
+                id: id.clone(),
+                owner: uid.to_string(),
+                kind,
+                name: if name.trim().is_empty() { "image".into() } else { name },
+                mime: mime.to_string(),
+                size,
+                width,
+                height,
+                message_id: None,
+            })?;
+            send.write_all(&reply(FileReply { ok: true, id, mime: mime.to_string(), size, error: String::new() })).await?;
+            let _ = send.finish();
+        }
+    }
+    // Let the reply reach the other side before the stream is dropped.
+    let _ = timeout(Duration::from_secs(10), send.stopped()).await;
+    Ok(())
+}
+
 struct Ctx<'a> {
     hub: &'a Hub,
     conn_id: ConnId,
@@ -203,8 +305,36 @@ impl Ctx<'_> {
         self.hub.db.get_user(&self.uid).map(|u| u.role).unwrap_or(Role::Member)
     }
 
-    fn require_admin(&self) -> Result<(), (ErrorCode, String)> {
-        if self.role().is_admin() { Ok(()) } else { Err((ErrorCode::Forbidden, "Only admins can do that.".into())) }
+    /// What this member may do: everything for admins and the owner, otherwise what their
+    /// roles allow.
+    fn perms(&self) -> u64 {
+        if self.role().is_admin() {
+            return perm::ALL;
+        }
+        let mine = self.hub.db.member_roles(&self.uid);
+        self.hub.db.roles().iter().filter(|r| mine.contains(&r.id)).fold(0, |acc, r| acc | r.perms)
+    }
+
+    fn require(&self, p: u64, what: &str) -> Result<(), (ErrorCode, String)> {
+        if self.perms() & p == p { Ok(()) } else { Err((ErrorCode::Forbidden, format!("You don't have permission to {what}."))) }
+    }
+
+    /// Where someone stands: the owner above admins above every custom role (by its
+    /// position); members with no roles at the bottom.
+    fn rank_of(&self, uid: &str) -> i64 {
+        match self.hub.db.get_user(uid).map(|u| u.role) {
+            Some(Role::Owner) => i64::MAX,
+            Some(Role::Admin) => i64::MAX - 1,
+            _ => {
+                let mine = self.hub.db.member_roles(uid);
+                self.hub.db.roles().iter().filter(|r| mine.contains(&r.id)).map(|r| r.position as i64).max().unwrap_or(i64::MIN)
+            }
+        }
+    }
+
+    /// Roles at or above your own highest one are out of your reach (unless you're an admin).
+    fn can_manage_role(&self, r: &RoleDef) -> bool {
+        self.role().is_admin() || (r.position as i64) < self.rank_of(&self.uid)
     }
 
     fn take_message_token(&mut self) -> Result<(), (ErrorCode, String)> {
@@ -226,15 +356,28 @@ impl Ctx<'_> {
             Request::Login { .. } => bad("already logged in"),
             Request::Ping { t } => Ok(Event::Pong { t }),
 
-            Request::SendMessage { channel_id, content, reply_to, nonce } => {
+            Request::SendMessage { channel_id, content, reply_to, nonce, attachments } => {
                 self.take_message_token()?;
-                let Some(content) = clean_content(&content) else { return bad("message is empty or too long") };
+                if attachments.len() > MAX_ATTACHMENTS_PER_MESSAGE {
+                    return bad("too many attachments");
+                }
+                for id in &attachments {
+                    match db.file(id) {
+                        Some(f) if f.owner == self.uid && f.kind == FileKind::Attachment && f.message_id.is_none() => {}
+                        _ => return bad("an attachment is missing; try sending it again"),
+                    }
+                }
+                let content = match clean_content(&content) {
+                    Some(c) => c,
+                    None if !attachments.is_empty() && content.trim().is_empty() => String::new(),
+                    None => return bad("message is empty or too long"),
+                };
                 if db.channel(channel_id).is_none() {
                     return Err((ErrorCode::NotFound, "No such channel.".into()));
                 }
                 let reply_to = reply_to.filter(|id| db.get_message(*id).map(|m| m.channel_id == channel_id).unwrap_or(false));
                 let message = db
-                    .insert_message(channel_id, &self.uid, &content, reply_to)
+                    .insert_message_with(channel_id, &self.uid, &content, reply_to, &attachments)
                     .map_err(|e| (ErrorCode::Internal, e.to_string()))?;
                 hub.broadcast(Event::MessageCreated { message, nonce });
                 Ok(Event::Ok)
@@ -252,10 +395,11 @@ impl Ctx<'_> {
             }
             Request::DeleteMessage { message_id } => {
                 let Some(m) = db.get_message(message_id) else { return Ok(Event::Ok) };
-                if m.author != self.uid && !self.role().is_admin() {
+                if m.author != self.uid && self.perms() & perm::MANAGE_MESSAGES == 0 {
                     return Err((ErrorCode::Forbidden, "You can't delete that message.".into()));
                 }
-                db.delete_message(message_id).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                let files = db.delete_message(message_id).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                hub.wipe_files(&files);
                 hub.broadcast(Event::MessageDeleted { channel_id: m.channel_id, message_id });
                 Ok(Event::Ok)
             }
@@ -287,14 +431,14 @@ impl Ctx<'_> {
             Request::Typing { channel_id } => hub.typing(self.conn_id, &self.uid, channel_id),
 
             Request::CreateChannel { name, kind } => {
-                self.require_admin()?;
+                self.require(perm::MANAGE_CHANNELS, "manage channels")?;
                 let Some(name) = clean_channel_name(&name, kind) else { return bad("channel name is empty") };
                 let channel = db.create_channel(&name, kind).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
                 hub.broadcast(Event::ChannelUpserted { channel });
                 Ok(Event::Ok)
             }
             Request::UpdateChannel { channel_id, name, topic } => {
-                self.require_admin()?;
+                self.require(perm::MANAGE_CHANNELS, "manage channels")?;
                 let Some(ch) = db.channel(channel_id) else { return Err((ErrorCode::NotFound, "No such channel.".into())) };
                 let name = match name {
                     Some(n) => Some(clean_channel_name(&n, ch.kind).ok_or((ErrorCode::BadRequest, "empty name".into()))?),
@@ -307,9 +451,11 @@ impl Ctx<'_> {
                 Ok(Event::Ok)
             }
             Request::DeleteChannel { channel_id } => {
-                self.require_admin()?;
+                self.require(perm::MANAGE_CHANNELS, "manage channels")?;
                 hub.evict_channel(channel_id);
-                if db.delete_channel(channel_id).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
+                let (existed, files) = db.delete_channel(channel_id).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                hub.wipe_files(&files);
+                if existed {
                     hub.broadcast(Event::ChannelDeleted { channel_id });
                 }
                 Ok(Event::Ok)
@@ -350,7 +496,7 @@ impl Ctx<'_> {
                 Ok(Event::Ok)
             }
             Request::UpdateServer { name, description } => {
-                self.require_admin()?;
+                self.require(perm::MANAGE_SERVER, "change the server's settings")?;
                 if let Some(n) = name.and_then(|n| clean_name(&n, 48)) {
                     let _ = db.set_meta("name", &n);
                 }
@@ -378,16 +524,145 @@ impl Ctx<'_> {
                 }
                 hub.route_e2ee(self.conn_id, epoch, keys)
             }
+
+            // ---- roles
+            Request::CreateRole { name, color, perms, hoist } => {
+                self.require(perm::MANAGE_ROLES, "manage roles")?;
+                let Some(name) = clean_name(&name, 32) else { return bad("role name is empty") };
+                if db.roles().len() >= 100 {
+                    return bad("this server has the most roles it can have (100)");
+                }
+                // You can't hand out powers you don't have.
+                let perms = perms & perm::ALL;
+                if perms & !self.perms() != 0 {
+                    return Err((ErrorCode::Forbidden, "You can't create a role with permissions you don't have.".into()));
+                }
+                let role = db.create_role(&name, color & 0xffffff, perms, hoist).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                hub.broadcast(Event::RoleUpserted { role });
+                Ok(Event::Ok)
+            }
+            Request::UpdateRole { role_id, name, color, perms, hoist, shift } => {
+                self.require(perm::MANAGE_ROLES, "manage roles")?;
+                let Some(mut role) = db.role(role_id) else { return Err((ErrorCode::NotFound, "No such role.".into())) };
+                if !self.can_manage_role(&role) {
+                    return Err((ErrorCode::Forbidden, "That role is at or above your own highest role.".into()));
+                }
+                if let Some(n) = name {
+                    role.name = clean_name(&n, 32).ok_or((ErrorCode::BadRequest, "role name is empty".into()))?;
+                }
+                if let Some(c) = color {
+                    role.color = c & 0xffffff;
+                }
+                if let Some(p) = perms {
+                    let p = p & perm::ALL;
+                    if p & !self.perms() != 0 {
+                        return Err((ErrorCode::Forbidden, "You can't give a role permissions you don't have.".into()));
+                    }
+                    role.perms = p;
+                }
+                if let Some(h) = hoist {
+                    role.hoist = h;
+                }
+                let mut changed = vec![];
+                if shift != 0 {
+                    // Swap places with the neighbour above or below.
+                    let all = db.roles(); // highest first
+                    if let Some(i) = all.iter().position(|r| r.id == role_id) {
+                        let j = if shift > 0 { i.checked_sub(1) } else { Some(i + 1).filter(|j| *j < all.len()) };
+                        if let Some(j) = j {
+                            let mut other = all[j].clone();
+                            if !self.can_manage_role(&other) {
+                                return Err((ErrorCode::Forbidden, "You can't move a role above your own highest role.".into()));
+                            }
+                            std::mem::swap(&mut role.position, &mut other.position);
+                            if role.position == other.position {
+                                role.position += shift.signum();
+                            }
+                            changed.push(other);
+                        }
+                    }
+                }
+                changed.push(role);
+                for r in changed {
+                    db.save_role(&r).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                    hub.broadcast(Event::RoleUpserted { role: r });
+                }
+                Ok(Event::Ok)
+            }
+            Request::DeleteRole { role_id } => {
+                self.require(perm::MANAGE_ROLES, "manage roles")?;
+                let Some(role) = db.role(role_id) else { return Ok(Event::Ok) };
+                if !self.can_manage_role(&role) {
+                    return Err((ErrorCode::Forbidden, "That role is at or above your own highest role.".into()));
+                }
+                let had = db.delete_role(role_id).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                hub.broadcast(Event::RoleDeleted { role_id });
+                for uid in had {
+                    if let Some(member) = hub.member(&uid) {
+                        hub.broadcast(Event::MemberUpserted { member });
+                    }
+                }
+                Ok(Event::Ok)
+            }
+            Request::SetMemberRoles { user_id, roles } => {
+                self.require(perm::MANAGE_ROLES, "manage roles")?;
+                let Some(target) = db.get_user(&user_id).filter(|u| !u.banned) else {
+                    return Err((ErrorCode::NotFound, "No such member.".into()));
+                };
+                if user_id != self.uid && !self.role().is_admin() && self.rank_of(&user_id) >= self.rank_of(&self.uid) {
+                    return Err((ErrorCode::Forbidden, "You can only change the roles of people below you.".into()));
+                }
+                if target.role == Role::Owner && self.role() != Role::Owner {
+                    return Err((ErrorCode::Forbidden, "Only the owner can change the owner's roles.".into()));
+                }
+                let all = db.roles();
+                let before = db.member_roles(&user_id);
+                let mut after: Vec<RoleId> = roles.into_iter().filter(|id| all.iter().any(|r| r.id == *id)).collect();
+                after.sort();
+                after.dedup();
+                // Every role being added or taken away must be below your own highest one.
+                for id in before.iter().filter(|r| !after.contains(r)).chain(after.iter().filter(|r| !before.contains(r))) {
+                    if let Some(r) = all.iter().find(|r| r.id == *id) {
+                        if !self.can_manage_role(r) {
+                            return Err((ErrorCode::Forbidden, format!("\"{}\" is at or above your own highest role.", r.name)));
+                        }
+                    }
+                }
+                db.set_member_roles(&user_id, &after).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                if let Some(member) = hub.member(&user_id) {
+                    hub.broadcast(Event::MemberUpserted { member });
+                }
+                Ok(Event::Ok)
+            }
+            Request::SetAvatar { file_id } => {
+                if let Some(id) = &file_id {
+                    match db.file(id) {
+                        Some(f) if f.owner == self.uid && f.kind == FileKind::Avatar => {}
+                        _ => return bad("upload the picture first"),
+                    }
+                }
+                let old = db.set_avatar(&self.uid, file_id.as_deref()).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                if let Some(old) = old.filter(|o| Some(o) != file_id.as_ref()) {
+                    if db.release_avatar(&old) {
+                        hub.wipe_files(&[old]);
+                    }
+                }
+                if let Some(member) = hub.member(&self.uid) {
+                    hub.broadcast(Event::MemberUpserted { member });
+                }
+                Ok(Event::Ok)
+            }
+            Request::Unknown => Err((ErrorCode::BadRequest, "This server is older than your app and can't do that yet.".into())),
         }
     }
 
     fn remove(&self, user_id: UserId, ban: bool) -> Reply {
-        let my_role = self.role();
-        if !my_role.is_admin() {
-            return Err((ErrorCode::Forbidden, "Only admins can remove members.".into()));
+        if ban {
+            self.require(perm::BAN, "ban members")?;
+        } else {
+            self.require(perm::KICK, "kick members")?;
         }
-        let target_role = self.hub.db.get_user(&user_id).map(|u| u.role).unwrap_or(Role::Member);
-        if target_role >= my_role {
+        if self.rank_of(&user_id) >= self.rank_of(&self.uid) {
             return Err((ErrorCode::Forbidden, "You can't remove someone with the same or a higher role.".into()));
         }
         if let Err(e) = self.hub.db.remove_user(&user_id, ban) {

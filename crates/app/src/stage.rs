@@ -24,6 +24,7 @@ struct Tile {
     /// Screen share that carries sound.
     has_sound: bool,
     stream_volume: f32,
+    face: Option<egui::TextureId>,
 }
 
 fn grid_layout(n: usize, area: Rect, gap: f32) -> Vec<Rect> {
@@ -152,6 +153,7 @@ impl IngleApp {
                 let me = p.session == call.session;
                 let name = s.member_name(&p.user_id);
                 let has_cam = p.tracks.iter().any(|t| t.id == track::CAMERA);
+                let face = self.face(ui.ctx(), s, &p.user_id);
                 tiles.push(Tile {
                     key: VideoKey { session: p.session, track: track::CAMERA },
                     user_id: p.user_id.clone(),
@@ -166,6 +168,7 @@ impl IngleApp {
                     volume: st.user_volumes.get(&p.user_id).copied().unwrap_or(1.0),
                     has_sound: false,
                     stream_volume: 1.0,
+                    face,
                 });
                 if p.tracks.iter().any(|t| t.id == track::SCREEN) {
                     let key = VideoKey { session: p.session, track: track::SCREEN };
@@ -183,6 +186,7 @@ impl IngleApp {
                         volume: st.user_volumes.get(&p.user_id).copied().unwrap_or(1.0),
                         has_sound: p.tracks.iter().any(|t| t.id == track::SCREEN_AUDIO),
                         stream_volume: st.stream_volumes.get(&p.user_id).copied().unwrap_or(1.0),
+                        face: None,
                     });
                 }
             }
@@ -265,7 +269,7 @@ impl IngleApp {
                     }
                 } else {
                     let r = (rect.height().min(rect.width()) * 0.2).clamp(18.0, 64.0);
-                    avatar(&p, rect.center(), r, &t.user_id, &t.name, t.speaking, theme::TILE);
+                    avatar(&p, rect.center(), r, &t.user_id, &t.name, t.speaking, theme::TILE, t.face);
                     if t.has_camera {
                         p.text(rect.center() + vec2(0.0, r + 16.0), egui::Align2::CENTER_CENTER, "starting video…", theme::font(11.5), theme::DIM);
                     }

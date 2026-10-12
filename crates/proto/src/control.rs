@@ -71,6 +71,182 @@ pub struct Member {
     pub online: bool,
     #[serde(default)]
     pub joined_at: i64,
+    /// Custom roles (see [`RoleDef`]) this member has.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<RoleId>,
+    /// Profile picture: the id of a file on the server (see [`FILES_FEATURE`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
+}
+
+pub type RoleId = i64;
+
+/// What a custom role allows (bits of [`RoleDef::perms`]). Admins and the owner can do
+/// everything; everyone can chat, react, join voice and create invites.
+pub mod perm {
+    pub const MANAGE_CHANNELS: u64 = 1 << 0;
+    pub const KICK: u64 = 1 << 1;
+    pub const BAN: u64 = 1 << 2;
+    /// Delete other people's messages.
+    pub const MANAGE_MESSAGES: u64 = 1 << 3;
+    /// Create, edit and hand out roles below your own highest one.
+    pub const MANAGE_ROLES: u64 = 1 << 4;
+    /// Rename the server and change its description.
+    pub const MANAGE_SERVER: u64 = 1 << 5;
+    pub const ALL: u64 = MANAGE_CHANNELS | KICK | BAN | MANAGE_MESSAGES | MANAGE_ROLES | MANAGE_SERVER;
+    /// (bit, short name, what it means) for settings screens.
+    pub const LIST: [(u64, &str, &str); 6] = [
+        (MANAGE_CHANNELS, "Manage channels", "Create, rename and delete channels."),
+        (MANAGE_MESSAGES, "Manage messages", "Delete other people's messages."),
+        (KICK, "Kick members", "Remove people (they can come back with an invite)."),
+        (BAN, "Ban members", "Remove people for good."),
+        (MANAGE_ROLES, "Manage roles", "Create and edit roles, and give people roles below their own highest role."),
+        (MANAGE_SERVER, "Manage server", "Rename the server and change its description."),
+    ];
+}
+
+/// A custom role, like Discord's: a name and color, what it allows, and its place in the
+/// order (higher `position` ranks higher).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct RoleDef {
+    pub id: RoleId,
+    pub name: String,
+    /// 0xRRGGBB; 0 means no color.
+    pub color: u32,
+    pub position: i32,
+    pub perms: u64,
+    /// Members with this role are listed in their own group.
+    #[serde(default)]
+    pub hoist: bool,
+}
+
+/// An image or GIF attached to a message. The bytes live on the server; fetch them with a
+/// file stream (see [`FILES_FEATURE`]).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Attachment {
+    pub id: String,
+    pub name: String,
+    pub mime: String,
+    pub size: u64,
+    #[serde(default)]
+    pub width: u32,
+    #[serde(default)]
+    pub height: u32,
+}
+
+/// Server features newer than protocol v1, listed in `Ready::features`. A client only uses
+/// a feature the server lists, so newer apps work with older servers and the other way
+/// round.
+pub const ROLES_FEATURE: &str = "roles";
+/// File streams: attachments and profile pictures.
+pub const FILES_FEATURE: &str = "files";
+pub const AVATARS_FEATURE: &str = "avatars";
+
+/// Largest attachment and profile picture the server accepts.
+pub const MAX_ATTACHMENT_BYTES: u64 = 10 << 20;
+pub const MAX_AVATAR_BYTES: u64 = 1 << 20;
+pub const MAX_ATTACHMENTS_PER_MESSAGE: usize = 10;
+
+/// File streams. The client opens a new bidirectional stream, writes [`FILE_PREAMBLE`], one
+/// length-prefixed JSON [`FileRequest`] (and for a put, exactly `size` bytes), and finishes
+/// its side. The server answers with one length-prefixed JSON [`FileReply`], followed by the
+/// file's bytes for a get.
+pub const FILE_PREAMBLE: &[u8; 4] = b"INGF";
+
+/// A profile picture's id: the first 16 bytes of SHA-256(user id ‖ image), in hex. Named by
+/// content, so an app can tell whether a server already has its current picture.
+pub fn avatar_id(uid: &str, bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(uid.as_bytes());
+    h.update(bytes);
+    h.finalize()[..16].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Width and height of a PNG, GIF, JPEG or WebP image, read from its header.
+pub fn image_size(b: &[u8]) -> Option<(u32, u32)> {
+    let be32 = |i: usize| b.get(i..i + 4).map(|x| u32::from_be_bytes([x[0], x[1], x[2], x[3]]));
+    let le16 = |i: usize| b.get(i..i + 2).map(|x| u16::from_le_bytes([x[0], x[1]]) as u32);
+    let be16 = |i: usize| b.get(i..i + 2).map(|x| u16::from_be_bytes([x[0], x[1]]) as u32);
+    let le24 = |i: usize| b.get(i..i + 3).map(|x| x[0] as u32 | (x[1] as u32) << 8 | (x[2] as u32) << 16);
+    match sniff_image(b)? {
+        "image/png" => Some((be32(16)?, be32(20)?)),
+        "image/gif" => Some((le16(6)?, le16(8)?)),
+        "image/jpeg" => {
+            // Walk the markers to the first start-of-frame.
+            let mut i = 2;
+            while i + 9 < b.len() {
+                if b[i] != 0xff {
+                    i += 1;
+                    continue;
+                }
+                let marker = b[i + 1];
+                if (0xc0..=0xcf).contains(&marker) && ![0xc4, 0xc8, 0xcc].contains(&marker) {
+                    return Some((be16(i + 7)?, be16(i + 5)?));
+                }
+                if marker == 0xd8 || marker == 0x01 || (0xd0..=0xd7).contains(&marker) {
+                    i += 2;
+                    continue;
+                }
+                i += 2 + be16(i + 2)? as usize;
+            }
+            None
+        }
+        "image/webp" => match b.get(12..16)? {
+            b"VP8X" => Some((le24(24)? + 1, le24(27)? + 1)),
+            b"VP8L" => {
+                let v = u32::from_le_bytes([*b.get(21)?, *b.get(22)?, *b.get(23)?, *b.get(24)?]);
+                Some(((v & 0x3fff) + 1, ((v >> 14) & 0x3fff) + 1))
+            }
+            b"VP8 " => Some((le16(26)? & 0x3fff, le16(28)? & 0x3fff)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum FileRequest {
+    Get { id: String },
+    /// Upload an attachment (then send it with `SendMessage::attachments`) or a profile
+    /// picture (then `SetAvatar`).
+    Put { kind: FileKind, name: String, mime: String, size: u64 },
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FileKind {
+    Attachment,
+    Avatar,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct FileReply {
+    pub ok: bool,
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub mime: String,
+    #[serde(default)]
+    pub size: u64,
+    #[serde(default)]
+    pub error: String,
+}
+
+/// The kind of image in `bytes`, from its first bytes (PNG, JPEG, GIF and WebP only).
+pub fn sniff_image(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
@@ -102,6 +278,8 @@ pub struct Message {
     pub reply_to: Option<MessageId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reactions: Vec<Reaction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<Attachment>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -181,6 +359,9 @@ pub enum Request {
         /// Client-chosen id echoed in `MessageCreated` so the sender can match its pending copy.
         #[serde(default)]
         nonce: String,
+        /// Files uploaded with a file stream first (needs [`FILES_FEATURE`]).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<String>,
     },
     EditMessage {
         message_id: MessageId,
@@ -279,6 +460,43 @@ pub enum Request {
     Ping {
         t: u64,
     },
+    // ---- roles ([`ROLES_FEATURE`])
+    CreateRole {
+        name: String,
+        color: u32,
+        perms: u64,
+        #[serde(default)]
+        hoist: bool,
+    },
+    UpdateRole {
+        role_id: RoleId,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        color: Option<u32>,
+        #[serde(default)]
+        perms: Option<u64>,
+        #[serde(default)]
+        hoist: Option<bool>,
+        /// Move it up (+1) or down (-1) in the order.
+        #[serde(default)]
+        shift: i32,
+    },
+    DeleteRole {
+        role_id: RoleId,
+    },
+    SetMemberRoles {
+        user_id: UserId,
+        roles: Vec<RoleId>,
+    },
+    /// Profile picture ([`AVATARS_FEATURE`]): a file uploaded as [`FileKind::Avatar`], or none.
+    SetAvatar {
+        #[serde(default)]
+        file_id: Option<String>,
+    },
+    /// A request this server doesn't know (from a newer app).
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -319,6 +537,11 @@ pub enum Event {
         channels: Vec<Channel>,
         members: Vec<Member>,
         voice: Vec<VoiceParticipant>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        roles: Vec<RoleDef>,
+        /// What this server supports beyond protocol v1 (see [`ROLES_FEATURE`] and friends).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        features: Vec<String>,
     },
     Ok,
     Error {
@@ -398,6 +621,15 @@ pub enum Event {
     Pong {
         t: u64,
     },
+    RoleUpserted {
+        role: RoleDef,
+    },
+    RoleDeleted {
+        role_id: RoleId,
+    },
+    /// An event this app doesn't know (from a newer server); ignored.
+    #[serde(other)]
+    Unknown,
 }
 
 impl Event {
@@ -436,6 +668,34 @@ pub fn clean_channel_name(raw: &str, kind: ChannelKind) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_events_and_requests_are_tolerated() {
+        let f: ServerFrame = serde_json::from_str(r#"{"ev":{"type":"something_new","x":1}}"#).unwrap();
+        assert!(matches!(f.ev, Event::Unknown));
+        let r: ClientFrame = serde_json::from_str(r#"{"id":4,"req":{"op":"do_new_thing","y":[1]}}"#).unwrap();
+        assert!(matches!(r.req, Request::Unknown));
+        // Old servers' Ready (no roles, no features) still parses.
+        let f: ServerFrame = serde_json::from_str(
+            r#"{"ev":{"type":"ready","me":{"user_id":"a","name":"A","role":"owner","online":true},"server":{"name":"S"},"channels":[],"members":[],"voice":[]}}"#,
+        )
+        .unwrap();
+        assert!(matches!(f.ev, Event::Ready { ref features, .. } if features.is_empty()));
+    }
+
+    #[test]
+    fn sniffs_images() {
+        assert_eq!(sniff_image(b"\x89PNG\r\n\x1a\nrest"), Some("image/png"));
+        assert_eq!(sniff_image(b"GIF89a...."), Some("image/gif"));
+        assert_eq!(sniff_image(&[0xff, 0xd8, 0xff, 0xe0]), Some("image/jpeg"));
+        assert_eq!(sniff_image(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
+        assert_eq!(sniff_image(b"MZ\x90\0 an exe"), None);
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png.extend_from_slice(&640u32.to_be_bytes());
+        png.extend_from_slice(&480u32.to_be_bytes());
+        assert_eq!(image_size(&png), Some((640, 480)));
+        assert_eq!(image_size(b"GIF89a\x40\x01\xf0\x00"), Some((320, 240)));
+    }
 
     #[test]
     fn event_json_shape() {

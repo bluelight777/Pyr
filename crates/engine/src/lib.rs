@@ -5,6 +5,7 @@
 //! threads.
 
 pub mod audio;
+pub mod files;
 pub mod call;
 pub mod config;
 pub mod e2ee;
@@ -100,6 +101,9 @@ pub struct Shared {
     audio_factory: Option<AudioIoFactory>,
     mic_test: Mutex<Option<AudioEngine>>,
     last_video_bytes: Mutex<(std::time::Instant, u64)>,
+    /// Images downloaded from servers (attachments and profile pictures), by file id. Kept
+    /// in memory only, so nothing deleted on a server lingers on this PC.
+    pub files: Mutex<files::FileCache>,
 }
 
 impl Shared {
@@ -320,6 +324,7 @@ impl Engine {
             audio_factory: opts.audio,
             mic_test: Mutex::new(None),
             last_video_bytes: Mutex::new((std::time::Instant::now(), 0)),
+            files: Mutex::new(files::FileCache::default()),
         });
         for e in entries {
             let h = server::spawn(shared.clone(), e.clone());
@@ -460,10 +465,23 @@ impl Engine {
     // ---------------------------------------------------------------- text
 
     pub fn send_message(&self, key: &str, channel_id: ChannelId, content: &str, reply_to: Option<MessageId>) {
+        self.send_message_with(key, channel_id, content, reply_to, Vec::new());
+    }
+
+    /// A message with images (file name, bytes): they're uploaded first, then sent with it.
+    pub fn send_message_with(
+        &self,
+        key: &str,
+        channel_id: ChannelId,
+        content: &str,
+        reply_to: Option<MessageId>,
+        files: Vec<(String, Vec<u8>)>,
+    ) {
         let content = content.trim();
-        if content.is_empty() {
+        if content.is_empty() && files.is_empty() {
             return;
         }
+        let files: Vec<(String, Arc<Vec<u8>>)> = files.into_iter().map(|(n, b)| (n, Arc::new(b))).collect();
         let nonce = ingle_proto::b64::encode(&crypto::random_bytes::<9>());
         {
             let mut st = self.shared.state.write();
@@ -474,26 +492,141 @@ impl Engine {
                     reply_to,
                     created_at: ingle_proto::now_ms(),
                     failed: None,
+                    files: files.clone(),
+                    progress: (!files.is_empty()).then(|| "Uploading…".to_string()),
                 });
             }
         }
         let Some(h) = self.handle(key) else { return };
         let shared = self.shared.clone();
         let key = key.to_string();
-        let req = Request::SendMessage { channel_id, content: content.to_string(), reply_to, nonce: nonce.clone() };
+        let content = content.to_string();
         self.shared.rt.spawn(async move {
-            if let Ok(Event::Error { message, .. }) = h.request(req).await {
+            let set = |shared: &Arc<Shared>, progress: Option<String>, failed: Option<String>| {
                 let mut st = shared.state.write();
                 if let Some(s) = st.server_mut(&key) {
                     if let Some(p) = s.logs.entry(channel_id).or_default().pending.iter_mut().find(|p| p.nonce == nonce) {
-                        p.failed = Some(message);
+                        p.progress = progress;
+                        if failed.is_some() {
+                            p.failed = failed;
+                        }
                     }
                 }
                 drop(st);
                 (shared.repaint)();
+            };
+            let mut ids = Vec::new();
+            if !files.is_empty() {
+                let Some(conn) = h.connection() else {
+                    set(&shared, None, Some("not connected".into()));
+                    return;
+                };
+                for (i, (name, bytes)) in files.iter().enumerate() {
+                    set(&shared, Some(format!("Uploading {} of {}…", i + 1, files.len())), None);
+                    let mime = ingle_proto::control::sniff_image(bytes).unwrap_or("application/octet-stream");
+                    match net::file_put(&conn, FileKind::Attachment, name, mime, bytes).await {
+                        Ok(id) => {
+                            // We have the bytes already: no need to download our own upload.
+                            shared.files.lock().insert(id.clone(), bytes.clone());
+                            ids.push(id);
+                        }
+                        Err(e) => {
+                            set(&shared, None, Some(format!("Couldn't upload {name}: {e:#}")));
+                            return;
+                        }
+                    }
+                }
+                set(&shared, None, None);
+            }
+            let req = Request::SendMessage { channel_id, content, reply_to, nonce: nonce.clone(), attachments: ids };
+            if let Ok(Event::Error { message, .. }) = h.request(req).await {
+                set(&shared, None, Some(message));
             }
         });
         (self.shared.repaint)();
+    }
+
+    // ---------------------------------------------------------------- files
+
+    /// An image from a server, if it's here yet; starts downloading it otherwise.
+    pub fn file(&self, key: &str, id: &str) -> files::FileState {
+        let state = self.shared.files.lock().get(id);
+        if !matches!(state, files::FileState::Missing) {
+            return state;
+        }
+        let Some(conn) = self.handle(key).and_then(|h| h.connection()) else { return files::FileState::Missing };
+        self.shared.files.lock().set_loading(id);
+        let shared = self.shared.clone();
+        let id = id.to_string();
+        self.shared.rt.spawn(async move {
+            match net::file_get(&conn, &id).await {
+                Ok((_, bytes)) => shared.files.lock().insert(id, Arc::new(bytes)),
+                Err(e) => shared.files.lock().set_failed(&id, format!("{e:#}")),
+            }
+            (shared.repaint)();
+        });
+        files::FileState::Loading
+    }
+
+    // ---------------------------------------------------------------- roles
+
+    pub fn create_role(&self, key: &str, name: &str, color: u32, perms: u64, hoist: bool) {
+        self.request(key, Request::CreateRole { name: name.to_string(), color, perms, hoist });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_role(
+        &self,
+        key: &str,
+        role_id: RoleId,
+        name: Option<String>,
+        color: Option<u32>,
+        perms: Option<u64>,
+        hoist: Option<bool>,
+        shift: i32,
+    ) {
+        self.request(key, Request::UpdateRole { role_id, name, color, perms, hoist, shift });
+    }
+
+    pub fn delete_role(&self, key: &str, role_id: RoleId) {
+        self.request(key, Request::DeleteRole { role_id });
+    }
+
+    pub fn set_member_roles(&self, key: &str, user_id: &str, roles: Vec<RoleId>) {
+        self.request(key, Request::SetMemberRoles { user_id: user_id.to_string(), roles });
+    }
+
+    // -------------------------------------------------------------- avatar
+
+    /// Your profile picture (a square PNG), or none. Saved on this PC and sent to every
+    /// server you're in.
+    pub fn set_avatar(&self, png: Option<Vec<u8>>) {
+        let path = self.shared.config_dir.join(AVATAR_FILE);
+        match &png {
+            Some(b) => {
+                if let Err(e) = std::fs::write(&path, b) {
+                    self.toast(format!("Couldn't save your picture: {e}"), true);
+                    return;
+                }
+            }
+            None => {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+        if let Some(b) = png {
+            let id = ingle_proto::control::avatar_id(&self.shared.identity.user_id(), &b);
+            self.shared.files.lock().insert(id, Arc::new(b));
+        }
+        let keys: Vec<String> = self.shared.servers.lock().keys().cloned().collect();
+        for k in keys {
+            sync_avatar(self.shared.clone(), k);
+        }
+        (self.shared.repaint)();
+    }
+
+    /// Your profile picture as saved on this PC.
+    pub fn my_avatar(&self) -> Option<Vec<u8>> {
+        std::fs::read(self.shared.config_dir.join(AVATAR_FILE)).ok()
     }
 
     pub fn discard_pending(&self, key: &str, channel_id: ChannelId, nonce: &str) {
@@ -952,4 +1085,47 @@ impl Engine {
             h.close();
         }
     }
+}
+
+const AVATAR_FILE: &str = "avatar.png";
+
+/// Make a server's copy of my profile picture match the one saved on this PC (after
+/// connecting, and when it changes). Content-named ids mean nothing is re-sent needlessly.
+pub(crate) fn sync_avatar(shared: Arc<Shared>, key: String) {
+    let rt = shared.rt.clone();
+    rt.spawn(async move {
+        let (has_feature, current) = {
+            let st = shared.state.read();
+            match st.server(&key) {
+                Some(s) => (s.has(ingle_proto::control::AVATARS_FEATURE), s.me.as_ref().and_then(|m| m.avatar.clone())),
+                None => return,
+            }
+        };
+        if !has_feature {
+            return;
+        }
+        let Some(h) = shared.servers.lock().get(&key).cloned() else { return };
+        let local = std::fs::read(shared.config_dir.join(AVATAR_FILE)).ok();
+        let wanted = local.as_ref().map(|b| ingle_proto::control::avatar_id(&shared.identity.user_id(), b));
+        if wanted == current {
+            return;
+        }
+        let file_id = match local {
+            Some(bytes) => {
+                let Some(conn) = h.connection() else { return };
+                let mime = ingle_proto::control::sniff_image(&bytes).unwrap_or("image/png");
+                match net::file_put(&conn, FileKind::Avatar, "avatar.png", mime, &bytes).await {
+                    Ok(id) => Some(id),
+                    Err(e) => {
+                        tracing::warn!("couldn't upload the profile picture: {e:#}");
+                        return;
+                    }
+                }
+            }
+            None => None,
+        };
+        if let Ok(Event::Error { message, .. }) = h.request(Request::SetAvatar { file_id }).await {
+            tracing::warn!("couldn't set the profile picture: {message}");
+        }
+    });
 }

@@ -3,7 +3,9 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use ingle_proto::control::{Channel, ChannelId, ChannelKind, Member, Message, MessageId, Reaction, Role, UserId};
+use ingle_proto::control::{
+    Attachment, Channel, ChannelId, ChannelKind, FileKind, Member, Message, MessageId, Reaction, Role, RoleDef, RoleId, UserId,
+};
 use ingle_proto::now_ms;
 use parking_lot::Mutex;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -17,6 +19,21 @@ pub struct UserRow {
     pub role: Role,
     pub banned: bool,
     pub joined_at: i64,
+    pub avatar: Option<String>,
+}
+
+/// A stored file (attachment or profile picture).
+#[derive(Clone, Debug)]
+pub struct FileRow {
+    pub id: String,
+    pub owner: String,
+    pub kind: FileKind,
+    pub name: String,
+    pub mime: String,
+    pub size: u64,
+    pub width: u32,
+    pub height: u32,
+    pub message_id: Option<MessageId>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -70,7 +87,44 @@ CREATE TABLE IF NOT EXISTS invites (
     expires_at INTEGER,
     grants_role INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS roles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    color INTEGER NOT NULL DEFAULT 0,
+    position INTEGER NOT NULL DEFAULT 0,
+    perms INTEGER NOT NULL DEFAULT 0,
+    hoist INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS member_roles (
+    user_id TEXT NOT NULL,
+    role_id INTEGER NOT NULL,
+    PRIMARY KEY (user_id, role_id)
+);
+CREATE TABLE IF NOT EXISTS files (
+    id TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    kind INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    mime TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    width INTEGER NOT NULL DEFAULT 0,
+    height INTEGER NOT NULL DEFAULT 0,
+    message_id INTEGER,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS files_by_message ON files(message_id);
 "#;
+
+fn file_kind_to_i(k: FileKind) -> i64 {
+    match k {
+        FileKind::Attachment => 0,
+        FileKind::Avatar => 1,
+    }
+}
+
+fn file_kind_from_i(v: i64) -> FileKind {
+    if v == 1 { FileKind::Avatar } else { FileKind::Attachment }
+}
 
 fn kind_to_i(k: ChannelKind) -> i64 {
     match k {
@@ -81,6 +135,17 @@ fn kind_to_i(k: ChannelKind) -> i64 {
 
 fn kind_from_i(v: i64) -> ChannelKind {
     if v == 1 { ChannelKind::Voice } else { ChannelKind::Text }
+}
+
+/// Columns added after the first release.
+fn migrate(c: &Connection) -> Result<()> {
+    let has_avatar = c
+        .prepare("SELECT 1 FROM pragma_table_info('users') WHERE name = 'avatar'")?
+        .exists([])?;
+    if !has_avatar {
+        c.execute_batch("ALTER TABLE users ADD COLUMN avatar TEXT")?;
+    }
+    Ok(())
 }
 
 /// After deleting or editing: copy the zeroed pages into the database file and empty the
@@ -100,6 +165,7 @@ impl Db {
         // where a recovery tool could find it.
         conn.pragma_update(None, "secure_delete", "ON")?;
         conn.execute_batch(SCHEMA)?;
+        migrate(&conn)?;
         conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema', '1')", [])?;
         // Databases from before secure delete may still hold old deleted text in free pages:
         // rebuild once to drop it.
@@ -116,6 +182,7 @@ impl Db {
     pub fn open_in_memory() -> Result<Db> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(SCHEMA)?;
+        migrate(&conn)?;
         Ok(Db { conn: Mutex::new(conn) })
     }
 
@@ -141,12 +208,13 @@ impl Db {
     pub fn get_user(&self, id: &str) -> Option<UserRow> {
         self.conn
             .lock()
-            .query_row("SELECT name, role, banned, joined_at FROM users WHERE id = ?1", [id], |r| {
+            .query_row("SELECT name, role, banned, joined_at, avatar FROM users WHERE id = ?1", [id], |r| {
                 Ok(UserRow {
                     name: r.get(0)?,
                     role: Role::from_i64(r.get(1)?),
                     banned: r.get::<_, i64>(2)? != 0,
                     joined_at: r.get(3)?,
+                    avatar: r.get(4)?,
                 })
             })
             .optional()
@@ -187,6 +255,7 @@ impl Db {
         } else {
             c.execute("DELETE FROM users WHERE id = ?1", [id])?;
         }
+        c.execute("DELETE FROM member_roles WHERE user_id = ?1", [id])?;
         scrub(&c);
         Ok(())
     }
@@ -194,19 +263,229 @@ impl Db {
     pub fn members(&self) -> Vec<Member> {
         let c = self.conn.lock();
         let mut st = c
-            .prepare("SELECT id, name, role, joined_at FROM users WHERE banned = 0 ORDER BY joined_at")
+            .prepare("SELECT id, name, role, joined_at, avatar FROM users WHERE banned = 0 ORDER BY joined_at")
+            .expect("valid SQL");
+        let mut members: Vec<Member> = st
+            .query_map([], |r| {
+                Ok(Member {
+                    user_id: r.get(0)?,
+                    name: r.get(1)?,
+                    role: Role::from_i64(r.get(2)?),
+                    online: false,
+                    joined_at: r.get(3)?,
+                    roles: Vec::new(),
+                    avatar: r.get(4)?,
+                })
+            })
+            .map(|rows| rows.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default();
+        let mut by_user: std::collections::HashMap<String, Vec<RoleId>> = Default::default();
+        if let Ok(mut st) = c.prepare("SELECT user_id, role_id FROM member_roles ORDER BY role_id") {
+            if let Ok(rows) = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))) {
+                for (u, r) in rows.flatten() {
+                    by_user.entry(u).or_default().push(r);
+                }
+            }
+        }
+        for m in &mut members {
+            m.roles = by_user.remove(&m.user_id).unwrap_or_default();
+        }
+        members
+    }
+
+    // ---------------------------------------------------------------- roles
+
+    pub fn roles(&self) -> Vec<RoleDef> {
+        let c = self.conn.lock();
+        let mut st = c
+            .prepare("SELECT id, name, color, position, perms, hoist FROM roles ORDER BY position DESC, id")
             .expect("valid SQL");
         st.query_map([], |r| {
-            Ok(Member {
-                user_id: r.get(0)?,
+            Ok(RoleDef {
+                id: r.get(0)?,
                 name: r.get(1)?,
-                role: Role::from_i64(r.get(2)?),
-                online: false,
-                joined_at: r.get(3)?,
+                color: r.get::<_, i64>(2)? as u32,
+                position: r.get(3)?,
+                perms: r.get::<_, i64>(4)? as u64,
+                hoist: r.get::<_, i64>(5)? != 0,
             })
         })
         .map(|rows| rows.filter_map(|r| r.ok()).collect())
         .unwrap_or_default()
+    }
+
+    pub fn role(&self, id: RoleId) -> Option<RoleDef> {
+        self.roles().into_iter().find(|r| r.id == id)
+    }
+
+    /// A new role goes to the bottom of the order, like Discord.
+    pub fn create_role(&self, name: &str, color: u32, perms: u64, hoist: bool) -> Result<RoleDef> {
+        let c = self.conn.lock();
+        let bottom: i64 = c.query_row("SELECT COALESCE(MIN(position), 1) FROM roles", [], |r| r.get(0))?;
+        let position = (bottom - 1) as i32;
+        c.execute(
+            "INSERT INTO roles(name, color, position, perms, hoist) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![name, color as i64, position, perms as i64, hoist as i64],
+        )?;
+        Ok(RoleDef { id: c.last_insert_rowid(), name: name.to_string(), color, position, perms, hoist })
+    }
+
+    pub fn save_role(&self, r: &RoleDef) -> Result<()> {
+        self.conn.lock().execute(
+            "UPDATE roles SET name = ?2, color = ?3, position = ?4, perms = ?5, hoist = ?6 WHERE id = ?1",
+            params![r.id, r.name, r.color as i64, r.position, r.perms as i64, r.hoist as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Deletes a role; returns the members who had it.
+    pub fn delete_role(&self, id: RoleId) -> Result<Vec<String>> {
+        let c = self.conn.lock();
+        let mut st = c.prepare("SELECT user_id FROM member_roles WHERE role_id = ?1")?;
+        let had: Vec<String> = st.query_map([id], |r| r.get(0))?.flatten().collect();
+        drop(st);
+        c.execute("DELETE FROM member_roles WHERE role_id = ?1", [id])?;
+        c.execute("DELETE FROM roles WHERE id = ?1", [id])?;
+        Ok(had)
+    }
+
+    pub fn member_roles(&self, uid: &str) -> Vec<RoleId> {
+        let c = self.conn.lock();
+        let Ok(mut st) = c.prepare("SELECT role_id FROM member_roles WHERE user_id = ?1 ORDER BY role_id") else {
+            return Vec::new();
+        };
+        st.query_map([uid], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
+    }
+
+    pub fn set_member_roles(&self, uid: &str, roles: &[RoleId]) -> Result<()> {
+        let c = self.conn.lock();
+        c.execute("DELETE FROM member_roles WHERE user_id = ?1", [uid])?;
+        for r in roles {
+            c.execute("INSERT OR IGNORE INTO member_roles(user_id, role_id) VALUES (?1, ?2)", params![uid, r])?;
+        }
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------- files
+
+    pub fn insert_file(&self, f: &FileRow) -> Result<()> {
+        self.conn.lock().execute(
+            "INSERT OR REPLACE INTO files(id, owner, kind, name, mime, size, width, height, message_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9)",
+            params![f.id, f.owner, file_kind_to_i(f.kind), f.name, f.mime, f.size as i64, f.width, f.height, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    fn row_to_file(r: &rusqlite::Row<'_>) -> rusqlite::Result<FileRow> {
+        Ok(FileRow {
+            id: r.get(0)?,
+            owner: r.get(1)?,
+            kind: file_kind_from_i(r.get(2)?),
+            name: r.get(3)?,
+            mime: r.get(4)?,
+            size: r.get::<_, i64>(5)? as u64,
+            width: r.get(6)?,
+            height: r.get(7)?,
+            message_id: r.get(8)?,
+        })
+    }
+
+    pub fn file(&self, id: &str) -> Option<FileRow> {
+        self.conn
+            .lock()
+            .query_row(
+                "SELECT id, owner, kind, name, mime, size, width, height, message_id FROM files WHERE id = ?1",
+                [id],
+                Self::row_to_file,
+            )
+            .optional()
+            .ok()
+            .flatten()
+    }
+
+    /// Total bytes stored (for the storage limit).
+    pub fn files_total(&self) -> u64 {
+        self.conn.lock().query_row("SELECT COALESCE(SUM(size), 0) FROM files", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as u64
+    }
+
+    /// Attachments uploaded but not sent within `max_age_ms`, and profile pictures nobody
+    /// uses: their rows are removed and their ids returned so the files can be wiped.
+    pub fn take_unused_files(&self, max_age_ms: i64) -> Vec<String> {
+        let c = self.conn.lock();
+        let cutoff = now_ms() - max_age_ms;
+        let sql = "SELECT id FROM files WHERE created_at < ?1 AND (
+                       (kind = 0 AND message_id IS NULL)
+                    OR (kind = 1 AND id NOT IN (SELECT avatar FROM users WHERE avatar IS NOT NULL)))";
+        let ids: Vec<String> = c
+            .prepare(sql)
+            .and_then(|mut st| st.query_map([cutoff], |r| r.get(0)).map(|rows| rows.flatten().collect()))
+            .unwrap_or_default();
+        for id in &ids {
+            let _ = c.execute("DELETE FROM files WHERE id = ?1", [id]);
+        }
+        if !ids.is_empty() {
+            scrub(&c);
+        }
+        ids
+    }
+
+    pub fn set_avatar(&self, uid: &str, file_id: Option<&str>) -> Result<Option<String>> {
+        let c = self.conn.lock();
+        let old: Option<String> =
+            c.query_row("SELECT avatar FROM users WHERE id = ?1", [uid], |r| r.get(0)).optional()?.flatten();
+        c.execute("UPDATE users SET avatar = ?2 WHERE id = ?1", params![uid, file_id])?;
+        Ok(old)
+    }
+
+    /// Removes a profile picture's row if nobody uses it any more; true if it should be wiped.
+    pub fn release_avatar(&self, id: &str) -> bool {
+        let c = self.conn.lock();
+        let used: i64 = c.query_row("SELECT COUNT(*) FROM users WHERE avatar = ?1", [id], |r| r.get(0)).unwrap_or(1);
+        if used > 0 {
+            return false;
+        }
+        let n = c.execute("DELETE FROM files WHERE id = ?1 AND kind = 1", [id]).unwrap_or(0);
+        scrub(&c);
+        n > 0
+    }
+
+    fn attachments_for(c: &Connection, ids: &[MessageId]) -> std::collections::HashMap<MessageId, Vec<Attachment>> {
+        let mut out: std::collections::HashMap<MessageId, Vec<Attachment>> = Default::default();
+        if ids.is_empty() {
+            return out;
+        }
+        let list = ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT message_id, id, name, mime, size, width, height FROM files WHERE message_id IN ({list}) ORDER BY created_at, rowid"
+        );
+        let Ok(mut st) = c.prepare(&sql) else { return out };
+        let rows = st.query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                Attachment {
+                    id: r.get(1)?,
+                    name: r.get(2)?,
+                    mime: r.get(3)?,
+                    size: r.get::<_, i64>(4)? as u64,
+                    width: r.get(5)?,
+                    height: r.get(6)?,
+                },
+            ))
+        });
+        if let Ok(rows) = rows {
+            for (mid, a) in rows.flatten() {
+                out.entry(mid).or_default().push(a);
+            }
+        }
+        out
+    }
+
+    /// Files attached to messages in a channel, or to one message (to wipe them).
+    fn file_ids_where(c: &Connection, sql_where: &str, arg: i64) -> Vec<String> {
+        c.prepare(&format!("SELECT id FROM files WHERE {sql_where}"))
+            .and_then(|mut st| st.query_map([arg], |r| r.get(0)).map(|rows| rows.flatten().collect()))
+            .unwrap_or_default()
     }
 
     pub fn owner_exists(&self) -> bool {
@@ -282,13 +561,17 @@ impl Db {
         Ok(self.channel(id))
     }
 
-    pub fn delete_channel(&self, id: ChannelId) -> Result<bool> {
+    /// Deletes a channel and its messages; returns whether it existed and the ids of the
+    /// files that were attached (to wipe).
+    pub fn delete_channel(&self, id: ChannelId) -> Result<(bool, Vec<String>)> {
         let c = self.conn.lock();
         let n = c.execute("DELETE FROM channels WHERE id = ?1", [id])?;
         c.execute("DELETE FROM reactions WHERE message_id IN (SELECT id FROM messages WHERE channel_id = ?1)", [id])?;
+        let files = Self::file_ids_where(&c, "message_id IN (SELECT id FROM messages WHERE channel_id = ?1)", id);
+        c.execute("DELETE FROM files WHERE message_id IN (SELECT id FROM messages WHERE channel_id = ?1)", [id])?;
         c.execute("DELETE FROM messages WHERE channel_id = ?1", [id])?;
         scrub(&c);
-        Ok(n > 0)
+        Ok((n > 0, files))
     }
 
     // ------------------------------------------------------------- messages
@@ -300,14 +583,31 @@ impl Db {
         content: &str,
         reply_to: Option<MessageId>,
     ) -> Result<Message> {
+        self.insert_message_with(channel_id, author, content, reply_to, &[])
+    }
+
+    /// A message with files the author uploaded (checked by the caller); links them to it.
+    pub fn insert_message_with(
+        &self,
+        channel_id: ChannelId,
+        author: &str,
+        content: &str,
+        reply_to: Option<MessageId>,
+        files: &[String],
+    ) -> Result<Message> {
         let now = now_ms();
         let c = self.conn.lock();
         c.execute(
             "INSERT INTO messages(channel_id, author, content, created_at, reply_to) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![channel_id, author, content, now, reply_to],
         )?;
+        let id = c.last_insert_rowid();
+        for f in files {
+            c.execute("UPDATE files SET message_id = ?2 WHERE id = ?1 AND message_id IS NULL", params![f, id])?;
+        }
+        let attachments = Self::attachments_for(&c, &[id]).remove(&id).unwrap_or_default();
         Ok(Message {
-            id: c.last_insert_rowid(),
+            id,
             channel_id,
             author: author.to_string(),
             content: content.to_string(),
@@ -315,6 +615,7 @@ impl Db {
             edited_at: None,
             reply_to,
             reactions: Vec::new(),
+            attachments,
         })
     }
 
@@ -351,6 +652,7 @@ impl Db {
             edited_at: r.get(5)?,
             reply_to: r.get(6)?,
             reactions: Vec::new(),
+            attachments: Vec::new(),
         })
     }
 
@@ -366,6 +668,7 @@ impl Db {
             .ok()
             .flatten()?;
         m.reactions = Self::reactions_for(&c, &[id]).remove(&id).unwrap_or_default();
+        m.attachments = Self::attachments_for(&c, &[id]).remove(&id).unwrap_or_default();
         Some(m)
     }
 
@@ -378,12 +681,15 @@ impl Db {
         Ok(self.get_message(id))
     }
 
-    pub fn delete_message(&self, id: MessageId) -> Result<()> {
+    /// Deletes a message; returns the ids of its files (to wipe).
+    pub fn delete_message(&self, id: MessageId) -> Result<Vec<String>> {
         let c = self.conn.lock();
         c.execute("DELETE FROM messages WHERE id = ?1", [id])?;
         c.execute("DELETE FROM reactions WHERE message_id = ?1", [id])?;
+        let files = Self::file_ids_where(&c, "message_id = ?1", id);
+        c.execute("DELETE FROM files WHERE message_id = ?1", [id])?;
         scrub(&c);
-        Ok(())
+        Ok(files)
     }
 
     /// Newest-last page of history older than `before`.
@@ -406,8 +712,10 @@ impl Db {
         msgs.reverse();
         let ids: Vec<i64> = msgs.iter().map(|m| m.id).collect();
         let mut reactions = Self::reactions_for(&c, &ids);
+        let mut attachments = Self::attachments_for(&c, &ids);
         for m in &mut msgs {
             m.reactions = reactions.remove(&m.id).unwrap_or_default();
+            m.attachments = attachments.remove(&m.id).unwrap_or_default();
         }
         (msgs, complete)
     }
