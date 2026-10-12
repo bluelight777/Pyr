@@ -126,10 +126,9 @@ pub struct Settings {
     pub camera_quality: CameraQuality,
     pub screen_preset: ScreenPreset,
     pub share_audio: bool,
-    /// Windows: the window's close button hides Ingle to its icon by the clock (the
-    /// notification area) instead of quitting, so calls and messages keep coming in.
+    /// No longer used: the close button always keeps Ingle running by the clock (Windows).
     pub close_to_tray: bool,
-    /// The one-time note explaining `close_to_tray` has been shown.
+    /// The one-time notice that Ingle is still running by the clock has been shown.
     pub tray_note_seen: bool,
     /// Notification sounds (messages, people joining voice, streams).
     pub sounds: bool,
@@ -193,6 +192,7 @@ pub struct Config {
 
 /// Where the config lives. `profile` lets several identities coexist on one PC (for testing).
 pub fn config_dir(profile: Option<&str>) -> PathBuf {
+    let profile = profile.filter(|p| valid_profile(p));
     if let Ok(dir) = std::env::var("INGLE_HOME") {
         let base = PathBuf::from(dir);
         return match profile {
@@ -217,14 +217,9 @@ pub fn load_or_create_identity(dir: &Path) -> Result<Identity> {
         }
         anyhow::bail!("{} is corrupted; move it away to create a new identity", path.display());
     }
-    std::fs::create_dir_all(dir)?;
+    create_private_dir(dir)?;
     let id = Identity::generate();
     write_atomic(&path, b64::encode(&id.seed()).as_bytes())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-    }
     Ok(id)
 }
 
@@ -236,16 +231,48 @@ pub fn load_config(dir: &Path) -> Config {
 }
 
 pub fn save_config(dir: &Path, cfg: &Config) -> Result<()> {
-    std::fs::create_dir_all(dir)?;
+    create_private_dir(dir)?;
     let data = serde_json::to_vec_pretty(cfg)?;
     write_atomic(&dir.join("config.json"), &data)
 }
 
+/// Writes a file in one go (a new file renamed over the old), readable only by this user on
+/// Linux from the moment it exists: the identity key is the user's whole identity, and the
+/// config holds their servers and keys for services.
 fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
+    use std::io::Write;
     let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, data).with_context(|| format!("writing {}", tmp.display()))?;
+    let _ = std::fs::remove_file(&tmp);
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(&tmp).with_context(|| format!("writing {}", tmp.display()))?;
+    f.write_all(data).with_context(|| format!("writing {}", tmp.display()))?;
+    let _ = f.sync_all();
+    drop(f);
     std::fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display()))?;
     Ok(())
+}
+
+/// Makes the config folder (only this user may open it, on Linux).
+fn create_private_dir(dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+    Ok(())
+}
+
+/// A profile name is a plain word: never a path (which could point the config, and the
+/// identity key, somewhere else, even a network share).
+pub fn valid_profile(p: &str) -> bool {
+    !p.is_empty() && p.len() <= 32 && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 #[cfg(test)]
@@ -262,6 +289,26 @@ mod tests {
         cfg.display_name = "Blue".into();
         save_config(&dir, &cfg).unwrap();
         assert_eq!(load_config(&dir).display_name, "Blue");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for f in ["identity.key", "config.json"] {
+                let mode = std::fs::metadata(dir.join(f)).unwrap().permissions().mode() & 0o777;
+                assert_eq!(mode, 0o600, "{f} is readable by others");
+            }
+            assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn profiles_are_names_not_paths() {
+        assert!(valid_profile("test-2"));
+        for bad in ["", "..", "../x", "a/b", "C:\\x", "\\\\host\\share", "/etc", "x y"] {
+            assert!(!valid_profile(bad), "{bad}");
+        }
+        let base = config_dir(None);
+        assert_eq!(config_dir(Some("/etc")), base, "a path is ignored, not used");
+        assert_eq!(config_dir(Some("p1")), base.join("profiles").join("p1"));
     }
 }

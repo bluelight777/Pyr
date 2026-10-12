@@ -48,8 +48,24 @@ impl Tex {
 /// "avatar:" + file id for the small round version).
 pub struct Images {
     tex: HashMap<String, Tex>,
+    /// When each was last shown (egui pass number), to let go of ones not seen in a while.
+    used: HashMap<String, u64>,
+    /// Bytes of decoded pictures held as textures.
+    bytes: usize,
     tx: mpsc::Sender<(String, std::sync::Arc<Vec<u8>>, u32)>,
     rx: mpsc::Receiver<(String, Result<Decoded, String>)>,
+}
+
+/// Pictures kept decoded at most (beyond this, the least recently shown are let go and
+/// decoded again if they come back into view).
+const TEX_BUDGET: usize = 512 << 20;
+const TEX_MAX: usize = 1500;
+
+fn tex_bytes(t: &Tex) -> usize {
+    match t {
+        Tex::Ready { frames, size, .. } => frames.len() * (size.x as usize).max(1) * (size.y as usize).max(1) * 4,
+        _ => 0,
+    }
 }
 
 impl Default for Images {
@@ -64,7 +80,7 @@ impl Default for Images {
                 }
             }
         });
-        Images { tex: HashMap::new(), tx, rx }
+        Images { tex: HashMap::new(), used: HashMap::new(), bytes: 0, tx, rx }
     }
 }
 
@@ -72,6 +88,11 @@ impl Images {
     /// The texture for `key`, decoding `bytes` (once) if needed. `max_side` limits the size.
     pub fn get(&mut self, ctx: &egui::Context, key: &str, bytes: Option<std::sync::Arc<Vec<u8>>>, max_side: u32) -> &Tex {
         self.collect(ctx);
+        let pass = ctx.cumulative_pass_nr();
+        self.used.insert(key.to_string(), pass);
+        if self.bytes > TEX_BUDGET || self.tex.len() > TEX_MAX {
+            self.evict(pass);
+        }
         if !self.tex.contains_key(key) {
             if let Some(b) = bytes {
                 self.tex.insert(key.to_string(), Tex::Loading);
@@ -83,7 +104,28 @@ impl Images {
     }
 
     pub fn forget(&mut self, key: &str) {
-        self.tex.remove(key);
+        if let Some(t) = self.tex.remove(key) {
+            self.bytes = self.bytes.saturating_sub(tex_bytes(&t));
+        }
+        self.used.remove(key);
+    }
+
+    /// Lets go of the pictures shown longest ago (never ones on screen right now) until well
+    /// under the budget.
+    fn evict(&mut self, pass: u64) {
+        let mut old: Vec<(u64, String)> = self
+            .tex
+            .keys()
+            .map(|k| (self.used.get(k).copied().unwrap_or(0), k.clone()))
+            .filter(|(at, _)| pass.saturating_sub(*at) > 2)
+            .collect();
+        old.sort();
+        for (_, k) in old {
+            if self.bytes <= TEX_BUDGET * 3 / 4 && self.tex.len() <= TEX_MAX * 3 / 4 {
+                break;
+            }
+            self.forget(&k);
+        }
     }
 
     /// Upload any finished decodes.
@@ -103,7 +145,10 @@ impl Images {
                 }
                 Err(e) => Tex::Failed(e),
             };
-            self.tex.insert(key, t);
+            self.bytes += tex_bytes(&t);
+            if let Some(old) = self.tex.insert(key, t) {
+                self.bytes = self.bytes.saturating_sub(tex_bytes(&old));
+            }
             ctx.request_repaint();
         }
     }
@@ -123,11 +168,41 @@ fn shrink(img: image::RgbaImage, max_side: u32) -> image::RgbaImage {
     image::imageops::resize(&img, nw, nh, image::imageops::FilterType::Triangle)
 }
 
+/// Decoding limits for pictures from anywhere: a small file can claim to be enormous (a
+/// "decompression bomb"), so the declared size is checked first and memory is capped.
+fn limits() -> image::Limits {
+    let mut l = image::Limits::default();
+    l.max_image_width = Some(ingle_proto::control::MAX_IMAGE_SIDE);
+    l.max_image_height = Some(ingle_proto::control::MAX_IMAGE_SIDE);
+    l.max_alloc = Some(320 << 20);
+    l
+}
+
+/// A still picture, decoded within [`limits`].
+pub fn load_limited(bytes: &[u8]) -> Result<image::DynamicImage, String> {
+    if !ingle_proto::control::image_dimensions_ok(bytes) {
+        return Err("That image is too large, or isn't one Ingle can read.".into());
+    }
+    let mut r = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| e.to_string())?;
+    r.limits(limits());
+    r.decode().map_err(|e| e.to_string())
+}
+
+/// An animated GIF's decoder, within [`limits`].
+fn gif_decoder(bytes: &[u8]) -> Result<image::codecs::gif::GifDecoder<std::io::Cursor<&[u8]>>, String> {
+    if !ingle_proto::control::image_dimensions_ok(bytes) {
+        return Err("That GIF is too large.".into());
+    }
+    let mut dec = image::codecs::gif::GifDecoder::new(std::io::Cursor::new(bytes)).map_err(|e| e.to_string())?;
+    dec.set_limits(limits()).map_err(|e| e.to_string())?;
+    Ok(dec)
+}
+
 /// Decode a PNG, JPEG, WebP or GIF (all its frames) into textures-to-be.
 pub fn decode(bytes: &[u8], max_side: u32) -> Result<Decoded, String> {
     let fmt = image::guess_format(bytes).map_err(|e| e.to_string())?;
     if fmt == image::ImageFormat::Gif {
-        let dec = image::codecs::gif::GifDecoder::new(std::io::Cursor::new(bytes)).map_err(|e| e.to_string())?;
+        let dec = gif_decoder(bytes)?;
         let mut frames = Vec::new();
         for f in dec.into_frames().take(MAX_FRAMES) {
             let f = f.map_err(|e| e.to_string())?;
@@ -140,12 +215,12 @@ pub fn decode(bytes: &[u8], max_side: u32) -> Result<Decoded, String> {
         }
         if frames.len() == 1 {
             // A still GIF can be as sharp as any other image.
-            let img = image::load_from_memory_with_format(bytes, fmt).map_err(|e| e.to_string())?.to_rgba8();
+            let img = load_limited(bytes)?.to_rgba8();
             frames = vec![(to_color_image(&shrink(img, max_side)), Duration::ZERO)];
         }
         return Ok(Decoded { frames });
     }
-    let img = image::load_from_memory_with_format(bytes, fmt).map_err(|e| e.to_string())?.to_rgba8();
+    let img = load_limited(bytes)?.to_rgba8();
     Ok(Decoded { frames: vec![(to_color_image(&shrink(img, max_side)), Duration::ZERO)] })
 }
 
@@ -161,7 +236,7 @@ pub fn make_emoji(bytes: &[u8]) -> Result<(Vec<u8>, bool), String> {
     let bad = || "That file isn't an image Ingle can read.".to_string();
     let fmt = image::guess_format(bytes).map_err(|_| bad())?;
     if fmt == image::ImageFormat::Gif {
-        let dec = image::codecs::gif::GifDecoder::new(std::io::Cursor::new(bytes)).map_err(|_| bad())?;
+        let dec = gif_decoder(bytes)?;
         let frames: Vec<image::Frame> = dec.into_frames().take(MAX_FRAMES).collect::<Result<_, _>>().map_err(|_| bad())?;
         if frames.len() > 1 {
             let (w, h) = frames[0].buffer().dimensions();
@@ -184,7 +259,7 @@ pub fn make_emoji(bytes: &[u8]) -> Result<(Vec<u8>, bool), String> {
             return Ok((out, true));
         }
     }
-    let img = image::load_from_memory(bytes).map_err(|_| bad())?.to_rgba8();
+    let img = load_limited(bytes).map_err(|_| bad())?.to_rgba8();
     let (w, h) = img.dimensions();
     let small = if w.max(h) > STILL { shrink(img, STILL) } else { img };
     let mut out = Vec::new();
@@ -215,7 +290,7 @@ pub fn make_avatar(bytes: &[u8]) -> Result<Vec<u8>, String> {
 /// A profile picture from part of an image: the square centred at (`cx`, `cy`) (0–1 across
 /// and down the image) whose side is `frac` of the image's shorter side.
 pub fn make_avatar_crop(bytes: &[u8], cx: f32, cy: f32, frac: f32) -> Result<Vec<u8>, String> {
-    let img = image::load_from_memory(bytes).map_err(|_| "That file isn't an image Ingle can read.".to_string())?.to_rgba8();
+    let img = load_limited(bytes).map_err(|_| "That file isn't an image Ingle can read (or it's too large).".to_string())?.to_rgba8();
     let (w, h) = img.dimensions();
     let side = ((w.min(h) as f32 * frac.clamp(0.05, 1.0)).round() as u32).clamp(1, w.min(h));
     let x = ((cx * w as f32 - side as f32 / 2.0).round().max(0.0) as u32).min(w - side);
@@ -246,6 +321,9 @@ pub fn check_attachment(name: &str, bytes: &[u8]) -> Result<(), String> {
     }
     if ingle_proto::control::sniff_image(bytes).is_none() {
         return Err(format!("{name} isn't a PNG, JPEG, GIF or WebP image."));
+    }
+    if !ingle_proto::control::image_dimensions_ok(bytes) {
+        return Err(format!("{name} is too large (at most 8192 pixels across; animated GIFs at most 4096)."));
     }
     Ok(())
 }
@@ -400,7 +478,6 @@ mod tests {
         img.write_to(&mut std::io::Cursor::new(&mut jpg), image::ImageFormat::Jpeg).unwrap();
         assert_eq!(ingle_proto::control::image_size(&jpg), Some((37, 21)));
         let mut webp = Vec::new();
-        img.to_rgba8();
         image::DynamicImage::ImageRgba8(img.to_rgba8()).write_to(&mut std::io::Cursor::new(&mut webp), image::ImageFormat::WebP).unwrap();
         assert_eq!(ingle_proto::control::image_size(&webp), Some((37, 21)));
     }
@@ -441,5 +518,22 @@ mod tests {
         assert_eq!(super::emoji_name_from("C:\\pics\\Party Cat!.png"), "Party_Cat");
         assert_eq!(super::emoji_name_from("x.gif"), "emojix");
         assert!(ingle_proto::control::valid_emoji_name(&super::emoji_name_from("a b c d e f g h i j k l m n o p q r s t.png")));
+    }
+
+    #[test]
+    fn decompression_bombs_are_not_decoded() {
+        // A tiny GIF claiming a 60000x60000 canvas.
+        let mut gif = b"GIF89a".to_vec();
+        gif.extend_from_slice(&60000u16.to_le_bytes());
+        gif.extend_from_slice(&60000u16.to_le_bytes());
+        gif.extend_from_slice(&[0, 0, 0, 0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x4c, 1, 0, 0x3b]);
+        assert!(super::decode(&gif, 400).is_err());
+        assert!(super::load_limited(&gif).is_err());
+        assert!(super::check_attachment("bomb.gif", &gif).is_err());
+        // A PNG header claiming 100000x100000.
+        let mut png = png(2, 2);
+        png[16..20].copy_from_slice(&100_000u32.to_be_bytes());
+        png[20..24].copy_from_slice(&100_000u32.to_be_bytes());
+        assert!(super::decode(&png, 400).is_err());
     }
 }

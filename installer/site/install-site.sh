@@ -47,9 +47,41 @@ if [ -x /usr/local/bin/ingle-server ] && systemctl list-unit-files ingle-server.
     chmod 0755 "$NEW"
     OLD_V=$(/usr/local/bin/ingle-server --version 2>/dev/null || echo unknown)
     NEW_V=$("$NEW" --version 2>/dev/null || echo "")
+    # Extra walls around the service (it already runs as its own user): no capabilities,
+    # devices, kernel settings or new privileges. Added once; taken away again below if the
+    # server won't start with them.
+    DROPIN=/etc/systemd/system/ingle-server.service.d/hardening.conf
+    NEW_DROPIN=""
+    PORT_NOW=$(systemctl show -p ExecStart ingle-server 2>/dev/null | sed -n 's/.*--bind [^ ]*:\([0-9]*\).*/\1/p' | head -n 1)
+    if [ ! -f "$DROPIN" ] && [ "$(systemctl show -p User --value ingle-server 2>/dev/null)" = "ingle-server" ] \
+       && [ -n "$PORT_NOW" ] && [ "$PORT_NOW" -ge 1024 ]; then
+      mkdir -p "$(dirname "$DROPIN")"
+      cat > "$DROPIN" <<'HARDEN'
+[Service]
+UMask=0077
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+HARDEN
+      NEW_DROPIN=1
+      systemctl daemon-reload
+    fi
     if [ -z "$NEW_V" ]; then
       echo "The new guild server program won't run on this VPS; left the old one alone." >&2
-    elif ! cmp -s "$NEW" /usr/local/bin/ingle-server; then
+    elif ! cmp -s "$NEW" /usr/local/bin/ingle-server || [ -n "$NEW_DROPIN" ]; then
       cp -f /usr/local/bin/ingle-server /usr/local/bin/ingle-server.previous
       install -m 0755 "$NEW" /usr/local/bin/ingle-server.new
       mv -f /usr/local/bin/ingle-server.new /usr/local/bin/ingle-server
@@ -58,9 +90,20 @@ if [ -x /usr/local/bin/ingle-server ] && systemctl list-unit-files ingle-server.
       if systemctl is-active --quiet ingle-server; then
         echo "Guild server updated: $OLD_V -> $NEW_V"
       else
-        echo "The new guild server didn't start; putting the old one back." >&2
-        mv -f /usr/local/bin/ingle-server.previous /usr/local/bin/ingle-server
-        systemctl restart ingle-server
+        if [ -n "$NEW_DROPIN" ]; then
+          echo "The guild server didn't start with the extra protections; trying without them." >&2
+          rm -f "$DROPIN"
+          systemctl daemon-reload
+          systemctl restart ingle-server
+          sleep 2
+        fi
+        if systemctl is-active --quiet ingle-server; then
+          echo "Guild server updated: $OLD_V -> $NEW_V"
+        else
+          echo "The new guild server didn't start; putting the old one back." >&2
+          mv -f /usr/local/bin/ingle-server.previous /usr/local/bin/ingle-server
+          systemctl restart ingle-server
+        fi
       fi
     else
       echo "Guild server already up to date ($OLD_V)"

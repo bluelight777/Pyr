@@ -283,6 +283,39 @@ impl IngleApp {
                         self.ui.dialog = Some(Dialog::ServerSettings { key, name, tab });
                     }
                 }
+                Dialog::ConfirmJoin { link } => {
+                    ui.set_width(440.0);
+                    title(ui, "Join this server?");
+                    match ingle_proto::invite::InviteLink::parse(&link) {
+                        Ok(l) => {
+                            ui.label(RichText::new(l.authority()).font(theme::mono(14.0)).color(theme::TEXT));
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(
+                                    "A link asked Ingle to join this server. Joining connects to it: the server sees your \
+                                     IP address and your Ingle identity. Only join servers from people you trust.",
+                                )
+                                .color(theme::MUTED),
+                            );
+                            ui.add_space(14.0);
+                            ui.horizontal(|ui| {
+                                if ui.add(theme::primary_button("Join").min_size(vec2(100.0, 34.0))).clicked() {
+                                    acts.push(Act::AddServer(link.clone()));
+                                    close = true;
+                                }
+                                if ui.button("Cancel").clicked() {
+                                    close = true;
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            ui.label(RichText::new(format!("That link doesn't work: {e}")).color(theme::LIVE));
+                            if ui.button("OK").clicked() {
+                                close = true;
+                            }
+                        }
+                    }
+                }
                 Dialog::LeaveServer { key, name } => {
                     ui.set_width(400.0);
                     title(ui, &format!("Leave '{name}'?"));
@@ -405,9 +438,12 @@ impl IngleApp {
     fn settings_dialog(&mut self, ui: &mut egui::Ui, st: &AppState, tab: u8, acts: &mut Vec<Act>, close: &mut bool) {
         ui.set_width(640.0);
         let mut draft = self.ui.settings_draft.clone().unwrap_or_else(|| st.settings.clone());
-        // The tray note can change these while this dialog is open; don't save stale copies.
-        draft.close_to_tray = st.settings.close_to_tray;
+        // Things changed elsewhere while this dialog is open (the tray notice, the emoji
+        // picker): don't save stale copies of them.
         draft.tray_note_seen = st.settings.tray_note_seen;
+        draft.recent_emoji = st.settings.recent_emoji.clone();
+        draft.emoji_tone = st.settings.emoji_tone;
+        draft.giphy_key = st.settings.giphy_key.clone();
         let before = draft.clone();
         let mut t = tab;
         ui.horizontal(|ui| {
@@ -642,14 +678,12 @@ impl IngleApp {
             }
             3 => {
                 field_label(ui, "Icon by the clock");
-                ui.checkbox(&mut draft.close_to_tray, "Keep Ingle running in the tray when I close the window");
                 ui.label(
                     RichText::new(
-                        "You stay in voice and friends can still reach you. Click the campfire icon by the clock to open Ingle; \
-                         right-click it to mute, leave voice or quit.",
+                        "Closing the window keeps Ingle running by the clock, so you stay in voice and friends can still reach \
+                         you. Click the campfire icon to open Ingle; right-click it to mute, leave voice or quit.",
                     )
-                    .size(12.0)
-                    .color(theme::DIM),
+                    .color(theme::MUTED),
                 );
                 ui.add_space(4.0);
                 ui.label(
@@ -663,10 +697,14 @@ impl IngleApp {
                 if !crate::tray::is_active() {
                     ui.add_space(6.0);
                     ui.label(
-                        RichText::new("The tray icon couldn't be added right now, so closing the window quits Ingle.")
+                        RichText::new("Windows isn't showing the icon right now, so closing the window minimizes Ingle instead.")
                             .size(12.0)
                             .color(theme::LIVE),
                     );
+                }
+                ui.add_space(12.0);
+                if ui.add(theme::danger_button("Quit Ingle").min_size(vec2(110.0, 32.0))).clicked() {
+                    acts.push(Act::Quit);
                 }
             }
             _ => {
@@ -703,60 +741,6 @@ impl IngleApp {
     }
 }
 
-impl IngleApp {
-    /// Shown the first time the close button hides Ingle to the tray (Windows).
-    pub fn tray_note(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
-        if !self.tray_note {
-            return;
-        }
-        // Some(true): keep running in the tray; Some(false): the close button quits.
-        let mut choice: Option<bool> = None;
-        let modal = egui::Modal::new(egui::Id::new("tray-note")).frame(modal_frame()).backdrop_color(Color32::from_black_alpha(170));
-        let resp = modal.show(ctx, |ui| {
-            ui.set_width(460.0);
-            title(ui, "Ingle keeps running by the clock");
-            ui.label(
-                RichText::new("Closing the window leaves Ingle running in the tray, so you stay in voice and friends can still reach you.")
-                    .color(theme::MUTED),
-            );
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new(
-                    "Click the campfire icon by the clock to come back. Windows may tuck it under the ^ arrow. \
-                     To quit, right-click it and choose Quit Ingle.",
-                )
-                .color(theme::MUTED),
-            );
-            ui.add_space(6.0);
-            ui.label(RichText::new("You can change this any time in Settings, under Windows.").size(12.0).color(theme::DIM));
-            ui.add_space(14.0);
-            ui.horizontal(|ui| {
-                if ui.add(theme::primary_button("Keep running").min_size(vec2(130.0, 34.0))).clicked() {
-                    choice = Some(true);
-                }
-                if ui.button("Quit when I close it").clicked() {
-                    choice = Some(false);
-                }
-            });
-        });
-        if let Some(keep_running) = choice {
-            let mut s = st.settings.clone();
-            s.close_to_tray = keep_running;
-            s.tray_note_seen = true;
-            acts.push(Act::Settings(s));
-            self.tray_note = false;
-            if keep_running {
-                crate::tray::hide_main();
-            } else {
-                // Settings apply at the end of this frame, so the close isn't stopped again.
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-        } else if resp.should_close() {
-            // Escape or a click outside: stay open, and ask again next time.
-            self.tray_note = false;
-        }
-    }
-}
 
 fn device_combo(ui: &mut egui::Ui, id: &str, value: &mut Option<String>, devices: &[(String, String)]) {
     let current = value

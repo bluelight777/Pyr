@@ -14,6 +14,9 @@ use crate::{icons, theme};
 
 pub enum Act {
     AddServer(String),
+    /// An invite link from outside the app (a web page, a launch, a link in a message): ask
+    /// first, unless it's a server already joined.
+    OfferJoin(String),
     /// Join a server this app just set up, with its owner link (keeps the setup dialog open).
     JoinOwned(String),
     /// Show the "Join a server" dialog.
@@ -33,6 +36,8 @@ pub enum Act {
     /// Set (or remove) a server's icon from part of an image: (bytes, cx, cy, frac).
     SetServerIcon { key: String, bytes: Option<(Arc<Vec<u8>>, f32, f32, f32)> },
     AddEmoji { key: String, name: String, bytes: Vec<u8> },
+    /// Quit for real (Settings → Quit Ingle).
+    Quit,
     AddFriend(String),
     AcceptFriend(String),
     RemoveFriend(String),
@@ -94,6 +99,8 @@ pub struct RoleEdit {
 pub enum Dialog {
     /// "Join a server" with an invite link.
     AddServer { link: String, error: Option<String> },
+    /// "Join this server?" for a link that came from outside the app.
+    ConfirmJoin { link: String },
     /// Create or join?
     AddChoice,
     /// The create-a-server wizard (its state is in `UiState::create`).
@@ -181,7 +188,6 @@ pub struct IngleApp {
     /// The icon by the clock (Windows); kept here so it goes away with the app.
     _tray: Option<crate::tray::Tray>,
     /// Showing the one-time note about the close button hiding Ingle to the tray.
-    pub tray_note: bool,
     /// Decoded images and profile pictures.
     pub images: crate::images::Images,
     pub updater: crate::update::Updater,
@@ -213,7 +219,6 @@ impl IngleApp {
             handoff,
             initial_join,
             _tray: tray,
-            tray_note: false,
             images: crate::images::Images::default(),
             updater,
             update_seen: None,
@@ -225,6 +230,21 @@ impl IngleApp {
     fn apply(&mut self, a: Act, ctx: &egui::Context) {
         let e = &self.engine;
         match a {
+            Act::OfferJoin(link) => {
+                let known = ingle_proto::invite::InviteLink::parse(&link).ok().and_then(|l| {
+                    e.state().servers.iter().find(|s| {
+                        ingle_proto::b64::decode_array::<32>(&s.key).map(|fp| l.matches(&fp)).unwrap_or(false)
+                    }).map(|s| s.key.clone())
+                });
+                match known {
+                    // Already a member there: just open it.
+                    Some(key) => {
+                        self.ui.home = false;
+                        self.ui.server = Some(key);
+                    }
+                    None => self.ui.dialog = Some(Dialog::ConfirmJoin { link }),
+                }
+            }
             Act::AddServer(link) => match e.add_server(&link) {
                 Ok(key) => {
                     self.ui.server = Some(key);
@@ -330,6 +350,12 @@ impl IngleApp {
                 Err(err) => self.toast(err, true),
             },
             Act::RemoveEmoji { key, id } => e.remove_emoji(&key, &id),
+            Act::Quit => {
+                #[cfg(windows)]
+                crate::tray::quit();
+                #[cfg(not(windows))]
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
             Act::AddFriend(uid) => e.add_friend(&uid),
             Act::AcceptFriend(uid) => e.accept_friend(&uid),
             Act::RemoveFriend(uid) => e.remove_friend(&uid),
@@ -439,30 +465,34 @@ impl eframe::App for IngleApp {
         let engine = self.engine.clone();
         let mut acts: Vec<Act> = Vec::new();
         if let Some(link) = self.initial_join.take() {
-            acts.push(Act::AddServer(link));
+            acts.push(Act::OfferJoin(link));
         }
         // Another launch handed us an invite link (or just wants the window): come to the front.
         if let Some(link) = self.handoff.poll() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             if !link.is_empty() {
-                acts.push(Act::AddServer(link));
+                acts.push(Act::OfferJoin(link));
             }
         }
-        // With the icon by the clock, the close button hides Ingle instead of quitting, so calls
-        // and messages keep coming in (the first time, a note says so).
-        if ctx.input(|i| i.viewport().close_requested()) && crate::tray::is_active() {
-            let (keep_running, note_seen) = {
-                let s = &engine.state().settings;
-                (s.close_to_tray, s.tray_note_seen)
-            };
-            if keep_running {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                if note_seen {
-                    crate::tray::hide_main();
-                } else {
-                    self.tray_note = true;
+        // The close button (and Alt+F4) never quits while there's an icon by the clock: Ingle
+        // keeps running there, like Discord, until you choose Quit Ingle on the icon. The first
+        // time, the icon says so.
+        if ctx.input(|i| i.viewport().close_requested()) && crate::tray::available() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            if crate::tray::ensure_icon() {
+                crate::tray::hide_main();
+                let settings = engine.state().settings.clone();
+                if !settings.tray_note_seen {
+                    crate::tray::notify(
+                        "Ingle is still running",
+                        "Click the campfire icon to open Ingle. To quit, right-click it and choose Quit Ingle.",
+                    );
+                    acts.push(Act::Settings(ingle_engine::config::Settings { tray_note_seen: true, ..settings }));
                 }
+            } else {
+                // No icon to come back from (Windows wouldn't show it): just minimize.
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
             }
         }
         self.update_step(&mut acts);
@@ -551,7 +581,7 @@ impl IngleApp {
                 self.engine.shared.state.write().toast(format!("Update failed: {e}"), true);
                 self.updater.dismiss_error(self.update_seen.clone());
             }
-            Status::Ready(path) => {
+            Status::Ready(path, sha256) => {
                 // Remember where we are, start the installer, and get out of its way.
                 {
                     let st = self.engine.state();
@@ -564,7 +594,7 @@ impl IngleApp {
                         }
                     }
                 }
-                match crate::update::install(&path) {
+                match crate::update::install(&path, &sha256) {
                     Ok(()) => {
                         tracing::info!("quitting to install the update");
                         crate::tray::prepare_exit();
@@ -609,7 +639,7 @@ impl IngleApp {
             Status::Downloading(done, total) => {
                 ("Downloading the update…".to_string(), Some(done as f32 / total.max(1) as f32), None)
             }
-            Status::Ready(_) => ("Installing…".to_string(), Some(1.0), None),
+            Status::Ready(..) => ("Installing…".to_string(), Some(1.0), None),
             _ => return,
         };
         let (rect, resp) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::click());
@@ -752,7 +782,6 @@ impl IngleApp {
         if self.ui.home {
             self.home_ui(ctx, st, acts);
             self.dialogs(ctx, st, acts);
-            self.tray_note(ctx, st, acts);
             self.viewer(ctx, acts);
             self.avatar_editor(ctx, acts);
             self.drop_files(ctx, st, acts);
@@ -813,7 +842,6 @@ impl IngleApp {
         }
 
         self.dialogs(ctx, st, acts);
-        self.tray_note(ctx, st, acts);
         self.viewer(ctx, acts);
         self.avatar_editor(ctx, acts);
         self.drop_files(ctx, st, acts);

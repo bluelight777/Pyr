@@ -49,7 +49,7 @@ impl ApiError {
             401 => Failure::new("DigitalOcean didn't accept the token.")
                 .hint("Copy the whole token again (it starts with dop_v1_). DigitalOcean shows a token only once, so if it's lost, generate a new one."),
             403 => Failure::new("This token isn't allowed to do that.").hint(
-                "Generate a new token with Full Access, or with Custom Scopes that include droplet (create, read, delete) and ssh_key (create, read).",
+                "Generate a new token with Custom Scopes: droplet (create, read, delete), ssh_key (create, read), regions (read), sizes (read) and account (read).",
             ),
             422 if lower.contains("limit") => Failure::new(format!("DigitalOcean: {msg}"))
                 .hint("Delete a droplet you no longer use, or ask DigitalOcean support to raise your droplet limit."),
@@ -184,8 +184,16 @@ impl Api {
         Api { token: token.trim().to_string(), base: base_url(), agent }
     }
 
+    /// The full address for an API path. A full address (a "next page" link) is only used if
+    /// it's on the API itself: the token is never sent anywhere else.
     fn url(&self, path: &str) -> String {
-        if path.starts_with("http://") || path.starts_with("https://") { path.to_string() } else { format!("{}{path}", self.base) }
+        if path.starts_with(&format!("{}/", self.base)) {
+            path.to_string()
+        } else if path.starts_with('/') {
+            format!("{}{path}", self.base)
+        } else {
+            format!("{}/invalid", self.base)
+        }
     }
 
     fn check(&self, resp: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> Result<ureq::http::Response<ureq::Body>, ApiError> {
@@ -230,7 +238,8 @@ impl Api {
                 .map_err(|e| ApiError { status: 0, id: "decode".into(), message: format!("unexpected answer: {e}") })?;
             out.extend(items);
             let links: Links = v.get("links").cloned().and_then(|l| serde_json::from_value(l).ok()).unwrap_or_default();
-            next = links.pages.and_then(|p| p.next);
+            // Only follow "next" links that stay on the API.
+            next = links.pages.and_then(|p| p.next).filter(|n| n.starts_with(&format!("{}/", self.base)));
             pages += 1;
             if pages > 20 {
                 break;
@@ -275,7 +284,9 @@ impl Api {
         }
     }
 
-    pub fn create_droplet(&self, name: &str, region: &str, size: &str, ssh_key: u64) -> Result<Droplet, ApiError> {
+    /// `user_data` is the cloud-init setup the server runs on first boot (here: the SSH host
+    /// key Ingle made for it).
+    pub fn create_droplet(&self, name: &str, region: &str, size: &str, ssh_key: u64, user_data: &str) -> Result<Droplet, ApiError> {
         #[derive(Deserialize)]
         struct R {
             droplet: Droplet,
@@ -289,6 +300,7 @@ impl Api {
             "backups": false,
             "ipv6": false,
             "monitoring": false,
+            "user_data": user_data,
         });
         self.post::<R>("/v2/droplets", body).map(|r| r.droplet)
     }
@@ -375,7 +387,7 @@ pub fn load_catalog(token: &str) -> Result<Catalog, Failure> {
 }
 
 /// What to rent.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RentRequest {
     pub token: String,
     /// Name of the community (the droplet is named after it).
@@ -386,6 +398,13 @@ pub struct RentRequest {
     /// For showing: "1 GB" and "New York 3" (the slugs if empty).
     pub size_label: String,
     pub region_label: String,
+}
+
+impl std::fmt::Debug for RentRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never the token.
+        f.debug_struct("RentRequest").field("name", &self.name).field("region", &self.region).field("size", &self.size).finish_non_exhaustive()
+    }
 }
 
 /// A droplet name from a community name: "Game Night!" -> "ingle-game-night".
@@ -448,7 +467,11 @@ fn rent_inner(req: &RentRequest, config_dir: &Path, payloads: &Payloads, progres
         or(&req.region_label, &req.region),
         req.price_monthly
     ));
-    let droplet = api.create_droplet(&name, &req.region, &req.size, key_id).map_err(|e| e.explain())?;
+    // The server's own SSH identity is made here and handed to it at creation, so the first
+    // connection can already tell the real server from anyone in between.
+    let (host_private, host_public, host_fp) = crate::keys::new_host_key().map_err(Failure::from)?;
+    let droplet =
+        api.create_droplet(&name, &req.region, &req.size, key_id, &host_key_cloud_config(&host_private, &host_public)).map_err(|e| e.explain())?;
     let mut dref = DropletRef { id: droplet.id, name: name.clone(), ip: None, region: req.region.clone(), size: req.size.clone() };
     progress.log(format!("Droplet {} (id {}) created.", name, droplet.id));
     let mut record = HostedServer {
@@ -460,6 +483,7 @@ fn rent_inner(req: &RentRequest, config_dir: &Path, payloads: &Payloads, progres
         droplet_id: Some(droplet.id),
         region: Some(req.region.clone()),
         size: Some(req.size.clone()),
+        host_key: Some(host_fp.clone()),
         created_ms: ingle_proto::now_ms(),
         ..Default::default()
     };
@@ -495,7 +519,7 @@ fn rent_inner(req: &RentRequest, config_dir: &Path, payloads: &Payloads, progres
     let _ = records::save(config_dir, &record);
     progress.log(format!("The server's address is {ip}."));
 
-    let ready = install_on(&dref, &req.name, &key.key, payloads, progress).map_err(|f| with_droplet(f, &dref))?;
+    let ready = install_on(&dref, &req.name, &key.key, Some(host_fp), payloads, progress).map_err(|f| with_droplet(f, &dref))?;
     record.installed = true;
     record.name = ready.name.clone();
     record.invite_link = Some(ready.invite_link.clone());
@@ -503,9 +527,23 @@ fn rent_inner(req: &RentRequest, config_dir: &Path, payloads: &Payloads, progres
     Ok(ready)
 }
 
-fn install_on(d: &DropletRef, name: &str, key: &std::sync::Arc<russh::keys::PrivateKey>, payloads: &Payloads, progress: &Progress) -> Result<crate::Ready, Failure> {
+/// cloud-init: replace the image's host keys with ours (and make no others), so the server's
+/// SSH identity is the one we know.
+fn host_key_cloud_config(private: &str, public: &str) -> String {
+    let indented: String = private.lines().map(|l| format!("    {l}\n")).collect();
+    format!("#cloud-config\nssh_deletekeys: true\nssh_genkeytypes: []\nssh_keys:\n  ed25519_private: |\n{indented}  ed25519_public: {public}\n")
+}
+
+fn install_on(
+    d: &DropletRef,
+    name: &str,
+    key: &std::sync::Arc<russh::keys::PrivateKey>,
+    host_key: Option<String>,
+    payloads: &Payloads,
+    progress: &Progress,
+) -> Result<crate::Ready, Failure> {
     let ip = d.ip.clone().ok_or_else(|| Failure::new("The server has no address yet."))?;
-    let login = Login { host: ip.clone(), port: 22, user: "root".into(), auth: Auth::Key(key.clone()), sudo_password: None };
+    let login = Login { host: ip.clone(), port: 22, user: "root".into(), auth: Auth::Key(key.clone()), sudo_password: None, host_key };
     let opts = install_options(name, &ip, payloads);
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| Failure::new(e.to_string()))?;
     let installed = rt.block_on(install::install(&login, &opts, progress));
@@ -518,15 +556,15 @@ fn install_on(d: &DropletRef, name: &str, key: &std::sync::Arc<russh::keys::Priv
 pub fn retry_install(d: DropletRef, name: String, config_dir: PathBuf, payloads: Payloads, progress: Progress) {
     let outcome = (|| {
         let key = crate::keys::load_or_create(&config_dir).map_err(Failure::from)?;
-        let ready = install_on(&d, &name, &key.key, &payloads, &progress).map_err(|mut f| {
-            f.droplet = Some(d.clone());
-            f
-        })?;
         let mut record = records::load(&config_dir)
             .servers
             .into_iter()
             .find(|s| s.droplet_id == Some(d.id))
             .unwrap_or_else(|| HostedServer { provider: "digitalocean".into(), droplet_id: Some(d.id), ..Default::default() });
+        let ready = install_on(&d, &name, &key.key, record.host_key.clone(), &payloads, &progress).map_err(|mut f| {
+            f.droplet = Some(d.clone());
+            f
+        })?;
         record.host = d.ip.clone().unwrap_or_default();
         record.port = crate::DEFAULT_PORT;
         record.name = ready.name.clone();

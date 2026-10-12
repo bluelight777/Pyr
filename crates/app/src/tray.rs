@@ -1,8 +1,9 @@
 //! Ingle's icon by the clock (the Windows notification area, or "system tray").
 //!
-//! Click the icon to open Ingle; right-click it to mute, deafen, leave voice or quit. While the
-//! icon is there, the window's close button hides Ingle instead of quitting (a setting, on by
-//! default), so calls and messages keep coming in, like Discord.
+//! Click the icon to open Ingle; right-click it to mute, deafen, leave voice or quit. The
+//! window's close button (and Alt+F4) never quits: it hides Ingle to the icon, so calls and
+//! messages keep coming in, like Discord. Only the icon's Quit Ingle (or Settings → Quit)
+//! ends it.
 //!
 //! egui only runs frames while the window is visible, so nothing here waits for one. The icon's
 //! clicks go to a small hidden window of our own, whose window procedure runs on the UI thread
@@ -23,8 +24,8 @@ use windows::Win32::Foundation::{CloseHandle, HINSTANCE, HWND, LPARAM, LRESULT, 
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
 use windows::Win32::UI::Shell::{
-    NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_SETVERSION, NIN_SELECT, NOTIFYICON_VERSION_4,
-    NOTIFYICONDATAW, Shell_NotifyIconW,
+    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NIN_SELECT,
+    NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu,
@@ -160,6 +161,37 @@ impl Drop for Tray {
 /// Whether the icon is showing (so the close button may hide the window).
 pub fn is_active() -> bool {
     SHOWN.load(Ordering::Relaxed)
+}
+
+/// There's a tray window (the icon may still need adding, e.g. Explorer was restarting).
+pub fn available() -> bool {
+    with_state(|_| ()).is_some()
+}
+
+/// Makes sure the icon is showing, adding it again if it went missing. True if it's there.
+pub fn ensure_icon() -> bool {
+    SHOWN.load(Ordering::Relaxed) || add_icon()
+}
+
+/// A little notice from the icon (Windows shows it as a toast).
+pub fn notify(title: &str, text: &str) {
+    let Some(mut nid) = with_state(icon_data) else { return };
+    nid.uFlags = NIF_INFO;
+    nid.dwInfoFlags = NIIF_INFO;
+    for (dst, src) in nid.szInfoTitle.iter_mut().zip(title.encode_utf16().take(63)) {
+        *dst = src;
+    }
+    for (dst, src) in nid.szInfo.iter_mut().zip(text.encode_utf16().take(255)) {
+        *dst = src;
+    }
+    unsafe {
+        let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+    }
+}
+
+/// Quit Ingle for real (Settings → Quit Ingle): the same as the icon's Quit.
+pub fn quit() -> ! {
+    quit_now()
 }
 
 /// Take the icon away before the process exits by itself (an update quitting the app).

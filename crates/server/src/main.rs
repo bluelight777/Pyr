@@ -39,11 +39,13 @@ enum Cmd {
         #[arg(long)]
         hours: Option<u64>,
     },
-    /// Create a new one-time link that grants ownership (if you lost the first one).
+    /// Create a new one-time link that grants ownership (if you lost the first one). It works
+    /// for a week.
     OwnerInvite,
     /// Set up the community without starting it and print its links as
     /// INGLE_NAME=, INGLE_OWNER_LINK= and INGLE_INVITE_LINK= lines (for setup scripts).
-    /// The owner link is the unused one, or a new one-time link if it has been used.
+    /// The owner link is the unused one, or a new one-time link while the community has no
+    /// owner yet (empty once someone owns it).
     Links,
 }
 
@@ -52,11 +54,13 @@ fn make_invite(cli: &Cli, owner: bool, uses: Option<u32>, hours: Option<u64>) ->
     let tls = ingle_server::tls::load_or_create(&cli.data)?;
     let db = ingle_server::db::Db::open(&cli.data.join("ingle.db"))?;
     let (code, uses, role) = if owner {
-        (format!("owner-{}", ingle_server::db::new_invite_code(10)), Some(1), Role::Owner)
+        (format!("owner-{}", ingle_server::db::new_invite_code(16)), Some(1), Role::Owner)
     } else {
-        (ingle_server::db::new_invite_code(8), uses, Role::Member)
+        (ingle_server::db::new_invite_code(10), uses, Role::Member)
     };
-    let exp = hours.map(|h| ingle_proto::now_ms() + h as i64 * 3_600_000);
+    let exp = hours.map(|h| ingle_proto::now_ms() + h.min(24 * 365 * 10) as i64 * 3_600_000);
+    // Owner links always expire (a week unless asked for sooner).
+    let exp = if owner { Some(exp.unwrap_or_else(ingle_server::owner_link_expiry).min(ingle_server::owner_link_expiry())) } else { exp };
     db.create_invite(&code, "server", uses, exp, role)?;
     let host = cli
         .public_host

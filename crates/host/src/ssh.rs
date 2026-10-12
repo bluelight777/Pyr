@@ -1,7 +1,9 @@
 //! A small SSH client for setting up servers: log in, run commands, upload files.
 //!
-//! Server host keys are trusted on first use (there's nothing to compare them with for
-//! a server someone just bought); the fingerprint is reported so it can be recorded.
+//! Server host keys: a key we expect (one we gave a rented server, or the one seen last
+//! time) must match exactly; otherwise this PC's `~/.ssh/known_hosts` is checked (a changed
+//! key there is refused too), and a server never seen before is trusted on first use, with
+//! its fingerprint reported and recorded for next time.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -32,7 +34,7 @@ impl std::fmt::Debug for Auth {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Login {
     pub host: String,
     pub port: u16,
@@ -41,6 +43,22 @@ pub struct Login {
     /// For a user who isn't root and needs a password for sudo (defaults to the login
     /// password when logging in with one).
     pub sudo_password: Option<String>,
+    /// The server's host key fingerprint (`SHA256:…`) when we know it: any other key is
+    /// refused before a password or key is sent.
+    pub host_key: Option<String>,
+}
+
+impl std::fmt::Debug for Login {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Login")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("user", &self.user)
+            .field("auth", &self.auth)
+            .field("sudo_password", &self.sudo_password.as_ref().map(|_| ".."))
+            .field("host_key", &self.host_key)
+            .finish()
+    }
 }
 
 impl Login {
@@ -59,15 +77,20 @@ pub enum ConnectError {
     Denied(String),
     /// The key file couldn't be used.
     BadKey(String),
+    /// The server isn't the one we expected (its host key changed): maybe someone is in the
+    /// way, so nothing was sent.
+    HostKey(String),
     Other(String),
 }
 
 impl std::fmt::Display for ConnectError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ConnectError::Unreachable(s) | ConnectError::Denied(s) | ConnectError::BadKey(s) | ConnectError::Other(s) => {
-                f.write_str(s)
-            }
+            ConnectError::Unreachable(s)
+            | ConnectError::Denied(s)
+            | ConnectError::BadKey(s)
+            | ConnectError::HostKey(s)
+            | ConnectError::Other(s) => f.write_str(s),
         }
     }
 }
@@ -75,15 +98,47 @@ impl std::fmt::Display for ConnectError {
 impl std::error::Error for ConnectError {}
 
 struct Client {
+    host: String,
+    port: u16,
+    expected: Option<String>,
     host_key: Arc<Mutex<Option<String>>>,
+    /// Why the key was refused, if it was.
+    refused: Arc<Mutex<Option<String>>>,
 }
 
 impl client::Handler for Client {
     type Error = russh::Error;
 
     async fn check_server_key(&mut self, key: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
-        let fp = key.public_key().fingerprint(HashAlg::Sha256).to_string();
-        *self.host_key.lock() = Some(fp);
+        let public = key.public_key();
+        let fp = public.fingerprint(HashAlg::Sha256).to_string();
+        *self.host_key.lock() = Some(fp.clone());
+        if let Some(expected) = &self.expected {
+            if *expected != fp {
+                *self.refused.lock() = Some(format!(
+                    "{} isn't the server Ingle expected: its identity key is {fp}, not {expected}. Someone may be \
+                     intercepting the connection, so nothing was sent. (If you reinstalled or rebuilt the server, \
+                     remove it from Ingle's list of servers you set up and try again.)",
+                    self.host
+                ));
+                return Ok(false);
+            }
+            return Ok(true);
+        }
+        // What `ssh` on this PC has seen for this server, if anything.
+        if let Some(home) = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }) {
+            let path = std::path::PathBuf::from(home).join(".ssh").join("known_hosts");
+            if let Err(russh::keys::Error::KeyChanged { line }) = russh::keys::check_known_hosts_path(&self.host, self.port, &public, &path) {
+                *self.refused.lock() = Some(format!(
+                    "{}'s identity key isn't the one your PC's SSH remembers (line {line} of {}). Someone may be \
+                     intercepting the connection, so nothing was sent. If the server was reinstalled, remove that line \
+                     and try again.",
+                    self.host,
+                    path.display()
+                ));
+                return Ok(false);
+            }
+        }
         Ok(true)
     }
 }
@@ -166,7 +221,14 @@ impl Session {
             ..Default::default()
         });
         let host_key = Arc::new(Mutex::new(None));
-        let handler = Client { host_key: host_key.clone() };
+        let refused = Arc::new(Mutex::new(None));
+        let handler = Client {
+            host: login.host.clone(),
+            port: login.port,
+            expected: login.host_key.clone().filter(|k| !k.is_empty()),
+            host_key: host_key.clone(),
+            refused: refused.clone(),
+        };
         let addr = (login.host.as_str(), login.port);
         let tcp = match tokio::time::timeout(timeout, tokio::net::TcpStream::connect(addr)).await {
             Err(_) => {
@@ -182,6 +244,9 @@ impl Session {
         let mut handle = match tokio::time::timeout(timeout, client::connect_stream(config, tcp, handler)).await {
             Err(_) => return Err(ConnectError::Unreachable(format!("{} accepted the connection but didn't speak SSH.", login.host))),
             Ok(Err(e)) => {
+                if let Some(why) = refused.lock().take() {
+                    return Err(ConnectError::HostKey(why));
+                }
                 return Err(match e {
                     russh::Error::IO(io) => ConnectError::Unreachable(describe_io(&login.host, login.port, &io)),
                     russh::Error::Disconnect | russh::Error::HUP => {
@@ -308,6 +373,11 @@ async fn keyboard_interactive(handle: &mut client::Handle<Client>, user: &str, p
             R::Success => return Ok(true),
             R::Failure { .. } => return Ok(false),
             R::InfoRequest { prompts, .. } => {
+                // The password only goes to a hidden prompt asking for a password (not, say,
+                // a one-time code or anything shown back on screen).
+                if prompts.iter().any(|p| p.echo || !p.prompt.to_lowercase().contains("password")) {
+                    return Ok(false);
+                }
                 let answers = prompts.iter().map(|_| password.to_string()).collect();
                 r = handle.authenticate_keyboard_interactive_respond(answers).await.map_err(err)?;
             }

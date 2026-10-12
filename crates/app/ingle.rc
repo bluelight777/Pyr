@@ -3,8 +3,8 @@
 1 ICON "assets/icon/ingle.ico"
 
 1 VERSIONINFO
-FILEVERSION 0,5,0,0
-PRODUCTVERSION 0,5,0,0
+FILEVERSION 0,6,0,0
+PRODUCTVERSION 0,6,0,0
 FILEOS 0x40004
 FILETYPE 0x1
 BEGIN
@@ -14,11 +14,11 @@ BEGIN
     BEGIN
       VALUE "CompanyName", "Firelit Games"
       VALUE "FileDescription", "Ingle"
-      VALUE "FileVersion", "0.5.0"
+      VALUE "FileVersion", "0.6.0"
       VALUE "InternalName", "ingle"
       VALUE "OriginalFilename", "ingle.exe"
       VALUE "ProductName", "Ingle"
-      VALUE "ProductVersion", "0.5.0"
+      VALUE "ProductVersion", "0.6.0"
     END
   END
   BLOCK "VarFileInfo"

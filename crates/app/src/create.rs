@@ -453,7 +453,7 @@ fn token_steps(c: &mut CreateState, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         link_button(ui, "Open the API tokens page", digitalocean::TOKENS_URL);
     });
-    dim(ui, "Click Generate New Token. Name it Ingle, pick any expiration, and choose Full Access (or Custom Scopes with droplet and ssh_key ticked). Click Generate Token, then copy the token it shows (it starts with dop_v1_).");
+    dim(ui, "Click Generate New Token. Name it Ingle and pick the shortest expiration (Ingle only needs it while it sets the server up). Choose Custom Scopes and tick droplet (create, read, delete), ssh_key (create, read), regions (read), sizes (read) and account (read): nothing more. Click Generate Token, then copy the token it shows (it starts with dop_v1_). You can delete the token once your server is running.");
 
     step_heading(ui, 3, "Paste the token here");
     let loading = c.catalog_job.is_some();
@@ -579,7 +579,9 @@ fn login_from_form(c: &CreateState) -> Result<Login, String> {
         }
         Auth::Password(c.password.clone())
     };
-    Ok(Login { host, port, user, auth, sudo_password: Some(c.sudo_password.clone()).filter(|p| !p.is_empty()) })
+    // The host key seen when this server was set up before (if it was) is filled in by
+    // `setup_existing` from Ingle's records.
+    Ok(Login { host, port, user, auth, sudo_password: Some(c.sudo_password.clone()).filter(|p| !p.is_empty()), host_key: None })
 }
 
 fn downloads_folder() -> PathBuf {
@@ -634,8 +636,10 @@ fn manual_page(c: &mut CreateState, ui: &mut egui::Ui, acts: &mut Vec<Act>, clos
     dim(ui, shell);
     let sep = std::path::MAIN_SEPARATOR;
     let f = folder.display().to_string();
+    // Into your home folder on the server (not /tmp, where other accounts could swap the
+    // files before they run).
     let scp = format!(
-        "scp \"{f}{sep}ingle-server-linux-x86_64\" \"{f}{sep}{}\" {user}@{host}:/tmp/",
+        "scp \"{f}{sep}ingle-server-linux-x86_64\" \"{f}{sep}{}\" {user}@{host}:",
         install::SCRIPT_NAME
     );
     code_box(ui, &scp, acts);
@@ -643,7 +647,7 @@ fn manual_page(c: &mut CreateState, ui: &mut egui::Ui, acts: &mut Vec<Act>, clos
 
     step_heading(ui, 3, "Run the setup on the server");
     let run = format!(
-        "ssh -t {user}@{host} sh /tmp/{} --binary /tmp/ingle-server-linux-x86_64 --public-host {host}",
+        "ssh -t {user}@{host} sh ./{} --binary ./ingle-server-linux-x86_64 --public-host {host}",
         install::SCRIPT_NAME
     );
     code_box(ui, &run, acts);

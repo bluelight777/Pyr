@@ -30,6 +30,14 @@ RestrictNamespaces=true
 LockPersonality=true
 RestrictRealtime=true
 SystemCallArchitectures=native
+UMask=0077
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+MemoryDenyWriteExecute=true
 
 [Install]
 WantedBy=multi-user.target

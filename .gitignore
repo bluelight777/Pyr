@@ -4,3 +4,6 @@
 /ingle-data/
 *.log
 /dist/
+# Signing keys never go in the repository.
+*release-key*
+*.key

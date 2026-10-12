@@ -5,18 +5,34 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 use ingle_proto::control::*;
 use ingle_proto::media::{self, AudioHeader, VideoHeader, track};
 use ingle_proto::{MAX_MESSAGE_CHARS, MAX_VIDEO_FRAME, PROTOCOL_VERSION, crypto, framing};
-use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
 use crate::db::new_invite_code;
-use crate::hub::{ConnId, Hub, Reply, frame};
+use crate::hub::{ConnId, ConnSlot, Hub, Outbox, Reply, frame};
 
-pub async fn handle(hub: Arc<Hub>, incoming: quinn::Incoming) {
+/// Most video frames being received at once on one connection.
+const MAX_VIDEO_READS: usize = 24;
+/// Longest message `nonce` a client may send (it's echoed to everyone).
+const MAX_NONCE_LEN: usize = 64;
+/// Usable invites one member may have made at a time.
+const MAX_INVITES_PER_MEMBER: usize = 25;
+/// Requests per second (and burst) one connection may make, all kinds together.
+const REQ_RATE: f64 = 20.0;
+const REQ_BURST: f64 = 80.0;
+/// History pages are kept well under the frame limit (long messages add up).
+const HISTORY_PAGE_BYTES: usize = 700 * 1024;
+/// Video one person may send, in bytes per second and burst (Ingle's sharpest screen share
+/// plus a camera is about 1.5 MB/s): frames past this are dropped, not passed on to
+/// everyone watching.
+const VIDEO_BYTES_PER_SEC: f64 = 5.0 * 1024.0 * 1024.0;
+const VIDEO_BURST_BYTES: f64 = 24.0 * 1024.0 * 1024.0;
+
+pub async fn handle(hub: Arc<Hub>, incoming: quinn::Incoming, mut slot: ConnSlot) {
     let remote = incoming.remote_address();
     let conn = match incoming.await {
         Ok(c) => c,
@@ -25,11 +41,13 @@ pub async fn handle(hub: Arc<Hub>, incoming: quinn::Incoming) {
             return;
         }
     };
+    slot.handshake_done();
     match session(hub, conn.clone()).await {
         Ok(()) => debug!(%remote, "connection closed"),
         Err(e) => debug!(%remote, "connection ended: {e:#}"),
     }
     conn.close(quinn::VarInt::from_u32(0), b"bye");
+    drop(slot);
 }
 
 async fn read_frame<T: serde::de::DeserializeOwned>(recv: &mut quinn::RecvStream) -> Result<Option<T>> {
@@ -74,12 +92,17 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection) -> Result<()> {
     let mut exporter = [0u8; 32];
     conn.export_keying_material(&mut exporter, crypto::LOGIN_EXPORTER_LABEL, b"")
         .map_err(|_| anyhow!("TLS exporter unavailable"))?;
-    if !crypto::verify(&user_id, &crypto::login_transcript(&nonce, &exporter, &user_id), &sig) {
+    // Exactly the way we write ids: the same key spelled with padding or spaces would
+    // otherwise count as someone else (a way around a ban) or bloat everything it's sent in.
+    let canonical = crypto::is_valid_user_id(&user_id)
+        && ingle_proto::b64::decode(&user_id).map(|b| ingle_proto::b64::encode(&b) == user_id).unwrap_or(false);
+    if !canonical || !crypto::verify(&user_id, &crypto::login_transcript(&nonce, &exporter, &user_id), &sig) {
         send.write_all(&reject(ErrorCode::Unauthorized, "identity proof failed")).await?;
         bail!("bad login signature");
     }
-    let name = clean_name(&name, 32).unwrap_or_else(|| "Anonymous".to_string());
-    if let Err((code, msg)) = hub.authorize(&user_id, &name, invite.as_deref()) {
+    let name = clean_member_name(&name).unwrap_or_else(|| "Anonymous".to_string());
+    let client: String = client.chars().filter(|c| !c.is_control()).take(48).collect();
+    if let Err((code, msg)) = hub.authorize(&user_id, &name, invite.as_deref(), conn.remote_address().ip()) {
         send.write_all(&reject(code, &msg)).await?;
         let _ = send.finish();
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -87,33 +110,55 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection) -> Result<()> {
     }
     info!(user = %&user_id[..8], %name, %client, remote = %conn.remote_address(), "logged in");
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<Bytes>();
+    let (tx, mut rx) = Outbox::new(conn.clone());
+    let out = tx.clone();
     let writer = tokio::spawn(async move {
         while let Some(b) = rx.recv().await {
             if send.write_all(&b).await.is_err() {
                 break;
             }
+            out.sent(b.len());
         }
         let _ = send.finish();
     });
 
     let conn_id = hub.alloc_conn_id();
     let session_cell = Arc::new(AtomicU32::new(0));
-    hub.register(conn_id, &user_id, conn.clone(), tx.clone(), session_cell.clone(), login.id);
+    if let Err((code, msg)) = hub.register(conn_id, &user_id, conn.clone(), tx.clone(), session_cell.clone(), login.id) {
+        tx.send(frame(login.id, Event::error(code, msg.clone())));
+        drop(tx);
+        let _ = timeout(Duration::from_secs(1), writer).await;
+        bail!("not registered: {msg}");
+    }
 
     let dg = tokio::spawn(datagram_loop(hub.clone(), conn.clone(), session_cell.clone()));
     let uni = tokio::spawn(uni_loop(hub.clone(), conn.clone(), session_cell.clone()));
     let files = tokio::spawn(file_loop(hub.clone(), conn.clone(), user_id.clone()));
 
-    let mut ctx = Ctx { hub: &hub, conn_id, uid: user_id.clone(), msg_tokens: 10.0, last_refill: Instant::now() };
+    let mut ctx = Ctx {
+        hub: &hub,
+        conn_id,
+        uid: user_id.clone(),
+        msg_tokens: Bucket::new(1.5, 10.0),
+        react_tokens: Bucket::new(3.0, 15.0),
+        req_tokens: Bucket::new(REQ_RATE, REQ_BURST),
+    };
     let result = async {
         loop {
             let Some(f) = read_frame::<ClientFrame>(&mut recv).await? else { return Ok(()) };
             let id = f.id;
-            let reply = ctx.handle(f.req);
+            let reply = if ctx.req_tokens.take(cost(&f.req)) {
+                ctx.handle(f.req)
+            } else {
+                Err((ErrorCode::RateLimited, "Slow down a little.".into()))
+            };
             let ev = reply.unwrap_or_else(|(code, message)| Event::Error { code, message });
             if id != 0 {
-                let _ = tx.send(frame(id, ev));
+                let mut b = frame(id, ev);
+                if b.len() > ingle_proto::MAX_CONTROL_FRAME {
+                    b = frame(id, Event::error(ErrorCode::Internal, "That reply was too big to send."));
+                }
+                tx.send(b);
             }
         }
     }
@@ -153,28 +198,50 @@ async fn datagram_loop(hub: Arc<Hub>, conn: quinn::Connection, session: Arc<Atom
     }
 }
 
-/// Video frames: one unidirectional stream per frame.
+/// Video frames: one unidirectional stream per frame. Only from someone in voice, a few at
+/// a time, and each read no further than its header says.
 async fn uni_loop(hub: Arc<Hub>, conn: quinn::Connection, session: Arc<AtomicU32>) {
+    let slots = Arc::new(tokio::sync::Semaphore::new(MAX_VIDEO_READS));
+    let budget = Arc::new(parking_lot::Mutex::new(Bucket::new(VIDEO_BYTES_PER_SEC, VIDEO_BURST_BYTES)));
     while let Ok(mut stream) = conn.accept_uni().await {
+        if session.load(Ordering::Relaxed) == 0 {
+            let _ = stream.stop(quinn::VarInt::from_u32(0));
+            continue;
+        }
+        let Ok(permit) = slots.clone().try_acquire_owned() else {
+            // Too many at once: drop this frame (the sender sends a keyframe when asked).
+            let _ = stream.stop(quinn::VarInt::from_u32(0));
+            continue;
+        };
         let hub = hub.clone();
         let session = session.clone();
+        let budget = budget.clone();
         tokio::spawn(async move {
-            let Ok(Ok(data)) =
-                timeout(Duration::from_secs(5), stream.read_to_end(MAX_VIDEO_FRAME + media::VIDEO_HEADER_LEN)).await
-            else {
+            let _permit = permit;
+            let read = async {
+                let mut head = [0u8; media::VIDEO_HEADER_LEN];
+                stream.read_exact(&mut head).await.ok()?;
+                let h = VideoHeader::parse(&head)?;
+                let len = h.len as usize;
+                if len > MAX_VIDEO_FRAME || !budget.lock().take(len as f64) {
+                    return None;
+                }
+                let mut data = BytesMut::with_capacity(media::VIDEO_HEADER_LEN + len);
+                data.extend_from_slice(&head);
+                data.resize(media::VIDEO_HEADER_LEN + len, 0);
+                stream.read_exact(&mut data[media::VIDEO_HEADER_LEN..]).await.ok()?;
+                Some((h, data))
+            };
+            let Ok(Some((h, mut data))) = timeout(Duration::from_secs(5), read).await else {
+                let _ = stream.stop(quinn::VarInt::from_u32(0));
                 return;
             };
             let s = session.load(Ordering::Relaxed);
             if s == 0 {
                 return;
             }
-            let Some(h) = VideoHeader::parse(&data) else { return };
-            if data.len() != media::VIDEO_HEADER_LEN + h.len as usize {
-                return;
-            }
-            let mut b = BytesMut::from(&data[..]);
-            media::set_session(&mut b, s);
-            hub.forward_video(s, h.track, h.is_keyframe(), b.freeze());
+            media::set_session(&mut data, s);
+            hub.forward_video(s, h.track, h.is_keyframe(), data.freeze());
         });
     }
 }
@@ -210,13 +277,15 @@ async fn file_stream(hub: &Hub, uid: &str, mut send: quinn::SendStream, mut recv
                 let _ = send.finish();
                 return Ok(());
             };
-            // A picture sent in a direct message is only for its two people.
-            let private = row
-                .message_id
-                .and_then(|m| hub.db.get_message(m))
-                .and_then(|m| hub.db.dm_members(m.channel_id))
-                .map(|(a, b)| a != uid && b != uid)
-                .unwrap_or(false);
+            // A picture sent in a direct message is only for its two people. (If its message
+            // can't be found, nobody gets it: never fail open.)
+            let private = match row.message_id {
+                None => row.kind == FileKind::Attachment && row.owner != uid,
+                Some(m) => match hub.db.get_message(m) {
+                    None => true,
+                    Some(msg) => hub.db.dm_members(msg.channel_id).map(|(a, b)| a != uid && b != uid).unwrap_or(false),
+                },
+            };
             let bytes = if private { Vec::new() } else { tokio::fs::read(&path).await.unwrap_or_default() };
             if bytes.len() as u64 != row.size || private {
                 send.write_all(&fail("That file is gone.")).await?;
@@ -237,12 +306,14 @@ async fn file_stream(hub: &Hub, uid: &str, mut send: quinn::SendStream, mut recv
                 let _ = send.finish();
                 return Ok(());
             }
-            let cap: u64 = std::env::var("INGLE_STORAGE_MB").ok().and_then(|v| v.parse().ok()).unwrap_or(5 * 1024) << 20;
-            if hub.db.files_total() + size > cap {
-                send.write_all(&fail("This server's storage for images is full.")).await?;
-                let _ = send.finish();
-                return Ok(());
-            }
+            let slot = match hub.reserve_upload(uid, size) {
+                Ok(s) => s,
+                Err(msg) => {
+                    send.write_all(&fail(&msg)).await?;
+                    let _ = send.finish();
+                    return Ok(());
+                }
+            };
             let bytes = timeout(Duration::from_secs(300), recv.read_to_end(size as usize + 1)).await??;
             if bytes.len() as u64 != size {
                 send.write_all(&fail("The upload was cut short.")).await?;
@@ -255,6 +326,13 @@ async fn file_stream(hub: &Hub, uid: &str, mut send: quinn::SendStream, mut recv
                 return Ok(());
             };
             let (width, height) = image_size(&bytes).unwrap_or((0, 0));
+            // Pictures that claim to be enormous are refused: decoding one would make every
+            // app that shows it run out of memory.
+            if !image_dimensions_ok(&bytes) {
+                send.write_all(&fail("That image is too large (at most 8192 pixels across).")).await?;
+                let _ = send.finish();
+                return Ok(());
+            }
             let id = match kind {
                 // Profile pictures are named by their content, so an app can tell whether the
                 // server already has its current one.
@@ -277,6 +355,7 @@ async fn file_stream(hub: &Hub, uid: &str, mut send: quinn::SendStream, mut recv
                 height,
                 message_id: None,
             })?;
+            slot.stored();
             send.write_all(&reply(FileReply { ok: true, id, mime: mime.to_string(), size, error: String::new() })).await?;
             let _ = send.finish();
         }
@@ -290,8 +369,78 @@ struct Ctx<'a> {
     hub: &'a Hub,
     conn_id: ConnId,
     uid: String,
-    msg_tokens: f64,
-    last_refill: Instant,
+    /// Messages and edits.
+    msg_tokens: Bucket,
+    react_tokens: Bucket,
+    /// Every request (weighted by [`cost`]).
+    req_tokens: Bucket,
+}
+
+/// A token bucket: `rate` per second, holding at most `burst`.
+struct Bucket {
+    tokens: f64,
+    rate: f64,
+    burst: f64,
+    at: Instant,
+}
+
+impl Bucket {
+    fn new(rate: f64, burst: f64) -> Bucket {
+        Bucket { tokens: burst, rate, burst, at: Instant::now() }
+    }
+
+    fn take(&mut self, n: f64) -> bool {
+        let now = Instant::now();
+        self.tokens = (self.tokens + now.duration_since(self.at).as_secs_f64() * self.rate).min(self.burst);
+        self.at = now;
+        if self.tokens < n {
+            return false;
+        }
+        self.tokens -= n;
+        true
+    }
+}
+
+/// How much of the request allowance a request uses: database-heavy or things that grow the
+/// database cost more.
+fn cost(req: &Request) -> f64 {
+    match req {
+        Request::Ping { .. } | Request::Typing { .. } | Request::VoiceState { .. } => 0.5,
+        Request::FetchHistory { .. } => 3.0,
+        Request::E2eeKeys { keys, .. } => 1.0 + keys.len() as f64 / 16.0,
+        Request::CreateInvite { .. }
+        | Request::FriendRequest { .. }
+        | Request::OpenDm { .. }
+        | Request::AddEmoji { .. }
+        | Request::CreateChannel { .. }
+        | Request::CreateRole { .. }
+        | Request::SetAvatar { .. }
+        | Request::SetServerIcon { .. }
+        | Request::UpdateProfile { .. }
+        | Request::UpdateServer { .. }
+        | Request::Block { .. } => 4.0,
+        _ => 1.0,
+    }
+}
+
+/// A member id as we write them (anything else can't be anyone).
+fn valid_uid(uid: &str) -> Result<(), (ErrorCode, String)> {
+    if crypto::is_valid_user_id(uid) { Ok(()) } else { Err((ErrorCode::NotFound, "No such member.".into())) }
+}
+
+/// A Unicode emoji reaction: no letters, digits (except in keycaps), spaces or controls, and
+/// short.
+fn valid_unicode_reaction(e: &str) -> bool {
+    let keycap = e.contains('\u{20e3}');
+    !e.is_empty()
+        && e.len() <= 32
+        && e.chars().all(|c| {
+            if c.is_ascii() {
+                keycap && (c.is_ascii_digit() || c == '#' || c == '*')
+            } else {
+                !c.is_control() && !c.is_whitespace() && !is_invisible(c) || matches!(c, '\u{200d}' | '\u{fe0f}' | '\u{e0020}'..='\u{e007f}')
+            }
+        })
 }
 
 fn bad<T>(msg: &str) -> Result<T, (ErrorCode, String)> {
@@ -375,14 +524,21 @@ impl Ctx<'_> {
     }
 
     fn take_message_token(&mut self) -> Result<(), (ErrorCode, String)> {
-        let now = Instant::now();
-        let dt = now.duration_since(self.last_refill).as_secs_f64();
-        self.last_refill = now;
-        self.msg_tokens = (self.msg_tokens + dt * 1.5).min(10.0);
-        if self.msg_tokens < 1.0 {
+        if !self.msg_tokens.take(1.0) {
             return Err((ErrorCode::RateLimited, "You're sending messages too fast.".into()));
         }
-        self.msg_tokens -= 1.0;
+        Ok(())
+    }
+
+    /// In a direct message, refuse if either has blocked the other.
+    fn not_blocked_in(&self, channel_id: ChannelId) -> Result<(), (ErrorCode, String)> {
+        let db = &self.hub.db;
+        if let Some((x, y)) = db.dm_members(channel_id) {
+            let other = if x == self.uid { y } else { x };
+            if db.blocked_between(&self.uid, &other) {
+                return Err((ErrorCode::Forbidden, "You can't message this person.".into()));
+            }
+        }
         Ok(())
     }
 
@@ -395,6 +551,9 @@ impl Ctx<'_> {
 
             Request::SendMessage { channel_id, content, reply_to, nonce, attachments } => {
                 self.take_message_token()?;
+                if nonce.len() > MAX_NONCE_LEN {
+                    return bad("bad message nonce");
+                }
                 if attachments.len() > MAX_ATTACHMENTS_PER_MESSAGE {
                     return bad("too many attachments");
                 }
@@ -410,12 +569,7 @@ impl Ctx<'_> {
                     None => return bad("message is empty or too long"),
                 };
                 self.can_see(channel_id)?;
-                if let Some((x, y)) = db.dm_members(channel_id) {
-                    let other = if x == self.uid { y } else { x };
-                    if db.blocked_between(&self.uid, &other) {
-                        return Err((ErrorCode::Forbidden, "You can't message this person.".into()));
-                    }
-                }
+                self.not_blocked_in(channel_id)?;
                 let reply_to = reply_to.filter(|id| db.get_message(*id).map(|m| m.channel_id == channel_id).unwrap_or(false));
                 let message = db
                     .insert_message_with(channel_id, &self.uid, &content, reply_to, &attachments)
@@ -424,11 +578,13 @@ impl Ctx<'_> {
                 Ok(Event::Ok)
             }
             Request::EditMessage { message_id, content } => {
+                self.take_message_token()?;
                 let Some(content) = clean_content(&content) else { return bad("message is empty or too long") };
                 let Some(m) = db.get_message(message_id) else { return Err((ErrorCode::NotFound, "gone".into())) };
                 if m.author != self.uid {
                     return Err((ErrorCode::Forbidden, "You can only edit your own messages.".into()));
                 }
+                self.not_blocked_in(m.channel_id)?;
                 if let Ok(Some(message)) = db.edit_message(message_id, &content) {
                     hub.broadcast_in(message.channel_id, Event::MessageUpdated { message });
                 }
@@ -447,19 +603,29 @@ impl Ctx<'_> {
                 Ok(Event::Ok)
             }
             Request::React { message_id, emoji, add } => {
-                let emoji = emoji.trim().to_string();
-                // A server emoji (`<:name:id>`, which must exist here) or a real emoji.
-                let custom = emoji.starts_with('<') && emoji.ends_with('>');
-                if custom {
-                    let id = emoji.trim_end_matches('>').rsplit(':').next().unwrap_or("");
-                    if emoji.len() > 120 || !db.emojis().iter().any(|e| e.id == id) {
-                        return bad("not an emoji on this server");
-                    }
-                } else if emoji.is_empty() || emoji.len() > 32 || emoji.chars().any(|c| c.is_ascii_alphanumeric() || c.is_whitespace()) {
-                    return bad("not an emoji");
+                if !self.react_tokens.take(1.0) {
+                    return Err((ErrorCode::RateLimited, "You're reacting too fast.".into()));
                 }
+                let emoji = emoji.trim().to_string();
+                // A server emoji (`<:name:id>`, which must exist here; kept as the server
+                // writes it) or a real emoji.
+                let emoji = if emoji.starts_with('<') && emoji.ends_with('>') && emoji.len() <= 120 {
+                    let id = emoji.trim_end_matches('>').rsplit(':').next().unwrap_or("");
+                    match db.emojis().into_iter().find(|e| e.id == id) {
+                        Some(e) if e.animated => format!("<a:{}:{}>", e.name, e.id),
+                        Some(e) => format!("<:{}:{}>", e.name, e.id),
+                        None => return bad("not an emoji on this server"),
+                    }
+                } else if valid_unicode_reaction(&emoji) {
+                    emoji
+                } else {
+                    return bad("not an emoji");
+                };
                 let Some(m) = db.get_message(message_id) else { return Err((ErrorCode::NotFound, "gone".into())) };
                 self.can_see(m.channel_id)?;
+                if add {
+                    self.not_blocked_in(m.channel_id)?;
+                }
                 if add && db.distinct_reactions(message_id) >= 20 {
                     return bad("too many different reactions");
                 }
@@ -471,14 +637,28 @@ impl Ctx<'_> {
             }
             Request::FetchHistory { channel_id, before, limit } => {
                 self.can_see(channel_id)?;
-                let (messages, complete) = db.history(channel_id, before, limit);
+                let (mut messages, mut complete) = db.history(channel_id, before, limit);
+                // Long messages add up: keep the page well inside one frame, dropping the
+                // oldest (the app asks for those next).
+                let size = |m: &Message| {
+                    m.content.len()
+                        + 400
+                        + m.attachments.iter().map(|a| a.name.len() + 160).sum::<usize>()
+                        + m.reactions.iter().map(|r| r.emoji.len() + 24 + r.users.iter().map(|u| u.len() + 3).sum::<usize>()).sum::<usize>()
+                };
+                let mut total: usize = messages.iter().map(size).sum();
+                while total > HISTORY_PAGE_BYTES && messages.len() > 1 {
+                    total -= size(&messages.remove(0));
+                    complete = false;
+                }
                 Ok(Event::History { channel_id, messages, complete })
             }
-            Request::Typing { channel_id } => match self.can_see(channel_id) {
+            Request::Typing { channel_id } => match self.can_see(channel_id).and_then(|_| self.not_blocked_in(channel_id)) {
                 Ok(()) => hub.typing(self.conn_id, &self.uid, channel_id),
                 Err(_) => Ok(Event::Ok),
             },
             Request::OpenDm { user_id } => {
+                valid_uid(&user_id)?;
                 if user_id == self.uid {
                     return bad("you can't message yourself");
                 }
@@ -530,13 +710,17 @@ impl Ctx<'_> {
                 Ok(Event::Ok)
             }
             Request::CreateInvite { max_uses, expires_secs } => {
-                let code = new_invite_code(8);
+                if db.invites_by(&self.uid) >= MAX_INVITES_PER_MEMBER {
+                    return bad("You've made a lot of invite links already. Use one of those.");
+                }
+                let code = new_invite_code(10);
                 let expires_at = expires_secs.map(|s| ingle_proto::now_ms() + (s.min(365 * 86400) as i64) * 1000);
                 db.create_invite(&code, &self.uid, max_uses, expires_at, Role::Member)
                     .map_err(|e| (ErrorCode::Internal, e.to_string()))?;
                 Ok(Event::InviteCreated { link: hub.invite_link(&code), code })
             }
             Request::SetRole { user_id, role } => {
+                valid_uid(&user_id)?;
                 if self.role() != Role::Owner {
                     return Err((ErrorCode::Forbidden, "Only the owner can change roles.".into()));
                 }
@@ -554,10 +738,13 @@ impl Ctx<'_> {
                 Ok(Event::Ok)
             }
             Request::Kick { user_id } | Request::Ban { user_id } if user_id == self.uid => bad("you can't remove yourself"),
+            Request::Kick { user_id } | Request::Ban { user_id } if !crypto::is_valid_user_id(&user_id) => {
+                Err((ErrorCode::NotFound, "No such member.".into()))
+            }
             Request::Kick { user_id } => self.remove(user_id, false),
             Request::Ban { user_id } => self.remove(user_id, true),
             Request::UpdateProfile { name } => {
-                let Some(name) = clean_name(&name, 32) else { return bad("name is empty") };
+                let Some(name) = clean_member_name(&name) else { return bad("Pick another name (not empty, not @everyone or @here).") };
                 db.touch_user(&self.uid, &name).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
                 if let Some(member) = hub.member(&self.uid) {
                     hub.broadcast(Event::MemberUpserted { member });
@@ -624,8 +811,9 @@ impl Ctx<'_> {
                 }
                 if let Some(p) = perms {
                     let p = p & perm::ALL;
-                    if p & !self.perms() != 0 {
-                        return Err((ErrorCode::Forbidden, "You can't give a role permissions you don't have.".into()));
+                    // Only permissions you have yourself can be switched on or off.
+                    if (p ^ role.perms) & !self.perms() != 0 {
+                        return Err((ErrorCode::Forbidden, "You can only change permissions you have yourself.".into()));
                     }
                     role.perms = p;
                 }
@@ -689,11 +877,16 @@ impl Ctx<'_> {
                 let mut after: Vec<RoleId> = roles.into_iter().filter(|id| all.iter().any(|r| r.id == *id)).collect();
                 after.sort();
                 after.dedup();
-                // Every role being added or taken away must be below your own highest one.
+                // Every role being added or taken away must be below your own highest one, and
+                // you can only hand out roles whose powers you have yourself.
+                let mine = self.perms();
                 for id in before.iter().filter(|r| !after.contains(r)).chain(after.iter().filter(|r| !before.contains(r))) {
                     if let Some(r) = all.iter().find(|r| r.id == *id) {
                         if !self.can_manage_role(r) {
                             return Err((ErrorCode::Forbidden, format!("\"{}\" is at or above your own highest role.", r.name)));
+                        }
+                        if !before.contains(id) && r.perms & !mine != 0 {
+                            return Err((ErrorCode::Forbidden, format!("\"{}\" has permissions you don't have.", r.name)));
                         }
                     }
                 }
@@ -722,7 +915,11 @@ impl Ctx<'_> {
                 Ok(Event::Ok)
             }
             Request::FriendRequest { user_id } => {
+                valid_uid(&user_id)?;
                 self.other_member(&user_id)?;
+                if db.outgoing_requests(&self.uid) >= 200 {
+                    return bad("You have a lot of friend requests waiting already.");
+                }
                 if db.blocked_between(&self.uid, &user_id) {
                     return Err((ErrorCode::Forbidden, "You can't add this person as a friend.".into()));
                 }
@@ -740,6 +937,7 @@ impl Ctx<'_> {
                 Ok(Event::Ok)
             }
             Request::FriendAccept { user_id } => {
+                valid_uid(&user_id)?;
                 if db.relation(&self.uid, &user_id) != Some(RelationKind::Incoming) {
                     return bad("There's no friend request from them.");
                 }
@@ -751,11 +949,13 @@ impl Ctx<'_> {
                 Ok(Event::Ok)
             }
             Request::FriendRemove { user_id } => {
+                valid_uid(&user_id)?;
                 db.clear_relation(&self.uid, &user_id, &[0, 1]).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
                 self.tell_relation(&user_id);
                 Ok(Event::Ok)
             }
             Request::Block { user_id } => {
+                valid_uid(&user_id)?;
                 if user_id == self.uid {
                     return bad("You can't block yourself.");
                 }
@@ -766,6 +966,7 @@ impl Ctx<'_> {
                 Ok(Event::Ok)
             }
             Request::Unblock { user_id } => {
+                valid_uid(&user_id)?;
                 db.unblock(&self.uid, &user_id).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
                 self.tell_relation(&user_id);
                 Ok(Event::Ok)
@@ -853,5 +1054,224 @@ impl Ctx<'_> {
         let reason = if ban { "You were banned from this server." } else { "You were kicked from this server." };
         self.hub.eject(&user_id, reason);
         Ok(Event::Ok)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Db;
+
+    fn uid() -> String {
+        crypto::Identity::generate().user_id()
+    }
+
+    fn hub() -> Arc<Hub> {
+        let dir = std::env::temp_dir().join(format!("ingle-conn-test-{}", crypto::random_bytes::<6>().iter().map(|b| format!("{b:02x}")).collect::<String>()));
+        Hub::new(Db::open_in_memory().unwrap(), [7u8; 32], "example.org".into(), 7777, dir)
+    }
+
+    fn ctx<'a>(hub: &'a Hub, uid: &str) -> Ctx<'a> {
+        Ctx {
+            hub,
+            conn_id: 1,
+            uid: uid.to_string(),
+            msg_tokens: Bucket::new(1.5, 10.0),
+            react_tokens: Bucket::new(3.0, 15.0),
+            req_tokens: Bucket::new(REQ_RATE, REQ_BURST),
+        }
+    }
+
+    fn forbidden(r: Reply) -> bool {
+        matches!(r, Err((ErrorCode::Forbidden, _)))
+    }
+
+    #[test]
+    fn role_managers_cant_hand_out_powers_they_lack() {
+        let hub = hub();
+        let (owner, bob, carol) = (uid(), uid(), uid());
+        hub.db.insert_user(&owner, "Owner", Role::Owner).unwrap();
+        hub.db.insert_user(&bob, "Bob", Role::Member).unwrap();
+        hub.db.insert_user(&carol, "Carol", Role::Member).unwrap();
+        // "Role manager" first, then "Moderator" (new roles go to the bottom, so it's below).
+        let manager = hub.db.create_role("Role manager", 0, perm::MANAGE_ROLES, false).unwrap();
+        let moderator = hub.db.create_role("Moderator", 0, perm::KICK | perm::BAN, false).unwrap();
+        let helper = hub.db.create_role("Helper", 0, 0, false).unwrap();
+        hub.db.set_member_roles(&bob, &[manager.id]).unwrap();
+        let mut b = ctx(&hub, &bob);
+        // Giving himself (or Carol) the Moderator role would give powers he doesn't have.
+        assert!(forbidden(b.handle(Request::SetMemberRoles { user_id: bob.clone(), roles: vec![manager.id, moderator.id] })));
+        assert!(forbidden(b.handle(Request::SetMemberRoles { user_id: carol.clone(), roles: vec![moderator.id] })));
+        // A role with nothing he lacks is fine.
+        assert!(b.handle(Request::SetMemberRoles { user_id: carol.clone(), roles: vec![helper.id] }).is_ok());
+        // Nor can he switch Kick/Ban off (or on) on a lower role.
+        let r = b.handle(Request::UpdateRole { role_id: moderator.id, name: None, color: None, perms: Some(perm::KICK), hoist: None, shift: 0 });
+        assert!(forbidden(r));
+        // The owner can.
+        let mut o = ctx(&hub, &owner);
+        assert!(o.handle(Request::SetMemberRoles { user_id: carol.clone(), roles: vec![moderator.id] }).is_ok());
+    }
+
+    #[test]
+    fn echoed_fields_are_bounded_and_ids_checked() {
+        let hub = hub();
+        let (owner, bob) = (uid(), uid());
+        hub.db.insert_user(&owner, "Owner", Role::Owner).unwrap();
+        hub.db.insert_user(&bob, "Bob", Role::Member).unwrap();
+        let ch = hub.db.create_channel("general", ChannelKind::Text).unwrap();
+        let mut b = ctx(&hub, &bob);
+        let send = |c: &mut Ctx, nonce: String| {
+            c.handle(Request::SendMessage { channel_id: ch.id, content: "hi".into(), reply_to: None, nonce, attachments: vec![] })
+        };
+        assert!(send(&mut b, "x".repeat(MAX_NONCE_LEN + 1)).is_err(), "a huge nonce would be echoed to everyone");
+        assert!(send(&mut b, "n1".into()).is_ok());
+        // Ids that can't be anyone are refused before they reach the database or a broadcast.
+        let mut o = ctx(&hub, &owner);
+        assert!(o.handle(Request::Ban { user_id: "x".repeat(5000) }).is_err());
+        assert!(b.handle(Request::Block { user_id: "y".repeat(5000) }).is_err());
+        assert!(b.handle(Request::FriendRequest { user_id: format!("{owner}=") }).is_err());
+        // Names that would read as @everyone or show as nothing.
+        assert!(b.handle(Request::UpdateProfile { name: "@everyone".into() }).is_err());
+        assert!(b.handle(Request::UpdateProfile { name: "\u{200b}\u{3164}".into() }).is_err());
+        assert!(b.handle(Request::UpdateProfile { name: "Bo\u{202e}b".into() }).is_ok());
+        assert_eq!(hub.db.get_user(&bob).unwrap().name, "Bob");
+    }
+
+    #[test]
+    fn reactions_are_real_emoji_and_custom_ones_are_rewritten() {
+        let hub = hub();
+        let (owner, bob) = (uid(), uid());
+        hub.db.insert_user(&owner, "Owner", Role::Owner).unwrap();
+        hub.db.insert_user(&bob, "Bob", Role::Member).unwrap();
+        let ch = hub.db.create_channel("general", ChannelKind::Text).unwrap();
+        let mid = hub.db.insert_message(ch.id, &owner, "hello", None).unwrap().id;
+        let id = "0123456789abcdef0123456789abcdef".to_string();
+        hub.db.add_emoji(&CustomEmoji { id: id.clone(), name: "party".into(), animated: false, by: owner.clone() }).unwrap();
+        let mut b = ctx(&hub, &bob);
+        let react = |c: &mut Ctx, e: &str| c.handle(Request::React { message_id: mid, emoji: e.into(), add: true });
+        assert!(react(&mut b, "👍🏽").is_ok());
+        assert!(react(&mut b, "1\u{fe0f}\u{20e3}").is_ok());
+        assert!(react(&mut b, "<<>>").is_err());
+        assert!(react(&mut b, "a").is_err());
+        assert!(react(&mut b, "\u{200b}").is_err());
+        assert!(react(&mut b, &format!("<:anything at all here:{id}>")).is_ok());
+        let m = hub.db.get_message(mid).unwrap();
+        assert!(m.reactions.iter().any(|r| r.emoji == format!("<:party:{id}>")), "{:?}", m.reactions);
+        assert!(!m.reactions.iter().any(|r| r.emoji.contains("anything")));
+        assert!(react(&mut b, "<:nope:ffffffffffffffffffffffffffffffff>").is_err());
+    }
+
+    #[test]
+    fn history_pages_stay_inside_one_frame() {
+        let hub = hub();
+        let a = uid();
+        hub.db.insert_user(&a, "A", Role::Owner).unwrap();
+        let ch = hub.db.create_channel("general", ChannelKind::Text).unwrap();
+        // 100 messages of 4000 four-byte characters: 1.6 MB, more than a frame.
+        let big: String = "😀".repeat(MAX_MESSAGE_CHARS);
+        for _ in 0..100 {
+            hub.db.insert_message(ch.id, &a, &big, None).unwrap();
+        }
+        let mut c = ctx(&hub, &a);
+        let Ok(ev) = c.handle(Request::FetchHistory { channel_id: ch.id, before: None, limit: 100 }) else { panic!() };
+        let Event::History { messages, complete, .. } = &ev else { panic!() };
+        assert!(!complete);
+        assert!(messages.len() < 100 && !messages.is_empty());
+        assert!(frame(1, ev.clone()).len() < ingle_proto::MAX_CONTROL_FRAME);
+    }
+
+    #[test]
+    fn blocked_people_cant_edit_react_or_type_in_dms() {
+        let hub = hub();
+        let (a, b) = (uid(), uid());
+        hub.db.insert_user(&a, "A", Role::Member).unwrap();
+        hub.db.insert_user(&b, "B", Role::Member).unwrap();
+        let (dm, _) = hub.db.open_dm(&a, &b).unwrap();
+        let mid = hub.db.insert_message(dm, &b, "hi", None).unwrap().id;
+        hub.db.set_relation(&a, &b, 2).unwrap();
+        let mut cb = ctx(&hub, &b);
+        assert!(forbidden(cb.handle(Request::EditMessage { message_id: mid, content: "something mean".into() })));
+        assert!(forbidden(cb.handle(Request::React { message_id: mid, emoji: "😠".into(), add: true })));
+        assert_eq!(hub.db.get_message(mid).unwrap().content, "hi");
+    }
+
+    #[test]
+    fn invites_capped_and_requests_rate_limited() {
+        let hub = hub();
+        let a = uid();
+        hub.db.insert_user(&a, "A", Role::Member).unwrap();
+        let mut c = ctx(&hub, &a);
+        for _ in 0..MAX_INVITES_PER_MEMBER {
+            assert!(c.handle(Request::CreateInvite { max_uses: None, expires_secs: None }).is_ok());
+        }
+        assert!(c.handle(Request::CreateInvite { max_uses: None, expires_secs: None }).is_err());
+        let mut bucket = Bucket::new(REQ_RATE, REQ_BURST);
+        let allowed = (0..1000).filter(|_| bucket.take(1.0)).count();
+        assert!(allowed < 120, "{allowed}");
+        // Kicking someone retires the invites they made.
+        hub.db.remove_user(&a, false).unwrap();
+        assert_eq!(hub.db.invites_by(&a), 0);
+    }
+
+    #[test]
+    fn invites_and_bans_at_login() {
+        let hub = hub();
+        let ip: std::net::IpAddr = "203.0.113.5".parse().unwrap();
+        let (a, b) = (uid(), uid());
+        hub.db.create_invite("fivetimes1", "server", Some(5), None, Role::Member).unwrap();
+        hub.authorize(&a, "A", Some("fivetimes1"), ip).unwrap();
+        // Reconnecting with the same invite doesn't use it up.
+        for _ in 0..10 {
+            hub.authorize(&a, "A", Some("fivetimes1"), ip).unwrap();
+        }
+        hub.authorize(&b, "B", Some("fivetimes1"), ip).unwrap();
+        // A ban sticks: joining again with an invite doesn't undo it.
+        hub.db.remove_user(&b, true).unwrap();
+        assert!(hub.authorize(&b, "B", Some("fivetimes1"), ip).is_err());
+        assert!(!hub.db.insert_user(&b, "B", Role::Member).unwrap());
+        // Guessing invite codes gets throttled per address.
+        for i in 0..BAD_INVITES {
+            assert!(matches!(hub.authorize(&uid(), "X", Some(&format!("guess{i}")), ip), Err((ErrorCode::InviteInvalid, _))));
+        }
+        assert!(matches!(hub.authorize(&uid(), "X", Some("fivetimes1"), ip), Err((ErrorCode::RateLimited, _))));
+        let other: std::net::IpAddr = "198.51.100.7".parse().unwrap();
+        assert!(hub.authorize(&uid(), "Y", Some("fivetimes1"), other).is_ok());
+    }
+
+    const BAD_INVITES: u32 = 10;
+
+    #[test]
+    fn canonical_ids_only() {
+        let id = uid();
+        assert!(crypto::is_valid_user_id(&id));
+        assert!(!crypto::is_valid_user_id(&format!("{id}=")));
+        assert!(!crypto::is_valid_user_id(&format!(" {id}")));
+    }
+
+    #[test]
+    fn decompression_bombs_are_refused() {
+        // A GIF that says it's 60000x60000 (with one tiny frame): the canvas alone would be
+        // gigabytes.
+        let mut gif = b"GIF89a".to_vec();
+        gif.extend_from_slice(&60000u16.to_le_bytes());
+        gif.extend_from_slice(&60000u16.to_le_bytes());
+        gif.extend_from_slice(&[0, 0, 0, 0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x4c, 1, 0, 0x3b]);
+        assert!(!image_dimensions_ok(&gif));
+        // Many big frames: too much in all.
+        let mut anim = b"GIF89a".to_vec();
+        anim.extend_from_slice(&4000u16.to_le_bytes());
+        anim.extend_from_slice(&4000u16.to_le_bytes());
+        anim.extend_from_slice(&[0, 0, 0]);
+        for _ in 0..60 {
+            anim.extend_from_slice(&[0x2c, 0, 0, 0, 0, 0xa0, 0x0f, 0xa0, 0x0f, 0, 2, 2, 0x4c, 1, 0]);
+        }
+        anim.push(0x3b);
+        assert!(!image_dimensions_ok(&anim));
+        // A normal small GIF is fine.
+        let mut ok = b"GIF89a".to_vec();
+        ok.extend_from_slice(&64u16.to_le_bytes());
+        ok.extend_from_slice(&64u16.to_le_bytes());
+        ok.extend_from_slice(&[0, 0, 0, 0x2c, 0, 0, 0, 0, 64, 0, 64, 0, 0, 2, 2, 0x4c, 1, 0, 0x3b]);
+        assert!(image_dimensions_ok(&ok));
     }
 }

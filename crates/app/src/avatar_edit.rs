@@ -33,7 +33,7 @@ pub struct AvatarCrop {
 
 impl AvatarCrop {
     pub fn new(bytes: Vec<u8>, target: CropTarget) -> Result<AvatarCrop, String> {
-        let img = image::load_from_memory(&bytes).map_err(|_| "That file isn't an image Ingle can read.".to_string())?;
+        let img = crate::images::load_limited(&bytes).map_err(|_| "That file isn't an image Ingle can read (or it's too large).".to_string())?;
         let key = format!("crop:{}", ingle_proto::release::sha256_hex(&bytes));
         Ok(AvatarCrop {
             bytes: Arc::new(bytes),

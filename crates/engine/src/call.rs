@@ -141,18 +141,33 @@ async fn datagram_loop(shared: Arc<Shared>, conn: quinn::Connection, e2ee: Arc<M
     }
 }
 
-/// Receive video frames (one QUIC stream each).
+/// Receive video frames (one QUIC stream each), a few dozen at a time, each read no further
+/// than its header says.
 async fn uni_loop(shared: Arc<Shared>, conn: quinn::Connection, e2ee: Arc<Mutex<E2ee>>) {
+    let slots = Arc::new(tokio::sync::Semaphore::new(48));
     while let Ok(mut s) = conn.accept_uni().await {
+        let Ok(permit) = slots.clone().try_acquire_owned() else {
+            let _ = s.stop(VarInt::from_u32(0));
+            continue;
+        };
         let shared = shared.clone();
         let e2ee = e2ee.clone();
         tokio::spawn(async move {
-            let Ok(Ok(data)) = tokio::time::timeout(
-                Duration::from_secs(5),
-                s.read_to_end(ingle_proto::MAX_VIDEO_FRAME + media::VIDEO_HEADER_LEN),
-            )
-            .await
-            else {
+            let _permit = permit;
+            let read = async {
+                let mut head = [0u8; media::VIDEO_HEADER_LEN];
+                s.read_exact(&mut head).await.ok()?;
+                let h = VideoHeader::parse(&head)?;
+                if h.len as usize > ingle_proto::MAX_VIDEO_FRAME {
+                    return None;
+                }
+                let mut data = vec![0u8; media::VIDEO_HEADER_LEN + h.len as usize];
+                data[..media::VIDEO_HEADER_LEN].copy_from_slice(&head);
+                s.read_exact(&mut data[media::VIDEO_HEADER_LEN..]).await.ok()?;
+                Some(data)
+            };
+            let Ok(Some(data)) = tokio::time::timeout(Duration::from_secs(5), read).await else {
+                let _ = s.stop(VarInt::from_u32(0));
                 return;
             };
             let Some(h) = VideoHeader::parse(&data) else { return };

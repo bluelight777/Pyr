@@ -67,7 +67,9 @@ impl ServerCertVerifier for PinnedVerifier {
 
 pub fn transport_config() -> quinn::TransportConfig {
     let mut t = quinn::TransportConfig::default();
-    t.max_concurrent_uni_streams(VarInt::from_u32(2048));
+    // Video frames from the server, one stream each (see call::uni_loop for how many are read
+    // at once).
+    t.max_concurrent_uni_streams(VarInt::from_u32(256));
     t.max_concurrent_bidi_streams(VarInt::from_u32(16));
     t.keep_alive_interval(Some(Duration::from_secs(4)));
     t.max_idle_timeout(Some(Duration::from_secs(20).try_into().expect("valid idle timeout")));

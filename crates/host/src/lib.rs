@@ -56,6 +56,9 @@ pub struct Ready {
     pub warnings: Vec<String>,
     /// The rented server, if one was created.
     pub droplet: Option<DropletRef>,
+    /// The server's SSH identity (`SHA256:…`), remembered so a later connection can tell
+    /// it's the same server.
+    pub host_key: String,
 }
 
 /// A rented server that exists (and costs money) whatever happened afterwards.

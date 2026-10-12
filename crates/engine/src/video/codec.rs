@@ -1,6 +1,6 @@
 //! H.264 encode/decode (OpenH264) with fast colour conversion and scaling.
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use fast_image_resize::images::Image;
 use fast_image_resize::{PixelType, ResizeAlg, ResizeOptions, Resizer};
 use openh264::OpenH264API;
@@ -207,6 +207,11 @@ impl H264Decoder {
     pub fn decode(&mut self, data: &[u8]) -> Result<Option<DecodedFrame>> {
         let Some(yuvf) = self.dec.decode(data)? else { return Ok(None) };
         let (w, h) = yuvf.dimensions();
+        // Ingle never sends more than 1440p; anything past 4K is junk (or someone trying to
+        // make us allocate huge pictures).
+        if w == 0 || h == 0 || w > 4096 || h > 2304 {
+            bail!("video frame of {w}x{h} is too large");
+        }
         let (ys, us, vs) = yuvf.strides();
         let planar = YuvPlanarImage {
             y_plane: yuvf.y(),

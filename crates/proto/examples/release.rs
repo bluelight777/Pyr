@@ -26,11 +26,22 @@ fn main() -> Result<()> {
     match args.first().map(String::as_str) {
         Some("keygen") => {
             let path = args.get(1).context("keygen <file>")?;
-            if Path::new(path).exists() {
-                bail!("{path} already exists; not overwriting a release key");
-            }
             let key = Identity::generate();
-            std::fs::write(path, b64::encode(&key.seed()))?;
+            // A new file only (never over an existing key), readable only by you.
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            let mut f = match opts.open(path) {
+                Ok(f) => f,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => bail!("{path} already exists; not overwriting a release key"),
+                Err(e) => return Err(e.into()),
+            };
+            use std::io::Write;
+            f.write_all(b64::encode(&key.seed()).as_bytes())?;
             println!("public key (put in the app): {}", key.user_id());
         }
         Some("sign") => {

@@ -81,23 +81,35 @@ fn first_run_setup(db: &db::Db, name: Option<&str>) -> Result<()> {
     db.create_channel("links-and-clips", ChannelKind::Text)?;
     db.create_channel("Lounge", ChannelKind::Voice)?;
     db.create_channel("Gaming", ChannelKind::Voice)?;
-    let invite = db::new_invite_code(8);
+    let invite = db::new_invite_code(10);
     db.create_invite(&invite, "server", None, None, Role::Member)?;
     db.set_meta("default_invite", &invite)?;
-    let owner = format!("owner-{}", db::new_invite_code(10));
-    db.create_invite(&owner, "server", Some(1), None, Role::Owner)?;
+    let owner = format!("owner-{}", db::new_invite_code(16));
+    db.create_invite(&owner, "server", Some(1), Some(owner_link_expiry()), Role::Owner)?;
     db.set_meta("initialized", "1")?;
     info!("created a new community: {name}");
     Ok(())
+}
+
+/// Owner links work for a week: plenty of time to set up, not a key left lying around.
+pub fn owner_link_expiry() -> i64 {
+    ingle_proto::now_ms() + 7 * 24 * 3_600_000
 }
 
 /// Opens (or creates) the community in `cfg.data_dir`: TLS identity, database, default
 /// channels and invites, and the remembered public host.
 fn prepare(cfg: &ServerConfig) -> Result<(tls::TlsIdentity, db::Db)> {
     std::fs::create_dir_all(&cfg.data_dir).with_context(|| format!("creating {}", cfg.data_dir.display()))?;
+    #[cfg(unix)]
+    {
+        // The database holds every message: only the server's own account may read it.
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&cfg.data_dir, std::fs::Permissions::from_mode(0o700));
+    }
     let tls_id = tls::load_or_create(&cfg.data_dir)?;
     let db = db::Db::open(&cfg.data_dir.join("ingle.db"))?;
     first_run_setup(&db, cfg.name.as_deref())?;
+    db.prune_invites()?;
     // --public-host is remembered, so starting the server again (say, from a shortcut)
     // keeps handing out links with the right address. `--public-host ""` forgets it.
     if let Some(h) = &cfg.public_host {
@@ -116,24 +128,28 @@ pub fn setup_links(cfg: &ServerConfig) -> Result<SetupLinks> {
         .filter(|h| !h.is_empty())
         .or_else(detect_lan_ip)
         .unwrap_or_else(|| "127.0.0.1".into());
+    // A fresh owner link only while nobody owns the community yet (after that, `ingle-server
+    // owner-invite` makes one on purpose).
     let owner = match db.usable_invite(Role::Owner) {
-        Some(code) => code,
-        None => {
-            let code = format!("owner-{}", db::new_invite_code(10));
-            db.create_invite(&code, "server", Some(1), None, Role::Owner)?;
-            code
+        Some(code) => Some(code),
+        None if !db.owner_exists() => {
+            let code = format!("owner-{}", db::new_invite_code(16));
+            db.create_invite(&code, "server", Some(1), Some(owner_link_expiry()), Role::Owner)?;
+            Some(code)
         }
+        None => None,
     };
     let invite = db.get_meta("default_invite").unwrap_or_default();
     let link = |code: String| {
         ingle_proto::invite::InviteLink::new(host.clone(), cfg.bind.port(), Some(code), tls_id.fingerprint)
             .to_url()
     };
-    Ok(SetupLinks { name: db.get_meta("name").unwrap_or_default(), owner: link(owner), invite: link(invite) })
+    Ok(SetupLinks { name: db.get_meta("name").unwrap_or_default(), owner: owner.map(link).unwrap_or_default(), invite: link(invite) })
 }
 
 pub struct SetupLinks {
     pub name: String,
+    /// Empty once the community has an owner.
     pub owner: String,
     pub invite: String,
 }
@@ -167,7 +183,18 @@ pub async fn start(cfg: ServerConfig) -> Result<RunningServer> {
     let h = hub.clone();
     let task = tokio::spawn(async move {
         while let Some(incoming) = ep.accept().await {
-            tokio::spawn(conn::handle(h.clone(), incoming));
+            // Caps on connections per address and in all; under a flood of handshakes, new
+            // ones must prove their address first.
+            let ip = incoming.remote_address().ip();
+            match h.admit(ip, incoming.remote_address_validated()) {
+                (hub::Admit::Accept, Some(slot)) => {
+                    tokio::spawn(conn::handle(h.clone(), incoming, slot));
+                }
+                (hub::Admit::Retry, _) => {
+                    let _ = incoming.retry();
+                }
+                _ => incoming.refuse(),
+            }
         }
     });
 
@@ -231,6 +258,17 @@ mod tests {
         let after = setup_links(&cfg()).unwrap();
         assert_ne!(after.owner, first.owner);
         assert!(after.owner.contains("/owner-"));
+        // Once someone owns the community, no new owner links are made (and old ones that
+        // never expire are removed at start).
+        {
+            let db = db::Db::open(&dir.join("ingle.db")).unwrap();
+            db.insert_user(&ingle_proto::crypto::Identity::generate().user_id(), "Owner", Role::Owner).unwrap();
+            db.create_invite("owner-legacy", "server", Some(1), None, Role::Owner).unwrap();
+        }
+        let owned = setup_links(&cfg()).unwrap();
+        assert!(owned.owner.is_empty() || owned.owner == after.owner, "{}", owned.owner);
+        let db = db::Db::open(&dir.join("ingle.db")).unwrap();
+        assert_eq!(db.invite_role("owner-legacy"), None, "a never-expiring owner link is removed once there's an owner");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

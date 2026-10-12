@@ -116,12 +116,13 @@ fn digits(hash: &[u8], groups: usize) -> String {
         .join(" ")
 }
 
-/// A stable, human-comparable code for one identity (e.g. "0417 2280 9133 5052").
+/// A stable, human-comparable code for one identity (e.g. "0417 2280 9133 5052 7710 0381").
+/// Six groups (about 80 bits), so nobody can make another identity with the same code.
 pub fn safety_code(user_id: &str) -> String {
     let mut h = Sha256::new();
-    h.update(b"ingle-safety-v1");
+    h.update(b"ingle-safety-v2");
     h.update(user_id.as_bytes());
-    digits(&h.finalize(), 4)
+    digits(&h.finalize(), 6)
 }
 
 /// A short code everyone in a call can compare. It covers every participant's identity
@@ -130,13 +131,15 @@ pub fn call_code(participants: &[(String, [u8; 32])]) -> String {
     let mut v: Vec<&(String, [u8; 32])> = participants.iter().collect();
     v.sort();
     let mut h = Sha256::new();
-    h.update(b"ingle-call-v1");
+    h.update(b"ingle-call-v2");
     for (uid, key) in v {
         h.update((uid.len() as u16).to_be_bytes());
         h.update(uid.as_bytes());
         h.update(key);
     }
-    digits(&h.finalize(), 3)
+    // Six groups (about 80 bits): too many to search for a hidden extra participant whose key
+    // happens to give the same code.
+    digits(&h.finalize(), 6)
 }
 
 /// What a participant signs to bind their session key to a voice channel.
@@ -338,6 +341,7 @@ mod tests {
         let b = ("bob".to_string(), [2u8; 32]);
         assert_eq!(call_code(&[a.clone(), b.clone()]), call_code(&[b.clone(), a.clone()]));
         assert_ne!(call_code(&[a.clone(), b]), call_code(&[a, ("bob".into(), [3u8; 32])]));
-        assert_eq!(safety_code("x").len(), 19);
+        assert_eq!(safety_code("x").len(), 29);
+        assert_eq!(call_code(&[("a".into(), [1u8; 32])]).len(), 29);
     }
 }

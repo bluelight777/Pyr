@@ -37,8 +37,9 @@ pub enum Status {
     Available(Manifest),
     /// Downloading the new version: bytes done, total.
     Downloading(u64, u64),
-    /// Downloaded and checked; the app should now start the installer and quit.
-    Ready(PathBuf),
+    /// Downloaded and checked; the app should now start the installer and quit. (The file's
+    /// SHA-256 is checked once more right before it's installed.)
+    Ready(PathBuf, String),
     Failed(String),
 }
 
@@ -94,7 +95,7 @@ impl Updater {
                 r();
             });
             *s.lock() = match result {
-                Ok(path) => Status::Ready(path),
+                Ok(path) => Status::Ready(path, asset.sha256.to_lowercase()),
                 Err(e) => {
                     tracing::warn!("update download failed: {e}");
                     Status::Failed(e)
@@ -137,11 +138,46 @@ pub fn platform_asset(m: &Manifest) -> Option<&Asset> {
     }
 }
 
+/// A new folder only this user can get into, for the download. (Not a fixed name in the
+/// shared temp folder: on Linux another account could put its own file there, and the
+/// package is installed as root.)
+fn private_dir() -> Result<PathBuf, String> {
+    let base = {
+        #[cfg(unix)]
+        {
+            std::env::var_os("XDG_RUNTIME_DIR")
+                .map(PathBuf::from)
+                .filter(|p| p.is_dir())
+                .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+                .unwrap_or_else(std::env::temp_dir)
+        }
+        #[cfg(not(unix))]
+        {
+            std::env::temp_dir()
+        }
+    };
+    let _ = std::fs::create_dir_all(&base);
+    let name: String = ingle_proto::crypto::random_bytes::<12>().iter().map(|b| format!("{b:02x}")).collect();
+    let dir = base.join(format!("ingle-update-{name}"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        // Fails if anything (a file, a link someone planted) already has that name.
+        std::fs::DirBuilder::new().mode(0o700).create(&dir).map_err(|e| format!("couldn't make a download folder: {e}"))?;
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir(&dir).map_err(|e| format!("couldn't make a download folder: {e}"))?;
+    Ok(dir)
+}
+
+/// The SHA-256 of a file, read fresh from disk.
+fn file_sha256(path: &Path) -> Option<String> {
+    std::fs::read(path).ok().map(|b| release::sha256_hex(&b))
+}
+
 fn fetch(asset: &Asset, version: &str, mut progress: impl FnMut(u64)) -> Result<PathBuf, String> {
-    let dir = std::env::temp_dir().join("ingle-update");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let ext = if cfg!(windows) { "exe" } else { "deb" };
-    let path = dir.join(format!("ingle-{version}.{ext}"));
+    let version: String = version.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-')).take(32).collect();
     let mut resp = agent().get(&asset.url).call().map_err(|e| format!("couldn't download the update: {e}"))?;
     let mut reader = resp.body_mut().with_config().limit(asset.size + 1).reader();
     let mut bytes = Vec::with_capacity(asset.size as usize);
@@ -157,7 +193,14 @@ fn fetch(asset: &Asset, version: &str, mut progress: impl FnMut(u64)) -> Result<
     if bytes.len() as u64 != asset.size || release::sha256_hex(&bytes) != asset.sha256.to_lowercase() {
         return Err("the download doesn't match the release (damaged or tampered with), so it wasn't installed".into());
     }
-    std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    let dir = private_dir()?;
+    let path = dir.join(format!("ingle-{version}.{ext}"));
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(|e| e.to_string())?;
+        f.write_all(&bytes).map_err(|e| e.to_string())?;
+        f.sync_all().map_err(|e| e.to_string())?;
+    }
     Ok(path)
 }
 
@@ -193,7 +236,11 @@ pub fn take_resume(config_dir: &Path) -> Option<Resume> {
 /// once we've quit and then reopens Ingle (/RELAUNCH); on Linux the package is installed
 /// with the system's password prompt (pkexec) and Ingle is reopened right after. The caller
 /// quits the app when this returns Ok.
-pub fn install(path: &Path) -> Result<(), String> {
+pub fn install(path: &Path, sha256: &str) -> Result<(), String> {
+    // The very file about to run must still be the one that was checked.
+    if file_sha256(path).as_deref() != Some(sha256) {
+        return Err("the downloaded update changed on disk, so it wasn't installed".into());
+    }
     #[cfg(windows)]
     {
         std::process::Command::new(path)
@@ -205,7 +252,7 @@ pub fn install(path: &Path) -> Result<(), String> {
     #[cfg(not(windows))]
     {
         let status = std::process::Command::new("pkexec")
-            .args(["apt-get", "install", "-y", "--allow-downgrades"])
+            .args(["apt-get", "install", "-y"])
             .arg(path)
             .status()
             .map_err(|e| format!("couldn't ask for permission to install (pkexec): {e}"))?;
@@ -223,5 +270,30 @@ pub fn install(path: &Path) -> Result<(), String> {
             .spawn()
             .map_err(|e| format!("installed, but couldn't reopen Ingle: {e}"))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn downloads_go_to_a_new_private_folder() {
+        let a = private_dir().unwrap();
+        let b = private_dir().unwrap();
+        assert_ne!(a, b);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&a).unwrap().permissions().mode() & 0o777, 0o700);
+        }
+        // A file swapped after the check is never installed.
+        let f = a.join("ingle-9.9.9.deb");
+        std::fs::write(&f, b"real").unwrap();
+        let good = release::sha256_hex(b"real");
+        std::fs::write(&f, b"evil").unwrap();
+        assert!(install(&f, &good).unwrap_err().contains("changed"));
+        let _ = std::fs::remove_dir_all(a);
+        let _ = std::fs::remove_dir_all(b);
     }
 }

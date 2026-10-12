@@ -161,6 +161,12 @@ else
 fi
 
 step "Starting the server"
+# Ports below 1024 need the one capability that allows them; otherwise none at all.
+if [ "$PORT" -lt 1024 ]; then
+  CAPS="CAP_NET_BIND_SERVICE"
+else
+  CAPS=""
+fi
 cat > /etc/systemd/system/ingle-server.service <<UNIT
 [Unit]
 Description=Ingle server (voice, webcams, screen sharing and chat)
@@ -179,6 +185,23 @@ PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths=/var/lib/ingle-server
+UMask=0077
+CapabilityBoundingSet=$CAPS
+AmbientCapabilities=$CAPS
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target

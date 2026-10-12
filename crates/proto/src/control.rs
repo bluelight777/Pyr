@@ -284,6 +284,88 @@ pub struct FileReply {
 }
 
 /// The kind of image in `bytes`, from its first bytes (PNG, JPEG, GIF and WebP only).
+/// Largest picture side Ingle accepts (attachments, avatars, emoji).
+pub const MAX_IMAGE_SIDE: u32 = 8192;
+/// Animated GIFs: largest canvas side, most frames, and most pixels decoded in all.
+pub const MAX_GIF_SIDE: u32 = 4096;
+pub const MAX_GIF_FRAMES: usize = 1000;
+pub const MAX_GIF_TOTAL_PIXELS: u64 = 600_000_000;
+
+/// Whether a picture's declared size is safe to decode: every image format says how big the
+/// picture is up front, and a tiny file can claim to be gigantic (a "decompression bomb").
+pub fn image_dimensions_ok(b: &[u8]) -> bool {
+    let Some((w, h)) = image_size(b) else { return false };
+    if w == 0 || h == 0 || w > MAX_IMAGE_SIDE || h > MAX_IMAGE_SIDE {
+        return false;
+    }
+    if sniff_image(b) == Some("image/gif") {
+        return gif_ok(b, w, h);
+    }
+    true
+}
+
+/// Walks a GIF's blocks: every frame must fit the limits above.
+fn gif_ok(b: &[u8], screen_w: u32, screen_h: u32) -> bool {
+    let mut i = 13usize;
+    let flags = *b.get(10).unwrap_or(&0);
+    if flags & 0x80 != 0 {
+        i += 3 * (1usize << ((flags & 7) + 1));
+    }
+    let skip_sub_blocks = |mut i: usize| -> Option<usize> {
+        loop {
+            let n = *b.get(i)? as usize;
+            i += 1;
+            if n == 0 {
+                return Some(i);
+            }
+            i += n;
+        }
+    };
+    let canvas = screen_w.max(1) as u64 * screen_h.max(1) as u64;
+    let mut frames = 0usize;
+    let mut pixels = 0u64;
+    let mut frame_side = 0u32;
+    while let Some(&tag) = b.get(i) {
+        match tag {
+            0x3b => break,
+            0x21 => match skip_sub_blocks(i + 2) {
+                Some(next) => i = next,
+                None => break,
+            },
+            0x2c => {
+                let Some(d) = b.get(i + 1..i + 10) else { break };
+                let (left, top) = (u16::from_le_bytes([d[0], d[1]]) as u32, u16::from_le_bytes([d[2], d[3]]) as u32);
+                let (fw, fh) = (u16::from_le_bytes([d[4], d[5]]) as u32, u16::from_le_bytes([d[6], d[7]]) as u32);
+                if left + fw > MAX_IMAGE_SIDE || top + fh > MAX_IMAGE_SIDE {
+                    return false;
+                }
+                frames += 1;
+                pixels += canvas.max(fw as u64 * fh as u64);
+                frame_side = frame_side.max(fw).max(fh);
+                let mut j = i + 10;
+                if d[8] & 0x80 != 0 {
+                    j += 3 * (1usize << ((d[8] & 7) + 1));
+                }
+                match skip_sub_blocks(j + 1) {
+                    Some(next) => i = next,
+                    None => break,
+                }
+            }
+            _ => break,
+        }
+    }
+    if frames > 1
+        && (screen_w > MAX_GIF_SIDE
+            || screen_h > MAX_GIF_SIDE
+            || frame_side > MAX_GIF_SIDE
+            || frames > MAX_GIF_FRAMES
+            || pixels > MAX_GIF_TOTAL_PIXELS)
+    {
+        return false;
+    }
+    true
+}
+
 pub fn sniff_image(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some("image/png")
@@ -783,13 +865,35 @@ impl Event {
 pub fn clean_name(raw: &str, max_chars: usize) -> Option<String> {
     let collapsed: String = raw
         .chars()
-        .filter(|c| !c.is_control())
+        .filter(|c| !c.is_control() && !is_invisible(*c))
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
     let trimmed: String = collapsed.chars().take(max_chars).collect();
     if trimmed.is_empty() { None } else { Some(trimmed) }
+}
+
+/// Characters that show as nothing (zero-width spaces and joiners, text-direction overrides,
+/// blank "filler" letters...): kept out of names so nobody is invisible or look-alike, and
+/// no name flips the text around it.
+pub fn is_invisible(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}' | '\u{034F}' | '\u{061C}' | '\u{115F}' | '\u{1160}' | '\u{17B4}' | '\u{17B5}' | '\u{180B}'..='\u{180F}'
+        | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{2800}' | '\u{3164}'
+        | '\u{FE00}'..='\u{FE0E}' | '\u{FEFF}' | '\u{FFA0}' | '\u{FFF0}'..='\u{FFF8}' | '\u{1D159}' | '\u{1D173}'..='\u{1D17A}'
+        | '\u{E0000}'..='\u{E007F}')
+}
+
+/// A member's display name: like [`clean_name`] (32 characters), and not one that would read
+/// as a mention of everybody.
+pub fn clean_member_name(raw: &str) -> Option<String> {
+    let name = clean_name(raw, 32)?;
+    let bare = name.trim_start_matches('@').to_lowercase();
+    if bare == "everyone" || bare == "here" {
+        return None;
+    }
+    Some(name)
 }
 
 /// Channel names are lower-case, dash separated for text channels (Discord style);

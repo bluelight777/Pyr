@@ -177,9 +177,11 @@ async fn session(
     crate::resume_voice(shared.clone(), key.to_string());
     crate::sync_blocks(shared, key);
     {
-        // Membership is established; the invite is no longer needed.
+        // Membership is established; the invite is no longer needed (and isn't sent again, so
+        // it isn't used up by reconnecting).
         let mut cfg = shared.config.lock();
         if let Some(e) = cfg.servers.iter_mut().find(|s| s.key == key) {
+            e.invite = None;
             if let Some(name) = shared.state.read().server(key).map(|s| s.info.name.clone()) {
                 e.name = name;
             }

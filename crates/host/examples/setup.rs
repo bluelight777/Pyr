@@ -68,6 +68,7 @@ fn main() {
                 user: get("user").unwrap_or_else(|| "root".into()),
                 auth,
                 sudo_password: get("sudo-password"),
+                host_key: get("host-key"),
             };
             let opts = InstallOptions {
                 name: get("name").unwrap_or_default(),

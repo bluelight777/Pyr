@@ -28,6 +28,13 @@ mod tray {
     pub fn is_active() -> bool {
         false
     }
+    pub fn available() -> bool {
+        false
+    }
+    pub fn ensure_icon() -> bool {
+        false
+    }
+    pub fn notify(_title: &str, _text: &str) {}
     pub fn hide_main() {}
     pub fn prepare_exit() {}
 }
@@ -43,7 +50,15 @@ fn main() -> eframe::Result<()> {
     let mut join: Option<String> = None;
     let mut renderer: Option<String> = std::env::var("INGLE_RENDERER").ok();
     let mut quit = false;
-    let mut args = std::env::args().skip(1);
+    let link_prefix = format!("{}://", ingle_proto::APP_ID);
+    let all: Vec<String> = std::env::args().skip(1).collect();
+    // Opened for an invite link (the ingle:// handler): that link is all we take, so nothing
+    // smuggled into the link can pass as a command-line option.
+    let all = match all.iter().find(|a| a.starts_with(&link_prefix)) {
+        Some(link) => vec![link.clone()],
+        None => all,
+    };
+    let mut args = all.into_iter();
     while let Some(a) = args.next() {
         match a.as_str() {
             "--profile" => profile = args.next(),
@@ -58,10 +73,12 @@ fn main() -> eframe::Result<()> {
                 println!("  --quit           ask a running Ingle to quit (the installer uses this)");
                 return Ok(());
             }
-            other if other.starts_with(&format!("{}://", ingle_proto::APP_ID)) => join = Some(other.to_string()),
+            other if other.starts_with(&link_prefix) => join = Some(other.to_string()),
             _ => {}
         }
     }
+    // A profile is a plain name, never a path.
+    let profile = profile.filter(|p| ingle_engine::config::valid_profile(p));
     // One copy per profile: a second launch (say, from clicking an invite link) passes its
     // link to the copy that's already open and quits.
     let config_dir = ingle_engine::config::config_dir(profile.as_deref());

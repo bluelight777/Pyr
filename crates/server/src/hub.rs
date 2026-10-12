@@ -1,8 +1,9 @@
 //! In-memory state of a running server: connected clients, voice sessions and media routing.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::net::IpAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -13,7 +14,7 @@ use ingle_proto::{b64, crypto, framing, now_ms};
 use parking_lot::Mutex;
 use quinn::VarInt;
 use tokio::sync::mpsc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::db::{self, Db};
 
@@ -22,6 +23,110 @@ pub type Reply = Result<Event, (ErrorCode, String)>;
 
 fn err<T>(code: ErrorCode, msg: impl Into<String>) -> Result<T, (ErrorCode, String)> {
     Err((code, msg.into()))
+}
+
+/// Most bytes of control frames waiting to go out to one connection. A client that stops
+/// reading (or can't keep up) is disconnected rather than letting the queue grow forever.
+pub const MAX_QUEUED_BYTES: usize = 16 << 20;
+/// Connections at once: from one address, by one member, and in all.
+pub const MAX_CONNECTIONS_PER_IP: usize = 32;
+pub const MAX_CONNECTIONS_PER_USER: usize = 6;
+fn max_connections() -> usize {
+    std::env::var("INGLE_MAX_CONNECTIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(4000)
+}
+/// Wrong invite codes allowed from one address before it has to wait.
+const BAD_INVITES_PER_IP: u32 = 10;
+const BAD_INVITE_WINDOW: Duration = Duration::from_secs(600);
+/// New members allowed to join in a burst, and how fast that refills (raid protection).
+const JOIN_BURST: f64 = 30.0;
+const JOINS_PER_HOUR: f64 = 120.0;
+
+/// One connection's queue of outgoing control frames (see [`MAX_QUEUED_BYTES`]).
+#[derive(Clone)]
+pub struct Outbox {
+    tx: mpsc::UnboundedSender<Bytes>,
+    queued: Arc<AtomicUsize>,
+    conn: quinn::Connection,
+}
+
+impl Outbox {
+    /// The outbox and what its writer task drains (it reports written bytes with
+    /// [`Outbox::sent`]).
+    pub fn new(conn: quinn::Connection) -> (Outbox, mpsc::UnboundedReceiver<Bytes>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (Outbox { tx, queued: Arc::new(AtomicUsize::new(0)), conn }, rx)
+    }
+
+    /// Queues a frame. Frames too big for the other side to accept are dropped; a client too
+    /// far behind is disconnected.
+    pub fn send(&self, b: Bytes) -> bool {
+        if b.len() > ingle_proto::MAX_CONTROL_FRAME + 4 {
+            warn!(len = b.len(), "not sending a control frame that's too big for clients");
+            return false;
+        }
+        let queued = self.queued.fetch_add(b.len(), Ordering::Relaxed) + b.len();
+        if queued > MAX_QUEUED_BYTES {
+            self.queued.fetch_sub(b.len(), Ordering::Relaxed);
+            debug!("disconnecting a client that stopped reading");
+            self.conn.close(VarInt::from_u32(5), b"too far behind");
+            return false;
+        }
+        self.tx.send(b).is_ok()
+    }
+
+    /// The writer finished sending `n` bytes.
+    pub fn sent(&self, n: usize) {
+        self.queued.fetch_sub(n, Ordering::Relaxed);
+    }
+}
+
+/// Connection counts per address, and wrong-invite counts (for throttling).
+#[derive(Default)]
+struct Limits {
+    per_ip: HashMap<IpAddr, usize>,
+    total: usize,
+    handshaking: usize,
+    bad_invites: HashMap<IpAddr, (u32, Instant)>,
+    /// Tokens for new members joining (see [`JOIN_BURST`]).
+    join_tokens: Option<(f64, Instant)>,
+}
+
+/// What to do with a new connection attempt.
+pub enum Admit {
+    Accept,
+    /// Make the other side prove its address first (busy: maybe a spoofed flood).
+    Retry,
+    Refuse,
+}
+
+/// Counts a connection while it's alive (see [`Hub::admit`]).
+pub struct ConnSlot {
+    hub: Arc<Hub>,
+    ip: IpAddr,
+    handshaking: bool,
+}
+
+impl ConnSlot {
+    /// The handshake is over (either way).
+    pub fn handshake_done(&mut self) {
+        if std::mem::take(&mut self.handshaking) {
+            self.hub.limits.lock().handshaking -= 1;
+        }
+    }
+}
+
+impl Drop for ConnSlot {
+    fn drop(&mut self) {
+        self.handshake_done();
+        let mut l = self.hub.limits.lock();
+        l.total -= 1;
+        if let Some(n) = l.per_ip.get_mut(&self.ip) {
+            *n -= 1;
+            if *n == 0 {
+                l.per_ip.remove(&self.ip);
+            }
+        }
+    }
 }
 
 pub struct Hub {
@@ -34,6 +139,9 @@ pub struct Hub {
     inner: Mutex<Inner>,
     next_conn: AtomicU64,
     next_session: AtomicU32,
+    limits: Mutex<Limits>,
+    /// Uploads per member: bytes being received now, and what arrived in the last hour.
+    uploads: Mutex<HashMap<UserId, (u64, Vec<(Instant, u64)>)>>,
 }
 
 #[derive(Default)]
@@ -45,7 +153,7 @@ struct Inner {
 struct Client {
     user_id: UserId,
     conn: quinn::Connection,
-    tx: mpsc::UnboundedSender<Bytes>,
+    tx: Outbox,
     session: Option<SessionId>,
     session_cell: Arc<AtomicU32>,
     last_typing: HashMap<ChannelId, Instant>,
@@ -55,7 +163,7 @@ struct Voice {
     p: VoiceParticipant,
     conn_id: ConnId,
     conn: quinn::Connection,
-    tx: mpsc::UnboundedSender<Bytes>,
+    tx: Outbox,
     /// published track -> subscriber session -> forwarder
     subs: HashMap<u8, HashMap<SessionId, Subscriber>>,
     last_keyframe_request: HashMap<u8, Instant>,
@@ -138,6 +246,41 @@ async fn forward_task(conn: quinn::Connection, mut rx: mpsc::Receiver<(u64, Byte
     }
 }
 
+fn env_mb(name: &str, default_mb: u64) -> u64 {
+    std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default_mb) << 20
+}
+
+/// Room reserved for one upload (see [`Hub::reserve_upload`]).
+pub struct UploadSlot<'a> {
+    hub: &'a Hub,
+    uid: String,
+    size: u64,
+    done: bool,
+}
+
+impl UploadSlot<'_> {
+    /// The file was stored: count it towards the hourly allowance.
+    pub fn stored(mut self) {
+        self.done = true;
+        let mut up = self.hub.uploads.lock();
+        if let Some(e) = up.get_mut(&self.uid) {
+            e.0 = e.0.saturating_sub(self.size);
+            e.1.push((Instant::now(), self.size));
+        }
+    }
+}
+
+impl Drop for UploadSlot<'_> {
+    fn drop(&mut self) {
+        if !self.done {
+            let mut up = self.hub.uploads.lock();
+            if let Some(e) = up.get_mut(&self.uid) {
+                e.0 = e.0.saturating_sub(self.size);
+            }
+        }
+    }
+}
+
 pub fn frame(re: u64, ev: Event) -> Bytes {
     Bytes::from(framing::encode(&ServerFrame { re, ev }))
 }
@@ -154,7 +297,92 @@ impl Hub {
             inner: Mutex::new(Inner::default()),
             next_conn: AtomicU64::new(1),
             next_session: AtomicU32::new(1),
+            limits: Mutex::new(Limits::default()),
+            uploads: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Whether to take a new connection from `ip`; while it's alive, keep the slot.
+    pub fn admit(self: &Arc<Self>, ip: IpAddr, address_validated: bool) -> (Admit, Option<ConnSlot>) {
+        let mut l = self.limits.lock();
+        if l.total >= max_connections() || l.per_ip.get(&ip).copied().unwrap_or(0) >= MAX_CONNECTIONS_PER_IP {
+            return (Admit::Refuse, None);
+        }
+        // Lots of handshakes at once: make new ones prove their address first.
+        if !address_validated && l.handshaking >= 32 {
+            return (Admit::Retry, None);
+        }
+        l.total += 1;
+        l.handshaking += 1;
+        *l.per_ip.entry(ip).or_default() += 1;
+        (Admit::Accept, Some(ConnSlot { hub: self.clone(), ip, handshaking: true }))
+    }
+
+    /// Whether `ip` has guessed too many invite codes lately.
+    fn invite_throttled(&self, ip: IpAddr) -> bool {
+        let mut l = self.limits.lock();
+        match l.bad_invites.get(&ip) {
+            Some((n, since)) if since.elapsed() < BAD_INVITE_WINDOW => *n >= BAD_INVITES_PER_IP,
+            Some(_) => {
+                l.bad_invites.remove(&ip);
+                false
+            }
+            None => false,
+        }
+    }
+
+    fn note_bad_invite(&self, ip: IpAddr) {
+        let mut l = self.limits.lock();
+        if l.bad_invites.len() > 100_000 {
+            l.bad_invites.retain(|_, (_, t)| t.elapsed() < BAD_INVITE_WINDOW);
+        }
+        let e = l.bad_invites.entry(ip).or_insert((0, Instant::now()));
+        if e.1.elapsed() >= BAD_INVITE_WINDOW {
+            *e = (0, Instant::now());
+        }
+        e.0 += 1;
+    }
+
+    /// One new member may join now (a slow trickle is always fine; a flood of fresh
+    /// accounts is not).
+    fn take_join_token(&self) -> bool {
+        let mut l = self.limits.lock();
+        let now = Instant::now();
+        let (tokens, at) = l.join_tokens.unwrap_or((JOIN_BURST, now));
+        let tokens = (tokens + now.duration_since(at).as_secs_f64() * JOINS_PER_HOUR / 3600.0).min(JOIN_BURST);
+        if tokens < 1.0 {
+            l.join_tokens = Some((tokens, now));
+            return false;
+        }
+        l.join_tokens = Some((tokens - 1.0, now));
+        true
+    }
+
+    /// Reserves room for an upload of `size` bytes by `uid`: within the server's storage, the
+    /// member's own share of it, and how much one member may upload in an hour.
+    pub fn reserve_upload(&self, uid: &str, size: u64) -> Result<UploadSlot<'_>, String> {
+        let total_cap = env_mb("INGLE_STORAGE_MB", 5 * 1024);
+        let user_cap = env_mb("INGLE_USER_STORAGE_MB", 1024);
+        let hourly_cap = env_mb("INGLE_USER_UPLOAD_MB_PER_HOUR", 400);
+        let mut up = self.uploads.lock();
+        let in_flight_all: u64 = up.values().map(|v| v.0).sum();
+        let mine = up.entry(uid.to_string()).or_default();
+        mine.1.retain(|(t, _)| t.elapsed() < Duration::from_secs(3600));
+        let last_hour: u64 = mine.1.iter().map(|(_, n)| n).sum();
+        if self.db.files_total() + in_flight_all + size > total_cap {
+            return Err("This server's storage for images is full.".into());
+        }
+        if self.db.files_total_of(uid) + mine.0 + size > user_cap {
+            return Err("You've used all the image storage this server gives each person. Delete some old images first.".into());
+        }
+        if last_hour + mine.0 + size > hourly_cap {
+            return Err("You've uploaded a lot in the last hour. Try again a bit later.".into());
+        }
+        if self.db.unsent_files_of(uid) >= 40 {
+            return Err("Too many images waiting to be sent. Send or remove some first.".into());
+        }
+        mine.0 += size;
+        Ok(UploadSlot { hub: self, uid: uid.to_string(), size, done: false })
     }
 
     pub fn alloc_conn_id(&self) -> ConnId {
@@ -222,15 +450,6 @@ impl Hub {
         }
     }
 
-    fn broadcast_except(&self, except: ConnId, ev: Event) {
-        let b = frame(0, ev);
-        for (id, c) in self.inner.lock().clients.iter() {
-            if *id != except {
-                let _ = c.tx.send(b.clone());
-            }
-        }
-    }
-
     fn is_online_locked(inner: &Inner, uid: &str) -> bool {
         inner.clients.values().any(|c| c.user_id == uid)
     }
@@ -251,17 +470,21 @@ impl Hub {
         })
     }
 
-    /// Decide whether `uid` may log in, redeeming an invite for newcomers.
-    pub fn authorize(&self, uid: &str, name: &str, invite: Option<&str>) -> Result<(), (ErrorCode, String)> {
+    /// Decide whether `uid` may log in, redeeming an invite for newcomers. `ip` is where
+    /// they connect from (wrong invite codes from one address are throttled).
+    pub fn authorize(&self, uid: &str, name: &str, invite: Option<&str>, ip: IpAddr) -> Result<(), (ErrorCode, String)> {
         match self.db.get_user(uid) {
             Some(u) if u.banned => err(ErrorCode::Banned, "You are banned from this server."),
             Some(u) => {
                 let _ = self.db.touch_user(uid, name);
-                // An existing member presenting an owner/admin invite gets upgraded.
+                // An existing member presenting an owner/admin invite gets upgraded. (Their
+                // everyday invite isn't used up again each time they connect.)
                 if let Some(code) = invite {
-                    if let Ok(role) = self.db.redeem_invite(code) {
-                        if role > u.role {
-                            let _ = self.db.set_role(uid, role);
+                    if self.db.invite_role(code).map(|r| r > u.role).unwrap_or(false) {
+                        if let Ok(role) = self.db.redeem_invite(code) {
+                            if role > u.role {
+                                let _ = self.db.set_role(uid, role);
+                            }
                         }
                     }
                 }
@@ -271,15 +494,28 @@ impl Hub {
                 let Some(code) = invite else {
                     return err(ErrorCode::InviteInvalid, "You need an invite link to join this server.");
                 };
+                if self.invite_throttled(ip) {
+                    return err(ErrorCode::RateLimited, "Too many wrong invite links from your address. Try again in a few minutes.");
+                }
                 let role = match self.db.redeem_invite(code) {
                     Ok(r) => r,
-                    Err(db::InviteError::NotFound) => return err(ErrorCode::InviteInvalid, "That invite doesn't exist."),
-                    Err(db::InviteError::Expired) => return err(ErrorCode::InviteInvalid, "That invite has expired."),
-                    Err(db::InviteError::UsedUp) => {
-                        return err(ErrorCode::InviteInvalid, "That invite has already been used.");
+                    Err(e) => {
+                        self.note_bad_invite(ip);
+                        return match e {
+                            db::InviteError::NotFound => err(ErrorCode::InviteInvalid, "That invite doesn't exist."),
+                            db::InviteError::Expired => err(ErrorCode::InviteInvalid, "That invite has expired."),
+                            db::InviteError::UsedUp => err(ErrorCode::InviteInvalid, "That invite has already been used."),
+                        };
                     }
                 };
-                self.db.insert_user(uid, name, role).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                // Owner links always work; everyday invites are rate-limited against raids of
+                // throwaway accounts.
+                if role < Role::Owner && !self.take_join_token() {
+                    return err(ErrorCode::RateLimited, "Lots of people are joining right now. Try again in a few minutes.");
+                }
+                if !self.db.insert_user(uid, name, role).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
+                    return err(ErrorCode::Banned, "You are banned from this server.");
+                }
                 info!(%uid, %name, ?role, "new member joined");
                 Ok(())
             }
@@ -293,11 +529,18 @@ impl Hub {
         conn_id: ConnId,
         uid: &str,
         conn: quinn::Connection,
-        tx: mpsc::UnboundedSender<Bytes>,
+        tx: Outbox,
         session_cell: Arc<AtomicU32>,
         re: u64,
-    ) {
+    ) -> Result<(), (ErrorCode, String)> {
         let mut inner = self.inner.lock();
+        // Checked again under the lock: a ban since the login was authorized wins.
+        if !db::user_is_member(&self.db, &uid.to_string()) {
+            return err(ErrorCode::Banned, "You are not a member of this server.");
+        }
+        if inner.clients.values().filter(|c| c.user_id == uid).count() >= MAX_CONNECTIONS_PER_USER {
+            return err(ErrorCode::RateLimited, "You're connected from too many places at once.");
+        }
         let was_online = Self::is_online_locked(&inner, uid);
         inner.clients.insert(
             conn_id,
@@ -323,7 +566,7 @@ impl Hub {
             roles: Vec::new(),
             avatar: None,
         });
-        let ready = Event::Ready {
+        let mut ready = Event::Ready {
             me: me.clone(),
             server: self.info(),
             channels: self.db.channels(),
@@ -334,7 +577,24 @@ impl Hub {
             dms: self.db.dms_of(uid),
             relations: self.db.relations_of(uid),
         };
-        let _ = tx.send(frame(re, ready));
+        // A very big community could outgrow one frame: then leave out members who've been
+        // away longest (their names show up again when they come back).
+        let mut b = frame(re, ready.clone());
+        while b.len() > ingle_proto::MAX_CONTROL_FRAME {
+            let Event::Ready { members, .. } = &mut ready else { break };
+            let offline: Vec<usize> = (0..members.len()).filter(|i| !members[*i].online && members[*i].user_id != uid).collect();
+            if offline.is_empty() {
+                break;
+            }
+            let drop: HashSet<usize> = offline[..offline.len().div_ceil(2)].iter().copied().collect();
+            let mut i = 0;
+            members.retain(|_| {
+                i += 1;
+                !drop.contains(&(i - 1))
+            });
+            b = frame(re, ready.clone());
+        }
+        tx.send(b);
         if !was_online {
             let b = frame(0, Event::MemberUpserted { member: me });
             for (id, c) in inner.clients.iter() {
@@ -343,6 +603,7 @@ impl Hub {
                 }
             }
         }
+        Ok(())
     }
 
     pub fn unregister(&self, conn_id: ConnId) {
@@ -420,12 +681,14 @@ impl Hub {
         let mut inner = self.inner.lock();
         let Some(client) = inner.clients.get(&conn_id) else { return err(ErrorCode::Unauthorized, "not logged in") };
         let uid = client.user_id.clone();
-        let (Some(pk), Ok(sig)) = (b64::decode_array::<32>(&e2ee_pub), b64::decode(&e2ee_sig)) else {
+        let (Some(pk), Some(sig)) = (b64::decode_array::<32>(&e2ee_pub), b64::decode_array::<64>(&e2ee_sig)) else {
             return err(ErrorCode::BadRequest, "bad E2EE key");
         };
         if !crypto::verify_binding(&uid, channel_id, &pk, &sig) {
             return err(ErrorCode::BadRequest, "E2EE key signature is invalid");
         }
+        // Passed on to everyone as we'd write them, not as sent (padding, spaces...).
+        let (e2ee_pub, e2ee_sig) = (b64::encode(&pk), b64::encode(&sig));
         // One voice session per person: leave any previous one (this or another device).
         let stale: Vec<SessionId> = inner.voice.values().filter(|v| v.p.user_id == uid).map(|v| v.p.session).collect();
         for s in stale {
@@ -570,11 +833,15 @@ impl Hub {
 
     pub fn request_keyframe(&self, conn_id: ConnId, session: SessionId, track_id: u8) -> Reply {
         let mut inner = self.inner.lock();
-        if Self::session_of(&inner, conn_id).is_none() {
+        let Some(me) = Self::session_of(&inner, conn_id) else {
             return err(ErrorCode::BadRequest, "not in voice");
-        }
+        };
+        let my_channel = inner.voice.get(&me).map(|v| v.p.channel_id);
         if let Some(p) = inner.voice.get_mut(&session) {
-            Self::maybe_request_keyframe(p, track_id, Duration::from_millis(400));
+            // Only for people watching it: same channel, and subscribed to that track.
+            if Some(p.p.channel_id) == my_channel && p.subs.get(&track_id).map(|s| s.contains_key(&me)).unwrap_or(false) {
+                Self::maybe_request_keyframe(p, track_id, Duration::from_millis(400));
+            }
         }
         Ok(Event::Ok)
     }
@@ -596,8 +863,10 @@ impl Hub {
         let Some(channel) = inner.voice.get(&from).map(|v| v.p.channel_id) else {
             return err(ErrorCode::BadRequest, "not in voice");
         };
+        let mut seen = HashSet::new();
         for k in keys {
-            if k.to == from {
+            // One key per person, of a sensible size.
+            if k.to == from || !seen.insert(k.to) || k.nonce.len() > 32 || k.ct.len() > 256 {
                 continue;
             }
             if let Some(v) = inner.voice.get(&k.to) {
@@ -686,7 +955,7 @@ impl Hub {
     /// Remove a member from the server: tell their open connections and close them.
     pub fn eject(&self, uid: &str, reason: &str) {
         let mut inner = self.inner.lock();
-        let conns: Vec<(ConnId, quinn::Connection, mpsc::UnboundedSender<Bytes>)> = inner
+        let conns: Vec<(ConnId, quinn::Connection, Outbox)> = inner
             .clients
             .iter()
             .filter(|(_, c)| c.user_id == uid)

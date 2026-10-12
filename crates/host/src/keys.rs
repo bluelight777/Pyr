@@ -28,6 +28,11 @@ pub fn load_or_create(config_dir: &Path) -> Result<IngleKey> {
     let path = key_path(config_dir);
     let key = match std::fs::read_to_string(&path) {
         Ok(text) => PrivateKey::from_openssh(text.as_bytes()).with_context(|| format!("reading {}", path.display()))?,
+        // Only a missing key is made anew: any other trouble reading it must not replace
+        // the key your rented servers trust.
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(e).with_context(|| format!("reading {}", path.display()));
+        }
         Err(_) => {
             let mut seed = [0u8; 32];
             getrandom::getrandom(&mut seed).map_err(|e| anyhow::anyhow!("getting random bytes for an SSH key: {e}"))?;
@@ -44,6 +49,20 @@ pub fn load_or_create(config_dir: &Path) -> Result<IngleKey> {
     };
     let public_openssh = key.public_key().to_openssh().context("encoding the SSH key")?;
     Ok(IngleKey { key: Arc::new(key), public_openssh, path })
+}
+
+/// A fresh host key for a server Ingle rents: given to the server when it's created (so we
+/// know its identity before ever connecting). Returns (private key in OpenSSH form, public
+/// key line, SHA256 fingerprint).
+pub fn new_host_key() -> Result<(String, String, String)> {
+    let mut seed = [0u8; 32];
+    getrandom::getrandom(&mut seed).map_err(|e| anyhow::anyhow!("getting random bytes for a host key: {e}"))?;
+    let key = PrivateKey::new(KeypairData::Ed25519(Ed25519Keypair::from_seed(&seed)), "")
+        .context("creating a host key")?;
+    let private = key.to_openssh(LineEnding::LF).context("encoding the host key")?.to_string();
+    let public = key.public_key().to_openssh().context("encoding the host key")?;
+    let fingerprint = key.public_key().fingerprint(russh::keys::HashAlg::Sha256).to_string();
+    Ok((private, public, fingerprint))
 }
 
 fn write_private(path: &Path, data: &[u8]) -> Result<()> {

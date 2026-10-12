@@ -45,7 +45,8 @@ fn write_private(path: &Path, data: &[u8]) -> Result<()> {
 
 pub fn transport_config() -> quinn::TransportConfig {
     let mut t = quinn::TransportConfig::default();
-    t.max_concurrent_uni_streams(VarInt::from_u32(2048));
+    // Video frames each use a stream; a few dozen in flight is plenty (see conn::uni_loop).
+    t.max_concurrent_uni_streams(VarInt::from_u32(64));
     t.max_concurrent_bidi_streams(VarInt::from_u32(16));
     t.keep_alive_interval(Some(Duration::from_secs(4)));
     t.max_idle_timeout(Some(Duration::from_secs(20).try_into().expect("valid idle timeout")));

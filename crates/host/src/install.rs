@@ -53,10 +53,15 @@ impl Payloads {
         if let Some(d) = &exe_dir {
             candidates.push(d.join("vps"));
             // /usr/bin/ingle -> /usr/lib/ingle/vps
+            #[cfg(unix)]
             candidates.push(d.join("..").join("lib").join("ingle").join("vps"));
             // target/release/ingle -> dist/vps (running from a source checkout)
+            #[cfg(debug_assertions)]
             candidates.push(d.join("..").join("..").join("dist").join("vps"));
         }
+        // (Only on Linux: on Windows this would be C:\usr\lib\..., a folder any account can
+        // make, and these programs end up running as root on your server.)
+        #[cfg(unix)]
         candidates.push(PathBuf::from("/usr/lib/ingle/vps"));
         let dir = candidates
             .iter()
@@ -137,6 +142,11 @@ fn connect_failure(e: ConnectError, login: &Login) -> Failure {
             _ => "Check the user name, and that this key is allowed on the server (in ~/.ssh/authorized_keys for that user).".to_string(),
         }),
         ConnectError::BadKey(_) => None,
+        ConnectError::HostKey(_) => Some(
+            "Don't type your password anywhere until you're sure you're reaching your real server (try another network, \
+             or check the server's SSH fingerprint in your provider's console)."
+                .to_string(),
+        ),
         ConnectError::Other(_) => None,
     };
     Failure { error: e.to_string(), hint, droplet: None }
@@ -291,7 +301,9 @@ async fn install_with(s: &mut Session, login: &Login, opts: &InstallOptions, pro
     match (owner, invite) {
         (Some(owner_link), Some(invite_link)) if out.ok() => Ok(Installed {
             name: name.unwrap_or_else(|| opts.name.clone()),
-            owner_link,
+            // Set up again on a community that already has its owner: there's no owner link
+            // any more (the owner is already a member), so the everyday link does.
+            owner_link: if owner_link.trim().is_empty() { invite_link.clone() } else { owner_link },
             invite_link,
             warnings,
             host_key: String::new(),
@@ -305,7 +317,18 @@ async fn install_with(s: &mut Session, login: &Login, opts: &InstallOptions, pro
 
 /// The full "use a server I have" setup: install over SSH, then check that this PC can
 /// reach the server over UDP.
-pub fn setup_existing(login: Login, opts: InstallOptions, progress: Progress, records_dir: Option<PathBuf>) {
+pub fn setup_existing(mut login: Login, opts: InstallOptions, progress: Progress, records_dir: Option<PathBuf>) {
+    // Set up from this PC before: its SSH identity must be the same as then.
+    if login.host_key.is_none() {
+        if let Some(dir) = &records_dir {
+            login.host_key = crate::records::load(dir)
+                .servers
+                .into_iter()
+                .find(|s| s.host == login.host && s.ssh_port == login.port && s.provider == "ssh")
+                .and_then(|s| s.host_key)
+                .filter(|k| !k.is_empty());
+        }
+    }
     let outcome = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
         Err(e) => Err(Failure::new(format!("couldn't start: {e}"))),
         Ok(rt) => rt.block_on(install(&login, &opts, &progress)),
@@ -322,6 +345,7 @@ pub fn setup_existing(login: Login, opts: InstallOptions, progress: Progress, re
                 ssh_user: login.user.clone(),
                 ssh_port: login.port,
                 invite_link: Some(ready.invite_link.clone()),
+                host_key: Some(ready.host_key.clone()).filter(|k| !k.is_empty()),
                 created_ms: ingle_proto::now_ms(),
                 installed: true,
                 ..Default::default()
@@ -351,6 +375,7 @@ pub(crate) fn finish(login: &Login, opts: &InstallOptions, i: Installed, droplet
         reachable: Some(reachable.is_ok()),
         warnings: i.warnings,
         droplet,
+        host_key: i.host_key,
     }
 }
 

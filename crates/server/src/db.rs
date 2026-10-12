@@ -251,14 +251,16 @@ impl Db {
             .flatten()
     }
 
-    pub fn insert_user(&self, id: &str, name: &str, role: Role) -> Result<i64> {
+    /// Adds a member. False if they're banned (a ban made meanwhile is never undone here).
+    pub fn insert_user(&self, id: &str, name: &str, role: Role) -> Result<bool> {
         let now = now_ms();
-        self.conn.lock().execute(
+        let n = self.conn.lock().execute(
             "INSERT INTO users(id, name, role, banned, joined_at, last_seen) VALUES (?1, ?2, ?3, 0, ?4, ?4)
-             ON CONFLICT(id) DO UPDATE SET name = excluded.name, role = excluded.role, banned = 0, joined_at = excluded.joined_at",
+             ON CONFLICT(id) DO UPDATE SET name = excluded.name, role = excluded.role, joined_at = excluded.joined_at
+             WHERE users.banned = 0",
             params![id, name, role.as_i64(), now],
         )?;
-        Ok(now)
+        Ok(n > 0)
     }
 
     pub fn touch_user(&self, id: &str, name: &str) -> Result<()> {
@@ -285,6 +287,8 @@ impl Db {
             c.execute("DELETE FROM users WHERE id = ?1", [id])?;
         }
         c.execute("DELETE FROM member_roles WHERE user_id = ?1", [id])?;
+        // Invites they made stop working: a removed troll can't come back with them.
+        c.execute("DELETE FROM invites WHERE created_by = ?1", [id])?;
         scrub(&c);
         Ok(())
     }
@@ -438,6 +442,24 @@ impl Db {
         self.conn.lock().query_row("SELECT COALESCE(SUM(size), 0) FROM files", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as u64
     }
 
+    /// Bytes of files one member has uploaded that are still kept.
+    pub fn files_total_of(&self, uid: &str) -> u64 {
+        self.conn
+            .lock()
+            .query_row("SELECT COALESCE(SUM(size), 0) FROM files WHERE owner = ?1", [uid], |r| r.get::<_, i64>(0))
+            .unwrap_or(0) as u64
+    }
+
+    /// Attachments a member uploaded but hasn't sent yet.
+    pub fn unsent_files_of(&self, uid: &str) -> usize {
+        self.conn
+            .lock()
+            .query_row("SELECT COUNT(*) FROM files WHERE owner = ?1 AND kind = 0 AND message_id IS NULL", [uid], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap_or(0) as usize
+    }
+
     /// Attachments uploaded but not sent within `max_age_ms`, and profile pictures nobody
     /// uses: their rows are removed and their ids returned so the files can be wiped.
     pub fn take_unused_files(&self, max_age_ms: i64) -> Vec<String> {
@@ -495,6 +517,14 @@ impl Db {
             st.query_map([uid], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
         };
         others.into_iter().filter_map(|o| self.relation(uid, &o).map(|kind| Relation { user_id: o, kind })).collect()
+    }
+
+    /// Friend requests someone has sent that are still waiting.
+    pub fn outgoing_requests(&self, uid: &str) -> usize {
+        self.conn
+            .lock()
+            .query_row("SELECT COUNT(*) FROM relations WHERE a = ?1 AND kind = 0", [uid], |r| r.get::<_, i64>(0))
+            .unwrap_or(0) as usize
     }
 
     /// Either has blocked the other.
@@ -937,6 +967,47 @@ impl Db {
              VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)",
             params![code, created_by, now_ms(), max_uses, expires_at, grants.as_i64()],
         )?;
+        Ok(())
+    }
+
+    /// The role an invite would grant, if it can still be used (without using it).
+    pub fn invite_role(&self, code: &str) -> Option<Role> {
+        self.conn
+            .lock()
+            .query_row(
+                "SELECT grants_role FROM invites WHERE code = ?1 AND (max_uses IS NULL OR uses < max_uses)
+                 AND (expires_at IS NULL OR expires_at > ?2)",
+                params![code, now_ms()],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .map(Role::from_i64)
+    }
+
+    /// How many usable invites someone has made.
+    pub fn invites_by(&self, uid: &str) -> usize {
+        self.conn
+            .lock()
+            .query_row(
+                "SELECT COUNT(*) FROM invites WHERE created_by = ?1 AND (max_uses IS NULL OR uses < max_uses)
+                 AND (expires_at IS NULL OR expires_at > ?2)",
+                params![uid, now_ms()],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0) as usize
+    }
+
+    /// Once the server has an owner, old owner links that never expire are removed (they
+    /// would make anyone who found one an owner too), as are invites past their date.
+    pub fn prune_invites(&self) -> Result<()> {
+        let c = self.conn.lock();
+        c.execute("DELETE FROM invites WHERE expires_at IS NOT NULL AND expires_at < ?1", [now_ms()])?;
+        let owner: i64 = c.query_row("SELECT COUNT(*) FROM users WHERE role = 2 AND banned = 0", [], |r| r.get(0)).unwrap_or(0);
+        if owner > 0 {
+            c.execute("DELETE FROM invites WHERE grants_role = 2 AND expires_at IS NULL", [])?;
+        }
         Ok(())
     }
 
