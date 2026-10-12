@@ -263,6 +263,7 @@ fn apply_ready(shared: &Shared, key: &str, ready: Event) {
     roles.sort_by_key(|r| (std::cmp::Reverse(r.position), r.id));
     sort_channels(&mut channels);
     let mut st = shared.state.write();
+    let my_uid = st.my_uid.clone();
     let s = match st.server_mut(key) {
         Some(s) => s,
         None => {
@@ -282,7 +283,7 @@ fn apply_ready(shared: &Shared, key: &str, ready: Event) {
     // Direct messages that came in while we were away show as unread.
     s.dms.clear();
     for dm in dms {
-        if let Some(last) = dm.last_message {
+        if let Some(last) = dm.last_message.filter(|_| dm.last_from.as_deref() != Some(my_uid.as_str())) {
             if last_read.get(&dm.id).map(|seen| *seen < last).unwrap_or(true) {
                 s.unread.insert(dm.id);
                 s.mentions.entry(dm.id).or_insert(1);
@@ -331,7 +332,7 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
                 let in_dm = s.dm(cid).is_some();
                 if in_dm {
                     let (with, mid) = (s.dm(cid).map(|d| d.with.clone()).unwrap_or_default(), log_newest(s, cid));
-                    s.upsert_dm(Dm { id: cid, with, last_message: mid });
+                    s.upsert_dm(Dm { id: cid, with, last_message: mid, last_from: None });
                 }
                 // A ping for every new message you can see, unless the channel (or server) is
                 // muted or you're looking right at it. Mentions and direct messages ping even

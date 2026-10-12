@@ -449,7 +449,7 @@ impl IngleApp {
                             }
                         });
                         ui.label(
-                            RichText::new("PNG, JPEG, GIF or WebP. The middle square is used. It shows on every server you're in.")
+                            RichText::new("PNG, JPEG, GIF or WebP. You can zoom in and move it before saving. It shows on every server you're in.")
                                 .size(12.0)
                                 .color(theme::DIM),
                         );

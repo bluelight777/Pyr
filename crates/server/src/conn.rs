@@ -458,11 +458,12 @@ impl Ctx<'_> {
                 }
                 let (id, new) = db.open_dm(&self.uid, &user_id).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
                 if new {
-                    let theirs = Dm { id, with: self.uid.clone(), last_message: None };
+                    let theirs = Dm { id, with: self.uid.clone(), last_message: None, last_from: None };
                     hub.send_to_user(&user_id, Event::DmOpened { dm: theirs });
                 }
-                let last_message = db.dms_of(&self.uid).into_iter().find(|d| d.id == id).and_then(|d| d.last_message);
-                Ok(Event::DmOpened { dm: Dm { id, with: user_id, last_message } })
+                let mine = db.dms_of(&self.uid).into_iter().find(|d| d.id == id);
+                let (last_message, last_from) = mine.map(|d| (d.last_message, d.last_from)).unwrap_or((None, None));
+                Ok(Event::DmOpened { dm: Dm { id, with: user_id, last_message, last_from } })
             }
 
             Request::CreateChannel { name, kind } => {

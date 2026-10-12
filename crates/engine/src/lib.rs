@@ -865,6 +865,9 @@ impl Engine {
             let entry = cfg.last_read.entry(key.to_string()).or_default();
             if entry.get(&channel_id) != Some(&id) {
                 entry.insert(channel_id, id);
+                // Saved now, so read messages don't come back as unread after a crash or an
+                // update restart.
+                self.shared.save_config_locked(&cfg);
             }
         }
     }

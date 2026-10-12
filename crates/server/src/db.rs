@@ -630,12 +630,12 @@ impl Db {
         let c = self.conn.lock();
         let mut st = c
             .prepare(
-                "SELECT d.channel_id, CASE WHEN d.a = ?1 THEN d.b ELSE d.a END, \
-                 (SELECT MAX(id) FROM messages WHERE channel_id = d.channel_id) \
-                 FROM dms d WHERE d.a = ?1 OR d.b = ?1",
+                "SELECT d.channel_id, CASE WHEN d.a = ?1 THEN d.b ELSE d.a END, m.id, m.author \
+                 FROM dms d LEFT JOIN messages m ON m.id = (SELECT MAX(id) FROM messages WHERE channel_id = d.channel_id) \
+                 WHERE d.a = ?1 OR d.b = ?1",
             )
             .expect("valid SQL");
-        st.query_map([uid], |r| Ok(Dm { id: r.get(0)?, with: r.get(1)?, last_message: r.get(2)? }))
+        st.query_map([uid], |r| Ok(Dm { id: r.get(0)?, with: r.get(1)?, last_message: r.get(2)?, last_from: r.get(3)? }))
             .map(|rows| rows.filter_map(|r| r.ok()).collect())
             .unwrap_or_default()
     }

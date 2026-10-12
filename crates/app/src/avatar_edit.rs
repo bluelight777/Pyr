@@ -119,15 +119,14 @@ impl IngleApp {
                 }
                 // Darken everything outside the circle, then outline it.
                 let r = CIRCLE / 2.0;
-                let ring = BOX; // wide enough to cover the corners
-                p.circle_stroke(area.center(), r + ring / 2.0, Stroke::new(ring, Color32::from_black_alpha(150)));
+                p.add(dim_outside_circle(area.center(), r, BOX, Color32::from_black_alpha(160)));
                 p.circle_stroke(area.center(), r, Stroke::new(2.0f32, Color32::WHITE));
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("🖼").size(13.0).color(theme::MUTED));
+                    ui.label(RichText::new("−").size(16.0).color(theme::MUTED));
                     ui.spacing_mut().slider_width = BOX - 60.0;
                     ui.add(egui::Slider::new(&mut c.zoom, 1.0..=5.0).show_value(false));
-                    ui.label(RichText::new("🖼").size(19.0).color(theme::MUTED));
+                    ui.label(RichText::new("+").size(16.0).color(theme::MUTED));
                 });
                 ui.label(RichText::new("Drag to move, zoom with the slider or your mouse wheel.").size(12.0).color(theme::DIM));
                 ui.add_space(12.0);
@@ -160,4 +159,23 @@ impl IngleApp {
             self.ui.avatar_crop = Some(c);
         }
     }
+}
+
+/// A ring from radius `r` out past the corners of a `size` box: the shade outside the circle.
+fn dim_outside_circle(c: egui::Pos2, r: f32, size: f32, color: Color32) -> egui::Shape {
+    let outer = size; // beyond the box's corners (clipped to the box)
+    let n = 96u32;
+    let mut mesh = egui::Mesh::default();
+    for i in 0..=n {
+        let a = i as f32 / n as f32 * std::f32::consts::TAU;
+        let d = vec2(a.cos(), a.sin());
+        mesh.colored_vertex(c + d * r, color);
+        mesh.colored_vertex(c + d * outer, color);
+    }
+    for i in 0..n {
+        let k = i * 2;
+        mesh.add_triangle(k, k + 1, k + 2);
+        mesh.add_triangle(k + 1, k + 3, k + 2);
+    }
+    egui::Shape::mesh(mesh)
 }

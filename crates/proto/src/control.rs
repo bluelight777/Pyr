@@ -160,6 +160,9 @@ pub struct Dm {
     /// Newest message, for sorting the list; none while it's empty.
     #[serde(default)]
     pub last_message: Option<MessageId>,
+    /// Who wrote it (so my own last message doesn't show as unread).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_from: Option<UserId>,
 }
 
 /// Largest attachment and profile picture the server accepts.
