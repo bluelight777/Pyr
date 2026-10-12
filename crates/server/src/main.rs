@@ -65,7 +65,7 @@ fn make_invite(cli: &Cli, owner: bool, uses: Option<u32>, hours: Option<u64>) ->
         .or_else(|| db.get_meta("public_host").filter(|h| !h.is_empty()))
         .or_else(ingle_server::detect_lan_ip)
         .unwrap_or_else(|| "127.0.0.1".into());
-    Ok(InviteLink { host, port: cli.bind.port(), code: Some(code), fingerprint: tls.fingerprint }.to_url())
+    Ok(InviteLink::new(host, cli.bind.port(), Some(code), tls.fingerprint).to_url())
 }
 
 fn main() {

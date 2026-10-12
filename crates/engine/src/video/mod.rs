@@ -1,5 +1,7 @@
 //! Video: capture → scale → H.264 encode on the way out; reorder → decode → texture on the way in.
 
+#[cfg(windows)]
+pub mod border;
 pub mod capture;
 pub mod codec;
 

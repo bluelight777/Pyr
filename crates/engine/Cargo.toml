@@ -38,7 +38,15 @@ yuv = "0.8.19"
 ingle-server = { path = "../server" }
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Win32_System_Threading", "Win32_Foundation"] }
+windows = { version = "0.62", features = [
+    "Win32_System_Threading",
+    "Win32_Foundation",
+    # The green frame around what you're sharing (video/border.rs).
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dwm",
+    "Win32_System_LibraryLoader",
+] }
 windows-capture = "2.0.1"
 nokhwa = { version = "0.10.11", features = ["input-msmf"] }
 wasapi = "0.25.0"

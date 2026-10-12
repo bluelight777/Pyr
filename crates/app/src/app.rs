@@ -360,6 +360,7 @@ impl eframe::App for IngleApp {
         }
         self.update_step(&mut acts);
         ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        crate::titlebar::show(ctx, ingle_proto::APP_NAME);
         {
             let st = engine.state();
             self.frame_ui(ctx, &st, &mut acts);

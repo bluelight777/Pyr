@@ -14,10 +14,13 @@ use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, SignatureScheme};
 
-/// Accepts exactly one certificate: the one whose SHA-256 matches the invite link.
+/// Accepts exactly one certificate: the one whose SHA-256 matches the invite link (all 32
+/// bytes, or the first `len` from a short link — then `seen` records the full one).
 #[derive(Debug)]
 struct PinnedVerifier {
     fingerprint: [u8; 32],
+    len: usize,
+    seen: Arc<std::sync::Mutex<Option<[u8; 32]>>>,
     provider: Arc<CryptoProvider>,
 }
 
@@ -30,7 +33,9 @@ impl ServerCertVerifier for PinnedVerifier {
         _ocsp_response: &[u8],
         _now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        if crypto::fingerprint(end_entity.as_ref()) == self.fingerprint {
+        let full = crypto::fingerprint(end_entity.as_ref());
+        if full[..self.len] == self.fingerprint[..self.len] {
+            *self.seen.lock().unwrap_or_else(|e| e.into_inner()) = Some(full);
             Ok(ServerCertVerified::assertion())
         } else {
             Err(rustls::Error::General("server certificate does not match the invite link".into()))
@@ -75,11 +80,19 @@ pub fn transport_config() -> quinn::TransportConfig {
 }
 
 pub fn client_config(fingerprint: [u8; 32]) -> Result<quinn::ClientConfig> {
+    pinned_config(fingerprint, 32, Arc::default())
+}
+
+fn pinned_config(
+    fingerprint: [u8; 32],
+    len: usize,
+    seen: Arc<std::sync::Mutex<Option<[u8; 32]>>>,
+) -> Result<quinn::ClientConfig> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let mut tls = rustls::ClientConfig::builder_with_provider(provider.clone())
         .with_protocol_versions(&[&rustls::version::TLS13])?
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(PinnedVerifier { fingerprint, provider }))
+        .with_custom_certificate_verifier(Arc::new(PinnedVerifier { fingerprint, len: len.clamp(1, 32), seen, provider }))
         .with_no_client_auth();
     tls.alpn_protocols = vec![ingle_proto::ALPN.to_vec()];
     let crypto = quinn::crypto::rustls::QuicClientConfig::try_from(tls)?;
@@ -153,6 +166,33 @@ pub async fn read_frame<T: serde::de::DeserializeOwned>(recv: &mut quinn::RecvSt
     let mut body = vec![0u8; n];
     recv.read_exact(&mut body).await?;
     Ok(Some(framing::decode(&body)?))
+}
+
+/// For a short invite link: connects to the server, checks its certificate starts with the
+/// link's fingerprint and returns the whole fingerprint (which is then pinned from now on).
+pub async fn learn_fingerprint(
+    endpoints: &std::sync::Mutex<Endpoints>,
+    link: &ingle_proto::invite::InviteLink,
+) -> Result<[u8; 32]> {
+    let (host, port) = (link.host.as_str(), link.port);
+    let addr = resolve(host, port).await?;
+    let endpoint = endpoints.lock().map_err(|_| anyhow!("endpoint lock poisoned"))?.for_addr(addr)?;
+    let seen = Arc::new(std::sync::Mutex::new(None));
+    let connecting = endpoint.connect_with(pinned_config(link.fingerprint, link.fp_len, seen.clone())?, addr, ingle_proto::APP_ID)?;
+    let conn = tokio::time::timeout(Duration::from_secs(8), connecting)
+        .await
+        .map_err(|_| anyhow!("The server didn't answer (is it running, and is UDP port {port} open?)"))?
+        .map_err(|e| {
+            let s = e.to_string();
+            if s.contains("does not match the invite") || s.contains("certificate") {
+                anyhow!("This server's identity doesn't match the invite link.")
+            } else {
+                anyhow!("Couldn't connect: {s}")
+            }
+        })?;
+    conn.close(VarInt::from_u32(0), b"");
+    let full = seen.lock().unwrap_or_else(|e| e.into_inner()).take();
+    full.ok_or_else(|| anyhow!("the server didn't show its certificate"))
 }
 
 pub async fn connect_and_login(

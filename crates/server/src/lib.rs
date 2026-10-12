@@ -126,7 +126,7 @@ pub fn setup_links(cfg: &ServerConfig) -> Result<SetupLinks> {
     };
     let invite = db.get_meta("default_invite").unwrap_or_default();
     let link = |code: String| {
-        ingle_proto::invite::InviteLink { host: host.clone(), port: cfg.bind.port(), code: Some(code), fingerprint: tls_id.fingerprint }
+        ingle_proto::invite::InviteLink::new(host.clone(), cfg.bind.port(), Some(code), tls_id.fingerprint)
             .to_url()
     };
     Ok(SetupLinks { name: db.get_meta("name").unwrap_or_default(), owner: link(owner), invite: link(invite) })

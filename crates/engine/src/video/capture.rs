@@ -41,6 +41,9 @@ pub struct CaptureHandle {
     thread: Option<std::thread::JoinHandle<()>>,
     #[cfg(windows)]
     wgc: Option<windows_capture::capture::CaptureControl<win::WgcHandler, Box<dyn std::error::Error + Send + Sync>>>,
+    /// Our green frame in place of Windows' yellow one.
+    #[cfg(windows)]
+    border: Option<super::border::ShareBorder>,
 }
 
 impl CaptureHandle {
@@ -50,6 +53,8 @@ impl CaptureHandle {
             thread: Some(t),
             #[cfg(windows)]
             wgc: None,
+            #[cfg(windows)]
+            border: None,
         }
     }
 }
@@ -61,6 +66,8 @@ impl Drop for CaptureHandle {
         if let Some(c) = self.wgc.take() {
             let _ = c.stop();
         }
+        #[cfg(windows)]
+        drop(self.border.take());
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
@@ -255,46 +262,73 @@ fn platform_start_screen(id: &str, fps: u32, slot: Arc<FrameSlot>) -> Result<Cap
     use windows_capture::capture::GraphicsCaptureApiHandler;
     use windows_capture::monitor::Monitor;
     use windows_capture::settings::{
-        ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings, MinimumUpdateIntervalSettings,
-        SecondaryWindowSettings, Settings,
+        ColorFormat, CursorCaptureSettings, DirtyRegionSettings, MinimumUpdateIntervalSettings, SecondaryWindowSettings,
+        Settings,
     };
+    use super::border::Target;
     use windows_capture::window::Window;
     let interval = MinimumUpdateIntervalSettings::Custom(Duration::from_micros(1_000_000 / fps.max(1) as u64));
     let control = if let Some(idx) = id.strip_prefix("mon:") {
         let idx: usize = idx.parse()?;
         let m = Monitor::from_index(idx).map_err(|e| anyhow!("screen {idx} not found: {e}"))?;
-        let settings = Settings::new(
-            m,
-            CursorCaptureSettings::WithCursor,
-            DrawBorderSettings::Default,
-            SecondaryWindowSettings::Default,
-            interval,
-            DirtyRegionSettings::Default,
-            ColorFormat::Bgra8,
-            slot,
-        );
-        win::WgcHandler::start_free_threaded(settings).map_err(|e| anyhow!("screen capture failed: {e}"))?
+        let target = Target::Monitor(m.as_raw_hmonitor() as isize);
+        let make = |border| {
+            Settings::new(
+                m,
+                CursorCaptureSettings::WithCursor,
+                border,
+                SecondaryWindowSettings::Default,
+                interval,
+                DirtyRegionSettings::Default,
+                ColorFormat::Bgra8,
+                slot.clone(),
+            )
+        };
+        start_wgc(make, target).map_err(|e| anyhow!("screen capture failed: {e}"))?
     } else if let Some(h) = id.strip_prefix("win:") {
         let hwnd: usize = h.parse()?;
         let w = Window::from_raw_hwnd(hwnd as *mut std::ffi::c_void);
         if !w.is_valid() {
             return Err(anyhow!("that window was closed"));
         }
-        let settings = Settings::new(
-            w,
-            CursorCaptureSettings::WithCursor,
-            DrawBorderSettings::Default,
-            SecondaryWindowSettings::Default,
-            interval,
-            DirtyRegionSettings::Default,
-            ColorFormat::Bgra8,
-            slot,
-        );
-        win::WgcHandler::start_free_threaded(settings).map_err(|e| anyhow!("window capture failed: {e}"))?
+        let target = Target::Window(hwnd as isize);
+        let make = |border| {
+            Settings::new(
+                w,
+                CursorCaptureSettings::WithCursor,
+                border,
+                SecondaryWindowSettings::Default,
+                interval,
+                DirtyRegionSettings::Default,
+                ColorFormat::Bgra8,
+                slot.clone(),
+            )
+        };
+        start_wgc(make, target).map_err(|e| anyhow!("window capture failed: {e}"))?
     } else {
         return Err(anyhow!("unknown capture source"));
     };
-    Ok(CaptureHandle { stop: Arc::new(AtomicBool::new(false)), thread: None, wgc: Some(control) })
+    let (control, border) = control;
+    Ok(CaptureHandle { stop: Arc::new(AtomicBool::new(false)), thread: None, wgc: Some(control), border })
+}
+
+/// Starts Windows' capture without its yellow frame and puts up Ingle's green one instead.
+/// Where Windows doesn't allow turning its frame off, its own frame stays.
+#[cfg(windows)]
+fn start_wgc<T: TryInto<windows_capture::settings::GraphicsCaptureItemType> + Send + 'static>(
+    make: impl Fn(windows_capture::settings::DrawBorderSettings) -> windows_capture::settings::Settings<Arc<FrameSlot>, T>,
+    target: super::border::Target,
+) -> Result<(windows_capture::capture::CaptureControl<win::WgcHandler, Box<dyn std::error::Error + Send + Sync>>, Option<super::border::ShareBorder>), String> {
+    use windows_capture::capture::GraphicsCaptureApiHandler;
+    use windows_capture::graphics_capture_api::GraphicsCaptureApi;
+    use windows_capture::settings::DrawBorderSettings;
+    if GraphicsCaptureApi::is_border_settings_supported().unwrap_or(false) {
+        match win::WgcHandler::start_free_threaded(make(DrawBorderSettings::WithoutBorder)) {
+            Ok(c) => return Ok((c, Some(super::border::ShareBorder::show(target)))),
+            Err(e) => tracing::warn!("capture without Windows' frame failed ({e}); using its frame"),
+        }
+    }
+    win::WgcHandler::start_free_threaded(make(DrawBorderSettings::Default)).map(|c| (c, None)).map_err(|e| e.to_string())
 }
 
 #[cfg(target_os = "linux")]

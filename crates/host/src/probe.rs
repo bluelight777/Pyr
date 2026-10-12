@@ -14,7 +14,7 @@ use rustls::{DigitallySignedStruct, SignatureScheme};
 
 #[derive(Debug)]
 struct Pinned {
-    fingerprint: [u8; 32],
+    link: InviteLink,
     provider: Arc<CryptoProvider>,
 }
 
@@ -27,7 +27,7 @@ impl ServerCertVerifier for Pinned {
         _: &[u8],
         _: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        if ingle_proto::crypto::fingerprint(end_entity.as_ref()) == self.fingerprint {
+        if self.link.matches(&ingle_proto::crypto::fingerprint(end_entity.as_ref())) {
             Ok(ServerCertVerified::assertion())
         } else {
             Err(rustls::Error::General("the server's certificate doesn't match the invite link".into()))
@@ -70,7 +70,7 @@ pub async fn reachable(link: &str, timeout: Duration) -> Result<()> {
     let mut tls = rustls::ClientConfig::builder_with_provider(provider.clone())
         .with_protocol_versions(&[&rustls::version::TLS13])?
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(Pinned { fingerprint: link.fingerprint, provider }))
+        .with_custom_certificate_verifier(Arc::new(Pinned { link: link.clone(), provider }))
         .with_no_client_auth();
     tls.alpn_protocols = vec![ingle_proto::ALPN.to_vec()];
     let crypto = quinn::crypto::rustls::QuicClientConfig::try_from(tls)?;

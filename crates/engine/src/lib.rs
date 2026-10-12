@@ -378,9 +378,30 @@ impl Engine {
 
     // ------------------------------------------------------------- servers
 
+    /// A short link only has the start of the server's fingerprint: use the full one of a
+    /// server already joined at that address, or else ask the server (and check it matches).
+    fn full_fingerprint(&self, link: &InviteLink) -> Result<[u8; 32]> {
+        let known = self.shared.config.lock().servers.iter().find_map(|s| {
+            let fp = ingle_proto::b64::decode_array::<32>(&s.key)?;
+            (s.host == link.host && s.port == link.port && link.matches(&fp)).then_some(fp)
+        });
+        if let Some(fp) = known {
+            return Ok(fp);
+        }
+        let (shared, link) = (self.shared.clone(), link.clone());
+        // On its own thread so this works from inside or outside the runtime.
+        std::thread::spawn(move || shared.rt.block_on(net::learn_fingerprint(&shared.endpoints, &link)))
+            .join()
+            .map_err(|_| anyhow::anyhow!("joining failed"))?
+    }
+
     /// Join a server from an invite link.
     pub fn add_server(&self, invite: &str) -> Result<String> {
-        let link = InviteLink::parse(invite)?;
+        let mut link = InviteLink::parse(invite)?;
+        if !link.is_full() {
+            link.fingerprint = self.full_fingerprint(&link)?;
+            link.fp_len = 32;
+        }
         let key = ingle_proto::b64::encode(&link.fingerprint);
         // Already connected (or connecting) to this server at this address: nothing to redo,
         // and reconnecting would drop a call in progress.
@@ -729,7 +750,8 @@ impl Engine {
         self.request_then(key, Request::CreateInvite { max_uses, expires_secs }, move |shared, ev| {
             if let Event::InviteCreated { link, .. } = ev {
                 if let Some(s) = shared.state.write().server_mut(&k) {
-                    s.last_invite = Some(link);
+                    // Servers before 0.3.0 hand out the long form.
+                    s.last_invite = Some(InviteLink::shorten(&link));
                 }
                 (shared.repaint)();
             }

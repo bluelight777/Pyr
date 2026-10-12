@@ -50,7 +50,7 @@ impl IngleApp {
                     title(ui, "Join a server");
                     ui.label(RichText::new("Paste an invite link someone shared with you.").color(theme::MUTED));
                     field_label(ui, "Invite link");
-                    let r = input(ui, &mut link, "ingle://host:7766/abcd1234?fp=…");
+                    let r = input(ui, &mut link, "ingle://host/abcd1234/xxxxxxxxxxxx");
                     let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                     if !enter {
                         r.request_focus();

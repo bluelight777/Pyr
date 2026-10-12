@@ -753,11 +753,11 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
             field_label(ui, "Invite link for friends");
             egui::Frame::new().fill(theme::CODE_BG).corner_radius(6).inner_margin(10).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.add(egui::Label::new(RichText::new(&r.invite_link).font(theme::mono(12.0)).color(theme::TEXT)).wrap().selectable(true));
+                ui.add(egui::Label::new(RichText::new(ingle_proto::invite::InviteLink::shorten(&r.invite_link)).font(theme::mono(12.0)).color(theme::TEXT)).wrap().selectable(true));
             });
             ui.add_space(4.0);
             if ui.add(theme::primary_button("Copy invite link").min_size(vec2(150.0, 32.0))).clicked() {
-                acts.push(Act::Copy(r.invite_link.clone()));
+                acts.push(Act::Copy(ingle_proto::invite::InviteLink::shorten(&r.invite_link)));
                 c.copied = true;
             }
             if c.copied {

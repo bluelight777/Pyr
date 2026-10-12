@@ -170,13 +170,7 @@ impl Hub {
     }
 
     pub fn invite_link(&self, code: &str) -> String {
-        InviteLink {
-            host: self.public_host.clone(),
-            port: self.port,
-            code: Some(code.to_string()),
-            fingerprint: self.fingerprint,
-        }
-        .to_url()
+        InviteLink::new(self.public_host.clone(), self.port, Some(code.to_string()), self.fingerprint).to_url()
     }
 
     pub fn online_count(&self) -> usize {

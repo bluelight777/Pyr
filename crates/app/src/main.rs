@@ -7,6 +7,7 @@ mod create;
 mod dialogs;
 mod icons;
 mod images;
+mod titlebar;
 mod instance;
 mod markdown;
 mod stage;
@@ -84,6 +85,8 @@ fn main() -> eframe::Result<()> {
     };
     let viewport = egui::ViewportBuilder::default()
         .with_title(&title)
+        // Windows: Ingle draws its own dark title strip (titlebar.rs) instead of the white one.
+        .with_decorations(!titlebar::enabled())
         .with_app_id(ingle_proto::APP_ID)
         .with_inner_size([1280.0, 800.0])
         .with_min_inner_size([960.0, 600.0])
