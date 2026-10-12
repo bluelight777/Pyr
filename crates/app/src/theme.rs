@@ -80,7 +80,12 @@ pub fn install(ctx: &egui::Context) {
     let mut b = vec!["inter-semibold".to_string()];
     b.extend(fallbacks);
     fonts.families.insert(bold(), b);
+    fonts.font_data.insert("emoji-blank".into(), Arc::new(FontData::from_static(crate::emoji::BLANK_TTF)));
+    fonts.font_data.insert("emoji-zero".into(), Arc::new(FontData::from_static(crate::emoji::ZERO_TTF)));
+    fonts.families.insert(crate::emoji::blank_family(), vec!["emoji-blank".into()]);
+    fonts.families.insert(crate::emoji::zero_family(), vec!["emoji-zero".into()]);
     ctx.set_fonts(fonts);
+    crate::emoji::preload();
 
     // Always the warm dark theme, even when Windows is set to light mode (egui would
     // otherwise switch to its light style on the first frame).

@@ -322,6 +322,24 @@ impl Ctx<'_> {
         self.hub.db.roles().iter().filter(|r| mine.contains(&r.id)).fold(0, |acc, r| acc | r.perms)
     }
 
+    /// Someone else who's a member here.
+    fn other_member(&self, uid: &str) -> Result<(), (ErrorCode, String)> {
+        if uid == self.uid {
+            return Err((ErrorCode::BadRequest, "That's you.".into()));
+        }
+        match self.hub.db.get_user(uid) {
+            Some(u) if !u.banned => Ok(()),
+            _ => Err((ErrorCode::NotFound, "They aren't a member of this server.".into())),
+        }
+    }
+
+    /// Tells both people where they now stand with each other.
+    fn tell_relation(&self, other: &str) {
+        let db = &self.hub.db;
+        self.hub.send_to_user(&self.uid, Event::RelationUpdated { user_id: other.to_string(), kind: db.relation(&self.uid, other) });
+        self.hub.send_to_user(other, Event::RelationUpdated { user_id: self.uid.clone(), kind: db.relation(other, &self.uid) });
+    }
+
     fn require(&self, p: u64, what: &str) -> Result<(), (ErrorCode, String)> {
         if self.perms() & p == p { Ok(()) } else { Err((ErrorCode::Forbidden, format!("You don't have permission to {what}."))) }
     }
@@ -392,6 +410,12 @@ impl Ctx<'_> {
                     None => return bad("message is empty or too long"),
                 };
                 self.can_see(channel_id)?;
+                if let Some((x, y)) = db.dm_members(channel_id) {
+                    let other = if x == self.uid { y } else { x };
+                    if db.blocked_between(&self.uid, &other) {
+                        return Err((ErrorCode::Forbidden, "You can't message this person.".into()));
+                    }
+                }
                 let reply_to = reply_to.filter(|id| db.get_message(*id).map(|m| m.channel_id == channel_id).unwrap_or(false));
                 let message = db
                     .insert_message_with(channel_id, &self.uid, &content, reply_to, &attachments)
@@ -424,8 +448,14 @@ impl Ctx<'_> {
             }
             Request::React { message_id, emoji, add } => {
                 let emoji = emoji.trim().to_string();
-                if emoji.is_empty() || emoji.len() > 32 || emoji.chars().any(|c| c.is_ascii_alphanumeric() || c.is_whitespace())
-                {
+                // A server emoji (`<:name:id>`, which must exist here) or a real emoji.
+                let custom = emoji.starts_with('<') && emoji.ends_with('>');
+                if custom {
+                    let id = emoji.trim_end_matches('>').rsplit(':').next().unwrap_or("");
+                    if emoji.len() > 120 || !db.emojis().iter().any(|e| e.id == id) {
+                        return bad("not an emoji on this server");
+                    }
+                } else if emoji.is_empty() || emoji.len() > 32 || emoji.chars().any(|c| c.is_ascii_alphanumeric() || c.is_whitespace()) {
                     return bad("not an emoji");
                 }
                 let Some(m) = db.get_message(message_id) else { return Err((ErrorCode::NotFound, "gone".into())) };
@@ -455,6 +485,9 @@ impl Ctx<'_> {
                 match db.get_user(&user_id) {
                     Some(u) if !u.banned => {}
                     _ => return Err((ErrorCode::NotFound, "They aren't a member of this server.".into())),
+                }
+                if db.blocked_between(&self.uid, &user_id) {
+                    return Err((ErrorCode::Forbidden, "You can't message this person.".into()));
                 }
                 let (id, new) = db.open_dm(&self.uid, &user_id).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
                 if new {
@@ -686,6 +719,100 @@ impl Ctx<'_> {
                 if let Some(member) = hub.member(&self.uid) {
                     hub.broadcast(Event::MemberUpserted { member });
                 }
+                Ok(Event::Ok)
+            }
+            Request::FriendRequest { user_id } => {
+                self.other_member(&user_id)?;
+                if db.blocked_between(&self.uid, &user_id) {
+                    return Err((ErrorCode::Forbidden, "You can't add this person as a friend.".into()));
+                }
+                let ie = |e: anyhow::Error| (ErrorCode::Internal, e.to_string());
+                match db.relation(&self.uid, &user_id) {
+                    Some(RelationKind::Friend | RelationKind::Outgoing) => {}
+                    Some(RelationKind::Incoming) => {
+                        db.clear_relation(&self.uid, &user_id, &[0]).map_err(ie)?;
+                        db.set_relation(&self.uid, &user_id, 1).map_err(ie)?;
+                        db.set_relation(&user_id, &self.uid, 1).map_err(ie)?;
+                    }
+                    _ => db.set_relation(&self.uid, &user_id, 0).map_err(ie)?,
+                }
+                self.tell_relation(&user_id);
+                Ok(Event::Ok)
+            }
+            Request::FriendAccept { user_id } => {
+                if db.relation(&self.uid, &user_id) != Some(RelationKind::Incoming) {
+                    return bad("There's no friend request from them.");
+                }
+                let ie = |e: anyhow::Error| (ErrorCode::Internal, e.to_string());
+                db.clear_relation(&self.uid, &user_id, &[0]).map_err(ie)?;
+                db.set_relation(&self.uid, &user_id, 1).map_err(ie)?;
+                db.set_relation(&user_id, &self.uid, 1).map_err(ie)?;
+                self.tell_relation(&user_id);
+                Ok(Event::Ok)
+            }
+            Request::FriendRemove { user_id } => {
+                db.clear_relation(&self.uid, &user_id, &[0, 1]).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                self.tell_relation(&user_id);
+                Ok(Event::Ok)
+            }
+            Request::Block { user_id } => {
+                if user_id == self.uid {
+                    return bad("You can't block yourself.");
+                }
+                let ie = |e: anyhow::Error| (ErrorCode::Internal, e.to_string());
+                db.clear_relation(&self.uid, &user_id, &[0, 1]).map_err(ie)?;
+                db.set_relation(&self.uid, &user_id, 2).map_err(ie)?;
+                self.tell_relation(&user_id);
+                Ok(Event::Ok)
+            }
+            Request::Unblock { user_id } => {
+                db.unblock(&self.uid, &user_id).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                self.tell_relation(&user_id);
+                Ok(Event::Ok)
+            }
+            Request::AddEmoji { name, file_id, animated } => {
+                self.require(perm::MANAGE_EMOJI, "add emoji")?;
+                if !valid_emoji_name(&name) {
+                    return bad("Emoji names are 2–32 letters, numbers or underscores.");
+                }
+                match db.file(&file_id) {
+                    Some(f) if f.owner == self.uid && f.kind == FileKind::Avatar => {}
+                    _ => return bad("upload the picture first"),
+                }
+                let all = db.emojis();
+                if all.len() >= MAX_CUSTOM_EMOJI {
+                    return bad(&format!("This server already has {MAX_CUSTOM_EMOJI} emoji, the most it can have."));
+                }
+                if all.iter().any(|e| e.name.eq_ignore_ascii_case(&name)) {
+                    return bad(&format!("There's already an emoji called :{name}:."));
+                }
+                let e = CustomEmoji { id: file_id, name, animated, by: self.uid.clone() };
+                if !db.add_emoji(&e).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
+                    return bad("That picture is already one of this server's emoji.");
+                }
+                hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                Ok(Event::Ok)
+            }
+            Request::RemoveEmoji { id } => {
+                self.require(perm::MANAGE_EMOJI, "remove emoji")?;
+                if db.remove_emoji(&id).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
+                    if db.release_avatar(&id) {
+                        hub.wipe_files(&[id]);
+                    }
+                    hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                }
+                Ok(Event::Ok)
+            }
+            Request::RenameEmoji { id, name } => {
+                self.require(perm::MANAGE_EMOJI, "rename emoji")?;
+                if !valid_emoji_name(&name) {
+                    return bad("Emoji names are 2–32 letters, numbers or underscores.");
+                }
+                if db.emojis().iter().any(|e| e.id != id && e.name.eq_ignore_ascii_case(&name)) {
+                    return bad(&format!("There's already an emoji called :{name}:."));
+                }
+                db.rename_emoji(&id, &name).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                hub.broadcast(Event::ServerUpdated { server: hub.info() });
                 Ok(Event::Ok)
             }
             Request::SetServerIcon { file_id } => {

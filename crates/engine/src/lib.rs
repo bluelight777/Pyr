@@ -110,6 +110,8 @@ pub struct Shared {
     pub window_focused: AtomicBool,
     /// A direct message conversation just opened with `open_dm`, for the UI to show.
     pub opened_dm: Mutex<Option<(String, ChannelId)>>,
+    /// What our screen share is showing (to share it again after a reconnect).
+    pub screen_source: Mutex<Option<String>>,
 }
 
 impl Shared {
@@ -149,6 +151,29 @@ impl Shared {
 
     pub fn server_disconnected(&self, key: &str) {
         self.forward_call_event(key, CallEvent::Disconnected);
+    }
+
+    /// The server connection dropped during a call: end it here quietly and remember it, so
+    /// it's rejoined when the server is back (see `resume_voice`).
+    pub fn call_lost(&self) {
+        let call = self.call.lock().take();
+        if let Some(c) = call {
+            c.shutdown(false);
+            self.video.clear();
+            let screen = self.screen_source.lock().clone();
+            let mut st = self.state.write();
+            if let Some(cv) = st.call.take() {
+                st.voice_rejoin = Some(state::VoiceRejoin {
+                    server_key: cv.server_key,
+                    channel_id: cv.channel_id,
+                    camera: cv.camera_on,
+                    screen: screen.filter(|_| cv.screen_on),
+                    since: std::time::Instant::now(),
+                });
+            }
+        }
+        *self.call_events.lock() = None;
+        (self.repaint)();
     }
 
     /// Tear down the call without telling the server (it already knows, or is gone).
@@ -305,6 +330,7 @@ impl Engine {
         let state = AppState {
             safety_code: crypto::safety_code(&my_uid),
             my_uid,
+            voice_rejoin: None,
             my_name: cfg.display_name.clone(),
             servers: cfg
                 .servers
@@ -320,6 +346,7 @@ impl Engine {
             mic_level_db: -100.0,
             mic_test: false,
             muted_servers: cfg.muted_servers.clone(),
+            blocked: cfg.blocked.clone(),
             muted_channels: cfg.muted_channels.iter().flat_map(|(k, cs)| cs.iter().map(move |c| (k.clone(), *c))).collect(),
         };
         // Tests and bots (which bring their own audio) stay quiet.
@@ -342,6 +369,7 @@ impl Engine {
             rt: handle,
             active_view: Mutex::new(None),
             opened_dm: Mutex::new(None),
+            screen_source: Mutex::new(None),
             voice_prefs: Mutex::new((false, false)),
             ptt_down: ptt_down.clone(),
             audio_factory: opts.audio,
@@ -703,6 +731,132 @@ impl Engine {
         });
     }
 
+    /// Adds one of a server's own emoji: uploads the picture (PNG, or a GIF when animated),
+    /// then names it.
+    pub fn add_emoji(&self, key: &str, name: &str, bytes: Vec<u8>, animated: bool) {
+        let shared = self.shared.clone();
+        let (key, name) = (key.to_string(), name.to_string());
+        self.shared.rt.clone().spawn(async move {
+            let Some(h) = shared.servers.lock().get(&key).cloned() else { return };
+            let Some(conn) = h.connection() else {
+                shared.state.write().toast("Not connected to that server right now.", true);
+                return;
+            };
+            let mime = if animated { "image/gif" } else { "image/png" };
+            let file_id = match net::file_put(&conn, FileKind::Avatar, "emoji", mime, &bytes).await {
+                Ok(id) => id,
+                Err(e) => {
+                    shared.state.write().toast(format!("Couldn't upload the emoji: {e:#}"), true);
+                    (shared.repaint)();
+                    return;
+                }
+            };
+            shared.files.lock().insert(file_id.clone(), Arc::new(bytes));
+            match h.request(Request::AddEmoji { name: name.clone(), file_id, animated }).await {
+                Ok(Event::Error { message, .. }) => shared.state.write().toast(message, true),
+                Ok(_) => shared.state.write().toast(format!("Added :{name}:"), false),
+                Err(_) => {}
+            }
+            (shared.repaint)();
+        });
+    }
+
+    pub fn remove_emoji(&self, key: &str, id: &str) {
+        self.request(key, Request::RemoveEmoji { id: id.to_string() });
+    }
+
+    pub fn rename_emoji(&self, key: &str, id: &str, name: &str) {
+        self.request(key, Request::RenameEmoji { id: id.to_string(), name: name.to_string() });
+    }
+
+    // ------------------------------------------------------------- friends
+
+    /// Servers (connected, with friends) where we're both members; ones where something is
+    /// already recorded between us first.
+    fn shared_servers(&self, uid: &str) -> Vec<String> {
+        let st = self.shared.state.read();
+        let mut v: Vec<(bool, String)> = st
+            .servers
+            .iter()
+            .filter(|s| s.has(FRIENDS_FEATURE) && s.status.is_connected() && s.members.contains_key(uid))
+            .map(|s| (!s.relations.contains_key(uid), s.key.clone()))
+            .collect();
+        v.sort();
+        v.into_iter().map(|x| x.1).collect()
+    }
+
+    /// Sends a friend request (or accepts theirs), through a server we share.
+    pub fn add_friend(&self, uid: &str) {
+        match self.shared_servers(uid).first() {
+            Some(k) => self.request(k, Request::FriendRequest { user_id: uid.to_string() }),
+            None => self.toast("You need to share a server with them (and be connected) to add them.", true),
+        }
+    }
+
+    pub fn accept_friend(&self, uid: &str) {
+        let keys: Vec<String> = {
+            let st = self.shared.state.read();
+            st.servers.iter().filter(|s| s.relations.get(uid) == Some(&RelationKind::Incoming)).map(|s| s.key.clone()).collect()
+        };
+        for k in keys {
+            self.request(&k, Request::FriendAccept { user_id: uid.to_string() });
+        }
+    }
+
+    /// Declines, cancels or unfriends, everywhere.
+    pub fn remove_friend(&self, uid: &str) {
+        let keys: Vec<String> = {
+            let st = self.shared.state.read();
+            st.servers
+                .iter()
+                .filter(|s| matches!(s.relations.get(uid), Some(RelationKind::Friend | RelationKind::Incoming | RelationKind::Outgoing)))
+                .map(|s| s.key.clone())
+                .collect()
+        };
+        for k in keys {
+            self.request(&k, Request::FriendRemove { user_id: uid.to_string() });
+        }
+    }
+
+    /// Blocks someone on every server we share (and on this PC: their messages fold away).
+    pub fn block(&self, uid: &str) {
+        self.set_blocked_locally(uid, true);
+        for k in self.shared_servers(uid) {
+            self.request(&k, Request::Block { user_id: uid.to_string() });
+        }
+    }
+
+    pub fn unblock(&self, uid: &str) {
+        self.set_blocked_locally(uid, false);
+        let keys: Vec<String> = {
+            let st = self.shared.state.read();
+            st.servers.iter().filter(|s| s.has(FRIENDS_FEATURE) && s.status.is_connected()).map(|s| s.key.clone()).collect()
+        };
+        for k in keys {
+            self.request(&k, Request::Unblock { user_id: uid.to_string() });
+        }
+    }
+
+    fn set_blocked_locally(&self, uid: &str, on: bool) {
+        {
+            let mut cfg = self.shared.config.lock();
+            if on {
+                cfg.blocked.insert(uid.to_string());
+            } else {
+                cfg.blocked.remove(uid);
+            }
+            self.shared.save_config_locked(&cfg);
+        }
+        let mut st = self.shared.state.write();
+        if on {
+            st.blocked.insert(uid.to_string());
+        } else {
+            st.blocked.remove(uid);
+        }
+        drop(st);
+        (self.shared.repaint)();
+    }
+
     /// Your profile picture as saved on this PC.
     pub fn my_avatar(&self) -> Option<Vec<u8>> {
         std::fs::read(self.shared.config_dir.join(AVATAR_FILE)).ok()
@@ -962,6 +1116,7 @@ impl Engine {
     }
 
     pub fn leave_voice(&self) {
+        self.shared.state.write().voice_rejoin = None;
         let call = self.shared.call.lock().take();
         if let Some(c) = call {
             c.shutdown(true);
@@ -1024,6 +1179,7 @@ impl Engine {
     }
 
     pub fn start_screen(&self, source_id: &str) {
+        *self.shared.screen_source.lock() = Some(source_id.to_string());
         let preset = self.shared.state.read().settings.screen_preset;
         let (max_h, fps, bitrate) = preset.params();
         let cfg = PublisherConfig { screen: true, max_width: max_h * 16 / 9 + 8, max_height: max_h, fps, bitrate };
@@ -1260,6 +1416,68 @@ const AVATAR_FILE: &str = "avatar.png";
 
 /// Make a server's copy of my profile picture match the one saved on this PC (after
 /// connecting, and when it changes). Content-named ids mean nothing is re-sent needlessly.
+/// People blocked on this PC are blocked on every server too (one joined later, say).
+pub(crate) fn sync_blocks(shared: &Arc<Shared>, key: &str) {
+    let todo: Vec<String> = {
+        let st = shared.state.read();
+        let Some(s) = st.server(key).filter(|s| s.has(FRIENDS_FEATURE)) else { return };
+        st.blocked.iter().filter(|u| s.members.contains_key(*u) && s.relations.get(*u) != Some(&RelationKind::Blocked)).cloned().collect()
+    };
+    let Some(h) = shared.servers.lock().get(key).cloned() else { return };
+    for u in todo {
+        h.notify(Request::Block { user_id: u });
+    }
+}
+
+/// Back on a server after the connection dropped mid-call: rejoin that call, and turn the
+/// camera and screen share back on if they were.
+pub(crate) fn resume_voice(shared: Arc<Shared>, key: String) {
+    let r = {
+        let mut st = shared.state.write();
+        match &st.voice_rejoin {
+            Some(r) if r.server_key == key && st.call.is_none() => {
+                if r.since.elapsed() > VOICE_REJOIN_FOR {
+                    st.voice_rejoin = None;
+                    return;
+                }
+                r.clone()
+            }
+            _ => return,
+        }
+    };
+    let rt = shared.rt.clone();
+    rt.spawn(async move {
+        // The channel may be gone, or the server may say no now.
+        let exists = shared.state.read().server(&key).map(|s| s.channel(r.channel_id).is_some()).unwrap_or(false);
+        let result = if exists { Call::join(shared.clone(), key.clone(), r.channel_id).await } else { Err(anyhow::anyhow!("the channel is gone")) };
+        {
+            let mut st = shared.state.write();
+            // Only if nothing else happened meanwhile (the user leaving or joining elsewhere).
+            if st.voice_rejoin.as_ref().map(|x| x.since) == Some(r.since) {
+                st.voice_rejoin = None;
+            }
+            if let Err(e) = &result {
+                st.toast(format!("Couldn't get back into voice: {e:#}"), true);
+            }
+        }
+        if result.is_err() {
+            if shared.call.lock().is_none() {
+                *shared.call_events.lock() = None;
+            }
+            (shared.repaint)();
+            return;
+        }
+        let e = Engine { shared: shared.clone(), _rt: None, _ptt: None };
+        if r.camera {
+            e.start_camera();
+        }
+        if let Some(src) = &r.screen {
+            e.start_screen(src);
+        }
+        (shared.repaint)();
+    });
+}
+
 pub(crate) fn sync_avatar(shared: Arc<Shared>, key: String) {
     let rt = shared.rt.clone();
     rt.spawn(async move {

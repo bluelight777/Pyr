@@ -82,6 +82,12 @@ impl IngleApp {
                 .show_separator_line(false)
                 .frame(egui::Frame::new().fill(theme::SIDE_DARK).inner_margin(egui::Margin::symmetric(10, 8)))
                 .show_inside(ui, |ui| self.voice_panel(ui, st, call, acts));
+        } else if st.voice_rejoin.is_some() {
+            egui::TopBottomPanel::bottom("home-voice-panel")
+                .exact_height(56.0)
+                .show_separator_line(false)
+                .frame(egui::Frame::new().fill(theme::SIDE_DARK).inner_margin(egui::Margin::symmetric(10, 8)))
+                .show_inside(ui, |ui| self.rejoin_panel(ui, st, acts));
         }
         egui::TopBottomPanel::top("home-header")
             .exact_height(48.0)
@@ -105,6 +111,12 @@ impl IngleApp {
             }
             crate::icons::people(ui.painter(), Rect::from_center_size(pos2(r.left() + 22.0, r.center().y), vec2(20.0, 20.0)), theme::TEXT);
             ui.painter().text(pos2(r.left() + 48.0, r.center().y), egui::Align2::LEFT_CENTER, "Friends", theme::bold_font(14.5), theme::TEXT);
+            let pending = st.relations().iter().filter(|r| r.1 == ingle_proto::control::RelationKind::Incoming).count();
+            if pending > 0 {
+                let b = pos2(r.right() - 16.0, r.center().y);
+                ui.painter().circle_filled(b, 8.5, theme::LIVE);
+                ui.painter().text(b, egui::Align2::CENTER_CENTER, pending.min(99).to_string(), theme::bold_font(10.5), Color32::WHITE);
+            }
             if resp.clicked() {
                 self.ui.dm = None;
                 acts.push(Act::ClearActive);
@@ -184,14 +196,18 @@ impl IngleApp {
                 acts.push(Act::MuteChat { key: key.clone(), channel: Some(id), muted: !muted });
                 ui.close();
             }
+            crate::app::person_menu(ui, st, with, acts);
         });
     }
 
     fn friends_page(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
+        use ingle_proto::control::RelationKind;
         if self.ui.active_view.is_some() {
             acts.push(Act::ClearActive);
         }
-        let all = friends(st);
+        let people = friends(st);
+        let rels = st.relations();
+        let pending = rels.iter().filter(|r| r.1 == RelationKind::Incoming).count();
         egui::TopBottomPanel::top("friends-header")
             .exact_height(48.0)
             .show_separator_line(false)
@@ -202,72 +218,189 @@ impl IngleApp {
                     crate::icons::people(ui.painter(), r, theme::DIM);
                     ui.label(RichText::new("Friends").font(theme::bold_font(15.5)).color(theme::TEXT));
                     ui.add_space(12.0);
-                    for (label, show_all) in [("Online", false), ("All", true)] {
-                        let on = self.ui.friends_all == show_all;
+                    for (label, tab) in [("Online", 0u8), ("All", 1), ("Pending", 2), ("Blocked", 3)] {
+                        let on = self.ui.friends_tab == tab;
                         let b = egui::Button::new(RichText::new(label).color(if on { theme::TEXT } else { theme::MUTED }))
                             .fill(if on { theme::ELEV2 } else { Color32::TRANSPARENT })
                             .corner_radius(4);
-                        if ui.add(b).clicked() {
-                            self.ui.friends_all = show_all;
+                        let r = ui.add(b);
+                        if tab == 2 && pending > 0 {
+                            let c = pos2(r.rect.right() + 2.0, r.rect.center().y);
+                            ui.add_space(14.0);
+                            ui.painter().circle_filled(c + vec2(6.0, 0.0), 8.0, theme::LIVE);
+                            ui.painter().text(c + vec2(6.0, 0.0), egui::Align2::CENTER_CENTER, pending.min(99).to_string(), theme::bold_font(10.5), Color32::WHITE);
                         }
+                        if r.clicked() {
+                            self.ui.friends_tab = tab;
+                        }
+                    }
+                    let on = self.ui.friends_tab == 4;
+                    let add = egui::Button::new(RichText::new("Add Friend").color(if on { theme::ONLINE } else { Color32::WHITE }))
+                        .fill(if on { Color32::TRANSPARENT } else { Color32::from_rgb(0x24, 0x80, 0x46) })
+                        .corner_radius(4);
+                    if ui.add(add).clicked() {
+                        self.ui.friends_tab = 4;
                     }
                 });
                 let r = ui.max_rect();
                 ui.painter().line_segment([pos2(r.left() - 16.0, r.bottom()), pos2(r.right() + 16.0, r.bottom())], Stroke::new(1.0f32, theme::SHADOW_LINE));
             });
+        let tab = self.ui.friends_tab;
         egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::MAIN).inner_margin(egui::Margin::symmetric(24, 16))).show_inside(ui, |ui| {
-            let shown: Vec<&Friend> = all.iter().filter(|f| self.ui.friends_all || f.online).collect();
-            let label = if self.ui.friends_all { "ALL FRIENDS" } else { "ONLINE" };
-            ui.label(RichText::new(format!("{label} — {}", shown.len())).font(theme::bold_font(11.5)).color(theme::DIM));
+            let online = |uid: &str| people.iter().any(|f| f.uid == uid && f.online);
+            if tab == 4 {
+                ui.label(RichText::new("ADD FRIEND").font(theme::bold_font(14.0)).color(theme::TEXT));
+                ui.label(RichText::new("You can add anyone you share a server with. Search by their name.").color(theme::MUTED));
+                ui.add_space(8.0);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.ui.friend_search)
+                        .hint_text("Type a name")
+                        .desired_width(ui.available_width())
+                        .margin(egui::Margin::symmetric(12, 10))
+                        .font(theme::font(15.0)),
+                );
+                ui.add_space(10.0);
+                let q = self.ui.friend_search.trim().to_lowercase();
+                let found: Vec<&Friend> = people.iter().filter(|f| q.is_empty() || f.name.to_lowercase().contains(&q)).collect();
+                if found.is_empty() {
+                    ui.label(RichText::new("Nobody by that name in your servers.").color(theme::DIM));
+                    return;
+                }
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    for f in found {
+                        let sub = if f.online { "Online" } else { "Offline" };
+                        let rel = st.relation(&f.uid);
+                        self.person_row(ui, st, f, sub, acts, |ui, acts| match rel {
+                            Some(RelationKind::Friend) => {
+                                ui.label(RichText::new("Friends").color(theme::ONLINE));
+                            }
+                            Some(RelationKind::Outgoing) => {
+                                ui.label(RichText::new("Request sent").color(theme::DIM));
+                            }
+                            Some(RelationKind::Incoming) => {
+                                if ui.add(theme::primary_button("Accept")).clicked() {
+                                    acts.push(Act::AcceptFriend(f.uid.clone()));
+                                }
+                            }
+                            Some(RelationKind::Blocked) => {
+                                ui.label(RichText::new("Blocked").color(theme::LIVE));
+                            }
+                            None => {
+                                if ui.add(theme::primary_button("Send Friend Request")).clicked() {
+                                    acts.push(Act::AddFriend(f.uid.clone()));
+                                }
+                            }
+                        });
+                    }
+                });
+                return;
+            }
+            let rows: Vec<(String, RelationKind)> = rels
+                .iter()
+                .filter(|(uid, k)| match tab {
+                    0 => *k == RelationKind::Friend && online(uid),
+                    1 => *k == RelationKind::Friend,
+                    2 => matches!(k, RelationKind::Incoming | RelationKind::Outgoing),
+                    _ => *k == RelationKind::Blocked,
+                })
+                .cloned()
+                .collect();
+            let label = ["ONLINE", "ALL FRIENDS", "PENDING", "BLOCKED"][tab.min(3) as usize];
+            ui.label(RichText::new(format!("{label} — {}", rows.len())).font(theme::bold_font(11.5)).color(theme::DIM));
             ui.add_space(8.0);
-            if shown.is_empty() {
+            if rows.is_empty() {
                 ui.add_space(40.0);
                 ui.vertical_centered(|ui| {
-                    let msg = if all.is_empty() {
-                        "Nobody here yet. Everyone you share a server with shows up here."
-                    } else {
-                        "No one's online right now. Check All to message someone anyway."
+                    let msg = match tab {
+                        0 if rels.iter().any(|r| r.1 == RelationKind::Friend) => "None of your friends are online right now.",
+                        0 | 1 => "No friends yet. Add someone you share a server with: click Add Friend, or right-click them in a member list.",
+                        2 => "There are no pending friend requests.",
+                        _ => "You haven't blocked anyone.",
                     };
                     ui.label(RichText::new(msg).color(theme::MUTED));
+                    if tab < 2 && ui.add(theme::primary_button("Add Friend")).clicked() {
+                        self.ui.friends_tab = 4;
+                    }
                 });
                 return;
             }
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                for f in shown {
-                    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 58.0), Sense::click());
-                    ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0f32, theme::LINE));
-                    if resp.hovered() {
-                        ui.painter().rect_filled(r.shrink2(vec2(0.0, 2.0)), CornerRadius::same(8), theme::HOVER);
-                    }
-                    let s = f.servers.first().and_then(|k| st.server(k));
-                    let face = s.and_then(|s| self.face(ui.ctx(), s, &f.uid));
-                    let c = pos2(r.left() + 26.0, r.center().y);
-                    avatar(ui.painter(), c, 18.0, &f.uid, &f.name, false, theme::MAIN, face);
-                    if f.online {
-                        status_dot(ui.painter(), c + vec2(13.0, 13.0), true, theme::MAIN);
-                    }
-                    ui.painter().text(pos2(r.left() + 56.0, r.center().y - 8.0), egui::Align2::LEFT_CENTER, &f.name, theme::bold_font(15.0), theme::TEXT);
-                    let servers: Vec<String> = f.servers.iter().filter_map(|k| st.server(k).map(|s| s.name.clone())).collect();
-                    let sub = format!("{}  ·  {}", if f.online { "Online" } else { "Offline" }, servers.join(", "));
-                    ui.painter().text(pos2(r.left() + 56.0, r.center().y + 10.0), egui::Align2::LEFT_CENTER, sub, theme::font(12.5), theme::MUTED);
-                    let target = dm_server(st, &f.uid);
-                    // "Message" button on the right.
-                    let br = Rect::from_center_size(pos2(r.right() - 60.0, r.center().y), vec2(96.0, 32.0));
-                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(br).layout(Layout::left_to_right(Align::Center)));
-                    let clicked_button = match &target {
-                        Some(_) => child.add_sized(br.size(), crate::theme::primary_button("Message")).clicked(),
-                        None => {
-                            child.add_sized(br.size(), egui::Label::new(RichText::new("Not connected").size(12.0).color(theme::DIM)));
-                            false
-                        }
+                for (uid, kind) in rows {
+                    let f = people.iter().find(|f| f.uid == uid);
+                    let fallback = Friend { uid: uid.clone(), name: st.name_of(&uid), online: false, servers: Vec::new() };
+                    let f = f.unwrap_or(&fallback);
+                    let sub = match kind {
+                        RelationKind::Incoming => "Incoming Friend Request",
+                        RelationKind::Outgoing => "Outgoing Friend Request",
+                        RelationKind::Blocked => "Blocked",
+                        _ if f.online => "Online",
+                        _ => "Offline",
                     };
-                    if clicked_button || resp.clicked() {
-                        if let Some(key) = target {
-                            acts.push(Act::OpenDm { key, uid: f.uid.clone() });
+                    let target = dm_server(st, &uid);
+                    self.person_row(ui, st, f, sub, acts, |ui, acts| match kind {
+                        RelationKind::Friend => {
+                            ui.menu_button("More", |ui| crate::app::person_menu(ui, st, &uid, acts));
+                            ui.add_enabled_ui(target.is_some(), |ui| {
+                                if ui.add(theme::primary_button("Message")).clicked() {
+                                    if let Some(key) = &target {
+                                        acts.push(Act::OpenDm { key: key.clone(), uid: uid.clone() });
+                                    }
+                                }
+                            });
                         }
-                    }
+                        RelationKind::Incoming => {
+                            if ui.add(egui::Button::new("Ignore").min_size(vec2(64.0, 32.0))).clicked() {
+                                acts.push(Act::RemoveFriend(uid.clone()));
+                            }
+                            if ui.add(theme::primary_button("Accept")).clicked() {
+                                acts.push(Act::AcceptFriend(uid.clone()));
+                            }
+                        }
+                        RelationKind::Outgoing => {
+                            if ui.add(egui::Button::new("Cancel").min_size(vec2(64.0, 32.0))).clicked() {
+                                acts.push(Act::RemoveFriend(uid.clone()));
+                            }
+                        }
+                        RelationKind::Blocked => {
+                            if ui.add(egui::Button::new("Unblock").min_size(vec2(72.0, 32.0))).clicked() {
+                                acts.push(Act::Unblock(uid.clone()));
+                            }
+                        }
+                    });
                 }
             });
         });
+    }
+
+    /// One person in a friends list: picture, name, a line under it, buttons on the right
+    /// (laid out right to left), and the friend/block menu on right-click.
+    fn person_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        st: &AppState,
+        f: &Friend,
+        sub: &str,
+        acts: &mut Vec<Act>,
+        buttons: impl FnOnce(&mut egui::Ui, &mut Vec<Act>),
+    ) {
+        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 58.0), Sense::click());
+        ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0f32, theme::LINE));
+        if resp.hovered() {
+            ui.painter().rect_filled(r.shrink2(vec2(0.0, 2.0)), CornerRadius::same(8), theme::HOVER);
+        }
+        let s = f.servers.first().and_then(|k| st.server(k));
+        let face = s.and_then(|s| self.face(ui.ctx(), s, &f.uid));
+        let c = pos2(r.left() + 26.0, r.center().y);
+        avatar(ui.painter(), c, 18.0, &f.uid, &f.name, false, theme::MAIN, face);
+        if f.online {
+            status_dot(ui.painter(), c + vec2(13.0, 13.0), true, theme::MAIN);
+        }
+        ui.painter().text(pos2(r.left() + 56.0, r.center().y - 8.0), egui::Align2::LEFT_CENTER, &f.name, theme::bold_font(15.0), theme::TEXT);
+        ui.painter().text(pos2(r.left() + 56.0, r.center().y + 10.0), egui::Align2::LEFT_CENTER, sub, theme::font(12.5), theme::MUTED);
+        let br = Rect::from_min_max(pos2(r.center().x, r.top() + 10.0), pos2(r.right() - 12.0, r.bottom() - 10.0));
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(br).layout(Layout::right_to_left(Align::Center)));
+        buttons(&mut child, acts);
+        let uid = f.uid.clone();
+        resp.context_menu(|ui| crate::app::person_menu(ui, st, &uid, acts));
     }
 }

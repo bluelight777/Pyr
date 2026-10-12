@@ -167,6 +167,7 @@ impl Hub {
             description: self.db.get_meta("description").unwrap_or_default(),
             fingerprint: b64::encode(&self.fingerprint),
             icon: self.db.get_meta("icon").filter(|i| !i.is_empty()),
+            emojis: self.db.emojis(),
         }
     }
 
@@ -329,8 +330,9 @@ impl Hub {
             members,
             voice: inner.voice.values().map(|v| v.p.clone()).collect(),
             roles: self.db.roles(),
-            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE].iter().map(|s| s.to_string()).collect(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE].iter().map(|s| s.to_string()).collect(),
             dms: self.db.dms_of(uid),
+            relations: self.db.relations_of(uid),
         };
         let _ = tx.send(frame(re, ready));
         if !was_online {
@@ -359,12 +361,32 @@ impl Hub {
 
     // ------------------------------------------------------------------ voice
 
+    /// Updates a screen share's list of viewers from who's subscribed; true if it changed.
+    fn sync_viewers(v: &mut Voice) -> bool {
+        let mut viewers: Vec<SessionId> = v.subs.get(&track::SCREEN).map(|m| m.keys().copied().collect()).unwrap_or_default();
+        viewers.sort_unstable();
+        match v.p.tracks.iter_mut().find(|t| t.id == track::SCREEN) {
+            Some(t) if t.viewers != viewers => {
+                t.viewers = viewers;
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn remove_session_locked(inner: &mut Inner, session: SessionId) {
         let Some(v) = inner.voice.remove(&session) else { return };
+        let mut changed = Vec::new();
         for other in inner.voice.values_mut() {
             for subs in other.subs.values_mut() {
                 subs.remove(&session);
             }
+            if Self::sync_viewers(other) {
+                changed.push(other.p.clone());
+            }
+        }
+        for p in changed {
+            Self::broadcast_locked(inner, Event::VoiceUpserted { participant: p });
         }
         if let Some(c) = inner.clients.get_mut(&v.conn_id) {
             if c.session == Some(session) {
@@ -475,10 +497,13 @@ impl Hub {
         if !ok || t.width > 7680 || t.height > 4320 || t.fps > 240 {
             return err(ErrorCode::BadRequest, "invalid track");
         }
+        let mut t = t;
+        t.viewers.clear();
         self.with_my_voice(conn_id, |v| {
             v.p.tracks.retain(|x| x.id != t.id);
             v.p.tracks.push(t);
             v.p.tracks.sort_by_key(|x| x.id);
+            Self::sync_viewers(v);
             true
         })
     }
@@ -514,6 +539,10 @@ impl Hub {
             if let Some(m) = publisher.subs.get_mut(&track_id) {
                 m.remove(&me);
             }
+            if Self::sync_viewers(publisher) {
+                let p = publisher.p.clone();
+                Self::broadcast_locked(&inner, Event::VoiceUpserted { participant: p });
+            }
             return Ok(Event::Ok);
         }
         if track_id != track::CAMERA && track_id != track::SCREEN {
@@ -532,6 +561,10 @@ impl Hub {
         // A new viewer always needs a keyframe.
         publisher.last_keyframe_request.insert(track_id, Instant::now());
         let _ = publisher.tx.send(frame(0, Event::KeyframeRequested { track: track_id }));
+        if Self::sync_viewers(publisher) {
+            let p = publisher.p.clone();
+            Self::broadcast_locked(&inner, Event::VoiceUpserted { participant: p });
+        }
         Ok(Event::Ok)
     }
 

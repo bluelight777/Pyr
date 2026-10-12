@@ -175,6 +175,7 @@ async fn uni_loop(shared: Arc<Shared>, conn: quinn::Connection, e2ee: Arc<Mutex<
 async fn event_loop(shared: Arc<Shared>, mut rx: mpsc::UnboundedReceiver<CallEvent>) {
     while let Some(ev) = rx.recv().await {
         let mut end = false;
+        let mut lost = false;
         {
             let mut guard = shared.call.lock();
             let Some(call) = guard.as_mut() else { break };
@@ -198,8 +199,12 @@ async fn event_loop(shared: Arc<Shared>, mut rx: mpsc::UnboundedReceiver<CallEve
                         debug!(from, epoch, "couldn't use an E2EE key");
                     }
                 }
-                CallEvent::Disconnected => end = true,
+                CallEvent::Disconnected => lost = true,
             }
+        }
+        if lost {
+            shared.call_lost();
+            break;
         }
         if end {
             shared.end_call_local("You left the voice channel.");
@@ -463,7 +468,7 @@ impl Call {
             return Some(sa);
         }
         self.stream_audio = Some(sa);
-        let info = TrackInfo { id: track::SCREEN_AUDIO, kind: TrackKind::ScreenAudio, width: 0, height: 0, fps: 0 };
+        let info = TrackInfo { id: track::SCREEN_AUDIO, kind: TrackKind::ScreenAudio, width: 0, height: 0, fps: 0, viewers: Vec::new() };
         self.handle.notify(Request::Publish { track: info });
         None
     }
@@ -523,6 +528,7 @@ impl Call {
             width: max_w,
             height: max_h,
             fps,
+            viewers: Vec::new(),
         };
         self.handle.notify(Request::Publish { track: info });
         let out = VideoOut { publisher, net_task };

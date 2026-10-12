@@ -150,6 +150,17 @@ fn run() -> Result<()> {
         }
         println!("  Press Ctrl+C to stop.");
 
+        // Ctrl+C, or systemd stopping/restarting the service (an update): close everyone's
+        // connection properly so their apps reconnect right away instead of timing out.
+        #[cfg(unix)]
+        {
+            let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+            tokio::select! {
+                r = tokio::signal::ctrl_c() => r?,
+                _ = term.recv() => {}
+            }
+        }
+        #[cfg(not(unix))]
         tokio::signal::ctrl_c().await?;
         println!("Shutting down...");
         server.shutdown().await;

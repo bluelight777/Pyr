@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use ingle_proto::control::{
+use ingle_proto::control::{CustomEmoji, Relation, RelationKind, 
     Attachment, Channel, ChannelId, ChannelKind, Dm, FileKind, Member, Message, MessageId, Reaction, Role, RoleDef, RoleId, UserId,
 };
 use ingle_proto::now_ms;
@@ -121,6 +121,24 @@ CREATE TABLE IF NOT EXISTS dms (
     UNIQUE (a, b)
 );
 CREATE INDEX IF NOT EXISTS dms_by_b ON dms(b);
+-- Friends and blocks, directed: kind 0 = a asked b to be friends, 1 = friends (a row each
+-- way), 2 = a blocked b.
+CREATE TABLE IF NOT EXISTS relations (
+    a TEXT NOT NULL,
+    b TEXT NOT NULL,
+    kind INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (a, b, kind)
+);
+CREATE INDEX IF NOT EXISTS relations_by_b ON relations(b);
+-- The server's own emoji (the picture is a kind-1 file with the same id).
+CREATE TABLE IF NOT EXISTS emojis (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    animated INTEGER NOT NULL DEFAULT 0,
+    by TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
 "#;
 
 /// `channels.kind` of a direct message conversation (never listed as a channel).
@@ -428,7 +446,8 @@ impl Db {
         let sql = "SELECT id FROM files WHERE created_at < ?1 AND (
                        (kind = 0 AND message_id IS NULL)
                     OR (kind = 1 AND id NOT IN (SELECT avatar FROM users WHERE avatar IS NOT NULL)
-                                 AND id NOT IN (SELECT value FROM meta WHERE key = 'icon')))";
+                                 AND id NOT IN (SELECT value FROM meta WHERE key = 'icon')
+                                 AND id NOT IN (SELECT id FROM emojis)))";
         let ids: Vec<String> = c
             .prepare(sql)
             .and_then(|mut st| st.query_map([cutoff], |r| r.get(0)).map(|rows| rows.flatten().collect()))
@@ -440,6 +459,96 @@ impl Db {
             scrub(&c);
         }
         ids
+    }
+
+    fn rel_kinds(c: &Connection, a: &str, b: &str) -> Vec<i64> {
+        let Ok(mut st) = c.prepare("SELECT kind FROM relations WHERE a = ?1 AND b = ?2") else { return Vec::new() };
+        st.query_map(params![a, b], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
+    }
+
+    /// Where `me` stands with `other`, as `me` sees it.
+    pub fn relation(&self, me: &str, other: &str) -> Option<RelationKind> {
+        let c = self.conn.lock();
+        let mine = Self::rel_kinds(&c, me, other);
+        if mine.contains(&2) {
+            return Some(RelationKind::Blocked);
+        }
+        if mine.contains(&1) {
+            return Some(RelationKind::Friend);
+        }
+        if mine.contains(&0) {
+            return Some(RelationKind::Outgoing);
+        }
+        if Self::rel_kinds(&c, other, me).contains(&0) {
+            return Some(RelationKind::Incoming);
+        }
+        None
+    }
+
+    pub fn relations_of(&self, uid: &str) -> Vec<Relation> {
+        let others: Vec<String> = {
+            let c = self.conn.lock();
+            let Ok(mut st) = c.prepare("SELECT b FROM relations WHERE a = ?1 UNION SELECT a FROM relations WHERE b = ?1 AND kind = 0")
+            else {
+                return Vec::new();
+            };
+            st.query_map([uid], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
+        };
+        others.into_iter().filter_map(|o| self.relation(uid, &o).map(|kind| Relation { user_id: o, kind })).collect()
+    }
+
+    /// Either has blocked the other.
+    pub fn blocked_between(&self, x: &str, y: &str) -> bool {
+        let c = self.conn.lock();
+        Self::rel_kinds(&c, x, y).contains(&2) || Self::rel_kinds(&c, y, x).contains(&2)
+    }
+
+    pub fn set_relation(&self, a: &str, b: &str, kind: i64) -> Result<()> {
+        self.conn.lock().execute(
+            "INSERT OR IGNORE INTO relations (a, b, kind, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![a, b, kind, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// Removes rows of these kinds between the two, both ways.
+    pub fn clear_relation(&self, x: &str, y: &str, kinds: &[i64]) -> Result<()> {
+        let c = self.conn.lock();
+        for k in kinds {
+            c.execute("DELETE FROM relations WHERE ((a = ?1 AND b = ?2) OR (a = ?2 AND b = ?1)) AND kind = ?3", params![x, y, k])?;
+        }
+        Ok(())
+    }
+
+    pub fn unblock(&self, me: &str, other: &str) -> Result<()> {
+        self.conn.lock().execute("DELETE FROM relations WHERE a = ?1 AND b = ?2 AND kind = 2", params![me, other])?;
+        Ok(())
+    }
+
+    pub fn emojis(&self) -> Vec<CustomEmoji> {
+        let c = self.conn.lock();
+        let Ok(mut st) = c.prepare("SELECT id, name, animated, by FROM emojis ORDER BY created_at, rowid") else { return Vec::new() };
+        st.query_map([], |r| Ok(CustomEmoji { id: r.get(0)?, name: r.get(1)?, animated: r.get::<_, i64>(2)? != 0, by: r.get(3)? }))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
+    /// Adds an emoji; false if the name or picture is already used.
+    pub fn add_emoji(&self, e: &CustomEmoji) -> Result<bool> {
+        let n = self.conn.lock().execute(
+            "INSERT OR IGNORE INTO emojis (id, name, animated, by, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![e.id, e.name, e.animated as i64, e.by, now_ms()],
+        )?;
+        Ok(n > 0)
+    }
+
+    pub fn remove_emoji(&self, id: &str) -> Result<bool> {
+        Ok(self.conn.lock().execute("DELETE FROM emojis WHERE id = ?1", [id])? > 0)
+    }
+
+    /// False if another emoji has that name (or there's no such emoji).
+    pub fn rename_emoji(&self, id: &str, name: &str) -> Result<bool> {
+        Ok(self.conn.lock().execute("UPDATE OR IGNORE emojis SET name = ?2 WHERE id = ?1", params![id, name])? > 0)
     }
 
     pub fn set_avatar(&self, uid: &str, file_id: Option<&str>) -> Result<Option<String>> {
@@ -455,7 +564,8 @@ impl Db {
         let c = self.conn.lock();
         let used: i64 = c
             .query_row(
-                "SELECT (SELECT COUNT(*) FROM users WHERE avatar = ?1) + (SELECT COUNT(*) FROM meta WHERE key = 'icon' AND value = ?1)",
+                "SELECT (SELECT COUNT(*) FROM users WHERE avatar = ?1) + (SELECT COUNT(*) FROM meta WHERE key = 'icon' AND value = ?1) \
+                 + (SELECT COUNT(*) FROM emojis WHERE id = ?1)",
                 [id],
                 |r| r.get(0),
             )

@@ -98,6 +98,22 @@ fn is_url_start(s: &str) -> bool {
 
 /// Build a styled layout for one paragraph. Returns the job and link spans (in chars).
 pub fn layout(text: &str, size: f32, color: Color32, names: &[String], wrap_width: f32) -> (LayoutJob, Vec<LinkSpan>) {
+    let (job, links, _) = layout_emoji(text, size, size * crate::emoji::SCALE, color, names, wrap_width);
+    (job, links)
+}
+
+/// Like `layout`, with room left for colour emoji (`emoji_size` across): also returns where
+/// each one starts (char index in the job) and what it is.
+pub fn layout_emoji(
+    text: &str,
+    size: f32,
+    emoji_size: f32,
+    color: Color32,
+    names: &[String],
+    wrap_width: f32,
+) -> (LayoutJob, Vec<LinkSpan>, Vec<(usize, crate::emoji::EmojiRef)>) {
+    let mut emojis = Vec::new();
+    let (lead_fmt, rest_fmt) = crate::emoji::formats(emoji_size);
     let mut job = LayoutJob::default();
     job.wrap.max_width = wrap_width;
     let mut links = Vec::new();
@@ -230,16 +246,32 @@ pub fn layout(text: &str, size: f32, color: Color32, names: &[String], wrap_widt
                 continue;
             }
         }
+        if let Some((n, e)) = crate::emoji::match_at(&chars, i) {
+            flush(&mut job, &mut buf, &mut chars_out, fmt(style, false, false, false));
+            emojis.push((chars_out, e));
+            let mut lead = chars[i].to_string();
+            flush(&mut job, &mut lead, &mut chars_out, lead_fmt.clone());
+            if n > 1 {
+                let mut rest: String = chars[i + 1..i + n].iter().collect();
+                flush(&mut job, &mut rest, &mut chars_out, rest_fmt.clone());
+            }
+            i += n;
+            continue;
+        }
         buf.push(chars[i]);
         i += 1;
     }
     flush(&mut job, &mut buf, &mut chars_out, fmt(style, false, false, false));
-    (job, links)
+    (job, links, emojis)
 }
 
+/// Turns a server emoji's file id into a texture (or none yet).
+pub type CustomEmoji<'a> = &'a mut dyn FnMut(&str) -> Option<egui::TextureId>;
+
 /// Draw a message body; `names` (lowercase) are what @mentions highlight.
-pub fn show(ui: &mut egui::Ui, text: &str, color: Color32, names: &[String]) {
+pub fn show(ui: &mut egui::Ui, text: &str, color: Color32, names: &[String], custom: CustomEmoji) {
     let width = ui.available_width();
+    let emoji_size = if crate::emoji::is_jumbo(text) { crate::emoji::JUMBO_SIZE } else { 14.5 * crate::emoji::SCALE };
     for block in blocks(text) {
         match block {
             Block::Code(code) => {
@@ -262,18 +294,31 @@ pub fn show(ui: &mut egui::Ui, text: &str, color: Color32, names: &[String]) {
                 ui.horizontal(|ui| {
                     let (r, _) = ui.allocate_exact_size(egui::vec2(4.0, 18.0), egui::Sense::hover());
                     ui.painter().rect_filled(r, 2, theme::DIM);
-                    paragraph(ui, &q, theme::MUTED, names, width - 16.0);
+                    paragraph(ui, &q, theme::MUTED, names, width - 16.0, emoji_size, custom);
                 });
             }
-            Block::Text(t) => paragraph(ui, &t, color, names, width),
+            Block::Text(t) => paragraph(ui, &t, color, names, width, emoji_size, custom),
         }
     }
 }
 
-fn paragraph(ui: &mut egui::Ui, text: &str, color: Color32, names: &[String], width: f32) {
-    let (job, links) = layout(text, 14.5, color, names, width);
+fn paragraph(ui: &mut egui::Ui, text: &str, color: Color32, names: &[String], width: f32, emoji_size: f32, custom: CustomEmoji) {
+    let (job, links, emojis) = layout_emoji(text, 14.5, emoji_size, color, names, width);
     let galley = ui.fonts_mut(|f| f.layout_job(job));
     let resp = ui.add(egui::Label::new(galley.clone()).selectable(true).sense(egui::Sense::click()));
+    if !emojis.is_empty() {
+        let starts: Vec<usize> = emojis.iter().map(|e| e.0).collect();
+        for (r, (_, e)) in crate::emoji::placed(&galley, &starts).into_iter().zip(&emojis) {
+            if r.is_positive() && ui.is_rect_visible(r.translate(resp.rect.min.to_vec2())) {
+                let rect = r.translate(resp.rect.min.to_vec2());
+                crate::emoji::paint(ui.painter(), rect, e, custom);
+                if let crate::emoji::EmojiRef::Custom { name, .. } = e {
+                    let id = ui.id().with(("emoji", r.min.x as i32, r.min.y as i32));
+                    ui.interact(rect, id, egui::Sense::hover()).on_hover_text(format!(":{name}:"));
+                }
+            }
+        }
+    }
     if links.is_empty() {
         return;
     }

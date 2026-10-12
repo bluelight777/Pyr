@@ -321,9 +321,38 @@ pub fn fullscreen(p: &Painter, r: Rect, c: Color32, exit: bool) {
         (r.right_bottom(), -1.0, -1.0),
     ] {
         // The bend sits on the corner (enter) or a bracket's length in from it (exit).
-        let k = if exit { corner + eframe::egui::vec2(dx * l, dy * l) } else { corner };
+        let k = if exit { corner + vec2(dx * l, dy * l) } else { corner };
         let (sx, sy) = if exit { (-dx, -dy) } else { (dx, dy) };
-        p.line_segment([k, k + eframe::egui::vec2(sx * l, 0.0)], s);
-        p.line_segment([k, k + eframe::egui::vec2(0.0, sy * l)], s);
+        p.line_segment([k, k + vec2(sx * l, 0.0)], s);
+        p.line_segment([k, k + vec2(0.0, sy * l)], s);
     }
+}
+
+pub fn clock(p: &Painter, r: Rect, c: Color32) {
+    let s = Stroke::new(1.8f32, c);
+    let rad = r.width().min(r.height()) / 2.0;
+    p.circle_stroke(r.center(), rad - 1.0, s);
+    p.line_segment([r.center(), r.center() + vec2(0.0, -rad * 0.55)], s);
+    p.line_segment([r.center(), r.center() + vec2(rad * 0.45, rad * 0.2)], s);
+}
+
+pub fn gif(p: &Painter, r: Rect, c: Color32) {
+    p.rect_stroke(r.shrink(1.0), 3.0, Stroke::new(1.6f32, c), StrokeKind::Inside);
+    p.text(r.center(), eframe::egui::Align2::CENTER_CENTER, "GIF", crate::theme::bold_font(r.height() * 0.42), c);
+}
+
+pub fn eye(p: &Painter, r: Rect, c: Color32) {
+    let s = Stroke::new(1.6f32, c);
+    let (cx, cy, w, h) = (r.center().x, r.center().y, r.width() / 2.0, r.height() / 2.0);
+    let top: Vec<Pos2> = (0..=12).map(|i| {
+        let t = i as f32 / 12.0 * PI;
+        pos2(cx - w * t.cos(), cy - h * 0.85 * t.sin())
+    }).collect();
+    let bottom: Vec<Pos2> = (0..=12).map(|i| {
+        let t = i as f32 / 12.0 * PI;
+        pos2(cx - w * t.cos(), cy + h * 0.85 * t.sin())
+    }).collect();
+    p.add(Shape::line(top, s));
+    p.add(Shape::line(bottom, s));
+    p.circle_filled(r.center(), h * 0.45, c);
 }

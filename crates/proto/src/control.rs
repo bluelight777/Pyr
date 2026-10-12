@@ -95,9 +95,11 @@ pub mod perm {
     pub const MANAGE_SERVER: u64 = 1 << 5;
     /// Ping everyone with @everyone or @here.
     pub const MENTION_EVERYONE: u64 = 1 << 6;
-    pub const ALL: u64 = MANAGE_CHANNELS | KICK | BAN | MANAGE_MESSAGES | MANAGE_ROLES | MANAGE_SERVER | MENTION_EVERYONE;
+    /// Add and remove the server's own emoji.
+    pub const MANAGE_EMOJI: u64 = 1 << 7;
+    pub const ALL: u64 = MANAGE_CHANNELS | KICK | BAN | MANAGE_MESSAGES | MANAGE_ROLES | MANAGE_SERVER | MENTION_EVERYONE | MANAGE_EMOJI;
     /// (bit, short name, what it means) for settings screens.
-    pub const LIST: [(u64, &str, &str); 7] = [
+    pub const LIST: [(u64, &str, &str); 8] = [
         (MANAGE_CHANNELS, "Manage channels", "Create, rename and delete channels."),
         (MANAGE_MESSAGES, "Manage messages", "Delete other people's messages."),
         (KICK, "Kick members", "Remove people (they can come back with an invite)."),
@@ -105,6 +107,7 @@ pub mod perm {
         (MANAGE_ROLES, "Manage roles", "Create and edit roles, and give people roles below their own highest role."),
         (MANAGE_SERVER, "Manage server", "Rename the server and change its description."),
         (MENTION_EVERYONE, "Mention @everyone", "Ping the whole server with @everyone or @here."),
+        (MANAGE_EMOJI, "Manage emoji", "Upload and remove the server's own emoji."),
     ];
 }
 
@@ -148,6 +151,29 @@ pub const AVATARS_FEATURE: &str = "avatars";
 pub const DMS_FEATURE: &str = "dms";
 /// A picture for the server (`ServerInfo::icon`, set with `SetServerIcon`).
 pub const ICONS_FEATURE: &str = "server_icon";
+/// The server's own emoji (`ServerInfo::emojis`, `AddEmoji`, `RemoveEmoji`).
+pub const EMOJI_FEATURE: &str = "custom_emoji";
+/// Friends and blocking ([`Relation`]).
+pub const FRIENDS_FEATURE: &str = "friends";
+
+/// Where you stand with someone, as you see it.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum RelationKind {
+    Friend,
+    /// They asked to be your friend.
+    Incoming,
+    /// You asked them.
+    Outgoing,
+    /// You blocked them (they aren't told).
+    Blocked,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Relation {
+    pub user_id: UserId,
+    pub kind: RelationKind,
+}
 
 /// A private conversation between me and one other member ([`DMS_FEATURE`]). It works like a
 /// text channel (`SendMessage`, `FetchHistory`, `Typing`... with its `id`), but only the two
@@ -283,6 +309,30 @@ pub struct ServerInfo {
     /// The server's icon ([`ICONS_FEATURE`]): a file id, fetched like a profile picture.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// The server's own emoji ([`EMOJI_FEATURE`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub emojis: Vec<CustomEmoji>,
+}
+
+/// One of a server's own emoji. Written in messages as `<:name:id>` (`<a:name:id>` when
+/// animated); the picture is a file uploaded as [`FileKind::Avatar`], fetched by its id.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct CustomEmoji {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub animated: bool,
+    /// Who added it.
+    #[serde(default)]
+    pub by: UserId,
+}
+
+/// How many emoji a server can have.
+pub const MAX_CUSTOM_EMOJI: usize = 250;
+
+/// Emoji names: 2–32 letters, digits and underscores.
+pub fn valid_emoji_name(name: &str) -> bool {
+    (2..=32).contains(&name.len()) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -329,6 +379,9 @@ pub struct TrackInfo {
     pub height: u32,
     #[serde(default)]
     pub fps: u32,
+    /// Who's watching (screen shares; set by the server).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub viewers: Vec<SessionId>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -520,6 +573,41 @@ pub enum Request {
         #[serde(default)]
         file_id: Option<String>,
     },
+    /// Add one of the server's own emoji ([`EMOJI_FEATURE`]; needs Manage emoji): a picture
+    /// uploaded as [`FileKind::Avatar`].
+    AddEmoji {
+        name: String,
+        file_id: String,
+        #[serde(default)]
+        animated: bool,
+    },
+    /// Remove one (needs Manage emoji), or rename it when `name` is given.
+    RemoveEmoji {
+        id: String,
+    },
+    RenameEmoji {
+        id: String,
+        name: String,
+    },
+    /// Ask someone to be friends ([`FRIENDS_FEATURE`]); accepts if they already asked you.
+    FriendRequest {
+        user_id: UserId,
+    },
+    FriendAccept {
+        user_id: UserId,
+    },
+    /// Decline, cancel or unfriend.
+    FriendRemove {
+        user_id: UserId,
+    },
+    /// Block someone: no direct messages or friend requests between you, and any friendship
+    /// ends. They aren't told.
+    Block {
+        user_id: UserId,
+    },
+    Unblock {
+        user_id: UserId,
+    },
     /// Set or remove the server's icon ([`ICONS_FEATURE`]; needs Manage server): a file
     /// uploaded as [`FileKind::Avatar`].
     SetServerIcon {
@@ -582,6 +670,9 @@ pub enum Event {
         /// My direct message conversations ([`DMS_FEATURE`]).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         dms: Vec<Dm>,
+        /// My friends, friend requests and blocks ([`FRIENDS_FEATURE`]).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        relations: Vec<Relation>,
     },
     Ok,
     Error {
@@ -633,6 +724,12 @@ pub enum Event {
     },
     ServerUpdated {
         server: ServerInfo,
+    },
+    /// Where I stand with someone changed (none: nothing between us now).
+    RelationUpdated {
+        user_id: UserId,
+        #[serde(default)]
+        kind: Option<RelationKind>,
     },
     VoiceUpserted {
         participant: VoiceParticipant,

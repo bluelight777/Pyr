@@ -249,6 +249,12 @@ async fn chat_voice_video_end_to_end() {
     assert!(b.video_frame(scr).is_none(), "screen share is opt-in");
     b.watch(a_session, track::SCREEN, true);
     wait_for("bob decodes the screen share", 15, || b.video_frame(scr).is_some()).await;
+    // Everyone sees who's watching (for the "tuned in" sound and the viewer count).
+    let b_session = b.state().call.as_ref().unwrap().session;
+    wait_for("alice sees bob watching", 5, || {
+        a.state().servers[0].voice.get(&a_session).map(|p| p.tracks.iter().any(|t| t.id == track::SCREEN && t.viewers == vec![b_session])).unwrap_or(false)
+    })
+    .await;
     let g0 = b.video_frame(scr).unwrap().generation;
     tokio::time::sleep(Duration::from_millis(1500)).await;
     let s = b.video_frame(scr).unwrap();

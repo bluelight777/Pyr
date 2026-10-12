@@ -25,6 +25,8 @@ struct Tile {
     has_sound: bool,
     stream_volume: f32,
     face: Option<egui::TextureId>,
+    /// Who's watching this screen share (names).
+    viewers: Vec<String>,
 }
 
 fn grid_layout(n: usize, area: Rect, gap: f32) -> Vec<Rect> {
@@ -169,6 +171,7 @@ impl IngleApp {
                     has_sound: false,
                     stream_volume: 1.0,
                     face,
+                    viewers: Vec::new(),
                 });
                 if p.tracks.iter().any(|t| t.id == track::SCREEN) {
                     let key = VideoKey { session: p.session, track: track::SCREEN };
@@ -187,6 +190,12 @@ impl IngleApp {
                         has_sound: p.tracks.iter().any(|t| t.id == track::SCREEN_AUDIO),
                         stream_volume: st.stream_volumes.get(&p.user_id).copied().unwrap_or(1.0),
                         face: None,
+                        viewers: p
+                            .tracks
+                            .iter()
+                            .find(|t| t.id == track::SCREEN)
+                            .map(|t| t.viewers.iter().filter_map(|v| s.voice.get(v)).map(|v| s.member_name(&v.user_id)).collect())
+                            .unwrap_or_default(),
                     });
                 }
             }
@@ -288,10 +297,24 @@ impl IngleApp {
             icons::mic(&p, Rect::from_min_size(lr.min + vec2(6.0, 4.0), vec2(16.0, 16.0)), theme::LIVE, true);
         }
         p.galley(lr.min + vec2(8.0 + icon_w, 12.0 - galley.size().y / 2.0), galley, theme::TEXT);
+        let mut right = rect.right() - 10.0;
         if t.screen && t.watching && !t.is_me {
-            let b = Rect::from_min_size(rect.right_top() + vec2(-58.0, 10.0), vec2(48.0, 22.0));
+            let b = Rect::from_min_size(pos2(right - 48.0, rect.top() + 10.0), vec2(48.0, 22.0));
             p.rect_filled(b, CornerRadius::same(5), theme::LIVE);
             p.text(b.center(), egui::Align2::CENTER_CENTER, "LIVE", theme::bold_font(12.0), Color32::WHITE);
+            right = b.left() - 6.0;
+        }
+        if t.screen && !t.viewers.is_empty() {
+            // How many are watching (who, on hover), like Discord.
+            let n = t.viewers.len().to_string();
+            let g = ui.painter().layout_no_wrap(n, theme::bold_font(12.0), Color32::WHITE);
+            let b = Rect::from_min_size(pos2(right - (30.0 + g.size().x), rect.top() + 10.0), vec2(30.0 + g.size().x, 22.0));
+            p.rect_filled(b, CornerRadius::same(5), Color32::from_black_alpha(170));
+            icons::eye(&p, Rect::from_min_size(b.min + vec2(6.0, 4.0), vec2(16.0, 14.0)), Color32::WHITE);
+            p.galley(pos2(b.left() + 25.0, b.center().y - g.size().y / 2.0), g, Color32::WHITE);
+            let id = ui.id().with(("viewers", t.key.session));
+            let names = t.viewers.join("\n");
+            ui.interact(b, id, egui::Sense::hover()).on_hover_text(format!("Watching:\n{names}"));
         }
         if t.screen && t.has_sound && (t.watching || t.is_me) {
             // Little speaker next to the name: this stream has sound (muted look at 0%).

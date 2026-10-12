@@ -32,6 +32,14 @@ pub enum Act {
     MuteChat { key: String, channel: Option<ChannelId>, muted: bool },
     /// Set (or remove) a server's icon from part of an image: (bytes, cx, cy, frac).
     SetServerIcon { key: String, bytes: Option<(Arc<Vec<u8>>, f32, f32, f32)> },
+    AddEmoji { key: String, name: String, bytes: Vec<u8> },
+    AddFriend(String),
+    AcceptFriend(String),
+    RemoveFriend(String),
+    Block(String),
+    Unblock(String),
+    RemoveEmoji { key: String, id: String },
+    RenameEmoji { key: String, id: String, name: String },
     /// Save part of an image as my profile picture (see `make_avatar_crop`).
     SetAvatarCropped { bytes: Arc<Vec<u8>>, cx: f32, cy: f32, frac: f32 },
     /// Play the message sound at this volume (settings).
@@ -137,13 +145,26 @@ pub struct UiState {
     /// The direct message conversation open on the home screen: (server, conversation).
     pub dm: Option<(String, ChannelId)>,
     /// Friends list shows everyone, not just who's online.
-    pub friends_all: bool,
+
     /// The (server, channel) last reported to the engine as being looked at.
     pub active_view: Option<(String, ChannelId)>,
     /// Highlighted row in the @mention list.
     pub mention_sel: usize,
     /// A new profile picture being framed (zoom and drag) before it's saved.
     pub avatar_crop: Option<crate::avatar_edit::AvatarCrop>,
+    /// The emoji picker's search and scroll.
+    pub picker: crate::emoji_picker::PickerState,
+    /// The GIF search panel.
+    pub giphy: crate::giphy::GiphyUi,
+    /// GIFs from GIPHY being shown.
+    pub gifs: crate::giphy::Downloads,
+    /// Folded runs of blocked messages that were opened (by their first message).
+    pub shown_blocked: std::collections::HashSet<MessageId>,
+    /// Friends page tab: 0 online, 1 all, 2 pending, 3 blocked, 4 add friend.
+    pub friends_tab: u8,
+    pub friend_search: String,
+    /// Emoji names being edited in server settings, by emoji id.
+    pub emoji_names: HashMap<String, String>,
 }
 
 pub struct IngleApp {
@@ -304,6 +325,17 @@ impl IngleApp {
                 Ok(png) => e.set_avatar(Some(png)),
                 Err(err) => self.toast(err, true),
             },
+            Act::AddEmoji { key, name, bytes } => match crate::images::make_emoji(&bytes) {
+                Ok((b, animated)) => e.add_emoji(&key, &name, b, animated),
+                Err(err) => self.toast(err, true),
+            },
+            Act::RemoveEmoji { key, id } => e.remove_emoji(&key, &id),
+            Act::AddFriend(uid) => e.add_friend(&uid),
+            Act::AcceptFriend(uid) => e.accept_friend(&uid),
+            Act::RemoveFriend(uid) => e.remove_friend(&uid),
+            Act::Block(uid) => e.block(&uid),
+            Act::Unblock(uid) => e.unblock(&uid),
+            Act::RenameEmoji { key, id, name } => e.rename_emoji(&key, &id, &name),
             Act::SetServerIcon { key, bytes } => match bytes {
                 None => e.set_server_icon(&key, None),
                 Some((b, cx, cy, frac)) => match crate::images::make_avatar_crop(&b, cx, cy, frac) {
@@ -316,9 +348,11 @@ impl IngleApp {
                 Err(err) => self.toast(err, true),
             },
             Act::SaveImage { name, bytes } => {
-                if let Err(err) = crate::images::save_as(&name, &bytes) {
-                    self.toast(format!("Couldn't save the image: {err}"), true);
-                }
+                let shared = self.engine.shared.clone();
+                crate::images::save_as_async(name, bytes, move |err| {
+                    shared.state.write().toast(format!("Couldn't save the image: {err}"), true);
+                    (shared.repaint)();
+                });
             }
             Act::Toast(text, error) => self.toast(text, error),
         }
@@ -338,7 +372,20 @@ impl IngleApp {
         self.images.get(ctx, &format!("av:{id}"), bytes, 256).frame(0.0).map(|f| f.0)
     }
 
-    /// My own profile picture (from this PC), as a texture.
+    /// A server emoji's picture (animated ones play), once downloaded.
+    pub fn custom_emoji_tex(&mut self, ctx: &egui::Context, key: &str, id: &str) -> Option<egui::TextureId> {
+        let bytes = match self.engine.file(key, id) {
+            ingle_engine::files::FileState::Ready(b) => Some(b),
+            _ => None,
+        };
+        let t = ctx.input(|i| i.time);
+        let (tex, _, next) = self.images.get(ctx, &format!("emoji:{id}"), bytes, 128).frame(t)?;
+        if let Some(n) = next {
+            ctx.request_repaint_after(n);
+        }
+        Some(tex)
+    }
+
     /// A server's icon, once downloaded.
     pub fn server_icon(&mut self, ctx: &egui::Context, s: &ServerView) -> Option<egui::TextureId> {
         let id = s.info.icon.clone()?;
@@ -419,6 +466,34 @@ impl eframe::App for IngleApp {
             }
         }
         self.update_step(&mut acts);
+        // Pictures chosen in a file dialog (which runs on its own thread).
+        for (what, files) in crate::images::take_picked() {
+            use crate::images::PickFor;
+            match what {
+                PickFor::Avatar | PickFor::ServerIcon(_) => {
+                    let target = match what {
+                        PickFor::ServerIcon(k) => crate::avatar_edit::CropTarget::Server(k),
+                        _ => crate::avatar_edit::CropTarget::Me,
+                    };
+                    if let Some((_, bytes)) = files.into_iter().next() {
+                        match crate::avatar_edit::AvatarCrop::new(bytes, target) {
+                            Ok(c) => self.ui.avatar_crop = Some(c),
+                            Err(e) => acts.push(Act::Toast(e, true)),
+                        }
+                    }
+                }
+                PickFor::Emoji(key) => {
+                    for (name, bytes) in files {
+                        acts.push(Act::AddEmoji { key: key.clone(), name: crate::images::emoji_name_from(&name), bytes });
+                    }
+                }
+                PickFor::Attach(key, ch) => {
+                    for (name, bytes) in files {
+                        crate::chat::add_attachment(&mut self.ui.attach, &(key.clone(), ch), name, bytes, &mut acts);
+                    }
+                }
+            }
+        }
         // A direct message conversation was opened (from the member list or friends): show it.
         if let Some((key, id)) = engine.take_opened_dm() {
             self.ui.home = true;
@@ -814,7 +889,8 @@ impl IngleApp {
                 let pill = Rect::from_center_size(pos2(ui.max_rect().left() + 2.0, r.center().y), vec2(4.0, if home { 40.0 } else { 20.0 }));
                 ui.painter().rect_filled(pill, CornerRadius::same(2), theme::TEXT);
             }
-            let dm_count: u32 = st.servers.iter().map(|s| s.dms.iter().filter_map(|d| s.mentions.get(&d.id)).sum::<u32>()).sum();
+            let dm_count: u32 = st.servers.iter().map(|s| s.dms.iter().filter_map(|d| s.mentions.get(&d.id)).sum::<u32>()).sum::<u32>()
+                + st.relations().iter().filter(|r| r.1 == ingle_proto::control::RelationKind::Incoming).count() as u32;
             if dm_count > 0 {
                 let c = r.right_bottom() - vec2(6.0, 6.0);
                 ui.painter().circle_filled(c, 9.0, theme::RAIL);
@@ -941,6 +1017,12 @@ impl IngleApp {
                 .show_separator_line(false)
                 .frame(egui::Frame::new().fill(theme::SIDE_DARK).inner_margin(egui::Margin::symmetric(10, 8)))
                 .show_inside(ui, |ui| self.voice_panel(ui, st, call, acts));
+        } else if st.voice_rejoin.is_some() {
+            egui::TopBottomPanel::bottom("voice-panel")
+                .exact_height(56.0)
+                .show_separator_line(false)
+                .frame(egui::Frame::new().fill(theme::SIDE_DARK).inner_margin(egui::Margin::symmetric(10, 8)))
+                .show_inside(ui, |ui| self.rejoin_panel(ui, st, acts));
         }
         // Header
         egui::TopBottomPanel::top("server-header")
@@ -1135,6 +1217,27 @@ impl IngleApp {
         });
     }
 
+    /// Shown while getting back into a call after the server dropped (an update, say).
+    pub(crate) fn rejoin_panel(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
+        let Some(r) = st.voice_rejoin.as_ref() else { return };
+        let channel_name = st.server(&r.server_key).and_then(|s| s.channel(r.channel_id)).map(|c| c.name.clone()).unwrap_or_default();
+        ui.horizontal(|ui| {
+            let (rect, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
+            icons::signal(ui.painter(), rect, theme::EMBER2);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.label(RichText::new("Reconnecting…").font(theme::bold_font(13.5)).color(theme::EMBER2));
+                ui.add(egui::Label::new(RichText::new(format!("{channel_name} · the server is restarting")).size(12.0).color(theme::MUTED)).truncate());
+            });
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if icon_button(ui, 32.0, "Disconnect", false, |p, r, _| icons::hangup(p, r, theme::TEXT)).clicked() {
+                    acts.push(Act::Leave);
+                }
+            });
+        });
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
+    }
+
     pub(crate) fn voice_panel(&mut self, ui: &mut egui::Ui, st: &AppState, call: &ingle_engine::state::CallView, acts: &mut Vec<Act>) {
         let server = st.server(&call.server_key);
         let channel_name = server.and_then(|s| s.channel(call.channel_id)).map(|c| c.name.clone()).unwrap_or_default();
@@ -1303,6 +1406,7 @@ impl IngleApp {
                             acts.push(Act::OpenDm { key: key.clone(), uid: uid.clone() });
                             ui.close();
                         }
+                        person_menu(ui, st, &uid, acts);
                         if ui.button("Copy safety code").clicked() {
                             acts.push(Act::Copy(ingle_proto::crypto::safety_code(&uid)));
                             ui.close();
@@ -1442,5 +1546,35 @@ impl IngleApp {
                 }
             });
         let _ = self.started;
+    }
+}
+
+/// Friend and block choices for someone (right-click menus), like Discord's.
+pub(crate) fn person_menu(ui: &mut egui::Ui, st: &AppState, uid: &str, acts: &mut Vec<Act>) {
+    use ingle_proto::control::RelationKind;
+    if uid == st.my_uid {
+        return;
+    }
+    let rel = st.relation(uid);
+    let mut item = |ui: &mut egui::Ui, label: &str, act: Act| {
+        if ui.button(label).clicked() {
+            acts.push(act);
+            ui.close();
+        }
+    };
+    match rel {
+        Some(RelationKind::Friend) => item(ui, "Remove Friend", Act::RemoveFriend(uid.into())),
+        Some(RelationKind::Incoming) => {
+            item(ui, "Accept Friend Request", Act::AcceptFriend(uid.into()));
+            item(ui, "Ignore Friend Request", Act::RemoveFriend(uid.into()));
+        }
+        Some(RelationKind::Outgoing) => item(ui, "Cancel Friend Request", Act::RemoveFriend(uid.into())),
+        Some(RelationKind::Blocked) => {}
+        None => item(ui, "Add Friend", Act::AddFriend(uid.into())),
+    }
+    if rel == Some(RelationKind::Blocked) {
+        item(ui, "Unblock", Act::Unblock(uid.into()));
+    } else {
+        item(ui, "Block", Act::Block(uid.into()));
     }
 }

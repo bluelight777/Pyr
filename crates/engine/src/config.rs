@@ -134,6 +134,12 @@ pub struct Settings {
     /// Notification sounds (messages, people joining voice, streams).
     pub sounds: bool,
     pub sound_volume: f32,
+    /// Emoji picked most recently, newest first (the picker's "Frequently used").
+    pub recent_emoji: Vec<String>,
+    /// Skin tone for emoji that have them: 0 = default yellow, 1–5 light to dark.
+    pub emoji_tone: u8,
+    /// A GIPHY API key of your own (otherwise the one built into Ingle, if any).
+    pub giphy_key: String,
 }
 
 impl Default for Settings {
@@ -160,6 +166,9 @@ impl Default for Settings {
             tray_note_seen: false,
             sounds: true,
             sound_volume: 0.7,
+            recent_emoji: Vec::new(),
+            emoji_tone: 0,
+            giphy_key: String::new(),
         }
     }
 }
@@ -178,6 +187,8 @@ pub struct Config {
     /// Muted (no message sound, no unread dot): whole servers, and channels per server.
     pub muted_servers: std::collections::HashSet<String>,
     pub muted_channels: HashMap<String, std::collections::HashSet<ChannelId>>,
+    /// People I've blocked (their messages are hidden; servers keep them from contacting me).
+    pub blocked: std::collections::HashSet<UserId>,
 }
 
 /// Where the config lives. `profile` lets several identities coexist on one PC (for testing).

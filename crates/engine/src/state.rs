@@ -91,6 +91,8 @@ pub struct ServerView {
     pub features: Vec<String>,
     /// My direct message conversations here, newest first.
     pub dms: Vec<Dm>,
+    /// Friends, friend requests and blocks recorded on this server.
+    pub relations: HashMap<UserId, RelationKind>,
 }
 
 impl ServerView {
@@ -114,6 +116,7 @@ impl ServerView {
             roles: Vec::new(),
             features: Vec::new(),
             dms: Vec::new(),
+            relations: HashMap::new(),
         }
     }
 
@@ -300,6 +303,19 @@ pub struct CallView {
 }
 
 #[derive(Clone, Debug)]
+pub struct VoiceRejoin {
+    pub server_key: String,
+    pub channel_id: ChannelId,
+    pub camera: bool,
+    /// The screen (or window) being shared, to share again.
+    pub screen: Option<String>,
+    pub since: Instant,
+}
+
+/// How long to keep trying to get back into a call after the server drops.
+pub const VOICE_REJOIN_FOR: std::time::Duration = std::time::Duration::from_secs(180);
+
+#[derive(Clone, Debug)]
 pub struct Toast {
     pub text: String,
     pub error: bool,
@@ -321,6 +337,9 @@ pub struct AppState {
     pub safety_code: String,
     pub servers: Vec<ServerView>,
     pub call: Option<CallView>,
+    /// The connection to the server dropped mid-call (an update restarting it, say): the call
+    /// is rejoined, camera and screen share included, as soon as the server is back.
+    pub voice_rejoin: Option<VoiceRejoin>,
     pub toasts: Vec<Toast>,
     pub devices: DeviceLists,
     pub settings: Settings,
@@ -332,6 +351,8 @@ pub struct AppState {
     /// Muted servers and (server, channel) pairs.
     pub muted_servers: HashSet<String>,
     pub muted_channels: HashSet<(String, ChannelId)>,
+    /// People I've blocked.
+    pub blocked: HashSet<UserId>,
 }
 
 impl AppState {
@@ -341,6 +362,29 @@ impl AppState {
     pub fn server_mut(&mut self, key: &str) -> Option<&mut ServerView> {
         self.servers.iter_mut().find(|s| s.key == key)
     }
+    /// Where I stand with someone, across all my servers (a block anywhere wins, then a
+    /// friendship, then requests).
+    pub fn relation(&self, uid: &str) -> Option<RelationKind> {
+        if self.blocked.contains(uid) {
+            return Some(RelationKind::Blocked);
+        }
+        let all: Vec<RelationKind> = self.servers.iter().filter_map(|s| s.relations.get(uid).copied()).collect();
+        [RelationKind::Blocked, RelationKind::Friend, RelationKind::Incoming, RelationKind::Outgoing].into_iter().find(|k| all.contains(k))
+    }
+
+    /// Everyone I have some relation with: (user id, relation).
+    pub fn relations(&self) -> Vec<(UserId, RelationKind)> {
+        let mut uids: Vec<UserId> = self.servers.iter().flat_map(|s| s.relations.keys().cloned()).chain(self.blocked.iter().cloned()).collect();
+        uids.sort();
+        uids.dedup();
+        uids.into_iter().filter_map(|u| self.relation(&u).map(|k| (u, k))).collect()
+    }
+
+    /// A name for someone from any server we share.
+    pub fn name_of(&self, uid: &str) -> String {
+        self.servers.iter().find(|s| s.members.contains_key(uid)).map(|s| s.member_name(uid)).unwrap_or_else(|| "Someone".into())
+    }
+
     pub fn is_muted(&self, key: &str, channel: ChannelId) -> bool {
         self.muted_servers.contains(key) || self.muted_channels.contains(&(key.to_string(), channel))
     }

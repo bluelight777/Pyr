@@ -135,7 +135,13 @@ async fn run(
                 set_status(&shared, &key, ConnStatus::Reconnecting { attempt, error: format!("{e:#}") });
             }
         }
-        let delay = Duration::from_millis((500u64 << attempt.min(6)).min(30_000));
+        // Quick retries first (a server restarting for an update is back in a few seconds),
+        // then slower ones.
+        let delay = match attempt {
+            0 => Duration::from_millis(500),
+            1..=10 => Duration::from_secs(1),
+            n => Duration::from_secs((2 * (n as u64 - 10)).min(30)),
+        };
         let wake = tokio::time::Instant::now() + delay;
         loop {
             tokio::select! {
@@ -168,6 +174,8 @@ async fn session(
     let net::LoggedIn { conn, mut send, mut recv, ready } = li;
     apply_ready(shared, key, ready);
     crate::sync_avatar(shared.clone(), key.to_string());
+    crate::resume_voice(shared.clone(), key.to_string());
+    crate::sync_blocks(shared, key);
     {
         // Membership is established; the invite is no longer needed.
         let mut cfg = shared.config.lock();
@@ -258,7 +266,7 @@ fn sort_channels(v: &mut [Channel]) {
 }
 
 fn apply_ready(shared: &Shared, key: &str, ready: Event) {
-    let Event::Ready { me, server, mut channels, members, voice, mut roles, features, dms } = ready else { return };
+    let Event::Ready { me, server, mut channels, members, voice, mut roles, features, dms, relations } = ready else { return };
     let last_read = shared.config.lock().last_read.get(key).cloned().unwrap_or_default();
     roles.sort_by_key(|r| (std::cmp::Reverse(r.position), r.id));
     sort_channels(&mut channels);
@@ -280,6 +288,7 @@ fn apply_ready(shared: &Shared, key: &str, ready: Event) {
     s.voice = voice.into_iter().map(|p| (p.session, p)).collect();
     s.roles = roles;
     s.features = features;
+    s.relations = relations.into_iter().map(|r| (r.user_id, r.kind)).collect();
     // Direct messages that came in while we were away show as unread.
     s.dms.clear();
     for dm in dms {
@@ -316,8 +325,34 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
         let server_muted = st.muted_servers.contains(key);
         let muted_channels: std::collections::HashSet<ChannelId> =
             st.muted_channels.iter().filter(|(k, _)| k == key).map(|(_, c)| *c).collect();
+        let blocked = st.blocked.clone();
         let Some(s) = st.server_mut(key) else { return };
         match ev {
+            Event::RelationUpdated { user_id, kind } => {
+                let before = s.relations.get(&user_id).copied();
+                match kind {
+                    Some(k) => s.relations.insert(user_id.clone(), k),
+                    None => s.relations.remove(&user_id),
+                };
+                let who = s.member_name(&user_id);
+                if kind == Some(RelationKind::Incoming) && before != Some(RelationKind::Incoming) && !blocked.contains(&user_id) {
+                    toast = Some(format!("{who} sent you a friend request."));
+                    ding = true;
+                }
+                if kind == Some(RelationKind::Friend) && before == Some(RelationKind::Outgoing) {
+                    toast = Some(format!("{who} accepted your friend request."));
+                }
+            }
+            Event::MessageCreated { message, nonce } if blocked.contains(&message.author) => {
+                // From someone I blocked: kept (shown folded away), but no ping or unread.
+                let cid = message.channel_id;
+                let _ = nonce;
+                if let Some(log) = s.logs.get_mut(&cid) {
+                    if log.loaded {
+                        log.upsert(message);
+                    }
+                }
+            }
             Event::MessageCreated { message, nonce } => {
                 let cid = message.channel_id;
                 let mention = message.author != my_uid && s.pings_me(&message.author, &message.content);

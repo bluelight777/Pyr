@@ -153,6 +153,60 @@ pub fn max_side_for_chat() -> u32 {
     MAX_SIDE
 }
 
+/// A server emoji from any image: up to 128 pixels across as PNG, or (for an animated GIF)
+/// a GIF up to 96 pixels across. Returns the bytes and whether it's animated.
+pub fn make_emoji(bytes: &[u8]) -> Result<(Vec<u8>, bool), String> {
+    const STILL: u32 = 128;
+    const MOVING: u32 = 96;
+    let bad = || "That file isn't an image Ingle can read.".to_string();
+    let fmt = image::guess_format(bytes).map_err(|_| bad())?;
+    if fmt == image::ImageFormat::Gif {
+        let dec = image::codecs::gif::GifDecoder::new(std::io::Cursor::new(bytes)).map_err(|_| bad())?;
+        let frames: Vec<image::Frame> = dec.into_frames().take(MAX_FRAMES).collect::<Result<_, _>>().map_err(|_| bad())?;
+        if frames.len() > 1 {
+            let (w, h) = frames[0].buffer().dimensions();
+            if bytes.len() <= 256 * 1024 && w.max(h) <= 160 {
+                return Ok((bytes.to_vec(), true));
+            }
+            let mut out = Vec::new();
+            {
+                let mut enc = image::codecs::gif::GifEncoder::new_with_speed(&mut out, 10);
+                enc.set_repeat(image::codecs::gif::Repeat::Infinite).map_err(|e| e.to_string())?;
+                for f in frames {
+                    let delay = f.delay();
+                    let small = shrink(f.into_buffer(), MOVING);
+                    enc.encode_frame(image::Frame::from_parts(small, 0, 0, delay)).map_err(|e| e.to_string())?;
+                }
+            }
+            if out.len() as u64 > ingle_proto::control::MAX_AVATAR_BYTES {
+                return Err("That animated emoji is too big even after shrinking it; try a shorter GIF.".into());
+            }
+            return Ok((out, true));
+        }
+    }
+    let img = image::load_from_memory(bytes).map_err(|_| bad())?.to_rgba8();
+    let (w, h) = img.dimensions();
+    let small = if w.max(h) > STILL { shrink(img, STILL) } else { img };
+    let mut out = Vec::new();
+    image::DynamicImage::ImageRgba8(small).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    Ok((out, false))
+}
+
+/// An emoji name from a file name: "Party Cat!.png" → "Party_Cat".
+pub fn emoji_name_from(file: &str) -> String {
+    let stem = file.rsplit(['/', '\\']).next().unwrap_or(file);
+    let stem = stem.rsplit_once('.').map(|(a, _)| a).unwrap_or(stem);
+    let mut n: String = stem.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+    while n.contains("__") {
+        n = n.replace("__", "_");
+    }
+    let mut n = n.trim_matches('_').chars().take(32).collect::<String>();
+    if n.len() < 2 {
+        n = format!("emoji{n}");
+    }
+    n
+}
+
 /// A profile picture from any image: the middle square, 256×256, as PNG.
 pub fn make_avatar(bytes: &[u8]) -> Result<Vec<u8>, String> {
     make_avatar_crop(bytes, 0.5, 0.5, 1.0)
@@ -202,6 +256,56 @@ pub fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     let r = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
     let d = r.into_decoder().ok()?;
     Some(d.dimensions())
+}
+
+/// What a file dialog was opened for. Dialogs run on their own thread: the window (and,
+/// through the shared state it reads each frame, voice) must never wait on one.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PickFor {
+    Avatar,
+    ServerIcon(String),
+    Emoji(String),
+    Attach(String, ingle_proto::control::ChannelId),
+}
+
+type Picked = (PickFor, Vec<(String, Vec<u8>)>);
+
+fn picks() -> &'static std::sync::Mutex<Vec<Picked>> {
+    static P: std::sync::OnceLock<std::sync::Mutex<Vec<Picked>>> = std::sync::OnceLock::new();
+    P.get_or_init(Default::default)
+}
+
+static DIALOG_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Opens the system's picture chooser without blocking; results come from `take_picked`.
+pub fn pick_async(what: PickFor, multiple: bool, ctx: &egui::Context) {
+    use std::sync::atomic::Ordering;
+    if DIALOG_OPEN.swap(true, Ordering::SeqCst) {
+        return; // one at a time
+    }
+    let ctx = ctx.clone();
+    let _ = std::thread::Builder::new().name("ingle-file-dialog".into()).spawn(move || {
+        let files = if multiple { pick_images() } else { pick_image().into_iter().collect() };
+        DIALOG_OPEN.store(false, Ordering::SeqCst);
+        if !files.is_empty() {
+            picks().lock().unwrap().push((what, files));
+        }
+        ctx.request_repaint();
+    });
+}
+
+/// Pictures chosen since the last call.
+pub fn take_picked() -> Vec<Picked> {
+    std::mem::take(&mut *picks().lock().unwrap())
+}
+
+/// Saves an image where the person chooses, without blocking the window.
+pub fn save_as_async(name: String, bytes: std::sync::Arc<Vec<u8>>, on_error: impl FnOnce(String) + Send + 'static) {
+    let _ = std::thread::Builder::new().name("ingle-file-dialog".into()).spawn(move || {
+        if let Err(e) = save_as(&name, &bytes) {
+            on_error(e);
+        }
+    });
 }
 
 /// Pick image files with the system's file dialog (multiple).
@@ -318,5 +422,20 @@ mod tests {
         assert_eq!(got.get_pixel(128, 128).0, [0, 0, 255, 255]);
         // Out-of-range centres are pulled back inside the picture.
         assert!(super::make_avatar_crop(&png, 5.0, -3.0, 1.0).is_ok());
+    }
+
+    #[test]
+    fn emoji_pictures_are_small() {
+        let mut big = image::RgbaImage::new(600, 300);
+        big.put_pixel(0, 0, image::Rgba([1, 2, 3, 255]));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(big).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let (out, animated) = super::make_emoji(&png).unwrap();
+        assert!(!animated);
+        let got = image::load_from_memory(&out).unwrap();
+        assert_eq!((got.width(), got.height()), (128, 64));
+        assert_eq!(super::emoji_name_from("C:\\pics\\Party Cat!.png"), "Party_Cat");
+        assert_eq!(super::emoji_name_from("x.gif"), "emojix");
+        assert!(ingle_proto::control::valid_emoji_name(&super::emoji_name_from("a b c d e f g h i j k l m n o p q r s t.png")));
     }
 }

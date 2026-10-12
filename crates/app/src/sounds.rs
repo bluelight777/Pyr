@@ -17,6 +17,8 @@ pub struct VoiceSounds {
     people: HashMap<SessionId, bool>,
     /// Streams I was watching.
     watching: HashSet<VideoKey>,
+    /// Who was watching each screen share in the channel (by the sharer's session).
+    viewers: HashMap<SessionId, HashSet<SessionId>>,
 }
 
 impl VoiceSounds {
@@ -39,7 +41,29 @@ impl VoiceSounds {
                 .unwrap_or(false)
         };
         let watching: HashSet<VideoKey> = st.call.as_ref().map(|c| c.watching.iter().copied().filter(|k| is_screen(k)).collect()).unwrap_or_default();
+        let viewers: HashMap<SessionId, HashSet<SessionId>> = match (&call, server) {
+            (Some((_, ch, _)), Some(s)) => s
+                .voice
+                .values()
+                .filter(|p| p.channel_id == *ch)
+                .filter_map(|p| p.tracks.iter().find(|t| t.kind == TrackKind::Screen).map(|t| (p.session, t.viewers.iter().copied().collect())))
+                .collect(),
+            _ => HashMap::new(),
+        };
 
+        // Dropped and getting back in (the server restarting for an update, say): stay quiet,
+        // and when back, take the channel as it is now without chiming for everyone.
+        if call.is_none() && st.voice_rejoin.is_some() {
+            return;
+        }
+        let rejoined = matches!((&self.call, &call), (Some(a), Some(b)) if a.0 == b.0 && a.1 == b.1 && a.2 != b.2);
+        if rejoined {
+            self.call = call;
+            self.people = people;
+            self.watching = watching;
+            self.viewers = viewers;
+            return;
+        }
         let same_call = call.is_some() && call == self.call;
         if call != self.call {
             match (&self.call, &call) {
@@ -72,9 +96,25 @@ impl VoiceSounds {
             if self.watching.iter().any(|k| !watching.contains(k) && people.get(&k.session) == Some(&true)) {
                 engine.play_sound(Sound::WatchStop);
             }
+            // Someone else tuning in to (or out of) a stream in the call — your own included:
+            // everyone in the call hears it, like Discord.
+            let me = my_session.unwrap_or_default();
+            let mut tuned_in = false;
+            let mut tuned_out = false;
+            for (sharer, now) in &viewers {
+                let Some(before) = self.viewers.get(sharer) else { continue };
+                tuned_in |= now.iter().any(|v| !before.contains(v) && *v != me);
+                tuned_out |= before.iter().any(|v| !now.contains(v) && *v != me && people.contains_key(v));
+            }
+            if tuned_in {
+                engine.play_sound(Sound::WatchStart);
+            } else if tuned_out {
+                engine.play_sound(Sound::WatchStop);
+            }
         }
         self.call = call;
         self.people = people;
         self.watching = watching;
+        self.viewers = viewers;
     }
 }

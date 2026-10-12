@@ -10,7 +10,6 @@ use ingle_proto::control::{Attachment, ChannelId, ChannelKind, FILES_FEATURE, Me
 use crate::app::{Act, IngleApp, avatar, icon_button, name_color};
 use crate::{icons, markdown, theme};
 
-pub const QUICK_REACTIONS: &[&str] = &["👍", "❤", "😂", "😮", "😢", "🔥", "🎉", "👀", "💯", "✅", "🙏", "😎", "⭐", "👏", "😅", "🚀"];
 const GROUP_WINDOW_MS: i64 = 7 * 60 * 1000;
 
 fn local(ms: i64) -> chrono::DateTime<Local> {
@@ -149,7 +148,21 @@ impl IngleApp {
         egui::TopBottomPanel::bottom(ui.id().with("composer"))
             .show_separator_line(false)
             .frame(egui::Frame::new().fill(theme::MAIN).inner_margin(egui::Margin { left: 16, right: 16, top: 0, bottom: 18 }))
-            .show_inside(ui, |ui| self.composer(ui, st, s, &ch, acts));
+            .show_inside(ui, |ui| match dm_with.as_ref().filter(|w| st.blocked.contains(*w)) {
+                Some(w) => {
+                    egui::Frame::new().fill(theme::ELEV).corner_radius(8).inner_margin(egui::Margin::symmetric(14, 12)).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("You can't send messages to someone you've blocked.").color(theme::MUTED));
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if ui.button("Unblock").clicked() {
+                                    acts.push(Act::Unblock(w.clone()));
+                                }
+                            });
+                        });
+                    });
+                }
+                None => self.composer(ui, st, s, &ch, acts),
+            });
 
         // Messages
         egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::MAIN)).show_inside(ui, |ui| {
@@ -173,7 +186,41 @@ impl IngleApp {
                         ui.vertical_centered(|ui| ui.label(RichText::new("Loading older messages…").color(theme::DIM)));
                     }
                     let mut prev: Option<&Message> = None;
-                    for m in &log.messages {
+                    let msgs = &log.messages;
+                    let mut i = 0;
+                    while i < msgs.len() {
+                        let m = &msgs[i];
+                        // Messages from people I blocked fold into one line, like Discord.
+                        if st.blocked.contains(&m.author) {
+                            let mut j = i;
+                            while j < msgs.len() && st.blocked.contains(&msgs[j].author) {
+                                j += 1;
+                            }
+                            let open = self.ui.shown_blocked.contains(&m.id);
+                            let n = j - i;
+                            ui.horizontal(|ui| {
+                                ui.add_space(22.0);
+                                let label = format!("{n} blocked message{}", if n == 1 { "" } else { "s" });
+                                ui.label(RichText::new(label).size(13.0).color(theme::DIM));
+                                let b = ui.add(egui::Label::new(RichText::new(if open { "Hide" } else { "Show" }).size(13.0).color(theme::LINK)).sense(Sense::click()));
+                                if b.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                                    if open {
+                                        self.ui.shown_blocked.remove(&m.id);
+                                    } else {
+                                        self.ui.shown_blocked.insert(m.id);
+                                    }
+                                }
+                            });
+                            if open {
+                                for mm in &msgs[i..j] {
+                                    self.message(ui, st, s, log, mm, false, &names, acts);
+                                }
+                            }
+                            prev = None;
+                            i = j;
+                            continue;
+                        }
+                        i += 1;
                         let new_day = prev.map(|p| local(p.created_at).date_naive() != local(m.created_at).date_naive()).unwrap_or(true);
                         if new_day {
                             day_divider(ui, &day_label(m.created_at));
@@ -335,8 +382,14 @@ impl IngleApp {
                         }
                     }
                     None => {
-                        if !m.content.is_empty() {
-                            markdown::show(ui, &m.content, theme::BODY, names);
+                        let gifs = crate::giphy::gif_links(&m.content);
+                        let only_gif = gifs.len() == 1 && m.content.trim() == gifs[0];
+                        if !m.content.is_empty() && !only_gif {
+                            let ctx = ui.ctx().clone();
+                            markdown::show(ui, &m.content, theme::BODY, names, &mut |id| self.custom_emoji_tex(&ctx, &key, id));
+                        }
+                        for g in &gifs {
+                            self.gif_embed(ui, g);
                         }
                         if m.edited_at.is_some() {
                             ui.label(RichText::new("(edited)").size(10.5).color(theme::DIM));
@@ -356,14 +409,16 @@ impl IngleApp {
                         ui.spacing_mut().item_spacing.x = 6.0;
                         for r in &m.reactions {
                             let me_in = r.users.iter().any(|u| u == &st.my_uid);
-                            let label = RichText::new(format!("{} {}", r.emoji, r.users.len())).size(13.0).color(if me_in { theme::EMBER2 } else { theme::MUTED });
-                            let b = egui::Button::new(label)
-                                .fill(if me_in { Color32::from_rgb(0x3d, 0x26, 0x18) } else { theme::ELEV })
-                                .stroke(if me_in { Stroke::new(1.0f32, theme::EMBER) } else { Stroke::NONE })
-                                .corner_radius(CornerRadius::same(8))
-                                .min_size(vec2(0.0, 24.0));
+                            let ctx = ui.ctx().clone();
+                            let pill = crate::emoji_picker::reaction_pill(ui, &r.emoji, r.users.len(), me_in, &mut |id| {
+                                self.custom_emoji_tex(&ctx, &key, id)
+                            });
                             let names: Vec<String> = r.users.iter().map(|u| s.member_name(u)).collect();
-                            if ui.add(b).on_hover_text(format!("{} reacted with {}", names.join(", "), r.emoji)).clicked() {
+                            let what = match crate::emoji::find_all(&r.emoji).first() {
+                                Some((_, _, crate::emoji::EmojiRef::Custom { name, .. })) => format!(":{name}:"),
+                                _ => r.emoji.clone(),
+                            };
+                            if pill.on_hover_text(format!("{} reacted with {}", names.join(", "), what)).clicked() {
                                 acts.push(Act::React { key: key.clone(), id: m.id, emoji: r.emoji.clone(), add: !me_in });
                             }
                         }
@@ -412,21 +467,16 @@ impl IngleApp {
             if self.ui.react_picker == Some(m.id) {
                 let area = egui::Area::new(ui.id().with(("react", m.id)))
                     .order(egui::Order::Foreground)
-                    .fixed_pos(pos2(tools.right() - 8.0 * 34.0 - 12.0, tools.bottom() + 4.0))
+                    .pivot(egui::Align2::RIGHT_TOP)
+                    .fixed_pos(pos2(tools.right(), tools.bottom() + 4.0))
+                    .constrain(true)
                     .show(ui.ctx(), |ui| {
-                        egui::Frame::popup(ui.style()).fill(theme::SIDE).show(ui, |ui| {
-                            egui::Grid::new(("react-grid", m.id)).spacing(vec2(2.0, 2.0)).show(ui, |ui| {
-                                for (i, e) in QUICK_REACTIONS.iter().enumerate() {
-                                    if ui.add(egui::Button::new(RichText::new(*e).size(18.0)).frame(false).min_size(vec2(32.0, 32.0))).clicked() {
-                                        let already = m.reactions.iter().any(|r| r.emoji == *e && r.users.iter().any(|u| u == &st.my_uid));
-                                        acts.push(Act::React { key: key.clone(), id: m.id, emoji: e.to_string(), add: !already });
-                                        self.ui.react_picker = None;
-                                    }
-                                    if i % 8 == 7 {
-                                        ui.end_row();
-                                    }
-                                }
-                            });
+                        egui::Frame::popup(ui.style()).fill(theme::SIDE).inner_margin(10).show(ui, |ui| {
+                            if let Some(e) = self.emoji_picker(ui, st, Some(&key)) {
+                                let already = m.reactions.iter().any(|r| r.emoji == e && r.users.iter().any(|u| u == &st.my_uid));
+                                acts.push(Act::React { key: key.clone(), id: m.id, emoji: e, add: !already });
+                                self.ui.react_picker = None;
+                            }
                         });
                     });
                 let clicked_outside = ui.input(|i| i.pointer.any_pressed())
@@ -454,7 +504,9 @@ impl IngleApp {
             ui.vertical(|ui| {
                 let col = if p.failed.is_some() { theme::LIVE } else { theme::DIM };
                 if !p.content.is_empty() {
-                    markdown::show(ui, &p.content, col, &mention_names(s_of(st, key)));
+                    let ctx = ui.ctx().clone();
+                    let k = key.to_string();
+                    markdown::show(ui, &p.content, col, &mention_names(s_of(st, key)), &mut |id| self.custom_emoji_tex(&ctx, &k, id));
                 }
                 if !p.files.is_empty() {
                     ui.horizontal_wrapped(|ui| {
@@ -582,8 +634,20 @@ impl IngleApp {
                 });
             }
             // Typing "@": people, roles and @everyone to pick from (arrows + Enter/Tab, or click).
+            // Typing ":smi": emoji. Typing "/giphy cats": GIFs.
             let composer_id = egui::Id::new(("composer", &key, ch.id));
-            let suggestions = mention_suggestions(s, &draft);
+            let giphy_q = giphy_query(&draft);
+            if let Some(q) = &giphy_q {
+                self.giphy_panel(ui, st, &key, ch.id, q, &mut draft, composer_id, acts);
+            } else if self.ui.giphy.searched.is_some() {
+                self.ui.giphy.reset();
+            }
+            let suggestions = if giphy_q.is_some() {
+                Vec::new()
+            } else {
+                let m = mention_suggestions(s, &draft);
+                if m.is_empty() { emoji_suggestions(s, &draft, st.settings.emoji_tone) } else { m }
+            };
             if suggestions.is_empty() {
                 self.ui.mention_sel = 0;
             } else {
@@ -602,9 +666,13 @@ impl IngleApp {
                         }
                     });
                 }
+                let header = match (&suggestions[0].emoji, emoji_token(&draft)) {
+                    (Some(_), Some((_, p))) => format!("EMOJI MATCHING :{}", p.to_uppercase()),
+                    _ => "MENTION".to_string(),
+                };
                 egui::Frame::new().fill(theme::ELEV).corner_radius(8).inner_margin(6).stroke(Stroke::new(1.0f32, theme::LINE)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(RichText::new("MENTION").font(theme::bold_font(11.0)).color(theme::DIM));
+                    ui.label(RichText::new(header).font(theme::bold_font(11.0)).color(theme::DIM));
                     for (i, sg) in suggestions.iter().enumerate() {
                         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
                         if resp.hovered() {
@@ -614,6 +682,12 @@ impl IngleApp {
                             ui.painter().rect_filled(r, CornerRadius::same(5), theme::HOVER);
                         }
                         let mut x = r.left() + 8.0;
+                        if let Some(e) = &sg.emoji {
+                            let ctx = ui.ctx().clone();
+                            let er = Rect::from_center_size(pos2(x + 11.0, r.center().y), vec2(22.0, 22.0));
+                            crate::emoji::paint(ui.painter(), er, e, &mut |id| self.custom_emoji_tex(&ctx, &key, id));
+                            x += 30.0;
+                        }
                         if let Some(uid) = &sg.uid {
                             let face = self.face(ui.ctx(), s, uid);
                             avatar(ui.painter(), pos2(x + 10.0, r.center().y), 10.0, uid, &sg.label, false, theme::ELEV, face);
@@ -629,7 +703,11 @@ impl IngleApp {
                     }
                 });
                 if let Some(i) = pick {
-                    complete_mention(&mut draft, &suggestions[i].insert);
+                    if suggestions[i].emoji.is_some() {
+                        complete_emoji(&mut draft, &suggestions[i].insert);
+                    } else {
+                        complete_mention(&mut draft, &suggestions[i].insert);
+                    }
                     self.ui.mention_sel = 0;
                     // Put the cursor after the name.
                     let mut state = egui::text_edit::TextEditState::load(ui.ctx(), composer_id).unwrap_or_default();
@@ -650,22 +728,44 @@ impl IngleApp {
                 if files_ok
                     && icon_button(ui, 30.0, "Attach images (or paste or drop them here)", false, |p, r, c| icons::plus(p, r, c, 2.0)).clicked()
                 {
-                    for (name, bytes) in crate::images::pick_images() {
-                        add_attachment(&mut self.ui.attach, &draft_key, name, bytes, acts);
+                    crate::images::pick_async(crate::images::PickFor::Attach(key.clone(), ch.id), true, ui.ctx());
+                }
+                let width = ui.available_width() - 76.0;
+                let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
+                    let job = composer_job(buf.as_str(), wrap);
+                    ui.fonts_mut(|f| f.layout_job(job))
+                };
+                let out = ui
+                    .add_enabled_ui(connected, |ui| {
+                        egui::TextEdit::multiline(&mut draft)
+                            .id(composer_id)
+                            .hint_text(RichText::new(hint).color(theme::DIM))
+                            .desired_rows(1)
+                            .desired_width(width)
+                            .frame(false)
+                            .font(theme::font(14.5))
+                            .layouter(&mut layouter)
+                            .return_key(KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter))
+                            .show(ui)
+                    })
+                    .inner;
+                let resp = out.response.clone();
+                // Colour emoji over the spaces the layout left for them.
+                {
+                    let found = crate::emoji::find_all(out.galley.text());
+                    if !found.is_empty() {
+                        let starts: Vec<usize> = found.iter().map(|f| f.0).collect();
+                        let ctx = ui.ctx().clone();
+                        let painter = ui.painter().with_clip_rect(out.text_clip_rect);
+                        for (r, f) in crate::emoji::placed(&out.galley, &starts).into_iter().zip(&found) {
+                            if r.is_positive() {
+                                crate::emoji::paint(&painter, r.translate(out.galley_pos.to_vec2()), &f.2, &mut |id| {
+                                    self.custom_emoji_tex(&ctx, &key, id)
+                                });
+                            }
+                        }
                     }
                 }
-                let width = ui.available_width() - 40.0;
-                let resp = ui.add_enabled(
-                    connected,
-                    egui::TextEdit::multiline(&mut draft)
-                        .id(composer_id)
-                        .hint_text(RichText::new(hint).color(theme::DIM))
-                        .desired_rows(1)
-                        .desired_width(width)
-                        .frame(false)
-                        .font(theme::font(14.5))
-                        .return_key(KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter)),
-                );
                 if self.ui.editing.is_none()
                     && self.ui.dialog.is_none()
                     && self.ui.viewer.is_none()
@@ -689,7 +789,8 @@ impl IngleApp {
                 let files = self.ui.attach.get(&draft_key).cloned().unwrap_or_default();
                 if send && (!draft.trim().is_empty() || !files.is_empty()) {
                     let reply_to = self.ui.reply.take().map(|(id, _)| id);
-                    acts.push(Act::Send { key: key.clone(), channel: ch.id, text: draft.trim().to_string(), reply_to, files });
+                    let text = expand_shortcodes(s, draft.trim(), st.settings.emoji_tone);
+                    acts.push(Act::Send { key: key.clone(), channel: ch.id, text, reply_to, files });
                     self.ui.attach.remove(&draft_key);
                     draft.clear();
                     resp.request_focus();
@@ -697,19 +798,53 @@ impl IngleApp {
                 if resp.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
                     self.ui.reply = None;
                 }
-                if icon_button(ui, 30.0, "Emoji", self.ui.composer_emoji, |p, r, c| icons::smile(p, r, c)).clicked() {
+                if icon_button(ui, 30.0, "Search GIFs (or type /giphy)", giphy_q.is_some(), |p, r, c| icons::gif(p, r.shrink(1.0), c)).clicked() {
+                    if giphy_q.is_some() {
+                        draft.clear();
+                    } else {
+                        draft = "/giphy ".into();
+                        let mut state = egui::text_edit::TextEditState::load(ui.ctx(), composer_id).unwrap_or_default();
+                        state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(7))));
+                        state.store(ui.ctx(), composer_id);
+                        ui.ctx().memory_mut(|m| m.request_focus(composer_id));
+                    }
+                }
+                let eb = icon_button(ui, 30.0, "Emoji", self.ui.composer_emoji, |p, r, c| icons::smile(p, r, c));
+                if eb.clicked() {
                     self.ui.composer_emoji = !self.ui.composer_emoji;
+                    self.ui.picker.search.clear();
+                }
+                if self.ui.composer_emoji {
+                    let area = egui::Area::new(egui::Id::new(("composer-emoji", &key, ch.id)))
+                        .order(egui::Order::Foreground)
+                        .pivot(egui::Align2::RIGHT_BOTTOM)
+                        .fixed_pos(pos2(eb.rect.right() + 6.0, eb.rect.top() - 12.0))
+                        .constrain(true)
+                        .show(ui.ctx(), |ui| {
+                            egui::Frame::popup(ui.style()).fill(theme::SIDE).inner_margin(10).show(ui, |ui| self.emoji_picker(ui, st, Some(&key))).inner
+                        });
+                    if let Some(e) = area.inner {
+                        // In at the cursor.
+                        let mut state = egui::text_edit::TextEditState::load(ui.ctx(), composer_id).unwrap_or_default();
+                        let at = state.cursor.char_range().map(|r| r.primary.index).unwrap_or(draft.chars().count()).min(draft.chars().count());
+                        let byte = draft.char_indices().nth(at).map(|(b, _)| b).unwrap_or(draft.len());
+                        draft.insert_str(byte, &e);
+                        let end = at + e.chars().count();
+                        state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(end))));
+                        state.store(ui.ctx(), composer_id);
+                        if !ui.input(|i| i.modifiers.shift) {
+                            self.ui.composer_emoji = false;
+                        }
+                        ui.ctx().memory_mut(|m| m.request_focus(composer_id));
+                    }
+                    let clicked_outside = ui.input(|i| i.pointer.any_pressed())
+                        && !area.response.contains_pointer()
+                        && !eb.rect.contains(ui.input(|i| i.pointer.interact_pos()).unwrap_or_default());
+                    if clicked_outside || ui.input(|i| i.key_pressed(Key::Escape)) {
+                        self.ui.composer_emoji = false;
+                    }
                 }
             });
-            if self.ui.composer_emoji {
-                ui.horizontal_wrapped(|ui| {
-                    for e in QUICK_REACTIONS {
-                        if ui.add(egui::Button::new(RichText::new(*e).size(18.0)).frame(false)).clicked() {
-                            draft.push_str(e);
-                        }
-                    }
-                });
-            }
         });
         if draft != before {
             if !draft.is_empty() && self.ui.last_typing.map(|t| t.elapsed() > Duration::from_secs(3)).unwrap_or(true) {
@@ -902,6 +1037,8 @@ pub struct Suggestion {
     pub detail: String,
     pub color: Color32,
     pub uid: Option<String>,
+    /// For emoji suggestions: the picture.
+    pub emoji: Option<crate::emoji::EmojiRef>,
 }
 
 /// The "@partial" being typed at the end of the message, if any: (byte offset of the @, the
@@ -933,19 +1070,20 @@ pub fn mention_suggestions(s: &ServerView, draft: &str) -> Vec<Suggestion> {
                 detail: if m.online { "online".into() } else { String::new() },
                 color: name_color(s, &m.user_id, m.role),
                 uid: Some(m.user_id.clone()),
+                emoji: None,
             });
         }
     }
     for r in &s.roles {
         if r.name.to_lowercase().starts_with(&partial) {
             let color = if r.color != 0 { crate::app::rgb(r.color) } else { theme::TEXT };
-            out.push(Suggestion { insert: r.name.clone(), label: format!("@{}", r.name), detail: "role".into(), color, uid: None });
+            out.push(Suggestion { insert: r.name.clone(), label: format!("@{}", r.name), detail: "role".into(), color, uid: None, emoji: None });
         }
     }
     if s.can(perm::MENTION_EVERYONE) {
         for (word, what) in [("everyone", "everyone in the server"), ("here", "everyone online")] {
             if word.starts_with(&partial) {
-                out.push(Suggestion { insert: word.into(), label: format!("@{word}"), detail: what.into(), color: theme::GLOW, uid: None });
+                out.push(Suggestion { insert: word.into(), label: format!("@{word}"), detail: what.into(), color: theme::GLOW, uid: None, emoji: None });
             }
         }
     }
@@ -964,5 +1102,359 @@ pub fn complete_mention(draft: &mut String, insert: &str) {
         draft.push('@');
         draft.push_str(insert);
         draft.push(' ');
+    }
+}
+
+/// "/giphy cats" (or just "/giphy") in the box: the search words.
+pub fn giphy_query(draft: &str) -> Option<String> {
+    let rest = draft.strip_prefix("/giphy").or_else(|| draft.strip_prefix("/gif"))?;
+    if !rest.is_empty() && !rest.starts_with(' ') {
+        return None;
+    }
+    Some(rest.trim().to_string())
+}
+
+/// The ":partial" shortcode being typed at the end of the message: (byte offset of the
+/// colon, the partial text).
+fn emoji_token(draft: &str) -> Option<(usize, String)> {
+    let colon = draft.rfind(':')?;
+    if draft[..colon].chars().next_back().map(|c| !c.is_whitespace()).unwrap_or(false) {
+        return None;
+    }
+    let partial = &draft[colon + 1..];
+    if partial.chars().count() < 2 || partial.len() > 32 || !partial.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '-')) {
+        return None;
+    }
+    Some((colon, partial.to_lowercase()))
+}
+
+/// Emoji whose shortcode starts with (or contains) the ":partial" being typed.
+pub fn emoji_suggestions(s: &ServerView, draft: &str, tone: u8) -> Vec<Suggestion> {
+    let Some((_, partial)) = emoji_token(draft) else { return Vec::new() };
+    let mut out = Vec::new();
+    for c in &s.info.emojis {
+        if c.name.to_lowercase().contains(&partial) {
+            out.push(Suggestion {
+                insert: crate::emoji_picker::custom_text(&c.name, &c.id, c.animated),
+                label: format!(":{}:", c.name),
+                detail: String::new(),
+                color: theme::TEXT,
+                uid: None,
+                emoji: Some(crate::emoji::EmojiRef::Custom { name: c.name.clone(), id: c.id.clone(), animated: c.animated }),
+            });
+        }
+    }
+    let mut scored: Vec<(u8, usize, Suggestion)> = Vec::new();
+    for g in &crate::emoji::data().groups {
+        for it in &g.items {
+            let Some((rank, sc)) = it
+                .s
+                .iter()
+                .filter_map(|sc| if sc.starts_with(&partial) { Some((0, sc)) } else if sc.contains(&partial) { Some((1, sc)) } else { None })
+                .min_by_key(|x| (x.0, x.1.len()))
+            else {
+                continue;
+            };
+            let (text, _) = it.toned(tone);
+            let Some(cell) = crate::emoji::cell_of(text) else { continue };
+            scored.push((
+                rank,
+                sc.len(),
+                Suggestion {
+                    insert: text.to_string(),
+                    label: format!(":{sc}:"),
+                    detail: String::new(),
+                    color: theme::TEXT,
+                    uid: None,
+                    emoji: Some(crate::emoji::EmojiRef::Unicode(cell)),
+                },
+            ));
+        }
+    }
+    scored.sort_by_key(|x| (x.0, x.1));
+    out.extend(scored.into_iter().map(|x| x.2));
+    out.truncate(8);
+    out
+}
+
+/// Puts the chosen emoji in place of the ":partial" being typed.
+pub fn complete_emoji(draft: &mut String, insert: &str) {
+    if let Some((colon, _)) = emoji_token(draft) {
+        draft.truncate(colon);
+        draft.push_str(insert);
+        draft.push(' ');
+    }
+}
+
+/// Turns finished ":shortcodes:" (the server's own emoji too) into emoji when sending,
+/// leaving code alone.
+pub fn expand_shortcodes(s: &ServerView, text: &str, tone: u8) -> String {
+    if !text.contains(':') {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut in_code = false;
+    let mut rest = text;
+    while let Some(i) = rest.find([':', '`']) {
+        let (before, after) = rest.split_at(i);
+        out.push_str(before);
+        if after.starts_with('`') {
+            in_code = !in_code;
+            out.push('`');
+            rest = &after[1..];
+            continue;
+        }
+        // after starts with ':'
+        let body = &after[1..];
+        let end = body.find(':');
+        let word = end.map(|e| &body[..e]).filter(|w| !w.is_empty() && w.len() <= 32 && w.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '-')));
+        let (Some(w), false) = (word, in_code) else {
+            out.push(':');
+            rest = body;
+            continue;
+        };
+        // Part of a custom emoji already written out (<:name:id>)? Leave it.
+        if out.ends_with('<') || out.ends_with("<a") {
+            out.push(':');
+            rest = body;
+            continue;
+        }
+        let custom = s.info.emojis.iter().find(|c| c.name == w);
+        let uni = crate::emoji::data().by_short.get(&w.to_lowercase()).map(|(g, i)| &crate::emoji::data().groups[*g].items[*i]);
+        match (custom, uni) {
+            (Some(c), _) => out.push_str(&crate::emoji_picker::custom_text(&c.name, &c.id, c.animated)),
+            (None, Some(it)) => out.push_str(it.toned(tone).0),
+            _ => {
+                out.push(':');
+                rest = body;
+                continue;
+            }
+        }
+        rest = &body[w.len() + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The message box's text layout: plain text, with room left for colour emoji.
+fn composer_job(text: &str, wrap: f32) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = wrap;
+    let plain = egui::text::TextFormat::simple(theme::font(14.5), theme::TEXT);
+    let (lead, rest) = crate::emoji::formats(14.5 * crate::emoji::SCALE);
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    for (start, n, _) in crate::emoji::find_all(text) {
+        if start > i {
+            job.append(&chars[i..start].iter().collect::<String>(), 0.0, plain.clone());
+        }
+        job.append(&chars[start].to_string(), 0.0, lead.clone());
+        if n > 1 {
+            job.append(&chars[start + 1..start + n].iter().collect::<String>(), 0.0, rest.clone());
+        }
+        i = start + n;
+    }
+    if i < chars.len() || chars.is_empty() {
+        job.append(&chars[i..].iter().collect::<String>(), 0.0, plain);
+    }
+    job
+}
+
+impl IngleApp {
+    /// A GIF from GIPHY in a message, playing.
+    fn gif_embed(&mut self, ui: &mut egui::Ui, url: &str) {
+        let ctx = ui.ctx().clone();
+        let dl = self.ui.gifs.get(url, move || ctx.request_repaint());
+        let max = vec2(320.0, 240.0);
+        match dl {
+            crate::giphy::Dl::Ready(bytes) => {
+                let t = ui.input(|i| i.time);
+                let k = format!("gif:{url}");
+                match self.images.get(ui.ctx(), &k, Some(bytes), 480).frame(t) {
+                    Some((tex, size, next)) => {
+                        let s = (max.x / size.x).min(max.y / size.y).min(2.0);
+                        let (r, resp) = ui.allocate_exact_size(size * s, Sense::click());
+                        ui.painter().add(egui::epaint::RectShape::filled(r, CornerRadius::same(8), Color32::WHITE).with_texture(
+                            tex,
+                            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                        ));
+                        if let Some(n) = next {
+                            ui.ctx().request_repaint_after(n);
+                        }
+                        if resp.on_hover_text("GIF from GIPHY (click to open)").clicked() {
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                        }
+                    }
+                    None => {
+                        let (r, _) = ui.allocate_exact_size(vec2(200.0, 120.0), Sense::hover());
+                        ui.painter().rect_filled(r, CornerRadius::same(8), theme::ELEV);
+                    }
+                }
+            }
+            crate::giphy::Dl::Loading => {
+                let (r, _) = ui.allocate_exact_size(vec2(200.0, 120.0), Sense::hover());
+                ui.painter().rect_filled(r, CornerRadius::same(8), theme::ELEV);
+                ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, "Loading GIF…", theme::font(12.5), theme::DIM);
+            }
+            crate::giphy::Dl::Failed => {}
+        }
+    }
+
+    /// The `/giphy` search results above the message box.
+    #[allow(clippy::too_many_arguments)]
+    fn giphy_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        st: &AppState,
+        key: &str,
+        channel: ChannelId,
+        query: &str,
+        draft: &mut String,
+        composer_id: egui::Id,
+        acts: &mut Vec<Act>,
+    ) {
+        let api_key = crate::giphy::key(&st.settings.giphy_key);
+        let mut send: Option<String> = None;
+        egui::Frame::new().fill(theme::SIDE).corner_radius(8).inner_margin(8).stroke(Stroke::new(1.0f32, theme::LINE)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let title = if query.is_empty() { "TRENDING GIFS".to_string() } else { format!("GIFS FOR \u{201c}{}\u{201d}", query.to_uppercase()) };
+                ui.label(RichText::new(title).font(theme::bold_font(11.0)).color(theme::DIM));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(RichText::new("Powered by GIPHY").font(theme::bold_font(10.5)).color(theme::MUTED));
+                });
+            });
+            let Some(api_key) = api_key else {
+                ui.label(RichText::new("GIF search needs a GIPHY API key. Paste one here (get a free one at developers.giphy.com):").color(theme::MUTED));
+                let mut k = st.settings.giphy_key.clone();
+                if ui.add(egui::TextEdit::singleline(&mut k).hint_text("GIPHY API key").desired_width(320.0)).changed() {
+                    let mut s = st.settings.clone();
+                    s.giphy_key = k.trim().to_string();
+                    self.engine.update_settings(s);
+                }
+                return;
+            };
+            let ctx = ui.ctx().clone();
+            self.ui.giphy.update(query, &api_key, move || ctx.request_repaint());
+            let results = self.ui.giphy.results.lock().clone();
+            let gifs = match results {
+                Some(crate::giphy::Search::Ready(v)) if !self.ui.giphy.waiting() => v,
+                Some(crate::giphy::Search::Failed(e)) => {
+                    ui.label(RichText::new(e).color(theme::LIVE));
+                    return;
+                }
+                _ => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(RichText::new("Searching GIPHY…").color(theme::MUTED));
+                    });
+                    ui.ctx().request_repaint_after(Duration::from_millis(100));
+                    return;
+                }
+            };
+            if gifs.is_empty() {
+                ui.label(RichText::new("No GIFs found. Try other words.").color(theme::MUTED));
+                return;
+            }
+            let n = gifs.len();
+            self.ui.giphy.sel = self.ui.giphy.sel.min(n - 1);
+            let focused = ui.ctx().memory(|m| m.focused()) == Some(composer_id);
+            if focused {
+                ui.input_mut(|i| {
+                    if i.consume_key(Modifiers::NONE, Key::ArrowRight) || i.consume_key(Modifiers::NONE, Key::Tab) {
+                        self.ui.giphy.sel = (self.ui.giphy.sel + 1) % n;
+                    }
+                    if i.consume_key(Modifiers::NONE, Key::ArrowLeft) {
+                        self.ui.giphy.sel = (self.ui.giphy.sel + n - 1) % n;
+                    }
+                    if i.consume_key(Modifiers::NONE, Key::Enter) {
+                        send = Some(gifs[self.ui.giphy.sel].url.clone());
+                    }
+                    if i.consume_key(Modifiers::NONE, Key::Escape) {
+                        draft.clear();
+                    }
+                });
+            }
+            let h = 110.0;
+            egui::ScrollArea::horizontal().id_salt("giphy-row").max_height(h + 8.0).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for (i, g) in gifs.iter().enumerate() {
+                        let w = (g.preview_w / g.preview_h.max(1.0) * h).clamp(60.0, 260.0);
+                        let (r, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click());
+                        if i == self.ui.giphy.sel && focused {
+                            resp.scroll_to_me(None);
+                        }
+                        if !ui.is_rect_visible(r) {
+                            continue;
+                        }
+                        ui.painter().rect_filled(r, CornerRadius::same(6), theme::ELEV);
+                        let ctx = ui.ctx().clone();
+                        if let crate::giphy::Dl::Ready(bytes) = self.ui.gifs.get(&g.preview, move || ctx.request_repaint()) {
+                            let t = ui.input(|i| i.time);
+                            if let Some((tex, _, next)) = self.images.get(ui.ctx(), &format!("gif:{}", g.preview), Some(bytes), 260).frame(t) {
+                                ui.painter().add(
+                                    egui::epaint::RectShape::filled(r, CornerRadius::same(6), Color32::WHITE)
+                                        .with_texture(tex, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))),
+                                );
+                                if let Some(nx) = next {
+                                    ui.ctx().request_repaint_after(nx);
+                                }
+                            }
+                        }
+                        if i == self.ui.giphy.sel || resp.hovered() {
+                            ui.painter().rect_stroke(r, CornerRadius::same(6), Stroke::new(2.0f32, theme::EMBER), egui::StrokeKind::Inside);
+                        }
+                        let resp = if g.title.is_empty() { resp } else { resp.on_hover_text(&g.title) };
+                        if resp.clicked() {
+                            send = Some(g.url.clone());
+                        }
+                    }
+                });
+            });
+            ui.label(RichText::new("← → to choose, Enter to send, Esc to cancel").size(11.0).color(theme::DIM));
+        });
+        if let Some(url) = send {
+            let reply_to = self.ui.reply.take().map(|(id, _)| id);
+            acts.push(Act::Send { key: key.to_string(), channel, text: url, reply_to, files: Vec::new() });
+            draft.clear();
+            self.ui.giphy.reset();
+            ui.ctx().memory_mut(|m| m.request_focus(composer_id));
+        }
+    }
+}
+
+#[cfg(test)]
+mod emoji_text_tests {
+    use super::*;
+
+    fn server() -> ServerView {
+        let mut s = ServerView::new("k".into(), "S".into(), String::new());
+        s.info.emojis.push(ingle_proto::control::CustomEmoji { id: "abcdefgh12".into(), name: "party_cat".into(), animated: false, by: String::new() });
+        s
+    }
+
+    #[test]
+    fn shortcodes_become_emoji_when_sent() {
+        let s = server();
+        assert_eq!(expand_shortcodes(&s, "hi :joy: and :party_cat:!", 0), "hi 😂 and <:party_cat:abcdefgh12>!");
+        assert_eq!(expand_shortcodes(&s, "time 12:30:45 `:joy:` :nope:", 0), "time 12:30:45 `:joy:` :nope:");
+        assert_eq!(expand_shortcodes(&s, "<:party_cat:abcdefgh12>", 0), "<:party_cat:abcdefgh12>");
+        assert_eq!(expand_shortcodes(&s, ":thumbsup:", 3), "👍🏽");
+    }
+
+    #[test]
+    fn emoji_and_giphy_suggestions() {
+        let s = server();
+        let v = emoji_suggestions(&s, "hey :part", 0);
+        assert!(v.iter().any(|x| x.label == ":party_cat:"), "{:?}", v.iter().map(|x| &x.label).collect::<Vec<_>>());
+        assert!(v.len() > 1);
+        assert!(emoji_suggestions(&s, "12:30", 0).is_empty());
+        let mut d = "hey :part".to_string();
+        complete_emoji(&mut d, "🎉");
+        assert_eq!(d, "hey 🎉 ");
+        assert_eq!(giphy_query("/giphy cute cats").as_deref(), Some("cute cats"));
+        assert_eq!(giphy_query("/giphy").as_deref(), Some(""));
+        assert_eq!(giphy_query("/giphyx"), None);
+        assert_eq!(giphy_query("hello"), None);
     }
 }

@@ -203,7 +203,12 @@ impl IngleApp {
                     let server = st.server(&key).cloned();
                     let can_server = server.as_ref().map(|s| s.can(perm::MANAGE_SERVER)).unwrap_or(false);
                     let can_roles = server.as_ref().map(|s| s.can(perm::MANAGE_ROLES) && s.has(ROLES_FEATURE)).unwrap_or(false);
-                    ui.set_width(if tab == 1 { 680.0 } else { 440.0 });
+                    let can_emoji =
+                        server.as_ref().map(|s| s.can(perm::MANAGE_EMOJI) && s.has(ingle_proto::control::EMOJI_FEATURE)).unwrap_or(false);
+                    if tab == 0 && !can_server && can_emoji {
+                        tab = 2;
+                    }
+                    ui.set_width(if tab == 1 { 680.0 } else if tab == 2 { 560.0 } else { 440.0 });
                     ui.horizontal(|ui| {
                         title(ui, "Server settings");
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -219,11 +224,18 @@ impl IngleApp {
                         if can_roles && ui.add(egui::Button::selectable(tab == 1, "Roles")).clicked() {
                             tab = 1;
                         }
+                        if can_emoji && ui.add(egui::Button::selectable(tab == 2, "Emoji")).clicked() {
+                            tab = 2;
+                        }
                     });
                     ui.separator();
                     if tab == 1 {
                         if let Some(s) = &server {
                             self.roles_editor(ui, s, acts);
+                        }
+                    } else if tab == 2 {
+                        if let Some(s) = &server {
+                            self.emoji_editor(ui, s, acts);
                         }
                     } else {
                         if let Some(s) = server.as_ref().filter(|s| s.has(ingle_proto::control::ICONS_FEATURE)) {
@@ -249,12 +261,7 @@ impl IngleApp {
                                     ui.add_space(14.0);
                                     ui.horizontal(|ui| {
                                         if ui.add(theme::primary_button("Upload an icon")).clicked() {
-                                            if let Some((_, bytes)) = crate::images::pick_image() {
-                                                match crate::avatar_edit::AvatarCrop::new(bytes, crate::avatar_edit::CropTarget::Server(key.clone())) {
-                                                    Ok(c) => self.ui.avatar_crop = Some(c),
-                                                    Err(e) => acts.push(Act::Toast(e, true)),
-                                                }
-                                            }
+                                            crate::images::pick_async(crate::images::PickFor::ServerIcon(key.clone()), false, ui.ctx());
                                         }
                                         if s.info.icon.is_some() && ui.button("Remove").clicked() {
                                             acts.push(Act::SetServerIcon { key: key.clone(), bytes: None });
@@ -437,12 +444,7 @@ impl IngleApp {
                         ui.add_space(14.0);
                         ui.horizontal(|ui| {
                             if ui.add(theme::primary_button("Upload a picture")).clicked() {
-                                if let Some((_, bytes)) = crate::images::pick_image() {
-                                    match crate::avatar_edit::AvatarCrop::new(bytes, crate::avatar_edit::CropTarget::Me) {
-                                        Ok(c) => self.ui.avatar_crop = Some(c),
-                                        Err(e) => acts.push(Act::Toast(e, true)),
-                                    }
-                                }
+                                crate::images::pick_async(crate::images::PickFor::Avatar, false, ui.ctx());
                             }
                             if face.is_some() && ui.button("Remove").clicked() {
                                 acts.push(Act::SetAvatar(None));
@@ -891,6 +893,65 @@ impl IngleApp {
                 ui.label(RichText::new("Give someone a role by right-clicking them in the member list.").size(11.5).color(theme::DIM));
             });
             self.ui.role_edit = Some(e);
+        });
+    }
+}
+
+impl IngleApp {
+    /// Server settings → Emoji: upload, rename and remove the server's own emoji.
+    fn emoji_editor(&mut self, ui: &mut egui::Ui, s: &ingle_engine::state::ServerView, acts: &mut Vec<Act>) {
+        let max = ingle_proto::control::MAX_CUSTOM_EMOJI;
+        ui.label(
+            RichText::new(format!(
+                "Add up to {max} emoji anyone in this server can use, by typing :name: or from the emoji picker. \
+                 PNG, JPEG, WebP or GIF (animated GIFs move). Names are letters, numbers and underscores."
+            ))
+            .color(theme::MUTED),
+        );
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.add(theme::primary_button("Upload emoji")).clicked() {
+                crate::images::pick_async(crate::images::PickFor::Emoji(s.key.clone()), true, ui.ctx());
+            }
+            ui.label(RichText::new(format!("{} of {max} used", s.info.emojis.len())).size(12.0).color(theme::DIM));
+        });
+        ui.add_space(8.0);
+        if s.info.emojis.is_empty() {
+            ui.label(RichText::new("No emoji yet.").color(theme::DIM));
+            return;
+        }
+        let ctx = ui.ctx().clone();
+        egui::ScrollArea::vertical().max_height(380.0).show(ui, |ui| {
+            egui::Grid::new("emoji-list").num_columns(4).spacing(vec2(12.0, 6.0)).striped(true).show(ui, |ui| {
+                ui.label(RichText::new("IMAGE").font(theme::bold_font(11.0)).color(theme::DIM));
+                ui.label(RichText::new("NAME").font(theme::bold_font(11.0)).color(theme::DIM));
+                ui.label(RichText::new("ADDED BY").font(theme::bold_font(11.0)).color(theme::DIM));
+                ui.label("");
+                ui.end_row();
+                for e in &s.info.emojis {
+                    let r = crate::emoji::EmojiRef::Custom { name: e.name.clone(), id: e.id.clone(), animated: e.animated };
+                    crate::emoji::widget(ui, 32.0, &r, &mut |id| self.custom_emoji_tex(&ctx, &s.key, id));
+                    let mut name = self.ui.emoji_names.get(&e.id).cloned().unwrap_or_else(|| e.name.clone());
+                    let resp = ui.add(egui::TextEdit::singleline(&mut name).desired_width(180.0).char_limit(32));
+                    if resp.changed() {
+                        self.ui.emoji_names.insert(e.id.clone(), name.clone());
+                    }
+                    if resp.lost_focus() {
+                        let n = name.trim().to_string();
+                        if n != e.name && ingle_proto::control::valid_emoji_name(&n) {
+                            acts.push(Act::RenameEmoji { key: s.key.clone(), id: e.id.clone(), name: n });
+                        } else if n != e.name {
+                            acts.push(Act::Toast("Emoji names are 2–32 letters, numbers or underscores.".into(), true));
+                        }
+                        self.ui.emoji_names.remove(&e.id);
+                    }
+                    ui.label(RichText::new(s.member_name(&e.by)).color(theme::MUTED));
+                    if crate::app::icon_button(ui, 26.0, "Remove", false, |p, r, _| crate::icons::trash(p, r, theme::LIVE)).clicked() {
+                        acts.push(Act::RemoveEmoji { key: s.key.clone(), id: e.id.clone() });
+                    }
+                    ui.end_row();
+                }
+            });
         });
     }
 }
