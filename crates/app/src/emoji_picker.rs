@@ -15,6 +15,8 @@ const RECENT_MAX: usize = 27;
 #[derive(Default)]
 pub struct PickerState {
     pub search: String,
+    /// Put the cursor in the search box (set when the picker opens).
+    pub focus_search: bool,
     /// Section to scroll to (set by the category bar).
     jump: Option<usize>,
     /// The tone choice row is open.
@@ -75,8 +77,9 @@ impl IngleApp {
                     .desired_width(CELL * COLS as f32 + 60.0 - 48.0)
                     .id(egui::Id::new("emoji-search")),
             );
-            if !r.has_focus() && ui.ctx().memory(|m| m.focused().is_none()) {
+            if ps.focus_search || (!r.has_focus() && ui.ctx().memory(|m| m.focused().is_none())) {
                 r.request_focus();
+                ps.focus_search = false;
             }
             let hand = EmojiRef::Unicode(emoji::cell_of(TONE_HANDS[tone as usize]).unwrap_or(0));
             let resp = emoji::widget(ui, 28.0, &hand, &mut custom_tex).on_hover_text("Skin tone");

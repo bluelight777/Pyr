@@ -454,6 +454,8 @@ impl IngleApp {
             child.spacing_mut().item_spacing.x = 2.0;
             if icon_button(&mut child, 28.0, "Add reaction", self.ui.react_picker == Some(m.id), |p, r, c| icons::smile(p, r, c)).clicked() {
                 self.ui.react_picker = if self.ui.react_picker == Some(m.id) { None } else { Some(m.id) };
+                self.ui.picker.search.clear();
+                self.ui.picker.focus_search = true;
             }
             if icon_button(&mut child, 28.0, "Reply", false, |p, r, c| icons::reply(p, r, c)).clicked() {
                 self.ui.reply = Some((m.id, name.clone()));
@@ -767,6 +769,8 @@ impl IngleApp {
                     }
                 }
                 if self.ui.editing.is_none()
+                    && !self.ui.composer_emoji
+                    && self.ui.react_picker.is_none()
                     && self.ui.dialog.is_none()
                     && self.ui.viewer.is_none()
                     && !resp.has_focus()
@@ -813,6 +817,7 @@ impl IngleApp {
                 if eb.clicked() {
                     self.ui.composer_emoji = !self.ui.composer_emoji;
                     self.ui.picker.search.clear();
+                    self.ui.picker.focus_search = true;
                 }
                 if self.ui.composer_emoji {
                     let area = egui::Area::new(egui::Id::new(("composer-emoji", &key, ch.id)))
