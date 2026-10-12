@@ -4,7 +4,7 @@
 use eframe::egui::{self, Color32, CornerRadius, Rect, RichText, Sense, Stroke, pos2, vec2};
 use ingle_engine::state::AppState;
 
-use crate::app::IngleApp;
+use crate::app::{Act, IngleApp};
 use crate::emoji::{self, EmojiRef};
 use crate::theme;
 
@@ -41,7 +41,7 @@ const TONE_HANDS: [&str; 6] = ["👏", "👏🏻", "👏🏼", "👏🏽", "👏
 
 impl IngleApp {
     /// Draws the picker for server `key` (for its own emoji); returns what was picked.
-    pub(crate) fn emoji_picker(&mut self, ui: &mut egui::Ui, st: &AppState, key: Option<&str>) -> Option<String> {
+    pub(crate) fn emoji_picker(&mut self, ui: &mut egui::Ui, st: &AppState, key: Option<&str>, acts: &mut Vec<Act>) -> Option<String> {
         let mut picked: Option<String> = None;
         let mut new_tone: Option<u8> = None;
         let tone = st.settings.emoji_tone.min(5);
@@ -247,18 +247,19 @@ impl IngleApp {
             }
         });
         drop(custom_tex);
+        // (Settings change through an action: the shared state is being read this frame.)
+        let mut s = st.settings.clone();
         if let Some(t) = new_tone {
-            let mut s = st.settings.clone();
             s.emoji_tone = t;
-            self.engine.update_settings(s);
         }
         if let Some(p) = &picked {
-            let mut s = self.engine.state().settings.clone();
             s.recent_emoji.retain(|r| r != p);
             s.recent_emoji.insert(0, p.clone());
             s.recent_emoji.truncate(RECENT_MAX);
-            self.engine.update_settings(s);
             ps.search.clear();
+        }
+        if s != st.settings {
+            acts.push(Act::Settings(s));
         }
         self.ui.picker = ps;
         picked

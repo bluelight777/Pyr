@@ -474,7 +474,7 @@ impl IngleApp {
                     .constrain(true)
                     .show(ui.ctx(), |ui| {
                         egui::Frame::popup(ui.style()).fill(theme::SIDE).inner_margin(10).show(ui, |ui| {
-                            if let Some(e) = self.emoji_picker(ui, st, Some(&key)) {
+                            if let Some(e) = self.emoji_picker(ui, st, Some(&key), acts) {
                                 let already = m.reactions.iter().any(|r| r.emoji == e && r.users.iter().any(|u| u == &st.my_uid));
                                 acts.push(Act::React { key: key.clone(), id: m.id, emoji: e, add: !already });
                                 self.ui.react_picker = None;
@@ -826,7 +826,7 @@ impl IngleApp {
                         .fixed_pos(pos2(eb.rect.right() + 6.0, eb.rect.top() - 12.0))
                         .constrain(true)
                         .show(ui.ctx(), |ui| {
-                            egui::Frame::popup(ui.style()).fill(theme::SIDE).inner_margin(10).show(ui, |ui| self.emoji_picker(ui, st, Some(&key))).inner
+                            egui::Frame::popup(ui.style()).fill(theme::SIDE).inner_margin(10).show(ui, |ui| self.emoji_picker(ui, st, Some(&key), acts)).inner
                         });
                     if let Some(e) = area.inner {
                         // In at the cursor.
@@ -1335,7 +1335,7 @@ impl IngleApp {
                 if ui.add(egui::TextEdit::singleline(&mut k).hint_text("GIPHY API key").desired_width(320.0)).changed() {
                     let mut s = st.settings.clone();
                     s.giphy_key = k.trim().to_string();
-                    self.engine.update_settings(s);
+                    acts.push(Act::Settings(s));
                 }
                 return;
             };
