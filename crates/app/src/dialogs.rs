@@ -685,6 +685,12 @@ impl IngleApp {
                     ui.add_space(6.0);
                 }
                 ui.label(RichText::new("Text messages are stored on the server you're talking on (like Discord), not end-to-end encrypted.").size(12.0).color(theme::DIM));
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new("Emoji graphics: Twemoji by Twitter, Inc. and other contributors, licensed CC-BY 4.0. Emoji names: Emojibase (MIT). GIF search powered by GIPHY.")
+                        .size(12.0)
+                        .color(theme::DIM),
+                );
             }
         });
         if draft != before {
