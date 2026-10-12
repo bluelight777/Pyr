@@ -921,7 +921,8 @@ impl IngleApp {
             return;
         }
         let ctx = ui.ctx().clone();
-        egui::ScrollArea::vertical().max_height(380.0).show(ui, |ui| {
+        let rows_h = (s.info.emojis.len() as f32 * 40.0 + 30.0).min(380.0);
+        egui::ScrollArea::vertical().max_height(380.0).min_scrolled_height(rows_h).show(ui, |ui| {
             egui::Grid::new("emoji-list").num_columns(4).spacing(vec2(12.0, 6.0)).striped(true).show(ui, |ui| {
                 ui.label(RichText::new("IMAGE").font(theme::bold_font(11.0)).color(theme::DIM));
                 ui.label(RichText::new("NAME").font(theme::bold_font(11.0)).color(theme::DIM));

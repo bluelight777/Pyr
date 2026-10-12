@@ -275,7 +275,6 @@ fn picks() -> &'static std::sync::Mutex<Vec<Picked>> {
     P.get_or_init(Default::default)
 }
 
-static DIALOG_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static DIALOG_CLOSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// A file dialog closed since the last call. (Keys pressed in it can leave the window
@@ -284,22 +283,27 @@ pub fn dialog_closed() -> bool {
     DIALOG_CLOSED.swap(false, std::sync::atomic::Ordering::SeqCst)
 }
 
-/// Opens the system's picture chooser without blocking; results come from `take_picked`.
+fn wanted() -> &'static std::sync::Mutex<Option<(PickFor, bool)>> {
+    static W: std::sync::OnceLock<std::sync::Mutex<Option<(PickFor, bool)>>> = std::sync::OnceLock::new();
+    W.get_or_init(Default::default)
+}
+
+/// Asks for the system's picture chooser. It opens right after this frame is drawn (see
+/// `run_wanted_dialog`), when nothing is holding the shared state, so voice and messages
+/// carry on while it's open. Results come from `take_picked`.
 pub fn pick_async(what: PickFor, multiple: bool, ctx: &egui::Context) {
-    use std::sync::atomic::Ordering;
-    if DIALOG_OPEN.swap(true, Ordering::SeqCst) {
-        return; // one at a time
+    *wanted().lock().unwrap() = Some((what, multiple));
+    ctx.request_repaint();
+}
+
+/// Opens a chooser asked for with `pick_async`. Call between frames only.
+pub fn run_wanted_dialog() {
+    let Some((what, multiple)) = wanted().lock().unwrap().take() else { return };
+    let files = if multiple { pick_images() } else { pick_image().into_iter().collect() };
+    DIALOG_CLOSED.store(true, std::sync::atomic::Ordering::SeqCst);
+    if !files.is_empty() {
+        picks().lock().unwrap().push((what, files));
     }
-    let ctx = ctx.clone();
-    let _ = std::thread::Builder::new().name("ingle-file-dialog".into()).spawn(move || {
-        let files = if multiple { pick_images() } else { pick_image().into_iter().collect() };
-        DIALOG_OPEN.store(false, Ordering::SeqCst);
-        DIALOG_CLOSED.store(true, Ordering::SeqCst);
-        if !files.is_empty() {
-            picks().lock().unwrap().push((what, files));
-        }
-        ctx.request_repaint();
-    });
 }
 
 /// Pictures chosen since the last call.
@@ -307,15 +311,6 @@ pub fn take_picked() -> Vec<Picked> {
     std::mem::take(&mut *picks().lock().unwrap())
 }
 
-/// Saves an image where the person chooses, without blocking the window.
-pub fn save_as_async(name: String, bytes: std::sync::Arc<Vec<u8>>, on_error: impl FnOnce(String) + Send + 'static) {
-    let _ = std::thread::Builder::new().name("ingle-file-dialog".into()).spawn(move || {
-        if let Err(e) = save_as(&name, &bytes) {
-            on_error(e);
-        }
-        DIALOG_CLOSED.store(true, std::sync::atomic::Ordering::SeqCst);
-    });
-}
 
 /// Pick image files with the system's file dialog (multiple).
 pub fn pick_images() -> Vec<(String, Vec<u8>)> {

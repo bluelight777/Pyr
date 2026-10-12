@@ -348,11 +348,11 @@ impl IngleApp {
                 Err(err) => self.toast(err, true),
             },
             Act::SaveImage { name, bytes } => {
-                let shared = self.engine.shared.clone();
-                crate::images::save_as_async(name, bytes, move |err| {
-                    shared.state.write().toast(format!("Couldn't save the image: {err}"), true);
-                    (shared.repaint)();
-                });
+                // (Between frames: nothing holds the shared state while the dialog is open.)
+                if let Err(err) = crate::images::save_as(&name, &bytes) {
+                    self.toast(format!("Couldn't save the image: {err}"), true);
+                }
+                ctx.input_mut(|i| i.keys_down.clear());
             }
             Act::Toast(text, error) => self.toast(text, error),
         }
@@ -515,6 +515,7 @@ impl eframe::App for IngleApp {
         for a in acts {
             self.apply(a, ctx);
         }
+        crate::images::run_wanted_dialog();
         // Drop textures for tiles that are gone.
         let live: Vec<VideoKey> = self.textures.keys().copied().collect();
         for k in live {
