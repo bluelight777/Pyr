@@ -20,7 +20,8 @@ use std::time::Duration;
 use eframe::egui;
 use ingle_engine::Engine;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use windows::Win32::Foundation::{CloseHandle, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
 use windows::Win32::UI::Shell::{
@@ -29,11 +30,11 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu,
-    DestroyWindow, FindWindowW, GetSystemMetrics, GetWindowThreadProcessId, HICON, IMAGE_ICON, IsIconic, LR_DEFAULTCOLOR,
+    DestroyWindow, FindWindowW, GetCursorPos, GetSystemMetrics, GetWindowThreadProcessId, HICON, IMAGE_ICON, IsIconic, LR_DEFAULTCOLOR,
     LoadImageW, MENU_ITEM_FLAGS, MF_CHECKED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, PostMessageW, RegisterClassW,
     RegisterWindowMessageW, SM_CXSMICON, SM_CYSMICON, SM_MENUDROPALIGNMENT, SW_HIDE, SW_RESTORE, SW_SHOW, SetForegroundWindow,
     SetMenuDefaultItem, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTALIGN,
-    TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP, WM_CONTEXTMENU, WM_ENDSESSION, WM_NULL, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
+    TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP, WM_CONTEXTMENU, WM_ENDSESSION, WM_MOUSEMOVE, WM_NULL, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
 
@@ -221,8 +222,26 @@ fn show_main() {
     unsafe {
         let _ = ShowWindow(main, if IsIconic(main).as_bool() { SW_RESTORE } else { SW_SHOW });
         let _ = SetForegroundWindow(main);
+        refresh_pointer(main);
     }
     ctx.request_repaint();
+}
+
+/// The window only hears about the pointer when it lands somewhere new (winit), and ignores
+/// clicks until it knows where the pointer is (egui). So after hiding, a click on the very
+/// pixel of the last one (the close button, with the window brought back from the keyboard)
+/// would do nothing until the mouse moved. Tell the window afresh where the pointer is: first
+/// somewhere it can't be, then where it really is.
+unsafe fn refresh_pointer(main: HWND) {
+    let mut p = POINT::default();
+    unsafe {
+        if GetCursorPos(&mut p).is_err() || !ScreenToClient(main, &mut p).as_bool() {
+            return;
+        }
+        let at = |x: i32, y: i32| LPARAM((((y as u16 as u32) << 16) | x as u16 as u32) as isize);
+        let _ = PostMessageW(Some(main), WM_MOUSEMOVE, WPARAM(0), at(-32000, -32000));
+        let _ = PostMessageW(Some(main), WM_MOUSEMOVE, WPARAM(0), at(p.x, p.y));
+    }
 }
 
 /// Quit without waiting for a frame (there are none while the window is hidden): what closing
