@@ -778,7 +778,7 @@ impl IngleApp {
             // Home: friends and direct messages.
             let (r, resp) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::click());
             let home = self.ui.home;
-            let fill = if home { theme::EMBER } else if resp.hovered() { theme::ELEV2 } else { Color32::from_rgb(0x24, 0x1d, 0x19) };
+            let fill = if home { Color32::from_rgb(0x4a, 0x30, 0x22) } else if resp.hovered() { theme::ELEV2 } else { Color32::from_rgb(0x24, 0x1d, 0x19) };
             ui.painter().rect_filled(r, CornerRadius::same(if home || resp.hovered() { 16 } else { 24 }), fill);
             icons::flame(ui.painter(), r.shrink(10.0));
             if home || resp.hovered() {
