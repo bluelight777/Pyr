@@ -194,7 +194,7 @@ impl IngleApp {
             }
             egui::ScrollArea::vertical().id_salt("emoji-grid").max_height(330.0).min_scrolled_height(330.0).auto_shrink([false, false]).show(
                 ui,
-                |ui| {
+                |ui| ui.vertical(|ui| {
                     ui.set_width(CELL * COLS as f32);
                     for (i, (title, cells)) in sections.iter().enumerate() {
                         let h = ui.label(RichText::new(title.to_uppercase()).font(theme::bold_font(11.5)).color(theme::MUTED));
@@ -226,7 +226,7 @@ impl IngleApp {
                         }
                         ui.add_space(6.0);
                     }
-                },
+                }),
             );
         });
         // Preview of the one under the pointer.

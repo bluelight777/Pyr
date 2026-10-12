@@ -252,7 +252,9 @@ pub fn placed(galley: &egui::Galley, starts: &[usize]) -> Vec<Rect> {
                 let size = g.advance_width;
                 let cy = row.pos.y + row.size.y / 2.0;
                 let x = row.pos.x + g.pos.x;
-                out[want[w].1] = Rect::from_min_max(pos2(x, cy - size / 2.0), pos2(x + size, cy + size / 2.0));
+                // A hair of space around each, like Discord.
+                let r = Rect::from_min_max(pos2(x, cy - size / 2.0), pos2(x + size, cy + size / 2.0));
+                out[want[w].1] = r.shrink(size * 0.045);
                 w += 1;
             }
             idx += 1;
