@@ -55,6 +55,7 @@ impl Updater {
         let (s, r) = (status.clone(), repaint.clone());
         let _ = std::thread::Builder::new().name("ingle-update".into()).spawn(move || {
             std::thread::sleep(Duration::from_secs(8));
+            clean_old_downloads(&download_base(), Duration::from_secs(60 * 60));
             loop {
                 match check() {
                     Ok(Some(m)) => {
@@ -138,24 +139,45 @@ pub fn platform_asset(m: &Manifest) -> Option<&Asset> {
     }
 }
 
+/// Where update downloads go: this user's own folders (on Linux, not the shared /tmp).
+fn download_base() -> PathBuf {
+    #[cfg(unix)]
+    {
+        std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir())
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+            .unwrap_or_else(std::env::temp_dir)
+    }
+    #[cfg(not(unix))]
+    {
+        std::env::temp_dir()
+    }
+}
+
+/// Removes download folders left by earlier updates (an installer can't remove itself while
+/// it runs). Only our own folders, and only ones older than `min_age`, so never the one an
+/// installer may still be running from.
+fn clean_old_downloads(base: &Path, min_age: Duration) {
+    let Ok(entries) = std::fs::read_dir(base) else { return };
+    for e in entries.flatten() {
+        if !e.file_name().to_str().is_some_and(|n| n.starts_with("ingle-update")) {
+            continue;
+        }
+        // A real folder (not a link to somewhere else).
+        let Ok(meta) = std::fs::symlink_metadata(e.path()) else { continue };
+        let old = meta.modified().ok().and_then(|m| m.elapsed().ok()).is_some_and(|age| age >= min_age);
+        if meta.is_dir() && old {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
+    }
+}
+
 /// A new folder only this user can get into, for the download. (Not a fixed name in the
 /// shared temp folder: on Linux another account could put its own file there, and the
 /// package is installed as root.)
 fn private_dir() -> Result<PathBuf, String> {
-    let base = {
-        #[cfg(unix)]
-        {
-            std::env::var_os("XDG_RUNTIME_DIR")
-                .map(PathBuf::from)
-                .filter(|p| p.is_dir())
-                .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
-                .unwrap_or_else(std::env::temp_dir)
-        }
-        #[cfg(not(unix))]
-        {
-            std::env::temp_dir()
-        }
-    };
+    let base = download_base();
     let _ = std::fs::create_dir_all(&base);
     let name: String = ingle_proto::crypto::random_bytes::<12>().iter().map(|b| format!("{b:02x}")).collect();
     let dir = base.join(format!("ingle-update-{name}"));
@@ -295,5 +317,33 @@ mod tests {
         assert!(install(&f, &good).unwrap_err().contains("changed"));
         let _ = std::fs::remove_dir_all(a);
         let _ = std::fs::remove_dir_all(b);
+    }
+
+    #[test]
+    fn old_downloads_are_cleaned_up_but_nothing_else() {
+        let base = std::env::temp_dir().join(format!("ingle-clean-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("ingle-update-0123abcd")).unwrap();
+        std::fs::write(base.join("ingle-update-0123abcd").join("ingle-9.9.9.exe"), b"x").unwrap();
+        std::fs::create_dir_all(base.join("ingle-update")).unwrap();
+        std::fs::create_dir_all(base.join("someone-else")).unwrap();
+        std::fs::write(base.join("ingle-update-file"), b"not a folder").unwrap();
+        // Too new to touch yet.
+        clean_old_downloads(&base, Duration::from_secs(3600));
+        assert!(base.join("ingle-update-0123abcd").exists());
+        // Old enough: our folders go, everything else stays.
+        clean_old_downloads(&base, Duration::ZERO);
+        assert!(!base.join("ingle-update-0123abcd").exists());
+        assert!(!base.join("ingle-update").exists());
+        assert!(base.join("someone-else").exists());
+        assert!(base.join("ingle-update-file").exists());
+        #[cfg(unix)]
+        {
+            // A link named like ours is left alone, and so is what it points at.
+            std::os::unix::fs::symlink(base.join("someone-else"), base.join("ingle-update-link")).unwrap();
+            clean_old_downloads(&base, Duration::ZERO);
+            assert!(base.join("someone-else").exists());
+        }
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
