@@ -932,7 +932,7 @@ impl IngleApp {
                     let r = crate::emoji::EmojiRef::Custom { name: e.name.clone(), id: e.id.clone(), animated: e.animated };
                     crate::emoji::widget(ui, 32.0, &r, &mut |id| self.custom_emoji_tex(&ctx, &s.key, id));
                     let mut name = self.ui.emoji_names.get(&e.id).cloned().unwrap_or_else(|| e.name.clone());
-                    let resp = ui.add(egui::TextEdit::singleline(&mut name).desired_width(180.0).char_limit(32));
+                    let resp = ui.add_sized([200.0, 26.0], egui::TextEdit::singleline(&mut name).char_limit(32));
                     if resp.changed() {
                         self.ui.emoji_names.insert(e.id.clone(), name.clone());
                     }

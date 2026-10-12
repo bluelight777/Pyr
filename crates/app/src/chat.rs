@@ -789,7 +789,12 @@ impl IngleApp {
                     }
                     self.ui.paste_down = down;
                 }
-                let send = resp.has_focus() && ui.input(|i| i.key_pressed(Key::Enter) && !i.modifiers.shift);
+                // Any Enter press counts (even one egui takes for a repeat because it missed a key
+                // release, e.g. to a file dialog).
+                let enter = ui.input(|i| {
+                    i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::Enter, pressed: true, modifiers, .. } if !modifiers.shift))
+                });
+                let send = resp.has_focus() && enter;
                 let files = self.ui.attach.get(&draft_key).cloned().unwrap_or_default();
                 if send && (!draft.trim().is_empty() || !files.is_empty()) {
                     let reply_to = self.ui.reply.take().map(|(id, _)| id);

@@ -276,6 +276,13 @@ fn picks() -> &'static std::sync::Mutex<Vec<Picked>> {
 }
 
 static DIALOG_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static DIALOG_CLOSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A file dialog closed since the last call. (Keys pressed in it can leave the window
+/// thinking they're still held down.)
+pub fn dialog_closed() -> bool {
+    DIALOG_CLOSED.swap(false, std::sync::atomic::Ordering::SeqCst)
+}
 
 /// Opens the system's picture chooser without blocking; results come from `take_picked`.
 pub fn pick_async(what: PickFor, multiple: bool, ctx: &egui::Context) {
@@ -287,6 +294,7 @@ pub fn pick_async(what: PickFor, multiple: bool, ctx: &egui::Context) {
     let _ = std::thread::Builder::new().name("ingle-file-dialog".into()).spawn(move || {
         let files = if multiple { pick_images() } else { pick_image().into_iter().collect() };
         DIALOG_OPEN.store(false, Ordering::SeqCst);
+        DIALOG_CLOSED.store(true, Ordering::SeqCst);
         if !files.is_empty() {
             picks().lock().unwrap().push((what, files));
         }
@@ -305,6 +313,7 @@ pub fn save_as_async(name: String, bytes: std::sync::Arc<Vec<u8>>, on_error: imp
         if let Err(e) = save_as(&name, &bytes) {
             on_error(e);
         }
+        DIALOG_CLOSED.store(true, std::sync::atomic::Ordering::SeqCst);
     });
 }
 

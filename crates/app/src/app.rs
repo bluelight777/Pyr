@@ -466,6 +466,9 @@ impl eframe::App for IngleApp {
             }
         }
         self.update_step(&mut acts);
+        if crate::images::dialog_closed() {
+            ctx.input_mut(|i| i.keys_down.clear());
+        }
         // Pictures chosen in a file dialog (which runs on its own thread).
         for (what, files) in crate::images::take_picked() {
             use crate::images::PickFor;
