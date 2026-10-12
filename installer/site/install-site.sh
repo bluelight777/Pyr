@@ -13,7 +13,7 @@ TOKEN=$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')
 for R in $(nginx -T 2>/dev/null | awk '/^[[:space:]]*root[[:space:]]/ { r = $2; gsub(";", "", r); print r }' | sort -u); do
   [ -d "$R" ] || continue
   echo "$TOKEN" > "$R/ingle-probe-$TOKEN.txt" 2>/dev/null || continue
-  GOT=$(curl -sk --max-time 5 --resolve "$SITE:443:127.0.0.1" "https://$SITE/ingle-probe-$TOKEN.txt" || true)
+  GOT=$(curl -sk --noproxy "*" --max-time 5 --resolve "$SITE:443:127.0.0.1" "https://$SITE/ingle-probe-$TOKEN.txt" || true)
   rm -f "$R/ingle-probe-$TOKEN.txt"
   if [ "$GOT" = "$TOKEN" ]; then ROOT=$R; break; fi
 done
