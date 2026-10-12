@@ -34,3 +34,32 @@ for R in $(nginx -T 2>/dev/null | awk '/^[[:space:]]*root[[:space:]]/ { r = $2; 
     rm -rf "${R:?}/ingle" && echo "Removed a stray copy from $R/ingle"
   fi
 done
+# Update the Ingle guild server running on this VPS (if one is set up) to the same version.
+# Everyone in it drops for a few seconds and reconnects by themselves.
+if [ -x /usr/local/bin/ingle-server ] && systemctl list-unit-files ingle-server.service >/dev/null 2>&1; then
+  case "$(uname -m)" in
+    x86_64) NEW="$HERE/server/ingle-server-linux-x86_64" ;;
+    aarch64) NEW="$HERE/server/ingle-server-linux-aarch64" ;;
+    *) NEW="" ;;
+  esac
+  if [ -n "$NEW" ] && [ -f "$NEW" ]; then
+    OLD_V=$(/usr/local/bin/ingle-server --version 2>/dev/null || echo unknown)
+    NEW_V=$("$NEW" --version 2>/dev/null || echo "")
+    if [ -n "$NEW_V" ] && [ "$OLD_V" != "$NEW_V" ]; then
+      cp -f /usr/local/bin/ingle-server /usr/local/bin/ingle-server.previous
+      install -m 0755 "$NEW" /usr/local/bin/ingle-server.new
+      mv -f /usr/local/bin/ingle-server.new /usr/local/bin/ingle-server
+      systemctl restart ingle-server
+      sleep 2
+      if systemctl is-active --quiet ingle-server; then
+        echo "Guild server updated: $OLD_V -> $NEW_V"
+      else
+        echo "The new guild server didn't start; putting the old one back." >&2
+        mv -f /usr/local/bin/ingle-server.previous /usr/local/bin/ingle-server
+        systemctl restart ingle-server
+      fi
+    else
+      echo "Guild server already up to date ($OLD_V)"
+    fi
+  fi
+fi

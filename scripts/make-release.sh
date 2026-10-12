@@ -24,5 +24,6 @@ fi
 cargo run -q -p ingle-proto --example release -- sign --key "$KEY" --version "$VERSION" --notes "$NOTES" \
   --base-url "$BASE" --windows "$SITE/Ingle-Setup-$VERSION.exe" "${DEB[@]}" --out "$SITE/latest.json"
 cp installer/site/install-site.sh "$OUT/upload/"
+mkdir -p "$OUT/upload/server" && cp dist/vps/ingle-server-linux-x86_64 dist/vps/ingle-server-linux-aarch64 "$OUT/upload/server/"
 cp installer/site/publish.ps1 installer/site/publish.cmd "$OUT/"
 ls -la "$SITE"
