@@ -206,24 +206,37 @@ SystemCallArchitectures=native
 [Install]
 WantedBy=multi-user.target
 UNIT
+# Waits (at most 30 seconds) for the service to run and listen on its port.
+server_up() {
+  i=0
+  while [ $i -lt 30 ]; do
+    if systemctl is-active --quiet ingle-server; then
+      if ! command -v ss >/dev/null 2>&1 || ss -uln 2>/dev/null | grep -q "[:.]${PORT}[[:space:]]"; then
+        return 0
+      fi
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  return 1
+}
 systemctl daemon-reload
 systemctl enable ingle-server >/dev/null 2>&1
-systemctl restart ingle-server
-UP=""
-i=0
-while [ $i -lt 30 ]; do
-  if systemctl is-active --quiet ingle-server; then
-    if ! command -v ss >/dev/null 2>&1 || ss -uln 2>/dev/null | grep -q "[:.]${PORT}[[:space:]]"; then
-      UP=1
-      break
-    fi
+systemctl restart ingle-server || true
+if ! server_up; then
+  # Some servers (older containers) can't apply the extra protections from UMask= down to
+  # SystemCallArchitectures=: try once without them (keeping a low port's one capability).
+  warn "The server didn't start with the extra protections; trying without them."
+  sed -i '/^UMask=/,/^SystemCallArchitectures=/d' /etc/systemd/system/ingle-server.service
+  if [ -n "$CAPS" ]; then
+    sed -i "/^ReadWritePaths=/a AmbientCapabilities=$CAPS" /etc/systemd/system/ingle-server.service
   fi
-  sleep 1
-  i=$((i + 1))
-done
-if [ -z "$UP" ]; then
-  journalctl -u ingle-server -n 20 --no-pager 2>/dev/null || true
-  die "The server didn't start (see the log above)."
+  systemctl daemon-reload
+  systemctl restart ingle-server || true
+  if ! server_up; then
+    journalctl -u ingle-server -n 20 --no-pager 2>/dev/null || true
+    die "The server didn't start (see the log above)."
+  fi
 fi
 
 echo

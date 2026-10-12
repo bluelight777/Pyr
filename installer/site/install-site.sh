@@ -85,7 +85,7 @@ HARDEN
       cp -f /usr/local/bin/ingle-server /usr/local/bin/ingle-server.previous
       install -m 0755 "$NEW" /usr/local/bin/ingle-server.new
       mv -f /usr/local/bin/ingle-server.new /usr/local/bin/ingle-server
-      systemctl restart ingle-server
+      systemctl restart ingle-server || true
       sleep 2
       if systemctl is-active --quiet ingle-server; then
         echo "Guild server updated: $OLD_V -> $NEW_V"
@@ -94,7 +94,7 @@ HARDEN
           echo "The guild server didn't start with the extra protections; trying without them." >&2
           rm -f "$DROPIN"
           systemctl daemon-reload
-          systemctl restart ingle-server
+          systemctl restart ingle-server || true
           sleep 2
         fi
         if systemctl is-active --quiet ingle-server; then
@@ -102,7 +102,7 @@ HARDEN
         else
           echo "The new guild server didn't start; putting the old one back." >&2
           mv -f /usr/local/bin/ingle-server.previous /usr/local/bin/ingle-server
-          systemctl restart ingle-server
+          systemctl restart ingle-server || true
         fi
       fi
     else

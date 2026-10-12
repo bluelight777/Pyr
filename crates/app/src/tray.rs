@@ -191,7 +191,7 @@ pub fn notify(title: &str, text: &str) {
 
 /// Quit Ingle for real (Settings → Quit Ingle): the same as the icon's Quit.
 pub fn quit() -> ! {
-    quit_now()
+    quit_now("Settings")
 }
 
 /// Take the icon away before the process exits by itself (an update quitting the app).
@@ -227,8 +227,8 @@ fn show_main() {
 
 /// Quit without waiting for a frame (there are none while the window is hidden): what closing
 /// the window does, then exit.
-fn quit_now() -> ! {
-    tracing::info!("quitting from the tray icon");
+fn quit_now(from: &str) -> ! {
+    tracing::info!("quitting ({from})");
     let state = with_state(|s| (s.main, s.engine.clone()));
     remove_icon();
     if let Some((main, engine)) = state {
@@ -283,7 +283,7 @@ fn show_menu(tray: HWND, x: i32, y: i32) {
         CMD_MUTE => engine.set_mute(!muted),
         CMD_DEAFEN => engine.set_deafen(!deafened),
         CMD_LEAVE => engine.leave_voice(),
-        CMD_QUIT => quit_now(),
+        CMD_QUIT => quit_now("tray icon"),
         _ => {}
     }
 }
@@ -310,7 +310,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             hide_main_now();
             LRESULT(0)
         }
-        WM_INGLE_QUIT => quit_now(),
+        WM_INGLE_QUIT => quit_now("asked to by another launch, like the installer"),
         WM_ENDSESSION if wparam.0 != 0 => {
             // Windows is signing out or shutting down: save what quitting would save.
             if let Some(engine) = with_state(|s| s.engine.clone()) {
