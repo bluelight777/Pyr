@@ -12,6 +12,7 @@ pub mod e2ee;
 pub mod hotkey;
 pub mod net;
 pub mod server;
+pub mod sfx;
 pub mod state;
 pub mod video;
 
@@ -104,9 +105,26 @@ pub struct Shared {
     /// Images downloaded from servers (attachments and profile pictures), by file id. Kept
     /// in memory only, so nothing deleted on a server lingers on this PC.
     pub files: Mutex<files::FileCache>,
+    sfx: Option<sfx::Sfx>,
+    /// The app's window is in front (messages in the open channel then make no sound).
+    pub window_focused: AtomicBool,
+    /// A direct message conversation just opened with `open_dm`, for the UI to show.
+    pub opened_dm: Mutex<Option<(String, ChannelId)>>,
 }
 
 impl Shared {
+    /// Plays a notification sound, if they're on.
+    pub fn play(&self, sound: sfx::Sound) {
+        let Some(sfx) = &self.sfx else { return };
+        let (on, device, volume) = {
+            let st = self.state.read();
+            (st.settings.sounds, st.settings.output_device.clone(), st.settings.sound_volume)
+        };
+        if on {
+            sfx.play(sound, device, volume);
+        }
+    }
+
     pub fn save_config_locked(&self, cfg: &Config) {
         if let Err(e) = config::save_config(&self.config_dir, cfg) {
             warn!("couldn't save settings: {e:#}");
@@ -301,7 +319,11 @@ impl Engine {
             stream_volumes: cfg.stream_volumes.clone(),
             mic_level_db: -100.0,
             mic_test: false,
+            muted_servers: cfg.muted_servers.clone(),
+            muted_channels: cfg.muted_channels.iter().flat_map(|(k, cs)| cs.iter().map(move |c| (k.clone(), *c))).collect(),
         };
+        // Tests and bots (which bring their own audio) stay quiet.
+        let sfx = if opts.audio.is_none() { Some(sfx::Sfx::start()) } else { None };
         let ptt_down = Arc::new(AtomicBool::new(false));
         let ptt_key = cfg.settings.ptt_key.clone();
         let entries = cfg.servers.clone();
@@ -319,12 +341,15 @@ impl Engine {
             endpoints: std::sync::Mutex::new(net::Endpoints::default()),
             rt: handle,
             active_view: Mutex::new(None),
+            opened_dm: Mutex::new(None),
             voice_prefs: Mutex::new((false, false)),
             ptt_down: ptt_down.clone(),
             audio_factory: opts.audio,
             mic_test: Mutex::new(None),
             last_video_bytes: Mutex::new((std::time::Instant::now(), 0)),
             files: Mutex::new(files::FileCache::default()),
+            sfx,
+            window_focused: AtomicBool::new(true),
         });
         for e in entries {
             let h = server::spawn(shared.clone(), e.clone());
@@ -704,6 +729,92 @@ impl Engine {
             drop(st);
             (shared.repaint)();
         });
+    }
+
+    pub fn play_sound(&self, sound: sfx::Sound) {
+        self.shared.play(sound);
+    }
+
+    /// Plays a sound with these settings (the settings screen's Test button).
+    pub fn play_sound_with(&self, sound: sfx::Sound, settings: &Settings) {
+        if let Some(sfx) = &self.shared.sfx {
+            sfx.play(sound, settings.output_device.clone(), settings.sound_volume);
+        }
+    }
+
+    /// Whether the window is in front (see `Shared::window_focused`).
+    pub fn set_window_focused(&self, focused: bool) {
+        self.shared.window_focused.store(focused, Ordering::Relaxed);
+    }
+
+    /// Mutes or unmutes a whole server (`channel` none) or one channel or conversation.
+    pub fn set_muted(&self, key: &str, channel: Option<ChannelId>, muted: bool) {
+        {
+            let mut cfg = self.shared.config.lock();
+            match channel {
+                None if muted => {
+                    cfg.muted_servers.insert(key.to_string());
+                }
+                None => {
+                    cfg.muted_servers.remove(key);
+                }
+                Some(c) if muted => {
+                    cfg.muted_channels.entry(key.to_string()).or_default().insert(c);
+                }
+                Some(c) => {
+                    if let Some(set) = cfg.muted_channels.get_mut(key) {
+                        set.remove(&c);
+                    }
+                }
+            }
+            self.shared.save_config_locked(&cfg);
+        }
+        let mut st = self.shared.state.write();
+        match channel {
+            None if muted => {
+                st.muted_servers.insert(key.to_string());
+            }
+            None => {
+                st.muted_servers.remove(key);
+            }
+            Some(c) if muted => {
+                st.muted_channels.insert((key.to_string(), c));
+            }
+            Some(c) => {
+                st.muted_channels.remove(&(key.to_string(), c));
+            }
+        }
+    }
+
+    /// Opens (starting it if needed) the direct message conversation with a member of this
+    /// server; `take_opened_dm` then says which to show.
+    pub fn open_dm(&self, key: &str, user_id: &str) {
+        let known = self.shared.state.read().server(key).and_then(|s| s.dm_with(user_id)).map(|d| d.id);
+        if let Some(id) = known {
+            *self.shared.opened_dm.lock() = Some((key.to_string(), id));
+            (self.shared.repaint)();
+            return;
+        }
+        let k = key.to_string();
+        self.request_then(key, Request::OpenDm { user_id: user_id.to_string() }, move |shared, ev| {
+            if let Event::DmOpened { dm } = ev {
+                let id = dm.id;
+                if let Some(s) = shared.state.write().server_mut(&k) {
+                    s.upsert_dm(dm);
+                }
+                *shared.opened_dm.lock() = Some((k, id));
+                (shared.repaint)();
+            }
+        });
+    }
+
+    pub fn take_opened_dm(&self) -> Option<(String, ChannelId)> {
+        self.shared.opened_dm.lock().take()
+    }
+
+    /// Nothing in particular is being looked at (the friends list, settings...).
+    pub fn clear_active_channel(&self) {
+        *self.shared.active_view.lock() = None;
     }
 
     /// Tell the engine what the user is looking at (clears unread markers there).

@@ -89,6 +89,8 @@ pub struct ServerView {
     pub roles: Vec<RoleDef>,
     /// Features the server has beyond protocol v1 (roles, files, avatars).
     pub features: Vec<String>,
+    /// My direct message conversations here, newest first.
+    pub dms: Vec<Dm>,
 }
 
 impl ServerView {
@@ -111,11 +113,32 @@ impl ServerView {
             rtt_ms: 0,
             roles: Vec::new(),
             features: Vec::new(),
+            dms: Vec::new(),
         }
     }
 
     pub fn has(&self, feature: &str) -> bool {
         self.features.iter().any(|f| f == feature)
+    }
+
+    pub fn dm(&self, channel_id: ChannelId) -> Option<&Dm> {
+        self.dms.iter().find(|d| d.id == channel_id)
+    }
+
+    pub fn dm_with(&self, uid: &str) -> Option<&Dm> {
+        self.dms.iter().find(|d| d.with == uid)
+    }
+
+    /// Adds or replaces a conversation, keeping the newest first.
+    pub fn upsert_dm(&mut self, dm: Dm) {
+        match self.dms.iter_mut().find(|d| d.id == dm.id) {
+            Some(d) => {
+                d.with = dm.with;
+                d.last_message = d.last_message.max(dm.last_message);
+            }
+            None => self.dms.push(dm),
+        }
+        self.dms.sort_by_key(|d| std::cmp::Reverse((d.last_message, d.id)));
     }
 
     pub fn role(&self, id: RoleId) -> Option<&RoleDef> {
@@ -140,6 +163,32 @@ impl ServerView {
             return perm::ALL;
         }
         self.roles.iter().filter(|r| me.roles.contains(&r.id)).fold(0, |a, r| a | r.perms)
+    }
+
+    /// What a member may do.
+    pub fn perms_of(&self, uid: &str) -> u64 {
+        let Some(m) = self.members.get(uid) else { return 0 };
+        if m.role.is_admin() {
+            return perm::ALL;
+        }
+        self.roles_of(uid).iter().fold(0, |a, r| a | r.perms)
+    }
+
+    /// Whether a message pings me, like Discord: @my name, @one of my roles, or
+    /// @everyone / @here from someone allowed to use them.
+    pub fn pings_me(&self, author: &str, content: &str) -> bool {
+        let Some(me) = &self.me else { return false };
+        if author == me.user_id {
+            return false;
+        }
+        let lower = content.to_lowercase();
+        if has_mention(&lower, &self.member_name(&me.user_id).to_lowercase()) {
+            return true;
+        }
+        if self.roles_of(&me.user_id).iter().any(|r| has_mention(&lower, &r.name.to_lowercase())) {
+            return true;
+        }
+        (has_mention(&lower, "everyone") || has_mention(&lower, "here")) && self.perms_of(author) & perm::MENTION_EVERYONE != 0
     }
 
     pub fn can(&self, p: u64) -> bool {
@@ -179,6 +228,30 @@ impl ServerView {
     pub fn voice_in(&self, channel_id: ChannelId) -> Vec<&VoiceParticipant> {
         self.voice.values().filter(|p| p.channel_id == channel_id).collect()
     }
+}
+
+/// `@name` in (lowercased) text, at the start or after a space, and not just the start of a
+/// longer word ("@bob" isn't in "@bobby").
+pub fn has_mention(lower: &str, name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let needle = format!("@{name}");
+    let mut from = 0;
+    while let Some(i) = lower[from..].find(&needle) {
+        let start = from + i;
+        let end = start + needle.len();
+        let before_ok = lower[..start].chars().next_back().map(|c| c.is_whitespace() || "([{".contains(c)).unwrap_or(true);
+        let after_ok = lower[end..].chars().next().map(|c| !c.is_alphanumeric() && c != '_').unwrap_or(true);
+        if before_ok && after_ok {
+            return true;
+        }
+        from = start + 1;
+        while !lower.is_char_boundary(from) {
+            from += 1;
+        }
+    }
+    false
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -256,6 +329,9 @@ pub struct AppState {
     /// Microphone level in dBFS (for the settings meter), updated while audio runs.
     pub mic_level_db: f32,
     pub mic_test: bool,
+    /// Muted servers and (server, channel) pairs.
+    pub muted_servers: HashSet<String>,
+    pub muted_channels: HashSet<(String, ChannelId)>,
 }
 
 impl AppState {
@@ -265,6 +341,10 @@ impl AppState {
     pub fn server_mut(&mut self, key: &str) -> Option<&mut ServerView> {
         self.servers.iter_mut().find(|s| s.key == key)
     }
+    pub fn is_muted(&self, key: &str, channel: ChannelId) -> bool {
+        self.muted_servers.contains(key) || self.muted_channels.contains(&(key.to_string(), channel))
+    }
+
     pub fn toast(&mut self, text: impl Into<String>, error: bool) {
         self.toasts.push(Toast { text: text.into(), error, at: Instant::now() });
         if self.toasts.len() > 5 {
@@ -283,3 +363,19 @@ pub struct VideoFrame {
 }
 
 pub type SharedFrame = Arc<VideoFrame>;
+
+#[cfg(test)]
+mod tests {
+    use super::has_mention;
+
+    #[test]
+    fn mentions_need_whole_names() {
+        assert!(has_mention("hey @bob!", "bob"));
+        assert!(has_mention("@bob", "bob"));
+        assert!(has_mention("hi @big mike, you there", "big mike"));
+        assert!(!has_mention("hey @bobby", "bob"));
+        assert!(!has_mention("mail me at x@bob", "bob"));
+        assert!(has_mention("(@mods) help", "mods"));
+        assert!(has_mention("@everyone 🎉", "everyone"));
+    }
+}

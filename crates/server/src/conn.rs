@@ -210,8 +210,15 @@ async fn file_stream(hub: &Hub, uid: &str, mut send: quinn::SendStream, mut recv
                 let _ = send.finish();
                 return Ok(());
             };
-            let bytes = tokio::fs::read(&path).await.unwrap_or_default();
-            if bytes.len() as u64 != row.size {
+            // A picture sent in a direct message is only for its two people.
+            let private = row
+                .message_id
+                .and_then(|m| hub.db.get_message(m))
+                .and_then(|m| hub.db.dm_members(m.channel_id))
+                .map(|(a, b)| a != uid && b != uid)
+                .unwrap_or(false);
+            let bytes = if private { Vec::new() } else { tokio::fs::read(&path).await.unwrap_or_default() };
+            if bytes.len() as u64 != row.size || private {
                 send.write_all(&fail("That file is gone.")).await?;
                 let _ = send.finish();
                 return Ok(());
@@ -337,6 +344,18 @@ impl Ctx<'_> {
         self.role().is_admin() || (r.position as i64) < self.rank_of(&self.uid)
     }
 
+    /// A text channel, or a direct message I'm in.
+    fn can_see(&self, channel_id: ChannelId) -> Result<(), (ErrorCode, String)> {
+        let db = &self.hub.db;
+        if db.channel(channel_id).is_some() {
+            return Ok(());
+        }
+        match db.dm_members(channel_id) {
+            Some((a, b)) if a == self.uid || b == self.uid => Ok(()),
+            _ => Err((ErrorCode::NotFound, "No such channel.".into())),
+        }
+    }
+
     fn take_message_token(&mut self) -> Result<(), (ErrorCode, String)> {
         let now = Instant::now();
         let dt = now.duration_since(self.last_refill).as_secs_f64();
@@ -372,14 +391,12 @@ impl Ctx<'_> {
                     None if !attachments.is_empty() && content.trim().is_empty() => String::new(),
                     None => return bad("message is empty or too long"),
                 };
-                if db.channel(channel_id).is_none() {
-                    return Err((ErrorCode::NotFound, "No such channel.".into()));
-                }
+                self.can_see(channel_id)?;
                 let reply_to = reply_to.filter(|id| db.get_message(*id).map(|m| m.channel_id == channel_id).unwrap_or(false));
                 let message = db
                     .insert_message_with(channel_id, &self.uid, &content, reply_to, &attachments)
                     .map_err(|e| (ErrorCode::Internal, e.to_string()))?;
-                hub.broadcast(Event::MessageCreated { message, nonce });
+                hub.broadcast_in(channel_id, Event::MessageCreated { message, nonce });
                 Ok(Event::Ok)
             }
             Request::EditMessage { message_id, content } => {
@@ -389,18 +406,20 @@ impl Ctx<'_> {
                     return Err((ErrorCode::Forbidden, "You can only edit your own messages.".into()));
                 }
                 if let Ok(Some(message)) = db.edit_message(message_id, &content) {
-                    hub.broadcast(Event::MessageUpdated { message });
+                    hub.broadcast_in(message.channel_id, Event::MessageUpdated { message });
                 }
                 Ok(Event::Ok)
             }
             Request::DeleteMessage { message_id } => {
                 let Some(m) = db.get_message(message_id) else { return Ok(Event::Ok) };
-                if m.author != self.uid && self.perms() & perm::MANAGE_MESSAGES == 0 {
+                // In direct messages only the author can; elsewhere moderators can too.
+                let in_dm = db.dm_members(m.channel_id).is_some();
+                if m.author != self.uid && (in_dm || self.perms() & perm::MANAGE_MESSAGES == 0) {
                     return Err((ErrorCode::Forbidden, "You can't delete that message.".into()));
                 }
                 let files = db.delete_message(message_id).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
                 hub.wipe_files(&files);
-                hub.broadcast(Event::MessageDeleted { channel_id: m.channel_id, message_id });
+                hub.broadcast_in(m.channel_id, Event::MessageDeleted { channel_id: m.channel_id, message_id });
                 Ok(Event::Ok)
             }
             Request::React { message_id, emoji, add } => {
@@ -409,26 +428,42 @@ impl Ctx<'_> {
                 {
                     return bad("not an emoji");
                 }
-                if db.get_message(message_id).is_none() {
-                    return Err((ErrorCode::NotFound, "gone".into()));
-                }
+                let Some(m) = db.get_message(message_id) else { return Err((ErrorCode::NotFound, "gone".into())) };
+                self.can_see(m.channel_id)?;
                 if add && db.distinct_reactions(message_id) >= 20 {
                     return bad("too many different reactions");
                 }
                 db.set_reaction(message_id, &emoji, &self.uid, add).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
                 if let Some(message) = db.get_message(message_id) {
-                    hub.broadcast(Event::MessageUpdated { message });
+                    hub.broadcast_in(message.channel_id, Event::MessageUpdated { message });
                 }
                 Ok(Event::Ok)
             }
             Request::FetchHistory { channel_id, before, limit } => {
-                if db.channel(channel_id).is_none() {
-                    return Err((ErrorCode::NotFound, "No such channel.".into()));
-                }
+                self.can_see(channel_id)?;
                 let (messages, complete) = db.history(channel_id, before, limit);
                 Ok(Event::History { channel_id, messages, complete })
             }
-            Request::Typing { channel_id } => hub.typing(self.conn_id, &self.uid, channel_id),
+            Request::Typing { channel_id } => match self.can_see(channel_id) {
+                Ok(()) => hub.typing(self.conn_id, &self.uid, channel_id),
+                Err(_) => Ok(Event::Ok),
+            },
+            Request::OpenDm { user_id } => {
+                if user_id == self.uid {
+                    return bad("you can't message yourself");
+                }
+                match db.get_user(&user_id) {
+                    Some(u) if !u.banned => {}
+                    _ => return Err((ErrorCode::NotFound, "They aren't a member of this server.".into())),
+                }
+                let (id, new) = db.open_dm(&self.uid, &user_id).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                if new {
+                    let theirs = Dm { id, with: self.uid.clone(), last_message: None };
+                    hub.send_to_user(&user_id, Event::DmOpened { dm: theirs });
+                }
+                let last_message = db.dms_of(&self.uid).into_iter().find(|d| d.id == id).and_then(|d| d.last_message);
+                Ok(Event::DmOpened { dm: Dm { id, with: user_id, last_message } })
+            }
 
             Request::CreateChannel { name, kind } => {
                 self.require(perm::MANAGE_CHANNELS, "manage channels")?;

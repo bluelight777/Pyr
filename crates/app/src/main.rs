@@ -6,6 +6,8 @@ mod chat;
 mod create;
 mod dialogs;
 mod icons;
+mod home;
+mod sounds;
 mod images;
 mod titlebar;
 mod instance;

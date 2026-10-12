@@ -258,7 +258,8 @@ fn sort_channels(v: &mut [Channel]) {
 }
 
 fn apply_ready(shared: &Shared, key: &str, ready: Event) {
-    let Event::Ready { me, server, mut channels, members, voice, mut roles, features } = ready else { return };
+    let Event::Ready { me, server, mut channels, members, voice, mut roles, features, dms } = ready else { return };
+    let last_read = shared.config.lock().last_read.get(key).cloned().unwrap_or_default();
     roles.sort_by_key(|r| (std::cmp::Reverse(r.position), r.id));
     sort_channels(&mut channels);
     let mut st = shared.state.write();
@@ -278,6 +279,17 @@ fn apply_ready(shared: &Shared, key: &str, ready: Event) {
     s.voice = voice.into_iter().map(|p| (p.session, p)).collect();
     s.roles = roles;
     s.features = features;
+    // Direct messages that came in while we were away show as unread.
+    s.dms.clear();
+    for dm in dms {
+        if let Some(last) = dm.last_message {
+            if last_read.get(&dm.id).map(|seen| *seen < last).unwrap_or(true) {
+                s.unread.insert(dm.id);
+                s.mentions.entry(dm.id).or_insert(1);
+            }
+        }
+        s.upsert_dm(dm);
+    }
     // History may have changed while we were away; reload lazily.
     for log in s.logs.values_mut() {
         log.loaded = false;
@@ -286,38 +298,72 @@ fn apply_ready(shared: &Shared, key: &str, ready: Event) {
     (shared.repaint)();
 }
 
-fn mentions_me(content: &str, my_name: &str) -> bool {
-    if my_name.is_empty() {
-        return false;
-    }
-    let lower = content.to_lowercase();
-    lower.contains(&format!("@{}", my_name.to_lowercase())) || lower.contains("@everyone") || lower.contains("@here")
+fn log_newest(s: &ServerView, cid: ChannelId) -> Option<MessageId> {
+    s.logs.get(&cid).and_then(|l| l.messages.last().map(|m| m.id))
 }
+
 
 fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
     let active = shared.active_view.lock().clone();
     let mut forward: Option<CallEvent> = None;
     let mut toast: Option<String> = None;
+    let mut dm_note: Option<String> = None;
+    let mut ding = false;
     {
         let mut st = shared.state.write();
         let my_uid = st.my_uid.clone();
+        let server_muted = st.muted_servers.contains(key);
+        let muted_channels: std::collections::HashSet<ChannelId> =
+            st.muted_channels.iter().filter(|(k, _)| k == key).map(|(_, c)| *c).collect();
         let Some(s) = st.server_mut(key) else { return };
         match ev {
             Event::MessageCreated { message, nonce } => {
                 let cid = message.channel_id;
+                let mention = message.author != my_uid && s.pings_me(&message.author, &message.content);
                 let log = s.logs.entry(cid).or_default();
                 if !nonce.is_empty() {
                     log.pending.retain(|p| p.nonce != nonce);
                 }
                 let mine = message.author == my_uid;
-                let mention = !mine && mentions_me(&message.content, s.me.as_ref().map(|m| m.name.as_str()).unwrap_or(""));
                 log.upsert(message);
                 s.typing.entry(cid).or_default().retain(|u, _| !mine || u != &my_uid);
                 let viewing = active.as_ref().map(|(k, c)| k == key && *c == cid).unwrap_or(false);
+                let in_dm = s.dm(cid).is_some();
+                if in_dm {
+                    let (with, mid) = (s.dm(cid).map(|d| d.with.clone()).unwrap_or_default(), log_newest(s, cid));
+                    s.upsert_dm(Dm { id: cid, with, last_message: mid });
+                }
+                // A ping for every new message you can see, unless the channel (or server) is
+                // muted or you're looking right at it. Mentions and direct messages ping even
+                // in a muted server, like Discord.
+                let focused = shared.window_focused.load(std::sync::atomic::Ordering::Relaxed);
+                let muted = server_muted && !mention && !in_dm || muted_channels.contains(&cid);
+                if !mine && !(viewing && focused) && !muted {
+                    ding = true;
+                }
                 if !mine && !viewing {
-                    s.unread.insert(cid);
-                    if mention {
+                    if !muted || mention {
+                        s.unread.insert(cid);
+                    }
+                    // Every direct message counts like a mention (the red badge).
+                    if mention || in_dm {
                         *s.mentions.entry(cid).or_default() += 1;
+                    }
+                    if mention && !in_dm {
+                        if let Some(m) = s.logs.get(&cid).and_then(|l| l.messages.last()) {
+                            let who = s.member_name(&m.author);
+                            let channel = s.channel(cid).map(|c| c.name.clone()).unwrap_or_default();
+                            let text: String = m.content.chars().take(80).collect();
+                            dm_note = Some(format!("{who} mentioned you in #{channel}: {text}"));
+                        }
+                    }
+                    if in_dm {
+                        if let Some(m) = s.logs.get(&cid).and_then(|l| l.messages.last()) {
+                            let who = s.member_name(&m.author);
+                            let text = if m.content.is_empty() { "sent a picture".to_string() } else { m.content.clone() };
+                            let text: String = text.chars().take(80).collect();
+                            dm_note = Some(format!("{who}: {text}"));
+                        }
                     }
                 }
             }
@@ -373,6 +419,7 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
                 }
                 s.roles.sort_by_key(|r| (std::cmp::Reverse(r.position), r.id));
             }
+            Event::DmOpened { dm } => s.upsert_dm(dm),
             Event::RoleDeleted { role_id } => {
                 s.roles.retain(|r| r.id != role_id);
                 for m in s.members.values_mut() {
@@ -404,6 +451,12 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
         if let Some(t) = toast {
             st.toast(t, true);
         }
+        if let Some(t) = dm_note {
+            st.toast(t, false);
+        }
+    }
+    if ding {
+        shared.play(crate::sfx::Sound::Message);
     }
     if let Some(ev) = forward {
         shared.forward_call_event(key, ev);

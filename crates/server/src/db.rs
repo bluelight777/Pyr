@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use ingle_proto::control::{
-    Attachment, Channel, ChannelId, ChannelKind, FileKind, Member, Message, MessageId, Reaction, Role, RoleDef, RoleId, UserId,
+    Attachment, Channel, ChannelId, ChannelKind, Dm, FileKind, Member, Message, MessageId, Reaction, Role, RoleDef, RoleId, UserId,
 };
 use ingle_proto::now_ms;
 use parking_lot::Mutex;
@@ -113,7 +113,18 @@ CREATE TABLE IF NOT EXISTS files (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS files_by_message ON files(message_id);
+-- Direct messages: each is a hidden row in `channels` (kind 2) between two members, a < b.
+CREATE TABLE IF NOT EXISTS dms (
+    channel_id INTEGER PRIMARY KEY,
+    a TEXT NOT NULL,
+    b TEXT NOT NULL,
+    UNIQUE (a, b)
+);
+CREATE INDEX IF NOT EXISTS dms_by_b ON dms(b);
 "#;
+
+/// `channels.kind` of a direct message conversation (never listed as a channel).
+const DM_KIND: i64 = 2;
 
 fn file_kind_to_i(k: FileKind) -> i64 {
     match k {
@@ -501,7 +512,7 @@ impl Db {
     pub fn channels(&self) -> Vec<Channel> {
         let c = self.conn.lock();
         let mut st = c
-            .prepare("SELECT id, kind, name, topic, position FROM channels ORDER BY kind, position, id")
+            .prepare("SELECT id, kind, name, topic, position FROM channels WHERE kind < 2 ORDER BY kind, position, id")
             .expect("valid SQL");
         st.query_map([], |r| {
             Ok(Channel {
@@ -519,7 +530,7 @@ impl Db {
     pub fn channel(&self, id: ChannelId) -> Option<Channel> {
         self.conn
             .lock()
-            .query_row("SELECT id, kind, name, topic, position FROM channels WHERE id = ?1", [id], |r| {
+            .query_row("SELECT id, kind, name, topic, position FROM channels WHERE id = ?1 AND kind < 2", [id], |r| {
                 Ok(Channel {
                     id: r.get(0)?,
                     kind: kind_from_i(r.get(1)?),
@@ -565,13 +576,61 @@ impl Db {
     /// files that were attached (to wipe).
     pub fn delete_channel(&self, id: ChannelId) -> Result<(bool, Vec<String>)> {
         let c = self.conn.lock();
-        let n = c.execute("DELETE FROM channels WHERE id = ?1", [id])?;
+        let n = c.execute("DELETE FROM channels WHERE id = ?1 AND kind < 2", [id])?;
+        if n == 0 {
+            return Ok((false, Vec::new()));
+        }
         c.execute("DELETE FROM reactions WHERE message_id IN (SELECT id FROM messages WHERE channel_id = ?1)", [id])?;
         let files = Self::file_ids_where(&c, "message_id IN (SELECT id FROM messages WHERE channel_id = ?1)", id);
         c.execute("DELETE FROM files WHERE message_id IN (SELECT id FROM messages WHERE channel_id = ?1)", [id])?;
         c.execute("DELETE FROM messages WHERE channel_id = ?1", [id])?;
         scrub(&c);
         Ok((n > 0, files))
+    }
+
+    // ------------------------------------------------------------- direct messages
+
+    /// The two people in a direct message conversation.
+    pub fn dm_members(&self, channel_id: ChannelId) -> Option<(String, String)> {
+        self.conn
+            .lock()
+            .query_row("SELECT a, b FROM dms WHERE channel_id = ?1", [channel_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()
+            .ok()
+            .flatten()
+    }
+
+    /// Finds or starts the conversation between two members; true when it's new.
+    pub fn open_dm(&self, x: &str, y: &str) -> Result<(ChannelId, bool)> {
+        let (a, b) = if x <= y { (x, y) } else { (y, x) };
+        let c = self.conn.lock();
+        if let Some(id) =
+            c.query_row("SELECT channel_id FROM dms WHERE a = ?1 AND b = ?2", params![a, b], |r| r.get(0)).optional()?
+        {
+            return Ok((id, false));
+        }
+        c.execute(
+            "INSERT INTO channels(kind, name, topic, position, created_at) VALUES (?1, '', '', 0, ?2)",
+            params![DM_KIND, now_ms()],
+        )?;
+        let id = c.last_insert_rowid();
+        c.execute("INSERT INTO dms(channel_id, a, b) VALUES (?1, ?2, ?3)", params![id, a, b])?;
+        Ok((id, true))
+    }
+
+    /// Someone's conversations, as they see them.
+    pub fn dms_of(&self, uid: &str) -> Vec<Dm> {
+        let c = self.conn.lock();
+        let mut st = c
+            .prepare(
+                "SELECT d.channel_id, CASE WHEN d.a = ?1 THEN d.b ELSE d.a END, \
+                 (SELECT MAX(id) FROM messages WHERE channel_id = d.channel_id) \
+                 FROM dms d WHERE d.a = ?1 OR d.b = ?1",
+            )
+            .expect("valid SQL");
+        st.query_map([uid], |r| Ok(Dm { id: r.get(0)?, with: r.get(1)?, last_message: r.get(2)? }))
+            .map(|rows| rows.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default()
     }
 
     // ------------------------------------------------------------- messages

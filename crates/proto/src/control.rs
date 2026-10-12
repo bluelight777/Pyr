@@ -93,15 +93,18 @@ pub mod perm {
     pub const MANAGE_ROLES: u64 = 1 << 4;
     /// Rename the server and change its description.
     pub const MANAGE_SERVER: u64 = 1 << 5;
-    pub const ALL: u64 = MANAGE_CHANNELS | KICK | BAN | MANAGE_MESSAGES | MANAGE_ROLES | MANAGE_SERVER;
+    /// Ping everyone with @everyone or @here.
+    pub const MENTION_EVERYONE: u64 = 1 << 6;
+    pub const ALL: u64 = MANAGE_CHANNELS | KICK | BAN | MANAGE_MESSAGES | MANAGE_ROLES | MANAGE_SERVER | MENTION_EVERYONE;
     /// (bit, short name, what it means) for settings screens.
-    pub const LIST: [(u64, &str, &str); 6] = [
+    pub const LIST: [(u64, &str, &str); 7] = [
         (MANAGE_CHANNELS, "Manage channels", "Create, rename and delete channels."),
         (MANAGE_MESSAGES, "Manage messages", "Delete other people's messages."),
         (KICK, "Kick members", "Remove people (they can come back with an invite)."),
         (BAN, "Ban members", "Remove people for good."),
         (MANAGE_ROLES, "Manage roles", "Create and edit roles, and give people roles below their own highest role."),
         (MANAGE_SERVER, "Manage server", "Rename the server and change its description."),
+        (MENTION_EVERYONE, "Mention @everyone", "Ping the whole server with @everyone or @here."),
     ];
 }
 
@@ -141,6 +144,21 @@ pub const ROLES_FEATURE: &str = "roles";
 /// File streams: attachments and profile pictures.
 pub const FILES_FEATURE: &str = "files";
 pub const AVATARS_FEATURE: &str = "avatars";
+/// Direct messages between two members ([`Dm`]).
+pub const DMS_FEATURE: &str = "dms";
+
+/// A private conversation between me and one other member ([`DMS_FEATURE`]). It works like a
+/// text channel (`SendMessage`, `FetchHistory`, `Typing`... with its `id`), but only the two
+/// of us can see it, and only its author can delete a message.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Dm {
+    pub id: ChannelId,
+    /// The other person.
+    pub with: UserId,
+    /// Newest message, for sorting the list; none while it's empty.
+    #[serde(default)]
+    pub last_message: Option<MessageId>,
+}
 
 /// Largest attachment and profile picture the server accepts.
 pub const MAX_ATTACHMENT_BYTES: u64 = 10 << 20;
@@ -494,6 +512,11 @@ pub enum Request {
         #[serde(default)]
         file_id: Option<String>,
     },
+    /// Start (or find) the direct message conversation with a member ([`DMS_FEATURE`]).
+    /// Answered with `DmOpened`.
+    OpenDm {
+        user_id: UserId,
+    },
     /// A request this server doesn't know (from a newer app).
     #[serde(other)]
     Unknown,
@@ -542,6 +565,9 @@ pub enum Event {
         /// What this server supports beyond protocol v1 (see [`ROLES_FEATURE`] and friends).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         features: Vec<String>,
+        /// My direct message conversations ([`DMS_FEATURE`]).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        dms: Vec<Dm>,
     },
     Ok,
     Error {
@@ -626,6 +652,10 @@ pub enum Event {
     },
     RoleDeleted {
         role_id: RoleId,
+    },
+    /// A direct message conversation I'm in was started (by me or the other person).
+    DmOpened {
+        dm: Dm,
     },
     /// An event this app doesn't know (from a newer server); ignored.
     #[serde(other)]

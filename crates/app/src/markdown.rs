@@ -97,7 +97,7 @@ fn is_url_start(s: &str) -> bool {
 }
 
 /// Build a styled layout for one paragraph. Returns the job and link spans (in chars).
-pub fn layout(text: &str, size: f32, color: Color32, my_name: &str, wrap_width: f32) -> (LayoutJob, Vec<LinkSpan>) {
+pub fn layout(text: &str, size: f32, color: Color32, names: &[String], wrap_width: f32) -> (LayoutJob, Vec<LinkSpan>) {
     let mut job = LayoutJob::default();
     job.wrap.max_width = wrap_width;
     let mut links = Vec::new();
@@ -188,15 +188,13 @@ pub fn layout(text: &str, size: f32, color: Color32, my_name: &str, wrap_width: 
         // mentions
         if chars[i] == '@' && (i == 0 || chars[i - 1].is_whitespace()) {
             let lower: String = chars[i + 1..].iter().collect::<String>().to_lowercase();
-            let name = if !my_name.is_empty() && lower.starts_with(&my_name.to_lowercase()) {
-                Some(my_name.chars().count())
-            } else if lower.starts_with("everyone") {
-                Some(8)
-            } else if lower.starts_with("here") {
-                Some(4)
-            } else {
-                None
-            };
+            // The longest known name (people, roles, everyone, here) that follows the @.
+            let name = names
+                .iter()
+                .filter(|n| !n.is_empty() && lower.starts_with(n.as_str()))
+                .filter(|n| lower[n.len()..].chars().next().map(|c| !c.is_alphanumeric() && c != '_').unwrap_or(true))
+                .map(|n| n.chars().count())
+                .max();
             if let Some(n) = name {
                 flush(&mut job, &mut buf, &mut chars_out, fmt(style, false, false, false));
                 let mut b: String = chars[i..i + 1 + n].iter().collect();
@@ -239,8 +237,8 @@ pub fn layout(text: &str, size: f32, color: Color32, my_name: &str, wrap_width: 
     (job, links)
 }
 
-/// Draw a message body. Returns true if the body contains a mention of `my_name`.
-pub fn show(ui: &mut egui::Ui, text: &str, color: Color32, my_name: &str) {
+/// Draw a message body; `names` (lowercase) are what @mentions highlight.
+pub fn show(ui: &mut egui::Ui, text: &str, color: Color32, names: &[String]) {
     let width = ui.available_width();
     for block in blocks(text) {
         match block {
@@ -264,16 +262,16 @@ pub fn show(ui: &mut egui::Ui, text: &str, color: Color32, my_name: &str) {
                 ui.horizontal(|ui| {
                     let (r, _) = ui.allocate_exact_size(egui::vec2(4.0, 18.0), egui::Sense::hover());
                     ui.painter().rect_filled(r, 2, theme::DIM);
-                    paragraph(ui, &q, theme::MUTED, my_name, width - 16.0);
+                    paragraph(ui, &q, theme::MUTED, names, width - 16.0);
                 });
             }
-            Block::Text(t) => paragraph(ui, &t, color, my_name, width),
+            Block::Text(t) => paragraph(ui, &t, color, names, width),
         }
     }
 }
 
-fn paragraph(ui: &mut egui::Ui, text: &str, color: Color32, my_name: &str, width: f32) {
-    let (job, links) = layout(text, 14.5, color, my_name, width);
+fn paragraph(ui: &mut egui::Ui, text: &str, color: Color32, names: &[String], width: f32) {
+    let (job, links) = layout(text, 14.5, color, names, width);
     let galley = ui.fonts_mut(|f| f.layout_job(job));
     let resp = ui.add(egui::Label::new(galley.clone()).selectable(true).sense(egui::Sense::click()));
     if links.is_empty() {
@@ -317,7 +315,7 @@ mod tests {
 
     #[test]
     fn finds_links_and_strips_markers() {
-        let (job, links) = layout("see https://example.com/x, **bold** and `code`", 14.0, Color32::WHITE, "", 400.0);
+        let (job, links) = layout("see https://example.com/x, **bold** and `code`", 14.0, Color32::WHITE, &[], 400.0);
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].url, "https://example.com/x");
         assert_eq!(job.text, "see https://example.com/x, bold and code");
@@ -327,13 +325,13 @@ mod tests {
 
     #[test]
     fn lone_asterisk_is_literal() {
-        let (job, _) = layout("2 * 3 = 6", 14.0, Color32::WHITE, "", 400.0);
+        let (job, _) = layout("2 * 3 = 6", 14.0, Color32::WHITE, &[], 400.0);
         assert_eq!(job.text, "2 * 3 = 6");
     }
 
     #[test]
     fn backslash_escapes_markers() {
-        let (job, _) = layout(r"\*not italic\* and \`not code\` but C:\path stays", 14.0, Color32::WHITE, "", 400.0);
+        let (job, _) = layout(r"\*not italic\* and \`not code\` but C:\path stays", 14.0, Color32::WHITE, &[], 400.0);
         assert_eq!(job.text, r"*not italic* and `not code` but C:\path stays");
         assert!(job.sections.iter().all(|s| s.format.background == Color32::TRANSPARENT && !s.format.italics));
     }

@@ -214,7 +214,7 @@ mod tests {
         };
         let first = setup_links(&cfg()).unwrap();
         assert_eq!(first.name, "Campfire");
-        assert!(first.owner.starts_with("ingle://203.0.113.9:7766/owner-"), "{}", first.owner);
+        assert!(first.owner.starts_with("ingle://203.0.113.9/owner-"), "{}", first.owner);
         // Asking again (say, the setup script runs twice) gives the same unused owner link.
         let again = setup_links(&cfg()).unwrap();
         assert_eq!(again.owner, first.owner);
@@ -222,8 +222,8 @@ mod tests {
         // The server started later hands out the same links.
         let s = start(ServerConfig { bind: "127.0.0.1:0".parse().unwrap(), public_host: None, ..cfg() }).await.unwrap();
         let port = s.local_addr.port();
-        assert_eq!(s.owner_link().unwrap(), first.owner.replace(":7766/", &format!(":{port}/")));
-        assert_eq!(s.invite_link(), first.invite.replace(":7766/", &format!(":{port}/")));
+        assert_eq!(s.owner_link().unwrap(), first.owner.replace(".9/", &format!(".9:{port}/")));
+        assert_eq!(s.invite_link(), first.invite.replace(".9/", &format!(".9:{port}/")));
         // Once the owner link is used up, a new one-time link is made.
         let code = first.owner.split('/').nth(3).unwrap().split('?').next().unwrap().to_string();
         s.hub.db.redeem_invite(&code).unwrap();

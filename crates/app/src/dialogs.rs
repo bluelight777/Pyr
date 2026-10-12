@@ -374,9 +374,9 @@ impl IngleApp {
         });
         // Tab ids stay the same everywhere (About is 2); the Windows tab only exists there.
         let tabs: &[(u8, &str)] = if cfg!(windows) {
-            &[(0, "My Account"), (1, "Voice & Video"), (3, "Windows"), (2, "About")]
+            &[(0, "My Account"), (1, "Voice & Video"), (4, "Notifications"), (3, "Windows"), (2, "About")]
         } else {
-            &[(0, "My Account"), (1, "Voice & Video"), (2, "About")]
+            &[(0, "My Account"), (1, "Voice & Video"), (4, "Notifications"), (2, "About")]
         };
         ui.horizontal(|ui| {
             for &(id, name) in tabs {
@@ -563,6 +563,38 @@ impl IngleApp {
                 if ui.small_button("Re-scan devices").clicked() {
                     acts.push(Act::RefreshDevices);
                 }
+            }
+            4 => {
+                field_label(ui, "Sounds");
+                ui.checkbox(&mut draft.sounds, "Play sounds");
+                ui.label(
+                    RichText::new(
+                        "A ping for new messages (not in muted channels, or the one you're looking at), and chimes when people \
+                         join or leave your voice channel, start or stop sharing their screen, and when you tune in to a stream.",
+                    )
+                    .size(12.0)
+                    .color(theme::DIM),
+                );
+                ui.add_space(8.0);
+                ui.add_enabled_ui(draft.sounds, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Volume");
+                        let mut pct = draft.sound_volume * 100.0;
+                        if ui.add(egui::Slider::new(&mut pct, 0.0..=150.0).suffix("%")).changed() {
+                            draft.sound_volume = pct / 100.0;
+                        }
+                        if ui.button("Test").clicked() {
+                            acts.push(Act::TestSound(draft.sound_volume));
+                        }
+                    });
+                });
+                ui.add_space(10.0);
+                field_label(ui, "Muting");
+                ui.label(
+                    RichText::new("Right-click a channel, a server or a direct message conversation to mute it.")
+                        .size(12.0)
+                        .color(theme::DIM),
+                );
             }
             3 => {
                 field_label(ui, "Icon by the clock");

@@ -26,6 +26,14 @@ pub enum Act {
     React { key: String, id: MessageId, emoji: String, add: bool },
     LoadHistory { key: String, channel: ChannelId, older: bool },
     SetActive { key: String, channel: ChannelId },
+    /// Not looking at any channel (the friends list).
+    ClearActive,
+    /// Mute or unmute a server (no channel) or a channel / conversation.
+    MuteChat { key: String, channel: Option<ChannelId>, muted: bool },
+    /// Play the message sound at this volume (settings).
+    TestSound(f32),
+    /// Open the direct message conversation with someone on this server.
+    OpenDm { key: String, uid: String },
     Typing { key: String, channel: ChannelId },
     CreateChannel { key: String, name: String, kind: ChannelKind },
     UpdateChannel { key: String, channel: ChannelId, name: Option<String>, topic: Option<String> },
@@ -120,6 +128,16 @@ pub struct UiState {
     pub role_edit: Option<RoleEdit>,
     /// Ctrl+V was down last frame (to catch an image paste once).
     pub paste_down: bool,
+    /// The home screen (friends and direct messages) instead of a server.
+    pub home: bool,
+    /// The direct message conversation open on the home screen: (server, conversation).
+    pub dm: Option<(String, ChannelId)>,
+    /// Friends list shows everyone, not just who's online.
+    pub friends_all: bool,
+    /// The (server, channel) last reported to the engine as being looked at.
+    pub active_view: Option<(String, ChannelId)>,
+    /// Highlighted row in the @mention list.
+    pub mention_sel: usize,
 }
 
 pub struct IngleApp {
@@ -144,6 +162,8 @@ pub struct IngleApp {
     update_seen: Option<ingle_proto::release::Manifest>,
     /// After an update: where to put the person back, and since when we've been trying.
     resume: Option<(crate::update::Resume, Instant)>,
+    /// Join / leave / stream chimes.
+    voice_sounds: crate::sounds::VoiceSounds,
 }
 
 impl IngleApp {
@@ -171,6 +191,7 @@ impl IngleApp {
             updater,
             update_seen: None,
             resume,
+            voice_sounds: Default::default(),
         }
     }
 
@@ -209,6 +230,18 @@ impl IngleApp {
             Act::React { key, id, emoji, add } => e.react(&key, id, &emoji, add),
             Act::LoadHistory { key, channel, older } => e.load_history(&key, channel, older),
             Act::SetActive { key, channel } => e.set_active_channel(&key, channel),
+            Act::ClearActive => {
+                e.clear_active_channel();
+                self.ui.active_view = None;
+            }
+            Act::OpenDm { key, uid } => e.open_dm(&key, &uid),
+            Act::MuteChat { key, channel, muted } => e.set_muted(&key, channel, muted),
+            Act::TestSound(v) => {
+                let mut s = e.state().settings.clone();
+                s.sounds = true;
+                s.sound_volume = v;
+                e.play_sound_with(ingle_engine::sfx::Sound::Message, &s);
+            }
             Act::Typing { key, channel } => e.typing(&key, channel),
             Act::CreateChannel { key, name, kind } => e.create_channel(&key, &name, kind),
             Act::UpdateChannel { key, channel, name, topic } => e.update_channel(&key, channel, name, topic),
@@ -359,12 +392,21 @@ impl eframe::App for IngleApp {
             }
         }
         self.update_step(&mut acts);
+        // A direct message conversation was opened (from the member list or friends): show it.
+        if let Some((key, id)) = engine.take_opened_dm() {
+            self.ui.home = true;
+            self.ui.dm = Some((key, id));
+            self.ui.call_view = false;
+        }
         ctx.request_repaint_after(std::time::Duration::from_secs(1));
         crate::titlebar::show(ctx, ingle_proto::APP_NAME);
         {
             let st = engine.state();
+            self.voice_sounds.step(&st, &engine);
             self.frame_ui(ctx, &st, &mut acts);
         }
+        let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true) && !i.viewport().minimized.unwrap_or(false));
+        engine.set_window_focused(focused);
         for a in acts {
             self.apply(a, ctx);
         }
@@ -601,6 +643,15 @@ impl IngleApp {
             .frame(egui::Frame::new().fill(theme::RAIL))
             .show(ctx, |ui| self.rail(ui, st, acts));
 
+        if self.ui.home {
+            self.home_ui(ctx, st, acts);
+            self.dialogs(ctx, st, acts);
+            self.tray_note(ctx, st, acts);
+            self.viewer(ctx, acts);
+            self.drop_files(ctx, st, acts);
+            self.toasts(ctx, st);
+            return;
+        }
         let selected = self.ui.server.clone().and_then(|k| st.server(&k).cloned());
         match selected {
             Some(server) => {
@@ -663,11 +714,14 @@ impl IngleApp {
 
     /// Images dragged onto the window go to the open channel's composer.
     fn drop_files(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
-        let Some(server) = self.ui.server.clone().and_then(|k| st.server(&k).cloned()) else { return };
+        let key = if self.ui.home { self.ui.dm.as_ref().map(|d| d.0.clone()) } else { self.ui.server.clone() };
+        let Some(server) = key.and_then(|k| st.server(&k).cloned()) else { return };
         if !server.has(ingle_proto::control::FILES_FEATURE) {
             return;
         }
-        let channel = if self.ui.call_view {
+        let channel = if self.ui.home {
+            self.ui.dm.as_ref().map(|d| d.1)
+        } else if self.ui.call_view {
             st.call.as_ref().filter(|c| c.server_key == server.key && self.ui.call_chat_open).map(|c| c.channel_id)
         } else {
             self.current_channel(&server)
@@ -679,11 +733,15 @@ impl IngleApp {
             egui::Area::new(egui::Id::new("drop-overlay")).order(egui::Order::Foreground).fixed_pos(screen.min).interactable(false).show(ctx, |ui| {
                 let (r, _) = ui.allocate_exact_size(screen.size(), Sense::hover());
                 ui.painter().rect_filled(r, CornerRadius::ZERO, Color32::from_black_alpha(160));
-                let name = server.channel(channel).map(|c| c.name.clone()).unwrap_or_default();
+                let name = server
+                    .channel(channel)
+                    .map(|c| format!("#{}", c.name))
+                    .or_else(|| server.dm(channel).map(|d| format!("your chat with {}", server.member_name(&d.with))))
+                    .unwrap_or_default();
                 let b = Rect::from_center_size(r.center(), vec2(420.0, 120.0));
                 ui.painter().rect_filled(b, CornerRadius::same(14), theme::EMBER);
                 ui.painter().text(b.center() - vec2(0.0, 12.0), egui::Align2::CENTER_CENTER, "Drop images to send", theme::bold_font(20.0), Color32::from_rgb(0x1b, 0x14, 0x11));
-                ui.painter().text(b.center() + vec2(0.0, 18.0), egui::Align2::CENTER_CENTER, format!("in #{name}"), theme::font(14.0), Color32::from_rgb(0x3a, 0x22, 0x14));
+                ui.painter().text(b.center() + vec2(0.0, 18.0), egui::Align2::CENTER_CENTER, format!("in {name}"), theme::font(14.0), Color32::from_rgb(0x3a, 0x22, 0x14));
             });
         }
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
@@ -717,16 +775,33 @@ impl IngleApp {
     fn rail(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
         ui.add_space(12.0);
         ui.vertical_centered(|ui| {
-            let (r, _) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::hover());
-            ui.painter().rect_filled(r, CornerRadius::same(16), Color32::from_rgb(0x24, 0x1d, 0x19));
+            // Home: friends and direct messages.
+            let (r, resp) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::click());
+            let home = self.ui.home;
+            let fill = if home { theme::EMBER } else if resp.hovered() { theme::ELEV2 } else { Color32::from_rgb(0x24, 0x1d, 0x19) };
+            ui.painter().rect_filled(r, CornerRadius::same(if home || resp.hovered() { 16 } else { 24 }), fill);
             icons::flame(ui.painter(), r.shrink(10.0));
+            if home || resp.hovered() {
+                let pill = Rect::from_center_size(pos2(ui.max_rect().left() + 2.0, r.center().y), vec2(4.0, if home { 40.0 } else { 20.0 }));
+                ui.painter().rect_filled(pill, CornerRadius::same(2), theme::TEXT);
+            }
+            let dm_count: u32 = st.servers.iter().map(|s| s.dms.iter().filter_map(|d| s.mentions.get(&d.id)).sum::<u32>()).sum();
+            if dm_count > 0 {
+                let c = r.right_bottom() - vec2(6.0, 6.0);
+                ui.painter().circle_filled(c, 9.0, theme::RAIL);
+                ui.painter().circle_filled(c, 7.5, theme::LIVE);
+                ui.painter().text(c, egui::Align2::CENTER_CENTER, dm_count.min(99).to_string(), theme::bold_font(10.0), Color32::WHITE);
+            }
+            if resp.on_hover_text("Direct messages").clicked() {
+                self.ui.home = true;
+            }
             ui.add_space(6.0);
             let (sep, _) = ui.allocate_exact_size(vec2(32.0, 2.0), Sense::hover());
             ui.painter().rect_filled(sep, CornerRadius::same(1), theme::LINE);
             ui.add_space(6.0);
             self.update_button(ui);
             for s in &st.servers {
-                let selected = self.ui.server.as_deref() == Some(s.key.as_str());
+                let selected = !self.ui.home && self.ui.server.as_deref() == Some(s.key.as_str());
                 let (rect, resp) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::click());
                 let hovered = resp.hovered();
                 let radius = if selected || hovered { 16 } else { 24 };
@@ -748,13 +823,14 @@ impl IngleApp {
                 let tc = if selected { Color32::from_rgb(0x1b, 0x14, 0x11) } else { theme::TEXT };
                 ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, initials, theme::bold_font(15.0), tc);
                 // pill indicator
-                let unread = !s.unread.is_empty();
+                // Direct messages count on the home button, not the server's.
+                let unread = s.unread.iter().any(|c| s.dm(*c).is_none());
                 let pill_h = if selected { 40.0 } else if hovered { 20.0 } else if unread { 8.0 } else { 0.0 };
                 if pill_h > 0.0 {
                     let pill = Rect::from_center_size(pos2(ui.max_rect().left() + 2.0, rect.center().y), vec2(4.0, pill_h));
                     ui.painter().rect_filled(pill, CornerRadius::same(2), theme::TEXT);
                 }
-                let mentions: u32 = s.mentions.values().sum();
+                let mentions: u32 = s.mentions.iter().filter(|(c, _)| s.dm(**c).is_none()).map(|(_, n)| n).sum();
                 if mentions > 0 {
                     let c = rect.right_bottom() - vec2(6.0, 6.0);
                     ui.painter().circle_filled(c, 9.0, theme::RAIL);
@@ -768,12 +844,14 @@ impl IngleApp {
                     ui.painter().circle_filled(c, 4.0, col);
                 }
                 if resp.clicked() {
+                    self.ui.home = false;
                     self.ui.server = Some(s.key.clone());
                     self.ui.call_view = st.call.as_ref().map(|c| c.server_key == s.key).unwrap_or(false) && self.ui.call_view;
                 }
                 let name = s.name.clone();
                 let key = s.key.clone();
                 let admin = s.can(perm::MANAGE_SERVER) || s.can(perm::MANAGE_ROLES);
+                let server_muted = st.muted_servers.contains(&s.key);
                 let resp = resp.on_hover_text(&name);
                 resp.context_menu(|ui| {
                     if ui.button("Invite people").clicked() {
@@ -783,6 +861,11 @@ impl IngleApp {
                     }
                     if admin && ui.button("Server settings").clicked() {
                         self.ui.dialog = Some(Dialog::ServerSettings { key: key.clone(), name: name.clone(), tab: 0 });
+                        ui.close();
+                    }
+                    let label = if server_muted { "Unmute server" } else { "Mute server" };
+                    if ui.button(label).on_hover_text("No message sounds or unread dots (mentions still ping)").clicked() {
+                        acts.push(Act::MuteChat { key: key.clone(), channel: None, muted: !server_muted });
                         ui.close();
                     }
                     if ui.button("Reconnect").clicked() {
@@ -885,7 +968,13 @@ impl IngleApp {
                     let bg = if selected { theme::ELEV2 } else if resp.hovered() { theme::ELEV } else { Color32::TRANSPARENT };
                     ui.painter().rect_filled(rect, CornerRadius::same(6), bg);
                     let icon_rect = Rect::from_min_size(rect.left_top() + vec2(8.0, 7.0), vec2(18.0, 18.0));
-                    let fg = if selected || unread || resp.hovered() { theme::TEXT } else { theme::MUTED };
+                    let fg = if selected || unread || resp.hovered() {
+                        theme::TEXT
+                    } else if st.is_muted(&s.key, c.id) {
+                        theme::DIM
+                    } else {
+                        theme::MUTED
+                    };
                     if kind == ChannelKind::Text {
                         icons::hash(ui.painter(), icon_rect, theme::DIM);
                     } else {
@@ -929,8 +1018,19 @@ impl IngleApp {
                         }
                     }
                     let (key, cid, cname, ctopic) = (s.key.clone(), c.id, c.name.clone(), c.topic.clone());
-                    if s.can(perm::MANAGE_CHANNELS) {
+                    let muted = st.is_muted(&s.key, cid);
+                    let can_manage = s.can(perm::MANAGE_CHANNELS);
+                    {
                         resp.context_menu(|ui| {
+                            let label = if muted { "Unmute channel" } else { "Mute channel" };
+                            if ui.button(label).clicked() {
+                                acts.push(Act::MuteChat { key: key.clone(), channel: Some(cid), muted: !muted });
+                                ui.close();
+                            }
+                            if !can_manage {
+                                return;
+                            }
+                            ui.separator();
                             if ui.button("Edit channel").clicked() {
                                 self.ui.dialog = Some(Dialog::EditChannel { key: key.clone(), channel: cid, name: cname.clone(), topic: ctopic.clone() });
                                 ui.close();
@@ -999,7 +1099,7 @@ impl IngleApp {
         });
     }
 
-    fn voice_panel(&mut self, ui: &mut egui::Ui, st: &AppState, call: &ingle_engine::state::CallView, acts: &mut Vec<Act>) {
+    pub(crate) fn voice_panel(&mut self, ui: &mut egui::Ui, st: &AppState, call: &ingle_engine::state::CallView, acts: &mut Vec<Act>) {
         let server = st.server(&call.server_key);
         let channel_name = server.and_then(|s| s.channel(call.channel_id)).map(|c| c.name.clone()).unwrap_or_default();
         ui.horizontal(|ui| {
@@ -1055,7 +1155,7 @@ impl IngleApp {
         });
     }
 
-    fn user_panel(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
+    pub(crate) fn user_panel(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
         let (muted, deafened) = self.engine.voice_prefs();
         ui.horizontal_centered(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());
@@ -1158,7 +1258,15 @@ impl IngleApp {
                     if !their_roles.is_empty() {
                         hover.push_str(&format!("\nRoles: {}", their_roles.join(", ")));
                     }
+                    let can_dm = !me && s.has(ingle_proto::control::DMS_FEATURE) && s.status.is_connected();
+                    if can_dm && resp.clicked() {
+                        acts.push(Act::OpenDm { key: key.clone(), uid: uid.clone() });
+                    }
                     resp.on_hover_text(hover).context_menu(|ui| {
+                        if can_dm && ui.button("Message").clicked() {
+                            acts.push(Act::OpenDm { key: key.clone(), uid: uid.clone() });
+                            ui.close();
+                        }
                         if ui.button("Copy safety code").clicked() {
                             acts.push(Act::Copy(ingle_proto::crypto::safety_code(&uid)));
                             ui.close();

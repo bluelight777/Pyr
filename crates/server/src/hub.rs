@@ -188,6 +188,38 @@ impl Hub {
         Self::broadcast_locked(&self.inner.lock(), ev);
     }
 
+    /// Sends a channel's event to those who can see it: everyone, or for a direct message
+    /// just its two people.
+    pub fn broadcast_in(&self, channel_id: ChannelId, ev: Event) {
+        self.broadcast_in_except(channel_id, None, ev)
+    }
+
+    fn broadcast_in_except(&self, channel_id: ChannelId, except: Option<ConnId>, ev: Event) {
+        let dm = self.db.dm_members(channel_id);
+        let b = frame(0, ev);
+        for (id, c) in self.inner.lock().clients.iter() {
+            if Some(*id) == except {
+                continue;
+            }
+            if let Some((a, z)) = &dm {
+                if c.user_id != *a && c.user_id != *z {
+                    continue;
+                }
+            }
+            let _ = c.tx.send(b.clone());
+        }
+    }
+
+    /// Sends to every open connection of one member.
+    pub fn send_to_user(&self, uid: &str, ev: Event) {
+        let b = frame(0, ev);
+        for c in self.inner.lock().clients.values() {
+            if c.user_id == uid {
+                let _ = c.tx.send(b.clone());
+            }
+        }
+    }
+
     fn broadcast_except(&self, except: ConnId, ev: Event) {
         let b = frame(0, ev);
         for (id, c) in self.inner.lock().clients.iter() {
@@ -296,7 +328,8 @@ impl Hub {
             members,
             voice: inner.voice.values().map(|v| v.p.clone()).collect(),
             roles: self.db.roles(),
-            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE].iter().map(|s| s.to_string()).collect(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE].iter().map(|s| s.to_string()).collect(),
+            dms: self.db.dms_of(uid),
         };
         let _ = tx.send(frame(re, ready));
         if !was_online {
@@ -612,7 +645,7 @@ impl Hub {
             }
             c.last_typing.insert(channel_id, now);
         }
-        self.broadcast_except(conn_id, Event::Typing { channel_id, user_id: uid.to_string() });
+        self.broadcast_in_except(channel_id, Some(conn_id), Event::Typing { channel_id, user_id: uid.to_string() });
         Ok(Event::Ok)
     }
 

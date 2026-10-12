@@ -131,6 +131,9 @@ pub struct Settings {
     pub close_to_tray: bool,
     /// The one-time note explaining `close_to_tray` has been shown.
     pub tray_note_seen: bool,
+    /// Notification sounds (messages, people joining voice, streams).
+    pub sounds: bool,
+    pub sound_volume: f32,
 }
 
 impl Default for Settings {
@@ -155,6 +158,8 @@ impl Default for Settings {
             share_audio: true,
             close_to_tray: true,
             tray_note_seen: false,
+            sounds: true,
+            sound_volume: 0.7,
         }
     }
 }
@@ -170,6 +175,9 @@ pub struct Config {
     pub stream_volumes: HashMap<UserId, f32>,
     /// server key -> channel -> newest message id seen
     pub last_read: HashMap<String, HashMap<ChannelId, MessageId>>,
+    /// Muted (no message sound, no unread dot): whole servers, and channels per server.
+    pub muted_servers: std::collections::HashSet<String>,
+    pub muted_channels: HashMap<String, std::collections::HashSet<ChannelId>>,
 }
 
 /// Where the config lives. `profile` lets several identities coexist on one PC (for testing).

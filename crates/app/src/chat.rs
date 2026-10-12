@@ -59,9 +59,20 @@ impl IngleApp {
         in_call_panel: bool,
         acts: &mut Vec<Act>,
     ) {
-        let Some(ch) = s.channel(channel).cloned() else { return };
+        // A direct message shows like a text channel named after the other person.
+        let dm_with = s.dm(channel).map(|d| d.with.clone());
+        let ch = s.channel(channel).cloned().or_else(|| {
+            dm_with.as_ref().map(|w| ingle_proto::control::Channel {
+                id: channel,
+                kind: ChannelKind::Text,
+                name: format!("@{}", s.member_name(w)),
+                topic: String::new(),
+                position: 0,
+            })
+        });
+        let Some(ch) = ch else { return };
         let key = s.key.clone();
-        let my_name = s.me.as_ref().map(|m| m.name.clone()).unwrap_or_else(|| st.my_name.clone());
+        let names = mention_names(s);
 
         // History + read markers
         let log = s.logs.get(&channel);
@@ -73,11 +84,17 @@ impl IngleApp {
         if loaded {
             self.ui.requested.remove(&(key.clone(), channel));
         }
-        if s.unread.contains(&channel) || s.mentions.contains_key(&channel) || self.ui.channel.get(&key) != Some(&channel) && !in_call_panel {
+        let here = (key.clone(), channel);
+        if s.unread.contains(&channel) || s.mentions.contains_key(&channel) || self.ui.active_view.as_ref() != Some(&here) && !in_call_panel {
             acts.push(Act::SetActive { key: key.clone(), channel });
+            if !in_call_panel {
+                self.ui.active_view = Some(here);
+            }
         }
         if !in_call_panel {
-            self.ui.channel.insert(key.clone(), channel);
+            if dm_with.is_none() {
+                self.ui.channel.insert(key.clone(), channel);
+            }
         } else if s.unread.contains(&channel) {
             acts.push(Act::SetActive { key: key.clone(), channel });
         }
@@ -89,13 +106,23 @@ impl IngleApp {
             .frame(egui::Frame::new().fill(theme::MAIN).inner_margin(egui::Margin::symmetric(16, 0)))
             .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
-                    let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
-                    if ch.kind == ChannelKind::Voice {
-                        icons::chat(ui.painter(), r, theme::DIM);
+                    if let Some(w) = &dm_with {
+                        let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
+                        let face = self.face(ui.ctx(), s, w);
+                        avatar(ui.painter(), r.center(), 12.0, w, &s.member_name(w), false, theme::MAIN, face);
+                        ui.label(RichText::new(s.member_name(w)).font(theme::bold_font(15.5)).color(theme::TEXT));
+                        if s.members.get(w).map(|m| m.online).unwrap_or(false) {
+                            crate::app::status_dot(ui.painter(), ui.min_rect().right_center() + vec2(10.0, 0.0), true, theme::MAIN);
+                        }
                     } else {
-                        icons::hash(ui.painter(), r, theme::DIM);
+                        let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
+                        if ch.kind == ChannelKind::Voice {
+                            icons::chat(ui.painter(), r, theme::DIM);
+                        } else {
+                            icons::hash(ui.painter(), r, theme::DIM);
+                        }
+                        ui.label(RichText::new(&ch.name).font(theme::bold_font(15.5)).color(theme::TEXT));
                     }
-                    ui.label(RichText::new(&ch.name).font(theme::bold_font(15.5)).color(theme::TEXT));
                     if !ch.topic.is_empty() && !in_call_panel {
                         let (sep, _) = ui.allocate_exact_size(vec2(1.0, 22.0), Sense::hover());
                         ui.painter().rect_filled(sep, 0, theme::LINE);
@@ -106,7 +133,7 @@ impl IngleApp {
                             if icon_button(ui, 28.0, "Close chat", false, |p, r, c| icons::close(p, r, c)).clicked() {
                                 self.ui.call_chat_open = false;
                             }
-                        } else {
+                        } else if dm_with.is_none() {
                             let open = self.ui.members_open;
                             if icon_button(ui, 30.0, if open { "Hide member list" } else { "Show member list" }, open, |p, r, c| icons::people(p, r, c)).clicked() {
                                 self.ui.members_open = !open;
@@ -138,7 +165,10 @@ impl IngleApp {
                     ui.set_width(ui.available_width());
                     ui.add_space(8.0);
                     if log.complete || log.messages.is_empty() && log.loaded {
-                        self.channel_intro(ui, &ch);
+                        match &dm_with {
+                            Some(w) => self.dm_intro(ui, s, w),
+                            None => self.channel_intro(ui, &ch),
+                        }
                     } else if log.loading {
                         ui.vertical_centered(|ui| ui.label(RichText::new("Loading older messages…").color(theme::DIM)));
                     }
@@ -151,7 +181,7 @@ impl IngleApp {
                         let grouped = !new_day
                             && m.reply_to.is_none()
                             && prev.map(|p| p.author == m.author && m.created_at - p.created_at < GROUP_WINDOW_MS).unwrap_or(false);
-                        self.message(ui, st, s, log, m, grouped, &my_name, acts);
+                        self.message(ui, st, s, log, m, grouped, &names, acts);
                         prev = Some(m);
                     }
                     for p in &log.pending {
@@ -163,6 +193,27 @@ impl IngleApp {
                 acts.push(Act::LoadHistory { key: key.clone(), channel, older: true });
             }
         });
+    }
+
+    /// The top of a direct message conversation: their picture and name.
+    fn dm_intro(&mut self, ui: &mut egui::Ui, s: &ServerView, with: &str) {
+        let name = s.member_name(with);
+        ui.add_space(20.0);
+        ui.horizontal(|ui| {
+            ui.add_space(16.0);
+            ui.vertical(|ui| {
+                let (r, _) = ui.allocate_exact_size(vec2(80.0, 80.0), Sense::hover());
+                let face = self.face(ui.ctx(), s, with);
+                avatar(ui.painter(), r.center(), 40.0, with, &name, false, theme::MAIN, face);
+                ui.add_space(8.0);
+                ui.label(RichText::new(&name).font(theme::bold_font(26.0)).color(theme::TEXT));
+                ui.label(
+                    RichText::new(format!("This is the beginning of your direct message history with {name}. Only the two of you can see it."))
+                        .color(theme::MUTED),
+                );
+            });
+        });
+        ui.add_space(12.0);
     }
 
     fn channel_intro(&self, ui: &mut egui::Ui, ch: &ingle_proto::control::Channel) {
@@ -200,17 +251,14 @@ impl IngleApp {
         log: &ingle_engine::state::ChannelLog,
         m: &Message,
         grouped: bool,
-        my_name: &str,
+        names: &[String],
         acts: &mut Vec<Act>,
     ) {
         let key = s.key.clone();
         let mine = m.author == st.my_uid;
         let author = s.members.get(&m.author);
         let name = s.member_name(&m.author);
-        let mention = !mine && {
-            let l = m.content.to_lowercase();
-            (!my_name.is_empty() && l.contains(&format!("@{}", my_name.to_lowercase()))) || l.contains("@everyone") || l.contains("@here")
-        };
+        let mention = !mine && s.pings_me(&m.author, &m.content);
         let bg_idx = ui.painter().add(egui::Shape::Noop);
         let top = ui.cursor().top();
         ui.add_space(if grouped { 1.0 } else { 10.0 });
@@ -288,7 +336,7 @@ impl IngleApp {
                     }
                     None => {
                         if !m.content.is_empty() {
-                            markdown::show(ui, &m.content, theme::BODY, my_name);
+                            markdown::show(ui, &m.content, theme::BODY, names);
                         }
                         if m.edited_at.is_some() {
                             ui.label(RichText::new("(edited)").size(10.5).color(theme::DIM));
@@ -340,7 +388,8 @@ impl IngleApp {
 
         // Hover tools
         if hovered && self.ui.editing.as_ref().map(|(id, _)| *id != m.id).unwrap_or(true) {
-            let admin = s.can(perm::MANAGE_MESSAGES);
+            // Moderators can't delete other people's direct messages.
+            let admin = s.can(perm::MANAGE_MESSAGES) && s.dm(m.channel_id).is_none();
             let n = 2 + mine as usize + (mine || admin) as usize;
             let w = n as f32 * 30.0 + 8.0;
             let tools = Rect::from_min_size(pos2(rect.right() - w - 16.0, rect.top() - 10.0), vec2(w, 32.0));
@@ -405,7 +454,7 @@ impl IngleApp {
             ui.vertical(|ui| {
                 let col = if p.failed.is_some() { theme::LIVE } else { theme::DIM };
                 if !p.content.is_empty() {
-                    markdown::show(ui, &p.content, col, &st.my_name);
+                    markdown::show(ui, &p.content, col, &mention_names(s_of(st, key)));
                 }
                 if !p.files.is_empty() {
                     ui.horizontal_wrapped(|ui| {
@@ -532,10 +581,68 @@ impl IngleApp {
                     });
                 });
             }
+            // Typing "@": people, roles and @everyone to pick from (arrows + Enter/Tab, or click).
+            let composer_id = egui::Id::new(("composer", &key, ch.id));
+            let suggestions = mention_suggestions(s, &draft);
+            if suggestions.is_empty() {
+                self.ui.mention_sel = 0;
+            } else {
+                self.ui.mention_sel = self.ui.mention_sel.min(suggestions.len() - 1);
+                let mut pick = None;
+                if ui.ctx().memory(|m| m.focused()) == Some(composer_id) {
+                    ui.input_mut(|i| {
+                        if i.consume_key(Modifiers::NONE, Key::ArrowDown) {
+                            self.ui.mention_sel = (self.ui.mention_sel + 1) % suggestions.len();
+                        }
+                        if i.consume_key(Modifiers::NONE, Key::ArrowUp) {
+                            self.ui.mention_sel = (self.ui.mention_sel + suggestions.len() - 1) % suggestions.len();
+                        }
+                        if i.consume_key(Modifiers::NONE, Key::Enter) || i.consume_key(Modifiers::NONE, Key::Tab) {
+                            pick = Some(self.ui.mention_sel);
+                        }
+                    });
+                }
+                egui::Frame::new().fill(theme::ELEV).corner_radius(8).inner_margin(6).stroke(Stroke::new(1.0f32, theme::LINE)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(RichText::new("MENTION").font(theme::bold_font(11.0)).color(theme::DIM));
+                    for (i, sg) in suggestions.iter().enumerate() {
+                        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
+                        if resp.hovered() {
+                            self.ui.mention_sel = i;
+                        }
+                        if i == self.ui.mention_sel {
+                            ui.painter().rect_filled(r, CornerRadius::same(5), theme::HOVER);
+                        }
+                        let mut x = r.left() + 8.0;
+                        if let Some(uid) = &sg.uid {
+                            let face = self.face(ui.ctx(), s, uid);
+                            avatar(ui.painter(), pos2(x + 10.0, r.center().y), 10.0, uid, &sg.label, false, theme::ELEV, face);
+                            x += 28.0;
+                        }
+                        let galley = ui.painter().layout_no_wrap(sg.label.clone(), theme::bold_font(14.0), sg.color);
+                        let w = galley.size().x;
+                        ui.painter().galley(pos2(x, r.center().y - galley.size().y / 2.0), galley, sg.color);
+                        ui.painter().text(pos2(x + w + 10.0, r.center().y), egui::Align2::LEFT_CENTER, &sg.detail, theme::font(12.5), theme::DIM);
+                        if resp.clicked() {
+                            pick = Some(i);
+                        }
+                    }
+                });
+                if let Some(i) = pick {
+                    complete_mention(&mut draft, &suggestions[i].insert);
+                    self.ui.mention_sel = 0;
+                    // Put the cursor after the name.
+                    let mut state = egui::text_edit::TextEditState::load(ui.ctx(), composer_id).unwrap_or_default();
+                    let end = draft.chars().count();
+                    state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(end))));
+                    state.store(ui.ctx(), composer_id);
+                    ui.ctx().memory_mut(|m| m.request_focus(composer_id));
+                }
+            }
             ui.horizontal(|ui| {
                 let hint = if !connected {
                     "Reconnecting…".to_string()
-                } else if ch.kind == ChannelKind::Voice {
+                } else if ch.kind == ChannelKind::Voice || ch.name.starts_with('@') {
                     format!("Message {}", ch.name)
                 } else {
                     format!("Message #{}", ch.name)
@@ -551,7 +658,7 @@ impl IngleApp {
                 let resp = ui.add_enabled(
                     connected,
                     egui::TextEdit::multiline(&mut draft)
-                        .id(ui.id().with(("composer", &key, ch.id)))
+                        .id(composer_id)
                         .hint_text(RichText::new(hint).color(theme::DIM))
                         .desired_rows(1)
                         .desired_width(width)
@@ -771,4 +878,91 @@ fn day_divider(ui: &mut egui::Ui, label: &str) {
     ui.painter().line_segment([pos2(r.left() + 16.0, c.y), pos2(c.x - tw / 2.0 - 8.0, c.y)], Stroke::new(1.0f32, theme::LINE));
     ui.painter().line_segment([pos2(c.x + tw / 2.0 + 8.0, c.y), pos2(r.right() - 16.0, c.y)], Stroke::new(1.0f32, theme::LINE));
     ui.painter().text(c, egui::Align2::CENTER_CENTER, label, theme::bold_font(11.5), theme::DIM);
+}
+
+/// Everything an @mention can name here (lowercase): people, roles, everyone and here.
+pub fn mention_names(s: &ServerView) -> Vec<String> {
+    let mut v: Vec<String> = s.members.keys().map(|u| s.member_name(u).to_lowercase()).collect();
+    v.extend(s.roles.iter().map(|r| r.name.to_lowercase()));
+    v.push("everyone".into());
+    v.push("here".into());
+    v
+}
+
+fn s_of<'a>(st: &'a AppState, key: &str) -> &'a ServerView {
+    static EMPTY: std::sync::OnceLock<ServerView> = std::sync::OnceLock::new();
+    st.server(key).unwrap_or_else(|| EMPTY.get_or_init(|| ServerView::new(String::new(), String::new(), String::new())))
+}
+
+/// One choice in the @ list under the composer.
+pub struct Suggestion {
+    /// What goes into the message after the @.
+    pub insert: String,
+    pub label: String,
+    pub detail: String,
+    pub color: Color32,
+    pub uid: Option<String>,
+}
+
+/// The "@partial" being typed at the end of the message, if any: (byte offset of the @, the
+/// partial text).
+fn mention_token(draft: &str) -> Option<(usize, String)> {
+    let at = draft.rfind('@')?;
+    if draft[..at].chars().next_back().map(|c| !c.is_whitespace()).unwrap_or(false) {
+        return None;
+    }
+    let partial = &draft[at + 1..];
+    if partial.contains('\n') || partial.chars().count() > 32 || partial.ends_with("  ") {
+        return None;
+    }
+    Some((at, partial.to_lowercase()))
+}
+
+/// People, roles and @everyone/@here matching what's typed after the @.
+pub fn mention_suggestions(s: &ServerView, draft: &str) -> Vec<Suggestion> {
+    let Some((_, partial)) = mention_token(draft) else { return Vec::new() };
+    let mut out = Vec::new();
+    let mut members: Vec<_> = s.members.values().collect();
+    members.sort_by(|a, b| b.online.cmp(&a.online).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    for m in members {
+        let name = s.member_name(&m.user_id);
+        if name.to_lowercase().starts_with(&partial) {
+            out.push(Suggestion {
+                insert: name.clone(),
+                label: name,
+                detail: if m.online { "online".into() } else { String::new() },
+                color: name_color(s, &m.user_id, m.role),
+                uid: Some(m.user_id.clone()),
+            });
+        }
+    }
+    for r in &s.roles {
+        if r.name.to_lowercase().starts_with(&partial) {
+            let color = if r.color != 0 { crate::app::rgb(r.color) } else { theme::TEXT };
+            out.push(Suggestion { insert: r.name.clone(), label: format!("@{}", r.name), detail: "role".into(), color, uid: None });
+        }
+    }
+    if s.can(perm::MENTION_EVERYONE) {
+        for (word, what) in [("everyone", "everyone in the server"), ("here", "everyone online")] {
+            if word.starts_with(&partial) {
+                out.push(Suggestion { insert: word.into(), label: format!("@{word}"), detail: what.into(), color: theme::GLOW, uid: None });
+            }
+        }
+    }
+    // A finished mention ("@Bob " or exactly "@Bob" already picked) needs no list.
+    if out.len() == 1 && out[0].insert.to_lowercase() == partial {
+        out.clear();
+    }
+    out.truncate(8);
+    out
+}
+
+/// Puts the chosen name in place of the "@partial" being typed.
+pub fn complete_mention(draft: &mut String, insert: &str) {
+    if let Some((at, _)) = mention_token(draft) {
+        draft.truncate(at);
+        draft.push('@');
+        draft.push_str(insert);
+        draft.push(' ');
+    }
 }

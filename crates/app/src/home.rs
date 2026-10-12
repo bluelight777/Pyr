@@ -1,0 +1,273 @@
+//! The home screen, like Discord's: direct message conversations down the side, and the
+//! friends list (everyone you share a server with) or the open conversation in the middle.
+
+use std::collections::BTreeMap;
+
+use eframe::egui::{self, Align, Color32, CornerRadius, Layout, Rect, RichText, Sense, Stroke, pos2, vec2};
+use ingle_engine::state::{AppState, ServerView};
+use ingle_proto::control::{ChannelId, DMS_FEATURE};
+
+use crate::app::{Act, IngleApp, avatar, status_dot};
+use crate::theme;
+
+/// Someone you share at least one server with.
+struct Friend {
+    uid: String,
+    name: String,
+    online: bool,
+    /// Servers you share (keys), where a conversation could happen.
+    servers: Vec<String>,
+}
+
+fn friends(st: &AppState) -> Vec<Friend> {
+    let mut by_uid: BTreeMap<String, Friend> = BTreeMap::new();
+    for s in &st.servers {
+        for m in s.members.values() {
+            if m.user_id == st.my_uid {
+                continue;
+            }
+            let f = by_uid.entry(m.user_id.clone()).or_insert_with(|| Friend {
+                uid: m.user_id.clone(),
+                name: s.member_name(&m.user_id),
+                online: false,
+                servers: Vec::new(),
+            });
+            f.online |= m.online && s.status.is_connected();
+            f.servers.push(s.key.clone());
+        }
+    }
+    let mut v: Vec<Friend> = by_uid.into_values().collect();
+    v.sort_by(|a, b| b.online.cmp(&a.online).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    v
+}
+
+/// Where to talk to someone: an existing conversation, else the first connected server you
+/// share that has direct messages.
+fn dm_server(st: &AppState, uid: &str) -> Option<String> {
+    st.servers
+        .iter()
+        .find(|s| s.dm_with(uid).is_some() && s.status.is_connected())
+        .or_else(|| st.servers.iter().find(|s| s.has(DMS_FEATURE) && s.status.is_connected() && s.members.contains_key(uid)))
+        .map(|s| s.key.clone())
+}
+
+impl IngleApp {
+    pub(crate) fn home_ui(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
+        // The open conversation might be gone (left the server).
+        let open = self.ui.dm.clone().and_then(|(k, id)| st.server(&k).filter(|s| s.dm(id).is_some()).map(|s| (s.clone(), id)));
+        if open.is_none() {
+            self.ui.dm = None;
+        }
+        egui::SidePanel::left("home-side")
+            .exact_width(240.0)
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(egui::Frame::new().fill(theme::SIDE))
+            .show(ctx, |ui| self.home_sidebar(ui, st, acts));
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::MAIN)).show(ctx, |ui| match open {
+            Some((server, id)) => self.chat_view(ui, st, &server, id, false, acts),
+            None => self.friends_page(ui, st, acts),
+        });
+    }
+
+    fn home_sidebar(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
+        egui::TopBottomPanel::bottom("home-user-panel")
+            .exact_height(56.0)
+            .show_separator_line(false)
+            .frame(egui::Frame::new().fill(theme::SIDE_DARK).inner_margin(egui::Margin::symmetric(8, 0)))
+            .show_inside(ui, |ui| self.user_panel(ui, st, acts));
+        if let Some(call) = st.call.as_ref() {
+            egui::TopBottomPanel::bottom("home-voice-panel")
+                .exact_height(86.0)
+                .show_separator_line(false)
+                .frame(egui::Frame::new().fill(theme::SIDE_DARK).inner_margin(egui::Margin::symmetric(10, 8)))
+                .show_inside(ui, |ui| self.voice_panel(ui, st, call, acts));
+        }
+        egui::TopBottomPanel::top("home-header")
+            .exact_height(48.0)
+            .show_separator_line(false)
+            .frame(egui::Frame::new().fill(theme::SIDE).inner_margin(egui::Margin::symmetric(16, 0)))
+            .show_inside(ui, |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.label(RichText::new("Direct Messages").font(theme::bold_font(15.5)).color(theme::TEXT));
+                });
+                let r = ui.max_rect();
+                ui.painter().line_segment([pos2(r.left() - 16.0, r.bottom()), pos2(r.right() + 16.0, r.bottom())], Stroke::new(1.0f32, theme::SHADOW_LINE));
+            });
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.add_space(8.0);
+            // Friends
+            let on_friends = self.ui.dm.is_none();
+            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width() - 16.0, 42.0), Sense::click());
+            let r = r.translate(vec2(8.0, 0.0));
+            if on_friends || resp.hovered() {
+                ui.painter().rect_filled(r, CornerRadius::same(6), if on_friends { theme::ELEV2 } else { theme::HOVER });
+            }
+            crate::icons::people(ui.painter(), Rect::from_center_size(pos2(r.left() + 22.0, r.center().y), vec2(20.0, 20.0)), theme::TEXT);
+            ui.painter().text(pos2(r.left() + 48.0, r.center().y), egui::Align2::LEFT_CENTER, "Friends", theme::bold_font(14.5), theme::TEXT);
+            if resp.clicked() {
+                self.ui.dm = None;
+                acts.push(Act::ClearActive);
+            }
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                ui.add_space(16.0);
+                ui.label(RichText::new("DIRECT MESSAGES").font(theme::bold_font(11.5)).color(theme::DIM));
+            });
+            ui.add_space(4.0);
+            let several = st.servers.iter().filter(|s| !s.dms.is_empty()).count() > 1;
+            let mut any = false;
+            for s in &st.servers {
+                for d in &s.dms {
+                    let selected = self.ui.dm.as_ref() == Some(&(s.key.clone(), d.id));
+                    if d.last_message.is_none() && !selected {
+                        continue;
+                    }
+                    any = true;
+                    self.dm_row(ui, st, s, d.id, &d.with, selected, several, acts);
+                }
+            }
+            if !any {
+                ui.horizontal(|ui| {
+                    ui.add_space(16.0);
+                    ui.add(egui::Label::new(RichText::new("Message someone from Friends or a server's member list.").size(12.5).color(theme::DIM)).wrap());
+                });
+            }
+        });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dm_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        st: &AppState,
+        s: &ServerView,
+        id: ChannelId,
+        with: &str,
+        selected: bool,
+        show_server: bool,
+        acts: &mut Vec<Act>,
+    ) {
+        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width() - 16.0, 44.0), Sense::click());
+        let r = r.translate(vec2(8.0, 0.0));
+        if selected || resp.hovered() {
+            ui.painter().rect_filled(r, CornerRadius::same(6), if selected { theme::ELEV2 } else { theme::HOVER });
+        }
+        let name = s.member_name(with);
+        let online = s.members.get(with).map(|m| m.online).unwrap_or(false) && s.status.is_connected();
+        let c = pos2(r.left() + 22.0, r.center().y);
+        let face = self.face(ui.ctx(), s, with);
+        avatar(ui.painter(), c, 16.0, with, &name, false, theme::SIDE, face);
+        if online {
+            status_dot(ui.painter(), c + vec2(12.0, 12.0), true, theme::SIDE);
+        }
+        let unread = s.mentions.get(&id).copied().unwrap_or(0);
+        let col = if selected || unread > 0 { theme::TEXT } else { theme::MUTED };
+        if show_server {
+            ui.painter().text(pos2(r.left() + 48.0, r.center().y - 7.0), egui::Align2::LEFT_CENTER, &name, theme::bold_font(14.0), col);
+            ui.painter().text(pos2(r.left() + 48.0, r.center().y + 9.0), egui::Align2::LEFT_CENTER, &s.name, theme::font(11.5), theme::DIM);
+        } else {
+            ui.painter().text(pos2(r.left() + 48.0, r.center().y), egui::Align2::LEFT_CENTER, &name, theme::bold_font(14.0), col);
+        }
+        if unread > 0 {
+            let b = pos2(r.right() - 16.0, r.center().y);
+            ui.painter().circle_filled(b, 8.5, theme::LIVE);
+            ui.painter().text(b, egui::Align2::CENTER_CENTER, unread.min(99).to_string(), theme::bold_font(10.5), Color32::WHITE);
+        }
+        if resp.clicked() {
+            self.ui.dm = Some((s.key.clone(), id));
+        }
+        let muted = st.is_muted(&s.key, id);
+        let key = s.key.clone();
+        resp.context_menu(|ui| {
+            if ui.button(if muted { "Unmute conversation" } else { "Mute conversation" }).clicked() {
+                acts.push(Act::MuteChat { key: key.clone(), channel: Some(id), muted: !muted });
+                ui.close();
+            }
+        });
+    }
+
+    fn friends_page(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
+        if self.ui.active_view.is_some() {
+            acts.push(Act::ClearActive);
+        }
+        let all = friends(st);
+        egui::TopBottomPanel::top("friends-header")
+            .exact_height(48.0)
+            .show_separator_line(false)
+            .frame(egui::Frame::new().fill(theme::MAIN).inner_margin(egui::Margin::symmetric(16, 0)))
+            .show_inside(ui, |ui| {
+                ui.horizontal_centered(|ui| {
+                    let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
+                    crate::icons::people(ui.painter(), r, theme::DIM);
+                    ui.label(RichText::new("Friends").font(theme::bold_font(15.5)).color(theme::TEXT));
+                    ui.add_space(12.0);
+                    for (label, show_all) in [("Online", false), ("All", true)] {
+                        let on = self.ui.friends_all == show_all;
+                        let b = egui::Button::new(RichText::new(label).color(if on { theme::TEXT } else { theme::MUTED }))
+                            .fill(if on { theme::ELEV2 } else { Color32::TRANSPARENT })
+                            .corner_radius(4);
+                        if ui.add(b).clicked() {
+                            self.ui.friends_all = show_all;
+                        }
+                    }
+                });
+                let r = ui.max_rect();
+                ui.painter().line_segment([pos2(r.left() - 16.0, r.bottom()), pos2(r.right() + 16.0, r.bottom())], Stroke::new(1.0f32, theme::SHADOW_LINE));
+            });
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::MAIN).inner_margin(egui::Margin::symmetric(24, 16))).show_inside(ui, |ui| {
+            let shown: Vec<&Friend> = all.iter().filter(|f| self.ui.friends_all || f.online).collect();
+            let label = if self.ui.friends_all { "ALL FRIENDS" } else { "ONLINE" };
+            ui.label(RichText::new(format!("{label} — {}", shown.len())).font(theme::bold_font(11.5)).color(theme::DIM));
+            ui.add_space(8.0);
+            if shown.is_empty() {
+                ui.add_space(40.0);
+                ui.vertical_centered(|ui| {
+                    let msg = if all.is_empty() {
+                        "Nobody here yet. Everyone you share a server with shows up here."
+                    } else {
+                        "No one's online right now. Check All to message someone anyway."
+                    };
+                    ui.label(RichText::new(msg).color(theme::MUTED));
+                });
+                return;
+            }
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                for f in shown {
+                    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 58.0), Sense::click());
+                    ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0f32, theme::LINE));
+                    if resp.hovered() {
+                        ui.painter().rect_filled(r.shrink2(vec2(0.0, 2.0)), CornerRadius::same(8), theme::HOVER);
+                    }
+                    let s = f.servers.first().and_then(|k| st.server(k));
+                    let face = s.and_then(|s| self.face(ui.ctx(), s, &f.uid));
+                    let c = pos2(r.left() + 26.0, r.center().y);
+                    avatar(ui.painter(), c, 18.0, &f.uid, &f.name, false, theme::MAIN, face);
+                    if f.online {
+                        status_dot(ui.painter(), c + vec2(13.0, 13.0), true, theme::MAIN);
+                    }
+                    ui.painter().text(pos2(r.left() + 56.0, r.center().y - 8.0), egui::Align2::LEFT_CENTER, &f.name, theme::bold_font(15.0), theme::TEXT);
+                    let servers: Vec<String> = f.servers.iter().filter_map(|k| st.server(k).map(|s| s.name.clone())).collect();
+                    let sub = format!("{}  ·  {}", if f.online { "Online" } else { "Offline" }, servers.join(", "));
+                    ui.painter().text(pos2(r.left() + 56.0, r.center().y + 10.0), egui::Align2::LEFT_CENTER, sub, theme::font(12.5), theme::MUTED);
+                    let target = dm_server(st, &f.uid);
+                    // "Message" button on the right.
+                    let br = Rect::from_center_size(pos2(r.right() - 60.0, r.center().y), vec2(96.0, 32.0));
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(br).layout(Layout::left_to_right(Align::Center)));
+                    let clicked_button = match &target {
+                        Some(_) => child.add_sized(br.size(), crate::theme::primary_button("Message")).clicked(),
+                        None => {
+                            child.add_sized(br.size(), egui::Label::new(RichText::new("Not connected").size(12.0).color(theme::DIM)));
+                            false
+                        }
+                    };
+                    if clicked_button || resp.clicked() {
+                        if let Some(key) = target {
+                            acts.push(Act::OpenDm { key, uid: f.uid.clone() });
+                        }
+                    }
+                }
+            });
+        });
+    }
+}
