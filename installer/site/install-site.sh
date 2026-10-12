@@ -43,9 +43,13 @@ if [ -x /usr/local/bin/ingle-server ] && systemctl list-unit-files ingle-server.
     *) NEW="" ;;
   esac
   if [ -n "$NEW" ] && [ -f "$NEW" ]; then
+    # Copied from Windows, it arrives without permission to run.
+    chmod 0755 "$NEW"
     OLD_V=$(/usr/local/bin/ingle-server --version 2>/dev/null || echo unknown)
     NEW_V=$("$NEW" --version 2>/dev/null || echo "")
-    if [ -n "$NEW_V" ] && [ "$OLD_V" != "$NEW_V" ]; then
+    if [ -z "$NEW_V" ]; then
+      echo "The new guild server program won't run on this VPS; left the old one alone." >&2
+    elif ! cmp -s "$NEW" /usr/local/bin/ingle-server; then
       cp -f /usr/local/bin/ingle-server /usr/local/bin/ingle-server.previous
       install -m 0755 "$NEW" /usr/local/bin/ingle-server.new
       mv -f /usr/local/bin/ingle-server.new /usr/local/bin/ingle-server
