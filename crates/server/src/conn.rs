@@ -687,6 +687,24 @@ impl Ctx<'_> {
                 }
                 Ok(Event::Ok)
             }
+            Request::SetServerIcon { file_id } => {
+                self.require(perm::MANAGE_SERVER, "change the server's icon")?;
+                if let Some(id) = &file_id {
+                    match db.file(id) {
+                        Some(f) if f.owner == self.uid && f.kind == FileKind::Avatar => {}
+                        _ => return bad("upload the picture first"),
+                    }
+                }
+                let old = db.get_meta("icon").filter(|i| !i.is_empty());
+                db.set_meta("icon", file_id.as_deref().unwrap_or("")).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                if let Some(old) = old.filter(|o| Some(o) != file_id.as_ref()) {
+                    if db.release_avatar(&old) {
+                        hub.wipe_files(&[old]);
+                    }
+                }
+                hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                Ok(Event::Ok)
+            }
             Request::Unknown => Err((ErrorCode::BadRequest, "This server is older than your app and can't do that yet.".into())),
         }
     }

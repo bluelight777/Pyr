@@ -6,6 +6,7 @@ mod chat;
 mod create;
 mod dialogs;
 mod icons;
+mod avatar_edit;
 mod home;
 mod sounds;
 mod images;

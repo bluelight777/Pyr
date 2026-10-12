@@ -166,6 +166,7 @@ impl Hub {
             name: self.db.get_meta("name").unwrap_or_else(|| "Ingle Server".into()),
             description: self.db.get_meta("description").unwrap_or_default(),
             fingerprint: b64::encode(&self.fingerprint),
+            icon: self.db.get_meta("icon").filter(|i| !i.is_empty()),
         }
     }
 
@@ -328,7 +329,7 @@ impl Hub {
             members,
             voice: inner.voice.values().map(|v| v.p.clone()).collect(),
             roles: self.db.roles(),
-            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE].iter().map(|s| s.to_string()).collect(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE].iter().map(|s| s.to_string()).collect(),
             dms: self.db.dms_of(uid),
         };
         let _ = tx.send(frame(re, ready));

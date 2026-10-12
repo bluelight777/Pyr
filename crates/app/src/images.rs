@@ -155,10 +155,18 @@ pub fn max_side_for_chat() -> u32 {
 
 /// A profile picture from any image: the middle square, 256×256, as PNG.
 pub fn make_avatar(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    make_avatar_crop(bytes, 0.5, 0.5, 1.0)
+}
+
+/// A profile picture from part of an image: the square centred at (`cx`, `cy`) (0–1 across
+/// and down the image) whose side is `frac` of the image's shorter side.
+pub fn make_avatar_crop(bytes: &[u8], cx: f32, cy: f32, frac: f32) -> Result<Vec<u8>, String> {
     let img = image::load_from_memory(bytes).map_err(|_| "That file isn't an image Ingle can read.".to_string())?.to_rgba8();
     let (w, h) = img.dimensions();
-    let side = w.min(h);
-    let square = image::imageops::crop_imm(&img, (w - side) / 2, (h - side) / 2, side, side).to_image();
+    let side = ((w.min(h) as f32 * frac.clamp(0.05, 1.0)).round() as u32).clamp(1, w.min(h));
+    let x = ((cx * w as f32 - side as f32 / 2.0).round().max(0.0) as u32).min(w - side);
+    let y = ((cy * h as f32 - side as f32 / 2.0).round().max(0.0) as u32).min(h - side);
+    let square = image::imageops::crop_imm(&img, x, y, side, side).to_image();
     let small = image::imageops::resize(&square, 256, 256, image::imageops::FilterType::Lanczos3);
     let mut out = Vec::new();
     image::DynamicImage::ImageRgba8(small)
@@ -293,5 +301,22 @@ mod tests {
     fn attachments_must_be_images() {
         assert!(check_attachment("a.png", &png(2, 2)).is_ok());
         assert!(check_attachment("a.exe", b"MZ\x90\x00").is_err());
+    }
+
+    #[test]
+    fn avatar_crop_takes_the_chosen_square() {
+        // 40x20: left half red, right half blue. Zoomed on the right, the picture is blue.
+        let mut img = image::RgbaImage::new(40, 20);
+        for (x, _, p) in img.enumerate_pixels_mut() {
+            *p = if x < 20 { image::Rgba([255, 0, 0, 255]) } else { image::Rgba([0, 0, 255, 255]) };
+        }
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let out = super::make_avatar_crop(&png, 0.75, 0.5, 0.5).unwrap();
+        let got = image::load_from_memory(&out).unwrap().to_rgba8();
+        assert_eq!(got.dimensions(), (256, 256));
+        assert_eq!(got.get_pixel(128, 128).0, [0, 0, 255, 255]);
+        // Out-of-range centres are pulled back inside the picture.
+        assert!(super::make_avatar_crop(&png, 5.0, -3.0, 1.0).is_ok());
     }
 }

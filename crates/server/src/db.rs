@@ -427,7 +427,8 @@ impl Db {
         let cutoff = now_ms() - max_age_ms;
         let sql = "SELECT id FROM files WHERE created_at < ?1 AND (
                        (kind = 0 AND message_id IS NULL)
-                    OR (kind = 1 AND id NOT IN (SELECT avatar FROM users WHERE avatar IS NOT NULL)))";
+                    OR (kind = 1 AND id NOT IN (SELECT avatar FROM users WHERE avatar IS NOT NULL)
+                                 AND id NOT IN (SELECT value FROM meta WHERE key = 'icon')))";
         let ids: Vec<String> = c
             .prepare(sql)
             .and_then(|mut st| st.query_map([cutoff], |r| r.get(0)).map(|rows| rows.flatten().collect()))
@@ -452,7 +453,13 @@ impl Db {
     /// Removes a profile picture's row if nobody uses it any more; true if it should be wiped.
     pub fn release_avatar(&self, id: &str) -> bool {
         let c = self.conn.lock();
-        let used: i64 = c.query_row("SELECT COUNT(*) FROM users WHERE avatar = ?1", [id], |r| r.get(0)).unwrap_or(1);
+        let used: i64 = c
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM users WHERE avatar = ?1) + (SELECT COUNT(*) FROM meta WHERE key = 'icon' AND value = ?1)",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap_or(1);
         if used > 0 {
             return false;
         }

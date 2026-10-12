@@ -226,6 +226,45 @@ impl IngleApp {
                             self.roles_editor(ui, s, acts);
                         }
                     } else {
+                        if let Some(s) = server.as_ref().filter(|s| s.has(ingle_proto::control::ICONS_FEATURE)) {
+                            field_label(ui, "Server icon");
+                            ui.horizontal(|ui| {
+                                let (r, _) = ui.allocate_exact_size(vec2(80.0, 80.0), Sense::hover());
+                                match self.server_icon(ui.ctx(), s) {
+                                    Some(t) => {
+                                        ui.painter().add(
+                                            egui::epaint::RectShape::filled(r, CornerRadius::same(24), Color32::WHITE)
+                                                .with_texture(t, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))),
+                                        );
+                                    }
+                                    None => {
+                                        ui.painter().rect_filled(r, CornerRadius::same(24), theme::ELEV);
+                                        let initials: String =
+                                            s.name.split_whitespace().filter_map(|w| w.chars().next()).take(2).collect::<String>().to_uppercase();
+                                        ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, initials, theme::bold_font(24.0), theme::TEXT);
+                                    }
+                                }
+                                ui.add_space(12.0);
+                                ui.vertical(|ui| {
+                                    ui.add_space(14.0);
+                                    ui.horizontal(|ui| {
+                                        if ui.add(theme::primary_button("Upload an icon")).clicked() {
+                                            if let Some((_, bytes)) = crate::images::pick_image() {
+                                                match crate::avatar_edit::AvatarCrop::new(bytes, crate::avatar_edit::CropTarget::Server(key.clone())) {
+                                                    Ok(c) => self.ui.avatar_crop = Some(c),
+                                                    Err(e) => acts.push(Act::Toast(e, true)),
+                                                }
+                                            }
+                                        }
+                                        if s.info.icon.is_some() && ui.button("Remove").clicked() {
+                                            acts.push(Act::SetServerIcon { key: key.clone(), bytes: None });
+                                        }
+                                    });
+                                    ui.label(RichText::new("Shows in everyone's server list. At least 128×128 looks best.").size(12.0).color(theme::DIM));
+                                });
+                            });
+                            ui.add_space(12.0);
+                        }
                         field_label(ui, "Server name");
                         input(ui, &mut name, "");
                         ui.add_space(14.0);
@@ -399,7 +438,10 @@ impl IngleApp {
                         ui.horizontal(|ui| {
                             if ui.add(theme::primary_button("Upload a picture")).clicked() {
                                 if let Some((_, bytes)) = crate::images::pick_image() {
-                                    acts.push(Act::SetAvatar(Some(bytes)));
+                                    match crate::avatar_edit::AvatarCrop::new(bytes, crate::avatar_edit::CropTarget::Me) {
+                                        Ok(c) => self.ui.avatar_crop = Some(c),
+                                        Err(e) => acts.push(Act::Toast(e, true)),
+                                    }
                                 }
                             }
                             if face.is_some() && ui.button("Remove").clicked() {

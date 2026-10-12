@@ -30,6 +30,10 @@ pub enum Act {
     ClearActive,
     /// Mute or unmute a server (no channel) or a channel / conversation.
     MuteChat { key: String, channel: Option<ChannelId>, muted: bool },
+    /// Set (or remove) a server's icon from part of an image: (bytes, cx, cy, frac).
+    SetServerIcon { key: String, bytes: Option<(Arc<Vec<u8>>, f32, f32, f32)> },
+    /// Save part of an image as my profile picture (see `make_avatar_crop`).
+    SetAvatarCropped { bytes: Arc<Vec<u8>>, cx: f32, cy: f32, frac: f32 },
     /// Play the message sound at this volume (settings).
     TestSound(f32),
     /// Open the direct message conversation with someone on this server.
@@ -138,6 +142,8 @@ pub struct UiState {
     pub active_view: Option<(String, ChannelId)>,
     /// Highlighted row in the @mention list.
     pub mention_sel: usize,
+    /// A new profile picture being framed (zoom and drag) before it's saved.
+    pub avatar_crop: Option<crate::avatar_edit::AvatarCrop>,
 }
 
 pub struct IngleApp {
@@ -294,6 +300,17 @@ impl IngleApp {
             Act::UpdateRole { key, id, name, color, perms, hoist, shift } => e.update_role(&key, id, name, color, perms, hoist, shift),
             Act::DeleteRole { key, id } => e.delete_role(&key, id),
             Act::SetMemberRoles { key, uid, roles } => e.set_member_roles(&key, &uid, roles),
+            Act::SetAvatarCropped { bytes, cx, cy, frac } => match crate::images::make_avatar_crop(&bytes, cx, cy, frac) {
+                Ok(png) => e.set_avatar(Some(png)),
+                Err(err) => self.toast(err, true),
+            },
+            Act::SetServerIcon { key, bytes } => match bytes {
+                None => e.set_server_icon(&key, None),
+                Some((b, cx, cy, frac)) => match crate::images::make_avatar_crop(&b, cx, cy, frac) {
+                    Ok(png) => e.set_server_icon(&key, Some(png)),
+                    Err(err) => self.toast(err, true),
+                },
+            },
             Act::SetAvatar(bytes) => match bytes.map(|b| crate::images::make_avatar(&b)).transpose() {
                 Ok(png) => e.set_avatar(png),
                 Err(err) => self.toast(err, true),
@@ -322,6 +339,16 @@ impl IngleApp {
     }
 
     /// My own profile picture (from this PC), as a texture.
+    /// A server's icon, once downloaded.
+    pub fn server_icon(&mut self, ctx: &egui::Context, s: &ServerView) -> Option<egui::TextureId> {
+        let id = s.info.icon.clone()?;
+        let bytes = match self.engine.file(&s.key, &id) {
+            ingle_engine::files::FileState::Ready(b) => Some(b),
+            _ => None,
+        };
+        self.images.get(ctx, &format!("icon:{id}"), bytes, 256).frame(0.0).map(|f| f.0)
+    }
+
     pub fn my_face(&mut self, ctx: &egui::Context) -> Option<egui::TextureId> {
         let bytes = self.engine.my_avatar()?;
         let key = format!("av:me:{}", ingle_proto::release::sha256_hex(&bytes));
@@ -648,6 +675,7 @@ impl IngleApp {
             self.dialogs(ctx, st, acts);
             self.tray_note(ctx, st, acts);
             self.viewer(ctx, acts);
+            self.avatar_editor(ctx, acts);
             self.drop_files(ctx, st, acts);
             self.toasts(ctx, st);
             return;
@@ -708,6 +736,7 @@ impl IngleApp {
         self.dialogs(ctx, st, acts);
         self.tray_note(ctx, st, acts);
         self.viewer(ctx, acts);
+        self.avatar_editor(ctx, acts);
         self.drop_files(ctx, st, acts);
         self.toasts(ctx, st);
     }
@@ -812,7 +841,12 @@ impl IngleApp {
                 } else {
                     theme::ELEV
                 };
+                let icon = self.server_icon(ui.ctx(), s);
                 ui.painter().rect_filled(rect, CornerRadius::same(radius), fill);
+                if let Some(t) = icon {
+                    let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+                    ui.painter().add(egui::epaint::RectShape::filled(rect, CornerRadius::same(radius), Color32::WHITE).with_texture(t, uv));
+                }
                 let initials: String = s
                     .name
                     .split_whitespace()
@@ -821,7 +855,9 @@ impl IngleApp {
                     .collect::<String>()
                     .to_uppercase();
                 let tc = if selected { Color32::from_rgb(0x1b, 0x14, 0x11) } else { theme::TEXT };
-                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, initials, theme::bold_font(15.0), tc);
+                if icon.is_none() {
+                    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, initials, theme::bold_font(15.0), tc);
+                }
                 // pill indicator
                 // Direct messages count on the home button, not the server's.
                 let unread = s.unread.iter().any(|c| s.dm(*c).is_none());

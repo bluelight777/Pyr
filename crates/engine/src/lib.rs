@@ -670,6 +670,39 @@ impl Engine {
         (self.shared.repaint)();
     }
 
+    /// Sets (or with none, removes) a server's icon: uploads the PNG, then asks the server.
+    pub fn set_server_icon(&self, key: &str, png: Option<Vec<u8>>) {
+        let shared = self.shared.clone();
+        let key = key.to_string();
+        self.shared.rt.clone().spawn(async move {
+            let Some(h) = shared.servers.lock().get(&key).cloned() else { return };
+            let file_id = match png {
+                Some(bytes) => {
+                    let Some(conn) = h.connection() else {
+                        shared.state.write().toast("Not connected to that server right now.", true);
+                        return;
+                    };
+                    match net::file_put(&conn, FileKind::Avatar, "icon.png", "image/png", &bytes).await {
+                        Ok(id) => {
+                            shared.files.lock().insert(id.clone(), Arc::new(bytes));
+                            Some(id)
+                        }
+                        Err(e) => {
+                            shared.state.write().toast(format!("Couldn't upload the icon: {e:#}"), true);
+                            (shared.repaint)();
+                            return;
+                        }
+                    }
+                }
+                None => None,
+            };
+            if let Ok(Event::Error { message, .. }) = h.request(Request::SetServerIcon { file_id }).await {
+                shared.state.write().toast(message, true);
+            }
+            (shared.repaint)();
+        });
+    }
+
     /// Your profile picture as saved on this PC.
     pub fn my_avatar(&self) -> Option<Vec<u8>> {
         std::fs::read(self.shared.config_dir.join(AVATAR_FILE)).ok()

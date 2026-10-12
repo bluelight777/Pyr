@@ -129,6 +129,18 @@ async fn direct_messages_are_private() {
     a.delete_message(&key, alices);
     wait_for("gone for bob", 5, || b.state().servers[0].logs[&dm].find(alices).is_none()).await;
 
+    // ---- server icon: only people who can manage the server set it; everyone sees it.
+    c.set_server_icon(&key, Some(PNG.to_vec()));
+    wait_for("carol can't set the icon", 5, || toasts(&c).contains("change the server's icon")).await;
+    a.set_server_icon(&key, Some(PNG.to_vec()));
+    wait_for("bob sees the icon", 10, || b.state().servers[0].info.icon.is_some()).await;
+    let icon = b.state().servers[0].info.icon.clone().unwrap();
+    let _ = b.file(&key, &icon);
+    wait_for("bob downloads it", 10, || matches!(b.file(&key, &icon), FileState::Ready(_))).await;
+    a.set_server_icon(&key, None);
+    wait_for("icon removed", 10, || b.state().servers[0].info.icon.is_none()).await;
+    wait_for("and wiped", 5, || !data.join("files").join(&icon).exists()).await;
+
     // Carol messages Alice while Alice is away; Alice sees it as unread when she's back.
     let a_dir_key = key.clone();
     drop(a);

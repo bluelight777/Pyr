@@ -146,6 +146,8 @@ pub const FILES_FEATURE: &str = "files";
 pub const AVATARS_FEATURE: &str = "avatars";
 /// Direct messages between two members ([`Dm`]).
 pub const DMS_FEATURE: &str = "dms";
+/// A picture for the server (`ServerInfo::icon`, set with `SetServerIcon`).
+pub const ICONS_FEATURE: &str = "server_icon";
 
 /// A private conversation between me and one other member ([`DMS_FEATURE`]). It works like a
 /// text channel (`SendMessage`, `FetchHistory`, `Typing`... with its `id`), but only the two
@@ -275,6 +277,9 @@ pub struct ServerInfo {
     /// base64url SHA-256 of the server's TLS certificate (stable server identity).
     #[serde(default)]
     pub fingerprint: String,
+    /// The server's icon ([`ICONS_FEATURE`]): a file id, fetched like a profile picture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -509,6 +514,12 @@ pub enum Request {
     },
     /// Profile picture ([`AVATARS_FEATURE`]): a file uploaded as [`FileKind::Avatar`], or none.
     SetAvatar {
+        #[serde(default)]
+        file_id: Option<String>,
+    },
+    /// Set or remove the server's icon ([`ICONS_FEATURE`]; needs Manage server): a file
+    /// uploaded as [`FileKind::Avatar`].
+    SetServerIcon {
         #[serde(default)]
         file_id: Option<String>,
     },
