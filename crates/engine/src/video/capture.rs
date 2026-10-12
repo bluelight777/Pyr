@@ -188,17 +188,29 @@ mod win {
     pub struct WgcHandler {
         slot: Arc<FrameSlot>,
         buf: Vec<u8>,
+        /// Frames closer together than this are skipped (Windows versions that can't be
+        /// told a frame rate send one per screen refresh).
+        gap: Duration,
+        last: Option<std::time::Instant>,
     }
 
     impl GraphicsCaptureApiHandler for WgcHandler {
-        type Flags = Arc<FrameSlot>;
+        type Flags = (Arc<FrameSlot>, Duration);
         type Error = Box<dyn std::error::Error + Send + Sync>;
 
         fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
-            Ok(WgcHandler { slot: ctx.flags, buf: Vec::new() })
+            Ok(WgcHandler { slot: ctx.flags.0, buf: Vec::new(), gap: ctx.flags.1, last: None })
         }
 
         fn on_frame_arrived(&mut self, frame: &mut Frame, _control: InternalCaptureControl) -> Result<(), Self::Error> {
+            let now = std::time::Instant::now();
+            if let Some(t) = self.last {
+                // A little slack so 60 fps from a 60 Hz screen isn't halved.
+                if now.duration_since(t) + Duration::from_millis(2) < self.gap {
+                    return Ok(());
+                }
+            }
+            self.last = Some(now);
             let fb = frame.buffer()?;
             let (w, h) = (fb.width(), fb.height());
             let data = fb.as_nopadding_buffer(&mut self.buf).to_vec();
@@ -267,7 +279,20 @@ fn platform_start_screen(id: &str, fps: u32, slot: Arc<FrameSlot>) -> Result<Cap
     };
     use super::border::Target;
     use windows_capture::window::Window;
-    let interval = MinimumUpdateIntervalSettings::Custom(Duration::from_micros(1_000_000 / fps.max(1) as u64));
+    use windows_capture::graphics_capture_api::GraphicsCaptureApi;
+    let gap = Duration::from_micros(1_000_000 / fps.max(1) as u64);
+    // Older Windows 10 can't be given a frame rate or told to hide the cursor setting;
+    // leave those at Windows' defaults there (the handler skips extra frames itself).
+    let interval = if GraphicsCaptureApi::is_minimum_update_interval_supported().unwrap_or(false) {
+        MinimumUpdateIntervalSettings::Custom(gap)
+    } else {
+        MinimumUpdateIntervalSettings::Default
+    };
+    let cursor = if GraphicsCaptureApi::is_cursor_settings_supported().unwrap_or(false) {
+        CursorCaptureSettings::WithCursor
+    } else {
+        CursorCaptureSettings::Default
+    };
     let control = if let Some(idx) = id.strip_prefix("mon:") {
         let idx: usize = idx.parse()?;
         let m = Monitor::from_index(idx).map_err(|e| anyhow!("screen {idx} not found: {e}"))?;
@@ -275,13 +300,13 @@ fn platform_start_screen(id: &str, fps: u32, slot: Arc<FrameSlot>) -> Result<Cap
         let make = |border| {
             Settings::new(
                 m,
-                CursorCaptureSettings::WithCursor,
+                cursor,
                 border,
                 SecondaryWindowSettings::Default,
                 interval,
                 DirtyRegionSettings::Default,
                 ColorFormat::Bgra8,
-                slot.clone(),
+                (slot.clone(), gap),
             )
         };
         start_wgc(make, target).map_err(|e| anyhow!("screen capture failed: {e}"))?
@@ -295,13 +320,13 @@ fn platform_start_screen(id: &str, fps: u32, slot: Arc<FrameSlot>) -> Result<Cap
         let make = |border| {
             Settings::new(
                 w,
-                CursorCaptureSettings::WithCursor,
+                cursor,
                 border,
                 SecondaryWindowSettings::Default,
                 interval,
                 DirtyRegionSettings::Default,
                 ColorFormat::Bgra8,
-                slot.clone(),
+                (slot.clone(), gap),
             )
         };
         start_wgc(make, target).map_err(|e| anyhow!("window capture failed: {e}"))?
@@ -316,7 +341,7 @@ fn platform_start_screen(id: &str, fps: u32, slot: Arc<FrameSlot>) -> Result<Cap
 /// Where Windows doesn't allow turning its frame off, its own frame stays.
 #[cfg(windows)]
 fn start_wgc<T: TryInto<windows_capture::settings::GraphicsCaptureItemType> + Send + 'static>(
-    make: impl Fn(windows_capture::settings::DrawBorderSettings) -> windows_capture::settings::Settings<Arc<FrameSlot>, T>,
+    make: impl Fn(windows_capture::settings::DrawBorderSettings) -> windows_capture::settings::Settings<(Arc<FrameSlot>, Duration), T>,
     target: super::border::Target,
 ) -> Result<(windows_capture::capture::CaptureControl<win::WgcHandler, Box<dyn std::error::Error + Send + Sync>>, Option<super::border::ShareBorder>), String> {
     use windows_capture::capture::GraphicsCaptureApiHandler;
