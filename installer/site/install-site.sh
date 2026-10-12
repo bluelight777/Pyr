@@ -7,7 +7,10 @@ trap 'rm -rf "$HERE"' EXIT
 ROOT=$(nginx -T 2>/dev/null | awk '
   /^[[:space:]]*server[[:space:]]*\{/ { root = ""; named = 0 }
   /^[[:space:]]*root[[:space:]]/ { r = $2; gsub(";", "", r); if (named) { print r; exit } root = r }
-  /^[[:space:]]*server_name[[:space:]]/ && /firelitgames\.com/ { named = 1; if (root != "") { print root; exit } }')
+  /^[[:space:]]*server_name[[:space:]]/ {
+    # Exactly firelitgames.com (not mail.firelitgames.com and other subdomains).
+    for (i = 2; i <= NF; i++) { n = $i; gsub(";", "", n); if (n == "firelitgames.com" || n == "www.firelitgames.com") named = 1 }
+    if (named && root != "") { print root; exit } }')
 if [ -z "$ROOT" ]; then
   # No server block names the domain: it's served by the default one.
   ROOT=$(nginx -T 2>/dev/null | awk '
