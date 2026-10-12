@@ -1,0 +1,6 @@
+# Options for the ingle-server service (all options: ingle-server --help).
+#
+# For friends outside your network, put your public IP address or domain name here so the
+# invite links point at it, and forward UDP port 7766 to this machine:
+#   INGLE_SERVER_ARGS="--public-host play.example.com"
+INGLE_SERVER_ARGS=""

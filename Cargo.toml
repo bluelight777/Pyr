@@ -1,0 +1,31 @@
+[workspace]
+resolver = "3"
+members = ["crates/proto", "crates/server", "crates/engine", "crates/host", "crates/app"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.91"
+license = "MIT OR Apache-2.0"
+authors = ["Firelit Games, LLC"]
+
+[profile.dev]
+opt-level = 1
+
+# Media code (Opus, OpenH264, RNNoise, AEC) is unusably slow unoptimised,
+# so dependencies are always built with full optimisation.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+strip = true
+panic = "unwind"
+
+# Smaller release builds (whole-program LTO): `--profile dist`.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ingle — voice, video and chat for your group</title>
+<meta name="description" content="Ingle by Firelit Games: voice channels, webcams, 1080p60 screen sharing and text chat, end-to-end encrypted, on your own server.">
+<link rel="icon" href="ingle-icon.png">
+<style>
+  :root { --bg:#1b1512; --panel:#241d19; --line:#3a2e27; --text:#f3e9e2; --muted:#b8a79c; --ember:#ff7a3d; --ember2:#ffb067; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:radial-gradient(1200px 600px at 50% -10%, #3a2318 0%, var(--bg) 60%); color:var(--text);
+         font:16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; min-height:100vh; }
+  main { max-width:880px; margin:0 auto; padding:64px 20px 48px; text-align:center; }
+  img.logo { width:96px; height:96px; border-radius:22px; box-shadow:0 10px 40px rgba(255,122,61,.25); }
+  h1 { font-size:44px; margin:18px 0 6px; letter-spacing:-.5px; }
+  p.lead { color:var(--muted); font-size:19px; margin:0 auto 32px; max-width:600px; }
+  .buttons { display:flex; gap:14px; justify-content:center; flex-wrap:wrap; }
+  a.btn { display:inline-flex; flex-direction:column; align-items:center; min-width:250px; padding:14px 26px; border-radius:12px;
+          text-decoration:none; color:var(--text); background:var(--panel); border:1px solid var(--line); }
+  a.btn strong { font-size:18px; }
+  a.btn span { font-size:13px; color:var(--muted); }
+  a.btn.primary { background:linear-gradient(180deg,var(--ember2),var(--ember)); color:#1b1512; border:none; }
+  a.btn.primary span { color:#4a2a17; }
+  .version { color:var(--muted); font-size:14px; margin-top:14px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px; margin-top:52px; text-align:left; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px; }
+  .card h3 { margin:0 0 6px; font-size:16px; } .card p { margin:0; color:var(--muted); font-size:14.5px; }
+  .notes { margin-top:44px; text-align:left; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px 22px; }
+  .notes h2 { font-size:17px; margin:0 0 8px; } .notes p { color:var(--muted); white-space:pre-line; margin:0; }
+  footer { color:var(--muted); font-size:13px; margin-top:44px; }
+  footer a { color:var(--ember2); }
+</style>
+</head>
+<body>
+<main>
+  <img class="logo" src="ingle-icon.png" alt="Ingle">
+  <h1>Ingle</h1>
+  <p class="lead">Voice channels, webcams, smooth 1080p60 screen sharing and text chat for your group. End-to-end encrypted, no accounts, on a server you own.</p>
+  <div class="buttons">
+    <a class="btn" id="win" href="Ingle-Setup.exe"><strong>Download for Windows</strong><span>Windows 10 and 11, 64-bit</span></a>
+    <a class="btn" id="linux" href="ingle_amd64.deb"><strong>Download for Linux</strong><span>Ubuntu, Mint, Pop!_OS, Debian (.deb)</span></a>
+  </div>
+  <div class="version" id="version">&nbsp;</div>
+  <div class="grid">
+    <div class="card"><h3>Calls that stay private</h3><p>Voice, cameras and streams are encrypted on your PC. Not even your server can listen in.</p></div>
+    <div class="card"><h3>Free full-quality streams</h3><p>Share your screen at 1080p and 60 fps with sound, no subscription.</p></div>
+    <div class="card"><h3>Your own server</h3><p>Ingle sets one up for you on a VPS in a few minutes, and keeps itself up to date.</p></div>
+  </div>
+  <div class="notes" id="notes" hidden><h2 id="notes-title">What's new</h2><p id="notes-text"></p></div>
+  <footer>Made by <a href="https://firelitgames.com/">Firelit Games</a>. Windows may say "Windows protected your PC" while the installer is new: click More info, then Run anyway.</footer>
+</main>
+<script>
+  // Put the visitor's system first, and show the current version and what's new.
+  (function () {
+    var linux = /Linux/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent);
+    var first = document.getElementById(linux ? "linux" : "win");
+    first.classList.add("primary");
+    first.parentNode.insertBefore(first, first.parentNode.firstChild);
+    fetch("latest.json", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (f) {
+      var m = JSON.parse(f.manifest);
+      document.getElementById("version").textContent = "Version " + m.version;
+      if (m.notes) {
+        document.getElementById("notes-title").textContent = "What's new in " + m.version;
+        document.getElementById("notes-text").textContent = m.notes;
+        document.getElementById("notes").hidden = false;
+      }
+    }).catch(function () {});
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+[package]
+name = "ingle-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Sets up Ingle servers: on a rented VPS (DigitalOcean) or on any Linux server over SSH."
+
+[dependencies]
+anyhow = "1.0.104"
+getrandom = "0.2"
+ingle-proto = { path = "../proto", features = ["quic"] }
+parking_lot = "0.12.5"
+quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
+russh = { version = "0.64.1", default-features = false, features = ["ring", "flate2", "rsa"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "logging"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.152"
+tokio = { version = "1.53.2", features = ["rt", "macros", "net", "time", "io-util", "sync"] }
+tracing = "0.1.44"
+ureq = { version = "3.4.2", default-features = false, features = ["rustls", "json"] }
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }

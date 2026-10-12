@@ -1,0 +1,32 @@
+[package]
+name = "ingle-proto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Wire protocol, identity and end-to-end media encryption shared by the Ingle client and server."
+
+[dependencies]
+base64 = "0.22.1"
+chacha20poly1305 = "0.10"
+ed25519-dalek = "2"
+getrandom = "0.2"
+hkdf = "0.12"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.152"
+sha2 = "0.10"
+thiserror = "2.0.21"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"], optional = true }
+tokio = { version = "1.53.2", features = ["net"], optional = true }
+
+[features]
+# QUIC endpoint helpers shared by the client and the server.
+quic = ["dep:quinn", "dep:tokio"]
+
+[dev-dependencies]
+anyhow = "1.0.104"
+bytes = "1.12.1"
+rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "ring"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std"] }
+tokio = { version = "1.53.2", features = ["net", "macros", "rt-multi-thread", "time"] }

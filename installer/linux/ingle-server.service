@@ -1,0 +1,35 @@
+# Host an Ingle community as a background service (not enabled by default):
+#   sudo nano /etc/default/ingle-server        # set --public-host
+#   sudo systemctl enable --now ingle-server
+#   sudo journalctl -u ingle-server            # shows your owner link the first time
+[Unit]
+Description=Ingle community server
+Documentation=file:///usr/share/doc/ingle/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ingle-server
+Group=ingle-server
+EnvironmentFile=-/etc/default/ingle-server
+ExecStart=/usr/bin/ingle-server --data /var/lib/ingle-server $INGLE_SERVER_ARGS
+Restart=on-failure
+RestartSec=5
+StateDirectory=ingle-server
+StateDirectoryMode=0750
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

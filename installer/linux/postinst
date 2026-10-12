@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+    # Account the optional ingle-server service runs as.
+    if ! getent passwd ingle-server >/dev/null; then
+        if command -v adduser >/dev/null 2>&1; then
+            adduser --system --group --no-create-home --home /var/lib/ingle-server --quiet ingle-server
+        else
+            useradd --system --user-group --no-create-home --home-dir /var/lib/ingle-server \
+                --shell /usr/sbin/nologin ingle-server
+        fi
+    fi
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+fi
+exit 0
