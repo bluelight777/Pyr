@@ -12,5 +12,8 @@ cp "$REL/examples/bot.exe" dist/windows/ingle-bot.exe
 mkdir -p dist/windows/vps
 cp dist/vps/ingle-server-linux-x86_64 dist/vps/ingle-server-linux-aarch64 dist/windows/vps/
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-makensis -V2 -DVERSION="$VERSION" installer/windows/ingle.nsi
+# Shortcuts use a copy of the icon named after its contents: Windows keeps icons it has shown by
+# file name, so a new icon needs a new name to show (see ICONFILE in ingle.nsi).
+ICONFILE="ingle-$(sha256sum crates/app/assets/icon/ingle.ico | cut -c1-12).ico"
+makensis -V2 -DVERSION="$VERSION" -DICONFILE="$ICONFILE" installer/windows/ingle.nsi
 ls -l dist/Ingle-Setup-*.exe

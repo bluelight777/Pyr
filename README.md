@@ -331,6 +331,10 @@ Open them with the gear next to your name (**Voice & Video** tab):
   restarting, a USB hiccup) are reopened by themselves within a second or two; if it takes
   longer, the call screen says so. If it still happens, the log says whether a device
   stopped or someone's sound didn't decrypt: send a bug report with the log.
+- **The taskbar or Start menu shows an old icon**: Windows keeps the icons it has shown by
+  file name. Since 0.6.5 the installer points Ingle's shortcuts and taskbar pins at a copy
+  of the icon named after the icon itself, so a new icon shows as soon as it's installed.
+  If a pin still shows the old one, unpin Ingle and pin it again.
 - **Logs**: the app writes `ingle.log` next to your config in `%APPDATA%\Ingle\config`
   (started fresh each launch, with the run before kept as `ingle.previous.log`; set
   `RUST_LOG=debug` for more detail). If the app crashes it says so in a message box and

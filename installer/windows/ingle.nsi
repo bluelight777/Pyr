@@ -26,6 +26,14 @@ Target amd64-unicode
 !ifndef OUTDIR
   !define OUTDIR "../../dist"
 !endif
+; Windows keeps the icons it has shown by file name, and doesn't notice when a program's own
+; icon changes: after the campfire icon came in, the taskbar and Start menu kept showing the
+; old one. So shortcuts use a copy of the icon named after its contents (build.sh passes the
+; name): a new icon gets a name Windows has never seen, and it reads the new one.
+!ifndef ICONFILE
+  !define ICONFILE "ingle.ico"
+!endif
+!define ICONPATH "$INSTDIR\icons\${ICONFILE}"
 
 Name "${APPNAME}"
 OutFile "${OUTDIR}/Ingle-Setup-${VERSION}.exe"
@@ -128,11 +136,83 @@ Function .onInstSuccess
   ${EndIf}
 FunctionEnd
 
+; Taskbar pins are shortcuts Windows made when Ingle was pinned. Point the ones that open this
+; Ingle (or its server) at the icon file too (only their icon changes), so the taskbar shows the
+; new icon.
+Function PinsUseIcon
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  Push $6
+  Push $7
+  Push $8
+  Push $9
+  StrCpy $6 "$APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
+  StrCpy $7 "${ICONPATH}"
+  System::Call "ole32::CoInitialize(p 0) i .r8"
+  ClearErrors
+  FindFirst $0 $1 "$6\*.lnk"
+  next_pin:
+    StrCmp $1 "" pins_done
+    StrCpy $5 "$6\$1"
+    ; A shell link (IShellLinkW), read from the file through IPersistFile.
+    System::Call "ole32::CoCreateInstance(g '{00021401-0000-0000-C000-000000000046}', p 0, i 1, g '{000214F9-0000-0000-C000-000000000046}', *p .r2) i .r4"
+    ${If} $4 = 0
+      System::Call "$2->0(g '{0000010b-0000-0000-C000-000000000046}', *p .r3) i .r4"
+      ${If} $4 = 0
+        ; IPersistFile::Load (read and write)
+        System::Call "$3->5(w r5, i 2) i .r4"
+        ${If} $4 = 0
+          ; IShellLinkW::GetPath: where the pin points
+          System::Call "$2->3(w .r4, i ${NSIS_MAX_STRLEN}, p 0, i 0) i .r9"
+          ${If} $9 <> 0
+            StrCpy $4 ""
+          ${EndIf}
+          ${If} $4 == "$INSTDIR\ingle.exe"
+          ${OrIf} $4 == "$INSTDIR\ingle-server.exe"
+            ; IShellLinkW::SetIconLocation, then IPersistFile::Save
+            System::Call "$2->17(w r7, i 0) i .r9"
+            ${If} $9 = 0
+              System::Call "$3->6(w r5, i 1) i .r9"
+              ; SHCNE_UPDATEITEM, SHCNF_PATHW
+              System::Call "shell32::SHChangeNotify(i 0x2000, i 0x5, w r5, p 0)"
+            ${EndIf}
+          ${EndIf}
+        ${EndIf}
+        System::Call "$3->2()"
+      ${EndIf}
+      System::Call "$2->2()"
+    ${EndIf}
+    FindNext $0 $1
+    Goto next_pin
+  pins_done:
+  FindClose $0
+  ${If} $8 >= 0
+    System::Call "ole32::CoUninitialize()"
+  ${EndIf}
+  Pop $9
+  Pop $8
+  Pop $7
+  Pop $6
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
 Section "Ingle" SecApp
   SectionIn RO
   SetOutPath "$INSTDIR"
   !insertmacro ReplaceFile "ingle.exe" app "${HOWTO_APP}"
   File "${BINDIR}/ingle.exe"
+  SetOutPath "$INSTDIR\icons"
+  File "/oname=${ICONFILE}" "../../crates/app/assets/icon/ingle.ico"
+  SetOutPath "$INSTDIR"
   File "/oname=README.txt" "../../README.md"
   File "/oname=Inter font license.txt" "../../crates/app/assets/fonts/OFL.txt"
   ; Linux server programs the app uploads when it sets up a VPS for you.
@@ -144,15 +224,16 @@ Section "Ingle" SecApp
   ; Clicking an ingle:// invite link opens Ingle (which hands it to a copy that's already open).
   WriteRegStr HKCU "Software\Classes\ingle" "" "URL:Ingle invite link"
   WriteRegStr HKCU "Software\Classes\ingle" "URL Protocol" ""
-  WriteRegStr HKCU "Software\Classes\ingle\DefaultIcon" "" "$INSTDIR\ingle.exe,0"
+  WriteRegStr HKCU "Software\Classes\ingle\DefaultIcon" "" "${ICONPATH}"
   WriteRegStr HKCU "Software\Classes\ingle\shell\open\command" "" '${LINKCMD}'
 
-  CreateShortcut "$SMPROGRAMS\Ingle.lnk" "$INSTDIR\ingle.exe" "" "$INSTDIR\ingle.exe" 0 SW_SHOWNORMAL "" "Voice, webcams, screen sharing and chat"
+  CreateShortcut "$SMPROGRAMS\Ingle.lnk" "$INSTDIR\ingle.exe" "" "${ICONPATH}" 0 SW_SHOWNORMAL "" "Voice, webcams, screen sharing and chat"
+  Call PinsUseIcon
 
   WriteUninstaller "$INSTDIR\Uninstall Ingle.exe"
   WriteRegStr HKCU "Software\Ingle" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "${UNINSTKEY}" "DisplayName" "Ingle"
-  WriteRegStr HKCU "${UNINSTKEY}" "DisplayIcon" "$INSTDIR\ingle.exe,0"
+  WriteRegStr HKCU "${UNINSTKEY}" "DisplayIcon" "${ICONPATH}"
   WriteRegStr HKCU "${UNINSTKEY}" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "${UNINSTKEY}" "Publisher" "${COMPANY}"
   WriteRegStr HKCU "${UNINSTKEY}" "InstallLocation" "$INSTDIR"
@@ -163,7 +244,7 @@ Section "Ingle" SecApp
 SectionEnd
 
 Section "Desktop shortcut" SecDesktop
-  CreateShortcut "$DESKTOP\Ingle.lnk" "$INSTDIR\ingle.exe" "" "$INSTDIR\ingle.exe" 0 SW_SHOWNORMAL "" "Voice, webcams, screen sharing and chat"
+  CreateShortcut "$DESKTOP\Ingle.lnk" "$INSTDIR\ingle.exe" "" "${ICONPATH}" 0 SW_SHOWNORMAL "" "Voice, webcams, screen sharing and chat"
 SectionEnd
 
 Section "Ingle Server (host a community on this PC)" SecServer
@@ -174,7 +255,7 @@ Section "Ingle Server (host a community on this PC)" SecServer
   ; install folder, so reinstalling or uninstalling never touches it.
   CreateDirectory "$APPDATA\Ingle\server"
   SetOutPath "$APPDATA\Ingle\server"
-  CreateShortcut "$SMPROGRAMS\Ingle Server.lnk" "$INSTDIR\ingle-server.exe" '--data "$APPDATA\Ingle\server"' "$INSTDIR\ingle-server.exe" 0 SW_SHOWNORMAL "" "Host an Ingle community on this PC"
+  CreateShortcut "$SMPROGRAMS\Ingle Server.lnk" "$INSTDIR\ingle-server.exe" '--data "$APPDATA\Ingle\server"' "${ICONPATH}" 0 SW_SHOWNORMAL "" "Host an Ingle community on this PC"
   SetOutPath "$INSTDIR"
 SectionEnd
 
@@ -187,6 +268,11 @@ SectionEnd
 Section "-Size"
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
   WriteRegDWORD HKCU "${UNINSTKEY}" "EstimatedSize" "$0"
+  ; Tell Windows ingle.exe changed (SHCNE_UPDATEITEM) and that icons changed
+  ; (SHCNE_ASSOCCHANGED): the taskbar, Start menu and Explorer look at them again.
+  StrCpy $0 "$INSTDIR\ingle.exe"
+  System::Call "shell32::SHChangeNotify(i 0x2000, i 0x5, w r0, p 0)"
+  System::Call "shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)"
 SectionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
@@ -209,6 +295,8 @@ Section "Uninstall"
   Delete "$INSTDIR\vps\ingle-server-linux-x86_64"
   Delete "$INSTDIR\vps\ingle-server-linux-aarch64"
   RMDir "$INSTDIR\vps"
+  Delete "$INSTDIR\icons\ingle*.ico"
+  RMDir "$INSTDIR\icons"
   Delete "$INSTDIR\Uninstall Ingle.exe"
   ; Only removes the folder if it's empty, so nothing you put there is lost.
   RMDir "$INSTDIR"
