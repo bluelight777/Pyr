@@ -188,6 +188,16 @@ pub struct Config {
     pub muted_channels: HashMap<String, std::collections::HashSet<ChannelId>>,
     /// People I've blocked (their messages are hidden; servers keep them from contacting me).
     pub blocked: std::collections::HashSet<UserId>,
+    /// Mute and deafen, kept across restarts and updates (like Discord) so nobody comes back
+    /// from an update with their microphone on. `None` until this PC first saves them.
+    pub self_voice: Option<SelfVoice>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(default)]
+pub struct SelfVoice {
+    pub muted: bool,
+    pub deafened: bool,
 }
 
 /// Where the config lives. `profile` lets several identities coexist on one PC (for testing).

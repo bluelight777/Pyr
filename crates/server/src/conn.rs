@@ -111,13 +111,14 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection) -> Result<()> {
     info!(user = %&user_id[..8], %name, %client, remote = %conn.remote_address(), "logged in");
 
     let (tx, mut rx) = Outbox::new(conn.clone());
-    let out = tx.clone();
+    let queued = tx.queued();
+    // Ends when the connection does (once every `Outbox` for it is gone) or a write fails.
     let writer = tokio::spawn(async move {
         while let Some(b) = rx.recv().await {
             if send.write_all(&b).await.is_err() {
                 break;
             }
-            out.sent(b.len());
+            queued.fetch_sub(b.len(), Ordering::Relaxed);
         }
         let _ = send.finish();
     });

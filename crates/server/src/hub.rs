@@ -74,9 +74,11 @@ impl Outbox {
         self.tx.send(b).is_ok()
     }
 
-    /// The writer finished sending `n` bytes.
-    pub fn sent(&self, n: usize) {
-        self.queued.fetch_sub(n, Ordering::Relaxed);
+    /// The count of bytes waiting, for the writer task to take what it has sent off. (The
+    /// writer must not hold an `Outbox` itself: that would keep its own queue open forever, so
+    /// it would never finish, and kept the connection — and its memory — after it closed.)
+    pub fn queued(&self) -> Arc<AtomicUsize> {
+        self.queued.clone()
     }
 }
 
@@ -148,7 +150,14 @@ pub struct Hub {
 struct Inner {
     clients: HashMap<ConnId, Client>,
     voice: HashMap<SessionId, Voice>,
+    /// How each person was (muted, deafened) when they last left voice, for a few minutes:
+    /// sent back when they rejoin (see `VoiceReady::before`).
+    left_voice: HashMap<UserId, (SelfVoiceState, Instant)>,
 }
+
+/// How long the server remembers how someone was when they left voice (an app update takes
+/// well under this).
+const LEFT_VOICE_KEPT: Duration = Duration::from_secs(15 * 60);
 
 struct Client {
     user_id: UserId,
@@ -637,6 +646,9 @@ impl Hub {
 
     fn remove_session_locked(inner: &mut Inner, session: SessionId) {
         let Some(v) = inner.voice.remove(&session) else { return };
+        inner.left_voice.retain(|_, (_, at)| at.elapsed() < LEFT_VOICE_KEPT);
+        let was = SelfVoiceState { self_mute: v.p.self_mute, self_deaf: v.p.self_deaf };
+        inner.left_voice.insert(v.p.user_id.clone(), (was, Instant::now()));
         let mut changed = Vec::new();
         for other in inner.voice.values_mut() {
             for subs in other.subs.values_mut() {
@@ -694,6 +706,7 @@ impl Hub {
         for s in stale {
             Self::remove_session_locked(&mut inner, s);
         }
+        let before = inner.left_voice.remove(&uid).filter(|(_, at)| at.elapsed() < LEFT_VOICE_KEPT).map(|(was, _)| was);
         let session = self.next_session.fetch_add(1, Ordering::Relaxed);
         let client = inner.clients.get_mut(&conn_id).expect("checked above");
         client.session = Some(session);
@@ -702,7 +715,8 @@ impl Hub {
             session,
             user_id: uid,
             channel_id,
-            self_mute,
+            // Deafened means muted too (as `set_voice_state` keeps it).
+            self_mute: self_mute || self_deaf,
             self_deaf,
             tracks: Vec::new(),
             e2ee_pub,
@@ -720,7 +734,7 @@ impl Hub {
         Self::broadcast_locked(&inner, Event::VoiceUpserted { participant: p });
         let participants = inner.voice.values().filter(|v| v.p.channel_id == channel_id).map(|v| v.p.clone()).collect();
         debug!(session, channel_id, "voice join");
-        Ok(Event::VoiceReady { session, participants })
+        Ok(Event::VoiceReady { session, participants, before })
     }
 
     pub fn leave_voice(&self, conn_id: ConnId) -> Reply {

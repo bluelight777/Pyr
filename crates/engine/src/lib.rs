@@ -133,6 +133,28 @@ impl Shared {
         }
     }
 
+    /// Mute and deafen as they are now (in `voice_prefs`): saved, so a restart (an update,
+    /// say) brings you back the same way, and put into effect in the call.
+    pub(crate) fn apply_voice_prefs(&self) {
+        let (muted, deafened) = *self.voice_prefs.lock();
+        {
+            let mut cfg = self.config.lock();
+            let now = Some(config::SelfVoice { muted, deafened });
+            if cfg.self_voice != now {
+                cfg.self_voice = now;
+                self.save_config_locked(&cfg);
+            }
+        }
+        if let Some(c) = self.call.lock().as_mut() {
+            c.set_mute(muted, deafened);
+        }
+        if let Some(cv) = self.state.write().call.as_mut() {
+            cv.muted = muted || deafened;
+            cv.deafened = deafened;
+        }
+        (self.repaint)();
+    }
+
     pub fn audio_io(&self) -> (AudioInput, AudioOutput) {
         let settings = self.state.read().settings.clone();
         match &self.audio_factory {
@@ -354,6 +376,7 @@ impl Engine {
         let ptt_down = Arc::new(AtomicBool::new(false));
         let ptt_key = cfg.settings.ptt_key.clone();
         let entries = cfg.servers.clone();
+        let voice_prefs = cfg.self_voice.map(|v| (v.muted, v.deafened)).unwrap_or_default();
         let shared = Arc::new(Shared {
             state: RwLock::new(state),
             video: Arc::new(VideoStore::new(opts.repaint.clone())),
@@ -370,7 +393,7 @@ impl Engine {
             active_view: Mutex::new(None),
             opened_dm: Mutex::new(None),
             screen_source: Mutex::new(None),
-            voice_prefs: Mutex::new((false, false)),
+            voice_prefs: Mutex::new(voice_prefs),
             ptt_down: ptt_down.clone(),
             audio_factory: opts.audio,
             mic_test: Mutex::new(None),
@@ -1128,39 +1151,23 @@ impl Engine {
     }
 
     pub fn set_mute(&self, muted: bool) {
-        let deaf = {
+        {
             let mut p = self.shared.voice_prefs.lock();
             p.0 = muted;
             if !muted {
                 p.1 = false;
             }
-            p.1
-        };
-        self.apply_voice_prefs(muted, deaf);
+        }
+        self.shared.apply_voice_prefs();
     }
 
     pub fn set_deafen(&self, deafened: bool) {
-        let muted = {
-            let mut p = self.shared.voice_prefs.lock();
-            p.1 = deafened;
-            p.0
-        };
-        self.apply_voice_prefs(muted, deafened);
+        self.shared.voice_prefs.lock().1 = deafened;
+        self.shared.apply_voice_prefs();
     }
 
     pub fn voice_prefs(&self) -> (bool, bool) {
         *self.shared.voice_prefs.lock()
-    }
-
-    fn apply_voice_prefs(&self, muted: bool, deafened: bool) {
-        if let Some(c) = self.shared.call.lock().as_mut() {
-            c.set_mute(muted, deafened);
-        }
-        if let Some(cv) = self.shared.state.write().call.as_mut() {
-            cv.muted = muted || deafened;
-            cv.deafened = deafened;
-        }
-        (self.shared.repaint)();
     }
 
     pub fn start_camera(&self) {

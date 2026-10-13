@@ -251,12 +251,13 @@ impl Call {
         // arrival (e.g. by sending us their keys) before our join request even returns.
         let (ev_tx, ev_rx) = mpsc::unbounded_channel();
         *shared.call_events.lock() = Some((key.clone(), ev_tx));
+        let sent = (muted || deafened, deafened);
         let reply = handle
-            .request(Request::VoiceJoin { channel_id, e2ee_pub, e2ee_sig, self_mute: muted, self_deaf: deafened })
+            .request(Request::VoiceJoin { channel_id, e2ee_pub, e2ee_sig, self_mute: sent.0, self_deaf: sent.1 })
             .await
             .map_err(|_| anyhow!("connection lost"));
-        let (session, participants) = match reply {
-            Ok(Event::VoiceReady { session, participants }) => (session, participants),
+        let (session, participants, before) = match reply {
+            Ok(Event::VoiceReady { session, participants, before }) => (session, participants, before),
             Ok(Event::Error { message, .. }) => {
                 *shared.call_events.lock() = None;
                 bail!(message)
@@ -270,6 +271,22 @@ impl Call {
                 bail!("unexpected reply")
             }
         };
+        // Just updated from a version that didn't remember mute and deafen: come back the way
+        // the server saw you leave. From then on this PC remembers (and is what counts).
+        if let Some(b) = before {
+            let unknown = shared.config.lock().self_voice.is_none();
+            if unknown {
+                info!(muted = b.self_mute, deafened = b.self_deaf, "rejoining voice the way I left it");
+                *shared.voice_prefs.lock() = (b.self_mute, b.self_deaf);
+                shared.apply_voice_prefs();
+            }
+        }
+        // Mute or deafen changed while joining (or just above): tell everyone. Nothing has been
+        // sent from the microphone yet; that starts below.
+        let (muted, deafened) = *shared.voice_prefs.lock();
+        if (muted || deafened, deafened) != sent {
+            handle.notify(Request::VoiceState { self_mute: muted || deafened, self_deaf: deafened });
+        }
         e2ee.set_my_session(session);
         for p in &participants {
             e2ee.upsert_peer(p);
@@ -311,7 +328,7 @@ impl Call {
                 server_key: key,
                 channel_id,
                 session,
-                muted,
+                muted: muted || deafened,
                 deafened,
                 camera_on: false,
                 screen_on: false,
@@ -328,6 +345,10 @@ impl Call {
             });
         }
         *shared.call.lock() = Some(call);
+        // A click on mute or deafen in the last moment, before the call was here to take it.
+        if *shared.voice_prefs.lock() != (muted, deafened) {
+            shared.apply_voice_prefs();
+        }
         // Now that the call exists, process everything that arrived meanwhile (in order).
         let events = tokio::spawn(event_loop(shared.clone(), ev_rx));
         if let Some(c) = shared.call.lock().as_mut() {

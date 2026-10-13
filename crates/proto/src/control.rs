@@ -481,6 +481,14 @@ pub struct VoiceParticipant {
     pub e2ee_sig: String,
 }
 
+/// Your own mute and deafen, as the server last saw them.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(default)]
+pub struct SelfVoiceState {
+    pub self_mute: bool,
+    pub self_deaf: bool,
+}
+
 /// One media key, wrapped for one recipient.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct WrappedKey {
@@ -775,6 +783,11 @@ pub enum Event {
     VoiceReady {
         session: SessionId,
         participants: Vec<VoiceParticipant>,
+        /// Muted and deafened as you were when you left voice here, if that was only a few
+        /// minutes ago: an app that doesn't know (one just updated from a version that didn't
+        /// remember) comes back the way you were.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before: Option<SelfVoiceState>,
     },
     MessageCreated {
         message: Message,
@@ -926,6 +939,26 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(f.ev, Event::Ready { ref features, .. } if features.is_empty()));
+    }
+
+    #[test]
+    fn voice_ready_with_and_without_how_you_were() {
+        // From servers that don't remember (and as old apps see new servers' replies: the
+        // extra field is just skipped).
+        let f: ServerFrame =
+            serde_json::from_str(r#"{"re":2,"ev":{"type":"voice_ready","session":7,"participants":[]}}"#).unwrap();
+        assert!(matches!(f.ev, Event::VoiceReady { session: 7, before: None, .. }));
+        let ev = Event::VoiceReady {
+            session: 7,
+            participants: Vec::new(),
+            before: Some(SelfVoiceState { self_mute: true, self_deaf: false }),
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        assert_eq!(s, r#"{"type":"voice_ready","session":7,"participants":[],"before":{"self_mute":true,"self_deaf":false}}"#);
+        let back: Event = serde_json::from_str(&s).unwrap();
+        assert!(matches!(back, Event::VoiceReady { before: Some(SelfVoiceState { self_mute: true, self_deaf: false }), .. }));
+        let none = serde_json::to_string(&Event::VoiceReady { session: 7, participants: Vec::new(), before: None }).unwrap();
+        assert!(!none.contains("before"), "{none}");
     }
 
     #[test]
