@@ -27,16 +27,45 @@ pub struct CapturePipeline {
     ptt_until: Instant,
     level_db: f32,
     voice_prob: f32,
+    /// Speech is going on (RNNoise is confident, or was in the last moment): held through
+    /// the quiet parts of words, so nothing is cut in the middle of one.
+    speech_until: Instant,
+    /// Loudness envelope (dB): jumps up at once, falls slowly, so the quiet parts of a word
+    /// (s, f, t, its end) count as loud as the word.
+    env_db: f32,
+    /// The same envelope of what the microphone picked up, before automatic gain (which
+    /// lifts a far voice once you stop talking, so only the raw level says how close it is).
+    raw_env_db: f32,
+    /// The microphone's level over the last 50 ms (before automatic gain): a voice's
+    /// syllable-to-syllable loudness, which tells near from far better than its peaks.
+    raw_recent: [f32; 5],
+    raw_recent_at: usize,
+    /// Voice isolation hears 30 ms ahead: the sound waits here while its fate is decided, so
+    /// the start of your first word isn't clipped while it's being recognised.
+    iso_delay: std::collections::VecDeque<f32>,
     /// Voice isolation: how loud your own voice usually is at the mic (dB), the gain being
-    /// applied, and whether this frame sounds like you (close and speech).
+    /// applied, and until when the voice going on is yours (close to the mic, and speech).
     iso_ref_db: f32,
     iso_gain: f32,
-    iso_near: bool,
+    mine_until: Instant,
     settings: Settings,
     pub stream_delay_ms: i32,
     pub sent: u64,
     encoded: Vec<u8>,
 }
+
+/// How long speech counts as going on after RNNoise last heard it (bridges the quiet parts of
+/// words and the gaps between them).
+const SPEECH_HOLD_MS: u64 = 350;
+/// Voice isolation: speech must be within this many dB of your usual level to be taken as
+/// you, and once it is, stays you down to this many dB (people trail off within sentences).
+const ISO_START_DB: f32 = 12.0;
+const ISO_KEEP_DB: f32 = 20.0;
+/// Voice isolation's look-ahead, in 10 ms frames.
+const ISO_LOOKAHEAD_FRAMES: usize = 3;
+/// Voice isolation: how much is let through of other people's voices, and of other sounds.
+const ISO_OTHER_VOICE: f32 = 0.05;
+const ISO_FLOOR: f32 = 0.03;
 
 fn rms_db(x: &[f32]) -> f32 {
     let s = x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32;
@@ -86,14 +115,26 @@ impl CapturePipeline {
             ptt_until: now,
             level_db: -100.0,
             voice_prob: 0.0,
-            iso_ref_db: -70.0,
+            speech_until: now,
+            env_db: -100.0,
+            raw_env_db: -100.0,
+            raw_recent: [0.0; 5],
+            raw_recent_at: 0,
+            iso_delay: std::iter::repeat_n(0.0, ISO_LOOKAHEAD_FRAMES * 480).collect(),
+            iso_ref_db: -100.0,
             iso_gain: 1.0,
-            iso_near: true,
+            mine_until: now,
             settings: settings.clone(),
             stream_delay_ms: 60,
             sent: 0,
             encoded: vec![0u8; 1500],
         })
+    }
+
+    /// For measuring tools: speech probability, raw envelope, learned level of your voice,
+    /// isolation gain.
+    pub fn debug_state(&self) -> (f32, f32, f32, f32) {
+        (self.voice_prob, self.raw_env_db, self.iso_ref_db, self.iso_gain)
     }
 
     pub fn level_db(&self) -> f32 {
@@ -125,10 +166,12 @@ impl CapturePipeline {
             }
             InputMode::VoiceActivity => {
                 let voice = if self.settings.vad_auto {
-                    if self.denoise.is_some() {
-                        // RNNoise's voice probability, with hysteresis.
-                        let threshold = if self.gate_open { 0.35 } else { 0.6 };
-                        self.voice_prob > threshold && self.level_db > -60.0 && self.iso_near
+                    if self.settings.noise_suppression == NoiseSuppression::Isolation {
+                        // Your voice (see `isolate`), already held through your words.
+                        now < self.mine_until
+                    } else if self.denoise.is_some() {
+                        // RNNoise's speech detection, held through words (see `track_speech`).
+                        now < self.speech_until && self.env_db > -60.0
                     } else {
                         self.level_db > -48.0
                     }
@@ -143,31 +186,63 @@ impl CapturePipeline {
         }
     }
 
-    /// Voice isolation, after RNNoise: keep speech that's about as loud as your own voice and
-    /// turn everything else far down. A voice across the room or on a TV reaches your mic
-    /// 15+ dB quieter than yours, so the level tells them apart; RNNoise's speech probability
-    /// catches the rest (and is why this needs RNNoise).
-    fn isolate(&mut self, frame: &mut [f32], db: f32) {
-        // Learn your level from confident speech: rise quickly to a louder voice; sink only
-        // with speech close to it (you talking more softly), never toward a quieter voice
-        // further away, or it would end up learning the other person.
-        if self.voice_prob > 0.8 && db > -70.0 {
-            if db > self.iso_ref_db {
-                self.iso_ref_db += (db - self.iso_ref_db) * 0.3;
-            } else if db > self.iso_ref_db - 8.0 {
-                self.iso_ref_db += (db - self.iso_ref_db) * 0.005;
+    /// After RNNoise: follow the loudness envelope and whether speech is going on. RNNoise's
+    /// speech probability is per 10 ms and dips inside words (on consonants, at their ends),
+    /// so it starts speech only when confident and then a lower bar keeps it going, with a
+    /// hold that bridges the dips; the envelope jumps up at once and falls slowly
+    /// (about 6 dB per 100 ms) for the same reason.
+    fn track_speech(&mut self, now: Instant, db: f32, raw_db: f32) {
+        self.env_db = if db > self.env_db { db } else { (self.env_db - 0.6).max(db) };
+        self.raw_env_db = if raw_db > self.raw_env_db { raw_db } else { (self.raw_env_db - 0.6).max(raw_db) };
+        self.raw_recent[self.raw_recent_at] = 10f32.powf(raw_db / 10.0);
+        self.raw_recent_at = (self.raw_recent_at + 1) % self.raw_recent.len();
+        let going = now < self.speech_until;
+        if self.voice_prob > 0.6 || (going && self.voice_prob > 0.2) {
+            self.speech_until = now + Duration::from_millis(SPEECH_HOLD_MS);
+        }
+    }
+
+    /// Voice isolation: keep your voice and turn everything else far down. A voice across the
+    /// room or on a TV reaches your mic 15+ dB quieter than yours, so its level tells them
+    /// apart; RNNoise's speech detection tells speech from other sounds. Decided per stretch
+    /// of speech (held, see `track_speech`), never per slice of a word, so your words come
+    /// through whole.
+    fn isolate(&mut self, now: Instant, frame: &mut [f32]) {
+        let speech = now < self.speech_until;
+        let e = self.raw_recent.iter().sum::<f32>() / self.raw_recent.len() as f32;
+        let level = if e > 1e-10 { 10.0 * e.log10() } else { -100.0 };
+        // Learn your level from confident speech, gently: it rises toward a louder voice and
+        // sinks only with speech close to it (you talking more softly), never toward a quieter
+        // voice further away, or it would end up learning the other person.
+        if self.voice_prob > 0.8 && level > -70.0 {
+            if level > self.iso_ref_db {
+                self.iso_ref_db += (level - self.iso_ref_db) * if self.iso_ref_db < -90.0 { 1.0 } else { 0.05 };
+            } else if level > self.iso_ref_db - 8.0 {
+                self.iso_ref_db += (level - self.iso_ref_db) * 0.01;
             }
         }
-        let speech = self.voice_prob > 0.5;
-        self.iso_near = db > self.iso_ref_db - 14.0;
-        let target: f32 = match (speech, self.iso_near) {
-            (true, true) => 1.0,
-            (true, false) => 0.03,
-            _ => 0.01,
+        // Becoming "you" takes speech nearly as loud as you; staying "you" through the softer
+        // parts of your sentences takes much less (and the hold bridges the gaps).
+        let mine = now < self.mine_until;
+        let near = level > self.iso_ref_db - if mine { ISO_KEEP_DB } else { ISO_START_DB };
+        if speech && near && (self.voice_prob > 0.5 || mine) {
+            self.mine_until = now + Duration::from_millis(SPEECH_HOLD_MS);
+        }
+        let target: f32 = if now < self.mine_until {
+            1.0
+        } else if speech {
+            ISO_OTHER_VOICE
+        } else {
+            ISO_FLOOR
         };
-        // Glide to the new gain over the frame (10 ms) so it doesn't click; open faster than close.
+        // The decision applies to the sound from 30 ms ago (see `iso_delay`).
+        self.iso_delay.extend(frame.iter().copied());
+        for v in frame.iter_mut() {
+            *v = self.iso_delay.pop_front().unwrap_or(0.0);
+        }
+        // Open at once (within these 10 ms, so it doesn't click); close over about 120 ms.
         let start = self.iso_gain;
-        let end = if target > start { target } else { start + (target - start) * 0.5 };
+        let end = if target >= start { target } else { (start * 0.7).max(target) };
         let n = frame.len() as f32;
         for (i, v) in frame.iter_mut().enumerate() {
             *v *= start + (end - start) * (i as f32 / n);
@@ -186,6 +261,7 @@ impl CapturePipeline {
         if self.settings.echo_cancellation {
             let _ = self.apm.set_stream_delay_ms(self.stream_delay_ms);
         }
+        let raw_db = rms_db(&frame[..480]);
         self.scratch.copy_from_slice(&frame[..480]);
         let _ = self.apm.process_capture_f32(&[&self.scratch], &mut [&mut frame[..480]]);
 
@@ -199,8 +275,11 @@ impl CapturePipeline {
             }
         }
         let db = rms_db(&frame[..480]);
+        if self.denoise.is_some() {
+            self.track_speech(now, db, raw_db);
+        }
         if self.settings.noise_suppression == NoiseSuppression::Isolation {
-            self.isolate(&mut frame[..480], db);
+            self.isolate(now, &mut frame[..480]);
         }
         // Fast attack, slower release, for a pleasant meter.
         self.level_db = if db > self.level_db { db } else { self.level_db * 0.85 + db * 0.15 };
