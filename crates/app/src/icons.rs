@@ -1,8 +1,10 @@
 //! Small vector icons drawn with the painter (crisp at any DPI, no icon font needed).
 
-use std::f32::consts::{PI, TAU};
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
+use std::sync::OnceLock;
 
-use eframe::egui::{Color32, CornerRadius, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, pos2, vec2};
+use eframe::egui::epaint::PathStroke;
+use eframe::egui::{Color32, CornerRadius, Mesh, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, Vec2, pos2, vec2};
 
 fn arc(c: Pos2, r: f32, a0: f32, a1: f32, n: usize) -> Vec<Pos2> {
     (0..=n).map(|i| {
@@ -214,20 +216,210 @@ pub fn smile(p: &Painter, r: Rect, c: Color32) {
     p.add(Shape::line(arc(ctr + vec2(0.0, s * 0.02), s * 0.18, 0.4, PI - 0.4, 10), Stroke::new(s * 0.07, c)));
 }
 
+/// Ingle's campfire: the app icon's fire without its tile (the home button, the welcome screen).
+/// Drawn from the same shapes as the icon (tools/make-icons.py), on the icon's 512 grid: two
+/// logs crossed in an X seen from a little above, lit by the fire.
 pub fn flame(p: &Painter, r: Rect) {
-    let s = r.width();
-    let ctr = r.center();
-    let mut outer = Vec::new();
-    for i in 0..=40 {
-        let t = i as f32 / 40.0 * TAU;
-        let x = (t).sin() * s * 0.30 * (1.0 - 0.35 * (t.cos() * 0.5 + 0.5));
-        let y = -(t.cos()) * s * 0.36 + s * 0.06;
-        let tip = if t.cos() > 0.0 { t.cos().powf(3.0) * s * 0.12 } else { 0.0 };
-        outer.push(ctr + vec2(x, y - tip));
+    let fire = fire();
+    // The fire spans y 66-455 of the grid, flame tip to log ends: fit that to `r`, centred.
+    let u = r.height() * 0.96 / 389.0;
+    let at = |q: Pos2| r.center() + (q - pos2(256.0, 260.5)) * u;
+    let hair = 1.0 / p.ctx().pixels_per_point();
+    let cross = at(pos2(256.0, 384.0));
+    let (half, radius) = (124.0 * u, 26.0 * u);
+    let (sin, cos) = 17.0f32.to_radians().sin_cos();
+    // B (near end at the lower left) lies under A.
+    let b = (vec2(-cos, sin), vec2(sin, cos));
+    log(p, cross, b, half, radius, None, hair);
+    log(p, cross, (vec2(cos, sin), vec2(-sin, cos)), half, radius, None, hair);
+    // The fire sits on top of the logs. egui only smooths the edges of convex shapes, and a flame is anything but; so each part
+    // is filled as triangles, then traced with a one-pixel line of the same colour.
+    for (outline, tris, colour) in [(&fire.flame, &fire.flame_tris, crate::theme::EMBER), (&fire.core, &fire.core_tris, GOLD)] {
+        let pts: Vec<Pos2> = outline.iter().map(|&q| at(q)).collect();
+        let mut mesh = Mesh::default();
+        for &q in &pts {
+            mesh.colored_vertex(q, colour);
+        }
+        for t in tris {
+            mesh.add_triangle(t[0], t[1], t[2]);
+        }
+        p.add(Shape::mesh(mesh));
+        p.add(Shape::closed_line(pts, Stroke::new(hair, colour)));
     }
-    p.add(Shape::convex_polygon(outer, crate::theme::EMBER, Stroke::NONE));
-    p.circle_filled(ctr + vec2(0.0, s * 0.16), s * 0.13, Color32::from_rgb(0xff, 0xd2, 0x7a));
-    p.line_segment([ctr + vec2(-s * 0.3, s * 0.40), ctr + vec2(s * 0.3, s * 0.40)], Stroke::new(s * 0.08, Color32::from_rgb(0x8a, 0x5a, 0x3c)));
+}
+
+const GOLD: Color32 = Color32::from_rgb(0xff, 0xd2, 0x7a);
+const BARK: Color32 = Color32::from_rgb(0x5a, 0x34, 0x20);
+const WOOD: Color32 = Color32::from_rgb(0xc9, 0x98, 0x68);
+/// Across a log, from its top edge (0) to its underside (1): where the fire catches it, the
+/// side we see, the underside. LOG_SHADING in tools/make-icons.py.
+const LOG_SHADING: [(f32, [u8; 3]); 4] =
+    [(0.0, [0xe7, 0xa0, 0x61]), (0.22, [0xf0, 0xaa, 0x68]), (0.58, [0xb4, 0x74, 0x47]), (1.0, [0x6a, 0x3e, 0x26])];
+
+fn log_shade(t: f32) -> Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let i = LOG_SHADING.iter().position(|s| t <= s.0).unwrap_or(LOG_SHADING.len() - 1).max(1);
+    let ((t0, c0), (t1, c1)) = (LOG_SHADING[i - 1], LOG_SHADING[i]);
+    let k = (t - t0) / (t1 - t0);
+    let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * k).round() as u8;
+    Color32::from_rgb(mix(c0[0], c1[0]), mix(c0[1], c1[1]), mix(c0[2], c1[2]))
+}
+
+/// One log: centred on `c`, `dir.0` pointing to its near end and `dir.1` to its underside,
+/// `half` from its centre to each end. Its ends are circles seen at an angle, so ellipses
+/// squashed along the log; the near one shows its cut face. Drawn from `from` along the log
+/// (negative: toward the far end) to the near end; None draws all of it.
+fn log(p: &Painter, c: Pos2, dir: (Vec2, Vec2), half: f32, r: f32, from: Option<f32>, hair: f32) {
+    let (along, down) = dir;
+    let kr = 0.53 * r;
+    const STEPS: usize = 16;
+    let mut shape: Vec<Vec2> = (0..=STEPS)
+        .map(|i| -FRAC_PI_2 + PI * i as f32 / STEPS as f32)
+        .map(|a| vec2(half + kr * a.cos(), r * a.sin()))
+        .chain((0..=STEPS).map(|i| FRAC_PI_2 + PI * i as f32 / STEPS as f32).map(|a| vec2(-half + kr * a.cos(), r * a.sin())))
+        .collect();
+    if let Some(x0) = from {
+        shape = clip(&shape, |q| q.x - x0);
+    }
+    let place = move |q: Vec2| c + along * q.x + down * q.y;
+    // Lit top fading to the dark underside: a strip per stretch of LOG_SHADING, each coloured
+    // at its corners so the colours blend across it.
+    let mut mesh = Mesh::default();
+    for s in LOG_SHADING.windows(2) {
+        let (y0, y1) = (r * (2.0 * s[0].0 - 1.0), r * (2.0 * s[1].0 - 1.0));
+        let strip = clip(&clip(&shape, |q| q.y - y0), |q| y1 - q.y);
+        if strip.len() < 3 {
+            continue;
+        }
+        let first = mesh.vertices.len() as u32;
+        for &q in &strip {
+            mesh.colored_vertex(place(q), log_shade((q.y / r + 1.0) / 2.0));
+        }
+        for i in 1..strip.len() as u32 - 1 {
+            mesh.add_triangle(first, first + i, first + i + 1);
+        }
+    }
+    p.add(Shape::mesh(mesh));
+    // a hairline round it, shaded the same way, for a smooth edge
+    let outline: Vec<Pos2> = shape.iter().map(|&q| place(q)).collect();
+    p.add(Shape::closed_line(outline, PathStroke::new_uv(hair, move |_, q: Pos2| log_shade(((q - c).dot(down) / r + 1.0) / 2.0))));
+    // the cut face at the near end: a bark rim round pale wood
+    let ellipse = |rx: f32, ry: f32| -> Vec<Pos2> {
+        (0..32).map(|i| i as f32 / 32.0 * TAU).map(|a| place(vec2(half + rx * a.cos(), ry * a.sin()))).collect()
+    };
+    p.add(Shape::convex_polygon(ellipse(kr, r), BARK, Stroke::NONE));
+    p.add(Shape::convex_polygon(ellipse(kr * 0.8, r * 0.84), WOOD, Stroke::NONE));
+}
+
+/// The part of a convex polygon where `side` is zero or more.
+fn clip(poly: &[Vec2], side: impl Fn(Vec2) -> f32) -> Vec<Vec2> {
+    let mut out = Vec::with_capacity(poly.len() + 2);
+    for (i, &a) in poly.iter().enumerate() {
+        let b = poly[(i + 1) % poly.len()];
+        let (sa, sb) = (side(a), side(b));
+        if sa >= 0.0 {
+            out.push(a);
+        }
+        if (sa >= 0.0) != (sb >= 0.0) {
+            out.push(a + (b - a) * (sa / (sa - sb)));
+        }
+    }
+    out
+}
+
+/// The flame and its gold heart in a 100 x 140 box, base centre at (50, 140): a start point,
+/// then (control, control, end) per cubic curve. FLAME and CORE in tools/make-icons.py.
+const FLAME: (Pos2, [[f32; 6]; 7]) = (
+    pos2(50.0, 140.0),
+    [
+        [76.0, 140.0, 96.0, 121.0, 96.0, 96.0],
+        [96.0, 74.0, 87.0, 60.0, 77.0, 46.0],
+        [68.0, 33.0, 61.0, 19.0, 60.0, 0.0],
+        [47.0, 13.0, 37.0, 31.0, 39.0, 58.0],
+        [31.0, 53.0, 26.0, 45.0, 25.0, 33.0],
+        [14.0, 46.0, 4.0, 65.0, 4.0, 96.0],
+        [4.0, 121.0, 24.0, 140.0, 50.0, 140.0],
+    ],
+);
+const CORE: (Pos2, [[f32; 6]; 5]) = (
+    pos2(50.0, 135.0),
+    [
+        [63.0, 135.0, 72.0, 125.0, 72.0, 112.0],
+        [72.0, 99.0, 63.0, 91.0, 56.0, 84.0],
+        [51.0, 79.0, 48.0, 73.0, 47.0, 66.0],
+        [40.0, 79.0, 28.0, 93.0, 28.0, 112.0],
+        [28.0, 125.0, 37.0, 135.0, 50.0, 135.0],
+    ],
+);
+
+/// The flame's outlines on the icon's grid (300 tall, base at 256,366) and their triangles,
+/// worked out once.
+struct Fire {
+    flame: Vec<Pos2>,
+    flame_tris: Vec<[u32; 3]>,
+    core: Vec<Pos2>,
+    core_tris: Vec<[u32; 3]>,
+}
+
+fn fire() -> &'static Fire {
+    static FIRE: OnceLock<Fire> = OnceLock::new();
+    FIRE.get_or_init(|| {
+        let k = 300.0 / 140.0;
+        let place = |start: Pos2, curves: &[[f32; 6]]| -> Vec<Pos2> {
+            outline(start, curves).into_iter().map(|q| pos2(256.0 + (q.x - 50.0) * k, 66.0 + q.y * k)).collect()
+        };
+        let flame = place(FLAME.0, &FLAME.1);
+        let core = place(CORE.0, &CORE.1);
+        Fire { flame_tris: triangulate(&flame), flame, core_tris: triangulate(&core), core }
+    })
+}
+
+/// Points along a closed run of cubic curves (the last one ends where the first starts).
+fn outline(start: Pos2, curves: &[[f32; 6]]) -> Vec<Pos2> {
+    const STEPS: usize = 12;
+    let mut pts = vec![start];
+    let mut p0 = start;
+    for c in curves {
+        let (p1, p2, p3) = (pos2(c[0], c[1]), pos2(c[2], c[3]), pos2(c[4], c[5]));
+        for i in 1..=STEPS {
+            let t = i as f32 / STEPS as f32;
+            let s = 1.0 - t;
+            pts.push((p0.to_vec2() * (s * s * s) + p1.to_vec2() * (3.0 * s * s * t) + p2.to_vec2() * (3.0 * s * t * t) + p3.to_vec2() * (t * t * t)).to_pos2());
+        }
+        p0 = p3;
+    }
+    pts.pop(); // back at the start
+    pts
+}
+
+/// Triangles covering a simple polygon, by ear clipping (a few dozen points, done once).
+fn triangulate(pts: &[Pos2]) -> Vec<[u32; 3]> {
+    let cross = |a: Pos2, b: Pos2, c: Pos2| (b - a).x * (c - a).y - (b - a).y * (c - a).x;
+    let mut ring: Vec<usize> = (0..pts.len()).collect();
+    // Wind it so that corners pointing out turn the positive way.
+    let area: f32 = (0..pts.len()).map(|i| cross(Pos2::ZERO, pts[i], pts[(i + 1) % pts.len()])).sum();
+    if area < 0.0 {
+        ring.reverse();
+    }
+    let mut tris = Vec::with_capacity(pts.len());
+    while ring.len() > 3 {
+        let m = ring.len();
+        let ear = (0..m).find(|&i| {
+            let (a, b, c) = (pts[ring[(i + m - 1) % m]], pts[ring[i]], pts[ring[(i + 1) % m]]);
+            cross(a, b, c) > 0.0
+                && !ring.iter().any(|&j| {
+                    let q = pts[j];
+                    q != a && q != b && q != c && cross(a, b, q) >= 0.0 && cross(b, c, q) >= 0.0 && cross(c, a, q) >= 0.0
+                })
+        });
+        let Some(i) = ear else { break }; // not a simple polygon: draw what we have
+        tris.push([ring[(i + m - 1) % m] as u32, ring[i] as u32, ring[(i + 1) % m] as u32]);
+        ring.remove(i);
+    }
+    if ring.len() == 3 {
+        tris.push([ring[0] as u32, ring[1] as u32, ring[2] as u32]);
+    }
+    tris
 }
 
 pub fn crown(p: &Painter, r: Rect, c: Color32) {
