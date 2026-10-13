@@ -538,6 +538,63 @@ pub fn fullscreen(p: &Painter, r: Rect, c: Color32, exit: bool) {
     }
 }
 
+/// A five-pointed star, filled (a favorite) or outlined.
+pub fn star(p: &Painter, r: Rect, c: Color32, filled: bool) {
+    let ctr = r.center() + vec2(0.0, r.height() * 0.04);
+    let outer = r.width().min(r.height()) * 0.5;
+    let inner = outer * 0.42;
+    let pts: Vec<Pos2> = (0..10)
+        .map(|i| {
+            let a = -FRAC_PI_2 + i as f32 * PI / 5.0;
+            let rad = if i % 2 == 0 { outer } else { inner };
+            pos2(ctr.x + rad * a.cos(), ctr.y + rad * a.sin())
+        })
+        .collect();
+    if filled {
+        // A fan from the middle (a star isn't convex, so one polygon would fill it wrong).
+        let mut mesh = Mesh::default();
+        mesh.colored_vertex(ctr, c);
+        for q in &pts {
+            mesh.colored_vertex(*q, c);
+        }
+        for i in 0..10u32 {
+            mesh.add_triangle(0, 1 + i, 1 + (i + 1) % 10);
+        }
+        p.add(Shape::mesh(mesh));
+    } else {
+        p.add(Shape::closed_line(pts, Stroke::new((outer * 0.16).max(1.2), c)));
+    }
+}
+
+/// A rounded square: stop.
+pub fn stop(p: &Painter, r: Rect, c: Color32) {
+    let s = r.width().min(r.height());
+    p.rect_filled(Rect::from_center_size(r.center(), vec2(s * 0.62, s * 0.62)), CornerRadius::same((s * 0.12) as u8), c);
+}
+
+/// The soundboard: a 2×2 board of pads, one lit, with a sound coming off it.
+pub fn soundboard(p: &Painter, r: Rect, c: Color32) {
+    let s = r.width().min(r.height());
+    let pad = s * 0.3;
+    let gap = s * 0.08;
+    // The board at the bottom left, the waves rising off it to the top right.
+    let o = Rect::from_center_size(r.center(), vec2(s, s)).min + vec2(s * 0.02, s * 0.3);
+    let round = CornerRadius::same((s * 0.07) as u8);
+    for (i, j) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+        let q = Rect::from_min_size(o + vec2(i as f32 * (pad + gap), j as f32 * (pad + gap)), vec2(pad, pad));
+        if (i, j) == (1, 0) {
+            p.rect_filled(q, round, c);
+        } else {
+            p.rect_stroke(q, round, Stroke::new((s * 0.075).max(1.2), c), StrokeKind::Inside);
+        }
+    }
+    // Two little waves off the lit pad's corner.
+    let k = o + vec2(2.0 * pad + gap, 0.0);
+    for rad in [s * 0.14, s * 0.26] {
+        p.add(Shape::line(arc(k, rad, -FRAC_PI_2 + 0.25, -0.25, 8), Stroke::new((s * 0.07).max(1.1), c)));
+    }
+}
+
 pub fn clock(p: &Painter, r: Rect, c: Color32) {
     let s = Stroke::new(1.8f32, c);
     let rad = r.width().min(r.height()) / 2.0;

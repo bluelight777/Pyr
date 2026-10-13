@@ -337,21 +337,33 @@ pub fn paint(
     e: &EmojiRef,
     custom: &mut dyn FnMut(&str) -> Option<egui::TextureId>,
 ) {
+    paint_faded(painter, rect, e, custom, 1.0);
+}
+
+/// `paint`, see-through by `alpha` (0 to 1), for emoji that fade away.
+pub fn paint_faded(
+    painter: &egui::Painter,
+    rect: Rect,
+    e: &EmojiRef,
+    custom: &mut dyn FnMut(&str) -> Option<egui::TextureId>,
+    alpha: f32,
+) {
+    let tint = Color32::WHITE.gamma_multiply(alpha.clamp(0.0, 1.0));
     match e {
         EmojiRef::Unicode(cell) => {
             if let Some(t) = atlas(painter.ctx()) {
                 // A plain textured quad: egui's image shape adds a soft half-pixel rim whose
                 // texture coordinates reach past this cell into the next emoji in the atlas.
                 let mut mesh = egui::Mesh::with_texture(t);
-                mesh.add_rect_with_uv(rect, uv(*cell), Color32::WHITE);
+                mesh.add_rect_with_uv(rect, uv(*cell), tint);
                 painter.add(egui::Shape::mesh(mesh));
             }
         }
         EmojiRef::Custom { id, .. } => {
             if let Some(t) = custom(id) {
-                painter.image(t, rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+                painter.image(t, rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), tint);
             } else {
-                painter.rect_filled(rect.shrink(rect.width() * 0.15), 4.0, Color32::from_white_alpha(14));
+                painter.rect_filled(rect.shrink(rect.width() * 0.15), 4.0, Color32::from_white_alpha((14.0 * alpha.clamp(0.0, 1.0)) as u8));
             }
         }
     }

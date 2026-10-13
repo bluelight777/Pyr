@@ -207,13 +207,20 @@ pub struct Imported {
     pub cut: bool,
 }
 
-/// Read an audio file (MP3, Ogg Vorbis, WAV, FLAC, AAC/M4A, or an Ingle sound).
+/// How a picked file's sound is decoded: by Symphonia, or (Ogg Opus, which Symphonia reads
+/// but can't decode) by the Opus decoder calls use, skipping the encoder's lead-in.
+enum Decoding {
+    Symphonia(Box<dyn symphonia::core::codecs::Decoder>),
+    Opus { dec: opus::Decoder, channels: usize, skip: usize },
+}
+
+/// Read an audio file (MP3, Ogg Vorbis or Opus, WAV, FLAC, AAC/M4A, or an Ingle sound).
 pub fn import(bytes: Vec<u8>, extension: Option<&str>) -> Result<Imported> {
     if sound::check(&bytes).is_some() {
         return Ok(Imported { pcm: decode(&bytes)?, cut: false });
     }
     use symphonia::core::audio::SampleBuffer;
-    use symphonia::core::codecs::{CODEC_TYPE_NULL, DecoderOptions};
+    use symphonia::core::codecs::{CODEC_TYPE_NULL, CODEC_TYPE_OPUS, DecoderOptions};
     use symphonia::core::errors::Error as SymErr;
     use symphonia::core::formats::FormatOptions;
     use symphonia::core::io::MediaSourceStream;
@@ -235,12 +242,25 @@ pub fn import(bytes: Vec<u8>, extension: Option<&str>) -> Result<Imported> {
         .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
         .ok_or_else(|| anyhow!("There's no sound in that file."))?;
     let track_id = track.id;
-    let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
-        .map_err(|_| anyhow!("Ingle can't play that kind of sound (try MP3, OGG, WAV or FLAC)."))?;
-    let mut rate = track.codec_params.sample_rate.unwrap_or(48_000) as usize;
+    let params = track.codec_params.clone();
+    let mut decoding = if params.codec == CODEC_TYPE_OPUS {
+        let channels = params.channels.map(|c| c.count()).unwrap_or(2);
+        if !(1..=2).contains(&channels) {
+            bail!("Ingle can't read Opus sound with more than two channels (try MP3, OGG, WAV or FLAC).");
+        }
+        let dec = opus::Decoder::new(48_000, if channels == 2 { opus::Channels::Stereo } else { opus::Channels::Mono })?;
+        Decoding::Opus { dec, channels, skip: params.delay.unwrap_or(0) as usize }
+    } else {
+        let d = symphonia::default::get_codecs()
+            .make(&params, &DecoderOptions::default())
+            .map_err(|_| anyhow!("Ingle can't play that kind of sound (try MP3, OGG, WAV or FLAC)."))?;
+        Decoding::Symphonia(d)
+    };
+    let mut rate = if params.codec == CODEC_TYPE_OPUS { RATE } else { params.sample_rate.unwrap_or(48_000) as usize };
     let (mut left, mut right) = (Vec::new(), Vec::new());
     let mut cut = false;
+    // (Opus packets hold up to 120 ms.)
+    let mut opus_buf = vec![0f32; 5760 * 2];
     loop {
         let packet = match format.next_packet() {
             Ok(p) => p,
@@ -256,20 +276,36 @@ pub fn import(bytes: Vec<u8>, extension: Option<&str>) -> Result<Imported> {
         if packet.track_id() != track_id {
             continue;
         }
-        let decoded = match decoder.decode(&packet) {
-            Ok(d) => d,
-            // A damaged packet: skip it.
-            Err(SymErr::DecodeError(_)) => continue,
-            Err(e) => return Err(anyhow!("couldn't read the sound: {e}")),
-        };
-        let spec = *decoded.spec();
-        rate = spec.rate as usize;
-        let ch = spec.channels.count().max(1);
-        let mut buf = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
-        buf.copy_interleaved_ref(decoded);
-        for frame in buf.samples().chunks(ch) {
-            left.push(frame[0]);
-            right.push(*frame.get(1).unwrap_or(&frame[0]));
+        match &mut decoding {
+            Decoding::Symphonia(decoder) => {
+                let decoded = match decoder.decode(&packet) {
+                    Ok(d) => d,
+                    // A damaged packet: skip it.
+                    Err(SymErr::DecodeError(_)) => continue,
+                    Err(e) => return Err(anyhow!("couldn't read the sound: {e}")),
+                };
+                let spec = *decoded.spec();
+                rate = spec.rate as usize;
+                let ch = spec.channels.count().max(1);
+                let mut buf = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
+                buf.copy_interleaved_ref(decoded);
+                for frame in buf.samples().chunks(ch) {
+                    left.push(frame[0]);
+                    right.push(*frame.get(1).unwrap_or(&frame[0]));
+                }
+            }
+            Decoding::Opus { dec, channels, skip } => {
+                // A damaged packet: skip it.
+                let Ok(n) = dec.decode_float(&packet.data, &mut opus_buf[..5760 * *channels], false) else { continue };
+                for frame in opus_buf[..n * *channels].chunks(*channels) {
+                    if *skip > 0 {
+                        *skip -= 1;
+                        continue;
+                    }
+                    left.push(frame[0]);
+                    right.push(*frame.get(1).unwrap_or(&frame[0]));
+                }
+            }
         }
         if left.len() > MAX_IMPORT_SECS * rate.max(1) {
             cut = true;
@@ -489,5 +525,76 @@ mod tests {
         let secs = seconds(&got.pcm);
         assert!((secs - 0.5).abs() < 0.03, "{secs} s");
         assert!(import(b"definitely not audio".to_vec(), None).is_err());
+    }
+
+    /// An Ogg page holding one packet.
+    fn ogg_page(out: &mut Vec<u8>, kind: u8, granule: u64, seq: u32, packet: &[u8]) {
+        let start = out.len();
+        out.extend_from_slice(b"OggS");
+        out.push(0);
+        out.push(kind);
+        out.extend_from_slice(&granule.to_le_bytes());
+        out.extend_from_slice(&7u32.to_le_bytes());
+        out.extend_from_slice(&seq.to_le_bytes());
+        out.extend_from_slice(&[0; 4]);
+        let mut lacing = vec![255u8; packet.len() / 255];
+        lacing.push((packet.len() % 255) as u8);
+        out.push(lacing.len() as u8);
+        out.extend_from_slice(&lacing);
+        out.extend_from_slice(packet);
+        // Ogg's CRC-32 (polynomial 0x04c11db7, not reflected), over the page.
+        let mut crc = 0u32;
+        for b in &out[start..] {
+            crc ^= (*b as u32) << 24;
+            for _ in 0..8 {
+                crc = if crc & 0x8000_0000 != 0 { (crc << 1) ^ 0x04c1_1db7 } else { crc << 1 };
+            }
+        }
+        out[start + 22..start + 26].copy_from_slice(&crc.to_le_bytes());
+    }
+
+    #[test]
+    fn imports_an_ogg_opus_file() {
+        // 0.1 s of silence then 0.3 s of 880 Hz, mono, as an Ogg Opus file (what voice note
+        // and recording apps make). Symphonia reads it; Ingle's Opus decoder plays it.
+        let mut enc = opus::Encoder::new(48_000, opus::Channels::Mono, opus::Application::Audio).unwrap();
+        let pre_skip = enc.get_lookahead().unwrap() as u16;
+        let n = RATE * 4 / 10;
+        let pcm: Vec<f32> = (0..n)
+            .map(|i| if i < RATE / 10 { 0.0 } else { (i as f32 / RATE as f32 * 880.0 * std::f32::consts::TAU).sin() * 0.5 })
+            .collect();
+        let mut file = Vec::new();
+        let mut head = b"OpusHead".to_vec();
+        head.push(1);
+        head.push(1);
+        head.extend_from_slice(&pre_skip.to_le_bytes());
+        head.extend_from_slice(&48_000u32.to_le_bytes());
+        head.extend_from_slice(&0i16.to_le_bytes());
+        head.push(0);
+        ogg_page(&mut file, 0x02, 0, 0, &head);
+        let mut tags = b"OpusTags".to_vec();
+        tags.extend_from_slice(&5u32.to_le_bytes());
+        tags.extend_from_slice(b"ingle");
+        tags.extend_from_slice(&0u32.to_le_bytes());
+        ogg_page(&mut file, 0, 0, 1, &tags);
+        // (The encoder's lead-in is pre-skip long: feed that much more at the end.)
+        let mut padded = pcm.clone();
+        padded.resize(n + pre_skip as usize + 960, 0.0);
+        let frames = padded.len() / 960;
+        for f in 0..frames {
+            let packet = enc.encode_vec_float(&padded[f * 960..(f + 1) * 960], 4000).unwrap();
+            let last = f + 1 == frames;
+            let granule = ((f + 1) * 960) as u64;
+            ogg_page(&mut file, if last { 0x04 } else { 0 }, granule, 2 + f as u32, &packet);
+        }
+        let got = import(file, Some("opus")).unwrap();
+        let peak = got.pcm.iter().fold(0f32, |m, v| m.max(v.abs()));
+        assert!((peak - 0.5).abs() < 0.1, "plays at the level it was made: {peak}");
+        let starts = got.pcm.iter().position(|v| v.abs() > 0.1).unwrap() as f32 / 2.0 / RATE as f32;
+        assert!((starts - 0.1).abs() < 0.003, "the encoder's lead-in is skipped: the tone starts at {starts} s");
+        // Its pitch: 880 Hz (rising zero crossings over the tone's middle 0.2 s).
+        let mid = &got.pcm[(RATE * 15 / 100) * 2..(RATE * 35 / 100) * 2];
+        let ups = mid.chunks(2).collect::<Vec<_>>().windows(2).filter(|w| w[0][0] < 0.0 && w[1][0] >= 0.0).count();
+        assert!((ups as i32 - 176).abs() <= 2, "{ups} cycles in 0.2 s");
     }
 }

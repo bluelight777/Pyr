@@ -7,6 +7,9 @@ use ingle_proto::media::track;
 use crate::app::{Act, Dialog, IngleApp, avatar, icon_button};
 use crate::{icons, theme};
 
+/// Buttons under the call (Leave, a little wider, included).
+const CALL_BUTTONS: f32 = 6.0;
+
 #[derive(Clone)]
 struct Tile {
     key: VideoKey,
@@ -27,6 +30,21 @@ struct Tile {
     face: Option<egui::TextureId>,
     /// Who's watching this screen share (names).
     viewers: Vec<String>,
+    /// I've muted their soundboard sounds.
+    sb_muted: bool,
+    /// The soundboard sound they just played, while it shows over them.
+    pop: Option<Pop>,
+}
+
+/// A soundboard sound someone played, shown over their tile.
+#[derive(Clone)]
+struct Pop {
+    emoji: String,
+    name: String,
+    /// Seconds since it was played.
+    age: f32,
+    /// The picture, for one of the server's own emoji.
+    tex: Option<egui::TextureId>,
 }
 
 fn grid_layout(n: usize, area: Rect, gap: f32) -> Vec<Rect> {
@@ -226,6 +244,12 @@ impl IngleApp {
                 let name = s.member_name(&p.user_id);
                 let has_cam = p.tracks.iter().any(|t| t.id == track::CAMERA);
                 let face = self.face(ui.ctx(), s, &p.user_id);
+                let pop = crate::soundboard::recent_pop(call, p.session).map(|(x, age)| Pop {
+                    emoji: x.emoji.clone(),
+                    name: x.name.clone(),
+                    age,
+                    tex: crate::soundboard::custom_emoji_id(&x.emoji).and_then(|id| self.custom_emoji_tex(ui.ctx(), &s.key, &id)),
+                });
                 tiles.push(Tile {
                     key: VideoKey { session: p.session, track: track::CAMERA },
                     user_id: p.user_id.clone(),
@@ -242,6 +266,8 @@ impl IngleApp {
                     stream_volume: 1.0,
                     face,
                     viewers: Vec::new(),
+                    sb_muted: st.settings.soundboard_muted.contains(&p.user_id),
+                    pop,
                 });
                 if p.tracks.iter().any(|t| t.id == track::SCREEN) {
                     let key = VideoKey { session: p.session, track: track::SCREEN };
@@ -266,6 +292,8 @@ impl IngleApp {
                             .find(|t| t.id == track::SCREEN)
                             .map(|t| t.viewers.iter().filter_map(|v| s.voice.get(v)).map(|v| s.member_name(&v.user_id)).collect())
                             .unwrap_or_default(),
+                        sb_muted: false,
+                        pop: None,
                     });
                 }
             }
@@ -406,6 +434,22 @@ impl IngleApp {
         if t.speaking {
             p.rect_stroke(rect, CornerRadius::same(12), Stroke::new(3.0f32, theme::GLOW), StrokeKind::Inside);
         }
+        // A soundboard sound they just played: its emoji pops up over them, and what it was
+        // shows in the corner.
+        if let Some(pop) = &t.pop {
+            let face_r = (rect.height().min(rect.width()) * 0.2).clamp(18.0, 64.0);
+            let size = (face_r * 1.1).clamp(22.0, 64.0);
+            let at = rect.center() + vec2(face_r * 0.95, -face_r * 0.75);
+            let tex = pop.tex;
+            crate::soundboard::paint_pop(&p, at, size, &pop.emoji, pop.age, &mut |_| tex);
+            let (_, _, alpha) = crate::soundboard::pop_motion(pop.age);
+            let g = ui.fonts_mut(|f| f.layout_no_wrap(pop.name.clone(), theme::bold_font(12.0), theme::TEXT.gamma_multiply(alpha)));
+            let b = Rect::from_min_size(rect.left_top() + vec2(10.0, 10.0), vec2(g.size().x + 34.0, 24.0));
+            p.rect_filled(b, CornerRadius::same(6), Color32::from_black_alpha((150.0 * alpha) as u8));
+            icons::soundboard(&p, Rect::from_min_size(b.min + vec2(7.0, 4.0), vec2(16.0, 16.0)), theme::EMBER2.gamma_multiply(alpha));
+            p.galley(pos2(b.left() + 28.0, b.center().y - g.size().y / 2.0), g, theme::TEXT);
+            ctx.request_repaint();
+        }
         if resp.hovered() {
             p.rect_stroke(rect, CornerRadius::same(12), Stroke::new(1.0f32, theme::LINE), StrokeKind::Inside);
         }
@@ -452,6 +496,7 @@ impl IngleApp {
         let watching = t.watching;
         let vol = t.volume;
         let (has_sound, svol) = (t.has_sound, t.stream_volume);
+        let sb_muted = t.sb_muted;
         resp.context_menu(|ui| {
             if !is_me {
                 // Mute this person (or just their stream's sound) on this PC, like Discord.
@@ -466,6 +511,11 @@ impl IngleApp {
                         0.0
                     };
                     acts.push(if screen { Act::StreamVolume { uid: uid.clone(), volume } } else { Act::Volume { uid: uid.clone(), volume } });
+                    ui.close();
+                }
+                // Their soundboard sounds, for me only (everyone else still hears them).
+                if !screen && ui.checkbox(&mut sb_muted.clone(), "Mute their soundboard").clicked() {
+                    acts.push(Act::MuteSoundboard { uid: uid.clone(), muted: !sb_muted });
                     ui.close();
                 }
                 ui.separator();
@@ -519,10 +569,10 @@ impl IngleApp {
             if let Some(err) = &call.audio_error {
                 lines = vec!["Audio problem:".into(), err.clone()];
             }
-            // Keep the text clear of the call buttons (they're centred, 5 buttons wide);
+            // Keep the text clear of the call buttons (they're centred, `CALL_BUTTONS` wide);
             // anything longer is cut with "…" and shown in full on hover.
             let r = ui.max_rect();
-            let buttons_left = r.center().x - (5.0 * 54.0 + 4.0 * 14.0 + 18.0) / 2.0;
+            let buttons_left = r.center().x - (CALL_BUTTONS * 54.0 + (CALL_BUTTONS - 1.0) * 14.0 + 18.0) / 2.0;
             let width = (buttons_left - r.left() - 28.0).max(60.0);
             let colour = if call.audio_error.is_some() { theme::LIVE } else { theme::DIM };
             let mut cut = false;
@@ -543,36 +593,42 @@ impl IngleApp {
         }
         let (muted, deafened) = self.engine.voice_prefs();
         let full = ui.max_rect();
-        let n = 5.0;
+        let n = CALL_BUTTONS;
         let size = 54.0;
         let gap = 14.0;
         let total = n * size + (n - 1.0) * gap + 18.0;
         let mut x = full.center().x - total / 2.0;
         let y = full.center().y - 4.0;
-        let mut button = |ui: &mut egui::Ui, w: f32, fill: Color32, tip: &str, draw: &dyn Fn(&egui::Painter, Rect)| -> bool {
+        let mut button = |ui: &mut egui::Ui, w: f32, fill: Color32, tip: &str, draw: &dyn Fn(&egui::Painter, Rect)| -> egui::Response {
             let r = Rect::from_center_size(pos2(x + w / 2.0, y), vec2(w, size));
             x += w + gap;
             let resp = ui.allocate_rect(r, Sense::click());
             let f = if resp.hovered() { fill.gamma_multiply(1.25) } else { fill };
             ui.painter().rect_filled(r, CornerRadius::same((size / 2.0) as u8), f);
             draw(ui.painter(), Rect::from_center_size(r.center(), vec2(24.0, 24.0)));
-            resp.on_hover_text(tip).clicked()
+            resp.on_hover_text(tip)
         };
         let base = Color32::from_rgb(0x2a, 0x23, 0x1f);
         let on = Color32::from_rgb(0x3a, 0x2a, 0x20);
         if button(ui, size, if muted { Color32::from_rgb(0x4a, 0x1f, 0x1f) } else { base }, if muted { "Unmute" } else { "Mute" }, &|p, r| {
             icons::mic(p, r, if muted { theme::LIVE } else { theme::TEXT }, muted)
-        }) {
+        })
+        .clicked()
+        {
             acts.push(Act::Mute(!muted));
         }
         if button(ui, size, if call.camera_on { on } else { base }, if call.camera_on { "Turn off camera" } else { "Turn on camera" }, &|p, r| {
             icons::camera(p, r, if call.camera_on { theme::EMBER2 } else { theme::TEXT }, false)
-        }) {
+        })
+        .clicked()
+        {
             acts.push(Act::Camera(!call.camera_on));
         }
         if button(ui, size, if call.screen_on { on } else { base }, if call.screen_on { "Stop sharing" } else { "Share your screen" }, &|p, r| {
             icons::screen(p, r, if call.screen_on { theme::EMBER2 } else { theme::TEXT })
-        }) {
+        })
+        .clicked()
+        {
             if call.screen_on {
                 acts.push(Act::StopScreen);
             } else {
@@ -580,12 +636,22 @@ impl IngleApp {
                 self.ui.dialog = Some(Dialog::ScreenPicker { selected: None });
             }
         }
+        let sb_open = self.soundboard_open();
+        let sb = button(ui, size, if sb_open { on } else { base }, "Soundboard", &|p, r| {
+            icons::soundboard(p, r, if sb_open { theme::EMBER2 } else { theme::TEXT })
+        });
+        self.soundboard_anchor(crate::soundboard::FROM_CALL, sb.rect);
+        if sb.clicked() {
+            self.toggle_soundboard(st, crate::soundboard::FROM_CALL);
+        }
         if button(ui, size, if deafened { Color32::from_rgb(0x4a, 0x1f, 0x1f) } else { base }, if deafened { "Undeafen" } else { "Deafen" }, &|p, r| {
             icons::headphones(p, r, if deafened { theme::LIVE } else { theme::TEXT }, deafened)
-        }) {
+        })
+        .clicked()
+        {
             acts.push(Act::Deafen(!deafened));
         }
-        if button(ui, size + 18.0, theme::LIVE, "Leave call", &|p, r| icons::hangup(p, r, Color32::WHITE)) {
+        if button(ui, size + 18.0, theme::LIVE, "Leave call", &|p, r| icons::hangup(p, r, Color32::WHITE)).clicked() {
             acts.push(Act::Leave);
         }
     }
@@ -613,6 +679,8 @@ mod tests {
             stream_volume: 1.0,
             face: None,
             viewers: Vec::new(),
+            sb_muted: false,
+            pop: None,
         };
         for (w, n) in [(1400.0, 4), (620.0, 4), (380.0, 4), (300.0, 6), (1000.0, 2)] {
             let area = Rect::from_min_size(pos2(0.0, 0.0), vec2(w, 700.0));

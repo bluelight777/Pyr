@@ -34,6 +34,14 @@ pub(crate) fn input(ui: &mut egui::Ui, text: &mut String, hint: &str) -> egui::R
 
 impl IngleApp {
     pub fn dialogs(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
+        self.dialog_ui(ctx, st, acts);
+        // One dialog opening another (Server Settings' "Add a sound", say, and back).
+        if let Some(d) = self.ui.next_dialog.take() {
+            self.ui.dialog = Some(d);
+        }
+    }
+
+    fn dialog_ui(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
         let Some(dialog) = self.ui.dialog.clone() else { return };
         let was_create = matches!(dialog, Dialog::Create);
         let mut close = false;
@@ -206,10 +214,17 @@ impl IngleApp {
                     let can_emoji =
                         server.as_ref().map(|s| s.can(perm::MANAGE_EMOJI) && s.has(ingle_proto::control::EMOJI_FEATURE)).unwrap_or(false);
                     let can_backup = self.engine.can_back_up(&key);
+                    // The soundboard tab shows for anyone who manages emoji (it says when the
+                    // server needs updating first).
+                    let can_sounds = server.as_ref().is_some_and(|s| s.can(perm::MANAGE_EMOJI) && s.status.is_connected());
                     if tab == 0 && !can_server && can_emoji {
                         tab = 2;
                     }
-                    ui.set_width(if tab == 1 { 680.0 } else if tab == 2 { 560.0 } else { 440.0 });
+                    ui.set_width(match tab {
+                        1 => 680.0,
+                        2 | 4 => 560.0,
+                        _ => 440.0,
+                    });
                     ui.horizontal(|ui| {
                         title(ui, "Server settings");
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -228,12 +243,20 @@ impl IngleApp {
                         if can_emoji && ui.add(egui::Button::selectable(tab == 2, "Emoji")).clicked() {
                             tab = 2;
                         }
+                        if can_sounds && ui.add(egui::Button::selectable(tab == 4, "Soundboard")).clicked() {
+                            tab = 4;
+                        }
                         if can_backup && ui.add(egui::Button::selectable(tab == 3, "Backups")).clicked() {
                             tab = 3;
                         }
                     });
                     ui.separator();
-                    if tab == 3 {
+                    if tab == 4 {
+                        if let Some(s) = &server {
+                            let back = Dialog::ServerSettings { key: key.clone(), name: name.clone(), tab: 4 };
+                            self.server_sounds_tab(ui, s, back);
+                        }
+                    } else if tab == 3 {
                         self.backups_tab(ui, st, &key);
                     } else if tab == 1 {
                         if let Some(s) = &server {
@@ -595,6 +618,12 @@ impl IngleApp {
                 Dialog::Settings { tab } => {
                     self.settings_dialog(ui, st, tab, acts, &mut close);
                 }
+                Dialog::SoundEditor => {
+                    self.sound_editor_dialog(ui, st, acts, &mut close);
+                }
+                Dialog::RemoveSound { key, id, name, from_settings } => {
+                    self.remove_sound_dialog(ui, st, &key, &id, &name, from_settings, acts, &mut close);
+                }
             }
         });
         // A setup that's running can't be dismissed by clicking outside or pressing Escape.
@@ -607,6 +636,17 @@ impl IngleApp {
             // only until then).
             if matches!(self.ui.dialog, Some(Dialog::Create)) || was_create {
                 self.ui.create = None;
+            }
+            // The add-a-sound dialog closed with Escape (or a click outside): back to where it
+            // was opened from.
+            if matches!(self.ui.dialog, Some(Dialog::SoundEditor)) {
+                self.sound_editor_closed();
+            }
+            if let Some(Dialog::RemoveSound { key, from_settings: true, .. }) = &self.ui.dialog {
+                if self.ui.next_dialog.is_none() {
+                    let name = st.server(key).map(|s| s.name.clone()).unwrap_or_default();
+                    self.ui.next_dialog = Some(Dialog::ServerSettings { key: key.clone(), name, tab: 4 });
+                }
             }
             self.ui.dialog = None;
         }
@@ -625,6 +665,9 @@ impl IngleApp {
         draft.spellcheck = st.settings.spellcheck;
         draft.spell_language = st.settings.spell_language.clone();
         draft.spell_words = st.settings.spell_words.clone();
+        // (Sounds played by their keys while this is open, and the soundboard's favorites.)
+        draft.sound_recent = st.settings.sound_recent.clone();
+        draft.sound_favorites = st.settings.sound_favorites.clone();
         let before = draft.clone();
         let mut t = tab;
         ui.horizontal(|ui| {
@@ -815,6 +858,8 @@ impl IngleApp {
                     .color(theme::DIM),
                 );
 
+                self.soundboard_settings(ui, st, &mut draft);
+
                 field_label(ui, "Camera");
                 ui.horizontal(|ui| {
                     device_combo(ui, "cam-dev", &mut draft.camera_device, &devices.cameras);
@@ -942,7 +987,9 @@ impl IngleApp {
                     RichText::new(
                         "Emoji graphics: Twemoji by Twitter, Inc. and other contributors, licensed CC-BY 4.0. Emoji names: Emojibase (MIT). \
                          GIF search powered by GIPHY. Voice isolation: DeepFilterNet (MIT/Apache-2.0) and RNNoise (BSD). Spellcheck: \
-                         spellbook (MPL-2.0) with dictionaries from SCOWL (MIT/BSD), RLA-ES (MPL-1.1) and Grammalecte (MPL-2.0).",
+                         spellbook (MPL-2.0) with dictionaries from SCOWL (MIT/BSD), RLA-ES (MPL-1.1) and Grammalecte (MPL-2.0). \
+                         Reading sound files for the soundboard: Symphonia (MPL-2.0). Ingle's own soundboard sounds are \
+                         synthesized by Ingle (no recordings).",
                     )
                         .size(12.0)
                         .color(theme::DIM),

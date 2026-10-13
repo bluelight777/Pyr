@@ -344,6 +344,8 @@ pub enum PickFor {
     ServerIcon(String),
     Emoji(String),
     Attach(String, ingle_proto::control::ChannelId),
+    /// A sound file for a server's soundboard (picking nothing is reported too, as no files).
+    Sound(String),
 }
 
 type Picked = (PickFor, Vec<(String, Vec<u8>)>);
@@ -384,11 +386,34 @@ pub fn run_wanted_dialog() {
         }
     }
     let Some((what, multiple)) = wanted().lock().unwrap().take() else { return };
+    if let PickFor::Sound(_) = what {
+        let file = pick_sound();
+        DIALOG_CLOSED.store(true, std::sync::atomic::Ordering::SeqCst);
+        picks().lock().unwrap().push((what, file.into_iter().collect()));
+        return;
+    }
     let files = if multiple { pick_images() } else { pick_image().into_iter().collect() };
     DIALOG_CLOSED.store(true, std::sync::atomic::Ordering::SeqCst);
     if !files.is_empty() {
         picks().lock().unwrap().push((what, files));
     }
+}
+
+/// The most of a sound file read (far more than the 3 minutes kept of any sound).
+const MAX_SOUND_FILE: u64 = 256 << 20;
+
+/// Pick a sound file (its start, for a very big one).
+fn pick_sound() -> Option<(String, Vec<u8>)> {
+    use std::io::Read;
+    let path = rfd::FileDialog::new()
+        .set_title("Choose a sound")
+        .add_filter("Sounds", &["mp3", "wav", "ogg", "oga", "opus", "flac", "m4a", "aac", "mp4", "ings"])
+        .add_filter("All files", &["*"])
+        .pick_file()?;
+    let name = path.file_name()?.to_string_lossy().to_string();
+    let mut bytes = Vec::new();
+    std::fs::File::open(&path).ok()?.take(MAX_SOUND_FILE).read_to_end(&mut bytes).ok()?;
+    Some((name, bytes))
 }
 
 /// What a chosen folder is for.

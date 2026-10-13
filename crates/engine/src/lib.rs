@@ -159,6 +159,48 @@ pub struct Shared {
 const SOUND_MIME: &str = "audio/x-ingle-sound";
 
 /// Play `sound` in the call on server `key` (see `Engine::play_sound`).
+/// Plays `sound` for everyone in our voice channel (and notes it in the recent sounds).
+fn play_soundboard_on(shared: &Arc<Shared>, sound: SoundRef) {
+    let Some(key) = shared.call.lock().as_ref().map(|c| c.server_key.clone()) else {
+        shared.state.write().toast("Join a voice channel to play sounds.", true);
+        (shared.repaint)();
+        return;
+    };
+    {
+        let mut cfg = shared.config.lock();
+        let recent = &mut cfg.settings.sound_recent;
+        recent.retain(|s| !s.same(&sound));
+        recent.insert(0, sound.clone());
+        recent.truncate(12);
+        let recent = recent.clone();
+        shared.save_config_locked(&cfg);
+        drop(cfg);
+        shared.state.write().settings.sound_recent = recent;
+    }
+    let s2 = shared.clone();
+    shared.rt.spawn(async move {
+        if let Err(e) = play_sound_in_call(&s2, &key, &sound).await {
+            s2.state.write().toast(format!("{e:#}"), true);
+            (s2.repaint)();
+        }
+    });
+}
+
+/// Plays samples to us only: through the call when we're in one (in step with everything
+/// else), otherwise on the notification sounds' own stream.
+fn preview_pcm_on(shared: &Arc<Shared>, pcm: soundboard::Pcm, volume: f32) {
+    let (volume, device) = {
+        let st = shared.state.read_recursive();
+        (volume.clamp(0.0, 1.0) * st.settings.soundboard_volume.clamp(0.0, 1.0), st.settings.output_device.clone())
+    };
+    let call = shared.call.lock().as_ref().and_then(|c| c.audio.as_ref().map(|a| (a.mixer.clone(), c.session)));
+    match (call, &shared.sfx) {
+        (Some((mixer, me)), _) => mixer.lock().play_effect(pcm, volume, me),
+        (None, Some(sfx)) => sfx.play_stereo(pcm, device, volume),
+        (None, None) => {}
+    }
+}
+
 async fn play_sound_in_call(shared: &Arc<Shared>, key: &str, sound: &SoundRef) -> Result<()> {
     let h = shared.servers.lock().get(key).cloned().ok_or_else(|| anyhow!("not connected to that server"))?;
     for attempt in 0..2 {
@@ -538,6 +580,8 @@ pub struct Engine {
     pub shared: Arc<Shared>,
     _rt: Option<tokio::runtime::Runtime>,
     _ptt: Option<hotkey::PttWatcher>,
+    /// Keys that play soundboard sounds.
+    _keys: Option<hotkey::ComboWatcher>,
 }
 
 impl Engine {
@@ -658,7 +702,24 @@ impl Engine {
         } else {
             None
         };
-        let engine = Engine { shared, _rt: rt, _ptt: ptt };
+        let keys = if opts.push_to_talk {
+            let combos: Vec<String> = shared.state.read_recursive().settings.sound_keys.iter().map(|(c, _)| c.clone()).collect();
+            let s2 = shared.clone();
+            Some(hotkey::ComboWatcher::start(
+                &combos,
+                Arc::new(move |i| {
+                    let sound = s2.state.read_recursive().settings.sound_keys.get(i).map(|(_, s)| s.clone());
+                    // Only in a call: elsewhere the key is just a key.
+                    if let Some(sound) = sound.filter(|_| s2.call.lock().is_some()) {
+                        play_soundboard_on(&s2, sound);
+                    }
+                }),
+                opts.repaint.clone(),
+            ))
+        } else {
+            None
+        };
+        let engine = Engine { shared, _rt: rt, _ptt: ptt, _keys: keys };
         Ok(engine)
     }
 
@@ -1050,22 +1111,29 @@ impl Engine {
     /// another server (or a built-in one) is sent to the call's server first, if it isn't
     /// there already.
     pub fn play_soundboard(&self, sound: SoundRef) {
-        let Some(key) = self.shared.call.lock().as_ref().map(|c| c.server_key.clone()) else {
-            self.toast("Join a voice channel to play sounds.", true);
-            return;
-        };
-        let mut settings = self.shared.state.read_recursive().settings.clone();
-        settings.sound_recent.retain(|s| !s.same(&sound));
-        settings.sound_recent.insert(0, sound.clone());
-        settings.sound_recent.truncate(12);
-        self.update_settings(settings);
-        let shared = self.shared.clone();
-        self.shared.rt.spawn(async move {
-            if let Err(e) = play_sound_in_call(&shared, &key, &sound).await {
-                shared.state.write().toast(format!("{e:#}"), true);
-                (shared.repaint)();
-            }
-        });
+        play_soundboard_on(&self.shared, sound);
+    }
+
+    /// Record the next key combination pressed, for a soundboard key (`take_recorded_sound_key`
+    /// has it once it's pressed); `false` stops recording.
+    pub fn record_sound_key(&self, on: bool) {
+        if let Some(k) = &self._keys {
+            k.record(on);
+        }
+    }
+
+    pub fn take_recorded_sound_key(&self) -> Option<String> {
+        self._keys.as_ref()?.take_recorded()
+    }
+
+    /// Whether soundboard keys work here (they need the keyboard's state, like push-to-talk).
+    pub fn sound_keys_available(&self) -> bool {
+        self._keys.is_some()
+    }
+
+    /// Hear sound samples yourself (the add-a-sound dialog trying out its cut).
+    pub fn preview_pcm(&self, pcm: soundboard::Pcm, volume: f32) {
+        preview_pcm_on(&self.shared, pcm, volume);
     }
 
     /// Hear a sound yourself, nobody else (trying it out).
@@ -1081,18 +1149,7 @@ impl Engine {
                     return;
                 }
             };
-            let (volume, device) = {
-                let st = shared.state.read_recursive();
-                (sound.volume.clamp(0.0, 1.0) * st.settings.soundboard_volume.clamp(0.0, 1.0), st.settings.output_device.clone())
-            };
-            // In a call, through the call (so it's in step with everything else); otherwise on
-            // the notification sounds' own stream.
-            let call = shared.call.lock().as_ref().and_then(|c| c.audio.as_ref().map(|a| (a.mixer.clone(), c.session)));
-            match (call, &shared.sfx) {
-                (Some((mixer, me)), _) => mixer.lock().play_effect(pcm, volume, me),
-                (None, Some(sfx)) => sfx.play_stereo(pcm, device, volume),
-                (None, None) => {}
-            }
+            preview_pcm_on(&shared, pcm, sound.volume);
         });
     }
 
@@ -1138,6 +1195,27 @@ impl Engine {
                 Err(_) => {}
             }
             (shared.repaint)();
+        });
+    }
+
+    /// Add a sound from samples picked in the add-a-sound dialog (48 kHz stereo): the part
+    /// from `start` to `end` seconds is prepared (faded, evened out, cut to the limit) and
+    /// encoded off the UI thread, then uploaded.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_sound_from(&self, key: &str, name: &str, emoji: &str, volume: f32, pcm: soundboard::Pcm, start: f32, end: f32) {
+        let shared = self.shared.clone();
+        let (key, name, emoji) = (key.to_string(), name.to_string(), emoji.to_string());
+        let me = Engine { shared: self.shared.clone(), _rt: None, _ptt: None, _keys: None };
+        self.shared.rt.spawn(async move {
+            let made = tokio::task::spawn_blocking(move || soundboard::encode(&soundboard::prepare(&pcm, start, end))).await;
+            match made {
+                Ok(Ok(file)) => me.add_sound(&key, &name, &emoji, volume, file),
+                Ok(Err(e)) => {
+                    shared.state.write().toast(format!("Couldn't make the sound: {e:#}"), true);
+                    (shared.repaint)();
+                }
+                Err(_) => {}
+            }
         });
     }
 
@@ -1914,6 +1992,29 @@ impl Engine {
         if let Some(p) = self._ptt.as_ref() {
             p.set_key(&settings.ptt_key);
         }
+        if old.sound_keys != settings.sound_keys {
+            if let Some(k) = &self._keys {
+                k.set_combos(&settings.sound_keys.iter().map(|(c, _)| c.clone()).collect::<Vec<_>>());
+            }
+        }
+        // Someone's soundboard just muted: their sounds playing now stop too.
+        let newly_muted: Vec<&String> = settings.soundboard_muted.iter().filter(|u| !old.soundboard_muted.contains(u)).collect();
+        if !newly_muted.is_empty() {
+            let sessions: Vec<SessionId> = {
+                let st = self.shared.state.read_recursive();
+                st.call
+                    .as_ref()
+                    .and_then(|c| st.server(&c.server_key))
+                    .map(|s| s.voice.values().filter(|p| newly_muted.contains(&&p.user_id)).map(|p| p.session).collect())
+                    .unwrap_or_default()
+            };
+            if let Some(a) = self.shared.call.lock().as_ref().and_then(|c| c.audio.as_ref()) {
+                let mut mixer = a.mixer.lock();
+                for s in sessions {
+                    mixer.stop_effects(Some(s));
+                }
+            }
+        }
         if audio_changed {
             let (m, d) = *self.shared.voice_prefs.lock();
             if let Some(c) = self.shared.call.lock().as_mut() {
@@ -2119,7 +2220,7 @@ pub(crate) fn resume_voice(shared: Arc<Shared>, key: String) {
             (shared.repaint)();
             return;
         }
-        let e = Engine { shared: shared.clone(), _rt: None, _ptt: None };
+        let e = Engine { shared: shared.clone(), _rt: None, _ptt: None, _keys: None };
         if r.camera {
             e.start_camera();
         }

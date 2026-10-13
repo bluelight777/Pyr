@@ -89,6 +89,18 @@ pub enum Act {
     SetAvatar(Option<Vec<u8>>),
     SaveImage { name: String, bytes: Arc<Vec<u8>> },
     Toast(String, bool),
+    /// Play a soundboard sound for everyone in the call (see `soundboard.rs`).
+    PlaySound(ingle_engine::config::SoundRef),
+    /// Hear a soundboard sound yourself, nobody else.
+    PreviewSound(ingle_engine::config::SoundRef),
+    /// Stop every soundboard sound playing here.
+    StopSounds,
+    /// Add part (`start` to `end` seconds) of a picked file to a server's soundboard.
+    AddSound { key: String, name: String, emoji: String, volume: f32, pcm: Arc<Vec<f32>>, start: f32, end: f32 },
+    EditSound { key: String, id: String, name: String, emoji: String, volume: f32 },
+    RemoveSound { key: String, id: String },
+    /// Don't play someone's soundboard sounds here (or do again).
+    MuteSoundboard { uid: String, muted: bool },
 }
 
 /// The role being edited in server settings.
@@ -114,7 +126,7 @@ pub enum Dialog {
     CreateChannel { key: String, kind: ChannelKind, name: String },
     EditChannel { key: String, channel: ChannelId, name: String, topic: String },
     Invite { key: String },
-    /// Tab 0: overview; 1: roles.
+    /// Tab 0: overview; 1: roles; 2: emoji; 3: backups; 4: soundboard.
     ServerSettings { key: String, name: String, tab: u8 },
     LeaveServer { key: String, name: String },
     /// "Delete message?" (see `chat.rs`).
@@ -126,6 +138,10 @@ pub enum Dialog {
     /// The owner's inbox of Ingle bug reports for a server; `filter`: 0 new, 1 approved,
     /// 2 fixed, 3 rejected.
     BugReports { key: String, filter: u8 },
+    /// Add or edit a soundboard sound (its state is in `UiState::sb`).
+    SoundEditor,
+    /// "Delete this sound?" (`from_settings`: go back to Server Settings after).
+    RemoveSound { key: String, id: String, name: String, from_settings: bool },
 }
 
 #[derive(Default)]
@@ -209,6 +225,10 @@ pub struct UiState {
     pub spell: crate::spell::Speller,
     /// What the message box's right-click menu was opened on.
     pub composer_menu: Option<crate::chat::ComposerMenu>,
+    /// The soundboard: its picker over the call buttons and the add-a-sound dialog.
+    pub sb: crate::soundboard::SoundboardUi,
+    /// A dialog to open once this frame's dialog is done with (one dialog opening another).
+    pub next_dialog: Option<Dialog>,
 }
 
 pub struct IngleApp {
@@ -434,6 +454,20 @@ impl IngleApp {
                 ctx.input_mut(|i| i.keys_down.clear());
             }
             Act::Toast(text, error) => self.toast(text, error),
+            Act::PlaySound(sound) => e.play_soundboard(sound),
+            Act::PreviewSound(sound) => e.preview_sound(sound),
+            Act::StopSounds => e.stop_sounds(),
+            Act::AddSound { key, name, emoji, volume, pcm, start, end } => e.add_sound_from(&key, &name, &emoji, volume, pcm, start, end),
+            Act::EditSound { key, id, name, emoji, volume } => e.edit_sound(&key, &id, Some(name), Some(emoji), Some(volume)),
+            Act::RemoveSound { key, id } => e.remove_sound(&key, &id),
+            Act::MuteSoundboard { uid, muted } => {
+                let mut s = e.state().settings.clone();
+                s.soundboard_muted.retain(|u| *u != uid);
+                if muted {
+                    s.soundboard_muted.push(uid);
+                }
+                e.update_settings(s);
+            }
         }
     }
 
@@ -586,6 +620,11 @@ impl eframe::App for IngleApp {
                 PickFor::Attach(key, ch) => {
                     for (name, bytes) in files {
                         crate::chat::add_attachment(&mut self.ui.attach, &(key.clone(), ch), name, bytes, &mut acts);
+                    }
+                }
+                PickFor::Sound(key) => {
+                    if let Some(ed) = self.ui.sb.editor.as_mut().filter(|e| e.key == key) {
+                        ed.picked(files.into_iter().next(), ctx);
                     }
                 }
             }
@@ -888,6 +927,7 @@ impl IngleApp {
 
         if self.ui.home {
             self.home_ui(ctx, st, acts);
+            self.soundboard_popup(ctx, st, acts);
             self.dialogs(ctx, st, acts);
             self.viewer(ctx, acts);
             self.avatar_editor(ctx, acts);
@@ -957,6 +997,7 @@ impl IngleApp {
             }
         }
 
+        self.soundboard_popup(ctx, st, acts);
         self.profile_card(ctx, st, acts);
         self.dialogs(ctx, st, acts);
         self.viewer(ctx, acts);
@@ -1067,6 +1108,15 @@ impl IngleApp {
             let mut v = st.user_volumes.get(uid).copied().unwrap_or(1.0) * 100.0;
             if ui.add(egui::Slider::new(&mut v, 0.0..=200.0).suffix("%")).changed() {
                 acts.push(Act::Volume { uid: uid.to_string(), volume: v / 100.0 });
+            }
+            // In my call: their soundboard sounds can be muted, for me.
+            let in_my_call = st.call.as_ref().is_some_and(|c| c.server_key == s.key && s.voice_in(c.channel_id).iter().any(|p| p.user_id == uid));
+            if in_my_call {
+                let muted = st.settings.soundboard_muted.iter().any(|u| u == uid);
+                if ui.checkbox(&mut muted.clone(), "Mute their soundboard").clicked() {
+                    acts.push(Act::MuteSoundboard { uid: uid.to_string(), muted: !muted });
+                    chose = true;
+                }
             }
             ui.separator();
             let n = acts.len();
@@ -1520,7 +1570,14 @@ impl IngleApp {
                             let face = self.face(ui.ctx(), s, &uid);
                             avatar(ui.painter(), center, 11.0, &uid, &name, speaking.contains(&p.session), theme::SIDE, face);
                             let col = if speaking.contains(&p.session) || pointer_in { theme::TEXT } else { theme::MUTED };
-                            ui.painter().text(pos2(r.left() + 64.0, r.center().y), egui::Align2::LEFT_CENTER, &name, theme::font(13.5), col);
+                            let name_rect = ui.painter().text(pos2(r.left() + 64.0, r.center().y), egui::Align2::LEFT_CENTER, &name, theme::font(13.5), col);
+                            // A soundboard sound they just played: its emoji by their name.
+                            if let Some((x, age)) = st.call.as_ref().filter(|c| c.server_key == s.key).and_then(|c| crate::soundboard::recent_pop(c, p.session)) {
+                                let tex = crate::soundboard::custom_emoji_id(&x.emoji).and_then(|id| self.custom_emoji_tex(ui.ctx(), &s.key, &id));
+                                let at = pos2(name_rect.right() + 13.0, r.center().y + 4.0);
+                                crate::soundboard::paint_pop(ui.painter(), at, 18.0, &x.emoji, age, &mut |_| tex);
+                                ui.ctx().request_repaint();
+                            }
                             let mut x = r.right() - 10.0;
                             if p.tracks.iter().any(|t| t.id == ingle_proto::media::track::SCREEN) {
                                 let b = Rect::from_min_max(pos2(x - 34.0, r.center().y - 8.0), pos2(x, r.center().y + 8.0));
@@ -1619,7 +1676,7 @@ impl IngleApp {
         });
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            let w = (ui.available_width() - 16.0) / 3.0;
+            let w = (ui.available_width() - 3.0 * ui.spacing().item_spacing.x) / 4.0;
             let btn = |ui: &mut egui::Ui, active: bool, tip: &str, draw: &dyn Fn(&egui::Painter, Rect, Color32)| {
                 let (rect, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
                 let bg = if active { Color32::from_rgb(0x3a, 0x2a, 0x20) } else if resp.hovered() { theme::ELEV2 } else { theme::ELEV };
@@ -1637,6 +1694,11 @@ impl IngleApp {
                     acts.push(Act::RefreshDevices);
                     self.ui.dialog = Some(Dialog::ScreenPicker { selected: None });
                 }
+            }
+            let sb = btn(ui, self.soundboard_open(), "Soundboard", &|p, r, c| icons::soundboard(p, r, c));
+            self.soundboard_anchor(crate::soundboard::FROM_PANEL, sb.rect);
+            if sb.clicked() {
+                self.toggle_soundboard(st, crate::soundboard::FROM_PANEL);
             }
             let code = call.call_code.clone();
             let tip = if call.e2ee_ready {

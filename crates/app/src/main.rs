@@ -12,6 +12,7 @@ mod emoji;
 mod emoji_picker;
 mod giphy;
 mod home;
+mod soundboard;
 mod sounds;
 mod spell;
 mod images;
