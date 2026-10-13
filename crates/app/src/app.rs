@@ -177,6 +177,15 @@ pub struct UiState {
     pub attach: HashMap<(String, ChannelId), Vec<(String, Vec<u8>)>>,
     /// An image open in the full-size viewer: (server key, the image).
     pub viewer: Option<(String, Attachment)>,
+    /// Where each conversation is scrolled to, kept steady while things load (see `chat.rs`).
+    pub chat_scroll: HashMap<(String, ChannelId), crate::chat::ChatScroll>,
+    /// While drawing a conversation: pictures load only inside this (near the screen); `None`
+    /// elsewhere, where they always load.
+    pub load_rect: Option<Rect>,
+    /// How big GIFs were, so their space is kept before they load.
+    pub gif_sizes: crate::giphy::GifSizes,
+    /// GIFs near the screen this frame whose size isn't known until they load.
+    pub gifs_waiting: usize,
     pub role_edit: Option<RoleEdit>,
     /// Ctrl+V was down last frame (to catch an image paste once).
     pub paste_down: bool,
@@ -250,7 +259,8 @@ impl IngleApp {
     ) -> IngleApp {
         engine.refresh_devices();
         let resume = crate::update::take_resume(&engine.shared.config_dir).map(|r| (r, Instant::now()));
-        let ui = UiState { members_open: true, call_chat_open: false, ..Default::default() };
+        let gif_sizes = crate::giphy::GifSizes::load(&engine.shared.config_dir);
+        let ui = UiState { members_open: true, call_chat_open: false, gif_sizes, ..Default::default() };
         IngleApp {
             engine,
             ui,
@@ -643,6 +653,7 @@ impl eframe::App for IngleApp {
                 self.textures.remove(&k);
             }
         }
+        self.ui.gif_sizes.save(false);
         // Keep animating while toasts/typing indicators/speaking rings are visible.
         ctx.request_repaint_after(Duration::from_millis(250));
         // eframe paints the frame after this returns, then waits for the next one.
@@ -650,6 +661,7 @@ impl eframe::App for IngleApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.ui.gif_sizes.save(true);
         self.engine.shutdown();
     }
 }
@@ -689,6 +701,7 @@ impl IngleApp {
                 match crate::update::install(&path, &sha256) {
                     Ok(()) => {
                         tracing::info!("quitting to install the update");
+                        self.ui.gif_sizes.save(true);
                         crate::tray::prepare_exit();
                         self.engine.shutdown();
                         std::thread::sleep(Duration::from_millis(300));

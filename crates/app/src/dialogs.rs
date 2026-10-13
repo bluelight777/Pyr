@@ -28,6 +28,17 @@ pub(crate) fn field_label(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text.to_uppercase()).font(theme::bold_font(11.5)).color(theme::MUTED));
 }
 
+/// The most a dialog's contents can take up: the window's height, less the dialog's margins
+/// and a little room around it (`top`: where a dialog pinned to the top starts).
+pub(crate) fn dialog_room(ctx: &egui::Context, top: Option<f32>) -> f32 {
+    let h = ctx.content_rect().height();
+    let around = match top {
+        Some(t) => t + 16.0,
+        None => 32.0,
+    };
+    (h - around - 2.0 * 22.0).max(160.0)
+}
+
 pub(crate) fn input(ui: &mut egui::Ui, text: &mut String, hint: &str) -> egui::Response {
     ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(f32::INFINITY).margin(egui::Margin::symmetric(10, 8)))
 }
@@ -38,13 +49,19 @@ impl IngleApp {
         let was_create = matches!(dialog, Dialog::Create);
         let mut close = false;
         let mut modal = egui::Modal::new(egui::Id::new("dialog")).frame(modal_frame()).backdrop_color(Color32::from_black_alpha(170));
+        let mut top = None;
         if was_create {
             // The wizard changes height as you go; pinning its top keeps buttons from jumping.
-            let top = (ctx.content_rect().height() * 0.07).clamp(16.0, 80.0);
-            modal = modal.area(egui::Modal::default_area(egui::Id::new("dialog-create")).anchor(egui::Align2::CENTER_TOP, vec2(0.0, top)));
+            let t = (ctx.content_rect().height() * 0.07).clamp(16.0, 80.0);
+            top = Some(t);
+            modal = modal.area(egui::Modal::default_area(egui::Id::new("dialog-create")).anchor(egui::Align2::CENTER_TOP, vec2(0.0, t)));
         }
+        // Every dialog fits the window, however small: the screen picker and Settings fit
+        // themselves (their buttons always show), and the others scroll when they must.
+        let room = dialog_room(ctx, top);
+        let fits_itself = matches!(dialog, Dialog::ScreenPicker { .. } | Dialog::Settings { .. });
         let resp = modal.show(ctx, |ui| {
-            match dialog {
+            let body = |ui: &mut egui::Ui| match dialog {
                 Dialog::AddServer { mut link, error } => {
                     ui.set_width(460.0);
                     title(ui, "Join a server");
@@ -510,67 +527,83 @@ impl IngleApp {
                 Dialog::ScreenPicker { selected } => {
                     ui.set_width(560.0);
                     title(ui, "Share your screen");
+                    // The title and the buttons always show (Go Live never goes off the
+                    // window); what's between fits what's left: the lists and the preview get
+                    // smaller in a short window, and the rest scrolls if it must.
+                    let body_h = (room - 44.0 - 56.0).max(120.0);
+                    // Quality, sound and the note under the preview, and the preview's label.
+                    let fixed = 205.0;
+                    // The preview as big as fits (leaving the screens and windows room), and the
+                    // list of them in what's left: it scrolls when there are more than fit.
+                    let preview_h = ((body_h - fixed - 180.0) * 0.6).clamp(64.0, 220.0);
+                    let sources_h = (body_h - fixed - preview_h).max(100.0);
                     let preset = self.ui.settings_draft.as_ref().map(|s| s.screen_preset).unwrap_or(st.settings.screen_preset);
                     let mut chosen = selected.clone();
                     let screens = &st.devices.screens;
-                    if screens.is_empty() {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.label(RichText::new("Looking for screens and windows…").color(theme::MUTED));
-                        });
-                    }
-                    for (label, kind) in [("SCREENS", SourceKind::Monitor), ("WINDOWS", SourceKind::Window), ("OTHER", SourceKind::Test)] {
-                        let items: Vec<_> = screens.iter().filter(|s| s.kind == kind).collect();
-                        if items.is_empty() {
-                            continue;
+                    egui::ScrollArea::vertical().id_salt("share-body").max_height(body_h).auto_shrink([false, true]).show(ui, |ui| {
+                        if screens.is_empty() {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(RichText::new("Looking for screens and windows…").color(theme::MUTED));
+                            });
                         }
-                        field_label(ui, label);
-                        egui::ScrollArea::vertical().id_salt(label).max_height(if kind == SourceKind::Window { 180.0 } else { 120.0 }).show(ui, |ui| {
-                            for s in items {
-                                let sel = chosen.as_deref() == Some(s.id.as_str());
-                                let text = if s.width > 0 { format!("{}   ({}×{})", s.name, s.width, s.height) } else { s.name.clone() };
-                                if ui.add(egui::Button::selectable(sel, text).min_size(vec2(ui.available_width(), 30.0))).clicked() {
-                                    chosen = Some(s.id.clone());
+                        egui::ScrollArea::vertical().id_salt("share-sources").max_height(sources_h).auto_shrink([false, true]).show(ui, |ui| {
+                            for (label, kind) in [("SCREENS", SourceKind::Monitor), ("WINDOWS", SourceKind::Window), ("OTHER", SourceKind::Test)] {
+                                let items: Vec<_> = screens.iter().filter(|s| s.kind == kind).collect();
+                                if items.is_empty() {
+                                    continue;
+                                }
+                                field_label(ui, label);
+                                for s in items {
+                                    let sel = chosen.as_deref() == Some(s.id.as_str());
+                                    let text = if s.width > 0 { format!("{}   ({}×{})", s.name, s.width, s.height) } else { s.name.clone() };
+                                    if ui.add(egui::Button::selectable(sel, text).min_size(vec2(ui.available_width(), 30.0))).clicked() {
+                                        chosen = Some(s.id.clone());
+                                    }
                                 }
                             }
                         });
-                    }
-                    if chosen.is_none() {
-                        chosen = screens.iter().find(|s| s.kind == SourceKind::Monitor).map(|s| s.id.clone());
-                    }
-                    self.share_preview(ui, chosen.as_deref());
-                    field_label(ui, "Quality");
-                    let mut p = preset;
-                    egui::ComboBox::from_id_salt("screen-preset").selected_text(p.label()).width(260.0).show_ui(ui, |ui| {
-                        for q in ScreenPreset::ALL {
-                            ui.selectable_value(&mut p, q, q.label());
+                        if chosen.is_none() {
+                            chosen = screens.iter().find(|s| s.kind == SourceKind::Monitor).map(|s| s.id.clone());
                         }
+                        self.share_preview(ui, chosen.as_deref(), preview_h);
+                        field_label(ui, "Quality");
+                        let mut p = preset;
+                        egui::ComboBox::from_id_salt("screen-preset").selected_text(p.label()).width(260.0).show_ui(ui, |ui| {
+                            for q in ScreenPreset::ALL {
+                                ui.selectable_value(&mut p, q, q.label());
+                            }
+                        });
+                        if p != preset {
+                            let mut s = st.settings.clone();
+                            s.screen_preset = p;
+                            acts.push(Act::Settings(s));
+                        }
+                        ui.add_space(8.0);
+                        let sound_ok = chosen.as_deref().map(ingle_engine::can_share_sound).unwrap_or(false);
+                        let what = match chosen.as_deref() {
+                            Some(id) if id.starts_with("win:") => "Share this app's sound",
+                            Some(id) if id.starts_with("test:") => "Share sound (a test tone)",
+                            _ => "Share sound (everything you hear, except this call)",
+                        };
+                        // Shown unticked when this source can't carry sound, so it never looks like it will.
+                        let mut share = st.settings.share_audio && sound_ok;
+                        let cb = ui.add_enabled(sound_ok, egui::Checkbox::new(&mut share, if sound_ok { what } else { "Share sound" }));
+                        if !sound_ok {
+                            cb.on_disabled_hover_text("Sharing sound needs Windows 10 (build 20348+) or Windows 11 for now.");
+                        } else if share != st.settings.share_audio {
+                            let mut s = st.settings.clone();
+                            s.share_audio = share;
+                            acts.push(Act::Settings(s));
+                        }
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new("Free, no subscription. Viewers choose to watch, so it only uses bandwidth for people who are watching.")
+                                .size(12.0)
+                                .color(theme::DIM),
+                        );
                     });
-                    if p != preset {
-                        let mut s = st.settings.clone();
-                        s.screen_preset = p;
-                        acts.push(Act::Settings(s));
-                    }
-                    ui.add_space(8.0);
-                    let sound_ok = chosen.as_deref().map(ingle_engine::can_share_sound).unwrap_or(false);
-                    let what = match chosen.as_deref() {
-                        Some(id) if id.starts_with("win:") => "Share this app's sound",
-                        Some(id) if id.starts_with("test:") => "Share sound (a test tone)",
-                        _ => "Share sound (everything you hear, except this call)",
-                    };
-                    // Shown unticked when this source can't carry sound, so it never looks like it will.
-                    let mut share = st.settings.share_audio && sound_ok;
-                    let cb = ui.add_enabled(sound_ok, egui::Checkbox::new(&mut share, if sound_ok { what } else { "Share sound" }));
-                    if !sound_ok {
-                        cb.on_disabled_hover_text("Sharing sound needs Windows 10 (build 20348+) or Windows 11 for now.");
-                    } else if share != st.settings.share_audio {
-                        let mut s = st.settings.clone();
-                        s.share_audio = share;
-                        acts.push(Act::Settings(s));
-                    }
-                    ui.add_space(6.0);
-                    ui.label(RichText::new("Free, no subscription. Viewers choose to watch, so it only uses bandwidth for people who are watching.").size(12.0).color(theme::DIM));
-                    ui.add_space(14.0);
+                    ui.add_space(12.0);
                     ui.horizontal(|ui| {
                         let ok = chosen.is_some();
                         if ui.add_enabled(ok, theme::primary_button("Go Live").min_size(vec2(110.0, 34.0))).clicked() {
@@ -595,6 +628,11 @@ impl IngleApp {
                 Dialog::Settings { tab } => {
                     self.settings_dialog(ui, st, tab, acts, &mut close);
                 }
+            };
+            if fits_itself {
+                body(ui);
+            } else {
+                egui::ScrollArea::vertical().id_salt("dialog-body").max_height(room).auto_shrink([true, true]).show(ui, body);
             }
         });
         // A setup that's running can't be dismissed by clicking outside or pressing Escape.
@@ -649,7 +687,9 @@ impl IngleApp {
             }
         });
         ui.separator();
-        egui::ScrollArea::vertical().max_height(470.0).min_scrolled_height(470.0).show(ui, |ui| match t {
+        // As tall as the window allows (the title, tabs and the version at the foot always show).
+        let body_h = (dialog_room(ui.ctx(), None) - 150.0).clamp(140.0, 470.0);
+        egui::ScrollArea::vertical().max_height(body_h).min_scrolled_height(body_h).show(ui, |ui| match t {
             0 => {
                 field_label(ui, "Profile picture");
                 ui.horizontal(|ui| {
@@ -1243,7 +1283,7 @@ impl IngleApp {
 
 impl IngleApp {
     /// What's about to be shared, live (a few frames a second), in the share picker.
-    fn share_preview(&mut self, ui: &mut egui::Ui, source: Option<&str>) {
+    fn share_preview(&mut self, ui: &mut egui::Ui, source: Option<&str>, height: f32) {
         if self.ui.preview_source.as_deref() != source {
             self.ui.preview_source = source.map(String::from);
             self.ui.preview_tex = None;
@@ -1264,7 +1304,7 @@ impl IngleApp {
         }
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
         field_label(ui, "PREVIEW");
-        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 220.0), Sense::hover());
+        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
         ui.painter().rect_filled(r, CornerRadius::same(8), Color32::BLACK);
         match &self.ui.preview_tex {
             Some((t, _)) => {

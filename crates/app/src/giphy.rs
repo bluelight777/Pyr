@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use eframe::egui;
 use parking_lot::Mutex;
 
 const API: &str = "https://api.giphy.com/v1/gifs";
@@ -41,6 +42,28 @@ pub struct Gif {
     pub preview_h: f32,
     /// What gets posted.
     pub url: String,
+    /// Its size, when GIPHY said (posted with it, see `posted`).
+    pub size: Option<(u32, u32)>,
+}
+
+impl Gif {
+    /// The link posted: with the GIF's size, so everyone's chat keeps its space before it
+    /// loads (`?w=…&h=…`; GIPHY ignores it, and older Ingles show the GIF as before).
+    pub fn posted(&self) -> String {
+        match self.size {
+            Some((w, h)) => format!("{}?w={w}&h={h}", self.url),
+            None => self.url.clone(),
+        }
+    }
+}
+
+/// The size a posted GIF link says its GIF is (see `Gif::posted`).
+pub fn link_size(url: &str) -> Option<egui::Vec2> {
+    let query = url.split_once('?')?.1;
+    let num = |k: &str| {
+        query.split('&').find_map(|p| p.strip_prefix(k)?.strip_prefix('=')?.parse::<u32>().ok()).filter(|n| (1..=4096).contains(n))
+    };
+    Some(egui::vec2(num("w")? as f32, num("h")? as f32))
 }
 
 #[derive(Clone, Debug)]
@@ -215,21 +238,22 @@ fn read_gif(g: &serde_json::Value) -> Option<Gif> {
             let num = |k: &str| {
                 r.get(k)
                     .and_then(|x| x.as_f64().or_else(|| x.as_str().and_then(|t| t.parse::<f64>().ok())))
-                    .filter(|n| *n > 0.0)
-                    .unwrap_or(200.0) as f32
+                    .filter(|n| *n > 0.0 && *n <= 4096.0)
+                    .map(|n| n as f32)
             };
             Some((url.to_string(), num("width"), num("height")))
         })
     };
     let (preview, preview_w, preview_h) = pick(&["fixed_width_downsampled", "fixed_width", "fixed_width_small", "downsized"])?;
-    let (full, _, _) = pick(&["downsized", "downsized_medium", "fixed_height", "original"])?;
+    let (full, w, h) = pick(&["downsized", "downsized_medium", "fixed_height", "original"])?;
     Some(Gif {
         id: g.get("id").and_then(|x| x.as_str()).unwrap_or_default().to_string(),
         title: g.get("title").and_then(|x| x.as_str()).unwrap_or_default().to_string(),
         preview: clean(&preview),
-        preview_w,
-        preview_h,
+        preview_w: preview_w.unwrap_or(200.0),
+        preview_h: preview_h.unwrap_or(200.0),
         url: clean(&full),
+        size: w.zip(h).map(|(w, h)| (w as u32, h as u32)),
     })
 }
 
@@ -301,6 +325,69 @@ impl Downloads {
     }
 }
 
+/// The sizes of GIFs shown before, kept between runs: a GIF's space in the chat is set aside
+/// before it loads, so nothing moves when it does (GIPHY links don't say how big they are).
+#[derive(Default)]
+pub struct GifSizes {
+    map: HashMap<String, (u16, u16)>,
+    /// Where they're kept (none: not kept, in tests).
+    path: Option<std::path::PathBuf>,
+    dirty: bool,
+    saved_at: Option<Instant>,
+}
+
+/// Sizes kept at most (old ones make way).
+const SIZES_MAX: usize = 3000;
+
+impl GifSizes {
+    pub fn load(dir: &std::path::Path) -> GifSizes {
+        let path = dir.join("gif-sizes.json");
+        let map = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        GifSizes { map, path: Some(path), dirty: false, saved_at: None }
+    }
+
+    /// How big the GIF at `url` was last time (as decoded for the chat).
+    pub fn get(&self, url: &str) -> Option<egui::Vec2> {
+        self.map.get(clean_ref(url)).map(|(w, h)| egui::vec2(*w as f32, *h as f32))
+    }
+
+    pub fn set(&mut self, url: &str, size: egui::Vec2) {
+        let v = (size.x.round().clamp(1.0, 4096.0) as u16, size.y.round().clamp(1.0, 4096.0) as u16);
+        let url = clean_ref(url);
+        if self.map.get(url) == Some(&v) {
+            return;
+        }
+        if self.map.len() >= SIZES_MAX {
+            let drop: Vec<String> = self.map.keys().take(SIZES_MAX / 10).cloned().collect();
+            for k in drop {
+                self.map.remove(&k);
+            }
+        }
+        self.map.insert(url.to_string(), v);
+        self.dirty = true;
+    }
+
+    /// Saves what's new, at most every half minute (`now`: right away).
+    pub fn save(&mut self, now: bool) {
+        if !self.dirty || (!now && self.saved_at.is_some_and(|t| t.elapsed() < Duration::from_secs(30))) {
+            return;
+        }
+        let Some(path) = &self.path else { return };
+        if let Ok(b) = serde_json::to_vec(&self.map) {
+            let tmp = path.with_extension("json.tmp");
+            if std::fs::write(&tmp, b).is_ok() && std::fs::rename(&tmp, path).is_ok() {
+                self.dirty = false;
+            }
+        }
+        self.saved_at = Some(Instant::now());
+    }
+}
+
+/// A GIF link as remembered: without its query.
+fn clean_ref(url: &str) -> &str {
+    url.split('?').next().unwrap_or(url)
+}
+
 /// Debug builds only, for trying the picker without GIPHY: `INGLE_GIPHY_FAKE=<folder>` answers
 /// trending from `trending.json` and searches from `search.json` in that folder, and serves GIF
 /// links from it by file name.
@@ -349,10 +436,33 @@ mod tests {
         assert_eq!((v[0].preview_w, v[0].preview_h), (200.0, 113.0));
         assert!(is_giphy_media(&v[0].url) && is_giphy_media(&v[0].preview));
         assert!(parse(r#"{"meta":{"status":401,"msg":"Unauthorized"}}"#).is_err());
+        // The link posted says how big the GIF is (and is still a GIPHY GIF to older Ingles).
+        let posted = v[0].posted();
+        assert_eq!(posted, "https://media0.giphy.com/media/v1.Y2lkPWU1ZTE5MDI5/tphCApwvdtC1VJabZ1/giphy-downsized.gif?w=480&h=270");
+        assert!(is_giphy_media(&posted));
+        assert_eq!(gif_links(&posted), vec![posted.clone()]);
+        assert_eq!(link_size(&posted), Some(egui::vec2(480.0, 270.0)));
+        assert_eq!(link_size(&v[0].url), None);
+        assert_eq!(link_size("https://media.giphy.com/media/a/giphy.gif?w=0&h=10"), None);
+        assert_eq!(link_size("https://media.giphy.com/media/a/giphy.gif?cid=x&h=10&w=20"), Some(egui::vec2(20.0, 10.0)));
+    }
+
+    #[test]
+    fn gif_sizes_are_kept_between_runs() {
+        let dir = std::env::temp_dir().join(format!("ingle-gifsizes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = GifSizes::load(&dir);
+        assert_eq!(s.get("https://media.giphy.com/media/a/giphy.gif"), None);
+        s.set("https://media.giphy.com/media/a/giphy.gif?w=1&h=1", egui::vec2(480.0, 270.0));
+        s.save(true);
+        let s = GifSizes::load(&dir);
+        // (Whatever the link's query.)
+        assert_eq!(s.get("https://media.giphy.com/media/a/giphy.gif"), Some(egui::vec2(480.0, 270.0)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn gif(id: &str) -> Gif {
-        Gif { id: id.into(), title: String::new(), preview: String::new(), preview_w: 1.0, preview_h: 1.0, url: String::new() }
+        Gif { id: id.into(), title: String::new(), preview: String::new(), preview_w: 1.0, preview_h: 1.0, url: String::new(), size: None }
     }
 
     #[test]

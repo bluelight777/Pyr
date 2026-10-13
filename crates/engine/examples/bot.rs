@@ -8,7 +8,8 @@
 //! --no-sound). Ctrl+C to stop.
 //!
 //! `--dm NAME` sends the `--say` lines as direct messages to that member instead, after
-//! `--wait SECONDS` (time to switch windows), `--gap SECONDS` apart.
+//! `--wait SECONDS` (time to switch windows), `--gap SECONDS` apart. `--image PATH` sends a
+//! picture (in order with the `--say` lines).
 //!
 //! `--check-isolation` only loads voice isolation's model and times it on this PC, then exits.
 
@@ -26,7 +27,8 @@ fn main() -> anyhow::Result<()> {
     let mut voice: Option<String> = None;
     let mut camera = false;
     let mut screen = false;
-    let mut say: Vec<String> = Vec::new();
+    // What to send, in order: (text, a picture to attach).
+    let mut say: Vec<(String, Option<std::path::PathBuf>)> = Vec::new();
     let mut channel = "general".to_string();
     let mut tone = 330.0f32;
     let mut seconds: Option<u64> = None;
@@ -44,7 +46,8 @@ fn main() -> anyhow::Result<()> {
             "--voice" => voice = args.next(),
             "--camera" => camera = true,
             "--screen" => screen = true,
-            "--say" => say.extend(args.next()),
+            "--say" => say.extend(args.next().map(|t| (t, None))),
+            "--image" => say.extend(args.next().map(|p| (String::new(), Some(std::path::PathBuf::from(p))))),
             "--channel" => channel = args.next().unwrap_or(channel),
             "--tone" => tone = args.next().and_then(|t| t.parse().ok()).unwrap_or(tone),
             "--seconds" => seconds = args.next().and_then(|t| t.parse().ok()),
@@ -140,9 +143,18 @@ fn main() -> anyhow::Result<()> {
     };
     if let Some(ch) = target {
         std::thread::sleep(Duration::from_secs_f32(wait));
-        for line in &say {
-            engine.send_message(&key, ch, line, None);
-            println!("{name}: said {line:?}");
+        for (line, image) in &say {
+            match image {
+                Some(p) => {
+                    let file = (p.file_name().and_then(|n| n.to_str()).unwrap_or("image.png").to_string(), std::fs::read(p)?);
+                    engine.send_message_with(&key, ch, line, None, vec![file]);
+                    println!("{name}: sent {}", p.display());
+                }
+                None => {
+                    engine.send_message(&key, ch, line, None);
+                    println!("{name}: said {line:?}");
+                }
+            }
             std::thread::sleep(Duration::from_secs_f32(gap));
         }
     }
