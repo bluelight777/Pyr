@@ -24,6 +24,9 @@ const MAX_INVITES_PER_MEMBER: usize = 25;
 /// Requests per second (and burst) one connection may make, all kinds together.
 const REQ_RATE: f64 = 20.0;
 const REQ_BURST: f64 = 80.0;
+/// Soundboard: a few sounds in a row, then one every couple of seconds.
+const SOUND_RATE: f64 = 0.5;
+const SOUND_BURST: f64 = 4.0;
 /// History pages are kept well under the frame limit (long messages add up).
 const HISTORY_PAGE_BYTES: usize = 700 * 1024;
 /// Video one person may send, in bytes per second and burst (Ingle's sharpest screen share
@@ -154,6 +157,7 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection) -> Result<()> {
         msg_tokens: Bucket::new(1.5, 10.0),
         react_tokens: Bucket::new(3.0, 15.0),
         req_tokens: Bucket::new(REQ_RATE, REQ_BURST),
+        sound_tokens: Bucket::new(SOUND_RATE, SOUND_BURST),
     };
     let result = async {
         loop {
@@ -315,11 +319,20 @@ async fn file_stream(hub: &Hub, uid: &str, mut send: quinn::SendStream, mut recv
             let limit = match kind {
                 FileKind::Attachment => MAX_ATTACHMENT_BYTES,
                 FileKind::Avatar => MAX_AVATAR_BYTES,
+                FileKind::Sound => ingle_proto::sound::MAX_BYTES as u64,
             };
             if size == 0 || size > limit {
-                send.write_all(&fail(&format!("Images can be up to {} MB.", limit >> 20))).await?;
+                let msg = if kind == FileKind::Sound {
+                    format!("Sounds can be up to {} KB.", limit >> 10)
+                } else {
+                    format!("Images can be up to {} MB.", limit >> 20)
+                };
+                send.write_all(&fail(&msg)).await?;
                 let _ = send.finish();
                 return Ok(());
+            }
+            if kind == FileKind::Sound {
+                return sound_put(hub, uid, &name, size, send, recv).await;
             }
             let slot = match hub.reserve_upload(uid, size) {
                 Ok(s) => s,
@@ -352,7 +365,8 @@ async fn file_stream(hub: &Hub, uid: &str, mut send: quinn::SendStream, mut recv
                 // Profile pictures are named by their content, so an app can tell whether the
                 // server already has its current one.
                 FileKind::Avatar => avatar_id(uid, &bytes),
-                FileKind::Attachment => crypto::random_bytes::<16>().iter().map(|b| format!("{b:02x}")).collect(),
+                // (Sounds are handled by `sound_put` before this.)
+                FileKind::Attachment | FileKind::Sound => crypto::random_bytes::<16>().iter().map(|b| format!("{b:02x}")).collect(),
             };
             let path = hub.file_path(&id).ok_or_else(|| anyhow!("bad id"))?;
             let tmp = path.with_extension("part");
@@ -380,6 +394,71 @@ async fn file_stream(hub: &Hub, uid: &str, mut send: quinn::SendStream, mut recv
     Ok(())
 }
 
+/// A soundboard sound (`FileKind::Sound`): checked (it has to be a sound file Ingle can play,
+/// see `ingle_proto::sound`) and named by its content, so the same sound is kept once however
+/// often it's sent.
+async fn sound_put(hub: &Hub, uid: &str, name: &str, size: u64, mut send: quinn::SendStream, mut recv: quinn::RecvStream) -> Result<()> {
+    let reply = |r: FileReply| framing::encode(&r);
+    let fail = |msg: &str| reply(FileReply { ok: false, id: String::new(), mime: String::new(), size: 0, error: msg.to_string() });
+    let slot = match hub.reserve_upload(uid, size) {
+        Ok(s) => s,
+        Err(msg) => {
+            send.write_all(&fail(&msg)).await?;
+            let _ = send.finish();
+            return Ok(());
+        }
+    };
+    let bytes = timeout(Duration::from_secs(120), recv.read_to_end(size as usize + 1)).await??;
+    if bytes.len() as u64 != size {
+        send.write_all(&fail("The upload was cut short.")).await?;
+        let _ = send.finish();
+        return Ok(());
+    }
+    if ingle_proto::sound::check(&bytes).is_none() {
+        send.write_all(&fail("That isn't a sound Ingle can play.")).await?;
+        let _ = send.finish();
+        return Ok(());
+    }
+    const MIME: &str = "audio/x-ingle-sound";
+    let id = ingle_proto::sound::sound_id(&bytes);
+    let have = hub.db.file(&id).is_some_and(|f| f.kind == FileKind::Sound) && hub.file_path(&id).is_some_and(|p| p.is_file());
+    if !have {
+        let path = hub.file_path(&id).ok_or_else(|| anyhow!("bad id"))?;
+        let tmp = path.with_extension("part");
+        tokio::fs::write(&tmp, &bytes).await?;
+        tokio::fs::rename(&tmp, &path).await?;
+        let name: String = name.chars().filter(|c| !c.is_control() && !matches!(c, '/' | '\\')).take(100).collect();
+        hub.db.insert_file(&crate::db::FileRow {
+            id: id.clone(),
+            owner: uid.to_string(),
+            kind: FileKind::Sound,
+            name: if name.trim().is_empty() { "sound".into() } else { name },
+            mime: MIME.to_string(),
+            size,
+            width: 0,
+            height: 0,
+            message_id: None,
+        })?;
+        slot.stored();
+    }
+    send.write_all(&reply(FileReply { ok: true, id, mime: MIME.to_string(), size, error: String::new() })).await?;
+    let _ = send.finish();
+    let _ = timeout(Duration::from_secs(10), send.stopped()).await;
+    Ok(())
+}
+
+/// A soundboard sound's name: 1–32 characters, no control characters.
+fn clean_sound_name(name: &str) -> Option<String> {
+    let n: String = name.chars().filter(|c| !c.is_control()).collect::<String>().trim().to_string();
+    (!n.is_empty() && n.chars().count() <= MAX_SOUND_NAME).then_some(n)
+}
+
+/// What a sound shows with it: one emoji, a few characters at most (or nothing).
+fn clean_sound_emoji(e: &str) -> Option<String> {
+    let e = e.trim();
+    (e.len() <= 80 && !e.chars().any(|c| c.is_control() || c.is_whitespace())).then(|| e.to_string())
+}
+
 struct Ctx<'a> {
     hub: &'a Hub,
     conn_id: ConnId,
@@ -389,6 +468,8 @@ struct Ctx<'a> {
     react_tokens: Bucket,
     /// Every request (weighted by [`cost`]).
     req_tokens: Bucket,
+    /// Soundboard sounds played.
+    sound_tokens: Bucket,
 }
 
 /// A token bucket: `rate` per second, holding at most `burst`.
@@ -427,6 +508,7 @@ fn cost(req: &Request) -> f64 {
         | Request::FriendRequest { .. }
         | Request::OpenDm { .. }
         | Request::AddEmoji { .. }
+        | Request::AddSound { .. }
         | Request::CreateChannel { .. }
         | Request::CreateRole { .. }
         | Request::SetAvatar { .. }
@@ -1032,6 +1114,66 @@ impl Ctx<'_> {
                 hub.broadcast(Event::ServerUpdated { server: hub.info() });
                 Ok(Event::Ok)
             }
+            Request::AddSound { file_id, name, emoji, volume } => {
+                self.require(perm::MANAGE_EMOJI, "add sounds")?;
+                let Some(name) = clean_sound_name(&name) else {
+                    return bad(&format!("Sound names are 1–{MAX_SOUND_NAME} characters."));
+                };
+                let Some(emoji) = clean_sound_emoji(&emoji) else { return bad("That emoji won't do.") };
+                let Some(f) = db.file(&file_id).filter(|f| f.kind == FileKind::Sound) else { return bad("upload the sound first") };
+                let Some(length_ms) =
+                    hub.file_path(&f.id).and_then(|p| std::fs::read(p).ok()).and_then(|b| ingle_proto::sound::check(&b)).map(|s| s.length_ms())
+                else {
+                    return bad("upload the sound first");
+                };
+                let all = db.sounds();
+                if all.len() >= MAX_SERVER_SOUNDS {
+                    return bad(&format!("This server already has {MAX_SERVER_SOUNDS} sounds, the most it can have."));
+                }
+                let s = ServerSound { id: file_id, name, emoji, volume: volume.clamp(0.0, 1.0), by: self.uid.clone(), length_ms };
+                if !db.add_sound(&s).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
+                    return bad("That sound is already on this server's soundboard.");
+                }
+                hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                Ok(Event::Ok)
+            }
+            Request::EditSound { id, name, emoji, volume } => {
+                self.require(perm::MANAGE_EMOJI, "change sounds")?;
+                let name = match name {
+                    Some(n) => Some(clean_sound_name(&n).ok_or((ErrorCode::BadRequest, format!("Sound names are 1–{MAX_SOUND_NAME} characters.")))?),
+                    None => None,
+                };
+                let emoji = match emoji {
+                    Some(e) => Some(clean_sound_emoji(&e).ok_or((ErrorCode::BadRequest, "That emoji won't do.".to_string()))?),
+                    None => None,
+                };
+                let volume = volume.map(|v| v.clamp(0.0, 1.0));
+                if !db.edit_sound(&id, name.as_deref(), emoji.as_deref(), volume).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
+                    return Err((ErrorCode::NotFound, "That sound is gone.".into()));
+                }
+                hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                Ok(Event::Ok)
+            }
+            Request::RemoveSound { id } => {
+                self.require(perm::MANAGE_EMOJI, "remove sounds")?;
+                if db.remove_sound(&id).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
+                    hub.wipe_files(&[id]);
+                    hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                }
+                Ok(Event::Ok)
+            }
+            Request::PlaySound { sound, name, emoji, volume } => {
+                if !self.sound_tokens.take(1.0) {
+                    return Err((ErrorCode::RateLimited, "Easy on the sounds: try again in a moment.".into()));
+                }
+                let known = ingle_proto::sound::is_builtin(&sound) || db.file(&sound).is_some_and(|f| f.kind == FileKind::Sound);
+                if !known {
+                    return Err((ErrorCode::NotFound, "upload the sound first".into()));
+                }
+                let name: String = name.chars().filter(|c| !c.is_control()).take(MAX_SOUND_NAME).collect();
+                let emoji = clean_sound_emoji(&emoji).unwrap_or_default();
+                hub.play_sound(self.conn_id, sound, name, emoji, volume.clamp(0.0, 1.0))
+            }
             Request::SetServerIcon { file_id } => {
                 self.require(perm::MANAGE_SERVER, "change the server's icon")?;
                 if let Some(id) = &file_id {
@@ -1132,6 +1274,7 @@ mod tests {
             msg_tokens: Bucket::new(1.5, 10.0),
             react_tokens: Bucket::new(3.0, 15.0),
             req_tokens: Bucket::new(REQ_RATE, REQ_BURST),
+            sound_tokens: Bucket::new(SOUND_RATE, SOUND_BURST),
         }
     }
 

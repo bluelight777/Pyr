@@ -34,6 +34,7 @@ pub mod errors {
 pub mod net;
 pub mod server;
 pub mod sfx;
+pub mod soundboard;
 pub mod state;
 pub mod video;
 
@@ -42,17 +43,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use ingle_proto::control::*;
 use ingle_proto::crypto::{self, Identity};
 use ingle_proto::invite::InviteLink;
 use ingle_proto::media::track;
 use parking_lot::{Mutex, RwLock, RwLockReadGuard};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::audio::{AudioEngine, AudioInput, AudioOutput};
 use crate::call::{Call, CallEvent};
 use crate::config::{Config, ServerEntry, Settings};
+use crate::soundboard::SoundRef;
 use crate::server::ServerHandle;
 use crate::state::*;
 use crate::video::{PublisherConfig, VideoStore};
@@ -147,6 +149,45 @@ pub struct Shared {
     video_gen: [AtomicU64; 2],
     /// Read marks changed that aren't saved yet (see `mark_read`).
     read_unsaved: AtomicBool,
+    /// Soundboard sounds fetched and decoded so far.
+    pub sounds: Mutex<soundboard::Cache>,
+    /// Sound files known to be on a server: (server key, file id).
+    sounds_on: Mutex<std::collections::HashSet<(String, String)>>,
+}
+
+/// What sound files are, to the file streams.
+const SOUND_MIME: &str = "audio/x-ingle-sound";
+
+/// Play `sound` in the call on server `key` (see `Engine::play_sound`).
+async fn play_sound_in_call(shared: &Arc<Shared>, key: &str, sound: &SoundRef) -> Result<()> {
+    let h = shared.servers.lock().get(key).cloned().ok_or_else(|| anyhow!("not connected to that server"))?;
+    for attempt in 0..2 {
+        let wire = if sound.is_builtin() || sound.server == key {
+            sound.wire_id()
+        } else {
+            // From another server: sent to this one first. Sound files are named by their
+            // content, so one this server has already isn't sent again.
+            let file = shared.sound_file(&sound.server, &sound.id).await?;
+            let id = ingle_proto::sound::sound_id(&file);
+            let here = (key.to_string(), id.clone());
+            if !shared.sounds_on.lock().contains(&here) {
+                let conn = h.connection().ok_or_else(|| anyhow!("not connected to that server"))?;
+                let got = net::file_put(&conn, FileKind::Sound, &sound.name, SOUND_MIME, &file).await?;
+                shared.sounds_on.lock().insert((key.to_string(), got));
+            }
+            id
+        };
+        let req = Request::PlaySound { sound: wire.clone(), name: sound.name.clone(), emoji: sound.emoji.clone(), volume: sound.volume };
+        match h.request(req).await.map_err(|_| anyhow!("connection lost"))? {
+            // The server let go of a sound sent earlier: send it again.
+            Event::Error { code: ErrorCode::NotFound, .. } if attempt == 0 && !sound.is_builtin() && sound.server != key => {
+                shared.sounds_on.lock().remove(&(key.to_string(), wire));
+            }
+            Event::Error { message, .. } => anyhow::bail!(message),
+            _ => return Ok(()),
+        }
+    }
+    Ok(())
 }
 
 /// How often changed read marks for channels are saved.
@@ -199,6 +240,89 @@ impl Shared {
             entry.insert(channel_id, id - 1);
             self.read_unsaved.store(true, Ordering::Relaxed);
         }
+    }
+
+    /// A sound file: built in, already here, or fetched from its server (and decoded, so it's
+    /// ready to play).
+    pub(crate) async fn sound_file(self: &Arc<Self>, server: &str, id: &str) -> Result<Arc<Vec<u8>>> {
+        if let Some(f) = self.sounds.lock().file(server, id) {
+            if self.sounds.lock().pcm(server, id).is_some() {
+                return Ok(f);
+            }
+        }
+        let bytes = match soundboard::builtin_file(id).filter(|_| server.is_empty()) {
+            Some(b) => b.to_vec(),
+            None => {
+                let conn = self
+                    .servers
+                    .lock()
+                    .get(server)
+                    .and_then(|h| h.connection())
+                    .ok_or_else(|| anyhow!("not connected to that sound's server"))?;
+                let (_, b) = net::file_get(&conn, id).await?;
+                b
+            }
+        };
+        let (bytes, pcm) = tokio::task::spawn_blocking(move || {
+            let pcm = soundboard::decode(&bytes)?;
+            anyhow::Ok((bytes, pcm))
+        })
+        .await??;
+        let file = Arc::new(bytes);
+        self.sounds.lock().insert(server, id, file.clone(), Arc::new(pcm));
+        if !server.is_empty() {
+            self.sounds_on.lock().insert((server.to_string(), id.to_string()));
+        }
+        Ok(file)
+    }
+
+    /// A sound's samples (fetching it first if need be).
+    pub(crate) async fn sound_pcm(self: &Arc<Self>, server: &str, id: &str) -> Result<soundboard::Pcm> {
+        if let Some(p) = self.sounds.lock().pcm(server, id) {
+            return Ok(p);
+        }
+        self.sound_file(server, id).await?;
+        self.sounds.lock().pcm(server, id).ok_or_else(|| anyhow!("that sound couldn't be read"))
+    }
+
+    /// Someone in a voice channel on server `key` played a sound: play it if that's our call
+    /// (and they're not someone whose sounds we've muted), and show who played what.
+    pub(crate) fn sound_played(self: &Arc<Self>, key: &str, session: SessionId, channel_id: ChannelId, sound: String, name: String, emoji: String, volume: f32) {
+        let ours = self.call.lock().as_ref().is_some_and(|c| c.server_key == key && c.channel_id == channel_id);
+        if !ours {
+            return;
+        }
+        let (muted, gain) = {
+            let mut st = self.state.write();
+            let uid = st.server(key).and_then(|s| s.voice.get(&session)).map(|p| p.user_id.clone()).unwrap_or_default();
+            let muted = st.settings.soundboard_muted.contains(&uid);
+            let gain = volume.clamp(0.0, 1.0) * st.settings.soundboard_volume.clamp(0.0, 1.0);
+            if let Some(cv) = st.call.as_mut() {
+                let now = std::time::Instant::now();
+                cv.sounds.retain(|s| now.duration_since(s.at) < std::time::Duration::from_secs(4));
+                cv.sounds.push(state::SoundShown { session, name, emoji, at: now });
+            }
+            (muted, gain)
+        };
+        (self.repaint)();
+        if muted || gain <= 0.0 {
+            return;
+        }
+        let (server, id) = match sound.strip_prefix(ingle_proto::sound::BUILTIN_PREFIX) {
+            Some(b) => (String::new(), b.to_string()),
+            None => (key.to_string(), sound),
+        };
+        let shared = self.clone();
+        self.rt.spawn(async move {
+            match shared.sound_pcm(&server, &id).await {
+                Ok(pcm) => {
+                    if let Some(a) = shared.call.lock().as_ref().and_then(|c| c.audio.as_ref()) {
+                        a.mixer.lock().play_effect(pcm, gain, session);
+                    }
+                }
+                Err(e) => debug!("couldn't play a soundboard sound ({id}): {e:#}"),
+            }
+        });
     }
 
     /// Plays a notification sound, if they're on.
@@ -506,6 +630,8 @@ impl Engine {
             focus_probe: Mutex::new(None),
             video_gen: [AtomicU64::new(0), AtomicU64::new(0)],
             read_unsaved: AtomicBool::new(false),
+            sounds: Mutex::new(soundboard::Cache::default()),
+            sounds_on: Mutex::new(Default::default()),
         });
         // Read marks for channels are saved a few at a time (reading a busy channel moves them
         // with every message), so what you've read stays read after a restart or a crash.
@@ -918,6 +1044,139 @@ impl Engine {
         self.request(key, Request::RenameEmoji { id: id.to_string(), name: name.to_string() });
     }
 
+    // ------------------------------------------------------------- soundboard
+
+    /// Play a sound for everyone in your voice channel. Any sound plays in any call: one from
+    /// another server (or a built-in one) is sent to the call's server first, if it isn't
+    /// there already.
+    pub fn play_sound(&self, sound: SoundRef) {
+        let Some(key) = self.shared.call.lock().as_ref().map(|c| c.server_key.clone()) else {
+            self.toast("Join a voice channel to play sounds.", true);
+            return;
+        };
+        let mut settings = self.shared.state.read_recursive().settings.clone();
+        settings.sound_recent.retain(|s| !s.same(&sound));
+        settings.sound_recent.insert(0, sound.clone());
+        settings.sound_recent.truncate(12);
+        self.update_settings(settings);
+        let shared = self.shared.clone();
+        self.shared.rt.spawn(async move {
+            if let Err(e) = play_sound_in_call(&shared, &key, &sound).await {
+                shared.state.write().toast(format!("{e:#}"), true);
+                (shared.repaint)();
+            }
+        });
+    }
+
+    /// Hear a sound yourself, nobody else (trying it out).
+    pub fn preview_sound(&self, sound: SoundRef) {
+        let shared = self.shared.clone();
+        self.shared.rt.spawn(async move {
+            let (server, id) = (sound.server.clone(), sound.id.clone());
+            let pcm = match shared.sound_pcm(&server, &id).await {
+                Ok(p) => p,
+                Err(e) => {
+                    shared.state.write().toast(format!("Couldn't play {}: {e:#}", sound.name), true);
+                    (shared.repaint)();
+                    return;
+                }
+            };
+            let (volume, device) = {
+                let st = shared.state.read_recursive();
+                (sound.volume.clamp(0.0, 1.0) * st.settings.soundboard_volume.clamp(0.0, 1.0), st.settings.output_device.clone())
+            };
+            // In a call, through the call (so it's in step with everything else); otherwise on
+            // the notification sounds' own stream.
+            let call = shared.call.lock().as_ref().and_then(|c| c.audio.as_ref().map(|a| (a.mixer.clone(), c.session)));
+            match (call, &shared.sfx) {
+                (Some((mixer, me)), _) => mixer.lock().play_effect(pcm, volume, me),
+                (None, Some(sfx)) => sfx.play_stereo(pcm, device, volume),
+                (None, None) => {}
+            }
+        });
+    }
+
+    /// Stop every soundboard sound playing here (anyone's).
+    pub fn stop_sounds(&self) {
+        if let Some(a) = self.shared.call.lock().as_ref().and_then(|c| c.audio.as_ref()) {
+            a.mixer.lock().stop_effects(None);
+        }
+        if let Some(sfx) = &self.shared.sfx {
+            sfx.hush();
+        }
+    }
+
+    /// Whether soundboard sounds are playing in the call.
+    pub fn sounds_playing(&self) -> bool {
+        self.shared.call.lock().as_ref().and_then(|c| c.audio.as_ref()).is_some_and(|a| a.mixer.lock().effects_playing())
+    }
+
+    /// Add a sound to a server's soundboard: `file` is a sound file (see `soundboard::encode`).
+    pub fn add_sound(&self, key: &str, name: &str, emoji: &str, volume: f32, file: Vec<u8>) {
+        let shared = self.shared.clone();
+        let (key, name, emoji) = (key.to_string(), name.to_string(), emoji.to_string());
+        self.shared.rt.clone().spawn(async move {
+            let Some(h) = shared.servers.lock().get(&key).cloned() else { return };
+            let Some(conn) = h.connection() else {
+                shared.state.write().toast("Not connected to that server right now.", true);
+                return;
+            };
+            let file_id = match net::file_put(&conn, FileKind::Sound, &name, SOUND_MIME, &file).await {
+                Ok(id) => id,
+                Err(e) => {
+                    shared.state.write().toast(format!("Couldn't upload the sound: {e:#}"), true);
+                    (shared.repaint)();
+                    return;
+                }
+            };
+            if let Ok(pcm) = soundboard::decode(&file) {
+                shared.sounds.lock().insert(&key, &file_id, Arc::new(file), Arc::new(pcm));
+            }
+            match h.request(Request::AddSound { file_id, name: name.clone(), emoji, volume }).await {
+                Ok(Event::Error { message, .. }) => shared.state.write().toast(message, true),
+                Ok(_) => shared.state.write().toast(format!("Added {name} to the soundboard."), false),
+                Err(_) => {}
+            }
+            (shared.repaint)();
+        });
+    }
+
+    pub fn edit_sound(&self, key: &str, id: &str, name: Option<String>, emoji: Option<String>, volume: Option<f32>) {
+        self.request(key, Request::EditSound { id: id.to_string(), name, emoji, volume });
+    }
+
+    pub fn remove_sound(&self, key: &str, id: &str) {
+        self.request(key, Request::RemoveSound { id: id.to_string() });
+    }
+
+    /// Get a server's sounds ready to play (fetched and decoded in the background), so the
+    /// first time one is played it plays at once.
+    pub fn prefetch_sounds(&self, key: &str) {
+        let ids: Vec<String> = {
+            let st = self.shared.state.read_recursive();
+            let Some(s) = st.server(key) else { return };
+            let cache = self.shared.sounds.lock();
+            s.info.sounds.iter().filter(|x| cache.pcm(key, &x.id).is_none()).map(|x| x.id.clone()).collect()
+        };
+        if ids.is_empty() {
+            return;
+        }
+        let shared = self.shared.clone();
+        let key = key.to_string();
+        self.shared.rt.spawn(async move {
+            for id in ids {
+                if let Err(e) = shared.sound_file(&key, &id).await {
+                    debug!("couldn't fetch sound {id}: {e:#}");
+                }
+            }
+        });
+    }
+
+    /// A sound's samples, if they're here already (for drawing it).
+    pub fn sound_pcm(&self, sound: &SoundRef) -> Option<soundboard::Pcm> {
+        self.shared.sounds.lock().pcm(&sound.server, &sound.id)
+    }
+
     // ------------------------------------------------------------- friends
 
     /// Servers (connected, with friends) where we're both members; ones where something is
@@ -1294,10 +1553,25 @@ impl Engine {
         let shared = self.shared.clone();
         let key = key.to_string();
         self.shared.rt.spawn(async move {
-            if let Err(e) = Call::join(shared.clone(), key, channel_id).await {
-                shared.state.write().toast(format!("Couldn't join voice: {e:#}"), true);
-                if shared.call.lock().is_none() {
-                    *shared.call_events.lock() = None;
+            match Call::join(shared.clone(), key.clone(), channel_id).await {
+                Err(e) => {
+                    shared.state.write().toast(format!("Couldn't join voice: {e:#}"), true);
+                    if shared.call.lock().is_none() {
+                        *shared.call_events.lock() = None;
+                    }
+                }
+                Ok(()) => {
+                    // Your join sound, for everyone there (not when a call comes back after
+                    // the server restarted: that isn't joining).
+                    let join = shared.state.read_recursive().settings.join_sound.clone();
+                    let has = shared.state.read_recursive().server(&key).is_some_and(|s| s.has(SOUNDBOARD_FEATURE));
+                    if let Some(sound) = join.filter(|_| has) {
+                        // A moment for the others to hear we're here (and get our keys).
+                        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                        if let Err(e) = play_sound_in_call(&shared, &key, &sound).await {
+                            debug!("join sound didn't play: {e:#}");
+                        }
+                    }
                 }
             }
             (shared.repaint)();

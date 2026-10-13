@@ -372,6 +372,8 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
     let mut read_upto: Option<(ChannelId, MessageId, bool)> = None;
     // A channel's first unread message (see `mark_read_before`).
     let mut unread_from: Option<(ChannelId, MessageId)> = None;
+    // A soundboard sound someone played: (session, channel, sound, name, emoji, volume).
+    let mut sound: Option<(SessionId, ChannelId, String, String, String, f32)> = None;
     {
         let mut st = shared.state.write();
         let my_uid = st.my_uid.clone();
@@ -552,6 +554,9 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
             }
             Event::KeyframeRequested { track } => forward = Some(CallEvent::KeyframeRequested(track)),
             Event::E2eeKey { from, epoch, nonce, ct } => forward = Some(CallEvent::Key { from, epoch, nonce, ct }),
+            Event::SoundPlayed { session, channel_id, sound: s, name, emoji, volume } => {
+                sound = Some((session, channel_id, s, name, emoji, volume));
+            }
             Event::Pong { .. } | Event::Ok | Event::Hello { .. } | Event::Ready { .. } => {}
             Event::Error { message, .. } => toast = Some(message),
             Event::History { .. } | Event::InviteCreated { .. } | Event::VoiceReady { .. } | Event::Kicked { .. } | Event::Bugs { .. } => {}
@@ -568,6 +573,9 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
     }
     if let Some((cid, id)) = unread_from {
         shared.mark_read_before(key, cid, id);
+    }
+    if let Some((session, channel_id, s, name, emoji, volume)) = sound {
+        shared.sound_played(key, session, channel_id, s, name, emoji, volume);
     }
     if ding {
         shared.play(crate::sfx::Sound::Message);

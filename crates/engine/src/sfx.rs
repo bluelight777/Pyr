@@ -3,7 +3,7 @@
 //! loaded from files, and play on the chosen speakers on their own little stream, so they
 //! work in and out of calls.
 
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use crate::audio::device::OutputDevice;
@@ -19,27 +19,51 @@ pub enum Sound {
     WatchStop,
 }
 
-struct Play {
-    sound: Sound,
-    device: Option<String>,
-    volume: f32,
+/// What to play: one of the chimes, or 48 kHz stereo (a soundboard sound heard only here).
+enum Clip {
+    Chime(Sound),
+    Stereo(Arc<Vec<f32>>),
+}
+
+enum Msg {
+    Play { clip: Clip, device: Option<String>, volume: f32 },
+    /// Stop the soundboard sounds playing here.
+    Hush,
 }
 
 pub struct Sfx {
-    tx: mpsc::Sender<Play>,
+    tx: mpsc::Sender<Msg>,
 }
 
 const RATE: f32 = 48_000.0;
 
 impl Sfx {
     pub fn start() -> Sfx {
-        let (tx, rx) = mpsc::channel::<Play>();
+        let (tx, rx) = mpsc::channel::<Msg>();
         let _ = std::thread::Builder::new().name("sfx".into()).spawn(move || run(rx));
         Sfx { tx }
     }
 
     pub fn play(&self, sound: Sound, device: Option<String>, volume: f32) {
-        let _ = self.tx.send(Play { sound, device, volume });
+        let _ = self.tx.send(Msg::Play { clip: Clip::Chime(sound), device, volume });
+    }
+
+    /// 48 kHz stereo (a soundboard sound tried out away from a call).
+    pub fn play_stereo(&self, pcm: Arc<Vec<f32>>, device: Option<String>, volume: f32) {
+        let _ = self.tx.send(Msg::Play { clip: Clip::Stereo(pcm), device, volume });
+    }
+
+    /// Stop the soundboard sounds playing (chimes finish).
+    pub fn hush(&self) {
+        let _ = self.tx.send(Msg::Hush);
+    }
+}
+
+/// A clip as 48 kHz stereo, and whether it's a chime.
+fn stereo(clip: Clip) -> (Arc<Vec<f32>>, bool) {
+    match clip {
+        Clip::Chime(s) => (Arc::new(render(s).into_iter().flat_map(|v| [v, v]).collect()), true),
+        Clip::Stereo(pcm) => (pcm, false),
     }
 }
 
@@ -84,32 +108,35 @@ pub fn render(s: Sound) -> Vec<f32> {
     out
 }
 
-fn run(rx: mpsc::Receiver<Play>) {
+fn run(rx: mpsc::Receiver<Msg>) {
     let mut out: Option<(OutputDevice, Option<String>)> = None;
-    // Sounds still playing: (samples, position, volume).
-    let mut playing: Vec<(Vec<f32>, usize, f32)> = Vec::new();
+    // Sounds still playing: (48 kHz stereo, position, volume, a chime).
+    let mut playing: Vec<(Arc<Vec<f32>>, usize, f32, bool)> = Vec::new();
     let mut idle_since = Instant::now();
     let mut chunk = vec![0.0f32; 960];
     loop {
         let wait = if playing.is_empty() { Duration::from_millis(500) } else { Duration::from_millis(0) };
-        match rx.recv_timeout(wait) {
-            Ok(p) => {
-                let same = out.as_ref().map(|(_, d)| *d == p.device).unwrap_or(false);
-                if !same {
-                    out = OutputDevice::open(p.device.as_deref()).ok().map(|d| (d, p.device.clone()));
-                }
-                // The same sound twice at once just sounds louder; skip the copy.
-                if playing.len() < 6 {
-                    playing.push((render(p.sound), 0, p.volume.clamp(0.0, 2.0)));
-                }
-                while let Ok(p) = rx.try_recv() {
+        let mut next = match rx.recv_timeout(wait) {
+            Ok(m) => Some(m),
+            Err(mpsc::RecvTimeoutError::Timeout) => None,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+        };
+        while let Some(m) = next.take() {
+            match m {
+                Msg::Play { clip, device, volume } => {
+                    let same = out.as_ref().map(|(_, d)| *d == device).unwrap_or(false);
+                    if !same {
+                        out = OutputDevice::open(device.as_deref()).ok().map(|d| (d, device.clone()));
+                    }
+                    // The same sound twice at once just sounds louder; skip the copy.
                     if playing.len() < 6 {
-                        playing.push((render(p.sound), 0, p.volume.clamp(0.0, 2.0)));
+                        let (pcm, chime) = stereo(clip);
+                        playing.push((pcm, 0, volume.clamp(0.0, 2.0), chime));
                     }
                 }
+                Msg::Hush => playing.retain(|p| p.3),
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            next = rx.try_recv().ok();
         }
         if playing.is_empty() {
             // Let go of the speakers when nothing has played for a while.
@@ -135,19 +162,17 @@ fn run(rx: mpsc::Receiver<Play>) {
             for c in chunk.iter_mut() {
                 *c = 0.0;
             }
-            for (samples, pos, vol) in playing.iter_mut() {
-                for i in 0..480 {
-                    let v = samples.get(*pos + i).copied().unwrap_or(0.0) * *vol;
-                    chunk[2 * i] += v;
-                    chunk[2 * i + 1] += v;
+            for (samples, pos, vol, _) in playing.iter_mut() {
+                for (i, c) in chunk.iter_mut().enumerate() {
+                    *c += samples.get(*pos + i).copied().unwrap_or(0.0) * *vol;
                 }
-                *pos += 480;
+                *pos += 960;
             }
             for c in chunk.iter_mut() {
                 *c = c.clamp(-1.0, 1.0);
             }
             dev.write(&chunk);
-            playing.retain(|(s, pos, _)| *pos < s.len());
+            playing.retain(|(s, pos, _, _)| *pos < s.len());
         }
         idle_since = Instant::now();
         std::thread::sleep(Duration::from_millis(5));

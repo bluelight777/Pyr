@@ -427,6 +427,7 @@ impl Call {
                 audio_error: None,
                 video_error: None,
                 joined_at: Instant::now(),
+                sounds: Vec::new(),
             });
         }
         *shared.call.lock() = Some(call);

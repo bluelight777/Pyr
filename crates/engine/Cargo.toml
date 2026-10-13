@@ -39,6 +39,8 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.152"
 sha2 = "0.10"
 sonora = "0.2.0"
+# Reading audio files for the soundboard (MP3, AAC/M4A, Ogg Vorbis, FLAC, WAV); MPL-2.0.
+symphonia = { version = "0.5.5", default-features = false, features = ["mp3", "aac", "isomp4", "ogg", "vorbis", "flac", "wav", "pcm", "adpcm"] }
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util"] }
 tracing = "0.1.44"
 yuv = "0.8.19"

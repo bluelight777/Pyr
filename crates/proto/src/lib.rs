@@ -14,6 +14,7 @@ pub mod framing;
 pub mod invite;
 pub mod media;
 pub mod release;
+pub mod sound;
 #[cfg(feature = "quic")]
 pub mod udp;
 

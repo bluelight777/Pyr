@@ -9,6 +9,8 @@ use ingle_proto::crypto::Identity;
 use ingle_proto::{APP_NAME, b64};
 use serde::{Deserialize, Serialize};
 
+pub use crate::soundboard::SoundRef;
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ServerEntry {
     /// Server identity: base64url SHA-256 of its certificate.
@@ -154,6 +156,18 @@ pub struct Settings {
     pub spell_words: Vec<String>,
     /// Ask before deleting a message (holding Shift when clicking Delete skips it anyway).
     pub confirm_delete: bool,
+    /// How loud soundboard sounds play here, 0–1 (anyone's, yours included).
+    pub soundboard_volume: f32,
+    /// The soundboard's favourites (★), in the order they were starred.
+    pub sound_favorites: Vec<SoundRef>,
+    /// Sounds played most recently, newest first.
+    pub sound_recent: Vec<SoundRef>,
+    /// Played for everyone in the channel when you join voice.
+    pub join_sound: Option<SoundRef>,
+    /// People whose soundboard sounds you don't hear.
+    pub soundboard_muted: Vec<UserId>,
+    /// Keys that play a sound while you're in voice: ("LControl+Key1", sound).
+    pub sound_keys: Vec<(String, SoundRef)>,
 }
 
 impl Default for Settings {
@@ -190,6 +204,12 @@ impl Default for Settings {
             spell_language: "en-US".into(),
             spell_words: Vec::new(),
             confirm_delete: true,
+            soundboard_volume: 0.7,
+            sound_favorites: Vec::new(),
+            sound_recent: Vec::new(),
+            join_sound: None,
+            soundboard_muted: Vec::new(),
+            sound_keys: Vec::new(),
         }
     }
 }

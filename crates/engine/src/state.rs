@@ -305,6 +305,17 @@ pub struct CallView {
     pub audio_error: Option<String>,
     pub video_error: Option<String>,
     pub joined_at: Instant,
+    /// Soundboard sounds played lately, for showing who played what.
+    pub sounds: Vec<SoundShown>,
+}
+
+/// A soundboard sound someone in the call played.
+#[derive(Clone, Debug)]
+pub struct SoundShown {
+    pub session: SessionId,
+    pub name: String,
+    pub emoji: String,
+    pub at: Instant,
 }
 
 #[derive(Clone, Debug)]

@@ -408,6 +408,7 @@ impl Hub {
             fingerprint: b64::encode(&self.fingerprint),
             icon: self.db.get_meta("icon").filter(|i| !i.is_empty()),
             emojis: self.db.emojis(),
+            sounds: self.db.sounds(),
             giphy_key: self.db.get_meta("giphy_key").unwrap_or_default(),
             bug_reports: self.db.get_meta("bug_reports").as_deref() == Some("1"),
             new_bug_reports: self.db.new_bug_count(),
@@ -588,7 +589,7 @@ impl Hub {
             members,
             voice: inner.voice.values().map(|v| v.p.clone()).collect(),
             roles: self.db.roles(),
-            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE].iter().map(|s| s.to_string()).collect(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE].iter().map(|s| s.to_string()).collect(),
             dms: self.db.dms_of(uid),
             relations: self.db.relations_of(uid),
         };
@@ -873,6 +874,22 @@ impl Hub {
             p.last_keyframe_request.insert(track_id, now);
             let _ = p.tx.send(frame(0, Event::KeyframeRequested { track: track_id }));
         }
+    }
+
+    /// A soundboard sound, for everyone in the player's voice channel (them included).
+    pub fn play_sound(&self, conn_id: ConnId, sound: String, name: String, emoji: String, volume: f32) -> Reply {
+        let inner = self.inner.lock();
+        let Some(session) = Self::session_of(&inner, conn_id) else {
+            return err(ErrorCode::BadRequest, "Join a voice channel to play sounds.");
+        };
+        let Some(channel_id) = inner.voice.get(&session).map(|v| v.p.channel_id) else {
+            return err(ErrorCode::BadRequest, "Join a voice channel to play sounds.");
+        };
+        let b = frame(0, Event::SoundPlayed { session, channel_id, sound, name, emoji, volume });
+        for v in inner.voice.values().filter(|v| v.p.channel_id == channel_id) {
+            let _ = v.tx.send(b.clone());
+        }
+        Ok(Event::Ok)
     }
 
     pub fn route_e2ee(&self, conn_id: ConnId, epoch: u16, keys: Vec<WrappedKey>) -> Reply {

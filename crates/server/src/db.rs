@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use ingle_proto::control::{CustomEmoji, Relation, RelationKind, 
+use ingle_proto::control::{CustomEmoji, Relation, RelationKind, ServerSound,
     Attachment, Channel, ChannelId, ChannelKind, Dm, FileKind, Member, Message, MessageId, Reaction, Role, RoleDef, RoleId, UserId,
 };
 use ingle_proto::now_ms;
@@ -139,6 +139,16 @@ CREATE TABLE IF NOT EXISTS emojis (
     by TEXT NOT NULL,
     created_at INTEGER NOT NULL
 );
+-- Soundboard sounds: their files are in `files` (kind 2).
+CREATE TABLE IF NOT EXISTS sounds (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    emoji TEXT NOT NULL DEFAULT '',
+    volume REAL NOT NULL DEFAULT 1,
+    by TEXT NOT NULL,
+    length_ms INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
 -- Ingle bug reports sent to this server (when its owner collects them). Whoever sent one
 -- isn't recorded: no account, no address.
 CREATE TABLE IF NOT EXISTS bug_reports (
@@ -161,11 +171,16 @@ fn file_kind_to_i(k: FileKind) -> i64 {
     match k {
         FileKind::Attachment => 0,
         FileKind::Avatar => 1,
+        FileKind::Sound => 2,
     }
 }
 
 fn file_kind_from_i(v: i64) -> FileKind {
-    if v == 1 { FileKind::Avatar } else { FileKind::Attachment }
+    match v {
+        1 => FileKind::Avatar,
+        2 => FileKind::Sound,
+        _ => FileKind::Attachment,
+    }
 }
 
 fn kind_to_i(k: ChannelKind) -> i64 {
@@ -533,8 +548,9 @@ impl Db {
             .unwrap_or(0) as usize
     }
 
-    /// Attachments uploaded but not sent within `max_age_ms`, and profile pictures nobody
-    /// uses: their rows are removed and their ids returned so the files can be wiped.
+    /// Attachments uploaded but not sent within `max_age_ms`, profile pictures nobody uses,
+    /// and sounds played here that aren't among the server's own (a sound from another server,
+    /// say): their rows are removed and their ids returned so the files can be wiped.
     pub fn take_unused_files(&self, max_age_ms: i64) -> Vec<String> {
         let c = self.conn.lock();
         let cutoff = now_ms() - max_age_ms;
@@ -542,7 +558,8 @@ impl Db {
                        (kind = 0 AND message_id IS NULL)
                     OR (kind = 1 AND id NOT IN (SELECT avatar FROM users WHERE avatar IS NOT NULL)
                                  AND id NOT IN (SELECT value FROM meta WHERE key = 'icon')
-                                 AND id NOT IN (SELECT id FROM emojis)))";
+                                 AND id NOT IN (SELECT id FROM emojis))
+                    OR (kind = 2 AND id NOT IN (SELECT id FROM sounds)))";
         let ids: Vec<String> = c
             .prepare(sql)
             .and_then(|mut st| st.query_map([cutoff], |r| r.get(0)).map(|rows| rows.flatten().collect()))
@@ -652,6 +669,63 @@ impl Db {
     /// False if another emoji has that name (or there's no such emoji).
     pub fn rename_emoji(&self, id: &str, name: &str) -> Result<bool> {
         Ok(self.conn.lock().execute("UPDATE OR IGNORE emojis SET name = ?2 WHERE id = ?1", params![id, name])? > 0)
+    }
+
+    // ------------------------------------------------------------- soundboard
+
+    pub fn sounds(&self) -> Vec<ServerSound> {
+        let c = self.conn.lock();
+        let Ok(mut st) = c.prepare("SELECT id, name, emoji, volume, by, length_ms FROM sounds ORDER BY created_at, rowid") else {
+            return Vec::new();
+        };
+        st.query_map([], |r| {
+            Ok(ServerSound {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                emoji: r.get(2)?,
+                volume: r.get::<_, f64>(3)? as f32,
+                by: r.get(4)?,
+                length_ms: r.get::<_, i64>(5)? as u32,
+            })
+        })
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
+    }
+
+    /// Adds a sound; false if that file is already one of the server's sounds.
+    pub fn add_sound(&self, s: &ServerSound) -> Result<bool> {
+        let n = self.conn.lock().execute(
+            "INSERT OR IGNORE INTO sounds (id, name, emoji, volume, by, length_ms, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![s.id, s.name, s.emoji, s.volume as f64, s.by, s.length_ms as i64, now_ms()],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Changes what's given; false if there's no such sound.
+    pub fn edit_sound(&self, id: &str, name: Option<&str>, emoji: Option<&str>, volume: Option<f32>) -> Result<bool> {
+        let c = self.conn.lock();
+        let mut found = c.query_row("SELECT 1 FROM sounds WHERE id = ?1", [id], |_| Ok(())).optional()?.is_some();
+        if let Some(n) = name {
+            found &= c.execute("UPDATE sounds SET name = ?2 WHERE id = ?1", params![id, n])? > 0;
+        }
+        if let Some(e) = emoji {
+            c.execute("UPDATE sounds SET emoji = ?2 WHERE id = ?1", params![id, e])?;
+        }
+        if let Some(v) = volume {
+            c.execute("UPDATE sounds SET volume = ?2 WHERE id = ?1", params![id, v as f64])?;
+        }
+        Ok(found)
+    }
+
+    /// Removes a sound and its file; true if it was one of the server's sounds.
+    pub fn remove_sound(&self, id: &str) -> Result<bool> {
+        let c = self.conn.lock();
+        let n = c.execute("DELETE FROM sounds WHERE id = ?1", [id])?;
+        if n > 0 {
+            c.execute("DELETE FROM files WHERE id = ?1 AND kind = 2", [id])?;
+            scrub(&c);
+        }
+        Ok(n > 0)
     }
 
     pub fn set_avatar(&self, uid: &str, file_id: Option<&str>) -> Result<Option<String>> {

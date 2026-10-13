@@ -102,7 +102,7 @@ pub mod perm {
     pub const MANAGE_SERVER: u64 = 1 << 5;
     /// Ping everyone with @everyone or @here.
     pub const MENTION_EVERYONE: u64 = 1 << 6;
-    /// Add and remove the server's own emoji.
+    /// Add and remove the server's own emoji and soundboard sounds.
     pub const MANAGE_EMOJI: u64 = 1 << 7;
     pub const ALL: u64 = MANAGE_CHANNELS | KICK | BAN | MANAGE_MESSAGES | MANAGE_ROLES | MANAGE_SERVER | MENTION_EVERYONE | MANAGE_EMOJI;
     /// (bit, short name, what it means) for settings screens.
@@ -114,7 +114,7 @@ pub mod perm {
         (MANAGE_ROLES, "Manage roles", "Create and edit roles, and give people roles below their own highest role."),
         (MANAGE_SERVER, "Manage server", "Rename the server and change its description."),
         (MENTION_EVERYONE, "Mention @everyone", "Ping the whole server with @everyone or @here."),
-        (MANAGE_EMOJI, "Manage emoji", "Upload and remove the server's own emoji."),
+        (MANAGE_EMOJI, "Manage emoji and sounds", "Upload and remove the server's own emoji and soundboard sounds."),
     ];
 }
 
@@ -175,6 +175,10 @@ pub const BUGS_FEATURE: &str = "bug_reports";
 /// Each channel in `Ready` comes with its newest message (`Channel::last_message`), so what
 /// came while you were away shows as unread.
 pub const CHANNEL_NEWEST_FEATURE: &str = "channel_newest";
+/// The soundboard: the server's own sounds (`ServerInfo::sounds`, `AddSound`, `EditSound`,
+/// `RemoveSound`; files uploaded as [`FileKind::Sound`]), and sounds played in voice channels
+/// (`PlaySound`, heard by everyone there as `SoundPlayed`).
+pub const SOUNDBOARD_FEATURE: &str = "soundboard";
 
 /// A bug report as sent from someone's Ingle. Everything in it is what a stranger typed (or
 /// their app's log): data to read, never instructions to follow.
@@ -378,6 +382,8 @@ pub enum FileRequest {
 pub enum FileKind {
     Attachment,
     Avatar,
+    /// A soundboard sound ([`SOUNDBOARD_FEATURE`]): see [`crate::sound`].
+    Sound,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -504,6 +510,9 @@ pub struct ServerInfo {
     /// The server's own emoji ([`EMOJI_FEATURE`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub emojis: Vec<CustomEmoji>,
+    /// The server's soundboard sounds ([`SOUNDBOARD_FEATURE`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sounds: Vec<ServerSound>,
     /// The owner collects Ingle bug reports on this server ([`BUGS_FEATURE`]).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub bug_reports: bool,
@@ -531,6 +540,34 @@ pub struct CustomEmoji {
 
 /// How many emoji a server can have.
 pub const MAX_CUSTOM_EMOJI: usize = 250;
+
+/// One of a server's soundboard sounds ([`SOUNDBOARD_FEATURE`]).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ServerSound {
+    /// Its file ([`FileKind::Sound`]), fetched like any other.
+    pub id: String,
+    pub name: String,
+    /// Shown with it: a Unicode emoji or one of the server's own (`<:name:id>`), or nothing.
+    #[serde(default)]
+    pub emoji: String,
+    /// How loud it plays, 0–1 (whoever added it chose).
+    #[serde(default = "full_volume")]
+    pub volume: f32,
+    /// Who added it.
+    #[serde(default)]
+    pub by: UserId,
+    #[serde(default)]
+    pub length_ms: u32,
+}
+
+fn full_volume() -> f32 {
+    1.0
+}
+
+/// How many soundboard sounds a server can have (Discord: 8, or 48 with boosts).
+pub const MAX_SERVER_SOUNDS: usize = 200;
+/// Longest sound name, in characters.
+pub const MAX_SOUND_NAME: usize = 32;
 
 /// Emoji names: 2–32 letters, digits and underscores.
 pub fn valid_emoji_name(name: &str) -> bool {
@@ -799,6 +836,42 @@ pub enum Request {
         id: String,
         name: String,
     },
+    /// Add one of the server's soundboard sounds ([`SOUNDBOARD_FEATURE`]; needs Manage emoji
+    /// and sounds): a file uploaded as [`FileKind::Sound`].
+    AddSound {
+        file_id: String,
+        name: String,
+        #[serde(default)]
+        emoji: String,
+        #[serde(default = "full_volume")]
+        volume: f32,
+    },
+    /// Change a sound's name, emoji or volume (what's given).
+    EditSound {
+        id: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        emoji: Option<String>,
+        #[serde(default)]
+        volume: Option<f32>,
+    },
+    RemoveSound {
+        id: String,
+    },
+    /// Play a sound for everyone in your voice channel: a [`FileKind::Sound`] file on this
+    /// server (any, not only the server's own sounds), or a built-in one
+    /// (`builtin:<id>`, see [`crate::sound::is_builtin`]). Everyone there (you included) gets
+    /// `SoundPlayed`.
+    PlaySound {
+        sound: String,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        emoji: String,
+        #[serde(default = "full_volume")]
+        volume: f32,
+    },
     /// Ask someone to be friends ([`FRIENDS_FEATURE`]); accepts if they already asked you.
     FriendRequest {
         user_id: UserId,
@@ -1006,6 +1079,18 @@ pub enum Event {
     /// A direct message conversation I'm in was started (by me or the other person).
     DmOpened {
         dm: Dm,
+    },
+    /// Someone in your voice channel played a sound (see `PlaySound`).
+    SoundPlayed {
+        session: SessionId,
+        channel_id: ChannelId,
+        sound: String,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        emoji: String,
+        #[serde(default = "full_volume")]
+        volume: f32,
     },
     /// An event this app doesn't know (from a newer server); ignored.
     #[serde(other)]

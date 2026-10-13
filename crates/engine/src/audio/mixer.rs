@@ -1,6 +1,7 @@
 //! Mixes every speaker's jitter buffer into one stereo 48 kHz stream.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ingle_proto::control::SessionId;
@@ -8,8 +9,20 @@ use ingle_proto::media::track;
 
 use super::jitter::{JitterStats, PeerAudio};
 
+/// A soundboard sound playing (48 kHz stereo, interleaved).
+struct Effect {
+    pcm: Arc<Vec<f32>>,
+    pos: usize,
+    gain: f32,
+    from: SessionId,
+}
+
+/// The most soundboard sounds that play at once (the oldest stops for a new one).
+const MAX_EFFECTS: usize = 6;
+
 pub struct Mixer {
     peers: HashMap<(SessionId, u8), PeerAudio>,
+    effects: Vec<Effect>,
     volumes: HashMap<SessionId, f32>,
     /// Separate volume for someone's stream audio (screen share sound).
     stream_volumes: HashMap<SessionId, f32>,
@@ -22,6 +35,7 @@ impl Default for Mixer {
     fn default() -> Self {
         Mixer {
             peers: HashMap::new(),
+            effects: Vec::new(),
             volumes: HashMap::new(),
             stream_volumes: HashMap::new(),
             master: 1.0,
@@ -62,6 +76,23 @@ impl Mixer {
         self.volumes.insert(session, volume.clamp(0.0, 3.0));
     }
 
+    /// Play a soundboard sound (someone's in the call, or a preview: `from` is who played it).
+    pub fn play_effect(&mut self, pcm: Arc<Vec<f32>>, gain: f32, from: SessionId) {
+        if self.effects.len() >= MAX_EFFECTS {
+            self.effects.remove(0);
+        }
+        self.effects.push(Effect { pcm, pos: 0, gain, from });
+    }
+
+    /// Stop the soundboard sounds playing (all, or one person's).
+    pub fn stop_effects(&mut self, from: Option<SessionId>) {
+        self.effects.retain(|e| from.is_some_and(|f| e.from != f));
+    }
+
+    pub fn effects_playing(&self) -> bool {
+        !self.effects.is_empty()
+    }
+
     /// Mix 10 ms into `out` (480 stereo frames, interleaved L/R).
     pub fn mix(&mut self, out: &mut [f32], now: Instant) {
         out[..960].fill(0.0);
@@ -84,6 +115,18 @@ impl Mixer {
                 }
             }
         }
+        // Soundboard sounds (not while deafened: those are lost, like everyone's voice).
+        for e in self.effects.iter_mut() {
+            let n = (e.pcm.len() - e.pos).min(960);
+            if !self.deafened {
+                let g = e.gain * self.master;
+                for (o, v) in out[..n].iter_mut().zip(&e.pcm[e.pos..e.pos + n]) {
+                    *o += v * g;
+                }
+            }
+            e.pos += n;
+        }
+        self.effects.retain(|e| e.pos < e.pcm.len());
         for v in out[..960].iter_mut() {
             *v = soft_clip(*v);
         }
@@ -123,5 +166,38 @@ impl Mixer {
             s.jitter_ms /= n;
         }
         s
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn soundboard_sounds_mix_in_and_stop() {
+        let mut m = Mixer::default();
+        let t = Instant::now();
+        let mut out = vec![0f32; 960];
+        // 25 ms of a steady level: two full 10 ms blocks and a bit of a third.
+        m.play_effect(Arc::new(vec![0.25; 2400]), 0.5, 7);
+        m.mix(&mut out, t);
+        assert!((out[0] - 0.125).abs() < 1e-6 && (out[959] - 0.125).abs() < 1e-6);
+        m.mix(&mut out, t);
+        m.mix(&mut out, t);
+        assert!((out[0] - 0.125).abs() < 1e-6 && out[480].abs() < 1e-6, "the end of it, then silence");
+        assert!(!m.effects_playing());
+
+        // Deafened: not heard. Stopped: gone.
+        m.play_effect(Arc::new(vec![0.25; 9600]), 1.0, 7);
+        m.play_effect(Arc::new(vec![0.25; 9600]), 1.0, 8);
+        m.deafened = true;
+        m.mix(&mut out, t);
+        assert!(out.iter().all(|v| *v == 0.0));
+        m.deafened = false;
+        m.stop_effects(Some(7));
+        m.mix(&mut out, t);
+        assert!((out[0] - 0.25).abs() < 1e-6, "only 8's is left");
+        m.stop_effects(None);
+        assert!(!m.effects_playing());
     }
 }
