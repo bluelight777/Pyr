@@ -21,7 +21,8 @@ use ingle_proto::media::{flags, track};
 use parking_lot::Mutex;
 use tracing::{info, warn};
 
-use super::PacketCallback;
+use super::stream_echo::{FRAME as ECHO_FRAME, StreamEcho};
+use super::{PacketCallback, PlayedTap};
 
 /// 20 ms of 48 kHz stereo, interleaved.
 const FRAME_SAMPLES: usize = 960 * 2;
@@ -53,7 +54,14 @@ pub struct StreamAudio {
 
 impl StreamAudio {
     /// Start capturing and sending. Returns once capture is running (or failed to start).
-    pub fn start(source: StreamAudioSource, bitrate_kbps: u32, sink: PacketCallback) -> Result<StreamAudio> {
+    /// With `played` (what the call plays), the call is taken back out of the stream's sound
+    /// if it gets in (see `stream_echo`).
+    pub fn start(source: StreamAudioSource, bitrate_kbps: u32, sink: PacketCallback, played: Option<Arc<PlayedTap>>) -> Result<StreamAudio> {
+        Self::start_from(Box::new(move || open_capture(source)), format!("{source:?}"), bitrate_kbps, sink, played)
+    }
+
+    /// `start`, with capture opened (on the capture thread) by `open`.
+    fn start_from(open: OpenCapture, label: String, bitrate_kbps: u32, sink: PacketCallback, played: Option<Arc<PlayedTap>>) -> Result<StreamAudio> {
         let stop = Arc::new(AtomicBool::new(false));
         let packets = Arc::new(AtomicU64::new(0));
         let error = Arc::new(Mutex::new(None));
@@ -61,7 +69,7 @@ impl StreamAudio {
         let (st, pk, er) = (stop.clone(), packets.clone(), error.clone());
         let thread = std::thread::Builder::new()
             .name("ingle-stream-audio".into())
-            .spawn(move || run(source, bitrate_kbps, sink, st, pk, er, ready_tx))
+            .spawn(move || run(open, label, bitrate_kbps, sink, played, st, pk, er, ready_tx))
             .map_err(|e| anyhow!("couldn't start the stream audio thread: {e}"))?;
         match ready_rx.recv_timeout(Duration::from_secs(4)) {
             Ok(Ok(())) => Ok(StreamAudio { stop, thread: Some(thread), packets, error }),
@@ -93,6 +101,9 @@ impl Drop for StreamAudio {
         self.stop.store(true, Ordering::Relaxed);
     }
 }
+
+/// Opens capture (on the thread that reads it).
+type OpenCapture = Box<dyn FnOnce() -> Result<Box<dyn Capture>> + Send>;
 
 /// Where 48 kHz stereo samples come from.
 trait Capture {
@@ -131,21 +142,24 @@ fn open_capture(source: StreamAudioSource) -> Result<Box<dyn Capture>> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run(
-    source: StreamAudioSource,
+    open: OpenCapture,
+    label: String,
     bitrate_kbps: u32,
     mut sink: PacketCallback,
+    played: Option<Arc<PlayedTap>>,
     stop: Arc<AtomicBool>,
     packets: Arc<AtomicU64>,
     error: Arc<Mutex<Option<String>>>,
     ready: std::sync::mpsc::Sender<Result<()>>,
 ) {
-    let setup = || -> Result<(Box<dyn Capture>, opus::Encoder)> {
+    let setup = move || -> Result<(Box<dyn Capture>, opus::Encoder)> {
         let mut enc = opus::Encoder::new(48_000, opus::Channels::Stereo, opus::Application::Audio)?;
         enc.set_bitrate(opus::Bitrate::Bits((bitrate_kbps.clamp(32, 256) * 1000) as i32))?;
         enc.set_vbr(true)?;
         enc.set_complexity(9)?;
-        Ok((open_capture(source)?, enc))
+        Ok((open()?, enc))
     };
     let (mut cap, mut enc) = match setup() {
         Ok(x) => {
@@ -157,7 +171,14 @@ fn run(
             return;
         }
     };
-    info!(?source, "stream audio started");
+    info!(source = label, "stream audio started");
+    // What the call played, to take back out (its own 10 ms at a time, in step with capture).
+    let mut echo = played.map(|tap| {
+        tap.subscribe();
+        (tap, StreamEcho::new(), Vec::with_capacity(ECHO_FRAME * 8))
+    });
+    let mut captured: VecDeque<f32> = VecDeque::with_capacity(FRAME_SAMPLES * 4);
+    let mut ten_ms = vec![0f32; ECHO_FRAME];
     let mut pending: VecDeque<f32> = VecDeque::with_capacity(FRAME_SAMPLES * 4);
     let mut frame = vec![0f32; FRAME_SAMPLES];
     let mut out = vec![0u8; MAX_PACKET];
@@ -165,10 +186,25 @@ fn run(
     // Start paused, so the first packet is marked as the start of a talkspurt.
     let mut silent_run = SILENT_FRAMES_BEFORE_PAUSE + 1;
     while !stop.load(Ordering::Relaxed) {
-        if let Err(e) = cap.read(&mut pending) {
+        if let Err(e) = cap.read(&mut captured) {
             warn!("stream audio stopped: {e:#}");
             *error.lock() = Some(format!("{e:#}"));
             break;
+        }
+        match echo.as_mut() {
+            Some((tap, ec, buf)) => {
+                buf.clear();
+                tap.take(buf);
+                ec.played(buf.iter().copied());
+                while captured.len() >= ECHO_FRAME {
+                    for (d, s) in ten_ms.iter_mut().zip(captured.drain(..ECHO_FRAME)) {
+                        *d = s;
+                    }
+                    ec.clean(&mut ten_ms);
+                    pending.extend(ten_ms.iter().copied());
+                }
+            }
+            None => pending.extend(captured.drain(..)),
         }
         // Never let a hiccup build up delay: keep at most ~100 ms queued.
         while pending.len() > FRAME_SAMPLES * 5 {
@@ -199,6 +235,9 @@ fn run(
                 Err(e) => warn!("stream audio encode failed: {e}"),
             }
         }
+    }
+    if let Some((tap, ..)) = echo {
+        tap.unsubscribe();
     }
     info!("stream audio stopped");
 }
@@ -274,6 +313,79 @@ mod win {
 mod tests {
     use super::*;
 
+    /// A PC whose sound goes through another program that plays it all again (so Windows
+    /// can't leave Ingle out): each read plays 10 ms of the call (into `tap`, as the call does)
+    /// and captures it back `delay` samples later, with nothing else playing.
+    struct LeakyPc {
+        tap: Arc<PlayedTap>,
+        call: Vec<f32>,
+        delay: usize,
+        at: usize,
+    }
+
+    impl Capture for LeakyPc {
+        fn read(&mut self, out: &mut VecDeque<f32>) -> Result<()> {
+            if self.at + 960 > self.call.len() {
+                std::thread::sleep(Duration::from_millis(5));
+                return Ok(());
+            }
+            self.tap.push(&self.call[self.at..self.at + 960]);
+            for i in self.at..self.at + 960 {
+                out.push_back(if i >= 2 * self.delay { 0.7 * self.call[i - 2 * self.delay] } else { 0.0 });
+            }
+            self.at += 960;
+            Ok(())
+        }
+    }
+
+    /// The stream's sound (decoded), per second, in dBFS.
+    fn levels(packets: &[(u8, u8, Vec<u8>)]) -> Vec<f32> {
+        let mut dec = opus::Decoder::new(48_000, opus::Channels::Stereo).unwrap();
+        let mut pcm = vec![0f32; 960 * 2];
+        let mut all = Vec::new();
+        for (_, _, d) in packets {
+            let n = dec.decode_float(d, &mut pcm, false).unwrap();
+            all.extend_from_slice(&pcm[..2 * n]);
+        }
+        all.chunks(96_000).map(|c| 10.0 * (c.iter().map(|v| v * v).sum::<f32>() / c.len() as f32).max(1e-12).log10()).collect()
+    }
+
+    #[test]
+    fn the_call_is_taken_back_out_of_a_streams_sound() {
+        // People taking turns: bursts of coloured noise.
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut lp = 0f32;
+        let call: Vec<f32> = (0..48_000 * 14)
+            .flat_map(|i| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                lp += 0.3 * ((seed >> 40) as f32 / (1u64 << 23) as f32 - 1.0 - lp);
+                let talking = (i as f32 / 48_000.0 * 0.7).fract() < 0.6;
+                let v = if talking { 0.3 * lp } else { 0.0 };
+                [v, v]
+            })
+            .collect();
+        let tap = Arc::new(PlayedTap::default());
+        let got: Arc<Mutex<Vec<(u8, u8, Vec<u8>)>>> = Arc::default();
+        let (g, t, c) = (got.clone(), tap.clone(), call.clone());
+        let pc = Box::new(move || Ok(Box::new(LeakyPc { tap: t, call: c, delay: 60 * 48, at: 0 }) as Box<dyn Capture>));
+        let mut sa = StreamAudio::start_from(pc, "leaky".into(), 128, Box::new(move |t, f, d| g.lock().push((t, f, d.to_vec()))), Some(tap.clone())).unwrap();
+        let until = Instant::now() + Duration::from_secs(60);
+        while got.lock().len() < 14 * 50 * 6 / 10 && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        sa.stop();
+        let l = levels(&got.lock());
+        assert!(l.len() >= 6, "only {} s of stream sound", l.len());
+        // The first second goes out as captured; once the call's been found and learnt it's
+        // taken out (the stream mostly stops: there's nothing else to send).
+        let (first, last) = (l[0], *l.last().unwrap());
+        assert!(first > -40.0, "the leak should be heard at first: {first:.1} dBFS");
+        assert!(last < first - 20.0, "the call wasn't taken out: {l:?}");
+    }
+
     #[test]
     fn synthetic_source_sends_stereo_opus() {
         let got: Arc<Mutex<Vec<(u8, u8, Vec<u8>)>>> = Arc::default();
@@ -282,6 +394,7 @@ mod tests {
             StreamAudioSource::Synthetic,
             128,
             Box::new(move |t, f, d| g.lock().push((t, f, d.to_vec()))),
+            None,
         )
         .unwrap();
         std::thread::sleep(Duration::from_millis(400));

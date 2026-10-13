@@ -3167,6 +3167,7 @@ dependencies = [
  "opus",
  "parking_lot",
  "quinn",
+ "realfft",
  "rtrb",
  "rubato 5.0.1",
  "rustls",

@@ -120,6 +120,8 @@ pub struct Shared {
     pub active_view: Mutex<Option<(String, ChannelId)>>,
     pub voice_prefs: Mutex<(bool, bool)>,
     pub ptt_down: Arc<AtomicBool>,
+    /// What calls play, for taking it back out of our screen share's sound.
+    pub played: Arc<audio::PlayedTap>,
     audio_factory: Option<AudioIoFactory>,
     mic_test: Mutex<Option<AudioEngine>>,
     /// The screen share picker's live preview: (source, capture, its frames).
@@ -493,6 +495,7 @@ impl Engine {
             screen_source: Mutex::new(None),
             voice_prefs: Mutex::new(voice_prefs),
             ptt_down: ptt_down.clone(),
+            played: Arc::default(),
             audio_factory: opts.audio,
             mic_test: Mutex::new(None),
             screen_preview: Mutex::new(None),
@@ -1508,7 +1511,10 @@ impl Engine {
                 if let Some(src) = stream_audio_source(&source) {
                     let sink = shared.call.lock().as_ref().map(|c| c.stream_audio_sink(&shared));
                     if let Some(sink) = sink {
-                        match audio::stream::StreamAudio::start(src, STREAM_AUDIO_KBPS, sink) {
+                        // The call is taken back out of the stream's sound, in case it gets in
+                        // (not from the test pattern, which never has it).
+                        let played = (src != audio::stream::StreamAudioSource::Synthetic).then(|| shared.played.clone());
+                        match audio::stream::StreamAudio::start(src, STREAM_AUDIO_KBPS, sink, played) {
                             Ok(sa) => {
                                 let leftover = shared.call.lock().as_mut().map(|c| c.attach_stream_audio(sa));
                                 drop(leftover);

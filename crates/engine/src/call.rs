@@ -461,6 +461,7 @@ impl Call {
             }
         });
         let engine = AudioEngine::start(settings.clone(), input, output, sink, shared.ptt_down.clone());
+        *engine.controls.played.lock() = Some(shared.played.clone());
         engine.controls.muted.store(muted || deafened, Ordering::Relaxed);
         engine.controls.deafened.store(deafened, Ordering::Relaxed);
         engine.controls.monitor.store(shared.state.read_recursive().mic_test, Ordering::Relaxed);

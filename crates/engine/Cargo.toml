@@ -32,6 +32,7 @@ opus = "0.4.0"
 parking_lot = "0.12.5"
 quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
 rtrb = "0.4.0"
+realfft = "3.5.0"
 rubato = "5.0.1"
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "logging"] }
 serde = { version = "1.0.229", features = ["derive"] }

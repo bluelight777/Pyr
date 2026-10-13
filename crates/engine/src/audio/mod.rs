@@ -8,6 +8,7 @@ pub mod jitter;
 pub mod mixer;
 pub mod resample;
 pub mod stream;
+pub mod stream_echo;
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -37,6 +38,50 @@ pub struct Controls {
     /// Play your own processed microphone back to you (mic test).
     pub monitor: AtomicBool,
     pub stop: AtomicBool,
+    /// Where what the call plays is copied, for taking it back out of our screen share's
+    /// sound (see `stream_echo`).
+    pub played: Mutex<Option<Arc<PlayedTap>>>,
+}
+
+/// What a call plays, kept for taking it back out of our screen share's sound
+/// (`stream_echo`), while a screen share with sound is running.
+#[derive(Default)]
+pub struct PlayedTap {
+    listeners: std::sync::atomic::AtomicUsize,
+    queue: Mutex<Vec<f32>>,
+}
+
+impl PlayedTap {
+    /// Most kept waiting (1 s of 48 kHz stereo): more means nobody's taking it.
+    const MAX: usize = 96_000;
+
+    pub fn subscribe(&self) {
+        if self.listeners.fetch_add(1, Ordering::SeqCst) == 0 {
+            self.queue.lock().clear();
+        }
+    }
+
+    pub fn unsubscribe(&self) {
+        let _ = self.listeners.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
+    }
+
+    /// The call played this (48 kHz stereo, interleaved).
+    pub fn push(&self, x: &[f32]) {
+        if self.listeners.load(Ordering::Relaxed) == 0 {
+            return;
+        }
+        let mut q = self.queue.lock();
+        if q.len() + x.len() <= Self::MAX {
+            q.extend_from_slice(x);
+        }
+    }
+
+    /// Everything played since the last time.
+    pub fn take(&self, out: &mut Vec<f32>) {
+        let mut q = self.queue.lock();
+        out.extend_from_slice(&q);
+        q.clear();
+    }
 }
 
 impl Controls {
@@ -508,6 +553,9 @@ fn worker(
             if played {
                 if let Some(c) = cap.as_mut() {
                     c.render(mix);
+                }
+                if let Some(t) = ctl.played.lock().as_ref() {
+                    t.push(mix);
                 }
             }
         };
