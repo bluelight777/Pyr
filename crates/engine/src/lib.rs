@@ -121,6 +121,8 @@ pub struct Shared {
     pub ptt_down: Arc<AtomicBool>,
     audio_factory: Option<AudioIoFactory>,
     mic_test: Mutex<Option<AudioEngine>>,
+    /// The screen share picker's live preview: (source, capture, its frames).
+    screen_preview: Mutex<Option<(String, Option<video::CaptureHandle>, Arc<video::FrameSlot>)>>,
     last_video_bytes: Mutex<(std::time::Instant, u64)>,
     /// Images downloaded from servers (attachments and profile pictures), by file id. Kept
     /// in memory only, so nothing deleted on a server lingers on this PC.
@@ -426,6 +428,7 @@ impl Engine {
             ptt_down: ptt_down.clone(),
             audio_factory: opts.audio,
             mic_test: Mutex::new(None),
+            screen_preview: Mutex::new(None),
             last_video_bytes: Mutex::new((std::time::Instant::now(), 0)),
             files: Mutex::new(files::FileCache::default()),
             sfx,
@@ -1461,6 +1464,58 @@ impl Engine {
         if let Some(mut e) = self.shared.mic_test.lock().take() {
             e.stop();
         }
+    }
+
+    /// A live preview of a screen or window in the share picker (`None` stops it). A few
+    /// frames a second, without the "you're sharing" frame; nothing is sent anywhere.
+    pub fn preview_screen(&self, source: Option<&str>) {
+        let mut p = self.shared.screen_preview.lock();
+        if p.as_ref().map(|x| x.0.as_str()) == source {
+            return;
+        }
+        *p = None;
+        let Some(source) = source else { return };
+        let slot = Arc::new(video::FrameSlot::default());
+        *p = Some((source.to_string(), None, slot.clone()));
+        drop(p);
+        let (shared, source) = (self.shared.clone(), source.to_string());
+        self.shared.rt.spawn_blocking(move || {
+            let cap = video::capture::start_screen(&source, 4, slot).map(|c| c.without_border());
+            let mut p = shared.screen_preview.lock();
+            match (p.as_mut(), cap) {
+                // Still the one wanted: keep it running.
+                (Some(x), Ok(c)) if x.0 == source => x.1 = Some(c),
+                (_, Err(e)) => tracing::info!("no preview of {source}: {e:#}"),
+                _ => {}
+            }
+            drop(p);
+            (shared.repaint)();
+        });
+    }
+
+    /// The preview's newest frame, scaled to at most `max_w` wide, as RGBA.
+    pub fn preview_frame(&self, max_w: u32) -> Option<(u32, u32, Vec<u8>)> {
+        let slot = self.shared.screen_preview.lock().as_ref().map(|x| x.2.clone())?;
+        let f = slot.take_wait(std::time::Duration::ZERO)?;
+        let bpp = f.bytes_per_pixel();
+        if f.width == 0 || f.height == 0 || f.data.len() < (f.width * f.height) as usize * bpp {
+            return None;
+        }
+        let step = f.width.div_ceil(max_w.max(1)).max(1);
+        let (w, h) = (f.width / step, f.height / step);
+        let mut out = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let i = (((y * step) * f.width + x * step) as usize) * bpp;
+                let px = &f.data[i..i + bpp];
+                match f.format {
+                    video::codec::PixelFormat::Bgra => out.extend_from_slice(&[px[2], px[1], px[0], 255]),
+                    video::codec::PixelFormat::Rgba => out.extend_from_slice(&[px[0], px[1], px[2], 255]),
+                    video::codec::PixelFormat::Rgb => out.extend_from_slice(&[px[0], px[1], px[2], 255]),
+                }
+            }
+        }
+        Some((w, h, out))
     }
 
     /// Re-scan microphones, speakers, cameras and screens (in the background).

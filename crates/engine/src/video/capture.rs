@@ -47,6 +47,14 @@ pub struct CaptureHandle {
 }
 
 impl CaptureHandle {
+    /// For a preview: no "you're sharing" frame around the screen (Ingle's green one).
+    #[cfg_attr(not(windows), allow(unused_mut))]
+    pub fn without_border(mut self) -> CaptureHandle {
+        #[cfg(windows)]
+        drop(self.border.take());
+        self
+    }
+
     fn thread(stop: Arc<AtomicBool>, t: std::thread::JoinHandle<()>) -> CaptureHandle {
         CaptureHandle {
             stop,

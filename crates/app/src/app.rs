@@ -142,6 +142,9 @@ pub struct UiState {
     pub fullscreen_on: bool,
     /// A click on a video tile, acted on once it's clearly not a double-click.
     pub pending_click: Option<(VideoKey, Instant)>,
+    /// The share picker's live preview: what it shows, and its picture (with when it came).
+    pub preview_source: Option<String>,
+    pub preview_tex: Option<(egui::TextureHandle, Instant)>,
     pub dialog: Option<Dialog>,
     pub react_picker: Option<MessageId>,
     pub composer_emoji: bool,
@@ -491,6 +494,12 @@ impl eframe::App for IngleApp {
         let mut acts: Vec<Act> = Vec::new();
         for e in ingle_engine::errors::take() {
             engine.shared.state.write().toast(e, true);
+        }
+        // The share picker closed: stop previewing.
+        if self.ui.preview_source.is_some() && !matches!(self.ui.dialog, Some(Dialog::ScreenPicker { .. })) {
+            self.ui.preview_source = None;
+            self.ui.preview_tex = None;
+            engine.preview_screen(None);
         }
         if let Some(link) = self.initial_join.take() {
             acts.push(Act::OfferJoin(link));

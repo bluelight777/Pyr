@@ -399,6 +399,7 @@ impl IngleApp {
                     if chosen.is_none() {
                         chosen = screens.iter().find(|s| s.kind == SourceKind::Monitor).map(|s| s.id.clone());
                     }
+                    self.share_preview(ui, chosen.as_deref());
                     field_label(ui, "Quality");
                     let mut p = preset;
                     egui::ComboBox::from_id_salt("screen-preset").selected_text(p.label()).width(260.0).show_ui(ui, |ui| {
@@ -1059,5 +1060,48 @@ impl IngleApp {
                 .size(12.0)
                 .color(theme::DIM),
         );
+    }
+}
+
+impl IngleApp {
+    /// What's about to be shared, live (a few frames a second), in the share picker.
+    fn share_preview(&mut self, ui: &mut egui::Ui, source: Option<&str>) {
+        if self.ui.preview_source.as_deref() != source {
+            self.ui.preview_source = source.map(String::from);
+            self.ui.preview_tex = None;
+            self.engine.preview_screen(source);
+        }
+        if let Some((w, h, rgba)) = self.engine.preview_frame(640) {
+            let img = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
+            match self.ui.preview_tex.as_mut() {
+                Some((t, at)) => {
+                    t.set(img, egui::TextureOptions::LINEAR);
+                    *at = std::time::Instant::now();
+                }
+                None => {
+                    let t = ui.ctx().load_texture("share-preview", img, egui::TextureOptions::LINEAR);
+                    self.ui.preview_tex = Some((t, std::time::Instant::now()));
+                }
+            }
+        }
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+        field_label(ui, "PREVIEW");
+        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 220.0), Sense::hover());
+        ui.painter().rect_filled(r, CornerRadius::same(8), Color32::BLACK);
+        match &self.ui.preview_tex {
+            Some((t, _)) => {
+                let size = t.size_vec2();
+                let scale = (r.width() / size.x).min(r.height() / size.y);
+                let pr = egui::Rect::from_center_size(r.center(), size * scale);
+                let mut mesh = egui::Mesh::with_texture(t.id());
+                mesh.add_rect_with_uv(pr, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                ui.painter().add(egui::Shape::mesh(mesh));
+            }
+            None => {
+                let text = if source.is_some() { "Getting a preview…" } else { "Pick a screen or window" };
+                ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, text, theme::font(13.0), theme::DIM);
+            }
+        }
+        ui.add_space(4.0);
     }
 }
