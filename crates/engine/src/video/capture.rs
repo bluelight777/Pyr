@@ -169,6 +169,20 @@ fn start_test_pattern(slot: Arc<FrameSlot>, w: u32, h: u32, fps: u32) -> Capture
 
 pub fn list_screens() -> Vec<ScreenSource> {
     let mut v = platform_screens();
+    // Development builds: `INGLE_FAKE_WINDOWS=N` lists N made-up windows, for trying the share
+    // picker with a busy desktop.
+    #[cfg(debug_assertions)]
+    if let Some(n) = std::env::var("INGLE_FAKE_WINDOWS").ok().and_then(|n| n.parse::<usize>().ok()) {
+        for i in 0..n.min(40) {
+            v.push(ScreenSource {
+                id: format!("fake:{i}"),
+                name: format!("A window with a long title, number {} — Some Browser", i + 1),
+                kind: SourceKind::Window,
+                width: 1920,
+                height: 1080,
+            });
+        }
+    }
     v.push(ScreenSource {
         id: TEST_PATTERN_ID.into(),
         name: "Test pattern".into(),

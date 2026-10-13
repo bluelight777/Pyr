@@ -54,7 +54,15 @@ pub struct Images {
     bytes: usize,
     tx: mpsc::Sender<(String, std::sync::Arc<Vec<u8>>, u32)>,
     rx: mpsc::Receiver<(String, Result<Decoded, String>)>,
+    /// Decoded pictures waiting to become textures (a few each frame, see `UPLOAD_PER_FRAME`).
+    waiting: std::collections::VecDeque<(String, Result<Decoded, String>)>,
+    /// Bytes made into textures this pass, and which pass that is.
+    uploaded: (u64, usize),
 }
+
+/// Picture bytes made into textures in one frame at most (always at least one picture): many
+/// finishing together are spread over a few frames, so none of them stalls the window.
+const UPLOAD_PER_FRAME: usize = 16 << 20;
 
 /// Pictures kept decoded at most (beyond this, the least recently shown are let go and
 /// decoded again if they come back into view).
@@ -80,7 +88,7 @@ impl Default for Images {
                 }
             }
         });
-        Images { tex: HashMap::new(), used: HashMap::new(), bytes: 0, tx, rx }
+        Images { tex: HashMap::new(), used: HashMap::new(), bytes: 0, tx, rx, waiting: Default::default(), uploaded: (0, 0) }
     }
 }
 
@@ -101,6 +109,11 @@ impl Images {
             }
         }
         self.tex.get(key).unwrap_or(&Tex::Loading)
+    }
+
+    /// Whether `key` is ready to show (without asking for it).
+    pub fn has(&self, key: &str) -> bool {
+        matches!(self.tex.get(key), Some(Tex::Ready { .. }))
     }
 
     pub fn forget(&mut self, key: &str) {
@@ -128,9 +141,20 @@ impl Images {
         }
     }
 
-    /// Upload any finished decodes.
+    /// Make finished decodes into textures, up to `UPLOAD_PER_FRAME` a frame.
     fn collect(&mut self, ctx: &egui::Context) {
-        while let Ok((key, r)) = self.rx.try_recv() {
+        while let Ok(done) = self.rx.try_recv() {
+            self.waiting.push_back(done);
+        }
+        let pass = ctx.cumulative_pass_nr();
+        if self.uploaded.0 != pass {
+            self.uploaded = (pass, 0);
+        }
+        while self.uploaded.1 < UPLOAD_PER_FRAME {
+            let Some((key, r)) = self.waiting.pop_front() else { break };
+            if let Ok(d) = &r {
+                self.uploaded.1 += d.frames.iter().map(|f| f.0.size[0] * f.0.size[1] * 4).sum::<usize>().max(1);
+            }
             let t = match r {
                 Ok(d) => {
                     let size = d.frames.first().map(|f| egui::vec2(f.0.size[0] as f32, f.0.size[1] as f32)).unwrap_or_default();
@@ -149,6 +173,9 @@ impl Images {
             if let Some(old) = self.tex.insert(key, t) {
                 self.bytes = self.bytes.saturating_sub(tex_bytes(&old));
             }
+            ctx.request_repaint();
+        }
+        if !self.waiting.is_empty() {
             ctx.request_repaint();
         }
     }

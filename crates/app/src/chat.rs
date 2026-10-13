@@ -53,6 +53,49 @@ fn snippet(s: &str, n: usize) -> String {
     if one_line.chars().count() > n { format!("{}…", one_line.chars().take(n).collect::<String>()) } else { one_line }
 }
 
+/// Where a conversation is scrolled to, from one frame to the next. Like Discord: at the
+/// newest messages it stays there as messages, pictures and GIFs come in; scrolled up, the
+/// message at the top stays put while things above it (older messages, pictures loading)
+/// change size, instead of the view jumping.
+#[derive(Clone, Debug)]
+pub struct ChatScroll {
+    /// The scroll area's id (its offset is kept by egui).
+    pub id: egui::Id,
+    /// At the newest messages.
+    pub stuck: bool,
+    /// The message at the top of the view, and how far its top is from the view's top.
+    pub anchor: Option<(MessageId, f32)>,
+    /// Shown yet (see `REVEAL_WAIT`), and since when it's been laid out.
+    pub shown: bool,
+    pub since: Instant,
+    /// How tall it was laid out last time.
+    pub h: f32,
+}
+
+/// The longest a conversation just opened is kept from showing while GIFs on screen whose
+/// size isn't known yet load (only those: everything else has its size before it loads).
+const REVEAL_WAIT: Duration = Duration::from_millis(1500);
+
+/// Where a conversation should be scrolled to after laying it out (`drawn`: where this pass
+/// drew it; `placed`: each message's top and bottom): where you scrolled to, else the newest
+/// messages if you were there, else wherever keeps your top message in place.
+fn steady_scroll(out: &egui::scroll_area::ScrollAreaOutput<()>, drawn: f32, memo: Option<&ChatScroll>, placed: &[(MessageId, f32, f32)]) -> f32 {
+    let max = (out.content_size.y - out.inner_rect.height()).max(0.0);
+    let now = out.state.offset.y;
+    let Some(memo) = memo else { return max };
+    if (now - drawn).abs() > 0.5 {
+        // You scrolled (wheel, scroll bar, keys).
+        return now.clamp(0.0, max);
+    }
+    if memo.stuck {
+        return max;
+    }
+    match memo.anchor.and_then(|(id, from_top)| placed.iter().find(|m| m.0 == id).map(|m| m.1 - from_top)) {
+        Some(at) => at.clamp(0.0, max),
+        None => now.clamp(0.0, max),
+    }
+}
+
 impl IngleApp {
     pub fn chat_view(
         &mut self,
@@ -174,12 +217,37 @@ impl IngleApp {
                 ui.centered_and_justified(|ui| ui.label(RichText::new("Loading…").color(theme::DIM)));
                 return;
             };
+            // Kept steady: at the newest messages, or on the message you were reading, whatever
+            // loads above or below (see `ChatScroll`).
+            let memo_key = (key.clone(), channel);
+            let memo = self.ui.chat_scroll.get(&memo_key).cloned();
+            // Just opened: laid out unseen until what's on screen has its size (see below).
+            let hidden = memo.as_ref().is_none_or(|m| !m.shown);
+            self.ui.gifs_waiting = 0;
+            // Where this pass draws (what the last one left).
+            let drawn = memo.as_ref().and_then(|m| egui::scroll_area::State::load(ui.ctx(), m.id)).map(|st| st.offset.y).unwrap_or(0.0);
+            // Where each message is: (id, top, bottom), from the top of the list.
+            let mut placed: Vec<(MessageId, f32, f32)> = Vec::new();
+            let panel = ui.max_rect();
             let out = egui::ScrollArea::vertical()
                 .id_salt(("msgs", &key, channel))
-                .stick_to_bottom(true)
                 .auto_shrink([false, false])
+                .scroll_bar_visibility(if hidden {
+                    egui::scroll_area::ScrollBarVisibility::AlwaysHidden
+                } else {
+                    egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded
+                })
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
+                    if hidden {
+                        ui.set_invisible();
+                    }
+                    let origin = ui.cursor().top();
+                    // Pictures load only near the screen. The first time this conversation is
+                    // drawn, this pass's place isn't where it'll be shown (that's the newest
+                    // messages, set right after), so none load from it.
+                    let clip = ui.clip_rect();
+                    self.ui.load_rect = Some(if memo.is_some() { clip.expand2(vec2(0.0, clip.height())) } else { Rect::NOTHING });
                     ui.add_space(8.0);
                     if log.complete || log.messages.is_empty() && log.loaded {
                         match &dm_with {
@@ -220,7 +288,9 @@ impl IngleApp {
                             });
                             if open {
                                 for mm in &msgs[i..j] {
+                                    let top = ui.cursor().top() - origin;
                                     self.message(ui, st, s, log, mm, false, &names, acts);
+                                    placed.push((mm.id, top, ui.cursor().top() - origin));
                                 }
                             }
                             prev = None;
@@ -242,7 +312,9 @@ impl IngleApp {
                             && !first_new
                             && m.reply_to.is_none()
                             && prev.map(|p| p.author == m.author && m.created_at - p.created_at < GROUP_WINDOW_MS).unwrap_or(false);
+                        let top = ui.cursor().top() - origin;
                         self.message(ui, st, s, log, m, grouped, &names, acts);
+                        placed.push((m.id, top, ui.cursor().top() - origin));
                         prev = Some(m);
                     }
                     for p in &log.pending {
@@ -250,7 +322,39 @@ impl IngleApp {
                     }
                     ui.add_space(6.0);
                 });
-            if out.state.offset.y < 40.0 && !log.complete && log.loaded && !log.loading && out.content_size.y > out.inner_rect.height() {
+            self.ui.load_rect = None;
+            let offset = steady_scroll(&out, drawn, memo.as_ref(), &placed);
+            if (offset - out.state.offset.y).abs() > 0.5 {
+                let mut state = out.state;
+                state.offset.y = offset;
+                state.store(ui.ctx(), out.id);
+            }
+            // Shown once the GIFs on screen have their sizes (or after a moment), so the first
+            // thing you see is the conversation as it stays, not one that jumps as GIFs load.
+            let since = memo.as_ref().map(|m| m.since).unwrap_or_else(Instant::now);
+            let h = out.content_size.y;
+            // (And laid out the same as last time: the first frame shown is the one that stays.)
+            let settled = memo.as_ref().is_some_and(|m| (m.h - h).abs() < 0.5) && self.ui.gifs_waiting == 0;
+            let shown = !hidden || (memo.is_some() && (settled || since.elapsed() >= REVEAL_WAIT));
+            if hidden && shown {
+                ui.ctx().request_repaint();
+            }
+            // This pass was drawn somewhere else (things above changed size, or the window did):
+            // it's drawn again, right away, before anything shows, so nothing jumps.
+            let misplaced = (offset - drawn).abs() > 0.5 && (out.state.offset.y - drawn).abs() <= 0.5;
+            if misplaced && !hidden {
+                ui.ctx().request_discard("conversation kept steady while it loads");
+            }
+            if !shown {
+                // (Just where "Loading…" was while the messages were on their way.)
+                let mut over = ui.new_child(egui::UiBuilder::new().max_rect(panel));
+                over.centered_and_justified(|ui| ui.label(RichText::new("Loading…").color(theme::DIM)));
+                ui.ctx().request_repaint_after(Duration::from_millis(100));
+            }
+            let max = (out.content_size.y - out.inner_rect.height()).max(0.0);
+            let anchor = placed.iter().find(|m| m.2 > offset).map(|m| (m.0, m.1 - offset));
+            self.ui.chat_scroll.insert(memo_key, ChatScroll { id: out.id, stuck: offset >= max - 1.0, anchor, shown, since, h });
+            if offset < 40.0 && !log.complete && log.loaded && !log.loading && out.content_size.y > out.inner_rect.height() {
                 acts.push(Act::LoadHistory { key: key.clone(), channel, older: true });
             }
         });
@@ -1343,6 +1447,12 @@ impl IngleApp {
         let scale = (max.x / w).min(max.y / h).min(1.0);
         let size = vec2((w * scale).max(48.0), (h * scale).max(48.0));
         let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+        // Far from the screen: just its space. It's fetched when it comes near, so opening a
+        // conversation doesn't load every picture in it at once.
+        if self.ui.load_rect.is_some_and(|r| !r.intersects(rect)) && !self.images.has(&a.id) {
+            ui.painter().rect_filled(rect, CornerRadius::same(6), theme::ELEV);
+            return;
+        }
         let state = self.engine.file(&s.key, &a.id);
         let bytes = match &state {
             ingle_engine::files::FileState::Ready(b) => Some(b.clone()),
@@ -1728,39 +1838,50 @@ impl IngleApp {
 
     /// A GIPHY GIF at most `max` big; `open`: clicking opens it on GIPHY.
     fn gif_embed_sized(&mut self, ui: &mut egui::Ui, url: &str, max: egui::Vec2, open: bool) {
+        let fit = |size: egui::Vec2| size * (max.x / size.x).min(max.y / size.y).min(2.0);
+        // Its space before it loads: the size its link says (see `Gif::posted`), else the size
+        // it had the last time it was shown here, so nothing moves when it shows; else a guess.
+        let known = crate::giphy::link_size(url).or_else(|| self.ui.gif_sizes.get(url));
+        let space = known.map(fit).unwrap_or(vec2(200.0, 120.0));
+        let k = format!("gif:{url}");
+        let far = self.ui.load_rect.is_some_and(|r| !r.intersects(Rect::from_min_size(ui.cursor().min, space)));
+        if far && !self.images.has(&k) {
+            let (r, _) = ui.allocate_exact_size(space, Sense::hover());
+            ui.painter().rect_filled(r, CornerRadius::same(8), theme::ELEV);
+            return;
+        }
         let ctx = ui.ctx().clone();
         let dl = self.ui.gifs.get(url, move || ctx.request_repaint());
-        match dl {
-            crate::giphy::Dl::Ready(bytes) => {
-                let t = ui.input(|i| i.time);
-                let k = format!("gif:{url}");
-                match self.images.get(ui.ctx(), &k, Some(bytes), 480).frame(t) {
-                    Some((tex, size, next)) => {
-                        let s = (max.x / size.x).min(max.y / size.y).min(2.0);
-                        let (r, resp) = ui.allocate_exact_size(size * s, Sense::click());
-                        ui.painter().add(egui::epaint::RectShape::filled(r, CornerRadius::same(8), Color32::WHITE).with_texture(
-                            tex,
-                            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                        ));
-                        if let Some(n) = next {
-                            ui.ctx().request_repaint_after(n);
-                        }
-                        if open && resp.on_hover_text("GIF from GIPHY (click to open)").clicked() {
-                            ui.ctx().open_url(egui::OpenUrl::new_tab(url));
-                        }
-                    }
-                    None => {
-                        let (r, _) = ui.allocate_exact_size(vec2(200.0, 120.0), Sense::hover());
-                        ui.painter().rect_filled(r, CornerRadius::same(8), theme::ELEV);
-                    }
+        let t = ui.input(|i| i.time);
+        let shown = match dl {
+            crate::giphy::Dl::Ready(bytes) => self.images.get(ui.ctx(), &k, Some(bytes), 480).frame(t),
+            crate::giphy::Dl::Loading => None,
+            crate::giphy::Dl::Failed => return,
+        };
+        match shown {
+            Some((tex, size, next)) => {
+                self.ui.gif_sizes.set(url, size);
+                // In the space it was given (fitted), or at its own size.
+                let (r, resp) = ui.allocate_exact_size(if known.is_some() { space } else { fit(size) }, Sense::click());
+                let (img, uv) = fit_in(r, size);
+                ui.painter().add(egui::epaint::RectShape::filled(img, CornerRadius::same(8), Color32::WHITE).with_texture(tex, uv));
+                if let Some(n) = next {
+                    ui.ctx().request_repaint_after(n);
+                }
+                if open && resp.on_hover_text("GIF from GIPHY (click to open)").clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(url));
                 }
             }
-            crate::giphy::Dl::Loading => {
-                let (r, _) = ui.allocate_exact_size(vec2(200.0, 120.0), Sense::hover());
+            None => {
+                // Its size isn't known yet: a conversation just opened waits a moment for it
+                // (see `chat_view`).
+                if known.is_none() {
+                    self.ui.gifs_waiting += 1;
+                }
+                let (r, _) = ui.allocate_exact_size(space, Sense::hover());
                 ui.painter().rect_filled(r, CornerRadius::same(8), theme::ELEV);
                 ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, "Loading GIF…", theme::font(12.5), theme::DIM);
             }
-            crate::giphy::Dl::Failed => {}
         }
     }
 
@@ -1871,7 +1992,7 @@ impl IngleApp {
         }
         self.ui.giphy.sel = sel;
         if enter {
-            send = Some(gifs[sel].url.clone());
+            send = Some(gifs[sel].posted());
         }
         // Two columns, each GIF at its own height (like Discord's picker), each going under the
         // shorter column.
@@ -1919,7 +2040,7 @@ impl IngleApp {
                 }
                 let resp = if g.title.is_empty() { resp } else { resp.on_hover_text(&g.title) };
                 if resp.clicked() {
-                    send = Some(g.url.clone());
+                    send = Some(g.posted());
                 }
             }
         });
