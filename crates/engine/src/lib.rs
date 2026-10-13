@@ -936,7 +936,16 @@ impl Engine {
     }
 
     pub fn react(&self, key: &str, message_id: MessageId, emoji: &str, add: bool) {
-        self.request(key, Request::React { message_id, emoji: emoji.to_string(), add });
+        if self.handle(key).map(|h| h.connection().is_none()).unwrap_or(true) {
+            self.toast("Couldn't react: not connected to that server right now.", true);
+            return;
+        }
+        // Never silently: if the server says no, say why.
+        self.request_then(key, Request::React { message_id, emoji: emoji.to_string(), add }, |shared, ev| {
+            if let Event::Error { message, .. } = ev {
+                shared.state.write().toast(format!("Couldn't react: {message}"), true);
+            }
+        });
     }
 
     /// Load the newest page (first open) or the next older page.

@@ -1215,6 +1215,31 @@ mod tests {
     }
 
     #[test]
+    fn every_picker_emoji_is_a_valid_reaction() {
+        let index: serde_json::Value = serde_json::from_str(include_str!("../../app/assets/emoji/index.json")).unwrap();
+        let mut bad = Vec::new();
+        let mut n = 0;
+        for g in index["groups"].as_array().unwrap() {
+            for it in g["items"].as_array().unwrap() {
+                let mut all = vec![it["e"].as_str().unwrap().to_string()];
+                if let Some(t) = it["t"].as_array() {
+                    for v in t {
+                        all.push(v[0].as_str().unwrap_or_else(|| v.as_str().unwrap()).to_string());
+                    }
+                }
+                for e in all {
+                    n += 1;
+                    if !super::valid_unicode_reaction(&e) {
+                        bad.push(format!("{} {:?}", it["n"], e.chars().map(|c| format!("{:x}", c as u32)).collect::<Vec<_>>()));
+                    }
+                }
+            }
+        }
+        assert!(n > 2500, "{n}");
+        assert!(bad.is_empty(), "{} of {n} refused: {:?}", bad.len(), &bad[..bad.len().min(30)]);
+    }
+
+    #[test]
     fn history_pages_stay_inside_one_frame() {
         let hub = hub();
         let a = uid();
@@ -1378,4 +1403,5 @@ async fn backup_item(hub: &Hub, uid: &str, item: &str, send: &mut quinn::SendStr
     }
     let _ = send.finish();
     Ok(())
+
 }
