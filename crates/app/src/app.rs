@@ -1081,7 +1081,12 @@ impl IngleApp {
                     theme::ELEV
                 };
                 let icon = self.server_icon(ui.ctx(), s);
-                ui.painter().rect_filled(rect, CornerRadius::same(radius), fill);
+                // A server's own icon is drawn as it is (see-through parts stay see-through, like
+                // Discord); the coloured tile is only behind initials. The pill on the left shows
+                // which server is open.
+                if icon.is_none() {
+                    ui.painter().rect_filled(rect, CornerRadius::same(radius), fill);
+                }
                 if let Some(t) = icon {
                     let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
                     ui.painter().add(egui::epaint::RectShape::filled(rect, CornerRadius::same(radius), Color32::WHITE).with_texture(t, uv));
