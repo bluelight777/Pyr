@@ -378,9 +378,38 @@ pub fn label(
     wrap: Option<f32>,
     custom: &mut dyn FnMut(&str) -> Option<egui::TextureId>,
 ) -> egui::Response {
+    label_job(ui, text, font, color, wrap, false, custom)
+}
+
+/// `label` on one line at most `width` wide, cut with "…" (a reply's preview of a message).
+pub fn label_line(
+    ui: &mut egui::Ui,
+    text: &str,
+    font: FontId,
+    color: Color32,
+    width: f32,
+    custom: &mut dyn FnMut(&str) -> Option<egui::TextureId>,
+) -> egui::Response {
+    label_job(ui, text, font, color, Some(width), true, custom)
+}
+
+fn label_job(
+    ui: &mut egui::Ui,
+    text: &str,
+    font: FontId,
+    color: Color32,
+    wrap: Option<f32>,
+    one_line: bool,
+    custom: &mut dyn FnMut(&str) -> Option<egui::TextureId>,
+) -> egui::Response {
     let mut job = egui::text::LayoutJob::default();
     if let Some(w) = wrap {
         job.wrap.max_width = w;
+    }
+    if one_line {
+        job.wrap.max_rows = 1;
+        job.wrap.break_anywhere = true;
+        job.wrap.overflow_character = Some('…');
     }
     let found = find_all(text);
     let chars: Vec<char> = text.chars().collect();

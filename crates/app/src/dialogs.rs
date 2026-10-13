@@ -45,8 +45,20 @@ pub(crate) fn input(ui: &mut egui::Ui, text: &mut String, hint: &str) -> egui::R
 
 impl IngleApp {
     pub fn dialogs(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
-        let Some(dialog) = self.ui.dialog.clone() else { return };
+        let Some(dialog) = self.ui.dialog.clone() else {
+            self.ui.dialog_shown = None;
+            return;
+        };
         let was_create = matches!(dialog, Dialog::Create);
+        let kind = std::mem::discriminant(&dialog);
+        let page = if was_create { self.ui.create.as_ref().map(|c| c.page as u8 + 1).unwrap_or(0) } else { 0 };
+        let opened = self.ui.dialog_shown != Some((kind, page));
+        self.ui.dialog_shown = Some((kind, page));
+        if opened {
+            // A dialog is placed by its size last frame (another dialog's or page's, or none):
+            // lay it out again so it never shows at the wrong size or place.
+            ctx.request_discard("a dialog opened");
+        }
         let mut close = false;
         let mut modal = egui::Modal::new(egui::Id::new("dialog")).frame(modal_frame()).backdrop_color(Color32::from_black_alpha(170));
         let mut top = None;
@@ -61,6 +73,10 @@ impl IngleApp {
         let room = dialog_room(ctx, top);
         let fits_itself = matches!(dialog, Dialog::ScreenPicker { .. } | Dialog::Settings { .. });
         let resp = modal.show(ctx, |ui| {
+            // The modal lays its contents out in last frame's size, which would let a dialog
+            // shrink but never grow (a short dialog before it, or a wizard step getting
+            // longer, would cut it off): it gets the whole room every frame instead.
+            ui.set_max_height(room);
             let body = |ui: &mut egui::Ui| match dialog {
                 Dialog::AddServer { mut link, error } => {
                     ui.set_width(460.0);
@@ -632,7 +648,11 @@ impl IngleApp {
             if fits_itself {
                 body(ui);
             } else {
-                egui::ScrollArea::vertical().id_salt("dialog-body").max_height(room).auto_shrink([true, true]).show(ui, body);
+                let mut scroll = egui::ScrollArea::vertical().id_salt(("dialog-body", kind)).max_height(room).auto_shrink([true, true]);
+                if opened {
+                    scroll = scroll.vertical_scroll_offset(0.0);
+                }
+                scroll.show(ui, body);
             }
         });
         // A setup that's running can't be dismissed by clicking outside or pressing Escape.

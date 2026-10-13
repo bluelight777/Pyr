@@ -157,6 +157,9 @@ pub struct UiState {
     pub preview_source: Option<String>,
     pub preview_tex: Option<(egui::TextureHandle, Instant)>,
     pub dialog: Option<Dialog>,
+    /// Which dialog (and wizard page) was showing last frame, so a dialog that just opened, or
+    /// the wizard's next page, starts at its top.
+    pub dialog_shown: Option<(std::mem::Discriminant<Dialog>, u8)>,
     pub react_picker: Option<MessageId>,
     pub composer_emoji: bool,
     /// The GIF picker over the message box (the GIF button, or typing /giphy), its search

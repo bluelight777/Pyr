@@ -451,7 +451,10 @@ impl IngleApp {
                     let face = self.face(ui.ctx(), s, u);
                     avatar(ui.painter(), ar.center(), 8.0, u, &s.member_name(u), false, theme::MAIN, face);
                 }
-                ui.add(egui::Label::new(RichText::new(text).size(12.5).color(theme::MUTED)).truncate());
+                // (Its emoji in colour, like the message itself.)
+                let ctx = ui.ctx().clone();
+                let w = ui.available_width();
+                crate::emoji::label_line(ui, &text, theme::font(12.5), theme::MUTED, w, &mut |id| self.custom_emoji_tex(&ctx, &key, id));
             });
         }
 
