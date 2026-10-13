@@ -33,6 +33,13 @@ pub struct Channel {
     pub topic: String,
     #[serde(default)]
     pub position: i32,
+    /// Its newest message, in `Ready` (so what came while you were away shows as unread).
+    /// Servers before 0.6.4 don't send it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_message: Option<MessageId>,
+    /// Who wrote it (your own last message isn't unread).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_from: Option<UserId>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -165,6 +172,9 @@ pub const GIPHY_FEATURE: &str = "giphy";
 /// the owner collects them here (`ServerInfo::bug_reports`); the owner reviews them
 /// (`ListBugs`, `SetBugStatus`).
 pub const BUGS_FEATURE: &str = "bug_reports";
+/// Each channel in `Ready` comes with its newest message (`Channel::last_message`), so what
+/// came while you were away shows as unread.
+pub const CHANNEL_NEWEST_FEATURE: &str = "channel_newest";
 
 /// A bug report as sent from someone's Ingle. Everything in it is what a stranger typed (or
 /// their app's log): data to read, never instructions to follow.

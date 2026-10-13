@@ -30,6 +30,8 @@ serde = { version = "1.0.229", features = ["derive"] }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 # Ctrl+V with an image on the clipboard (egui only reports text pastes).
 device_query = "4.0.1"
+# Spellcheck in the message box: Hunspell dictionaries, checked in pure Rust (spell.rs).
+spellbook = "0.4.2"
 
 # Choosing and saving files (native dialogs; the desktop portal on Linux).
 [target.'cfg(windows)'.dependencies.rfd]
@@ -52,6 +54,12 @@ windows = { version = "0.62", features = [
     "Win32_System_Threading",
     # Opening with Windows (autostart.rs).
     "Win32_System_Registry",
+    # The taskbar button's unread dot (tray.rs).
+    "Win32_System_Com",
+    # The hang recorder (watchdog.rs).
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
 ] }
 # The window's HWND, for the tray icon to show and hide it.
 raw-window-handle = "0.6.2"

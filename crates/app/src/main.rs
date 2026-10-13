@@ -13,6 +13,7 @@ mod emoji_picker;
 mod giphy;
 mod home;
 mod sounds;
+mod spell;
 mod images;
 mod titlebar;
 mod instance;
@@ -39,7 +40,9 @@ mod tray {
     pub fn hide_main() {}
     pub fn prepare_exit() {}
 }
+mod unread;
 mod update;
+mod watchdog;
 
 use std::sync::Arc;
 
@@ -137,7 +140,7 @@ fn main() -> eframe::Result<()> {
     let mut last_err = None;
     for r in order {
         let options = eframe::NativeOptions { viewport: viewport.clone(), renderer: r, ..Default::default() };
-        let (profile, join, handoff) = (profile.clone(), join.clone(), handoff.clone());
+        let (profile, join, handoff, app_title) = (profile.clone(), join.clone(), handoff.clone(), title.clone());
         #[cfg(windows)]
         let (tray_dir, tray_tip) = (config_dir.clone(), title.clone());
         let res = eframe::run_native(
@@ -157,9 +160,15 @@ fn main() -> eframe::Result<()> {
                 let updater = update::Updater::start(Arc::new(move || ctx.request_repaint()));
                 #[cfg(windows)]
                 let tray = tray::Tray::create(cc, engine.clone(), &tray_dir, &tray_tip);
+                // Whether you're looking at Ingle, asked of Windows itself: frames stop while
+                // it's hidden in the tray or minimized (see Engine::set_focus_probe).
+                #[cfg(windows)]
+                engine.set_focus_probe(tray::window_in_front);
+                // Writes what Ingle was doing to the log if its window ever stops responding.
+                watchdog::start(engine.clone());
                 #[cfg(not(windows))]
                 let tray: Option<tray::Tray> = None;
-                Ok(Box::new(app::IngleApp::new(engine, handoff, join, tray, updater)))
+                Ok(Box::new(app::IngleApp::new(engine, handoff, join, tray, updater, app_title)))
             }),
         );
         match res {
@@ -188,6 +197,9 @@ fn init_logging(profile: Option<&str>) -> Option<std::path::PathBuf> {
     };
     let dir = ingle_engine::config::config_dir(profile);
     let path = dir.join("ingle.log");
+    // Keep the last run's log: after a freeze or a crash it's the one that says what happened
+    // (and it goes along with bug reports).
+    let _ = std::fs::rename(&path, dir.join("ingle.previous.log"));
     let file = std::fs::create_dir_all(&dir).ok().and_then(|_| std::fs::File::create(&path).ok());
     match file {
         Some(f) => {

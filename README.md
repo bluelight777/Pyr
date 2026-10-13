@@ -35,11 +35,18 @@ working name; see [Naming](#naming) for the shortlist and how to rename.
 Features:
 
 - Servers with **text channels** (Discord-like: markdown, replies, @mentions, reactions,
-  edits, deletes, typing indicators, unread markers, history) and **voice channels**, each
-  with its own text chat.
+  edits, deletes, typing indicators, spellcheck in four languages, history) and **voice
+  channels**, each with its own text chat.
+- **Unread messages are marked everywhere**: channels (a dot and a bold name, red badges
+  for mentions), voice channels' chats (also on the call's chat button), servers (the pill
+  beside their icon), direct messages (who sent them, under the home button), a "NEW" line
+  above the first one in the conversation, the window's title, and on Windows the icon by
+  the clock (with where they are in its tooltip) and the taskbar button. What came while
+  Ingle was closed shows as unread when it's back.
 - **Voice**: Opus with in-band FEC, adaptive jitter buffer with loss concealment, echo
-  cancellation and auto gain (WebRTC AEC3/AGC2 via `sonora`), two levels of noise
-  suppression (RNNoise or WebRTC NS), voice activity or **push-to-talk** (global key, also
+  cancellation and auto gain (WebRTC AEC3/AGC2 via `sonora`), noise suppression (RNNoise
+  or WebRTC NS) or **voice isolation** (DeepFilterNet3: only your voice, no keyboard, mouse
+  or machines), voice activity or **push-to-talk** (global key, also
   mouse buttons 4/5), per-person volume, mute/deafen, mic test.
 - **Webcams**: H.264, shown automatically to everyone in the channel.
 - **Screen sharing ("Go Live")**: whole screen or one window, H.264 tuned for screen
@@ -283,7 +290,10 @@ Open them with the gear next to your name (**Voice & Video** tab):
 
 - **Input mode**: voice activity (automatic, uses RNNoise's speech detector) or
   push-to-talk. The default PTT key is the backtick/tilde key; mouse buttons 4/5 work too.
-- **Noise suppression**: *Strong (AI)* (RNNoise, default), *Standard* (WebRTC), or off.
+- **Noise suppression**: *Strong (AI)* (RNNoise, default), *Standard* (WebRTC), off, or
+  *Voice isolation*: DeepFilterNet3 cleans the sound (typing, clicks, fans and machines
+  included) and only the close voice at your mic gets through (no TV, no people across the
+  room, nothing between your words). About 1.5 ms of CPU per 10 ms of audio; 30 ms more delay.
 - **Voice quality**: 24–192 kbps; camera device and quality; screen-share quality.
 - Right-click a person for their volume; right-click a stream for stream volume.
 - **Windows** tab (on Windows): whether the close button keeps Ingle running in the tray
@@ -316,9 +326,17 @@ Open them with the gear next to your name (**Voice & Video** tab):
   said. Running the setup again is always safe. "doesn't accept the password": many
   providers turn off password logins for root; use your key file, or the user and password
   from the provider's welcome email.
+- **Can't hear anyone (or nobody hears you) until you restart**: since 0.6.4, a microphone
+  or speakers that stop working mid-call (a virtual device like NVIDIA Broadcast or a GoXLR
+  restarting, a USB hiccup) are reopened by themselves within a second or two; if it takes
+  longer, the call screen says so. If it still happens, the log says whether a device
+  stopped or someone's sound didn't decrypt: send a bug report with the log.
 - **Logs**: the app writes `ingle.log` next to your config in `%APPDATA%\Ingle\config`
-  (started fresh each launch; set `RUST_LOG=debug` for more detail). If the app crashes it
-  says so in a message box and records the reason there. The server logs to its console.
+  (started fresh each launch, with the run before kept as `ingle.previous.log`; set
+  `RUST_LOG=debug` for more detail). If the app crashes it says so in a message box and
+  records the reason there. If its window ever stops responding, the log records what the
+  window was doing, which of Ingle's threads were busy and how loaded the PC was. Bug reports
+  include both logs. The server logs to its console.
 
 ## Building from source
 
@@ -423,4 +441,7 @@ These are availability checks, not legal clearance. To rename, change `APP_NAME`
 `Cargo.toml` marks the code as MIT OR Apache-2.0, the usual Rust choice; change it before
 publishing if you'd rather use something else. Third-party parts: Inter font (SIL OFL 1.1,
 `crates/app/assets/fonts/OFL.txt`), libopus (BSD), OpenH264 (BSD, compiled from source;
-see the H.264 note in the [roadmap](ARCHITECTURE.md#roadmap)), SQLite (public domain).
+see the H.264 note in the [roadmap](ARCHITECTURE.md#roadmap)), SQLite (public domain),
+RNNoise (BSD), DeepFilterNet3 and its model (MIT OR Apache-2.0, run with tract, MIT OR
+Apache-2.0), spellbook (MPL-2.0) and the spellcheck dictionaries (SCOWL, MIT AND BSD; RLA-ES,
+used under MPL-1.1; Grammalecte, MPL-2.0; see `crates/app/assets/dict/README.md`).

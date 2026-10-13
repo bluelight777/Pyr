@@ -12,7 +12,7 @@ use ingle_proto::media::{self, AAD_LEN, AudioHeader, VideoHeader, flags, track};
 use parking_lot::Mutex;
 use quinn::VarInt;
 use tokio::sync::mpsc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::Shared;
 use crate::audio::stream::StreamAudio;
@@ -31,9 +31,69 @@ pub enum CallEvent {
     Disconnected,
 }
 
-struct VideoOut {
+/// Our camera or screen share being sent. Dropping it stops capture, which can take a moment
+/// (Windows' capture waits for its thread), so it's dropped away from the UI thread and the
+/// call lock (see `crate::drop_later`).
+pub struct VideoOut {
     publisher: Publisher,
     net_task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for VideoOut {
+    fn drop(&mut self) {
+        self.net_task.abort();
+    }
+}
+
+/// What starting a camera or screen share needs from the call, taken out of it so the slow part
+/// (opening the capture, which can take seconds) runs without holding the call.
+pub struct VideoCtx {
+    pub session: SessionId,
+    conn: quinn::Connection,
+    e2ee: Arc<Mutex<E2ee>>,
+    seqs: Arc<[AtomicU32; 4]>,
+    started: Instant,
+}
+
+impl VideoCtx {
+    /// Start capturing and encoding. It goes live once the call installs it
+    /// (`Call::install_video`).
+    pub fn start(&self, shared: &Arc<Shared>, track_id: u8, source: &str, cfg: PublisherConfig) -> Result<(VideoOut, TrackInfo)> {
+        let slot = Arc::new(FrameSlot::default());
+        let capture = if track_id == track::SCREEN {
+            capture::start_screen(source, cfg.fps, slot.clone())?
+        } else {
+            capture::start_camera(source, cfg.max_width, cfg.max_height, cfg.fps, slot.clone())?
+        };
+        let inflight = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (e2ee, seqs, inf, started) = (self.e2ee.clone(), self.seqs.clone(), inflight.clone(), self.started);
+        let counters = shared.clone();
+        let sink = Box::new(move |f: EncodedFrame, _w: u32, _h: u32| {
+            let Some(pkt) = seal_video(&e2ee, &seqs, track_id, &f, started.elapsed().as_millis() as u32) else {
+                return;
+            };
+            counters.call_counters.video_sent.fetch_add(1, Ordering::Relaxed);
+            counters.call_counters.video_bytes.fetch_add(pkt.len() as u64, Ordering::Relaxed);
+            inf.fetch_add(1, Ordering::Relaxed);
+            let _ = tx.send(pkt);
+        });
+        let video = shared.video.clone();
+        let me = self.session;
+        let preview = Box::new(move |w, h, px| video.put(VideoKey { session: me, track: track_id }, w, h, px));
+        let (fps, max_w, max_h) = (cfg.fps, cfg.max_width, cfg.max_height);
+        let publisher = Publisher::start(cfg, capture, slot, sink, Some(preview), inflight.clone())?;
+        let net_task = shared.rt.spawn(video_send_loop(self.conn.clone(), rx, inflight));
+        let info = TrackInfo {
+            id: track_id,
+            kind: if track_id == track::SCREEN { TrackKind::Screen } else { TrackKind::Camera },
+            width: max_w,
+            height: max_h,
+            fps,
+            viewers: Vec::new(),
+        };
+        Ok((VideoOut { publisher, net_task }, info))
+    }
 }
 
 pub struct Call {
@@ -124,16 +184,41 @@ async fn video_send_loop(conn: quinn::Connection, mut rx: mpsc::UnboundedReceive
     }
 }
 
+/// Packets in a row from someone that don't open (about two seconds of their sound) before
+/// it's worth a line in the log.
+const UNDECRYPTABLE_LOG_AFTER: u32 = 100;
+
 /// Receive audio datagrams for the whole call.
 async fn datagram_loop(shared: Arc<Shared>, conn: quinn::Connection, e2ee: Arc<Mutex<E2ee>>) {
-    while let Ok(d) = conn.read_datagram().await {
+    // Per sender: packets in a row that didn't open, and whether that's in the log.
+    let mut failing: HashMap<SessionId, (u32, bool)> = HashMap::new();
+    loop {
+        let d = match conn.read_datagram().await {
+            Ok(d) => d,
+            Err(e) => {
+                debug!("no more voice packets: {e}");
+                break;
+            }
+        };
         let Some(h) = AudioHeader::parse(&d) else { continue };
         let ct = &d[media::AUDIO_HEADER_LEN..];
         let pt = e2ee.lock().open(h.session, h.epoch, h.track, h.seq, &d[..AAD_LEN], ct);
         let Some(pt) = pt else {
             shared.call_counters.undecryptable.fetch_add(1, Ordering::Relaxed);
+            let f = failing.entry(h.session).or_default();
+            f.0 += 1;
+            if f.0 >= UNDECRYPTABLE_LOG_AFTER && !f.1 {
+                f.1 = true;
+                let why = e2ee.lock().why_not(h.session, h.epoch);
+                warn!(session = h.session, epoch = h.epoch, "someone's sound doesn't decrypt: {why}");
+            }
             continue;
         };
+        if !failing.is_empty() {
+            if let Some((_, true)) = failing.remove(&h.session) {
+                info!(session = h.session, "their sound decrypts again");
+            }
+        }
         let mixer = shared.call.lock().as_ref().and_then(|c| c.audio.as_ref().map(|a| a.mixer.clone()));
         if let Some(m) = mixer {
             m.lock().push(h.session, h.track, h.seq, h.flags, pt, Instant::now());
@@ -363,7 +448,7 @@ impl Call {
         if let Some(mut a) = self.audio.take() {
             a.stop();
         }
-        let settings = shared.state.read().settings.clone();
+        let settings = shared.state.read_recursive().settings.clone();
         let (input, output) = shared.audio_io();
         let e2ee = self.e2ee.clone();
         let seqs = self.seqs.clone();
@@ -378,14 +463,14 @@ impl Call {
         let engine = AudioEngine::start(settings.clone(), input, output, sink, shared.ptt_down.clone());
         engine.controls.muted.store(muted || deafened, Ordering::Relaxed);
         engine.controls.deafened.store(deafened, Ordering::Relaxed);
-        engine.controls.monitor.store(shared.state.read().mic_test, Ordering::Relaxed);
+        engine.controls.monitor.store(shared.state.read_recursive().mic_test, Ordering::Relaxed);
         // Per-person volumes (voice and stream audio).
         {
             let (vols, svols) = {
                 let cfg = shared.config.lock();
                 (cfg.user_volumes.clone(), cfg.stream_volumes.clone())
             };
-            let st = shared.state.read();
+            let st = shared.state.read_recursive();
             if let Some(s) = st.server(&self.server_key) {
                 let mut m = engine.mixer.lock();
                 for p in s.voice.values() {
@@ -526,67 +611,31 @@ impl Call {
         self.handle.notify(Request::VoiceState { self_mute: muted || deafened, self_deaf: deafened });
     }
 
-    pub fn start_video(
-        &mut self,
-        shared: &Arc<Shared>,
-        track_id: u8,
-        source: &str,
-        cfg: PublisherConfig,
-    ) -> Result<(u32, u32)> {
-        let slot = Arc::new(FrameSlot::default());
-        let capture = if track_id == track::SCREEN {
-            capture::start_screen(source, cfg.fps, slot.clone())?
-        } else {
-            capture::start_camera(source, cfg.max_width, cfg.max_height, cfg.fps, slot.clone())?
-        };
-        let inflight = Arc::new(AtomicUsize::new(0));
-        let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let (e2ee, seqs, inf, started) = (self.e2ee.clone(), self.seqs.clone(), inflight.clone(), self.started);
-        let counters = shared.clone();
-        let sink = Box::new(move |f: EncodedFrame, _w: u32, _h: u32| {
-            let Some(pkt) = seal_video(&e2ee, &seqs, track_id, &f, started.elapsed().as_millis() as u32) else {
-                return;
-            };
-            counters.call_counters.video_sent.fetch_add(1, Ordering::Relaxed);
-            counters.call_counters.video_bytes.fetch_add(pkt.len() as u64, Ordering::Relaxed);
-            inf.fetch_add(1, Ordering::Relaxed);
-            let _ = tx.send(pkt);
-        });
-        let video = shared.video.clone();
-        let me = self.session;
-        let preview = Box::new(move |w, h, px| video.put(VideoKey { session: me, track: track_id }, w, h, px));
-        let (fps, max_w, max_h) = (cfg.fps, cfg.max_width, cfg.max_height);
-        let publisher = Publisher::start(cfg, capture, slot, sink, Some(preview), inflight.clone())?;
-        let net_task = tokio::spawn(video_send_loop(self.conn.clone(), rx, inflight));
-        let info = TrackInfo {
-            id: track_id,
-            kind: if track_id == track::SCREEN { TrackKind::Screen } else { TrackKind::Camera },
-            width: max_w,
-            height: max_h,
-            fps,
-            viewers: Vec::new(),
-        };
-        self.handle.notify(Request::Publish { track: info });
-        let out = VideoOut { publisher, net_task };
-        if track_id == track::SCREEN {
-            self.screen = Some(out);
-        } else {
-            self.camera = Some(out);
-        }
-        Ok((max_w, max_h))
+    /// What `VideoCtx::start` needs, to start a camera or screen share outside the call lock.
+    pub fn video_ctx(&self) -> VideoCtx {
+        VideoCtx { session: self.session, conn: self.conn.clone(), e2ee: self.e2ee.clone(), seqs: self.seqs.clone(), started: self.started }
     }
 
-    pub fn stop_video(&mut self, shared: &Arc<Shared>, track_id: u8) {
+    /// A started camera or screen share goes live (the server tells the others). Returns the one
+    /// it replaces, to be dropped elsewhere.
+    pub fn install_video(&mut self, track_id: u8, out: VideoOut, info: TrackInfo) -> Option<VideoOut> {
+        self.handle.notify(Request::Publish { track: info });
+        if track_id == track::SCREEN { self.screen.replace(out) } else { self.camera.replace(out) }
+    }
+
+    /// Take our camera or screen share (with the share's sound) out of the call; the server
+    /// stops forwarding it. Drop what comes back away from the UI thread and the call lock.
+    pub fn take_video(&mut self, shared: &Arc<Shared>, track_id: u8) -> (Option<VideoOut>, Option<StreamAudio>) {
         let out = if track_id == track::SCREEN { self.screen.take() } else { self.camera.take() };
-        if track_id == track::SCREEN && self.stream_audio.take().is_some() {
+        let sound = if track_id == track::SCREEN { self.stream_audio.take() } else { None };
+        if sound.is_some() {
             self.handle.notify(Request::Unpublish { track: track::SCREEN_AUDIO });
         }
-        if let Some(v) = out {
-            v.net_task.abort();
-            drop(v.publisher);
+        if out.is_some() {
             self.handle.notify(Request::Unpublish { track: track_id });
         }
         shared.video.remove(VideoKey { session: self.session, track: track_id });
+        (out, sound)
     }
 
     pub fn video_on(&self, track_id: u8) -> bool {
@@ -618,14 +667,9 @@ impl Call {
         for t in self.tasks.drain(..) {
             t.abort();
         }
-        if let Some(v) = self.camera.take() {
-            v.net_task.abort();
-        }
-        if let Some(v) = self.screen.take() {
-            v.net_task.abort();
-        }
-        self.stream_audio = None;
-        self.receivers.clear();
+        // Capture and decoders stop on a thread of their own: Windows' capture can take a
+        // moment to let go, and this runs on the UI thread when you leave.
+        crate::drop_later((self.camera.take(), self.screen.take(), self.stream_audio.take(), std::mem::take(&mut self.receivers)));
         if let Some(mut a) = self.audio.take() {
             a.stop();
         }

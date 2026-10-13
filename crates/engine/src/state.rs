@@ -83,6 +83,10 @@ pub struct ServerView {
     pub typing: HashMap<ChannelId, HashMap<UserId, Instant>>,
     pub unread: HashSet<ChannelId>,
     pub mentions: HashMap<ChannelId, u32>,
+    /// Where the "NEW" line goes: messages from this id on came in while you weren't looking.
+    /// Kept after you've read them, until you leave the conversation (or write in it), so you
+    /// can see who wrote what you missed.
+    pub new_since: HashMap<ChannelId, MessageId>,
     pub last_invite: Option<String>,
     pub rtt_ms: u32,
     /// Custom roles, highest first.
@@ -111,6 +115,7 @@ impl ServerView {
             typing: HashMap::new(),
             unread: HashSet::new(),
             mentions: HashMap::new(),
+            new_since: HashMap::new(),
             last_invite: None,
             rtt_ms: 0,
             roles: Vec::new(),
@@ -341,7 +346,7 @@ pub struct DeviceLists {
     pub screens: Vec<crate::video::ScreenSource>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct AppState {
     pub my_uid: String,
     pub my_name: String,

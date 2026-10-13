@@ -10,14 +10,14 @@ pub mod resample;
 pub mod stream;
 
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use ingle_proto::control::SessionId;
 use parking_lot::Mutex;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::config::Settings;
 use capture::CapturePipeline;
@@ -49,6 +49,9 @@ pub enum AudioInput {
     Device(Option<String>),
     /// Generates 480 samples (10 ms, 48 kHz mono) per call. Used by tests and bots.
     Synthetic(Box<dyn FnMut(&mut [f32]) + Send>),
+    /// A stand-in sound card, made (and made again to reopen it) by this.
+    #[cfg(test)]
+    Fake(Opener<InputDevice>),
     None,
 }
 
@@ -56,8 +59,15 @@ pub enum AudioOutput {
     Device(Option<String>),
     /// Receives 10 ms of 48 kHz stereo (960 interleaved samples) per call.
     Synthetic(Box<dyn FnMut(&[f32]) + Send>),
+    /// A stand-in sound card, made (and made again to reopen it) by this.
+    #[cfg(test)]
+    Fake(Opener<OutputDevice>),
     None,
 }
+
+/// Opens a sound device (again, when it has stopped): the one asked for, or with `true`, the
+/// default one standing in for it if the one asked for won't open.
+pub type Opener<T> = Arc<dyn Fn(bool) -> anyhow::Result<T> + Send + Sync>;
 
 #[derive(Default, Clone, Debug)]
 pub struct AudioStatus {
@@ -114,19 +124,262 @@ impl Drop for AudioEngine {
 }
 
 enum In {
-    Dev(InputDevice),
+    Dev(Link<InputDevice>),
     Synth(Box<dyn FnMut(&mut [f32]) + Send>),
     None,
 }
 
 enum Out {
-    Dev(OutputDevice),
+    Dev(Link<OutputDevice>),
     Synth(Box<dyn FnMut(&[f32]) + Send>),
     Clock,
 }
 
 /// Target amount of audio queued at the sound card.
 const OUTPUT_TARGET_MS: f32 = 30.0;
+
+/// How long a working sound card may go without calling back before it counts as stuck.
+const STALL: Duration = Duration::from_secs(1);
+/// A device that stops again within this long of coming back waits longer before the next try.
+const SETTLED: Duration = Duration::from_secs(10);
+/// A device that has been down this long is mentioned on the call screen (and in a message).
+const TELL_AFTER: Duration = Duration::from_millis(1500);
+/// While a device is down, only the one asked for is tried at first (it's usually back in a
+/// moment); after this long, the default device may stand in for it.
+const FALL_BACK_AFTER: Duration = if cfg!(test) { Duration::from_secs(2) } else { Duration::from_secs(10) };
+/// How often a stand-in checks whether the device asked for is back.
+const SWITCH_BACK_EVERY: Duration = if cfg!(test) { Duration::from_secs(1) } else { Duration::from_secs(5) };
+
+/// How long to wait before opening a device again, after `failures` tries in a row.
+fn retry_delay(failures: u32) -> Duration {
+    match failures {
+        0 => Duration::ZERO,
+        1 => Duration::from_millis(500),
+        2 => Duration::from_secs(1),
+        3 => Duration::from_secs(2),
+        _ => Duration::from_secs(5),
+    }
+}
+
+/// Whether the n-th failure in a row gets a line in the log: the first few, then fewer and
+/// fewer (a PC without a microphone would otherwise say so every 5 s).
+fn worth_logging(n: u32) -> bool {
+    n <= 3 || n.is_power_of_two()
+}
+
+/// A microphone or speakers, as the audio thread needs them.
+trait Device: Send + 'static {
+    fn name(&self) -> &str;
+    /// The default device, playing the part of the one asked for.
+    fn stand_in(&self) -> bool;
+    /// Why it should be reopened, if it should.
+    fn trouble(&mut self, stall: Duration) -> Option<String>;
+}
+
+impl Device for InputDevice {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn stand_in(&self) -> bool {
+        self.stand_in
+    }
+
+    fn trouble(&mut self, stall: Duration) -> Option<String> {
+        InputDevice::trouble(self, stall)
+    }
+}
+
+impl Device for OutputDevice {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn stand_in(&self) -> bool {
+        self.stand_in
+    }
+
+    fn trouble(&mut self, stall: Duration) -> Option<String> {
+        OutputDevice::trouble(self, stall)
+    }
+}
+
+/// What happened to a device this time round.
+#[derive(Debug, PartialEq)]
+enum Change {
+    None,
+    /// It stopped working.
+    Lost,
+    /// It works again, for the first time, or as a different device.
+    Back,
+    /// It has been down a while: time to tell the user.
+    Tell,
+}
+
+/// A sound device, kept working. When it stops (or wasn't there to begin with) it's reopened
+/// in the background, each try a little later than the last, until it's back; the call and
+/// the other device carry on meanwhile. Before this, a microphone or speakers that stopped
+/// (a virtual device restarting, a USB hiccup) stayed silent until Ingle was restarted.
+///
+/// If the device asked for stays away, the default one stands in for it until it's back.
+struct Link<T: Device> {
+    /// "speakers" or "microphone", for the log.
+    what: &'static str,
+    open: Opener<T>,
+    dev: Option<T>,
+    /// The device's name, as last seen.
+    name: String,
+    up_since: Option<Instant>,
+    down_since: Option<Instant>,
+    /// Failed tries (and comebacks that didn't last) in a row.
+    failures: u32,
+    next_try: Instant,
+    /// When a stand-in next looks for the device asked for.
+    next_check: Instant,
+    /// From when the default device may stand in for the one asked for, while it's down.
+    fall_back_from: Instant,
+    /// A try in progress (on a thread of its own: a stuck driver can take seconds to answer).
+    trying: Option<mpsc::Receiver<anyhow::Result<T>>>,
+    told: bool,
+}
+
+impl<T: Device> Link<T> {
+    /// Open the device now (before the first sound). If that fails, the error comes back and
+    /// the device is tried again later.
+    fn start(what: &'static str, open: Opener<T>) -> (Link<T>, Option<String>) {
+        let now = Instant::now();
+        let mut link = Link {
+            what,
+            open,
+            dev: None,
+            name: what.to_string(),
+            up_since: None,
+            down_since: None,
+            failures: 0,
+            next_try: now,
+            next_check: now + SWITCH_BACK_EVERY,
+            fall_back_from: now,
+            trying: None,
+            told: false,
+        };
+        match (link.open)(true) {
+            Ok(d) => {
+                info!("{what}: {}", d.name());
+                link.name = d.name().to_string();
+                link.dev = Some(d);
+                link.up_since = Some(now);
+                (link, None)
+            }
+            Err(e) => {
+                let e = format!("{e:#}");
+                warn!("{what} unavailable: {e}");
+                link.down_since = Some(now);
+                link.failures = 1;
+                link.next_try = now + retry_delay(1);
+                // The caller shows this error.
+                link.told = true;
+                (link, Some(e))
+            }
+        }
+    }
+
+    /// Check on the device, and work on getting it back if it's down. Call it all the time.
+    fn step(&mut self, now: Instant) -> Change {
+        if let Some(rx) = &self.trying {
+            match rx.try_recv() {
+                Ok(Ok(d)) => {
+                    self.trying = None;
+                    return self.got(d, now);
+                }
+                Ok(Err(e)) => self.no_luck(now, format!("{e:#}")),
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => self.no_luck(now, "opening it went wrong".into()),
+            }
+        }
+        if let Some(d) = self.dev.as_mut() {
+            if let Some(why) = d.trouble(STALL) {
+                let settled = self.up_since.is_some_and(|t| now.duration_since(t) >= SETTLED);
+                self.failures = if settled { 0 } else { self.failures + 1 };
+                if worth_logging(self.failures.max(1)) {
+                    warn!("{} stopped working ({}): {why}; reconnecting", self.what, self.name);
+                }
+                // Letting go of a stuck stream can take a moment too.
+                crate::drop_later(self.dev.take());
+                self.up_since = None;
+                self.down_since = Some(now);
+                self.next_try = now + retry_delay(self.failures);
+                self.fall_back_from = now + FALL_BACK_AFTER;
+                self.told = false;
+                return Change::Lost;
+            }
+            // Standing in for the device asked for: see now and then whether it's back.
+            if d.stand_in() && self.trying.is_none() && now >= self.next_check {
+                self.next_check = now + SWITCH_BACK_EVERY;
+                self.try_open(false, now);
+            }
+            return Change::None;
+        }
+        if self.trying.is_none() && now >= self.next_try {
+            self.try_open(now >= self.fall_back_from, now);
+        }
+        if !self.told && self.down_since.is_some_and(|t| now.duration_since(t) >= TELL_AFTER) {
+            self.told = true;
+            return Change::Tell;
+        }
+        Change::None
+    }
+
+    fn try_open(&mut self, fall_back: bool, now: Instant) {
+        let (tx, rx) = mpsc::channel();
+        let open = self.open.clone();
+        let spawned = std::thread::Builder::new().name(format!("ingle-open-{}", self.what)).spawn(move || {
+            let _ = tx.send(open(fall_back));
+        });
+        match spawned {
+            Ok(_) => self.trying = Some(rx),
+            Err(_) => self.next_try = now + Duration::from_secs(1),
+        }
+    }
+
+    /// A try came back with a device.
+    fn got(&mut self, d: T, now: Instant) -> Change {
+        if let Some(cur) = &self.dev {
+            // A look for the device asked for, while another stands in for it.
+            if d.stand_in() || !cur.stand_in() {
+                crate::drop_later(d);
+                return Change::None;
+            }
+            info!("{} “{}” is back; switching to it from “{}”", self.what, d.name(), cur.name());
+            crate::drop_later(self.dev.take());
+        } else {
+            let down = self.down_since.map(|t| now.duration_since(t)).unwrap_or_default();
+            let note = if d.stand_in() { " (standing in for the one chosen)" } else { "" };
+            info!("{} back after {:.1} s: {}{note}", self.what, down.as_secs_f32(), d.name());
+        }
+        self.name = d.name().to_string();
+        self.dev = Some(d);
+        self.up_since = Some(now);
+        self.down_since = None;
+        self.next_check = now + SWITCH_BACK_EVERY;
+        self.told = false;
+        Change::Back
+    }
+
+    /// A try failed.
+    fn no_luck(&mut self, now: Instant, e: String) {
+        self.trying = None;
+        if self.dev.is_some() {
+            // Only a look for the device asked for; the stand-in carries on.
+            debug!("the {} chosen still won't open: {e}", self.what);
+            return;
+        }
+        self.failures += 1;
+        self.next_try = now + retry_delay(self.failures);
+        if worth_logging(self.failures) {
+            warn!("{} still unavailable (try {}): {e}", self.what, self.failures);
+        }
+    }
+}
 
 /// Ask the OS to schedule the audio thread like other real-time audio (MMCSS "Pro Audio"
 /// on Windows), so a busy PC doesn't make voice crackle.
@@ -137,6 +390,25 @@ fn boost_audio_thread() {
         let mut index = 0u32;
         let _ = AvSetMmThreadCharacteristicsW(windows::core::w!("Pro Audio"), &mut index);
         let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+    }
+}
+
+/// What the status says about a device, kept in step with its `Link`: the error is cleared
+/// again once the device is back (only if it's still the one this put there).
+fn report<T: Device>(change: &Change, link: &Link<T>, name: &mut Option<String>, error: &mut Option<String>, told: &mut Option<String>, down: &str) {
+    match change {
+        Change::None | Change::Lost => {}
+        Change::Back => {
+            *name = Some(link.name.clone());
+            if error.is_some() && *error == *told {
+                *error = None;
+            }
+            *told = None;
+        }
+        Change::Tell => {
+            *error = Some(down.to_string());
+            *told = Some(down.to_string());
+        }
     }
 }
 
@@ -158,41 +430,50 @@ fn worker(
             None
         }
     };
+    // What this thread put in the status as the microphone's or speakers' error.
+    let (mut told_in, mut told_out): (Option<String>, Option<String>) = (None, None);
+    let mic = |open: Opener<InputDevice>, told: &mut Option<String>| {
+        let (link, err) = Link::start("microphone", open);
+        let mut st = status.lock();
+        match err {
+            None => st.input_name = Some(link.name.clone()),
+            Some(e) => {
+                st.input_error = Some(e.clone());
+                *told = Some(e);
+            }
+        }
+        In::Dev(link)
+    };
     let mut inp = match input {
-        AudioInput::Device(id) => match InputDevice::open(id.as_deref()) {
-            Ok(d) => {
-                info!("microphone: {}", d.name);
-                status.lock().input_name = Some(d.name.clone());
-                In::Dev(d)
-            }
-            Err(e) => {
-                warn!("microphone unavailable: {e:#}");
-                status.lock().input_error = Some(format!("{e:#}"));
-                In::None
-            }
-        },
+        AudioInput::Device(id) => mic(Arc::new(move |fall_back| InputDevice::open_with(id.as_deref(), fall_back)), &mut told_in),
+        #[cfg(test)]
+        AudioInput::Fake(open) => mic(open, &mut told_in),
         AudioInput::Synthetic(f) => In::Synth(f),
         AudioInput::None => In::None,
     };
+    let speakers = |open: Opener<OutputDevice>, told: &mut Option<String>| {
+        let (link, err) = Link::start("speakers", open);
+        let mut st = status.lock();
+        match err {
+            None => st.output_name = Some(link.name.clone()),
+            Some(e) => {
+                st.output_error = Some(e.clone());
+                *told = Some(e);
+            }
+        }
+        Out::Dev(link)
+    };
     let mut out = match output {
-        AudioOutput::Device(id) => match OutputDevice::open(id.as_deref()) {
-            Ok(d) => {
-                info!("speakers: {}", d.name);
-                status.lock().output_name = Some(d.name.clone());
-                Out::Dev(d)
-            }
-            Err(e) => {
-                warn!("speakers unavailable: {e:#}");
-                status.lock().output_error = Some(format!("{e:#}"));
-                Out::Clock
-            }
-        },
+        AudioOutput::Device(id) => speakers(Arc::new(move |fall_back| OutputDevice::open_with(id.as_deref(), fall_back)), &mut told_out),
+        #[cfg(test)]
+        AudioOutput::Fake(open) => speakers(open, &mut told_out),
         AudioOutput::Synthetic(f) => Out::Synth(f),
         AudioOutput::None => Out::Clock,
     };
-    if let (Some(c), Out::Dev(_)) = (cap.as_mut(), &out) {
-        // speaker queue + device buffers + mic buffering, roughly
-        c.stream_delay_ms = (OUTPUT_TARGET_MS as i32) + 30;
+    // speaker queue + device buffers + mic buffering, roughly
+    let echo_delay_ms = (OUTPUT_TARGET_MS as i32) + 30;
+    if let (Some(c), Out::Dev(Link { dev: Some(_), .. })) = (cap.as_mut(), &out) {
+        c.stream_delay_ms = echo_delay_ms;
     }
 
     let start = Instant::now();
@@ -209,8 +490,9 @@ fn worker(
         let deaf = ctl.deafened.load(Ordering::Relaxed);
         let monitoring = ctl.monitor.load(Ordering::Relaxed);
 
-        // Playback first, so the echo canceller sees the far end before the near end.
-        let produce = |mix: &mut Vec<f32>, cap: &mut Option<CapturePipeline>, monitor: &mut VecDeque<f32>| {
+        // Playback first, so the echo canceller sees the far end before the near end (only
+        // what's really played: with no speakers there's no echo to cancel).
+        let produce = |mix: &mut Vec<f32>, cap: &mut Option<CapturePipeline>, monitor: &mut VecDeque<f32>, played: bool| {
             {
                 let mut m = mixer.lock();
                 m.deafened = deaf;
@@ -223,29 +505,53 @@ fn worker(
                     mix[2 * i + 1] += v;
                 }
             }
-            if let Some(c) = cap.as_mut() {
-                c.render(mix);
+            if played {
+                if let Some(c) = cap.as_mut() {
+                    c.render(mix);
+                }
             }
         };
         match &mut out {
-            Out::Dev(d) => {
-                let mut guard = 0;
-                while d.buffered_ms() < OUTPUT_TARGET_MS && guard < 10 {
-                    produce(&mut mix, &mut cap, &mut monitor);
-                    d.write(&mix);
-                    guard += 1;
+            Out::Dev(link) => {
+                let change = link.step(now);
+                if change == Change::Back {
+                    if let Some(c) = cap.as_mut() {
+                        c.stream_delay_ms = echo_delay_ms;
+                    }
+                }
+                if change != Change::None {
+                    let down = format!("your speakers “{}” stopped playing sound; reconnecting them…", link.name);
+                    let mut st = status.lock();
+                    let st = &mut *st;
+                    report(&change, link, &mut st.output_name, &mut st.output_error, &mut told_out, &down);
+                }
+                if let Some(d) = link.dev.as_mut() {
+                    let mut guard = 0;
+                    while d.buffered_ms() < OUTPUT_TARGET_MS && guard < 10 {
+                        produce(&mut mix, &mut cap, &mut monitor, true);
+                        d.write(&mix);
+                        guard += 1;
+                    }
+                    out_frames = due;
+                } else {
+                    // No speakers right now: mix by the clock all the same, so the speaking
+                    // rings keep working and nobody's sound piles up for when they're back.
+                    while out_frames < due {
+                        produce(&mut mix, &mut cap, &mut monitor, false);
+                        out_frames += 1;
+                    }
                 }
             }
             Out::Synth(f) => {
                 while out_frames < due {
-                    produce(&mut mix, &mut cap, &mut monitor);
+                    produce(&mut mix, &mut cap, &mut monitor, true);
                     f(&mix);
                     out_frames += 1;
                 }
             }
             Out::Clock => {
                 while out_frames < due {
-                    produce(&mut mix, &mut cap, &mut monitor);
+                    produce(&mut mix, &mut cap, &mut monitor, false);
                     out_frames += 1;
                 }
             }
@@ -263,9 +569,24 @@ fn worker(
             }
         };
         match &mut inp {
-            In::Dev(d) => {
-                while d.read_frame(&mut frame) {
-                    process(&mut frame, &mut cap, &mut monitor);
+            In::Dev(link) => {
+                let change = link.step(now);
+                if change == Change::Lost {
+                    // Nothing's being sent: don't leave the meter and your speaking ring
+                    // showing whatever they last did.
+                    ctl.transmitting.store(false, Ordering::Relaxed);
+                    ctl.mic_level.store((-100f32).to_bits(), Ordering::Relaxed);
+                }
+                if change != Change::None {
+                    let down = format!("your microphone “{}” stopped; reconnecting it…", link.name);
+                    let mut st = status.lock();
+                    let st = &mut *st;
+                    report(&change, link, &mut st.input_name, &mut st.input_error, &mut told_in, &down);
+                }
+                if let Some(d) = link.dev.as_mut() {
+                    while d.read_frame(&mut frame) {
+                        process(&mut frame, &mut cap, &mut monitor);
+                    }
                 }
             }
             In::Synth(g) => {
@@ -337,5 +658,219 @@ mod tests {
         }
         assert!(energy > 10.0, "decoded audio is silent ({energy})");
         assert_eq!(m.speaking(t0 + Duration::from_millis(390)), vec![7]);
+    }
+
+    /// Wait (up to `secs`) until `f` holds.
+    fn wait_until(secs: f32, mut f: impl FnMut() -> bool) -> bool {
+        let end = Instant::now() + Duration::from_secs_f32(secs);
+        while Instant::now() < end {
+            if f() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        f()
+    }
+
+    /// Speakers and a microphone that stop (the way Windows' do when a virtual device restarts,
+    /// or that report they've gone) are reopened by themselves, and the call carries on
+    /// meanwhile. Before, you heard nobody (or nobody heard you) until Ingle was restarted.
+    #[test]
+    fn stopped_speakers_and_microphone_come_back_by_themselves() {
+        use std::sync::atomic::{AtomicU64, AtomicU8};
+
+        use device::fake;
+
+        let mut settings = Settings::default();
+        settings.noise_suppression = crate::config::NoiseSuppression::Off; // a pure tone isn't speech
+        settings.vad_auto = false;
+        settings.vad_threshold_db = -40.0;
+        settings.echo_cancellation = false;
+        settings.auto_gain = false;
+
+        // The microphone plays a tone; each one opened gets its own switch.
+        let mics: Arc<Mutex<Vec<Arc<AtomicU8>>>> = Arc::default();
+        let open_mic: Opener<InputDevice> = {
+            let mics = mics.clone();
+            Arc::new(move |_| {
+                let state = Arc::new(AtomicU8::new(fake::OK));
+                let n = {
+                    let mut m = mics.lock();
+                    m.push(state.clone());
+                    m.len()
+                };
+                let mut phase = 0usize;
+                Ok(fake::microphone(&format!("Mic {n}"), state, move |buf| {
+                    for v in buf.iter_mut() {
+                        *v = (phase as f32 / 48_000.0 * 440.0 * std::f32::consts::TAU).sin() * 0.25;
+                        phase += 1;
+                    }
+                }))
+            })
+        };
+        // The speakers count the loud 10 ms they play, per device; `refuse` makes the next few
+        // tries to open them fail (the device isn't back yet).
+        let speakers: Arc<Mutex<Vec<Arc<AtomicU8>>>> = Arc::default();
+        let heard: Arc<Mutex<Vec<u32>>> = Arc::default();
+        let refuse = Arc::new(AtomicU32::new(0));
+        let open_speakers: Opener<OutputDevice> = {
+            let (speakers, heard, refuse) = (speakers.clone(), heard.clone(), refuse.clone());
+            Arc::new(move |_| {
+                if refuse.load(Ordering::Relaxed) > 0 {
+                    refuse.fetch_sub(1, Ordering::Relaxed);
+                    anyhow::bail!("not there yet");
+                }
+                let state = Arc::new(AtomicU8::new(fake::OK));
+                let n = {
+                    let mut s = speakers.lock();
+                    s.push(state.clone());
+                    heard.lock().push(0);
+                    s.len() - 1
+                };
+                let h = heard.clone();
+                Ok(fake::speakers(&format!("Speakers {n}"), state, move |buf| {
+                    if buf.iter().map(|v| v * v).sum::<f32>() > 1.0 {
+                        h.lock()[n] += 1;
+                    }
+                }))
+            })
+        };
+
+        // What the microphone sends comes straight back as somebody else (session 7) talking.
+        let sent = Arc::new(AtomicU64::new(0));
+        let (tx, rx) = mpsc::channel::<(u8, u8, Vec<u8>)>();
+        let s2 = sent.clone();
+        let mut engine = AudioEngine::start(
+            settings,
+            AudioInput::Fake(open_mic),
+            AudioOutput::Fake(open_speakers),
+            Box::new(move |t, f, data| {
+                s2.fetch_add(1, Ordering::Relaxed);
+                let _ = tx.send((t, f, data.to_vec()));
+            }),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let mixer = engine.mixer.clone();
+        std::thread::spawn(move || {
+            let mut seq = 0u32;
+            while let Ok((t, f, d)) = rx.recv() {
+                mixer.lock().push(7, t, seq, f, d, Instant::now());
+                seq += 1;
+            }
+        });
+        let status = engine.status.clone();
+        let heard_on = |n: usize| heard.lock().get(n).copied().unwrap_or(0);
+        let speaking = || status.lock().speaking == vec![7];
+
+        // Working: the tone goes round and is heard.
+        assert!(wait_until(3.0, || heard_on(0) > 30 && speaking()), "heard {:?}", heard.lock());
+        assert_eq!(status.lock().output_name.as_deref(), Some("Speakers 0"));
+        assert_eq!(status.lock().input_name.as_deref(), Some("Mic 1"));
+
+        // The speakers get stuck without a word: within a couple of seconds there are new ones
+        // playing, and the speaking ring kept going meanwhile.
+        speakers.lock()[0].store(fake::STUCK, Ordering::Relaxed);
+        let stuck_at = Instant::now();
+        assert!(wait_until(4.0, || speakers.lock().len() == 2), "the speakers weren't reopened");
+        let took = stuck_at.elapsed();
+        assert!(took < Duration::from_secs(3), "reopening took {took:?}");
+        assert!(wait_until(2.0, || heard_on(1) > 30), "nothing heard on the new speakers: {:?}", heard.lock());
+        assert!(speaking());
+        assert_eq!(status.lock().output_name.as_deref(), Some("Speakers 1"));
+        assert_eq!(status.lock().output_error, None, "a quick recovery isn't worth a message");
+
+        // The microphone goes away (and says so): it's reopened, and sound flows again.
+        mics.lock()[0].store(fake::GONE, Ordering::Relaxed);
+        assert!(wait_until(3.0, || mics.lock().len() == 2), "the microphone wasn't reopened");
+        let before = sent.load(Ordering::Relaxed);
+        assert!(wait_until(2.0, || sent.load(Ordering::Relaxed) > before + 20), "nothing sent after reopening the microphone");
+        assert_eq!(status.lock().input_name.as_deref(), Some("Mic 2"));
+        assert_eq!(status.lock().input_error, None);
+
+        // Speakers that stay away a while: the call screen says so (and the mixing carries on),
+        // and the message goes once they're back.
+        refuse.store(2, Ordering::Relaxed);
+        speakers.lock()[1].store(fake::GONE, Ordering::Relaxed);
+        assert!(
+            wait_until(4.0, || status.lock().output_error.as_deref().is_some_and(|e| e.contains("Speakers 1") && e.contains("reconnecting"))),
+            "no message: {:?}",
+            status.lock().output_error
+        );
+        assert!(wait_until(1.0, &speaking), "the speaking ring stopped while the speakers were away");
+        assert!(wait_until(12.0, || speakers.lock().len() == 3), "the speakers never came back");
+        assert!(wait_until(2.0, || status.lock().output_error.is_none()), "the message stayed: {:?}", status.lock().output_error);
+        assert!(wait_until(2.0, || heard_on(2) > 30), "nothing heard on the third speakers: {:?}", heard.lock());
+        assert_eq!(refuse.load(Ordering::Relaxed), 0);
+        engine.stop();
+    }
+
+    /// Speakers chosen that go away for a while: the default ones stand in (after a moment's
+    /// wait for the chosen ones), and the chosen ones take over again once they're back.
+    #[test]
+    fn default_speakers_stand_in_until_the_chosen_ones_are_back() {
+        use std::sync::atomic::AtomicU8;
+
+        use device::fake;
+
+        let there = Arc::new(AtomicBool::new(true));
+        let states: Arc<Mutex<Vec<(String, Arc<AtomicU8>)>>> = Arc::default();
+        let open: Opener<OutputDevice> = {
+            let (there, states) = (there.clone(), states.clone());
+            Arc::new(move |fall_back| {
+                let chosen = there.load(Ordering::Relaxed);
+                if !chosen && !fall_back {
+                    anyhow::bail!("the speakers chosen aren't there");
+                }
+                let name = if chosen { "Headset" } else { "Default speakers" };
+                let state = Arc::new(AtomicU8::new(fake::OK));
+                states.lock().push((name.to_string(), state.clone()));
+                let mut d = fake::speakers(name, state, |_| {});
+                d.stand_in = !chosen;
+                Ok(d)
+            })
+        };
+        let (mut link, err) = Link::start("speakers", open);
+        assert_eq!(err, None);
+        assert_eq!(link.name, "Headset");
+        let run = |secs: f32, link: &mut Link<OutputDevice>| {
+            let mut seen = Vec::new();
+            let end = Instant::now() + Duration::from_secs_f32(secs);
+            while Instant::now() < end {
+                let c = link.step(Instant::now());
+                if c != Change::None {
+                    seen.push((c, link.name.clone()));
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            seen
+        };
+        run(0.2, &mut link);
+
+        // The headset goes away (unplugged, say).
+        there.store(false, Ordering::Relaxed);
+        states.lock()[0].1.store(fake::GONE, Ordering::Relaxed);
+        let seen = run(FALL_BACK_AFTER.as_secs_f32() + 2.5, &mut link);
+        assert_eq!(
+            seen,
+            vec![(Change::Lost, "Headset".to_string()), (Change::Tell, "Headset".to_string()), (Change::Back, "Default speakers".to_string())],
+        );
+        assert!(link.dev.as_ref().is_some_and(|d| d.stand_in));
+
+        // It's plugged in again: back to it.
+        there.store(true, Ordering::Relaxed);
+        let seen = run(SWITCH_BACK_EVERY.as_secs_f32() + 1.0, &mut link);
+        assert_eq!(seen, vec![(Change::Back, "Headset".to_string())]);
+        assert!(link.dev.as_ref().is_some_and(|d| !d.stand_in));
+        let opened: Vec<String> = states.lock().iter().map(|(n, _)| n.clone()).collect();
+        assert_eq!(opened, ["Headset", "Default speakers", "Headset"]);
+    }
+
+    #[test]
+    fn retries_slow_down_and_logging_thins_out() {
+        assert_eq!(retry_delay(0), Duration::ZERO);
+        assert!(retry_delay(1) < retry_delay(2) && retry_delay(2) < retry_delay(3) && retry_delay(3) < retry_delay(4));
+        assert_eq!(retry_delay(40), Duration::from_secs(5));
+        let logged: Vec<u32> = (1..=70).filter(|n| worth_logging(*n)).collect();
+        assert_eq!(logged, vec![1, 2, 3, 4, 8, 16, 32, 64]);
     }
 }

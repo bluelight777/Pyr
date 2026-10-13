@@ -38,8 +38,9 @@ pub enum NoiseSuppression {
     /// RNNoise neural suppressor: removes keyboards, fans, dogs.
     #[default]
     Strong,
-    /// RNNoise plus only letting through the close voice at the mic (yours): mutes TVs,
-    /// people talking in the room and sounds between your words.
+    /// Only your voice: DeepFilterNet3 cleans the sound (typing, clicks, fans and machines
+    /// too), and only the close voice at the mic (yours) gets through: TVs, people talking in
+    /// the room and sounds between your words are cut.
     Isolation,
 }
 
@@ -145,6 +146,12 @@ pub struct Settings {
     pub emoji_tone: u8,
     /// A GIPHY API key of your own (otherwise the one built into Ingle, if any).
     pub giphy_key: String,
+    /// Underline misspelled words in the message box (right-click it to switch off).
+    pub spellcheck: bool,
+    /// Its dictionary: "en-US", "en-GB", "es" or "fr".
+    pub spell_language: String,
+    /// Words added to the dictionary (right-click one → Add to dictionary).
+    pub spell_words: Vec<String>,
 }
 
 impl Default for Settings {
@@ -177,6 +184,9 @@ impl Default for Settings {
             recent_emoji: Vec::new(),
             emoji_tone: 0,
             giphy_key: String::new(),
+            spellcheck: true,
+            spell_language: "en-US".into(),
+            spell_words: Vec::new(),
         }
     }
 }

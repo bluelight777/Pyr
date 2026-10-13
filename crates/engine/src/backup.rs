@@ -75,7 +75,7 @@ pub fn info(dir: &Path) -> Option<BackupInfo> {
 
 /// Whether I own `key` and it can be backed up.
 pub fn can_back_up(shared: &Shared, key: &str) -> bool {
-    let st = shared.state.read();
+    let st = shared.state.read_recursive();
     st.server(key)
         .map(|s| s.features.iter().any(|f| f == BACKUP_FEATURE) && s.me.as_ref().map(|m| m.role == Role::Owner).unwrap_or(false))
         .unwrap_or(false)
@@ -113,7 +113,7 @@ pub async fn run(shared: Arc<Shared>, key: String) -> Result<BackupInfo> {
 
 async fn run_inner(shared: &Arc<Shared>, key: &str) -> Result<BackupInfo> {
     let (name, entry) = {
-        let st = shared.state.read();
+        let st = shared.state.read_recursive();
         let name = st.server(key).map(|s| s.info.name.clone()).unwrap_or_default();
         let entry = shared.config.lock().servers.iter().find(|s| s.key == key).cloned();
         (name, entry)
@@ -275,7 +275,7 @@ pub fn spawn_schedule(shared: Arc<Shared>, key: String, conn: quinn::Connection)
             }
             if can_back_up(&shared, &key) {
                 let due = {
-                    let st = shared.state.read();
+                    let st = shared.state.read_recursive();
                     let last = st.backups.get(&key).and_then(|b| b.last_ok).or_else(|| {
                         let name = st.server(&key).map(|s| s.info.name.clone()).unwrap_or_default();
                         info(&folder(&shared, &key, &name)).map(|i| i.last_backup)
@@ -283,12 +283,12 @@ pub fn spawn_schedule(shared: Arc<Shared>, key: String, conn: quinn::Connection)
                     last.map(|t| ingle_proto::now_ms() - t >= EVERY.as_millis() as i64).unwrap_or(true)
                 };
                 if due {
-                    let failing = shared.state.read().backups.get(&key).map(|b| b.error.is_some()).unwrap_or(false);
+                    let failing = shared.state.read_recursive().backups.get(&key).map(|b| b.error.is_some()).unwrap_or(false);
                     if let Err(e) = run(shared.clone(), key.clone()).await {
                         tracing::warn!("backup failed: {e:#}");
                         // Said once per run of failures, not every few minutes.
                         if !failing {
-                            let name = shared.state.read().server(&key).map(|s| s.info.name.clone()).unwrap_or_default();
+                            let name = shared.state.read_recursive().server(&key).map(|s| s.info.name.clone()).unwrap_or_default();
                             crate::errors::report(format!("Couldn't back up {name}: {e:#}"));
                         }
                     }

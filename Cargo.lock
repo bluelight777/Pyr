@@ -3118,7 +3118,7 @@ dependencies = [
 
 [[package]]
 name = "ingle"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3136,6 +3136,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "spellbook",
  "tracing",
  "tracing-subscriber",
  "ureq",
@@ -3144,7 +3145,7 @@ dependencies = [
 
 [[package]]
 name = "ingle-engine"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3188,7 +3189,7 @@ dependencies = [
 
 [[package]]
 name = "ingle-host"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "anyhow",
  "getrandom 0.2.17",
@@ -3207,7 +3208,7 @@ dependencies = [
 
 [[package]]
 name = "ingle-proto"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3229,7 +3230,7 @@ dependencies = [
 
 [[package]]
 name = "ingle-server"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -6227,6 +6228,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7cf0804e4752a5562262e143014f53043080ead4cd5a98f9278d3ceaf32d868"
 dependencies = [
  "cpufeatures 0.3.1",
+]
+
+[[package]]
+name = "spellbook"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d204abcbdf8e88729306a8d0ca01a79d8a49969fe1f84696909d6dbc4321c1a"
+dependencies = [
+ "foldhash 0.2.0",
+ "hashbrown 0.17.1",
 ]
 
 [[package]]

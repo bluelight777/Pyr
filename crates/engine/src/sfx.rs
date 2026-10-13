@@ -118,6 +118,14 @@ fn run(rx: mpsc::Receiver<Play>) {
             }
             continue;
         }
+        // Speakers that stopped taking sound (see `device::Health`) would keep every sound
+        // after this one silent too: let them go, and open them again for the next sound.
+        if let Some(why) = out.as_mut().and_then(|(d, _)| d.trouble(Duration::from_secs(1))) {
+            tracing::warn!("sound effects: the speakers stopped ({why}); reopening them for the next sound");
+            crate::drop_later(out.take());
+            playing.clear();
+            continue;
+        }
         let Some((dev, _)) = out.as_mut() else {
             playing.clear();
             continue;

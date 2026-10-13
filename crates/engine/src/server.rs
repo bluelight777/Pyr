@@ -183,7 +183,7 @@ async fn session(
         let mut cfg = shared.config.lock();
         if let Some(e) = cfg.servers.iter_mut().find(|s| s.key == key) {
             e.invite = None;
-            if let Some(name) = shared.state.read().server(key).map(|s| s.info.name.clone()) {
+            if let Some(name) = shared.state.read_recursive().server(key).map(|s| s.info.name.clone()) {
                 e.name = name;
             }
         }
@@ -275,6 +275,9 @@ fn apply_ready(shared: &Shared, key: &str, ready: Event) {
     sort_channels(&mut channels);
     let mut st = shared.state.write();
     let my_uid = st.my_uid.clone();
+    let server_muted = st.muted_servers.contains(key);
+    let muted_channels: std::collections::HashSet<ChannelId> = st.muted_channels.iter().filter(|(k, _)| k == key).map(|(_, c)| *c).collect();
+    let blocked = st.blocked.clone();
     let s = match st.server_mut(key) {
         Some(s) => s,
         None => {
@@ -282,6 +285,39 @@ fn apply_ready(shared: &Shared, key: &str, ready: Event) {
             st.servers.last_mut().expect("just pushed")
         }
     };
+    // Channels: what came while you were away (or since you last read them here) shows as
+    // unread, with the "NEW" line after the last message read. A channel this PC has no mark
+    // for yet starts out read (marks are kept from the first unread message on, see
+    // `mark_read_before`). Muted ones stay quiet, as they do while you're here.
+    // (Servers before 0.6.4 don't say what's newest: nothing to go on.)
+    let last_read_known = features.iter().any(|f| f == CHANNEL_NEWEST_FEATURE);
+    let mut marks: Vec<(ChannelId, MessageId)> = Vec::new();
+    for c in channels.iter().filter(|_| last_read_known) {
+        let seen = last_read.get(&c.id).copied();
+        let Some(last) = c.last_message else {
+            // Nothing in it yet: whatever comes is new.
+            if seen.is_none() {
+                marks.push((c.id, 0));
+            }
+            continue;
+        };
+        let mine = c.last_from.as_deref() == Some(my_uid.as_str());
+        match seen {
+            Some(seen) if seen >= last => {}
+            Some(_) if mine => marks.push((c.id, last)),
+            None => marks.push((c.id, last)),
+            Some(seen) => {
+                let quiet = server_muted || muted_channels.contains(&c.id) || c.last_from.as_ref().is_some_and(|f| blocked.contains(f));
+                if !quiet {
+                    if s.unread.insert(c.id) {
+                        s.new_since.insert(c.id, seen + 1);
+                    } else {
+                        s.new_since.entry(c.id).or_insert(seen + 1);
+                    }
+                }
+            }
+        }
+    }
     s.status = ConnStatus::Connected;
     s.name = server.name.clone();
     s.info = server;
@@ -292,12 +328,19 @@ fn apply_ready(shared: &Shared, key: &str, ready: Event) {
     s.roles = roles;
     s.features = features;
     s.relations = relations.into_iter().map(|r| (r.user_id, r.kind)).collect();
-    // Direct messages that came in while we were away show as unread.
+    // Direct messages that came in while we were away show as unread, with the "NEW" line
+    // after the last one read here (or on the newest, if this PC never opened it).
     s.dms.clear();
     for dm in dms {
         if let Some(last) = dm.last_message.filter(|_| dm.last_from.as_deref() != Some(my_uid.as_str())) {
-            if last_read.get(&dm.id).map(|seen| *seen < last).unwrap_or(true) {
-                s.unread.insert(dm.id);
+            let seen = last_read.get(&dm.id).copied();
+            if seen.map(|seen| seen < last).unwrap_or(true) {
+                let since = seen.map(|r| r + 1).unwrap_or(last);
+                if s.unread.insert(dm.id) {
+                    s.new_since.insert(dm.id, since);
+                } else {
+                    s.new_since.entry(dm.id).or_insert(since);
+                }
                 s.mentions.entry(dm.id).or_insert(1);
             }
         }
@@ -308,6 +351,9 @@ fn apply_ready(shared: &Shared, key: &str, ready: Event) {
         log.loaded = false;
     }
     drop(st);
+    for (c, id) in marks {
+        shared.mark_read(key, c, id, false);
+    }
     (shared.repaint)();
 }
 
@@ -322,6 +368,10 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
     let mut toast: Option<String> = None;
     let mut dm_note: Option<String> = None;
     let mut ding = false;
+    // Read up to here (channel, message, save now): what came while you were looking at it.
+    let mut read_upto: Option<(ChannelId, MessageId, bool)> = None;
+    // A channel's first unread message (see `mark_read_before`).
+    let mut unread_from: Option<(ChannelId, MessageId)> = None;
     {
         let mut st = shared.state.write();
         let my_uid = st.my_uid.clone();
@@ -364,25 +414,44 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
                     log.pending.retain(|p| p.nonce != nonce);
                 }
                 let mine = message.author == my_uid;
+                let mid = message.id;
                 log.upsert(message);
                 s.typing.entry(cid).or_default().retain(|u, _| !mine || u != &my_uid);
                 let viewing = active.as_ref().map(|(k, c)| k == key && *c == cid).unwrap_or(false);
+                // Open in front of you. Open in a window that's behind another one, minimized or
+                // hidden to the tray doesn't count: that's unread until you come back.
+                let looking = viewing && shared.window_in_front();
                 let in_dm = s.dm(cid).is_some();
                 if in_dm {
-                    let (with, mid) = (s.dm(cid).map(|d| d.with.clone()).unwrap_or_default(), log_newest(s, cid));
-                    s.upsert_dm(Dm { id: cid, with, last_message: mid, last_from: None });
+                    let (with, newest) = (s.dm(cid).map(|d| d.with.clone()).unwrap_or_default(), log_newest(s, cid));
+                    s.upsert_dm(Dm { id: cid, with, last_message: newest, last_from: None });
+                }
+                if mine {
+                    // You've written here, so you've read it: no "NEW" line above your reply.
+                    s.new_since.remove(&cid);
+                    read_upto = Some((cid, mid, in_dm));
+                } else if looking {
+                    read_upto = Some((cid, mid, in_dm));
                 }
                 // A ping for every new message you can see, unless the channel (or server) is
                 // muted or you're looking right at it. Mentions and direct messages ping even
                 // in a muted server, like Discord.
-                let focused = shared.window_focused.load(std::sync::atomic::Ordering::Relaxed);
                 let muted = server_muted && !mention && !in_dm || muted_channels.contains(&cid);
-                if !mine && !(viewing && focused) && !muted {
+                if !mine && !looking && !muted {
                     ding = true;
                 }
-                if !mine && !viewing {
+                if !mine && !looking {
                     if !muted || mention {
-                        s.unread.insert(cid);
+                        // The "NEW" line goes above the first message you haven't seen: this one,
+                        // unless older ones are still unread.
+                        if s.unread.insert(cid) {
+                            s.new_since.insert(cid, mid);
+                            if !in_dm {
+                                unread_from = Some((cid, mid));
+                            }
+                        } else {
+                            s.new_since.entry(cid).or_insert(mid);
+                        }
                     }
                     // Every direct message counts like a mention (the red badge).
                     if mention || in_dm {
@@ -493,6 +562,12 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
         if let Some(t) = dm_note {
             st.toast(t, false);
         }
+    }
+    if let Some((cid, id, save)) = read_upto {
+        shared.mark_read(key, cid, id, save);
+    }
+    if let Some((cid, id)) = unread_from {
+        shared.mark_read_before(key, cid, id);
     }
     if ding {
         shared.play(crate::sfx::Sound::Message);

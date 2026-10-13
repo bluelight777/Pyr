@@ -374,14 +374,53 @@ pub fn pick_async(what: PickFor, multiple: bool, ctx: &egui::Context) {
     ctx.request_repaint();
 }
 
-/// Opens a chooser asked for with `pick_async`. Call between frames only.
+/// Opens a chooser asked for with `pick_async` or `pick_folder_async`. Call between frames only.
 pub fn run_wanted_dialog() {
+    if let Some((what, title)) = wanted_folder().lock().unwrap().take() {
+        let dir = rfd::FileDialog::new().set_title(title).pick_folder();
+        DIALOG_CLOSED.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(d) = dir {
+            folders().lock().unwrap().push((what, d));
+        }
+    }
     let Some((what, multiple)) = wanted().lock().unwrap().take() else { return };
     let files = if multiple { pick_images() } else { pick_image().into_iter().collect() };
     DIALOG_CLOSED.store(true, std::sync::atomic::Ordering::SeqCst);
     if !files.is_empty() {
         picks().lock().unwrap().push((what, files));
     }
+}
+
+/// What a chosen folder is for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FolderFor {
+    /// Where server backups go (Settings).
+    Backups,
+    /// A backup to bring a server back from (creating a server).
+    Restore,
+}
+
+fn wanted_folder() -> &'static std::sync::Mutex<Option<(FolderFor, &'static str)>> {
+    static W: std::sync::OnceLock<std::sync::Mutex<Option<(FolderFor, &'static str)>>> = std::sync::OnceLock::new();
+    W.get_or_init(Default::default)
+}
+
+fn folders() -> &'static std::sync::Mutex<Vec<(FolderFor, std::path::PathBuf)>> {
+    static F: std::sync::OnceLock<std::sync::Mutex<Vec<(FolderFor, std::path::PathBuf)>>> = std::sync::OnceLock::new();
+    F.get_or_init(Default::default)
+}
+
+/// Asks for the system's folder chooser, opened between frames like `pick_async` (a dialog
+/// opened while drawing would hold the shared state, and with it voice and messages, until it
+/// closes). Results come from `take_folders`.
+pub fn pick_folder_async(what: FolderFor, title: &'static str, ctx: &egui::Context) {
+    *wanted_folder().lock().unwrap() = Some((what, title));
+    ctx.request_repaint();
+}
+
+/// Folders chosen since the last call.
+pub fn take_folders() -> Vec<(FolderFor, std::path::PathBuf)> {
+    std::mem::take(&mut *folders().lock().unwrap())
 }
 
 /// Pictures chosen since the last call.

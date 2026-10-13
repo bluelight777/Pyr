@@ -97,7 +97,9 @@ One real-time thread (MMCSS "Pro Audio" priority on Windows) runs in 10 ms steps
 
 ```
 mic (cpal) → resample to 48 kHz → AEC3 echo canceller → noise suppression
-  (RNNoise "Strong" or WebRTC NS "Standard") → AGC2 → level + voice detection
+  (RNNoise "Strong" or WebRTC NS "Standard"; or "Voice isolation": DeepFilterNet3 cleans
+  the sound, 30 ms behind, while RNNoise's speech detector on the raw mic decides when you
+  talk and a level check keeps only the close voice) → AGC2 → level + voice detection
   → gate (voice activity with 400 ms hangover and 20 ms pre-roll, or push-to-talk)
   → Opus 20 ms, mono, VBR, in-band FEC, 64 kbps default → seal → datagram
 
@@ -108,8 +110,19 @@ datagram → open → per-person jitter buffer (adaptive target 40–200 ms, FEC
          └→ also fed to the echo canceller as the far-end signal
 ```
 
+**Sound devices that stop.** Windows can stop calling a stream back without a word (a
+virtual device such as NVIDIA Broadcast or a GoXLR restarting or changing format, a USB
+hiccup), or report that the device went away. Each stream counts its callbacks; the audio
+thread reopens a microphone or speakers that went a second without one (three for a new
+stream) or reported they're gone, on a thread of its own, retrying after 0.5, 1, 2 and then
+every 5 s. Meanwhile the mixer keeps running by the clock, so the speaking rings go on and
+nothing piles up. After 1.5 s the call screen says so. If the device chosen stays away for
+10 s, the default one stands in until it's back (checked every 5 s). Notification sounds
+reopen stuck speakers the same way.
+
 Libraries: `cpal` (WASAPI/ALSA/CoreAudio), `sonora` (pure-Rust port of WebRTC's audio
-processing: AEC3, NS, AGC2, high-pass), `nnnoiseless` (RNNoise), `opus` (libopus 1.6).
+processing: AEC3, NS, AGC2, high-pass), `nnnoiseless` (RNNoise), `deep_filter` with `tract`
+(DeepFilterNet3, its model built in), `opus` (libopus 1.6).
 
 **Stream sound** has its own thread: 48 kHz stereo capture, Opus 128 kbps stereo
 (`Application::Audio`), paused during silence. On Windows it uses WASAPI *process

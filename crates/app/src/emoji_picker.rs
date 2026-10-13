@@ -36,7 +36,7 @@ pub fn custom_text(name: &str, id: &str, animated: bool) -> String {
 }
 
 /// Group icons for the category bar.
-const GROUP_ICONS: [&str; 9] = ["😀", "👋", "🐻", "🍔", "⚽", "🚗", "💡", "❤\u{fe0f}", "🏁"];
+const GROUP_ICONS: [&str; 9] = ["😀", "👋", "🦝", "🍔", "⚽", "🚗", "💡", "❤\u{fe0f}", "🏁"];
 const TONE_HANDS: [&str; 6] = ["👏", "👏🏻", "👏🏼", "👏🏽", "👏🏾", "👏🏿"];
 
 impl IngleApp {

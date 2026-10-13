@@ -729,10 +729,15 @@ impl Db {
 
     // ------------------------------------------------------------- channels
 
+    /// The channels, each with its newest message (for unread markers in `Ready`).
     pub fn channels(&self) -> Vec<Channel> {
         let c = self.conn.lock();
         let mut st = c
-            .prepare("SELECT id, kind, name, topic, position FROM channels WHERE kind < 2 ORDER BY kind, position, id")
+            .prepare(
+                "SELECT c.id, c.kind, c.name, c.topic, c.position, m.id, m.author \
+                 FROM channels c LEFT JOIN messages m ON m.id = (SELECT MAX(id) FROM messages WHERE channel_id = c.id) \
+                 WHERE c.kind < 2 ORDER BY c.kind, c.position, c.id",
+            )
             .expect("valid SQL");
         st.query_map([], |r| {
             Ok(Channel {
@@ -741,6 +746,8 @@ impl Db {
                 name: r.get(2)?,
                 topic: r.get(3)?,
                 position: r.get(4)?,
+                last_message: r.get(5)?,
+                last_from: r.get(6)?,
             })
         })
         .map(|rows| rows.filter_map(|r| r.ok()).collect())
@@ -757,6 +764,8 @@ impl Db {
                     name: r.get(2)?,
                     topic: r.get(3)?,
                     position: r.get(4)?,
+                    last_message: None,
+                    last_from: None,
                 })
             })
             .optional()
@@ -775,7 +784,7 @@ impl Db {
             "INSERT INTO channels(kind, name, topic, position, created_at) VALUES (?1, ?2, '', ?3, ?4)",
             params![kind_to_i(kind), name, position, now_ms()],
         )?;
-        Ok(Channel { id: c.last_insert_rowid(), kind, name: name.to_string(), topic: String::new(), position })
+        Ok(Channel { id: c.last_insert_rowid(), kind, name: name.to_string(), topic: String::new(), position, last_message: None, last_from: None })
     }
 
     pub fn update_channel(&self, id: ChannelId, name: Option<&str>, topic: Option<&str>) -> Result<Option<Channel>> {
@@ -1180,6 +1189,27 @@ mod tests {
         db.create_invite("old", "x", None, Some(1), Role::Member).unwrap();
         assert_eq!(db.redeem_invite("old"), Err(InviteError::Expired));
         assert!(new_invite_code(8).len() == 8);
+    }
+
+    /// Each channel comes with its newest message and who wrote it (what the app marks unread
+    /// after being away), and a deleted newest message hands that over to the one before.
+    #[test]
+    fn channels_know_their_newest_message() {
+        let db = Db::open_in_memory().unwrap();
+        let general = db.create_channel("general", ChannelKind::Text).unwrap().id;
+        let quiet = db.create_channel("quiet", ChannelKind::Text).unwrap().id;
+        let tavern = db.create_channel("tavern", ChannelKind::Voice).unwrap().id;
+        db.insert_message(general, "a", "first", None).unwrap();
+        let second = db.insert_message(general, "b", "second", None).unwrap();
+        let in_voice = db.insert_message(tavern, "c", "in the voice chat", None).unwrap();
+        let newest = |id| db.channels().into_iter().find(|c| c.id == id).map(|c| (c.last_message, c.last_from));
+        assert_eq!(newest(general), Some((Some(second.id), Some("b".to_string()))));
+        assert_eq!(newest(quiet), Some((None, None)));
+        assert_eq!(newest(tavern), Some((Some(in_voice.id), Some("c".to_string()))));
+        let third = db.insert_message(general, "a", "third", None).unwrap();
+        assert_eq!(newest(general), Some((Some(third.id), Some("a".to_string()))));
+        db.delete_message(third.id).unwrap();
+        assert_eq!(newest(general), Some((Some(second.id), Some("b".to_string()))));
     }
 }
 

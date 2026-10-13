@@ -129,20 +129,81 @@ pub struct Shared {
     /// in memory only, so nothing deleted on a server lingers on this PC.
     pub files: Mutex<files::FileCache>,
     sfx: Option<sfx::Sfx>,
-    /// The app's window is in front (messages in the open channel then make no sound).
+    /// The app's window is in front (messages in the open channel then make no sound and
+    /// count as read). Set from the app's frames; see `focus_probe` for when there are none.
     pub window_focused: AtomicBool,
+    /// Asks the system directly whether the window is in front (`None`: it can't tell). The app
+    /// only runs frames while its window is showing, so after it's hidden to the tray or
+    /// minimized `window_focused` still says what the last frame saw.
+    pub focus_probe: Mutex<Option<Box<dyn Fn() -> Option<bool> + Send + Sync>>>,
     /// A direct message conversation just opened with `open_dm`, for the UI to show.
     pub opened_dm: Mutex<Option<(String, ChannelId)>>,
     /// What our screen share is showing (to share it again after a reconnect).
     pub screen_source: Mutex<Option<String>>,
+    /// Counts starts and stops of our [camera, screen share]: a start that's still opening when
+    /// a newer start or a stop comes doesn't go live.
+    video_gen: [AtomicU64; 2],
+    /// Read marks changed that aren't saved yet (see `mark_read`).
+    read_unsaved: AtomicBool,
+}
+
+/// How often changed read marks for channels are saved.
+const READ_MARKS_SAVED_EVERY: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Drop something that can take a moment to let go (a capture, decoders) on a thread of its
+/// own, so neither the UI nor whoever holds a lock waits for it.
+pub(crate) fn drop_later<T: Send + 'static>(x: T) {
+    let _ = std::thread::Builder::new().name("ingle-teardown".into()).spawn(move || drop(x));
 }
 
 impl Shared {
+    /// Whether you can see Ingle right now: its window is in front, not hidden or minimized.
+    pub fn window_in_front(&self) -> bool {
+        if let Some(seen) = self.focus_probe.lock().as_ref().and_then(|p| p()) {
+            return seen;
+        }
+        self.window_focused.load(Ordering::Relaxed)
+    }
+
+    /// Whether you're looking at this conversation right now (open, with the window in front).
+    pub fn looking_at(&self, key: &str, channel_id: ChannelId) -> bool {
+        let open = self.active_view.lock().as_ref().map(|(k, c)| k == key && *c == channel_id).unwrap_or(false);
+        open && self.window_in_front()
+    }
+
+    /// Remember that you've read `channel_id` up to `id` (what comes after is unread after a
+    /// restart). With `save` it's saved at once (direct messages); otherwise within
+    /// `READ_MARKS_SAVED_EVERY`.
+    pub(crate) fn mark_read(&self, key: &str, channel_id: ChannelId, id: MessageId, save: bool) {
+        let mut cfg = self.config.lock();
+        let entry = cfg.last_read.entry(key.to_string()).or_default();
+        if entry.get(&channel_id).map(|seen| *seen < id).unwrap_or(true) {
+            entry.insert(channel_id, id);
+            if save {
+                self.save_config_locked(&cfg);
+            } else {
+                self.read_unsaved.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// A channel just got unread messages: if this PC has no read mark for it yet, everything
+    /// before `id` counts as read (so the unread ones still show after a restart, instead of
+    /// the channel starting out read then).
+    pub(crate) fn mark_read_before(&self, key: &str, channel_id: ChannelId, id: MessageId) {
+        let mut cfg = self.config.lock();
+        let entry = cfg.last_read.entry(key.to_string()).or_default();
+        if !entry.contains_key(&channel_id) {
+            entry.insert(channel_id, id - 1);
+            self.read_unsaved.store(true, Ordering::Relaxed);
+        }
+    }
+
     /// Plays a notification sound, if they're on.
     pub fn play(&self, sound: sfx::Sound) {
         let Some(sfx) = &self.sfx else { return };
         let (on, device, volume) = {
-            let st = self.state.read();
+            let st = self.state.read_recursive();
             (st.settings.sounds, st.settings.output_device.clone(), st.settings.sound_volume)
         };
         if on {
@@ -180,7 +241,7 @@ impl Shared {
     }
 
     pub fn audio_io(&self) -> (AudioInput, AudioOutput) {
-        let settings = self.state.read().settings.clone();
+        let settings = self.state.read_recursive().settings.clone();
         match &self.audio_factory {
             Some(f) => f(&settings),
             None => call::default_audio_io(&settings),
@@ -408,6 +469,10 @@ impl Engine {
         let ptt_down = Arc::new(AtomicBool::new(false));
         let ptt_key = cfg.settings.ptt_key.clone();
         qos::set_enabled(cfg.settings.voice_priority);
+        if cfg.settings.noise_suppression == config::NoiseSuppression::Isolation {
+            // Unpacked in the background now, so joining voice doesn't wait for it.
+            audio::dfn::preload();
+        }
         let entries = cfg.servers.clone();
         let voice_prefs = cfg.self_voice.map(|v| (v.muted, v.deafened)).unwrap_or_default();
         let shared = Arc::new(Shared {
@@ -435,7 +500,26 @@ impl Engine {
             files: Mutex::new(files::FileCache::default()),
             sfx,
             window_focused: AtomicBool::new(true),
+            focus_probe: Mutex::new(None),
+            video_gen: [AtomicU64::new(0), AtomicU64::new(0)],
+            read_unsaved: AtomicBool::new(false),
         });
+        // Read marks for channels are saved a few at a time (reading a busy channel moves them
+        // with every message), so what you've read stays read after a restart or a crash.
+        {
+            let weak = Arc::downgrade(&shared);
+            shared.rt.spawn(async move {
+                let mut tick = tokio::time::interval(READ_MARKS_SAVED_EVERY);
+                loop {
+                    tick.tick().await;
+                    let Some(shared) = weak.upgrade() else { break };
+                    if shared.read_unsaved.swap(false, Ordering::Relaxed) {
+                        let cfg = shared.config.lock();
+                        shared.save_config_locked(&cfg);
+                    }
+                }
+            });
+        }
         for e in entries {
             let h = server::spawn(shared.clone(), e.clone());
             shared.servers.lock().insert(e.key.clone(), h);
@@ -449,6 +533,11 @@ impl Engine {
         Ok(engine)
     }
 
+    /// The shared state, for the UI to draw a frame from. Hold it only while drawing: engine
+    /// methods called meanwhile read it again (never write it), which is why the engine's own
+    /// reads are `read_recursive` — a plain read waits behind a waiting writer, and a thread
+    /// that already holds a read would then wait for itself (Ingle froze that way when a voice
+    /// chime played while voice state was being updated).
     pub fn state(&self) -> RwLockReadGuard<'_, AppState> {
         self.shared.state.read()
     }
@@ -523,7 +612,7 @@ impl Engine {
             .iter()
             .any(|s| s.key == key && s.host == link.host && s.port == link.port);
         let live = self.shared.servers.lock().contains_key(&key)
-            && self.shared.state.read().server(&key).map(|s| !matches!(s.status, ConnStatus::Failed(_))).unwrap_or(false);
+            && self.shared.state.read_recursive().server(&key).map(|s| !matches!(s.status, ConnStatus::Failed(_))).unwrap_or(false);
         if same_address && live {
             return Ok(key);
         }
@@ -578,7 +667,7 @@ impl Engine {
     }
 
     pub fn remove_server(&self, key: &str) {
-        if self.shared.state.read().call.as_ref().map(|c| c.server_key == key).unwrap_or(false) {
+        if self.shared.state.read_recursive().call.as_ref().map(|c| c.server_key == key).unwrap_or(false) {
             self.leave_voice();
         }
         if let Some(h) = self.shared.servers.lock().remove(key) {
@@ -831,7 +920,7 @@ impl Engine {
     /// Servers (connected, with friends) where we're both members; ones where something is
     /// already recorded between us first.
     fn shared_servers(&self, uid: &str) -> Vec<String> {
-        let st = self.shared.state.read();
+        let st = self.shared.state.read_recursive();
         let mut v: Vec<(bool, String)> = st
             .servers
             .iter()
@@ -852,7 +941,7 @@ impl Engine {
 
     pub fn accept_friend(&self, uid: &str) {
         let keys: Vec<String> = {
-            let st = self.shared.state.read();
+            let st = self.shared.state.read_recursive();
             st.servers.iter().filter(|s| s.relations.get(uid) == Some(&RelationKind::Incoming)).map(|s| s.key.clone()).collect()
         };
         for k in keys {
@@ -863,7 +952,7 @@ impl Engine {
     /// Declines, cancels or unfriends, everywhere.
     pub fn remove_friend(&self, uid: &str) {
         let keys: Vec<String> = {
-            let st = self.shared.state.read();
+            let st = self.shared.state.read_recursive();
             st.servers
                 .iter()
                 .filter(|s| matches!(s.relations.get(uid), Some(RelationKind::Friend | RelationKind::Incoming | RelationKind::Outgoing)))
@@ -886,7 +975,7 @@ impl Engine {
     pub fn unblock(&self, uid: &str) {
         self.set_blocked_locally(uid, false);
         let keys: Vec<String> = {
-            let st = self.shared.state.read();
+            let st = self.shared.state.read_recursive();
             st.servers.iter().filter(|s| s.has(FRIENDS_FEATURE) && s.status.is_connected()).map(|s| s.key.clone()).collect()
         };
         for k in keys {
@@ -963,7 +1052,9 @@ impl Engine {
         let k = key.to_string();
         self.request_then(key, Request::FetchHistory { channel_id, before, limit: 50 }, move |shared, ev| {
             let mut st = shared.state.write();
+            let mut newest = None;
             if let Some(s) = st.server_mut(&k) {
+                let dm = s.dm(channel_id).is_some();
                 let log = s.logs.entry(channel_id).or_default();
                 log.loading = false;
                 if let Event::History { messages, complete, .. } = ev {
@@ -977,9 +1068,16 @@ impl Engine {
                     for m in messages {
                         log.upsert(m);
                     }
+                    if !older {
+                        newest = log.messages.last().map(|m| (m.id, dm));
+                    }
                 }
             }
             drop(st);
+            // Opened before its messages arrived: they're read now that you can see them.
+            if let Some((id, dm)) = newest.filter(|_| shared.looking_at(&k, channel_id)) {
+                shared.mark_read(&k, channel_id, id, dm);
+            }
             (shared.repaint)();
         });
     }
@@ -998,6 +1096,12 @@ impl Engine {
     /// Whether the window is in front (see `Shared::window_focused`).
     pub fn set_window_focused(&self, focused: bool) {
         self.shared.window_focused.store(focused, Ordering::Relaxed);
+    }
+
+    /// How to ask the system whether the window is in front, for when the app isn't running
+    /// frames (see `Shared::focus_probe`).
+    pub fn set_focus_probe(&self, probe: impl Fn() -> Option<bool> + Send + Sync + 'static) {
+        *self.shared.focus_probe.lock() = Some(Box::new(probe));
     }
 
     /// Mutes or unmutes a whole server (`channel` none) or one channel or conversation.
@@ -1042,7 +1146,7 @@ impl Engine {
     /// Opens (starting it if needed) the direct message conversation with a member of this
     /// server; `take_opened_dm` then says which to show.
     pub fn open_dm(&self, key: &str, user_id: &str) {
-        let known = self.shared.state.read().server(key).and_then(|s| s.dm_with(user_id)).map(|d| d.id);
+        let known = self.shared.state.read_recursive().server(key).and_then(|s| s.dm_with(user_id)).map(|d| d.id);
         if let Some(id) = known {
             *self.shared.opened_dm.lock() = Some((key.to_string(), id));
             (self.shared.repaint)();
@@ -1067,12 +1171,23 @@ impl Engine {
 
     /// Nothing in particular is being looked at (the friends list, settings...).
     pub fn clear_active_channel(&self) {
-        *self.shared.active_view.lock() = None;
+        let left = self.shared.active_view.lock().take();
+        if let Some((k, c)) = left {
+            self.left_view(&k, c);
+        }
     }
 
-    /// Tell the engine what the user is looking at (clears unread markers there).
+    /// Tell the engine what the user is looking at. Its unread markers clear once the window is
+    /// in front: what comes in while you're in another window stays unread until you're back.
     pub fn set_active_channel(&self, key: &str, channel_id: ChannelId) {
-        *self.shared.active_view.lock() = Some((key.to_string(), channel_id));
+        let here = (key.to_string(), channel_id);
+        let left = self.shared.active_view.lock().replace(here.clone());
+        if let Some((k, c)) = left.filter(|l| *l != here) {
+            self.left_view(&k, c);
+        }
+        if !self.shared.window_in_front() {
+            return;
+        }
         let newest = {
             let mut st = self.shared.state.write();
             let Some(s) = st.server_mut(key) else { return };
@@ -1081,13 +1196,18 @@ impl Engine {
             s.logs.get(&channel_id).and_then(|l| l.messages.last().map(|m| m.id))
         };
         if let Some(id) = newest {
-            let mut cfg = self.shared.config.lock();
-            let entry = cfg.last_read.entry(key.to_string()).or_default();
-            if entry.get(&channel_id) != Some(&id) {
-                entry.insert(channel_id, id);
-                // Saved now, so read messages don't come back as unread after a crash or an
-                // update restart.
-                self.shared.save_config_locked(&cfg);
+            // Saved now, so read messages don't come back as unread after a crash or an update
+            // restart.
+            self.shared.mark_read(key, channel_id, id, true);
+        }
+    }
+
+    /// You moved on from a conversation: its "NEW" line goes, once what it marked was seen.
+    fn left_view(&self, key: &str, channel_id: ChannelId) {
+        let mut st = self.shared.state.write();
+        if let Some(s) = st.server_mut(key) {
+            if !s.unread.contains(&channel_id) && !s.mentions.contains_key(&channel_id) {
+                s.new_since.remove(&channel_id);
             }
         }
     }
@@ -1224,7 +1344,7 @@ impl Engine {
 
     /// Where backups of this server go.
     pub fn backup_folder(&self, key: &str) -> std::path::PathBuf {
-        let name = self.shared.state.read().server(key).map(|s| s.info.name.clone()).unwrap_or_default();
+        let name = self.shared.state.read_recursive().server(key).map(|s| s.info.name.clone()).unwrap_or_default();
         backup::folder(&self.shared, key, &name)
     }
 
@@ -1311,7 +1431,7 @@ impl Engine {
     }
 
     pub fn start_camera(&self) {
-        let settings = self.shared.state.read().settings.clone();
+        let settings = self.shared.state.read_recursive().settings.clone();
         let device = settings.camera_device.clone().or_else(|| {
             let cams = video::list_cameras();
             cams.first().map(|c| c.0.clone())
@@ -1327,7 +1447,7 @@ impl Engine {
 
     pub fn start_screen(&self, source_id: &str) {
         *self.shared.screen_source.lock() = Some(source_id.to_string());
-        let preset = self.shared.state.read().settings.screen_preset;
+        let preset = self.shared.state.read_recursive().settings.screen_preset;
         let (max_h, fps, bitrate) = preset.params();
         let cfg = PublisherConfig { screen: true, max_width: max_h * 16 / 9 + 8, max_height: max_h, fps, bitrate };
         self.start_video(track::SCREEN, source_id, cfg);
@@ -1336,22 +1456,53 @@ impl Engine {
     fn start_video(&self, track_id: u8, source: &str, cfg: PublisherConfig) {
         let shared = self.shared.clone();
         let source = source.to_string();
-        // Opening a camera can block for a while; keep the UI responsive.
+        let which = (track_id == track::SCREEN) as usize;
+        // This start wins over any earlier one still opening.
+        let generation = shared.video_gen[which].fetch_add(1, Ordering::SeqCst) + 1;
+        // Opening a camera or a capture can take seconds: never on the UI thread, and never while
+        // holding the call (the UI, voice and the network need it meanwhile).
         self.shared.rt.spawn_blocking(move || {
-            let result = {
-                let mut guard = shared.call.lock();
-                match guard.as_mut() {
-                    Some(c) => {
-                        c.stop_video(&shared, track_id);
-                        c.start_video(&shared, track_id, &source, cfg)
+            let current = || shared.video_gen[which].load(Ordering::SeqCst) == generation;
+            // What's being sent now stops first (a camera can't be opened twice).
+            let (ctx, old) = match shared.call.lock().as_mut() {
+                Some(c) => (Some(c.video_ctx()), Some(c.take_video(&shared, track_id))),
+                None => (None, None),
+            };
+            drop(old);
+            let what = if track_id == track::SCREEN { "share your screen" } else { "start your camera" };
+            let Some(ctx) = ctx else {
+                shared.state.write().toast(format!("Couldn't {what}: join a voice channel first"), true);
+                return;
+            };
+            if !current() {
+                return;
+            }
+            let installed = match ctx.start(&shared, track_id, &source, cfg) {
+                Ok((out, info)) => {
+                    let mut call = shared.call.lock();
+                    match call.as_mut() {
+                        // Still in the same call, and nobody pressed stop meanwhile.
+                        Some(c) if c.session == ctx.session && current() => {
+                            let replaced = c.install_video(track_id, out, info);
+                            drop(call);
+                            drop(replaced);
+                            true
+                        }
+                        _ => {
+                            drop(call);
+                            drop(out);
+                            false
+                        }
                     }
-                    None => Err(anyhow::anyhow!("join a voice channel first")),
+                }
+                Err(e) => {
+                    if current() {
+                        shared.state.write().toast(format!("Couldn't {what}: {e:#}"), true);
+                    }
+                    false
                 }
             };
-            if let Err(e) = result {
-                let what = if track_id == track::SCREEN { "share your screen" } else { "start your camera" };
-                shared.state.write().toast(format!("Couldn't {what}: {e:#}"), true);
-            } else if track_id == track::SCREEN && shared.state.read().settings.share_audio {
+            if installed && track_id == track::SCREEN && shared.state.read_recursive().settings.share_audio {
                 // Sound for the stream. Started without holding the call lock, since the
                 // system can take a moment to set up capture.
                 if let Some(src) = stream_audio_source(&source) {
@@ -1375,16 +1526,20 @@ impl Engine {
     }
 
     pub fn stop_camera(&self) {
-        if let Some(c) = self.shared.call.lock().as_mut() {
-            c.stop_video(&self.shared, track::CAMERA);
-        }
-        self.shared.refresh_call_view();
+        self.stop_video(track::CAMERA);
     }
 
     pub fn stop_screen(&self) {
-        if let Some(c) = self.shared.call.lock().as_mut() {
-            c.stop_video(&self.shared, track::SCREEN);
-        }
+        self.stop_video(track::SCREEN);
+    }
+
+    /// Stop sending our camera or screen share. Quick on the calling (UI) thread: capture lets
+    /// go on a thread of its own.
+    fn stop_video(&self, track_id: u8) {
+        // A start that's still opening doesn't go live after this.
+        self.shared.video_gen[(track_id == track::SCREEN) as usize].fetch_add(1, Ordering::SeqCst);
+        let old = self.shared.call.lock().as_mut().map(|c| c.take_video(&self.shared, track_id));
+        drop_later(old);
         self.shared.refresh_call_view();
     }
 
@@ -1405,7 +1560,7 @@ impl Engine {
         }
         self.shared.state.write().stream_volumes.insert(user_id.to_string(), volume);
         let sessions: Vec<SessionId> = {
-            let st = self.shared.state.read();
+            let st = self.shared.state.read_recursive();
             st.call
                 .as_ref()
                 .and_then(|c| st.server(&c.server_key))
@@ -1430,7 +1585,7 @@ impl Engine {
         }
         self.shared.state.write().user_volumes.insert(user_id.to_string(), volume);
         let sessions: Vec<SessionId> = {
-            let st = self.shared.state.read();
+            let st = self.shared.state.read_recursive();
             st.call
                 .as_ref()
                 .and_then(|c| st.server(&c.server_key))
@@ -1449,7 +1604,7 @@ impl Engine {
     // ------------------------------------------------------------ settings
 
     pub fn update_settings(&self, settings: Settings) {
-        let old = self.shared.state.read().settings.clone();
+        let old = self.shared.state.read_recursive().settings.clone();
         if old == settings {
             return;
         }
@@ -1460,6 +1615,9 @@ impl Engine {
         }
         self.shared.state.write().settings = settings.clone();
         qos::set_enabled(settings.voice_priority);
+        if settings.noise_suppression == config::NoiseSuppression::Isolation && old.noise_suppression != settings.noise_suppression {
+            audio::dfn::preload();
+        }
         // Restart audio so device/processing changes take effect.
         let audio_changed = old.input_device != settings.input_device
             || old.output_device != settings.output_device
@@ -1504,7 +1662,7 @@ impl Engine {
             }
             return;
         }
-        let settings = self.shared.state.read().settings.clone();
+        let settings = self.shared.state.read_recursive().settings.clone();
         let (input, output) = self.shared.audio_io();
         let engine = AudioEngine::start(settings, input, output, Box::new(|_, _, _| {}), self.shared.ptt_down.clone());
         engine.controls.monitor.store(true, Ordering::Relaxed);
@@ -1535,28 +1693,42 @@ impl Engine {
     /// A live preview of a screen or window in the share picker (`None` stops it). A few
     /// frames a second, without the "you're sharing" frame; nothing is sent anywhere.
     pub fn preview_screen(&self, source: Option<&str>) {
-        let mut p = self.shared.screen_preview.lock();
-        if p.as_ref().map(|x| x.0.as_str()) == source {
-            return;
-        }
-        *p = None;
-        let Some(source) = source else { return };
-        let slot = Arc::new(video::FrameSlot::default());
-        *p = Some((source.to_string(), None, slot.clone()));
-        drop(p);
-        let (shared, source) = (self.shared.clone(), source.to_string());
-        self.shared.rt.spawn_blocking(move || {
-            let cap = video::capture::start_screen(&source, 4, slot).map(|c| c.without_border());
-            let mut p = shared.screen_preview.lock();
-            match (p.as_mut(), cap) {
-                // Still the one wanted: keep it running.
-                (Some(x), Ok(c)) if x.0 == source => x.1 = Some(c),
-                (_, Err(e)) => tracing::info!("no preview of {source}: {e:#}"),
-                _ => {}
+        let old = {
+            let mut p = self.shared.screen_preview.lock();
+            if p.as_ref().map(|x| x.0.as_str()) == source {
+                return;
             }
-            drop(p);
-            (shared.repaint)();
-        });
+            let old = p.take();
+            if let Some(source) = source {
+                let slot = Arc::new(video::FrameSlot::default());
+                *p = Some((source.to_string(), None, slot.clone()));
+                let (shared, source) = (self.shared.clone(), source.to_string());
+                self.shared.rt.spawn_blocking(move || {
+                    let cap = video::capture::start_screen(&source, 4, slot.clone()).map(|c| c.without_border());
+                    let unwanted = {
+                        let mut p = shared.screen_preview.lock();
+                        match (p.as_mut(), cap) {
+                            // Still the one wanted (this very request): keep it running.
+                            (Some(x), Ok(c)) if Arc::ptr_eq(&x.2, &slot) && x.1.is_none() => {
+                                x.1 = Some(c);
+                                None
+                            }
+                            (_, Ok(c)) => Some(c),
+                            (_, Err(e)) => {
+                                tracing::info!("no preview of {source}: {e:#}");
+                                None
+                            }
+                        }
+                    };
+                    // Stopping a capture waits for it: never while holding the preview.
+                    drop(unwanted);
+                    (shared.repaint)();
+                });
+            }
+            old
+        };
+        // The one being replaced stops on a thread of its own (this is the UI thread).
+        drop_later(old);
     }
 
     /// The preview's newest frame, scaled to at most `max_w` wide, as RGBA.
@@ -1619,7 +1791,7 @@ const AVATAR_FILE: &str = "avatar.png";
 /// People blocked on this PC are blocked on every server too (one joined later, say).
 pub(crate) fn sync_blocks(shared: &Arc<Shared>, key: &str) {
     let todo: Vec<String> = {
-        let st = shared.state.read();
+        let st = shared.state.read_recursive();
         let Some(s) = st.server(key).filter(|s| s.has(FRIENDS_FEATURE)) else { return };
         st.blocked.iter().filter(|u| s.members.contains_key(*u) && s.relations.get(*u) != Some(&RelationKind::Blocked)).cloned().collect()
     };
@@ -1648,7 +1820,7 @@ pub(crate) fn resume_voice(shared: Arc<Shared>, key: String) {
     let rt = shared.rt.clone();
     rt.spawn(async move {
         // The channel may be gone, or the server may say no now.
-        let exists = shared.state.read().server(&key).map(|s| s.channel(r.channel_id).is_some()).unwrap_or(false);
+        let exists = shared.state.read_recursive().server(&key).map(|s| s.channel(r.channel_id).is_some()).unwrap_or(false);
         let result = if exists { Call::join(shared.clone(), key.clone(), r.channel_id).await } else { Err(anyhow::anyhow!("the channel is gone")) };
         {
             let mut st = shared.state.write();
@@ -1682,7 +1854,7 @@ pub(crate) fn sync_avatar(shared: Arc<Shared>, key: String) {
     let rt = shared.rt.clone();
     rt.spawn(async move {
         let (has_feature, current) = {
-            let st = shared.state.read();
+            let st = shared.state.read_recursive();
             match st.server(&key) {
                 Some(s) => (s.has(ingle_proto::control::AVATARS_FEATURE), s.me.as_ref().and_then(|m| m.avatar.clone())),
                 None => return,

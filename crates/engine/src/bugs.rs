@@ -28,10 +28,20 @@ pub fn can_report() -> bool {
 
 /// The end of this app's log (for a report, if they agree).
 pub fn log_tail(shared: &Shared, max: usize) -> String {
-    let text = std::fs::read_to_string(shared.config_dir.join("ingle.log")).unwrap_or_default();
+    // The run before this one too: after a freeze or a crash, that's the one that says what
+    // happened (the app keeps it as ingle.previous.log).
+    let previous = tail_of(&shared.config_dir.join("ingle.previous.log"), max / 3);
+    let label = "--- the run before ---\n";
+    let rest = max.saturating_sub(previous.len() + label.len() + 40);
+    let current = tail_of(&shared.config_dir.join("ingle.log"), rest);
+    if previous.is_empty() { current } else { format!("{label}{previous}\n--- this run ---\n{current}") }
+}
+
+/// The last `max` bytes of a text file, from the start of a line.
+fn tail_of(path: &std::path::Path, max: usize) -> String {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
     let start = text.len().saturating_sub(max);
     let start = (start..text.len()).find(|i| text.is_char_boundary(*i)).unwrap_or(text.len());
-    // From the start of a line.
     let tail = &text[start..];
     tail.find('\n').filter(|_| start > 0).map(|i| &tail[i + 1..]).unwrap_or(tail).to_string()
 }

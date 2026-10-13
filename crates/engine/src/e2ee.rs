@@ -17,8 +17,8 @@ struct Peer {
     uid: String,
     session_pub: [u8; 32],
     verified: bool,
-    /// (epoch, secret, received)
-    epochs: Vec<(u16, [u8; 32], Instant)>,
+    /// (epoch, secret, when a newer one replaced it)
+    epochs: Vec<(u16, [u8; 32], Option<Instant>)>,
     keys: HashMap<(u16, u8), MediaKey>,
 }
 
@@ -136,9 +136,17 @@ impl E2ee {
         else {
             return false;
         };
+        // The sender goes on using its current key until the new one activates, and some of
+        // what it sealed with it is still on its way: older keys stay usable for KEEP_OLD after
+        // a newer one arrives. (They used to count from when they themselves arrived, so a key
+        // that had been in use a while went the moment the next one came, and a moment of
+        // everyone's sound was lost whenever someone joined or left.)
         let now = Instant::now();
-        p.epochs.retain(|(e, _, t)| *e != epoch && now.duration_since(*t) < KEEP_OLD);
-        p.epochs.push((epoch, secret, now));
+        for (_, _, replaced) in p.epochs.iter_mut() {
+            replaced.get_or_insert(now);
+        }
+        p.epochs.retain(|(e, _, replaced)| *e != epoch && replaced.is_none_or(|t| now.duration_since(t) < KEEP_OLD));
+        p.epochs.push((epoch, secret, None));
         p.keys.retain(|(e, _), _| p.epochs.iter().any(|(pe, _, _)| pe == e));
         true
     }
@@ -179,6 +187,20 @@ impl E2ee {
             p.keys.insert((epoch, track), MediaKey::derive(secret, track));
         }
         p.keys.get(&(epoch, track))?.open(seq, aad, ct)
+    }
+
+    /// Why media from `from` sealed with `epoch` doesn't open, for the log.
+    pub fn why_not(&self, from: SessionId, epoch: u16) -> String {
+        match self.peers.get(&from) {
+            None => "they aren't in the call as far as this end knows".into(),
+            Some(p) if !p.verified => "their call key isn't signed by them".into(),
+            Some(p) if p.epochs.is_empty() => "they haven't sent this end a key yet".into(),
+            Some(p) if !p.epochs.iter().any(|(e, _, _)| *e == epoch) => {
+                let have: Vec<u16> = p.epochs.iter().map(|(e, _, _)| *e).collect();
+                format!("no key for their epoch {epoch} (have {have:?})")
+            }
+            Some(_) => "it doesn't open with their key".into(),
+        }
     }
 
     /// Code everyone in the call can compare to rule out interception.
@@ -254,6 +276,45 @@ mod tests {
             }
         }
         assert!(b.open(1, epoch, track::MIC, 5, &h[..AAD_LEN], &ct).is_some(), "old epoch still valid briefly");
+    }
+
+    /// A key that has been in use for a long time still opens what was sealed with it for a
+    /// while after the next one arrives (the sender keeps using it until the new one
+    /// activates), and goes some time after that.
+    #[test]
+    fn long_used_keys_outlive_the_next_one_briefly() {
+        let (ia, ib) = (Identity::generate(), Identity::generate());
+        let (mut a, mut b) = (E2ee::new(&ia, 9), E2ee::new(&ib, 9));
+        a.set_my_session(1);
+        b.set_my_session(2);
+        a.upsert_peer(&participant(&b, 2, &ib));
+        b.upsert_peer(&participant(&a, 1, &ia));
+        let (e1, keys) = a.rotate();
+        assert!(b.receive_key(1, e1, &keys[0].nonce, &keys[0].ct));
+        std::thread::sleep(ACTIVATE_DELAY + Duration::from_millis(20));
+        let epoch = a.current_epoch();
+        assert_eq!(epoch, e1);
+        let h = AudioHeader { track: track::MIC, flags: 0, epoch, seq: 9, session: 0 }.to_bytes();
+        let ct = a.seal(track::MIC, 9, &h[..AAD_LEN], b"opus");
+        assert_eq!(b.why_not(1, e1 + 1), format!("no key for their epoch {} (have [{e1}])", e1 + 1));
+        assert_eq!(b.why_not(5, e1), "they aren't in the call as far as this end knows");
+
+        // A has used that key for a minute when someone joins and it rotates.
+        let (e2, keys) = a.rotate();
+        assert!(b.receive_key(1, e2, &keys[0].nonce, &keys[0].ct));
+        assert!(b.open(1, epoch, track::MIC, 9, &h[..AAD_LEN], &ct).is_some(), "the key in use is gone the moment the next arrived");
+
+        // Long after it was replaced, the next key to arrive clears it out.
+        for (e, _, replaced) in b.peers.get_mut(&1).unwrap().epochs.iter_mut() {
+            if *e == e1 {
+                *replaced = Some(Instant::now() - KEEP_OLD - Duration::from_secs(1));
+            }
+        }
+        let (e3, keys) = a.rotate();
+        assert!(b.receive_key(1, e3, &keys[0].nonce, &keys[0].ct));
+        let have: Vec<u16> = b.peers[&1].epochs.iter().map(|(e, _, _)| *e).collect();
+        assert_eq!(have, vec![e2, e3]);
+        assert!(b.open(1, epoch, track::MIC, 9, &h[..AAD_LEN], &ct).is_none());
     }
 
     #[test]

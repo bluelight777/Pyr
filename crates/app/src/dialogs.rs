@@ -619,6 +619,9 @@ impl IngleApp {
         draft.recent_emoji = st.settings.recent_emoji.clone();
         draft.emoji_tone = st.settings.emoji_tone;
         draft.giphy_key = st.settings.giphy_key.clone();
+        draft.spellcheck = st.settings.spellcheck;
+        draft.spell_language = st.settings.spell_language.clone();
+        draft.spell_words = st.settings.spell_words.clone();
         let before = draft.clone();
         let mut t = tab;
         ui.horizontal(|ui| {
@@ -781,8 +784,9 @@ impl IngleApp {
                 if draft.noise_suppression == NoiseSuppression::Isolation {
                     ui.label(
                         RichText::new(
-                            "Only your voice gets through: TVs, people talking in the room and sounds between your words are cut. \
-                             Someone talking right next to you as loudly as you can still be heard. Try it with Let's check.",
+                            "Only your voice gets through: typing, mouse clicks, fans, machines, TVs, people talking in the room \
+                             and sounds between your words are cut. Someone talking right next to you as loudly as you can still be \
+                             heard. Try it with Let's check.",
                         )
                         .size(12.0)
                         .color(theme::DIM),
@@ -924,7 +928,11 @@ impl IngleApp {
                 ui.label(RichText::new("Text messages are stored on the server you're talking on (like Discord), not end-to-end encrypted.").size(12.0).color(theme::DIM));
                 ui.add_space(6.0);
                 ui.label(
-                    RichText::new("Emoji graphics: Twemoji by Twitter, Inc. and other contributors, licensed CC-BY 4.0. Emoji names: Emojibase (MIT). GIF search powered by GIPHY.")
+                    RichText::new(
+                        "Emoji graphics: Twemoji by Twitter, Inc. and other contributors, licensed CC-BY 4.0. Emoji names: Emojibase (MIT). \
+                         GIF search powered by GIPHY. Voice isolation: DeepFilterNet (MIT/Apache-2.0) and RNNoise (BSD). Spellcheck: \
+                         spellbook (MPL-2.0) with dictionaries from SCOWL (MIT/BSD), RLA-ES (MPL-1.1) and Grammalecte (MPL-2.0).",
+                    )
                         .size(12.0)
                         .color(theme::DIM),
                 );
@@ -1210,9 +1218,7 @@ impl IngleApp {
                 crate::create::open_folder(&folder);
             }
             if ui.button("Change folder…").on_hover_text("A OneDrive, Dropbox or Google Drive folder keeps a copy online too").clicked() {
-                if let Some(d) = rfd::FileDialog::new().set_title("Where to keep server backups").pick_folder() {
-                    self.engine.set_backup_dir(Some(d));
-                }
+                crate::images::pick_folder_async(crate::images::FolderFor::Backups, "Where to keep server backups", ui.ctx());
             }
         });
         ui.add_space(8.0);

@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/proto", "crates/server", "crates/engine", "crates/host", "crates/app"]
 
 [workspace.package]
-version = "0.6.3"
+version = "0.6.4"
 edition = "2024"
 rust-version = "1.91"
 license = "MIT OR Apache-2.0"
@@ -11,11 +11,21 @@ authors = ["Firelit Games, LLC"]
 
 [profile.dev]
 opt-level = 1
+# Line numbers for backtraces, without full debug info: every test is its own executable, and
+# with full debug info they filled the disk.
+debug = "line-tables-only"
 
 # Media code (Opus, OpenH264, RNNoise, AEC) is unusably slow unoptimised,
 # so dependencies are always built with full optimisation.
 [profile.dev.package."*"]
 opt-level = 3
+debug = false
+
+# tract (which runs voice isolation's model) double-checks its graphs when debug assertions
+# are on, and DeepFilterNet3's graph trips a naming check that release builds never run. Test
+# builds load the model the way the app does.
+[profile.dev.package.tract-core]
+debug-assertions = false
 
 [profile.release]
 opt-level = 3

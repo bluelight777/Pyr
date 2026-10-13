@@ -203,6 +203,10 @@ pub struct UiState {
     pub friend_search: String,
     /// Emoji names being edited in server settings, by emoji id.
     pub emoji_names: HashMap<String, String>,
+    /// Spellcheck for the message box.
+    pub spell: crate::spell::Speller,
+    /// What the message box's right-click menu was opened on.
+    pub composer_menu: Option<crate::chat::ComposerMenu>,
 }
 
 pub struct IngleApp {
@@ -228,6 +232,9 @@ pub struct IngleApp {
     resume: Option<(crate::update::Resume, Instant)>,
     /// Join / leave / stream chimes.
     voice_sounds: crate::sounds::VoiceSounds,
+    /// The window's title, and what it shows now (with what's unread, see `unread::Unread`).
+    title: String,
+    title_shown: String,
 }
 
 impl IngleApp {
@@ -237,6 +244,7 @@ impl IngleApp {
         initial_join: Option<String>,
         tray: Option<crate::tray::Tray>,
         updater: crate::update::Updater,
+        title: String,
     ) -> IngleApp {
         engine.refresh_devices();
         let resume = crate::update::take_resume(&engine.shared.config_dir).map(|r| (r, Instant::now()));
@@ -255,6 +263,8 @@ impl IngleApp {
             update_seen: None,
             resume,
             voice_sounds: Default::default(),
+            title_shown: title.clone(),
+            title,
         }
     }
 
@@ -503,6 +513,7 @@ impl IngleApp {
 
 impl eframe::App for IngleApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        crate::watchdog::step("starting a frame");
         let engine = self.engine.clone();
         let mut acts: Vec<Act> = Vec::new();
         for e in ingle_engine::errors::take() {
@@ -577,6 +588,17 @@ impl eframe::App for IngleApp {
                 }
             }
         }
+        // Folders chosen in a dialog (opened between frames).
+        for (what, dir) in crate::images::take_folders() {
+            match what {
+                crate::images::FolderFor::Backups => engine.set_backup_dir(Some(dir)),
+                crate::images::FolderFor::Restore => {
+                    if let Some(c) = self.ui.create.as_mut() {
+                        c.set_restore(dir);
+                    }
+                }
+            }
+        }
         // A direct message conversation was opened (from the member list or friends): show it.
         if let Some((key, id)) = engine.take_opened_dm() {
             self.ui.home = true;
@@ -585,16 +607,32 @@ impl eframe::App for IngleApp {
         }
         ctx.request_repaint_after(std::time::Duration::from_secs(1));
         crate::titlebar::show(ctx, ingle_proto::APP_NAME);
-        {
+        crate::watchdog::step("waiting to read the shared state");
+        let chimes = {
             let st = engine.state();
-            self.voice_sounds.step(&st, &engine);
+            crate::watchdog::step("drawing the window");
+            let chimes = self.voice_sounds.step(&st);
             self.frame_ui(ctx, &st, &mut acts);
+            // The title (on the taskbar button and in Alt+Tab) says when something's unread.
+            let title = crate::unread::Unread::of(&st).title(&self.title);
+            if title != self.title_shown {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+                self.title_shown = title;
+            }
+            chimes
+        };
+        crate::watchdog::step("playing sounds");
+        // Only now that the state is let go (see Engine::state).
+        for c in chimes {
+            engine.play_sound(c);
         }
         let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true) && !i.viewport().minimized.unwrap_or(false));
         engine.set_window_focused(focused);
+        crate::watchdog::step("doing what was clicked");
         for a in acts {
             self.apply(a, ctx);
         }
+        crate::watchdog::step("in a file dialog");
         crate::images::run_wanted_dialog();
         // Drop textures for tiles that are gone.
         let live: Vec<VideoKey> = self.textures.keys().copied().collect();
@@ -605,6 +643,8 @@ impl eframe::App for IngleApp {
         }
         // Keep animating while toasts/typing indicators/speaking rings are visible.
         ctx.request_repaint_after(Duration::from_millis(250));
+        // eframe paints the frame after this returns, then waits for the next one.
+        crate::watchdog::step("painting or idle");
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -872,6 +912,9 @@ impl IngleApp {
                             .show_separator_line(false)
                             .frame(egui::Frame::new().fill(theme::MAIN))
                             .show(ctx, |ui| self.chat_view(ui, st, &server, call.channel_id, true, acts));
+                    } else if self.ui.active_view.is_some() {
+                        // No chat on screen: what comes in meanwhile is unread, wherever it is.
+                        acts.push(Act::ClearActive);
                     }
                     egui::CentralPanel::default()
                         .frame(egui::Frame::new().fill(theme::STAGE))
@@ -890,6 +933,9 @@ impl IngleApp {
                         match channel {
                             Some(c) => self.chat_view(ui, st, &server, c, false, acts),
                             None => {
+                                if self.ui.active_view.is_some() {
+                                    acts.push(Act::ClearActive);
+                                }
                                 ui.centered_and_justified(|ui| {
                                     let msg = short_status(&server.status).map(|s| s.0).unwrap_or_else(|| "No channels yet.".into());
                                     ui.label(RichText::new(msg).color(theme::MUTED));
@@ -900,6 +946,9 @@ impl IngleApp {
                 }
             }
             None => {
+                if self.ui.active_view.is_some() {
+                    acts.push(Act::ClearActive);
+                }
                 egui::CentralPanel::default()
                     .frame(egui::Frame::new().fill(theme::MAIN))
                     .show(ctx, |ui| self.welcome(ui, st, acts));
@@ -1120,6 +1169,37 @@ impl IngleApp {
             if resp.on_hover_text("Direct messages").clicked() {
                 self.ui.home = true;
             }
+            // Unread direct messages under it, by who sent them (like Discord): their picture
+            // with how many, wherever you are. Click to read.
+            let mut waiting: Vec<(&ServerView, ChannelId, String, u32)> = Vec::new();
+            for s in &st.servers {
+                for d in &s.dms {
+                    let n = s.mentions.get(&d.id).copied().unwrap_or(0);
+                    // (A muted server still lets direct messages through; a muted conversation doesn't.)
+                    let muted = st.muted_channels.contains(&(s.key.clone(), d.id));
+                    if n > 0 && !muted && !st.blocked.contains(&d.with) {
+                        waiting.push((s, d.id, d.with.clone(), n));
+                    }
+                }
+            }
+            for (s, id, with, n) in waiting.into_iter().take(5) {
+                ui.add_space(8.0);
+                let (r, resp) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::click());
+                let name = s.member_name(&with);
+                let face = self.face(ui.ctx(), s, &with);
+                avatar(ui.painter(), r.center(), 24.0, &with, &name, false, theme::RAIL, face);
+                let pill = Rect::from_center_size(pos2(ui.max_rect().left() + 2.0, r.center().y), vec2(4.0, if resp.hovered() { 20.0 } else { 8.0 }));
+                ui.painter().rect_filled(pill, CornerRadius::same(2), theme::TEXT);
+                let c = r.right_bottom() - vec2(6.0, 6.0);
+                ui.painter().circle_filled(c, 9.0, theme::RAIL);
+                ui.painter().circle_filled(c, 7.5, theme::LIVE);
+                ui.painter().text(c, egui::Align2::CENTER_CENTER, n.min(99).to_string(), theme::bold_font(10.0), Color32::WHITE);
+                let tip = format!("{name}: {n} unread message{}", if n == 1 { "" } else { "s" });
+                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tip).clicked() {
+                    self.ui.home = true;
+                    self.ui.dm = Some((s.key.clone(), id));
+                }
+            }
             ui.add_space(6.0);
             let (sep, _) = ui.allocate_exact_size(vec2(32.0, 2.0), Sense::hover());
             ui.painter().rect_filled(sep, CornerRadius::same(1), theme::LINE);
@@ -1331,10 +1411,14 @@ impl IngleApp {
                     let mentions = s.mentions.get(&c.id).copied().unwrap_or(0);
                     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width() - 8.0, 32.0), Sense::click());
                     let rect = rect.translate(vec2(8.0, 0.0)).with_max_x(rect.right());
-                    let bg = if selected { theme::ELEV2 } else if resp.hovered() { theme::ELEV } else { Color32::TRANSPARENT };
+                    // Hover by where the pointer is, not by which widget has it: over the chat
+                    // bubble the row itself isn't "hovered", and going by that made the bubble
+                    // blink (and miss clicks).
+                    let hot = ui.rect_contains_pointer(rect);
+                    let bg = if selected { theme::ELEV2 } else if hot { theme::ELEV } else { Color32::TRANSPARENT };
                     ui.painter().rect_filled(rect, CornerRadius::same(6), bg);
                     let icon_rect = Rect::from_min_size(rect.left_top() + vec2(8.0, 7.0), vec2(18.0, 18.0));
-                    let fg = if selected || unread || resp.hovered() {
+                    let fg = if selected || unread || hot {
                         theme::TEXT
                     } else if st.is_muted(&s.key, c.id) {
                         theme::DIM
@@ -1352,17 +1436,27 @@ impl IngleApp {
                         let b = Rect::from_center_size(rect.right_center() - vec2(18.0, 0.0), vec2(22.0, 16.0));
                         ui.painter().rect_filled(b, CornerRadius::same(8), theme::LIVE);
                         ui.painter().text(b.center(), egui::Align2::CENTER_CENTER, mentions.to_string(), theme::bold_font(11.0), Color32::WHITE);
-                    } else if unread && kind == ChannelKind::Text {
+                    }
+                    // Unread (text channels, and voice channels' chats): the dot on the left.
+                    if unread || mentions > 0 {
                         let p = pos2(rect.left() - 6.0, rect.center().y);
                         ui.painter().rect_filled(Rect::from_center_size(p, vec2(4.0, 8.0)), CornerRadius::same(2), theme::TEXT);
                     }
                     // Voice channels: a chat bubble opens the channel's text chat without joining.
+                    // Always there to click; shown while the pointer is on the row (or unread).
                     let mut chat_clicked = false;
-                    if kind == ChannelKind::Voice && (resp.hovered() || unread) {
-                        let cr = Rect::from_center_size(rect.right_center() - vec2(16.0, 0.0), vec2(22.0, 22.0));
+                    if kind == ChannelKind::Voice {
+                        // (Left of the mentions badge when there is one.)
+                        let x = if mentions > 0 { 46.0 } else { 16.0 };
+                        let cr = Rect::from_center_size(rect.right_center() - vec2(x, 0.0), vec2(26.0, 26.0));
                         let cresp = ui.interact(cr, ui.id().with(("chat", c.id)), Sense::click());
-                        icons::chat(ui.painter(), cr.shrink(3.0), if cresp.hovered() || unread { theme::TEXT } else { theme::MUTED });
-                        if cresp.on_hover_text("Open chat").clicked() {
+                        if hot || unread {
+                            if cresp.hovered() {
+                                ui.painter().rect_filled(cr, CornerRadius::same(5), theme::ELEV2);
+                            }
+                            icons::chat(ui.painter(), cr.shrink(5.0), if cresp.hovered() || unread { theme::TEXT } else { theme::MUTED });
+                        }
+                        if cresp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Open chat").clicked() {
                             chat_clicked = true;
                         }
                     }

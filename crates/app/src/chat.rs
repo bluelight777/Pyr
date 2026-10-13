@@ -72,6 +72,8 @@ impl IngleApp {
                 name: format!("@{}", s.member_name(w)),
                 topic: String::new(),
                 position: 0,
+                last_message: None,
+                last_from: None,
             })
         });
         let Some(ch) = ch else { return };
@@ -88,19 +90,16 @@ impl IngleApp {
         if loaded {
             self.ui.requested.remove(&(key.clone(), channel));
         }
+        // This is what's on screen (the call's chat beside the call included): what comes in
+        // here counts as read while the window is in front, and anywhere else as unread. Said
+        // again while it has unread messages, which clears them once the window is in front.
         let here = (key.clone(), channel);
-        if s.unread.contains(&channel) || s.mentions.contains_key(&channel) || self.ui.active_view.as_ref() != Some(&here) && !in_call_panel {
+        if s.unread.contains(&channel) || s.mentions.contains_key(&channel) || self.ui.active_view.as_ref() != Some(&here) {
             acts.push(Act::SetActive { key: key.clone(), channel });
-            if !in_call_panel {
-                self.ui.active_view = Some(here);
-            }
+            self.ui.active_view = Some(here);
         }
-        if !in_call_panel {
-            if dm_with.is_none() {
-                self.ui.channel.insert(key.clone(), channel);
-            }
-        } else if s.unread.contains(&channel) {
-            acts.push(Act::SetActive { key: key.clone(), channel });
+        if !in_call_panel && dm_with.is_none() {
+            self.ui.channel.insert(key.clone(), channel);
         }
 
         // Header
@@ -192,6 +191,9 @@ impl IngleApp {
                     }
                     let mut prev: Option<&Message> = None;
                     let msgs = &log.messages;
+                    // The red "NEW" line above the first message that came while you weren't
+                    // looking (it stays until you leave the conversation or write in it).
+                    let mut new_line = s.new_since.get(&channel).copied();
                     let mut i = 0;
                     while i < msgs.len() {
                         let m = &msgs[i];
@@ -230,7 +232,14 @@ impl IngleApp {
                         if new_day {
                             day_divider(ui, &day_label(m.created_at));
                         }
+                        let first_new = new_line.is_some_and(|since| m.id >= since && m.author != st.my_uid);
+                        if first_new {
+                            new_divider(ui);
+                            new_line = None;
+                        }
+                        // After the "NEW" line the name and picture show again: who wrote it.
                         let grouped = !new_day
+                            && !first_new
                             && m.reply_to.is_none()
                             && prev.map(|p| p.author == m.author && m.created_at - p.created_at < GROUP_WINDOW_MS).unwrap_or(false);
                         self.message(ui, st, s, log, m, grouped, &names, acts);
@@ -288,6 +297,11 @@ impl IngleApp {
                 } else {
                     format!("This is the start of the #{} channel.", ch.name)
                 };
+                // The channel's topic first, when it has one (it's also in the header).
+                if !ch.topic.trim().is_empty() {
+                    ui.add(egui::Label::new(RichText::new(ch.topic.trim()).size(15.0).color(theme::TEXT)).wrap());
+                    ui.add_space(2.0);
+                }
                 ui.label(RichText::new(sub).color(theme::MUTED));
             });
         });
@@ -743,10 +757,18 @@ impl IngleApp {
                 {
                     crate::images::pick_async(crate::images::PickFor::Attach(key.clone(), ch.id), true, ui.ctx());
                 }
-                let width = ui.available_width() - 76.0;
+                // Room for the GIF, emoji and send buttons on the right.
+                let width = ui.available_width() - 114.0;
                 let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
                     let job = composer_job(buf.as_str(), wrap);
                     ui.fonts_mut(|f| f.layout_job(job))
+                };
+                // A right-click inside selected text keeps it selected (egui would move the
+                // cursor to the click), so the menu can cut or copy it.
+                let kept_selection = if ui.input(|i| i.pointer.secondary_pressed()) {
+                    egui::text_edit::TextEditState::load(ui.ctx(), composer_id).and_then(|s| s.cursor.char_range()).filter(|r| !r.is_empty())
+                } else {
+                    None
                 };
                 let out = ui
                     .add_enabled_ui(connected, |ui| {
@@ -763,6 +785,132 @@ impl IngleApp {
                     })
                     .inner;
                 let resp = out.response.clone();
+                let pointer_char = |ui: &egui::Ui| {
+                    ui.input(|i| i.pointer.interact_pos()).map(|p| out.galley.cursor_from_pos(p - out.galley_pos).index)
+                };
+                if let Some(sel) = kept_selection {
+                    let (a, b) = (sel.primary.index.min(sel.secondary.index), sel.primary.index.max(sel.secondary.index));
+                    if pointer_char(ui).map(|at| a <= at && at <= b).unwrap_or(false) {
+                        let mut state = egui::text_edit::TextEditState::load(ui.ctx(), composer_id).unwrap_or_default();
+                        state.cursor.set_char_range(Some(sel));
+                        state.store(ui.ctx(), composer_id);
+                    }
+                }
+                // Spellcheck: a red squiggle under misspelled words (not the one being typed).
+                let spell_on = st.settings.spellcheck && self.ui.spell.ready(&st.settings.spell_language, ui.ctx());
+                if spell_on && !out.galley.text().is_empty() {
+                    self.ui.spell.know(s, &st.settings.spell_words);
+                    let typing_at = out.cursor_range.filter(|_| resp.has_focus()).map(|c| c.primary.index);
+                    let bad = self.ui.spell.misspelled(out.galley.text(), typing_at);
+                    let painter = ui.painter().with_clip_rect(out.text_clip_rect.expand(3.0));
+                    crate::spell::paint_squiggles(&painter, &out.galley, out.galley_pos, &bad);
+                }
+                // Right-click: what's under the pointer decides the menu (corrections for a
+                // misspelled word, Cut and Copy for selected text).
+                if resp.secondary_clicked() {
+                    let text = out.galley.text().to_string();
+                    let chars: Vec<char> = text.chars().collect();
+                    let selection = egui::text_edit::TextEditState::load(ui.ctx(), composer_id)
+                        .and_then(|s| s.cursor.char_range())
+                        .map(|r| r.primary.index.min(r.secondary.index)..r.primary.index.max(r.secondary.index))
+                        .filter(|r| !r.is_empty() && r.end <= chars.len());
+                    let word = pointer_char(ui)
+                        .filter(|_| spell_on)
+                        .and_then(|at| crate::spell::word_at(&text, at))
+                        .map(|r| (r.clone(), chars[r].iter().collect::<String>()))
+                        .filter(|(_, w)| !self.ui.spell.correct(w))
+                        .map(|(r, w)| {
+                            let fixes = self.ui.spell.suggest(&w);
+                            (r, w, fixes)
+                        });
+                    self.ui.composer_menu = Some(ComposerMenu { word, selection });
+                }
+                resp.context_menu(|ui| {
+                    ui.set_min_width(220.0);
+                    let menu = self.ui.composer_menu.clone().unwrap_or_default();
+                    let put_cursor = |ui: &egui::Ui, at: usize| {
+                        let mut state = egui::text_edit::TextEditState::load(ui.ctx(), composer_id).unwrap_or_default();
+                        state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(at))));
+                        state.store(ui.ctx(), composer_id);
+                        ui.ctx().memory_mut(|m| m.request_focus(composer_id));
+                    };
+                    if let Some((range, word, fixes)) = &menu.word {
+                        if fixes.is_empty() {
+                            ui.label(RichText::new("No spelling suggestions").color(theme::DIM));
+                        }
+                        for fix in fixes {
+                            let still_there = draft.chars().skip(range.start).take(range.len()).collect::<String>() == *word;
+                            if ui.button(RichText::new(fix).strong()).clicked() && still_there {
+                                replace_chars(&mut draft, range.clone(), fix);
+                                put_cursor(ui, range.start + fix.chars().count());
+                                ui.close();
+                            }
+                        }
+                        if ui.button("Add to dictionary").clicked() {
+                            let mut set = st.settings.clone();
+                            if !set.spell_words.iter().any(|w| w.eq_ignore_ascii_case(word)) {
+                                set.spell_words.push(word.clone());
+                            }
+                            acts.push(Act::Settings(set));
+                            ui.close();
+                        }
+                        ui.separator();
+                    }
+                    if menu_check(ui, "Spellcheck", st.settings.spellcheck, false).clicked() {
+                        acts.push(Act::Settings(ingle_engine::config::Settings { spellcheck: !st.settings.spellcheck, ..st.settings.clone() }));
+                        ui.close();
+                    }
+                    ui.menu_button("Languages", |ui| {
+                        ui.set_min_width(200.0);
+                        let current = crate::spell::lang(&st.settings.spell_language).code;
+                        for l in crate::spell::LANGS {
+                            if menu_check(ui, l.name, l.code == current, true).clicked() {
+                                acts.push(Act::Settings(ingle_engine::config::Settings {
+                                    spell_language: l.code.to_string(),
+                                    spellcheck: true,
+                                    ..st.settings.clone()
+                                }));
+                                ui.close();
+                            }
+                        }
+                    });
+                    ui.separator();
+                    if let Some(sel) = menu.selection.clone().filter(|r| r.end <= draft.chars().count()) {
+                        let picked: String = draft.chars().skip(sel.start).take(sel.len()).collect();
+                        if ui.add(egui::Button::new("Cut").shortcut_text("Ctrl+X")).clicked() {
+                            ui.ctx().copy_text(picked.clone());
+                            replace_chars(&mut draft, sel.clone(), "");
+                            put_cursor(ui, sel.start);
+                            ui.close();
+                        }
+                        if ui.add(egui::Button::new("Copy").shortcut_text("Ctrl+C")).clicked() {
+                            ui.ctx().copy_text(picked);
+                            ui.close();
+                        }
+                    }
+                    if ui.add(egui::Button::new("Paste").shortcut_text("Ctrl+V")).clicked() {
+                        // Text goes in at the cursor (over selected text); a picture is attached.
+                        match arboard::Clipboard::new().ok().and_then(|mut c| c.get_text().ok()).filter(|t| !t.is_empty()) {
+                            Some(t) => {
+                                let at = egui::text_edit::TextEditState::load(ui.ctx(), composer_id)
+                                    .and_then(|s| s.cursor.char_range())
+                                    .map(|r| r.primary.index.min(r.secondary.index)..r.primary.index.max(r.secondary.index))
+                                    .unwrap_or_else(|| { let n = draft.chars().count(); n..n });
+                                let at = at.start.min(draft.chars().count())..at.end.min(draft.chars().count());
+                                replace_chars(&mut draft, at.clone(), &t);
+                                put_cursor(ui, at.start + t.chars().count());
+                            }
+                            None if files_ok => {
+                                if let Some(png) = crate::images::clipboard_png() {
+                                    add_attachment(&mut self.ui.attach, &draft_key, "pasted-image.png".into(), png, acts);
+                                }
+                                ui.ctx().memory_mut(|m| m.request_focus(composer_id));
+                            }
+                            None => {}
+                        }
+                        ui.close();
+                    }
+                });
                 // Colour emoji over the spaces the layout left for them.
                 {
                     let found = crate::emoji::find_all(out.galley.text());
@@ -801,29 +949,6 @@ impl IngleApp {
                     }
                     self.ui.paste_down = down;
                 }
-                // Any Enter press counts (even one egui takes for a repeat because it missed a key
-                // release, e.g. to a file dialog).
-                let enter = ui.input(|i| {
-                    i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::Enter, pressed: true, modifiers, .. } if !modifiers.shift))
-                });
-                let send = resp.has_focus() && enter;
-                let files = self.ui.attach.get(&draft_key).cloned().unwrap_or_default();
-                // "/giphy …" (or a bare "/gif") is a GIF search, never a message.
-                let gif_command = giphy_query(draft.trim()).or_else(|| (draft.trim() == "/gif").then(String::new));
-                if send && gif_command.is_some() {
-                    self.open_gif_picker(gif_command.unwrap_or_default());
-                    draft.clear();
-                } else if send && (!draft.trim().is_empty() || !files.is_empty()) {
-                    let reply_to = self.ui.reply.take().map(|(id, _)| id);
-                    let text = expand_shortcodes(s, draft.trim(), st.settings.emoji_tone);
-                    acts.push(Act::Send { key: key.clone(), channel: ch.id, text, reply_to, files });
-                    self.ui.attach.remove(&draft_key);
-                    draft.clear();
-                    resp.request_focus();
-                }
-                if resp.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
-                    self.ui.reply = None;
-                }
                 let gb = icon_button(ui, 30.0, "Search GIFs (or type /giphy)", self.ui.gif_picker, |p, r, c| icons::gif(p, r.shrink(1.0), c));
                 if gb.clicked() {
                     if self.ui.gif_picker {
@@ -839,11 +964,39 @@ impl IngleApp {
                     self.ui.picker.search.clear();
                     self.ui.picker.focus_search = true;
                 }
+                let files = self.ui.attach.get(&draft_key).cloned().unwrap_or_default();
+                // Send, at the far right (lit up once there's something to send).
+                let ready = connected && (!draft.trim().is_empty() || !files.is_empty());
+                let sb = send_button(ui, ready);
+                // Any Enter press counts (even one egui takes for a repeat because it missed a key
+                // release, e.g. to a file dialog).
+                let enter = ui.input(|i| {
+                    i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::Enter, pressed: true, modifiers, .. } if !modifiers.shift))
+                });
+                let send = resp.has_focus() && enter || sb.clicked() && connected;
+                // "/giphy …" (or a bare "/gif") is a GIF search, never a message.
+                let gif_command = giphy_query(draft.trim()).or_else(|| (draft.trim() == "/gif").then(String::new));
+                if send && gif_command.is_some() {
+                    self.open_gif_picker(gif_command.unwrap_or_default());
+                    draft.clear();
+                } else if send && (!draft.trim().is_empty() || !files.is_empty()) {
+                    let reply_to = self.ui.reply.take().map(|(id, _)| id);
+                    let text = expand_shortcodes(s, draft.trim(), st.settings.emoji_tone);
+                    acts.push(Act::Send { key: key.clone(), channel: ch.id, text, reply_to, files });
+                    self.ui.attach.remove(&draft_key);
+                    draft.clear();
+                    resp.request_focus();
+                } else if sb.clicked() {
+                    resp.request_focus();
+                }
+                if resp.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
+                    self.ui.reply = None;
+                }
                 if self.ui.gif_picker {
                     let area = egui::Area::new(egui::Id::new(("composer-gif", &key, ch.id)))
                         .order(egui::Order::Foreground)
                         .pivot(egui::Align2::RIGHT_BOTTOM)
-                        .fixed_pos(pos2(eb.rect.right() + 6.0, gb.rect.top() - 12.0))
+                        .fixed_pos(pos2(sb.rect.right() + 6.0, gb.rect.top() - 12.0))
                         .constrain(true)
                         .show(ui.ctx(), |ui| egui::Frame::popup(ui.style()).fill(theme::SIDE).inner_margin(10).show(ui, |ui| self.gif_picker(ui, st, s, acts)).inner);
                     if let Some(url) = area.inner {
@@ -864,7 +1017,7 @@ impl IngleApp {
                     let area = egui::Area::new(egui::Id::new(("composer-emoji", &key, ch.id)))
                         .order(egui::Order::Foreground)
                         .pivot(egui::Align2::RIGHT_BOTTOM)
-                        .fixed_pos(pos2(eb.rect.right() + 6.0, eb.rect.top() - 12.0))
+                        .fixed_pos(pos2(sb.rect.right() + 6.0, eb.rect.top() - 12.0))
                         .constrain(true)
                         .show(ui.ctx(), |ui| {
                             egui::Frame::popup(ui.style()).fill(theme::SIDE).inner_margin(10).show(ui, |ui| self.emoji_picker(ui, st, Some(&key), acts)).inner
@@ -899,6 +1052,68 @@ impl IngleApp {
             }
             self.ui.drafts.insert(draft_key, draft);
         }
+    }
+}
+
+/// What the message box's right-click menu was opened on.
+#[derive(Clone, Default)]
+pub struct ComposerMenu {
+    /// The misspelled word under the pointer: where it is (chars), the word, its corrections.
+    pub word: Option<(std::ops::Range<usize>, String, Vec<String>)>,
+    /// Selected text (chars), for Cut and Copy.
+    pub selection: Option<std::ops::Range<usize>>,
+}
+
+/// Put `with` in place of the characters `range` of `text`.
+fn replace_chars(text: &mut String, range: std::ops::Range<usize>, with: &str) {
+    let byte = |i: usize| text.char_indices().nth(i).map(|(b, _)| b).unwrap_or(text.len());
+    let (a, b) = (byte(range.start), byte(range.end));
+    text.replace_range(a..b, with);
+}
+
+/// A menu row with a checkbox (or, for one of several, a round radio mark) on its right, like
+/// Discord's.
+fn menu_check(ui: &mut egui::Ui, label: &str, on: bool, radio: bool) -> egui::Response {
+    // Room on the right for the box.
+    let resp = ui.add(egui::Button::new(label).right_text("      "));
+    let b = Rect::from_center_size(pos2(resp.rect.right() - 16.0, resp.rect.center().y), vec2(16.0, 16.0));
+    let p = ui.painter();
+    match (radio, on) {
+        (false, true) => {
+            p.rect_filled(b, CornerRadius::same(4), theme::EMBER);
+            icons::tick(p, b, Color32::WHITE);
+        }
+        (false, false) => {
+            p.rect_stroke(b, CornerRadius::same(4), Stroke::new(1.5f32, theme::MUTED), egui::StrokeKind::Inside);
+        }
+        (true, on) => {
+            p.circle_stroke(b.center(), 7.0, Stroke::new(1.5f32, if on { theme::EMBER } else { theme::MUTED }));
+            if on {
+                p.circle_filled(b.center(), 3.8, theme::EMBER);
+            }
+        }
+    }
+    resp
+}
+
+/// The paper plane at the right of the message box.
+fn send_button(ui: &mut egui::Ui, ready: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(30.0, 30.0), if ready { Sense::click() } else { Sense::hover() });
+    if ready && resp.hovered() {
+        ui.painter().rect_filled(rect, CornerRadius::same(6), theme::ELEV2);
+    }
+    let color = if !ready {
+        theme::DIM
+    } else if resp.hovered() {
+        theme::EMBER2
+    } else {
+        theme::EMBER
+    };
+    icons::send(ui.painter(), rect.shrink(7.0), color);
+    if ready {
+        resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Send message (Enter)")
+    } else {
+        resp.on_hover_text("Send message")
     }
 }
 
@@ -1049,6 +1264,24 @@ pub fn human_size(n: u64) -> String {
     } else {
         format!("{} KB", (n / 1024).max(1))
     }
+}
+
+/// Discord's red "NEW" line: where the messages you hadn't seen start.
+fn new_divider(ui: &mut egui::Ui) {
+    ui.add_space(8.0);
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 14.0), Sense::hover());
+    let c = r.center();
+    let galley = ui.painter().layout_no_wrap("NEW".to_string(), theme::bold_font(10.0), Color32::WHITE);
+    let tag = Rect::from_min_size(pos2(r.right() - 16.0 - galley.size().x - 10.0, c.y - 7.0), vec2(galley.size().x + 10.0, 14.0));
+    ui.painter().line_segment([pos2(r.left() + 16.0, c.y), pos2(tag.left(), c.y)], Stroke::new(1.0f32, theme::LIVE));
+    // A notch pointing at the line, then the tag.
+    ui.painter().add(egui::Shape::convex_polygon(
+        vec![pos2(tag.left() - 5.0, c.y), pos2(tag.left() + 1.0, tag.top()), pos2(tag.left() + 1.0, tag.bottom())],
+        theme::LIVE,
+        Stroke::NONE,
+    ));
+    ui.painter().rect_filled(tag, CornerRadius::same(3), theme::LIVE);
+    ui.painter().galley(tag.center() - galley.size() / 2.0, galley, Color32::WHITE);
 }
 
 fn day_divider(ui: &mut egui::Ui, label: &str) {

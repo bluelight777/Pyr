@@ -1,10 +1,11 @@
 // Windows resources for ingle.exe: the icon Explorer, shortcuts and the taskbar show, and the
-// details in the file's Properties (and Task Manager). Built by build.rs on Windows targets.
-1 ICON "assets/icon/ingle.ico"
+// details in the file's Properties (and Task Manager). A template: build.rs fills in the icon's
+// path and the version from Cargo.toml (Windows' crash and hang reports quote it).
+1 ICON "@ICON@"
 
 1 VERSIONINFO
-FILEVERSION 0,6,1,0
-PRODUCTVERSION 0,6,1,0
+FILEVERSION @VERSION_COMMAS@
+PRODUCTVERSION @VERSION_COMMAS@
 FILEOS 0x40004
 FILETYPE 0x1
 BEGIN
@@ -14,11 +15,11 @@ BEGIN
     BEGIN
       VALUE "CompanyName", "Firelit Games"
       VALUE "FileDescription", "Ingle"
-      VALUE "FileVersion", "0.6.1"
+      VALUE "FileVersion", "@VERSION@"
       VALUE "InternalName", "ingle"
       VALUE "OriginalFilename", "ingle.exe"
       VALUE "ProductName", "Ingle"
-      VALUE "ProductVersion", "0.6.1"
+      VALUE "ProductVersion", "@VERSION@"
     END
   END
   BLOCK "VarFileInfo"

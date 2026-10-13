@@ -5,6 +5,10 @@
 //! messages keep coming in, like Discord. Only the icon's Quit Ingle (or Settings → Quit)
 //! ends it.
 //!
+//! Unread messages show here too: a dot on the icon (red for mentions and direct messages,
+//! light for the rest) with where they are in its tooltip, and the same dot on the taskbar
+//! button while the window is open.
+//!
 //! egui only runs frames while the window is visible, so nothing here waits for one. The icon's
 //! clicks go to a small hidden window of our own, whose window procedure runs on the UI thread
 //! inside winit's message loop and shows the main window, talks to the engine or quits right
@@ -14,23 +18,28 @@
 use std::cell::RefCell;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::time::Duration;
 
 use eframe::egui;
 use ingle_engine::Engine;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Win32::Foundation::{CloseHandle, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
-use windows::Win32::Graphics::Gdi::ScreenToClient;
+use windows::Win32::Graphics::Gdi::{
+    BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, CreateBitmap, CreateDIBSection, DIB_RGB_COLORS, DeleteObject, GetDC, GetDIBits, GetObjectW,
+    HBITMAP, HGDIOBJ, ReleaseDC, ScreenToClient,
+};
+use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
 use windows::Win32::UI::Shell::{
-    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NIN_SELECT,
-    NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW,
+    ITaskbarList3, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION,
+    NIN_SELECT, NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW, TaskbarList,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AllowSetForegroundWindow, AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu,
-    DestroyWindow, FindWindowW, GetCursorPos, GetSystemMetrics, GetWindowThreadProcessId, HICON, IMAGE_ICON, IsIconic, LR_DEFAULTCOLOR,
+    AllowSetForegroundWindow, AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu,
+    DestroyWindow, FindWindowW, GetCursorPos, GetForegroundWindow, GetIconInfo, GetSystemMetrics, GetWindowThreadProcessId, HICON, ICONINFO,
+    IMAGE_ICON, IsIconic, IsWindowVisible, LR_DEFAULTCOLOR,
     LoadImageW, MENU_ITEM_FLAGS, MF_CHECKED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, PostMessageW, RegisterClassW,
     RegisterWindowMessageW, SM_CXSMICON, SM_CYSMICON, SM_MENUDROPALIGNMENT, SW_HIDE, SW_RESTORE, SW_SHOW, SetForegroundWindow,
     SetMenuDefaultItem, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTALIGN,
@@ -49,6 +58,8 @@ const WM_INGLE_SHOW: u32 = WM_APP + 2;
 const WM_INGLE_QUIT: u32 = WM_APP + 3;
 /// The close button: hide the window once the current frame is done.
 const WM_INGLE_HIDE: u32 = WM_APP + 4;
+/// What's unread changed (see `watch_unread`): show it on the icon and the taskbar button.
+const WM_INGLE_UNREAD: u32 = WM_APP + 5;
 /// Enter or Space on the icon (NIN_SELECT | NINF_KEY).
 const NIN_KEYSELECT: u32 = NIN_SELECT | 1;
 const ICON_ID: u32 = 1;
@@ -67,6 +78,14 @@ struct State {
     icon: HICON,
     tip: String,
     taskbar_created: u32,
+    /// What the icon shows now: the plain icon, or one with a dot, and the tooltip.
+    shown: (HICON, String),
+    /// The icon with a light dot, and with a red one; and the taskbar's dots (made when
+    /// first needed).
+    dotted: [Option<HICON>; 2],
+    taskbar_dots: [Option<HICON>; 2],
+    /// The taskbar, for its button's dot (`None` if Windows wouldn't give it to us).
+    taskbar: Option<Option<ITaskbarList3>>,
 }
 
 thread_local! {
@@ -74,8 +93,36 @@ thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
 }
 
+/// Our hidden window, for the unread watcher's thread to wake.
+static TRAY: AtomicIsize = AtomicIsize::new(0);
+/// What's unread, as the watcher last saw it.
+static UNREAD: std::sync::Mutex<Option<crate::unread::Unread>> = std::sync::Mutex::new(None);
+
 /// The icon is showing, so hiding the window is safe: there's a way back.
 static SHOWN: AtomicBool = AtomicBool::new(false);
+
+/// The main window, for [`window_in_front`] (which the engine's threads call, so it can't use
+/// `STATE`).
+static MAIN: AtomicIsize = AtomicIsize::new(0);
+
+/// The main window, once it exists (for the hang recorder's thread).
+pub fn main_window() -> Option<HWND> {
+    let h = MAIN.load(Ordering::Relaxed);
+    (h != 0).then(|| HWND(h as *mut core::ffi::c_void))
+}
+
+/// Whether Ingle's window is in front of you: the foreground window, not minimized or hidden in
+/// the tray. `None` until there's a window. egui runs no frames while the window is hidden or
+/// minimized, so the engine asks this rather than trusting what the last frame saw.
+pub fn window_in_front() -> Option<bool> {
+    let h = MAIN.load(Ordering::Relaxed);
+    if h == 0 {
+        return None;
+    }
+    let main = HWND(h as *mut core::ffi::c_void);
+    // Plain reads of window state: fine from any thread.
+    unsafe { Some(GetForegroundWindow() == main && IsWindowVisible(main).as_bool() && !IsIconic(main).as_bool()) }
+}
 
 /// Reads the state without holding a borrow across Win32 calls (those can dispatch messages
 /// that end up back here, or in an egui frame that asks [`is_active`]).
@@ -97,6 +144,7 @@ impl Tray {
                 return None;
             }
         };
+        MAIN.store(main.0 as isize, Ordering::Relaxed);
         let name = wide(&window_name(config_dir));
         let (tray, icon, taskbar_created) = unsafe {
             let instance = HINSTANCE(GetModuleHandleW(None).ok()?.0);
@@ -134,9 +182,22 @@ impl Tray {
             (tray, icon, RegisterWindowMessageW(w!("TaskbarCreated")))
         };
         STATE.with(|s| {
-            *s.borrow_mut() =
-                Some(State { tray, main, engine, ctx: cc.egui_ctx.clone(), icon, tip: tip.to_string(), taskbar_created })
+            *s.borrow_mut() = Some(State {
+                tray,
+                main,
+                engine: engine.clone(),
+                ctx: cc.egui_ctx.clone(),
+                icon,
+                tip: tip.to_string(),
+                taskbar_created,
+                shown: (icon, tip.to_string()),
+                dotted: [None; 2],
+                taskbar_dots: [None; 2],
+                taskbar: None,
+            })
         });
+        TRAY.store(tray.0 as isize, Ordering::Relaxed);
+        watch_unread(engine);
         if add_icon() {
             tracing::info!("tray icon added");
         } else {
@@ -151,15 +212,223 @@ impl Tray {
 impl Drop for Tray {
     fn drop(&mut self) {
         remove_icon();
+        TRAY.store(0, Ordering::Relaxed);
         if let Some(s) = STATE.with(|s| s.borrow_mut().take()) {
             unsafe {
                 let _ = DestroyWindow(s.tray);
-                if !s.icon.is_invalid() {
-                    let _ = DestroyIcon(s.icon);
+                for icon in [Some(s.icon)].into_iter().chain(s.dotted).chain(s.taskbar_dots).flatten() {
+                    if !icon.is_invalid() {
+                        let _ = DestroyIcon(icon);
+                    }
                 }
             }
         }
     }
+}
+
+/// Looks at what's unread every so often (the window runs no frames while it's hidden, so it
+/// can't be the one to notice) and has the window procedure show it when it changes, or when
+/// the window is back on the taskbar (its button comes without a dot).
+fn watch_unread(engine: Arc<Engine>) {
+    let _ = std::thread::Builder::new().name("ingle-unread".into()).spawn(move || {
+        let mut last: Option<crate::unread::Unread> = None;
+        let mut visible = false;
+        let mut again = 0u8;
+        loop {
+            std::thread::sleep(Duration::from_millis(700));
+            let tray = TRAY.load(Ordering::Relaxed);
+            if tray == 0 {
+                continue;
+            }
+            let now = crate::unread::Unread::of(&engine.state());
+            let shown = main_window().is_some_and(|h| unsafe { IsWindowVisible(h).as_bool() });
+            if shown && !visible {
+                // Explorer takes a moment to make the button: put the dot on a few times.
+                again = 3;
+            }
+            visible = shown;
+            if last.as_ref() != Some(&now) || again > 0 {
+                again = again.saturating_sub(1);
+                *UNREAD.lock().unwrap_or_else(|e| e.into_inner()) = Some(now.clone());
+                last = Some(now);
+                unsafe {
+                    let _ = PostMessageW(Some(HWND(tray as *mut core::ffi::c_void)), WM_INGLE_UNREAD, WPARAM(0), LPARAM(0));
+                }
+            }
+        }
+    });
+}
+
+/// Show what's unread on the icon (its dot and tooltip) and on the taskbar button (UI thread).
+fn show_unread() {
+    let Some(u) = UNREAD.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return };
+    // 0: nothing, 1: unread messages, 2: mentions or direct messages.
+    let level = if u.pings > 0 {
+        2
+    } else if u.any() {
+        1
+    } else {
+        0
+    };
+    let what = if u.pings > 0 {
+        format!("{} mention{} or direct message{}", u.pings, if u.pings == 1 { "" } else { "s" }, if u.pings == 1 { "" } else { "s" })
+    } else {
+        "Unread messages".to_string()
+    };
+    // Only GDI in here, which sends no window messages, so the state can stay borrowed.
+    let todo = STATE.with(|cell| {
+        let mut b = cell.try_borrow_mut().ok()?;
+        let s = b.as_mut()?;
+        let icon = match level {
+            0 => s.icon,
+            _ => *s.dotted[level - 1].get_or_insert_with(|| unsafe { dotted_icon(s.icon, level == 2) }.unwrap_or(s.icon)),
+        };
+        s.shown = (icon, u.tooltip(&s.tip));
+        let nid = icon_data(s);
+        let dot = match level {
+            0 => None,
+            _ => {
+                let (cx, cy) = unsafe { (GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON)) };
+                Some(*s.taskbar_dots[level - 1].get_or_insert_with(|| unsafe { dot_icon(cx, cy, level == 2) }.unwrap_or_default()))
+            }
+        };
+        let taskbar = s.taskbar.get_or_insert_with(taskbar_list).clone();
+        Some((nid, s.main, dot, taskbar))
+    });
+    let Some((mut nid, main, dot, taskbar)) = todo else { return };
+    unsafe {
+        if SHOWN.load(Ordering::Relaxed) {
+            nid.uFlags = NIF_ICON | NIF_TIP | NIF_SHOWTIP;
+            let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+        }
+        if let Some(t) = taskbar {
+            let text = wide(&what);
+            let _ = match dot.filter(|d| !d.is_invalid()) {
+                Some(d) => t.SetOverlayIcon(main, d, PCWSTR(text.as_ptr())),
+                None => t.SetOverlayIcon(main, HICON::default(), PCWSTR::null()),
+            };
+        }
+    }
+}
+
+/// The taskbar's interface for putting a dot on our button.
+fn taskbar_list() -> Option<ITaskbarList3> {
+    unsafe {
+        // Usually done already on this thread (by winit); harmless if so.
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let t: ITaskbarList3 = CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER)
+            .map_err(|e| tracing::warn!("no taskbar badge: {e}"))
+            .ok()?;
+        t.HrInit().map_err(|e| tracing::warn!("no taskbar badge: {e}")).ok()?;
+        Some(t)
+    }
+}
+
+/// An icon's pixels: BGRA with straight alpha, top row first.
+unsafe fn icon_pixels(icon: HICON) -> Option<(Vec<u8>, usize, usize)> {
+    unsafe {
+        let mut ii = ICONINFO::default();
+        GetIconInfo(icon, &mut ii).ok()?;
+        let read = |bmp: HBITMAP| -> Option<(Vec<u8>, usize, usize)> {
+            let mut bm = BITMAP::default();
+            if GetObjectW(HGDIOBJ(bmp.0), std::mem::size_of::<BITMAP>() as i32, Some(&mut bm as *mut BITMAP as *mut _)) == 0 {
+                return None;
+            }
+            let (w, h) = (bm.bmWidth, bm.bmHeight);
+            let mut bmi = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: w,
+                    biHeight: -h,
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut px = vec![0u8; (w * h * 4) as usize];
+            let dc = GetDC(None);
+            let lines = GetDIBits(dc, bmp, 0, h as u32, Some(px.as_mut_ptr().cast()), &mut bmi, DIB_RGB_COLORS);
+            ReleaseDC(None, dc);
+            (lines == h).then_some((px, w as usize, h as usize))
+        };
+        let color = if ii.hbmColor.is_invalid() { None } else { read(ii.hbmColor) };
+        let mask = read(ii.hbmMask);
+        let _ = DeleteObject(HGDIOBJ(ii.hbmColor.0));
+        let _ = DeleteObject(HGDIOBJ(ii.hbmMask.0));
+        let (mut px, w, h) = color?;
+        // An icon without alpha says what's see-through in its mask instead.
+        if px.chunks(4).all(|p| p[3] == 0) {
+            let (m, mw, mh) = mask?;
+            if (mw, mh) != (w, h) {
+                return None;
+            }
+            for (p, q) in px.chunks_mut(4).zip(m.chunks(4)) {
+                p[3] = if q[0] == 0 { 255 } else { 0 };
+            }
+        }
+        Some((px, w, h))
+    }
+}
+
+/// An icon from BGRA pixels (straight alpha, top row first).
+unsafe fn icon_from_pixels(px: &[u8], w: usize, h: usize) -> Option<HICON> {
+    unsafe {
+        let bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: w as i32,
+                biHeight: -(h as i32),
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+        let dc = GetDC(None);
+        let color = CreateDIBSection(Some(dc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0);
+        ReleaseDC(None, dc);
+        let color = color.ok()?;
+        if bits.is_null() {
+            let _ = DeleteObject(HGDIOBJ(color.0));
+            return None;
+        }
+        std::ptr::copy_nonoverlapping(px.as_ptr(), bits.cast::<u8>(), px.len().min(w * h * 4));
+        // The colours carry their own alpha; the mask just has to be there.
+        let mask_bits = vec![0u8; w.div_ceil(16) * 2 * h];
+        let mask = CreateBitmap(w as i32, h as i32, 1, 1, Some(mask_bits.as_ptr().cast()));
+        let ii = ICONINFO { fIcon: true.into(), xHotspot: 0, yHotspot: 0, hbmMask: mask, hbmColor: color };
+        let icon = CreateIconIndirect(&ii);
+        let _ = DeleteObject(HGDIOBJ(color.0));
+        let _ = DeleteObject(HGDIOBJ(mask.0));
+        icon.ok()
+    }
+}
+
+/// The tray icon with a dot in its bottom right corner.
+unsafe fn dotted_icon(icon: HICON, red: bool) -> Option<HICON> {
+    unsafe {
+        let (mut px, w, h) = icon_pixels(icon)?;
+        let unit = w as f32 / 16.0;
+        let (r, ring) = (3.4 * unit, 1.0 * unit);
+        let c = (w as f32 - r - ring, h as f32 - r - ring);
+        crate::unread::paint_dot(&mut px, w, h, c, r, ring, if red { crate::unread::RED } else { crate::unread::LIGHT });
+        icon_from_pixels(&px, w, h)
+    }
+}
+
+/// Just a dot, for the taskbar button's corner.
+unsafe fn dot_icon(w: i32, h: i32, red: bool) -> Option<HICON> {
+    let (w, h) = (w.max(8) as usize, h.max(8) as usize);
+    let mut px = vec![0u8; w * h * 4];
+    let unit = w as f32 / 16.0;
+    let ring = 1.0 * unit;
+    let r = w as f32 / 2.0 - ring - 0.5;
+    crate::unread::paint_dot(&mut px, w, h, (w as f32 / 2.0, h as f32 / 2.0), r, ring, if red { crate::unread::RED } else { crate::unread::LIGHT });
+    unsafe { icon_from_pixels(&px, w, h) }
 }
 
 /// Whether the icon is showing (so the close button may hide the window).
@@ -332,6 +601,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             hide_main_now();
             LRESULT(0)
         }
+        WM_INGLE_UNREAD => {
+            show_unread();
+            LRESULT(0)
+        }
         WM_INGLE_QUIT => quit_now("asked to by another launch, like the installer"),
         WM_ENDSESSION if wparam.0 != 0 => {
             // Windows is signing out or shutting down: save what quitting would save.
@@ -354,6 +627,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     }
 }
 
+/// The icon as it shows now (its dot and tooltip included, so adding it again after Explorer
+/// restarts keeps them).
 fn icon_data(s: &State) -> NOTIFYICONDATAW {
     let mut nid = NOTIFYICONDATAW {
         cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
@@ -361,10 +636,10 @@ fn icon_data(s: &State) -> NOTIFYICONDATAW {
         uID: ICON_ID,
         uFlags: NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP,
         uCallbackMessage: WM_TRAY,
-        hIcon: s.icon,
+        hIcon: s.shown.0,
         ..Default::default()
     };
-    for (dst, src) in nid.szTip.iter_mut().zip(s.tip.encode_utf16().take(127)) {
+    for (dst, src) in nid.szTip.iter_mut().zip(s.shown.1.encode_utf16().take(127)) {
         *dst = src;
     }
     nid

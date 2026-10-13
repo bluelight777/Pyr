@@ -6,6 +6,11 @@
 //! The bot "talks" with a tone (on/off like speech), and can share a test-pattern
 //! camera and screen (the screen share comes with a quiet test chord unless you pass
 //! --no-sound). Ctrl+C to stop.
+//!
+//! `--dm NAME` sends the `--say` lines as direct messages to that member instead, after
+//! `--wait SECONDS` (time to switch windows), `--gap SECONDS` apart.
+//!
+//! `--check-isolation` only loads voice isolation's model and times it on this PC, then exits.
 
 use std::time::{Duration, Instant};
 
@@ -28,6 +33,9 @@ fn main() -> anyhow::Result<()> {
     let mut quiet = false;
     let mut watch = false;
     let mut stream_sound = true;
+    let mut dm_to: Option<String> = None;
+    let mut wait = 0.0f32;
+    let mut gap = 0.9f32;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -43,8 +51,14 @@ fn main() -> anyhow::Result<()> {
             "--quiet" => quiet = true,
             "--watch" => watch = true,
             "--no-sound" => stream_sound = false,
+            "--dm" => dm_to = args.next(),
+            "--wait" => wait = args.next().and_then(|t| t.parse().ok()).unwrap_or(wait),
+            "--gap" => gap = args.next().and_then(|t| t.parse().ok()).unwrap_or(gap),
             _ => {}
         }
+    }
+    if std::env::args().any(|a| a == "--check-isolation") {
+        return check_isolation();
     }
     let join = join.ok_or_else(|| anyhow::anyhow!("--join <invite link> is required"))?;
     let dir = std::env::temp_dir().join(format!("ingle-bot-{}", name.to_lowercase().replace(' ', "-")));
@@ -103,10 +117,33 @@ fn main() -> anyhow::Result<()> {
             s.channels.iter().find(|c| c.kind == kind && c.name.eq_ignore_ascii_case(n)).map(|c| c.id)
         })
     };
-    if let Some(ch) = find(ChannelKind::Text, &channel).or_else(|| find(ChannelKind::Voice, &channel)) {
+    let target = match &dm_to {
+        Some(who) => {
+            let uid = engine
+                .state()
+                .server(&key)
+                .and_then(|s| s.members.values().find(|m| m.name.eq_ignore_ascii_case(who)).map(|m| m.user_id.clone()))
+                .ok_or_else(|| anyhow::anyhow!("nobody called {who} here"))?;
+            engine.open_dm(&key, &uid);
+            let t = Instant::now();
+            loop {
+                if let Some((_, id)) = engine.take_opened_dm() {
+                    break Some(id);
+                }
+                if t.elapsed() > Duration::from_secs(10) {
+                    anyhow::bail!("couldn't open a direct message with {who}");
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+        None => find(ChannelKind::Text, &channel).or_else(|| find(ChannelKind::Voice, &channel)),
+    };
+    if let Some(ch) = target {
+        std::thread::sleep(Duration::from_secs_f32(wait));
         for line in &say {
             engine.send_message(&key, ch, line, None);
-            std::thread::sleep(Duration::from_millis(900));
+            println!("{name}: said {line:?}");
+            std::thread::sleep(Duration::from_secs_f32(gap));
         }
     }
     if let Some(v) = &voice {
@@ -165,5 +202,26 @@ fn main() -> anyhow::Result<()> {
         }
     }
     engine.shutdown();
+    Ok(())
+}
+
+/// Load voice isolation's model (built into the program) and time 3 s of audio through it.
+fn check_isolation() -> anyhow::Result<()> {
+    let t = Instant::now();
+    let mut d = ingle_engine::audio::dfn::Dfn::new().map_err(|e| anyhow::anyhow!("voice isolation model failed: {e}"))?;
+    let load = t.elapsed();
+    let mut frame = vec![0f32; 480];
+    let mut worst = Duration::ZERO;
+    let t = Instant::now();
+    for i in 0..300usize {
+        for (k, s) in frame.iter_mut().enumerate() {
+            *s = ((i * 480 + k) as f32 * 0.047).sin() * 0.1;
+        }
+        let f = Instant::now();
+        d.process(&mut frame);
+        worst = worst.max(f.elapsed());
+    }
+    let per = t.elapsed().as_secs_f64() * 1000.0 / 300.0;
+    println!("voice isolation model: loaded in {} ms; {per:.2} ms per 10 ms of audio (slowest {:.2} ms)", load.as_millis(), worst.as_secs_f64() * 1000.0);
     Ok(())
 }

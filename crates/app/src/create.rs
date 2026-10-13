@@ -133,6 +133,18 @@ impl CreateState {
     }
 
     /// True while setup work is running (the dialog can't be closed then).
+    /// A backup folder was chosen to restore from (see `images::FolderFor::Restore`).
+    pub fn set_restore(&mut self, dir: std::path::PathBuf) {
+        match ingle_engine::backup::info(&dir).filter(|_| dir.join("database").join("latest.db").is_file()) {
+            Some(info) => {
+                self.name = info.name.clone();
+                self.restore = Some((dir, info));
+                self.restore_error = None;
+            }
+            None => self.restore_error = Some("That folder isn't an Ingle server backup (it needs server.json and database/latest.db).".into()),
+        }
+    }
+
     pub fn busy(&self) -> bool {
         self.progress.as_ref().map(|p| !p.is_finished()).unwrap_or(false) || self.delete_job.is_some()
     }
@@ -333,16 +345,7 @@ fn choose_page(c: &mut CreateState, ui: &mut egui::Ui, close: &mut bool) {
     }
     ui.horizontal(|ui| {
         if ui.button(if c.restore.is_some() { "Choose another backup…" } else { "Restore from a backup…" }).clicked() {
-            if let Some(dir) = rfd::FileDialog::new().set_title("Choose the server's backup folder").pick_folder() {
-                match ingle_engine::backup::info(&dir).filter(|_| dir.join("database").join("latest.db").is_file()) {
-                    Some(info) => {
-                        c.name = info.name.clone();
-                        c.restore = Some((dir, info));
-                        c.restore_error = None;
-                    }
-                    None => c.restore_error = Some("That folder isn't an Ingle server backup (it needs server.json and database/latest.db).".into()),
-                }
-            }
+            crate::images::pick_folder_async(crate::images::FolderFor::Restore, "Choose the server's backup folder", ui.ctx());
         }
         if c.restore.is_some() && ui.button("Start a new server instead").clicked() {
             c.restore = None;

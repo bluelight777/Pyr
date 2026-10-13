@@ -114,49 +114,40 @@ impl IngleApp {
         let channel_name = s.channel(call.channel_id).map(|c| c.name.clone()).unwrap_or_default();
 
         // ---- header
+        let topic = s.channel(call.channel_id).map(|c| c.topic.trim().to_string()).unwrap_or_default();
         egui::TopBottomPanel::top("stage-header")
             .exact_height(52.0)
             .show_separator_line(false)
             .frame(egui::Frame::new().fill(theme::STAGE).inner_margin(egui::Margin::symmetric(16, 0)))
             .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
-                    let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
-                    icons::speaker(ui.painter(), r, theme::MUTED);
-                    ui.label(RichText::new(&channel_name).font(theme::bold_font(15.5)).color(theme::TEXT));
-                    ui.add_space(8.0);
-                    let others = s.voice_in(call.channel_id).len().saturating_sub(1);
-                    let (fill, stroke, text) = if call.e2ee_ready || others == 0 {
-                        (
-                            Color32::from_rgba_unmultiplied(0x6c, 0xc0, 0x70, 26),
-                            Color32::from_rgba_unmultiplied(0x6c, 0xc0, 0x70, 70),
-                            format!("End-to-end encrypted · call code {}", call.call_code),
-                        )
-                    } else {
-                        (theme::ELEV, theme::LINE, "Exchanging encryption keys…".to_string())
-                    };
-                    let resp = egui::Frame::new()
-                        .fill(fill)
-                        .stroke(Stroke::new(1.0f32, stroke))
-                        .corner_radius(12)
-                        .inner_margin(egui::Margin::symmetric(10, 3))
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
-                                icons::lock(ui.painter(), r, theme::ONLINE);
-                                ui.label(RichText::new(text).size(12.5).color(Color32::from_rgb(0xbf, 0xe3, 0xbc)));
-                            });
-                        })
-                        .response
-                        .interact(Sense::click());
-                    if resp
-                        .on_hover_text("Everyone in the call should see the same code. If they do, no one (not even the server) can listen in. Click to copy.")
-                        .clicked()
-                    {
-                        acts.push(Act::Copy(call.call_code.clone()));
-                    }
+                    // Right to left first (chat, view, the encryption pill), so they never sit on
+                    // top of the name and topic, which get what's left and are cut to fit.
+                    let wide = ui.available_width() > 820.0;
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let open = self.ui.call_chat_open;
-                        if icon_button(ui, 32.0, if open { "Hide chat" } else { "Show chat" }, open, |p, r, c| icons::chat(p, r, c)).clicked() {
+                        let unread = s.unread.contains(&call.channel_id);
+                        let mentions = s.mentions.get(&call.channel_id).copied().unwrap_or(0);
+                        let tip = match (open, unread) {
+                            (true, _) => "Hide chat",
+                            (false, true) => "Show chat (new messages)",
+                            (false, false) => "Show chat",
+                        };
+                        let b = icon_button(ui, 32.0, tip, open, |p, r, c| icons::chat(p, r, c));
+                        // The call's chat has messages you haven't seen: a badge on its button,
+                        // like the channel list's.
+                        if !open && (unread || mentions > 0) {
+                            let c = b.rect.right_top() + vec2(-3.0, 4.0);
+                            if mentions > 0 {
+                                ui.painter().circle_filled(c, 8.0, theme::STAGE);
+                                ui.painter().circle_filled(c, 6.5, theme::LIVE);
+                                ui.painter().text(c, egui::Align2::CENTER_CENTER, mentions.min(9).to_string(), theme::bold_font(9.0), Color32::WHITE);
+                            } else {
+                                ui.painter().circle_filled(c, 5.0, theme::STAGE);
+                                ui.painter().circle_filled(c, 3.5, theme::TEXT);
+                            }
+                        }
+                        if b.clicked() {
                             self.ui.call_chat_open = !open;
                         }
                         ui.add_space(6.0);
@@ -166,6 +157,54 @@ impl IngleApp {
                             self.ui.grid_view = !grid;
                             self.ui.focus = None;
                         }
+                        ui.add_space(8.0);
+                        let others = s.voice_in(call.channel_id).len().saturating_sub(1);
+                        let (fill, stroke, text) = if call.e2ee_ready || others == 0 {
+                            (
+                                Color32::from_rgba_unmultiplied(0x6c, 0xc0, 0x70, 26),
+                                Color32::from_rgba_unmultiplied(0x6c, 0xc0, 0x70, 70),
+                                if wide { format!("End-to-end encrypted · call code {}", call.call_code) } else { call.call_code.clone() },
+                            )
+                        } else {
+                            (theme::ELEV, theme::LINE, if wide { "Exchanging encryption keys…".to_string() } else { "Keys…".to_string() })
+                        };
+                        let resp = egui::Frame::new()
+                            .fill(fill)
+                            .stroke(Stroke::new(1.0f32, stroke))
+                            .corner_radius(12)
+                            .inner_margin(egui::Margin::symmetric(10, 3))
+                            .show(ui, |ui| {
+                                // The header lays out right to left: the text first, then the
+                                // lock to its left.
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(text).size(12.5).color(Color32::from_rgb(0xbf, 0xe3, 0xbc)));
+                                    let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+                                    icons::lock(ui.painter(), r, theme::ONLINE);
+                                });
+                            })
+                            .response
+                            .interact(Sense::click());
+                        if resp
+                            .on_hover_text(format!(
+                                "End-to-end encrypted, call code {}. Everyone in the call should see the same code. If they do, no one (not even the server) can listen in. Click to copy.",
+                                call.call_code
+                            ))
+                            .clicked()
+                        {
+                            acts.push(Act::Copy(call.call_code.clone()));
+                        }
+                        ui.add_space(8.0);
+                        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                            let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
+                            icons::speaker(ui.painter(), r, theme::MUTED);
+                            ui.add(egui::Label::new(RichText::new(&channel_name).font(theme::bold_font(15.5)).color(theme::TEXT)).truncate());
+                            // The channel's topic, like a text channel's header.
+                            if !topic.is_empty() && ui.available_width() > 60.0 {
+                                let (sep, _) = ui.allocate_exact_size(vec2(1.0, 22.0), Sense::hover());
+                                ui.painter().rect_filled(sep, 0, theme::LINE);
+                                ui.add(egui::Label::new(RichText::new(&topic).size(13.0).color(theme::MUTED)).truncate()).on_hover_text(&topic);
+                            }
+                        });
                     });
                 });
             });
