@@ -443,7 +443,10 @@ impl IngleApp {
                     ui.separator();
                     let want = tabs[(filter as usize).min(3)].0;
                     let shown: Vec<_> = all.iter().filter(|b| b.status == want).collect();
-                    egui::ScrollArea::vertical().max_height(480.0).show(ui, |ui| {
+                    // A fixed-height list: the dialog keeps the size it had while loading, so a
+                    // list that sized itself would stay cut off.
+                    let list_h = (ui.ctx().content_rect().height() - 320.0).clamp(220.0, 520.0);
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).min_scrolled_height(list_h).max_height(list_h).show(ui, |ui| {
                         if shown.is_empty() {
                             ui.label(RichText::new(if st.bugs.contains_key(&key) { "Nothing here." } else { "Loading…" }).color(theme::DIM));
                         }
