@@ -794,7 +794,8 @@ impl IngleApp {
                 let enter = ui.input(|i| {
                     i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::Enter, pressed: true, modifiers, .. } if !modifiers.shift))
                 });
-                let send = resp.has_focus() && enter;
+                // ("/giphy …" is a GIF search, never a message: its Enter belongs to the GIF picker.)
+                let send = resp.has_focus() && enter && giphy_q.is_none();
                 let files = self.ui.attach.get(&draft_key).cloned().unwrap_or_default();
                 if send && (!draft.trim().is_empty() || !files.is_empty()) {
                     let reply_to = self.ui.reply.take().map(|(id, _)| id);
@@ -1325,6 +1326,21 @@ impl IngleApp {
     ) {
         let api_key = crate::giphy::key(&st.settings.giphy_key);
         let mut send: Option<String> = None;
+        // While "/giphy" is in the box, Enter and Esc belong to the GIF picker: Enter sends the
+        // chosen GIF (and never the command itself as a message), Esc cancels.
+        let focused = ui.ctx().memory(|m| m.focused()) == Some(composer_id);
+        let (mut enter, mut esc) = (false, false);
+        if focused {
+            ui.input_mut(|i| {
+                enter = i.consume_key(Modifiers::NONE, Key::Enter);
+                esc = i.consume_key(Modifiers::NONE, Key::Escape);
+            });
+        }
+        if esc {
+            draft.clear();
+            self.ui.giphy.reset();
+            return;
+        }
         egui::Frame::new().fill(theme::SIDE).corner_radius(8).inner_margin(8).stroke(Stroke::new(1.0f32, theme::LINE)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
@@ -1335,7 +1351,10 @@ impl IngleApp {
                 });
             });
             let Some(api_key) = api_key else {
-                ui.label(RichText::new("GIF search needs a GIPHY API key. Paste one here (get a free one at developers.giphy.com):").color(theme::MUTED));
+                ui.label(
+                    RichText::new("GIF search isn't set up in this copy of Ingle. If you have a GIPHY API key, paste it here:")
+                        .color(theme::MUTED),
+                );
                 let mut k = st.settings.giphy_key.clone();
                 if ui.add(egui::TextEdit::singleline(&mut k).hint_text("GIPHY API key").desired_width(320.0)).changed() {
                     let mut s = st.settings.clone();
@@ -1344,11 +1363,15 @@ impl IngleApp {
                 }
                 return;
             };
+            // One letter isn't worth a search (each one uses up some of the key's allowance).
+            if crate::giphy::normalize(query).chars().count() == 1 {
+                ui.label(RichText::new("Keep typing to search GIPHY…").color(theme::MUTED));
+                return;
+            }
             let ctx = ui.ctx().clone();
             self.ui.giphy.update(query, &api_key, move || ctx.request_repaint());
-            let results = self.ui.giphy.results.lock().clone();
-            let gifs = match results {
-                Some(crate::giphy::Search::Ready(v)) if !self.ui.giphy.waiting() => v,
+            let gifs = match self.ui.giphy.current() {
+                Some(crate::giphy::Search::Ready(v)) => v,
                 Some(crate::giphy::Search::Failed(e)) => {
                     ui.label(RichText::new(e).color(theme::LIVE));
                     return;
@@ -1368,7 +1391,6 @@ impl IngleApp {
             }
             let n = gifs.len();
             self.ui.giphy.sel = self.ui.giphy.sel.min(n - 1);
-            let focused = ui.ctx().memory(|m| m.focused()) == Some(composer_id);
             if focused {
                 ui.input_mut(|i| {
                     if i.consume_key(Modifiers::NONE, Key::ArrowRight) || i.consume_key(Modifiers::NONE, Key::Tab) {
@@ -1377,13 +1399,10 @@ impl IngleApp {
                     if i.consume_key(Modifiers::NONE, Key::ArrowLeft) {
                         self.ui.giphy.sel = (self.ui.giphy.sel + n - 1) % n;
                     }
-                    if i.consume_key(Modifiers::NONE, Key::Enter) {
-                        send = Some(gifs[self.ui.giphy.sel].url.clone());
-                    }
-                    if i.consume_key(Modifiers::NONE, Key::Escape) {
-                        draft.clear();
-                    }
                 });
+            }
+            if enter {
+                send = Some(gifs[self.ui.giphy.sel].url.clone());
             }
             let h = 110.0;
             egui::ScrollArea::horizontal().id_salt("giphy-row").max_height(h + 8.0).show(ui, |ui| {

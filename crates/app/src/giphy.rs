@@ -2,8 +2,10 @@
 //! GIPHY, pick one (click, or arrows and Enter) and it's posted. GIFs from GIPHY in
 //! messages play right in the chat.
 //!
-//! Searches go straight from this PC to GIPHY with an API key (built in at release time,
-//! or your own in Settings). Only GIPHY's own addresses are ever fetched automatically.
+//! Searches go straight from this PC to GIPHY (GIPHY doesn't allow passing them through a
+//! server) with an API key: built in at release time, or your own pasted into the GIF panel.
+//! Only GIPHY's own addresses are ever fetched automatically. Results are cached for a while,
+//! since a free key gets 100 calls an hour for everyone using it.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -53,52 +55,92 @@ pub enum Dl {
     Failed,
 }
 
+/// How long typing must pause before a search starts (each search uses up some of the key's
+/// allowance: a free GIPHY key gets 100 calls an hour, shared by everyone using it).
+const PAUSE: Duration = Duration::from_millis(600);
+/// Results already fetched are reused for this long (trending, and the same words again).
+const CACHE_FOR: Duration = Duration::from_secs(30 * 60);
+const CACHE_MAX: usize = 200;
+
 #[derive(Default)]
 pub struct GiphyUi {
     /// The query typed, and when it last changed (searches wait for a pause in typing).
     typed: String,
     typed_at: Option<Instant>,
-    /// The query the results are for.
+    /// The query being shown (the last one searched).
     pub searched: Option<String>,
-    pub results: Arc<Mutex<Option<Search>>>,
+    /// The latest search: the query it's for, and how it went.
+    results: Arc<Mutex<Option<(String, Search)>>>,
+    /// Results already fetched, by query ("" is trending).
+    cache: Arc<Mutex<HashMap<String, (Instant, Vec<Gif>)>>>,
     pub sel: usize,
+}
+
+/// Words as searched: case and spacing don't make a different search.
+pub fn normalize(query: &str) -> String {
+    query.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
 impl GiphyUi {
     /// Call every frame while `/giphy …` is in the box; starts searches as needed.
     pub fn update(&mut self, query: &str, api_key: &str, repaint: impl Fn() + Send + 'static) {
-        let q = query.trim().to_string();
+        let q = normalize(query);
         if q != self.typed {
             self.typed = q.clone();
             self.typed_at = Some(Instant::now());
             self.sel = 0;
         }
-        let settled = self.typed_at.map(|t| t.elapsed() > Duration::from_millis(350)).unwrap_or(true);
-        if settled && self.searched.as_deref() != Some(q.as_str()) {
-            self.searched = Some(q.clone());
-            *self.results.lock() = Some(Search::Loading);
-            let slot = self.results.clone();
-            let key = api_key.to_string();
-            let _ = std::thread::Builder::new().name("ingle-giphy".into()).spawn(move || {
-                let r = search(&key, &q);
-                let mut s = slot.lock();
-                // Still the latest search?
-                if matches!(*s, Some(Search::Loading)) {
-                    *s = Some(match r {
+        if self.waiting() || self.searched.as_deref() == Some(q.as_str()) {
+            return;
+        }
+        self.searched = Some(q.clone());
+        if let Some(v) = self.cached(&q) {
+            *self.results.lock() = Some((q, Search::Ready(v)));
+            return;
+        }
+        *self.results.lock() = Some((q.clone(), Search::Loading));
+        let (slot, cache, key) = (self.results.clone(), self.cache.clone(), api_key.to_string());
+        let _ = std::thread::Builder::new().name("ingle-giphy".into()).spawn(move || {
+            let r = search(&key, &q);
+            if let Ok(v) = &r {
+                remember(&mut cache.lock(), &q, v.clone());
+            }
+            let mut s = slot.lock();
+            // Only if it's still the latest search.
+            if s.as_ref().is_some_and(|(sq, _)| *sq == q) {
+                *s = Some((
+                    q,
+                    match r {
                         Ok(v) => Search::Ready(v),
                         Err(e) => Search::Failed(e),
-                    });
-                }
-                drop(s);
-                repaint();
-            });
+                    },
+                ));
+            }
+            drop(s);
+            repaint();
+        });
+    }
+
+    fn cached(&self, q: &str) -> Option<Vec<Gif>> {
+        self.cache.lock().get(q).filter(|(t, _)| t.elapsed() < CACHE_FOR).map(|(_, v)| v.clone())
+    }
+
+    /// How the search for what's typed now is going (None while typing).
+    pub fn current(&self) -> Option<Search> {
+        if self.waiting() {
+            return None;
+        }
+        match (&*self.results.lock(), &self.searched) {
+            (Some((q, r)), Some(sq)) if q == sq => Some(r.clone()),
+            _ => None,
         }
     }
 
     pub fn waiting(&self) -> bool {
-        self.typed_at.map(|t| t.elapsed() <= Duration::from_millis(350)).unwrap_or(false)
+        self.typed_at.is_some_and(|t| t.elapsed() < PAUSE)
     }
 
+    /// The box no longer holds `/giphy` (results already fetched are kept for next time).
     pub fn reset(&mut self) {
         self.typed.clear();
         self.typed_at = None;
@@ -106,6 +148,19 @@ impl GiphyUi {
         *self.results.lock() = None;
         self.sel = 0;
     }
+}
+
+/// Keeps `v` as the results for `q`, making room by dropping expired and then the oldest.
+fn remember(cache: &mut HashMap<String, (Instant, Vec<Gif>)>, q: &str, v: Vec<Gif>) {
+    if cache.len() >= CACHE_MAX {
+        cache.retain(|_, (t, _)| t.elapsed() < CACHE_FOR);
+    }
+    if cache.len() >= CACHE_MAX {
+        if let Some(oldest) = cache.iter().min_by_key(|(_, (t, _))| *t).map(|(k, _)| k.clone()) {
+            cache.remove(&oldest);
+        }
+    }
+    cache.insert(q.to_string(), (Instant::now(), v));
 }
 
 fn agent() -> ureq::Agent {
@@ -144,8 +199,10 @@ pub fn search(key: &str, q: &str) -> Result<Vec<Gif>, String> {
         format!("{API}/search?api_key={}&q={}&limit={RESULTS}&rating=pg-13&lang=en", enc(key), enc(q))
     };
     let mut resp = agent().get(&url).call().map_err(|e| match e {
-        ureq::Error::StatusCode(401 | 403) => "GIPHY didn't accept the API key.".to_string(),
-        ureq::Error::StatusCode(429) => "GIPHY says too many searches for now; try again in a bit.".to_string(),
+        ureq::Error::StatusCode(401 | 403) => "GIPHY didn't accept the GIF search key.".to_string(),
+        ureq::Error::StatusCode(429) => {
+            "GIF searches are used up for this hour (GIPHY limits how many one key gets). Try again a bit later.".to_string()
+        }
         e => format!("Couldn't reach GIPHY: {e}"),
     })?;
     let text = resp.body_mut().read_to_string().map_err(|e| e.to_string())?;
@@ -264,6 +321,41 @@ mod tests {
         assert_eq!(v[0].preview, "https://media2.giphy.com/media/abc123/200w_d.gif");
         assert_eq!(v[0].url, "https://media2.giphy.com/media/abc123/giphy-downsized.gif");
         assert_eq!(v[0].preview_h, 150.0);
+    }
+
+    fn gif(id: &str) -> Gif {
+        Gif { id: id.into(), title: String::new(), preview: String::new(), preview_w: 1.0, preview_h: 1.0, url: String::new() }
+    }
+
+    #[test]
+    fn searches_are_reused_and_never_shown_for_other_words() {
+        assert_eq!(normalize("  Cute   CATS "), "cute cats");
+        let mut g = GiphyUi::default();
+        g.cache.lock().insert("dogs".into(), (Instant::now(), vec![gif("d1")]));
+        // Still typing: nothing yet.
+        g.update("Dogs", "key", || {});
+        assert!(g.current().is_none());
+        // After the pause, the cached results come straight back (no call to GIPHY).
+        g.typed_at = Some(Instant::now() - PAUSE * 2);
+        g.update("Dogs", "key", || {});
+        assert!(matches!(g.current(), Some(Search::Ready(v)) if v[0].id == "d1"));
+        // Results for other words (a slow earlier search finishing late) are never shown.
+        *g.results.lock() = Some(("cats".into(), Search::Ready(vec![gif("c1")])));
+        assert!(g.current().is_none());
+        // Old results expire.
+        g.cache.lock().insert("old".into(), (Instant::now() - CACHE_FOR * 2, vec![gif("o1")]));
+        assert!(g.cached("old").is_none());
+    }
+
+    #[test]
+    fn the_cache_stays_small() {
+        let mut c = HashMap::new();
+        for i in 0..CACHE_MAX {
+            c.insert(format!("q{i}"), (Instant::now() - Duration::from_secs(1000 - i as u64), vec![gif("x")]));
+        }
+        remember(&mut c, "new", vec![gif("n")]);
+        assert_eq!(c.len(), CACHE_MAX);
+        assert!(c.contains_key("new") && !c.contains_key("q0"));
     }
 
     #[test]
