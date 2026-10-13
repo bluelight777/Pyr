@@ -36,7 +36,10 @@ Features:
 
 - Servers with **text channels** (Discord-like: markdown, replies, @mentions, reactions,
   edits, deletes, typing indicators, spellcheck in four languages, history) and **voice
-  channels**, each with its own text chat.
+  channels**, each with its own text chat. Deleting a message asks first, showing the
+  message as it is (pictures too), what goes with it (its pictures, reactions, replies) and,
+  for a moderator, whose it is; hold Shift to delete straight away (the bin turns red), or
+  switch the question off in Settings → Notifications.
 - **Unread messages are marked everywhere**: channels (a dot and a bold name, red badges
   for mentions), voice channels' chats (also on the call's chat button), servers (the pill
   beside their icon), direct messages (who sent them, under the home button), a "NEW" line
@@ -55,7 +58,10 @@ Features:
   stream at once and you can watch several streams.
 - **Stream sound** (Windows): a whole-screen share sends everything your PC plays
   *except the call itself*, so viewers never hear themselves echoed. A window share sends
-  just that app's sound. Viewers get their own stream-volume slider.
+  just that app's sound. If your PC's sound goes through a program that plays it all again
+  (Voicemeeter, SteelSeries Sonar, Elgato Wave Link, NVIDIA Broadcast's speaker effects),
+  Ingle notices the call in your stream's sound and takes it back out, leaving the game's
+  sound as it was. Viewers get their own stream-volume slider.
 - **End-to-end encryption** of all voice, video, screen and stream sound. Keys rotate
   whenever someone joins or leaves; the server only relays ciphertext. Everyone sees a
   *call code*: if the codes match, nobody (not even the server) can listen in.
@@ -331,6 +337,12 @@ Open them with the gear next to your name (**Voice & Video** tab):
   restarting, a USB hiccup) are reopened by themselves within a second or two; if it takes
   longer, the call screen says so. If it still happens, the log says whether a device
   stopped or someone's sound didn't decrypt: send a bug report with the log.
+- **People hear themselves when you share your screen with sound**: since 0.6.6 Ingle takes
+  the call back out of your stream's sound by itself, within a few seconds of people
+  talking (it's there when a program like Voicemeeter or SteelSeries Sonar plays your PC's
+  sound again). If someone still hears themselves, share a single window instead of the
+  whole screen, or set Ingle's speakers to your headset itself rather than the program's
+  virtual device.
 - **The taskbar or Start menu shows an old icon**: Windows keeps the icons it has shown by
   file name. Since 0.6.5 the installer points Ingle's shortcuts and taskbar pins at a copy
   of the icon named after the icon itself, so a new icon shows as soon as it's installed.

@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use chrono::{Datelike, Local, TimeZone};
 use eframe::egui::{self, Align, Color32, CornerRadius, Key, KeyboardShortcut, Layout, Modifiers, Rect, RichText, Sense, Stroke, pos2, vec2};
-use ingle_engine::state::{AppState, ServerView};
-use ingle_proto::control::{Attachment, ChannelId, ChannelKind, FILES_FEATURE, Message, perm};
+use ingle_engine::state::{AppState, ChannelLog, ServerView};
+use ingle_proto::control::{Attachment, ChannelId, ChannelKind, FILES_FEATURE, Message, MessageId, perm};
 
 use crate::app::{Act, IngleApp, avatar, icon_button, name_color};
 use crate::{icons, markdown, theme};
@@ -487,8 +487,24 @@ impl IngleApp {
             if mine && icon_button(&mut child, 28.0, "Edit", false, |p, r, c| icons::pencil(p, r, c)).clicked() {
                 self.ui.editing = Some((m.id, m.content.clone()));
             }
-            if (mine || admin) && icon_button(&mut child, 28.0, "Delete", false, |p, r, _| icons::trash(p, r, theme::LIVE)).clicked() {
-                acts.push(Act::Delete { key: key.clone(), id: m.id });
+            if mine || admin {
+                // Holding Shift deletes at once (no question), and the button shows it.
+                let now = ui.input(|i| i.modifiers.shift);
+                let del = if now {
+                    let (r, resp) = child.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
+                    child.painter().rect_filled(r, CornerRadius::same(6), theme::LIVE);
+                    icons::trash(child.painter(), r.shrink(28.0 * 0.2), Color32::WHITE);
+                    resp.on_hover_text("Delete now")
+                } else {
+                    icon_button(&mut child, 28.0, "Delete", false, |p, r, _| icons::trash(p, r, theme::LIVE))
+                };
+                if del.clicked() {
+                    if now || !st.settings.confirm_delete {
+                        acts.push(Act::Delete { key: key.clone(), id: m.id });
+                    } else {
+                        self.ui.dialog = Some(crate::app::Dialog::DeleteMessage { key: key.clone(), channel: m.channel_id, id: m.id });
+                    }
+                }
             }
             if self.ui.react_picker == Some(m.id) {
                 let area = egui::Area::new(ui.id().with(("react", m.id)))
@@ -1154,11 +1170,175 @@ pub fn fit_in(r: Rect, size: egui::Vec2) -> (Rect, Rect) {
     (Rect::from_center_size(r.center(), size * s), uv)
 }
 
+/// What goes when a message is deleted, besides its words: its pictures and reactions, and
+/// replies that will say it's gone.
+fn goes_with_it(m: &Message, log: &ChannelLog) -> Option<String> {
+    let pictures = m.attachments.len() + crate::giphy::gif_links(&m.content).len();
+    let reactions: usize = m.reactions.iter().map(|r| r.users.len()).sum();
+    let replies = log.messages.iter().filter(|x| x.reply_to == Some(m.id)).count();
+    let mut parts = Vec::new();
+    match pictures {
+        0 => {}
+        1 => parts.push("Its picture".to_string()),
+        n => parts.push(format!("Its {n} pictures")),
+    }
+    match reactions {
+        0 => {}
+        1 => parts.push("1 reaction".to_string()),
+        n => parts.push(format!("{n} reactions")),
+    }
+    let mut out = String::new();
+    if !parts.is_empty() {
+        let one = parts.len() == 1 && (pictures == 1 || reactions == 1);
+        out = format!("{} {} with it.", parts.join(" and "), if one { "goes" } else { "go" });
+    }
+    if replies > 0 {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out += &match replies {
+            1 => "The reply to it will say it was deleted.".to_string(),
+            n => format!("The {n} replies to it will say it was deleted."),
+        };
+    }
+    (!out.is_empty()).then_some(out)
+}
+
 impl IngleApp {
+    /// "Delete message": like Discord's, but the message shows as it is (pictures and all), it
+    /// says what goes with it and, for someone else's, whose it is; Enter deletes, Escape keeps.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn delete_dialog(
+        &mut self,
+        ui: &mut egui::Ui,
+        st: &AppState,
+        key: &str,
+        channel: ChannelId,
+        id: MessageId,
+        acts: &mut Vec<Act>,
+        close: &mut bool,
+    ) {
+        ui.set_width(460.0);
+        // Gone already (deleted elsewhere, or the server's gone): nothing to ask.
+        let Some((s, log, m)) = st.server(key).and_then(|s| s.logs.get(&channel).and_then(|l| l.find(id).map(|m| (s, l, m)))) else {
+            *close = true;
+            return;
+        };
+        let mine = m.author == st.my_uid;
+        let place = match s.dm(channel) {
+            Some(_) => "this conversation".to_string(),
+            None => s.channel(channel).map(|c| format!("#{}", c.name)).unwrap_or_else(|| "the channel".into()),
+        };
+        crate::dialogs::title(ui, "Delete message");
+        let ask = if mine {
+            format!("Are you sure you want to delete this message? It goes for everyone in {place}.")
+        } else {
+            format!("This is {}'s message. Deleting it takes it away for everyone in {place}.", s.member_name(&m.author))
+        };
+        ui.label(RichText::new(ask).color(theme::MUTED));
+        ui.add_space(12.0);
+        egui::Frame::new()
+            .fill(theme::MAIN)
+            .stroke(Stroke::new(1.0f32, theme::LINE))
+            .corner_radius(8)
+            .inner_margin(egui::Margin::same(12))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                egui::ScrollArea::vertical().max_height(300.0).auto_shrink([false, true]).show(ui, |ui| {
+                    self.message_preview(ui, st, s, log, m);
+                });
+            });
+        if let Some(goes) = goes_with_it(m, log) {
+            ui.add_space(8.0);
+            ui.label(RichText::new(goes).size(12.5).color(theme::MUTED));
+        }
+        ui.add_space(10.0);
+        ui.label(RichText::new("TIP").font(theme::bold_font(11.0)).color(theme::ONLINE));
+        ui.label(RichText::new("Hold Shift when you click Delete to delete straight away, without this question.").size(12.5).color(theme::BODY));
+        ui.add_space(14.0);
+        let enter = ui.input(|i| i.key_pressed(Key::Enter));
+        ui.horizontal(|ui| {
+            let w = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
+            if ui.add(egui::Button::new("Cancel").min_size(vec2(w, 36.0))).clicked() {
+                *close = true;
+            }
+            if ui.add(theme::danger_button("Delete").min_size(vec2(w, 36.0))).clicked() || enter {
+                acts.push(Act::Delete { key: key.to_string(), id });
+                *close = true;
+            }
+        });
+    }
+
+    /// A message as the chat shows it, for the delete question (clicking it does nothing).
+    fn message_preview(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, log: &ChannelLog, m: &Message) {
+        let key = s.key.clone();
+        let name = s.member_name(&m.author);
+        if let Some(rid) = m.reply_to {
+            let text = match log.find(rid) {
+                Some(r) => format!("Replying to {}: {}", s.member_name(&r.author), snippet(&r.content, 60)),
+                None => "Replying to a message that was deleted or is older".to_string(),
+            };
+            ui.add(egui::Label::new(RichText::new(text).size(12.0).color(theme::DIM)).truncate());
+            ui.add_space(4.0);
+        }
+        ui.horizontal_top(|ui| {
+            let (r, _) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::hover());
+            let face = self.face(ui.ctx(), s, &m.author);
+            avatar(ui.painter(), r.center(), 20.0, &m.author, &name, false, theme::MAIN, face);
+            ui.add_space(8.0);
+            ui.vertical(|ui| {
+                ui.set_max_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    let col = s.members.get(&m.author).map(|a| name_color(s, &m.author, a.role)).unwrap_or(theme::TEXT);
+                    ui.label(RichText::new(&name).font(theme::bold_font(14.5)).color(col));
+                    ui.label(RichText::new(when(m.created_at)).size(11.5).color(theme::DIM));
+                });
+                let gifs = crate::giphy::gif_links(&m.content);
+                let only_gif = gifs.len() == 1 && m.content.trim() == gifs[0];
+                if !m.content.is_empty() && !only_gif {
+                    let ctx = ui.ctx().clone();
+                    let names = mention_names(s);
+                    markdown::show(ui, &m.content, theme::BODY, &names, &mut |id| self.custom_emoji_tex(&ctx, &key, id));
+                }
+                for g in &gifs {
+                    self.gif_embed_sized(ui, g, vec2(240.0, 160.0), false);
+                }
+                if m.edited_at.is_some() {
+                    ui.label(RichText::new("(edited)").size(10.5).color(theme::DIM));
+                }
+                if !m.attachments.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+                        for a in &m.attachments {
+                            self.attachment_sized(ui, s, a, vec2(240.0, 160.0), false);
+                        }
+                    });
+                }
+                if !m.reactions.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        for r in &m.reactions {
+                            let me_in = r.users.iter().any(|u| u == &st.my_uid);
+                            let ctx = ui.ctx().clone();
+                            let _ = crate::emoji_picker::reaction_pill(ui, &r.emoji, r.users.len(), me_in, &mut |id| {
+                                self.custom_emoji_tex(&ctx, &key, id)
+                            });
+                        }
+                    });
+                }
+            });
+        });
+    }
+
     /// An image or GIF in a message; click to see it full size.
     fn attachment(&mut self, ui: &mut egui::Ui, s: &ServerView, a: &Attachment) {
+        self.attachment_sized(ui, s, a, vec2(400.0, 300.0), true);
+    }
+
+    /// An image or GIF at most `max` big; `open`: clicking shows it full size.
+    fn attachment_sized(&mut self, ui: &mut egui::Ui, s: &ServerView, a: &Attachment, max: egui::Vec2, open: bool) {
         let (w, h) = if a.width > 0 && a.height > 0 { (a.width as f32, a.height as f32) } else { (320.0, 200.0) };
-        let max = vec2(400.0f32.min(ui.available_width().max(120.0)), 300.0);
+        let max = vec2(max.x.min(ui.available_width().max(120.0)), max.y);
         // Small images keep their size; big ones shrink to fit. Tiny ones get a minimum.
         let scale = (max.x / w).min(max.y / h).min(1.0);
         let size = vec2((w * scale).max(48.0), (h * scale).max(48.0));
@@ -1197,10 +1377,10 @@ impl IngleApp {
             }
         }
         let resp = resp.on_hover_text(format!("{}  ·  {}", a.name, human_size(a.size)));
-        if resp.hovered() {
+        if open && resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
-        if resp.clicked() {
+        if open && resp.clicked() {
             self.ui.viewer = Some((s.key.clone(), a.clone()));
         }
     }
@@ -1543,9 +1723,13 @@ fn composer_job(text: &str, wrap: f32) -> egui::text::LayoutJob {
 impl IngleApp {
     /// A GIF from GIPHY in a message, playing.
     fn gif_embed(&mut self, ui: &mut egui::Ui, url: &str) {
+        self.gif_embed_sized(ui, url, vec2(320.0, 240.0), true);
+    }
+
+    /// A GIPHY GIF at most `max` big; `open`: clicking opens it on GIPHY.
+    fn gif_embed_sized(&mut self, ui: &mut egui::Ui, url: &str, max: egui::Vec2, open: bool) {
         let ctx = ui.ctx().clone();
         let dl = self.ui.gifs.get(url, move || ctx.request_repaint());
-        let max = vec2(320.0, 240.0);
         match dl {
             crate::giphy::Dl::Ready(bytes) => {
                 let t = ui.input(|i| i.time);
@@ -1561,7 +1745,7 @@ impl IngleApp {
                         if let Some(n) = next {
                             ui.ctx().request_repaint_after(n);
                         }
-                        if resp.on_hover_text("GIF from GIPHY (click to open)").clicked() {
+                        if open && resp.on_hover_text("GIF from GIPHY (click to open)").clicked() {
                             ui.ctx().open_url(egui::OpenUrl::new_tab(url));
                         }
                     }
@@ -1742,6 +1926,54 @@ impl IngleApp {
         ui.add_space(6.0);
         ui.label(RichText::new("Click a GIF to send it  ·  ↑ ↓ to choose, Enter to send  ·  Esc to close").size(11.0).color(theme::DIM));
         send
+    }
+}
+
+#[cfg(test)]
+mod delete_tests {
+    use super::*;
+    use ingle_proto::control::Reaction;
+
+    fn msg(id: MessageId, reply_to: Option<MessageId>) -> Message {
+        Message {
+            id,
+            channel_id: 1,
+            author: "a".into(),
+            content: "hi".into(),
+            created_at: 0,
+            edited_at: None,
+            reply_to,
+            reactions: Vec::new(),
+            attachments: Vec::new(),
+        }
+    }
+
+    fn picture() -> Attachment {
+        Attachment { id: "f".into(), name: "dog.png".into(), mime: "image/png".into(), size: 10, width: 4, height: 4 }
+    }
+
+    #[test]
+    fn the_delete_question_says_what_goes_with_the_message() {
+        let mut log = ChannelLog::default();
+        let mut m = msg(5, None);
+        log.upsert(m.clone());
+        assert_eq!(goes_with_it(&m, &log), None);
+        m.attachments.push(picture());
+        assert_eq!(goes_with_it(&m, &log).as_deref(), Some("Its picture goes with it."));
+        m.reactions.push(Reaction { emoji: "😘".into(), users: vec!["b".into()] });
+        assert_eq!(goes_with_it(&m, &log).as_deref(), Some("Its picture and 1 reaction go with it."));
+        m.attachments.push(picture());
+        m.reactions.push(Reaction { emoji: "🔥".into(), users: vec!["b".into(), "c".into()] });
+        assert_eq!(goes_with_it(&m, &log).as_deref(), Some("Its 2 pictures and 3 reactions go with it."));
+        m.attachments.clear();
+        m.content = "https://media.giphy.com/media/abc/giphy.gif".into();
+        log.upsert(msg(6, Some(5)));
+        log.upsert(msg(7, Some(5)));
+        log.upsert(msg(8, Some(6)));
+        let said = goes_with_it(&m, &log).unwrap();
+        assert!(said.ends_with("The 2 replies to it will say it was deleted."), "{said}");
+        let just_reactions = Message { reactions: vec![Reaction { emoji: "👍".into(), users: vec!["b".into()] }], ..msg(9, None) };
+        assert_eq!(goes_with_it(&just_reactions, &log).as_deref(), Some("1 reaction goes with it."));
     }
 }
 

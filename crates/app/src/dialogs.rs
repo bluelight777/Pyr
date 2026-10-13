@@ -383,6 +383,9 @@ impl IngleApp {
                         }
                     });
                 }
+                Dialog::DeleteMessage { key, channel, id } => {
+                    self.delete_dialog(ui, st, &key, channel, id, acts, &mut close);
+                }
                 Dialog::ReportBug { mut title, mut body, mut include_log } => {
                     ui.set_width(520.0);
                     super::dialogs::title(ui, "Report a bug");
@@ -856,6 +859,14 @@ impl IngleApp {
                         }
                     });
                 });
+                ui.add_space(10.0);
+                field_label(ui, "Messages");
+                ui.checkbox(&mut draft.confirm_delete, "Ask before deleting a message");
+                ui.label(
+                    RichText::new("Holding Shift when you click Delete skips the question either way.")
+                        .size(12.0)
+                        .color(theme::DIM),
+                );
                 ui.add_space(10.0);
                 field_label(ui, "Muting");
                 ui.label(

@@ -117,6 +117,8 @@ pub enum Dialog {
     /// Tab 0: overview; 1: roles.
     ServerSettings { key: String, name: String, tab: u8 },
     LeaveServer { key: String, name: String },
+    /// "Delete message?" (see `chat.rs`).
+    DeleteMessage { key: String, channel: ChannelId, id: MessageId },
     Settings { tab: u8 },
     ScreenPicker { selected: Option<String> },
     /// Report a bug in Ingle (see the engine's `bugs.rs`).

@@ -152,6 +152,8 @@ pub struct Settings {
     pub spell_language: String,
     /// Words added to the dictionary (right-click one → Add to dictionary).
     pub spell_words: Vec<String>,
+    /// Ask before deleting a message (holding Shift when clicking Delete skips it anyway).
+    pub confirm_delete: bool,
 }
 
 impl Default for Settings {
@@ -187,6 +189,7 @@ impl Default for Settings {
             spellcheck: true,
             spell_language: "en-US".into(),
             spell_words: Vec::new(),
+            confirm_delete: true,
         }
     }
 }

@@ -129,6 +129,21 @@ processing: AEC3, NS, AGC2, high-pass), `nnnoiseless` (RNNoise), `deep_filter` w
 loopback*: whole-screen shares capture every process except Ingle's own process tree,
 window shares capture just that window's process tree.
 
+Some PCs play all their sound again from another process (Voicemeeter, SteelSeries Sonar,
+NVIDIA Broadcast's speaker effects), which puts the call back into the stream where
+process loopback can't leave it out. So the stream thread also gets a copy of what the call
+plays (`PlayedTap`, filled only while a stream with sound runs) and `stream_echo` takes it
+back out: GCC-PHAT between the two at 16 kHz finds a delayed copy of the call even under
+loud game sound (a peak over 50 times the median, twice in a row at the same delay), then
+the way back is learnt per channel as an H1 estimate (cross-spectra over 43 ms frames,
+averaged over about 30 s of talk; the game averages away), turned into a 30 ms impulse
+response that's shrunk tap by tap against the noise seen far out, and subtracted with a
+partitioned overlap-save filter. Nothing is suppressed or ducked, so the game sounds the
+same, it only subtracts while that makes the stream quieter, and until the call is found
+the stream goes out bit for bit as captured. `examples/stream_echo_eval.rs` measures it:
+31-37 dB of the call removed after a few seconds of talk (about 20 dB if the other program
+compresses it).
+
 ## Video pipeline (client)
 
 ```
