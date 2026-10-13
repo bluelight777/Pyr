@@ -13,19 +13,22 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
-/// Built into release builds (`INGLE_GIPHY_KEY=... scripts/build-*.sh`).
-const BUILT_IN_KEY: Option<&str> = option_env!("INGLE_GIPHY_KEY");
 const API: &str = "https://api.giphy.com/v1/gifs";
 /// Biggest GIF downloaded for showing in chat.
 const MAX_GIF_BYTES: usize = 12 << 20;
 const RESULTS: usize = 24;
 
-pub fn key(settings_key: &str) -> Option<String> {
-    let k = settings_key.trim();
+/// The key for GIF search on a server: the one its owner set up (`ServerInfo::giphy_key`).
+/// (Development builds also take `INGLE_GIPHY_KEY`, for testing against a fake GIPHY.)
+pub fn key(server_key: &str) -> Option<String> {
+    let k = server_key.trim();
     if !k.is_empty() {
         return Some(k.to_string());
     }
-    std::env::var("INGLE_GIPHY_KEY").ok().filter(|k| !k.is_empty()).or_else(|| BUILT_IN_KEY.filter(|k| !k.is_empty()).map(String::from))
+    if cfg!(debug_assertions) {
+        return std::env::var("INGLE_GIPHY_KEY").ok().filter(|k| !k.is_empty());
+    }
+    None
 }
 
 #[derive(Clone, Debug, PartialEq)]

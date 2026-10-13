@@ -398,6 +398,8 @@ pub struct RentRequest {
     /// For showing: "1 GB" and "New York 3" (the slugs if empty).
     pub size_label: String,
     pub region_label: String,
+    /// Put back a server from this backup folder instead of starting a new one.
+    pub restore: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for RentRequest {
@@ -427,13 +429,14 @@ pub fn droplet_name(community: &str) -> String {
     if s == "ingle" { "ingle-server".into() } else { s }
 }
 
-fn install_options(name: &str, ip: &str, payloads: &Payloads) -> InstallOptions {
+fn install_options(name: &str, ip: &str, payloads: &Payloads, restore: Option<PathBuf>) -> InstallOptions {
     InstallOptions {
         name: name.to_string(),
         public_host: ip.to_string(),
         port: crate::DEFAULT_PORT,
         payloads: payloads.clone(),
         wait_for_boot: Some(Duration::from_secs(240)),
+        restore,
     }
 }
 
@@ -519,7 +522,7 @@ fn rent_inner(req: &RentRequest, config_dir: &Path, payloads: &Payloads, progres
     let _ = records::save(config_dir, &record);
     progress.log(format!("The server's address is {ip}."));
 
-    let ready = install_on(&dref, &req.name, &key.key, Some(host_fp), payloads, progress).map_err(|f| with_droplet(f, &dref))?;
+    let ready = install_on(&dref, &req.name, &key.key, Some(host_fp), payloads, progress, req.restore.clone()).map_err(|f| with_droplet(f, &dref))?;
     record.installed = true;
     record.name = ready.name.clone();
     record.invite_link = Some(ready.invite_link.clone());
@@ -541,10 +544,11 @@ fn install_on(
     host_key: Option<String>,
     payloads: &Payloads,
     progress: &Progress,
+    restore: Option<PathBuf>,
 ) -> Result<crate::Ready, Failure> {
     let ip = d.ip.clone().ok_or_else(|| Failure::new("The server has no address yet."))?;
     let login = Login { host: ip.clone(), port: 22, user: "root".into(), auth: Auth::Key(key.clone()), sudo_password: None, host_key };
-    let opts = install_options(name, &ip, payloads);
+    let opts = install_options(name, &ip, payloads, restore);
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| Failure::new(e.to_string()))?;
     let installed = rt.block_on(install::install(&login, &opts, progress));
     drop(rt);
@@ -553,7 +557,7 @@ fn install_on(
 }
 
 /// Runs the install again on a droplet that was created earlier (after a failure).
-pub fn retry_install(d: DropletRef, name: String, config_dir: PathBuf, payloads: Payloads, progress: Progress) {
+pub fn retry_install(d: DropletRef, name: String, config_dir: PathBuf, payloads: Payloads, progress: Progress, restore: Option<PathBuf>) {
     let outcome = (|| {
         let key = crate::keys::load_or_create(&config_dir).map_err(Failure::from)?;
         let mut record = records::load(&config_dir)
@@ -561,7 +565,7 @@ pub fn retry_install(d: DropletRef, name: String, config_dir: PathBuf, payloads:
             .into_iter()
             .find(|s| s.droplet_id == Some(d.id))
             .unwrap_or_else(|| HostedServer { provider: "digitalocean".into(), droplet_id: Some(d.id), ..Default::default() });
-        let ready = install_on(&d, &name, &key.key, record.host_key.clone(), &payloads, &progress).map_err(|mut f| {
+        let ready = install_on(&d, &name, &key.key, record.host_key.clone(), &payloads, &progress, restore).map_err(|mut f| {
             f.droplet = Some(d.clone());
             f
         })?;

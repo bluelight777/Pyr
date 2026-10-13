@@ -315,8 +315,19 @@ pub struct VoiceRejoin {
 /// How long to keep trying to get back into a call after the server drops.
 pub const VOICE_REJOIN_FOR: std::time::Duration = std::time::Duration::from_secs(180);
 
+/// Backups of a server I own (see `backup.rs`).
+#[derive(Clone, Debug, Default)]
+pub struct BackupStatus {
+    pub running: bool,
+    /// When the last one finished (ms since 1970).
+    pub last_ok: Option<i64>,
+    pub error: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Toast {
+    /// Unique, for dismissing it.
+    pub id: u64,
     pub text: String,
     pub error: bool,
     pub at: Instant,
@@ -341,6 +352,8 @@ pub struct AppState {
     /// is rejoined, camera and screen share included, as soon as the server is back.
     pub voice_rejoin: Option<VoiceRejoin>,
     pub toasts: Vec<Toast>,
+    /// Backups of servers I own, by server key.
+    pub backups: HashMap<String, BackupStatus>,
     pub devices: DeviceLists,
     pub settings: Settings,
     pub user_volumes: HashMap<UserId, f32>,
@@ -389,10 +402,20 @@ impl AppState {
         self.muted_servers.contains(key) || self.muted_channels.contains(&(key.to_string(), channel))
     }
 
+    /// A notice in the corner. Errors stay until dismissed (and can be copied); the same error
+    /// again just moves back to the top instead of piling up.
     pub fn toast(&mut self, text: impl Into<String>, error: bool) {
-        self.toasts.push(Toast { text: text.into(), error, at: Instant::now() });
-        if self.toasts.len() > 5 {
-            self.toasts.remove(0);
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let text = text.into();
+        if error {
+            self.toasts.retain(|t| !(t.error && t.text == text));
+        }
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.toasts.push(Toast { id, text, error, at: Instant::now() });
+        // Keep a few: notices go first, then the oldest errors.
+        while self.toasts.len() > 8 {
+            let i = self.toasts.iter().position(|t| !t.error).unwrap_or(0);
+            self.toasts.remove(i);
         }
     }
 }

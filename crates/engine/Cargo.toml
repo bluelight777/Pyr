@@ -46,6 +46,10 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Dwm",
     "Win32_System_LibraryLoader",
+    # Voice priority (qos.rs).
+    "Win32_NetworkManagement_QoS",
+    "Win32_Networking_WinSock",
+    "Win32_System_IO",
 ] }
 windows-capture = "2.0.1"
 nokhwa = { version = "0.10.11", features = ["input-msmf"] }

@@ -120,12 +120,18 @@ pub struct Settings {
     pub echo_cancellation: bool,
     pub auto_gain: bool,
     pub voice_bitrate_kbps: u32,
+    /// Mark voice packets so routers and Wi-Fi send them first (Windows; like Discord's
+    /// "Quality of Service High Packet Priority"). A few routers misbehave with it.
+    pub voice_priority: bool,
     pub input_gain: f32,
     pub output_volume: f32,
     pub camera_device: Option<String>,
     pub camera_quality: CameraQuality,
     pub screen_preset: ScreenPreset,
     pub share_audio: bool,
+    /// Open Ingle when Windows starts (like Discord), and then only in the tray.
+    pub start_with_windows: bool,
+    pub start_hidden: bool,
     /// No longer used: the close button always keeps Ingle running by the clock (Windows).
     pub close_to_tray: bool,
     /// The one-time notice that Ingle is still running by the clock has been shown.
@@ -155,12 +161,15 @@ impl Default for Settings {
             echo_cancellation: true,
             auto_gain: true,
             voice_bitrate_kbps: 64,
+            voice_priority: true,
             input_gain: 1.0,
             output_volume: 1.0,
             camera_device: None,
             camera_quality: CameraQuality::Standard,
             screen_preset: ScreenPreset::Smooth,
             share_audio: true,
+            start_with_windows: true,
+            start_hidden: true,
             close_to_tray: true,
             tray_note_seen: false,
             sounds: true,
@@ -191,6 +200,8 @@ pub struct Config {
     /// Mute and deafen, kept across restarts and updates (like Discord) so nobody comes back
     /// from an update with their microphone on. `None` until this PC first saves them.
     pub self_voice: Option<SelfVoice>,
+    /// Where backups of servers I own go (`None`: "Ingle Server Backups" in Documents).
+    pub backup_dir: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -82,6 +82,8 @@ pub struct InstallOptions {
     pub payloads: Payloads,
     /// A freshly created server: keep trying to log in while it boots (up to this long).
     pub wait_for_boot: Option<Duration>,
+    /// Put back a server from this backup folder (see `restore.rs`).
+    pub restore: Option<PathBuf>,
 }
 
 /// What the install produced.
@@ -247,8 +249,17 @@ async fn install_with(s: &mut Session, login: &Login, opts: &InstallOptions, pro
     }
     let bin_path = format!("{dir}/ingle-server");
     let script_path = format!("{dir}/{SCRIPT_NAME}");
+    let restore_path = format!("{dir}/restore.tar");
+    let restore = match &opts.restore {
+        Some(b) => Some(crate::restore::pack(b).map_err(|e| Failure::new(format!("{e:#}")))?),
+        None => None,
+    };
     let uploaded = async {
         s.upload(&data, &bin_path).await?;
+        if let Some(tar) = &restore {
+            progress.step(format!("Uploading the backup ({:.1} MB)", tar.len() as f64 / 1_048_576.0));
+            s.upload(tar, &restore_path).await?;
+        }
         s.upload(INSTALL_SCRIPT.as_bytes(), &script_path).await
     }
     .await;
@@ -266,6 +277,9 @@ async fn install_with(s: &mut Session, login: &Login, opts: &InstallOptions, pro
     );
     if !opts.name.trim().is_empty() {
         cmd.push_str(&format!(" --name {}", sh_quote(opts.name.trim())));
+    }
+    if restore.is_some() {
+        cmd.push_str(&format!(" --restore {}", sh_quote(&restore_path)));
     }
     let (cmd, stdin) = match &elevate {
         Elevate::None => (cmd, String::new()),

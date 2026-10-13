@@ -19,6 +19,7 @@
 
 pub mod digitalocean;
 pub mod install;
+pub mod restore;
 pub mod keys;
 pub mod probe;
 pub mod records;

@@ -175,6 +175,7 @@ async fn session(
     apply_ready(shared, key, ready);
     crate::sync_avatar(shared.clone(), key.to_string());
     crate::resume_voice(shared.clone(), key.to_string());
+    crate::backup::spawn_schedule(shared.clone(), key.to_string(), conn.clone());
     crate::sync_blocks(shared, key);
     {
         // Membership is established; the invite is no longer needed (and isn't sent again, so

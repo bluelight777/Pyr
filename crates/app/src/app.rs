@@ -36,6 +36,8 @@ pub enum Act {
     /// Set (or remove) a server's icon from part of an image: (bytes, cx, cy, frac).
     SetServerIcon { key: String, bytes: Option<(Arc<Vec<u8>>, f32, f32, f32)> },
     AddEmoji { key: String, name: String, bytes: Vec<u8> },
+    /// The server's GIPHY key (owner only; "" turns GIF search off).
+    SetGiphyKey { key: String, giphy: String },
     /// Quit for real (Settings → Quit Ingle).
     Quit,
     AddFriend(String),
@@ -129,6 +131,12 @@ pub struct UiState {
     pub members_open: bool,
     pub call_chat_open: bool,
     pub focus: Option<VideoKey>,
+    /// With nothing picked, the big tile follows whoever talks (like Discord): who it is now,
+    /// and since when. `grid_view` turns that off (everyone the same size).
+    pub speaker_focus: Option<(VideoKey, Instant)>,
+    pub grid_view: bool,
+    /// Volumes from before "Mute" in a tile's menu, to go back to on "Unmute".
+    pub premute_volume: HashMap<(String, bool), f32>,
     /// A stream filling the whole screen, and whether the window is in full screen for it.
     pub fullscreen: Option<VideoKey>,
     pub fullscreen_on: bool,
@@ -142,6 +150,9 @@ pub struct UiState {
     pub gif_picker: bool,
     pub gif_search: String,
     pub gif_focus: bool,
+    /// Error notices closed with Dismiss, and the one just copied (for "Copied").
+    pub toasts_dismissed: HashSet<u64>,
+    pub toast_copied: Option<(u64, Instant)>,
     pub last_typing: Option<Instant>,
     pub requested: HashSet<(String, ChannelId)>,
     pub settings_draft: Option<Settings>,
@@ -334,7 +345,12 @@ impl IngleApp {
             }
             Act::Volume { uid, volume } => e.set_user_volume(&uid, volume),
             Act::StreamVolume { uid, volume } => e.set_stream_volume(&uid, volume),
-            Act::Settings(s) => e.update_settings(s),
+            Act::Settings(s) => {
+                if e.shared.config_dir == ingle_engine::config::config_dir(None) {
+                    crate::autostart::apply(s.start_with_windows);
+                }
+                e.update_settings(s)
+            }
             Act::MicTest(on) => {
                 if on {
                     e.start_mic_test()
@@ -370,6 +386,7 @@ impl IngleApp {
             Act::Block(uid) => e.block(&uid),
             Act::Unblock(uid) => e.unblock(&uid),
             Act::RenameEmoji { key, id, name } => e.rename_emoji(&key, &id, &name),
+            Act::SetGiphyKey { key, giphy } => e.set_giphy_key(&key, &giphy),
             Act::SetServerIcon { key, bytes } => match bytes {
                 None => e.set_server_icon(&key, None),
                 Some((b, cx, cy, frac)) => match crate::images::make_avatar_crop(&b, cx, cy, frac) {
@@ -472,6 +489,9 @@ impl eframe::App for IngleApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let engine = self.engine.clone();
         let mut acts: Vec<Act> = Vec::new();
+        for e in ingle_engine::errors::take() {
+            engine.shared.state.write().toast(e, true);
+        }
         if let Some(link) = self.initial_join.take() {
             acts.push(Act::OfferJoin(link));
         }
@@ -1703,14 +1723,24 @@ impl IngleApp {
 
     fn toasts(&mut self, ctx: &egui::Context, st: &AppState) {
         let now = Instant::now();
-        let visible: Vec<_> = st.toasts.iter().filter(|t| now.duration_since(t.at) < Duration::from_secs(6)).collect();
+        // Notices fade after 6 seconds; errors stay until dismissed, so they can be read and
+        // copied (to send to whoever runs the server, say).
+        let visible: Vec<_> = st
+            .toasts
+            .iter()
+            .filter(|t| if t.error { !self.ui.toasts_dismissed.contains(&t.id) } else { now.duration_since(t.at) < Duration::from_secs(6) })
+            .collect();
         if visible.is_empty() {
             return;
         }
+        if visible.iter().any(|t| !t.error) {
+            ctx.request_repaint_after(Duration::from_millis(500));
+        }
+        let mut dismiss = None;
+        let mut copy = None;
         egui::Area::new(egui::Id::new("toasts"))
             .anchor(egui::Align2::RIGHT_BOTTOM, vec2(-20.0, -90.0))
             .order(egui::Order::Foreground)
-            .interactable(false)
             .show(ctx, |ui| {
                 for t in visible.iter().rev().take(3) {
                     egui::Frame::new()
@@ -1719,12 +1749,39 @@ impl IngleApp {
                         .corner_radius(8)
                         .inner_margin(egui::Margin::symmetric(14, 10))
                         .show(ui, |ui| {
-                            ui.set_max_width(340.0);
-                            ui.label(RichText::new(&t.text).color(theme::TEXT));
+                            ui.set_max_width(360.0);
+                            if !t.error {
+                                ui.label(RichText::new(&t.text).color(theme::TEXT));
+                                return;
+                            }
+                            ui.label(RichText::new("Something went wrong").font(theme::bold_font(13.0)).color(theme::TEXT));
+                            ui.add_space(2.0);
+                            ui.add(egui::Label::new(RichText::new(&t.text).color(theme::TEXT)).selectable(true));
+                            ui.add_space(6.0);
+                            ui.horizontal(|ui| {
+                                let copied = self.ui.toast_copied.map(|(id, at)| id == t.id && now.duration_since(at) < Duration::from_secs(2)).unwrap_or(false);
+                                if ui.button(if copied { "Copied" } else { "Copy" }).on_hover_text("Copy this error, to paste it to someone").clicked() {
+                                    copy = Some(t.id);
+                                }
+                                if ui.button("Dismiss").clicked() {
+                                    dismiss = Some(t.id);
+                                }
+                            });
                         });
                     ui.add_space(6.0);
                 }
             });
+        if let Some(id) = copy {
+            if let Some(t) = st.toasts.iter().find(|t| t.id == id) {
+                let when = chrono::Local::now().format("%Y-%m-%d %H:%M");
+                ctx.copy_text(format!("{}\n(Ingle {}, {when})", t.text, env!("CARGO_PKG_VERSION")));
+                self.ui.toast_copied = Some((id, now));
+                ctx.request_repaint_after(Duration::from_secs(2));
+            }
+        }
+        if let Some(id) = dismiss {
+            self.ui.toasts_dismissed.insert(id);
+        }
         let _ = self.started;
     }
 }

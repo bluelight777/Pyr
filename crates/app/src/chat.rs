@@ -845,7 +845,7 @@ impl IngleApp {
                         .pivot(egui::Align2::RIGHT_BOTTOM)
                         .fixed_pos(pos2(eb.rect.right() + 6.0, gb.rect.top() - 12.0))
                         .constrain(true)
-                        .show(ui.ctx(), |ui| egui::Frame::popup(ui.style()).fill(theme::SIDE).inner_margin(10).show(ui, |ui| self.gif_picker(ui, st, acts)).inner);
+                        .show(ui.ctx(), |ui| egui::Frame::popup(ui.style()).fill(theme::SIDE).inner_margin(10).show(ui, |ui| self.gif_picker(ui, st, s, acts)).inner);
                     if let Some(url) = area.inner {
                         let reply_to = self.ui.reply.take().map(|(id, _)| id);
                         acts.push(Act::Send { key: key.clone(), channel: ch.id, text: url, reply_to, files: Vec::new() });
@@ -1357,7 +1357,7 @@ impl IngleApp {
 
     /// The GIF picker: a GIPHY search box over what's trending or the results, like Discord's.
     /// Returns the GIF to send.
-    fn gif_picker(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) -> Option<String> {
+    fn gif_picker(&mut self, ui: &mut egui::Ui, _st: &AppState, s: &ServerView, acts: &mut Vec<Act>) -> Option<String> {
         const W: f32 = 460.0;
         ui.set_width(W);
         let mut send = None;
@@ -1390,16 +1390,31 @@ impl IngleApp {
         let title = if words.is_empty() { "TRENDING GIFS".to_string() } else { format!("GIFS FOR \u{201c}{}\u{201d}", words.to_uppercase()) };
         ui.label(RichText::new(title).font(theme::bold_font(11.0)).color(theme::DIM));
         ui.add_space(4.0);
-        let Some(api_key) = crate::giphy::key(&st.settings.giphy_key) else {
-            ui.label(
-                RichText::new("GIF search isn't set up in this copy of Ingle. If you have a GIPHY API key, paste it here:")
-                    .color(theme::MUTED),
-            );
-            let mut k = st.settings.giphy_key.clone();
-            if ui.add(egui::TextEdit::singleline(&mut k).hint_text("GIPHY API key").desired_width(320.0)).changed() {
-                let mut s = st.settings.clone();
-                s.giphy_key = k.trim().to_string();
-                acts.push(Act::Settings(s));
+        let Some(api_key) = crate::giphy::key(&s.info.giphy_key) else {
+            let owner = s.me.as_ref().map(|m| m.role == ingle_proto::control::Role::Owner).unwrap_or(false);
+            if !s.has(ingle_proto::control::GIPHY_FEATURE) {
+                ui.label(RichText::new("This server needs updating before it can have GIF search.").color(theme::MUTED));
+            } else if owner {
+                ui.label(
+                    RichText::new("GIF search is off on your server. Paste a GIPHY API key (free from developers.giphy.com) to turn it on for everyone here:")
+                        .color(theme::MUTED),
+                );
+                let id = ui.id().with("giphy-key-setup");
+                let mut k: String = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+                ui.horizontal(|ui| {
+                    if ui.add(egui::TextEdit::singleline(&mut k).hint_text("GIPHY API key").desired_width(300.0)).changed() {
+                        ui.data_mut(|d| d.insert_temp(id, k.clone()));
+                    }
+                    if ui.add_enabled(!k.trim().is_empty(), theme::primary_button("Turn on")).clicked() {
+                        acts.push(Act::SetGiphyKey { key: s.key.clone(), giphy: k.trim().to_string() });
+                        ui.data_mut(|d| d.remove::<String>(id));
+                    }
+                });
+            } else {
+                ui.label(
+                    RichText::new("GIF search isn't set up on this server yet. The server's owner can turn it on in Server settings.")
+                        .color(theme::MUTED),
+                );
             }
             return None;
         };

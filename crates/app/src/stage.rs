@@ -59,6 +59,30 @@ fn grid_layout(n: usize, area: Rect, gap: f32) -> Vec<Rect> {
     out
 }
 
+/// One big tile and the others in a row under it. Like Discord, the row's tiles keep their
+/// height and get narrower to fit a narrow window (down to nearly square-ish, then smaller).
+fn focus_layout(tiles: &[Tile], focus: VideoKey, area: Rect, gap: f32) -> Vec<(usize, Rect)> {
+    let others: Vec<usize> = (0..tiles.len()).filter(|i| tiles[*i].key != focus).collect();
+    let n = others.len().max(1) as f32;
+    let mut strip_h = (area.height() * 0.2).clamp(70.0, 150.0);
+    // Room for each: full 16:9, or narrower (to 1:1) when the window is narrow...
+    let room = (area.width() - gap * (n - 1.0)) / n;
+    let mut tw = (strip_h * 16.0 / 9.0).min(room);
+    if tw < strip_h {
+        // ...and past that, the whole row shrinks.
+        strip_h = tw.max(40.0);
+        tw = tw.max(40.0);
+    }
+    let main = Rect::from_min_max(area.min, pos2(area.right(), area.bottom() - strip_h - gap));
+    let mut v = vec![(tiles.iter().position(|t| t.key == focus).unwrap_or(0), main)];
+    let total = n * tw + (n - 1.0) * gap;
+    let x0 = area.center().x - total / 2.0;
+    for (j, i) in others.into_iter().enumerate() {
+        v.push((i, Rect::from_min_size(pos2(x0 + j as f32 * (tw + gap), area.bottom() - strip_h), vec2(tw, strip_h))));
+    }
+    v
+}
+
 /// Fit (contain) or fill (cover) an image of `size` into `rect`; returns (draw rect, uv rect).
 fn fit(rect: Rect, size: egui::Vec2, cover: bool) -> (Rect, Rect) {
     let full_uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
@@ -135,6 +159,13 @@ impl IngleApp {
                         if icon_button(ui, 32.0, if open { "Hide chat" } else { "Show chat" }, open, |p, r, c| icons::chat(p, r, c)).clicked() {
                             self.ui.call_chat_open = !open;
                         }
+                        ui.add_space(6.0);
+                        let grid = self.ui.grid_view;
+                        let tip = if grid { "Speaker view: whoever talks gets the big spot" } else { "Grid view: everyone the same size" };
+                        if ui.button(if grid { "Speaker view" } else { "Grid view" }).on_hover_text(tip).clicked() {
+                            self.ui.grid_view = !grid;
+                            self.ui.focus = None;
+                        }
                     });
                 });
             });
@@ -202,22 +233,11 @@ impl IngleApp {
             if self.ui.focus.map(|f| !tiles.iter().any(|t| t.key == f)).unwrap_or(false) {
                 self.ui.focus = None;
             }
+            let focus = self.ui.focus.or_else(|| if self.ui.grid_view { None } else { self.follow_speaker(&tiles) });
             let area = ui.max_rect().shrink2(vec2(16.0, 8.0));
             let gap = 10.0;
-            let rects: Vec<(usize, Rect)> = match self.ui.focus {
-                Some(f) if tiles.len() > 1 => {
-                    let strip_h = (area.height() * 0.2).clamp(90.0, 150.0);
-                    let main = Rect::from_min_max(area.min, pos2(area.right(), area.bottom() - strip_h - gap));
-                    let mut v = vec![(tiles.iter().position(|t| t.key == f).unwrap_or(0), main)];
-                    let others: Vec<usize> = (0..tiles.len()).filter(|i| tiles[*i].key != f).collect();
-                    let tw = strip_h * 16.0 / 9.0;
-                    let total = others.len() as f32 * tw + (others.len() as f32 - 1.0) * gap;
-                    let x0 = area.center().x - total / 2.0;
-                    for (j, i) in others.into_iter().enumerate() {
-                        v.push((i, Rect::from_min_size(pos2(x0 + j as f32 * (tw + gap), area.bottom() - strip_h), vec2(tw, strip_h))));
-                    }
-                    v
-                }
+            let rects: Vec<(usize, Rect)> = match focus {
+                Some(f) if tiles.len() > 1 => focus_layout(&tiles, f, area, gap),
                 _ => grid_layout(tiles.len(), area, gap).into_iter().enumerate().collect(),
             };
             for (i, rect) in rects {
@@ -234,6 +254,25 @@ impl IngleApp {
                 );
             }
         });
+    }
+
+    /// The tile of whoever is talking (not you), kept for a moment after they stop so the view
+    /// doesn't jump at every pause; `None` until someone talks.
+    fn follow_speaker(&mut self, tiles: &[Tile]) -> Option<VideoKey> {
+        let now = std::time::Instant::now();
+        let current = self.ui.speaker_focus.filter(|(k, _)| tiles.iter().any(|t| t.key == *k));
+        let speaking: Vec<VideoKey> = tiles.iter().filter(|t| t.speaking && !t.is_me && !t.screen).map(|t| t.key).collect();
+        let next = match current {
+            Some((k, _)) if speaking.contains(&k) => Some((k, now)),
+            // Someone else talks: switch, unless the last switch was a moment ago.
+            Some((k, at)) => match speaking.first() {
+                Some(s) if now.duration_since(at) > std::time::Duration::from_millis(1500) => Some((*s, now)),
+                _ => Some((k, at)),
+            },
+            None => speaking.first().map(|s| (*s, now)),
+        };
+        self.ui.speaker_focus = next;
+        next.map(|(k, _)| k)
     }
 
     fn tile(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, t: &Tile, rect: Rect, acts: &mut Vec<Act>) {
@@ -274,6 +313,8 @@ impl IngleApp {
                         let br = ui.put(b, theme::primary_button("Watch Stream"));
                         if br.clicked() {
                             acts.push(Act::Watch { session: t.key.session, track: track::SCREEN, on: true });
+                            // Like Discord: the stream you start watching takes the big spot.
+                            self.ui.focus = Some(t.key);
                         }
                     }
                 } else {
@@ -373,6 +414,23 @@ impl IngleApp {
         let vol = t.volume;
         let (has_sound, svol) = (t.has_sound, t.stream_volume);
         resp.context_menu(|ui| {
+            if !is_me {
+                // Mute this person (or just their stream's sound) on this PC, like Discord.
+                let (now, label) = if screen { (svol, "Mute stream") } else { (vol, "Mute") };
+                let muted = now <= 0.001;
+                if ui.checkbox(&mut muted.clone(), if screen && !has_sound { "Mute stream (it has no sound now)" } else { label }).clicked() {
+                    let slot = (uid.clone(), screen);
+                    let volume = if muted {
+                        self.ui.premute_volume.remove(&slot).filter(|v| *v > 0.001).unwrap_or(1.0)
+                    } else {
+                        self.ui.premute_volume.insert(slot, now);
+                        0.0
+                    };
+                    acts.push(if screen { Act::StreamVolume { uid: uid.clone(), volume } } else { Act::Volume { uid: uid.clone(), volume } });
+                    ui.close();
+                }
+                ui.separator();
+            }
             if !is_me && screen {
                 if has_sound {
                     ui.label(RichText::new("Stream volume").size(12.0).color(theme::MUTED));
@@ -497,6 +555,49 @@ impl IngleApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn focus_row_shrinks_to_fit_narrow_windows() {
+        let tile = |session: u32| Tile {
+            key: VideoKey { session, track: track::CAMERA },
+            user_id: String::new(),
+            name: String::new(),
+            speaking: false,
+            muted: false,
+            deaf: false,
+            is_me: false,
+            screen: false,
+            watching: false,
+            has_camera: false,
+            volume: 1.0,
+            has_sound: false,
+            stream_volume: 1.0,
+            face: None,
+            viewers: Vec::new(),
+        };
+        for (w, n) in [(1400.0, 4), (620.0, 4), (380.0, 4), (300.0, 6), (1000.0, 2)] {
+            let area = Rect::from_min_size(pos2(0.0, 0.0), vec2(w, 700.0));
+            let tiles: Vec<Tile> = (1..=n).map(tile).collect();
+            let rects = focus_layout(&tiles, tiles[0].key, area, 10.0);
+            assert_eq!(rects.len(), n as usize);
+            assert_eq!(rects[0].0, 0, "the focused tile comes first");
+            assert!(rects[0].1.height() > rects[1].1.height() * 2.0, "{w}: the focused one is big");
+            for (_, r) in &rects {
+                assert!(area.expand(0.5).contains_rect(*r), "{w}x{n}: {r:?} spills out of {area:?}");
+            }
+            let row = &rects[1..];
+            for pair in row.windows(2) {
+                assert!(pair[0].1.right() <= pair[1].1.left(), "no overlap");
+            }
+            // Wide windows keep 16:9; narrow ones get skinnier (like Discord's).
+            let r = row[0].1;
+            if w >= 1400.0 {
+                assert!((r.width() / r.height() - 16.0 / 9.0).abs() < 0.01);
+            } else if w <= 620.0 {
+                assert!(r.width() / r.height() < 16.0 / 9.0 - 0.1, "{w}: {r:?}");
+            }
+        }
+    }
 
     #[test]
     fn grid_fits_inside_area() {

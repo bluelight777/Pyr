@@ -106,23 +106,31 @@ fn pinned_config(
 /// One client endpoint per address family, created lazily and shared by all servers.
 #[derive(Default)]
 pub struct Endpoints {
-    v4: Option<quinn::Endpoint>,
-    v6: Option<quinn::Endpoint>,
+    v4: Option<(quinn::Endpoint, u64)>,
+    v6: Option<(quinn::Endpoint, u64)>,
 }
 
 impl Endpoints {
     pub fn for_addr(&mut self, addr: SocketAddr) -> Result<quinn::Endpoint> {
         let slot = if addr.is_ipv4() { &mut self.v4 } else { &mut self.v6 };
-        if let Some(e) = slot {
+        if let Some((e, _)) = slot {
             return Ok(e.clone());
         }
         let bind: SocketAddr = if addr.is_ipv4() { "0.0.0.0:0".parse()? } else { "[::]:0".parse()? };
-        let (e, fallback) = ingle_proto::udp::bind_endpoint(bind, None).context("opening UDP socket")?;
+        let (e, fallback, raw) = ingle_proto::udp::bind_endpoint_raw(bind, None).context("opening UDP socket")?;
         if let Some(why) = fallback {
             tracing::warn!("the network stack refused QUIC socket options ({why}); using a plain UDP socket");
         }
-        *slot = Some(e.clone());
+        *slot = Some((e.clone(), raw));
         Ok(e)
+    }
+
+    /// Connected to a server at `addr`: its packets get voice priority (see `qos`).
+    pub fn connected(&self, addr: SocketAddr) {
+        let slot = if addr.is_ipv4() { &self.v4 } else { &self.v6 };
+        if let Some((_, raw)) = slot {
+            crate::qos::watch(*raw, addr);
+        }
     }
 }
 
@@ -220,6 +228,9 @@ pub async fn connect_and_login(
                 anyhow!("connection failed: {s}")
             }
         })?;
+    if let Ok(e) = endpoints.lock() {
+        e.connected(addr);
+    }
     let (mut send, mut recv) = conn.open_bi().await?;
     // QUIC only announces a stream once data is sent on it.
     send.write_all(ingle_proto::CONTROL_PREAMBLE).await?;

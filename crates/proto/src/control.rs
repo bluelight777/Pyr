@@ -155,6 +155,36 @@ pub const ICONS_FEATURE: &str = "server_icon";
 pub const EMOJI_FEATURE: &str = "custom_emoji";
 /// Friends and blocking ([`Relation`]).
 pub const FRIENDS_FEATURE: &str = "friends";
+/// The owner's app can download everything the server keeps (`FileRequest::Backup`), so the
+/// server can be put back as it was on another machine.
+pub const BACKUP_FEATURE: &str = "backup";
+/// GIF search for everyone in the server, with a GIPHY key only the owner sets
+/// (`ServerInfo::giphy_key`, `SetGiphyKey`).
+pub const GIPHY_FEATURE: &str = "giphy";
+
+/// What a backup lists (`FileRequest::Backup` of [`BACKUP_MANIFEST`]).
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+pub struct BackupManifest {
+    /// The server program's version.
+    pub version: String,
+    pub made_at: i64,
+    pub name: String,
+    /// Every stored file: (id, size). Ids are content-free random hex and never reused, so a
+    /// file already backed up never needs fetching again.
+    pub files: Vec<(String, u64)>,
+}
+
+/// The parts of a backup, for `FileRequest::Backup`.
+pub const BACKUP_MANIFEST: &str = "manifest";
+/// A consistent copy of the whole database (messages, channels, members, roles...).
+pub const BACKUP_DATABASE: &str = "database";
+/// The server's TLS identity: keeping it is what makes a restored server the same server
+/// to everyone's app (and keeps invite links working).
+pub const BACKUP_CERT: &str = "server-cert.der";
+pub const BACKUP_KEY: &str = "server-key.der";
+/// `file:<id>`: one stored file (attachment, picture, emoji).
+pub const BACKUP_FILE_PREFIX: &str = "file:";
 
 /// Where you stand with someone, as you see it.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -261,6 +291,8 @@ pub enum FileRequest {
     /// Upload an attachment (then send it with `SendMessage::attachments`) or a profile
     /// picture (then `SetAvatar`).
     Put { kind: FileKind, name: String, mime: String, size: u64 },
+    /// Owner only ([`BACKUP_FEATURE`]): one part of a backup (see [`BACKUP_MANIFEST`]).
+    Backup { item: String },
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -394,6 +426,10 @@ pub struct ServerInfo {
     /// The server's own emoji ([`EMOJI_FEATURE`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub emojis: Vec<CustomEmoji>,
+    /// The GIPHY key the owner set up for everyone's GIF search here ([`GIPHY_FEATURE`]).
+    /// Empty: GIF search is off on this server.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub giphy_key: String,
 }
 
 /// One of a server's own emoji. Written in messages as `<:name:id>` (`<a:name:id>` when
@@ -703,6 +739,11 @@ pub enum Request {
     SetServerIcon {
         #[serde(default)]
         file_id: Option<String>,
+    },
+    /// Owner only ([`GIPHY_FEATURE`]): the GIPHY key everyone's GIF search here uses (empty
+    /// turns GIF search off).
+    SetGiphyKey {
+        key: String,
     },
     /// Start (or find) the direct message conversation with a member ([`DMS_FEATURE`]).
     /// Answered with `DmOpened`.

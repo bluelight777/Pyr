@@ -2,6 +2,7 @@
 //! Ingle desktop app.
 
 mod app;
+mod autostart;
 mod chat;
 mod create;
 mod dialogs;
@@ -50,6 +51,7 @@ fn main() -> eframe::Result<()> {
     let mut join: Option<String> = None;
     let mut renderer: Option<String> = std::env::var("INGLE_RENDERER").ok();
     let mut quit = false;
+    let mut autostart = false;
     let link_prefix = format!("{}://", ingle_proto::APP_ID);
     let all: Vec<String> = std::env::args().skip(1).collect();
     // Opened for an invite link (the ingle:// handler): that link is all we take, so nothing
@@ -65,6 +67,8 @@ fn main() -> eframe::Result<()> {
             "--join" => join = args.next(),
             "--renderer" => renderer = args.next(),
             "--quit" => quit = true,
+            // Started by Windows at sign-in (see autostart.rs).
+            "--autostart" => autostart = true,
             "--help" | "-h" => {
                 println!("{} — voice, video, screen share and chat\n", ingle_proto::APP_NAME);
                 println!("  --profile NAME   use a separate identity (run two copies on one PC)");
@@ -106,7 +110,15 @@ fn main() -> eframe::Result<()> {
         Some(p) => format!("{} ({p})", ingle_proto::APP_NAME),
         None => ingle_proto::APP_NAME.to_string(),
     };
+    // Opening with Windows follows the setting (only for your own identity, not test profiles).
+    let start_settings = ingle_engine::config::load_config(&config_dir).settings;
+    if profile.is_none() {
+        autostart::apply(start_settings.start_with_windows);
+    }
+    // Started with Windows: stay in the tray (the icon opens the window), like Discord.
+    let hidden = autostart && cfg!(windows) && start_settings.start_hidden;
     let viewport = egui::ViewportBuilder::default()
+        .with_visible(!hidden)
         .with_title(&title)
         // Windows: Ingle draws its own dark title strip (titlebar.rs) instead of the white one.
         .with_decorations(!titlebar::enabled())

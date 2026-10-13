@@ -224,6 +224,8 @@ Section "Uninstall"
   ${EndIf}
   DeleteRegKey HKCU "${UNINSTKEY}"
   DeleteRegKey HKCU "Software\Ingle"
+  ; No longer opens when Windows starts.
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Ingle"
   ; Your identity, settings and server data in %APPDATA%\Ingle are kept on purpose:
   ; the identity key is your account.
 SectionEnd

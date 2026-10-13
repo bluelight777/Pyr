@@ -205,6 +205,7 @@ impl IngleApp {
                     let can_roles = server.as_ref().map(|s| s.can(perm::MANAGE_ROLES) && s.has(ROLES_FEATURE)).unwrap_or(false);
                     let can_emoji =
                         server.as_ref().map(|s| s.can(perm::MANAGE_EMOJI) && s.has(ingle_proto::control::EMOJI_FEATURE)).unwrap_or(false);
+                    let can_backup = self.engine.can_back_up(&key);
                     if tab == 0 && !can_server && can_emoji {
                         tab = 2;
                     }
@@ -227,9 +228,14 @@ impl IngleApp {
                         if can_emoji && ui.add(egui::Button::selectable(tab == 2, "Emoji")).clicked() {
                             tab = 2;
                         }
+                        if can_backup && ui.add(egui::Button::selectable(tab == 3, "Backups")).clicked() {
+                            tab = 3;
+                        }
                     });
                     ui.separator();
-                    if tab == 1 {
+                    if tab == 3 {
+                        self.backups_tab(ui, st, &key);
+                    } else if tab == 1 {
                         if let Some(s) = &server {
                             self.roles_editor(ui, s, acts);
                         }
@@ -269,6 +275,37 @@ impl IngleApp {
                                     });
                                     ui.label(RichText::new("Shows in everyone's server list. At least 128×128 looks best.").size(12.0).color(theme::DIM));
                                 });
+                            });
+                            ui.add_space(12.0);
+                        }
+                        if let Some(s) = server.as_ref().filter(|s| {
+                            s.has(ingle_proto::control::GIPHY_FEATURE) && s.me.as_ref().map(|m| m.role == ingle_proto::control::Role::Owner).unwrap_or(false)
+                        }) {
+                            field_label(ui, "GIF search (GIPHY)");
+                            let on = !s.info.giphy_key.is_empty();
+                            ui.label(
+                                RichText::new(if on {
+                                    "On for everyone in this server (/giphy and the GIF button). Only you, the owner, can change it."
+                                } else {
+                                    "Off. Paste a GIPHY API key (free from developers.giphy.com) to turn on /giphy and the GIF button for everyone here."
+                                })
+                                .size(12.0)
+                                .color(theme::DIM),
+                            );
+                            let id = egui::Id::new(("giphy-key-edit", key.clone()));
+                            let mut k: String = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+                            ui.horizontal(|ui| {
+                                let hint = if on { "New GIPHY API key" } else { "GIPHY API key" };
+                                if ui.add(egui::TextEdit::singleline(&mut k).hint_text(hint).desired_width(260.0)).changed() {
+                                    ui.data_mut(|d| d.insert_temp(id, k.clone()));
+                                }
+                                if ui.add_enabled(!k.trim().is_empty(), theme::primary_button(if on { "Change" } else { "Turn on" })).clicked() {
+                                    acts.push(Act::SetGiphyKey { key: key.clone(), giphy: k.trim().to_string() });
+                                    ui.data_mut(|d| d.remove::<String>(id));
+                                }
+                                if on && ui.button("Turn off").clicked() {
+                                    acts.push(Act::SetGiphyKey { key: key.clone(), giphy: String::new() });
+                                }
                             });
                             ui.add_space(12.0);
                         }
@@ -623,6 +660,15 @@ impl IngleApp {
                     }
                 });
                 ui.label(RichText::new("Opus with in-band error correction. Discord's default is 64 kbps; anything above ~64 kbps is overkill for voice but great for music.").size(12.0).color(theme::DIM));
+                ui.checkbox(&mut draft.voice_priority, "Prioritize voice packets (Quality of Service)");
+                ui.label(
+                    RichText::new(
+                        "Tells your router and Wi-Fi to send Ingle's voice ahead of downloads and other traffic. \
+                         Turn it off if your voice cuts out or won't connect (a few routers don't handle it).",
+                    )
+                    .size(12.0)
+                    .color(theme::DIM),
+                );
 
                 field_label(ui, "Camera");
                 ui.horizontal(|ui| {
@@ -702,6 +748,15 @@ impl IngleApp {
                             .color(theme::LIVE),
                     );
                 }
+                ui.add_space(12.0);
+                field_label(ui, "When Windows starts");
+                ui.checkbox(&mut draft.start_with_windows, "Open Ingle when Windows starts");
+                ui.add_enabled(draft.start_with_windows, egui::Checkbox::new(&mut draft.start_hidden, "Start in the tray (just the icon by the clock)"));
+                ui.label(
+                    RichText::new("Like Discord: you're online and friends can reach you as soon as your PC is on.")
+                        .size(12.0)
+                        .color(theme::DIM),
+                );
                 ui.add_space(12.0);
                 if ui.add(theme::danger_button("Quit Ingle").min_size(vec2(110.0, 32.0))).clicked() {
                     acts.push(Act::Quit);
@@ -944,5 +999,65 @@ impl IngleApp {
                 }
             });
         });
+    }
+}
+
+impl IngleApp {
+    /// Server settings → Backups (owner only): this server's backups on this PC.
+    fn backups_tab(&mut self, ui: &mut egui::Ui, st: &AppState, key: &str) {
+        let folder = self.engine.backup_folder(key);
+        let status = st.backups.get(key).cloned().unwrap_or_default();
+        let last = status.last_ok.or_else(|| ingle_engine::backup::info(&folder).map(|i| i.last_backup));
+        field_label(ui, "Backups on this PC");
+        ui.label(
+            RichText::new(
+                "While Ingle is open, everything on this server is copied to this PC every hour: messages, channels, members, \
+                 roles, emoji, pictures and files, and the server's identity. If the VPS is lost, replaced or you stop paying \
+                 for it, set up a new one with Restore from a backup and the server comes back exactly as it was, as the same \
+                 server for everyone.",
+            )
+            .color(theme::MUTED),
+        );
+        ui.add_space(8.0);
+        let when = |ms: i64| {
+            chrono::DateTime::from_timestamp_millis(ms)
+                .map(|t| t.with_timezone(&chrono::Local).format("%b %-d, %Y at %-I:%M %p").to_string())
+                .unwrap_or_default()
+        };
+        let line = if status.running {
+            "Backing up now…".to_string()
+        } else {
+            match last {
+                Some(t) => format!("Last backed up {}", when(t)),
+                None => "Not backed up yet".to_string(),
+            }
+        };
+        ui.label(RichText::new(line).color(theme::TEXT));
+        if let Some(e) = &status.error {
+            ui.label(RichText::new(format!("The last try failed: {e}")).color(theme::LIVE));
+        }
+        ui.add_space(4.0);
+        ui.label(RichText::new(folder.display().to_string()).size(12.0).color(theme::DIM));
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.add_enabled(!status.running, theme::primary_button("Back up now")).clicked() {
+                self.engine.backup_now(key);
+            }
+            if ui.button("Open folder").clicked() {
+                let _ = std::fs::create_dir_all(&folder);
+                crate::create::open_folder(&folder);
+            }
+            if ui.button("Change folder…").on_hover_text("A OneDrive, Dropbox or Google Drive folder keeps a copy online too").clicked() {
+                if let Some(d) = rfd::FileDialog::new().set_title("Where to keep server backups").pick_folder() {
+                    self.engine.set_backup_dir(Some(d));
+                }
+            }
+        });
+        ui.add_space(8.0);
+        ui.label(
+            RichText::new("The backup includes direct messages and the server's private key: keep the folder to yourself.")
+                .size(12.0)
+                .color(theme::DIM),
+        );
     }
 }

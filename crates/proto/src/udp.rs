@@ -19,20 +19,46 @@ use quinn::{AsyncUdpSocket, Endpoint, EndpointConfig, Runtime, ServerConfig, Tok
 /// runtime. The second value is set when the plain-UDP fallback had to be used, with the
 /// reason the normal socket was refused.
 pub fn bind_endpoint(addr: SocketAddr, server: Option<ServerConfig>) -> io::Result<(Endpoint, Option<io::Error>)> {
+    bind_endpoint_raw(addr, server).map(|(e, why, _)| (e, why))
+}
+
+/// [`bind_endpoint`], also giving the OS handle of the UDP socket (a Windows SOCKET or a Unix
+/// file descriptor), valid for as long as the endpoint lives: for marking its packets as
+/// voice (Windows' QoS).
+pub fn bind_endpoint_raw(addr: SocketAddr, server: Option<ServerConfig>) -> io::Result<(Endpoint, Option<io::Error>, u64)> {
     let runtime: Arc<dyn Runtime> = Arc::new(TokioRuntime);
     let socket = std::net::UdpSocket::bind(addr)?;
+    let raw = raw_handle(&socket);
     match Endpoint::new(EndpointConfig::default(), server.clone(), socket, runtime.clone()) {
-        Ok(e) => Ok((e, None)),
+        Ok(e) => Ok((e, None, raw)),
         Err(why) if why.kind() != io::ErrorKind::AddrInUse => {
             // The failed attempt has already closed its socket, so the port is free again.
             let socket = std::net::UdpSocket::bind(addr)?;
             socket.set_nonblocking(true)?;
+            let raw = raw_handle(&socket);
             let io = tokio::net::UdpSocket::from_std(socket)?;
             let e = Endpoint::new_with_abstract_socket(EndpointConfig::default(), server, Arc::new(PlainUdp { io }), runtime)?;
-            Ok((e, Some(why)))
+            Ok((e, Some(why), raw))
         }
         Err(e) => Err(e),
     }
+}
+
+#[cfg(windows)]
+fn raw_handle(s: &std::net::UdpSocket) -> u64 {
+    use std::os::windows::io::AsRawSocket;
+    s.as_raw_socket()
+}
+
+#[cfg(unix)]
+fn raw_handle(s: &std::net::UdpSocket) -> u64 {
+    use std::os::fd::AsRawFd;
+    s.as_raw_fd() as u64
+}
+
+#[cfg(not(any(windows, unix)))]
+fn raw_handle(_: &std::net::UdpSocket) -> u64 {
+    0
 }
 
 struct PlainUdp {

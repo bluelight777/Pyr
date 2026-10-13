@@ -437,6 +437,24 @@ impl Db {
             .flatten()
     }
 
+    /// Every stored file: (id, size), for backups.
+    pub fn all_files(&self) -> Vec<(String, u64)> {
+        let c = self.conn.lock();
+        let Ok(mut q) = c.prepare("SELECT id, size FROM files ORDER BY created_at") else { return Vec::new() };
+        q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64)))
+            .map(|rows| rows.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default()
+    }
+
+    /// A consistent copy of the whole database at `path` (for backups), taken in one go
+    /// while nothing else writes.
+    pub fn snapshot(&self, path: &Path) -> Result<()> {
+        let _ = std::fs::remove_file(path);
+        let target = path.to_str().context("backup path isn't text")?;
+        self.conn.lock().execute("VACUUM INTO ?1", [target]).context("copying the database")?;
+        Ok(())
+    }
+
     /// Total bytes stored (for the storage limit).
     pub fn files_total(&self) -> u64 {
         self.conn.lock().query_row("SELECT COALESCE(SUM(size), 0) FROM files", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as u64

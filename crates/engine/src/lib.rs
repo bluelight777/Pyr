@@ -5,11 +5,31 @@
 //! threads.
 
 pub mod audio;
+pub mod backup;
 pub mod files;
 pub mod call;
 pub mod config;
 pub mod e2ee;
 pub mod hotkey;
+pub mod qos;
+
+/// Problems found where there's no app state at hand (saving settings, a background upload):
+/// shown as error notices by the app (`take_errors`).
+pub mod errors {
+    use std::sync::Mutex;
+    static PENDING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    pub fn report(text: impl Into<String>) {
+        let mut p = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+        if p.len() < 20 {
+            p.push(text.into());
+        }
+    }
+
+    pub fn take() -> Vec<String> {
+        std::mem::take(&mut *PENDING.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+}
 pub mod net;
 pub mod server;
 pub mod sfx;
@@ -130,6 +150,7 @@ impl Shared {
     pub fn save_config_locked(&self, cfg: &Config) {
         if let Err(e) = config::save_config(&self.config_dir, cfg) {
             warn!("couldn't save settings: {e:#}");
+            errors::report(format!("Couldn't save your settings: {e:#}"));
         }
     }
 
@@ -178,6 +199,7 @@ impl Shared {
     /// The server connection dropped during a call: end it here quietly and remember it, so
     /// it's rejoined when the server is back (see `resume_voice`).
     pub fn call_lost(&self) {
+        qos::set_video(false);
         let call = self.call.lock().take();
         if let Some(c) = call {
             c.shutdown(false);
@@ -275,7 +297,12 @@ impl Shared {
             cv.watching = watching;
             cv.camera_on = cam;
             cv.screen_on = scr;
+            qos::set_video(cam || scr);
             cv.stream_audio_on = scr_audio;
+            // A microphone or speaker problem: say so (once), not only on the call screen.
+            if let Some(e) = audio_err.as_ref().filter(|e| cv.audio_error.as_ref() != Some(*e) && e.as_str() != "audio not running") {
+                errors::report(format!("Sound problem in the call: {e}"));
+            }
             cv.audio_error = audio_err;
             cv.stats.rtt_ms = rtt;
             cv.stats.audio_sent = self.call_counters.audio_sent.load(Ordering::Relaxed);
@@ -361,6 +388,7 @@ impl Engine {
                 .collect(),
             call: None,
             toasts: Vec::new(),
+            backups: HashMap::new(),
             devices: DeviceLists::default(),
             settings: cfg.settings.clone(),
             user_volumes: cfg.user_volumes.clone(),
@@ -375,6 +403,7 @@ impl Engine {
         let sfx = if opts.audio.is_none() { Some(sfx::Sfx::start()) } else { None };
         let ptt_down = Arc::new(AtomicBool::new(false));
         let ptt_key = cfg.settings.ptt_key.clone();
+        qos::set_enabled(cfg.settings.voice_priority);
         let entries = cfg.servers.clone();
         let voice_prefs = cfg.self_voice.map(|v| (v.muted, v.deafened)).unwrap_or_default();
         let shared = Arc::new(Shared {
@@ -1139,6 +1168,7 @@ impl Engine {
     }
 
     pub fn leave_voice(&self) {
+        qos::set_video(false);
         self.shared.state.write().voice_rejoin = None;
         let call = self.shared.call.lock().take();
         if let Some(c) = call {
@@ -1164,6 +1194,47 @@ impl Engine {
     pub fn set_deafen(&self, deafened: bool) {
         self.shared.voice_prefs.lock().1 = deafened;
         self.shared.apply_voice_prefs();
+    }
+
+    /// Back up a server I own now (see `backup.rs`); progress shows in `AppState::backups`.
+    pub fn backup_now(&self, key: &str) {
+        let (shared, key) = (self.shared.clone(), key.to_string());
+        self.shared.rt.spawn(async move {
+            match backup::run(shared.clone(), key).await {
+                Ok(i) => shared.state.write().toast(format!("Backed up {} ({} files).", i.name, i.files), false),
+                Err(e) => shared.state.write().toast(format!("Couldn't back up the server: {e:#}"), true),
+            }
+            (shared.repaint)();
+        });
+    }
+
+    /// Where backups of this server go.
+    pub fn backup_folder(&self, key: &str) -> std::path::PathBuf {
+        let name = self.shared.state.read().server(key).map(|s| s.info.name.clone()).unwrap_or_default();
+        backup::folder(&self.shared, key, &name)
+    }
+
+    /// Owner only: the GIPHY key everyone's GIF search on this server uses ("" turns it off).
+    pub fn set_giphy_key(&self, key: &str, giphy_key: &str) {
+        let on = !giphy_key.trim().is_empty();
+        self.request_then(key, Request::SetGiphyKey { key: giphy_key.trim().to_string() }, move |shared, ev| match ev {
+            Event::Error { message, .. } => shared.state.write().toast(format!("Couldn't set up GIF search: {message}"), true),
+            _ => shared
+                .state
+                .write()
+                .toast(if on { "GIF search is on for everyone in this server." } else { "GIF search is off on this server." }, false),
+        });
+    }
+
+    /// Where backups of servers I own go (`None`: "Ingle Server Backups" in Documents).
+    pub fn set_backup_dir(&self, dir: Option<std::path::PathBuf>) {
+        let mut cfg = self.shared.config.lock();
+        cfg.backup_dir = dir;
+        self.shared.save_config_locked(&cfg);
+    }
+
+    pub fn can_back_up(&self, key: &str) -> bool {
+        backup::can_back_up(&self.shared, key)
     }
 
     pub fn voice_prefs(&self) -> (bool, bool) {
@@ -1319,6 +1390,7 @@ impl Engine {
             self.shared.save_config_locked(&cfg);
         }
         self.shared.state.write().settings = settings.clone();
+        qos::set_enabled(settings.voice_priority);
         // Restart audio so device/processing changes take effect.
         let audio_changed = old.input_device != settings.input_device
             || old.output_device != settings.output_device
@@ -1512,6 +1584,7 @@ pub(crate) fn sync_avatar(shared: Arc<Shared>, key: String) {
                     Ok(id) => Some(id),
                     Err(e) => {
                         tracing::warn!("couldn't upload the profile picture: {e:#}");
+                        errors::report(format!("Couldn't upload your profile picture: {e:#}"));
                         return;
                     }
                 }
@@ -1520,6 +1593,7 @@ pub(crate) fn sync_avatar(shared: Arc<Shared>, key: String) {
         };
         if let Ok(Event::Error { message, .. }) = h.request(Request::SetAvatar { file_id }).await {
             tracing::warn!("couldn't set the profile picture: {message}");
+            errors::report(format!("Couldn't set your profile picture: {message}"));
         }
     });
 }

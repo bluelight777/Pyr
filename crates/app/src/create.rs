@@ -85,6 +85,9 @@ pub struct CreateState {
     probe_job: Option<Job<bool>>,
     reachable_now: Option<bool>,
     copied: bool,
+    /// Put back a server from this backup instead of starting a new one.
+    restore: Option<(std::path::PathBuf, ingle_engine::backup::BackupInfo)>,
+    restore_error: Option<String>,
 }
 
 impl CreateState {
@@ -124,6 +127,8 @@ impl CreateState {
             probe_job: None,
             reachable_now: None,
             copied: false,
+            restore: None,
+            restore_error: None,
         }
     }
 
@@ -312,8 +317,40 @@ impl IngleApp {
 fn choose_page(c: &mut CreateState, ui: &mut egui::Ui, close: &mut bool) {
     title(ui, "Create a server");
     muted(ui, "Your server keeps your channels and messages and connects your calls. It stays on, so friends can drop in any time, even when you're offline.");
-    field_label(ui, "Server name");
-    input(ui, &mut c.name, "My Ingle Server");
+    match &c.restore {
+        None => {
+            field_label(ui, "Server name");
+            input(ui, &mut c.name, "My Ingle Server");
+        }
+        Some((dir, info)) => {
+            field_label(ui, "Restoring from a backup");
+            let when = chrono::DateTime::from_timestamp_millis(info.last_backup)
+                .map(|t| t.with_timezone(&chrono::Local).format("%b %-d, %Y at %-I:%M %p").to_string())
+                .unwrap_or_default();
+            muted(ui, format!("{} — backed up {when}, {} files. It comes back with all its messages, members and roles, as the same server: everyone's app recognises it. Send everyone the new invite link afterwards if its address changes.", info.name, info.files));
+            dim(ui, dir.display().to_string());
+        }
+    }
+    ui.horizontal(|ui| {
+        if ui.button(if c.restore.is_some() { "Choose another backup…" } else { "Restore from a backup…" }).clicked() {
+            if let Some(dir) = rfd::FileDialog::new().set_title("Choose the server's backup folder").pick_folder() {
+                match ingle_engine::backup::info(&dir).filter(|_| dir.join("database").join("latest.db").is_file()) {
+                    Some(info) => {
+                        c.name = info.name.clone();
+                        c.restore = Some((dir, info));
+                        c.restore_error = None;
+                    }
+                    None => c.restore_error = Some("That folder isn't an Ingle server backup (it needs server.json and database/latest.db).".into()),
+                }
+            }
+        }
+        if c.restore.is_some() && ui.button("Start a new server instead").clicked() {
+            c.restore = None;
+        }
+    });
+    if let Some(e) = &c.restore_error {
+        ui.label(egui::RichText::new(e).color(theme::LIVE));
+    }
     ui.add_space(12.0);
     if choice_card(
         ui,
@@ -427,6 +464,7 @@ fn rent_page(c: &mut CreateState, ui: &mut egui::Ui, config_dir: &std::path::Pat
             price_monthly: c.price,
             size_label,
             region_label,
+            restore: c.restore.as_ref().map(|(d, _)| d.clone()),
         };
         let progress = c.new_progress(ui.ctx());
         let dir = config_dir.to_path_buf();
@@ -546,6 +584,7 @@ fn own_page(c: &mut CreateState, ui: &mut egui::Ui, config_dir: &std::path::Path
                     port: ingle_host::DEFAULT_PORT,
                     payloads: Payloads::find(),
                     wait_for_boot: None,
+                    restore: c.restore.as_ref().map(|(d, _)| d.clone()),
                 };
                 let progress = c.new_progress(ui.ctx());
                 let dir = config_dir.to_path_buf();
@@ -591,7 +630,7 @@ fn downloads_folder() -> PathBuf {
         .join("Ingle server files")
 }
 
-fn open_folder(path: &std::path::Path) {
+pub(crate) fn open_folder(path: &std::path::Path) {
     #[cfg(windows)]
     let _ = std::process::Command::new("explorer").arg(path).spawn();
     #[cfg(not(windows))]
@@ -822,10 +861,11 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
             if retry {
                 if let Some(d) = f.droplet.clone() {
                     let (name, dir) = (c.name.trim().to_string(), config_dir.to_path_buf());
+                    let restore = c.restore.as_ref().map(|(d, _)| d.clone());
                     let progress = c.new_progress(ui.ctx());
                     let _ = std::thread::Builder::new()
                         .name("ingle-setup".into())
-                        .spawn(move || digitalocean::retry_install(d, name, dir, Payloads::find(), progress));
+                        .spawn(move || digitalocean::retry_install(d, name, dir, Payloads::find(), progress, restore));
                     return;
                 }
             }

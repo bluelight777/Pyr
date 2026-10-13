@@ -297,6 +297,9 @@ async fn file_stream(hub: &Hub, uid: &str, mut send: quinn::SendStream, mut recv
             send.write_all(&bytes).await?;
             let _ = send.finish();
         }
+        FileRequest::Backup { item } => {
+            backup_item(hub, uid, &item, &mut send).await?;
+        }
         FileRequest::Put { kind, name, mime: _, size } => {
             let limit = match kind {
                 FileKind::Attachment => MAX_ATTACHMENT_BYTES,
@@ -417,6 +420,7 @@ fn cost(req: &Request) -> f64 {
         | Request::CreateRole { .. }
         | Request::SetAvatar { .. }
         | Request::SetServerIcon { .. }
+        | Request::SetGiphyKey { .. }
         | Request::UpdateProfile { .. }
         | Request::UpdateServer { .. }
         | Request::Block { .. } => 4.0,
@@ -1035,6 +1039,18 @@ impl Ctx<'_> {
                 hub.broadcast(Event::ServerUpdated { server: hub.info() });
                 Ok(Event::Ok)
             }
+            Request::SetGiphyKey { key } => {
+                if self.role() != Role::Owner {
+                    return Err((ErrorCode::Forbidden, "Only the server's owner can set up GIF search.".into()));
+                }
+                let key = key.trim();
+                if key.len() > 64 || !key.bytes().all(|b| b.is_ascii_alphanumeric()) {
+                    return bad("that doesn't look like a GIPHY API key (letters and numbers, from developers.giphy.com)");
+                }
+                db.set_meta("giphy_key", key).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                Ok(Event::Ok)
+            }
             Request::Unknown => Err((ErrorCode::BadRequest, "This server is older than your app and can't do that yet.".into())),
         }
     }
@@ -1275,4 +1291,55 @@ mod tests {
         ok.extend_from_slice(&[0, 0, 0, 0x2c, 0, 0, 0, 0, 64, 0, 64, 0, 0, 2, 2, 0x4c, 1, 0, 0x3b]);
         assert!(image_dimensions_ok(&ok));
     }
+}
+
+/// One part of a backup (see [`ingle_proto::control::BACKUP_MANIFEST`]), for the owner only:
+/// it's everything on the server, direct messages and the server's own key included.
+async fn backup_item(hub: &Hub, uid: &str, item: &str, send: &mut quinn::SendStream) -> Result<()> {
+    use ingle_proto::control::{BACKUP_CERT, BACKUP_DATABASE, BACKUP_FILE_PREFIX, BACKUP_KEY, BACKUP_MANIFEST, BackupManifest};
+    let reply = |r: FileReply| framing::encode(&r);
+    let fail = |msg: &str| reply(FileReply { ok: false, id: String::new(), mime: String::new(), size: 0, error: msg.to_string() });
+    if hub.member(uid).map(|m| m.role) != Some(Role::Owner) {
+        send.write_all(&fail("Only the server's owner can back it up.")).await?;
+        let _ = send.finish();
+        return Ok(());
+    }
+    let data_dir = hub.files_dir.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let bytes: Result<Vec<u8>, String> = match item {
+        BACKUP_MANIFEST => {
+            let m = BackupManifest {
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                made_at: ingle_proto::now_ms(),
+                name: hub.info().name,
+                files: hub.db.all_files().into_iter().filter(|(id, _)| hub.file_path(id).map(|p| p.is_file()).unwrap_or(false)).collect(),
+            };
+            serde_json::to_vec(&m).map_err(|e| e.to_string())
+        }
+        BACKUP_DATABASE => {
+            let tag: String = ingle_proto::crypto::random_bytes::<8>().iter().map(|b| format!("{b:02x}")).collect();
+            let tmp = data_dir.join(format!("backup-{tag}.db"));
+            // Quick (it copies pages), and nothing may write meanwhile anyway.
+            let r = hub.db.snapshot(&tmp).and_then(|()| Ok(std::fs::read(&tmp)?));
+            crate::hub::wipe_file(&tmp);
+            r.map_err(|e| format!("{e:#}"))
+        }
+        BACKUP_CERT | BACKUP_KEY => tokio::fs::read(data_dir.join(item)).await.map_err(|e| e.to_string()),
+        other => match other.strip_prefix(BACKUP_FILE_PREFIX).and_then(|id| hub.file_path(id)) {
+            Some(path) => tokio::fs::read(&path).await.map_err(|_| "That file is gone.".to_string()),
+            None => Err("Unknown backup item.".to_string()),
+        },
+    };
+    match bytes {
+        Ok(b) => {
+            send.write_all(&reply(FileReply { ok: true, id: item.to_string(), mime: String::new(), size: b.len() as u64, error: String::new() }))
+                .await?;
+            send.write_all(&b).await?;
+        }
+        Err(e) => {
+            tracing::warn!("backup of {item} failed: {e}");
+            send.write_all(&fail(&format!("The server couldn't read its {item}: {e}"))).await?;
+        }
+    }
+    let _ = send.finish();
+    Ok(())
 }

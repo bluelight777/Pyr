@@ -76,6 +76,7 @@ fn main() {
                 port: ingle_host::DEFAULT_PORT,
                 payloads,
                 wait_for_boot: None,
+                restore: get("restore").map(PathBuf::from),
             };
             install::setup_existing(login, opts, progress.clone(), get("config").map(PathBuf::from));
         }
@@ -113,6 +114,7 @@ fn main() {
                 price_monthly: get("price").map(|p| p.parse().unwrap_or(0.0)).unwrap_or(6.0),
                 size_label: String::new(),
                 region_label: String::new(),
+                restore: get("restore").map(PathBuf::from),
             };
             digitalocean::rent(req, PathBuf::from(need("config")), payloads, progress.clone());
         }
@@ -124,7 +126,7 @@ fn main() {
                 region: String::new(),
                 size: String::new(),
             };
-            digitalocean::retry_install(d, get("name").unwrap_or_default(), PathBuf::from(need("config")), payloads, progress.clone());
+            digitalocean::retry_install(d, get("name").unwrap_or_default(), PathBuf::from(need("config")), payloads, progress.clone(), get("restore").map(PathBuf::from));
         }
         "delete" => {
             match digitalocean::delete(&need("token"), need("droplet").parse().expect("droplet id"), &PathBuf::from(need("config"))) {

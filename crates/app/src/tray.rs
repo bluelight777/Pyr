@@ -122,6 +122,7 @@ impl Tray {
                 Ok(h) => h,
                 Err(e) => {
                     tracing::warn!("couldn't create the tray window: {e}");
+                    ingle_engine::errors::report(format!("Couldn't put Ingle by the clock (tray): {e}"));
                     return None;
                 }
             };
@@ -139,7 +140,9 @@ impl Tray {
         if add_icon() {
             tracing::info!("tray icon added");
         } else {
-            tracing::warn!("couldn't add the tray icon; the close button will quit Ingle");
+            // Often just Windows still starting (Ingle opened with it): the icon is added when
+            // the taskbar announces itself ("TaskbarCreated").
+            tracing::warn!("couldn't add the tray icon yet; the close button will quit Ingle until it's there");
         }
         Some(Tray(()))
     }

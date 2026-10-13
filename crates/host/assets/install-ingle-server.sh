@@ -12,6 +12,9 @@
 #   --public-host HOST   IP address or domain name friends connect to (default: detected)
 #   --name NAME          name for a new community (default: My Ingle Server)
 #   --port PORT          UDP port to use (default: 7766)
+#   --restore FILE       put back a server from a backup (a .tar of ingle.db, files/ and its
+#                        identity, as Ingle's "Restore from a backup" makes). Whatever is
+#                        already here is kept in /var/lib/ingle-server-before-restore-<time>.
 #
 # Running it again updates the program and keeps the community and its messages, which
 # live in /var/lib/ingle-server.
@@ -32,12 +35,14 @@ BIN=""
 HOST=""
 NAME=""
 PORT=7766
+RESTORE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --binary) BIN=${2:-}; shift 2 ;;
     --public-host) HOST=${2:-}; shift 2 ;;
     --name) NAME=${2:-}; shift 2 ;;
     --port) PORT=${2:-}; shift 2 ;;
+    --restore) RESTORE=${2:-}; shift 2 ;;
     -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
     *) die "Unknown option: $1 (see --help)" ;;
   esac
@@ -78,6 +83,23 @@ if ! id ingle-server >/dev/null 2>&1; then
 fi
 GROUP=$(id -gn ingle-server)
 mkdir -p /var/lib/ingle-server
+if [ -n "$RESTORE" ]; then
+  step "Putting the server back from its backup"
+  [ -f "$RESTORE" ] || die "$RESTORE doesn't exist."
+  if [ -n "$(ls -A /var/lib/ingle-server 2>/dev/null)" ]; then
+    # Never lose what's here: keep a copy first.
+    KEPT=/var/lib/ingle-server-before-restore-$(date +%Y%m%d-%H%M%S)
+    cp -a /var/lib/ingle-server "$KEPT" || die "Couldn't keep a copy of the server's current data."
+    chmod 700 "$KEPT"
+    echo "    what was here before is kept in $KEPT"
+  fi
+  rm -f /var/lib/ingle-server/ingle.db /var/lib/ingle-server/ingle.db-wal /var/lib/ingle-server/ingle.db-shm
+  tar -x -f "$RESTORE" -C /var/lib/ingle-server || die "Couldn't unpack the backup."
+  [ -f /var/lib/ingle-server/ingle.db ] || die "The backup has no database in it."
+  chown -R "ingle-server:$GROUP" /var/lib/ingle-server
+  chmod 700 /var/lib/ingle-server
+  echo "    messages, members, roles, files and the server's identity are back"
+fi
 chown -R "ingle-server:$GROUP" /var/lib/ingle-server
 chmod 750 /var/lib/ingle-server
 
