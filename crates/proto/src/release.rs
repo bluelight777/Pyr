@@ -34,6 +34,17 @@ pub struct Manifest {
     /// The Linux package (.deb).
     #[serde(default)]
     pub linux_deb: Option<Asset>,
+    /// Every version released so far (so an app can tell how many updates it's behind).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub released: Vec<String>,
+}
+
+impl Manifest {
+    /// How many released versions are newer than `current` (at least 1 when this one is).
+    pub fn missed(&self, current: &str) -> usize {
+        let n = self.released.iter().filter(|v| newer(v, current)).count();
+        n.max(newer(&self.version, current) as usize)
+    }
 }
 
 /// The file on the website: the manifest exactly as signed, and its signature.
@@ -88,6 +99,7 @@ mod tests {
         let m = Manifest {
             version: "0.2.1".into(),
             notes: "Fixes".into(),
+            released: vec!["0.1.0".into(), "0.2.0".into(), "0.3.0".into()],
             windows: Some(Asset { url: "https://example.org/a.exe".into(), sha256: sha256_hex(b"x"), size: 1 }),
             linux_deb: None,
         };
@@ -106,5 +118,23 @@ mod tests {
         assert!(newer("1.0", "0.99.99"));
         assert!(!newer("0.2.0", "0.2.0"));
         assert!(!newer("0.1.9", "0.2.0"));
+    }
+
+    #[test]
+    fn counts_missed_updates() {
+        let m = Manifest {
+            version: "0.6.3".into(),
+            notes: String::new(),
+            windows: None,
+            linux_deb: None,
+            released: ["0.5.0", "0.6.0", "0.6.2", "0.6.3"].iter().map(|s| s.to_string()).collect(),
+        };
+        assert_eq!(m.missed("0.6.3"), 0);
+        assert_eq!(m.missed("0.6.2"), 1);
+        assert_eq!(m.missed("0.6.1"), 2);
+        assert_eq!(m.missed("0.5.0"), 3);
+        // An older server list without the history still says "one".
+        let old = Manifest { released: Vec::new(), ..m };
+        assert_eq!(old.missed("0.5.0"), 1);
     }
 }

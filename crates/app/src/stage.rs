@@ -673,10 +673,11 @@ impl IngleApp {
                     theme::font(14.0),
                     theme::TEXT,
                 );
-                let b = Rect::from_min_size(bar.right_top() + vec2(-50.0, 9.0), vec2(34.0, 34.0));
+                // Exit at the bottom right, like Discord's.
+                let b = Rect::from_min_size(rect.right_bottom() + vec2(-58.0, -58.0), vec2(42.0, 42.0));
                 let br = ui.interact(b, ui.id().with("exit-full"), Sense::click());
-                ui.painter().rect_filled(b, CornerRadius::same(6), Color32::from_white_alpha(if br.hovered() { 40 } else { 20 }));
-                icons::fullscreen(ui.painter(), b.shrink(9.0), theme::TEXT, true);
+                ui.painter().rect_filled(b, CornerRadius::same(8), Color32::from_black_alpha(if br.hovered() { 220 } else { 160 }));
+                icons::fullscreen(ui.painter(), b.shrink(11.0), theme::TEXT, true);
                 leave |= br.on_hover_text("Exit full screen").clicked();
                 ctx.request_repaint_after(std::time::Duration::from_millis(500));
             }

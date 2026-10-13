@@ -684,8 +684,15 @@ impl IngleApp {
     /// Discord's green arrow: shown in the server rail when an update is out.
     fn update_button(&mut self, ui: &mut egui::Ui) {
         use crate::update::Status;
+        let missed = match self.updater.status() {
+            Status::Available(m) => m.missed(crate::update::current_version()),
+            _ => 0,
+        };
         let (label, frac, manifest) = match self.updater.status() {
-            Status::Available(m) => (format!("Update to Ingle {} (restarts Ingle and puts you back where you were)", m.version), None, Some(m)),
+            Status::Available(m) => {
+                let behind = if missed > 1 { format!(" ({missed} updates behind)") } else { String::new() };
+                (format!("Update to Ingle {}{behind} (restarts Ingle and puts you back where you were)", m.version), None, Some(m))
+            }
             Status::Downloading(done, total) => {
                 ("Downloading the update…".to_string(), Some(done as f32 / total.max(1) as f32), None)
             }
@@ -705,6 +712,14 @@ impl IngleApp {
                 ui.painter().line_segment([c + vec2(-7.0, -2.0), c + vec2(0.0, 5.0)], s);
                 ui.painter().line_segment([c + vec2(7.0, -2.0), c + vec2(0.0, 5.0)], s);
                 ui.painter().line_segment([c + vec2(-10.0, 11.0), c + vec2(10.0, 11.0)], s);
+                // Several updates missed: how many, in a red badge (like Discord's counts).
+                if missed > 1 {
+                    let t = if missed > 9 { "9+".to_string() } else { missed.to_string() };
+                    let b = egui::Rect::from_center_size(rect.right_bottom() + vec2(-6.0, -6.0), vec2(if missed > 9 { 24.0 } else { 20.0 }, 20.0));
+                    ui.painter().rect_filled(b.expand(3.0), CornerRadius::same(13), theme::RAIL);
+                    ui.painter().rect_filled(b, CornerRadius::same(10), theme::LIVE);
+                    ui.painter().text(b.center(), egui::Align2::CENTER_CENTER, t, theme::bold_font(12.0), Color32::WHITE);
+                }
             }
             Some(f) => {
                 let pct = format!("{}%", (f * 100.0).round() as u32);

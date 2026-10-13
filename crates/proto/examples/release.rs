@@ -53,6 +53,7 @@ fn main() -> Result<()> {
             let manifest = Manifest {
                 version: get("--version").context("--version")?,
                 notes: get("--notes").unwrap_or_default(),
+                released: get("--released").map(|r| r.split(',').map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).collect()).unwrap_or_default(),
                 windows: get("--windows").map(|p| asset(&p, &base)).transpose()?,
                 linux_deb: get("--deb").map(|p| asset(&p, &base)).transpose()?,
             };

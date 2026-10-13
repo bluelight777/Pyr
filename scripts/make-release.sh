@@ -21,7 +21,10 @@ else
   rm -f "$SITE/ingle_amd64.deb"
   DEB=()
 fi
-cargo run -q -p ingle-proto --example release -- sign --key "$KEY" --version "$VERSION" --notes "$NOTES" \
+# Every version released so far (apps show how many updates they're behind).
+grep -qx "$VERSION" installer/site/releases.txt || echo "$VERSION" >> installer/site/releases.txt
+RELEASED=$(paste -sd, installer/site/releases.txt)
+cargo run -q -p ingle-proto --example release -- sign --key "$KEY" --version "$VERSION" --notes "$NOTES" --released "$RELEASED" \
   --base-url "$BASE" --windows "$SITE/Ingle-Setup-$VERSION.exe" "${DEB[@]}" --out "$SITE/latest.json"
 cp installer/site/install-site.sh "$OUT/upload/"
 mkdir -p "$OUT/upload/server" && cp dist/vps/ingle-server-linux-x86_64 dist/vps/ingle-server-linux-aarch64 "$OUT/upload/server/"
