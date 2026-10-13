@@ -104,8 +104,25 @@ pub fn builtin_file(id: &str) -> Option<&'static [u8]> {
 
 // ------------------------------------------------------------------ files
 
-/// A sound file from 48 kHz stereo (cut to `sound::MAX_MS`).
+/// A sound file from 48 kHz stereo (cut to `sound::MAX_MS`). Opus can overshoot sharp sounds
+/// (crackles, claps) by a few dB, so the file is checked once decoded and made quieter until
+/// it stays under full scale.
 pub fn encode(pcm: &[f32]) -> Result<Vec<u8>> {
+    let mut file = encode_raw(pcm)?;
+    let mut scale = 1.0f32;
+    for _ in 0..4 {
+        let peak = decode(&file)?.iter().fold(0f32, |m, v| m.max(v.abs()));
+        if peak <= 0.97 {
+            break;
+        }
+        scale *= 0.94 / peak;
+        let quieter: Vec<f32> = pcm.iter().map(|v| v * scale).collect();
+        file = encode_raw(&quieter)?;
+    }
+    Ok(file)
+}
+
+fn encode_raw(pcm: &[f32]) -> Result<Vec<u8>> {
     let mut enc = opus::Encoder::new(48_000, opus::Channels::Stereo, opus::Application::Audio)?;
     enc.set_bitrate(opus::Bitrate::Bits(112_000))?;
     enc.set_vbr(true)?;
@@ -389,6 +406,22 @@ mod tests {
     }
 
     #[test]
+    fn sharp_sounds_stay_under_full_scale_once_encoded() {
+        // Crackles at the limiter's ceiling: Opus overshoots these.
+        let mut seed = 99u32;
+        let pcm: Vec<f32> = (0..RATE)
+            .flat_map(|i| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let v = if i % 2_400 < 24 { if seed >> 31 == 0 { 0.89 } else { -0.89 } } else { 0.0 };
+                [v, v]
+            })
+            .collect();
+        let back = decode(&encode(&pcm).unwrap()).unwrap();
+        let peak = back.iter().fold(0f32, |m, v| m.max(v.abs()));
+        assert!(peak <= 0.97, "peak {peak}");
+    }
+
+    #[test]
     fn long_sounds_are_cut_to_the_limit() {
         let pcm = tone(14.0, 300.0);
         let file = encode(&pcm).unwrap();
@@ -402,7 +435,7 @@ mod tests {
     #[test]
     fn loudness_is_evened_out() {
         let peak = |x: &[f32]| x.iter().fold(0f32, |m, v| m.max(v.abs()));
-        let mut quiet: Vec<f32> = tone(1.0, 440.0).iter().map(|v| v * 0.01).collect();
+        let mut quiet: Vec<f32> = tone(1.0, 440.0).iter().map(|v| v * 0.05).collect();
         let mut loud: Vec<f32> = tone(1.0, 440.0).iter().map(|v| (v * 40.0).clamp(-1.0, 1.0)).collect();
         level(&mut quiet);
         level(&mut loud);
@@ -410,6 +443,11 @@ mod tests {
         let (q, l) = (20.0 * rms(&quiet).log10(), 20.0 * rms(&loud).log10());
         assert!((q - l).abs() < 3.0, "quiet {q:.1} dB, loud {l:.1} dB");
         assert!(peak(&loud) < 0.9 && peak(&quiet) < 0.9);
+        // Near silence isn't blown up into hiss: at most 24 dB louder.
+        let mut hiss: Vec<f32> = tone(1.0, 440.0).iter().map(|v| v * 0.001).collect();
+        let before = rms(&hiss);
+        level(&mut hiss);
+        assert!(20.0 * (rms(&hiss) / before).log10() <= 24.1);
     }
 
     #[test]
@@ -419,7 +457,7 @@ mod tests {
             assert!(fmt.length_ms() <= sound::MAX_MS, "{}", b.id);
             let pcm = decode(b.file).unwrap();
             let loudest = pcm.iter().fold(0f32, |m, v| m.max(v.abs()));
-            assert!(loudest > 0.05 && loudest < 1.0, "{}: peak {loudest}", b.id);
+            assert!(loudest > 0.05 && loudest <= 0.97, "{}: peak {loudest}", b.id);
         }
         assert!(builtin("quack").is_some() && builtin("nope").is_none());
     }

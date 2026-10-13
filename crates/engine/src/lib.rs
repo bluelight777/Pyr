@@ -1049,7 +1049,7 @@ impl Engine {
     /// Play a sound for everyone in your voice channel. Any sound plays in any call: one from
     /// another server (or a built-in one) is sent to the call's server first, if it isn't
     /// there already.
-    pub fn play_sound(&self, sound: SoundRef) {
+    pub fn play_soundboard(&self, sound: SoundRef) {
         let Some(key) = self.shared.call.lock().as_ref().map(|c| c.server_key.clone()) else {
             self.toast("Join a voice channel to play sounds.", true);
             return;
