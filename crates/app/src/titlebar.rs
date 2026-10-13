@@ -46,7 +46,15 @@ pub fn show(ctx: &egui::Context, title: &str) {
                 ctx.send_viewport_cmd(ViewportCommand::StartDrag);
             }
             let p = ui.painter();
-            p.text(pos2(full.left() + 12.0, full.center().y), Align2::LEFT_CENTER, title, theme::bold_font(12.0), theme::MUTED);
+            let name = p.text(pos2(full.left() + 12.0, full.center().y), Align2::LEFT_CENTER, title, theme::bold_font(12.0), theme::MUTED);
+            // The version, quietly, after the name (what people quote in a bug report).
+            p.text(
+                pos2(name.right() + 6.0, full.center().y),
+                Align2::LEFT_CENTER,
+                env!("CARGO_PKG_VERSION"),
+                theme::font(11.0),
+                theme::DIM,
+            );
 
             let mut x = full.max.x - buttons_w;
             for kind in [Btn::Min, Btn::Max, Btn::Close] {

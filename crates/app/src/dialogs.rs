@@ -930,6 +930,16 @@ impl IngleApp {
                 );
             }
         });
+        // Like Discord: the version at the foot of Settings, on every tab.
+        ui.add_space(10.0);
+        ui.separator();
+        ui.horizontal(|ui| {
+            let v = format!("Ingle {} · {} {}", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH);
+            ui.label(RichText::new(&v).size(11.5).color(theme::DIM));
+            if ui.small_button("Copy").on_hover_text("Copy the version (for a bug report)").clicked() {
+                ui.ctx().copy_text(v);
+            }
+        });
         if draft != before {
             acts.push(Act::Settings(draft.clone()));
         }
