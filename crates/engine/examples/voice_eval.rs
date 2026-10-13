@@ -328,8 +328,12 @@ fn main() {
                 name, mode, sc.cut_pct, sc.cuts_per_min, sc.soft_pct, sc.other_db, sc.onset_cuts, sc.mid_cuts
             );
             if let Some(d) = &out_dir {
-                let f = format!("{}-{}.wav", name.replace([' ', ',', '(', ')'], "_"), mode);
-                write_wav(&d.join(f), &out);
+                let base = name.replace([' ', ',', '(', ')'], "_");
+                write_wav(&d.join(format!("{base}-{mode}.wav")), &out);
+                write_wav(&d.join(format!("{base}-you.wav")), you);
+                if let Some(o) = other {
+                    write_wav(&d.join(format!("{base}-other.wav")), o);
+                }
             }
         }
     }

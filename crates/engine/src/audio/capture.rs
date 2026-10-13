@@ -15,6 +15,20 @@ pub type PacketSink<'a> = &'a mut dyn FnMut(u8, u8, &[u8]);
 pub struct CapturePipeline {
     apm: sonora::AudioProcessing,
     denoise: Option<Box<nnnoiseless::DenoiseState<'static>>>,
+    /// Voice isolation's noise remover (DeepFilterNet3). RNNoise then only tells when there's
+    /// speech; its own cleaned audio isn't used.
+    dfn: Option<super::dfn::Dfn>,
+    /// The frame as it was before DeepFilterNet (for speech detection on it).
+    pre: Vec<f32>,
+    /// DeepFilterNet's estimate of the speech-to-noise ratio in the latest frame (dB).
+    lsnr: f32,
+    /// Voice isolation: detect speech in the cleaned sound (true) or in the microphone's
+    /// own (false), and how many 10 ms frames ahead it hears.
+    iso_vad_on_clean: bool,
+    /// Voice isolation: speech only *starts* when DeepFilterNet also hears the voice standing
+    /// out from the noise by this much (dB). RNNoise alone takes some ticks and clacks for
+    /// speech; DeepFilterNet doesn't.
+    iso_start_lsnr: f32,
     encoder: opus::Encoder,
     acc: Vec<f32>,
     prev: Vec<f32>,
@@ -61,8 +75,14 @@ const SPEECH_HOLD_MS: u64 = 350;
 /// you, and once it is, stays you down to this many dB (people trail off within sentences).
 const ISO_START_DB: f32 = 12.0;
 const ISO_KEEP_DB: f32 = 20.0;
-/// Voice isolation's look-ahead, in 10 ms frames.
-const ISO_LOOKAHEAD_FRAMES: usize = 3;
+/// Voice isolation: whether speech is detected in DeepFilterNet's cleaned sound, and the
+/// look-ahead in 10 ms frames (see `tune_isolation`). Detecting it in the microphone's own
+/// sound needs no look-ahead of its own: DeepFilterNet's output is 30 ms behind its input, so
+/// the decision is already that far ahead of the sound it applies to. (Measured on speech
+/// over 10 kinds of mechanical noise: same quality either way, 30 ms less delay this way.)
+const ISO_DEFAULT_TUNING: (bool, usize) = (false, 0);
+/// See `iso_start_lsnr`.
+const ISO_START_LSNR: f32 = 3.0;
 /// Voice isolation: how much is let through of other people's voices, and of other sounds.
 const ISO_OTHER_VOICE: f32 = 0.05;
 const ISO_FLOOR: f32 = 0.03;
@@ -99,10 +119,28 @@ impl CapturePipeline {
         encoder.set_complexity(10)?;
         let denoise = matches!(settings.noise_suppression, NoiseSuppression::Strong | NoiseSuppression::Isolation)
             .then(nnnoiseless::DenoiseState::new);
+        let dfn = if settings.noise_suppression == NoiseSuppression::Isolation {
+            match super::dfn::Dfn::new() {
+                Ok(d) => Some(d),
+                Err(e) => {
+                    // Still isolates voices, with RNNoise's cleaning instead.
+                    tracing::warn!("voice isolation without DeepFilterNet: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let (iso_vad_on_clean, iso_lookahead) = ISO_DEFAULT_TUNING;
         let now = Instant::now();
         Ok(CapturePipeline {
             apm,
             denoise,
+            dfn,
+            pre: vec![0.0; 480],
+            lsnr: 0.0,
+            iso_vad_on_clean,
+            iso_start_lsnr: ISO_START_LSNR,
             encoder,
             acc: Vec::with_capacity(960),
             prev: vec![0.0; 960],
@@ -120,7 +158,7 @@ impl CapturePipeline {
             raw_env_db: -100.0,
             raw_recent: [0.0; 5],
             raw_recent_at: 0,
-            iso_delay: std::iter::repeat_n(0.0, ISO_LOOKAHEAD_FRAMES * 480).collect(),
+            iso_delay: std::iter::repeat_n(0.0, iso_lookahead * 480).collect(),
             iso_ref_db: -100.0,
             iso_gain: 1.0,
             mine_until: now,
@@ -131,10 +169,37 @@ impl CapturePipeline {
         })
     }
 
+    /// For measuring tools: voice isolation's speech detection on the cleaned sound or the
+    /// microphone's own, and its look-ahead in 10 ms frames.
+    #[doc(hidden)]
+    pub fn tune_isolation(&mut self, vad_on_clean: bool, lookahead_frames: usize, start_lsnr: f32) {
+        self.iso_vad_on_clean = vad_on_clean;
+        self.iso_start_lsnr = start_lsnr;
+        self.iso_delay = std::iter::repeat_n(0.0, lookahead_frames * 480).collect();
+    }
+
+    /// For measuring tools: voice isolation as it was before DeepFilterNet.
+    #[doc(hidden)]
+    pub fn without_dfn(&mut self) {
+        self.dfn = None;
+    }
+
+    /// Whether voice isolation runs DeepFilterNet (it falls back to RNNoise if the model
+    /// couldn't load).
+    pub fn has_dfn(&self) -> bool {
+        self.dfn.is_some()
+    }
+
     /// For measuring tools: speech probability, raw envelope, learned level of your voice,
     /// isolation gain.
     pub fn debug_state(&self) -> (f32, f32, f32, f32) {
         (self.voice_prob, self.raw_env_db, self.iso_ref_db, self.iso_gain)
+    }
+
+    /// For measuring tools: DeepFilterNet's speech-to-noise estimate (dB).
+    #[doc(hidden)]
+    pub fn debug_lsnr(&self) -> f32 {
+        self.lsnr
     }
 
     pub fn level_db(&self) -> f32 {
@@ -197,7 +262,8 @@ impl CapturePipeline {
         self.raw_recent[self.raw_recent_at] = 10f32.powf(raw_db / 10.0);
         self.raw_recent_at = (self.raw_recent_at + 1) % self.raw_recent.len();
         let going = now < self.speech_until;
-        if self.voice_prob > 0.6 || (going && self.voice_prob > 0.2) {
+        let starts = self.voice_prob > 0.6 && (self.dfn.is_none() || self.lsnr > self.iso_start_lsnr);
+        if starts || (going && self.voice_prob > 0.2) {
             self.speech_until = now + Duration::from_millis(SPEECH_HOLD_MS);
         }
     }
@@ -265,7 +331,18 @@ impl CapturePipeline {
         self.scratch.copy_from_slice(&frame[..480]);
         let _ = self.apm.process_capture_f32(&[&self.scratch], &mut [&mut frame[..480]]);
 
-        if let Some(dn) = self.denoise.as_mut() {
+        if let Some(d) = self.dfn.as_mut() {
+            // Voice isolation: DeepFilterNet cleans; RNNoise only listens for speech.
+            self.pre.copy_from_slice(&frame[..480]);
+            self.lsnr = d.process(&mut frame[..480]);
+            let src: &[f32] = if self.iso_vad_on_clean { &frame[..480] } else { &self.pre };
+            if let Some(dn) = self.denoise.as_mut() {
+                for i in 0..480 {
+                    self.rn_in[i] = src[i] * 32768.0;
+                }
+                self.voice_prob = dn.process_frame(&mut self.rn_out, &self.rn_in);
+            }
+        } else if let Some(dn) = self.denoise.as_mut() {
             for i in 0..480 {
                 self.rn_in[i] = frame[i] * 32768.0;
             }

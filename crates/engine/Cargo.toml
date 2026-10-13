@@ -12,6 +12,14 @@ base64 = "0.22.1"
 bytes = "1.12.1"
 chrono = "0.4.45"
 cpal = "0.18.2"
+# Voice isolation: DeepFilterNet3 (MIT/Apache-2.0), with its model built in.
+deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", rev = "d375b2d8309e0935d165700c91da9de862a99c31", default-features = false, features = ["tract", "default-model"] }
+ndarray = "0.15"
+# deep_filter is written for tract 0.21.4 (later 0.21 releases moved to a newer ndarray).
+tract-core = "=0.21.4"
+tract-onnx = "=0.21.4"
+tract-hir = "=0.21.4"
+tract-pulse = "=0.21.4"
 crossbeam-channel = "0.5.17"
 device_query = "4.0.1"
 directories = "6.0.0"

@@ -2,6 +2,7 @@
 //! processes the microphone and hands encoded Opus packets to the network.
 
 pub mod capture;
+pub mod dfn;
 pub mod device;
 pub mod jitter;
 pub mod mixer;
