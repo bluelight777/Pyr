@@ -6,6 +6,7 @@
 
 pub mod audio;
 pub mod backup;
+pub mod bugs;
 pub mod files;
 pub mod call;
 pub mod config;
@@ -391,6 +392,7 @@ impl Engine {
             call: None,
             toasts: Vec::new(),
             backups: HashMap::new(),
+            bugs: HashMap::new(),
             devices: DeviceLists::default(),
             settings: cfg.settings.clone(),
             user_volumes: cfg.user_volumes.clone(),
@@ -1215,6 +1217,61 @@ impl Engine {
     pub fn backup_folder(&self, key: &str) -> std::path::PathBuf {
         let name = self.shared.state.read().server(key).map(|s| s.info.name.clone()).unwrap_or_default();
         backup::folder(&self.shared, key, &name)
+    }
+
+    /// Send an Ingle bug report (see `bugs.rs`); the result shows as a notice.
+    pub fn report_bug(&self, title: &str, body: &str, include_log: bool) {
+        let shared = self.shared.clone();
+        let report = ingle_proto::control::BugReport {
+            title: title.trim().to_string(),
+            body: body.trim().to_string(),
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            os: bugs::os_name(),
+            log: if include_log { bugs::log_tail(&shared, ingle_proto::control::BUG_LOG_MAX - 1000) } else { String::new() },
+        };
+        self.shared.rt.spawn(async move {
+            match bugs::send(shared.clone(), report).await {
+                Ok(()) => shared.state.write().toast("Thanks! Your bug report was sent.", false),
+                Err(e) => shared.state.write().toast(format!("Couldn't send the bug report: {e:#}"), true),
+            }
+            (shared.repaint)();
+        });
+    }
+
+    /// Owner only: a server's bug reports, into `AppState::bugs`.
+    pub fn list_bugs(&self, key: &str) {
+        let k = key.to_string();
+        self.request_then(key, Request::ListBugs, move |shared, ev| match ev {
+            Event::Bugs { mut reports } => {
+                bugs::sort(&mut reports);
+                shared.state.write().bugs.insert(k, reports);
+            }
+            Event::Error { message, .. } => shared.state.write().toast(message, true),
+            _ => {}
+        });
+    }
+
+    /// Owner only: approve (for fixing), reject or mark fixed.
+    pub fn set_bug_status(&self, key: &str, id: i64, status: ingle_proto::control::BugStatus) {
+        if let Some(list) = self.shared.state.write().bugs.get_mut(key) {
+            if let Some(b) = list.iter_mut().find(|b| b.id == id) {
+                b.status = status;
+            }
+        }
+        self.request_then(key, Request::SetBugStatus { id, status }, move |shared, ev| {
+            if let Event::Error { message, .. } = ev {
+                shared.state.write().toast(format!("Couldn't change the report: {message}"), true);
+            }
+        });
+    }
+
+    /// Owner only: collect Ingle bug reports on this server, or stop.
+    pub fn set_bug_reports(&self, key: &str, on: bool) {
+        self.request_then(key, Request::SetBugReports { on }, move |shared, ev| {
+            if let Event::Error { message, .. } = ev {
+                shared.state.write().toast(message, true);
+            }
+        });
     }
 
     /// Owner only: the GIPHY key everyone's GIF search on this server uses ("" turns it off).

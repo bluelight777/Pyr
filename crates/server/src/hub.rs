@@ -142,6 +142,8 @@ pub struct Hub {
     next_conn: AtomicU64,
     next_session: AtomicU32,
     limits: Mutex<Limits>,
+    /// Bug reports taken in the last hour: from each address, and in all (flood limits).
+    bug_reports: Mutex<(HashMap<IpAddr, Vec<Instant>>, Vec<Instant>)>,
     /// Uploads per member: bytes being received now, and what arrived in the last hour.
     uploads: Mutex<HashMap<UserId, (u64, Vec<(Instant, u64)>)>>,
 }
@@ -307,6 +309,7 @@ impl Hub {
             next_conn: AtomicU64::new(1),
             next_session: AtomicU32::new(1),
             limits: Mutex::new(Limits::default()),
+            bug_reports: Mutex::new((HashMap::new(), Vec::new())),
             uploads: Mutex::new(HashMap::new()),
         })
     }
@@ -406,6 +409,8 @@ impl Hub {
             icon: self.db.get_meta("icon").filter(|i| !i.is_empty()),
             emojis: self.db.emojis(),
             giphy_key: self.db.get_meta("giphy_key").unwrap_or_default(),
+            bug_reports: self.db.get_meta("bug_reports").as_deref() == Some("1"),
+            new_bug_reports: self.db.new_bug_count(),
         }
     }
 
@@ -583,7 +588,7 @@ impl Hub {
             members,
             voice: inner.voice.values().map(|v| v.p.clone()).collect(),
             roles: self.db.roles(),
-            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE].iter().map(|s| s.to_string()).collect(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE].iter().map(|s| s.to_string()).collect(),
             dms: self.db.dms_of(uid),
             relations: self.db.relations_of(uid),
         };
@@ -992,6 +997,54 @@ impl Hub {
     pub fn member(&self, uid: &str) -> Option<Member> {
         let inner = self.inner.lock();
         self.member_locked(&inner, uid)
+    }
+
+    /// Take a bug report (sent instead of logging in), if the owner collects them and the
+    /// sender isn't flooding: at most 5 an hour from one address, 60 in all, and 2,000
+    /// waiting to be read.
+    pub fn take_bug_report(&self, ip: IpAddr, mut r: BugReport) -> Result<(), String> {
+        if self.db.get_meta("bug_reports").as_deref() != Some("1") {
+            return Err("This server doesn't collect bug reports.".into());
+        }
+        let hour = Duration::from_secs(3600);
+        {
+            let mut g = self.bug_reports.lock();
+            let (per_ip, all) = &mut *g;
+            all.retain(|t| t.elapsed() < hour);
+            per_ip.retain(|_, v| {
+                v.retain(|t| t.elapsed() < hour);
+                !v.is_empty()
+            });
+            let mine = per_ip.entry(ip).or_default();
+            if mine.len() >= 5 || all.len() >= 60 {
+                return Err("Lots of reports just now. Please try again in a while.".into());
+            }
+            mine.push(Instant::now());
+            all.push(Instant::now());
+        }
+        if self.db.new_bug_count() >= 2000 {
+            return Err("The bug inbox is full right now.".into());
+        }
+        let clip = |s: &mut String, max: usize| {
+            let s2: String = s.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').collect();
+            *s = s2;
+            while s.len() > max {
+                s.pop();
+            }
+        };
+        clip(&mut r.title, BUG_TITLE_MAX);
+        clip(&mut r.body, BUG_BODY_MAX);
+        clip(&mut r.log, BUG_LOG_MAX);
+        clip(&mut r.app_version, 40);
+        clip(&mut r.os, 80);
+        if r.title.trim().is_empty() && r.body.trim().is_empty() {
+            return Err("The report is empty.".into());
+        }
+        let id = self.db.add_bug(&r).map_err(|e| format!("{e:#}"))?;
+        info!(id, "bug report received");
+        // Tell the owner's open apps there's something new (it shows as a count).
+        self.broadcast(Event::ServerUpdated { server: self.info() });
+        Ok(())
     }
 
     pub fn file_path(&self, id: &str) -> Option<std::path::PathBuf> {

@@ -485,7 +485,7 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
             Event::E2eeKey { from, epoch, nonce, ct } => forward = Some(CallEvent::Key { from, epoch, nonce, ct }),
             Event::Pong { .. } | Event::Ok | Event::Hello { .. } | Event::Ready { .. } => {}
             Event::Error { message, .. } => toast = Some(message),
-            Event::History { .. } | Event::InviteCreated { .. } | Event::VoiceReady { .. } | Event::Kicked { .. } => {}
+            Event::History { .. } | Event::InviteCreated { .. } | Event::VoiceReady { .. } | Event::Kicked { .. } | Event::Bugs { .. } => {}
         }
         if let Some(t) = toast {
             st.toast(t, true);

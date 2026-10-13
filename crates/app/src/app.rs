@@ -36,6 +36,10 @@ pub enum Act {
     /// Set (or remove) a server's icon from part of an image: (bytes, cx, cy, frac).
     SetServerIcon { key: String, bytes: Option<(Arc<Vec<u8>>, f32, f32, f32)> },
     AddEmoji { key: String, name: String, bytes: Vec<u8> },
+    ListBugs(String),
+    SetBugStatus { key: String, id: i64, status: ingle_proto::control::BugStatus },
+    SetBugReports { key: String, on: bool },
+    ReportBug { title: String, body: String, include_log: bool },
     /// The server's GIPHY key (owner only; "" turns GIF search off).
     SetGiphyKey { key: String, giphy: String },
     /// Quit for real (Settings → Quit Ingle).
@@ -115,6 +119,11 @@ pub enum Dialog {
     LeaveServer { key: String, name: String },
     Settings { tab: u8 },
     ScreenPicker { selected: Option<String> },
+    /// Report a bug in Ingle (see the engine's `bugs.rs`).
+    ReportBug { title: String, body: String, include_log: bool },
+    /// The owner's inbox of Ingle bug reports for a server; `filter`: 0 new, 1 approved,
+    /// 2 fixed, 3 rejected.
+    BugReports { key: String, filter: u8 },
 }
 
 #[derive(Default)]
@@ -390,6 +399,10 @@ impl IngleApp {
             Act::Unblock(uid) => e.unblock(&uid),
             Act::RenameEmoji { key, id, name } => e.rename_emoji(&key, &id, &name),
             Act::SetGiphyKey { key, giphy } => e.set_giphy_key(&key, &giphy),
+            Act::ListBugs(key) => e.list_bugs(&key),
+            Act::SetBugStatus { key, id, status } => e.set_bug_status(&key, id, status),
+            Act::SetBugReports { key, on } => e.set_bug_reports(&key, on),
+            Act::ReportBug { title, body, include_log } => e.report_bug(&title, &body, include_log),
             Act::SetServerIcon { key, bytes } => match bytes {
                 None => e.set_server_icon(&key, None),
                 Some((b, cx, cy, frac)) => match crate::images::make_avatar_crop(&b, cx, cy, frac) {
@@ -1256,6 +1269,29 @@ impl IngleApp {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.add_space(8.0);
             let current = self.ui.channel.get(&s.key).copied();
+            // The owner's bug report inbox (when this server collects Ingle bug reports).
+            let owner = s.me.as_ref().map(|m| m.role == ingle_proto::control::Role::Owner).unwrap_or(false);
+            if owner && s.info.bug_reports {
+                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
+                let row = r.shrink2(vec2(8.0, 1.0));
+                if resp.hovered() {
+                    ui.painter().rect_filled(row, CornerRadius::same(6), theme::ELEV);
+                }
+                ui.painter().text(row.left_center() + vec2(12.0, 0.0), egui::Align2::LEFT_CENTER, "!", theme::bold_font(17.0), theme::MUTED);
+                ui.painter().text(row.left_center() + vec2(32.0, 0.0), egui::Align2::LEFT_CENTER, "bug-reports", theme::font(15.0), theme::MUTED);
+                let n = s.info.new_bug_reports;
+                if n > 0 {
+                    let t = if n > 99 { "99+".to_string() } else { n.to_string() };
+                    let b = Rect::from_center_size(pos2(row.right() - 18.0, row.center().y), vec2(14.0 + 7.0 * t.len() as f32, 18.0));
+                    ui.painter().rect_filled(b, CornerRadius::same(9), theme::LIVE);
+                    ui.painter().text(b.center(), egui::Align2::CENTER_CENTER, t, theme::bold_font(11.5), Color32::WHITE);
+                }
+                if resp.on_hover_text("Ingle bug reports people sent here. Only you see this.").clicked() {
+                    acts.push(Act::ListBugs(s.key.clone()));
+                    self.ui.dialog = Some(Dialog::BugReports { key: s.key.clone(), filter: 0 });
+                }
+                ui.add_space(6.0);
+            }
             for kind in [ChannelKind::Text, ChannelKind::Voice] {
                 ui.horizontal(|ui| {
                     ui.add_space(16.0);
@@ -1747,6 +1783,7 @@ impl IngleApp {
         }
         let mut dismiss = None;
         let mut copy = None;
+        let mut report: Option<String> = None;
         egui::Area::new(egui::Id::new("toasts"))
             .anchor(egui::Align2::RIGHT_BOTTOM, vec2(-20.0, -90.0))
             .order(egui::Order::Foreground)
@@ -1775,6 +1812,10 @@ impl IngleApp {
                                 if ui.button("Dismiss").clicked() {
                                     dismiss = Some(t.id);
                                 }
+                                if ingle_engine::bugs::can_report() && ui.button("Report").on_hover_text("Tell Ingle's developers about this").clicked() {
+                                    report = Some(t.text.clone());
+                                    dismiss = Some(t.id);
+                                }
                             });
                         });
                     ui.add_space(6.0);
@@ -1790,6 +1831,13 @@ impl IngleApp {
         }
         if let Some(id) = dismiss {
             self.ui.toasts_dismissed.insert(id);
+        }
+        if let Some(text) = report {
+            self.ui.dialog = Some(Dialog::ReportBug {
+                title: text.chars().take(80).collect(),
+                body: format!("This error came up:\n{text}\n\nWhat I was doing: "),
+                include_log: true,
+            });
         }
         let _ = self.started;
     }

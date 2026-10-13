@@ -352,6 +352,8 @@ pub struct AppState {
     /// is rejoined, camera and screen share included, as soon as the server is back.
     pub voice_rejoin: Option<VoiceRejoin>,
     pub toasts: Vec<Toast>,
+    /// Bug reports on servers I own (fetched when looked at), by server key.
+    pub bugs: HashMap<String, Vec<ingle_proto::control::BugEntry>>,
     /// Backups of servers I own, by server key.
     pub backups: HashMap<String, BackupStatus>,
     pub devices: DeviceLists,

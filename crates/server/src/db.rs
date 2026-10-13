@@ -139,6 +139,19 @@ CREATE TABLE IF NOT EXISTS emojis (
     by TEXT NOT NULL,
     created_at INTEGER NOT NULL
 );
+-- Ingle bug reports sent to this server (when its owner collects them). Whoever sent one
+-- isn't recorded: no account, no address.
+CREATE TABLE IF NOT EXISTS bug_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'new',
+    status_at INTEGER NOT NULL DEFAULT 0,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    app_version TEXT NOT NULL DEFAULT '',
+    os TEXT NOT NULL DEFAULT '',
+    log TEXT NOT NULL DEFAULT ''
+);
 "#;
 
 /// `channels.kind` of a direct message conversation (never listed as a channel).
@@ -435,6 +448,48 @@ impl Db {
             .optional()
             .ok()
             .flatten()
+    }
+
+    pub fn add_bug(&self, r: &ingle_proto::control::BugReport) -> Result<i64> {
+        let c = self.conn.lock();
+        c.execute(
+            "INSERT INTO bug_reports(created_at, title, body, app_version, os, log) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![now_ms(), r.title, r.body, r.app_version, r.os, r.log],
+        )?;
+        Ok(c.last_insert_rowid())
+    }
+
+    /// Reports waiting for the owner to look at them.
+    pub fn new_bug_count(&self) -> u64 {
+        self.conn.lock().query_row("SELECT COUNT(*) FROM bug_reports WHERE status = 'new'", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as u64
+    }
+
+    /// Newest first.
+    pub fn bugs(&self, limit: usize) -> Vec<ingle_proto::control::BugEntry> {
+        use ingle_proto::control::{BugEntry, BugReport, BugStatus};
+        let c = self.conn.lock();
+        let Ok(mut q) = c.prepare("SELECT id, created_at, status, title, body, app_version, os, log FROM bug_reports ORDER BY id DESC LIMIT ?1")
+        else {
+            return Vec::new();
+        };
+        q.query_map([limit as i64], |r| {
+            Ok(BugEntry {
+                id: r.get(0)?,
+                created_at: r.get(1)?,
+                status: BugStatus::parse(&r.get::<_, String>(2)?).unwrap_or_default(),
+                report: BugReport { title: r.get(3)?, body: r.get(4)?, app_version: r.get(5)?, os: r.get(6)?, log: r.get(7)? },
+            })
+        })
+        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+    }
+
+    pub fn set_bug_status(&self, id: i64, status: ingle_proto::control::BugStatus) -> Result<bool> {
+        Ok(self
+            .conn
+            .lock()
+            .execute("UPDATE bug_reports SET status = ?2, status_at = ?3 WHERE id = ?1", params![id, status.as_str(), now_ms()])?
+            > 0)
     }
 
     /// Every stored file: (id, size), for backups.

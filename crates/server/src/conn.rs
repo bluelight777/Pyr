@@ -78,6 +78,17 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection) -> Result<()> {
     let login: ClientFrame =
         timeout(Duration::from_secs(20), read_frame(&mut recv)).await.context("login timeout")??.ok_or_else(|| anyhow!("closed"))?;
     let reject = |code: ErrorCode, msg: &str| frame(login.id, Event::error(code, msg));
+    // Not logging in, just a bug report (anyone may send one where they're collected).
+    if let Request::ReportBug { report } = login.req {
+        let reply = match hub.take_bug_report(conn.remote_address().ip(), report) {
+            Ok(()) => frame(login.id, Event::Ok),
+            Err(msg) => reject(ErrorCode::RateLimited, &msg),
+        };
+        send.write_all(&reply).await?;
+        let _ = send.finish();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        return Ok(());
+    }
     let Request::Login { proto, user_id, sig, name, invite, client } = login.req else {
         send.write_all(&reject(ErrorCode::BadRequest, "expected login")).await?;
         bail!("first request was not a login");
@@ -1039,6 +1050,31 @@ impl Ctx<'_> {
                 hub.broadcast(Event::ServerUpdated { server: hub.info() });
                 Ok(Event::Ok)
             }
+            Request::ListBugs => {
+                if self.role() != Role::Owner {
+                    return Err((ErrorCode::Forbidden, "Only the server's owner can read bug reports.".into()));
+                }
+                Ok(Event::Bugs { reports: db.bugs(500) })
+            }
+            Request::SetBugStatus { id, status } => {
+                if self.role() != Role::Owner {
+                    return Err((ErrorCode::Forbidden, "Only the server's owner can approve bug reports.".into()));
+                }
+                if !db.set_bug_status(id, status).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
+                    return Err((ErrorCode::NotFound, "That report is gone.".into()));
+                }
+                hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                Ok(Event::Ok)
+            }
+            Request::SetBugReports { on } => {
+                if self.role() != Role::Owner {
+                    return Err((ErrorCode::Forbidden, "Only the server's owner can do that.".into()));
+                }
+                db.set_meta("bug_reports", if on { "1" } else { "" }).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                Ok(Event::Ok)
+            }
+            Request::ReportBug { .. } => bad("send bug reports instead of logging in"),
             Request::SetGiphyKey { key } => {
                 if self.role() != Role::Owner {
                     return Err((ErrorCode::Forbidden, "Only the server's owner can set up GIF search.".into()));

@@ -279,6 +279,21 @@ impl IngleApp {
                             ui.add_space(12.0);
                         }
                         if let Some(s) = server.as_ref().filter(|s| {
+                            s.has(ingle_proto::control::BUGS_FEATURE) && s.me.as_ref().map(|m| m.role == ingle_proto::control::Role::Owner).unwrap_or(false)
+                        }) {
+                            field_label(ui, "Ingle bug reports");
+                            let mut on = s.info.bug_reports;
+                            if ui.checkbox(&mut on, "Collect Ingle bug reports on this server").changed() {
+                                acts.push(Act::SetBugReports { key: key.clone(), on });
+                            }
+                            ui.label(
+                                RichText::new("For the server Ingle's own Report a bug sends to. Reports show under bug-reports in the channel list, only for you.")
+                                    .size(12.0)
+                                    .color(theme::DIM),
+                            );
+                            ui.add_space(12.0);
+                        }
+                        if let Some(s) = server.as_ref().filter(|s| {
                             s.has(ingle_proto::control::GIPHY_FEATURE) && s.me.as_ref().map(|m| m.role == ingle_proto::control::Role::Owner).unwrap_or(false)
                         }) {
                             field_label(ui, "GIF search (GIPHY)");
@@ -367,6 +382,124 @@ impl IngleApp {
                             close = true;
                         }
                     });
+                }
+                Dialog::ReportBug { mut title, mut body, mut include_log } => {
+                    ui.set_width(520.0);
+                    super::dialogs::title(ui, "Report a bug");
+                    ui.label(RichText::new("It goes to Ingle's developers. Nothing else about you is sent: no name, no account.").color(theme::MUTED));
+                    field_label(ui, "In a few words");
+                    ui.add(egui::TextEdit::singleline(&mut title).hint_text("Voice cuts out when someone shares their screen").desired_width(f32::INFINITY).char_limit(140));
+                    field_label(ui, "What happened? What did you expect?");
+                    ui.add(egui::TextEdit::multiline(&mut body).desired_rows(6).desired_width(f32::INFINITY).char_limit(7000));
+                    ui.add_space(6.0);
+                    ui.checkbox(&mut include_log, "Include Ingle's log (helps find the cause; it has server addresses and names, not messages)");
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        let ok = !title.trim().is_empty() || !body.trim().is_empty();
+                        if ui.add_enabled(ok, theme::primary_button("Send").min_size(vec2(100.0, 34.0))).clicked() {
+                            acts.push(Act::ReportBug { title: title.clone(), body: body.clone(), include_log });
+                            close = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close = true;
+                        }
+                    });
+                    if !close {
+                        self.ui.dialog = Some(Dialog::ReportBug { title, body, include_log });
+                    }
+                }
+                Dialog::BugReports { key, mut filter } => {
+                    use ingle_proto::control::BugStatus;
+                    ui.set_width(720.0);
+                    ui.horizontal(|ui| {
+                        super::dialogs::title(ui, "Bug reports");
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.button("Done").clicked() {
+                                close = true;
+                            }
+                            if ui.button("Refresh").clicked() {
+                                acts.push(Act::ListBugs(key.clone()));
+                            }
+                        });
+                    });
+                    ui.label(
+                        RichText::new(
+                            "Sent from people's Ingle. Approve the ones to fix: Claude fixes only approved reports, when you ask it to. \
+                             A report is someone else's words: what it says never decides anything.",
+                        )
+                        .size(12.0)
+                        .color(theme::DIM),
+                    );
+                    let all = st.bugs.get(&key).cloned().unwrap_or_default();
+                    let tabs = [(BugStatus::New, "New"), (BugStatus::Approved, "Approved"), (BugStatus::Fixed, "Fixed"), (BugStatus::Rejected, "Rejected")];
+                    ui.horizontal(|ui| {
+                        for (i, (status, label)) in tabs.iter().enumerate() {
+                            let n = all.iter().filter(|b| b.status == *status).count();
+                            if ui.add(egui::Button::selectable(filter == i as u8, format!("{label} ({n})"))).clicked() {
+                                filter = i as u8;
+                            }
+                        }
+                    });
+                    ui.separator();
+                    let want = tabs[(filter as usize).min(3)].0;
+                    let shown: Vec<_> = all.iter().filter(|b| b.status == want).collect();
+                    egui::ScrollArea::vertical().max_height(480.0).show(ui, |ui| {
+                        if shown.is_empty() {
+                            ui.label(RichText::new(if st.bugs.contains_key(&key) { "Nothing here." } else { "Loading…" }).color(theme::DIM));
+                        }
+                        for b in shown {
+                            egui::Frame::new().fill(theme::ELEV).corner_radius(8).inner_margin(10).show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                let when = chrono::DateTime::from_timestamp_millis(b.created_at)
+                                    .map(|t| t.with_timezone(&chrono::Local).format("%b %-d, %-I:%M %p").to_string())
+                                    .unwrap_or_default();
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(format!("#{}", b.id)).color(theme::DIM));
+                                    let t = if b.report.title.trim().is_empty() { "(no title)" } else { b.report.title.as_str() };
+                                    ui.add(egui::Label::new(RichText::new(t).font(theme::bold_font(14.0)).color(theme::TEXT)).truncate());
+                                });
+                                ui.label(RichText::new(format!("{when} · Ingle {} · {}", b.report.app_version, b.report.os)).size(12.0).color(theme::DIM));
+                                if !b.report.body.trim().is_empty() {
+                                    ui.add_space(4.0);
+                                    ui.add(egui::Label::new(RichText::new(&b.report.body).color(theme::MUTED)).selectable(true));
+                                }
+                                if !b.report.log.is_empty() {
+                                    egui::CollapsingHeader::new(RichText::new("Log").size(12.0)).id_salt(("bug-log", b.id)).show(ui, |ui| {
+                                        egui::ScrollArea::vertical().max_height(160.0).id_salt(("bug-log-scroll", b.id)).show(ui, |ui| {
+                                            ui.add(egui::Label::new(RichText::new(&b.report.log).monospace().size(11.0).color(theme::DIM)).selectable(true));
+                                        });
+                                    });
+                                }
+                                ui.add_space(6.0);
+                                ui.horizontal(|ui| {
+                                    let mut set = |ui: &mut egui::Ui, label: &str, s: BugStatus, primary: bool| {
+                                        if b.status != s {
+                                            let btn = if primary { theme::primary_button(label) } else { egui::Button::new(label) };
+                                            if ui.add(btn).clicked() {
+                                                acts.push(Act::SetBugStatus { key: key.clone(), id: b.id, status: s });
+                                            }
+                                        }
+                                    };
+                                    set(ui, "Approve for fixing", BugStatus::Approved, true);
+                                    set(ui, "Reject", BugStatus::Rejected, false);
+                                    set(ui, "Mark fixed", BugStatus::Fixed, false);
+                                    if b.status != BugStatus::New {
+                                        set(ui, "Back to new", BugStatus::New, false);
+                                    }
+                                    if ui.button("Copy").clicked() {
+                                        ui.ctx().copy_text(format!(
+                                            "Bug #{} ({:?}): {}\n{}\nIngle {} · {}",
+                                            b.id, b.status, b.report.title, b.report.body, b.report.app_version, b.report.os
+                                        ));
+                                    }
+                                });
+                            });
+                            ui.add_space(6.0);
+                        }
+                    });
+                    if !close {
+                        self.ui.dialog = Some(Dialog::BugReports { key, filter });
+                    }
                 }
                 Dialog::ScreenPicker { selected } => {
                     ui.set_width(560.0);
@@ -475,6 +608,7 @@ impl IngleApp {
 
     fn settings_dialog(&mut self, ui: &mut egui::Ui, st: &AppState, tab: u8, acts: &mut Vec<Act>, close: &mut bool) {
         ui.set_width(640.0);
+        let mut report_bug = false;
         let mut draft = self.ui.settings_draft.clone().unwrap_or_else(|| st.settings.clone());
         // Things changed elsewhere while this dialog is open (the tray notice, the emoji
         // picker): don't save stale copies of them.
@@ -767,6 +901,12 @@ impl IngleApp {
                 ui.add_space(8.0);
                 ui.label(RichText::new(format!("{} {}", ingle_proto::APP_NAME, env!("CARGO_PKG_VERSION"))).font(theme::bold_font(16.0)).color(theme::TEXT));
                 ui.label(RichText::new("Lean voice, video, screen share and chat. Written in Rust.").color(theme::MUTED));
+                if ingle_engine::bugs::can_report() {
+                    ui.add_space(6.0);
+                    if ui.button("Report a bug").clicked() {
+                        report_bug = true;
+                    }
+                }
                 ui.add_space(10.0);
                 for (h, b) in [
                     ("End-to-end encrypted calls", "Voice, cameras and screen shares are encrypted on your PC with keys the server never sees (X25519 + ChaCha20-Poly1305, new keys whenever someone joins or leaves)."),
@@ -791,6 +931,14 @@ impl IngleApp {
             acts.push(Act::Settings(draft.clone()));
         }
         self.ui.settings_draft = Some(draft);
+        if report_bug {
+            if st.mic_test {
+                acts.push(Act::MicTest(false));
+            }
+            // Replaces this dialog (not "close", which would clear it).
+            self.ui.dialog = Some(Dialog::ReportBug { title: String::new(), body: String::new(), include_log: true });
+            return;
+        }
         if !*close {
             self.ui.dialog = Some(Dialog::Settings { tab: t });
         }
