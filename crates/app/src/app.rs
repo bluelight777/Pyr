@@ -134,6 +134,11 @@ pub struct UiState {
     pub dialog: Option<Dialog>,
     pub react_picker: Option<MessageId>,
     pub composer_emoji: bool,
+    /// The GIF picker over the message box (the GIF button, or typing /giphy), its search
+    /// words, and whether its search box should take the cursor.
+    pub gif_picker: bool,
+    pub gif_search: String,
+    pub gif_focus: bool,
     pub last_typing: Option<Instant>,
     pub requested: HashSet<(String, ChannelId)>,
     pub settings_draft: Option<Settings>,

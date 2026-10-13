@@ -638,15 +638,16 @@ impl IngleApp {
             // Typing "@": people, roles and @everyone to pick from (arrows + Enter/Tab, or click).
             // Typing ":smi": emoji. Typing "/giphy cats": GIFs.
             let composer_id = egui::Id::new(("composer", &key, ch.id));
-            let giphy_q = giphy_query(&draft);
-            if let Some(q) = &giphy_q {
-                self.giphy_panel(ui, st, &key, ch.id, q, &mut draft, composer_id, acts);
-            } else if self.ui.giphy.searched.is_some() {
+            // Typing "/giphy" (or "/giphy cats") brings up the GIF search, the words going into
+            // its search box.
+            if let Some(q) = giphy_query(&draft) {
+                self.open_gif_picker(q);
+                draft.clear();
+            }
+            if !self.ui.gif_picker && self.ui.giphy.searched.is_some() {
                 self.ui.giphy.reset();
             }
-            let suggestions = if giphy_q.is_some() {
-                Vec::new()
-            } else {
+            let suggestions = {
                 let m = mention_suggestions(s, &draft);
                 if m.is_empty() { emoji_suggestions(s, &draft, st.settings.emoji_tone) } else { m }
             };
@@ -770,6 +771,7 @@ impl IngleApp {
                 }
                 if self.ui.editing.is_none()
                     && !self.ui.composer_emoji
+                    && !self.ui.gif_picker
                     && self.ui.react_picker.is_none()
                     && self.ui.dialog.is_none()
                     && self.ui.viewer.is_none()
@@ -794,10 +796,14 @@ impl IngleApp {
                 let enter = ui.input(|i| {
                     i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::Enter, pressed: true, modifiers, .. } if !modifiers.shift))
                 });
-                // ("/giphy …" is a GIF search, never a message: its Enter belongs to the GIF picker.)
-                let send = resp.has_focus() && enter && giphy_q.is_none();
+                let send = resp.has_focus() && enter;
                 let files = self.ui.attach.get(&draft_key).cloned().unwrap_or_default();
-                if send && (!draft.trim().is_empty() || !files.is_empty()) {
+                // "/giphy …" (or a bare "/gif") is a GIF search, never a message.
+                let gif_command = giphy_query(draft.trim()).or_else(|| (draft.trim() == "/gif").then(String::new));
+                if send && gif_command.is_some() {
+                    self.open_gif_picker(gif_command.unwrap_or_default());
+                    draft.clear();
+                } else if send && (!draft.trim().is_empty() || !files.is_empty()) {
                     let reply_to = self.ui.reply.take().map(|(id, _)| id);
                     let text = expand_shortcodes(s, draft.trim(), st.settings.emoji_tone);
                     acts.push(Act::Send { key: key.clone(), channel: ch.id, text, reply_to, files });
@@ -808,22 +814,41 @@ impl IngleApp {
                 if resp.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
                     self.ui.reply = None;
                 }
-                if icon_button(ui, 30.0, "Search GIFs (or type /giphy)", giphy_q.is_some(), |p, r, c| icons::gif(p, r.shrink(1.0), c)).clicked() {
-                    if giphy_q.is_some() {
-                        draft.clear();
+                let gb = icon_button(ui, 30.0, "Search GIFs (or type /giphy)", self.ui.gif_picker, |p, r, c| icons::gif(p, r.shrink(1.0), c));
+                if gb.clicked() {
+                    if self.ui.gif_picker {
+                        self.ui.gif_picker = false;
                     } else {
-                        draft = "/giphy ".into();
-                        let mut state = egui::text_edit::TextEditState::load(ui.ctx(), composer_id).unwrap_or_default();
-                        state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(7))));
-                        state.store(ui.ctx(), composer_id);
-                        ui.ctx().memory_mut(|m| m.request_focus(composer_id));
+                        self.open_gif_picker(String::new());
                     }
                 }
                 let eb = icon_button(ui, 30.0, "Emoji", self.ui.composer_emoji, |p, r, c| icons::smile(p, r, c));
                 if eb.clicked() {
                     self.ui.composer_emoji = !self.ui.composer_emoji;
+                    self.ui.gif_picker = false;
                     self.ui.picker.search.clear();
                     self.ui.picker.focus_search = true;
+                }
+                if self.ui.gif_picker {
+                    let area = egui::Area::new(egui::Id::new(("composer-gif", &key, ch.id)))
+                        .order(egui::Order::Foreground)
+                        .pivot(egui::Align2::RIGHT_BOTTOM)
+                        .fixed_pos(pos2(eb.rect.right() + 6.0, gb.rect.top() - 12.0))
+                        .constrain(true)
+                        .show(ui.ctx(), |ui| egui::Frame::popup(ui.style()).fill(theme::SIDE).inner_margin(10).show(ui, |ui| self.gif_picker(ui, st, acts)).inner);
+                    if let Some(url) = area.inner {
+                        let reply_to = self.ui.reply.take().map(|(id, _)| id);
+                        acts.push(Act::Send { key: key.clone(), channel: ch.id, text: url, reply_to, files: Vec::new() });
+                        self.ui.gif_picker = false;
+                        ui.ctx().memory_mut(|m| m.request_focus(composer_id));
+                    }
+                    let clicked_outside = ui.input(|i| i.pointer.any_pressed())
+                        && !area.response.contains_pointer()
+                        && !gb.rect.contains(ui.input(|i| i.pointer.interact_pos()).unwrap_or_default());
+                    if clicked_outside || ui.input(|i| i.key_pressed(Key::Escape)) {
+                        self.ui.gif_picker = false;
+                        ui.ctx().memory_mut(|m| m.request_focus(composer_id));
+                    }
                 }
                 if self.ui.composer_emoji {
                     let area = egui::Area::new(egui::Id::new(("composer-emoji", &key, ch.id)))
@@ -1116,9 +1141,10 @@ pub fn complete_mention(draft: &mut String, insert: &str) {
     }
 }
 
-/// "/giphy cats" (or just "/giphy") in the box: the search words.
+/// "/giphy" or "/giphy cats" (or "/gif cats") in the box: a GIF search, and its words. A bare
+/// "/gif" isn't one yet, since it may be the start of "/giphy".
 pub fn giphy_query(draft: &str) -> Option<String> {
-    let rest = draft.strip_prefix("/giphy").or_else(|| draft.strip_prefix("/gif"))?;
+    let rest = draft.strip_prefix("/giphy").or_else(|| draft.strip_prefix("/gif").filter(|r| r.starts_with(' ')))?;
     if !rest.is_empty() && !rest.starts_with(' ') {
         return None;
     }
@@ -1311,144 +1337,140 @@ impl IngleApp {
         }
     }
 
-    /// The `/giphy` search results above the message box.
-    #[allow(clippy::too_many_arguments)]
-    fn giphy_panel(
-        &mut self,
-        ui: &mut egui::Ui,
-        st: &AppState,
-        key: &str,
-        channel: ChannelId,
-        query: &str,
-        draft: &mut String,
-        composer_id: egui::Id,
-        acts: &mut Vec<Act>,
-    ) {
-        let api_key = crate::giphy::key(&st.settings.giphy_key);
-        let mut send: Option<String> = None;
-        // While "/giphy" is in the box, Enter and Esc belong to the GIF picker: Enter sends the
-        // chosen GIF (and never the command itself as a message), Esc cancels.
-        let focused = ui.ctx().memory(|m| m.focused()) == Some(composer_id);
-        let (mut enter, mut esc) = (false, false);
-        if focused {
+    /// Opens the GIF picker with these search words, its search box taking the cursor.
+    fn open_gif_picker(&mut self, words: String) {
+        self.ui.gif_picker = true;
+        self.ui.composer_emoji = false;
+        self.ui.gif_search = words;
+        self.ui.gif_focus = true;
+    }
+
+    /// The GIF picker: a GIPHY search box over what's trending or the results, like Discord's.
+    /// Returns the GIF to send.
+    fn gif_picker(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) -> Option<String> {
+        const W: f32 = 460.0;
+        const TILE_H: f32 = 100.0;
+        ui.set_width(W);
+        let mut send = None;
+        let search_id = egui::Id::new("gif-search");
+        // While typing in the search box: Up/Down (or Tab) choose a GIF, Enter sends it.
+        let typing = ui.ctx().memory(|m| m.has_focus(search_id));
+        let (mut go_next, mut go_prev, mut enter) = (false, false, false);
+        if typing {
             ui.input_mut(|i| {
+                go_next = i.consume_key(Modifiers::NONE, Key::ArrowDown) || i.consume_key(Modifiers::NONE, Key::Tab);
+                go_prev = i.consume_key(Modifiers::NONE, Key::ArrowUp) || i.consume_key(Modifiers::SHIFT, Key::Tab);
                 enter = i.consume_key(Modifiers::NONE, Key::Enter);
-                esc = i.consume_key(Modifiers::NONE, Key::Escape);
             });
         }
-        if esc {
-            draft.clear();
-            self.ui.giphy.reset();
-            return;
-        }
-        egui::Frame::new().fill(theme::SIDE).corner_radius(8).inner_margin(8).stroke(Stroke::new(1.0f32, theme::LINE)).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                let title = if query.is_empty() { "TRENDING GIFS".to_string() } else { format!("GIFS FOR \u{201c}{}\u{201d}", query.to_uppercase()) };
-                ui.label(RichText::new(title).font(theme::bold_font(11.0)).color(theme::DIM));
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(RichText::new("Powered by GIPHY").font(theme::bold_font(10.5)).color(theme::MUTED));
-                });
+        ui.horizontal(|ui| {
+            let r = ui.add(
+                egui::TextEdit::singleline(&mut self.ui.gif_search).hint_text("Search GIPHY").desired_width(W - 130.0).id(search_id),
+            );
+            if self.ui.gif_focus || (!r.has_focus() && ui.ctx().memory(|m| m.focused().is_none())) {
+                r.request_focus();
+                self.ui.gif_focus = false;
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.label(RichText::new("Powered by GIPHY").font(theme::bold_font(10.5)).color(theme::MUTED));
             });
-            let Some(api_key) = api_key else {
-                ui.label(
-                    RichText::new("GIF search isn't set up in this copy of Ingle. If you have a GIPHY API key, paste it here:")
-                        .color(theme::MUTED),
-                );
-                let mut k = st.settings.giphy_key.clone();
-                if ui.add(egui::TextEdit::singleline(&mut k).hint_text("GIPHY API key").desired_width(320.0)).changed() {
-                    let mut s = st.settings.clone();
-                    s.giphy_key = k.trim().to_string();
-                    acts.push(Act::Settings(s));
-                }
-                return;
-            };
-            // One letter isn't worth a search (each one uses up some of the key's allowance).
-            if crate::giphy::normalize(query).chars().count() == 1 {
-                ui.label(RichText::new("Keep typing to search GIPHY…").color(theme::MUTED));
-                return;
+        });
+        ui.add_space(8.0);
+        let query = self.ui.gif_search.clone();
+        let words = crate::giphy::normalize(&query);
+        let title = if words.is_empty() { "TRENDING GIFS".to_string() } else { format!("GIFS FOR \u{201c}{}\u{201d}", words.to_uppercase()) };
+        ui.label(RichText::new(title).font(theme::bold_font(11.0)).color(theme::DIM));
+        ui.add_space(4.0);
+        let Some(api_key) = crate::giphy::key(&st.settings.giphy_key) else {
+            ui.label(
+                RichText::new("GIF search isn't set up in this copy of Ingle. If you have a GIPHY API key, paste it here:")
+                    .color(theme::MUTED),
+            );
+            let mut k = st.settings.giphy_key.clone();
+            if ui.add(egui::TextEdit::singleline(&mut k).hint_text("GIPHY API key").desired_width(320.0)).changed() {
+                let mut s = st.settings.clone();
+                s.giphy_key = k.trim().to_string();
+                acts.push(Act::Settings(s));
             }
-            let ctx = ui.ctx().clone();
-            self.ui.giphy.update(query, &api_key, move || ctx.request_repaint());
-            let gifs = match self.ui.giphy.current() {
-                Some(crate::giphy::Search::Ready(v)) => v,
-                Some(crate::giphy::Search::Failed(e)) => {
-                    ui.label(RichText::new(e).color(theme::LIVE));
-                    return;
-                }
-                _ => {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(RichText::new("Searching GIPHY…").color(theme::MUTED));
-                    });
-                    ui.ctx().request_repaint_after(Duration::from_millis(100));
-                    return;
-                }
-            };
-            if gifs.is_empty() {
-                ui.label(RichText::new("No GIFs found. Try other words.").color(theme::MUTED));
-                return;
+            return None;
+        };
+        // One letter isn't worth a search (each one uses up some of the key's allowance).
+        if words.chars().count() == 1 {
+            ui.label(RichText::new("Keep typing to search GIPHY…").color(theme::MUTED));
+            return None;
+        }
+        let ctx = ui.ctx().clone();
+        self.ui.giphy.update(&query, &api_key, move || ctx.request_repaint());
+        let gifs = match self.ui.giphy.current() {
+            Some(crate::giphy::Search::Ready(v)) => v,
+            Some(crate::giphy::Search::Failed(e)) => {
+                ui.label(RichText::new(e).color(theme::LIVE));
+                return None;
             }
-            let n = gifs.len();
-            self.ui.giphy.sel = self.ui.giphy.sel.min(n - 1);
-            if focused {
-                ui.input_mut(|i| {
-                    if i.consume_key(Modifiers::NONE, Key::ArrowRight) || i.consume_key(Modifiers::NONE, Key::Tab) {
-                        self.ui.giphy.sel = (self.ui.giphy.sel + 1) % n;
-                    }
-                    if i.consume_key(Modifiers::NONE, Key::ArrowLeft) {
-                        self.ui.giphy.sel = (self.ui.giphy.sel + n - 1) % n;
-                    }
-                });
-            }
-            if enter {
-                send = Some(gifs[self.ui.giphy.sel].url.clone());
-            }
-            let h = 110.0;
-            egui::ScrollArea::horizontal().id_salt("giphy-row").max_height(h + 8.0).show(ui, |ui| {
+            _ => {
                 ui.horizontal(|ui| {
-                    for (i, g) in gifs.iter().enumerate() {
-                        let w = (g.preview_w / g.preview_h.max(1.0) * h).clamp(60.0, 260.0);
-                        let (r, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click());
-                        if i == self.ui.giphy.sel && focused {
-                            resp.scroll_to_me(None);
-                        }
-                        if !ui.is_rect_visible(r) {
-                            continue;
-                        }
-                        ui.painter().rect_filled(r, CornerRadius::same(6), theme::ELEV);
-                        let ctx = ui.ctx().clone();
-                        if let crate::giphy::Dl::Ready(bytes) = self.ui.gifs.get(&g.preview, move || ctx.request_repaint()) {
-                            let t = ui.input(|i| i.time);
-                            if let Some((tex, _, next)) = self.images.get(ui.ctx(), &format!("gif:{}", g.preview), Some(bytes), 260).frame(t) {
-                                ui.painter().add(
-                                    egui::epaint::RectShape::filled(r, CornerRadius::same(6), Color32::WHITE)
-                                        .with_texture(tex, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))),
-                                );
-                                if let Some(nx) = next {
-                                    ui.ctx().request_repaint_after(nx);
-                                }
+                    ui.spinner();
+                    ui.label(RichText::new("Searching GIPHY…").color(theme::MUTED));
+                });
+                ui.ctx().request_repaint_after(Duration::from_millis(100));
+                return None;
+            }
+        };
+        if gifs.is_empty() {
+            ui.label(RichText::new("No GIFs found. Try other words.").color(theme::MUTED));
+            return None;
+        }
+        let n = gifs.len();
+        let mut sel = self.ui.giphy.sel.min(n - 1);
+        if go_next {
+            sel = (sel + 1) % n;
+        }
+        if go_prev {
+            sel = (sel + n - 1) % n;
+        }
+        self.ui.giphy.sel = sel;
+        if enter {
+            send = Some(gifs[sel].url.clone());
+        }
+        egui::ScrollArea::vertical().id_salt("gif-grid").max_height(320.0).auto_shrink([false, true]).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+                for (i, g) in gifs.iter().enumerate() {
+                    let w = (g.preview_w / g.preview_h.max(1.0) * TILE_H).clamp(60.0, W - 24.0);
+                    let (r, resp) = ui.allocate_exact_size(vec2(w, TILE_H), Sense::click());
+                    if i == sel && (go_next || go_prev) {
+                        resp.scroll_to_me(None);
+                    }
+                    if !ui.is_rect_visible(r) {
+                        continue;
+                    }
+                    ui.painter().rect_filled(r, CornerRadius::same(6), theme::ELEV);
+                    let ctx = ui.ctx().clone();
+                    if let crate::giphy::Dl::Ready(bytes) = self.ui.gifs.get(&g.preview, move || ctx.request_repaint()) {
+                        let t = ui.input(|i| i.time);
+                        if let Some((tex, _, next)) = self.images.get(ui.ctx(), &format!("gif:{}", g.preview), Some(bytes), 260).frame(t) {
+                            ui.painter().add(
+                                egui::epaint::RectShape::filled(r, CornerRadius::same(6), Color32::WHITE)
+                                    .with_texture(tex, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))),
+                            );
+                            if let Some(nx) = next {
+                                ui.ctx().request_repaint_after(nx);
                             }
                         }
-                        if i == self.ui.giphy.sel || resp.hovered() {
-                            ui.painter().rect_stroke(r, CornerRadius::same(6), Stroke::new(2.0f32, theme::EMBER), egui::StrokeKind::Inside);
-                        }
-                        let resp = if g.title.is_empty() { resp } else { resp.on_hover_text(&g.title) };
-                        if resp.clicked() {
-                            send = Some(g.url.clone());
-                        }
                     }
-                });
+                    if i == sel || resp.hovered() {
+                        ui.painter().rect_stroke(r, CornerRadius::same(6), Stroke::new(2.0f32, theme::EMBER), egui::StrokeKind::Inside);
+                    }
+                    let resp = if g.title.is_empty() { resp } else { resp.on_hover_text(&g.title) };
+                    if resp.clicked() {
+                        send = Some(g.url.clone());
+                    }
+                }
             });
-            ui.label(RichText::new("← → to choose, Enter to send, Esc to cancel").size(11.0).color(theme::DIM));
         });
-        if let Some(url) = send {
-            let reply_to = self.ui.reply.take().map(|(id, _)| id);
-            acts.push(Act::Send { key: key.to_string(), channel, text: url, reply_to, files: Vec::new() });
-            draft.clear();
-            self.ui.giphy.reset();
-            ui.ctx().memory_mut(|m| m.request_focus(composer_id));
-        }
+        ui.add_space(6.0);
+        ui.label(RichText::new("Click a GIF to send it  ·  ↑ ↓ to choose, Enter to send  ·  Esc to close").size(11.0).color(theme::DIM));
+        send
     }
 }
 
@@ -1485,5 +1507,9 @@ mod emoji_text_tests {
         assert_eq!(giphy_query("/giphy").as_deref(), Some(""));
         assert_eq!(giphy_query("/giphyx"), None);
         assert_eq!(giphy_query("hello"), None);
+        // "/gif" might be the start of "/giphy": not a search until a space follows.
+        assert_eq!(giphy_query("/gif"), None);
+        assert_eq!(giphy_query("/gif dogs").as_deref(), Some("dogs"));
+        assert_eq!(giphy_query("/gifts for mom"), None);
     }
 }

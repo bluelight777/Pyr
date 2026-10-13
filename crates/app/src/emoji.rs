@@ -316,12 +316,18 @@ pub fn atlas(ctx: &egui::Context) -> Option<egui::TextureId> {
     }
 }
 
+/// Where an emoji's picture is in the atlas, half a pixel in from each side of its cell. The
+/// emoji sit edge to edge in the atlas and most touch their cell's edge, so smooth sampling
+/// right at the edge blends in the neighbouring emoji: thin lines around the picture.
 pub fn uv(cell: u16) -> Rect {
     let d = data();
     let (c, r) = ((cell as u32 % d.cols) as f32, (cell as u32 / d.cols) as f32);
     let (w, h) = ((d.cols * d.cell) as f32, (d.rows * d.cell) as f32);
     let cs = d.cell as f32;
-    Rect::from_min_max(pos2(c * cs / w, r * cs / h), pos2((c + 1.0) * cs / w, (r + 1.0) * cs / h))
+    Rect::from_min_max(
+        pos2((c * cs + 0.5) / w, (r * cs + 0.5) / h),
+        pos2(((c + 1.0) * cs - 0.5) / w, ((r + 1.0) * cs - 0.5) / h),
+    )
 }
 
 /// Draws one emoji filling `rect`. `custom` turns a server emoji's file id into a texture.
@@ -334,7 +340,11 @@ pub fn paint(
     match e {
         EmojiRef::Unicode(cell) => {
             if let Some(t) = atlas(painter.ctx()) {
-                painter.image(t, rect, uv(*cell), Color32::WHITE);
+                // A plain textured quad: egui's image shape adds a soft half-pixel rim whose
+                // texture coordinates reach past this cell into the next emoji in the atlas.
+                let mut mesh = egui::Mesh::with_texture(t);
+                mesh.add_rect_with_uv(rect, uv(*cell), Color32::WHITE);
+                painter.add(egui::Shape::mesh(mesh));
             }
         }
         EmojiRef::Custom { id, .. } => {
@@ -447,6 +457,14 @@ mod tests {
                 assert!(cell_of(&it.e).is_some() || d.cells.contains_key(&it.k), "{} {}", it.n, it.e);
             }
         }
-        assert!(uv(0).min == pos2(0.0, 0.0));
+        // Each picture stays inside its own cell, half a pixel in from every side.
+        let (w, h) = ((d.cols * d.cell) as f32, (d.rows * d.cell) as f32);
+        for cell in [0u16, 1, (d.cols + 1) as u16, (d.cols * (d.rows - 1)) as u16] {
+            let (c, r) = ((cell as u32 % d.cols) as f32, (cell as u32 / d.cols) as f32);
+            let u = uv(cell);
+            let cs = d.cell as f32;
+            assert!((u.min.x * w - (c * cs + 0.5)).abs() < 1e-3 && (u.min.y * h - (r * cs + 0.5)).abs() < 1e-3);
+            assert!((u.max.x * w - ((c + 1.0) * cs - 0.5)).abs() < 1e-3 && (u.max.y * h - ((r + 1.0) * cs - 0.5)).abs() < 1e-3);
+        }
     }
 }

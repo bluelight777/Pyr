@@ -12,7 +12,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
-use serde::Deserialize;
 
 /// Built into release builds (`INGLE_GIPHY_KEY=... scripts/build-*.sh`).
 const BUILT_IN_KEY: Option<&str> = option_env!("INGLE_GIPHY_KEY");
@@ -170,29 +169,14 @@ fn agent() -> ureq::Agent {
         .into()
 }
 
-#[derive(Deserialize)]
-struct Resp {
-    data: Vec<RawGif>,
-}
-#[derive(Deserialize)]
-struct RawGif {
-    id: String,
-    #[serde(default)]
-    title: String,
-    images: HashMap<String, Rendition>,
-}
-#[derive(Deserialize, Clone)]
-struct Rendition {
-    #[serde(default)]
-    url: Option<String>,
-    #[serde(default)]
-    width: Option<String>,
-    #[serde(default)]
-    height: Option<String>,
-}
-
 /// Search GIPHY (or what's trending, for an empty query).
 pub fn search(key: &str, q: &str) -> Result<Vec<Gif>, String> {
+    #[cfg(debug_assertions)]
+    if let Some(dir) = fake_dir() {
+        std::thread::sleep(Duration::from_millis(300));
+        let file = if q.is_empty() { "trending.json" } else { "search.json" };
+        return parse(&std::fs::read_to_string(dir.join(file)).map_err(|e| e.to_string())?);
+    }
     let url = if q.is_empty() {
         format!("{API}/trending?api_key={}&limit={RESULTS}&rating=pg-13", enc(key))
     } else {
@@ -209,25 +193,41 @@ pub fn search(key: &str, q: &str) -> Result<Vec<Gif>, String> {
     parse(&text)
 }
 
+/// Reads a GIPHY search or trending response. Lenient on purpose: a GIF with something odd
+/// about it is skipped rather than failing the whole search, and sizes may come as text or
+/// numbers.
 pub fn parse(text: &str) -> Result<Vec<Gif>, String> {
-    let r: Resp = serde_json::from_str(text).map_err(|e| format!("GIPHY sent something unexpected: {e}"))?;
-    Ok(r.data
-        .into_iter()
-        .filter_map(|g| {
-            let pick = |names: &[&str]| names.iter().find_map(|n| g.images.get(*n).filter(|r| r.url.is_some()).cloned());
-            let preview = pick(&["fixed_width_downsampled", "fixed_width", "fixed_width_small", "downsized"])?;
-            let full = pick(&["downsized", "downsized_medium", "fixed_height", "original"])?;
-            let num = |s: &Option<String>| s.as_deref().and_then(|v| v.parse::<f32>().ok()).unwrap_or(200.0);
-            Some(Gif {
-                id: g.id.clone(),
-                title: g.title.clone(),
-                preview: clean(preview.url.as_deref()?),
-                preview_w: num(&preview.width),
-                preview_h: num(&preview.height),
-                url: clean(full.url.as_deref()?),
-            })
+    let v: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("GIPHY sent something unexpected: {e}"))?;
+    let data = v.get("data").and_then(|d| d.as_array()).ok_or("GIPHY sent something unexpected (no results list).")?;
+    Ok(data.iter().filter_map(read_gif).collect())
+}
+
+fn read_gif(g: &serde_json::Value) -> Option<Gif> {
+    let images = g.get("images")?.as_object()?;
+    // A rendition with a link: (url, width, height).
+    let pick = |names: &[&str]| {
+        names.iter().find_map(|n| {
+            let r = images.get(*n)?;
+            let url = r.get("url")?.as_str().filter(|u| !u.is_empty())?;
+            let num = |k: &str| {
+                r.get(k)
+                    .and_then(|x| x.as_f64().or_else(|| x.as_str().and_then(|t| t.parse::<f64>().ok())))
+                    .filter(|n| *n > 0.0)
+                    .unwrap_or(200.0) as f32
+            };
+            Some((url.to_string(), num("width"), num("height")))
         })
-        .collect())
+    };
+    let (preview, preview_w, preview_h) = pick(&["fixed_width_downsampled", "fixed_width", "fixed_width_small", "downsized"])?;
+    let (full, _, _) = pick(&["downsized", "downsized_medium", "fixed_height", "original"])?;
+    Some(Gif {
+        id: g.get("id").and_then(|x| x.as_str()).unwrap_or_default().to_string(),
+        title: g.get("title").and_then(|x| x.as_str()).unwrap_or_default().to_string(),
+        preview: clean(&preview),
+        preview_w,
+        preview_h,
+        url: clean(&full),
+    })
 }
 
 /// GIPHY links without their tracking query.
@@ -298,8 +298,20 @@ impl Downloads {
     }
 }
 
+/// Debug builds only, for trying the picker without GIPHY: `INGLE_GIPHY_FAKE=<folder>` answers
+/// trending from `trending.json` and searches from `search.json` in that folder, and serves GIF
+/// links from it by file name.
+#[cfg(debug_assertions)]
+fn fake_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("INGLE_GIPHY_FAKE").map(std::path::PathBuf::from)
+}
+
 fn fetch(url: &str) -> Option<Vec<u8>> {
     use std::io::Read;
+    #[cfg(debug_assertions)]
+    if let Some(dir) = fake_dir() {
+        return std::fs::read(dir.join(url.rsplit('/').next()?)).ok();
+    }
     let mut resp = agent().get(url).call().ok()?;
     let mut out = Vec::new();
     resp.body_mut().as_reader().take(MAX_GIF_BYTES as u64 + 1).read_to_end(&mut out).ok()?;
@@ -321,6 +333,19 @@ mod tests {
         assert_eq!(v[0].preview, "https://media2.giphy.com/media/abc123/200w_d.gif");
         assert_eq!(v[0].url, "https://media2.giphy.com/media/abc123/giphy-downsized.gif");
         assert_eq!(v[0].preview_h, 150.0);
+        // Today's links carry a token in the path; sizes may be numbers; odd items are skipped.
+        let text = r#"{"data":[
+            {"id":"tphCApwvdtC1VJabZ1","title":"Cat Meme GIF","images":{
+              "fixed_width_downsampled":{"url":"https://media0.giphy.com/media/v1.Y2lkPWU1ZTE5MDI5/tphCApwvdtC1VJabZ1/200w_d.gif","width":200,"height":"113","size":"123"},
+              "downsized":{"url":"https://media0.giphy.com/media/v1.Y2lkPWU1ZTE5MDI5/tphCApwvdtC1VJabZ1/giphy-downsized.gif","width":"480","height":"270"},
+              "looping":{"mp4":"https://media0.giphy.com/x.mp4"}}},
+            {"id":"weird","images":"none"},
+            {"id":"noimg"}],"meta":{"status":200,"msg":"OK"}}"#;
+        let v = parse(text).unwrap();
+        assert_eq!(v.len(), 1);
+        assert_eq!((v[0].preview_w, v[0].preview_h), (200.0, 113.0));
+        assert!(is_giphy_media(&v[0].url) && is_giphy_media(&v[0].preview));
+        assert!(parse(r#"{"meta":{"status":401,"msg":"Unauthorized"}}"#).is_err());
     }
 
     fn gif(id: &str) -> Gif {
