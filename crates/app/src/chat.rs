@@ -30,6 +30,11 @@ pub fn when(ms: i64) -> String {
     }
 }
 
+/// "Oct 11, 2026": when someone joined a server.
+pub fn member_since(ms: i64) -> String {
+    local(ms).format("%b %-d, %Y").to_string()
+}
+
 fn day_label(ms: i64) -> String {
     let t = local(ms);
     let today = Local::now().date_naive();
@@ -414,11 +419,16 @@ impl IngleApp {
                                 self.custom_emoji_tex(&ctx, &key, id)
                             });
                             let names: Vec<String> = r.users.iter().map(|u| s.member_name(u)).collect();
-                            let what = match crate::emoji::find_all(&r.emoji).first() {
-                                Some((_, _, crate::emoji::EmojiRef::Custom { name, .. })) => format!(":{name}:"),
-                                _ => r.emoji.clone(),
-                            };
-                            if pill.on_hover_text(format!("{} reacted with {}", names.join(", "), what)).clicked() {
+                            // Who reacted, with the emoji drawn as itself (as text it can come out as
+                            // a box).
+                            let who = format!("{} reacted with {}", names.join(", "), r.emoji);
+                            let ctx = ui.ctx().clone();
+                            let pill = pill.on_hover_ui(|ui| {
+                                crate::emoji::label(ui, &who, theme::font(13.0), theme::TEXT, Some(280.0), &mut |id| {
+                                    self.custom_emoji_tex(&ctx, &key, id)
+                                });
+                            });
+                            if pill.clicked() {
                                 acts.push(Act::React { key: key.clone(), id: m.id, emoji: r.emoji.clone(), add: !me_in });
                             }
                         }
@@ -1349,7 +1359,6 @@ impl IngleApp {
     /// Returns the GIF to send.
     fn gif_picker(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) -> Option<String> {
         const W: f32 = 460.0;
-        const TILE_H: f32 = 100.0;
         ui.set_width(W);
         let mut send = None;
         let search_id = egui::Id::new("gif-search");
@@ -1432,41 +1441,55 @@ impl IngleApp {
         if enter {
             send = Some(gifs[sel].url.clone());
         }
-        egui::ScrollArea::vertical().id_salt("gif-grid").max_height(320.0).auto_shrink([false, true]).show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-                for (i, g) in gifs.iter().enumerate() {
-                    let w = (g.preview_w / g.preview_h.max(1.0) * TILE_H).clamp(60.0, W - 24.0);
-                    let (r, resp) = ui.allocate_exact_size(vec2(w, TILE_H), Sense::click());
-                    if i == sel && (go_next || go_prev) {
-                        resp.scroll_to_me(None);
-                    }
-                    if !ui.is_rect_visible(r) {
-                        continue;
-                    }
-                    ui.painter().rect_filled(r, CornerRadius::same(6), theme::ELEV);
-                    let ctx = ui.ctx().clone();
-                    if let crate::giphy::Dl::Ready(bytes) = self.ui.gifs.get(&g.preview, move || ctx.request_repaint()) {
-                        let t = ui.input(|i| i.time);
-                        if let Some((tex, _, next)) = self.images.get(ui.ctx(), &format!("gif:{}", g.preview), Some(bytes), 260).frame(t) {
-                            ui.painter().add(
-                                egui::epaint::RectShape::filled(r, CornerRadius::same(6), Color32::WHITE)
-                                    .with_texture(tex, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))),
-                            );
-                            if let Some(nx) = next {
-                                ui.ctx().request_repaint_after(nx);
-                            }
+        // Two columns, each GIF at its own height (like Discord's picker), each going under the
+        // shorter column.
+        const GAP: f32 = 6.0;
+        let col_w = (W - GAP) / 2.0;
+        let mut col_h = [0.0f32; 2];
+        let places: Vec<(usize, f32, f32)> = gifs
+            .iter()
+            .map(|g| {
+                let h = (col_w * g.preview_h / g.preview_w.max(1.0)).clamp(60.0, 360.0);
+                let c = usize::from(col_h[1] < col_h[0]);
+                let y = col_h[c];
+                col_h[c] += h + GAP;
+                (c, y, h)
+            })
+            .collect();
+        let total = (col_h[0].max(col_h[1]) - GAP).max(0.0);
+        egui::ScrollArea::vertical().id_salt("gif-grid").max_height(340.0).auto_shrink([false, true]).show(ui, |ui| {
+            let (area, _) = ui.allocate_exact_size(vec2(W, total), Sense::hover());
+            for (i, (g, &(c, y, h))) in gifs.iter().zip(&places).enumerate() {
+                let r = Rect::from_min_size(area.min + vec2(c as f32 * (col_w + GAP), y), vec2(col_w, h));
+                let resp = ui.interact(r, ui.id().with(("gif", i)), Sense::click());
+                if i == sel && (go_next || go_prev) {
+                    ui.scroll_to_rect(r, None);
+                }
+                if !ui.is_rect_visible(r) {
+                    continue;
+                }
+                ui.painter().rect_filled(r, CornerRadius::same(6), theme::ELEV);
+                let ctx = ui.ctx().clone();
+                if let crate::giphy::Dl::Ready(bytes) = self.ui.gifs.get(&g.preview, move || ctx.request_repaint()) {
+                    let t = ui.input(|i| i.time);
+                    if let Some((tex, _, next)) = self.images.get(ui.ctx(), &format!("gif:{}", g.preview), Some(bytes), 260).frame(t) {
+                        ui.painter().add(
+                            egui::epaint::RectShape::filled(r, CornerRadius::same(6), Color32::WHITE)
+                                .with_texture(tex, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))),
+                        );
+                        if let Some(nx) = next {
+                            ui.ctx().request_repaint_after(nx);
                         }
                     }
-                    if i == sel || resp.hovered() {
-                        ui.painter().rect_stroke(r, CornerRadius::same(6), Stroke::new(2.0f32, theme::EMBER), egui::StrokeKind::Inside);
-                    }
-                    let resp = if g.title.is_empty() { resp } else { resp.on_hover_text(&g.title) };
-                    if resp.clicked() {
-                        send = Some(g.url.clone());
-                    }
                 }
-            });
+                if i == sel || resp.hovered() {
+                    ui.painter().rect_stroke(r, CornerRadius::same(6), Stroke::new(2.0f32, theme::EMBER), egui::StrokeKind::Inside);
+                }
+                let resp = if g.title.is_empty() { resp } else { resp.on_hover_text(&g.title) };
+                if resp.clicked() {
+                    send = Some(g.url.clone());
+                }
+            }
         });
         ui.add_space(6.0);
         ui.label(RichText::new("Click a GIF to send it  ·  ↑ ↓ to choose, Enter to send  ·  Esc to close").size(11.0).color(theme::DIM));

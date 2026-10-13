@@ -118,6 +118,9 @@ pub enum Dialog {
 #[derive(Default)]
 pub struct UiState {
     pub server: Option<String>,
+    /// Someone's profile card, from clicking their name in a voice channel: (server, user, the
+    /// name's row, which the card opens beside).
+    pub profile_card: Option<(String, String, Rect)>,
     pub channel: HashMap<String, ChannelId>,
     pub call_view: bool,
     pub drafts: HashMap<(String, ChannelId), String>,
@@ -846,11 +849,134 @@ impl IngleApp {
             }
         }
 
+        self.profile_card(ctx, st, acts);
         self.dialogs(ctx, st, acts);
         self.viewer(ctx, acts);
         self.avatar_editor(ctx, acts);
         self.drop_files(ctx, st, acts);
         self.toasts(ctx, st);
+    }
+
+    /// Someone's profile (from clicking their name in a voice channel), like Discord's: their
+    /// picture, name, roles, when they joined and how you know them, and a button to message them.
+    /// (Right-clicking the name has the other options.)
+    fn profile_card(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
+        use ingle_proto::control::RelationKind;
+        let Some((key, uid, row)) = self.ui.profile_card.clone() else { return };
+        let at = pos2(row.right() + 10.0, row.top());
+        let Some(s) = st.server(&key) else {
+            self.ui.profile_card = None;
+            return;
+        };
+        let mut chose = false;
+        let area = egui::Area::new(egui::Id::new("profile-card")).order(egui::Order::Foreground).fixed_pos(at).constrain(true).show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).fill(theme::SIDE).inner_margin(16).corner_radius(10).show(ui, |ui| {
+                ui.set_width(260.0);
+                let member = s.members.get(&uid);
+                let name = s.member_name(&uid);
+                let role = member.map(|m| m.role).unwrap_or(Role::Member);
+                let online = member.map(|m| m.online).unwrap_or(false);
+                let (r, _) = ui.allocate_exact_size(vec2(72.0, 72.0), Sense::hover());
+                let face = self.face(ui.ctx(), s, &uid);
+                avatar(ui.painter(), r.center(), 34.0, &uid, &name, false, theme::SIDE, face);
+                status_dot(ui.painter(), r.center() + vec2(25.0, 25.0), online, theme::SIDE);
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(&name).font(theme::bold_font(19.0)).color(name_color(s, &uid, role)));
+                    if role == Role::Owner {
+                        let (cr, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                        icons::crown(ui.painter(), cr, theme::OWNER);
+                    }
+                });
+                let how = match st.relation(&uid) {
+                    _ if uid == st.my_uid => Some("This is you"),
+                    Some(RelationKind::Friend) => Some("Friend"),
+                    Some(RelationKind::Incoming) => Some("Sent you a friend request"),
+                    Some(RelationKind::Outgoing) => Some("Friend request sent"),
+                    Some(RelationKind::Blocked) => Some("Blocked"),
+                    None => None,
+                };
+                if let Some(how) = how {
+                    ui.label(RichText::new(how).size(12.5).color(theme::MUTED));
+                }
+                ui.add_space(8.0);
+                ui.separator();
+                let roles = s.roles_of(&uid);
+                if !roles.is_empty() {
+                    ui.label(RichText::new("ROLES").font(theme::bold_font(11.0)).color(theme::DIM));
+                    ui.horizontal_wrapped(|ui| {
+                        for r in roles {
+                            let col = if r.color != 0 { rgb(r.color) } else { theme::TEXT };
+                            egui::Frame::new().fill(theme::ELEV).corner_radius(4).inner_margin(egui::Margin::symmetric(6, 2)).show(ui, |ui| {
+                                ui.label(RichText::new(&r.name).size(12.0).color(col));
+                            });
+                        }
+                    });
+                    ui.add_space(6.0);
+                }
+                if let Some(joined) = member.map(|m| m.joined_at).filter(|t| *t > 0) {
+                    ui.label(RichText::new("MEMBER SINCE").font(theme::bold_font(11.0)).color(theme::DIM));
+                    ui.label(RichText::new(crate::chat::member_since(joined)).size(13.0).color(theme::TEXT));
+                    ui.add_space(6.0);
+                }
+                ui.label(RichText::new("SAFETY CODE").font(theme::bold_font(11.0)).color(theme::DIM));
+                ui.label(RichText::new(ingle_proto::crypto::safety_code(&uid)).font(theme::mono(12.5)).color(theme::MUTED))
+                    .on_hover_text("Compare it with theirs (on the welcome screen) to be sure it's really them.");
+                let can_dm = uid != st.my_uid && s.has(ingle_proto::control::DMS_FEATURE) && s.status.is_connected();
+                if can_dm {
+                    ui.add_space(10.0);
+                    if ui.add(theme::primary_button(&format!("Message {name}")).min_size(vec2(ui.available_width(), 32.0))).clicked() {
+                        acts.push(Act::OpenDm { key: s.key.clone(), uid: uid.clone() });
+                        chose = true;
+                    }
+                }
+            });
+        });
+        // A click elsewhere closes it; one on the name itself is left to toggle it (a quick click
+        // can press and release within one frame).
+        let pressed_at = ctx.input(|i| if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None });
+        let clicked_outside = pressed_at.is_some_and(|p| !area.response.rect.contains(p) && !row.contains(p));
+        if chose || clicked_outside || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.ui.profile_card = None;
+        }
+    }
+
+    /// What you can do with someone, in the menu from right-clicking their name: message them,
+    /// set how loud they are for you, friend or block them, copy their safety code, and for
+    /// moderators, kick them. True when something was chosen (moving the volume slider isn't).
+    pub(crate) fn person_options(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, uid: &str, acts: &mut Vec<Act>) -> bool {
+        let me = uid == st.my_uid;
+        let name = s.member_name(uid);
+        let mut chose = false;
+        let can_dm = !me && s.has(ingle_proto::control::DMS_FEATURE) && s.status.is_connected();
+        if can_dm && ui.button("Message").clicked() {
+            acts.push(Act::OpenDm { key: s.key.clone(), uid: uid.to_string() });
+            chose = true;
+        }
+        if !me {
+            ui.separator();
+            ui.label(RichText::new("User volume").size(12.0).color(theme::MUTED));
+            let mut v = st.user_volumes.get(uid).copied().unwrap_or(1.0) * 100.0;
+            if ui.add(egui::Slider::new(&mut v, 0.0..=200.0).suffix("%")).changed() {
+                acts.push(Act::Volume { uid: uid.to_string(), volume: v / 100.0 });
+            }
+            ui.separator();
+            let n = acts.len();
+            person_menu(ui, st, uid, acts);
+            chose |= acts.len() > n;
+        }
+        if ui.button("Copy safety code").clicked() {
+            acts.push(Act::Copy(ingle_proto::crypto::safety_code(uid)));
+            chose = true;
+        }
+        if !me && s.can(perm::KICK) && s.rank(uid) < s.rank(&st.my_uid) {
+            ui.separator();
+            if ui.button(RichText::new(format!("Kick {name}")).color(theme::LIVE)).clicked() {
+                acts.push(Act::Kick { key: s.key.clone(), uid: uid.to_string(), ban: false });
+                chose = true;
+            }
+        }
+        chose
     }
 
     /// Images dragged onto the window go to the open channel's composer.
@@ -1202,13 +1328,17 @@ impl IngleApp {
                         for p in s.voice_in(c.id) {
                             let name = s.member_name(&p.user_id);
                             let (r, presp) = ui.allocate_exact_size(vec2(ui.available_width() - 8.0, 28.0), Sense::click());
-                            if presp.hovered() {
-                                ui.painter().rect_filled(r.translate(vec2(8.0, 0.0)).with_max_x(r.right()), CornerRadius::same(6), theme::HOVER);
+                            let row = r.translate(vec2(8.0, 0.0)).with_max_x(r.right());
+                            let uid = p.user_id.clone();
+                            let pointer_in = presp.contains_pointer();
+                            let card_open = self.ui.profile_card.as_ref().is_some_and(|(k, u, _)| *k == s.key && *u == uid);
+                            if pointer_in || card_open {
+                                ui.painter().rect_filled(row, CornerRadius::same(6), theme::HOVER);
                             }
                             let center = pos2(r.left() + 46.0, r.center().y);
-                            let face = self.face(ui.ctx(), s, &p.user_id);
-                            avatar(ui.painter(), center, 11.0, &p.user_id, &name, speaking.contains(&p.session), theme::SIDE, face);
-                            let col = if speaking.contains(&p.session) { theme::TEXT } else { theme::MUTED };
+                            let face = self.face(ui.ctx(), s, &uid);
+                            avatar(ui.painter(), center, 11.0, &uid, &name, speaking.contains(&p.session), theme::SIDE, face);
+                            let col = if speaking.contains(&p.session) || pointer_in { theme::TEXT } else { theme::MUTED };
                             ui.painter().text(pos2(r.left() + 64.0, r.center().y), egui::Align2::LEFT_CENTER, &name, theme::font(13.5), col);
                             let mut x = r.right() - 10.0;
                             if p.tracks.iter().any(|t| t.id == ingle_proto::media::track::SCREEN) {
@@ -1223,29 +1353,37 @@ impl IngleApp {
                             }
                             if p.self_deaf {
                                 icons::headphones(ui.painter(), Rect::from_center_size(pos2(x - 8.0, r.center().y), vec2(16.0, 16.0)), theme::DIM, true);
+                                x -= 20.0;
                             } else if p.self_mute {
                                 icons::mic(ui.painter(), Rect::from_center_size(pos2(x - 8.0, r.center().y), vec2(16.0, 16.0)), theme::DIM, true);
+                                x -= 20.0;
                             }
-                            if p.user_id != st.my_uid {
-                                let uid = p.user_id.clone();
-                                let vol = st.user_volumes.get(&uid).copied().unwrap_or(1.0);
-                                let admin_can = s.can(perm::KICK) && s.rank(&uid) < s.rank(&st.my_uid);
-                                let key = s.key.clone();
-                                presp.context_menu(|ui| {
-                                    ui.label(RichText::new(format!("{name} volume")).color(theme::MUTED).size(12.0));
-                                    let mut v = vol * 100.0;
-                                    if ui.add(egui::Slider::new(&mut v, 0.0..=200.0).suffix("%")).changed() {
-                                        acts.push(Act::Volume { uid: uid.clone(), volume: v / 100.0 });
-                                    }
-                                    if admin_can {
-                                        ui.separator();
-                                        if ui.button(RichText::new(format!("Kick {name}")).color(theme::LIVE)).clicked() {
-                                            acts.push(Act::Kick { key: key.clone(), uid: uid.clone(), ban: false });
-                                            ui.close();
-                                        }
-                                    }
-                                });
+                            // Hovering someone: a button to message them (like the chat bubble on a
+                            // voice channel).
+                            let can_dm = uid != st.my_uid && s.has(ingle_proto::control::DMS_FEATURE) && s.status.is_connected();
+                            let mut dm_clicked = false;
+                            if can_dm && pointer_in {
+                                let br = Rect::from_center_size(pos2(x - 10.0, r.center().y), vec2(22.0, 22.0));
+                                let bresp = ui.interact(br, ui.id().with(("dm", c.id, &uid)), Sense::click());
+                                icons::chat(ui.painter(), br.shrink(3.0), if bresp.hovered() { theme::TEXT } else { theme::MUTED });
+                                if bresp.on_hover_text(format!("Message {name}")).clicked() {
+                                    acts.push(Act::OpenDm { key: s.key.clone(), uid: uid.clone() });
+                                    dm_clicked = true;
+                                }
                             }
+                            // Left-click: their profile. Right-click: what you can do.
+                            if presp.clicked() && !dm_clicked {
+                                self.ui.profile_card = if card_open { None } else { Some((s.key.clone(), uid.clone(), row)) };
+                            }
+                            presp.context_menu(|ui| {
+                                if ui.button("Profile").clicked() {
+                                    self.ui.profile_card = Some((s.key.clone(), uid.clone(), row));
+                                    ui.close();
+                                }
+                                if self.person_options(ui, st, s, &uid, acts) {
+                                    ui.close();
+                                }
+                            });
                         }
                     }
                 }

@@ -65,6 +65,13 @@ pub fn mono(size: f32) -> FontId {
 }
 
 pub fn install(ctx: &egui::Context) {
+    // Clicks as forgiving as Windows' own: a slow press, or a hand that moves a few pixels while
+    // clicking, still counts. (egui's defaults, 0.8 s and 6 points, turn those into drags, so a
+    // reaction or button sometimes didn't respond.)
+    ctx.options_mut(|o| {
+        o.input_options.max_click_dist = 10.0;
+        o.input_options.max_click_duration = 5.0;
+    });
     let mut fonts = FontDefinitions::default();
     fonts
         .font_data
