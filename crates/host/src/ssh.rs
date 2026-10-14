@@ -1,9 +1,10 @@
 //! A small SSH client for setting up servers: log in, run commands, upload files.
 //!
-//! Server host keys: a key we expect (one we gave a rented server, or the one seen last
-//! time) must match exactly; otherwise this PC's `~/.ssh/known_hosts` is checked (a changed
-//! key there is refused too), and a server never seen before is trusted on first use, with
-//! its fingerprint reported and recorded for next time.
+//! Server host keys: a key we expect (one we gave a rented server, the one seen last time, or
+//! one the person checked) must match exactly; otherwise this PC's `~/.ssh/known_hosts` is
+//! checked (a changed key there is refused too, a matching one is fine). A server never seen
+//! before isn't logged into at all: [`ConnectError::NewHostKey`] gives its fingerprint for the
+//! person to check first, before any password or key is sent.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -80,6 +81,9 @@ pub enum ConnectError {
     /// The server isn't the one we expected (its host key changed): maybe someone is in the
     /// way, so nothing was sent.
     HostKey(String),
+    /// A server never seen before: nothing was sent. Its identity key (type and `SHA256:…`
+    /// fingerprint) is for the person to check before logging in with it as [`Login::host_key`].
+    NewHostKey { kind: String, fingerprint: String },
     Other(String),
 }
 
@@ -91,6 +95,9 @@ impl std::fmt::Display for ConnectError {
             | ConnectError::BadKey(s)
             | ConnectError::HostKey(s)
             | ConnectError::Other(s) => f.write_str(s),
+            ConnectError::NewHostKey { kind, fingerprint } => {
+                write!(f, "This is the first time Ingle connects to this server. Its SSH identity is {kind} key {fingerprint}.")
+            }
         }
     }
 }
@@ -104,6 +111,22 @@ struct Client {
     host_key: Arc<Mutex<Option<String>>>,
     /// Why the key was refused, if it was.
     refused: Arc<Mutex<Option<String>>>,
+    /// A key nobody has checked yet (its type and fingerprint): not logged into.
+    unknown: Arc<Mutex<Option<(String, String)>>>,
+}
+
+/// A key type as `ssh-keygen -l` names it (ED25519, ECDSA, RSA).
+fn key_kind(algorithm: &str) -> String {
+    let a = algorithm.to_ascii_lowercase();
+    if a.contains("ed25519") {
+        "ED25519".into()
+    } else if a.contains("ecdsa") {
+        "ECDSA".into()
+    } else if a.contains("rsa") {
+        "RSA".into()
+    } else {
+        algorithm.to_string()
+    }
 }
 
 impl client::Handler for Client {
@@ -128,18 +151,25 @@ impl client::Handler for Client {
         // What `ssh` on this PC has seen for this server, if anything.
         if let Some(home) = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }) {
             let path = std::path::PathBuf::from(home).join(".ssh").join("known_hosts");
-            if let Err(russh::keys::Error::KeyChanged { line }) = russh::keys::check_known_hosts_path(&self.host, self.port, &public, &path) {
-                *self.refused.lock() = Some(format!(
-                    "{}'s identity key isn't the one your PC's SSH remembers (line {line} of {}). Someone may be \
-                     intercepting the connection, so nothing was sent. If the server was reinstalled, remove that line \
-                     and try again.",
-                    self.host,
-                    path.display()
-                ));
-                return Ok(false);
+            match russh::keys::check_known_hosts_path(&self.host, self.port, &public, &path) {
+                Err(russh::keys::Error::KeyChanged { line }) => {
+                    *self.refused.lock() = Some(format!(
+                        "{}'s identity key isn't the one your PC's SSH remembers (line {line} of {}). Someone may be \
+                         intercepting the connection, so nothing was sent. If the server was reinstalled, remove that line \
+                         and try again.",
+                        self.host,
+                        path.display()
+                    ));
+                    return Ok(false);
+                }
+                // Your own SSH has logged in here with this very key: it's the server you know.
+                Ok(true) => return Ok(true),
+                _ => {}
             }
         }
-        Ok(true)
+        // Never seen: not trusted on first use. Nothing is sent until the person has checked it.
+        *self.unknown.lock() = Some((key_kind(public.algorithm().as_str()), fp));
+        Ok(false)
     }
 }
 
@@ -222,12 +252,14 @@ impl Session {
         });
         let host_key = Arc::new(Mutex::new(None));
         let refused = Arc::new(Mutex::new(None));
+        let unknown = Arc::new(Mutex::new(None));
         let handler = Client {
             host: login.host.clone(),
             port: login.port,
             expected: login.host_key.clone().filter(|k| !k.is_empty()),
             host_key: host_key.clone(),
             refused: refused.clone(),
+            unknown: unknown.clone(),
         };
         let addr = (login.host.as_str(), login.port);
         let tcp = match tokio::time::timeout(timeout, tokio::net::TcpStream::connect(addr)).await {
@@ -246,6 +278,9 @@ impl Session {
             Ok(Err(e)) => {
                 if let Some(why) = refused.lock().take() {
                     return Err(ConnectError::HostKey(why));
+                }
+                if let Some((kind, fingerprint)) = unknown.lock().take() {
+                    return Err(ConnectError::NewHostKey { kind, fingerprint });
                 }
                 return Err(match e {
                     russh::Error::IO(io) => ConnectError::Unreachable(describe_io(&login.host, login.port, &io)),

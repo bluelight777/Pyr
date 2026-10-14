@@ -233,6 +233,15 @@ I already have**, then type:
 
 Ingle logs in once and doesn't save the password.
 
+**Checking it's your server.** The first time Ingle connects to a server, it stops before
+sending your password or key and shows the server's SSH identity (like
+`SHA256:7YG79cG6…`). Check it's your server's: your provider's control panel or console
+may show it, or on the server itself run `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`.
+If it's different, someone may be in the way: don't go on. After that Ingle remembers it
+and refuses to log in if it ever changes. If your PC's own SSH already knows the server
+(it's in your `known_hosts`), there's nothing to check. Servers Ingle rents get their
+identity from Ingle, so they're never in question.
+
 **Firewalls.** Ingle opens UDP 7766 in the server's own firewall (ufw, firewalld or plain
 iptables, including Oracle Cloud's), but some providers also put a firewall in front of
 the server that only their website can change. If the app says it can't reach the server,

@@ -80,11 +80,14 @@ pub struct Failure {
     /// Set when a rented server was created before things went wrong: it keeps running
     /// (and billing) until deleted, so the UI offers to retry the install or delete it.
     pub droplet: Option<DropletRef>,
+    /// A server never connected to before: its SSH identity key (type, `SHA256:…`), for the
+    /// person to check before Ingle logs in (then again with it as `Login::host_key`).
+    pub new_host_key: Option<(String, String)>,
 }
 
 impl Failure {
     pub fn new(error: impl Into<String>) -> Failure {
-        Failure { error: error.into(), hint: None, droplet: None }
+        Failure { error: error.into(), hint: None, droplet: None, new_host_key: None }
     }
     pub fn hint(mut self, hint: impl Into<String>) -> Failure {
         self.hint = Some(hint.into());

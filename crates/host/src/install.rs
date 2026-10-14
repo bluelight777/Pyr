@@ -149,9 +149,18 @@ fn connect_failure(e: ConnectError, login: &Login) -> Failure {
              or check the server's SSH fingerprint in your provider's console)."
                 .to_string(),
         ),
+        ConnectError::NewHostKey { kind, .. } => Some(format!(
+            "Before Ingle sends your password or key, check that this is your server's key: your provider's control \
+             panel or console may show it, or on the server itself run: ssh-keygen -lf /etc/ssh/ssh_host_{}_key.pub",
+            kind.to_lowercase()
+        )),
         ConnectError::Other(_) => None,
     };
-    Failure { error: e.to_string(), hint, droplet: None }
+    let new_host_key = match &e {
+        ConnectError::NewHostKey { kind, fingerprint } => Some((kind.clone(), fingerprint.clone())),
+        _ => None,
+    };
+    Failure { error: e.to_string(), hint, droplet: None, new_host_key }
 }
 
 async fn inspect(s: &mut Session) -> Result<Machine> {

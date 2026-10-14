@@ -72,6 +72,9 @@ pub struct CreateState {
     key_path: String,
     passphrase: String,
     sudo_password: String,
+    /// A server's SSH identity the person checked (host, port, fingerprint): Ingle logs in only
+    /// if the server still has it.
+    checked_key: Option<(String, u16, String)>,
     form_error: Option<String>,
     saved_files: Option<Result<PathBuf, String>>,
     // Working / done
@@ -115,6 +118,7 @@ impl CreateState {
             key_path: ingle_host::keys::default_user_key().map(|p| p.display().to_string()).unwrap_or_default(),
             passphrase: String::new(),
             sudo_password: String::new(),
+            checked_key: None,
             form_error: None,
             saved_files: None,
             progress: None,
@@ -577,24 +581,33 @@ fn own_page(c: &mut CreateState, ui: &mut egui::Ui, config_dir: &std::path::Path
         });
     });
     if start {
-        match login_from_form(c) {
-            Err(e) => c.form_error = Some(e),
-            Ok(login) => {
-                c.form_error = None;
-                let opts = InstallOptions {
-                    name: c.name.trim().to_string(),
-                    public_host: login.host.clone(),
-                    port: ingle_host::DEFAULT_PORT,
-                    payloads: Payloads::find(),
-                    wait_for_boot: None,
-                    restore: c.restore.as_ref().map(|(d, _)| d.clone()),
-                };
-                let progress = c.new_progress(ui.ctx());
-                let dir = config_dir.to_path_buf();
-                let _ = std::thread::Builder::new()
-                    .name("ingle-setup".into())
-                    .spawn(move || install::setup_existing(login, opts, progress, Some(dir)));
-            }
+        start_own(c, ui.ctx(), config_dir);
+    }
+}
+
+/// Sets up the server in the form (logging in only once its SSH identity is one Ingle knows,
+/// this PC's SSH knows, or the person checked).
+fn start_own(c: &mut CreateState, ctx: &egui::Context, config_dir: &std::path::Path) {
+    match login_from_form(c) {
+        Err(e) => {
+            c.form_error = Some(e);
+            c.page = Page::Own;
+        }
+        Ok(login) => {
+            c.form_error = None;
+            let opts = InstallOptions {
+                name: c.name.trim().to_string(),
+                public_host: login.host.clone(),
+                port: ingle_host::DEFAULT_PORT,
+                payloads: Payloads::find(),
+                wait_for_boot: None,
+                restore: c.restore.as_ref().map(|(d, _)| d.clone()),
+            };
+            let progress = c.new_progress(ctx);
+            let dir = config_dir.to_path_buf();
+            let _ = std::thread::Builder::new()
+                .name("ingle-setup".into())
+                .spawn(move || install::setup_existing(login, opts, progress, Some(dir)));
         }
     }
 }
@@ -622,8 +635,9 @@ fn login_from_form(c: &CreateState) -> Result<Login, String> {
         Auth::Password(c.password.clone())
     };
     // The host key seen when this server was set up before (if it was) is filled in by
-    // `setup_existing` from Ingle's records.
-    Ok(Login { host, port, user, auth, sudo_password: Some(c.sudo_password.clone()).filter(|p| !p.is_empty()), host_key: None })
+    // `setup_existing` from Ingle's records; one the person just checked comes from here.
+    let host_key = c.checked_key.as_ref().filter(|(h, p, _)| *h == host && *p == port).map(|(_, _, k)| k.clone());
+    Ok(Login { host, port, user, auth, sudo_password: Some(c.sudo_password.clone()).filter(|p| !p.is_empty()), host_key })
 }
 
 fn downloads_folder() -> PathBuf {
@@ -720,6 +734,7 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
     let task = progress.snapshot();
     let heading = match (&task.outcome, c.kind) {
         (Some(Outcome::Ready(r)), _) => format!("{} is ready", r.name),
+        (Some(Outcome::Failed(f)), Kind::Own) if f.new_host_key.is_some() => "Check that it's your server".to_string(),
         (Some(Outcome::Failed(_)), _) => "The setup didn't finish".to_string(),
         (None, Kind::Rent) => "Creating your server".to_string(),
         (None, Kind::Own) => "Setting up your server".to_string(),
@@ -742,7 +757,8 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
             });
         }
     };
-    if !matches!(task.outcome, Some(Outcome::Ready(_))) {
+    let checking_key = matches!(&task.outcome, Some(Outcome::Failed(f)) if f.new_host_key.is_some()) && c.kind == Kind::Own;
+    if !matches!(task.outcome, Some(Outcome::Ready(_))) && !checking_key {
         steps(ui);
     }
     if task.outcome.is_none() {
@@ -826,6 +842,50 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
             }
             ui.add_space(8.0);
             egui::CollapsingHeader::new(RichText::new("What Ingle did").color(theme::MUTED)).id_salt("setup-steps").show(ui, steps);
+        }
+        // A server Ingle has never connected to: nothing was sent. Is it really theirs?
+        Some(Outcome::Failed(f)) if f.new_host_key.is_some() && c.kind == Kind::Own => {
+            let (kind, fp) = f.new_host_key.clone().unwrap_or_default();
+            let host = ingle_host::clean_host(&c.host);
+            let port: u16 = c.ssh_port.trim().parse().unwrap_or(22);
+            ui.add_space(8.0);
+            egui::Frame::new().fill(theme::ELEV).corner_radius(8).inner_margin(12).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(RichText::new("Is this your server?").font(theme::bold_font(15.0)).color(theme::TEXT));
+                ui.add_space(2.0);
+                ui.label(RichText::new(format!("This is the first time Ingle connects to {host}, so nothing has been sent to it yet. Its SSH identity is this {kind} key:")).color(theme::TEXT));
+                ui.add_space(4.0);
+                egui::Frame::new().fill(theme::CODE_BG).corner_radius(6).inner_margin(8).show(ui, |ui| {
+                    ui.add(egui::Label::new(RichText::new(&fp).font(theme::mono(13.0)).color(theme::TEXT)).wrap().selectable(true));
+                });
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(format!(
+                        "Check that it's your server's before Ingle sends your password or key: your provider's control panel or console may \
+                         show it, or on the server itself run  ssh-keygen -lf /etc/ssh/ssh_host_{}_key.pub  and compare. If it's different, \
+                         someone may be in the way: don't go on.",
+                        kind.to_lowercase()
+                    ))
+                    .size(12.5)
+                    .color(theme::MUTED),
+                );
+            });
+            ui.add_space(12.0);
+            let mut go = false;
+            ui.horizontal(|ui| {
+                if ui.add(theme::primary_button("It's my server: set it up")).clicked() {
+                    go = true;
+                }
+                if ui.button("Back").clicked() {
+                    c.page = Page::Own;
+                    c.progress = None;
+                }
+            });
+            if go {
+                c.checked_key = Some((host, port, fp));
+                start_own(c, ui.ctx(), config_dir);
+                return;
+            }
         }
         Some(Outcome::Failed(f)) => {
             ui.add_space(8.0);
