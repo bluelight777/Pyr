@@ -59,6 +59,9 @@ pub struct SoundboardUi {
     recording: Option<SoundRef>,
     /// Why the keys just pressed won't do (a key you type with, alone).
     key_hint: Option<String>,
+    /// The recently played sounds as they were when it opened: playing one doesn't move the
+    /// sounds around under the pointer (it shows at the top next time).
+    recent_shown: Vec<SoundRef>,
 }
 
 /// The add-a-sound (or edit-a-sound) dialog.
@@ -239,6 +242,7 @@ impl IngleApp {
         self.ui.sb.open = true;
         self.ui.sb.from = from;
         self.ui.sb.focus_search = true;
+        self.ui.sb.recent_shown = st.settings.sound_recent.clone();
         // Have every server's sounds ready, so the first play of each is instant.
         for s in &st.servers {
             if s.has(SOUNDBOARD_FEATURE) && s.status.is_connected() {
@@ -280,11 +284,15 @@ impl IngleApp {
         let Some(anchor) = anchors.iter().find(|a| a.0 == from).or(anchors.first()).map(|a| a.1) else { return };
         let call_key = call.server_key.clone();
         let was_recording = self.ui.sb.recording.is_some();
+        // A sound's right-click menu open: Escape closes just the menu.
+        let menu_open = egui::Popup::is_any_open(ctx);
         let resp = egui::Area::new(Id::new("soundboard"))
             .order(egui::Order::Foreground)
             .pivot(Align2::CENTER_BOTTOM)
             .fixed_pos(pos2(anchor.center().x, anchor.top() - 12.0))
-            .constrain(true)
+            // Kept a little in from the window's edges (from the voice panel it would
+            // otherwise sit flush against the left one).
+            .constrain_to(ctx.content_rect().shrink(8.0))
             .show(ctx, |ui| {
                 egui::Frame::new()
                     .fill(theme::SIDE)
@@ -300,7 +308,7 @@ impl IngleApp {
             i.pointer.any_click()
                 && i.pointer.interact_pos().is_some_and(|p| !resp.response.rect.contains(p) && !anchors.iter().any(|a| a.1.contains(p)))
         });
-        let escape = !was_recording && ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        let escape = !was_recording && !menu_open && ctx.input(|i| i.key_pressed(egui::Key::Escape));
         if self.ui.sb.open && ((outside && !egui::Popup::is_any_open(ctx)) || escape) {
             self.close_soundboard();
         }
@@ -405,7 +413,7 @@ impl IngleApp {
         let mut sections: Vec<Section> = Vec::new();
         let cell = |sound: SoundRef| Cell { manage: can_manage(st, &sound), sound };
         let favorites: Vec<Cell> = st.settings.sound_favorites.iter().filter_map(|f| current(st, f)).map(cell).collect();
-        let recent: Vec<Cell> = st.settings.sound_recent.iter().filter_map(|f| current(st, f)).take(RECENT_SHOWN).map(cell).collect();
+        let recent: Vec<Cell> = sbui.recent_shown.iter().filter_map(|f| current(st, f)).take(RECENT_SHOWN).map(cell).collect();
         let mut servers: Vec<&ServerView> =
             st.servers.iter().filter(|s| s.has(SOUNDBOARD_FEATURE) && s.status.is_connected() && !s.info.sounds.is_empty()).collect();
         // The call's server first.
@@ -590,8 +598,10 @@ impl IngleApp {
             ui.painter().galley(pos2(rect.left() + 36.0, rect.center().y + 8.0 - g.size().y / 2.0), g, theme::DIM);
         }
         let fav = st.settings.sound_favorites.iter().any(|f| f.same(sound));
-        if fav {
-            icons::star(ui.painter(), Rect::from_center_size(rect.left_top() + vec2(9.0, 9.0), vec2(9.0, 9.0)), theme::GLOW, true);
+        // A favorite's star, in the corner clear of the emoji (the hear-it button takes it
+        // while the pointer's on the sound).
+        if fav && !inside {
+            icons::star(ui.painter(), Rect::from_center_size(rect.right_top() + vec2(-9.0, 9.0), vec2(8.0, 8.0)), theme::GLOW, true);
         }
         // Hear it yourself first: the speaker on the right (drawn over the cell, so it takes
         // its own clicks).
@@ -1011,6 +1021,14 @@ impl IngleApp {
         }
     }
 
+    /// A sound's emoji (in colour, as on its button) and name, in a row.
+    fn sound_name(&mut self, ui: &mut egui::Ui, sound: &SoundRef) {
+        let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
+        let ctx = ui.ctx().clone();
+        paint_emoji(ui.painter(), r, &sound.emoji, &mut |id| self.custom_emoji_tex(&ctx, &sound.server, id));
+        ui.label(RichText::new(&sound.name).color(theme::TEXT));
+    }
+
     /// Settings → Voice & Video → Soundboard.
     pub(crate) fn soundboard_settings(&mut self, ui: &mut egui::Ui, st: &AppState, draft: &mut ingle_engine::config::Settings) {
         field_label(ui, "Soundboard");
@@ -1027,7 +1045,7 @@ impl IngleApp {
             ui.label("When you join voice:");
             match draft.join_sound.clone() {
                 Some(j) => {
-                    ui.label(RichText::new(format!("{} {}", j.emoji, j.name)).color(theme::TEXT));
+                    self.sound_name(ui, &j);
                     if ui.button("Don't play a sound").clicked() {
                         draft.join_sound = None;
                     }
@@ -1044,7 +1062,7 @@ impl IngleApp {
             for (i, (combo, sound)) in draft.sound_keys.iter().enumerate() {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(combo_label(combo)).font(theme::bold_font(12.5)).color(theme::EMBER2));
-                    ui.label(format!("{} {}", sound.emoji, sound.name));
+                    self.sound_name(ui, sound);
                     if ui.small_button("Remove").clicked() {
                         remove = Some(i);
                     }
