@@ -1,5 +1,6 @@
-//! The server restarting (an update) mid-call: everyone's app rejoins the call by itself,
-//! camera included, and they hear each other again.
+//! The server restarting (an update) mid-call: everyone's app rejoins the call by itself and
+//! they hear each other again. A camera that was on stays off until its owner turns it back on
+//! (the app offers to).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -111,7 +112,19 @@ async fn call_survives_a_server_restart() {
     })
     .await;
     eprintln!("back in the call {:?} after the server came back", t0.elapsed());
+    // Her camera isn't back on by itself: she's offered it.
+    wait_for("alice is offered her camera", 10, || {
+        a.state().resume_offer.as_ref().is_some_and(|o| o.camera && !o.screen && o.server_key == key && o.channel_id == lounge)
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!a.state().call.as_ref().is_some_and(|c| c.camera_on), "the camera stays off until she says so");
+    assert!(b.state().resume_offer.is_none(), "bob had nothing on");
+    // She takes it.
+    a.settle_resume_offer(true, false);
+    a.start_camera();
     wait_for("alice's camera back on", 10, || a.state().call.as_ref().map(|c| c.camera_on).unwrap_or(false)).await;
+    assert!(a.state().resume_offer.is_none());
     wait_for("bob sees two people in the lounge", 10, || {
         b.state().servers[0].voice.values().filter(|p| p.channel_id == lounge).count() == 2
     })

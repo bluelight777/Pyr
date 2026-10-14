@@ -78,7 +78,7 @@ impl IngleApp {
             .show_inside(ui, |ui| self.user_panel(ui, st, acts));
         if let Some(call) = st.call.as_ref() {
             egui::TopBottomPanel::bottom("home-voice-panel")
-                .exact_height(86.0)
+                .exact_height(crate::app::voice_panel_height(st, call))
                 .show_separator_line(false)
                 .frame(egui::Frame::new().fill(theme::SIDE_DARK).inner_margin(egui::Margin::symmetric(10, 8)))
                 .show_inside(ui, |ui| self.voice_panel(ui, st, call, acts));

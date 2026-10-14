@@ -464,6 +464,7 @@ impl Shared {
             self.video.clear();
             let mut st = self.state.write();
             st.call = None;
+            st.resume_offer = None;
             st.toast(reason.to_string(), false);
         }
         *self.call_events.lock() = None;
@@ -618,6 +619,7 @@ impl Engine {
             safety_code: crypto::safety_code(&my_uid),
             my_uid,
             voice_rejoin: None,
+            resume_offer: None,
             my_name: cfg.display_name.clone(),
             servers: cfg
                 .servers
@@ -1672,9 +1674,28 @@ impl Engine {
         });
     }
 
+    /// The offer to turn the camera or screen share back on after a drop: done with (`camera`,
+    /// `screen`: which part).
+    pub fn settle_resume_offer(&self, camera: bool, screen: bool) {
+        let mut st = self.shared.state.write();
+        if let Some(o) = st.resume_offer.as_mut() {
+            o.camera &= !camera;
+            o.screen &= !screen;
+            if !o.camera && !o.screen {
+                st.resume_offer = None;
+            }
+        }
+        drop(st);
+        (self.shared.repaint)();
+    }
+
     pub fn leave_voice(&self) {
         qos::set_video(false);
-        self.shared.state.write().voice_rejoin = None;
+        {
+            let mut st = self.shared.state.write();
+            st.voice_rejoin = None;
+            st.resume_offer = None;
+        }
         let call = self.shared.call.lock().take();
         if let Some(c) = call {
             c.shutdown(true);
@@ -2249,8 +2270,9 @@ pub(crate) fn sync_blocks(shared: &Arc<Shared>, key: &str) {
     }
 }
 
-/// Back on a server after the connection dropped mid-call: rejoin that call, and turn the
-/// camera and screen share back on if they were.
+/// Back on a server after the connection dropped mid-call: rejoin that call. A camera or
+/// screen share that was on isn't turned back on by itself (the screens or windows may have
+/// changed meanwhile, and you may have moved on): the app offers it (`AppState::resume_offer`).
 pub(crate) fn resume_voice(shared: Arc<Shared>, key: String) {
     let r = {
         let mut st = shared.state.write();
@@ -2287,12 +2309,9 @@ pub(crate) fn resume_voice(shared: Arc<Shared>, key: String) {
             (shared.repaint)();
             return;
         }
-        let e = Engine { shared: shared.clone(), _rt: None, _ptt: None, _keys: None };
-        if r.camera {
-            e.start_camera();
-        }
-        if let Some(src) = &r.screen {
-            e.start_screen(src);
+        if r.camera || r.screen.is_some() {
+            shared.state.write().resume_offer =
+                Some(ResumeOffer { server_key: key.clone(), channel_id: r.channel_id, camera: r.camera, screen: r.screen.is_some() });
         }
         (shared.repaint)();
     });

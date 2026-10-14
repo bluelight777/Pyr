@@ -65,6 +65,9 @@ pub enum Act {
     UpdateChannel { key: String, channel: ChannelId, name: Option<String>, topic: Option<String> },
     DeleteChannel { key: String, channel: ChannelId },
     CreateInvite { key: String },
+    /// After a dropped call came back: turn the camera back on (`camera`), or not, and done
+    /// with the offer to share the screen again (`screen`).
+    SettleResume { camera: bool, screen: bool, turn_on_camera: bool },
     Kick { key: String, uid: String, ban: bool },
     ServerMute { key: String, uid: String, muted: bool },
     ServerDeafen { key: String, uid: String, deafened: bool },
@@ -389,6 +392,12 @@ impl IngleApp {
             Act::UpdateChannel { key, channel, name, topic } => e.update_channel(&key, channel, name, topic),
             Act::DeleteChannel { key, channel } => e.delete_channel(&key, channel),
             Act::CreateInvite { key } => e.create_invite(&key, None, None),
+            Act::SettleResume { camera, screen, turn_on_camera } => {
+                e.settle_resume_offer(camera, screen);
+                if turn_on_camera {
+                    e.start_camera();
+                }
+            }
             Act::Kick { key, uid, ban } => e.kick(&key, &uid, ban),
             Act::ServerMute { key, uid, muted } => e.server_mute(&key, &uid, muted),
             Act::ServerDeafen { key, uid, deafened } => e.server_deafen(&key, &uid, deafened),
@@ -408,12 +417,16 @@ impl IngleApp {
             Act::Deafen(d) => e.set_deafen(d),
             Act::Camera(on) => {
                 if on {
+                    e.settle_resume_offer(true, false);
                     e.start_camera()
                 } else {
                     e.stop_camera()
                 }
             }
-            Act::StartScreen(src) => e.start_screen(&src),
+            Act::StartScreen(src) => {
+                e.settle_resume_offer(false, true);
+                e.start_screen(&src)
+            }
             Act::StopScreen => e.stop_screen(),
             Act::Watch { session, track, on } => {
                 e.watch(session, track, on);
@@ -1441,7 +1454,7 @@ impl IngleApp {
             .show_inside(ui, |ui| self.user_panel(ui, st, acts));
         if let Some(call) = st.call.as_ref() {
             egui::TopBottomPanel::bottom("voice-panel")
-                .exact_height(86.0)
+                .exact_height(crate::app::voice_panel_height(st, call))
                 .show_separator_line(false)
                 .frame(egui::Frame::new().fill(theme::SIDE_DARK).inner_margin(egui::Margin::symmetric(10, 8)))
                 .show_inside(ui, |ui| self.voice_panel(ui, st, call, acts));
@@ -1805,6 +1818,37 @@ impl IngleApp {
                 acts.push(Act::Copy(code));
             }
         });
+        // Back after the connection dropped: what was on stays off until you say so.
+        if let Some(o) = st.resume_offer.as_ref().filter(|o| o.server_key == call.server_key && o.channel_id == call.channel_id) {
+            ui.add_space(6.0);
+            egui::Frame::new().fill(theme::ELEV).corner_radius(6).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                let what = match (o.camera, o.screen) {
+                    (true, true) => "your camera and screen share are",
+                    (true, false) => "your camera is",
+                    _ => "your screen share is",
+                };
+                ui.label(RichText::new(format!("The connection dropped, so {what} off now.")).size(12.0).color(theme::MUTED));
+                // Small links, side by side (the panel is narrow).
+                let link = |ui: &mut egui::Ui, text: &str, col: Color32| {
+                    ui.add(egui::Button::new(RichText::new(text).size(12.0).color(col)).frame(false))
+                };
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    if o.camera && link(ui, "Camera on", theme::LINK).on_hover_text("Turn your camera back on").clicked() {
+                        acts.push(Act::SettleResume { camera: true, screen: false, turn_on_camera: true });
+                    }
+                    if o.screen && link(ui, "Share again", theme::LINK).on_hover_text("Pick what to share").clicked() {
+                        acts.push(Act::SettleResume { camera: false, screen: true, turn_on_camera: false });
+                        acts.push(Act::RefreshDevices);
+                        self.ui.dialog = Some(Dialog::ScreenPicker { selected: None });
+                    }
+                    if link(ui, "Not now", theme::MUTED).clicked() {
+                        acts.push(Act::SettleResume { camera: true, screen: true, turn_on_camera: false });
+                    }
+                });
+            });
+        }
     }
 
     pub(crate) fn user_panel(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
@@ -2167,6 +2211,15 @@ pub(crate) fn moderate(st: &AppState, s: &ServerView, uid: &str) -> (bool, bool)
     let stuck_mute = me && !owner && now.is_some_and(|p| p.server_mute);
     let stuck_deaf = me && !owner && now.is_some_and(|p| p.server_deaf);
     (reach && s.can(perm::MUTE_MEMBERS) && !stuck_mute, reach && s.can(perm::DEAFEN_MEMBERS) && !stuck_deaf)
+}
+
+/// How tall the voice panel is: taller while it offers to turn the camera or screen share back
+/// on after a dropped call.
+pub(crate) fn voice_panel_height(st: &AppState, call: &ingle_engine::state::CallView) -> f32 {
+    match st.resume_offer.as_ref().filter(|o| o.server_key == call.server_key && o.channel_id == call.channel_id) {
+        Some(_) => 168.0,
+        None => 86.0,
+    }
 }
 
 /// Friend and block choices for someone (right-click menus), like Discord's.

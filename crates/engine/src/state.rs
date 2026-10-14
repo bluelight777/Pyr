@@ -329,6 +329,15 @@ pub struct VoiceRejoin {
     pub since: Instant,
 }
 
+/// What was on before a call dropped and came back (see `AppState::resume_offer`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResumeOffer {
+    pub server_key: String,
+    pub channel_id: ChannelId,
+    pub camera: bool,
+    pub screen: bool,
+}
+
 /// How long to keep trying to get back into a call after the server drops.
 pub const VOICE_REJOIN_FOR: std::time::Duration = std::time::Duration::from_secs(180);
 
@@ -378,8 +387,13 @@ pub struct AppState {
     pub servers: Vec<ServerView>,
     pub call: Option<CallView>,
     /// The connection to the server dropped mid-call (an update restarting it, say): the call
-    /// is rejoined, camera and screen share included, as soon as the server is back.
+    /// is rejoined as soon as the server is back (the camera and screen share aren't: see
+    /// `resume_offer`).
     pub voice_rejoin: Option<VoiceRejoin>,
+    /// Back in a call after a drop, with the camera or a screen share off that was on before:
+    /// the app offers to turn them back on (never by itself: what's on your screen may have
+    /// changed meanwhile).
+    pub resume_offer: Option<ResumeOffer>,
     pub toasts: Vec<Toast>,
     /// The bug report being sent, or how the last one went; `bug_sends_done` counts the sends
     /// that have finished, so the app sees each outcome once.

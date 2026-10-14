@@ -74,6 +74,8 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   server. A moderator can't undo their own (only the owner can).
 - Calls stay connected while the server restarts or updates, and a microphone or speakers
   that drop out mid-call (a USB hiccup, a virtual device restarting) come back by themselves.
+  A camera or screen share that was on stays off until you turn it back on (Ingle offers to):
+  what's on your screen may have changed meanwhile.
 - On Windows, Ingle marks its packets as voice for your network (Quality of Service), as
   Discord does.
 
