@@ -83,6 +83,14 @@ the server sees who talks to whom and when (metadata) and packet sizes.
 
 - **Voice**: datagrams fan out to everyone in the channel except the sender and deafened
   people. Muted people's packets are dropped. The server rewrites only the session field.
+  A moderator's **server mute** and **server deafen** (`MUTE_MEMBERS`, `DEAFEN_MEMBERS`) are
+  enforced here too, whatever the person's app does: a server muted person's packets are
+  dropped, and a server deafened person is sent none (they can still talk). Both are kept per
+  member in the server's settings, so they last through rejoins and restarts.
+- **Soundboard**: a sound played is a small control message (`PlaySound` → `SoundPlayed`
+  to everyone in the channel), not audio: each app mixes the sound itself, from Ingle's own
+  sounds (made by the app) or the Opus file the sound is on its server (cached). Rate-limited
+  per person; server muted people's sounds don't play.
 - **Stream sound** (track 3) goes only to people watching that person's screen share.
 - **Video**: people subscribe per track. Cameras are subscribed automatically; screen
   shares only when you click *Watch Stream*. Each (viewer, track) has its own queue: if
@@ -244,9 +252,9 @@ In rough priority order:
 7. Opus 1.5/1.6 neural features (deep PLC, NoLACE) and DRED once its format is final;
    RED (redundant audio) under heavy loss.
 8. MLS (`openmls`) for key management in big calls; optional E2EE text channels.
-9. A soundboard (in progress), plugins and bots; attachments beyond pictures, threads,
-   search. Plugins must be written in Rust: the plugin kit is a Rust crate only (no C
-   header, no scripting runtime), and plugins come as Rust source that's built from it.
+9. Plugins and bots; attachments beyond pictures, threads, search. Plugins must be written
+   in Rust: the plugin kit is a Rust crate only (no C header, no scripting runtime), and
+   plugins come as Rust source that's built from it.
 10. A web client over WebTransport + WebCodecs, then mobile.
 11. H.264 licensing: OpenH264 here is compiled from source, which Cisco's patent licence
     doesn't cover. Before shipping widely, either download Cisco's prebuilt OpenH264 at

@@ -33,8 +33,12 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   showing the message and what goes with it (hold Shift to delete straight away).
 - **Pictures**: PNG, JPEG, GIF or WebP, up to 10 per message and 10 MB each. Add them with
   the **+** button, drag them in, or paste them with Ctrl+V. Animated GIFs play.
-- **GIF search**: type `/giphy` or click the GIF button (powered by GIPHY; each server's
-  owner turns it on with a free GIPHY key).
+- **GIF search**: type `/giphy` or `/klipy`, or click the GIF button (powered by GIPHY and
+  KLIPY, each in its own tab; each server's owner turns them on with a free key).
+- **Select and copy any text** like on a web page: drag from anywhere over the messages,
+  across as many as you like; double-click a word, triple-click a paragraph; Ctrl+C.
+  Right-click a message for Copy, **Copy link**, Open link, Copy text, Reply, Edit and
+  Delete.
 - Color emoji (Twemoji) with a searchable picker, and each server's own **custom emoji**.
 - Spellcheck in English (US and UK), Spanish and French: right-click a word for fixes.
 - **Unread messages are marked everywhere**: channels (a dot and a bold name, red badges for
@@ -57,7 +61,16 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   (WebRTC AEC3/AGC2), noise suppression (RNNoise or WebRTC) or **voice isolation**
   (DeepFilterNet3: only your voice gets through, no keyboard, mouse, fans or machines).
 - Voice activity or **push-to-talk** with a global key that still works in your game (mouse
-  buttons 4/5 too), per-person volume, mute and deafen, and a mic test.
+  buttons 4/5 too), per-person volume, mute and deafen, and a mic test. Right-click your
+  name for Mute and Deafen, as in Discord (deafening mutes you too).
+- **Soundboard**, like Discord's but better: Ingle's own sounds, each server's (up to 200,
+  10 seconds each, trimmed and evened out in loudness as they're added), favorites, recently
+  played, a sound when you join voice, and keys that play sounds even in a game. Every
+  sound you can reach plays in any call; hover to hear one yourself first, and mute anyone's
+  sounds just for you.
+- **Server Mute and Server Deafen** for moderators: a server muted person isn't heard, a
+  server deafened one hears nobody (they can still talk), until a moderator undoes it, in
+  any voice channel of the server.
 - Calls stay connected while the server restarts or updates, and a microphone or speakers
   that drop out mid-call (a USB hiccup, a virtual device restarting) come back by themselves.
 - On Windows, Ingle marks its packets as voice for your network (Quality of Service), as
@@ -96,8 +109,8 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
 - **Create a server** from the app: rent one from DigitalOcean (about $4–6 a month) and let
   Ingle set it up, or point Ingle at any Linux VPS you already have.
 - **Roles and permissions**: your own roles with colors, listed separately in the member
-  list if you like, with permissions for channels, messages, kicking, banning, roles,
-  emoji, server settings and @everyone.
+  list if you like, with permissions for channels, messages, kicking, banning, muting and
+  deafening in voice, roles, emoji and sounds, server settings and @everyone.
 - **Backups**: the owner's Ingle copies the whole server to their PC every hour (messages,
   pictures and the server's identity), and a new server can be set up from a backup.
 - **Invite links** (`ingle://...`): clicking one opens Ingle, which asks before joining.
@@ -417,7 +430,9 @@ and to mute its sound.
   from the provider's welcome email.
 - **GIF search says it's off**: the server's owner turns it on in **Server settings** (or
   right in the GIF picker) with a free API key from
-  [developers.giphy.com](https://developers.giphy.com).
+  [developers.giphy.com](https://developers.giphy.com), a free KLIPY app key from
+  [partner.klipy.com](https://partner.klipy.com), or both. (A KLIPY test key allows 100
+  searches an hour; ask KLIPY for production access in its partner panel.)
 - **Can't hear anyone (or nobody hears you) until you restart**: a microphone or speakers
   that stop working mid-call (a virtual device like NVIDIA Broadcast or a GoXLR restarting,
   a USB hiccup) are reopened by themselves within a second or two; if it takes longer, the
@@ -517,4 +532,6 @@ Twitter, Inc. and other contributors, CC-BY 4.0), Emojibase emoji names (MIT), l
 control and noise suppressor (via `sonora`, BSD), RNNoise (BSD), DeepFilterNet3 and its
 model (MIT OR Apache-2.0, run with tract, MIT OR Apache-2.0), spellbook (MPL-2.0) and the
 spellcheck dictionaries (SCOWL, MIT AND BSD; RLA-ES, used under MPL-1.1; Grammalecte,
-MPL-2.0; see `crates/app/assets/dict/README.md`). GIF search is powered by GIPHY.
+MPL-2.0; see `crates/app/assets/dict/README.md`), Symphonia for reading sound files
+(MPL-2.0). GIF search is powered by GIPHY and KLIPY. Ingle's own soundboard sounds are made
+by the app itself.
