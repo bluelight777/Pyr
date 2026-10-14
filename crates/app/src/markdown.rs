@@ -97,6 +97,7 @@ fn is_url_start(s: &str) -> bool {
 }
 
 /// Build a styled layout for one paragraph. Returns the job and link spans (in chars).
+#[cfg(test)]
 pub fn layout(text: &str, size: f32, color: Color32, names: &[String], wrap_width: f32) -> (LayoutJob, Vec<LinkSpan>) {
     let (job, links, _) = layout_emoji(text, size, size * crate::emoji::SCALE, color, names, wrap_width);
     (job, links)

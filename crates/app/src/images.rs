@@ -23,7 +23,8 @@ pub struct Decoded {
 pub enum Tex {
     Loading,
     Ready { frames: Vec<(egui::TextureHandle, Duration)>, size: egui::Vec2, total: Duration },
-    Failed(String),
+    /// Not a picture (or none we can read).
+    Failed,
 }
 
 impl Tex {
@@ -116,6 +117,11 @@ impl Images {
         matches!(self.tex.get(key), Some(Tex::Ready { .. }))
     }
 
+    /// Whether `key`'s bytes turned out not to be a picture (without asking for it).
+    pub fn failed(&self, key: &str) -> bool {
+        matches!(self.tex.get(key), Some(Tex::Failed))
+    }
+
     pub fn forget(&mut self, key: &str) {
         if let Some(t) = self.tex.remove(key) {
             self.bytes = self.bytes.saturating_sub(tex_bytes(&t));
@@ -165,9 +171,12 @@ impl Images {
                         .enumerate()
                         .map(|(i, (img, delay))| (ctx.load_texture(format!("{key}#{i}"), img, egui::TextureOptions::LINEAR), delay))
                         .collect::<Vec<_>>();
-                    if frames.is_empty() { Tex::Failed("empty image".into()) } else { Tex::Ready { frames, size, total } }
+                    if frames.is_empty() { Tex::Failed } else { Tex::Ready { frames, size, total } }
                 }
-                Err(e) => Tex::Failed(e),
+                Err(e) => {
+                    tracing::debug!("couldn't show picture {key}: {e}");
+                    Tex::Failed
+                }
             };
             self.bytes += tex_bytes(&t);
             if let Some(old) = self.tex.insert(key, t) {

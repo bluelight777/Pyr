@@ -598,7 +598,7 @@ impl IngleApp {
                     }
                     None => {
                         let gifs = crate::giphy::gif_links(&m.content);
-                        let only_gif = gifs.len() == 1 && m.content.trim() == gifs[0];
+                        let only_gif = self.only_gif(&m.content, &gifs);
                         if !m.content.is_empty() && !only_gif {
                             let ctx = ui.ctx().clone();
                             // (Out of `self` while drawn: the emoji lookup borrows it too.)
@@ -1502,7 +1502,7 @@ impl IngleApp {
                     ui.label(RichText::new(when(m.created_at)).size(11.5).color(theme::DIM));
                 });
                 let gifs = crate::giphy::gif_links(&m.content);
-                let only_gif = gifs.len() == 1 && m.content.trim() == gifs[0];
+                let only_gif = self.only_gif(&m.content, &gifs);
                 if !m.content.is_empty() && !only_gif {
                     let ctx = ui.ctx().clone();
                     let names = mention_names(s);
@@ -1951,6 +1951,18 @@ impl IngleApp {
         self.gif_embed_sized(ui, url, vec2(320.0, 240.0), true);
     }
 
+    /// Whether a GIF in a message can't be shown (it didn't download, or isn't a picture): like
+    /// Discord, its message then shows the link as text, so a message that's only a GIF isn't
+    /// left empty.
+    fn gif_failed(&self, url: &str) -> bool {
+        self.ui.gifs.failed(url) || self.images.failed(&format!("gif:{url}"))
+    }
+
+    /// A message's text is only this GIF's link (so the GIF shows instead of it).
+    fn only_gif(&self, content: &str, gifs: &[String]) -> bool {
+        gifs.len() == 1 && content.trim() == gifs[0] && !self.gif_failed(&gifs[0])
+    }
+
     /// A GIPHY GIF at most `max` big; `open`: clicking opens it on GIPHY.
     fn gif_embed_sized(&mut self, ui: &mut egui::Ui, url: &str, max: egui::Vec2, open: bool) {
         let fit = |size: egui::Vec2| size * (max.x / size.x).min(max.y / size.y).min(2.0);
@@ -1968,8 +1980,13 @@ impl IngleApp {
         let ctx = ui.ctx().clone();
         let dl = self.ui.gifs.get(url, move || ctx.request_repaint());
         let t = ui.input(|i| i.time);
+        // One that can't be shown leaves nothing here: its message shows the link instead (see
+        // `gif_failed`).
         let shown = match dl {
-            crate::giphy::Dl::Ready(bytes) => self.images.get(ui.ctx(), &k, Some(bytes), 480).frame(t),
+            crate::giphy::Dl::Ready(bytes) => match self.images.get(ui.ctx(), &k, Some(bytes), 480) {
+                crate::images::Tex::Failed => return,
+                tex => tex.frame(t),
+            },
             crate::giphy::Dl::Loading => None,
             crate::giphy::Dl::Failed => return,
         };

@@ -369,6 +369,11 @@ impl Downloads {
         });
         Dl::Loading
     }
+
+    /// Whether `url` was tried and couldn't be downloaded (without trying it).
+    pub fn failed(&self, url: &str) -> bool {
+        media_provider(url).is_none() || matches!(self.map.lock().get(url), Some(Dl::Failed))
+    }
 }
 
 /// The sizes of GIFs shown before, kept between runs: a GIF's space in the chat is set aside
