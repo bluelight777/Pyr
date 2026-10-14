@@ -20,12 +20,15 @@ use crate::dialogs::{field_label, title};
 use crate::emoji;
 use crate::{icons, theme};
 
-const CELL: Vec2 = Vec2 { x: 146.0, y: 40.0 };
+// Compact, like Discord's: three sounds a row, six rows showing.
+const CELL: Vec2 = Vec2 { x: 136.0, y: 36.0 };
 const COLS: usize = 3;
 const GAP: f32 = 6.0;
 const RAIL_W: f32 = 36.0;
 const GRID_W: f32 = COLS as f32 * CELL.x + (COLS - 1) as f32 * GAP;
 const WIDTH: f32 = GRID_W + RAIL_W + 10.0;
+/// Six rows of sounds.
+const GRID_H: f32 = 6.0 * (CELL.y + GAP);
 /// The longest a sound can be, in seconds (a frame under the limit, see `soundboard::prepare`).
 const MAX_SECS: f32 = ingle_proto::sound::MAX_MS as f32 / 1000.0 - 0.02;
 /// How many recently played sounds show.
@@ -479,7 +482,8 @@ impl IngleApp {
                     }
                 });
             }
-            egui::ScrollArea::vertical().id_salt("sound-grid").max_height(300.0).min_scrolled_height(300.0).auto_shrink([false, false]).show(ui, |ui| {
+            // (A scroll area lays out like the row it's in: its contents go down a column.)
+            egui::ScrollArea::vertical().id_salt("sound-grid").max_height(GRID_H).min_scrolled_height(GRID_H).auto_shrink([false, false]).show(ui, |ui| ui.vertical(|ui| {
                 ui.set_width(GRID_W + 4.0);
                 for (i, sec) in sections.iter().enumerate() {
                     let h = ui.horizontal(|ui| {
@@ -507,7 +511,7 @@ impl IngleApp {
                     }
                     ui.add_space(8.0);
                 }
-            });
+            }));
         });
 
         // Adding sounds to the call's server.

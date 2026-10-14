@@ -368,13 +368,34 @@ impl IngleApp {
             None => {
                 if t.screen {
                     p.rect_filled(rect, CornerRadius::same(12), Color32::from_rgb(0x16, 0x12, 0x10));
-                    let c = rect.center();
-                    let badge = Rect::from_center_size(c - vec2(0.0, 34.0), vec2(48.0, 22.0));
-                    p.rect_filled(badge, CornerRadius::same(5), theme::LIVE);
-                    p.text(badge.center(), egui::Align2::CENTER_CENTER, "LIVE", theme::bold_font(12.0), Color32::WHITE);
-                    p.text(c - vec2(0.0, 4.0), egui::Align2::CENTER_CENTER, format!("{} is sharing their screen", t.name), theme::font(14.0), theme::TEXT);
+                    // LIVE, who's sharing and Watch Stream, stacked in the room above the name
+                    // label; a small tile (the row under the big one) keeps what fits.
+                    let (top, bottom) = (rect.top() + 8.0, rect.bottom() - 40.0);
+                    let room = bottom - top;
+                    let show_badge = room >= 64.0;
+                    let show_text = room >= 100.0 && rect.width() >= 240.0;
+                    let btn_h = if room >= 100.0 { 34.0 } else { 30.0 };
+                    let mut h = if t.is_me { 0.0 } else { btn_h };
+                    if show_badge {
+                        h += 30.0;
+                    }
+                    if show_text || t.is_me {
+                        h += 26.0;
+                    }
+                    let x = rect.center().x;
+                    let mut y = top + ((room - h) / 2.0).max(0.0);
+                    if show_badge {
+                        let badge = Rect::from_center_size(pos2(x, y + 11.0), vec2(48.0, 22.0));
+                        p.rect_filled(badge, CornerRadius::same(5), theme::LIVE);
+                        p.text(badge.center(), egui::Align2::CENTER_CENTER, "LIVE", theme::bold_font(12.0), Color32::WHITE);
+                        y += 30.0;
+                    }
+                    if show_text || t.is_me {
+                        p.text(pos2(x, y + 9.0), egui::Align2::CENTER_CENTER, format!("{} is sharing their screen", t.name), theme::font(14.0), theme::TEXT);
+                        y += 26.0;
+                    }
                     if !t.is_me {
-                        let b = Rect::from_center_size(c + vec2(0.0, 34.0), vec2(140.0, 34.0));
+                        let b = Rect::from_center_size(pos2(x, y + btn_h / 2.0), vec2(140f32.min(rect.width() - 16.0), btn_h));
                         let br = ui.put(b, theme::primary_button("Watch Stream"));
                         if br.clicked() {
                             acts.push(Act::Watch { session: t.key.session, track: track::SCREEN, on: true });
