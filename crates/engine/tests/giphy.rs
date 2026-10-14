@@ -1,4 +1,5 @@
 //! GIF search is set up per server, by its owner only, and then works for everyone in it.
+//! (GIPHY and KLIPY want each app to search them itself, so every member's app gets the key.)
 
 use std::time::{Duration, Instant};
 

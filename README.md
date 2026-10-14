@@ -115,7 +115,9 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   moves your server to another provider, history and all.
 - **Roles and permissions**: your own roles with colors, listed separately in the member
   list if you like, with permissions for channels, messages, kicking, banning, muting and
-  deafening in voice, roles, emoji and sounds, server settings and @everyone.
+  deafening in voice, roles, emoji and sounds, server settings and @everyone. Banning
+  someone also turns off the invite link they joined with, so they can't walk back in
+  through it as someone new (make a fresh link for everyone else).
 - **Backups**: the owner's Ingle copies the whole server to their PC every hour (messages,
   pictures and the server's identity), and a new server can be set up from a backup.
 - **Invite links** (`ingle://...`): clicking one opens Ingle, which asks before joining.
@@ -161,7 +163,9 @@ starts as just the icon.
 **Linux (Ubuntu, Linux Mint, Pop!_OS, Debian and relatives, 64-bit):** download the `.deb`
 from the same page and open it with your software installer, or run
 `sudo apt install ./ingle_amd64.deb`. Ingle appears in the app menu, `ingle://` links open
-it, and you get the `ingle-server` and `ingle-bot` commands. It works on Ubuntu 22.04 or
+it, and you get the `ingle-server` and `ingle-bot` commands. Updates ask for your password
+("Ingle needs your password to install its update"); the package is checked again as root,
+where nothing else can change it, before it's installed. It works on Ubuntu 22.04 or
 newer, Linux Mint 21+, Pop!_OS 22.04+ and Debian 12+. Linux packages are built less often
 than the Windows app, so the Linux version can be a little behind. On Wayland desktops,
 screen sharing and push-to-talk outside the window don't work yet; pick the Xorg session at
@@ -304,12 +308,17 @@ The owner's Ingle backs up their server to their PC every hour: the database (ch
 messages, roles, emoji), every picture, and the server's own identity. They go to
 `Documents\Ingle Server Backups` unless you choose another folder in **Server settings →
 Backups**, which also shows the last backup and has **Back up now** (a OneDrive, Dropbox or
-Google Drive folder keeps a copy online too). A backup includes direct messages and the
-server's private key: keep the folder to yourself.
+Google Drive folder keeps a copy online too). A backup includes direct messages: keep the
+folder to yourself. The server's private key in it is locked to your Ingle identity, so
+someone who gets hold of the folder can't pass for your server, and only your Ingle (or a
+copy of your `identity.key`, see [Your data](#your-data)) can bring the server back as
+itself. Keep a copy of `identity.key` somewhere safe and separate, a USB stick say, not in
+the same online folder.
 
 To bring a server back (on a new VPS, or after deleting the old one), click **Restore from
 a backup...** when you create a server and pick the backup. The new server comes back as
-the same server, with all its history. If its address changed, send everyone a new invite
+the same server, with all its history. (A backup made by an older Ingle has the key as it
+is, and restores the same way.) If its address changed, send everyone a new invite
 link: clicking it points their Ingle at the new address, and they're back as themselves,
 with their roles.
 
@@ -445,7 +454,9 @@ and to mute its sound.
 
 - Your identity is `identity.key` in `%APPDATA%\Ingle\config` (`~/.config/ingle` on Linux).
   It is your account: back it up, and don't share it. Copying it to another PC moves your
-  identity.
+  identity. If you own a server, it's also what unlocks the server's identity in its backups.
+- A bug report's log has DigitalOcean tokens, GIF search keys and the codes in invite links
+  taken out before it's sent.
 - The app remembers servers, settings and volumes in `config.json` next to it.
 
 ## Troubleshooting
@@ -472,7 +483,10 @@ and to mute its sound.
   right in the GIF picker) with a free API key from
   [developers.giphy.com](https://developers.giphy.com), a free KLIPY app key from
   [partner.klipy.com](https://partner.klipy.com), or both. (A KLIPY test key allows 100
-  searches an hour; ask KLIPY for production access in its partner panel.)
+  searches an hour; ask KLIPY for production access in its partner panel.) Everyone's Ingle
+  on the server gets the key, since GIPHY and KLIPY want each search to come straight from
+  the app rather than through a server: use keys made just for that server, and if one is
+  ever misused, make a new one and change it in Server settings.
 - **Can't hear anyone (or nobody hears you) until you restart**: a microphone or speakers
   that stop working mid-call (a virtual device like NVIDIA Broadcast or a GoXLR restarting,
   a USB hiccup) are reopened by themselves within a second or two; if it takes longer, the

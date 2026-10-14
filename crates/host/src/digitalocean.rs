@@ -398,8 +398,8 @@ pub struct RentRequest {
     /// For showing: "1 GB" and "New York 3" (the slugs if empty).
     pub size_label: String,
     pub region_label: String,
-    /// Put back a server from this backup folder instead of starting a new one.
-    pub restore: Option<PathBuf>,
+    /// Put back a server from this backup instead of starting a new one.
+    pub restore: Option<crate::restore::Backup>,
 }
 
 impl std::fmt::Debug for RentRequest {
@@ -429,7 +429,7 @@ pub fn droplet_name(community: &str) -> String {
     if s == "ingle" { "ingle-server".into() } else { s }
 }
 
-fn install_options(name: &str, ip: &str, payloads: &Payloads, restore: Option<PathBuf>) -> InstallOptions {
+fn install_options(name: &str, ip: &str, payloads: &Payloads, restore: Option<crate::restore::Backup>) -> InstallOptions {
     InstallOptions {
         name: name.to_string(),
         public_host: ip.to_string(),
@@ -544,7 +544,7 @@ fn install_on(
     host_key: Option<String>,
     payloads: &Payloads,
     progress: &Progress,
-    restore: Option<PathBuf>,
+    restore: Option<crate::restore::Backup>,
 ) -> Result<crate::Ready, Failure> {
     let ip = d.ip.clone().ok_or_else(|| Failure::new("The server has no address yet."))?;
     let login = Login { host: ip.clone(), port: 22, user: "root".into(), auth: Auth::Key(key.clone()), sudo_password: None, host_key };
@@ -557,7 +557,14 @@ fn install_on(
 }
 
 /// Runs the install again on a droplet that was created earlier (after a failure).
-pub fn retry_install(d: DropletRef, name: String, config_dir: PathBuf, payloads: Payloads, progress: Progress, restore: Option<PathBuf>) {
+pub fn retry_install(
+    d: DropletRef,
+    name: String,
+    config_dir: PathBuf,
+    payloads: Payloads,
+    progress: Progress,
+    restore: Option<crate::restore::Backup>,
+) {
     let outcome = (|| {
         let key = crate::keys::load_or_create(&config_dir).map_err(Failure::from)?;
         let mut record = records::load(&config_dir)

@@ -2020,7 +2020,12 @@ impl IngleApp {
                                 acts.push(Act::Kick { key: key.clone(), uid: uid.clone(), ban: false });
                                 ui.close();
                             }
-                            if s.can(perm::BAN) && ui.button(RichText::new(format!("Ban {name}")).color(theme::LIVE)).clicked() {
+                            if s.can(perm::BAN)
+                                && ui
+                                    .button(RichText::new(format!("Ban {name}")).color(theme::LIVE))
+                                    .on_hover_text("They're removed and can't come back as themselves, and the invite link they joined with stops working (make a new one for everyone else).")
+                                    .clicked()
+                            {
                                 acts.push(Act::Kick { key: key.clone(), uid: uid.clone(), ban: true });
                                 ui.close();
                             }
@@ -2068,7 +2073,7 @@ impl IngleApp {
                         acts.push(Act::SetName(self.ui.welcome_name.trim().to_string()));
                     }
                     let name = if name_changed { self.ui.welcome_name.trim().to_string() } else { st.my_name.clone() };
-                    self.ui.create = Some(crate::create::CreateState::new(&name));
+                    self.ui.create = Some(crate::create::CreateState::new(&name, ingle_proto::crypto::backup_key(&self.engine.shared.identity)));
                     self.ui.dialog = Some(Dialog::Create);
                 }
                 ui.add_space(4.0);

@@ -131,7 +131,8 @@ struct Limits {
     waiting: usize,
     waiting_per_ip: HashMap<Place, usize>,
     waiting_per_network: HashMap<Place, usize>,
-    bad_invites: HashMap<IpAddr, (u32, Instant)>,
+    /// Wrong invite codes per place (an IPv6 /64 is one place, as for connections).
+    bad_invites: HashMap<Place, (u32, Instant)>,
     /// Tokens for new members joining (see [`JOIN_BURST`]).
     join_tokens: Option<(f64, Instant)>,
 }
@@ -422,11 +423,12 @@ impl Hub {
 
     /// Whether `ip` has guessed too many invite codes lately.
     fn invite_throttled(&self, ip: IpAddr) -> bool {
+        let place = Place::of(ip, 64);
         let mut l = self.limits.lock();
-        match l.bad_invites.get(&ip) {
+        match l.bad_invites.get(&place) {
             Some((n, since)) if since.elapsed() < BAD_INVITE_WINDOW => *n >= BAD_INVITES_PER_IP,
             Some(_) => {
-                l.bad_invites.remove(&ip);
+                l.bad_invites.remove(&place);
                 false
             }
             None => false,
@@ -438,7 +440,7 @@ impl Hub {
         if l.bad_invites.len() > 100_000 {
             l.bad_invites.retain(|_, (_, t)| t.elapsed() < BAD_INVITE_WINDOW);
         }
-        let e = l.bad_invites.entry(ip).or_insert((0, Instant::now()));
+        let e = l.bad_invites.entry(Place::of(ip, 64)).or_insert((0, Instant::now()));
         if e.1.elapsed() >= BAD_INVITE_WINDOW {
             *e = (0, Instant::now());
         }
@@ -508,6 +510,40 @@ impl Hub {
             klipy_key: self.db.get_meta("klipy_key").unwrap_or_default(),
             bug_reports: self.db.get_meta("bug_reports").as_deref() == Some("1"),
             new_bug_reports: self.db.new_bug_count(),
+        }
+    }
+
+    /// `info` as `user` is sent it: only the owner is told how many bug reports are waiting.
+    /// Every member's app gets the GIF search keys: GIPHY and KLIPY want each search to come
+    /// straight from the app, never through a server, so a key for them is one every member's
+    /// app has (nobody else is sent them).
+    fn info_as(mut info: ServerInfo, user: Option<&db::UserRow>) -> ServerInfo {
+        if !user.is_some_and(|u| u.role == Role::Owner) {
+            info.new_bug_reports = 0;
+        }
+        if user.is_none() {
+            info.giphy_key.clear();
+            info.klipy_key.clear();
+        }
+        info
+    }
+
+    /// The server's info as `uid` is sent it (see `info_as`).
+    pub fn info_for(&self, uid: &str) -> ServerInfo {
+        Self::info_as(self.info(), self.db.get_user(uid).as_ref())
+    }
+
+    /// Tells every open app that the server's info changed, each as it's sent it.
+    pub fn broadcast_info(&self) {
+        let full = self.info();
+        let inner = self.inner.lock();
+        // (Three kinds of people at most: the owner, members, and anyone no longer one.)
+        let mut frames: HashMap<(bool, bool), Bytes> = HashMap::new();
+        for c in inner.clients.values() {
+            let user = self.db.get_user(&c.user_id);
+            let kind = (user.as_ref().is_some_and(|u| u.role == Role::Owner), user.is_none());
+            let b = frames.entry(kind).or_insert_with(|| frame(0, Event::ServerUpdated { server: Self::info_as(full.clone(), user.as_ref()) }));
+            let _ = c.tx.send(b.clone());
         }
     }
 
@@ -628,6 +664,7 @@ impl Hub {
                 if !self.db.insert_user(uid, name, role).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
                     return err(ErrorCode::Banned, "You are banned from this server.");
                 }
+                let _ = self.db.set_joined_with(uid, code);
                 info!(%uid, %name, ?role, "new member joined");
                 Ok(())
             }
@@ -680,7 +717,7 @@ impl Hub {
         });
         let mut ready = Event::Ready {
             me: me.clone(),
-            server: self.info(),
+            server: self.info_for(uid),
             channels: self.db.channels(),
             members,
             voice: inner.voice.values().map(|v| v.p.clone()).collect(),
@@ -1209,7 +1246,7 @@ impl Hub {
         let id = self.db.add_bug(&r).map_err(|e| format!("{e:#}"))?;
         info!(id, "bug report received");
         // Tell the owner's open apps there's something new (it shows as a count).
-        self.broadcast(Event::ServerUpdated { server: self.info() });
+        self.broadcast_info();
         Ok(())
     }
 

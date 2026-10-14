@@ -32,6 +32,10 @@ for n in 16 32 48 64 128 256 512; do
   install -Dm644 crates/app/assets/icon/ingle-$n.png "$PKG/usr/share/icons/hicolor/${n}x${n}/apps/ingle.png"
 done
 install -Dm644 $L/ingle-server.service "$PKG/usr/lib/systemd/system/ingle-server.service"
+# The in-app updater's root step (checks the package as root, then installs it) and its
+# password prompt.
+install -Dm755 $L/install-update "$PKG/usr/lib/ingle/install-update"
+install -Dm644 $L/com.firelitgames.ingle.install-update.policy "$PKG/usr/share/polkit-1/actions/com.firelitgames.ingle.install-update.policy"
 install -Dm644 $L/ingle-server.default "$PKG/etc/default/ingle-server"
 install -Dm644 README.md "$PKG/usr/share/doc/ingle/README.md"
 install -Dm644 $L/copyright "$PKG/usr/share/doc/ingle/copyright"
@@ -68,8 +72,9 @@ Description: voice, webcams and screen sharing with text channels
  1080p60, and end-to-end encrypted calls. There are no accounts; your identity
  is a key stored on your computer.
  .
- The app can rent a server for you (DigitalOcean) or set up a Linux server
- you already have over SSH, so your group always has a place to meet.
+ The app can set up the server on any Linux VPS you have, over SSH, or
+ create one on your own DigitalOcean account, so your group always has a
+ place to meet.
  .
  This package contains the desktop app (ingle), the community server
  (ingle-server, which can also run as the ingle-server systemd service), the

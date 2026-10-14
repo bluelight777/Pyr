@@ -76,7 +76,11 @@ fn main() {
                 port: ingle_host::DEFAULT_PORT,
                 payloads,
                 wait_for_boot: None,
-                restore: get("restore").map(PathBuf::from),
+                // A sealed server key opens with the backing-up owner's identity.key (--identity).
+                restore: get("restore").map(|d| ingle_host::restore::Backup {
+                    dir: PathBuf::from(d),
+                    key: get("identity").and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| ingle_proto::b64::decode_array::<32>(t.trim())).map(|seed| ingle_proto::crypto::backup_key(&ingle_proto::crypto::Identity::from_seed(seed))),
+                }),
             };
             install::setup_existing(login, opts, progress.clone(), get("config").map(PathBuf::from));
         }

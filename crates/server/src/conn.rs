@@ -879,7 +879,7 @@ impl Ctx<'_> {
                     let d: String = d.chars().filter(|c| !c.is_control()).take(300).collect();
                     let _ = db.set_meta("description", &d);
                 }
-                hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                hub.broadcast_info();
                 Ok(Event::Ok)
             }
 
@@ -1110,7 +1110,7 @@ impl Ctx<'_> {
                 if !db.add_emoji(&e).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
                     return bad("That picture is already one of this server's emoji.");
                 }
-                hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                hub.broadcast_info();
                 Ok(Event::Ok)
             }
             Request::RemoveEmoji { id } => {
@@ -1119,7 +1119,7 @@ impl Ctx<'_> {
                     if db.release_avatar(&id) {
                         hub.wipe_files(&[id]);
                     }
-                    hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                    hub.broadcast_info();
                 }
                 Ok(Event::Ok)
             }
@@ -1132,7 +1132,7 @@ impl Ctx<'_> {
                     return bad(&format!("There's already an emoji called :{name}:."));
                 }
                 db.rename_emoji(&id, &name).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
-                hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                hub.broadcast_info();
                 Ok(Event::Ok)
             }
             Request::AddSound { file_id, name, emoji, volume } => {
@@ -1155,7 +1155,7 @@ impl Ctx<'_> {
                 if !db.add_sound(&s).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
                     return bad("That sound is already on this server's soundboard.");
                 }
-                hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                hub.broadcast_info();
                 Ok(Event::Ok)
             }
             Request::EditSound { id, name, emoji, volume } => {
@@ -1172,14 +1172,14 @@ impl Ctx<'_> {
                 if !db.edit_sound(&id, name.as_deref(), emoji.as_deref(), volume).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
                     return Err((ErrorCode::NotFound, "That sound is gone.".into()));
                 }
-                hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                hub.broadcast_info();
                 Ok(Event::Ok)
             }
             Request::RemoveSound { id } => {
                 self.require(perm::MANAGE_EMOJI, "remove sounds")?;
                 if db.remove_sound(&id).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
                     hub.wipe_files(&[id]);
-                    hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                    hub.broadcast_info();
                 }
                 Ok(Event::Ok)
             }
@@ -1210,7 +1210,7 @@ impl Ctx<'_> {
                         hub.wipe_files(&[old]);
                     }
                 }
-                hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                hub.broadcast_info();
                 Ok(Event::Ok)
             }
             Request::ListBugs => {
@@ -1240,7 +1240,7 @@ impl Ctx<'_> {
                 if !db.set_bug_status(id, status).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
                     return Err((ErrorCode::NotFound, "That report is gone.".into()));
                 }
-                hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                hub.broadcast_info();
                 Ok(Event::Ok)
             }
             Request::SetBugReports { on } => {
@@ -1248,7 +1248,7 @@ impl Ctx<'_> {
                     return Err((ErrorCode::Forbidden, "Only the server's owner can do that.".into()));
                 }
                 db.set_meta("bug_reports", if on { "1" } else { "" }).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
-                hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                hub.broadcast_info();
                 Ok(Event::Ok)
             }
             Request::ReportBug { .. } => bad("send bug reports instead of logging in"),
@@ -1261,7 +1261,7 @@ impl Ctx<'_> {
                     return bad("that doesn't look like a GIPHY API key (letters and numbers, from developers.giphy.com)");
                 }
                 db.set_meta("giphy_key", key).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
-                hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                hub.broadcast_info();
                 Ok(Event::Ok)
             }
             Request::SetKlipyKey { key } => {
@@ -1274,7 +1274,7 @@ impl Ctx<'_> {
                     return bad("that doesn't look like a KLIPY app key (letters and numbers, from partner.klipy.com)");
                 }
                 db.set_meta("klipy_key", key).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
-                hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                hub.broadcast_info();
                 Ok(Event::Ok)
             }
             Request::ServerMute { user_id, muted } => {
@@ -1424,6 +1424,45 @@ mod tests {
         assert!(!hub.moderated(ModeratedVoice::Deafened).contains(&bob));
         assert!(hub.moderated(ModeratedVoice::Muted).contains(&bob));
         assert!(!hub.moderated(ModeratedVoice::Muted).contains(&modr));
+    }
+
+    #[test]
+    fn a_ban_turns_off_the_invite_they_came_with() {
+        let hub = hub();
+        let owner = uid();
+        hub.db.insert_user(&owner, "Owner", Role::Owner).unwrap();
+        let ip: std::net::IpAddr = "198.51.100.4".parse().unwrap();
+        hub.db.create_invite("public-link", &owner, None, None, Role::Member).unwrap();
+        hub.db.create_invite("other-link", &owner, None, None, Role::Member).unwrap();
+        let (troll, friend) = (uid(), uid());
+        assert!(hub.authorize(&troll, "Troll", Some("public-link"), ip).is_ok());
+        assert!(hub.authorize(&friend, "Friend", Some("other-link"), ip).is_ok());
+        assert!(ctx(&hub, &owner).handle(Request::Ban { user_id: troll.clone() }).is_ok());
+        // A new identity can't come back in through the link the troll used...
+        assert!(hub.authorize(&uid(), "Troll again", Some("public-link"), ip).is_err());
+        assert_eq!(hub.db.invite_role("public-link"), None);
+        // ...and other links still work. Kicking (not banning) leaves links alone.
+        assert!(hub.db.invite_role("other-link").is_some());
+        assert!(ctx(&hub, &owner).handle(Request::Kick { user_id: friend.clone() }).is_ok());
+        assert!(hub.db.invite_role("other-link").is_some());
+    }
+
+    #[test]
+    fn gif_keys_and_the_bug_count_go_only_where_theyre_needed() {
+        let hub = hub();
+        let (owner, member) = (uid(), uid());
+        hub.db.insert_user(&owner, "Owner", Role::Owner).unwrap();
+        hub.db.insert_user(&member, "Pat", Role::Member).unwrap();
+        assert!(ctx(&hub, &owner).handle(Request::SetGiphyKey { key: "abc123".into() }).is_ok());
+        assert!(ctx(&hub, &owner).handle(Request::SetKlipyKey { key: "kl-1_2".into() }).is_ok());
+        hub.db.add_bug(&BugReport { title: "crash".into(), ..Default::default() }).unwrap();
+        let (o, m) = (hub.info_for(&owner), hub.info_for(&member));
+        // GIPHY and KLIPY want each app to search them itself: members' apps get the keys...
+        assert_eq!((o.giphy_key.as_str(), o.klipy_key.as_str()), ("abc123", "kl-1_2"));
+        assert_eq!((m.giphy_key.as_str(), m.klipy_key.as_str()), ("abc123", "kl-1_2"));
+        // ...strangers don't, and only the owner is told how many bug reports are waiting.
+        assert!(hub.info_for(&uid()).giphy_key.is_empty());
+        assert_eq!((o.new_bug_reports, m.new_bug_reports), (1, 0));
     }
 
     #[test]
@@ -1650,17 +1689,29 @@ mod tests {
             hub.authorize(&a, "A", Some("fivetimes1"), ip).unwrap();
         }
         hub.authorize(&b, "B", Some("fivetimes1"), ip).unwrap();
-        // A ban sticks: joining again with an invite doesn't undo it.
+        // A ban sticks: joining again with an invite doesn't undo it. (The invite they joined
+        // with is gone too: see a_ban_turns_off_the_invite_they_came_with.)
         hub.db.remove_user(&b, true).unwrap();
-        assert!(hub.authorize(&b, "B", Some("fivetimes1"), ip).is_err());
+        assert_eq!(hub.db.invite_role("fivetimes1"), None);
+        hub.db.create_invite("another1", "server", Some(5), None, Role::Member).unwrap();
+        assert!(matches!(hub.authorize(&b, "B", Some("another1"), ip), Err((ErrorCode::Banned, _))));
         assert!(!hub.db.insert_user(&b, "B", Role::Member).unwrap());
-        // Guessing invite codes gets throttled per address.
+        // Guessing invite codes gets throttled per place.
         for i in 0..BAD_INVITES {
             assert!(matches!(hub.authorize(&uid(), "X", Some(&format!("guess{i}")), ip), Err((ErrorCode::InviteInvalid, _))));
         }
-        assert!(matches!(hub.authorize(&uid(), "X", Some("fivetimes1"), ip), Err((ErrorCode::RateLimited, _))));
+        assert!(matches!(hub.authorize(&uid(), "X", Some("another1"), ip), Err((ErrorCode::RateLimited, _))));
         let other: std::net::IpAddr = "198.51.100.7".parse().unwrap();
-        assert!(hub.authorize(&uid(), "Y", Some("fivetimes1"), other).is_ok());
+        assert!(hub.authorize(&uid(), "Y", Some("another1"), other).is_ok());
+        // An IPv6 /64 is one place: the other addresses in it don't start the count again.
+        for i in 0..BAD_INVITES {
+            let ip6: std::net::IpAddr = format!("2001:db8:1:2::{:x}", i + 1).parse().unwrap();
+            assert!(matches!(hub.authorize(&uid(), "Z", Some(&format!("g6{i}")), ip6), Err((ErrorCode::InviteInvalid, _))));
+        }
+        let ip6: std::net::IpAddr = "2001:db8:1:2::ffff".parse().unwrap();
+        assert!(matches!(hub.authorize(&uid(), "Z", Some("another1"), ip6), Err((ErrorCode::RateLimited, _))));
+        let next_door: std::net::IpAddr = "2001:db8:1:3::1".parse().unwrap();
+        assert!(hub.authorize(&uid(), "W", Some("another1"), next_door).is_ok());
     }
 
     const BAD_INVITES: u32 = 10;

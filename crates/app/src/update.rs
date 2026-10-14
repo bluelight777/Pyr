@@ -320,11 +320,24 @@ pub fn install(path: &Path, sha256: &str) -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
-        let status = std::process::Command::new("pkexec")
-            .args(["apt-get", "install", "-y"])
+        // As root: copy the package somewhere only root can write, check it there, and install
+        // that copy. (Checking it here and then having apt read it from a folder we own would
+        // leave a moment for something running as us to swap it.) The package's own copy of the
+        // script has a password prompt that says what it's for.
+        let mut cmd = std::process::Command::new("pkexec");
+        if Path::new(LINUX_HELPER).is_file() {
+            cmd.arg(LINUX_HELPER);
+        } else {
+            cmd.args(["/bin/sh", "-c", LINUX_INSTALL, "ingle-update"]);
+        }
+        let status = cmd
             .arg(path)
+            .arg(sha256)
             .status()
             .map_err(|e| format!("couldn't ask for permission to install (pkexec): {e}"))?;
+        if status.code() == Some(3) {
+            return Err("the downloaded update changed on disk, so it wasn't installed".into());
+        }
         if !status.success() {
             return Err("the update wasn't installed (cancelled, or the package manager is busy)".into());
         }
@@ -342,9 +355,54 @@ pub fn install(path: &Path, sha256: &str) -> Result<(), String> {
     }
 }
 
+/// Run as root by `install` on Linux, with the package and its SHA-256: copied into a new
+/// root-only folder, checked there, installed from there. The package installs it as
+/// [`LINUX_HELPER`] (with its own password prompt, `com.firelitgames.ingle.install-update`).
+#[cfg_attr(windows, allow(dead_code))]
+const LINUX_INSTALL: &str = include_str!("../../../installer/linux/install-update");
+#[cfg_attr(windows, allow(dead_code))]
+const LINUX_HELPER: &str = "/usr/lib/ingle/install-update";
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn linux_install_checks_the_copy_it_installs() {
+        // The script, with apt-get standing in: a matching package gets to "apt-get" (here a
+        // stand-in that records its argument); a changed one stops with code 3 before it.
+        let dir = std::env::temp_dir().join(format!("ingle-inst-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        let fake = dir.join("bin").join("apt-get");
+        std::fs::write(&fake, format!("#!/bin/sh\ncp \"$3\" {}/installed.deb\n", dir.display())).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let pkg = dir.join("ingle.deb");
+        std::fs::write(&pkg, b"the real package").unwrap();
+        let path = format!("{}:{}", dir.join("bin").display(), std::env::var("PATH").unwrap_or_default());
+        // Both ways it runs: the package's own copy, and the same script given to sh.
+        let helper = concat!(env!("CARGO_MANIFEST_DIR"), "/../../installer/linux/install-update");
+        for packaged in [true, false] {
+            let run = |sha: &str| {
+                let mut cmd = if packaged {
+                    std::process::Command::new(helper)
+                } else {
+                    let mut c = std::process::Command::new("/bin/sh");
+                    c.args(["-c", LINUX_INSTALL, "ingle-update"]);
+                    c
+                };
+                cmd.env("PATH", &path).arg(&pkg).arg(sha).status().unwrap()
+            };
+            let _ = std::fs::remove_file(dir.join("installed.deb"));
+            assert_eq!(run(&release::sha256_hex(b"something else")).code(), Some(3), "packaged: {packaged}");
+            assert!(!dir.join("installed.deb").exists());
+            assert!(run(&release::sha256_hex(b"the real package")).success(), "packaged: {packaged}");
+            assert_eq!(std::fs::read(dir.join("installed.deb")).unwrap(), b"the real package");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn an_old_or_stale_release_file_is_not_believed() {

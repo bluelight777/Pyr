@@ -1,0 +1,13 @@
+#!/bin/sh
+# Installs an Ingle update, run as root by the app (through pkexec) with the downloaded
+# package's path and its SHA-256 from the signed release file. The package is copied into a
+# new folder only root can write, checked there and installed from there, so nothing running
+# as you can swap it between the check and the install. Exits 3 if it isn't the one checked.
+d=$(mktemp -d) || exit 1
+trap 'rm -rf "$d"' EXIT
+cp -- "$1" "$d/ingle.deb" || exit 1
+echo "$2  $d/ingle.deb" | sha256sum -c --status || exit 3
+# (Readable now, for apt's own unprivileged downloader; still writable by root alone.)
+chmod 644 "$d/ingle.deb"
+chmod 755 "$d"
+apt-get install -y "$d/ingle.deb"

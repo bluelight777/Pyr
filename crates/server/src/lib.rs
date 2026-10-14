@@ -96,16 +96,33 @@ pub fn owner_link_expiry() -> i64 {
     ingle_proto::now_ms() + 7 * 24 * 3_600_000
 }
 
+/// The server's data folder, made if it's new, and readable only by the server's own account
+/// either way (it holds every message and the server's private key). Every way in (running the
+/// server, or a command like `invite` before it ever ran) goes through here.
+pub fn private_data_dir(dir: &std::path::Path) -> Result<()> {
+    let mut b = std::fs::DirBuilder::new();
+    b.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        b.mode(0o700);
+    }
+    b.create(dir).with_context(|| format!("creating {}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        // (A folder system that can't do this, some mounted drives say: carry on, but say so.)
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)) {
+            tracing::warn!("couldn't make {} readable only by this account: {e}", dir.display());
+        }
+    }
+    Ok(())
+}
+
 /// Opens (or creates) the community in `cfg.data_dir`: TLS identity, database, default
 /// channels and invites, and the remembered public host.
 fn prepare(cfg: &ServerConfig) -> Result<(tls::TlsIdentity, db::Db)> {
-    std::fs::create_dir_all(&cfg.data_dir).with_context(|| format!("creating {}", cfg.data_dir.display()))?;
-    #[cfg(unix)]
-    {
-        // The database holds every message: only the server's own account may read it.
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&cfg.data_dir, std::fs::Permissions::from_mode(0o700));
-    }
+    private_data_dir(&cfg.data_dir)?;
     let tls_id = tls::load_or_create(&cfg.data_dir)?;
     let db = db::Db::open(&cfg.data_dir.join("ingle.db"))?;
     first_run_setup(&db, cfg.name.as_deref())?;
@@ -270,5 +287,25 @@ mod tests {
         let db = db::Db::open(&dir.join("ingle.db")).unwrap();
         assert_eq!(db.invite_role("owner-legacy"), None, "a never-expiring owner link is removed once there's an owner");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_data_folder_is_the_servers_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let base = std::env::temp_dir().join(format!("ingle-private-data-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        // A new one (made by `ingle-server invite`, say, before the server ever ran)...
+        let new = base.join("new").join("ingle-data");
+        private_data_dir(&new).unwrap();
+        assert_eq!(mode(&new), 0o700);
+        // ...and one made earlier that others could read.
+        let old = base.join("old");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o755)).unwrap();
+        private_data_dir(&old).unwrap();
+        assert_eq!(mode(&old), 0o700);
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

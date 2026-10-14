@@ -202,6 +202,11 @@ fn migrate(c: &Connection) -> Result<()> {
     if !has_avatar {
         c.execute_batch("ALTER TABLE users ADD COLUMN avatar TEXT")?;
     }
+    // Which invite each member joined with (0.7.1): banning someone turns it off.
+    let has_joined_with = c.prepare("SELECT 1 FROM pragma_table_info('users') WHERE name = 'joined_with'")?.exists([])?;
+    if !has_joined_with {
+        c.execute_batch("ALTER TABLE users ADD COLUMN joined_with TEXT")?;
+    }
     Ok(())
 }
 
@@ -308,10 +313,22 @@ impl Db {
         Ok(self.conn.lock().execute("UPDATE users SET role = ?2 WHERE id = ?1", params![id, role.as_i64()])? > 0)
     }
 
-    /// Remove membership. A banned user keeps a row with `banned = 1`.
+    /// The invite someone joined with (noted when they first came in).
+    pub fn set_joined_with(&self, id: &str, code: &str) -> Result<()> {
+        self.conn.lock().execute("UPDATE users SET joined_with = ?2 WHERE id = ?1", params![id, code])?;
+        Ok(())
+    }
+
+    /// Remove membership. A banned user keeps a row with `banned = 1`, and the invite they
+    /// joined with stops working (or they'd be back with a new identity through it).
     pub fn remove_user(&self, id: &str, ban: bool) -> Result<()> {
         let c = self.conn.lock();
         if ban {
+            let joined_with: Option<String> =
+                c.query_row("SELECT joined_with FROM users WHERE id = ?1", [id], |r| r.get(0)).optional().ok().flatten().flatten();
+            if let Some(code) = joined_with {
+                c.execute("DELETE FROM invites WHERE code = ?1", [code])?;
+            }
             c.execute("UPDATE users SET banned = 1, role = 0 WHERE id = ?1", [id])?;
             c.execute(
                 "INSERT OR IGNORE INTO users(id, name, role, banned, joined_at) VALUES (?1, '', 0, 1, ?2)",

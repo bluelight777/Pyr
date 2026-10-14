@@ -46,7 +46,67 @@ pub fn log_tail(shared: &Shared, max: usize) -> String {
     let label = "--- the run before ---\n";
     let rest = max.saturating_sub(previous.len() + label.len() + 40);
     let current = tail_of(&shared.config_dir.join("ingle.log"), rest);
-    if previous.is_empty() { current } else { format!("{label}{previous}\n--- this run ---\n{current}") }
+    let log = if previous.is_empty() { current } else { format!("{label}{previous}\n--- this run ---\n{current}") };
+    scrub(&log)
+}
+
+/// What mustn't leave this PC in a report, taken out of a log: DigitalOcean API tokens, GIF
+/// search keys, and the codes in invite, owner and bot links (the server's address stays: it
+/// helps with connection problems). Nothing Ingle writes to its log today has any of these;
+/// this is in case something ever does.
+pub fn scrub(log: &str) -> String {
+    let mut out = String::with_capacity(log.len());
+    let mut rest = log;
+    // (Each rule: what comes before the secret, and which characters the secret is made of.)
+    let rules: [(&str, fn(char) -> bool); 5] = [
+        ("dop_v1_", |c| c.is_ascii_hexdigit()),
+        ("api_key=", |c| c.is_ascii_alphanumeric()),
+        ("api.klipy.com/api/v1/", |c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+        ("owner-", |c| c.is_ascii_alphanumeric()),
+        ("bot-", |c| c.is_ascii_alphanumeric()),
+    ];
+    loop {
+        // The next thing to scrub: a rule's marker, or an ingle:// link.
+        let next = rules
+            .iter()
+            .filter_map(|(m, f)| rest.find(m).map(|i| (i, m.len(), Some(*f))))
+            .chain(rest.find("ingle://").map(|i| (i, "ingle://".len(), None)))
+            .min_by_key(|(i, _, _)| *i);
+        let Some((i, len, rule)) = next else { break };
+        out.push_str(&rest[..i + len]);
+        let after = &rest[i + len..];
+        match rule {
+            Some(f) => {
+                let n = after.find(|c: char| !f(c)).unwrap_or(after.len());
+                if n > 0 {
+                    out.push_str("[removed]");
+                }
+                rest = &after[n..];
+            }
+            // ingle://host[:port]/code/fingerprint: the code goes.
+            None => {
+                let end = after.find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ')' || c == '>').unwrap_or(after.len());
+                let link = &after[..end];
+                let mut parts = link.splitn(3, '/');
+                let host = parts.next().unwrap_or("");
+                let code = parts.next();
+                let fp = parts.next();
+                out.push_str(host);
+                match (code, fp) {
+                    (Some(c), Some(f)) if !c.is_empty() => out.push_str(&format!("/[code]/{f}")),
+                    (Some(c), None) => {
+                        out.push('/');
+                        out.push_str(c);
+                    }
+                    (Some(_), Some(f)) => out.push_str(&format!("//{f}")),
+                    _ => {}
+                }
+                rest = &after[end..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The last `max` bytes of a text file, from the start of a line.
@@ -140,4 +200,28 @@ pub fn save_approved(shared: &Shared, key: &str, server: &str, reports: &[BugEnt
 /// The owner's view of a server's reports (fetched with `Engine::list_bugs`).
 pub fn sort(reports: &mut [BugEntry]) {
     reports.sort_by_key(|r| (r.status != BugStatus::New, std::cmp::Reverse(r.id)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn secrets_never_leave_in_a_report() {
+        let log = "token dop_v1_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef ok\n\
+                   GET https://api.giphy.com/v1/gifs/search?api_key=AbCdEf123&q=cat\n\
+                   GET https://api.klipy.com/api/v1/Key_123-x/gifs/search?q=dog\n\
+                   joining ingle://203.0.113.5:7766/xykyyqhf/eIbQ7wcA9qSj now\n\
+                   owner link ingle://play.example.com/owner-8utue4bt6ca44s5a/eIbQ7wcA9qSj\n\
+                   bot link ingle://203.0.113.5/bot-abcdef0123456789/eIbQ7wcA9qSj\n\
+                   plain ingle://203.0.113.5/eIbQ7wcA9qSj and é ünïcode";
+        let s = scrub(log);
+        for secret in ["0123456789abcdef0123", "AbCdEf123", "Key_123-x", "xykyyqhf", "8utue4bt6ca44s5a", "abcdef0123456789"] {
+            assert!(!s.contains(secret), "{secret} left in:\n{s}");
+        }
+        // What helps with problems stays.
+        for kept in ["203.0.113.5:7766", "play.example.com", "eIbQ7wcA9qSj", "q=cat", "ünïcode", "joining ingle://"] {
+            assert!(s.contains(kept), "{kept} gone:\n{s}");
+        }
+    }
 }

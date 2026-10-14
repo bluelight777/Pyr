@@ -7,15 +7,20 @@
 //!
 //!   <name> (<key>)/
 //!     server.json           which server, where it was, when it was last backed up
-//!     identity/             server-cert.der, server-key.der (keep these private)
+//!     identity/             server-cert.der, and server-key.der.sealed: the server's private
+//!                           key, sealed to the owner who makes the backup (only their Ingle
+//!                           can put it back: see `ingle_proto::crypto::backup_key`)
 //!     files/<id>            every stored file, fetched once (ids are never reused)
 //!     database/latest.db    the newest copy of the database
 //!     database/<time>.db    older copies: every hour for two days, then daily for three
 //!                           months, then monthly, kept for good
 //!
-//! To restore, set up a server with "Restore from a backup" (or by hand: copy latest.db to
-//! `ingle.db`, files/ and the two identity files into the server's data folder before it
+//! To restore, set up a server with "Restore from a backup" (or by hand, as a server with a new
+//! identity: copy latest.db to `ingle.db` and files/ into the server's data folder before it
 //! first starts).
+//!
+//! Everything in it is written readable only by you (on Linux; on Windows it's as private as
+//! the folder it's in).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -125,17 +130,23 @@ async fn run_inner(shared: &Arc<Shared>, key: &str) -> Result<BackupInfo> {
         .and_then(|h| h.connection())
         .ok_or_else(|| anyhow!("Not connected to the server right now."))?;
     let dir = folder(shared, key, &name);
+    private_dir(&dir).with_context(|| format!("making the backup folder {}", dir.display()))?;
     for sub in ["identity", "files", "database"] {
-        std::fs::create_dir_all(dir.join(sub)).with_context(|| format!("making the backup folder {}", dir.display()))?;
+        private_dir(&dir.join(sub)).with_context(|| format!("making the backup folder {}", dir.display()))?;
     }
     let manifest: BackupManifest =
         serde_json::from_slice(&get(&conn, BACKUP_MANIFEST).await.context("the list of what to back up")?).context("reading the list")?;
 
-    // The server's identity (rarely changes, but cheap).
-    for part in [BACKUP_CERT, BACKUP_KEY] {
-        let bytes = get(&conn, part).await.with_context(|| format!("the server's {part}"))?;
-        write_private(&dir.join("identity").join(part), &bytes)?;
-    }
+    // The server's identity (rarely changes, but cheap): its certificate as it is, its private
+    // key sealed to me (a backup folder that leaks, a synced cloud folder say, then can't be
+    // used to pass for the server).
+    let cert = get(&conn, BACKUP_CERT).await.context("the server's certificate")?;
+    write_private(&dir.join("identity").join(BACKUP_CERT), &cert)?;
+    let private = get(&conn, BACKUP_KEY).await.context("the server's private key")?;
+    let sealed = ingle_proto::crypto::seal(&ingle_proto::crypto::backup_key(&shared.identity), &private);
+    write_private(&dir.join("identity").join(format!("{BACKUP_KEY}.sealed")), &sealed)?;
+    // (Backups before 0.8 kept it as it is.)
+    let _ = std::fs::remove_file(dir.join("identity").join(BACKUP_KEY));
     // Files: only the new ones.
     let mut bytes_total = 0u64;
     for (id, size) in &manifest.files {
@@ -148,7 +159,7 @@ async fn run_inner(shared: &Arc<Shared>, key: &str) -> Result<BackupInfo> {
             continue;
         }
         match get(&conn, &format!("{BACKUP_FILE_PREFIX}{id}")).await {
-            Ok(b) => write_atomic(&path, &b)?,
+            Ok(b) => write_private(&path, &b)?,
             // Deleted on the server meanwhile: fine.
             Err(e) if e.to_string().contains("gone") => {}
             Err(e) => return Err(e.context(format!("file {id}"))),
@@ -176,14 +187,15 @@ async fn run_inner(shared: &Arc<Shared>, key: &str) -> Result<BackupInfo> {
         bytes: bytes_total,
         server_version: manifest.version.clone(),
     };
-    write_atomic(&dir.join("server.json"), &serde_json::to_vec_pretty(&info)?)?;
-    std::fs::write(
-        dir.join("READ ME.txt"),
-        "This is a backup of an Ingle server you own: every message, channel, member, role, emoji, picture and file,\n\
-         and the server's identity (the identity folder: keep it private; it's what makes a restored server the same server).\n\n\
-         To put the server back (on a new VPS, say): in Ingle, + (Add a server) > Set up a server > Restore from a backup,\n\
-         and pick this folder. Or by hand, before the server first starts: copy database/latest.db to <data folder>/ingle.db,\n\
-         files/ to <data folder>/files/, and identity/* into <data folder>/.\n",
+    write_private(&dir.join("server.json"), &serde_json::to_vec_pretty(&info)?)?;
+    write_private(
+        &dir.join("READ ME.txt"),
+        b"This is a backup of an Ingle server you own: every message, channel, member, role, emoji, picture and file,\n\
+         and the server's identity (the identity folder; its private key is sealed to your Ingle identity, so only your Ingle\n\
+         can put it back: keep a copy of your identity.key somewhere safe too). Keep this folder to yourself.\n\n\
+         To put the server back (on a new VPS, say): in Ingle, + (Add a server) > Create my own > Restore from a backup,\n\
+         and pick this folder. Or by hand, as a server with a new identity (everyone needs a new invite link then), before\n\
+         the server first starts: copy database/latest.db to <data folder>/ingle.db and files/ to <data folder>/files/.\n",
     )
     .ok();
     tracing::info!(server = %info.name, files = info.files, "backed up to {}", dir.display());
@@ -215,20 +227,36 @@ async fn get(conn: &quinn::Connection, item: &str) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
+/// Writes a file readable only by you from the moment it exists (on Linux: on Windows, as the
+/// folder allows), whole or not at all.
+fn write_private(path: &Path, data: &[u8]) -> Result<()> {
+    use std::io::Write;
     let tmp = path.with_extension("partial");
-    std::fs::write(&tmp, data).with_context(|| format!("writing {}", tmp.display()))?;
+    let _ = std::fs::remove_file(&tmp);
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(&tmp).with_context(|| format!("writing {}", tmp.display()))?;
+    f.write_all(data).with_context(|| format!("writing {}", tmp.display()))?;
+    drop(f);
     std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
 
-fn write_private(path: &Path, data: &[u8]) -> Result<()> {
-    write_atomic(path, data)?;
+/// A folder (and those above it that are new) only you can open, on Linux: one an older Ingle
+/// made, that others could open, is made yours alone too.
+fn private_dir(dir: &Path) -> std::io::Result<()> {
+    let mut b = std::fs::DirBuilder::new();
+    b.recursive(true);
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-    }
+    std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+    b.create(dir)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(dir, <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700))?;
     Ok(())
 }
 

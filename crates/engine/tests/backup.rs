@@ -89,7 +89,25 @@ async fn back_up_and_restore_elsewhere() {
     assert_eq!(info.name, "Brethren");
     assert_eq!(info.files, 1, "the icon");
     assert!(folder.join("database/latest.db").is_file());
-    assert!(folder.join("identity/server-key.der").is_file());
+    // The server's private key is sealed to the owner: the folder alone can't pass for the
+    // server.
+    let sealed = std::fs::read(folder.join("identity/server-key.der.sealed")).unwrap();
+    assert!(!folder.join("identity/server-key.der").exists());
+    assert!(ingle_proto::crypto::unseal(&ingle_proto::crypto::backup_key(&b.shared.identity), &sealed).is_none());
+    let server_key = ingle_proto::crypto::unseal(&ingle_proto::crypto::backup_key(&a.shared.identity), &sealed).expect("the owner opens it");
+    assert_eq!(server_key, std::fs::read(data.join("server-key.der")).unwrap());
+    // Everything in it is the owner's alone, from the start.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        for d in ["", "identity", "files", "database"] {
+            assert_eq!(mode(&folder.join(d)), 0o700, "{d}");
+        }
+        for f in ["server.json", "database/latest.db", "identity/server-cert.der", "identity/server-key.der.sealed"] {
+            assert_eq!(mode(&folder.join(f)), 0o600, "{f}");
+        }
+    }
     // A second backup only adds what's new (and keeps dated copies).
     a.backup_now(&key);
     wait_for("second backup", 30, || a.state().backups.get(&key).map(|s| !s.running && s.last_ok.unwrap_or(0) > info.last_backup).unwrap_or(false)).await;
@@ -98,10 +116,12 @@ async fn back_up_and_restore_elsewhere() {
     server.shutdown().await;
     let _ = std::fs::remove_dir_all(&data);
 
-    // A new machine: its data folder from the backup (as the setup script's --restore does).
+    // A new machine: its data folder from the backup (as the setup script's --restore does,
+    // with the server key the owner's Ingle unsealed).
     let new_data = temp_dir("restored");
     std::fs::copy(folder.join("database/latest.db"), new_data.join("ingle.db")).unwrap();
-    copy_dir(&folder.join("identity"), &new_data);
+    std::fs::copy(folder.join("identity/server-cert.der"), new_data.join("server-cert.der")).unwrap();
+    std::fs::write(new_data.join("server-key.der"), &server_key).unwrap();
     copy_dir(&folder.join("files"), &new_data.join("files"));
     let server = ingle_server::start(ingle_server::ServerConfig {
         data_dir: new_data.clone(),

@@ -248,6 +248,38 @@ pub struct MediaKey {
 /// AEAD tag overhead added to every sealed frame.
 pub const TAG_LEN: usize = 16;
 
+/// The key that seals the secret parts of a server's backups to the owner who makes them
+/// (their identity's seed, run through HKDF): someone who gets hold of the backup folder (a
+/// synced cloud folder, say) can't pass for the server without that owner's identity too.
+pub fn backup_key(owner: &Identity) -> [u8; 32] {
+    let hk = Hkdf::<Sha256>::new(Some(b"ingle-backup-v1"), &owner.seed());
+    let mut okm = [0u8; 32];
+    hk.expand(b"server identity", &mut okm).expect("32 bytes is a valid HKDF length");
+    okm
+}
+
+/// What a sealed file starts with.
+const SEALED_MAGIC: &[u8; 12] = b"ingle-seal1\n";
+
+/// Seals `plaintext` with `key` (see [`backup_key`]): a fresh nonce each time.
+pub fn seal(key: &[u8; 32], plaintext: &[u8]) -> Vec<u8> {
+    let nonce = random_bytes::<12>();
+    let ct = ChaCha20Poly1305::new(Key::from_slice(key))
+        .encrypt(Nonce::from_slice(&nonce), Payload { msg: plaintext, aad: SEALED_MAGIC })
+        .expect("sealing can't fail");
+    [SEALED_MAGIC.as_slice(), &nonce, &ct].concat()
+}
+
+/// Opens what [`seal`] made with the same key (None: another key, or not sealed, or damaged).
+pub fn unseal(key: &[u8; 32], sealed: &[u8]) -> Option<Vec<u8>> {
+    let rest = sealed.strip_prefix(SEALED_MAGIC.as_slice())?;
+    if rest.len() < 12 + 16 {
+        return None;
+    }
+    let (nonce, ct) = rest.split_at(12);
+    ChaCha20Poly1305::new(Key::from_slice(key)).decrypt(Nonce::from_slice(nonce), Payload { msg: ct, aad: SEALED_MAGIC }).ok()
+}
+
 fn media_nonce(seq: u32) -> [u8; 12] {
     let mut n = [0u8; 12];
     n[8..12].copy_from_slice(&seq.to_be_bytes());
@@ -279,6 +311,22 @@ impl MediaKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sealed_backups_open_only_for_their_owner() {
+        let (owner, other) = (Identity::generate(), Identity::generate());
+        let key = backup_key(&owner);
+        assert_eq!(key, backup_key(&Identity::from_seed(owner.seed())), "the same owner, the same key");
+        let sealed = seal(&key, b"server key");
+        assert_ne!(seal(&key, b"server key"), sealed, "a fresh nonce each time");
+        assert!(!sealed.windows(10).any(|w| w == b"server key"));
+        assert_eq!(unseal(&key, &sealed).as_deref(), Some(&b"server key"[..]));
+        assert!(unseal(&backup_key(&other), &sealed).is_none());
+        let mut bad = sealed.clone();
+        *bad.last_mut().unwrap() ^= 1;
+        assert!(unseal(&key, &bad).is_none());
+        assert!(unseal(&key, b"server key").is_none(), "not sealed at all");
+    }
 
     #[test]
     fn identity_sign_verify() {

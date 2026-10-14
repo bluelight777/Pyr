@@ -177,7 +177,7 @@ impl IngleApp {
                         });
                     });
                     if create {
-                        self.ui.create = Some(crate::create::CreateState::new(&st.my_name));
+                        self.ui.create = Some(crate::create::CreateState::new(&st.my_name, ingle_proto::crypto::backup_key(&self.engine.shared.identity)));
                         self.ui.dialog = Some(Dialog::Create);
                     } else if let Some(Dialog::AddServer { link: l, .. }) = self.ui.dialog.as_mut() {
                         *l = link;
@@ -195,7 +195,7 @@ impl IngleApp {
                         "A server for you and your friends, on any VPS from any provider: one you already have, or a new one in your own DigitalOcean account. Ingle sets it up.",
                         icons::cloud,
                     ) {
-                        self.ui.create = Some(crate::create::CreateState::new(&st.my_name));
+                        self.ui.create = Some(crate::create::CreateState::new(&st.my_name, ingle_proto::crypto::backup_key(&self.engine.shared.identity)));
                         self.ui.dialog = Some(Dialog::Create);
                     }
                     if crate::create::choice_card(
@@ -434,6 +434,13 @@ impl IngleApp {
                                     acts.push(Act::SetGiphyKey { key: key.clone(), giphy: String::new() });
                                 }
                             });
+                            ui.label(
+                                RichText::new(
+                                    "Everyone's Ingle here gets this key: GIPHY wants each search to come straight from the app, never through a server. Use a key made just for this server, and change it if it's ever misused."
+                                )
+                                .size(12.0)
+                                .color(theme::DIM),
+                            );
                             ui.add_space(12.0);
                         }
                         if let Some(s) = server.as_ref().filter(|s| {
@@ -465,6 +472,13 @@ impl IngleApp {
                                     acts.push(Act::SetKlipyKey { key: key.clone(), klipy: String::new() });
                                 }
                             });
+                            ui.label(
+                                RichText::new(
+                                    "Everyone's Ingle here gets this key: KLIPY wants each search to come straight from the app, never through a server. Use a key made just for this server, and change it if it's ever misused."
+                                )
+                                .size(12.0)
+                                .color(theme::DIM),
+                            );
                             ui.add_space(12.0);
                         }
                         field_label(ui, "Server name");

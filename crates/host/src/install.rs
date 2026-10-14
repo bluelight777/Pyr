@@ -82,8 +82,8 @@ pub struct InstallOptions {
     pub payloads: Payloads,
     /// A freshly created server: keep trying to log in while it boots (up to this long).
     pub wait_for_boot: Option<Duration>,
-    /// Put back a server from this backup folder (see `restore.rs`).
-    pub restore: Option<PathBuf>,
+    /// Put back a server from this backup (see `restore.rs`).
+    pub restore: Option<crate::restore::Backup>,
 }
 
 /// What the install produced.

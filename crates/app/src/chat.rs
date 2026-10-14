@@ -2127,6 +2127,14 @@ impl IngleApp {
                         ui.data_mut(|d| d.remove::<String>(id));
                     }
                 });
+                ui.label(
+                    RichText::new(format!(
+                        "Everyone's Ingle here gets this key: {} wants each search to come straight from the app, never through a server. Use a key made just for this server.",
+                        provider.name()
+                    ))
+                    .size(12.0)
+                    .color(theme::DIM),
+                );
             } else {
                 ui.label(
                     RichText::new("GIF search isn't set up on this server yet. The server's owner can turn it on in Server settings.")

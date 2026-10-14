@@ -90,11 +90,13 @@ pub struct CreateState {
     copied: bool,
     /// Put back a server from this backup instead of starting a new one.
     restore: Option<(std::path::PathBuf, ingle_engine::backup::BackupInfo)>,
+    /// Opens the server's sealed private key in my backups (made from my identity).
+    backup_key: [u8; 32],
     restore_error: Option<String>,
 }
 
 impl CreateState {
-    pub fn new(my_name: &str) -> CreateState {
+    pub fn new(my_name: &str, backup_key: [u8; 32]) -> CreateState {
         let name = if my_name.trim().is_empty() || my_name == "Friend" {
             "My Ingle Server".to_string()
         } else {
@@ -133,6 +135,7 @@ impl CreateState {
             copied: false,
             restore: None,
             restore_error: None,
+            backup_key,
         }
     }
 
@@ -141,6 +144,11 @@ impl CreateState {
     pub fn set_restore(&mut self, dir: std::path::PathBuf) {
         match ingle_engine::backup::info(&dir).filter(|_| dir.join("database").join("latest.db").is_file()) {
             Some(info) => {
+                // (A backup someone else made: its server key is sealed to them.)
+                if let Err(e) = ingle_host::restore::check(&ingle_host::restore::Backup { dir: dir.clone(), key: Some(self.backup_key) }) {
+                    self.restore_error = Some(format!("{e:#}"));
+                    return;
+                }
                 self.name = info.name.clone();
                 self.restore = Some((dir, info));
                 self.restore_error = None;
@@ -471,7 +479,7 @@ fn rent_page(c: &mut CreateState, ui: &mut egui::Ui, config_dir: &std::path::Pat
             price_monthly: c.price,
             size_label,
             region_label,
-            restore: c.restore.as_ref().map(|(d, _)| d.clone()),
+            restore: c.restore.as_ref().map(|(d, _)| ingle_host::restore::Backup { dir: d.clone(), key: Some(c.backup_key) }),
         };
         let progress = c.new_progress(ui.ctx());
         let dir = config_dir.to_path_buf();
@@ -601,7 +609,7 @@ fn start_own(c: &mut CreateState, ctx: &egui::Context, config_dir: &std::path::P
                 port: ingle_host::DEFAULT_PORT,
                 payloads: Payloads::find(),
                 wait_for_boot: None,
-                restore: c.restore.as_ref().map(|(d, _)| d.clone()),
+                restore: c.restore.as_ref().map(|(d, _)| ingle_host::restore::Backup { dir: d.clone(), key: Some(c.backup_key) }),
             };
             let progress = c.new_progress(ctx);
             let dir = config_dir.to_path_buf();
@@ -924,7 +932,7 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
             if retry {
                 if let Some(d) = f.droplet.clone() {
                     let (name, dir) = (c.name.trim().to_string(), config_dir.to_path_buf());
-                    let restore = c.restore.as_ref().map(|(d, _)| d.clone());
+                    let restore = c.restore.as_ref().map(|(d, _)| ingle_host::restore::Backup { dir: d.clone(), key: Some(c.backup_key) });
                     let progress = c.new_progress(ui.ctx());
                     let _ = std::thread::Builder::new()
                         .name("ingle-setup".into())

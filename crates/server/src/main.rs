@@ -50,7 +50,7 @@ enum Cmd {
 }
 
 fn make_invite(cli: &Cli, owner: bool, uses: Option<u32>, hours: Option<u64>) -> Result<String> {
-    std::fs::create_dir_all(&cli.data)?;
+    ingle_server::private_data_dir(&cli.data)?;
     let tls = ingle_server::tls::load_or_create(&cli.data)?;
     let db = ingle_server::db::Db::open(&cli.data.join("ingle.db"))?;
     let (code, uses, role) = if owner {
