@@ -1824,6 +1824,19 @@ impl Engine {
         });
     }
 
+    /// Owner only: the KLIPY app key everyone's KLIPY GIF search on this server uses ("" turns
+    /// it off).
+    pub fn set_klipy_key(&self, key: &str, klipy_key: &str) {
+        let on = !klipy_key.trim().is_empty();
+        self.request_then(key, Request::SetKlipyKey { key: klipy_key.trim().to_string() }, move |shared, ev| match ev {
+            Event::Error { message, .. } => shared.state.write().toast(format!("Couldn't set up KLIPY: {message}"), true),
+            _ => shared
+                .state
+                .write()
+                .toast(if on { "KLIPY GIF search is on for everyone in this server." } else { "KLIPY GIF search is off on this server." }, false),
+        });
+    }
+
     /// Where backups of servers I own go (`None`: "Ingle Server Backups" in Documents).
     pub fn set_backup_dir(&self, dir: Option<std::path::PathBuf>) {
         let mut cfg = self.shared.config.lock();

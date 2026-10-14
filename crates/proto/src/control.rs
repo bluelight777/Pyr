@@ -177,6 +177,10 @@ pub const BACKUP_FEATURE: &str = "backup";
 /// GIF search for everyone in the server, with a GIPHY key only the owner sets
 /// (`ServerInfo::giphy_key`, `SetGiphyKey`).
 pub const GIPHY_FEATURE: &str = "giphy";
+/// GIF search from KLIPY too, with a KLIPY app key only the owner sets
+/// (`ServerInfo::klipy_key`, `SetKlipyKey`). Each app searches KLIPY itself (KLIPY wants
+/// requests to come from people's own apps), in its own tab, never mixed with GIPHY's.
+pub const KLIPY_FEATURE: &str = "klipy";
 /// Ingle bug reports: anyone's app can send one (`ReportBug`, instead of logging in) when
 /// the owner collects them here (`ServerInfo::bug_reports`); the owner reviews them
 /// (`ListBugs`, `SetBugStatus`).
@@ -536,6 +540,10 @@ pub struct ServerInfo {
     /// Empty: GIF search is off on this server.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub giphy_key: String,
+    /// The KLIPY app key the owner set up for everyone's KLIPY GIF search here
+    /// ([`KLIPY_FEATURE`]). Empty: KLIPY is off on this server.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub klipy_key: String,
 }
 
 /// One of a server's own emoji. Written in messages as `<:name:id>` (`<a:name:id>` when
@@ -923,6 +931,11 @@ pub enum Request {
     /// Owner only ([`GIPHY_FEATURE`]): the GIPHY key everyone's GIF search here uses (empty
     /// turns GIF search off).
     SetGiphyKey {
+        key: String,
+    },
+    /// Owner only ([`KLIPY_FEATURE`]): the KLIPY app key everyone's KLIPY GIF search here uses
+    /// (empty turns it off).
+    SetKlipyKey {
         key: String,
     },
     /// Instead of `Login` ([`BUGS_FEATURE`]): send a bug report, no account needed.

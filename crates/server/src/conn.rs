@@ -514,6 +514,7 @@ fn cost(req: &Request) -> f64 {
         | Request::SetAvatar { .. }
         | Request::SetServerIcon { .. }
         | Request::SetGiphyKey { .. }
+        | Request::SetKlipyKey { .. }
         | Request::UpdateProfile { .. }
         | Request::UpdateServer { .. }
         | Request::Block { .. } => 4.0,
@@ -1226,6 +1227,19 @@ impl Ctx<'_> {
                     return bad("that doesn't look like a GIPHY API key (letters and numbers, from developers.giphy.com)");
                 }
                 db.set_meta("giphy_key", key).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                hub.broadcast(Event::ServerUpdated { server: hub.info() });
+                Ok(Event::Ok)
+            }
+            Request::SetKlipyKey { key } => {
+                if self.role() != Role::Owner {
+                    return Err((ErrorCode::Forbidden, "Only the server's owner can set up GIF search.".into()));
+                }
+                // (It goes in the path of every KLIPY address: letters, numbers, - and _ only.)
+                let key = key.trim();
+                if key.len() > 128 || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+                    return bad("that doesn't look like a KLIPY app key (letters and numbers, from partner.klipy.com)");
+                }
+                db.set_meta("klipy_key", key).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
                 hub.broadcast(Event::ServerUpdated { server: hub.info() });
                 Ok(Event::Ok)
             }

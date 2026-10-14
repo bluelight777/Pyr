@@ -880,14 +880,15 @@ impl IngleApp {
             // Typing "@": people, roles and @everyone to pick from (arrows + Enter/Tab, or click).
             // Typing ":smi": emoji. Typing "/giphy cats": GIFs.
             let composer_id = egui::Id::new(("composer", &key, ch.id));
-            // Typing "/giphy" (or "/giphy cats") brings up the GIF search, the words going into
-            // its search box.
-            if let Some(q) = giphy_query(&draft) {
-                self.open_gif_picker(q);
+            // Typing "/giphy" (or "/giphy cats", or /klipy) brings up the GIF search, the words
+            // going into its search box.
+            if let Some((q, from)) = gif_query(&draft) {
+                self.open_gif_picker(q, from);
                 draft.clear();
             }
-            if !self.ui.gif_picker && self.ui.giphy.searched.is_some() {
+            if !self.ui.gif_picker && (self.ui.giphy.searched.is_some() || self.ui.klipy.searched.is_some()) {
                 self.ui.giphy.reset();
+                self.ui.klipy.reset();
             }
             let suggestions = {
                 let m = mention_suggestions(s, &draft);
@@ -1167,12 +1168,17 @@ impl IngleApp {
                     }
                     self.ui.paste_down = down;
                 }
-                let gb = icon_button(ui, 30.0, "Search GIFs (or type /giphy)", self.ui.gif_picker, |p, r, c| icons::gif(p, r.shrink(1.0), c));
+                let tip = if s.has(ingle_proto::control::KLIPY_FEATURE) && !s.info.klipy_key.is_empty() {
+                    "Search GIFs (or type /giphy or /klipy)"
+                } else {
+                    "Search GIFs (or type /giphy)"
+                };
+                let gb = icon_button(ui, 30.0, tip, self.ui.gif_picker, |p, r, c| icons::gif(p, r.shrink(1.0), c));
                 if gb.clicked() {
                     if self.ui.gif_picker {
                         self.ui.gif_picker = false;
                     } else {
-                        self.open_gif_picker(String::new());
+                        self.open_gif_picker(String::new(), None);
                     }
                 }
                 let eb = icon_button(ui, 30.0, "Emoji", self.ui.composer_emoji, |p, r, c| icons::smile(p, r, c));
@@ -1192,10 +1198,10 @@ impl IngleApp {
                     i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::Enter, pressed: true, modifiers, .. } if !modifiers.shift))
                 });
                 let send = resp.has_focus() && enter || sb.clicked() && connected;
-                // "/giphy …" (or a bare "/gif") is a GIF search, never a message.
-                let gif_command = giphy_query(draft.trim()).or_else(|| (draft.trim() == "/gif").then(String::new));
-                if send && gif_command.is_some() {
-                    self.open_gif_picker(gif_command.unwrap_or_default());
+                // "/giphy …", "/klipy …" (or a bare "/gif") is a GIF search, never a message.
+                let gif_command = gif_query(draft.trim()).or_else(|| (draft.trim() == "/gif").then(|| (String::new(), None)));
+                if send && let Some((q, from)) = gif_command {
+                    self.open_gif_picker(q, from);
                     draft.clear();
                 } else if send && (!draft.trim().is_empty() || !files.is_empty()) {
                     let reply_to = self.ui.reply.take().map(|(id, _)| id);
@@ -1782,6 +1788,17 @@ pub fn giphy_query(draft: &str) -> Option<String> {
     Some(rest.trim().to_string())
 }
 
+/// A GIF search typed in the box: its words, and where to search ("/giphy" GIPHY, "/klipy"
+/// KLIPY, "/gif" wherever the picker was last).
+pub fn gif_query(draft: &str) -> Option<(String, Option<crate::giphy::Provider>)> {
+    use crate::giphy::Provider;
+    if let Some(rest) = draft.strip_prefix("/klipy") {
+        return (rest.is_empty() || rest.starts_with(' ')).then(|| (rest.trim().to_string(), Some(Provider::Klipy)));
+    }
+    let q = giphy_query(draft)?;
+    Some((q, draft.starts_with("/giphy").then_some(Provider::Giphy)))
+}
+
 /// The ":partial" shortcode being typed at the end of the message: (byte offset of the
 /// colon, the partial text).
 fn emoji_token(draft: &str) -> Option<(usize, String)> {
@@ -1966,8 +1983,9 @@ impl IngleApp {
                 if let Some(n) = next {
                     ui.ctx().request_repaint_after(n);
                 }
-                if open && resp.on_hover_text("GIF from GIPHY (click to open)").clicked() {
-                    ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                let from = crate::giphy::media_provider(url).unwrap_or_default().name();
+                if open && resp.on_hover_text(format!("GIF from {from} (click to open)")).clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(url.split('#').next().unwrap_or(url)));
                 }
             }
             None => {
@@ -1983,21 +2001,47 @@ impl IngleApp {
         }
     }
 
-    /// Opens the GIF picker with these search words, its search box taking the cursor.
-    fn open_gif_picker(&mut self, words: String) {
+    /// Opens the GIF picker with these search words, its search box taking the cursor (on
+    /// `from`'s tab; `None`: the one it was on last).
+    fn open_gif_picker(&mut self, words: String, from: Option<crate::giphy::Provider>) {
         self.ui.gif_picker = true;
         self.ui.composer_emoji = false;
         self.ui.gif_search = words;
         self.ui.gif_focus = true;
+        if let Some(p) = from {
+            self.ui.gif_provider = p;
+        }
     }
 
-    /// The GIF picker: a GIPHY search box over what's trending or the results, like Discord's.
-    /// Returns the GIF to send.
+    /// The GIF search state of `p`'s tab.
+    fn gif_search_of(&mut self, p: crate::giphy::Provider) -> &mut crate::giphy::GiphyUi {
+        match p {
+            crate::giphy::Provider::Giphy => &mut self.ui.giphy,
+            crate::giphy::Provider::Klipy => &mut self.ui.klipy,
+        }
+    }
+
+    /// The GIF picker: a search box over what's trending or the results, like Discord's, from
+    /// GIPHY or KLIPY (a tab each, when the server has both). Returns the GIF to send.
     fn gif_picker(&mut self, ui: &mut egui::Ui, _st: &AppState, s: &ServerView, acts: &mut Vec<Act>) -> Option<String> {
+        use crate::giphy::Provider;
         const W: f32 = 460.0;
         ui.set_width(W);
         let mut send = None;
         let search_id = egui::Id::new("gif-search");
+        let owner = s.me.as_ref().is_some_and(|m| m.role == ingle_proto::control::Role::Owner);
+        let key_of = |p: Provider| match p {
+            Provider::Giphy => crate::giphy::key(&s.info.giphy_key),
+            Provider::Klipy => crate::klipy::key(&s.info.klipy_key),
+        };
+        let feature = |p: Provider| s.has(if p == Provider::Giphy { ingle_proto::control::GIPHY_FEATURE } else { ingle_proto::control::KLIPY_FEATURE });
+        // A tab for each source that's on here (or that the owner could turn on).
+        let tabs: Vec<Provider> = [Provider::Giphy, Provider::Klipy].into_iter().filter(|p| feature(*p) && (owner || key_of(*p).is_some())).collect();
+        let mut provider = self.ui.gif_provider;
+        if !tabs.contains(&provider) {
+            provider = tabs.iter().copied().find(|p| key_of(*p).is_some()).or(tabs.first().copied()).unwrap_or_default();
+            self.ui.gif_provider = provider;
+        }
         // While typing in the search box: Up/Down (or Tab) choose a GIF, Enter sends it.
         let typing = ui.ctx().memory(|m| m.has_focus(search_id));
         let (mut go_next, mut go_prev, mut enter) = (false, false, false);
@@ -2009,15 +2053,25 @@ impl IngleApp {
             });
         }
         ui.horizontal(|ui| {
+            if tabs.len() > 1 {
+                for p in &tabs {
+                    if ui.add(egui::Button::selectable(provider == *p, RichText::new(p.name()).font(theme::bold_font(12.0)))).clicked() && provider != *p {
+                        self.ui.gif_provider = *p;
+                        self.ui.gif_focus = true;
+                    }
+                }
+            }
+            let w = if tabs.len() > 1 { W - 260.0 } else { W - 130.0 };
+            // (KLIPY asks for exactly "Search KLIPY" here.)
             let r = ui.add(
-                egui::TextEdit::singleline(&mut self.ui.gif_search).hint_text("Search GIPHY").desired_width(W - 130.0).id(search_id),
+                egui::TextEdit::singleline(&mut self.ui.gif_search).hint_text(format!("Search {}", provider.name())).desired_width(w).id(search_id),
             );
             if self.ui.gif_focus || (!r.has_focus() && ui.ctx().memory(|m| m.focused().is_none())) {
                 r.request_focus();
                 self.ui.gif_focus = false;
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label(RichText::new("Powered by GIPHY").font(theme::bold_font(10.5)).color(theme::MUTED));
+                ui.label(RichText::new(format!("Powered by {}", provider.name())).font(theme::bold_font(10.5)).color(theme::MUTED));
             });
         });
         ui.add_space(8.0);
@@ -2026,23 +2080,33 @@ impl IngleApp {
         let title = if words.is_empty() { "TRENDING GIFS".to_string() } else { format!("GIFS FOR \u{201c}{}\u{201d}", words.to_uppercase()) };
         ui.label(RichText::new(title).font(theme::bold_font(11.0)).color(theme::DIM));
         ui.add_space(4.0);
-        let Some(api_key) = crate::giphy::key(&s.info.giphy_key) else {
-            let owner = s.me.as_ref().map(|m| m.role == ingle_proto::control::Role::Owner).unwrap_or(false);
-            if !s.has(ingle_proto::control::GIPHY_FEATURE) {
+        let Some(api_key) = key_of(provider) else {
+            if !feature(provider) {
                 ui.label(RichText::new("This server needs updating before it can have GIF search.").color(theme::MUTED));
             } else if owner {
-                ui.label(
-                    RichText::new("GIF search is off on your server. Paste a GIPHY API key (free from developers.giphy.com) to turn it on for everyone here:")
-                        .color(theme::MUTED),
-                );
-                let id = ui.id().with("giphy-key-setup");
+                let (text, hint, id) = match provider {
+                    Provider::Giphy => (
+                        "GIF search is off on your server. Paste a GIPHY API key (free from developers.giphy.com) to turn it on for everyone here:",
+                        "GIPHY API key",
+                        ui.id().with("giphy-key-setup"),
+                    ),
+                    Provider::Klipy => (
+                        "KLIPY is off on your server. Paste a KLIPY app key (free from partner.klipy.com) to turn it on for everyone here:",
+                        "KLIPY app key",
+                        ui.id().with("klipy-key-setup"),
+                    ),
+                };
+                ui.label(RichText::new(text).color(theme::MUTED));
                 let mut k: String = ui.data(|d| d.get_temp(id)).unwrap_or_default();
                 ui.horizontal(|ui| {
-                    if ui.add(egui::TextEdit::singleline(&mut k).hint_text("GIPHY API key").desired_width(300.0)).changed() {
+                    if ui.add(egui::TextEdit::singleline(&mut k).hint_text(hint).desired_width(300.0)).changed() {
                         ui.data_mut(|d| d.insert_temp(id, k.clone()));
                     }
                     if ui.add_enabled(!k.trim().is_empty(), theme::primary_button("Turn on")).clicked() {
-                        acts.push(Act::SetGiphyKey { key: s.key.clone(), giphy: k.trim().to_string() });
+                        acts.push(match provider {
+                            Provider::Giphy => Act::SetGiphyKey { key: s.key.clone(), giphy: k.trim().to_string() },
+                            Provider::Klipy => Act::SetKlipyKey { key: s.key.clone(), klipy: k.trim().to_string() },
+                        });
                         ui.data_mut(|d| d.remove::<String>(id));
                     }
                 });
@@ -2056,12 +2120,12 @@ impl IngleApp {
         };
         // One letter isn't worth a search (each one uses up some of the key's allowance).
         if words.chars().count() == 1 {
-            ui.label(RichText::new("Keep typing to search GIPHY…").color(theme::MUTED));
+            ui.label(RichText::new(format!("Keep typing to search {}…", provider.name())).color(theme::MUTED));
             return None;
         }
         let ctx = ui.ctx().clone();
-        self.ui.giphy.update(&query, &api_key, move || ctx.request_repaint());
-        let gifs = match self.ui.giphy.current() {
+        self.gif_search_of(provider).update(provider, &query, &api_key, move || ctx.request_repaint());
+        let gifs = match self.gif_search_of(provider).current() {
             Some(crate::giphy::Search::Ready(v)) => v,
             Some(crate::giphy::Search::Failed(e)) => {
                 ui.label(RichText::new(e).color(theme::LIVE));
@@ -2070,7 +2134,7 @@ impl IngleApp {
             _ => {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label(RichText::new("Searching GIPHY…").color(theme::MUTED));
+                    ui.label(RichText::new(format!("Searching {}…", provider.name())).color(theme::MUTED));
                 });
                 ui.ctx().request_repaint_after(Duration::from_millis(100));
                 return None;
@@ -2081,19 +2145,17 @@ impl IngleApp {
             return None;
         }
         let n = gifs.len();
-        let mut sel = self.ui.giphy.sel.min(n - 1);
+        let mut sel = self.gif_search_of(provider).sel.min(n - 1);
         if go_next {
             sel = (sel + 1) % n;
         }
         if go_prev {
             sel = (sel + n - 1) % n;
         }
-        self.ui.giphy.sel = sel;
-        if enter {
-            send = Some(gifs[sel].posted());
-        }
+        self.gif_search_of(provider).sel = sel;
+        let mut chosen = enter.then_some(sel);
         // Two columns, each GIF at its own height (like Discord's picker), each going under the
-        // shorter column.
+        // shorter column (in the order they came: KLIPY's must stay as KLIPY sends them).
         const GAP: f32 = 6.0;
         let col_w = (W - GAP) / 2.0;
         let mut col_h = [0.0f32; 2];
@@ -2108,7 +2170,7 @@ impl IngleApp {
             })
             .collect();
         let total = (col_h[0].max(col_h[1]) - GAP).max(0.0);
-        egui::ScrollArea::vertical().id_salt("gif-grid").max_height(340.0).auto_shrink([false, true]).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt(("gif-grid", provider.name())).max_height(340.0).auto_shrink([false, true]).show(ui, |ui| {
             let (area, _) = ui.allocate_exact_size(vec2(W, total), Sense::hover());
             for (i, (g, &(c, y, h))) in gifs.iter().zip(&places).enumerate() {
                 let r = Rect::from_min_size(area.min + vec2(c as f32 * (col_w + GAP), y), vec2(col_w, h));
@@ -2138,10 +2200,17 @@ impl IngleApp {
                 }
                 let resp = if g.title.is_empty() { resp } else { resp.on_hover_text(&g.title) };
                 if resp.clicked() {
-                    send = Some(g.posted());
+                    chosen = Some(i);
                 }
             }
         });
+        if let Some(g) = chosen.and_then(|i| gifs.get(i)) {
+            send = Some(g.posted());
+            // KLIPY counts what's shared (and what it was found by).
+            if g.provider == Provider::Klipy {
+                crate::klipy::share(&api_key, &g.slug, &words);
+            }
+        }
         ui.add_space(6.0);
         ui.label(RichText::new("Click a GIF to send it  ·  ↑ ↓ to choose, Enter to send  ·  Esc to close").size(11.0).color(theme::DIM));
         send
@@ -2233,5 +2302,12 @@ mod emoji_text_tests {
         assert_eq!(giphy_query("/gif"), None);
         assert_eq!(giphy_query("/gif dogs").as_deref(), Some("dogs"));
         assert_eq!(giphy_query("/gifts for mom"), None);
+        use crate::giphy::Provider;
+        assert_eq!(gif_query("/klipy cute cats"), Some(("cute cats".into(), Some(Provider::Klipy))));
+        assert_eq!(gif_query("/klipy"), Some((String::new(), Some(Provider::Klipy))));
+        assert_eq!(gif_query("/klipyx"), None);
+        assert_eq!(gif_query("/giphy dogs"), Some(("dogs".into(), Some(Provider::Giphy))));
+        assert_eq!(gif_query("/gif dogs"), Some(("dogs".into(), None)));
+        assert_eq!(gif_query("hello /klipy"), None);
     }
 }

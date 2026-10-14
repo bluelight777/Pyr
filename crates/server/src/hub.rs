@@ -427,6 +427,7 @@ impl Hub {
             emojis: self.db.emojis(),
             sounds: self.db.sounds(),
             giphy_key: self.db.get_meta("giphy_key").unwrap_or_default(),
+            klipy_key: self.db.get_meta("klipy_key").unwrap_or_default(),
             bug_reports: self.db.get_meta("bug_reports").as_deref() == Some("1"),
             new_bug_reports: self.db.new_bug_count(),
         }
@@ -606,7 +607,7 @@ impl Hub {
             members,
             voice: inner.voice.values().map(|v| v.p.clone()).collect(),
             roles: self.db.roles(),
-            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE].iter().map(|s| s.to_string()).collect(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE].iter().map(|s| s.to_string()).collect(),
             dms: self.db.dms_of(uid),
             relations: self.db.relations_of(uid),
         };

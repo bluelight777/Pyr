@@ -1,6 +1,6 @@
 //! GIF search, like Discord's `/giphy`: type `/giphy cats` in a message box to search
-//! GIPHY, pick one (click, or arrows and Enter) and it's posted. GIFs from GIPHY in
-//! messages play right in the chat.
+//! GIPHY, pick one (click, or arrows and Enter) and it's posted. GIFs from GIPHY (and from
+//! KLIPY, see `klipy.rs`, which shares the picker in a tab of its own) play right in the chat.
 //!
 //! Searches go straight from this PC to GIPHY (GIPHY doesn't allow passing them through a
 //! server) with an API key: built in at release time, or your own pasted into the GIF panel.
@@ -32,9 +32,30 @@ pub fn key(server_key: &str) -> Option<String> {
     None
 }
 
+/// Where a GIF comes from. Each is searched on its own, in its own tab of the picker (KLIPY's
+/// results are never mixed with anyone else's).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Provider {
+    #[default]
+    Giphy,
+    Klipy,
+}
+
+impl Provider {
+    pub fn name(self) -> &'static str {
+        match self {
+            Provider::Giphy => "GIPHY",
+            Provider::Klipy => "KLIPY",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Gif {
+    pub provider: Provider,
     pub id: String,
+    /// KLIPY's name for it (to tell KLIPY it was shared).
+    pub slug: String,
     pub title: String,
     /// Small moving preview for the grid.
     pub preview: String,
@@ -48,22 +69,29 @@ pub struct Gif {
 
 impl Gif {
     /// The link posted: with the GIF's size, so everyone's chat keeps its space before it
-    /// loads (`?w=…&h=…`; GIPHY ignores it, and older Ingles show the GIF as before).
+    /// loads (`?w=…&h=…`; GIPHY ignores it, and older Ingles show the GIF as before). KLIPY's
+    /// links are used just as KLIPY gives them: there the size goes after a `#`, which is
+    /// never part of what's fetched.
     pub fn posted(&self) -> String {
-        match self.size {
-            Some((w, h)) => format!("{}?w={w}&h={h}", self.url),
-            None => self.url.clone(),
+        match (self.size, self.provider) {
+            (Some((w, h)), Provider::Giphy) => format!("{}?w={w}&h={h}", self.url),
+            (Some((w, h)), Provider::Klipy) => format!("{}#w={w}&h={h}", self.url),
+            (None, _) => self.url.clone(),
         }
     }
 }
 
 /// The size a posted GIF link says its GIF is (see `Gif::posted`).
 pub fn link_size(url: &str) -> Option<egui::Vec2> {
-    let query = url.split_once('?')?.1;
-    let num = |k: &str| {
-        query.split('&').find_map(|p| p.strip_prefix(k)?.strip_prefix('=')?.parse::<u32>().ok()).filter(|n| (1..=4096).contains(n))
+    let (link, fragment) = url.split_once('#').map_or((url, None), |(l, f)| (l, Some(f)));
+    let query = link.split_once('?').map(|q| q.1);
+    let size = |params: &str| {
+        let num = |k: &str| {
+            params.split('&').find_map(|p| p.strip_prefix(k)?.strip_prefix('=')?.parse::<u32>().ok()).filter(|n| (1..=4096).contains(n))
+        };
+        Some(egui::vec2(num("w")? as f32, num("h")? as f32))
     };
-    Some(egui::vec2(num("w")? as f32, num("h")? as f32))
+    fragment.and_then(size).or_else(|| query.and_then(size))
 }
 
 #[derive(Clone, Debug)]
@@ -107,8 +135,9 @@ pub fn normalize(query: &str) -> String {
 }
 
 impl GiphyUi {
-    /// Call every frame while `/giphy …` is in the box; starts searches as needed.
-    pub fn update(&mut self, query: &str, api_key: &str, repaint: impl Fn() + Send + 'static) {
+    /// Call every frame while `/giphy …` is in the box; starts searches as needed (on
+    /// `provider`; KLIPY's results aren't kept for next time, as KLIPY asks).
+    pub fn update(&mut self, provider: Provider, query: &str, api_key: &str, repaint: impl Fn() + Send + 'static) {
         let q = normalize(query);
         if q != self.typed {
             self.typed = q.clone();
@@ -119,15 +148,19 @@ impl GiphyUi {
             return;
         }
         self.searched = Some(q.clone());
-        if let Some(v) = self.cached(&q) {
+        let keep = provider == Provider::Giphy;
+        if let Some(v) = self.cached(&q).filter(|_| keep) {
             *self.results.lock() = Some((q, Search::Ready(v)));
             return;
         }
         *self.results.lock() = Some((q.clone(), Search::Loading));
         let (slot, cache, key) = (self.results.clone(), self.cache.clone(), api_key.to_string());
         let _ = std::thread::Builder::new().name("ingle-giphy".into()).spawn(move || {
-            let r = search(&key, &q);
-            if let Ok(v) = &r {
+            let r = match provider {
+                Provider::Giphy => search(&key, &q),
+                Provider::Klipy => crate::klipy::search(&key, &q),
+            };
+            if let (Ok(v), true) = (&r, keep) {
                 remember(&mut cache.lock(), &q, v.clone());
             }
             let mut s = slot.lock();
@@ -247,7 +280,9 @@ fn read_gif(g: &serde_json::Value) -> Option<Gif> {
     let (preview, preview_w, preview_h) = pick(&["fixed_width_downsampled", "fixed_width", "fixed_width_small", "downsized"])?;
     let (full, w, h) = pick(&["downsized", "downsized_medium", "fixed_height", "original"])?;
     Some(Gif {
+        provider: Provider::Giphy,
         id: g.get("id").and_then(|x| x.as_str()).unwrap_or_default().to_string(),
+        slug: String::new(),
         title: g.get("title").and_then(|x| x.as_str()).unwrap_or_default().to_string(),
         preview: clean(&preview),
         preview_w: preview_w.unwrap_or(200.0),
@@ -262,7 +297,7 @@ fn clean(url: &str) -> String {
     url.split('?').next().unwrap_or(url).to_string()
 }
 
-fn enc(s: &str) -> String {
+pub(crate) fn enc(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         match b {
@@ -283,9 +318,20 @@ pub fn is_giphy_media(url: &str) -> bool {
     giphy_host && (path.ends_with(".gif") || path.ends_with(".webp"))
 }
 
-/// GIPHY GIF links in a message.
+/// Where a GIF link (shown in chat by itself) is from: GIPHY's or KLIPY's media hosts only.
+pub fn media_provider(url: &str) -> Option<Provider> {
+    if is_giphy_media(url) {
+        Some(Provider::Giphy)
+    } else if crate::klipy::is_media(url) {
+        Some(Provider::Klipy)
+    } else {
+        None
+    }
+}
+
+/// GIF links (GIPHY's and KLIPY's) in a message.
 pub fn gif_links(text: &str) -> Vec<String> {
-    text.split_whitespace().filter(|w| is_giphy_media(w)).map(|w| w.to_string()).take(4).collect()
+    text.split_whitespace().filter(|w| media_provider(w).is_some()).map(|w| w.to_string()).take(4).collect()
 }
 
 /// Downloads of GIFs shown in chat and in the search grid.
@@ -297,7 +343,7 @@ pub struct Downloads {
 
 impl Downloads {
     pub fn get(&self, url: &str, repaint: impl Fn() + Send + 'static) -> Dl {
-        if !is_giphy_media(url) {
+        if media_provider(url).is_none() {
             return Dl::Failed;
         }
         let mut m = self.map.lock();
@@ -383,9 +429,9 @@ impl GifSizes {
     }
 }
 
-/// A GIF link as remembered: without its query.
+/// A GIF link as remembered: without its query or size.
 fn clean_ref(url: &str) -> &str {
-    url.split('?').next().unwrap_or(url)
+    url.split(['?', '#']).next().unwrap_or(url)
 }
 
 /// Debug builds only, for trying the picker without GIPHY: `INGLE_GIPHY_FAKE=<folder>` answers
@@ -398,9 +444,17 @@ fn fake_dir() -> Option<std::path::PathBuf> {
 
 fn fetch(url: &str) -> Option<Vec<u8>> {
     use std::io::Read;
+    // (What's after a # never goes out: it's ours.)
+    let url = url.split('#').next().unwrap_or(url);
     #[cfg(debug_assertions)]
-    if let Some(dir) = fake_dir() {
-        return std::fs::read(dir.join(url.rsplit('/').next()?)).ok();
+    {
+        let fake = match media_provider(url) {
+            Some(Provider::Klipy) => std::env::var_os("INGLE_KLIPY_FAKE").map(std::path::PathBuf::from),
+            _ => fake_dir(),
+        };
+        if let Some(dir) = fake {
+            return std::fs::read(dir.join(url.rsplit('/').next()?.split('?').next()?)).ok();
+        }
     }
     let mut resp = agent().get(url).call().ok()?;
     let mut out = Vec::new();
@@ -462,7 +516,17 @@ mod tests {
     }
 
     fn gif(id: &str) -> Gif {
-        Gif { id: id.into(), title: String::new(), preview: String::new(), preview_w: 1.0, preview_h: 1.0, url: String::new(), size: None }
+        Gif {
+            provider: Provider::Giphy,
+            id: id.into(),
+            slug: String::new(),
+            title: String::new(),
+            preview: String::new(),
+            preview_w: 1.0,
+            preview_h: 1.0,
+            url: String::new(),
+            size: None,
+        }
     }
 
     #[test]
@@ -471,11 +535,11 @@ mod tests {
         let mut g = GiphyUi::default();
         g.cache.lock().insert("dogs".into(), (Instant::now(), vec![gif("d1")]));
         // Still typing: nothing yet.
-        g.update("Dogs", "key", || {});
+        g.update(Provider::Giphy, "Dogs", "key", || {});
         assert!(g.current().is_none());
         // After the pause, the cached results come straight back (no call to GIPHY).
         g.typed_at = Some(Instant::now() - PAUSE * 2);
-        g.update("Dogs", "key", || {});
+        g.update(Provider::Giphy, "Dogs", "key", || {});
         assert!(matches!(g.current(), Some(Search::Ready(v)) if v[0].id == "d1"));
         // Results for other words (a slow earlier search finishing late) are never shown.
         *g.results.lock() = Some(("cats".into(), Search::Ready(vec![gif("c1")])));

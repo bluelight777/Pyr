@@ -436,6 +436,37 @@ impl IngleApp {
                             });
                             ui.add_space(12.0);
                         }
+                        if let Some(s) = server.as_ref().filter(|s| {
+                            s.has(ingle_proto::control::KLIPY_FEATURE) && s.me.as_ref().map(|m| m.role == ingle_proto::control::Role::Owner).unwrap_or(false)
+                        }) {
+                            field_label(ui, "GIF search (KLIPY)");
+                            let on = !s.info.klipy_key.is_empty();
+                            ui.label(
+                                RichText::new(if on {
+                                    "On for everyone in this server (/klipy, and its own tab in the GIF button). Only you, the owner, can change it."
+                                } else {
+                                    "Off. Paste a KLIPY app key (free from partner.klipy.com) to turn on /klipy and a KLIPY tab in the GIF button for everyone here."
+                                })
+                                .size(12.0)
+                                .color(theme::DIM),
+                            );
+                            let id = egui::Id::new(("klipy-key-edit", key.clone()));
+                            let mut k: String = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+                            ui.horizontal(|ui| {
+                                let hint = if on { "New KLIPY app key" } else { "KLIPY app key" };
+                                if ui.add(egui::TextEdit::singleline(&mut k).hint_text(hint).desired_width(260.0)).changed() {
+                                    ui.data_mut(|d| d.insert_temp(id, k.clone()));
+                                }
+                                if ui.add_enabled(!k.trim().is_empty(), theme::primary_button(if on { "Change" } else { "Turn on" })).clicked() {
+                                    acts.push(Act::SetKlipyKey { key: key.clone(), klipy: k.trim().to_string() });
+                                    ui.data_mut(|d| d.remove::<String>(id));
+                                }
+                                if on && ui.button("Turn off").clicked() {
+                                    acts.push(Act::SetKlipyKey { key: key.clone(), klipy: String::new() });
+                                }
+                            });
+                            ui.add_space(12.0);
+                        }
                         field_label(ui, "Server name");
                         input(ui, &mut name, "");
                         ui.add_space(14.0);
@@ -1158,7 +1189,7 @@ impl IngleApp {
                 ui.label(
                     RichText::new(
                         "Emoji graphics: Twemoji by Twitter, Inc. and other contributors, licensed CC-BY 4.0. Emoji names: Emojibase (MIT). \
-                         GIF search powered by GIPHY. Voice isolation: DeepFilterNet (MIT/Apache-2.0) and RNNoise (BSD). Spellcheck: \
+                         GIF search powered by GIPHY and KLIPY. Voice isolation: DeepFilterNet (MIT/Apache-2.0) and RNNoise (BSD). Spellcheck: \
                          spellbook (MPL-2.0) with dictionaries from SCOWL (MIT/BSD), RLA-ES (MPL-1.1) and Grammalecte (MPL-2.0). \
                          Reading sound files for the soundboard: Symphonia (MPL-2.0). Ingle's own soundboard sounds are \
                          synthesized by Ingle (no recordings).",

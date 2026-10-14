@@ -43,6 +43,8 @@ pub enum Act {
     ReportBug { title: String, body: String, include_log: bool, turn_on: Option<String> },
     /// The server's GIPHY key (owner only; "" turns GIF search off).
     SetGiphyKey { key: String, giphy: String },
+    /// The server's KLIPY app key (owner only; "" turns KLIPY off).
+    SetKlipyKey { key: String, klipy: String },
     /// Quit for real (Settings → Quit Ingle).
     Quit,
     AddFriend(String),
@@ -236,6 +238,9 @@ pub struct UiState {
     pub picker: crate::emoji_picker::PickerState,
     /// The GIF search panel.
     pub giphy: crate::giphy::GiphyUi,
+    /// The KLIPY tab's search, and which tab the GIF picker is on.
+    pub klipy: crate::giphy::GiphyUi,
+    pub gif_provider: crate::giphy::Provider,
     /// GIFs from GIPHY being shown.
     pub gifs: crate::giphy::Downloads,
     /// Folded runs of blocked messages that were opened (by their first message).
@@ -460,6 +465,7 @@ impl IngleApp {
             Act::Unblock(uid) => e.unblock(&uid),
             Act::RenameEmoji { key, id, name } => e.rename_emoji(&key, &id, &name),
             Act::SetGiphyKey { key, giphy } => e.set_giphy_key(&key, &giphy),
+            Act::SetKlipyKey { key, klipy } => e.set_klipy_key(&key, &klipy),
             Act::ListBugs(key) => e.list_bugs(&key),
             Act::SetBugStatus { key, id, status } => e.set_bug_status(&key, id, status),
             Act::SetBugReports { key, on } => e.set_bug_reports(&key, on),

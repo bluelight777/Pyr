@@ -11,6 +11,7 @@ mod avatar_edit;
 mod emoji;
 mod emoji_picker;
 mod giphy;
+mod klipy;
 mod home;
 mod soundboard;
 mod sounds;
