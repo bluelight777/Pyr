@@ -19,6 +19,7 @@ mod images;
 mod titlebar;
 mod instance;
 mod markdown;
+mod select;
 mod stage;
 mod theme;
 #[cfg(windows)]

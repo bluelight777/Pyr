@@ -64,6 +64,8 @@ pub enum Act {
     DeleteChannel { key: String, channel: ChannelId },
     CreateInvite { key: String },
     Kick { key: String, uid: String, ban: bool },
+    ServerMute { key: String, uid: String, muted: bool },
+    ServerDeafen { key: String, uid: String, deafened: bool },
     SetRole { key: String, uid: String, role: Role },
     RenameServer { key: String, name: String },
     SetName(String),
@@ -144,6 +146,11 @@ pub enum Dialog {
     /// "Delete this sound?" (`from_settings`: go back to Server Settings after).
     RemoveSound { key: String, id: String, name: String, from_settings: bool },
 }
+
+/// What the microphone buttons say when a moderator has server muted you.
+pub(crate) const SERVER_MUTED: &str = "A moderator server muted you here. Only a moderator can unmute you.";
+/// And the deafen buttons, server deafened.
+pub(crate) const SERVER_DEAFENED: &str = "A moderator server deafened you here. Only a moderator can undeafen you.";
 
 #[derive(Default)]
 pub struct UiState {
@@ -246,6 +253,8 @@ pub struct UiState {
     pub sb: crate::soundboard::SoundboardUi,
     /// A dialog to open once this frame's dialog is done with (one dialog opening another).
     pub next_dialog: Option<Dialog>,
+    /// Text selected in a conversation, and the messages' right-click menu.
+    pub sel: crate::select::Selection,
 }
 
 pub struct IngleApp {
@@ -376,6 +385,8 @@ impl IngleApp {
             Act::DeleteChannel { key, channel } => e.delete_channel(&key, channel),
             Act::CreateInvite { key } => e.create_invite(&key, None, None),
             Act::Kick { key, uid, ban } => e.kick(&key, &uid, ban),
+            Act::ServerMute { key, uid, muted } => e.server_mute(&key, &uid, muted),
+            Act::ServerDeafen { key, uid, deafened } => e.server_deafen(&key, &uid, deafened),
             Act::SetRole { key, uid, role } => e.set_role(&key, &uid, role),
             Act::RenameServer { key, name } => e.update_server(&key, Some(name), None),
             Act::SetName(n) => e.set_display_name(&n),
@@ -1144,6 +1155,15 @@ impl IngleApp {
             person_menu(ui, st, uid, acts);
             chose |= acts.len() > n;
         }
+        // A moderator's Server Mute and Server Deafen, in a group of their own.
+        let (can_mute, can_deafen) = moderate(st, s, uid);
+        if (can_mute || can_deafen) && s.voice.values().any(|p| p.user_id == uid) {
+            if !me {
+                ui.separator();
+            }
+            server_voice_items(ui, st, s, uid, acts);
+            ui.separator();
+        }
         if ui.button("Copy safety code").clicked() {
             acts.push(Act::Copy(ingle_proto::crypto::safety_code(uid)));
             chose = true;
@@ -1156,6 +1176,16 @@ impl IngleApp {
             }
         }
         chose
+    }
+
+    /// Whether a moderator muted or deafened me in my call (`VoiceParticipant::server_mute`,
+    /// `server_deaf`).
+    pub(crate) fn moderated_me(st: &AppState) -> (bool, bool) {
+        st.call
+            .as_ref()
+            .and_then(|c| st.server(&c.server_key).and_then(|s| s.voice.get(&c.session)))
+            .map(|p| (p.server_mute, p.server_deaf))
+            .unwrap_or_default()
     }
 
     /// Images dragged onto the window go to the open channel's composer.
@@ -1610,10 +1640,17 @@ impl IngleApp {
                                 icons::camera(ui.painter(), Rect::from_center_size(pos2(x - 8.0, r.center().y), vec2(16.0, 16.0)), theme::DIM, false);
                                 x -= 20.0;
                             }
-                            if p.self_deaf {
-                                icons::headphones(ui.painter(), Rect::from_center_size(pos2(x - 8.0, r.center().y), vec2(16.0, 16.0)), theme::DIM, true);
+                            // Deafened (red: by a moderator), and muted (red: by a moderator), like
+                            // Discord's; deafening yourself mutes you too, so that shows just the one.
+                            if p.server_deaf || p.self_deaf {
+                                let c = if p.server_deaf { theme::LIVE } else { theme::DIM };
+                                icons::headphones(ui.painter(), Rect::from_center_size(pos2(x - 8.0, r.center().y), vec2(16.0, 16.0)), c, true);
                                 x -= 20.0;
-                            } else if p.self_mute {
+                            }
+                            if p.server_mute {
+                                icons::mic(ui.painter(), Rect::from_center_size(pos2(x - 8.0, r.center().y), vec2(16.0, 16.0)), theme::LIVE, true);
+                                x -= 20.0;
+                            } else if p.self_mute && !p.self_deaf {
                                 icons::mic(ui.painter(), Rect::from_center_size(pos2(x - 8.0, r.center().y), vec2(16.0, 16.0)), theme::DIM, true);
                                 x -= 20.0;
                             }
@@ -1634,10 +1671,27 @@ impl IngleApp {
                             if presp.clicked() && !dm_clicked {
                                 self.ui.profile_card = if card_open { None } else { Some((s.key.clone(), uid.clone(), row)) };
                             }
-                            presp.context_menu(|ui| {
+                            // (Ticking Mute or Deafen leaves the menu open, like Discord; the
+                            // other items close it.)
+                            egui::Popup::context_menu(&presp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
                                 if ui.button("Profile").clicked() {
                                     self.ui.profile_card = Some((s.key.clone(), uid.clone(), row));
                                     ui.close();
+                                }
+                                if uid == st.my_uid {
+                                    // Like Discord: your own Mute and Deafen, the same as the
+                                    // buttons by your name (deafened counts as muted too).
+                                    let (muted, deafened) = self.engine.voice_prefs();
+                                    ui.separator();
+                                    let mut m = muted || deafened;
+                                    if ui.checkbox(&mut m, "Mute").clicked() {
+                                        acts.push(Act::Mute(m));
+                                    }
+                                    let mut d = deafened;
+                                    if ui.checkbox(&mut d, "Deafen").clicked() {
+                                        acts.push(Act::Deafen(d));
+                                    }
+                                    ui.separator();
                                 }
                                 if self.person_options(ui, st, s, &uid, acts) {
                                     ui.close();
@@ -1755,13 +1809,25 @@ impl IngleApp {
                     self.ui.settings_draft = Some(st.settings.clone());
                     acts.push(Act::RefreshDevices);
                 }
-                let deaf_tip = if deafened { "Undeafen" } else { "Deafen" };
-                if icon_button(ui, 32.0, deaf_tip, false, |p, r, c| icons::headphones(p, r, if deafened { theme::LIVE } else { c }, deafened)).clicked() {
-                    acts.push(Act::Deafen(!deafened));
+                let (server_muted, server_deafened) = Self::moderated_me(st);
+                let deaf_tip = if server_deafened { SERVER_DEAFENED } else if deafened { "Undeafen" } else { "Deafen" };
+                let deaf = deafened || server_deafened;
+                if icon_button(ui, 32.0, deaf_tip, false, |p, r, c| icons::headphones(p, r, if deaf { theme::LIVE } else { c }, deaf)).clicked() {
+                    if server_deafened {
+                        acts.push(Act::Toast(SERVER_DEAFENED.into(), false));
+                    } else {
+                        acts.push(Act::Deafen(!deafened));
+                    }
                 }
-                let mute_tip = if muted { "Unmute" } else { "Mute" };
-                if icon_button(ui, 32.0, mute_tip, false, |p, r, c| icons::mic(p, r, if muted { theme::LIVE } else { c }, muted)).clicked() {
-                    acts.push(Act::Mute(!muted));
+                // Deafened is muted too (unmuting undeafens), like Discord.
+                let muted = muted || deafened;
+                let mute_tip = if server_muted { SERVER_MUTED } else if muted { "Unmute" } else { "Mute" };
+                if icon_button(ui, 32.0, mute_tip, false, |p, r, c| icons::mic(p, r, if muted || server_muted { theme::LIVE } else { c }, muted || server_muted)).clicked() {
+                    if server_muted {
+                        acts.push(Act::Toast(SERVER_MUTED.into(), false));
+                    } else {
+                        acts.push(Act::Mute(!muted));
+                    }
                 }
             });
         });
@@ -2047,6 +2113,33 @@ impl IngleApp {
         }
         let _ = self.started;
     }
+}
+
+/// Server Mute and Server Deafen, in red like Discord's, for a moderator
+/// (`perm::MUTE_MEMBERS`, `perm::DEAFEN_MEMBERS`) and someone in voice they may do it to
+/// (themselves, or someone with a lower role).
+pub(crate) fn server_voice_items(ui: &mut egui::Ui, st: &AppState, s: &ServerView, uid: &str, acts: &mut Vec<Act>) {
+    let (can_mute, can_deafen) = moderate(st, s, uid);
+    let Some(p) = s.voice.values().find(|p| p.user_id == uid) else { return };
+    if can_mute {
+        let mut on = p.server_mute;
+        if ui.checkbox(&mut on, RichText::new("Server Mute").color(theme::LIVE)).on_hover_text("Nobody hears them until a moderator unmutes them, in any voice channel here.").clicked() {
+            acts.push(Act::ServerMute { key: s.key.clone(), uid: uid.to_string(), muted: on });
+        }
+    }
+    if can_deafen {
+        let mut on = p.server_deaf;
+        if ui.checkbox(&mut on, RichText::new("Server Deafen").color(theme::LIVE)).on_hover_text("They hear nobody until a moderator undeafens them (they can still talk).").clicked() {
+            acts.push(Act::ServerDeafen { key: s.key.clone(), uid: uid.to_string(), deafened: on });
+        }
+    }
+}
+
+/// Whether I may server mute and server deafen `uid` here: a moderator with the permission,
+/// and them myself or below me.
+pub(crate) fn moderate(st: &AppState, s: &ServerView, uid: &str) -> (bool, bool) {
+    let reach = s.has(ingle_proto::control::VOICE_MOD_FEATURE) && (uid == st.my_uid || s.rank(uid) < s.rank(&st.my_uid));
+    (reach && s.can(perm::MUTE_MEMBERS), reach && s.can(perm::DEAFEN_MEMBERS))
 }
 
 /// Friend and block choices for someone (right-click menus), like Discord's.

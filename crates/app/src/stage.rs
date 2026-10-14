@@ -32,6 +32,9 @@ struct Tile {
     viewers: Vec<String>,
     /// I've muted their soundboard sounds.
     sb_muted: bool,
+    /// I can server mute or deafen them (a moderator): the server, and whether they are now
+    /// (`None`: that one isn't mine to do).
+    moderate: Option<(String, Option<bool>, Option<bool>)>,
     /// The soundboard sound they just played, while it shows over them.
     pop: Option<Pop>,
 }
@@ -255,8 +258,8 @@ impl IngleApp {
                     user_id: p.user_id.clone(),
                     name: name.clone(),
                     speaking: call.speaking.contains(&p.session),
-                    muted: p.self_mute,
-                    deaf: p.self_deaf,
+                    muted: p.self_mute || p.server_mute,
+                    deaf: p.self_deaf || p.server_deaf,
                     is_me: me,
                     screen: false,
                     watching: false,
@@ -267,6 +270,10 @@ impl IngleApp {
                     face,
                     viewers: Vec::new(),
                     sb_muted: st.settings.soundboard_muted.contains(&p.user_id),
+                    moderate: {
+                        let (m, d) = crate::app::moderate(st, s, &p.user_id);
+                        (m || d).then(|| (s.key.clone(), m.then_some(p.server_mute), d.then_some(p.server_deaf)))
+                    },
                     pop,
                 });
                 if p.tracks.iter().any(|t| t.id == track::SCREEN) {
@@ -293,6 +300,7 @@ impl IngleApp {
                             .map(|t| t.viewers.iter().filter_map(|v| s.voice.get(v)).map(|v| s.member_name(&v.user_id)).collect())
                             .unwrap_or_default(),
                         sb_muted: false,
+                        moderate: None,
                         pop: None,
                     });
                 }
@@ -523,7 +531,23 @@ impl IngleApp {
         let vol = t.volume;
         let (has_sound, svol) = (t.has_sound, t.stream_volume);
         let sb_muted = t.sb_muted;
-        resp.context_menu(|ui| {
+        let moderate = t.moderate.clone().filter(|_| !screen);
+        // (Ticking your own Mute or Deafen leaves the menu open, like Discord.)
+        egui::Popup::context_menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+            if is_me && !screen {
+                // Your own Mute and Deafen, as in the voice channel list (deafened counts as
+                // muted too), like Discord.
+                let (muted, deafened) = self.engine.voice_prefs();
+                let mut m = muted || deafened;
+                if ui.checkbox(&mut m, "Mute").clicked() {
+                    acts.push(Act::Mute(m));
+                }
+                let mut d = deafened;
+                if ui.checkbox(&mut d, "Deafen").clicked() {
+                    acts.push(Act::Deafen(d));
+                }
+                ui.separator();
+            }
             if !is_me {
                 // Mute this person (or just their stream's sound) on this PC, like Discord.
                 let (now, label) = if screen { (svol, "Mute stream") } else { (vol, "Mute") };
@@ -562,6 +586,23 @@ impl IngleApp {
                 if ui.add(egui::Slider::new(&mut v, 0.0..=200.0).suffix("%")).changed() {
                     acts.push(Act::Volume { uid: uid.clone(), volume: v / 100.0 });
                 }
+            }
+            // A moderator's Server Mute and Server Deafen, in red like Discord's.
+            if let Some((server, mute, deaf)) = &moderate {
+                if !is_me {
+                    ui.separator();
+                }
+                if let Some(mut on) = *mute {
+                    if ui.checkbox(&mut on, RichText::new("Server Mute").color(theme::LIVE)).clicked() {
+                        acts.push(Act::ServerMute { key: server.clone(), uid: uid.clone(), muted: on });
+                    }
+                }
+                if let Some(mut on) = *deaf {
+                    if ui.checkbox(&mut on, RichText::new("Server Deafen").color(theme::LIVE)).clicked() {
+                        acts.push(Act::ServerDeafen { key: server.clone(), uid: uid.clone(), deafened: on });
+                    }
+                }
+                ui.separator();
             }
             if screen && watching && !is_me && ui.button("Stop watching").clicked() {
                 acts.push(Act::Watch { session: key.session, track: track::SCREEN, on: false });
@@ -618,6 +659,8 @@ impl IngleApp {
             }
         }
         let (muted, deafened) = self.engine.voice_prefs();
+        // Deafened is muted too (unmuting undeafens), like Discord.
+        let muted = muted || deafened;
         let full = ui.max_rect();
         let n = CALL_BUTTONS;
         let size = 54.0;
@@ -636,12 +679,19 @@ impl IngleApp {
         };
         let base = Color32::from_rgb(0x2a, 0x23, 0x1f);
         let on = Color32::from_rgb(0x3a, 0x2a, 0x20);
-        if button(ui, size, if muted { Color32::from_rgb(0x4a, 0x1f, 0x1f) } else { base }, if muted { "Unmute" } else { "Mute" }, &|p, r| {
-            icons::mic(p, r, if muted { theme::LIVE } else { theme::TEXT }, muted)
+        let (server_muted, server_deafened) = Self::moderated_me(st);
+        let mic_off = muted || server_muted;
+        let tip = if server_muted { crate::app::SERVER_MUTED } else if muted { "Unmute" } else { "Mute" };
+        if button(ui, size, if mic_off { Color32::from_rgb(0x4a, 0x1f, 0x1f) } else { base }, tip, &|p, r| {
+            icons::mic(p, r, if mic_off { theme::LIVE } else { theme::TEXT }, mic_off)
         })
         .clicked()
         {
-            acts.push(Act::Mute(!muted));
+            if server_muted {
+                acts.push(Act::Toast(crate::app::SERVER_MUTED.into(), false));
+            } else {
+                acts.push(Act::Mute(!muted));
+            }
         }
         if button(ui, size, if call.camera_on { on } else { base }, if call.camera_on { "Turn off camera" } else { "Turn on camera" }, &|p, r| {
             icons::camera(p, r, if call.camera_on { theme::EMBER2 } else { theme::TEXT }, false)
@@ -670,12 +720,18 @@ impl IngleApp {
         if sb.clicked() {
             self.toggle_soundboard(st, crate::soundboard::FROM_CALL);
         }
-        if button(ui, size, if deafened { Color32::from_rgb(0x4a, 0x1f, 0x1f) } else { base }, if deafened { "Undeafen" } else { "Deafen" }, &|p, r| {
-            icons::headphones(p, r, if deafened { theme::LIVE } else { theme::TEXT }, deafened)
+        let deaf = deafened || server_deafened;
+        let tip = if server_deafened { crate::app::SERVER_DEAFENED } else if deafened { "Undeafen" } else { "Deafen" };
+        if button(ui, size, if deaf { Color32::from_rgb(0x4a, 0x1f, 0x1f) } else { base }, tip, &|p, r| {
+            icons::headphones(p, r, if deaf { theme::LIVE } else { theme::TEXT }, deaf)
         })
         .clicked()
         {
-            acts.push(Act::Deafen(!deafened));
+            if server_deafened {
+                acts.push(Act::Toast(crate::app::SERVER_DEAFENED.into(), false));
+            } else {
+                acts.push(Act::Deafen(!deafened));
+            }
         }
         if button(ui, size + 18.0, theme::LIVE, "Leave call", &|p, r| icons::hangup(p, r, Color32::WHITE)).clicked() {
             acts.push(Act::Leave);
@@ -706,6 +762,7 @@ mod tests {
             face: None,
             viewers: Vec::new(),
             sb_muted: false,
+            moderate: None,
             pop: None,
         };
         for (w, n) in [(1400.0, 4), (620.0, 4), (380.0, 4), (300.0, 6), (1000.0, 2)] {

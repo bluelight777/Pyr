@@ -245,7 +245,8 @@ In rough priority order:
    RED (redundant audio) under heavy loss.
 8. MLS (`openmls`) for key management in big calls; optional E2EE text channels.
 9. A soundboard (in progress), plugins and bots; attachments beyond pictures, threads,
-   search.
+   search. Plugins must be written in Rust: the plugin kit is a Rust crate only (no C
+   header, no scripting runtime), and plugins come as Rust source that's built from it.
 10. A web client over WebTransport + WebCodecs, then mobile.
 11. H.264 licensing: OpenH264 here is compiled from source, which Cisco's patent licence
     doesn't cover. Before shipping widely, either download Cisco's prebuilt OpenH264 at

@@ -13,7 +13,7 @@ use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
 use crate::db::new_invite_code;
-use crate::hub::{ConnId, ConnSlot, Hub, Outbox, Reply, frame};
+use crate::hub::{ConnId, ConnSlot, Hub, ModeratedVoice, Outbox, Reply, frame};
 
 /// Most video frames being received at once on one connection.
 const MAX_VIDEO_READS: usize = 24;
@@ -1229,8 +1229,30 @@ impl Ctx<'_> {
                 hub.broadcast(Event::ServerUpdated { server: hub.info() });
                 Ok(Event::Ok)
             }
+            Request::ServerMute { user_id, muted } => {
+                self.require(perm::MUTE_MEMBERS, "server mute people")?;
+                self.may_moderate(&user_id, "server mute")?;
+                hub.set_moderated(ModeratedVoice::Muted, &user_id, muted)
+            }
+            Request::ServerDeafen { user_id, deafened } => {
+                self.require(perm::DEAFEN_MEMBERS, "server deafen people")?;
+                self.may_moderate(&user_id, "server deafen")?;
+                hub.set_moderated(ModeratedVoice::Deafened, &user_id, deafened)
+            }
             Request::Unknown => Err((ErrorCode::BadRequest, "This server is older than your app and can't do that yet.".into())),
         }
+    }
+
+    /// Server mute or deafen: yourself, or a member below you (like kicking).
+    fn may_moderate(&self, user_id: &str, what: &str) -> Result<(), (ErrorCode, String)> {
+        if user_id == self.uid {
+            return Ok(());
+        }
+        self.other_member(user_id)?;
+        if self.rank_of(user_id) >= self.rank_of(&self.uid) {
+            return Err((ErrorCode::Forbidden, format!("You can't {what} someone with the same or a higher role.")));
+        }
+        Ok(())
     }
 
     fn remove(&self, user_id: UserId, ban: bool) -> Reply {
@@ -1306,6 +1328,44 @@ mod tests {
         // The owner can.
         let mut o = ctx(&hub, &owner);
         assert!(o.handle(Request::SetMemberRoles { user_id: carol.clone(), roles: vec![moderator.id] }).is_ok());
+    }
+
+    #[test]
+    fn server_mute_and_deafen_need_the_permission_and_a_lower_role() {
+        let hub = hub();
+        let (owner, modr, bob) = (uid(), uid(), uid());
+        hub.db.insert_user(&owner, "Owner", Role::Owner).unwrap();
+        hub.db.insert_user(&modr, "Mod", Role::Member).unwrap();
+        hub.db.insert_user(&bob, "Bob", Role::Member).unwrap();
+        let muter = hub.db.create_role("Voice mod", 0, perm::MUTE_MEMBERS, false).unwrap();
+        hub.db.set_member_roles(&modr, &[muter.id]).unwrap();
+        let mute = |c: &mut Ctx, who: &str, on: bool| c.handle(Request::ServerMute { user_id: who.into(), muted: on });
+        let deafen = |c: &mut Ctx, who: &str, on: bool| c.handle(Request::ServerDeafen { user_id: who.into(), deafened: on });
+        // Bob has neither permission.
+        let mut b = ctx(&hub, &bob);
+        assert!(forbidden(mute(&mut b, &modr, true)));
+        assert!(forbidden(deafen(&mut b, &modr, true)));
+        // The voice mod can mute (not deafen) someone below him, and himself, but not the owner.
+        let mut m = ctx(&hub, &modr);
+        assert!(mute(&mut m, &bob, true).is_ok());
+        assert!(forbidden(deafen(&mut m, &bob, true)));
+        assert!(forbidden(mute(&mut m, &owner, true)));
+        assert!(mute(&mut m, &modr, true).is_ok());
+        assert!(m.handle(Request::ServerMute { user_id: "x".repeat(5000), muted: true }).is_err());
+        // The owner can do both to anyone. It's kept (it lasts through restarts and rejoins).
+        let mut o = ctx(&hub, &owner);
+        assert!(deafen(&mut o, &bob, true).is_ok());
+        assert!(deafen(&mut o, &owner, true).is_ok());
+        let muted = hub.moderated(ModeratedVoice::Muted);
+        let deaf = hub.moderated(ModeratedVoice::Deafened);
+        assert!(muted.contains(&bob) && muted.contains(&modr) && !muted.contains(&owner));
+        assert!(deaf.contains(&bob) && deaf.contains(&owner) && !deaf.contains(&modr));
+        // Taken off again (deafening isn't muting: Bob's mute stays).
+        assert!(deafen(&mut o, &bob, false).is_ok());
+        assert!(mute(&mut m, &modr, false).is_ok());
+        assert!(!hub.moderated(ModeratedVoice::Deafened).contains(&bob));
+        assert!(hub.moderated(ModeratedVoice::Muted).contains(&bob));
+        assert!(!hub.moderated(ModeratedVoice::Muted).contains(&modr));
     }
 
     #[test]

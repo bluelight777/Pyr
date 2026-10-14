@@ -115,6 +115,12 @@ pub struct Call {
     /// counter is the AEAD nonce.
     seqs: Arc<[AtomicU32; 4]>,
     started: Instant,
+    /// A moderator muted me here: nothing goes out from the microphone (the server wouldn't
+    /// pass it on anyway), and I don't show as speaking.
+    server_muted: bool,
+    /// A moderator deafened me here: I hear nobody (the server sends me nothing), but unlike
+    /// deafening myself it doesn't mute me.
+    server_deafened: bool,
 }
 
 fn seal_audio(e2ee: &Mutex<E2ee>, seqs: &[AtomicU32; 4], track_id: u8, fl: u8, opus: &[u8]) -> Option<Bytes> {
@@ -400,6 +406,8 @@ impl Call {
             tasks: Vec::new(),
             seqs,
             started: Instant::now(),
+            server_muted: participants.iter().any(|p| p.session == session && p.server_mute),
+            server_deafened: participants.iter().any(|p| p.session == session && p.server_deaf),
         };
         call.start_audio(&shared, muted, deafened);
         call.tasks.push(tokio::spawn(datagram_loop(shared.clone(), conn.clone(), e2ee.clone())));
@@ -463,8 +471,8 @@ impl Call {
         });
         let engine = AudioEngine::start(settings.clone(), input, output, sink, shared.ptt_down.clone());
         *engine.controls.played.lock() = Some(shared.played.clone());
-        engine.controls.muted.store(muted || deafened, Ordering::Relaxed);
-        engine.controls.deafened.store(deafened, Ordering::Relaxed);
+        engine.controls.muted.store(muted || deafened || self.server_muted, Ordering::Relaxed);
+        engine.controls.deafened.store(deafened || self.server_deafened, Ordering::Relaxed);
         engine.controls.monitor.store(shared.state.read_recursive().mic_test, Ordering::Relaxed);
         // Per-person volumes (voice and stream audio).
         {
@@ -489,7 +497,11 @@ impl Call {
     }
 
     fn on_participant(&mut self, shared: &Arc<Shared>, p: &VoiceParticipant) {
-        if p.session == self.session || p.channel_id != self.channel_id {
+        if p.session == self.session {
+            self.set_moderated(shared, p.server_mute, p.server_deaf);
+            return;
+        }
+        if p.channel_id != self.channel_id {
             return;
         }
         let new_peer = self.e2ee.lock().upsert_peer(p);
@@ -606,11 +618,29 @@ impl Call {
     }
 
     pub fn set_mute(&mut self, muted: bool, deafened: bool) {
-        if let Some(a) = &self.audio {
-            a.controls.muted.store(muted || deafened, Ordering::Relaxed);
-            a.controls.deafened.store(deafened, Ordering::Relaxed);
-        }
+        self.apply_mic(muted, deafened);
         self.handle.notify(Request::VoiceState { self_mute: muted || deafened, self_deaf: deafened });
+    }
+
+    /// What the microphone and speakers do: my own mute and deafen (which mutes too), and a
+    /// moderator's (whose deafen doesn't).
+    fn apply_mic(&self, muted: bool, deafened: bool) {
+        if let Some(a) = &self.audio {
+            a.controls.muted.store(muted || deafened || self.server_muted, Ordering::Relaxed);
+            a.controls.deafened.store(deafened || self.server_deafened, Ordering::Relaxed);
+        }
+    }
+
+    /// A moderator muted, deafened, unmuted or undeafened me (`VoiceParticipant::server_mute`,
+    /// `server_deaf`).
+    fn set_moderated(&mut self, shared: &Shared, muted: bool, deafened: bool) {
+        if (self.server_muted, self.server_deafened) == (muted, deafened) {
+            return;
+        }
+        (self.server_muted, self.server_deafened) = (muted, deafened);
+        let (m, d) = *shared.voice_prefs.lock();
+        self.apply_mic(m, d);
+        info!(muted, deafened, "a moderator changed my voice");
     }
 
     /// What `VideoCtx::start` needs, to start a camera or screen share outside the call lock.

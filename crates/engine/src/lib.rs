@@ -1591,6 +1591,16 @@ impl Engine {
         });
     }
 
+    /// Server mute someone in voice, or unmute them (a moderator, `perm::MUTE_MEMBERS`).
+    pub fn server_mute(&self, key: &str, user_id: &str, muted: bool) {
+        self.request(key, Request::ServerMute { user_id: user_id.into(), muted });
+    }
+
+    /// Server deafen someone in voice, or undeafen them (`perm::DEAFEN_MEMBERS`).
+    pub fn server_deafen(&self, key: &str, user_id: &str, deafened: bool) {
+        self.request(key, Request::ServerDeafen { user_id: user_id.into(), deafened });
+    }
+
     pub fn kick(&self, key: &str, user_id: &str, ban: bool) {
         let req = if ban { Request::Ban { user_id: user_id.into() } } else { Request::Kick { user_id: user_id.into() } };
         self.request(key, req);

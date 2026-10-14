@@ -268,11 +268,30 @@ pub fn layout_emoji(
 /// Turns a server emoji's file id into a texture (or none yet).
 pub type CustomEmoji<'a> = &'a mut dyn FnMut(&str) -> Option<egui::TextureId>;
 
+/// A message's text that can be selected along with the rest of its conversation (see
+/// `select.rs`).
+pub struct Selectable<'a> {
+    pub sel: &'a mut crate::select::Selection,
+    pub chat: &'a crate::select::Chat,
+    pub msg: ingle_proto::control::MessageId,
+}
+
 /// Draw a message body; `names` (lowercase) are what @mentions highlight.
 pub fn show(ui: &mut egui::Ui, text: &str, color: Color32, names: &[String], custom: CustomEmoji) {
+    show_in(ui, text, color, names, custom, None);
+}
+
+/// `show`, for a message in a conversation: its text is selected like a web page's (dragging
+/// over it and other messages, double-clicking), and its links are opened by the conversation.
+pub fn show_selectable(ui: &mut egui::Ui, text: &str, color: Color32, names: &[String], custom: CustomEmoji, sel: Selectable) {
+    show_in(ui, text, color, names, custom, Some(sel));
+}
+
+fn show_in(ui: &mut egui::Ui, text: &str, color: Color32, names: &[String], custom: CustomEmoji, mut sel: Option<Selectable>) {
     let width = ui.available_width();
     let emoji_size = if crate::emoji::is_jumbo(text) { crate::emoji::JUMBO_SIZE } else { 14.5 * crate::emoji::SCALE };
-    for block in blocks(text) {
+    for (i, block) in blocks(text).into_iter().enumerate() {
+        let part = |s: &Selectable| crate::select::Part { msg: s.msg, block: i as u32 };
         match block {
             Block::Code(code) => {
                 egui::Frame::new()
@@ -282,58 +301,89 @@ pub fn show(ui: &mut egui::Ui, text: &str, color: Color32, names: &[String], cus
                     .inner_margin(egui::Margin::symmetric(10, 8))
                     .show(ui, |ui| {
                         ui.set_width(width - 24.0);
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(code).font(theme::mono(13.0)).color(Color32::from_rgb(0xf2, 0xd9, 0xc4)),
-                            )
-                            .selectable(true),
-                        );
+                        let code_color = Color32::from_rgb(0xf2, 0xd9, 0xc4);
+                        match sel.as_mut() {
+                            Some(s) => {
+                                let job = LayoutJob::simple(code, theme::mono(13.0), code_color, width - 24.0);
+                                let galley = ui.fonts_mut(|f| f.layout_job(job));
+                                let p = part(s);
+                                s.sel.draw(ui, s.chat, p, galley, Vec::new());
+                            }
+                            None => {
+                                ui.add(egui::Label::new(egui::RichText::new(code).font(theme::mono(13.0)).color(code_color)).selectable(true));
+                            }
+                        }
                     });
             }
             Block::Quote(q) => {
                 ui.horizontal(|ui| {
                     let (r, _) = ui.allocate_exact_size(egui::vec2(4.0, 18.0), egui::Sense::hover());
                     ui.painter().rect_filled(r, 2, theme::DIM);
-                    paragraph(ui, &q, theme::MUTED, names, width - 16.0, emoji_size, custom);
+                    let s = sel.as_mut().map(|s| {
+                        let p = part(s);
+                        (s, p)
+                    });
+                    paragraph(ui, &q, theme::MUTED, names, width - 16.0, emoji_size, custom, s);
                 });
             }
-            Block::Text(t) => paragraph(ui, &t, color, names, width, emoji_size, custom),
+            Block::Text(t) => {
+                let s = sel.as_mut().map(|s| {
+                    let p = part(s);
+                    (s, p)
+                });
+                paragraph(ui, &t, color, names, width, emoji_size, custom, s);
+            }
         }
     }
 }
 
-fn paragraph(ui: &mut egui::Ui, text: &str, color: Color32, names: &[String], width: f32, emoji_size: f32, custom: CustomEmoji) {
+#[allow(clippy::too_many_arguments)]
+fn paragraph(
+    ui: &mut egui::Ui,
+    text: &str,
+    color: Color32,
+    names: &[String],
+    width: f32,
+    emoji_size: f32,
+    custom: CustomEmoji,
+    sel: Option<(&mut Selectable, crate::select::Part)>,
+) {
     let (job, links, emojis) = layout_emoji(text, 14.5, emoji_size, color, names, width);
     let galley = ui.fonts_mut(|f| f.layout_job(job));
-    let resp = ui.add(egui::Label::new(galley.clone()).selectable(true).sense(egui::Sense::click()));
+    let rect = match sel {
+        // Selected and its links opened along with the rest of the conversation.
+        Some((s, part)) => s.sel.draw(ui, s.chat, part, galley.clone(), links.iter().map(|l| (l.start, l.end, l.url.clone())).collect()),
+        None => {
+            let resp = ui.add(egui::Label::new(galley.clone()).selectable(true).sense(egui::Sense::click()));
+            if !links.is_empty() {
+                if let Some(pos) = resp.hover_pos() {
+                    let idx = galley.cursor_from_pos(pos - resp.rect.min).index;
+                    if links.iter().any(|l| idx >= l.start && idx < l.end) {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                }
+                if resp.clicked() {
+                    if let Some(pos) = resp.interact_pointer_pos() {
+                        let idx = galley.cursor_from_pos(pos - resp.rect.min).index;
+                        if let Some(l) = links.iter().find(|l| idx >= l.start && idx < l.end) {
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(l.url.clone()));
+                        }
+                    }
+                }
+            }
+            resp.rect
+        }
+    };
     if !emojis.is_empty() {
         let starts: Vec<usize> = emojis.iter().map(|e| e.0).collect();
         for (r, (_, e)) in crate::emoji::placed(&galley, &starts).into_iter().zip(&emojis) {
-            if r.is_positive() && ui.is_rect_visible(r.translate(resp.rect.min.to_vec2())) {
-                let rect = r.translate(resp.rect.min.to_vec2());
-                crate::emoji::paint(ui.painter(), rect, e, custom);
+            if r.is_positive() && ui.is_rect_visible(r.translate(rect.min.to_vec2())) {
+                let at = r.translate(rect.min.to_vec2());
+                crate::emoji::paint(ui.painter(), at, e, custom);
                 if let crate::emoji::EmojiRef::Custom { name, .. } = e {
                     let id = ui.id().with(("emoji", r.min.x as i32, r.min.y as i32));
-                    ui.interact(rect, id, egui::Sense::hover()).on_hover_text(format!(":{name}:"));
+                    ui.interact(at, id, egui::Sense::hover()).on_hover_text(format!(":{name}:"));
                 }
-            }
-        }
-    }
-    if links.is_empty() {
-        return;
-    }
-    if let Some(pos) = resp.hover_pos() {
-        let local = pos - resp.rect.min;
-        let idx = galley.cursor_from_pos(local).index;
-        if links.iter().any(|l| idx >= l.start && idx < l.end) {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-    }
-    if resp.clicked() {
-        if let Some(pos) = resp.interact_pointer_pos() {
-            let idx = galley.cursor_from_pos(pos - resp.rect.min).index;
-            if let Some(l) = links.iter().find(|l| idx >= l.start && idx < l.end) {
-                ui.ctx().open_url(egui::OpenUrl::new_tab(l.url.clone()));
             }
         }
     }

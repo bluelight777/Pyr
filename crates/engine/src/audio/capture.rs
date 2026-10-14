@@ -219,7 +219,8 @@ impl CapturePipeline {
     }
 
     fn gate(&mut self, now: Instant, ctl: &Controls) -> bool {
-        if ctl.muted.load(Ordering::Relaxed) || ctl.deafened.load(Ordering::Relaxed) {
+        // (Deafening yourself sets `muted` too; a moderator's deafen leaves you able to talk.)
+        if ctl.muted.load(Ordering::Relaxed) {
             return false;
         }
         match self.settings.input_mode {

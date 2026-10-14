@@ -225,6 +225,8 @@ mod tests {
             channel_id: 9,
             self_mute: false,
             self_deaf: false,
+            server_mute: false,
+            server_deaf: false,
             tracks: vec![],
             e2ee_pub,
             e2ee_sig,

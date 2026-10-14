@@ -161,6 +161,23 @@ struct Inner {
 /// well under this).
 const LEFT_VOICE_KEPT: Duration = Duration::from_secs(15 * 60);
 
+/// What a moderator did to someone in voice (see `Hub::set_moderated`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModeratedVoice {
+    Muted,
+    Deafened,
+}
+
+impl ModeratedVoice {
+    /// Where the people it's on are kept (a JSON list of user ids in `meta`).
+    fn key(self) -> &'static str {
+        match self {
+            ModeratedVoice::Muted => "server_muted",
+            ModeratedVoice::Deafened => "server_deafened",
+        }
+    }
+}
+
 struct Client {
     user_id: UserId,
     conn: quinn::Connection,
@@ -589,7 +606,7 @@ impl Hub {
             members,
             voice: inner.voice.values().map(|v| v.p.clone()).collect(),
             roles: self.db.roles(),
-            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE].iter().map(|s| s.to_string()).collect(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE].iter().map(|s| s.to_string()).collect(),
             dms: self.db.dms_of(uid),
             relations: self.db.relations_of(uid),
         };
@@ -718,6 +735,9 @@ impl Hub {
         let client = inner.clients.get_mut(&conn_id).expect("checked above");
         client.session = Some(session);
         client.session_cell.store(session, Ordering::Relaxed);
+        // A moderator's mute or deafen follows them from channel to channel, and visit to visit.
+        let server_mute = self.moderated(ModeratedVoice::Muted).contains(&uid);
+        let server_deaf = self.moderated(ModeratedVoice::Deafened).contains(&uid);
         let p = VoiceParticipant {
             session,
             user_id: uid,
@@ -725,6 +745,8 @@ impl Hub {
             // Deafened means muted too (as `set_voice_state` keeps it).
             self_mute: self_mute || self_deaf,
             self_deaf,
+            server_mute,
+            server_deaf,
             tracks: Vec::new(),
             e2ee_pub,
             e2ee_sig,
@@ -771,6 +793,43 @@ impl Hub {
             v.p.self_deaf = self_deaf;
             true
         })
+    }
+
+    /// Who's server muted, or server deafened (`ModeratedVoice`): kept with the server's
+    /// settings, so it lasts.
+    pub fn moderated(&self, what: ModeratedVoice) -> HashSet<UserId> {
+        self.db.get_meta(what.key()).and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default()
+    }
+
+    /// Server mute or deafen someone, or take it off (who may is checked by the caller): it's
+    /// kept, and if they're in voice now, everyone sees it and the server stops passing on
+    /// their voice (muted) or everyone else's to them (deafened).
+    pub fn set_moderated(&self, what: ModeratedVoice, user_id: &str, on: bool) -> Reply {
+        let mut inner = self.inner.lock();
+        let mut all = self.moderated(what);
+        let changed = if on { all.insert(user_id.to_string()) } else { all.remove(user_id) };
+        if changed {
+            let mut list: Vec<&UserId> = all.iter().collect();
+            list.sort();
+            if let Err(e) = self.db.set_meta(what.key(), &serde_json::to_string(&list).unwrap_or_default()) {
+                return err(ErrorCode::Internal, e.to_string());
+            }
+        }
+        let mut now = Vec::new();
+        for v in inner.voice.values_mut().filter(|v| v.p.user_id == user_id) {
+            let flag = match what {
+                ModeratedVoice::Muted => &mut v.p.server_mute,
+                ModeratedVoice::Deafened => &mut v.p.server_deaf,
+            };
+            if *flag != on {
+                *flag = on;
+                now.push(v.p.clone());
+            }
+        }
+        for p in now {
+            Self::broadcast_locked(&inner, Event::VoiceUpserted { participant: p });
+        }
+        Ok(Event::Ok)
     }
 
     pub fn publish(&self, conn_id: ConnId, t: TrackInfo) -> Reply {
@@ -882,9 +941,13 @@ impl Hub {
         let Some(session) = Self::session_of(&inner, conn_id) else {
             return err(ErrorCode::BadRequest, "Join a voice channel to play sounds.");
         };
-        let Some(channel_id) = inner.voice.get(&session).map(|v| v.p.channel_id) else {
+        let Some(v) = inner.voice.get(&session) else {
             return err(ErrorCode::BadRequest, "Join a voice channel to play sounds.");
         };
+        if v.p.server_mute {
+            return err(ErrorCode::Forbidden, "A moderator muted you here, so your sounds don't play.");
+        }
+        let channel_id = v.p.channel_id;
         let b = frame(0, Event::SoundPlayed { session, channel_id, sound, name, emoji, volume });
         for v in inner.voice.values().filter(|v| v.p.channel_id == channel_id) {
             let _ = v.tx.send(b.clone());
@@ -920,13 +983,15 @@ impl Hub {
         out.clear();
         let inner = self.inner.lock();
         let Some(v) = inner.voice.get(&session) else { return };
-        if v.p.self_mute && track_id == track::MIC {
+        // Muted, by themselves or a moderator. (A moderator's deafen doesn't mute.)
+        if (v.p.self_mute || v.p.server_mute) && track_id == track::MIC {
             return;
         }
+        let deaf = |o: &Voice| o.p.self_deaf || o.p.server_deaf;
         match track_id {
             track::MIC => {
                 for o in inner.voice.values() {
-                    if o.p.channel_id == v.p.channel_id && o.p.session != session && !o.p.self_deaf {
+                    if o.p.channel_id == v.p.channel_id && o.p.session != session && !deaf(o) {
                         out.push(o.conn.clone());
                     }
                 }
@@ -935,7 +1000,7 @@ impl Hub {
             track::SCREEN_AUDIO => {
                 if let Some(subs) = v.subs.get(&track::SCREEN) {
                     for (s, sub) in subs {
-                        if inner.voice.get(s).map(|o| !o.p.self_deaf).unwrap_or(false) {
+                        if inner.voice.get(s).map(|o| !deaf(o)).unwrap_or(false) {
                             out.push(sub.conn.clone());
                         }
                     }

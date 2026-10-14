@@ -1235,8 +1235,17 @@ impl IngleApp {
         }
         ui.columns(2, |cols| {
             let ui = &mut cols[0];
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Roles are listed highest first. People get every permission of every role they have; colors and groups come from their highest role.").size(12.0).color(theme::DIM));
+            // (Wrapped to the column, not justified: on one line it stretched the dialog off
+            // the window.)
+            ui.with_layout(Layout::top_down(Align::LEFT), |ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new("Roles are listed highest first. People get every permission of every role they have; colors and groups come from their highest role.")
+                            .size(12.0)
+                            .color(theme::DIM),
+                    )
+                    .wrap(),
+                );
             });
             ui.add_space(6.0);
             if ui.add(theme::primary_button("Create role")).clicked() {
@@ -1305,7 +1314,14 @@ impl IngleApp {
                         e.perms &= !bit;
                     }
                 }
-                ui.label(RichText::new("Everyone can chat, react, join voice, share and create invites.").size(11.5).color(theme::DIM));
+                // (Notes wrap to the column, left aligned, and the buttons go on two rows: on one
+                // they ran into each other in a narrow column.)
+                let note = |ui: &mut egui::Ui, text: &str| {
+                    ui.with_layout(Layout::top_down(Align::LEFT), |ui| {
+                        ui.add(egui::Label::new(RichText::new(text).size(11.5).color(theme::DIM)).wrap());
+                    });
+                };
+                note(ui, "Everyone can chat, react, join voice, share and create invites.");
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     let changed = e.name.trim() != role.name
@@ -1323,19 +1339,21 @@ impl IngleApp {
                             shift: 0,
                         });
                     }
-                    if ui.button("Move up").clicked() {
-                        acts.push(Act::UpdateRole { key: key.clone(), id: e.id, name: None, color: None, perms: None, hoist: None, shift: 1 });
-                    }
-                    if ui.button("Move down").clicked() {
-                        acts.push(Act::UpdateRole { key: key.clone(), id: e.id, name: None, color: None, perms: None, hoist: None, shift: -1 });
-                    }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.add(theme::danger_button("Delete")).clicked() {
                             acts.push(Act::DeleteRole { key: key.clone(), id: e.id });
                         }
                     });
                 });
-                ui.label(RichText::new("Give someone a role by right-clicking them in the member list.").size(11.5).color(theme::DIM));
+                ui.horizontal(|ui| {
+                    if ui.button("Move up").clicked() {
+                        acts.push(Act::UpdateRole { key: key.clone(), id: e.id, name: None, color: None, perms: None, hoist: None, shift: 1 });
+                    }
+                    if ui.button("Move down").clicked() {
+                        acts.push(Act::UpdateRole { key: key.clone(), id: e.id, name: None, color: None, perms: None, hoist: None, shift: -1 });
+                    }
+                });
+                note(ui, "Give someone a role by right-clicking them in the member list.");
             });
             self.ui.role_edit = Some(e);
         });

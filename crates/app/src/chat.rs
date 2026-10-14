@@ -229,6 +229,9 @@ impl IngleApp {
             // Where each message is: (id, top, bottom), from the top of the list.
             let mut placed: Vec<(MessageId, f32, f32)> = Vec::new();
             let panel = ui.max_rect();
+            // The messages' background, under everything in them: pressing and dragging on it
+            // selects text (see `select.rs`); right-click opens the message menu.
+            let mut select_bg: Option<egui::Response> = None;
             let out = egui::ScrollArea::vertical()
                 .id_salt(("msgs", &key, channel))
                 .auto_shrink([false, false])
@@ -237,11 +240,21 @@ impl IngleApp {
                 } else {
                     egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded
                 })
+                // Dragging selects text here, like on a web page (not scrolling, as on a phone).
+                .scroll_source(egui::scroll_area::ScrollSource { drag: false, ..Default::default() })
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     if hidden {
                         ui.set_invisible();
                     }
+                    // Message text is selected across the whole conversation, not label by label
+                    // (names and times aren't selectable on their own).
+                    ui.style_mut().interaction.selectable_labels = false;
+                    let bg = ui.interact(ui.clip_rect(), ui.id().with("select"), Sense::click_and_drag());
+                    if let Some(url) = self.ui.sel.input(ui, &bg, &memo_key) {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                    }
+                    select_bg = Some(bg);
                     let origin = ui.cursor().top();
                     // Pictures load only near the screen. The first time this conversation is
                     // drawn, this pass's place isn't where it'll be shown (that's the newest
@@ -323,6 +336,13 @@ impl IngleApp {
                     ui.add_space(6.0);
                 });
             self.ui.load_rect = None;
+            // Right-click on the messages: Copy (what's selected), Copy link, and the message's own.
+            if let Some(bg) = select_bg.filter(|_| self.ui.sel.menu.is_some()) {
+                let open = bg.context_menu(|ui| self.message_menu(ui, st, s, log, acts)).is_some();
+                if !open {
+                    self.ui.sel.menu = None;
+                }
+            }
             let offset = steady_scroll(&out, drawn, memo.as_ref(), &placed);
             if (offset - out.state.offset.y).abs() > 0.5 {
                 let mut state = out.state;
@@ -358,6 +378,75 @@ impl IngleApp {
                 acts.push(Act::LoadHistory { key: key.clone(), channel, older: true });
             }
         });
+    }
+
+    /// The right-click menu over the messages (what it was opened on is `UiState::sel.menu`):
+    /// Copy for selected text, Copy link and Open link over a link, then the message's own.
+    fn message_menu(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, log: &ChannelLog, acts: &mut Vec<Act>) {
+        ui.set_min_width(200.0);
+        let Some(menu) = self.ui.sel.menu.clone() else {
+            ui.close();
+            return;
+        };
+        let mut above = false;
+        if let Some(text) = &menu.copy {
+            if ui.button("Copy").clicked() {
+                ui.ctx().copy_text(text.clone());
+                ui.close();
+            }
+            above = true;
+        }
+        if let Some(url) = &menu.link {
+            if ui.button("Copy link").clicked() {
+                ui.ctx().copy_text(url.clone());
+                ui.close();
+            }
+            if ui.button("Open link").clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(url.clone()));
+                ui.close();
+            }
+            above = true;
+        }
+        let Some(m) = menu.msg.and_then(|id| log.find(id)) else {
+            if !above {
+                ui.close();
+            }
+            return;
+        };
+        if above {
+            ui.separator();
+        }
+        let key = s.key.clone();
+        let mine = m.author == st.my_uid;
+        // Moderators can't delete other people's direct messages.
+        let admin = s.can(perm::MANAGE_MESSAGES) && s.dm(m.channel_id).is_none();
+        if !m.content.is_empty() && ui.button("Copy text").clicked() {
+            ui.ctx().copy_text(m.content.clone());
+            ui.close();
+        }
+        if ui.button("Add reaction").clicked() {
+            self.ui.react_picker = Some(m.id);
+            self.ui.picker.search.clear();
+            self.ui.picker.focus_search = true;
+            ui.close();
+        }
+        if ui.button("Reply").clicked() {
+            self.ui.reply = Some((m.id, s.member_name(&m.author)));
+            ui.close();
+        }
+        if mine && ui.button("Edit message").clicked() {
+            self.ui.editing = Some((m.id, m.content.clone()));
+            ui.close();
+        }
+        if (mine || admin) && ui.button(RichText::new("Delete message").color(theme::LIVE)).clicked() {
+            // Holding Shift deletes at once, as with the trash button.
+            if ui.input(|i| i.modifiers.shift) || !st.settings.confirm_delete {
+                acts.push(Act::Delete { key, id: m.id });
+            } else {
+                self.ui.dialog = Some(crate::app::Dialog::DeleteMessage { key, channel: m.channel_id, id: m.id });
+            }
+            ui.close();
+        }
     }
 
     /// The top of a direct message conversation: their picture and name.
@@ -512,7 +601,12 @@ impl IngleApp {
                         let only_gif = gifs.len() == 1 && m.content.trim() == gifs[0];
                         if !m.content.is_empty() && !only_gif {
                             let ctx = ui.ctx().clone();
-                            markdown::show(ui, &m.content, theme::BODY, names, &mut |id| self.custom_emoji_tex(&ctx, &key, id));
+                            // (Out of `self` while drawn: the emoji lookup borrows it too.)
+                            let mut sel = std::mem::take(&mut self.ui.sel);
+                            let chat = (key.clone(), m.channel_id);
+                            let at = markdown::Selectable { sel: &mut sel, chat: &chat, msg: m.id };
+                            markdown::show_selectable(ui, &m.content, theme::BODY, names, &mut |id| self.custom_emoji_tex(&ctx, &key, id), at);
+                            self.ui.sel = sel;
                         }
                         for g in &gifs {
                             self.gif_embed(ui, g);
@@ -559,6 +653,7 @@ impl IngleApp {
         });
         ui.add_space(2.0);
         let rect = Rect::from_min_max(pos2(ui.max_rect().left(), top), pos2(ui.max_rect().right(), ui.cursor().top()));
+        self.ui.sel.row(&(key.clone(), m.channel_id), m.id, rect);
         let hovered = ui.rect_contains_pointer(rect) || self.ui.react_picker == Some(m.id);
         let bg = if mention {
             Color32::from_rgba_unmultiplied(0xff, 0xaa, 0x4d, 14)
