@@ -776,6 +776,12 @@ impl IngleApp {
                 self.engine.shared.state.write().toast(format!("Update failed: {e}"), true);
                 self.updater.dismiss_error(self.update_seen.clone());
             }
+            // Something's off with the website (or Firelit hasn't signed the release file again
+            // in a long while): say so, once each time it's found.
+            Status::Stale(e) => {
+                self.engine.shared.state.write().toast(format!("Couldn't check for Ingle updates: {e}."), true);
+                self.updater.dismiss_error(self.update_seen.clone());
+            }
             Status::Ready(path, sha256) => {
                 // Remember where we are, start the installer, and get out of its way.
                 {

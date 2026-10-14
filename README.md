@@ -145,8 +145,11 @@ settings in `%APPDATA%\Ingle`.
 After that, Ingle updates itself. It looks for a new version when it starts and every few
 hours; when there is one, a green button with an arrow appears at the top of the server
 list (with a count if you've missed several). Click it: Ingle downloads the update, checks
-it against Firelit Games' signature, installs it and opens again where you were. Running a
-newer setup by hand also works: it closes a running Ingle by itself, even one in the tray.
+it against Firelit Games' signature, installs it and opens again where you were. The signed
+release information has dates, and Ingle never takes one past its date or older than one it
+has already seen, so a hacked website can't hide a newer release by serving an old one.
+Running a newer setup by hand also works: it closes a running Ingle by itself, even one in
+the tray.
 
 While Ingle runs on Windows, its campfire icon sits by the clock (Windows may tuck it under
 the **^** arrow; drag it next to the clock to keep it in view). Click it to open Ingle;
@@ -519,6 +522,9 @@ The released Windows `.exe` files are cross-compiled from Linux with MinGW
 (`scripts/build-windows.sh`) and only depend on DLLs that ship with Windows. Building
 natively with MSVC should work but hasn't been tried yet. Releases are signed with
 `scripts/make-release.sh`; the app only installs updates signed with Firelit Games' key.
+A signed `latest.json` counts for 180 days; with no release in that time, sign it again
+(`cargo run -p ingle-proto --example release -- refresh --key KEY --in latest.json`) and
+put it on the website.
 
 Layout:
 

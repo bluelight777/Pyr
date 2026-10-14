@@ -37,9 +37,37 @@ pub struct Manifest {
     /// Every version released so far (so an app can tell how many updates it's behind).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub released: Vec<String>,
+    /// When it was signed, and when it stops counting (Unix seconds): an app takes no manifest
+    /// that's past its date, or older than one it has already seen. So someone who breaks into
+    /// the website can't keep serving an old one to hide a newer release (manifests before
+    /// 0.8 have neither).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub issued: i64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub expires: i64,
 }
 
+fn is_zero(v: &i64) -> bool {
+    *v == 0
+}
+
+/// How long a manifest counts for after it's signed, unless told otherwise (a release, or
+/// `release refresh`, signs a new one).
+pub const VALID_DAYS: i64 = 180;
+
 impl Manifest {
+    /// Whether to believe it now (`now`, Unix seconds), having already seen one signed at
+    /// `newest_seen` (0: none yet): not past its date, and not older than that one.
+    pub fn fresh(&self, now: i64, newest_seen: i64) -> Result<(), String> {
+        if self.expires != 0 && now > self.expires {
+            return Err("the update information is past its date (it should have been signed again)".into());
+        }
+        if self.issued < newest_seen {
+            return Err("the update information is older than what this app has already seen".into());
+        }
+        Ok(())
+    }
+
     /// How many released versions are newer than `current` (at least 1 when this one is).
     pub fn missed(&self, current: &str) -> usize {
         let n = self.released.iter().filter(|v| newer(v, current)).count();
@@ -102,6 +130,8 @@ mod tests {
             released: vec!["0.1.0".into(), "0.2.0".into(), "0.3.0".into()],
             windows: Some(Asset { url: "https://example.org/a.exe".into(), sha256: sha256_hex(b"x"), size: 1 }),
             linux_deb: None,
+            issued: 1_000,
+            expires: 2_000,
         };
         let signed = serde_json::to_string(&sign(&key, &m)).unwrap();
         assert_eq!(open(&signed, &key.user_id()).unwrap(), m);
@@ -109,6 +139,34 @@ mod tests {
         assert!(open(&signed, &Identity::generate().user_id()).is_err());
         let evil = signed.replace("a.exe", "evil.exe");
         assert!(open(&evil, &key.user_id()).is_err());
+    }
+
+    #[test]
+    fn old_or_stale_manifests_are_refused() {
+        let m = |issued, expires| Manifest {
+            version: "0.8.0".into(),
+            notes: String::new(),
+            windows: None,
+            linux_deb: None,
+            released: Vec::new(),
+            issued,
+            expires,
+        };
+        // Fresh, and newer than (or the same as) what was seen.
+        assert!(m(1_000, 5_000).fresh(2_000, 0).is_ok());
+        assert!(m(1_000, 5_000).fresh(2_000, 1_000).is_ok());
+        // Past its date: someone may be holding back a newer one.
+        assert!(m(1_000, 5_000).fresh(6_000, 0).is_err());
+        // Older than one already seen (a replayed manifest), or an old undated one after a
+        // dated one.
+        assert!(m(1_000, 5_000).fresh(2_000, 1_500).is_err());
+        assert!(m(0, 0).fresh(2_000, 1_000).is_err());
+        // Undated ones (before 0.8) still work for an app that has seen nothing newer.
+        assert!(m(0, 0).fresh(2_000, 0).is_ok());
+        // The dates are signed: changing them breaks the signature.
+        let key = Identity::generate();
+        let signed = serde_json::to_string(&sign(&key, &m(1_000, 5_000))).unwrap();
+        assert!(open(&signed.replace("5000", "9000"), &key.user_id()).is_err());
     }
 
     #[test]
@@ -128,6 +186,8 @@ mod tests {
             windows: None,
             linux_deb: None,
             released: ["0.5.0", "0.6.0", "0.6.2", "0.6.3"].iter().map(|s| s.to_string()).collect(),
+            issued: 0,
+            expires: 0,
         };
         assert_eq!(m.missed("0.6.3"), 0);
         assert_eq!(m.missed("0.6.2"), 1);

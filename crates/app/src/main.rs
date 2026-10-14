@@ -160,7 +160,7 @@ fn main() -> eframe::Result<()> {
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
                 let engine = Arc::new(engine);
                 let ctx = cc.egui_ctx.clone();
-                let updater = update::Updater::start(Arc::new(move || ctx.request_repaint()));
+                let updater = update::Updater::start(Arc::new(move || ctx.request_repaint()), engine.shared.config_dir.clone());
                 #[cfg(windows)]
                 let tray = tray::Tray::create(cc, engine.clone(), &tray_dir, &tray_tip);
                 // Whether you're looking at Ingle, asked of Windows itself: frames stop while

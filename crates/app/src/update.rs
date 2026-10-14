@@ -4,7 +4,9 @@
 //!
 //! The release file (`latest.json`) must be signed with the Firelit release key and the
 //! download must match its SHA-256 (see `ingle_proto::release`), so a hacked website can't
-//! push anything else.
+//! push anything else. It must also be within its dates and no older than one this app has
+//! already seen (`update-seen.json`), so a hacked website can't hide a newer release by
+//! serving an old one either.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -21,6 +23,8 @@ pub const RELEASE_KEY: &str = "J0EGQDSoDplSzp3aFrK7EA8C5Of4w4D40kaO-g7iJcE";
 const DEFAULT_URL: &str = "https://firelitgames.com/ingle/latest.json";
 const CHECK_EVERY: Duration = Duration::from_secs(3 * 60 * 60);
 const RESUME_FILE: &str = "resume.json";
+/// When the newest release file this app has seen was signed (see `check`).
+const SEEN_FILE: &str = "update-seen.json";
 
 pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -41,6 +45,9 @@ pub enum Status {
     /// SHA-256 is checked once more right before it's installed.)
     Ready(PathBuf, String),
     Failed(String),
+    /// The release file couldn't be trusted to be the current one (past its date, or older
+    /// than one seen before): something to tell the person, once.
+    Stale(String),
 }
 
 pub struct Updater {
@@ -49,15 +56,16 @@ pub struct Updater {
 }
 
 impl Updater {
-    /// Checks shortly after start and then every few hours.
-    pub fn start(repaint: Arc<dyn Fn() + Send + Sync>) -> Updater {
+    /// Checks shortly after start and then every few hours. `dir` is where what's been seen is
+    /// kept (Ingle's settings folder).
+    pub fn start(repaint: Arc<dyn Fn() + Send + Sync>, dir: PathBuf) -> Updater {
         let status = Arc::new(Mutex::new(Status::Idle));
         let (s, r) = (status.clone(), repaint.clone());
         let _ = std::thread::Builder::new().name("ingle-update".into()).spawn(move || {
             std::thread::sleep(Duration::from_secs(8));
             clean_old_downloads(&download_base(), Duration::from_secs(60 * 60));
             loop {
-                match check() {
+                match check(&dir) {
                     Ok(Some(m)) => {
                         let mut st = s.lock();
                         // Don't interrupt a download, or undo a failure the person hasn't seen.
@@ -68,7 +76,15 @@ impl Updater {
                         }
                     }
                     Ok(None) => tracing::debug!("up to date"),
-                    Err(e) => tracing::info!("update check failed: {e}"),
+                    Err(Check::Stale(e)) => {
+                        tracing::warn!("update check: {e}");
+                        let mut st = s.lock();
+                        if matches!(*st, Status::Idle) {
+                            *st = Status::Stale(e);
+                            r();
+                        }
+                    }
+                    Err(Check::Failed(e)) => tracing::info!("update check failed: {e}"),
                 }
                 std::thread::sleep(CHECK_EVERY);
             }
@@ -116,17 +132,48 @@ fn agent() -> ureq::Agent {
         .into()
 }
 
+/// Why a check came to nothing.
+enum Check {
+    /// Couldn't reach the website, or read what it said.
+    Failed(String),
+    /// What it said is signed, but can't be trusted to be the current release.
+    Stale(String),
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct Seen {
+    /// When the newest release file seen was signed (Unix seconds).
+    issued: i64,
+}
+
+fn now_secs() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
 /// The newer release, if there is one for this platform.
-fn check() -> Result<Option<Manifest>, String> {
+fn check(dir: &Path) -> Result<Option<Manifest>, Check> {
     let text = agent()
         .get(&manifest_url())
         .call()
-        .map_err(|e| e.to_string())?
+        .map_err(|e| Check::Failed(e.to_string()))?
         .body_mut()
         .read_to_string()
-        .map_err(|e| e.to_string())?;
-    let m = release::open(&text, RELEASE_KEY)?;
+        .map_err(|e| Check::Failed(e.to_string()))?;
+    let m = release::open(&text, RELEASE_KEY).map_err(Check::Failed)?;
+    believe(&m, dir, now_secs()).map_err(Check::Stale)?;
     Ok((release::newer(&m.version, current_version()) && platform_asset(&m).is_some()).then_some(m))
+}
+
+/// A signed release file is only believed if it's within its dates and no older than the
+/// newest one seen before; then it's the newest one seen.
+fn believe(m: &Manifest, dir: &Path, now: i64) -> Result<(), String> {
+    let path = dir.join(SEEN_FILE);
+    let seen: Seen = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    m.fresh(now, seen.issued)?;
+    if m.issued > seen.issued {
+        let _ = std::fs::write(&path, serde_json::to_vec(&Seen { issued: m.issued }).unwrap_or_default());
+    }
+    Ok(())
 }
 
 pub fn platform_asset(m: &Manifest) -> Option<&Asset> {
@@ -298,6 +345,32 @@ pub fn install(path: &Path, sha256: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_old_or_stale_release_file_is_not_believed() {
+        let dir = std::env::temp_dir().join(format!("ingle-seen-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let m = |issued, expires| Manifest {
+            version: "0.8.0".into(),
+            notes: String::new(),
+            windows: None,
+            linux_deb: None,
+            released: Vec::new(),
+            issued,
+            expires,
+        };
+        // The current one is believed, and remembered.
+        assert!(believe(&m(1_000, 9_000), &dir, 2_000).is_ok());
+        // An older one served later (the website replaying it) isn't, nor is one past its date.
+        assert!(believe(&m(500, 9_000), &dir, 2_000).is_err());
+        assert!(believe(&m(0, 0), &dir, 2_000).is_err(), "nor an undated one, once a dated one was seen");
+        assert!(believe(&m(1_000, 9_000), &dir, 9_500).is_err());
+        // A newer one is, and then the old one is out for good.
+        assert!(believe(&m(3_000, 9_000), &dir, 4_000).is_ok());
+        assert!(believe(&m(1_000, 9_000), &dir, 4_000).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn downloads_go_to_a_new_private_folder() {
