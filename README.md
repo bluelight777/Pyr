@@ -2,7 +2,7 @@
 
 **Voice channels, webcams, smooth 1080p60 screen sharing and Discord-style text chat for
 your group. A native Rust app with end-to-end encrypted calls, no accounts, and a server
-you own: Ingle can rent one and set it up for you in a few minutes.**
+you own, on any VPS from any provider: Ingle sets it up for you in a few minutes.**
 
 *Ingle* is an old Scots word for the fire in a hearth: the place people gather.
 
@@ -19,7 +19,7 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
 | Voice | Opus 64 kbps default, up to 192 kbps for everyone | 64 kbps default, 96 max without boosts |
 | Calls end-to-end encrypted | yes, always, with a call code you can compare | yes (DAVE) |
 | Account | none: a key on your PC is your identity | email account; age checks rolling out |
-| Hosting | your own server (rented for you in the app, or one you have) | Discord's servers only |
+| Hosting | your own server, on any VPS from any provider (the app sets it up) | Discord's servers only |
 | App | native Rust, no Electron | Electron |
 
 ## Features
@@ -106,8 +106,10 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
 
 **Your server**
 
-- **Create a server** from the app: rent one from DigitalOcean (about $4–6 a month) and let
-  Ingle set it up, or point Ingle at any Linux VPS you already have.
+- **Create a server** from the app on any Linux VPS from any provider: Ingle sets up one you
+  already have over SSH, or creates a small one in your own DigitalOcean account (about
+  $4–6 a month, billed to you by DigitalOcean). You're never tied to one host: a backup
+  moves your server to another provider, history and all.
 - **Roles and permissions**: your own roles with colors, listed separately in the member
   list if you like, with permissions for channels, messages, kicking, banning, muting and
   deafening in voice, roles, emoji and sounds, server settings and @everyone.
@@ -167,13 +169,16 @@ in the link).
 
 1. **Install Ingle** (above), and have your friends install it too.
 2. **Make a server.** Click **Create a server** (or the **+** on the left, then **Create my
-   own**), name it, and pick one:
-   - **Rent a server** (recommended): Ingle creates a small server for you at DigitalOcean,
-     about $4–6 a month paid to DigitalOcean, and sets it up. The app walks you through
-     making the account and the API token it needs.
-   - **Use a server I already have**: any Linux VPS from any provider. Type its address and
-     password (or key file) and Ingle sets it up over SSH, or shows you the commands to do it
-     yourself.
+   own**), name it, and pick one. Any VPS from any provider works, so you're never tied to
+   one host:
+   - **Use a server I already have**: any Linux VPS from any provider (Hetzner, Vultr,
+     Linode, OVH, AWS, DigitalOcean...). Type its address and password (or key file) and
+     Ingle sets it up over SSH, or shows you the commands to do it yourself.
+   - **Rent a server**: the quickest way if you don't have a VPS yet. You make your own
+     DigitalOcean account, with your own card or PayPal, and an API token; the app walks
+     you through both. Ingle then uses the token to create a small server in your account
+     and set it up. DigitalOcean bills you directly, about $4–6 a month. Ingle doesn't
+     charge anything.
 
    When it's done you're in your new server as its owner, and the app shows an invite link.
 3. **Invite friends.** Click **Copy invite link** and send it. Friends click **Join a
@@ -191,41 +196,27 @@ search, **Roles**, **Emoji** and **Backups**.
 
 The server keeps your channels, messages and pictures, and relays calls (it can't listen
 in: calls are end-to-end encrypted). It needs to be on all the time and reachable from the
-internet on **UDP port 7766**, which is why a small rented server (a "VPS") is the easy
-choice: about $4–6 a month, and it doesn't depend on anyone's PC being on.
+internet on **UDP port 7766**, which is why a small VPS (a server you rent from a hosting
+company) is the easy choice: a few dollars a month, and it doesn't depend on anyone's PC
+being on.
 
-![Renting a server: pick a size and a place](docs/screenshots/rent-a-server.png)
+**Use any VPS you like, from any provider: you're never tied to one host.** Ingle sets up
+any 64-bit Linux server, and a backup moves your server to another provider whenever you
+like, history and all ([below](#backups-and-moving-to-another-server)). Ingle doesn't rent
+out servers, sell hosting or take payments, and it's free: you rent the VPS yourself, in
+your own account with whichever provider you choose, and they bill you directly. Ingle
+only does the setup work.
 
-### Renting one (DigitalOcean)
+Two ways to set one up, both under **Create a server** in the app:
 
-DigitalOcean was picked for being cheap, very reliable and simple to sign up for. Prices
-when this was written (October 2026): $4/month (512 MB memory, 500 GB of traffic) or
-$6/month (1 GB, 1 TB, recommended), billed only for the time the server exists. The app
-shows the current prices from your account before you buy anything.
+- **Use a server I already have**: any VPS from any provider ([below](#using-any-vps-you-already-have)).
+- **Rent a server**: a shortcut if you don't have a VPS yet. With an API token from your
+  own DigitalOcean account, Ingle creates a small server there and sets it up in one go
+  ([below](#renting-one-from-digitalocean-the-shortcut)). DigitalOcean is just the provider
+  this shortcut works with; every other provider works through **Use a server I already
+  have**.
 
-1. Make an account at [digitalocean.com](https://cloud.digitalocean.com/registrations/new)
-   (card or PayPal).
-2. Open the **API** page in DigitalOcean's control panel (the app has a button for it),
-   click **Generate New Token**, name it `Ingle` and pick the shortest expiration (Ingle only
-   needs it while it sets the server up). Choose **Custom Scopes** and tick *droplet*
-   (create, read, delete), *ssh_key* (create, read), *regions* (read), *sizes* (read) and
-   *account* (read), then click **Generate Token** and copy it (it starts with `dop_v1_`).
-3. In Ingle: **Create a server → Rent a server**, paste the token, pick a size and the
-   place nearest you and your friends, and click **Create my server**.
-
-Ingle then adds its SSH key to your account (as "Ingle"), creates an Ubuntu 24.04 server
-named `ingle-<your server name>`, waits for it to start, installs Ingle Server on it and
-checks that it can be reached. That takes a couple of minutes. **The token isn't saved**;
-you can delete it on the API page afterwards. To stop paying, delete the server ("droplet")
-in DigitalOcean's control panel under **Droplets**. If the setup fails after the server
-was created, the app offers to try again or to delete it.
-
-Ingle's SSH key is `ssh/ingle_ed25519` in your Ingle settings folder
-(`%APPDATA%\Ingle\config` on Windows, `~/.config/ingle` on Linux), so you can log in
-yourself: `ssh -i <that file> root@<server address>`. The app also notes the servers it set
-up in `hosted-servers.json` there.
-
-### Using a server you already have
+### Using any VPS you already have
 
 Any 64-bit (x86-64 or ARM64) Linux server with systemd works: Ubuntu 22.04 or newer,
 Debian 11+, Fedora, Rocky, Alma and so on, from any provider (Hetzner, Vultr, Linode,
@@ -258,6 +249,40 @@ add an inbound rule there for **UDP port 7766 from anywhere (0.0.0.0/0)**, then 
 
 SSH (TCP port 22) must be allowed too for the setup itself.
 
+### Renting one from DigitalOcean (the shortcut)
+
+![Renting a server from DigitalOcean in Ingle: pick a size and a place](docs/screenshots/rent-a-server.png)
+
+DigitalOcean was picked for being cheap, very reliable and simple to sign up for. The
+account is yours, made with your own card or PayPal, and **DigitalOcean bills you
+directly**; Ingle never sees your payment details. Prices when this was written (October
+2026): $4/month (512 MB memory, 500 GB of traffic) or $6/month (1 GB, 1 TB, recommended),
+billed by DigitalOcean only for the time the server exists. The app shows the current
+prices from your account before anything is created.
+
+1. Make your own account at [digitalocean.com](https://cloud.digitalocean.com/registrations/new)
+   (card or PayPal).
+2. Open the **API** page in DigitalOcean's control panel (the app has a button for it),
+   click **Generate New Token**, name it `Ingle` and pick the shortest expiration (Ingle only
+   needs it while it sets the server up). Choose **Custom Scopes** and tick *droplet*
+   (create, read, delete), *ssh_key* (create, read), *regions* (read), *sizes* (read) and
+   *account* (read), then click **Generate Token** and copy it (it starts with `dop_v1_`).
+3. In Ingle: **Create a server → Rent a server**, paste the token, pick a size and the
+   place nearest you and your friends, and click **Create my server**.
+
+Ingle then uses the token to add its SSH key to your account (as "Ingle"), create an Ubuntu
+24.04 server in your account named `ingle-<your server name>`, wait for it to start,
+install Ingle Server on it and check that it can be reached. That takes a couple of
+minutes. **The token isn't saved**; you can delete it on the API page afterwards. To stop
+paying, delete the server ("droplet") in DigitalOcean's control panel under **Droplets**.
+If the setup fails after the server was created, the app offers to try again or to delete
+it.
+
+Ingle's SSH key is `ssh/ingle_ed25519` in your Ingle settings folder
+(`%APPDATA%\Ingle\config` on Windows, `~/.config/ingle` on Linux), so you can log in
+yourself: `ssh -i <that file> root@<server address>`. The app also notes the servers it set
+up in `hosted-servers.json` there.
+
 ### Backups, and moving to another server
 
 The owner's Ingle backs up their server to their PC every hour: the database (channels,
@@ -277,9 +302,9 @@ with their roles.
 
 New versions of the app work with older servers (features that need a newer server appear
 once it's updated). To update a server, run the setup again: **Create a server → Use a
-server I already have** with the same address (for a server Ingle rented, log in as `root`
-with Ingle's key file, above). It updates the program and keeps the server, its messages and
-its links.
+server I already have** with the same address (for a server Ingle set up at DigitalOcean,
+log in as `root` with Ingle's key file, above). It updates the program and keeps the
+server, its messages and its links.
 
 ### Setting it up by hand
 
@@ -419,7 +444,7 @@ and to mute its sound.
   OpenGL by itself. To force OpenGL: `ingle.exe --renderer glow`.
 - **Stream has no sound / "Sharing without sound"**: capturing app audio needs Windows 10
   build 20348 or newer (Windows 11 is fine). Otherwise the stream works without sound.
-- **Friends can't connect**: for a VPS, see [Firewalls](#using-a-server-you-already-have)
+- **Friends can't connect**: for a VPS, see [Firewalls](#using-any-vps-you-already-have)
   (UDP 7766 must be allowed in the provider's firewall) and check
   `systemctl status ingle-server` on the server. For a server on your PC: check the
   server window says it's listening, the router forwards **UDP** 7766, Windows Firewall
