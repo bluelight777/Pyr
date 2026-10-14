@@ -360,7 +360,7 @@ fn choose_page(c: &mut CreateState, ui: &mut egui::Ui, close: &mut bool) {
         "rent",
         Some("RECOMMENDED"),
         "Rent a server",
-        "From DigitalOcean, $4–6 a month. Ingle creates it and sets it up for you in a few minutes. You pay DigitalOcean directly and can delete it any time.",
+        "In your own DigitalOcean account, about $4–6 a month, billed to you by DigitalOcean (Ingle doesn't charge anything). Ingle creates it and sets it up for you in a few minutes; delete it any time.",
         icons::cloud,
     ) {
         c.kind = Kind::Rent;
@@ -371,7 +371,7 @@ fn choose_page(c: &mut CreateState, ui: &mut egui::Ui, close: &mut bool) {
         "own",
         None,
         "Use a server I already have",
-        "Any Linux VPS from any provider (Ubuntu, Debian, Fedora…). Ingle sets it up over SSH, or shows you how to do it yourself.",
+        "Any Linux VPS from any provider (Hetzner, Vultr, Linode, OVH, AWS, DigitalOcean…), so you're never tied to one host. Ingle sets it up over SSH, or shows you how to do it yourself.",
         icons::server,
     ) {
         c.kind = Kind::Own;
@@ -388,7 +388,7 @@ fn choose_page(c: &mut CreateState, ui: &mut egui::Ui, close: &mut bool) {
 
 fn rent_page(c: &mut CreateState, ui: &mut egui::Ui, config_dir: &std::path::Path) {
     title(ui, "Rent a server from DigitalOcean");
-    muted(ui, "DigitalOcean is a large, dependable cloud provider. A small server costs $4–6 a month, charged only for the time it exists, and you can delete it whenever you like.");
+    muted(ui, "DigitalOcean is a large, dependable cloud provider. The server is made in your own DigitalOcean account and DigitalOcean bills you for it: $4–6 a month, charged only for the time it exists. Ingle doesn't charge anything, and you can delete the server whenever you like.");
 
     if let Some(cat) = &c.catalog {
         ui.add_space(10.0);

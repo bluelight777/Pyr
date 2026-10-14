@@ -192,7 +192,7 @@ impl IngleApp {
                         "add-create",
                         None,
                         "Create my own",
-                        "A server for you and your friends. Rent one for a few dollars a month, or use a server you already have.",
+                        "A server for you and your friends, on any VPS from any provider: one you already have, or a new one in your own DigitalOcean account. Ingle sets it up.",
                         icons::cloud,
                     ) {
                         self.ui.create = Some(crate::create::CreateState::new(&st.my_name));
