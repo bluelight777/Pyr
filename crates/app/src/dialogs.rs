@@ -946,6 +946,8 @@ impl IngleApp {
         // (Sounds played by their keys while this is open, and the soundboard's favorites.)
         draft.sound_recent = st.settings.sound_recent.clone();
         draft.sound_favorites = st.settings.sound_favorites.clone();
+        // (And GIFs starred in chat or the GIF picker.)
+        draft.gif_favorites = st.settings.gif_favorites.clone();
         let before = draft.clone();
         let mut t = tab;
         ui.horizontal(|ui| {

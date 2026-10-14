@@ -96,9 +96,23 @@ pub struct Selection {
     this: Vec<Drawn>,
     last: Vec<Drawn>,
     pub menu: Option<Menu>,
+    /// The right-click menu's popup (it hangs off the background, see `input`).
+    popup: Option<egui::Id>,
 }
 
 impl Selection {
+    /// Opens the right-click menu for something over the messages that takes its own clicks
+    /// (a GIF), as if the background had been right-clicked there: its link and its message.
+    pub fn open_menu(&mut self, ctx: &egui::Context, link: Option<String>, msg: MessageId) {
+        let Some(id) = self.popup else { return };
+        self.menu = Some(Menu { copy: None, link, msg: Some(msg) });
+        let at = ctx.pointer_hover_pos();
+        // (Just what egui's own context menu does when its widget is right-clicked: open it
+        // where the pointer is. There's no other way to place a pointer-fixed popup.)
+        #[allow(deprecated)]
+        ctx.memory_mut(|m| m.open_popup_at(id, at));
+    }
+
     pub fn clear(&mut self) {
         self.anchor = None;
         self.focus = None;
@@ -212,6 +226,7 @@ impl Selection {
     pub fn input(&mut self, ui: &egui::Ui, bg: &egui::Response, chat: &Chat) -> Option<String> {
         let ctx = ui.ctx().clone();
         self.turn(&ctx);
+        self.popup = Some(egui::Popup::default_response_id(bg));
         let (pointer, pressed, down, shift, escape, copy) = ctx.input(|i| {
             (
                 i.pointer.interact_pos(),

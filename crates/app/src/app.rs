@@ -248,6 +248,9 @@ pub struct UiState {
     /// The KLIPY tab's search, and which tab the GIF picker is on.
     pub klipy: crate::giphy::GiphyUi,
     pub gif_provider: crate::giphy::Provider,
+    /// The GIF picker is on its Favorites tab (and which favorite the arrow keys are on).
+    pub gif_favs: bool,
+    pub gif_fav_sel: usize,
     /// GIFs from GIPHY being shown.
     pub gifs: crate::giphy::Downloads,
     /// Folded runs of blocked messages that were opened (by their first message).

@@ -424,6 +424,14 @@ impl IngleApp {
             ui.ctx().copy_text(m.content.clone());
             ui.close();
         }
+        if let Some(g) = crate::giphy::gif_links(&m.content).first() {
+            let fav = crate::giphy::is_favorite(&st.settings.gif_favorites, g);
+            if ui.button(if fav { "Remove GIF from favorites" } else { "Add GIF to favorites" }).clicked() {
+                let shown = self.ui.gif_sizes.get(g);
+                self.toggle_gif_favorite(st, crate::giphy::favorite_from_link(g, shown), acts);
+                ui.close();
+            }
+        }
         if ui.button("Add reaction").clicked() {
             self.ui.react_picker = Some(m.id);
             self.ui.picker.search.clear();
@@ -611,7 +619,7 @@ impl IngleApp {
                             self.ui.sel = sel;
                         }
                         for g in &gifs {
-                            self.gif_embed(ui, g);
+                            self.gif_embed(ui, st, g, m.id, acts);
                         }
                         if m.edited_at.is_some() {
                             ui.label(RichText::new("(edited)").size(10.5).color(theme::DIM));
@@ -1511,7 +1519,7 @@ impl IngleApp {
                     markdown::show(ui, &m.content, theme::BODY, &names, &mut |id| self.custom_emoji_tex(&ctx, &key, id));
                 }
                 for g in &gifs {
-                    self.gif_embed_sized(ui, g, vec2(240.0, 160.0), false);
+                    self.gif_embed_sized(ui, g, vec2(240.0, 160.0), None);
                 }
                 if m.edited_at.is_some() {
                     ui.label(RichText::new("(edited)").size(10.5).color(theme::DIM));
@@ -1947,10 +1955,39 @@ fn composer_job(text: &str, wrap: f32) -> egui::text::LayoutJob {
     job
 }
 
+/// The favorite star in a GIF's top corner, like Discord's: gold, outlined, or filled when it's
+/// a favorite already. Returns whether it was clicked.
+fn gif_star(ui: &mut egui::Ui, r: Rect, id: impl std::hash::Hash, fav: bool) -> bool {
+    let sr = Rect::from_min_size(pos2(r.right() - 32.0, r.top() + 6.0), vec2(26.0, 26.0));
+    let resp = ui.interact(sr, ui.id().with(id), Sense::click());
+    let lit = resp.hovered();
+    ui.painter().rect_filled(sr, CornerRadius::same(7), if lit { theme::ELEV2 } else { Color32::from_black_alpha(150) });
+    icons::star(ui.painter(), sr.shrink(if lit { 4.5 } else { 5.5 }), theme::GLOW, fav);
+    resp.on_hover_text(if fav { "Remove from favorites" } else { "Add to favorites" }).clicked()
+}
+
 impl IngleApp {
-    /// A GIF from GIPHY in a message, playing.
-    fn gif_embed(&mut self, ui: &mut egui::Ui, url: &str) {
-        self.gif_embed_sized(ui, url, vec2(320.0, 240.0), true);
+    /// A GIF from GIPHY or KLIPY in a message, playing. Pointed at, it has a star in its corner
+    /// that keeps it in your favorites (the GIF picker's first tab), like Discord's.
+    /// Right-clicked, it has its message's menu (with Copy link and the favorite item).
+    fn gif_embed(&mut self, ui: &mut egui::Ui, st: &AppState, url: &str, msg: MessageId, acts: &mut Vec<Act>) {
+        let fav = crate::giphy::is_favorite(&st.settings.gif_favorites, url);
+        let (starred, menu) = self.gif_embed_sized(ui, url, vec2(320.0, 240.0), Some(fav));
+        if starred {
+            let shown = self.ui.gif_sizes.get(url);
+            self.toggle_gif_favorite(st, crate::giphy::favorite_from_link(url, shown), acts);
+        }
+        if menu {
+            self.ui.sel.open_menu(ui.ctx(), Some(url.to_string()), msg);
+        }
+    }
+
+    /// Adds a GIF to your favorites, or takes it out if it's there.
+    pub(crate) fn toggle_gif_favorite(&mut self, st: &AppState, fav: crate::giphy::GifFavorite, acts: &mut Vec<Act>) {
+        match crate::giphy::toggle_favorite(&st.settings.gif_favorites, fav) {
+            Ok(v) => acts.push(Act::Settings(ingle_engine::config::Settings { gif_favorites: v, ..st.settings.clone() })),
+            Err(e) => acts.push(Act::Toast(e, false)),
+        }
     }
 
     /// Whether a GIF in a message can't be shown (it didn't download, or isn't a picture): like
@@ -1965,8 +2002,13 @@ impl IngleApp {
         gifs.len() == 1 && content.trim() == gifs[0] && !self.gif_failed(&gifs[0])
     }
 
-    /// A GIPHY GIF at most `max` big; `open`: clicking opens it on GIPHY.
-    fn gif_embed_sized(&mut self, ui: &mut egui::Ui, url: &str, max: egui::Vec2, open: bool) {
+    /// A GIF at most `max` big. `star`: it's in a message (clicking it opens it on its site, and
+    /// pointing at it shows the favorite star, filled when it's a favorite already); `None`:
+    /// just the picture. Returns whether the star was clicked, and whether the GIF was
+    /// right-clicked.
+    fn gif_embed_sized(&mut self, ui: &mut egui::Ui, url: &str, max: egui::Vec2, star: Option<bool>) -> (bool, bool) {
+        let open = star.is_some();
+        let (mut starred, mut menu) = (false, false);
         let fit = |size: egui::Vec2| size * (max.x / size.x).min(max.y / size.y).min(2.0);
         // Its space before it loads: the size its link says (see `Gif::posted`), else the size
         // it had the last time it was shown here, so nothing moves when it shows; else a guess.
@@ -1977,7 +2019,7 @@ impl IngleApp {
         if far && !self.images.has(&k) {
             let (r, _) = ui.allocate_exact_size(space, Sense::hover());
             ui.painter().rect_filled(r, CornerRadius::same(8), theme::ELEV);
-            return;
+            return (false, false);
         }
         let ctx = ui.ctx().clone();
         let dl = self.ui.gifs.get(url, move || ctx.request_repaint());
@@ -1986,11 +2028,11 @@ impl IngleApp {
         // `gif_failed`).
         let shown = match dl {
             crate::giphy::Dl::Ready(bytes) => match self.images.get(ui.ctx(), &k, Some(bytes), 480) {
-                crate::images::Tex::Failed => return,
+                crate::images::Tex::Failed => return (false, false),
                 tex => tex.frame(t),
             },
             crate::giphy::Dl::Loading => None,
-            crate::giphy::Dl::Failed => return,
+            crate::giphy::Dl::Failed => return (false, false),
         };
         match shown {
             Some((tex, size, next)) => {
@@ -2003,8 +2045,14 @@ impl IngleApp {
                     ui.ctx().request_repaint_after(n);
                 }
                 let from = crate::giphy::media_provider(url).unwrap_or_default().name();
+                menu = open && resp.secondary_clicked();
                 if open && resp.on_hover_text(format!("GIF from {from} (click to open)")).clicked() {
                     ui.ctx().open_url(egui::OpenUrl::new_tab(url.split('#').next().unwrap_or(url)));
+                }
+                // The favorite star, in the top corner while the GIF's pointed at (over the GIF,
+                // so it takes its own clicks).
+                if let Some(fav) = star.filter(|_| ui.rect_contains_pointer(img)) {
+                    starred = gif_star(ui, img, ("gif-star", url), fav);
                 }
             }
             None => {
@@ -2018,6 +2066,7 @@ impl IngleApp {
                 ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, "Loading GIF…", theme::font(12.5), theme::DIM);
             }
         }
+        (starred, menu)
     }
 
     /// Opens the GIF picker with these search words, its search box taking the cursor (on
@@ -2030,6 +2079,9 @@ impl IngleApp {
         if let Some(p) = from {
             self.ui.gif_provider = p;
         }
+        if from.is_some() || !self.ui.gif_search.trim().is_empty() {
+            self.ui.gif_favs = false;
+        }
     }
 
     /// The GIF search state of `p`'s tab.
@@ -2040,12 +2092,12 @@ impl IngleApp {
         }
     }
 
-    /// The GIF picker: a search box over what's trending or the results, like Discord's, from
-    /// GIPHY or KLIPY (a tab each, when the server has both). Returns the GIF to send.
-    fn gif_picker(&mut self, ui: &mut egui::Ui, _st: &AppState, s: &ServerView, acts: &mut Vec<Act>) -> Option<String> {
+    /// The GIF picker, like Discord's: your favorite GIFs (the first tab), and a search box over
+    /// what's trending or the results from GIPHY or KLIPY (a tab each, when the server has
+    /// them). Returns the GIF to send.
+    fn gif_picker(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, acts: &mut Vec<Act>) -> Option<String> {
         use crate::giphy::Provider;
-        const W: f32 = 460.0;
-        ui.set_width(W);
+        ui.set_width(PICKER_W);
         let mut send = None;
         let search_id = egui::Id::new("gif-search");
         let owner = s.me.as_ref().is_some_and(|m| m.role == ingle_proto::control::Role::Owner);
@@ -2056,10 +2108,12 @@ impl IngleApp {
         let feature = |p: Provider| s.has(if p == Provider::Giphy { ingle_proto::control::GIPHY_FEATURE } else { ingle_proto::control::KLIPY_FEATURE });
         // A tab for each source that's on here (or that the owner could turn on).
         let tabs: Vec<Provider> = [Provider::Giphy, Provider::Klipy].into_iter().filter(|p| feature(*p) && (owner || key_of(*p).is_some())).collect();
-        let mut provider = self.ui.gif_provider;
-        if !tabs.contains(&provider) {
-            provider = tabs.iter().copied().find(|p| key_of(*p).is_some()).or(tabs.first().copied()).unwrap_or_default();
-            self.ui.gif_provider = provider;
+        if !tabs.contains(&self.ui.gif_provider) {
+            self.ui.gif_provider = tabs.iter().copied().find(|p| key_of(*p).is_some()).or(tabs.first().copied()).unwrap_or_default();
+        }
+        // No GIF search here: favorites are still yours to send.
+        if tabs.is_empty() {
+            self.ui.gif_favs = true;
         }
         // While typing in the search box: Up/Down (or Tab) choose a GIF, Enter sends it.
         let typing = ui.ctx().memory(|m| m.has_focus(search_id));
@@ -2071,29 +2125,49 @@ impl IngleApp {
                 enter = i.consume_key(Modifiers::NONE, Key::Enter);
             });
         }
+        // The tabs: Favorites first, then where GIFs are searched.
         ui.horizontal(|ui| {
-            if tabs.len() > 1 {
-                for p in &tabs {
-                    if ui.add(egui::Button::selectable(provider == *p, RichText::new(p.name()).font(theme::bold_font(12.0)))).clicked() && provider != *p {
-                        self.ui.gif_provider = *p;
-                        self.ui.gif_focus = true;
-                    }
+            let b = ui.add(egui::Button::selectable(self.ui.gif_favs, RichText::new("      Favorites").font(theme::bold_font(12.0))));
+            icons::star(ui.painter(), Rect::from_center_size(pos2(b.rect.left() + 14.0, b.rect.center().y), vec2(11.0, 11.0)), theme::GLOW, true);
+            if b.clicked() && !self.ui.gif_favs {
+                self.ui.gif_favs = true;
+                self.ui.gif_search.clear();
+                self.ui.gif_focus = true;
+            }
+            for p in &tabs {
+                let on = !self.ui.gif_favs && self.ui.gif_provider == *p;
+                if ui.add(egui::Button::selectable(on, RichText::new(p.name()).font(theme::bold_font(12.0)))).clicked() && !on {
+                    self.ui.gif_provider = *p;
+                    self.ui.gif_favs = false;
+                    self.ui.gif_focus = true;
                 }
             }
-            let w = if tabs.len() > 1 { W - 260.0 } else { W - 130.0 };
+            if !self.ui.gif_favs {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(RichText::new(format!("Powered by {}", self.ui.gif_provider.name())).font(theme::bold_font(10.5)).color(theme::MUTED));
+                });
+            }
+        });
+        let provider = self.ui.gif_provider;
+        ui.add_space(6.0);
+        // The search box (on Favorites, typing searches the last site used, like Discord's).
+        if !tabs.is_empty() {
             // (KLIPY asks for exactly "Search KLIPY" here.)
             let r = ui.add(
-                egui::TextEdit::singleline(&mut self.ui.gif_search).hint_text(format!("Search {}", provider.name())).desired_width(w).id(search_id),
+                egui::TextEdit::singleline(&mut self.ui.gif_search).hint_text(format!("Search {}", provider.name())).desired_width(PICKER_W).id(search_id),
             );
             if self.ui.gif_focus || (!r.has_focus() && ui.ctx().memory(|m| m.focused().is_none())) {
                 r.request_focus();
                 self.ui.gif_focus = false;
             }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label(RichText::new(format!("Powered by {}", provider.name())).font(theme::bold_font(10.5)).color(theme::MUTED));
-            });
-        });
-        ui.add_space(8.0);
+            if self.ui.gif_favs && !self.ui.gif_search.trim().is_empty() {
+                self.ui.gif_favs = false;
+            }
+            ui.add_space(8.0);
+        }
+        if self.ui.gif_favs {
+            return self.gif_favorites(ui, st, s, (go_next, go_prev, enter), acts);
+        }
         let query = self.ui.gif_search.clone();
         let words = crate::giphy::normalize(&query);
         let title = if words.is_empty() { "TRENDING GIFS".to_string() } else { format!("GIFS FOR \u{201c}{}\u{201d}", words.to_uppercase()) };
@@ -2180,58 +2254,16 @@ impl IngleApp {
             sel = (sel + n - 1) % n;
         }
         self.gif_search_of(provider).sel = sel;
-        let mut chosen = enter.then_some(sel);
-        // Two columns, each GIF at its own height (like Discord's picker), each going under the
-        // shorter column (in the order they came: KLIPY's must stay as KLIPY sends them).
-        const GAP: f32 = 6.0;
-        let col_w = (W - GAP) / 2.0;
-        let mut col_h = [0.0f32; 2];
-        let places: Vec<(usize, f32, f32)> = gifs
+        let favs = &st.settings.gif_favorites;
+        let tiles: Vec<Tile> = gifs
             .iter()
-            .map(|g| {
-                let h = (col_w * g.preview_h / g.preview_w.max(1.0)).clamp(60.0, 360.0);
-                let c = usize::from(col_h[1] < col_h[0]);
-                let y = col_h[c];
-                col_h[c] += h + GAP;
-                (c, y, h)
-            })
+            .map(|g| Tile { show: &g.preview, fallback: &g.preview, w: g.preview_w, h: g.preview_h, title: &g.title, fav: crate::giphy::is_favorite(favs, &g.url) })
             .collect();
-        let total = (col_h[0].max(col_h[1]) - GAP).max(0.0);
-        egui::ScrollArea::vertical().id_salt(("gif-grid", provider.name())).max_height(340.0).auto_shrink([false, true]).show(ui, |ui| {
-            let (area, _) = ui.allocate_exact_size(vec2(W, total), Sense::hover());
-            for (i, (g, &(c, y, h))) in gifs.iter().zip(&places).enumerate() {
-                let r = Rect::from_min_size(area.min + vec2(c as f32 * (col_w + GAP), y), vec2(col_w, h));
-                let resp = ui.interact(r, ui.id().with(("gif", i)), Sense::click());
-                if i == sel && (go_next || go_prev) {
-                    ui.scroll_to_rect(r, None);
-                }
-                if !ui.is_rect_visible(r) {
-                    continue;
-                }
-                ui.painter().rect_filled(r, CornerRadius::same(6), theme::ELEV);
-                let ctx = ui.ctx().clone();
-                if let crate::giphy::Dl::Ready(bytes) = self.ui.gifs.get(&g.preview, move || ctx.request_repaint()) {
-                    let t = ui.input(|i| i.time);
-                    if let Some((tex, _, next)) = self.images.get(ui.ctx(), &format!("gif:{}", g.preview), Some(bytes), 260).frame(t) {
-                        ui.painter().add(
-                            egui::epaint::RectShape::filled(r, CornerRadius::same(6), Color32::WHITE)
-                                .with_texture(tex, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))),
-                        );
-                        if let Some(nx) = next {
-                            ui.ctx().request_repaint_after(nx);
-                        }
-                    }
-                }
-                if i == sel || resp.hovered() {
-                    ui.painter().rect_stroke(r, CornerRadius::same(6), Stroke::new(2.0f32, theme::EMBER), egui::StrokeKind::Inside);
-                }
-                let resp = if g.title.is_empty() { resp } else { resp.on_hover_text(&g.title) };
-                if resp.clicked() {
-                    chosen = Some(i);
-                }
-            }
-        });
-        if let Some(g) = chosen.and_then(|i| gifs.get(i)) {
+        let (clicked, starred) = self.gif_grid(ui, ("gif-grid", provider.name()), &tiles, sel, go_next || go_prev);
+        if let Some(g) = starred.and_then(|i| gifs.get(i)) {
+            self.toggle_gif_favorite(st, g.favorite(), acts);
+        }
+        if let Some(g) = enter.then_some(sel).or(clicked).and_then(|i| gifs.get(i)) {
             send = Some(g.posted());
             // KLIPY counts what's shared (and what it was found by).
             if g.provider == Provider::Klipy {
@@ -2239,8 +2271,160 @@ impl IngleApp {
             }
         }
         ui.add_space(6.0);
-        ui.label(RichText::new("Click a GIF to send it  ·  ↑ ↓ to choose, Enter to send  ·  Esc to close").size(11.0).color(theme::DIM));
+        ui.label(RichText::new("Click a GIF to send it  ·  its star keeps it in Favorites  ·  ↑ ↓ and Enter").size(11.0).color(theme::DIM));
         send
+    }
+
+    /// The GIF picker's Favorites tab: your favorite GIFs, newest first (from any server, and
+    /// sent to any). Returns the one to send.
+    fn gif_favorites(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, keys: (bool, bool, bool), acts: &mut Vec<Act>) -> Option<String> {
+        let (go_next, go_prev, enter) = keys;
+        let favs = &st.settings.gif_favorites;
+        ui.label(RichText::new("FAVORITES").font(theme::bold_font(11.0)).color(theme::DIM));
+        ui.add_space(4.0);
+        if favs.is_empty() {
+            ui.add_space(4.0);
+            ui.label(RichText::new("No favorites yet. Point at any GIF, here or in chat, and click the star in its corner to keep it here.").color(theme::MUTED));
+            ui.add_space(8.0);
+            return None;
+        }
+        let n = favs.len();
+        let mut sel = self.ui.gif_fav_sel.min(n - 1);
+        if go_next {
+            sel = (sel + 1) % n;
+        }
+        if go_prev {
+            sel = (sel + n - 1) % n;
+        }
+        self.ui.gif_fav_sel = sel;
+        let tiles: Vec<Tile> = favs
+            .iter()
+            .map(|f| Tile {
+                show: if f.preview.is_empty() { &f.url } else { &f.preview },
+                fallback: &f.url,
+                w: f32::from(f.w),
+                h: f32::from(f.h),
+                title: &f.title,
+                fav: true,
+            })
+            .collect();
+        let (clicked, starred) = self.gif_grid(ui, "gif-favorites", &tiles, sel, go_next || go_prev);
+        if let Some(f) = starred.and_then(|i| favs.get(i)) {
+            self.toggle_gif_favorite(st, f.clone(), acts);
+        }
+        let send = enter.then_some(sel).or(clicked).and_then(|i| favs.get(i)).map(|f| {
+            // KLIPY counts what's shared, when it's on here and its name for the GIF is known.
+            if crate::giphy::media_provider(&f.url) == Some(crate::giphy::Provider::Klipy) && !f.slug.is_empty() && s.has(ingle_proto::control::KLIPY_FEATURE) {
+                if let Some(k) = crate::klipy::key(&s.info.klipy_key) {
+                    crate::klipy::share(&k, &f.slug, "");
+                }
+            }
+            f.url.clone()
+        });
+        ui.add_space(6.0);
+        ui.label(RichText::new("Click a GIF to send it  ·  its star takes it out  ·  ↑ ↓ and Enter").size(11.0).color(theme::DIM));
+        send
+    }
+
+    /// The GIF picker's grid: two columns, each GIF at its own height (like Discord's picker),
+    /// each going under the shorter column, in the order given (KLIPY's must stay as KLIPY sends
+    /// them). Returns the GIF clicked and the one whose star was clicked.
+    fn gif_grid(&mut self, ui: &mut egui::Ui, id: impl std::hash::Hash, tiles: &[Tile], sel: usize, to_sel: bool) -> (Option<usize>, Option<usize>) {
+        const GAP: f32 = 6.0;
+        let col_w = (PICKER_W - GAP) / 2.0;
+        let mut col_h = [0.0f32; 2];
+        let places: Vec<(usize, f32, f32)> = tiles
+            .iter()
+            .map(|t| {
+                // Its shape: as given, else as it was when last shown, else a guess.
+                let size = (t.w > 0.0 && t.h > 0.0).then(|| vec2(t.w, t.h)).or_else(|| self.ui.gif_sizes.get(t.fallback));
+                let h = size.map_or(col_w * 0.75, |s| (col_w * s.y / s.x.max(1.0)).clamp(60.0, 360.0));
+                let c = usize::from(col_h[1] < col_h[0]);
+                let y = col_h[c];
+                col_h[c] += h + GAP;
+                (c, y, h)
+            })
+            .collect();
+        let total = (col_h[0].max(col_h[1]) - GAP).max(0.0);
+        let (mut clicked, mut starred) = (None, None);
+        egui::ScrollArea::vertical().id_salt(id).max_height(340.0).auto_shrink([false, true]).show(ui, |ui| {
+            let (area, _) = ui.allocate_exact_size(vec2(PICKER_W, total), Sense::hover());
+            for (i, (t, &(c, y, h))) in tiles.iter().zip(&places).enumerate() {
+                let r = Rect::from_min_size(area.min + vec2(c as f32 * (col_w + GAP), y), vec2(col_w, h));
+                let resp = ui.interact(r, ui.id().with(("gif", i)), Sense::click());
+                if i == sel && to_sel {
+                    ui.scroll_to_rect(r, None);
+                }
+                if !ui.is_rect_visible(r) {
+                    continue;
+                }
+                ui.painter().rect_filled(r, CornerRadius::same(6), theme::ELEV);
+                // Its small version, else the GIF itself.
+                let ctx = ui.ctx().clone();
+                let mut src = t.show;
+                let mut dl = self.ui.gifs.get(src, move || ctx.request_repaint());
+                if matches!(dl, crate::giphy::Dl::Failed) && t.fallback != t.show {
+                    let ctx = ui.ctx().clone();
+                    src = t.fallback;
+                    dl = self.ui.gifs.get(src, move || ctx.request_repaint());
+                }
+                if let crate::giphy::Dl::Ready(bytes) = dl {
+                    let time = ui.input(|i| i.time);
+                    if let Some((tex, size, next)) = self.images.get(ui.ctx(), &format!("gif:{src}"), Some(bytes), 260).frame(time) {
+                        if t.w <= 0.0 || t.h <= 0.0 {
+                            self.ui.gif_sizes.set(t.fallback, size);
+                        }
+                        ui.painter().add(egui::epaint::RectShape::filled(r, CornerRadius::same(6), Color32::WHITE).with_texture(tex, cover_uv(r, size)));
+                        if let Some(nx) = next {
+                            ui.ctx().request_repaint_after(nx);
+                        }
+                    }
+                }
+                let inside = ui.rect_contains_pointer(r);
+                if i == sel || inside {
+                    ui.painter().rect_stroke(r, CornerRadius::same(6), Stroke::new(2.0f32, theme::EMBER), egui::StrokeKind::Inside);
+                }
+                let resp = if t.title.is_empty() { resp } else { resp.on_hover_text(t.title) };
+                if resp.clicked() {
+                    clicked = Some(i);
+                }
+                if inside && gif_star(ui, r, ("gif-tile-star", i), t.fav) {
+                    starred = Some(i);
+                }
+            }
+        });
+        (clicked, starred)
+    }
+}
+
+/// The GIF picker's width.
+const PICKER_W: f32 = 460.0;
+
+/// One GIF in the picker's grid.
+struct Tile<'a> {
+    /// What's shown: a small version, or `fallback` (the GIF itself) if that can't be had.
+    show: &'a str,
+    fallback: &'a str,
+    /// Its size, for its shape (0 when unknown).
+    w: f32,
+    h: f32,
+    title: &'a str,
+    fav: bool,
+}
+
+/// The part of a picture of `size` that fills `r` (its shape kept, the overflow cut off evenly).
+fn cover_uv(r: Rect, size: egui::Vec2) -> Rect {
+    let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+    if size.x <= 0.0 || size.y <= 0.0 || r.height() <= 0.0 {
+        return full;
+    }
+    let (ra, ia) = (r.width() / r.height(), size.x / size.y);
+    if ia > ra {
+        let w = ra / ia;
+        Rect::from_min_max(pos2((1.0 - w) / 2.0, 0.0), pos2((1.0 + w) / 2.0, 1.0))
+    } else {
+        let h = ia / ra;
+        Rect::from_min_max(pos2(0.0, (1.0 - h) / 2.0), pos2(1.0, (1.0 + h) / 2.0))
     }
 }
 

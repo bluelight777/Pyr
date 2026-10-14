@@ -71,14 +71,92 @@ impl Gif {
     /// The link posted: with the GIF's size, so everyone's chat keeps its space before it
     /// loads (`?w=…&h=…`; GIPHY ignores it, and older Ingles show the GIF as before). KLIPY's
     /// links are used just as KLIPY gives them: there the size goes after a `#`, which is
-    /// never part of what's fetched.
+    /// never part of what's fetched, with KLIPY's name for it (so whoever sends it again, say
+    /// from their favorites, can tell KLIPY it was shared).
     pub fn posted(&self) -> String {
-        match (self.size, self.provider) {
-            (Some((w, h)), Provider::Giphy) => format!("{}?w={w}&h={h}", self.url),
-            (Some((w, h)), Provider::Klipy) => format!("{}#w={w}&h={h}", self.url),
-            (None, _) => self.url.clone(),
+        match self.provider {
+            Provider::Giphy => match self.size {
+                Some((w, h)) => format!("{}?w={w}&h={h}", self.url),
+                None => self.url.clone(),
+            },
+            Provider::Klipy => {
+                let mut ours = Vec::new();
+                if let Some((w, h)) = self.size {
+                    ours.push(format!("w={w}&h={h}"));
+                }
+                if crate::klipy::path_safe(&self.slug) {
+                    ours.push(format!("slug={}", self.slug));
+                }
+                if ours.is_empty() { self.url.clone() } else { format!("{}#{}", self.url, ours.join("&")) }
+            }
         }
     }
+
+    /// It as a favorite (from the picker, where its small preview and KLIPY name are known).
+    pub fn favorite(&self) -> GifFavorite {
+        GifFavorite {
+            url: self.posted(),
+            preview: self.preview.clone(),
+            w: self.preview_w.round() as u16,
+            h: self.preview_h.round() as u16,
+            slug: self.slug.clone(),
+            title: self.title.clone(),
+        }
+    }
+}
+
+pub use ingle_engine::config::GifFavorite;
+
+/// Favorite GIFs kept at most (Discord kept 250 for a while; this is roomier).
+pub const MAX_FAVORITES: usize = 500;
+
+/// Whether the GIF at `url` is one of `favs` (whatever size its link says).
+pub fn is_favorite(favs: &[GifFavorite], url: &str) -> bool {
+    favs.iter().any(|f| clean_ref(&f.url) == clean_ref(url))
+}
+
+/// `favs` with `fav` put first, or taken out if it's there already (newest first, like
+/// Discord's). Says why when there's no room for another.
+pub fn toggle_favorite(favs: &[GifFavorite], fav: GifFavorite) -> Result<Vec<GifFavorite>, String> {
+    if is_favorite(favs, &fav.url) {
+        return Ok(favs.iter().filter(|f| clean_ref(&f.url) != clean_ref(&fav.url)).cloned().collect());
+    }
+    if favs.len() >= MAX_FAVORITES {
+        return Err(format!("You have {MAX_FAVORITES} favorite GIFs, the most Ingle keeps. Take one out to add another."));
+    }
+    Ok(std::iter::once(fav).chain(favs.iter().cloned()).collect())
+}
+
+/// A GIF seen in chat, as a favorite: its link, GIPHY's smaller version of it for the picker
+/// (KLIPY's links are only ever used as KLIPY gave them), its size (from its link, else as it
+/// was shown) and KLIPY's name for it when its link says.
+pub fn favorite_from_link(url: &str, shown: Option<egui::Vec2>) -> GifFavorite {
+    let size = link_size(url).or(shown).unwrap_or(egui::vec2(0.0, 0.0));
+    GifFavorite {
+        url: url.to_string(),
+        preview: giphy_preview(url).unwrap_or_default(),
+        w: size.x.round().clamp(0.0, 4096.0) as u16,
+        h: size.y.round().clamp(0.0, 4096.0) as u16,
+        slug: link_slug(url).unwrap_or_default(),
+        title: String::new(),
+    }
+}
+
+/// GIPHY's 200-wide version of a GIF of theirs (every GIF's versions sit side by side in its
+/// folder): small and quick for the picker's grid.
+fn giphy_preview(url: &str) -> Option<String> {
+    if !is_giphy_media(url) {
+        return None;
+    }
+    let link = clean_ref(url);
+    let (folder, file) = link.rsplit_once('/')?;
+    (folder.contains("/media/") && file != "200w_d.gif").then(|| format!("{folder}/200w_d.gif"))
+}
+
+/// KLIPY's name for a GIF, from the `#…&slug=…` of a link posted from the picker.
+pub fn link_slug(url: &str) -> Option<String> {
+    let (_, ours) = url.split_once('#')?;
+    ours.split('&').find_map(|p| p.strip_prefix("slug=")).filter(|s| crate::klipy::path_safe(s)).map(str::to_string)
 }
 
 /// The size a posted GIF link says its GIF is (see `Gif::posted`).
@@ -575,5 +653,50 @@ mod tests {
         assert!(!is_giphy_media("https://giphy.com/gifs/abc"));
         assert_eq!(gif_links("look https://media.giphy.com/media/a/giphy.gif lol").len(), 1);
         assert_eq!(enc("cat & dog"), "cat+%26+dog");
+    }
+
+    #[test]
+    fn favorites_like_discords() {
+        // From the picker: the posted link, its small preview and KLIPY's name.
+        let g = Gif {
+            provider: Provider::Giphy,
+            id: "abc".into(),
+            slug: String::new(),
+            title: "Cat".into(),
+            preview: "https://media2.giphy.com/media/abc/200w_d.gif".into(),
+            preview_w: 200.0,
+            preview_h: 150.0,
+            url: "https://media2.giphy.com/media/abc/giphy-downsized.gif".into(),
+            size: Some((480, 360)),
+        };
+        let f = g.favorite();
+        assert_eq!(f.url, "https://media2.giphy.com/media/abc/giphy-downsized.gif?w=480&h=360");
+        assert_eq!((f.preview.as_str(), f.w, f.h, f.title.as_str()), ("https://media2.giphy.com/media/abc/200w_d.gif", 200, 150, "Cat"));
+
+        // Newest first; the same GIF at another size is the same favorite; starring it again
+        // takes it out.
+        let mut favs = toggle_favorite(&[], f.clone()).unwrap();
+        let other = favorite_from_link("https://media.giphy.com/media/v1.Y2lk/xyz/giphy.gif", Some(egui::vec2(320.0, 240.0)));
+        favs = toggle_favorite(&favs, other.clone()).unwrap();
+        assert_eq!(favs.iter().map(|f| f.url.as_str()).collect::<Vec<_>>(), [other.url.as_str(), f.url.as_str()]);
+        assert!(is_favorite(&favs, "https://media2.giphy.com/media/abc/giphy-downsized.gif?w=240&h=180"));
+        assert!(!is_favorite(&favs, "https://media2.giphy.com/media/abd/giphy-downsized.gif"));
+        favs = toggle_favorite(&favs, favorite_from_link("https://media2.giphy.com/media/abc/giphy-downsized.gif", None)).unwrap();
+        assert_eq!(favs, vec![other.clone()]);
+
+        // From chat: GIPHY's small version from the same folder, the size it was shown at.
+        assert_eq!(other.preview, "https://media.giphy.com/media/v1.Y2lk/xyz/200w_d.gif");
+        assert_eq!((other.w, other.h), (320, 240));
+        assert_eq!(favorite_from_link("https://i.giphy.com/abc.gif", None).preview, "");
+        // KLIPY's links are only used as given; the name comes from the link when it says.
+        let k = favorite_from_link("https://static.klipy.com/ii/a/md.gif#w=400&h=225&slug=hello-hi-662", None);
+        assert_eq!((k.preview.as_str(), k.slug.as_str(), k.w, k.h), ("", "hello-hi-662", 400, 225));
+        assert_eq!(link_slug("https://static.klipy.com/ii/a/md.gif#w=4&h=2&slug=../x"), None);
+
+        // There's a limit, and it says so.
+        let full: Vec<GifFavorite> = (0..MAX_FAVORITES).map(|i| favorite_from_link(&format!("https://media.giphy.com/media/g{i}/giphy.gif"), None)).collect();
+        assert!(toggle_favorite(&full, f.clone()).unwrap_err().contains("500"));
+        // (Taking one out still works when full.)
+        assert_eq!(toggle_favorite(&full, full[3].clone()).unwrap().len(), MAX_FAVORITES - 1);
     }
 }

@@ -168,6 +168,28 @@ pub struct Settings {
     pub soundboard_muted: Vec<UserId>,
     /// Keys that play a sound while you're in voice: ("LControl+Key1", sound).
     pub sound_keys: Vec<(String, SoundRef)>,
+    /// GIFs kept in the GIF picker's Favorites (the star on a GIF, like Discord's), newest first.
+    pub gif_favorites: Vec<GifFavorite>,
+}
+
+/// A favorite GIF: just its links (the GIF itself is fetched from GIPHY or KLIPY each time it's
+/// shown, as they ask), so the picker can show it and send it again.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct GifFavorite {
+    /// The link as posted in chat (with its size: GIPHY's after a `?`, KLIPY's after a `#`).
+    pub url: String,
+    /// A smaller moving picture for the picker's grid (empty: `url` itself).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub preview: String,
+    /// The preview's size, to lay out the grid before it loads (0 when unknown).
+    pub w: u16,
+    pub h: u16,
+    /// KLIPY's name for it, to tell KLIPY when it's shared (empty when unknown).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub slug: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub title: String,
 }
 
 impl Default for Settings {
@@ -210,6 +232,7 @@ impl Default for Settings {
             join_sound: None,
             soundboard_muted: Vec::new(),
             sound_keys: Vec::new(),
+            gif_favorites: Vec::new(),
         }
     }
 }

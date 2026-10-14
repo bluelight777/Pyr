@@ -29,7 +29,7 @@ pub fn key(server_key: &str) -> Option<String> {
 }
 
 /// Fit to go in a KLIPY address as a part of its path (an app key, a slug).
-fn path_safe(s: &str) -> bool {
+pub(crate) fn path_safe(s: &str) -> bool {
     !s.is_empty() && s.len() <= 200 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
@@ -173,9 +173,11 @@ mod tests {
         assert_eq!(g.preview, "https://static.klipy.com/ii/abc/sm.gif?v=2");
         assert_eq!(g.url, "https://static.klipy.com/ii/abc/md.gif");
         assert_eq!(g.size, Some((400, 225)));
-        // Posted with its size after a #, so the address fetched is KLIPY's own.
+        // Posted with its size (and KLIPY's name for it) after a #, so the address fetched is
+        // KLIPY's own.
         let posted = g.posted();
-        assert_eq!(posted, "https://static.klipy.com/ii/abc/md.gif#w=400&h=225");
+        assert_eq!(posted, "https://static.klipy.com/ii/abc/md.gif#w=400&h=225&slug=hello-hi-662");
+        assert_eq!(crate::giphy::link_slug(&posted).as_deref(), Some("hello-hi-662"));
         assert!(is_media(&posted));
         assert_eq!(crate::giphy::link_size(&posted), Some(eframe::egui::vec2(400.0, 225.0)));
         assert_eq!(crate::giphy::gif_links(&format!("look {posted}")), vec![posted.clone()]);
