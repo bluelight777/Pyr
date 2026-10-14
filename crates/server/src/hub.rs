@@ -28,9 +28,44 @@ fn err<T>(code: ErrorCode, msg: impl Into<String>) -> Result<T, (ErrorCode, Stri
 /// Most bytes of control frames waiting to go out to one connection. A client that stops
 /// reading (or can't keep up) is disconnected rather than letting the queue grow forever.
 pub const MAX_QUEUED_BYTES: usize = 16 << 20;
-/// Connections at once: from one address, by one member, and in all.
+/// Connections at once: from one place (an IPv4 address, or an IPv6 /64), from one wider
+/// network (an IPv6 /48), by one member, and in all.
 pub const MAX_CONNECTIONS_PER_IP: usize = 32;
+pub const MAX_CONNECTIONS_PER_NETWORK: usize = 128;
 pub const MAX_CONNECTIONS_PER_USER: usize = 6;
+/// Connections that haven't logged in yet: from one place, one wider network, and in all, so
+/// nobody can fill the server's slots with connections that never log in.
+pub const MAX_WAITING_PER_IP: usize = 8;
+pub const MAX_WAITING_PER_NETWORK: usize = 16;
+pub const MAX_WAITING: usize = 256;
+/// How long a new connection has to log in (or send its bug report), handshake included.
+pub const LOGIN_WITHIN: Duration = Duration::from_secs(15);
+
+/// Where a connection comes from, for counting: an IPv4 address, or for IPv6 the first
+/// `prefix` bits (a home or a server usually has a whole /64 of addresses, so counting single
+/// IPv6 addresses would let one place open thousands of connections).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Place {
+    V4(u32),
+    V6(u128),
+}
+
+impl Place {
+    pub fn of(ip: IpAddr, prefix: u32) -> Place {
+        match ip {
+            IpAddr::V4(a) => Place::V4(u32::from(a)),
+            IpAddr::V6(a) => match a.to_ipv4_mapped() {
+                Some(v4) => Place::V4(u32::from(v4)),
+                None => Place::V6(u128::from(a) & (!0u128 << (128 - prefix.min(128)))),
+            },
+        }
+    }
+
+    /// One place (an address, or an IPv6 /64), and the wider network it's in (an IPv6 /48).
+    pub fn both(ip: IpAddr) -> (Place, Place) {
+        (Place::of(ip, 64), Place::of(ip, 48))
+    }
+}
 fn max_connections() -> usize {
     std::env::var("INGLE_MAX_CONNECTIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(4000)
 }
@@ -82,12 +117,17 @@ impl Outbox {
     }
 }
 
-/// Connection counts per address, and wrong-invite counts (for throttling).
+/// Connection counts per place (see [`Place`]), and wrong-invite counts (for throttling).
 #[derive(Default)]
 struct Limits {
-    per_ip: HashMap<IpAddr, usize>,
+    per_ip: HashMap<Place, usize>,
+    per_network: HashMap<Place, usize>,
     total: usize,
     handshaking: usize,
+    /// Not logged in yet: in all, and per place and network.
+    waiting: usize,
+    waiting_per_ip: HashMap<Place, usize>,
+    waiting_per_network: HashMap<Place, usize>,
     bad_invites: HashMap<IpAddr, (u32, Instant)>,
     /// Tokens for new members joining (see [`JOIN_BURST`]).
     join_tokens: Option<(f64, Instant)>,
@@ -104,8 +144,19 @@ pub enum Admit {
 /// Counts a connection while it's alive (see [`Hub::admit`]).
 pub struct ConnSlot {
     hub: Arc<Hub>,
-    ip: IpAddr,
+    place: (Place, Place),
     handshaking: bool,
+    waiting: bool,
+}
+
+/// One less in a count by place (gone from the map at zero).
+fn uncount(m: &mut HashMap<Place, usize>, p: Place) {
+    if let Some(n) = m.get_mut(&p) {
+        *n = n.saturating_sub(1);
+        if *n == 0 {
+            m.remove(&p);
+        }
+    }
 }
 
 impl ConnSlot {
@@ -115,19 +166,26 @@ impl ConnSlot {
             self.hub.limits.lock().handshaking -= 1;
         }
     }
+
+    /// Logged in: it no longer counts as waiting.
+    pub fn logged_in(&mut self) {
+        if std::mem::take(&mut self.waiting) {
+            let mut l = self.hub.limits.lock();
+            l.waiting -= 1;
+            uncount(&mut l.waiting_per_ip, self.place.0);
+            uncount(&mut l.waiting_per_network, self.place.1);
+        }
+    }
 }
 
 impl Drop for ConnSlot {
     fn drop(&mut self) {
         self.handshake_done();
+        self.logged_in();
         let mut l = self.hub.limits.lock();
         l.total -= 1;
-        if let Some(n) = l.per_ip.get_mut(&self.ip) {
-            *n -= 1;
-            if *n == 0 {
-                l.per_ip.remove(&self.ip);
-            }
-        }
+        uncount(&mut l.per_ip, self.place.0);
+        uncount(&mut l.per_network, self.place.1);
     }
 }
 
@@ -333,8 +391,16 @@ impl Hub {
 
     /// Whether to take a new connection from `ip`; while it's alive, keep the slot.
     pub fn admit(self: &Arc<Self>, ip: IpAddr, address_validated: bool) -> (Admit, Option<ConnSlot>) {
+        let place = Place::both(ip);
         let mut l = self.limits.lock();
-        if l.total >= max_connections() || l.per_ip.get(&ip).copied().unwrap_or(0) >= MAX_CONNECTIONS_PER_IP {
+        let count = |m: &HashMap<Place, usize>, p: Place| m.get(&p).copied().unwrap_or(0);
+        if l.total >= max_connections()
+            || count(&l.per_ip, place.0) >= MAX_CONNECTIONS_PER_IP
+            || count(&l.per_network, place.1) >= MAX_CONNECTIONS_PER_NETWORK
+            || l.waiting >= MAX_WAITING
+            || count(&l.waiting_per_ip, place.0) >= MAX_WAITING_PER_IP
+            || count(&l.waiting_per_network, place.1) >= MAX_WAITING_PER_NETWORK
+        {
             return (Admit::Refuse, None);
         }
         // Lots of handshakes at once: make new ones prove their address first.
@@ -343,8 +409,12 @@ impl Hub {
         }
         l.total += 1;
         l.handshaking += 1;
-        *l.per_ip.entry(ip).or_default() += 1;
-        (Admit::Accept, Some(ConnSlot { hub: self.clone(), ip, handshaking: true }))
+        l.waiting += 1;
+        *l.per_ip.entry(place.0).or_default() += 1;
+        *l.per_network.entry(place.1).or_default() += 1;
+        *l.waiting_per_ip.entry(place.0).or_default() += 1;
+        *l.waiting_per_network.entry(place.1).or_default() += 1;
+        (Admit::Accept, Some(ConnSlot { hub: self.clone(), place, handshaking: true, waiting: true }))
     }
 
     /// Whether `ip` has guessed too many invite codes lately.

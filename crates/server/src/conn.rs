@@ -37,15 +37,22 @@ const VIDEO_BURST_BYTES: f64 = 24.0 * 1024.0 * 1024.0;
 
 pub async fn handle(hub: Arc<Hub>, incoming: quinn::Incoming, mut slot: ConnSlot) {
     let remote = incoming.remote_address();
-    let conn = match incoming.await {
-        Ok(c) => c,
-        Err(e) => {
+    // From the first packet to logging in: a connection that's slower than this gives its
+    // place up (see `hub::LOGIN_WITHIN`).
+    let deadline = tokio::time::Instant::now() + crate::hub::LOGIN_WITHIN;
+    let conn = match tokio::time::timeout_at(deadline, incoming).await {
+        Ok(Ok(c)) => c,
+        Ok(Err(e)) => {
             debug!(%remote, "handshake failed: {e}");
+            return;
+        }
+        Err(_) => {
+            debug!(%remote, "handshake too slow");
             return;
         }
     };
     slot.handshake_done();
-    match session(hub, conn.clone()).await {
+    match session(hub, conn.clone(), &mut slot, deadline).await {
         Ok(()) => debug!(%remote, "connection closed"),
         Err(e) => debug!(%remote, "connection ended: {e:#}"),
     }
@@ -66,10 +73,10 @@ async fn read_frame<T: serde::de::DeserializeOwned>(recv: &mut quinn::RecvStream
     Ok(Some(framing::decode(&body)?))
 }
 
-async fn session(hub: Arc<Hub>, conn: quinn::Connection) -> Result<()> {
-    let (mut send, mut recv) = timeout(Duration::from_secs(10), conn.accept_bi()).await.context("no control stream")??;
+async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, deadline: tokio::time::Instant) -> Result<()> {
+    let (mut send, mut recv) = tokio::time::timeout_at(deadline, conn.accept_bi()).await.context("no control stream")??;
     let mut preamble = [0u8; 4];
-    timeout(Duration::from_secs(10), recv.read_exact(&mut preamble)).await.context("no preamble")??;
+    tokio::time::timeout_at(deadline, recv.read_exact(&mut preamble)).await.context("no preamble")??;
     if &preamble != ingle_proto::CONTROL_PREAMBLE {
         bail!("not an Ingle client");
     }
@@ -79,7 +86,7 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection) -> Result<()> {
     send.write_all(&frame(0, hello)).await?;
 
     let login: ClientFrame =
-        timeout(Duration::from_secs(20), read_frame(&mut recv)).await.context("login timeout")??.ok_or_else(|| anyhow!("closed"))?;
+        tokio::time::timeout_at(deadline, read_frame(&mut recv)).await.context("login timeout")??.ok_or_else(|| anyhow!("closed"))?;
     let reject = |code: ErrorCode, msg: &str| frame(login.id, Event::error(code, msg));
     // Not logging in, just a bug report (anyone may send one where they're collected).
     if let Request::ReportBug { report } = login.req {
@@ -123,6 +130,7 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection) -> Result<()> {
         bail!("login refused: {msg}");
     }
     info!(user = %&user_id[..8], %name, %client, remote = %conn.remote_address(), "logged in");
+    slot.logged_in();
 
     let (tx, mut rx) = Outbox::new(conn.clone());
     let queued = tx.queued();
@@ -1390,6 +1398,52 @@ mod tests {
         assert!(!hub.moderated(ModeratedVoice::Deafened).contains(&bob));
         assert!(hub.moderated(ModeratedVoice::Muted).contains(&bob));
         assert!(!hub.moderated(ModeratedVoice::Muted).contains(&modr));
+    }
+
+    #[test]
+    fn one_place_cant_take_every_slot() {
+        use crate::hub::{Admit, MAX_CONNECTIONS_PER_IP, MAX_CONNECTIONS_PER_NETWORK, MAX_WAITING_PER_IP, MAX_WAITING_PER_NETWORK};
+        let hub = hub();
+        let ip = |s: String| -> std::net::IpAddr { s.parse().unwrap() };
+        let take = |a: std::net::IpAddr| match hub.admit(a, true) {
+            (Admit::Accept, Some(s)) => Some(s),
+            _ => None,
+        };
+        // A /64 is one place, whatever address in it: only so many can wait to log in at once...
+        let mut slots: Vec<ConnSlot> = (0..MAX_WAITING_PER_IP).map(|i| take(ip(format!("2001:db8:1:1::{:x}", i + 1))).unwrap()).collect();
+        assert!(take(ip("2001:db8:1:1:ffff:ffff:ffff:ffff".into())).is_none(), "the /64 has as many waiting as it may");
+        // ...and once they're in, the place may have more, up to its own cap.
+        for s in &mut slots {
+            s.logged_in();
+        }
+        while slots.len() < MAX_CONNECTIONS_PER_IP {
+            let mut s = take(ip(format!("2001:db8:1:1::{:x}", slots.len() + 100))).unwrap();
+            s.logged_in();
+            slots.push(s);
+        }
+        assert!(take(ip("2001:db8:1:1::abcd".into())).is_none(), "the /64 is full");
+        // Other /64s in the same /48 count towards the /48's cap (waiting ones, then all).
+        let mut wide: Vec<ConnSlot> = Vec::new();
+        for i in 0..MAX_WAITING_PER_NETWORK {
+            wide.push(take(ip(format!("2001:db8:1:{:x}::1", i + 2))).expect("another /64"));
+        }
+        assert!(take(ip("2001:db8:1:ff::1".into())).is_none(), "the /48 has as many waiting as it may");
+        for s in &mut wide {
+            s.logged_in();
+        }
+        while slots.len() + wide.len() < MAX_CONNECTIONS_PER_NETWORK {
+            let mut s = take(ip(format!("2001:db8:1:{:x}::1", wide.len() + 100))).expect("room in the /48");
+            s.logged_in();
+            wide.push(s);
+        }
+        assert!(take(ip("2001:db8:1:fff::1".into())).is_none(), "the /48 is full");
+        // Someone else is fine: another network, or an IPv4 address.
+        let other = take(ip("2001:db8:2::1".into()));
+        assert!(other.is_some());
+        assert!(take(ip("203.0.113.9".into())).is_some());
+        // Leaving frees the places up.
+        drop(wide);
+        assert!(take(ip("2001:db8:1:ff::1".into())).is_some());
     }
 
     #[test]
