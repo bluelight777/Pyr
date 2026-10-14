@@ -34,6 +34,13 @@ const HISTORY_PAGE_BYTES: usize = 700 * 1024;
 /// everyone watching.
 const VIDEO_BYTES_PER_SEC: f64 = 5.0 * 1024.0 * 1024.0;
 const VIDEO_BURST_BYTES: f64 = 24.0 * 1024.0 * 1024.0;
+/// Sound one person may send (their microphone and their stream's sound, 50 packets a second
+/// each, up to about 40 KB/s together at Ingle's best quality): packets past this are dropped,
+/// not copied to everyone listening.
+const AUDIO_PACKETS_PER_SEC: f64 = 200.0;
+const AUDIO_PACKET_BURST: f64 = 400.0;
+const AUDIO_BYTES_PER_SEC: f64 = 96.0 * 1024.0;
+const AUDIO_BURST_BYTES: f64 = 192.0 * 1024.0;
 
 pub async fn handle(hub: Arc<Hub>, incoming: quinn::Incoming, mut slot: ConnSlot) {
     let remote = incoming.remote_address();
@@ -200,9 +207,14 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
 /// Audio datagrams: rewrite the session id and fan out.
 async fn datagram_loop(hub: Arc<Hub>, conn: quinn::Connection, session: Arc<AtomicU32>) {
     let mut targets = Vec::new();
+    let (mut packets, mut bytes) = (Bucket::new(AUDIO_PACKETS_PER_SEC, AUDIO_PACKET_BURST), Bucket::new(AUDIO_BYTES_PER_SEC, AUDIO_BURST_BYTES));
     while let Ok(d) = conn.read_datagram().await {
         let s = session.load(Ordering::Relaxed);
         if s == 0 {
+            continue;
+        }
+        // More than anyone's app sends: dropped here, before it's copied to everyone.
+        if !packets.take(1.0) || !bytes.take(d.len() as f64) {
             continue;
         }
         let Some(h) = AudioHeader::parse(&d) else { continue };
@@ -1205,7 +1217,21 @@ impl Ctx<'_> {
                 if self.role() != Role::Owner {
                     return Err((ErrorCode::Forbidden, "Only the server's owner can read bug reports.".into()));
                 }
-                Ok(Event::Bugs { reports: db.bugs(500) })
+                // As many as fit in one reply (logs make them big), what's waiting first: a pile
+                // of reports (even a flood from strangers) never stops the list loading.
+                let mut reports = db.bugs(500);
+                let size = |b: &BugEntry| b.report.title.len() + b.report.body.len() + b.report.log.len() + b.report.os.len() + 300;
+                let mut total = 0usize;
+                let mut keep = 0usize;
+                for b in &reports {
+                    total += size(b);
+                    if total > HISTORY_PAGE_BYTES && keep > 0 {
+                        break;
+                    }
+                    keep += 1;
+                }
+                reports.truncate(keep);
+                Ok(Event::Bugs { reports })
             }
             Request::SetBugStatus { id, status } => {
                 if self.role() != Role::Owner {
@@ -1398,6 +1424,46 @@ mod tests {
         assert!(!hub.moderated(ModeratedVoice::Deafened).contains(&bob));
         assert!(hub.moderated(ModeratedVoice::Muted).contains(&bob));
         assert!(!hub.moderated(ModeratedVoice::Muted).contains(&modr));
+    }
+
+    #[test]
+    fn bug_list_always_loads() {
+        let hub = hub();
+        let owner = uid();
+        hub.db.insert_user(&owner, "Owner", Role::Owner).unwrap();
+        // Lots of big reports (a flood from strangers, say), some already looked at.
+        for i in 0..60 {
+            let r = BugReport { title: format!("report {i}"), body: "b".repeat(BUG_BODY_MAX), log: "l".repeat(BUG_LOG_MAX), ..Default::default() };
+            let id = hub.db.add_bug(&r).unwrap();
+            if i % 2 == 0 {
+                hub.db.set_bug_status(id, BugStatus::Approved).unwrap();
+            }
+        }
+        let reports = match ctx(&hub, &owner).handle(Request::ListBugs) {
+            Ok(Event::Bugs { reports }) => reports,
+            other => panic!("{other:?}"),
+        };
+        // It fits in one reply, with what's waiting first.
+        assert!(!reports.is_empty());
+        let b = frame(1, Event::Bugs { reports: reports.clone() });
+        assert!(b.len() <= ingle_proto::MAX_CONTROL_FRAME, "{} bytes", b.len());
+        assert!(reports.iter().all(|r| r.status == BugStatus::New), "the new ones come first");
+        assert_eq!(reports[0].report.title, "report 59", "newest first");
+    }
+
+    #[test]
+    fn new_members_get_a_small_share_of_storage() {
+        let hub = hub();
+        let (old, new) = (uid(), uid());
+        hub.db.insert_user(&old, "Old", Role::Member).unwrap();
+        hub.db.insert_user(&new, "New", Role::Member).unwrap();
+        hub.db.set_joined_at(&old, ingle_proto::now_ms() - 10 * 24 * 3600 * 1000).unwrap();
+        let mb = |n: u64| n << 20;
+        // A newcomer gets 100 MB; someone who's been here a while, a tenth of the server's 5 GB.
+        assert!(hub.reserve_upload(&new, mb(150)).is_err());
+        assert!(hub.reserve_upload(&new, mb(90)).is_ok());
+        assert!(hub.reserve_upload(&old, mb(400)).is_ok());
+        assert!(hub.reserve_upload(&old, mb(600)).is_err(), "a tenth of the server is the most");
     }
 
     #[test]

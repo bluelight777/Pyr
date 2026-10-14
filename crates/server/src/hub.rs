@@ -69,6 +69,9 @@ impl Place {
 fn max_connections() -> usize {
     std::env::var("INGLE_MAX_CONNECTIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(4000)
 }
+/// A member this new (ms) gets a smaller share of the server's storage (see
+/// `Hub::reserve_upload`).
+const NEW_MEMBER_MS: i64 = 3 * 24 * 3600 * 1000;
 /// Wrong invite codes allowed from one address before it has to wait.
 const BAD_INVITES_PER_IP: u32 = 10;
 const BAD_INVITE_WINDOW: Duration = Duration::from_secs(600);
@@ -201,7 +204,7 @@ pub struct Hub {
     next_session: AtomicU32,
     limits: Mutex<Limits>,
     /// Bug reports taken in the last hour: from each address, and in all (flood limits).
-    bug_reports: Mutex<(HashMap<IpAddr, Vec<Instant>>, Vec<Instant>)>,
+    bug_reports: Mutex<(HashMap<Place, Vec<Instant>>, Vec<Instant>)>,
     /// Uploads per member: bytes being received now, and what arrived in the last hour.
     uploads: Mutex<HashMap<UserId, (u64, Vec<(Instant, u64)>)>>,
 }
@@ -461,7 +464,12 @@ impl Hub {
     /// member's own share of it, and how much one member may upload in an hour.
     pub fn reserve_upload(&self, uid: &str, size: u64) -> Result<UploadSlot<'_>, String> {
         let total_cap = env_mb("INGLE_STORAGE_MB", 5 * 1024);
-        let user_cap = env_mb("INGLE_USER_STORAGE_MB", 1024);
+        // Each member's share: at most a tenth of it (a few accounts can't fill it), and much
+        // less in their first days (new accounts made to fill it get little each).
+        let mut user_cap = env_mb("INGLE_USER_STORAGE_MB", 1024).min(total_cap / 10);
+        if self.db.get_user(uid).is_some_and(|u| now_ms() - u.joined_at < NEW_MEMBER_MS) {
+            user_cap = user_cap.min(env_mb("INGLE_NEW_MEMBER_STORAGE_MB", 100));
+        }
         let hourly_cap = env_mb("INGLE_USER_UPLOAD_MB_PER_HOUR", 400);
         let mut up = self.uploads.lock();
         let in_flight_all: u64 = up.values().map(|v| v.0).sum();
@@ -1159,6 +1167,8 @@ impl Hub {
     /// sender isn't flooding: at most 5 an hour from one address, 60 in all, and 2,000
     /// waiting to be read.
     pub fn take_bug_report(&self, ip: IpAddr, mut r: BugReport) -> Result<(), String> {
+        // (Counted per place: one IPv6 /64 is one sender, whichever of its addresses.)
+        let place = Place::of(ip, 64);
         if self.db.get_meta("bug_reports").as_deref() != Some("1") {
             return Err("This server doesn't collect bug reports.".into());
         }
@@ -1171,7 +1181,7 @@ impl Hub {
                 v.retain(|t| t.elapsed() < hour);
                 !v.is_empty()
             });
-            let mine = per_ip.entry(ip).or_default();
+            let mine = per_ip.entry(place).or_default();
             if mine.len() >= 5 || all.len() >= 60 {
                 return Err("Lots of reports just now. Please try again in a while.".into());
             }

@@ -291,6 +291,12 @@ impl Db {
         Ok(n > 0)
     }
 
+    #[cfg(test)]
+    pub fn set_joined_at(&self, id: &str, at: i64) -> Result<()> {
+        self.conn.lock().execute("UPDATE users SET joined_at = ?2 WHERE id = ?1", params![id, at])?;
+        Ok(())
+    }
+
     pub fn touch_user(&self, id: &str, name: &str) -> Result<()> {
         self.conn
             .lock()
@@ -479,11 +485,14 @@ impl Db {
         self.conn.lock().query_row("SELECT COUNT(*) FROM bug_reports WHERE status = 'new'", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as u64
     }
 
-    /// Newest first.
+    /// The ones waiting to be looked at first, then the rest; newest first in each.
     pub fn bugs(&self, limit: usize) -> Vec<ingle_proto::control::BugEntry> {
         use ingle_proto::control::{BugEntry, BugReport, BugStatus};
         let c = self.conn.lock();
-        let Ok(mut q) = c.prepare("SELECT id, created_at, status, title, body, app_version, os, log FROM bug_reports ORDER BY id DESC LIMIT ?1")
+        let Ok(mut q) = c.prepare(
+            "SELECT id, created_at, status, title, body, app_version, os, log FROM bug_reports \
+             ORDER BY (status = 'new') DESC, id DESC LIMIT ?1",
+        )
         else {
             return Vec::new();
         };
