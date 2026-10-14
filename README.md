@@ -110,7 +110,8 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   with Windows, straight into the tray.
 - Error messages stay until you dismiss them and have a Copy button. **Report a bug**
   (Settings → About, or Report on an error) sends Firelit Games what happened, your Ingle
-  version and system, and the log if you tick it. No account needed.
+  version and system, and the log if you tick it. No account needed, and a report that
+  can't be sent stays in the window to send again.
 
 ## Install
 

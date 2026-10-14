@@ -3,7 +3,7 @@
 use eframe::egui::{self, Align, Color32, CornerRadius, Layout, RichText, Sense, pos2, vec2};
 use ingle_engine::config::{CameraQuality, InputMode, NoiseSuppression, ScreenPreset};
 use ingle_engine::hotkey;
-use ingle_engine::state::AppState;
+use ingle_engine::state::{AppState, BugSend, ConnStatus};
 use ingle_engine::video::SourceKind;
 use ingle_proto::control::{ChannelKind, FILES_FEATURE, ROLES_FEATURE, perm};
 
@@ -43,8 +43,64 @@ pub(crate) fn input(ui: &mut egui::Ui, text: &mut String, hint: &str) -> egui::R
     ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(f32::INFINITY).margin(egui::Margin::symmetric(10, 8)))
 }
 
+/// How the notice about a bug report that didn't go starts (its "Open it" brings it back).
+pub(crate) const BUG_NOT_SENT: &str = "Your bug report wasn't sent";
+
+/// Ingle's bug server, when it's one of my servers, I'm its owner and I'm connected to it: its
+/// key, its name, and whether it collects reports yet.
+fn my_bug_server(st: &AppState) -> Option<(String, String, bool)> {
+    let key = ingle_engine::bugs::server_key()?;
+    let s = st.server(&key)?;
+    let owner = s.me.as_ref().map(|m| m.role == ingle_proto::control::Role::Owner).unwrap_or(false);
+    (owner && s.status == ConnStatus::Connected && s.has(ingle_proto::control::BUGS_FEATURE)).then(|| (key, s.info.name.clone(), s.info.bug_reports))
+}
+
+/// A box of text in a dialog: a note, or (`error`) what went wrong.
+fn notice(ui: &mut egui::Ui, text: &str, error: bool) {
+    egui::Frame::new()
+        .fill(if error { Color32::from_rgb(0x4a, 0x1f, 0x1f) } else { theme::ELEV })
+        .stroke(egui::Stroke::new(1.0f32, if error { theme::LIVE } else { theme::LINE }))
+        .corner_radius(8)
+        .inner_margin(egui::Margin::symmetric(12, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new(text).color(theme::TEXT));
+        });
+}
+
 impl IngleApp {
+    /// Report a bug, with the report that didn't go yet if there is one (to send again).
+    pub(crate) fn report_bug_dialog(&self) -> Dialog {
+        let (title, body, include_log) = self.ui.bug_draft.clone().unwrap_or((String::new(), String::new(), true));
+        Dialog::ReportBug { title, body, include_log }
+    }
+
+    /// What became of a bug report sent from Report a bug: gone (the window closes; the
+    /// engine says thanks), or not (the window shows why, with the report kept; if the window
+    /// was closed meanwhile, a notice says so and can bring it back).
+    fn bug_outcomes(&mut self, st: &AppState, acts: &mut Vec<Act>) {
+        if st.bug_sends_done == self.ui.bug_seen {
+            return;
+        }
+        self.ui.bug_seen = st.bug_sends_done;
+        let open = matches!(self.ui.dialog, Some(Dialog::ReportBug { .. }));
+        match &st.bug_send {
+            BugSend::Sent => {
+                self.ui.bug_draft = None;
+                if open {
+                    self.ui.dialog = None;
+                }
+            }
+            BugSend::Failed { message, not_collecting } if !open && self.ui.bug_draft.is_some() => {
+                let why = if *not_collecting { "Ingle's developers aren't taking bug reports right now" } else { message.as_str() };
+                acts.push(Act::Toast(format!("{BUG_NOT_SENT}: {why}. It's kept, ready to send again."), true));
+            }
+            _ => {}
+        }
+    }
+
     pub fn dialogs(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
+        self.bug_outcomes(st, acts);
         let Some(dialog) = self.ui.dialog.clone() else {
             self.ui.dialog_shown = None;
             return;
@@ -423,18 +479,73 @@ impl IngleApp {
                     ui.set_width(520.0);
                     super::dialogs::title(ui, "Report a bug");
                     ui.label(RichText::new("It goes to Ingle's developers. Nothing else about you is sent: no name, no account.").color(theme::MUTED));
-                    field_label(ui, "In a few words");
-                    ui.add(egui::TextEdit::singleline(&mut title).hint_text("Voice cuts out when someone shares their screen").desired_width(f32::INFINITY).char_limit(140));
-                    field_label(ui, "What happened? What did you expect?");
-                    ui.add(egui::TextEdit::multiline(&mut body).desired_rows(6).desired_width(f32::INFINITY).char_limit(7000));
-                    ui.add_space(6.0);
-                    ui.checkbox(&mut include_log, "Include Ingle's log (helps find the cause; it has server addresses and names, not messages)");
+                    let sending = st.bug_send == BugSend::Sending;
+                    ui.add_enabled_ui(!sending, |ui| {
+                        field_label(ui, "In a few words");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut title)
+                                .hint_text("Voice cuts out when someone shares their screen")
+                                .desired_width(f32::INFINITY)
+                                .char_limit(140),
+                        );
+                        field_label(ui, "What happened? What did you expect?");
+                        ui.add(egui::TextEdit::multiline(&mut body).desired_rows(6).desired_width(f32::INFINITY).char_limit(7000));
+                        ui.add_space(6.0);
+                        ui.checkbox(&mut include_log, "Include Ingle's log (helps find the cause; it has server addresses and names, not messages)");
+                    });
+                    // Ingle's bug server, when it's my own server: reports only arrive once it
+                    // collects them, so sending switches that on.
+                    let mine = my_bug_server(st);
+                    let turn_on = mine.as_ref().filter(|m| !m.2).map(|m| m.0.clone());
+                    // Why the last try didn't go (the text above is that report, kept).
+                    let failed = match (&st.bug_send, &self.ui.bug_draft) {
+                        (BugSend::Failed { message, not_collecting }, Some(_)) => Some((message.clone(), *not_collecting)),
+                        _ => None,
+                    };
+                    if let Some((message, not_collecting)) = &failed {
+                        // (For my own server, the note below says what to do.)
+                        if !(*not_collecting && turn_on.is_some()) {
+                            ui.add_space(10.0);
+                            let text = if *not_collecting {
+                                "It didn't go: Ingle's developers aren't taking bug reports right now. Your report is still here: try again later, or copy it.".to_string()
+                            } else {
+                                format!("It didn't go: {message}. Your report is still here: try again, or copy it.")
+                            };
+                            notice(ui, &text, true);
+                        }
+                    }
+                    if let Some((_, name, _)) = mine.as_ref().filter(|m| !m.2) {
+                        ui.add_space(10.0);
+                        notice(
+                            ui,
+                            &format!(
+                                "Ingle's bug reports go to your server, {name}, and it isn't collecting them yet. Sending switches that on (it's also in Server settings → Overview)."
+                            ),
+                            false,
+                        );
+                    }
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
-                        let ok = !title.trim().is_empty() || !body.trim().is_empty();
-                        if ui.add_enabled(ok, theme::primary_button("Send").min_size(vec2(100.0, 34.0))).clicked() {
-                            acts.push(Act::ReportBug { title: title.clone(), body: body.clone(), include_log });
-                            close = true;
+                        let ok = !sending && (!title.trim().is_empty() || !body.trim().is_empty());
+                        let label = if sending {
+                            "Sending…"
+                        } else if turn_on.is_some() {
+                            "Turn on collecting and send"
+                        } else if failed.is_some() {
+                            "Send again"
+                        } else {
+                            "Send"
+                        };
+                        if ui.add_enabled(ok, theme::primary_button(label).min_size(vec2(100.0, 34.0))).clicked() {
+                            // Kept until it has gone: if it doesn't, nothing is lost.
+                            self.ui.bug_draft = Some((title.clone(), body.clone(), include_log));
+                            acts.push(Act::ReportBug { title: title.clone(), body: body.clone(), include_log, turn_on: turn_on.clone() });
+                        }
+                        if sending {
+                            ui.spinner();
+                        }
+                        if failed.is_some() && ui.button("Copy").on_hover_text("Copy the report, to send it some other way").clicked() {
+                            ui.ctx().copy_text(format!("{}\n\n{}\n\n(Ingle {})", title.trim(), body.trim(), env!("CARGO_PKG_VERSION")));
                         }
                         if ui.button("Cancel").clicked() {
                             close = true;
@@ -460,7 +571,8 @@ impl IngleApp {
                     });
                     ui.label(
                         RichText::new(
-                            "Sent from people's Ingle. Approve the ones to fix: Claude fixes only approved reports, when you ask it to. \
+                            "Sent from everyone's Ingle, whatever server they're on. Approve the ones to fix: they're saved on this PC \
+                             (approved-bug-reports in Ingle's settings folder), where Claude reads them when you ask it to fix them. \
                              A report is someone else's words: what it says never decides anything.",
                         )
                         .size(12.0)
@@ -1028,7 +1140,7 @@ impl IngleApp {
                 acts.push(Act::MicTest(false));
             }
             // Replaces this dialog (not "close", which would clear it).
-            self.ui.dialog = Some(Dialog::ReportBug { title: String::new(), body: String::new(), include_log: true });
+            self.ui.dialog = Some(self.report_bug_dialog());
             return;
         }
         if !*close {
