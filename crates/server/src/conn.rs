@@ -1245,22 +1245,28 @@ impl Ctx<'_> {
             }
             Request::ServerMute { user_id, muted } => {
                 self.require(perm::MUTE_MEMBERS, "server mute people")?;
-                self.may_moderate(&user_id, "server mute")?;
+                self.may_moderate(&user_id, if muted { "server mute" } else { "undo the server mute of" }, muted)?;
                 hub.set_moderated(ModeratedVoice::Muted, &user_id, muted)
             }
             Request::ServerDeafen { user_id, deafened } => {
                 self.require(perm::DEAFEN_MEMBERS, "server deafen people")?;
-                self.may_moderate(&user_id, "server deafen")?;
+                self.may_moderate(&user_id, if deafened { "server deafen" } else { "undo the server deafen of" }, deafened)?;
                 hub.set_moderated(ModeratedVoice::Deafened, &user_id, deafened)
             }
             Request::Unknown => Err((ErrorCode::BadRequest, "This server is older than your app and can't do that yet.".into())),
         }
     }
 
-    /// Server mute or deafen: yourself, or a member below you (like kicking).
-    fn may_moderate(&self, user_id: &str, what: &str) -> Result<(), (ErrorCode, String)> {
+    /// Server mute or deafen (`on`), or undo it: someone below you (like kicking). Yourself
+    /// too, but only the owner can undo their own: a moderator muted by someone above them stays
+    /// muted until someone above them says otherwise.
+    fn may_moderate(&self, user_id: &str, what: &str, on: bool) -> Result<(), (ErrorCode, String)> {
         if user_id == self.uid {
-            return Ok(());
+            if on || self.role() == Role::Owner {
+                return Ok(());
+            }
+            let undo = what.trim_start_matches("undo the ").trim_end_matches(" of");
+            return Err((ErrorCode::Forbidden, format!("You can't undo your own {undo}: ask someone with a higher role.")));
         }
         self.other_member(user_id)?;
         if self.rank_of(user_id) >= self.rank_of(&self.uid) {
@@ -1365,6 +1371,8 @@ mod tests {
         assert!(forbidden(deafen(&mut m, &bob, true)));
         assert!(forbidden(mute(&mut m, &owner, true)));
         assert!(mute(&mut m, &modr, true).is_ok());
+        // ...but not undo it (someone above him has to).
+        assert!(forbidden(mute(&mut m, &modr, false)));
         assert!(m.handle(Request::ServerMute { user_id: "x".repeat(5000), muted: true }).is_err());
         // The owner can do both to anyone. It's kept (it lasts through restarts and rejoins).
         let mut o = ctx(&hub, &owner);
@@ -1374,9 +1382,11 @@ mod tests {
         let deaf = hub.moderated(ModeratedVoice::Deafened);
         assert!(muted.contains(&bob) && muted.contains(&modr) && !muted.contains(&owner));
         assert!(deaf.contains(&bob) && deaf.contains(&owner) && !deaf.contains(&modr));
-        // Taken off again (deafening isn't muting: Bob's mute stays).
+        // Taken off again (deafening isn't muting: Bob's mute stays), the voice mod's by the
+        // owner. The owner can undo their own.
         assert!(deafen(&mut o, &bob, false).is_ok());
-        assert!(mute(&mut m, &modr, false).is_ok());
+        assert!(mute(&mut o, &modr, false).is_ok());
+        assert!(deafen(&mut o, &owner, false).is_ok());
         assert!(!hub.moderated(ModeratedVoice::Deafened).contains(&bob));
         assert!(hub.moderated(ModeratedVoice::Muted).contains(&bob));
         assert!(!hub.moderated(ModeratedVoice::Muted).contains(&modr));

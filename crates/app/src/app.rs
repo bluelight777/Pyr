@@ -2144,8 +2144,15 @@ pub(crate) fn server_voice_items(ui: &mut egui::Ui, st: &AppState, s: &ServerVie
 /// Whether I may server mute and server deafen `uid` here: a moderator with the permission,
 /// and them myself or below me.
 pub(crate) fn moderate(st: &AppState, s: &ServerView, uid: &str) -> (bool, bool) {
-    let reach = s.has(ingle_proto::control::VOICE_MOD_FEATURE) && (uid == st.my_uid || s.rank(uid) < s.rank(&st.my_uid));
-    (reach && s.can(perm::MUTE_MEMBERS), reach && s.can(perm::DEAFEN_MEMBERS))
+    let me = uid == st.my_uid;
+    let reach = s.has(ingle_proto::control::VOICE_MOD_FEATURE) && (me || s.rank(uid) < s.rank(&st.my_uid));
+    // Only the owner undoes their own server mute or deafen: anyone else's is for someone above
+    // them to undo (so it isn't offered).
+    let owner = s.me.as_ref().is_some_and(|m| m.role == Role::Owner);
+    let now = s.voice.values().find(|p| p.user_id == uid);
+    let stuck_mute = me && !owner && now.is_some_and(|p| p.server_mute);
+    let stuck_deaf = me && !owner && now.is_some_and(|p| p.server_deaf);
+    (reach && s.can(perm::MUTE_MEMBERS) && !stuck_mute, reach && s.can(perm::DEAFEN_MEMBERS) && !stuck_deaf)
 }
 
 /// Friend and block choices for someone (right-click menus), like Discord's.

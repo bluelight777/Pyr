@@ -984,8 +984,9 @@ impl Hub {
         out.clear();
         let inner = self.inner.lock();
         let Some(v) = inner.voice.get(&session) else { return };
-        // Muted, by themselves or a moderator. (A moderator's deafen doesn't mute.)
-        if (v.p.self_mute || v.p.server_mute) && track_id == track::MIC {
+        // Muted, by themselves or a moderator (a moderator's deafen doesn't mute). Muting
+        // yourself leaves your stream's sound on, like Discord; a server mute silences both.
+        if (v.p.self_mute && track_id == track::MIC) || v.p.server_mute {
             return;
         }
         let deaf = |o: &Voice| o.p.self_deaf || o.p.server_deaf;
