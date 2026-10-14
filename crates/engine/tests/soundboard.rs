@@ -75,6 +75,12 @@ fn tone_ratio(x: &[f32], freq: f32) -> f32 {
     if total <= 0.0 { 0.0 } else { power / total }
 }
 
+/// Whether `e` has shown a sound called `name` played since `t` (the call shows each for a
+/// few seconds).
+fn shown_since(e: &Engine, name: &str, t: Instant) -> bool {
+    e.state().call.as_ref().is_some_and(|c| c.sounds.iter().any(|s| s.name == name && s.at >= t))
+}
+
 fn rms(x: &[f32]) -> f32 {
     (x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32).sqrt()
 }
@@ -191,18 +197,19 @@ async fn soundboard_end_to_end() {
     assert!(best > 0.5, "bob hears a sound from a server he isn't on");
     // Played again, it isn't sent again (the call's server keeps it).
     heard_b.lock().clear();
+    let t = Instant::now();
     a.play_soundboard(chirp_ref.clone());
-    wait_for("second chirp", 5, || b.state().call.as_ref().is_some_and(|c| c.sounds.iter().filter(|s| s.name == "Chirp").count() >= 2)).await;
+    wait_for("second chirp", 5, || shown_since(&b, "Chirp", t)).await;
 
     // ---- muting Alice's soundboard: Bob still sees it, doesn't hear it
     let mut s = b.state().settings.clone();
     s.soundboard_muted.push(alice_uid.clone());
     b.update_settings(s);
     tokio::time::sleep(Duration::from_millis(1200)).await;
-    let before = b.state().call.as_ref().unwrap().sounds.len();
     heard_b.lock().clear();
+    let t = Instant::now();
     a.play_soundboard(ding.clone());
-    wait_for("bob sees the muted ding", 5, || b.state().call.as_ref().is_some_and(|c| c.sounds.len() > before)).await;
+    wait_for("bob sees the muted ding", 5, || shown_since(&b, "Ding", t)).await;
     tokio::time::sleep(Duration::from_millis(1000)).await;
     let hb = heard_b.lock().clone();
     println!("muted ding: bob hears rms {:.5}", rms(&hb));
