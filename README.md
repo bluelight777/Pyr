@@ -499,11 +499,12 @@ for the research behind it.
 ## How it's tested
 
 Ingle is used on real Windows 10 and 11 PCs, and every release is also tested in a Linux
-sandbox before it ships: about 130 automated tests, including end-to-end runs with a real
+sandbox before it ships: about 150 automated tests, including end-to-end runs with a real
 server and several clients over QUIC (chat, invites, end-to-end encrypted voice in both
 directions, webcam pixels, 1080p screen sharing, stream sound reaching only viewers, late
 joiners, voice through server restarts, roles, pictures, custom emoji, direct messages,
-friends and blocking, unread marks, backups restored on another server, bug reports). The
+friends and blocking, unread marks, backups restored on another server, bug reports, the
+soundboard heard by everyone in the call, server mute and deafen enforced by the server). The
 app is driven through its real UI on a virtual display (visual fixes are checked with
 before-and-after captures), and the Windows builds are run under Wine (the app, the server,
 the bot and the setup).
