@@ -590,7 +590,12 @@ impl eframe::App for IngleApp {
         for e in ingle_engine::errors::take() {
             engine.shared.state.write().toast(e, true);
         }
-        // The share picker closed: stop previewing.
+        // The share picker closed, or the window was minimized with it open: stop previewing
+        // (a minimized picker closes: nothing keeps capturing your screen out of sight).
+        let minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+        if minimized && matches!(self.ui.dialog, Some(Dialog::ScreenPicker { .. })) {
+            self.ui.dialog = None;
+        }
         if self.ui.preview_source.is_some() && !matches!(self.ui.dialog, Some(Dialog::ScreenPicker { .. })) {
             self.ui.preview_source = None;
             self.ui.preview_tex = None;
@@ -613,6 +618,15 @@ impl eframe::App for IngleApp {
         if ctx.input(|i| i.viewport().close_requested()) && crate::tray::available() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             if crate::tray::ensure_icon() {
+                // Off to the tray: the share picker closes, and its preview stops now (a hidden
+                // window may not draw again until it's back).
+                if matches!(self.ui.dialog, Some(Dialog::ScreenPicker { .. })) {
+                    self.ui.dialog = None;
+                }
+                if self.ui.preview_source.take().is_some() {
+                    self.ui.preview_tex = None;
+                    engine.preview_screen(None);
+                }
                 crate::tray::hide_main();
                 let settings = engine.state().settings.clone();
                 if !settings.tray_note_seen {
