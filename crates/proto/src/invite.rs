@@ -38,7 +38,8 @@ impl InviteLink {
     pub fn parse(input: &str) -> Result<InviteLink, InviteError> {
         let mut s = input.trim();
         for scheme in [format!("{}://", crate::APP_ID), "https://".into(), "http://".into()] {
-            if s.len() >= scheme.len() && s[..scheme.len()].eq_ignore_ascii_case(&scheme) {
+            // (`get`: pasted text can have a multi-byte character right where the scheme ends.)
+            if s.get(..scheme.len()).is_some_and(|p| p.eq_ignore_ascii_case(&scheme)) {
                 s = &s[scheme.len()..];
                 break;
             }
@@ -146,6 +147,14 @@ fn split_host_port(authority: &str) -> Result<(String, u16), InviteError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn odd_text_is_no_link_not_a_crash() {
+        // A multi-byte character right where "ingle://" would end.
+        for t in ["ingle:/€abc", "http:/€", "é", "ingle:€€€€€€", "https:/\u{1F525}x"] {
+            let _ = InviteLink::parse(t);
+        }
+    }
 
     #[test]
     fn short_links() {

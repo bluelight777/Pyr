@@ -222,7 +222,8 @@ impl ServerView {
             .get(uid)
             .map(|m| m.name.clone())
             .filter(|n| !n.is_empty())
-            .unwrap_or_else(|| format!("user-{}", &uid[..uid.len().min(6)]))
+            // (By characters: an id from a server that isn't Ingle's own can be any text.)
+            .unwrap_or_else(|| format!("user-{}", uid.chars().take(6).collect::<String>()))
     }
 
     pub fn is_admin(&self) -> bool {
@@ -467,7 +468,17 @@ pub type SharedFrame = Arc<VideoFrame>;
 
 #[cfg(test)]
 mod tests {
-    use super::has_mention;
+    use super::{ServerView, has_mention};
+
+    #[test]
+    fn any_member_id_has_a_name() {
+        // A server that isn't Ingle's own could send ids that aren't base64: multi-byte
+        // characters where a name gets cut used to crash the app.
+        let s = ServerView::new("k".into(), "S".into(), String::new());
+        assert_eq!(s.member_name("abcdéfgh"), "user-abcdéf");
+        assert_eq!(s.member_name("ab"), "user-ab");
+        assert_eq!(s.member_name("🔥🔥🔥🔥🔥🔥🔥"), "user-🔥🔥🔥🔥🔥🔥");
+    }
 
     #[test]
     fn mentions_need_whole_names() {
