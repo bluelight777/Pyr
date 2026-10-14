@@ -85,8 +85,8 @@ the server sees who talks to whom and when (metadata) and packet sizes.
   people. Muted people's packets are dropped. The server rewrites only the session field.
   A moderator's **server mute** and **server deafen** (`MUTE_MEMBERS`, `DEAFEN_MEMBERS`) are
   enforced here too, whatever the person's app does: a server muted person's packets are
-  dropped (their stream's sound too), and a server deafened person is sent none (they can
-  still talk). Only someone ranked above them undoes it (a moderator can't undo their own;
+  dropped (their stream's sound too), and a server deafened person is sent none and their
+  microphone's packets are dropped too (like deafening yourself). Only someone ranked above them undoes it (a moderator can't undo their own;
   the owner can). Both are kept per member in the server's settings, so they last through
   rejoins and restarts.
 - **Soundboard**: a sound played is a small control message (`PlaySound` → `SoundPlayed`

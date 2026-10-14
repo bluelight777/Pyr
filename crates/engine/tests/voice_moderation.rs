@@ -1,7 +1,8 @@
 //! A moderator's Server Mute and Server Deafen, end to end, like Discord's: a real server and
 //! two headless clients talking (each "microphone" a tone of its own). Muted, nobody hears
-//! them (and their soundboard sounds don't play); deafened, they hear nobody but can still be
-//! heard; both stay when they leave voice and come back; and only who may can do it.
+//! them (and their soundboard sounds don't play); deafened, they hear nobody and nobody hears
+//! them (Discord's "won't be able to speak or hear others"); both stay when they leave voice and
+//! come back; and only who may can do it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -150,14 +151,14 @@ async fn server_mute_and_deafen() {
     wait_for("bob unmuted", 10, || seen(&b, &bob).is_some_and(|p| !p.server_mute)).await;
     hears(&ha, "alice hears bob again").await;
 
-    // ---- Server Deafen: Bob hears nobody, but it doesn't mute him (unlike deafening himself).
+    // ---- Server Deafen: Bob hears nobody, and nobody hears him (like deafening himself).
     a.server_deafen(&key, &bob, true);
     wait_for("both see bob server deafened", 10, || {
         seen(&a, &bob).is_some_and(|p| p.server_deaf && !p.server_mute) && seen(&b, &bob).is_some_and(|p| p.server_deaf)
     })
     .await;
     silent_for(&hb, "bob, server deafened").await;
-    hears(&ha, "alice still hears server deafened bob").await;
+    silent_for(&ha, "alice doesn't hear server deafened bob").await;
 
     // It stays when he leaves voice and comes back.
     b.leave_voice();
@@ -168,10 +169,11 @@ async fn server_mute_and_deafen() {
     })
     .await;
     silent_for(&hb, "bob back, server deafened").await;
-    hears(&ha, "alice hears bob back").await;
+    silent_for(&ha, "nor does alice hear him").await;
 
     // Undeafened: he hears Alice again.
     a.server_deafen(&key, &bob, false);
     wait_for("bob undeafened", 10, || seen(&b, &bob).is_some_and(|p| !p.server_deaf)).await;
     hears(&hb, "bob hears alice again").await;
+    hears(&ha, "and alice hears bob").await;
 }

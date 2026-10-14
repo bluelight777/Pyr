@@ -945,7 +945,7 @@ impl Hub {
         let Some(v) = inner.voice.get(&session) else {
             return err(ErrorCode::BadRequest, "Join a voice channel to play sounds.");
         };
-        if v.p.server_mute {
+        if v.p.server_mute || v.p.server_deaf {
             return err(ErrorCode::Forbidden, "A moderator muted you here, so your sounds don't play.");
         }
         let channel_id = v.p.channel_id;
@@ -986,7 +986,9 @@ impl Hub {
         let Some(v) = inner.voice.get(&session) else { return };
         // Muted, by themselves or a moderator (a moderator's deafen doesn't mute). Muting
         // yourself leaves your stream's sound on, like Discord; a server mute silences both.
-        if (v.p.self_mute && track_id == track::MIC) || v.p.server_mute {
+        // A server deafen mutes the microphone too (like deafening yourself): someone who
+        // can't hear the call isn't heard in it either.
+        if ((v.p.self_mute || v.p.server_deaf) && track_id == track::MIC) || v.p.server_mute {
             return;
         }
         let deaf = |o: &Voice| o.p.self_deaf || o.p.server_deaf;

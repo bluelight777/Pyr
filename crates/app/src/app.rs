@@ -2135,7 +2135,7 @@ pub(crate) fn server_voice_items(ui: &mut egui::Ui, st: &AppState, s: &ServerVie
     }
     if can_deafen {
         let mut on = p.server_deaf;
-        if ui.checkbox(&mut on, RichText::new("Server Deafen").color(theme::LIVE)).on_hover_text("They hear nobody until a moderator undeafens them (they can still talk).").clicked() {
+        if ui.checkbox(&mut on, RichText::new("Server Deafen").color(theme::LIVE)).on_hover_text("They hear nobody, and nobody hears them, until a moderator undeafens them.").clicked() {
             acts.push(Act::ServerDeafen { key: s.key.clone(), uid: uid.to_string(), deafened: on });
         }
     }

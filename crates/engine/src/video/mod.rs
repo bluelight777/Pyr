@@ -212,10 +212,14 @@ pub struct Receiver {
 }
 
 const REORDER_WAIT: Duration = Duration::from_millis(120);
+/// Frames waiting for the decoder, at most: more than that and the newest are dropped (the
+/// decoder asks for a fresh keyframe), so nobody can pile up memory by sending faster than
+/// pictures can be decoded.
+const QUEUE: usize = 24;
 
 impl Receiver {
     pub fn start(key: VideoKey, store: Arc<VideoStore>, request_keyframe: Box<dyn Fn() + Send>) -> Receiver {
-        let (tx, rx) = crossbeam_channel::unbounded::<Incoming>();
+        let (tx, rx) = crossbeam_channel::bounded::<Incoming>(QUEUE);
         let stats = Arc::new(ReceiverStats::default());
         let st = stats.clone();
         let thread = std::thread::Builder::new()
@@ -311,7 +315,9 @@ impl Receiver {
 
     pub fn push(&self, seq: u32, keyframe: bool, data: Vec<u8>) {
         if let Some(tx) = &self.tx {
-            let _ = tx.send(Incoming { seq, keyframe, data, at: Instant::now() });
+            if let Err(crossbeam_channel::TrySendError::Full(_)) = tx.try_send(Incoming { seq, keyframe, data, at: Instant::now() }) {
+                self.stats.dropped.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 }

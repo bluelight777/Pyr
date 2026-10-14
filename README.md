@@ -69,9 +69,9 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   sound you can reach plays in any call; hover to hear one yourself first, and mute anyone's
   sounds just for you.
 - **Server Mute and Server Deafen** for moderators: a server muted person isn't heard (nor
-  is their stream's sound), a server deafened one hears nobody (they can still talk), until
-  a moderator above them undoes it, in any voice channel of the server. A moderator can't
-  undo their own (only the owner can).
+  is their stream's sound), a server deafened one hears nobody and isn't heard either (like
+  deafening yourself), until a moderator above them undoes it, in any voice channel of the
+  server. A moderator can't undo their own (only the owner can).
 - Calls stay connected while the server restarts or updates, and a microphone or speakers
   that drop out mid-call (a USB hiccup, a virtual device restarting) come back by themselves.
 - On Windows, Ingle marks its packets as voice for your network (Quality of Service), as
