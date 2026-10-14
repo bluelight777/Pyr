@@ -287,10 +287,14 @@ impl Shared {
     /// A sound file: built in, already here, or fetched from its server (and decoded, so it's
     /// ready to play).
     pub(crate) async fn sound_file(self: &Arc<Self>, server: &str, id: &str) -> Result<Arc<Vec<u8>>> {
-        if let Some(f) = self.sounds.lock().file(server, id) {
-            if self.sounds.lock().pcm(server, id).is_some() {
-                return Ok(f);
-            }
+        // One look at the cache (the lock is held to the end of an `if let`, so locking it again
+        // inside would wait on itself forever: built-in sounds always have a file).
+        let cached = {
+            let cache = self.sounds.lock();
+            cache.pcm(server, id).and_then(|_| cache.file(server, id))
+        };
+        if let Some(f) = cached {
+            return Ok(f);
         }
         let bytes = match soundboard::builtin_file(id).filter(|_| server.is_empty()) {
             Some(b) => b.to_vec(),
