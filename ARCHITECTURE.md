@@ -164,9 +164,27 @@ capture → latest-frame slot (never queues stale frames) → encoder thread:
 
 ## Server storage
 
-`ingle-data/ingle.db` (SQLite, WAL): meta (name, default invite), users (id, name, role,
-banned), channels, messages (with reply, edit time), reactions, invites. TLS key and
-certificate sit next to it. Voice state lives only in memory.
+`ingle-data/ingle.db` (SQLite, WAL): meta (the server's name and settings), users (id,
+name, role, banned), roles and member_roles, channels, messages (with reply and edit time),
+reactions, invites, files (attached pictures, profile pictures and emoji pictures, each
+linked to its message; the bytes sit in `files/`), dms, relations (friends, requests,
+blocks), emojis and bug_reports. TLS key and certificate sit next to it. Voice state lives
+only in memory. The owner's app backs all of it up every hour (see the README).
+
+## Bug reports
+
+Every copy of Ingle sends its bug reports to one central inbox, the server named when Ingle
+is built (`INGLE_BUG_SERVER=host:port/<server key>`), whichever servers its user is on: a
+report is sent instead of logging in, with no account (`engine/src/bugs.rs`). That server
+keeps reports only while its owner has *Collect Ingle bug reports* on, and caps them per
+address and per hour. The owner reads them under bug-reports in the channel list and
+approves the ones to fix; their app saves the approved ones (with their logs) to
+`approved-bug-reports/<server key>.json` in its settings folder, which is what Claude reads
+when asked to fix them. A report is a stranger's words: it never decides anything.
+
+A report that can't be sent stays in the Report a bug window with the reason (or comes
+back from a notice, if the window was closed), and when the inbox is the owner's own server
+with collecting off, sending switches it on first.
 
 ## Setting up servers (`crates/host`)
 
@@ -226,8 +244,8 @@ In rough priority order:
 7. Opus 1.5/1.6 neural features (deep PLC, NoLACE) and DRED once its format is final;
    RED (redundant audio) under heavy loss.
 8. MLS (`openmls`) for key management in big calls; optional E2EE text channels.
-9. Attachments and image embeds, GIF picker, custom emoji, DMs and a friends list,
-   threads, search.
+9. A soundboard (in progress), plugins and bots; attachments beyond pictures, threads,
+   search.
 10. A web client over WebTransport + WebCodecs, then mobile.
 11. H.264 licensing: OpenH264 here is compiled from source, which Cisco's patent licence
     doesn't cover. Before shipping widely, either download Cisco's prebuilt OpenH264 at

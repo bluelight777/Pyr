@@ -39,7 +39,8 @@ pub enum Act {
     ListBugs(String),
     SetBugStatus { key: String, id: i64, status: ingle_proto::control::BugStatus },
     SetBugReports { key: String, on: bool },
-    ReportBug { title: String, body: String, include_log: bool },
+    /// Send a bug report; `turn_on`: the bug server is mine, so switch collecting on there first.
+    ReportBug { title: String, body: String, include_log: bool, turn_on: Option<String> },
     /// The server's GIPHY key (owner only; "" turns GIF search off).
     SetGiphyKey { key: String, giphy: String },
     /// Quit for real (Settings → Quit Ingle).
@@ -173,6 +174,9 @@ pub struct UiState {
     pub preview_source: Option<String>,
     pub preview_tex: Option<(egui::TextureHandle, Instant)>,
     pub dialog: Option<Dialog>,
+    /// Which dialog (and wizard page) was showing last frame, so a dialog that just opened, or
+    /// the wizard's next page, starts at its top.
+    pub dialog_shown: Option<(std::mem::Discriminant<Dialog>, u8)>,
     pub react_picker: Option<MessageId>,
     pub composer_emoji: bool,
     /// The GIF picker over the message box (the GIF button, or typing /giphy), its search
@@ -182,6 +186,10 @@ pub struct UiState {
     pub gif_focus: bool,
     /// Error notices closed with Dismiss, and the one just copied (for "Copied").
     pub toasts_dismissed: HashSet<u64>,
+    /// A bug report's text from when Send was clicked until it has gone (a report that
+    /// doesn't go is never lost), and the last finished send acted on.
+    pub bug_draft: Option<(String, String, bool)>,
+    pub bug_seen: u64,
     pub toast_copied: Option<(u64, Instant)>,
     pub last_typing: Option<Instant>,
     pub requested: HashSet<(String, ChannelId)>,
@@ -444,7 +452,7 @@ impl IngleApp {
             Act::ListBugs(key) => e.list_bugs(&key),
             Act::SetBugStatus { key, id, status } => e.set_bug_status(&key, id, status),
             Act::SetBugReports { key, on } => e.set_bug_reports(&key, on),
-            Act::ReportBug { title, body, include_log } => e.report_bug(&title, &body, include_log),
+            Act::ReportBug { title, body, include_log, turn_on } => e.report_bug(&title, &body, include_log, turn_on.as_deref()),
             Act::SetServerIcon { key, bytes } => match bytes {
                 None => e.set_server_icon(&key, None),
                 Some((b, cx, cy, frac)) => match crate::images::make_avatar_crop(&b, cx, cy, frac) {
@@ -1970,6 +1978,7 @@ impl IngleApp {
         let mut dismiss = None;
         let mut copy = None;
         let mut report: Option<String> = None;
+        let mut reopen_report = false;
         egui::Area::new(egui::Id::new("toasts"))
             .anchor(egui::Align2::RIGHT_BOTTOM, vec2(-20.0, -90.0))
             .order(egui::Order::Foreground)
@@ -1998,7 +2007,15 @@ impl IngleApp {
                                 if ui.button("Dismiss").clicked() {
                                     dismiss = Some(t.id);
                                 }
-                                if ingle_engine::bugs::can_report() && ui.button("Report").on_hover_text("Tell Ingle's developers about this").clicked() {
+                                if t.text.starts_with(crate::dialogs::BUG_NOT_SENT) {
+                                    // That report, as it was, to send again.
+                                    if ui.button("Open it").clicked() {
+                                        reopen_report = true;
+                                        dismiss = Some(t.id);
+                                    }
+                                } else if ingle_engine::bugs::can_report()
+                                    && ui.button("Report").on_hover_text("Tell Ingle's developers about this").clicked()
+                                {
                                     report = Some(t.text.clone());
                                     dismiss = Some(t.id);
                                 }
@@ -2024,6 +2041,9 @@ impl IngleApp {
                 body: format!("This error came up:\n{text}\n\nWhat I was doing: "),
                 include_log: true,
             });
+        }
+        if reopen_report {
+            self.ui.dialog = Some(self.report_bug_dialog());
         }
         let _ = self.started;
     }

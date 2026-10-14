@@ -622,6 +622,8 @@ impl Engine {
                 .collect(),
             call: None,
             toasts: Vec::new(),
+            bug_send: Default::default(),
+            bug_sends_done: 0,
             backups: HashMap::new(),
             bugs: HashMap::new(),
             devices: DeviceLists::default(),
@@ -1703,8 +1705,11 @@ impl Engine {
         backup::folder(&self.shared, key, &name)
     }
 
-    /// Send an Ingle bug report (see `bugs.rs`); the result shows as a notice.
-    pub fn report_bug(&self, title: &str, body: &str, include_log: bool) {
+    /// Send an Ingle bug report (see `bugs.rs`). How it goes shows in `AppState::bug_send`, with
+    /// a thank-you notice once it's sent; a report that doesn't go is logged, and the app keeps
+    /// its text. `turn_on`: the bug server, when it's one of my servers and I'm its owner:
+    /// switch collecting on there first.
+    pub fn report_bug(&self, title: &str, body: &str, include_log: bool, turn_on: Option<&str>) {
         let shared = self.shared.clone();
         let report = ingle_proto::control::BugReport {
             title: title.trim().to_string(),
@@ -1713,11 +1718,35 @@ impl Engine {
             os: bugs::os_name(),
             log: if include_log { bugs::log_tail(&shared, ingle_proto::control::BUG_LOG_MAX - 1000) } else { String::new() },
         };
+        let mine = turn_on.and_then(|k| self.handle(k));
+        shared.state.write().bug_send = BugSend::Sending;
         self.shared.rt.spawn(async move {
-            match bugs::send(shared.clone(), report).await {
-                Ok(()) => shared.state.write().toast("Thanks! Your bug report was sent.", false),
-                Err(e) => shared.state.write().toast(format!("Couldn't send the bug report: {e:#}"), true),
+            let r = async {
+                if let Some(h) = mine {
+                    let answer = tokio::time::timeout(std::time::Duration::from_secs(15), h.request(Request::SetBugReports { on: true })).await;
+                    match answer {
+                        Ok(Ok(Event::Ok)) => {}
+                        Ok(Ok(Event::Error { message, .. })) => anyhow::bail!("couldn't switch on collecting: {message}"),
+                        _ => anyhow::bail!("your server didn't answer when asked to collect bug reports"),
+                    }
+                }
+                bugs::send(shared.clone(), report).await
             }
+            .await;
+            let mut st = shared.state.write();
+            match r {
+                Ok(()) => {
+                    st.bug_send = BugSend::Sent;
+                    st.toast("Thanks! Your bug report was sent.", false);
+                }
+                Err(e) => {
+                    let message = format!("{e:#}");
+                    warn!("bug report not sent: {message}");
+                    st.bug_send = BugSend::Failed { not_collecting: bugs::is_not_collecting(&message), message };
+                }
+            }
+            st.bug_sends_done += 1;
+            drop(st);
             (shared.repaint)();
         });
     }
@@ -1728,6 +1757,8 @@ impl Engine {
         self.request_then(key, Request::ListBugs, move |shared, ev| match ev {
             Event::Bugs { mut reports } => {
                 bugs::sort(&mut reports);
+                let name = shared.state.read().server(&k).map(|s| s.info.name.clone()).unwrap_or_default();
+                bugs::save_approved(shared, &k, &name, &reports);
                 shared.state.write().bugs.insert(k, reports);
             }
             Event::Error { message, .. } => shared.state.write().toast(message, true),
@@ -1737,10 +1768,19 @@ impl Engine {
 
     /// Owner only: approve (for fixing), reject or mark fixed.
     pub fn set_bug_status(&self, key: &str, id: i64, status: ingle_proto::control::BugStatus) {
-        if let Some(list) = self.shared.state.write().bugs.get_mut(key) {
-            if let Some(b) = list.iter_mut().find(|b| b.id == id) {
-                b.status = status;
-            }
+        let changed = {
+            let mut st = self.shared.state.write();
+            let name = st.server(key).map(|s| s.info.name.clone()).unwrap_or_default();
+            st.bugs.get_mut(key).map(|list| {
+                if let Some(b) = list.iter_mut().find(|b| b.id == id) {
+                    b.status = status;
+                }
+                (name, list.clone())
+            })
+        };
+        // What's approved now, for Claude (see `bugs::save_approved`).
+        if let Some((name, list)) = changed {
+            bugs::save_approved(&self.shared, key, &name, &list);
         }
         self.request_then(key, Request::SetBugStatus { id, status }, move |shared, ev| {
             if let Event::Error { message, .. } = ev {

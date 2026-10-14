@@ -345,6 +345,8 @@ impl IngleApp {
     fn tile(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, t: &Tile, rect: Rect, acts: &mut Vec<Act>) {
         let resp = ui.allocate_rect(rect, Sense::click());
         let p = ui.painter_at(rect);
+        // A watched stream's resolution and frame rate, in the corner left of its badges.
+        let mut quality: Option<String> = None;
         p.rect_filled(rect, CornerRadius::same(12), theme::TILE);
         let tex = if t.screen && !t.watching { None } else if t.screen || t.has_camera { self.texture(ctx, t.key) } else { None };
         match tex {
@@ -360,11 +362,7 @@ impl IngleApp {
                 p.rect_stroke(rect.expand(6.0), CornerRadius::same(18), Stroke::new(12.0f32, theme::STAGE), StrokeKind::Inside);
                 if t.screen && !t.is_me {
                     let fps = self.fps.get(&t.key).map(|f| f.2).unwrap_or(0.0);
-                    let q = format!("{}p · {:.0} fps", size.y as u32, fps);
-                    let g = ui.fonts_mut(|f| f.layout_no_wrap(q, theme::font(11.5), theme::MUTED));
-                    let b = Rect::from_min_size(rect.right_top() + vec2(-70.0 - g.size().x - 12.0, 10.0), vec2(g.size().x + 12.0, 22.0));
-                    p.rect_filled(b, CornerRadius::same(5), Color32::from_black_alpha(150));
-                    p.galley(b.min + vec2(6.0, 11.0 - g.size().y / 2.0), g, theme::MUTED);
+                    quality = Some(format!("{}p · {:.0} fps", size.y as u32, fps));
                 }
             }
             None => {
@@ -423,6 +421,13 @@ impl IngleApp {
             let id = ui.id().with(("viewers", t.key.session));
             let names = t.viewers.join("\n");
             ui.interact(b, id, egui::Sense::hover()).on_hover_text(format!("Watching:\n{names}"));
+            right = b.left() - 6.0;
+        }
+        if let Some(q) = quality {
+            let g = ui.fonts_mut(|f| f.layout_no_wrap(q, theme::font(11.5), theme::MUTED));
+            let b = Rect::from_min_size(pos2(right - g.size().x - 12.0, rect.top() + 10.0), vec2(g.size().x + 12.0, 22.0));
+            p.rect_filled(b, CornerRadius::same(5), Color32::from_black_alpha(150));
+            p.galley(b.min + vec2(6.0, 11.0 - g.size().y / 2.0), g, theme::MUTED);
         }
         if t.screen && t.has_sound && (t.watching || t.is_me) {
             // Little speaker next to the name: this stream has sound (muted look at 0%).

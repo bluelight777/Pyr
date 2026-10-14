@@ -340,6 +340,18 @@ pub struct BackupStatus {
     pub error: Option<String>,
 }
 
+/// How the last bug report I sent went (the Report a bug window shows it).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum BugSend {
+    #[default]
+    Idle,
+    Sending,
+    Sent,
+    /// It didn't go: why, and whether that's because the bug server isn't collecting reports
+    /// (which its owner can switch on).
+    Failed { message: String, not_collecting: bool },
+}
+
 #[derive(Clone, Debug)]
 pub struct Toast {
     /// Unique, for dismissing it.
@@ -368,6 +380,10 @@ pub struct AppState {
     /// is rejoined, camera and screen share included, as soon as the server is back.
     pub voice_rejoin: Option<VoiceRejoin>,
     pub toasts: Vec<Toast>,
+    /// The bug report being sent, or how the last one went; `bug_sends_done` counts the sends
+    /// that have finished, so the app sees each outcome once.
+    pub bug_send: BugSend,
+    pub bug_sends_done: u64,
     /// Bug reports on servers I own (fetched when looked at), by server key.
     pub bugs: HashMap<String, Vec<ingle_proto::control::BugEntry>>,
     /// Backups of servers I own, by server key.
