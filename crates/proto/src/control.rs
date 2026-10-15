@@ -1187,19 +1187,11 @@ pub fn clean_member_name(raw: &str) -> Option<String> {
     Some(name)
 }
 
-/// Channel names are lower-case, dash separated for text channels (Discord style);
-/// voice channels keep their spacing and case. Emoji are welcome (🎮-gaming), and stay whole
-/// (see [`clean_name_with_emoji`]).
-pub fn clean_channel_name(raw: &str, kind: ChannelKind) -> Option<String> {
-    let name = clean_name_with_emoji(raw, 64)?;
-    Some(match kind {
-        ChannelKind::Voice => name,
-        ChannelKind::Text => name
-            .to_lowercase()
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join("-"),
-    })
+/// Channel names keep their spacing and capitals, text channels' too (unlike Discord's
+/// lower-case names with dashes): "📜 Rules", "🎮 Game Night". Emoji are welcome, and stay
+/// whole (see [`clean_name_with_emoji`]).
+pub fn clean_channel_name(raw: &str, _kind: ChannelKind) -> Option<String> {
+    clean_name_with_emoji(raw, 64)
 }
 
 /// [`clean_name`], except that an emoji made of several stays whole: the zero-width joiner
@@ -1257,7 +1249,11 @@ mod tests {
 
     #[test]
     fn channel_names_take_emoji_whole() {
-        assert_eq!(clean_channel_name("🎮 Gaming", ChannelKind::Text).as_deref(), Some("🎮-gaming"));
+        assert_eq!(clean_channel_name("🎮 Gaming", ChannelKind::Text).as_deref(), Some("🎮 Gaming"));
+        // Text channels keep their spaces and capitals, like voice channels (not Discord's
+        // "📜-rules").
+        assert_eq!(clean_channel_name("  📜   Rules ", ChannelKind::Text).as_deref(), Some("📜 Rules"));
+        assert_eq!(clean_channel_name("Officer Chat", ChannelKind::Text).as_deref(), Some("Officer Chat"));
         assert_eq!(clean_channel_name("🔊 Chill Zone 🎵", ChannelKind::Voice).as_deref(), Some("🔊 Chill Zone 🎵"));
         // Emoji made of several stay whole: a profession, a flag with a joiner, skin tones, a
         // keycap, Scotland's flag.
@@ -1355,7 +1351,8 @@ mod tests {
 
     #[test]
     fn names() {
-        assert_eq!(clean_channel_name("  Off Topic  ", ChannelKind::Text).unwrap(), "off-topic");
+        // Text channels keep their spaces and capitals too (unlike Discord's "off-topic").
+        assert_eq!(clean_channel_name("  Off Topic  ", ChannelKind::Text).unwrap(), "Off Topic");
         assert_eq!(clean_channel_name("Game  Night", ChannelKind::Voice).unwrap(), "Game Night");
         assert!(clean_name("\n\t ", 10).is_none());
         assert_eq!(clean_name("abcdefghijkl", 5).unwrap(), "abcde");

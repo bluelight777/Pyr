@@ -77,8 +77,8 @@ fn first_run_setup(db: &db::Db, name: Option<&str>) -> Result<()> {
         .unwrap_or_else(|| "My Ingle Server".to_string());
     db.set_meta("name", &name)?;
     db.set_meta("description", "")?;
-    db.create_channel("general", ChannelKind::Text)?;
-    db.create_channel("links-and-clips", ChannelKind::Text)?;
+    db.create_channel("General", ChannelKind::Text)?;
+    db.create_channel("Links and clips", ChannelKind::Text)?;
     db.create_channel("Lounge", ChannelKind::Voice)?;
     db.create_channel("Gaming", ChannelKind::Voice)?;
     let invite = db::new_invite_code(10);

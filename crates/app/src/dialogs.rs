@@ -284,7 +284,7 @@ impl IngleApp {
                     field_label(ui, "Channel name");
                     let open_id = egui::Id::new(("channel-emoji-open", "create"));
                     let was_picking = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
-                    let r = self.channel_name_input(ui, st, "create", &mut name, if k == ChannelKind::Text { "new-channel" } else { "Game Night" }, acts);
+                    let r = self.channel_name_input(ui, st, "create", &mut name, if k == ChannelKind::Text { "New channel" } else { "Game Night" }, acts);
                     let picking = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
                     // (Enter in the emoji picker's search picks an emoji: it doesn't create the
                     // channel. The cursor stays in the name, except while that search has it.)

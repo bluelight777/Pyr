@@ -835,6 +835,16 @@ impl IngleApp {
                         self.ui.server = Some(r.server_key.clone());
                         if let Some(c) = r.channel_id.filter(|c| s.channel(*c).is_some()) {
                             acts.push(Act::Join { key: r.server_key.clone(), channel: c });
+                            // Back muted or deafened (as you were before the update): say so, so
+                            // it doesn't look like the update did it.
+                            let note = match self.engine.voice_prefs() {
+                                (_, true) => Some("You're deafened, as you were before Ingle updated. Click the headphones to hear everyone."),
+                                (true, false) => Some("You're muted, as you were before Ingle updated. Click the microphone to talk."),
+                                _ => None,
+                            };
+                            if let Some(n) = note {
+                                acts.push(Act::Toast(n.to_string(), false));
+                            }
                         }
                         drop(st);
                         self.resume = None;

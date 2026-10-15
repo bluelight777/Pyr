@@ -230,6 +230,29 @@ async fn mute_and_deafen_survive_updates() {
     assert_eq!(a.voice_prefs(), (false, false));
     assert!(!seen(&b, &alice).unwrap().self_mute);
 
+    // 6. From a version that didn't remember again, but she'd left deafened (bug report #3: she
+    // came back silently deafened, and it looked like the update had muted her): her
+    // microphone stays off, she hears everyone again, and she's told why she's muted.
+    a.set_deafen(true);
+    wait_for("bob sees alice deafened (6)", 10, || seen(&b, &alice).map(|p| p.self_mute && p.self_deaf).unwrap_or(false)).await;
+    a.shutdown();
+    drop(a);
+    wait_for("bob sees alice go (6)", 10, || seen(&b, &alice).is_none()).await;
+    let mut old: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(old.as_object_mut().unwrap().remove("self_voice").is_some());
+    std::fs::write(&path, serde_json::to_vec_pretty(&old).unwrap()).unwrap();
+    let a = bot(&adir, "Alice", 440.0, ha.clone(), false);
+    connected(&a, "alice reconnected (6)").await;
+    a.join_voice(&key, lounge);
+    wait_for("alice back in the call (6)", 15, || a.state().call.is_some()).await;
+    assert_eq!(a.voice_prefs(), (true, false), "muted, not deafened");
+    wait_for("bob sees alice muted, not deafened (6)", 10, || seen(&b, &alice).map(|p| p.self_mute && !p.self_deaf).unwrap_or(false)).await;
+    ha.lock().clear();
+    wait_for("alice hears bob (6)", 10, || loud(&ha.lock())).await;
+    silent_for(&hb, "bob, alice still muted (6)").await;
+    let told = a.state().toasts.iter().any(|t| t.text.contains("Click the microphone to talk"));
+    assert!(told, "alice is told why she's muted");
+
     a.shutdown();
     b.shutdown();
     server.shutdown().await;

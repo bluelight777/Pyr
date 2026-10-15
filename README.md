@@ -27,8 +27,8 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
 **Text chat**
 
 - Servers with **text channels** and **voice channels** (each voice channel has its own
-  chat), emoji in channel names (🎮-gaming, 🔊 Chill Zone), channel topics, server icons and
-  profile pictures.
+  chat), channel names that keep their spaces and capitals, with emoji if you like
+  (📜 Rules, 🎮 Game Night), channel topics, server icons and profile pictures.
 - Markdown, replies, **@mentions** (people, roles, @everyone and @here, suggested as you
   type), reactions, edits, typing indicators and history. Deleting a message asks first,
   showing the message and what goes with it (hold Shift to delete straight away).

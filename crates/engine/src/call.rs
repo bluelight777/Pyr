@@ -362,14 +362,24 @@ impl Call {
                 bail!("unexpected reply")
             }
         };
-        // Just updated from a version that didn't remember mute and deafen: come back the way
-        // the server saw you leave. From then on this PC remembers (and is what counts).
+        // Just updated from a version that didn't remember mute and deafen (0.6.1 or older): a
+        // microphone the server saw muted when Ingle closed stays muted (nobody's heard who
+        // didn't mean to be), but you hear everyone again, and you're told (coming back
+        // silently muted and deafened looked like the update had done it: bug report #3).
+        // From then on this PC remembers (and is what counts).
         if let Some(b) = before {
             let unknown = shared.config.lock().self_voice.is_none();
             if unknown {
                 info!(muted = b.self_mute, deafened = b.self_deaf, "rejoining voice the way I left it");
-                *shared.voice_prefs.lock() = (b.self_mute, b.self_deaf);
+                let muted = b.self_mute || b.self_deaf;
+                *shared.voice_prefs.lock() = (muted, false);
                 shared.apply_voice_prefs();
+                if muted {
+                    shared
+                        .state
+                        .write()
+                        .toast("You're muted: your microphone was off when Ingle closed to update. Click the microphone to talk.", false);
+                }
             }
         }
         // Mute or deafen changed while joining (or just above): tell everyone. Nothing has been

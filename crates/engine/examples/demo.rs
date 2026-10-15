@@ -171,7 +171,7 @@ fn setup() -> Result<()> {
 
     // An evening in #general.
     say(mara, &key, general, "Game night Friday? I set up the **Gaming** voice channel 🎉", None)?;
-    say(mara, &key, general, "Bracket is in #links-and-clips, sign up by Thursday", None)?;
+    say(mara, &key, general, "Bracket is in #Links and clips, sign up by Thursday", None)?;
     let sharp = say(theo, &key, general, "The screen share in here is *so* much sharper than Discord's free tier", None)?;
     for e in [mara, rae, &me] {
         e.react(&key, sharp, "🔥", true);
@@ -194,7 +194,7 @@ fn setup() -> Result<()> {
     say(&me, &key, general, "On my way! Hosting tips are in the README :)", Some(omw))?;
 
     // Elsewhere, unread.
-    if let Some(links) = channel(mara, &key, "links-and-clips") {
+    if let Some(links) = channel(mara, &key, "Links and clips") {
         say(mara, &key, links, "Friday bracket: reply here to sign up 👇", None)?;
     }
     if let Some(notes) = channel(theo, &key, "patch-notes") {

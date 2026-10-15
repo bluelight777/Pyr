@@ -31,6 +31,17 @@ fn main() {
     }
     let get = |k: &str| opts.get(k).cloned();
     let need = |k: &str| get(k).unwrap_or_else(|| panic!("--{k} is required"));
+    // A backup to restore (--restore <folder>); a sealed server key opens with the backing-up
+    // owner's identity.key (--identity <file>).
+    let backup = || {
+        get("restore").map(|d| ingle_host::restore::Backup {
+            dir: PathBuf::from(d),
+            key: get("identity")
+                .and_then(|f| std::fs::read_to_string(f).ok())
+                .and_then(|t| ingle_proto::b64::decode_array::<32>(t.trim()))
+                .map(|seed| ingle_proto::crypto::backup_key(&ingle_proto::crypto::Identity::from_seed(seed))),
+        })
+    };
     let payloads = Payloads::find();
 
     // Print steps and log lines as they happen.
@@ -76,11 +87,7 @@ fn main() {
                 port: ingle_host::DEFAULT_PORT,
                 payloads,
                 wait_for_boot: None,
-                // A sealed server key opens with the backing-up owner's identity.key (--identity).
-                restore: get("restore").map(|d| ingle_host::restore::Backup {
-                    dir: PathBuf::from(d),
-                    key: get("identity").and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| ingle_proto::b64::decode_array::<32>(t.trim())).map(|seed| ingle_proto::crypto::backup_key(&ingle_proto::crypto::Identity::from_seed(seed))),
-                }),
+                restore: backup(),
             };
             install::setup_existing(login, opts, progress.clone(), get("config").map(PathBuf::from));
         }
@@ -118,7 +125,7 @@ fn main() {
                 price_monthly: get("price").map(|p| p.parse().unwrap_or(0.0)).unwrap_or(6.0),
                 size_label: String::new(),
                 region_label: String::new(),
-                restore: get("restore").map(PathBuf::from),
+                restore: backup(),
             };
             digitalocean::rent(req, PathBuf::from(need("config")), payloads, progress.clone());
         }
@@ -130,7 +137,7 @@ fn main() {
                 region: String::new(),
                 size: String::new(),
             };
-            digitalocean::retry_install(d, get("name").unwrap_or_default(), PathBuf::from(need("config")), payloads, progress.clone(), get("restore").map(PathBuf::from));
+            digitalocean::retry_install(d, get("name").unwrap_or_default(), PathBuf::from(need("config")), payloads, progress.clone(), backup());
         }
         "delete" => {
             match digitalocean::delete(&need("token"), need("droplet").parse().expect("droplet id"), &PathBuf::from(need("config"))) {

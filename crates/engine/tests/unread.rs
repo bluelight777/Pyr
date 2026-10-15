@@ -221,8 +221,8 @@ async fn channels_keep_unread_across_restarts() {
     b.add_server(&server.invite_link()).unwrap();
     wait_for("bob connected", 10, || connected(&b)).await;
     let key = a.state().servers[0].key.clone();
-    let general = channel_named(&a, "general");
-    let clips = channel_named(&a, "links-and-clips");
+    let general = channel_named(&a, "General");
+    let clips = channel_named(&a, "Links and clips");
     let lounge = channel_named(&a, "Lounge");
 
     // Alice is in #clips, in front of it; Bob writes in #general.

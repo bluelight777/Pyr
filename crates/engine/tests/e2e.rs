@@ -130,7 +130,7 @@ async fn chat_voice_video_end_to_end() {
     }
 
     // ---- text chat
-    let general = a.state().servers[0].channels.iter().find(|c| c.name == "general").unwrap().id;
+    let general = a.state().servers[0].channels.iter().find(|c| c.name == "General").unwrap().id;
     b.load_history(&key, general, false);
     a.send_message(&key, general, "hello from **Alice**", None);
     wait_for("bob gets message", 5, || {
@@ -167,9 +167,9 @@ async fn chat_voice_video_end_to_end() {
     };
     assert!(reply_ok, "history reload");
 
-    // ---- admin: create a channel
+    // ---- admin: create a channel (its name as typed: spaces and capitals, no dashes)
     a.create_channel(&key, "Clips And Links 2", ChannelKind::Text);
-    wait_for("bob sees new channel", 5, || b.state().servers[0].channels.iter().any(|c| c.name == "clips-and-links-2")).await;
+    wait_for("bob sees new channel", 5, || b.state().servers[0].channels.iter().any(|c| c.name == "Clips And Links 2")).await;
 
     // ---- voice: both join Lounge
     let lounge = a.state().servers[0].channels.iter().find(|c| c.name == "Lounge").unwrap().id;
