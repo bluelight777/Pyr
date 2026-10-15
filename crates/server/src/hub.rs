@@ -206,6 +206,8 @@ pub struct Hub {
     limits: Mutex<Limits>,
     /// Bug reports taken in the last hour: from each address, and in all (flood limits).
     bug_reports: Mutex<(HashMap<Place, Vec<Instant>>, Vec<Instant>)>,
+    /// The same for plugins sent in for the library.
+    plugin_submissions: Mutex<(HashMap<Place, Vec<Instant>>, Vec<Instant>)>,
     /// Uploads per member: bytes being received now, and what arrived in the last hour.
     uploads: Mutex<HashMap<UserId, (u64, Vec<(Instant, u64)>)>>,
 }
@@ -389,6 +391,7 @@ impl Hub {
             next_session: AtomicU32::new(1),
             limits: Mutex::new(Limits::default()),
             bug_reports: Mutex::new((HashMap::new(), Vec::new())),
+            plugin_submissions: Mutex::new((HashMap::new(), Vec::new())),
             uploads: Mutex::new(HashMap::new()),
         })
     }
@@ -510,6 +513,8 @@ impl Hub {
             klipy_key: self.db.get_meta("klipy_key").unwrap_or_default(),
             bug_reports: self.db.get_meta("bug_reports").as_deref() == Some("1"),
             new_bug_reports: self.db.new_bug_count(),
+            plugin_submissions: self.db.get_meta("plugin_submissions").as_deref() == Some("1"),
+            new_plugin_submissions: self.db.new_submission_count(),
         }
     }
 
@@ -520,6 +525,7 @@ impl Hub {
     fn info_as(mut info: ServerInfo, user: Option<&db::UserRow>) -> ServerInfo {
         if !user.is_some_and(|u| u.role == Role::Owner) {
             info.new_bug_reports = 0;
+            info.new_plugin_submissions = 0;
         }
         if user.is_none() {
             info.giphy_key.clear();
@@ -722,7 +728,7 @@ impl Hub {
             members,
             voice: inner.voice.values().map(|v| v.p.clone()).collect(),
             roles: self.db.roles(),
-            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE].iter().map(|s| s.to_string()).collect(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE].iter().map(|s| s.to_string()).collect(),
             dms: self.db.dms_of(uid),
             relations: self.db.relations_of(uid),
         };
@@ -1250,6 +1256,81 @@ impl Hub {
         Ok(())
     }
 
+    /// Take a plugin sent in for the library (instead of logging in), if the owner collects
+    /// them and the sender isn't flooding: at most 3 an hour from one place, 30 in all, and
+    /// 300 waiting. Its files must be a Rust project's (a Cargo.toml at the top) with plain
+    /// relative paths, 600 KB in all.
+    pub fn take_plugin_submission(&self, ip: IpAddr, mut sub: PluginSubmission) -> Result<i64, String> {
+        let place = Place::of(ip, 64);
+        if self.db.get_meta("plugin_submissions").as_deref() != Some("1") {
+            return Err("This server doesn't collect plugins.".into());
+        }
+        let hour = Duration::from_secs(3600);
+        {
+            let mut g = self.plugin_submissions.lock();
+            let (per_ip, all) = &mut *g;
+            all.retain(|t| t.elapsed() < hour);
+            per_ip.retain(|_, v| {
+                v.retain(|t| t.elapsed() < hour);
+                !v.is_empty()
+            });
+            let mine = per_ip.entry(place).or_default();
+            if mine.len() >= 3 || all.len() >= 30 {
+                return Err("Lots of plugins sent just now. Please try again in a while.".into());
+            }
+            mine.push(Instant::now());
+            all.push(Instant::now());
+        }
+        if self.db.new_submission_count() >= 300 {
+            return Err("The plugin inbox is full right now.".into());
+        }
+        let clip = |s: &mut String, max: usize| {
+            let s2: String = s.chars().filter(|c| !c.is_control()).collect();
+            *s = s2.trim().to_string();
+            while s.len() > max {
+                s.pop();
+            }
+        };
+        clip(&mut sub.name, 60);
+        clip(&mut sub.kind, 10);
+        clip(&mut sub.version, 30);
+        clip(&mut sub.summary, 200);
+        clip(&mut sub.author, 80);
+        clip(&mut sub.contact, 120);
+        clip(&mut sub.app_version, 40);
+        if sub.name.is_empty() {
+            return Err("The plugin needs a name.".into());
+        }
+        if sub.kind != "program" && sub.kind != "addon" {
+            return Err("A plugin is a program or an add-on.".into());
+        }
+        if sub.files.is_empty() || sub.files.len() > SUBMISSION_FILES_MAX {
+            return Err(format!("A plugin has between 1 and {SUBMISSION_FILES_MAX} files."));
+        }
+        let mut size = 0usize;
+        let mut paths = std::collections::HashSet::new();
+        for f in &sub.files {
+            if !plain_relative_path(&f.path) {
+                return Err(format!("{:?} isn't a plain path inside the plugin's folder.", f.path.chars().take(80).collect::<String>()));
+            }
+            if !paths.insert(f.path.as_str()) {
+                return Err(format!("{} is in it twice.", f.path));
+            }
+            size += b64::decode(&f.data).map_err(|_| format!("{} isn't readable.", f.path))?.len();
+            if size > SUBMISSION_MAX {
+                return Err(format!("The plugin is bigger than {} KB.", SUBMISSION_MAX / 1000));
+            }
+        }
+        if !paths.contains("Cargo.toml") {
+            return Err("Plugins are Rust projects: a Cargo.toml goes at the top.".into());
+        }
+        let files = serde_json::to_string(&sub.files).map_err(|e| e.to_string())?;
+        let id = self.db.add_submission(&sub, &files, size as u64).map_err(|e| format!("{e:#}"))?;
+        info!(id, name = %sub.name, "plugin sent in for the library");
+        self.broadcast_info();
+        Ok(id)
+    }
+
     pub fn file_path(&self, id: &str) -> Option<std::path::PathBuf> {
         // Ids are hex we made ourselves; anything else never touches the disk.
         (id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())).then(|| self.files_dir.join(id))
@@ -1294,4 +1375,14 @@ pub fn wipe_file(path: &std::path::Path) {
         }
         let _ = std::fs::remove_file(path);
     }
+}
+
+/// A path inside a plugin's folder as sent in: parts separated by `/`, none empty, `.` or
+/// `..`, no backslashes, colons or control characters, and not too long.
+pub fn plain_relative_path(p: &str) -> bool {
+    p.len() <= 200
+        && !p.starts_with('/')
+        && !p.contains(['\\', ':'])
+        && !p.chars().any(|c| c.is_control())
+        && p.split('/').all(|part| !part.is_empty() && part != "." && part != "..")
 }

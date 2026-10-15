@@ -124,30 +124,38 @@ pub fn os_name() -> String {
 
 /// Send a report to the bug server.
 pub async fn send(shared: Arc<Shared>, report: BugReport) -> Result<()> {
-    let (host, port, fp) = server().ok_or_else(|| anyhow!("This copy of Ingle has nowhere to send bug reports."))?;
+    let server = server().ok_or_else(|| anyhow!("This copy of Ingle has nowhere to send bug reports."))?;
+    send_alone(shared, server, Request::ReportBug { report }, "the bug report server").await
+}
+
+/// Sends one request that's sent instead of logging in (a bug report, a plugin for the
+/// library) to `server` (host, port, key) and waits for its Ok. `who` names the server in
+/// errors.
+pub(crate) async fn send_alone(shared: Arc<Shared>, server: (String, u16, [u8; 32]), req: Request, who: &str) -> Result<()> {
+    let (host, port, fp) = server;
     let addr = crate::net::resolve(&host, port).await?;
     let endpoint = shared.endpoints.lock().map_err(|_| anyhow!("network unavailable"))?.for_addr(addr)?;
     let connecting = endpoint.connect_with(crate::net::client_config(fp)?, addr, ingle_proto::APP_ID)?;
     let conn = tokio::time::timeout(Duration::from_secs(10), connecting)
         .await
-        .map_err(|_| anyhow!("the bug report server didn't answer"))?
-        .context("couldn't reach the bug report server")?;
+        .map_err(|_| anyhow!("{who} didn't answer"))?
+        .with_context(|| format!("couldn't reach {who}"))?;
     let r = async {
         let (mut send, mut recv) = conn.open_bi().await?;
         send.write_all(ingle_proto::CONTROL_PREAMBLE).await?;
         let hello: ServerFrame = tokio::time::timeout(Duration::from_secs(10), crate::net::read_frame(&mut recv))
             .await
-            .map_err(|_| anyhow!("the bug report server didn't answer"))??
-            .ok_or_else(|| anyhow!("the bug report server closed the connection"))?;
+            .map_err(|_| anyhow!("{who} didn't answer"))??
+            .ok_or_else(|| anyhow!("{who} closed the connection"))?;
         let Event::Hello { proto, .. } = hello.ev else { bail!("unexpected greeting") };
         if proto != PROTOCOL_VERSION {
-            bail!("the bug report server needs updating");
+            bail!("{who} needs updating");
         }
-        send.write_all(&framing::encode(&ClientFrame { id: 1, req: Request::ReportBug { report } })).await?;
-        let reply: ServerFrame = tokio::time::timeout(Duration::from_secs(15), crate::net::read_frame(&mut recv))
+        send.write_all(&framing::encode(&ClientFrame { id: 1, req })).await?;
+        let reply: ServerFrame = tokio::time::timeout(Duration::from_secs(30), crate::net::read_frame(&mut recv))
             .await
-            .map_err(|_| anyhow!("the bug report server didn't answer"))??
-            .ok_or_else(|| anyhow!("the bug report server closed the connection"))?;
+            .map_err(|_| anyhow!("{who} didn't answer"))??
+            .ok_or_else(|| anyhow!("{who} closed the connection"))?;
         match reply.ev {
             Event::Ok => Ok(()),
             Event::Error { message, .. } => bail!("{message}"),

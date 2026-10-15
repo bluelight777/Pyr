@@ -32,6 +32,7 @@ pub mod errors {
     }
 }
 pub mod net;
+pub mod plugins;
 pub mod server;
 pub mod sfx;
 pub mod soundboard;
@@ -632,6 +633,10 @@ impl Engine {
             bug_sends_done: 0,
             backups: HashMap::new(),
             bugs: HashMap::new(),
+            plugin_send: Default::default(),
+            plugin_sends_done: 0,
+            submissions: HashMap::new(),
+            submission_files: HashMap::new(),
             devices: DeviceLists::default(),
             settings: cfg.settings.clone(),
             user_volumes: cfg.user_volumes.clone(),
@@ -1827,6 +1832,119 @@ impl Engine {
     /// Owner only: collect Ingle bug reports on this server, or stop.
     pub fn set_bug_reports(&self, key: &str, on: bool) {
         self.request_then(key, Request::SetBugReports { on }, move |shared, ev| {
+            if let Event::Error { message, .. } = ev {
+                shared.state.write().toast(message, true);
+            }
+        });
+    }
+
+    /// Send a plugin in for the Ingle Library (see `plugins.rs`). How it goes shows in
+    /// `AppState::plugin_send`, like a bug report. `turn_on`: the library server, when it's
+    /// mine: switch collecting on there first.
+    pub fn submit_plugin(&self, mut submission: ingle_proto::control::PluginSubmission, turn_on: Option<&str>) {
+        let shared = self.shared.clone();
+        submission.app_version = env!("CARGO_PKG_VERSION").to_string();
+        let mine = turn_on.and_then(|k| self.handle(k));
+        shared.state.write().plugin_send = BugSend::Sending;
+        self.shared.rt.spawn(async move {
+            let r = async {
+                if let Some(h) = mine {
+                    let answer = tokio::time::timeout(std::time::Duration::from_secs(15), h.request(Request::SetPluginSubmissions { on: true })).await;
+                    match answer {
+                        Ok(Ok(Event::Ok)) => {}
+                        Ok(Ok(Event::Error { message, .. })) => anyhow::bail!("couldn't switch on collecting: {message}"),
+                        _ => anyhow::bail!("your server didn't answer when asked to collect plugins"),
+                    }
+                }
+                plugins::send(shared.clone(), submission).await
+            }
+            .await;
+            let mut st = shared.state.write();
+            match r {
+                Ok(()) => {
+                    st.plugin_send = BugSend::Sent;
+                    st.toast("Sent! Your plugin will be looked at before it's listed.", false);
+                }
+                Err(e) => {
+                    let message = format!("{e:#}");
+                    warn!("plugin not sent: {message}");
+                    st.plugin_send = BugSend::Failed { not_collecting: plugins::is_not_collecting(&message), message };
+                }
+            }
+            st.plugin_sends_done += 1;
+            drop(st);
+            (shared.repaint)();
+        });
+    }
+
+    /// Owner only: the plugins sent in to a server, into `AppState::submissions`.
+    pub fn list_submissions(&self, key: &str) {
+        let k = key.to_string();
+        self.request_then(key, Request::ListPluginSubmissions, move |shared, ev| {
+            if let Event::PluginSubmissions { mut list } = ev {
+                plugins::sort(&mut list);
+                shared.state.write().submissions.insert(k, list);
+            }
+        });
+    }
+
+    /// Owner only: one submission's files, into `AppState::submission_files` (to look at).
+    pub fn open_submission(&self, key: &str, id: i64) {
+        let k = key.to_string();
+        self.request_then(key, Request::GetPluginSubmission { id }, move |shared, ev| {
+            if let Event::PluginSubmission { entry, files } = ev {
+                shared.state.write().submission_files.insert((k, entry.id), files);
+            }
+        });
+    }
+
+    /// Owner only: approve (its source is saved to this PC for building, see
+    /// `plugins::save_approved`), reject, mark listed, or put back.
+    pub fn set_submission_status(&self, key: &str, id: i64, status: ingle_proto::control::SubmissionStatus) {
+        use ingle_proto::control::SubmissionStatus;
+        let k = key.to_string();
+        let set = move |shared: &Arc<Shared>, handle: Option<ServerHandle>| {
+            if let Some(h) = handle {
+                let shared = shared.clone();
+                shared.rt.clone().spawn(async move {
+                    match tokio::time::timeout(std::time::Duration::from_secs(15), h.request(Request::SetPluginSubmissionStatus { id, status })).await {
+                        Ok(Ok(Event::Ok)) => {}
+                        Ok(Ok(Event::Error { message, .. })) => shared.state.write().toast(format!("Couldn't change the plugin: {message}"), true),
+                        _ => shared.state.write().toast("Couldn't change the plugin: the server didn't answer.", true),
+                    }
+                    (shared.repaint)();
+                });
+            }
+        };
+        {
+            let mut st = self.shared.state.write();
+            if let Some(e) = st.submissions.get_mut(key).and_then(|l| l.iter_mut().find(|e| e.id == id)) {
+                e.status = status;
+            }
+        }
+        if status != SubmissionStatus::Approved {
+            set(&self.shared, self.handle(key));
+            return;
+        }
+        // Approved: save its source here first (for building), then say so to the server.
+        let handle = self.handle(key);
+        self.request_then(key, Request::GetPluginSubmission { id }, move |shared, ev| match ev {
+            Event::PluginSubmission { entry, files } => match plugins::save_approved(&shared.config_dir, &k, &entry, &files) {
+                Ok(dir) => {
+                    tracing::info!("approved plugin saved to {}", dir.display());
+                    shared.state.write().toast(format!("Approved. Its source is saved for building in {}", dir.display()), false);
+                    set(shared, handle);
+                }
+                Err(e) => shared.state.write().toast(format!("Couldn't save the plugin's source, so it wasn't approved: {e:#}"), true),
+            },
+            Event::Error { message, .. } => shared.state.write().toast(format!("Couldn't get the plugin: {message}"), true),
+            _ => {}
+        });
+    }
+
+    /// Owner only: collect plugins for the Ingle Library on this server, or stop.
+    pub fn set_plugin_submissions(&self, key: &str, on: bool) {
+        self.request_then(key, Request::SetPluginSubmissions { on }, move |shared, ev| {
             if let Event::Error { message, .. } = ev {
                 shared.state.write().toast(message, true);
             }

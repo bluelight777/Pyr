@@ -106,6 +106,17 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
         tokio::time::sleep(Duration::from_millis(300)).await;
         return Ok(());
     }
+    // Nor this: a plugin sent in for the Ingle Library (where they're collected).
+    if let Request::SubmitPlugin { submission } = login.req {
+        let reply = match hub.take_plugin_submission(conn.remote_address().ip(), submission) {
+            Ok(_) => frame(login.id, Event::Ok),
+            Err(msg) => reject(ErrorCode::RateLimited, &msg),
+        };
+        send.write_all(&reply).await?;
+        let _ = send.finish();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        return Ok(());
+    }
     let Request::Login { proto, user_id, sig, name, invite, client } = login.req else {
         send.write_all(&reject(ErrorCode::BadRequest, "expected login")).await?;
         bail!("first request was not a login");
@@ -1252,6 +1263,41 @@ impl Ctx<'_> {
                 Ok(Event::Ok)
             }
             Request::ReportBug { .. } => bad("send bug reports instead of logging in"),
+            Request::SubmitPlugin { .. } => bad("send plugins instead of logging in"),
+            Request::ListPluginSubmissions => {
+                if self.role() != Role::Owner {
+                    return Err((ErrorCode::Forbidden, "Only the server's owner can see plugins sent in.".into()));
+                }
+                Ok(Event::PluginSubmissions { list: db.submissions(1000) })
+            }
+            Request::GetPluginSubmission { id } => {
+                if self.role() != Role::Owner {
+                    return Err((ErrorCode::Forbidden, "Only the server's owner can see plugins sent in.".into()));
+                }
+                let Some((entry, files)) = db.submission(id) else {
+                    return Err((ErrorCode::NotFound, "That plugin is gone.".into()));
+                };
+                let files: Vec<SourceFile> = serde_json::from_str(&files).unwrap_or_default();
+                Ok(Event::PluginSubmission { entry, files })
+            }
+            Request::SetPluginSubmissionStatus { id, status } => {
+                if self.role() != Role::Owner {
+                    return Err((ErrorCode::Forbidden, "Only the server's owner can approve plugins.".into()));
+                }
+                if !db.set_submission_status(id, status).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
+                    return Err((ErrorCode::NotFound, "That plugin is gone.".into()));
+                }
+                hub.broadcast_info();
+                Ok(Event::Ok)
+            }
+            Request::SetPluginSubmissions { on } => {
+                if self.role() != Role::Owner {
+                    return Err((ErrorCode::Forbidden, "Only the server's owner can do that.".into()));
+                }
+                db.set_meta("plugin_submissions", if on { "1" } else { "" }).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                hub.broadcast_info();
+                Ok(Event::Ok)
+            }
             Request::SetGiphyKey { key } => {
                 if self.role() != Role::Owner {
                     return Err((ErrorCode::Forbidden, "Only the server's owner can set up GIF search.".into()));
@@ -1488,6 +1534,72 @@ mod tests {
         assert!(b.len() <= ingle_proto::MAX_CONTROL_FRAME, "{} bytes", b.len());
         assert!(reports.iter().all(|r| r.status == BugStatus::New), "the new ones come first");
         assert_eq!(reports[0].report.title, "report 59", "newest first");
+    }
+
+    #[test]
+    fn plugins_sent_in_are_checked_and_kept_for_the_owner() {
+        let hub = hub();
+        let (owner, member) = (uid(), uid());
+        hub.db.insert_user(&owner, "Owner", Role::Owner).unwrap();
+        hub.db.insert_user(&member, "Member", Role::Member).unwrap();
+        let ip: std::net::IpAddr = "203.0.113.9".parse().unwrap();
+        let file = |path: &str, data: &[u8]| SourceFile { path: path.into(), data: ingle_proto::b64::encode(data) };
+        let good = || PluginSubmission {
+            name: "Dice\u{7}".into(),
+            kind: "addon".into(),
+            version: "1.0.0".into(),
+            summary: "Rolls dice".into(),
+            author: "Mara".into(),
+            files: vec![file("Cargo.toml", b"[package]"), file("src/lib.rs", b"fn main() {}")],
+            ..Default::default()
+        };
+        // Not collected yet.
+        assert!(hub.take_plugin_submission(ip, good()).unwrap_err().contains("doesn't collect"));
+        assert!(forbidden(ctx(&hub, &member).handle(Request::SetPluginSubmissions { on: true })));
+        assert!(matches!(ctx(&hub, &owner).handle(Request::SetPluginSubmissions { on: true }), Ok(Event::Ok)));
+        // Paths that leave the folder, no Cargo.toml, too big, not a plugin kind.
+        let mut bad = good();
+        bad.files.push(file("../escape.rs", b"x"));
+        assert!(hub.take_plugin_submission(ip, bad).is_err());
+        let mut bad = good();
+        bad.files[0].path = "C:/Windows/x".into();
+        assert!(hub.take_plugin_submission("203.0.113.10".parse().unwrap(), bad).is_err());
+        let mut bad = good();
+        bad.files.remove(0);
+        assert!(hub.take_plugin_submission("203.0.113.11".parse().unwrap(), bad).unwrap_err().contains("Cargo.toml"));
+        let mut bad = good();
+        bad.files.push(file("assets/big.bin", &vec![0u8; SUBMISSION_MAX]));
+        assert!(hub.take_plugin_submission("203.0.113.12".parse().unwrap(), bad).unwrap_err().contains("bigger"));
+        let mut bad = good();
+        bad.kind = "script".into();
+        assert!(hub.take_plugin_submission("203.0.113.13".parse().unwrap(), bad).is_err());
+        // A good one is kept (its name without the control character); three an hour per place.
+        let id = hub.take_plugin_submission("203.0.113.14".parse().unwrap(), good()).unwrap();
+        hub.take_plugin_submission("203.0.113.14".parse().unwrap(), good()).unwrap();
+        hub.take_plugin_submission("203.0.113.14".parse().unwrap(), good()).unwrap();
+        assert!(hub.take_plugin_submission("203.0.113.14".parse().unwrap(), good()).unwrap_err().contains("try again"));
+        // Only the owner sees them, and the count.
+        assert!(forbidden(ctx(&hub, &member).handle(Request::ListPluginSubmissions)));
+        assert_eq!(hub.info_for(&member).new_plugin_submissions, 0);
+        assert_eq!(hub.info_for(&owner).new_plugin_submissions, 3);
+        let list = match ctx(&hub, &owner).handle(Request::ListPluginSubmissions) {
+            Ok(Event::PluginSubmissions { list }) => list,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(list.len(), 3);
+        let e = list.iter().find(|e| e.id == id).unwrap();
+        assert_eq!((e.name.as_str(), e.files, e.size), ("Dice", 2, 21));
+        match ctx(&hub, &owner).handle(Request::GetPluginSubmission { id }) {
+            Ok(Event::PluginSubmission { files, .. }) => assert_eq!(files, good().files),
+            other => panic!("{other:?}"),
+        }
+        assert!(forbidden(ctx(&hub, &member).handle(Request::GetPluginSubmission { id })));
+        ctx(&hub, &owner).handle(Request::SetPluginSubmissionStatus { id, status: SubmissionStatus::Approved }).unwrap();
+        assert_eq!(hub.info_for(&owner).new_plugin_submissions, 2);
+        assert!(matches!(
+            ctx(&hub, &owner).handle(Request::SetPluginSubmissionStatus { id: 999, status: SubmissionStatus::Rejected }),
+            Err((ErrorCode::NotFound, _))
+        ));
     }
 
     #[test]

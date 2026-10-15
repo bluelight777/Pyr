@@ -401,6 +401,13 @@ pub struct AppState {
     pub bug_sends_done: u64,
     /// Bug reports on servers I own (fetched when looked at), by server key.
     pub bugs: HashMap<String, Vec<ingle_proto::control::BugEntry>>,
+    /// The plugin being sent in for the library, or how the last one went (like `bug_send`).
+    pub plugin_send: BugSend,
+    pub plugin_sends_done: u64,
+    /// Plugins sent in to servers I own (fetched when looked at), by server key; and the files
+    /// of the ones opened, by (server key, id).
+    pub submissions: HashMap<String, Vec<ingle_proto::control::SubmissionEntry>>,
+    pub submission_files: HashMap<(String, i64), Vec<ingle_proto::control::SourceFile>>,
     /// Backups of servers I own, by server key.
     pub backups: HashMap<String, BackupStatus>,
     pub devices: DeviceLists,

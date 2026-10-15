@@ -12,6 +12,7 @@ pub mod control;
 pub mod crypto;
 pub mod framing;
 pub mod invite;
+pub mod library;
 pub mod media;
 pub mod release;
 pub mod sound;

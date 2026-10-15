@@ -162,6 +162,24 @@ CREATE TABLE IF NOT EXISTS bug_reports (
     os TEXT NOT NULL DEFAULT '',
     log TEXT NOT NULL DEFAULT ''
 );
+-- Plugins sent in for the Ingle Library (when the owner collects them): Rust source waiting
+-- for review. Whoever sent one isn't recorded, beyond what they wrote in it.
+CREATE TABLE IF NOT EXISTS plugin_submissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'new',
+    status_at INTEGER NOT NULL DEFAULT 0,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT '',
+    version TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    author TEXT NOT NULL DEFAULT '',
+    contact TEXT NOT NULL DEFAULT '',
+    app_version TEXT NOT NULL DEFAULT '',
+    file_count INTEGER NOT NULL DEFAULT 0,
+    size INTEGER NOT NULL DEFAULT 0,
+    files TEXT NOT NULL
+);
 "#;
 
 /// `channels.kind` of a direct message conversation (never listed as a channel).
@@ -530,6 +548,87 @@ impl Db {
             .conn
             .lock()
             .execute("UPDATE bug_reports SET status = ?2, status_at = ?3 WHERE id = ?1", params![id, status.as_str(), now_ms()])?
+            > 0)
+    }
+
+    /// A plugin sent in; `files` is the submission's files as JSON, `size` their bytes in all.
+    pub fn add_submission(&self, sub: &ingle_proto::control::PluginSubmission, files: &str, size: u64) -> Result<i64> {
+        let c = self.conn.lock();
+        c.execute(
+            "INSERT INTO plugin_submissions(created_at, name, kind, version, summary, author, contact, app_version, file_count, size, files) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                now_ms(),
+                sub.name,
+                sub.kind,
+                sub.version,
+                sub.summary,
+                sub.author,
+                sub.contact,
+                sub.app_version,
+                sub.files.len() as i64,
+                size as i64,
+                files
+            ],
+        )?;
+        Ok(c.last_insert_rowid())
+    }
+
+    /// Submissions waiting for the owner to look at them.
+    pub fn new_submission_count(&self) -> u64 {
+        self.conn
+            .lock()
+            .query_row("SELECT COUNT(*) FROM plugin_submissions WHERE status = 'new'", [], |r| r.get::<_, i64>(0))
+            .unwrap_or(0) as u64
+    }
+
+    fn submission_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ingle_proto::control::SubmissionEntry> {
+        use ingle_proto::control::{SubmissionEntry, SubmissionStatus};
+        Ok(SubmissionEntry {
+            id: r.get(0)?,
+            created_at: r.get(1)?,
+            status: SubmissionStatus::parse(&r.get::<_, String>(2)?).unwrap_or_default(),
+            name: r.get(3)?,
+            kind: r.get(4)?,
+            version: r.get(5)?,
+            summary: r.get(6)?,
+            author: r.get(7)?,
+            contact: r.get(8)?,
+            app_version: r.get(9)?,
+            files: r.get::<_, i64>(10)? as u32,
+            size: r.get::<_, i64>(11)? as u64,
+        })
+    }
+
+    /// The ones waiting to be looked at first, then the rest; newest first in each (no files).
+    pub fn submissions(&self, limit: usize) -> Vec<ingle_proto::control::SubmissionEntry> {
+        let c = self.conn.lock();
+        let Ok(mut q) = c.prepare(
+            "SELECT id, created_at, status, name, kind, version, summary, author, contact, app_version, file_count, size \
+             FROM plugin_submissions ORDER BY (status = 'new') DESC, id DESC LIMIT ?1",
+        ) else {
+            return Vec::new();
+        };
+        q.query_map([limit as i64], Self::submission_row).map(|rows| rows.filter_map(|r| r.ok()).collect()).unwrap_or_default()
+    }
+
+    /// One submission with its files (as stored: JSON).
+    pub fn submission(&self, id: i64) -> Option<(ingle_proto::control::SubmissionEntry, String)> {
+        let c = self.conn.lock();
+        c.query_row(
+            "SELECT id, created_at, status, name, kind, version, summary, author, contact, app_version, file_count, size, files \
+             FROM plugin_submissions WHERE id = ?1",
+            [id],
+            |r| Ok((Self::submission_row(r)?, r.get::<_, String>(12)?)),
+        )
+        .ok()
+    }
+
+    pub fn set_submission_status(&self, id: i64, status: ingle_proto::control::SubmissionStatus) -> Result<bool> {
+        Ok(self
+            .conn
+            .lock()
+            .execute("UPDATE plugin_submissions SET status = ?2, status_at = ?3 WHERE id = ?1", params![id, status.as_str(), now_ms()])?
             > 0)
     }
 

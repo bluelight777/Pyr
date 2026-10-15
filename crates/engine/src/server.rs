@@ -559,7 +559,7 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
             }
             Event::Pong { .. } | Event::Ok | Event::Hello { .. } | Event::Ready { .. } => {}
             Event::Error { message, .. } => toast = Some(message),
-            Event::History { .. } | Event::InviteCreated { .. } | Event::VoiceReady { .. } | Event::Kicked { .. } | Event::Bugs { .. } => {}
+            Event::History { .. } | Event::InviteCreated { .. } | Event::VoiceReady { .. } | Event::Kicked { .. } | Event::Bugs { .. } | Event::PluginSubmissions { .. } | Event::PluginSubmission { .. } => {}
         }
         if let Some(t) = toast {
             st.toast(t, true);

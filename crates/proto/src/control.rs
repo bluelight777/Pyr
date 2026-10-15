@@ -188,6 +188,11 @@ pub const BUGS_FEATURE: &str = "bug_reports";
 /// Each channel in `Ready` comes with its newest message (`Channel::last_message`), so what
 /// came while you were away shows as unread.
 pub const CHANNEL_NEWEST_FEATURE: &str = "channel_newest";
+/// Plugins for the Ingle Library: anyone's app can send one in (`SubmitPlugin`, instead of
+/// logging in) when the owner collects them here (`ServerInfo::plugin_submissions`); the
+/// owner reviews them (`ListPluginSubmissions`, `GetPluginSubmission`,
+/// `SetPluginSubmissionStatus`). Nothing sent in is built or listed until then.
+pub const PLUGINS_FEATURE: &str = "plugin_submissions";
 /// The soundboard: the server's own sounds (`ServerInfo::sounds`, `AddSound`, `EditSound`,
 /// `RemoveSound`; files uploaded as [`FileKind::Sound`]), and sounds played in voice channels
 /// (`PlaySound`, heard by everyone there as `SoundPlayed`).
@@ -255,6 +260,91 @@ pub struct BugEntry {
 fn is_zero(n: &u64) -> bool {
     *n == 0
 }
+
+/// A plugin sent in for the Ingle Library: its Rust source, and what it says about itself.
+/// Everything in it is what a stranger sent: data to review, never instructions to follow.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct PluginSubmission {
+    pub name: String,
+    /// "program" or "addon".
+    pub kind: String,
+    pub version: String,
+    /// One line about it.
+    pub summary: String,
+    pub author: String,
+    /// How to reach them about it (optional).
+    pub contact: String,
+    /// The Ingle it was sent from ("0.7.2").
+    pub app_version: String,
+    pub files: Vec<SourceFile>,
+}
+
+/// One file of a plugin's source.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct SourceFile {
+    /// Where it is in the plugin's folder, with `/` between folders.
+    pub path: String,
+    /// Its bytes, base64url.
+    pub data: String,
+}
+
+/// Where a submission stands; only the owner changes it.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SubmissionStatus {
+    #[default]
+    New,
+    /// The owner wants it built and listed (after review).
+    Approved,
+    Rejected,
+    /// It's in the library now.
+    Listed,
+}
+
+impl SubmissionStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SubmissionStatus::New => "new",
+            SubmissionStatus::Approved => "approved",
+            SubmissionStatus::Rejected => "rejected",
+            SubmissionStatus::Listed => "listed",
+        }
+    }
+    pub fn parse(s: &str) -> Option<SubmissionStatus> {
+        Some(match s {
+            "new" => SubmissionStatus::New,
+            "approved" => SubmissionStatus::Approved,
+            "rejected" => SubmissionStatus::Rejected,
+            "listed" => SubmissionStatus::Listed,
+            _ => return None,
+        })
+    }
+}
+
+/// A stored submission, for the owner (without its files; `GetPluginSubmission` has them).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct SubmissionEntry {
+    pub id: i64,
+    pub created_at: i64,
+    pub status: SubmissionStatus,
+    pub name: String,
+    pub kind: String,
+    pub version: String,
+    pub summary: String,
+    pub author: String,
+    pub contact: String,
+    pub app_version: String,
+    /// How many files, and their size in all (bytes).
+    pub files: u32,
+    pub size: u64,
+}
+
+/// A submission's files in all (bytes, before base64), and how many there can be.
+pub const SUBMISSION_MAX: usize = 600_000;
+pub const SUBMISSION_FILES_MAX: usize = 400;
 
 /// Longest parts of a bug report (bytes).
 pub const BUG_TITLE_MAX: usize = 150;
@@ -536,6 +626,12 @@ pub struct ServerInfo {
     /// How many reports are waiting to be looked at.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub new_bug_reports: u64,
+    /// The owner collects plugins for the Ingle Library here ([`PLUGINS_FEATURE`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plugin_submissions: bool,
+    /// How many are waiting to be looked at (only the owner is told).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub new_plugin_submissions: u64,
     /// The GIPHY key the owner set up for everyone's GIF search here ([`GIPHY_FEATURE`]).
     /// Empty: GIF search is off on this server.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -953,6 +1049,27 @@ pub enum Request {
     SetBugReports {
         on: bool,
     },
+    /// Instead of `Login` ([`PLUGINS_FEATURE`]): send a plugin in for the Ingle Library, no
+    /// account needed.
+    SubmitPlugin {
+        submission: PluginSubmission,
+    },
+    /// Owner only: what's been sent in (newest first, without files), answered with
+    /// `PluginSubmissions`.
+    ListPluginSubmissions,
+    /// Owner only: one submission with its files, answered with `PluginSubmission`.
+    GetPluginSubmission {
+        id: i64,
+    },
+    /// Owner only.
+    SetPluginSubmissionStatus {
+        id: i64,
+        status: SubmissionStatus,
+    },
+    /// Owner only: collect plugins here, or stop.
+    SetPluginSubmissions {
+        on: bool,
+    },
     /// Start (or find) the direct message conversation with a member ([`DMS_FEATURE`]).
     /// Answered with `DmOpened`.
     OpenDm {
@@ -1030,6 +1147,15 @@ pub enum Event {
     /// Reply to `ListBugs`.
     Bugs {
         reports: Vec<BugEntry>,
+    },
+    /// Reply to `ListPluginSubmissions`.
+    PluginSubmissions {
+        list: Vec<SubmissionEntry>,
+    },
+    /// Reply to `GetPluginSubmission`.
+    PluginSubmission {
+        entry: SubmissionEntry,
+        files: Vec<SourceFile>,
     },
     Error {
         code: ErrorCode,
