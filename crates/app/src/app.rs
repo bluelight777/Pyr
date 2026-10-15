@@ -48,6 +48,8 @@ pub enum Act {
     SetKlipyKey { key: String, klipy: String },
     /// Quit for real (Settings → Quit Ingle).
     Quit,
+    /// Look for a newer Ingle right away (Check for updates).
+    CheckUpdates,
     AddFriend(String),
     AcceptFriend(String),
     RemoveFriend(String),
@@ -294,6 +296,9 @@ pub struct IngleApp {
     pub updater: crate::update::Updater,
     /// The update we last told the person about (pinged once per version).
     update_seen: Option<ingle_proto::release::Manifest>,
+    /// When a check they asked for last said this is the newest version (the Check for
+    /// updates button shows a tick for a moment).
+    update_checked: Option<Instant>,
     /// After an update: where to put the person back, and since when we've been trying.
     resume: Option<(crate::update::Resume, Instant)>,
     /// Join / leave / stream chimes.
@@ -329,6 +334,7 @@ impl IngleApp {
             images: crate::images::Images::default(),
             updater,
             update_seen: None,
+            update_checked: None,
             resume,
             voice_sounds: Default::default(),
             title_shown: title.clone(),
@@ -482,6 +488,7 @@ impl IngleApp {
                 #[cfg(not(windows))]
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
+            Act::CheckUpdates => self.updater.check_now(crate::update::Asker::Window, || {}),
             Act::AddFriend(uid) => e.add_friend(&uid),
             Act::AcceptFriend(uid) => e.accept_friend(&uid),
             Act::RemoveFriend(uid) => e.remove_friend(&uid),
@@ -771,7 +778,8 @@ impl eframe::App for IngleApp {
 impl IngleApp {
     /// Update pings, installing a downloaded update, and rejoining after one.
     fn update_step(&mut self, acts: &mut Vec<Act>) {
-        use crate::update::Status;
+        use crate::update::{Checked, Status};
+        let mut told = false;
         match self.updater.status() {
             Status::Available(m) => {
                 if self.update_seen.as_ref().map(|s| s.version != m.version).unwrap_or(true) {
@@ -781,6 +789,7 @@ impl IngleApp {
                         .write()
                         .toast(format!("Ingle {} is out. Click the green arrow at the top left to update.", m.version), false);
                     self.update_seen = Some(m);
+                    told = true;
                 }
             }
             Status::Failed(e) => {
@@ -822,6 +831,20 @@ impl IngleApp {
                 }
             }
             Status::Idle | Status::Downloading(..) => {}
+        }
+        // What Check for updates found.
+        for answer in self.updater.take_answers(crate::update::Asker::Window) {
+            let toast = match answer {
+                Checked::UpToDate => {
+                    self.update_checked = Some(Instant::now());
+                    (format!("You have the newest Ingle ({}).", crate::update::current_version()), false)
+                }
+                // (Just said above, the first time it's found.)
+                Checked::Found(_) if told => continue,
+                Checked::Found(v) => (format!("Ingle {v} is out. Click the green arrow at the top left to update."), false),
+                Checked::Failed(e) => (format!("Couldn't check for updates: {e}"), true),
+            };
+            self.engine.shared.state.write().toast(toast.0, toast.1);
         }
         // Back from an update: open the same server and rejoin the voice channel once it's
         // connected (give up after a minute and a half).
@@ -870,7 +893,7 @@ impl IngleApp {
                 ("Downloading the update…".to_string(), Some(done as f32 / total.max(1) as f32), None)
             }
             Status::Ready(..) => ("Installing…".to_string(), Some(1.0), None),
-            _ => return,
+            _ => return self.check_button(ui),
         };
         let (rect, resp) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::click());
         let green = Color32::from_rgb(0x23, 0xa5, 0x5a);
@@ -905,6 +928,39 @@ impl IngleApp {
             if let Some(m) = manifest {
                 self.updater.download(m);
             }
+        }
+        ui.add_space(8.0);
+    }
+
+    /// Check for updates, where the green button shows up: so a new version can be had
+    /// without waiting for the next check (every few hours) or reopening Ingle.
+    fn check_button(&mut self, ui: &mut egui::Ui) {
+        let checking = self.updater.checking();
+        let (slot, resp) = ui.allocate_exact_size(vec2(48.0, 40.0), Sense::click());
+        let r = Rect::from_center_size(slot.center(), vec2(36.0, 36.0));
+        let fill = if resp.hovered() { theme::ELEV2 } else { Color32::from_rgb(0x24, 0x1d, 0x19) };
+        ui.painter().rect_filled(r, CornerRadius::same(if resp.hovered() { 12 } else { 18 }), fill);
+        let icon = Rect::from_center_size(r.center(), vec2(20.0, 20.0));
+        // Just said this is the newest version: a green tick for a moment.
+        let fresh = self.update_checked.is_some_and(|t| t.elapsed() < Duration::from_secs(4));
+        if checking {
+            let t = ui.input(|i| i.time) as f32;
+            icons::refresh(ui.painter(), icon, theme::TEXT, t * 6.0);
+            ui.ctx().request_repaint_after(Duration::from_millis(16));
+        } else if fresh {
+            icons::tick(ui.painter(), icon, theme::ONLINE);
+            ui.ctx().request_repaint_after(Duration::from_millis(250));
+        } else {
+            icons::refresh(ui.painter(), icon, if resp.hovered() { theme::TEXT } else { theme::MUTED }, 0.0);
+        }
+        let tip = if checking {
+            "Checking for updates…".to_string()
+        } else {
+            format!("Check for updates (this is Ingle {})", crate::update::current_version())
+        };
+        if resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tip).clicked() && !checking {
+            self.update_checked = None;
+            self.updater.check_now(crate::update::Asker::Window, || {});
         }
         ui.add_space(8.0);
     }
@@ -2118,7 +2174,7 @@ impl IngleApp {
             ui.label(RichText::new(format!("Welcome to {}", ingle_proto::APP_NAME)).font(theme::bold_font(28.0)).color(theme::TEXT));
             ui.add_space(6.0);
             ui.label(
-                RichText::new("Voice, video, screen share and chat — end-to-end encrypted, no accounts, no ads.")
+                RichText::new("Voice, video, screen share and chat for your group. Calls are end-to-end encrypted. No accounts, no ads.")
                     .size(15.0)
                     .color(theme::MUTED),
             );

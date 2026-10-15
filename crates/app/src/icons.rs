@@ -495,6 +495,24 @@ pub fn send(p: &Painter, r: Rect, c: Color32) {
     p.add(Shape::convex_polygon(vec![nose, notch, ctr + vec2(-s * 0.40, -s * 0.38)], c, Stroke::NONE));
 }
 
+/// Two arrows chasing each other round a circle (Check for updates). `turn` spins it, in
+/// radians.
+pub fn refresh(p: &Painter, r: Rect, c: Color32, turn: f32) {
+    let s = r.width().min(r.height());
+    let ctr = r.center();
+    let rad = s * 0.32;
+    let w = (s * 0.09).max(1.6);
+    let at = |a: f32, k: f32| pos2(ctr.x + (rad + k) * a.cos(), ctr.y + (rad + k) * a.sin());
+    for half in [0.0, PI] {
+        let a0 = turn + half + 0.35;
+        let a1 = turn + half + PI - 0.55;
+        p.add(Shape::line(arc(ctr, rad, a0, a1, 12), Stroke::new(w, c)));
+        // The arrowhead, pointing on round (clockwise on screen), wound clockwise.
+        let h = s * 0.14;
+        p.add(Shape::convex_polygon(vec![at(a1 + 0.42, 0.0), at(a1, -h), at(a1, h)], c, Stroke::NONE));
+    }
+}
+
 /// A tick (in a checkbox).
 pub fn tick(p: &Painter, r: Rect, c: Color32) {
     let s = r.width();

@@ -1246,12 +1246,16 @@ impl IngleApp {
                 ui.add_space(8.0);
                 ui.label(RichText::new(format!("{} {}", ingle_proto::APP_NAME, env!("CARGO_PKG_VERSION"))).font(theme::bold_font(16.0)).color(theme::TEXT));
                 ui.label(RichText::new("Lean voice, video, screen share and chat. Written in Rust.").color(theme::MUTED));
-                if ingle_engine::bugs::can_report() {
-                    ui.add_space(6.0);
-                    if ui.button("Report a bug").clicked() {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    let checking = self.updater.checking();
+                    if ui.add_enabled(!checking, egui::Button::new(if checking { "Checking…" } else { "Check for updates" })).clicked() {
+                        acts.push(Act::CheckUpdates);
+                    }
+                    if ingle_engine::bugs::can_report() && ui.button("Report a bug").clicked() {
                         report_bug = true;
                     }
-                }
+                });
                 ui.add_space(10.0);
                 for (h, b) in [
                     ("End-to-end encrypted calls", "Voice, cameras and screen shares are encrypted on your PC with keys the server never sees (X25519 + ChaCha20-Poly1305, new keys whenever someone joins or leaves)."),

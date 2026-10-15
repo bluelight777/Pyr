@@ -11,6 +11,7 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ingle_proto::control::ChannelId;
@@ -50,50 +51,142 @@ pub enum Status {
     Stale(String),
 }
 
+/// What a check someone asked for found (Check for updates, in the window or the tray icon's
+/// menu), to tell them.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Checked {
+    /// This is the newest version.
+    UpToDate,
+    /// A newer version (the green button, and the tray icon's Update item, have it now).
+    Found(String),
+    Failed(String),
+}
+
+/// Who asked for a check: the window (told with a toast) or the tray icon's menu (told with a
+/// Windows notice, since the window may well be hidden).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Asker {
+    Window,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Tray,
+}
+
+#[derive(Clone)]
 pub struct Updater {
     status: Arc<Mutex<Status>>,
     repaint: Arc<dyn Fn() + Send + Sync>,
+    /// Where what's been seen is kept (Ingle's settings folder).
+    dir: PathBuf,
+    /// One check at a time (the regular one, or one someone asked for).
+    check_lock: Arc<Mutex<()>>,
+    /// A check is running (the Check for updates button turns while it does).
+    checking: Arc<AtomicBool>,
+    /// What checks people asked for found, waiting to be told.
+    answers: Arc<Mutex<Vec<(Asker, Checked)>>>,
 }
 
 impl Updater {
     /// Checks shortly after start and then every few hours. `dir` is where what's been seen is
     /// kept (Ingle's settings folder).
     pub fn start(repaint: Arc<dyn Fn() + Send + Sync>, dir: PathBuf) -> Updater {
-        let status = Arc::new(Mutex::new(Status::Idle));
-        let (s, r) = (status.clone(), repaint.clone());
+        let u = Updater {
+            status: Arc::new(Mutex::new(Status::Idle)),
+            repaint,
+            dir,
+            check_lock: Arc::new(Mutex::new(())),
+            checking: Arc::new(AtomicBool::new(false)),
+            answers: Arc::new(Mutex::new(Vec::new())),
+        };
+        let me = u.clone();
         let _ = std::thread::Builder::new().name("ingle-update".into()).spawn(move || {
             std::thread::sleep(Duration::from_secs(8));
             clean_old_downloads(&download_base(), Duration::from_secs(60 * 60));
             loop {
-                match check(&dir) {
-                    Ok(Some(m)) => {
-                        let mut st = s.lock();
-                        // Don't interrupt a download, or undo a failure the person hasn't seen.
-                        if matches!(*st, Status::Idle | Status::Available(_)) {
-                            tracing::info!("update available: {}", m.version);
-                            *st = Status::Available(m);
-                            r();
-                        }
-                    }
-                    Ok(None) => tracing::debug!("up to date"),
-                    Err(Check::Stale(e)) => {
-                        tracing::warn!("update check: {e}");
-                        let mut st = s.lock();
-                        if matches!(*st, Status::Idle) {
-                            *st = Status::Stale(e);
-                            r();
-                        }
-                    }
-                    Err(Check::Failed(e)) => tracing::info!("update check failed: {e}"),
-                }
+                let _ = me.check_and_apply(false);
                 std::thread::sleep(CHECK_EVERY);
             }
         });
-        Updater { status, repaint }
+        u
     }
 
     pub fn status(&self) -> Status {
         self.status.lock().clone()
+    }
+
+    /// A check is running.
+    pub fn checking(&self) -> bool {
+        self.checking.load(Ordering::Relaxed)
+    }
+
+    /// Check right away (Check for updates), in the background. What it finds goes to the
+    /// green button as usual, and to [`Updater::take_answers`] for `asker`; then `done` is
+    /// called (from the checking thread).
+    pub fn check_now(&self, asker: Asker, done: impl FnOnce() + Send + 'static) {
+        // Nothing to look for while an update is on its way in.
+        if matches!(self.status(), Status::Downloading(..) | Status::Ready(..)) {
+            return;
+        }
+        let me = self.clone();
+        let _ = std::thread::Builder::new().name("ingle-update-check".into()).spawn(move || {
+            let answer = match me.check_and_apply(true) {
+                Ok(Some(version)) => Checked::Found(version),
+                Ok(None) => Checked::UpToDate,
+                Err(e) => Checked::Failed(e),
+            };
+            tracing::info!("update check (asked for): {answer:?}");
+            me.answers.lock().push((asker, answer));
+            (me.repaint)();
+            done();
+        });
+    }
+
+    /// What the checks `asker` asked for found, oldest first (each told once).
+    pub fn take_answers(&self, asker: Asker) -> Vec<Checked> {
+        let mut all = self.answers.lock();
+        let (mine, rest): (Vec<_>, Vec<_>) = all.drain(..).partition(|(a, _)| *a == asker);
+        *all = rest;
+        mine.into_iter().map(|(_, c)| c).collect()
+    }
+
+    /// One check. A newer version goes to the green button; the newer version's number, if
+    /// any, or why the check failed, is returned. (A stale release file is also shown as an
+    /// error by the regular checks; one someone asked for just answers with it.)
+    fn check_and_apply(&self, asked: bool) -> Result<Option<String>, String> {
+        let _one = self.check_lock.lock();
+        self.checking.store(true, Ordering::Relaxed);
+        (self.repaint)();
+        let found = check(&self.dir);
+        self.checking.store(false, Ordering::Relaxed);
+        let answer = match found {
+            Ok(Some(m)) => {
+                let version = m.version.clone();
+                let mut st = self.status.lock();
+                // Don't interrupt a download, or undo a failure the person hasn't seen.
+                if matches!(*st, Status::Idle | Status::Available(_)) {
+                    tracing::info!("update available: {}", m.version);
+                    *st = Status::Available(m);
+                }
+                Ok(Some(version))
+            }
+            Ok(None) => {
+                tracing::debug!("up to date");
+                Ok(None)
+            }
+            Err(Check::Stale(e)) => {
+                tracing::warn!("update check: {e}");
+                let mut st = self.status.lock();
+                if !asked && matches!(*st, Status::Idle) {
+                    *st = Status::Stale(e.clone());
+                }
+                Err(e)
+            }
+            Err(Check::Failed(e)) => {
+                tracing::info!("update check failed: {e}");
+                Err(e)
+            }
+        };
+        (self.repaint)();
+        answer
     }
 
     /// Back to "available" after the person has seen an error.
@@ -123,11 +216,23 @@ impl Updater {
     }
 }
 
+/// For the release file: small, so a minute is plenty.
 fn agent() -> ureq::Agent {
+    agent_with_body_time(Duration::from_secs(60))
+}
+
+/// ureq's body timeout is the time for the whole body, not a pause between reads. Given a
+/// minute, a 55 MB installer needed a 7 Mbit/s connection, and on anything slower the update
+/// "broke off". Allow 50 kB/s instead (about 20 minutes for 55 MB), and a minute more.
+fn download_time(size: u64) -> Duration {
+    Duration::from_secs(60 + size / 50_000)
+}
+
+fn agent_with_body_time(body: Duration) -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(None)
         .timeout_connect(Some(Duration::from_secs(15)))
-        .timeout_recv_body(Some(Duration::from_secs(60)))
+        .timeout_recv_body(Some(body))
         .build()
         .into()
 }
@@ -154,6 +259,8 @@ fn now_secs() -> i64 {
 fn check(dir: &Path) -> Result<Option<Manifest>, Check> {
     let text = agent()
         .get(&manifest_url())
+        // The newest one, not a copy a cache kept (someone checking right after a release).
+        .header("Cache-Control", "no-cache")
         .call()
         .map_err(|e| Check::Failed(e.to_string()))?
         .body_mut()
@@ -247,7 +354,10 @@ fn file_sha256(path: &Path) -> Option<String> {
 fn fetch(asset: &Asset, version: &str, mut progress: impl FnMut(u64)) -> Result<PathBuf, String> {
     let ext = if cfg!(windows) { "exe" } else { "deb" };
     let version: String = version.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-')).take(32).collect();
-    let mut resp = agent().get(&asset.url).call().map_err(|e| format!("couldn't download the update: {e}"))?;
+    let mut resp = agent_with_body_time(download_time(asset.size))
+        .get(&asset.url)
+        .call()
+        .map_err(|e| format!("couldn't download the update: {e}"))?;
     let mut reader = resp.body_mut().with_config().limit(asset.size + 1).reader();
     let mut bytes = Vec::with_capacity(asset.size as usize);
     let mut buf = vec![0u8; 256 * 1024];
@@ -402,6 +512,32 @@ mod tests {
             assert_eq!(std::fs::read(dir.join("installed.deb")).unwrap(), b"the real package");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_slow_connection_has_time_to_download_an_update() {
+        // 55 MB at 50 kB/s is 1,100 seconds.
+        assert!(download_time(55_000_000) >= Duration::from_secs(1_100));
+        assert!(download_time(0) >= Duration::from_secs(60));
+    }
+
+    #[test]
+    fn answers_go_to_whoever_asked() {
+        let u = Updater {
+            status: Arc::new(Mutex::new(Status::Idle)),
+            repaint: Arc::new(|| {}),
+            dir: std::env::temp_dir(),
+            check_lock: Arc::new(Mutex::new(())),
+            checking: Arc::new(AtomicBool::new(false)),
+            answers: Arc::new(Mutex::new(vec![
+                (Asker::Tray, Checked::UpToDate),
+                (Asker::Window, Checked::Found("9.9.9".into())),
+                (Asker::Tray, Checked::Failed("offline".into())),
+            ])),
+        };
+        assert_eq!(u.take_answers(Asker::Tray), vec![Checked::UpToDate, Checked::Failed("offline".into())]);
+        assert_eq!(u.take_answers(Asker::Tray), vec![]);
+        assert_eq!(u.take_answers(Asker::Window), vec![Checked::Found("9.9.9".into())]);
     }
 
     #[test]

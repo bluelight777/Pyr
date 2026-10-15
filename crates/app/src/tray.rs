@@ -1,6 +1,7 @@
 //! Ingle's icon by the clock (the Windows notification area, or "system tray").
 //!
-//! Click the icon to open Ingle; right-click it to mute, deafen, leave voice or quit. The
+//! Click the icon to open Ingle; right-click it to mute, deafen, leave voice, check for
+//! updates (and update, when there's one), or quit. The
 //! window's close button (and Alt+F4) never quits: it hides Ingle to the icon, so calls and
 //! messages keep coming in, like Discord. Only the icon's Quit Ingle (or Settings → Quit)
 //! ends it.
@@ -40,7 +41,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu,
     DestroyWindow, FindWindowW, GetCursorPos, GetForegroundWindow, GetIconInfo, GetSystemMetrics, GetWindowThreadProcessId, HICON, ICONINFO,
     IMAGE_ICON, IsIconic, IsWindowVisible, LR_DEFAULTCOLOR,
-    LoadImageW, MENU_ITEM_FLAGS, MF_CHECKED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, PostMessageW, RegisterClassW,
+    LoadImageW, MENU_ITEM_FLAGS, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, PostMessageW, RegisterClassW,
     RegisterWindowMessageW, SM_CXSMICON, SM_CYSMICON, SM_MENUDROPALIGNMENT, SW_HIDE, SW_RESTORE, SW_SHOW, SetForegroundWindow,
     SetMenuDefaultItem, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTALIGN,
     TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP, WM_CONTEXTMENU, WM_ENDSESSION, WM_MOUSEMOVE, WM_NULL, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
@@ -60,6 +61,8 @@ const WM_INGLE_QUIT: u32 = WM_APP + 3;
 const WM_INGLE_HIDE: u32 = WM_APP + 4;
 /// What's unread changed (see `watch_unread`): show it on the icon and the taskbar button.
 const WM_INGLE_UNREAD: u32 = WM_APP + 5;
+/// A check for updates asked for from the icon's menu finished: say what it found.
+const WM_INGLE_UPDATE: u32 = WM_APP + 6;
 /// Enter or Space on the icon (NIN_SELECT | NINF_KEY).
 const NIN_KEYSELECT: u32 = NIN_SELECT | 1;
 const ICON_ID: u32 = 1;
@@ -69,11 +72,14 @@ const CMD_MUTE: usize = 2;
 const CMD_DEAFEN: usize = 3;
 const CMD_LEAVE: usize = 4;
 const CMD_QUIT: usize = 5;
+const CMD_UPDATE: usize = 6;
+const CMD_CHECK: usize = 7;
 
 struct State {
     tray: HWND,
     main: HWND,
     engine: Arc<Engine>,
+    updater: crate::update::Updater,
     ctx: egui::Context,
     icon: HICON,
     tip: String,
@@ -136,7 +142,13 @@ pub struct Tray(());
 impl Tray {
     /// Adds the icon for the app's main window. `config_dir` names this copy of Ingle (one per
     /// profile) so later launches can find it; `tip` is the icon's tooltip.
-    pub fn create(cc: &eframe::CreationContext<'_>, engine: Arc<Engine>, config_dir: &Path, tip: &str) -> Option<Tray> {
+    pub fn create(
+        cc: &eframe::CreationContext<'_>,
+        engine: Arc<Engine>,
+        updater: crate::update::Updater,
+        config_dir: &Path,
+        tip: &str,
+    ) -> Option<Tray> {
         let main = match cc.window_handle().map(|h| h.as_raw()) {
             Ok(RawWindowHandle::Win32(h)) => HWND(h.hwnd.get() as *mut core::ffi::c_void),
             _ => {
@@ -186,6 +198,7 @@ impl Tray {
                 tray,
                 main,
                 engine: engine.clone(),
+                updater,
                 ctx: cc.egui_ctx.clone(),
                 icon,
                 tip: tip.to_string(),
@@ -535,7 +548,21 @@ fn quit_now(from: &str) -> ! {
 }
 
 fn show_menu(tray: HWND, x: i32, y: i32) {
-    let Some(engine) = with_state(|s| s.engine.clone()) else { return };
+    use crate::update::Status;
+    let Some((engine, updater)) = with_state(|s| (s.engine.clone(), s.updater.clone())) else { return };
+    // Updating: "Update Ingle to 0.7.3" once there's a newer version (its progress while it
+    // downloads), and Check for updates.
+    let status = updater.status();
+    let update = match &status {
+        Status::Available(m) => Some(format!("Update Ingle to {}", m.version)),
+        Status::Downloading(done, total) => Some(format!("Downloading the update ({}%)", done * 100 / (*total).max(1))),
+        Status::Ready(..) => Some("Installing the update…".to_string()),
+        _ => None,
+    }
+    .map(|l| wide(&l));
+    let busy = matches!(status, Status::Downloading(..) | Status::Ready(..));
+    let checking = updater.checking();
+    let grey = |off: bool| -> MENU_ITEM_FLAGS { if off { MF_GRAYED } else { MENU_ITEM_FLAGS(0) } };
     let (muted, deafened) = engine.voice_prefs();
     let leave = {
         let st = engine.state();
@@ -559,6 +586,14 @@ fn show_menu(tray: HWND, x: i32, y: i32) {
             let _ = AppendMenuW(menu, MF_STRING, CMD_LEAVE, PCWSTR(label.as_ptr()));
         }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        if let Some(label) = &update {
+            let _ = AppendMenuW(menu, MF_STRING | grey(busy), CMD_UPDATE, PCWSTR(label.as_ptr()));
+        }
+        if !busy {
+            let label = if checking { w!("Checking for updates…") } else { w!("Check for updates") };
+            let _ = AppendMenuW(menu, MF_STRING | grey(checking), CMD_CHECK, label);
+        }
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, MF_STRING, CMD_QUIT, w!("Quit Ingle"));
         // Without this the menu doesn't go away when you click somewhere else.
         let _ = SetForegroundWindow(tray);
@@ -575,7 +610,46 @@ fn show_menu(tray: HWND, x: i32, y: i32) {
         CMD_DEAFEN => engine.set_deafen(!deafened),
         CMD_LEAVE => engine.leave_voice(),
         CMD_QUIT => quit_now("tray icon"),
+        // Download it, with the window open so its green button shows how it's going (and the
+        // window's frames install it once it's here).
+        CMD_UPDATE => {
+            if let Status::Available(m) = updater.status() {
+                updater.download(m);
+            }
+            show_main();
+        }
+        CMD_CHECK => {
+            // The answer comes back to our window procedure (Windows notices must come from
+            // this thread).
+            let tray = TRAY.load(Ordering::Relaxed);
+            updater.check_now(crate::update::Asker::Tray, move || {
+                if tray != 0 {
+                    unsafe {
+                        let _ = PostMessageW(Some(HWND(tray as *mut core::ffi::c_void)), WM_INGLE_UPDATE, WPARAM(0), LPARAM(0));
+                    }
+                }
+            });
+        }
         _ => {}
+    }
+}
+
+/// Says what a check for updates asked for from the menu found, with a Windows notice (the
+/// window may well be hidden).
+fn tell_update_answers() {
+    use crate::update::Checked;
+    let answers = with_state(|s| s.updater.take_answers(crate::update::Asker::Tray)).unwrap_or_default();
+    for answer in answers {
+        match answer {
+            Checked::UpToDate => {
+                notify("Ingle is up to date", &format!("You have the newest version, Ingle {}.", crate::update::current_version()))
+            }
+            Checked::Found(v) => notify(
+                &format!("Ingle {v} is out"),
+                "Right-click the Ingle icon by the clock and choose Update, or click the green arrow in Ingle.",
+            ),
+            Checked::Failed(e) => notify("Couldn't check for updates", &e),
+        }
     }
 }
 
@@ -603,6 +677,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_INGLE_UNREAD => {
             show_unread();
+            LRESULT(0)
+        }
+        WM_INGLE_UPDATE => {
+            tell_update_answers();
             LRESULT(0)
         }
         WM_INGLE_QUIT => quit_now("asked to by another launch, like the installer"),
