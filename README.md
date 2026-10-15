@@ -1,7 +1,7 @@
 # Ingle
 
-**Voice channels, webcams, smooth 1080p60 screen sharing and Discord-style text chat for
-your group. A native Rust app with end-to-end encrypted calls, no accounts, and a server
+**Voice channels, webcams, smooth 1080p60 screen sharing, a soundboard and Discord-style
+text chat for your group. A native Rust app with end-to-end encrypted calls, no accounts, and a server
 you own, on any VPS from any provider: Ingle sets it up for you in a few minutes.**
 
 *Ingle* is an old Scots word for the fire in a hearth: the place people gather.
@@ -27,7 +27,8 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
 **Text chat**
 
 - Servers with **text channels** and **voice channels** (each voice channel has its own
-  chat), channel topics, server icons and profile pictures.
+  chat), emoji in channel names (🎮-gaming, 🔊 Chill Zone), channel topics, server icons and
+  profile pictures.
 - Markdown, replies, **@mentions** (people, roles, @everyone and @here, suggested as you
   type), reactions, edits, typing indicators and history. Deleting a message asks first,
   showing the message and what goes with it (hold Shift to delete straight away).
@@ -35,6 +36,10 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   the **+** button, drag them in, or paste them with Ctrl+V. Animated GIFs play.
 - **GIF search**: type `/giphy` or `/klipy`, or click the GIF button (powered by GIPHY and
   KLIPY, each in its own tab; each server's owner turns them on with a free key).
+- **Favorites**, like Discord's, for GIFs from GIPHY and KLIPY and for pictures people post
+  (memes): point at one, in chat or in the GIF picker, and click the star in its corner.
+  They wait in the GIF picker's first tab, ready to send on any server (a favorite picture is
+  kept on your PC, so it's there even if the original is deleted).
 - **Select and copy any text** like on a web page: drag from anywhere over the messages,
   across as many as you like; double-click a word, triple-click a paragraph; Ctrl+C.
   Right-click a message for Copy, **Copy link**, Open link, Copy text, Reply, Edit and
@@ -50,8 +55,9 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
 **Friends and direct messages**
 
 - Add friends, accept or decline requests, and block people.
-- **Direct messages** with anyone you share a server with. They're private on that server:
-  only the two of you can read them.
+- **Direct messages** with anyone you share a server with. Other members can't see them,
+  but they aren't end-to-end encrypted yet: they're stored on the server, so whoever runs it
+  could read them (end-to-end encrypted messages are coming in 0.8).
 
 ![Direct messages, with the NEW line above what you haven't read](docs/screenshots/messages.png)
 
@@ -81,12 +87,16 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
 
 ![A voice channel: a camera (the test bot's pattern), a screen share and the call code](docs/screenshots/call.png)
 
+![The soundboard in a call: Ingle's own sounds (and the server's), with an emoji by whoever played one](docs/screenshots/soundboard.png)
+
 **Video and screen sharing**
 
 - **Webcams** (H.264), shown to everyone in the channel.
 - **Go Live**: share a whole screen or one window, with a live preview before you start,
-  from 720p30 to 1080p60, or 1440p30 for sharp text. Viewers opt in with **Watch Stream**,
-  so a stream only uses bandwidth for the people watching it. Several people can stream at
+  from 720p30 to 1080p60, or 1440p30 for sharp text. Viewers opt in with **Watch Stream**
+  (on the stream, or from the person's profile when you click their name in the channel
+  list: **Join and Watch** from anywhere else), so a stream only uses bandwidth for the
+  people watching it. Several people can stream at
   once, and a sound plays when someone starts watching.
 - **Stream sound** (Windows): a whole-screen share sends everything your PC plays *except
   the call itself*, so viewers never hear themselves; a window share sends just that app's
@@ -270,7 +280,7 @@ SSH (TCP port 22) must be allowed too for the setup itself.
 
 ### Renting one from DigitalOcean (the shortcut)
 
-![Renting a server from DigitalOcean in Ingle: pick a size and a place](docs/screenshots/rent-a-server.png)
+![Renting a server in your own DigitalOcean account, in Ingle: pick a size and a place](docs/screenshots/rent-a-server.png)
 
 DigitalOcean was picked for being cheap, very reliable and simple to sign up for. The
 account is yours, made with your own card or PayPal, and **DigitalOcean bills you
@@ -556,12 +566,13 @@ for the research behind it.
 ## How it's tested
 
 Ingle is used on real Windows 10 and 11 PCs, and every release is also tested in a Linux
-sandbox before it ships: about 150 automated tests, including end-to-end runs with a real
+sandbox before it ships: about 165 automated tests, including end-to-end runs with a real
 server and several clients over QUIC (chat, invites, end-to-end encrypted voice in both
 directions, webcam pixels, 1080p screen sharing, stream sound reaching only viewers, late
 joiners, voice through server restarts, roles, pictures, custom emoji, direct messages,
 friends and blocking, unread marks, backups restored on another server, bug reports, the
-soundboard heard by everyone in the call, server mute and deafen enforced by the server). The
+soundboard heard by everyone in the call, server mute and deafen enforced by the server,
+backups whose server key only their owner can open, release files that expire). The
 app is driven through its real UI on a virtual display (visual fixes are checked with
 before-and-after captures), and the Windows builds are run under Wine (the app, the server,
 the bot and the setup).

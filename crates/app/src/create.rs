@@ -370,7 +370,7 @@ fn choose_page(c: &mut CreateState, ui: &mut egui::Ui, close: &mut bool) {
     if choice_card(
         ui,
         "rent",
-        Some("RECOMMENDED"),
+        Some("QUICKEST"),
         "Rent a server",
         "In your own DigitalOcean account, about $4–6 a month, billed to you by DigitalOcean (Ingle doesn't charge anything). Ingle creates it and sets it up for you in a few minutes; delete it any time.",
         icons::cloud,

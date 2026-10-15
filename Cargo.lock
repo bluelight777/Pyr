@@ -3144,7 +3144,7 @@ dependencies = [
 
 [[package]]
 name = "ingle"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3171,7 +3171,7 @@ dependencies = [
 
 [[package]]
 name = "ingle-engine"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3217,7 +3217,7 @@ dependencies = [
 
 [[package]]
 name = "ingle-host"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "getrandom 0.2.17",
@@ -3236,7 +3236,7 @@ dependencies = [
 
 [[package]]
 name = "ingle-proto"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3258,7 +3258,7 @@ dependencies = [
 
 [[package]]
 name = "ingle-server"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
