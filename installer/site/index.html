@@ -297,7 +297,8 @@ section { position: relative; }
 .plug-hero .kind { font-size: 12.5px; font-weight: 650; color: #b9c2ff; letter-spacing: .06em; text-transform: uppercase; }
 .plug-hero p { padding: 0 30px; }
 .plug-hero .tags { padding: 0 30px; }
-.plug-hero .shot { margin: 26px 0 0 30px; border-radius: 14px 0 0 0; border-right: 0; border-bottom: 0; }
+.plug-hero .shot { margin: 26px 0 0 30px; border-radius: 14px 0 0 0; border-right: 0; border-bottom: 0; flex: 1; min-height: 240px; }
+.plug-hero .shot img { width: 100%; height: 100%; object-fit: cover; object-position: left top; }
 .plug-side { display: grid; gap: 16px; }
 .plug-side .card h3 { font-size: 20px; }
 
@@ -405,6 +406,7 @@ dialog[open] { animation: pop .35s var(--ease); }
   .t-chat, .t-server, .t-private { grid-column: span 6; }
   .t-private { grid-column: span 12; }
   .plug-grid, .trust { grid-template-columns: 1fr; }
+  .plug-side { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 760px) {
   body { font-size: 16px; }
@@ -434,7 +436,11 @@ dialog[open] { animation: pop .35s var(--ease); }
   .foot { grid-template-columns: 1fr; }
   .dlg { padding: 26px 20px 22px; }
   .dlg h2 { font-size: 25px; }
-  .plug-hero .shot { margin-left: 24px; }
+  .plug-side { grid-template-columns: 1fr; }
+  .plug-hero { padding: 0; }
+  .plug-hero .top-row { padding: 24px 24px 0; }
+  .plug-hero p, .plug-hero .tags { padding: 0 24px; }
+  .plug-hero .shot { margin-left: 24px; min-height: 0; }
   .stats b { font-size: 18px; }
   .stats div { padding: 12px 10px; }
 }
@@ -725,6 +731,11 @@ dialog[open] { animation: pop .35s var(--ease); }
           <div class="icon-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg></div>
           <h3>Make your own with Claude</h3>
           <p>The <a href="https://github.com/bluelight777/ingle/tree/main/plugins" rel="noopener">Ingle plugin kit</a> explains everything Claude needs, so you can describe a plugin and build it together, then try it in Ingle. Send it to the library from Ingle; it's reviewed before anyone else sees it.</p>
+        </article>
+        <article class="card" data-reveal>
+          <div class="icon-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4.5 6v6c0 4.4 3.2 8.1 7.5 9 4.3-.9 7.5-4.6 7.5-9V6z"/><path d="m8.6 12.2 2.4 2.4 4.4-4.8"/></svg></div>
+          <h3>Checked every time</h3>
+          <p>Ingle checks every file against the library's signed list before it installs a plugin, and again each time a program opens.</p>
         </article>
       </div>
     </div>
