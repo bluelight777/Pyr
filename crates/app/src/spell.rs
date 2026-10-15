@@ -342,7 +342,15 @@ mod tests {
         let mut s = ServerView::new("k".into(), "Camp".into(), String::new());
         s.members.insert(
             "u1".into(),
-            ingle_proto::control::Member { user_id: "u1".into(), name: "Kainzor".into(), online: true, ..Default::default() },
+            ingle_proto::control::Member {
+                user_id: "u1".into(),
+                name: "Kainzor".into(),
+                role: ingle_proto::control::Role::Member,
+                online: true,
+                joined_at: 0,
+                roles: Vec::new(),
+                avatar: None,
+            },
         );
         sp.know(&s, &["Brethren".to_string()]);
         let text = "Kainzor's helo, the Brethren gg wrld teh";

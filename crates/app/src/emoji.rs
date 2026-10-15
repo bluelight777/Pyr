@@ -405,6 +405,31 @@ pub fn label_line(
     label_job(ui, text, font, color, Some(width), true, custom)
 }
 
+/// Like `Painter::text`, with colour emoji: on one line, cut with "…" past `max_width`
+/// (a channel's name in the list). Where it went.
+pub fn paint_text(
+    painter: &egui::Painter,
+    pos: Pos2,
+    anchor: egui::Align2,
+    text: &str,
+    font: FontId,
+    color: Color32,
+    max_width: Option<f32>,
+) -> Rect {
+    let (job, found) = job_of(text, font, color, max_width, true);
+    let galley = painter.layout_job(job);
+    let rect = anchor.anchor_size(pos, galley.size());
+    let starts: Vec<usize> = found.iter().map(|f| f.0).collect();
+    let spots = placed(&galley, &starts);
+    painter.galley(rect.min, galley, color);
+    for (r, f) in spots.into_iter().zip(&found) {
+        if r.is_positive() {
+            paint(painter, r.translate(rect.min.to_vec2()), &f.2, &mut |_| None);
+        }
+    }
+    rect
+}
+
 fn label_job(
     ui: &mut egui::Ui,
     text: &str,
@@ -414,6 +439,20 @@ fn label_job(
     one_line: bool,
     custom: &mut dyn FnMut(&str) -> Option<egui::TextureId>,
 ) -> egui::Response {
+    let (job, found) = job_of(text, font, color, wrap, one_line);
+    let galley = ui.fonts_mut(|f| f.layout_job(job));
+    let resp = ui.add(egui::Label::new(galley.clone()).sense(egui::Sense::click()));
+    let starts: Vec<usize> = found.iter().map(|f| f.0).collect();
+    for (r, f) in placed(&galley, &starts).into_iter().zip(&found) {
+        if r.is_positive() {
+            paint(ui.painter(), r.translate(resp.rect.min.to_vec2()), &f.2, custom);
+        }
+    }
+    resp
+}
+
+/// `text` laid out with room for its colour emoji (drawn over it afterwards), and where they are.
+fn job_of(text: &str, font: FontId, color: Color32, wrap: Option<f32>, one_line: bool) -> (egui::text::LayoutJob, Vec<(usize, usize, EmojiRef)>) {
     let mut job = egui::text::LayoutJob::default();
     if let Some(w) = wrap {
         job.wrap.max_width = w;
@@ -441,15 +480,7 @@ fn label_job(
     if i < chars.len() {
         job.append(&chars[i..].iter().collect::<String>(), 0.0, plain);
     }
-    let galley = ui.fonts_mut(|f| f.layout_job(job));
-    let resp = ui.add(egui::Label::new(galley.clone()).sense(egui::Sense::click()));
-    let starts: Vec<usize> = found.iter().map(|f| f.0).collect();
-    for (r, f) in placed(&galley, &starts).into_iter().zip(&found) {
-        if r.is_positive() {
-            paint(ui.painter(), r.translate(resp.rect.min.to_vec2()), &f.2, custom);
-        }
-    }
-    resp
+    (job, found)
 }
 
 #[cfg(test)]

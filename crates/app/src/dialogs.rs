@@ -43,6 +43,20 @@ pub(crate) fn input(ui: &mut egui::Ui, text: &mut String, hint: &str) -> egui::R
     ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(f32::INFINITY).margin(egui::Margin::symmetric(10, 8)))
 }
 
+/// Puts `insert` where the text box `id`'s cursor is (at the end if it has none) and moves the
+/// cursor after it.
+fn insert_at_cursor(ctx: &egui::Context, id: egui::Id, text: &mut String, insert: &str) {
+    use egui::text::{CCursor, CCursorRange};
+    let mut state = egui::TextEdit::load_state(ctx, id);
+    let at = state.as_ref().and_then(|s| s.cursor.char_range()).map(|r| r.primary.index).unwrap_or(usize::MAX).min(text.chars().count());
+    let byte = text.char_indices().nth(at).map(|(b, _)| b).unwrap_or(text.len());
+    text.insert_str(byte, insert);
+    if let Some(s) = state.as_mut() {
+        s.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(at + insert.chars().count()))));
+        s.clone().store(ctx, id);
+    }
+}
+
 /// How the notice about a bug report that didn't go starts (its "Open it" brings it back).
 pub(crate) const BUG_NOT_SENT: &str = "Your bug report wasn't sent";
 
@@ -69,6 +83,50 @@ fn notice(ui: &mut egui::Ui, text: &str, error: bool) {
 }
 
 impl IngleApp {
+    /// A channel name box with an emoji button beside it (the emoji goes where the cursor is,
+    /// like Discord's 🎮-gaming). `salt` keeps each dialog's picker apart.
+    fn channel_name_input(&mut self, ui: &mut egui::Ui, st: &AppState, salt: &str, name: &mut String, hint: &str, acts: &mut Vec<Act>) -> egui::Response {
+        let open_id = egui::Id::new(("channel-emoji-open", salt));
+        let mut open: bool = ui.data(|d| d.get_temp(open_id)).unwrap_or(false);
+        let (resp, button) = ui
+            .horizontal(|ui| {
+                let w = (ui.available_width() - 44.0).max(80.0);
+                let r = ui.add(egui::TextEdit::singleline(name).hint_text(hint).desired_width(w).margin(egui::Margin::symmetric(10, 8)));
+                let b = crate::app::icon_button(ui, 34.0, "Add an emoji", open, |p, r, c| icons::smile(p, r, c));
+                (r, b)
+            })
+            .inner;
+        if button.clicked() {
+            open = !open;
+            if open {
+                // Typing searches the picker, like Discord's.
+                self.ui.picker.search.clear();
+                self.ui.picker.focus_search = true;
+            }
+        }
+        if open {
+            let area = egui::Area::new(egui::Id::new(("channel-emoji", salt)))
+                .order(egui::Order::Tooltip)
+                .pivot(egui::Align2::LEFT_TOP)
+                .fixed_pos(pos2(button.rect.right() + 10.0, button.rect.top()))
+                .constrain(true)
+                .show(ui.ctx(), |ui| egui::Frame::popup(ui.style()).fill(theme::SIDE).inner_margin(10).show(ui, |ui| self.emoji_picker(ui, st, None, acts)).inner);
+            if let Some(e) = area.inner {
+                insert_at_cursor(ui.ctx(), resp.id, name, &e);
+                resp.request_focus();
+                open = false;
+            }
+            let pressed_at = ui.input(|i| if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None });
+            let outside = pressed_at.is_some_and(|p| !area.response.rect.contains(p) && !button.rect.contains(p));
+            // (Escape closes the picker, not the dialog.)
+            if outside || ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                open = false;
+            }
+        }
+        ui.data_mut(|d| d.insert_temp(open_id, open));
+        resp
+    }
+
     /// Report a bug, with the report that didn't go yet if there is one (to send again).
     pub(crate) fn report_bug_dialog(&self) -> Dialog {
         let (title, body, include_log) = self.ui.bug_draft.clone().unwrap_or((String::new(), String::new(), true));
@@ -224,9 +282,14 @@ impl IngleApp {
                     ui.radio_value(&mut k, ChannelKind::Text, "Text — messages, links and emoji");
                     ui.radio_value(&mut k, ChannelKind::Voice, "Voice — talk, cameras and screen share (with its own chat)");
                     field_label(ui, "Channel name");
-                    let r = input(ui, &mut name, if k == ChannelKind::Text { "new-channel" } else { "Game Night" });
-                    let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if !enter {
+                    let open_id = egui::Id::new(("channel-emoji-open", "create"));
+                    let was_picking = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
+                    let r = self.channel_name_input(ui, st, "create", &mut name, if k == ChannelKind::Text { "new-channel" } else { "Game Night" }, acts);
+                    let picking = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
+                    // (Enter in the emoji picker's search picks an emoji: it doesn't create the
+                    // channel. The cursor stays in the name, except while that search has it.)
+                    let enter = !was_picking && !picking && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if !enter && !picking && !was_picking {
                         r.request_focus();
                     }
                     ui.add_space(14.0);
@@ -247,7 +310,7 @@ impl IngleApp {
                     ui.set_width(440.0);
                     title(ui, "Edit channel");
                     field_label(ui, "Name");
-                    input(ui, &mut name, "");
+                    self.channel_name_input(ui, st, "edit", &mut name, "", acts);
                     field_label(ui, "Topic");
                     input(ui, &mut topic, "What's this channel about?");
                     ui.add_space(14.0);

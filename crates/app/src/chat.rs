@@ -167,7 +167,7 @@ impl IngleApp {
                         } else {
                             icons::hash(ui.painter(), r, theme::DIM);
                         }
-                        ui.label(RichText::new(&ch.name).font(theme::bold_font(15.5)).color(theme::TEXT));
+                        crate::emoji::label(ui, &ch.name, theme::bold_font(15.5), theme::TEXT, None, &mut |_| None);
                     }
                     if !ch.topic.is_empty() && !in_call_panel {
                         let (sep, _) = ui.allocate_exact_size(vec2(1.0, 22.0), Sense::hover());
@@ -462,7 +462,7 @@ impl IngleApp {
                 ui.add_space(8.0);
                 ui.label(RichText::new(&name).font(theme::bold_font(26.0)).color(theme::TEXT));
                 ui.label(
-                    RichText::new(format!("This is the beginning of your direct message history with {name}. Only the two of you can see it."))
+                    RichText::new(format!("This is the beginning of your direct message history with {name}. Other members can't see it (the server it's on can: it isn't end-to-end encrypted yet)."))
                         .color(theme::MUTED),
                 );
             });
@@ -484,7 +484,8 @@ impl IngleApp {
                 }
                 ui.add_space(8.0);
                 let title = if ch.kind == ChannelKind::Voice { format!("{} chat", ch.name) } else { format!("Welcome to #{}!", ch.name) };
-                ui.label(RichText::new(title).font(theme::bold_font(26.0)).color(theme::TEXT));
+                let w = ui.available_width();
+                crate::emoji::label(ui, &title, theme::bold_font(26.0), theme::TEXT, Some(w), &mut |_| None);
                 let sub = if ch.kind == ChannelKind::Voice {
                     "Messages here stay with the voice channel — handy for links while you talk.".to_string()
                 } else {
@@ -495,7 +496,8 @@ impl IngleApp {
                     ui.add(egui::Label::new(RichText::new(ch.topic.trim()).size(15.0).color(theme::TEXT)).wrap());
                     ui.add_space(2.0);
                 }
-                ui.label(RichText::new(sub).color(theme::MUTED));
+                let w = ui.available_width();
+                crate::emoji::label(ui, &sub, theme::font(14.5), theme::MUTED, Some(w), &mut |_| None);
             });
         });
         ui.add_space(12.0);

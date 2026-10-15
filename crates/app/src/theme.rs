@@ -83,9 +83,14 @@ pub fn install(ctx: &egui::Context) {
         fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let mut prop = vec!["inter".to_string()];
     prop.extend(fallbacks.iter().cloned());
+    // Last: the parts of emoji that take no room (the emoji-style selector, joiners, a flag's
+    // tag letters) take none in plain text either, instead of showing as empty boxes (a
+    // channel name being typed, say).
+    prop.push("emoji-zero".into());
     fonts.families.insert(FontFamily::Proportional, prop);
     let mut b = vec!["inter-semibold".to_string()];
     b.extend(fallbacks);
+    b.push("emoji-zero".into());
     fonts.families.insert(bold(), b);
     fonts.font_data.insert("emoji-blank".into(), Arc::new(FontData::from_static(crate::emoji::BLANK_TTF)));
     fonts.font_data.insert("emoji-zero".into(), Arc::new(FontData::from_static(crate::emoji::ZERO_TTF)));

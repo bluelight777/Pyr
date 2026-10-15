@@ -9,6 +9,7 @@ use ingle_engine::Engine;
 use ingle_engine::config::Settings;
 use ingle_engine::state::{AppState, ConnStatus, ServerView, VideoKey};
 use ingle_proto::control::{Attachment, ChannelId, ChannelKind, MessageId, Role, RoleId, SessionId, perm};
+use ingle_proto::media::track;
 
 use crate::{icons, theme};
 
@@ -163,6 +164,9 @@ pub struct UiState {
     /// Someone's profile card, from clicking their name in a voice channel: (server, user, the
     /// name's row, which the card opens beside).
     pub profile_card: Option<(String, String, Rect)>,
+    /// "Join and Watch" from someone's profile: once we're in their voice channel, watch
+    /// their stream (server, channel, their session, when it was asked).
+    pub watch_after_join: Option<(String, ChannelId, SessionId, Instant)>,
     pub channel: HashMap<String, ChannelId>,
     pub call_view: bool,
     pub drafts: HashMap<(String, ChannelId), String>,
@@ -977,6 +981,7 @@ pub fn short_status(s: &ConnStatus) -> Option<(String, bool)> {
 
 impl IngleApp {
     fn frame_ui(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
+        self.watch_when_joined(st, acts);
         if self.fullscreen_ui(ctx, st, acts) {
             self.toasts(ctx, st);
             return;
@@ -1077,9 +1082,27 @@ impl IngleApp {
         self.toasts(ctx, st);
     }
 
+    /// After "Join and Watch": once we're in their channel, watch their stream (given up after
+    /// a while, or if they stop sharing first).
+    fn watch_when_joined(&mut self, st: &AppState, acts: &mut Vec<Act>) {
+        let Some((key, channel, session, asked)) = self.ui.watch_after_join.clone() else { return };
+        let sharing = st.server(&key).is_some_and(|s| {
+            s.voice.values().any(|p| p.session == session && p.channel_id == channel && p.tracks.iter().any(|t| t.id == track::SCREEN))
+        });
+        let joined = st.call.as_ref().is_some_and(|c| c.server_key == key && c.channel_id == channel);
+        if joined && sharing {
+            acts.push(Act::Watch { session, track: track::SCREEN, on: true });
+            self.ui.call_view = true;
+            self.ui.watch_after_join = None;
+        } else if !sharing || asked.elapsed() > Duration::from_secs(20) {
+            self.ui.watch_after_join = None;
+        }
+    }
+
     /// Someone's profile (from clicking their name in a voice channel), like Discord's: their
-    /// picture, name, roles, when they joined and how you know them, and a button to message them.
-    /// (Right-clicking the name has the other options.)
+    /// picture, name, roles, when they joined and how you know them, and buttons to watch their
+    /// stream (when they're sharing their screen) and to message them. (Right-clicking the name
+    /// has the other options.)
     fn profile_card(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
         use ingle_proto::control::RelationKind;
         let Some((key, uid, row)) = self.ui.profile_card.clone() else { return };
@@ -1142,9 +1165,34 @@ impl IngleApp {
                 ui.label(RichText::new("SAFETY CODE").font(theme::bold_font(11.0)).color(theme::DIM));
                 ui.label(RichText::new(ingle_proto::crypto::safety_code(&uid)).font(theme::mono(12.5)).color(theme::MUTED))
                     .on_hover_text("Compare it with theirs (on the welcome screen) to be sure it's really them.");
+                // Sharing their screen: watch it from here, like Discord's Watch Stream. From
+                // another voice channel (or none), it joins theirs first.
+                let live = s
+                    .voice
+                    .values()
+                    .find(|p| p.user_id == uid && p.tracks.iter().any(|t| t.id == track::SCREEN))
+                    .map(|p| (p.channel_id, p.session))
+                    .filter(|_| uid != st.my_uid && s.status.is_connected());
+                if let Some((channel, session)) = live {
+                    let here = st.call.as_ref().is_some_and(|c| c.server_key == s.key && c.channel_id == channel);
+                    ui.add_space(10.0);
+                    let b = ui.add(theme::primary_button(if here { "Watch Stream" } else { "Join and Watch" }).min_size(vec2(ui.available_width(), 32.0)));
+                    let where_ = s.channels.iter().find(|c| c.id == channel).map(|c| c.name.clone()).unwrap_or_default();
+                    let b = if here { b } else { b.on_hover_text(format!("Joins {where_} and watches {name}'s stream")) };
+                    if b.clicked() {
+                        if here {
+                            acts.push(Act::Watch { session, track: track::SCREEN, on: true });
+                            self.ui.call_view = true;
+                        } else {
+                            acts.push(Act::Join { key: s.key.clone(), channel });
+                            self.ui.watch_after_join = Some((s.key.clone(), channel, session, Instant::now()));
+                        }
+                        chose = true;
+                    }
+                }
                 let can_dm = uid != st.my_uid && s.has(ingle_proto::control::DMS_FEATURE) && s.status.is_connected();
                 if can_dm {
-                    ui.add_space(10.0);
+                    ui.add_space(if live.is_some() { 6.0 } else { 10.0 });
                     if ui.add(theme::primary_button(&format!("Message {name}")).min_size(vec2(ui.available_width(), 32.0))).clicked() {
                         acts.push(Act::OpenDm { key: s.key.clone(), uid: uid.clone() });
                         chose = true;
@@ -1573,7 +1621,9 @@ impl IngleApp {
                         icons::speaker(ui.painter(), icon_rect, if in_this_call { theme::ONLINE } else { theme::DIM });
                     }
                     let font = if unread { theme::bold_font(14.5) } else { theme::font(14.5) };
-                    ui.painter().text(rect.left_center() + vec2(34.0, 0.0), egui::Align2::LEFT_CENTER, &c.name, font, fg);
+                    // (In colour, emoji and all; room kept for the badges on the right.)
+                    let room = (rect.width() - 34.0 - 44.0).max(40.0);
+                    crate::emoji::paint_text(ui.painter(), rect.left_center() + vec2(34.0, 0.0), egui::Align2::LEFT_CENTER, &c.name, font, fg, Some(room));
                     if mentions > 0 {
                         let b = Rect::from_center_size(rect.right_center() - vec2(18.0, 0.0), vec2(22.0, 16.0));
                         ui.painter().rect_filled(b, CornerRadius::same(8), theme::LIVE);
@@ -1754,7 +1804,8 @@ impl IngleApp {
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 ui.label(RichText::new("Reconnecting…").font(theme::bold_font(13.5)).color(theme::EMBER2));
-                ui.add(egui::Label::new(RichText::new(format!("{channel_name} · the server is restarting")).size(12.0).color(theme::MUTED)).truncate());
+                let w = ui.available_width();
+                crate::emoji::label_line(ui, &format!("{channel_name} · the server is restarting"), theme::font(12.0), theme::MUTED, w, &mut |_| None);
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if icon_button(ui, 32.0, "Disconnect", false, |p, r, _| icons::hangup(p, r, theme::TEXT)).clicked() {
@@ -1775,7 +1826,8 @@ impl IngleApp {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 let label = ui.add(egui::Label::new(RichText::new("Voice Connected").font(theme::bold_font(13.5)).color(theme::ONLINE)).sense(Sense::click()));
                 let srv = server.map(|s| s.name.clone()).unwrap_or_default();
-                ui.add(egui::Label::new(RichText::new(format!("{channel_name} · {} ms", call.stats.rtt_ms)).size(12.0).color(theme::MUTED)).truncate())
+                let w = ui.available_width();
+                crate::emoji::label_line(ui, &format!("{channel_name} · {} ms", call.stats.rtt_ms), theme::font(12.0), theme::MUTED, w, &mut |_| None)
                     .on_hover_text(format!("{channel_name} / {srv}"));
                 if label.clicked() {
                     self.ui.server = Some(call.server_key.clone());

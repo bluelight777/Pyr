@@ -218,7 +218,8 @@ impl IngleApp {
                         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                             let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
                             icons::speaker(ui.painter(), r, theme::MUTED);
-                            ui.add(egui::Label::new(RichText::new(&channel_name).font(theme::bold_font(15.5)).color(theme::TEXT)).truncate());
+                            let w = ui.available_width();
+                            crate::emoji::label_line(ui, &channel_name, theme::bold_font(15.5), theme::TEXT, w, &mut |_| None);
                             // The channel's topic, like a text channel's header.
                             if !topic.is_empty() && ui.available_width() > 60.0 {
                                 let (sep, _) = ui.allocate_exact_size(vec2(1.0, 22.0), Sense::hover());

@@ -1188,9 +1188,10 @@ pub fn clean_member_name(raw: &str) -> Option<String> {
 }
 
 /// Channel names are lower-case, dash separated for text channels (Discord style);
-/// voice channels keep their spacing and case.
+/// voice channels keep their spacing and case. Emoji are welcome (🎮-gaming), and stay whole
+/// (see [`clean_name_with_emoji`]).
 pub fn clean_channel_name(raw: &str, kind: ChannelKind) -> Option<String> {
-    let name = clean_name(raw, 64)?;
+    let name = clean_name_with_emoji(raw, 64)?;
     Some(match kind {
         ChannelKind::Voice => name,
         ChannelKind::Text => name
@@ -1201,9 +1202,76 @@ pub fn clean_channel_name(raw: &str, kind: ChannelKind) -> Option<String> {
     })
 }
 
+/// [`clean_name`], except that an emoji made of several stays whole: the zero-width joiner
+/// between two pictures (👩‍💻, 🏳️‍🌈) and the tag letters of a flag like Scotland's are kept.
+/// Anywhere else they're taken out, as in every other name.
+pub fn clean_name_with_emoji(raw: &str, max_chars: usize) -> Option<String> {
+    let chars: Vec<char> = raw.chars().collect();
+    let mut kept: Vec<char> = Vec::with_capacity(chars.len());
+    let mut in_tags = false;
+    for (i, &c) in chars.iter().enumerate() {
+        let keep = match c {
+            '\u{200D}' => {
+                in_tags = false;
+                let before = kept.iter().rev().find(|p| !is_emoji_tweak(**p)).copied();
+                let after = chars.get(i + 1).copied();
+                before.is_some_and(is_pictograph) && after.is_some_and(is_pictograph)
+            }
+            // A subdivision flag: 🏴 and tag letters, ended by the cancel tag.
+            '\u{E0020}'..='\u{E007E}' => {
+                in_tags = in_tags || kept.last() == Some(&'\u{1F3F4}');
+                in_tags
+            }
+            '\u{E007F}' => std::mem::take(&mut in_tags),
+            c => {
+                in_tags = false;
+                !c.is_control() && !is_invisible(c)
+            }
+        };
+        if keep {
+            kept.push(c);
+        }
+    }
+    let collapsed = kept.iter().collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut trimmed: String = collapsed.chars().take(max_chars).collect();
+    // (A cut in the middle of an emoji leaves no joiner dangling.)
+    while trimmed.ends_with('\u{200D}') {
+        trimmed.pop();
+    }
+    if trimmed.is_empty() { None } else { Some(trimmed) }
+}
+
+/// What may come between a picture and a joiner: the emoji-style selector and skin tones.
+fn is_emoji_tweak(c: char) -> bool {
+    matches!(c, '\u{FE0F}' | '\u{1F3FB}'..='\u{1F3FF}')
+}
+
+/// A picture an emoji sequence is made of (the emoji blocks, roughly).
+fn is_pictograph(c: char) -> bool {
+    matches!(c as u32, 0x00A9 | 0x00AE | 0x203C | 0x2049 | 0x2122 | 0x2139 | 0x2190..=0x2BFF | 0x3030 | 0x303D | 0x3297 | 0x3299 | 0x1F000..=0x1FAFF)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn channel_names_take_emoji_whole() {
+        assert_eq!(clean_channel_name("🎮 Gaming", ChannelKind::Text).as_deref(), Some("🎮-gaming"));
+        assert_eq!(clean_channel_name("🔊 Chill Zone 🎵", ChannelKind::Voice).as_deref(), Some("🔊 Chill Zone 🎵"));
+        // Emoji made of several stay whole: a profession, a flag with a joiner, skin tones, a
+        // keycap, Scotland's flag.
+        for e in ["👩\u{200D}💻", "🏳\u{FE0F}\u{200D}🌈", "👍🏽", "1\u{FE0F}\u{20E3}", "🏴\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}", "🧑🏿\u{200D}🚀"] {
+            assert_eq!(clean_channel_name(&format!("{e} crew"), ChannelKind::Voice), Some(format!("{e} crew")), "{e:?}");
+        }
+        // Joiners and tags anywhere else still go (no invisible look-alikes), as do the other
+        // invisible characters.
+        assert_eq!(clean_channel_name("ad\u{200D}min", ChannelKind::Text).as_deref(), Some("admin"));
+        assert_eq!(clean_channel_name("a\u{E0061}b", ChannelKind::Text).as_deref(), Some("ab"));
+        assert_eq!(clean_channel_name("🎮\u{200B}\u{202E}gaming", ChannelKind::Text).as_deref(), Some("🎮gaming"));
+        assert_eq!(clean_channel_name("🎮\u{200D}", ChannelKind::Text).as_deref(), Some("🎮"));
+        assert_eq!(clean_channel_name("\u{200D}\u{200D}", ChannelKind::Text), None);
+    }
 
     #[test]
     fn unknown_events_and_requests_are_tolerated() {
