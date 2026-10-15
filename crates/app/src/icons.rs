@@ -518,11 +518,13 @@ pub fn puzzle(p: &Painter, r: Rect, c: Color32) {
     let s = r.width().min(r.height());
     let o = r.center() - vec2(s / 2.0, s / 2.0);
     let at = |x: f32, y: f32| o + vec2(x * s, y * s);
-    // The body, a little rounded, with a knob on top and on the right.
-    let body = Rect::from_min_max(at(0.08, 0.26), at(0.74, 0.92));
-    p.rect_filled(body, CornerRadius::same((s * 0.1) as u8), c);
-    p.circle_filled(at(0.41, 0.2), s * 0.15, c);
-    p.circle_filled(at(0.8, 0.59), s * 0.15, c);
+    // The body, a little rounded, with a round knob on a neck on top and on the right.
+    let body = Rect::from_min_max(at(0.08, 0.32), at(0.70, 0.94));
+    p.rect_filled(body, CornerRadius::same((s * 0.09) as u8), c);
+    p.rect_filled(Rect::from_min_max(at(0.32, 0.18), at(0.46, 0.34)), CornerRadius::ZERO, c);
+    p.circle_filled(at(0.39, 0.16), s * 0.13, c);
+    p.rect_filled(Rect::from_min_max(at(0.68, 0.56), at(0.84, 0.70)), CornerRadius::ZERO, c);
+    p.circle_filled(at(0.84, 0.63), s * 0.13, c);
 }
 
 /// A tick (in a checkbox).

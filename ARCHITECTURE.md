@@ -198,7 +198,7 @@ Every copy of Ingle sends its bug reports to one central inbox, the server named
 is built (`INGLE_BUG_SERVER=host:port/<server key>`), whichever servers its user is on: a
 report is sent instead of logging in, with no account (`engine/src/bugs.rs`). That server
 keeps reports only while its owner has *Collect Ingle bug reports* on, and caps them per
-address and per hour. The owner reads them under bug-reports in the channel list and
+address and per hour. The owner reads them under Bug reports in the channel list and
 approves the ones to fix; their app saves the approved ones (with their logs) to
 `approved-bug-reports/<server key>.json` in its settings folder, which is what Claude reads
 when asked to fix them. A report is a stranger's words: it never decides anything.
@@ -206,6 +206,43 @@ when asked to fix them. A report is a stranger's words: it never decides anythin
 A report that can't be sent stays in the Report a bug window with the reason (or comes
 back from a notice, if the window was closed), and when the inbox is the owner's own server
 with collecting off, sending switches it on first.
+
+## Plugins
+
+**The Ingle Library** is a list on the website (`ingle/library/index.json`) of programs and
+add-ons, with every file's SHA-256 and size, signed with the release key under its own
+context (`ingle plugin library v1`, so an update signature can't pass as a list or the other
+way round) and dated like a release: the app takes no list past its date or older than one it
+has seen (`proto/src/library.rs`, `app/src/plugins/library.rs`). It's made offline with
+`scripts/make-library.sh` from `installer/site/library/plugins.json` and the built files.
+
+**Installing** (`app/src/plugins/install.rs`) downloads a plugin's files into a new folder,
+checks each against the list, and swaps the folder in whole; a program's files are checked
+again before every launch. A plugin taken out of the list stops (an add-on) or won't open (a
+program).
+
+**Add-ons** (`app/src/plugins/addon.rs`) are WebAssembly modules run by wasmi, an
+interpreter, each on a thread of its own. A module that imports anything is refused, so an
+add-on can reach nothing but the JSON Ingle hands it; each call gets a fuel budget (about 300
+million instructions) and the module 64 MB of memory, and one that runs out is stopped. It can
+add /commands, draw a panel from a few kinds of widgets, and keep up to 64 KB of data of its
+own. What it sends (4,000 characters at most) goes only to the channel that's open, as the
+person's message, and only if the add-on asked for the commands permission when it was
+listed. The plugin kit (`plugins/kit`) writes the module's side.
+
+**Programs** are apps of their own, run with the user's rights like anything else they
+install: the protection is that the library only lists programs Firelit Games has read and
+built from source, and Ingle only opens the files the list names.
+
+**Plugins sent in** (`engine/src/plugins.rs`): anyone's Ingle sends a plugin's Rust source
+(never a built file) to the library server, which is the bug report server unless Ingle was
+built with `INGLE_LIBRARY_SERVER`, before logging in and with no account. The server keeps
+it only while its owner has *Collect plugins for the Ingle Library* on, after checking it
+(a Cargo.toml, plain relative paths, 600 KB and 400 files at most, a few an hour per address,
+a cap on how many wait), and only the owner sees them, under Plugins sent in. Approving one
+saves its source to `approved-plugins/<server key>/<id>-<name>/` on the owner's PC;
+building, signing and listing happen offline. What's sent in is a stranger's code and words:
+it never decides anything.
 
 ## Setting up servers (`crates/host`)
 
@@ -280,6 +317,11 @@ What one person, or one place, can use up on a server (`server/src/hub.rs`, `con
   folder only root can write, and installed from there.
 - **Bug reports** carry the end of the app's log, with DigitalOcean tokens, GIF keys and the
   codes in invite links taken out first.
+- **Plugins**: an add-on can't reach anything outside its sandbox, and only sends what the
+  person asked for to the channel they have open. A program runs with the user's rights, so
+  what keeps a bad one out is the review before it's built and the signed list Ingle checks
+  its files against. Whoever holds the release key could list a harmful program, as they
+  could sign a harmful update.
 
 ## Roadmap
 
@@ -299,9 +341,8 @@ In rough priority order:
 7. Opus 1.5/1.6 neural features (deep PLC, NoLACE) and DRED once its format is final;
    RED (redundant audio) under heavy loss.
 8. MLS (`openmls`) for key management in big calls; optional E2EE text channels.
-9. Plugins and bots; attachments beyond pictures, threads, search. Plugins must be written
-   in Rust: the plugin kit is a Rust crate only (no C header, no scripting runtime), and
-   plugins come as Rust source that's built from it.
+9. Bots as members; attachments beyond pictures, threads, search. (Plugins came in 0.7.2,
+   Rust only: the kit is a Rust crate, and plugins come as Rust source that's built from it.)
 10. A web client over WebTransport + WebCodecs, then mobile.
 11. H.264 licensing: OpenH264 here is compiled from source, which Cisco's patent licence
     doesn't cover. Before shipping widely, either download Cisco's prebuilt OpenH264 at

@@ -181,8 +181,10 @@ pub fn start_addon(folder: &Path, name: &str) -> Result<PathBuf, String> {
         .replace("ingle-plugin = { path = \"../kit\" }", "ingle-plugin = { path = \"ingle-plugin\" }")
         .replace("name = \"Hello\"", &format!("name = \"{}\"", name.replace('"', "'")))
         .replace("# The kit (Ingle's \"Start an add-on\" puts a copy of it in an ingle-plugin folder next to this).\n", "# The plugin kit (a copy of it, in the ingle-plugin folder).\n");
-    // A project of its own, outside any other Cargo workspace.
-    let manifest = format!("{manifest}\n[workspace]\n");
+    // A project of its own, outside any other Cargo workspace, built small.
+    let manifest = format!(
+        "{manifest}\n[workspace]\n\n# A small .wasm.\n[profile.release]\nopt-level = \"s\"\nlto = true\ncodegen-units = 1\npanic = \"abort\"\nstrip = true\n"
+    );
     let write = |rel: &str, text: &str| -> Result<(), String> {
         let path = dir.join(rel);
         if let Some(parent) = path.parent() {

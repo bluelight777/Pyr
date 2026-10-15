@@ -386,6 +386,8 @@ impl IngleApp {
             }
             Act::AddServer(link) => match e.add_server(&link) {
                 Ok(key) => {
+                    self.ui.home = false;
+                    self.ui.plugins_open = false;
                     self.ui.server = Some(key);
                     self.ui.dialog = None;
                 }
@@ -393,6 +395,8 @@ impl IngleApp {
             },
             Act::JoinOwned(link) => match e.add_server(&link) {
                 Ok(key) => {
+                    self.ui.home = false;
+                    self.ui.plugins_open = false;
                     self.ui.server = Some(key);
                     self.ui.call_view = false;
                 }
@@ -2046,6 +2050,8 @@ impl IngleApp {
                 crate::emoji::label_line(ui, &format!("{channel_name} · {} ms", call.stats.rtt_ms), theme::font(12.0), theme::MUTED, w, &mut |_| None)
                     .on_hover_text(format!("{channel_name} / {srv}"));
                 if label.clicked() {
+                    self.ui.home = false;
+                    self.ui.plugins_open = false;
                     self.ui.server = Some(call.server_key.clone());
                     self.ui.call_view = true;
                 }

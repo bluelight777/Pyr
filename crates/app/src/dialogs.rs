@@ -205,7 +205,7 @@ impl IngleApp {
                     title(ui, "Join a server");
                     ui.label(RichText::new("Paste an invite link someone shared with you.").color(theme::MUTED));
                     field_label(ui, "Invite link");
-                    let r = input(ui, &mut link, "ingle://host/abcd1234/xxxxxxxxxxxx");
+                    let r = input(ui, &mut link, "https://firelitgames.com/ingle/#… or ingle://…");
                     let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                     if !enter {
                         r.request_focus();
@@ -261,7 +261,7 @@ impl IngleApp {
                         "add-join",
                         None,
                         "Join with an invite link",
-                        "Someone sent you a link that starts with ingle://",
+                        "Someone sent you an invite link",
                         icons::link,
                     ) {
                         self.ui.dialog = Some(Dialog::AddServer { link: String::new(), error: None });

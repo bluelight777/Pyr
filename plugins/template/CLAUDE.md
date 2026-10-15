@@ -61,7 +61,8 @@ In `Cargo.toml`, keep `[package.metadata.ingle]` up to date: `name` (what people
    add-on file**, and pick that `.wasm`. Its commands work in chat and its panel opens, until
    Ingle closes. Rebuild and try again as you change it.
 
-For a smaller file, add to `Cargo.toml`:
+For a small file, `Cargo.toml` should have these (Ingle's "Start an add-on" puts them in; add
+them if they're missing):
 
 ```toml
 [profile.release]

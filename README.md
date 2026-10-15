@@ -130,12 +130,38 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   through it as someone new (make a fresh link for everyone else).
 - **Backups**: the owner's Ingle copies the whole server to their PC every hour (messages,
   pictures and the server's identity), and a new server can be set up from a backup.
-- **Invite links** (`ingle://...`): clicking one opens Ingle, which asks before joining.
+- **Invite links that work anywhere**: Copy link gives a web link
+  (`https://firelitgames.com/ingle/#n=…&join=…`) you can paste in any chat app. Clicking it
+  opens Ingle, which asks before joining; someone who doesn't have Ingle yet gets it from the
+  same page first. Invite links clicked in Ingle's own chat ask right there, and the
+  `ingle://` link still works.
+
+**Plugins**
+
+- The **Ingle Library** (the puzzle piece in the server list) has programs and add-ons, each
+  built by Firelit Games from its source after someone read it. Ingle checks every file
+  against the library's signed list before installing it, and again before opening a program.
+- **Programs** are apps of their own, opened from Ingle. The first is **Chimbrowser**
+  (Windows): a lean, private browser that blocks ads and trackers, makes YouTube play
+  smoothly, and has an AI sidebar for Claude, ChatGPT, Gemini and others.
+- **Add-ons** run inside Ingle in a sandbox (WebAssembly with nothing to reach: not your files,
+  not the internet, not the rest of your PC). They add /commands to chat (with hints as you
+  type), show a small panel and keep a little data. **Dice** rolls dice: `/roll 2d6+1`, or
+  click a die in its panel.
+- **Make your own with Claude**: Plugins → Make your own starts an add-on in a folder with the
+  plugin kit and a `CLAUDE.md` that explains Ingle add-ons to Claude. Say what it should do,
+  try the `.wasm` it builds right there in Ingle, then **send it for review**: Ingle sends its
+  Rust source (never a built file), and nothing is built or listed until it's been looked at.
+  The kit, a template and Dice are in [`plugins/`](plugins).
+
+![The Ingle Library: Chimbrowser and Dice](docs/screenshots/plugins.png)
 
 **The app**
 
 - Updates itself: a green button appears at the top of the server list when a new version
-  is out, and updating puts you back in the voice channel you were in.
+  is out, and updating puts you back in the voice channel you were in. **Check for updates**
+  (the arrows under the home button, Settings → About, or the tray icon's menu, which also
+  has **Update Ingle** once there's one) looks right away instead of waiting.
 - On Windows it lives by the clock (closing the window keeps you in voice), and can start
   with Windows, straight into the tray.
 - Error messages stay until you dismiss them and have a Copy button. **Report a bug**
@@ -537,6 +563,11 @@ installer/linux/build-deb.sh           # dist/ingle_<version>_amd64.deb (needs d
 installer/windows/build.sh             # dist/Ingle-Setup-<version>.exe (needs NSIS)
 ```
 
+Plugins (see [plugins/README.md](plugins/README.md)): in `plugins/`, `cargo build --release
+--target wasm32-unknown-unknown -p ingle-dice` builds the Dice add-on (once: `rustup target
+add wasm32-unknown-unknown`), and `scripts/make-library.sh` signs the Ingle Library's list
+from `installer/site/library/plugins.json`.
+
 The icons and installer artwork are drawn by `tools/make-icons.py` (needs Pillow). Build the
 Linux binaries on the oldest distribution you want to support (the released .deb is built
 on Ubuntu 22.04): a binary only runs where its build machine's glibc, or a newer one, is
@@ -558,6 +589,7 @@ crates/server   ingle-server: SQLite storage, auth, chat, roles, files, SFU medi
 crates/engine   client engine: networking, E2EE, audio + video pipelines (no UI)
 crates/host     server setup: renting from DigitalOcean, installing over SSH, reachability
 crates/app      ingle: the egui desktop app
+plugins         the plugin kit (ingle-plugin), a template for new add-ons, and Dice
 ```
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how it works and [RESEARCH.md](RESEARCH.md)
@@ -566,13 +598,15 @@ for the research behind it.
 ## How it's tested
 
 Ingle is used on real Windows 10 and 11 PCs, and every release is also tested in a Linux
-sandbox before it ships: about 165 automated tests, including end-to-end runs with a real
+sandbox before it ships: about 190 automated tests, including end-to-end runs with a real
 server and several clients over QUIC (chat, invites, end-to-end encrypted voice in both
 directions, webcam pixels, 1080p screen sharing, stream sound reaching only viewers, late
 joiners, voice through server restarts, roles, pictures, custom emoji, direct messages,
 friends and blocking, unread marks, backups restored on another server, bug reports, the
 soundboard heard by everyone in the call, server mute and deafen enforced by the server,
-backups whose server key only their owner can open, release files that expire). The
+backups whose server key only their owner can open, release files that expire; and for
+plugins, the library's signed list, installs checked file by file, add-ons that reach
+outside or run away being stopped, and plugins sent in kept for the library's owner). The
 app is driven through its real UI on a virtual display (visual fixes are checked with
 before-and-after captures), and the Windows builds are run under Wine (the app, the server,
 the bot and the setup).

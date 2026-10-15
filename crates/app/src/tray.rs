@@ -646,7 +646,7 @@ fn tell_update_answers() {
             }
             Checked::Found(v) => notify(
                 &format!("Ingle {v} is out"),
-                "Right-click the Ingle icon by the clock and choose Update, or click the green arrow in Ingle.",
+                &format!("Right-click the Ingle icon by the clock and choose Update Ingle to {v}, or click the green arrow in Ingle."),
             ),
             Checked::Failed(e) => notify("Couldn't check for updates", &e),
         }

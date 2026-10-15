@@ -135,12 +135,12 @@ fn setup() -> Result<()> {
     let key = join(&me, &owner)?;
     me.set_server_icon(&key, Some(png(&assets, "icon.png")?));
     me.add_emoji(&key, "campfire", png(&assets, "campfire.png")?, false);
-    me.create_channel(&key, "patch-notes", ChannelKind::Text);
+    me.create_channel(&key, "📜 Patch notes", ChannelKind::Text);
     if channel(&me, &key, "Gaming").is_none() {
         me.create_channel(&key, "Gaming", ChannelKind::Voice);
     }
-    wait("channels", 10, || channel(&me, &key, "patch-notes").and(channel(&me, &key, "Gaming")))?;
-    let general = channel(&me, &key, "general").ok_or_else(|| anyhow!("no #general"))?;
+    wait("channels", 10, || channel(&me, &key, "📜 Patch notes").and(channel(&me, &key, "Gaming")))?;
+    let general = channel(&me, &key, "General").ok_or_else(|| anyhow!("no #General"))?;
     me.update_channel(&key, general, None, Some("Say hi! Game night is Fridays at 8.".into()));
     me.create_role(&key, "Moderators", 0x6cc070, perm::MANAGE_MESSAGES | perm::KICK | perm::MANAGE_EMOJI, true);
     me.create_role(&key, "Crew", 0xffa94d, 0, false);
@@ -169,7 +169,7 @@ fn setup() -> Result<()> {
     let me_uid = me.state().my_uid.clone();
     let (mara, theo, rae, kai) = (f("Mara"), f("Theo"), f("Rae"), f("Kai"));
 
-    // An evening in #general.
+    // An evening in #General.
     say(mara, &key, general, "Game night Friday? I set up the **Gaming** voice channel 🎉", None)?;
     say(mara, &key, general, "Bracket is in #Links and clips, sign up by Thursday", None)?;
     let sharp = say(theo, &key, general, "The screen share in here is *so* much sharper than Discord's free tier", None)?;
@@ -197,8 +197,8 @@ fn setup() -> Result<()> {
     if let Some(links) = channel(mara, &key, "Links and clips") {
         say(mara, &key, links, "Friday bracket: reply here to sign up 👇", None)?;
     }
-    if let Some(notes) = channel(theo, &key, "patch-notes") {
-        say(theo, &key, notes, "@Friend 0.6.7 is out: channels open steady now, no more jumping", None)?;
+    if let Some(notes) = channel(theo, &key, "📜 Patch notes") {
+        say(theo, &key, notes, "@Friend 0.7.2 is out: plugins! Get Dice from the library and try /roll 2d6+1", None)?;
     }
 
     // Friends: Rae and Kai (accepted), Theo (waiting for you), and Mara messages you.

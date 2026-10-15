@@ -290,6 +290,7 @@ section { position: relative; }
 
 /* plugins */
 .plug-grid { margin-top: 52px; display: grid; grid-template-columns: 1.25fr 1fr; gap: 16px; }
+.plug-side code { font: 600 .9em var(--mono); color: var(--text); background: rgba(255, 255, 255, .07); padding: 1px 6px; border-radius: 6px; white-space: nowrap; }
 .plug-hero { padding: 0; display: flex; flex-direction: column; }
 .plug-hero .top-row { display: flex; gap: 18px; align-items: center; padding: 30px 30px 0; }
 .plug-hero .top-row img { width: 64px; height: 64px; border-radius: 16px; box-shadow: 0 12px 30px -10px rgba(110, 120, 255, .6); }
@@ -702,7 +703,7 @@ dialog[open] { animation: pop .35s var(--ease); }
     <div class="head" data-reveal>
       <span class="eyebrow">New: Plugins</span>
       <h2 id="plugins-title">Make Ingle do <span class="serif fire-text">more.</span></h2>
-      <p>Install programs and add-ons from the Ingle Library, right inside Ingle. Every plugin is built from its Rust source code and checked by hand before it's listed.</p>
+      <p>Install programs and add-ons from the Ingle Library, right inside Ingle. Every plugin is built from its Rust source code, and only after someone has read it.</p>
     </div>
     <div class="plug-grid">
       <article class="card plug-hero" data-reveal>
@@ -718,12 +719,12 @@ dialog[open] { animation: pop .35s var(--ease); }
         <article class="card" data-reveal>
           <div class="icon-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 7v10l8 4 8-4V7z"/><path d="m4 7 8 4 8-4M12 11v10"/></svg></div>
           <h3>Add-ons, sealed off from your PC</h3>
-          <p>Add-ons run inside Ingle in a sandbox. They can't touch your files or the internet, and they only do what you allow.</p>
+          <p>Add-ons run inside Ingle in a sandbox. They can't touch your files or the internet, and they only do what you allow. The first one, Dice, rolls in chat: <code>/roll 2d6+1</code>.</p>
         </article>
         <article class="card" data-reveal>
           <div class="icon-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg></div>
           <h3>Make your own with Claude</h3>
-          <p>The Ingle plugin kit explains everything Claude needs, so you can describe a plugin and build it together. Send it to the library from Ingle; it's reviewed before anyone else sees it.</p>
+          <p>The <a href="https://github.com/bluelight777/ingle/tree/main/plugins" rel="noopener">Ingle plugin kit</a> explains everything Claude needs, so you can describe a plugin and build it together, then try it in Ingle. Send it to the library from Ingle; it's reviewed before anyone else sees it.</p>
         </article>
       </div>
     </div>
@@ -739,7 +740,7 @@ dialog[open] { animation: pop .35s var(--ease); }
     <div class="trust">
       <div class="card" data-reveal>
         <ul class="checks">
-          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg><span><b>About 170 automated tests run before each release:</b> real calls between real apps over the network, 1080p screen shares, stream sound that reaches only viewers, voice through server restarts, and backups restored on another server.</span></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg><span><b>About 190 automated tests run before each release:</b> real calls between real apps over the network, 1080p screen shares, stream sound that reaches only viewers, voice through server restarts, and backups restored on another server.</span></li>
           <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg><span><b>Signed updates.</b> Ingle only installs updates signed with Firelit Games' key, and won't take an old or expired one.</span></li>
           <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg><span><b>Open source.</b> The code is <a href="https://github.com/bluelight777/ingle" rel="noopener">on GitHub</a> under the MIT or Apache 2.0 license.</span></li>
           <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg><span><b>Honest about gaps.</b> Not tested yet: renting through DigitalOcean's real website, and real cloud firewalls. Not built yet: phone and Mac apps, and end-to-end encrypted messages (coming in 0.8).</span></li>
