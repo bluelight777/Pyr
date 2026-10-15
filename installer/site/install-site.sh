@@ -26,6 +26,14 @@ mkdir -p "$ROOT/ingle"
 find "$HERE/ingle" -maxdepth 1 -type f ! -name latest.json -exec cp -f {} "$ROOT/ingle/" \;
 # The page's pictures and fonts (and any other folders), into folders of the same names.
 find "$HERE/ingle" -mindepth 1 -maxdepth 1 -type d -exec cp -rf {} "$ROOT/ingle/" \;
+# The Ingle Library (library.tar, from make-release.sh): the plugins' files first, then the
+# signed list that names them.
+if [ -f "$HERE/library.tar" ]; then
+  mkdir -p "$HERE/library-x" "$ROOT/ingle/library"
+  tar --no-same-owner --no-same-permissions -xf "$HERE/library.tar" -C "$HERE/library-x"
+  if [ -d "$HERE/library-x/library/files" ]; then cp -rf "$HERE/library-x/library/files" "$ROOT/ingle/library/"; fi
+  if [ -f "$HERE/library-x/library/index.json" ]; then cp -f "$HERE/library-x/library/index.json" "$ROOT/ingle/library/index.json"; fi
+fi
 cp -f "$HERE/ingle/latest.json" "$ROOT/ingle/latest.json"
 chmod -R a+rX "$ROOT/ingle"
 echo "Published to $ROOT/ingle"
