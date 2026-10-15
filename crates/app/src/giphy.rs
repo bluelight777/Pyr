@@ -101,6 +101,7 @@ impl Gif {
             h: self.preview_h.round() as u16,
             slug: self.slug.clone(),
             title: self.title.clone(),
+            file: String::new(),
         }
     }
 }
@@ -109,6 +110,99 @@ pub use ingle_engine::config::GifFavorite;
 
 /// Favorite GIFs kept at most (Discord kept 250 for a while; this is roomier).
 pub const MAX_FAVORITES: usize = 500;
+
+/// Where favorite pictures from chat are kept (set once, at start: `set_favorites_dir`).
+static FAV_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+/// How a kept picture's favorite link starts (the rest is its file's name).
+const FAV_PREFIX: &str = "ingle-fav:";
+/// Most room favorite pictures take on this PC.
+pub const MAX_FAVORITE_BYTES: u64 = 500 << 20;
+
+/// Favorite pictures are kept in `favorites` beside the settings.
+pub fn set_favorites_dir(config_dir: &std::path::Path) {
+    let _ = FAV_DIR.set(config_dir.join("favorites"));
+}
+
+/// A kept picture's file, from its favorite's link (only names Ingle makes itself: hex, and the
+/// picture's kind).
+pub fn local_favorite(url: &str) -> Option<std::path::PathBuf> {
+    let name = url.strip_prefix(FAV_PREFIX)?;
+    let (stem, ext) = name.split_once('.')?;
+    let ours = stem.len() == 32 && stem.bytes().all(|b| b.is_ascii_hexdigit()) && matches!(ext, "png" | "jpg" | "gif" | "webp");
+    if !ours {
+        return None;
+    }
+    FAV_DIR.get().map(|d| d.join(name))
+}
+
+/// What kind of picture `bytes` are, as a file extension (None: not one we keep).
+fn picture_ext(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("jpg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("gif")
+    } else if bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("webp")
+    } else {
+        None
+    }
+}
+
+/// A picture from chat (a meme, say) as a favorite: a copy kept on this PC, named after what's
+/// in it (so the same picture is the same favorite, whoever posted it), sendable on any server.
+pub fn favorite_picture(bytes: &[u8], name: &str, size: Option<(u32, u32)>) -> Result<GifFavorite, String> {
+    let ext = picture_ext(bytes).ok_or("Only pictures (PNG, JPEG, GIF or WebP) can be favorites.")?;
+    let dir = FAV_DIR.get().ok_or("Favorites aren't ready yet.")?;
+    let file = format!("{}.{ext}", &ingle_proto::release::sha256_hex(bytes)[..32]);
+    let path = dir.join(&file);
+    if !path.is_file() {
+        let used: u64 = std::fs::read_dir(dir).map(|rd| rd.flatten().filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum()).unwrap_or(0);
+        if used + bytes.len() as u64 > MAX_FAVORITE_BYTES {
+            return Err(format!("Your favorite pictures take {} MB, the most Ingle keeps. Take some out to add more.", MAX_FAVORITE_BYTES >> 20));
+        }
+        std::fs::create_dir_all(dir).map_err(|e| format!("Couldn't keep the picture: {e}"))?;
+        let tmp = path.with_extension("part");
+        std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, &path)).map_err(|e| format!("Couldn't keep the picture: {e}"))?;
+    }
+    let (w, h) = size.unwrap_or((0, 0));
+    Ok(GifFavorite {
+        url: format!("{FAV_PREFIX}{file}"),
+        preview: String::new(),
+        w: w.min(4096) as u16,
+        h: h.min(4096) as u16,
+        slug: String::new(),
+        title: name.to_string(),
+        file,
+    })
+}
+
+/// The favorite link a picture from chat has (the same whoever posted it, wherever), from
+/// what's in it. Empty: it isn't a picture that can be a favorite.
+pub fn picture_favorite_link(bytes: &[u8]) -> String {
+    match picture_ext(bytes) {
+        Some(ext) => format!("{FAV_PREFIX}{}.{ext}", &ingle_proto::release::sha256_hex(bytes)[..32]),
+        None => String::new(),
+    }
+}
+
+/// A favorite picture taken out: its kept copy goes too.
+pub fn forget_picture(f: &GifFavorite) {
+    if let Some(p) = local_favorite(&f.url) {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+/// A kept picture, to send again: its name and bytes (None: it's gone from this PC).
+pub fn kept_picture(favs: &[GifFavorite], url: &str) -> Option<(String, Vec<u8>)> {
+    let path = local_favorite(url)?;
+    let bytes = std::fs::read(&path).ok()?;
+    let f = favs.iter().find(|f| f.url == url);
+    let ext = url.rsplit('.').next().unwrap_or("png");
+    let name = f.map(|f| f.title.clone()).filter(|t| !t.trim().is_empty()).unwrap_or_else(|| format!("favorite.{ext}"));
+    Some((name, bytes))
+}
 
 /// Whether the GIF at `url` is one of `favs` (whatever size its link says).
 pub fn is_favorite(favs: &[GifFavorite], url: &str) -> bool {
@@ -139,6 +233,7 @@ pub fn favorite_from_link(url: &str, shown: Option<egui::Vec2>) -> GifFavorite {
         h: size.y.round().clamp(0.0, 4096.0) as u16,
         slug: link_slug(url).unwrap_or_default(),
         title: String::new(),
+        file: String::new(),
     }
 }
 
@@ -421,7 +516,7 @@ pub struct Downloads {
 
 impl Downloads {
     pub fn get(&self, url: &str, repaint: impl Fn() + Send + 'static) -> Dl {
-        if media_provider(url).is_none() {
+        if media_provider(url).is_none() && local_favorite(url).is_none() {
             return Dl::Failed;
         }
         let mut m = self.map.lock();
@@ -450,7 +545,7 @@ impl Downloads {
 
     /// Whether `url` was tried and couldn't be downloaded (without trying it).
     pub fn failed(&self, url: &str) -> bool {
-        media_provider(url).is_none() || matches!(self.map.lock().get(url), Some(Dl::Failed))
+        (media_provider(url).is_none() && local_favorite(url).is_none()) || matches!(self.map.lock().get(url), Some(Dl::Failed))
     }
 }
 
@@ -527,6 +622,12 @@ fn fake_dir() -> Option<std::path::PathBuf> {
 
 fn fetch(url: &str) -> Option<Vec<u8>> {
     use std::io::Read;
+    // A favorite picture kept on this PC.
+    if let Some(path) = local_favorite(url) {
+        let mut out = Vec::new();
+        std::fs::File::open(path).ok()?.take(MAX_GIF_BYTES as u64 + 1).read_to_end(&mut out).ok()?;
+        return (out.len() <= MAX_GIF_BYTES).then_some(out);
+    }
     // (What's after a # never goes out: it's ours.)
     let url = url.split('#').next().unwrap_or(url);
     #[cfg(debug_assertions)]
@@ -653,6 +754,39 @@ mod tests {
         assert!(!is_giphy_media("https://giphy.com/gifs/abc"));
         assert_eq!(gif_links("look https://media.giphy.com/media/a/giphy.gif lol").len(), 1);
         assert_eq!(enc("cat & dog"), "cat+%26+dog");
+    }
+
+    #[test]
+    fn pictures_from_chat_are_kept_as_favorites() {
+        let dir = std::env::temp_dir().join(format!("ingle-favpics-{}", std::process::id()));
+        set_favorites_dir(&dir);
+        let dir = FAV_DIR.get().unwrap().clone();
+        // A tiny PNG (a meme, say).
+        let png: &[u8] = &[
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+            0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63,
+            0xf8, 0xcf, 0xc0, 0xf0, 0x1f, 0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99, 0x3d, 0x1d, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44,
+            0xae, 0x42, 0x60, 0x82,
+        ];
+        let f = favorite_picture(png, "meme.png", Some((1, 1))).unwrap();
+        // Kept on this PC, named after what's in it (the same picture is the same favorite,
+        // whoever posted it).
+        let kept = local_favorite(&f.url).unwrap();
+        assert!(kept.starts_with(&dir) && kept.is_file());
+        assert_eq!(picture_favorite_link(png), f.url);
+        assert_eq!(favorite_picture(png, "again.png", None).unwrap().url, f.url);
+        assert_eq!(kept_picture(std::slice::from_ref(&f), &f.url), Some(("meme.png".to_string(), png.to_vec())));
+        // Only pictures, and only names Ingle makes itself.
+        assert!(favorite_picture(b"just some text", "x.txt", None).is_err());
+        assert_eq!(picture_favorite_link(b"just some text"), "");
+        for bad in ["ingle-fav:../../config.json", "ingle-fav:zz.png", "ingle-fav:0123456789abcdef0123456789abcdef.exe", "https://media.giphy.com/a.gif"] {
+            assert!(local_favorite(bad).is_none(), "{bad}");
+        }
+        // Taken out, its copy goes.
+        forget_picture(&f);
+        assert!(!kept.exists());
+        assert_eq!(kept_picture(&[f.clone()], &f.url), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -251,6 +251,9 @@ pub struct UiState {
     /// The GIF picker is on its Favorites tab (and which favorite the arrow keys are on).
     pub gif_favs: bool,
     pub gif_fav_sel: usize,
+    /// The favorite link of pictures in chat that were pointed at (by server and file id), so
+    /// their star knows whether they're favorites (worked out once each, from what's in them).
+    pub picture_favs: HashMap<(String, String), String>,
     /// GIFs from GIPHY being shown.
     pub gifs: crate::giphy::Downloads,
     /// Folded runs of blocked messages that were opened (by their first message).
@@ -312,6 +315,7 @@ impl IngleApp {
         engine.refresh_devices();
         let resume = crate::update::take_resume(&engine.shared.config_dir).map(|r| (r, Instant::now()));
         let gif_sizes = crate::giphy::GifSizes::load(&engine.shared.config_dir);
+        crate::giphy::set_favorites_dir(&engine.shared.config_dir);
         let ui = UiState { members_open: true, call_chat_open: false, gif_sizes, ..Default::default() };
         IngleApp {
             engine,

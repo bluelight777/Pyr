@@ -630,7 +630,7 @@ impl IngleApp {
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
                         for a in &m.attachments {
-                            self.attachment(ui, s, a);
+                            self.attachment(ui, st, s, a, acts);
                         }
                     });
                 }
@@ -1235,7 +1235,15 @@ impl IngleApp {
                         .show(ui.ctx(), |ui| egui::Frame::popup(ui.style()).fill(theme::SIDE).inner_margin(10).show(ui, |ui| self.gif_picker(ui, st, s, acts)).inner);
                     if let Some(url) = area.inner {
                         let reply_to = self.ui.reply.take().map(|(id, _)| id);
-                        acts.push(Act::Send { key: key.clone(), channel: ch.id, text: url, reply_to, files: Vec::new() });
+                        // A favorite picture (a meme, say) goes as a picture: from its copy here.
+                        if crate::giphy::local_favorite(&url).is_some() {
+                            match crate::giphy::kept_picture(&st.settings.gif_favorites, &url) {
+                                Some(file) => acts.push(Act::Send { key: key.clone(), channel: ch.id, text: String::new(), reply_to, files: vec![file] }),
+                                None => acts.push(Act::Toast("That favorite picture isn't on this PC any more.".into(), true)),
+                            }
+                        } else {
+                            acts.push(Act::Send { key: key.clone(), channel: ch.id, text: url, reply_to, files: Vec::new() });
+                        }
                         self.ui.gif_picker = false;
                         ui.ctx().memory_mut(|m| m.request_focus(composer_id));
                     }
@@ -1528,7 +1536,7 @@ impl IngleApp {
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
                         for a in &m.attachments {
-                            self.attachment_sized(ui, s, a, vec2(240.0, 160.0), false);
+                            self.attachment_sized(ui, s, a, vec2(240.0, 160.0), false, &[]);
                         }
                     });
                 }
@@ -1548,13 +1556,34 @@ impl IngleApp {
         });
     }
 
-    /// An image or GIF in a message; click to see it full size.
-    fn attachment(&mut self, ui: &mut egui::Ui, s: &ServerView, a: &Attachment) {
-        self.attachment_sized(ui, s, a, vec2(400.0, 300.0), true);
+    /// An image or GIF in a message; click to see it full size. Pointed at, it has the
+    /// favorite star in its corner, like a GIF from GIPHY or KLIPY: a favorite picture (a meme,
+    /// say) is kept on this PC, in the GIF picker's Favorites, ready to send on any server.
+    fn attachment(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, a: &Attachment, acts: &mut Vec<Act>) {
+        let Some((url, bytes)) = self.attachment_sized(ui, s, a, vec2(400.0, 300.0), true, &st.settings.gif_favorites) else { return };
+        match st.settings.gif_favorites.iter().find(|f| f.url == url) {
+            // Starred again: out it goes.
+            Some(f) => self.toggle_gif_favorite(st, f.clone(), acts),
+            None => match crate::giphy::favorite_picture(&bytes, &a.name, Some((a.width, a.height))) {
+                Ok(f) => self.toggle_gif_favorite(st, f, acts),
+                Err(e) => acts.push(Act::Toast(e, true)),
+            },
+        }
     }
 
-    /// An image or GIF at most `max` big; `open`: clicking shows it full size.
-    fn attachment_sized(&mut self, ui: &mut egui::Ui, s: &ServerView, a: &Attachment, max: egui::Vec2, open: bool) {
+    /// An image or GIF at most `max` big; `open`: clicking shows it full size, and pointing at
+    /// it shows the favorite star (filled when it's one of `favs`). Returns the picture's
+    /// favorite link and what's in it when its star was clicked.
+    fn attachment_sized(
+        &mut self,
+        ui: &mut egui::Ui,
+        s: &ServerView,
+        a: &Attachment,
+        max: egui::Vec2,
+        open: bool,
+        favs: &[crate::giphy::GifFavorite],
+    ) -> Option<(String, std::sync::Arc<Vec<u8>>)> {
+        let mut starred = None;
         let (w, h) = if a.width > 0 && a.height > 0 { (a.width as f32, a.height as f32) } else { (320.0, 200.0) };
         let max = vec2(max.x.min(ui.available_width().max(120.0)), max.y);
         // Small images keep their size; big ones shrink to fit. Tiny ones get a minimum.
@@ -1565,7 +1594,7 @@ impl IngleApp {
         // conversation doesn't load every picture in it at once.
         if self.ui.load_rect.is_some_and(|r| !r.intersects(rect)) && !self.images.has(&a.id) {
             ui.painter().rect_filled(rect, CornerRadius::same(6), theme::ELEV);
-            return;
+            return None;
         }
         let state = self.engine.file(&s.key, &a.id);
         let bytes = match &state {
@@ -1573,7 +1602,7 @@ impl IngleApp {
             _ => None,
         };
         let t = ui.input(|i| i.time);
-        let tex = self.images.get(ui.ctx(), &a.id, bytes, crate::images::max_side_for_chat());
+        let tex = self.images.get(ui.ctx(), &a.id, bytes.clone(), crate::images::max_side_for_chat());
         match (tex.frame(t), &state) {
             (Some((id, isize, next)), _) => {
                 let (fit, uv) = fit_in(rect, isize);
@@ -1582,6 +1611,22 @@ impl IngleApp {
                 );
                 if let Some(n) = next {
                     ui.ctx().request_repaint_after(n);
+                }
+                // The favorite star while it's pointed at (its link is worked out from what's
+                // in it, once).
+                if let (true, Some(b)) = (open && ui.rect_contains_pointer(fit), &bytes) {
+                    let k = (s.key.clone(), a.id.clone());
+                    let url = match self.ui.picture_favs.get(&k) {
+                        Some(u) => u.clone(),
+                        None => {
+                            let u = crate::giphy::picture_favorite_link(b);
+                            self.ui.picture_favs.insert(k, u.clone());
+                            u
+                        }
+                    };
+                    if !url.is_empty() && gif_star(ui, fit, ("picture-star", &a.id), crate::giphy::is_favorite(favs, &url)) {
+                        starred = Some((url, b.clone()));
+                    }
                 }
             }
             (None, ingle_engine::files::FileState::Failed(e)) => {
@@ -1604,9 +1649,10 @@ impl IngleApp {
         if open && resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
-        if open && resp.clicked() {
+        if open && resp.clicked() && starred.is_none() {
             self.ui.viewer = Some((s.key.clone(), a.clone()));
         }
+        starred
     }
 
     /// The full-size image viewer (click outside or press Esc to close).
@@ -1984,9 +2030,21 @@ impl IngleApp {
 
     /// Adds a GIF to your favorites, or takes it out if it's there.
     pub(crate) fn toggle_gif_favorite(&mut self, st: &AppState, fav: crate::giphy::GifFavorite, acts: &mut Vec<Act>) {
-        match crate::giphy::toggle_favorite(&st.settings.gif_favorites, fav) {
-            Ok(v) => acts.push(Act::Settings(ingle_engine::config::Settings { gif_favorites: v, ..st.settings.clone() })),
-            Err(e) => acts.push(Act::Toast(e, false)),
+        let removing = crate::giphy::is_favorite(&st.settings.gif_favorites, &fav.url);
+        match crate::giphy::toggle_favorite(&st.settings.gif_favorites, fav.clone()) {
+            Ok(v) => {
+                // (A kept picture taken out: its copy goes too.)
+                if removing {
+                    crate::giphy::forget_picture(&fav);
+                }
+                acts.push(Act::Settings(ingle_engine::config::Settings { gif_favorites: v, ..st.settings.clone() }));
+            }
+            Err(e) => {
+                if !removing && !fav.file.is_empty() {
+                    crate::giphy::forget_picture(&fav);
+                }
+                acts.push(Act::Toast(e, false));
+            }
         }
     }
 
@@ -2284,7 +2342,10 @@ impl IngleApp {
         ui.add_space(4.0);
         if favs.is_empty() {
             ui.add_space(4.0);
-            ui.label(RichText::new("No favorites yet. Point at any GIF, here or in chat, and click the star in its corner to keep it here.").color(theme::MUTED));
+            ui.label(
+                RichText::new("No favorites yet. Point at any GIF or picture (a meme, say), here or in chat, and click the star in its corner to keep it here.")
+                    .color(theme::MUTED),
+            );
             ui.add_space(8.0);
             return None;
         }
@@ -2322,7 +2383,7 @@ impl IngleApp {
             f.url.clone()
         });
         ui.add_space(6.0);
-        ui.label(RichText::new("Click a GIF to send it  ·  its star takes it out  ·  ↑ ↓ and Enter").size(11.0).color(theme::DIM));
+        ui.label(RichText::new("Click one to send it  ·  its star takes it out  ·  ↑ ↓ and Enter").size(11.0).color(theme::DIM));
         send
     }
 

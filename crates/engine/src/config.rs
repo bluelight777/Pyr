@@ -190,6 +190,10 @@ pub struct GifFavorite {
     pub slug: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub title: String,
+    /// A picture from chat (a meme, say) kept as a copy of its own: the copy's name in the
+    /// favorites folder (empty: a GIF from GIPHY or KLIPY, at `url`).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub file: String,
 }
 
 impl Default for Settings {
