@@ -821,19 +821,27 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
                 ui.label(RichText::new("Reachable now.").color(theme::ONLINE));
             }
             field_label(ui, "Invite link for friends");
+            let web = ingle_proto::invite::InviteLink::web(&r.invite_link, &r.name);
             egui::Frame::new().fill(theme::CODE_BG).corner_radius(6).inner_margin(10).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.add(egui::Label::new(RichText::new(ingle_proto::invite::InviteLink::shorten(&r.invite_link)).font(theme::mono(12.0)).color(theme::TEXT)).wrap().selectable(true));
+                ui.add(egui::Label::new(RichText::new(&web).font(theme::mono(12.0)).color(theme::TEXT)).wrap().selectable(true));
             });
             ui.add_space(4.0);
-            if ui.add(theme::primary_button("Copy invite link").min_size(vec2(150.0, 32.0))).clicked() {
-                acts.push(Act::Copy(ingle_proto::invite::InviteLink::shorten(&r.invite_link)));
-                c.copied = true;
-            }
+            ui.horizontal(|ui| {
+                if ui.add(theme::primary_button("Copy invite link").min_size(vec2(150.0, 32.0))).clicked() {
+                    acts.push(Act::Copy(web.clone()));
+                    c.copied = true;
+                }
+                let plain = ingle_proto::invite::InviteLink::shorten(&r.invite_link);
+                if ui.button("Copy the ingle:// link").on_hover_text(plain.as_str()).clicked() {
+                    acts.push(Act::Copy(plain));
+                    c.copied = true;
+                }
+            });
             if c.copied {
                 ui.label(RichText::new("Copied. Paste it into a message to your friends.").size(12.5).color(theme::ONLINE));
             }
-            dim(ui, "Friends install Ingle (Windows: the setup .exe; Linux: the .deb package), click + and then Join a server, and paste this link.");
+            dim(ui, "Friends click the link: the page gets them Ingle if they don't have it yet, and its Open invite in Ingle button joins. Pasting it into Join a server works too.");
             if let Some(d) = &r.droplet {
                 ui.add_space(8.0);
                 ui.horizontal_wrapped(|ui| {

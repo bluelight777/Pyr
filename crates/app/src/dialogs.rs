@@ -330,17 +330,25 @@ impl IngleApp {
                 Dialog::Invite { key } => {
                     ui.set_width(520.0);
                     let s = st.server(&key);
-                    title(ui, &format!("Invite friends to {}", s.map(|s| s.name.as_str()).unwrap_or("this server")));
-                    ui.label(RichText::new("Send them this link. They paste it into \"Join a server\".").color(theme::MUTED));
+                    let name = s.map(|s| s.name.as_str()).unwrap_or("this server");
+                    title(ui, &format!("Invite friends to {name}"));
+                    ui.label(
+                        RichText::new("Send them this link. It opens a page that gets Ingle for anyone who doesn't have it yet, and joins with one click. (It can also be pasted into Join a server.)")
+                            .color(theme::MUTED),
+                    );
                     ui.add_space(8.0);
                     match s.and_then(|s| s.last_invite.clone()) {
                         Some(link) => {
+                            let web = ingle_proto::invite::InviteLink::web(&link, s.map(|s| s.name.as_str()).unwrap_or(""));
                             egui::Frame::new().fill(theme::CODE_BG).corner_radius(6).inner_margin(10).show(ui, |ui| {
-                                ui.add(egui::Label::new(RichText::new(&link).font(theme::mono(12.5)).color(theme::TEXT)).wrap());
+                                ui.add(egui::Label::new(RichText::new(&web).font(theme::mono(12.5)).color(theme::TEXT)).wrap());
                             });
                             ui.add_space(10.0);
                             ui.horizontal(|ui| {
                                 if ui.add(theme::primary_button("Copy link").min_size(vec2(110.0, 34.0))).clicked() {
+                                    acts.push(Act::Copy(web.clone()));
+                                }
+                                if ui.button("Copy the ingle:// link").on_hover_text(link.as_str()).clicked() {
                                     acts.push(Act::Copy(link.clone()));
                                 }
                                 if ui.button("Done").clicked() {

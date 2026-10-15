@@ -9,6 +9,11 @@
 
 use crate::b64;
 
+/// Where invite links open on the web: firelitgames.com/ingle, which offers Ingle to anyone
+/// who doesn't have it yet and a button that opens the invite in it. A web link can be clicked
+/// anywhere links can (chat apps don't make `ingle://` links clickable).
+pub const WEB_INVITE: &str = "https://firelitgames.com/ingle/";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InviteLink {
     pub host: String,
@@ -36,6 +41,10 @@ pub enum InviteError {
 
 impl InviteLink {
     pub fn parse(input: &str) -> Result<InviteLink, InviteError> {
+        // A web link (`https://…/#n=<server>&join=<host>/<code>/<fp>`): the invite inside it.
+        if let Some(inner) = web_inner(input) {
+            return InviteLink::parse(&inner);
+        }
         let mut s = input.trim();
         for scheme in [format!("{}://", crate::APP_ID), "https://".into(), "http://".into()] {
             // (`get`: pasted text can have a multi-byte character right where the scheme ends.)
@@ -119,6 +128,76 @@ impl InviteLink {
     pub fn shorten(link: &str) -> String {
         InviteLink::parse(link).map(|l| l.to_url()).unwrap_or_else(|_| link.to_string())
     }
+
+    /// The web form, `https://firelitgames.com/ingle/#n=<server name>&join=<host>/<code>/<fp>`.
+    /// Everything after the `#` stays in the browser (browsers never send it to the website),
+    /// where the page reads it to show the server's name and an Open invite in Ingle button.
+    pub fn to_web_url(&self, server_name: &str) -> String {
+        let link = self.to_url();
+        let rest = link.strip_prefix(&format!("{}://", crate::APP_ID)).unwrap_or(&link);
+        // (Brackets around an IPv6 address would end the link in some chat apps.)
+        let rest = rest.replace('[', "%5B").replace(']', "%5D");
+        let name: String = server_name.trim().chars().filter(|c| !c.is_control()).take(60).collect();
+        if name.is_empty() {
+            format!("{WEB_INVITE}#join={rest}")
+        } else {
+            format!("{WEB_INVITE}#n={}&join={rest}", percent_encode(&name))
+        }
+    }
+
+    /// The web form of a link a server handed out (it's left as it is if it isn't a link).
+    pub fn web(link: &str, server_name: &str) -> String {
+        InviteLink::parse(link).map(|l| l.to_web_url(server_name)).unwrap_or_else(|_| link.to_string())
+    }
+}
+
+/// The `ingle://` link inside a web invite link, if `input` is one (see
+/// [`InviteLink::to_web_url`]). Only a link with `join=` after its `#` counts.
+fn web_inner(input: &str) -> Option<String> {
+    let s = input.trim();
+    let (_, fragment) = s.split_once('#')?;
+    let at = fragment.find("join=")?;
+    // `join=` is the last part, so it's either the start or follows `&`.
+    if at > 0 && !fragment[..at].ends_with('&') {
+        return None;
+    }
+    let rest = percent_decode(&fragment[at + "join=".len()..]);
+    let scheme = format!("{}://", crate::APP_ID);
+    let rest = rest.strip_prefix(&scheme).unwrap_or(&rest);
+    (!rest.is_empty()).then(|| format!("{scheme}{rest}"))
+}
+
+/// Everything but letters, digits and `-._~` as %XX (UTF-8).
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// %XX back to bytes (anything that isn't a valid escape is kept as it is).
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = |c: u8| (c as char).to_digit(16);
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2])) {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn split_host_port(authority: &str) -> Result<(String, u16), InviteError> {
@@ -197,6 +276,34 @@ mod tests {
         let l = InviteLink::parse(&format!("192.168.1.5?fp={fp}")).unwrap();
         assert_eq!(l.port, crate::DEFAULT_PORT);
         assert_eq!(l.code, None);
+    }
+
+    #[test]
+    fn web_links_carry_the_invite_and_the_name() {
+        let mut fp = [0u8; 32];
+        fp[0] = 9;
+        let link = InviteLink::new("2.24.121.231".into(), 7766, Some("xykyyqhf".into()), fp);
+        let web = link.to_web_url("Brethren of Blood");
+        assert_eq!(web, format!("https://firelitgames.com/ingle/#n=Brethren%20of%20Blood&join=2.24.121.231/xykyyqhf/{}", b64::encode(&fp[..SHORT_FP])));
+        // Pasted into Join a server, it's the same invite.
+        assert_eq!(InviteLink::parse(&web).unwrap(), InviteLink::parse(&link.to_url()).unwrap());
+        assert_eq!(InviteLink::web(&link.to_url(), "Camp"), link.to_web_url("Camp"));
+        // Names that need escaping, no name, another port, IPv6, and the whole link escaped.
+        let odd = link.to_web_url("Rock & Roll #1 🔥");
+        assert!(odd.contains("#n=Rock%20%26%20Roll%20%231%20%F0%9F%94%A5&join="), "{odd}");
+        assert_eq!(InviteLink::parse(&odd).unwrap().code.as_deref(), Some("xykyyqhf"));
+        assert!(link.to_web_url("  ").ends_with(&format!("#join=2.24.121.231/xykyyqhf/{}", b64::encode(&fp[..SHORT_FP]))));
+        let v6 = InviteLink::new("::1".into(), 9000, Some("abc".into()), fp);
+        let w = v6.to_web_url("x");
+        assert!(w.contains("join=%5B::1%5D:9000/abc/"), "{w}");
+        let back = InviteLink::parse(&w).unwrap();
+        assert_eq!((back.host.as_str(), back.port), ("::1", 9000));
+        let escaped = format!("https://firelitgames.com/ingle/#join=ingle%3A%2F%2F2.24.121.231%2Fxykyyqhf%2F{}", b64::encode(&fp[..SHORT_FP]));
+        assert_eq!(InviteLink::parse(&escaped).unwrap().host, "2.24.121.231");
+        // Not web invites: a plain https link to a server, and a page link without join=.
+        assert!(web_inner("https://example.com/x#notjoin=1").is_none());
+        assert!(web_inner("https://example.com/x#a=b&join=").is_none());
+        assert_eq!(percent_decode("%zz%4"), "%zz%4");
     }
 
     #[test]

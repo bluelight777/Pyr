@@ -750,6 +750,20 @@ impl eframe::App for IngleApp {
         let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true) && !i.viewport().minimized.unwrap_or(false));
         engine.set_window_focused(focused);
         crate::watchdog::step("doing what was clicked");
+        // Invite links clicked in a message (ingle:// ones, and web invites from
+        // firelitgames.com): ask to join right here, not by way of the browser or Windows.
+        let invites = ctx.output_mut(|o| {
+            let mut found = Vec::new();
+            o.commands.retain(|c| match c {
+                egui::OutputCommand::OpenUrl(u) if is_invite(&u.url) => {
+                    found.push(u.url.clone());
+                    false
+                }
+                _ => true,
+            });
+            found
+        });
+        acts.extend(invites.into_iter().map(Act::OfferJoin));
         for a in acts {
             self.apply(a, ctx);
         }
@@ -967,6 +981,14 @@ impl IngleApp {
 }
 
 // ------------------------------------------------------------------- helpers
+
+/// An invite link Ingle can join from: `ingle://…`, or the web form on firelitgames.com.
+fn is_invite(url: &str) -> bool {
+    let u = url.trim();
+    let app = u.get(..8).is_some_and(|p| p.eq_ignore_ascii_case("ingle://"));
+    let web = u.starts_with(ingle_proto::invite::WEB_INVITE) && u.contains("join=");
+    (app || web) && ingle_proto::invite::InviteLink::parse(u).is_ok()
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn avatar(
@@ -2385,5 +2407,19 @@ pub(crate) fn person_menu(ui: &mut egui::Ui, st: &AppState, uid: &str, acts: &mu
         item(ui, "Unblock", Act::Unblock(uid.into()));
     } else {
         item(ui, "Block", Act::Block(uid.into()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn invite_links_are_told_apart_from_other_links() {
+        let fp = ingle_proto::b64::encode(&[7u8; 9]);
+        assert!(super::is_invite(&format!("ingle://2.24.121.231/abc/{fp}")));
+        assert!(super::is_invite(&format!("INGLE://2.24.121.231/abc/{fp}")));
+        assert!(super::is_invite(&format!("https://firelitgames.com/ingle/#n=Camp&join=2.24.121.231/abc/{fp}")));
+        assert!(!super::is_invite("https://firelitgames.com/ingle/"));
+        assert!(!super::is_invite(&format!("https://example.com/#join=2.24.121.231/abc/{fp}")));
+        assert!(!super::is_invite("ingle://not-a-link"));
     }
 }

@@ -1006,6 +1006,7 @@ dialog[open] { animation: pop .35s var(--ease); }
     if (i < 0) return null;
     var link = h.slice(i + 5).replace(/^ingle(:|%3A)(\/\/|%2F%2F)/i, "");
     try { if (/%2F/i.test(link)) link = decodeURIComponent(link); } catch (e) { return null; }
+    link = link.replace(/%5B/gi, "[").replace(/%5D/gi, "]");
     if (link.length > 400 || !/^[A-Za-z0-9.\-\[\]:%]+\/[A-Za-z0-9._~\-\/?=&%]+$/.test(link)) return null;
     var name = "";
     var nm = h.slice(0, i).match(/(?:^|&)n=([^&]*)/);
