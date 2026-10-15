@@ -1,0 +1,19 @@
+[package]
+name = "ingle-dice"
+version = "1.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Dice for Ingle: /roll 2d6+1 in chat, or roll from its panel."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ingle-plugin = { path = "../kit" }
+
+# What the Ingle Library shows about it.
+[package.metadata.ingle]
+kind = "addon"
+name = "Dice"
+summary = "Roll dice in chat with /roll 2d6+1, or from its panel."
+permissions = ["commands", "panel", "storage"]

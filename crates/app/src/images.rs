@@ -382,6 +382,8 @@ pub enum PickFor {
     Attach(String, ingle_proto::control::ChannelId),
     /// A sound file for a server's soundboard (picking nothing is reported too, as no files).
     Sound(String),
+    /// An add-on (.wasm) to try (Plugins → Make your own).
+    AddonFile,
 }
 
 type Picked = (PickFor, Vec<(String, Vec<u8>)>);
@@ -428,6 +430,19 @@ pub fn run_wanted_dialog() {
         picks().lock().unwrap().push((what, file.into_iter().collect()));
         return;
     }
+    if let PickFor::AddonFile = what {
+        let file = rfd::FileDialog::new()
+            .set_title("Choose an add-on to try")
+            .add_filter("Ingle add-ons", &["wasm"])
+            .pick_file()
+            .filter(|p| std::fs::metadata(p).map(|m| m.len() <= 8 << 20).unwrap_or(false));
+        DIALOG_CLOSED.store(true, std::sync::atomic::Ordering::SeqCst);
+        let files = file.map(|p| read_files(&[p])).unwrap_or_default();
+        if !files.is_empty() {
+            picks().lock().unwrap().push((what, files));
+        }
+        return;
+    }
     let files = if multiple { pick_images() } else { pick_image().into_iter().collect() };
     DIALOG_CLOSED.store(true, std::sync::atomic::Ordering::SeqCst);
     if !files.is_empty() {
@@ -459,6 +474,10 @@ pub enum FolderFor {
     Backups,
     /// A backup to bring a server back from (creating a server).
     Restore,
+    /// Where to start a new add-on (Plugins → Make your own).
+    NewAddon,
+    /// A plugin's folder, to send in for the Ingle Library.
+    PluginSource,
 }
 
 fn wanted_folder() -> &'static std::sync::Mutex<Option<(FolderFor, &'static str)>> {

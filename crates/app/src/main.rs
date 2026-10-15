@@ -20,6 +20,7 @@ mod images;
 mod titlebar;
 mod instance;
 mod markdown;
+mod plugins;
 mod select;
 mod stage;
 mod theme;
@@ -171,7 +172,9 @@ fn main() -> eframe::Result<()> {
                 watchdog::start(engine.clone());
                 #[cfg(not(windows))]
                 let tray: Option<tray::Tray> = None;
-                Ok(Box::new(app::IngleApp::new(engine, handoff, join, tray, updater, app_title)))
+                let ctx = cc.egui_ctx.clone();
+                let plugins = plugins::Plugins::new(&engine.shared.config_dir, Arc::new(move || ctx.request_repaint()));
+                Ok(Box::new(app::IngleApp::new(engine, handoff, join, tray, updater, plugins, app_title)))
             }),
         );
         match res {

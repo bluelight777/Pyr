@@ -1,0 +1,14 @@
+# The Ingle plugin kit and the plugins made with it. Add-ons are built to WebAssembly:
+#   cargo build --release --target wasm32-unknown-unknown -p ingle-dice
+# (once: rustup target add wasm32-unknown-unknown). The kit's own tests run on your PC:
+#   cargo test -p ingle-plugin
+[workspace]
+resolver = "3"
+members = ["kit", "template", "dice"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

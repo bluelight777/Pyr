@@ -513,6 +513,18 @@ pub fn refresh(p: &Painter, r: Rect, c: Color32, turn: f32) {
     }
 }
 
+/// A jigsaw piece (Plugins).
+pub fn puzzle(p: &Painter, r: Rect, c: Color32) {
+    let s = r.width().min(r.height());
+    let o = r.center() - vec2(s / 2.0, s / 2.0);
+    let at = |x: f32, y: f32| o + vec2(x * s, y * s);
+    // The body, a little rounded, with a knob on top and on the right.
+    let body = Rect::from_min_max(at(0.08, 0.26), at(0.74, 0.92));
+    p.rect_filled(body, CornerRadius::same((s * 0.1) as u8), c);
+    p.circle_filled(at(0.41, 0.2), s * 0.15, c);
+    p.circle_filled(at(0.8, 0.59), s * 0.15, c);
+}
+
 /// A tick (in a checkbox).
 pub fn tick(p: &Painter, r: Rect, c: Color32) {
     let s = r.width();

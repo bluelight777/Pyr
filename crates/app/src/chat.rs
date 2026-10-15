@@ -900,6 +900,37 @@ impl IngleApp {
                 self.ui.giphy.reset();
                 self.ui.klipy.reset();
             }
+            // Typing "/": add-ons' commands (Tab fills in the first, a click any).
+            if let Some(partial) = draft.strip_prefix('/').filter(|p| !p.contains(char::is_whitespace)) {
+                let cmds = self.plugins.commands_like(partial);
+                if !cmds.is_empty() {
+                    let mut fill = None;
+                    if ui.ctx().memory(|m| m.focused()) == Some(composer_id) && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Tab)) {
+                        fill = Some(cmds[0].0.clone());
+                    }
+                    egui::Frame::new().fill(theme::ELEV).corner_radius(8).inner_margin(6).stroke(Stroke::new(1.0f32, theme::LINE)).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(RichText::new("ADD-ON COMMANDS").font(theme::bold_font(11.0)).color(theme::DIM));
+                        for (name, help) in &cmds {
+                            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::click());
+                            if resp.hovered() {
+                                ui.painter().rect_filled(r, CornerRadius::same(5), theme::HOVER);
+                            }
+                            let g = ui.painter().layout_no_wrap(format!("/{name}"), theme::bold_font(14.0), theme::TEXT);
+                            let w = g.size().x;
+                            ui.painter().galley(pos2(r.left() + 8.0, r.center().y - g.size().y / 2.0), g, theme::TEXT);
+                            ui.painter().text(pos2(r.left() + 18.0 + w, r.center().y), egui::Align2::LEFT_CENTER, help, theme::font(12.5), theme::DIM);
+                            if resp.clicked() {
+                                fill = Some(name.clone());
+                            }
+                        }
+                    });
+                    if let Some(name) = fill {
+                        draft = format!("/{name} ");
+                        ui.ctx().memory_mut(|m| m.request_focus(composer_id));
+                    }
+                }
+            }
             let suggestions = {
                 let m = mention_suggestions(s, &draft);
                 if m.is_empty() { emoji_suggestions(s, &draft, st.settings.emoji_tone) } else { m }
@@ -1210,7 +1241,15 @@ impl IngleApp {
                 let send = resp.has_focus() && enter || sb.clicked() && connected;
                 // "/giphy …", "/klipy …" (or a bare "/gif") is a GIF search, never a message.
                 let gif_command = gif_query(draft.trim()).or_else(|| (draft.trim() == "/gif").then(|| (String::new(), None)));
-                if send && let Some((q, from)) = gif_command {
+                // "/roll 2d6": an add-on's command. It answers on its own thread, and the answer
+                // is sent here as my message.
+                let addon_command = self.plugins.command_in(draft.trim());
+                if send && let Some((addon, name, args)) = addon_command {
+                    let reply_to = self.ui.reply.take().map(|(id, _)| id);
+                    acts.push(Act::AddonCommand { addon, name, args, key: key.clone(), channel: ch.id, reply_to });
+                    draft.clear();
+                    resp.request_focus();
+                } else if send && let Some((q, from)) = gif_command {
                     self.open_gif_picker(q, from);
                     draft.clear();
                 } else if send && (!draft.trim().is_empty() || !files.is_empty()) {

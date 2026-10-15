@@ -50,6 +50,19 @@ pub enum Act {
     Quit,
     /// Look for a newer Ingle right away (Check for updates).
     CheckUpdates,
+    /// Open an installed program (plugin).
+    PluginOpen(String),
+    /// Open an add-on's panel.
+    AddonPanel(String),
+    /// "/name args" in a channel, for an add-on: its answer is sent there.
+    AddonCommand { addon: String, name: String, args: String, key: String, channel: ChannelId, reply_to: Option<MessageId> },
+    /// Send a plugin in for the Ingle Library (`turn_on`: the library server, when it's mine).
+    SubmitPlugin { submission: ingle_proto::control::PluginSubmission, turn_on: Option<String> },
+    /// The library owner: plugins sent in, one's files, and what becomes of one.
+    ListSubmissions(String),
+    OpenSubmission { key: String, id: i64 },
+    SetSubmissionStatus { key: String, id: i64, status: ingle_proto::control::SubmissionStatus },
+    SetPluginSubmissions { key: String, on: bool },
     AddFriend(String),
     AcceptFriend(String),
     RemoveFriend(String),
@@ -149,6 +162,9 @@ pub enum Dialog {
     /// The owner's inbox of Ingle bug reports for a server; `filter`: 0 new, 1 approved,
     /// 2 fixed, 3 rejected.
     BugReports { key: String, filter: u8 },
+    /// The Ingle Library's owner: plugins sent in (filter: 0 new, 1 approved, 2 listed,
+    /// 3 rejected), and which file is open (submission id, path).
+    PluginSubmissions { key: String, filter: u8, open_file: Option<(i64, String)> },
     /// Add or edit a soundboard sound (its state is in `UiState::sb`).
     SoundEditor,
     /// "Delete this sound?" (`from_settings`: go back to Server Settings after).
@@ -233,6 +249,8 @@ pub struct UiState {
     pub paste_down: bool,
     /// The home screen (friends and direct messages) instead of a server.
     pub home: bool,
+    /// The Plugins page is showing (instead of a server or home).
+    pub plugins_open: bool,
     /// The direct message conversation open on the home screen: (server, conversation).
     pub dm: Option<(String, ChannelId)>,
     /// Friends list shows everyone, not just who's online.
@@ -294,6 +312,8 @@ pub struct IngleApp {
     /// Decoded images and profile pictures.
     pub images: crate::images::Images,
     pub updater: crate::update::Updater,
+    /// Plugins: the library, what's installed, running add-ons.
+    pub plugins: crate::plugins::Plugins,
     /// The update we last told the person about (pinged once per version).
     update_seen: Option<ingle_proto::release::Manifest>,
     /// When a check they asked for last said this is the newest version (the Check for
@@ -315,6 +335,7 @@ impl IngleApp {
         initial_join: Option<String>,
         tray: Option<crate::tray::Tray>,
         updater: crate::update::Updater,
+        plugins: crate::plugins::Plugins,
         title: String,
     ) -> IngleApp {
         engine.refresh_devices();
@@ -333,6 +354,7 @@ impl IngleApp {
             _tray: tray,
             images: crate::images::Images::default(),
             updater,
+            plugins,
             update_seen: None,
             update_checked: None,
             resume,
@@ -355,6 +377,8 @@ impl IngleApp {
                     // Already a member there: just open it.
                     Some(key) => {
                         self.ui.home = false;
+
+                        self.ui.plugins_open = false;
                         self.ui.server = Some(key);
                     }
                     None => self.ui.dialog = Some(Dialog::ConfirmJoin { link }),
@@ -489,6 +513,35 @@ impl IngleApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             Act::CheckUpdates => self.updater.check_now(crate::update::Asker::Window, || {}),
+            Act::PluginOpen(id) => {
+                if let Err(e) = self.plugins.open_program(&id) {
+                    self.toast(&e, true);
+                }
+            }
+            Act::AddonPanel(id) => {
+                let (place, here) = {
+                    let st = e.state();
+                    self.addon_place(&st)
+                };
+                self.plugins.open_panel(&id, place, here);
+            }
+            Act::AddonCommand { addon, name, args, key, channel, reply_to } => {
+                let place = {
+                    let st = e.state();
+                    let s = st.server(&key);
+                    crate::plugins::addon::Place {
+                        me: st.my_name.clone(),
+                        server: s.map(|s| s.info.name.clone()).unwrap_or_default(),
+                        channel: s.and_then(|s| s.channel(channel)).map(|c| c.name.clone()).unwrap_or_default(),
+                    }
+                };
+                self.plugins.run_command(&addon, &name, &args, place, key, channel, reply_to);
+            }
+            Act::SubmitPlugin { submission, turn_on } => e.submit_plugin(submission, turn_on.as_deref()),
+            Act::ListSubmissions(key) => e.list_submissions(&key),
+            Act::OpenSubmission { key, id } => e.open_submission(&key, id),
+            Act::SetSubmissionStatus { key, id, status } => e.set_submission_status(&key, id, status),
+            Act::SetPluginSubmissions { key, on } => e.set_plugin_submissions(&key, on),
             Act::AddFriend(uid) => e.add_friend(&uid),
             Act::AcceptFriend(uid) => e.accept_friend(&uid),
             Act::RemoveFriend(uid) => e.remove_friend(&uid),
@@ -673,6 +726,13 @@ impl eframe::App for IngleApp {
             }
         }
         self.update_step(&mut acts);
+        // What plugins handed back: add-ons' messages to send, notices.
+        for o in self.plugins.step() {
+            match o {
+                crate::plugins::Outcome::Send { key, channel, text, reply_to } => acts.push(Act::Send { key, channel, text, reply_to, files: Vec::new() }),
+                crate::plugins::Outcome::Toast(t, error) => acts.push(Act::Toast(t, error)),
+            }
+        }
         if crate::images::dialog_closed() {
             ctx.input_mut(|i| i.keys_down.clear());
         }
@@ -707,6 +767,11 @@ impl eframe::App for IngleApp {
                         ed.picked(files.into_iter().next(), ctx);
                     }
                 }
+                PickFor::AddonFile => {
+                    if let Some((_, bytes)) = files.into_iter().next() {
+                        self.plugins.try_addon(bytes);
+                    }
+                }
             }
         }
         // Folders chosen in a dialog (opened between frames).
@@ -718,11 +783,29 @@ impl eframe::App for IngleApp {
                         c.set_restore(dir);
                     }
                 }
+                // "Start an add-on": its project, kit included, in a new folder there.
+                crate::images::FolderFor::NewAddon => match crate::plugins::source::start_addon(&dir, self.plugins.new_name.trim()) {
+                    Ok(made) => {
+                        self.toast(&format!("Your add-on is in {}. Open that folder with Claude and say what it should do.", made.display()), false);
+                        crate::create::open_folder(&made);
+                        self.plugins.new_name.clear();
+                    }
+                    Err(e) => self.toast(&format!("Couldn't start the add-on: {e}"), true),
+                },
+                // A plugin's folder to send in: gathered and checked, shown in the form.
+                crate::images::FolderFor::PluginSource => {
+                    let gathered = crate::plugins::source::gather(&dir);
+                    let sends_before = engine.state().plugin_sends_done;
+                    let author = engine.state().my_name.clone();
+                    self.plugins.form = Some(crate::plugins::ui::SubmitForm { gathered, author, contact: String::new(), agree: false, sends_before });
+                }
             }
         }
         // A direct message conversation was opened (from the member list or friends): show it.
         if let Some((key, id)) = engine.take_opened_dm() {
             self.ui.home = true;
+
+            self.ui.plugins_open = false;
             self.ui.dm = Some((key, id));
             self.ui.call_view = false;
         }
@@ -1096,9 +1179,19 @@ impl IngleApp {
             .frame(egui::Frame::new().fill(theme::RAIL))
             .show(ctx, |ui| self.rail(ui, st, acts));
 
+        if self.ui.plugins_open {
+            self.plugins_page(ctx, st, acts);
+            self.soundboard_popup(ctx, st, acts);
+            self.addon_panels(ctx, st);
+            self.dialogs(ctx, st, acts);
+            self.viewer(ctx, acts);
+            self.toasts(ctx, st);
+            return;
+        }
         if self.ui.home {
             self.home_ui(ctx, st, acts);
             self.soundboard_popup(ctx, st, acts);
+            self.addon_panels(ctx, st);
             self.dialogs(ctx, st, acts);
             self.viewer(ctx, acts);
             self.avatar_editor(ctx, acts);
@@ -1170,6 +1263,7 @@ impl IngleApp {
 
         self.soundboard_popup(ctx, st, acts);
         self.profile_card(ctx, st, acts);
+        self.addon_panels(ctx, st);
         self.dialogs(ctx, st, acts);
         self.viewer(ctx, acts);
         self.avatar_editor(ctx, acts);
@@ -1453,6 +1547,7 @@ impl IngleApp {
             }
             if resp.on_hover_text("Direct messages").clicked() {
                 self.ui.home = true;
+                self.ui.plugins_open = false;
             }
             // Unread direct messages under it, by who sent them (like Discord): their picture
             // with how many, wherever you are. Click to read.
@@ -1482,6 +1577,8 @@ impl IngleApp {
                 let tip = format!("{name}: {n} unread message{}", if n == 1 { "" } else { "s" });
                 if resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tip).clicked() {
                     self.ui.home = true;
+
+                    self.ui.plugins_open = false;
                     self.ui.dm = Some((s.key.clone(), id));
                 }
             }
@@ -1491,7 +1588,7 @@ impl IngleApp {
             ui.add_space(6.0);
             self.update_button(ui);
             for s in &st.servers {
-                let selected = !self.ui.home && self.ui.server.as_deref() == Some(s.key.as_str());
+                let selected = !self.ui.home && !self.ui.plugins_open && self.ui.server.as_deref() == Some(s.key.as_str());
                 let (rect, resp) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::click());
                 let hovered = resp.hovered();
                 let radius = if selected || hovered { 16 } else { 24 };
@@ -1547,6 +1644,8 @@ impl IngleApp {
                 }
                 if resp.clicked() {
                     self.ui.home = false;
+
+                    self.ui.plugins_open = false;
                     self.ui.server = Some(s.key.clone());
                     self.ui.call_view = st.call.as_ref().map(|c| c.server_key == s.key).unwrap_or(false) && self.ui.call_view;
                 }
@@ -1589,6 +1688,7 @@ impl IngleApp {
             if resp.on_hover_text("Add a server").clicked() {
                 self.ui.dialog = Some(Dialog::AddChoice);
             }
+            self.plugins_button(ui);
         });
     }
 
@@ -1669,6 +1769,27 @@ impl IngleApp {
                 if resp.on_hover_text("Ingle bug reports people sent here. Only you see this.").clicked() {
                     acts.push(Act::ListBugs(s.key.clone()));
                     self.ui.dialog = Some(Dialog::BugReports { key: s.key.clone(), filter: 0 });
+                }
+                ui.add_space(6.0);
+            }
+            // And the plugins sent in for the Ingle Library (when this server collects them).
+            if owner && s.info.plugin_submissions {
+                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
+                let row = r.shrink2(vec2(8.0, 1.0));
+                if resp.hovered() {
+                    ui.painter().rect_filled(row, CornerRadius::same(6), theme::ELEV);
+                }
+                icons::puzzle(ui.painter(), Rect::from_center_size(row.left_center() + vec2(14.0, 0.0), vec2(15.0, 15.0)), theme::MUTED);
+                ui.painter().text(row.left_center() + vec2(32.0, 0.0), egui::Align2::LEFT_CENTER, "plugins-sent-in", theme::font(15.0), theme::MUTED);
+                let n = s.info.new_plugin_submissions;
+                if n > 0 {
+                    let t = if n > 99 { "99+".to_string() } else { n.to_string() };
+                    let b = Rect::from_center_size(pos2(row.right() - 18.0, row.center().y), vec2(14.0 + 7.0 * t.len() as f32, 18.0));
+                    ui.painter().rect_filled(b, CornerRadius::same(9), theme::LIVE);
+                    ui.painter().text(b.center(), egui::Align2::CENTER_CENTER, t, theme::bold_font(11.5), Color32::WHITE);
+                }
+                if resp.on_hover_text("Plugins people sent in for the Ingle Library. Only you see this.").clicked() {
+                    crate::plugins::ui::open_submissions(self, &s.key, acts);
                 }
                 ui.add_space(6.0);
             }

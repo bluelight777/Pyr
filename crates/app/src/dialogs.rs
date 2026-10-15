@@ -469,6 +469,12 @@ impl IngleApp {
                             if ui.checkbox(&mut on, "Collect Ingle bug reports on this server").changed() {
                                 acts.push(Act::SetBugReports { key: key.clone(), on });
                             }
+                            if s.has(ingle_proto::control::PLUGINS_FEATURE) {
+                                let mut on = s.info.plugin_submissions;
+                                if ui.checkbox(&mut on, "Collect plugins for the Ingle Library on this server").changed() {
+                                    acts.push(Act::SetPluginSubmissions { key: key.clone(), on });
+                                }
+                            }
                             ui.label(
                                 RichText::new("For the server Ingle's own Report a bug sends to. Reports show under bug-reports in the channel list, only for you.")
                                     .size(12.0)
@@ -789,6 +795,12 @@ impl IngleApp {
                     });
                     if !close {
                         self.ui.dialog = Some(Dialog::BugReports { key, filter });
+                    }
+                }
+                Dialog::PluginSubmissions { key, mut filter, mut open_file } => {
+                    self.submissions_dialog(ui, st, &key, &mut filter, &mut open_file, acts, &mut close);
+                    if !close {
+                        self.ui.dialog = Some(Dialog::PluginSubmissions { key, filter, open_file });
                     }
                 }
                 Dialog::ScreenPicker { selected } => {
