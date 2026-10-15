@@ -24,6 +24,8 @@ fi
 mkdir -p "$ROOT/ingle"
 # Everything but latest.json first, so the app never sees a version whose files aren't there yet.
 find "$HERE/ingle" -maxdepth 1 -type f ! -name latest.json -exec cp -f {} "$ROOT/ingle/" \;
+# The page's pictures and fonts (and any other folders), into folders of the same names.
+find "$HERE/ingle" -mindepth 1 -maxdepth 1 -type d -exec cp -rf {} "$ROOT/ingle/" \;
 cp -f "$HERE/ingle/latest.json" "$ROOT/ingle/latest.json"
 chmod -R a+rX "$ROOT/ingle"
 echo "Published to $ROOT/ingle"

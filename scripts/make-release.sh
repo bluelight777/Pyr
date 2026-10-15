@@ -11,7 +11,13 @@ BASE=https://firelitgames.com/ingle
 OUT=dist/release
 rm -rf "$OUT" && mkdir -p "$OUT/upload/ingle"
 SITE=$OUT/upload/ingle
-cp installer/site/index.html installer/site/ingle-icon.png "$SITE/"
+# The page, with this release filled in (the page also reads latest.json when it opens), and
+# what it shows (pictures, fonts).
+WIN_MB=$(( ($(stat -c %s "dist/Ingle-Setup-$VERSION.exe") + 500000) / 1000000 ))
+TODAY=$(LC_ALL=C date +"%B %-d, %Y")
+sed -e "s/{{VERSION}}/$VERSION/g" -e "s/{{WIN_MB}}/$WIN_MB/g" -e "s/{{DATE}}/$TODAY/g" installer/site/index.html > "$SITE/index.html"
+cp installer/site/ingle-icon.png "$SITE/"
+cp -r installer/site/assets "$SITE/"
 cp "dist/Ingle-Setup-$VERSION.exe" "$SITE/" && cp "dist/Ingle-Setup-$VERSION.exe" "$SITE/Ingle-Setup.exe"
 if [ -f "dist/ingle_${VERSION}_amd64.deb" ]; then
   cp "dist/ingle_${VERSION}_amd64.deb" "$SITE/" && cp "dist/ingle_${VERSION}_amd64.deb" "$SITE/ingle_amd64.deb"
