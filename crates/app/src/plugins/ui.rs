@@ -19,6 +19,8 @@ pub struct SubmitForm {
     pub agree: bool,
     /// The plugin sends done when this form was filled in (to show only this one's outcome).
     pub sends_before: u64,
+    /// Scroll it into view (it opens below the fold).
+    pub scroll: bool,
 }
 
 const KIT_URL: &str = "https://github.com/bluelight777/ingle/tree/main/plugins";
@@ -50,6 +52,17 @@ fn note(ui: &mut egui::Ui, text: &str, error: bool) {
         ui.set_width(ui.available_width());
         ui.add(egui::Label::new(RichText::new(text).color(if error { theme::TEXT } else { theme::MUTED })).wrap());
     });
+}
+
+/// Widgets on an ELEV card, one step lighter: the theme's buttons, check boxes and radio
+/// circles are ELEV themselves, so they'd vanish into the card.
+fn card_visuals(ui: &mut egui::Ui) {
+    let w = &mut ui.visuals_mut().widgets;
+    let hover = Color32::from_rgb(0x46, 0x3b, 0x34);
+    w.inactive.bg_fill = theme::ELEV2;
+    w.inactive.weak_bg_fill = theme::ELEV2;
+    w.hovered.bg_fill = hover;
+    w.hovered.weak_bg_fill = hover;
 }
 
 impl IngleApp {
@@ -138,7 +151,7 @@ impl IngleApp {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.plugins.tab {
                 Tab::Library => match self.plugins.detail.clone() {
                     Some(id) => self.plugin_detail(ui, &id, acts),
-                    None => self.library_grid(ui),
+                    None => self.library_grid(ui, acts),
                 },
                 Tab::Installed => self.installed_list(ui, st, acts),
                 Tab::Make => self.make_your_own(ui, st, acts),
@@ -174,7 +187,12 @@ impl IngleApp {
         let available = !e.files_for(super::install::os()).is_empty();
         match installed {
             None if !available => {
-                ui.label(RichText::new("Not for this system yet").color(theme::DIM));
+                let only = match (e.windows.is_empty(), e.linux.is_empty()) {
+                    (false, true) => "Windows only for now",
+                    (true, false) => "Linux only for now",
+                    _ => "Not for this system yet",
+                };
+                ui.label(RichText::new(only).color(theme::DIM));
             }
             None => {
                 if ui.add(theme::primary_button("Install").min_size(vec2(92.0, 30.0))).clicked() {
@@ -207,7 +225,7 @@ impl IngleApp {
         }
     }
 
-    fn library_grid(&mut self, ui: &mut egui::Ui) {
+    fn library_grid(&mut self, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
         let Some(lib) = self.plugins.library.clone() else {
             if self.plugins.fetching() {
                 ui.horizontal(|ui| {
@@ -242,42 +260,58 @@ impl IngleApp {
         let width = ui.available_width();
         let cols = ((width + 12.0) / 340.0).floor().max(1.0) as usize;
         let card_w = (width - 12.0 * (cols as f32 - 1.0)) / cols as f32;
+        // Card content height: the summary gets up to three lines, and the buttons sit at the bottom.
+        const CARD_H: f32 = 172.0;
         for row in shown.chunks(cols) {
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 12.0;
                 for e in row {
                     let mut open = false;
-                    let frame = egui::Frame::new().fill(theme::ELEV).stroke(Stroke::new(1.0f32, theme::LINE)).corner_radius(12).inner_margin(16).show(ui, |ui| {
-                        ui.set_width(card_w - 34.0);
-                        ui.set_min_height(150.0);
-                        ui.horizontal(|ui| {
-                            self.plugin_icon(ui, &e.id, e.kind, 48.0);
-                            ui.add_space(4.0);
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new(&e.name).font(theme::bold_font(17.0)).color(theme::TEXT));
+                    // A Ui that senses clicks behind the card's own buttons (it's registered before them),
+                    // laid out top to bottom (a Frame takes its parent's layout, and this row's is sideways).
+                    let card = ui.scope_builder(
+                        egui::UiBuilder::new().id_salt(("plugin-card", &e.id)).layout(egui::Layout::top_down(egui::Align::Min)).sense(Sense::click()),
+                        |ui| {
+                            let hovered = ui.response().hovered();
+                            let stroke = if hovered { Color32::from_rgb(0x5a, 0x48, 0x3c) } else { theme::LINE };
+                            egui::Frame::new().fill(theme::ELEV).stroke(Stroke::new(1.0f32, stroke)).corner_radius(12).inner_margin(16).show(ui, |ui| {
+                                card_visuals(ui);
+                                ui.set_width(card_w - 34.0);
+                                let top = ui.min_rect().top();
                                 ui.horizontal(|ui| {
-                                    kind_pill(ui, e.kind);
-                                    if !e.author.is_empty() {
-                                        ui.label(RichText::new(format!("by {}", e.author)).size(12.5).color(theme::DIM));
-                                    }
+                                    self.plugin_icon(ui, &e.id, e.kind, 48.0);
+                                    ui.add_space(4.0);
+                                    ui.vertical(|ui| {
+                                        ui.label(RichText::new(&e.name).font(theme::bold_font(17.0)).color(theme::TEXT));
+                                        ui.horizontal(|ui| {
+                                            kind_pill(ui, e.kind);
+                                            if !e.author.is_empty() {
+                                                ui.label(RichText::new(format!("by {}", e.author)).size(12.5).color(theme::DIM));
+                                            }
+                                        });
+                                    });
+                                });
+                                ui.add_space(10.0);
+                                let mut job = egui::text::LayoutJob::simple(e.summary.clone(), egui::TextStyle::Body.resolve(ui.style()), theme::BODY, ui.available_width());
+                                job.wrap.max_rows = 3;
+                                ui.label(job);
+                                let used = ui.min_rect().bottom() - top;
+                                ui.add_space((CARD_H - 30.0 - used).max(10.0));
+                                ui.horizontal(|ui| {
+                                    ui.set_min_height(30.0);
+                                    let size = e.size_for(super::install::os()).max(e.wasm.as_ref().map(|w| w.size).unwrap_or(0));
+                                    ui.label(RichText::new(if size > 0 { format!("{} · {}", e.version, size_text(size)) } else { e.version.clone() }).size(12.5).color(theme::DIM));
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if ui.button("Details").clicked() {
+                                            open = true;
+                                        }
+                                        self.plugin_action(ui, e, acts);
+                                    });
                                 });
                             });
-                        });
-                        ui.add_space(8.0);
-                        ui.add(egui::Label::new(RichText::new(&e.summary).color(theme::BODY)).wrap());
-                        ui.add_space(10.0);
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(format!("{} · {}", e.version, size_text(e.size_for(super::install::os()).max(e.wasm.as_ref().map(|w| w.size).unwrap_or(0))))).size(12.5).color(theme::DIM));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.button("Details").clicked() {
-                                    open = true;
-                                }
-                                self.plugin_action(ui, e, &mut Vec::new());
-                            });
-                        });
-                    });
-                    let resp = ui.interact(frame.response.rect, ui.id().with(("plugin-card", &e.id)), Sense::click());
-                    if open || resp.clicked() {
+                        },
+                    );
+                    if open || card.response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                         self.plugins.detail = Some(e.id.clone());
                     }
                 }
@@ -291,6 +325,8 @@ impl IngleApp {
             self.plugins.detail = None;
             return;
         };
+        // Lines that span a wide window are hard to read.
+        ui.set_max_width(860.0);
         if ui.add(egui::Button::new(RichText::new("← All plugins").color(theme::LINK)).frame(false)).clicked() {
             self.plugins.detail = None;
         }
@@ -379,6 +415,7 @@ impl IngleApp {
         let name = self.plugins.installed.get(id).map(|p| p.name.clone()).unwrap_or_else(|| id.to_string());
         ui.add_space(8.0);
         egui::Frame::new().fill(theme::ELEV).stroke(Stroke::new(1.0f32, theme::LIVE)).corner_radius(8).inner_margin(10).show(ui, |ui| {
+            card_visuals(ui);
             ui.horizontal(|ui| {
                 ui.label(RichText::new(format!("Remove {name} and its data from this PC?")).color(theme::TEXT));
                 if ui.add(theme::danger_button("Remove")).clicked() {
@@ -399,10 +436,17 @@ impl IngleApp {
         if let Some(tried) = self.plugins.tried.clone().filter(|t| self.plugins.addons.contains_key(t)) {
             let name = self.plugins.addons[&tried].info.name.clone();
             egui::Frame::new().fill(theme::ELEV).stroke(Stroke::new(1.0f32, theme::EMBER2)).corner_radius(10).inner_margin(12).show(ui, |ui| {
+                card_visuals(ui);
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("Trying {name}")).font(theme::bold_font(15.0)).color(theme::TEXT));
-                    ui.label(RichText::new("from a file, until Ingle closes. Nobody has reviewed it, but it's in the same sandbox.").color(theme::MUTED));
+                    ui.vertical(|ui| {
+                        ui.set_max_width((ui.available_width() - 220.0).max(160.0));
+                        ui.label(RichText::new(format!("Trying {name}")).font(theme::bold_font(15.0)).color(theme::TEXT));
+                        ui.add(
+                            egui::Label::new(RichText::new("From a file, until Ingle closes. Nobody has reviewed it, but it runs in the same sandbox as any add-on.").color(theme::MUTED))
+                                .wrap(),
+                        );
+                    });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("Stop").clicked() {
                             self.plugins.addons.remove(&tried);
@@ -424,11 +468,14 @@ impl IngleApp {
         }
         for p in list {
             egui::Frame::new().fill(theme::ELEV).stroke(Stroke::new(1.0f32, theme::LINE)).corner_radius(10).inner_margin(12).show(ui, |ui| {
+                card_visuals(ui);
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     self.plugin_icon(ui, &p.id, p.kind, 40.0);
                     ui.add_space(4.0);
                     ui.vertical(|ui| {
+                        // Leave room for its buttons on the right.
+                        ui.set_max_width((ui.available_width() - 380.0).max(160.0));
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(&p.name).font(theme::bold_font(15.0)).color(theme::TEXT));
                             kind_pill(ui, p.kind);
@@ -445,6 +492,8 @@ impl IngleApp {
                         };
                         if let Some((s, bad)) = status {
                             ui.label(RichText::new(s).size(12.5).color(if bad { theme::LIVE } else { theme::ONLINE }));
+                        } else if let Some(e) = self.plugins.library.as_ref().and_then(|l| l.find(&p.id)) {
+                            ui.add(egui::Label::new(RichText::new(&e.summary).size(12.5).color(theme::MUTED)).truncate());
                         }
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -526,7 +575,8 @@ impl IngleApp {
         ui.add_space(12.0);
         let mut send = false;
         let mut close = false;
-        egui::Frame::new().fill(theme::ELEV).stroke(Stroke::new(1.0f32, theme::LINE)).corner_radius(10).inner_margin(14).show(ui, |ui| {
+        let shown = egui::Frame::new().fill(theme::ELEV).stroke(Stroke::new(1.0f32, theme::LINE)).corner_radius(10).inner_margin(14).show(ui, |ui| {
+            card_visuals(ui);
             ui.set_width(ui.available_width());
             let g = &mut form.gathered;
             ui.label(RichText::new(g.folder.display().to_string()).font(theme::mono(12.0)).color(theme::DIM));
@@ -590,6 +640,9 @@ impl IngleApp {
                 }
             }
         });
+        if std::mem::take(&mut form.scroll) {
+            ui.scroll_to_rect(shown.response.rect, Some(egui::Align::Center));
+        }
         if send {
             let sub = form.gathered.submission(&form.author, &form.contact);
             // The library server, when it's mine: switch collecting on there first.
@@ -697,6 +750,7 @@ impl IngleApp {
             }
             for e in shown {
                 egui::Frame::new().fill(theme::ELEV).stroke(Stroke::new(1.0f32, theme::LINE)).corner_radius(10).inner_margin(12).show(ui, |ui| {
+                    card_visuals(ui);
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(format!("#{} {}", e.id, e.name)).font(theme::bold_font(15.0)).color(theme::TEXT));

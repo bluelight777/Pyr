@@ -1,0 +1,38 @@
+{
+  "plugins": [
+    {
+      "id": "chimbrowser",
+      "name": "Chimbrowser",
+      "kind": "program",
+      "version": "0.1.3-1",
+      "summary": "A lean, private browser: it blocks ads and trackers, makes YouTube smooth, and has an AI sidebar.",
+      "description": "Chimbrowser is a dark, private web browser built on the browser engine Windows already has (Microsoft Edge WebView2). It blocks ads and trackers with Brave's filter engine and the EasyList, EasyPrivacy and uBlock Origin lists, strips tracking codes from links, and sends Global Privacy Control. YouTube plays smoothly: its ads are removed and skipped, and it picks a video format your graphics card plays easily. The AI sidebar (Ctrl+Shift+A) has Claude, ChatGPT, Gemini, Perplexity and others, signed in with your own accounts, and can ask about the page you're on. Its settings are at chim://settings.",
+      "license": "MIT OR Apache-2.0",
+      "review": "Read and built from its source for the Ingle Library. This build has four fixes from the review: websites can't read your clipboard without asking, Microsoft Defender SmartScreen keeps checking downloads and sites, pages can only open web pages in new tabs, and Chimbrowser's own pages can't be put inside other websites. It needs Microsoft Edge WebView2, which Windows 10 and 11 already have.",
+      "icon": "chimbrowser/icon.png",
+      "windows": [
+        "chimbrowser/0.1.3-1/windows/chimbrowser.exe",
+        "chimbrowser/0.1.3-1/windows/WebView2Loader.dll"
+      ],
+      "run": "chimbrowser.exe"
+    },
+    {
+      "id": "dice",
+      "name": "Dice",
+      "kind": "addon",
+      "version": "1.0.0",
+      "summary": "Roll dice in chat with /roll 2d6+1, or from its panel.",
+      "description": "Type /roll and some dice (2d6+1, d20, 3d8-2 and so on; just /roll is a d20) and the roll goes to the channel as your message, with every die shown. Its panel has a button for each common die, a box for any other roll, and your last few rolls.",
+      "author": "Firelit Games",
+      "license": "MIT OR Apache-2.0",
+      "source": "https://github.com/bluelight777/ingle/tree/main/plugins/dice",
+      "icon": "dice/icon.png",
+      "permissions": [
+        "commands",
+        "panel",
+        "storage"
+      ],
+      "wasm": "dice/1.0.0/dice.wasm"
+    }
+  ]
+}

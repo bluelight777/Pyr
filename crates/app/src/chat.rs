@@ -927,6 +927,11 @@ impl IngleApp {
                     });
                     if let Some(name) = fill {
                         draft = format!("/{name} ");
+                        // Put the cursor at the end, after the space.
+                        let mut state = egui::text_edit::TextEditState::load(ui.ctx(), composer_id).unwrap_or_default();
+                        let end = draft.chars().count();
+                        state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(end))));
+                        state.store(ui.ctx(), composer_id);
                         ui.ctx().memory_mut(|m| m.request_focus(composer_id));
                     }
                 }

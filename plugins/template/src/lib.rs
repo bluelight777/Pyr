@@ -26,7 +26,7 @@ impl AddOn for Hello {
         let clicks = ctx.store["clicks"].as_u64().unwrap_or(0);
         Panel::new()
             .heading("Hello")
-            .text(format!("You've clicked {clicks} times."))
+            .text(format!("You've clicked {clicks} time{}.", if clicks == 1 { "" } else { "s" }))
             .row(vec![
                 Widget::Button { id: "click".into(), label: "Click me".into() },
                 Widget::Button { id: "wave".into(), label: "Wave in chat".into() },

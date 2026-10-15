@@ -32,6 +32,12 @@ grep -qx "$VERSION" installer/site/releases.txt || echo "$VERSION" >> installer/
 RELEASED=$(paste -sd, installer/site/releases.txt)
 cargo run -q -p ingle-proto --example release -- sign --key "$KEY" --version "$VERSION" --notes "$NOTES" --released "$RELEASED" \
   --base-url "$BASE" --windows "$SITE/Ingle-Setup-$VERSION.exe" "${DEB[@]}" --out "$SITE/latest.json"
+# The Ingle Library (scripts/make-library.sh): its signed list and the plugins' files.
+if [ -f dist/library/index.json ]; then
+  mkdir -p "$SITE/library" && cp -r dist/library/index.json dist/library/files "$SITE/library/"
+else
+  echo "no dist/library/index.json: the website keeps the library it has" >&2
+fi
 cp installer/site/install-site.sh "$OUT/upload/"
 mkdir -p "$OUT/upload/server" && cp dist/vps/ingle-server-linux-x86_64 dist/vps/ingle-server-linux-aarch64 "$OUT/upload/server/"
 cp installer/site/publish.ps1 installer/site/publish.cmd "$OUT/"

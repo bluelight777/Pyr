@@ -464,21 +464,26 @@ impl IngleApp {
                         if let Some(s) = server.as_ref().filter(|s| {
                             s.has(ingle_proto::control::BUGS_FEATURE) && s.me.as_ref().map(|m| m.role == ingle_proto::control::Role::Owner).unwrap_or(false)
                         }) {
-                            field_label(ui, "Ingle bug reports");
+                            let plugins = s.has(ingle_proto::control::PLUGINS_FEATURE);
+                            field_label(ui, if plugins { "Ingle bug reports and plugins" } else { "Ingle bug reports" });
                             let mut on = s.info.bug_reports;
                             if ui.checkbox(&mut on, "Collect Ingle bug reports on this server").changed() {
                                 acts.push(Act::SetBugReports { key: key.clone(), on });
                             }
-                            if s.has(ingle_proto::control::PLUGINS_FEATURE) {
+                            if plugins {
                                 let mut on = s.info.plugin_submissions;
                                 if ui.checkbox(&mut on, "Collect plugins for the Ingle Library on this server").changed() {
                                     acts.push(Act::SetPluginSubmissions { key: key.clone(), on });
                                 }
                             }
                             ui.label(
-                                RichText::new("For the server Ingle's own Report a bug sends to. Reports show under bug-reports in the channel list, only for you.")
-                                    .size(12.0)
-                                    .color(theme::DIM),
+                                RichText::new(if plugins {
+                                    "For the server Ingle's own Report a bug and Send for review go to. What's sent shows under Bug reports and Plugins sent in, at the top of the channel list, only for you."
+                                } else {
+                                    "For the server Ingle's own Report a bug sends to. Reports show under Bug reports in the channel list, only for you."
+                                })
+                                .size(12.0)
+                                .color(theme::DIM),
                             );
                             ui.add_space(12.0);
                         }

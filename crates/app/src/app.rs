@@ -797,7 +797,7 @@ impl eframe::App for IngleApp {
                     let gathered = crate::plugins::source::gather(&dir);
                     let sends_before = engine.state().plugin_sends_done;
                     let author = engine.state().my_name.clone();
-                    self.plugins.form = Some(crate::plugins::ui::SubmitForm { gathered, author, contact: String::new(), agree: false, sends_before });
+                    self.plugins.form = Some(crate::plugins::ui::SubmitForm { gathered, author, contact: String::new(), agree: false, sends_before, scroll: true });
                 }
             }
         }
@@ -1758,7 +1758,7 @@ impl IngleApp {
                     ui.painter().rect_filled(row, CornerRadius::same(6), theme::ELEV);
                 }
                 ui.painter().text(row.left_center() + vec2(12.0, 0.0), egui::Align2::LEFT_CENTER, "!", theme::bold_font(17.0), theme::MUTED);
-                ui.painter().text(row.left_center() + vec2(32.0, 0.0), egui::Align2::LEFT_CENTER, "bug-reports", theme::font(15.0), theme::MUTED);
+                ui.painter().text(row.left_center() + vec2(32.0, 0.0), egui::Align2::LEFT_CENTER, "Bug reports", theme::font(15.0), theme::MUTED);
                 let n = s.info.new_bug_reports;
                 if n > 0 {
                     let t = if n > 99 { "99+".to_string() } else { n.to_string() };
@@ -1780,7 +1780,7 @@ impl IngleApp {
                     ui.painter().rect_filled(row, CornerRadius::same(6), theme::ELEV);
                 }
                 icons::puzzle(ui.painter(), Rect::from_center_size(row.left_center() + vec2(14.0, 0.0), vec2(15.0, 15.0)), theme::MUTED);
-                ui.painter().text(row.left_center() + vec2(32.0, 0.0), egui::Align2::LEFT_CENTER, "plugins-sent-in", theme::font(15.0), theme::MUTED);
+                ui.painter().text(row.left_center() + vec2(32.0, 0.0), egui::Align2::LEFT_CENTER, "Plugins sent in", theme::font(15.0), theme::MUTED);
                 let n = s.info.new_plugin_submissions;
                 if n > 0 {
                     let t = if n > 99 { "99+".to_string() } else { n.to_string() };

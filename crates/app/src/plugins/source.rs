@@ -193,7 +193,12 @@ pub fn start_addon(folder: &Path, name: &str) -> Result<PathBuf, String> {
     write("Cargo.toml", &manifest)?;
     write(".gitignore", "/target\n")?;
     for (rel, text) in KIT {
-        write(rel, text)?;
+        if *rel == "src/lib.rs" {
+            // Its name in the code too ({:?} writes it as a Rust string, quotes escaped).
+            write(rel, &text.replace("Info::new(\"Hello\")", &format!("Info::new({name:?})")))?;
+        } else {
+            write(rel, text)?;
+        }
     }
     Ok(dir)
 }
@@ -208,6 +213,7 @@ mod tests {
         let p = start_addon(&dir, "Coin Flip!").unwrap();
         assert!(p.ends_with("coin-flip"));
         assert!(start_addon(&dir, "Coin Flip!").is_err(), "not over an existing folder");
+        assert!(std::fs::read_to_string(p.join("src/lib.rs")).unwrap().contains(r#"Info::new("Coin Flip!")"#));
         std::fs::create_dir_all(p.join("target/release")).unwrap();
         std::fs::write(p.join("target/release/big.wasm"), b"built").unwrap();
         let g = gather(&p);

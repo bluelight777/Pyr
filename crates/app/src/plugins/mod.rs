@@ -60,7 +60,7 @@ pub struct OpenPanel {
 /// Where an answer goes when it comes.
 enum Waiting {
     /// A /command typed in a channel: its answer is sent there.
-    Command { key: String, channel: ChannelId, reply_to: Option<MessageId> },
+    Command { key: String, channel: ChannelId, reply_to: Option<MessageId>, place: Place },
     /// A panel's drawing (or a click in it, which may also send a message).
     Panel { key: Option<(String, ChannelId)> },
 }
@@ -323,8 +323,8 @@ impl Plugins {
 
     pub fn run_command(&mut self, id: &str, name: &str, args: &str, place: Place, key: String, channel: ChannelId, reply_to: Option<MessageId>) {
         let Some(a) = self.addons.get(id) else { return };
-        let rx = a.ask(Request::Command { name: name.to_string(), args: args.to_string() }, place);
-        self.pending.push(Pending { id: id.to_string(), rx, waiting: Waiting::Command { key, channel, reply_to }, since: Instant::now() });
+        let rx = a.ask(Request::Command { name: name.to_string(), args: args.to_string() }, place.clone());
+        self.pending.push(Pending { id: id.to_string(), rx, waiting: Waiting::Command { key, channel, reply_to, place }, since: Instant::now() });
     }
 
     /// Opens (or brings back) an add-on's panel.
@@ -437,11 +437,17 @@ impl Plugins {
             let name = self.addons.get(&p.id).map(|a| a.info.name.clone()).unwrap_or_else(|| p.id.clone());
             let may_send = self.may_send(&p.id);
             match (p.waiting, answer) {
-                (Waiting::Command { key, channel, reply_to }, Ok(r)) => match (r.say, r.error) {
-                    (_, Some(e)) => out.push(Outcome::Toast(format!("{name}: {e}"), false)),
-                    (Some(text), None) if !text.trim().is_empty() => out.push(Outcome::Send { key, channel, text, reply_to }),
-                    _ => {}
-                },
+                (Waiting::Command { key, channel, reply_to, place }, Ok(r)) => {
+                    // Its panel, when open, may show what the command changed (Dice's last rolls).
+                    if r.error.is_none() && self.panels.iter().any(|x| x.id == p.id && x.open) {
+                        self.open_panel(&p.id, place, Some((key.clone(), channel)));
+                    }
+                    match (r.say, r.error) {
+                        (_, Some(e)) => out.push(Outcome::Toast(format!("{name}: {e}"), false)),
+                        (Some(text), None) if !text.trim().is_empty() => out.push(Outcome::Send { key, channel, text, reply_to }),
+                        _ => {}
+                    }
+                }
                 (Waiting::Panel { key }, Ok(r)) => {
                     if let Some(panel) = self.panels.iter_mut().find(|x| x.id == p.id) {
                         if let Some(pn) = r.panel {

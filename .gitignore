@@ -7,3 +7,4 @@
 # Signing keys never go in the repository.
 *release-key*
 *.key
+/plugins/target
