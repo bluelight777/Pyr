@@ -384,8 +384,9 @@ pub struct ResumeOffer {
 /// How long to keep trying to get back into a call after the server drops.
 pub const VOICE_REJOIN_FOR: std::time::Duration = std::time::Duration::from_secs(180);
 
-/// How long a call in a direct message rings before it counts as not answered (and missed).
-pub const RING_FOR: std::time::Duration = std::time::Duration::from_secs(45);
+/// How long a call in a direct message rings before it counts as not answered (and missed):
+/// about as long as Discord's.
+pub const RING_FOR: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Someone calling you in a direct message (see `DM_CALLS_FEATURE`): it rings until you
 /// answer or decline, they hang up, or [`RING_FOR`] goes by.
@@ -488,6 +489,9 @@ pub struct AppState {
     /// The plugin being sent in for the library, or how the last one went (like `bug_send`).
     pub plugin_send: BugSend,
     pub plugin_sends_done: u64,
+    /// What I sent in to the Ingle Library and where each stands (`Engine::my_submissions`):
+    /// none until asked, then the list or why it couldn't be had.
+    pub my_submissions: Option<Result<Vec<ingle_proto::control::SubmissionEntry>, String>>,
     /// Plugins sent in to servers I own (fetched when looked at), by server key; and the files
     /// of the ones opened, by (server key, id).
     pub submissions: HashMap<String, Vec<ingle_proto::control::SubmissionEntry>>,

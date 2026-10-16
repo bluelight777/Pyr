@@ -89,12 +89,12 @@ impl IngleApp {
         });
         if ps.tones_open {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Skin tone").size(12.0).color(theme::MUTED));
+                ui.label(RichText::new("Skin tone").size(12.0).color(theme::MUTED()));
                 for (i, h) in TONE_HANDS.iter().enumerate() {
                     let e = EmojiRef::Unicode(emoji::cell_of(h).unwrap_or(0));
                     let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
                     if i as u8 == tone {
-                        ui.painter().rect_filled(rect, CornerRadius::same(6), theme::HOVER);
+                        ui.painter().rect_filled(rect, CornerRadius::same(6), theme::HOVER());
                     }
                     emoji::paint(ui.painter(), rect.shrink(4.0), &e, &mut custom_tex);
                     if resp.clicked() {
@@ -183,11 +183,11 @@ impl IngleApp {
                         };
                         let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
                         if resp.hovered() {
-                            ui.painter().rect_filled(rect, CornerRadius::same(6), theme::HOVER);
+                            ui.painter().rect_filled(rect, CornerRadius::same(6), theme::HOVER());
                         }
                         match &icon {
                             Some(e) => emoji::paint(ui.painter(), rect.shrink(6.0), e, &mut custom_tex),
-                            None => crate::icons::clock(ui.painter(), rect.shrink(8.0), theme::MUTED),
+                            None => crate::icons::clock(ui.painter(), rect.shrink(8.0), theme::MUTED()),
                         }
                         if resp.on_hover_text(title).clicked() {
                             ps.jump = Some(i);
@@ -200,13 +200,13 @@ impl IngleApp {
                 |ui| ui.vertical(|ui| {
                     ui.set_width(CELL * COLS as f32);
                     for (i, (title, cells)) in sections.iter().enumerate() {
-                        let h = ui.label(RichText::new(title.to_uppercase()).font(theme::bold_font(11.5)).color(theme::MUTED));
+                        let h = ui.label(RichText::new(title.to_uppercase()).font(theme::bold_font(11.5)).color(theme::MUTED()));
                         if ps.jump == Some(i) {
                             h.scroll_to_me(Some(egui::Align::TOP));
                             ps.jump = None;
                         }
                         if cells.is_empty() {
-                            ui.label(RichText::new("No emoji match that.").color(theme::DIM));
+                            ui.label(RichText::new("No emoji match that.").color(theme::DIM()));
                         }
                         for row in cells.chunks(COLS) {
                             ui.horizontal(|ui| {
@@ -217,7 +217,7 @@ impl IngleApp {
                                         continue;
                                     }
                                     if resp.hovered() {
-                                        ui.painter().rect_filled(rect, CornerRadius::same(6), theme::HOVER);
+                                        ui.painter().rect_filled(rect, CornerRadius::same(6), theme::HOVER());
                                         hovered = Some((c.e.clone(), c.label.clone()));
                                     }
                                     emoji::paint(ui.painter(), rect.shrink(5.0), &c.e, &mut custom_tex);
@@ -239,10 +239,10 @@ impl IngleApp {
             match &hovered {
                 Some((e, label)) => {
                     emoji::widget(ui, 28.0, e, &mut custom_tex);
-                    ui.label(RichText::new(label).font(theme::bold_font(14.0)).color(theme::TEXT));
+                    ui.label(RichText::new(label).font(theme::bold_font(14.0)).color(theme::TEXT()));
                 }
                 None => {
-                    ui.label(RichText::new("Pick an emoji").color(theme::DIM));
+                    ui.label(RichText::new("Pick an emoji").color(theme::DIM()));
                 }
             }
         });
@@ -266,7 +266,7 @@ impl IngleApp {
     }
 }
 
-/// A reaction pill: the emoji (in colour) and how many.
+/// A reaction pill: the emoji (in color) and how many.
 pub fn reaction_pill(
     ui: &mut egui::Ui,
     text: &str,
@@ -277,30 +277,30 @@ pub fn reaction_pill(
     let chars: Vec<char> = text.chars().collect();
     let e = emoji::match_at(&chars, 0).map(|m| m.1);
     let n = count.to_string();
-    let galley = ui.painter().layout_no_wrap(n, theme::bold_font(13.0), if mine { theme::EMBER2 } else { theme::MUTED });
+    let galley = ui.painter().layout_no_wrap(n, theme::bold_font(13.0), if mine { theme::EMBER2() } else { theme::MUTED() });
     let w = 8.0 + 20.0 + 6.0 + galley.size().x + 9.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 28.0), Sense::click());
     let fill = if mine {
         Color32::from_rgb(0x3d, 0x26, 0x18)
     } else if resp.hovered() {
-        theme::ELEV2
+        theme::ELEV2()
     } else {
-        theme::ELEV
+        theme::ELEV()
     };
     ui.painter().rect_filled(rect, CornerRadius::same(8), fill);
     if mine {
-        ui.painter().rect_stroke(rect, CornerRadius::same(8), Stroke::new(1.0f32, theme::EMBER), egui::StrokeKind::Inside);
+        ui.painter().rect_stroke(rect, CornerRadius::same(8), Stroke::new(1.0f32, theme::EMBER()), egui::StrokeKind::Inside);
     } else if resp.hovered() {
-        ui.painter().rect_stroke(rect, CornerRadius::same(8), Stroke::new(1.0f32, theme::LINE), egui::StrokeKind::Inside);
+        ui.painter().rect_stroke(rect, CornerRadius::same(8), Stroke::new(1.0f32, theme::LINE()), egui::StrokeKind::Inside);
     }
     let er = Rect::from_min_size(pos2(rect.left() + 8.0, rect.center().y - 10.0), vec2(20.0, 20.0));
     match &e {
         Some(e) => emoji::paint(ui.painter(), er, e, custom),
         None => {
-            ui.painter().text(er.center(), egui::Align2::CENTER_CENTER, text, theme::font(15.0), theme::TEXT);
+            ui.painter().text(er.center(), egui::Align2::CENTER_CENTER, text, theme::font(15.0), theme::TEXT());
         }
     }
     let gp = pos2(er.right() + 6.0, rect.center().y - galley.size().y / 2.0);
-    ui.painter().galley(gp, galley, theme::MUTED);
+    ui.painter().galley(gp, galley, theme::MUTED());
     resp
 }

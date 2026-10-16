@@ -1,4 +1,4 @@
-//! Colour emoji, like Discord: Twemoji pictures (graphics CC-BY 4.0 by Twitter/X and
+//! Color emoji, like Discord: Twemoji pictures (graphics CC-BY 4.0 by Twitter/X and
 //! contributors) drawn over the space text layout leaves for them, plus each server's own
 //! uploaded emoji (written `<:name:id>` in messages, `<a:name:id>` when animated).
 //!
@@ -381,7 +381,7 @@ pub fn widget(
     resp
 }
 
-/// Text with colour emoji, laid out and drawn (one line or wrapped).
+/// Text with color emoji, laid out and drawn (one line or wrapped).
 pub fn label(
     ui: &mut egui::Ui,
     text: &str,
@@ -423,7 +423,7 @@ pub fn without_emoji(text: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Like `Painter::text`, with colour emoji: on one line, cut with "…" past `max_width`
+/// Like `Painter::text`, with color emoji: on one line, cut with "…" past `max_width`
 /// (a channel's name in the list). Where it went.
 pub fn paint_text(
     painter: &egui::Painter,
@@ -469,7 +469,7 @@ fn label_job(
     resp
 }
 
-/// `text` laid out with room for its colour emoji (drawn over it afterwards), and where they are.
+/// `text` laid out with room for its color emoji (drawn over it afterwards), and where they are.
 fn job_of(text: &str, font: FontId, color: Color32, wrap: Option<f32>, one_line: bool) -> (egui::text::LayoutJob, Vec<(usize, usize, EmojiRef)>) {
     let mut job = egui::text::LayoutJob::default();
     if let Some(w) = wrap {

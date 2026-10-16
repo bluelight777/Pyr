@@ -1,6 +1,8 @@
-//! Plugins sent in for the Ingle Library: anyone can send one (no account) to the server that
-//! collects them; only its owner sees them, and what they approve is saved on their PC for
-//! building. Nothing a sender writes approves anything.
+//! Plugins and skins sent in for the Ingle Library: anyone can send one (no account) to the
+//! server that collects them; only its owner sees them, and what they approve is saved on their
+//! PC for building or listing. Nothing a sender writes approves anything. What's sent is signed
+//! with the sender's Ingle identity: only they can send a new version of it, and they can see
+//! where theirs stand (with the owner's note).
 
 use std::time::{Duration, Instant};
 
@@ -97,7 +99,7 @@ async fn plugins_reach_only_the_owner_and_approved_ones_are_saved() {
     }
     // The owner's own plugin switches collecting on, then goes.
     assert_eq!(send(&owner, plugin("Owner's tool"), Some(&key)).await, BugSend::Sent);
-    assert!(toast(&owner, "will be looked at before it's listed"));
+    assert!(toast(&owner, "Your plugin will be looked at before it's listed"));
     wait_for("on", 10, || owner.state().servers[0].info.plugin_submissions).await;
     // A stranger with no account sends one.
     assert_eq!(send(&stranger, plugin("Dice"), None).await, BugSend::Sent);
@@ -121,10 +123,10 @@ async fn plugins_reach_only_the_owner_and_approved_ones_are_saved() {
     // source saved on the owner's PC for building.
     let approved = owner.shared.config_dir.join(ingle_engine::plugins::APPROVED_DIR).join(&key);
     assert!(!approved.exists());
-    member.set_submission_status(&key, dice.id, SubmissionStatus::Approved);
+    member.set_submission_status(&key, dice.id, SubmissionStatus::Approved, String::new());
     wait_for("member can't approve", 10, || toast(&member, "Only the server's owner")).await;
     assert!(!member.shared.config_dir.join(ingle_engine::plugins::APPROVED_DIR).exists());
-    owner.set_submission_status(&key, dice.id, SubmissionStatus::Approved);
+    owner.set_submission_status(&key, dice.id, SubmissionStatus::Approved, String::new());
     let saved = approved.join(format!("{}-dice", dice.id));
     wait_for("saved", 10, || saved.join("source/src/lib.rs").exists()).await;
     assert_eq!(std::fs::read_to_string(saved.join("source/Cargo.toml")).unwrap(), "[package]\nname = \"dice\"\n");
@@ -134,7 +136,8 @@ async fn plugins_reach_only_the_owner_and_approved_ones_are_saved() {
     wait_for("approved", 10, || owner.state().submissions[&key].iter().any(|e| e.id == dice.id && e.status == SubmissionStatus::Approved)).await;
     // Rejecting doesn't save anything.
     let other = owner.state().submissions[&key].iter().find(|e| e.name == "Owner's tool").cloned().unwrap();
-    owner.set_submission_status(&key, other.id, SubmissionStatus::Rejected);
+    owner.set_submission_status(&key, other.id, SubmissionStatus::Rejected, String::new());
     wait_for("none waiting", 10, || owner.state().servers[0].info.new_plugin_submissions == 0).await;
     assert_eq!(std::fs::read_dir(&approved).unwrap().count(), 1);
 }
+

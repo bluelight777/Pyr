@@ -79,8 +79,23 @@ pub enum Act {
     /// The library owner: plugins sent in, one's files, and what becomes of one.
     ListSubmissions(String),
     OpenSubmission { key: String, id: i64 },
-    SetSubmissionStatus { key: String, id: i64, status: ingle_proto::control::SubmissionStatus },
+    /// `note` goes to the sender.
+    SetSubmissionStatus { key: String, id: i64, status: ingle_proto::control::SubmissionStatus, note: String },
     SetPluginSubmissions { key: String, on: bool },
+    /// Try a skin sent in (its files fetched with `OpenSubmission`) before approving it.
+    TrySentInSkin { key: String, id: i64 },
+    /// Back to the skin in use (stop trying one).
+    StopTryingSkin,
+    /// Wear an installed skin ("": Campfire, Ingle's own).
+    WearSkin(String),
+    InstallSkin(ingle_proto::library::SkinEntry),
+    RemoveSkin(String),
+    /// Star (or unstar) a plugin or skin in the Library (`skin:<id>` for a skin).
+    ToggleFavorite(String),
+    /// How the Library is sorted.
+    SortLibrary(String),
+    /// What I sent in to the Ingle Library, and where it stands.
+    MySubmissions,
     AddFriend(String),
     AcceptFriend(String),
     RemoveFriend(String),
@@ -182,7 +197,8 @@ pub enum Dialog {
     BugReports { key: String, filter: u8 },
     /// The Ingle Library's owner: plugins sent in (filter: 0 new, 1 approved, 2 listed,
     /// 3 rejected), and which file is open (submission id, path).
-    PluginSubmissions { key: String, filter: u8, open_file: Option<(i64, String)> },
+    /// The library owner's plugins (or `skins`) sent in.
+    PluginSubmissions { key: String, skins: bool, filter: u8, open_file: Option<(i64, String)> },
     /// Add or edit a soundboard sound (its state is in `UiState::sb`).
     SoundEditor,
     /// "Delete this sound?" (`from_settings`: go back to Server Settings after).
@@ -327,6 +343,12 @@ pub struct UiState {
     pub overlay_rects: Vec<Rect>,
     /// Text selected in a conversation, and the messages' right-click menu.
     pub sel: crate::select::Selection,
+    /// Settings opens this tab next frame (one tab sending you to another).
+    pub settings_tab_next: Option<u8>,
+    /// Settings → Claude: what's set up where.
+    pub claude_setup: Option<crate::appearance::ClaudeSetup>,
+    /// The library owner's notes to senders, by submission, being written.
+    pub submission_notes: HashMap<i64, String>,
 }
 
 pub struct IngleApp {
@@ -359,6 +381,8 @@ pub struct IngleApp {
     /// The window's title, and what it shows now (with what's unread, see `unread::Unread`).
     title: String,
     title_shown: String,
+    /// The skin on now (or one being tried), its picture and fonts.
+    pub looks: crate::looks::Looks,
 }
 
 impl IngleApp {
@@ -376,7 +400,9 @@ impl IngleApp {
         let gif_sizes = crate::giphy::GifSizes::load(&engine.shared.config_dir);
         crate::giphy::set_favorites_dir(&engine.shared.config_dir);
         let ui = UiState { members_open: true, call_chat_open: false, gif_sizes, ..Default::default() };
+        let looks = crate::looks::Looks::new(engine.shared.config_dir.clone());
         IngleApp {
+            looks,
             engine,
             ui,
             textures: HashMap::new(),
@@ -612,7 +638,47 @@ impl IngleApp {
             Act::SubmitPlugin { submission, turn_on } => e.submit_plugin(submission, turn_on.as_deref()),
             Act::ListSubmissions(key) => e.list_submissions(&key),
             Act::OpenSubmission { key, id } => e.open_submission(&key, id),
-            Act::SetSubmissionStatus { key, id, status } => e.set_submission_status(&key, id, status),
+            Act::SetSubmissionStatus { key, id, status, note } => e.set_submission_status(&key, id, status, note),
+            Act::TrySentInSkin { key, id } => {
+                let found = e.state().submission_files.get(&(key.clone(), id)).cloned();
+                let name = e.state().submissions.get(&key).and_then(|l| l.iter().find(|s| s.id == id)).map(|s| s.name.clone()).unwrap_or_default();
+                match found {
+                    Some(files) => {
+                        let files: Vec<(String, Vec<u8>)> = files.into_iter().map(|f| (f.path, ingle_proto::b64::decode(&f.data).unwrap_or_default())).collect();
+                        self.looks.try_on(crate::looks::Trial::SentIn { key, id }, name, files);
+                    }
+                    None => e.shared.state.write().toast("Open it first, so its files are here.", true),
+                }
+            }
+            Act::StopTryingSkin => self.looks.stop_trying(),
+            Act::WearSkin(id) => {
+                let settings = e.state().settings.clone();
+                e.update_settings(ingle_engine::config::Settings { skin: id, ..settings });
+            }
+            Act::InstallSkin(entry) => self.plugins.install_skin(&entry),
+            Act::RemoveSkin(id) => {
+                let settings = e.state().settings.clone();
+                if settings.skin == id {
+                    e.update_settings(ingle_engine::config::Settings { skin: String::new(), ..settings });
+                }
+                if let Err(err) = self.plugins.uninstall_skin(&id) {
+                    e.shared.state.write().toast(err, true);
+                }
+            }
+            Act::ToggleFavorite(id) => {
+                let mut settings = e.state().settings.clone();
+                if settings.library_favorites.contains(&id) {
+                    settings.library_favorites.retain(|f| f != &id);
+                } else {
+                    settings.library_favorites.push(id);
+                }
+                e.update_settings(settings);
+            }
+            Act::SortLibrary(by) => {
+                let settings = e.state().settings.clone();
+                e.update_settings(ingle_engine::config::Settings { library_sort: by, ..settings });
+            }
+            Act::MySubmissions => e.my_submissions(),
             Act::SetPluginSubmissions { key, on } => e.set_plugin_submissions(&key, on),
             Act::AddFriend(uid) => e.add_friend(&uid),
             Act::AcceptFriend(uid) => e.accept_friend(&uid),
@@ -805,6 +871,16 @@ impl eframe::App for IngleApp {
                 crate::plugins::Outcome::Toast(t, error) => acts.push(Act::Toast(t, error)),
             }
         }
+        // A skin taken out of the Ingle Library comes off (back to Campfire), like a plugin.
+        {
+            let worn = engine.state().settings.skin.clone();
+            let gone = !worn.is_empty() && self.plugins.library.as_ref().is_some_and(|l| l.find_skin(&worn).is_none()) && self.plugins.skins.get(&worn).is_some();
+            if gone {
+                let name = self.plugins.skins.get(&worn).map(|s| s.name.clone()).unwrap_or(worn);
+                acts.push(Act::WearSkin(String::new()));
+                acts.push(Act::Toast(format!("{name} was taken out of the Ingle Library, so Ingle went back to Campfire."), true));
+            }
+        }
         if crate::images::dialog_closed() {
             ctx.input_mut(|i| i.keys_down.clear());
         }
@@ -871,6 +947,16 @@ impl eframe::App for IngleApp {
                     let author = engine.state().my_name.clone();
                     self.plugins.form = Some(crate::plugins::ui::SubmitForm { gathered, author, contact: String::new(), agree: false, sends_before, scroll: true });
                 }
+                // A skin someone's making: worn until they stop (and again whenever it changes).
+                crate::images::FolderFor::TrySkin => match ingle_engine::skins::check_folder(&dir) {
+                    Ok((files, report)) if report.ok() => {
+                        let name = report.manifest.name.clone();
+                        self.looks.try_on(crate::looks::Trial::Folder { path: dir }, name.clone(), files);
+                        self.toast(&format!("Trying {name}. Save a change to its files and Ingle wears it again."), false);
+                    }
+                    Ok((_, report)) => self.toast(&format!("That skin can't be worn yet: {}", report.problems.join(" ")), true),
+                    Err(e) => self.toast(&format!("{e:#}"), true),
+                },
             }
         }
         // A direct message conversation was opened (from the member list or friends): show it,
@@ -887,6 +973,15 @@ impl eframe::App for IngleApp {
             self.show_dm(key, id);
         }
         ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        // The skin: what Ingle looks like (its picture goes under everything, so first).
+        {
+            let skin = engine.state().settings.skin.clone();
+            let plugins = &self.plugins;
+            if let Some(msg) = self.looks.step(ctx, &engine, &skin, |id| plugins.skin_files(id)) {
+                let error = !msg.starts_with("Trying");
+                engine.shared.state.write().toast(msg, error);
+            }
+        }
         {
             let (chip, updater) = (&mut self.update_chip, &self.updater);
             crate::titlebar::show(ctx, ingle_proto::APP_NAME, |ui, x, y| chip.title_chip(ui, updater, x, y));
@@ -1111,8 +1206,8 @@ pub fn avatar(
     face: Option<egui::TextureId>,
 ) {
     if speaking {
-        p.circle_filled(center, radius + 4.0, theme::GLOW.gamma_multiply(0.25));
-        p.circle_stroke(center, radius + 2.5, Stroke::new(2.5f32, theme::GLOW));
+        p.circle_filled(center, radius + 4.0, theme::GLOW().gamma_multiply(0.25));
+        p.circle_stroke(center, radius + 2.5, Stroke::new(2.5f32, theme::GLOW()));
         p.circle_stroke(center, radius + 0.5, Stroke::new(1.5f32, ring_bg));
     }
     if let Some(tex) = face {
@@ -1129,9 +1224,9 @@ pub fn avatar(
 pub fn status_dot(p: &egui::Painter, center: egui::Pos2, online: bool, bg: Color32) {
     p.circle_filled(center, 6.0, bg);
     if online {
-        p.circle_filled(center, 4.0, theme::ONLINE);
+        p.circle_filled(center, 4.0, theme::ONLINE());
     } else {
-        p.circle_stroke(center, 3.0, Stroke::new(1.5f32, theme::DIM));
+        p.circle_stroke(center, 3.0, Stroke::new(1.5f32, theme::DIM()));
     }
 }
 
@@ -1147,12 +1242,12 @@ pub fn icon_button(
     let bg = if active {
         Color32::from_rgb(0x3a, 0x2a, 0x20)
     } else if resp.hovered() {
-        theme::ELEV
+        theme::ELEV()
     } else {
         Color32::TRANSPARENT
     };
     ui.painter().rect_filled(rect, CornerRadius::same(6), bg);
-    let color = if active { theme::EMBER2 } else if resp.hovered() { theme::TEXT } else { theme::MUTED };
+    let color = if active { theme::EMBER2() } else if resp.hovered() { theme::TEXT() } else { theme::MUTED() };
     draw(ui.painter(), rect.shrink(size * 0.2), color);
     resp.on_hover_text(tooltip)
 }
@@ -1168,9 +1263,9 @@ pub fn name_color(s: &ServerView, uid: &str, role: Role) -> Color32 {
 
 pub fn role_color(role: Role) -> Color32 {
     match role {
-        Role::Owner => theme::OWNER,
-        Role::Admin => theme::ADMIN,
-        Role::Member => theme::TEXT,
+        Role::Owner => theme::OWNER(),
+        Role::Admin => theme::ADMIN(),
+        Role::Member => theme::TEXT(),
     }
 }
 
@@ -1190,6 +1285,7 @@ impl IngleApp {
             self.toasts(ctx, st);
             return;
         }
+        self.trying_banner(ctx, acts);
         // Pick a server if none selected.
         if self.ui.server.as_ref().map(|k| st.server(k).is_none()).unwrap_or(true) {
             self.ui.server = st.servers.first().map(|s| s.key.clone());
@@ -1202,7 +1298,7 @@ impl IngleApp {
             .exact_width(72.0)
             .resizable(false)
             .show_separator_line(false)
-            .frame(egui::Frame::new().fill(theme::RAIL))
+            .frame(egui::Frame::new().fill(theme::panel(theme::RAIL(), false)))
             .show(ctx, |ui| {
                 self.rail(ui, st, acts);
                 // Without a title strip of Ingle's own, the updater is at the bottom of the rail.
@@ -1247,7 +1343,7 @@ impl IngleApp {
                     .exact_width(240.0)
                     .resizable(false)
                     .show_separator_line(false)
-                    .frame(egui::Frame::new().fill(theme::SIDE))
+                    .frame(egui::Frame::new().fill(theme::panel(theme::SIDE(), false)))
                     .show(ctx, |ui| self.channel_sidebar(ui, st, &server, acts));
                 let in_call_here = st.call.as_ref().map(|c| c.server_key == server.key).unwrap_or(false);
                 if self.ui.call_view && in_call_here {
@@ -1257,14 +1353,14 @@ impl IngleApp {
                             .exact_width(340.0)
                             .resizable(false)
                             .show_separator_line(false)
-                            .frame(egui::Frame::new().fill(theme::MAIN))
+                            .frame(egui::Frame::new().fill(theme::panel(theme::MAIN(), true)))
                             .show(ctx, |ui| self.chat_view(ui, st, &server, call.channel_id, true, acts));
                     } else if self.ui.active_view.is_some() {
                         // No chat on screen: what comes in meanwhile is unread, wherever it is.
                         acts.push(Act::ClearActive);
                     }
                     egui::CentralPanel::default()
-                        .frame(egui::Frame::new().fill(theme::STAGE))
+                        .frame(egui::Frame::new().fill(theme::STAGE()))
                         .show(ctx, |ui| self.stage(ui, ctx, st, &server, acts));
                 } else {
                     let channel = self.current_channel(&server);
@@ -1273,10 +1369,10 @@ impl IngleApp {
                             .exact_width(240.0)
                             .resizable(false)
                             .show_separator_line(false)
-                            .frame(egui::Frame::new().fill(theme::SIDE))
+                            .frame(egui::Frame::new().fill(theme::panel(theme::SIDE(), false)))
                             .show(ctx, |ui| self.member_list(ui, st, &server, acts));
                     }
-                    egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::MAIN)).show(ctx, |ui| {
+                    egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::panel(theme::MAIN(), true))).show(ctx, |ui| {
                         match channel {
                             Some(c) => self.chat_view(ui, st, &server, c, false, acts),
                             None => {
@@ -1285,7 +1381,7 @@ impl IngleApp {
                                 }
                                 ui.centered_and_justified(|ui| {
                                     let msg = short_status(&server.status).map(|s| s.0).unwrap_or_else(|| "No channels yet.".into());
-                                    ui.label(RichText::new(msg).color(theme::MUTED));
+                                    ui.label(RichText::new(msg).color(theme::MUTED()));
                                 });
                             }
                         }
@@ -1297,7 +1393,7 @@ impl IngleApp {
                     acts.push(Act::ClearActive);
                 }
                 egui::CentralPanel::default()
-                    .frame(egui::Frame::new().fill(theme::MAIN))
+                    .frame(egui::Frame::new().fill(theme::panel(theme::MAIN(), true)))
                     .show(ctx, |ui| self.welcome(ui, st, acts));
             }
         }
@@ -1344,7 +1440,7 @@ impl IngleApp {
         };
         let mut chose = false;
         let area = egui::Area::new(egui::Id::new("profile-card")).order(egui::Order::Foreground).fixed_pos(at).constrain(true).show(ctx, |ui| {
-            egui::Frame::popup(ui.style()).fill(theme::SIDE).inner_margin(16).corner_radius(10).show(ui, |ui| {
+            egui::Frame::popup(ui.style()).fill(theme::SIDE()).inner_margin(16).corner_radius(10).show(ui, |ui| {
                 ui.set_width(260.0);
                 let member = s.members.get(&uid);
                 let name = s.member_name(&uid);
@@ -1352,14 +1448,14 @@ impl IngleApp {
                 let online = member.map(|m| m.online).unwrap_or(false);
                 let (r, _) = ui.allocate_exact_size(vec2(72.0, 72.0), Sense::hover());
                 let face = self.face(ui.ctx(), s, &uid);
-                avatar(ui.painter(), r.center(), 34.0, &uid, &name, false, theme::SIDE, face);
-                status_dot(ui.painter(), r.center() + vec2(25.0, 25.0), online, theme::SIDE);
+                avatar(ui.painter(), r.center(), 34.0, &uid, &name, false, theme::SIDE(), face);
+                status_dot(ui.painter(), r.center() + vec2(25.0, 25.0), online, theme::SIDE());
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(&name).font(theme::bold_font(19.0)).color(name_color(s, &uid, role)));
                     if role == Role::Owner {
                         let (cr, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
-                        icons::crown(ui.painter(), cr, theme::OWNER);
+                        icons::crown(ui.painter(), cr, theme::OWNER());
                     }
                 });
                 let how = match st.relation(&uid) {
@@ -1371,17 +1467,17 @@ impl IngleApp {
                     None => None,
                 };
                 if let Some(how) = how {
-                    ui.label(RichText::new(how).size(12.5).color(theme::MUTED));
+                    ui.label(RichText::new(how).size(12.5).color(theme::MUTED()));
                 }
                 ui.add_space(8.0);
                 ui.separator();
                 let roles = s.roles_of(&uid);
                 if !roles.is_empty() {
-                    ui.label(RichText::new("ROLES").font(theme::bold_font(11.0)).color(theme::DIM));
+                    ui.label(RichText::new("ROLES").font(theme::bold_font(11.0)).color(theme::DIM()));
                     ui.horizontal_wrapped(|ui| {
                         for r in roles {
-                            let col = if r.color != 0 { rgb(r.color) } else { theme::TEXT };
-                            egui::Frame::new().fill(theme::ELEV).corner_radius(4).inner_margin(egui::Margin::symmetric(6, 2)).show(ui, |ui| {
+                            let col = if r.color != 0 { rgb(r.color) } else { theme::TEXT() };
+                            egui::Frame::new().fill(theme::ELEV()).corner_radius(4).inner_margin(egui::Margin::symmetric(6, 2)).show(ui, |ui| {
                                 ui.label(RichText::new(&r.name).size(12.0).color(col));
                             });
                         }
@@ -1389,12 +1485,12 @@ impl IngleApp {
                     ui.add_space(6.0);
                 }
                 if let Some(joined) = member.map(|m| m.joined_at).filter(|t| *t > 0) {
-                    ui.label(RichText::new("MEMBER SINCE").font(theme::bold_font(11.0)).color(theme::DIM));
-                    ui.label(RichText::new(crate::chat::member_since(joined)).size(13.0).color(theme::TEXT));
+                    ui.label(RichText::new("MEMBER SINCE").font(theme::bold_font(11.0)).color(theme::DIM()));
+                    ui.label(RichText::new(crate::chat::member_since(joined)).size(13.0).color(theme::TEXT()));
                     ui.add_space(6.0);
                 }
-                ui.label(RichText::new("SAFETY CODE").font(theme::bold_font(11.0)).color(theme::DIM));
-                ui.label(RichText::new(ingle_proto::crypto::safety_code(&uid)).font(theme::mono(12.5)).color(theme::MUTED))
+                ui.label(RichText::new("SAFETY CODE").font(theme::bold_font(11.0)).color(theme::DIM()));
+                ui.label(RichText::new(ingle_proto::crypto::safety_code(&uid)).font(theme::mono(12.5)).color(theme::MUTED()))
                     .on_hover_text("Compare it with theirs (on the welcome screen) to be sure it's really them.");
                 // Sharing their screen: watch it from here, like Discord's Watch Stream. From
                 // another voice channel (or none), it joins theirs first.
@@ -1455,7 +1551,7 @@ impl IngleApp {
         chose |= crate::calls::call_item(ui, st, uid, Some(&s.key), acts);
         if !me {
             ui.separator();
-            ui.label(RichText::new("User volume").size(12.0).color(theme::MUTED));
+            ui.label(RichText::new("User volume").size(12.0).color(theme::MUTED()));
             let mut v = st.user_volumes.get(uid).copied().unwrap_or(1.0) * 100.0;
             if ui.add(egui::Slider::new(&mut v, 0.0..=200.0).suffix("%")).changed() {
                 acts.push(Act::Volume { uid: uid.to_string(), volume: v / 100.0 });
@@ -1489,7 +1585,7 @@ impl IngleApp {
         }
         if !me && s.can(perm::KICK) && s.rank(uid) < s.rank(&st.my_uid) {
             ui.separator();
-            if ui.button(RichText::new(format!("Kick {name}")).color(theme::LIVE)).clicked() {
+            if ui.button(RichText::new(format!("Kick {name}")).color(theme::LIVE())).clicked() {
                 acts.push(Act::Kick { key: s.key.clone(), uid: uid.to_string(), ban: false });
                 chose = true;
             }
@@ -1535,7 +1631,7 @@ impl IngleApp {
                     .or_else(|| server.group(channel).map(|g| server.group_name(g, &st.my_uid)))
                     .unwrap_or_default();
                 let b = Rect::from_center_size(r.center(), vec2(420.0, 120.0));
-                ui.painter().rect_filled(b, CornerRadius::same(14), theme::EMBER);
+                ui.painter().rect_filled(b, CornerRadius::same(14), theme::EMBER());
                 ui.painter().text(b.center() - vec2(0.0, 12.0), egui::Align2::CENTER_CENTER, "Drop images to send", theme::bold_font(20.0), Color32::from_rgb(0x1b, 0x14, 0x11));
                 ui.painter().text(b.center() + vec2(0.0, 18.0), egui::Align2::CENTER_CENTER, format!("in {name}"), theme::font(14.0), Color32::from_rgb(0x3a, 0x22, 0x14));
             });
@@ -1574,20 +1670,20 @@ impl IngleApp {
             // Home: friends and direct messages.
             let (r, resp) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::click());
             let home = self.ui.home;
-            let fill = if home { Color32::from_rgb(0x4a, 0x30, 0x22) } else if resp.hovered() { theme::ELEV2 } else { Color32::from_rgb(0x24, 0x1d, 0x19) };
+            let fill = if home { Color32::from_rgb(0x4a, 0x30, 0x22) } else if resp.hovered() { theme::ELEV2() } else { Color32::from_rgb(0x24, 0x1d, 0x19) };
             ui.painter().rect_filled(r, CornerRadius::same(if home || resp.hovered() { 16 } else { 24 }), fill);
             icons::flame(ui.painter(), r.shrink(10.0));
             if home || resp.hovered() {
                 let pill = Rect::from_center_size(pos2(ui.max_rect().left() + 2.0, r.center().y), vec2(4.0, if home { 40.0 } else { 20.0 }));
-                ui.painter().rect_filled(pill, CornerRadius::same(2), theme::TEXT);
+                ui.painter().rect_filled(pill, CornerRadius::same(2), theme::TEXT());
             }
             // (Direct messages and groups count here, not on their server's icon.)
             let dm_count: u32 = st.servers.iter().map(|s| s.mentions.iter().filter(|(c, _)| s.is_private(**c)).map(|(_, n)| n).sum::<u32>()).sum::<u32>()
                 + st.relations().iter().filter(|r| r.1 == ingle_proto::control::RelationKind::Incoming).count() as u32;
             if dm_count > 0 {
                 let c = r.right_bottom() - vec2(6.0, 6.0);
-                ui.painter().circle_filled(c, 9.0, theme::RAIL);
-                ui.painter().circle_filled(c, 7.5, theme::LIVE);
+                ui.painter().circle_filled(c, 9.0, theme::RAIL());
+                ui.painter().circle_filled(c, 7.5, theme::LIVE());
                 ui.painter().text(c, egui::Align2::CENTER_CENTER, dm_count.min(99).to_string(), theme::bold_font(10.0), Color32::WHITE);
             }
             if resp.on_hover_text("Direct messages").clicked() {
@@ -1620,21 +1716,21 @@ impl IngleApp {
                     (Some(w), _) => {
                         let name = s.member_name(w);
                         let face = self.face(ui.ctx(), s, w);
-                        avatar(ui.painter(), r.center(), 24.0, w, &name, false, theme::RAIL, face);
+                        avatar(ui.painter(), r.center(), 24.0, w, &name, false, theme::RAIL(), face);
                         name
                     }
                     (None, Some(g)) => {
                         let p = ui.painter().clone();
-                        crate::calls::group_picture(self, &p, ui.ctx(), s, g, &st.my_uid, r.center(), 24.0, theme::RAIL);
+                        crate::calls::group_picture(self, &p, ui.ctx(), s, g, &st.my_uid, r.center(), 24.0, theme::RAIL());
                         s.group_name(g, &st.my_uid)
                     }
                     (None, None) => continue,
                 };
                 let pill = Rect::from_center_size(pos2(ui.max_rect().left() + 2.0, r.center().y), vec2(4.0, if resp.hovered() { 20.0 } else { 8.0 }));
-                ui.painter().rect_filled(pill, CornerRadius::same(2), theme::TEXT);
+                ui.painter().rect_filled(pill, CornerRadius::same(2), theme::TEXT());
                 let c = r.right_bottom() - vec2(6.0, 6.0);
-                ui.painter().circle_filled(c, 9.0, theme::RAIL);
-                ui.painter().circle_filled(c, 7.5, theme::LIVE);
+                ui.painter().circle_filled(c, 9.0, theme::RAIL());
+                ui.painter().circle_filled(c, 7.5, theme::LIVE());
                 ui.painter().text(c, egui::Align2::CENTER_CENTER, n.min(99).to_string(), theme::bold_font(10.0), Color32::WHITE);
                 let tip = format!("{name}: {n} unread message{}", if n == 1 { "" } else { "s" });
                 if resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tip).clicked() {
@@ -1646,7 +1742,7 @@ impl IngleApp {
             }
             ui.add_space(6.0);
             let (sep, _) = ui.allocate_exact_size(vec2(32.0, 2.0), Sense::hover());
-            ui.painter().rect_filled(sep, CornerRadius::same(1), theme::LINE);
+            ui.painter().rect_filled(sep, CornerRadius::same(1), theme::LINE());
             ui.add_space(6.0);
             for s in &st.servers {
                 let selected = !self.ui.home && !self.ui.plugins_open && self.ui.server.as_deref() == Some(s.key.as_str());
@@ -1654,15 +1750,15 @@ impl IngleApp {
                 let hovered = resp.hovered();
                 let radius = if selected || hovered { 16 } else { 24 };
                 let fill = if selected {
-                    theme::EMBER
+                    theme::EMBER()
                 } else if hovered {
-                    theme::ELEV2
+                    theme::ELEV2()
                 } else {
-                    theme::ELEV
+                    theme::ELEV()
                 };
                 let icon = self.server_icon(ui.ctx(), s);
                 // A server's own icon is drawn as it is (see-through parts stay see-through, like
-                // Discord); the coloured tile is only behind initials. The pill on the left shows
+                // Discord); the colored tile is only behind initials. The pill on the left shows
                 // which server is open.
                 if icon.is_none() {
                     ui.painter().rect_filled(rect, CornerRadius::same(radius), fill);
@@ -1678,7 +1774,7 @@ impl IngleApp {
                     .take(2)
                     .collect::<String>()
                     .to_uppercase();
-                let tc = if selected { Color32::from_rgb(0x1b, 0x14, 0x11) } else { theme::TEXT };
+                let tc = if selected { Color32::from_rgb(0x1b, 0x14, 0x11) } else { theme::TEXT() };
                 if icon.is_none() {
                     ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, initials, theme::bold_font(15.0), tc);
                 }
@@ -1688,19 +1784,19 @@ impl IngleApp {
                 let pill_h = if selected { 40.0 } else if hovered { 20.0 } else if unread { 8.0 } else { 0.0 };
                 if pill_h > 0.0 {
                     let pill = Rect::from_center_size(pos2(ui.max_rect().left() + 2.0, rect.center().y), vec2(4.0, pill_h));
-                    ui.painter().rect_filled(pill, CornerRadius::same(2), theme::TEXT);
+                    ui.painter().rect_filled(pill, CornerRadius::same(2), theme::TEXT());
                 }
                 let mentions: u32 = s.mentions.iter().filter(|(c, _)| !s.is_private(**c)).map(|(_, n)| n).sum();
                 if mentions > 0 {
                     let c = rect.right_bottom() - vec2(6.0, 6.0);
-                    ui.painter().circle_filled(c, 9.0, theme::RAIL);
-                    ui.painter().circle_filled(c, 7.5, theme::LIVE);
+                    ui.painter().circle_filled(c, 9.0, theme::RAIL());
+                    ui.painter().circle_filled(c, 7.5, theme::LIVE());
                     ui.painter().text(c, egui::Align2::CENTER_CENTER, mentions.min(99).to_string(), theme::bold_font(10.0), Color32::WHITE);
                 }
                 if !s.status.is_connected() {
                     let c = rect.right_top() + vec2(-6.0, 6.0);
-                    let col = if matches!(s.status, ConnStatus::Failed(_)) { theme::LIVE } else { theme::DIM };
-                    ui.painter().circle_filled(c, 6.0, theme::RAIL);
+                    let col = if matches!(s.status, ConnStatus::Failed(_)) { theme::LIVE() } else { theme::DIM() };
+                    ui.painter().circle_filled(c, 6.0, theme::RAIL());
                     ui.painter().circle_filled(c, 4.0, col);
                 }
                 if resp.clicked() {
@@ -1735,7 +1831,7 @@ impl IngleApp {
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button(RichText::new("Leave server").color(theme::LIVE)).clicked() {
+                    if ui.button(RichText::new("Leave server").color(theme::LIVE())).clicked() {
                         self.ui.dialog = Some(Dialog::LeaveServer { key: key.clone(), name: name.clone() });
                         ui.close();
                     }
@@ -1743,9 +1839,9 @@ impl IngleApp {
                 ui.add_space(8.0);
             }
             let (rect, resp) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::click());
-            let fill = if resp.hovered() { theme::EMBER } else { theme::ELEV };
+            let fill = if resp.hovered() { theme::EMBER() } else { theme::ELEV() };
             ui.painter().rect_filled(rect, CornerRadius::same(if resp.hovered() { 16 } else { 24 }), fill);
-            icons::plus(ui.painter(), rect.shrink(12.0), if resp.hovered() { theme::RAIL } else { theme::EMBER }, 2.5);
+            icons::plus(ui.painter(), rect.shrink(12.0), if resp.hovered() { theme::RAIL() } else { theme::EMBER() }, 2.5);
             if resp.on_hover_text("Add a server").clicked() {
                 self.ui.dialog = Some(Dialog::AddChoice);
             }
@@ -1760,29 +1856,29 @@ impl IngleApp {
         egui::TopBottomPanel::bottom("user-panel")
             .exact_height(56.0)
             .show_separator_line(false)
-            .frame(egui::Frame::new().fill(theme::SIDE_DARK).inner_margin(egui::Margin::symmetric(8, 0)))
+            .frame(egui::Frame::new().fill(theme::panel(theme::SIDE_DARK(), false)).inner_margin(egui::Margin::symmetric(8, 0)))
             .show_inside(ui, |ui| self.user_panel(ui, st, acts));
         if let Some(call) = st.call.as_ref() {
             egui::TopBottomPanel::bottom("voice-panel")
                 .exact_height(crate::app::voice_panel_height(st, call))
                 .show_separator_line(false)
-                .frame(egui::Frame::new().fill(theme::SIDE_DARK).inner_margin(egui::Margin::symmetric(10, 8)))
+                .frame(egui::Frame::new().fill(theme::panel(theme::SIDE_DARK(), false)).inner_margin(egui::Margin::symmetric(10, 8)))
                 .show_inside(ui, |ui| self.voice_panel(ui, st, call, acts));
         } else if st.voice_rejoin.is_some() {
             egui::TopBottomPanel::bottom("voice-panel")
                 .exact_height(56.0)
                 .show_separator_line(false)
-                .frame(egui::Frame::new().fill(theme::SIDE_DARK).inner_margin(egui::Margin::symmetric(10, 8)))
+                .frame(egui::Frame::new().fill(theme::panel(theme::SIDE_DARK(), false)).inner_margin(egui::Margin::symmetric(10, 8)))
                 .show_inside(ui, |ui| self.rejoin_panel(ui, st, acts));
         }
         // Header
         egui::TopBottomPanel::top("server-header")
             .exact_height(48.0)
             .show_separator_line(false)
-            .frame(egui::Frame::new().fill(theme::SIDE).inner_margin(egui::Margin::symmetric(16, 0)))
+            .frame(egui::Frame::new().fill(theme::inner(theme::SIDE(), false)).inner_margin(egui::Margin::symmetric(16, 0)))
             .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
-                    let title = ui.add(egui::Label::new(RichText::new(&s.name).font(theme::bold_font(15.5)).color(theme::TEXT)).truncate().sense(Sense::click()));
+                    let title = ui.add(egui::Label::new(RichText::new(&s.name).font(theme::bold_font(15.5)).color(theme::TEXT())).truncate().sense(Sense::click()));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if icon_button(ui, 26.0, "Invite people", false, |p, r, c| icons::plus(p, r, c, 2.0)).clicked() {
                             acts.push(Act::CreateInvite { key: s.key.clone() });
@@ -1795,12 +1891,12 @@ impl IngleApp {
                     }
                 });
                 let r = ui.max_rect();
-                ui.painter().line_segment([pos2(r.left() - 16.0, r.bottom()), pos2(r.right() + 16.0, r.bottom())], Stroke::new(1.0f32, theme::SHADOW_LINE));
+                ui.painter().line_segment([pos2(r.left() - 16.0, r.bottom()), pos2(r.right() + 16.0, r.bottom())], Stroke::new(1.0f32, theme::SHADOW_LINE()));
             });
 
         if let Some((msg, failed)) = short_status(&s.status) {
-            egui::Frame::new().fill(if failed { Color32::from_rgb(0x4a, 0x1f, 0x1f) } else { theme::ELEV }).inner_margin(8).corner_radius(6).outer_margin(8).show(ui, |ui| {
-                ui.label(RichText::new(msg).color(theme::TEXT).size(12.5));
+            egui::Frame::new().fill(if failed { Color32::from_rgb(0x4a, 0x1f, 0x1f) } else { theme::ELEV() }).inner_margin(8).corner_radius(6).outer_margin(8).show(ui, |ui| {
+                ui.label(RichText::new(msg).color(theme::TEXT()).size(12.5));
                 if ui.small_button("Retry now").clicked() {
                     acts.push(Act::Retry(s.key.clone()));
                 }
@@ -1816,15 +1912,15 @@ impl IngleApp {
                 let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
                 let row = r.shrink2(vec2(8.0, 1.0));
                 if resp.hovered() {
-                    ui.painter().rect_filled(row, CornerRadius::same(6), theme::ELEV);
+                    ui.painter().rect_filled(row, CornerRadius::same(6), theme::ELEV());
                 }
-                ui.painter().text(row.left_center() + vec2(12.0, 0.0), egui::Align2::LEFT_CENTER, "!", theme::bold_font(17.0), theme::MUTED);
-                ui.painter().text(row.left_center() + vec2(32.0, 0.0), egui::Align2::LEFT_CENTER, "Bug reports", theme::font(15.0), theme::MUTED);
+                ui.painter().text(row.left_center() + vec2(12.0, 0.0), egui::Align2::LEFT_CENTER, "!", theme::bold_font(17.0), theme::MUTED());
+                ui.painter().text(row.left_center() + vec2(32.0, 0.0), egui::Align2::LEFT_CENTER, "Bug reports", theme::font(15.0), theme::MUTED());
                 let n = s.info.new_bug_reports;
                 if n > 0 {
                     let t = if n > 99 { "99+".to_string() } else { n.to_string() };
                     let b = Rect::from_center_size(pos2(row.right() - 18.0, row.center().y), vec2(14.0 + 7.0 * t.len() as f32, 18.0));
-                    ui.painter().rect_filled(b, CornerRadius::same(9), theme::LIVE);
+                    ui.painter().rect_filled(b, CornerRadius::same(9), theme::LIVE());
                     ui.painter().text(b.center(), egui::Align2::CENTER_CENTER, t, theme::bold_font(11.5), Color32::WHITE);
                 }
                 if resp.on_hover_text("Ingle bug reports people sent here. Only you see this.").clicked() {
@@ -1833,24 +1929,34 @@ impl IngleApp {
                 }
                 ui.add_space(6.0);
             }
-            // And the plugins sent in for the Ingle Library (when this server collects them).
+            // And the plugins and skins sent in for the Ingle Library (when this server
+            // collects them).
             if owner && s.info.plugin_submissions {
-                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
-                let row = r.shrink2(vec2(8.0, 1.0));
-                if resp.hovered() {
-                    ui.painter().rect_filled(row, CornerRadius::same(6), theme::ELEV);
-                }
-                icons::puzzle(ui.painter(), Rect::from_center_size(row.left_center() + vec2(14.0, 0.0), vec2(15.0, 15.0)), theme::MUTED);
-                ui.painter().text(row.left_center() + vec2(32.0, 0.0), egui::Align2::LEFT_CENTER, "Plugins sent in", theme::font(15.0), theme::MUTED);
-                let n = s.info.new_plugin_submissions;
-                if n > 0 {
-                    let t = if n > 99 { "99+".to_string() } else { n.to_string() };
-                    let b = Rect::from_center_size(pos2(row.right() - 18.0, row.center().y), vec2(14.0 + 7.0 * t.len() as f32, 18.0));
-                    ui.painter().rect_filled(b, CornerRadius::same(9), theme::LIVE);
-                    ui.painter().text(b.center(), egui::Align2::CENTER_CENTER, t, theme::bold_font(11.5), Color32::WHITE);
-                }
-                if resp.on_hover_text("Plugins people sent in for the Ingle Library. Only you see this.").clicked() {
-                    crate::plugins::ui::open_submissions(self, &s.key, acts);
+                for skins in [false, true] {
+                    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
+                    let row = r.shrink2(vec2(8.0, 1.0));
+                    if resp.hovered() {
+                        ui.painter().rect_filled(row, CornerRadius::same(6), theme::ELEV());
+                    }
+                    let icon = Rect::from_center_size(row.left_center() + vec2(14.0, 0.0), vec2(15.0, 15.0));
+                    if skins {
+                        icons::palette(ui.painter(), icon);
+                    } else {
+                        icons::puzzle(ui.painter(), icon, theme::MUTED());
+                    }
+                    let label = if skins { "Skins sent in" } else { "Plugins sent in" };
+                    ui.painter().text(row.left_center() + vec2(32.0, 0.0), egui::Align2::LEFT_CENTER, label, theme::font(15.0), theme::MUTED());
+                    let n = if skins { s.info.new_skin_submissions } else { s.info.new_plugin_submissions };
+                    if n > 0 {
+                        let t = if n > 99 { "99+".to_string() } else { n.to_string() };
+                        let b = Rect::from_center_size(pos2(row.right() - 18.0, row.center().y), vec2(14.0 + 7.0 * t.len() as f32, 18.0));
+                        ui.painter().rect_filled(b, CornerRadius::same(9), theme::LIVE());
+                        ui.painter().text(b.center(), egui::Align2::CENTER_CENTER, t, theme::bold_font(11.5), Color32::WHITE);
+                    }
+                    let tip = if skins { "Skins people sent in for the Ingle Library. Only you see this." } else { "Plugins people sent in for the Ingle Library. Only you see this." };
+                    if resp.on_hover_text(tip).clicked() {
+                        crate::plugins::ui::open_submissions(self, &s.key, acts, skins);
+                    }
                 }
                 ui.add_space(6.0);
             }
@@ -1858,7 +1964,7 @@ impl IngleApp {
                 ui.horizontal(|ui| {
                     ui.add_space(16.0);
                     let label = if kind == ChannelKind::Text { "TEXT CHANNELS" } else { "VOICE CHANNELS" };
-                    ui.label(RichText::new(label).font(theme::bold_font(11.5)).color(theme::DIM));
+                    ui.label(RichText::new(label).font(theme::bold_font(11.5)).color(theme::DIM()));
                     if s.can(perm::MANAGE_CHANNELS) {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             ui.add_space(8.0);
@@ -1882,34 +1988,34 @@ impl IngleApp {
                     // bubble the row itself isn't "hovered", and going by that made the bubble
                     // blink (and miss clicks).
                     let hot = ui.rect_contains_pointer(rect);
-                    let bg = if selected { theme::ELEV2 } else if hot { theme::ELEV } else { Color32::TRANSPARENT };
+                    let bg = if selected { theme::ELEV2() } else if hot { theme::ELEV() } else { Color32::TRANSPARENT };
                     ui.painter().rect_filled(rect, CornerRadius::same(6), bg);
                     let icon_rect = Rect::from_min_size(rect.left_top() + vec2(8.0, 7.0), vec2(18.0, 18.0));
                     let fg = if selected || unread || hot {
-                        theme::TEXT
+                        theme::TEXT()
                     } else if st.is_muted(&s.key, c.id) {
-                        theme::DIM
+                        theme::DIM()
                     } else {
-                        theme::MUTED
+                        theme::MUTED()
                     };
                     if kind == ChannelKind::Text {
-                        icons::hash(ui.painter(), icon_rect, theme::DIM);
+                        icons::hash(ui.painter(), icon_rect, theme::DIM());
                     } else {
-                        icons::speaker(ui.painter(), icon_rect, if in_this_call { theme::ONLINE } else { theme::DIM });
+                        icons::speaker(ui.painter(), icon_rect, if in_this_call { theme::ONLINE() } else { theme::DIM() });
                     }
                     let font = if unread { theme::bold_font(14.5) } else { theme::font(14.5) };
-                    // (In colour, emoji and all; room kept for the badges on the right.)
+                    // (In color, emoji and all; room kept for the badges on the right.)
                     let room = (rect.width() - 34.0 - 44.0).max(40.0);
                     crate::emoji::paint_text(ui.painter(), rect.left_center() + vec2(34.0, 0.0), egui::Align2::LEFT_CENTER, &c.name, font, fg, Some(room));
                     if mentions > 0 {
                         let b = Rect::from_center_size(rect.right_center() - vec2(18.0, 0.0), vec2(22.0, 16.0));
-                        ui.painter().rect_filled(b, CornerRadius::same(8), theme::LIVE);
+                        ui.painter().rect_filled(b, CornerRadius::same(8), theme::LIVE());
                         ui.painter().text(b.center(), egui::Align2::CENTER_CENTER, mentions.to_string(), theme::bold_font(11.0), Color32::WHITE);
                     }
                     // Unread (text channels, and voice channels' chats): the dot on the left.
                     if unread || mentions > 0 {
                         let p = pos2(rect.left() - 6.0, rect.center().y);
-                        ui.painter().rect_filled(Rect::from_center_size(p, vec2(4.0, 8.0)), CornerRadius::same(2), theme::TEXT);
+                        ui.painter().rect_filled(Rect::from_center_size(p, vec2(4.0, 8.0)), CornerRadius::same(2), theme::TEXT());
                     }
                     // Voice channels: a chat bubble opens the channel's text chat without joining.
                     // Always there to click; shown while the pointer is on the row (or unread).
@@ -1921,9 +2027,9 @@ impl IngleApp {
                         let cresp = ui.interact(cr, ui.id().with(("chat", c.id)), Sense::click());
                         if hot || unread {
                             if cresp.hovered() {
-                                ui.painter().rect_filled(cr, CornerRadius::same(5), theme::ELEV2);
+                                ui.painter().rect_filled(cr, CornerRadius::same(5), theme::ELEV2());
                             }
-                            icons::chat(ui.painter(), cr.shrink(5.0), if cresp.hovered() || unread { theme::TEXT } else { theme::MUTED });
+                            icons::chat(ui.painter(), cr.shrink(5.0), if cresp.hovered() || unread { theme::TEXT() } else { theme::MUTED() });
                         }
                         if cresp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Open chat").clicked() {
                             chat_clicked = true;
@@ -1964,7 +2070,7 @@ impl IngleApp {
                                 self.ui.dialog = Some(Dialog::EditChannel { key: key.clone(), channel: cid, name: cname.clone(), topic: ctopic.clone() });
                                 ui.close();
                             }
-                            if ui.button(RichText::new("Delete channel").color(theme::LIVE)).clicked() {
+                            if ui.button(RichText::new("Delete channel").color(theme::LIVE())).clicked() {
                                 acts.push(Act::DeleteChannel { key: key.clone(), channel: cid });
                                 ui.close();
                             }
@@ -1986,36 +2092,36 @@ impl IngleApp {
                             let pointer_in = presp.contains_pointer();
                             let card_open = self.ui.profile_card.as_ref().is_some_and(|(k, u, _)| *k == s.key && *u == uid);
                             if pointer_in || card_open {
-                                ui.painter().rect_filled(row, CornerRadius::same(6), theme::HOVER);
+                                ui.painter().rect_filled(row, CornerRadius::same(6), theme::HOVER());
                             }
                             // (A hair in from the name's first letter, as in Discord.)
                             let center = pos2(indent + 13.5, r.center().y);
                             let face = self.face(ui.ctx(), s, &uid);
-                            avatar(ui.painter(), center, 12.0, &uid, &name, speaking.contains(&p.session), theme::SIDE, face);
-                            let col = if speaking.contains(&p.session) || pointer_in { theme::TEXT } else { theme::MUTED };
+                            avatar(ui.painter(), center, 12.0, &uid, &name, speaking.contains(&p.session), theme::SIDE(), face);
+                            let col = if speaking.contains(&p.session) || pointer_in { theme::TEXT() } else { theme::MUTED() };
                             let mut x = r.right() - 10.0;
                             if p.tracks.iter().any(|t| t.id == ingle_proto::media::track::SCREEN) {
                                 let b = Rect::from_min_max(pos2(x - 34.0, r.center().y - 8.0), pos2(x, r.center().y + 8.0));
-                                ui.painter().rect_filled(b, CornerRadius::same(4), theme::LIVE);
+                                ui.painter().rect_filled(b, CornerRadius::same(4), theme::LIVE());
                                 ui.painter().text(b.center(), egui::Align2::CENTER_CENTER, "LIVE", theme::bold_font(10.0), Color32::WHITE);
                                 x -= 40.0;
                             }
                             if p.tracks.iter().any(|t| t.id == ingle_proto::media::track::CAMERA) {
-                                icons::camera(ui.painter(), Rect::from_center_size(pos2(x - 8.0, r.center().y), vec2(16.0, 16.0)), theme::DIM, false);
+                                icons::camera(ui.painter(), Rect::from_center_size(pos2(x - 8.0, r.center().y), vec2(16.0, 16.0)), theme::DIM(), false);
                                 x -= 20.0;
                             }
                             // Deafened (red: by a moderator), and muted (red: by a moderator), like
                             // Discord's; deafening yourself mutes you too, so that shows just the one.
                             if p.server_deaf || p.self_deaf {
-                                let c = if p.server_deaf { theme::LIVE } else { theme::DIM };
+                                let c = if p.server_deaf { theme::LIVE() } else { theme::DIM() };
                                 icons::headphones(ui.painter(), Rect::from_center_size(pos2(x - 8.0, r.center().y), vec2(16.0, 16.0)), c, true);
                                 x -= 20.0;
                             }
                             if p.server_mute {
-                                icons::mic(ui.painter(), Rect::from_center_size(pos2(x - 8.0, r.center().y), vec2(16.0, 16.0)), theme::LIVE, true);
+                                icons::mic(ui.painter(), Rect::from_center_size(pos2(x - 8.0, r.center().y), vec2(16.0, 16.0)), theme::LIVE(), true);
                                 x -= 20.0;
                             } else if p.self_mute && !p.self_deaf {
-                                icons::mic(ui.painter(), Rect::from_center_size(pos2(x - 8.0, r.center().y), vec2(16.0, 16.0)), theme::DIM, true);
+                                icons::mic(ui.painter(), Rect::from_center_size(pos2(x - 8.0, r.center().y), vec2(16.0, 16.0)), theme::DIM(), true);
                                 x -= 20.0;
                             }
                             // Hovering someone: a button to message them (like the chat bubble on a
@@ -2044,7 +2150,7 @@ impl IngleApp {
                             if can_dm && pointer_in {
                                 let br = Rect::from_center_size(pos2(x - 10.0, r.center().y), vec2(22.0, 22.0));
                                 let bresp = ui.interact(br, ui.id().with(("dm", c.id, &uid)), Sense::click());
-                                icons::chat(ui.painter(), br.shrink(3.0), if bresp.hovered() { theme::TEXT } else { theme::MUTED });
+                                icons::chat(ui.painter(), br.shrink(3.0), if bresp.hovered() { theme::TEXT() } else { theme::MUTED() });
                                 if bresp.on_hover_text(format!("Message {name}")).clicked() {
                                     acts.push(Act::OpenDm { key: s.key.clone(), uid: uid.clone() });
                                     dm_clicked = true;
@@ -2094,15 +2200,15 @@ impl IngleApp {
         let channel_name = st.call_place(&r.server_key, r.channel_id);
         ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
-            icons::signal(ui.painter(), rect, theme::EMBER2);
+            icons::signal(ui.painter(), rect, theme::EMBER2());
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
-                ui.label(RichText::new("Reconnecting…").font(theme::bold_font(13.5)).color(theme::EMBER2));
+                ui.label(RichText::new("Reconnecting…").font(theme::bold_font(13.5)).color(theme::EMBER2()));
                 let w = ui.available_width();
-                crate::emoji::label_line(ui, &format!("{channel_name} · the server is restarting"), theme::font(12.0), theme::MUTED, w, &mut |_| None);
+                crate::emoji::label_line(ui, &format!("{channel_name} · the server is restarting"), theme::font(12.0), theme::MUTED(), w, &mut |_| None);
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if icon_button(ui, 32.0, "Disconnect", false, |p, r, _| icons::hangup(p, r, theme::TEXT)).clicked() {
+                if icon_button(ui, 32.0, "Disconnect", false, |p, r, _| icons::hangup(p, r, theme::TEXT())).clicked() {
                     acts.push(Act::Leave);
                 }
             });
@@ -2117,13 +2223,13 @@ impl IngleApp {
         let dm_call = st.is_dm_call(&call.server_key, call.channel_id);
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
-            icons::signal(ui.painter(), r, theme::ONLINE);
+            icons::signal(ui.painter(), r, theme::ONLINE());
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
-                let label = ui.add(egui::Label::new(RichText::new("Voice Connected").font(theme::bold_font(13.5)).color(theme::ONLINE)).sense(Sense::click()));
+                let label = ui.add(egui::Label::new(RichText::new("Voice Connected").font(theme::bold_font(13.5)).color(theme::ONLINE())).sense(Sense::click()));
                 let srv = server.map(|s| s.name.clone()).unwrap_or_default();
                 let w = ui.available_width();
-                crate::emoji::label_line(ui, &format!("{channel_name} · {} ms", call.stats.rtt_ms), theme::font(12.0), theme::MUTED, w, &mut |_| None)
+                crate::emoji::label_line(ui, &format!("{channel_name} · {} ms", call.stats.rtt_ms), theme::font(12.0), theme::MUTED(), w, &mut |_| None)
                     .on_hover_text(format!("{channel_name} / {srv}"));
                 if label.clicked() {
                     if dm_call {
@@ -2137,7 +2243,7 @@ impl IngleApp {
                 }
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if icon_button(ui, 32.0, "Disconnect", false, |p, r, _| icons::hangup(p, r, theme::TEXT)).clicked() {
+                if icon_button(ui, 32.0, "Disconnect", false, |p, r, _| icons::hangup(p, r, theme::TEXT())).clicked() {
                     acts.push(Act::Leave);
                 }
             });
@@ -2147,9 +2253,9 @@ impl IngleApp {
             let w = (ui.available_width() - 3.0 * ui.spacing().item_spacing.x) / 4.0;
             let btn = |ui: &mut egui::Ui, active: bool, tip: &str, draw: &dyn Fn(&egui::Painter, Rect, Color32)| {
                 let (rect, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
-                let bg = if active { Color32::from_rgb(0x3a, 0x2a, 0x20) } else if resp.hovered() { theme::ELEV2 } else { theme::ELEV };
+                let bg = if active { Color32::from_rgb(0x3a, 0x2a, 0x20) } else if resp.hovered() { theme::ELEV2() } else { theme::ELEV() };
                 ui.painter().rect_filled(rect, CornerRadius::same(6), bg);
-                draw(ui.painter(), Rect::from_center_size(rect.center(), vec2(18.0, 18.0)), if active { theme::EMBER2 } else { theme::TEXT });
+                draw(ui.painter(), Rect::from_center_size(rect.center(), vec2(18.0, 18.0)), if active { theme::EMBER2() } else { theme::TEXT() });
                 resp.on_hover_text(tip)
             };
             if btn(ui, call.camera_on, if call.camera_on { "Turn off camera" } else { "Turn on camera" }, &|p, r, c| icons::camera(p, r, c, false)).clicked() {
@@ -2174,36 +2280,36 @@ impl IngleApp {
             } else {
                 "Exchanging encryption keys…".to_string()
             };
-            if btn(ui, false, &tip, &|p, r, c| icons::lock(p, r, if c == theme::TEXT { theme::ONLINE } else { c })).clicked() {
+            if btn(ui, false, &tip, &|p, r, c| icons::lock(p, r, if c == theme::TEXT() { theme::ONLINE() } else { c })).clicked() {
                 acts.push(Act::Copy(code));
             }
         });
         // Back after the connection dropped: what was on stays off until you say so.
         if let Some(o) = st.resume_offer.as_ref().filter(|o| o.server_key == call.server_key && o.channel_id == call.channel_id) {
             ui.add_space(6.0);
-            egui::Frame::new().fill(theme::ELEV).corner_radius(6).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
+            egui::Frame::new().fill(theme::ELEV()).corner_radius(6).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 let what = match (o.camera, o.screen) {
                     (true, true) => "your camera and screen share are",
                     (true, false) => "your camera is",
                     _ => "your screen share is",
                 };
-                ui.label(RichText::new(format!("The connection dropped, so {what} off now.")).size(12.0).color(theme::MUTED));
+                ui.label(RichText::new(format!("The connection dropped, so {what} off now.")).size(12.0).color(theme::MUTED()));
                 // Small links, side by side (the panel is narrow).
                 let link = |ui: &mut egui::Ui, text: &str, col: Color32| {
                     ui.add(egui::Button::new(RichText::new(text).size(12.0).color(col)).frame(false))
                 };
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 10.0;
-                    if o.camera && link(ui, "Camera on", theme::LINK).on_hover_text("Turn your camera back on").clicked() {
+                    if o.camera && link(ui, "Camera on", theme::LINK()).on_hover_text("Turn your camera back on").clicked() {
                         acts.push(Act::SettleResume { camera: true, screen: false, turn_on_camera: true });
                     }
-                    if o.screen && link(ui, "Share again", theme::LINK).on_hover_text("Pick what to share").clicked() {
+                    if o.screen && link(ui, "Share again", theme::LINK()).on_hover_text("Pick what to share").clicked() {
                         acts.push(Act::SettleResume { camera: false, screen: true, turn_on_camera: false });
                         acts.push(Act::RefreshDevices);
                         self.ui.dialog = Some(Dialog::ScreenPicker { selected: None });
                     }
-                    if link(ui, "Not now", theme::MUTED).clicked() {
+                    if link(ui, "Not now", theme::MUTED()).clicked() {
                         acts.push(Act::SettleResume { camera: true, screen: true, turn_on_camera: false });
                     }
                 });
@@ -2217,14 +2323,14 @@ impl IngleApp {
             let (r, _) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());
             let speaking = st.call.as_ref().map(|c| c.speaking.contains(&c.session)).unwrap_or(false);
             let face = self.my_face(ui.ctx());
-            avatar(ui.painter(), r.center(), 16.0, &st.my_uid, &st.my_name, speaking, theme::SIDE_DARK, face);
-            status_dot(ui.painter(), r.right_bottom() - vec2(3.0, 3.0), true, theme::SIDE_DARK);
+            avatar(ui.painter(), r.center(), 16.0, &st.my_uid, &st.my_name, speaking, theme::SIDE_DARK(), face);
+            status_dot(ui.painter(), r.right_bottom() - vec2(3.0, 3.0), true, theme::SIDE_DARK());
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 ui.add_space(9.0);
-                ui.label(RichText::new(&st.my_name).font(theme::bold_font(13.5)).color(theme::TEXT));
+                ui.label(RichText::new(&st.my_name).font(theme::bold_font(13.5)).color(theme::TEXT()));
                 let sub = if st.call.is_some() { "In voice" } else { "Online" };
-                ui.label(RichText::new(sub).size(11.5).color(theme::MUTED));
+                ui.label(RichText::new(sub).size(11.5).color(theme::MUTED()));
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
@@ -2236,7 +2342,7 @@ impl IngleApp {
                 let (server_muted, server_deafened) = Self::moderated_me(st);
                 let deaf_tip = if server_deafened { SERVER_DEAFENED } else if deafened { "Undeafen" } else { "Deafen" };
                 let deaf = deafened || server_deafened;
-                if icon_button(ui, 32.0, deaf_tip, false, |p, r, c| icons::headphones(p, r, if deaf { theme::LIVE } else { c }, deaf)).clicked() {
+                if icon_button(ui, 32.0, deaf_tip, false, |p, r, c| icons::headphones(p, r, if deaf { theme::LIVE() } else { c }, deaf)).clicked() {
                     if server_deafened {
                         acts.push(Act::Toast(SERVER_DEAFENED.into(), false));
                     } else {
@@ -2246,7 +2352,7 @@ impl IngleApp {
                 // Deafened is muted too (unmuting undeafens), like Discord.
                 let muted = muted || deafened;
                 let mute_tip = if server_muted { SERVER_MUTED } else if muted { "Unmute" } else { "Mute" };
-                if icon_button(ui, 32.0, mute_tip, false, |p, r, c| icons::mic(p, r, if muted || server_muted { theme::LIVE } else { c }, muted || server_muted)).clicked() {
+                if icon_button(ui, 32.0, mute_tip, false, |p, r, c| icons::mic(p, r, if muted || server_muted { theme::LIVE() } else { c }, muted || server_muted)).clicked() {
                     if server_muted {
                         acts.push(Act::Toast(SERVER_MUTED.into(), false));
                     } else {
@@ -2290,20 +2396,20 @@ impl IngleApp {
             for (label, group, online) in groups {
                 ui.horizontal(|ui| {
                     ui.add_space(16.0);
-                    ui.label(RichText::new(format!("{label} — {}", group.len())).font(theme::bold_font(11.5)).color(theme::DIM));
+                    ui.label(RichText::new(format!("{label} — {}", group.len())).font(theme::bold_font(11.5)).color(theme::DIM()));
                 });
                 for m in group {
                     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width() - 8.0, 42.0), Sense::click());
                     let r = r.translate(vec2(8.0, 0.0)).with_max_x(r.right());
                     if resp.hovered() {
-                        ui.painter().rect_filled(r, CornerRadius::same(6), theme::HOVER);
+                        ui.painter().rect_filled(r, CornerRadius::same(6), theme::HOVER());
                     }
                     let alpha = if online { 1.0 } else { 0.45 };
                     let c = pos2(r.left() + 22.0, r.center().y);
                     let face = self.face(ui.ctx(), s, &m.user_id);
-                    avatar(ui.painter(), c, 16.0, &m.user_id, &m.name, false, theme::SIDE, face);
+                    avatar(ui.painter(), c, 16.0, &m.user_id, &m.name, false, theme::SIDE(), face);
                     if online {
-                        status_dot(ui.painter(), c + vec2(12.0, 12.0), true, theme::SIDE);
+                        status_dot(ui.painter(), c + vec2(12.0, 12.0), true, theme::SIDE());
                     }
                     ui.painter().text(
                         pos2(r.left() + 48.0, r.center().y),
@@ -2314,7 +2420,7 @@ impl IngleApp {
                     );
                     if m.role == Role::Owner {
                         let w = ui.fonts_mut(|f| f.layout_no_wrap(m.name.clone(), theme::bold_font(14.0), Color32::WHITE).size().x);
-                        icons::crown(ui.painter(), Rect::from_center_size(pos2(r.left() + 58.0 + w, r.center().y), vec2(14.0, 14.0)), theme::OWNER);
+                        icons::crown(ui.painter(), Rect::from_center_size(pos2(r.left() + 58.0 + w, r.center().y), vec2(14.0, 14.0)), theme::OWNER());
                     }
                     let (uid, name, role) = (m.user_id.clone(), m.name.clone(), m.role);
                     let me = st.my_uid == uid;
@@ -2349,7 +2455,7 @@ impl IngleApp {
                                 let current: Vec<RoleId> = s.members.get(&uid).map(|m| m.roles.clone()).unwrap_or_default();
                                 for r in &manageable {
                                     let mut on = current.contains(&r.id);
-                                    let col = if r.color != 0 { rgb(r.color) } else { theme::TEXT };
+                                    let col = if r.color != 0 { rgb(r.color) } else { theme::TEXT() };
                                     if ui.checkbox(&mut on, RichText::new(&r.name).color(col)).changed() {
                                         let mut next = current.clone();
                                         if on {
@@ -2371,13 +2477,13 @@ impl IngleApp {
                         }
                         if !me && below_me && (s.can(perm::KICK) || s.can(perm::BAN)) {
                             ui.separator();
-                            if s.can(perm::KICK) && ui.button(RichText::new(format!("Kick {name}")).color(theme::LIVE)).clicked() {
+                            if s.can(perm::KICK) && ui.button(RichText::new(format!("Kick {name}")).color(theme::LIVE())).clicked() {
                                 acts.push(Act::Kick { key: key.clone(), uid: uid.clone(), ban: false });
                                 ui.close();
                             }
                             if s.can(perm::BAN)
                                 && ui
-                                    .button(RichText::new(format!("Ban {name}")).color(theme::LIVE))
+                                    .button(RichText::new(format!("Ban {name}")).color(theme::LIVE()))
                                     .on_hover_text("They're removed and can't come back as themselves, and the invite link they joined with stops working (make a new one for everyone else).")
                                     .clicked()
                             {
@@ -2401,15 +2507,15 @@ impl IngleApp {
             ui.painter().rect_filled(r, CornerRadius::same(22), Color32::from_rgb(0x24, 0x1d, 0x19));
             icons::flame(ui.painter(), r.shrink(14.0));
             ui.add_space(14.0);
-            ui.label(RichText::new(format!("Welcome to {}", ingle_proto::APP_NAME)).font(theme::bold_font(28.0)).color(theme::TEXT));
+            ui.label(RichText::new(format!("Welcome to {}", ingle_proto::APP_NAME)).font(theme::bold_font(28.0)).color(theme::TEXT()));
             ui.add_space(6.0);
             ui.label(
                 RichText::new("Voice, video, screen share and chat for your group. Calls are end-to-end encrypted. No accounts, no ads.")
                     .size(15.0)
-                    .color(theme::MUTED),
+                    .color(theme::MUTED()),
             );
             ui.add_space(26.0);
-            ui.label(RichText::new("What should people call you?").color(theme::MUTED));
+            ui.label(RichText::new("What should people call you?").color(theme::MUTED()));
             ui.add_space(4.0);
             if self.ui.welcome_name.is_empty() {
                 self.ui.welcome_name = st.my_name.clone();
@@ -2433,7 +2539,7 @@ impl IngleApp {
                 }
                 ui.add_space(4.0);
                 if ui
-                    .add(egui::Button::new(RichText::new("Join a server").font(theme::bold_font(14.0)).color(theme::TEXT)).fill(theme::ELEV2).min_size(vec2(220.0, 42.0)))
+                    .add(egui::Button::new(RichText::new("Join a server").font(theme::bold_font(14.0)).color(theme::TEXT())).fill(theme::ELEV2()).min_size(vec2(220.0, 42.0)))
                     .on_hover_text("Paste an invite link a friend sent you")
                     .clicked()
                 {
@@ -2447,14 +2553,49 @@ impl IngleApp {
             ui.label(
                 RichText::new("A server is where your group's channels live. Create one for your friends, or join one with an invite link.")
                     .size(13.0)
-                    .color(theme::DIM),
+                    .color(theme::DIM()),
             );
             ui.add_space(12.0);
-            ui.label(RichText::new(format!("Your safety code: {}", st.safety_code)).size(12.0).color(theme::DIM));
+            ui.label(RichText::new(format!("Your safety code: {}", st.safety_code)).size(12.0).color(theme::DIM()));
         });
     }
 
     // ----------------------------------------------------------------- toasts
+
+    /// While a skin is being tried: what it is, and Stop (back to the skin in use).
+    /// While a skin is being tried on: a strip across the top, under the title bar, saying which
+    /// and where it's from, with Stop. It takes its own room, so it never covers a dialog's title
+    /// or a channel's header.
+    fn trying_banner(&mut self, ctx: &egui::Context, acts: &mut Vec<Act>) {
+        let Some((name, what)) = self.looks.trying_name() else { return };
+        let from = match what {
+            crate::looks::Trial::Claude { .. } => "from Claude",
+            crate::looks::Trial::SentIn { .. } => "sent in",
+            crate::looks::Trial::Folder { .. } => "from its folder",
+        };
+        egui::TopBottomPanel::top("trying-skin")
+            .exact_height(34.0)
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(egui::Frame::new().fill(theme::ELEV2()).inner_margin(egui::Margin::symmetric(14, 0)))
+            .show(ctx, |ui| {
+                // (Across the whole strip: the inner margin is 14 points a side.)
+                let r = ui.max_rect().expand2(vec2(14.0, 0.0));
+                ui.painter().hline(r.x_range(), r.bottom() - 0.5, Stroke::new(1.0f32, theme::EMBER2()));
+                ui.horizontal_centered(|ui| {
+                    let (icon, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
+                    icons::palette(ui.painter(), icon);
+                    ui.add_space(2.0);
+                    ui.label(RichText::new(format!("Trying {name}")).font(theme::bold_font(13.5)).color(theme::TEXT()));
+                    ui.label(RichText::new(format!("({from}): your own skin comes back when you stop.")).color(theme::MUTED()));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.button("Stop trying it").on_hover_text("Back to your own skin").clicked() {
+                            acts.push(Act::StopTryingSkin);
+                        }
+                    });
+                });
+            });
+    }
 
     fn toasts(&mut self, ctx: &egui::Context, st: &AppState) {
         let now = Instant::now();
@@ -2481,19 +2622,19 @@ impl IngleApp {
             .show(ctx, |ui| {
                 for t in visible.iter().rev().take(3) {
                     egui::Frame::new()
-                        .fill(if t.error { Color32::from_rgb(0x4a, 0x1f, 0x1f) } else { theme::ELEV2 })
-                        .stroke(Stroke::new(1.0f32, if t.error { theme::LIVE } else { theme::LINE }))
+                        .fill(if t.error { Color32::from_rgb(0x4a, 0x1f, 0x1f) } else { theme::ELEV2() })
+                        .stroke(Stroke::new(1.0f32, if t.error { theme::LIVE() } else { theme::LINE() }))
                         .corner_radius(8)
                         .inner_margin(egui::Margin::symmetric(14, 10))
                         .show(ui, |ui| {
                             ui.set_max_width(360.0);
                             if !t.error {
-                                ui.label(RichText::new(&t.text).color(theme::TEXT));
+                                ui.label(RichText::new(&t.text).color(theme::TEXT()));
                                 return;
                             }
-                            ui.label(RichText::new("Something went wrong").font(theme::bold_font(13.0)).color(theme::TEXT));
+                            ui.label(RichText::new("Something went wrong").font(theme::bold_font(13.0)).color(theme::TEXT()));
                             ui.add_space(2.0);
-                            ui.add(egui::Label::new(RichText::new(&t.text).color(theme::TEXT)).selectable(true));
+                            ui.add(egui::Label::new(RichText::new(&t.text).color(theme::TEXT())).selectable(true));
                             ui.add_space(6.0);
                             ui.horizontal(|ui| {
                                 let copied = self.ui.toast_copied.map(|(id, at)| id == t.id && now.duration_since(at) < Duration::from_secs(2)).unwrap_or(false);
@@ -2554,13 +2695,13 @@ pub(crate) fn server_voice_items(ui: &mut egui::Ui, st: &AppState, s: &ServerVie
     let Some(p) = s.voice.values().find(|p| p.user_id == uid) else { return };
     if can_mute {
         let mut on = p.server_mute;
-        if ui.checkbox(&mut on, RichText::new("Server Mute").color(theme::LIVE)).on_hover_text("Nobody hears them until a moderator unmutes them, in any voice channel here.").clicked() {
+        if ui.checkbox(&mut on, RichText::new("Server Mute").color(theme::LIVE())).on_hover_text("Nobody hears them until a moderator unmutes them, in any voice channel here.").clicked() {
             acts.push(Act::ServerMute { key: s.key.clone(), uid: uid.to_string(), muted: on });
         }
     }
     if can_deafen {
         let mut on = p.server_deaf;
-        if ui.checkbox(&mut on, RichText::new("Server Deafen").color(theme::LIVE)).on_hover_text("They hear nobody, and nobody hears them, until a moderator undeafens them.").clicked() {
+        if ui.checkbox(&mut on, RichText::new("Server Deafen").color(theme::LIVE())).on_hover_text("They hear nobody, and nobody hears them, until a moderator undeafens them.").clicked() {
             acts.push(Act::ServerDeafen { key: s.key.clone(), uid: uid.to_string(), deafened: on });
         }
     }

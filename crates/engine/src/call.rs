@@ -57,13 +57,41 @@ pub struct VideoCtx {
 
 impl VideoCtx {
     /// Start capturing and encoding. It goes live once the call installs it
-    /// (`Call::install_video`).
-    pub fn start(&self, shared: &Arc<Shared>, track_id: u8, source: &str, cfg: PublisherConfig) -> Result<(VideoOut, TrackInfo)> {
+    /// (`Call::install_video`). `generation`: this start's (see `Shared::video_gen`), so a
+    /// capture that ends by itself only takes its own share down.
+    pub fn start(&self, shared: &Arc<Shared>, track_id: u8, source: &str, cfg: PublisherConfig, generation: u64) -> Result<(VideoOut, TrackInfo)> {
         let slot = Arc::new(FrameSlot::default());
-        let capture = if track_id == track::SCREEN {
-            capture::start_screen(source, cfg.fps, slot.clone())?
-        } else {
-            capture::start_camera(source, cfg.max_width, cfg.max_height, cfg.fps, slot.clone())?
+        let screen = track_id == track::SCREEN;
+        let mut open: crate::video::Restart = {
+            let (source, slot) = (source.to_string(), slot.clone());
+            if screen {
+                Box::new(move || capture::start_screen(&source, cfg.fps, slot.clone()))
+            } else {
+                Box::new(move || capture::start_camera(&source, cfg.max_width, cfg.max_height, cfg.fps, slot.clone()))
+            }
+        };
+        let capture = open()?;
+        // What the capture does by itself: started again (and reported), or over.
+        let on_event = {
+            let s = shared.clone();
+            let what = if screen { "screen sharing" } else { "the camera" };
+            Box::new(move |ev: crate::video::CaptureEvent| match ev {
+                crate::video::CaptureEvent::Restarted(why) => {
+                    crate::bugs::auto_report(&s, &format!("{what} stopped working, and was started again"), &why);
+                }
+                crate::video::CaptureEvent::Ended { why, gone } => {
+                    warn!("{what} ended: {why}");
+                    let text = if gone { format!("Stopped sharing: {why}.") } else { format!("{} stopped working: {why}", if screen { "Screen sharing" } else { "Your camera" }) };
+                    s.state.write().toast(text, !gone);
+                    if !gone {
+                        crate::bugs::auto_report(&s, &format!("{what} stopped working"), &why);
+                    }
+                    // Taken down elsewhere: stopping it waits for this thread.
+                    let s2 = s.clone();
+                    s.rt.spawn_blocking(move || crate::stop_video_on(&s2, track_id, Some(generation)));
+                    (s.repaint)();
+                }
+            })
         };
         let inflight = Arc::new(AtomicUsize::new(0));
         let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -82,7 +110,7 @@ impl VideoCtx {
         let me = self.session;
         let preview = Box::new(move |w, h, px| video.put(VideoKey { session: me, track: track_id }, w, h, px));
         let (fps, max_w, max_h) = (cfg.fps, cfg.max_width, cfg.max_height);
-        let publisher = Publisher::start(cfg, capture, slot, sink, Some(preview), inflight.clone())?;
+        let publisher = Publisher::start(cfg, capture, slot, sink, Some(preview), inflight.clone(), Some(open), on_event)?;
         let net_task = shared.rt.spawn(video_send_loop(self.conn.clone(), rx, inflight));
         let info = TrackInfo {
             id: track_id,

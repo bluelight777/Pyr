@@ -114,7 +114,7 @@ mod tests {
     fn an_older_list_is_never_believed_again() {
         let dir = temp_dir("seen");
         let key = ingle_proto::crypto::Identity::generate();
-        let list = |issued| serde_json::to_string(&library::sign(&key, &Library { issued, expires: 10_000, plugins: vec![] })).unwrap();
+        let list = |issued| serde_json::to_string(&library::sign(&key, &Library { issued, expires: 10_000, ..Default::default() })).unwrap();
         assert!(believe_with(&list(100), &key.user_id(), &dir, 500).is_ok());
         assert!(believe_with(&list(200), &key.user_id(), &dir, 500).is_ok());
         assert!(believe_with(&list(100), &key.user_id(), &dir, 500).unwrap_err().contains("older"));
@@ -126,7 +126,7 @@ mod tests {
     fn a_list_not_signed_by_firelit_is_not_believed() {
         let dir = temp_dir("sig");
         let other = ingle_proto::crypto::Identity::generate();
-        let lib = Library { issued: 10, expires: now_secs() + 1000, plugins: vec![] };
+        let lib = Library { issued: 10, expires: now_secs() + 1000, plugins: vec![], skins: vec![] };
         let text = serde_json::to_string(&library::sign(&other, &lib)).unwrap();
         assert!(believe(&text, &dir, now_secs()).unwrap_err().contains("isn't signed by Firelit"));
         let _ = std::fs::remove_dir_all(dir);

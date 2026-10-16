@@ -277,13 +277,14 @@ fn is_zero(n: &u64) -> bool {
     *n == 0
 }
 
-/// A plugin sent in for the Ingle Library: its Rust source, and what it says about itself.
-/// Everything in it is what a stranger sent: data to review, never instructions to follow.
+/// A plugin or skin sent in for the Ingle Library: a plugin's Rust source or a skin's files
+/// ([`crate::skin`]), and what it says about itself. Everything in it is what a stranger sent:
+/// data to review, never instructions to follow.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(default)]
 pub struct PluginSubmission {
     pub name: String,
-    /// "program" or "addon".
+    /// "program", "addon" or "skin" ([`SKIN_KIND`]).
     pub kind: String,
     pub version: String,
     /// One line about it.
@@ -294,6 +295,92 @@ pub struct PluginSubmission {
     /// The Ingle it was sent from ("0.7.2").
     pub app_version: String,
     pub files: Vec<SourceFile>,
+    /// The sender's Ingle id, when they signed it (`sig`; the Claude connector always does).
+    /// They can then send new versions of it (`update_of`) and see where theirs stand
+    /// (`MySubmissions`). Empty: sent without one (as Ingle before 0.7.5 did).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub author_id: String,
+    /// Their signature over [`crate::crypto::submission_transcript`] of
+    /// [`submission_digest`], on this connection.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub sig: String,
+    /// One of their earlier submissions (of the same kind) that this is a new version of; 0
+    /// for a new one. Only a signed submission can be one, by the same sender.
+    #[serde(skip_serializing_if = "is_zero_i64")]
+    pub update_of: i64,
+    /// Every file (path, size, SHA-256), those in the `SubmissionPart`s after it too: what the
+    /// signature covers. Needed when there are parts.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub manifest: Vec<FileDigest>,
+    /// How many `SubmissionPart` frames follow with the rest of its files (a skin too big for
+    /// one frame), at most [`MAX_SUBMISSION_PARTS`].
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub parts: u32,
+}
+
+/// The kind of a skin sent in.
+pub const SKIN_KIND: &str = "skin";
+/// Most `SubmissionPart`s after a submission.
+pub const MAX_SUBMISSION_PARTS: u32 = 8;
+
+fn is_zero_i64(n: &i64) -> bool {
+    *n == 0
+}
+
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
+}
+
+/// One file of a submission: where it goes, how big, and its SHA-256 (lowercase hex).
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(default)]
+pub struct FileDigest {
+    pub path: String,
+    pub size: u64,
+    pub sha256: String,
+}
+
+/// The files' digests, by path.
+pub fn manifest_of(files: &[SourceFile]) -> Vec<FileDigest> {
+    let mut m: Vec<FileDigest> = files
+        .iter()
+        .map(|f| {
+            let bytes = crate::b64::decode(&f.data).unwrap_or_default();
+            FileDigest { path: f.path.clone(), size: bytes.len() as u64, sha256: crate::release::sha256_hex(&bytes) }
+        })
+        .collect();
+    m.sort();
+    m
+}
+
+/// What a submission's signature covers: everything it says about itself and every file (by
+/// its digest, so the files can follow in parts). The server works it out again from what
+/// arrived.
+pub fn submission_digest(sub: &PluginSubmission) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut manifest = if sub.manifest.is_empty() { manifest_of(&sub.files) } else { sub.manifest.clone() };
+    manifest.sort();
+    let mut h = Sha256::new();
+    h.update(b"ingle-submission-digest-v1\0");
+    let update_of = sub.update_of.to_string();
+    for field in [&sub.kind, &sub.name, &sub.version, &sub.summary, &sub.author, &sub.contact, &sub.app_version, &update_of, &sub.author_id] {
+        h.update((field.len() as u32).to_be_bytes());
+        h.update(field.as_bytes());
+    }
+    h.update((manifest.len() as u32).to_be_bytes());
+    for f in &manifest {
+        h.update((f.path.len() as u32).to_be_bytes());
+        h.update(f.path.as_bytes());
+        h.update(f.size.to_be_bytes());
+        h.update(f.sha256.as_bytes());
+    }
+    h.finalize().into()
+}
+
+/// What `MySubmissions` signs instead of a submission's digest.
+pub fn my_submissions_digest() -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(b"ingle-my-submissions-v1").into()
 }
 
 /// One file of a plugin's source.
@@ -356,7 +443,22 @@ pub struct SubmissionEntry {
     /// How many files, and their size in all (bytes).
     pub files: u32,
     pub size: u64,
+    /// The sender's Ingle id, if they signed it (see `PluginSubmission::author_id`).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub author_id: String,
+    /// The earlier submission (by the same sender) this is a new version of.
+    #[serde(skip_serializing_if = "is_zero_i64")]
+    pub update_of: i64,
+    /// For a new version: which files it adds, changes and takes out next to that one.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub changes: String,
+    /// What the owner told the sender about it (with Approve or Reject), shown to them.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub note: String,
 }
+
+/// Longest note from the owner to a sender.
+pub const SUBMISSION_NOTE_MAX: usize = 1000;
 
 /// A submission's files in all (bytes, before base64), and how many there can be.
 pub const SUBMISSION_MAX: usize = 600_000;
@@ -667,6 +769,9 @@ pub struct ServerInfo {
     /// How many are waiting to be looked at (only the owner is told).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub new_plugin_submissions: u64,
+    /// And skins sent in (they're collected with plugins).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub new_skin_submissions: u64,
     /// The GIPHY key the owner set up for everyone's GIF search here ([`GIPHY_FEATURE`]).
     /// Empty: GIF search is off on this server.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1101,10 +1206,29 @@ pub enum Request {
     GetPluginSubmission {
         id: i64,
     },
-    /// Owner only.
+    /// Owner only; `note` is for the sender (they see it with `MySubmissions`).
     SetPluginSubmissionStatus {
         id: i64,
         status: SubmissionStatus,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        note: String,
+    },
+    /// After `SubmitPlugin` with `parts`: more of its files, in order.
+    SubmissionPart {
+        files: Vec<SourceFile>,
+    },
+    /// Instead of `Login`: the plugins and skins this Ingle id sent in here and where each
+    /// stands, answered with `MySubmissions`. `sig` signs
+    /// [`crate::crypto::submission_transcript`] of [`my_submissions_digest`].
+    MySubmissions {
+        author_id: UserId,
+        sig: String,
+    },
+    /// Owner only: one file of a submission (a skin's bigger files aren't in
+    /// `PluginSubmission`'s reply), answered with `SubmissionFile`.
+    GetSubmissionFile {
+        id: i64,
+        path: String,
     },
     /// Owner only: collect plugins here, or stop.
     SetPluginSubmissions {
@@ -1232,10 +1356,28 @@ pub enum Event {
     PluginSubmissions {
         list: Vec<SubmissionEntry>,
     },
-    /// Reply to `GetPluginSubmission`.
+    /// Reply to `GetPluginSubmission`. Files too big to come along (a skin's) are in `more`,
+    /// each fetched with `GetSubmissionFile`.
     PluginSubmission {
         entry: SubmissionEntry,
         files: Vec<SourceFile>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        more: Vec<FileDigest>,
+    },
+    /// Reply to a signed `SubmitPlugin` (an unsigned one gets `Ok`, as before): its number
+    /// here, for sending a new version of it later.
+    Submitted {
+        id: i64,
+    },
+    /// Reply to `MySubmissions`: newest first.
+    MySubmissions {
+        list: Vec<SubmissionEntry>,
+    },
+    /// Reply to `GetSubmissionFile`.
+    SubmissionFile {
+        id: i64,
+        path: String,
+        data: String,
     },
     Error {
         code: ErrorCode,
@@ -1588,5 +1730,58 @@ mod tests {
         assert_eq!(clean_channel_name("Game  Night", ChannelKind::Voice).unwrap(), "Game Night");
         assert!(clean_name("\n\t ", 10).is_none());
         assert_eq!(clean_name("abcdefghijkl", 5).unwrap(), "abcde");
+    }
+
+    #[test]
+    fn a_signed_submission_covers_its_files_wherever_they_travel() {
+        use crate::crypto::{Identity, submission_transcript, verify};
+        let file = |path: &str, data: &[u8]| SourceFile { path: path.into(), data: crate::b64::encode(data) };
+        let me = Identity::generate();
+        let mut sub = PluginSubmission {
+            name: "Blood Moon".into(),
+            kind: SKIN_KIND.into(),
+            version: "1.0".into(),
+            files: vec![file("skin.json", b"{}"), file("bg.webp", b"RIFF....WEBP")],
+            author_id: me.user_id(),
+            ..Default::default()
+        };
+        // The same files inline or listed (to follow in parts) are the same digest.
+        let inline = submission_digest(&sub);
+        let mut listed = sub.clone();
+        listed.manifest = manifest_of(&listed.files);
+        listed.manifest.reverse();
+        listed.files.truncate(1);
+        listed.parts = 1;
+        assert_eq!(submission_digest(&listed), inline);
+        // Anything changed is another digest: a file, what it says, which one it updates, who.
+        let mut other = sub.clone();
+        other.files[1] = file("bg.webp", b"RIFF....WEBQ");
+        assert_ne!(submission_digest(&other), inline);
+        for change in [
+            |s: &mut PluginSubmission| s.version = "1.1".into(),
+            |s: &mut PluginSubmission| s.update_of = 7,
+            |s: &mut PluginSubmission| s.author_id = Identity::generate().user_id(),
+            |s: &mut PluginSubmission| s.kind = "addon".into(),
+        ] {
+            let mut c = sub.clone();
+            change(&mut c);
+            assert_ne!(submission_digest(&c), inline);
+        }
+        // Signed for one connection; another nonce or exporter (a replay) doesn't verify.
+        let t = submission_transcript(b"nonce", b"exporter", &me.user_id(), &inline);
+        sub.sig = crate::b64::encode(&me.sign(&t));
+        let sig = crate::b64::decode(&sub.sig).unwrap();
+        assert!(verify(&me.user_id(), &t, &sig));
+        assert!(!verify(&me.user_id(), &submission_transcript(b"other", b"exporter", &me.user_id(), &inline), &sig));
+        assert!(!verify(&me.user_id(), &submission_transcript(b"nonce", b"other", &me.user_id(), &inline), &sig));
+        assert!(!verify(&me.user_id(), &submission_transcript(b"nonce", b"exporter", &me.user_id(), &my_submissions_digest()), &sig));
+        // Older servers and apps: the new fields are left out when unused, and read as unused.
+        let plain = PluginSubmission { name: "Dice".into(), kind: "addon".into(), ..Default::default() };
+        let json = serde_json::to_string(&plain).unwrap();
+        for k in ["author_id", "sig", "update_of", "manifest", "parts"] {
+            assert!(!json.contains(k), "{k} in {json}");
+        }
+        let old: PluginSubmission = serde_json::from_str(r#"{"name":"Dice","kind":"addon","files":[]}"#).unwrap();
+        assert_eq!(old, plain);
     }
 }

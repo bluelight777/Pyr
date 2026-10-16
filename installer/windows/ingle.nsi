@@ -3,7 +3,7 @@
 ;   makensis installer/windows/ingle.nsi
 ;   makensis -DBINDIR=path/to/exes -DOUTDIR=dist installer/windows/ingle.nsi
 ;
-; BINDIR must hold ingle.exe, ingle-server.exe, ingle-bot.exe and vps\ingle-server-linux-*
+; BINDIR must hold ingle.exe, ingle-mcp.exe, ingle-server.exe, ingle-bot.exe and vps\ingle-server-linux-*
 ; (the Linux server programs the app installs on VPSes). Installs per user into
 ; %LOCALAPPDATA%\Programs\Ingle (no admin rights needed, like Discord or VS Code).
 
@@ -112,6 +112,19 @@ Var UpdateWait
     ${EndIf}
 !macroend
 
+; The Claude connector may be running: the Claude app starts it and keeps it while it's open. A
+; running program's file can't be replaced, but it can be renamed, so it's set aside (and taken
+; away by the next install or the uninstaller) and the new one goes in; Claude keeps using the
+; old one until it next starts it.
+!macro SetAsideFile NAME
+  Delete "$INSTDIR\${NAME}.old"
+  ClearErrors
+  Delete "$INSTDIR\${NAME}"
+  ${If} ${Errors}
+    Rename "$INSTDIR\${NAME}" "$INSTDIR\${NAME}.old"
+  ${EndIf}
+!macroend
+
 !define HOWTO_APP "Ingle is still running.$\r$\n$\r$\nQuit it, then click Retry: right-click the Ingle icon by the clock (it may be under the ^ arrow) and choose Quit Ingle. If there's no icon there, close the Ingle window."
 !define HOWTO_SERVER "Ingle Server is running.$\r$\n$\r$\nClose its window, then click Retry."
 !define HOWTO_BOT "The Ingle test bot is running.$\r$\n$\r$\nClose its window, then click Retry."
@@ -210,6 +223,9 @@ Section "Ingle" SecApp
   SetOutPath "$INSTDIR"
   !insertmacro ReplaceFile "ingle.exe" app "${HOWTO_APP}"
   File "${BINDIR}/ingle.exe"
+  ; The Claude connector (Settings, Claude tab, sets it up in the Claude app).
+  !insertmacro SetAsideFile "ingle-mcp.exe"
+  File "${BINDIR}/ingle-mcp.exe"
   SetOutPath "$INSTDIR\icons"
   File "/oname=${ICONFILE}" "../../crates/app/assets/icon/ingle.ico"
   SetOutPath "$INSTDIR"
@@ -290,6 +306,8 @@ Section "Uninstall"
   !insertmacro ReplaceFile "ingle.exe" unapp "${HOWTO_APP}"
   !insertmacro ReplaceFile "ingle-server.exe" unserver "${HOWTO_SERVER}"
   Delete "$INSTDIR\ingle-bot.exe"
+  Delete "$INSTDIR\ingle-mcp.exe"
+  Delete "$INSTDIR\ingle-mcp.exe.old"
   Delete "$INSTDIR\README.txt"
   Delete "$INSTDIR\Inter font license.txt"
   Delete "$INSTDIR\vps\ingle-server-linux-x86_64"

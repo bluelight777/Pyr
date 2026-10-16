@@ -100,6 +100,21 @@ pub fn login_transcript(server_nonce: &[u8], tls_exporter: &[u8], user_id: &str)
 /// TLS exporter label used for the login transcript.
 pub const LOGIN_EXPORTER_LABEL: &[u8] = b"EXPORTER-ingle-login";
 
+/// What a signed submission (or asking for one's own) proves: this Ingle id, on this
+/// connection (the server's nonce and the TLS keying material, so it can't be replayed or
+/// relayed), for exactly this content (`digest`, see `control::submission_digest`).
+pub fn submission_transcript(server_nonce: &[u8], tls_exporter: &[u8], user_id: &str, digest: &[u8]) -> Vec<u8> {
+    let mut t = b"ingle-submission-v1\0".to_vec();
+    for part in [server_nonce, tls_exporter, user_id.as_bytes(), digest] {
+        t.extend_from_slice(&(part.len() as u16).to_be_bytes());
+        t.extend_from_slice(part);
+    }
+    t
+}
+
+/// TLS exporter label for the submission transcript.
+pub const SUBMISSION_EXPORTER_LABEL: &[u8] = b"EXPORTER-ingle-submission";
+
 /// SHA-256 of a DER certificate (the server's pinned identity).
 pub fn fingerprint(der: &[u8]) -> [u8; 32] {
     Sha256::digest(der).into()

@@ -36,7 +36,7 @@ pub fn show(ctx: &egui::Context, title: &str, after_name: impl FnOnce(&mut egui:
         .exact_height(HEIGHT)
         .resizable(false)
         .show_separator_line(false)
-        .frame(egui::Frame::new().fill(theme::RAIL))
+        .frame(egui::Frame::new().fill(theme::panel(theme::RAIL(), false)))
         .show(ctx, |ui| {
             let full = ui.max_rect();
             let buttons_w = BUTTON_W * 3.0;
@@ -51,7 +51,7 @@ pub fn show(ctx: &egui::Context, title: &str, after_name: impl FnOnce(&mut egui:
             let p = ui.painter().clone();
             // Ingle's flame and name, then the version and the updater (see `update_chip`).
             crate::icons::flame(&p, Rect::from_center_size(pos2(full.left() + 17.0, full.center().y), vec2(13.0, 13.0)));
-            let name = p.text(pos2(full.left() + 28.0, full.center().y), Align2::LEFT_CENTER, title, theme::bold_font(12.0), theme::MUTED);
+            let name = p.text(pos2(full.left() + 28.0, full.center().y), Align2::LEFT_CENTER, title, theme::bold_font(12.0), theme::MUTED());
             after_name(ui, name.right() + 3.0, full.center().y);
 
             let mut x = full.max.x - buttons_w;
@@ -61,10 +61,10 @@ pub fn show(ctx: &egui::Context, title: &str, after_name: impl FnOnce(&mut egui:
                 let resp = ui.interact(r, ui.id().with(kind as u8), Sense::click());
                 let hover = resp.hovered();
                 if hover {
-                    let bg = if kind == Btn::Close { Color32::from_rgb(0xd8, 0x3b, 0x3b) } else { theme::HOVER };
+                    let bg = if kind == Btn::Close { Color32::from_rgb(0xd8, 0x3b, 0x3b) } else { theme::HOVER() };
                     p.rect_filled(r, 0.0, bg);
                 }
-                let col = if hover { theme::TEXT } else { theme::MUTED };
+                let col = if hover { theme::TEXT() } else { theme::MUTED() };
                 draw_glyph(&p, kind, r.center(), maximized, col);
                 if resp.clicked() {
                     match kind {

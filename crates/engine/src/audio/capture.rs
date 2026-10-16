@@ -55,7 +55,7 @@ pub struct CapturePipeline {
     raw_recent: [f32; 5],
     raw_recent_at: usize,
     /// Voice isolation hears 30 ms ahead: the sound waits here while its fate is decided, so
-    /// the start of your first word isn't clipped while it's being recognised.
+    /// the start of your first word isn't clipped while it's being recognized.
     iso_delay: std::collections::VecDeque<f32>,
     /// Voice isolation: how loud your own voice usually is at the mic (dB), the gain being
     /// applied, and until when the voice going on is yours (close to the mic, and speech).

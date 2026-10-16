@@ -94,7 +94,7 @@ impl Unread {
     }
 }
 
-/// The badge colours: red for mentions and direct messages, light for other unread messages,
+/// The badge colors: red for mentions and direct messages, light for other unread messages,
 /// each with a dark ring so it shows on a light taskbar too.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub const RED: [u8; 3] = [0xe5, 0x48, 0x4d];
@@ -221,7 +221,7 @@ mod tests {
         }
         paint_dot(&mut px, w, h, (12.0, 12.0), 3.0, 1.0, RED);
         let at = |x: usize, y: usize| -> [u8; 4] { px[(y * w + x) * 4..(y * w + x) * 4 + 4].try_into().unwrap() };
-        assert_eq!(at(12, 12), [RED[2], RED[1], RED[0], 0xff], "the middle is the badge's colour (BGRA)");
+        assert_eq!(at(12, 12), [RED[2], RED[1], RED[0], 0xff], "the middle is the badge's color (BGRA)");
         assert_eq!(at(2, 2), [0x40, 0x40, 0x40, 0xff], "far from it nothing changes");
         let ring = at(12, 8); // 3.5 px from the centre: on the ring
         assert!(ring[0] < 0x40 && ring[3] == 0xff, "the ring is dark: {ring:?}");

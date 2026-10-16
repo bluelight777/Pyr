@@ -34,5 +34,18 @@
       ],
       "wasm": "dice/1.0.0/dice.wasm"
     }
+  ],
+  "skins": [
+    {
+      "id": "blood-moon",
+      "name": "Blood Moon",
+      "version": "1.0",
+      "summary": "Deep reds and black, with a blood-red moon rising behind the chat.",
+      "description": "Ingle in the colors of the Brethren of Blood: near-black panels with a red glow, crimson buttons and highlights, and a blood-red moon over a dark ridge of pines that shows faintly through the chat. Only colors and a picture: Ingle's own fonts and sounds stay.",
+      "author": "Firelit Games",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Firelit Games. The picture is drawn by tools/make-skin-art.py in Ingle's source.",
+      "dir": "blood-moon/1.0"
+    }
   ]
 }

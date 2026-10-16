@@ -450,7 +450,7 @@ unsafe fn icon_from_pixels(px: &[u8], w: usize, h: usize) -> Option<HICON> {
             return None;
         }
         std::ptr::copy_nonoverlapping(px.as_ptr(), bits.cast::<u8>(), px.len().min(w * h * 4));
-        // The colours carry their own alpha; the mask just has to be there.
+        // The colors carry their own alpha; the mask just has to be there.
         let mask_bits = vec![0u8; w.div_ceil(16) * 2 * h];
         let mask = CreateBitmap(w as i32, h as i32, 1, 1, Some(mask_bits.as_ptr().cast()));
         let ii = ICONINFO { fIcon: true.into(), xHotspot: 0, yHotspot: 0, hbmMask: mask, hbmColor: color };

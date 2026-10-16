@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build dist/ingle_<version>_amd64.deb from the release binaries:
-#   cargo build --release -p ingle -p ingle-server
+#   cargo build --release -p ingle -p ingle-mcp -p ingle-server
 #   cargo build --release -p ingle-engine --example bot
 #   scripts/build-vps-server.sh
 #   installer/linux/build-deb.sh
@@ -17,10 +17,11 @@ PKG=$WORK/ingle_${VERSION}_${ARCH}
 L=installer/linux
 
 install -Dm755 "$REL/ingle" "$PKG/usr/bin/ingle"
+install -Dm755 "$REL/ingle-mcp" "$PKG/usr/bin/ingle-mcp"
 install -Dm755 "$REL/ingle-server" "$PKG/usr/bin/ingle-server"
 install -Dm755 "$REL/examples/bot" "$PKG/usr/bin/ingle-bot"
 # Built on a new distro, the binaries would otherwise insist on its glibc (see the script).
-python3 $L/relax-glibc.py "$PKG/usr/bin/ingle" "$PKG/usr/bin/ingle-server" "$PKG/usr/bin/ingle-bot"
+python3 $L/relax-glibc.py "$PKG/usr/bin/ingle" "$PKG/usr/bin/ingle-mcp" "$PKG/usr/bin/ingle-server" "$PKG/usr/bin/ingle-bot"
 # Static Linux server programs the app uploads when it sets up a VPS (x86-64 and ARM64),
 # built by scripts/build-vps-server.sh. They have no library dependencies.
 VPS=${VPS:-dist/vps}
@@ -44,7 +45,7 @@ install -Dm644 $L/copyright "$PKG/usr/share/doc/ingle/copyright"
 # debian/control to run, so give it a throwaway one).
 mkdir -p "$WORK/src/debian"
 printf 'Source: ingle\n\nPackage: ingle\nArchitecture: any\n' > "$WORK/src/debian/control"
-LINKED=$(cd "$WORK/src" && dpkg-shlibdeps -O "$PKG/usr/bin/ingle" "$PKG/usr/bin/ingle-server" "$PKG/usr/bin/ingle-bot" 2>/dev/null \
+LINKED=$(cd "$WORK/src" && dpkg-shlibdeps -O "$PKG/usr/bin/ingle" "$PKG/usr/bin/ingle-mcp" "$PKG/usr/bin/ingle-server" "$PKG/usr/bin/ingle-bot" 2>/dev/null \
   | sed -n 's/^shlibs:Depends=//p')
 # The oldest glibc that has every version the binaries hard-require (relax-glibc.py made the
 # rest optional; dpkg-shlibdeps doesn't know that).
@@ -76,7 +77,8 @@ Description: voice, webcams and screen sharing with text channels
  create one on your own DigitalOcean account, so your group always has a
  place to meet.
  .
- This package contains the desktop app (ingle), the community server
+ This package contains the desktop app (ingle), its Claude connector
+ (ingle-mcp), the community server
  (ingle-server, which can also run as the ingle-server systemd service), the
  static server programs the app installs on VPSes, and a test participant
  (ingle-bot).

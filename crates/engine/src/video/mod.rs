@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use tracing::{debug, warn};
 
-pub use capture::{CaptureHandle, FrameSlot, ScreenSource, SourceKind, list_cameras, list_screens};
+pub use capture::{CaptureHandle, FrameSlot, ScreenSource, SourceKind, Trouble, list_cameras, list_screens};
 use codec::{EncodedFrame, H264Decoder, H264Encoder, Scaler, fit_size, preview_rgba, to_i420};
 
 use crate::state::{SharedFrame, VideoFrame, VideoKey};
@@ -55,6 +55,7 @@ impl VideoStore {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct PublisherConfig {
     pub screen: bool,
     pub max_width: u32,
@@ -65,6 +66,21 @@ pub struct PublisherConfig {
 
 pub type EncodedSink = Box<dyn FnMut(EncodedFrame, u32, u32) + Send>;
 pub type PreviewSink = Box<dyn FnMut(u32, u32, Vec<u8>) + Send>;
+/// Starts the same capture again (after it stopped working by itself).
+pub type Restart = Box<dyn FnMut() -> anyhow::Result<CaptureHandle> + Send>;
+
+/// What a share's capture did by itself (told to `Publisher::start`'s `on_event`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum CaptureEvent {
+    /// It stopped working and was started again: why it stopped.
+    Restarted(String),
+    /// It's over: what was being captured is gone (`gone`), or it stopped working and couldn't
+    /// be started again.
+    Ended { why: String, gone: bool },
+}
+
+/// A capture that stops working is started again this many times a minute at most.
+const RESTARTS_PER_MINUTE: usize = 3;
 
 #[derive(Default)]
 pub struct PublisherStats {
@@ -75,11 +91,12 @@ pub struct PublisherStats {
     pub height: AtomicU64,
 }
 
-/// Encodes frames from a capture source and hands them to the network.
+/// Encodes frames from a capture source and hands them to the network, and looks after the
+/// capture (its thread owns it): one that stops working by itself (a game changing the display,
+/// the graphics driver restarting) is started again with `restart`.
 pub struct Publisher {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
-    _capture: CaptureHandle,
     pub keyframe: Arc<AtomicBool>,
     /// Frames handed to the network but not yet acknowledged by the server.
     pub inflight: Arc<AtomicUsize>,
@@ -87,6 +104,7 @@ pub struct Publisher {
 }
 
 impl Publisher {
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         cfg: PublisherConfig,
         capture: CaptureHandle,
@@ -94,6 +112,8 @@ impl Publisher {
         mut sink: EncodedSink,
         mut preview: Option<PreviewSink>,
         inflight: Arc<AtomicUsize>,
+        mut restart: Option<Restart>,
+        mut on_event: Box<dyn FnMut(CaptureEvent) + Send>,
     ) -> anyhow::Result<Publisher> {
         let stop = Arc::new(AtomicBool::new(false));
         let keyframe = Arc::new(AtomicBool::new(true));
@@ -112,7 +132,43 @@ impl Publisher {
                 let mut scaler = Scaler::default();
                 let mut preview_scaler = Scaler::default();
                 let mut n: u64 = 0;
+                let mut capture = capture;
+                let mut checked = Instant::now();
+                let mut restarts: Vec<Instant> = Vec::new();
+                let mut over = false;
                 while !st.load(Ordering::Relaxed) {
+                    // The capture, looked at once a second.
+                    if !over && checked.elapsed() >= Duration::from_secs(1) {
+                        checked = Instant::now();
+                        match capture.trouble() {
+                            None => {}
+                            Some(Trouble::Gone(why)) => {
+                                over = true;
+                                on_event(CaptureEvent::Ended { why, gone: true });
+                            }
+                            Some(Trouble::Broken(why)) => {
+                                restarts.retain(|t| t.elapsed() < Duration::from_secs(60));
+                                let again = if restarts.len() < RESTARTS_PER_MINUTE { restart.as_mut().map(|f| f()) } else { None };
+                                match again {
+                                    Some(Ok(c)) => {
+                                        warn!("the capture stopped working ({why}); started it again");
+                                        capture = c;
+                                        restarts.push(Instant::now());
+                                        kf.store(true, Ordering::Relaxed);
+                                        on_event(CaptureEvent::Restarted(why));
+                                    }
+                                    Some(Err(e)) => {
+                                        over = true;
+                                        on_event(CaptureEvent::Ended { why: format!("{why}, and starting it again didn't work: {e:#}"), gone: false });
+                                    }
+                                    None => {
+                                        over = true;
+                                        on_event(CaptureEvent::Ended { why, gone: false });
+                                    }
+                                }
+                            }
+                        }
+                    }
                     let fresh = slot.take_wait(Duration::from_millis(40));
                     let now = Instant::now();
                     let have_new = fresh.is_some();
@@ -176,8 +232,10 @@ impl Publisher {
                     }
                 }
                 debug!("encoder stopped after {n} frames");
+                // (The capture stops here, with the thread that looked after it.)
+                drop(capture);
             })?;
-        Ok(Publisher { stop, thread: Some(thread), _capture: capture, keyframe, inflight, stats })
+        Ok(Publisher { stop, thread: Some(thread), keyframe, inflight, stats })
     }
 }
 
@@ -328,5 +386,74 @@ impl Drop for Receiver {
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A capture that has already stopped working (its thread is done).
+    fn broken() -> CaptureHandle {
+        CaptureHandle::thread(Arc::new(AtomicBool::new(false)), std::thread::spawn(|| {}))
+    }
+
+    #[test]
+    fn a_capture_that_stops_working_is_started_again_a_few_times_then_given_up_on() {
+        let cfg = PublisherConfig { screen: true, max_width: 320, max_height: 180, fps: 10, bitrate: 200_000 };
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let starts = Arc::new(AtomicUsize::new(0));
+        let (ev, st) = (events.clone(), starts.clone());
+        let publisher = Publisher::start(
+            cfg,
+            broken(),
+            Arc::new(FrameSlot::default()),
+            Box::new(|_, _, _| {}),
+            None,
+            Arc::new(AtomicUsize::new(0)),
+            Some(Box::new(move || {
+                st.fetch_add(1, Ordering::SeqCst);
+                Ok(broken())
+            })),
+            Box::new(move |e| ev.lock().push(e)),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !events.lock().iter().any(|e| matches!(e, CaptureEvent::Ended { .. })) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        drop(publisher);
+        let events = events.lock().clone();
+        assert_eq!(starts.load(Ordering::SeqCst), RESTARTS_PER_MINUTE);
+        assert_eq!(events.len(), RESTARTS_PER_MINUTE + 1, "{events:?}");
+        assert!(events[..RESTARTS_PER_MINUTE].iter().all(|e| matches!(e, CaptureEvent::Restarted(_))));
+        assert_eq!(events.last(), Some(&CaptureEvent::Ended { why: "capturing stopped".into(), gone: false }));
+    }
+
+    #[test]
+    fn a_capture_that_cant_start_again_ends_the_share() {
+        let cfg = PublisherConfig { screen: true, max_width: 320, max_height: 180, fps: 10, bitrate: 200_000 };
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let ev = events.clone();
+        let publisher = Publisher::start(
+            cfg,
+            broken(),
+            Arc::new(FrameSlot::default()),
+            Box::new(|_, _, _| {}),
+            None,
+            Arc::new(AtomicUsize::new(0)),
+            Some(Box::new(|| Err(anyhow::anyhow!("no screen")))),
+            Box::new(move |e| ev.lock().push(e)),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while events.lock().is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        drop(publisher);
+        assert_eq!(
+            events.lock().clone(),
+            vec![CaptureEvent::Ended { why: "capturing stopped, and starting it again didn't work: no screen".into(), gone: false }]
+        );
     }
 }

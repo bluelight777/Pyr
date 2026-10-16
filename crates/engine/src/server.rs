@@ -631,7 +631,7 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
             }
             Event::Pong { .. } | Event::Ok | Event::Hello { .. } | Event::Ready { .. } => {}
             Event::Error { message, .. } => toast = Some(message),
-            Event::History { .. } | Event::InviteCreated { .. } | Event::VoiceReady { .. } | Event::Kicked { .. } | Event::Bugs { .. } | Event::PluginSubmissions { .. } | Event::PluginSubmission { .. } => {}
+            Event::History { .. } | Event::InviteCreated { .. } | Event::VoiceReady { .. } | Event::Kicked { .. } | Event::Bugs { .. } | Event::PluginSubmissions { .. } | Event::PluginSubmission { .. } | Event::SubmissionFile { .. } | Event::Submitted { .. } | Event::MySubmissions { .. } => {}
         }
         if let Some(t) = toast {
             st.toast(t, true);
@@ -654,8 +654,11 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
                 Some(_) => follow = Some(cid),
                 // (Not a call we're in already.)
                 None if !here(&st, cid) => {
+                    // Rung again while it's still ringing (the same call): it keeps its time,
+                    // so it still stops when it would have.
+                    let since = st.incoming_calls.iter().find(|c| this(c, cid) && c.from == from).map(|c| c.since).unwrap_or_else(Instant::now);
                     st.incoming_calls.retain(|c| !this(c, cid));
-                    st.incoming_calls.push(IncomingCall { server_key: key.to_string(), channel_id: cid, from, video, since: Instant::now() });
+                    st.incoming_calls.push(IncomingCall { server_key: key.to_string(), channel_id: cid, from, video, since });
                     ring = true;
                 }
                 None => {}

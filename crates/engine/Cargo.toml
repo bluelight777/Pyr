@@ -7,6 +7,9 @@ license.workspace = true
 description = "Ingle client engine: networking, audio and video pipelines (no UI)."
 
 [dependencies]
+# Checking a skin's fonts parse before the app's text renderer gets them (the same crate egui
+# reads fonts with).
+ab_glyph = "0.2.32"
 anyhow = "1.0.104"
 base64 = "0.22.1"
 bytes = "1.12.1"
@@ -42,6 +45,8 @@ sonora = "0.2.0"
 # Reading audio files for the soundboard (MP3, AAC/M4A, Ogg Vorbis, FLAC, WAV); MPL-2.0.
 symphonia = { version = "0.5.5", default-features = false, features = ["mp3", "aac", "isomp4", "ogg", "vorbis", "flac", "wav", "pcm", "adpcm"] }
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util"] }
+# Reading a plugin's Cargo.toml (what it says about itself) before it's sent in.
+toml = "1.1"
 tracing = "0.1.44"
 yuv = "0.8.19"
 
@@ -61,6 +66,8 @@ windows = { version = "0.62", features = [
     "Win32_NetworkManagement_QoS",
     "Win32_Networking_WinSock",
     "Win32_System_IO",
+    # Asking whether Windows took the screen capture's graphics device away (video/capture.rs).
+    "Win32_Graphics_Direct3D11",
 ] }
 windows-capture = "2.0.1"
 nokhwa = { version = "0.10.11", features = ["input-msmf"] }

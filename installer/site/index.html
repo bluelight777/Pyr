@@ -300,6 +300,12 @@ section { position: relative; }
 .plug-hero .shot { margin: 26px 0 0 30px; border-radius: 14px 0 0 0; border-right: 0; border-bottom: 0; flex: 1; min-height: 240px; }
 .plug-hero .shot img { width: 100%; height: 100%; object-fit: cover; object-position: left top; }
 .plug-side { display: grid; gap: 16px; }
+.skin-row { margin-top: 16px; padding: 0; display: grid; grid-template-columns: 1fr 1.25fr; gap: 28px; align-items: end; overflow: hidden; }
+.skin-row .skin-text { padding: 30px 0 30px 30px; align-self: center; }
+.skin-row .kind { font-size: 12.5px; font-weight: 650; color: #ffb48a; letter-spacing: .06em; text-transform: uppercase; }
+.skin-row h3 { margin-top: 6px; }
+.skin-row .shot { margin: 26px 0 0; border-radius: 14px 0 0 0; border-right: 0; border-bottom: 0; }
+.skin-row .shot img { display: block; width: 100%; height: auto; }
 .plug-side .card h3 { font-size: 20px; }
 
 /* trust */
@@ -407,6 +413,9 @@ dialog[open] { animation: pop .35s var(--ease); }
   .t-private { grid-column: span 12; }
   .plug-grid, .trust { grid-template-columns: 1fr; }
   .plug-side { grid-template-columns: repeat(3, 1fr); }
+  .skin-row { grid-template-columns: 1fr; gap: 0; }
+  .skin-row .skin-text { padding: 30px 30px 0; }
+  .skin-row .shot { margin: 24px 0 0 30px; }
 }
 @media (max-width: 760px) {
   body { font-size: 16px; }
@@ -438,6 +447,9 @@ dialog[open] { animation: pop .35s var(--ease); }
   .dlg h2 { font-size: 25px; }
   .plug-side { grid-template-columns: 1fr; }
   .plug-hero { padding: 0; }
+  .skin-row { padding: 0; }
+  .skin-row .skin-text { padding: 24px 24px 0; }
+  .skin-row .shot { margin: 20px 0 0 24px; }
   .plug-hero .top-row { padding: 24px 24px 0; }
   .plug-hero p, .plug-hero .tags { padding: 0 24px; }
   .plug-hero .shot { margin-left: 24px; min-height: 0; }
@@ -707,9 +719,9 @@ dialog[open] { animation: pop .35s var(--ease); }
 <section class="sec" id="plugins" aria-labelledby="plugins-title">
   <div class="wrap">
     <div class="head" data-reveal>
-      <span class="eyebrow">New: Plugins</span>
+      <span class="eyebrow">New: Plugins and skins</span>
       <h2 id="plugins-title">Make Ingle do <span class="serif fire-text">more.</span></h2>
-      <p>Install programs and add-ons from the Ingle Library, right inside Ingle. Every plugin is built from its Rust source code, and only after someone has read it.</p>
+      <p>Install programs, add-ons and skins from the Ingle Library, right inside Ingle. Every plugin is built from its Rust source code, and only after someone has read it.</p>
     </div>
     <div class="plug-grid">
       <article class="card plug-hero" data-reveal>
@@ -730,15 +742,24 @@ dialog[open] { animation: pop .35s var(--ease); }
         <article class="card" data-reveal>
           <div class="icon-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg></div>
           <h3>Make your own with Claude</h3>
-          <p>The <a href="https://github.com/bluelight777/ingle/tree/main/plugins" rel="noopener">Ingle plugin kit</a> explains everything Claude needs, so you can describe a plugin and build it together, then try it in Ingle. Send it to the library from Ingle; it's reviewed before anyone else sees it.</p>
+          <p>Add Ingle's Claude connector in Settings → Claude, and Claude can build a skin or a plugin with you, show the skin on your Ingle while you talk it over, and send it to the Ingle Library, where it's reviewed before anyone else sees it. The <a href="https://github.com/bluelight777/ingle/tree/main/plugins" rel="noopener">plugin kit</a> has everything Claude needs.</p>
         </article>
         <article class="card" data-reveal>
           <div class="icon-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4.5 6v6c0 4.4 3.2 8.1 7.5 9 4.3-.9 7.5-4.6 7.5-9V6z"/><path d="m8.6 12.2 2.4 2.4 4.4-4.8"/></svg></div>
           <h3>Checked every time</h3>
-          <p>Ingle checks every file against the library's signed list before it installs a plugin, and again each time a program opens.</p>
+          <p>Ingle checks every file against the library's signed list before it installs a plugin or a skin, and again each time a program opens.</p>
         </article>
       </div>
     </div>
+    <article class="card skin-row" data-reveal>
+      <div class="skin-text">
+        <span class="kind">Skin · in the Library</span>
+        <h3>Skins: Ingle in your colors</h3>
+        <p>Change Ingle's colors, put a picture behind the chat, and bring fonts and sounds of your own. Skins have no code, and Ingle checks every file before it uses one. Blood Moon is the first; Settings → Appearance brings back Campfire any time.</p>
+        <div class="tags"><span class="tag">Colors</span><span class="tag">A picture behind the chat</span><span class="tag">Fonts and sounds</span></div>
+      </div>
+      <div class="shot"><img src="assets/img/skin-blood-moon.webp" width="1280" height="720" alt="Ingle wearing the Blood Moon skin: deep reds, with a blood-red moon rising over a ridge of pines behind the chat." loading="lazy"></div>
+    </article>
   </div>
 </section>
 
@@ -751,7 +772,7 @@ dialog[open] { animation: pop .35s var(--ease); }
     <div class="trust">
       <div class="card" data-reveal>
         <ul class="checks">
-          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg><span><b>About 200 automated tests run before each release:</b> real calls between real apps over the network, 1080p screen shares, stream sound that reaches only viewers, voice through server restarts, and backups restored on another server.</span></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg><span><b>Over 200 automated tests run before each release:</b> real calls between real apps over the network, 1080p screen shares, stream sound that reaches only viewers, voice through server restarts, and backups restored on another server.</span></li>
           <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg><span><b>Signed updates.</b> Ingle only installs updates signed with Firelit Games' key, and won't take an old or expired one.</span></li>
           <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg><span><b>Open source.</b> The code is <a href="https://github.com/bluelight777/ingle" rel="noopener">on GitHub</a> under the MIT or Apache 2.0 license.</span></li>
           <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg><span><b>Honest about gaps.</b> Not tested yet: renting through DigitalOcean's real website, and real cloud firewalls. Not built yet: phone and Mac apps, and end-to-end encrypted messages (coming in 0.8).</span></li>
@@ -1064,7 +1085,7 @@ dialog[open] { animation: pop .35s var(--ease); }
   // ---- embers rising behind the hero
   var cv = $("#embers");
   if (!cv || reduce || !cv.getContext) return;
-  var ctx = cv.getContext("2d"), W = 0, H = 0, dpr = 1, parts = [], running = false, seen = true;
+  var ctx = cv.getContext("2d"), W = 0, H = 0, dpr = 1, parts = [], running = false, seen = true, raf = 0, last = 0;
   var sprite = doc.createElement("canvas"); sprite.width = sprite.height = 32;
   var sg = sprite.getContext("2d"), g = sg.createRadialGradient(16, 16, 0, 16, 16, 16);
   g.addColorStop(0, "rgba(255,236,190,1)"); g.addColorStop(.25, "rgba(255,170,80,.9)"); g.addColorStop(.6, "rgba(255,100,40,.25)"); g.addColorStop(1, "rgba(255,80,30,0)");
@@ -1080,23 +1101,34 @@ dialog[open] { animation: pop .35s var(--ease); }
     return { x: x, y: anywhere ? Math.random() * H : H + 10, vx: (Math.random() - 0.5) * 0.25, vy: -(0.35 + Math.random() * 0.95),
              s: 3 + Math.random() * 9, t: 0, life: 260 + Math.random() * 420, ph: Math.random() * 6.28, sw: 0.4 + Math.random() * 0.9 };
   }
-  function frame() {
+  // One loop only: a frame asked for before the page was hidden still comes when it's shown
+  // again, so stopping cancels it (otherwise every hide and show added a loop, and the embers
+  // sped up). They move by the time that passed (at most 50 ms of it, after a pause), not by
+  // the frame, so they rise as fast on a 144 Hz screen as on a 60 Hz one.
+  function frame(now) {
+    raf = 0;
     if (!running) return;
+    var dt = last ? Math.min(50, Math.max(0, now - last)) / 16.667 : 1;
+    last = now;
     ctx.clearRect(0, 0, W, H);
     ctx.globalCompositeOperation = "lighter";
     for (var k = 0; k < parts.length; k++) {
       var p = parts[k];
-      p.t++; p.ph += 0.018;
-      p.x += p.vx + Math.sin(p.ph) * 0.28 * p.sw; p.y += p.vy;
+      p.t += dt; p.ph += 0.018 * dt;
+      p.x += (p.vx + Math.sin(p.ph) * 0.28 * p.sw) * dt; p.y += p.vy * dt;
       var u = p.t / p.life, a = u < 0.12 ? u / 0.12 : 1 - (u - 0.12) / 0.88;
       if (u >= 1 || p.y < -20) { parts[k] = spawn(false); continue; }
       ctx.globalAlpha = Math.max(0, a) * 0.85;
       ctx.drawImage(sprite, p.x - p.s / 2, p.y - p.s / 2, p.s, p.s);
     }
     ctx.globalAlpha = 1;
-    requestAnimationFrame(frame);
+    raf = requestAnimationFrame(frame);
   }
-  function go() { var want = seen && !doc.hidden; if (want && !running) { running = true; requestAnimationFrame(frame); } else if (!want) running = false; }
+  function go() {
+    var want = seen && !doc.hidden;
+    if (want && !running) { running = true; last = 0; if (!raf) raf = requestAnimationFrame(frame); }
+    else if (!want && running) { running = false; if (raf) { cancelAnimationFrame(raf); raf = 0; } }
+  }
   size();
   var n = Math.round(Math.min(70, Math.max(26, W / 22)));
   for (var k = 0; k < n; k++) parts.push(spawn(true));

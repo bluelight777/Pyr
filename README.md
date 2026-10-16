@@ -59,8 +59,9 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   but they aren't end-to-end encrypted yet: they're stored on the server, so whoever runs it
   could read them (end-to-end encrypted messages are coming in 0.8).
 - **Call friends**, like Discord: the call and video buttons at the top of a direct message,
-  or **Call** when you right-click someone's name. It rings them (with Accept and Decline,
-  a Windows notice and a flashing taskbar button if Ingle is hidden), the call shows above
+  or **Call** when you right-click someone's name. It rings them for 30 seconds, about as long
+  as Discord does (with Accept and Decline, a Windows notice and a flashing taskbar button if
+  Ingle is hidden), then counts as missed; the call shows above
   your chat, and it's end-to-end encrypted like voice channels. Only the two of you see it;
   server moderators can't mute you in it, and blocking someone ends it.
 - **Group conversations and group calls** of up to 10 people: start one with the **+** by
@@ -160,11 +161,24 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   not the internet, not the rest of your PC). They add /commands to chat (with hints as you
   type), show a small panel and keep a little data. **Dice** rolls dice: `/roll 2d6+1`, or
   click a die in its panel.
+- **Skins** change how Ingle looks and sounds: its colors, a picture behind the chat, fonts
+  and the sounds for messages, people joining and calls. They're in the Library next to the
+  plugins, and Settings → Appearance switches between them and Campfire, Ingle's own. Skins
+  have no code, and Ingle checks every file (fonts included) before it uses one.
+- Every plugin and skin shows **who made it**: click their name for everything they made.
+  **Star** the ones you like, and sort the Library by favorites, name, author or newest.
 - **Make your own with Claude**: Plugins → Make your own starts an add-on in a folder with the
   plugin kit and a `CLAUDE.md` that explains Ingle add-ons to Claude. Say what it should do,
   try the `.wasm` it builds right there in Ingle, then **send it for review**: Ingle sends its
   Rust source (never a built file), and nothing is built or listed until it's been looked at.
   The kit, a template and Dice are in [`plugins/`](plugins).
+- **The Claude connector** (`ingle-mcp`, installed with Ingle; Settings → Claude adds it to
+  the Claude app, or gives the line for Claude Code) lets Claude make skins and plugins with
+  you: it starts one, puts a skin on your Ingle as you talk it over, checks it the way the
+  Library will, and sends it in for review, and new versions of yours later. What it sends is
+  signed with your Ingle identity, so only you can send a new version of what you sent, and
+  Plugins → Make your own shows whether yours were approved (with the reviewer's note). How
+  to make a skin: [`skins/`](skins).
 
 ![The Ingle Library: Chimbrowser and Dice](docs/screenshots/plugins.png)
 
@@ -495,7 +509,14 @@ Open them with the gear next to your name:
 - **Notifications**: sounds and their volume (with Test), whether deleting a message asks
   first, and what you've muted.
 - **Windows** (on Windows): the icon by the clock, starting with Windows, and **Quit Ingle**.
-- **About**: the version, **Report a bug**, and credits.
+- **Appearance**: the skin Ingle wears (Campfire, Ingle's own, or one from the Library), and
+  trying one you're making in a folder.
+- **Claude**: sets up the Claude connector in the Claude app (or gives the line for Claude
+  Code), for making skins and plugins with Claude.
+- **About**: the version, **Report a bug**, whether error reports go by themselves (on unless
+  you switch them off: when screen sharing or the camera won't start or stops working, or Ingle
+  crashed or froze last time, Ingle sends what happened and its log, never your messages), and
+  credits.
 
 Right-click a person for their volume and options; right-click a stream for its volume
 and to mute its sound.
@@ -569,7 +590,7 @@ faster. On Linux: `cmake`, `clang` (bindgen needs libclang), `libasound2-dev` an
 `libx11-dev`.
 
 ```
-cargo build --release                  # target/release/ingle(.exe), ingle-server(.exe)
+cargo build --release                  # target/release/ingle(.exe), ingle-server(.exe), ingle-mcp(.exe)
 cargo build --release -p ingle-engine --example bot
 scripts/build-vps-server.sh            # dist/vps/ingle-server-linux-{x86_64,aarch64} (static)
 cargo test --workspace                 # unit tests + end-to-end tests over real QUIC
@@ -603,7 +624,9 @@ crates/server   ingle-server: SQLite storage, auth, chat, roles, files, SFU medi
 crates/engine   client engine: networking, E2EE, audio + video pipelines (no UI)
 crates/host     server setup: renting from DigitalOcean, installing over SSH, reachability
 crates/app      ingle: the egui desktop app
+crates/mcp      ingle-mcp: the Claude connector (an MCP server on stdin and stdout)
 plugins         the plugin kit (ingle-plugin), a template for new add-ons, and Dice
+skins           how to make a skin: the format, the colors and the checks
 ```
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how it works and [RESEARCH.md](RESEARCH.md)
@@ -622,7 +645,9 @@ reports, the soundboard heard by everyone in the call, server mute and deafen en
 the server, backups whose server key only their owner can open, release files that
 expire; and for
 plugins, the library's signed list, installs checked file by file, add-ons that reach
-outside or run away being stopped, and plugins sent in kept for the library's owner). The
+outside or run away being stopped, plugins and skins sent in kept for the library's owner,
+signed so only their sender can send new versions, a skin's big files sent in parts and
+fetched one by one; and the Claude connector's tools over both kinds of MCP). The
 app is driven through its real UI on a virtual display (visual fixes are checked with
 before-and-after captures), and the Windows builds are run under Wine (the app, the server,
 the bot and the setup).

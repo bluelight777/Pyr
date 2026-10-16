@@ -352,7 +352,7 @@ mod tests {
 
     #[test]
     fn the_call_is_taken_back_out_of_a_streams_sound() {
-        // People taking turns: bursts of coloured noise.
+        // People taking turns: bursts of colored noise.
         let mut seed = 0x2545_f491_4f6c_dd1du64;
         let mut lp = 0f32;
         let call: Vec<f32> = (0..48_000 * 14)

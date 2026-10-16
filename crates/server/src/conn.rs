@@ -70,6 +70,10 @@ pub async fn handle(hub: Arc<Hub>, incoming: quinn::Incoming, mut slot: ConnSlot
     drop(slot);
 }
 
+/// Most of a submission's files sent with `PluginSubmission` (bytes, before base64): what fits
+/// one reply with room to spare.
+const INLINE_SUBMISSION_BYTES: usize = 600_000;
+
 async fn read_frame<T: serde::de::DeserializeOwned>(recv: &mut quinn::RecvStream) -> Result<Option<T>> {
     let mut len = [0u8; 4];
     match recv.read_exact(&mut len).await {
@@ -81,6 +85,65 @@ async fn read_frame<T: serde::de::DeserializeOwned>(recv: &mut quinn::RecvStream
     let mut body = vec![0u8; n];
     recv.read_exact(&mut body).await?;
     Ok(Some(framing::decode(&body)?))
+}
+
+/// Whether `sig` is `author_id`'s signature over a submission transcript for `digest` on this
+/// connection (the server's nonce, the TLS keying material).
+fn signed_by(conn: &quinn::Connection, nonce: &[u8], author_id: &str, digest: &[u8], sig: &str) -> bool {
+    let mut exporter = [0u8; 32];
+    if conn.export_keying_material(&mut exporter, crypto::SUBMISSION_EXPORTER_LABEL, b"").is_err() {
+        return false;
+    }
+    let Ok(sig) = ingle_proto::b64::decode(sig) else { return false };
+    crypto::is_valid_user_id(author_id) && crypto::verify(author_id, &crypto::submission_transcript(nonce, &exporter, author_id, digest), &sig)
+}
+
+/// A submission: the rest of its files (`parts`, read only if it would be taken), its
+/// signature checked if it has one, then taken in. Returns its id and whether it was signed.
+async fn take_submission(
+    hub: &Hub,
+    conn: &quinn::Connection,
+    recv: &mut quinn::RecvStream,
+    nonce: &[u8],
+    mut sub: PluginSubmission,
+) -> std::result::Result<(i64, bool), String> {
+    let ip = conn.remote_address().ip();
+    hub.may_take_submission(ip)?;
+    if sub.parts > MAX_SUBMISSION_PARTS {
+        return Err(format!("It comes in {} parts: {MAX_SUBMISSION_PARTS} at most.", sub.parts));
+    }
+    if sub.parts > 0 {
+        let until = tokio::time::Instant::now() + Duration::from_secs(120);
+        for _ in 0..sub.parts {
+            let part: Option<ClientFrame> = tokio::time::timeout_at(until, read_frame(recv))
+                .await
+                .map_err(|_| "The rest of it didn't arrive in time.".to_string())?
+                .map_err(|e| format!("The rest of it didn't arrive: {e}"))?;
+            match part.map(|f| f.req) {
+                Some(Request::SubmissionPart { files }) => {
+                    if sub.files.len() + files.len() > SUBMISSION_FILES_MAX {
+                        return Err("Too many files.".into());
+                    }
+                    sub.files.extend(files);
+                }
+                _ => return Err("Expected the rest of its files.".into()),
+            }
+        }
+    }
+    // The files that came are the ones it lists (and so the ones its signature covers).
+    if !sub.manifest.is_empty() {
+        let mut said = sub.manifest.clone();
+        said.sort();
+        if manifest_of(&sub.files) != said {
+            return Err("Its files aren't the ones it lists.".into());
+        }
+    }
+    let signed = !sub.author_id.is_empty();
+    if signed && !signed_by(conn, nonce, &sub.author_id, &submission_digest(&sub), &sub.sig) {
+        return Err("Its signature doesn't check out.".into());
+    }
+    let id = hub.take_plugin_submission(ip, sub, signed)?;
+    Ok((id, signed))
 }
 
 async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, deadline: tokio::time::Instant) -> Result<()> {
@@ -109,11 +172,34 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
         tokio::time::sleep(Duration::from_millis(300)).await;
         return Ok(());
     }
-    // Nor this: a plugin sent in for the Ingle Library (where they're collected).
+    // Nor this: a plugin or skin sent in for the Ingle Library (where they're collected),
+    // with the rest of its files after it if it's big, and signed by its sender if they can
+    // send new versions of it later.
     if let Request::SubmitPlugin { submission } = login.req {
-        let reply = match hub.take_plugin_submission(conn.remote_address().ip(), submission) {
-            Ok(_) => frame(login.id, Event::Ok),
-            Err(msg) => reject(ErrorCode::RateLimited, &msg),
+        let ip = conn.remote_address().ip();
+        let reply = match take_submission(&hub, &conn, &mut recv, &nonce, submission).await {
+            Ok((id, true)) => frame(login.id, Event::Submitted { id }),
+            Ok((_, false)) => frame(login.id, Event::Ok),
+            Err(msg) => {
+                debug!(%ip, "submission refused: {msg}");
+                reject(ErrorCode::RateLimited, &msg)
+            }
+        };
+        send.write_all(&reply).await?;
+        let _ = send.finish();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        return Ok(());
+    }
+    // Or asking for one's own (by an Ingle id this connection proves).
+    if let Request::MySubmissions { author_id, sig } = login.req {
+        let ok = signed_by(&conn, &nonce, &author_id, &my_submissions_digest(), &sig);
+        let reply = if !ok {
+            reject(ErrorCode::Unauthorized, "That signature doesn't check out.")
+        } else {
+            match hub.my_submissions(conn.remote_address().ip(), &author_id) {
+                Ok(list) => frame(login.id, Event::MySubmissions { list }),
+                Err(msg) => reject(ErrorCode::RateLimited, &msg),
+            }
         };
         send.write_all(&reply).await?;
         let _ = send.finish();
@@ -1446,7 +1532,8 @@ impl Ctx<'_> {
                 Ok(Event::Ok)
             }
             Request::ReportBug { .. } => bad("send bug reports instead of logging in"),
-            Request::SubmitPlugin { .. } => bad("send plugins instead of logging in"),
+            Request::SubmitPlugin { .. } | Request::SubmissionPart { .. } => bad("send plugins and skins instead of logging in"),
+            Request::MySubmissions { .. } => bad("ask for your own submissions instead of logging in"),
             Request::ListPluginSubmissions => {
                 if self.role() != Role::Owner {
                     return Err((ErrorCode::Forbidden, "Only the server's owner can see plugins sent in.".into()));
@@ -1461,13 +1548,43 @@ impl Ctx<'_> {
                     return Err((ErrorCode::NotFound, "That plugin is gone.".into()));
                 };
                 let files: Vec<SourceFile> = serde_json::from_str(&files).unwrap_or_default();
-                Ok(Event::PluginSubmission { entry, files })
+                // As much as fits one reply comes along; the rest (a skin's bigger files) is
+                // fetched one by one.
+                let (mut inline, mut more, mut room) = (Vec::new(), Vec::new(), INLINE_SUBMISSION_BYTES);
+                let manifest = manifest_of(&files);
+                for f in files {
+                    let d = manifest.iter().find(|m| m.path == f.path).cloned().unwrap_or_default();
+                    if (d.size as usize) <= room {
+                        room -= d.size as usize;
+                        inline.push(f);
+                    } else {
+                        more.push(d);
+                    }
+                }
+                Ok(Event::PluginSubmission { entry, files: inline, more })
             }
-            Request::SetPluginSubmissionStatus { id, status } => {
+            Request::GetSubmissionFile { id, path } => {
+                if self.role() != Role::Owner {
+                    return Err((ErrorCode::Forbidden, "Only the server's owner can see what's sent in.".into()));
+                }
+                let Some((_, files)) = db.submission(id) else {
+                    return Err((ErrorCode::NotFound, "That's gone.".into()));
+                };
+                let files: Vec<SourceFile> = serde_json::from_str(&files).unwrap_or_default();
+                match files.into_iter().find(|f| f.path == path) {
+                    Some(f) => Ok(Event::SubmissionFile { id, path, data: f.data }),
+                    None => Err((ErrorCode::NotFound, "There's no such file in it.".into())),
+                }
+            }
+            Request::SetPluginSubmissionStatus { id, status, note } => {
                 if self.role() != Role::Owner {
                     return Err((ErrorCode::Forbidden, "Only the server's owner can approve plugins.".into()));
                 }
-                if !db.set_submission_status(id, status).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
+                let mut note: String = note.chars().filter(|c| !c.is_control() || *c == '\n').collect::<String>().trim().to_string();
+                while note.len() > SUBMISSION_NOTE_MAX {
+                    note.pop();
+                }
+                if !db.set_submission_status(id, status, &note).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
                     return Err((ErrorCode::NotFound, "That plugin is gone.".into()));
                 }
                 hub.broadcast_info();
@@ -1739,52 +1856,178 @@ mod tests {
             ..Default::default()
         };
         // Not collected yet.
-        assert!(hub.take_plugin_submission(ip, good()).unwrap_err().contains("doesn't collect"));
+        assert!(hub.take_plugin_submission(ip, good(), false).unwrap_err().contains("doesn't collect"));
         assert!(forbidden(ctx(&hub, &member).handle(Request::SetPluginSubmissions { on: true })));
         assert!(matches!(ctx(&hub, &owner).handle(Request::SetPluginSubmissions { on: true }), Ok(Event::Ok)));
         // Paths that leave the folder, no Cargo.toml, too big, not a plugin kind.
         let mut bad = good();
         bad.files.push(file("../escape.rs", b"x"));
-        assert!(hub.take_plugin_submission(ip, bad).is_err());
+        assert!(hub.take_plugin_submission(ip, bad, false).is_err());
         let mut bad = good();
         bad.files[0].path = "C:/Windows/x".into();
-        assert!(hub.take_plugin_submission("203.0.113.10".parse().unwrap(), bad).is_err());
+        assert!(hub.take_plugin_submission("203.0.113.10".parse().unwrap(), bad, false).is_err());
         let mut bad = good();
         bad.files.remove(0);
-        assert!(hub.take_plugin_submission("203.0.113.11".parse().unwrap(), bad).unwrap_err().contains("Cargo.toml"));
+        assert!(hub.take_plugin_submission("203.0.113.11".parse().unwrap(), bad, false).unwrap_err().contains("Cargo.toml"));
         let mut bad = good();
         bad.files.push(file("assets/big.bin", &vec![0u8; SUBMISSION_MAX]));
-        assert!(hub.take_plugin_submission("203.0.113.12".parse().unwrap(), bad).unwrap_err().contains("bigger"));
+        assert!(hub.take_plugin_submission("203.0.113.12".parse().unwrap(), bad, false).unwrap_err().contains("bigger"));
         let mut bad = good();
         bad.kind = "script".into();
-        assert!(hub.take_plugin_submission("203.0.113.13".parse().unwrap(), bad).is_err());
-        // A good one is kept (its name without the control character); three an hour per place.
-        let id = hub.take_plugin_submission("203.0.113.14".parse().unwrap(), good()).unwrap();
-        hub.take_plugin_submission("203.0.113.14".parse().unwrap(), good()).unwrap();
-        hub.take_plugin_submission("203.0.113.14".parse().unwrap(), good()).unwrap();
-        assert!(hub.take_plugin_submission("203.0.113.14".parse().unwrap(), good()).unwrap_err().contains("try again"));
+        assert!(hub.take_plugin_submission("203.0.113.13".parse().unwrap(), bad, false).is_err());
+        // A good one is kept (its name without the control character); six an hour per place.
+        let id = hub.take_plugin_submission("203.0.113.14".parse().unwrap(), good(), false).unwrap();
+        hub.take_plugin_submission("203.0.113.14".parse().unwrap(), good(), false).unwrap();
+        hub.take_plugin_submission("203.0.113.14".parse().unwrap(), good(), false).unwrap();
+        for _ in 0..3 {
+            hub.take_plugin_submission("203.0.113.15".parse().unwrap(), good(), false).unwrap();
+        }
+        for place in ["203.0.113.14", "203.0.113.15"] {
+            hub.take_plugin_submission(place.parse().unwrap(), good(), false).unwrap();
+            hub.take_plugin_submission(place.parse().unwrap(), good(), false).unwrap();
+            hub.take_plugin_submission(place.parse().unwrap(), good(), false).unwrap();
+        }
+        assert!(hub.take_plugin_submission("203.0.113.14".parse().unwrap(), good(), false).unwrap_err().contains("try again"));
+        assert!(hub.may_take_submission("203.0.113.14".parse().unwrap()).is_err());
+        assert!(hub.may_take_submission("203.0.113.16".parse().unwrap()).is_ok());
         // Only the owner sees them, and the count.
         assert!(forbidden(ctx(&hub, &member).handle(Request::ListPluginSubmissions)));
         assert_eq!(hub.info_for(&member).new_plugin_submissions, 0);
-        assert_eq!(hub.info_for(&owner).new_plugin_submissions, 3);
+        assert_eq!(hub.info_for(&owner).new_plugin_submissions, 12);
         let list = match ctx(&hub, &owner).handle(Request::ListPluginSubmissions) {
             Ok(Event::PluginSubmissions { list }) => list,
             other => panic!("{other:?}"),
         };
-        assert_eq!(list.len(), 3);
+        assert_eq!(list.len(), 12);
         let e = list.iter().find(|e| e.id == id).unwrap();
         assert_eq!((e.name.as_str(), e.files, e.size), ("Dice", 2, 21));
         match ctx(&hub, &owner).handle(Request::GetPluginSubmission { id }) {
-            Ok(Event::PluginSubmission { files, .. }) => assert_eq!(files, good().files),
+            Ok(Event::PluginSubmission { files, more, .. }) => {
+                assert_eq!(files, good().files);
+                assert!(more.is_empty());
+            }
             other => panic!("{other:?}"),
         }
         assert!(forbidden(ctx(&hub, &member).handle(Request::GetPluginSubmission { id })));
-        ctx(&hub, &owner).handle(Request::SetPluginSubmissionStatus { id, status: SubmissionStatus::Approved }).unwrap();
-        assert_eq!(hub.info_for(&owner).new_plugin_submissions, 2);
+        ctx(&hub, &owner).handle(Request::SetPluginSubmissionStatus { id, status: SubmissionStatus::Approved, note: String::new() }).unwrap();
+        assert_eq!(hub.info_for(&owner).new_plugin_submissions, 11);
         assert!(matches!(
-            ctx(&hub, &owner).handle(Request::SetPluginSubmissionStatus { id: 999, status: SubmissionStatus::Rejected }),
+            ctx(&hub, &owner).handle(Request::SetPluginSubmissionStatus { id: 999, status: SubmissionStatus::Rejected, note: String::new() }),
             Err((ErrorCode::NotFound, _))
         ));
+    }
+
+    fn skin_files() -> Vec<SourceFile> {
+        let file = |path: &str, data: &[u8]| SourceFile { path: path.into(), data: ingle_proto::b64::encode(data) };
+        let json = r##"{ "name": "Blood Moon", "version": "1.0", "summary": "Red and black.", "author": "Blue",
+            "colors": { "main": "#1a0d0f", "ember": "#d4202c" }, "sounds": { "message": "sounds/message.ings" } }"##;
+        let sound = ingle_proto::sound::write(1, &[vec![0xf8, 0xff, 0xfe]]);
+        vec![file("skin.json", json.as_bytes()), file("sounds/message.ings", &sound), file("big.txt", &vec![b'a'; 60_000])]
+    }
+
+    #[test]
+    fn skins_and_new_versions_from_the_same_sender() {
+        let hub = hub();
+        let owner = uid();
+        hub.db.insert_user(&owner, "Owner", Role::Owner).unwrap();
+        ctx(&hub, &owner).handle(Request::SetPluginSubmissions { on: true }).unwrap();
+        let ip = |n: u8| -> std::net::IpAddr { format!("198.51.100.{n}").parse().unwrap() };
+        let (mara, eve) = (crypto::Identity::generate().user_id(), crypto::Identity::generate().user_id());
+        let skin = |by: &str| PluginSubmission { name: "Blood Moon".into(), kind: SKIN_KIND.into(), version: "1.0".into(), author_id: by.into(), files: skin_files(), ..Default::default() };
+        // A skin is checked as Ingle checks skins.
+        let mut bad = skin(&mara);
+        bad.files[0].data = ingle_proto::b64::encode(br##"{ "name": "X", "version": "1", "colors": { "body": "#333333", "main": "#303030" } }"##);
+        assert!(hub.take_plugin_submission(ip(1), bad, true).unwrap_err().contains("hard to read"));
+        let mut bad = skin(&mara);
+        bad.files.push(SourceFile { path: "tool.exe".into(), data: ingle_proto::b64::encode(b"MZ") });
+        assert!(hub.take_plugin_submission(ip(2), bad, true).unwrap_err().contains("doesn't use it"));
+        // Signed: the sender is kept. Not signed: nobody is, and it can't be a new version.
+        let first = hub.take_plugin_submission(ip(3), skin(&mara), true).unwrap();
+        let anon = hub.take_plugin_submission(ip(4), skin(&eve), false).unwrap();
+        let mut sneaky = skin("");
+        sneaky.update_of = first;
+        assert!(hub.take_plugin_submission(ip(5), sneaky, false).unwrap_err().contains("signed"));
+        // Only its sender can send a new version, of the same kind.
+        let mut by_eve = skin(&eve);
+        by_eve.update_of = first;
+        assert!(hub.take_plugin_submission(ip(6), by_eve, true).unwrap_err().contains("someone else"));
+        let mut onto_anon = skin(&eve);
+        onto_anon.update_of = anon;
+        assert!(hub.take_plugin_submission(ip(7), onto_anon, true).unwrap_err().contains("someone else"));
+        let mut as_plugin = skin(&mara);
+        as_plugin.kind = "addon".into();
+        as_plugin.update_of = first;
+        as_plugin.files = vec![SourceFile { path: "Cargo.toml".into(), data: ingle_proto::b64::encode(b"[package]") }];
+        assert!(hub.take_plugin_submission(ip(8), as_plugin, true).unwrap_err().contains("is a skin"));
+        let mut v2 = skin(&mara);
+        v2.version = "1.1".into();
+        v2.update_of = first;
+        v2.files[2] = SourceFile { path: "OFL.txt".into(), data: ingle_proto::b64::encode(b"SIL Open Font License") };
+        let second = hub.take_plugin_submission(ip(9), v2, true).unwrap();
+        // The owner sees skins counted apart, and what the new version changed.
+        assert_eq!(hub.info_for(&owner).new_skin_submissions, 3);
+        assert_eq!(hub.info_for(&owner).new_plugin_submissions, 0);
+        let list = match ctx(&hub, &owner).handle(Request::ListPluginSubmissions) {
+            Ok(Event::PluginSubmissions { list }) => list,
+            other => panic!("{other:?}"),
+        };
+        let e = list.iter().find(|e| e.id == second).unwrap();
+        assert_eq!((e.update_of, e.author_id.as_str(), e.kind.as_str()), (first, mara.as_str(), SKIN_KIND));
+        assert_eq!(e.changes, "Added: OFL.txt. Taken out: big.txt.");
+        assert!(list.iter().find(|e| e.id == anon).unwrap().author_id.is_empty());
+        // A note goes to the sender with the status; they see their own, nobody else's.
+        ctx(&hub, &owner)
+            .handle(Request::SetPluginSubmissionStatus { id: first, status: SubmissionStatus::Rejected, note: "Make the red darker.\u{7}".into() })
+            .unwrap();
+        let mine = hub.my_submissions(ip(10), &mara).unwrap();
+        assert_eq!(mine.iter().map(|e| e.id).collect::<Vec<_>>(), vec![second, first]);
+        assert_eq!(mine[1].note, "Make the red darker.");
+        assert_eq!(mine[1].status, SubmissionStatus::Rejected);
+        assert!(hub.my_submissions(ip(10), &eve).unwrap().is_empty(), "eve signed none");
+        assert!(hub.my_submissions(ip(10), "").unwrap().is_empty());
+        for _ in 0..27 {
+            hub.my_submissions(ip(10), &mara).unwrap();
+        }
+        assert!(hub.my_submissions(ip(10), &mara).is_err(), "30 asks an hour from one place");
+        // One sender can't flood from many places either: six tries an hour (refused ones count),
+        // and mara has made five.
+        let mut more = skin(&mara);
+        more.update_of = second;
+        hub.take_plugin_submission(ip(20), more.clone(), true).unwrap();
+        assert!(hub.take_plugin_submission(ip(21), more, true).unwrap_err().contains("a lot"));
+        hub.take_plugin_submission(ip(22), skin(&eve), true).unwrap();
+    }
+
+    #[test]
+    fn a_big_skins_files_come_one_by_one() {
+        let hub = hub();
+        let owner = uid();
+        hub.db.insert_user(&owner, "Owner", Role::Owner).unwrap();
+        ctx(&hub, &owner).handle(Request::SetPluginSubmissions { on: true }).unwrap();
+        let file = |path: &str, data: &[u8]| SourceFile { path: path.into(), data: ingle_proto::b64::encode(data) };
+        // A picture and a font too big to come along together with everything else.
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\x07\x80\0\0\x04\x38\x08\x06\0\0\0".to_vec();
+        png.resize(650_000, 0);
+        let mut font = vec![0, 1, 0, 0];
+        font.resize(300_000, 7);
+        let json = br#"{ "name": "Big", "version": "1", "background": { "file": "bg.png" }, "fonts": { "body": "f.ttf" } }"#;
+        let files = vec![file("skin.json", json), file("bg.png", &png), file("f.ttf", &font), file("OFL.txt", b"SIL Open Font License")];
+        let sub = PluginSubmission { name: "Big".into(), kind: SKIN_KIND.into(), version: "1".into(), files: files.clone(), ..Default::default() };
+        let id = hub.take_plugin_submission("198.51.100.1".parse().unwrap(), sub, false).unwrap();
+        match ctx(&hub, &owner).handle(Request::GetPluginSubmission { id }) {
+            Ok(Event::PluginSubmission { files: inline, more, .. }) => {
+                assert_eq!(inline.len() + more.len(), files.len());
+                assert_eq!(more.iter().map(|d| d.path.as_str()).collect::<Vec<_>>(), vec!["bg.png"]);
+                let total: usize = inline.iter().map(|f| ingle_proto::b64::decode(&f.data).unwrap().len()).sum();
+                assert!(total <= INLINE_SUBMISSION_BYTES);
+                match ctx(&hub, &owner).handle(Request::GetSubmissionFile { id, path: "bg.png".into() }) {
+                    Ok(Event::SubmissionFile { data, .. }) => assert_eq!(ingle_proto::b64::decode(&data).unwrap(), png),
+                    other => panic!("{other:?}"),
+                }
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(ctx(&hub, &owner).handle(Request::GetSubmissionFile { id, path: "nope.txt".into() }), Err((ErrorCode::NotFound, _))));
     }
 
     #[test]

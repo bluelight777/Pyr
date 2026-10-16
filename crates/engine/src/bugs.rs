@@ -4,7 +4,7 @@
 //! and can be overridden with the same environment variable when running.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use ingle_proto::control::{BugEntry, BugReport, BugStatus, ClientFrame, Event, Request, ServerFrame};
@@ -122,6 +122,85 @@ pub fn os_name() -> String {
     format!("{} ({})", std::env::consts::OS, std::env::consts::ARCH)
 }
 
+/// The same kind of trouble is reported by itself at most this often, and only a few times in
+/// all while Ingle runs.
+const AUTO_EVERY: Duration = Duration::from_secs(6 * 3600);
+const AUTO_PER_RUN: usize = 5;
+
+/// Sends a report by itself about something that went wrong, so it gets fixed: `what` names
+/// the kind of trouble (the same words each time it happens), `detail` says what Ingle knows,
+/// and Ingle's log goes along (scrubbed, as with any report). Not when reports by themselves are
+/// switched off (Settings → About), when the same thing was reported a little while ago, or
+/// once a few have gone this run. The first one ever sent says so, once.
+pub fn auto_report(shared: &Arc<Shared>, what: &str, detail: &str) {
+    if !can_report() {
+        return;
+    }
+    let (on, told) = {
+        let st = shared.state.read_recursive();
+        (st.settings.auto_reports, st.settings.auto_report_told)
+    };
+    if !on {
+        return;
+    }
+    {
+        let mut sent = shared.auto_reports.lock();
+        if sent.len() >= AUTO_PER_RUN || sent.iter().any(|(w, t)| w == what && t.elapsed() < AUTO_EVERY) {
+            return;
+        }
+        sent.push((what.to_string(), Instant::now()));
+    }
+    let title: String = format!("Automatic: {what}").chars().take(ingle_proto::control::BUG_TITLE_MAX / 2).collect();
+    let body: String = format!("{detail}\n\n(Ingle sent this by itself when it happened.)").chars().take(ingle_proto::control::BUG_BODY_MAX / 2).collect();
+    let report = BugReport { title, body, app_version: env!("CARGO_PKG_VERSION").to_string(), os: os_name(), log: log_tail(shared, ingle_proto::control::BUG_LOG_MAX - 1000) };
+    let s = shared.clone();
+    let what = what.to_string();
+    shared.rt.spawn(async move {
+        match send(s.clone(), report).await {
+            Ok(()) => {
+                tracing::info!("sent a report by itself: {what}");
+                if !told {
+                    let settings = {
+                        let mut cfg = s.config.lock();
+                        cfg.settings.auto_report_told = true;
+                        s.save_config_locked(&cfg);
+                        cfg.settings.clone()
+                    };
+                    let mut st = s.state.write();
+                    st.settings.auto_report_told = settings.auto_report_told;
+                    st.toast(
+                        format!("Ingle sent Firelit Games a report about this ({what}) so it gets fixed: what happened and Ingle's log, no messages. Settings → About can turn these off."),
+                        false,
+                    );
+                    drop(st);
+                    (s.repaint)();
+                }
+            }
+            Err(e) => tracing::warn!("couldn't send a report by itself ({what}): {e:#}"),
+        }
+    });
+}
+
+/// Trouble the run before this one ended in, from its log: a crash, or a window that stopped
+/// responding and never came back. (`what`, `detail`) for `auto_report`.
+pub fn last_run_trouble(previous_log: &str) -> Option<(&'static str, String)> {
+    if let Some(line) = previous_log.lines().rev().find(|l| l.contains("crash in thread main")) {
+        let at = line.find("crash in thread").unwrap_or(0);
+        return Some(("Ingle crashed", line[at..].chars().take(600).collect()));
+    }
+    let lines: Vec<&str> = previous_log.lines().collect();
+    let hung = lines.iter().rposition(|l| l.contains("Ingle's window stopped responding"));
+    let back = lines.iter().rposition(|l| l.contains("Ingle's window responds again"));
+    match (hung, back) {
+        (Some(h), b) if b.is_none_or(|b| b < h) => {
+            let line = lines[h];
+            let at = line.find("Ingle's window").unwrap_or(0);
+            Some(("Ingle stopped responding and was closed", line[at..].chars().take(600).collect()))
+        }
+        _ => None,
+    }
+}
+
 /// Send a report to the bug server.
 pub async fn send(shared: Arc<Shared>, report: BugReport) -> Result<()> {
     let server = server().ok_or_else(|| anyhow!("This copy of Ingle has nowhere to send bug reports."))?;
@@ -213,6 +292,24 @@ pub fn sort(reports: &mut [BugEntry]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_crash_or_a_freeze_last_time_is_found_in_its_log() {
+        let fine = "2026-10-16T05:44:38Z  INFO ingle::tray: tray icon added\n2026-10-16T05:48:29Z  INFO stream audio started\n";
+        assert_eq!(last_run_trouble(fine), None);
+        // A crash in the window's thread (others are logged too, but Ingle carries on).
+        let crashed = format!("{fine}2026-10-16T06:00:00Z ERROR ingle: crash in thread main: panicked at src/app.rs:10:5: oops\n");
+        let (what, detail) = last_run_trouble(&crashed).unwrap();
+        assert_eq!(what, "Ingle crashed");
+        assert!(detail.starts_with("crash in thread main: panicked at src/app.rs:10:5"), "{detail}");
+        assert_eq!(last_run_trouble(&format!("{fine}2026-10-16T06:00:00Z ERROR ingle: crash in thread ingle-ring: panicked\n")), None);
+        // A freeze it came out of isn't trouble; one it never came out of is.
+        let froze = format!("{fine}2026-10-16T06:01:00Z  WARN ingle::watchdog::win: Ingle's window stopped responding (it was drawing the window; shared state free, call free). busy\n");
+        assert_eq!(last_run_trouble(&froze).map(|t| t.0), Some("Ingle stopped responding and was closed"));
+        let came_back = format!("{froze}2026-10-16T06:01:09Z  INFO ingle::watchdog::win: Ingle's window responds again after 9 s\n");
+        assert_eq!(last_run_trouble(&came_back), None);
+        assert!(last_run_trouble(&format!("{came_back}{}", froze.lines().last().unwrap())).is_some(), "froze again later");
+    }
 
     #[test]
     fn secrets_never_leave_in_a_report() {

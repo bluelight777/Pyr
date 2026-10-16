@@ -5,12 +5,14 @@
 //! - `programs`: programs running inside Ingle's window.
 //! - `addon`: running add-ons (WebAssembly, sandboxed) and talking to them.
 //! - `source`: gathering a plugin's source to send in, and starting a new add-on.
-//! - `ui`: the Plugins page, add-on panels and the owner's review list.
+//! - `skins`: skins from the library (installing, reading back; wearing one is `crate::looks`).
+//! - `ui`: the Plugins page, add-on panels and the owner's review lists.
 
 pub mod addon;
 pub mod install;
 pub mod library;
 pub mod programs;
+pub mod skins;
 pub mod source;
 pub mod ui;
 
@@ -21,7 +23,7 @@ use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant};
 
 use ingle_proto::control::{ChannelId, MessageId};
-use ingle_proto::library::{Entry, Kind, Library, Permission};
+use ingle_proto::library::{Entry, Kind, Library, Permission, SkinEntry};
 use parking_lot::Mutex;
 
 use addon::{AddOn, Panel, Place, Request, Response};
@@ -36,14 +38,26 @@ pub enum Tab {
     Make,
 }
 
+/// What the Library shows (plugins and skins together, or one kind, or the favorites).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Show {
+    #[default]
+    All,
+    Programs,
+    Addons,
+    Skins,
+    Favorites,
+}
+
 /// What background work hands back to the window.
 #[derive(Default)]
 struct Work {
     fetching: bool,
     fetched: Option<Result<Library, String>>,
-    /// Installs in progress: (bytes done, total), by plugin id.
+    /// Installs in progress: (bytes done, total), by plugin id (`skin:<id>` for a skin).
     installing: HashMap<String, (u64, u64)>,
     installed: Vec<(String, Result<InstalledPlugin, String>)>,
+    installed_skins: Vec<Result<skins::InstalledSkin, String>>,
     /// Add-ons started in the background: (id, what came of it, tried rather than installed).
     started: Vec<(String, Result<AddOn, String>, bool)>,
     icons: Vec<(String, Vec<u8>)>,
@@ -112,12 +126,20 @@ pub struct Plugins {
     pub programs: programs::Programs,
     /// The program whose page is showing (instead of the Plugins page).
     pub program_page: Option<String>,
+    /// What the Library shows, and only one author's (clicked under a plugin or skin).
+    pub show: Show,
+    pub author: Option<String>,
+    /// Skins installed from the Library, and where.
+    pub skins: skins::InstalledSkins,
+    pub skins_dir: PathBuf,
 }
 
 impl Plugins {
     pub fn new(config_dir: &std::path::Path, repaint: Arc<dyn Fn() + Send + Sync>) -> Plugins {
         let dir = install::plugins_dir(config_dir);
         let installed = Installed::load(&dir);
+        let skins_dir = skins::skins_dir(config_dir);
+        let skins = skins::InstalledSkins::load(&skins_dir);
         let library = library::cached(&dir);
         let p = Plugins {
             index_url: library::index_url(),
@@ -141,6 +163,10 @@ impl Plugins {
             new_name: String::new(),
             programs: Default::default(),
             program_page: None,
+            show: Show::default(),
+            author: None,
+            skins,
+            skins_dir,
             dir,
         };
         p.start_installed_addons();
@@ -184,9 +210,51 @@ impl Plugins {
         (e.version != p.version && !e.files_for(install::os()).is_empty()).then_some(e)
     }
 
-    /// How many installed plugins have an update.
+    /// The library's entry for an installed skin, if it has a newer version.
+    pub fn skin_update_for(&self, s: &skins::InstalledSkin) -> Option<&SkinEntry> {
+        let e = self.library.as_ref()?.find_skin(&s.id)?;
+        (e.version != s.version).then_some(e)
+    }
+
+    /// How many installed plugins and skins have an update.
     pub fn updates(&self) -> usize {
-        self.installed.plugins.iter().filter(|p| self.update_for(p).is_some()).count()
+        self.installed.plugins.iter().filter(|p| self.update_for(p).is_some()).count() + self.skins.skins.iter().filter(|s| self.skin_update_for(s).is_some()).count()
+    }
+
+    /// Installs (or updates) a skin from the library, in the background.
+    pub fn install_skin(&mut self, entry: &SkinEntry) {
+        let key = format!("skin:{}", entry.id);
+        if self.work.lock().installing.contains_key(&key) {
+            return;
+        }
+        let (dir, url, work, repaint, entry) = (self.skins_dir.clone(), self.index_url.clone(), self.work.clone(), self.repaint.clone(), entry.clone());
+        work.lock().installing.insert(key.clone(), (0, entry.size()));
+        let _ = std::thread::Builder::new().name("ingle-skin-install".into()).spawn(move || {
+            let _ = std::fs::create_dir_all(&dir);
+            let w2 = work.clone();
+            let k2 = key.clone();
+            let r = skins::install(&dir, &url, &entry, |done, total| {
+                w2.lock().installing.insert(k2.clone(), (done, total));
+                repaint();
+            });
+            let mut w = work.lock();
+            w.installing.remove(&key);
+            w.installed_skins.push(r);
+            drop(w);
+            repaint();
+        });
+    }
+
+    /// Removes an installed skin (it's taken off first, if it's on: see the caller).
+    pub fn uninstall_skin(&mut self, id: &str) -> Result<(), String> {
+        skins::uninstall(&self.skins_dir, id)?;
+        self.skins.skins.retain(|s| s.id != id);
+        self.skins.save(&self.skins_dir)
+    }
+
+    /// A skin's files as installed (checked against what was installed).
+    pub fn skin_files(&self, id: &str) -> Option<Result<Vec<(String, Vec<u8>)>, String>> {
+        self.skins.get(id).map(|s| skins::files(&self.skins_dir, s))
     }
 
     /// Fetches the list (if it isn't already being fetched, and wasn't just now).
@@ -366,10 +434,23 @@ impl Plugins {
     /// do (send messages, show notices).
     pub fn step(&mut self) -> Vec<Outcome> {
         let mut out = Vec::new();
-        let (fetched, installed, started, icons) = {
+        let (fetched, installed, started, icons, installed_skins) = {
             let mut w = self.work.lock();
-            (w.fetched.take(), std::mem::take(&mut w.installed), std::mem::take(&mut w.started), std::mem::take(&mut w.icons))
+            (w.fetched.take(), std::mem::take(&mut w.installed), std::mem::take(&mut w.started), std::mem::take(&mut w.icons), std::mem::take(&mut w.installed_skins))
         };
+        for r in installed_skins {
+            match r {
+                Ok(s) => {
+                    let name = s.name.clone();
+                    self.skins.put(s);
+                    if let Err(e) = self.skins.save(&self.skins_dir) {
+                        out.push(Outcome::Toast(format!("Couldn't save the list of installed skins: {e}"), true));
+                    }
+                    out.push(Outcome::Toast(format!("{name} is installed: Wear it from its card, or in Settings → Appearance."), false));
+                }
+                Err(e) => out.push(Outcome::Toast(format!("Couldn't install the skin: {e}"), true)),
+            }
+        }
         if let Some(r) = fetched {
             match r {
                 Ok(lib) => {
@@ -492,18 +573,25 @@ impl Plugins {
         out
     }
 
-    /// Fetches the icons of the plugins in the list (once each).
+    /// Fetches the icons of the plugins in the list, and the skins' pictures (once each; a
+    /// skin's as `skin:<id>`).
     fn fetch_icons(&self) {
         let Some(lib) = &self.library else { return };
-        let todo: Vec<(String, ingle_proto::library::File)> =
+        let mut todo: Vec<(String, ingle_proto::library::File)> =
             lib.plugins.iter().filter(|p| !self.icons.contains_key(&p.id)).filter_map(|p| p.icon.clone().map(|i| (p.id.clone(), i))).collect();
+        todo.extend(
+            lib.skins
+                .iter()
+                .filter(|s| !self.icons.contains_key(&format!("skin:{}", s.id)))
+                .filter_map(|s| s.preview.clone().map(|f| (format!("skin:{}", s.id), f))),
+        );
         if todo.is_empty() {
             return;
         }
         let (url, work, repaint) = (self.index_url.clone(), self.work.clone(), self.repaint.clone());
         let _ = std::thread::Builder::new().name("ingle-plugin-icons".into()).spawn(move || {
             for (id, f) in todo {
-                if f.size > 512 * 1024 {
+                if f.size as usize > ingle_proto::skin::MAX_FILE {
                     continue;
                 }
                 let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(20))).build().into();

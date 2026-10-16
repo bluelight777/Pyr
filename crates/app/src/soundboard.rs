@@ -180,7 +180,7 @@ fn paint_emoji(p: &egui::Painter, r: Rect, text: &str, custom: &mut dyn FnMut(&s
     let chars: Vec<char> = text.chars().collect();
     match emoji::match_at(&chars, 0) {
         Some((_, e)) => emoji::paint(p, r, &e, custom),
-        None => icons::speaker(p, r.shrink(2.0), theme::MUTED),
+        None => icons::speaker(p, r.shrink(2.0), theme::MUTED()),
     }
 }
 
@@ -295,8 +295,8 @@ impl IngleApp {
             .constrain_to(ctx.content_rect().shrink(8.0))
             .show(ctx, |ui| {
                 egui::Frame::new()
-                    .fill(theme::SIDE)
-                    .stroke(Stroke::new(1.0f32, theme::LINE))
+                    .fill(theme::SIDE())
+                    .stroke(Stroke::new(1.0f32, theme::LINE()))
                     .corner_radius(14)
                     .inner_margin(egui::Margin::same(12))
                     .shadow(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(140) })
@@ -375,7 +375,7 @@ impl IngleApp {
             }
             let playing = self.engine.sounds_playing();
             let tip = if playing { "Stop every sound playing" } else { "Stops sounds playing (nothing is now)" };
-            if icon_button(ui, 30.0, tip, false, |p, r, c| icons::stop(p, r, if playing { theme::LIVE } else { c })).clicked() && playing {
+            if icon_button(ui, 30.0, tip, false, |p, r, c| icons::stop(p, r, if playing { theme::LIVE() } else { c })).clicked() && playing {
                 acts.push(Act::StopSounds);
             }
             if playing {
@@ -384,7 +384,7 @@ impl IngleApp {
         });
         if sbui.volume_open {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Soundboard volume").size(12.5).color(theme::MUTED));
+                ui.label(RichText::new("Soundboard volume").size(12.5).color(theme::MUTED()));
                 let mut pct = st.settings.soundboard_volume * 100.0;
                 if ui.add(egui::Slider::new(&mut pct, 0.0..=100.0).suffix("%")).changed() {
                     let mut s = st.settings.clone();
@@ -392,16 +392,16 @@ impl IngleApp {
                     acts.push(Act::Settings(s));
                 }
             });
-            ui.label(RichText::new("How loud everyone's sounds play for you. Right-click someone in the call to mute theirs.").size(11.5).color(theme::DIM));
+            ui.label(RichText::new("How loud everyone's sounds play for you. Right-click someone in the call to mute theirs.").size(11.5).color(theme::DIM()));
         }
         if let Some(sound) = &sbui.recording {
             egui::Frame::new().fill(Color32::from_rgb(0x3a, 0x2a, 0x20)).corner_radius(8).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
                 ui.set_width(WIDTH - 16.0);
-                ui.label(RichText::new(format!("Press the keys that should play {}… (Esc cancels)", sound.name)).color(theme::EMBER2));
+                ui.label(RichText::new(format!("Press the keys that should play {}… (Esc cancels)", sound.name)).color(theme::EMBER2()));
                 match &sbui.key_hint {
-                    Some(h) => ui.label(RichText::new(h).size(11.5).color(theme::LIVE)),
+                    Some(h) => ui.label(RichText::new(h).size(11.5).color(theme::LIVE())),
                     None => ui.label(
-                        RichText::new("They work anywhere while you're in voice, even in a game, and the game still gets them.").size(11.5).color(theme::DIM),
+                        RichText::new("They work anywhere while you're in voice, even in a game, and the game still gets them.").size(11.5).color(theme::DIM()),
                     ),
                 };
             });
@@ -459,11 +459,11 @@ impl IngleApp {
                     for (i, sec) in sections.iter().enumerate() {
                         let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
                         if resp.hovered() {
-                            ui.painter().rect_filled(rect, CornerRadius::same(8), theme::HOVER);
+                            ui.painter().rect_filled(rect, CornerRadius::same(8), theme::HOVER());
                         }
                         match &sec.rail {
-                            Rail::Favorites => icons::star(ui.painter(), rect.shrink(7.0), theme::GLOW, true),
-                            Rail::Recent => icons::clock(ui.painter(), rect.shrink(8.0), theme::MUTED),
+                            Rail::Favorites => icons::star(ui.painter(), rect.shrink(7.0), theme::GLOW(), true),
+                            Rail::Recent => icons::clock(ui.painter(), rect.shrink(8.0), theme::MUTED()),
                             Rail::Ingle => icons::flame(ui.painter(), rect.shrink(5.0)),
                             Rail::Server(k) => {
                                 let s = st.server(k);
@@ -475,11 +475,11 @@ impl IngleApp {
                                         ui.painter().add(egui::epaint::RectShape::filled(r, CornerRadius::same(8), Color32::WHITE).with_texture(t, uv));
                                     }
                                     None => {
-                                        ui.painter().rect_filled(r, CornerRadius::same(8), theme::ELEV2);
+                                        ui.painter().rect_filled(r, CornerRadius::same(8), theme::ELEV2());
                                         let initials: String = s
                                             .map(|s| s.name.split_whitespace().filter_map(|w| w.chars().next()).take(2).collect::<String>().to_uppercase())
                                             .unwrap_or_default();
-                                        ui.painter().text(r.center(), Align2::CENTER_CENTER, initials, theme::bold_font(11.0), theme::TEXT);
+                                        ui.painter().text(r.center(), Align2::CENTER_CENTER, initials, theme::bold_font(11.0), theme::TEXT());
                                     }
                                 }
                             }
@@ -497,16 +497,16 @@ impl IngleApp {
                     let h = ui.horizontal(|ui| {
                         if let Rail::Favorites = sec.rail {
                             let (r, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
-                            icons::star(ui.painter(), r, theme::GLOW, true);
+                            icons::star(ui.painter(), r, theme::GLOW(), true);
                         }
-                        ui.label(RichText::new(sec.title.to_uppercase()).font(theme::bold_font(11.5)).color(theme::MUTED));
+                        ui.label(RichText::new(sec.title.to_uppercase()).font(theme::bold_font(11.5)).color(theme::MUTED()));
                     });
                     if sbui.jump == Some(i) {
                         h.response.scroll_to_me(Some(egui::Align::TOP));
                         sbui.jump = None;
                     }
                     if sec.cells.is_empty() {
-                        ui.label(RichText::new("No sounds match that.").color(theme::DIM));
+                        ui.label(RichText::new("No sounds match that.").color(theme::DIM()));
                     }
                     for row in sec.cells.chunks(COLS) {
                         ui.horizontal(|ui| {
@@ -535,13 +535,13 @@ impl IngleApp {
                         self.ui.dialog = Some(Dialog::SoundEditor);
                         sbui.open = false;
                     }
-                    ui.label(RichText::new(format!("{} of {MAX_SERVER_SOUNDS} on {}", s.info.sounds.len(), s.name)).size(12.0).color(theme::DIM));
+                    ui.label(RichText::new(format!("{} of {MAX_SERVER_SOUNDS} on {}", s.info.sounds.len(), s.name)).size(12.0).color(theme::DIM()));
                 }
                 Some(_) => {
-                    ui.label(RichText::new("Click a sound to play it for everyone here. Right-click it for more.").size(12.0).color(theme::DIM));
+                    ui.label(RichText::new("Click a sound to play it for everyone here. Right-click it for more.").size(12.0).color(theme::DIM()));
                 }
                 None => {
-                    ui.label(RichText::new("This server needs updating for its own sounds; Ingle's play anywhere.").size(12.0).color(theme::DIM));
+                    ui.label(RichText::new("This server needs updating for its own sounds; Ingle's play anywhere.").size(12.0).color(theme::DIM()));
                 }
             }
         });
@@ -564,14 +564,14 @@ impl IngleApp {
         let fill = if lit {
             Color32::from_rgb(0x4a, 0x30, 0x22)
         } else if inside {
-            theme::ELEV2
+            theme::ELEV2()
         } else {
-            theme::ELEV
+            theme::ELEV()
         };
         let p = ui.painter();
         p.rect_filled(rect, CornerRadius::same(9), fill);
         if lit {
-            p.rect_stroke(rect, CornerRadius::same(9), Stroke::new(1.5f32, theme::EMBER), StrokeKind::Inside);
+            p.rect_stroke(rect, CornerRadius::same(9), Stroke::new(1.5f32, theme::EMBER()), StrokeKind::Inside);
             ui.ctx().request_repaint();
         }
         let key = sound.server.clone();
@@ -580,7 +580,7 @@ impl IngleApp {
         paint_emoji(ui.painter(), Rect::from_center_size(pos2(rect.left() + 20.0, rect.center().y), vec2(22.0, 22.0)), &sound.emoji, &mut custom);
         // Its name, cut with "…" to fit (leaving room for the hear-it button when pointed at).
         let room = rect.width() - 40.0 - if inside { 28.0 } else { 6.0 };
-        let mut job = egui::text::LayoutJob::simple(sound.name.clone(), theme::font(13.0), theme::TEXT, room);
+        let mut job = egui::text::LayoutJob::simple(sound.name.clone(), theme::font(13.0), theme::TEXT(), room);
         job.wrap.max_rows = 1;
         job.wrap.break_anywhere = true;
         job.wrap.overflow_character = Some('…');
@@ -588,20 +588,20 @@ impl IngleApp {
         let combo = st.settings.sound_keys.iter().find(|(_, s)| s.same(sound)).map(|(k, _)| k.clone());
         // With a key: the key under its name.
         let lift = if combo.is_some() { 7.0 } else { 0.0 };
-        ui.painter().galley(pos2(rect.left() + 36.0, rect.center().y - lift - g.size().y / 2.0), g, theme::TEXT);
+        ui.painter().galley(pos2(rect.left() + 36.0, rect.center().y - lift - g.size().y / 2.0), g, theme::TEXT());
         if let Some(k) = &combo {
-            let mut job = egui::text::LayoutJob::simple(combo_label(k), theme::font(10.5), theme::DIM, room);
+            let mut job = egui::text::LayoutJob::simple(combo_label(k), theme::font(10.5), theme::DIM(), room);
             job.wrap.max_rows = 1;
             job.wrap.break_anywhere = true;
             job.wrap.overflow_character = Some('…');
             let g = ui.fonts_mut(|f| f.layout_job(job));
-            ui.painter().galley(pos2(rect.left() + 36.0, rect.center().y + 8.0 - g.size().y / 2.0), g, theme::DIM);
+            ui.painter().galley(pos2(rect.left() + 36.0, rect.center().y + 8.0 - g.size().y / 2.0), g, theme::DIM());
         }
         let fav = st.settings.sound_favorites.iter().any(|f| f.same(sound));
         // A favorite's star, in the corner clear of the emoji (the hear-it button takes it
         // while the pointer's on the sound).
         if fav && !inside {
-            icons::star(ui.painter(), Rect::from_center_size(rect.right_top() + vec2(-9.0, 9.0), vec2(8.0, 8.0)), theme::GLOW, true);
+            icons::star(ui.painter(), Rect::from_center_size(rect.right_top() + vec2(-9.0, 9.0), vec2(8.0, 8.0)), theme::GLOW(), true);
         }
         // Hear it yourself first: the speaker on the right (drawn over the cell, so it takes
         // its own clicks).
@@ -609,8 +609,8 @@ impl IngleApp {
         let mut previewed = false;
         if inside {
             let pv = ui.interact(pr, ui.id().with(("hear", &sound.server, &sound.id)), Sense::click());
-            ui.painter().rect_filled(pr, CornerRadius::same(7), if pv.hovered() { theme::HOVER } else { theme::ELEV });
-            icons::speaker(ui.painter(), pr.shrink(6.0), if pv.hovered() { theme::TEXT } else { theme::MUTED });
+            ui.painter().rect_filled(pr, CornerRadius::same(7), if pv.hovered() { theme::HOVER() } else { theme::ELEV() });
+            icons::speaker(ui.painter(), pr.shrink(6.0), if pv.hovered() { theme::TEXT() } else { theme::MUTED() });
             if pv.on_hover_text("Hear it yourself (nobody else does)").clicked() {
                 acts.push(Act::PreviewSound(sound.clone()));
                 previewed = true;
@@ -688,7 +688,7 @@ impl IngleApp {
                     }
                     ui.close();
                 }
-                if ui.button(RichText::new("Delete sound…").color(theme::LIVE)).clicked() {
+                if ui.button(RichText::new("Delete sound…").color(theme::LIVE())).clicked() {
                     self.ui.dialog = Some(Dialog::RemoveSound { key: sound.server.clone(), id: sound.id.clone(), name: sound.name.clone(), from_settings: false });
                     sbui.open = false;
                     ui.close();
@@ -738,7 +738,7 @@ impl IngleApp {
                     "For everyone on {server}, and anywhere they play it. Pick an MP3, WAV, OGG, OPUS, FLAC or M4A and up to 10 seconds of it; \
                      it's evened out in loudness, so it's never deafening or too quiet."
                 ))
-                .color(theme::MUTED),
+                .color(theme::MUTED()),
             );
             ui.add_space(8.0);
             ui.horizontal(|ui| {
@@ -749,7 +749,7 @@ impl IngleApp {
                 }
                 if ed.loading {
                     ui.spinner();
-                    ui.label(RichText::new("Reading it…").color(theme::MUTED));
+                    ui.label(RichText::new("Reading it…").color(theme::MUTED()));
                 }
             });
             if let Some(pcm) = ed.pcm.clone() {
@@ -757,9 +757,9 @@ impl IngleApp {
                 self.trimmer(ui, &mut ed, &pcm);
                 ui.horizontal(|ui| {
                     let len = ed.end - ed.start;
-                    ui.label(RichText::new(format!("{} – {}  ·  {:.1} s", clock(ed.start), clock(ed.end), len)).color(theme::BODY));
+                    ui.label(RichText::new(format!("{} – {}  ·  {:.1} s", clock(ed.start), clock(ed.end), len)).color(theme::BODY()));
                     if len < 0.05 {
-                        ui.label(RichText::new("Too short to hear").color(theme::LIVE));
+                        ui.label(RichText::new("Too short to hear").color(theme::LIVE()));
                     }
                     if ui.button("▶  Hear the cut").clicked() {
                         let cut = sb::prepare(&pcm, ed.start, ed.end);
@@ -767,7 +767,7 @@ impl IngleApp {
                     }
                 });
                 let note = if ed.cut { "Only the first 3 minutes of the file are shown. " } else { "" };
-                ui.label(RichText::new(format!("{note}Drag the ends to choose, or drag the middle to move it (10 seconds at most).")).size(11.5).color(theme::DIM));
+                ui.label(RichText::new(format!("{note}Drag the ends to choose, or drag the middle to move it (10 seconds at most).")).size(11.5).color(theme::DIM()));
             }
         }
         field_label(ui, "Name");
@@ -778,14 +778,14 @@ impl IngleApp {
             let (r, resp) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::click());
             emoji_button = r;
             let lit = resp.hovered() || ed.emoji_open;
-            ui.painter().rect_filled(r, CornerRadius::same(8), if lit { theme::HOVER } else { theme::ELEV });
+            ui.painter().rect_filled(r, CornerRadius::same(8), if lit { theme::HOVER() } else { theme::ELEV() });
             let ctx = ui.ctx().clone();
             let key = ed.key.clone();
             paint_emoji(ui.painter(), r.shrink(6.0), &ed.emoji, &mut |id| self.custom_emoji_tex(&ctx, &key, id));
             if resp.on_hover_text("Pick an emoji").clicked() {
                 ed.emoji_open = !ed.emoji_open;
             }
-            ui.label(RichText::new("Shows on its button and pops up over whoever plays it.").size(12.0).color(theme::DIM));
+            ui.label(RichText::new("Shows on its button and pops up over whoever plays it.").size(12.0).color(theme::DIM()));
         });
         if ed.emoji_open {
             // The picker beside the button, over the dialog.
@@ -796,7 +796,7 @@ impl IngleApp {
                 .fixed_pos(pos2(emoji_button.right() + 12.0, emoji_button.center().y))
                 .constrain(true)
                 .show(ui.ctx(), |ui| {
-                    egui::Frame::popup(ui.style()).fill(theme::SIDE).inner_margin(10).show(ui, |ui| self.emoji_picker(ui, st, Some(&key), acts)).inner
+                    egui::Frame::popup(ui.style()).fill(theme::SIDE()).inner_margin(10).show(ui, |ui| self.emoji_picker(ui, st, Some(&key), acts)).inner
                 });
             if let Some(e) = area.inner {
                 ed.emoji = e;
@@ -815,11 +815,11 @@ impl IngleApp {
             if ui.add(egui::Slider::new(&mut pct, 5.0..=100.0).suffix("%")).changed() {
                 ed.volume = pct / 100.0;
             }
-            ui.label(RichText::new("Every sound is already about as loud as the others.").size(12.0).color(theme::DIM));
+            ui.label(RichText::new("Every sound is already about as loud as the others.").size(12.0).color(theme::DIM()));
         });
         if let Some(e) = &ed.error {
             ui.add_space(6.0);
-            ui.label(RichText::new(e).color(theme::LIVE));
+            ui.label(RichText::new(e).color(theme::LIVE()));
         }
         ui.add_space(14.0);
         let name = ed.name.trim().to_string();
@@ -897,7 +897,7 @@ impl IngleApp {
         }
         let (a, b) = (x_of(ed.start), x_of(ed.end));
         let p = ui.painter();
-        p.rect_filled(rect, CornerRadius::same(8), theme::MAIN);
+        p.rect_filled(rect, CornerRadius::same(8), theme::MAIN());
         let sel = Rect::from_min_max(pos2(a, rect.top()), pos2(b, rect.bottom()));
         p.rect_filled(sel, CornerRadius::same(4), Color32::from_rgba_unmultiplied(0xff, 0x8a, 0x3d, 34));
         let n = ed.outline.len().max(1);
@@ -905,14 +905,14 @@ impl IngleApp {
         for (i, v) in ed.outline.iter().enumerate() {
             let x = rect.left() + (i as f32 + 0.5) * w;
             let h = (v.sqrt() * (rect.height() / 2.0 - 8.0)).max(1.0);
-            let c = if x >= a && x <= b { theme::EMBER } else { theme::DIM };
+            let c = if x >= a && x <= b { theme::EMBER() } else { theme::DIM() };
             p.line_segment([pos2(x, rect.center().y - h), pos2(x, rect.center().y + h)], Stroke::new((w - 1.0).max(1.0), c));
         }
         for x in [a, b] {
             let handle = Rect::from_center_size(pos2(x, rect.center().y), vec2(6.0, rect.height() - 6.0));
-            p.rect_filled(handle, CornerRadius::same(3), theme::EMBER2);
+            p.rect_filled(handle, CornerRadius::same(3), theme::EMBER2());
         }
-        p.rect_stroke(sel, CornerRadius::same(4), Stroke::new(1.0f32, theme::EMBER), StrokeKind::Inside);
+        p.rect_stroke(sel, CornerRadius::same(4), Stroke::new(1.0f32, theme::EMBER()), StrokeKind::Inside);
         if resp.hovered() || ed.drag.is_some() {
             let near = pointer.or(ui.input(|i| i.pointer.hover_pos())).is_some_and(|p| (p.x - a).abs() < 10.0 || (p.x - b).abs() < 10.0);
             let icon = match ed.drag {
@@ -929,11 +929,11 @@ impl IngleApp {
     pub(crate) fn server_sounds_tab(&mut self, ui: &mut egui::Ui, s: &ServerView, back_to: Dialog) {
         ui.label(
             RichText::new("Sounds anyone here can play in voice. Ingle doesn't lock them to this server: members can play them in any call.")
-                .color(theme::MUTED),
+                .color(theme::MUTED()),
         );
         ui.add_space(8.0);
         if !s.has(SOUNDBOARD_FEATURE) {
-            ui.label(RichText::new("This server needs updating (to Ingle 0.7) before it can have its own sounds.").color(theme::LIVE));
+            ui.label(RichText::new("This server needs updating (to Ingle 0.7) before it can have its own sounds.").color(theme::LIVE()));
             return;
         }
         ui.horizontal(|ui| {
@@ -942,11 +942,11 @@ impl IngleApp {
                 self.ui.sb.editor = Some(SoundEditor::add(&s.key, Some(back_to.clone())));
                 self.ui.next_dialog = Some(Dialog::SoundEditor);
             }
-            ui.label(RichText::new(format!("{} of {MAX_SERVER_SOUNDS}", s.info.sounds.len())).color(theme::DIM));
+            ui.label(RichText::new(format!("{} of {MAX_SERVER_SOUNDS}", s.info.sounds.len())).color(theme::DIM()));
         });
         ui.add_space(6.0);
         if s.info.sounds.is_empty() {
-            ui.label(RichText::new("No sounds yet. Ingle's own (air horn, ba dum tss, sad trombone…) work everywhere meanwhile.").color(theme::DIM));
+            ui.label(RichText::new("No sounds yet. Ingle's own (air horn, ba dum tss, sad trombone…) work everywhere meanwhile.").color(theme::DIM()));
             return;
         }
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
@@ -956,10 +956,10 @@ impl IngleApp {
                     let ctx = ui.ctx().clone();
                     let key = s.key.clone();
                     paint_emoji(ui.painter(), r, &x.emoji, &mut |id| self.custom_emoji_tex(&ctx, &key, id));
-                    ui.label(RichText::new(&x.name).color(theme::TEXT));
-                    ui.label(RichText::new(format!("{:.1} s · {}% · added by {}", x.length_ms as f32 / 1000.0, (x.volume * 100.0).round(), s.member_name(&x.by))).size(12.0).color(theme::DIM));
+                    ui.label(RichText::new(&x.name).color(theme::TEXT()));
+                    ui.label(RichText::new(format!("{:.1} s · {}% · added by {}", x.length_ms as f32 / 1000.0, (x.volume * 100.0).round(), s.member_name(&x.by))).size(12.0).color(theme::DIM()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(RichText::new("Delete").color(theme::LIVE)).clicked() {
+                        if ui.button(RichText::new("Delete").color(theme::LIVE())).clicked() {
                             self.ui.next_dialog = Some(Dialog::RemoveSound { key: s.key.clone(), id: x.id.clone(), name: x.name.clone(), from_settings: true });
                         }
                         if ui.button("Edit").clicked() {
@@ -1002,7 +1002,7 @@ impl IngleApp {
         title(ui, &format!("Delete \u{201c}{name}\u{201d}?"));
         ui.label(
             RichText::new("It goes from the soundboard for everyone on this server. Where it was someone's favorite or had a key, that goes too.")
-                .color(theme::MUTED),
+                .color(theme::MUTED()),
         );
         ui.add_space(14.0);
         let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -1021,12 +1021,12 @@ impl IngleApp {
         }
     }
 
-    /// A sound's emoji (in colour, as on its button) and name, in a row.
+    /// A sound's emoji (in color, as on its button) and name, in a row.
     fn sound_name(&mut self, ui: &mut egui::Ui, sound: &SoundRef) {
         let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
         let ctx = ui.ctx().clone();
         paint_emoji(ui.painter(), r, &sound.emoji, &mut |id| self.custom_emoji_tex(&ctx, &sound.server, id));
-        ui.label(RichText::new(&sound.name).color(theme::TEXT));
+        ui.label(RichText::new(&sound.name).color(theme::TEXT()));
     }
 
     /// Settings → Voice & Video → Soundboard.
@@ -1039,7 +1039,7 @@ impl IngleApp {
                 draft.soundboard_volume = pct / 100.0;
             }
         });
-        ui.label(RichText::new("How loud anyone's soundboard sounds play for you (yours too).").size(12.0).color(theme::DIM));
+        ui.label(RichText::new("How loud anyone's soundboard sounds play for you (yours too).").size(12.0).color(theme::DIM()));
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label("When you join voice:");
@@ -1051,7 +1051,7 @@ impl IngleApp {
                     }
                 }
                 None => {
-                    ui.label(RichText::new("no sound (right-click one in the soundboard to choose it)").color(theme::DIM));
+                    ui.label(RichText::new("no sound (right-click one in the soundboard to choose it)").color(theme::DIM()));
                 }
             }
         });
@@ -1061,7 +1061,7 @@ impl IngleApp {
             let mut remove = None;
             for (i, (combo, sound)) in draft.sound_keys.iter().enumerate() {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(combo_label(combo)).font(theme::bold_font(12.5)).color(theme::EMBER2));
+                    ui.label(RichText::new(combo_label(combo)).font(theme::bold_font(12.5)).color(theme::EMBER2()));
                     self.sound_name(ui, sound);
                     if ui.small_button("Remove").clicked() {
                         remove = Some(i);
@@ -1129,7 +1129,7 @@ pub fn paint_pop(p: &egui::Painter, at: egui::Pos2, size: f32, text: &str, age: 
     let chars: Vec<char> = text.chars().collect();
     match emoji::match_at(&chars, 0) {
         Some((_, e)) => emoji::paint_faded(p, r, &e, custom, alpha),
-        None => icons::speaker(p, r.shrink(s * 0.1), theme::TEXT.gamma_multiply(alpha)),
+        None => icons::speaker(p, r.shrink(s * 0.1), theme::TEXT().gamma_multiply(alpha)),
     }
 }
 

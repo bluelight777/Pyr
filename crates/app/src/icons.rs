@@ -19,7 +19,7 @@ fn slash(p: &Painter, r: Rect) {
     let a = r.left_top() + vec2(s * 0.18, s * 0.18);
     let b = r.right_bottom() - vec2(s * 0.18, s * 0.18);
     p.line_segment([a, b], Stroke::new(s * 0.16, Color32::from_rgb(0x1e, 0x19, 0x16)));
-    p.line_segment([a, b], Stroke::new(s * 0.09, crate::theme::LIVE));
+    p.line_segment([a, b], Stroke::new(s * 0.09, crate::theme::LIVE()));
 }
 
 pub fn mic(p: &Painter, r: Rect, c: Color32, off: bool) {
@@ -267,18 +267,18 @@ pub fn flame(p: &Painter, r: Rect) {
     log(p, cross, b, half, radius, None, hair);
     log(p, cross, (vec2(cos, sin), vec2(-sin, cos)), half, radius, None, hair);
     // The fire sits on top of the logs. egui only smooths the edges of convex shapes, and a flame is anything but; so each part
-    // is filled as triangles, then traced with a one-pixel line of the same colour.
-    for (outline, tris, colour) in [(&fire.flame, &fire.flame_tris, crate::theme::EMBER), (&fire.core, &fire.core_tris, GOLD)] {
+    // is filled as triangles, then traced with a one-pixel line of the same color.
+    for (outline, tris, color) in [(&fire.flame, &fire.flame_tris, crate::theme::EMBER()), (&fire.core, &fire.core_tris, GOLD)] {
         let pts: Vec<Pos2> = outline.iter().map(|&q| at(q)).collect();
         let mut mesh = Mesh::default();
         for &q in &pts {
-            mesh.colored_vertex(q, colour);
+            mesh.colored_vertex(q, color);
         }
         for t in tris {
             mesh.add_triangle(t[0], t[1], t[2]);
         }
         p.add(Shape::mesh(mesh));
-        p.add(Shape::closed_line(pts, Stroke::new(hair, colour)));
+        p.add(Shape::closed_line(pts, Stroke::new(hair, color)));
     }
 }
 
@@ -316,8 +316,8 @@ fn log(p: &Painter, c: Pos2, dir: (Vec2, Vec2), half: f32, r: f32, from: Option<
         shape = clip(&shape, |q| q.x - x0);
     }
     let place = move |q: Vec2| c + along * q.x + down * q.y;
-    // Lit top fading to the dark underside: a strip per stretch of LOG_SHADING, each coloured
-    // at its corners so the colours blend across it.
+    // Lit top fading to the dark underside: a strip per stretch of LOG_SHADING, each colored
+    // at its corners so the colors blend across it.
     let mut mesh = Mesh::default();
     for s in LOG_SHADING.windows(2) {
         let (y0, y1) = (r * (2.0 * s[0].0 - 1.0), r * (2.0 * s[1].0 - 1.0));
@@ -486,7 +486,7 @@ pub fn server(p: &Painter, r: Rect, c: Color32) {
     for (i, y) in [0.20f32, 0.52].iter().enumerate() {
         let b = Rect::from_min_size(pos2(r.left() + s * 0.14, r.top() + s * y), vec2(s * 0.72, s * 0.26));
         p.rect_stroke(b, CornerRadius::same((s * 0.05) as u8), Stroke::new(s * 0.07, c), StrokeKind::Inside);
-        p.circle_filled(pos2(b.right() - s * 0.14, b.center().y), s * 0.045, if i == 0 { crate::theme::ONLINE } else { c });
+        p.circle_filled(pos2(b.right() - s * 0.14, b.center().y), s * 0.045, if i == 0 { crate::theme::ONLINE() } else { c });
         p.line_segment([pos2(b.left() + s * 0.12, b.center().y), pos2(b.left() + s * 0.34, b.center().y)], Stroke::new(s * 0.06, c));
     }
 }
@@ -622,7 +622,7 @@ pub fn done(p: &Painter, r: Rect, c: Color32) {
 /// A cross in a circle (a failed step).
 pub fn failed(p: &Painter, r: Rect) {
     let s = r.width();
-    p.circle_filled(r.center(), s * 0.45, crate::theme::LIVE);
+    p.circle_filled(r.center(), s * 0.45, crate::theme::LIVE());
     let k = s * 0.17;
     let st = Stroke::new(s * 0.1, Color32::WHITE);
     p.line_segment([r.center() + vec2(-k, -k), r.center() + vec2(k, k)], st);
@@ -672,6 +672,20 @@ pub fn star(p: &Painter, r: Rect, c: Color32, filled: bool) {
         p.add(Shape::mesh(mesh));
     } else {
         p.add(Shape::closed_line(pts, Stroke::new((outer * 0.16).max(1.2), c)));
+    }
+}
+
+/// A painter's palette with four dabs of paint (skins).
+pub fn palette(p: &Painter, r: Rect) {
+    let rad = r.width().min(r.height()) * 0.5;
+    let c = r.center();
+    p.circle_filled(c, rad, Color32::from_rgb(0xe9, 0xdc, 0xc8));
+    // The thumb hole.
+    p.circle_filled(c + vec2(rad * 0.38, rad * 0.38), rad * 0.2, crate::theme::ELEV2());
+    let dabs = [Color32::from_rgb(0xe5, 0x48, 0x4d), Color32::from_rgb(0xff, 0xb3, 0x47), Color32::from_rgb(0x6c, 0xc0, 0x70), Color32::from_rgb(0x6a, 0x8c, 0xff)];
+    for (i, col) in dabs.into_iter().enumerate() {
+        let a = PI * (0.85 + i as f32 * 0.33);
+        p.circle_filled(pos2(c.x + rad * 0.58 * a.cos(), c.y + rad * 0.58 * a.sin()), rad * 0.17, col);
     }
 }
 

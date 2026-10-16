@@ -226,6 +226,21 @@ A report that can't be sent stays in the Report a bug window with the reason (or
 back from a notice, if the window was closed), and when the inbox is the owner's own server
 with collecting off, sending switches it on first.
 
+**Reports sent by themselves** (`bugs::auto_report`): when screen sharing or the camera
+won't start (after one more try a moment later), when a capture stops working mid-share and
+has to be started again (or can't be), and when the last run ended in a crash or a freeze it
+never came out of (`bugs::last_run_trouble`, read from `ingle.previous.log`), Ingle sends a
+report titled "Automatic: …" with what it knows and its log, the same way as one sent by
+hand. Each kind goes at most once every six hours, five in all per run; the first ever sent
+says so in a notice, and Settings → About turns them off.
+
+**Captures that stop working**: Windows' screen capture can die under a running share (a game
+changing the display mode, the graphics driver restarting). The share's encoder thread looks
+at its capture once a second (`CaptureHandle::trouble`: the capture thread ended, the window
+or screen went away, or Windows removed the capture's Direct3D device) and starts it again,
+up to three times a minute, before giving up and taking the share down with a notice. A
+capture that doesn't start within 10 seconds counts as failed.
+
 ## Plugins
 
 **The Ingle Library** is a list on the website (`ingle/library/index.json`) of programs and
@@ -260,15 +275,56 @@ anyway (an undecorated one that keeps room round itself for its shadow, say) is 
 bigger and cut down to the part it draws in, so that part fills the page to its edges.
 **Pop out** gives it its frame back.
 
-**Plugins sent in** (`engine/src/plugins.rs`): anyone's Ingle sends a plugin's Rust source
-(never a built file) to the library server, which is the bug report server unless Ingle was
-built with `INGLE_LIBRARY_SERVER`, before logging in and with no account. The server keeps
-it only while its owner has *Collect plugins for the Ingle Library* on, after checking it
-(a Cargo.toml, plain relative paths, 600 KB and 400 files at most, a few an hour per address,
-a cap on how many wait), and only the owner sees them, under Plugins sent in. Approving one
-saves its source to `approved-plugins/<server key>/<id>-<name>/` on the owner's PC;
-building, signing and listing happen offline. What's sent in is a stranger's code and words:
-it never decides anything.
+**Plugins and skins sent in** (`engine/src/plugins.rs`): anyone's Ingle (or the Claude
+connector) sends a plugin's Rust source (never a built file) or a skin's files to the library
+server, which is the bug report server unless Ingle was built with `INGLE_LIBRARY_SERVER`,
+before logging in and with no account. What's sent is signed with the sender's Ingle
+identity over the server's nonce, the connection's TLS exporter and a digest of everything
+in it, file by file (`crypto::submission_transcript`, `control::submission_digest`), so a
+signature can't be replayed, relayed or moved to other files. A skin's files that don't fit
+the first frame follow in parts, checked against the signed list of them. The server keeps
+them only while its owner has *Collect plugins for the Ingle Library* on, after checking
+them (a plugin: a Cargo.toml, plain relative paths, 600 KB and 400 files at most; a skin: the
+skin checks below; a few an hour per address and per sender, a cap on how many wait), and
+only the owner sees them, under Plugins sent in and Skins sent in. A **new version** names
+the one it replaces and is only taken from the same signed sender, of the same kind; the
+owner sees which files it adds, changes and takes out. The owner can try a skin on before
+approving it and write the sender a note with Approve or Reject; senders see where theirs
+stand, and the note, by asking with a signature (`MySubmissions`). Approving saves the files
+to `approved-plugins/` or `approved-skins/<server key>/<id>-<name>/` on the owner's PC;
+building, signing and listing happen offline. What's sent in is a stranger's code, pictures
+and words: it never decides anything.
+
+## Skins
+
+A skin (`proto/src/skin.rs`, the guide in `skins/README.md`) is a `skin.json` and the files
+it names: up to 25 colors (the palette everything in the app is drawn with, read through
+functions in `app/src/theme.rs`), a picture behind the chat or the whole window, body and
+bold fonts, and sounds for Ingle's chimes (Opus `.ings` files). 24 files, 700 KB each and
+4 MB in all at most. The checks, everywhere a skin goes (the connector, the server, the
+Library's list, installing, wearing): plain paths, known fields, colors that keep text
+readable (WCAG contrast 4.5 for text on the chat and side panels, 3 for secondary text),
+pictures that are PNG, JPEG or WebP no bigger than 4096 pixels a side, sounds that are Ingle
+sound files, and fonts that parse (the app's text renderer would stop the app on a bad one,
+so it's only ever handed fonts that load). The Library lists skins apart from plugins (older
+apps don't see them), and installing one checks every file against the signed list, then the
+whole as a skin, then swaps its folder in; wearing one checks it again (`app/src/looks.rs`).
+A skin can be tried without installing it: one Claude is making (the connector writes it to
+`skin-preview/` in Ingle's settings folder, then a stamp Ingle looks for every second), one in
+a folder of your own (worn again when its files change), or one sent in, by the library's
+owner.
+
+## The Claude connector
+
+`ingle-mcp` (`crates/mcp`) is an MCP server the Claude app (or Claude Code) starts on the
+person's PC, speaking JSON-RPC a line at a time on stdin and stdout; it answers both the
+stateless kind of MCP (2026-07-28: `server/discover`, the version in every request) and the
+older kind that begins with `initialize`. Its tools start, check, show and send skins and
+plugins, make sounds, and list what was sent. It reads Ingle's identity and name from Ingle's
+settings folder to sign what it sends, writes nothing there but the skin being previewed,
+and can't reach the person's servers or messages. Settings → Claude adds it to the Claude
+app's `claude_desktop_config.json` (keeping everything else there, with a copy of the file
+as it was) or gives the `claude mcp add` line for Claude Code.
 
 ## Setting up servers (`crates/host`)
 
@@ -372,6 +428,6 @@ In rough priority order:
 9. Bots as members; attachments beyond pictures, threads, search. (Plugins came in 0.7.2,
    Rust only: the kit is a Rust crate, and plugins come as Rust source that's built from it.)
 10. A web client over WebTransport + WebCodecs, then mobile.
-11. H.264 licensing: OpenH264 here is compiled from source, which Cisco's patent licence
+11. H.264 licensing: OpenH264 here is compiled from source, which Cisco's patent license
     doesn't cover. Before shipping widely, either download Cisco's prebuilt OpenH264 at
     runtime or default to AV1.

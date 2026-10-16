@@ -177,34 +177,34 @@ impl CreateState {
 }
 
 fn link_button(ui: &mut egui::Ui, text: &str, url: &str) {
-    if ui.add(egui::Button::new(RichText::new(format!("{text}  ↗")).color(theme::LINK))).on_hover_text(url).clicked() {
+    if ui.add(egui::Button::new(RichText::new(format!("{text}  ↗")).color(theme::LINK()))).on_hover_text(url).clicked() {
         ui.ctx().open_url(egui::OpenUrl::new_tab(url));
     }
 }
 
 fn dim(ui: &mut egui::Ui, text: impl Into<String>) {
-    ui.label(RichText::new(text.into()).size(12.5).color(theme::DIM));
+    ui.label(RichText::new(text.into()).size(12.5).color(theme::DIM()));
 }
 
 fn muted(ui: &mut egui::Ui, text: impl Into<String>) {
-    ui.label(RichText::new(text.into()).color(theme::MUTED));
+    ui.label(RichText::new(text.into()).color(theme::MUTED()));
 }
 
 fn step_heading(ui: &mut egui::Ui, n: u32, text: &str) {
     ui.add_space(10.0);
     ui.horizontal(|ui| {
         let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
-        ui.painter().circle_filled(r.center(), 11.0, theme::ELEV2);
-        ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, n.to_string(), theme::bold_font(12.0), theme::EMBER2);
-        ui.label(RichText::new(text).font(theme::bold_font(14.5)).color(theme::TEXT));
+        ui.painter().circle_filled(r.center(), 11.0, theme::ELEV2());
+        ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, n.to_string(), theme::bold_font(12.0), theme::EMBER2());
+        ui.label(RichText::new(text).font(theme::bold_font(14.5)).color(theme::TEXT()));
     });
 }
 
 /// A copyable block of text (a command or a link).
 fn code_box(ui: &mut egui::Ui, text: &str, acts: &mut Vec<Act>) {
-    egui::Frame::new().fill(theme::CODE_BG).corner_radius(6).inner_margin(10).show(ui, |ui| {
+    egui::Frame::new().fill(theme::CODE_BG()).corner_radius(6).inner_margin(10).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.add(egui::Label::new(RichText::new(text).font(theme::mono(12.0)).color(theme::TEXT)).wrap().selectable(true));
+        ui.add(egui::Label::new(RichText::new(text).font(theme::mono(12.0)).color(theme::TEXT())).wrap().selectable(true));
     });
     if ui.small_button("Copy").clicked() {
         acts.push(Act::Copy(text.to_string()));
@@ -219,25 +219,25 @@ pub(crate) fn choice_card(ui: &mut egui::Ui, id: &str, badge: Option<&str>, head
         ui.set_width(width - 28.0);
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::hover());
-            ui.painter().rect_filled(r, CornerRadius::same(10), theme::SIDE);
-            icon(ui.painter(), r.shrink(7.0), theme::EMBER);
+            ui.painter().rect_filled(r, CornerRadius::same(10), theme::SIDE());
+            icon(ui.painter(), r.shrink(7.0), theme::EMBER());
             ui.add_space(6.0);
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(heading).font(theme::bold_font(15.0)).color(theme::TEXT));
+                    ui.label(RichText::new(heading).font(theme::bold_font(15.0)).color(theme::TEXT()));
                     if let Some(b) = badge {
-                        egui::Frame::new().fill(theme::EMBER).corner_radius(4).inner_margin(egui::Margin::symmetric(5, 1)).show(ui, |ui| {
+                        egui::Frame::new().fill(theme::EMBER()).corner_radius(4).inner_margin(egui::Margin::symmetric(5, 1)).show(ui, |ui| {
                             ui.label(RichText::new(b).font(theme::bold_font(10.5)).color(Color32::from_rgb(0x1b, 0x14, 0x11)));
                         });
                     }
                 });
-                ui.add(egui::Label::new(RichText::new(body).color(theme::MUTED)).wrap());
+                ui.add(egui::Label::new(RichText::new(body).color(theme::MUTED())).wrap());
             });
         });
     });
     let rect = inner.response.rect;
     let resp = ui.interact(rect, ui.id().with(id), Sense::click());
-    let (fill, stroke) = if resp.hovered() { (theme::ELEV2, theme::EMBER) } else { (theme::ELEV, theme::LINE) };
+    let (fill, stroke) = if resp.hovered() { (theme::ELEV2(), theme::EMBER()) } else { (theme::ELEV(), theme::LINE()) };
     ui.painter().set(bg, egui::Shape::rect_filled(rect, CornerRadius::same(10), fill));
     ui.painter().rect_stroke(rect, CornerRadius::same(10), Stroke::new(1.0f32, stroke), egui::StrokeKind::Inside);
     ui.add_space(8.0);
@@ -247,14 +247,14 @@ pub(crate) fn choice_card(ui: &mut egui::Ui, id: &str, badge: Option<&str>, head
 fn error_box(ui: &mut egui::Ui, f: &Failure) {
     egui::Frame::new()
         .fill(Color32::from_rgb(0x3a, 0x1c, 0x1c))
-        .stroke(Stroke::new(1.0f32, theme::LIVE))
+        .stroke(Stroke::new(1.0f32, theme::LIVE()))
         .corner_radius(8)
         .inner_margin(10)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(RichText::new(&f.error).color(theme::TEXT));
+            ui.label(RichText::new(&f.error).color(theme::TEXT()));
             if let Some(h) = &f.hint {
-                ui.label(RichText::new(h).size(12.5).color(theme::MUTED));
+                ui.label(RichText::new(h).size(12.5).color(theme::MUTED()));
             }
         });
 }
@@ -274,8 +274,8 @@ fn firewall_help(ui: &mut egui::Ui) {
     for (who, what) in FIREWALL_HELP {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
-            ui.label(RichText::new(format!("{who}: ")).size(12.5).color(theme::TEXT));
-            ui.label(RichText::new(*what).size(12.5).color(theme::MUTED));
+            ui.label(RichText::new(format!("{who}: ")).size(12.5).color(theme::TEXT()));
+            ui.label(RichText::new(*what).size(12.5).color(theme::MUTED()));
         });
     }
 }
@@ -351,7 +351,7 @@ fn choose_page(c: &mut CreateState, ui: &mut egui::Ui, close: &mut bool) {
             let when = chrono::DateTime::from_timestamp_millis(info.last_backup)
                 .map(|t| t.with_timezone(&chrono::Local).format("%b %-d, %Y at %-I:%M %p").to_string())
                 .unwrap_or_default();
-            muted(ui, format!("{} — backed up {when}, {} files. It comes back with all its messages, members and roles, as the same server: everyone's app recognises it. Send everyone the new invite link afterwards if its address changes.", info.name, info.files));
+            muted(ui, format!("{} — backed up {when}, {} file{}. It comes back with all its messages, members and roles, as the same server: everyone's app recognizes it. Send everyone the new invite link afterwards if its address changes.", info.name, info.files, if info.files == 1 { "" } else { "s" }));
             dim(ui, dir.display().to_string());
         }
     }
@@ -364,7 +364,7 @@ fn choose_page(c: &mut CreateState, ui: &mut egui::Ui, close: &mut bool) {
         }
     });
     if let Some(e) = &c.restore_error {
-        ui.label(egui::RichText::new(e).color(theme::LIVE));
+        ui.label(egui::RichText::new(e).color(theme::LIVE()));
     }
     ui.add_space(12.0);
     if choice_card(
@@ -407,9 +407,9 @@ fn rent_page(c: &mut CreateState, ui: &mut egui::Ui, config_dir: &std::path::Pat
         let mut change = false;
         ui.horizontal_wrapped(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
-            icons::done(ui.painter(), r, theme::ONLINE);
+            icons::done(ui.painter(), r, theme::ONLINE());
             let who = cat.account.as_ref().map(|a| format!(" ({})", a.email)).unwrap_or_default();
-            ui.label(RichText::new(format!("Connected to your DigitalOcean account{who}")).color(theme::TEXT));
+            ui.label(RichText::new(format!("Connected to your DigitalOcean account{who}")).color(theme::TEXT()));
             if ui.small_button("Use another token").clicked() {
                 change = true;
             }
@@ -426,7 +426,7 @@ fn rent_page(c: &mut CreateState, ui: &mut egui::Ui, config_dir: &std::path::Pat
     let mut create = false;
     if let Some(cat) = &c.catalog {
         ui.add_space(10.0);
-        ui.label(RichText::new("Pick a size and a place").font(theme::bold_font(14.5)).color(theme::TEXT));
+        ui.label(RichText::new("Pick a size and a place").font(theme::bold_font(14.5)).color(theme::TEXT()));
         let cheapest = cat.plans.first().map(|p| p.slug.clone());
         for p in &cat.plans {
             let selected = c.plan == p.slug;
@@ -448,7 +448,7 @@ fn rent_page(c: &mut CreateState, ui: &mut egui::Ui, config_dir: &std::path::Pat
         }
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Place").color(theme::MUTED));
+            ui.label(RichText::new("Place").color(theme::MUTED()));
             let current = regions.iter().find(|r| r.slug == c.region).map(|r| r.name.clone()).unwrap_or_else(|| c.region.clone());
             egui::ComboBox::from_id_salt("do-region").selected_text(current).width(240.0).show_ui(ui, |ui| {
                 for r in &regions {
@@ -569,10 +569,10 @@ fn own_page(c: &mut CreateState, ui: &mut egui::Ui, config_dir: &std::path::Path
     }
     if let Some(e) = &c.form_error {
         ui.add_space(4.0);
-        ui.label(RichText::new(e).color(theme::LIVE).size(12.5));
+        ui.label(RichText::new(e).color(theme::LIVE()).size(12.5));
     }
     ui.add_space(8.0);
-    egui::CollapsingHeader::new(RichText::new("Firewalls: what to check").color(theme::TEXT)).id_salt("fw-help").show(ui, firewall_help);
+    egui::CollapsingHeader::new(RichText::new("Firewalls: what to check").color(theme::TEXT())).id_salt("fw-help").show(ui, firewall_help);
     ui.add_space(10.0);
     let mut start = false;
     ui.horizontal(|ui| {
@@ -583,7 +583,7 @@ fn own_page(c: &mut CreateState, ui: &mut egui::Ui, config_dir: &std::path::Path
             c.page = Page::Choose;
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.add(egui::Button::new(RichText::new("Set it up by hand instead").color(theme::LINK)).frame(false)).clicked() {
+            if ui.add(egui::Button::new(RichText::new("Set it up by hand instead").color(theme::LINK())).frame(false)).clicked() {
                 c.page = Page::Manual;
             }
         });
@@ -690,7 +690,7 @@ fn manual_page(c: &mut CreateState, ui: &mut egui::Ui, acts: &mut Vec<Act>, clos
     match &c.saved_files {
         Some(Ok(f)) => dim(ui, format!("Saved in {}", f.display())),
         Some(Err(e)) => {
-            ui.label(RichText::new(e).color(theme::LIVE).size(12.5));
+            ui.label(RichText::new(e).color(theme::LIVE()).size(12.5));
         }
         None => dim(ui, format!("They go into {}", folder.display())),
     }
@@ -718,7 +718,7 @@ fn manual_page(c: &mut CreateState, ui: &mut egui::Ui, acts: &mut Vec<Act>, clos
     dim(ui, "It installs Ingle Server as a service that starts by itself, opens UDP port 7766 in the server's firewall, and prints your owner link and an invite link. Running it again later updates the server and keeps everything.");
 
     step_heading(ui, 4, "Check your provider's firewall");
-    egui::CollapsingHeader::new(RichText::new("Where to find it").color(theme::TEXT)).id_salt("fw-help-manual").show(ui, firewall_help);
+    egui::CollapsingHeader::new(RichText::new("Where to find it").color(theme::TEXT())).id_salt("fw-help-manual").show(ui, firewall_help);
 
     step_heading(ui, 5, "Join with your owner link");
     dim(ui, "Paste the owner link the setup printed into Join a server. The first person to use it becomes the owner, so use it yourself first.");
@@ -754,13 +754,13 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
             ui.horizontal(|ui| {
                 let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
                 match state {
-                    StepState::Done => icons::done(ui.painter(), r, theme::ONLINE),
+                    StepState::Done => icons::done(ui.painter(), r, theme::ONLINE()),
                     StepState::Failed => icons::failed(ui.painter(), r),
                     StepState::Running => {
-                        ui.put(r, egui::Spinner::new().size(16.0).color(theme::EMBER2));
+                        ui.put(r, egui::Spinner::new().size(16.0).color(theme::EMBER2()));
                     }
                 }
-                let col = if *state == StepState::Running { theme::TEXT } else { theme::MUTED };
+                let col = if *state == StepState::Running { theme::TEXT() } else { theme::MUTED() };
                 ui.label(RichText::new(text).color(col));
             });
         }
@@ -787,7 +787,7 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
             ui.add_space(10.0);
             let reachable = c.reachable_now.or(r.reachable);
             if let Some(e) = &c.join_error {
-                ui.label(RichText::new(format!("Couldn't open it here: {e}")).color(theme::LIVE));
+                ui.label(RichText::new(format!("Couldn't open it here: {e}")).color(theme::LIVE()));
             } else if reachable == Some(false) {
                 muted(ui, format!("It's running at {} and it's in the list on the left, where you'll be its owner once this PC can reach it.", r.host));
             } else {
@@ -797,18 +797,18 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
                 ui.add_space(8.0);
                 egui::Frame::new()
                     .fill(Color32::from_rgb(0x3a, 0x2a, 0x16))
-                    .stroke(Stroke::new(1.0f32, theme::EMBER2))
+                    .stroke(Stroke::new(1.0f32, theme::EMBER2()))
                     .corner_radius(8)
                     .inner_margin(10)
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
-                        ui.label(RichText::new(format!("This PC can't reach the server on UDP port {} yet, so calls and chat won't connect.", r.port)).color(theme::TEXT));
-                        ui.label(RichText::new("A firewall in your provider's website is probably blocking it. Let in UDP port 7766 from anywhere there, then check again.").size(12.5).color(theme::MUTED));
-                        egui::CollapsingHeader::new(RichText::new("Where to find it").color(theme::TEXT)).id_salt("fw-help-done").show(ui, firewall_help);
+                        ui.label(RichText::new(format!("This PC can't reach the server on UDP port {} yet, so calls and chat won't connect.", r.port)).color(theme::TEXT()));
+                        ui.label(RichText::new("A firewall in your provider's website is probably blocking it. Let in UDP port 7766 from anywhere there, then check again.").size(12.5).color(theme::MUTED()));
+                        egui::CollapsingHeader::new(RichText::new("Where to find it").color(theme::TEXT())).id_salt("fw-help-done").show(ui, firewall_help);
                         ui.horizontal(|ui| {
                             if c.probe_job.is_some() {
                                 ui.spinner();
-                                ui.label(RichText::new("Checking…").color(theme::MUTED));
+                                ui.label(RichText::new("Checking…").color(theme::MUTED()));
                             } else if ui.button("Check again").clicked() {
                                 let link = r.owner_link.clone();
                                 c.probe_job = Some(spawn_job(ui.ctx(), move || {
@@ -818,13 +818,13 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
                         });
                     });
             } else if c.reachable_now == Some(true) {
-                ui.label(RichText::new("Reachable now.").color(theme::ONLINE));
+                ui.label(RichText::new("Reachable now.").color(theme::ONLINE()));
             }
             field_label(ui, "Invite link for friends");
             let web = ingle_proto::invite::InviteLink::web(&r.invite_link, &r.name);
-            egui::Frame::new().fill(theme::CODE_BG).corner_radius(6).inner_margin(10).show(ui, |ui| {
+            egui::Frame::new().fill(theme::CODE_BG()).corner_radius(6).inner_margin(10).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.add(egui::Label::new(RichText::new(&web).font(theme::mono(12.0)).color(theme::TEXT)).wrap().selectable(true));
+                ui.add(egui::Label::new(RichText::new(&web).font(theme::mono(12.0)).color(theme::TEXT())).wrap().selectable(true));
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -839,7 +839,7 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
                 }
             });
             if c.copied {
-                ui.label(RichText::new("Copied. Paste it into a message to your friends.").size(12.5).color(theme::ONLINE));
+                ui.label(RichText::new("Copied. Paste it into a message to your friends.").size(12.5).color(theme::ONLINE()));
             }
             dim(ui, "Friends click the link: the page gets them Ingle if they don't have it yet, and its Open invite in Ingle button joins. Pasting it into Join a server works too.");
             if let Some(d) = &r.droplet {
@@ -850,14 +850,14 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
                 });
             }
             for w in &r.warnings {
-                ui.label(RichText::new(format!("Note: {w}")).size(12.5).color(theme::EMBER2));
+                ui.label(RichText::new(format!("Note: {w}")).size(12.5).color(theme::EMBER2()));
             }
             ui.add_space(12.0);
-            if ui.add(egui::Button::new(RichText::new("Done").font(theme::bold_font(14.0)).color(theme::TEXT)).fill(theme::ELEV2).min_size(vec2(110.0, 34.0))).clicked() {
+            if ui.add(egui::Button::new(RichText::new("Done").font(theme::bold_font(14.0)).color(theme::TEXT())).fill(theme::ELEV2()).min_size(vec2(110.0, 34.0))).clicked() {
                 *close = true;
             }
             ui.add_space(8.0);
-            egui::CollapsingHeader::new(RichText::new("What Ingle did").color(theme::MUTED)).id_salt("setup-steps").show(ui, steps);
+            egui::CollapsingHeader::new(RichText::new("What Ingle did").color(theme::MUTED())).id_salt("setup-steps").show(ui, steps);
         }
         // A server Ingle has never connected to: nothing was sent. Is it really theirs?
         Some(Outcome::Failed(f)) if f.new_host_key.is_some() && c.kind == Kind::Own => {
@@ -865,14 +865,14 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
             let host = ingle_host::clean_host(&c.host);
             let port: u16 = c.ssh_port.trim().parse().unwrap_or(22);
             ui.add_space(8.0);
-            egui::Frame::new().fill(theme::ELEV).corner_radius(8).inner_margin(12).show(ui, |ui| {
+            egui::Frame::new().fill(theme::ELEV()).corner_radius(8).inner_margin(12).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(RichText::new("Is this your server?").font(theme::bold_font(15.0)).color(theme::TEXT));
+                ui.label(RichText::new("Is this your server?").font(theme::bold_font(15.0)).color(theme::TEXT()));
                 ui.add_space(2.0);
-                ui.label(RichText::new(format!("This is the first time Ingle connects to {host}, so nothing has been sent to it yet. Its SSH identity is this {kind} key:")).color(theme::TEXT));
+                ui.label(RichText::new(format!("This is the first time Ingle connects to {host}, so nothing has been sent to it yet. Its SSH identity is this {kind} key:")).color(theme::TEXT()));
                 ui.add_space(4.0);
-                egui::Frame::new().fill(theme::CODE_BG).corner_radius(6).inner_margin(8).show(ui, |ui| {
-                    ui.add(egui::Label::new(RichText::new(&fp).font(theme::mono(13.0)).color(theme::TEXT)).wrap().selectable(true));
+                egui::Frame::new().fill(theme::CODE_BG()).corner_radius(6).inner_margin(8).show(ui, |ui| {
+                    ui.add(egui::Label::new(RichText::new(&fp).font(theme::mono(13.0)).color(theme::TEXT())).wrap().selectable(true));
                 });
                 ui.add_space(4.0);
                 ui.label(
@@ -883,7 +883,7 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
                         kind.to_lowercase()
                     ))
                     .size(12.5)
-                    .color(theme::MUTED),
+                    .color(theme::MUTED()),
                 );
             });
             ui.add_space(12.0);
@@ -909,17 +909,17 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
             let mut retry = false;
             if let Some(d) = &f.droplet {
                 ui.add_space(8.0);
-                egui::Frame::new().fill(theme::ELEV).corner_radius(8).inner_margin(10).show(ui, |ui| {
+                egui::Frame::new().fill(theme::ELEV()).corner_radius(8).inner_margin(10).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     match &c.deleted {
                         Some(Ok(())) => {
-                            ui.label(RichText::new(format!("The server \"{}\" was deleted. DigitalOcean only charges for the time it existed.", d.name)).color(theme::TEXT));
+                            ui.label(RichText::new(format!("The server \"{}\" was deleted. DigitalOcean only charges for the time it existed.", d.name)).color(theme::TEXT()));
                         }
                         _ => {
                             let ip = d.ip.as_deref().map(|ip| format!(" at {ip}")).unwrap_or_default();
-                            ui.label(RichText::new(format!("Your DigitalOcean server \"{}\"{ip} was created and costs money until it's deleted.", d.name)).color(theme::TEXT));
+                            ui.label(RichText::new(format!("Your DigitalOcean server \"{}\"{ip} was created and costs money until it's deleted.", d.name)).color(theme::TEXT()));
                             if let Some(Err(e)) = &c.deleted {
-                                ui.label(RichText::new(format!("Deleting failed: {}", e.error)).color(theme::LIVE).size(12.5));
+                                ui.label(RichText::new(format!("Deleting failed: {}", e.error)).color(theme::LIVE()).size(12.5));
                             }
                             ui.horizontal(|ui| {
                                 if d.ip.is_some() && ui.add(theme::primary_button("Try the setup again")).clicked() {
@@ -965,10 +965,10 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
 
     if !task.log.is_empty() {
         ui.add_space(10.0);
-        egui::CollapsingHeader::new(RichText::new("Details").color(theme::MUTED)).id_salt("setup-log").default_open(c.show_log).show(ui, |ui| {
+        egui::CollapsingHeader::new(RichText::new("Details").color(theme::MUTED())).id_salt("setup-log").default_open(c.show_log).show(ui, |ui| {
             egui::ScrollArea::vertical().max_height(180.0).stick_to_bottom(true).show(ui, |ui| {
                 for line in &task.log {
-                    ui.add(egui::Label::new(RichText::new(line).font(theme::mono(11.5)).color(theme::MUTED)).wrap().selectable(true));
+                    ui.add(egui::Label::new(RichText::new(line).font(theme::mono(11.5)).color(theme::MUTED())).wrap().selectable(true));
                 }
             });
         });

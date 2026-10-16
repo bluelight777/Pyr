@@ -21,7 +21,7 @@ const RATE: usize = 48_000;
 /// Samples (both channels) in one 20 ms frame.
 const FRAME: usize = 960 * 2;
 
-/// A sound, as a list of favourites (or the recently played ones) remembers it: where it's
+/// A sound, as a list of favorites (or the recently played ones) remembers it: where it's
 /// from and what it's called, so it shows even while its server is offline.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct SoundRef {

@@ -33,9 +33,11 @@ pub mod errors {
     }
 }
 pub mod net;
+pub mod plugin_source;
 pub mod plugins;
 pub mod server;
 pub mod sfx;
+pub mod skins;
 pub mod soundboard;
 pub mod state;
 pub mod video;
@@ -161,6 +163,8 @@ pub struct Shared {
     sounds_on: Mutex<std::collections::HashSet<(String, String)>>,
     /// The ringer is going (see `ring`).
     ringer: AtomicBool,
+    /// Reports sent by themselves this run: (what, when) (see `bugs::auto_report`).
+    pub auto_reports: Mutex<Vec<(String, std::time::Instant)>>,
 }
 
 /// What sound files are, to the file streams.
@@ -656,6 +660,7 @@ impl Engine {
             plugin_sends_done: 0,
             submissions: HashMap::new(),
             submission_files: HashMap::new(),
+            my_submissions: None,
             devices: DeviceLists::default(),
             settings: cfg.settings.clone(),
             user_volumes: cfg.user_volumes.clone(),
@@ -713,6 +718,7 @@ impl Engine {
             sounds: Mutex::new(soundboard::Cache::default()),
             sounds_on: Mutex::new(Default::default()),
             ringer: AtomicBool::new(false),
+            auto_reports: Mutex::new(Vec::new()),
             call_group: Mutex::new(None),
         });
         // Read marks for channels are saved a few at a time (reading a busy channel moves them
@@ -759,6 +765,15 @@ impl Engine {
         };
         let engine = Engine { shared, _rt: rt, _ptt: ptt, _keys: keys };
         Ok(engine)
+    }
+
+    /// What went wrong the last time Ingle was open (a crash, or a freeze it never came out
+    /// of), reported by itself (see `bugs::auto_report`). The app calls it once it's up.
+    pub fn report_last_run_trouble(&self) {
+        let log = std::fs::read_to_string(self.shared.config_dir.join("ingle.previous.log")).unwrap_or_default();
+        if let Some((what, detail)) = bugs::last_run_trouble(&log) {
+            bugs::auto_report(&self.shared, what, &format!("The last time Ingle was open: {detail}"));
+        }
     }
 
     /// The shared state, for the UI to draw a frame from. Hold it only while drawing: engine
@@ -1891,7 +1906,7 @@ impl Engine {
         let (shared, key) = (self.shared.clone(), key.to_string());
         self.shared.rt.spawn(async move {
             match backup::run(shared.clone(), key).await {
-                Ok(i) => shared.state.write().toast(format!("Backed up {} ({} files).", i.name, i.files), false),
+                Ok(i) => shared.state.write().toast(format!("Backed up {} ({} file{}).", i.name, i.files, if i.files == 1 { "" } else { "s" }), false),
                 Err(e) => shared.state.write().toast(format!("Couldn't back up the server: {e:#}"), true),
             }
             (shared.repaint)();
@@ -2003,6 +2018,7 @@ impl Engine {
     pub fn submit_plugin(&self, mut submission: ingle_proto::control::PluginSubmission, turn_on: Option<&str>) {
         let shared = self.shared.clone();
         submission.app_version = env!("CARGO_PKG_VERSION").to_string();
+        let what = if submission.kind == ingle_proto::control::SKIN_KIND { "skin" } else { "plugin" };
         let mine = turn_on.and_then(|k| self.handle(k));
         shared.state.write().plugin_send = BugSend::Sending;
         self.shared.rt.spawn(async move {
@@ -2020,9 +2036,10 @@ impl Engine {
             .await;
             let mut st = shared.state.write();
             match r {
-                Ok(()) => {
+                Ok(id) => {
                     st.plugin_send = BugSend::Sent;
-                    st.toast("Sent! Your plugin will be looked at before it's listed.", false);
+                    let number = if id > 0 { format!(" as #{id}") } else { String::new() };
+                    st.toast(format!("Sent{number}! Your {what} will be looked at before it's listed."), false);
                 }
                 Err(e) => {
                     let message = format!("{e:#}");
@@ -2047,58 +2064,83 @@ impl Engine {
         });
     }
 
-    /// Owner only: one submission's files, into `AppState::submission_files` (to look at).
+    /// Owner only: one submission's files (all of them, a skin's bigger ones fetched one by
+    /// one), into `AppState::submission_files` (to look at, or try a skin on).
     pub fn open_submission(&self, key: &str, id: i64) {
-        let k = key.to_string();
-        self.request_then(key, Request::GetPluginSubmission { id }, move |shared, ev| {
-            if let Event::PluginSubmission { entry, files } = ev {
-                shared.state.write().submission_files.insert((k, entry.id), files);
+        let Some(h) = self.handle(key) else { return };
+        let (shared, k) = (self.shared.clone(), key.to_string());
+        self.shared.rt.spawn(async move {
+            match plugins::fetch(&h, id).await {
+                Ok((entry, files)) => {
+                    shared.state.write().submission_files.insert((k, entry.id), files);
+                }
+                Err(e) => shared.state.write().toast(format!("Couldn't get it: {e:#}"), true),
             }
+            (shared.repaint)();
         });
     }
 
-    /// Owner only: approve (its source is saved to this PC for building, see
-    /// `plugins::save_approved`), reject, mark listed, or put back.
-    pub fn set_submission_status(&self, key: &str, id: i64, status: ingle_proto::control::SubmissionStatus) {
+    /// Owner only: approve (a plugin's source is saved to this PC for building, a skin's files
+    /// for listing, see `plugins::save_approved`), reject, mark listed, or put back. `note`
+    /// goes to the sender (they see it with their connector).
+    pub fn set_submission_status(&self, key: &str, id: i64, status: ingle_proto::control::SubmissionStatus, note: String) {
         use ingle_proto::control::SubmissionStatus;
-        let k = key.to_string();
-        let set = move |shared: &Arc<Shared>, handle: Option<ServerHandle>| {
-            if let Some(h) = handle {
-                let shared = shared.clone();
-                shared.rt.clone().spawn(async move {
-                    match tokio::time::timeout(std::time::Duration::from_secs(15), h.request(Request::SetPluginSubmissionStatus { id, status })).await {
-                        Ok(Ok(Event::Ok)) => {}
-                        Ok(Ok(Event::Error { message, .. })) => shared.state.write().toast(format!("Couldn't change the plugin: {message}"), true),
-                        _ => shared.state.write().toast("Couldn't change the plugin: the server didn't answer.", true),
-                    }
-                    (shared.repaint)();
-                });
-            }
-        };
-        {
+        let Some(h) = self.handle(key) else { return };
+        let (shared, k) = (self.shared.clone(), key.to_string());
+        let what = |kind: &str| if kind == ingle_proto::control::SKIN_KIND { "skin" } else { "plugin" };
+        let kind = {
             let mut st = self.shared.state.write();
-            if let Some(e) = st.submissions.get_mut(key).and_then(|l| l.iter_mut().find(|e| e.id == id)) {
+            let e = st.submissions.get_mut(key).and_then(|l| l.iter_mut().find(|e| e.id == id));
+            let kind = e.as_ref().map(|e| e.kind.clone()).unwrap_or_default();
+            if let Some(e) = e {
                 e.status = status;
+                e.note = note.clone();
             }
-        }
-        if status != SubmissionStatus::Approved {
-            set(&self.shared, self.handle(key));
-            return;
-        }
-        // Approved: save its source here first (for building), then say so to the server.
-        let handle = self.handle(key);
-        self.request_then(key, Request::GetPluginSubmission { id }, move |shared, ev| match ev {
-            Event::PluginSubmission { entry, files } => match plugins::save_approved(&shared.config_dir, &k, &entry, &files) {
-                Ok(dir) => {
-                    tracing::info!("approved plugin saved to {}", dir.display());
-                    shared.state.write().toast(format!("Approved. Its source is saved for building in {}", dir.display()), false);
-                    set(shared, handle);
+            kind
+        };
+        self.shared.rt.spawn(async move {
+            let r = async {
+                // Approved: saved here first (for building or listing), then said so to the server.
+                if status == SubmissionStatus::Approved {
+                    let (entry, files) = plugins::fetch(&h, id).await?;
+                    let dir = plugins::save_approved(&shared.config_dir, &k, &entry, &files)?;
+                    tracing::info!("approved {} saved to {}", what(&entry.kind), dir.display());
+                    let saved = if entry.kind == ingle_proto::control::SKIN_KIND { "Its files are saved for listing in" } else { "Its source is saved for building in" };
+                    shared.state.write().toast(format!("Approved. {saved} {}", dir.display()), false);
                 }
-                Err(e) => shared.state.write().toast(format!("Couldn't save the plugin's source, so it wasn't approved: {e:#}"), true),
-            },
-            Event::Error { message, .. } => shared.state.write().toast(format!("Couldn't get the plugin: {message}"), true),
-            _ => {}
+                match tokio::time::timeout(std::time::Duration::from_secs(15), h.request(Request::SetPluginSubmissionStatus { id, status, note })).await {
+                    Ok(Ok(Event::Ok)) => Ok(()),
+                    Ok(Ok(Event::Error { message, .. })) => Err(anyhow::anyhow!("{message}")),
+                    _ => Err(anyhow::anyhow!("the server didn't answer")),
+                }
+            }
+            .await;
+            if let Err(e) = r {
+                shared.state.write().toast(format!("Couldn't change the {}: {e:#}", what(&kind)), true);
+            }
+            (shared.repaint)();
         });
+    }
+
+    /// What I sent in to the Ingle Library and where each stands, into
+    /// `AppState::my_submissions`.
+    pub fn my_submissions(&self) {
+        let shared = self.shared.clone();
+        self.shared.rt.spawn(async move {
+            let r = match plugins::server() {
+                None => Err("This copy of Ingle has nowhere to send plugins.".to_string()),
+                Some(server) => plugins::mine(&shared.endpoints, server, &shared.identity).await.map_err(|e| format!("{e:#}")),
+            };
+            shared.state.write().my_submissions = Some(r);
+            (shared.repaint)();
+        });
+    }
+
+    /// A skin's sounds in place of Ingle's own (none: Ingle's own again).
+    pub fn set_skin_sounds(&self, sounds: Vec<(sfx::Sound, Arc<Vec<f32>>)>) {
+        if let Some(sfx) = &self.shared.sfx {
+            sfx.set_overrides(sounds);
+        }
     }
 
     /// Owner only: collect plugins for the Ingle Library on this server, or stop.
@@ -2177,11 +2219,7 @@ impl Engine {
     /// Stop sending our camera or screen share. Quick on the calling (UI) thread: capture lets
     /// go on a thread of its own.
     fn stop_video(&self, track_id: u8) {
-        // A start that's still opening doesn't go live after this.
-        self.shared.video_gen[(track_id == track::SCREEN) as usize].fetch_add(1, Ordering::SeqCst);
-        let old = self.shared.call.lock().as_mut().map(|c| c.take_video(&self.shared, track_id));
-        drop_later(old);
-        self.shared.refresh_call_view();
+        stop_video_on(&self.shared, track_id, None);
     }
 
     pub fn watch(&self, session: SessionId, track_id: u8, on: bool) {
@@ -2592,6 +2630,20 @@ fn start_camera_on(shared: &Arc<Shared>) {
 }
 
 /// Starts sending a camera or a screen share in the call.
+/// Stops our camera or screen share (`only`: only if it's still the one that start made, see
+/// `Shared::video_gen`).
+pub(crate) fn stop_video_on(shared: &Arc<Shared>, track_id: u8, only: Option<u64>) {
+    let which = (track_id == track::SCREEN) as usize;
+    if only.is_some_and(|g| shared.video_gen[which].load(Ordering::SeqCst) != g) {
+        return;
+    }
+    // A start that's still opening doesn't go live after this.
+    shared.video_gen[which].fetch_add(1, Ordering::SeqCst);
+    let old = shared.call.lock().as_mut().map(|c| c.take_video(shared, track_id));
+    drop_later(old);
+    shared.refresh_call_view();
+}
+
 fn start_video_on(shared: &Arc<Shared>, track_id: u8, source: &str, cfg: PublisherConfig) {
     let rt = shared.rt.clone();
     let shared = shared.clone();
@@ -2617,7 +2669,23 @@ fn start_video_on(shared: &Arc<Shared>, track_id: u8, source: &str, cfg: Publish
         if !current() {
             return;
         }
-        let installed = match ctx.start(&shared, track_id, &source, cfg) {
+        // A start that fails is tried once more a moment later (Windows' capture can fail
+        // while a game is changing the display); if it fails again, it's reported by itself.
+        let started = match ctx.start(&shared, track_id, &source, cfg, generation) {
+            Err(e) if current() && !format!("{e:#}").contains("was closed") => {
+                tracing::warn!("couldn't {what} ({e:#}); trying again");
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                if !current() {
+                    return;
+                }
+                ctx.start(&shared, track_id, &source, cfg, generation).inspect_err(|e| {
+                    let kind = if track_id == track::SCREEN { "screen sharing didn't start" } else { "the camera didn't start" };
+                    bugs::auto_report(&shared, kind, &format!("{e:#}"));
+                })
+            }
+            r => r,
+        };
+        let installed = match started {
             Ok((out, info)) => {
                 let mut call = shared.call.lock();
                 match call.as_mut() {

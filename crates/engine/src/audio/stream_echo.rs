@@ -11,7 +11,7 @@
 //! 1. Is the call in there at all? Cross-correlation with the phase transform (GCC-PHAT, at
 //!    16 kHz) finds a delayed copy of the call even under loud game sound, and how late it is.
 //!    Until it's found, the stream's sound goes out exactly as captured.
-//! 2. Once found, the way it comes back (its delay and how the other program colours it) is
+//! 2. Once found, the way it comes back (its delay and how the other program colors it) is
 //!    learnt from cross-spectra averaged over many seconds of people talking; game sound has
 //!    nothing to do with the call, so it averages away. The learnt impulse response is cleaned
 //!    of estimation noise (taps far out are noise only, which says how much to expect).
@@ -646,7 +646,7 @@ mod tests {
         }
     }
 
-    /// `secs` of a call (bursts of coloured noise, like people taking turns) and of game sound
+    /// `secs` of a call (bursts of colored noise, like people taking turns) and of game sound
     /// (steady noise and a chord, different in each ear), 48 kHz stereo.
     fn sounds(secs: usize) -> (Vec<f32>, Vec<f32>) {
         let n = secs * RATE;

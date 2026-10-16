@@ -12,20 +12,20 @@ use crate::{icons, theme};
 
 fn modal_frame() -> egui::Frame {
     egui::Frame::new()
-        .fill(theme::SIDE)
-        .stroke(egui::Stroke::new(1.0f32, theme::LINE))
+        .fill(theme::SIDE())
+        .stroke(egui::Stroke::new(1.0f32, theme::LINE()))
         .corner_radius(12)
         .inner_margin(egui::Margin::same(22))
 }
 
 pub(crate) fn title(ui: &mut egui::Ui, text: &str) {
-    ui.label(RichText::new(text).font(theme::bold_font(20.0)).color(theme::TEXT));
+    ui.label(RichText::new(text).font(theme::bold_font(20.0)).color(theme::TEXT()));
     ui.add_space(4.0);
 }
 
 pub(crate) fn field_label(ui: &mut egui::Ui, text: &str) {
     ui.add_space(8.0);
-    ui.label(RichText::new(text.to_uppercase()).font(theme::bold_font(11.5)).color(theme::MUTED));
+    ui.label(RichText::new(text.to_uppercase()).font(theme::bold_font(11.5)).color(theme::MUTED()));
 }
 
 /// The most a dialog's contents can take up: the window's height, less the dialog's margins
@@ -70,15 +70,15 @@ fn my_bug_server(st: &AppState) -> Option<(String, String, bool)> {
 }
 
 /// A box of text in a dialog: a note, or (`error`) what went wrong.
-fn notice(ui: &mut egui::Ui, text: &str, error: bool) {
+pub(crate) fn notice(ui: &mut egui::Ui, text: &str, error: bool) {
     egui::Frame::new()
-        .fill(if error { Color32::from_rgb(0x4a, 0x1f, 0x1f) } else { theme::ELEV })
-        .stroke(egui::Stroke::new(1.0f32, if error { theme::LIVE } else { theme::LINE }))
+        .fill(if error { Color32::from_rgb(0x4a, 0x1f, 0x1f) } else { theme::ELEV() })
+        .stroke(egui::Stroke::new(1.0f32, if error { theme::LIVE() } else { theme::LINE() }))
         .corner_radius(8)
         .inner_margin(egui::Margin::symmetric(12, 10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(RichText::new(text).color(theme::TEXT));
+            ui.label(RichText::new(text).color(theme::TEXT()));
         });
 }
 
@@ -110,7 +110,7 @@ impl IngleApp {
                 .pivot(egui::Align2::LEFT_TOP)
                 .fixed_pos(pos2(button.rect.right() + 10.0, button.rect.top()))
                 .constrain(true)
-                .show(ui.ctx(), |ui| egui::Frame::popup(ui.style()).fill(theme::SIDE).inner_margin(10).show(ui, |ui| self.emoji_picker(ui, st, None, acts)).inner);
+                .show(ui.ctx(), |ui| egui::Frame::popup(ui.style()).fill(theme::SIDE()).inner_margin(10).show(ui, |ui| self.emoji_picker(ui, st, None, acts)).inner);
             if let Some(e) = area.inner {
                 insert_at_cursor(ui.ctx(), resp.id, name, &e);
                 resp.request_focus();
@@ -203,7 +203,7 @@ impl IngleApp {
                 Dialog::AddServer { mut link, error } => {
                     ui.set_width(460.0);
                     title(ui, "Join a server");
-                    ui.label(RichText::new("Paste an invite link someone shared with you.").color(theme::MUTED));
+                    ui.label(RichText::new("Paste an invite link someone shared with you.").color(theme::MUTED()));
                     field_label(ui, "Invite link");
                     let r = input(ui, &mut link, "https://firelitgames.com/ingle/#… or ingle://…");
                     let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -211,13 +211,13 @@ impl IngleApp {
                         r.request_focus();
                     }
                     if let Some(e) = &error {
-                        ui.label(RichText::new(e).color(theme::LIVE).size(12.5));
+                        ui.label(RichText::new(e).color(theme::LIVE()).size(12.5));
                     }
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new("The link includes the server's fingerprint, so your connection is checked against it and can't be impersonated.")
                             .size(12.0)
-                            .color(theme::DIM),
+                            .color(theme::DIM()),
                     );
                     ui.add_space(14.0);
                     let mut create = false;
@@ -229,7 +229,7 @@ impl IngleApp {
                             close = true;
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.add(egui::Button::new(RichText::new("No invite? Create your own server").color(theme::LINK)).frame(false)).clicked() {
+                            if ui.add(egui::Button::new(RichText::new("No invite? Create your own server").color(theme::LINK())).frame(false)).clicked() {
                                 create = true;
                             }
                         });
@@ -334,14 +334,14 @@ impl IngleApp {
                     title(ui, &format!("Invite friends to {name}"));
                     ui.label(
                         RichText::new("Send them this link. It opens a page that gets Ingle for anyone who doesn't have it yet, and joins with one click. (It can also be pasted into Join a server.)")
-                            .color(theme::MUTED),
+                            .color(theme::MUTED()),
                     );
                     ui.add_space(8.0);
                     match s.and_then(|s| s.last_invite.clone()) {
                         Some(link) => {
                             let web = ingle_proto::invite::InviteLink::web(&link, s.map(|s| s.name.as_str()).unwrap_or(""));
-                            egui::Frame::new().fill(theme::CODE_BG).corner_radius(6).inner_margin(10).show(ui, |ui| {
-                                ui.add(egui::Label::new(RichText::new(&web).font(theme::mono(12.5)).color(theme::TEXT)).wrap());
+                            egui::Frame::new().fill(theme::CODE_BG()).corner_radius(6).inner_margin(10).show(ui, |ui| {
+                                ui.add(egui::Label::new(RichText::new(&web).font(theme::mono(12.5)).color(theme::TEXT())).wrap());
                             });
                             ui.add_space(10.0);
                             ui.horizontal(|ui| {
@@ -359,7 +359,7 @@ impl IngleApp {
                         None => {
                             ui.horizontal(|ui| {
                                 ui.spinner();
-                                ui.label(RichText::new("Creating invite…").color(theme::MUTED));
+                                ui.label(RichText::new("Creating invite…").color(theme::MUTED()));
                             });
                             if ui.button("Close").clicked() {
                                 close = true;
@@ -439,10 +439,10 @@ impl IngleApp {
                                         );
                                     }
                                     None => {
-                                        ui.painter().rect_filled(r, CornerRadius::same(24), theme::ELEV);
+                                        ui.painter().rect_filled(r, CornerRadius::same(24), theme::ELEV());
                                         let initials: String =
                                             s.name.split_whitespace().filter_map(|w| w.chars().next()).take(2).collect::<String>().to_uppercase();
-                                        ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, initials, theme::bold_font(24.0), theme::TEXT);
+                                        ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, initials, theme::bold_font(24.0), theme::TEXT());
                                     }
                                 }
                                 ui.add_space(12.0);
@@ -456,7 +456,7 @@ impl IngleApp {
                                             acts.push(Act::SetServerIcon { key: key.clone(), bytes: None });
                                         }
                                     });
-                                    ui.label(RichText::new("Shows in everyone's server list. At least 128×128 looks best.").size(12.0).color(theme::DIM));
+                                    ui.label(RichText::new("Shows in everyone's server list. At least 128×128 looks best.").size(12.0).color(theme::DIM()));
                                 });
                             });
                             ui.add_space(12.0);
@@ -472,18 +472,18 @@ impl IngleApp {
                             }
                             if plugins {
                                 let mut on = s.info.plugin_submissions;
-                                if ui.checkbox(&mut on, "Collect plugins for the Ingle Library on this server").changed() {
+                                if ui.checkbox(&mut on, "Collect plugins and skins for the Ingle Library on this server").changed() {
                                     acts.push(Act::SetPluginSubmissions { key: key.clone(), on });
                                 }
                             }
                             ui.label(
                                 RichText::new(if plugins {
-                                    "For the server Ingle's own Report a bug and Send for review go to. What's sent shows under Bug reports and Plugins sent in, at the top of the channel list, only for you."
+                                    "For the server Ingle's own Report a bug and Send for review go to (and Claude's connector, for plugins and skins). What's sent shows under Bug reports, Plugins sent in and Skins sent in, at the top of the channel list, only for you."
                                 } else {
                                     "For the server Ingle's own Report a bug sends to. Reports show under Bug reports in the channel list, only for you."
                                 })
                                 .size(12.0)
-                                .color(theme::DIM),
+                                .color(theme::DIM()),
                             );
                             ui.add_space(12.0);
                         }
@@ -499,7 +499,7 @@ impl IngleApp {
                                     "Off. Paste a GIPHY API key (free from developers.giphy.com) to turn on /giphy and the GIF button for everyone here."
                                 })
                                 .size(12.0)
-                                .color(theme::DIM),
+                                .color(theme::DIM()),
                             );
                             let id = egui::Id::new(("giphy-key-edit", key.clone()));
                             let mut k: String = ui.data(|d| d.get_temp(id)).unwrap_or_default();
@@ -521,7 +521,7 @@ impl IngleApp {
                                     "Everyone's Ingle here gets this key: GIPHY wants each search to come straight from the app, never through a server. Use a key made just for this server, and change it if it's ever misused."
                                 )
                                 .size(12.0)
-                                .color(theme::DIM),
+                                .color(theme::DIM()),
                             );
                             ui.add_space(12.0);
                         }
@@ -537,7 +537,7 @@ impl IngleApp {
                                     "Off. Paste a KLIPY app key (free from partner.klipy.com) to turn on /klipy and a KLIPY tab in the GIF button for everyone here."
                                 })
                                 .size(12.0)
-                                .color(theme::DIM),
+                                .color(theme::DIM()),
                             );
                             let id = egui::Id::new(("klipy-key-edit", key.clone()));
                             let mut k: String = ui.data(|d| d.get_temp(id)).unwrap_or_default();
@@ -559,7 +559,7 @@ impl IngleApp {
                                     "Everyone's Ingle here gets this key: KLIPY wants each search to come straight from the app, never through a server. Use a key made just for this server, and change it if it's ever misused."
                                 )
                                 .size(12.0)
-                                .color(theme::DIM),
+                                .color(theme::DIM()),
                             );
                             ui.add_space(12.0);
                         }
@@ -579,14 +579,14 @@ impl IngleApp {
                     title(ui, "Join this server?");
                     match ingle_proto::invite::InviteLink::parse(&link) {
                         Ok(l) => {
-                            ui.label(RichText::new(l.authority()).font(theme::mono(14.0)).color(theme::TEXT));
+                            ui.label(RichText::new(l.authority()).font(theme::mono(14.0)).color(theme::TEXT()));
                             ui.add_space(6.0);
                             ui.label(
                                 RichText::new(
                                     "A link asked Ingle to join this server. Joining connects to it: the server sees your \
                                      IP address and your Ingle identity. Only join servers from people you trust.",
                                 )
-                                .color(theme::MUTED),
+                                .color(theme::MUTED()),
                             );
                             ui.add_space(14.0);
                             ui.horizontal(|ui| {
@@ -600,7 +600,7 @@ impl IngleApp {
                             });
                         }
                         Err(e) => {
-                            ui.label(RichText::new(format!("That link doesn't work: {e}")).color(theme::LIVE));
+                            ui.label(RichText::new(format!("That link doesn't work: {e}")).color(theme::LIVE()));
                             if ui.button("OK").clicked() {
                                 close = true;
                             }
@@ -610,7 +610,7 @@ impl IngleApp {
                 Dialog::LeaveServer { key, name } => {
                     ui.set_width(400.0);
                     title(ui, &format!("Leave '{name}'?"));
-                    ui.label(RichText::new("You'll need a new invite to come back.").color(theme::MUTED));
+                    ui.label(RichText::new("You'll need a new invite to come back.").color(theme::MUTED()));
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
                         if ui.add(theme::danger_button("Leave server").min_size(vec2(120.0, 34.0))).clicked() {
@@ -628,7 +628,7 @@ impl IngleApp {
                 Dialog::ReportBug { mut title, mut body, mut include_log } => {
                     ui.set_width(520.0);
                     super::dialogs::title(ui, "Report a bug");
-                    ui.label(RichText::new("It goes to Ingle's developers. Nothing else about you is sent: no name, no account.").color(theme::MUTED));
+                    ui.label(RichText::new("It goes to Ingle's developers. Nothing else about you is sent: no name, no account.").color(theme::MUTED()));
                     let sending = st.bug_send == BugSend::Sending;
                     ui.add_enabled_ui(!sending, |ui| {
                         field_label(ui, "In a few words");
@@ -726,7 +726,7 @@ impl IngleApp {
                              A report is someone else's words: what it says never decides anything.",
                         )
                         .size(12.0)
-                        .color(theme::DIM),
+                        .color(theme::DIM()),
                     );
                     let all = st.bugs.get(&key).cloned().unwrap_or_default();
                     let tabs = [(BugStatus::New, "New"), (BugStatus::Approved, "Approved"), (BugStatus::Fixed, "Fixed"), (BugStatus::Rejected, "Rejected")];
@@ -746,28 +746,28 @@ impl IngleApp {
                     let list_h = (ui.ctx().content_rect().height() - 320.0).clamp(220.0, 520.0);
                     egui::ScrollArea::vertical().auto_shrink([false, false]).min_scrolled_height(list_h).max_height(list_h).show(ui, |ui| {
                         if shown.is_empty() {
-                            ui.label(RichText::new(if st.bugs.contains_key(&key) { "Nothing here." } else { "Loading…" }).color(theme::DIM));
+                            ui.label(RichText::new(if st.bugs.contains_key(&key) { "Nothing here." } else { "Loading…" }).color(theme::DIM()));
                         }
                         for b in shown {
-                            egui::Frame::new().fill(theme::ELEV).corner_radius(8).inner_margin(10).show(ui, |ui| {
+                            egui::Frame::new().fill(theme::ELEV()).corner_radius(8).inner_margin(10).show(ui, |ui| {
                                 ui.set_width(ui.available_width());
                                 let when = chrono::DateTime::from_timestamp_millis(b.created_at)
                                     .map(|t| t.with_timezone(&chrono::Local).format("%b %-d, %-I:%M %p").to_string())
                                     .unwrap_or_default();
                                 ui.horizontal(|ui| {
-                                    ui.label(RichText::new(format!("#{}", b.id)).color(theme::DIM));
+                                    ui.label(RichText::new(format!("#{}", b.id)).color(theme::DIM()));
                                     let t = if b.report.title.trim().is_empty() { "(no title)" } else { b.report.title.as_str() };
-                                    ui.add(egui::Label::new(RichText::new(t).font(theme::bold_font(14.0)).color(theme::TEXT)).truncate());
+                                    ui.add(egui::Label::new(RichText::new(t).font(theme::bold_font(14.0)).color(theme::TEXT())).truncate());
                                 });
-                                ui.label(RichText::new(format!("{when} · Ingle {} · {}", b.report.app_version, b.report.os)).size(12.0).color(theme::DIM));
+                                ui.label(RichText::new(format!("{when} · Ingle {} · {}", b.report.app_version, b.report.os)).size(12.0).color(theme::DIM()));
                                 if !b.report.body.trim().is_empty() {
                                     ui.add_space(4.0);
-                                    ui.add(egui::Label::new(RichText::new(&b.report.body).color(theme::MUTED)).selectable(true));
+                                    ui.add(egui::Label::new(RichText::new(&b.report.body).color(theme::MUTED())).selectable(true));
                                 }
                                 if !b.report.log.is_empty() {
                                     egui::CollapsingHeader::new(RichText::new("Log").size(12.0)).id_salt(("bug-log", b.id)).show(ui, |ui| {
                                         egui::ScrollArea::vertical().max_height(160.0).id_salt(("bug-log-scroll", b.id)).show(ui, |ui| {
-                                            ui.add(egui::Label::new(RichText::new(&b.report.log).monospace().size(11.0).color(theme::DIM)).selectable(true));
+                                            ui.add(egui::Label::new(RichText::new(&b.report.log).monospace().size(11.0).color(theme::DIM())).selectable(true));
                                         });
                                     });
                                 }
@@ -802,10 +802,10 @@ impl IngleApp {
                         self.ui.dialog = Some(Dialog::BugReports { key, filter });
                     }
                 }
-                Dialog::PluginSubmissions { key, mut filter, mut open_file } => {
-                    self.submissions_dialog(ui, st, &key, &mut filter, &mut open_file, acts, &mut close);
+                Dialog::PluginSubmissions { key, skins, mut filter, mut open_file } => {
+                    self.submissions_dialog(ui, st, &key, skins, &mut filter, &mut open_file, acts, &mut close);
                     if !close {
-                        self.ui.dialog = Some(Dialog::PluginSubmissions { key, filter, open_file });
+                        self.ui.dialog = Some(Dialog::PluginSubmissions { key, skins, filter, open_file });
                     }
                 }
                 Dialog::ScreenPicker { selected } => {
@@ -828,7 +828,7 @@ impl IngleApp {
                         if screens.is_empty() {
                             ui.horizontal(|ui| {
                                 ui.spinner();
-                                ui.label(RichText::new("Looking for screens and windows…").color(theme::MUTED));
+                                ui.label(RichText::new("Looking for screens and windows…").color(theme::MUTED()));
                             });
                         }
                         egui::ScrollArea::vertical().id_salt("share-sources").max_height(sources_h).auto_shrink([false, true]).show(ui, |ui| {
@@ -884,7 +884,7 @@ impl IngleApp {
                         ui.label(
                             RichText::new("Free, no subscription. Viewers choose to watch, so it only uses bandwidth for people who are watching.")
                                 .size(12.0)
-                                .color(theme::DIM),
+                                .color(theme::DIM()),
                         );
                     });
                     ui.add_space(12.0);
@@ -965,7 +965,8 @@ impl IngleApp {
     }
 
     fn settings_dialog(&mut self, ui: &mut egui::Ui, st: &AppState, tab: u8, acts: &mut Vec<Act>, close: &mut bool) {
-        ui.set_width(640.0);
+        // Wide enough for every tab on one row.
+        ui.set_width(700.0);
         let mut report_bug = false;
         let mut draft = self.ui.settings_draft.clone().unwrap_or_else(|| st.settings.clone());
         // Things changed elsewhere while this dialog is open (the tray notice, the emoji
@@ -982,8 +983,14 @@ impl IngleApp {
         draft.sound_favorites = st.settings.sound_favorites.clone();
         // (And GIFs starred in chat or the GIF picker.)
         draft.gif_favorites = st.settings.gif_favorites.clone();
+        // (The skin worn, and the Library's stars and order: changed where they're shown.)
+        draft.skin = st.settings.skin.clone();
+        draft.library_favorites = st.settings.library_favorites.clone();
+        draft.library_sort = st.settings.library_sort.clone();
+        // (And the notice that a report went by itself, shown once.)
+        draft.auto_report_told = st.settings.auto_report_told;
         let before = draft.clone();
-        let mut t = tab;
+        let mut t = self.ui.settings_tab_next.take().unwrap_or(tab);
         ui.horizontal(|ui| {
             title(ui, "Settings");
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -994,11 +1001,11 @@ impl IngleApp {
         });
         // Tab ids stay the same everywhere (About is 2); the Windows tab only exists there.
         let tabs: &[(u8, &str)] = if cfg!(windows) {
-            &[(0, "My Account"), (1, "Voice & Video"), (4, "Notifications"), (3, "Windows"), (2, "About")]
+            &[(0, "My Account"), (1, "Voice & Video"), (4, "Notifications"), (5, "Appearance"), (6, "Claude"), (3, "Windows"), (2, "About")]
         } else {
-            &[(0, "My Account"), (1, "Voice & Video"), (4, "Notifications"), (2, "About")]
+            &[(0, "My Account"), (1, "Voice & Video"), (4, "Notifications"), (5, "Appearance"), (6, "Claude"), (2, "About")]
         };
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for &(id, name) in tabs {
                 if ui.add(egui::Button::selectable(t == id, name)).clicked() {
                     t = id;
@@ -1014,7 +1021,7 @@ impl IngleApp {
                 ui.horizontal(|ui| {
                     let (r, _) = ui.allocate_exact_size(vec2(80.0, 80.0), Sense::hover());
                     let face = self.my_face(ui.ctx());
-                    avatar(ui.painter(), r.center(), 40.0, &st.my_uid, &st.my_name, false, theme::SIDE, face);
+                    avatar(ui.painter(), r.center(), 40.0, &st.my_uid, &st.my_name, false, theme::SIDE(), face);
                     ui.add_space(12.0);
                     ui.vertical(|ui| {
                         ui.add_space(14.0);
@@ -1029,7 +1036,7 @@ impl IngleApp {
                         ui.label(
                             RichText::new("PNG, JPEG, GIF or WebP. You can zoom in and move it before saving. It shows on every server you're in.")
                                 .size(12.0)
-                                .color(theme::DIM),
+                                .color(theme::DIM()),
                         );
                     });
                 });
@@ -1037,7 +1044,7 @@ impl IngleApp {
                     ui.label(
                         RichText::new("Some of your servers run an older Ingle Server and won't show it until they're updated.")
                             .size(12.0)
-                            .color(theme::DIM),
+                            .color(theme::DIM()),
                     );
                 }
                 field_label(ui, "Display name");
@@ -1050,29 +1057,29 @@ impl IngleApp {
                 field_label(ui, "Your identity");
                 ui.label(
                     RichText::new(
-                        "There's no account or password. Your identity is a key stored on this computer; servers recognise you by it.",
+                        "There's no account or password. Your identity is a key stored on this computer; servers recognize you by it.",
                     )
-                    .color(theme::MUTED),
+                    .color(theme::MUTED()),
                 );
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Safety code").color(theme::MUTED));
-                    ui.label(RichText::new(&st.safety_code).font(theme::mono(14.0)).color(theme::TEXT));
+                    ui.label(RichText::new("Safety code").color(theme::MUTED()));
+                    ui.label(RichText::new(&st.safety_code).font(theme::mono(14.0)).color(theme::TEXT()));
                     if ui.small_button("Copy").clicked() {
                         acts.push(Act::Copy(st.safety_code.clone()));
                     }
                 });
-                ui.label(RichText::new("Friends can compare this code with you to be sure they're talking to the real you.").size(12.0).color(theme::DIM));
+                ui.label(RichText::new("Friends can compare this code with you to be sure they're talking to the real you.").size(12.0).color(theme::DIM()));
                 ui.add_space(6.0);
                 let path = self.engine.identity_path().display().to_string();
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Key file").color(theme::MUTED));
-                    ui.add(egui::Label::new(RichText::new(&path).font(theme::mono(11.5)).color(theme::DIM)).truncate());
+                    ui.label(RichText::new("Key file").color(theme::MUTED()));
+                    ui.add(egui::Label::new(RichText::new(&path).font(theme::mono(11.5)).color(theme::DIM())).truncate());
                     if ui.small_button("Copy path").clicked() {
                         acts.push(Act::Copy(path.clone()));
                     }
                 });
-                ui.label(RichText::new("Back this file up to keep your identity if you reinstall. Don't share it.").size(12.0).color(theme::DIM));
+                ui.label(RichText::new("Back this file up to keep your identity if you reinstall. Don't share it.").size(12.0).color(theme::DIM()));
             }
             1 => {
                 let devices = &st.devices;
@@ -1100,7 +1107,7 @@ impl IngleApp {
                     }
                     meter(ui, st.mic_level_db, if draft.vad_auto { None } else { Some(draft.vad_threshold_db) });
                 });
-                ui.label(RichText::new("Plays your processed microphone back to you so you can hear what others hear.").size(12.0).color(theme::DIM));
+                ui.label(RichText::new("Plays your processed microphone back to you so you can hear what others hear.").size(12.0).color(theme::DIM()));
 
                 field_label(ui, "Input mode");
                 ui.horizontal(|ui| {
@@ -1112,32 +1119,32 @@ impl IngleApp {
                         ui.checkbox(&mut draft.vad_auto, "Automatically detect when I'm talking");
                         if !draft.vad_auto {
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new("Sensitivity").color(theme::MUTED));
+                                ui.label(RichText::new("Sensitivity").color(theme::MUTED()));
                                 ui.add(egui::Slider::new(&mut draft.vad_threshold_db, -80.0..=-10.0).suffix(" dB"));
                             });
                         }
                     }
                     InputMode::PushToTalk => {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new("Key").color(theme::MUTED));
+                            ui.label(RichText::new("Key").color(theme::MUTED()));
                             egui::ComboBox::from_id_salt("ptt-key").selected_text(hotkey::key_label(&draft.ptt_key)).show_ui(ui, |ui| {
                                 for k in hotkey::KEY_CHOICES {
                                     ui.selectable_value(&mut draft.ptt_key, k.to_string(), hotkey::key_label(k));
                                 }
                             });
-                            ui.label(RichText::new("Release delay").color(theme::MUTED));
+                            ui.label(RichText::new("Release delay").color(theme::MUTED()));
                             let mut d = draft.ptt_release_ms as f32;
                             if ui.add(egui::Slider::new(&mut d, 0.0..=1000.0).suffix(" ms")).changed() {
                                 draft.ptt_release_ms = d as u32;
                             }
                         });
-                        ui.label(RichText::new("Works while other apps are focused, and doesn't block the key in your game.").size(12.0).color(theme::DIM));
+                        ui.label(RichText::new("Works while other apps are focused, and doesn't block the key in your game.").size(12.0).color(theme::DIM()));
                     }
                 }
 
                 field_label(ui, "Voice processing");
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Noise suppression").color(theme::MUTED));
+                    ui.label(RichText::new("Noise suppression").color(theme::MUTED()));
                     ui.radio_value(&mut draft.noise_suppression, NoiseSuppression::Off, "Off");
                     ui.radio_value(&mut draft.noise_suppression, NoiseSuppression::Standard, "Standard");
                     ui.radio_value(&mut draft.noise_suppression, NoiseSuppression::Strong, "Strong (AI)");
@@ -1151,19 +1158,19 @@ impl IngleApp {
                              heard. Try it with Let's check.",
                         )
                         .size(12.0)
-                        .color(theme::DIM),
+                        .color(theme::DIM()),
                     );
                 }
                 ui.checkbox(&mut draft.echo_cancellation, "Echo cancellation (needed if you use speakers instead of headphones)");
                 ui.checkbox(&mut draft.auto_gain, "Automatic gain control");
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Voice quality").color(theme::MUTED));
+                    ui.label(RichText::new("Voice quality").color(theme::MUTED()));
                     let mut b = draft.voice_bitrate_kbps as f32;
                     if ui.add(egui::Slider::new(&mut b, 24.0..=192.0).step_by(8.0).suffix(" kbps")).changed() {
                         draft.voice_bitrate_kbps = b as u32;
                     }
                 });
-                ui.label(RichText::new("Opus with in-band error correction. Discord's default is 64 kbps; anything above ~64 kbps is overkill for voice but great for music.").size(12.0).color(theme::DIM));
+                ui.label(RichText::new("Opus with in-band error correction. Discord's default is 64 kbps; anything above ~64 kbps is overkill for voice but great for music.").size(12.0).color(theme::DIM()));
                 ui.checkbox(&mut draft.voice_priority, "Prioritize voice packets (Quality of Service)");
                 ui.label(
                     RichText::new(
@@ -1171,7 +1178,7 @@ impl IngleApp {
                          Turn it off if your voice cuts out or won't connect (a few routers don't handle it).",
                     )
                     .size(12.0)
-                    .color(theme::DIM),
+                    .color(theme::DIM()),
                 );
 
                 self.soundboard_settings(ui, st, &mut draft);
@@ -1196,6 +1203,8 @@ impl IngleApp {
                     acts.push(Act::RefreshDevices);
                 }
             }
+            5 => self.appearance_tab(ui, st, acts, close),
+            6 => self.claude_tab(ui, st, acts),
             4 => {
                 field_label(ui, "Sounds");
                 ui.checkbox(&mut draft.sounds, "Play sounds");
@@ -1205,14 +1214,14 @@ impl IngleApp {
                          join or leave your voice channel, start or stop sharing their screen, and when you tune in to a stream.",
                     )
                     .size(12.0)
-                    .color(theme::DIM),
+                    .color(theme::DIM()),
                 );
                 ui.add_space(6.0);
                 ui.checkbox(&mut draft.ring, "Ring when someone calls me");
                 ui.label(
                     RichText::new("Calls in direct messages ring (and you hear it ringing when you call), even with the other sounds off.")
                         .size(12.0)
-                        .color(theme::DIM),
+                        .color(theme::DIM()),
                 );
                 ui.add_space(8.0);
                 ui.add_enabled_ui(draft.sounds || draft.ring, |ui| {
@@ -1233,14 +1242,14 @@ impl IngleApp {
                 ui.label(
                     RichText::new("Holding Shift when you click Delete skips the question either way.")
                         .size(12.0)
-                        .color(theme::DIM),
+                        .color(theme::DIM()),
                 );
                 ui.add_space(10.0);
                 field_label(ui, "Muting");
                 ui.label(
                     RichText::new("Right-click a channel, a server or a direct message conversation to mute it.")
                         .size(12.0)
-                        .color(theme::DIM),
+                        .color(theme::DIM()),
                 );
             }
             3 => {
@@ -1250,7 +1259,7 @@ impl IngleApp {
                         "Closing the window keeps Ingle running by the clock, so you stay in voice and friends can still reach \
                          you. Click the campfire icon to open Ingle; right-click it to mute, leave voice or quit.",
                     )
-                    .color(theme::MUTED),
+                    .color(theme::MUTED()),
                 );
                 ui.add_space(4.0);
                 ui.label(
@@ -1259,14 +1268,14 @@ impl IngleApp {
                          next to the clock.",
                     )
                     .size(12.0)
-                    .color(theme::DIM),
+                    .color(theme::DIM()),
                 );
                 if !crate::tray::is_active() {
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new("Windows isn't showing the icon right now, so closing the window minimizes Ingle instead.")
                             .size(12.0)
-                            .color(theme::LIVE),
+                            .color(theme::LIVE()),
                     );
                 }
                 ui.add_space(12.0);
@@ -1276,7 +1285,7 @@ impl IngleApp {
                 ui.label(
                     RichText::new("Like Discord: you're online and friends can reach you as soon as your PC is on.")
                         .size(12.0)
-                        .color(theme::DIM),
+                        .color(theme::DIM()),
                 );
                 ui.add_space(12.0);
                 if ui.add(theme::danger_button("Quit Ingle").min_size(vec2(110.0, 32.0))).clicked() {
@@ -1285,8 +1294,8 @@ impl IngleApp {
             }
             _ => {
                 ui.add_space(8.0);
-                ui.label(RichText::new(format!("{} {}", ingle_proto::APP_NAME, env!("CARGO_PKG_VERSION"))).font(theme::bold_font(16.0)).color(theme::TEXT));
-                ui.label(RichText::new("Lean voice, video, screen share and chat. Written in Rust.").color(theme::MUTED));
+                ui.label(RichText::new(format!("{} {}", ingle_proto::APP_NAME, env!("CARGO_PKG_VERSION"))).font(theme::bold_font(16.0)).color(theme::TEXT()));
+                ui.label(RichText::new("Lean voice, video, screen share and chat. Written in Rust.").color(theme::MUTED()));
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     let checking = self.updater.checking();
@@ -1297,6 +1306,21 @@ impl IngleApp {
                         report_bug = true;
                     }
                 });
+                if ingle_engine::bugs::can_report() {
+                    ui.add_space(6.0);
+                    ui.checkbox(&mut draft.auto_reports, "Send error reports automatically");
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(
+                                "When screen sharing or your camera won't start or stops working, or Ingle crashed or froze the last time it was \
+                                 open, Ingle sends Firelit Games what happened and its log (never your messages), so it gets fixed.",
+                            )
+                            .size(12.0)
+                            .color(theme::DIM()),
+                        )
+                        .wrap(),
+                    );
+                }
                 ui.add_space(10.0);
                 for (h, b) in [
                     ("End-to-end encrypted calls", "Voice, cameras and screen shares are encrypted on your PC with keys the server never sees (X25519 + ChaCha20-Poly1305, new keys whenever someone joins or leaves)."),
@@ -1304,11 +1328,11 @@ impl IngleApp {
                     ("Self-hosted", "Communities run their own small server. Text history lives on that server."),
                     ("Free quality", "1080p60 screen sharing and high-bitrate audio without a subscription."),
                 ] {
-                    ui.label(RichText::new(h).font(theme::bold_font(14.0)).color(theme::TEXT));
-                    ui.label(RichText::new(b).color(theme::MUTED));
+                    ui.label(RichText::new(h).font(theme::bold_font(14.0)).color(theme::TEXT()));
+                    ui.label(RichText::new(b).color(theme::MUTED()));
                     ui.add_space(6.0);
                 }
-                ui.label(RichText::new("Text messages are stored on the server you're talking on (like Discord), not end-to-end encrypted.").size(12.0).color(theme::DIM));
+                ui.label(RichText::new("Text messages are stored on the server you're talking on (like Discord), not end-to-end encrypted.").size(12.0).color(theme::DIM()));
                 ui.add_space(6.0);
                 ui.label(
                     RichText::new(
@@ -1319,7 +1343,7 @@ impl IngleApp {
                          synthesized by Ingle (no recordings).",
                     )
                         .size(12.0)
-                        .color(theme::DIM),
+                        .color(theme::DIM()),
                 );
             }
         });
@@ -1328,7 +1352,7 @@ impl IngleApp {
         ui.separator();
         ui.horizontal(|ui| {
             let v = format!("Ingle {} · {} {}", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH);
-            ui.label(RichText::new(&v).size(11.5).color(theme::DIM));
+            ui.label(RichText::new(&v).size(11.5).color(theme::DIM()));
             if ui.small_button("Copy").on_hover_text("Copy the version (for a bug report)").clicked() {
                 ui.ctx().copy_text(v);
             }
@@ -1367,14 +1391,14 @@ fn device_combo(ui: &mut egui::Ui, id: &str, value: &mut Option<String>, devices
 
 fn meter(ui: &mut egui::Ui, level_db: f32, threshold: Option<f32>) {
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width().min(320.0), 10.0), Sense::hover());
-    ui.painter().rect_filled(r, CornerRadius::same(5), theme::ELEV);
+    ui.painter().rect_filled(r, CornerRadius::same(5), theme::ELEV());
     let frac = ((level_db + 80.0) / 80.0).clamp(0.0, 1.0);
     let fill = egui::Rect::from_min_size(r.min, vec2(r.width() * frac, r.height()));
-    let col = if level_db > -12.0 { theme::LIVE } else { theme::ONLINE };
+    let col = if level_db > -12.0 { theme::LIVE() } else { theme::ONLINE() };
     ui.painter().rect_filled(fill, CornerRadius::same(5), col);
     if let Some(t) = threshold {
         let x = r.left() + r.width() * ((t + 80.0) / 80.0).clamp(0.0, 1.0);
-        ui.painter().line_segment([egui::pos2(x, r.top() - 3.0), egui::pos2(x, r.bottom() + 3.0)], egui::Stroke::new(2.0f32, theme::EMBER2));
+        ui.painter().line_segment([egui::pos2(x, r.top() - 3.0), egui::pos2(x, r.bottom() + 3.0)], egui::Stroke::new(2.0f32, theme::EMBER2()));
     }
 }
 
@@ -1397,7 +1421,7 @@ impl IngleApp {
                     egui::Label::new(
                         RichText::new("Roles are listed highest first. People get every permission of every role they have; colors and groups come from their highest role.")
                             .size(12.0)
-                            .color(theme::DIM),
+                            .color(theme::DIM()),
                     )
                     .wrap(),
                 );
@@ -1409,18 +1433,18 @@ impl IngleApp {
             ui.add_space(6.0);
             egui::ScrollArea::vertical().id_salt("roles-list").max_height(380.0).show(ui, |ui| {
                 if s.roles.is_empty() {
-                    ui.label(RichText::new("No roles yet.").color(theme::MUTED));
+                    ui.label(RichText::new("No roles yet.").color(theme::MUTED()));
                 }
                 for r in &s.roles {
                     let count = s.members.values().filter(|m| m.roles.contains(&r.id)).count();
                     let selected = self.ui.role_edit.as_ref().map(|e| e.id == r.id).unwrap_or(false);
                     let resp = ui.add(egui::Button::selectable(selected, "").min_size(vec2(ui.available_width(), 34.0)));
                     let rect = resp.rect;
-                    let col = if r.color != 0 { rgb(r.color) } else { theme::MUTED };
+                    let col = if r.color != 0 { rgb(r.color) } else { theme::MUTED() };
                     ui.painter().circle_filled(pos2(rect.left() + 14.0, rect.center().y), 6.0, col);
-                    ui.painter().text(pos2(rect.left() + 28.0, rect.center().y), egui::Align2::LEFT_CENTER, &r.name, theme::bold_font(13.5), theme::TEXT);
+                    ui.painter().text(pos2(rect.left() + 28.0, rect.center().y), egui::Align2::LEFT_CENTER, &r.name, theme::bold_font(13.5), theme::TEXT());
                     let people = if count == 1 { "1 person".to_string() } else { format!("{count} people") };
-                    ui.painter().text(pos2(rect.right() - 10.0, rect.center().y), egui::Align2::RIGHT_CENTER, people, theme::font(12.0), theme::DIM);
+                    ui.painter().text(pos2(rect.right() - 10.0, rect.center().y), egui::Align2::RIGHT_CENTER, people, theme::font(12.0), theme::DIM());
                     if resp.clicked() {
                         let [rr, gg, bb] = [(r.color >> 16) as u8, (r.color >> 8) as u8, r.color as u8];
                         self.ui.role_edit = Some(RoleEdit { id: r.id, name: r.name.clone(), color: [rr, gg, bb], perms: r.perms, hoist: r.hoist });
@@ -1431,13 +1455,13 @@ impl IngleApp {
             let ui = &mut cols[1];
             let Some(mut e) = self.ui.role_edit.clone() else {
                 ui.add_space(30.0);
-                ui.label(RichText::new("Pick a role to edit it.").color(theme::MUTED));
+                ui.label(RichText::new("Pick a role to edit it.").color(theme::MUTED()));
                 return;
             };
             let Some(role) = s.role(e.id).cloned() else { return };
             let editable = s.can_manage_role(&role);
             if !editable {
-                ui.label(RichText::new("This role is at or above your own highest role, so you can't change it.").size(12.0).color(theme::LIVE));
+                ui.label(RichText::new("This role is at or above your own highest role, so you can't change it.").size(12.0).color(theme::LIVE()));
             }
             ui.add_enabled_ui(editable, |ui| {
                 field_label(ui, "Name");
@@ -1473,7 +1497,7 @@ impl IngleApp {
                 // they ran into each other in a narrow column.)
                 let note = |ui: &mut egui::Ui, text: &str| {
                     ui.with_layout(Layout::top_down(Align::LEFT), |ui| {
-                        ui.add(egui::Label::new(RichText::new(text).size(11.5).color(theme::DIM)).wrap());
+                        ui.add(egui::Label::new(RichText::new(text).size(11.5).color(theme::DIM())).wrap());
                     });
                 };
                 note(ui, "Everyone can chat, react, join voice, share and create invites.");
@@ -1524,27 +1548,27 @@ impl IngleApp {
                 "Add up to {max} emoji anyone in this server can use, by typing :name: or from the emoji picker. \
                  PNG, JPEG, WebP or GIF (animated GIFs move). Names are letters, numbers and underscores."
             ))
-            .color(theme::MUTED),
+            .color(theme::MUTED()),
         );
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             if ui.add(theme::primary_button("Upload emoji")).clicked() {
                 crate::images::pick_async(crate::images::PickFor::Emoji(s.key.clone()), true, ui.ctx());
             }
-            ui.label(RichText::new(format!("{} of {max} used", s.info.emojis.len())).size(12.0).color(theme::DIM));
+            ui.label(RichText::new(format!("{} of {max} used", s.info.emojis.len())).size(12.0).color(theme::DIM()));
         });
         ui.add_space(8.0);
         if s.info.emojis.is_empty() {
-            ui.label(RichText::new("No emoji yet.").color(theme::DIM));
+            ui.label(RichText::new("No emoji yet.").color(theme::DIM()));
             return;
         }
         let ctx = ui.ctx().clone();
         let rows_h = (s.info.emojis.len() as f32 * 40.0 + 30.0).min(380.0);
         egui::ScrollArea::vertical().max_height(380.0).min_scrolled_height(rows_h).show(ui, |ui| {
             egui::Grid::new("emoji-list").num_columns(4).spacing(vec2(12.0, 6.0)).striped(true).show(ui, |ui| {
-                ui.label(RichText::new("IMAGE").font(theme::bold_font(11.0)).color(theme::DIM));
-                ui.label(RichText::new("NAME").font(theme::bold_font(11.0)).color(theme::DIM));
-                ui.label(RichText::new("ADDED BY").font(theme::bold_font(11.0)).color(theme::DIM));
+                ui.label(RichText::new("IMAGE").font(theme::bold_font(11.0)).color(theme::DIM()));
+                ui.label(RichText::new("NAME").font(theme::bold_font(11.0)).color(theme::DIM()));
+                ui.label(RichText::new("ADDED BY").font(theme::bold_font(11.0)).color(theme::DIM()));
                 ui.label("");
                 ui.end_row();
                 for e in &s.info.emojis {
@@ -1564,8 +1588,8 @@ impl IngleApp {
                         }
                         self.ui.emoji_names.remove(&e.id);
                     }
-                    ui.label(RichText::new(s.member_name(&e.by)).color(theme::MUTED));
-                    if crate::app::icon_button(ui, 26.0, "Remove", false, |p, r, _| crate::icons::trash(p, r, theme::LIVE)).clicked() {
+                    ui.label(RichText::new(s.member_name(&e.by)).color(theme::MUTED()));
+                    if crate::app::icon_button(ui, 26.0, "Remove", false, |p, r, _| crate::icons::trash(p, r, theme::LIVE())).clicked() {
                         acts.push(Act::RemoveEmoji { key: s.key.clone(), id: e.id.clone() });
                     }
                     ui.end_row();
@@ -1589,7 +1613,7 @@ impl IngleApp {
                  for it, set up a new one with Restore from a backup and the server comes back exactly as it was, as the same \
                  server for everyone.",
             )
-            .color(theme::MUTED),
+            .color(theme::MUTED()),
         );
         ui.add_space(8.0);
         let when = |ms: i64| {
@@ -1605,12 +1629,12 @@ impl IngleApp {
                 None => "Not backed up yet".to_string(),
             }
         };
-        ui.label(RichText::new(line).color(theme::TEXT));
+        ui.label(RichText::new(line).color(theme::TEXT()));
         if let Some(e) = &status.error {
-            ui.label(RichText::new(format!("The last try failed: {e}")).color(theme::LIVE));
+            ui.label(RichText::new(format!("The last try failed: {e}")).color(theme::LIVE()));
         }
         ui.add_space(4.0);
-        ui.label(RichText::new(folder.display().to_string()).size(12.0).color(theme::DIM));
+        ui.label(RichText::new(folder.display().to_string()).size(12.0).color(theme::DIM()));
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             if ui.add_enabled(!status.running, theme::primary_button("Back up now")).clicked() {
@@ -1628,7 +1652,7 @@ impl IngleApp {
         ui.label(
             RichText::new("The backup includes direct messages and the server's private key: keep the folder to yourself.")
                 .size(12.0)
-                .color(theme::DIM),
+                .color(theme::DIM()),
         );
     }
 }
@@ -1669,7 +1693,7 @@ impl IngleApp {
             }
             None => {
                 let text = if source.is_some() { "Getting a preview…" } else { "Pick a screen or window" };
-                ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, text, theme::font(13.0), theme::DIM);
+                ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, text, theme::font(13.0), theme::DIM());
             }
         }
         ui.add_space(4.0);

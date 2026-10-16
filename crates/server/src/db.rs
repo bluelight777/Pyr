@@ -174,8 +174,10 @@ CREATE TABLE IF NOT EXISTS bug_reports (
     os TEXT NOT NULL DEFAULT '',
     log TEXT NOT NULL DEFAULT ''
 );
--- Plugins sent in for the Ingle Library (when the owner collects them): Rust source waiting
--- for review. Whoever sent one isn't recorded, beyond what they wrote in it.
+-- Plugins and skins sent in for the Ingle Library (when the owner collects them): Rust source
+-- or a skin's files, waiting for review. Whoever sent one isn't recorded, beyond what they
+-- wrote in it and, when they signed it (0.7.5), their Ingle id (`author_id`, added by migrate):
+-- that's what lets them send new versions of it and see where theirs stand.
 CREATE TABLE IF NOT EXISTS plugin_submissions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at INTEGER NOT NULL,
@@ -193,6 +195,10 @@ CREATE TABLE IF NOT EXISTS plugin_submissions (
     files TEXT NOT NULL
 );
 "#;
+
+/// What `Db::submission_row` reads, in its order.
+const SUBMISSION_COLUMNS: &str =
+    "id, created_at, status, name, kind, version, summary, author, contact, app_version, file_count, size, author_id, update_of, changes, note";
 
 /// `channels.kind` of a direct message conversation (never listed as a channel).
 const DM_KIND: i64 = 2;
@@ -239,6 +245,14 @@ fn migrate(c: &Connection) -> Result<()> {
     if !has_joined_with {
         c.execute_batch("ALTER TABLE users ADD COLUMN joined_with TEXT")?;
     }
+    // Signed submissions and new versions of them, and the owner's note to the sender (0.7.5).
+    for (column, kind) in [("author_id", "TEXT NOT NULL DEFAULT ''"), ("update_of", "INTEGER NOT NULL DEFAULT 0"), ("changes", "TEXT NOT NULL DEFAULT ''"), ("note", "TEXT NOT NULL DEFAULT ''")] {
+        let has = c.prepare(&format!("SELECT 1 FROM pragma_table_info('plugin_submissions') WHERE name = '{column}'"))?.exists([])?;
+        if !has {
+            c.execute_batch(&format!("ALTER TABLE plugin_submissions ADD COLUMN {column} {kind}"))?;
+        }
+    }
+    c.execute_batch("CREATE INDEX IF NOT EXISTS plugin_submissions_author ON plugin_submissions(author_id)")?;
     Ok(())
 }
 
@@ -565,12 +579,14 @@ impl Db {
             > 0)
     }
 
-    /// A plugin sent in; `files` is the submission's files as JSON, `size` their bytes in all.
-    pub fn add_submission(&self, sub: &ingle_proto::control::PluginSubmission, files: &str, size: u64) -> Result<i64> {
+    /// A plugin or skin sent in; `files` is its files as JSON, `size` their bytes in all.
+    /// `sub.author_id` is stored only once its signature has been checked (the caller clears
+    /// it otherwise); `changes` says how a new version differs from the one it updates.
+    pub fn add_submission(&self, sub: &ingle_proto::control::PluginSubmission, files: &str, size: u64, changes: &str) -> Result<i64> {
         let c = self.conn.lock();
         c.execute(
-            "INSERT INTO plugin_submissions(created_at, name, kind, version, summary, author, contact, app_version, file_count, size, files) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO plugin_submissions(created_at, name, kind, version, summary, author, contact, app_version, file_count, size, files, author_id, update_of, changes) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 now_ms(),
                 sub.name,
@@ -582,17 +598,21 @@ impl Db {
                 sub.app_version,
                 sub.files.len() as i64,
                 size as i64,
-                files
+                files,
+                sub.author_id,
+                sub.update_of,
+                changes
             ],
         )?;
         Ok(c.last_insert_rowid())
     }
 
-    /// Submissions waiting for the owner to look at them.
-    pub fn new_submission_count(&self) -> u64 {
+    /// Submissions waiting for the owner to look at them: skins, or plugins.
+    pub fn new_submission_count(&self, skins: bool) -> u64 {
+        let op = if skins { "=" } else { "!=" };
         self.conn
             .lock()
-            .query_row("SELECT COUNT(*) FROM plugin_submissions WHERE status = 'new'", [], |r| r.get::<_, i64>(0))
+            .query_row(&format!("SELECT COUNT(*) FROM plugin_submissions WHERE status = 'new' AND kind {op} 'skin'"), [], |r| r.get::<_, i64>(0))
             .unwrap_or(0) as u64
     }
 
@@ -611,38 +631,52 @@ impl Db {
             app_version: r.get(9)?,
             files: r.get::<_, i64>(10)? as u32,
             size: r.get::<_, i64>(11)? as u64,
+            author_id: r.get(12)?,
+            update_of: r.get(13)?,
+            changes: r.get(14)?,
+            note: r.get(15)?,
         })
     }
 
     /// The ones waiting to be looked at first, then the rest; newest first in each (no files).
     pub fn submissions(&self, limit: usize) -> Vec<ingle_proto::control::SubmissionEntry> {
         let c = self.conn.lock();
-        let Ok(mut q) = c.prepare(
-            "SELECT id, created_at, status, name, kind, version, summary, author, contact, app_version, file_count, size \
-             FROM plugin_submissions ORDER BY (status = 'new') DESC, id DESC LIMIT ?1",
-        ) else {
+        let Ok(mut q) = c.prepare(&format!("SELECT {SUBMISSION_COLUMNS} FROM plugin_submissions ORDER BY (status = 'new') DESC, id DESC LIMIT ?1")) else {
             return Vec::new();
         };
         q.query_map([limit as i64], Self::submission_row).map(|rows| rows.filter_map(|r| r.ok()).collect()).unwrap_or_default()
     }
 
+    /// What one sender (by their Ingle id) sent in, newest first (no files).
+    pub fn submissions_by(&self, author_id: &str, limit: usize) -> Vec<ingle_proto::control::SubmissionEntry> {
+        if author_id.is_empty() {
+            return Vec::new();
+        }
+        let c = self.conn.lock();
+        let Ok(mut q) = c.prepare(&format!("SELECT {SUBMISSION_COLUMNS} FROM plugin_submissions WHERE author_id = ?1 ORDER BY id DESC LIMIT ?2")) else {
+            return Vec::new();
+        };
+        q.query_map(params![author_id, limit as i64], Self::submission_row).map(|rows| rows.filter_map(|r| r.ok()).collect()).unwrap_or_default()
+    }
+
     /// One submission with its files (as stored: JSON).
     pub fn submission(&self, id: i64) -> Option<(ingle_proto::control::SubmissionEntry, String)> {
         let c = self.conn.lock();
-        c.query_row(
-            "SELECT id, created_at, status, name, kind, version, summary, author, contact, app_version, file_count, size, files \
-             FROM plugin_submissions WHERE id = ?1",
-            [id],
-            |r| Ok((Self::submission_row(r)?, r.get::<_, String>(12)?)),
-        )
+        c.query_row(&format!("SELECT {SUBMISSION_COLUMNS}, files FROM plugin_submissions WHERE id = ?1"), [id], |r| {
+            Ok((Self::submission_row(r)?, r.get::<_, String>(16)?))
+        })
         .ok()
     }
 
-    pub fn set_submission_status(&self, id: i64, status: ingle_proto::control::SubmissionStatus) -> Result<bool> {
+    /// `note` (for the sender) replaces the one before, if any.
+    pub fn set_submission_status(&self, id: i64, status: ingle_proto::control::SubmissionStatus, note: &str) -> Result<bool> {
         Ok(self
             .conn
             .lock()
-            .execute("UPDATE plugin_submissions SET status = ?2, status_at = ?3 WHERE id = ?1", params![id, status.as_str(), now_ms()])?
+            .execute(
+                "UPDATE plugin_submissions SET status = ?2, status_at = ?3, note = ?4 WHERE id = ?1",
+                params![id, status.as_str(), now_ms(), note],
+            )?
             > 0)
     }
 

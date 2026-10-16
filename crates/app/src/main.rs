@@ -2,9 +2,11 @@
 //! Ingle desktop app.
 
 mod app;
+mod appearance;
 mod autostart;
 mod calls;
 mod chat;
+mod connector;
 mod create;
 mod dialogs;
 mod icons;
@@ -20,6 +22,7 @@ mod spell;
 mod images;
 mod titlebar;
 mod instance;
+mod looks;
 mod markdown;
 mod plugins;
 mod select;
@@ -172,6 +175,10 @@ fn main() -> eframe::Result<()> {
                 engine.set_focus_probe(tray::window_in_front);
                 // Writes what Ingle was doing to the log if its window ever stops responding.
                 watchdog::start(engine.clone());
+                // A crash or a freeze the last time Ingle was open is reported by itself (once,
+                // even if a second renderer is tried).
+                static LAST_RUN: std::sync::Once = std::sync::Once::new();
+                LAST_RUN.call_once(|| engine.report_last_run_trouble());
                 #[cfg(not(windows))]
                 let tray: Option<tray::Tray> = None;
                 let ctx = cc.egui_ctx.clone();

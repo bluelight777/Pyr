@@ -80,15 +80,15 @@ impl IngleApp {
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .frame(egui::Frame::new().fill(theme::SIDE).corner_radius(12).inner_margin(18).stroke(Stroke::new(1.0f32, theme::LINE)))
+            .frame(egui::Frame::new().fill(theme::SIDE()).corner_radius(12).inner_margin(18).stroke(Stroke::new(1.0f32, theme::LINE())))
             .title_bar(false)
             .show(ctx, |ui| {
                 ui.set_width(BOX);
-                ui.label(RichText::new(title).font(theme::bold_font(18.0)).color(theme::TEXT));
+                ui.label(RichText::new(title).font(theme::bold_font(18.0)).color(theme::TEXT()));
                 ui.add_space(10.0);
                 let (area, resp) = ui.allocate_exact_size(vec2(BOX, BOX), Sense::drag());
                 let p = ui.painter().with_clip_rect(area);
-                p.rect_filled(area, CornerRadius::same(8), theme::STAGE);
+                p.rect_filled(area, CornerRadius::same(8), theme::STAGE());
                 // How big an image pixel is on screen: the chosen square fills the circle.
                 let side_px = c.w.min(c.h) * c.frac();
                 let scale = CIRCLE / side_px;
@@ -114,7 +114,7 @@ impl IngleApp {
                         p.image(t, Rect::from_min_size(min, size), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
                     }
                     None => {
-                        p.text(area.center(), egui::Align2::CENTER_CENTER, "Loading…", theme::font(14.0), theme::DIM);
+                        p.text(area.center(), egui::Align2::CENTER_CENTER, "Loading…", theme::font(14.0), theme::DIM());
                     }
                 }
                 // Darken everything outside the circle, then outline it.
@@ -123,12 +123,12 @@ impl IngleApp {
                 p.circle_stroke(area.center(), r, Stroke::new(2.0f32, Color32::WHITE));
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("−").size(16.0).color(theme::MUTED));
+                    ui.label(RichText::new("−").size(16.0).color(theme::MUTED()));
                     ui.spacing_mut().slider_width = BOX - 60.0;
                     ui.add(egui::Slider::new(&mut c.zoom, 1.0..=5.0).show_value(false));
-                    ui.label(RichText::new("+").size(16.0).color(theme::MUTED));
+                    ui.label(RichText::new("+").size(16.0).color(theme::MUTED()));
                 });
-                ui.label(RichText::new("Drag to move, zoom with the slider or your mouse wheel.").size(12.0).color(theme::DIM));
+                ui.label(RichText::new("Drag to move, zoom with the slider or your mouse wheel.").size(12.0).color(theme::DIM()));
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     if ui.button("Reset").clicked() {

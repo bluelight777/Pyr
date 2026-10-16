@@ -95,12 +95,12 @@ pub fn data_path(dir: &Path, id: &str) -> PathBuf {
     dir.join("data").join(format!("{id}.json"))
 }
 
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
 /// Downloads one file, checking its size and SHA-256 (allowing 50 kB/s, and a minute).
-fn download(url: &str, size: u64, sha256: &str, mut progress: impl FnMut(u64)) -> Result<Vec<u8>, String> {
+pub(crate) fn download(url: &str, size: u64, sha256: &str, mut progress: impl FnMut(u64)) -> Result<Vec<u8>, String> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(None)
         .timeout_connect(Some(Duration::from_secs(15)))

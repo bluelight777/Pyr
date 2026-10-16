@@ -1,4 +1,4 @@
-//! Discord-flavoured markdown subset: **bold**, *italic*, __underline__, ~~strike~~,
+//! Discord-flavored markdown subset: **bold**, *italic*, __underline__, ~~strike~~,
 //! `code`, ```code blocks```, > quotes, links and @mentions.
 
 use eframe::egui::text::{LayoutJob, TextFormat};
@@ -103,7 +103,7 @@ pub fn layout(text: &str, size: f32, color: Color32, names: &[String], wrap_widt
     (job, links)
 }
 
-/// Like `layout`, with room left for colour emoji (`emoji_size` across): also returns where
+/// Like `layout`, with room left for color emoji (`emoji_size` across): also returns where
 /// each one starts (char index in the job) and what it is.
 pub fn layout_emoji(
     text: &str,
@@ -137,21 +137,21 @@ pub fn layout_emoji(
             f.italics = true;
         }
         if st.underline || link {
-            f.underline = Stroke::new(1.0f32, if link { theme::LINK } else { color });
+            f.underline = Stroke::new(1.0f32, if link { theme::LINK() } else { color });
         }
         if st.strike {
             f.strikethrough = Stroke::new(1.0f32, color);
         }
         if code {
-            f.background = theme::CODE_BG;
+            f.background = theme::CODE_BG();
             f.color = Color32::from_rgb(0xf2, 0xd9, 0xc4);
         }
         if link {
-            f.color = theme::LINK;
+            f.color = theme::LINK();
         }
         if mention {
             f.background = Color32::from_rgb(0x4a, 0x2c, 0x1a);
-            f.color = theme::EMBER2;
+            f.color = theme::EMBER2();
         }
         f
     };
@@ -296,8 +296,8 @@ fn show_in(ui: &mut egui::Ui, text: &str, color: Color32, names: &[String], cust
         match block {
             Block::Code(code) => {
                 egui::Frame::new()
-                    .fill(theme::CODE_BG)
-                    .stroke(Stroke::new(1.0f32, theme::LINE))
+                    .fill(theme::CODE_BG())
+                    .stroke(Stroke::new(1.0f32, theme::LINE()))
                     .corner_radius(6)
                     .inner_margin(egui::Margin::symmetric(10, 8))
                     .show(ui, |ui| {
@@ -319,12 +319,12 @@ fn show_in(ui: &mut egui::Ui, text: &str, color: Color32, names: &[String], cust
             Block::Quote(q) => {
                 ui.horizontal(|ui| {
                     let (r, _) = ui.allocate_exact_size(egui::vec2(4.0, 18.0), egui::Sense::hover());
-                    ui.painter().rect_filled(r, 2, theme::DIM);
+                    ui.painter().rect_filled(r, 2, theme::DIM());
                     let s = sel.as_mut().map(|s| {
                         let p = part(s);
                         (s, p)
                     });
-                    paragraph(ui, &q, theme::MUTED, names, width - 16.0, emoji_size, custom, s);
+                    paragraph(ui, &q, theme::MUTED(), names, width - 16.0, emoji_size, custom, s);
                 });
             }
             Block::Text(t) => {

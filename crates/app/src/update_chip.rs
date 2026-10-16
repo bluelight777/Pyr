@@ -156,7 +156,7 @@ impl Chip {
         let now = ui.input(|i| i.time) as f32;
         let id = ui.id().with("update-chip");
         let top = y - H / 2.0;
-        let ver = ui.painter().layout_no_wrap(current_version().to_string(), theme::font(11.0), theme::DIM);
+        let ver = ui.painter().layout_no_wrap(current_version().to_string(), theme::font(11.0), theme::DIM());
         let vw = ver.size().x;
         const PAD: f32 = 6.0;
         const GAP: f32 = 5.0;
@@ -164,18 +164,18 @@ impl Chip {
         match look {
             // The version, then the update's own button.
             Look::Available(..) | Look::Downloading(..) | Look::Restarting => {
-                ui.painter().galley(pos2(x + PAD, y - ver.size().y / 2.0), ver, theme::DIM);
+                ui.painter().galley(pos2(x + PAD, y - ver.size().y / 2.0), ver, theme::DIM());
                 let bx = x + PAD + vw + 8.0;
                 self.update_button(ui, u, look, id, bx, top, now)
             }
             // The version (click it to check for updates), and how a check went.
             look => {
                 let (text, icon_col, text_col, fill, tip): (Option<&str>, Color32, Color32, Color32, String) = match &look {
-                    Look::Checking => (Some("Checking…"), theme::MUTED, theme::MUTED, theme::ELEV, "Checking for updates…".into()),
+                    Look::Checking => (Some("Checking…"), theme::MUTED(), theme::MUTED(), theme::ELEV(), "Checking for updates…".into()),
                     Look::UpToDate(_) => (
                         Some("Up to date"),
-                        theme::ONLINE,
-                        theme::ONLINE,
+                        theme::ONLINE(),
+                        theme::ONLINE(),
                         GREEN_TINT,
                         format!("Ingle {} is the newest version.", current_version()),
                     ),
@@ -186,7 +186,7 @@ impl Chip {
                         AMBER_TINT,
                         format!("Couldn't check for updates: {why}\nClick to try again."),
                     ),
-                    _ => (None, theme::DIM, theme::DIM, Color32::TRANSPARENT, format!("Ingle {}. Click to check for updates.", current_version())),
+                    _ => (None, theme::DIM(), theme::DIM(), Color32::TRANSPARENT, format!("Ingle {}. Click to check for updates.", current_version())),
                 };
                 let text_galley = text.map(|t| ui.painter().layout_no_wrap(t.to_string(), theme::font(11.0), text_col));
                 let target = PAD + vw + GAP + ICON + text_galley.as_ref().map(|g| GAP + g.size().x).unwrap_or(0.0) + PAD - 1.0;
@@ -201,13 +201,13 @@ impl Chip {
                     _ => 1.0,
                 };
                 let fill = match look {
-                    Look::Version => theme::HOVER.gamma_multiply(hot),
+                    Look::Version => theme::HOVER().gamma_multiply(hot),
                     Look::Failed(_) => lerp(AMBER_TINT, AMBER_HOT, hot),
                     _ => fill.gamma_multiply(fade),
                 };
                 let p = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
                 p.rect_filled(rect, CornerRadius::same((H / 2.0) as u8), fill);
-                let ver_col = lerp(if matches!(look, Look::Version) { theme::DIM } else { theme::MUTED }, theme::TEXT, hot);
+                let ver_col = lerp(if matches!(look, Look::Version) { theme::DIM() } else { theme::MUTED() }, theme::TEXT(), hot);
                 p.text(pos2(x + PAD, y), Align2::LEFT_CENTER, current_version(), theme::font(11.0), ver_col);
                 let icon = Rect::from_min_size(pos2(x + PAD + vw + GAP, y - ICON / 2.0), vec2(ICON, ICON));
                 match look {
@@ -224,7 +224,7 @@ impl Chip {
                         ui.ctx().request_repaint_after(Duration::from_millis(500));
                     }
                     // A quarter turn as the pointer comes onto it: "check again".
-                    _ => icons::refresh(&p, icon, lerp(icon_col.gamma_multiply(0.8), theme::TEXT, hot), hot * 0.25),
+                    _ => icons::refresh(&p, icon, lerp(icon_col.gamma_multiply(0.8), theme::TEXT(), hot), hot * 0.25),
                 }
                 if let Some(g) = text_galley {
                     let col = match look {
@@ -379,8 +379,8 @@ impl Chip {
                         if *missed > 1 {
                             let t = if *missed > 9 { "9+".to_string() } else { missed.to_string() };
                             let b = Rect::from_center_size(rect.right_bottom() + vec2(-6.0, -6.0), vec2(if *missed > 9 { 24.0 } else { 20.0 }, 20.0));
-                            p.rect_filled(b.expand(3.0), CornerRadius::same(13), theme::RAIL);
-                            p.rect_filled(b, CornerRadius::same(10), theme::LIVE);
+                            p.rect_filled(b.expand(3.0), CornerRadius::same(13), theme::RAIL());
+                            p.rect_filled(b, CornerRadius::same(10), theme::LIVE());
                             p.text(b.center(), Align2::CENTER_CENTER, t, theme::bold_font(12.0), Color32::WHITE);
                         }
                     }
@@ -408,18 +408,18 @@ impl Chip {
                 let checking = matches!(look, Look::Checking);
                 let hot = ui.ctx().animate_bool_with_time(id.with("hot"), resp.hovered() && !checking, 0.12);
                 let (icon_col, fill, tip) = match &look {
-                    Look::Checking => (theme::MUTED, theme::ELEV, "Checking for updates…".to_string()),
-                    Look::UpToDate(_) => (theme::ONLINE, GREEN_TINT, format!("Ingle {} is the newest version.", current_version())),
+                    Look::Checking => (theme::MUTED(), theme::ELEV(), "Checking for updates…".to_string()),
+                    Look::UpToDate(_) => (theme::ONLINE(), GREEN_TINT, format!("Ingle {} is the newest version.", current_version())),
                     Look::Failed(why) => (AMBER, lerp(AMBER_TINT, AMBER_HOT, hot), format!("Couldn't check for updates: {why}\nClick to try again.")),
-                    _ => (lerp(theme::DIM, theme::TEXT, hot), theme::HOVER.gamma_multiply(hot), format!("Ingle {}. Click to check for updates.", current_version())),
+                    _ => (lerp(theme::DIM(), theme::TEXT(), hot), theme::HOVER().gamma_multiply(hot), format!("Ingle {}. Click to check for updates.", current_version())),
                 };
                 let p = ui.painter();
                 p.rect_filled(rect, CornerRadius::same(11), fill);
-                let g = p.layout_no_wrap(current_version().to_string(), theme::font(10.5), lerp(theme::DIM, theme::TEXT, hot));
+                let g = p.layout_no_wrap(current_version().to_string(), theme::font(10.5), lerp(theme::DIM(), theme::TEXT(), hot));
                 let total = g.size().x + 4.0 + 11.0;
                 let left = rect.center().x - total / 2.0;
                 let icon = Rect::from_min_size(pos2(left + g.size().x + 4.0, rect.center().y - 5.5), vec2(11.0, 11.0));
-                p.galley(pos2(left, rect.center().y - g.size().y / 2.0), g, theme::DIM);
+                p.galley(pos2(left, rect.center().y - g.size().y / 2.0), g, theme::DIM());
                 match look {
                     Look::Checking => {
                         icons::refresh(p, icon, icon_col, now * 6.0);
@@ -478,7 +478,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn colours_blend_end_to_end() {
+    fn colors_blend_end_to_end() {
         assert_eq!(lerp(GREEN, GREEN_HOT, 0.0), GREEN);
         assert_eq!(lerp(GREEN, GREEN_HOT, 1.0), GREEN_HOT);
         assert_eq!(lerp(Color32::TRANSPARENT, Color32::WHITE, 2.0), Color32::WHITE);

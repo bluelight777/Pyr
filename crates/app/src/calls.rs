@@ -70,7 +70,7 @@ pub(crate) fn call_item(ui: &mut egui::Ui, st: &AppState, uid: &str, here: Optio
     false
 }
 
-/// Pulsing rings around a picture: `t` in seconds, `col` their colour.
+/// Pulsing rings around a picture: `t` in seconds, `col` their color.
 fn pulse_rings(p: &egui::Painter, center: egui::Pos2, radius: f32, t: f32, col: Color32) {
     for k in 0..2 {
         let phase = ((t / 1.6) + k as f32 * 0.5).fract();
@@ -117,8 +117,8 @@ impl IngleApp {
         let card = egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
             ui.set_opacity(ease);
             egui::Frame::new()
-                .fill(theme::ELEV)
-                .stroke(Stroke::new(1.0_f32, theme::LINE))
+                .fill(theme::ELEV())
+                .stroke(Stroke::new(1.0_f32, theme::LINE()))
                 .corner_radius(16)
                 .shadow(egui::epaint::Shadow { offset: [0, 8], blur: 28, spread: 0, color: Color32::from_black_alpha(150) })
                 .inner_margin(egui::Margin { left: 18, right: 18, top: 16, bottom: 16 })
@@ -138,13 +138,13 @@ impl IngleApp {
         let (row, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 64.0), Sense::click());
         let center = pos2(row.left() + 32.0, row.center().y);
         let p = ui.painter();
-        pulse_rings(p, center, 28.0, t, theme::ONLINE);
-        avatar(p, center, 28.0, &c.from, name, false, theme::ELEV, face);
+        pulse_rings(p, center, 28.0, t, theme::ONLINE());
+        avatar(p, center, 28.0, &c.from, name, false, theme::ELEV(), face);
         let x = row.left() + 76.0;
         let room = row.right() - x;
-        crate::emoji::paint_text(p, pos2(x, row.center().y - 11.0), Align2::LEFT_CENTER, name, theme::bold_font(17.0), theme::TEXT, Some(room));
+        crate::emoji::paint_text(p, pos2(x, row.center().y - 11.0), Align2::LEFT_CENTER, name, theme::bold_font(17.0), theme::TEXT(), Some(room));
         let what = if c.video { "Incoming video call…" } else { "Incoming call…" };
-        p.text(pos2(x, row.center().y + 10.0), Align2::LEFT_CENTER, what, theme::font(13.0), theme::MUTED);
+        p.text(pos2(x, row.center().y + 10.0), Align2::LEFT_CENTER, what, theme::font(13.0), theme::MUTED());
         // In a group: which; and which server it came through, when there's more than one.
         let mut under = Vec::new();
         if let Some(g) = s.group(c.channel_id) {
@@ -154,7 +154,7 @@ impl IngleApp {
             under.push(s.name.clone());
         }
         if !under.is_empty() {
-            crate::emoji::paint_text(p, pos2(x, row.center().y + 27.0), Align2::LEFT_CENTER, &under.join(" · "), theme::font(11.5), theme::DIM, Some(room));
+            crate::emoji::paint_text(p, pos2(x, row.center().y + 27.0), Align2::LEFT_CENTER, &under.join(" · "), theme::font(11.5), theme::DIM(), Some(room));
         }
         if resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(format!("Open your conversation with {name}")).clicked() {
             acts.push(Act::ShowDm { key: c.server_key.clone(), channel: c.channel_id });
@@ -186,28 +186,28 @@ impl IngleApp {
         let name = s.member_name(uid);
         let face = self.face(ui.ctx(), s, uid);
         let p = ui.painter_at(rect);
-        p.rect_filled(rect, CornerRadius::same(12), theme::TILE);
+        p.rect_filled(rect, CornerRadius::same(12), theme::TILE());
         let radius = (rect.width().min(rect.height()) * 0.17).clamp(26.0, 64.0);
         let center = pos2(rect.center().x, rect.center().y - 18.0);
         let t = ui.input(|i| i.time) as f32;
         if state == Some(RingState::Ringing) {
-            pulse_rings(&p, center, radius, t, theme::ONLINE);
+            pulse_rings(&p, center, radius, t, theme::ONLINE());
             ui.ctx().request_repaint_after(Duration::from_millis(33));
         }
-        avatar(&p, center, radius, uid, &name, false, theme::TILE, face);
+        avatar(&p, center, radius, uid, &name, false, theme::TILE(), face);
         // Not here (yet): a little faded.
-        p.circle_filled(center, radius, theme::TILE.gamma_multiply(0.45));
+        p.circle_filled(center, radius, theme::TILE().gamma_multiply(0.45));
         let ny = center.y + radius + 18.0;
-        crate::emoji::paint_text(&p, pos2(rect.center().x, ny), Align2::CENTER_CENTER, &name, theme::bold_font(15.0), theme::TEXT, Some(rect.width() - 24.0));
+        crate::emoji::paint_text(&p, pos2(rect.center().x, ny), Align2::CENTER_CENTER, &name, theme::bold_font(15.0), theme::TEXT(), Some(rect.width() - 24.0));
         let (status, col) = match state {
             Some(RingState::Ringing) => {
                 // "Calling", and its dots coming and going.
                 let dots = ".".repeat(((t * 2.0) as usize % 3) + 1);
-                (format!("Calling{dots}"), theme::MUTED)
+                (format!("Calling{dots}"), theme::MUTED())
             }
-            Some(RingState::Declined) => ("Declined".to_string(), theme::LIVE),
-            Some(RingState::NoAnswer) => ("Didn't answer".to_string(), theme::MUTED),
-            None => ("Not in the call".to_string(), theme::DIM),
+            Some(RingState::Declined) => ("Declined".to_string(), theme::LIVE()),
+            Some(RingState::NoAnswer) => ("Didn't answer".to_string(), theme::MUTED()),
+            None => ("Not in the call".to_string(), theme::DIM()),
         };
         p.text(pos2(rect.center().x, ny + 20.0), Align2::CENTER_CENTER, status, theme::font(13.0), col);
         if state != Some(RingState::Ringing) && rect.height() > 180.0 {
@@ -250,17 +250,17 @@ impl IngleApp {
                 let t = ui.input(|i| i.time) as f32;
                 let center = pos2(r.left() + 16.0, r.center().y);
                 let face = self.face(ui.ctx(), s, &with);
-                pulse_rings(ui.painter(), center, 14.0, t, theme::ONLINE);
+                pulse_rings(ui.painter(), center, 14.0, t, theme::ONLINE());
                 avatar(ui.painter(), center, 14.0, &with, &name, false, CALL_TINT, face);
                 let text = match (&ringing, there.len()) {
                     (Some(_), _) => format!("{name} is calling you…"),
                     (None, 1) => format!("{name} is in a call, waiting for you"),
                     (None, n) => format!("{n} people are in a call: {name} and {}", if n == 2 { "one more".to_string() } else { format!("{} more", n - 1) }),
                 };
-                crate::emoji::paint_text(ui.painter(), pos2(r.left() + 42.0, r.center().y), Align2::LEFT_CENTER, &text, theme::bold_font(14.0), theme::TEXT, Some(r.width() - 260.0));
+                crate::emoji::paint_text(ui.painter(), pos2(r.left() + 42.0, r.center().y), Align2::LEFT_CENTER, &text, theme::bold_font(14.0), theme::TEXT(), Some(r.width() - 260.0));
                 let mut x = r.right();
                 let key = s.key.clone();
-                for (label, video, fill, hot) in [("Join with video", true, theme::ELEV2, theme::LINE), ("Join call", false, GREEN, GREEN_HOT)] {
+                for (label, video, fill, hot) in [("Join with video", true, theme::ELEV2(), theme::LINE()), ("Join call", false, GREEN, GREEN_HOT)] {
                     let galley = ui.painter().layout_no_wrap(label.to_string(), theme::bold_font(13.0), Color32::WHITE);
                     let bw = galley.size().x + 26.0;
                     let b = Rect::from_min_size(pos2(x - bw, r.center().y - 15.0), vec2(bw, 30.0));
@@ -322,7 +322,7 @@ impl IngleApp {
             (None, Some(_)) => "This makes a new group with the three (or more) of you. Your chat here stays just yours.".to_string(),
             _ => format!("A group of up to {MAX_GROUP}, with its own chat and calls. Only the people in it see it."),
         };
-        ui.label(RichText::new(note).color(theme::MUTED));
+        ui.label(RichText::new(note).color(theme::MUTED()));
         ui.add_space(8.0);
         let r = input(ui, &mut search, "Find someone");
         if ui.memory(|m| m.focused().is_none()) {
@@ -340,30 +340,30 @@ impl IngleApp {
         // Friends first, then who's online, then by name.
         people.sort_by_key(|(u, n, on)| (st.relation(u) != Some(ingle_proto::control::RelationKind::Friend), !on, n.to_lowercase()));
         let left = room.saturating_sub(picked.len());
-        ui.label(RichText::new(if left == 0 { "That's as many as a group can have.".to_string() } else { format!("You can add {left} more.") }).size(12.0).color(theme::DIM));
+        ui.label(RichText::new(if left == 0 { "That's as many as a group can have.".to_string() } else { format!("You can add {left} more.") }).size(12.0).color(theme::DIM()));
         ui.add_space(4.0);
         egui::ScrollArea::vertical().max_height(300.0).auto_shrink([false, true]).show(ui, |ui| {
             if people.is_empty() {
-                ui.label(RichText::new("Nobody else to add here.").color(theme::DIM));
+                ui.label(RichText::new("Nobody else to add here.").color(theme::DIM()));
             }
             for (uid, name, online) in &people {
                 let on = picked.contains(uid);
                 let (row, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::click());
                 if resp.hovered() || on {
-                    ui.painter().rect_filled(row, CornerRadius::same(6), if on { theme::ELEV2 } else { theme::HOVER });
+                    ui.painter().rect_filled(row, CornerRadius::same(6), if on { theme::ELEV2() } else { theme::HOVER() });
                 }
                 let face = self.face(ui.ctx(), s, uid);
-                avatar(ui.painter(), pos2(row.left() + 22.0, row.center().y), 14.0, uid, name, false, theme::ELEV, face);
+                avatar(ui.painter(), pos2(row.left() + 22.0, row.center().y), 14.0, uid, name, false, theme::ELEV(), face);
                 if *online {
-                    crate::app::status_dot(ui.painter(), pos2(row.left() + 32.0, row.center().y + 10.0), true, theme::ELEV);
+                    crate::app::status_dot(ui.painter(), pos2(row.left() + 32.0, row.center().y + 10.0), true, theme::ELEV());
                 }
-                crate::emoji::paint_text(ui.painter(), pos2(row.left() + 46.0, row.center().y), Align2::LEFT_CENTER, name, theme::font(14.5), theme::TEXT, Some(row.width() - 90.0));
+                crate::emoji::paint_text(ui.painter(), pos2(row.left() + 46.0, row.center().y), Align2::LEFT_CENTER, name, theme::font(14.5), theme::TEXT(), Some(row.width() - 90.0));
                 // A tick box on the right.
                 let b = Rect::from_center_size(pos2(row.right() - 20.0, row.center().y), vec2(20.0, 20.0));
-                ui.painter().rect_filled(b, CornerRadius::same(5), if on { theme::EMBER } else { theme::MAIN });
-                ui.painter().rect_stroke(b, CornerRadius::same(5), Stroke::new(1.0_f32, if on { theme::EMBER } else { theme::LINE }), egui::StrokeKind::Inside);
+                ui.painter().rect_filled(b, CornerRadius::same(5), if on { theme::EMBER() } else { theme::MAIN() });
+                ui.painter().rect_stroke(b, CornerRadius::same(5), Stroke::new(1.0_f32, if on { theme::EMBER() } else { theme::LINE() }), egui::StrokeKind::Inside);
                 if on {
-                    icons::tick(ui.painter(), b.shrink(3.0), theme::RAIL);
+                    icons::tick(ui.painter(), b.shrink(3.0), theme::RAIL());
                 }
                 if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                     if on {
@@ -400,7 +400,7 @@ impl IngleApp {
             }
             if !ready {
                 let why = if need == 2 { "Pick at least two people" } else { "Pick someone" };
-                ui.label(RichText::new(why).size(12.0).color(theme::DIM));
+                ui.label(RichText::new(why).size(12.0).color(theme::DIM()));
             }
         });
         if !*close {
@@ -435,7 +435,7 @@ impl IngleApp {
     pub(crate) fn leave_group_dialog(&mut self, ui: &mut egui::Ui, key: String, channel: ChannelId, name: &str, acts: &mut Vec<Act>, close: &mut bool) {
         ui.set_width(420.0);
         title(ui, &format!("Leave {name}?"));
-        ui.label(RichText::new("You won't see what's said in it any more, and can only come back if someone in it adds you.").color(theme::MUTED));
+        ui.label(RichText::new("You won't see what's said in it any more, and can only come back if someone in it adds you.").color(theme::MUTED()));
         ui.add_space(14.0);
         ui.horizontal(|ui| {
             if ui.add(theme::danger_button("Leave group").min_size(vec2(120.0, 34.0))).clicked() {
@@ -454,26 +454,26 @@ impl IngleApp {
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width() - 16.0, 44.0), Sense::click());
         let r = r.translate(vec2(8.0, 0.0));
         if selected || resp.hovered() {
-            ui.painter().rect_filled(r, CornerRadius::same(6), if selected { theme::ELEV2 } else { theme::HOVER });
+            ui.painter().rect_filled(r, CornerRadius::same(6), if selected { theme::ELEV2() } else { theme::HOVER() });
         }
-        let bg = if selected { theme::ELEV2 } else if resp.hovered() { theme::HOVER } else { theme::SIDE };
+        let bg = if selected { theme::ELEV2() } else if resp.hovered() { theme::HOVER() } else { theme::SIDE() };
         let p = ui.painter().clone();
         group_picture(self, &p, ui.ctx(), s, g, &st.my_uid, pos2(r.left() + 22.0, r.center().y), 16.0, bg);
         let name = s.group_name(g, &st.my_uid);
         let unread = s.mentions.get(&g.id).copied().unwrap_or(0);
-        let col = if selected || unread > 0 { theme::TEXT } else { theme::MUTED };
+        let col = if selected || unread > 0 { theme::TEXT() } else { theme::MUTED() };
         let room = r.width() - 48.0 - 34.0;
         let sub = if show_server { format!("{} members · {}", g.members.len(), s.name) } else { format!("{} members", g.members.len()) };
         crate::emoji::paint_text(&p, pos2(r.left() + 48.0, r.center().y - 7.0), Align2::LEFT_CENTER, &name, theme::bold_font(14.0), col, Some(room));
-        p.text(pos2(r.left() + 48.0, r.center().y + 9.0), Align2::LEFT_CENTER, sub, theme::font(11.5), theme::DIM);
+        p.text(pos2(r.left() + 48.0, r.center().y + 9.0), Align2::LEFT_CENTER, sub, theme::font(11.5), theme::DIM());
         if unread > 0 {
             let b = pos2(r.right() - 16.0, r.center().y);
-            p.circle_filled(b, 8.5, theme::LIVE);
+            p.circle_filled(b, 8.5, theme::LIVE());
             p.text(b, Align2::CENTER_CENTER, unread.min(99).to_string(), theme::bold_font(10.5), Color32::WHITE);
         }
         if !s.voice_in(g.id).is_empty() {
             let x = if unread > 0 { r.right() - 40.0 } else { r.right() - 16.0 };
-            icons::phone(&p, Rect::from_center_size(pos2(x, r.center().y), vec2(15.0, 15.0)), theme::ONLINE);
+            icons::phone(&p, Rect::from_center_size(pos2(x, r.center().y), vec2(15.0, 15.0)), theme::ONLINE());
         }
         if resp.clicked() {
             self.ui.dm = Some((s.key.clone(), g.id));
@@ -498,7 +498,7 @@ impl IngleApp {
                 ui.close();
             }
             ui.separator();
-            if ui.button(RichText::new("Leave group").color(theme::LIVE)).clicked() {
+            if ui.button(RichText::new("Leave group").color(theme::LIVE())).clicked() {
                 self.ui.dialog = Some(Dialog::LeaveGroup { key: key.clone(), channel: id, name: name.clone() });
                 ui.close();
             }
@@ -516,7 +516,7 @@ impl IngleApp {
         ui.add_space(14.0);
         ui.horizontal(|ui| {
             ui.add_space(14.0);
-            ui.label(RichText::new(format!("MEMBERS — {}", g.members.len())).font(theme::bold_font(11.5)).color(theme::DIM));
+            ui.label(RichText::new(format!("MEMBERS — {}", g.members.len())).font(theme::bold_font(11.5)).color(theme::DIM()));
         });
         ui.add_space(6.0);
         let in_call: Vec<String> = s.voice_in(g.id).iter().map(|p| p.user_id.clone()).collect();
@@ -525,22 +525,22 @@ impl IngleApp {
             let (row, resp) = ui.allocate_exact_size(vec2(ui.available_width() - 16.0, 40.0), Sense::click());
             let row = row.translate(vec2(8.0, 0.0));
             if resp.hovered() {
-                ui.painter().rect_filled(row, CornerRadius::same(6), theme::HOVER);
+                ui.painter().rect_filled(row, CornerRadius::same(6), theme::HOVER());
             }
             let face = self.face(ui.ctx(), s, uid);
             let c = pos2(row.left() + 20.0, row.center().y);
-            avatar(ui.painter(), c, 14.0, uid, &name, false, theme::SIDE, face);
+            avatar(ui.painter(), c, 14.0, uid, &name, false, theme::SIDE(), face);
             if s.members.get(uid).is_some_and(|m| m.online) && s.status.is_connected() {
-                crate::app::status_dot(ui.painter(), c + vec2(10.0, 10.0), true, theme::SIDE);
+                crate::app::status_dot(ui.painter(), c + vec2(10.0, 10.0), true, theme::SIDE());
             }
             let mut x = row.left() + 42.0;
-            let named = crate::emoji::paint_text(ui.painter(), pos2(x, row.center().y), Align2::LEFT_CENTER, &name, theme::font(14.0), theme::MUTED, Some(row.width() - 80.0));
+            let named = crate::emoji::paint_text(ui.painter(), pos2(x, row.center().y), Align2::LEFT_CENTER, &name, theme::font(14.0), theme::MUTED(), Some(row.width() - 80.0));
             x = named.right() + 6.0;
             if *uid == g.owner {
-                icons::crown(ui.painter(), Rect::from_center_size(pos2(x + 7.0, row.center().y), vec2(14.0, 14.0)), theme::OWNER);
+                icons::crown(ui.painter(), Rect::from_center_size(pos2(x + 7.0, row.center().y), vec2(14.0, 14.0)), theme::OWNER());
             }
             if in_call.contains(uid) {
-                icons::phone(ui.painter(), Rect::from_center_size(pos2(row.right() - 14.0, row.center().y), vec2(14.0, 14.0)), theme::ONLINE);
+                icons::phone(ui.painter(), Rect::from_center_size(pos2(row.right() - 14.0, row.center().y), vec2(14.0, 14.0)), theme::ONLINE());
             }
             if *uid != st.my_uid {
                 let uid2 = uid.clone();
@@ -557,14 +557,14 @@ impl IngleApp {
         // Then (under a line) adding people and leaving, as rows like the people's.
         ui.add_space(6.0);
         let (line, _) = ui.allocate_exact_size(vec2(ui.available_width(), 9.0), Sense::hover());
-        ui.painter().line_segment([pos2(line.left() + 16.0, line.center().y), pos2(line.right() - 16.0, line.center().y)], Stroke::new(1.0f32, theme::LINE));
+        ui.painter().line_segment([pos2(line.left() + 16.0, line.center().y), pos2(line.right() - 16.0, line.center().y)], Stroke::new(1.0f32, theme::LINE()));
         if g.members.len() < MAX_GROUP
             && can_group(s)
-            && panel_row(ui, "Add people", theme::MUTED, theme::TEXT, |p, r, c| icons::add_person(p, r, c))
+            && panel_row(ui, "Add people", theme::MUTED(), theme::TEXT(), |p, r, c| icons::add_person(p, r, c))
         {
             self.ui.dialog = Some(Dialog::AddPeople { key: s.key.clone(), channel: Some(g.id), picked: Vec::new(), search: String::new() });
         }
-        if panel_row(ui, "Leave group", theme::LIVE.gamma_multiply(0.85), theme::LIVE, |p, r, c| icons::leave(p, r, c)) {
+        if panel_row(ui, "Leave group", theme::LIVE().gamma_multiply(0.85), theme::LIVE(), |p, r, c| icons::leave(p, r, c)) {
             self.ui.dialog = Some(Dialog::LeaveGroup { key: s.key.clone(), channel: g.id, name: s.group_name(g, &st.my_uid) });
         }
         ui.add_space(10.0);
@@ -578,11 +578,11 @@ fn panel_row(ui: &mut egui::Ui, label: &str, color: Color32, hot: Color32, icon:
     let row = row.translate(vec2(8.0, 0.0));
     let h = ui.ctx().animate_bool_with_time(resp.id, resp.hovered(), 0.12);
     if h > 0.0 {
-        ui.painter().rect_filled(row, CornerRadius::same(6), theme::HOVER.gamma_multiply(h));
+        ui.painter().rect_filled(row, CornerRadius::same(6), theme::HOVER().gamma_multiply(h));
     }
     let col = lerp(color, hot, h);
     let c = pos2(row.left() + 20.0, row.center().y);
-    ui.painter().circle_filled(c, 14.0, theme::ELEV2);
+    ui.painter().circle_filled(c, 14.0, theme::ELEV2());
     icon(ui.painter(), Rect::from_center_size(c, vec2(15.0, 15.0)), col);
     ui.painter().text(pos2(row.left() + 42.0, row.center().y), Align2::LEFT_CENTER, label, theme::font(14.0), col);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()

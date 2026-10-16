@@ -161,7 +161,7 @@ pub struct Settings {
     pub confirm_delete: bool,
     /// How loud soundboard sounds play here, 0–1 (anyone's, yours included).
     pub soundboard_volume: f32,
-    /// The soundboard's favourites (★), in the order they were starred.
+    /// The soundboard's favorites (★), in the order they were starred.
     pub sound_favorites: Vec<SoundRef>,
     /// Sounds played most recently, newest first.
     pub sound_recent: Vec<SoundRef>,
@@ -173,6 +173,19 @@ pub struct Settings {
     pub sound_keys: Vec<(String, SoundRef)>,
     /// GIFs kept in the GIF picker's Favorites (the star on a GIF, like Discord's), newest first.
     pub gif_favorites: Vec<GifFavorite>,
+    /// The skin in use: one installed from the Ingle Library, by its id (empty: Campfire,
+    /// Ingle's own).
+    pub skin: String,
+    /// Plugins and skins starred in the Library (`skin:<id>` for a skin), oldest first.
+    pub library_favorites: Vec<String>,
+    /// How the Library is sorted: "name", "author", "newest" or "favorites".
+    pub library_sort: String,
+    /// Send a report by itself when something goes wrong that Ingle can tell (screen sharing
+    /// or the camera won't start or stops working, a crash or a freeze last time), so it gets
+    /// fixed: what happened and Ingle's log, to the bug report server (see `bugs::auto_report`).
+    pub auto_reports: bool,
+    /// The one-time notice that a report was sent by itself has been shown.
+    pub auto_report_told: bool,
 }
 
 /// A favorite GIF: just its links (the GIF itself is fetched from GIPHY or KLIPY each time it's
@@ -241,6 +254,11 @@ impl Default for Settings {
             soundboard_muted: Vec::new(),
             sound_keys: Vec::new(),
             gif_favorites: Vec::new(),
+            skin: String::new(),
+            library_favorites: Vec::new(),
+            library_sort: String::new(),
+            auto_reports: true,
+            auto_report_told: false,
         }
     }
 }

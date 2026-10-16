@@ -1,14 +1,15 @@
 //! Notification sounds: new messages, people joining and leaving voice, screen shares
-//! starting and stopping, tuning in to one, and calls ringing. The sounds are made here (short chimes), not
-//! loaded from files, and play on the chosen speakers on their own little stream, so they
-//! work in and out of calls.
+//! starting and stopping, tuning in to one, and calls ringing. The sounds are made here (short
+//! chimes), not loaded from files, unless a skin brings its own; they play on the chosen
+//! speakers on their own little stream, so they work in and out of calls.
 
+use std::collections::HashMap;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use crate::audio::device::OutputDevice;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Sound {
     Message,
     Join,
@@ -33,6 +34,32 @@ enum Msg {
     Play { clip: Clip, device: Option<String>, volume: f32 },
     /// Stop the soundboard sounds playing here.
     Hush,
+    /// A skin's sounds (48 kHz stereo) in place of these chimes.
+    Overrides(HashMap<Sound, Arc<Vec<f32>>>),
+}
+
+impl Sound {
+    pub const ALL: [Sound; 9] =
+        [Sound::Message, Sound::Join, Sound::Leave, Sound::StreamStart, Sound::StreamStop, Sound::WatchStart, Sound::WatchStop, Sound::Ring, Sound::Ringback];
+
+    /// Its name in a skin (`ingle_proto::skin::SOUNDS`).
+    pub fn name(self) -> &'static str {
+        match self {
+            Sound::Message => "message",
+            Sound::Join => "join",
+            Sound::Leave => "leave",
+            Sound::StreamStart => "stream_start",
+            Sound::StreamStop => "stream_stop",
+            Sound::WatchStart => "watch_start",
+            Sound::WatchStop => "watch_stop",
+            Sound::Ring => "ring",
+            Sound::Ringback => "ringback",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Sound> {
+        Sound::ALL.into_iter().find(|s| s.name() == name)
+    }
 }
 
 pub struct Sfx {
@@ -61,12 +88,21 @@ impl Sfx {
     pub fn hush(&self) {
         let _ = self.tx.send(Msg::Hush);
     }
+
+    /// A skin's sounds in place of these chimes (an empty list: the chimes again).
+    pub fn set_overrides(&self, sounds: Vec<(Sound, Arc<Vec<f32>>)>) {
+        let _ = self.tx.send(Msg::Overrides(sounds.into_iter().collect()));
+    }
 }
 
-/// A clip as 48 kHz stereo, and whether it's a chime.
-fn stereo(clip: Clip) -> (Arc<Vec<f32>>, bool) {
+/// A clip as 48 kHz stereo, and whether it's a chime (a skin's sound in place of one counts
+/// as one).
+fn stereo(clip: Clip, skin: &HashMap<Sound, Arc<Vec<f32>>>) -> (Arc<Vec<f32>>, bool) {
     match clip {
-        Clip::Chime(s) => (Arc::new(render(s).into_iter().flat_map(|v| [v, v]).collect()), true),
+        Clip::Chime(s) => match skin.get(&s) {
+            Some(pcm) => (pcm.clone(), true),
+            None => (Arc::new(render(s).into_iter().flat_map(|v| [v, v]).collect()), true),
+        },
         Clip::Stereo(pcm) => (pcm, false),
     }
 }
@@ -127,6 +163,7 @@ fn run(rx: mpsc::Receiver<Msg>) {
     let mut playing: Vec<(Arc<Vec<f32>>, usize, f32, bool)> = Vec::new();
     let mut idle_since = Instant::now();
     let mut chunk = vec![0.0f32; 960];
+    let mut skin: HashMap<Sound, Arc<Vec<f32>>> = HashMap::new();
     loop {
         let wait = if playing.is_empty() { Duration::from_millis(500) } else { Duration::from_millis(0) };
         let mut next = match rx.recv_timeout(wait) {
@@ -143,11 +180,12 @@ fn run(rx: mpsc::Receiver<Msg>) {
                     }
                     // The same sound twice at once just sounds louder; skip the copy.
                     if playing.len() < 6 {
-                        let (pcm, chime) = stereo(clip);
+                        let (pcm, chime) = stereo(clip, &skin);
                         playing.push((pcm, 0, volume.clamp(0.0, 2.0), chime));
                     }
                 }
                 Msg::Hush => playing.retain(|p| p.3),
+                Msg::Overrides(sounds) => skin = sounds,
             }
             next = rx.try_recv().ok();
         }
@@ -214,5 +252,20 @@ mod tests {
             assert!(v.len() > 4800 && v.len() < 48_000, "{s:?} {}", v.len());
             assert!(peak > 0.05 && peak < 0.6, "{s:?} peak {peak}");
         }
+    }
+
+    #[test]
+    fn a_skins_sound_plays_in_place_of_a_chime() {
+        for s in Sound::ALL {
+            assert_eq!(Sound::from_name(s.name()), Some(s));
+            assert!(ingle_proto::skin::SOUNDS.iter().any(|(n, _)| *n == s.name()), "{s:?}");
+        }
+        assert_eq!(ingle_proto::skin::SOUNDS.len(), Sound::ALL.len());
+        let mine = Arc::new(vec![0.25f32; 9600]);
+        let skin: HashMap<Sound, Arc<Vec<f32>>> = [(Sound::Message, mine.clone())].into();
+        let (pcm, chime) = stereo(Clip::Chime(Sound::Message), &skin);
+        assert!(Arc::ptr_eq(&pcm, &mine) && chime, "still a chime: it isn't hushed with the soundboard");
+        let (pcm, _) = stereo(Clip::Chime(Sound::Join), &skin);
+        assert_eq!(pcm.len(), render(Sound::Join).len() * 2, "the others stay Ingle's own");
     }
 }

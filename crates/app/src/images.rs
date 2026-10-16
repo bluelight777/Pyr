@@ -478,6 +478,8 @@ pub enum FolderFor {
     NewAddon,
     /// A plugin's folder, to send in for the Ingle Library.
     PluginSource,
+    /// A skin's folder, to try on (Settings → Appearance).
+    TrySkin,
 }
 
 fn wanted_folder() -> &'static std::sync::Mutex<Option<(FolderFor, &'static str)>> {

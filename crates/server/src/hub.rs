@@ -206,8 +206,12 @@ pub struct Hub {
     limits: Mutex<Limits>,
     /// Bug reports taken in the last hour: from each address, and in all (flood limits).
     bug_reports: Mutex<(HashMap<Place, Vec<Instant>>, Vec<Instant>)>,
-    /// The same for plugins sent in for the library.
+    /// The same for plugins and skins sent in for the library,
     plugin_submissions: Mutex<(HashMap<Place, Vec<Instant>>, Vec<Instant>)>,
+    /// from each signed sender,
+    submission_senders: Mutex<HashMap<String, Vec<Instant>>>,
+    /// and asks for one's own (`MySubmissions`) from each place.
+    submission_asks: Mutex<HashMap<Place, Vec<Instant>>>,
     /// Uploads per member: bytes being received now, and what arrived in the last hour.
     uploads: Mutex<HashMap<UserId, (u64, Vec<(Instant, u64)>)>>,
 }
@@ -403,6 +407,8 @@ impl Hub {
             limits: Mutex::new(Limits::default()),
             bug_reports: Mutex::new((HashMap::new(), Vec::new())),
             plugin_submissions: Mutex::new((HashMap::new(), Vec::new())),
+            submission_senders: Mutex::new(HashMap::new()),
+            submission_asks: Mutex::new(HashMap::new()),
             uploads: Mutex::new(HashMap::new()),
         })
     }
@@ -525,7 +531,8 @@ impl Hub {
             bug_reports: self.db.get_meta("bug_reports").as_deref() == Some("1"),
             new_bug_reports: self.db.new_bug_count(),
             plugin_submissions: self.db.get_meta("plugin_submissions").as_deref() == Some("1"),
-            new_plugin_submissions: self.db.new_submission_count(),
+            new_plugin_submissions: self.db.new_submission_count(false),
+            new_skin_submissions: self.db.new_submission_count(true),
         }
     }
 
@@ -537,6 +544,7 @@ impl Hub {
         if !user.is_some_and(|u| u.role == Role::Owner) {
             info.new_bug_reports = 0;
             info.new_plugin_submissions = 0;
+            info.new_skin_submissions = 0;
         }
         if user.is_none() {
             info.giphy_key.clear();
@@ -1381,15 +1389,41 @@ impl Hub {
         Ok(())
     }
 
-    /// Take a plugin sent in for the library (instead of logging in), if the owner collects
-    /// them and the sender isn't flooding: at most 3 an hour from one place, 30 in all, and
-    /// 300 waiting. Its files must be a Rust project's (a Cargo.toml at the top) with plain
-    /// relative paths, 600 KB in all.
-    pub fn take_plugin_submission(&self, ip: IpAddr, mut sub: PluginSubmission) -> Result<i64, String> {
+    /// Whether a plugin or skin from `ip` would be taken now: checked before the rest of a
+    /// skin's files are read, so nobody's files are taken in for nothing.
+    pub fn may_take_submission(&self, ip: IpAddr) -> Result<(), String> {
+        if self.db.get_meta("plugin_submissions").as_deref() != Some("1") {
+            return Err("This server doesn't collect plugins or skins.".into());
+        }
+        let place = Place::of(ip, 64);
+        let hour = Duration::from_secs(3600);
+        let g = self.plugin_submissions.lock();
+        let (per_ip, all) = &*g;
+        let mine = per_ip.get(&place).map(|v| v.iter().filter(|t| t.elapsed() < hour).count()).unwrap_or(0);
+        if mine >= SUBMISSIONS_PER_PLACE || all.iter().filter(|t| t.elapsed() < hour).count() >= SUBMISSIONS_IN_ALL {
+            return Err("Lots of plugins and skins sent just now. Please try again in a while.".into());
+        }
+        Ok(())
+    }
+
+    /// Take a plugin or skin sent in for the library (instead of logging in), if the owner
+    /// collects them and the sender isn't flooding: at most 6 an hour from one place (and from
+    /// one sender), 60 in all, and 300 waiting. A plugin's files must be a Rust project's (a
+    /// Cargo.toml at the top) with plain relative paths, 600 KB in all; a skin's pass
+    /// [`ingle_proto::skin::check`]. `signed`: its signature was checked (by the connection);
+    /// only then is the sender kept, and only then can it be a new version of one of theirs.
+    pub fn take_plugin_submission(&self, ip: IpAddr, mut sub: PluginSubmission, signed: bool) -> Result<i64, String> {
         let place = Place::of(ip, 64);
         if self.db.get_meta("plugin_submissions").as_deref() != Some("1") {
-            return Err("This server doesn't collect plugins.".into());
+            return Err("This server doesn't collect plugins or skins.".into());
         }
+        if !signed {
+            sub.author_id.clear();
+            if sub.update_of != 0 {
+                return Err("Only a signed plugin or skin can be a new version of one (the Claude connector signs them).".into());
+            }
+        }
+        sub.sig.clear();
         let hour = Duration::from_secs(3600);
         {
             let mut g = self.plugin_submissions.lock();
@@ -1400,14 +1434,26 @@ impl Hub {
                 !v.is_empty()
             });
             let mine = per_ip.entry(place).or_default();
-            if mine.len() >= 3 || all.len() >= 30 {
-                return Err("Lots of plugins sent just now. Please try again in a while.".into());
+            if mine.len() >= SUBMISSIONS_PER_PLACE || all.len() >= SUBMISSIONS_IN_ALL {
+                return Err("Lots of plugins and skins sent just now. Please try again in a while.".into());
+            }
+            if !sub.author_id.is_empty() {
+                let mut by = self.submission_senders.lock();
+                by.retain(|_, v| {
+                    v.retain(|t| t.elapsed() < hour);
+                    !v.is_empty()
+                });
+                let theirs = by.entry(sub.author_id.clone()).or_default();
+                if theirs.len() >= SUBMISSIONS_PER_PLACE {
+                    return Err("You've sent a lot just now. Please try again in a while.".into());
+                }
+                theirs.push(Instant::now());
             }
             mine.push(Instant::now());
             all.push(Instant::now());
         }
-        if self.db.new_submission_count() >= 300 {
-            return Err("The plugin inbox is full right now.".into());
+        if self.db.new_submission_count(false) + self.db.new_submission_count(true) >= 300 {
+            return Err("The inbox for plugins and skins is full right now.".into());
         }
         let clip = |s: &mut String, max: usize| {
             let s2: String = s.chars().filter(|c| !c.is_control()).collect();
@@ -1424,36 +1470,86 @@ impl Hub {
         clip(&mut sub.contact, 120);
         clip(&mut sub.app_version, 40);
         if sub.name.is_empty() {
-            return Err("The plugin needs a name.".into());
+            return Err("It needs a name.".into());
         }
-        if sub.kind != "program" && sub.kind != "addon" {
-            return Err("A plugin is a program or an add-on.".into());
+        let skin = sub.kind == SKIN_KIND;
+        if !skin && sub.kind != "program" && sub.kind != "addon" {
+            return Err("A plugin is a program or an add-on (or it's a skin).".into());
         }
-        if sub.files.is_empty() || sub.files.len() > SUBMISSION_FILES_MAX {
-            return Err(format!("A plugin has between 1 and {SUBMISSION_FILES_MAX} files."));
+        let (max_files, max_size) = if skin { (ingle_proto::skin::MAX_FILES, ingle_proto::skin::MAX_TOTAL) } else { (SUBMISSION_FILES_MAX, SUBMISSION_MAX) };
+        if sub.files.is_empty() || sub.files.len() > max_files {
+            return Err(format!("It has between 1 and {max_files} files."));
         }
         let mut size = 0usize;
         let mut paths = std::collections::HashSet::new();
+        let mut decoded = Vec::with_capacity(sub.files.len());
         for f in &sub.files {
             if !plain_relative_path(&f.path) {
-                return Err(format!("{:?} isn't a plain path inside the plugin's folder.", f.path.chars().take(80).collect::<String>()));
+                return Err(format!("{:?} isn't a plain path inside its folder.", f.path.chars().take(80).collect::<String>()));
             }
             if !paths.insert(f.path.as_str()) {
                 return Err(format!("{} is in it twice.", f.path));
             }
-            size += b64::decode(&f.data).map_err(|_| format!("{} isn't readable.", f.path))?.len();
-            if size > SUBMISSION_MAX {
-                return Err(format!("The plugin is bigger than {} KB.", SUBMISSION_MAX / 1000));
+            let bytes = b64::decode(&f.data).map_err(|_| format!("{} isn't readable.", f.path))?;
+            size += bytes.len();
+            if size > max_size {
+                return Err(format!("It's bigger than {} KB.", max_size / 1000));
             }
+            decoded.push((f.path.clone(), bytes));
         }
-        if !paths.contains("Cargo.toml") {
+        if skin {
+            let report = ingle_proto::skin::check(&decoded);
+            if !report.ok() {
+                let mut why = report.problems.join(" ");
+                while why.len() > 900 {
+                    why.pop();
+                }
+                return Err(format!("The skin isn't right yet: {why}"));
+            }
+        } else if !paths.contains("Cargo.toml") {
             return Err("Plugins are Rust projects: a Cargo.toml goes at the top.".into());
         }
+        drop(decoded);
+        // A new version: of one of the sender's own, of the same kind.
+        let mut changes = String::new();
+        if sub.update_of != 0 {
+            let Some((before, before_files)) = self.db.submission(sub.update_of) else {
+                return Err(format!("There's no #{} here to send a new version of.", sub.update_of));
+            };
+            if before.author_id.is_empty() || before.author_id != sub.author_id {
+                return Err(format!("#{} was sent by someone else: only whoever sent it can send a new version.", sub.update_of));
+            }
+            if (before.kind == SKIN_KIND) != skin {
+                return Err(format!("#{} is a {}: a new version of it is one too.", sub.update_of, if skin { "plugin" } else { "skin" }));
+            }
+            let before_files: Vec<SourceFile> = serde_json::from_str(&before_files).unwrap_or_default();
+            changes = describe_changes(&manifest_of(&before_files), &manifest_of(&sub.files));
+        }
         let files = serde_json::to_string(&sub.files).map_err(|e| e.to_string())?;
-        let id = self.db.add_submission(&sub, &files, size as u64).map_err(|e| format!("{e:#}"))?;
-        info!(id, name = %sub.name, "plugin sent in for the library");
+        let id = self.db.add_submission(&sub, &files, size as u64, &changes).map_err(|e| format!("{e:#}"))?;
+        info!(id, name = %sub.name, kind = %sub.kind, update_of = sub.update_of, signed, "sent in for the library");
         self.broadcast_info();
         Ok(id)
+    }
+
+    /// What one sender (proven by the connection) sent in here, at most 30 asks an hour from
+    /// one place.
+    pub fn my_submissions(&self, ip: IpAddr, author_id: &str) -> Result<Vec<SubmissionEntry>, String> {
+        let place = Place::of(ip, 64);
+        let hour = Duration::from_secs(3600);
+        {
+            let mut g = self.submission_asks.lock();
+            g.retain(|_, v| {
+                v.retain(|t| t.elapsed() < hour);
+                !v.is_empty()
+            });
+            let mine = g.entry(place).or_default();
+            if mine.len() >= 30 {
+                return Err("Lots of asks just now. Please try again in a while.".into());
+            }
+            mine.push(Instant::now());
+        }
+        Ok(self.db.submissions_by(author_id, 50))
     }
 
     pub fn file_path(&self, id: &str) -> Option<std::path::PathBuf> {
@@ -1504,6 +1600,38 @@ pub fn wipe_file(path: &std::path::Path) {
 
 /// A path inside a plugin's folder as sent in: parts separated by `/`, none empty, `.` or
 /// `..`, no backslashes, colons or control characters, and not too long.
+/// Plugins and skins taken in an hour: from one place (and one signed sender), and in all.
+const SUBMISSIONS_PER_PLACE: usize = 6;
+const SUBMISSIONS_IN_ALL: usize = 60;
+
+/// How a new version's files differ from the one before: "Changed: a, b. Added: c. Taken out: d."
+pub fn describe_changes(before: &[FileDigest], after: &[FileDigest]) -> String {
+    let old: HashMap<&str, &str> = before.iter().map(|f| (f.path.as_str(), f.sha256.as_str())).collect();
+    let new: HashMap<&str, &str> = after.iter().map(|f| (f.path.as_str(), f.sha256.as_str())).collect();
+    let mut changed: Vec<&str> = after.iter().filter(|f| old.get(f.path.as_str()).is_some_and(|h| *h != f.sha256)).map(|f| f.path.as_str()).collect();
+    let mut added: Vec<&str> = after.iter().filter(|f| !old.contains_key(f.path.as_str())).map(|f| f.path.as_str()).collect();
+    let mut gone: Vec<&str> = before.iter().filter(|f| !new.contains_key(f.path.as_str())).map(|f| f.path.as_str()).collect();
+    for v in [&mut changed, &mut added, &mut gone] {
+        v.sort_unstable();
+    }
+    let mut parts = Vec::new();
+    for (label, list) in [("Changed", &changed), ("Added", &added), ("Taken out", &gone)] {
+        if !list.is_empty() {
+            parts.push(format!("{label}: {}.", list.join(", ")));
+        }
+    }
+    let mut out = if parts.is_empty() { "No files changed.".to_string() } else { parts.join(" ") };
+    if out.len() > 300 {
+        let mut cut = 297;
+        while !out.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        out.truncate(cut);
+        out.push_str("...");
+    }
+    out
+}
+
 pub fn plain_relative_path(p: &str) -> bool {
     p.len() <= 200
         && !p.starts_with('/')

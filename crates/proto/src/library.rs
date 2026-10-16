@@ -13,6 +13,9 @@
 //!   Ingle's plugins folder and opened from Ingle. They run like any program you install.
 //! - **Add-ons**: Rust built to WebAssembly, run inside Ingle in a sandbox: no files, no
 //!   network, no imports at all; just what Ingle passes in (see `ingle-plugin`, the kit).
+//!
+//! And **skins** ([`crate::skin`]): colors, a picture, fonts and sounds, no code at all. They're
+//! listed apart (`skins`), so Ingle from before skins reads the list as it always has.
 
 use serde::{Deserialize, Serialize};
 
@@ -198,12 +201,90 @@ impl Entry {
     }
 }
 
+/// A skin in the Library: its folder's files (`skin.json` and what it uses), each by where it
+/// goes in the skin's folder.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct SkinEntry {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    /// One line.
+    pub summary: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub author: String,
+    #[serde(default)]
+    pub license: String,
+    pub files: Vec<File>,
+    /// A picture of Ingle wearing it (one of `files`, or apart).
+    #[serde(default)]
+    pub preview: Option<File>,
+    /// What reviewing it found worth knowing (shown with it).
+    #[serde(default)]
+    pub review: String,
+    /// When this version was listed (Unix seconds).
+    #[serde(default)]
+    pub updated: i64,
+}
+
+impl SkinEntry {
+    pub fn size(&self) -> u64 {
+        self.files.iter().map(|f| f.size).sum()
+    }
+
+    /// Everything a list entry must get right before the app will touch it.
+    pub fn check(&self) -> Result<(), String> {
+        if !valid_id(&self.id) {
+            return Err(format!("bad skin id {:?}", self.id));
+        }
+        if self.name.trim().is_empty() || self.name.chars().count() > 60 {
+            return Err(format!("{}: bad name", self.id));
+        }
+        if self.files.is_empty() || self.files.len() > crate::skin::MAX_FILES {
+            return Err(format!("{}: between 1 and {} files", self.id, crate::skin::MAX_FILES));
+        }
+        if !self.files.iter().any(|f| f.path == crate::skin::MANIFEST) {
+            return Err(format!("{}: no skin.json", self.id));
+        }
+        let mut paths = std::collections::HashSet::new();
+        let mut total = 0u64;
+        for f in self.files.iter().chain(&self.preview) {
+            if !valid_path(&f.path) {
+                return Err(format!("{}: bad file path {:?}", self.id, f.path));
+            }
+            if f.sha256.len() != 64 || !f.sha256.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+                return Err(format!("{}: bad SHA-256 for {}", self.id, f.path));
+            }
+            if f.url.is_empty() || f.url.contains("..") {
+                return Err(format!("{}: bad address for {}", self.id, f.path));
+            }
+            if f.size as usize > crate::skin::MAX_FILE {
+                return Err(format!("{}: {} is too big", self.id, f.path));
+            }
+        }
+        for f in &self.files {
+            if !paths.insert(f.path.as_str()) {
+                return Err(format!("{}: the same file twice", self.id));
+            }
+            total += f.size;
+        }
+        if total as usize > crate::skin::MAX_TOTAL {
+            return Err(format!("{}: too big", self.id));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct Library {
     /// When it was signed, and when it stops counting (Unix seconds).
     pub issued: i64,
     pub expires: i64,
     pub plugins: Vec<Entry>,
+    /// Skins (Ingle 0.7.5 and later).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skins: Vec<SkinEntry>,
 }
 
 impl Library {
@@ -220,6 +301,10 @@ impl Library {
 
     pub fn find(&self, id: &str) -> Option<&Entry> {
         self.plugins.iter().find(|p| p.id == id)
+    }
+
+    pub fn find_skin(&self, id: &str) -> Option<&SkinEntry> {
+        self.skins.iter().find(|s| s.id == id)
     }
 }
 
@@ -252,6 +337,9 @@ pub fn open(signed_json: &str, key: &str) -> Result<Library, String> {
     lib.plugins.retain(|p| p.check().is_ok());
     let mut seen = std::collections::HashSet::new();
     lib.plugins.retain(|p| seen.insert(p.id.clone()));
+    lib.skins.retain(|s| s.check().is_ok());
+    let mut seen = std::collections::HashSet::new();
+    lib.skins.retain(|s| seen.insert(s.id.clone()));
     Ok(lib)
 }
 
@@ -305,7 +393,7 @@ mod tests {
         bad.run = "../../evil.exe".into();
         let mut twice = entry();
         twice.version = "9.9.9".into();
-        let lib = Library { issued: 100, expires: 200, plugins: vec![entry(), bad, twice] };
+        let lib = Library { issued: 100, expires: 200, plugins: vec![entry(), bad, twice], ..Default::default() };
         let signed = serde_json::to_string(&sign(&key, &lib)).unwrap();
         let back = open(&signed, &key.user_id()).unwrap();
         assert_eq!(back.plugins.len(), 1, "the bad path and the second chimbrowser are dropped");
@@ -346,5 +434,51 @@ mod tests {
         assert_eq!(a.files_for("windows").len(), 1);
         assert_eq!(entry().files_for("linux").len(), 0);
         assert_eq!(entry().size_for("windows"), 20);
+    }
+
+    fn skin() -> SkinEntry {
+        SkinEntry {
+            id: "blood-moon".into(),
+            name: "Blood Moon".into(),
+            version: "1.0".into(),
+            summary: "Red and black.".into(),
+            description: String::new(),
+            author: "Blue".into(),
+            license: String::new(),
+            files: vec![file("skin.json"), file("background.webp"), file("fonts/Body.ttf")],
+            preview: Some(file("preview.webp")),
+            review: String::new(),
+            updated: 0,
+        }
+    }
+
+    #[test]
+    fn skins_are_listed_apart_and_older_apps_read_the_list_as_before() {
+        let key = Identity::generate();
+        let mut no_manifest = skin();
+        no_manifest.id = "broken".into();
+        no_manifest.files.remove(0);
+        let mut escaping = skin();
+        escaping.id = "escaping".into();
+        escaping.files.push(file("../../x.dll"));
+        let mut huge = skin();
+        huge.id = "huge".into();
+        huge.files[1].size = 50_000_000;
+        let lib = Library { issued: 100, expires: 200, plugins: vec![entry()], skins: vec![skin(), no_manifest, escaping, huge, skin()] };
+        let signed = serde_json::to_string(&sign(&key, &lib)).unwrap();
+        let back = open(&signed, &key.user_id()).unwrap();
+        assert_eq!(back.skins, vec![skin()], "the bad ones and the second blood-moon are dropped");
+        assert_eq!(back.find_skin("blood-moon").unwrap().size(), 30);
+        // Ingle from before skins: the list has no `skins` for it, and reads exactly as before.
+        #[derive(Deserialize)]
+        struct Before {
+            plugins: Vec<Entry>,
+        }
+        let s: Signed = serde_json::from_str(&signed).unwrap();
+        let before: Before = serde_json::from_str(&s.index).unwrap();
+        assert_eq!(before.plugins, vec![entry()]);
+        // A list with no skins says nothing about them.
+        let plain = sign(&key, &Library { issued: 1, expires: 2, plugins: vec![entry()], skins: vec![] });
+        assert!(!plain.index.contains("skins"));
     }
 }

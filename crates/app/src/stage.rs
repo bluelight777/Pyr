@@ -142,7 +142,7 @@ impl IngleApp {
         egui::TopBottomPanel::top("stage-header")
             .exact_height(52.0)
             .show_separator_line(false)
-            .frame(egui::Frame::new().fill(theme::STAGE).inner_margin(egui::Margin::symmetric(16, 0)))
+            .frame(egui::Frame::new().fill(theme::STAGE()).inner_margin(egui::Margin::symmetric(16, 0)))
             .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     // Right to left first (chat, view, the encryption pill), so they never sit on
@@ -165,12 +165,12 @@ impl IngleApp {
                             if !open && (unread || mentions > 0) {
                                 let c = b.rect.right_top() + vec2(-3.0, 4.0);
                                 if mentions > 0 {
-                                    ui.painter().circle_filled(c, 8.0, theme::STAGE);
-                                    ui.painter().circle_filled(c, 6.5, theme::LIVE);
+                                    ui.painter().circle_filled(c, 8.0, theme::STAGE());
+                                    ui.painter().circle_filled(c, 6.5, theme::LIVE());
                                     ui.painter().text(c, egui::Align2::CENTER_CENTER, mentions.min(9).to_string(), theme::bold_font(9.0), Color32::WHITE);
                                 } else {
-                                    ui.painter().circle_filled(c, 5.0, theme::STAGE);
-                                    ui.painter().circle_filled(c, 3.5, theme::TEXT);
+                                    ui.painter().circle_filled(c, 5.0, theme::STAGE());
+                                    ui.painter().circle_filled(c, 3.5, theme::TEXT());
                                 }
                             }
                             if b.clicked() {
@@ -197,7 +197,7 @@ impl IngleApp {
                                 if wide { format!("End-to-end encrypted · call code {}", call.call_code) } else { call.call_code.clone() },
                             )
                         } else {
-                            (theme::ELEV, theme::LINE, if wide { "Exchanging encryption keys…".to_string() } else { "Keys…".to_string() })
+                            (theme::ELEV(), theme::LINE(), if wide { "Exchanging encryption keys…".to_string() } else { "Keys…".to_string() })
                         };
                         let resp = egui::Frame::new()
                             .fill(fill)
@@ -210,7 +210,7 @@ impl IngleApp {
                                 ui.horizontal(|ui| {
                                     ui.label(RichText::new(text).size(12.5).color(Color32::from_rgb(0xbf, 0xe3, 0xbc)));
                                     let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
-                                    icons::lock(ui.painter(), r, theme::ONLINE);
+                                    icons::lock(ui.painter(), r, theme::ONLINE());
                                 });
                             })
                             .response
@@ -228,17 +228,17 @@ impl IngleApp {
                         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                             let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
                             if dm_with.is_some() {
-                                icons::phone(ui.painter(), r, theme::ONLINE);
+                                icons::phone(ui.painter(), r, theme::ONLINE());
                             } else {
-                                icons::speaker(ui.painter(), r, theme::MUTED);
+                                icons::speaker(ui.painter(), r, theme::MUTED());
                             }
                             let w = ui.available_width();
-                            crate::emoji::label_line(ui, &channel_name, theme::bold_font(15.5), theme::TEXT, w, &mut |_| None);
+                            crate::emoji::label_line(ui, &channel_name, theme::bold_font(15.5), theme::TEXT(), w, &mut |_| None);
                             // The channel's topic, like a text channel's header.
                             if !topic.is_empty() && ui.available_width() > 60.0 {
                                 let (sep, _) = ui.allocate_exact_size(vec2(1.0, 22.0), Sense::hover());
-                                ui.painter().rect_filled(sep, 0, theme::LINE);
-                                ui.add(egui::Label::new(RichText::new(&topic).size(13.0).color(theme::MUTED)).truncate()).on_hover_text(&topic);
+                                ui.painter().rect_filled(sep, 0, theme::LINE());
+                                ui.add(egui::Label::new(RichText::new(&topic).size(13.0).color(theme::MUTED())).truncate()).on_hover_text(&topic);
                             }
                         });
                     });
@@ -249,11 +249,11 @@ impl IngleApp {
         egui::TopBottomPanel::bottom("stage-controls")
             .exact_height(84.0)
             .show_separator_line(false)
-            .frame(egui::Frame::new().fill(theme::STAGE))
+            .frame(egui::Frame::new().fill(theme::STAGE()))
             .show_inside(ui, |ui| self.call_controls(ui, st, acts));
 
         // ---- tiles
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::STAGE)).show_inside(ui, |ui| {
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::STAGE())).show_inside(ui, |ui| {
             let mut tiles: Vec<Tile> = Vec::new();
             let mut parts: Vec<_> = s.voice_in(call.channel_id);
             parts.sort_by_key(|p| (p.session != call.session, p.session));
@@ -363,7 +363,7 @@ impl IngleApp {
                     egui::Align2::CENTER_BOTTOM,
                     "You're the only one here. Invite a friend from the server menu.",
                     theme::font(13.0),
-                    theme::DIM,
+                    theme::DIM(),
                 );
             }
         });
@@ -393,7 +393,7 @@ impl IngleApp {
         let p = ui.painter_at(rect);
         // A watched stream's resolution and frame rate, in the corner left of its badges.
         let mut quality: Option<String> = None;
-        p.rect_filled(rect, CornerRadius::same(12), theme::TILE);
+        p.rect_filled(rect, CornerRadius::same(12), theme::TILE());
         let tex = if t.screen && !t.watching { None } else if t.screen || t.has_camera { self.texture(ctx, t.key) } else { None };
         match tex {
             Some((id, size)) => {
@@ -404,8 +404,8 @@ impl IngleApp {
                 let mut mesh = egui::Mesh::with_texture(id);
                 mesh.add_rect_with_uv(r, uv, Color32::WHITE);
                 p.add(egui::Shape::mesh(mesh));
-                // Round the video's corners by painting over them with the stage colour.
-                p.rect_stroke(rect.expand(6.0), CornerRadius::same(18), Stroke::new(12.0f32, theme::STAGE), StrokeKind::Inside);
+                // Round the video's corners by painting over them with the stage color.
+                p.rect_stroke(rect.expand(6.0), CornerRadius::same(18), Stroke::new(12.0f32, theme::STAGE()), StrokeKind::Inside);
                 if t.screen && !t.is_me {
                     let fps = self.fps.get(&t.key).map(|f| f.2).unwrap_or(0.0);
                     quality = Some(format!("{}p · {:.0} fps", size.y as u32, fps));
@@ -432,12 +432,12 @@ impl IngleApp {
                     let mut y = top + ((room - h) / 2.0).max(0.0);
                     if show_badge {
                         let badge = Rect::from_center_size(pos2(x, y + 11.0), vec2(48.0, 22.0));
-                        p.rect_filled(badge, CornerRadius::same(5), theme::LIVE);
+                        p.rect_filled(badge, CornerRadius::same(5), theme::LIVE());
                         p.text(badge.center(), egui::Align2::CENTER_CENTER, "LIVE", theme::bold_font(12.0), Color32::WHITE);
                         y += 30.0;
                     }
                     if show_text || t.is_me {
-                        p.text(pos2(x, y + 9.0), egui::Align2::CENTER_CENTER, format!("{} is sharing their screen", t.name), theme::font(14.0), theme::TEXT);
+                        p.text(pos2(x, y + 9.0), egui::Align2::CENTER_CENTER, format!("{} is sharing their screen", t.name), theme::font(14.0), theme::TEXT());
                         y += 26.0;
                     }
                     if !t.is_me {
@@ -451,29 +451,29 @@ impl IngleApp {
                     }
                 } else {
                     let r = (rect.height().min(rect.width()) * 0.2).clamp(18.0, 64.0);
-                    avatar(&p, rect.center(), r, &t.user_id, &t.name, t.speaking, theme::TILE, t.face);
+                    avatar(&p, rect.center(), r, &t.user_id, &t.name, t.speaking, theme::TILE(), t.face);
                     if t.has_camera {
-                        p.text(rect.center() + vec2(0.0, r + 16.0), egui::Align2::CENTER_CENTER, "starting video…", theme::font(11.5), theme::DIM);
+                        p.text(rect.center() + vec2(0.0, r + 16.0), egui::Align2::CENTER_CENTER, "starting video…", theme::font(11.5), theme::DIM());
                     }
                 }
             }
         }
         // name label
         let label = if t.screen { format!("{}'s screen", t.name) } else if t.is_me { format!("{} (you)", t.name) } else { t.name.clone() };
-        let galley = ui.fonts_mut(|f| f.layout_no_wrap(label, theme::bold_font(12.5), theme::TEXT));
+        let galley = ui.fonts_mut(|f| f.layout_no_wrap(label, theme::bold_font(12.5), theme::TEXT()));
         let icon_w = if t.muted || t.deaf { 18.0 } else { 0.0 };
         let lr = Rect::from_min_size(rect.left_bottom() + vec2(10.0, -34.0), vec2(galley.size().x + 16.0 + icon_w, 24.0));
         p.rect_filled(lr, CornerRadius::same(6), Color32::from_black_alpha(150));
         if t.deaf {
-            icons::headphones(&p, Rect::from_min_size(lr.min + vec2(6.0, 4.0), vec2(16.0, 16.0)), theme::LIVE, true);
+            icons::headphones(&p, Rect::from_min_size(lr.min + vec2(6.0, 4.0), vec2(16.0, 16.0)), theme::LIVE(), true);
         } else if t.muted {
-            icons::mic(&p, Rect::from_min_size(lr.min + vec2(6.0, 4.0), vec2(16.0, 16.0)), theme::LIVE, true);
+            icons::mic(&p, Rect::from_min_size(lr.min + vec2(6.0, 4.0), vec2(16.0, 16.0)), theme::LIVE(), true);
         }
-        p.galley(lr.min + vec2(8.0 + icon_w, 12.0 - galley.size().y / 2.0), galley, theme::TEXT);
+        p.galley(lr.min + vec2(8.0 + icon_w, 12.0 - galley.size().y / 2.0), galley, theme::TEXT());
         let mut right = rect.right() - 10.0;
         if t.screen && t.watching && !t.is_me {
             let b = Rect::from_min_size(pos2(right - 48.0, rect.top() + 10.0), vec2(48.0, 22.0));
-            p.rect_filled(b, CornerRadius::same(5), theme::LIVE);
+            p.rect_filled(b, CornerRadius::same(5), theme::LIVE());
             p.text(b.center(), egui::Align2::CENTER_CENTER, "LIVE", theme::bold_font(12.0), Color32::WHITE);
             right = b.left() - 6.0;
         }
@@ -491,20 +491,20 @@ impl IngleApp {
             right = b.left() - 6.0;
         }
         if let Some(q) = quality {
-            let g = ui.fonts_mut(|f| f.layout_no_wrap(q, theme::font(11.5), theme::MUTED));
+            let g = ui.fonts_mut(|f| f.layout_no_wrap(q, theme::font(11.5), theme::MUTED()));
             let b = Rect::from_min_size(pos2(right - g.size().x - 12.0, rect.top() + 10.0), vec2(g.size().x + 12.0, 22.0));
             p.rect_filled(b, CornerRadius::same(5), Color32::from_black_alpha(150));
-            p.galley(b.min + vec2(6.0, 11.0 - g.size().y / 2.0), g, theme::MUTED);
+            p.galley(b.min + vec2(6.0, 11.0 - g.size().y / 2.0), g, theme::MUTED());
         }
         if t.screen && t.has_sound && (t.watching || t.is_me) {
             // Little speaker next to the name: this stream has sound (muted look at 0%).
             let s = Rect::from_min_size(lr.right_top() + vec2(6.0, 0.0), vec2(24.0, 24.0));
             p.rect_filled(s, CornerRadius::same(6), Color32::from_black_alpha(150));
-            let c = if t.stream_volume <= 0.001 && !t.is_me { theme::LIVE } else { theme::TEXT };
+            let c = if t.stream_volume <= 0.001 && !t.is_me { theme::LIVE() } else { theme::TEXT() };
             icons::speaker(&p, s.shrink(4.0), c);
         }
         if t.speaking {
-            p.rect_stroke(rect, CornerRadius::same(12), Stroke::new(3.0f32, theme::GLOW), StrokeKind::Inside);
+            p.rect_stroke(rect, CornerRadius::same(12), Stroke::new(3.0f32, theme::GLOW()), StrokeKind::Inside);
         }
         // A soundboard sound they just played: its emoji pops up over them, and what it was
         // shows in the corner.
@@ -515,15 +515,15 @@ impl IngleApp {
             let tex = pop.tex;
             crate::soundboard::paint_pop(&p, at, size, &pop.emoji, pop.age, &mut |_| tex);
             let (_, _, alpha) = crate::soundboard::pop_motion(pop.age);
-            let g = ui.fonts_mut(|f| f.layout_no_wrap(pop.name.clone(), theme::bold_font(12.0), theme::TEXT.gamma_multiply(alpha)));
+            let g = ui.fonts_mut(|f| f.layout_no_wrap(pop.name.clone(), theme::bold_font(12.0), theme::TEXT().gamma_multiply(alpha)));
             let b = Rect::from_min_size(rect.left_top() + vec2(10.0, 10.0), vec2(g.size().x + 34.0, 24.0));
             p.rect_filled(b, CornerRadius::same(6), Color32::from_black_alpha((150.0 * alpha) as u8));
-            icons::soundboard(&p, Rect::from_min_size(b.min + vec2(7.0, 4.0), vec2(16.0, 16.0)), theme::EMBER2.gamma_multiply(alpha));
-            p.galley(pos2(b.left() + 28.0, b.center().y - g.size().y / 2.0), g, theme::TEXT);
+            icons::soundboard(&p, Rect::from_min_size(b.min + vec2(7.0, 4.0), vec2(16.0, 16.0)), theme::EMBER2().gamma_multiply(alpha));
+            p.galley(pos2(b.left() + 28.0, b.center().y - g.size().y / 2.0), g, theme::TEXT());
             ctx.request_repaint();
         }
         if resp.hovered() {
-            p.rect_stroke(rect, CornerRadius::same(12), Stroke::new(1.0f32, theme::LINE), StrokeKind::Inside);
+            p.rect_stroke(rect, CornerRadius::same(12), Stroke::new(1.0f32, theme::LINE()), StrokeKind::Inside);
         }
         // Full screen: for a stream (or camera) that's showing video.
         let can_full = tex.is_some();
@@ -534,7 +534,7 @@ impl IngleApp {
             let b = Rect::from_min_size(rect.right_bottom() + vec2(-44.0, -44.0), vec2(34.0, 34.0));
             let br = ui.interact(b, ui.id().with(("full", t.key.session, t.key.track)), Sense::click());
             p.rect_filled(b, CornerRadius::same(6), Color32::from_black_alpha(if br.hovered() { 210 } else { 150 }));
-            icons::fullscreen(&p, b.shrink(9.0), theme::TEXT, false);
+            icons::fullscreen(&p, b.shrink(9.0), theme::TEXT(), false);
             go_full |= br.on_hover_text("Full screen (double-click)").clicked();
         }
         if can_full && resp.double_clicked() {
@@ -610,16 +610,16 @@ impl IngleApp {
             }
             if !is_me && screen {
                 if has_sound {
-                    ui.label(RichText::new("Stream volume").size(12.0).color(theme::MUTED));
+                    ui.label(RichText::new("Stream volume").size(12.0).color(theme::MUTED()));
                     let mut v = svol * 100.0;
                     if ui.add(egui::Slider::new(&mut v, 0.0..=200.0).suffix("%")).changed() {
                         acts.push(Act::StreamVolume { uid: uid.clone(), volume: v / 100.0 });
                     }
                 } else {
-                    ui.label(RichText::new("This stream has no sound").size(12.0).color(theme::DIM));
+                    ui.label(RichText::new("This stream has no sound").size(12.0).color(theme::DIM()));
                 }
             } else if !is_me {
-                ui.label(RichText::new(format!("{name} volume")).size(12.0).color(theme::MUTED));
+                ui.label(RichText::new(format!("{name} volume")).size(12.0).color(theme::MUTED()));
                 let mut v = vol * 100.0;
                 if ui.add(egui::Slider::new(&mut v, 0.0..=200.0).suffix("%")).changed() {
                     acts.push(Act::Volume { uid: uid.clone(), volume: v / 100.0 });
@@ -631,12 +631,12 @@ impl IngleApp {
                     ui.separator();
                 }
                 if let Some(mut on) = *mute {
-                    if ui.checkbox(&mut on, RichText::new("Server Mute").color(theme::LIVE)).clicked() {
+                    if ui.checkbox(&mut on, RichText::new("Server Mute").color(theme::LIVE())).clicked() {
                         acts.push(Act::ServerMute { key: server.clone(), uid: uid.clone(), muted: on });
                     }
                 }
                 if let Some(mut on) = *deaf {
-                    if ui.checkbox(&mut on, RichText::new("Server Deafen").color(theme::LIVE)).clicked() {
+                    if ui.checkbox(&mut on, RichText::new("Server Deafen").color(theme::LIVE())).clicked() {
                         acts.push(Act::ServerDeafen { key: server.clone(), uid: uid.clone(), deafened: on });
                     }
                 }
@@ -679,17 +679,17 @@ impl IngleApp {
             let r = ui.max_rect();
             let buttons_left = r.center().x - (CALL_BUTTONS * 54.0 + (CALL_BUTTONS - 1.0) * 14.0 + 18.0) / 2.0;
             let width = (buttons_left - r.left() - 28.0).max(60.0);
-            let colour = if call.audio_error.is_some() { theme::LIVE } else { theme::DIM };
+            let color = if call.audio_error.is_some() { theme::LIVE() } else { theme::DIM() };
             let mut cut = false;
             for (i, l) in lines.iter().enumerate() {
-                let mut job = egui::text::LayoutJob::simple(l.clone(), theme::font(11.0), colour, width);
+                let mut job = egui::text::LayoutJob::simple(l.clone(), theme::font(11.0), color, width);
                 job.wrap.max_rows = 1;
                 job.wrap.break_anywhere = true;
                 job.wrap.overflow_character = Some('…');
                 let galley = ui.fonts_mut(|f| f.layout_job(job));
                 cut |= galley.elided;
                 let pos = pos2(r.left() + 16.0, r.center().y - 14.0 + i as f32 * 14.0 - galley.size().y / 2.0);
-                ui.painter().galley(pos, galley, colour);
+                ui.painter().galley(pos, galley, color);
             }
             if cut {
                 let area = Rect::from_min_size(pos2(r.left() + 16.0, r.center().y - 22.0), vec2(width, 16.0 + lines.len() as f32 * 14.0));
@@ -721,7 +721,7 @@ impl IngleApp {
         let mic_off = muted || server_muted;
         let tip = if server_muted { crate::app::SERVER_MUTED } else if muted { "Unmute" } else { "Mute" };
         if button(ui, size, if mic_off { Color32::from_rgb(0x4a, 0x1f, 0x1f) } else { base }, tip, &|p, r| {
-            icons::mic(p, r, if mic_off { theme::LIVE } else { theme::TEXT }, mic_off)
+            icons::mic(p, r, if mic_off { theme::LIVE() } else { theme::TEXT() }, mic_off)
         })
         .clicked()
         {
@@ -732,14 +732,14 @@ impl IngleApp {
             }
         }
         if button(ui, size, if call.camera_on { on } else { base }, if call.camera_on { "Turn off camera" } else { "Turn on camera" }, &|p, r| {
-            icons::camera(p, r, if call.camera_on { theme::EMBER2 } else { theme::TEXT }, false)
+            icons::camera(p, r, if call.camera_on { theme::EMBER2() } else { theme::TEXT() }, false)
         })
         .clicked()
         {
             acts.push(Act::Camera(!call.camera_on));
         }
         if button(ui, size, if call.screen_on { on } else { base }, if call.screen_on { "Stop sharing" } else { "Share your screen" }, &|p, r| {
-            icons::screen(p, r, if call.screen_on { theme::EMBER2 } else { theme::TEXT })
+            icons::screen(p, r, if call.screen_on { theme::EMBER2() } else { theme::TEXT() })
         })
         .clicked()
         {
@@ -752,7 +752,7 @@ impl IngleApp {
         }
         let sb_open = self.soundboard_open();
         let sb = button(ui, size, if sb_open { on } else { base }, "Soundboard", &|p, r| {
-            icons::soundboard(p, r, if sb_open { theme::EMBER2 } else { theme::TEXT })
+            icons::soundboard(p, r, if sb_open { theme::EMBER2() } else { theme::TEXT() })
         });
         self.soundboard_anchor(crate::soundboard::FROM_CALL, sb.rect);
         if sb.clicked() {
@@ -761,7 +761,7 @@ impl IngleApp {
         let deaf = deafened || server_deafened;
         let tip = if server_deafened { crate::app::SERVER_DEAFENED } else if deafened { "Undeafen" } else { "Deafen" };
         if button(ui, size, if deaf { Color32::from_rgb(0x4a, 0x1f, 0x1f) } else { base }, tip, &|p, r| {
-            icons::headphones(p, r, if deaf { theme::LIVE } else { theme::TEXT }, deaf)
+            icons::headphones(p, r, if deaf { theme::LIVE() } else { theme::TEXT() }, deaf)
         })
         .clicked()
         {
@@ -771,7 +771,7 @@ impl IngleApp {
                 acts.push(Act::Deafen(!deafened));
             }
         }
-        if button(ui, size + 18.0, theme::LIVE, "Leave call", &|p, r| icons::hangup(p, r, Color32::WHITE)).clicked() {
+        if button(ui, size + 18.0, theme::LIVE(), "Leave call", &|p, r| icons::hangup(p, r, Color32::WHITE)).clicked() {
             acts.push(Act::Leave);
         }
     }
@@ -899,13 +899,13 @@ impl IngleApp {
                     egui::Align2::LEFT_CENTER,
                     format!("{what}  ·  Esc or double-click to exit full screen"),
                     theme::font(14.0),
-                    theme::TEXT,
+                    theme::TEXT(),
                 );
                 // Exit at the bottom right, like Discord's.
                 let b = Rect::from_min_size(rect.right_bottom() + vec2(-58.0, -58.0), vec2(42.0, 42.0));
                 let br = ui.interact(b, ui.id().with("exit-full"), Sense::click());
                 ui.painter().rect_filled(b, CornerRadius::same(8), Color32::from_black_alpha(if br.hovered() { 220 } else { 160 }));
-                icons::fullscreen(ui.painter(), b.shrink(11.0), theme::TEXT, true);
+                icons::fullscreen(ui.painter(), b.shrink(11.0), theme::TEXT(), true);
                 leave |= br.on_hover_text("Exit full screen").clicked();
                 ctx.request_repaint_after(std::time::Duration::from_millis(500));
             }

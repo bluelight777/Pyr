@@ -110,15 +110,15 @@ fn run() -> Result<()> {
         _ => {}
     }
 
-    // Colours only in a real terminal: under systemd the journal would show the escape codes,
+    // Colors only in a real terminal: under systemd the journal would show the escape codes,
     // and the classic Windows console prints them literally.
     use std::io::IsTerminal;
-    let colour = std::io::stdout().is_terminal() && !cfg!(windows);
+    let color = std::io::stdout().is_terminal() && !cfg!(windows);
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "ingle_server=info,warn".into()),
         )
-        .with_ansi(colour)
+        .with_ansi(color)
         .init();
 
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;

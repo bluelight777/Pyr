@@ -1,4 +1,4 @@
-//! H.264 encode/decode (OpenH264) with fast colour conversion and scaling.
+//! H.264 encode/decode (OpenH264) with fast color conversion and scaling.
 
 use anyhow::{Result, anyhow, bail};
 use fast_image_resize::images::Image;
@@ -122,7 +122,7 @@ pub fn to_i420(frame: &RawFrame) -> Result<I420> {
         PixelFormat::Bgra => yuv::bgra_to_yuv420(&mut img, &frame.data, stride, r, m, mode),
         PixelFormat::Rgb => yuv::rgb_to_yuv420(&mut img, &frame.data, stride, r, m, mode),
     }
-    .map_err(|e| anyhow!("colour conversion failed: {e:?}"))?;
+    .map_err(|e| anyhow!("color conversion failed: {e:?}"))?;
     Ok(I420 {
         width: w,
         height: h,
@@ -225,7 +225,7 @@ impl H264Decoder {
         };
         let mut rgba = vec![0u8; w * h * 4];
         yuv::yuv420_to_rgba(&planar, &mut rgba, (w * 4) as u32, YuvRange::Limited, YuvStandardMatrix::Bt601)
-            .map_err(|e| anyhow!("colour conversion failed: {e:?}"))?;
+            .map_err(|e| anyhow!("color conversion failed: {e:?}"))?;
         Ok(Some(DecodedFrame { width: w as u32, height: h as u32, rgba }))
     }
 }
@@ -250,7 +250,7 @@ mod tests {
             }
             if let Some(d) = dec.decode(&e.data).unwrap() {
                 assert_eq!((d.width, d.height), (640, 360));
-                // Compare the colour of a flat region with the source.
+                // Compare the color of a flat region with the source.
                 let px = |buf: &[u8], x: usize, y: usize, bpp: usize| {
                     let o = (y * 640 + x) * bpp;
                     [buf[o] as i32, buf[o + 1] as i32, buf[o + 2] as i32]

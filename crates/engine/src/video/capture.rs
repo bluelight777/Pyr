@@ -41,9 +41,22 @@ pub struct CaptureHandle {
     thread: Option<std::thread::JoinHandle<()>>,
     #[cfg(windows)]
     wgc: Option<windows_capture::capture::CaptureControl<win::WgcHandler, Box<dyn std::error::Error + Send + Sync>>>,
+    /// What Windows' capture says about itself (see `trouble`).
+    #[cfg(windows)]
+    watch: Option<Arc<win::WgcWatch>>,
     /// Our green frame in place of Windows' yellow one.
     #[cfg(windows)]
     border: Option<super::border::ShareBorder>,
+}
+
+/// What went wrong with a capture that's still meant to be running.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Trouble {
+    /// What was being captured is gone (the window closed, the screen was unplugged).
+    Gone(String),
+    /// Capturing stopped working (a game changing the display, say, or the graphics driver
+    /// restarting): starting it again may well work.
+    Broken(String),
 }
 
 impl CaptureHandle {
@@ -55,14 +68,31 @@ impl CaptureHandle {
         self
     }
 
-    fn thread(stop: Arc<AtomicBool>, t: std::thread::JoinHandle<()>) -> CaptureHandle {
+    pub(crate) fn thread(stop: Arc<AtomicBool>, t: std::thread::JoinHandle<()>) -> CaptureHandle {
         CaptureHandle {
             stop,
             thread: Some(t),
             #[cfg(windows)]
             wgc: None,
             #[cfg(windows)]
+            watch: None,
+            #[cfg(windows)]
             border: None,
+        }
+    }
+
+    /// Whether it has stopped working by itself (looked at about once a second while sharing).
+    pub fn trouble(&self) -> Option<Trouble> {
+        if self.stop.load(Ordering::Relaxed) {
+            return None;
+        }
+        #[cfg(windows)]
+        if let (Some(c), Some(w)) = (&self.wgc, &self.watch) {
+            return w.trouble(c.is_finished());
+        }
+        match &self.thread {
+            Some(t) if t.is_finished() => Some(Trouble::Broken("capturing stopped".into())),
+            _ => None,
         }
     }
 }
@@ -100,7 +130,7 @@ pub struct ScreenSource {
 
 pub const TEST_PATTERN_ID: &str = "test:pattern";
 
-/// The static part of the test card (colour bars over a warm gradient), RGBA.
+/// The static part of the test card (color bars over a warm gradient), RGBA.
 fn test_background(w: u32, h: u32) -> Vec<u8> {
     let mut data = vec![0u8; (w * h * 4) as usize];
     let bars: [[u8; 3]; 7] =
@@ -134,7 +164,7 @@ fn draw_box(data: &mut [u8], w: u32, h: u32, index: u64) {
     }
 }
 
-/// A colourful moving test card (RGBA). Deterministic for a given frame index.
+/// A colorful moving test card (RGBA). Deterministic for a given frame index.
 pub fn test_pattern(w: u32, h: u32, index: u64) -> RawFrame {
     let mut data = test_background(w, h);
     draw_box(&mut data, w, h, index);
@@ -203,9 +233,43 @@ pub fn start_screen(id: &str, fps: u32, slot: Arc<FrameSlot>) -> Result<CaptureH
 #[cfg(windows)]
 mod win {
     use super::*;
+    use windows::Win32::Graphics::Direct3D11::ID3D11Device;
     use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
+    use windows_capture::d3d11::SendDirectX;
     use windows_capture::frame::Frame;
     use windows_capture::graphics_capture_api::InternalCaptureControl;
+
+    /// What Windows' capture tells us about itself, for `CaptureHandle::trouble`.
+    pub struct WgcWatch {
+        /// "window" or "screen".
+        pub what: &'static str,
+        /// Why it stopped (a frame couldn't be read).
+        error: parking_lot::Mutex<Option<String>>,
+        /// What was being captured went away.
+        closed: AtomicBool,
+        /// Its graphics device, to ask whether Windows took it away (a game changing the
+        /// display mode or the graphics driver restarting does that).
+        device: parking_lot::Mutex<Option<SendDirectX<ID3D11Device>>>,
+    }
+
+    impl WgcWatch {
+        pub fn new(what: &'static str) -> Arc<WgcWatch> {
+            Arc::new(WgcWatch { what, error: Default::default(), closed: AtomicBool::new(false), device: Default::default() })
+        }
+
+        pub fn trouble(&self, finished: bool) -> Option<Trouble> {
+            if self.closed.load(Ordering::Relaxed) {
+                return Some(Trouble::Gone(if self.what == "window" { "the window you were sharing closed".into() } else { "the screen you were sharing went away".into() }));
+            }
+            if finished {
+                let why = self.error.lock().clone().unwrap_or_else(|| "Windows stopped capturing it".into());
+                return Some(Trouble::Broken(format!("the {} capture stopped: {why}", self.what)));
+            }
+            // (The device is thread-safe: D3D11 devices are, unless made single-threaded.)
+            let lost = self.device.lock().as_ref().and_then(|d| unsafe { d.0.GetDeviceRemovedReason() }.err());
+            lost.map(|e| Trouble::Broken(format!("Windows took the {} capture's graphics device away ({e})", self.what)))
+        }
+    }
 
     pub struct WgcHandler {
         slot: Arc<FrameSlot>,
@@ -214,14 +278,22 @@ mod win {
         /// told a frame rate send one per screen refresh).
         gap: Duration,
         last: Option<std::time::Instant>,
+        watch: Arc<WgcWatch>,
     }
 
     impl GraphicsCaptureApiHandler for WgcHandler {
-        type Flags = (Arc<FrameSlot>, Duration);
+        type Flags = (Arc<FrameSlot>, Duration, Arc<WgcWatch>);
         type Error = Box<dyn std::error::Error + Send + Sync>;
 
         fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
-            Ok(WgcHandler { slot: ctx.flags.0, buf: Vec::new(), gap: ctx.flags.1, last: None })
+            let (slot, gap, watch) = ctx.flags;
+            *watch.device.lock() = Some(SendDirectX::new(ctx.device.clone()));
+            Ok(WgcHandler { slot, buf: Vec::new(), gap, last: None, watch })
+        }
+
+        fn on_closed(&mut self) -> Result<(), Self::Error> {
+            self.watch.closed.store(true, Ordering::Relaxed);
+            Ok(())
         }
 
         fn on_frame_arrived(&mut self, frame: &mut Frame, _control: InternalCaptureControl) -> Result<(), Self::Error> {
@@ -233,7 +305,13 @@ mod win {
                 }
             }
             self.last = Some(now);
-            let fb = frame.buffer()?;
+            let fb = match frame.buffer() {
+                Ok(fb) => fb,
+                Err(e) => {
+                    *self.watch.error.lock() = Some(e.to_string());
+                    return Err(e.into());
+                }
+            };
             let (w, h) = (fb.width(), fb.height());
             let data = fb.as_nopadding_buffer(&mut self.buf).to_vec();
             self.slot.put(RawFrame { width: w, height: h, format: PixelFormat::Bgra, data });
@@ -291,9 +369,31 @@ pub fn window_process_id(source_id: &str) -> Option<u32> {
     w.process_id().ok()
 }
 
+/// Windows' capture usually starts in well under a second; it's been seen to hang while a game
+/// was changing the display. Past this it counts as not starting (and the stuck start is
+/// stopped if it ever finishes).
+#[cfg(windows)]
+const START_WITHIN: Duration = Duration::from_secs(10);
+
 #[cfg(windows)]
 fn platform_start_screen(id: &str, fps: u32, slot: Arc<FrameSlot>) -> Result<CaptureHandle> {
-    use windows_capture::capture::GraphicsCaptureApiHandler;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let id = id.to_string();
+    std::thread::Builder::new().name("ingle-capture-start".into()).spawn(move || {
+        // Too late: whoever asked has given up on it, so it stops again.
+        if let Err(std::sync::mpsc::SendError(late)) = tx.send(start_wgc_source(&id, fps, slot)) {
+            drop(late);
+        }
+    })?;
+    match rx.recv_timeout(START_WITHIN) {
+        Ok(r) => r,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(anyhow!("Windows didn't start capturing within {} seconds", START_WITHIN.as_secs())),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(anyhow!("the capture couldn't start")),
+    }
+}
+
+#[cfg(windows)]
+fn start_wgc_source(id: &str, fps: u32, slot: Arc<FrameSlot>) -> Result<CaptureHandle> {
     use windows_capture::monitor::Monitor;
     use windows_capture::settings::{
         ColorFormat, CursorCaptureSettings, DirtyRegionSettings, MinimumUpdateIntervalSettings, SecondaryWindowSettings,
@@ -319,6 +419,7 @@ fn platform_start_screen(id: &str, fps: u32, slot: Arc<FrameSlot>) -> Result<Cap
         let idx: usize = idx.parse()?;
         let m = Monitor::from_index(idx).map_err(|e| anyhow!("screen {idx} not found: {e}"))?;
         let target = Target::Monitor(m.as_raw_hmonitor() as isize);
+        let watch = win::WgcWatch::new("screen");
         let make = |border| {
             Settings::new(
                 m,
@@ -328,10 +429,10 @@ fn platform_start_screen(id: &str, fps: u32, slot: Arc<FrameSlot>) -> Result<Cap
                 interval,
                 DirtyRegionSettings::Default,
                 ColorFormat::Bgra8,
-                (slot.clone(), gap),
+                (slot.clone(), gap, watch.clone()),
             )
         };
-        start_wgc(make, target).map_err(|e| anyhow!("screen capture failed: {e}"))?
+        (start_wgc(make, target).map_err(|e| anyhow!("screen capture failed: {e}"))?, watch)
     } else if let Some(h) = id.strip_prefix("win:") {
         let hwnd: usize = h.parse()?;
         let w = Window::from_raw_hwnd(hwnd as *mut std::ffi::c_void);
@@ -339,6 +440,7 @@ fn platform_start_screen(id: &str, fps: u32, slot: Arc<FrameSlot>) -> Result<Cap
             return Err(anyhow!("that window was closed"));
         }
         let target = Target::Window(hwnd as isize);
+        let watch = win::WgcWatch::new("window");
         let make = |border| {
             Settings::new(
                 w,
@@ -348,22 +450,22 @@ fn platform_start_screen(id: &str, fps: u32, slot: Arc<FrameSlot>) -> Result<Cap
                 interval,
                 DirtyRegionSettings::Default,
                 ColorFormat::Bgra8,
-                (slot.clone(), gap),
+                (slot.clone(), gap, watch.clone()),
             )
         };
-        start_wgc(make, target).map_err(|e| anyhow!("window capture failed: {e}"))?
+        (start_wgc(make, target).map_err(|e| anyhow!("window capture failed: {e}"))?, watch)
     } else {
         return Err(anyhow!("unknown capture source"));
     };
-    let (control, border) = control;
-    Ok(CaptureHandle { stop: Arc::new(AtomicBool::new(false)), thread: None, wgc: Some(control), border })
+    let ((control, border), watch) = control;
+    Ok(CaptureHandle { stop: Arc::new(AtomicBool::new(false)), thread: None, wgc: Some(control), watch: Some(watch), border })
 }
 
 /// Starts Windows' capture without its yellow frame and puts up Ingle's green one instead.
 /// Where Windows doesn't allow turning its frame off, its own frame stays.
 #[cfg(windows)]
 fn start_wgc<T: TryInto<windows_capture::settings::GraphicsCaptureItemType> + Send + 'static>(
-    make: impl Fn(windows_capture::settings::DrawBorderSettings) -> windows_capture::settings::Settings<(Arc<FrameSlot>, Duration), T>,
+    make: impl Fn(windows_capture::settings::DrawBorderSettings) -> windows_capture::settings::Settings<(Arc<FrameSlot>, Duration, Arc<win::WgcWatch>), T>,
     target: super::border::Target,
 ) -> Result<(windows_capture::capture::CaptureControl<win::WgcHandler, Box<dyn std::error::Error + Send + Sync>>, Option<super::border::ShareBorder>), String> {
     use windows_capture::capture::GraphicsCaptureApiHandler;
