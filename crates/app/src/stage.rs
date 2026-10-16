@@ -1,7 +1,7 @@
 //! The call view: video grid / spotlight, screen-share tiles, call controls.
 
 use eframe::egui::{self, Align, Color32, CornerRadius, Layout, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
-use ingle_engine::state::{AppState, ServerView, VideoKey};
+use ingle_engine::state::{AppState, RingState, ServerView, VideoKey};
 use ingle_proto::media::track;
 
 use crate::app::{Act, Dialog, IngleApp, avatar, icon_button};
@@ -132,7 +132,10 @@ fn fit(rect: Rect, size: egui::Vec2, cover: bool) -> (Rect, Rect) {
 impl IngleApp {
     pub fn stage(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, st: &AppState, s: &ServerView, acts: &mut Vec<Act>) {
         let Some(call) = st.call.as_ref() else { return };
-        let channel_name = s.channel(call.channel_id).map(|c| c.name.clone()).unwrap_or_default();
+        // A direct message's or group's call (its chat is under it, not beside it): who else is
+        // in the conversation.
+        let dm_with = s.is_private(call.channel_id).then(|| s.others_in(call.channel_id, &st.my_uid));
+        let channel_name = st.call_place(&call.server_key, call.channel_id);
 
         // ---- header
         let topic = s.channel(call.channel_id).map(|c| c.topic.trim().to_string()).unwrap_or_default();
@@ -146,39 +149,46 @@ impl IngleApp {
                     // top of the name and topic, which get what's left and are cut to fit.
                     let wide = ui.available_width() > 820.0;
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let open = self.ui.call_chat_open;
-                        let unread = s.unread.contains(&call.channel_id);
-                        let mentions = s.mentions.get(&call.channel_id).copied().unwrap_or(0);
-                        let tip = match (open, unread) {
-                            (true, _) => "Hide chat",
-                            (false, true) => "Show chat (new messages)",
-                            (false, false) => "Show chat",
-                        };
-                        let b = icon_button(ui, 32.0, tip, open, |p, r, c| icons::chat(p, r, c));
-                        // The call's chat has messages you haven't seen: a badge on its button,
-                        // like the channel list's.
-                        if !open && (unread || mentions > 0) {
-                            let c = b.rect.right_top() + vec2(-3.0, 4.0);
-                            if mentions > 0 {
-                                ui.painter().circle_filled(c, 8.0, theme::STAGE);
-                                ui.painter().circle_filled(c, 6.5, theme::LIVE);
-                                ui.painter().text(c, egui::Align2::CENTER_CENTER, mentions.min(9).to_string(), theme::bold_font(9.0), Color32::WHITE);
-                            } else {
-                                ui.painter().circle_filled(c, 5.0, theme::STAGE);
-                                ui.painter().circle_filled(c, 3.5, theme::TEXT);
+                        // (A direct message's call has its chat right under it.)
+                        if dm_with.is_none() {
+                            let open = self.ui.call_chat_open;
+                            let unread = s.unread.contains(&call.channel_id);
+                            let mentions = s.mentions.get(&call.channel_id).copied().unwrap_or(0);
+                            let tip = match (open, unread) {
+                                (true, _) => "Hide chat",
+                                (false, true) => "Show chat (new messages)",
+                                (false, false) => "Show chat",
+                            };
+                            let b = icon_button(ui, 32.0, tip, open, |p, r, c| icons::chat(p, r, c));
+                            // The call's chat has messages you haven't seen: a badge on its
+                            // button, like the channel list's.
+                            if !open && (unread || mentions > 0) {
+                                let c = b.rect.right_top() + vec2(-3.0, 4.0);
+                                if mentions > 0 {
+                                    ui.painter().circle_filled(c, 8.0, theme::STAGE);
+                                    ui.painter().circle_filled(c, 6.5, theme::LIVE);
+                                    ui.painter().text(c, egui::Align2::CENTER_CENTER, mentions.min(9).to_string(), theme::bold_font(9.0), Color32::WHITE);
+                                } else {
+                                    ui.painter().circle_filled(c, 5.0, theme::STAGE);
+                                    ui.painter().circle_filled(c, 3.5, theme::TEXT);
+                                }
                             }
+                            if b.clicked() {
+                                self.ui.call_chat_open = !open;
+                            }
+                            ui.add_space(6.0);
                         }
-                        if b.clicked() {
-                            self.ui.call_chat_open = !open;
+                        // (Two of you in a call of your own are side by side anyway.)
+                        let tiles = s.voice_in(call.channel_id).iter().map(|p| 1 + p.tracks.iter().any(|t| t.id == track::SCREEN) as usize).sum::<usize>();
+                        if dm_with.is_none() || tiles > 2 {
+                            let grid = self.ui.grid_view;
+                            let tip = if grid { "Speaker view: whoever talks gets the big spot" } else { "Grid view: everyone the same size" };
+                            if ui.button(if grid { "Speaker view" } else { "Grid view" }).on_hover_text(tip).clicked() {
+                                self.ui.grid_view = !grid;
+                                self.ui.focus = None;
+                            }
+                            ui.add_space(8.0);
                         }
-                        ui.add_space(6.0);
-                        let grid = self.ui.grid_view;
-                        let tip = if grid { "Speaker view: whoever talks gets the big spot" } else { "Grid view: everyone the same size" };
-                        if ui.button(if grid { "Speaker view" } else { "Grid view" }).on_hover_text(tip).clicked() {
-                            self.ui.grid_view = !grid;
-                            self.ui.focus = None;
-                        }
-                        ui.add_space(8.0);
                         let others = s.voice_in(call.channel_id).len().saturating_sub(1);
                         let (fill, stroke, text) = if call.e2ee_ready || others == 0 {
                             (
@@ -217,7 +227,11 @@ impl IngleApp {
                         ui.add_space(8.0);
                         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                             let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
-                            icons::speaker(ui.painter(), r, theme::MUTED);
+                            if dm_with.is_some() {
+                                icons::phone(ui.painter(), r, theme::ONLINE);
+                            } else {
+                                icons::speaker(ui.painter(), r, theme::MUTED);
+                            }
                             let w = ui.available_width();
                             crate::emoji::label_line(ui, &channel_name, theme::bold_font(15.5), theme::TEXT, w, &mut |_| None);
                             // The channel's topic, like a text channel's header.
@@ -309,18 +323,41 @@ impl IngleApp {
             if self.ui.focus.map(|f| !tiles.iter().any(|t| t.key == f)).unwrap_or(false) {
                 self.ui.focus = None;
             }
-            let focus = self.ui.focus.or_else(|| if self.ui.grid_view { None } else { self.follow_speaker(&tiles) });
+            // Two of you in a call of your own: side by side (like Discord's), not one big.
+            let pair = dm_with.is_some() && tiles.len() <= 2;
+            let focus = self.ui.focus.or_else(|| if self.ui.grid_view || pair { None } else { self.follow_speaker(&tiles) });
             let area = ui.max_rect().shrink2(vec2(16.0, 8.0));
             let gap = 10.0;
+            // A direct message's call: the other person keeps a place beside you while they
+            // aren't in it (ringing, or not there). A group's: those it's ringing for; and while
+            // nobody's answered, everyone it rang (who said no, or didn't answer: Ring again).
+            let alone = !parts.iter().any(|p| p.user_id != st.my_uid);
+            let ringing: Vec<String> = st
+                .outgoing_call
+                .as_ref()
+                .filter(|o| o.server_key == call.server_key && o.channel_id == call.channel_id)
+                .map(|o| o.to.iter().filter(|w| alone || (o.state == RingState::Ringing && !o.declined.contains(w))).cloned().collect())
+                .unwrap_or_default();
+            let ghosts: Vec<String> = match &dm_with {
+                Some(others) if others.len() == 1 => others.iter().filter(|w| !parts.iter().any(|p| &p.user_id == *w)).cloned().collect(),
+                Some(others) => others.iter().filter(|w| ringing.contains(w) && !parts.iter().any(|p| &p.user_id == *w)).cloned().collect(),
+                None => Vec::new(),
+            };
             let rects: Vec<(usize, Rect)> = match focus {
-                Some(f) if tiles.len() > 1 => focus_layout(&tiles, f, area, gap),
-                _ => grid_layout(tiles.len(), area, gap).into_iter().enumerate().collect(),
+                Some(f) if tiles.len() > 1 && ghosts.is_empty() => focus_layout(&tiles, f, area, gap),
+                _ => grid_layout(tiles.len() + ghosts.len(), area, gap).into_iter().enumerate().collect(),
             };
             for (i, rect) in rects {
-                let t = tiles[i].clone();
-                self.tile(ui, ctx, &t, rect, acts);
+                match tiles.get(i).cloned() {
+                    Some(t) => self.tile(ui, ctx, &t, rect, acts),
+                    None => {
+                        if let Some(w) = ghosts.get(i - tiles.len()) {
+                            self.ringing_tile(ui, st, s, w, rect, acts);
+                        }
+                    }
+                }
             }
-            if tiles.len() == 1 {
+            if tiles.len() == 1 && dm_with.is_none() {
                 ui.painter().text(
                     pos2(area.center().x, area.bottom() - 14.0),
                     egui::Align2::CENTER_BOTTOM,

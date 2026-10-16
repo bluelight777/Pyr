@@ -104,6 +104,29 @@ pub fn hangup(p: &Painter, r: Rect, c: Color32) {
     }
 }
 
+/// A phone handset tilted like a call button's, earpiece up and to the left (calling someone):
+/// `hangup`'s handset, turned.
+pub fn phone(p: &Painter, r: Rect, c: Color32) {
+    let s = r.width().min(r.height());
+    let ctr = r.center();
+    // Turned three eighths of a turn back, about the middle (a little below it, where the
+    // handset's weight is).
+    let (sn, cs) = (-0.75 * PI).sin_cos();
+    let mid = vec2(0.0, s * 0.03);
+    let turn = |v: Vec2| -> Pos2 {
+        let v = v - mid;
+        ctr + vec2(v.x * cs - v.y * sn, v.x * sn + v.y * cs)
+    };
+    let pts: Vec<Pos2> = arc(pos2(0.0, s * 0.26), s * 0.42, PI * 1.18, PI * 1.82, 16).into_iter().map(|q| turn(q.to_vec2())).collect();
+    p.add(Shape::line(pts, Stroke::new(s * 0.16, c)));
+    for dx in [-1.0f32, 1.0] {
+        let e = vec2(dx * s * 0.33, s * 0.14);
+        let (hw, hh) = (s * 0.09, s * 0.07);
+        let corners = [e + vec2(-hw, -hh), e + vec2(hw, -hh), e + vec2(hw, hh), e + vec2(-hw, hh)].map(turn);
+        p.add(Shape::convex_polygon(corners.to_vec(), c, Stroke::NONE));
+    }
+}
+
 pub fn speaker(p: &Painter, r: Rect, c: Color32) {
     let s = r.width();
     let poly = vec![
@@ -165,6 +188,17 @@ pub fn people(p: &Painter, r: Rect, c: Color32) {
     p.add(Shape::convex_polygon(arc(pos2(r.left() + s * 0.38, r.top() + s * 0.82), s * 0.26, PI, TAU, 12), c, Stroke::NONE));
     p.circle_filled(pos2(r.left() + s * 0.70, r.top() + s * 0.36), s * 0.11, c);
     p.add(Shape::convex_polygon(arc(pos2(r.left() + s * 0.72, r.top() + s * 0.80), s * 0.19, PI, TAU, 10), c, Stroke::NONE));
+}
+
+/// A person with a plus beside them (add people).
+pub fn add_person(p: &Painter, r: Rect, c: Color32) {
+    let s = r.width();
+    p.circle_filled(pos2(r.left() + s * 0.40, r.top() + s * 0.32), s * 0.15, c);
+    p.add(Shape::convex_polygon(arc(pos2(r.left() + s * 0.40, r.top() + s * 0.84), s * 0.28, PI, TAU, 12), c, Stroke::NONE));
+    let (cx, cy) = (r.left() + s * 0.80, r.top() + s * 0.40);
+    let st = Stroke::new(s * 0.09, c);
+    p.line_segment([pos2(cx - s * 0.13, cy), pos2(cx + s * 0.13, cy)], st);
+    p.line_segment([pos2(cx, cy - s * 0.13), pos2(cx, cy + s * 0.13)], st);
 }
 
 pub fn signal(p: &Painter, r: Rect, c: Color32) {
@@ -511,6 +545,49 @@ pub fn refresh(p: &Painter, r: Rect, c: Color32, turn: f32) {
         let h = s * 0.14;
         p.add(Shape::convex_polygon(vec![at(a1 + 0.42, 0.0), at(a1, -h), at(a1, h)], c, Stroke::NONE));
     }
+}
+
+/// A down arrow into a tray (an update to download). `drop` nudges the arrow down (0 to 1) for
+/// a little bounce.
+pub fn download(p: &Painter, r: Rect, c: Color32, drop: f32) {
+    let s = r.width().min(r.height());
+    let ctr = r.center();
+    let w = (s * 0.13).max(1.4);
+    let st = Stroke::new(w, c);
+    let dy = drop.clamp(0.0, 1.0) * s * 0.08;
+    let tip = ctr + vec2(0.0, s * 0.14 + dy);
+    p.line_segment([ctr + vec2(0.0, -s * 0.40 + dy), tip], st);
+    p.add(Shape::line(vec![tip + vec2(-s * 0.24, -s * 0.24), tip, tip + vec2(s * 0.24, -s * 0.24)], st));
+    p.add(Shape::line(
+        vec![ctr + vec2(-s * 0.40, s * 0.18), ctr + vec2(-s * 0.40, s * 0.40), ctr + vec2(s * 0.40, s * 0.40), ctr + vec2(s * 0.40, s * 0.18)],
+        st,
+    ));
+}
+
+/// A door frame with an arrow going out of it (leave).
+pub fn leave(p: &Painter, r: Rect, c: Color32) {
+    let s = r.width().min(r.height());
+    let ctr = r.center();
+    let w = (s * 0.11).max(1.3);
+    let st = Stroke::new(w, c);
+    // The frame, open on the right where the arrow goes out.
+    p.add(Shape::line(
+        vec![ctr + vec2(s * 0.06, -s * 0.24), ctr + vec2(s * 0.06, -s * 0.40), ctr + vec2(-s * 0.40, -s * 0.40), ctr + vec2(-s * 0.40, s * 0.40), ctr + vec2(s * 0.06, s * 0.40), ctr + vec2(s * 0.06, s * 0.24)],
+        st,
+    ));
+    let tip = ctr + vec2(s * 0.42, 0.0);
+    p.line_segment([ctr + vec2(-s * 0.16, 0.0), tip], st);
+    p.add(Shape::line(vec![tip + vec2(-s * 0.18, -s * 0.18), tip, tip + vec2(-s * 0.18, s * 0.18)], st));
+}
+
+/// An exclamation mark in a ring (something went wrong).
+pub fn alert(p: &Painter, r: Rect, c: Color32) {
+    let s = r.width().min(r.height());
+    let ctr = r.center();
+    let w = (s * 0.11).max(1.3);
+    p.circle_stroke(ctr, s * 0.42, Stroke::new(w, c));
+    p.line_segment([ctr + vec2(0.0, -s * 0.22), ctr + vec2(0.0, s * 0.06)], Stroke::new(w * 1.1, c));
+    p.circle_filled(ctr + vec2(0.0, s * 0.22), w * 0.75, c);
 }
 
 /// A jigsaw piece (Plugins).

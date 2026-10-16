@@ -78,11 +78,12 @@ impl IngleApp {
         (place, here)
     }
 
-    /// The Plugins button, at the bottom of the server rail.
+    /// The Plugins button, at the bottom of the server rail (and the programs open inside
+    /// Ingle under it).
     pub(crate) fn plugins_button(&mut self, ui: &mut egui::Ui) {
         ui.add_space(8.0);
         let (rect, resp) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::click());
-        let on = self.ui.plugins_open;
+        let on = self.ui.plugins_open && self.plugins.program_page.is_none();
         let fill = if on {
             Color32::from_rgb(0x4a, 0x30, 0x22)
         } else if resp.hovered() {
@@ -107,8 +108,121 @@ impl IngleApp {
         if resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tip).clicked() {
             self.ui.plugins_open = true;
             self.ui.home = false;
+            self.plugins.program_page = None;
             self.plugins.refresh(false);
         }
+        self.program_buttons(ui);
+    }
+
+    /// Programs open inside Ingle, in the rail under Plugins: click one to go to it.
+    fn program_buttons(&mut self, ui: &mut egui::Ui) {
+        let open: Vec<(String, String, bool)> = self.plugins.programs.open.iter().map(|p| (p.id.clone(), p.name.clone(), p.popped)).collect();
+        for (id, name, popped) in open {
+            ui.add_space(8.0);
+            let (rect, resp) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::click());
+            let on = self.ui.plugins_open && self.plugins.program_page.as_deref() == Some(id.as_str());
+            let hot = on || resp.hovered();
+            ui.painter().rect_filled(rect, CornerRadius::same(if hot { 16 } else { 24 }), if hot { theme::ELEV2 } else { theme::ELEV });
+            let mut icon_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(8.0)));
+            self.plugin_icon(&mut icon_ui, &id, Kind::Program, 32.0);
+            if hot {
+                let pill = Rect::from_center_size(egui::pos2(ui.max_rect().left() + 2.0, rect.center().y), vec2(4.0, if on { 40.0 } else { 20.0 }));
+                ui.painter().rect_filled(pill, CornerRadius::same(2), theme::TEXT);
+            }
+            // A green dot: it's running.
+            let c = rect.right_bottom() - vec2(6.0, 6.0);
+            ui.painter().circle_filled(c, 7.0, theme::RAIL);
+            ui.painter().circle_filled(c, 5.0, theme::ONLINE);
+            let tip = if popped { format!("{name} (in its own window)") } else { name.clone() };
+            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tip);
+            if resp.clicked() {
+                self.show_program(&id);
+            }
+            resp.context_menu(|ui| {
+                if popped {
+                    if cfg!(windows) && ui.button("Bring into Ingle").clicked() {
+                        self.plugins.programs.pop_in(&id);
+                        self.show_program(&id);
+                        ui.close();
+                    }
+                } else if ui.button("Pop out").clicked() {
+                    self.plugins.programs.pop_out(&id);
+                    ui.close();
+                }
+                if ui.button(RichText::new(format!("Close {name}")).color(theme::LIVE)).clicked() {
+                    self.plugins.programs.close(&id);
+                    ui.close();
+                }
+            });
+        }
+    }
+
+    /// Shows a program's page (where it is, inside Ingle).
+    pub(crate) fn show_program(&mut self, id: &str) {
+        self.ui.plugins_open = true;
+        self.ui.home = false;
+        self.plugins.program_page = Some(id.to_string());
+    }
+
+    /// A program's page: its name and buttons along the top, and the program itself under them
+    /// (its own window, kept right there: see `programs`).
+    pub(crate) fn program_page(&mut self, ctx: &egui::Context, id: &str) {
+        let Some((name, ready, slow, popped)) = self.plugins.programs.get(id).map(|p| (p.name.clone(), p.ready(), p.slow(), p.popped)) else {
+            self.plugins.program_page = None;
+            return;
+        };
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::STAGE)).show(ctx, |ui| {
+            egui::TopBottomPanel::top("program-header")
+                .exact_height(48.0)
+                .show_separator_line(false)
+                .frame(egui::Frame::new().fill(theme::MAIN).inner_margin(egui::Margin::symmetric(16, 0)))
+                .show_inside(ui, |ui| {
+                    ui.horizontal_centered(|ui| {
+                        self.plugin_icon(ui, id, Kind::Program, 26.0);
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(&name).font(theme::bold_font(15.5)).color(theme::TEXT));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Close").on_hover_text(format!("Close {name}")).clicked() {
+                                self.plugins.programs.close(id);
+                            }
+                            if cfg!(windows) {
+                                if popped {
+                                    if ui.button("Bring into Ingle").clicked() {
+                                        self.plugins.programs.pop_in(id);
+                                    }
+                                } else if ui.button("Pop out").on_hover_text(format!("{name} in a window of its own")).clicked() {
+                                    self.plugins.programs.pop_out(id);
+                                }
+                            }
+                        });
+                    });
+                    let r = ui.max_rect();
+                    ui.painter().line_segment([egui::pos2(r.left() - 16.0, r.bottom()), egui::pos2(r.right() + 16.0, r.bottom())], Stroke::new(1.0f32, theme::SHADOW_LINE));
+                });
+            egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::STAGE)).show_inside(ui, |ui| {
+                let area = ui.max_rect();
+                let c = area.center();
+                let say = |ui: &egui::Ui, y: f32, text: &str, col: Color32, size: f32| {
+                    ui.painter().text(egui::pos2(c.x, c.y + y), egui::Align2::CENTER_CENTER, text, theme::font(size), col);
+                };
+                if popped {
+                    say(ui, -10.0, &format!("{name} is open in a window of its own."), theme::MUTED, 15.0);
+                    say(ui, 14.0, "Bring it back in with the button at the top.", theme::DIM, 13.0);
+                    return;
+                }
+                // Where the program goes (it shows over this once its window is found).
+                self.ui.program_area = Some(area);
+                if !ready {
+                    let t = ui.input(|i| i.time) as f32;
+                    icons::refresh(ui.painter(), Rect::from_center_size(egui::pos2(c.x, c.y - 30.0), vec2(28.0, 28.0)), theme::MUTED, t * 5.0);
+                    say(ui, 10.0, &format!("Opening {name}…"), theme::MUTED, 15.0);
+                    if slow {
+                        say(ui, 34.0, "This is taking a while. If it opened in a window of its own, it'll stay there.", theme::DIM, 13.0);
+                    }
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+                }
+            });
+        });
     }
 
     /// The Plugins page.

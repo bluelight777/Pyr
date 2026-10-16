@@ -14,7 +14,7 @@ use crate::Shared;
 use crate::call::CallEvent;
 use crate::config::ServerEntry;
 use crate::net::{self, Fatal};
-use crate::state::{ConnStatus, ServerView};
+use crate::state::{AppState, ConnStatus, IncomingCall, RingState, ServerView};
 
 enum Outgoing {
     Req { req: Request, reply: Option<oneshot::Sender<Event>> },
@@ -269,7 +269,7 @@ fn sort_channels(v: &mut [Channel]) {
 }
 
 fn apply_ready(shared: &Shared, key: &str, ready: Event) {
-    let Event::Ready { me, server, mut channels, members, voice, mut roles, features, dms, relations } = ready else { return };
+    let Event::Ready { me, server, mut channels, members, voice, mut roles, features, dms, relations, groups } = ready else { return };
     let last_read = shared.config.lock().last_read.get(key).cloned().unwrap_or_default();
     roles.sort_by_key(|r| (std::cmp::Reverse(r.position), r.id));
     sort_channels(&mut channels);
@@ -346,6 +346,31 @@ fn apply_ready(shared: &Shared, key: &str, ready: Event) {
         }
         s.upsert_dm(dm);
     }
+    // Groups the same way.
+    s.groups.clear();
+    for g in groups {
+        if let Some(last) = g.last_message.filter(|_| g.last_from.as_deref() != Some(my_uid.as_str())) {
+            let seen = last_read.get(&g.id).copied();
+            if seen.map(|seen| seen < last).unwrap_or(true) {
+                let since = seen.map(|r| r + 1).unwrap_or(last);
+                if s.unread.insert(g.id) {
+                    s.new_since.insert(g.id, since);
+                } else {
+                    s.new_since.entry(g.id).or_insert(since);
+                }
+                s.mentions.entry(g.id).or_insert(1);
+            }
+        }
+        s.upsert_group(g);
+    }
+    // Gone while we were away (a channel deleted, a group left on another device): nothing of
+    // it is kept (no unread mark, no badge).
+    let known: std::collections::HashSet<ChannelId> =
+        s.channels.iter().map(|c| c.id).chain(s.dms.iter().map(|d| d.id)).chain(s.groups.iter().map(|g| g.id)).collect();
+    s.unread.retain(|id| known.contains(id));
+    s.mentions.retain(|id, _| known.contains(id));
+    s.new_since.retain(|id, _| known.contains(id));
+    s.logs.retain(|id, _| known.contains(id));
     // History may have changed while we were away; reload lazily.
     for log in s.logs.values_mut() {
         log.loaded = false;
@@ -374,6 +399,18 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
     let mut unread_from: Option<(ChannelId, MessageId)> = None;
     // A soundboard sound someone played: (session, channel, sound, name, emoji, volume).
     let mut sound: Option<(SessionId, ChannelId, String, String, String, f32)> = None;
+    // Calls in direct messages: someone ringing (channel, from, video), someone declining
+    // (channel, by), and someone coming into or leaving one (channel, who, came in).
+    let mut ringing: Option<(ChannelId, UserId, bool, Option<ChannelId>)> = None;
+    let mut declined: Option<(ChannelId, UserId)> = None;
+    let mut dm_voice: Option<(ChannelId, UserId, bool)> = None;
+    let mut ring = false;
+    // The call we're in moved to this conversation: join it there.
+    let mut follow: Option<ChannelId> = None;
+    // A group we're no longer in (left here or on another device), and whether we're in its
+    // call here (and so leave it).
+    let mut gone_group: Option<ChannelId> = None;
+    let mut leave_call = false;
     {
         let mut st = shared.state.write();
         let my_uid = st.my_uid.clone();
@@ -423,10 +460,14 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
                 // Open in front of you. Open in a window that's behind another one, minimized or
                 // hidden to the tray doesn't count: that's unread until you come back.
                 let looking = viewing && shared.window_in_front();
-                let in_dm = s.dm(cid).is_some();
-                if in_dm {
+                // A direct message, or a group: like a direct message.
+                let in_dm = s.is_private(cid);
+                if s.dm(cid).is_some() {
                     let (with, newest) = (s.dm(cid).map(|d| d.with.clone()).unwrap_or_default(), log_newest(s, cid));
                     s.upsert_dm(Dm { id: cid, with, last_message: newest, last_from: None });
+                } else if let Some(mut g) = s.group(cid).cloned() {
+                    g.last_message = log_newest(s, cid);
+                    s.upsert_group(g);
                 }
                 if mine {
                     // You've written here, so you've read it: no "NEW" line above your reply.
@@ -472,7 +513,11 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
                             let who = s.member_name(&m.author);
                             let text = if m.content.is_empty() { "sent a picture".to_string() } else { m.content.clone() };
                             let text: String = text.chars().take(80).collect();
-                            dm_note = Some(format!("{who}: {text}"));
+                            // (In a group: which one.)
+                            dm_note = Some(match s.group(cid) {
+                                Some(g) => format!("{who} in {}: {text}", s.group_name(g, &my_uid)),
+                                None => format!("{who}: {text}"),
+                            });
                         }
                     }
                 }
@@ -545,13 +590,40 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
                 s.info = server;
             }
             Event::VoiceUpserted { participant } => {
+                if s.is_private(participant.channel_id) && !s.voice.contains_key(&participant.session) {
+                    dm_voice = Some((participant.channel_id, participant.user_id.clone(), true));
+                }
                 s.voice.insert(participant.session, participant.clone());
                 forward = Some(CallEvent::Upserted(participant));
             }
-            Event::VoiceRemoved { session, .. } => {
+            Event::VoiceRemoved { session, user_id, channel_id } => {
+                if s.is_private(channel_id) {
+                    dm_voice = Some((channel_id, user_id, false));
+                }
                 s.voice.remove(&session);
                 forward = Some(CallEvent::Removed(session));
             }
+            // (Only ever sent to the people in it; not from someone I've blocked.)
+            Event::Ringing { channel_id, from, video, moved_from } => {
+                if !blocked.contains(&from) && from != my_uid {
+                    if !s.is_private(channel_id) {
+                        // A direct message started just now (a group comes with GroupUpserted).
+                        s.upsert_dm(Dm { id: channel_id, with: from.clone(), last_message: None, last_from: None });
+                    }
+                    ringing = Some((channel_id, from, video, moved_from));
+                }
+            }
+            Event::GroupUpserted { group } => s.upsert_group(group),
+            Event::GroupRemoved { channel_id } => {
+                s.groups.retain(|g| g.id != channel_id);
+                s.logs.remove(&channel_id);
+                s.unread.remove(&channel_id);
+                s.mentions.remove(&channel_id);
+                // Out of it: its call too (the server took us out), and its ringing.
+                s.voice.retain(|_, p| p.channel_id != channel_id);
+                gone_group = Some(channel_id);
+            }
+            Event::CallDeclined { channel_id, by } => declined = Some((channel_id, by)),
             Event::KeyframeRequested { track } => forward = Some(CallEvent::KeyframeRequested(track)),
             Event::E2eeKey { from, epoch, nonce, ct } => forward = Some(CallEvent::Key { from, epoch, nonce, ct }),
             Event::SoundPlayed { session, channel_id, sound: s, name, emoji, volume } => {
@@ -567,6 +639,81 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
         if let Some(t) = dm_note {
             st.toast(t, false);
         }
+        let here = |st: &AppState, c: ChannelId| st.call.as_ref().is_some_and(|x| x.server_key == key && x.channel_id == c);
+        let this = |c: &IncomingCall, cid: ChannelId| c.server_key == key && c.channel_id == cid;
+        if let Some(cid) = gone_group {
+            st.incoming_calls.retain(|c| !this(c, cid));
+            if st.outgoing_call.as_ref().is_some_and(|o| o.server_key == key && o.channel_id == cid) {
+                st.outgoing_call = None;
+            }
+            leave_call = here(&st, cid);
+        }
+        if let Some((cid, from, video, moved_from)) = ringing {
+            match moved_from.filter(|m| here(&st, *m)) {
+                // The call we're in moved here (people were added to it): come along.
+                Some(_) => follow = Some(cid),
+                // (Not a call we're in already.)
+                None if !here(&st, cid) => {
+                    st.incoming_calls.retain(|c| !this(c, cid));
+                    st.incoming_calls.push(IncomingCall { server_key: key.to_string(), channel_id: cid, from, video, since: Instant::now() });
+                    ring = true;
+                }
+                None => {}
+            }
+        }
+        if let Some((cid, by)) = declined {
+            if by == my_uid {
+                // Declined here or on another of my devices: it stops ringing everywhere.
+                st.incoming_calls.retain(|c| !this(c, cid));
+            } else if let Some(o) = st.outgoing_call.as_mut().filter(|o| o.server_key == key && o.channel_id == cid) {
+                if o.to.contains(&by) && !o.declined.contains(&by) {
+                    o.declined.push(by);
+                }
+                // Everyone said no.
+                if o.to.iter().all(|t| o.declined.contains(t)) {
+                    o.state = RingState::Declined;
+                }
+            }
+        }
+        if let Some((cid, who, came)) = dm_voice {
+            if came && who == my_uid {
+                // Answered (here, or on another of my devices).
+                st.incoming_calls.retain(|c| !this(c, cid));
+            }
+            // Someone answered: they're in. In a group, the others keep ringing (until they
+            // answer, say no, or it rings out); once nobody's left ringing, it's settled.
+            let answered = match st.outgoing_call.as_mut().filter(|o| came && o.server_key == key && o.channel_id == cid && o.to.contains(&who)) {
+                Some(o) => {
+                    o.to.retain(|t| *t != who);
+                    o.declined.retain(|t| *t != who);
+                    if !o.to.is_empty() && o.to.iter().all(|t| o.declined.contains(t)) {
+                        o.state = RingState::Declined;
+                    }
+                    o.to.is_empty()
+                }
+                None => false,
+            };
+            if answered {
+                st.outgoing_call = None;
+            }
+            if !came {
+                // They hung up before it was answered: a missed call.
+                if let Some(i) = st.incoming_calls.iter().position(|c| this(c, cid) && c.from == who) {
+                    st.incoming_calls.remove(i);
+                    let name = st.server(key).map(|s| s.member_name(&who)).unwrap_or_default();
+                    st.missed_call(key, cid, &name);
+                }
+            }
+        }
+    }
+    if ring {
+        crate::ring::ensure(shared);
+    }
+    if leave_call {
+        crate::leave_voice_on(shared);
+    }
+    if let Some(cid) = follow {
+        crate::join_voice_on(shared, key, cid, crate::AfterJoin::default());
     }
     if let Some((cid, id, save)) = read_upto {
         shared.mark_read(key, cid, id, save);

@@ -35,11 +35,11 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
 use windows::Win32::UI::Shell::{
     ITaskbarList3, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION,
-    NIN_SELECT, NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW, TaskbarList,
+    NIN_BALLOONUSERCLICK, NIN_SELECT, NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW, TaskbarList,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu,
-    DestroyWindow, FindWindowW, GetCursorPos, GetForegroundWindow, GetIconInfo, GetSystemMetrics, GetWindowThreadProcessId, HICON, ICONINFO,
+    DestroyWindow, FLASHW_ALL, FLASHW_TIMERNOFG, FLASHWINFO, FindWindowW, FlashWindowEx, GetCursorPos, GetForegroundWindow, GetIconInfo, GetSystemMetrics, GetWindowThreadProcessId, HICON, ICONINFO,
     IMAGE_ICON, IsIconic, IsWindowVisible, LR_DEFAULTCOLOR,
     LoadImageW, MENU_ITEM_FLAGS, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, PostMessageW, RegisterClassW,
     RegisterWindowMessageW, SM_CXSMICON, SM_CYSMICON, SM_MENUDROPALIGNMENT, SW_HIDE, SW_RESTORE, SW_SHOW, SetForegroundWindow,
@@ -63,6 +63,9 @@ const WM_INGLE_HIDE: u32 = WM_APP + 4;
 const WM_INGLE_UNREAD: u32 = WM_APP + 5;
 /// A check for updates asked for from the icon's menu finished: say what it found.
 const WM_INGLE_UPDATE: u32 = WM_APP + 6;
+/// Someone's calling (or a call was missed) while Ingle isn't in front: say so (see
+/// `watch_unread`).
+const WM_INGLE_CALL: u32 = WM_APP + 7;
 /// Enter or Space on the icon (NIN_SELECT | NINF_KEY).
 const NIN_KEYSELECT: u32 = NIN_SELECT | 1;
 const ICON_ID: u32 = 1;
@@ -103,6 +106,9 @@ thread_local! {
 static TRAY: AtomicIsize = AtomicIsize::new(0);
 /// What's unread, as the watcher last saw it.
 static UNREAD: std::sync::Mutex<Option<crate::unread::Unread>> = std::sync::Mutex::new(None);
+/// A call to tell about with a Windows notice: (title, text), and whether to flash the taskbar
+/// button too (someone's calling).
+static CALL_NOTE: std::sync::Mutex<Option<(String, String, bool)>> = std::sync::Mutex::new(None);
 
 /// The icon is showing, so hiding the window is safe: there's a way back.
 static SHOWN: AtomicBool = AtomicBool::new(false);
@@ -126,8 +132,13 @@ pub fn window_in_front() -> Option<bool> {
         return None;
     }
     let main = HWND(h as *mut core::ffi::c_void);
-    // Plain reads of window state: fine from any thread.
-    unsafe { Some(GetForegroundWindow() == main && IsWindowVisible(main).as_bool() && !IsIconic(main).as_bool()) }
+    // Plain reads of window state: fine from any thread. A program open inside Ingle that has
+    // the keyboard counts as Ingle.
+    unsafe {
+        let front = GetForegroundWindow();
+        let ours = front == main || crate::plugins::programs::is_embedded(front.0 as isize);
+        Some(ours && IsWindowVisible(main).as_bool() && !IsIconic(main).as_bool())
+    }
 }
 
 /// Reads the state without holding a borrow across Win32 calls (those can dispatch messages
@@ -247,11 +258,40 @@ fn watch_unread(engine: Arc<Engine>) {
         let mut last: Option<crate::unread::Unread> = None;
         let mut visible = false;
         let mut again = 0u8;
+        // Calls ringing that were told about already, and how many were missed by then.
+        let mut rang: Vec<(String, i64, std::time::Instant)> = Vec::new();
+        let mut missed_told = engine.state().missed_calls;
         loop {
             std::thread::sleep(Duration::from_millis(700));
             let tray = TRAY.load(Ordering::Relaxed);
             if tray == 0 {
                 continue;
+            }
+            // Someone calling, or a call missed, while Ingle's window isn't in front (it rings
+            // all the same: see the engine's `ring`): a Windows notice, and the taskbar button
+            // flashes for a call.
+            let note = {
+                let st = engine.state();
+                let mut note = None;
+                for c in &st.incoming_calls {
+                    if !rang.iter().any(|r| r.0 == c.server_key && r.1 == c.channel_id && r.2 == c.since) {
+                        let who = st.server(&c.server_key).map(|s| s.member_name(&c.from)).unwrap_or_default();
+                        let what = if c.video { "A video call. Open Ingle to answer." } else { "Open Ingle to answer." };
+                        note = Some((format!("{who} is calling you"), what.to_string(), true));
+                    }
+                }
+                rang = st.incoming_calls.iter().map(|c| (c.server_key.clone(), c.channel_id, c.since)).collect();
+                if st.missed_calls > missed_told {
+                    missed_told = st.missed_calls;
+                    note = note.or_else(|| Some((format!("Missed call from {}", st.last_missed_from), "They called while you were away.".to_string(), false)));
+                }
+                note
+            };
+            if note.is_some() && window_in_front() != Some(true) {
+                *CALL_NOTE.lock().unwrap_or_else(|e| e.into_inner()) = note;
+                unsafe {
+                    let _ = PostMessageW(Some(HWND(tray as *mut core::ffi::c_void)), WM_INGLE_CALL, WPARAM(0), LPARAM(0));
+                }
             }
             let now = crate::unread::Unread::of(&engine.state());
             let shown = main_window().is_some_and(|h| unsafe { IsWindowVisible(h).as_bool() });
@@ -483,6 +523,7 @@ pub fn quit() -> ! {
 /// Take the icon away before the process exits by itself (an update quitting the app).
 pub fn prepare_exit() {
     remove_icon();
+    crate::plugins::programs::close_all_now();
 }
 
 /// Hide the window to the tray, once the current frame is done.
@@ -499,6 +540,8 @@ fn hide_main_now() {
         unsafe {
             let _ = ShowWindow(main, SW_HIDE);
         }
+        // Programs open inside Ingle hide with it.
+        crate::plugins::programs::hide_all();
     }
 }
 
@@ -539,6 +582,8 @@ fn quit_now(from: &str) -> ! {
         unsafe {
             let _ = ShowWindow(main, SW_HIDE);
         }
+        // Programs open inside Ingle close with it.
+        crate::plugins::programs::close_all_now();
         // Leave voice, save settings and read markers, close server connections.
         engine.shutdown();
         // A moment for those goodbyes to go out before the process ends.
@@ -567,9 +612,11 @@ fn show_menu(tray: HWND, x: i32, y: i32) {
     let leave = {
         let st = engine.state();
         st.call.as_ref().map(|c| {
-            match st.server(&c.server_key).and_then(|s| s.channel(c.channel_id)) {
-                Some(ch) => format!("Leave voice ({})", ch.name),
-                None => "Leave voice".to_string(),
+            let place = st.call_place(&c.server_key, c.channel_id);
+            match (place.is_empty(), st.is_dm_call(&c.server_key, c.channel_id)) {
+                (true, _) => "Leave voice".to_string(),
+                (false, true) => format!("Hang up ({place})"),
+                (false, false) => format!("Leave voice ({place})"),
             }
         })
     };
@@ -610,8 +657,8 @@ fn show_menu(tray: HWND, x: i32, y: i32) {
         CMD_DEAFEN => engine.set_deafen(!deafened),
         CMD_LEAVE => engine.leave_voice(),
         CMD_QUIT => quit_now("tray icon"),
-        // Download it, with the window open so its green button shows how it's going (and the
-        // window's frames install it once it's here).
+        // Download it, with the window open so its Update button (in the title strip) shows how
+        // it's going (and the window's frames install it once it's here).
         CMD_UPDATE => {
             if let Status::Available(m) = updater.status() {
                 updater.download(m);
@@ -634,6 +681,19 @@ fn show_menu(tray: HWND, x: i32, y: i32) {
     }
 }
 
+/// Tells about a call with a Windows notice (and flashes the taskbar button while someone's
+/// calling, until Ingle is brought to the front).
+fn tell_call() {
+    let Some((title, text, flash)) = CALL_NOTE.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+    notify(&title, &text);
+    if let (true, Some(main)) = (flash, main_window()) {
+        let info = FLASHWINFO { cbSize: std::mem::size_of::<FLASHWINFO>() as u32, hwnd: main, dwFlags: FLASHW_ALL | FLASHW_TIMERNOFG, uCount: 0, dwTimeout: 0 };
+        unsafe {
+            let _ = FlashWindowEx(&info);
+        }
+    }
+}
+
 /// Says what a check for updates asked for from the menu found, with a Windows notice (the
 /// window may well be hidden).
 fn tell_update_answers() {
@@ -646,7 +706,7 @@ fn tell_update_answers() {
             }
             Checked::Found(v) => notify(
                 &format!("Ingle {v} is out"),
-                &format!("Right-click the Ingle icon by the clock and choose Update Ingle to {v}, or click the green arrow in Ingle."),
+                &format!("Click Update at the top of Ingle's window, or right-click the Ingle icon by the clock and choose Update Ingle to {v}."),
             ),
             Checked::Failed(e) => notify("Couldn't check for updates", &e),
         }
@@ -657,7 +717,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     match msg {
         WM_TRAY => {
             match (lparam.0 as u32) & 0xffff {
-                NIN_SELECT | NIN_KEYSELECT => show_main(),
+                // The icon, or one of its notices (someone calling, say), clicked.
+                NIN_SELECT | NIN_KEYSELECT | NIN_BALLOONUSERCLICK => show_main(),
                 WM_CONTEXTMENU => {
                     let x = (wparam.0 & 0xffff) as u16 as i16 as i32;
                     let y = ((wparam.0 >> 16) & 0xffff) as u16 as i16 as i32;
@@ -681,6 +742,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_INGLE_UPDATE => {
             tell_update_answers();
+            LRESULT(0)
+        }
+        WM_INGLE_CALL => {
+            tell_call();
             LRESULT(0)
         }
         WM_INGLE_QUIT => quit_now("asked to by another launch, like the installer"),

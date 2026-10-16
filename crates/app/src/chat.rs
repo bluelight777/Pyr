@@ -106,13 +106,20 @@ impl IngleApp {
         in_call_panel: bool,
         acts: &mut Vec<Act>,
     ) {
-        // A direct message shows like a text channel named after the other person.
+        // A direct message shows like a text channel named after the other person; a group,
+        // after itself.
         let dm_with = s.dm(channel).map(|d| d.with.clone());
+        let group = s.group(channel).cloned();
         let ch = s.channel(channel).cloned().or_else(|| {
-            dm_with.as_ref().map(|w| ingle_proto::control::Channel {
+            let name = match (&dm_with, &group) {
+                (Some(w), _) => format!("@{}", s.member_name(w)),
+                (None, Some(g)) => s.group_name(g, &st.my_uid),
+                _ => return None,
+            };
+            Some(ingle_proto::control::Channel {
                 id: channel,
                 kind: ChannelKind::Text,
-                name: format!("@{}", s.member_name(w)),
+                name,
                 topic: String::new(),
                 position: 0,
                 last_message: None,
@@ -141,7 +148,7 @@ impl IngleApp {
             acts.push(Act::SetActive { key: key.clone(), channel });
             self.ui.active_view = Some(here);
         }
-        if !in_call_panel && dm_with.is_none() {
+        if !in_call_panel && dm_with.is_none() && group.is_none() {
             self.ui.channel.insert(key.clone(), channel);
         }
 
@@ -152,7 +159,14 @@ impl IngleApp {
             .frame(egui::Frame::new().fill(theme::MAIN).inner_margin(egui::Margin::symmetric(16, 0)))
             .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
-                    if let Some(w) = &dm_with {
+                    if let Some(g) = &group {
+                        let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
+                        let p = ui.painter().clone();
+                        crate::calls::group_picture(self, &p, ui.ctx(), s, g, &st.my_uid, r.center(), 13.0, theme::MAIN);
+                        let w = (ui.available_width() - 200.0).max(80.0);
+                        crate::emoji::label_line(ui, &ch.name, theme::bold_font(15.5), theme::TEXT, w, &mut |_| None);
+                        ui.label(RichText::new(format!("{} members", g.members.len())).size(12.5).color(theme::DIM));
+                    } else if let Some(w) = &dm_with {
                         let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
                         let face = self.face(ui.ctx(), s, w);
                         avatar(ui.painter(), r.center(), 12.0, w, &s.member_name(w), false, theme::MAIN, face);
@@ -179,10 +193,37 @@ impl IngleApp {
                             if icon_button(ui, 28.0, "Close chat", false, |p, r, c| icons::close(p, r, c)).clicked() {
                                 self.ui.call_chat_open = false;
                             }
-                        } else if dm_with.is_none() {
+                        } else if dm_with.is_none() && group.is_none() {
                             let open = self.ui.members_open;
                             if icon_button(ui, 30.0, if open { "Hide member list" } else { "Show member list" }, open, |p, r, c| icons::people(p, r, c)).clicked() {
                                 self.ui.members_open = !open;
+                            }
+                        } else {
+                            // A group's people (beside its chat), and adding people: to the group,
+                            // or to make one from this conversation (like Discord's).
+                            if group.is_some() {
+                                let open = self.ui.members_open;
+                                if icon_button(ui, 30.0, if open { "Hide members" } else { "Show members" }, open, |p, r, c| icons::people(p, r, c)).clicked() {
+                                    self.ui.members_open = !open;
+                                }
+                            }
+                            let can_add = crate::calls::can_group(s)
+                                && group.as_ref().map(|g| g.members.len() < ingle_proto::control::MAX_GROUP).unwrap_or(true)
+                                && dm_with.as_ref().is_none_or(|w| !st.blocked.contains(w));
+                            if can_add && icon_button(ui, 30.0, "Add people", false, |p, r, c| icons::add_person(p, r, c)).clicked() {
+                                self.ui.dialog = Some(crate::app::Dialog::AddPeople { key: s.key.clone(), channel: Some(channel), picked: Vec::new(), search: String::new() });
+                            }
+                            // Calls, like Discord's: voice, and video (not while you're in it).
+                            let blocked = dm_with.as_ref().is_some_and(|w| st.blocked.contains(w));
+                            let can_call = s.has(ingle_proto::control::DM_CALLS_FEATURE) && s.status.is_connected() && !blocked;
+                            let in_it = st.call.as_ref().is_some_and(|c| c.server_key == s.key && c.channel_id == channel);
+                            if can_call && !in_it {
+                                if icon_button(ui, 30.0, "Start a video call", false, |p, r, c| icons::camera(p, r, c, false)).clicked() {
+                                    acts.push(Act::CallDm { key: s.key.clone(), channel, video: true });
+                                }
+                                if icon_button(ui, 30.0, "Start a voice call", false, |p, r, c| icons::phone(p, r, c)).clicked() {
+                                    acts.push(Act::CallDm { key: s.key.clone(), channel, video: false });
+                                }
                             }
                         }
                     });
@@ -190,6 +231,20 @@ impl IngleApp {
                 let r = ui.max_rect();
                 ui.painter().line_segment([pos2(r.left() - 16.0, r.bottom()), pos2(r.right() + 16.0, r.bottom())], Stroke::new(1.0f32, theme::SHADOW_LINE));
             });
+
+        // Someone's in this conversation's call and you aren't: join it.
+        if (dm_with.is_some() || group.is_some()) && !in_call_panel {
+            self.dm_call_banner(ui, st, s, channel, acts);
+        }
+        // A group's people, down the right.
+        if let Some(g) = group.as_ref().filter(|_| self.ui.members_open && !in_call_panel) {
+            egui::SidePanel::right(ui.id().with("group-members"))
+                .exact_width(220.0)
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(egui::Frame::new().fill(theme::SIDE))
+                .show_inside(ui, |ui| self.group_members_panel(ui, st, s, g, acts));
+        }
 
         // Composer at the bottom
         egui::TopBottomPanel::bottom(ui.id().with("composer"))
@@ -263,9 +318,10 @@ impl IngleApp {
                     self.ui.load_rect = Some(if memo.is_some() { clip.expand2(vec2(0.0, clip.height())) } else { Rect::NOTHING });
                     ui.add_space(8.0);
                     if log.complete || log.messages.is_empty() && log.loaded {
-                        match &dm_with {
-                            Some(w) => self.dm_intro(ui, s, w),
-                            None => self.channel_intro(ui, &ch),
+                        match (&dm_with, &group) {
+                            (Some(w), _) => self.dm_intro(ui, s, w),
+                            (None, Some(g)) => self.group_intro(ui, st, s, g),
+                            _ => self.channel_intro(ui, &ch),
                         }
                     } else if log.loading {
                         ui.vertical_centered(|ui| ui.label(RichText::new("Loading older messages…").color(theme::DIM)));
@@ -419,7 +475,7 @@ impl IngleApp {
         let key = s.key.clone();
         let mine = m.author == st.my_uid;
         // Moderators can't delete other people's direct messages.
-        let admin = s.can(perm::MANAGE_MESSAGES) && s.dm(m.channel_id).is_none();
+        let admin = s.can(perm::MANAGE_MESSAGES) && !s.is_private(m.channel_id);
         if !m.content.is_empty() && ui.button("Copy text").clicked() {
             ui.ctx().copy_text(m.content.clone());
             ui.close();
@@ -457,7 +513,30 @@ impl IngleApp {
         }
     }
 
-    /// The top of a direct message conversation: their picture and name.
+    /// The top of a group's conversation: its picture and name.
+    fn group_intro(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, g: &ingle_proto::control::Group) {
+        let name = s.group_name(g, &st.my_uid);
+        ui.add_space(20.0);
+        ui.horizontal(|ui| {
+            ui.add_space(16.0);
+            ui.vertical(|ui| {
+                let (r, _) = ui.allocate_exact_size(vec2(80.0, 80.0), Sense::hover());
+                let p = ui.painter().clone();
+                crate::calls::group_picture(self, &p, ui.ctx(), s, g, &st.my_uid, r.center(), 40.0, theme::MAIN);
+                ui.add_space(8.0);
+                crate::emoji::label(ui, &name, theme::bold_font(26.0), theme::TEXT, None, &mut |_| None);
+                ui.label(
+                    RichText::new(format!(
+                        "Welcome to the beginning of this group. Only the {} people in it can see it (and the server it's on: it isn't end-to-end encrypted yet).",
+                        g.members.len()
+                    ))
+                    .color(theme::MUTED),
+                );
+            });
+        });
+        ui.add_space(12.0);
+    }
+
     fn dm_intro(&mut self, ui: &mut egui::Ui, s: &ServerView, with: &str) {
         let name = s.member_name(with);
         ui.add_space(20.0);
@@ -680,7 +759,7 @@ impl IngleApp {
         // Hover tools
         if hovered && self.ui.editing.as_ref().map(|(id, _)| *id != m.id).unwrap_or(true) {
             // Moderators can't delete other people's direct messages.
-            let admin = s.can(perm::MANAGE_MESSAGES) && s.dm(m.channel_id).is_none();
+            let admin = s.can(perm::MANAGE_MESSAGES) && !s.is_private(m.channel_id);
             let n = 2 + mine as usize + (mine || admin) as usize;
             let w = n as f32 * 30.0 + 8.0;
             let tools = Rect::from_min_size(pos2(rect.right() - w - 16.0, rect.top() - 10.0), vec2(w, 32.0));
@@ -1010,12 +1089,16 @@ impl IngleApp {
                 }
             }
             ui.horizontal(|ui| {
+                // (The hint is plain text, which can't show emoji: they're left out of the name.)
+                let name = crate::emoji::without_emoji(&ch.name);
                 let hint = if !connected {
                     "Reconnecting…".to_string()
-                } else if ch.kind == ChannelKind::Voice || ch.name.starts_with('@') {
-                    format!("Message {}", ch.name)
+                } else if name.is_empty() {
+                    "Send a message".to_string()
+                } else if ch.kind == ChannelKind::Voice || ch.name.starts_with('@') || s.group(ch.id).is_some() {
+                    format!("Message {name}")
                 } else {
-                    format!("Message #{}", ch.name)
+                    format!("Message #{name}")
                 };
                 if files_ok
                     && icon_button(ui, 30.0, "Attach images (or paste or drop them here)", false, |p, r, c| icons::plus(p, r, c, 2.0)).clicked()
@@ -1495,9 +1578,10 @@ impl IngleApp {
             return;
         };
         let mine = m.author == st.my_uid;
-        let place = match s.dm(channel) {
-            Some(_) => "this conversation".to_string(),
-            None => s.channel(channel).map(|c| format!("#{}", c.name)).unwrap_or_else(|| "the channel".into()),
+        let place = if s.is_private(channel) {
+            "this conversation".to_string()
+        } else {
+            s.channel(channel).map(|c| format!("#{}", c.name)).unwrap_or_else(|| "the channel".into())
         };
         crate::dialogs::title(ui, "Delete message");
         let ask = if mine {

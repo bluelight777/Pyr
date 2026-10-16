@@ -40,7 +40,10 @@ fn toast(e: &Engine, s: &str) -> bool {
 async fn report(e: &Engine, title: &str, body: &str, include_log: bool, turn_on: Option<&str>) -> BugSend {
     let before = e.state().bug_sends_done;
     e.report_bug(title, body, include_log, turn_on);
-    assert_eq!(e.state().bug_send, BugSend::Sending);
+    // Sending, until the answer (which, from a server on this machine, can be back already).
+    let st = e.state();
+    assert!(st.bug_send == BugSend::Sending || st.bug_sends_done > before, "{:?}", st.bug_send);
+    drop(st);
     wait_for("the report's answer", 15, || e.state().bug_sends_done > before).await;
     e.state().bug_send.clone()
 }

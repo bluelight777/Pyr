@@ -1,5 +1,5 @@
 //! Notification sounds: new messages, people joining and leaving voice, screen shares
-//! starting and stopping, and tuning in to one. The sounds are made here (short chimes), not
+//! starting and stopping, tuning in to one, and calls ringing. The sounds are made here (short chimes), not
 //! loaded from files, and play on the chosen speakers on their own little stream, so they
 //! work in and out of calls.
 
@@ -17,6 +17,10 @@ pub enum Sound {
     StreamStop,
     WatchStart,
     WatchStop,
+    /// Someone's calling you (played every couple of seconds while it rings).
+    Ring,
+    /// You're calling someone and it's ringing at their end.
+    Ringback,
 }
 
 /// What to play: one of the chimes, or 48 kHz stereo (a soundboard sound heard only here).
@@ -81,6 +85,15 @@ fn notes(s: Sound) -> &'static [(f32, f32, f32, f32)] {
         // Short blips for tuning in and out of someone's stream.
         Sound::WatchStart => &[(1046.5, 0.0, 90.0, 0.4), (1568.0, 60.0, 180.0, 0.4)],
         Sound::WatchStop => &[(1568.0, 0.0, 90.0, 0.4), (1046.5, 60.0, 180.0, 0.4)],
+        // A bright "ring-ring": two quick rising pairs.
+        Sound::Ring => &[
+            (784.0, 0.0, 120.0, 0.55),
+            (1046.5, 95.0, 140.0, 0.55),
+            (784.0, 260.0, 120.0, 0.55),
+            (1046.5, 355.0, 240.0, 0.55),
+        ],
+        // Softer and lower, for waiting on the other end.
+        Sound::Ringback => &[(523.3, 0.0, 260.0, 0.32), (659.3, 170.0, 420.0, 0.3)],
     }
 }
 
@@ -185,7 +198,17 @@ mod tests {
 
     #[test]
     fn sounds_are_short_and_not_too_loud() {
-        for s in [Sound::Message, Sound::Join, Sound::Leave, Sound::StreamStart, Sound::StreamStop, Sound::WatchStart, Sound::WatchStop] {
+        for s in [
+            Sound::Message,
+            Sound::Join,
+            Sound::Leave,
+            Sound::StreamStart,
+            Sound::StreamStop,
+            Sound::WatchStart,
+            Sound::WatchStop,
+            Sound::Ring,
+            Sound::Ringback,
+        ] {
             let v = render(s);
             let peak = v.iter().fold(0.0f32, |a, x| a.max(x.abs()));
             assert!(v.len() > 4800 && v.len() < 48_000, "{s:?} {}", v.len());

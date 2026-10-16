@@ -2,6 +2,7 @@
 //!
 //! - `library`: the signed list, fetched from firelitgames.com.
 //! - `install`: downloading, checking, installing, opening and removing.
+//! - `programs`: programs running inside Ingle's window.
 //! - `addon`: running add-ons (WebAssembly, sandboxed) and talking to them.
 //! - `source`: gathering a plugin's source to send in, and starting a new add-on.
 //! - `ui`: the Plugins page, add-on panels and the owner's review list.
@@ -9,6 +10,7 @@
 pub mod addon;
 pub mod install;
 pub mod library;
+pub mod programs;
 pub mod source;
 pub mod ui;
 
@@ -106,6 +108,10 @@ pub struct Plugins {
     pub confirm_remove: Option<String>,
     /// The name for a new add-on ("Start an add-on").
     pub new_name: String,
+    /// Programs running (inside Ingle, on Windows).
+    pub programs: programs::Programs,
+    /// The program whose page is showing (instead of the Plugins page).
+    pub program_page: Option<String>,
 }
 
 impl Plugins {
@@ -133,6 +139,8 @@ impl Plugins {
             form: None,
             confirm_remove: None,
             new_name: String::new(),
+            programs: Default::default(),
+            program_page: None,
             dir,
         };
         p.start_installed_addons();
@@ -239,6 +247,9 @@ impl Plugins {
     }
 
     pub fn uninstall(&mut self, id: &str) -> Result<(), String> {
+        if let Some(p) = self.programs.get(id) {
+            return Err(format!("{} is open: close it first.", p.name));
+        }
         self.addons.remove(id);
         self.panels.retain(|p| p.id != id);
         install::uninstall(&self.dir, id)?;
@@ -246,12 +257,13 @@ impl Plugins {
         self.installed.save(&self.dir)
     }
 
-    pub fn open_program(&self, id: &str) -> Result<(), String> {
-        let p = self.installed.get(id).ok_or("it isn't installed")?;
+    /// Opens a program (inside Ingle on Windows), or finds it open already.
+    pub fn open_program(&mut self, id: &str) -> Result<(), String> {
+        let p = self.installed.get(id).ok_or("it isn't installed")?.clone();
         if self.listed(id) == Some(false) {
             return Err(format!("{} was taken out of the Ingle Library, so Ingle won't open it. Remove it.", p.name));
         }
-        install::launch(&self.dir, p)
+        self.programs.start(&self.dir, &p)
     }
 
     /// Switches an installed add-on on or off.

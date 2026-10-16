@@ -3,6 +3,7 @@
 
 mod app;
 mod autostart;
+mod calls;
 mod chat;
 mod create;
 mod dialogs;
@@ -46,6 +47,7 @@ mod tray {
 }
 mod unread;
 mod update;
+mod update_chip;
 mod watchdog;
 
 use std::sync::Arc;

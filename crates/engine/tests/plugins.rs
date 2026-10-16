@@ -57,7 +57,10 @@ fn plugin(name: &str) -> PluginSubmission {
 async fn send(e: &Engine, p: PluginSubmission, turn_on: Option<&str>) -> BugSend {
     let before = e.state().plugin_sends_done;
     e.submit_plugin(p, turn_on);
-    assert_eq!(e.state().plugin_send, BugSend::Sending);
+    // Sending, until the answer (which, from a server on this machine, can be back already).
+    let st = e.state();
+    assert!(st.plugin_send == BugSend::Sending || st.plugin_sends_done > before, "{:?}", st.plugin_send);
+    drop(st);
     wait_for("the answer", 15, || e.state().plugin_sends_done > before).await;
     e.state().plugin_send.clone()
 }

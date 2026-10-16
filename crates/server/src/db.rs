@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use ingle_proto::control::{CustomEmoji, Relation, RelationKind, ServerSound,
-    Attachment, Channel, ChannelId, ChannelKind, Dm, FileKind, Member, Message, MessageId, Reaction, Role, RoleDef, RoleId, UserId,
+    Attachment, Channel, ChannelId, ChannelKind, Dm, FileKind, Group, Member, Message, MessageId, Reaction, Role, RoleDef, RoleId, UserId,
 };
 use ingle_proto::now_ms;
 use parking_lot::Mutex;
@@ -121,6 +121,18 @@ CREATE TABLE IF NOT EXISTS dms (
     UNIQUE (a, b)
 );
 CREATE INDEX IF NOT EXISTS dms_by_b ON dms(b);
+-- Group conversations: each a hidden row in `channels` (kind 3) with its members.
+CREATE TABLE IF NOT EXISTS groups (
+    channel_id INTEGER PRIMARY KEY,
+    owner TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS group_members (
+    channel_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
+    PRIMARY KEY (channel_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS group_members_by_user ON group_members(user_id);
 -- Friends and blocks, directed: kind 0 = a asked b to be friends, 1 = friends (a row each
 -- way), 2 = a blocked b.
 CREATE TABLE IF NOT EXISTS relations (
@@ -184,6 +196,8 @@ CREATE TABLE IF NOT EXISTS plugin_submissions (
 
 /// `channels.kind` of a direct message conversation (never listed as a channel).
 const DM_KIND: i64 = 2;
+/// `channels.kind` of a group conversation (never listed as a channel either).
+const GROUP_KIND: i64 = 3;
 
 fn file_kind_to_i(k: FileKind) -> i64 {
     match k {
@@ -1044,6 +1058,111 @@ impl Db {
         let id = c.last_insert_rowid();
         c.execute("INSERT INTO dms(channel_id, a, b) VALUES (?1, ?2, ?3)", params![id, a, b])?;
         Ok((id, true))
+    }
+
+    /// Who's in a private conversation: a direct message's two people, or a group's members.
+    pub fn private_members(&self, channel_id: ChannelId) -> Option<Vec<String>> {
+        if let Some((a, b)) = self.dm_members(channel_id) {
+            return Some(vec![a, b]);
+        }
+        self.group(channel_id).map(|g| g.members)
+    }
+
+    /// A group conversation (as anyone in it sees it).
+    pub fn group(&self, channel_id: ChannelId) -> Option<Group> {
+        let c = self.conn.lock();
+        let (owner, name): (String, String) = c
+            .query_row("SELECT owner, name FROM groups WHERE channel_id = ?1", [channel_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()
+            .ok()
+            .flatten()?;
+        let members: Vec<String> = c
+            .prepare("SELECT user_id FROM group_members WHERE channel_id = ?1 ORDER BY rowid")
+            .and_then(|mut st| st.query_map([channel_id], |r| r.get(0)).map(|rows| rows.flatten().collect()))
+            .unwrap_or_default();
+        let last: Option<(MessageId, String)> = c
+            .query_row("SELECT id, author FROM messages WHERE channel_id = ?1 ORDER BY id DESC LIMIT 1", [channel_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()
+            .ok()
+            .flatten();
+        Some(Group { id: channel_id, members, name, owner, last_message: last.as_ref().map(|l| l.0), last_from: last.map(|l| l.1) })
+    }
+
+    /// The group conversations someone's in.
+    pub fn groups_of(&self, uid: &str) -> Vec<Group> {
+        let ids: Vec<ChannelId> = {
+            let c = self.conn.lock();
+            c.prepare("SELECT channel_id FROM group_members WHERE user_id = ?1")
+                .and_then(|mut st| st.query_map([uid], |r| r.get(0)).map(|rows| rows.flatten().collect()))
+                .unwrap_or_default()
+        };
+        ids.into_iter().filter_map(|id| self.group(id)).collect()
+    }
+
+    /// How many groups someone started that are still going.
+    /// How many groups someone started and is still in.
+    pub fn groups_owned(&self, uid: &str) -> usize {
+        self.conn
+            .lock()
+            .query_row(
+                "SELECT COUNT(*) FROM groups g JOIN group_members m ON m.channel_id = g.channel_id AND m.user_id = g.owner WHERE g.owner = ?1",
+                [uid],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0) as usize
+    }
+
+    /// Starts a group conversation: `owner` and `others`.
+    pub fn create_group(&self, owner: &str, others: &[String]) -> Result<ChannelId> {
+        let c = self.conn.lock();
+        c.execute(
+            "INSERT INTO channels(kind, name, topic, position, created_at) VALUES (?1, '', '', 0, ?2)",
+            params![GROUP_KIND, now_ms()],
+        )?;
+        let id = c.last_insert_rowid();
+        c.execute("INSERT INTO groups(channel_id, owner, name) VALUES (?1, ?2, '')", params![id, owner])?;
+        for m in std::iter::once(owner).chain(others.iter().map(|s| s.as_str())) {
+            c.execute("INSERT OR IGNORE INTO group_members(channel_id, user_id) VALUES (?1, ?2)", params![id, m])?;
+        }
+        Ok(id)
+    }
+
+    pub fn add_group_members(&self, channel_id: ChannelId, uids: &[String]) -> Result<()> {
+        let c = self.conn.lock();
+        for u in uids {
+            c.execute("INSERT OR IGNORE INTO group_members(channel_id, user_id) VALUES (?1, ?2)", params![channel_id, u])?;
+        }
+        Ok(())
+    }
+
+    /// Takes someone out of a group. When nobody's left, the group and everything said in it
+    /// go: the ids of its files are returned (to wipe).
+    pub fn leave_group(&self, channel_id: ChannelId, uid: &str) -> Result<Vec<String>> {
+        let c = self.conn.lock();
+        c.execute("DELETE FROM group_members WHERE channel_id = ?1 AND user_id = ?2", params![channel_id, uid])?;
+        let left: i64 = c.query_row("SELECT COUNT(*) FROM group_members WHERE channel_id = ?1", [channel_id], |r| r.get(0))?;
+        if left > 0 {
+            // The one who started it left: it passes to whoever's been in it longest.
+            c.execute(
+                "UPDATE groups SET owner = (SELECT user_id FROM group_members WHERE channel_id = ?1 ORDER BY rowid LIMIT 1)
+                 WHERE channel_id = ?1 AND owner = ?2",
+                params![channel_id, uid],
+            )?;
+            return Ok(Vec::new());
+        }
+        c.execute("DELETE FROM groups WHERE channel_id = ?1", [channel_id])?;
+        c.execute("DELETE FROM channels WHERE id = ?1 AND kind = ?2", params![channel_id, GROUP_KIND])?;
+        c.execute("DELETE FROM reactions WHERE message_id IN (SELECT id FROM messages WHERE channel_id = ?1)", [channel_id])?;
+        let files = Self::file_ids_where(&c, "message_id IN (SELECT id FROM messages WHERE channel_id = ?1)", channel_id);
+        c.execute("DELETE FROM files WHERE message_id IN (SELECT id FROM messages WHERE channel_id = ?1)", [channel_id])?;
+        c.execute("DELETE FROM messages WHERE channel_id = ?1", [channel_id])?;
+        scrub(&c);
+        Ok(files)
+    }
+
+    pub fn rename_group(&self, channel_id: ChannelId, name: &str) -> Result<()> {
+        self.conn.lock().execute("UPDATE groups SET name = ?2 WHERE channel_id = ?1", params![channel_id, name])?;
+        Ok(())
     }
 
     /// Someone's conversations, as they see them.

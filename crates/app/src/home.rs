@@ -54,7 +54,7 @@ fn dm_server(st: &AppState, uid: &str) -> Option<String> {
 impl IngleApp {
     pub(crate) fn home_ui(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
         // The open conversation might be gone (left the server).
-        let open = self.ui.dm.clone().and_then(|(k, id)| st.server(&k).filter(|s| s.dm(id).is_some()).map(|s| (s.clone(), id)));
+        let open = self.ui.dm.clone().and_then(|(k, id)| st.server(&k).filter(|s| s.is_private(id)).map(|s| (s.clone(), id)));
         if open.is_none() {
             self.ui.dm = None;
         }
@@ -65,6 +65,17 @@ impl IngleApp {
             .frame(egui::Frame::new().fill(theme::SIDE))
             .show(ctx, |ui| self.home_sidebar(ui, st, acts));
         egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::MAIN)).show(ctx, |ui| match open {
+            // In this conversation's call: the call on top (like Discord's), the chat under it.
+            Some((server, id)) if st.call.as_ref().is_some_and(|c| c.server_key == server.key && c.channel_id == id) => {
+                let full = ui.max_rect();
+                let h = (full.height() * 0.55).clamp(300.0_f32.min(full.height() - 160.0), (full.height() - 240.0).max(300.0));
+                let top = Rect::from_min_size(full.min, vec2(full.width(), h));
+                let mut call_ui = ui.new_child(egui::UiBuilder::new().max_rect(top).id_salt("dm-call"));
+                self.stage(&mut call_ui, ctx, st, &server, acts);
+                let rest = Rect::from_min_max(pos2(full.left(), top.bottom()), full.max);
+                let mut chat_ui = ui.new_child(egui::UiBuilder::new().max_rect(rest).id_salt("dm-chat"));
+                self.chat_view(&mut chat_ui, st, &server, id, false, acts);
+            }
             Some((server, id)) => self.chat_view(ui, st, &server, id, false, acts),
             None => self.friends_page(ui, st, acts),
         });
@@ -122,21 +133,50 @@ impl IngleApp {
                 acts.push(Act::ClearActive);
             }
             ui.add_space(12.0);
+            // A server where groups can be made: the one with the conversation open, else the
+            // first that can.
+            let group_server = self
+                .ui
+                .dm
+                .as_ref()
+                .and_then(|(k, _)| st.server(k))
+                .filter(|s| crate::calls::can_group(s))
+                .or_else(|| st.servers.iter().find(|s| crate::calls::can_group(s)))
+                .map(|s| s.key.clone());
             ui.horizontal(|ui| {
                 ui.add_space(16.0);
                 ui.label(RichText::new("DIRECT MESSAGES").font(theme::bold_font(11.5)).color(theme::DIM));
+                if let Some(key) = group_server {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.add_space(12.0);
+                        if crate::app::icon_button(ui, 20.0, "New group", false, |p, r, c| crate::icons::plus(p, r, c, 1.8)).clicked() {
+                            self.ui.dialog = Some(crate::app::Dialog::AddPeople { key, channel: None, picked: Vec::new(), search: String::new() });
+                        }
+                    });
+                }
             });
             ui.add_space(4.0);
-            let several = st.servers.iter().filter(|s| !s.dms.is_empty()).count() > 1;
+            let several = st.servers.iter().filter(|s| !s.dms.is_empty() || !s.groups.is_empty()).count() > 1;
             let mut any = false;
             for s in &st.servers {
-                for d in &s.dms {
-                    let selected = self.ui.dm.as_ref() == Some(&(s.key.clone(), d.id));
-                    if d.last_message.is_none() && !selected {
+                // Conversations and groups together, newest first.
+                let mut list: Vec<(Option<i64>, ChannelId, bool)> = s.dms.iter().map(|d| (d.last_message, d.id, false)).collect();
+                list.extend(s.groups.iter().map(|g| (g.last_message, g.id, true)));
+                list.sort_by_key(|x| std::cmp::Reverse((x.0, x.1)));
+                for (last, id, is_group) in list {
+                    let selected = self.ui.dm.as_ref() == Some(&(s.key.clone(), id));
+                    // (An empty conversation shows once it's open; a new group always does.)
+                    if last.is_none() && !selected && !is_group {
                         continue;
                     }
                     any = true;
-                    self.dm_row(ui, st, s, d.id, &d.with, selected, several, acts);
+                    if is_group {
+                        if let Some(g) = s.group(id).cloned() {
+                            self.group_row(ui, st, s, &g, selected, several, acts);
+                        }
+                    } else if let Some(with) = s.dm(id).map(|d| d.with.clone()) {
+                        self.dm_row(ui, st, s, id, &with, selected, several, acts);
+                    }
                 }
             }
             if !any {
@@ -186,12 +226,18 @@ impl IngleApp {
             ui.painter().circle_filled(b, 8.5, theme::LIVE);
             ui.painter().text(b, egui::Align2::CENTER_CENTER, unread.min(99).to_string(), theme::bold_font(10.5), Color32::WHITE);
         }
+        // A call going on in it: a green phone (left of the unread count).
+        if !s.voice_in(id).is_empty() {
+            let x = if unread > 0 { r.right() - 40.0 } else { r.right() - 16.0 };
+            crate::icons::phone(ui.painter(), Rect::from_center_size(pos2(x, r.center().y), vec2(15.0, 15.0)), theme::ONLINE);
+        }
         if resp.clicked() {
             self.ui.dm = Some((s.key.clone(), id));
         }
         let muted = st.is_muted(&s.key, id);
         let key = s.key.clone();
         resp.context_menu(|ui| {
+            crate::calls::call_item(ui, st, with, Some(&key), acts);
             if ui.button(if muted { "Unmute conversation" } else { "Mute conversation" }).clicked() {
                 acts.push(Act::MuteChat { key: key.clone(), channel: Some(id), muted: !muted });
                 ui.close();
@@ -339,7 +385,10 @@ impl IngleApp {
                     let target = dm_server(st, &uid);
                     self.person_row(ui, st, f, sub, acts, |ui, acts| match kind {
                         RelationKind::Friend => {
-                            ui.menu_button("More", |ui| crate::app::person_menu(ui, st, &uid, acts));
+                            ui.menu_button("More", |ui| {
+                                crate::calls::call_item(ui, st, &uid, None, acts);
+                                crate::app::person_menu(ui, st, &uid, acts)
+                            });
                             ui.add_enabled_ui(target.is_some(), |ui| {
                                 if ui.add(theme::primary_button("Message")).clicked() {
                                     if let Some(key) = &target {
@@ -401,6 +450,9 @@ impl IngleApp {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(br).layout(Layout::right_to_left(Align::Center)));
         buttons(&mut child, acts);
         let uid = f.uid.clone();
-        resp.context_menu(|ui| crate::app::person_menu(ui, st, &uid, acts));
+        resp.context_menu(|ui| {
+            crate::calls::call_item(ui, st, &uid, None, acts);
+            crate::app::person_menu(ui, st, &uid, acts)
+        });
     }
 }

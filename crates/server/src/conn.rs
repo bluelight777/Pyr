@@ -27,6 +27,9 @@ const REQ_BURST: f64 = 80.0;
 /// Soundboard: a few sounds in a row, then one every couple of seconds.
 const SOUND_RATE: f64 = 0.5;
 const SOUND_BURST: f64 = 4.0;
+/// Ringing someone (and declining): a few in a row, then one every 5 seconds.
+const RING_RATE: f64 = 0.2;
+const RING_BURST: f64 = 4.0;
 /// History pages are kept well under the frame limit (long messages add up).
 const HISTORY_PAGE_BYTES: usize = 700 * 1024;
 /// Video one person may send, in bytes per second and burst (Ingle's sharpest screen share
@@ -117,7 +120,7 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
         tokio::time::sleep(Duration::from_millis(300)).await;
         return Ok(());
     }
-    let Request::Login { proto, user_id, sig, name, invite, client } = login.req else {
+    let Request::Login { proto, user_id, sig, name, invite, client, caps } = login.req else {
         send.write_all(&reject(ErrorCode::BadRequest, "expected login")).await?;
         bail!("first request was not a login");
     };
@@ -165,7 +168,8 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
 
     let conn_id = hub.alloc_conn_id();
     let session_cell = Arc::new(AtomicU32::new(0));
-    if let Err((code, msg)) = hub.register(conn_id, &user_id, conn.clone(), tx.clone(), session_cell.clone(), login.id) {
+    let groups = caps.iter().any(|c| c == GROUPS_CAP);
+    if let Err((code, msg)) = hub.register(conn_id, &user_id, conn.clone(), tx.clone(), session_cell.clone(), login.id, groups) {
         tx.send(frame(login.id, Event::error(code, msg.clone())));
         drop(tx);
         let _ = timeout(Duration::from_secs(1), writer).await;
@@ -180,10 +184,12 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
         hub: &hub,
         conn_id,
         uid: user_id.clone(),
+        groups,
         msg_tokens: Bucket::new(1.5, 10.0),
         react_tokens: Bucket::new(3.0, 15.0),
         req_tokens: Bucket::new(REQ_RATE, REQ_BURST),
         sound_tokens: Bucket::new(SOUND_RATE, SOUND_BURST),
+        ring_tokens: Bucket::new(RING_RATE, RING_BURST),
     };
     let result = async {
         loop {
@@ -324,13 +330,13 @@ async fn file_stream(hub: &Hub, uid: &str, mut send: quinn::SendStream, mut recv
                 let _ = send.finish();
                 return Ok(());
             };
-            // A picture sent in a direct message is only for its two people. (If its message
-            // can't be found, nobody gets it: never fail open.)
+            // A picture sent in a direct message (or a group) is only for its people. (If its
+            // message can't be found, nobody gets it: never fail open.)
             let private = match row.message_id {
                 None => row.kind == FileKind::Attachment && row.owner != uid,
                 Some(m) => match hub.db.get_message(m) {
                     None => true,
-                    Some(msg) => hub.db.dm_members(msg.channel_id).map(|(a, b)| a != uid && b != uid).unwrap_or(false),
+                    Some(msg) => hub.db.private_members(msg.channel_id).is_some_and(|who| !who.iter().any(|w| w == uid)),
                 },
             };
             let bytes = if private { Vec::new() } else { tokio::fs::read(&path).await.unwrap_or_default() };
@@ -494,6 +500,8 @@ struct Ctx<'a> {
     hub: &'a Hub,
     conn_id: ConnId,
     uid: String,
+    /// The app knows group conversations (`GROUPS_CAP`).
+    groups: bool,
     /// Messages and edits.
     msg_tokens: Bucket,
     react_tokens: Bucket,
@@ -501,6 +509,8 @@ struct Ctx<'a> {
     req_tokens: Bucket,
     /// Soundboard sounds played.
     sound_tokens: Bucket,
+    /// Rings and declined calls (direct messages' calls).
+    ring_tokens: Bucket,
 }
 
 /// A token bucket: `rate` per second, holding at most `burst`.
@@ -548,6 +558,9 @@ fn cost(req: &Request) -> f64 {
         | Request::SetKlipyKey { .. }
         | Request::UpdateProfile { .. }
         | Request::UpdateServer { .. }
+        | Request::CreateGroup { .. }
+        | Request::AddToGroup { .. }
+        | Request::RenameGroup { .. }
         | Request::Block { .. } => 4.0,
         _ => 1.0,
     }
@@ -641,15 +654,72 @@ impl Ctx<'_> {
         self.role().is_admin() || (r.position as i64) < self.rank_of(&self.uid)
     }
 
-    /// A text channel, or a direct message I'm in.
+    /// A text channel, or a direct message or group I'm in.
     fn can_see(&self, channel_id: ChannelId) -> Result<(), (ErrorCode, String)> {
         let db = &self.hub.db;
         if db.channel(channel_id).is_some() {
             return Ok(());
         }
-        match db.dm_members(channel_id) {
-            Some((a, b)) if a == self.uid || b == self.uid => Ok(()),
-            _ => Err((ErrorCode::NotFound, "No such channel.".into())),
+        if let Some((a, b)) = db.dm_members(channel_id) {
+            if a == self.uid || b == self.uid {
+                return Ok(());
+            }
+        } else if let Some(g) = db.group(channel_id) {
+            if self.groups && g.members.contains(&self.uid) {
+                return Ok(());
+            }
+        }
+        Err((ErrorCode::NotFound, "No such channel.".into()))
+    }
+
+    /// The others in a private conversation I'm in (a direct message's other person, or a
+    /// group's other members), for its call. Not someone I've blocked or who blocked me (in a
+    /// direct message).
+    fn call_others(&self, channel_id: ChannelId) -> Result<Vec<UserId>, (ErrorCode, String)> {
+        let db = &self.hub.db;
+        if db.dm_members(channel_id).is_some() {
+            return self.dm_partner(channel_id).map(|o| vec![o]);
+        }
+        match db.group(channel_id) {
+            Some(g) if self.groups && g.members.contains(&self.uid) => Ok(g.members.into_iter().filter(|m| *m != self.uid).collect()),
+            _ => Err((ErrorCode::NotFound, "No such conversation.".into())),
+        }
+    }
+
+    /// Who may be put in a group by me: members here (not banned), not me, and not someone
+    /// either of us blocked.
+    fn group_candidates(&self, uids: &[UserId]) -> Result<Vec<UserId>, (ErrorCode, String)> {
+        let db = &self.hub.db;
+        let mut out: Vec<UserId> = Vec::new();
+        for u in uids {
+            valid_uid(u)?;
+            if *u == self.uid || out.contains(u) {
+                continue;
+            }
+            match db.get_user(u) {
+                Some(x) if !x.banned => {}
+                _ => return Err((ErrorCode::NotFound, "Someone you picked isn't a member of this server.".into())),
+            }
+            if db.blocked_between(&self.uid, u) {
+                return Err((ErrorCode::Forbidden, "You can't add someone you've blocked (or who blocked you).".into()));
+            }
+            out.push(u.clone());
+        }
+        Ok(out)
+    }
+
+    /// Tells everyone in a group how it is now (and who left, that they're out of it).
+    fn tell_group(&self, channel_id: ChannelId, left: Option<&str>) {
+        let hub = self.hub;
+        match hub.db.group(channel_id) {
+            Some(g) => {
+                hub.group_call_members(channel_id, &g.members, left);
+                hub.send_to_group_members(&g.members.clone(), Event::GroupUpserted { group: g });
+            }
+            None => hub.group_call_members(channel_id, &[], left),
+        }
+        if let Some(who) = left {
+            hub.send_to_group_members(&[who.to_string()], Event::GroupRemoved { channel_id });
         }
     }
 
@@ -658,6 +728,20 @@ impl Ctx<'_> {
             return Err((ErrorCode::RateLimited, "You're sending messages too fast.".into()));
         }
         Ok(())
+    }
+
+    /// The other person in a direct message I'm in, for its call: not blocked either way.
+    fn dm_partner(&self, channel_id: ChannelId) -> Result<UserId, (ErrorCode, String)> {
+        let db = &self.hub.db;
+        let other = match db.dm_members(channel_id) {
+            Some((a, b)) if a == self.uid => b,
+            Some((a, b)) if b == self.uid => a,
+            _ => return Err((ErrorCode::NotFound, "No such conversation.".into())),
+        };
+        if db.blocked_between(&self.uid, &other) {
+            return Err((ErrorCode::Forbidden, "You can't call this person.".into()));
+        }
+        Ok(other)
     }
 
     /// In a direct message, refuse if either has blocked the other.
@@ -714,6 +798,8 @@ impl Ctx<'_> {
                 if m.author != self.uid {
                     return Err((ErrorCode::Forbidden, "You can only edit your own messages.".into()));
                 }
+                // (Not in a group you've left.)
+                self.can_see(m.channel_id)?;
                 self.not_blocked_in(m.channel_id)?;
                 if let Ok(Some(message)) = db.edit_message(message_id, &content) {
                     hub.broadcast_in(message.channel_id, Event::MessageUpdated { message });
@@ -723,7 +809,7 @@ impl Ctx<'_> {
             Request::DeleteMessage { message_id } => {
                 let Some(m) = db.get_message(message_id) else { return Ok(Event::Ok) };
                 // In direct messages only the author can; elsewhere moderators can too.
-                let in_dm = db.dm_members(m.channel_id).is_some();
+                let in_dm = db.private_members(m.channel_id).is_some();
                 if m.author != self.uid && (in_dm || self.perms() & perm::MANAGE_MESSAGES == 0) {
                     return Err((ErrorCode::Forbidden, "You can't delete that message.".into()));
                 }
@@ -831,6 +917,10 @@ impl Ctx<'_> {
             }
             Request::DeleteChannel { channel_id } => {
                 self.require(perm::MANAGE_CHANNELS, "manage channels")?;
+                // Only the server's own channels: never a direct message or group (nor its call).
+                if db.channel(channel_id).is_none() {
+                    return Ok(Event::Ok);
+                }
                 hub.evict_channel(channel_id);
                 let (existed, files) = db.delete_channel(channel_id).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
                 hub.wipe_files(&files);
@@ -909,6 +999,97 @@ impl Ctx<'_> {
                     return bad("too many keys");
                 }
                 hub.route_e2ee(self.conn_id, epoch, keys)
+            }
+            // A private conversation's call: ring the others (only from inside the call).
+            Request::Ring { channel_id, video, moved_from } => {
+                let others = self.call_others(channel_id)?;
+                if hub.voice_channel_of(self.conn_id) != Some(channel_id) {
+                    return bad("Join the call first.");
+                }
+                if !self.ring_tokens.take(1.0) {
+                    return Err((ErrorCode::RateLimited, "That's a lot of ringing. Give them a moment.".into()));
+                }
+                // Moved from a direct message's call (people were added to it): said only to the
+                // other person in it, and only when the caller has just left that call, so
+                // nobody can be pulled out of a call they're in with someone else.
+                let was_in = moved_from
+                    .filter(|m| hub.just_left_call(&self.uid, *m))
+                    .and_then(|m| db.dm_members(m).map(|(a, b)| (m, [a, b])))
+                    .filter(|(_, who)| who.contains(&self.uid));
+                // (Not those in the call already: on their other devices it would ring for nothing.)
+                let here = hub.in_call(channel_id);
+                for o in others.iter().filter(|o| !here.contains(*o)) {
+                    let moved_from = was_in.as_ref().filter(|(_, who)| who.contains(o)).map(|(m, _)| *m);
+                    hub.send_to_user(o, Event::Ringing { channel_id, from: self.uid.clone(), video, moved_from });
+                }
+                Ok(Event::Ok)
+            }
+            Request::DeclineCall { channel_id } => {
+                let others = self.call_others(channel_id)?;
+                if !self.ring_tokens.take(1.0) {
+                    return Err((ErrorCode::RateLimited, "Slow down a little.".into()));
+                }
+                let ev = Event::CallDeclined { channel_id, by: self.uid.clone() };
+                for o in &others {
+                    hub.send_to_user(o, ev.clone());
+                }
+                hub.send_to_user(&self.uid, ev);
+                Ok(Event::Ok)
+            }
+
+            // ---- group conversations
+            Request::CreateGroup { members } => {
+                if !self.groups {
+                    return bad("This app doesn't know group conversations yet: update Ingle.");
+                }
+                let others = self.group_candidates(&members)?;
+                if others.len() < 2 {
+                    return bad("A group needs at least two other people (for one, send them a direct message).");
+                }
+                if others.len() + 1 > MAX_GROUP {
+                    return bad(&format!("A group can have up to {MAX_GROUP} people."));
+                }
+                if db.groups_owned(&self.uid) >= 200 {
+                    return bad("You've started a lot of groups already. Leave some first.");
+                }
+                let id = db.create_group(&self.uid, &others).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                let g = db.group(id).ok_or((ErrorCode::Internal, "the group went missing".into()))?;
+                hub.send_to_group_members(&g.members.iter().filter(|m| **m != self.uid).cloned().collect::<Vec<_>>(), Event::GroupUpserted { group: g.clone() });
+                // (Answered with it, and told to my other devices too.)
+                hub.send_to_group_members_except(&self.uid, self.conn_id, Event::GroupUpserted { group: g.clone() });
+                Ok(Event::GroupUpserted { group: g })
+            }
+            Request::AddToGroup { channel_id, members } => {
+                let g = db.group(channel_id).filter(|g| self.groups && g.members.contains(&self.uid)).ok_or((ErrorCode::NotFound, "No such group.".into()))?;
+                let new: Vec<UserId> = self.group_candidates(&members)?.into_iter().filter(|u| !g.members.contains(u)).collect();
+                if new.is_empty() {
+                    return Ok(Event::Ok);
+                }
+                if g.members.len() + new.len() > MAX_GROUP {
+                    return bad(&format!("A group can have up to {MAX_GROUP} people."));
+                }
+                db.add_group_members(channel_id, &new).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                self.tell_group(channel_id, None);
+                Ok(Event::Ok)
+            }
+            Request::LeaveGroup { channel_id } => {
+                match db.group(channel_id) {
+                    Some(g) if g.members.contains(&self.uid) => {}
+                    _ => return Ok(Event::Ok),
+                }
+                let files = db.leave_group(channel_id, &self.uid).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                hub.wipe_files(&files);
+                self.tell_group(channel_id, Some(&self.uid.clone()));
+                Ok(Event::Ok)
+            }
+            Request::RenameGroup { channel_id, name } => {
+                if db.group(channel_id).filter(|g| self.groups && g.members.contains(&self.uid)).is_none() {
+                    return Err((ErrorCode::NotFound, "No such group.".into()));
+                }
+                let name = clean_name(&name, 64).unwrap_or_default();
+                db.rename_group(channel_id, &name).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                self.tell_group(channel_id, None);
+                Ok(Event::Ok)
             }
 
             // ---- roles
@@ -1092,6 +1273,8 @@ impl Ctx<'_> {
                 let ie = |e: anyhow::Error| (ErrorCode::Internal, e.to_string());
                 db.clear_relation(&self.uid, &user_id, &[0, 1]).map_err(ie)?;
                 db.set_relation(&self.uid, &user_id, 2).map_err(ie)?;
+                // A call between them ends with it.
+                hub.end_dm_call(&self.uid, &user_id);
                 self.tell_relation(&user_id);
                 Ok(Event::Ok)
             }
@@ -1393,10 +1576,12 @@ mod tests {
             hub,
             conn_id: 1,
             uid: uid.to_string(),
+            groups: true,
             msg_tokens: Bucket::new(1.5, 10.0),
             react_tokens: Bucket::new(3.0, 15.0),
             req_tokens: Bucket::new(REQ_RATE, REQ_BURST),
             sound_tokens: Bucket::new(SOUND_RATE, SOUND_BURST),
+            ring_tokens: Bucket::new(RING_RATE, RING_BURST),
         }
     }
 
@@ -1754,6 +1939,65 @@ mod tests {
         assert!(!complete);
         assert!(messages.len() < 100 && !messages.is_empty());
         assert!(frame(1, ev.clone()).len() < ingle_proto::MAX_CONTROL_FRAME);
+    }
+
+    #[test]
+    fn groups_are_only_for_their_members() {
+        let hub = hub();
+        let people: Vec<String> = (0..12).map(|_| uid()).collect();
+        for (i, p) in people.iter().enumerate() {
+            hub.db.insert_user(p, &format!("P{i}"), Role::Member).unwrap();
+        }
+        let (a, b, c, out) = (&people[0], &people[1], &people[2], &people[3]);
+        let mut ca = ctx(&hub, a);
+        // At least two others, at most ten in all, members only, and nobody blocked.
+        assert!(ca.handle(Request::CreateGroup { members: vec![b.clone()] }).is_err());
+        assert!(ca.handle(Request::CreateGroup { members: people[1..11].to_vec() }).is_err());
+        assert!(ca.handle(Request::CreateGroup { members: vec![b.clone(), uid()] }).is_err());
+        hub.db.set_relation(c, a, 2).unwrap();
+        assert!(forbidden(ca.handle(Request::CreateGroup { members: vec![b.clone(), c.clone()] })));
+        hub.db.unblock(c, a).unwrap();
+        let Ok(Event::GroupUpserted { group }) = ca.handle(Request::CreateGroup { members: vec![b.clone(), c.clone(), b.clone()] }) else { panic!() };
+        assert_eq!(group.members.len(), 3, "{:?}", group.members);
+        assert_eq!(&group.owner, a);
+        let g = group.id;
+        // Its members read and write in it; nobody else can, nor an app that doesn't know groups.
+        let mut cb = ctx(&hub, b);
+        assert!(cb.handle(Request::SendMessage { channel_id: g, content: "hi all".into(), reply_to: None, nonce: String::new(), attachments: vec![] }).is_ok());
+        let mut co = ctx(&hub, out);
+        assert!(co.handle(Request::FetchHistory { channel_id: g, before: None, limit: 50 }).is_err());
+        assert!(co.handle(Request::SendMessage { channel_id: g, content: "let me in".into(), reply_to: None, nonce: String::new(), attachments: vec![] }).is_err());
+        assert!(co.handle(Request::AddToGroup { channel_id: g, members: vec![out.clone()] }).is_err());
+        assert!(co.handle(Request::RenameGroup { channel_id: g, name: "mine now".into() }).is_err());
+        let mut old_app = ctx(&hub, c);
+        old_app.groups = false;
+        assert!(old_app.handle(Request::FetchHistory { channel_id: g, before: None, limit: 50 }).is_err());
+        assert!(ca.handle(Request::FetchHistory { channel_id: g, before: None, limit: 50 }).is_ok());
+        // Grows up to ten; a name; leaving.
+        assert!(cb.handle(Request::AddToGroup { channel_id: g, members: people[3..11].to_vec() }).is_err(), "eleven is too many");
+        assert!(cb.handle(Request::AddToGroup { channel_id: g, members: vec![out.clone()] }).is_ok());
+        assert!(hub.db.group(g).unwrap().members.contains(out));
+        assert!(cb.handle(Request::RenameGroup { channel_id: g, name: "  Raid   night ".into() }).is_ok());
+        assert_eq!(hub.db.group(g).unwrap().name, "Raid night");
+        assert!(co.handle(Request::LeaveGroup { channel_id: g }).is_ok());
+        assert!(co.handle(Request::FetchHistory { channel_id: g, before: None, limit: 50 }).is_err(), "gone with leaving");
+        // A moderator can't delete it (nor end its call) as if it were a channel.
+        let boss = uid();
+        hub.db.insert_user(&boss, "Boss", Role::Owner).unwrap();
+        assert!(ctx(&hub, &boss).handle(Request::DeleteChannel { channel_id: g }).is_ok());
+        assert!(hub.db.group(g).is_some());
+        // Whoever started it leaving passes it on (and it stops counting as theirs).
+        assert_eq!(hub.db.groups_owned(a), 1);
+        assert!(ca.handle(Request::LeaveGroup { channel_id: g }).is_ok());
+        assert_eq!(hub.db.groups_owned(a), 0);
+        assert_eq!(&hub.db.group(g).unwrap().owner, b, "the one who's been in it longest");
+        // Its messages go with the last one out.
+        for p in [b, c] {
+            let mut cp = ctx(&hub, p);
+            assert!(cp.handle(Request::LeaveGroup { channel_id: g }).is_ok());
+        }
+        assert!(hub.db.group(g).is_none());
+        assert!(hub.db.history(g, None, 50).0.is_empty());
     }
 
     #[test]

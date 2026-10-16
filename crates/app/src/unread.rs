@@ -6,7 +6,7 @@ use ingle_engine::state::AppState;
 /// Unread conversations, everywhere.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Unread {
-    /// Where: direct messages by who sent them, then channels.
+    /// Where: direct messages by who sent them (and groups by name), then channels.
     pub places: Vec<String>,
     /// Mentions and direct messages (what the red badges add up to).
     pub pings: u32,
@@ -29,6 +29,16 @@ impl Unread {
                         continue;
                     }
                     let name = s.member_name(&d.with);
+                    if !dms.contains(&name) {
+                        dms.push(name);
+                    }
+                    pings += mentions;
+                } else if let Some(g) = s.group(id) {
+                    // A group, like a direct message (by its name).
+                    if st.muted_channels.contains(&(s.key.clone(), id)) {
+                        continue;
+                    }
+                    let name = s.group_name(g, &st.my_uid);
                     if !dms.contains(&name) {
                         dms.push(name);
                     }
@@ -163,6 +173,28 @@ mod tests {
         assert_eq!(u.pings, 3);
         assert_eq!(u.title("Ingle"), "(3) Ingle");
         assert_eq!(u.tooltip("Ingle"), format!("Ingle\nUnread: {kain}, #general, #off-topic"));
+    }
+
+    #[test]
+    fn groups_count_like_direct_messages() {
+        let mut st = state();
+        st.my_uid = "me".into();
+        let s = &mut st.servers[0];
+        s.groups.push(ingle_proto::control::Group {
+            id: 12,
+            members: vec!["me".into(), "kain".into(), "abel".into()],
+            name: "Raid night".into(),
+            owner: "me".into(),
+            last_message: Some(60),
+            last_from: None,
+        });
+        s.unread.extend([12, 2]);
+        s.mentions.insert(12, 2);
+        let u = Unread::of(&st);
+        assert_eq!(u.places, ["Raid night", "#off-topic"]);
+        assert_eq!(u.pings, 2);
+        st.muted_channels.insert(("k".into(), 12));
+        assert_eq!(Unread::of(&st).places, ["#off-topic"], "a muted group doesn't count");
     }
 
     #[test]

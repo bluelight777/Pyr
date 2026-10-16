@@ -918,6 +918,15 @@ impl IngleApp {
                 Dialog::RemoveSound { key, id, name, from_settings } => {
                     self.remove_sound_dialog(ui, st, &key, &id, &name, from_settings, acts, &mut close);
                 }
+                Dialog::AddPeople { key, channel, picked, search } => {
+                    self.add_people_dialog(ui, st, key, channel, picked, search, acts, &mut close);
+                }
+                Dialog::RenameGroup { key, channel, name } => {
+                    self.rename_group_dialog(ui, key, channel, name, acts, &mut close);
+                }
+                Dialog::LeaveGroup { key, channel, name } => {
+                    self.leave_group_dialog(ui, key, channel, &name, acts, &mut close);
+                }
             };
             if fits_itself {
                 body(ui);
@@ -1198,8 +1207,15 @@ impl IngleApp {
                     .size(12.0)
                     .color(theme::DIM),
                 );
+                ui.add_space(6.0);
+                ui.checkbox(&mut draft.ring, "Ring when someone calls me");
+                ui.label(
+                    RichText::new("Calls in direct messages ring (and you hear it ringing when you call), even with the other sounds off.")
+                        .size(12.0)
+                        .color(theme::DIM),
+                );
                 ui.add_space(8.0);
-                ui.add_enabled_ui(draft.sounds, |ui| {
+                ui.add_enabled_ui(draft.sounds || draft.ring, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Volume");
                         let mut pct = draft.sound_volume * 100.0;

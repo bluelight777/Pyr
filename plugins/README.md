@@ -7,11 +7,12 @@ Games from its Rust source after someone has read it. There are two kinds:
 - **Add-ons** run inside Ingle, in a sandbox. They're Rust built to WebAssembly, and they can
   add `/commands` to chat, show a small panel and keep a little data. They can't reach your
   files, the internet or anything else on your PC. [Dice](dice) is one.
-- **Programs** are apps of their own that Ingle installs and opens, like
-  [Chimbrowser](https://firelitgames.com/ingle/#plugins). They run like any app you install,
-  so the review is what stands between you and them: their source is read and built by
-  Firelit Games, and Ingle checks every file against the library's signed list before
-  installing it and again before opening it.
+- **Programs** are apps of their own that Ingle installs and opens inside its window (on
+  Windows), like [Chimbrowser](https://firelitgames.com/ingle/#plugins). They run like any app
+  you install, so the review is what stands between you and them: their source is read and
+  built by Firelit Games, and Ingle checks every file against the library's signed list
+  before installing it and again before opening it. Ingle starts a program with `INGLE_EMBED`
+  set, so it can open without a frame of its own (Ingle takes its window in either way).
 
 This folder has:
 

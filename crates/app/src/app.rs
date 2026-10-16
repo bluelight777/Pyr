@@ -50,6 +50,24 @@ pub enum Act {
     Quit,
     /// Look for a newer Ingle right away (Check for updates).
     CheckUpdates,
+    /// Call the other person in a direct message (`video`: with the camera on).
+    CallDm { key: String, channel: ChannelId, video: bool },
+    /// Call someone (from a menu on their name): their conversation on that server, opened.
+    CallPerson { key: String, uid: String, video: bool },
+    /// Ring them again (they declined, or didn't answer).
+    RingAgain,
+    /// Answer a call ringing here (or join one going on in a conversation).
+    AnswerCall { key: String, channel: ChannelId, video: bool },
+    DeclineCall { key: String, channel: ChannelId },
+    /// Show a direct message conversation.
+    ShowDm { key: String, channel: ChannelId },
+    /// Start a group with these people (`call`: and call them there; `from`: the direct
+    /// message whose call moves there).
+    CreateGroup { key: String, members: Vec<String>, call: Option<bool>, from: Option<ChannelId> },
+    /// Add people to a group (`ring`: we're in its call, so ring them into it).
+    AddToGroup { key: String, channel: ChannelId, members: Vec<String>, ring: bool },
+    LeaveGroup { key: String, channel: ChannelId },
+    RenameGroup { key: String, channel: ChannelId, name: String },
     /// Open an installed program (plugin).
     PluginOpen(String),
     /// Open an add-on's panel.
@@ -169,12 +187,19 @@ pub enum Dialog {
     SoundEditor,
     /// "Delete this sound?" (`from_settings`: go back to Server Settings after).
     RemoveSound { key: String, id: String, name: String, from_settings: bool },
+    /// Pick people: for a new group (`channel` none), to add to a group, or to make a group
+    /// with the other person in a direct message (see `calls.rs`).
+    AddPeople { key: String, channel: Option<ChannelId>, picked: Vec<String>, search: String },
+    RenameGroup { key: String, channel: ChannelId, name: String },
+    LeaveGroup { key: String, channel: ChannelId, name: String },
 }
 
 /// What the microphone buttons say when a moderator has server muted you.
 pub(crate) const SERVER_MUTED: &str = "A moderator server muted you here. Only a moderator can unmute you.";
 /// And the deafen buttons, server deafened.
 pub(crate) const SERVER_DEAFENED: &str = "A moderator server deafened you here. Only a moderator can undeafen you.";
+/// The height of a person's row under a voice channel (Discord's spacing).
+const VOICE_MEMBER_H: f32 = 30.0;
 
 #[derive(Default)]
 pub struct UiState {
@@ -291,6 +316,15 @@ pub struct UiState {
     pub sb: crate::soundboard::SoundboardUi,
     /// A dialog to open once this frame's dialog is done with (one dialog opening another).
     pub next_dialog: Option<Dialog>,
+    /// Call this person once their conversation (being started) opens: (server, them, video,
+    /// when asked). Only for a moment: if it didn't open, a later Message doesn't ring them.
+    pub call_when_open: Option<(String, String, bool, std::time::Instant)>,
+    /// Where the program on show goes this frame (its page's area), if a program's page is
+    /// showing.
+    pub program_area: Option<Rect>,
+    /// What's drawn over everything this frame that a program open inside Ingle must keep
+    /// clear of (toasts, a call ringing).
+    pub overlay_rects: Vec<Rect>,
     /// Text selected in a conversation, and the messages' right-click menu.
     pub sel: crate::select::Selection,
 }
@@ -316,9 +350,8 @@ pub struct IngleApp {
     pub plugins: crate::plugins::Plugins,
     /// The update we last told the person about (pinged once per version).
     update_seen: Option<ingle_proto::release::Manifest>,
-    /// When a check they asked for last said this is the newest version (the Check for
-    /// updates button shows a tick for a moment).
-    update_checked: Option<Instant>,
+    /// The updater in the title strip (or the rail): what checks asked for there said.
+    update_chip: crate::update_chip::Chip,
     /// After an update: where to put the person back, and since when we've been trying.
     resume: Option<(crate::update::Resume, Instant)>,
     /// Join / leave / stream chimes.
@@ -356,7 +389,7 @@ impl IngleApp {
             updater,
             plugins,
             update_seen: None,
-            update_checked: None,
+            update_chip: Default::default(),
             resume,
             voice_sounds: Default::default(),
             title_shown: title.clone(),
@@ -453,6 +486,40 @@ impl IngleApp {
                 e.join_voice(&key, channel);
                 self.ui.call_view = true;
             }
+            Act::CallDm { key, channel, video } => {
+                e.start_dm_call(&key, channel, video);
+                self.show_dm(key, channel);
+            }
+            Act::CallPerson { key, uid, video } => {
+                let known = e.state().server(&key).and_then(|s| s.dm_with(&uid)).map(|d| d.id);
+                match known {
+                    Some(channel) => {
+                        e.start_dm_call(&key, channel, video);
+                        self.show_dm(key, channel);
+                    }
+                    // Started first; the call follows once it's open (see `take_opened_dm`).
+                    None => {
+                        self.ui.call_when_open = Some((key.clone(), uid.clone(), video, std::time::Instant::now()));
+                        e.open_dm(&key, &uid);
+                    }
+                }
+            }
+            Act::RingAgain => e.ring_again(),
+            Act::AnswerCall { key, channel, video } => {
+                e.answer_call(&key, channel, video);
+                self.show_dm(key, channel);
+            }
+            Act::DeclineCall { key, channel } => e.decline_call(&key, channel),
+            Act::ShowDm { key, channel } => self.show_dm(key, channel),
+            Act::CreateGroup { key, members, call, from } => e.create_group(&key, members, call, from),
+            Act::AddToGroup { key, channel, members, ring } => e.add_to_group(&key, channel, members, ring),
+            Act::LeaveGroup { key, channel } => {
+                e.leave_group(&key, channel);
+                if self.ui.dm.as_ref() == Some(&(key, channel)) {
+                    self.ui.dm = None;
+                }
+            }
+            Act::RenameGroup { key, channel, name } => e.rename_group(&key, channel, &name),
             Act::Leave => {
                 e.leave_voice();
                 self.ui.call_view = false;
@@ -517,11 +584,12 @@ impl IngleApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             Act::CheckUpdates => self.updater.check_now(crate::update::Asker::Window, || {}),
-            Act::PluginOpen(id) => {
-                if let Err(e) = self.plugins.open_program(&id) {
-                    self.toast(&e, true);
-                }
-            }
+            Act::PluginOpen(id) => match self.plugins.open_program(&id) {
+                // Inside Ingle (Windows): its page.
+                Ok(()) if cfg!(windows) => self.show_program(&id),
+                Ok(()) => {}
+                Err(e) => self.toast(&e, true),
+            },
             Act::AddonPanel(id) => {
                 let (place, here) = {
                     let st = e.state();
@@ -805,22 +873,33 @@ impl eframe::App for IngleApp {
                 }
             }
         }
-        // A direct message conversation was opened (from the member list or friends): show it.
+        // A direct message conversation was opened (from the member list or friends): show it,
+        // and call them if that's what it was opened for.
+        // (A group just made to call in: the call starts.)
+        engine.take_group_call();
         if let Some((key, id)) = engine.take_opened_dm() {
-            self.ui.home = true;
-
-            self.ui.plugins_open = false;
-            self.ui.dm = Some((key, id));
-            self.ui.call_view = false;
+            if let Some((k, uid, video, asked)) = self.ui.call_when_open.take() {
+                let fresh = asked.elapsed() < std::time::Duration::from_secs(20);
+                if fresh && k == key && engine.state().server(&key).and_then(|s| s.dm(id)).is_some_and(|d| d.with == uid) {
+                    engine.start_dm_call(&key, id, video);
+                }
+            }
+            self.show_dm(key, id);
         }
         ctx.request_repaint_after(std::time::Duration::from_secs(1));
-        crate::titlebar::show(ctx, ingle_proto::APP_NAME);
+        {
+            let (chip, updater) = (&mut self.update_chip, &self.updater);
+            crate::titlebar::show(ctx, ingle_proto::APP_NAME, |ui, x, y| chip.title_chip(ui, updater, x, y));
+        }
         crate::watchdog::step("waiting to read the shared state");
         let chimes = {
             let st = engine.state();
             crate::watchdog::step("drawing the window");
             let chimes = self.voice_sounds.step(&st);
+            self.ui.program_area = None;
+            self.ui.overlay_rects.clear();
             self.frame_ui(ctx, &st, &mut acts);
+            self.place_programs(ctx);
             // The title (on the taskbar button and in Alt+Tab) says when something's unread.
             let title = crate::unread::Unread::of(&st).title(&self.title);
             if title != self.title_shown {
@@ -872,25 +951,70 @@ impl eframe::App for IngleApp {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.ui.gif_sizes.save(true);
+        self.plugins.programs.close_all();
         self.engine.shutdown();
     }
 }
 
 impl IngleApp {
+    /// Programs open inside Ingle: the one whose page is showing goes over it (clear of what's
+    /// drawn over everything, and out of the way of menus and dialogs), the rest out of sight.
+    fn place_programs(&mut self, ctx: &egui::Context) {
+        if self.plugins.programs.open.is_empty() {
+            return;
+        }
+        let covering = self.ui.dialog.is_some()
+            || ctx.is_popup_open()
+            || egui::Popup::is_any_open(ctx)
+            || self.ui.viewer.is_some()
+            || self.ui.profile_card.is_some()
+            || self.soundboard_open()
+            || self.plugins.panels.iter().any(|p| p.open);
+        let over = crate::plugins::programs::Overlays { covering, keep_clear: self.ui.overlay_rects.clone() };
+        let shown = if self.ui.plugins_open { self.plugins.program_page.clone() } else { None };
+        self.plugins.programs.step(ctx, shown.as_deref(), self.ui.program_area, &over);
+        // (Their windows are moved between frames too; keep frames coming while one's opening.)
+        if self.plugins.programs.open.iter().any(|p| !p.ready()) {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+    }
+
+    /// Shows a direct message conversation (on the home screen).
+    pub(crate) fn show_dm(&mut self, key: String, channel: ChannelId) {
+        self.ui.home = true;
+        self.ui.plugins_open = false;
+        self.ui.dm = Some((key, channel));
+        self.ui.call_view = false;
+    }
+
     /// Update pings, installing a downloaded update, and rejoining after one.
     fn update_step(&mut self, acts: &mut Vec<Act>) {
         use crate::update::{Checked, Status};
-        let mut told = false;
+        // What checks asked for in the window found: the updater itself shows it ("Up to date",
+        // "Couldn't check", or the green Update button); why a check failed is said too.
+        for answer in self.updater.take_answers(crate::update::Asker::Window) {
+            match answer {
+                Checked::UpToDate => self.update_chip.told_up_to_date(),
+                Checked::Found(_) => self.update_chip.told_found(),
+                Checked::Failed(e) => {
+                    self.engine.shared.state.write().toast(format!("Couldn't check for updates: {e}"), true);
+                    self.update_chip.told_failed(e);
+                }
+            }
+        }
         match self.updater.status() {
             Status::Available(m) => {
                 if self.update_seen.as_ref().map(|s| s.version != m.version).unwrap_or(true) {
-                    self.engine
-                        .shared
-                        .state
-                        .write()
-                        .toast(format!("Ingle {} is out. Click the green arrow at the top left to update.", m.version), false);
+                    // (Found by a check someone just asked for here: they're looking at it.)
+                    if !self.update_chip.just_asked() {
+                        let text = format!(
+                            "Ingle {} is out. Click Update {} (Ingle restarts and puts you back where you were).",
+                            m.version,
+                            crate::update_chip::where_it_is()
+                        );
+                        self.engine.shared.state.write().toast(text, false);
+                    }
                     self.update_seen = Some(m);
-                    told = true;
                 }
             }
             Status::Failed(e) => {
@@ -933,20 +1057,6 @@ impl IngleApp {
             }
             Status::Idle | Status::Downloading(..) => {}
         }
-        // What Check for updates found.
-        for answer in self.updater.take_answers(crate::update::Asker::Window) {
-            let toast = match answer {
-                Checked::UpToDate => {
-                    self.update_checked = Some(Instant::now());
-                    (format!("You have the newest Ingle ({}).", crate::update::current_version()), false)
-                }
-                // (Just said above, the first time it's found.)
-                Checked::Found(_) if told => continue,
-                Checked::Found(v) => (format!("Ingle {v} is out. Click the green arrow at the top left to update."), false),
-                Checked::Failed(e) => (format!("Couldn't check for updates: {e}"), true),
-            };
-            self.engine.shared.state.write().toast(toast.0, toast.1);
-        }
         // Back from an update: open the same server and rejoin the voice channel once it's
         // connected (give up after a minute and a half).
         if let Some((r, since)) = &self.resume {
@@ -976,94 +1086,6 @@ impl IngleApp {
                 }
             }
         }
-    }
-
-    /// Discord's green arrow: shown in the server rail when an update is out.
-    fn update_button(&mut self, ui: &mut egui::Ui) {
-        use crate::update::Status;
-        let missed = match self.updater.status() {
-            Status::Available(m) => m.missed(crate::update::current_version()),
-            _ => 0,
-        };
-        let (label, frac, manifest) = match self.updater.status() {
-            Status::Available(m) => {
-                let behind = if missed > 1 { format!(" ({missed} updates behind)") } else { String::new() };
-                (format!("Update to Ingle {}{behind} (restarts Ingle and puts you back where you were)", m.version), None, Some(m))
-            }
-            Status::Downloading(done, total) => {
-                ("Downloading the update…".to_string(), Some(done as f32 / total.max(1) as f32), None)
-            }
-            Status::Ready(..) => ("Installing…".to_string(), Some(1.0), None),
-            _ => return self.check_button(ui),
-        };
-        let (rect, resp) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::click());
-        let green = Color32::from_rgb(0x23, 0xa5, 0x5a);
-        let fill = if resp.hovered() { Color32::from_rgb(0x2d, 0xc7, 0x6d) } else { green };
-        ui.painter().rect_filled(rect, CornerRadius::same(if resp.hovered() { 16 } else { 24 }), fill);
-        match frac {
-            None => {
-                // A down arrow into a tray.
-                let c = rect.center();
-                let s = Stroke::new(3.0f32, Color32::WHITE);
-                ui.painter().line_segment([c + vec2(0.0, -11.0), c + vec2(0.0, 5.0)], s);
-                ui.painter().line_segment([c + vec2(-7.0, -2.0), c + vec2(0.0, 5.0)], s);
-                ui.painter().line_segment([c + vec2(7.0, -2.0), c + vec2(0.0, 5.0)], s);
-                ui.painter().line_segment([c + vec2(-10.0, 11.0), c + vec2(10.0, 11.0)], s);
-                // Several updates missed: how many, in a red badge (like Discord's counts).
-                if missed > 1 {
-                    let t = if missed > 9 { "9+".to_string() } else { missed.to_string() };
-                    let b = egui::Rect::from_center_size(rect.right_bottom() + vec2(-6.0, -6.0), vec2(if missed > 9 { 24.0 } else { 20.0 }, 20.0));
-                    ui.painter().rect_filled(b.expand(3.0), CornerRadius::same(13), theme::RAIL);
-                    ui.painter().rect_filled(b, CornerRadius::same(10), theme::LIVE);
-                    ui.painter().text(b.center(), egui::Align2::CENTER_CENTER, t, theme::bold_font(12.0), Color32::WHITE);
-                }
-            }
-            Some(f) => {
-                let pct = format!("{}%", (f * 100.0).round() as u32);
-                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, pct, theme::bold_font(13.0), Color32::WHITE);
-                ui.ctx().request_repaint_after(Duration::from_millis(200));
-            }
-        }
-        let resp = resp.on_hover_text(label);
-        if resp.clicked() {
-            if let Some(m) = manifest {
-                self.updater.download(m);
-            }
-        }
-        ui.add_space(8.0);
-    }
-
-    /// Check for updates, where the green button shows up: so a new version can be had
-    /// without waiting for the next check (every few hours) or reopening Ingle.
-    fn check_button(&mut self, ui: &mut egui::Ui) {
-        let checking = self.updater.checking();
-        let (slot, resp) = ui.allocate_exact_size(vec2(48.0, 40.0), Sense::click());
-        let r = Rect::from_center_size(slot.center(), vec2(36.0, 36.0));
-        let fill = if resp.hovered() { theme::ELEV2 } else { Color32::from_rgb(0x24, 0x1d, 0x19) };
-        ui.painter().rect_filled(r, CornerRadius::same(if resp.hovered() { 12 } else { 18 }), fill);
-        let icon = Rect::from_center_size(r.center(), vec2(20.0, 20.0));
-        // Just said this is the newest version: a green tick for a moment.
-        let fresh = self.update_checked.is_some_and(|t| t.elapsed() < Duration::from_secs(4));
-        if checking {
-            let t = ui.input(|i| i.time) as f32;
-            icons::refresh(ui.painter(), icon, theme::TEXT, t * 6.0);
-            ui.ctx().request_repaint_after(Duration::from_millis(16));
-        } else if fresh {
-            icons::tick(ui.painter(), icon, theme::ONLINE);
-            ui.ctx().request_repaint_after(Duration::from_millis(250));
-        } else {
-            icons::refresh(ui.painter(), icon, if resp.hovered() { theme::TEXT } else { theme::MUTED }, 0.0);
-        }
-        let tip = if checking {
-            "Checking for updates…".to_string()
-        } else {
-            format!("Check for updates (this is Ingle {})", crate::update::current_version())
-        };
-        if resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tip).clicked() && !checking {
-            self.update_checked = None;
-            self.updater.check_now(crate::update::Asker::Window, || {});
-        }
-        ui.add_space(8.0);
     }
 }
 
@@ -1181,14 +1203,28 @@ impl IngleApp {
             .resizable(false)
             .show_separator_line(false)
             .frame(egui::Frame::new().fill(theme::RAIL))
-            .show(ctx, |ui| self.rail(ui, st, acts));
+            .show(ctx, |ui| {
+                self.rail(ui, st, acts);
+                // Without a title strip of Ingle's own, the updater is at the bottom of the rail.
+                if !crate::titlebar::enabled() {
+                    let r = ui.max_rect();
+                    let bottom = Rect::from_min_max(pos2(r.left(), r.bottom() - 72.0), r.max);
+                    let mut below = ui.new_child(egui::UiBuilder::new().max_rect(bottom).layout(Layout::bottom_up(Align::Center)));
+                    below.add_space(12.0);
+                    self.update_chip.rail_button(&mut below, &self.updater);
+                }
+            });
 
         if self.ui.plugins_open {
-            self.plugins_page(ctx, st, acts);
+            match self.plugins.program_page.clone() {
+                Some(id) => self.program_page(ctx, &id),
+                None => self.plugins_page(ctx, st, acts),
+            }
             self.soundboard_popup(ctx, st, acts);
             self.addon_panels(ctx, st);
             self.dialogs(ctx, st, acts);
             self.viewer(ctx, acts);
+            self.incoming_call_card(ctx, st, acts);
             self.toasts(ctx, st);
             return;
         }
@@ -1200,6 +1236,7 @@ impl IngleApp {
             self.viewer(ctx, acts);
             self.avatar_editor(ctx, acts);
             self.drop_files(ctx, st, acts);
+            self.incoming_call_card(ctx, st, acts);
             self.toasts(ctx, st);
             return;
         }
@@ -1272,6 +1309,7 @@ impl IngleApp {
         self.viewer(ctx, acts);
         self.avatar_editor(ctx, acts);
         self.drop_files(ctx, st, acts);
+        self.incoming_call_card(ctx, st, acts);
         self.toasts(ctx, st);
     }
 
@@ -1414,6 +1452,7 @@ impl IngleApp {
             acts.push(Act::OpenDm { key: s.key.clone(), uid: uid.to_string() });
             chose = true;
         }
+        chose |= crate::calls::call_item(ui, st, uid, Some(&s.key), acts);
         if !me {
             ui.separator();
             ui.label(RichText::new("User volume").size(12.0).color(theme::MUTED));
@@ -1493,6 +1532,7 @@ impl IngleApp {
                     .channel(channel)
                     .map(|c| format!("#{}", c.name))
                     .or_else(|| server.dm(channel).map(|d| format!("your chat with {}", server.member_name(&d.with))))
+                    .or_else(|| server.group(channel).map(|g| server.group_name(g, &st.my_uid)))
                     .unwrap_or_default();
                 let b = Rect::from_center_size(r.center(), vec2(420.0, 120.0));
                 ui.painter().rect_filled(b, CornerRadius::same(14), theme::EMBER);
@@ -1541,7 +1581,8 @@ impl IngleApp {
                 let pill = Rect::from_center_size(pos2(ui.max_rect().left() + 2.0, r.center().y), vec2(4.0, if home { 40.0 } else { 20.0 }));
                 ui.painter().rect_filled(pill, CornerRadius::same(2), theme::TEXT);
             }
-            let dm_count: u32 = st.servers.iter().map(|s| s.dms.iter().filter_map(|d| s.mentions.get(&d.id)).sum::<u32>()).sum::<u32>()
+            // (Direct messages and groups count here, not on their server's icon.)
+            let dm_count: u32 = st.servers.iter().map(|s| s.mentions.iter().filter(|(c, _)| s.is_private(**c)).map(|(_, n)| n).sum::<u32>()).sum::<u32>()
                 + st.relations().iter().filter(|r| r.1 == ingle_proto::control::RelationKind::Incoming).count() as u32;
             if dm_count > 0 {
                 let c = r.right_bottom() - vec2(6.0, 6.0);
@@ -1553,25 +1594,42 @@ impl IngleApp {
                 self.ui.home = true;
                 self.ui.plugins_open = false;
             }
-            // Unread direct messages under it, by who sent them (like Discord): their picture
-            // with how many, wherever you are. Click to read.
-            let mut waiting: Vec<(&ServerView, ChannelId, String, u32)> = Vec::new();
+            // Unread direct messages and groups under it, by who sent them (like Discord): their
+            // picture with how many, wherever you are. Click to read.
+            let mut waiting: Vec<(&ServerView, ChannelId, Option<String>, u32)> = Vec::new();
             for s in &st.servers {
+                // (A muted server still lets direct messages through; a muted conversation doesn't.)
+                let muted = |id: ChannelId| st.muted_channels.contains(&(s.key.clone(), id));
                 for d in &s.dms {
                     let n = s.mentions.get(&d.id).copied().unwrap_or(0);
-                    // (A muted server still lets direct messages through; a muted conversation doesn't.)
-                    let muted = st.muted_channels.contains(&(s.key.clone(), d.id));
-                    if n > 0 && !muted && !st.blocked.contains(&d.with) {
-                        waiting.push((s, d.id, d.with.clone(), n));
+                    if n > 0 && !muted(d.id) && !st.blocked.contains(&d.with) {
+                        waiting.push((s, d.id, Some(d.with.clone()), n));
+                    }
+                }
+                for g in &s.groups {
+                    let n = s.mentions.get(&g.id).copied().unwrap_or(0);
+                    if n > 0 && !muted(g.id) {
+                        waiting.push((s, g.id, None, n));
                     }
                 }
             }
             for (s, id, with, n) in waiting.into_iter().take(5) {
                 ui.add_space(8.0);
                 let (r, resp) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::click());
-                let name = s.member_name(&with);
-                let face = self.face(ui.ctx(), s, &with);
-                avatar(ui.painter(), r.center(), 24.0, &with, &name, false, theme::RAIL, face);
+                let name = match (&with, s.group(id)) {
+                    (Some(w), _) => {
+                        let name = s.member_name(w);
+                        let face = self.face(ui.ctx(), s, w);
+                        avatar(ui.painter(), r.center(), 24.0, w, &name, false, theme::RAIL, face);
+                        name
+                    }
+                    (None, Some(g)) => {
+                        let p = ui.painter().clone();
+                        crate::calls::group_picture(self, &p, ui.ctx(), s, g, &st.my_uid, r.center(), 24.0, theme::RAIL);
+                        s.group_name(g, &st.my_uid)
+                    }
+                    (None, None) => continue,
+                };
                 let pill = Rect::from_center_size(pos2(ui.max_rect().left() + 2.0, r.center().y), vec2(4.0, if resp.hovered() { 20.0 } else { 8.0 }));
                 ui.painter().rect_filled(pill, CornerRadius::same(2), theme::TEXT);
                 let c = r.right_bottom() - vec2(6.0, 6.0);
@@ -1590,7 +1648,6 @@ impl IngleApp {
             let (sep, _) = ui.allocate_exact_size(vec2(32.0, 2.0), Sense::hover());
             ui.painter().rect_filled(sep, CornerRadius::same(1), theme::LINE);
             ui.add_space(6.0);
-            self.update_button(ui);
             for s in &st.servers {
                 let selected = !self.ui.home && !self.ui.plugins_open && self.ui.server.as_deref() == Some(s.key.as_str());
                 let (rect, resp) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::click());
@@ -1626,14 +1683,14 @@ impl IngleApp {
                     ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, initials, theme::bold_font(15.0), tc);
                 }
                 // pill indicator
-                // Direct messages count on the home button, not the server's.
-                let unread = s.unread.iter().any(|c| s.dm(*c).is_none());
+                // Direct messages and groups count on the home button, not the server's.
+                let unread = s.unread.iter().any(|c| !s.is_private(*c));
                 let pill_h = if selected { 40.0 } else if hovered { 20.0 } else if unread { 8.0 } else { 0.0 };
                 if pill_h > 0.0 {
                     let pill = Rect::from_center_size(pos2(ui.max_rect().left() + 2.0, rect.center().y), vec2(4.0, pill_h));
                     ui.painter().rect_filled(pill, CornerRadius::same(2), theme::TEXT);
                 }
-                let mentions: u32 = s.mentions.iter().filter(|(c, _)| s.dm(**c).is_none()).map(|(_, n)| n).sum();
+                let mentions: u32 = s.mentions.iter().filter(|(c, _)| !s.is_private(**c)).map(|(_, n)| n).sum();
                 if mentions > 0 {
                     let c = rect.right_bottom() - vec2(6.0, 6.0);
                     ui.painter().circle_filled(c, 9.0, theme::RAIL);
@@ -1913,31 +1970,29 @@ impl IngleApp {
                             }
                         });
                     }
-                    // People in this voice channel
+                    // People in this voice channel, lined up like Discord's: each picture starts
+                    // under the channel's name (past the speaker), with their name beside it.
                     if kind == ChannelKind::Voice {
                         let speaking: HashSet<SessionId> = st.call.as_ref().map(|c| c.speaking.clone()).unwrap_or_default();
                         for p in s.voice_in(c.id) {
                             let name = s.member_name(&p.user_id);
-                            let (r, presp) = ui.allocate_exact_size(vec2(ui.available_width() - 8.0, 28.0), Sense::click());
-                            let row = r.translate(vec2(8.0, 0.0)).with_max_x(r.right());
+                            let (r, _) = ui.allocate_exact_size(vec2(ui.available_width() - 8.0, VOICE_MEMBER_H), Sense::hover());
+                            // Where the channel's name starts (its row is 8 in, the name 34 more).
+                            let indent = r.left() + 42.0;
+                            // Only that part lights up and takes clicks, like Discord.
+                            let row = Rect::from_min_max(pos2(indent - 6.0, r.top()), r.max);
                             let uid = p.user_id.clone();
+                            let presp = ui.interact(row, ui.id().with(("voice-member", c.id, p.session)), Sense::click());
                             let pointer_in = presp.contains_pointer();
                             let card_open = self.ui.profile_card.as_ref().is_some_and(|(k, u, _)| *k == s.key && *u == uid);
                             if pointer_in || card_open {
                                 ui.painter().rect_filled(row, CornerRadius::same(6), theme::HOVER);
                             }
-                            let center = pos2(r.left() + 46.0, r.center().y);
+                            // (A hair in from the name's first letter, as in Discord.)
+                            let center = pos2(indent + 13.5, r.center().y);
                             let face = self.face(ui.ctx(), s, &uid);
-                            avatar(ui.painter(), center, 11.0, &uid, &name, speaking.contains(&p.session), theme::SIDE, face);
+                            avatar(ui.painter(), center, 12.0, &uid, &name, speaking.contains(&p.session), theme::SIDE, face);
                             let col = if speaking.contains(&p.session) || pointer_in { theme::TEXT } else { theme::MUTED };
-                            let name_rect = ui.painter().text(pos2(r.left() + 64.0, r.center().y), egui::Align2::LEFT_CENTER, &name, theme::font(13.5), col);
-                            // A soundboard sound they just played: its emoji by their name.
-                            if let Some((x, age)) = st.call.as_ref().filter(|c| c.server_key == s.key).and_then(|c| crate::soundboard::recent_pop(c, p.session)) {
-                                let tex = crate::soundboard::custom_emoji_id(&x.emoji).and_then(|id| self.custom_emoji_tex(ui.ctx(), &s.key, &id));
-                                let at = pos2(name_rect.right() + 13.0, r.center().y + 4.0);
-                                crate::soundboard::paint_pop(ui.painter(), at, 18.0, &x.emoji, age, &mut |_| tex);
-                                ui.ctx().request_repaint();
-                            }
                             let mut x = r.right() - 10.0;
                             if p.tracks.iter().any(|t| t.id == ingle_proto::media::track::SCREEN) {
                                 let b = Rect::from_min_max(pos2(x - 34.0, r.center().y - 8.0), pos2(x, r.center().y + 8.0));
@@ -1966,6 +2021,25 @@ impl IngleApp {
                             // Hovering someone: a button to message them (like the chat bubble on a
                             // voice channel).
                             let can_dm = uid != st.my_uid && s.has(ingle_proto::control::DMS_FEATURE) && s.status.is_connected();
+                            // Their name (emoji and all), cut short before what's on the right.
+                            let name_x = indent + 36.0;
+                            let end = if can_dm && pointer_in { x - 24.0 } else { x };
+                            let name_rect = crate::emoji::paint_text(
+                                ui.painter(),
+                                pos2(name_x, r.center().y),
+                                egui::Align2::LEFT_CENTER,
+                                &name,
+                                theme::font(14.0),
+                                col,
+                                Some((end - name_x - 6.0).max(24.0)),
+                            );
+                            // A soundboard sound they just played: its emoji by their name.
+                            if let Some((x, age)) = st.call.as_ref().filter(|c| c.server_key == s.key).and_then(|c| crate::soundboard::recent_pop(c, p.session)) {
+                                let tex = crate::soundboard::custom_emoji_id(&x.emoji).and_then(|id| self.custom_emoji_tex(ui.ctx(), &s.key, &id));
+                                let at = pos2(name_rect.right() + 13.0, r.center().y + 4.0);
+                                crate::soundboard::paint_pop(ui.painter(), at, 18.0, &x.emoji, age, &mut |_| tex);
+                                ui.ctx().request_repaint();
+                            }
                             let mut dm_clicked = false;
                             if can_dm && pointer_in {
                                 let br = Rect::from_center_size(pos2(x - 10.0, r.center().y), vec2(22.0, 22.0));
@@ -2017,7 +2091,7 @@ impl IngleApp {
     /// Shown while getting back into a call after the server dropped (an update, say).
     pub(crate) fn rejoin_panel(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
         let Some(r) = st.voice_rejoin.as_ref() else { return };
-        let channel_name = st.server(&r.server_key).and_then(|s| s.channel(r.channel_id)).map(|c| c.name.clone()).unwrap_or_default();
+        let channel_name = st.call_place(&r.server_key, r.channel_id);
         ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
             icons::signal(ui.painter(), rect, theme::EMBER2);
@@ -2038,7 +2112,9 @@ impl IngleApp {
 
     pub(crate) fn voice_panel(&mut self, ui: &mut egui::Ui, st: &AppState, call: &ingle_engine::state::CallView, acts: &mut Vec<Act>) {
         let server = st.server(&call.server_key);
-        let channel_name = server.and_then(|s| s.channel(call.channel_id)).map(|c| c.name.clone()).unwrap_or_default();
+        // (A voice channel's name, or "@" and who you're calling.)
+        let channel_name = st.call_place(&call.server_key, call.channel_id);
+        let dm_call = st.is_dm_call(&call.server_key, call.channel_id);
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
             icons::signal(ui.painter(), r, theme::ONLINE);
@@ -2050,10 +2126,14 @@ impl IngleApp {
                 crate::emoji::label_line(ui, &format!("{channel_name} · {} ms", call.stats.rtt_ms), theme::font(12.0), theme::MUTED, w, &mut |_| None)
                     .on_hover_text(format!("{channel_name} / {srv}"));
                 if label.clicked() {
-                    self.ui.home = false;
-                    self.ui.plugins_open = false;
-                    self.ui.server = Some(call.server_key.clone());
-                    self.ui.call_view = true;
+                    if dm_call {
+                        self.show_dm(call.server_key.clone(), call.channel_id);
+                    } else {
+                        self.ui.home = false;
+                        self.ui.plugins_open = false;
+                        self.ui.server = Some(call.server_key.clone());
+                        self.ui.call_view = true;
+                    }
                 }
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -2255,6 +2335,7 @@ impl IngleApp {
                             acts.push(Act::OpenDm { key: key.clone(), uid: uid.clone() });
                             ui.close();
                         }
+                        crate::calls::call_item(ui, st, &uid, Some(&key), acts);
                         person_menu(ui, st, &uid, acts);
                         if ui.button("Copy safety code").clicked() {
                             acts.push(Act::Copy(ingle_proto::crypto::safety_code(&uid)));
@@ -2394,7 +2475,7 @@ impl IngleApp {
         let mut copy = None;
         let mut report: Option<String> = None;
         let mut reopen_report = false;
-        egui::Area::new(egui::Id::new("toasts"))
+        let shown = egui::Area::new(egui::Id::new("toasts"))
             .anchor(egui::Align2::RIGHT_BOTTOM, vec2(-20.0, -90.0))
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
@@ -2439,6 +2520,7 @@ impl IngleApp {
                     ui.add_space(6.0);
                 }
             });
+        self.ui.overlay_rects.push(shown.response.rect);
         if let Some(id) = copy {
             if let Some(t) = st.toasts.iter().find(|t| t.id == id) {
                 let when = chrono::Local::now().format("%Y-%m-%d %H:%M");

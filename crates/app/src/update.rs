@@ -1,6 +1,6 @@
 //! Updates, like Discord: Ingle checks firelitgames.com for a newer version, shows a green
-//! button when there is one, and on a click downloads it, installs it silently, reopens and
-//! rejoins the voice channel you were in.
+//! Update button when there is one (see `update_chip`), and on a click downloads it, installs
+//! it silently, reopens and rejoins the voice channel you were in.
 //!
 //! The release file (`latest.json`) must be signed with the Firelit release key and the
 //! download must match its SHA-256 (see `ingle_proto::release`), so a hacked website can't
@@ -57,7 +57,7 @@ pub enum Status {
 pub enum Checked {
     /// This is the newest version.
     UpToDate,
-    /// A newer version (the green button, and the tray icon's Update item, have it now).
+    /// A newer version (the Update button, and the tray icon's Update item, have it now).
     Found(String),
     Failed(String),
 }
@@ -79,7 +79,7 @@ pub struct Updater {
     dir: PathBuf,
     /// One check at a time (the regular one, or one someone asked for).
     check_lock: Arc<Mutex<()>>,
-    /// A check is running (the Check for updates button turns while it does).
+    /// A check is running (the updater's arrow turns while it does).
     checking: Arc<AtomicBool>,
     /// What checks people asked for found, waiting to be told.
     answers: Arc<Mutex<Vec<(Asker, Checked)>>>,
@@ -119,7 +119,7 @@ impl Updater {
     }
 
     /// Check right away (Check for updates), in the background. What it finds goes to the
-    /// green button as usual, and to [`Updater::take_answers`] for `asker`; then `done` is
+    /// Update button as usual, and to [`Updater::take_answers`] for `asker`; then `done` is
     /// called (from the checking thread).
     pub fn check_now(&self, asker: Asker, done: impl FnOnce() + Send + 'static) {
         // Nothing to look for while an update is on its way in.
@@ -148,7 +148,7 @@ impl Updater {
         mine.into_iter().map(|(_, c)| c).collect()
     }
 
-    /// One check. A newer version goes to the green button; the newer version's number, if
+    /// One check. A newer version goes to the Update button; the newer version's number, if
     /// any, or why the check failed, is returned. (A stale release file is also shown as an
     /// error by the regular checks; one someone asked for just answers with it.)
     fn check_and_apply(&self, asked: bool) -> Result<Option<String>, String> {
@@ -199,6 +199,20 @@ impl Updater {
         let Some(asset) = platform_asset(&manifest).cloned() else { return };
         *self.status.lock() = Status::Downloading(0, asset.size);
         let (s, r) = (self.status.clone(), self.repaint.clone());
+        // (Development builds: a pretend update's pretend download; see dev_pretend_check.)
+        #[cfg(debug_assertions)]
+        if asset.url == "pretend" {
+            let _ = std::thread::Builder::new().name("ingle-update-pretend".into()).spawn(move || {
+                for i in 0..=60u64 {
+                    *s.lock() = Status::Downloading(asset.size * i / 60, asset.size);
+                    r();
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+                *s.lock() = Status::Failed("that was a pretend update (INGLE_DEV_FAKE_UPDATE): nothing was downloaded".into());
+                r();
+            });
+            return;
+        }
         let _ = std::thread::Builder::new().name("ingle-update-dl".into()).spawn(move || {
             let result = fetch(&asset, &manifest.version, |done| {
                 *s.lock() = Status::Downloading(done, asset.size);
@@ -257,6 +271,10 @@ fn now_secs() -> i64 {
 
 /// The newer release, if there is one for this platform.
 fn check(dir: &Path) -> Result<Option<Manifest>, Check> {
+    #[cfg(debug_assertions)]
+    if let Some(pretend) = dev_pretend_check() {
+        return pretend;
+    }
     let text = agent()
         .get(&manifest_url())
         // The newest one, not a copy a cache kept (someone checking right after a release).
@@ -269,6 +287,24 @@ fn check(dir: &Path) -> Result<Option<Manifest>, Check> {
     let m = release::open(&text, RELEASE_KEY).map_err(Check::Failed)?;
     believe(&m, dir, now_secs()).map_err(Check::Stale)?;
     Ok((release::newer(&m.version, current_version()) && platform_asset(&m).is_some()).then_some(m))
+}
+
+/// Development builds only: `INGLE_DEV_FAKE_UPDATE` stands in for the website, to see how the
+/// updater looks in each state: `none` (up to date), `fail` (can't check), or a version that's
+/// "out" (whose download only pretends, and then fails). Never in release builds.
+#[cfg(debug_assertions)]
+fn dev_pretend_check() -> Option<Result<Option<Manifest>, Check>> {
+    let v = std::env::var("INGLE_DEV_FAKE_UPDATE").ok().filter(|v| !v.is_empty())?;
+    std::thread::sleep(Duration::from_millis(1200));
+    Some(match v.as_str() {
+        "none" => Ok(None),
+        "fail" => Err(Check::Failed("pretend: couldn't reach firelitgames.com".into())),
+        v => {
+            let asset = Some(Asset { url: "pretend".into(), sha256: String::new(), size: 55_000_000 });
+            let released = vec![current_version().to_string(), v.to_string()];
+            Ok(Some(Manifest { version: v.into(), notes: String::new(), windows: asset.clone(), linux_deb: asset, released, issued: 0, expires: 0 }))
+        }
+    })
 }
 
 /// A signed release file is only believed if it's within its dates and no older than the

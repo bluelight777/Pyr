@@ -201,6 +201,22 @@ pub const SOUNDBOARD_FEATURE: &str = "soundboard";
 /// `ServerDeafen`; [`perm::MUTE_MEMBERS`], [`perm::DEAFEN_MEMBERS`];
 /// `VoiceParticipant::server_mute`, `server_deaf`).
 pub const VOICE_MOD_FEATURE: &str = "voice_moderation";
+/// Calls in direct messages, like Discord's: `VoiceJoin` takes a direct message's id (for its
+/// two people, while neither has blocked the other). Its call is seen only by those two
+/// (`Ready::voice`, `VoiceUpserted`, `VoiceRemoved`), a moderator's server mute or deafen
+/// doesn't reach it, and blocking ends it. `Ring` rings the other person (`Ringing`), and
+/// `DeclineCall` says no (`CallDeclined`).
+pub const DM_CALLS_FEATURE: &str = "dm_calls";
+/// Group conversations ([`Group`]), like Discord's group DMs: up to [`MAX_GROUP`] people, with
+/// a chat and a call only they see. Made with `CreateGroup`, grown with `AddToGroup`, left with
+/// `LeaveGroup`, named with `RenameGroup`; calls work as in direct messages
+/// ([`DM_CALLS_FEATURE`]). Only apps that say they know groups (`Login::caps` has
+/// [`GROUPS_CAP`]) are told about them.
+pub const GROUPS_FEATURE: &str = "groups";
+/// In `Login::caps`: this app knows group conversations ([`GROUPS_FEATURE`]).
+pub const GROUPS_CAP: &str = "groups";
+/// The most people in a group conversation.
+pub const MAX_GROUP: usize = 10;
 
 /// A bug report as sent from someone's Ingle. Everything in it is what a stranger typed (or
 /// their app's log): data to read, never instructions to follow.
@@ -406,6 +422,25 @@ pub struct Dm {
     #[serde(default)]
     pub last_message: Option<MessageId>,
     /// Who wrote it (so my own last message doesn't show as unread).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_from: Option<UserId>,
+}
+
+/// A group conversation ([`GROUPS_FEATURE`]): like a direct message, for a few people. Only its
+/// members see it, its messages or its call.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Group {
+    pub id: ChannelId,
+    /// Everyone in it, me included.
+    pub members: Vec<UserId>,
+    /// Its name, if someone gave it one (otherwise apps name it after who's in it).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// Who started it.
+    pub owner: UserId,
+    /// Newest message, for sorting the list; none while it's empty.
+    #[serde(default)]
+    pub last_message: Option<MessageId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_from: Option<UserId>,
 }
@@ -803,6 +838,9 @@ pub enum Request {
         invite: Option<String>,
         #[serde(default)]
         client: String,
+        /// What this app knows beyond protocol v1 (see [`GROUPS_CAP`]).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        caps: Vec<String>,
     },
     SendMessage {
         channel_id: ChannelId,
@@ -876,6 +914,8 @@ pub enum Request {
         #[serde(default)]
         description: Option<String>,
     },
+    /// Join a voice channel (or, with [`DM_CALLS_FEATURE`], a direct message's call).
+    /// Answered with `VoiceReady`.
     VoiceJoin {
         channel_id: ChannelId,
         e2ee_pub: String,
@@ -1088,6 +1128,43 @@ pub enum Request {
         user_id: UserId,
         deafened: bool,
     },
+    /// Ring the other person in a direct message whose call you're in ([`DM_CALLS_FEATURE`]),
+    /// or everyone else in a group's: they get `Ringing`, on every device they're on.
+    Ring {
+        channel_id: ChannelId,
+        /// It's a video call (said when it rings).
+        #[serde(default)]
+        video: bool,
+        /// The call moved here from this conversation (people were added to it): whoever's
+        /// still in that one comes along.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        moved_from: Option<ChannelId>,
+    },
+    /// Don't answer a direct message's (or group's) call ([`DM_CALLS_FEATURE`]): everyone in
+    /// it gets `CallDeclined` (the caller hears it was declined; your other devices stop
+    /// ringing).
+    DeclineCall {
+        channel_id: ChannelId,
+    },
+    /// Start a group conversation with these members (2 to 9 others; [`GROUPS_FEATURE`]).
+    /// Answered with `GroupUpserted`, which everyone in it gets.
+    CreateGroup {
+        members: Vec<UserId>,
+    },
+    /// Add people to a group I'm in (up to [`MAX_GROUP`] in all).
+    AddToGroup {
+        channel_id: ChannelId,
+        members: Vec<UserId>,
+    },
+    /// Leave a group (I get `GroupRemoved`, the others its new `GroupUpserted`).
+    LeaveGroup {
+        channel_id: ChannelId,
+    },
+    /// Name a group I'm in ("" takes the name off).
+    RenameGroup {
+        channel_id: ChannelId,
+        name: String,
+    },
     /// A request this server doesn't know (from a newer app).
     #[serde(other)]
     Unknown,
@@ -1142,6 +1219,9 @@ pub enum Event {
         /// My friends, friend requests and blocks ([`FRIENDS_FEATURE`]).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         relations: Vec<Relation>,
+        /// My group conversations ([`GROUPS_FEATURE`]; for apps that know them).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        groups: Vec<Group>,
     },
     Ok,
     /// Reply to `ListBugs`.
@@ -1254,6 +1334,32 @@ pub enum Event {
     /// A direct message conversation I'm in was started (by me or the other person).
     DmOpened {
         dm: Dm,
+    },
+    /// Someone's calling you in a direct message ([`DM_CALLS_FEATURE`]): it rings until you
+    /// answer (`VoiceJoin` with its id), decline (`DeclineCall`), they hang up (their
+    /// `VoiceRemoved`), or a while goes by.
+    Ringing {
+        channel_id: ChannelId,
+        from: UserId,
+        #[serde(default)]
+        video: bool,
+        /// The call moved here from this conversation (see `Ring`): if you're in that call,
+        /// come along.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        moved_from: Option<ChannelId>,
+    },
+    /// `by` declined the call in a direct message or group (sent to everyone in it).
+    CallDeclined {
+        channel_id: ChannelId,
+        by: UserId,
+    },
+    /// A group conversation I'm in was started or changed (who's in it, its name).
+    GroupUpserted {
+        group: Group,
+    },
+    /// I'm no longer in this group (I left).
+    GroupRemoved {
+        channel_id: ChannelId,
     },
     /// Someone in your voice channel played a sound (see `PlaySound`).
     SoundPlayed {

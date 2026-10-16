@@ -313,7 +313,12 @@ async fn event_loop(shared: Arc<Shared>, mut rx: mpsc::UnboundedReceiver<CallEve
             break;
         }
         if end {
-            shared.end_call_local("You left the voice channel.");
+            // (A direct message's call ends when the other person blocks you, say.)
+            let dm = {
+                let st = shared.state.read_recursive();
+                st.call.as_ref().is_some_and(|c| st.is_dm_call(&c.server_key, c.channel_id))
+            };
+            shared.end_call_local(if dm { "The call ended." } else { "You left the voice channel." });
             break;
         }
         shared.refresh_call_view();

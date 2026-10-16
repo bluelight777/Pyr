@@ -219,11 +219,17 @@ struct Inner {
     /// How each person was (muted, deafened) when they last left voice, for a few minutes:
     /// sent back when they rejoin (see `VoiceReady::before`).
     left_voice: HashMap<UserId, (SelfVoiceState, Instant)>,
+    /// The call each person was in last, and when they left it: a call moved to a group (see
+    /// `Request::Ring`) is only followed from the call its caller has just left.
+    last_call: HashMap<UserId, (ChannelId, Instant)>,
 }
 
 /// How long the server remembers how someone was when they left voice (an app update takes
 /// well under this).
 const LEFT_VOICE_KEPT: Duration = Duration::from_secs(15 * 60);
+/// How soon after leaving a call its caller can move it (adding people makes a group and moves
+/// the call there in a moment).
+const MOVED_CALL_WITHIN: Duration = Duration::from_secs(60);
 
 /// What a moderator did to someone in voice (see `Hub::set_moderated`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -244,6 +250,8 @@ impl ModeratedVoice {
 
 struct Client {
     user_id: UserId,
+    /// The app knows group conversations (`GROUPS_CAP`): only such apps hear of them.
+    groups: bool,
     conn: quinn::Connection,
     tx: Outbox,
     session: Option<SessionId>,
@@ -253,6 +261,9 @@ struct Client {
 
 struct Voice {
     p: VoiceParticipant,
+    /// A direct message's or group's call: its people, the only ones who see it (see
+    /// `DM_CALLS_FEATURE`).
+    audience: Option<Vec<UserId>>,
     conn_id: ConnId,
     conn: quinn::Connection,
     tx: Outbox,
@@ -568,6 +579,16 @@ impl Hub {
         }
     }
 
+    /// Who's in voice, changed: told to everyone, or for a private conversation's call only to
+    /// its people.
+    fn voice_news_locked(inner: &Inner, audience: Option<&Vec<UserId>>, ev: Event) {
+        let Some(who) = audience else { return Self::broadcast_locked(inner, ev) };
+        let f = frame(0, ev);
+        for c in inner.clients.values().filter(|c| who.contains(&c.user_id)) {
+            let _ = c.tx.send(f.clone());
+        }
+    }
+
     pub fn broadcast(&self, ev: Event) {
         Self::broadcast_locked(&self.inner.lock(), ev);
     }
@@ -579,7 +600,9 @@ impl Hub {
     }
 
     fn broadcast_in_except(&self, channel_id: ChannelId, except: Option<ConnId>, ev: Event) {
+        // A direct message's two people, or a group's members (with apps that know groups).
         let dm = self.db.dm_members(channel_id);
+        let group = if dm.is_none() { self.db.group(channel_id).map(|g| g.members) } else { None };
         let b = frame(0, ev);
         for (id, c) in self.inner.lock().clients.iter() {
             if Some(*id) == except {
@@ -590,7 +613,50 @@ impl Hub {
                     continue;
                 }
             }
+            if let Some(members) = &group {
+                if !c.groups || !members.contains(&c.user_id) {
+                    continue;
+                }
+            }
             let _ = c.tx.send(b.clone());
+        }
+    }
+
+    /// Sends to one member's other connections that know group conversations.
+    pub fn send_to_group_members_except(&self, uid: &str, except: ConnId, ev: Event) {
+        let b = frame(0, ev);
+        for (id, c) in self.inner.lock().clients.iter() {
+            if *id != except && c.groups && c.user_id == uid {
+                let _ = c.tx.send(b.clone());
+            }
+        }
+    }
+
+    /// Sends to every open connection of these members that knows group conversations.
+    pub fn send_to_group_members(&self, uids: &[UserId], ev: Event) {
+        let b = frame(0, ev);
+        for c in self.inner.lock().clients.values().filter(|c| c.groups && uids.contains(&c.user_id)) {
+            let _ = c.tx.send(b.clone());
+        }
+    }
+
+    /// A group's members changed: its call is seen by who's in it now. Who left leaves the
+    /// call; who came gets told who's in it.
+    pub fn group_call_members(&self, channel_id: ChannelId, members: &[UserId], left: Option<&str>) {
+        let mut inner = self.inner.lock();
+        let gone: Vec<SessionId> =
+            inner.voice.values().filter(|v| v.p.channel_id == channel_id && Some(v.p.user_id.as_str()) == left).map(|v| v.p.session).collect();
+        for s in gone {
+            Self::remove_session_locked(&mut inner, s);
+        }
+        let mut news = Vec::new();
+        for v in inner.voice.values_mut().filter(|v| v.p.channel_id == channel_id) {
+            v.audience = Some(members.to_vec());
+            news.push(v.p.clone());
+        }
+        let audience = members.to_vec();
+        for p in news {
+            Self::voice_news_locked(&inner, Some(&audience), Event::VoiceUpserted { participant: p });
         }
     }
 
@@ -687,6 +753,7 @@ impl Hub {
         tx: Outbox,
         session_cell: Arc<AtomicU32>,
         re: u64,
+        groups: bool,
     ) -> Result<(), (ErrorCode, String)> {
         let mut inner = self.inner.lock();
         // Checked again under the lock: a ban since the login was authorized wins.
@@ -701,6 +768,7 @@ impl Hub {
             conn_id,
             Client {
                 user_id: uid.to_string(),
+                groups,
                 conn,
                 tx: tx.clone(),
                 session: None,
@@ -726,11 +794,13 @@ impl Hub {
             server: self.info_for(uid),
             channels: self.db.channels(),
             members,
-            voice: inner.voice.values().map(|v| v.p.clone()).collect(),
+            // (Private conversations' calls only for their own people.)
+            voice: inner.voice.values().filter(|v| v.audience.as_ref().is_none_or(|who| who.iter().any(|w| w == uid))).map(|v| v.p.clone()).collect(),
             roles: self.db.roles(),
-            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE].iter().map(|s| s.to_string()).collect(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE].iter().map(|s| s.to_string()).collect(),
             dms: self.db.dms_of(uid),
             relations: self.db.relations_of(uid),
+            groups: if groups { self.db.groups_of(uid) } else { Vec::new() },
         };
         // A very big community could outgrow one frame: then leave out members who've been
         // away longest (their names show up again when they come back).
@@ -795,17 +865,19 @@ impl Hub {
         inner.left_voice.retain(|_, (_, at)| at.elapsed() < LEFT_VOICE_KEPT);
         let was = SelfVoiceState { self_mute: v.p.self_mute, self_deaf: v.p.self_deaf };
         inner.left_voice.insert(v.p.user_id.clone(), (was, Instant::now()));
+        inner.last_call.retain(|_, (_, at)| at.elapsed() < MOVED_CALL_WITHIN);
+        inner.last_call.insert(v.p.user_id.clone(), (v.p.channel_id, Instant::now()));
         let mut changed = Vec::new();
         for other in inner.voice.values_mut() {
             for subs in other.subs.values_mut() {
                 subs.remove(&session);
             }
             if Self::sync_viewers(other) {
-                changed.push(other.p.clone());
+                changed.push((other.p.clone(), other.audience.clone()));
             }
         }
-        for p in changed {
-            Self::broadcast_locked(inner, Event::VoiceUpserted { participant: p });
+        for (p, audience) in changed {
+            Self::voice_news_locked(inner, audience.as_ref(), Event::VoiceUpserted { participant: p });
         }
         if let Some(c) = inner.clients.get_mut(&v.conn_id) {
             if c.session == Some(session) {
@@ -813,8 +885,9 @@ impl Hub {
                 c.session_cell.store(0, Ordering::Relaxed);
             }
         }
-        Self::broadcast_locked(
+        Self::voice_news_locked(
             inner,
+            v.audience.as_ref(),
             Event::VoiceRemoved { session, user_id: v.p.user_id.clone(), channel_id: v.p.channel_id },
         );
     }
@@ -832,13 +905,30 @@ impl Hub {
         self_mute: bool,
         self_deaf: bool,
     ) -> Reply {
-        match self.db.channel(channel_id) {
-            Some(c) if c.kind == ChannelKind::Voice => {}
-            _ => return err(ErrorCode::NotFound, "No such voice channel."),
-        }
+        // A voice channel, or a private conversation's call: a direct message's (for its two
+        // people, while neither has blocked the other) or a group's (for its members).
+        let dm = self.db.dm_members(channel_id);
+        let audience = match self.db.channel(channel_id) {
+            Some(c) if c.kind == ChannelKind::Voice => None,
+            Some(_) => return err(ErrorCode::NotFound, "No such voice channel."),
+            None => match self.db.private_members(channel_id) {
+                Some(who) => Some(who),
+                None => return err(ErrorCode::NotFound, "No such voice channel."),
+            },
+        };
         let mut inner = self.inner.lock();
         let Some(client) = inner.clients.get(&conn_id) else { return err(ErrorCode::Unauthorized, "not logged in") };
         let uid = client.user_id.clone();
+        if let Some(who) = &audience {
+            if !who.contains(&uid) || (dm.is_none() && !client.groups) {
+                return err(ErrorCode::NotFound, "No such voice channel.");
+            }
+        }
+        if let Some((a, b)) = &dm {
+            if self.db.blocked_between(a, b) {
+                return err(ErrorCode::Forbidden, "You can't call this person.");
+            }
+        }
         let (Some(pk), Some(sig)) = (b64::decode_array::<32>(&e2ee_pub), b64::decode_array::<64>(&e2ee_sig)) else {
             return err(ErrorCode::BadRequest, "bad E2EE key");
         };
@@ -857,9 +947,10 @@ impl Hub {
         let client = inner.clients.get_mut(&conn_id).expect("checked above");
         client.session = Some(session);
         client.session_cell.store(session, Ordering::Relaxed);
-        // A moderator's mute or deafen follows them from channel to channel, and visit to visit.
-        let server_mute = self.moderated(ModeratedVoice::Muted).contains(&uid);
-        let server_deaf = self.moderated(ModeratedVoice::Deafened).contains(&uid);
+        // A moderator's mute or deafen follows them from channel to channel, and visit to visit
+        // (but not into a private conversation's call: that isn't the server's to moderate).
+        let server_mute = audience.is_none() && self.moderated(ModeratedVoice::Muted).contains(&uid);
+        let server_deaf = audience.is_none() && self.moderated(ModeratedVoice::Deafened).contains(&uid);
         let p = VoiceParticipant {
             session,
             user_id: uid,
@@ -875,6 +966,7 @@ impl Hub {
         };
         let voice = Voice {
             p: p.clone(),
+            audience: audience.clone(),
             conn_id,
             conn: client.conn.clone(),
             tx: client.tx.clone(),
@@ -882,7 +974,7 @@ impl Hub {
             last_keyframe_request: HashMap::new(),
         };
         inner.voice.insert(session, voice);
-        Self::broadcast_locked(&inner, Event::VoiceUpserted { participant: p });
+        Self::voice_news_locked(&inner, audience.as_ref(), Event::VoiceUpserted { participant: p });
         let participants = inner.voice.values().filter(|v| v.p.channel_id == channel_id).map(|v| v.p.clone()).collect();
         debug!(session, channel_id, "voice join");
         Ok(Event::VoiceReady { session, participants, before })
@@ -903,8 +995,8 @@ impl Hub {
         };
         let Some(v) = inner.voice.get_mut(&session) else { return err(ErrorCode::BadRequest, "not in voice") };
         if f(v) {
-            let p = v.p.clone();
-            Self::broadcast_locked(&inner, Event::VoiceUpserted { participant: p });
+            let (p, audience) = (v.p.clone(), v.audience.clone());
+            Self::voice_news_locked(&inner, audience.as_ref(), Event::VoiceUpserted { participant: p });
         }
         Ok(Event::Ok)
     }
@@ -938,7 +1030,8 @@ impl Hub {
             }
         }
         let mut now = Vec::new();
-        for v in inner.voice.values_mut().filter(|v| v.p.user_id == user_id) {
+        // (Not in a private conversation's call: that isn't the server's to moderate.)
+        for v in inner.voice.values_mut().filter(|v| v.p.user_id == user_id && v.audience.is_none()) {
             let flag = match what {
                 ModeratedVoice::Muted => &mut v.p.server_mute,
                 ModeratedVoice::Deafened => &mut v.p.server_deaf,
@@ -952,6 +1045,38 @@ impl Hub {
             Self::broadcast_locked(&inner, Event::VoiceUpserted { participant: p });
         }
         Ok(Event::Ok)
+    }
+
+    /// They left this call a moment ago (see `MOVED_CALL_WITHIN`).
+    pub fn just_left_call(&self, uid: &str, channel_id: ChannelId) -> bool {
+        self.inner.lock().last_call.get(uid).is_some_and(|(c, at)| *c == channel_id && at.elapsed() < MOVED_CALL_WITHIN)
+    }
+
+    /// Who's in a call now (on any of their devices).
+    pub fn in_call(&self, channel_id: ChannelId) -> HashSet<UserId> {
+        self.inner.lock().voice.values().filter(|v| v.p.channel_id == channel_id).map(|v| v.p.user_id.clone()).collect()
+    }
+
+    /// The voice channel (or direct message's call) a connection is in.
+    pub fn voice_channel_of(&self, conn_id: ConnId) -> Option<ChannelId> {
+        let inner = self.inner.lock();
+        Self::session_of(&inner, conn_id).and_then(|s| inner.voice.get(&s)).map(|v| v.p.channel_id)
+    }
+
+    /// Ends the call in the direct message between two people (one blocked the other).
+    pub fn end_dm_call(&self, x: &str, y: &str) {
+        let mut pair = vec![x.to_string(), y.to_string()];
+        pair.sort();
+        let mut inner = self.inner.lock();
+        let sessions: Vec<SessionId> = inner
+            .voice
+            .values()
+            .filter(|v| v.audience.as_ref().is_some_and(|a| a.len() == 2 && a.iter().all(|u| pair.contains(u))) && self.db.dm_members(v.p.channel_id).is_some())
+            .map(|v| v.p.session)
+            .collect();
+        for s in sessions {
+            Self::remove_session_locked(&mut inner, s);
+        }
     }
 
     pub fn publish(&self, conn_id: ConnId, t: TrackInfo) -> Reply {
@@ -1005,8 +1130,8 @@ impl Hub {
                 m.remove(&me);
             }
             if Self::sync_viewers(publisher) {
-                let p = publisher.p.clone();
-                Self::broadcast_locked(&inner, Event::VoiceUpserted { participant: p });
+                let (p, audience) = (publisher.p.clone(), publisher.audience.clone());
+                Self::voice_news_locked(&inner, audience.as_ref(), Event::VoiceUpserted { participant: p });
             }
             return Ok(Event::Ok);
         }
@@ -1027,8 +1152,8 @@ impl Hub {
         publisher.last_keyframe_request.insert(track_id, Instant::now());
         let _ = publisher.tx.send(frame(0, Event::KeyframeRequested { track: track_id }));
         if Self::sync_viewers(publisher) {
-            let p = publisher.p.clone();
-            Self::broadcast_locked(&inner, Event::VoiceUpserted { participant: p });
+            let (p, audience) = (publisher.p.clone(), publisher.audience.clone());
+            Self::voice_news_locked(&inner, audience.as_ref(), Event::VoiceUpserted { participant: p });
         }
         Ok(Event::Ok)
     }

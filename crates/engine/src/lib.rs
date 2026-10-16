@@ -13,6 +13,7 @@ pub mod config;
 pub mod e2ee;
 pub mod hotkey;
 pub mod qos;
+mod ring;
 
 /// Problems found where there's no app state at hand (saving settings, a background upload):
 /// shown as error notices by the app (`take_errors`).
@@ -141,8 +142,12 @@ pub struct Shared {
     /// only runs frames while its window is showing, so after it's hidden to the tray or
     /// minimized `window_focused` still says what the last frame saw.
     pub focus_probe: Mutex<Option<Box<dyn Fn() -> Option<bool> + Send + Sync>>>,
-    /// A direct message conversation just opened with `open_dm`, for the UI to show.
+    /// A direct message conversation just opened with `open_dm` (or a group made with
+    /// `create_group`), for the UI to show.
     pub opened_dm: Mutex<Option<(String, ChannelId)>>,
+    /// A group just made to call in: (server, group, video, the conversation whose call moves
+    /// there).
+    call_group: Mutex<Option<(String, ChannelId, bool, Option<ChannelId>)>>,
     /// What our screen share is showing (to share it again after a reconnect).
     pub screen_source: Mutex<Option<String>>,
     /// Counts starts and stops of our [camera, screen share]: a start that's still opening when
@@ -154,6 +159,8 @@ pub struct Shared {
     pub sounds: Mutex<soundboard::Cache>,
     /// Sound files known to be on a server: (server key, file id).
     sounds_on: Mutex<std::collections::HashSet<(String, String)>>,
+    /// The ringer is going (see `ring`).
+    ringer: AtomicBool,
 }
 
 /// What sound files are, to the file streams.
@@ -370,6 +377,18 @@ impl Shared {
                 Err(e) => debug!("couldn't play a soundboard sound ({id}): {e:#}"),
             }
         });
+    }
+
+    /// Plays the ringtone or the ringback, if ringing is on (whatever the other sounds are).
+    pub fn play_ring(&self, sound: sfx::Sound) {
+        let Some(sfx) = &self.sfx else { return };
+        let (on, device, volume) = {
+            let st = self.state.read_recursive();
+            (st.settings.ring, st.settings.output_device.clone(), st.settings.sound_volume)
+        };
+        if on {
+            sfx.play(sound, device, volume);
+        }
     }
 
     /// Plays a notification sound, if they're on.
@@ -646,6 +665,10 @@ impl Engine {
             muted_servers: cfg.muted_servers.clone(),
             blocked: cfg.blocked.clone(),
             muted_channels: cfg.muted_channels.iter().flat_map(|(k, cs)| cs.iter().map(move |c| (k.clone(), *c))).collect(),
+            incoming_calls: Vec::new(),
+            outgoing_call: None,
+            missed_calls: 0,
+            last_missed_from: String::new(),
         };
         // Tests and bots (which bring their own audio) stay quiet.
         let sfx = if opts.audio.is_none() { Some(sfx::Sfx::start()) } else { None };
@@ -689,6 +712,8 @@ impl Engine {
             read_unsaved: AtomicBool::new(false),
             sounds: Mutex::new(soundboard::Cache::default()),
             sounds_on: Mutex::new(Default::default()),
+            ringer: AtomicBool::new(false),
+            call_group: Mutex::new(None),
         });
         // Read marks for channels are saved a few at a time (reading a busy channel moves them
         // with every message), so what you've read stays read after a restart or a crash.
@@ -762,8 +787,11 @@ impl Engine {
     fn request_then(&self, key: &str, req: Request, then: impl FnOnce(&Arc<Shared>, Event) + Send + 'static) {
         let Some(h) = self.handle(key) else { return };
         let shared = self.shared.clone();
+        // Queued now (not in the task), so requests go in the order they're made: adding
+        // someone to a group and then ringing them, say.
+        let reply = h.request(req);
         self.shared.rt.spawn(async move {
-            match h.request(req).await {
+            match reply.await {
                 Ok(Event::Error { message, .. }) => {
                     shared.state.write().toast(message, true);
                     (shared.repaint)();
@@ -1407,7 +1435,7 @@ impl Engine {
             let mut st = shared.state.write();
             let mut newest = None;
             if let Some(s) = st.server_mut(&k) {
-                let dm = s.dm(channel_id).is_some();
+                let dm = s.is_private(channel_id);
                 let log = s.logs.entry(channel_id).or_default();
                 log.loading = false;
                 if let Event::History { messages, complete, .. } = ev {
@@ -1638,45 +1666,12 @@ impl Engine {
     // --------------------------------------------------------------- voice
 
     pub fn join_voice(&self, key: &str, channel_id: ChannelId) {
-        let in_same = self
-            .shared
-            .state
-            .read()
-            .call
-            .as_ref()
-            .map(|c| c.server_key == key && c.channel_id == channel_id)
-            .unwrap_or(false);
-        if in_same {
-            return;
-        }
-        self.leave_voice();
-        self.stop_mic_test();
-        let shared = self.shared.clone();
-        let key = key.to_string();
-        self.shared.rt.spawn(async move {
-            match Call::join(shared.clone(), key.clone(), channel_id).await {
-                Err(e) => {
-                    shared.state.write().toast(format!("Couldn't join voice: {e:#}"), true);
-                    if shared.call.lock().is_none() {
-                        *shared.call_events.lock() = None;
-                    }
-                }
-                Ok(()) => {
-                    // Your join sound, for everyone there (not when a call comes back after
-                    // the server restarted: that isn't joining).
-                    let join = shared.state.read_recursive().settings.join_sound.clone();
-                    let has = shared.state.read_recursive().server(&key).is_some_and(|s| s.has(SOUNDBOARD_FEATURE));
-                    if let Some(sound) = join.filter(|_| has) {
-                        // A moment for the others to hear we're here (and get our keys).
-                        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-                        if let Err(e) = play_sound_in_call(&shared, &key, &sound).await {
-                            debug!("join sound didn't play: {e:#}");
-                        }
-                    }
-                }
-            }
-            (shared.repaint)();
-        });
+        self.join_voice_with(key, channel_id, AfterJoin::default());
+    }
+
+    /// Join a voice channel (or a direct message's call), then do `after`.
+    fn join_voice_with(&self, key: &str, channel_id: ChannelId, after: AfterJoin) {
+        join_voice_on(&self.shared, key, channel_id, after);
     }
 
     /// The offer to turn the camera or screen share back on after a drop: done with (`camera`,
@@ -1695,20 +1690,184 @@ impl Engine {
     }
 
     pub fn leave_voice(&self) {
-        qos::set_video(false);
+        leave_voice_on(&self.shared);
+    }
+
+    // ------------------------------------------- calls in direct messages and groups
+
+    /// Call the others in a direct message or group (see `DM_CALLS_FEATURE`): join its call
+    /// and ring them (`video`: with the camera on). If someone's in the call already, this
+    /// just joins them; if we're in it already, it rings them again.
+    pub fn start_dm_call(&self, key: &str, channel_id: ChannelId, video: bool) {
+        self.start_private_call(key, channel_id, video, None);
+    }
+
+    /// Starts a call (`moved_from`: carried over from that conversation's call).
+    fn start_private_call(&self, key: &str, channel_id: ChannelId, video: bool, moved_from: Option<ChannelId>) {
+        let (to, someone_in, in_it, camera_on) = {
+            let st = self.shared.state.read_recursive();
+            let Some(s) = st.server(key) else { return };
+            let to = s.others_in(channel_id, &st.my_uid);
+            if to.is_empty() {
+                return;
+            }
+            let someone = s.voice_in(channel_id).iter().any(|p| to.contains(&p.user_id));
+            let call = st.call.as_ref().filter(|c| c.server_key == key && c.channel_id == channel_id);
+            (to, someone, call.is_some(), call.is_some_and(|c| c.camera_on))
+        };
+        let ring = !someone_in || moved_from.is_some();
         {
             let mut st = self.shared.state.write();
-            st.voice_rejoin = None;
-            st.resume_offer = None;
+            // Their call ringing here: calling them back is answering it.
+            st.incoming_calls.retain(|c| !(c.server_key == key && c.channel_id == channel_id));
+            st.outgoing_call = (!someone_in).then(|| OutgoingCall {
+                server_key: key.to_string(),
+                channel_id,
+                to,
+                declined: Vec::new(),
+                video,
+                since: std::time::Instant::now(),
+                state: RingState::Ringing,
+            });
         }
-        let call = self.shared.call.lock().take();
-        if let Some(c) = call {
-            c.shutdown(true);
+        if in_it {
+            if ring {
+                self.request(key, Request::Ring { channel_id, video, moved_from });
+            }
+            if video && !camera_on {
+                self.start_camera();
+            }
+        } else {
+            self.join_voice_with(key, channel_id, AfterJoin { ring: ring.then_some(video), camera: video, moved_from });
         }
-        *self.shared.call_events.lock() = None;
-        self.shared.video.clear();
-        self.shared.state.write().call = None;
+        if !someone_in {
+            ring::ensure(&self.shared);
+        }
         (self.shared.repaint)();
+    }
+
+    /// Ring them again, after they declined or didn't answer.
+    pub fn ring_again(&self) {
+        let o = {
+            let mut st = self.shared.state.write();
+            let Some(o) = st.outgoing_call.as_mut() else { return };
+            o.state = RingState::Ringing;
+            o.declined.clear();
+            o.since = std::time::Instant::now();
+            o.clone()
+        };
+        self.request(&o.server_key, Request::Ring { channel_id: o.channel_id, video: o.video, moved_from: None });
+        ring::ensure(&self.shared);
+        (self.shared.repaint)();
+    }
+
+    /// Answer a call ringing here, or join one going on in a conversation (`video`: with the
+    /// camera on).
+    pub fn answer_call(&self, key: &str, channel_id: ChannelId, video: bool) {
+        self.shared.state.write().incoming_calls.retain(|c| !(c.server_key == key && c.channel_id == channel_id));
+        self.join_voice_with(key, channel_id, AfterJoin { ring: None, camera: video, moved_from: None });
+        (self.shared.repaint)();
+    }
+
+    /// Don't answer a call ringing here: it stops ringing (on your other devices too), and the
+    /// caller sees you declined.
+    pub fn decline_call(&self, key: &str, channel_id: ChannelId) {
+        self.shared.state.write().incoming_calls.retain(|c| !(c.server_key == key && c.channel_id == channel_id));
+        self.request(key, Request::DeclineCall { channel_id });
+        (self.shared.repaint)();
+    }
+
+    // ------------------------------------------------------------ groups
+
+    /// Start a group with these people (see `GROUPS_FEATURE`); `take_opened_dm` then says to
+    /// show it. `call`: and call them there, with video or not. Started from a direct
+    /// message's call (`from`), that call moves to the group: we go, and so does whoever's
+    /// still in it with us.
+    pub fn create_group(&self, key: &str, members: Vec<UserId>, call: Option<bool>, from: Option<ChannelId>) {
+        let k = key.to_string();
+        let Some(h) = self.handle(key) else { return };
+        let shared = self.shared.clone();
+        self.shared.rt.spawn(async move {
+            match h.request(Request::CreateGroup { members }).await {
+                Ok(Event::GroupUpserted { group }) => {
+                    let id = group.id;
+                    if let Some(s) = shared.state.write().server_mut(&k) {
+                        s.upsert_group(group);
+                    }
+                    *shared.opened_dm.lock() = Some((k.clone(), id));
+                    if let Some(video) = call {
+                        *shared.call_group.lock() = Some((k, id, video, from));
+                    }
+                    (shared.repaint)();
+                }
+                Ok(Event::Error { message, .. }) => {
+                    shared.state.write().toast(message, true);
+                    (shared.repaint)();
+                }
+                _ => {}
+            }
+        });
+    }
+
+    /// A group made by `create_group` to call in: the call starts (from the app's frames).
+    pub fn take_group_call(&self) {
+        let todo = self.shared.call_group.lock().take();
+        if let Some((key, id, video, from)) = todo {
+            self.start_private_call(&key, id, video, from);
+        }
+    }
+
+    /// Adds people to a group; `ring`: we're in its call, so ring them into it (once they're
+    /// in: if adding them is refused, nobody rings).
+    pub fn add_to_group(&self, key: &str, channel_id: ChannelId, members: Vec<UserId>, ring: bool) {
+        let Some(h) = self.handle(key) else { return };
+        let (shared, k) = (self.shared.clone(), key.to_string());
+        let added = h.request(Request::AddToGroup { channel_id, members: members.clone() });
+        self.shared.rt.spawn(async move {
+            match added.await {
+                Ok(Event::Error { message, .. }) => {
+                    shared.state.write().toast(message, true);
+                    (shared.repaint)();
+                    return;
+                }
+                Ok(_) => {}
+                Err(_) => return,
+            }
+            if !ring || !shared.state.read_recursive().call.as_ref().is_some_and(|c| c.server_key == k && c.channel_id == channel_id) {
+                return;
+            }
+            shared.state.write().outgoing_call = Some(OutgoingCall {
+                server_key: k.clone(),
+                channel_id,
+                to: members,
+                declined: Vec::new(),
+                video: false,
+                since: std::time::Instant::now(),
+                state: RingState::Ringing,
+            });
+            ring::ensure(&shared);
+            if let Ok(Event::Error { message, .. }) = h.request(Request::Ring { channel_id, video: false, moved_from: None }).await {
+                let mut st = shared.state.write();
+                st.toast(message, true);
+                if st.outgoing_call.as_ref().is_some_and(|o| o.server_key == k && o.channel_id == channel_id) {
+                    st.outgoing_call = None;
+                }
+            }
+            (shared.repaint)();
+        });
+    }
+
+    pub fn leave_group(&self, key: &str, channel_id: ChannelId) {
+        // Out of its call first.
+        let in_it = self.shared.state.read_recursive().call.as_ref().is_some_and(|c| c.server_key == key && c.channel_id == channel_id);
+        if in_it {
+            self.leave_voice();
+        }
+        self.request(key, Request::LeaveGroup { channel_id });
+    }
+
+    pub fn rename_group(&self, key: &str, channel_id: ChannelId, name: &str) {
+        self.request(key, Request::RenameGroup { channel_id, name: name.to_string() });
     }
 
     pub fn set_mute(&self, muted: bool) {
@@ -1992,18 +2151,7 @@ impl Engine {
     }
 
     pub fn start_camera(&self) {
-        let settings = self.shared.state.read_recursive().settings.clone();
-        let device = settings.camera_device.clone().or_else(|| {
-            let cams = video::list_cameras();
-            cams.first().map(|c| c.0.clone())
-        });
-        let Some(device) = device else {
-            self.toast("No camera found.", true);
-            return;
-        };
-        let (w, h, fps, bitrate) = settings.camera_quality.params();
-        let cfg = PublisherConfig { screen: false, max_width: w, max_height: h, fps, bitrate };
-        self.start_video(track::CAMERA, &device, cfg);
+        start_camera_on(&self.shared);
     }
 
     pub fn start_screen(&self, source_id: &str) {
@@ -2015,78 +2163,7 @@ impl Engine {
     }
 
     fn start_video(&self, track_id: u8, source: &str, cfg: PublisherConfig) {
-        let shared = self.shared.clone();
-        let source = source.to_string();
-        let which = (track_id == track::SCREEN) as usize;
-        // This start wins over any earlier one still opening.
-        let generation = shared.video_gen[which].fetch_add(1, Ordering::SeqCst) + 1;
-        // Opening a camera or a capture can take seconds: never on the UI thread, and never while
-        // holding the call (the UI, voice and the network need it meanwhile).
-        self.shared.rt.spawn_blocking(move || {
-            let current = || shared.video_gen[which].load(Ordering::SeqCst) == generation;
-            // What's being sent now stops first (a camera can't be opened twice).
-            let (ctx, old) = match shared.call.lock().as_mut() {
-                Some(c) => (Some(c.video_ctx()), Some(c.take_video(&shared, track_id))),
-                None => (None, None),
-            };
-            drop(old);
-            let what = if track_id == track::SCREEN { "share your screen" } else { "start your camera" };
-            let Some(ctx) = ctx else {
-                shared.state.write().toast(format!("Couldn't {what}: join a voice channel first"), true);
-                return;
-            };
-            if !current() {
-                return;
-            }
-            let installed = match ctx.start(&shared, track_id, &source, cfg) {
-                Ok((out, info)) => {
-                    let mut call = shared.call.lock();
-                    match call.as_mut() {
-                        // Still in the same call, and nobody pressed stop meanwhile.
-                        Some(c) if c.session == ctx.session && current() => {
-                            let replaced = c.install_video(track_id, out, info);
-                            drop(call);
-                            drop(replaced);
-                            true
-                        }
-                        _ => {
-                            drop(call);
-                            drop(out);
-                            false
-                        }
-                    }
-                }
-                Err(e) => {
-                    if current() {
-                        shared.state.write().toast(format!("Couldn't {what}: {e:#}"), true);
-                    }
-                    false
-                }
-            };
-            if installed && track_id == track::SCREEN && shared.state.read_recursive().settings.share_audio {
-                // Sound for the stream. Started without holding the call lock, since the
-                // system can take a moment to set up capture.
-                if let Some(src) = stream_audio_source(&source) {
-                    let sink = shared.call.lock().as_ref().map(|c| c.stream_audio_sink(&shared));
-                    if let Some(sink) = sink {
-                        // The call is taken back out of the stream's sound, in case it gets in
-                        // (not from the test pattern, which never has it).
-                        let played = (src != audio::stream::StreamAudioSource::Synthetic).then(|| shared.played.clone());
-                        match audio::stream::StreamAudio::start(src, STREAM_AUDIO_KBPS, sink, played) {
-                            Ok(sa) => {
-                                let leftover = shared.call.lock().as_mut().map(|c| c.attach_stream_audio(sa));
-                                drop(leftover);
-                            }
-                            Err(e) => {
-                                tracing::warn!("stream audio unavailable: {e:#}");
-                                shared.state.write().toast(format!("Sharing without sound: {e:#}"), true);
-                            }
-                        }
-                    }
-                }
-            }
-            shared.refresh_call_view();
-        });
+        start_video_on(&self.shared, track_id, source, cfg);
     }
 
     pub fn stop_camera(&self) {
@@ -2266,15 +2343,7 @@ impl Engine {
     }
 
     pub fn stop_mic_test(&self) {
-        self.shared.state.write().mic_test = false;
-        if let Some(c) = self.shared.call.lock().as_ref() {
-            if let Some(a) = &c.audio {
-                a.controls.monitor.store(false, Ordering::Relaxed);
-            }
-        }
-        if let Some(mut e) = self.shared.mic_test.lock().take() {
-            e.stop();
-        }
+        stop_mic_test_on(&self.shared);
     }
 
     /// A live preview of a screen or window in the share picker (`None` stops it). A few
@@ -2388,6 +2457,218 @@ pub(crate) fn sync_blocks(shared: &Arc<Shared>, key: &str) {
     }
 }
 
+/// Join a voice channel (or a private conversation's call), then do `after`.
+pub(crate) fn join_voice_on(shared: &Arc<Shared>, key: &str, channel_id: ChannelId, after: AfterJoin) {
+    let in_same = shared
+        .state
+        .read()
+        .call
+        .as_ref()
+        .map(|c| c.server_key == key && c.channel_id == channel_id)
+        .unwrap_or(false);
+    if in_same {
+        return;
+    }
+    // Out of any other call first (ringing someone in the one being joined goes on).
+    let ringing = shared.state.read_recursive().outgoing_call.clone().filter(|o| o.server_key == key && o.channel_id == channel_id);
+    leave_voice_on(shared);
+    if ringing.is_some() {
+        shared.state.write().outgoing_call = ringing;
+    }
+    stop_mic_test_on(shared);
+    let rt = shared.rt.clone();
+    let shared = shared.clone();
+    let key = key.to_string();
+    rt.spawn(async move {
+        match Call::join(shared.clone(), key.clone(), channel_id).await {
+            Err(e) => {
+                {
+                    let mut st = shared.state.write();
+                    let what = if st.is_dm_call(&key, channel_id) { "Couldn't start the call" } else { "Couldn't join voice" };
+                    st.toast(format!("{what}: {e:#}"), true);
+                    // A call we started that couldn't start doesn't ring anyone.
+                    if st.outgoing_call.as_ref().is_some_and(|o| o.server_key == key && o.channel_id == channel_id) {
+                        st.outgoing_call = None;
+                    }
+                }
+                if shared.call.lock().is_none() {
+                    *shared.call_events.lock() = None;
+                }
+            }
+            Ok(()) => {
+                // A private conversation's call: ring the others.
+                if let Some(video) = after.ring {
+                    let h = shared.servers.lock().get(&key).cloned();
+                    if let Some(h) = h {
+                        if let Ok(Event::Error { message, .. }) = h.request(Request::Ring { channel_id, video, moved_from: after.moved_from }).await {
+                            // Nobody's being rung after all: no "Calling…".
+                            let mut st = shared.state.write();
+                            st.toast(message, true);
+                            if st.outgoing_call.as_ref().is_some_and(|o| o.server_key == key && o.channel_id == channel_id) {
+                                st.outgoing_call = None;
+                            }
+                        }
+                    }
+                }
+                if after.camera {
+                    start_camera_on(&shared);
+                }
+                // Your join sound, for everyone there (not when a call comes back after
+                // the server restarted: that isn't joining).
+                let join = shared.state.read_recursive().settings.join_sound.clone();
+                let has = shared.state.read_recursive().server(&key).is_some_and(|s| s.has(SOUNDBOARD_FEATURE));
+                if let Some(sound) = join.filter(|_| has) {
+                    // A moment for the others to hear we're here (and get our keys).
+                    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                    if let Err(e) = play_sound_in_call(&shared, &key, &sound).await {
+                        debug!("join sound didn't play: {e:#}");
+                    }
+                }
+            }
+        }
+        (shared.repaint)();
+    });
+}
+
+/// Leave the call (hanging up stops ringing whoever we were calling).
+pub(crate) fn leave_voice_on(shared: &Arc<Shared>) {
+    qos::set_video(false);
+    {
+        let mut st = shared.state.write();
+        st.voice_rejoin = None;
+        st.resume_offer = None;
+        // Hanging up stops ringing whoever we were calling.
+        st.outgoing_call = None;
+    }
+    let call = shared.call.lock().take();
+    if let Some(c) = call {
+        c.shutdown(true);
+    }
+    *shared.call_events.lock() = None;
+    shared.video.clear();
+    shared.state.write().call = None;
+    (shared.repaint)();
+}
+
+/// The microphone test stops (joining a call, say).
+pub(crate) fn stop_mic_test_on(shared: &Arc<Shared>) {
+    shared.state.write().mic_test = false;
+    if let Some(c) = shared.call.lock().as_ref() {
+        if let Some(a) = &c.audio {
+            a.controls.monitor.store(false, Ordering::Relaxed);
+        }
+    }
+    if let Some(mut e) = shared.mic_test.lock().take() {
+        e.stop();
+    }
+}
+
+/// What to do once a call is joined.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct AfterJoin {
+    /// Ring the others (a private conversation's call), saying whether it's a video call.
+    ring: Option<bool>,
+    /// Turn the camera on.
+    camera: bool,
+    /// The call moved here from this conversation's (people were added to it).
+    moved_from: Option<ChannelId>,
+}
+
+/// Turns the camera on in the call (the one chosen in Settings, or the first there is).
+fn start_camera_on(shared: &Arc<Shared>) {
+    let settings = shared.state.read_recursive().settings.clone();
+    let device = settings.camera_device.clone().or_else(|| {
+        let cams = video::list_cameras();
+        cams.first().map(|c| c.0.clone())
+    });
+    let Some(device) = device else {
+        shared.state.write().toast("No camera found.", true);
+        (shared.repaint)();
+        return;
+    };
+    let (w, h, fps, bitrate) = settings.camera_quality.params();
+    let cfg = PublisherConfig { screen: false, max_width: w, max_height: h, fps, bitrate };
+    start_video_on(shared, track::CAMERA, &device, cfg);
+}
+
+/// Starts sending a camera or a screen share in the call.
+fn start_video_on(shared: &Arc<Shared>, track_id: u8, source: &str, cfg: PublisherConfig) {
+    let rt = shared.rt.clone();
+    let shared = shared.clone();
+    let source = source.to_string();
+    let which = (track_id == track::SCREEN) as usize;
+    // This start wins over any earlier one still opening.
+    let generation = shared.video_gen[which].fetch_add(1, Ordering::SeqCst) + 1;
+    // Opening a camera or a capture can take seconds: never on the UI thread, and never while
+    // holding the call (the UI, voice and the network need it meanwhile).
+    rt.spawn_blocking(move || {
+        let current = || shared.video_gen[which].load(Ordering::SeqCst) == generation;
+        // What's being sent now stops first (a camera can't be opened twice).
+        let (ctx, old) = match shared.call.lock().as_mut() {
+            Some(c) => (Some(c.video_ctx()), Some(c.take_video(&shared, track_id))),
+            None => (None, None),
+        };
+        drop(old);
+        let what = if track_id == track::SCREEN { "share your screen" } else { "start your camera" };
+        let Some(ctx) = ctx else {
+            shared.state.write().toast(format!("Couldn't {what}: join a voice channel first"), true);
+            return;
+        };
+        if !current() {
+            return;
+        }
+        let installed = match ctx.start(&shared, track_id, &source, cfg) {
+            Ok((out, info)) => {
+                let mut call = shared.call.lock();
+                match call.as_mut() {
+                    // Still in the same call, and nobody pressed stop meanwhile.
+                    Some(c) if c.session == ctx.session && current() => {
+                        let replaced = c.install_video(track_id, out, info);
+                        drop(call);
+                        drop(replaced);
+                        true
+                    }
+                    _ => {
+                        drop(call);
+                        drop(out);
+                        false
+                    }
+                }
+            }
+            Err(e) => {
+                if current() {
+                    shared.state.write().toast(format!("Couldn't {what}: {e:#}"), true);
+                }
+                false
+            }
+        };
+        if installed && track_id == track::SCREEN && shared.state.read_recursive().settings.share_audio {
+            // Sound for the stream. Started without holding the call lock, since the
+            // system can take a moment to set up capture.
+            if let Some(src) = stream_audio_source(&source) {
+                let sink = shared.call.lock().as_ref().map(|c| c.stream_audio_sink(&shared));
+                if let Some(sink) = sink {
+                    // The call is taken back out of the stream's sound, in case it gets in
+                    // (not from the test pattern, which never has it).
+                    let played = (src != audio::stream::StreamAudioSource::Synthetic).then(|| shared.played.clone());
+                    match audio::stream::StreamAudio::start(src, STREAM_AUDIO_KBPS, sink, played) {
+                        Ok(sa) => {
+                            let leftover = shared.call.lock().as_mut().map(|c| c.attach_stream_audio(sa));
+                            drop(leftover);
+                        }
+                        Err(e) => {
+                            tracing::warn!("stream audio unavailable: {e:#}");
+                            shared.state.write().toast(format!("Sharing without sound: {e:#}"), true);
+                        }
+                    }
+                }
+            }
+        }
+        shared.refresh_call_view();
+    });
+}
+
+
 /// Back on a server after the connection dropped mid-call: rejoin that call. A camera or
 /// screen share that was on isn't turned back on by itself (the screens or windows may have
 /// changed meanwhile, and you may have moved on): the app offers it (`AppState::resume_offer`).
@@ -2408,7 +2689,8 @@ pub(crate) fn resume_voice(shared: Arc<Shared>, key: String) {
     let rt = shared.rt.clone();
     rt.spawn(async move {
         // The channel may be gone, or the server may say no now.
-        let exists = shared.state.read_recursive().server(&key).map(|s| s.channel(r.channel_id).is_some()).unwrap_or(false);
+        // (A voice channel, or a direct message's or group's call.)
+        let exists = shared.state.read_recursive().server(&key).is_some_and(|s| s.channel(r.channel_id).is_some() || s.is_private(r.channel_id));
         let result = if exists { Call::join(shared.clone(), key.clone(), r.channel_id).await } else { Err(anyhow::anyhow!("the channel is gone")) };
         {
             let mut st = shared.state.write();

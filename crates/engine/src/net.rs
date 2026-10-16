@@ -260,6 +260,8 @@ pub async fn connect_and_login(
             name: name.to_string(),
             invite: invite.map(|s| s.to_string()),
             client: format!("{} {}", ingle_proto::APP_NAME, env!("CARGO_PKG_VERSION")),
+            // (This app knows group conversations.)
+            caps: vec![ingle_proto::control::GROUPS_CAP.to_string()],
         },
     };
     send.write_all(&framing::encode(&login)).await?;

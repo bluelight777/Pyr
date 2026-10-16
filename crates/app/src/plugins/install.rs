@@ -207,7 +207,7 @@ pub fn verify(dir: &Path, p: &InstalledPlugin) -> Result<(), String> {
         if !ingle_proto::library::valid_path(&f.path) {
             return Err(format!("{} has a file in an odd place", p.name));
         }
-        let bytes = std::fs::read(dir.join(&p.id).join(&f.path)).map_err(|_| format!("{} is missing a file: reinstall it", p.name))?;
+        let bytes = std::fs::read(dir.join(&p.id).join(&f.path)).map_err(|e| unreadable(p, &f.path, &e))?;
         if sha256_hex(&bytes) != f.sha256 {
             return Err(format!("{}'s files changed since it was installed, so it wasn't opened: reinstall it", p.name));
         }
@@ -215,18 +215,47 @@ pub fn verify(dir: &Path, p: &InstalledPlugin) -> Result<(), String> {
     Ok(())
 }
 
-/// Starts a program (after checking its files).
-pub fn launch(dir: &Path, p: &InstalledPlugin) -> Result<(), String> {
+/// Why a plugin's file can't be read, said so it can be put right. On Windows that's nearly
+/// always antivirus: Windows Security (or another) took the file away, or is blocking it.
+fn unreadable(p: &InstalledPlugin, file: &str, e: &std::io::Error) -> String {
+    let gone = e.kind() == std::io::ErrorKind::NotFound;
+    if cfg!(windows) {
+        let what = if gone { "is gone" } else { "can't be opened" };
+        format!(
+            "{name}'s {file} {what}. Antivirus may have removed or blocked it: in Windows Security, open Virus & threat protection → Protection history, find {file}, and choose Allow or Restore. Then reinstall {name} if it's still missing.",
+            name = p.name
+        )
+    } else if gone {
+        format!("{} is missing a file ({file}): reinstall it", p.name)
+    } else {
+        format!("{}'s {file} can't be read ({e}): reinstall it", p.name)
+    }
+}
+
+/// Starts a program (after checking its files). On Windows it's told it opens inside Ingle
+/// (`INGLE_EMBED`), so it can start without a frame of its own.
+pub fn spawn(dir: &Path, p: &InstalledPlugin) -> Result<std::process::Child, String> {
     if p.kind != Kind::Program {
         return Err("only programs are opened this way".into());
     }
     verify(dir, p)?;
     let home = dir.join(&p.id);
-    std::process::Command::new(home.join(&p.run))
-        .current_dir(&home)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("couldn't open {}: {e}", p.name))
+    let mut cmd = std::process::Command::new(home.join(&p.run));
+    cmd.current_dir(&home);
+    if cfg!(windows) {
+        cmd.env("INGLE_EMBED", "1");
+    }
+    cmd.spawn().map_err(|e| match e.raw_os_error() {
+        // ERROR_VIRUS_INFECTED, ERROR_VIRUS_DELETED: antivirus said no.
+        Some(225) | Some(226) => unreadable(p, &p.run, &e),
+        _ => format!("couldn't open {}: {e}", p.name),
+    })
+}
+
+/// Starts a program on its own (its files checked first).
+#[cfg(test)]
+pub fn launch(dir: &Path, p: &InstalledPlugin) -> Result<(), String> {
+    spawn(dir, p).map(|_| ())
 }
 
 /// Removes a plugin's files and data.

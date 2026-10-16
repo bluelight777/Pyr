@@ -8,6 +8,18 @@
 //!   cargo run -p ingle-engine --example demo -- setup --owner "<owner link>" \
 //!       --invite "<invite link>" --me <app profile config folder> --assets <folder>
 //!   cargo run -p ingle-engine --example demo -- live --invite "<invite link>" --assets <folder>
+//!   cargo run -p ingle-engine --example demo -- call --invite "<invite link>" --to Friend \
+//!       [--from Mara] [--with Theo,Rae] [--video] [--seconds 120]
+//!
+//!   cargo run -p ingle-engine --example demo -- pickup --invite "<invite link>" --who Theo,Rae \
+//!       [--decline Rae] [--after 4] [--seconds 120]
+//!   cargo run -p ingle-engine --example demo -- say --invite "<invite link>" --to Friend \
+//!       [--from Mara] [--with Theo,Rae] --text "<message>"
+//!
+//! `call`: one of the friends calls someone in a direct message (with `--with`, the group of
+//! them all, made if there isn't one), and stays in the call for a while. `pickup`: some of the friends come online and
+//! answer calls ringing for them (or, the ones in `--decline`, say no), a few seconds after
+//! they start ringing (`--after`, and two more for each one after the first).
 //!
 //! `--me` is the config folder of the app profile the screenshots are taken with: `setup`
 //! uses its identity to make the server as its owner ("Friend"), so run it before opening
@@ -264,10 +276,125 @@ fn live() -> Result<()> {
     Ok(())
 }
 
+/// One of the friends calls someone (a direct message, or a group with `--with`).
+fn call() -> Result<()> {
+    let invite = arg("--invite").ok_or_else(|| anyhow!("--invite <invite link>"))?;
+    let to = arg("--to").ok_or_else(|| anyhow!("--to <name>"))?;
+    let from = arg("--from").unwrap_or_else(|| "Mara".into());
+    let secs: u64 = arg("--seconds").and_then(|s| s.parse().ok()).unwrap_or(120);
+    let video = std::env::args().any(|a| a == "--video");
+    let e = person(&dir_of(&from), &from, Some(330.0))?;
+    let key = join(&e, &invite)?;
+    let them = uid_of(&e, &key, &to).ok_or_else(|| anyhow!("nobody called {to}"))?;
+    let place = match arg("--with") {
+        Some(more) => {
+            let mut members = vec![them];
+            for n in more.split(',') {
+                members.push(uid_of(&e, &key, n.trim()).ok_or_else(|| anyhow!("nobody called {n}"))?);
+            }
+            // The group of just them (and us) if there's one already, else a new one.
+            let me = e.state().my_uid.clone();
+            let same = |g: &ingle_proto::control::Group| g.members.len() == members.len() + 1 && g.members.iter().all(|m| *m == me || members.contains(m));
+            let found = e.state().server(&key).and_then(|s| s.groups.iter().find(|g| same(g)).map(|g| g.id));
+            match found {
+                Some(id) => id,
+                None => {
+                    e.create_group(&key, members, None, None);
+                    wait("the group", 15, || e.take_opened_dm())?.1
+                }
+            }
+        }
+        None => {
+            e.open_dm(&key, &them);
+            wait("the conversation", 15, || e.take_opened_dm())?.1
+        }
+    };
+    e.start_dm_call(&key, place, video);
+    wait("in the call", 15, || e.state().call.as_ref().map(|_| ()))?;
+    println!("demo: {from} is calling {to} for {secs} s");
+    std::thread::sleep(Duration::from_secs(secs));
+    e.leave_voice();
+    std::thread::sleep(Duration::from_millis(500));
+    Ok(())
+}
+
+/// One of the friends sends someone a direct message (`--text`), or (`--with`) a message to the
+/// group of them all.
+fn say_dm() -> Result<()> {
+    let invite = arg("--invite").ok_or_else(|| anyhow!("--invite <invite link>"))?;
+    let to = arg("--to").ok_or_else(|| anyhow!("--to <name>"))?;
+    let from = arg("--from").unwrap_or_else(|| "Mara".into());
+    let text = arg("--text").ok_or_else(|| anyhow!("--text <message>"))?;
+    let e = person(&dir_of(&from), &from, None)?;
+    let key = join(&e, &invite)?;
+    let them = uid_of(&e, &key, &to).ok_or_else(|| anyhow!("nobody called {to}"))?;
+    let dm = match arg("--with") {
+        // The group of them all (and us), which must be there already.
+        Some(more) => {
+            let mut members = vec![them];
+            for n in more.split(',') {
+                members.push(uid_of(&e, &key, n.trim()).ok_or_else(|| anyhow!("nobody called {n}"))?);
+            }
+            let me = e.state().my_uid.clone();
+            let same = |g: &ingle_proto::control::Group| g.members.len() == members.len() + 1 && g.members.iter().all(|m| *m == me || members.contains(m));
+            e.state().server(&key).and_then(|s| s.groups.iter().find(|g| same(g)).map(|g| g.id)).ok_or_else(|| anyhow!("no such group"))?
+        }
+        None => {
+            e.open_dm(&key, &them);
+            wait("the conversation", 15, || e.take_opened_dm())?.1
+        }
+    };
+    e.send_message(&key, dm, &text, None);
+    std::thread::sleep(Duration::from_secs(2));
+    println!("demo: {from} told {to}: {text}");
+    e.shutdown();
+    Ok(())
+}
+
+/// Some of the friends answer calls ringing for them (or say no).
+fn pickup() -> Result<()> {
+    let invite = arg("--invite").ok_or_else(|| anyhow!("--invite <invite link>"))?;
+    let who = arg("--who").ok_or_else(|| anyhow!("--who <names>"))?;
+    let decline: Vec<String> = arg("--decline").map(|d| d.split(',').map(|n| n.trim().to_string()).collect()).unwrap_or_default();
+    let after: u64 = arg("--after").and_then(|s| s.parse().ok()).unwrap_or(4);
+    let secs: u64 = arg("--seconds").and_then(|s| s.parse().ok()).unwrap_or(120);
+    let mut people = Vec::new();
+    for (i, name) in who.split(',').map(str::trim).enumerate() {
+        let e = person(&dir_of(name), name, Some(260.0 + 45.0 * i as f32))?;
+        join(&e, &invite)?;
+        people.push((name.to_string(), e));
+    }
+    println!("demo: {who} picking up calls for {secs} s");
+    let end = Instant::now() + Duration::from_secs(secs);
+    while Instant::now() < end {
+        for (i, (name, e)) in people.iter().enumerate() {
+            let ringing = e.state().incoming_calls.first().cloned();
+            if let Some(c) = ringing.filter(|c| c.since.elapsed() >= Duration::from_secs(after + 2 * i as u64)) {
+                if decline.contains(name) {
+                    e.decline_call(&c.server_key, c.channel_id);
+                    println!("demo: {name} said no");
+                } else {
+                    e.answer_call(&c.server_key, c.channel_id, false);
+                    println!("demo: {name} answered");
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    for (_, e) in &people {
+        e.leave_voice();
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    Ok(())
+}
+
 fn main() -> Result<()> {
     match std::env::args().nth(1).as_deref() {
         Some("setup") => setup(),
         Some("live") => live(),
-        _ => bail!("usage: demo setup|live …"),
+        Some("call") => call(),
+        Some("pickup") => pickup(),
+        Some("say") => say_dm(),
+        _ => bail!("usage: demo setup|live|call|pickup|say …"),
     }
 }

@@ -12,13 +12,16 @@ const BUTTON_W: f32 = 44.0;
 /// How close to the window's edge the pointer must be to resize it.
 const GRIP: f32 = 5.0;
 
-/// True when Ingle draws its own title strip.
+/// True when Ingle draws its own title strip: on Windows (and, to see it elsewhere, in
+/// development builds run with `INGLE_DEV_TITLE_STRIP` set).
 pub fn enabled() -> bool {
-    cfg!(windows)
+    cfg!(windows) || (cfg!(debug_assertions) && std::env::var_os("INGLE_DEV_TITLE_STRIP").is_some())
 }
 
-/// Draws the strip and handles resizing. Call first thing in `update`.
-pub fn show(ctx: &egui::Context, title: &str) {
+/// Draws the strip and handles resizing. Call first thing in `update`. `after_name(ui, x, y)`
+/// draws what goes right after Ingle's name (the version and the updater), from `x` along and
+/// centred on `y`.
+pub fn show(ctx: &egui::Context, title: &str, after_name: impl FnOnce(&mut egui::Ui, f32, f32) -> f32) {
     if !enabled() {
         return;
     }
@@ -45,16 +48,11 @@ pub fn show(ctx: &egui::Context, title: &str) {
             } else if drag.drag_started_by(egui::PointerButton::Primary) {
                 ctx.send_viewport_cmd(ViewportCommand::StartDrag);
             }
-            let p = ui.painter();
-            let name = p.text(pos2(full.left() + 12.0, full.center().y), Align2::LEFT_CENTER, title, theme::bold_font(12.0), theme::MUTED);
-            // The version, quietly, after the name (what people quote in a bug report).
-            p.text(
-                pos2(name.right() + 6.0, full.center().y),
-                Align2::LEFT_CENTER,
-                env!("CARGO_PKG_VERSION"),
-                theme::font(11.0),
-                theme::DIM,
-            );
+            let p = ui.painter().clone();
+            // Ingle's flame and name, then the version and the updater (see `update_chip`).
+            crate::icons::flame(&p, Rect::from_center_size(pos2(full.left() + 17.0, full.center().y), vec2(13.0, 13.0)));
+            let name = p.text(pos2(full.left() + 28.0, full.center().y), Align2::LEFT_CENTER, title, theme::bold_font(12.0), theme::MUTED);
+            after_name(ui, name.right() + 3.0, full.center().y);
 
             let mut x = full.max.x - buttons_w;
             for kind in [Btn::Min, Btn::Max, Btn::Close] {
@@ -67,7 +65,7 @@ pub fn show(ctx: &egui::Context, title: &str) {
                     p.rect_filled(r, 0.0, bg);
                 }
                 let col = if hover { theme::TEXT } else { theme::MUTED };
-                draw_glyph(p, kind, r.center(), maximized, col);
+                draw_glyph(&p, kind, r.center(), maximized, col);
                 if resp.clicked() {
                     match kind {
                         Btn::Min => ctx.send_viewport_cmd(ViewportCommand::Minimized(true)),

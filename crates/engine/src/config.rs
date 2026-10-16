@@ -142,6 +142,9 @@ pub struct Settings {
     /// Notification sounds (messages, people joining voice, streams).
     pub sounds: bool,
     pub sound_volume: f32,
+    /// Ring when someone calls you in a direct message (and the ringback when you call),
+    /// even with the other sounds off.
+    pub ring: bool,
     /// Emoji picked most recently, newest first (the picker's "Frequently used").
     pub recent_emoji: Vec<String>,
     /// Skin tone for emoji that have them: 0 = default yellow, 1–5 light to dark.
@@ -223,6 +226,7 @@ impl Default for Settings {
             tray_note_seen: false,
             sounds: true,
             sound_volume: 0.7,
+            ring: true,
             recent_emoji: Vec::new(),
             emoji_tone: 0,
             giphy_key: String::new(),

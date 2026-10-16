@@ -405,6 +405,24 @@ pub fn label_line(
     label_job(ui, text, font, color, Some(width), true, custom)
 }
 
+/// `text` with its emoji taken out (and the spaces they leave tidied up): for places that
+/// show plain text only, like the message box's hint.
+pub fn without_emoji(text: &str) -> String {
+    let found = find_all(text);
+    if found.is_empty() {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    for (start, n, _) in found {
+        out.extend(&chars[i..start]);
+        i = start + n;
+    }
+    out.extend(&chars[i..]);
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Like `Painter::text`, with colour emoji: on one line, cut with "…" past `max_width`
 /// (a channel's name in the list). Where it went.
 pub fn paint_text(
@@ -485,6 +503,14 @@ fn job_of(text: &str, font: FontId, color: Color32, wrap: Option<f32>, one_line:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn emoji_come_out_of_plain_text() {
+        assert_eq!(super::without_emoji("🍺 The Tavern"), "The Tavern");
+        assert_eq!(super::without_emoji("General"), "General");
+        assert_eq!(super::without_emoji("Game 🎮 night"), "Game night");
+        assert_eq!(super::without_emoji("🔥"), "");
+    }
+
     use super::*;
 
     #[test]

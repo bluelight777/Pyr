@@ -52,14 +52,25 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   clock and the taskbar button. What came while Ingle was closed shows as unread.
 - Notification sounds, and muting for a server, a channel or a conversation.
 
-**Friends and direct messages**
+**Friends, direct messages and calls**
 
 - Add friends, accept or decline requests, and block people.
 - **Direct messages** with anyone you share a server with. Other members can't see them,
   but they aren't end-to-end encrypted yet: they're stored on the server, so whoever runs it
   could read them (end-to-end encrypted messages are coming in 0.8).
+- **Call friends**, like Discord: the call and video buttons at the top of a direct message,
+  or **Call** when you right-click someone's name. It rings them (with Accept and Decline,
+  a Windows notice and a flashing taskbar button if Ingle is hidden), the call shows above
+  your chat, and it's end-to-end encrypted like voice channels. Only the two of you see it;
+  server moderators can't mute you in it, and blocking someone ends it.
+- **Group conversations and group calls** of up to 10 people: start one with the **+** by
+  Direct Messages, or click **Add people** during a call (the call moves to the new group,
+  and everyone added rings). Whoever hasn't picked up yet shows in the call as *Calling…*.
+  Groups have their own chat and members list, can have a name, and can be left any time.
 
 ![Direct messages, with the NEW line above what you haven't read](docs/screenshots/messages.png)
+
+![A group call: three in it, Mara still ringing, and the group's chat and members below](docs/screenshots/group-call.png)
 
 **Voice**
 
@@ -141,9 +152,10 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
 - The **Ingle Library** (the puzzle piece in the server list) has programs and add-ons, each
   built by Firelit Games from its source after someone read it. Ingle checks every file
   against the library's signed list before installing it, and again before opening a program.
-- **Programs** are apps of their own, opened from Ingle. The first is **Chimbrowser**
-  (Windows): a lean, private browser that blocks ads and trackers, makes YouTube play
-  smoothly, and has an AI sidebar for Claude, ChatGPT, Gemini and others.
+- **Programs** open inside Ingle's window, on a page of their own (with a button in the
+  server list while they run); **Pop out** puts one in a window of its own. The first is
+  **Chimbrowser** (Windows): a lean, private browser that blocks ads and trackers, makes
+  YouTube play smoothly, and has an AI sidebar for Claude, ChatGPT, Gemini and others.
 - **Add-ons** run inside Ingle in a sandbox (WebAssembly with nothing to reach: not your files,
   not the internet, not the rest of your PC). They add /commands to chat (with hints as you
   type), show a small panel and keep a little data. **Dice** rolls dice: `/roll 2d6+1`, or
@@ -158,10 +170,11 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
 
 **The app**
 
-- Updates itself: a green button appears at the top of the server list when a new version
+- Updates itself: a glowing green **Update** button appears at the top of the window, by
+  Ingle's name and version (on Linux, at the bottom of the server list), when a new version
   is out, and updating puts you back in the voice channel you were in. **Check for updates**
-  (the arrows under the home button, Settings → About, or the tray icon's menu, which also
-  has **Update Ingle** once there's one) looks right away instead of waiting.
+  (click the version, Settings → About, or the tray icon's menu, which also has **Update
+  Ingle** once there's one) looks right away instead of waiting.
 - On Windows it lives by the clock (closing the window keeps you in voice), and can start
   with Windows, straight into the tray.
 - Error messages stay until you dismiss them and have a Copy button. **Report a bug**
@@ -181,11 +194,12 @@ protected your PC": click **More info → Run anyway**. Uninstalling keeps your 
 settings in `%APPDATA%\Ingle`.
 
 After that, Ingle updates itself. It looks for a new version when it starts and every few
-hours; when there is one, a green button with an arrow appears at the top of the server
-list (with a count if you've missed several). Click it: Ingle downloads the update, checks
-it against Firelit Games' signature, installs it and opens again where you were. The signed
-release information has dates, and Ingle never takes one past its date or older than one it
-has already seen, so a hacked website can't hide a newer release by serving an old one.
+hours; when there is one, a green **Update to …** button appears at the top of the window,
+next to Ingle's version (pointing at it says if you've missed several). Click it: Ingle
+downloads the update, checks it against Firelit Games' signature, installs it and opens
+again where you were. The signed release information has dates, and Ingle never takes one
+past its date or older than one it has already seen, so a hacked website can't hide a newer
+release by serving an old one.
 Running a newer setup by hand also works: it closes a running Ingle by itself, even one in
 the tray.
 
@@ -598,13 +612,15 @@ for the research behind it.
 ## How it's tested
 
 Ingle is used on real Windows 10 and 11 PCs, and every release is also tested in a Linux
-sandbox before it ships: about 190 automated tests, including end-to-end runs with a real
+sandbox before it ships: about 200 automated tests, including end-to-end runs with a real
 server and several clients over QUIC (chat, invites, end-to-end encrypted voice in both
 directions, webcam pixels, 1080p screen sharing, stream sound reaching only viewers, late
 joiners, voice through server restarts, roles, pictures, custom emoji, direct messages,
-friends and blocking, unread marks, backups restored on another server, bug reports, the
-soundboard heard by everyone in the call, server mute and deafen enforced by the server,
-backups whose server key only their owner can open, release files that expire; and for
+calls between friends and group calls (ringing, declining, privacy, moving a call into a
+group), friends and blocking, unread marks, backups restored on another server, bug
+reports, the soundboard heard by everyone in the call, server mute and deafen enforced by
+the server, backups whose server key only their owner can open, release files that
+expire; and for
 plugins, the library's signed list, installs checked file by file, add-ons that reach
 outside or run away being stopped, and plugins sent in kept for the library's owner). The
 app is driven through its real UI on a virtual display (visual fixes are checked with

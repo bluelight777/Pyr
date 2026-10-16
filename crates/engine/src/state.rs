@@ -95,6 +95,8 @@ pub struct ServerView {
     pub features: Vec<String>,
     /// My direct message conversations here, newest first.
     pub dms: Vec<Dm>,
+    /// My group conversations here, newest first.
+    pub groups: Vec<Group>,
     /// Friends, friend requests and blocks recorded on this server.
     pub relations: HashMap<UserId, RelationKind>,
 }
@@ -121,6 +123,7 @@ impl ServerView {
             roles: Vec::new(),
             features: Vec::new(),
             dms: Vec::new(),
+            groups: Vec::new(),
             relations: HashMap::new(),
         }
     }
@@ -135,6 +138,46 @@ impl ServerView {
 
     pub fn dm_with(&self, uid: &str) -> Option<&Dm> {
         self.dms.iter().find(|d| d.with == uid)
+    }
+
+    pub fn group(&self, channel_id: ChannelId) -> Option<&Group> {
+        self.groups.iter().find(|g| g.id == channel_id)
+    }
+
+    /// Adds or replaces a group, keeping the newest first.
+    pub fn upsert_group(&mut self, group: Group) {
+        match self.groups.iter_mut().find(|g| g.id == group.id) {
+            Some(g) => {
+                let last = g.last_message.max(group.last_message);
+                *g = group;
+                g.last_message = last;
+            }
+            None => self.groups.push(group),
+        }
+        self.groups.sort_by_key(|g| std::cmp::Reverse((g.last_message, g.id)));
+    }
+
+    /// A private conversation: a direct message or a group (not a channel everyone sees).
+    pub fn is_private(&self, channel_id: ChannelId) -> bool {
+        self.dm(channel_id).is_some() || self.group(channel_id).is_some()
+    }
+
+    /// The others in a private conversation (a direct message's other person, a group's other
+    /// members); `me` is left out.
+    pub fn others_in(&self, channel_id: ChannelId, me: &str) -> Vec<UserId> {
+        if let Some(d) = self.dm(channel_id) {
+            return vec![d.with.clone()];
+        }
+        self.group(channel_id).map(|g| g.members.iter().filter(|m| *m != me).cloned().collect()).unwrap_or_default()
+    }
+
+    /// A group's name: its own, or who's in it (besides `me`), like Discord's.
+    pub fn group_name(&self, g: &Group, me: &str) -> String {
+        if !g.name.is_empty() {
+            return g.name.clone();
+        }
+        let names: Vec<String> = g.members.iter().filter(|m| *m != me).map(|m| self.member_name(m)).collect();
+        if names.is_empty() { "Just you".to_string() } else { names.join(", ") }
     }
 
     /// Adds or replaces a conversation, keeping the newest first.
@@ -341,6 +384,47 @@ pub struct ResumeOffer {
 /// How long to keep trying to get back into a call after the server drops.
 pub const VOICE_REJOIN_FOR: std::time::Duration = std::time::Duration::from_secs(180);
 
+/// How long a call in a direct message rings before it counts as not answered (and missed).
+pub const RING_FOR: std::time::Duration = std::time::Duration::from_secs(45);
+
+/// Someone calling you in a direct message (see `DM_CALLS_FEATURE`): it rings until you
+/// answer or decline, they hang up, or [`RING_FOR`] goes by.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IncomingCall {
+    pub server_key: String,
+    /// The direct message.
+    pub channel_id: ChannelId,
+    pub from: UserId,
+    /// They started it as a video call.
+    pub video: bool,
+    pub since: Instant,
+}
+
+/// How ringing the other person in a call we started is going.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RingState {
+    Ringing,
+    /// They said no.
+    Declined,
+    /// It rang for [`RING_FOR`] and nobody answered.
+    NoAnswer,
+}
+
+/// A call we started in a direct message (or group), until someone comes in (or we leave).
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutgoingCall {
+    pub server_key: String,
+    pub channel_id: ChannelId,
+    /// Who's being rung: the other person in a direct message, the rest of a group.
+    pub to: Vec<UserId>,
+    /// Who of them said no.
+    pub declined: Vec<UserId>,
+    pub video: bool,
+    /// When it (last) started ringing.
+    pub since: Instant,
+    pub state: RingState,
+}
+
 /// Backups of a server I own (see `backup.rs`).
 #[derive(Clone, Debug, Default)]
 pub struct BackupStatus {
@@ -422,9 +506,42 @@ pub struct AppState {
     pub muted_channels: HashSet<(String, ChannelId)>,
     /// People I've blocked.
     pub blocked: HashSet<UserId>,
+    /// Calls in direct messages ringing here (see `ring`).
+    pub incoming_calls: Vec<IncomingCall>,
+    /// The call we started in a direct message, while the other person isn't in it yet.
+    pub outgoing_call: Option<OutgoingCall>,
+    /// Calls missed so far, and who from last (the tray icon says so while Ingle is hidden).
+    pub missed_calls: u64,
+    pub last_missed_from: String,
 }
 
 impl AppState {
+    /// What a call's place is called: its voice channel's name, for a direct message's call
+    /// "@" and the other person's name, and a group's name.
+    pub fn call_place(&self, key: &str, channel_id: ChannelId) -> String {
+        let Some(s) = self.server(key) else { return String::new() };
+        if let Some(c) = s.channel(channel_id) {
+            return c.name.clone();
+        }
+        if let Some(g) = s.group(channel_id) {
+            return s.group_name(g, &self.my_uid);
+        }
+        s.dm(channel_id).map(|d| format!("@{}", s.member_name(&d.with))).unwrap_or_default()
+    }
+
+    /// A call in a direct message rang out here: say so.
+    pub fn missed_call(&mut self, _key: &str, _channel_id: ChannelId, who: &str) {
+        self.missed_calls += 1;
+        self.last_missed_from = who.to_string();
+        self.toast(format!("You missed a call from {who}."), false);
+    }
+
+    /// The call is a private conversation's (a direct message's or a group's), not a voice
+    /// channel's.
+    pub fn is_dm_call(&self, key: &str, channel_id: ChannelId) -> bool {
+        self.server(key).is_some_and(|s| s.is_private(channel_id))
+    }
+
     pub fn server(&self, key: &str) -> Option<&ServerView> {
         self.servers.iter().find(|s| s.key == key)
     }

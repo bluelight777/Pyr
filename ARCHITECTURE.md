@@ -177,8 +177,8 @@ capture → latest-frame slot (never queues stale frames) → encoder thread:
 `ingle-data/ingle.db` (SQLite, WAL): meta (the server's name and settings), users (id,
 name, role, banned), roles and member_roles, channels, messages (with reply and edit time),
 reactions, invites, files (attached pictures, profile pictures and emoji pictures, each
-linked to its message; the bytes sit in `files/`), dms, relations (friends, requests,
-blocks), emojis and bug_reports. TLS key and certificate sit next to it. Voice state lives
+linked to its message; the bytes sit in `files/`), dms, groups and group_members, relations
+(friends, requests, blocks), emojis and bug_reports. TLS key and certificate sit next to it. Voice state lives
 only in memory. The data folder is made readable only by the server's own account (0700),
 whichever command creates it first.
 
@@ -191,6 +191,25 @@ owner's Ingle, or their `identity.key`.
 
 Each member's row notes the invite they joined with: banning them deletes that invite, so
 they can't walk back in through the same link with a new identity.
+
+## Calls and groups
+
+A direct message's call is a voice channel only the two people in it can see: the same
+relay, the same end-to-end encryption and call code (`server/src/hub.rs` keeps each call's
+*audience*, and tells nobody else it exists). Calling someone joins the call and sends
+`Ring`; their apps ring (every device they're on) until one answers or declines, or it rings
+out after 45 seconds and counts as missed (`engine/src/ring.rs`, on a thread of its own so it
+rings with the window hidden). Moderators can't mute or move anyone in it, and blocking
+someone ends it.
+
+A group (up to 10 people, `GROUPS_FEATURE`) is a conversation of its own with a call of its
+own, stored like a channel only its members can read. Adding people to a direct message's
+call makes a group and moves the call there: the ring tells those who were in the first call
+to follow (`moved_from`), so the call carries on without anyone answering again, and rings
+everyone added. A group call rings for each person until they answer or say no, or it rings
+out, whoever else has answered; the one calling sees those still ringing in the call as
+*Calling…*. Apps say they understand
+groups when they log in (`GROUPS_CAP`), and the server tells older apps nothing about them.
 
 ## Bug reports
 
@@ -232,7 +251,11 @@ listed. The plugin kit (`plugins/kit`) writes the module's side.
 
 **Programs** are apps of their own, run with the user's rights like anything else they
 install: the protection is that the library only lists programs Firelit Games has read and
-built from source, and Ingle only opens the files the list names.
+built from source, and Ingle only opens the files the list names. On Windows a program opens
+inside Ingle's window (`app/src/plugins/programs.rs`): Ingle starts it with `INGLE_EMBED`
+set, takes its main window off the taskbar, makes Ingle's window its owner, removes its frame
+and keeps it over the page it has in Ingle (following the window as it moves, and stepping
+aside for Ingle's own menus, dialogs and notices). **Pop out** gives it its frame back.
 
 **Plugins sent in** (`engine/src/plugins.rs`): anyone's Ingle sends a plugin's Rust source
 (never a built file) to the library server, which is the bug report server unless Ingle was
@@ -294,6 +317,8 @@ What one person, or one place, can use up on a server (`server/src/hub.rs`, `con
   connection that stops reading is dropped once 16 MB waits for it.
 - **Joining**: 10 wrong invite codes per place in 10 minutes; everyday invites let in 120
   people an hour (bursts of 30).
+- **Ringing**: a call rings (or says no) 4 times in a row, then once every 5 seconds;
+  starting or adding to a group costs four requests.
 - **Storage**: 5 GB for a server's pictures and files (`INGLE_STORAGE_MB`), a tenth of that
   (at most 1 GB) per member, 100 MB in a member's first three days, 400 MB an hour.
 - **Bug reports** (only while collecting): 5 an hour per place, 60 an hour in all, 2000
