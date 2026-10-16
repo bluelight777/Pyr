@@ -350,6 +350,7 @@ mod tests {
                 joined_at: 0,
                 roles: Vec::new(),
                 avatar: None,
+                idle: false,
             },
         );
         sp.know(&s, &["Brethren".to_string()]);

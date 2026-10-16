@@ -14,10 +14,6 @@ const PNG: &[u8] = &[
     0x99, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
 ];
 
-fn toasts(e: &Engine) -> String {
-    e.state().toasts.iter().map(|t| t.text.clone()).collect::<Vec<_>>().join(" | ")
-}
-
 fn temp_dir(name: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("ingle-backup-{}-{}", name, ingle_proto::now_ms()));
     std::fs::create_dir_all(&d).unwrap();

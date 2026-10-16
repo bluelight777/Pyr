@@ -15,8 +15,20 @@ struct Friend {
     uid: String,
     name: String,
     online: bool,
+    /// Online, but idle everywhere they're online (a moon).
+    idle: bool,
     /// Servers you share (keys), where a conversation could happen.
     servers: Vec<String>,
+}
+
+impl Friend {
+    fn presence(&self) -> crate::app::Presence {
+        match (self.online, self.idle) {
+            (false, _) => crate::app::Presence::Offline,
+            (true, true) => crate::app::Presence::Idle,
+            (true, false) => crate::app::Presence::Online,
+        }
+    }
 }
 
 fn friends(st: &AppState) -> Vec<Friend> {
@@ -30,9 +42,13 @@ fn friends(st: &AppState) -> Vec<Friend> {
                 uid: m.user_id.clone(),
                 name: s.member_name(&m.user_id),
                 online: false,
+                idle: false,
                 servers: Vec::new(),
             });
-            f.online |= m.online && s.status.is_connected();
+            if m.online && s.status.is_connected() {
+                f.idle = if f.online { f.idle && m.idle } else { m.idle };
+                f.online = true;
+            }
             f.servers.push(s.key.clone());
         }
     }
@@ -206,21 +222,23 @@ impl IngleApp {
             ui.painter().rect_filled(r, CornerRadius::same(6), if selected { theme::ELEV2() } else { theme::HOVER() });
         }
         let name = s.member_name(with);
-        let online = s.members.get(with).map(|m| m.online).unwrap_or(false) && s.status.is_connected();
+        let presence = crate::app::Presence::in_server(s, with);
         let c = pos2(r.left() + 22.0, r.center().y);
         let face = self.face(ui.ctx(), s, with);
         avatar(ui.painter(), c, 16.0, with, &name, false, theme::SIDE(), face);
-        if online {
-            status_dot(ui.painter(), c + vec2(12.0, 12.0), true, theme::SIDE());
+        if presence.here() {
+            status_dot(ui.painter(), c + vec2(12.0, 12.0), presence, theme::SIDE());
         }
         let unread = s.mentions.get(&id).copied().unwrap_or(0);
         let col = if selected || unread > 0 { theme::TEXT() } else { theme::MUTED() };
-        if show_server {
-            ui.painter().text(pos2(r.left() + 48.0, r.center().y - 7.0), egui::Align2::LEFT_CENTER, &name, theme::bold_font(14.0), col);
+        let named = if show_server {
+            let n = ui.painter().text(pos2(r.left() + 48.0, r.center().y - 7.0), egui::Align2::LEFT_CENTER, &name, theme::bold_font(14.0), col);
             ui.painter().text(pos2(r.left() + 48.0, r.center().y + 9.0), egui::Align2::LEFT_CENTER, &s.name, theme::font(11.5), theme::DIM());
+            n
         } else {
-            ui.painter().text(pos2(r.left() + 48.0, r.center().y), egui::Align2::LEFT_CENTER, &name, theme::bold_font(14.0), col);
-        }
+            ui.painter().text(pos2(r.left() + 48.0, r.center().y), egui::Align2::LEFT_CENTER, &name, theme::bold_font(14.0), col)
+        };
+        crate::trust::badge_at(ui, st, with, &name, pos2(named.right() + 5.0, named.center().y), 13.0);
         if unread > 0 {
             let b = pos2(r.right() - 16.0, r.center().y);
             ui.painter().circle_filled(b, 8.5, theme::LIVE());
@@ -238,6 +256,7 @@ impl IngleApp {
         let key = s.key.clone();
         resp.context_menu(|ui| {
             crate::calls::call_item(ui, st, with, Some(&key), acts);
+            self.make_sure_menu(ui, st, s, with, acts);
             if ui.button(if muted { "Unmute conversation" } else { "Mute conversation" }).clicked() {
                 acts.push(Act::MuteChat { key: key.clone(), channel: Some(id), muted: !muted });
                 ui.close();
@@ -314,7 +333,7 @@ impl IngleApp {
                 }
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     for f in found {
-                        let sub = if f.online { "Online" } else { "Offline" };
+                        let sub = f.presence().label();
                         let rel = st.relation(&f.uid);
                         self.person_row(ui, st, f, sub, acts, |ui, acts| match rel {
                             Some(RelationKind::Friend) => {
@@ -373,14 +392,13 @@ impl IngleApp {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 for (uid, kind) in rows {
                     let f = people.iter().find(|f| f.uid == uid);
-                    let fallback = Friend { uid: uid.clone(), name: st.name_of(&uid), online: false, servers: Vec::new() };
+                    let fallback = Friend { uid: uid.clone(), name: st.name_of(&uid), online: false, idle: false, servers: Vec::new() };
                     let f = f.unwrap_or(&fallback);
                     let sub = match kind {
                         RelationKind::Incoming => "Incoming Friend Request",
                         RelationKind::Outgoing => "Outgoing Friend Request",
                         RelationKind::Blocked => "Blocked",
-                        _ if f.online => "Online",
-                        _ => "Offline",
+                        _ => f.presence().label(),
                     };
                     let target = dm_server(st, &uid);
                     self.person_row(ui, st, f, sub, acts, |ui, acts| match kind {
@@ -442,16 +460,28 @@ impl IngleApp {
         let c = pos2(r.left() + 26.0, r.center().y);
         avatar(ui.painter(), c, 18.0, &f.uid, &f.name, false, theme::MAIN(), face);
         if f.online {
-            status_dot(ui.painter(), c + vec2(13.0, 13.0), true, theme::MAIN());
+            status_dot(ui.painter(), c + vec2(13.0, 13.0), f.presence(), theme::MAIN());
         }
-        ui.painter().text(pos2(r.left() + 56.0, r.center().y - 8.0), egui::Align2::LEFT_CENTER, &f.name, theme::bold_font(15.0), theme::TEXT());
+        let named = ui.painter().text(pos2(r.left() + 56.0, r.center().y - 8.0), egui::Align2::LEFT_CENTER, &f.name, theme::bold_font(15.0), theme::TEXT());
+        crate::trust::badge_at(ui, st, &f.uid, &f.name, pos2(named.right() + 5.0, named.center().y), 14.0);
         ui.painter().text(pos2(r.left() + 56.0, r.center().y + 10.0), egui::Align2::LEFT_CENTER, sub, theme::font(12.5), theme::MUTED());
         let br = Rect::from_min_max(pos2(r.center().x, r.top() + 10.0), pos2(r.right() - 12.0, r.bottom() - 10.0));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(br).layout(Layout::right_to_left(Align::Center)));
         buttons(&mut child, acts);
         let uid = f.uid.clone();
+        // Making sure of them goes through a server you share where they're online.
+        let through = f
+            .servers
+            .iter()
+            .filter_map(|k| st.server(k))
+            .find(|s| s.has(ingle_proto::control::HANDSHAKE_FEATURE) && s.members.get(&uid).is_some_and(|m| m.online))
+            .or(s)
+            .map(|s| s.key.clone());
         resp.context_menu(|ui| {
             crate::calls::call_item(ui, st, &uid, None, acts);
+            if let Some(s) = through.as_deref().and_then(|k| st.server(k)) {
+                self.make_sure_menu(ui, st, s, &uid, acts);
+            }
             crate::app::person_menu(ui, st, &uid, acts)
         });
     }

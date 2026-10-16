@@ -68,6 +68,9 @@ windows = { version = "0.62", features = [
     "Win32_System_IO",
     # Asking whether Windows took the screen capture's graphics device away (video/capture.rs).
     "Win32_Graphics_Direct3D11",
+    # How long since the last key or mouse move, for idle (idle.rs).
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_SystemInformation",
 ] }
 windows-capture = "2.0.1"
 nokhwa = { version = "0.10.11", features = ["input-msmf"] }
@@ -77,5 +80,6 @@ wasapi = "0.25.0"
 nokhwa = { version = "0.10.11", features = ["input-avfoundation"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-x11rb = "0.13"
+# (screensaver: how long since the last key or mouse move, for idle.)
+x11rb = { version = "0.13", features = ["screensaver"] }
 nokhwa = { version = "0.10.11", features = ["input-v4l"] }

@@ -128,6 +128,18 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   encrypted.
 - **No accounts**: your identity is a key pair on your PC, and the same identity works on
   every server.
+- **Make sure it's them**, without reading out codes: right-click someone (or click their
+  name in chat, the shield at the top of your messages with them, or the button in a call
+  with them) and **compare words** (both of you see the same six, each with its picture,
+  when nobody's in between; say them to each other in a call, on the phone or in person) or
+  **ask something only they'd know** (Ingle tells you both whether the answers match, and
+  neither answer leaves your PC). If one of you says the words don't match, it doesn't count
+  for either.
+  A green shield then shows by their name everywhere. People you made sure of **vouch** for
+  the people they made sure of (an outlined shield), so a whole group gets covered without
+  everyone checking everyone. Someone else turning up under the name of a person you made
+  sure of gets a red shield. When you've made sure of everyone in a call, the call says so,
+  and the call code has nothing left to check.
 
 **Your server**
 
@@ -191,6 +203,9 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   Ingle** once there's one) looks right away instead of waiting.
 - On Windows it lives by the clock (closing the window keeps you in voice), and can start
   with Windows, straight into the tray.
+- **Idle**, like Discord: five minutes away from the keyboard and mouse (and quiet in calls)
+  and you show with a yellow moon instead of the green dot, back to green the moment you
+  return. Click your name at the bottom left to say you're idle yourself.
 - Error messages stay until you dismiss them and have a Copy button. **Report a bug**
   (Settings → About, or Report on an error) sends Firelit Games what happened, your Ingle
   version and system, and the log if you tick it. No account needed, and a report that
@@ -497,7 +512,8 @@ second copy of the app as a different person: `ingle.exe --profile alt`.
 Open them with the gear next to your name:
 
 - **My Account**: your profile picture (zoom and drag to frame it), display name, and your
-  identity: a *safety code* friends can compare with you, and the key file to back up.
+  identity: a *safety code* friends can compare with you, and the key file to back up; how
+  many people you've made sure of, and whether you vouch for them.
 - **Voice & Video**: devices and volumes, the mic test, voice activity (automatic or with a
   sensitivity slider) or push-to-talk (the backtick key by default; mouse buttons 4/5 work
   too) with a release delay, and noise suppression: *Strong (AI)* (RNNoise, the default),

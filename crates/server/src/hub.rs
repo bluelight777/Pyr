@@ -261,6 +261,8 @@ struct Client {
     session: Option<SessionId>,
     session_cell: Arc<AtomicU32>,
     last_typing: HashMap<ChannelId, Instant>,
+    /// Its Ingle says it's idle (`SetIdle`).
+    idle: bool,
 }
 
 struct Voice {
@@ -678,8 +680,35 @@ impl Hub {
         }
     }
 
+    /// Connected right now, from anywhere.
+    pub fn is_online(&self, uid: &str) -> bool {
+        Self::is_online_locked(&self.inner.lock(), uid)
+    }
+
     fn is_online_locked(inner: &Inner, uid: &str) -> bool {
         inner.clients.values().any(|c| c.user_id == uid)
+    }
+
+    /// Idle: connected, and idle on every connection.
+    fn is_idle_locked(inner: &Inner, uid: &str) -> bool {
+        let mut theirs = inner.clients.values().filter(|c| c.user_id == uid).peekable();
+        theirs.peek().is_some() && theirs.all(|c| c.idle)
+    }
+
+    /// A connection's Ingle is idle, or back (`SetIdle`): everyone's told when that changes
+    /// how its member shows.
+    pub fn set_idle(&self, conn_id: ConnId, idle: bool) {
+        let mut inner = self.inner.lock();
+        let Some(uid) = inner.clients.get(&conn_id).map(|c| c.user_id.clone()) else { return };
+        let was = Self::is_idle_locked(&inner, &uid);
+        if let Some(c) = inner.clients.get_mut(&conn_id) {
+            c.idle = idle;
+        }
+        if Self::is_idle_locked(&inner, &uid) != was {
+            if let Some(m) = self.member_locked(&inner, &uid) {
+                Self::broadcast_locked(&inner, Event::MemberUpserted { member: m });
+            }
+        }
     }
 
     fn member_locked(&self, inner: &Inner, uid: &str) -> Option<Member> {
@@ -695,6 +724,7 @@ impl Hub {
             joined_at: u.joined_at,
             roles: self.db.member_roles(uid),
             avatar: u.avatar,
+            idle: Self::is_idle_locked(inner, uid),
         })
     }
 
@@ -772,6 +802,7 @@ impl Hub {
             return err(ErrorCode::RateLimited, "You're connected from too many places at once.");
         }
         let was_online = Self::is_online_locked(&inner, uid);
+        let was_idle = Self::is_idle_locked(&inner, uid);
         inner.clients.insert(
             conn_id,
             Client {
@@ -782,11 +813,13 @@ impl Hub {
                 session: None,
                 session_cell,
                 last_typing: HashMap::new(),
+                idle: false,
             },
         );
         let mut members = self.db.members();
         for m in &mut members {
             m.online = Self::is_online_locked(&inner, &m.user_id);
+            m.idle = Self::is_idle_locked(&inner, &m.user_id);
         }
         let me = members.iter().find(|m| m.user_id == uid).cloned().unwrap_or(Member {
             user_id: uid.to_string(),
@@ -796,6 +829,7 @@ impl Hub {
             joined_at: now_ms(),
             roles: Vec::new(),
             avatar: None,
+            idle: false,
         });
         let mut ready = Event::Ready {
             me: me.clone(),
@@ -805,7 +839,7 @@ impl Hub {
             // (Private conversations' calls only for their own people.)
             voice: inner.voice.values().filter(|v| v.audience.as_ref().is_none_or(|who| who.iter().any(|w| w == uid))).map(|v| v.p.clone()).collect(),
             roles: self.db.roles(),
-            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE].iter().map(|s| s.to_string()).collect(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE].iter().map(|s| s.to_string()).collect(),
             dms: self.db.dms_of(uid),
             relations: self.db.relations_of(uid),
             groups: if groups { self.db.groups_of(uid) } else { Vec::new() },
@@ -828,7 +862,8 @@ impl Hub {
             b = frame(re, ready.clone());
         }
         tx.send(b);
-        if !was_online {
+        // Online now, or (here again from somewhere) no longer idle.
+        if !was_online || was_idle {
             let b = frame(0, Event::MemberUpserted { member: me });
             for (id, c) in inner.clients.iter() {
                 if *id != conn_id {
@@ -844,8 +879,10 @@ impl Hub {
         if let Some(session) = inner.clients.get(&conn_id).and_then(|c| c.session) {
             Self::remove_session_locked(&mut inner, session);
         }
+        let was_idle = inner.clients.get(&conn_id).map(|c| Self::is_idle_locked(&inner, &c.user_id));
         if let Some(c) = inner.clients.remove(&conn_id) {
-            if !Self::is_online_locked(&inner, &c.user_id) {
+            // Gone, or idle now that the one place they weren't idle has gone.
+            if !Self::is_online_locked(&inner, &c.user_id) || was_idle != Some(Self::is_idle_locked(&inner, &c.user_id)) {
                 if let Some(m) = self.member_locked(&inner, &c.user_id) {
                     Self::broadcast_locked(&inner, Event::MemberUpserted { member: m });
                 }

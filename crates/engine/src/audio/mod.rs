@@ -33,6 +33,8 @@ pub struct Controls {
     /// Shared with the global push-to-talk key watcher.
     pub ptt_down: Arc<AtomicBool>,
     pub transmitting: AtomicBool,
+    /// When I last said something (ms since 1970; 0: not yet): talking in a call isn't idle.
+    pub last_spoke_ms: std::sync::atomic::AtomicI64,
     /// f32 bits, dBFS
     pub mic_level: AtomicU32,
     /// Play your own processed microphone back to you (mic test).

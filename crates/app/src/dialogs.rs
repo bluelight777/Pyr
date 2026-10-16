@@ -927,6 +927,9 @@ impl IngleApp {
                 Dialog::LeaveGroup { key, channel, name } => {
                     self.leave_group_dialog(ui, key, channel, &name, acts, &mut close);
                 }
+                Dialog::AskThem { key, uid, question, answer } => {
+                    self.ask_dialog(ui, st, key, uid, question, answer, acts, &mut close);
+                }
             };
             if fits_itself {
                 body(ui);
@@ -989,6 +992,8 @@ impl IngleApp {
         draft.library_sort = st.settings.library_sort.clone();
         // (And the notice that a report went by itself, shown once.)
         draft.auto_report_told = st.settings.auto_report_told;
+        // (And idle by my own say-so, set from my name at the bottom left.)
+        draft.idle_by_hand = st.settings.idle_by_hand;
         let before = draft.clone();
         let mut t = self.ui.settings_tab_next.take().unwrap_or(tab);
         ui.horizontal(|ui| {
@@ -1080,6 +1085,22 @@ impl IngleApp {
                     }
                 });
                 ui.label(RichText::new("Back this file up to keep your identity if you reinstall. Don't share it.").size(12.0).color(theme::DIM()));
+                field_label(ui, "Making sure of people");
+                let n = st.verified.len();
+                ui.label(
+                    RichText::new(match n {
+                        0 => "Right-click someone (or click their name in chat) and choose Make sure it's them: compare six words, or ask something only they'd know. A shield then shows by their name.".to_string(),
+                        1 => "You've made sure of 1 person: a shield shows by their name.".to_string(),
+                        n => format!("You've made sure of {n} people: a shield shows by their names."),
+                    })
+                    .color(theme::MUTED()),
+                );
+                ui.checkbox(&mut draft.vouch, "Vouch for the people I make sure of");
+                ui.label(
+                    RichText::new("On the servers you share with them. People who made sure of you then see them as vouched for (an outlined shield): it's how a whole group gets covered without everyone checking everyone.")
+                        .size(12.0)
+                        .color(theme::DIM()),
+                );
             }
             1 => {
                 let devices = &st.devices;

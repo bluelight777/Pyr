@@ -68,6 +68,60 @@ impl ChannelLog {
     }
 }
 
+/// How sure I can be that someone is who they say.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Trust {
+    /// I made sure of them.
+    Verified,
+    /// Someone I made sure of vouches for them (their ids).
+    Vouched(Vec<UserId>),
+    /// Not the person I made sure of under that name (a name like theirs, someone else): the
+    /// id of the one I made sure of.
+    Impostor(UserId),
+    /// Nothing to go on.
+    Unknown,
+}
+
+/// Making sure of someone, as the app shows it (see `verify`).
+#[derive(Clone, Debug)]
+pub struct HandshakeView {
+    pub sid: String,
+    /// The server it goes through.
+    pub server: String,
+    pub with: UserId,
+    pub kind: HandshakeKind,
+    pub mine: bool,
+    /// What was asked (asking something only they'd know).
+    pub question: String,
+    pub stage: HandshakeStage,
+    pub at: Instant,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HandshakeKind {
+    /// Comparing words.
+    Words,
+    /// Asking something only they'd know.
+    Ask,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum HandshakeStage {
+    /// They want to: waiting for me (to say yes to comparing words, or to answer).
+    Asked,
+    /// Waiting for them.
+    Waiting,
+    /// The words both should see (picture, word), and what they said about them so far.
+    Compare { words: Vec<(String, String)>, they_said: Option<bool> },
+    /// Done: I made sure it's them.
+    Sure,
+    /// I answered their question, and the answers matched: if only they could know that
+    /// answer, it's them (my say).
+    AnswersMatched,
+    /// It didn't work out (and why, to say).
+    Failed(String),
+}
+
 #[derive(Clone, Debug)]
 pub struct ServerView {
     pub key: String,
@@ -99,6 +153,8 @@ pub struct ServerView {
     pub groups: Vec<Group>,
     /// Friends, friend requests and blocks recorded on this server.
     pub relations: HashMap<UserId, RelationKind>,
+    /// Whether this server was told I'm idle (see `idle`; a new connection starts not idle).
+    pub idle_sent: bool,
 }
 
 impl ServerView {
@@ -125,6 +181,7 @@ impl ServerView {
             dms: Vec::new(),
             groups: Vec::new(),
             relations: HashMap::new(),
+            idle_sent: false,
         }
     }
 
@@ -468,6 +525,8 @@ pub struct DeviceLists {
 pub struct AppState {
     pub my_uid: String,
     pub my_name: String,
+    /// I'm idle (shown as a moon on my picture; see `idle`).
+    pub my_idle: bool,
     pub safety_code: String,
     pub servers: Vec<ServerView>,
     pub call: Option<CallView>,
@@ -510,6 +569,12 @@ pub struct AppState {
     pub muted_channels: HashSet<(String, ChannelId)>,
     /// People I've blocked.
     pub blocked: HashSet<UserId>,
+    /// People I made sure are who they say (see `verify`), by id.
+    pub verified: BTreeMap<UserId, crate::config::Verified>,
+    /// People vouched for by someone I made sure of: their id → who vouched.
+    pub vouched: HashMap<UserId, Vec<UserId>>,
+    /// Making sure of people: under way, or just done (cards in the app).
+    pub handshakes: Vec<HandshakeView>,
     /// Calls in direct messages ringing here (see `ring`).
     pub incoming_calls: Vec<IncomingCall>,
     /// The call we started in a direct message, while the other person isn't in it yet.
@@ -571,6 +636,23 @@ impl AppState {
     }
 
     /// A name for someone from any server we share.
+    /// How sure I can be that `uid` (shown as `name`) is who they say: see [`Trust`].
+    pub fn trust(&self, uid: &str, name: &str) -> Trust {
+        if self.verified.contains_key(uid) {
+            return Trust::Verified;
+        }
+        let folded = crate::verify::fold(name);
+        if !folded.is_empty() {
+            if let Some((real, _)) = self.verified.iter().find(|(id, v)| id.as_str() != uid && crate::verify::fold(&v.name) == folded) {
+                return Trust::Impostor(real.clone());
+            }
+        }
+        match self.vouched.get(uid) {
+            Some(by) if !by.is_empty() => Trust::Vouched(by.clone()),
+            _ => Trust::Unknown,
+        }
+    }
+
     pub fn name_of(&self, uid: &str) -> String {
         self.servers.iter().find(|s| s.members.contains_key(uid)).map(|s| s.member_name(uid)).unwrap_or_else(|| "Someone".into())
     }

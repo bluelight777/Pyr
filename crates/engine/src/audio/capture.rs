@@ -365,6 +365,10 @@ impl CapturePipeline {
 
         let open = self.gate(now, ctl);
         ctl.transmitting.store(open, Ordering::Relaxed);
+        // Something said (not just an open microphone in a quiet room): I'm here.
+        if open && self.level_db > -50.0 {
+            ctl.last_spoke_ms.store(ingle_proto::now_ms(), Ordering::Relaxed);
+        }
         self.acc.extend_from_slice(&frame[..480]);
         if self.acc.len() < 960 {
             return;

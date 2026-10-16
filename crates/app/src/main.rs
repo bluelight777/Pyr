@@ -30,6 +30,7 @@ mod stage;
 mod theme;
 #[cfg(windows)]
 mod tray;
+mod trust;
 
 /// The icon by the clock is Windows-only for now; elsewhere the close button quits as before.
 #[cfg(not(windows))]

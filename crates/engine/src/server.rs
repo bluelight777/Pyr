@@ -173,6 +173,10 @@ async fn session(
 ) -> SessionEnd {
     let net::LoggedIn { conn, mut send, mut recv, ready } = li;
     apply_ready(shared, key, ready);
+    // (A new connection starts out not idle: if I am, it hears so now.)
+    crate::idle::wake(shared);
+    crate::verify::publish_vouches(shared, key);
+    crate::verify::fetch_vouches(shared, key);
     crate::sync_avatar(shared.clone(), key.to_string());
     crate::resume_voice(shared.clone(), key.to_string());
     crate::backup::spawn_schedule(shared.clone(), key.to_string(), conn.clone());
@@ -327,6 +331,7 @@ fn apply_ready(shared: &Shared, key: &str, ready: Event) {
     s.voice = voice.into_iter().map(|p| (p.session, p)).collect();
     s.roles = roles;
     s.features = features;
+    s.idle_sent = false;
     s.relations = relations.into_iter().map(|r| (r.user_id, r.kind)).collect();
     // Direct messages that came in while we were away show as unread, with the "NEW" line
     // after the last one read here (or on the newest, if this PC never opened it).
@@ -388,6 +393,11 @@ fn log_newest(s: &ServerView, cid: ChannelId) -> Option<MessageId> {
 
 
 fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
+    // Someone's Ingle making sure of me (or answering me making sure of them): apart from the rest.
+    let ev = match ev {
+        Event::Handshake { from, data } => return crate::verify::on_handshake(shared, key, &from, &data),
+        ev => ev,
+    };
     let active = shared.active_view.lock().clone();
     let mut forward: Option<CallEvent> = None;
     let mut toast: Option<String> = None;
@@ -629,7 +639,8 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
             Event::SoundPlayed { session, channel_id, sound: s, name, emoji, volume } => {
                 sound = Some((session, channel_id, s, name, emoji, volume));
             }
-            Event::Pong { .. } | Event::Ok | Event::Hello { .. } | Event::Ready { .. } => {}
+            // (Handshakes are handled before this; vouches only come as replies.)
+            Event::Pong { .. } | Event::Ok | Event::Hello { .. } | Event::Ready { .. } | Event::Handshake { .. } | Event::Vouches { .. } => {}
             Event::Error { message, .. } => toast = Some(message),
             Event::History { .. } | Event::InviteCreated { .. } | Event::VoiceReady { .. } | Event::Kicked { .. } | Event::Bugs { .. } | Event::PluginSubmissions { .. } | Event::PluginSubmission { .. } | Event::SubmissionFile { .. } | Event::Submitted { .. } | Event::MySubmissions { .. } => {}
         }

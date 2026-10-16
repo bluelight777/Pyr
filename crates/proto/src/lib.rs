@@ -11,6 +11,7 @@ pub mod b64;
 pub mod control;
 pub mod crypto;
 pub mod framing;
+pub mod handshake;
 pub mod invite;
 pub mod library;
 pub mod media;
@@ -19,6 +20,7 @@ pub mod skin;
 pub mod sound;
 #[cfg(feature = "quic")]
 pub mod udp;
+pub mod words;
 
 /// Product name shown to people. Change this (and the crate/binary names) to rebrand.
 pub const APP_NAME: &str = "Ingle";

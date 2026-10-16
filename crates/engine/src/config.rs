@@ -186,6 +186,12 @@ pub struct Settings {
     pub auto_reports: bool,
     /// The one-time notice that a report was sent by itself has been shown.
     pub auto_report_told: bool,
+    /// Idle by my own say-so (shown as a moon until I change it), instead of after five
+    /// minutes away from the keyboard and mouse (see `idle`).
+    pub idle_by_hand: bool,
+    /// Vouch for the people I make sure of, on the servers we share: then people who made sure
+    /// of me see them as vouched for (see `verify`).
+    pub vouch: bool,
 }
 
 /// A favorite GIF: just its links (the GIF itself is fetched from GIPHY or KLIPY each time it's
@@ -259,6 +265,8 @@ impl Default for Settings {
             library_sort: String::new(),
             auto_reports: true,
             auto_report_told: false,
+            idle_by_hand: false,
+            vouch: true,
         }
     }
 }
@@ -284,6 +292,28 @@ pub struct Config {
     pub self_voice: Option<SelfVoice>,
     /// Where backups of servers I own go (`None`: "Ingle Server Backups" in Documents).
     pub backup_dir: Option<PathBuf>,
+    /// People I made sure are who they say, by id (see `verify`).
+    pub verified: std::collections::BTreeMap<UserId, Verified>,
+}
+
+/// Someone I made sure is who they say (see `verify`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Verified {
+    /// Their name when I made sure of them: someone else showing up under it is flagged.
+    pub name: String,
+    pub how: VerifiedHow,
+    /// When (ms since 1970).
+    pub at_ms: i64,
+}
+
+/// How I made sure of someone.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VerifiedHow {
+    /// We compared words.
+    Words,
+    /// I asked something only they'd know (or they asked me, and it could only be them).
+    Question,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]

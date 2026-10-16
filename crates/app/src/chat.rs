@@ -167,12 +167,16 @@ impl IngleApp {
                         crate::emoji::label_line(ui, &ch.name, theme::bold_font(15.5), theme::TEXT(), w, &mut |_| None);
                         ui.label(RichText::new(format!("{} members", g.members.len())).size(12.5).color(theme::DIM()));
                     } else if let Some(w) = &dm_with {
-                        let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
+                        // Their picture and name: click for their profile, like Discord's.
+                        let (r, pic) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
                         let face = self.face(ui.ctx(), s, w);
                         avatar(ui.painter(), r.center(), 12.0, w, &s.member_name(w), false, theme::MAIN(), face);
-                        ui.label(RichText::new(s.member_name(w)).font(theme::bold_font(15.5)).color(theme::TEXT()));
-                        if s.members.get(w).map(|m| m.online).unwrap_or(false) {
-                            crate::app::status_dot(ui.painter(), ui.min_rect().right_center() + vec2(10.0, 0.0), true, theme::MAIN());
+                        let named = ui.add(egui::Label::new(RichText::new(s.member_name(w)).font(theme::bold_font(15.5)).color(theme::TEXT())).sense(Sense::click()));
+                        self.profile_toggle(&pic.union(named), &s.key, w);
+                        crate::trust::badge(ui, st, w, &s.member_name(w), 15.0);
+                        let presence = crate::app::Presence::in_server(s, w);
+                        if presence.here() {
+                            crate::app::status_dot(ui.painter(), ui.min_rect().right_center() + vec2(10.0, 0.0), presence, theme::MAIN());
                         }
                     } else {
                         let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
@@ -224,6 +228,20 @@ impl IngleApp {
                                 if icon_button(ui, 30.0, "Start a voice call", false, |p, r, c| icons::phone(p, r, c)).clicked() {
                                     acts.push(Act::CallDm { key: s.key.clone(), channel, video: false });
                                 }
+                            }
+                            // Not made sure of yet: the shield, for making sure it's them.
+                            if let Some(w) = dm_with.as_ref().filter(|w| !st.verified.contains_key(*w) && !blocked) {
+                                let name = s.member_name(w);
+                                let b = icon_button(ui, 30.0, &format!("Make sure it's {name}"), false, |p, r, c| crate::trust::shield_icon(p, r, c));
+                                egui::Popup::menu(&b).align(egui::RectAlign::BOTTOM_END).width(300.0).show(|ui| {
+                                    // (Not a menu's justified layout: it spreads the words of a
+                                    // wrapped notice apart.)
+                                    ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                                        if self.trust_section(ui, st, s, w, acts) {
+                                            ui.close();
+                                        }
+                                    });
+                                });
                             }
                         }
                     });
@@ -646,9 +664,10 @@ impl IngleApp {
                     ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, t, theme::font(10.5), theme::DIM());
                 }
             } else {
-                let (r, _) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::hover());
+                let (r, pic) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::click());
                 let face = self.face(ui.ctx(), s, &m.author);
                 avatar(ui.painter(), r.center(), 20.0, &m.author, &name, false, theme::MAIN(), face);
+                self.profile_toggle(&pic, &key, &m.author);
             }
             ui.add_space(6.0);
             ui.vertical(|ui| {
@@ -656,7 +675,9 @@ impl IngleApp {
                 if !grouped {
                     ui.horizontal(|ui| {
                         let col = author.map(|a| name_color(s, &m.author, a.role)).unwrap_or(theme::TEXT());
-                        ui.label(RichText::new(&name).font(theme::bold_font(14.5)).color(col));
+                        let named = ui.add(egui::Label::new(RichText::new(&name).font(theme::bold_font(14.5)).color(col)).sense(Sense::click()));
+                        self.profile_toggle(&named, &key, &m.author);
+                        crate::trust::badge(ui, st, &m.author, &name, 14.0);
                         ui.label(RichText::new(crate::chat::when(m.created_at)).size(11.5).color(theme::DIM()));
                     });
                 }
@@ -1924,7 +1945,11 @@ pub fn mention_suggestions(s: &ServerView, draft: &str) -> Vec<Suggestion> {
             out.push(Suggestion {
                 insert: name.clone(),
                 label: name,
-                detail: if m.online { "online".into() } else { String::new() },
+                detail: match (m.online, m.idle) {
+                    (true, false) => "online".into(),
+                    (true, true) => "idle".into(),
+                    _ => String::new(),
+                },
                 color: name_color(s, &m.user_id, m.role),
                 uid: Some(m.user_id.clone()),
                 emoji: None,

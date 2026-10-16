@@ -75,9 +75,59 @@ SFrame + MLS (Discord's DAVE and Signal's group calls do similar things):
    fails to decrypt).
 5. The **call code** is a hash of everyone's identity and session keys. If everyone sees
    the same digits, nobody is in the middle.
+6. Once you've **made sure** of everyone else in a call (below), the call code has nothing
+   left to check: their session keys are signed with identities you checked, and media
+   keys only go to peers whose signatures verify. The call header says so instead.
 
 Not covered: text chat is not end-to-end encrypted (the server stores it, like Discord);
 the server sees who talks to whom and when (metadata) and packet sizes.
+
+## Making sure it's them (0.7.6)
+
+`proto::handshake`, `engine::verify`, `app::trust`. A server can show you someone else under
+a friend's name (a different identity, same display name), so Ingle gives two ways to check
+an identity that need no codes read out. Both run between the two Ingles through a server
+they share (`Request::Handshake` → `Event::Handshake`, relayed only to members who are
+online there and not blocked; the server never reads them), and both take in each end's
+view of who's at each end (both ids), so a server that showed either of them someone else
+can't make them come out right.
+
+- **Compare words**: a short authentication string after a commitment (like Matrix's emoji
+  verification). The starter sends H(sid, its X25519 key); the other replies with its key;
+  the starter reveals its key, which must match the commitment. Both show six words (48
+  bits) from `SHA-512(sid, ids, keys, X25519 secret)`, each from Ingle's own list of 256
+  (`proto::words`: easy to say, no two a sound apart, none that run together into another).
+  Whoever is in the middle has to choose their keys before seeing the other's, so they get
+  one try: 1 in 2^48. People say the words to each other (a call, the phone, in person).
+  Each end says whether they matched (`WordsSaid`); if the other end says they didn't, a
+  match said here doesn't count (and is taken back if it was said first, for 10 minutes).
+- **Ask something only they'd know**: CPace over Ristretto255. The generator is hashed from
+  (sid, ids, the question, the normalized answer); each side sends its half, the answerer
+  proves the shared secret with a MAC, the asker confirms with another. Neither answer
+  leaves its PC, the server learns nothing it could test guesses against, and an impostor
+  gets one guess per question (and three failed questions an hour per person). The
+  answerer only counts the asker as made sure of when they say only the asker could have
+  known that answer.
+
+What's made sure of is kept in `config.json` (`verified`: id, name then, how, when). Then:
+
+- **Shields** by names: green (made sure of), outlined (vouched for), red (someone else under
+  the name of a person you made sure of: names are compared folded, so look-alike letters,
+  digits for letters, "rn" for "m" and so on count as the same).
+- **Vouches** (`Vouch`, `SetVouches`, `GetVouches`): an Ed25519 signature over
+  (voucher, vouchee). Each app keeps its vouches for the people it made sure of on the servers
+  they share (off in Settings → My Account), and fetches the vouches of the people it made
+  sure of (when connecting, after making sure of someone, and when a profile opens). A
+  server stores and passes them on but can't make one up.
+
+## Idle (0.7.6)
+
+`engine::idle`: every 5 seconds the app works out whether you've been away five minutes:
+Windows' `GetLastInputInfo`, X11's screensaver extension on Linux, or Ingle's own window
+where neither says, and nothing said in a call. `SetIdle` tells each server; it shows a
+member as idle (`Member::idle`, a moon) while every connection of theirs is idle, and tells
+everyone (`MemberUpserted`) when that changes (at most one change in ten seconds a
+connection, after six). "Idle" can also be set by hand from your name.
 
 ## The relay (SFU)
 
@@ -388,7 +438,8 @@ What one person, or one place, can use up on a server (`server/src/hub.rs`, `con
 - A malicious **server** can read and alter text chat, see metadata, drop or delay media,
   and refuse service. It can't decrypt or forge voice/video/stream sound, can't
   impersonate an identity (logins are signatures), and can't substitute call keys without
-  the call code changing.
+  the call code changing. It can show you someone else under a name you know, which is what
+  making sure of people (and its red shield) is for; it can withhold vouches, never forge one.
 - A malicious **participant** can record what they receive, like in any call.
 - Losing `identity.key` loses that identity; anyone who copies it becomes you (and can put
   back the server identity in your backups).

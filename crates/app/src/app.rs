@@ -88,6 +88,21 @@ pub enum Act {
     StopTryingSkin,
     /// Wear an installed skin ("": Campfire, Ingle's own).
     WearSkin(String),
+    /// Idle by my own say-so (true), or worked out from the keyboard and mouse (false).
+    SetIdleByHand(bool),
+    /// Make sure someone is who they say: compare words, or ask something only they'd know.
+    CompareWords { key: String, uid: String },
+    AskThem { key: String, uid: String, question: String, answer: String },
+    /// Answering someone making sure of me (handshake ids).
+    AcceptWords(String),
+    AnswerQuestion { sid: String, answer: String },
+    WordsSaid { sid: String, matched: bool },
+    ItIsThem(String),
+    DeclineHandshake(String),
+    DismissHandshake(String),
+    ForgetVerified(String),
+    /// The vouches on this server, fetched again.
+    RefreshVouches(String),
     InstallSkin(ingle_proto::library::SkinEntry),
     RemoveSkin(String),
     /// Star (or unstar) a plugin or skin in the Library (`skin:<id>` for a skin).
@@ -208,6 +223,8 @@ pub enum Dialog {
     AddPeople { key: String, channel: Option<ChannelId>, picked: Vec<String>, search: String },
     RenameGroup { key: String, channel: ChannelId, name: String },
     LeaveGroup { key: String, channel: ChannelId, name: String },
+    /// "Make sure it's really them": the question to ask, and the answer I expect.
+    AskThem { key: String, uid: String, question: String, answer: String },
 }
 
 /// What the microphone buttons say when a moderator has server muted you.
@@ -322,6 +339,10 @@ pub struct UiState {
     /// Friends page tab: 0 online, 1 all, 2 pending, 3 blocked, 4 add friend.
     pub friends_tab: u8,
     pub friend_search: String,
+    /// Answers being typed to people making sure of me, by handshake id.
+    pub handshake_answers: HashMap<String, String>,
+    /// Whose profile the vouches were last fetched for (fetched again when another opens).
+    pub vouches_for: Option<(String, String)>,
     /// Emoji names being edited in server settings, by emoji id.
     pub emoji_names: HashMap<String, String>,
     /// Spellcheck for the message box.
@@ -655,6 +676,26 @@ impl IngleApp {
                 let settings = e.state().settings.clone();
                 e.update_settings(ingle_engine::config::Settings { skin: id, ..settings });
             }
+            Act::SetIdleByHand(on) => e.set_idle_by_hand(on),
+            Act::CompareWords { key, uid } => e.compare_words(&key, &uid),
+            Act::AskThem { key, uid, question, answer } => e.ask_them(&key, &uid, &question, &answer),
+            Act::AcceptWords(sid) => e.accept_words(&sid),
+            Act::AnswerQuestion { sid, answer } => {
+                self.ui.handshake_answers.remove(&sid);
+                e.answer_question(&sid, &answer);
+            }
+            Act::WordsSaid { sid, matched } => e.words_said(&sid, matched),
+            Act::ItIsThem(sid) => e.it_is_them(&sid),
+            Act::DeclineHandshake(sid) => {
+                self.ui.handshake_answers.remove(&sid);
+                e.decline_handshake(&sid);
+            }
+            Act::DismissHandshake(sid) => {
+                self.ui.handshake_answers.remove(&sid);
+                e.dismiss_handshake(&sid);
+            }
+            Act::ForgetVerified(uid) => e.forget_verified(&uid),
+            Act::RefreshVouches(key) => e.refresh_vouches(&key),
             Act::InstallSkin(entry) => self.plugins.install_skin(&entry),
             Act::RemoveSkin(id) => {
                 let settings = e.state().settings.clone();
@@ -811,6 +852,14 @@ impl eframe::App for IngleApp {
         let mut acts: Vec<Act> = Vec::new();
         for e in ingle_engine::errors::take() {
             engine.shared.state.write().toast(e, true);
+        }
+        // A key or the mouse in the window: I'm here (see `ingle_engine::idle`).
+        let active = ctx.input(|i| {
+            i.pointer.delta() != egui::Vec2::ZERO
+                || i.events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::PointerButton { .. } | egui::Event::MouseWheel { .. }))
+        });
+        if active {
+            engine.note_activity();
         }
         // The share picker closed, or the window was minimized with it open: stop previewing
         // (a minimized picker closes: nothing keeps capturing your screen out of sight).
@@ -1221,13 +1270,95 @@ pub fn avatar(
     p.text(center, egui::Align2::CENTER_CENTER, initial, theme::bold_font(radius * 0.95), Color32::from_rgb(0x1b, 0x14, 0x11));
 }
 
-pub fn status_dot(p: &egui::Painter, center: egui::Pos2, online: bool, bg: Color32) {
-    p.circle_filled(center, 6.0, bg);
-    if online {
-        p.circle_filled(center, 4.0, theme::ONLINE());
-    } else {
-        p.circle_stroke(center, 3.0, Stroke::new(1.5f32, theme::DIM()));
+/// How someone shows: online (a green dot), idle (a moon, like Discord's: away from the
+/// keyboard for a while, or they said so), or offline.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Presence {
+    Online,
+    Idle,
+    Offline,
+}
+
+impl Presence {
+    pub fn of(m: &ingle_proto::control::Member) -> Presence {
+        if !m.online {
+            Presence::Offline
+        } else if m.idle {
+            Presence::Idle
+        } else {
+            Presence::Online
+        }
     }
+
+    /// A member, as a server shows them (offline while it isn't connected).
+    pub fn in_server(s: &ServerView, uid: &str) -> Presence {
+        match s.members.get(uid) {
+            Some(m) if s.status.is_connected() => Presence::of(m),
+            _ => Presence::Offline,
+        }
+    }
+
+    /// Me, on this PC.
+    pub fn mine(st: &AppState) -> Presence {
+        if st.my_idle { Presence::Idle } else { Presence::Online }
+    }
+
+    pub fn here(self) -> bool {
+        self != Presence::Offline
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Presence::Online => "Online",
+            Presence::Idle => "Idle",
+            Presence::Offline => "Offline",
+        }
+    }
+}
+
+/// Discord's idle yellow, the same in every skin (so the moon always reads as idle).
+pub const IDLE: Color32 = Color32::from_rgb(0xf0, 0xb2, 0x32);
+
+/// The moon that means idle, `r` across from its middle.
+pub fn moon(p: &egui::Painter, center: egui::Pos2, r: f32, bg: Color32) {
+    p.circle_filled(center, r, IDLE);
+    // The bite out of its upper left, in what's behind it.
+    p.circle_filled(center + vec2(-0.42 * r, -0.42 * r), 0.7 * r, bg);
+}
+
+/// Someone's presence on their picture: a green dot when online, a yellow moon when idle, a
+/// grey ring when offline. `bg` is what's behind the picture (the dot sits in a ring of it).
+pub fn status_dot(p: &egui::Painter, center: egui::Pos2, presence: Presence, bg: Color32) {
+    p.circle_filled(center, 6.0, bg);
+    match presence {
+        Presence::Online => {
+            p.circle_filled(center, 4.0, theme::ONLINE());
+        }
+        Presence::Idle => moon(p, center, 4.3, bg),
+        Presence::Offline => {
+            p.circle_stroke(center, 3.0, Stroke::new(1.5f32, theme::DIM()));
+        }
+    }
+}
+
+/// A choice in my status menu: its dot, its name and what it means. True when clicked.
+fn status_choice(ui: &mut egui::Ui, p: Presence, chosen: bool, what: &str) -> bool {
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 42.0), Sense::click());
+    let bg = if resp.hovered() {
+        theme::HOVER()
+    } else if chosen {
+        theme::ELEV2()
+    } else {
+        ui.visuals().window_fill
+    };
+    ui.painter().rect_filled(r, CornerRadius::same(6), bg);
+    status_dot(ui.painter(), pos2(r.left() + 16.0, r.center().y), p, bg);
+    ui.painter().text(pos2(r.left() + 32.0, r.center().y - 8.0), egui::Align2::LEFT_CENTER, p.label(), theme::bold_font(13.5), theme::TEXT());
+    ui.painter().text(pos2(r.left() + 32.0, r.center().y + 9.0), egui::Align2::LEFT_CENTER, what, theme::font(11.5), theme::MUTED());
+    if chosen {
+        ui.painter().text(pos2(r.right() - 12.0, r.center().y), egui::Align2::RIGHT_CENTER, "✓", theme::bold_font(14.0), theme::ONLINE());
+    }
+    resp.clicked()
 }
 
 /// A square icon button that paints its icon with `draw`. Returns the response.
@@ -1321,6 +1452,7 @@ impl IngleApp {
             self.dialogs(ctx, st, acts);
             self.viewer(ctx, acts);
             self.incoming_call_card(ctx, st, acts);
+            self.handshake_cards(ctx, st, acts);
             self.toasts(ctx, st);
             return;
         }
@@ -1333,6 +1465,7 @@ impl IngleApp {
             self.avatar_editor(ctx, acts);
             self.drop_files(ctx, st, acts);
             self.incoming_call_card(ctx, st, acts);
+            self.handshake_cards(ctx, st, acts);
             self.toasts(ctx, st);
             return;
         }
@@ -1406,6 +1539,7 @@ impl IngleApp {
         self.avatar_editor(ctx, acts);
         self.drop_files(ctx, st, acts);
         self.incoming_call_card(ctx, st, acts);
+        self.handshake_cards(ctx, st, acts);
         self.toasts(ctx, st);
     }
 
@@ -1433,7 +1567,20 @@ impl IngleApp {
     fn profile_card(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
         use ingle_proto::control::RelationKind;
         let Some((key, uid, row)) = self.ui.profile_card.clone() else { return };
-        let at = pos2(row.right() + 10.0, row.top());
+        // (The vouches of the people I made sure of may have grown since they were fetched.)
+        if self.ui.vouches_for.as_ref() != Some(&(key.clone(), uid.clone())) {
+            self.ui.vouches_for = Some((key.clone(), uid.clone()));
+            acts.push(Act::RefreshVouches(key.clone()));
+        }
+        // Beside what it opened from (a name), or under it when there's no room beside it (a
+        // button at the right of a header).
+        const CARD_W: f32 = 292.0;
+        let screen = ctx.content_rect();
+        let at = if row.right() + 10.0 + CARD_W <= screen.right() - 8.0 {
+            pos2(row.right() + 10.0, row.top())
+        } else {
+            pos2((row.right() - CARD_W).max(screen.left() + 8.0), row.bottom() + 6.0)
+        };
         let Some(s) = st.server(&key) else {
             self.ui.profile_card = None;
             return;
@@ -1445,11 +1592,11 @@ impl IngleApp {
                 let member = s.members.get(&uid);
                 let name = s.member_name(&uid);
                 let role = member.map(|m| m.role).unwrap_or(Role::Member);
-                let online = member.map(|m| m.online).unwrap_or(false);
+                let presence = if uid == st.my_uid { Presence::mine(st) } else { member.map(Presence::of).unwrap_or(Presence::Offline) };
                 let (r, _) = ui.allocate_exact_size(vec2(72.0, 72.0), Sense::hover());
                 let face = self.face(ui.ctx(), s, &uid);
                 avatar(ui.painter(), r.center(), 34.0, &uid, &name, false, theme::SIDE(), face);
-                status_dot(ui.painter(), r.center() + vec2(25.0, 25.0), online, theme::SIDE());
+                status_dot(ui.painter(), r.center() + vec2(25.0, 25.0), presence, theme::SIDE());
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(&name).font(theme::bold_font(19.0)).color(name_color(s, &uid, role)));
@@ -1457,6 +1604,7 @@ impl IngleApp {
                         let (cr, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
                         icons::crown(ui.painter(), cr, theme::OWNER());
                     }
+                    crate::trust::badge(ui, st, &uid, &name, 17.0);
                 });
                 let how = match st.relation(&uid) {
                     _ if uid == st.my_uid => Some("This is you"),
@@ -1468,6 +1616,9 @@ impl IngleApp {
                 };
                 if let Some(how) = how {
                     ui.label(RichText::new(how).size(12.5).color(theme::MUTED()));
+                }
+                if presence == Presence::Idle {
+                    ui.label(RichText::new("Idle").size(12.5).color(IDLE)).on_hover_text("Away from the keyboard for a while (or they said so)");
                 }
                 ui.add_space(8.0);
                 ui.separator();
@@ -1489,9 +1640,10 @@ impl IngleApp {
                     ui.label(RichText::new(crate::chat::member_since(joined)).size(13.0).color(theme::TEXT()));
                     ui.add_space(6.0);
                 }
-                ui.label(RichText::new("SAFETY CODE").font(theme::bold_font(11.0)).color(theme::DIM()));
-                ui.label(RichText::new(ingle_proto::crypto::safety_code(&uid)).font(theme::mono(12.5)).color(theme::MUTED()))
-                    .on_hover_text("Compare it with theirs (on the welcome screen) to be sure it's really them.");
+                chose |= self.trust_section(ui, st, s, &uid, acts);
+                ui.add_space(4.0);
+                ui.label(RichText::new(format!("Safety code {}", ingle_proto::crypto::safety_code(&uid))).font(theme::mono(10.5)).color(theme::DIM()))
+                    .on_hover_text("The same code shows on their welcome screen: another way to check, digit by digit.");
                 // Sharing their screen: watch it from here, like Discord's Watch Stream. From
                 // another voice channel (or none), it joins theirs first.
                 let live = s
@@ -1536,6 +1688,18 @@ impl IngleApp {
         }
     }
 
+    /// Someone's picture or name, clickable: their profile opens beside it (and closes again),
+    /// like Discord's.
+    pub(crate) fn profile_toggle(&mut self, resp: &egui::Response, key: &str, uid: &str) {
+        if resp.hovered() {
+            resp.ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if resp.clicked() {
+            let open = self.ui.profile_card.as_ref().is_some_and(|(k, u, r)| k == key && u == uid && *r == resp.rect);
+            self.ui.profile_card = if open { None } else { Some((key.to_string(), uid.to_string(), resp.rect)) };
+        }
+    }
+
     /// What you can do with someone, in the menu from right-clicking their name: message them,
     /// set how loud they are for you, friend or block them, copy their safety code, and for
     /// moderators, kick them. True when something was chosen (moving the volume slider isn't).
@@ -1549,6 +1713,7 @@ impl IngleApp {
             chose = true;
         }
         chose |= crate::calls::call_item(ui, st, uid, Some(&s.key), acts);
+        chose |= self.make_sure_menu(ui, st, s, uid, acts);
         if !me {
             ui.separator();
             ui.label(RichText::new("User volume").size(12.0).color(theme::MUTED()));
@@ -2130,6 +2295,8 @@ impl IngleApp {
                             // Their name (emoji and all), cut short before what's on the right.
                             let name_x = indent + 36.0;
                             let end = if can_dm && pointer_in { x - 24.0 } else { x };
+                            // (Room for the shield, when there is one.)
+                            let shield_room = if uid != st.my_uid && st.trust(&uid, &name) != ingle_engine::state::Trust::Unknown { 16.0 } else { 0.0 };
                             let name_rect = crate::emoji::paint_text(
                                 ui.painter(),
                                 pos2(name_x, r.center().y),
@@ -2137,12 +2304,13 @@ impl IngleApp {
                                 &name,
                                 theme::font(14.0),
                                 col,
-                                Some((end - name_x - 6.0).max(24.0)),
+                                Some((end - name_x - 6.0 - shield_room).max(24.0)),
                             );
+                            let shield_w = crate::trust::badge_at(ui, st, &uid, &name, pos2(name_rect.right() + 4.0, r.center().y), 13.0);
                             // A soundboard sound they just played: its emoji by their name.
                             if let Some((x, age)) = st.call.as_ref().filter(|c| c.server_key == s.key).and_then(|c| crate::soundboard::recent_pop(c, p.session)) {
                                 let tex = crate::soundboard::custom_emoji_id(&x.emoji).and_then(|id| self.custom_emoji_tex(ui.ctx(), &s.key, &id));
-                                let at = pos2(name_rect.right() + 13.0, r.center().y + 4.0);
+                                let at = pos2(name_rect.right() + shield_w + 13.0, r.center().y + 4.0);
                                 crate::soundboard::paint_pop(ui.painter(), at, 18.0, &x.emoji, age, &mut |_| tex);
                                 ui.ctx().request_repaint();
                             }
@@ -2320,17 +2488,36 @@ impl IngleApp {
     pub(crate) fn user_panel(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
         let (muted, deafened) = self.engine.voice_prefs();
         ui.horizontal_centered(|ui| {
+            let me = Presence::mine(st);
             let (r, _) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());
             let speaking = st.call.as_ref().map(|c| c.speaking.contains(&c.session)).unwrap_or(false);
             let face = self.my_face(ui.ctx());
             avatar(ui.painter(), r.center(), 16.0, &st.my_uid, &st.my_name, speaking, theme::SIDE_DARK(), face);
-            status_dot(ui.painter(), r.right_bottom() - vec2(3.0, 3.0), true, theme::SIDE_DARK());
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 0.0;
-                ui.add_space(9.0);
-                ui.label(RichText::new(&st.my_name).font(theme::bold_font(13.5)).color(theme::TEXT()));
-                let sub = if st.call.is_some() { "In voice" } else { "Online" };
-                ui.label(RichText::new(sub).size(11.5).color(theme::MUTED()));
+            status_dot(ui.painter(), r.right_bottom() - vec2(3.0, 3.0), me, theme::SIDE_DARK());
+            let names = ui
+                .vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    ui.add_space(9.0);
+                    ui.label(RichText::new(&st.my_name).font(theme::bold_font(13.5)).color(theme::TEXT()));
+                    let sub = if st.call.is_some() { "In voice" } else { me.label() };
+                    ui.label(RichText::new(sub).size(11.5).color(theme::MUTED()));
+                })
+                .response;
+            // My picture and name: click to say you're idle (or online again), like Discord.
+            let mine = ui.interact(r.union(names.rect), ui.id().with("my-status"), Sense::click()).on_hover_text("Set your status");
+            if mine.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            egui::Popup::menu(&mine).align(egui::RectAlign::TOP_START).width(300.0).show(|ui| {
+                let by_hand = st.settings.idle_by_hand;
+                if status_choice(ui, Presence::Online, !by_hand, "Idle by itself after 5 minutes away") {
+                    acts.push(Act::SetIdleByHand(false));
+                    ui.close();
+                }
+                if status_choice(ui, Presence::Idle, by_hand, "Until you set it back") {
+                    acts.push(Act::SetIdleByHand(true));
+                    ui.close();
+                }
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
@@ -2409,7 +2596,8 @@ impl IngleApp {
                     let face = self.face(ui.ctx(), s, &m.user_id);
                     avatar(ui.painter(), c, 16.0, &m.user_id, &m.name, false, theme::SIDE(), face);
                     if online {
-                        status_dot(ui.painter(), c + vec2(12.0, 12.0), true, theme::SIDE());
+                        let presence = if m.user_id == st.my_uid { Presence::mine(st) } else { Presence::of(m) };
+                        status_dot(ui.painter(), c + vec2(12.0, 12.0), presence, theme::SIDE());
                     }
                     ui.painter().text(
                         pos2(r.left() + 48.0, r.center().y),
@@ -2418,17 +2606,27 @@ impl IngleApp {
                         theme::bold_font(14.0),
                         name_color(s, &m.user_id, m.role).gamma_multiply(alpha),
                     );
+                    let w = ui.fonts_mut(|f| f.layout_no_wrap(m.name.clone(), theme::bold_font(14.0), Color32::WHITE).size().x);
+                    let mut after = r.left() + 52.0 + w;
                     if m.role == Role::Owner {
-                        let w = ui.fonts_mut(|f| f.layout_no_wrap(m.name.clone(), theme::bold_font(14.0), Color32::WHITE).size().x);
                         icons::crown(ui.painter(), Rect::from_center_size(pos2(r.left() + 58.0 + w, r.center().y), vec2(14.0, 14.0)), theme::OWNER());
+                        after += 18.0;
                     }
+                    // Made sure of, vouched for, or not who you made sure of under that name.
+                    // (What it means goes in the row's hover text: two would cover each other.)
+                    crate::trust::paint_badge(ui.painter(), st, &m.user_id, &m.name, pos2(after, r.center().y), 14.0);
                     let (uid, name, role) = (m.user_id.clone(), m.name.clone(), m.role);
                     let me = st.my_uid == uid;
                     let my_role = s.me.as_ref().map(|x| x.role).unwrap_or(Role::Member);
                     let below_me = s.rank(&uid) < s.rank(&st.my_uid);
                     let key = s.key.clone();
                     let their_roles: Vec<String> = s.roles_of(&uid).iter().map(|r| r.name.clone()).collect();
-                    let mut hover = format!("{name}\nSafety code: {}", ingle_proto::crypto::safety_code(&uid));
+                    let mut hover = name.clone();
+                    let trust = st.trust(&uid, &name);
+                    if !me && trust != ingle_engine::state::Trust::Unknown {
+                        hover.push_str(&format!("\n{}", crate::trust::meaning(st, &trust, &name)));
+                    }
+                    hover.push_str(&format!("\nSafety code: {}", ingle_proto::crypto::safety_code(&uid)));
                     if !their_roles.is_empty() {
                         hover.push_str(&format!("\nRoles: {}", their_roles.join(", ")));
                     }
@@ -2442,6 +2640,7 @@ impl IngleApp {
                             ui.close();
                         }
                         crate::calls::call_item(ui, st, &uid, Some(&key), acts);
+                        self.make_sure_menu(ui, st, s, &uid, acts);
                         person_menu(ui, st, &uid, acts);
                         if ui.button("Copy safety code").clicked() {
                             acts.push(Act::Copy(ingle_proto::crypto::safety_code(&uid)));

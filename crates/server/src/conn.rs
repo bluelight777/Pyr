@@ -30,6 +30,14 @@ const SOUND_BURST: f64 = 4.0;
 /// Ringing someone (and declining): a few in a row, then one every 5 seconds.
 const RING_RATE: f64 = 0.2;
 const RING_BURST: f64 = 4.0;
+/// Idle and back: an Ingle changes it every few minutes at most (one in 10 seconds, after 6).
+const IDLE_RATE: f64 = 0.1;
+const IDLE_BURST: f64 = 6.0;
+/// Making sure of people takes a handful of messages each time (one every 2 seconds, after 20).
+const HANDSHAKE_RATE: f64 = 0.5;
+const HANDSHAKE_BURST: f64 = 20.0;
+/// The most vouches sent back at once.
+const VOUCHES_SENT_MAX: usize = 2000;
 /// History pages are kept well under the frame limit (long messages add up).
 const HISTORY_PAGE_BYTES: usize = 700 * 1024;
 /// Video one person may send, in bytes per second and burst (Ingle's sharpest screen share
@@ -276,6 +284,8 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
         req_tokens: Bucket::new(REQ_RATE, REQ_BURST),
         sound_tokens: Bucket::new(SOUND_RATE, SOUND_BURST),
         ring_tokens: Bucket::new(RING_RATE, RING_BURST),
+        idle_tokens: Bucket::new(IDLE_RATE, IDLE_BURST),
+        handshake_tokens: Bucket::new(HANDSHAKE_RATE, HANDSHAKE_BURST),
     };
     let result = async {
         loop {
@@ -597,6 +607,10 @@ struct Ctx<'a> {
     sound_tokens: Bucket,
     /// Rings and declined calls (direct messages' calls).
     ring_tokens: Bucket,
+    /// Idle and back again (`SetIdle`): everyone hears of each change.
+    idle_tokens: Bucket,
+    /// Messages for other members' Ingles (`Handshake`).
+    handshake_tokens: Bucket,
 }
 
 /// A token bucket: `rate` per second, holding at most `burst`.
@@ -629,7 +643,7 @@ impl Bucket {
 fn cost(req: &Request) -> f64 {
     match req {
         Request::Ping { .. } | Request::Typing { .. } | Request::VoiceState { .. } => 0.5,
-        Request::FetchHistory { .. } => 3.0,
+        Request::FetchHistory { .. } | Request::GetVouches { .. } => 3.0,
         Request::E2eeKeys { keys, .. } => 1.0 + keys.len() as f64 / 16.0,
         Request::CreateInvite { .. }
         | Request::FriendRequest { .. }
@@ -647,6 +661,7 @@ fn cost(req: &Request) -> f64 {
         | Request::CreateGroup { .. }
         | Request::AddToGroup { .. }
         | Request::RenameGroup { .. }
+        | Request::SetVouches { .. }
         | Request::Block { .. } => 4.0,
         _ => 1.0,
     }
@@ -959,6 +974,49 @@ impl Ctx<'_> {
                 Ok(()) => hub.typing(self.conn_id, &self.uid, channel_id),
                 Err(_) => Ok(Event::Ok),
             },
+            Request::SetIdle { idle } => {
+                if !self.idle_tokens.take(1.0) {
+                    return Err((ErrorCode::RateLimited, "Slow down a little.".into()));
+                }
+                hub.set_idle(self.conn_id, idle);
+                Ok(Event::Ok)
+            }
+            Request::Handshake { to, data } => {
+                if !self.handshake_tokens.take(1.0) {
+                    return Err((ErrorCode::RateLimited, "Slow down a little.".into()));
+                }
+                if data.len() > ingle_proto::handshake::HANDSHAKE_MAX {
+                    return bad("that's too long");
+                }
+                valid_uid(&to)?;
+                if to == self.uid {
+                    return bad("that's you");
+                }
+                if !crate::db::user_is_member(db, &to) || !hub.is_online(&to) {
+                    return Err((ErrorCode::NotFound, "They aren't online here right now.".into()));
+                }
+                // Between people where one blocked the other it goes nowhere, and nothing says so.
+                if !db.blocked_between(&self.uid, &to) {
+                    hub.send_to_user(&to, Event::Handshake { from: self.uid.clone(), data });
+                }
+                Ok(Event::Ok)
+            }
+            Request::SetVouches { vouches } => {
+                if vouches.len() > MAX_VOUCHES {
+                    return bad("that's more vouches than a server keeps");
+                }
+                if vouches.iter().any(|v| v.by != self.uid || !v.valid() || !crate::db::user_is_member(db, &v.for_uid)) {
+                    return bad("a vouch that isn't yours, isn't signed, or isn't for a member here");
+                }
+                db.set_vouches(&self.uid, &vouches).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                Ok(Event::Ok)
+            }
+            Request::GetVouches { by } => {
+                if by.len() > MAX_VOUCHES_ASKED {
+                    return bad("that's too many people at once");
+                }
+                Ok(Event::Vouches { vouches: db.vouches_by(&by, VOUCHES_SENT_MAX) })
+            }
             Request::OpenDm { user_id } => {
                 valid_uid(&user_id)?;
                 if user_id == self.uid {
@@ -1699,11 +1757,43 @@ mod tests {
             req_tokens: Bucket::new(REQ_RATE, REQ_BURST),
             sound_tokens: Bucket::new(SOUND_RATE, SOUND_BURST),
             ring_tokens: Bucket::new(RING_RATE, RING_BURST),
+            idle_tokens: Bucket::new(IDLE_RATE, IDLE_BURST),
+            handshake_tokens: Bucket::new(HANDSHAKE_RATE, HANDSHAKE_BURST),
         }
     }
 
     fn forbidden(r: Reply) -> bool {
         matches!(r, Err((ErrorCode::Forbidden, _)))
+    }
+
+    #[test]
+    fn vouches_are_kept_only_when_theyre_yours_signed_and_for_members() {
+        let hub = hub();
+        let blue = crypto::Identity::generate();
+        let (b, mara, stranger) = (blue.user_id(), uid(), uid());
+        hub.db.insert_user(&b, "Blue", Role::Owner).unwrap();
+        hub.db.insert_user(&mara, "Mara", Role::Member).unwrap();
+        let mut c = ctx(&hub, &b);
+        let good = Vouch::new(&blue, &mara);
+        assert!(c.handle(Request::SetVouches { vouches: vec![good.clone()] }).is_ok());
+        // For someone who isn't a member, someone else's, or not signed by who it says: no.
+        assert!(c.handle(Request::SetVouches { vouches: vec![Vouch::new(&blue, &stranger)] }).is_err());
+        let other = crypto::Identity::generate();
+        assert!(c.handle(Request::SetVouches { vouches: vec![Vouch::new(&other, &mara)] }).is_err());
+        assert!(c.handle(Request::SetVouches { vouches: vec![Vouch { sig: vec![0; 64], ..good.clone() }] }).is_err());
+        // Anyone here can get them.
+        let mut m = ctx(&hub, &mara);
+        match m.handle(Request::GetVouches { by: vec![b.clone()] }) {
+            Ok(Event::Vouches { vouches }) => assert_eq!(vouches, vec![good.clone()]),
+            other => panic!("{other:?}"),
+        }
+        // Setting them again replaces them.
+        assert!(c.handle(Request::SetVouches { vouches: vec![] }).is_ok());
+        assert!(matches!(m.handle(Request::GetVouches { by: vec![b.clone()] }), Ok(Event::Vouches { vouches }) if vouches.is_empty()));
+        // Messages for someone's Ingle only go to members who are here, and never too big.
+        assert!(matches!(c.handle(Request::Handshake { to: mara.clone(), data: "{}".into() }), Err((ErrorCode::NotFound, _))));
+        assert!(c.handle(Request::Handshake { to: mara.clone(), data: "x".repeat(ingle_proto::handshake::HANDSHAKE_MAX + 1) }).is_err());
+        assert!(c.handle(Request::Handshake { to: b, data: "{}".into() }).is_err(), "not to yourself");
     }
 
     #[test]

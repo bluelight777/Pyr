@@ -330,15 +330,15 @@ impl IngleApp {
         }
         ui.add_space(6.0);
         let q = search.trim().to_lowercase();
-        let mut people: Vec<(String, String, bool)> = s
+        let mut people: Vec<(String, String, crate::app::Presence)> = s
             .members
             .values()
             .filter(|m| !already.contains(&m.user_id) && !st.blocked.contains(&m.user_id))
-            .map(|m| (m.user_id.clone(), s.member_name(&m.user_id), m.online))
+            .map(|m| (m.user_id.clone(), s.member_name(&m.user_id), crate::app::Presence::of(m)))
             .filter(|(_, n, _)| q.is_empty() || n.to_lowercase().contains(&q))
             .collect();
         // Friends first, then who's online, then by name.
-        people.sort_by_key(|(u, n, on)| (st.relation(u) != Some(ingle_proto::control::RelationKind::Friend), !on, n.to_lowercase()));
+        people.sort_by_key(|(u, n, on)| (st.relation(u) != Some(ingle_proto::control::RelationKind::Friend), !on.here(), n.to_lowercase()));
         let left = room.saturating_sub(picked.len());
         ui.label(RichText::new(if left == 0 { "That's as many as a group can have.".to_string() } else { format!("You can add {left} more.") }).size(12.0).color(theme::DIM()));
         ui.add_space(4.0);
@@ -346,7 +346,7 @@ impl IngleApp {
             if people.is_empty() {
                 ui.label(RichText::new("Nobody else to add here.").color(theme::DIM()));
             }
-            for (uid, name, online) in &people {
+            for (uid, name, presence) in &people {
                 let on = picked.contains(uid);
                 let (row, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::click());
                 if resp.hovered() || on {
@@ -354,8 +354,8 @@ impl IngleApp {
                 }
                 let face = self.face(ui.ctx(), s, uid);
                 avatar(ui.painter(), pos2(row.left() + 22.0, row.center().y), 14.0, uid, name, false, theme::ELEV(), face);
-                if *online {
-                    crate::app::status_dot(ui.painter(), pos2(row.left() + 32.0, row.center().y + 10.0), true, theme::ELEV());
+                if presence.here() {
+                    crate::app::status_dot(ui.painter(), pos2(row.left() + 32.0, row.center().y + 10.0), *presence, theme::ELEV());
                 }
                 crate::emoji::paint_text(ui.painter(), pos2(row.left() + 46.0, row.center().y), Align2::LEFT_CENTER, name, theme::font(14.5), theme::TEXT(), Some(row.width() - 90.0));
                 // A tick box on the right.
@@ -530,15 +530,18 @@ impl IngleApp {
             let face = self.face(ui.ctx(), s, uid);
             let c = pos2(row.left() + 20.0, row.center().y);
             avatar(ui.painter(), c, 14.0, uid, &name, false, theme::SIDE(), face);
-            if s.members.get(uid).is_some_and(|m| m.online) && s.status.is_connected() {
-                crate::app::status_dot(ui.painter(), c + vec2(10.0, 10.0), true, theme::SIDE());
+            let presence = if *uid == st.my_uid { crate::app::Presence::mine(st) } else { crate::app::Presence::in_server(s, uid) };
+            if presence.here() {
+                crate::app::status_dot(ui.painter(), c + vec2(10.0, 10.0), presence, theme::SIDE());
             }
             let mut x = row.left() + 42.0;
             let named = crate::emoji::paint_text(ui.painter(), pos2(x, row.center().y), Align2::LEFT_CENTER, &name, theme::font(14.0), theme::MUTED(), Some(row.width() - 80.0));
             x = named.right() + 6.0;
             if *uid == g.owner {
                 icons::crown(ui.painter(), Rect::from_center_size(pos2(x + 7.0, row.center().y), vec2(14.0, 14.0)), theme::OWNER());
+                x += 18.0;
             }
+            crate::trust::badge_at(ui, st, uid, &name, pos2(x, row.center().y), 13.0);
             if in_call.contains(uid) {
                 icons::phone(ui.painter(), Rect::from_center_size(pos2(row.right() - 14.0, row.center().y), vec2(14.0, 14.0)), theme::ONLINE());
             }
@@ -550,6 +553,7 @@ impl IngleApp {
                         acts.push(Act::OpenDm { key: s.key.clone(), uid: uid2.clone() });
                         ui.close();
                     }
+                    self.make_sure_menu(ui, st, s, &uid2, acts);
                     crate::app::person_menu(ui, st, &uid2, acts);
                 });
             }
@@ -608,7 +612,7 @@ mod tests {
         for m in members {
             s.members.insert(
                 m.to_string(),
-                Member { user_id: m.to_string(), name: m.to_string(), role: Role::Member, online: true, joined_at: 0, roles: vec![], avatar: None },
+                Member { user_id: m.to_string(), name: m.to_string(), role: Role::Member, online: true, joined_at: 0, roles: vec![], avatar: None, idle: false },
             );
         }
         if let Some(w) = dm_with {

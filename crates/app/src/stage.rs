@@ -1,7 +1,7 @@
 //! The call view: video grid / spotlight, screen-share tiles, call controls.
 
 use eframe::egui::{self, Align, Color32, CornerRadius, Layout, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
-use ingle_engine::state::{AppState, RingState, ServerView, VideoKey};
+use ingle_engine::state::{AppState, RingState, ServerView, Trust, VideoKey};
 use ingle_proto::media::track;
 
 use crate::app::{Act, Dialog, IngleApp, avatar, icon_button};
@@ -37,6 +37,8 @@ struct Tile {
     moderate: Option<(String, Option<bool>, Option<bool>)>,
     /// The soundboard sound they just played, while it shows over them.
     pop: Option<Pop>,
+    /// How sure I can be it's them (a shield by their name).
+    trust: Trust,
 }
 
 /// A soundboard sound someone played, shown over their tile.
@@ -189,12 +191,20 @@ impl IngleApp {
                             }
                             ui.add_space(8.0);
                         }
-                        let others = s.voice_in(call.channel_id).len().saturating_sub(1);
-                        let (fill, stroke, text) = if call.e2ee_ready || others == 0 {
+                        let others: Vec<String> = s.voice_in(call.channel_id).iter().map(|p| p.user_id.clone()).filter(|u| *u != st.my_uid).collect();
+                        // Everyone else here made sure of: their Ingles sign their keys, so nobody
+                        // else can be given the call's (the code has nothing more to say).
+                        let all_sure = !others.is_empty() && others.iter().all(|u| st.verified.contains_key(u));
+                        let (fill, stroke, text) = if call.e2ee_ready || others.is_empty() {
                             (
                                 Color32::from_rgba_unmultiplied(0x6c, 0xc0, 0x70, 26),
                                 Color32::from_rgba_unmultiplied(0x6c, 0xc0, 0x70, 70),
-                                if wide { format!("End-to-end encrypted · call code {}", call.call_code) } else { call.call_code.clone() },
+                                match (all_sure && call.e2ee_ready, wide) {
+                                    (true, true) => "End-to-end encrypted · you made sure of everyone here".to_string(),
+                                    (true, false) => "Made sure of all".to_string(),
+                                    (false, true) => format!("End-to-end encrypted · call code {}", call.call_code),
+                                    (false, false) => call.call_code.clone(),
+                                },
                             )
                         } else {
                             (theme::ELEV(), theme::LINE(), if wide { "Exchanging encryption keys…".to_string() } else { "Keys…".to_string() })
@@ -215,14 +225,26 @@ impl IngleApp {
                             })
                             .response
                             .interact(Sense::click());
-                        if resp
-                            .on_hover_text(format!(
-                                "End-to-end encrypted, call code {}. Everyone in the call should see the same code. If they do, no one (not even the server) can listen in. Click to copy.",
+                        let tip = if all_sure && call.e2ee_ready {
+                            format!("End-to-end encrypted, and you made sure of everyone here: their Ingles sign their keys, so no one else (not even the server) can listen in. Call code {} (click to copy).", call.call_code)
+                        } else {
+                            format!(
+                                "End-to-end encrypted, call code {}. Everyone in the call should see the same code. If they do, no one (not even the server) can listen in. Or make sure of each person (right-click their name: Make sure it's them), and you won't need it. Click to copy.",
                                 call.call_code
-                            ))
-                            .clicked()
-                        {
+                            )
+                        };
+                        if resp.on_hover_text(tip).clicked() {
                             acts.push(Act::Copy(call.call_code.clone()));
+                        }
+                        // In a call with one other person you haven't made sure of: talking
+                        // already, it's the easiest time to compare words.
+                        let busy = others.first().is_some_and(|u| st.handshakes.iter().any(|h| &h.with == u));
+                        if others.len() == 1 && !all_sure && wide && !busy && s.has(ingle_proto::control::HANDSHAKE_FEATURE) {
+                            ui.add_space(6.0);
+                            let who = s.member_name(&others[0]);
+                            if ui.button(format!("Make sure it's {who}")).on_hover_text("Compare six words out loud: ten seconds, and Ingle remembers").clicked() {
+                                acts.push(Act::CompareWords { key: s.key.clone(), uid: others[0].clone() });
+                            }
                         }
                         ui.add_space(8.0);
                         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
@@ -260,6 +282,7 @@ impl IngleApp {
             for p in &parts {
                 let me = p.session == call.session;
                 let name = s.member_name(&p.user_id);
+                let trust = if me { Trust::Unknown } else { st.trust(&p.user_id, &name) };
                 let has_cam = p.tracks.iter().any(|t| t.id == track::CAMERA);
                 let face = self.face(ui.ctx(), s, &p.user_id);
                 let pop = crate::soundboard::recent_pop(call, p.session).map(|(x, age)| Pop {
@@ -290,6 +313,7 @@ impl IngleApp {
                         (m || d).then(|| (s.key.clone(), m.then_some(p.server_mute), d.then_some(p.server_deaf)))
                     },
                     pop,
+                    trust: trust.clone(),
                 });
                 if p.tracks.iter().any(|t| t.id == track::SCREEN) {
                     let key = VideoKey { session: p.session, track: track::SCREEN };
@@ -317,6 +341,7 @@ impl IngleApp {
                         sb_muted: false,
                         moderate: None,
                         pop: None,
+                        trust,
                     });
                 }
             }
@@ -462,7 +487,9 @@ impl IngleApp {
         let label = if t.screen { format!("{}'s screen", t.name) } else if t.is_me { format!("{} (you)", t.name) } else { t.name.clone() };
         let galley = ui.fonts_mut(|f| f.layout_no_wrap(label, theme::bold_font(12.5), theme::TEXT()));
         let icon_w = if t.muted || t.deaf { 18.0 } else { 0.0 };
-        let lr = Rect::from_min_size(rect.left_bottom() + vec2(10.0, -34.0), vec2(galley.size().x + 16.0 + icon_w, 24.0));
+        let shield_w = if t.trust == Trust::Unknown { 0.0 } else { 16.0 };
+        let text_w = galley.size().x;
+        let lr = Rect::from_min_size(rect.left_bottom() + vec2(10.0, -34.0), vec2(text_w + 16.0 + icon_w + shield_w, 24.0));
         p.rect_filled(lr, CornerRadius::same(6), Color32::from_black_alpha(150));
         if t.deaf {
             icons::headphones(&p, Rect::from_min_size(lr.min + vec2(6.0, 4.0), vec2(16.0, 16.0)), theme::LIVE(), true);
@@ -470,6 +497,9 @@ impl IngleApp {
             icons::mic(&p, Rect::from_min_size(lr.min + vec2(6.0, 4.0), vec2(16.0, 16.0)), theme::LIVE(), true);
         }
         p.galley(lr.min + vec2(8.0 + icon_w, 12.0 - galley.size().y / 2.0), galley, theme::TEXT());
+        if shield_w > 0.0 {
+            crate::trust::shield(&p, Rect::from_min_size(pos2(lr.left() + 8.0 + icon_w + text_w + 4.0, lr.center().y - 7.0), vec2(12.0, 14.0)), &t.trust);
+        }
         let mut right = rect.right() - 10.0;
         if t.screen && t.watching && !t.is_me {
             let b = Rect::from_min_size(pos2(right - 48.0, rect.top() + 10.0), vec2(48.0, 22.0));
@@ -802,6 +832,7 @@ mod tests {
             sb_muted: false,
             moderate: None,
             pop: None,
+            trust: Trust::Unknown,
         };
         for (w, n) in [(1400.0, 4), (620.0, 4), (380.0, 4), (300.0, 6), (1000.0, 2)] {
             let area = Rect::from_min_size(pos2(0.0, 0.0), vec2(w, 700.0));

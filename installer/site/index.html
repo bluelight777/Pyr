@@ -241,6 +241,9 @@ section { position: relative; }
 .code-box .row { display: flex; align-items: center; gap: 10px; color: #bfe6c1; font-size: 13.5px; font-weight: 600; }
 .code-box svg { width: 18px; height: 18px; }
 .code-box code { display: block; margin-top: 10px; font: 600 clamp(15px, 1.6vw, 19px)/1.3 var(--mono); color: var(--text); letter-spacing: .08em; word-spacing: .2em; }
+.code-box .words { display: grid; grid-template-columns: repeat(auto-fit, minmax(78px, 1fr)); gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
+.code-box .words li { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 4px 7px; border-radius: 10px; background: rgba(255, 236, 220, .06); color: var(--text); font: 600 13.5px/1.25 var(--sans); }
+.code-box .words li span { font-size: 22px; line-height: 1.2; }
 .key-row { display: flex; align-items: center; gap: 14px; margin-top: 24px; padding: 14px 16px; border-radius: 14px; background: rgba(255, 236, 220, .04); border: 1px solid var(--line); }
 .key-row svg { width: 34px; height: 34px; color: var(--ember-2); flex: none; }
 .key-row b { display: block; color: var(--text); font-size: 14.5px; }
@@ -611,10 +614,13 @@ dialog[open] { animation: pop .35s var(--ease); }
       <article class="card t-private" data-reveal>
         <div class="icon-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></div>
         <h3>Private calls you can check</h3>
-        <p>Voice, cameras and screens are end-to-end encrypted. Compare the call code: if yours matches, nobody can listen in, not even the server.</p>
-        <div class="code-box" aria-label="Example call code">
-          <div class="row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>Codes match</div>
-          <code>2035 1260 6981 2385 1849 3759</code>
+        <p>Voice, cameras and screens are end-to-end encrypted. Make sure it's really them in ten seconds: say six words to each other, or ask something only they'd know. Then nobody can listen in, not even the server.</p>
+        <div class="code-box" aria-label="Example words to compare">
+          <div class="row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>Words match: it's really them</div>
+          <ol class="words">
+            <li><span aria-hidden="true">🦊</span>fox</li><li><span aria-hidden="true">🌋</span>volcano</li><li><span aria-hidden="true">🎸</span>guitar</li>
+            <li><span aria-hidden="true">🍕</span>pizza</li><li><span aria-hidden="true">⚓</span>anchor</li><li><span aria-hidden="true">🦉</span>owl</li>
+          </ol>
         </div>
       </article>
 
@@ -684,7 +690,7 @@ dialog[open] { animation: pop .35s var(--ease); }
       <div class="crow" role="row"><span class="k" role="rowheader">Voice quality</span><span class="us" role="cell"><i class="yes" aria-hidden="true">✓</i>64 kbps, up to 192 kbps</span><span class="them" role="cell"><i class="meh" aria-hidden="true">–</i>Up to 96 kbps (more with boosts)</span></div>
       <div class="crow" role="row"><span class="k" role="rowheader">Account</span><span class="us" role="cell"><i class="yes" aria-hidden="true">✓</i>None: a key on your PC</span><span class="them" role="cell"><i class="meh" aria-hidden="true">–</i>Email account; age checks for some people</span></div>
       <div class="crow" role="row"><span class="k" role="rowheader">Where your group lives</span><span class="us" role="cell"><i class="yes" aria-hidden="true">✓</i>Your own server, with any host</span><span class="them" role="cell"><i class="meh" aria-hidden="true">–</i>Discord's servers</span></div>
-      <div class="crow" role="row"><span class="k" role="rowheader">Calls end-to-end encrypted</span><span class="us" role="cell"><i class="yes" aria-hidden="true">✓</i>Yes, with a call code to compare</span><span class="them" role="cell"><i class="yes" aria-hidden="true">✓</i>Yes, with privacy codes</span></div>
+      <div class="crow" role="row"><span class="k" role="rowheader">Calls end-to-end encrypted</span><span class="us" role="cell"><i class="yes" aria-hidden="true">✓</i>Yes, and six words say it's really them</span><span class="them" role="cell"><i class="yes" aria-hidden="true">✓</i>Yes, with privacy codes</span></div>
       <div class="crow" role="row"><span class="k" role="rowheader">Messages end-to-end encrypted</span><span class="us" role="cell"><i class="meh" aria-hidden="true">–</i>Not yet: coming in 0.8</span><span class="them" role="cell"><i class="no" aria-hidden="true">✕</i>No</span></div>
       <div class="crow" role="row"><span class="k" role="rowheader">Desktop app</span><span class="us" role="cell"><i class="yes" aria-hidden="true">✓</i>Native, written in Rust</span><span class="them" role="cell"><i class="meh" aria-hidden="true">–</i>Electron (a web page in a box)</span></div>
       <div class="crow" role="row"><span class="k" role="rowheader">Phones and Mac</span><span class="us" role="cell"><i class="no" aria-hidden="true">✕</i>Not yet: Windows and Linux</span><span class="them" role="cell"><i class="yes" aria-hidden="true">✓</i>Yes</span></div>

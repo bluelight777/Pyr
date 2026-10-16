@@ -84,9 +84,52 @@ pub struct Member {
     /// Profile picture: the id of a file on the server (see [`FILES_FEATURE`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar: Option<String>,
+    /// Away from the keyboard ([`IDLE_FEATURE`]): online, but every Ingle they're connected
+    /// from has gone a while without a key or the mouse (or they said they're idle). Shown as
+    /// a moon, like Discord's Idle.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub idle: bool,
 }
 
 pub type RoleId = i64;
+
+/// "I made sure this is them" (see [`VOUCHES_FEATURE`]), signed by whoever says it: a server
+/// keeps vouches and passes them on, but can't make one up.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Vouch {
+    pub by: UserId,
+    #[serde(rename = "for")]
+    pub for_uid: UserId,
+    #[serde(with = "crate::b64::bytes")]
+    pub sig: Vec<u8>,
+}
+
+/// The most vouches one person keeps on a server, and the most people asked about at once.
+pub const MAX_VOUCHES: usize = 500;
+pub const MAX_VOUCHES_ASKED: usize = 200;
+
+impl Vouch {
+    fn message(by: &str, for_uid: &str) -> Vec<u8> {
+        let mut m = b"ingle-vouch-v1\0".to_vec();
+        for p in [by.as_bytes(), for_uid.as_bytes()] {
+            m.extend_from_slice(&(p.len() as u16).to_be_bytes());
+            m.extend_from_slice(p);
+        }
+        m
+    }
+
+    /// Mine, for someone I made sure of.
+    pub fn new(identity: &crate::crypto::Identity, for_uid: &str) -> Vouch {
+        let by = identity.user_id();
+        let sig = identity.sign(&Vouch::message(&by, for_uid)).to_vec();
+        Vouch { by, for_uid: for_uid.to_string(), sig }
+    }
+
+    /// Signed by who it says, and not for themselves.
+    pub fn valid(&self) -> bool {
+        self.by != self.for_uid && crate::crypto::verify(&self.by, &Vouch::message(&self.by, &self.for_uid), &self.sig)
+    }
+}
 
 /// What a custom role allows (bits of [`RoleDef::perms`]). Admins and the owner can do
 /// everything; everyone can chat, react, join voice and create invites.
@@ -213,6 +256,17 @@ pub const DM_CALLS_FEATURE: &str = "dm_calls";
 /// ([`DM_CALLS_FEATURE`]). Only apps that say they know groups (`Login::caps` has
 /// [`GROUPS_CAP`]) are told about them.
 pub const GROUPS_FEATURE: &str = "groups";
+/// Idle, like Discord's: `SetIdle` says a connection's Ingle has gone a while without a key or
+/// the mouse (or its person said they're idle), and `Member::idle` shows who's idle on every
+/// Ingle they're connected from (sent again as `MemberUpserted` when it changes).
+pub const IDLE_FEATURE: &str = "idle";
+/// Making sure people are who they say ([`crate::handshake`]): `Handshake` passes a message
+/// on to another member's Ingle (`Event::Handshake`, on each of their connections) while
+/// they're online here, unless one of them blocked the other. The server never reads it.
+pub const HANDSHAKE_FEATURE: &str = "handshake";
+/// Vouches ([`Vouch`]): `SetVouches` keeps mine (for people who are members here), and
+/// `GetVouches` gets the ones made by the people asked about.
+pub const VOUCHES_FEATURE: &str = "vouches";
 /// In `Login::caps`: this app knows group conversations ([`GROUPS_FEATURE`]).
 pub const GROUPS_CAP: &str = "groups";
 /// The most people in a group conversation.
@@ -980,6 +1034,10 @@ pub enum Request {
     Typing {
         channel_id: ChannelId,
     },
+    /// This connection's Ingle is idle, or back ([`IDLE_FEATURE`]).
+    SetIdle {
+        idle: bool,
+    },
     CreateChannel {
         name: String,
         kind: ChannelKind,
@@ -1289,6 +1347,20 @@ pub enum Request {
         channel_id: ChannelId,
         name: String,
     },
+    /// For another member's Ingle ([`HANDSHAKE_FEATURE`]): the JSON of a
+    /// [`crate::handshake::Handshake`], passed on as it is.
+    Handshake {
+        to: UserId,
+        data: String,
+    },
+    /// All my vouches here ([`VOUCHES_FEATURE`]), in place of the ones before.
+    SetVouches {
+        vouches: Vec<Vouch>,
+    },
+    /// The vouches these people made here ([`VOUCHES_FEATURE`]): answered with `Vouches`.
+    GetVouches {
+        by: Vec<UserId>,
+    },
     /// A request this server doesn't know (from a newer app).
     #[serde(other)]
     Unknown,
@@ -1515,6 +1587,15 @@ pub enum Event {
         #[serde(default = "full_volume")]
         volume: f32,
     },
+    /// From another member's Ingle ([`HANDSHAKE_FEATURE`]; see `Request::Handshake`).
+    Handshake {
+        from: UserId,
+        data: String,
+    },
+    /// The vouches asked for (`GetVouches`).
+    Vouches {
+        vouches: Vec<Vouch>,
+    },
     /// An event this app doesn't know (from a newer server); ignored.
     #[serde(other)]
     Unknown,
@@ -1721,6 +1802,34 @@ mod tests {
             }
             _ => panic!(),
         }
+    }
+
+    #[test]
+    fn a_vouch_is_only_good_signed_by_who_it_says() {
+        let blue = crate::crypto::Identity::generate();
+        let mara = crate::crypto::Identity::generate().user_id();
+        let v = Vouch::new(&blue, &mara);
+        assert!(v.valid());
+        let back: Vouch = serde_json::from_str(&serde_json::to_string(&v).unwrap()).unwrap();
+        assert!(back.valid() && back == v);
+        // Someone else's name on it, or someone else it's for: not good.
+        let other = crate::crypto::Identity::generate().user_id();
+        assert!(!Vouch { by: other.clone(), ..v.clone() }.valid());
+        assert!(!Vouch { for_uid: other, ..v.clone() }.valid());
+        // Nobody vouches for themselves.
+        assert!(!Vouch::new(&blue, &blue.user_id()).valid());
+    }
+
+    #[test]
+    fn idle_is_left_out_when_its_not_so_older_apps_see_what_they_always_did() {
+        let m: Member = serde_json::from_str(r#"{"user_id":"u","name":"Mara","role":"member","online":true}"#).unwrap();
+        assert!(!m.idle, "an older server's member is never idle");
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(!json.contains("idle"), "{json}");
+        let idle = Member { idle: true, ..m };
+        assert!(serde_json::to_string(&idle).unwrap().contains(r#""idle":true"#));
+        let r = serde_json::to_string(&Request::SetIdle { idle: true }).unwrap();
+        assert_eq!(r, r#"{"op":"set_idle","idle":true}"#);
     }
 
     #[test]

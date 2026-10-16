@@ -12,6 +12,7 @@ pub mod call;
 pub mod config;
 pub mod e2ee;
 pub mod hotkey;
+pub mod idle;
 pub mod qos;
 mod ring;
 
@@ -40,6 +41,7 @@ pub mod sfx;
 pub mod skins;
 pub mod soundboard;
 pub mod state;
+pub mod verify;
 pub mod video;
 
 use std::collections::HashMap;
@@ -165,6 +167,12 @@ pub struct Shared {
     ringer: AtomicBool,
     /// Reports sent by themselves this run: (what, when) (see `bugs::auto_report`).
     pub auto_reports: Mutex<Vec<(String, std::time::Instant)>>,
+    /// When Ingle's window last had a key or the mouse (ms since 1970; see `idle`).
+    pub last_activity_ms: std::sync::atomic::AtomicI64,
+    /// The thread that works out whether you're idle (woken to look again at once).
+    pub idle_thread: Mutex<Option<std::thread::Thread>>,
+    /// Making sure of people: handshakes under way (see `verify`).
+    pub(crate) verify: Mutex<verify::Book>,
 }
 
 /// What sound files are, to the file streams.
@@ -641,6 +649,7 @@ impl Engine {
         let my_uid = identity.user_id();
         let state = AppState {
             safety_code: crypto::safety_code(&my_uid),
+            my_idle: false,
             my_uid,
             voice_rejoin: None,
             resume_offer: None,
@@ -669,6 +678,9 @@ impl Engine {
             mic_test: false,
             muted_servers: cfg.muted_servers.clone(),
             blocked: cfg.blocked.clone(),
+            verified: cfg.verified.clone(),
+            vouched: HashMap::new(),
+            handshakes: Vec::new(),
             muted_channels: cfg.muted_channels.iter().flat_map(|(k, cs)| cs.iter().map(move |c| (k.clone(), *c))).collect(),
             incoming_calls: Vec::new(),
             outgoing_call: None,
@@ -720,7 +732,11 @@ impl Engine {
             ringer: AtomicBool::new(false),
             auto_reports: Mutex::new(Vec::new()),
             call_group: Mutex::new(None),
+            last_activity_ms: std::sync::atomic::AtomicI64::new(ingle_proto::now_ms()),
+            idle_thread: Mutex::new(None),
+            verify: Mutex::new(verify::Book::default()),
         });
+        idle::start(&shared);
         // Read marks for channels are saved a few at a time (reading a busy channel moves them
         // with every message), so what you've read stays read after a restart or a crash.
         {
@@ -1614,6 +1630,85 @@ impl Engine {
         }
     }
 
+    /// A key or the mouse in Ingle's window (the app calls this as they come): you're here.
+    /// Idle until now, every server hears you're back right away.
+    pub fn note_activity(&self) {
+        self.shared.last_activity_ms.store(ingle_proto::now_ms(), Ordering::Relaxed);
+        let st = self.shared.state.read_recursive();
+        if st.my_idle && !st.settings.idle_by_hand {
+            drop(st);
+            idle::wake(&self.shared);
+        }
+    }
+
+    /// Make sure `uid` is who they say by comparing words with them (through server `key`).
+    pub fn compare_words(&self, key: &str, uid: &str) {
+        verify::compare_words(&self.shared, key, uid);
+    }
+
+    /// Make sure `uid` is who they say by asking them something only they'd know.
+    pub fn ask_them(&self, key: &str, uid: &str, question: &str, answer: &str) {
+        verify::ask(&self.shared, key, uid, question, answer);
+    }
+
+    /// Yes to comparing words someone asked for (handshake `sid`).
+    pub fn accept_words(&self, sid: &str) {
+        verify::accept_words(&self.shared, sid);
+    }
+
+    /// My answer to the question someone asked (handshake `sid`).
+    pub fn answer_question(&self, sid: &str, answer: &str) {
+        verify::answer(&self.shared, sid, answer);
+    }
+
+    /// The words matched (it's them), or they didn't.
+    pub fn words_said(&self, sid: &str, matched: bool) {
+        verify::words_said(&self.shared, sid, matched);
+    }
+
+    /// The answers to their question matched, and only they could know it: it's them.
+    pub fn it_is_them(&self, sid: &str) {
+        verify::it_is_them(&self.shared, sid);
+    }
+
+    /// Not now: the other end hears so.
+    pub fn decline_handshake(&self, sid: &str) {
+        verify::decline(&self.shared, sid);
+    }
+
+    /// Done with a finished handshake's card.
+    pub fn dismiss_handshake(&self, sid: &str) {
+        verify::dismiss(&self.shared, sid);
+    }
+
+    /// No longer count `uid` as made sure of.
+    pub fn forget_verified(&self, uid: &str) {
+        verify::forget(&self.shared, uid);
+    }
+
+    /// The vouches of the people I made sure of, fetched again from server `key` (when someone's
+    /// profile opens, say: they may have made sure of more people since).
+    pub fn refresh_vouches(&self, key: &str) {
+        verify::fetch_vouches(&self.shared, key);
+    }
+
+    /// Say you're idle yourself (it stays until you say otherwise), or go back to Ingle
+    /// working it out from the keyboard and mouse.
+    pub fn set_idle_by_hand(&self, on: bool) {
+        let settings = {
+            let mut cfg = self.shared.config.lock();
+            cfg.settings.idle_by_hand = on;
+            self.shared.save_config_locked(&cfg);
+            cfg.settings.clone()
+        };
+        self.shared.state.write().settings.idle_by_hand = settings.idle_by_hand;
+        if !on {
+            // Choosing it was using Ingle.
+            self.shared.last_activity_ms.store(ingle_proto::now_ms(), Ordering::Relaxed);
+        }
+        idle::wake(&self.shared);
+    }
+
     // --------------------------------------------------------------- admin
 
     pub fn create_channel(&self, key: &str, name: &str, kind: ChannelKind) {
@@ -2294,6 +2389,9 @@ impl Engine {
         }
         self.shared.state.write().settings = settings.clone();
         qos::set_enabled(settings.voice_priority);
+        if old.vouch != settings.vouch {
+            verify::everywhere(&self.shared);
+        }
         if settings.noise_suppression == config::NoiseSuppression::Isolation && old.noise_suppression != settings.noise_suppression {
             audio::dfn::preload();
         }

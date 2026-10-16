@@ -194,6 +194,15 @@ CREATE TABLE IF NOT EXISTS plugin_submissions (
     size INTEGER NOT NULL DEFAULT 0,
     files TEXT NOT NULL
 );
+-- Vouches (0.7.6): whom a member says they made sure of (`Vouch`), signed by them, so the
+-- server can keep and pass them on but never make one up. Only for members here.
+CREATE TABLE IF NOT EXISTS vouches (
+    by TEXT NOT NULL,
+    for_uid TEXT NOT NULL,
+    sig TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (by, for_uid)
+);
 "#;
 
 /// What `Db::submission_row` reads, in its order.
@@ -405,6 +414,7 @@ impl Db {
                     joined_at: r.get(3)?,
                     roles: Vec::new(),
                     avatar: r.get(4)?,
+                    idle: false,
                 })
             })
             .map(|rows| rows.filter_map(|r| r.ok()).collect())
@@ -605,6 +615,38 @@ impl Db {
             ],
         )?;
         Ok(c.last_insert_rowid())
+    }
+
+    /// `by`'s vouches, in place of the ones they had.
+    pub fn set_vouches(&self, by: &str, vouches: &[ingle_proto::control::Vouch]) -> Result<()> {
+        let mut c = self.conn.lock();
+        let tx = c.transaction()?;
+        tx.execute("DELETE FROM vouches WHERE by = ?1", [by])?;
+        for v in vouches {
+            tx.execute("INSERT OR REPLACE INTO vouches(by, for_uid, sig, at) VALUES (?1, ?2, ?3, ?4)", params![by, v.for_uid, ingle_proto::b64::encode(&v.sig), now_ms()])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The vouches these people made (at most `max`).
+    pub fn vouches_by(&self, by: &[String], max: usize) -> Vec<ingle_proto::control::Vouch> {
+        let c = self.conn.lock();
+        let Ok(mut st) = c.prepare("SELECT for_uid, sig FROM vouches WHERE by = ?1 ORDER BY at DESC LIMIT ?2") else { return Vec::new() };
+        let mut out = Vec::new();
+        for b in by {
+            let left = max.saturating_sub(out.len());
+            if left == 0 {
+                break;
+            }
+            let rows = st.query_map(params![b, left as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)));
+            for (for_uid, sig) in rows.map(|r| r.flatten().collect::<Vec<_>>()).unwrap_or_default() {
+                if let Ok(sig) = ingle_proto::b64::decode(&sig) {
+                    out.push(ingle_proto::control::Vouch { by: b.clone(), for_uid, sig });
+                }
+            }
+        }
+        out
     }
 
     /// Submissions waiting for the owner to look at them: skins, or plugins.
