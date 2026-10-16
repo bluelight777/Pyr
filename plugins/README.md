@@ -12,7 +12,8 @@ Games from its Rust source after someone has read it. There are two kinds:
   you install, so the review is what stands between you and them: their source is read and
   built by Firelit Games, and Ingle checks every file against the library's signed list
   before installing it and again before opening it. Ingle starts a program with `INGLE_EMBED`
-  set, so it can open without a frame of its own (Ingle takes its window in either way).
+  set, so it can start hidden for Ingle to show once it's in place. It should keep its frame:
+  Ingle takes the frame off itself, and gives it back for Pop out.
 
 This folder has:
 

@@ -414,7 +414,12 @@ impl IngleApp {
                                 ui.horizontal(|ui| {
                                     ui.set_min_height(30.0);
                                     let size = e.size_for(super::install::os()).max(e.wasm.as_ref().map(|w| w.size).unwrap_or(0));
-                                    ui.label(RichText::new(if size > 0 { format!("{} · {}", e.version, size_text(size)) } else { e.version.clone() }).size(12.5).color(theme::DIM));
+                                    // (With an update to offer, its button says the version, and
+                                    // there's no room for this as well.)
+                                    let update = self.plugins.installed.get(&e.id).is_some_and(|p| self.plugins.update_for(p).is_some());
+                                    if !update {
+                                        ui.label(RichText::new(if size > 0 { format!("{} · {}", e.version, size_text(size)) } else { e.version.clone() }).size(12.5).color(theme::DIM));
+                                    }
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                         if ui.button("Details").clicked() {
                                             open = true;

@@ -255,7 +255,10 @@ built from source, and Ingle only opens the files the list names. On Windows a p
 inside Ingle's window (`app/src/plugins/programs.rs`): Ingle starts it with `INGLE_EMBED`
 set, takes its main window off the taskbar, makes Ingle's window its owner, removes its frame
 and keeps it over the page it has in Ingle (following the window as it moves, and stepping
-aside for Ingle's own menus, dialogs and notices). **Pop out** gives it its frame back.
+aside for Ingle's own menus, dialogs and notices). A window that keeps part of its frame
+anyway (an undecorated one that keeps room round itself for its shadow, say) is made that much
+bigger and cut down to the part it draws in, so that part fills the page to its edges.
+**Pop out** gives it its frame back.
 
 **Plugins sent in** (`engine/src/plugins.rs`): anyone's Ingle sends a plugin's Rust source
 (never a built file) to the library server, which is the bug report server unless Ingle was

@@ -5,7 +5,7 @@ members = ["crates/proto", "crates/server", "crates/engine", "crates/host", "cra
 exclude = ["plugins"]
 
 [workspace.package]
-version = "0.7.3"
+version = "0.7.4"
 edition = "2024"
 rust-version = "1.91"
 license = "MIT OR Apache-2.0"

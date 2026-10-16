@@ -112,7 +112,7 @@ impl Programs {
                 let place = here.filter(|_| !over.covering).map(|a| clear_of(a, &over.keep_clear)).filter(|a| a.width() > 40.0 && a.height() > 40.0);
                 p.win.step(place.map(|a| a * ppp));
             }
-            win::set_embedded(self.open.iter().filter(|p| !p.popped).filter_map(|p| p.win.hwnd.map(|h| (h, p.win.pid))).collect());
+            win::set_embedded(self.open.iter().filter(|p| !p.popped).filter_map(|p| p.win.hwnd.map(|h| (h, p.win.pid, p.win.cut_down()))).collect());
         }
         #[cfg(not(windows))]
         let _ = (ctx, shown, area, over);
@@ -208,6 +208,42 @@ fn clear_of(area: Rect, keep: &[Rect]) -> Rect {
     a
 }
 
+/// What's left of a program's frame around the part it draws in, in pixels (Windows still draws
+/// it): some programs keep a frame Ingle can't take off, like an undecorated window that keeps
+/// room for its shadow. Ingle makes such a window that much bigger, so the part the program
+/// draws in fills the page to its edges, and cuts the rest off.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+struct Insets {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl Insets {
+    /// The most a frame (a title bar included, on a big screen) could be.
+    const MAX: i32 = 200;
+
+    /// From the window's outer rectangle and its own area's, both (left, top, right, bottom)
+    /// on the screen. Anything odd (the window moving between the two looks, say) is none.
+    fn measured(window: (i32, i32, i32, i32), client: (i32, i32, i32, i32)) -> Insets {
+        let i = Insets { left: client.0 - window.0, top: client.1 - window.1, right: window.2 - client.2, bottom: window.3 - client.3 };
+        let ok = |v: i32| (0..=Insets::MAX).contains(&v);
+        if ok(i.left) && ok(i.top) && ok(i.right) && ok(i.bottom) { i } else { Insets::default() }
+    }
+
+    fn is_none(&self) -> bool {
+        *self == Insets::default()
+    }
+
+    /// The window's rectangle (x, y, width, height) that puts the part it draws in on `target`.
+    fn around(&self, target: (i32, i32, i32, i32)) -> (i32, i32, i32, i32) {
+        (target.0 - self.left, target.1 - self.top, target.2 + self.left + self.right, target.3 + self.top + self.bottom)
+    }
+}
+
 /// Ingle hid to the tray (Windows): hide the programs with it (a window it owns doesn't hide by
 /// itself). They're put back by the next frame once Ingle's window is back.
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -240,7 +276,9 @@ mod win {
     use eframe::egui::Rect;
     use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, POINT, RECT, WPARAM};
     use windows::Win32::Graphics::Dwm::{DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DwmSetWindowAttribute};
-    use windows::Win32::Graphics::Gdi::{ClientToScreen, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
+    use windows::Win32::Graphics::Gdi::{
+        ClientToScreen, CreateRectRgn, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, SetWindowRgn,
+    };
     use windows::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JobObjectExtendedLimitInformation, SetInformationJobObject,
@@ -248,15 +286,16 @@ mod win {
     use windows::Win32::System::Threading::{GetCurrentProcessId, OpenProcess, PROCESS_TERMINATE, TerminateProcess};
     use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
     use windows::Win32::UI::WindowsAndMessaging::{
-        CHILDID_SELF, EVENT_OBJECT_LOCATIONCHANGE, EnumWindows, GW_OWNER, GWL_EXSTYLE, GWL_STYLE, GWLP_HWNDPARENT, GetWindow, GetWindowLongPtrW,
-        GetWindowRect, GetWindowTextLengthW, GetWindowThreadProcessId, IsHungAppWindow, IsWindow, IsWindowVisible, IsZoomed, OBJID_WINDOW,
-        PostMessageW, SW_HIDE, SW_RESTORE, SW_SHOWNA, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
-        SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync, WINEVENT_OUTOFCONTEXT, WM_CLOSE, WS_CAPTION,
-        WS_EX_APPWINDOW, WS_EX_CLIENTEDGE,
-        WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE, WS_MAXIMIZEBOX,
-        WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+        CHILDID_SELF, EVENT_OBJECT_LOCATIONCHANGE, EnumWindows, GW_OWNER, GWL_EXSTYLE, GWL_STYLE, GWLP_HWNDPARENT, GetClientRect, GetMenu, GetWindow,
+        GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowThreadProcessId, IsHungAppWindow, IsWindow, IsWindowVisible, IsZoomed,
+        OBJID_WINDOW, PostMessageW, SW_HIDE, SW_RESTORE, SW_SHOWNA, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync, WINEVENT_OUTOFCONTEXT, WM_CLOSE,
+        WS_CAPTION, WS_EX_APPWINDOW, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+        WS_EX_WINDOWEDGE, WS_HSCROLL, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME, WS_VSCROLL,
     };
     use windows::core::{BOOL, PCWSTR};
+
+    use super::Insets;
 
     /// The frame, title bar and their buttons: what comes off a program's window.
     const FRAME: u32 = WS_CAPTION.0 | WS_THICKFRAME.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0;
@@ -274,19 +313,22 @@ mod win {
         /// Where it was put last (screen pixels), and whether it's showing.
         placed: Option<(i32, i32, i32, i32)>,
         showing: bool,
+        /// What's left of its frame (see `Insets`), and the part of its window it's cut down
+        /// to, if any (that much frame, and its page's size).
+        inset: Insets,
+        clipped: Option<(Insets, i32, i32)>,
     }
 
     impl Embedded {
         pub fn new(pid: u32) -> Embedded {
-            Embedded { pid, hwnd: None, styles: None, placed: None, showing: false }
+            Embedded { pid, hwnd: None, styles: None, placed: None, showing: false, inset: Insets::default(), clipped: None }
         }
 
         /// `place`: where it goes (physical pixels in Ingle's window), or hidden.
         pub fn step(&mut self, place: Option<Rect>) {
             let Some(main) = crate::tray::main_window() else { return };
             if self.hwnd.is_some_and(|h| unsafe { !IsWindow(Some(hwnd(h))).as_bool() }) {
-                self.hwnd = None;
-                self.placed = None;
+                self.forget();
             }
             if self.hwnd.is_none() {
                 match find_window(self.pid) {
@@ -297,8 +339,14 @@ mod win {
             let Some(h) = self.hwnd else { return };
             let w = hwnd(h);
             // Not responding: leave it alone until it is again (anything asked of its window
-            // would wait for it), and gone full screen (a video, say): until it's back.
-            if hung(w) || fullscreen(w) {
+            // would wait for it), and gone full screen (a video, say): until it's back (shown
+            // whole meanwhile). Before Ingle has put it anywhere, a window as big as the screen
+            // is only how it started (on a small screen, say): it goes in its page.
+            if hung(w) {
+                return;
+            }
+            if self.placed.is_some() && fullscreen(w) {
+                self.clip(w, None);
                 return;
             }
             unsafe {
@@ -313,12 +361,24 @@ mod win {
                     Some(r) => {
                         let mut origin = POINT { x: r.min.x.round() as i32, y: r.min.y.round() as i32 };
                         let _ = ClientToScreen(main, &mut origin);
-                        let at = (origin.x, origin.y, r.width().round() as i32, r.height().round() as i32);
-                        follow(Some((main, w, (r.min.x.round() as i32, r.min.y.round() as i32, at.2, at.3))));
+                        let target = (origin.x, origin.y, r.width().round() as i32, r.height().round() as i32);
+                        // What's left of its frame, looked at while it's where it was put (not
+                        // moving): the window goes that much bigger, and is cut down to its page.
+                        let now = window_rect(w);
+                        if self.placed.is_none() || self.placed.map(|p| (p.0, p.1, p.0 + p.2, p.1 + p.3)) == now {
+                            let found = insets(w);
+                            if found != self.inset {
+                                tracing::info!(pid = self.pid, ?found, "a program's window keeps part of its frame: Ingle covers it");
+                                self.inset = found;
+                            }
+                        }
+                        let at = self.inset.around(target);
+                        follow(Some((main, w, (r.min.x.round() as i32, r.min.y.round() as i32, target.2, target.3), self.inset)));
                         if self.placed != Some(at) {
                             let _ = SetWindowPos(w, None, at.0, at.1, at.2, at.3, SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS);
                             self.placed = Some(at);
                         }
+                        self.clip(w, (!self.inset.is_none()).then_some((self.inset, target.2, target.3)));
                         // (Hidden meanwhile with Ingle, to the tray say: shown again.)
                         if !self.showing || !IsWindowVisible(w).as_bool() {
                             let _ = ShowWindowAsync(w, SW_SHOWNA);
@@ -349,20 +409,45 @@ mod win {
                 let square = DWMWCP_DONOTROUND;
                 let _ = DwmSetWindowAttribute(w, DWMWA_WINDOW_CORNER_PREFERENCE, &square as *const _ as *const core::ffi::c_void, std::mem::size_of_val(&square) as u32);
             }
+            self.forget_placement();
             self.hwnd = Some(h);
-            self.placed = None;
             self.showing = unsafe { IsWindowVisible(w).as_bool() };
             ensure_hook();
         }
 
-        /// Pop out: a window of its own again, with a frame and a taskbar button (one that
-        /// started without a frame for Ingle, see `INGLE_EMBED`, gets one too).
+        /// Cuts its window down to the part it draws in (`Insets`), or (none) back to whole.
+        fn clip(&mut self, w: HWND, to: Option<(Insets, i32, i32)>) {
+            if self.clipped == to {
+                return;
+            }
+            unsafe {
+                match to {
+                    Some((i, width, height)) => {
+                        // (Windows keeps the region and frees it with the window.)
+                        let _ = SetWindowRgn(w, Some(CreateRectRgn(i.left, i.top, i.left + width, i.top + height)), true);
+                    }
+                    None => {
+                        let _ = SetWindowRgn(w, None, true);
+                    }
+                }
+            }
+            self.clipped = to;
+        }
+
+        /// Pop out: a window of its own again, whole, with a frame and a taskbar button (one
+        /// that started without a frame gets one too).
         pub fn release(&mut self) {
             let Some(h) = self.hwnd else { return };
+            self.clip(hwnd(h), None);
             unsafe { give_back(hwnd(h), self.styles) };
             self.forget_placement();
             self.hwnd = None;
             self.styles = None;
+        }
+
+        /// Its window is cut down to the part it draws in (see `clip`).
+        pub fn cut_down(&self) -> bool {
+            self.clipped.is_some()
         }
 
         /// Its window isn't responding.
@@ -393,6 +478,8 @@ mod win {
             }
             self.placed = None;
             self.showing = false;
+            self.inset = Insets::default();
+            self.clipped = None;
         }
     }
 
@@ -408,6 +495,30 @@ mod win {
             let _ = SetWindowPos(w, None, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
             let _ = ShowWindow(w, SW_SHOWNA);
         }
+    }
+
+    /// A window's outer rectangle on the screen (left, top, right, bottom).
+    fn window_rect(w: HWND) -> Option<(i32, i32, i32, i32)> {
+        let mut r = RECT::default();
+        unsafe { GetWindowRect(w, &mut r) }.ok().map(|_| (r.left, r.top, r.right, r.bottom))
+    }
+
+    /// What's left of a window's frame around the part it draws in (see `Insets`). A window with
+    /// a menu bar or scroll bars of its own has those outside that part too: it's left as it is.
+    fn insets(w: HWND) -> Insets {
+        let style = unsafe { GetWindowLongPtrW(w, GWL_STYLE) } as u32;
+        if style & (WS_VSCROLL.0 | WS_HSCROLL.0) != 0 || unsafe { !GetMenu(w).is_invalid() } {
+            return Insets::default();
+        }
+        let Some(outer) = window_rect(w) else { return Insets::default() };
+        let mut c = RECT::default();
+        let mut o = POINT { x: 0, y: 0 };
+        unsafe {
+            if GetClientRect(w, &mut c).is_err() || !ClientToScreen(w, &mut o).as_bool() {
+                return Insets::default();
+            }
+        }
+        Insets::measured(outer, (o.x, o.y, o.x + c.right, o.y + c.bottom))
     }
 
     /// Not responding (Windows' own test: nothing taken from its messages for 5 seconds).
@@ -480,18 +591,19 @@ mod win {
 
     // ---- following Ingle's window as it's dragged (no frames run while it is)
 
-    /// Ingle's window, the program on show, and where it goes in Ingle's window (pixels).
+    /// Ingle's window, the program on show, where it goes in Ingle's window (pixels), and what's
+    /// left of its frame.
     #[derive(Clone, Copy)]
-    struct Follow(isize, isize, (i32, i32, i32, i32));
+    struct Follow(isize, isize, (i32, i32, i32, i32), Insets);
 
     static FOLLOW: Mutex<Option<Follow>> = Mutex::new(None);
     static HOOK: AtomicIsize = AtomicIsize::new(0);
-    /// The program windows taken in, and their processes (for hiding to the tray, counting as
-    /// Ingle in front, and closing with Ingle).
-    static EMBEDDED: Mutex<Vec<(isize, u32)>> = Mutex::new(Vec::new());
+    /// The program windows taken in, their processes, and whether Ingle cut the window down (for
+    /// hiding to the tray, counting as Ingle in front, and closing with Ingle).
+    static EMBEDDED: Mutex<Vec<(isize, u32, bool)>> = Mutex::new(Vec::new());
 
-    fn follow(f: Option<(HWND, HWND, (i32, i32, i32, i32))>) {
-        *FOLLOW.lock().unwrap_or_else(|e| e.into_inner()) = f.map(|(m, w, r)| Follow(m.0 as isize, w.0 as isize, r));
+    fn follow(f: Option<(HWND, HWND, (i32, i32, i32, i32), Insets)>) {
+        *FOLLOW.lock().unwrap_or_else(|e| e.into_inner()) = f.map(|(m, w, r, i)| Follow(m.0 as isize, w.0 as isize, r, i));
     }
 
     fn ensure_hook() {
@@ -509,7 +621,7 @@ mod win {
         if object != OBJID_WINDOW.0 || child != CHILDID_SELF as i32 {
             return;
         }
-        let Some(Follow(main, prog, (x, y, cw, ch))) = *FOLLOW.lock().unwrap_or_else(|e| e.into_inner()) else { return };
+        let Some(Follow(main, prog, (x, y, cw, ch), inset)) = *FOLLOW.lock().unwrap_or_else(|e| e.into_inner()) else { return };
         if w.0 as isize != main {
             return;
         }
@@ -519,11 +631,12 @@ mod win {
             }
             let mut origin = POINT { x, y };
             let _ = ClientToScreen(hwnd(main), &mut origin);
-            let _ = SetWindowPos(hwnd(prog), None, origin.x, origin.y, cw, ch, SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS);
+            let at = inset.around((origin.x, origin.y, cw, ch));
+            let _ = SetWindowPos(hwnd(prog), None, at.0, at.1, at.2, at.3, SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS);
         }
     }
 
-    pub fn set_embedded(list: Vec<(isize, u32)>) {
+    pub fn set_embedded(list: Vec<(isize, u32, bool)>) {
         *EMBEDDED.lock().unwrap_or_else(|e| e.into_inner()) = list;
     }
 
@@ -533,7 +646,7 @@ mod win {
 
     pub fn hide_all() {
         let list = EMBEDDED.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        for (h, _) in list {
+        for (h, _, _) in list {
             unsafe {
                 let _ = ShowWindowAsync(hwnd(h), SW_HIDE);
             }
@@ -550,13 +663,13 @@ mod win {
     pub fn close_all_now() {
         CLOSED_ALL.store(true, Ordering::Relaxed);
         let list = std::mem::take(&mut *EMBEDDED.lock().unwrap_or_else(|e| e.into_inner()));
-        for (h, _) in &list {
+        for (h, _, _) in &list {
             unsafe {
                 let _ = PostMessageW(Some(hwnd(*h)), WM_CLOSE, WPARAM(0), LPARAM(0));
             }
         }
         let until = std::time::Instant::now() + std::time::Duration::from_millis(1500);
-        for (h, pid) in list {
+        for (h, pid, cut_down) in list {
             while std::time::Instant::now() < until && unsafe { IsWindow(Some(hwnd(h))).as_bool() } {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
@@ -571,8 +684,13 @@ mod win {
                     }
                 }
             } else {
-                // Still open (asking something, say): out on its own to finish.
-                unsafe { give_back(hwnd(h), None) };
+                // Still open (asking something, say): out on its own to finish, whole.
+                unsafe {
+                    if cut_down {
+                        let _ = SetWindowRgn(hwnd(h), None, true);
+                    }
+                    give_back(hwnd(h), None);
+                }
             }
         }
         let_go();
@@ -629,6 +747,26 @@ mod win {
 mod tests {
     use super::*;
     use eframe::egui::{pos2, vec2};
+
+    #[test]
+    fn a_frame_left_on_a_window_is_covered() {
+        // An undecorated window that keeps room for its shadow (at 150%): 11 pixels at the
+        // sides and bottom, 2 at the top.
+        let window = (100, 100, 1100, 800);
+        let i = Insets::measured(window, (111, 102, 1089, 789));
+        assert_eq!(i, Insets { left: 11, top: 2, right: 11, bottom: 11 });
+        // Put so that the part it draws in is exactly the page.
+        let page = (108, 108, 3731, 1969);
+        let at = i.around(page);
+        assert_eq!(at, (97, 106, 3753, 1982));
+        assert_eq!((at.0 + i.left, at.1 + i.top, at.2 - i.left - i.right, at.3 - i.top - i.bottom), page);
+        // No frame: as it is.
+        assert!(Insets::measured(window, window).is_none());
+        assert_eq!(Insets::default().around(page), page);
+        // Looked at while it moved (the two rectangles from different places): none.
+        assert!(Insets::measured(window, (90, 95, 1080, 790)).is_none());
+        assert!(Insets::measured(window, (400, 400, 500, 500)).is_none(), "more than a frame could be");
+    }
 
     #[test]
     fn makes_room_for_what_is_over_it() {

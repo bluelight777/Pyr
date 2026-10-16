@@ -233,7 +233,7 @@ fn unreadable(p: &InstalledPlugin, file: &str, e: &std::io::Error) -> String {
 }
 
 /// Starts a program (after checking its files). On Windows it's told it opens inside Ingle
-/// (`INGLE_EMBED`), so it can start without a frame of its own.
+/// (`INGLE_EMBED`), so it can start hidden for Ingle to show once it's in place.
 pub fn spawn(dir: &Path, p: &InstalledPlugin) -> Result<std::process::Child, String> {
     if p.kind != Kind::Program {
         return Err("only programs are opened this way".into());
