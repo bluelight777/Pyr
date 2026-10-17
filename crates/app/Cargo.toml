@@ -83,3 +83,5 @@ embed-resource = "3.0.12"
 [dev-dependencies]
 # Hand-written WebAssembly for the add-on sandbox tests.
 wat = "1"
+# Animated PNGs for the moving-picture tests (the version the image crate uses).
+png = "0.18"

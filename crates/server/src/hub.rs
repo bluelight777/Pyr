@@ -263,6 +263,8 @@ struct Client {
     last_typing: HashMap<ChannelId, Instant>,
     /// Its Ingle says it's idle (`SetIdle`).
     idle: bool,
+    /// Its person said Do Not Disturb there (`SetDnd`).
+    dnd: bool,
 }
 
 struct Voice {
@@ -530,6 +532,7 @@ impl Hub {
             icon: self.db.get_meta("icon").filter(|i| !i.is_empty()),
             emojis: self.db.emojis(),
             sounds: self.db.sounds(),
+            gifs: self.db.gifs(),
             giphy_key: self.db.get_meta("giphy_key").unwrap_or_default(),
             klipy_key: self.db.get_meta("klipy_key").unwrap_or_default(),
             bug_reports: self.db.get_meta("bug_reports").as_deref() == Some("1"),
@@ -803,6 +806,27 @@ impl Hub {
         theirs.peek().is_some() && theirs.all(|c| c.idle)
     }
 
+    /// Do Not Disturb: said on any of their connections.
+    fn is_dnd_locked(inner: &Inner, uid: &str) -> bool {
+        inner.clients.values().any(|c| c.user_id == uid && c.dnd)
+    }
+
+    /// Do Not Disturb on a connection, or off (`SetDnd`): everyone's told when that changes
+    /// how its member shows.
+    pub fn set_dnd(&self, conn_id: ConnId, dnd: bool) {
+        let mut inner = self.inner.lock();
+        let Some(uid) = inner.clients.get(&conn_id).map(|c| c.user_id.clone()) else { return };
+        let was = Self::is_dnd_locked(&inner, &uid);
+        if let Some(c) = inner.clients.get_mut(&conn_id) {
+            c.dnd = dnd;
+        }
+        if Self::is_dnd_locked(&inner, &uid) != was {
+            if let Some(m) = self.member_locked(&inner, &uid) {
+                Self::broadcast_locked(&inner, Event::MemberUpserted { member: m });
+            }
+        }
+    }
+
     /// A connection's Ingle is idle, or back (`SetIdle`): everyone's told when that changes
     /// how its member shows.
     pub fn set_idle(&self, conn_id: ConnId, idle: bool) {
@@ -834,6 +858,7 @@ impl Hub {
             avatar: u.avatar,
             idle: Self::is_idle_locked(inner, uid),
             bot: u.bot,
+            dnd: Self::is_dnd_locked(inner, uid),
         })
     }
 
@@ -925,12 +950,14 @@ impl Hub {
                 session_cell,
                 last_typing: HashMap::new(),
                 idle: false,
+                dnd: false,
             },
         );
         let mut members = self.db.members();
         for m in &mut members {
             m.online = Self::is_online_locked(&inner, &m.user_id);
             m.idle = Self::is_idle_locked(&inner, &m.user_id);
+            m.dnd = Self::is_dnd_locked(&inner, &m.user_id);
         }
         let me = members.iter().find(|m| m.user_id == uid).cloned().unwrap_or(Member {
             user_id: uid.to_string(),
@@ -948,7 +975,7 @@ impl Hub {
             // (Private conversations' calls only for their own people.)
             voice: inner.voice.values().filter(|v| v.audience.as_ref().is_none_or(|who| who.iter().any(|w| w == uid))).map(|v| v.p.clone()).collect(),
             roles: self.db.roles(),
-            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE, PRIVATE_CHANNELS_FEATURE, BOTS_FEATURE].iter().map(|s| s.to_string()).collect(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, DND_FEATURE, BIG_FILES_FEATURE, GIFS_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE, VOUCHES_FOR_ME_FEATURE, PRIVATE_CHANNELS_FEATURE, BOTS_FEATURE].iter().map(|s| s.to_string()).collect(),
             dms: self.db.dms_of(uid),
             relations: self.db.relations_of(uid),
             groups: if groups { self.db.groups_of(uid) } else { Vec::new() },
@@ -989,9 +1016,14 @@ impl Hub {
             Self::remove_session_locked(&mut inner, session);
         }
         let was_idle = inner.clients.get(&conn_id).map(|c| Self::is_idle_locked(&inner, &c.user_id));
+        let was_dnd = inner.clients.get(&conn_id).map(|c| Self::is_dnd_locked(&inner, &c.user_id));
         if let Some(c) = inner.clients.remove(&conn_id) {
-            // Gone, or idle now that the one place they weren't idle has gone.
-            if !Self::is_online_locked(&inner, &c.user_id) || was_idle != Some(Self::is_idle_locked(&inner, &c.user_id)) {
+            // Gone, idle now that the one place they weren't idle has gone, or no longer Do
+            // Not Disturb now that the place they said so has gone.
+            if !Self::is_online_locked(&inner, &c.user_id)
+                || was_idle != Some(Self::is_idle_locked(&inner, &c.user_id))
+                || was_dnd != Some(Self::is_dnd_locked(&inner, &c.user_id))
+            {
                 if let Some(m) = self.member_locked(&inner, &c.user_id) {
                     Self::broadcast_locked(&inner, Event::MemberUpserted { member: m });
                 }

@@ -111,6 +111,16 @@ async fn making_sure_of_people() {
     b.refresh_vouches(&key);
     wait_for("vouched for", 10, || b.state().trust(&uc, "Carol") == Trust::Vouched(vec![ua.clone()])).await;
 
+    // Who made sure of me (the shield by my own name): Bob and Carol, of Alice; Alice, of Bob
+    // and of Carol.
+    let mut bob_and_carol = vec![ub.clone(), uc.clone()];
+    bob_and_carol.sort();
+    for e in [&a, &b, &c] {
+        e.refresh_vouches(&key);
+    }
+    wait_for("alice's shield", 10, || a.state().made_sure_of_me() == bob_and_carol).await;
+    wait_for("bob's and carol's", 10, || b.state().made_sure_of_me() == vec![ua.clone()] && c.state().made_sure_of_me() == vec![ua.clone()]).await;
+
     // Someone else calling themselves Bob: not the Bob Alice made sure of.
     let d = client("B0b");
     d.add_server(&server.invite_link()).unwrap();
@@ -149,9 +159,21 @@ async fn making_sure_of_people() {
     assert!(matches!(stage(&c, &ud), Some(HandshakeStage::Failed(_))));
     assert!(!c.state().verified.contains_key(&ud));
 
-    // Forgetting Bob: no longer made sure of (and his vouches go with him).
+    // Forgetting Bob: no longer made sure of (and his vouches go with him), and Bob's shield
+    // goes too.
     a.forget_verified(&ub);
     assert_eq!(a.state().trust(&ub, "Bob"), Trust::Unknown);
+    let mut gone = false;
+    for _ in 0..12 {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        b.refresh_vouches(&key);
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        if b.state().made_sure_of_me().is_empty() {
+            gone = true;
+            break;
+        }
+    }
+    assert!(gone, "Bob's shield should go once Alice forgets him");
     for e in [&a, &b, &c, &d] {
         e.shutdown();
     }

@@ -24,6 +24,10 @@ mod titlebar;
 mod instance;
 mod looks;
 mod markdown;
+mod meter;
+mod mixer;
+mod ringtone;
+mod server_gifs;
 mod plugins;
 mod select;
 mod stage;
@@ -163,6 +167,7 @@ fn main() -> eframe::Result<()> {
                 let engine = Engine::start(EngineOptions {
                     profile,
                     repaint: Arc::new(move || ctx.request_repaint()),
+                    audio: dev_voice(),
                     ..Default::default()
                 })
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
@@ -203,6 +208,87 @@ fn main() -> eframe::Result<()> {
         log_path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "the log".into())
     ));
     Err(err)
+}
+
+/// Development builds only: `INGLE_DEV_VOICE` puts a made-up voice in place of the
+/// microphone (`speech`: words and pauses, deep and bright sounds; anything else: silence),
+/// and plays nothing, to see voice meters and speaking rings on a PC without sound. Never in
+/// release builds.
+#[cfg(debug_assertions)]
+fn dev_voice() -> Option<ingle_engine::AudioIoFactory> {
+    use ingle_engine::audio::{AudioInput, AudioOutput};
+    let v = std::env::var("INGLE_DEV_VOICE").ok().filter(|v| !v.is_empty())?;
+    let speech = v == "speech";
+    Some(Box::new(move |_settings| {
+        let mut voice = DevVoice::default();
+        let input: Box<dyn FnMut(&mut [f32]) + Send> = Box::new(move |out| {
+            if speech {
+                voice.fill(out)
+            } else {
+                out.fill(0.0)
+            }
+        });
+        (AudioInput::Synthetic(input), AudioOutput::None)
+    }))
+}
+
+#[cfg(not(debug_assertions))]
+fn dev_voice() -> Option<ingle_engine::AudioIoFactory> {
+    None
+}
+
+/// A made-up voice (development builds): a buzz at a voice's pitch shaped by the resonances
+/// of vowels that change each syllable, a hiss now and then (an "s"), in words and pauses.
+#[cfg(debug_assertions)]
+#[derive(Default)]
+struct DevVoice {
+    /// Samples made so far (48 kHz).
+    n: u64,
+    phase: f64,
+    noise: u32,
+}
+
+#[cfg(debug_assertions)]
+impl DevVoice {
+    fn fill(&mut self, out: &mut [f32]) {
+        use std::f64::consts::TAU;
+        const RATE: f64 = 48_000.0;
+        // Vowels' first two resonances (Hz): a, e, i, o, u, and the "uh" in between.
+        const VOWELS: [(f64, f64); 6] = [(730.0, 1090.0), (530.0, 1840.0), (270.0, 2290.0), (570.0, 840.0), (300.0, 870.0), (520.0, 1190.0)];
+        let t = self.n as f64 / RATE;
+        // Words for 2.6 s, then a pause of 0.9 s.
+        let phrase = t % 3.5;
+        let talking = phrase < 2.6;
+        let syllable = (t * 4.2).floor() as usize;
+        let within = (t * 4.2).fract();
+        let (f1, f2) = VOWELS[(syllable * 7 + syllable / 3) % VOWELS.len()];
+        let pitch = 125.0 + 30.0 * (t * 0.9).sin() + 12.0 * (t * 5.0).sin();
+        // Each syllable swells and fades; louder at the start of a phrase.
+        let env = if talking { (within * std::f64::consts::PI).sin().powf(0.7) * (0.75 + 0.25 * (1.0 - phrase / 2.6)) } else { 0.0 };
+        let hiss = talking && syllable % 5 == 3 && within > 0.55;
+        let weight = |f: f64| {
+            let g = |c: f64, w: f64| (-((f - c) / w).powi(2)).exp();
+            g(f1, 110.0) + 0.7 * g(f2, 160.0) + 0.35 * g(2600.0, 250.0) + 0.04
+        };
+        let harmonics: Vec<(f64, f64)> = (1..=36).map(|k| k as f64 * pitch).filter(|f| *f < 9000.0).map(|f| (f / pitch, weight(f) / (f / pitch).sqrt())).collect();
+        for o in out.iter_mut() {
+            self.phase = (self.phase + TAU * pitch / RATE) % (TAU * 1000.0);
+            let mut v: f64 = harmonics.iter().map(|(k, a)| a * (self.phase * k).sin()).sum();
+            v *= 0.055 * env;
+            if hiss {
+                // xorshift noise, mostly bright
+                self.noise ^= self.noise << 13;
+                self.noise ^= self.noise >> 17;
+                self.noise ^= self.noise << 5;
+                if self.noise == 0 {
+                    self.noise = 0x9e37_79b9;
+                }
+                v += (self.noise as f64 / u32::MAX as f64 - 0.5) * 0.09;
+            }
+            *o = v as f32;
+            self.n += 1;
+        }
+    }
 }
 
 /// Log to `ingle.log` in the config folder (the Windows app has no console), and also to

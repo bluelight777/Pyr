@@ -17,16 +17,19 @@ struct Friend {
     online: bool,
     /// Online, but idle everywhere they're online (a moon).
     idle: bool,
+    /// Do Not Disturb, on a server you share.
+    dnd: bool,
     /// Servers you share (keys), where a conversation could happen.
     servers: Vec<String>,
 }
 
 impl Friend {
     fn presence(&self) -> crate::app::Presence {
-        match (self.online, self.idle) {
-            (false, _) => crate::app::Presence::Offline,
-            (true, true) => crate::app::Presence::Idle,
-            (true, false) => crate::app::Presence::Online,
+        match (self.online, self.dnd, self.idle) {
+            (false, _, _) => crate::app::Presence::Offline,
+            (true, true, _) => crate::app::Presence::Dnd,
+            (true, false, true) => crate::app::Presence::Idle,
+            (true, false, false) => crate::app::Presence::Online,
         }
     }
 }
@@ -43,10 +46,12 @@ fn friends(st: &AppState) -> Vec<Friend> {
                 name: s.member_name(&m.user_id),
                 online: false,
                 idle: false,
+                dnd: false,
                 servers: Vec::new(),
             });
             if m.online && s.status.is_connected() {
                 f.idle = if f.online { f.idle && m.idle } else { m.idle };
+                f.dnd |= m.dnd;
                 f.online = true;
             }
             f.servers.push(s.key.clone());
@@ -392,7 +397,7 @@ impl IngleApp {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 for (uid, kind) in rows {
                     let f = people.iter().find(|f| f.uid == uid);
-                    let fallback = Friend { uid: uid.clone(), name: st.name_of(&uid), online: false, idle: false, servers: Vec::new() };
+                    let fallback = Friend { uid: uid.clone(), name: st.name_of(&uid), online: false, idle: false, dnd: false, servers: Vec::new() };
                     let f = f.unwrap_or(&fallback);
                     let sub = match kind {
                         RelationKind::Incoming => "Incoming Friend Request",

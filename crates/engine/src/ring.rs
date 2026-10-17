@@ -10,11 +10,12 @@ use std::time::{Duration, Instant};
 use parking_lot::RwLock;
 
 use crate::Shared;
+use crate::config::Ringtone;
 use crate::sfx::Sound;
 use crate::state::{AppState, RING_FOR, RingState};
 
 /// How often the ringtone and the ringback play.
-const RING_EVERY: Duration = Duration::from_millis(2000);
+pub(crate) const RING_EVERY: Duration = Duration::from_millis(2000);
 const RINGBACK_EVERY: Duration = Duration::from_millis(3000);
 /// A call we started but aren't in (joining it failed, say) stops ringing after this.
 const JOIN_GRACE: Duration = Duration::from_secs(20);
@@ -44,8 +45,45 @@ fn busy(shared: &Shared) -> bool {
     !st.incoming_calls.is_empty() || st.outgoing_call.as_ref().is_some_and(|o| o.state == RingState::Ringing)
 }
 
+/// The ringtone for a call from `from`: their own, or the one for everyone (`None`: Ingle's
+/// own ring).
+pub fn ringtone_for(st: &AppState, from: Option<&str>) -> Option<Ringtone> {
+    from.and_then(|u| st.settings.ringtones.get(u).cloned()).or_else(|| st.settings.ringtone.clone())
+}
+
+/// Gets a ringtone's sound ready to play (fetched and decoded in the background, once).
+pub(crate) fn warm(shared: &Arc<Shared>, tone: &Ringtone) {
+    let key = tone.key();
+    if shared.ring_clips.lock().contains_key(&key) {
+        return;
+    }
+    let (s, tone) = (shared.clone(), tone.clone());
+    shared.rt.spawn(async move {
+        let pcm: anyhow::Result<Arc<Vec<f32>>> = match &tone.sound {
+            Some(snd) => s.sound_pcm(&snd.server, &snd.id).await.map(|p| p.clone()),
+            None => {
+                let path = s.config_dir.join(RINGS_DIR).join(&tone.file);
+                match tokio::task::spawn_blocking(move || -> anyhow::Result<Arc<Vec<f32>>> { Ok(Arc::new(crate::soundboard::decode(&std::fs::read(path)?)?)) }).await {
+                    Ok(r) => r,
+                    Err(e) => Err(anyhow::anyhow!("{e}")),
+                }
+            }
+        };
+        match pcm {
+            Ok(p) => {
+                s.ring_clips.lock().insert(key, p);
+            }
+            Err(e) => tracing::warn!("couldn't get the ringtone {} ready: {e:#}", tone.name),
+        }
+    });
+}
+
+/// Where sound files from this PC chosen as ringtones are kept (in the config folder).
+pub const RINGS_DIR: &str = "rings";
+
 fn run(shared: &Arc<Shared>) {
-    let mut last_ring: Option<Instant> = None;
+    // When the ringtone last started, and how long to wait before it plays again.
+    let mut last_ring: Option<(Instant, Duration)> = None;
     let mut last_back: Option<Instant> = None;
     loop {
         let (now, changed) = step(&shared.state, Instant::now());
@@ -55,9 +93,9 @@ fn run(shared: &Arc<Shared>) {
         let Some((ring, back)) = now else { return };
         // The ringtone, and (when nothing's coming in) the ringback.
         if ring {
-            if last_ring.is_none_or(|t| t.elapsed() >= RING_EVERY) {
-                shared.play_ring(Sound::Ring);
-                last_ring = Some(Instant::now());
+            if last_ring.is_none_or(|(t, every)| t.elapsed() >= every) {
+                let every = shared.play_ringtone();
+                last_ring = Some((Instant::now(), every));
             }
         } else {
             last_ring = None;
@@ -155,6 +193,32 @@ mod tests {
 
     fn incoming(age: Duration, now: Instant) -> IncomingCall {
         IncomingCall { server_key: "k".into(), channel_id: 7, from: "them".into(), video: false, since: now - age }
+    }
+
+    #[test]
+    fn a_call_rings_with_their_own_ringtone_or_everyones() {
+        let tone = |name: &str| Ringtone { name: name.into(), sound: None, file: format!("{name}.ings") };
+        let name = |t: Option<Ringtone>| t.map(|t| t.name);
+        let mut st = AppState::default();
+        assert_eq!(ringtone_for(&st, Some("mara")), None, "Ingle's own ring");
+        st.settings.ringtone = Some(tone("bells"));
+        assert_eq!(name(ringtone_for(&st, Some("mara"))).as_deref(), Some("bells"));
+        assert_eq!(name(ringtone_for(&st, None)).as_deref(), Some("bells"));
+        st.settings.ringtones.insert("mara".into(), tone("harp"));
+        assert_eq!(name(ringtone_for(&st, Some("mara"))).as_deref(), Some("harp"));
+        assert_eq!(name(ringtone_for(&st, Some("bob"))).as_deref(), Some("bells"));
+        // Hers still, with everyone else back to Ingle's own ring.
+        st.settings.ringtone = None;
+        assert_eq!(name(ringtone_for(&st, Some("mara"))).as_deref(), Some("harp"));
+        assert_eq!(ringtone_for(&st, Some("bob")), None);
+        // Kept between runs.
+        let json = serde_json::to_string(&st.settings).unwrap();
+        let back: crate::config::Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.ringtones, st.settings.ringtones);
+        assert_eq!(back.ringtone, None);
+        // Two ringtones of the same sound are the same sound, whatever they're called.
+        assert_eq!(tone("harp").key(), Ringtone { name: "Harp (mine)".into(), ..tone("harp") }.key());
+        assert_ne!(tone("harp").key(), tone("bells").key());
     }
 
     #[test]

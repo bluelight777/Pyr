@@ -14,7 +14,7 @@ pub mod e2ee;
 pub mod hotkey;
 pub mod idle;
 pub mod qos;
-mod ring;
+pub mod ring;
 
 /// Problems found where there's no app state at hand (saving settings, a background upload):
 /// shown as error notices by the app (`take_errors`).
@@ -169,6 +169,8 @@ pub struct Shared {
     sounds_on: Mutex<std::collections::HashSet<(String, String)>>,
     /// The ringer is going (see `ring`).
     ringer: AtomicBool,
+    /// Ringtones' sounds, ready to play (see `ring::warm`), by `Ringtone::key`.
+    pub(crate) ring_clips: Mutex<HashMap<String, Arc<Vec<f32>>>>,
     /// Reports sent by themselves this run: (what, when) (see `bugs::auto_report`).
     pub auto_reports: Mutex<Vec<(String, std::time::Instant)>>,
     /// When Ingle's window last had a key or the mouse (ms since 1970; see `idle`).
@@ -400,19 +402,58 @@ impl Shared {
         let Some(sfx) = &self.sfx else { return };
         let (on, device, volume) = {
             let st = self.state.read_recursive();
-            (st.settings.ring, st.settings.output_device.clone(), st.settings.sound_volume)
+            // (Do Not Disturb: calls coming in don't ring; my own call's ringback still plays.)
+            let quiet = st.settings.dnd && sound == sfx::Sound::Ring;
+            (st.settings.ring && !quiet, st.settings.output_device.clone(), st.settings.sound_volume)
         };
         if on {
             sfx.play(sound, device, volume);
         }
     }
 
-    /// Plays a notification sound, if they're on.
+    /// The ringtone for the call coming in (the caller's own, or the one for everyone), once.
+    /// Returns how long to wait before it plays again: a ringtone longer than the usual ring
+    /// plays out first.
+    pub(crate) fn play_ringtone(self: &Arc<Self>) -> std::time::Duration {
+        let tone = {
+            let st = self.state.read_recursive();
+            ring::ringtone_for(&st, st.incoming_calls.first().map(|c| c.from.as_str()))
+        };
+        if let Some(t) = tone {
+            let clip = self.ring_clips.lock().get(&t.key()).cloned();
+            match clip {
+                Some(pcm) => {
+                    let secs = pcm.len() as f32 / 96_000.0;
+                    self.play_ring_clip(pcm, t.sound.as_ref().map(|s| s.volume).unwrap_or(1.0));
+                    return ring::RING_EVERY.max(std::time::Duration::from_secs_f32(secs + 1.0));
+                }
+                // Not ready yet: Ingle's ring this time.
+                None => ring::warm(self, &t),
+            }
+        }
+        self.play_ring(sfx::Sound::Ring);
+        ring::RING_EVERY
+    }
+
+    /// A ringtone's sound, if calls ring (and not in Do Not Disturb).
+    fn play_ring_clip(&self, pcm: Arc<Vec<f32>>, gain: f32) {
+        let Some(sfx) = &self.sfx else { return };
+        let (on, device, volume) = {
+            let st = self.state.read_recursive();
+            (st.settings.ring && !st.settings.dnd, st.settings.output_device.clone(), st.settings.sound_volume)
+        };
+        if on {
+            sfx.play_ring_clip(pcm, device, volume * gain.clamp(0.0, 1.0));
+        }
+    }
+
+    /// Plays a notification sound, if they're on (not a message's, in Do Not Disturb).
     pub fn play(&self, sound: sfx::Sound) {
         let Some(sfx) = &self.sfx else { return };
         let (on, device, volume) = {
             let st = self.state.read_recursive();
-            (st.settings.sounds, st.settings.output_device.clone(), st.settings.sound_volume)
+            let quiet = st.settings.dnd && sound == sfx::Sound::Message;
+            (st.settings.sounds && !quiet, st.settings.output_device.clone(), st.settings.sound_volume)
         };
         if on {
             sfx.play(sound, device, volume);
@@ -703,6 +744,7 @@ impl Engine {
             blocked: cfg.blocked.clone(),
             verified: cfg.verified.clone(),
             vouched: HashMap::new(),
+            sure_of_me: HashMap::new(),
             handshakes: Vec::new(),
             muted_channels: cfg.muted_channels.iter().flat_map(|(k, cs)| cs.iter().map(move |c| (k.clone(), *c))).collect(),
             incoming_calls: Vec::new(),
@@ -755,6 +797,7 @@ impl Engine {
             sounds: Mutex::new(soundboard::Cache::default()),
             sounds_on: Mutex::new(Default::default()),
             ringer: AtomicBool::new(false),
+            ring_clips: Mutex::new(HashMap::new()),
             auto_reports: Mutex::new(Vec::new()),
             call_group: Mutex::new(None),
             last_activity_ms: std::sync::atomic::AtomicI64::new(ingle_proto::now_ms()),
@@ -1249,6 +1292,46 @@ impl Engine {
 
     pub fn rename_emoji(&self, key: &str, id: &str, name: &str) {
         self.request(key, Request::RenameEmoji { id: id.to_string(), name: name.to_string() });
+    }
+
+    // ------------------------------------------------------------- server GIFs
+
+    /// Adds a picture (a GIF, animated WebP or PNG, or a still one) as one of server `key`'s
+    /// GIFs, for everyone there (`GIFS_FEATURE`; needs Manage emoji, GIFs and sounds).
+    pub fn add_server_gif(&self, key: &str, name: &str, bytes: Vec<u8>) {
+        let shared = self.shared.clone();
+        let (key, name) = (key.to_string(), name.trim().chars().take(ingle_proto::control::MAX_GIF_NAME).collect::<String>());
+        self.shared.rt.clone().spawn(async move {
+            let Some(h) = shared.servers.lock().get(&key).cloned() else { return };
+            let Some(conn) = h.connection() else {
+                shared.state.write().toast("Not connected to that server right now.", true);
+                return;
+            };
+            let mime = ingle_proto::control::sniff_image(&bytes).unwrap_or("image/gif");
+            let file_id = match net::file_put(&conn, FileKind::Attachment, &name, mime, &bytes).await {
+                Ok(id) => id,
+                Err(e) => {
+                    shared.state.write().toast(format!("Couldn't upload the GIF: {e:#}"), true);
+                    (shared.repaint)();
+                    return;
+                }
+            };
+            shared.files.lock().insert(file_id.clone(), Arc::new(bytes));
+            match h.request(Request::AddGif { name: name.clone(), file_id }).await {
+                Ok(Event::Error { message, .. }) => shared.state.write().toast(message, true),
+                Ok(_) => shared.state.write().toast(format!("Added the GIF “{name}” for everyone here"), false),
+                Err(_) => {}
+            }
+            (shared.repaint)();
+        });
+    }
+
+    pub fn remove_server_gif(&self, key: &str, id: &str) {
+        self.request(key, Request::RemoveGif { id: id.to_string() });
+    }
+
+    pub fn rename_server_gif(&self, key: &str, id: &str, name: &str) {
+        self.request(key, Request::RenameGif { id: id.to_string(), name: name.to_string() });
     }
 
     // ------------------------------------------------------------- soundboard
@@ -1777,6 +1860,85 @@ impl Engine {
     /// profile opens, say: they may have made sure of more people since).
     pub fn refresh_vouches(&self, key: &str) {
         verify::fetch_vouches(&self.shared, key);
+        verify::fetch_vouches_for_me(&self.shared, key);
+    }
+
+    /// The ringtone for everyone (`for_uid` none) or for someone, set to `tone` (none: Ingle's
+    /// own ring, or for someone, the one for everyone again).
+    pub fn set_ringtone(&self, for_uid: Option<&str>, tone: Option<config::Ringtone>) {
+        set_ringtone_on(&self.shared, for_uid, tone);
+    }
+
+    /// A ringtone from a sound file's samples (48 kHz stereo): the part from `start` to `end`
+    /// seconds, evened out in loudness like a soundboard sound and kept in the config folder,
+    /// then set (for everyone, or for `for_uid`).
+    pub fn add_ringtone_file(&self, for_uid: Option<String>, name: &str, pcm: Arc<Vec<f32>>, start: f32, end: f32) {
+        let shared = self.shared.clone();
+        let name = name.trim().chars().take(64).collect::<String>();
+        self.shared.rt.spawn(async move {
+            let dir = shared.config_dir.join(ring::RINGS_DIR);
+            let made = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
+                let cut = soundboard::prepare(&pcm, start, end);
+                let file = soundboard::encode(&cut)?;
+                std::fs::create_dir_all(&dir)?;
+                let id = format!("{}.ings", &ingle_proto::release::sha256_hex(&file)[..16]);
+                std::fs::write(dir.join(&id), &file)?;
+                Ok(id)
+            })
+            .await;
+            match made {
+                Ok(Ok(file)) => {
+                    let tone = config::Ringtone { name: name.clone(), sound: None, file };
+                    set_ringtone_on(&shared, for_uid.as_deref(), Some(tone));
+                    shared.state.write().toast(format!("Ringtone set: {name}"), false);
+                }
+                Ok(Err(e)) => shared.state.write().toast(format!("Couldn't make that a ringtone: {e:#}"), true),
+                Err(e) => shared.state.write().toast(format!("Couldn't make that a ringtone: {e}"), true),
+            }
+            (shared.repaint)();
+        });
+    }
+
+    /// Hear a ringtone once (none: Ingle's own ring), whatever Do Not Disturb says.
+    pub fn preview_ringtone(&self, tone: Option<config::Ringtone>) {
+        let Some(sfx) = self.shared.sfx.as_ref() else { return };
+        let (device, volume) = {
+            let st = self.shared.state.read_recursive();
+            (st.settings.output_device.clone(), st.settings.sound_volume)
+        };
+        let Some(t) = tone else {
+            sfx.play(sfx::Sound::Ring, device, volume);
+            return;
+        };
+        let shared = self.shared.clone();
+        ring::warm(&shared, &t);
+        self.shared.rt.spawn(async move {
+            // (Fetched and decoded in a moment, the first time.)
+            for _ in 0..40 {
+                let clip = shared.ring_clips.lock().get(&t.key()).cloned();
+                if let Some(pcm) = clip {
+                    if let Some(sfx) = shared.sfx.as_ref() {
+                        sfx.play_ring_clip(pcm, device, volume * t.sound.as_ref().map(|s| s.volume).unwrap_or(1.0));
+                    }
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            shared.state.write().toast(format!("Couldn't play {}", t.name), true);
+            (shared.repaint)();
+        });
+    }
+
+    /// Do Not Disturb, on or off (it stays until you change it): see `Settings::dnd`.
+    pub fn set_dnd(&self, on: bool) {
+        {
+            let mut cfg = self.shared.config.lock();
+            cfg.settings.dnd = on;
+            self.shared.save_config_locked(&cfg);
+        }
+        self.shared.state.write().settings.dnd = on;
+        idle::wake(&self.shared);
+        (self.shared.repaint)();
     }
 
     /// Say you're idle yourself (it stays until you say otherwise), or go back to Ingle
@@ -2478,28 +2640,50 @@ impl Engine {
         self.shared.refresh_call_view();
     }
 
-    /// How loud each person in my call sounds right now (dBFS), me too while I'm sending: for
-    /// the voice meters, read every frame. Empty outside a call.
-    pub fn voice_levels(&self) -> Vec<(SessionId, f32)> {
+    /// How each person in my call sounds right now (their level and bands, see
+    /// `audio::Meter`), me too while I'm sending: for the voice meters, read every frame. Only
+    /// those making a sound; empty outside a call.
+    pub fn voice_meters(&self) -> Vec<(SessionId, audio::Meter)> {
         let guard = self.shared.call.lock();
         let Some(c) = guard.as_ref() else { return Vec::new() };
         let Some(a) = &c.audio else { return Vec::new() };
-        let mut v = a.status.lock().levels.clone();
-        if a.controls.transmitting.load(Ordering::Relaxed) {
-            v.push((c.session, a.controls.mic_level_db()));
+        let now = std::time::Instant::now();
+        let mut v = a.status.lock().meters.clone();
+        // Mine: my voice while it goes out, my screen's sound (my soundboard sounds are in
+        // there already, under my session).
+        for m in [a.controls.mic_meter.get(now), a.controls.screen_meter.get(now)].into_iter().flatten() {
+            match v.iter_mut().find(|(s, _)| *s == c.session) {
+                Some((_, e)) => e.merge(&m),
+                None => v.push((c.session, m)),
+            }
         }
         v
     }
 
     /// Volume of someone's screen-share sound, separate from their voice.
     pub fn set_stream_volume(&self, user_id: &str, volume: f32) {
+        self.person_volume(user_id, volume, true, true);
+    }
+
+    pub fn set_user_volume(&self, user_id: &str, volume: f32) {
+        self.person_volume(user_id, volume, false, true);
+    }
+
+    /// Someone's volume for me, their voice's or (`stream`) their stream's: heard at once, and
+    /// kept on this PC when `save` (the mixer's faders save once they're let go).
+    pub fn person_volume(&self, user_id: &str, volume: f32, stream: bool, save: bool) {
         let volume = volume.clamp(0.0, 2.0);
-        {
+        if save {
             let mut cfg = self.shared.config.lock();
-            cfg.stream_volumes.insert(user_id.to_string(), volume);
+            let map = if stream { &mut cfg.stream_volumes } else { &mut cfg.user_volumes };
+            map.insert(user_id.to_string(), volume);
             self.shared.save_config_locked(&cfg);
         }
-        self.shared.state.write().stream_volumes.insert(user_id.to_string(), volume);
+        {
+            let mut st = self.shared.state.write();
+            let map = if stream { &mut st.stream_volumes } else { &mut st.user_volumes };
+            map.insert(user_id.to_string(), volume);
+        }
         let sessions: Vec<SessionId> = {
             let st = self.shared.state.read_recursive();
             st.call
@@ -2510,36 +2694,67 @@ impl Engine {
         };
         if let Some(c) = self.shared.call.lock().as_ref() {
             if let Some(a) = &c.audio {
+                let mut m = a.mixer.lock();
                 for s in sessions {
-                    a.mixer.lock().set_stream_volume(s, volume);
+                    if stream {
+                        m.set_stream_volume(s, volume);
+                    } else {
+                        m.set_volume(s, volume);
+                    }
                 }
             }
         }
     }
 
-    pub fn set_user_volume(&self, user_id: &str, volume: f32) {
+    /// How loud everything I hear is (`Settings::output_volume`, 0 to 2): heard at once, kept
+    /// on this PC when `save`.
+    pub fn set_output_volume(&self, volume: f32, save: bool) {
         let volume = volume.clamp(0.0, 2.0);
-        {
+        if save {
             let mut cfg = self.shared.config.lock();
-            cfg.user_volumes.insert(user_id.to_string(), volume);
+            cfg.settings.output_volume = volume;
             self.shared.save_config_locked(&cfg);
         }
-        self.shared.state.write().user_volumes.insert(user_id.to_string(), volume);
-        let sessions: Vec<SessionId> = {
-            let st = self.shared.state.read_recursive();
-            st.call
-                .as_ref()
-                .and_then(|c| st.server(&c.server_key))
-                .map(|s| s.voice.values().filter(|p| p.user_id == user_id).map(|p| p.session).collect())
-                .unwrap_or_default()
-        };
-        if let Some(c) = self.shared.call.lock().as_ref() {
-            if let Some(a) = &c.audio {
-                for s in sessions {
-                    a.mixer.lock().set_volume(s, volume);
-                }
-            }
+        self.shared.state.write().settings.output_volume = volume;
+        if let Some(a) = self.shared.call.lock().as_ref().and_then(|c| c.audio.as_ref()) {
+            a.mixer.lock().master = volume;
         }
+        if let Some(a) = self.shared.mic_test.lock().as_ref() {
+            a.mixer.lock().master = volume;
+        }
+    }
+
+    /// How loud my microphone is sent (`Settings::input_gain`, 0 to 2): at once, kept on this
+    /// PC when `save`.
+    pub fn set_input_gain(&self, gain: f32, save: bool) {
+        let gain = gain.clamp(0.0, 2.0);
+        if save {
+            let mut cfg = self.shared.config.lock();
+            cfg.settings.input_gain = gain;
+            self.shared.save_config_locked(&cfg);
+        }
+        self.shared.state.write().settings.input_gain = gain;
+        if let Some(a) = self.shared.call.lock().as_ref().and_then(|c| c.audio.as_ref()) {
+            a.controls.input_gain.set(gain);
+        }
+        if let Some(a) = self.shared.mic_test.lock().as_ref() {
+            a.controls.input_gain.set(gain);
+        }
+    }
+
+    /// How loud each person's voice and stream sound are right now, as sent (session, track,
+    /// dBFS), for the call's mixer.
+    pub fn track_levels(&self) -> Vec<(SessionId, u8, f32)> {
+        let guard = self.shared.call.lock();
+        guard.as_ref().and_then(|c| c.audio.as_ref()).map(|a| a.status.lock().levels.clone()).unwrap_or_default()
+    }
+
+    /// My microphone right now in the call: its level (dBFS, after my input volume) and
+    /// whether it's going out.
+    pub fn my_mic_level(&self) -> Option<(f32, bool)> {
+        let guard = self.shared.call.lock();
+        let a = guard.as_ref()?.audio.as_ref()?;
+        Some((a.controls.mic_level_db(), a.controls.transmitting.load(Ordering::Relaxed)))
     }
 
     // ------------------------------------------------------------ settings
@@ -2572,7 +2787,6 @@ impl Engine {
             || old.input_mode != settings.input_mode
             || old.vad_auto != settings.vad_auto
             || (old.vad_threshold_db - settings.vad_threshold_db).abs() > 0.01
-            || (old.input_gain - settings.input_gain).abs() > 0.001
             || old.ptt_key != settings.ptt_key
             || old.ptt_release_ms != settings.ptt_release_ms;
         if let Some(p) = self._ptt.as_ref() {
@@ -2599,6 +2813,29 @@ impl Engine {
                 for s in sessions {
                     mixer.stop_effects(Some(s));
                 }
+            }
+        }
+        // The microphone's volume changes as it is (no restart).
+        if (old.input_gain - settings.input_gain).abs() > 0.001 {
+            if let Some(a) = self.shared.call.lock().as_ref().and_then(|c| c.audio.as_ref()) {
+                a.controls.input_gain.set(settings.input_gain);
+            }
+            if let Some(a) = self.shared.mic_test.lock().as_ref() {
+                a.controls.input_gain.set(settings.input_gain);
+            }
+        }
+        // Voice meters turned off (or back on): while they're off, nothing's measured for them.
+        if old.voice_meters_on() != settings.voice_meters_on() {
+            let on = settings.voice_meters_on();
+            let set = |a: &AudioEngine| {
+                a.controls.meters_off.store(!on, Ordering::Relaxed);
+                a.mixer.lock().set_meters(on);
+            };
+            if let Some(a) = self.shared.call.lock().as_ref().and_then(|c| c.audio.as_ref()) {
+                set(a);
+            }
+            if let Some(a) = self.shared.mic_test.lock().as_ref() {
+                set(a);
             }
         }
         if audio_changed {
@@ -2984,7 +3221,10 @@ fn start_video_on(shared: &Arc<Shared>, track_id: u8, source: &str, cfg: Publish
                     // The call is taken back out of the stream's sound, in case it gets in
                     // (not from the test pattern, which never has it).
                     let played = (src != audio::stream::StreamAudioSource::Synthetic).then(|| shared.played.clone());
-                    match audio::stream::StreamAudio::start(src, STREAM_AUDIO_KBPS, sink, played) {
+                    // (What it sends shows on my own voice meter, unless voice meters are off.)
+                    let meters_on = shared.state.read_recursive().settings.voice_meters_on();
+                    let meter = shared.call.lock().as_ref().and_then(|c| c.audio.as_ref()).filter(|_| meters_on).map(|a| a.controls.screen_meter.clone());
+                    match audio::stream::StreamAudio::start(src, STREAM_AUDIO_KBPS, sink, played, meter) {
                         Ok(sa) => {
                             let leftover = shared.call.lock().as_mut().map(|c| c.attach_stream_audio(sa));
                             drop(leftover);
@@ -3001,6 +3241,42 @@ fn start_video_on(shared: &Arc<Shared>, track_id: u8, source: &str, cfg: Publish
     });
 }
 
+
+/// The ringtone for everyone (`for_uid` none) or for someone, set to `tone` (see
+/// `Engine::set_ringtone`). Sound files no ringtone uses any more are let go.
+fn set_ringtone_on(shared: &Arc<Shared>, for_uid: Option<&str>, tone: Option<config::Ringtone>) {
+    let settings = {
+        let mut cfg = shared.config.lock();
+        match (for_uid, tone.clone()) {
+            (None, t) => cfg.settings.ringtone = t,
+            (Some(u), Some(t)) => {
+                cfg.settings.ringtones.insert(u.to_string(), t);
+            }
+            (Some(u), None) => {
+                cfg.settings.ringtones.remove(u);
+            }
+        }
+        shared.save_config_locked(&cfg);
+        cfg.settings.clone()
+    };
+    {
+        let mut st = shared.state.write();
+        st.settings.ringtone = settings.ringtone.clone();
+        st.settings.ringtones = settings.ringtones.clone();
+    }
+    if let Some(t) = &tone {
+        ring::warm(shared, t);
+    }
+    let used: std::collections::HashSet<String> = settings.ringtone.iter().chain(settings.ringtones.values()).map(|t| t.file.clone()).filter(|f| !f.is_empty()).collect();
+    if let Ok(dir) = std::fs::read_dir(shared.config_dir.join(ring::RINGS_DIR)) {
+        for e in dir.flatten() {
+            if !used.contains(&e.file_name().to_string_lossy().to_string()) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+    (shared.repaint)();
+}
 
 /// Back on a server after the connection dropped mid-call: rejoin that call. A camera or
 /// screen share that was on isn't turned back on by itself (the screens or windows may have

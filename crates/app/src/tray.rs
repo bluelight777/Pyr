@@ -287,7 +287,8 @@ fn watch_unread(engine: Arc<Engine>) {
                 }
                 note
             };
-            if note.is_some() && window_in_front() != Some(true) {
+            // (Not in Do Not Disturb: the call shows in Ingle, quietly.)
+            if note.is_some() && window_in_front() != Some(true) && !engine.state().settings.dnd {
                 *CALL_NOTE.lock().unwrap_or_else(|e| e.into_inner()) = note;
                 unsafe {
                     let _ = PostMessageW(Some(HWND(tray as *mut core::ffi::c_void)), WM_INGLE_CALL, WPARAM(0), LPARAM(0));

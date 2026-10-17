@@ -108,7 +108,18 @@ impl IngleApp {
                 let scale = CIRCLE / (c.w.min(c.h) * c.frac());
                 let size = vec2(c.w * scale, c.h * scale);
                 let min = area.center() - vec2(c.cx * size.x, c.cy * size.y);
-                let tex = self.images.get(ui.ctx(), &c.key, Some(c.bytes.clone()), 2048).frame(0.0).map(|f| f.0);
+                // A moving picture moves here too (it'll be a moving profile picture or icon).
+                let moving = crate::images::is_animated(&c.bytes);
+                let tex = if moving {
+                    let t = self.ui.anim_clock;
+                    let f = self.images.get(ui.ctx(), &format!("{}#moving", c.key), Some(c.bytes.clone()), 640).frame(t);
+                    if let Some((_, _, Some(next))) = f {
+                        ui.ctx().request_repaint_after(next);
+                    }
+                    f.map(|f| f.0)
+                } else {
+                    self.images.get_still(ui.ctx(), &c.key, Some(c.bytes.clone()), 2048).frame(0.0).map(|f| f.0)
+                };
                 match tex {
                     Some(t) => {
                         p.image(t, Rect::from_min_size(min, size), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
@@ -129,6 +140,13 @@ impl IngleApp {
                     ui.label(RichText::new("+").size(16.0).color(theme::MUTED()));
                 });
                 ui.label(RichText::new("Drag to move, zoom with the slider or your mouse wheel.").size(12.0).color(theme::DIM()));
+                if moving {
+                    ui.label(
+                        RichText::new("It moves: a profile picture moves while its person talks and when someone points at it, a server icon when someone points at it.")
+                            .size(12.0)
+                            .color(theme::DIM()),
+                    );
+                }
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     if ui.button("Reset").clicked() {

@@ -8,7 +8,7 @@ use crate::app::{Act, Dialog, IngleApp, avatar, icon_button};
 use crate::{icons, theme};
 
 /// Buttons under the call (Leave, a little wider, included).
-const CALL_BUTTONS: f32 = 6.0;
+const CALL_BUTTONS: f32 = 7.0;
 
 #[derive(Clone)]
 struct Tile {
@@ -24,10 +24,15 @@ struct Tile {
     watching: bool,
     has_camera: bool,
     volume: f32,
-    /// Screen share that carries sound.
+    /// Screen share that carries sound (on a person's own tile: theirs, while they share).
     has_sound: bool,
+    /// A person's own tile, while they're sharing their screen (its volume is in their menu
+    /// too).
+    streaming: bool,
     stream_volume: f32,
     face: Option<egui::TextureId>,
+    /// Their colors (top, bottom), from their picture (see `IngleApp::tile_tint`).
+    tint: Option<(Color32, Color32)>,
     /// Who's watching this screen share (names).
     viewers: Vec<String>,
     /// I've muted their soundboard sounds.
@@ -50,6 +55,20 @@ struct Pop {
     age: f32,
     /// The picture, for one of the server's own emoji.
     tex: Option<egui::TextureId>,
+}
+
+/// How loud someone's screen share's sound is for me (in their menu and their screen's): a
+/// slider, or a note when their stream has no sound.
+pub(crate) fn stream_volume_slider(ui: &mut egui::Ui, uid: &str, has_sound: bool, volume: f32, acts: &mut Vec<Act>) {
+    if has_sound {
+        ui.label(RichText::new("Stream volume").size(12.0).color(theme::MUTED()));
+        let mut v = volume * 100.0;
+        if ui.add(egui::Slider::new(&mut v, 0.0..=200.0).suffix("%")).changed() {
+            acts.push(Act::StreamVolume { uid: uid.to_string(), volume: v / 100.0 });
+        }
+    } else {
+        ui.label(RichText::new("Their stream has no sound").size(12.0).color(theme::DIM()));
+    }
 }
 
 fn grid_layout(n: usize, area: Rect, gap: f32) -> Vec<Rect> {
@@ -274,6 +293,21 @@ impl IngleApp {
             .frame(egui::Frame::new().fill(theme::STAGE()))
             .show_inside(ui, |ui| self.call_controls(ui, st, acts));
 
+        // ---- the mixer, over the buttons (it slides up when opened)
+        let open = ctx.animate_bool_with_time(egui::Id::new("mixer-open"), self.ui.mixer_open, 0.22);
+        if open > 0.0 {
+            let eased = 1.0 - (1.0 - open).powi(3);
+            egui::TopBottomPanel::bottom("stage-mixer")
+                .exact_height((crate::mixer::HEIGHT * eased).max(1.0))
+                .show_separator_line(false)
+                .resizable(false)
+                .frame(egui::Frame::new().fill(theme::STAGE()))
+                .show_inside(ui, |ui| {
+                    ui.set_clip_rect(ui.max_rect());
+                    self.mixer_panel(ui, st, s, call, acts);
+                });
+        }
+
         // ---- tiles
         egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::STAGE())).show_inside(ui, |ui| {
             let mut tiles: Vec<Tile> = Vec::new();
@@ -282,9 +316,10 @@ impl IngleApp {
             for p in &parts {
                 let me = p.session == call.session;
                 let name = s.member_name(&p.user_id);
-                let trust = if me { Trust::Unknown } else { st.trust(&p.user_id, &name) };
+                let trust = crate::trust::shown(st, &p.user_id, &name).map(|(t, _)| t).unwrap_or(Trust::Unknown);
                 let has_cam = p.tracks.iter().any(|t| t.id == track::CAMERA);
-                let face = self.face(ui.ctx(), s, &p.user_id);
+                // (A moving picture moves while they talk.)
+                let face = self.face_moving(ui.ctx(), s, &p.user_id, call.speaking.contains(&p.session));
                 let pop = crate::soundboard::recent_pop(call, p.session).map(|(x, age)| Pop {
                     emoji: x.emoji.clone(),
                     name: x.name.clone(),
@@ -303,9 +338,11 @@ impl IngleApp {
                     watching: false,
                     has_camera: has_cam,
                     volume: st.user_volumes.get(&p.user_id).copied().unwrap_or(1.0),
-                    has_sound: false,
-                    stream_volume: 1.0,
+                    has_sound: p.tracks.iter().any(|t| t.id == track::SCREEN_AUDIO),
+                    streaming: p.tracks.iter().any(|t| t.id == track::SCREEN),
+                    stream_volume: st.stream_volumes.get(&p.user_id).copied().unwrap_or(1.0),
                     face,
+                    tint: self.tile_tint(s, &p.user_id),
                     viewers: Vec::new(),
                     sb_muted: st.settings.soundboard_muted.contains(&p.user_id),
                     moderate: {
@@ -330,8 +367,10 @@ impl IngleApp {
                         has_camera: false,
                         volume: st.user_volumes.get(&p.user_id).copied().unwrap_or(1.0),
                         has_sound: p.tracks.iter().any(|t| t.id == track::SCREEN_AUDIO),
+                        streaming: false,
                         stream_volume: st.stream_volumes.get(&p.user_id).copied().unwrap_or(1.0),
                         face: None,
+                        tint: None,
                         viewers: p
                             .tracks
                             .iter()
@@ -374,7 +413,7 @@ impl IngleApp {
             };
             for (i, rect) in rects {
                 match tiles.get(i).cloned() {
-                    Some(t) => self.tile(ui, ctx, &t, rect, acts),
+                    Some(t) => self.tile(ui, ctx, &t, rect, crate::meter::Style::from_setting(&st.settings.voice_meter), acts),
                     None => {
                         if let Some(w) = ghosts.get(i - tiles.len()) {
                             self.ringing_tile(ui, st, s, w, rect, acts);
@@ -413,12 +452,25 @@ impl IngleApp {
         next.map(|(k, _)| k)
     }
 
-    fn tile(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, t: &Tile, rect: Rect, acts: &mut Vec<Act>) {
+    fn tile(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, t: &Tile, rect: Rect, style: crate::meter::Style, acts: &mut Vec<Act>) {
         let resp = ui.allocate_rect(rect, Sense::click());
+        // Their voice meter, in `style` (not on a screen share's tile: theirs is on their own).
+        let style = if t.screen { crate::meter::Style::Off } else { style };
+        let track = if style == crate::meter::Style::Off { None } else { self.meters.get(t.key.session).cloned() };
         let p = ui.painter_at(rect);
         // A watched stream's resolution and frame rate, in the corner left of its badges.
         let mut quality: Option<String> = None;
-        p.rect_filled(rect, CornerRadius::same(12), theme::TILE());
+        // Behind them: their picture's own color, deep and darker at the top, like Discord's.
+        let bg = match t.tint.filter(|_| !t.screen) {
+            Some((top, bottom)) => {
+                paint_tint(&p, rect, top, bottom);
+                theme::mix(top, bottom, 0.5)
+            }
+            None => {
+                p.rect_filled(rect, CornerRadius::same(12), theme::TILE());
+                theme::TILE()
+            }
+        };
         let tex = if t.screen && !t.watching { None } else if t.screen || t.has_camera { self.texture(ctx, t.key) } else { None };
         match tex {
             Some((id, size)) => {
@@ -476,7 +528,10 @@ impl IngleApp {
                     }
                 } else {
                     let r = (rect.height().min(rect.width()) * 0.2).clamp(18.0, 64.0);
-                    avatar(&p, rect.center(), r, &t.user_id, &t.name, t.speaking, theme::TILE(), t.face);
+                    if let (crate::meter::Style::Glow, Some(m)) = (style, track.as_ref()) {
+                        crate::meter::halo(&p, rect.center(), r, m);
+                    }
+                    avatar(&p, rect.center(), r, &t.user_id, &t.name, t.speaking, bg, t.face);
                     if t.has_camera {
                         p.text(rect.center() + vec2(0.0, r + 16.0), egui::Align2::CENTER_CENTER, "starting video…", theme::font(11.5), theme::DIM());
                     }
@@ -488,8 +543,9 @@ impl IngleApp {
         let galley = ui.fonts_mut(|f| f.layout_no_wrap(label, theme::bold_font(12.5), theme::TEXT()));
         let icon_w = if t.muted || t.deaf { 18.0 } else { 0.0 };
         let shield_w = if t.trust == Trust::Unknown { 0.0 } else { 16.0 };
+        let meter_w = if style == crate::meter::Style::Off { 0.0 } else { 34.0 };
         let text_w = galley.size().x;
-        let lr = Rect::from_min_size(rect.left_bottom() + vec2(10.0, -34.0), vec2(text_w + 16.0 + icon_w + shield_w, 24.0));
+        let lr = Rect::from_min_size(rect.left_bottom() + vec2(10.0, -34.0), vec2(text_w + 16.0 + icon_w + shield_w + meter_w, 24.0));
         p.rect_filled(lr, CornerRadius::same(6), Color32::from_black_alpha(150));
         if t.deaf {
             icons::headphones(&p, Rect::from_min_size(lr.min + vec2(6.0, 4.0), vec2(16.0, 16.0)), theme::LIVE(), true);
@@ -499,6 +555,10 @@ impl IngleApp {
         p.galley(lr.min + vec2(8.0 + icon_w, 12.0 - galley.size().y / 2.0), galley, theme::TEXT());
         if shield_w > 0.0 {
             crate::trust::shield(&p, Rect::from_min_size(pos2(lr.left() + 8.0 + icon_w + text_w + 4.0, lr.center().y - 7.0), vec2(12.0, 14.0)), &t.trust);
+        }
+        if meter_w > 0.0 {
+            let m = Rect::from_min_max(pos2(lr.right() - meter_w + 2.0, lr.center().y - 6.5), pos2(lr.right() - 7.0, lr.center().y + 6.5));
+            crate::meter::paint(&p, m, style, track.as_ref(), true);
         }
         let mut right = rect.right() - 10.0;
         if t.screen && t.watching && !t.is_me {
@@ -597,7 +657,7 @@ impl IngleApp {
         let screen = t.screen;
         let watching = t.watching;
         let vol = t.volume;
-        let (has_sound, svol) = (t.has_sound, t.stream_volume);
+        let (has_sound, svol, streaming) = (t.has_sound, t.stream_volume, t.streaming);
         let sb_muted = t.sb_muted;
         let moderate = t.moderate.clone().filter(|_| !screen);
         // (Ticking your own Mute or Deafen leaves the menu open, like Discord.)
@@ -639,20 +699,16 @@ impl IngleApp {
                 ui.separator();
             }
             if !is_me && screen {
-                if has_sound {
-                    ui.label(RichText::new("Stream volume").size(12.0).color(theme::MUTED()));
-                    let mut v = svol * 100.0;
-                    if ui.add(egui::Slider::new(&mut v, 0.0..=200.0).suffix("%")).changed() {
-                        acts.push(Act::StreamVolume { uid: uid.clone(), volume: v / 100.0 });
-                    }
-                } else {
-                    ui.label(RichText::new("This stream has no sound").size(12.0).color(theme::DIM()));
-                }
+                stream_volume_slider(ui, &uid, has_sound, svol, acts);
             } else if !is_me {
                 ui.label(RichText::new(format!("{name} volume")).size(12.0).color(theme::MUTED()));
                 let mut v = vol * 100.0;
                 if ui.add(egui::Slider::new(&mut v, 0.0..=200.0).suffix("%")).changed() {
                     acts.push(Act::Volume { uid: uid.clone(), volume: v / 100.0 });
+                }
+                // Sharing their screen: its sound's volume too, right here (like their voice's).
+                if streaming {
+                    stream_volume_slider(ui, &uid, has_sound, svol, acts);
                 }
             }
             // A moderator's Server Mute and Server Deafen, in red like Discord's.
@@ -788,6 +844,14 @@ impl IngleApp {
         if sb.clicked() {
             self.toggle_soundboard(st, crate::soundboard::FROM_CALL);
         }
+        let mixer_open = self.ui.mixer_open;
+        if button(ui, size, if mixer_open { on } else { base }, if mixer_open { "Close the mixer" } else { "Mixer: everyone's voice and stream volume" }, &|p, r| {
+            icons::mixer(p, r, if mixer_open { theme::EMBER2() } else { theme::TEXT() })
+        })
+        .clicked()
+        {
+            self.ui.mixer_open = !mixer_open;
+        }
         let deaf = deafened || server_deafened;
         let tip = if server_deafened { crate::app::SERVER_DEAFENED } else if deafened { "Undeafen" } else { "Deafen" };
         if button(ui, size, if deaf { Color32::from_rgb(0x4a, 0x1f, 0x1f) } else { base }, tip, &|p, r| {
@@ -826,8 +890,10 @@ mod tests {
             has_camera: false,
             volume: 1.0,
             has_sound: false,
+            streaming: false,
             stream_volume: 1.0,
             face: None,
+            tint: None,
             viewers: Vec::new(),
             sb_muted: false,
             moderate: None,
@@ -950,4 +1016,18 @@ impl IngleApp {
         }
         true
     }
+}
+
+/// A call tile's background: `top` fading to `bottom`, rounded like the others (the stage's
+/// color goes over its corners).
+pub(crate) fn paint_tint(p: &egui::Painter, rect: Rect, top: Color32, bottom: Color32) {
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(rect.left_top(), top);
+    mesh.colored_vertex(rect.right_top(), top);
+    mesh.colored_vertex(rect.left_bottom(), bottom);
+    mesh.colored_vertex(rect.right_bottom(), bottom);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(1, 3, 2);
+    p.add(egui::Shape::mesh(mesh));
+    p.rect_stroke(rect.expand(6.0), CornerRadius::same(18), Stroke::new(6.0f32, theme::STAGE()), StrokeKind::Inside);
 }

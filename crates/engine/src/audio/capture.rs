@@ -66,6 +66,10 @@ pub struct CapturePipeline {
     pub stream_delay_ms: i32,
     pub sent: u64,
     encoded: Vec<u8>,
+    /// What my voice sounds like as it goes out, band by band (for my voice meter).
+    analyzer: super::spectrum::Analyzer,
+    /// When my voice last went out (to start the bands afresh after a silence).
+    went_out: Option<Instant>,
 }
 
 /// How long speech counts as going on after RNNoise last heard it (bridges the quiet parts of
@@ -166,6 +170,8 @@ impl CapturePipeline {
             stream_delay_ms: 60,
             sent: 0,
             encoded: vec![0u8; 1500],
+            analyzer: super::spectrum::Analyzer::new(),
+            went_out: None,
         })
     }
 
@@ -319,7 +325,8 @@ impl CapturePipeline {
 
     /// Process 10 ms of 48 kHz mono microphone audio.
     pub fn process(&mut self, frame: &mut [f32], ctl: &Controls, now: Instant, sink: PacketSink<'_>) {
-        let gain = self.settings.input_gain;
+        // (As it is now: it can be dragged while I talk, see the call's mixer.)
+        let gain = ctl.input_gain.get();
         if (gain - 1.0).abs() > 1e-3 {
             for v in frame.iter_mut() {
                 *v *= gain;
@@ -365,6 +372,15 @@ impl CapturePipeline {
 
         let open = self.gate(now, ctl);
         ctl.transmitting.store(open, Ordering::Relaxed);
+        // My voice meter: what goes out, while it does (unless voice meters are off).
+        if open && !ctl.meters_off.load(Ordering::Relaxed) {
+            if !self.went_out.is_some_and(|t| now.saturating_duration_since(t) < super::METER_FRESH) {
+                self.analyzer.clear();
+            }
+            let bands = self.analyzer.feed(&frame[..480]);
+            ctl.mic_meter.set(super::Meter { db: self.level_db, bands }, now);
+            self.went_out = Some(now);
+        }
         // Something said (not just an open microphone in a quiet room): I'm here.
         if open && self.level_db > -50.0 {
             ctl.last_spoke_ms.store(ingle_proto::now_ms(), Ordering::Relaxed);

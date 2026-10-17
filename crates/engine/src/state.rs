@@ -157,6 +157,8 @@ pub struct ServerView {
     pub relations: HashMap<UserId, RelationKind>,
     /// Whether this server was told I'm idle (see `idle`; a new connection starts not idle).
     pub idle_sent: bool,
+    /// Whether this server was told Do Not Disturb (see `idle`; a new connection starts without).
+    pub dnd_sent: bool,
 }
 
 impl ServerView {
@@ -185,6 +187,7 @@ impl ServerView {
             groups: Vec::new(),
             relations: HashMap::new(),
             idle_sent: false,
+            dnd_sent: false,
         }
     }
 
@@ -597,6 +600,9 @@ pub struct AppState {
     pub verified: BTreeMap<UserId, crate::config::Verified>,
     /// People vouched for by someone I made sure of: their id → who vouched.
     pub vouched: HashMap<UserId, Vec<UserId>>,
+    /// Who made sure it's me, by server (their signed vouches for me; see
+    /// [`AppState::made_sure_of_me`]).
+    pub sure_of_me: HashMap<String, Vec<UserId>>,
     /// Making sure of people: under way, or just done (cards in the app).
     pub handshakes: Vec<HandshakeView>,
     /// Calls in direct messages ringing here (see `ring`).
@@ -674,6 +680,25 @@ impl AppState {
         match self.vouched.get(uid) {
             Some(by) if !by.is_empty() => Trust::Vouched(by.clone()),
             _ => Trust::Unknown,
+        }
+    }
+
+    /// Who made sure it's me, on any server I'm on (for the shield by my own name).
+    pub fn made_sure_of_me(&self) -> Vec<UserId> {
+        let mut v: Vec<UserId> = self.sure_of_me.iter().filter(|(k, _)| self.server(k).is_some()).flat_map(|(_, by)| by.iter().cloned()).collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    /// Who made sure it's me on server `key`, as it says now.
+    pub fn set_made_sure_of_me(&mut self, key: &str, mut by: Vec<UserId>) {
+        by.sort();
+        by.dedup();
+        if by.is_empty() {
+            self.sure_of_me.remove(key);
+        } else {
+            self.sure_of_me.insert(key.to_string(), by);
         }
     }
 

@@ -114,6 +114,53 @@ pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
 }
 
+/// A color's hue (0 to 1), saturation and lightness.
+pub fn hsl(c: Color32) -> (f32, f32, f32) {
+    let (r, g, b) = (c.r() as f32 / 255.0, c.g() as f32 / 255.0, c.b() as f32 / 255.0);
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let l = (max + min) / 2.0;
+    let d = max - min;
+    if d <= f32::EPSILON {
+        return (0.0, 0.0, l);
+    }
+    let s = d / (1.0 - (2.0 * l - 1.0).abs());
+    let h = if max == r {
+        ((g - b) / d).rem_euclid(6.0)
+    } else if max == g {
+        (b - r) / d + 2.0
+    } else {
+        (r - g) / d + 4.0
+    };
+    (h / 6.0, s.clamp(0.0, 1.0), l)
+}
+
+/// The color of hue `h` (0 to 1), saturation `s` and lightness `l`.
+pub fn from_hsl(h: f32, s: f32, l: f32) -> Color32 {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let hp = h.rem_euclid(1.0) * 6.0;
+    let x = c * (1.0 - (hp % 2.0 - 1.0).abs());
+    let (r, g, b) = match hp as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = l - c / 2.0;
+    let to = |v: f32| ((v + m).clamp(0.0, 1.0) * 255.0).round() as u8;
+    Color32::from_rgb(to(r), to(g), to(b))
+}
+
+/// What's behind someone in a call, in their picture's own color (see `images::accent_of`):
+/// deep and rich, darker at the top, like Discord's. (Top, bottom.)
+pub fn tile_tint(accent: Color32) -> (Color32, Color32) {
+    let (h, s, _) = hsl(accent);
+    // (A grey picture keeps a grey tile; any color gets a rich, deep version of itself.)
+    let s = if s < 0.1 { s } else { s.clamp(0.45, 0.85) };
+    (from_hsl(h, s, 0.085), from_hsl(h, s, 0.215))
+}
+
 /// Text on the accent color: dark, or white on a dark accent.
 pub fn on_ember() -> Color32 {
     let dark = [0x1b, 0x14, 0x11];

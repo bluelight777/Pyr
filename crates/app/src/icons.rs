@@ -731,6 +731,20 @@ pub fn soundboard(p: &Painter, r: Rect, c: Color32) {
     }
 }
 
+/// A mixing desk's faders: three grooves, each with its cap at another height.
+pub fn mixer(p: &Painter, r: Rect, c: Color32) {
+    let s = r.width().min(r.height());
+    let r = Rect::from_center_size(r.center(), vec2(s, s));
+    let w = (s * 0.09).max(1.2);
+    for (i, at) in [0.62f32, 0.3, 0.5].into_iter().enumerate() {
+        let x = r.left() + s * (0.2 + 0.3 * i as f32);
+        let (top, bottom) = (r.top() + s * 0.08, r.bottom() - s * 0.08);
+        p.line_segment([pos2(x, top), pos2(x, bottom)], Stroke::new(w, c.gamma_multiply(0.55)));
+        let y = top + (bottom - top) * at;
+        p.rect_filled(Rect::from_center_size(pos2(x, y), vec2(s * 0.26, s * 0.15)), CornerRadius::same((s * 0.04) as u8), c);
+    }
+}
+
 pub fn clock(p: &Painter, r: Rect, c: Color32) {
     let s = Stroke::new(1.8f32, c);
     let rad = r.width().min(r.height()) / 2.0;

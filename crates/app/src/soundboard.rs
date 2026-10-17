@@ -86,6 +86,8 @@ pub struct SoundEditor {
     emoji_open: bool,
     /// The dialog to go back to after (Server Settings).
     back_to: Option<Dialog>,
+    /// Cutting a ringtone, not a server's sound: for everyone (`None`), or someone's own.
+    pub ring: Option<Option<String>>,
 }
 
 #[derive(Clone, Copy)]
@@ -115,7 +117,15 @@ impl SoundEditor {
             drag: None,
             emoji_open: false,
             back_to,
+            ring: None,
         }
+    }
+
+    /// Cutting a ringtone from a sound file: for everyone (`for_uid` none), or someone's own.
+    pub fn ringtone(for_uid: Option<String>) -> SoundEditor {
+        // (From Settings, back to Settings after; from someone's menu, just closed.)
+        let back = if for_uid.is_none() { Some(Dialog::Settings { tab: 4 }) } else { None };
+        SoundEditor { ring: Some(for_uid), ..SoundEditor::add("", back) }
     }
 
     pub fn edit(key: &str, s: &ServerSound, back_to: Option<Dialog>) -> SoundEditor {
@@ -731,15 +741,26 @@ impl IngleApp {
         }
         let server = st.server(&ed.key).map(|s| s.name.clone()).unwrap_or_default();
         ui.set_width(520.0);
-        title(ui, if ed.edit.is_some() { "Edit sound" } else { "Add a sound" });
+        let ring_for = ed.ring.clone();
+        title(ui, if ring_for.is_some() { "Ringtone from a sound file" } else if ed.edit.is_some() { "Edit sound" } else { "Add a sound" });
         if ed.edit.is_none() {
-            ui.label(
-                RichText::new(format!(
+            let about = match &ring_for {
+                Some(who) => {
+                    let whose = match who {
+                        Some(u) => format!("Calls from {} ring with it.", st.name_of(u)),
+                        None => "Calls ring with it.".to_string(),
+                    };
+                    format!(
+                        "{whose} Pick an MP3, WAV, OGG, OPUS, FLAC or M4A and up to 10 seconds of it; it's evened out in loudness, \
+                         so it's never deafening or too quiet. It stays on this PC."
+                    )
+                }
+                None => format!(
                     "For everyone on {server}, and anywhere they play it. Pick an MP3, WAV, OGG, OPUS, FLAC or M4A and up to 10 seconds of it; \
                      it's evened out in loudness, so it's never deafening or too quiet."
-                ))
-                .color(theme::MUTED()),
-            );
+                ),
+            };
+            ui.label(RichText::new(about).color(theme::MUTED()));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if ui.add(theme::primary_button(if ed.pcm.is_some() { "Choose another file…" } else { "Choose a sound file…" })).clicked() {
@@ -772,6 +793,10 @@ impl IngleApp {
         }
         field_label(ui, "Name");
         ui.add(egui::TextEdit::singleline(&mut ed.name).hint_text("Air horn").char_limit(MAX_SOUND_NAME).desired_width(f32::INFINITY));
+        if ring_for.is_some() {
+            // (A ringtone has no emoji or volume of its own: just its name and its cut.)
+            return self.ringtone_editor_end(ui, ed, acts, close);
+        }
         field_label(ui, "Emoji");
         let mut emoji_button = Rect::NOTHING;
         ui.horizontal(|ui| {
@@ -833,6 +858,37 @@ impl IngleApp {
                     (Some(id), _) => acts.push(Act::EditSound { key: ed.key.clone(), id: id.clone(), name: name.clone(), emoji, volume: ed.volume }),
                     (None, Some(pcm)) => acts.push(Act::AddSound { key: ed.key.clone(), name: name.clone(), emoji, volume: ed.volume, pcm: pcm.clone(), start: ed.start, end: ed.end }),
                     _ => {}
+                }
+                done = true;
+            }
+            if ui.button("Cancel").clicked() {
+                done = true;
+            }
+        });
+        if done {
+            *close = true;
+            if let Some(back) = ed.back_to.take() {
+                self.ui.next_dialog = Some(back);
+            }
+        } else {
+            self.ui.sb.editor = Some(ed);
+        }
+    }
+
+    /// The ringtone editor's foot: Use as ringtone, or Cancel.
+    fn ringtone_editor_end(&mut self, ui: &mut egui::Ui, mut ed: SoundEditor, acts: &mut Vec<Act>, close: &mut bool) {
+        if let Some(e) = &ed.error {
+            ui.add_space(6.0);
+            ui.label(RichText::new(e).color(theme::LIVE()));
+        }
+        ui.add_space(14.0);
+        let name = ed.name.trim().to_string();
+        let ready = !name.is_empty() && ed.pcm.is_some() && ed.end - ed.start >= 0.05 && !ed.loading;
+        let mut done = false;
+        ui.horizontal(|ui| {
+            if ui.add_enabled(ready, theme::primary_button("Use as ringtone").min_size(vec2(140.0, 34.0))).clicked() {
+                if let (Some(pcm), Some(uid)) = (&ed.pcm, &ed.ring) {
+                    acts.push(Act::AddRingtoneFile { uid: uid.clone(), name: name.clone(), pcm: pcm.clone(), start: ed.start, end: ed.end });
                 }
                 done = true;
             }

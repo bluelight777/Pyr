@@ -444,12 +444,13 @@ impl IngleApp {
                     // server needs updating first).
                     let can_sounds = server.as_ref().is_some_and(|s| s.can(perm::MANAGE_EMOJI) && s.status.is_connected());
                     let can_bots = can_server && server.as_ref().is_some_and(|s| s.has(ingle_proto::control::BOTS_FEATURE));
+                    let can_gifs = server.as_ref().is_some_and(|s| s.can(perm::MANAGE_EMOJI) && s.has(ingle_proto::control::GIFS_FEATURE));
                     if tab == 0 && !can_server && can_emoji {
                         tab = 2;
                     }
                     ui.set_width(match tab {
                         1 => 680.0,
-                        2 | 4 | 5 => 560.0,
+                        2 | 4 | 5 | 6 => 560.0,
                         _ => 440.0,
                     });
                     ui.horizontal(|ui| {
@@ -470,6 +471,9 @@ impl IngleApp {
                         if can_emoji && ui.add(egui::Button::selectable(tab == 2, "Emoji")).clicked() {
                             tab = 2;
                         }
+                        if can_gifs && ui.add(egui::Button::selectable(tab == 6, "GIFs")).clicked() {
+                            tab = 6;
+                        }
                         if can_sounds && ui.add(egui::Button::selectable(tab == 4, "Soundboard")).clicked() {
                             tab = 4;
                         }
@@ -481,7 +485,11 @@ impl IngleApp {
                         }
                     });
                     ui.separator();
-                    if tab == 5 {
+                    if tab == 6 {
+                        if let Some(s) = &server {
+                            self.gifs_editor(ui, st, s, acts);
+                        }
+                    } else if tab == 5 {
                         if let Some(s) = &server {
                             self.bots_tab(ui, s, acts);
                         }
@@ -1068,6 +1076,11 @@ impl IngleApp {
         draft.auto_report_told = st.settings.auto_report_told;
         // (And idle by my own say-so, set from my name at the bottom left.)
         draft.idle_by_hand = st.settings.idle_by_hand;
+        // (And Do Not Disturb, set there too.)
+        draft.dnd = st.settings.dnd;
+        // (And the ringtones, chosen in menus.)
+        draft.ringtone = st.settings.ringtone.clone();
+        draft.ringtones = st.settings.ringtones.clone();
         let before = draft.clone();
         let mut t = self.ui.settings_tab_next.take().unwrap_or(tab);
         ui.horizontal(|ui| {
@@ -1207,6 +1220,18 @@ impl IngleApp {
                 });
                 ui.label(RichText::new("Plays your processed microphone back to you so you can hear what others hear.").size(12.0).color(theme::DIM()));
 
+                field_label(ui, "Voice meter");
+                crate::meter::picker(ui, &mut self.meters, &mut draft.voice_meter);
+                ui.label(
+                    RichText::new(
+                        "Shows across the voice panel (yours), by each person in your voice channel and on call tiles. It moves \
+                         with any sound someone sends: their voice, their screen's sound and their soundboard sounds. Right-click \
+                         yours in the voice panel to change its look or turn voice meters off.",
+                    )
+                    .size(12.0)
+                    .color(theme::DIM()),
+                );
+
                 field_label(ui, "Input mode");
                 ui.horizontal(|ui| {
                     ui.radio_value(&mut draft.input_mode, InputMode::VoiceActivity, "Voice activity");
@@ -1301,7 +1326,24 @@ impl IngleApp {
                     acts.push(Act::RefreshDevices);
                 }
             }
-            5 => self.appearance_tab(ui, st, acts, close),
+            5 => {
+                self.appearance_tab(ui, st, acts, close);
+                field_label(ui, "Moving pictures");
+                ui.horizontal_wrapped(|ui| {
+                    ui.radio_value(&mut draft.play_gifs, String::new(), "Play them");
+                    ui.radio_value(&mut draft.play_gifs, "hover".to_string(), "Play when I point at them");
+                    ui.radio_value(&mut draft.play_gifs, "never".to_string(), "Don't play them");
+                });
+                ui.label(
+                    RichText::new(
+                        "GIFs and other moving pictures in chat. Either way they wait while Ingle's in the background, and \
+                         clicking one opens it to play, pause or step through. Profile pictures move while their person talks, \
+                         and server icons when you point at them.",
+                    )
+                    .size(12.0)
+                    .color(theme::DIM()),
+                );
+            }
             6 => self.claude_tab(ui, st, acts),
             4 => {
                 field_label(ui, "Sounds");
@@ -1321,6 +1363,8 @@ impl IngleApp {
                         .size(12.0)
                         .color(theme::DIM()),
                 );
+                ui.add_space(6.0);
+                ui.add_enabled_ui(draft.ring, |ui| self.ringtone_setting(ui, st, acts));
                 ui.add_space(8.0);
                 ui.add_enabled_ui(draft.sounds || draft.ring, |ui| {
                     ui.horizontal(|ui| {

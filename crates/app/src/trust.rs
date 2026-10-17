@@ -82,42 +82,57 @@ fn names(st: &AppState, uids: &[String]) -> String {
     }
 }
 
+/// The shield by someone's name and what it means (none when there's nothing to go on). By my
+/// own name: green once someone has made sure it's me.
+pub fn shown(st: &AppState, uid: &str, name: &str) -> Option<(Trust, String)> {
+    if uid == st.my_uid {
+        let by = st.made_sure_of_me();
+        return (!by.is_empty()).then(|| (Trust::Verified, sure_of_you(st, &by)));
+    }
+    let trust = st.trust(uid, name);
+    (trust != Trust::Unknown).then(|| {
+        let m = meaning(st, &trust, name);
+        (trust, m)
+    })
+}
+
+/// "Chimbita and Maanix made sure it's really you" (the first few by name, then how many more).
+pub fn sure_of_you(st: &AppState, by: &[String]) -> String {
+    let named: Vec<String> = by.iter().take(3).map(|u| st.verified.get(u).map(|v| v.name.clone()).unwrap_or_else(|| st.name_of(u))).collect();
+    let more = by.len().saturating_sub(3);
+    let who = match (named.len(), more) {
+        (1, _) => named[0].clone(),
+        (2, _) => format!("{} and {}", named[0], named[1]),
+        (_, 0) => format!("{}, {} and {}", named[0], named[1], named[2]),
+        (_, 1) => format!("{}, {}, {} and 1 more", named[0], named[1], named[2]),
+        (_, n) => format!("{}, {}, {} and {n} more", named[0], named[1], named[2]),
+    };
+    format!("{who} made sure it's really you")
+}
+
 /// A shield in a row of text, right after a name, `size` points tall (with its meaning on hover).
 /// Nothing when there's nothing to show.
 pub fn badge(ui: &mut egui::Ui, st: &AppState, uid: &str, name: &str, size: f32) {
-    if uid == st.my_uid {
-        return;
-    }
-    let trust = st.trust(uid, name);
-    if trust == Trust::Unknown {
-        return;
-    }
+    let Some((trust, what)) = shown(st, uid, name) else { return };
     let (r, resp) = ui.allocate_exact_size(vec2(size * 0.86, size), Sense::hover());
     shield(ui.painter(), r, &trust);
-    resp.on_hover_text(meaning(st, &trust, name));
+    resp.on_hover_text(what);
 }
 
 /// A shield painted at `at` (its left middle), for rows drawn by hand (hovering it says what it
 /// means). Returns how wide it was (0 when there's none).
 pub fn badge_at(ui: &egui::Ui, st: &AppState, uid: &str, name: &str, at: Pos2, size: f32) -> f32 {
-    let w = paint_badge(ui.painter(), st, uid, name, at, size);
-    if w > 0.0 {
-        let r = Rect::from_min_size(pos2(at.x, at.y - size / 2.0), vec2(w, size));
-        ui.interact(r, ui.id().with(("shield", uid)), Sense::hover()).on_hover_text(meaning(st, &st.trust(uid, name), name));
-    }
-    w
+    let Some((trust, what)) = shown(st, uid, name) else { return 0.0 };
+    let r = Rect::from_min_size(pos2(at.x, at.y - size / 2.0), vec2(size * 0.86, size));
+    shield(ui.painter(), r, &trust);
+    ui.interact(r, ui.id().with(("shield", uid)), Sense::hover()).on_hover_text(what);
+    size * 0.86
 }
 
 /// The shield alone (for rows whose own hover text says what it means). Returns how wide it
 /// was (0 when there's none).
 pub fn paint_badge(p: &egui::Painter, st: &AppState, uid: &str, name: &str, at: Pos2, size: f32) -> f32 {
-    if uid == st.my_uid {
-        return 0.0;
-    }
-    let trust = st.trust(uid, name);
-    if trust == Trust::Unknown {
-        return 0.0;
-    }
+    let Some((trust, _)) = shown(st, uid, name) else { return 0.0 };
     shield(p, Rect::from_min_size(pos2(at.x, at.y - size / 2.0), vec2(size * 0.86, size)), &trust);
     size * 0.86
 }
@@ -134,6 +149,23 @@ impl IngleApp {
     /// one of them was chosen.
     pub(crate) fn trust_section(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, uid: &str, acts: &mut Vec<Act>) -> bool {
         if uid == st.my_uid {
+            // My own: who made sure it's me, or how to get the shield.
+            ui.label(RichText::new("MADE SURE IT'S YOU").font(theme::bold_font(11.0)).color(theme::DIM()));
+            ui.add_space(2.0);
+            let by = st.made_sure_of_me();
+            if by.is_empty() {
+                ui.label(
+                    RichText::new("No one yet. Ask a friend to right-click your name and choose Make sure it's them: then a shield shows by your name.")
+                        .size(12.5)
+                        .color(theme::MUTED()),
+                );
+            } else {
+                ui.horizontal_wrapped(|ui| {
+                    let (r, _) = ui.allocate_exact_size(vec2(16.0, 18.0), Sense::hover());
+                    shield(ui.painter(), r, &Trust::Verified);
+                    ui.label(RichText::new(sure_of_you(st, &by)).size(12.5).color(SURE));
+                });
+            }
             return false;
         }
         let name = s.member_name(uid);

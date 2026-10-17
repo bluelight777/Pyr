@@ -24,10 +24,12 @@ pub enum Sound {
     Ringback,
 }
 
-/// What to play: one of the chimes, or 48 kHz stereo (a soundboard sound heard only here).
+/// What to play: one of the chimes, 48 kHz stereo (a soundboard sound heard only here), or a
+/// ringtone's sound (48 kHz stereo that plays like a chime).
 enum Clip {
     Chime(Sound),
     Stereo(Arc<Vec<f32>>),
+    Ring(Arc<Vec<f32>>),
 }
 
 enum Msg {
@@ -84,6 +86,11 @@ impl Sfx {
         let _ = self.tx.send(Msg::Play { clip: Clip::Stereo(pcm), device, volume });
     }
 
+    /// A ringtone's sound (48 kHz stereo): it plays out like a chime.
+    pub fn play_ring_clip(&self, pcm: Arc<Vec<f32>>, device: Option<String>, volume: f32) {
+        let _ = self.tx.send(Msg::Play { clip: Clip::Ring(pcm), device, volume });
+    }
+
     /// Stop the soundboard sounds playing (chimes finish).
     pub fn hush(&self) {
         let _ = self.tx.send(Msg::Hush);
@@ -104,6 +111,7 @@ fn stereo(clip: Clip, skin: &HashMap<Sound, Arc<Vec<f32>>>) -> (Arc<Vec<f32>>, b
             None => (Arc::new(render(s).into_iter().flat_map(|v| [v, v]).collect()), true),
         },
         Clip::Stereo(pcm) => (pcm, false),
+        Clip::Ring(pcm) => (pcm, true),
     }
 }
 

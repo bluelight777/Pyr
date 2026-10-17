@@ -119,6 +119,10 @@ pub struct Member {
     /// A bot, like Claude through the Claude connector ([`BOTS_FEATURE`]): shown with a BOT tag.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub bot: bool,
+    /// Do Not Disturb ([`DND_FEATURE`]): they said so on an Ingle they're connected from. Shown
+    /// as a red dot with a line through it, like Discord's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dnd: bool,
 }
 
 pub type RoleId = i64;
@@ -196,7 +200,7 @@ pub mod perm {
         (MANAGE_ROLES, "Manage roles", "Create and edit roles, and give people roles below their own highest role."),
         (MANAGE_SERVER, "Manage server", "Rename the server and change its description."),
         (MENTION_EVERYONE, "Mention @everyone", "Ping the whole server with @everyone or @here."),
-        (MANAGE_EMOJI, "Manage emoji and sounds", "Upload and remove the server's own emoji and soundboard sounds."),
+        (MANAGE_EMOJI, "Manage emoji, GIFs and sounds", "Upload and remove the server's own emoji, GIFs and soundboard sounds."),
     ];
 }
 
@@ -242,6 +246,10 @@ pub const DMS_FEATURE: &str = "dms";
 pub const ICONS_FEATURE: &str = "server_icon";
 /// The server's own emoji (`ServerInfo::emojis`, `AddEmoji`, `RemoveEmoji`).
 pub const EMOJI_FEATURE: &str = "custom_emoji";
+/// Server GIFs ([`ServerGif`], 0.8.0): `AddGif` keeps an uploaded picture as one of the
+/// server's GIFs (needs Manage emoji, GIFs and sounds), `RemoveGif` and `RenameGif` change them,
+/// and `ServerInfo::gifs` lists them for everyone.
+pub const GIFS_FEATURE: &str = "server_gifs";
 /// Friends and blocking ([`Relation`]).
 pub const FRIENDS_FEATURE: &str = "friends";
 /// The owner's app can download everything the server keeps (`FileRequest::Backup`), so the
@@ -294,6 +302,10 @@ pub const GROUPS_FEATURE: &str = "groups";
 /// the mouse (or its person said they're idle), and `Member::idle` shows who's idle on every
 /// Ingle they're connected from (sent again as `MemberUpserted` when it changes).
 pub const IDLE_FEATURE: &str = "idle";
+/// Do Not Disturb, like Discord's: `SetDnd` says a connection's person doesn't want to be
+/// disturbed (or does again), and `Member::dnd` shows it while any of their Ingles says so
+/// (sent again as `MemberUpserted` when it changes). (0.8.0)
+pub const DND_FEATURE: &str = "dnd";
 /// Bots as members, like Discord's: someone who can manage the server makes a bot invite
 /// (`CreateBotInvite`; its code starts with [`BOT_INVITE_PREFIX`]), and whatever joins with it
 /// is a bot ([`Member::bot`]): it sees and writes where its roles let it, like anyone, but
@@ -308,6 +320,9 @@ pub const HANDSHAKE_FEATURE: &str = "handshake";
 /// Vouches ([`Vouch`]): `SetVouches` keeps mine (for people who are members here), and
 /// `GetVouches` gets the ones made by the people asked about.
 pub const VOUCHES_FEATURE: &str = "vouches";
+/// `GetVouchesForMe`: the vouches for me (who made sure it's me), for the shield by my own
+/// name (0.8.0).
+pub const VOUCHES_FOR_ME_FEATURE: &str = "vouches-for-me";
 /// In `Login::caps`: this app knows group conversations ([`GROUPS_FEATURE`]).
 pub const GROUPS_CAP: &str = "groups";
 /// The most people in a group conversation.
@@ -643,7 +658,12 @@ pub struct Group {
 }
 
 /// Largest attachment and profile picture the server accepts.
-pub const MAX_ATTACHMENT_BYTES: u64 = 10 << 20;
+/// The most an attached image can be: 25 MB, on servers that say [`BIG_FILES_FEATURE`]
+/// (0.8.0); [`OLD_MAX_ATTACHMENT_BYTES`] on older ones.
+pub const MAX_ATTACHMENT_BYTES: u64 = 25 << 20;
+pub const OLD_MAX_ATTACHMENT_BYTES: u64 = 10 << 20;
+/// Images up to [`MAX_ATTACHMENT_BYTES`] can be attached here (0.8.0).
+pub const BIG_FILES_FEATURE: &str = "files-25mb";
 pub const MAX_AVATAR_BYTES: u64 = 1 << 20;
 pub const MAX_ATTACHMENTS_PER_MESSAGE: usize = 10;
 
@@ -852,6 +872,9 @@ pub struct ServerInfo {
     /// The server's soundboard sounds ([`SOUNDBOARD_FEATURE`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sounds: Vec<ServerSound>,
+    /// The server's own GIFs ([`GIFS_FEATURE`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gifs: Vec<ServerGif>,
     /// The owner collects Ingle bug reports on this server ([`BUGS_FEATURE`]).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub bug_reports: bool,
@@ -892,6 +915,50 @@ pub struct CustomEmoji {
 
 /// How many emoji a server can have.
 pub const MAX_CUSTOM_EMOJI: usize = 250;
+
+/// One of a server's own GIFs ([`GIFS_FEATURE`]), like Discord's stickers: a moving (or still)
+/// picture everyone here can send. Its file was uploaded as an attachment and is kept for the
+/// server; a message sends it as `<g:name:id>` (see [`server_gif_token`]).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ServerGif {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub width: u32,
+    #[serde(default)]
+    pub height: u32,
+    /// Who added it.
+    #[serde(default)]
+    pub by: UserId,
+}
+
+/// How many GIFs a server can have, and how long their names can be.
+pub const MAX_SERVER_GIFS: usize = 100;
+pub const MAX_GIF_NAME: usize = 40;
+
+/// A server GIF as a message sends it.
+pub fn server_gif_token(name: &str, id: &str) -> String {
+    let name: String = name.chars().filter(|c| !matches!(c, '<' | '>' | ':')).take(MAX_GIF_NAME).collect();
+    format!("<g:{name}:{id}>")
+}
+
+/// The server GIFs a message sends: (name, file id), in order.
+pub fn server_gif_tokens(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(i) = rest.find("<g:") {
+        let after = &rest[i + 3..];
+        let Some(end) = after.find('>') else { break };
+        let inner = &after[..end];
+        if let Some((name, id)) = inner.rsplit_once(':') {
+            if !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') && !name.contains('<') {
+                out.push((name.to_string(), id.to_string()));
+            }
+        }
+        rest = &after[end + 1..];
+    }
+    out
+}
 
 /// One of a server's soundboard sounds ([`SOUNDBOARD_FEATURE`]).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -1079,6 +1146,10 @@ pub enum Request {
     SetIdle {
         idle: bool,
     },
+    /// Do Not Disturb on this connection's Ingle, or off again ([`DND_FEATURE`]).
+    SetDnd {
+        dnd: bool,
+    },
     CreateChannel {
         name: String,
         kind: ChannelKind,
@@ -1216,6 +1287,19 @@ pub enum Request {
         file_id: String,
         #[serde(default)]
         animated: bool,
+    },
+    /// Keep a picture uploaded as an attachment (and not sent) as one of the server's GIFs
+    /// ([`GIFS_FEATURE`]; needs Manage emoji, GIFs and sounds).
+    AddGif {
+        name: String,
+        file_id: String,
+    },
+    RemoveGif {
+        id: String,
+    },
+    RenameGif {
+        id: String,
+        name: String,
     },
     /// Remove one (needs Manage emoji), or rename it when `name` is given.
     RemoveEmoji {
@@ -1420,6 +1504,9 @@ pub enum Request {
     GetVouches {
         by: Vec<UserId>,
     },
+    /// The vouches for me here, made by the people who made sure it's me
+    /// ([`VOUCHES_FOR_ME_FEATURE`]): answered with `Vouches`.
+    GetVouchesForMe {},
     /// A request this server doesn't know (from a newer app).
     #[serde(other)]
     Unknown,
@@ -1760,6 +1847,14 @@ fn is_pictograph(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_gifs_go_by_name_and_id() {
+        let t = server_gif_token("party <cat>", "ab12cd");
+        assert_eq!(t, "<g:party cat:ab12cd>");
+        assert_eq!(server_gif_tokens(&format!("look {t} and <g:x:zz-9>")), vec![("party cat".into(), "ab12cd".into()), ("x".into(), "zz-9".into())]);
+        assert!(server_gif_tokens("<g:no id:> <g:bad:a b> <:emoji:123>").is_empty());
+    }
 
     #[test]
     fn channel_names_take_emoji_whole() {

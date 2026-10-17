@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use ingle_proto::control::{CustomEmoji, Relation, RelationKind, ServerSound,
+use ingle_proto::control::{CustomEmoji, Relation, RelationKind, ServerGif, ServerSound,
     Attachment, Channel, ChannelId, ChannelKind, Dm, FileKind, Group, Member, Message, MessageId, Reaction, Role, RoleDef, RoleId, UserId,
 };
 use ingle_proto::now_ms;
@@ -151,6 +151,16 @@ CREATE TABLE IF NOT EXISTS emojis (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     animated INTEGER NOT NULL DEFAULT 0,
+    by TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+-- Server GIFs (0.8.0), like Discord's stickers: pictures everyone here can send. Their files
+-- are attachments (kind 0) that were never sent, kept for the server.
+CREATE TABLE IF NOT EXISTS gifs (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    width INTEGER NOT NULL DEFAULT 0,
+    height INTEGER NOT NULL DEFAULT 0,
     by TEXT NOT NULL,
     created_at INTEGER NOT NULL
 );
@@ -471,6 +481,7 @@ impl Db {
                     avatar: r.get(4)?,
                     idle: false,
                     bot: r.get::<_, i64>(5)? != 0,
+                    dnd: false,
                 })
             })
             .map(|rows| rows.filter_map(|r| r.ok()).collect())
@@ -726,6 +737,18 @@ impl Db {
         out
     }
 
+    /// The vouches for `uid`, newest first (at most `max`).
+    pub fn vouches_for(&self, uid: &str, max: usize) -> Vec<ingle_proto::control::Vouch> {
+        let c = self.conn.lock();
+        let Ok(mut st) = c.prepare("SELECT by, sig FROM vouches WHERE for_uid = ?1 ORDER BY at DESC LIMIT ?2") else { return Vec::new() };
+        let rows = st.query_map(params![uid, max as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)));
+        rows.map(|r| r.flatten().collect::<Vec<_>>())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(by, sig)| ingle_proto::b64::decode(&sig).ok().map(|sig| ingle_proto::control::Vouch { by, for_uid: uid.to_string(), sig }))
+            .collect()
+    }
+
     /// Submissions waiting for the owner to look at them: skins, or plugins.
     pub fn new_submission_count(&self, skins: bool) -> u64 {
         let op = if skins { "=" } else { "!=" };
@@ -834,7 +857,7 @@ impl Db {
     pub fn unsent_files_of(&self, uid: &str) -> usize {
         self.conn
             .lock()
-            .query_row("SELECT COUNT(*) FROM files WHERE owner = ?1 AND kind = 0 AND message_id IS NULL", [uid], |r| {
+            .query_row("SELECT COUNT(*) FROM files WHERE owner = ?1 AND kind = 0 AND message_id IS NULL AND id NOT IN (SELECT id FROM gifs)", [uid], |r| {
                 r.get::<_, i64>(0)
             })
             .unwrap_or(0) as usize
@@ -847,7 +870,7 @@ impl Db {
         let c = self.conn.lock();
         let cutoff = now_ms() - max_age_ms;
         let sql = "SELECT id FROM files WHERE created_at < ?1 AND (
-                       (kind = 0 AND message_id IS NULL)
+                       (kind = 0 AND message_id IS NULL AND id NOT IN (SELECT id FROM gifs))
                     OR (kind = 1 AND id NOT IN (SELECT avatar FROM users WHERE avatar IS NOT NULL)
                                  AND id NOT IN (SELECT value FROM meta WHERE key = 'icon')
                                  AND id NOT IN (SELECT id FROM emojis))
@@ -961,6 +984,45 @@ impl Db {
     /// False if another emoji has that name (or there's no such emoji).
     pub fn rename_emoji(&self, id: &str, name: &str) -> Result<bool> {
         Ok(self.conn.lock().execute("UPDATE OR IGNORE emojis SET name = ?2 WHERE id = ?1", params![id, name])? > 0)
+    }
+
+    // ------------------------------------------------------------- server GIFs
+
+    pub fn gifs(&self) -> Vec<ServerGif> {
+        let c = self.conn.lock();
+        let Ok(mut st) = c.prepare("SELECT id, name, width, height, by FROM gifs ORDER BY created_at, rowid") else { return Vec::new() };
+        st.query_map([], |r| Ok(ServerGif { id: r.get(0)?, name: r.get(1)?, width: r.get::<_, i64>(2)? as u32, height: r.get::<_, i64>(3)? as u32, by: r.get(4)? }))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn is_gif(&self, id: &str) -> bool {
+        self.conn.lock().query_row("SELECT 1 FROM gifs WHERE id = ?1", [id], |_| Ok(())).is_ok()
+    }
+
+    /// Adds a GIF; false if the name or picture is already one.
+    pub fn add_gif(&self, g: &ServerGif) -> Result<bool> {
+        let n = self.conn.lock().execute(
+            "INSERT OR IGNORE INTO gifs (id, name, width, height, by, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![g.id, g.name, g.width as i64, g.height as i64, g.by, now_ms()],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Takes a GIF out, and its file's row with it; true if there was one (its file can go).
+    pub fn remove_gif(&self, id: &str) -> Result<bool> {
+        let c = self.conn.lock();
+        let n = c.execute("DELETE FROM gifs WHERE id = ?1", [id])?;
+        if n > 0 {
+            c.execute("DELETE FROM files WHERE id = ?1 AND kind = 0 AND message_id IS NULL", [id])?;
+            scrub(&c);
+        }
+        Ok(n > 0)
+    }
+
+    /// False if another GIF has that name (or there's no such GIF).
+    pub fn rename_gif(&self, id: &str, name: &str) -> Result<bool> {
+        Ok(self.conn.lock().execute("UPDATE OR IGNORE gifs SET name = ?2 WHERE id = ?1", params![id, name])? > 0)
     }
 
     // ------------------------------------------------------------- soundboard

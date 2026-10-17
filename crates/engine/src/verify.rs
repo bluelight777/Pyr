@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ingle_proto::control::{Event, HANDSHAKE_FEATURE, MAX_VOUCHES, MAX_VOUCHES_ASKED, Request, VOUCHES_FEATURE, Vouch};
+use ingle_proto::control::{Event, HANDSHAKE_FEATURE, MAX_VOUCHES, MAX_VOUCHES_ASKED, Request, VOUCHES_FEATURE, VOUCHES_FOR_ME_FEATURE, Vouch};
 use ingle_proto::handshake::{self, ANSWER_MAX, Asking, Handshake, QUESTION_MAX, WordsJoiner, WordsStarter};
 
 use crate::Shared;
@@ -380,6 +380,10 @@ pub(crate) fn on_handshake(shared: &Arc<Shared>, key: &str, from: &str, data: &s
             }
         }
         Handshake::WordsSaid { matched, .. } => {
+            if matched {
+                // They made sure of me: their vouch for me is on its way.
+                refetch_for_me_soon(shared);
+            }
             let mut st = shared.state.write();
             let mut sure = false;
             if let Some(v) = st.handshakes.iter_mut().find(|v| v.sid == sid) {
@@ -415,6 +419,10 @@ pub(crate) fn on_handshake(shared: &Arc<Shared>, key: &str, from: &str, data: &s
             let Some((_, _, step)) = take(shared, &sid) else { return };
             let Step::Answered(expected) = step else { return };
             let stage = if handshake::confirmed(&expected, &mac) { HandshakeStage::AnswersMatched } else { HandshakeStage::Failed("Their Ingle's reply didn't check out.".into()) };
+            if stage == HandshakeStage::AnswersMatched {
+                // My answer matched: they made sure of me.
+                refetch_for_me_soon(shared);
+            }
             end(shared, &sid, stage);
         }
         Handshake::Mismatch { .. } => end(shared, &sid, HandshakeStage::Failed("Your answer wasn't the one they expected.".into())),
@@ -490,6 +498,8 @@ fn mark(shared: &Arc<Shared>, key: &str, uid: &str, how: VerifiedHow) -> i64 {
         st.vouched.remove(uid);
     }
     everywhere(shared);
+    // They're likely making sure of me too, just now.
+    refetch_for_me_soon(shared);
     at_ms
 }
 
@@ -518,8 +528,47 @@ pub(crate) fn everywhere(shared: &Arc<Shared>) {
     for key in keys {
         publish_vouches(shared, &key);
         fetch_vouches(shared, &key);
+        fetch_vouches_for_me(shared, &key);
     }
     (shared.repaint)();
+}
+
+/// Who made sure it's me, asked again on every server in a few seconds and a little later
+/// (after making sure of each other: their vouch for me takes a moment to arrive).
+fn refetch_for_me_soon(shared: &Arc<Shared>) {
+    let s = shared.clone();
+    shared.rt.spawn(async move {
+        for wait in [4, 10] {
+            tokio::time::sleep(Duration::from_secs(wait)).await;
+            let keys: Vec<String> = s.state.read_recursive().servers.iter().map(|x| x.key.clone()).collect();
+            for key in keys {
+                fetch_vouches_for_me(&s, &key);
+            }
+        }
+    });
+}
+
+/// Who made sure it's me on server `key`: their signed vouches for me (from members, not
+/// bots), for the shield by my own name (`AppState::made_sure_of_me`).
+pub(crate) fn fetch_vouches_for_me(shared: &Arc<Shared>, key: &str) {
+    let ready = shared.state.read_recursive().server(key).is_some_and(|s| s.status == ConnStatus::Connected && s.has(VOUCHES_FOR_ME_FEATURE));
+    if !ready {
+        return;
+    }
+    let Some(h) = shared.servers.lock().get(key).cloned() else { return };
+    let reply = h.request(Request::GetVouchesForMe {});
+    let s = shared.clone();
+    let key = key.to_string();
+    shared.rt.spawn(async move {
+        let Ok(Event::Vouches { vouches }) = reply.await else { return };
+        let mut st = s.state.write();
+        let me = st.my_uid.clone();
+        let Some(srv) = st.server(&key) else { return };
+        let by: Vec<String> = vouches.into_iter().filter(|v| v.for_uid == me && v.by != me && srv.members.contains_key(&v.by) && !srv.is_bot(&v.by) && v.valid()).map(|v| v.by).collect();
+        st.set_made_sure_of_me(&key, by);
+        drop(st);
+        (s.repaint)();
+    });
 }
 
 /// My vouches on server `key`: for the people I made sure of who are members there (none when
@@ -550,12 +599,19 @@ pub(crate) fn fetch_vouches(shared: &Arc<Shared>, key: &str) {
         return;
     }
     let Some(h) = shared.servers.lock().get(key).cloned() else { return };
+    // (A server too old to say who made sure of me: the ones among these do.)
+    let older = !shared.state.read_recursive().server(key).is_some_and(|s| s.has(VOUCHES_FOR_ME_FEATURE));
     let reply = h.request(Request::GetVouches { by });
     let s = shared.clone();
+    let key = key.to_string();
     shared.rt.spawn(async move {
         let Ok(Event::Vouches { vouches }) = reply.await else { return };
         let mut st = s.state.write();
         let me = st.my_uid.clone();
+        if older {
+            let for_me: Vec<String> = vouches.iter().filter(|v| v.for_uid == me && st.verified.contains_key(&v.by) && v.valid()).map(|v| v.by.clone()).collect();
+            st.set_made_sure_of_me(&key, for_me);
+        }
         for v in vouches {
             if v.for_uid == me || st.verified.contains_key(&v.for_uid) || !st.verified.contains_key(&v.by) || !v.valid() {
                 continue;

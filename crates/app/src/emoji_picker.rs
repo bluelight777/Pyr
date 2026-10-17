@@ -104,6 +104,12 @@ impl IngleApp {
                 }
             });
         }
+        // Those who manage the server's emoji can add some right here.
+        if let Some(s) = server.filter(|s| s.can(ingle_proto::control::perm::MANAGE_EMOJI) && s.has(ingle_proto::control::EMOJI_FEATURE) && s.status.is_connected()) {
+            if ui.small_button("+ Add emoji for everyone here").on_hover_text("PNG, JPEG, WebP or GIF (moving ones move)").clicked() {
+                crate::images::pick_async(crate::images::PickFor::Emoji(s.key.clone()), true, ui.ctx());
+            }
+        }
         ui.add_space(4.0);
 
         // Sections: (title, cells).

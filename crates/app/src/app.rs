@@ -90,6 +90,19 @@ pub enum Act {
     WearSkin(String),
     /// Idle by my own say-so (true), or worked out from the keyboard and mouse (false).
     SetIdleByHand(bool),
+    /// Do Not Disturb, on or off.
+    SetDnd(bool),
+    /// The ringtone for everyone (`uid` none) or someone (`tone` none: Ingle's ring, or the
+    /// same as everyone's).
+    SetRingtone { uid: Option<String>, tone: Option<ingle_engine::config::Ringtone> },
+    /// Hear a ringtone (none: Ingle's ring).
+    PreviewRingtone(Option<ingle_engine::config::Ringtone>),
+    /// A picture added as one of a server's own GIFs, for everyone there.
+    AddServerGif { key: String, name: String, bytes: Vec<u8> },
+    RemoveServerGif { key: String, id: String },
+    RenameServerGif { key: String, id: String, name: String },
+    /// A ringtone cut from a sound file (seconds `start` to `end` of its 48 kHz stereo).
+    AddRingtoneFile { uid: Option<String>, name: String, pcm: Arc<Vec<f32>>, start: f32, end: f32 },
     /// Make sure someone is who they say: compare words, or ask something only they'd know.
     CompareWords { key: String, uid: String },
     AskThem { key: String, uid: String, question: String, answer: String },
@@ -152,6 +165,13 @@ pub enum Act {
     Watch { session: SessionId, track: u8, on: bool },
     Volume { uid: String, volume: f32 },
     StreamVolume { uid: String, volume: f32 },
+    /// Someone's volume for me (their voice, or `stream`: their stream's sound) as a mixer
+    /// fader moves: heard at once, kept on this PC when `save` (once it's let go).
+    PersonVolume { uid: String, volume: f32, stream: bool, save: bool },
+    /// Everything I hear (0 to 2), as the mixer's ALL fader moves.
+    OutputVolume { volume: f32, save: bool },
+    /// How loud I'm sent (0 to 2), as the mixer's MY MIC fader moves.
+    InputGain { gain: f32, save: bool },
     Settings(Settings),
     MicTest(bool),
     RefreshDevices,
@@ -271,6 +291,9 @@ pub struct UiState {
     pub editing: Option<(MessageId, String)>,
     pub members_open: bool,
     pub call_chat_open: bool,
+    /// The call's mixer is open (see `mixer`), and what it keeps between frames.
+    pub mixer_open: bool,
+    pub mixer: crate::mixer::MixerUi,
     pub focus: Option<VideoKey>,
     /// With nothing picked, the big tile follows whoever talks (like Discord): who it is now,
     /// and since when. `grid_view` turns that off (everyone the same size).
@@ -278,6 +301,16 @@ pub struct UiState {
     pub grid_view: bool,
     /// Volumes from before "Mute" in a tile's menu, to go back to on "Unmute".
     pub premute_volume: HashMap<(String, bool), f32>,
+    /// Where moving pictures are in their loop (seconds): this clock only runs while Ingle's
+    /// window is in front, so they wait while it's in the background (and use no power).
+    pub anim_clock: f64,
+    anim_last: Option<f64>,
+    /// The window is in front (moving pictures play).
+    pub anim_on: bool,
+    /// When moving pictures in chat play (`Settings::play_gifs`), as of this frame.
+    pub play_gifs: String,
+    /// Which profile pictures and icons move (by file id; known once looked at).
+    pub moves: HashMap<String, bool>,
     /// A stream filling the whole screen, and whether the window is in full screen for it.
     pub fullscreen: Option<VideoKey>,
     pub fullscreen_on: bool,
@@ -315,8 +348,10 @@ pub struct UiState {
     pub create: Option<crate::create::CreateState>,
     /// Images waiting to be sent, per channel: (file name, bytes).
     pub attach: HashMap<(String, ChannelId), Vec<(String, Vec<u8>)>>,
-    /// An image open in the full-size viewer: (server key, the image).
+    /// An image open in the full-size viewer: (server key, the image), and how a moving one
+    /// is playing there.
     pub viewer: Option<(String, Attachment)>,
+    pub viewer_play: crate::chat::ViewerPlay,
     /// Where each conversation is scrolled to, kept steady while things load (see `chat.rs`).
     pub chat_scroll: HashMap<(String, ChannelId), crate::chat::ChatScroll>,
     /// While drawing a conversation: pictures load only inside this (near the screen); `None`
@@ -352,10 +387,15 @@ pub struct UiState {
     pub gif_provider: crate::giphy::Provider,
     /// The GIF picker is on its Favorites tab (and which favorite the arrow keys are on).
     pub gif_favs: bool,
+    /// The GIF picker's tab of the server's own GIFs is open.
+    pub gif_server: bool,
     pub gif_fav_sel: usize,
     /// The favorite link of pictures in chat that were pointed at (by server and file id), so
     /// their star knows whether they're favorites (worked out once each, from what's in them).
     pub picture_favs: HashMap<(String, String), String>,
+    /// The picture in chat last right-clicked (its menu is about it), and whether its menu
+    /// still has to open.
+    pub menu_picture: Option<(String, bool)>,
     /// GIFs from GIPHY being shown.
     pub gifs: crate::giphy::Downloads,
     /// Folded runs of blocked messages that were opened (by their first message).
@@ -428,6 +468,8 @@ pub struct IngleApp {
     title_shown: String,
     /// The skin on now (or one being tried), its picture and fonts.
     pub looks: crate::looks::Looks,
+    /// Everyone's voice meters in my call, eased for drawing.
+    pub meters: crate::meter::Meters,
 }
 
 impl IngleApp {
@@ -465,6 +507,7 @@ impl IngleApp {
             voice_sounds: Default::default(),
             title_shown: title.clone(),
             title,
+            meters: Default::default(),
         }
     }
 
@@ -624,6 +667,9 @@ impl IngleApp {
             }
             Act::Volume { uid, volume } => e.set_user_volume(&uid, volume),
             Act::StreamVolume { uid, volume } => e.set_stream_volume(&uid, volume),
+            Act::PersonVolume { uid, volume, stream, save } => e.person_volume(&uid, volume, stream, save),
+            Act::OutputVolume { volume, save } => e.set_output_volume(volume, save),
+            Act::InputGain { gain, save } => e.set_input_gain(gain, save),
             Act::Settings(s) => {
                 if e.shared.config_dir == ingle_engine::config::config_dir(None) {
                     crate::autostart::apply(s.start_with_windows);
@@ -644,6 +690,14 @@ impl IngleApp {
             Act::UpdateRole { key, id, name, color, perms, hoist, shift } => e.update_role(&key, id, name, color, perms, hoist, shift),
             Act::DeleteRole { key, id } => e.delete_role(&key, id),
             Act::SetMemberRoles { key, uid, roles } => e.set_member_roles(&key, &uid, roles),
+            // (A moving one takes a moment to make: off the window's thread.)
+            Act::SetAvatarCropped { bytes, cx, cy, frac } if crate::images::is_animated(&bytes) => {
+                let e = e.clone();
+                std::thread::spawn(move || match crate::images::make_avatar_crop(&bytes, cx, cy, frac) {
+                    Ok(gif) => e.set_avatar(Some(gif)),
+                    Err(err) => e.shared.state.write().toast(err, true),
+                });
+            }
             Act::SetAvatarCropped { bytes, cx, cy, frac } => match crate::images::make_avatar_crop(&bytes, cx, cy, frac) {
                 Ok(png) => e.set_avatar(Some(png)),
                 Err(err) => self.toast(err, true),
@@ -706,6 +760,29 @@ impl IngleApp {
                 e.update_settings(ingle_engine::config::Settings { skin: id, ..settings });
             }
             Act::SetIdleByHand(on) => e.set_idle_by_hand(on),
+            Act::SetDnd(on) => e.set_dnd(on),
+            Act::SetRingtone { uid, tone } => e.set_ringtone(uid.as_deref(), tone),
+            Act::AddServerGif { key, name, bytes } => {
+                let limit = e.state().server(&key).map(crate::images::upload_limit).unwrap_or(ingle_proto::control::OLD_MAX_ATTACHMENT_BYTES);
+                if crate::images::can_shrink(&bytes, limit) {
+                    // Too big: made smaller to fit first, off the window's thread.
+                    self.toast(format!("{name} is over {} MB: making it smaller to fit…", limit >> 20), false);
+                    let e = e.clone();
+                    std::thread::spawn(move || match crate::images::shrink_to_fit(&bytes, limit) {
+                        Ok((small, _)) => e.add_server_gif(&key, &name, small),
+                        Err(err) => e.shared.state.write().toast(format!("{name}: {err}"), true),
+                    });
+                } else {
+                    match crate::images::check_attachment(&name, &bytes, limit) {
+                        Ok(()) => e.add_server_gif(&key, &name, bytes),
+                        Err(err) => self.toast(err, true),
+                    }
+                }
+            }
+            Act::RemoveServerGif { key, id } => e.remove_server_gif(&key, &id),
+            Act::RenameServerGif { key, id, name } => e.rename_server_gif(&key, &id, &name),
+            Act::PreviewRingtone(tone) => e.preview_ringtone(tone),
+            Act::AddRingtoneFile { uid, name, pcm, start, end } => e.add_ringtone_file(uid, &name, pcm, start, end),
             Act::CompareWords { key, uid } => e.compare_words(&key, &uid),
             Act::AskThem { key, uid, question, answer } => e.ask_them(&key, &uid, &question, &answer),
             Act::AcceptWords(sid) => e.accept_words(&sid),
@@ -764,6 +841,13 @@ impl IngleApp {
             Act::ReportBug { title, body, include_log, turn_on } => e.report_bug(&title, &body, include_log, turn_on.as_deref()),
             Act::SetServerIcon { key, bytes } => match bytes {
                 None => e.set_server_icon(&key, None),
+                Some((b, cx, cy, frac)) if crate::images::is_animated(&b) => {
+                    let e = e.clone();
+                    std::thread::spawn(move || match crate::images::make_avatar_crop(&b, cx, cy, frac) {
+                        Ok(gif) => e.set_server_icon(&key, Some(gif)),
+                        Err(err) => e.shared.state.write().toast(err, true),
+                    });
+                }
                 Some((b, cx, cy, frac)) => match crate::images::make_avatar_crop(&b, cx, cy, frac) {
                     Ok(png) => e.set_server_icon(&key, Some(png)),
                     Err(err) => self.toast(err, true),
@@ -802,14 +886,55 @@ impl IngleApp {
         self.engine.shared.state.write().toast(text, error);
     }
 
-    /// Someone's profile picture as a texture, if they have one and it's loaded.
+    /// Someone's profile picture as a texture, if they have one and it's loaded (still: a
+    /// moving one shows its first frame, see `face_moving`).
     pub fn face(&mut self, ctx: &egui::Context, s: &ServerView, uid: &str) -> Option<egui::TextureId> {
+        self.face_moving(ctx, s, uid, false)
+    }
+
+    /// Someone's profile picture, moving if it's a moving one and `moving` (they're talking,
+    /// it's pointed at, or their profile's open), like Discord's.
+    pub fn face_moving(&mut self, ctx: &egui::Context, s: &ServerView, uid: &str, moving: bool) -> Option<egui::TextureId> {
         let id = s.members.get(uid)?.avatar.clone()?;
         let bytes = match self.engine.file(&s.key, &id) {
             ingle_engine::files::FileState::Ready(b) => Some(b),
             _ => None,
         };
-        self.images.get(ctx, &format!("av:{id}"), bytes, 256).frame(0.0).map(|f| f.0)
+        self.picture(ctx, &format!("av:{id}"), bytes, moving)
+    }
+
+    /// The colors of someone's call tile (top, bottom): their profile picture's own (see
+    /// `theme::tile_tint`), or their initial's when they have no picture; `None` while their
+    /// picture's on its way.
+    pub fn tile_tint(&mut self, s: &ServerView, uid: &str) -> Option<(Color32, Color32)> {
+        match s.members.get(uid).and_then(|m| m.avatar.clone()) {
+            Some(id) => self.images.accent(&format!("av:{id}")).or_else(|| self.images.accent(&format!("av:{id}#moving"))).map(theme::tile_tint),
+            None => Some(theme::tile_tint(theme::avatar_color(uid))),
+        }
+    }
+
+    /// A picture that moves only now and then (a profile picture, a server's icon): its first
+    /// frame, or while `moving`, the frame for now (its frames decoded when first needed).
+    fn picture(&mut self, ctx: &egui::Context, key: &str, bytes: Option<Arc<Vec<u8>>>, moving: bool) -> Option<egui::TextureId> {
+        let moves = match (&bytes, self.ui.moves.get(key)) {
+            (_, Some(m)) => *m,
+            (Some(b), None) => {
+                let m = crate::images::is_animated(b);
+                self.ui.moves.insert(key.to_string(), m);
+                m
+            }
+            (None, None) => false,
+        };
+        if moving && moves && self.ui.anim_on {
+            let t = self.ui.anim_clock;
+            if let Some((tex, _, next)) = self.images.get(ctx, &format!("{key}#moving"), bytes.clone(), 256).frame(t) {
+                if let Some(n) = next {
+                    ctx.request_repaint_after(n);
+                }
+                return Some(tex);
+            }
+        }
+        self.images.get_still(ctx, key, bytes, 256).frame(0.0).map(|f| f.0)
     }
 
     /// A server emoji's picture (animated ones play), once downloaded.
@@ -818,28 +943,39 @@ impl IngleApp {
             ingle_engine::files::FileState::Ready(b) => Some(b),
             _ => None,
         };
-        let t = ctx.input(|i| i.time);
+        // (By the moving pictures' clock: they wait while Ingle's in the background.)
+        let t = self.ui.anim_clock;
         let (tex, _, next) = self.images.get(ctx, &format!("emoji:{id}"), bytes, 128).frame(t)?;
-        if let Some(n) = next {
+        if let (Some(n), true) = (next, self.ui.anim_on) {
             ctx.request_repaint_after(n);
         }
         Some(tex)
     }
 
-    /// A server's icon, once downloaded.
+    /// A server's icon, once downloaded (still).
     pub fn server_icon(&mut self, ctx: &egui::Context, s: &ServerView) -> Option<egui::TextureId> {
+        self.server_icon_moving(ctx, s, false)
+    }
+
+    /// A server's icon, moving if it's a moving one and `moving` (pointed at, like Discord's).
+    pub fn server_icon_moving(&mut self, ctx: &egui::Context, s: &ServerView, moving: bool) -> Option<egui::TextureId> {
         let id = s.info.icon.clone()?;
         let bytes = match self.engine.file(&s.key, &id) {
             ingle_engine::files::FileState::Ready(b) => Some(b),
             _ => None,
         };
-        self.images.get(ctx, &format!("icon:{id}"), bytes, 256).frame(0.0).map(|f| f.0)
+        self.picture(ctx, &format!("icon:{id}"), bytes, moving)
     }
 
     pub fn my_face(&mut self, ctx: &egui::Context) -> Option<egui::TextureId> {
+        self.my_face_moving(ctx, false)
+    }
+
+    /// My profile picture, moving while `moving` (if it's a moving one).
+    pub fn my_face_moving(&mut self, ctx: &egui::Context, moving: bool) -> Option<egui::TextureId> {
         let bytes = self.engine.my_avatar()?;
         let key = format!("av:me:{}", ingle_proto::release::sha256_hex(&bytes));
-        self.images.get(ctx, &key, Some(Arc::new(bytes)), 256).frame(0.0).map(|f| f.0)
+        self.picture(ctx, &key, Some(Arc::new(bytes)), moving)
     }
 
     /// Upload new video frames to textures; returns the texture for a tile.
@@ -879,6 +1015,17 @@ impl eframe::App for IngleApp {
         crate::watchdog::step("starting a frame");
         let engine = self.engine.clone();
         let mut acts: Vec<Act> = Vec::new();
+        // The moving pictures' clock: it runs only while the window's in front.
+        {
+            let now = ctx.input(|i| i.time);
+            let front = ctx.input(|i| i.viewport().focused.unwrap_or(true) && !i.viewport().minimized.unwrap_or(false));
+            if let (Some(last), true) = (self.ui.anim_last, front) {
+                self.ui.anim_clock += (now - last).clamp(0.0, 0.25);
+            }
+            self.ui.anim_last = Some(now);
+            self.ui.anim_on = front;
+            self.ui.play_gifs = engine.state().settings.play_gifs.clone();
+        }
         for e in ingle_engine::errors::take() {
             engine.shared.state.write().toast(e, true);
         }
@@ -984,8 +1131,9 @@ impl eframe::App for IngleApp {
                     }
                 }
                 PickFor::Attach(key, ch) => {
+                    let limit = engine.state().server(&key).map(crate::images::upload_limit).unwrap_or(ingle_proto::control::OLD_MAX_ATTACHMENT_BYTES);
                     for (name, bytes) in files {
-                        crate::chat::add_attachment(&mut self.ui.attach, &(key.clone(), ch), name, bytes, &mut acts);
+                        crate::chat::add_attachment(&mut self.ui.attach, &(key.clone(), ch), name, bytes, limit, ctx, &mut acts);
                     }
                 }
                 PickFor::Sound(key) => {
@@ -993,11 +1141,29 @@ impl eframe::App for IngleApp {
                         ed.picked(files.into_iter().next(), ctx);
                     }
                 }
+                PickFor::ServerGif(key) => {
+                    for (name, bytes) in files {
+                        acts.push(Act::AddServerGif { key: key.clone(), name: crate::server_gifs::name_from(&name), bytes });
+                    }
+                }
                 PickFor::AddonFile => {
                     if let Some((_, bytes)) = files.into_iter().next() {
                         self.plugins.try_addon(bytes);
                     }
                 }
+            }
+        }
+        // Pictures made smaller to fit (see `chat::add_attachment`).
+        for (draft, name, r, was) in crate::images::take_shrunk() {
+            match r {
+                Ok((bytes, ext)) => {
+                    let stem = std::path::Path::new(&name).file_stem().and_then(|s| s.to_str()).unwrap_or("image").to_string();
+                    let note = format!("Made {name} smaller to fit: {} → {}", crate::chat::human_size(was), crate::chat::human_size(bytes.len() as u64));
+                    let limit = engine.state().server(&draft.0).map(crate::images::upload_limit).unwrap_or(ingle_proto::control::OLD_MAX_ATTACHMENT_BYTES);
+                    crate::chat::add_attachment(&mut self.ui.attach, &draft, format!("{stem}.{ext}"), bytes, limit, ctx, &mut acts);
+                    acts.push(Act::Toast(note, false));
+                }
+                Err(e) => acts.push(Act::Toast(format!("{name}: {e}"), true)),
             }
         }
         // Folders chosen in a dialog (opened between frames).
@@ -1063,6 +1229,15 @@ impl eframe::App for IngleApp {
         {
             let (chip, updater) = (&mut self.update_chip, &self.updater);
             crate::titlebar::show(ctx, ingle_proto::APP_NAME, |ui, x, y| chip.title_chip(ui, updater, x, y));
+        }
+        // Voice meters: how everyone in my call sounds, eased for drawing (read before the
+        // state: it takes the call's lock, see Engine::state).
+        {
+            let style = crate::meter::Style::from_setting(&engine.state().settings.voice_meter);
+            let readings = if style == crate::meter::Style::Off { Vec::new() } else { engine.voice_meters() };
+            if self.meters.update(readings, ctx.input(|i| i.time)) {
+                ctx.request_repaint_after(Duration::from_millis(30));
+            }
         }
         crate::watchdog::step("waiting to read the shared state");
         let chimes = {
@@ -1305,6 +1480,8 @@ pub fn avatar(
 pub enum Presence {
     Online,
     Idle,
+    /// Do Not Disturb (a red dot with a line through it, like Discord's).
+    Dnd,
     Offline,
 }
 
@@ -1312,6 +1489,8 @@ impl Presence {
     pub fn of(m: &ingle_proto::control::Member) -> Presence {
         if !m.online {
             Presence::Offline
+        } else if m.dnd {
+            Presence::Dnd
         } else if m.idle {
             Presence::Idle
         } else {
@@ -1329,7 +1508,13 @@ impl Presence {
 
     /// Me, on this PC.
     pub fn mine(st: &AppState) -> Presence {
-        if st.my_idle { Presence::Idle } else { Presence::Online }
+        if st.settings.dnd {
+            Presence::Dnd
+        } else if st.my_idle {
+            Presence::Idle
+        } else {
+            Presence::Online
+        }
     }
 
     pub fn here(self) -> bool {
@@ -1340,6 +1525,7 @@ impl Presence {
         match self {
             Presence::Online => "Online",
             Presence::Idle => "Idle",
+            Presence::Dnd => "Do Not Disturb",
             Presence::Offline => "Offline",
         }
     }
@@ -1347,6 +1533,8 @@ impl Presence {
 
 /// Discord's idle yellow, the same in every skin (so the moon always reads as idle).
 pub const IDLE: Color32 = Color32::from_rgb(0xf0, 0xb2, 0x32);
+/// Discord's Do Not Disturb red, the same in every skin.
+pub const DND: Color32 = Color32::from_rgb(0xf2, 0x3f, 0x43);
 
 /// The moon that means idle, `r` across from its middle.
 pub fn moon(p: &egui::Painter, center: egui::Pos2, r: f32, bg: Color32) {
@@ -1364,6 +1552,10 @@ pub fn status_dot(p: &egui::Painter, center: egui::Pos2, presence: Presence, bg:
             p.circle_filled(center, 4.0, theme::ONLINE());
         }
         Presence::Idle => moon(p, center, 4.3, bg),
+        Presence::Dnd => {
+            p.circle_filled(center, 4.3, DND);
+            p.line_segment([center - vec2(2.3, 0.0), center + vec2(2.3, 0.0)], Stroke::new(1.6f32, bg));
+        }
         Presence::Offline => {
             p.circle_stroke(center, 3.0, Stroke::new(1.5f32, theme::DIM()));
         }
@@ -1480,7 +1672,7 @@ impl IngleApp {
             self.soundboard_popup(ctx, st, acts);
             self.addon_panels(ctx, st);
             self.dialogs(ctx, st, acts);
-            self.viewer(ctx, acts);
+            self.viewer(ctx, st, acts);
             self.incoming_call_card(ctx, st, acts);
             self.handshake_cards(ctx, st, acts);
             self.toasts(ctx, st);
@@ -1491,7 +1683,7 @@ impl IngleApp {
             self.soundboard_popup(ctx, st, acts);
             self.addon_panels(ctx, st);
             self.dialogs(ctx, st, acts);
-            self.viewer(ctx, acts);
+            self.viewer(ctx, st, acts);
             self.avatar_editor(ctx, acts);
             self.drop_files(ctx, st, acts);
             self.incoming_call_card(ctx, st, acts);
@@ -1565,7 +1757,7 @@ impl IngleApp {
         self.profile_card(ctx, st, acts);
         self.addon_panels(ctx, st);
         self.dialogs(ctx, st, acts);
-        self.viewer(ctx, acts);
+        self.viewer(ctx, st, acts);
         self.avatar_editor(ctx, acts);
         self.drop_files(ctx, st, acts);
         self.incoming_call_card(ctx, st, acts);
@@ -1624,7 +1816,8 @@ impl IngleApp {
                 let role = member.map(|m| m.role).unwrap_or(Role::Member);
                 let presence = if uid == st.my_uid { Presence::mine(st) } else { member.map(Presence::of).unwrap_or(Presence::Offline) };
                 let (r, _) = ui.allocate_exact_size(vec2(72.0, 72.0), Sense::hover());
-                let face = self.face(ui.ctx(), s, &uid);
+                // (Their profile's open: a moving picture moves.)
+                let face = self.face_moving(ui.ctx(), s, &uid, true);
                 avatar(ui.painter(), r.center(), 34.0, &uid, &name, false, theme::SIDE(), face);
                 status_dot(ui.painter(), r.center() + vec2(25.0, 25.0), presence, theme::SIDE());
                 ui.add_space(6.0);
@@ -1652,6 +1845,9 @@ impl IngleApp {
                 }
                 if presence == Presence::Idle {
                     ui.label(RichText::new("Idle").size(12.5).color(IDLE)).on_hover_text("Away from the keyboard for a while (or they said so)");
+                }
+                if presence == Presence::Dnd {
+                    ui.label(RichText::new("Do Not Disturb").size(12.5).color(DND)).on_hover_text("They don't hear message sounds, and calls don't ring for them");
                 }
                 ui.add_space(8.0);
                 ui.separator();
@@ -1749,11 +1945,8 @@ impl IngleApp {
         chose |= self.make_sure_menu(ui, st, s, uid, acts);
         if !me {
             ui.separator();
-            ui.label(RichText::new("User volume").size(12.0).color(theme::MUTED()));
-            let mut v = st.user_volumes.get(uid).copied().unwrap_or(1.0) * 100.0;
-            if ui.add(egui::Slider::new(&mut v, 0.0..=200.0).suffix("%")).changed() {
-                acts.push(Act::Volume { uid: uid.to_string(), volume: v / 100.0 });
-            }
+            volume_items(ui, st, s, uid, acts);
+            chose |= self.ringtone_menu(ui, st, uid, acts);
             // In my call: their soundboard sounds can be muted, for me.
             let in_my_call = st.call.as_ref().is_some_and(|c| c.server_key == s.key && s.voice_in(c.channel_id).iter().any(|p| p.user_id == uid));
             if in_my_call {
@@ -1843,7 +2036,7 @@ impl IngleApp {
                 _ => None,
             };
             if let Some((name, bytes)) = item {
-                crate::chat::add_attachment(&mut self.ui.attach, &draft, name, bytes, acts);
+                crate::chat::add_attachment(&mut self.ui.attach, &draft, name, bytes, crate::images::upload_limit(&server), ctx, acts);
             }
         }
     }
@@ -1954,7 +2147,8 @@ impl IngleApp {
                 } else {
                     theme::ELEV()
                 };
-                let icon = self.server_icon(ui.ctx(), s);
+                // (A moving icon moves while it's pointed at, like Discord's.)
+                let icon = self.server_icon_moving(ui.ctx(), s, hovered);
                 // A server's own icon is drawn as it is (see-through parts stay see-through, like
                 // Discord); the colored tile is only behind initials. The pill on the left shows
                 // which server is open.
@@ -2006,7 +2200,8 @@ impl IngleApp {
                 }
                 let name = s.name.clone();
                 let key = s.key.clone();
-                let admin = s.can(perm::MANAGE_SERVER) || s.can(perm::MANAGE_ROLES);
+                // (Server settings: for running the server, its roles, or its emoji and sounds.)
+                let admin = s.can(perm::MANAGE_SERVER) || s.can(perm::MANAGE_ROLES) || s.can(perm::MANAGE_EMOJI);
                 let server_muted = st.muted_servers.contains(&s.key);
                 let resp = resp.on_hover_text(&name);
                 resp.context_menu(|ui| {
@@ -2083,8 +2278,14 @@ impl IngleApp {
                             self.ui.dialog = Some(Dialog::Invite { key: s.key.clone() });
                         }
                     });
-                    if title.clicked() && (s.can(perm::MANAGE_SERVER) || s.can(perm::MANAGE_ROLES)) {
-                        let tab = if s.can(perm::MANAGE_SERVER) { 0 } else { 1 };
+                    if title.clicked() && (s.can(perm::MANAGE_SERVER) || s.can(perm::MANAGE_ROLES) || s.can(perm::MANAGE_EMOJI)) {
+                        let tab = if s.can(perm::MANAGE_SERVER) {
+                            0
+                        } else if s.can(perm::MANAGE_ROLES) {
+                            1
+                        } else {
+                            2
+                        };
                         self.ui.dialog = Some(Dialog::ServerSettings { key: s.key.clone(), name: s.name.clone(), tab });
                     }
                 });
@@ -2304,6 +2505,9 @@ impl IngleApp {
                     // under the channel's name (past the speaker), with their name beside it.
                     if kind == ChannelKind::Voice {
                         let speaking: HashSet<SessionId> = st.call.as_ref().map(|c| c.speaking.clone()).unwrap_or_default();
+                        // Voice meters, for the people in my call (only theirs reach me).
+                        let in_my_call = st.call.as_ref().is_some_and(|cl| cl.server_key == s.key && cl.channel_id == c.id);
+                        let style = if in_my_call { crate::meter::Style::from_setting(&st.settings.voice_meter) } else { crate::meter::Style::Off };
                         for p in s.voice_in(c.id) {
                             let name = s.member_name(&p.user_id);
                             let (r, _) = ui.allocate_exact_size(vec2(ui.available_width() - 8.0, VOICE_MEMBER_H), Sense::hover());
@@ -2320,7 +2524,12 @@ impl IngleApp {
                             }
                             // (A hair in from the name's first letter, as in Discord.)
                             let center = pos2(indent + 13.5, r.center().y);
-                            let face = self.face(ui.ctx(), s, &uid);
+                            // (A moving picture moves while they talk, or while it's pointed at.)
+                            let face = self.face_moving(ui.ctx(), s, &uid, speaking.contains(&p.session) || pointer_in);
+                            let track = if style == crate::meter::Style::Off { None } else { self.meters.get(p.session) };
+                            if let (crate::meter::Style::Glow, Some(t)) = (style, track) {
+                                crate::meter::halo(ui.painter(), center, 12.0, t);
+                            }
                             avatar(ui.painter(), center, 12.0, &uid, &name, speaking.contains(&p.session), theme::SIDE(), face);
                             let col = if speaking.contains(&p.session) || pointer_in { theme::TEXT() } else { theme::MUTED() };
                             let mut x = r.right() - 10.0;
@@ -2348,6 +2557,12 @@ impl IngleApp {
                                 icons::mic(ui.painter(), Rect::from_center_size(pos2(x - 8.0, r.center().y), vec2(16.0, 16.0)), theme::DIM(), true);
                                 x -= 20.0;
                             }
+                            // Their voice meter (Glow's is the light around their picture).
+                            if !matches!(style, crate::meter::Style::Off | crate::meter::Style::Glow) {
+                                let m = Rect::from_min_max(pos2(x - 30.0, r.center().y - 7.0), pos2(x - 2.0, r.center().y + 7.0));
+                                crate::meter::paint(ui.painter(), m, style, track, false);
+                                x -= 34.0;
+                            }
                             // Hovering someone: a button to message them (like the chat bubble on a
                             // voice channel).
                             let can_dm = uid != st.my_uid && s.has(ingle_proto::control::DMS_FEATURE) && s.status.is_connected();
@@ -2355,7 +2570,7 @@ impl IngleApp {
                             let name_x = indent + 36.0;
                             let end = if can_dm && pointer_in { x - 24.0 } else { x };
                             // (Room for the shield, when there is one.)
-                            let shield_room = if uid != st.my_uid && st.trust(&uid, &name) != ingle_engine::state::Trust::Unknown { 16.0 } else { 0.0 };
+                            let shield_room = if crate::trust::shown(st, &uid, &name).is_some() { 16.0 } else { 0.0 };
                             let name_rect = crate::emoji::paint_text(
                                 ui.painter(),
                                 pos2(name_x, r.center().y),
@@ -2448,6 +2663,8 @@ impl IngleApp {
         // (A voice channel's name, or "@" and who you're calling.)
         let channel_name = st.call_place(&call.server_key, call.channel_id);
         let dm_call = st.is_dm_call(&call.server_key, call.channel_id);
+        // My voice meter, across the panel under "Voice Connected": it moves with what I send.
+        let style = crate::meter::Style::from_setting(&st.settings.voice_meter);
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
             icons::signal(ui.painter(), r, theme::ONLINE());
@@ -2455,7 +2672,8 @@ impl IngleApp {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 let label = ui.add(egui::Label::new(RichText::new("Voice Connected").font(theme::bold_font(13.5)).color(theme::ONLINE())).sense(Sense::click()));
                 let srv = server.map(|s| s.name.clone()).unwrap_or_default();
-                let w = ui.available_width();
+                // (Leaving room for the Disconnect button.)
+                let w = (ui.available_width() - 40.0).max(40.0);
                 crate::emoji::label_line(ui, &format!("{channel_name} · {} ms", call.stats.rtt_ms), theme::font(12.0), theme::MUTED(), w, &mut |_| None)
                     .on_hover_text(format!("{channel_name} / {srv}"));
                 if label.clicked() {
@@ -2475,6 +2693,36 @@ impl IngleApp {
                 }
             });
         });
+        if style != crate::meter::Style::Off {
+            ui.add_space(3.0);
+            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), METER_STRIP_H), Sense::click());
+            crate::meter::paint(ui.painter(), r.shrink2(vec2(2.0, 0.0)), style, self.meters.get(call.session), true);
+            let tip = format!(
+                "Your voice meter ({}): it moves with everything you send: your voice, your screen's sound and your soundboard sounds. \
+                 Right-click to change its look or turn voice meters off.",
+                style.name()
+            );
+            let resp = resp.on_hover_text(tip);
+            if resp.clicked() {
+                self.ui.dialog = Some(Dialog::Settings { tab: 1 });
+            }
+            resp.context_menu(|ui| {
+                ui.label(RichText::new("VOICE METERS").font(theme::bold_font(11.0)).color(theme::DIM()));
+                for s in crate::meter::Style::LOOKS {
+                    if ui.add(egui::Button::selectable(s == style, s.name())).on_hover_text(s.about()).clicked() {
+                        acts.push(Act::Settings(ingle_engine::config::Settings { voice_meter: s.setting().to_string(), ..st.settings.clone() }));
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                if ui.button("Turn off voice meters").on_hover_text("Turn them back on in Settings → Voice & Video").clicked() {
+                    let off = crate::meter::Style::off_setting(&st.settings.voice_meter);
+                    acts.push(Act::Settings(ingle_engine::config::Settings { voice_meter: off, ..st.settings.clone() }));
+                    acts.push(Act::Toast("Voice meters are off. Turn them back on in Settings → Voice & Video.".into(), false));
+                    ui.close();
+                }
+            });
+        }
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             let w = (ui.available_width() - 3.0 * ui.spacing().item_spacing.x) / 4.0;
@@ -2550,7 +2798,7 @@ impl IngleApp {
             let me = Presence::mine(st);
             let (r, _) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());
             let speaking = st.call.as_ref().map(|c| c.speaking.contains(&c.session)).unwrap_or(false);
-            let face = self.my_face(ui.ctx());
+            let face = self.my_face_moving(ui.ctx(), speaking || ui.rect_contains_pointer(r));
             avatar(ui.painter(), r.center(), 16.0, &st.my_uid, &st.my_name, speaking, theme::SIDE_DARK(), face);
             status_dot(ui.painter(), r.right_bottom() - vec2(3.0, 3.0), me, theme::SIDE_DARK());
             let names = ui
@@ -2568,13 +2816,20 @@ impl IngleApp {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
             egui::Popup::menu(&mine).align(egui::RectAlign::TOP_START).width(300.0).show(|ui| {
-                let by_hand = st.settings.idle_by_hand;
-                if status_choice(ui, Presence::Online, !by_hand, "Idle by itself after 5 minutes away") {
+                let (by_hand, dnd) = (st.settings.idle_by_hand, st.settings.dnd);
+                if status_choice(ui, Presence::Online, !by_hand && !dnd, "Idle by itself after 5 minutes away") {
+                    acts.push(Act::SetDnd(false));
                     acts.push(Act::SetIdleByHand(false));
                     ui.close();
                 }
-                if status_choice(ui, Presence::Idle, by_hand, "Until you set it back") {
+                if status_choice(ui, Presence::Idle, by_hand && !dnd, "Until you set it back") {
+                    acts.push(Act::SetDnd(false));
                     acts.push(Act::SetIdleByHand(true));
+                    ui.close();
+                }
+                if status_choice(ui, Presence::Dnd, dnd, "No message sounds, and calls don't ring") {
+                    acts.push(Act::SetIdleByHand(false));
+                    acts.push(Act::SetDnd(true));
                     ui.close();
                 }
             });
@@ -2654,7 +2909,7 @@ impl IngleApp {
                     }
                     let alpha = if online { 1.0 } else { 0.45 };
                     let c = pos2(r.left() + 22.0, r.center().y);
-                    let face = self.face(ui.ctx(), s, &m.user_id);
+                    let face = self.face_moving(ui.ctx(), s, &m.user_id, resp.hovered());
                     avatar(ui.painter(), c, 16.0, &m.user_id, &m.name, false, theme::SIDE(), face);
                     if online {
                         let presence = if m.user_id == st.my_uid { Presence::mine(st) } else { Presence::of(m) };
@@ -2687,9 +2942,8 @@ impl IngleApp {
                     let key = s.key.clone();
                     let their_roles: Vec<String> = s.roles_of(&uid).iter().map(|r| r.name.clone()).collect();
                     let mut hover = name.clone();
-                    let trust = st.trust(&uid, &name);
-                    if !me && trust != ingle_engine::state::Trust::Unknown {
-                        hover.push_str(&format!("\n{}", crate::trust::meaning(st, &trust, &name)));
+                    if let Some((_, what)) = crate::trust::shown(st, &uid, &name) {
+                        hover.push_str(&format!("\n{what}"));
                     }
                     hover.push_str(&format!("\nSafety code: {}", ingle_proto::crypto::safety_code(&uid)));
                     if !their_roles.is_empty() {
@@ -2706,6 +2960,12 @@ impl IngleApp {
                         }
                         crate::calls::call_item(ui, st, &uid, Some(&key), acts);
                         self.make_sure_menu(ui, st, s, &uid, acts);
+                        if !me && !s.is_bot(&uid) {
+                            ui.separator();
+                            volume_items(ui, st, s, &uid, acts);
+                            self.ringtone_menu(ui, st, &uid, acts);
+                            ui.separator();
+                        }
                         person_menu(ui, st, &uid, acts);
                         if ui.button("Copy safety code").clicked() {
                             acts.push(Act::Copy(ingle_proto::crypto::safety_code(&uid)));
@@ -2994,11 +3254,16 @@ pub(crate) fn moderate(st: &AppState, s: &ServerView, uid: &str) -> (bool, bool)
 /// How tall the voice panel is: taller while it offers to turn the camera or screen share back
 /// on after a dropped call.
 pub(crate) fn voice_panel_height(st: &AppState, call: &ingle_engine::state::CallView) -> f32 {
-    match st.resume_offer.as_ref().filter(|o| o.server_key == call.server_key && o.channel_id == call.channel_id) {
+    let base = match st.resume_offer.as_ref().filter(|o| o.server_key == call.server_key && o.channel_id == call.channel_id) {
         Some(_) => 168.0,
         None => 86.0,
-    }
+    };
+    // (And the voice meter across it.)
+    if crate::meter::Style::from_setting(&st.settings.voice_meter) == crate::meter::Style::Off { base } else { base + METER_STRIP_H + 3.0 }
 }
+
+/// How tall the voice meter across the voice panel is.
+const METER_STRIP_H: f32 = 18.0;
 
 /// Friend and block choices for someone (right-click menus), like Discord's.
 /// The BOT tag after a bot's name, like Discord's.
@@ -3022,6 +3287,22 @@ pub(crate) fn paint_bot_tag(ui: &egui::Ui, left: egui::Pos2) {
 /// Whether someone is a bot in any of my servers (bots have no conversations, calls or friends).
 pub(crate) fn is_bot(st: &AppState, uid: &str) -> bool {
     st.servers.iter().any(|s| s.is_bot(uid))
+}
+
+/// How loud someone is for me: their voice, and while they share their screen, its sound
+/// (in the menus from right-clicking them).
+pub(crate) fn volume_items(ui: &mut egui::Ui, st: &AppState, s: &ServerView, uid: &str, acts: &mut Vec<Act>) {
+    let name = s.member_name(uid);
+    ui.label(RichText::new(format!("{name} volume")).size(12.0).color(theme::MUTED()));
+    let mut v = st.user_volumes.get(uid).copied().unwrap_or(1.0) * 100.0;
+    if ui.add(egui::Slider::new(&mut v, 0.0..=200.0).suffix("%")).changed() {
+        acts.push(Act::Volume { uid: uid.to_string(), volume: v / 100.0 });
+    }
+    if let Some(p) = s.voice.values().find(|p| p.user_id == uid && p.tracks.iter().any(|t| t.id == ingle_proto::media::track::SCREEN)) {
+        let has_sound = p.tracks.iter().any(|t| t.id == ingle_proto::media::track::SCREEN_AUDIO);
+        let volume = st.stream_volumes.get(uid).copied().unwrap_or(1.0);
+        crate::stage::stream_volume_slider(ui, uid, has_sound, volume, acts);
+    }
 }
 
 pub(crate) fn person_menu(ui: &mut egui::Ui, st: &AppState, uid: &str, acts: &mut Vec<Act>) {

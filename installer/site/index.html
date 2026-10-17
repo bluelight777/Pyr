@@ -131,11 +131,12 @@ em.serif, .serif { font-family: var(--serif); font-style: italic; font-weight: 4
     radial-gradient(900px 520px at 78% 58%, rgba(255, 110, 45, .22), transparent 65%),
     radial-gradient(700px 420px at 10% 0%, rgba(255, 170, 90, .10), transparent 60%),
     radial-gradient(1200px 500px at 50% 115%, rgba(255, 90, 40, .28), transparent 70%),
-    linear-gradient(180deg, #0d0a08 0%, var(--bg) 60%); }
+    linear-gradient(180deg, rgba(13, 10, 8, .7) 0%, rgba(16, 12, 10, 0) 60%); }
 .hero::after { content: ""; position: absolute; z-index: -1; inset: 0; opacity: .5; pointer-events: none; mix-blend-mode: overlay;
   -webkit-mask-image: linear-gradient(180deg, #000 60%, transparent); mask-image: linear-gradient(180deg, #000 60%, transparent);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .09 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
-#embers { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; }
+/* A campfire's sparks behind the whole page (see the script at the end). */
+#embers { position: fixed; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; }
 .hero-grid { display: grid; grid-template-columns: minmax(0, .96fr) minmax(0, 1.14fr); gap: 44px; align-items: center; }
 .pill { display: inline-flex; align-items: center; gap: 10px; padding: 6px 14px 6px 6px; border-radius: 999px; text-decoration: none;
         background: rgba(255, 236, 220, .05); border: 1px solid var(--line-2); color: var(--body); font-size: 14px; font-weight: 500; transition: border-color .2s, background .2s; }
@@ -356,6 +357,7 @@ footer { margin-top: 110px; border-top: 1px solid var(--line); padding: 54px 0 6
 .foot a:hover { color: var(--text); }
 .foot .brand { margin-bottom: 14px; }
 .legal { margin-top: 40px; display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 12.5px; }
+.disclaimer { margin: 12px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--dim); }
 
 /* install dialog */
 dialog { width: min(760px, calc(100vw - 24px)); max-height: calc(100vh - 32px); padding: 0; border: 1px solid var(--line-2); border-radius: 24px; color: var(--body);
@@ -487,8 +489,8 @@ dialog[open] { animation: pop .35s var(--ease); }
 
 
 <main id="main">
+<canvas id="embers" aria-hidden="true"></canvas>
 <section class="hero" aria-labelledby="hero-title">
-  <canvas id="embers" aria-hidden="true"></canvas>
   <div class="wrap">
     <div class="invite" id="invite" role="region" aria-label="Your invite">
       <div class="invite-card">
@@ -697,15 +699,15 @@ dialog[open] { animation: pop .35s var(--ease); }
     </div>
 
     <div class="anchor">
-      <div class="card" data-reveal>
-        <p style="margin:0 0 10px;color:var(--dim);font-size:13px;font-weight:650;letter-spacing:.1em;text-transform:uppercase">Streaming in 1080p60 on Discord</p>
-        <div class="price">$9.99<small> a month, per person (Nitro)</small></div>
-        <p>Or a server with 7 boosts. Discord's free plan streams at 720p30.</p>
-      </div>
       <div class="card ours" data-reveal>
         <p style="margin:0 0 10px;color:var(--ember-2);font-size:13px;font-weight:650;letter-spacing:.1em;text-transform:uppercase">Streaming in 1080p60 on Ingle</p>
         <div class="price">$0<small> for everyone</small></div>
         <p>Ingle is free. Your group's server costs about $4–6 a month in all, billed by your host, or nothing on a PC you leave on.</p>
+      </div>
+      <div class="card" data-reveal>
+        <p style="margin:0 0 10px;color:var(--dim);font-size:13px;font-weight:650;letter-spacing:.1em;text-transform:uppercase">Streaming in 1080p60 on Discord</p>
+        <div class="price">$9.99<small> a month, per person (Nitro)</small></div>
+        <p>Or a server with 7 boosts. Discord's free plan streams at 720p30.</p>
       </div>
     </div>
 
@@ -896,6 +898,7 @@ dialog[open] { animation: pop .35s var(--ease); }
       <span>Ingle is open source (MIT or Apache 2.0)</span>
       <span>This page has no trackers and sets no cookies</span>
     </div>
+    <p class="disclaimer">Ingle is not affiliated with, endorsed by, or sponsored by Discord Inc. Discord and Nitro are trademarks of Discord Inc.</p>
   </div>
 </footer>
 
@@ -1088,61 +1091,142 @@ dialog[open] { animation: pop .35s var(--ease); }
 
   $("#year").textContent = new Date().getFullYear();
 
-  // ---- embers rising behind the hero
+  // ---- a campfire's sparks, behind the whole page. The fire is just below the screen (its
+  // light flickers at the bottom edge) until the campfire near the end of the page comes into
+  // view: then the sparks come out of it, and the light below fades. Sparks rise on the fire's
+  // heat and drift on a slow current of air, cooling from white-gold to orange to red as they
+  // go, so most die out low and only a few make it up high. Each has a distance: near ones are
+  // bigger, brighter and quicker, and when the page scrolls they move with it more than the
+  // far ones do (they're in the air behind it).
   var cv = $("#embers");
   if (!cv || reduce || !cv.getContext) return;
-  var ctx = cv.getContext("2d"), W = 0, H = 0, dpr = 1, parts = [], running = false, seen = true, raf = 0, last = 0;
-  var sprite = doc.createElement("canvas"); sprite.width = sprite.height = 32;
-  var sg = sprite.getContext("2d"), g = sg.createRadialGradient(16, 16, 0, 16, 16, 16);
-  g.addColorStop(0, "rgba(255,236,190,1)"); g.addColorStop(.25, "rgba(255,170,80,.9)"); g.addColorStop(.6, "rgba(255,100,40,.25)"); g.addColorStop(1, "rgba(255,80,30,0)");
-  sg.fillStyle = g; sg.fillRect(0, 0, 32, 32);
+  var ctx = cv.getContext("2d"), W = 0, H = 0, dpr = 1, parts = [], running = false, raf = 0, last = 0, clock = 0;
+  var fire = $(".final .fire"), sy = window.scrollY || 0;
+  // A spark at each heat, hottest first.
+  var heats = [[255, 246, 220], [255, 214, 140], [255, 168, 80], [250, 118, 48], [214, 72, 32], [150, 44, 20]];
+  var sprites = heats.map(function (c) {
+    var sp = doc.createElement("canvas"); sp.width = sp.height = 32;
+    var x = sp.getContext("2d"), gr = x.createRadialGradient(16, 16, 0, 16, 16, 16);
+    gr.addColorStop(0, "rgba(255," + Math.min(255, c[1] + 30) + "," + Math.min(255, c[2] + 70) + ",1)");
+    gr.addColorStop(0.2, "rgba(" + c + ",.95)");
+    gr.addColorStop(0.5, "rgba(" + c + ",.3)");
+    gr.addColorStop(1, "rgba(" + c + ",0)");
+    x.fillStyle = gr; x.fillRect(0, 0, 32, 32);
+    return sp;
+  });
   function size() {
     dpr = Math.min(2, window.devicePixelRatio || 1);
     W = cv.clientWidth; H = cv.clientHeight;
     cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
-  function spawn(anywhere) {
-    var x = W * (0.45 + (Math.random() - 0.5) * 0.9 + (Math.random() - 0.5) * 0.3);
-    return { x: x, y: anywhere ? Math.random() * H : H + 10, vx: (Math.random() - 0.5) * 0.25, vy: -(0.35 + Math.random() * 0.95),
-             s: 3 + Math.random() * 9, t: 0, life: 260 + Math.random() * 420, ph: Math.random() * 6.28, sw: 0.4 + Math.random() * 0.9 };
+  // The campfire, while it's on screen: where its flames are, and how much of it shows (0 to 1).
+  function campfire() {
+    if (!fire) return null;
+    var r = fire.getBoundingClientRect();
+    var shown = (Math.min(r.bottom, H) - Math.max(r.top, 0)) / r.height;
+    if (shown <= 0) return null;
+    return { x: r.left + r.width / 2, y: r.top + r.height * 0.4, w: r.width * 0.34, shown: Math.min(1, shown) };
+  }
+  // A new spark: from the campfire when it's in view, otherwise from the fire below the screen.
+  // `scatter`: the page just opened (or jumped): it's already somewhere on its way up.
+  function spawn(scatter) {
+    var z = 0.3 + Math.random() * 0.7, c = campfire();
+    var p = { z: z, t: 0, life: (300 + Math.random() * 600) * (0.75 + 0.4 * z), heat: 0.8 + Math.random() * 0.2,
+              s: (4.5 + Math.random() * 8) * (0.55 + 0.7 * z), ph: Math.random() * 6.28, flare: 0 };
+    if (c && !scatter && Math.random() < c.shown) {
+      p.x = c.x + (Math.random() - 0.5) * c.w; p.y = c.y + Math.random() * 10;
+      p.vx = (Math.random() - 0.5) * 1.1; p.vy = -(1.2 + Math.random() * 1.2);
+    } else {
+      p.x = W * (0.5 + (Math.random() - 0.5) * 1.15); p.y = H + 6 + Math.random() * 24;
+      p.vx = (Math.random() - 0.5) * 0.3; p.vy = -(0.8 + Math.random() * 1.0);
+    }
+    if (scatter) {
+      // Fewer the higher up, as if they'd been rising a while.
+      var up = Math.pow(Math.random(), 1.5);
+      p.y = H - up * H * 1.05; p.t = Math.min(p.life * 0.85, up * p.life * 0.9);
+    }
+    return p;
+  }
+  function move(p, dt) {
+    p.t += dt;
+    var u = p.t / p.life;
+    // Lifted while hot, less as it cools (the air slows it); never quite falling.
+    p.vy = (p.vy - (0.0016 + 0.012 * Math.max(0, 1 - u * 1.2)) * dt) * Math.pow(0.992, dt);
+    p.vx *= Math.pow(0.985, dt);
+    // The air: a slow, wide current, and the spark's own flutter.
+    var air = Math.sin(p.y * 0.0042 + clock * 0.00035) * 0.22 + Math.sin(p.x * 0.0023 - clock * 0.00027 + p.z * 3) * 0.12;
+    p.ph += (0.03 + 0.03 * p.z) * dt;
+    var pace = 0.6 + 0.4 * p.z;
+    p.x += (p.vx + air + Math.sin(p.ph) * 0.22 * p.z) * dt * pace;
+    p.y += p.vy * dt * pace;
+    // Now and then one flares up for a moment.
+    if (p.flare > 0) p.flare = Math.max(0, p.flare - 0.07 * dt);
+    else if (Math.random() < 0.0015 * dt) p.flare = 1;
+  }
+  function draw(p) {
+    var u = p.t / p.life, heat = Math.max(0, p.heat * (1 - u * 0.95));
+    var fade = u < 0.06 ? u / 0.06 : u > 0.72 ? Math.max(0, 1 - (u - 0.72) / 0.28) : 1;
+    var i = Math.min(sprites.length - 1, Math.floor((1 - heat) * sprites.length));
+    var s = p.s * (0.7 + 0.3 * heat) * (1 + p.flare * 0.4);
+    ctx.globalAlpha = Math.min(1, fade * (0.45 + 0.55 * p.z) * (0.6 + 0.4 * heat) * (1 + p.flare * 0.8));
+    ctx.drawImage(sprites[i], p.x - s / 2, p.y - s / 2, s, s);
+  }
+  // The fire below the screen: its light on the bottom edge, flickering (fading as the campfire
+  // comes into view).
+  function firelight(strength) {
+    if (strength < 0.02) return;
+    var f = strength * (0.86 + 0.08 * Math.sin(clock * 0.0047) + 0.06 * Math.sin(clock * 0.0113 + 1.3));
+    var cy = H * 1.3, r = Math.max(W * 0.7, H * 0.8);
+    var gr = ctx.createRadialGradient(W / 2, cy, 0, W / 2, cy, r);
+    gr.addColorStop(0, "rgba(255,110,45," + (0.26 * f) + ")");
+    gr.addColorStop(0.5, "rgba(255,84,32," + (0.08 * f) + ")");
+    gr.addColorStop(1, "rgba(255,70,25,0)");
+    ctx.globalAlpha = 1; ctx.fillStyle = gr; ctx.fillRect(0, cy - r, W, r);
   }
   // One loop only: a frame asked for before the page was hidden still comes when it's shown
-  // again, so stopping cancels it (otherwise every hide and show added a loop, and the embers
+  // again, so stopping cancels it (otherwise every hide and show added a loop, and the sparks
   // sped up). They move by the time that passed (at most 50 ms of it, after a pause), not by
   // the frame, so they rise as fast on a 144 Hz screen as on a 60 Hz one.
   function frame(now) {
     raf = 0;
     if (!running) return;
     var dt = last ? Math.min(50, Math.max(0, now - last)) / 16.667 : 1;
-    last = now;
+    last = now; clock += dt * 16.667;
     ctx.clearRect(0, 0, W, H);
+    ctx.globalCompositeOperation = "source-over";
+    var c = campfire();
+    firelight(1 - (c ? c.shown : 0));
     ctx.globalCompositeOperation = "lighter";
     for (var k = 0; k < parts.length; k++) {
       var p = parts[k];
-      p.t += dt; p.ph += 0.018 * dt;
-      p.x += (p.vx + Math.sin(p.ph) * 0.28 * p.sw) * dt; p.y += p.vy * dt;
-      var u = p.t / p.life, a = u < 0.12 ? u / 0.12 : 1 - (u - 0.12) / 0.88;
-      if (u >= 1 || p.y < -20) { parts[k] = spawn(false); continue; }
-      ctx.globalAlpha = Math.max(0, a) * 0.85;
-      ctx.drawImage(sprite, p.x - p.s / 2, p.y - p.s / 2, p.s, p.s);
+      move(p, dt);
+      if (p.t >= p.life || p.y < -30 || p.y > H + 60 || p.x < -60 || p.x > W + 60) { parts[k] = spawn(false); continue; }
+      draw(p);
     }
     ctx.globalAlpha = 1;
     raf = requestAnimationFrame(frame);
   }
   function go() {
-    var want = seen && !doc.hidden;
+    var want = !doc.hidden;
     if (want && !running) { running = true; last = 0; if (!raf) raf = requestAnimationFrame(frame); }
     else if (!want && running) { running = false; if (raf) { cancelAnimationFrame(raf); raf = 0; } }
   }
-  size();
-  var n = Math.round(Math.min(70, Math.max(26, W / 22)));
-  for (var k = 0; k < n; k++) parts.push(spawn(true));
-  window.addEventListener("resize", function () { size(); });
-  doc.addEventListener("visibilitychange", go);
-  if ("IntersectionObserver" in window) {
-    new IntersectionObserver(function (es) { seen = es[0].isIntersecting; go(); }).observe($(".hero"));
+  function fill() {
+    var n = Math.round(Math.min(90, Math.max(28, W * H / 16000)));
+    parts = [];
+    for (var k = 0; k < n; k++) parts.push(spawn(true));
   }
+  size(); fill();
+  window.addEventListener("resize", function () { var before = W * H; size(); if (Math.abs(W * H - before) > before * 0.3) fill(); });
+  // Scrolling carries the sparks a little (the near ones more); a big jump (a link to further
+  // down) shows a fresh lot.
+  window.addEventListener("scroll", function () {
+    var y = window.scrollY || 0, dy = y - sy; sy = y;
+    if (Math.abs(dy) > H * 0.6) { fill(); return; }
+    for (var k = 0; k < parts.length; k++) parts[k].y -= dy * (0.12 + 0.38 * parts[k].z);
+  }, { passive: true });
+  doc.addEventListener("visibilitychange", go);
   go();
 })();
 </script>

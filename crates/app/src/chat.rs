@@ -413,6 +413,7 @@ impl IngleApp {
                 let open = bg.context_menu(|ui| self.message_menu(ui, st, s, log, acts)).is_some();
                 if !open {
                     self.ui.sel.menu = None;
+                    self.ui.menu_picture = None;
                 }
             }
             let offset = steady_scroll(&out, drawn, memo.as_ref(), &placed);
@@ -501,6 +502,35 @@ impl IngleApp {
             if ui.button(if fav { "Remove GIF from favorites" } else { "Add GIF to favorites" }).clicked() {
                 let shown = self.ui.gif_sizes.get(g);
                 self.toggle_gif_favorite(st, crate::giphy::favorite_from_link(g, shown), acts);
+                ui.close();
+            }
+        }
+        // A picture someone sent, made one of the server's GIFs (by who keeps them). (Not a GIF
+        // from GIPHY or KLIPY: their rules forbid keeping copies of their GIFs.)
+        let picked = self.ui.menu_picture.as_ref().and_then(|(id, _)| m.attachments.iter().find(|a| a.id == *id));
+        // A picture right-clicked: open it, or save it.
+        if let Some(pic) = picked {
+            if ui.button("Open picture").clicked() {
+                self.ui.viewer = Some((s.key.clone(), pic.clone()));
+                self.ui.viewer_play = ViewerPlay::default();
+                ui.close();
+            }
+            if let ingle_engine::files::FileState::Ready(b) = self.engine.file(&s.key, &pic.id) {
+                if ui.button("Save picture as…").clicked() {
+                    acts.push(Act::SaveImage { name: pic.name.clone(), bytes: b });
+                    ui.close();
+                }
+            }
+        }
+        let pic = picked.or(if m.attachments.len() == 1 { m.attachments.first() } else { None });
+        if let (Some(pic), true) = (pic, crate::server_gifs::can_manage(s)) {
+            if ui.button("Add picture to the server's GIFs").on_hover_text(format!("For everyone on {} to send from the GIF picker", s.name)).clicked() {
+                match self.engine.file(&s.key, &pic.id) {
+                    ingle_engine::files::FileState::Ready(b) => {
+                        acts.push(Act::AddServerGif { key: key.clone(), name: crate::server_gifs::name_from(&pic.name), bytes: b.to_vec() })
+                    }
+                    _ => acts.push(Act::Toast("The picture hasn't loaded yet: try again in a moment.".into(), true)),
+                }
                 ui.close();
             }
         }
@@ -669,9 +699,15 @@ impl IngleApp {
                 }
             } else {
                 let (r, pic) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::click());
-                let face = self.face(ui.ctx(), s, &m.author);
+                let face = self.face_moving(ui.ctx(), s, &m.author, pic.hovered());
                 avatar(ui.painter(), r.center(), 20.0, &m.author, &name, false, theme::MAIN(), face);
                 self.profile_toggle(&pic, &key, &m.author);
+                // Right-click: what you can do with them, as in the voice channel.
+                pic.context_menu(|ui| {
+                    if self.person_options(ui, st, s, &m.author, acts) {
+                        ui.close();
+                    }
+                });
             }
             ui.add_space(6.0);
             ui.vertical(|ui| {
@@ -681,6 +717,11 @@ impl IngleApp {
                         let col = author.map(|a| name_color(s, &m.author, a.role)).unwrap_or(theme::TEXT());
                         let named = ui.add(egui::Label::new(RichText::new(&name).font(theme::bold_font(14.5)).color(col)).sense(Sense::click()));
                         self.profile_toggle(&named, &key, &m.author);
+                        named.context_menu(|ui| {
+                            if self.person_options(ui, st, s, &m.author, acts) {
+                                ui.close();
+                            }
+                        });
                         if author.is_some_and(|a| a.bot) {
                             crate::app::bot_tag(ui);
                         }
@@ -714,16 +755,23 @@ impl IngleApp {
                         }
                     }
                     None => {
-                        let gifs = crate::giphy::gif_links(&m.content);
-                        let only_gif = self.only_gif(&m.content, &gifs);
-                        if !m.content.is_empty() && !only_gif {
+                        // The server's own GIFs it sends show as pictures (their tokens left out
+                        // of the text).
+                        let (rest, server_gifs) = crate::server_gifs::split(&m.content);
+                        let content = if server_gifs.is_empty() { m.content.clone() } else { rest };
+                        let gifs = crate::giphy::gif_links(&content);
+                        let only_gif = self.only_gif(&content, &gifs);
+                        if !content.is_empty() && !only_gif {
                             let ctx = ui.ctx().clone();
                             // (Out of `self` while drawn: the emoji lookup borrows it too.)
                             let mut sel = std::mem::take(&mut self.ui.sel);
                             let chat = (key.clone(), m.channel_id);
                             let at = markdown::Selectable { sel: &mut sel, chat: &chat, msg: m.id };
-                            markdown::show_selectable(ui, &m.content, theme::BODY(), names, &mut |id| self.custom_emoji_tex(&ctx, &key, id), at);
+                            markdown::show_selectable(ui, &content, theme::BODY(), names, &mut |id| self.custom_emoji_tex(&ctx, &key, id), at);
                             self.ui.sel = sel;
+                        }
+                        for (name, id) in &server_gifs {
+                            self.server_gif_embed(ui, s, name, id);
                         }
                         for g in &gifs {
                             self.gif_embed(ui, st, g, m.id, acts);
@@ -737,7 +785,7 @@ impl IngleApp {
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
                         for a in &m.attachments {
-                            self.attachment(ui, st, s, a, acts);
+                            self.attachment(ui, st, s, a, m.id, acts);
                         }
                     });
                 }
@@ -1292,9 +1340,7 @@ impl IngleApp {
                                 put_cursor(ui, at.start + t.chars().count());
                             }
                             None if files_ok => {
-                                if let Some(png) = crate::images::clipboard_png() {
-                                    add_attachment(&mut self.ui.attach, &draft_key, "pasted-image.png".into(), png, acts);
-                                }
+                                paste_files(self, &draft_key, crate::images::upload_limit(s), ui.ctx(), acts);
                                 ui.ctx().memory_mut(|m| m.request_focus(composer_id));
                             }
                             None => {}
@@ -1334,9 +1380,7 @@ impl IngleApp {
                 if files_ok && resp.has_focus() {
                     let down = ui.input(|i| i.modifiers.command) && paste_keys_down();
                     if down && !self.ui.paste_down {
-                        if let Some(png) = crate::images::clipboard_png() {
-                            add_attachment(&mut self.ui.attach, &draft_key, "pasted-image.png".into(), png, acts);
-                        }
+                        paste_files(self, &draft_key, crate::images::upload_limit(s), ui.ctx(), acts);
                     }
                     self.ui.paste_down = down;
                 }
@@ -1529,24 +1573,47 @@ fn send_button(ui: &mut egui::Ui, ready: bool) -> egui::Response {
     }
 }
 
-/// Add an image to a channel's draft, after checking it.
+/// Add an image to a channel's draft, after checking it (up to `limit` bytes: see
+/// `images::upload_limit`). A picture over it is made smaller to fit, and added when it's ready
+/// (see `images::take_shrunk`), instead of being refused.
 pub fn add_attachment(
     attach: &mut std::collections::HashMap<(String, ChannelId), Vec<(String, Vec<u8>)>>,
     draft: &(String, ChannelId),
     name: String,
     bytes: Vec<u8>,
+    limit: u64,
+    ctx: &egui::Context,
     acts: &mut Vec<Act>,
 ) {
-    if let Err(e) = crate::images::check_attachment(&name, &bytes) {
-        acts.push(Act::Toast(e, true));
-        return;
-    }
-    let list = attach.entry(draft.clone()).or_default();
-    if list.len() >= ingle_proto::control::MAX_ATTACHMENTS_PER_MESSAGE {
+    if attach.get(draft).is_some_and(|l| l.len() >= ingle_proto::control::MAX_ATTACHMENTS_PER_MESSAGE) {
         acts.push(Act::Toast("You can send up to 10 images at a time.".into(), true));
         return;
     }
-    list.push((name, bytes));
+    if crate::images::can_shrink(&bytes, limit) {
+        acts.push(Act::Toast(format!("{name} is over {} MB: making it smaller to fit…", limit >> 20), false));
+        crate::images::shrink_to_fit_async(draft.clone(), name, bytes, limit, ctx);
+        return;
+    }
+    if let Err(e) = crate::images::check_attachment(&name, &bytes, limit) {
+        acts.push(Act::Toast(e, true));
+        return;
+    }
+    attach.entry(draft.clone()).or_default().push((name, bytes));
+}
+
+/// What's on the clipboard, attached: files copied (a GIF copied in File Explorer stays
+/// moving), or else a picture (pasted as a PNG).
+fn paste_files(app: &mut IngleApp, draft: &(String, ChannelId), limit: u64, ctx: &egui::Context, acts: &mut Vec<Act>) {
+    let files = crate::images::clipboard_files();
+    if files.is_empty() {
+        if let Some(png) = crate::images::clipboard_png() {
+            add_attachment(&mut app.ui.attach, draft, "pasted-image.png".into(), png, limit, ctx, acts);
+        }
+        return;
+    }
+    for (name, bytes) in files {
+        add_attachment(&mut app.ui.attach, draft, name, bytes, limit, ctx, acts);
+    }
 }
 
 /// V and Ctrl (or Cmd) are held right now.
@@ -1730,8 +1797,14 @@ impl IngleApp {
     /// An image or GIF in a message; click to see it full size. Pointed at, it has the
     /// favorite star in its corner, like a GIF from GIPHY or KLIPY: a favorite picture (a meme,
     /// say) is kept on this PC, in the GIF picker's Favorites, ready to send on any server.
-    fn attachment(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, a: &Attachment, acts: &mut Vec<Act>) {
-        let Some((url, bytes)) = self.attachment_sized(ui, s, a, vec2(400.0, 300.0), true, &st.settings.gif_favorites) else { return };
+    fn attachment(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, a: &Attachment, msg: MessageId, acts: &mut Vec<Act>) {
+        let starred = self.attachment_sized(ui, s, a, vec2(400.0, 300.0), true, &st.settings.gif_favorites);
+        // Right-clicked: its message's menu, about this picture.
+        if self.ui.menu_picture.as_ref().is_some_and(|(id, fresh)| *fresh && *id == a.id) {
+            self.ui.menu_picture = Some((a.id.clone(), false));
+            self.ui.sel.open_menu(ui.ctx(), None, msg);
+        }
+        let Some((url, bytes)) = starred else { return };
         match st.settings.gif_favorites.iter().find(|f| f.url == url) {
             // Starred again: out it goes.
             Some(f) => self.toggle_gif_favorite(st, f.clone(), acts),
@@ -1773,15 +1846,29 @@ impl IngleApp {
             _ => None,
         };
         let t = ui.input(|i| i.time);
+        // Moving pictures play by Settings → Appearance: always, while pointed at, or never;
+        // and only while Ingle's window is in front.
+        let pointed = ui.rect_contains_pointer(rect);
+        let plays = self.ui.anim_on
+            && match self.ui.play_gifs.as_str() {
+                "never" => false,
+                "hover" => pointed,
+                _ => true,
+            };
         let tex = self.images.get(ui.ctx(), &a.id, bytes.clone(), crate::images::max_side_for_chat());
-        match (tex.frame(t), &state) {
+        let moving = tex.frame_count() > 1;
+        match (tex.frame(if plays { self.ui.anim_clock } else { 0.0 }), &state) {
             (Some((id, isize, next)), _) => {
                 let (fit, uv) = fit_in(rect, isize);
                 ui.painter().add(
                     egui::epaint::RectShape::filled(fit, CornerRadius::same(6), Color32::WHITE).with_texture(id, uv),
                 );
-                if let Some(n) = next {
+                if let (Some(n), true) = (next, plays) {
                     ui.ctx().request_repaint_after(n);
+                }
+                // Waiting to be played: say it moves.
+                if moving && !plays {
+                    gif_badge(ui.painter(), fit);
                 }
                 // The favorite star while it's pointed at (its link is worked out from what's
                 // in it, once).
@@ -1817,18 +1904,24 @@ impl IngleApp {
             }
         }
         let resp = resp.on_hover_text(format!("{}  ·  {}", a.name, human_size(a.size)));
+        if open && resp.secondary_clicked() {
+            self.ui.menu_picture = Some((a.id.clone(), true));
+        }
         if open && resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
         if open && resp.clicked() && starred.is_none() {
             self.ui.viewer = Some((s.key.clone(), a.clone()));
+            self.ui.viewer_play = ViewerPlay::default();
         }
         starred
     }
 
     /// The full-size image viewer (click outside or press Esc to close).
-    pub fn viewer(&mut self, ctx: &egui::Context, acts: &mut Vec<Act>) {
+    pub fn viewer(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
         let Some((key, a)) = self.ui.viewer.clone() else { return };
+        // Who keeps the server's GIFs can make this one of them.
+        let gifs_of = st.server(&key).filter(|s| crate::server_gifs::can_manage(s)).map(|s| s.name.clone());
         let mut close = ctx.input(|i| i.key_pressed(Key::Escape));
         let state = self.engine.file(&key, &a.id);
         let bytes = match &state {
@@ -1840,19 +1933,69 @@ impl IngleApp {
             let (r, backdrop) = ui.allocate_exact_size(screen.size(), Sense::click());
             ui.painter().rect_filled(r, CornerRadius::ZERO, Color32::from_black_alpha(215));
             let area = r.shrink2(vec2(r.width() * 0.05, 70.0)).translate(vec2(0.0, -10.0));
-            let t = ui.input(|i| i.time);
+            let now = ui.input(|i| i.time);
             let tex = self.images.get(ui.ctx(), &a.id, bytes.clone(), crate::images::max_side_for_chat());
             let mut img_rect = Rect::NOTHING;
-            if let Some((id, size, next)) = tex.frame(t) {
+            // A moving picture plays here whatever Settings say, at the speed picked, and can
+            // be paused and stepped through a frame at a time.
+            let n = tex.frame_count();
+            let vp = &mut self.ui.viewer_play;
+            if let (Some(last), false) = (vp.last, vp.paused) {
+                vp.pos += (now - last) * vp.speed as f64;
+            }
+            vp.last = Some(now);
+            let shown = if n > 1 { tex.index_at(vp.pos) } else { 0 };
+            if let Some((id, size, delay)) = tex.frame_at(shown) {
                 // Up to its real size, never stretched beyond it.
                 let s = (area.width() / size.x).min(area.height() / size.y).min(1.0);
                 img_rect = Rect::from_center_size(area.center(), size * s);
                 ui.painter().image(id, img_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-                if let Some(n) = next {
-                    ui.ctx().request_repaint_after(n);
+                if n > 1 && !vp.paused {
+                    ui.ctx().request_repaint_after((delay / 2).min(Duration::from_millis(40)).max(Duration::from_millis(10)));
                 }
             } else {
                 ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, "Loading…", theme::font(15.0), theme::MUTED());
+            }
+            if n > 1 {
+                // Where each frame starts, to step to it.
+                let starts: Vec<f64> = (0..n)
+                    .scan(0.0f64, |at, i| {
+                        let here = *at;
+                        *at += tex.frame_at(i).map(|f| f.2.as_secs_f64()).unwrap_or(0.1);
+                        Some(here)
+                    })
+                    .collect();
+                let bar = Rect::from_center_size(pos2(r.center().x, r.bottom() - 84.0), vec2(420.0, 36.0));
+                ui.painter().rect_filled(bar, CornerRadius::same(10), Color32::from_black_alpha(170));
+                let mut row = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(10.0, 4.0))).layout(Layout::left_to_right(Align::Center)));
+                // (The keys are the viewer's: they don't reach the message box under it.)
+                let (step_back, toggle, step_on) = ui.input_mut(|i| {
+                    (i.consume_key(Modifiers::NONE, Key::ArrowLeft), i.consume_key(Modifiers::NONE, Key::Space), i.consume_key(Modifiers::NONE, Key::ArrowRight))
+                });
+                let mut go_to: Option<usize> = None;
+                if row.button("⏮").on_hover_text("A frame back (←)").clicked() || step_back {
+                    go_to = Some((shown + n - 1) % n);
+                }
+                let label = if vp.paused { "▶" } else { "⏸" };
+                if row.button(label).on_hover_text(if vp.paused { "Play (Space)" } else { "Pause (Space)" }).clicked() || toggle {
+                    vp.paused = !vp.paused;
+                }
+                if row.button("⏭").on_hover_text("A frame on (→)").clicked() || step_on {
+                    go_to = Some((shown + 1) % n);
+                }
+                if let Some(i) = go_to {
+                    vp.paused = true;
+                    vp.pos = starts[i] + 0.0005;
+                }
+                row.add_space(8.0);
+                for sp in [0.25f32, 0.5, 1.0, 2.0] {
+                    let text = if sp == 1.0 { "1×".to_string() } else { format!("{sp}×") };
+                    if row.add(egui::Button::selectable(vp.speed == sp, text)).on_hover_text("How fast it plays").clicked() {
+                        vp.speed = sp;
+                    }
+                }
+                row.add_space(8.0);
+                row.label(RichText::new(format!("{} / {n}", shown + 1)).font(theme::mono(12.0)).color(theme::MUTED()));
             }
             // Name, size, Save and Close along the bottom.
             let bar = Rect::from_min_max(pos2(r.left(), r.bottom() - 56.0), r.max);
@@ -1867,6 +2010,11 @@ impl IngleApp {
                     if ui.button("Save as…").clicked() {
                         acts.push(Act::SaveImage { name: a.name.clone(), bytes: b.clone() });
                     }
+                    if let Some(server) = &gifs_of {
+                        if ui.button("Add to the server's GIFs").on_hover_text(format!("For everyone on {server} to send from the GIF picker")).clicked() {
+                            acts.push(Act::AddServerGif { key: key.clone(), name: crate::server_gifs::name_from(&a.name), bytes: b.to_vec() });
+                        }
+                    }
                 }
             });
             if backdrop.clicked() && !img_rect.contains(ui.input(|i| i.pointer.interact_pos()).unwrap_or_default()) && !bar.contains(ui.input(|i| i.pointer.interact_pos()).unwrap_or_default()) {
@@ -1877,6 +2025,29 @@ impl IngleApp {
             self.ui.viewer = None;
         }
     }
+}
+
+/// A moving picture in the viewer: paused or playing, where in its loop (seconds) and how
+/// fast.
+pub struct ViewerPlay {
+    pub paused: bool,
+    pub pos: f64,
+    pub speed: f32,
+    pub last: Option<f64>,
+}
+
+impl Default for ViewerPlay {
+    fn default() -> Self {
+        ViewerPlay { paused: false, pos: 0.0, speed: 1.0, last: None }
+    }
+}
+
+/// "GIF" in the corner of a moving picture that isn't playing (pointing at it plays it, or
+/// it's set not to).
+pub(crate) fn gif_badge(p: &egui::Painter, r: Rect) {
+    let b = Rect::from_min_size(r.left_top() + vec2(6.0, 6.0), vec2(30.0, 17.0));
+    p.rect_filled(b, CornerRadius::same(4), Color32::from_black_alpha(170));
+    p.text(b.center(), egui::Align2::CENTER_CENTER, "GIF", theme::bold_font(10.5), Color32::WHITE);
 }
 
 pub fn human_size(n: u64) -> String {
@@ -2256,13 +2427,27 @@ impl IngleApp {
         }
         let ctx = ui.ctx().clone();
         let dl = self.ui.gifs.get(url, move || ctx.request_repaint());
-        let t = ui.input(|i| i.time);
+        // In chat, it plays by Settings → Appearance (always, pointed at, or never), and only
+        // while Ingle's window is in front.
+        let pointed = ui.rect_contains_pointer(Rect::from_min_size(ui.cursor().min, space));
+        let plays = !open
+            || (self.ui.anim_on
+                && match self.ui.play_gifs.as_str() {
+                    "never" => false,
+                    "hover" => pointed,
+                    _ => true,
+                });
+        let t = if plays { self.ui.anim_clock } else { 0.0 };
         // One that can't be shown leaves nothing here: its message shows the link instead (see
         // `gif_failed`).
+        let mut moving = false;
         let shown = match dl {
             crate::giphy::Dl::Ready(bytes) => match self.images.get(ui.ctx(), &k, Some(bytes), 480) {
                 crate::images::Tex::Failed => return (false, false),
-                tex => tex.frame(t),
+                tex => {
+                    moving = tex.frame_count() > 1;
+                    tex.frame(t)
+                }
             },
             crate::giphy::Dl::Loading => None,
             crate::giphy::Dl::Failed => return (false, false),
@@ -2274,8 +2459,11 @@ impl IngleApp {
                 let (r, resp) = ui.allocate_exact_size(if known.is_some() { space } else { fit(size) }, Sense::click());
                 let (img, uv) = fit_in(r, size);
                 ui.painter().add(egui::epaint::RectShape::filled(img, CornerRadius::same(8), Color32::WHITE).with_texture(tex, uv));
-                if let Some(n) = next {
+                if let (Some(n), true) = (next, plays) {
                     ui.ctx().request_repaint_after(n);
+                }
+                if moving && !plays {
+                    gif_badge(ui.painter(), img);
                 }
                 let from = crate::giphy::media_provider(url).unwrap_or_default().name();
                 menu = open && resp.secondary_clicked();
@@ -2360,22 +2548,31 @@ impl IngleApp {
         }
         // The tabs: Favorites first, then where GIFs are searched.
         ui.horizontal(|ui| {
-            let b = ui.add(egui::Button::selectable(self.ui.gif_favs, RichText::new("      Favorites").font(theme::bold_font(12.0))));
+            let b = ui.add(egui::Button::selectable(self.ui.gif_favs && !self.ui.gif_server, RichText::new("      Favorites").font(theme::bold_font(12.0))));
             icons::star(ui.painter(), Rect::from_center_size(pos2(b.rect.left() + 14.0, b.rect.center().y), vec2(11.0, 11.0)), theme::GLOW(), true);
-            if b.clicked() && !self.ui.gif_favs {
+            if b.clicked() && (!self.ui.gif_favs || self.ui.gif_server) {
                 self.ui.gif_favs = true;
+                self.ui.gif_server = false;
                 self.ui.gif_search.clear();
                 self.ui.gif_focus = true;
             }
+            // The server's own GIFs, for everyone here.
+            if s.has(ingle_proto::control::GIFS_FEATURE) {
+                let on = self.ui.gif_server;
+                if ui.add(egui::Button::selectable(on, RichText::new("This server").font(theme::bold_font(12.0)))).on_hover_text(format!("GIFs for everyone on {}", s.name)).clicked() && !on {
+                    self.ui.gif_server = true;
+                }
+            }
             for p in &tabs {
-                let on = !self.ui.gif_favs && self.ui.gif_provider == *p;
+                let on = !self.ui.gif_favs && !self.ui.gif_server && self.ui.gif_provider == *p;
                 if ui.add(egui::Button::selectable(on, RichText::new(p.name()).font(theme::bold_font(12.0)))).clicked() && !on {
                     self.ui.gif_provider = *p;
                     self.ui.gif_favs = false;
+                    self.ui.gif_server = false;
                     self.ui.gif_focus = true;
                 }
             }
-            if !self.ui.gif_favs {
+            if !self.ui.gif_favs && !self.ui.gif_server {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.label(RichText::new(format!("Powered by {}", self.ui.gif_provider.name())).font(theme::bold_font(10.5)).color(theme::MUTED()));
                 });
@@ -2383,6 +2580,10 @@ impl IngleApp {
         });
         let provider = self.ui.gif_provider;
         ui.add_space(6.0);
+        if self.ui.gif_server && s.has(ingle_proto::control::GIFS_FEATURE) {
+            return self.server_gifs_tab(ui, s, acts);
+        }
+        self.ui.gif_server = false;
         // The search box (on Favorites, typing searches the last site used, like Discord's).
         if !tabs.is_empty() {
             // (KLIPY asks for exactly "Search KLIPY" here.)
@@ -2634,7 +2835,7 @@ impl IngleApp {
 }
 
 /// The GIF picker's width.
-const PICKER_W: f32 = 460.0;
+pub(crate) const PICKER_W: f32 = 460.0;
 
 /// One GIF in the picker's grid.
 struct Tile<'a> {
@@ -2649,7 +2850,7 @@ struct Tile<'a> {
 }
 
 /// The part of a picture of `size` that fills `r` (its shape kept, the overflow cut off evenly).
-fn cover_uv(r: Rect, size: egui::Vec2) -> Rect {
+pub(crate) fn cover_uv(r: Rect, size: egui::Vec2) -> Rect {
     let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
     if size.x <= 0.0 || size.y <= 0.0 || r.height() <= 0.0 {
         return full;

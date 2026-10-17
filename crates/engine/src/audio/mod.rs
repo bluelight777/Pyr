@@ -7,6 +7,7 @@ pub mod device;
 pub mod jitter;
 pub mod mixer;
 pub mod resample;
+pub mod spectrum;
 pub mod stream;
 pub mod stream_echo;
 
@@ -43,6 +44,76 @@ pub struct Controls {
     /// Where what the call plays is copied, for taking it back out of our screen share's
     /// sound (see `stream_echo`).
     pub played: Mutex<Option<Arc<PlayedTap>>>,
+    /// My voice as it goes out (only while it does), for my voice meter.
+    pub mic_meter: MeterTap,
+    /// My screen share's sound as it goes out, for my voice meter.
+    pub screen_meter: Arc<MeterTap>,
+    /// Voice meters are turned off: nothing is measured for them.
+    pub meters_off: AtomicBool,
+    /// How loud my microphone is sent (`Settings::input_gain`), changed as it's dragged.
+    pub input_gain: Gain,
+}
+
+/// A volume that can change while sound flows (an f32's bits); 1.0 to start with.
+pub struct Gain(AtomicU32);
+
+impl Default for Gain {
+    fn default() -> Self {
+        Gain(AtomicU32::new(1f32.to_bits()))
+    }
+}
+
+impl Gain {
+    pub fn get(&self) -> f32 {
+        f32::from_bits(self.0.load(Ordering::Relaxed))
+    }
+
+    pub fn set(&self, v: f32) {
+        self.0.store(v.to_bits(), Ordering::Relaxed);
+    }
+}
+
+/// How loud something sounds right now and what it sounds like, for voice meters: its level
+/// (dBFS) and how strong each band is, deep to bright (0 to 1, see `spectrum`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Meter {
+    pub db: f32,
+    pub bands: [f32; spectrum::BANDS],
+}
+
+impl Default for Meter {
+    fn default() -> Self {
+        Meter { db: -100.0, bands: [0.0; spectrum::BANDS] }
+    }
+}
+
+impl Meter {
+    /// Two sounds at once (someone's voice and their screen's sound): the louder of each.
+    pub fn merge(&mut self, other: &Meter) {
+        self.db = self.db.max(other.db);
+        for (a, b) in self.bands.iter_mut().zip(other.bands) {
+            *a = a.max(b);
+        }
+    }
+}
+
+/// The latest meter reading of something I send, and when it was taken (one that's older
+/// than [`METER_FRESH`] means it has gone quiet).
+#[derive(Default)]
+pub struct MeterTap(Mutex<Option<(Meter, Instant)>>);
+
+/// How long a meter reading counts: after that without a new one, it's quiet.
+pub const METER_FRESH: Duration = Duration::from_millis(120);
+
+impl MeterTap {
+    pub fn set(&self, m: Meter, at: Instant) {
+        *self.0.lock() = Some((m, at));
+    }
+
+    /// The reading, if it's recent.
+    pub fn get(&self, now: Instant) -> Option<Meter> {
+        self.0.lock().filter(|(_, at)| now.saturating_duration_since(*at) < METER_FRESH).map(|(m, _)| m)
+    }
 }
 
 /// What a call plays, kept for taking it back out of our screen share's sound
@@ -123,8 +194,11 @@ pub struct AudioStatus {
     pub input_error: Option<String>,
     pub output_error: Option<String>,
     pub speaking: Vec<SessionId>,
-    /// How loud each other session sounds right now (see `Mixer::levels`), every 20 ms.
-    pub levels: Vec<(SessionId, f32)>,
+    /// How each other session sounds right now (see `Mixer::meters`), every 20 ms.
+    pub meters: Vec<(SessionId, Meter)>,
+    /// How loud each other session's voice and stream sound are (see `Mixer::track_levels`),
+    /// every 20 ms, for the mixer panel (whether or not voice meters are on).
+    pub levels: Vec<(SessionId, u8, f32)>,
     pub packets_sent: u64,
 }
 
@@ -145,10 +219,12 @@ impl AudioEngine {
         sink: PacketCallback,
         ptt: Arc<AtomicBool>,
     ) -> AudioEngine {
-        let controls = Arc::new(Controls { ptt_down: ptt, ..Default::default() });
+        let controls = Arc::new(Controls { ptt_down: ptt, meters_off: AtomicBool::new(!settings.voice_meters_on()), ..Default::default() });
         controls.mic_level.store((-100f32).to_bits(), Ordering::Relaxed);
+        controls.input_gain.set(settings.input_gain);
         let mixer = Arc::new(Mutex::new(Mixer::default()));
         mixer.lock().master = settings.output_volume;
+        mixer.lock().meters = settings.voice_meters_on();
         let status = Arc::new(Mutex::new(AudioStatus::default()));
         let (c, m, s) = (controls.clone(), mixer.clone(), status.clone());
         let thread = std::thread::Builder::new()
@@ -654,8 +730,13 @@ fn worker(
 
         if now.duration_since(last_levels) > Duration::from_millis(20) {
             last_levels = now;
-            let levels = mixer.lock().levels(now);
-            status.lock().levels = levels;
+            let (meters, levels) = {
+                let m = mixer.lock();
+                (if ctl.meters_off.load(Ordering::Relaxed) { Vec::new() } else { m.meters(now) }, m.track_levels(now))
+            };
+            let mut st = status.lock();
+            st.meters = meters;
+            st.levels = levels;
         }
         if now.duration_since(last_status) > Duration::from_millis(80) {
             last_status = now;
@@ -697,8 +778,17 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         );
         std::thread::sleep(Duration::from_millis(500));
+        // The microphone's volume changes as it goes (the mixer's MY MIC): all the way down, it
+        // goes quiet.
+        let loud = engine.controls.mic_level_db();
+        assert!(loud > -30.0, "{loud}");
+        // (What was sent until then is what's played back below.)
+        let sent = packets.lock().len();
+        engine.controls.input_gain.set(0.0);
+        assert!(wait_until(3.0, || engine.controls.mic_level_db() < -80.0), "{}", engine.controls.mic_level_db());
         engine.stop();
-        let pk = packets.lock();
+        let all = packets.lock();
+        let pk = &all[..sent];
         assert!(pk.len() >= 20, "only {} packets", pk.len());
         assert_eq!(pk[0].1 & ingle_proto::media::flags::TALKSPURT, ingle_proto::media::flags::TALKSPURT);
 
@@ -716,6 +806,10 @@ mod tests {
         }
         assert!(energy > 10.0, "decoded audio is silent ({energy})");
         assert_eq!(m.speaking(t0 + Duration::from_millis(390)), vec![7]);
+        // The mixer panel's meter for their voice: how loud it came, as sent.
+        let levels = m.track_levels(t0 + Duration::from_millis(390));
+        assert!(matches!(levels.as_slice(), [(7, t, db)] if *t == ingle_proto::media::track::MIC && *db > -30.0), "{levels:?}");
+        assert!(m.track_levels(t0 + Duration::from_secs(5)).is_empty(), "quiet later");
     }
 
     /// Wait (up to `secs`) until `f` holds.

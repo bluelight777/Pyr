@@ -410,6 +410,23 @@ async fn file_loop(hub: Arc<Hub>, conn: quinn::Connection, uid: String) {
     }
 }
 
+/// Whether file `row` is kept from member `uid`. A picture sent in a direct message (or a
+/// group) is only for its people, and one in a private channel only for those who can see it;
+/// one not sent yet is only its uploader's, unless it's one of the server's GIFs. (If its
+/// message can't be found, nobody gets it: never fail open.)
+fn hidden_from(hub: &Hub, uid: &str, row: &crate::db::FileRow) -> bool {
+    match row.message_id {
+        None => row.kind == FileKind::Attachment && row.owner != uid && !hub.db.is_gif(&row.id),
+        Some(m) => match hub.db.get_message(m) {
+            None => true,
+            Some(msg) => match hub.db.private_members(msg.channel_id) {
+                Some(who) => !who.iter().any(|w| w == uid),
+                None => hub.db.channel(msg.channel_id).is_some_and(|ch| !hub.sees(uid, &ch)),
+            },
+        },
+    }
+}
+
 async fn file_stream(hub: &Hub, uid: &str, mut send: quinn::SendStream, mut recv: quinn::RecvStream) -> Result<()> {
     let mut preamble = [0u8; 4];
     timeout(Duration::from_secs(10), recv.read_exact(&mut preamble)).await??;
@@ -426,19 +443,7 @@ async fn file_stream(hub: &Hub, uid: &str, mut send: quinn::SendStream, mut recv
                 let _ = send.finish();
                 return Ok(());
             };
-            // A picture sent in a direct message (or a group) is only for its people. (If its
-            // message can't be found, nobody gets it: never fail open.)
-            let private = match row.message_id {
-                None => row.kind == FileKind::Attachment && row.owner != uid,
-                Some(m) => match hub.db.get_message(m) {
-                    None => true,
-                    Some(msg) => match hub.db.private_members(msg.channel_id) {
-                        Some(who) => !who.iter().any(|w| w == uid),
-                        // A picture in a private channel is only for those who can see it.
-                        None => hub.db.channel(msg.channel_id).is_some_and(|ch| !hub.sees(uid, &ch)),
-                    },
-                },
-            };
+            let private = hidden_from(hub, uid, &row);
             let bytes = if private { Vec::new() } else { tokio::fs::read(&path).await.unwrap_or_default() };
             if bytes.len() as u64 != row.size || private {
                 send.write_all(&fail("That file is gone.")).await?;
@@ -647,7 +652,7 @@ impl Bucket {
 fn cost(req: &Request) -> f64 {
     match req {
         Request::Ping { .. } | Request::Typing { .. } | Request::VoiceState { .. } => 0.5,
-        Request::FetchHistory { .. } | Request::GetVouches { .. } => 3.0,
+        Request::FetchHistory { .. } | Request::GetVouches { .. } | Request::GetVouchesForMe {} => 3.0,
         Request::E2eeKeys { keys, .. } => 1.0 + keys.len() as f64 / 16.0,
         Request::CreateInvite { .. }
         | Request::CreateBotInvite { .. }
@@ -655,6 +660,7 @@ fn cost(req: &Request) -> f64 {
         | Request::OpenDm { .. }
         | Request::AddEmoji { .. }
         | Request::AddSound { .. }
+        | Request::AddGif { .. }
         | Request::CreateChannel { .. }
         | Request::SetChannelAccess { .. }
         | Request::CreateRole { .. }
@@ -911,6 +917,7 @@ impl Ctx<'_> {
                 | Request::VoiceJoin { .. }
                 | Request::Handshake { .. }
                 | Request::SetVouches { .. }
+                | Request::GetVouchesForMe {}
                 | Request::ReportBug { .. }
                 | Request::SubmitPlugin { .. }
                 | Request::SubmissionPart { .. }
@@ -932,7 +939,8 @@ impl Ctx<'_> {
                 }
                 for id in &attachments {
                     match db.file(id) {
-                        Some(f) if f.owner == self.uid && f.kind == FileKind::Attachment && f.message_id.is_none() => {}
+                        // (Not one of the server's GIFs: its message being deleted would take it.)
+                        Some(f) if f.owner == self.uid && f.kind == FileKind::Attachment && f.message_id.is_none() && !db.is_gif(id) => {}
                         _ => return bad("an attachment is missing; try sending it again"),
                     }
                 }
@@ -1039,6 +1047,13 @@ impl Ctx<'_> {
                 hub.set_idle(self.conn_id, idle);
                 Ok(Event::Ok)
             }
+            Request::SetDnd { dnd } => {
+                if !self.idle_tokens.take(1.0) {
+                    return Err((ErrorCode::RateLimited, "Slow down a little.".into()));
+                }
+                hub.set_dnd(self.conn_id, dnd);
+                Ok(Event::Ok)
+            }
             Request::Handshake { to, data } => {
                 if !self.handshake_tokens.take(1.0) {
                     return Err((ErrorCode::RateLimited, "Slow down a little.".into()));
@@ -1075,6 +1090,7 @@ impl Ctx<'_> {
                 }
                 Ok(Event::Vouches { vouches: db.vouches_by(&by, VOUCHES_SENT_MAX) })
             }
+            Request::GetVouchesForMe {} => Ok(Event::Vouches { vouches: db.vouches_for(&self.uid, VOUCHES_SENT_MAX) }),
             Request::OpenDm { user_id } => {
                 valid_uid(&user_id)?;
                 if user_id == self.uid {
@@ -1542,6 +1558,51 @@ impl Ctx<'_> {
                 if !db.add_emoji(&e).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
                     return bad("That picture is already one of this server's emoji.");
                 }
+                hub.broadcast_info();
+                Ok(Event::Ok)
+            }
+            Request::AddGif { name, file_id } => {
+                self.require(perm::MANAGE_EMOJI, "add GIFs")?;
+                let name = name.trim().to_string();
+                if name.is_empty() || name.chars().count() > MAX_GIF_NAME || name.contains(['<', '>', ':']) {
+                    return bad(&format!("GIF names are 1–{MAX_GIF_NAME} characters, without < > or :."));
+                }
+                let f = match db.file(&file_id) {
+                    Some(f) if f.owner == self.uid && f.kind == FileKind::Attachment && f.message_id.is_none() => f,
+                    _ => return bad("upload the picture first"),
+                };
+                let all = db.gifs();
+                if all.len() >= MAX_SERVER_GIFS {
+                    return bad(&format!("This server already has {MAX_SERVER_GIFS} GIFs, the most it can have."));
+                }
+                if all.iter().any(|g| g.name.eq_ignore_ascii_case(&name)) {
+                    return bad(&format!("There's already a GIF called {name}."));
+                }
+                let g = ServerGif { id: file_id, name, width: f.width, height: f.height, by: self.uid.clone() };
+                if !db.add_gif(&g).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
+                    return bad("That picture is already one of this server's GIFs.");
+                }
+                hub.broadcast_info();
+                Ok(Event::Ok)
+            }
+            Request::RemoveGif { id } => {
+                self.require(perm::MANAGE_EMOJI, "remove GIFs")?;
+                if db.remove_gif(&id).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
+                    hub.wipe_files(&[id]);
+                    hub.broadcast_info();
+                }
+                Ok(Event::Ok)
+            }
+            Request::RenameGif { id, name } => {
+                self.require(perm::MANAGE_EMOJI, "rename GIFs")?;
+                let name = name.trim().to_string();
+                if name.is_empty() || name.chars().count() > MAX_GIF_NAME || name.contains(['<', '>', ':']) {
+                    return bad(&format!("GIF names are 1–{MAX_GIF_NAME} characters, without < > or :."));
+                }
+                if db.gifs().iter().any(|g| g.id != id && g.name.eq_ignore_ascii_case(&name)) {
+                    return bad(&format!("There's already a GIF called {name}."));
+                }
+                db.rename_gif(&id, &name).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
                 hub.broadcast_info();
                 Ok(Event::Ok)
             }
@@ -2018,13 +2079,90 @@ mod tests {
             Ok(Event::Vouches { vouches }) => assert_eq!(vouches, vec![good.clone()]),
             other => panic!("{other:?}"),
         }
+        // Mara asks who made sure of her: Blue.
+        match m.handle(Request::GetVouchesForMe {}) {
+            Ok(Event::Vouches { vouches }) => assert_eq!(vouches, vec![good.clone()]),
+            other => panic!("{other:?}"),
+        }
         // Setting them again replaces them.
         assert!(c.handle(Request::SetVouches { vouches: vec![] }).is_ok());
         assert!(matches!(m.handle(Request::GetVouches { by: vec![b.clone()] }), Ok(Event::Vouches { vouches }) if vouches.is_empty()));
+        assert!(matches!(m.handle(Request::GetVouchesForMe {}), Ok(Event::Vouches { vouches }) if vouches.is_empty()));
         // Messages for someone's Ingle only go to members who are here, and never too big.
         assert!(matches!(c.handle(Request::Handshake { to: mara.clone(), data: "{}".into() }), Err((ErrorCode::NotFound, _))));
         assert!(c.handle(Request::Handshake { to: mara.clone(), data: "x".repeat(ingle_proto::handshake::HANDSHAKE_MAX + 1) }).is_err());
         assert!(c.handle(Request::Handshake { to: b, data: "{}".into() }).is_err(), "not to yourself");
+    }
+
+    #[test]
+    fn server_gifs_need_the_permission_and_are_for_everyone() {
+        let hub = hub();
+        let (owner, keeper, bob) = (uid(), uid(), uid());
+        hub.db.insert_user(&owner, "Owner", Role::Owner).unwrap();
+        hub.db.insert_user(&keeper, "Keeper", Role::Member).unwrap();
+        hub.db.insert_user(&bob, "Bob", Role::Member).unwrap();
+        let keepers = hub.db.create_role("Emoji keepers", 0, perm::MANAGE_EMOJI, false).unwrap();
+        hub.db.set_member_roles(&keeper, &[keepers.id]).unwrap();
+        // Pictures uploaded and not sent yet.
+        let upload = |who: &str, id: &str| {
+            hub.db
+                .insert_file(&crate::db::FileRow {
+                    id: id.into(),
+                    owner: who.into(),
+                    kind: FileKind::Attachment,
+                    name: "party.gif".into(),
+                    mime: "image/gif".into(),
+                    size: 100,
+                    width: 64,
+                    height: 48,
+                    message_id: None,
+                })
+                .unwrap();
+        };
+        let (a, bobs, c2) = ("a".repeat(32), "b".repeat(32), "c".repeat(32));
+        upload(&keeper, &a);
+        upload(&bob, &bobs);
+        upload(&keeper, &c2);
+        let add = |c: &mut Ctx, name: &str, file: &str| c.handle(Request::AddGif { name: name.into(), file_id: file.into() });
+        let (mut k, mut b) = (ctx(&hub, &keeper), ctx(&hub, &bob));
+        // Only a role with "Manage emoji, GIFs and sounds".
+        assert!(forbidden(add(&mut b, "mine", &bobs)));
+        // Names are 1–40 characters, without < > or : (they go in messages as <g:name:id>).
+        assert!(add(&mut k, " ", &a).is_err());
+        assert!(add(&mut k, "a<b", &a).is_err());
+        assert!(add(&mut k, "a:b", &a).is_err());
+        assert!(add(&mut k, &"x".repeat(MAX_GIF_NAME + 1), &a).is_err());
+        // Only your own picture, not sent yet.
+        assert!(add(&mut k, "bobs", &bobs).is_err());
+        assert!(hidden_from(&hub, &bob, &hub.db.file(&a).unwrap()), "not sent yet: only its uploader's");
+        assert!(matches!(add(&mut k, "party cat", &a), Ok(Event::Ok)));
+        let gifs = hub.db.gifs();
+        assert_eq!(gifs.len(), 1);
+        assert_eq!((gifs[0].name.as_str(), gifs[0].width, gifs[0].height, gifs[0].by.as_str()), ("party cat", 64, 48, keeper.as_str()));
+        // Now everyone here has it: in the server's info, and its picture.
+        assert_eq!(hub.info().gifs, gifs);
+        assert!(!hidden_from(&hub, &bob, &hub.db.file(&a).unwrap()));
+        assert!(hidden_from(&hub, &keeper, &hub.db.file(&bobs).unwrap()), "other pictures not sent yet stay private");
+        // Each name and picture once.
+        assert!(add(&mut k, "PARTY CAT", &c2).is_err());
+        assert!(add(&mut k, "again", &a).is_err());
+        // It can't be sent as an attachment: deleting that message would take it from everyone.
+        let general = hub.db.create_channel("general", ChannelKind::Text).unwrap();
+        let send = |c: &mut Ctx, file: &str| {
+            c.handle(Request::SendMessage { channel_id: general.id, content: "look".into(), reply_to: None, nonce: String::new(), attachments: vec![file.into()] })
+        };
+        assert!(send(&mut k, &a).is_err());
+        assert!(send(&mut k, &c2).is_ok(), "a picture that isn't one sends as before");
+        // Renamed (not to another's name), then removed, its picture with it.
+        assert!(matches!(add(&mut k, "dance", &"d".repeat(32)), Err(_)), "no such upload");
+        assert!(forbidden(b.handle(Request::RenameGif { id: a.clone(), name: "mine".into() })));
+        assert!(k.handle(Request::RenameGif { id: a.clone(), name: "a:b".into() }).is_err());
+        assert!(k.handle(Request::RenameGif { id: a.clone(), name: "dance".into() }).is_ok());
+        assert_eq!(hub.db.gifs()[0].name, "dance");
+        assert!(forbidden(b.handle(Request::RemoveGif { id: a.clone() })));
+        assert!(k.handle(Request::RemoveGif { id: a.clone() }).is_ok());
+        assert!(hub.db.gifs().is_empty() && hub.info().gifs.is_empty());
+        assert!(hub.db.file(&a).is_none());
     }
 
     #[test]

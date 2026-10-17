@@ -2,13 +2,13 @@
 //! nothing said in a call), Ingle tells your servers you're idle, and everyone sees a moon on
 //! your picture instead of the green dot. Touching anything brings the green dot back. You can
 //! also say you're idle yourself (`Engine::set_idle_by_hand`), and then it stays until you
-//! change it.
+//! change it. Do Not Disturb (`Engine::set_dnd`) is told to servers the same way.
 
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use ingle_proto::control::{IDLE_FEATURE, Request};
+use ingle_proto::control::{DND_FEATURE, IDLE_FEATURE, Request};
 
 use crate::Shared;
 use crate::state::ConnStatus;
@@ -105,26 +105,39 @@ fn check(shared: &Arc<Shared>) {
     let now = ingle_proto::now_ms();
     let in_ingle = ago(now, shared.last_activity_ms.load(Ordering::Relaxed));
     let spoke = shared.call.lock().as_ref().and_then(|c| c.audio.as_ref()).map(|a| a.controls.last_spoke_ms.load(Ordering::Relaxed)).filter(|t| *t > 0).map(|t| ago(now, t));
-    let by_hand = shared.state.read_recursive().settings.idle_by_hand;
+    let (by_hand, dnd) = {
+        let st = shared.state.read_recursive();
+        (st.settings.idle_by_hand, st.settings.dnd)
+    };
     let idle = by_hand || idle_now(since_last_input(), in_ingle, spoke);
-    let mut tell = Vec::new();
+    let (mut tell, mut tell_dnd) = (Vec::new(), Vec::new());
     let changed = {
         let mut st = shared.state.write();
         let changed = st.my_idle != idle;
         st.my_idle = idle;
-        for s in st.servers.iter_mut().filter(|s| s.status == ConnStatus::Connected && s.has(IDLE_FEATURE)) {
-            if s.idle_sent != idle {
+        for s in st.servers.iter_mut().filter(|s| s.status == ConnStatus::Connected) {
+            if s.has(IDLE_FEATURE) && s.idle_sent != idle {
                 s.idle_sent = idle;
                 tell.push(s.key.clone());
+            }
+            // (Do Not Disturb goes the same way: each server hears when it changes.)
+            if s.has(DND_FEATURE) && s.dnd_sent != dnd {
+                s.dnd_sent = dnd;
+                tell_dnd.push(s.key.clone());
             }
         }
         changed
     };
-    if !tell.is_empty() {
+    if !tell.is_empty() || !tell_dnd.is_empty() {
         let servers = shared.servers.lock();
         for key in &tell {
             if let Some(h) = servers.get(key) {
                 h.notify(Request::SetIdle { idle });
+            }
+        }
+        for key in &tell_dnd {
+            if let Some(h) = servers.get(key) {
+                h.notify(Request::SetDnd { dnd });
             }
         }
     }

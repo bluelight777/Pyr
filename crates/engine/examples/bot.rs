@@ -38,6 +38,8 @@ fn main() -> anyhow::Result<()> {
     let mut dm_to: Option<String> = None;
     let mut wait = 0.0f32;
     let mut gap = 0.9f32;
+    // A profile picture (a square PNG or GIF) to wear.
+    let mut avatar: Option<std::path::PathBuf> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -57,6 +59,7 @@ fn main() -> anyhow::Result<()> {
             "--dm" => dm_to = args.next(),
             "--wait" => wait = args.next().and_then(|t| t.parse().ok()).unwrap_or(wait),
             "--gap" => gap = args.next().and_then(|t| t.parse().ok()).unwrap_or(gap),
+            "--avatar" => avatar = args.next().map(std::path::PathBuf::from),
             _ => {}
         }
     }
@@ -115,6 +118,9 @@ fn main() -> anyhow::Result<()> {
         std::thread::sleep(Duration::from_millis(100));
     }
     println!("{name}: connected");
+    if let Some(p) = &avatar {
+        engine.set_avatar(Some(std::fs::read(p)?));
+    }
     let find = |kind: ChannelKind, n: &str| {
         engine.state().server(&key).and_then(|s| {
             s.channels.iter().find(|c| c.kind == kind && c.name.eq_ignore_ascii_case(n)).map(|c| c.id)

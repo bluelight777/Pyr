@@ -22,7 +22,8 @@ use parking_lot::Mutex;
 use tracing::{info, warn};
 
 use super::stream_echo::{FRAME as ECHO_FRAME, StreamEcho};
-use super::{PacketCallback, PlayedTap};
+use super::spectrum::Analyzer;
+use super::{Meter, MeterTap, PacketCallback, PlayedTap};
 
 /// 20 ms of 48 kHz stereo, interleaved.
 const FRAME_SAMPLES: usize = 960 * 2;
@@ -55,13 +56,21 @@ pub struct StreamAudio {
 impl StreamAudio {
     /// Start capturing and sending. Returns once capture is running (or failed to start).
     /// With `played` (what the call plays), the call is taken back out of the stream's sound
-    /// if it gets in (see `stream_echo`).
-    pub fn start(source: StreamAudioSource, bitrate_kbps: u32, sink: PacketCallback, played: Option<Arc<PlayedTap>>) -> Result<StreamAudio> {
-        Self::start_from(Box::new(move || open_capture(source)), format!("{source:?}"), bitrate_kbps, sink, played)
+    /// if it gets in (see `stream_echo`). With `meter`, what's sent is measured there too
+    /// (for my voice meter).
+    pub fn start(source: StreamAudioSource, bitrate_kbps: u32, sink: PacketCallback, played: Option<Arc<PlayedTap>>, meter: Option<Arc<MeterTap>>) -> Result<StreamAudio> {
+        Self::start_from(Box::new(move || open_capture(source)), format!("{source:?}"), bitrate_kbps, sink, played, meter)
     }
 
     /// `start`, with capture opened (on the capture thread) by `open`.
-    fn start_from(open: OpenCapture, label: String, bitrate_kbps: u32, sink: PacketCallback, played: Option<Arc<PlayedTap>>) -> Result<StreamAudio> {
+    fn start_from(
+        open: OpenCapture,
+        label: String,
+        bitrate_kbps: u32,
+        sink: PacketCallback,
+        played: Option<Arc<PlayedTap>>,
+        meter: Option<Arc<MeterTap>>,
+    ) -> Result<StreamAudio> {
         let stop = Arc::new(AtomicBool::new(false));
         let packets = Arc::new(AtomicU64::new(0));
         let error = Arc::new(Mutex::new(None));
@@ -69,7 +78,7 @@ impl StreamAudio {
         let (st, pk, er) = (stop.clone(), packets.clone(), error.clone());
         let thread = std::thread::Builder::new()
             .name("ingle-stream-audio".into())
-            .spawn(move || run(open, label, bitrate_kbps, sink, played, st, pk, er, ready_tx))
+            .spawn(move || run(open, label, bitrate_kbps, sink, played, meter, st, pk, er, ready_tx))
             .map_err(|e| anyhow!("couldn't start the stream audio thread: {e}"))?;
         match ready_rx.recv_timeout(Duration::from_secs(4)) {
             Ok(Ok(())) => Ok(StreamAudio { stop, thread: Some(thread), packets, error }),
@@ -149,6 +158,7 @@ fn run(
     bitrate_kbps: u32,
     mut sink: PacketCallback,
     played: Option<Arc<PlayedTap>>,
+    meter: Option<Arc<MeterTap>>,
     stop: Arc<AtomicBool>,
     packets: Arc<AtomicU64>,
     error: Arc<Mutex<Option<String>>>,
@@ -182,6 +192,8 @@ fn run(
     let mut pending: VecDeque<f32> = VecDeque::with_capacity(FRAME_SAMPLES * 4);
     let mut frame = vec![0f32; FRAME_SAMPLES];
     let mut out = vec![0u8; MAX_PACKET];
+    // What's sent, measured for my voice meter.
+    let mut analyzer = meter.as_ref().map(|_| (Analyzer::new(), vec![0f32; FRAME_SAMPLES / 2]));
     // Count of silent frames in a row; above the limit we are "paused" and send nothing.
     // Start paused, so the first packet is marked as the start of a talkspurt.
     let mut silent_run = SILENT_FRAMES_BEFORE_PAUSE + 1;
@@ -233,6 +245,17 @@ fn run(
                     packets.fetch_add(1, Ordering::Relaxed);
                 }
                 Err(e) => warn!("stream audio encode failed: {e}"),
+            }
+            if let (Some(tap), Some((an, mono))) = (meter.as_ref(), analyzer.as_mut()) {
+                super::spectrum::mono(&frame, 2, mono);
+                let sum: f32 = mono.iter().map(|v| v * v).sum();
+                let db = 10.0 * (sum / mono.len() as f32).max(1e-10).log10();
+                if fl & flags::TALKSPURT != 0 {
+                    an.clear();
+                }
+                an.feed(&mono[..480]);
+                let bands = an.feed(&mono[480..]);
+                tap.set(Meter { db, bands }, Instant::now());
             }
         }
     }
@@ -370,7 +393,7 @@ mod tests {
         let got: Arc<Mutex<Vec<(u8, u8, Vec<u8>)>>> = Arc::default();
         let (g, t, c) = (got.clone(), tap.clone(), call.clone());
         let pc = Box::new(move || Ok(Box::new(LeakyPc { tap: t, call: c, delay: 60 * 48, at: 0 }) as Box<dyn Capture>));
-        let mut sa = StreamAudio::start_from(pc, "leaky".into(), 128, Box::new(move |t, f, d| g.lock().push((t, f, d.to_vec()))), Some(tap.clone())).unwrap();
+        let mut sa = StreamAudio::start_from(pc, "leaky".into(), 128, Box::new(move |t, f, d| g.lock().push((t, f, d.to_vec()))), Some(tap.clone()), None).unwrap();
         let until = Instant::now() + Duration::from_secs(60);
         while got.lock().len() < 14 * 50 * 6 / 10 && Instant::now() < until {
             std::thread::sleep(Duration::from_millis(20));
@@ -390,14 +413,21 @@ mod tests {
     fn synthetic_source_sends_stereo_opus() {
         let got: Arc<Mutex<Vec<(u8, u8, Vec<u8>)>>> = Arc::default();
         let g = got.clone();
+        let meter = Arc::new(MeterTap::default());
         let mut sa = StreamAudio::start(
             StreamAudioSource::Synthetic,
             128,
             Box::new(move |t, f, d| g.lock().push((t, f, d.to_vec()))),
             None,
+            Some(meter.clone()),
         )
         .unwrap();
         std::thread::sleep(Duration::from_millis(400));
+        // What's sent shows on my meter: the chord (523 and 784 Hz) in the middle bands.
+        let m = meter.get(Instant::now()).expect("the stream's sound on my meter");
+        assert!(m.db > -30.0, "{m:?}");
+        let loudest = m.bands.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map(|(i, _)| i).unwrap();
+        assert!((4..=8).contains(&loudest), "{m:?}");
         sa.stop();
         let pk = got.lock();
         assert!(pk.len() >= 12, "only {} packets in 400 ms", pk.len());

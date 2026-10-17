@@ -177,6 +177,7 @@ async fn session(
     crate::idle::wake(shared);
     crate::verify::publish_vouches(shared, key);
     crate::verify::fetch_vouches(shared, key);
+    crate::verify::fetch_vouches_for_me(shared, key);
     crate::sync_avatar(shared.clone(), key.to_string());
     crate::resume_voice(shared.clone(), key.to_string());
     crate::backup::spawn_schedule(shared.clone(), key.to_string(), conn.clone());
@@ -332,6 +333,7 @@ fn apply_ready(shared: &Shared, key: &str, ready: Event) {
     s.roles = roles;
     s.features = features;
     s.idle_sent = false;
+    s.dnd_sent = false;
     s.relations = relations.into_iter().map(|r| (r.user_id, r.kind)).collect();
     // Direct messages that came in while we were away show as unread, with the "NEW" line
     // after the last one read here (or on the newest, if this PC never opened it).

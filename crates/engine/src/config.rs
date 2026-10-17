@@ -192,8 +192,50 @@ pub struct Settings {
     /// Vouch for the people I make sure of, on the servers we share: then people who made sure
     /// of me see them as vouched for (see `verify`).
     pub vouch: bool,
-    /// How voice meters look: "bars", "wave", "dots", "glow" or "off" (empty: bars).
+    /// How voice meters look: "bars", "spectrum", "wave", "dots", "glow" or "off" (empty: bars).
     pub voice_meter: String,
+    /// Do Not Disturb, like Discord's: no message sounds, calls don't ring or pop up a Windows
+    /// notice, and everyone sees a red dot on my picture (see `idle`, which tells servers).
+    pub dnd: bool,
+    /// What calls ring with (none: Ingle's own ring; see `ring`), and someone's own ringtone,
+    /// by their id (in place of that).
+    pub ringtone: Option<Ringtone>,
+    pub ringtones: std::collections::BTreeMap<UserId, Ringtone>,
+    /// When moving pictures in chat (GIFs, animated WebP and PNG) play: "" always, "hover"
+    /// while pointed at, "never" (they show still, marked GIF).
+    pub play_gifs: String,
+}
+
+/// A ringtone: a soundboard sound (built in, or one of a server's), or a sound file from this
+/// PC, kept in the config folder's `rings` as an Ingle sound (see `Engine::add_ringtone_file`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct Ringtone {
+    /// What it's called: the sound's name, or the file's.
+    pub name: String,
+    /// A soundboard sound.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sound: Option<SoundRef>,
+    /// A sound file from this PC: its name in `rings`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub file: String,
+}
+
+impl Settings {
+    /// Whether voice meters show (`voice_meter` is "off", or "off:" and the look they had).
+    pub fn voice_meters_on(&self) -> bool {
+        !(self.voice_meter == "off" || self.voice_meter.starts_with("off:"))
+    }
+}
+
+impl Ringtone {
+    /// Which sound it is (two ringtones with the same key sound the same).
+    pub fn key(&self) -> String {
+        match &self.sound {
+            Some(s) => format!("sound:{}:{}", s.server, s.id),
+            None => format!("file:{}", self.file),
+        }
+    }
 }
 
 /// A favorite GIF: just its links (the GIF itself is fetched from GIPHY or KLIPY each time it's
@@ -266,6 +308,10 @@ impl Default for Settings {
             library_favorites: Vec::new(),
             library_sort: String::new(),
             voice_meter: String::new(),
+            dnd: false,
+            ringtone: None,
+            ringtones: Default::default(),
+            play_gifs: String::new(),
             auto_reports: true,
             auto_report_told: false,
             idle_by_hand: false,

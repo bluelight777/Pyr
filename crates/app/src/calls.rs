@@ -106,7 +106,8 @@ impl IngleApp {
         let Some(c) = st.incoming_calls.last().cloned() else { return };
         let Some(s) = st.server(&c.server_key) else { return };
         let name = s.member_name(&c.from);
-        let face = self.face(ctx, s, &c.from);
+        // (Calling: a moving picture moves.)
+        let face = self.face_moving(ctx, s, &c.from, true);
         let screen = ctx.content_rect();
         let w = 340.0;
         // Slides in from above as it starts ringing.
@@ -187,7 +188,17 @@ impl IngleApp {
         let name = s.member_name(uid);
         let face = self.face(ui.ctx(), s, uid);
         let p = ui.painter_at(rect);
-        p.rect_filled(rect, CornerRadius::same(12), theme::TILE());
+        // (In their own color, like their tile once they're here.)
+        let bg = match self.tile_tint(s, uid) {
+            Some((top, bottom)) => {
+                crate::stage::paint_tint(&p, rect, top, bottom);
+                theme::mix(top, bottom, 0.5)
+            }
+            None => {
+                p.rect_filled(rect, CornerRadius::same(12), theme::TILE());
+                theme::TILE()
+            }
+        };
         let radius = (rect.width().min(rect.height()) * 0.17).clamp(26.0, 64.0);
         let center = pos2(rect.center().x, rect.center().y - 18.0);
         let t = ui.input(|i| i.time) as f32;
@@ -195,9 +206,9 @@ impl IngleApp {
             pulse_rings(&p, center, radius, t, theme::ONLINE());
             ui.ctx().request_repaint_after(Duration::from_millis(33));
         }
-        avatar(&p, center, radius, uid, &name, false, theme::TILE(), face);
+        avatar(&p, center, radius, uid, &name, false, bg, face);
         // Not here (yet): a little faded.
-        p.circle_filled(center, radius, theme::TILE().gamma_multiply(0.45));
+        p.circle_filled(center, radius, bg.gamma_multiply(0.45));
         let ny = center.y + radius + 18.0;
         crate::emoji::paint_text(&p, pos2(rect.center().x, ny), Align2::CENTER_CENTER, &name, theme::bold_font(15.0), theme::TEXT(), Some(rect.width() - 24.0));
         let (status, col) = match state {
@@ -602,7 +613,7 @@ pub(crate) fn can_group(s: &ServerView) -> bool {
 mod tests {
     use super::*;
     use ingle_engine::state::ConnStatus;
-    use ingle_proto::control::{Dm, Member, Role};
+    use ingle_proto::control::{Dm, Member};
 
     fn server(key: &str, calls: bool, members: &[&str], dm_with: Option<&str>) -> ServerView {
         let mut s = ServerView::new(key.into(), key.into(), "127.0.0.1:1".into());
