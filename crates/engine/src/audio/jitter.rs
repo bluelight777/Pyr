@@ -83,7 +83,15 @@ impl PeerAudio {
 
     pub fn push(&mut self, seq: u32, pkt_flags: u8, payload: Vec<u8>, now: Instant) {
         self.stats.received += 1;
-        if let Some((t0, s0)) = self.last_arrival {
+        let talkspurt = pkt_flags & flags::TALKSPURT != 0 && !ingle_proto::ab::old("jitter");
+        if talkspurt {
+            // Someone starts talking again. The time since their last packet is the pause, not
+            // the network (nothing is sent while they're quiet, so sequence numbers don't move),
+            // and the packet after this one comes right with it (this one is the 20 ms before
+            // they started, see `CapturePipeline::process`): neither says anything about jitter.
+            // (Counting the pause made every sentence after one start up to 100 ms late.)
+            self.last_arrival = None;
+        } else if let Some((t0, s0)) = self.last_arrival {
             if seq > s0 {
                 let expected = (seq - s0) as f32 * FRAME_MS;
                 let actual = now.duration_since(t0).as_secs_f32() * 1000.0;
@@ -91,7 +99,7 @@ impl PeerAudio {
                 self.jitter_ms += (d - self.jitter_ms) / 16.0;
             }
         }
-        if self.last_arrival.map(|(_, s)| seq > s).unwrap_or(true) {
+        if !talkspurt && self.last_arrival.map(|(_, s)| seq > s).unwrap_or(true) {
             self.last_arrival = Some((now, seq));
         }
         if pkt_flags & flags::TALKSPURT != 0 && self.packets.is_empty() && self.missing_run > 0 {
@@ -360,6 +368,49 @@ mod tests {
         }
         assert!(peer.stats.concealed - before <= 6, "concealed {} frames", peer.stats.concealed - before);
         assert!(peer.next_seq.unwrap() >= 25, "caught up to the live stream");
+    }
+
+    /// Talking, a pause, talking again (the way the microphone sends it: nothing during the
+    /// pause, and the 20 ms before the new words sent along with them): the pause isn't
+    /// jitter, so the new words play at once instead of waiting for a bigger buffer.
+    #[test]
+    fn a_pause_in_talking_is_not_jitter() {
+        let mut enc = encoder();
+        let mut peer = PeerAudio::new(1);
+        let t0 = Instant::now();
+        let mut out = vec![0f32; 480];
+        let mut seq = 0u32;
+        let mut ms = 0u64;
+        let mut started_after = Vec::new();
+        for spurt in 0..4 {
+            // The start of the words: the 20 ms before, and the first 20 ms, together.
+            let at = t0 + Duration::from_millis(ms);
+            peer.push(seq, flags::TALKSPURT, enc.encode_vec_float(&tone_frame(0), 1500).unwrap(), at);
+            peer.push(seq + 1, 0, enc.encode_vec_float(&tone_frame(0), 1500).unwrap(), at);
+            seq += 2;
+            let mut first_sound = None;
+            // Half a second of talking, then a 2 s pause.
+            for i in 0..50u64 {
+                let now = at + Duration::from_millis(i * 10);
+                if i % 2 == 0 && i > 0 {
+                    peer.push(seq, 0, enc.encode_vec_float(&tone_frame(0), 1500).unwrap(), now);
+                    seq += 1;
+                }
+                if peer.take_10ms(&mut out, now) && first_sound.is_none() {
+                    first_sound = Some(i * 10);
+                }
+            }
+            for i in 50..250u64 {
+                peer.take_10ms(&mut out, at + Duration::from_millis(i * 10));
+            }
+            ms += 2500;
+            if spurt > 0 {
+                started_after.push(first_sound.unwrap());
+            }
+        }
+        assert!(started_after.iter().all(|&m| m == 0), "words after a pause played after {started_after:?} ms");
+        assert!(peer.stats.jitter_ms < 5.0, "jitter {} ms on a steady stream", peer.stats.jitter_ms);
+        assert_eq!(peer.target_frames(), MIN_TARGET);
     }
 
     #[test]

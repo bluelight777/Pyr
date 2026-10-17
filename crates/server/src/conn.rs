@@ -156,6 +156,10 @@ async fn take_submission(
 
 async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, deadline: tokio::time::Instant) -> Result<()> {
     let (mut send, mut recv) = tokio::time::timeout_at(deadline, conn.accept_bi()).await.context("no control stream")??;
+    // Messages to this app go ahead of the video sent to it (see `media::CONTROL_PRIORITY`).
+    if !ingle_proto::ab::old("fair") {
+        let _ = send.set_priority(ingle_proto::media::CONTROL_PRIORITY);
+    }
     let mut preamble = [0u8; 4];
     tokio::time::timeout_at(deadline, recv.read_exact(&mut preamble)).await.context("no preamble")??;
     if &preamble != ingle_proto::CONTROL_PREAMBLE {
@@ -263,7 +267,8 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
     let conn_id = hub.alloc_conn_id();
     let session_cell = Arc::new(AtomicU32::new(0));
     let groups = caps.iter().any(|c| c == GROUPS_CAP);
-    if let Err((code, msg)) = hub.register(conn_id, &user_id, conn.clone(), tx.clone(), session_cell.clone(), login.id, groups) {
+    let feedback = caps.iter().any(|c| c == VIDEO_FEEDBACK_CAP);
+    if let Err((code, msg)) = hub.register(conn_id, &user_id, conn.clone(), tx.clone(), session_cell.clone(), login.id, groups, feedback) {
         tx.send(frame(login.id, Event::error(code, msg.clone())));
         drop(tx);
         let _ = timeout(Duration::from_secs(1), writer).await;

@@ -9,6 +9,10 @@ use openh264::encoder::{
     BitRate, Complexity, Encoder, EncoderConfig, FrameRate, FrameType, IntraFramePeriod, RateControlMode, UsageType,
 };
 use openh264::formats::{YUVSlices, YUVSource};
+use openh264_sys2::{
+    ENCODER_OPTION_BITRATE, ENCODER_OPTION_FRAME_RATE, ENCODER_OPTION_MAX_BITRATE, SBitrateInfo, SPATIAL_LAYER_0, SPATIAL_LAYER_ALL,
+};
+use std::ptr::addr_of_mut;
 use yuv::{YuvChromaSubsampling, YuvConversionMode, YuvPlanarImage, YuvPlanarImageMut, YuvRange, YuvStandardMatrix};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,47 +142,151 @@ pub struct EncodedFrame {
 }
 
 pub struct H264Encoder {
-    enc: Encoder,
+    /// Made for each picture size (see `encode`).
+    enc: Option<Encoder>,
+    screen: bool,
+    /// A screen share showing motion (a game, a video): encoded the way a camera is (see
+    /// `set_motion`).
+    motion: bool,
+    /// Made again for the next frame (what's shared changed kind).
+    remake: bool,
+    /// What it's asked to do now (see `set_rates`), and what the encoder in use was last set to.
+    bitrate: u32,
+    fps: f32,
+    applied: (u32, f32),
+    /// The encoder in use hasn't encoded anything yet (OpenH264 sets itself up on the first
+    /// frame, and can't be changed before).
+    fresh: bool,
+    /// A keyframe at least every this many frames.
+    intra_frames: u32,
     force_key: bool,
     pub width: u32,
     pub height: u32,
+    /// Frames OpenH264 skipped to keep to its bitrate (what it's asked for is too much for it).
+    pub skipped: u64,
 }
 
 impl H264Encoder {
     pub fn new(screen: bool, bitrate_bps: u32, fps: u32) -> Result<H264Encoder> {
+        // A keyframe every minute by itself, as a safety net: keyframes are big, and viewers who
+        // lose something ask for one anyway. (Before 0.8.0, `INGLE_AB=adapt`: every 10 s.)
+        let every = if ingle_proto::ab::old("adapt") { 10 } else { 60 };
+        let mut e = H264Encoder {
+            enc: None,
+            screen,
+            motion: false,
+            remake: false,
+            bitrate: bitrate_bps,
+            fps: fps.max(1) as f32,
+            applied: (0, 0.0),
+            fresh: true,
+            intra_frames: fps.max(1) * every,
+            force_key: true,
+            width: 0,
+            height: 0,
+            skipped: 0,
+        };
+        // (Checked now, so a broken encoder shows when the share starts.)
+        e.enc = Some(e.make()?);
+        Ok(e)
+    }
+
+    fn make(&self) -> Result<Encoder> {
         let cfg = EncoderConfig::new()
-            .bitrate(BitRate::from_bps(bitrate_bps))
-            .max_frame_rate(FrameRate::from_hz(fps as f32))
+            .bitrate(BitRate::from_bps(self.bitrate))
+            .max_frame_rate(FrameRate::from_hz(self.fps))
             .rate_control_mode(RateControlMode::Bitrate)
-            .usage_type(if screen { UsageType::ScreenContentRealTime } else { UsageType::CameraVideoRealTime })
+            .usage_type(if self.screen && !self.motion { UsageType::ScreenContentRealTime } else { UsageType::CameraVideoRealTime })
             .skip_frames(true)
-            .complexity(if screen { Complexity::Low } else { Complexity::Medium })
-            .intra_frame_period(IntraFramePeriod::from_num_frames(fps.max(1) * 10))
+            .complexity(if self.screen && !self.motion { Complexity::Low } else { Complexity::Medium })
+            // A keyframe whenever the picture changes a lot (a fast pan in a game, at a few
+            // frames a second) made shares on slow connections worse: each is several times a
+            // normal frame's size. (`INGLE_AB=scenecut` puts it back.)
+            .scene_change_detect(ingle_proto::ab::old("scenecut"))
+            .intra_frame_period(IntraFramePeriod::from_num_frames(self.intra_frames))
             .num_threads(0);
-        let enc = Encoder::with_api_config(OpenH264API::from_source(), cfg)?;
-        Ok(H264Encoder { enc, force_key: true, width: 0, height: 0 })
+        Ok(Encoder::with_api_config(OpenH264API::from_source(), cfg)?)
     }
 
     pub fn request_keyframe(&mut self) {
         self.force_key = true;
     }
 
+    /// A screen share showing motion (a game, a video) is encoded the way a camera is: in
+    /// OpenH264's screen mode, every frame that changes a lot from the last becomes a keyframe
+    /// (it can't be turned off there), which at a few frames a second is nearly all of them;
+    /// and it may only lower the quality so far, skipping frames instead. Text and desktops
+    /// stay in screen mode, which keeps them sharp. (Changing costs a keyframe.)
+    pub fn set_motion(&mut self, motion: bool) {
+        if self.screen && motion != self.motion {
+            self.motion = motion;
+            self.remake = true;
+        }
+    }
+
+    /// The bitrate and frame rate to encode at from the next frame on (the network's and the
+    /// share's, see `video::adapt`).
+    pub fn set_rates(&mut self, bitrate_bps: u32, fps: f32) {
+        self.bitrate = bitrate_bps.max(50_000);
+        self.fps = fps.clamp(1.0, 60.0);
+    }
+
+    /// Tells OpenH264 the new bitrate and frame rate without starting over.
+    fn apply_rates(&mut self) {
+        let Some(enc) = self.enc.as_mut() else { return };
+        let (bitrate, fps) = (self.bitrate as i32, self.fps);
+        let raising = self.bitrate > self.applied.0;
+        // SAFETY: the options and their argument types are OpenH264's (codec_app_def.h); the
+        // encoder is set up (it has encoded a frame).
+        unsafe {
+            let api = enc.raw_api();
+            let mut target = SBitrateInfo { iLayer: SPATIAL_LAYER_ALL, iBitrate: bitrate };
+            // (It won't take a bitrate above its most, so that goes up first, or down after.)
+            let mut most = SBitrateInfo { iLayer: SPATIAL_LAYER_0, iBitrate: bitrate.saturating_mul(3) / 2 };
+            if raising {
+                api.set_option(ENCODER_OPTION_MAX_BITRATE, addr_of_mut!(most).cast());
+            }
+            api.set_option(ENCODER_OPTION_BITRATE, addr_of_mut!(target).cast());
+            if !raising {
+                api.set_option(ENCODER_OPTION_MAX_BITRATE, addr_of_mut!(most).cast());
+            }
+            let mut f = fps;
+            api.set_option(ENCODER_OPTION_FRAME_RATE, addr_of_mut!(f).cast());
+        }
+        self.applied = (self.bitrate, self.fps);
+    }
+
     pub fn encode(&mut self, img: &I420) -> Result<Option<EncodedFrame>> {
-        if self.width != img.width || self.height != img.height {
+        if self.width != img.width || self.height != img.height || self.enc.is_none() || self.remake {
+            // A new size: a new encoder, made for the bitrate and frame rate wanted now (set up
+            // again for a new size, OpenH264 would go back to the ones it started with). Its
+            // first frame is a keyframe.
+            if self.width != 0 || self.enc.is_none() || self.remake {
+                self.enc = Some(self.make()?);
+            }
+            self.remake = false;
             self.width = img.width;
             self.height = img.height;
-            self.force_key = true;
-        }
-        if self.force_key {
-            self.enc.force_intra_frame();
+            self.applied = (self.bitrate, self.fps);
+            self.fresh = true;
             self.force_key = false;
         }
+        if !self.fresh && (self.bitrate, self.fps) != self.applied {
+            self.apply_rates();
+        }
+        let enc = self.enc.as_mut().expect("made above");
+        if self.force_key && !self.fresh {
+            enc.force_intra_frame();
+        }
+        self.force_key = false;
         let w = img.width as usize;
         let h = img.height as usize;
         let src = YUVSlices::new((&img.y, &img.u, &img.v), (w, h), (w, w.div_ceil(2), w.div_ceil(2)));
-        let bs = self.enc.encode(&src)?;
+        let bs = enc.encode(&src)?;
+        self.fresh = false;
         let kind = bs.frame_type();
         if matches!(kind, FrameType::Skip | FrameType::Invalid) {
+            self.skipped += 1;
             return Ok(None);
         }
         let data = bs.to_vec();
@@ -204,8 +312,13 @@ impl H264Decoder {
         Ok(H264Decoder { dec: Decoder::new()? })
     }
 
-    pub fn decode(&mut self, data: &[u8]) -> Result<Option<DecodedFrame>> {
+    /// Decodes a frame; with `show`, the picture comes back too (without, it's only decoded,
+    /// for catching up: the next frame's here already).
+    pub fn decode(&mut self, data: &[u8], show: bool) -> Result<Option<DecodedFrame>> {
         let Some(yuvf) = self.dec.decode(data)? else { return Ok(None) };
+        if !show {
+            return Ok(None);
+        }
         let (w, h) = yuvf.dimensions();
         // Ingle never sends more than 1440p; anything past 4K is junk (or someone trying to
         // make us allocate huge pictures).
@@ -248,7 +361,7 @@ mod tests {
             if first_key.is_none() {
                 first_key = Some(e.keyframe);
             }
-            if let Some(d) = dec.decode(&e.data).unwrap() {
+            if let Some(d) = dec.decode(&e.data, true).unwrap() {
                 assert_eq!((d.width, d.height), (640, 360));
                 // Compare the color of a flat region with the source.
                 let px = |buf: &[u8], x: usize, y: usize, bpp: usize| {

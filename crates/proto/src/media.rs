@@ -40,6 +40,16 @@ pub mod flags {
 
 pub const CODEC_H264: u8 = 1;
 
+/// QUIC stream priorities (higher goes first): the control stream (messages, voice state,
+/// keyframe requests) ahead of video, and video frames oldest first (each one finishes before
+/// the next starts, instead of all of them crawling along together), all ahead of files.
+pub const CONTROL_PRIORITY: i32 = 1 << 30;
+
+/// The priority for video frame `n` (in the order they're sent): older ones first.
+pub fn frame_priority(n: u64) -> i32 {
+    (1 << 20) - (n % (1 << 19)) as i32
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AudioHeader {
     pub track: u8,

@@ -7,16 +7,32 @@
 //! camera and screen (the screen share comes with a quiet test chord unless you pass
 //! --no-sound). Ctrl+C to stop.
 //!
+//! `--friend NAME` sends that member a friend request.
+//!
 //! `--dm NAME` sends the `--say` lines as direct messages to that member instead, after
 //! `--wait SECONDS` (time to switch windows), `--gap SECONDS` apart. `--image PATH` sends a
 //! picture (in order with the `--say` lines).
 //!
 //! `--check-isolation` only loads voice isolation's model and times it on this PC, then exits.
+//!
+//! For measuring shares over slow or far-away networks (with the `pathsim` example between the
+//! bot and the server): `--source motion|text` shares a synthetic screen (a busy moving picture,
+//! or a page of text that scrolls now and then) whose frames carry the time they were made, and
+//! `--preset saver|standard|smooth|sharp` picks the share's quality. `--beeps` makes the bot's
+//! voice a short beep every 2 s of the clock. A watching bot with `--measure FILE` writes a line
+//! for every new picture it sees (`v <time ms> <latency ms> <width> <height>`), for every beep it
+//! hears (`a <time ms> <latency ms>`), and its call stats twice a second (`s ...`).
+//! `--media-log FILE` writes the engine's media events (frames sent, acknowledged, decoded,
+//! keyframe requests, the connection's round trip) there.
 
 use std::time::{Duration, Instant};
 
+use std::io::Write;
+use std::sync::{Arc, Mutex};
+
 use ingle_engine::audio::{AudioInput, AudioOutput};
-use ingle_engine::config::{Config, NoiseSuppression, Settings};
+use ingle_engine::config::{Config, NoiseSuppression, ScreenPreset, Settings};
+use ingle_engine::video::testsrc;
 use ingle_engine::state::ConnStatus;
 use ingle_engine::{Engine, EngineOptions};
 use ingle_proto::control::ChannelKind;
@@ -42,6 +58,13 @@ fn main() -> anyhow::Result<()> {
     let mut avatar: Option<std::path::PathBuf> = None;
     // How loud its voice is (the tone's amplitude).
     let mut amp = 0.18f32;
+    let mut source = ingle_engine::video::capture::TEST_PATTERN_ID.to_string();
+    let mut preset = ScreenPreset::default();
+    let mut measure: Option<std::path::PathBuf> = None;
+    let mut media_log: Option<std::path::PathBuf> = None;
+    let mut beeps = false;
+    // Someone to send a friend request to (by name).
+    let mut befriend: Option<String> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -63,6 +86,25 @@ fn main() -> anyhow::Result<()> {
             "--gap" => gap = args.next().and_then(|t| t.parse().ok()).unwrap_or(gap),
             "--avatar" => avatar = args.next().map(std::path::PathBuf::from),
             "--amp" => amp = args.next().and_then(|t| t.parse().ok()).unwrap_or(amp),
+            "--source" => {
+                source = match args.next().as_deref() {
+                    Some("motion") => testsrc::MOTION_ID.to_string(),
+                    Some("text") => testsrc::TEXT_ID.to_string(),
+                    _ => ingle_engine::video::capture::TEST_PATTERN_ID.to_string(),
+                }
+            }
+            "--preset" => {
+                preset = match args.next().as_deref() {
+                    Some("saver") => ScreenPreset::Saver,
+                    Some("standard") => ScreenPreset::Standard,
+                    Some("sharp") => ScreenPreset::Sharp,
+                    _ => ScreenPreset::Smooth,
+                }
+            }
+            "--measure" => measure = args.next().map(std::path::PathBuf::from),
+            "--media-log" => media_log = args.next().map(std::path::PathBuf::from),
+            "--beeps" => beeps = true,
+            "--friend" => befriend = args.next(),
             _ => {}
         }
     }
@@ -70,6 +112,19 @@ fn main() -> anyhow::Result<()> {
         return check_isolation();
     }
     let join = join.ok_or_else(|| anyhow::anyhow!("--join <invite link> is required"))?;
+    if let Some(p) = &media_log {
+        let file = std::fs::File::create(p)?;
+        tracing_subscriber::fmt()
+            .with_writer(Mutex::new(file))
+            .with_ansi(false)
+            .with_env_filter(tracing_subscriber::EnvFilter::new("ingle_media=debug,warn"))
+            .init();
+    }
+    // What a measuring bot writes (from the main loop and the sound thread).
+    let out: Option<Arc<Mutex<std::fs::File>>> = match &measure {
+        Some(p) => Some(Arc::new(Mutex::new(std::fs::File::create(p)?))),
+        None => None,
+    };
     let dir = std::env::temp_dir().join(format!("ingle-bot-{}", name.to_lowercase().replace(' ', "-")));
     std::fs::create_dir_all(&dir)?;
     let mut cfg = ingle_engine::config::load_config(&dir);
@@ -82,16 +137,29 @@ fn main() -> anyhow::Result<()> {
         auto_gain: false,
         camera_device: Some("test:camera".into()),
         share_audio: stream_sound,
+        screen_preset: preset,
         ..Default::default()
     };
     ingle_engine::config::save_config(&dir, &Config { ..cfg })?;
 
+    let out_for_sound = out.clone();
     let engine = Engine::start(EngineOptions {
         config_dir: Some(dir),
         push_to_talk: false,
         audio: Some(Box::new(move |_s: &Settings| {
             let mut n = 0u64;
+            let heard = out_for_sound.clone();
             let input = AudioInput::Synthetic(Box::new(move |buf: &mut [f32]| {
+                if beeps {
+                    // A 60 ms beep at every even 2 s of the clock (this 10 ms just ended).
+                    let start = wall_ms() - 10.0;
+                    for (i, v) in buf.iter_mut().enumerate() {
+                        let t = start + i as f64 / 48.0;
+                        let into = t.rem_euclid(BEEP_EVERY_MS);
+                        *v = if into < 60.0 { ((into / 1000.0 * BEEP_HZ * std::f64::consts::TAU).sin() * 0.3) as f32 } else { 0.0 };
+                    }
+                    return;
+                }
                 for v in buf.iter_mut() {
                     // talk for ~1.6 s, pause ~1.1 s, with a little vibrato so it sounds less robotic
                     let t = n as f32 / 48_000.0;
@@ -101,7 +169,39 @@ fn main() -> anyhow::Result<()> {
                     n += 1;
                 }
             }));
-            (input, AudioOutput::None)
+            // A measuring bot listens for the beeps: when each one starts, against when it was
+            // made.
+            let output = match heard {
+                Some(f) => {
+                    let mut last_loud = 0.0f64;
+                    // (The beep's pitch picked out of the mix, 2 ms at a time, so a shared
+                    // screen's sound playing along doesn't count.)
+                    let coeff = 2.0 * (std::f64::consts::TAU * BEEP_HZ / 48_000.0).cos();
+                    AudioOutput::Synthetic(Box::new(move |buf: &[f32]| {
+                        let start = wall_ms();
+                        let frames = buf.len() / 2;
+                        for w in 0..frames / 96 {
+                            let (mut s1, mut s2) = (0.0f64, 0.0f64);
+                            for i in w * 96..(w + 1) * 96 {
+                                let s0 = buf[2 * i] as f64 + coeff * s1 - s2;
+                                s2 = s1;
+                                s1 = s0;
+                            }
+                            let amp = 2.0 * (s1 * s1 + s2 * s2 - coeff * s1 * s2).max(0.0).sqrt() / 96.0;
+                            if amp > 0.1 {
+                                let t = start + (w * 96) as f64 / 48.0;
+                                if t - last_loud > 500.0 {
+                                    let late = t.rem_euclid(BEEP_EVERY_MS);
+                                    let _ = writeln!(f.lock().unwrap(), "a {:.1} {:.1}", t, late);
+                                }
+                                last_loud = t;
+                            }
+                        }
+                    }))
+                }
+                None => AudioOutput::None,
+            };
+            (input, output)
         })),
         ..Default::default()
     })?;
@@ -123,6 +223,15 @@ fn main() -> anyhow::Result<()> {
     println!("{name}: connected");
     if let Some(p) = &avatar {
         engine.set_avatar(Some(std::fs::read(p)?));
+    }
+    if let Some(who) = &befriend {
+        let uid = engine
+            .state()
+            .server(&key)
+            .and_then(|s| s.members.values().find(|m| m.name.eq_ignore_ascii_case(who)).map(|m| m.user_id.clone()))
+            .ok_or_else(|| anyhow::anyhow!("nobody called {who} here"))?;
+        engine.add_friend(&uid);
+        println!("{name}: sent {who} a friend request");
     }
     let find = |kind: ChannelKind, n: &str| {
         engine.state().server(&key).and_then(|s| {
@@ -179,16 +288,58 @@ fn main() -> anyhow::Result<()> {
             engine.start_camera();
         }
         if screen {
-            engine.start_screen("test:pattern");
+            engine.start_screen(&source);
         }
     }
     let _ = rt;
     let deadline = seconds.map(|s| Instant::now() + Duration::from_secs(s));
     let mut watching = std::collections::HashSet::new();
     let mut last_report = Instant::now();
+    let mut last_look = Instant::now() - Duration::from_secs(1);
+    let mut last_stats = Instant::now();
+    // The newest picture seen from each share.
+    let mut seen: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
     loop {
-        std::thread::sleep(Duration::from_millis(500));
-        if watch {
+        // Measuring: look for new pictures every 2 ms.
+        std::thread::sleep(Duration::from_millis(if measure.is_some() { 2 } else { 500 }));
+        if let Some(f) = &out {
+            for s in &watching {
+                let key = ingle_engine::state::VideoKey { session: *s, track: ingle_proto::media::track::SCREEN };
+                if let Some(frame) = engine.video_frame(key) {
+                    if seen.get(s) != Some(&frame.generation) {
+                        seen.insert(*s, frame.generation);
+                        let now = wall_ms();
+                        if let Some(ms) = testsrc::read_stamp(&frame.rgba, frame.width, frame.height) {
+                            // (The stamp keeps the clock's last 32 bits.)
+                            let late = (now as u64 as u32).wrapping_sub(ms) as i32;
+                            let _ = writeln!(f.lock().unwrap(), "v {now:.1} {late} {} {}", frame.width, frame.height);
+                        }
+                    }
+                }
+            }
+            if last_stats.elapsed() >= Duration::from_millis(500) {
+                last_stats = Instant::now();
+                let line = engine.state().call.as_ref().map(|c| {
+                    let st = &c.stats;
+                    format!(
+                        "s {:.1} rtt={} jitter={:.1} buffer={} audio_lost={} concealed={} video_rx={} send_kbps={}",
+                        wall_ms(),
+                        st.rtt_ms,
+                        st.jitter_ms,
+                        st.buffer_ms,
+                        st.audio_lost,
+                        st.audio_concealed,
+                        st.video_frames_received,
+                        st.video_send_kbps
+                    )
+                });
+                if let Some(l) = line {
+                    let _ = writeln!(f.lock().unwrap(), "{l}");
+                }
+            }
+        }
+        if watch && last_look.elapsed() >= Duration::from_millis(500) {
+            last_look = Instant::now();
             // Watch every screen share in our voice channel and report what we decode.
             let shares: Vec<u32> = {
                 let st = engine.state();
@@ -224,6 +375,16 @@ fn main() -> anyhow::Result<()> {
     }
     engine.shutdown();
     Ok(())
+}
+
+/// Beeps (see `--beeps`) start at every multiple of this on the clock,
+const BEEP_EVERY_MS: f64 = 2000.0;
+/// at this pitch (well above the test screen's sound).
+const BEEP_HZ: f64 = 2500.0;
+
+/// The wall clock in milliseconds (the same in every program on this computer).
+fn wall_ms() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0)
 }
 
 /// Load voice isolation's model (built into the program) and time 3 s of audio through it.

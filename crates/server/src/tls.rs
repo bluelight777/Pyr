@@ -51,11 +51,15 @@ pub fn transport_config() -> quinn::TransportConfig {
     t.keep_alive_interval(Some(Duration::from_secs(4)));
     t.max_idle_timeout(Some(Duration::from_secs(20).try_into().expect("valid idle timeout")));
     t.datagram_receive_buffer_size(Some(1 << 20));
-    // Keep the outgoing datagram queue short: stale audio is worse than lost audio.
-    t.datagram_send_buffer_size(128 * 1024);
+    // Keep the outgoing datagram queue short: stale audio is worse than lost audio. A
+    // fraction of a second of a few people talking at once (`INGLE_AB=dgram`: 128 KB, seconds).
+    t.datagram_send_buffer_size(if ingle_proto::ab::old("dgram") { 128 * 1024 } else { 16 * 1024 });
     t.stream_receive_window(VarInt::from_u32(8 << 20));
     t.receive_window(VarInt::from_u32(64 << 20));
     t.send_window(32 << 20);
+    if ingle_proto::ab::bbr() {
+        t.congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default()));
+    }
     t
 }
 

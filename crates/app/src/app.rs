@@ -1684,7 +1684,7 @@ impl IngleApp {
     fn frame_ui(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
         self.watch_when_joined(st, acts);
         if self.fullscreen_ui(ctx, st, acts) {
-            self.toasts(ctx, st);
+            self.toasts(ctx, st, acts);
             return;
         }
         self.trying_banner(ctx, acts);
@@ -1725,7 +1725,7 @@ impl IngleApp {
             self.viewer(ctx, st, acts);
             self.incoming_call_card(ctx, st, acts);
             self.handshake_cards(ctx, st, acts);
-            self.toasts(ctx, st);
+            self.toasts(ctx, st, acts);
             return;
         }
         if self.ui.home {
@@ -1738,7 +1738,7 @@ impl IngleApp {
             self.drop_files(ctx, st, acts);
             self.incoming_call_card(ctx, st, acts);
             self.handshake_cards(ctx, st, acts);
-            self.toasts(ctx, st);
+            self.toasts(ctx, st, acts);
             return;
         }
         let selected = self.ui.server.clone().and_then(|k| st.server(&k).cloned());
@@ -1812,7 +1812,7 @@ impl IngleApp {
         self.drop_files(ctx, st, acts);
         self.incoming_call_card(ctx, st, acts);
         self.handshake_cards(ctx, st, acts);
-        self.toasts(ctx, st);
+        self.toasts(ctx, st, acts);
     }
 
     /// After "Join and Watch": once we're in their channel, watch their stream (given up after
@@ -3194,19 +3194,24 @@ impl IngleApp {
             });
     }
 
-    fn toasts(&mut self, ctx: &egui::Context, st: &AppState) {
+    fn toasts(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
         let now = Instant::now();
         // Notices fade after 6 seconds; errors stay until dismissed, so they can be read and
-        // copied (to send to whoever runs the server, say).
+        // copied (to send to whoever runs the server, say). A friend request stays until it's
+        // answered or closed (and goes if it's answered elsewhere, or taken back).
         let visible: Vec<_> = st
             .toasts
             .iter()
-            .filter(|t| if t.error { !self.ui.toasts_dismissed.contains(&t.id) } else { now.duration_since(t.at) < Duration::from_secs(6) })
+            .filter(|t| match &t.friend {
+                Some(uid) => !self.ui.toasts_dismissed.contains(&t.id) && st.relation(uid) == Some(ingle_proto::control::RelationKind::Incoming),
+                None if t.error => !self.ui.toasts_dismissed.contains(&t.id),
+                None => now.duration_since(t.at) < Duration::from_secs(6),
+            })
             .collect();
         if visible.is_empty() {
             return;
         }
-        if visible.iter().any(|t| !t.error) {
+        if visible.iter().any(|t| !t.error && t.friend.is_none()) {
             ctx.request_repaint_after(Duration::from_millis(500));
         }
         let mut dismiss = None;
@@ -3225,6 +3230,31 @@ impl IngleApp {
                         .inner_margin(egui::Margin::symmetric(14, 10))
                         .show(ui, |ui| {
                             ui.set_max_width(360.0);
+                            if let Some(uid) = &t.friend {
+                                // A friend request: news (never "Something went wrong"), with
+                                // the answers on it, like Discord's.
+                                ui.horizontal(|ui| {
+                                    let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
+                                    icons::person(ui.painter(), r, theme::EMBER());
+                                    ui.label(RichText::new(&t.text).color(theme::TEXT()));
+                                });
+                                ui.add_space(6.0);
+                                ui.horizontal(|ui| {
+                                    // (The same buttons as Friends → Pending.)
+                                    if ui.add(theme::primary_button("Accept")).on_hover_text("You'll be friends").clicked() {
+                                        acts.push(Act::AcceptFriend(uid.clone()));
+                                        dismiss = Some(t.id);
+                                    }
+                                    if ui.button("Ignore").on_hover_text("Turn the request down").clicked() {
+                                        acts.push(Act::RemoveFriend(uid.clone()));
+                                        dismiss = Some(t.id);
+                                    }
+                                    if ui.button("Later").on_hover_text("It waits in Friends, under Pending").clicked() {
+                                        dismiss = Some(t.id);
+                                    }
+                                });
+                                return;
+                            }
                             if !t.error {
                                 ui.label(RichText::new(&t.text).color(theme::TEXT()));
                                 return;

@@ -408,8 +408,21 @@ pub struct CallStats {
     pub video_frames_sent: u64,
     pub video_frames_received: u64,
     pub video_send_kbps: u32,
+    /// What our screen share (or else camera) is sending now, adjusted to the network (see
+    /// `video::adapt`).
+    pub sending: Option<Sending>,
     pub jitter_ms: f32,
     pub buffer_ms: u32,
+}
+
+/// The size, frame rate and bitrate a camera or screen share goes out at now.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Sending {
+    pub height: u32,
+    pub fps: u32,
+    pub kbps: u32,
+    /// Less than its preset, to suit the connection (ours or a viewer's).
+    pub lowered: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -541,6 +554,10 @@ pub struct Toast {
     /// An error that's a bug: reported by itself (see `bugs::watch_errors`). Not a refusal
     /// (`refused`: the server said no, not connected, a limit), which is no bug.
     pub report: bool,
+    /// A friend request from this person (see `AppState::friend_request`): a notice, never an
+    /// error, shown with Accept and Ignore until it's answered (here or anywhere else), taken
+    /// back, or closed.
+    pub friend: Option<UserId>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -726,15 +743,32 @@ impl AppState {
     }
 
     fn toast_as(&mut self, text: String, error: bool, report: bool) {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         if error {
             self.toasts.retain(|t| !(t.error && t.text == text));
         }
+        self.push_toast(text, error, report, None);
+    }
+
+    /// Someone sent me a friend request: news, not an error. It stays (with Accept and Ignore)
+    /// until it's answered or closed; one per person.
+    pub fn friend_request(&mut self, text: impl Into<String>, from: &str) {
+        self.friend_request_done(from);
+        self.push_toast(text.into(), false, false, Some(from.to_string()));
+    }
+
+    /// Their friend request was answered (here or on another computer) or taken back: its
+    /// notice goes.
+    pub fn friend_request_done(&mut self, from: &str) {
+        self.toasts.retain(|t| t.friend.as_deref() != Some(from));
+    }
+
+    fn push_toast(&mut self, text: String, error: bool, report: bool, friend: Option<UserId>) {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.toasts.push(Toast { id, text, error, at: Instant::now(), report });
-        // Keep a few: notices go first, then the oldest errors.
+        self.toasts.push(Toast { id, text, error, at: Instant::now(), report, friend });
+        // Keep a few: passing notices go first, then the oldest of those that stay.
         while self.toasts.len() > 8 {
-            let i = self.toasts.iter().position(|t| !t.error).unwrap_or(0);
+            let i = self.toasts.iter().position(|t| !t.error && t.friend.is_none()).unwrap_or(0);
             self.toasts.remove(i);
         }
     }

@@ -265,6 +265,13 @@ async fn chat_voice_video_end_to_end() {
         let st = a.state();
         println!("alice sending video at {} kbps", st.call.as_ref().unwrap().stats.video_send_kbps);
     }
+    // The server tells Alice how Bob is getting on with her share (twice a second), and on a
+    // clear road it goes out as she set it: 1080p, not lowered.
+    wait_for("feedback on bob", 5, || a.call_counters().video_feedback.load(std::sync::atomic::Ordering::Relaxed) >= 2).await;
+    wait_for("alice's share shows what it sends", 5, || a.state().call.as_ref().is_some_and(|c| c.stats.sending.is_some())).await;
+    let sending = a.state().call.as_ref().unwrap().stats.sending.unwrap();
+    assert_eq!(sending.height, 1080, "{sending:?}");
+    assert!(!sending.lowered, "{sending:?}");
 
     // ---- Bob leaves; Alice is alone and the call stays healthy
     b.leave_voice();
@@ -282,9 +289,18 @@ async fn chat_voice_video_end_to_end() {
     server.shutdown().await;
 }
 
+/// Quiet by default. INGLE_TEST_LOG=FILE writes the media log there (RUST_LOG picks what goes
+/// in it; "ingle_media=debug,warn" if unset): what the rate control and the ladder decided.
 fn tracing_subscriber_init() -> Option<()> {
-    // Quiet by default; set RUST_LOG=debug to see everything.
-    None
+    let path = std::env::var("INGLE_TEST_LOG").ok()?;
+    let file = std::fs::File::create(path).ok()?;
+    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "ingle_media=debug,warn".into());
+    tracing_subscriber::fmt()
+        .with_writer(std::sync::Mutex::new(file))
+        .with_ansi(false)
+        .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
+        .try_init()
+        .ok()
 }
 
 /// Someone joining a call that's already running must get everyone's keys right away

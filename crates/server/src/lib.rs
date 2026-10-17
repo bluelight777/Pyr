@@ -186,6 +186,9 @@ pub async fn start(cfg: ServerConfig) -> Result<RunningServer> {
     });
     let hub = Hub::new(db, tls_id.fingerprint, public_host, local_addr.port(), cfg.data_dir.join("files"));
 
+    // How everyone's viewers are getting on with their camera or screen share.
+    tokio::spawn(hub.clone().feedback_loop());
+
     // Attachments that were uploaded but never sent, and unused profile pictures.
     let h = hub.clone();
     tokio::spawn(async move {

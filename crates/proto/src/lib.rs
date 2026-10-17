@@ -7,6 +7,7 @@
 //! * `invite` – invite links that pin the server's TLS certificate.
 //! * `udp` (feature `quic`) – QUIC endpoints with a plain-UDP fallback.
 
+pub mod ab;
 pub mod b64;
 pub mod control;
 pub mod crypto;

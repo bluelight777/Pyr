@@ -61,15 +61,33 @@ async fn friends_and_blocking() {
     wait_for("bob gets the request", 5, || b.state().relation(&ua) == Some(RelationKind::Incoming)).await;
     assert_eq!(a.state().relation(&ub), Some(RelationKind::Outgoing));
     assert!(toasts(&b).contains("Alice sent you a friend request"), "{}", toasts(&b));
+    // News, not an error ("Something went wrong" with Report on it, as 0.7.6 showed it): a
+    // notice that knows who sent it (for its Accept and Ignore), and goes once it's answered.
+    {
+        let st = b.state();
+        let t = st.toasts.iter().find(|t| t.text.contains("sent you a friend request")).unwrap();
+        assert!(!t.error && !t.report, "a friend request isn't an error");
+        assert_eq!(t.friend.as_deref(), Some(ua.as_str()));
+    }
     b.accept_friend(&ua);
     wait_for("friends", 5, || a.state().relation(&ub) == Some(RelationKind::Friend) && b.state().relation(&ua) == Some(RelationKind::Friend)).await;
+    assert!(!b.state().toasts.iter().any(|t| t.friend.is_some()), "answered: its notice went");
+    assert!(toasts(&a).contains("Bob accepted your friend request"), "{}", toasts(&a));
+    assert!(!a.state().toasts.iter().any(|t| t.error), "{}", toasts(&a));
     b.remove_friend(&ua);
     wait_for("unfriended", 5, || a.state().relation(&ub).is_none() && b.state().relation(&ua).is_none()).await;
+    // A request taken back takes its notice with it.
+    a.add_friend(&ub);
+    wait_for("asked again", 5, || b.state().toasts.iter().any(|t| t.friend.as_deref() == Some(ua.as_str()))).await;
+    a.remove_friend(&ub);
+    wait_for("taken back", 5, || b.state().relation(&ua).is_none()).await;
+    assert!(!b.state().toasts.iter().any(|t| t.friend.is_some()), "{}", toasts(&b));
     // Both asking at once makes friends.
     a.add_friend(&uc);
     wait_for("carol asked", 5, || c.state().relation(&ua) == Some(RelationKind::Incoming)).await;
     c.add_friend(&ua);
     wait_for("mutual", 5, || a.state().relation(&uc) == Some(RelationKind::Friend)).await;
+    wait_for("carol's notice went", 5, || !c.state().toasts.iter().any(|t| t.friend.is_some())).await;
 
     // Alice blocks Carol: friendship ends, Carol can't message or re-add her, Carol isn't told.
     a.block(&uc);

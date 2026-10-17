@@ -256,6 +256,8 @@ struct Client {
     user_id: UserId,
     /// The app knows group conversations (`GROUPS_CAP`): only such apps hear of them.
     groups: bool,
+    /// The app adjusts its shares to its viewers (`VIDEO_FEEDBACK_CAP`).
+    feedback: bool,
     conn: quinn::Connection,
     tx: Outbox,
     session: Option<SessionId>,
@@ -280,6 +282,8 @@ struct Voice {
     /// published track -> subscriber session -> forwarder
     subs: HashMap<u8, HashMap<SessionId, Subscriber>>,
     last_keyframe_request: HashMap<u8, Instant>,
+    /// Its app adjusts its shares to its viewers: it's told how they're getting on.
+    feedback: bool,
 }
 
 struct Subscriber {
@@ -291,70 +295,174 @@ struct Subscriber {
 /// Per (subscriber, published track) congestion state.
 pub struct SubState {
     need_keyframe: AtomicBool,
-    unacked: Mutex<BTreeMap<u64, Instant>>,
+    /// The keyframe they wait for is to catch them up after falling behind (not their first,
+    /// when they've just started watching): the frames skipped meanwhile are shed, and their
+    /// sharer hears so and sends less.
+    behind: AtomicBool,
+    /// Frames on their way: (when they were handed over, their size).
+    unacked: Mutex<BTreeMap<u64, (Instant, usize)>>,
     next_index: AtomicU64,
-    max_age: Duration,
+    /// Before 0.8.0 (`INGLE_AB=shed`): how old a frame on its way could get before the viewer
+    /// was taken to be stuck.
+    old_max_age: Duration,
+    /// Bytes that got to them, and frames skipped for them, since the last report.
+    delivered: AtomicU64,
+    shed: AtomicU32,
+    /// For the reports: their round trips lately (when, srtt), their losses at the last
+    /// report, and when that was.
+    rtts: Mutex<std::collections::VecDeque<(Instant, Duration)>>,
+    last_report: Mutex<Option<(Instant, u64, u64)>>,
+    /// What got to them, bit/s, as of the last report.
+    rate: AtomicU64,
 }
 
 enum Offer {
     Send(u64),
-    SkipNeedKeyframe,
+    /// Not to them: they wait for a keyframe. `shed`: because they fell behind (not because
+    /// they've only just started watching).
+    Skip { shed: bool },
 }
 
 impl SubState {
     fn new(rtt: Duration) -> SubState {
         SubState {
             need_keyframe: AtomicBool::new(true),
+            behind: AtomicBool::new(false),
             unacked: Mutex::new(BTreeMap::new()),
             next_index: AtomicU64::new(1),
-            // Allow roughly one round trip plus 350 ms of queued video before shedding.
-            max_age: Duration::from_millis(350) + rtt.min(Duration::from_millis(400)),
+            old_max_age: Duration::from_millis(350) + rtt.min(Duration::from_millis(400)),
+            delivered: AtomicU64::new(0),
+            shed: AtomicU32::new(0),
+            rtts: Mutex::new(std::collections::VecDeque::new()),
+            last_report: Mutex::new(None),
+            rate: AtomicU64::new(0),
         }
     }
 
-    fn offer(&self, keyframe: bool) -> Offer {
-        let congested = self.unacked.lock().first_key_value().map(|(_, t)| t.elapsed() > self.max_age).unwrap_or(false);
+    /// How late the oldest frame on its way to them is: beyond a round trip and the time its
+    /// own bytes take at the rate they've been getting (with room for a keyframe's).
+    fn late(&self, rtt: Duration) -> Duration {
+        let Some((_, (at, bytes))) = self.unacked.lock().first_key_value().map(|(i, v)| (*i, *v)) else { return Duration::ZERO };
+        let rate = self.rate.load(Ordering::Relaxed).max(300_000) as f64;
+        let own = Duration::from_secs_f64(bytes as f64 * 8.0 * 1.5 / rate);
+        at.elapsed().saturating_sub(rtt + own + Duration::from_millis(40))
+    }
+
+    /// Whether the next frame goes to them. `rtt`: their round trip now.
+    fn offer(&self, keyframe: bool, bytes: usize, rtt: Duration) -> Offer {
+        // Stuck: their oldest frame is so late (beyond its round trip and its own sending
+        // time) that they'd be watching the past; skipping to a fresh keyframe catches them up.
+        // (Their sharer is told how they're doing, see `Hub::feedback_loop`, and sends less
+        // before this; it's for the one who can't keep up whatever happens.)
+        let congested = if ingle_proto::ab::old("shed") {
+            self.unacked.lock().first_key_value().map(|(_, (t, _))| t.elapsed() > self.old_max_age).unwrap_or(false)
+        } else {
+            self.late(rtt) > (rtt * 2).max(Duration::from_millis(700))
+        };
         if congested {
-            self.need_keyframe.store(true, Ordering::Relaxed);
-            return Offer::SkipNeedKeyframe;
+            self.behind.store(true, Ordering::Relaxed);
+            if !self.need_keyframe.swap(true, Ordering::Relaxed) {
+                // (Each read on its own: `late` locks `unacked` too.)
+                let unacked = self.unacked.lock().len();
+                let late_ms = self.late(rtt).as_millis() as u64;
+                debug!(target: "ingle_media", ev = "congested", unacked, late_ms);
+            }
+            return Offer::Skip { shed: true };
         }
         if self.need_keyframe.load(Ordering::Relaxed) {
             if !keyframe {
-                return Offer::SkipNeedKeyframe;
+                return Offer::Skip { shed: self.behind.load(Ordering::Relaxed) };
             }
             self.need_keyframe.store(false, Ordering::Relaxed);
+            self.behind.store(false, Ordering::Relaxed);
         }
         let idx = self.next_index.fetch_add(1, Ordering::Relaxed);
-        self.unacked.lock().insert(idx, Instant::now());
+        self.unacked.lock().insert(idx, (Instant::now(), bytes));
         Offer::Send(idx)
     }
 
-    fn ack(&self, idx: u64) {
+    fn ack(&self, idx: u64, delivered: Option<usize>) {
         self.unacked.lock().remove(&idx);
+        if let Some(b) = delivered {
+            self.delivered.fetch_add(b as u64, Ordering::Relaxed);
+        }
+    }
+
+    /// How they're getting on (for their sharer's `Event::VideoFeedback`), from their
+    /// connection: since the last report.
+    fn report(&self, session: SessionId, conn: &quinn::Connection, now: Instant) -> ViewerFeedback {
+        let p = conn.stats().path;
+        let base = {
+            let mut r = self.rtts.lock();
+            if r.is_empty() && !p.min_rtt.is_zero() {
+                r.push_back((now, p.min_rtt));
+            }
+            r.push_back((now, p.rtt));
+            while r.front().is_some_and(|(t, _)| now.duration_since(*t) > Duration::from_secs(12)) {
+                r.pop_front();
+            }
+            r.iter().map(|(_, d)| *d).min().unwrap_or(p.rtt)
+        };
+        let delivered = self.delivered.swap(0, Ordering::Relaxed);
+        let (kbps, loss_pm) = {
+            let mut last = self.last_report.lock();
+            let out = match *last {
+                Some((t, lost, sent)) => {
+                    let dt = now.duration_since(t).as_secs_f64().max(0.05);
+                    let bps = delivered as f64 * 8.0 / dt;
+                    self.rate.store(bps as u64, Ordering::Relaxed);
+                    let ds = p.sent_packets.saturating_sub(sent);
+                    let pm = if ds > 0 { p.lost_packets.saturating_sub(lost) * 1000 / ds } else { 0 };
+                    ((bps / 1000.0) as u32, pm as u32)
+                }
+                None => (0, 0),
+            };
+            *last = Some((now, p.lost_packets, p.sent_packets));
+            out
+        };
+        ViewerFeedback {
+            session,
+            rtt_ms: p.rtt.as_millis() as u32,
+            queue_ms: p.rtt.saturating_sub(base).as_millis() as u32,
+            late_ms: self.late(p.rtt).as_millis() as u32,
+            kbps,
+            loss_pm,
+            shed: self.shed.swap(0, Ordering::Relaxed),
+        }
     }
 }
 
 /// Sends frames to one subscriber, one QUIC stream per frame. Frames that are not
 /// acknowledged within two seconds are abandoned (stream reset) so they can't pile up.
 async fn forward_task(conn: quinn::Connection, mut rx: mpsc::Receiver<(u64, Bytes)>, state: Arc<SubState>) {
+    let prioritize = !ingle_proto::ab::old("fair");
     while let Some((idx, frame)) = rx.recv().await {
+        let sent = Instant::now();
         let mut stream = match conn.open_uni().await {
             Ok(s) => s,
             Err(_) => break,
         };
+        // Oldest frames first (see `media::frame_priority`).
+        if prioritize {
+            let _ = stream.set_priority(ingle_proto::media::frame_priority(idx));
+        }
         if stream.write_all(&frame).await.is_err() {
-            state.ack(idx);
+            state.ack(idx, None);
             continue;
         }
         let _ = stream.finish();
         let st = state.clone();
+        let bytes = frame.len();
         tokio::spawn(async move {
             let done = tokio::time::timeout(Duration::from_secs(2), stream.stopped()).await;
             if done.is_err() {
                 let _ = stream.reset(VarInt::from_u32(0));
+                st.behind.store(true, Ordering::Relaxed);
                 st.need_keyframe.store(true, Ordering::Relaxed);
             }
-            st.ack(idx);
+            let ok = matches!(done, Ok(Ok(None)));
+            debug!(target: "ingle_media", ev = "fwd_ack", idx, bytes, ms = sent.elapsed().as_millis() as u64, ok);
+            st.ack(idx, ok.then_some(bytes));
         });
     }
 }
@@ -928,6 +1036,7 @@ impl Hub {
         session_cell: Arc<AtomicU32>,
         re: u64,
         groups: bool,
+        feedback: bool,
     ) -> Result<(), (ErrorCode, String)> {
         let mut inner = self.inner.lock();
         // Checked again under the lock: a ban since the login was authorized wins.
@@ -944,6 +1053,7 @@ impl Hub {
             Client {
                 user_id: uid.to_string(),
                 groups,
+                feedback,
                 conn,
                 tx: tx.clone(),
                 session: None,
@@ -1164,6 +1274,7 @@ impl Hub {
             tx: client.tx.clone(),
             subs: HashMap::new(),
             last_keyframe_request: HashMap::new(),
+            feedback: client.feedback,
         };
         inner.voice.insert(session, voice);
         Self::voice_news_locked(&inner, audience.as_ref(), Event::VoiceUpserted { participant: p });
@@ -1368,6 +1479,7 @@ impl Hub {
     fn maybe_request_keyframe(p: &mut Voice, track_id: u8, min_interval: Duration) {
         let now = Instant::now();
         let due = p.last_keyframe_request.get(&track_id).map(|t| now.duration_since(*t) >= min_interval).unwrap_or(true);
+        debug!(target: "ingle_media", ev = "kf_wanted", track = track_id, sent = due, every_ms = min_interval.as_millis() as u64);
         if due {
             p.last_keyframe_request.insert(track_id, now);
             let _ = p.tx.send(frame(0, Event::KeyframeRequested { track: track_id }));
@@ -1460,21 +1572,59 @@ impl Hub {
         }
         let mut need_kf = false;
         if let Some(subs) = v.subs.get(&track_id) {
-            for sub in subs.values() {
-                match sub.state.offer(keyframe) {
+            for (viewer, sub) in subs {
+                match sub.state.offer(keyframe, data.len(), sub.conn.rtt()) {
                     Offer::Send(idx) => {
                         if sub.tx.try_send((idx, data.clone())).is_err() {
-                            sub.state.ack(idx);
+                            sub.state.ack(idx, None);
+                            sub.state.behind.store(true, Ordering::Relaxed);
                             sub.state.need_keyframe.store(true, Ordering::Relaxed);
+                            sub.state.shed.fetch_add(1, Ordering::Relaxed);
+                            debug!(target: "ingle_media", ev = "shed", viewer, why = "queue_full");
                             need_kf = true;
                         }
                     }
-                    Offer::SkipNeedKeyframe => need_kf = true,
+                    // (Someone who's only just started watching waits for their first keyframe
+                    // without it counting against their sharer's connection: it used to halve
+                    // the share's bitrate every time someone tuned in.)
+                    Offer::Skip { shed } => {
+                        if shed {
+                            sub.state.shed.fetch_add(1, Ordering::Relaxed);
+                        }
+                        debug!(target: "ingle_media", ev = "shed", viewer, why = if shed { "behind" } else { "first_key" });
+                        need_kf = true
+                    }
                 }
             }
         }
         if need_kf {
             Self::maybe_request_keyframe(v, track_id, Duration::from_millis(1500));
+        }
+    }
+
+    /// Twice a second, forever: tells everyone sharing a camera or screen (whose app knows
+    /// how, `VIDEO_FEEDBACK_CAP`) how each of their viewers' connections is getting on with it,
+    /// so they send what their slowest viewer can take instead of what makes them fall
+    /// behind. (`INGLE_AB=feedback`: not told.)
+    pub async fn feedback_loop(self: Arc<Self>) {
+        if ingle_proto::ab::old("feedback") {
+            return;
+        }
+        let mut tick = tokio::time::interval(Duration::from_millis(500));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tick.tick().await;
+            let now = Instant::now();
+            let inner = self.inner.lock();
+            for v in inner.voice.values().filter(|v| v.feedback) {
+                for (track, subs) in &v.subs {
+                    if subs.is_empty() {
+                        continue;
+                    }
+                    let viewers: Vec<ViewerFeedback> = subs.iter().map(|(s, sub)| sub.state.report(*s, &sub.conn, now)).collect();
+                    let _ = v.tx.send(frame(0, Event::VideoFeedback { track: *track, viewers }));
+                }
+            }
         }
     }
 
@@ -1699,8 +1849,8 @@ impl Hub {
         if skin {
             names.push(crate::db::skin_author(&sub.files));
         }
-        let claims = self.author_names(&names, &sub.author_id)?;
-        // A new version: of one of the sender's own, of the same kind.
+        // A new version: of one of the sender's own, of the same kind (said before whose name
+        // it's under, which is the closer reason when someone sends a version of another's).
         let mut changes = String::new();
         if sub.update_of != 0 {
             let Some((before, before_files)) = self.db.submission(sub.update_of) else {
@@ -1715,6 +1865,7 @@ impl Hub {
             let before_files: Vec<SourceFile> = serde_json::from_str(&before_files).unwrap_or_default();
             changes = describe_changes(&manifest_of(&before_files), &manifest_of(&sub.files));
         }
+        let claims = self.author_names(&names, &sub.author_id)?;
         let files = serde_json::to_string(&sub.files).map_err(|e| e.to_string())?;
         self.claim_author_names(claims, &sub.author_id)?;
         let id = self.db.add_submission(&sub, &files, size as u64, &changes).map_err(|e| format!("{e:#}"))?;
@@ -1880,4 +2031,59 @@ pub fn plain_relative_path(p: &str) -> bool {
         && !p.contains(['\\', ':'])
         && !p.chars().any(|c| c.is_control())
         && p.split('/').all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A viewer whose oldest frame is long overdue is stuck: frames are skipped for them until
+    /// a keyframe. With the media log on (which reads how late they are as it says so), this
+    /// once locked the same thing twice and froze the whole server.
+    #[test]
+    fn a_stuck_viewer_is_skipped_with_the_media_log_on() {
+        let st = SubState::new(Duration::from_millis(200));
+        st.need_keyframe.store(false, Ordering::Relaxed);
+        st.unacked.lock().insert(1, (Instant::now() - Duration::from_secs(3), 30_000));
+        let subscriber = tracing_subscriber::fmt().with_max_level(tracing::Level::DEBUG).with_test_writer().finish();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let offered = tracing::subscriber::with_default(subscriber, || st.offer(false, 10_000, Duration::from_millis(200)));
+            let _ = tx.send(matches!(offered, Offer::Skip { shed: true }));
+        });
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(true), "skipped (and didn't hang)");
+    }
+
+    /// A viewer keeping up gets every frame, and its report says how it's doing.
+    #[test]
+    fn a_viewer_keeping_up_gets_frames() {
+        let st = SubState::new(Duration::from_millis(200));
+        assert!(matches!(st.offer(false, 10_000, Duration::from_millis(50)), Offer::Skip { shed: false }), "waits for a keyframe first (not shed)");
+        let Offer::Send(i) = st.offer(true, 40_000, Duration::from_millis(50)) else { panic!("the keyframe goes") };
+        st.ack(i, Some(40_000));
+        let Offer::Send(_) = st.offer(false, 10_000, Duration::from_millis(50)) else { panic!("then the rest") };
+        assert_eq!(st.late(Duration::from_millis(50)), Duration::ZERO);
+        assert_eq!(st.delivered.load(Ordering::Relaxed), 40_000);
+    }
+
+    /// Frames skipped for someone who fell behind count as shed (their sharer sends less) until
+    /// the keyframe that catches them up; the ones before a new viewer's first keyframe don't
+    /// (counting those halved a share's bitrate whenever someone started watching).
+    #[test]
+    fn only_falling_behind_is_shed() {
+        let rtt = Duration::from_millis(50);
+        let st = SubState::new(rtt);
+        for _ in 0..3 {
+            assert!(matches!(st.offer(false, 10_000, rtt), Offer::Skip { shed: false }), "a new viewer waiting for a keyframe");
+        }
+        let Offer::Send(i) = st.offer(true, 40_000, rtt) else { panic!("the keyframe goes") };
+        st.ack(i, Some(40_000));
+        // Falls behind: a frame on its way for 3 s.
+        st.unacked.lock().insert(99, (Instant::now() - Duration::from_secs(3), 30_000));
+        assert!(matches!(st.offer(false, 10_000, rtt), Offer::Skip { shed: true }), "stuck");
+        st.unacked.lock().clear();
+        assert!(matches!(st.offer(false, 10_000, rtt), Offer::Skip { shed: true }), "still waiting to catch up");
+        let Offer::Send(_) = st.offer(true, 40_000, rtt) else { panic!("the keyframe catches them up") };
+        let Offer::Send(_) = st.offer(false, 10_000, rtt) else { panic!("then the rest") };
+    }
 }

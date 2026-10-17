@@ -31,6 +31,8 @@ getrandom = "0.2"
 ingle-proto = { path = "../proto", features = ["quic"] }
 nnnoiseless = { version = "0.5.2", default-features = false }
 openh264 = "0.9.8"
+# OpenH264's own option types, for changing a running encoder's bitrate and frame rate.
+openh264-sys2 = { version = "0.9.8", default-features = false }
 opus = "0.4.0"
 parking_lot = "0.12.5"
 quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
@@ -52,6 +54,8 @@ yuv = "0.8.19"
 
 [dev-dependencies]
 ingle-server = { path = "../server" }
+# The test bot's media log (examples/bot.rs --media-log).
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

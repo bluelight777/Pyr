@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail};
@@ -21,12 +21,15 @@ use crate::e2ee::E2ee;
 use crate::server::ServerHandle;
 use crate::state::{CallStats, CallView, VideoKey};
 use crate::video::codec::EncodedFrame;
-use crate::video::{FrameSlot, Publisher, PublisherConfig, Receiver, capture};
+use crate::video::adapt::{PathSample, RateControl, ViewerReport};
+use crate::video::{FrameSlot, Publisher, PublisherConfig, Receiver, SendLink, capture};
 
 pub enum CallEvent {
     Upserted(VoiceParticipant),
     Removed(SessionId),
     KeyframeRequested(u8),
+    /// How the viewers of our camera or screen share are getting on (from the server).
+    VideoFeedback(u8, Vec<ViewerFeedback>),
     Key { from: SessionId, epoch: u16, nonce: Vec<u8>, ct: Vec<u8> },
     Disconnected,
 }
@@ -36,12 +39,25 @@ pub enum CallEvent {
 /// call lock (see `crate::drop_later`).
 pub struct VideoOut {
     publisher: Publisher,
+    cfg: PublisherConfig,
     net_task: tokio::task::JoinHandle<()>,
+    rate_task: tokio::task::JoinHandle<()>,
+    /// How much the network can take for it (see `video::adapt`).
+    rate: Arc<Mutex<RateControl>>,
+    /// Where to remember the bitrate it settled at (for the next share on this server), and
+    /// under what (server key, track), and when it started.
+    remember: (Arc<Mutex<HashMap<(String, u8), u32>>>, (String, u8), Instant),
 }
 
 impl Drop for VideoOut {
     fn drop(&mut self) {
         self.net_task.abort();
+        self.rate_task.abort();
+        // (Only once it has had time to settle; a little under it, to be safe.)
+        if self.remember.2.elapsed() > Duration::from_secs(10) {
+            let settled = self.rate.lock().target() as f64 * 0.9;
+            self.remember.0.lock().insert(self.remember.1.clone(), settled as u32);
+        }
     }
 }
 
@@ -49,6 +65,7 @@ impl Drop for VideoOut {
 /// (opening the capture, which can take seconds) runs without holding the call.
 pub struct VideoCtx {
     pub session: SessionId,
+    server_key: String,
     conn: quinn::Connection,
     e2ee: Arc<Mutex<E2ee>>,
     seqs: Arc<[AtomicU32; 4]>,
@@ -93,25 +110,31 @@ impl VideoCtx {
                 }
             })
         };
-        let inflight = Arc::new(AtomicUsize::new(0));
-        let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let (e2ee, seqs, inf, started) = (self.e2ee.clone(), self.seqs.clone(), inflight.clone(), self.started);
+        let link = Arc::new(SendLink::default());
+        // Starting where the last share on this server settled (or at the preset's bitrate).
+        let key = (self.server_key.clone(), track_id);
+        let start_bps = shared.video_rates.lock().get(&key).copied().unwrap_or(cfg.bitrate).min(cfg.bitrate);
+        let rate = Arc::new(Mutex::new(RateControl::new(cfg.bitrate, start_bps, Instant::now())));
+        let (tx, rx) = mpsc::unbounded_channel::<(u32, Vec<u8>)>();
+        let (e2ee, seqs, lk, started) = (self.e2ee.clone(), self.seqs.clone(), link.clone(), self.started);
         let counters = shared.clone();
-        let sink = Box::new(move |f: EncodedFrame, _w: u32, _h: u32| {
-            let Some(pkt) = seal_video(&e2ee, &seqs, track_id, &f, started.elapsed().as_millis() as u32) else {
+        let sink = Box::new(move |f: EncodedFrame, w: u32, h: u32| {
+            let Some((seq, pkt)) = seal_video(&e2ee, &seqs, track_id, &f, started.elapsed().as_millis() as u32) else {
                 return;
             };
+            debug!(target: "ingle_media", ev = "enc", track = track_id, seq, key = f.keyframe, bytes = pkt.len(), w, h);
             counters.call_counters.video_sent.fetch_add(1, Ordering::Relaxed);
             counters.call_counters.video_bytes.fetch_add(pkt.len() as u64, Ordering::Relaxed);
-            inf.fetch_add(1, Ordering::Relaxed);
-            let _ = tx.send(pkt);
+            lk.inflight.fetch_add(1, Ordering::Relaxed);
+            let _ = tx.send((seq, pkt));
         });
         let video = shared.video.clone();
         let me = self.session;
         let preview = Box::new(move |w, h, px| video.put(VideoKey { session: me, track: track_id }, w, h, px));
         let (fps, max_w, max_h) = (cfg.fps, cfg.max_width, cfg.max_height);
-        let publisher = Publisher::start(cfg, capture, slot, sink, Some(preview), inflight.clone(), Some(open), on_event)?;
-        let net_task = shared.rt.spawn(video_send_loop(self.conn.clone(), rx, inflight));
+        let publisher = Publisher::start(cfg, capture, slot, sink, Some(preview), link.clone(), Some(open), on_event)?;
+        let net_task = shared.rt.spawn(video_send_loop(self.conn.clone(), rx, link.clone(), rate.clone()));
+        let rate_task = shared.rt.spawn(rate_loop(self.conn.clone(), rate.clone(), link, track_id));
         let info = TrackInfo {
             id: track_id,
             kind: if track_id == track::SCREEN { TrackKind::Screen } else { TrackKind::Camera },
@@ -120,7 +143,7 @@ impl VideoCtx {
             fps,
             viewers: Vec::new(),
         };
-        Ok((VideoOut { publisher, net_task }, info))
+        Ok((VideoOut { publisher, cfg, net_task, rate_task, rate, remember: (shared.video_rates.clone(), key, Instant::now()) }, info))
     }
 }
 
@@ -167,7 +190,7 @@ fn seal_audio(e2ee: &Mutex<E2ee>, seqs: &[AtomicU32; 4], track_id: u8, fl: u8, o
     Some(Bytes::from(out))
 }
 
-fn seal_video(e2ee: &Mutex<E2ee>, seqs: &[AtomicU32; 4], track_id: u8, f: &EncodedFrame, ts_ms: u32) -> Option<Vec<u8>> {
+fn seal_video(e2ee: &Mutex<E2ee>, seqs: &[AtomicU32; 4], track_id: u8, f: &EncodedFrame, ts_ms: u32) -> Option<(u32, Vec<u8>)> {
     let mut e = e2ee.lock();
     if !e.can_send() {
         return None;
@@ -191,30 +214,112 @@ fn seal_video(e2ee: &Mutex<E2ee>, seqs: &[AtomicU32; 4], track_id: u8, f: &Encod
     let mut out = Vec::with_capacity(media::VIDEO_HEADER_LEN + ct.len());
     out.extend_from_slice(&h.to_bytes());
     out.extend_from_slice(&ct);
-    Some(out)
+    Some((seq, out))
 }
 
-async fn video_send_loop(conn: quinn::Connection, mut rx: mpsc::UnboundedReceiver<Vec<u8>>, inflight: Arc<AtomicUsize>) {
-    while let Some(buf) = rx.recv().await {
+async fn video_send_loop(conn: quinn::Connection, mut rx: mpsc::UnboundedReceiver<(u32, Vec<u8>)>, link: Arc<SendLink>, rate: Arc<Mutex<RateControl>>) {
+    let prioritize = !ingle_proto::ab::old("fair");
+    let mut n: u64 = 0;
+    while let Some((seq, buf)) = rx.recv().await {
+        let sent = Instant::now();
         let mut s = match conn.open_uni().await {
             Ok(s) => s,
             Err(_) => {
-                inflight.fetch_sub(1, Ordering::Relaxed);
+                link.inflight.fetch_sub(1, Ordering::Relaxed);
                 break;
             }
         };
+        // Oldest frames first (see `media::frame_priority`).
+        if prioritize {
+            let _ = s.set_priority(media::frame_priority(n));
+        }
+        n += 1;
+        rate.lock().on_sent(seq, buf.len(), sent);
         if s.write_all(&buf).await.is_err() {
-            inflight.fetch_sub(1, Ordering::Relaxed);
+            link.inflight.fetch_sub(1, Ordering::Relaxed);
+            rate.lock().on_acked(seq, false, Instant::now());
             continue;
         }
         let _ = s.finish();
-        let inf = inflight.clone();
+        let (lk, rc) = (link.clone(), rate.clone());
+        let bytes = buf.len();
         tokio::spawn(async move {
-            if tokio::time::timeout(Duration::from_secs(2), s.stopped()).await.is_err() {
+            // All of it acknowledged (not stopped by the server, which takes no more when it's
+            // swamped), within 2 s.
+            let done = tokio::time::timeout(Duration::from_secs(2), s.stopped()).await;
+            let ok = matches!(done, Ok(Ok(None)));
+            if done.is_err() {
                 let _ = s.reset(VarInt::from_u32(0));
             }
-            inf.fetch_sub(1, Ordering::Relaxed);
+            debug!(target: "ingle_media", ev = "ack", seq, bytes, ms = sent.elapsed().as_millis() as u64, ok);
+            rc.lock().on_acked(seq, ok, Instant::now());
+            lk.inflight.fetch_sub(1, Ordering::Relaxed);
         });
+    }
+}
+
+/// Every 100 ms: how much the network can take for one outgoing camera or screen share (see
+/// `video::adapt::RateControl`), told to its encoder.
+async fn rate_loop(conn: quinn::Connection, rate: Arc<Mutex<RateControl>>, link: Arc<SendLink>, track_id: u8) {
+    let mut tick = tokio::time::interval(Duration::from_millis(100));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut said = (0u32, "");
+    loop {
+        tick.tick().await;
+        if conn.close_reason().is_some() {
+            break;
+        }
+        let p = conn.stats().path;
+        let now = Instant::now();
+        let sample = PathSample { rtt: p.rtt, min_rtt: p.min_rtt, lost: p.lost_packets, sent: p.sent_packets };
+        let (target, late, why, acked, base) = {
+            let mut r = rate.lock();
+            let t = r.tick(now, sample);
+            (t, r.oldest_late(now), r.why, r.acked_bps(now), r.base_rtt())
+        };
+        link.target_bps.store(target, Ordering::Relaxed);
+        link.late_ms.store(late.as_millis() as u32, Ordering::Relaxed);
+        link.rtt_ms.store(p.rtt.as_millis() as u32, Ordering::Relaxed);
+        // (The media log: when it changes course, and twice a second.)
+        if tracing::enabled!(target: "ingle_media", tracing::Level::DEBUG) && (why != said.1 || target.abs_diff(said.0) > said.0 / 10) {
+            said = (target, why);
+            debug!(
+                target: "ingle_media",
+                ev = "rate",
+                track = track_id,
+                kbps = target / 1000,
+                why,
+                acked_kbps = (acked / 1000.0) as u32,
+                late_ms = late.as_millis() as u64,
+                rtt = p.rtt.as_millis() as u64,
+                base = base.as_millis() as u64
+            );
+        }
+    }
+}
+
+/// For measuring calls over test networks (`ingle_media` at debug level): the connection's
+/// round trip, congestion window and losses, twice a second.
+async fn path_log_loop(conn: quinn::Connection) {
+    let mut tick = tokio::time::interval(Duration::from_millis(500));
+    loop {
+        tick.tick().await;
+        if conn.close_reason().is_some() {
+            break;
+        }
+        if tracing::enabled!(target: "ingle_media", tracing::Level::DEBUG) {
+            let p = conn.stats().path;
+            debug!(
+                target: "ingle_media",
+                ev = "path",
+                rtt = p.rtt.as_micros() as u64,
+                min_rtt = p.min_rtt.as_micros() as u64,
+                cwnd = p.cwnd,
+                lost = p.lost_packets,
+                sent = p.sent_packets,
+                cong = p.congestion_events
+            );
+        }
     }
 }
 
@@ -322,7 +427,30 @@ async fn event_loop(shared: Arc<Shared>, mut rx: mpsc::UnboundedReceiver<CallEve
                         call.on_removed(&shared, s);
                     }
                 }
+                CallEvent::VideoFeedback(t, viewers) => {
+                    let out = if t == track::CAMERA { call.camera.as_ref() } else { call.screen.as_ref() };
+                    if let Some(v) = out.filter(|_| !ingle_proto::ab::old("feedback")) {
+                        let reports: Vec<ViewerReport> = viewers
+                            .iter()
+                            .map(|f| ViewerReport {
+                                session: f.session,
+                                rtt_ms: f.rtt_ms,
+                                queue_ms: f.queue_ms,
+                                late_ms: f.late_ms,
+                                kbps: f.kbps,
+                                loss_pm: f.loss_pm,
+                                shed: f.shed,
+                            })
+                            .collect();
+                        for r in &reports {
+                            debug!(target: "ingle_media", ev = "feedback", viewer = r.session, rtt = r.rtt_ms, queue = r.queue_ms, late = r.late_ms, kbps = r.kbps, loss_pm = r.loss_pm, shed = r.shed);
+                        }
+                        v.rate.lock().on_viewers(&reports, Instant::now());
+                        shared.call_counters.video_feedback.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
                 CallEvent::KeyframeRequested(t) => {
+                    debug!(target: "ingle_media", ev = "kfask", track = t);
                     let out = if t == track::CAMERA { call.camera.as_ref() } else { call.screen.as_ref() };
                     if let Some(v) = out {
                         v.publisher.keyframe.store(true, Ordering::Relaxed);
@@ -455,6 +583,9 @@ impl Call {
         call.start_audio(&shared, muted, deafened);
         call.tasks.push(tokio::spawn(datagram_loop(shared.clone(), conn.clone(), e2ee.clone())));
         call.tasks.push(tokio::spawn(uni_loop(shared.clone(), conn.clone(), e2ee.clone())));
+        if tracing::enabled!(target: "ingle_media", tracing::Level::DEBUG) {
+            call.tasks.push(tokio::spawn(path_log_loop(conn.clone())));
+        }
         for p in &participants {
             call.on_participant(&shared, p);
         }
@@ -600,7 +731,8 @@ impl Call {
     fn subscribe(&mut self, shared: &Arc<Shared>, key: VideoKey) {
         let handle = self.handle.clone();
         let rq = Box::new(move || handle.notify(Request::RequestKeyframe { session: key.session, track: key.track }));
-        self.receivers.insert(key, Receiver::start(key, shared.video.clone(), rq));
+        let conn = self.conn.clone();
+        self.receivers.insert(key, Receiver::start(key, shared.video.clone(), rq, Box::new(move || conn.rtt())));
         self.handle.notify(Request::Subscribe { session: key.session, track: key.track });
     }
 
@@ -688,7 +820,14 @@ impl Call {
 
     /// What `VideoCtx::start` needs, to start a camera or screen share outside the call lock.
     pub fn video_ctx(&self) -> VideoCtx {
-        VideoCtx { session: self.session, conn: self.conn.clone(), e2ee: self.e2ee.clone(), seqs: self.seqs.clone(), started: self.started }
+        VideoCtx {
+            session: self.session,
+            server_key: self.server_key.clone(),
+            conn: self.conn.clone(),
+            e2ee: self.e2ee.clone(),
+            seqs: self.seqs.clone(),
+            started: self.started,
+        }
     }
 
     /// A started camera or screen share goes live (the server tells the others). Returns the one
@@ -715,6 +854,19 @@ impl Call {
 
     pub fn video_on(&self, track_id: u8) -> bool {
         if track_id == track::SCREEN { self.screen.is_some() } else { self.camera.is_some() }
+    }
+
+    /// What our screen share (or else our camera) is sending now.
+    pub fn sending(&self) -> Option<crate::state::Sending> {
+        let v = self.screen.as_ref().or(self.camera.as_ref())?;
+        let s = &v.publisher.stats;
+        let (height, fps, kbps) = (s.height.load(Ordering::Relaxed) as u32, s.fps.load(Ordering::Relaxed), s.target_kbps.load(Ordering::Relaxed));
+        if height == 0 {
+            return None;
+        }
+        // (Only what the network asked for counts as lowered: see `PublisherStats::lowered`.)
+        let lowered = s.lowered.load(Ordering::Relaxed);
+        Some(crate::state::Sending { height, fps: if fps > 0 { fps } else { v.cfg.fps }, kbps: if kbps > 0 { kbps } else { v.cfg.bitrate / 1000 }, lowered })
     }
 
     pub fn publisher_stats(&self, track_id: u8) -> Option<(u64, u64, u64)> {

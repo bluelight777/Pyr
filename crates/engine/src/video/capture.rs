@@ -220,12 +220,23 @@ pub fn list_screens() -> Vec<ScreenSource> {
         width: 1920,
         height: 1080,
     });
+    // For trying a share over a slow or far-away connection with any build:
+    // `INGLE_TEST_SOURCES=1` lists the moving and the scrolling test pictures too (testsrc.rs).
+    if std::env::var_os("INGLE_TEST_SOURCES").is_some() {
+        for (id, name) in [(super::testsrc::MOTION_ID, "Test: moving picture"), (super::testsrc::TEXT_ID, "Test: scrolling text")] {
+            v.push(ScreenSource { id: id.into(), name: name.into(), kind: SourceKind::Test, width: 1920, height: 1080 });
+        }
+    }
     v
 }
 
 pub fn start_screen(id: &str, fps: u32, slot: Arc<FrameSlot>) -> Result<CaptureHandle> {
     if id == TEST_PATTERN_ID {
         return Ok(start_test_pattern(slot, 1920, 1080, fps));
+    }
+    // (Synthetic screens for testing over slow networks, not in the picker: video/testsrc.rs.)
+    if let Some(h) = super::testsrc::start(id, 1920, 1080, fps, slot.clone()) {
+        return Ok(h);
     }
     platform_start_screen(id, fps, slot)
 }

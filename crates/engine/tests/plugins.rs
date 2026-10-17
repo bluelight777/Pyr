@@ -98,7 +98,10 @@ async fn plugins_reach_only_the_owner_and_approved_ones_are_saved() {
         other => panic!("a member can't switch collecting on: got {other:?}"),
     }
     // The owner's own plugin switches collecting on, then goes.
-    assert_eq!(send(&owner, plugin("Owner's tool"), Some(&key)).await, BugSend::Sent);
+    // (Under Firelit Games' name: the first to send under a name keeps it, and the stranger's
+    // below are Mara's.)
+    let owners = PluginSubmission { author: "Firelit Games".into(), ..plugin("Owner's tool") };
+    assert_eq!(send(&owner, owners, Some(&key)).await, BugSend::Sent);
     assert!(toast(&owner, "Your plugin will be looked at before it's listed"));
     wait_for("on", 10, || owner.state().servers[0].info.plugin_submissions).await;
     // A stranger with no account sends one.

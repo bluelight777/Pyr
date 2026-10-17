@@ -74,7 +74,8 @@ pub const STREAM_AUDIO_KBPS: u32 = 128;
 /// What sound goes with a screen share of `source_id`, if we can capture it here.
 pub fn stream_audio_source(source_id: &str) -> Option<audio::stream::StreamAudioSource> {
     use audio::stream::StreamAudioSource;
-    if source_id == video::capture::TEST_PATTERN_ID {
+    // (The test pattern and the synthetic test screens, see video/testsrc.rs.)
+    if source_id == video::capture::TEST_PATTERN_ID || source_id == video::testsrc::MOTION_ID || source_id == video::testsrc::TEXT_ID {
         return Some(StreamAudioSource::Synthetic);
     }
     #[cfg(windows)]
@@ -101,11 +102,13 @@ pub struct CallCounters {
     pub video_sent: AtomicU64,
     pub video_bytes: AtomicU64,
     pub video_received: AtomicU64,
+    /// Reports from the server on how our viewers are getting on (see `video::adapt`).
+    pub video_feedback: AtomicU64,
 }
 
 impl CallCounters {
     fn reset(&self) {
-        for c in [&self.audio_sent, &self.undecryptable, &self.video_sent, &self.video_bytes, &self.video_received] {
+        for c in [&self.audio_sent, &self.undecryptable, &self.video_sent, &self.video_bytes, &self.video_received, &self.video_feedback] {
             c.store(0, Ordering::Relaxed);
         }
     }
@@ -161,6 +164,9 @@ pub struct Shared {
     /// Counts starts and stops of our [camera, screen share]: a start that's still opening when
     /// a newer start or a stop comes doesn't go live.
     video_gen: [AtomicU64; 2],
+    /// The bitrate our last camera or screen share settled at on each server (server key,
+    /// track): the next one starts there instead of finding it again (see `video::adapt`).
+    pub(crate) video_rates: Arc<Mutex<std::collections::HashMap<(String, u8), u32>>>,
     /// Read marks changed that aren't saved yet (see `mark_read`).
     read_unsaved: AtomicBool,
     /// Soundboard sounds fetched and decoded so far.
@@ -581,9 +587,10 @@ impl Shared {
                 c.video_on(track::SCREEN),
                 c.stream_audio_on(),
                 c.conn_rtt(),
+                c.sending(),
             )
         };
-        let (session, speaking, transmitting, mic_db, jitter, audio_err, code, ready, watching, cam, scr, scr_audio, rtt) = snapshot;
+        let (session, speaking, transmitting, mic_db, jitter, audio_err, code, ready, watching, cam, scr, scr_audio, rtt, sending) = snapshot;
         let now = std::time::Instant::now();
         let video_bytes = self.call_counters.video_bytes.load(Ordering::Relaxed);
         let kbps = {
@@ -626,6 +633,7 @@ impl Shared {
             if let Some(k) = kbps {
                 cv.stats.video_send_kbps = k;
             }
+            cv.stats.sending = sending;
             if let Some(j) = jitter {
                 cv.stats.audio_received = j.received;
                 cv.stats.audio_lost = j.lost;
@@ -793,6 +801,7 @@ impl Engine {
             window_focused: AtomicBool::new(true),
             focus_probe: Mutex::new(None),
             video_gen: [AtomicU64::new(0), AtomicU64::new(0)],
+            video_rates: Arc::default(),
             read_unsaved: AtomicBool::new(false),
             sounds: Mutex::new(soundboard::Cache::default()),
             sounds_on: Mutex::new(Default::default()),
@@ -877,6 +886,11 @@ impl Engine {
 
     pub fn video_frame(&self, key: VideoKey) -> Option<SharedFrame> {
         self.shared.video.get(key)
+    }
+
+    /// The current call's packet and frame counts (for tests and diagnostics).
+    pub fn call_counters(&self) -> &CallCounters {
+        &self.shared.call_counters
     }
 
     fn toast(&self, text: impl Into<String>, error: bool) {

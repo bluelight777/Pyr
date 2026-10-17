@@ -325,6 +325,9 @@ pub const VOUCHES_FEATURE: &str = "vouches";
 pub const VOUCHES_FOR_ME_FEATURE: &str = "vouches-for-me";
 /// In `Login::caps`: this app knows group conversations ([`GROUPS_FEATURE`]).
 pub const GROUPS_CAP: &str = "groups";
+/// In `Login::caps`: this app adjusts its camera and screen share to its viewers'
+/// connections, from `Event::VideoFeedback` (0.8.0).
+pub const VIDEO_FEEDBACK_CAP: &str = "video_feedback";
 /// The most people in a group conversation.
 pub const MAX_GROUP: usize = 10;
 
@@ -1025,6 +1028,27 @@ pub enum TrackKind {
     ScreenAudio,
 }
 
+/// How one viewer's connection is getting on with a camera or screen share, as the server
+/// sees it (see `Event::VideoFeedback`).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct ViewerFeedback {
+    pub session: SessionId,
+    /// Their round trip to the server, and how much of it is queueing (above the quietest
+    /// it's been lately).
+    pub rtt_ms: u32,
+    pub queue_ms: u32,
+    /// How late the oldest frame still on its way to them is (beyond a round trip and the
+    /// time its own data takes).
+    pub late_ms: u32,
+    /// What reached them, kbit/s.
+    pub kbps: u32,
+    /// Packets lost on the way to them, per thousand.
+    pub loss_pm: u32,
+    /// Frames they missed because they couldn't keep up (since the last report).
+    pub shed: u32,
+}
+
 /// A media track a voice participant is publishing.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct TrackInfo {
@@ -1669,6 +1693,12 @@ pub enum Event {
     /// Sent to a publisher: a subscriber needs a keyframe on `track`.
     KeyframeRequested {
         track: u8,
+    },
+    /// Sent to a publisher that knows it ([`VIDEO_FEEDBACK_CAP`]), twice a second while
+    /// anyone watches `track`: how each viewer's connection is getting on with it.
+    VideoFeedback {
+        track: u8,
+        viewers: Vec<ViewerFeedback>,
     },
     E2eeKey {
         from: SessionId,

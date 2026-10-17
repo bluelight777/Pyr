@@ -760,11 +760,24 @@ impl IngleApp {
                 0.0
             };
             let mut lines = vec![format!("{} ms ping · jitter {:.0} ms", stt.rtt_ms, stt.jitter_ms), format!("buffer {} ms · loss {:.1}%", stt.buffer_ms, loss)];
+            // Which line says the share was lowered (it explains itself on hover).
+            let mut lowered_line = None;
             if call.camera_on || call.screen_on {
-                lines.push(format!("sending {} kbps", stt.video_send_kbps));
+                match stt.sending {
+                    // (Lowered: to suit the connection, ours or a viewer's, see `video::adapt`.)
+                    Some(s) => {
+                        lines.push(format!("sending {}p {} fps · {:.1} Mbps", s.height, s.fps, s.kbps as f32 / 1000.0));
+                        if s.lowered {
+                            lowered_line = Some(lines.len());
+                            lines.push("lowered to fit the connection".into());
+                        }
+                    }
+                    None => lines.push(format!("sending {} kbps", stt.video_send_kbps)),
+                }
             }
             if let Some(err) = &call.audio_error {
                 lines = vec!["Audio problem:".into(), err.clone()];
+                lowered_line = None;
             }
             // Keep the text clear of the call buttons (they're centred, `CALL_BUTTONS` wide);
             // anything longer is cut with "…" and shown in full on hover.
@@ -773,6 +786,8 @@ impl IngleApp {
             let width = (buttons_left - r.left() - 28.0).max(60.0);
             let color = if call.audio_error.is_some() { theme::LIVE() } else { theme::DIM() };
             let mut cut = false;
+            // (The lines centred on the bar, 14 apart.)
+            let top = r.center().y - (lines.len() as f32 - 1.0) * 7.0;
             for (i, l) in lines.iter().enumerate() {
                 let mut job = egui::text::LayoutJob::simple(l.clone(), theme::font(11.0), color, width);
                 job.wrap.max_rows = 1;
@@ -780,12 +795,19 @@ impl IngleApp {
                 job.wrap.overflow_character = Some('…');
                 let galley = ui.fonts_mut(|f| f.layout_job(job));
                 cut |= galley.elided;
-                let pos = pos2(r.left() + 16.0, r.center().y - 14.0 + i as f32 * 14.0 - galley.size().y / 2.0);
+                let pos = pos2(r.left() + 16.0, top + i as f32 * 14.0 - galley.size().y / 2.0);
                 ui.painter().galley(pos, galley, color);
             }
             if cut {
-                let area = Rect::from_min_size(pos2(r.left() + 16.0, r.center().y - 22.0), vec2(width, 16.0 + lines.len() as f32 * 14.0));
+                let area = Rect::from_min_size(pos2(r.left() + 16.0, top - 8.0), vec2(width, 2.0 + lines.len() as f32 * 14.0));
                 ui.interact(area, ui.id().with("call-stats"), Sense::hover()).on_hover_text(lines.join("\n"));
+            } else if let Some(i) = lowered_line {
+                let area = Rect::from_min_size(pos2(r.left() + 16.0, top + i as f32 * 14.0 - 8.0), vec2(width, 16.0));
+                ui.interact(area, ui.id().with("call-lowered"), Sense::hover()).on_hover_text(
+                    "What you share goes out smaller or at fewer frames a second than the quality you picked, so it \
+                     stays smooth: your upload, or a viewer's connection, can't carry more right now. It goes back up \
+                     by itself when there's room.",
+                );
             }
         }
         let (muted, deafened) = self.engine.voice_prefs();

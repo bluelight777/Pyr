@@ -404,6 +404,9 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
     let mut forward: Option<CallEvent> = None;
     let mut toast: Option<String> = None;
     let mut dm_note: Option<String> = None;
+    // A friend request (the notice, and from whom), or one that was answered or taken back.
+    let mut friend_note: Option<(String, UserId)> = None;
+    let mut friend_done: Option<UserId> = None;
     let mut ding = false;
     // Read up to here (channel, message, save now): what came while you were looking at it.
     let mut read_upto: Option<(ChannelId, MessageId, bool)> = None;
@@ -439,10 +442,14 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
                     None => s.relations.remove(&user_id),
                 };
                 let who = s.member_name(&user_id);
-                // (News, not errors: they show as notices, never with Report on them.)
+                // (News, not errors: they show as notices, never with Report on them. A request
+                // stays, with Accept and Ignore, until it's answered.)
                 if kind == Some(RelationKind::Incoming) && before != Some(RelationKind::Incoming) && !blocked.contains(&user_id) {
-                    dm_note = Some(format!("{who} sent you a friend request."));
+                    friend_note = Some((format!("{who} sent you a friend request."), user_id.clone()));
                     ding = true;
+                }
+                if before == Some(RelationKind::Incoming) && kind != Some(RelationKind::Incoming) {
+                    friend_done = Some(user_id.clone());
                 }
                 if kind == Some(RelationKind::Friend) && before == Some(RelationKind::Outgoing) {
                     dm_note = Some(format!("{who} accepted your friend request."));
@@ -642,6 +649,7 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
             }
             Event::CallDeclined { channel_id, by } => declined = Some((channel_id, by)),
             Event::KeyframeRequested { track } => forward = Some(CallEvent::KeyframeRequested(track)),
+            Event::VideoFeedback { track, viewers } => forward = Some(CallEvent::VideoFeedback(track, viewers)),
             Event::E2eeKey { from, epoch, nonce, ct } => forward = Some(CallEvent::Key { from, epoch, nonce, ct }),
             Event::SoundPlayed { session, channel_id, sound: s, name, emoji, volume } => {
                 sound = Some((session, channel_id, s, name, emoji, volume));
@@ -657,6 +665,12 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
         }
         if let Some(t) = dm_note {
             st.toast(t, false);
+        }
+        if let Some(uid) = friend_done {
+            st.friend_request_done(&uid);
+        }
+        if let Some((t, uid)) = friend_note {
+            st.friend_request(t, &uid);
         }
         let here = |st: &AppState, c: ChannelId| st.call.as_ref().is_some_and(|x| x.server_key == key && x.channel_id == c);
         let this = |c: &IncomingCall, cid: ChannelId| c.server_key == key && c.channel_id == cid;

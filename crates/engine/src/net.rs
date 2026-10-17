@@ -74,10 +74,17 @@ pub fn transport_config() -> quinn::TransportConfig {
     t.keep_alive_interval(Some(Duration::from_secs(4)));
     t.max_idle_timeout(Some(Duration::from_secs(20).try_into().expect("valid idle timeout")));
     t.datagram_receive_buffer_size(Some(1 << 20));
-    t.datagram_send_buffer_size(64 * 1024);
+    // Sound waiting to go out (while the connection is full) is dropped, oldest first, past
+    // this: a fraction of a second of voice and a share's sound. Late sound is no use (it's
+    // thrown away when it arrives), and a long queue of it only delays what comes after.
+    // (`INGLE_AB=dgram`: 64 KB, seconds of it.)
+    t.datagram_send_buffer_size(if ingle_proto::ab::old("dgram") { 64 * 1024 } else { 4 * 1024 });
     t.stream_receive_window(VarInt::from_u32(8 << 20));
     t.receive_window(VarInt::from_u32(64 << 20));
     t.send_window(16 << 20);
+    if ingle_proto::ab::bbr() {
+        t.congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default()));
+    }
     t
 }
 
@@ -232,6 +239,10 @@ pub async fn connect_and_login(
         e.connected(addr);
     }
     let (mut send, mut recv) = conn.open_bi().await?;
+    // Messages go ahead of video (and of files), see `CONTROL_PRIORITY`.
+    if !ingle_proto::ab::old("fair") {
+        let _ = send.set_priority(ingle_proto::media::CONTROL_PRIORITY);
+    }
     // QUIC only announces a stream once data is sent on it.
     send.write_all(ingle_proto::CONTROL_PREAMBLE).await?;
 
@@ -260,8 +271,8 @@ pub async fn connect_and_login(
             name: name.to_string(),
             invite: invite.map(|s| s.to_string()),
             client: format!("{} {}", ingle_proto::APP_NAME, env!("CARGO_PKG_VERSION")),
-            // (This app knows group conversations.)
-            caps: vec![ingle_proto::control::GROUPS_CAP.to_string()],
+            // (This app knows group conversations, and adjusts its shares to its viewers.)
+            caps: vec![ingle_proto::control::GROUPS_CAP.to_string(), ingle_proto::control::VIDEO_FEEDBACK_CAP.to_string()],
         },
     };
     send.write_all(&framing::encode(&login)).await?;
