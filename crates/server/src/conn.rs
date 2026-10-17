@@ -2376,10 +2376,12 @@ mod tests {
         ));
     }
 
-    fn skin_files() -> Vec<SourceFile> {
+    /// A skin's files, by `author` (in its skin.json).
+    fn skin_files(author: &str) -> Vec<SourceFile> {
         let file = |path: &str, data: &[u8]| SourceFile { path: path.into(), data: ingle_proto::b64::encode(data) };
-        let json = r##"{ "name": "Blood Moon", "version": "1.0", "summary": "Red and black.", "author": "Blue",
-            "colors": { "main": "#1a0d0f", "ember": "#d4202c" }, "sounds": { "message": "sounds/message.ings" } }"##;
+        let json = r##"{ "name": "Blood Moon", "version": "1.0", "summary": "Red and black.", "author": "AUTHOR",
+            "colors": { "main": "#1a0d0f", "ember": "#d4202c" }, "sounds": { "message": "sounds/message.ings" } }"##
+            .replace("AUTHOR", author);
         let sound = ingle_proto::sound::write(1, &[vec![0xf8, 0xff, 0xfe]]);
         vec![file("skin.json", json.as_bytes()), file("sounds/message.ings", &sound), file("big.txt", &vec![b'a'; 60_000])]
     }
@@ -2392,7 +2394,11 @@ mod tests {
         ctx(&hub, &owner).handle(Request::SetPluginSubmissions { on: true }).unwrap();
         let ip = |n: u8| -> std::net::IpAddr { format!("198.51.100.{n}").parse().unwrap() };
         let (mara, eve) = (crypto::Identity::generate().user_id(), crypto::Identity::generate().user_id());
-        let skin = |by: &str| PluginSubmission { name: "Blood Moon".into(), kind: SKIN_KIND.into(), version: "1.0".into(), author_id: by.into(), files: skin_files(), ..Default::default() };
+        // (Each under their own author name: see `author_names_are_kept_by_whoever_had_them_first`.)
+        let skin = |by: &str| {
+            let author = if by == eve { "Eve" } else { "Mara" };
+            PluginSubmission { name: "Blood Moon".into(), kind: SKIN_KIND.into(), version: "1.0".into(), author_id: by.into(), files: skin_files(author), ..Default::default() }
+        };
         // A skin is checked as Ingle checks skins.
         let mut bad = skin(&mara);
         bad.files[0].data = ingle_proto::b64::encode(br##"{ "name": "X", "version": "1", "colors": { "body": "#333333", "main": "#303030" } }"##);
@@ -2455,6 +2461,81 @@ mod tests {
         hub.take_plugin_submission(ip(20), more.clone(), true).unwrap();
         assert!(hub.take_plugin_submission(ip(21), more, true).unwrap_err().contains("a lot"));
         hub.take_plugin_submission(ip(22), skin(&eve), true).unwrap();
+    }
+
+    #[test]
+    fn author_names_are_kept_by_whoever_had_them_first() {
+        let hub = hub();
+        let owner = crypto::Identity::generate().user_id();
+        hub.db.insert_user(&owner, "Owner", Role::Owner).unwrap();
+        ctx(&hub, &owner).handle(Request::SetPluginSubmissions { on: true }).unwrap();
+        let ip = |n: u8| -> std::net::IpAddr { format!("192.0.2.{n}").parse().unwrap() };
+        let (mara, eve) = (crypto::Identity::generate().user_id(), crypto::Identity::generate().user_id());
+        let file = |path: &str, data: &[u8]| SourceFile { path: path.into(), data: ingle_proto::b64::encode(data) };
+        let plugin = |by: &str, author: &str| PluginSubmission {
+            name: "Poker".into(),
+            kind: "addon".into(),
+            version: "0.1.0".into(),
+            author: author.into(),
+            author_id: by.into(),
+            files: vec![file("Cargo.toml", b"[package]"), file("src/lib.rs", b"")],
+            ..Default::default()
+        };
+        // Mara sends one in first, signed: "Maanix" is hers.
+        hub.take_plugin_submission(ip(1), plugin(&mara, "Maanix"), true).unwrap();
+        assert_eq!(hub.db.author_name(&author_key("Maanix")).map(|(n, who)| (n, who == mara)), Some(("Maanix".to_string(), true)));
+        // Nobody else can use it, or one that only looks different: case, spaces and dashes,
+        // a Cyrillic а, a capital I for an l, 0 for o.
+        // (Each from someone new, somewhere new: six tries an hour each.)
+        for (i, name) in ["Maanix", "maanix", " MAANIX ", "Maa-nix", "Mааnix", "MaanIx", "Maan1x"].into_iter().enumerate() {
+            let someone = crypto::Identity::generate().user_id();
+            let err = hub.take_plugin_submission(ip(100 + i as u8), plugin(&someone, name), true).unwrap_err();
+            assert!(err.contains("is taken"), "{name}: {err}");
+        }
+        // Not signed, it can't be told from her either.
+        assert!(hub.take_plugin_submission(ip(3), plugin("", "Maanix"), false).unwrap_err().contains("is taken"));
+        // She can go on using it, and others their own names (signed: theirs from then on).
+        hub.take_plugin_submission(ip(4), plugin(&mara, "maanix"), true).unwrap();
+        hub.take_plugin_submission(ip(5), plugin(&eve, "Eve"), true).unwrap();
+        assert!(hub.take_plugin_submission(ip(6), plugin(&mara, "Eve"), true).unwrap_err().contains("is taken"));
+        // Not signed: taken in, but the name isn't anyone's.
+        hub.take_plugin_submission(ip(7), plugin("", "Sam"), false).unwrap();
+        assert!(hub.db.author_name(&author_key("Sam")).is_none());
+        // A skin goes by the author in its skin.json too.
+        let mut skin = plugin(&eve, "");
+        skin.kind = SKIN_KIND.into();
+        skin.name = "Blood Moon".into();
+        skin.files = skin_files("Maanix");
+        assert!(hub.take_plugin_submission(ip(8), skin.clone(), true).unwrap_err().contains("is taken"));
+        skin.files = skin_files("Eve");
+        hub.take_plugin_submission(ip(9), skin, true).unwrap();
+        // Firelit Games' names are the owner's alone.
+        for (i, name) in ["Firelit Games", "firelit", "The Firelit Crew", "Ingle"].into_iter().enumerate() {
+            let someone = crypto::Identity::generate().user_id();
+            let err = hub.take_plugin_submission(ip(120 + i as u8), plugin(&someone, name), true).unwrap_err();
+            assert!(err.contains("Firelit Games' own"), "{name}: {err}");
+        }
+        hub.take_plugin_submission(ip(11), plugin(&owner, "Firelit Games"), true).unwrap();
+        // Names given out before this server knew about them: whoever sent first has them.
+        let db = &hub.db;
+        db.refill_author_names();
+        assert!(db.author_name(&author_key("Maanix")).is_some_and(|(_, who)| who == mara));
+        assert!(db.author_name(&author_key("Eve")).is_some_and(|(_, who)| who == eve));
+        assert!(db.author_name(&author_key("Sam")).is_none(), "not signed: nobody's");
+    }
+
+    #[test]
+    fn author_names_that_look_alike_are_one() {
+        let same = |a: &str, b: &str| author_key(a) == author_key(b);
+        assert!(same("Firelit Games", "firelit-games"));
+        assert!(same("Firelit Games", "FireIit Gаmes"), "a capital i, a Cyrillic а");
+        assert!(same("Firelit Games", "Ｆｉｒｅｌｉｔ Games"), "full width");
+        assert!(same("Bob", "B0b"));
+        assert!(same("Modern", "Modem"), "rn and m");
+        assert!(same("Zoë", "Zoe"));
+        assert!(!same("Mara", "Maria"));
+        assert!(!same("Sam", "Pam"));
+        assert_eq!(author_key("\u{200b}  \u{202e}"), "", "nothing but invisible characters is no name");
     }
 
     #[test]

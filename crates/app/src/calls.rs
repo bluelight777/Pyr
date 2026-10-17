@@ -493,6 +493,7 @@ impl IngleApp {
         let (key, id) = (s.key.clone(), g.id);
         let muted = st.is_muted(&key, id);
         resp.context_menu(|ui| {
+            crate::menu::style(ui);
             if s.has(DM_CALLS_FEATURE) && ui.button("Call").clicked() {
                 acts.push(Act::CallDm { key: key.clone(), channel: id, video: false });
                 ui.close();
@@ -510,7 +511,7 @@ impl IngleApp {
                 ui.close();
             }
             ui.separator();
-            if ui.button(RichText::new("Leave group").color(theme::LIVE())).clicked() {
+            if crate::menu::danger(ui, "Leave group").clicked() {
                 self.ui.dialog = Some(Dialog::LeaveGroup { key: key.clone(), channel: id, name: name.clone() });
                 ui.close();
             }
@@ -560,6 +561,7 @@ impl IngleApp {
             if *uid != st.my_uid {
                 let uid2 = uid.clone();
                 resp.context_menu(|ui| {
+                    crate::menu::style(ui);
                     call_item(ui, st, &uid2, Some(&s.key), acts);
                     if ui.button("Message").clicked() {
                         acts.push(Act::OpenDm { key: s.key.clone(), uid: uid2.clone() });

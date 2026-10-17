@@ -1766,6 +1766,55 @@ pub fn clean_name(raw: &str, max_chars: usize) -> Option<String> {
     if trimmed.is_empty() { None } else { Some(trimmed) }
 }
 
+/// What an author's name in the Ingle Library is told apart by: its letters and digits, in
+/// lower case, with letters that look alike made the same (Cyrillic and Greek letters that look
+/// Latin, accented letters, full-width ones, 0 and o, and 1, i and l, which are hard to tell
+/// apart in many fonts; rn and m, vv and w). "Firelit Games", "firelit-games" and "FireIit Gаmes"
+/// (a capital i, a Cyrillic а) are one name: whoever has it has them all.
+pub fn author_key(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars() {
+        // Full-width forms (Ｆ) as the letters they are.
+        let c = match c as u32 {
+            0xFF01..=0xFF5E => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+            _ => c,
+        };
+        for c in c.to_lowercase() {
+            let c = match c {
+                'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' | 'а' | 'α' => 'a',
+                'в' | 'β' | 'ь' => 'b',
+                'ç' | 'ć' | 'č' | 'с' | 'ϲ' => 'c',
+                'ď' | 'đ' | 'ð' | 'ԁ' => 'd',
+                'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ė' | 'ę' | 'ě' | 'е' | 'ё' | 'ε' => 'e',
+                'ğ' | 'ġ' | 'ɡ' => 'g',
+                'н' | 'һ' | 'η' => 'h',
+                'ĵ' | 'ј' => 'j',
+                'ķ' | 'к' | 'κ' => 'k',
+                // 1, i and l (and their look-alikes) are one letter here.
+                '1' | '|' | 'i' | 'ì' | 'í' | 'î' | 'ï' | 'ī' | 'ı' | 'ɩ' | 'і' | 'ї' | 'ι' | 'ӏ' | 'l' | 'ĺ' | 'ļ' | 'ľ' | 'ł' => 'l',
+                'м' | 'μ' => 'm',
+                'ñ' | 'ń' | 'ň' | 'п' | 'ν' => 'n',
+                '0' | 'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' | 'ő' | 'о' | 'ο' | 'σ' => 'o',
+                'р' | 'ρ' => 'p',
+                'ř' | 'г' => 'r',
+                'ś' | 'š' | 'ş' | 'ѕ' => 's',
+                'ť' | 'т' | 'τ' => 't',
+                'ù' | 'ú' | 'û' | 'ü' | 'ū' | 'ů' | 'ű' | 'υ' => 'u',
+                'ѵ' => 'v',
+                'ŵ' | 'ω' | 'ш' => 'w',
+                'х' | 'χ' => 'x',
+                'ý' | 'ÿ' | 'у' | 'γ' => 'y',
+                'ź' | 'ž' | 'ż' | 'ζ' => 'z',
+                c => c,
+            };
+            if c.is_alphanumeric() {
+                out.push(c);
+            }
+        }
+    }
+    out.replace("rn", "m").replace("vv", "w")
+}
+
 /// Characters that show as nothing (zero-width spaces and joiners, text-direction overrides,
 /// blank "filler" letters...): kept out of names so nobody is invisible or look-alike, and
 /// no name flips the text around it.

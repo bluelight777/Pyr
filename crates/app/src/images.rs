@@ -649,6 +649,118 @@ pub fn clipboard_png() -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Copy picture: a picture put on the clipboard, to paste anywhere. As a picture (PNG, and a
+/// bitmap for apps like Paint; a moving one's first frame) and, on Windows, as the file itself
+/// too, so pasted into Ingle, Discord or a folder it stays just as it was (a moving GIF keeps
+/// moving, and a JPEG photo isn't made into a far bigger PNG). Takes a moment for a big one:
+/// call it off the window's thread.
+pub fn copy_picture(name: &str, bytes: &[u8]) -> Result<(), String> {
+    let img = load_limited(bytes)?.to_rgba8();
+    #[cfg(windows)]
+    {
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(img.clone()).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|e| e.to_string())?;
+        let file = copied_file(name, bytes).map_err(|e| tracing::warn!("copy picture: no file to go with it: {e}")).ok();
+        put_on_clipboard(&png, &dib_of(&img), file.as_deref())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = name;
+        // (Kept, never dropped: on Linux what's copied is served from here until something
+        // else is copied.)
+        static CLIPBOARD: std::sync::OnceLock<std::sync::Mutex<Option<arboard::Clipboard>>> = std::sync::OnceLock::new();
+        let mut cb = CLIPBOARD.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+        if cb.is_none() {
+            *cb = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
+        }
+        let (w, h) = img.dimensions();
+        let image = arboard::ImageData { width: w as usize, height: h as usize, bytes: img.into_raw().into() };
+        cb.as_mut().map(|cb| cb.set_image(image).map_err(|e| e.to_string())).unwrap_or_else(|| Err("no clipboard".into()))
+    }
+}
+
+/// A picture as a Windows bitmap (`CF_DIB`): its header, then its rows bottom up, blue green
+/// red, 4-byte aligned. See-through parts are on white (apps that read bitmaps don't know
+/// see-through, and would show black).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn dib_of(img: &image::RgbaImage) -> Vec<u8> {
+    let (w, h) = img.dimensions();
+    let row = (w as usize * 3 + 3) & !3;
+    let mut out = Vec::with_capacity(40 + row * h as usize);
+    for v in [40u32, w, h] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out.extend_from_slice(&1u16.to_le_bytes()); // planes
+    out.extend_from_slice(&24u16.to_le_bytes()); // bits a pixel
+    // No compression, its size, 72 dpi each way, no palette.
+    for v in [0u32, (row * h as usize) as u32, 2835, 2835, 0, 0] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    for y in (0..h).rev() {
+        let start = out.len();
+        for x in 0..w {
+            let [r, g, b, a] = img.get_pixel(x, y).0;
+            let on_white = |c: u8| ((c as u32 * a as u32 + 255 * (255 - a as u32)) / 255) as u8;
+            out.extend_from_slice(&[on_white(b), on_white(g), on_white(r)]);
+        }
+        out.resize(start + row, 0);
+    }
+    out
+}
+
+/// The picture copied, as a file of its own to go on the clipboard with it (in Ingle's folder
+/// in the temp folder; the one copied before is let go).
+#[cfg(windows)]
+fn copied_file(name: &str, bytes: &[u8]) -> std::io::Result<std::path::PathBuf> {
+    let dir = std::env::temp_dir().join("Ingle").join("copied");
+    std::fs::create_dir_all(&dir)?;
+    for old in std::fs::read_dir(&dir)?.flatten() {
+        let _ = std::fs::remove_file(old.path());
+    }
+    let path = dir.join(file_name_for(name, bytes));
+    std::fs::write(&path, bytes)?;
+    Ok(path)
+}
+
+/// A file name for a picture copied: its own, made safe for a folder, with the extension its
+/// kind of picture has when it has none.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn file_name_for(name: &str, bytes: &[u8]) -> String {
+    let safe: String = name.chars().map(|c| if c.is_control() || "\\/:*?\"<>|".contains(c) { '_' } else { c }).collect();
+    let safe = safe.trim().trim_matches('.').to_string();
+    let ext = match ingle_proto::control::sniff_image(bytes) {
+        Some("image/jpeg") => "jpg",
+        Some("image/gif") => "gif",
+        Some("image/webp") => "webp",
+        _ => "png",
+    };
+    let has_ext = safe.rsplit_once('.').is_some_and(|(stem, e)| !stem.is_empty() && !e.is_empty() && !e.contains(' '));
+    if safe.is_empty() {
+        format!("picture.{ext}")
+    } else if has_ext {
+        safe
+    } else {
+        format!("{safe}.{ext}")
+    }
+}
+
+/// The clipboard, emptied and given the picture: as PNG (what browsers, Discord and Office
+/// take), as a bitmap, and as its file when there's one.
+#[cfg(windows)]
+fn put_on_clipboard(png: &[u8], dib: &[u8], file: Option<&std::path::Path>) -> Result<(), String> {
+    use clipboard_win::{formats, options::NoClear, raw};
+    let _open = clipboard_win::Clipboard::new_attempts(10).map_err(|e| format!("the clipboard is busy ({e})"))?;
+    raw::empty().map_err(|e| e.to_string())?;
+    if let Some(f) = raw::register_format("PNG") {
+        raw::set_without_clear(f.get(), png).map_err(|e| e.to_string())?;
+    }
+    raw::set_without_clear(formats::CF_DIB, dib).map_err(|e| e.to_string())?;
+    if let Some(f) = file {
+        raw::set_file_list_with(&[f.to_string_lossy()], NoClear).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// The most an image attached on server `s` can be: 25 MB, or 10 MB on servers older than 0.8.
 pub fn upload_limit(s: &ingle_engine::state::ServerView) -> u64 {
     use ingle_proto::control::{BIG_FILES_FEATURE, MAX_ATTACHMENT_BYTES, OLD_MAX_ATTACHMENT_BYTES};
@@ -971,6 +1083,29 @@ pub fn save_as(name: &str, bytes: &[u8]) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_copied_picture_is_a_bitmap_and_a_file_too() {
+        // 3 × 2: red, see-through, blue / green, white, half see-through black.
+        let px = [[255, 0, 0, 255], [9, 9, 9, 0], [0, 0, 255, 255], [0, 255, 0, 255], [255, 255, 255, 255], [0, 0, 0, 128]];
+        let img = image::RgbaImage::from_raw(3, 2, px.concat()).unwrap();
+        let dib = dib_of(&img);
+        let u32_at = |i: usize| u32::from_le_bytes(dib[i..i + 4].try_into().unwrap());
+        assert_eq!((u32_at(0), u32_at(4), u32_at(8)), (40, 3, 2), "header, width, height (bottom up)");
+        assert_eq!(u16::from_le_bytes([dib[14], dib[15]]), 24, "three bytes a pixel");
+        // Rows of 9 bytes padded to 12, the bottom one first, blue green red, on white.
+        assert_eq!(dib.len(), 40 + 2 * 12);
+        assert_eq!(&dib[40..52], &[0, 255, 0, 255, 255, 255, 127, 127, 127, 0, 0, 0]);
+        assert_eq!(&dib[52..64], &[0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0]);
+        // Its file keeps its name, made safe, with the extension its kind of picture has.
+        let png = b"\x89PNG\r\n\x1a\n....";
+        let gif = b"GIF89a....";
+        assert_eq!(file_name_for("cat.gif", gif), "cat.gif");
+        assert_eq!(file_name_for("pasted-image", png), "pasted-image.png");
+        assert_eq!(file_name_for("a/b\\c:d*.gif", gif), "a_b_c_d_.gif");
+        assert_eq!(file_name_for("  ", gif), "picture.gif");
+        assert_eq!(file_name_for(".hidden", png), "hidden.png");
+    }
 
     #[test]
     fn a_pictures_own_color_is_its_strongest_hue() {

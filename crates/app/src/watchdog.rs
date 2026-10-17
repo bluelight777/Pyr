@@ -45,7 +45,12 @@ mod win {
 
     /// Start watching the main window (call once the tray module knows it).
     pub fn start(engine: Arc<Engine>) {
+        // (Once: when the window is opened again, the same watch carries on, on the new one.)
+        static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         let Some(main) = crate::tray::main_window() else { return };
+        if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         // A window handle is just a number; it's fine to use from another thread.
         let main = main.0 as isize;
         let _ = std::thread::Builder::new().name("ingle-watchdog".into()).spawn(move || run(HWND(main as *mut _), engine));
@@ -170,6 +175,8 @@ mod win {
         let mut last_health = Instant::now();
         loop {
             std::thread::sleep(Duration::from_secs(2));
+            // (The window there is now: after it's opened again, the new one.)
+            let main = crate::tray::main_window().unwrap_or(main);
             // Answered by the window's thread whenever it checks its messages (even while the
             // window is hidden in the tray).
             let answered = unsafe {
@@ -196,6 +203,15 @@ mod win {
                 }
                 (true, Some(t)) => {
                     tracing::info!("Ingle's window responds again after {} s", t.elapsed().as_secs());
+                    // A freeze it came out of is a bug too: reported by itself (with the log of
+                    // what it was doing).
+                    if t.elapsed() >= Duration::from_secs(4) {
+                        ingle_engine::bugs::auto_report(
+                            &engine.shared,
+                            "Ingle stopped responding for a while",
+                            &format!("Ingle's window didn't respond for {} s, then carried on.", t.elapsed().as_secs()),
+                        );
+                    }
                     hung_since = None;
                 }
                 _ => {}

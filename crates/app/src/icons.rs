@@ -190,6 +190,48 @@ pub fn people(p: &Painter, r: Rect, c: Color32) {
     p.add(Shape::convex_polygon(arc(pos2(r.left() + s * 0.72, r.top() + s * 0.80), s * 0.19, PI, TAU, 10), c, Stroke::NONE));
 }
 
+/// One person: a head and shoulders (My Account).
+pub fn person(p: &Painter, r: Rect, c: Color32) {
+    let s = r.width().min(r.height());
+    let ctr = r.center();
+    p.circle_filled(ctr + vec2(0.0, -s * 0.17), s * 0.19, c);
+    p.add(Shape::convex_polygon(arc(ctr + vec2(0.0, s * 0.47), s * 0.36, PI, TAU, 14), c, Stroke::NONE));
+}
+
+/// A bell (notifications).
+pub fn bell(p: &Painter, r: Rect, c: Color32) {
+    let s = r.width().min(r.height());
+    let ctr = r.center();
+    // The dome, its sides flaring out to the rim, and the clapper under it.
+    let mut pts = arc(ctr + vec2(0.0, -s * 0.12), s * 0.26, PI, TAU, 12);
+    pts.push(ctr + vec2(s * 0.28, s * 0.20));
+    pts.push(ctr + vec2(s * 0.40, s * 0.30));
+    pts.push(ctr + vec2(-s * 0.40, s * 0.30));
+    pts.push(ctr + vec2(-s * 0.28, s * 0.20));
+    p.add(Shape::convex_polygon(pts, c, Stroke::NONE));
+    p.circle_filled(ctr + vec2(0.0, s * 0.38), s * 0.09, c);
+    p.circle_filled(ctr + vec2(0.0, -s * 0.40), s * 0.06, c);
+}
+
+/// An "i" in a ring (about).
+pub fn info(p: &Painter, r: Rect, c: Color32) {
+    let s = r.width().min(r.height());
+    let ctr = r.center();
+    let w = (s * 0.1).max(1.3);
+    p.circle_stroke(ctr, s * 0.42, Stroke::new(w, c));
+    p.line_segment([ctr + vec2(0.0, -s * 0.04), ctr + vec2(0.0, s * 0.22)], Stroke::new(w * 1.15, c));
+    p.circle_filled(ctr + vec2(0.0, -s * 0.2), w * 0.75, c);
+}
+
+/// A magnifying glass (search).
+pub fn search(p: &Painter, r: Rect, c: Color32) {
+    let s = r.width().min(r.height());
+    let ctr = r.center() + vec2(-s * 0.08, -s * 0.08);
+    let w = (s * 0.11).max(1.3);
+    p.circle_stroke(ctr, s * 0.28, Stroke::new(w, c));
+    p.line_segment([ctr + vec2(s * 0.2, s * 0.2), ctr + vec2(s * 0.44, s * 0.44)], Stroke::new(w * 1.2, c));
+}
+
 /// A person with a plus beside them (add people).
 pub fn add_person(p: &Painter, r: Rect, c: Color32) {
     let s = r.width();

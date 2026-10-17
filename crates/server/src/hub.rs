@@ -1694,6 +1694,12 @@ impl Hub {
             return Err("Plugins are Rust projects: a Cargo.toml goes at the top.".into());
         }
         drop(decoded);
+        // The names it's sent in under: whoever has one, has it (see `author_names`).
+        let mut names = vec![sub.author.clone()];
+        if skin {
+            names.push(crate::db::skin_author(&sub.files));
+        }
+        let claims = self.author_names(&names, &sub.author_id)?;
         // A new version: of one of the sender's own, of the same kind.
         let mut changes = String::new();
         if sub.update_of != 0 {
@@ -1710,10 +1716,52 @@ impl Hub {
             changes = describe_changes(&manifest_of(&before_files), &manifest_of(&sub.files));
         }
         let files = serde_json::to_string(&sub.files).map_err(|e| e.to_string())?;
+        self.claim_author_names(claims, &sub.author_id)?;
         let id = self.db.add_submission(&sub, &files, size as u64, &changes).map_err(|e| format!("{e:#}"))?;
         info!(id, name = %sub.name, kind = %sub.kind, update_of = sub.update_of, signed, "sent in for the library");
         self.broadcast_info();
         Ok(id)
+    }
+
+    /// Author names in the Ingle Library (Blue: "once an Author name is taken on the
+    /// plugin/skin/addon exchange, don't allow anyone else to take it"): the first signed sender
+    /// to send a plugin or skin in under a name has it, and every name that looks the same
+    /// (`author_key`); nobody else can send one in under it, signed or not. Names with
+    /// "Firelit" in them, and Ingle's own, are the owner's (Firelit Games'). A signed sender gets
+    /// the names they use that nobody has yet (the ones returned, `claim_author_names` once
+    /// the rest is right); one that isn't signed gets none.
+    fn author_names(&self, names: &[String], author_id: &str) -> Result<Vec<(String, String)>, String> {
+        let owner = !author_id.is_empty() && self.db.owner_ids().iter().any(|o| o == author_id);
+        let firelit = author_key(OWNER_NAME_PART);
+        let mut claim: Vec<(String, String)> = Vec::new();
+        for name in names {
+            let key = author_key(name);
+            if key.is_empty() || claim.iter().any(|(k, _)| *k == key) {
+                continue;
+            }
+            let ours = key.contains(&firelit) || OWNER_NAMES.iter().any(|n| author_key(n) == key);
+            if ours && !owner {
+                return Err(format!("The author name \u{201c}{}\u{201d} is Firelit Games' own. Use a name of your own.", name.trim()));
+            }
+            match self.db.author_name(&key) {
+                Some((_, who)) if who != author_id => return Err(name_taken(name)),
+                Some(_) => {}
+                None if !author_id.is_empty() => claim.push((key, name.trim().to_string())),
+                None => {}
+            }
+        }
+        Ok(claim)
+    }
+
+    /// The names `author_names` found for a signed sender, theirs now (unless someone got one
+    /// in between).
+    fn claim_author_names(&self, claims: Vec<(String, String)>, author_id: &str) -> Result<(), String> {
+        for (key, name) in claims {
+            if !self.db.claim_author_name(&key, &name, author_id).map_err(|e| format!("{e:#}"))? {
+                return Err(name_taken(&name));
+            }
+        }
+        Ok(())
     }
 
     /// What one sender (proven by the connection) sent in here, at most 30 asks an hour from
@@ -1787,6 +1835,16 @@ pub fn wipe_file(path: &std::path::Path) {
 /// Plugins and skins taken in an hour: from one place (and one signed sender), and in all.
 const SUBMISSIONS_PER_PLACE: usize = 6;
 const SUBMISSIONS_IN_ALL: usize = 60;
+
+/// Why a plugin or skin sent in under someone else's author name isn't taken.
+fn name_taken(name: &str) -> String {
+    format!("The author name \u{201c}{}\u{201d} is taken: someone else sends plugins and skins in under it. Use a name of your own.", name.trim())
+}
+
+/// Author names that are the library owner's (Firelit Games') alone: Ingle's own, and any
+/// with "Firelit" in them.
+const OWNER_NAMES: &[&str] = &["Ingle", "Ingle Library", "Ingle Team"];
+const OWNER_NAME_PART: &str = "Firelit";
 
 /// How a new version's files differ from the one before: "Changed: a, b. Added: c. Taken out: d."
 pub fn describe_changes(before: &[FileDigest], after: &[FileDigest]) -> String {

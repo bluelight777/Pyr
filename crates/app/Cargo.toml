@@ -76,6 +76,8 @@ windows = { version = "0.62", features = [
 ] }
 # The window's HWND, for the tray icon to show and hide it.
 raw-window-handle = "0.6.2"
+# Copy picture: a picture and its file on the clipboard at once (the one arboard uses).
+clipboard-win = { version = "5.4.1", features = ["std"] }
 
 [build-dependencies]
 embed-resource = "3.0.12"

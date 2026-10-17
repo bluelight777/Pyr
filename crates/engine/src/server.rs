@@ -439,12 +439,13 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
                     None => s.relations.remove(&user_id),
                 };
                 let who = s.member_name(&user_id);
+                // (News, not errors: they show as notices, never with Report on them.)
                 if kind == Some(RelationKind::Incoming) && before != Some(RelationKind::Incoming) && !blocked.contains(&user_id) {
-                    toast = Some(format!("{who} sent you a friend request."));
+                    dm_note = Some(format!("{who} sent you a friend request."));
                     ding = true;
                 }
                 if kind == Some(RelationKind::Friend) && before == Some(RelationKind::Outgoing) {
-                    toast = Some(format!("{who} accepted your friend request."));
+                    dm_note = Some(format!("{who} accepted your friend request."));
                 }
             }
             Event::MessageCreated { message, nonce } if blocked.contains(&message.author) => {
@@ -650,8 +651,9 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
             Event::Error { message, .. } => toast = Some(message),
             Event::History { .. } | Event::InviteCreated { .. } | Event::VoiceReady { .. } | Event::Kicked { .. } | Event::Bugs { .. } | Event::PluginSubmissions { .. } | Event::PluginSubmission { .. } | Event::SubmissionFile { .. } | Event::Submitted { .. } | Event::MySubmissions { .. } => {}
         }
+        // (The server saying no: no bug.)
         if let Some(t) = toast {
-            st.toast(t, true);
+            st.refused(t);
         }
         if let Some(t) = dm_note {
             st.toast(t, false);

@@ -22,6 +22,63 @@ struct Effect {
 /// The most soundboard sounds that play at once (the oldest stops for a new one).
 const MAX_EFFECTS: usize = 6;
 
+/// Quieter than this isn't counted as someone making a sound (see `Loudness`).
+const LOUD_FLOOR: f32 = -55.0;
+/// How fast what was heard long ago stops counting: half as much every two minutes.
+const LOUD_HALF_LIFE_S: f32 = 120.0;
+/// Enough to go by: three seconds of sound (in 10 ms blocks).
+const LOUD_ENOUGH: f32 = 300.0;
+
+/// How loud someone usually is while they make a sound, for the mixer's Even out: their 10 ms
+/// levels, counted by the dB, what's older counting less and less.
+#[derive(Clone, Debug, Default)]
+pub struct Loudness {
+    /// -64 to 0 dBFS, a dB each.
+    bins: Vec<f32>,
+    total: f32,
+    faded_at: Option<Instant>,
+}
+
+impl Loudness {
+    pub fn add(&mut self, db: f32, now: Instant) {
+        if self.bins.is_empty() {
+            self.bins = vec![0.0; 64];
+        }
+        match self.faded_at {
+            Some(t) if now.saturating_duration_since(t) >= Duration::from_secs(1) => {
+                let k = 0.5f32.powf(now.saturating_duration_since(t).as_secs_f32() / LOUD_HALF_LIFE_S);
+                self.bins.iter_mut().for_each(|b| *b *= k);
+                self.total *= k;
+                self.faded_at = Some(now);
+            }
+            None => self.faded_at = Some(now),
+            _ => {}
+        }
+        if db < LOUD_FLOOR {
+            return;
+        }
+        let i = ((db + 64.0).floor().max(0.0) as usize).min(63);
+        self.bins[i] += 1.0;
+        self.total += 1.0;
+    }
+
+    /// How loud they usually are (dBFS): the level they're at or under three quarters of the
+    /// time they make a sound. None until there's been enough of it.
+    pub fn level(&self) -> Option<f32> {
+        if self.total < LOUD_ENOUGH {
+            return None;
+        }
+        let mut seen = 0.0;
+        for (i, b) in self.bins.iter().enumerate() {
+            seen += b;
+            if seen >= self.total * 0.75 {
+                return Some(i as f32 - 64.0 + 0.5);
+            }
+        }
+        None
+    }
+}
+
 /// What one session sounds like, for its voice meter: everything of theirs mixed in the last
 /// 10 ms (their voice, their screen's sound, their soundboard sounds; mono, as they sent it,
 /// before my volume for them), and the bands that came of it.
@@ -62,6 +119,8 @@ pub struct Mixer {
     effect_levels: HashMap<SessionId, (f32, Instant)>,
     /// What each session sounds like, for voice meters.
     listens: HashMap<SessionId, Listen>,
+    /// How loud each session's voice and stream usually are (see `Loudness`).
+    loudness: HashMap<(SessionId, u8), Loudness>,
     volumes: HashMap<SessionId, f32>,
     /// Separate volume for someone's stream audio (screen share sound).
     stream_volumes: HashMap<SessionId, f32>,
@@ -79,6 +138,7 @@ impl Default for Mixer {
             effects: Vec::new(),
             effect_levels: HashMap::new(),
             listens: HashMap::new(),
+            loudness: HashMap::new(),
             volumes: HashMap::new(),
             stream_volumes: HashMap::new(),
             master: 1.0,
@@ -113,6 +173,7 @@ impl Mixer {
     pub fn remove_session(&mut self, session: SessionId) {
         self.peers.retain(|(s, _), _| *s != session);
         self.listens.remove(&session);
+        self.loudness.retain(|(s, _), _| *s != session);
         self.effect_levels.remove(&session);
         self.volumes.remove(&session);
         self.stream_volumes.remove(&session);
@@ -158,6 +219,8 @@ impl Mixer {
             if !peer.take_10ms(buf, now) {
                 continue;
             }
+            // How loud they usually are (as sent, before my volumes), for Even out.
+            self.loudness.entry((*session, *track_id)).or_default().add(peer.level_db, now);
             // For their meter (deafened or not: what they sent, not what I hear).
             if self.meters && peer.last_voice.is_some_and(fresh) {
                 self.listens.entry(*session).or_default().add(buf, ch, 1.0);
@@ -224,6 +287,14 @@ impl Mixer {
         let fresh = |t: Instant| now.saturating_duration_since(t) < METER_FRESH;
         let mut v: Vec<(SessionId, u8, f32)> =
             self.peers.iter().filter(|(_, p)| p.last_voice.is_some_and(fresh)).map(|((s, t), p)| (*s, *t, p.level_db)).collect();
+        v.sort_by_key(|(s, t, _)| (*s, *t));
+        v
+    }
+
+    /// How loud each session's voice and stream usually are (dBFS, as sent), for those heard
+    /// enough to tell: (session, track, level).
+    pub fn loudness(&self) -> Vec<(SessionId, u8, f32)> {
+        let mut v: Vec<(SessionId, u8, f32)> = self.loudness.iter().filter_map(|((s, t), l)| l.level().map(|db| (*s, *t, db))).collect();
         v.sort_by_key(|(s, t, _)| (*s, *t));
         v
     }
@@ -346,6 +417,31 @@ mod tests {
         assert!(loudest <= 4 && meter.bands[loudest] > 0.4, "300 Hz is low: {meter:?}");
         // Quiet a while later.
         assert!(m.meters(now + Duration::from_millis(500)).is_empty());
+    }
+
+    #[test]
+    fn how_loud_someone_usually_is_leaves_out_silence_and_old_news() {
+        let mut l = Loudness::default();
+        let t = Instant::now();
+        assert_eq!(l.level(), None);
+        // Talking at -20 dB (quieter syllables at -30), with silences between: two seconds
+        // isn't enough to go by yet.
+        for i in 0..200 {
+            l.add(if i % 4 == 0 { -30.0 } else { -20.0 }, t);
+            l.add(-100.0, t);
+        }
+        assert_eq!(l.level(), None, "not enough yet");
+        for i in 0..200 {
+            l.add(if i % 4 == 0 { -30.0 } else { -20.0 }, t);
+        }
+        let db = l.level().unwrap();
+        assert!((db + 20.0).abs() < 1.0, "{db}");
+        // Ten minutes later they're louder: that's what counts now.
+        let later = t + Duration::from_secs(600);
+        for _ in 0..400 {
+            l.add(-10.0, later);
+        }
+        assert!((l.level().unwrap() + 10.0).abs() < 1.0, "{:?}", l.level());
     }
 
     #[test]

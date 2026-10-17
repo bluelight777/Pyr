@@ -184,7 +184,12 @@ pub enum Act {
     /// A new profile picture (any image; it's cropped and resized), or none.
     SetAvatar(Option<Vec<u8>>),
     SaveImage { name: String, bytes: Arc<Vec<u8>> },
+    /// Copy picture: onto the clipboard (see `images::copy_picture`).
+    CopyPicture { name: String, bytes: Arc<Vec<u8>> },
     Toast(String, bool),
+    /// Something asked for that can't be done (a limit, not there yet): shown like an error,
+    /// but it's no bug, so it isn't reported by itself.
+    Refused(String),
     /// Play a soundboard sound for everyone in the call (see `soundboard.rs`).
     PlaySound(ingle_engine::config::SoundRef),
     /// Hear a soundboard sound yourself, nobody else.
@@ -339,9 +344,15 @@ pub struct UiState {
     pub toast_copied: Option<(u64, Instant)>,
     pub last_typing: Option<Instant>,
     pub requested: HashSet<(String, ChannelId)>,
-    pub settings_draft: Option<Settings>,
     /// Settings → My Account's name box, as typed (from your name when Settings opens).
     pub name_draft: Option<String>,
+    /// Settings' search box (it narrows the pages listed down its left).
+    pub settings_search: String,
+    /// What the last Check for updates asked for here found, and when (Settings → About says).
+    pub update_answer: Option<(crate::update::Checked, Instant)>,
+    /// My profile picture as last read from its file: (when the file was changed and how big
+    /// it is, its key in `images`, its bytes). See `IngleApp::my_avatar`.
+    pub my_avatar: Option<((Option<std::time::SystemTime>, u64), String, Arc<Vec<u8>>)>,
     /// The welcome screen's name box, as typed (your name to start with, once: an empty box
     /// stays empty, so typing a new name never ends up in front of the old one).
     pub welcome_name: Option<String>,
@@ -751,7 +762,7 @@ impl IngleApp {
                         let files: Vec<(String, Vec<u8>)> = files.into_iter().map(|f| (f.path, ingle_proto::b64::decode(&f.data).unwrap_or_default())).collect();
                         self.looks.try_on(crate::looks::Trial::SentIn { key, id }, name, files);
                     }
-                    None => e.shared.state.write().toast("Open it first, so its files are here.", true),
+                    None => e.shared.state.write().refused("Open it first, so its files are here."),
                 }
             }
             Act::StopTryingSkin => self.looks.stop_trying(),
@@ -864,7 +875,22 @@ impl IngleApp {
                 }
                 ctx.input_mut(|i| i.keys_down.clear());
             }
+            // (Off the window's thread: a big picture takes a moment to read and put there.)
+            Act::CopyPicture { name, bytes } => {
+                let e = e.clone();
+                let _ = std::thread::Builder::new().name("ingle-copy-picture".into()).spawn(move || {
+                    match crate::images::copy_picture(&name, &bytes) {
+                        Ok(()) => e.shared.state.write().toast("Picture copied.", false),
+                        // (A busy clipboard, say: not a bug to report.)
+                        Err(err) => e.shared.state.write().refused(format!("Couldn't copy the picture: {err}")),
+                    }
+                    (e.shared.repaint)();
+                });
+            }
             Act::Toast(text, error) => self.toast(text, error),
+            Act::Refused(text) => {
+                self.engine.shared.state.write().refused(text);
+            }
             Act::PlaySound(sound) => e.play_soundboard(sound),
             Act::PreviewSound(sound) => e.preview_sound(sound),
             Act::StopSounds => e.stop_sounds(),
@@ -967,15 +993,27 @@ impl IngleApp {
         self.picture(ctx, &format!("icon:{id}"), bytes, moving)
     }
 
-    pub fn my_face(&mut self, ctx: &egui::Context) -> Option<egui::TextureId> {
-        self.my_face_moving(ctx, false)
-    }
-
     /// My profile picture, moving while `moving` (if it's a moving one).
     pub fn my_face_moving(&mut self, ctx: &egui::Context, moving: bool) -> Option<egui::TextureId> {
-        let bytes = self.engine.my_avatar()?;
-        let key = format!("av:me:{}", ingle_proto::release::sha256_hex(&bytes));
-        self.picture(ctx, &key, Some(Arc::new(bytes)), moving)
+        let (key, bytes) = self.my_avatar()?;
+        self.picture(ctx, &key, Some(bytes), moving)
+    }
+
+    /// My profile picture's key (in `images`) and bytes. Its file is read (and hashed) again
+    /// only when it changes, not every frame: a moving one can be megabytes.
+    pub fn my_avatar(&mut self) -> Option<(String, Arc<Vec<u8>>)> {
+        let meta = std::fs::metadata(self.engine.my_avatar_path()).ok();
+        let Some(meta) = meta else {
+            self.ui.my_avatar = None;
+            return None;
+        };
+        let stamp = (meta.modified().ok(), meta.len());
+        if self.ui.my_avatar.as_ref().is_none_or(|(s, _, _)| *s != stamp) {
+            let bytes = self.engine.my_avatar()?;
+            let key = format!("av:me:{}", ingle_proto::release::sha256_hex(&bytes));
+            self.ui.my_avatar = Some((stamp, key, Arc::new(bytes)));
+        }
+        self.ui.my_avatar.as_ref().map(|(_, k, b)| (k.clone(), b.clone()))
     }
 
     /// Upload new video frames to textures; returns the texture for a tile.
@@ -1012,6 +1050,17 @@ impl IngleApp {
 
 impl eframe::App for IngleApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Development builds only: `INGLE_DEV_GPU_LOST=<seconds>` makes the window crash once the
+        // way it does when the graphics card goes away, to see it opened again (see `main`).
+        #[cfg(debug_assertions)]
+        {
+            static FIRED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if let Some(secs) = std::env::var("INGLE_DEV_GPU_LOST").ok().and_then(|v| v.parse::<f64>().ok()) {
+                if ctx.input(|i| i.time) > secs && !FIRED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    panic!("Error in Surface::present: Parent device is lost (made up: INGLE_DEV_GPU_LOST)");
+                }
+            }
+        }
         crate::watchdog::step("starting a frame");
         let engine = self.engine.clone();
         let mut acts: Vec<Act> = Vec::new();
@@ -1103,7 +1152,7 @@ impl eframe::App for IngleApp {
             if gone {
                 let name = self.plugins.skins.get(&worn).map(|s| s.name.clone()).unwrap_or(worn);
                 acts.push(Act::WearSkin(String::new()));
-                acts.push(Act::Toast(format!("{name} was taken out of the Ingle Library, so Ingle went back to Campfire."), true));
+                acts.push(Act::Refused(format!("{name} was taken out of the Ingle Library, so Ingle went back to Campfire.")));
             }
         }
         if crate::images::dialog_closed() {
@@ -1341,6 +1390,7 @@ impl IngleApp {
         // What checks asked for in the window found: the updater itself shows it ("Up to date",
         // "Couldn't check", or the green Update button); why a check failed is said too.
         for answer in self.updater.take_answers(crate::update::Asker::Window) {
+            self.ui.update_answer = Some((answer.clone(), Instant::now()));
             match answer {
                 Checked::UpToDate => self.update_chip.told_up_to_date(),
                 Checked::Found(_) => self.update_chip.told_found(),
@@ -1951,7 +2001,7 @@ impl IngleApp {
             let in_my_call = st.call.as_ref().is_some_and(|c| c.server_key == s.key && s.voice_in(c.channel_id).iter().any(|p| p.user_id == uid));
             if in_my_call {
                 let muted = st.settings.soundboard_muted.iter().any(|u| u == uid);
-                if ui.checkbox(&mut muted.clone(), "Mute their soundboard").clicked() {
+                if crate::menu::check(ui, muted, "Mute their soundboard", false).clicked() {
                     acts.push(Act::MuteSoundboard { uid: uid.to_string(), muted: !muted });
                     chose = true;
                 }
@@ -1976,7 +2026,7 @@ impl IngleApp {
         }
         if !me && s.can(perm::KICK) && s.rank(uid) < s.rank(&st.my_uid) {
             ui.separator();
-            if ui.button(RichText::new(format!("Kick {name}")).color(theme::LIVE())).clicked() {
+            if crate::menu::danger(ui, format!("Kick {name}")).clicked() {
                 acts.push(Act::Kick { key: s.key.clone(), uid: uid.to_string(), ban: false });
                 chose = true;
             }
@@ -2190,6 +2240,10 @@ impl IngleApp {
                     let col = if matches!(s.status, ConnStatus::Failed(_)) { theme::LIVE() } else { theme::DIM() };
                     ui.painter().circle_filled(c, 6.0, theme::RAIL());
                     ui.painter().circle_filled(c, 4.0, col);
+                } else if s.voice.values().any(|v| s.channel(v.channel_id).is_some()) {
+                    // People talking here: a little speaker (brighter when I'm there too).
+                    let mine = st.call.as_ref().is_some_and(|c| c.server_key == s.key);
+                    crate::server_card::voice_badge(ui.painter(), rect, mine);
                 }
                 if resp.clicked() {
                     self.ui.home = false;
@@ -2203,8 +2257,12 @@ impl IngleApp {
                 // (Server settings: for running the server, its roles, or its emoji and sounds.)
                 let admin = s.can(perm::MANAGE_SERVER) || s.can(perm::MANAGE_ROLES) || s.can(perm::MANAGE_EMOJI);
                 let server_muted = st.muted_servers.contains(&s.key);
-                let resp = resp.on_hover_text(&name);
+                // Pointed at: who's here and talking, like Discord's.
+                if hovered {
+                    self.server_card(ui.ctx(), st, s, rect);
+                }
                 resp.context_menu(|ui| {
+                    crate::menu::style(ui);
                     if ui.button("Invite people").clicked() {
                         acts.push(Act::CreateInvite { key: key.clone() });
                         self.ui.dialog = Some(Dialog::Invite { key: key.clone() });
@@ -2224,7 +2282,7 @@ impl IngleApp {
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button(RichText::new("Leave server").color(theme::LIVE())).clicked() {
+                    if crate::menu::danger(ui, "Leave server").clicked() {
                         self.ui.dialog = Some(Dialog::LeaveServer { key: key.clone(), name: name.clone() });
                         ui.close();
                     }
@@ -2475,6 +2533,7 @@ impl IngleApp {
                     let can_manage = s.can(perm::MANAGE_CHANNELS);
                     {
                         resp.context_menu(|ui| {
+                            crate::menu::style(ui);
                             let label = if muted { "Unmute channel" } else { "Mute channel" };
                             if ui.button(label).clicked() {
                                 acts.push(Act::MuteChat { key: key.clone(), channel: Some(cid), muted: !muted });
@@ -2495,7 +2554,7 @@ impl IngleApp {
                                 });
                                 ui.close();
                             }
-                            if ui.button(RichText::new("Delete channel").color(theme::LIVE())).clicked() {
+                            if crate::menu::danger(ui, "Delete channel").clicked() {
                                 acts.push(Act::DeleteChannel { key: key.clone(), channel: cid });
                                 ui.close();
                             }
@@ -2533,6 +2592,13 @@ impl IngleApp {
                             avatar(ui.painter(), center, 12.0, &uid, &name, speaking.contains(&p.session), theme::SIDE(), face);
                             let col = if speaking.contains(&p.session) || pointer_in { theme::TEXT() } else { theme::MUTED() };
                             let mut x = r.right() - 10.0;
+                            // Their voice meter first, at the right, so everyone's line up (Glow's
+                            // is the light around their picture); LIVE and the rest go left of it.
+                            if !matches!(style, crate::meter::Style::Off | crate::meter::Style::Glow) {
+                                let m = Rect::from_min_max(pos2(x - 30.0, r.center().y - 7.0), pos2(x - 2.0, r.center().y + 7.0));
+                                crate::meter::paint(ui.painter(), m, style, track, false);
+                                x -= 36.0;
+                            }
                             if p.tracks.iter().any(|t| t.id == ingle_proto::media::track::SCREEN) {
                                 let b = Rect::from_min_max(pos2(x - 34.0, r.center().y - 8.0), pos2(x, r.center().y + 8.0));
                                 ui.painter().rect_filled(b, CornerRadius::same(4), theme::LIVE());
@@ -2556,12 +2622,6 @@ impl IngleApp {
                             } else if p.self_mute && !p.self_deaf {
                                 icons::mic(ui.painter(), Rect::from_center_size(pos2(x - 8.0, r.center().y), vec2(16.0, 16.0)), theme::DIM(), true);
                                 x -= 20.0;
-                            }
-                            // Their voice meter (Glow's is the light around their picture).
-                            if !matches!(style, crate::meter::Style::Off | crate::meter::Style::Glow) {
-                                let m = Rect::from_min_max(pos2(x - 30.0, r.center().y - 7.0), pos2(x - 2.0, r.center().y + 7.0));
-                                crate::meter::paint(ui.painter(), m, style, track, false);
-                                x -= 34.0;
                             }
                             // Hovering someone: a button to message them (like the chat bubble on a
                             // voice channel).
@@ -2605,6 +2665,7 @@ impl IngleApp {
                             // (Ticking Mute or Deafen leaves the menu open, like Discord; the
                             // other items close it.)
                             egui::Popup::context_menu(&presp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+                                crate::menu::style(ui);
                                 if ui.button("Profile").clicked() {
                                     self.ui.profile_card = Some((s.key.clone(), uid.clone(), row));
                                     ui.close();
@@ -2614,13 +2675,12 @@ impl IngleApp {
                                     // buttons by your name (deafened counts as muted too).
                                     let (muted, deafened) = self.engine.voice_prefs();
                                     ui.separator();
-                                    let mut m = muted || deafened;
-                                    if ui.checkbox(&mut m, "Mute").clicked() {
-                                        acts.push(Act::Mute(m));
+                                    let m = muted || deafened;
+                                    if crate::menu::check(ui, m, "Mute", false).clicked() {
+                                        acts.push(Act::Mute(!m));
                                     }
-                                    let mut d = deafened;
-                                    if ui.checkbox(&mut d, "Deafen").clicked() {
-                                        acts.push(Act::Deafen(d));
+                                    if crate::menu::check(ui, deafened, "Deafen", false).clicked() {
+                                        acts.push(Act::Deafen(!deafened));
                                     }
                                     ui.separator();
                                 }
@@ -2707,7 +2767,8 @@ impl IngleApp {
                 self.ui.dialog = Some(Dialog::Settings { tab: 1 });
             }
             resp.context_menu(|ui| {
-                ui.label(RichText::new("VOICE METERS").font(theme::bold_font(11.0)).color(theme::DIM()));
+                crate::menu::style(ui);
+                crate::menu::header(ui, "Voice meters");
                 for s in crate::meter::Style::LOOKS {
                     if ui.add(egui::Button::selectable(s == style, s.name())).on_hover_text(s.about()).clicked() {
                         acts.push(Act::Settings(ingle_engine::config::Settings { voice_meter: s.setting().to_string(), ..st.settings.clone() }));
@@ -2816,6 +2877,7 @@ impl IngleApp {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
             egui::Popup::menu(&mine).align(egui::RectAlign::TOP_START).width(300.0).show(|ui| {
+                crate::menu::style(ui);
                 let (by_hand, dnd) = (st.settings.idle_by_hand, st.settings.dnd);
                 if status_choice(ui, Presence::Online, !by_hand && !dnd, "Idle by itself after 5 minutes away") {
                     acts.push(Act::SetDnd(false));
@@ -2837,7 +2899,6 @@ impl IngleApp {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 if icon_button(ui, 32.0, "User settings", false, |p, r, c| icons::gear(p, r, c)).clicked() {
                     self.ui.dialog = Some(Dialog::Settings { tab: 1 });
-                    self.ui.settings_draft = Some(st.settings.clone());
                     acts.push(Act::RefreshDevices);
                 }
                 let (server_muted, server_deafened) = Self::moderated_me(st);
@@ -2954,6 +3015,7 @@ impl IngleApp {
                         acts.push(Act::OpenDm { key: key.clone(), uid: uid.clone() });
                     }
                     resp.on_hover_text(hover).context_menu(|ui| {
+                        crate::menu::style(ui);
                         if can_dm && ui.button("Message").clicked() {
                             acts.push(Act::OpenDm { key: key.clone(), uid: uid.clone() });
                             ui.close();
@@ -2976,11 +3038,16 @@ impl IngleApp {
                         let manageable: Vec<_> = s.roles.iter().filter(|r| s.can_manage_role(r)).collect();
                         if !manageable.is_empty() && (me || below_me || s.is_admin()) && !(role == Role::Owner && my_role != Role::Owner) {
                             ui.menu_button("Roles", |ui| {
+                                crate::menu::style(ui);
                                 let current: Vec<RoleId> = s.members.get(&uid).map(|m| m.roles.clone()).unwrap_or_default();
                                 for r in &manageable {
-                                    let mut on = current.contains(&r.id);
+                                    let was = current.contains(&r.id);
                                     let col = if r.color != 0 { rgb(r.color) } else { theme::TEXT() };
-                                    if ui.checkbox(&mut on, RichText::new(&r.name).color(col)).changed() {
+                                    // (The role's color, as a dot before its name.)
+                                    let resp = crate::menu::check(ui, was, format!("     {}", r.name), false);
+                                    ui.painter().circle_filled(pos2(resp.rect.left() + 16.0, resp.rect.center().y), 5.0, col);
+                                    if resp.clicked() {
+                                        let on = !was;
                                         let mut next = current.clone();
                                         if on {
                                             next.push(r.id);
@@ -3001,7 +3068,7 @@ impl IngleApp {
                         }
                         if !me && below_me && (s.can(perm::KICK) || s.can(perm::BAN)) {
                             ui.separator();
-                            if s.can(perm::KICK) && ui.button(RichText::new(format!("Kick {name}")).color(theme::LIVE())).clicked() {
+                            if s.can(perm::KICK) && crate::menu::danger(ui, format!("Kick {name}")).clicked() {
                                 acts.push(Act::Kick { key: key.clone(), uid: uid.clone(), ban: false });
                                 ui.close();
                             }
@@ -3224,15 +3291,15 @@ pub(crate) fn server_voice_items(ui: &mut egui::Ui, st: &AppState, s: &ServerVie
     let (can_mute, can_deafen) = moderate(st, s, uid);
     let Some(p) = s.voice.values().find(|p| p.user_id == uid) else { return };
     if can_mute {
-        let mut on = p.server_mute;
-        if ui.checkbox(&mut on, RichText::new("Server Mute").color(theme::LIVE())).on_hover_text("Nobody hears them until a moderator unmutes them, in any voice channel here.").clicked() {
-            acts.push(Act::ServerMute { key: s.key.clone(), uid: uid.to_string(), muted: on });
+        let on = p.server_mute;
+        if crate::menu::check(ui, on, "Server Mute", true).on_hover_text("Nobody hears them until a moderator unmutes them, in any voice channel here.").clicked() {
+            acts.push(Act::ServerMute { key: s.key.clone(), uid: uid.to_string(), muted: !on });
         }
     }
     if can_deafen {
-        let mut on = p.server_deaf;
-        if ui.checkbox(&mut on, RichText::new("Server Deafen").color(theme::LIVE())).on_hover_text("They hear nobody, and nobody hears them, until a moderator undeafens them.").clicked() {
-            acts.push(Act::ServerDeafen { key: s.key.clone(), uid: uid.to_string(), deafened: on });
+        let on = p.server_deaf;
+        if crate::menu::check(ui, on, "Server Deafen", true).on_hover_text("They hear nobody, and nobody hears them, until a moderator undeafens them.").clicked() {
+            acts.push(Act::ServerDeafen { key: s.key.clone(), uid: uid.to_string(), deafened: !on });
         }
     }
 }
@@ -3293,11 +3360,14 @@ pub(crate) fn is_bot(st: &AppState, uid: &str) -> bool {
 /// (in the menus from right-clicking them).
 pub(crate) fn volume_items(ui: &mut egui::Ui, st: &AppState, s: &ServerView, uid: &str, acts: &mut Vec<Act>) {
     let name = s.member_name(uid);
-    ui.label(RichText::new(format!("{name} volume")).size(12.0).color(theme::MUTED()));
+    crate::menu::header(ui, &format!("{name}'s volume"));
     let mut v = st.user_volumes.get(uid).copied().unwrap_or(1.0) * 100.0;
-    if ui.add(egui::Slider::new(&mut v, 0.0..=200.0).suffix("%")).changed() {
-        acts.push(Act::Volume { uid: uid.to_string(), volume: v / 100.0 });
-    }
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        if ui.add(egui::Slider::new(&mut v, 0.0..=200.0).suffix("%").fixed_decimals(0)).changed() {
+            acts.push(Act::Volume { uid: uid.to_string(), volume: v / 100.0 });
+        }
+    });
     if let Some(p) = s.voice.values().find(|p| p.user_id == uid && p.tracks.iter().any(|t| t.id == ingle_proto::media::track::SCREEN)) {
         let has_sound = p.tracks.iter().any(|t| t.id == ingle_proto::media::track::SCREEN_AUDIO);
         let volume = st.stream_volumes.get(uid).copied().unwrap_or(1.0);

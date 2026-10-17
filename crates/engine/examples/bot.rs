@@ -40,6 +40,8 @@ fn main() -> anyhow::Result<()> {
     let mut gap = 0.9f32;
     // A profile picture (a square PNG or GIF) to wear.
     let mut avatar: Option<std::path::PathBuf> = None;
+    // How loud its voice is (the tone's amplitude).
+    let mut amp = 0.18f32;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -60,6 +62,7 @@ fn main() -> anyhow::Result<()> {
             "--wait" => wait = args.next().and_then(|t| t.parse().ok()).unwrap_or(wait),
             "--gap" => gap = args.next().and_then(|t| t.parse().ok()).unwrap_or(gap),
             "--avatar" => avatar = args.next().map(std::path::PathBuf::from),
+            "--amp" => amp = args.next().and_then(|t| t.parse().ok()).unwrap_or(amp),
             _ => {}
         }
     }
@@ -94,7 +97,7 @@ fn main() -> anyhow::Result<()> {
                     let t = n as f32 / 48_000.0;
                     let on = !quiet && (t % 2.7) < 1.6;
                     let f = tone * (1.0 + 0.03 * (t * 5.0).sin());
-                    *v = if on { (t * f * std::f32::consts::TAU).sin() * 0.18 } else { 0.0 };
+                    *v = if on { (t * f * std::f32::consts::TAU).sin() * amp } else { 0.0 };
                     n += 1;
                 }
             }));

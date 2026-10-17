@@ -283,6 +283,7 @@ pub fn apply_style(ctx: &egui::Context) {
         s.spacing.button_padding = egui::vec2(12.0, 6.0);
         s.spacing.interact_size.y = 30.0;
         s.spacing.slider_width = 220.0;
+        s.spacing.menu_margin = egui::Margin::same(6);
         s.spacing.scroll.bar_width = 8.0;
         s.spacing.scroll.floating = true;
         let mut v = Visuals::dark();
@@ -290,6 +291,9 @@ pub fn apply_style(ctx: &egui::Context) {
         v.window_fill = SIDE();
         v.window_stroke = Stroke::new(1.0f32, LINE());
         v.window_corner_radius = CornerRadius::same(10);
+        // Menus and tooltips: rounded, roomy, floating over things on a soft shadow.
+        v.menu_corner_radius = CornerRadius::same(10);
+        v.popup_shadow = egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(150) };
         v.extreme_bg_color = CODE_BG();
         v.faint_bg_color = ELEV();
         v.code_bg_color = CODE_BG();

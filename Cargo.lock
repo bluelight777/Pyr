@@ -3149,6 +3149,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "chrono",
+ "clipboard-win",
  "device_query",
  "directories",
  "eframe",

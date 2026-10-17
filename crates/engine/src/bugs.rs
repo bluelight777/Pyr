@@ -124,8 +124,63 @@ pub fn os_name() -> String {
 
 /// The same kind of trouble is reported by itself at most this often, and only a few times in
 /// all while Ingle runs.
-const AUTO_EVERY: Duration = Duration::from_secs(6 * 3600);
-const AUTO_PER_RUN: usize = 5;
+const AUTO_EVERY: Duration = Duration::from_secs(15 * 60);
+const AUTO_PER_RUN: usize = 25;
+
+/// The engine running in this app, for reporting crashes from the panic hook.
+static ENGINE: std::sync::Mutex<Option<std::sync::Weak<Shared>>> = std::sync::Mutex::new(None);
+
+/// Remembers the engine, so a crash anywhere can be reported (`report_crash`).
+pub fn register(shared: &Arc<Shared>) {
+    if let Ok(mut e) = ENGINE.lock() {
+        *e = Some(Arc::downgrade(shared));
+    }
+}
+
+/// A crash in a thread (Ingle carries on, or will be started again): reported by itself, now.
+/// Called from the panic hook.
+pub fn report_crash(thread: &str, what: &str) {
+    thread_local! {
+        static BUSY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    // (Never again from inside: a crash while reporting a crash isn't reported.)
+    if BUSY.with(|b| b.replace(true)) {
+        return;
+    }
+    let shared = ENGINE.lock().ok().and_then(|e| e.as_ref().and_then(|w| w.upgrade()));
+    if let Some(s) = shared {
+        auto_report(&s, &format!("Ingle crashed in its {thread} thread"), &format!("crash in thread {thread}: {what}"));
+    }
+    BUSY.with(|b| b.set(false));
+}
+
+/// Errors shown to the person that are bugs (not refusals, see `AppState::refused`) are
+/// reported by themselves as they come, every one (the same one again soon after counts once).
+pub fn watch_errors(shared: Arc<Shared>) {
+    if !can_report() {
+        return;
+    }
+    let weak = Arc::downgrade(&shared);
+    shared.rt.spawn(async move {
+        let mut seen: std::collections::VecDeque<u64> = Default::default();
+        loop {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let Some(s) = weak.upgrade() else { return };
+            let new: Vec<(u64, String)> = {
+                let st = s.state.read_recursive();
+                st.toasts.iter().filter(|t| t.error && t.report && !seen.contains(&t.id)).map(|t| (t.id, t.text.clone())).collect()
+            };
+            for (id, text) in new {
+                seen.push_back(id);
+                if seen.len() > 200 {
+                    seen.pop_front();
+                }
+                let what: String = text.chars().take(80).collect();
+                auto_report(&s, &format!("error: {what}"), &format!("This error came up: {text}"));
+            }
+        }
+    });
+}
 
 /// Sends a report by itself about something that went wrong, so it gets fixed: `what` names
 /// the kind of trouble (the same words each time it happens), `detail` says what Ingle knows,

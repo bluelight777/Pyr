@@ -260,6 +260,7 @@ impl IngleApp {
         let muted = st.is_muted(&s.key, id);
         let key = s.key.clone();
         resp.context_menu(|ui| {
+            crate::menu::style(ui);
             crate::calls::call_item(ui, st, with, Some(&key), acts);
             self.make_sure_menu(ui, st, s, with, acts);
             if ui.button(if muted { "Unmute conversation" } else { "Mute conversation" }).clicked() {
@@ -409,6 +410,7 @@ impl IngleApp {
                     self.person_row(ui, st, f, sub, acts, |ui, acts| match kind {
                         RelationKind::Friend => {
                             ui.menu_button("More", |ui| {
+                                crate::menu::style(ui);
                                 crate::calls::call_item(ui, st, &uid, None, acts);
                                 crate::app::person_menu(ui, st, &uid, acts)
                             });
@@ -483,6 +485,7 @@ impl IngleApp {
             .or(s)
             .map(|s| s.key.clone());
         resp.context_menu(|ui| {
+            crate::menu::style(ui);
             crate::calls::call_item(ui, st, &uid, None, acts);
             if let Some(s) = through.as_deref().and_then(|k| st.server(k)) {
                 self.make_sure_menu(ui, st, s, &uid, acts);

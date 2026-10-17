@@ -323,8 +323,28 @@ impl CapturePipeline {
         self.iso_gain = end;
     }
 
+    /// The voice settings that can change while the sound flows (see `Controls::retune`); the
+    /// rest (devices, noise suppression, echo cancellation, gain control) start the sound again.
+    pub fn retune(&mut self, s: &Settings) {
+        if s.voice_bitrate_kbps != self.settings.voice_bitrate_kbps {
+            if let Err(e) = self.encoder.set_bitrate(opus::Bitrate::Bits((s.voice_bitrate_kbps.clamp(16, 256) * 1000) as i32)) {
+                tracing::warn!("voice quality not changed: {e}");
+            }
+        }
+        self.settings.voice_bitrate_kbps = s.voice_bitrate_kbps;
+        self.settings.input_mode = s.input_mode;
+        self.settings.vad_auto = s.vad_auto;
+        self.settings.vad_threshold_db = s.vad_threshold_db;
+        self.settings.ptt_key = s.ptt_key.clone();
+        self.settings.ptt_release_ms = s.ptt_release_ms;
+    }
+
     /// Process 10 ms of 48 kHz mono microphone audio.
     pub fn process(&mut self, frame: &mut [f32], ctl: &Controls, now: Instant, sink: PacketSink<'_>) {
+        // Voice settings changed just now (the sensitivity let go of, say).
+        if let Some(s) = ctl.retune.try_lock().and_then(|mut r| r.take()) {
+            self.retune(&s);
+        }
         // (As it is now: it can be dragged while I talk, see the call's mixer.)
         let gain = ctl.input_gain.get();
         if (gain - 1.0).abs() > 1e-3 {
@@ -410,5 +430,70 @@ impl CapturePipeline {
         self.prev.copy_from_slice(&pcm);
         self.acc = pcm;
         self.acc.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Feeds `ms` of steady noise at about -25 dBFS: the sizes of the packets sent, and whether
+    /// the microphone is open at the end.
+    fn feed(cap: &mut CapturePipeline, ctl: &Controls, now: &mut Instant, seed: &mut u32, ms: u64) -> (Vec<usize>, bool) {
+        let mut sizes = Vec::new();
+        for _ in 0..ms / 10 {
+            let mut frame: Vec<f32> = (0..480)
+                .map(|_| {
+                    *seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    (*seed >> 8) as f32 / (1u32 << 24) as f32 * 0.2 - 0.1
+                })
+                .collect();
+            cap.process(&mut frame, ctl, *now, &mut |_, _, p: &[u8]| sizes.push(p.len()));
+            *now += Duration::from_millis(10);
+        }
+        (sizes, ctl.transmitting.load(Ordering::Relaxed))
+    }
+
+    #[test]
+    fn voice_settings_change_while_the_sound_flows() {
+        let base = Settings {
+            noise_suppression: NoiseSuppression::Off,
+            echo_cancellation: false,
+            auto_gain: false,
+            vad_auto: false,
+            vad_threshold_db: -40.0,
+            voice_bitrate_kbps: 24,
+            ..Settings::default()
+        };
+        let mut cap = CapturePipeline::new(&base).unwrap();
+        let ctl = Controls::default();
+        let (mut now, mut seed) = (Instant::now(), 7u32);
+        let (sent, open) = feed(&mut cap, &ctl, &mut now, &mut seed, 600);
+        assert!(open && sent.len() > 20, "louder than the sensitivity: heard ({} packets)", sent.len());
+        let small = sent[5..].iter().sum::<usize>() as f32 / (sent.len() - 5) as f32;
+
+        // The sensitivity let go of above the noise: it stops getting through (after the
+        // usual 400 ms for the ends of words), with nothing started again.
+        *ctl.retune.lock() = Some(Settings { vad_threshold_db: -15.0, ..base.clone() });
+        let (_, open) = feed(&mut cap, &ctl, &mut now, &mut seed, 600);
+        assert!(!open, "quieter than the new sensitivity");
+        assert!(ctl.retune.lock().is_none(), "taken up");
+        let (sent, _) = feed(&mut cap, &ctl, &mut now, &mut seed, 300);
+        assert!(sent.is_empty(), "nothing sent");
+
+        // Better voice quality: bigger packets straight away.
+        *ctl.retune.lock() = Some(Settings { voice_bitrate_kbps: 128, ..base.clone() });
+        let (sent, open) = feed(&mut cap, &ctl, &mut now, &mut seed, 600);
+        assert!(open, "heard again");
+        let big = sent[5..].iter().sum::<usize>() as f32 / (sent.len() - 5) as f32;
+        assert!(big > small * 2.0, "{small} bytes a packet at 24 kbps, {big} at 128 kbps");
+
+        // Push to talk, with the key up: quiet once its release delay is over.
+        *ctl.retune.lock() = Some(Settings { input_mode: InputMode::PushToTalk, ptt_release_ms: 100, ..base.clone() });
+        let (_, open) = feed(&mut cap, &ctl, &mut now, &mut seed, 200);
+        assert!(!open, "push to talk, key not held");
+        ctl.ptt_down.store(true, Ordering::Relaxed);
+        let (_, open) = feed(&mut cap, &ctl, &mut now, &mut seed, 100);
+        assert!(open, "key held");
     }
 }

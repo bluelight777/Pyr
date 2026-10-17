@@ -982,7 +982,7 @@ impl IngleApp {
                 });
             });
         });
-        self.confirm_remove_row(ui, &e.id);
+        self.confirm_remove_row(ui, &e.id, acts);
         ui.add_space(14.0);
         ui.label(RichText::new(&e.summary).font(theme::bold_font(15.0)).color(theme::TEXT()));
         if !e.description.is_empty() {
@@ -1031,7 +1031,7 @@ impl IngleApp {
         }
     }
 
-    fn confirm_remove_row(&mut self, ui: &mut egui::Ui, id: &str) {
+    fn confirm_remove_row(&mut self, ui: &mut egui::Ui, id: &str, acts: &mut Vec<Act>) {
         if self.plugins.confirm_remove.as_deref() != Some(id) {
             return;
         }
@@ -1042,10 +1042,12 @@ impl IngleApp {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(format!("Remove {name} and its data from this PC?")).color(theme::TEXT()));
                 if ui.add(theme::danger_button("Remove")).clicked() {
-                    match self.plugins.uninstall(id) {
-                        Ok(()) => self.engine.shared.state.write().toast(format!("{name} was removed."), false),
-                        Err(e) => self.engine.shared.state.write().toast(format!("Couldn't remove {name}: {e}"), true),
-                    }
+                    // (Said once the frame's done: the shared state is being read for it right
+                    // now, and writing to it here would wait for that forever.)
+                    acts.push(match self.plugins.uninstall(id) {
+                        Ok(()) => Act::Toast(format!("{name} was removed."), false),
+                        Err(e) => Act::Toast(format!("Couldn't remove {name}: {e}"), true),
+                    });
                     self.plugins.confirm_remove = None;
                 }
                 if ui.button("Keep it").clicked() {
@@ -1140,7 +1142,7 @@ impl IngleApp {
                         }
                     });
                 });
-                self.confirm_remove_row(ui, &p.id);
+                self.confirm_remove_row(ui, &p.id, acts);
             });
             ui.add_space(8.0);
         }
@@ -1344,8 +1346,14 @@ impl IngleApp {
                 ui.end_row();
                 ui.label("Kind");
                 ui.horizontal(|ui| {
-                    ui.radio_value(&mut g.kind, "addon".to_string(), "Add-on");
-                    ui.radio_value(&mut g.kind, "program".to_string(), "Program");
+                    if g.kind_fixed {
+                        // (Its source says: not for the sender to pick wrong.)
+                        kind_pill(ui, if g.kind == "program" { Kind::Program } else { Kind::Addon });
+                        ui.label(RichText::new("(as its Cargo.toml says)").size(12.5).color(theme::DIM()));
+                    } else {
+                        ui.radio_value(&mut g.kind, "addon".to_string(), "Add-on");
+                        ui.radio_value(&mut g.kind, "program".to_string(), "Program");
+                    }
                 });
                 ui.end_row();
                 ui.label("Version");
@@ -1389,6 +1397,13 @@ impl IngleApp {
                 match &st.plugin_send {
                     BugSend::Sent => {
                         ui.label(RichText::new("Sent. Someone will look at it before it's built and listed.").color(theme::ONLINE()));
+                    }
+                    // (Not collecting: nothing the sender did, so said so.)
+                    BugSend::Failed { not_collecting: true, .. } => {
+                        ui.label(
+                            RichText::new("Not sent: the Ingle Library isn't taking plugins or skins right now. What you filled in is kept here: try again later.")
+                                .color(theme::LIVE()),
+                        );
                     }
                     BugSend::Failed { message, .. } => {
                         ui.label(RichText::new(format!("Not sent: {message}")).color(theme::LIVE()));

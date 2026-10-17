@@ -329,8 +329,12 @@ fn platform_screens() -> Vec<ScreenSource> {
         for (i, m) in mons.iter().enumerate() {
             let (w, h) = (m.width().unwrap_or(0), m.height().unwrap_or(0));
             let name = m.name().unwrap_or_else(|_| format!("Display {}", i + 1));
+            // Known by Windows' own name for it too (\\.\DISPLAY2), so starting it again after
+            // the graphics driver restarts (when screens can be numbered anew) finds this one,
+            // never another.
+            let device = m.device_name().unwrap_or_default();
             v.push(ScreenSource {
-                id: format!("mon:{}", i + 1),
+                id: if device.is_empty() { format!("mon:{}", i + 1) } else { format!("mon:{}:{device}", i + 1) },
                 name: format!("Screen {} — {}", i + 1, name),
                 kind: SourceKind::Monitor,
                 width: w,
@@ -415,9 +419,20 @@ fn start_wgc_source(id: &str, fps: u32, slot: Arc<FrameSlot>) -> Result<CaptureH
     } else {
         CursorCaptureSettings::Default
     };
-    let control = if let Some(idx) = id.strip_prefix("mon:") {
+    let control = if let Some(rest) = id.strip_prefix("mon:") {
+        let (idx, device) = rest.split_once(':').unwrap_or((rest, ""));
         let idx: usize = idx.parse()?;
-        let m = Monitor::from_index(idx).map_err(|e| anyhow!("screen {idx} not found: {e}"))?;
+        // The very screen picked: by Windows' name for it when there is one (its number can
+        // change when the graphics driver restarts or a screen is unplugged); never another.
+        let m = if device.is_empty() {
+            Monitor::from_index(idx).map_err(|e| anyhow!("screen {idx} not found: {e}"))?
+        } else {
+            Monitor::enumerate()
+                .map_err(|e| anyhow!("screen {idx} not found: {e}"))?
+                .into_iter()
+                .find(|m| m.device_name().is_ok_and(|d| d == device))
+                .ok_or_else(|| anyhow!("screen {idx} not found (it's gone, or not back yet)"))?
+        };
         let target = Target::Monitor(m.as_raw_hmonitor() as isize);
         let watch = win::WgcWatch::new("screen");
         let make = |border| {

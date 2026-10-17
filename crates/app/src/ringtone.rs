@@ -3,7 +3,7 @@
 //! or a sound file from this PC, picked and cut like a soundboard sound. The engine plays them
 //! (`ingle_engine::ring`).
 
-use eframe::egui::{self, RichText};
+use eframe::egui::{self, Align, Layout, Rect, RichText, Sense, vec2};
 use ingle_engine::config::Ringtone;
 use ingle_engine::soundboard::{self as sb, SoundRef};
 use ingle_engine::state::AppState;
@@ -52,6 +52,7 @@ impl IngleApp {
         // Each server's own sounds.
         for s in st.servers.iter().filter(|s| !s.info.sounds.is_empty()) {
             ui.menu_button(format!("{}'s sounds", s.name), |ui| {
+                crate::menu::style(ui);
                 egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                     for snd in &s.info.sounds {
                         let r = SoundRef { server: s.key.clone(), id: snd.id.clone(), name: snd.name.clone(), emoji: snd.emoji.clone(), volume: snd.volume };
@@ -76,19 +77,30 @@ impl IngleApp {
         chose
     }
 
-    /// Settings → Notifications: the ringtone for everyone, to hear and change.
+    /// Settings → Notifications: the ringtone for everyone, to hear and change, in a card.
     pub(crate) fn ringtone_setting(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
-        ui.horizontal(|ui| {
-            ui.label("Ringtone");
-            let name = name_of(st.settings.ringtone.as_ref());
-            ui.label(RichText::new(name).strong().color(theme::TEXT()));
-            if ui.button("▶  Play").clicked() {
-                acts.push(Act::PreviewRingtone(st.settings.ringtone.clone()));
-            }
-            ui.menu_button("Change…", |ui| {
-                if self.ringtone_choices(ui, st, None, acts) {
-                    ui.close();
-                }
+        egui::Frame::new().fill(theme::SIDE()).corner_radius(10).inner_margin(egui::Margin::symmetric(14, 10)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(vec2(24.0, 40.0), Sense::hover());
+                crate::icons::bell(ui.painter(), Rect::from_center_size(r.center(), vec2(22.0, 22.0)), theme::MUTED());
+                ui.add_space(4.0);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    ui.label(RichText::new("Ringtone").size(12.5).color(theme::MUTED()));
+                    ui.label(RichText::new(name_of(st.settings.ringtone.as_ref())).font(theme::bold_font(15.0)).color(theme::TEXT()));
+                });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.menu_button("Change…", |ui| {
+                        crate::menu::style(ui);
+                        if self.ringtone_choices(ui, st, None, acts) {
+                            ui.close();
+                        }
+                    });
+                    if ui.button("▶  Play").clicked() {
+                        acts.push(Act::PreviewRingtone(st.settings.ringtone.clone()));
+                    }
+                });
             });
         });
         let own = st.settings.ringtones.len();
@@ -97,7 +109,9 @@ impl IngleApp {
             1 => "Calls ring with this, except from the 1 person you gave their own (right-click someone and choose Ringtone).".to_string(),
             n => format!("Calls ring with this, except from the {n} people you gave their own (right-click someone and choose Ringtone)."),
         };
+        ui.add_space(2.0);
         ui.label(RichText::new(note).size(12.0).color(theme::DIM()));
+        ui.add_space(4.0);
     }
 
     /// "Ringtone" in the menu from right-clicking someone: theirs to choose. True when one was
@@ -109,6 +123,7 @@ impl IngleApp {
             None => "Ringtone".to_string(),
         };
         ui.menu_button(label, |ui| {
+            crate::menu::style(ui);
             chose = self.ringtone_choices(ui, st, Some(uid), acts);
             if chose {
                 ui.close();

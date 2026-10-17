@@ -636,6 +636,7 @@ impl IngleApp {
             sbui.flash = Some((sound.server.clone(), sound.id.clone(), now));
         }
         resp.context_menu(|ui| {
+            crate::menu::style(ui);
             if ui.button("Play for everyone").clicked() {
                 acts.push(Act::PlaySound(sound.clone()));
                 ui.close();
@@ -698,7 +699,7 @@ impl IngleApp {
                     }
                     ui.close();
                 }
-                if ui.button(RichText::new("Delete sound…").color(theme::LIVE())).clicked() {
+                if crate::menu::danger(ui, "Delete sound…").clicked() {
                     self.ui.dialog = Some(Dialog::RemoveSound { key: sound.server.clone(), id: sound.id.clone(), name: sound.name.clone(), from_settings: false });
                     sbui.open = false;
                     ui.close();
@@ -1015,7 +1016,7 @@ impl IngleApp {
                     ui.label(RichText::new(&x.name).color(theme::TEXT()));
                     ui.label(RichText::new(format!("{:.1} s · {}% · added by {}", x.length_ms as f32 / 1000.0, (x.volume * 100.0).round(), s.member_name(&x.by))).size(12.0).color(theme::DIM()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(RichText::new("Delete").color(theme::LIVE())).clicked() {
+                        if crate::menu::danger(ui, "Delete").clicked() {
                             self.ui.next_dialog = Some(Dialog::RemoveSound { key: s.key.clone(), id: x.id.clone(), name: x.name.clone(), from_settings: true });
                         }
                         if ui.button("Edit").clicked() {
@@ -1087,33 +1088,28 @@ impl IngleApp {
 
     /// Settings → Voice & Video → Soundboard.
     pub(crate) fn soundboard_settings(&mut self, ui: &mut egui::Ui, st: &AppState, draft: &mut ingle_engine::config::Settings) {
-        field_label(ui, "Soundboard");
-        ui.horizontal(|ui| {
-            ui.label("Volume");
-            let mut pct = draft.soundboard_volume * 100.0;
-            if ui.add(egui::Slider::new(&mut pct, 0.0..=100.0).suffix("%")).changed() {
-                draft.soundboard_volume = pct / 100.0;
+        use crate::settings::{Slid, fine, heading, percent, slide};
+        heading(ui, "Soundboard");
+        field_label(ui, "Soundboard volume");
+        // (Taken when let go of: not saved over and over while it moves.)
+        if let Slid::Done(v) = slide(ui, "sb-vol", draft.soundboard_volume * 100.0, 0.0..=100.0, 1.0, None, percent) {
+            draft.soundboard_volume = v / 100.0;
+        }
+        fine(ui, "How loud anyone's soundboard sounds play for you (yours too).");
+        field_label(ui, "When you join voice");
+        ui.horizontal(|ui| match draft.join_sound.clone() {
+            Some(j) => {
+                self.sound_name(ui, &j);
+                if ui.button("Don't play a sound").clicked() {
+                    draft.join_sound = None;
+                }
             }
-        });
-        ui.label(RichText::new("How loud anyone's soundboard sounds play for you (yours too).").size(12.0).color(theme::DIM()));
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            ui.label("When you join voice:");
-            match draft.join_sound.clone() {
-                Some(j) => {
-                    self.sound_name(ui, &j);
-                    if ui.button("Don't play a sound").clicked() {
-                        draft.join_sound = None;
-                    }
-                }
-                None => {
-                    ui.label(RichText::new("no sound (right-click one in the soundboard to choose it)").color(theme::DIM()));
-                }
+            None => {
+                ui.label(RichText::new("No sound (right-click one in the soundboard to choose it).").color(theme::MUTED()));
             }
         });
         if !draft.sound_keys.is_empty() {
-            ui.add_space(6.0);
-            ui.label("Keys that play sounds (in voice, even in a game):");
+            field_label(ui, "Keys that play sounds (in voice, even in a game)");
             let mut remove = None;
             for (i, (combo, sound)) in draft.sound_keys.iter().enumerate() {
                 ui.horizontal(|ui| {
@@ -1129,8 +1125,7 @@ impl IngleApp {
             }
         }
         if !draft.soundboard_muted.is_empty() {
-            ui.add_space(6.0);
-            ui.label("People whose sounds you've muted:");
+            field_label(ui, "People whose sounds you've muted");
             let mut unmute = None;
             for uid in &draft.soundboard_muted {
                 let name = st.servers.iter().find_map(|s| s.members.get(uid).map(|m| m.name.clone())).unwrap_or_else(|| "someone".into());

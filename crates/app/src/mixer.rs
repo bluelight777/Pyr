@@ -42,6 +42,60 @@ pub struct MixerUi {
     before_mute: HashMap<String, f32>,
     /// When the meters last moved (seconds).
     last: Option<f64>,
+    /// Faders gliding to where Even out (or its Undo) put them.
+    glide: Option<Glide>,
+    /// What the faders were before Even out (for Undo), and when it was done.
+    undo: Option<(f64, Vec<(String, bool, f32)>)>,
+    /// The loudness everyone was evened out to (dBFS), and when: a line across the meters.
+    target: Option<(f64, f32)>,
+    /// What Even out did, said for a while (since when).
+    note: Option<(f64, String)>,
+}
+
+/// Faders moving by themselves: each person's voice (or stream) from one volume to another.
+struct Glide {
+    start: f64,
+    moves: Vec<(String, bool, f32, f32)>,
+}
+
+/// How long the faders take to glide into place.
+const GLIDE_S: f64 = 0.9;
+/// How long Undo, the target line and the note stay.
+const UNDO_S: f64 = 15.0;
+/// Streams sit this much under voices, so people can still be heard over a game or music.
+pub const STREAM_UNDER_DB: f32 = 5.0;
+
+/// Even out: for everyone heard enough to tell how loud they usually are (`loud`: who, their
+/// stream or not, dBFS as sent), the volume that makes them as loud as everyone else. The
+/// loudness aimed for is the middle of everyone's voices (kept between -28 and -18 dBFS, so it
+/// never ends up deafening or faint), streams a little under it. Someone I turned all the way
+/// down stays down. Returns the voices' target and the volumes, rounded to whole percents.
+pub fn even_out(loud: &[(String, bool, f32)], now: &dyn Fn(&str, bool) -> f32) -> (f32, Vec<(String, bool, f32)>) {
+    let mut voices: Vec<f32> = loud.iter().filter(|x| !x.1).map(|x| x.2).collect();
+    voices.sort_by(f32::total_cmp);
+    let target = match voices.len() {
+        0 => -22.0,
+        n if n % 2 == 1 => voices[n / 2],
+        n => (voices[n / 2 - 1] + voices[n / 2]) / 2.0,
+    }
+    .clamp(-28.0, -18.0);
+    let plan = loud
+        .iter()
+        .filter(|(uid, stream, _)| now(uid, *stream) > 0.0001)
+        .map(|(uid, stream, db)| {
+            let aim = if *stream { target - STREAM_UNDER_DB } else { target };
+            let (lo, hi) = if *stream { (0.1, MAX) } else { (0.25, MAX) };
+            let v = 10f32.powf((aim - db) / 20.0).clamp(lo, hi);
+            (uid.clone(), *stream, (v * 100.0).round() / 100.0)
+        })
+        .collect();
+    (target, plan)
+}
+
+/// Eased: quick to start, gentle to land.
+fn ease(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
 }
 
 /// A meter's reading as shown: quick up, slower down, with a peak light that waits, then
@@ -163,7 +217,7 @@ fn meter(p: &egui::Painter, r: Rect, led: Led, faint: bool) {
 /// A fader and its meter, in column `col`: `value` (0 to 2), glowing in `accent`; `dim` for
 /// one with nothing coming through it right now (it still moves).
 #[allow(clippy::too_many_arguments)]
-fn fader(ui: &mut egui::Ui, id: egui::Id, col: Rect, value: f32, accent: Color32, led: Led, faint: bool, dim: bool, tip: &str) -> Moved {
+fn fader(ui: &mut egui::Ui, id: egui::Id, col: Rect, value: f32, accent: Color32, led: Led, faint: bool, dim: bool, mark: Option<f32>, tip: &str) -> Moved {
     let p = ui.painter().clone();
     let gx = col.left() + 30.0;
     let (top, bottom) = (col.top() + 10.0, col.bottom() - 10.0);
@@ -224,6 +278,16 @@ fn fader(ui: &mut egui::Ui, id: egui::Id, col: Rect, value: f32, accent: Color32
     // The meter beside it.
     let m = Rect::from_min_max(pos2(gx + 15.0, top), pos2(gx + 22.0, bottom));
     meter(&p, m, led, faint);
+    // Where they usually are (after this fader): a little pointer beside the meter.
+    if let Some(level) = mark.filter(|l| *l > 0.0) {
+        let y = bottom - level * (bottom - top);
+        let tip = pos2(m.right() + 2.0, y);
+        p.add(egui::Shape::convex_polygon(
+            vec![tip, pos2(tip.x + 6.0, y - 4.0), pos2(tip.x + 6.0, y + 4.0)],
+            Color32::WHITE.gamma_multiply(0.85 * if dim { 0.5 } else { 1.0 }),
+            Stroke::NONE,
+        ));
+    }
     // The cap: a little metal block with a line across it, lit while it's held.
     let cap = Rect::from_center_size(pos2(gx, y), vec2(32.0, 15.0));
     p.rect_filled(cap.translate(vec2(0.0, 3.0)).expand(1.0), CornerRadius::same(5), Color32::from_black_alpha(110));
@@ -304,13 +368,21 @@ impl IngleApp {
         let head = Rect::from_min_size(card.min + vec2(18.0, 10.0), vec2(card.width() - 36.0, 26.0));
         icons::mixer(&p, Rect::from_min_size(pos2(head.left(), head.center().y - 8.0), vec2(16.0, 16.0)), theme::EMBER2());
         let title = p.text(pos2(head.left() + 24.0, head.center().y), Align2::LEFT_CENTER, "MIXER", theme::bold_font(12.5), theme::TEXT());
-        p.text(
-            pos2(title.right() + 12.0, head.center().y),
-            Align2::LEFT_CENTER,
-            "Only you hear what you change here · double-click a fader for 100%",
-            theme::font(12.0),
-            theme::DIM(),
-        );
+        // (Cut to fit left of the buttons.)
+        let room = (head.right() - 300.0) - (title.right() + 12.0);
+        if room > 40.0 {
+            let mut job = egui::text::LayoutJob::simple(
+                "Only you hear what you change here · double-click a fader for 100%".into(),
+                theme::font(12.0),
+                theme::DIM(),
+                room,
+            );
+            job.wrap.max_rows = 1;
+            job.wrap.break_anywhere = true;
+            job.wrap.overflow_character = Some('…');
+            let g = ui.fonts_mut(|f| f.layout_job(job));
+            p.galley(pos2(title.right() + 12.0, head.center().y - g.size().y / 2.0), g, theme::DIM());
+        }
         let close = Rect::from_center_size(pos2(head.right() - 10.0, head.center().y), vec2(24.0, 24.0));
         let cr = ui.interact(close, ui.id().with("mixer-close"), Sense::click());
         if cr.hovered() {
@@ -335,8 +407,35 @@ impl IngleApp {
                 speaking: call.speaking.contains(&v.session),
             });
         }
+        let now = ui.input(|i| i.time);
+        // Even out: how loud everyone usually is, and the faders gliding there.
+        let loud = self.engine.loudness();
+        let loud_of = |session: u32, t: u8| loud.iter().find(|(s, tr, _)| *s == session && *tr == t).map(|x| x.2);
+        self.glide_faders(now, acts);
+        let even = Rect::from_min_size(pos2(close.left() - 10.0 - 104.0, head.center().y - 12.0), vec2(104.0, 24.0));
+        let gliding = self.ui.mixer.glide.is_some();
+        let er = ui.interact(even, ui.id().with("mixer-even"), Sense::click());
+        let lit = er.hovered() || gliding;
+        gradient_rect(&p, even, 8.0, if lit { theme::EMBER2() } else { theme::EMBER() }, theme::mix(theme::EMBER(), Color32::BLACK, 0.25));
+        if lit {
+            p.rect_stroke(even.expand(1.5), CornerRadius::same(9), Stroke::new(1.0, theme::EMBER2().gamma_multiply(0.6)), StrokeKind::Outside);
+        }
+        // (Three bars coming level.)
+        let ic = Rect::from_center_size(pos2(even.left() + 16.0, even.center().y), vec2(12.0, 12.0));
+        for (i, h) in [0.55f32, 0.9, 0.7].into_iter().enumerate() {
+            let k = if gliding { 0.8 } else { h };
+            let x = ic.left() + 1.5 + i as f32 * 4.5;
+            p.line_segment([pos2(x, ic.bottom()), pos2(x, ic.bottom() - ic.height() * k)], Stroke::new(2.4, theme::on_ember()));
+        }
+        p.text(pos2(even.left() + 28.0, even.center().y), Align2::LEFT_CENTER, "Even out", theme::bold_font(12.0), theme::on_ember());
+        let tip = "Listens to how loud each person really talks (only while they talk) and how loud their stream is, then moves \
+                   every fader so everyone sounds just as loud: streams a little under voices, so people can still be heard over \
+                   them. Faders you turned all the way down stay down.";
+        if er.on_hover_text(tip).clicked() && !gliding {
+            self.start_even_out(st, s, call, &loud, now, acts);
+        }
         let reset_w = 132.0;
-        let reset = Rect::from_min_size(pos2(close.left() - 10.0 - reset_w, head.center().y - 12.0), vec2(reset_w, 24.0));
+        let reset = Rect::from_min_size(pos2(even.left() - 8.0 - reset_w, head.center().y - 12.0), vec2(reset_w, 24.0));
         let any_changed = strips.iter().any(|x| match x {
             Strip::Person { uid, .. } => {
                 st.user_volumes.get(uid).is_some_and(|v| (v - 1.0).abs() > 0.001) || st.stream_volumes.get(uid).is_some_and(|v| (v - 1.0).abs() > 0.001)
@@ -352,8 +451,29 @@ impl IngleApp {
             }
         }
 
+        // What Even out did (and Undo), for a while.
+        if let Some((at, text)) = self.ui.mixer.note.clone().filter(|(at, _)| now - at < UNDO_S) {
+            let fade = (1.0 - ((now - at - (UNDO_S - 1.0)) as f32).max(0.0)).clamp(0.0, 1.0);
+            let g = ui.painter().layout_no_wrap(text, theme::font(12.0), theme::TEXT().gamma_multiply(fade));
+            let x = (reset.left() - 14.0 - g.size().x - 52.0).max(title.right() + 12.0);
+            let undo_r = Rect::from_min_size(pos2(x + g.size().x + 8.0, head.center().y - 11.0), vec2(44.0, 22.0));
+            // (Over the line saying what the mixer is for.)
+            p.rect_filled(Rect::from_min_max(pos2(x - 6.0, head.top()), pos2(undo_r.right() + 4.0, head.bottom())), CornerRadius::same(6), theme::mix(theme::ELEV(), theme::STAGE(), 0.15));
+            p.galley(pos2(x, head.center().y - g.size().y / 2.0), g, theme::TEXT());
+            if self.ui.mixer.undo.is_some() && pill(ui, ui.id().with("mixer-undo"), undo_r, "Undo", false, theme::EMBER(), "Put the faders back where they were") {
+                if let Some((_, before)) = self.ui.mixer.undo.take() {
+                    let moves = before.into_iter().map(|(uid, stream, v)| {
+                        let from = if stream { st.stream_volumes.get(&uid) } else { st.user_volumes.get(&uid) }.copied().unwrap_or(1.0);
+                        (uid, stream, from, v)
+                    });
+                    self.ui.mixer.glide = Some(Glide { start: now, moves: moves.collect() });
+                    self.ui.mixer.note = Some((now, "Put back.".into()));
+                    self.ui.mixer.target = None;
+                }
+            }
+        }
+
         // The meters: what's coming in now, eased.
-        let now = ui.input(|i| i.time);
         let dt = self.ui.mixer.last.map(|l| (now - l) as f32).unwrap_or(0.016).clamp(0.0, 0.1);
         self.ui.mixer.last = Some(now);
         let levels = self.engine.track_levels();
@@ -415,7 +535,7 @@ impl IngleApp {
                         let acc = accent_of(tint);
                         let v = st.settings.input_gain;
                         let tip = "How loud your microphone is sent (everyone hears this one)";
-                        let moved = fader(ui, ui.id().with("f-mic"), fader_rect(col), v, acc, led("mic"), !transmitting, false, tip);
+                        let moved = fader(ui, ui.id().with("f-mic"), fader_rect(col), v, acc, led("mic"), !transmitting, false, None, tip);
                         match moved {
                             Moved::Live(g) => acts.push(Act::InputGain { gain: g, save: false }),
                             Moved::Done(g) => acts.push(Act::InputGain { gain: g, save: true }),
@@ -433,7 +553,7 @@ impl IngleApp {
                         let col = column(r, 0);
                         label(ui, col, "ALL", false, theme::MUTED());
                         let v = master;
-                        let moved = fader(ui, ui.id().with("f-all"), fader_rect(col), v, theme::EMBER2(), led("all"), false, false, "Everything you hear: everyone, streams and sounds");
+                        let moved = fader(ui, ui.id().with("f-all"), fader_rect(col), v, theme::EMBER2(), led("all"), false, false, None, "Everything you hear: everyone, streams and sounds");
                         match moved {
                             Moved::Live(g) => acts.push(Act::OutputVolume { volume: g, save: false }),
                             Moved::Done(g) => acts.push(Act::OutputVolume { volume: g, save: true }),
@@ -456,7 +576,12 @@ impl IngleApp {
                         // Their voice.
                         let col = column(r, 0);
                         label(ui, col, "VOICE", false, theme::MUTED());
-                        let moved = fader(ui, ui.id().with(("f-v", session)), fader_rect(col), voice, acc, led(&format!("v:{uid}")), false, false, &format!("{name}'s voice, for you"));
+                        let mark = loud_of(*session, track::MIC).map(|db| meter_level(after(db, voice)));
+                        let tip = match loud_of(*session, track::MIC) {
+                            Some(db) => format!("{name}'s voice, for you. They usually talk at {db:.0} dB (the white pointer, after this fader)."),
+                            None => format!("{name}'s voice, for you"),
+                        };
+                        let moved = fader(ui, ui.id().with(("f-v", session)), fader_rect(col), voice, acc, led(&format!("v:{uid}")), false, false, mark, &tip);
                         match moved {
                             Moved::Live(v) => acts.push(Act::PersonVolume { uid: uid.clone(), volume: v, stream: false, save: false }),
                             Moved::Done(v) => acts.push(Act::PersonVolume { uid: uid.clone(), volume: v, stream: false, save: true }),
@@ -472,7 +597,8 @@ impl IngleApp {
                         } else {
                             format!("The sound of {name}'s screen share, for you (they aren't sharing any right now)")
                         };
-                        let moved = fader(ui, ui.id().with(("f-s", session)), fader_rect(col), stream, acc, led(&format!("s:{uid}")), false, !live, &tip);
+                        let mark = loud_of(*session, track::SCREEN_AUDIO).map(|db| meter_level(after(db, stream)));
+                        let moved = fader(ui, ui.id().with(("f-s", session)), fader_rect(col), stream, acc, led(&format!("s:{uid}")), false, !live, mark, &tip);
                         match moved {
                             Moved::Live(v) => acts.push(Act::PersonVolume { uid: uid.clone(), volume: v, stream: true, save: false }),
                             Moved::Done(v) => acts.push(Act::PersonVolume { uid: uid.clone(), volume: v, stream: true, save: true }),
@@ -500,6 +626,24 @@ impl IngleApp {
                 }
             }
         });
+        // Where everyone was evened out to: a line across the meters, fading away.
+        if let Some((at, target)) = self.ui.mixer.target.filter(|(at, _)| now - at < UNDO_S) {
+            let fade = (1.0 - ((now - at) as f32 - 4.0).max(0.0) / 3.0).clamp(0.0, 1.0);
+            if fade > 0.0 && strips.len() > 2 {
+                let fr = fader_rect(column(Rect::from_min_size(body.min, vec2(10.0, STRIP_H)), 0));
+                let (top, bottom) = (fr.top() + 10.0, fr.bottom() - 10.0);
+                let y = bottom - meter_level(target) * (bottom - top);
+                let x0 = body.left() + 2.0 * (COL_W + 30.0) + 2.0 * GAP + 8.0;
+                let x1 = body.right().min(body.left() + total);
+                let c = theme::EMBER2().gamma_multiply(0.75 * fade);
+                let mut x = x0;
+                while x < x1 {
+                    p.line_segment([pos2(x, y), pos2((x + 6.0).min(x1), y)], Stroke::new(1.2, c));
+                    x += 10.0;
+                }
+                p.text(pos2(x1 - 4.0, y - 8.0), Align2::RIGHT_CENTER, format!("everyone ≈ {target:.0} dB"), theme::font(10.5), c);
+            }
+        }
         if strips.len() == 2 {
             p.text(
                 pos2(body.left() + 2.0 * (COL_W + 30.0) + GAP + 40.0, body.top() + STRIP_H / 2.0),
@@ -510,6 +654,82 @@ impl IngleApp {
             );
         }
         ui.ctx().request_repaint_after(Duration::from_millis(33));
+    }
+
+    /// Moves the gliding faders a step (heard as they go), and keeps them where they land.
+    fn glide_faders(&mut self, now: f64, acts: &mut Vec<Act>) {
+        let Some(g) = &self.ui.mixer.glide else { return };
+        let t = ((now - g.start) / GLIDE_S) as f32;
+        let done = t >= 1.0;
+        let k = ease(t);
+        for (uid, stream, from, to) in &g.moves {
+            let v = ((from + (to - from) * k) * 100.0).round() / 100.0;
+            acts.push(Act::PersonVolume { uid: uid.clone(), volume: if done { *to } else { v }, stream: *stream, save: done });
+        }
+        if done {
+            self.ui.mixer.glide = None;
+        }
+    }
+
+    /// Even out, started: works out where every fader goes (see `even_out`) and sets them
+    /// gliding there, keeping where they were for Undo.
+    fn start_even_out(&mut self, st: &AppState, s: &ServerView, call: &CallView, loud: &[(u32, u8, f32)], now: f64, acts: &mut Vec<Act>) {
+        let others: Vec<_> = s.voice_in(call.channel_id).into_iter().filter(|v| v.session != call.session).collect();
+        let mut measured: Vec<(String, bool, f32)> = Vec::new();
+        let mut unheard: Vec<String> = Vec::new();
+        for v in &others {
+            match loud.iter().find(|(se, t, _)| *se == v.session && *t == track::MIC) {
+                Some(x) => measured.push((v.user_id.clone(), false, x.2)),
+                None => unheard.push(s.member_name(&v.user_id)),
+            }
+            if let Some(x) = loud.iter().find(|(se, t, _)| *se == v.session && *t == track::SCREEN_AUDIO) {
+                measured.push((v.user_id.clone(), true, x.2));
+            }
+        }
+        let vol = |uid: &str, stream: bool| if stream { st.stream_volumes.get(uid) } else { st.user_volumes.get(uid) }.copied().unwrap_or(1.0);
+        let (target, plan) = even_out(&measured, &vol);
+        if plan.is_empty() {
+            let text = if others.is_empty() {
+                "Nobody else is here to even out yet.".to_string()
+            } else {
+                "Nobody has talked long enough to tell how loud they are yet: give it a few seconds of talking.".to_string()
+            };
+            acts.push(Act::Toast(text, false));
+            return;
+        }
+        let voices = plan.iter().filter(|x| !x.1).count();
+        let streams = plan.len() - voices;
+        let text = match (voices, streams) {
+            (v, 0) => format!("Evened out {v} {}.", if v == 1 { "voice" } else { "voices" }),
+            (0, n) => format!("Evened out {n} {}.", if n == 1 { "stream" } else { "streams" }),
+            (v, n) => format!("Evened out {v} {} and {n} {}.", if v == 1 { "voice" } else { "voices" }, if n == 1 { "stream" } else { "streams" }),
+        };
+        // Someone a fader can't bring all the way: said, so it isn't a mystery.
+        let short = plan.iter().filter(|(_, stream, _)| !stream).find_map(|(uid, _, v)| {
+            let db = measured.iter().find(|m| m.0 == *uid && !m.1)?.2;
+            let off = after(db, *v) - target;
+            (off.abs() > 2.0).then(|| (s.member_name(uid), off < 0.0))
+        });
+        // (The rest, said in a note of its own: the mixer's top only has room for a line.)
+        let mut more = String::new();
+        match short {
+            Some((name, true)) => more.push_str(&format!("{name} is still quieter than the rest: 200% is as far as a fader goes (their microphone is turned down low). ")),
+            Some((name, false)) => more.push_str(&format!("{name} is still louder than the rest: Even out doesn't go below 25%. ")),
+            None => {}
+        }
+        match unheard.as_slice() {
+            [] => {}
+            [one] => more.push_str(&format!("{one} hasn't talked enough to tell how loud they are yet.")),
+            many => more.push_str(&format!("{} people haven't talked enough to tell how loud they are yet.", many.len())),
+        }
+        if !more.is_empty() {
+            acts.push(Act::Toast(more.trim().to_string(), false));
+        }
+        self.ui.mixer.undo = Some((now, plan.iter().map(|(u, stream, _)| (u.clone(), *stream, vol(u, *stream))).collect()));
+        self.ui.mixer.glide = Some(Glide { start: now, moves: plan.into_iter().map(|(u, stream, to)| (u.clone(), stream, vol(&u, stream), to)).collect() });
+        self.ui.mixer.target = Some((now, target));
+        self.ui.mixer.note = Some((now, text));
+        self.glide_faders(now, acts);
     }
 
     /// A strip's top: in their colors, their picture (lit while they talk), their name, and
@@ -604,6 +824,43 @@ mod tests {
         assert_eq!(value_at(150.0, top, bottom), 0.5);
         assert_eq!(percent(0.5), "50%");
         assert_eq!(percent(1.234), "123%");
+    }
+
+    #[test]
+    fn even_out_makes_everyone_as_loud_as_the_middle_voice() {
+        let loud = vec![
+            ("quiet".to_string(), false, -32.0),
+            ("middle".to_string(), false, -22.0),
+            ("loud".to_string(), false, -12.0),
+            ("loud".to_string(), true, -10.0),
+            ("muted".to_string(), false, -20.0),
+        ];
+        let muted = |uid: &str, _: bool| if uid == "muted" { 0.0 } else { 1.0 };
+        let (target, plan) = even_out(&loud, &muted);
+        // Four voices: the middle of -32, -22, -20 and -12.
+        assert!((target + 21.0).abs() < 0.01, "{target}");
+        let get = |uid: &str, stream: bool| plan.iter().find(|x| x.0 == uid && x.1 == stream).map(|x| x.2);
+        // 11 dB up is more than 200%: as far as it goes.
+        assert_eq!(get("quiet", false), Some(2.0));
+        // 1 dB up and 9 dB down.
+        assert_eq!(get("middle", false), Some(1.12));
+        assert_eq!(get("loud", false), Some(0.35));
+        // Their stream: 5 dB under the voices (-26 dB from -10: 16 dB down).
+        assert_eq!(get("loud", true), Some(0.16));
+        // Someone turned all the way down stays down.
+        assert_eq!(get("muted", false), None);
+        // After it, everyone's meters point at about the same place.
+        for (uid, stream, db) in &loud {
+            if let Some(v) = get(uid, *stream).filter(|_| *uid != "quiet") {
+                let aim = if *stream { target - STREAM_UNDER_DB } else { target };
+                assert!((after(*db, v) - aim).abs() < 0.3, "{uid}: {}", after(*db, v));
+            }
+        }
+        // Everyone very loud: brought down to -18 dB, not to where they all are.
+        let (t2, _) = even_out(&[("a".into(), false, -6.0), ("b".into(), false, -8.0)], &|_, _| 1.0);
+        assert_eq!(t2, -18.0);
+        // Nobody measured: nothing to do.
+        assert!(even_out(&[], &|_, _| 1.0).1.is_empty());
     }
 
     #[test]

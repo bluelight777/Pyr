@@ -81,6 +81,16 @@ pub enum CaptureEvent {
 
 /// A capture that stops working is started again this many times a minute at most.
 const RESTARTS_PER_MINUTE: usize = 3;
+/// When starting it again doesn't work (right after the graphics driver restarted, the screens
+/// aren't back yet), it's tried every so often for a while before the share ends.
+#[cfg(not(test))]
+const RETRY_FOR: Duration = Duration::from_secs(30);
+#[cfg(not(test))]
+const RETRY_EVERY: Duration = Duration::from_secs(2);
+#[cfg(test)]
+const RETRY_FOR: Duration = Duration::from_millis(1500);
+#[cfg(test)]
+const RETRY_EVERY: Duration = Duration::from_millis(300);
 
 #[derive(Default)]
 pub struct PublisherStats {
@@ -136,10 +146,39 @@ impl Publisher {
                 let mut checked = Instant::now();
                 let mut restarts: Vec<Instant> = Vec::new();
                 let mut over = false;
+                // Starting it again failed: why it broke, the last failure, until when it's tried
+                // again, and when next.
+                let mut retrying: Option<(String, String, Instant, Instant)> = None;
                 while !st.load(Ordering::Relaxed) {
                     // The capture, looked at once a second.
-                    if !over && checked.elapsed() >= Duration::from_secs(1) {
+                    if !over && checked.elapsed() >= Duration::from_secs(1).min(RETRY_EVERY) {
                         checked = Instant::now();
+                        // Waiting for what's captured to come back (a driver restart): tried
+                        // again every so often, then given up on.
+                        if let Some((why, err, until, next)) = retrying.take() {
+                            if Instant::now() < next {
+                                retrying = Some((why, err, until, next));
+                            } else {
+                                match restart.as_mut().map(|f| f()) {
+                                    Some(Ok(c)) => {
+                                        warn!("the capture came back after {err}; started it again");
+                                        capture = c;
+                                        restarts.push(Instant::now());
+                                        kf.store(true, Ordering::Relaxed);
+                                        on_event(CaptureEvent::Restarted(format!("{why} (it came back after a moment: {err})")));
+                                    }
+                                    Some(Err(e)) if Instant::now() < until => retrying = Some((why, format!("{e:#}"), until, Instant::now() + RETRY_EVERY)),
+                                    Some(Err(e)) => {
+                                        over = true;
+                                        on_event(CaptureEvent::Ended { why: format!("{why}, and starting it again didn't work: {e:#}"), gone: false });
+                                    }
+                                    None => {
+                                        over = true;
+                                        on_event(CaptureEvent::Ended { why, gone: false });
+                                    }
+                                }
+                            }
+                        } else {
                         match capture.trouble() {
                             None => {}
                             Some(Trouble::Gone(why)) => {
@@ -158,8 +197,10 @@ impl Publisher {
                                         on_event(CaptureEvent::Restarted(why));
                                     }
                                     Some(Err(e)) => {
-                                        over = true;
-                                        on_event(CaptureEvent::Ended { why: format!("{why}, and starting it again didn't work: {e:#}"), gone: false });
+                                        // (Not back yet: the share holds its last picture meanwhile.)
+                                        warn!("the capture stopped working ({why}) and didn't start again yet ({e:#}); trying again for a while");
+                                        let now = Instant::now();
+                                        retrying = Some((why, format!("{e:#}"), now + RETRY_FOR, now + RETRY_EVERY));
                                     }
                                     None => {
                                         over = true;
@@ -167,6 +208,7 @@ impl Publisher {
                                     }
                                 }
                             }
+                        }
                         }
                     }
                     let fresh = slot.take_wait(Duration::from_millis(40));
@@ -398,6 +440,20 @@ mod tests {
         CaptureHandle::thread(Arc::new(AtomicBool::new(false)), std::thread::spawn(|| {}))
     }
 
+    /// A capture that keeps going until it's stopped.
+    fn working() -> CaptureHandle {
+        let stop = Arc::new(AtomicBool::new(false));
+        let s = stop.clone();
+        CaptureHandle::thread(
+            stop,
+            std::thread::spawn(move || {
+                while !s.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }),
+        )
+    }
+
     #[test]
     fn a_capture_that_stops_working_is_started_again_a_few_times_then_given_up_on() {
         let cfg = PublisherConfig { screen: true, max_width: 320, max_height: 180, fps: 10, bitrate: 200_000 };
@@ -428,6 +484,37 @@ mod tests {
         assert_eq!(events.len(), RESTARTS_PER_MINUTE + 1, "{events:?}");
         assert!(events[..RESTARTS_PER_MINUTE].iter().all(|e| matches!(e, CaptureEvent::Restarted(_))));
         assert_eq!(events.last(), Some(&CaptureEvent::Ended { why: "capturing stopped".into(), gone: false }));
+    }
+
+    #[test]
+    fn a_capture_that_comes_back_after_a_moment_carries_on() {
+        // (Like the screens right after the graphics driver restarts: not there at first.)
+        let cfg = PublisherConfig { screen: true, max_width: 320, max_height: 180, fps: 10, bitrate: 200_000 };
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let ev = events.clone();
+        let tries = Arc::new(AtomicUsize::new(0));
+        let t2 = tries.clone();
+        let publisher = Publisher::start(
+            cfg,
+            broken(),
+            Arc::new(FrameSlot::default()),
+            Box::new(|_, _, _| {}),
+            None,
+            Arc::new(AtomicUsize::new(0)),
+            Some(Box::new(move || {
+                if t2.fetch_add(1, Ordering::SeqCst) < 2 { Err(anyhow::anyhow!("screen 2 not found")) } else { Ok(working()) }
+            })),
+            Box::new(move |e| ev.lock().push(e)),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while events.lock().is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        drop(publisher);
+        let got = events.lock().clone();
+        assert!(matches!(got.as_slice(), [CaptureEvent::Restarted(why)] if why.contains("came back")), "{got:?}");
+        assert_eq!(tries.load(Ordering::SeqCst), 3);
     }
 
     #[test]

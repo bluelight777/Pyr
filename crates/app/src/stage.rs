@@ -61,11 +61,14 @@ struct Pop {
 /// slider, or a note when their stream has no sound.
 pub(crate) fn stream_volume_slider(ui: &mut egui::Ui, uid: &str, has_sound: bool, volume: f32, acts: &mut Vec<Act>) {
     if has_sound {
-        ui.label(RichText::new("Stream volume").size(12.0).color(theme::MUTED()));
+        crate::menu::header(ui, "Stream volume");
         let mut v = volume * 100.0;
-        if ui.add(egui::Slider::new(&mut v, 0.0..=200.0).suffix("%")).changed() {
-            acts.push(Act::StreamVolume { uid: uid.to_string(), volume: v / 100.0 });
-        }
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            if ui.add(egui::Slider::new(&mut v, 0.0..=200.0).suffix("%").fixed_decimals(0)).changed() {
+                acts.push(Act::StreamVolume { uid: uid.to_string(), volume: v / 100.0 });
+            }
+        });
     } else {
         ui.label(RichText::new("Their stream has no sound").size(12.0).color(theme::DIM()));
     }
@@ -662,17 +665,17 @@ impl IngleApp {
         let moderate = t.moderate.clone().filter(|_| !screen);
         // (Ticking your own Mute or Deafen leaves the menu open, like Discord.)
         egui::Popup::context_menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+            crate::menu::style(ui);
             if is_me && !screen {
                 // Your own Mute and Deafen, as in the voice channel list (deafened counts as
                 // muted too), like Discord.
                 let (muted, deafened) = self.engine.voice_prefs();
-                let mut m = muted || deafened;
-                if ui.checkbox(&mut m, "Mute").clicked() {
-                    acts.push(Act::Mute(m));
+                let m = muted || deafened;
+                if crate::menu::check(ui, m, "Mute", false).clicked() {
+                    acts.push(Act::Mute(!m));
                 }
-                let mut d = deafened;
-                if ui.checkbox(&mut d, "Deafen").clicked() {
-                    acts.push(Act::Deafen(d));
+                if crate::menu::check(ui, deafened, "Deafen", false).clicked() {
+                    acts.push(Act::Deafen(!deafened));
                 }
                 ui.separator();
             }
@@ -680,7 +683,7 @@ impl IngleApp {
                 // Mute this person (or just their stream's sound) on this PC, like Discord.
                 let (now, label) = if screen { (svol, "Mute stream") } else { (vol, "Mute") };
                 let muted = now <= 0.001;
-                if ui.checkbox(&mut muted.clone(), if screen && !has_sound { "Mute stream (it has no sound now)" } else { label }).clicked() {
+                if crate::menu::check(ui, muted, if screen && !has_sound { "Mute stream (it has no sound now)" } else { label }, false).clicked() {
                     let slot = (uid.clone(), screen);
                     let volume = if muted {
                         self.ui.premute_volume.remove(&slot).filter(|v| *v > 0.001).unwrap_or(1.0)
@@ -692,7 +695,7 @@ impl IngleApp {
                     ui.close();
                 }
                 // Their soundboard sounds, for me only (everyone else still hears them).
-                if !screen && ui.checkbox(&mut sb_muted.clone(), "Mute their soundboard").clicked() {
+                if !screen && crate::menu::check(ui, sb_muted, "Mute their soundboard", false).clicked() {
                     acts.push(Act::MuteSoundboard { uid: uid.clone(), muted: !sb_muted });
                     ui.close();
                 }
@@ -701,11 +704,14 @@ impl IngleApp {
             if !is_me && screen {
                 stream_volume_slider(ui, &uid, has_sound, svol, acts);
             } else if !is_me {
-                ui.label(RichText::new(format!("{name} volume")).size(12.0).color(theme::MUTED()));
+                crate::menu::header(ui, &format!("{name}'s volume"));
                 let mut v = vol * 100.0;
-                if ui.add(egui::Slider::new(&mut v, 0.0..=200.0).suffix("%")).changed() {
-                    acts.push(Act::Volume { uid: uid.clone(), volume: v / 100.0 });
-                }
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    if ui.add(egui::Slider::new(&mut v, 0.0..=200.0).suffix("%").fixed_decimals(0)).changed() {
+                        acts.push(Act::Volume { uid: uid.clone(), volume: v / 100.0 });
+                    }
+                });
                 // Sharing their screen: its sound's volume too, right here (like their voice's).
                 if streaming {
                     stream_volume_slider(ui, &uid, has_sound, svol, acts);
@@ -716,14 +722,14 @@ impl IngleApp {
                 if !is_me {
                     ui.separator();
                 }
-                if let Some(mut on) = *mute {
-                    if ui.checkbox(&mut on, RichText::new("Server Mute").color(theme::LIVE())).clicked() {
-                        acts.push(Act::ServerMute { key: server.clone(), uid: uid.clone(), muted: on });
+                if let Some(on) = *mute {
+                    if crate::menu::check(ui, on, "Server Mute", true).clicked() {
+                        acts.push(Act::ServerMute { key: server.clone(), uid: uid.clone(), muted: !on });
                     }
                 }
-                if let Some(mut on) = *deaf {
-                    if ui.checkbox(&mut on, RichText::new("Server Deafen").color(theme::LIVE())).clicked() {
-                        acts.push(Act::ServerDeafen { key: server.clone(), uid: uid.clone(), deafened: on });
+                if let Some(on) = *deaf {
+                    if crate::menu::check(ui, on, "Server Deafen", true).clicked() {
+                        acts.push(Act::ServerDeafen { key: server.clone(), uid: uid.clone(), deafened: !on });
                     }
                 }
                 ui.separator();

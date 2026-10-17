@@ -1,13 +1,12 @@
-//! Modal dialogs: join server, invites, channels, settings, screen picker.
+//! Modal dialogs: join server, invites, channels, the screen picker (Settings is in settings.rs).
 
 use eframe::egui::{self, Align, Color32, CornerRadius, Layout, RichText, Sense, pos2, vec2};
-use ingle_engine::config::{CameraQuality, InputMode, NoiseSuppression, ScreenPreset};
-use ingle_engine::hotkey;
+use ingle_engine::config::ScreenPreset;
 use ingle_engine::state::{AppState, BugSend, ConnStatus};
 use ingle_engine::video::SourceKind;
-use ingle_proto::control::{ChannelKind, FILES_FEATURE, ROLES_FEATURE, perm};
+use ingle_proto::control::{ChannelKind, ROLES_FEATURE, perm};
 
-use crate::app::{Act, Dialog, IngleApp, RoleEdit, avatar, rgb};
+use crate::app::{Act, Dialog, IngleApp, RoleEdit, rgb};
 use crate::{icons, theme};
 
 fn modal_frame() -> egui::Frame {
@@ -198,7 +197,8 @@ impl IngleApp {
             }
             BugSend::Failed { message, not_collecting } if !open && self.ui.bug_draft.is_some() => {
                 let why = if *not_collecting { "Ingle's developers aren't taking bug reports right now" } else { message.as_str() };
-                acts.push(Act::Toast(format!("{BUG_NOT_SENT}: {why}. It's kept, ready to send again."), true));
+                // (Not reported by itself: reports aren't getting through.)
+                acts.push(Act::Refused(format!("{BUG_NOT_SENT}: {why}. It's kept, ready to send again.")));
             }
             _ => {}
         }
@@ -229,7 +229,10 @@ impl IngleApp {
             ctx.request_discard("a dialog opened");
         }
         let mut close = false;
-        let mut modal = egui::Modal::new(egui::Id::new("dialog")).frame(modal_frame()).backdrop_color(Color32::from_black_alpha(170));
+        // (Settings is a big sheet of its own: see settings.rs.)
+        let sheet = matches!(dialog, Dialog::Settings { .. });
+        let frame = if sheet { crate::settings::sheet_frame() } else { modal_frame() };
+        let mut modal = egui::Modal::new(egui::Id::new("dialog")).frame(frame).backdrop_color(Color32::from_black_alpha(170));
         let mut top = None;
         if was_create {
             // The wizard changes height as you go; pinning its top keeps buttons from jumping.
@@ -245,7 +248,9 @@ impl IngleApp {
             // The modal lays its contents out in last frame's size, which would let a dialog
             // shrink but never grow (a short dialog before it, or a wizard step getting
             // longer, would cut it off): it gets the whole room every frame instead.
-            ui.set_max_height(room);
+            if !sheet {
+                ui.set_max_height(room);
+            }
             let body = |ui: &mut egui::Ui| match dialog {
                 Dialog::AddServer { mut link, error } => {
                     ui.set_width(460.0);
@@ -903,7 +908,7 @@ impl IngleApp {
                     // list of them in what's left: it scrolls when there are more than fit.
                     let preview_h = ((body_h - fixed - 180.0) * 0.6).clamp(64.0, 220.0);
                     let sources_h = (body_h - fixed - preview_h).max(100.0);
-                    let preset = self.ui.settings_draft.as_ref().map(|s| s.screen_preset).unwrap_or(st.settings.screen_preset);
+                    let preset = st.settings.screen_preset;
                     let mut chosen = selected.clone();
                     let screens = &st.devices.screens;
                     egui::ScrollArea::vertical().id_salt("share-body").max_height(body_h).auto_shrink([false, true]).show(ui, |ui| {
@@ -1047,500 +1052,6 @@ impl IngleApp {
             }
             self.ui.dialog = None;
         }
-    }
-
-    fn settings_dialog(&mut self, ui: &mut egui::Ui, st: &AppState, tab: u8, acts: &mut Vec<Act>, close: &mut bool) {
-        // Wide enough for every tab on one row.
-        ui.set_width(700.0);
-        let mut report_bug = false;
-        let mut draft = self.ui.settings_draft.clone().unwrap_or_else(|| st.settings.clone());
-        // Things changed elsewhere while this dialog is open (the tray notice, the emoji
-        // picker): don't save stale copies of them.
-        draft.tray_note_seen = st.settings.tray_note_seen;
-        draft.recent_emoji = st.settings.recent_emoji.clone();
-        draft.emoji_tone = st.settings.emoji_tone;
-        draft.giphy_key = st.settings.giphy_key.clone();
-        draft.spellcheck = st.settings.spellcheck;
-        draft.spell_language = st.settings.spell_language.clone();
-        draft.spell_words = st.settings.spell_words.clone();
-        // (Sounds played by their keys while this is open, and the soundboard's favorites.)
-        draft.sound_recent = st.settings.sound_recent.clone();
-        draft.sound_favorites = st.settings.sound_favorites.clone();
-        // (And GIFs starred in chat or the GIF picker.)
-        draft.gif_favorites = st.settings.gif_favorites.clone();
-        // (The skin worn, and the Library's stars and order: changed where they're shown.)
-        draft.skin = st.settings.skin.clone();
-        draft.library_favorites = st.settings.library_favorites.clone();
-        draft.library_sort = st.settings.library_sort.clone();
-        // (And the notice that a report went by itself, shown once.)
-        draft.auto_report_told = st.settings.auto_report_told;
-        // (And idle by my own say-so, set from my name at the bottom left.)
-        draft.idle_by_hand = st.settings.idle_by_hand;
-        // (And Do Not Disturb, set there too.)
-        draft.dnd = st.settings.dnd;
-        // (And the ringtones, chosen in menus.)
-        draft.ringtone = st.settings.ringtone.clone();
-        draft.ringtones = st.settings.ringtones.clone();
-        let before = draft.clone();
-        let mut t = self.ui.settings_tab_next.take().unwrap_or(tab);
-        ui.horizontal(|ui| {
-            title(ui, "Settings");
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.button("Done").clicked() {
-                    *close = true;
-                }
-            });
-        });
-        // Tab ids stay the same everywhere (About is 2); the Windows tab only exists there.
-        let tabs: &[(u8, &str)] = if cfg!(windows) {
-            &[(0, "My Account"), (1, "Voice & Video"), (4, "Notifications"), (5, "Appearance"), (6, "Claude"), (3, "Windows"), (2, "About")]
-        } else {
-            &[(0, "My Account"), (1, "Voice & Video"), (4, "Notifications"), (5, "Appearance"), (6, "Claude"), (2, "About")]
-        };
-        ui.horizontal_wrapped(|ui| {
-            for &(id, name) in tabs {
-                if ui.add(egui::Button::selectable(t == id, name)).clicked() {
-                    t = id;
-                }
-            }
-        });
-        ui.separator();
-        // As tall as the window allows (the title, tabs and the version at the foot always show).
-        let body_h = (dialog_room(ui.ctx(), None) - 150.0).clamp(140.0, 470.0);
-        egui::ScrollArea::vertical().max_height(body_h).min_scrolled_height(body_h).show(ui, |ui| match t {
-            0 => {
-                field_label(ui, "Profile picture");
-                ui.horizontal(|ui| {
-                    let (r, _) = ui.allocate_exact_size(vec2(80.0, 80.0), Sense::hover());
-                    let face = self.my_face(ui.ctx());
-                    avatar(ui.painter(), r.center(), 40.0, &st.my_uid, &st.my_name, false, theme::SIDE(), face);
-                    ui.add_space(12.0);
-                    ui.vertical(|ui| {
-                        ui.add_space(14.0);
-                        ui.horizontal(|ui| {
-                            if ui.add(theme::primary_button("Upload a picture")).clicked() {
-                                crate::images::pick_async(crate::images::PickFor::Avatar, false, ui.ctx());
-                            }
-                            if face.is_some() && ui.button("Remove").clicked() {
-                                acts.push(Act::SetAvatar(None));
-                            }
-                        });
-                        ui.label(
-                            RichText::new("PNG, JPEG, GIF or WebP. You can zoom in and move it before saving. It shows on every server you're in.")
-                                .size(12.0)
-                                .color(theme::DIM()),
-                        );
-                    });
-                });
-                if st.servers.iter().any(|s| s.status.is_connected() && !s.has(FILES_FEATURE)) {
-                    ui.label(
-                        RichText::new("Some of your servers run an older Ingle Server and won't show it until they're updated.")
-                            .size(12.0)
-                            .color(theme::DIM()),
-                    );
-                }
-                field_label(ui, "Display name");
-                ui.horizontal(|ui| {
-                    let draft = self.ui.name_draft.get_or_insert_with(|| st.my_name.clone());
-                    let resp = ui.add(egui::TextEdit::singleline(draft).hint_text("Your name").desired_width(260.0).margin(egui::Margin::symmetric(10, 8)));
-                    crate::textbox::menu(ui, &resp, draft, true);
-                    let name = draft.trim().to_string();
-                    if ui.add_enabled(!name.is_empty() && name != st.my_name, theme::primary_button("Save")).clicked() {
-                        acts.push(Act::SetName(name));
-                    }
-                });
-                field_label(ui, "Your identity");
-                ui.label(
-                    RichText::new(
-                        "There's no account or password. Your identity is a key stored on this computer; servers recognize you by it.",
-                    )
-                    .color(theme::MUTED()),
-                );
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Safety code").color(theme::MUTED()));
-                    ui.label(RichText::new(&st.safety_code).font(theme::mono(14.0)).color(theme::TEXT()));
-                    if ui.small_button("Copy").clicked() {
-                        acts.push(Act::Copy(st.safety_code.clone()));
-                    }
-                });
-                ui.label(RichText::new("Friends can compare this code with you to be sure they're talking to the real you.").size(12.0).color(theme::DIM()));
-                ui.add_space(6.0);
-                let path = self.engine.identity_path().display().to_string();
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Key file").color(theme::MUTED()));
-                    ui.add(egui::Label::new(RichText::new(&path).font(theme::mono(11.5)).color(theme::DIM())).truncate());
-                    if ui.small_button("Copy path").clicked() {
-                        acts.push(Act::Copy(path.clone()));
-                    }
-                });
-                ui.label(RichText::new("Back this file up to keep your identity if you reinstall. Don't share it.").size(12.0).color(theme::DIM()));
-                field_label(ui, "Making sure of people");
-                let n = st.verified.len();
-                ui.label(
-                    RichText::new(match n {
-                        0 => "Right-click someone (or click their name in chat) and choose Make sure it's them: compare six words, or ask something only they'd know. A shield then shows by their name.".to_string(),
-                        1 => "You've made sure of 1 person: a shield shows by their name.".to_string(),
-                        n => format!("You've made sure of {n} people: a shield shows by their names."),
-                    })
-                    .color(theme::MUTED()),
-                );
-                ui.checkbox(&mut draft.vouch, "Vouch for the people I make sure of");
-                ui.label(
-                    RichText::new("On the servers you share with them. People who made sure of you then see them as vouched for (an outlined shield): it's how a whole group gets covered without everyone checking everyone.")
-                        .size(12.0)
-                        .color(theme::DIM()),
-                );
-            }
-            1 => {
-                let devices = &st.devices;
-                ui.columns(2, |cols| {
-                    field_label(&mut cols[0], "Input device");
-                    device_combo(&mut cols[0], "in-dev", &mut draft.input_device, &devices.inputs);
-                    field_label(&mut cols[1], "Output device");
-                    device_combo(&mut cols[1], "out-dev", &mut draft.output_device, &devices.outputs);
-                    field_label(&mut cols[0], "Input volume");
-                    let mut g = draft.input_gain * 100.0;
-                    if cols[0].add(egui::Slider::new(&mut g, 0.0..=200.0).suffix("%")).changed() {
-                        draft.input_gain = g / 100.0;
-                    }
-                    field_label(&mut cols[1], "Output volume");
-                    let mut o = draft.output_volume * 100.0;
-                    if cols[1].add(egui::Slider::new(&mut o, 0.0..=200.0).suffix("%")).changed() {
-                        draft.output_volume = o / 100.0;
-                    }
-                });
-                field_label(ui, "Mic test");
-                ui.horizontal(|ui| {
-                    let label = if st.mic_test { "Stop testing" } else { "Let's check" };
-                    if ui.add(theme::primary_button(label)).clicked() {
-                        acts.push(Act::MicTest(!st.mic_test));
-                    }
-                    meter(ui, st.mic_level_db, if draft.vad_auto { None } else { Some(draft.vad_threshold_db) });
-                });
-                ui.label(RichText::new("Plays your processed microphone back to you so you can hear what others hear.").size(12.0).color(theme::DIM()));
-
-                field_label(ui, "Voice meter");
-                crate::meter::picker(ui, &mut self.meters, &mut draft.voice_meter);
-                ui.label(
-                    RichText::new(
-                        "Shows across the voice panel (yours), by each person in your voice channel and on call tiles. It moves \
-                         with any sound someone sends: their voice, their screen's sound and their soundboard sounds. Right-click \
-                         yours in the voice panel to change its look or turn voice meters off.",
-                    )
-                    .size(12.0)
-                    .color(theme::DIM()),
-                );
-
-                field_label(ui, "Input mode");
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut draft.input_mode, InputMode::VoiceActivity, "Voice activity");
-                    ui.radio_value(&mut draft.input_mode, InputMode::PushToTalk, "Push to talk");
-                });
-                match draft.input_mode {
-                    InputMode::VoiceActivity => {
-                        ui.checkbox(&mut draft.vad_auto, "Automatically detect when I'm talking");
-                        if !draft.vad_auto {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new("Sensitivity").color(theme::MUTED()));
-                                ui.add(egui::Slider::new(&mut draft.vad_threshold_db, -80.0..=-10.0).suffix(" dB"));
-                            });
-                        }
-                    }
-                    InputMode::PushToTalk => {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("Key").color(theme::MUTED()));
-                            egui::ComboBox::from_id_salt("ptt-key").selected_text(hotkey::key_label(&draft.ptt_key)).show_ui(ui, |ui| {
-                                for k in hotkey::KEY_CHOICES {
-                                    ui.selectable_value(&mut draft.ptt_key, k.to_string(), hotkey::key_label(k));
-                                }
-                            });
-                            ui.label(RichText::new("Release delay").color(theme::MUTED()));
-                            let mut d = draft.ptt_release_ms as f32;
-                            if ui.add(egui::Slider::new(&mut d, 0.0..=1000.0).suffix(" ms")).changed() {
-                                draft.ptt_release_ms = d as u32;
-                            }
-                        });
-                        ui.label(RichText::new("Works while other apps are focused, and doesn't block the key in your game.").size(12.0).color(theme::DIM()));
-                    }
-                }
-
-                field_label(ui, "Voice processing");
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Noise suppression").color(theme::MUTED()));
-                    ui.radio_value(&mut draft.noise_suppression, NoiseSuppression::Off, "Off");
-                    ui.radio_value(&mut draft.noise_suppression, NoiseSuppression::Standard, "Standard");
-                    ui.radio_value(&mut draft.noise_suppression, NoiseSuppression::Strong, "Strong (AI)");
-                    ui.radio_value(&mut draft.noise_suppression, NoiseSuppression::Isolation, "Voice isolation");
-                });
-                if draft.noise_suppression == NoiseSuppression::Isolation {
-                    ui.label(
-                        RichText::new(
-                            "Only your voice gets through: typing, mouse clicks, fans, machines, TVs, people talking in the room \
-                             and sounds between your words are cut. Someone talking right next to you as loudly as you can still be \
-                             heard. Try it with Let's check.",
-                        )
-                        .size(12.0)
-                        .color(theme::DIM()),
-                    );
-                }
-                ui.checkbox(&mut draft.echo_cancellation, "Echo cancellation (needed if you use speakers instead of headphones)");
-                ui.checkbox(&mut draft.auto_gain, "Automatic gain control");
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Voice quality").color(theme::MUTED()));
-                    let mut b = draft.voice_bitrate_kbps as f32;
-                    if ui.add(egui::Slider::new(&mut b, 24.0..=192.0).step_by(8.0).suffix(" kbps")).changed() {
-                        draft.voice_bitrate_kbps = b as u32;
-                    }
-                });
-                ui.label(RichText::new("Opus with in-band error correction. Discord's default is 64 kbps; anything above ~64 kbps is overkill for voice but great for music.").size(12.0).color(theme::DIM()));
-                ui.checkbox(&mut draft.voice_priority, "Prioritize voice packets (Quality of Service)");
-                ui.label(
-                    RichText::new(
-                        "Tells your router and Wi-Fi to send Ingle's voice ahead of downloads and other traffic. \
-                         Turn it off if your voice cuts out or won't connect (a few routers don't handle it).",
-                    )
-                    .size(12.0)
-                    .color(theme::DIM()),
-                );
-
-                self.soundboard_settings(ui, st, &mut draft);
-
-                field_label(ui, "Camera");
-                ui.horizontal(|ui| {
-                    device_combo(ui, "cam-dev", &mut draft.camera_device, &devices.cameras);
-                    egui::ComboBox::from_id_salt("cam-q").selected_text(draft.camera_quality.label()).show_ui(ui, |ui| {
-                        for q in [CameraQuality::Low, CameraQuality::Standard, CameraQuality::High] {
-                            ui.selectable_value(&mut draft.camera_quality, q, q.label());
-                        }
-                    });
-                });
-                field_label(ui, "Screen share quality");
-                egui::ComboBox::from_id_salt("scr-q").selected_text(draft.screen_preset.label()).width(260.0).show_ui(ui, |ui| {
-                    for q in ScreenPreset::ALL {
-                        ui.selectable_value(&mut draft.screen_preset, q, q.label());
-                    }
-                });
-                ui.add_space(6.0);
-                if ui.small_button("Re-scan devices").clicked() {
-                    acts.push(Act::RefreshDevices);
-                }
-            }
-            5 => {
-                self.appearance_tab(ui, st, acts, close);
-                field_label(ui, "Moving pictures");
-                ui.horizontal_wrapped(|ui| {
-                    ui.radio_value(&mut draft.play_gifs, String::new(), "Play them");
-                    ui.radio_value(&mut draft.play_gifs, "hover".to_string(), "Play when I point at them");
-                    ui.radio_value(&mut draft.play_gifs, "never".to_string(), "Don't play them");
-                });
-                ui.label(
-                    RichText::new(
-                        "GIFs and other moving pictures in chat. Either way they wait while Ingle's in the background, and \
-                         clicking one opens it to play, pause or step through. Profile pictures move while their person talks, \
-                         and server icons when you point at them.",
-                    )
-                    .size(12.0)
-                    .color(theme::DIM()),
-                );
-            }
-            6 => self.claude_tab(ui, st, acts),
-            4 => {
-                field_label(ui, "Sounds");
-                ui.checkbox(&mut draft.sounds, "Play sounds");
-                ui.label(
-                    RichText::new(
-                        "A ping for new messages (not in muted channels, or the one you're looking at), and chimes when people \
-                         join or leave your voice channel, start or stop sharing their screen, and when you tune in to a stream.",
-                    )
-                    .size(12.0)
-                    .color(theme::DIM()),
-                );
-                ui.add_space(6.0);
-                ui.checkbox(&mut draft.ring, "Ring when someone calls me");
-                ui.label(
-                    RichText::new("Calls in direct messages ring (and you hear it ringing when you call), even with the other sounds off.")
-                        .size(12.0)
-                        .color(theme::DIM()),
-                );
-                ui.add_space(6.0);
-                ui.add_enabled_ui(draft.ring, |ui| self.ringtone_setting(ui, st, acts));
-                ui.add_space(8.0);
-                ui.add_enabled_ui(draft.sounds || draft.ring, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Volume");
-                        let mut pct = draft.sound_volume * 100.0;
-                        if ui.add(egui::Slider::new(&mut pct, 0.0..=150.0).suffix("%")).changed() {
-                            draft.sound_volume = pct / 100.0;
-                        }
-                        if ui.button("Test").clicked() {
-                            acts.push(Act::TestSound(draft.sound_volume));
-                        }
-                    });
-                });
-                ui.add_space(10.0);
-                field_label(ui, "Messages");
-                ui.checkbox(&mut draft.confirm_delete, "Ask before deleting a message");
-                ui.label(
-                    RichText::new("Holding Shift when you click Delete skips the question either way.")
-                        .size(12.0)
-                        .color(theme::DIM()),
-                );
-                ui.add_space(10.0);
-                field_label(ui, "Muting");
-                ui.label(
-                    RichText::new("Right-click a channel, a server or a direct message conversation to mute it.")
-                        .size(12.0)
-                        .color(theme::DIM()),
-                );
-            }
-            3 => {
-                field_label(ui, "Icon by the clock");
-                ui.label(
-                    RichText::new(
-                        "Closing the window keeps Ingle running by the clock, so you stay in voice and friends can still reach \
-                         you. Click the campfire icon to open Ingle; right-click it to mute, leave voice or quit.",
-                    )
-                    .color(theme::MUTED()),
-                );
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(
-                        "Windows may tuck the icon under the ^ arrow. To keep it in view, drag it from there to the taskbar \
-                         next to the clock.",
-                    )
-                    .size(12.0)
-                    .color(theme::DIM()),
-                );
-                if !crate::tray::is_active() {
-                    ui.add_space(6.0);
-                    ui.label(
-                        RichText::new("Windows isn't showing the icon right now, so closing the window minimizes Ingle instead.")
-                            .size(12.0)
-                            .color(theme::LIVE()),
-                    );
-                }
-                ui.add_space(12.0);
-                field_label(ui, "When Windows starts");
-                ui.checkbox(&mut draft.start_with_windows, "Open Ingle when Windows starts");
-                ui.add_enabled(draft.start_with_windows, egui::Checkbox::new(&mut draft.start_hidden, "Start in the tray (just the icon by the clock)"));
-                ui.label(
-                    RichText::new("Like Discord: you're online and friends can reach you as soon as your PC is on.")
-                        .size(12.0)
-                        .color(theme::DIM()),
-                );
-                ui.add_space(12.0);
-                if ui.add(theme::danger_button("Quit Ingle").min_size(vec2(110.0, 32.0))).clicked() {
-                    acts.push(Act::Quit);
-                }
-            }
-            _ => {
-                ui.add_space(8.0);
-                ui.label(RichText::new(format!("{} {}", ingle_proto::APP_NAME, env!("CARGO_PKG_VERSION"))).font(theme::bold_font(16.0)).color(theme::TEXT()));
-                ui.label(RichText::new("Lean voice, video, screen share and chat. Written in Rust.").color(theme::MUTED()));
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    let checking = self.updater.checking();
-                    if ui.add_enabled(!checking, egui::Button::new(if checking { "Checking…" } else { "Check for updates" })).clicked() {
-                        acts.push(Act::CheckUpdates);
-                    }
-                    if ingle_engine::bugs::can_report() && ui.button("Report a bug").clicked() {
-                        report_bug = true;
-                    }
-                });
-                if ingle_engine::bugs::can_report() {
-                    ui.add_space(6.0);
-                    ui.checkbox(&mut draft.auto_reports, "Send error reports automatically");
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(
-                                "When screen sharing or your camera won't start or stops working, or Ingle crashed or froze the last time it was \
-                                 open, Ingle sends Firelit Games what happened and its log (never your messages), so it gets fixed.",
-                            )
-                            .size(12.0)
-                            .color(theme::DIM()),
-                        )
-                        .wrap(),
-                    );
-                }
-                ui.add_space(10.0);
-                for (h, b) in [
-                    ("End-to-end encrypted calls", "Voice, cameras and screen shares are encrypted on your PC with keys the server never sees (X25519 + ChaCha20-Poly1305, new keys whenever someone joins or leaves)."),
-                    ("No accounts", "Your identity is a key on this computer. No email, phone number or ID."),
-                    ("Self-hosted", "Communities run their own small server. Text history lives on that server."),
-                    ("Free quality", "1080p60 screen sharing and high-bitrate audio without a subscription."),
-                ] {
-                    ui.label(RichText::new(h).font(theme::bold_font(14.0)).color(theme::TEXT()));
-                    ui.label(RichText::new(b).color(theme::MUTED()));
-                    ui.add_space(6.0);
-                }
-                ui.label(RichText::new("Text messages are stored on the server you're talking on (like Discord), not end-to-end encrypted.").size(12.0).color(theme::DIM()));
-                ui.add_space(6.0);
-                ui.label(
-                    RichText::new(
-                        "Emoji graphics: Twemoji by Twitter, Inc. and other contributors, licensed CC-BY 4.0. Emoji names: Emojibase (MIT). \
-                         GIF search powered by GIPHY and KLIPY. Voice isolation: DeepFilterNet (MIT/Apache-2.0) and RNNoise (BSD). Spellcheck: \
-                         spellbook (MPL-2.0) with dictionaries from SCOWL (MIT/BSD), RLA-ES (MPL-1.1) and Grammalecte (MPL-2.0). \
-                         Reading sound files for the soundboard: Symphonia (MPL-2.0). Ingle's own soundboard sounds are \
-                         synthesized by Ingle (no recordings).",
-                    )
-                        .size(12.0)
-                        .color(theme::DIM()),
-                );
-            }
-        });
-        // Like Discord: the version at the foot of Settings, on every tab.
-        ui.add_space(10.0);
-        ui.separator();
-        ui.horizontal(|ui| {
-            let v = format!("Ingle {} · {} {}", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH);
-            ui.label(RichText::new(&v).size(11.5).color(theme::DIM()));
-            if ui.small_button("Copy").on_hover_text("Copy the version (for a bug report)").clicked() {
-                ui.ctx().copy_text(v);
-            }
-        });
-        if draft != before {
-            acts.push(Act::Settings(draft.clone()));
-        }
-        self.ui.settings_draft = Some(draft);
-        if report_bug {
-            if st.mic_test {
-                acts.push(Act::MicTest(false));
-            }
-            // Replaces this dialog (not "close", which would clear it).
-            self.ui.dialog = Some(self.report_bug_dialog());
-            return;
-        }
-        if !*close {
-            self.ui.dialog = Some(Dialog::Settings { tab: t });
-        }
-    }
-}
-
-
-fn device_combo(ui: &mut egui::Ui, id: &str, value: &mut Option<String>, devices: &[(String, String)]) {
-    let current = value
-        .as_ref()
-        .and_then(|v| devices.iter().find(|d| &d.0 == v).map(|d| d.1.clone()))
-        .unwrap_or_else(|| "Default".into());
-    egui::ComboBox::from_id_salt(id).selected_text(current).width(250.0).show_ui(ui, |ui| {
-        ui.selectable_value(value, None, "Default");
-        for (dev_id, name) in devices {
-            ui.selectable_value(value, Some(dev_id.clone()), name);
-        }
-    });
-}
-
-fn meter(ui: &mut egui::Ui, level_db: f32, threshold: Option<f32>) {
-    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width().min(320.0), 10.0), Sense::hover());
-    ui.painter().rect_filled(r, CornerRadius::same(5), theme::ELEV());
-    let frac = ((level_db + 80.0) / 80.0).clamp(0.0, 1.0);
-    let fill = egui::Rect::from_min_size(r.min, vec2(r.width() * frac, r.height()));
-    let col = if level_db > -12.0 { theme::LIVE() } else { theme::ONLINE() };
-    ui.painter().rect_filled(fill, CornerRadius::same(5), col);
-    if let Some(t) = threshold {
-        let x = r.left() + r.width() * ((t + 80.0) / 80.0).clamp(0.0, 1.0);
-        ui.painter().line_segment([egui::pos2(x, r.top() - 3.0), egui::pos2(x, r.bottom() + 3.0)], egui::Stroke::new(2.0f32, theme::EMBER2()));
     }
 }
 
@@ -1726,7 +1237,7 @@ impl IngleApp {
                         if n != e.name && ingle_proto::control::valid_emoji_name(&n) {
                             acts.push(Act::RenameEmoji { key: s.key.clone(), id: e.id.clone(), name: n });
                         } else if n != e.name {
-                            acts.push(Act::Toast("Emoji names are 2–32 letters, numbers or underscores.".into(), true));
+                            acts.push(Act::Refused("Emoji names are 2–32 letters, numbers or underscores.".into()));
                         }
                         self.ui.emoji_names.remove(&e.id);
                     }

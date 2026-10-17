@@ -19,6 +19,7 @@ pub(crate) fn menu(ui: &egui::Ui, resp: &egui::Response, text: &mut String, one_
         ctx.data_mut(|d| d.insert_temp(kept, sel));
     }
     resp.context_menu(|ui| {
+        crate::menu::style(ui);
         let n = text.chars().count();
         let sel: Option<Range<usize>> = ctx.data(|d| d.get_temp(kept)).flatten().filter(|r: &Range<usize>| r.end <= n);
         if let Some(r) = sel.clone().filter(|r| !r.is_empty()) {

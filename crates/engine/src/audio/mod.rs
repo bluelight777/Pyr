@@ -52,6 +52,10 @@ pub struct Controls {
     pub meters_off: AtomicBool,
     /// How loud my microphone is sent (`Settings::input_gain`), changed as it's dragged.
     pub input_gain: Gain,
+    /// Voice settings changed while the sound flows (sensitivity, input mode, push to talk's
+    /// release delay, voice quality): the microphone takes them up within 10 ms, without
+    /// starting the sound again (see `CapturePipeline::retune`).
+    pub retune: Mutex<Option<Settings>>,
 }
 
 /// A volume that can change while sound flows (an f32's bits); 1.0 to start with.
@@ -199,6 +203,9 @@ pub struct AudioStatus {
     /// How loud each other session's voice and stream sound are (see `Mixer::track_levels`),
     /// every 20 ms, for the mixer panel (whether or not voice meters are on).
     pub levels: Vec<(SessionId, u8, f32)>,
+    /// How loud each other session's voice and stream usually are (see `Mixer::loudness`),
+    /// every 20 ms, for the mixer's Even out.
+    pub loudness: Vec<(SessionId, u8, f32)>,
     pub packets_sent: u64,
 }
 
@@ -730,13 +737,14 @@ fn worker(
 
         if now.duration_since(last_levels) > Duration::from_millis(20) {
             last_levels = now;
-            let (meters, levels) = {
+            let (meters, levels, loudness) = {
                 let m = mixer.lock();
-                (if ctl.meters_off.load(Ordering::Relaxed) { Vec::new() } else { m.meters(now) }, m.track_levels(now))
+                (if ctl.meters_off.load(Ordering::Relaxed) { Vec::new() } else { m.meters(now) }, m.track_levels(now), m.loudness())
             };
             let mut st = status.lock();
             st.meters = meters;
             st.levels = levels;
+            st.loudness = loudness;
         }
         if now.duration_since(last_status) > Duration::from_millis(80) {
             last_status = now;

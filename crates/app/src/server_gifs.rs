@@ -147,7 +147,8 @@ impl IngleApp {
                 }
                 if manage {
                     resp.context_menu(|ui| {
-                        if ui.button(RichText::new("Remove from the server").color(theme::LIVE())).clicked() {
+                        crate::menu::style(ui);
+                        if crate::menu::danger(ui, "Remove from the server").clicked() {
                             acts.push(Act::RemoveServerGif { key: s.key.clone(), id: g.id.clone() });
                             ui.close();
                         }

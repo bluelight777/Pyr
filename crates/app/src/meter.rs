@@ -522,11 +522,10 @@ pub fn picker(ui: &mut egui::Ui, meters: &mut Meters, chosen: &mut String) {
     let shown = Style::from_setting(chosen) != Style::Off;
     let look = Style::look_of(chosen);
     let mut show = shown;
-    let tip = "Off: no voice meters anywhere, and nothing's measured for them. The green speaking rings still show.";
-    if ui.checkbox(&mut show, "Show voice meters").on_hover_text(tip).changed() {
+    let about = "Off: no voice meters anywhere, and nothing's measured for them. The green speaking rings still show.";
+    if crate::settings::toggle_row(ui, &mut show, "Show voice meters", about) {
         *chosen = if show { look.setting().to_string() } else { Style::off_setting(chosen) };
     }
-    ui.add_space(2.0);
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
         for s in Style::LOOKS {

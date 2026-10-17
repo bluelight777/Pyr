@@ -33,6 +33,24 @@
         "storage"
       ],
       "wasm": "dice/1.0.0/dice.wasm"
+    },
+    {
+      "id": "firelit-poker",
+      "name": "Firelit Poker",
+      "kind": "addon",
+      "version": "0.1.0",
+      "summary": "Deal Texas Hold'em showdowns in chat with /poker and /hand, and play heads-up Hold'em against a bot in its panel.",
+      "description": "/poker deals a Texas Hold'em showdown and posts everyone's cards, the board and who wins: /poker on its own is you against the dealer, /poker Mara is you against Mara, and /poker Mara, Sam, Lee deals those players (up to 8). /hand deals you five cards and names your hand. Its panel is heads-up Hold'em against a bot: you both start with 1,000 chips and ante 10 a hand, your chips carry over from hand to hand until one of you runs out, and Share in chat posts how you're doing. The bot plays fair: it only sees its own cards and the board.",
+      "author": "Maanix",
+      "license": "MIT OR Apache-2.0",
+      "review": "Read and built from its source for the Ingle Library. An add-on: it runs in Ingle's sandbox, with no way to reach your files, the internet or anything else on your PC. It sends a message only when you use /poker or /hand, or click Share in chat, and names typed after /poker are sent as plain text. One change from the review: the bot's hidden cards say \"face down\" (the card-back character it showed them with isn't in Ingle's fonts).",
+      "icon": "firelit-poker/icon.png",
+      "permissions": [
+        "commands",
+        "panel",
+        "storage"
+      ],
+      "wasm": "firelit-poker/0.1.0/poker.wasm"
     }
   ],
   "skins": [

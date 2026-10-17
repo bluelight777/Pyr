@@ -232,6 +232,7 @@ impl IngleApp {
                                 let name = s.member_name(w);
                                 let b = icon_button(ui, 30.0, &format!("Make sure it's {name}"), false, |p, r, c| crate::trust::shield_icon(p, r, c));
                                 egui::Popup::menu(&b).align(egui::RectAlign::BOTTOM_END).width(300.0).show(|ui| {
+                                    crate::menu::style(ui);
                                     // (Not a menu's justified layout: it spreads the words of a
                                     // wrapped notice apart.)
                                     ui.with_layout(Layout::top_down(Align::Min), |ui| {
@@ -410,7 +411,10 @@ impl IngleApp {
             self.ui.load_rect = None;
             // Right-click on the messages: Copy (what's selected), Copy link, and the message's own.
             if let Some(bg) = select_bg.filter(|_| self.ui.sel.menu.is_some()) {
-                let open = bg.context_menu(|ui| self.message_menu(ui, st, s, log, acts)).is_some();
+                let open = bg.context_menu(|ui| {
+                    crate::menu::style(ui);
+                    self.message_menu(ui, st, s, log, acts)
+                }).is_some();
                 if !open {
                     self.ui.sel.menu = None;
                     self.ui.menu_picture = None;
@@ -508,18 +512,22 @@ impl IngleApp {
         // A picture someone sent, made one of the server's GIFs (by who keeps them). (Not a GIF
         // from GIPHY or KLIPY: their rules forbid keeping copies of their GIFs.)
         let picked = self.ui.menu_picture.as_ref().and_then(|(id, _)| m.attachments.iter().find(|a| a.id == *id));
-        // A picture right-clicked: open it, or save it.
+        // A picture right-clicked: copy it, save it or open it (like Discord's Copy Image).
         if let Some(pic) = picked {
-            if ui.button("Open picture").clicked() {
-                self.ui.viewer = Some((s.key.clone(), pic.clone()));
-                self.ui.viewer_play = ViewerPlay::default();
-                ui.close();
-            }
             if let ingle_engine::files::FileState::Ready(b) = self.engine.file(&s.key, &pic.id) {
+                if ui.button("Copy picture").clicked() {
+                    acts.push(Act::CopyPicture { name: pic.name.clone(), bytes: b.clone() });
+                    ui.close();
+                }
                 if ui.button("Save picture as…").clicked() {
                     acts.push(Act::SaveImage { name: pic.name.clone(), bytes: b });
                     ui.close();
                 }
+            }
+            if ui.button("Open picture").clicked() {
+                self.ui.viewer = Some((s.key.clone(), pic.clone()));
+                self.ui.viewer_play = ViewerPlay::default();
+                ui.close();
             }
         }
         let pic = picked.or(if m.attachments.len() == 1 { m.attachments.first() } else { None });
@@ -529,7 +537,7 @@ impl IngleApp {
                     ingle_engine::files::FileState::Ready(b) => {
                         acts.push(Act::AddServerGif { key: key.clone(), name: crate::server_gifs::name_from(&pic.name), bytes: b.to_vec() })
                     }
-                    _ => acts.push(Act::Toast("The picture hasn't loaded yet: try again in a moment.".into(), true)),
+                    _ => acts.push(Act::Refused("The picture hasn't loaded yet: try again in a moment.".into())),
                 }
                 ui.close();
             }
@@ -548,7 +556,7 @@ impl IngleApp {
             self.ui.editing = Some((m.id, m.content.clone()));
             ui.close();
         }
-        if (mine || admin) && ui.button(RichText::new("Delete message").color(theme::LIVE())).clicked() {
+        if (mine || admin) && crate::menu::danger(ui, "Delete message").clicked() {
             // Holding Shift deletes at once, as with the trash button.
             if ui.input(|i| i.modifiers.shift) || !st.settings.confirm_delete {
                 acts.push(Act::Delete { key, id: m.id });
@@ -704,6 +712,7 @@ impl IngleApp {
                 self.profile_toggle(&pic, &key, &m.author);
                 // Right-click: what you can do with them, as in the voice channel.
                 pic.context_menu(|ui| {
+                    crate::menu::style(ui);
                     if self.person_options(ui, st, s, &m.author, acts) {
                         ui.close();
                     }
@@ -718,6 +727,7 @@ impl IngleApp {
                         let named = ui.add(egui::Label::new(RichText::new(&name).font(theme::bold_font(14.5)).color(col)).sense(Sense::click()));
                         self.profile_toggle(&named, &key, &m.author);
                         named.context_menu(|ui| {
+                            crate::menu::style(ui);
                             if self.person_options(ui, st, s, &m.author, acts) {
                                 ui.close();
                             }
@@ -1265,6 +1275,7 @@ impl IngleApp {
                     self.ui.composer_menu = Some(ComposerMenu { word, selection });
                 }
                 resp.context_menu(|ui| {
+                    crate::menu::style(ui);
                     ui.set_min_width(220.0);
                     let menu = self.ui.composer_menu.clone().unwrap_or_default();
                     let put_cursor = |ui: &egui::Ui, at: usize| {
@@ -1300,6 +1311,7 @@ impl IngleApp {
                         ui.close();
                     }
                     ui.menu_button("Languages", |ui| {
+                        crate::menu::style(ui);
                         ui.set_min_width(200.0);
                         let current = crate::spell::lang(&st.settings.spell_language).code;
                         for l in crate::spell::LANGS {
@@ -1453,7 +1465,7 @@ impl IngleApp {
                         if crate::giphy::local_favorite(&url).is_some() {
                             match crate::giphy::kept_picture(&st.settings.gif_favorites, &url) {
                                 Some(file) => acts.push(Act::Send { key: key.clone(), channel: ch.id, text: String::new(), reply_to, files: vec![file] }),
-                                None => acts.push(Act::Toast("That favorite picture isn't on this PC any more.".into(), true)),
+                                None => acts.push(Act::Refused("That favorite picture isn't on this PC any more.".into())),
                             }
                         } else {
                             acts.push(Act::Send { key: key.clone(), channel: ch.id, text: url, reply_to, files: Vec::new() });
@@ -1586,7 +1598,7 @@ pub fn add_attachment(
     acts: &mut Vec<Act>,
 ) {
     if attach.get(draft).is_some_and(|l| l.len() >= ingle_proto::control::MAX_ATTACHMENTS_PER_MESSAGE) {
-        acts.push(Act::Toast("You can send up to 10 images at a time.".into(), true));
+        acts.push(Act::Refused("You can send up to 10 images at a time.".into()));
         return;
     }
     if crate::images::can_shrink(&bytes, limit) {
@@ -1595,7 +1607,8 @@ pub fn add_attachment(
         return;
     }
     if let Err(e) = crate::images::check_attachment(&name, &bytes, limit) {
-        acts.push(Act::Toast(e, true));
+        // (A file that can't be sent: no bug.)
+        acts.push(Act::Refused(e));
         return;
     }
     attach.entry(draft.clone()).or_default().push((name, bytes));
@@ -1956,6 +1969,20 @@ impl IngleApp {
             } else {
                 ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, "Loading…", theme::font(15.0), theme::MUTED());
             }
+            // Right-clicked: copy it or save it.
+            if let (Some(b), true) = (&bytes, img_rect.is_positive()) {
+                ui.interact(img_rect, egui::Id::new("viewer-picture"), Sense::click()).context_menu(|ui| {
+                    crate::menu::style(ui);
+                    if ui.button("Copy picture").clicked() {
+                        acts.push(Act::CopyPicture { name: a.name.clone(), bytes: b.clone() });
+                        ui.close();
+                    }
+                    if ui.button("Save picture as…").clicked() {
+                        acts.push(Act::SaveImage { name: a.name.clone(), bytes: b.clone() });
+                        ui.close();
+                    }
+                });
+            }
             if n > 1 {
                 // Where each frame starts, to step to it.
                 let starts: Vec<f64> = (0..n)
@@ -2009,6 +2036,9 @@ impl IngleApp {
                 if let Some(b) = &bytes {
                     if ui.button("Save as…").clicked() {
                         acts.push(Act::SaveImage { name: a.name.clone(), bytes: b.clone() });
+                    }
+                    if ui.button("Copy").on_hover_text("Copy the picture, to paste anywhere").clicked() {
+                        acts.push(Act::CopyPicture { name: a.name.clone(), bytes: b.clone() });
                     }
                     if let Some(server) = &gifs_of {
                         if ui.button("Add to the server's GIFs").on_hover_text(format!("For everyone on {server} to send from the GIF picker")).clicked() {

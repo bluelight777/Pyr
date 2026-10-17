@@ -249,6 +249,7 @@ impl IngleApp {
         let mut chose = false;
         let menu = ui.add_enabled_ui(why_not.is_none(), |ui| {
             ui.menu_button("Make sure it's them", |ui| {
+                crate::menu::style(ui);
                 if ui.button("Compare words").on_hover_text("Both of you see six words: say them to each other (in a call, on the phone or in person)").clicked() {
                     acts.push(Act::CompareWords { key: s.key.clone(), uid: uid.to_string() });
                     chose = true;

@@ -16,6 +16,9 @@ pub struct Gathered {
     pub size: usize,
     pub name: String,
     pub kind: String,
+    /// Its kind is settled by its source (its Cargo.toml says, or it's built with Ingle's
+    /// add-on kit), so the form to send it in doesn't ask (Maanix's add-on went in as a program).
+    pub kind_fixed: bool,
     pub version: String,
     pub summary: String,
     pub problems: Vec<String>,
@@ -123,7 +126,12 @@ fn read_manifest(text: &str, g: &mut Gathered) {
         g.name = s(pkg, "name");
     }
     g.kind = s(ingle, "kind");
-    if g.kind.is_empty() {
+    // Built with the add-on kit: an add-on, whatever else it says.
+    let kit = doc.get("dependencies").and_then(|d| d.get("ingle-plugin")).is_some();
+    g.kind_fixed = kit || matches!(g.kind.as_str(), "addon" | "program");
+    if kit {
+        g.kind = "addon".into();
+    } else if !g.kind_fixed {
         // An add-on is a library built to WebAssembly; anything else is a program.
         g.kind = if doc.get("lib").is_some() { "addon".into() } else { "program".into() };
     }
@@ -225,6 +233,20 @@ mod tests {
     }
 
     #[test]
+    fn its_kind_is_what_its_cargo_toml_says() {
+        let kind = |toml: &str| {
+            let mut g = Gathered::default();
+            read_manifest(toml, &mut g);
+            (g.kind, g.kind_fixed)
+        };
+        let kit = "[package]\nname = \"poker\"\n[package.metadata.ingle]\nkind = \"program\"\n[dependencies]\ningle-plugin = { path = \"ingle-plugin\" }\n";
+        assert_eq!(kind(kit), ("addon".to_string(), true), "built with the kit: an add-on");
+        assert_eq!(kind("[package]\nname = \"x\"\n[package.metadata.ingle]\nkind = \"program\"\n"), ("program".to_string(), true));
+        assert_eq!(kind("[package]\nname = \"x\"\n[lib]\ncrate-type = [\"cdylib\"]\n"), ("addon".to_string(), false), "a guess: asked");
+        assert_eq!(kind("[package]\nname = \"x\"\n"), ("program".to_string(), false));
+    }
+
+    #[test]
     fn a_rust_project_is_gathered_and_anything_else_is_named() {
         let dir = temp_dir("gather");
         let p = start_addon(&dir, "Coin Flip!").unwrap();
@@ -235,7 +257,7 @@ mod tests {
         std::fs::write(p.join("target/release/big.wasm"), b"built").unwrap();
         let g = gather(&p);
         assert!(g.problems.is_empty(), "{:?}", g.problems);
-        assert_eq!((g.name.as_str(), g.kind.as_str()), ("Coin Flip!", "addon"));
+        assert_eq!((g.name.as_str(), g.kind.as_str(), g.kind_fixed), ("Coin Flip!", "addon", true));
         assert!(g.files.iter().any(|f| f.path == "ingle-plugin/src/lib.rs"));
         assert!(!g.files.iter().any(|f| f.path.starts_with("target")), "build output is left out");
         // Built files and other languages are refused.

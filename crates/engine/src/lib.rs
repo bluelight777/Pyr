@@ -188,7 +188,7 @@ const SOUND_MIME: &str = "audio/x-ingle-sound";
 /// Plays `sound` for everyone in our voice channel (and notes it in the recent sounds).
 fn play_soundboard_on(shared: &Arc<Shared>, sound: SoundRef) {
     let Some(key) = shared.call.lock().as_ref().map(|c| c.server_key.clone()) else {
-        shared.state.write().toast("Join a voice channel to play sounds.", true);
+        shared.state.write().refused("Join a voice channel to play sounds.");
         (shared.repaint)();
         return;
     };
@@ -850,6 +850,9 @@ impl Engine {
         } else {
             None
         };
+        // Bugs report themselves: crashes in any thread, and errors as they're shown.
+        bugs::register(&shared);
+        bugs::watch_errors(shared.clone());
         let engine = Engine { shared, _rt: rt, _ptt: ptt, _keys: keys };
         Ok(engine)
     }
@@ -881,6 +884,11 @@ impl Engine {
         (self.shared.repaint)();
     }
 
+    fn refused(&self, text: impl Into<String>) {
+        self.shared.state.write().refused(text);
+        (self.shared.repaint)();
+    }
+
     fn handle(&self, key: &str) -> Option<ServerHandle> {
         self.shared.servers.lock().get(key).cloned()
     }
@@ -895,7 +903,7 @@ impl Engine {
         self.shared.rt.spawn(async move {
             match reply.await {
                 Ok(Event::Error { message, .. }) => {
-                    shared.state.write().toast(message, true);
+                    shared.state.write().refused(message);
                     (shared.repaint)();
                 }
                 Ok(ev) => then(&shared, ev),
@@ -1232,7 +1240,7 @@ impl Engine {
             let file_id = match png {
                 Some(bytes) => {
                     let Some(conn) = h.connection() else {
-                        shared.state.write().toast("Not connected to that server right now.", true);
+                        shared.state.write().refused("Not connected to that server right now.");
                         return;
                     };
                     match net::file_put(&conn, FileKind::Avatar, "icon.png", "image/png", &bytes).await {
@@ -1250,7 +1258,7 @@ impl Engine {
                 None => None,
             };
             if let Ok(Event::Error { message, .. }) = h.request(Request::SetServerIcon { file_id }).await {
-                shared.state.write().toast(message, true);
+                shared.state.write().refused(message);
             }
             (shared.repaint)();
         });
@@ -1264,7 +1272,7 @@ impl Engine {
         self.shared.rt.clone().spawn(async move {
             let Some(h) = shared.servers.lock().get(&key).cloned() else { return };
             let Some(conn) = h.connection() else {
-                shared.state.write().toast("Not connected to that server right now.", true);
+                shared.state.write().refused("Not connected to that server right now.");
                 return;
             };
             let mime = if animated { "image/gif" } else { "image/png" };
@@ -1278,7 +1286,7 @@ impl Engine {
             };
             shared.files.lock().insert(file_id.clone(), Arc::new(bytes));
             match h.request(Request::AddEmoji { name: name.clone(), file_id, animated }).await {
-                Ok(Event::Error { message, .. }) => shared.state.write().toast(message, true),
+                Ok(Event::Error { message, .. }) => shared.state.write().refused(message),
                 Ok(_) => shared.state.write().toast(format!("Added :{name}:"), false),
                 Err(_) => {}
             }
@@ -1304,7 +1312,7 @@ impl Engine {
         self.shared.rt.clone().spawn(async move {
             let Some(h) = shared.servers.lock().get(&key).cloned() else { return };
             let Some(conn) = h.connection() else {
-                shared.state.write().toast("Not connected to that server right now.", true);
+                shared.state.write().refused("Not connected to that server right now.");
                 return;
             };
             let mime = ingle_proto::control::sniff_image(&bytes).unwrap_or("image/gif");
@@ -1318,7 +1326,7 @@ impl Engine {
             };
             shared.files.lock().insert(file_id.clone(), Arc::new(bytes));
             match h.request(Request::AddGif { name: name.clone(), file_id }).await {
-                Ok(Event::Error { message, .. }) => shared.state.write().toast(message, true),
+                Ok(Event::Error { message, .. }) => shared.state.write().refused(message),
                 Ok(_) => shared.state.write().toast(format!("Added the GIF “{name}” for everyone here"), false),
                 Err(_) => {}
             }
@@ -1404,7 +1412,7 @@ impl Engine {
         self.shared.rt.clone().spawn(async move {
             let Some(h) = shared.servers.lock().get(&key).cloned() else { return };
             let Some(conn) = h.connection() else {
-                shared.state.write().toast("Not connected to that server right now.", true);
+                shared.state.write().refused("Not connected to that server right now.");
                 return;
             };
             let file_id = match net::file_put(&conn, FileKind::Sound, &name, SOUND_MIME, &file).await {
@@ -1419,7 +1427,7 @@ impl Engine {
                 shared.sounds.lock().insert(&key, &file_id, Arc::new(file), Arc::new(pcm));
             }
             match h.request(Request::AddSound { file_id, name: name.clone(), emoji, volume }).await {
-                Ok(Event::Error { message, .. }) => shared.state.write().toast(message, true),
+                Ok(Event::Error { message, .. }) => shared.state.write().refused(message),
                 Ok(_) => shared.state.write().toast(format!("Added {name} to the soundboard."), false),
                 Err(_) => {}
             }
@@ -1504,7 +1512,7 @@ impl Engine {
     pub fn add_friend(&self, uid: &str) {
         match self.shared_servers(uid).first() {
             Some(k) => self.request(k, Request::FriendRequest { user_id: uid.to_string() }),
-            None => self.toast("You need to share a server with them (and be connected) to add them.", true),
+            None => self.refused("You need to share a server with them (and be connected) to add them."),
         }
     }
 
@@ -1574,7 +1582,12 @@ impl Engine {
 
     /// Your profile picture as saved on this PC.
     pub fn my_avatar(&self) -> Option<Vec<u8>> {
-        std::fs::read(self.shared.config_dir.join(AVATAR_FILE)).ok()
+        std::fs::read(self.my_avatar_path()).ok()
+    }
+
+    /// Where my profile picture is kept on this PC.
+    pub fn my_avatar_path(&self) -> std::path::PathBuf {
+        self.shared.config_dir.join(AVATAR_FILE)
     }
 
     pub fn discard_pending(&self, key: &str, channel_id: ChannelId, nonce: &str) {
@@ -1595,13 +1608,13 @@ impl Engine {
 
     pub fn react(&self, key: &str, message_id: MessageId, emoji: &str, add: bool) {
         if self.handle(key).map(|h| h.connection().is_none()).unwrap_or(true) {
-            self.toast("Couldn't react: not connected to that server right now.", true);
+            self.refused("Couldn't react: not connected to that server right now.");
             return;
         }
         // Never silently: if the server says no, say why.
         self.request_then(key, Request::React { message_id, emoji: emoji.to_string(), add }, |shared, ev| {
             if let Event::Error { message, .. } = ev {
-                shared.state.write().toast(format!("Couldn't react: {message}"), true);
+                shared.state.write().refused(format!("Couldn't react: {message}"));
             }
         });
     }
@@ -1632,7 +1645,7 @@ impl Engine {
             let mut st = shared.state.write();
             let mut newest = None;
             if let Event::Error { message, .. } = &ev {
-                st.toast(message.clone(), true);
+                st.refused(message.clone());
             }
             if let Some(s) = st.server_mut(&k) {
                 let dm = s.is_private(channel_id);
@@ -2227,7 +2240,7 @@ impl Engine {
                     (shared.repaint)();
                 }
                 Ok(Event::Error { message, .. }) => {
-                    shared.state.write().toast(message, true);
+                    shared.state.write().refused(message);
                     (shared.repaint)();
                 }
                 _ => {}
@@ -2252,7 +2265,7 @@ impl Engine {
         self.shared.rt.spawn(async move {
             match added.await {
                 Ok(Event::Error { message, .. }) => {
-                    shared.state.write().toast(message, true);
+                    shared.state.write().refused(message);
                     (shared.repaint)();
                     return;
                 }
@@ -2274,7 +2287,7 @@ impl Engine {
             ring::ensure(&shared);
             if let Ok(Event::Error { message, .. }) = h.request(Request::Ring { channel_id, video: false, moved_from: None }).await {
                 let mut st = shared.state.write();
-                st.toast(message, true);
+                st.refused(message);
                 if st.outgoing_call.as_ref().is_some_and(|o| o.server_key == k && o.channel_id == channel_id) {
                     st.outgoing_call = None;
                 }
@@ -2386,7 +2399,7 @@ impl Engine {
                 bugs::save_approved(shared, &k, &name, &reports);
                 shared.state.write().bugs.insert(k, reports);
             }
-            Event::Error { message, .. } => shared.state.write().toast(message, true),
+            Event::Error { message, .. } => shared.state.write().refused(message),
             _ => {}
         });
     }
@@ -2409,7 +2422,7 @@ impl Engine {
         }
         self.request_then(key, Request::SetBugStatus { id, status }, move |shared, ev| {
             if let Event::Error { message, .. } = ev {
-                shared.state.write().toast(format!("Couldn't change the report: {message}"), true);
+                shared.state.write().refused(format!("Couldn't change the report: {message}"));
             }
         });
     }
@@ -2418,7 +2431,7 @@ impl Engine {
     pub fn set_bug_reports(&self, key: &str, on: bool) {
         self.request_then(key, Request::SetBugReports { on }, move |shared, ev| {
             if let Event::Error { message, .. } = ev {
-                shared.state.write().toast(message, true);
+                shared.state.write().refused(message);
             }
         });
     }
@@ -2558,7 +2571,7 @@ impl Engine {
     pub fn set_plugin_submissions(&self, key: &str, on: bool) {
         self.request_then(key, Request::SetPluginSubmissions { on }, move |shared, ev| {
             if let Event::Error { message, .. } = ev {
-                shared.state.write().toast(message, true);
+                shared.state.write().refused(message);
             }
         });
     }
@@ -2567,7 +2580,7 @@ impl Engine {
     pub fn set_giphy_key(&self, key: &str, giphy_key: &str) {
         let on = !giphy_key.trim().is_empty();
         self.request_then(key, Request::SetGiphyKey { key: giphy_key.trim().to_string() }, move |shared, ev| match ev {
-            Event::Error { message, .. } => shared.state.write().toast(format!("Couldn't set up GIF search: {message}"), true),
+            Event::Error { message, .. } => shared.state.write().refused(format!("Couldn't set up GIF search: {message}")),
             _ => shared
                 .state
                 .write()
@@ -2580,7 +2593,7 @@ impl Engine {
     pub fn set_klipy_key(&self, key: &str, klipy_key: &str) {
         let on = !klipy_key.trim().is_empty();
         self.request_then(key, Request::SetKlipyKey { key: klipy_key.trim().to_string() }, move |shared, ev| match ev {
-            Event::Error { message, .. } => shared.state.write().toast(format!("Couldn't set up KLIPY: {message}"), true),
+            Event::Error { message, .. } => shared.state.write().refused(format!("Couldn't set up KLIPY: {message}")),
             _ => shared
                 .state
                 .write()
@@ -2749,6 +2762,13 @@ impl Engine {
         guard.as_ref().and_then(|c| c.audio.as_ref()).map(|a| a.status.lock().levels.clone()).unwrap_or_default()
     }
 
+    /// How loud each person's voice and stream usually are, as sent (session, track, dBFS),
+    /// for those heard long enough to tell: for the mixer's Even out.
+    pub fn loudness(&self) -> Vec<(SessionId, u8, f32)> {
+        let guard = self.shared.call.lock();
+        guard.as_ref().and_then(|c| c.audio.as_ref()).map(|a| a.status.lock().loudness.clone()).unwrap_or_default()
+    }
+
     /// My microphone right now in the call: its level (dBFS, after my input volume) and
     /// whether it's going out.
     pub fn my_mic_level(&self) -> Option<(f32, bool)> {
@@ -2782,8 +2802,9 @@ impl Engine {
             || old.output_device != settings.output_device
             || old.noise_suppression != settings.noise_suppression
             || old.echo_cancellation != settings.echo_cancellation
-            || old.auto_gain != settings.auto_gain
-            || old.voice_bitrate_kbps != settings.voice_bitrate_kbps
+            || old.auto_gain != settings.auto_gain;
+        // These change as the sound flows (nobody hears a gap when the sensitivity's moved).
+        let retune = old.voice_bitrate_kbps != settings.voice_bitrate_kbps
             || old.input_mode != settings.input_mode
             || old.vad_auto != settings.vad_auto
             || (old.vad_threshold_db - settings.vad_threshold_db).abs() > 0.01
@@ -2847,11 +2868,20 @@ impl Engine {
                 self.stop_mic_test();
                 self.start_mic_test();
             }
-        } else if (old.output_volume - settings.output_volume).abs() > 0.001 {
-            if let Some(c) = self.shared.call.lock().as_ref() {
-                if let Some(a) = &c.audio {
-                    a.mixer.lock().master = settings.output_volume;
+        } else {
+            let each = |f: &dyn Fn(&AudioEngine)| {
+                if let Some(a) = self.shared.call.lock().as_ref().and_then(|c| c.audio.as_ref()) {
+                    f(a);
                 }
+                if let Some(a) = self.shared.mic_test.lock().as_ref() {
+                    f(a);
+                }
+            };
+            if retune {
+                each(&|a| *a.controls.retune.lock() = Some(settings.clone()));
+            }
+            if (old.output_volume - settings.output_volume).abs() > 0.001 {
+                each(&|a| a.mixer.lock().master = settings.output_volume);
             }
         }
         (self.shared.repaint)();
@@ -3043,7 +3073,7 @@ pub(crate) fn join_voice_on(shared: &Arc<Shared>, key: &str, channel_id: Channel
                         if let Ok(Event::Error { message, .. }) = h.request(Request::Ring { channel_id, video, moved_from: after.moved_from }).await {
                             // Nobody's being rung after all: no "Calling…".
                             let mut st = shared.state.write();
-                            st.toast(message, true);
+                            st.refused(message);
                             if st.outgoing_call.as_ref().is_some_and(|o| o.server_key == key && o.channel_id == channel_id) {
                                 st.outgoing_call = None;
                             }
@@ -3122,7 +3152,7 @@ fn start_camera_on(shared: &Arc<Shared>) {
         cams.first().map(|c| c.0.clone())
     });
     let Some(device) = device else {
-        shared.state.write().toast("No camera found.", true);
+        shared.state.write().refused("No camera found.");
         (shared.repaint)();
         return;
     };
@@ -3165,7 +3195,7 @@ fn start_video_on(shared: &Arc<Shared>, track_id: u8, source: &str, cfg: Publish
         drop(old);
         let what = if track_id == track::SCREEN { "share your screen" } else { "start your camera" };
         let Some(ctx) = ctx else {
-            shared.state.write().toast(format!("Couldn't {what}: join a voice channel first"), true);
+            shared.state.write().refused(format!("Couldn't {what}: join a voice channel first"));
             return;
         };
         if !current() {

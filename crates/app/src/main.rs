@@ -24,12 +24,15 @@ mod titlebar;
 mod instance;
 mod looks;
 mod markdown;
+mod menu;
 mod meter;
 mod mixer;
 mod ringtone;
+mod server_card;
 mod server_gifs;
 mod plugins;
 mod select;
+mod settings;
 mod stage;
 mod textbox;
 mod theme;
@@ -70,6 +73,7 @@ fn main() -> eframe::Result<()> {
     let mut renderer: Option<String> = std::env::var("INGLE_RENDERER").ok();
     let mut quit = false;
     let mut autostart = false;
+    let mut reopened: u32 = 0;
     let link_prefix = format!("{}://", ingle_proto::APP_ID);
     let all: Vec<String> = std::env::args().skip(1).collect();
     // Opened for an invite link (the ingle:// handler): that link is all we take, so nothing
@@ -87,6 +91,9 @@ fn main() -> eframe::Result<()> {
             "--quit" => quit = true,
             // Started by Windows at sign-in (see autostart.rs).
             "--autostart" => autostart = true,
+            // Started again after the graphics card went away under the window (how many
+            // times in a row), see `relaunch`.
+            "--reopened" => reopened = args.next().and_then(|n| n.parse().ok()).unwrap_or(1),
             "--help" | "-h" => {
                 println!("{} — voice, video, screen share and chat\n", ingle_proto::APP_NAME);
                 println!("  --profile NAME   use a separate identity (run two copies on one PC)");
@@ -111,7 +118,7 @@ fn main() -> eframe::Result<()> {
         tray::quit_running(&config_dir);
         return Ok(());
     }
-    let (_instance_lock, handoff) = match instance::start(&config_dir, join.as_deref()) {
+    let (instance_lock, handoff) = match instance::start(&config_dir, join.as_deref()) {
         instance::Start::First { lock, handoff } => (lock, handoff),
         instance::Start::AlreadyRunning => {
             // Bring the running copy's window back, even from the tray. It picks up our
@@ -121,6 +128,7 @@ fn main() -> eframe::Result<()> {
             return Ok(());
         }
     };
+    REOPENED.store(reopened, std::sync::atomic::Ordering::Relaxed);
     let log_path = init_logging(profile.as_deref());
     install_crash_report(log_path.clone());
 
@@ -152,52 +160,94 @@ fn main() -> eframe::Result<()> {
         _ if cfg!(windows) || cfg!(target_os = "macos") => vec![eframe::Renderer::Wgpu, eframe::Renderer::Glow],
         _ => vec![eframe::Renderer::Glow, eframe::Renderer::Wgpu],
     };
+    // What lives on if the window has to be opened again (the graphics card went away: its
+    // driver restarted, or Windows took it back), so a call carries on: the engine and the
+    // updater. And where repaints go: the window there is now.
+    let kept: Arc<std::sync::Mutex<Option<(Arc<Engine>, update::Updater)>>> = Default::default();
+    let window: Arc<std::sync::Mutex<Option<egui::Context>>> = Default::default();
+    let repaint: Arc<dyn Fn() + Send + Sync> = {
+        let w = window.clone();
+        Arc::new(move || {
+            if let Some(c) = w.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                c.request_repaint();
+            }
+        })
+    };
     let mut last_err = None;
-    for r in order {
-        let options = eframe::NativeOptions { viewport: viewport.clone(), renderer: r, ..Default::default() };
-        let (profile, join, handoff, app_title) = (profile.clone(), join.clone(), handoff.clone(), title.clone());
-        #[cfg(windows)]
-        let (tray_dir, tray_tip) = (config_dir.clone(), title.clone());
-        let res = eframe::run_native(
-            &title,
-            options,
-            Box::new(move |cc| {
-                theme::install(&cc.egui_ctx);
-                let ctx = cc.egui_ctx.clone();
-                let engine = Engine::start(EngineOptions {
-                    profile,
-                    repaint: Arc::new(move || ctx.request_repaint()),
-                    audio: dev_voice(),
-                    ..Default::default()
-                })
-                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
-                let engine = Arc::new(engine);
-                let ctx = cc.egui_ctx.clone();
-                let updater = update::Updater::start(Arc::new(move || ctx.request_repaint()), engine.shared.config_dir.clone());
-                #[cfg(windows)]
-                let tray = tray::Tray::create(cc, engine.clone(), updater.clone(), &tray_dir, &tray_tip);
-                // Whether you're looking at Ingle, asked of Windows itself: frames stop while
-                // it's hidden in the tray or minimized (see Engine::set_focus_probe).
-                #[cfg(windows)]
-                engine.set_focus_probe(tray::window_in_front);
-                // Writes what Ingle was doing to the log if its window ever stops responding.
-                watchdog::start(engine.clone());
-                // A crash or a freeze the last time Ingle was open is reported by itself (once,
-                // even if a second renderer is tried).
-                static LAST_RUN: std::sync::Once = std::sync::Once::new();
-                LAST_RUN.call_once(|| engine.report_last_run_trouble());
-                #[cfg(not(windows))]
-                let tray: Option<tray::Tray> = None;
-                let ctx = cc.egui_ctx.clone();
-                let plugins = plugins::Plugins::new(&engine.shared.config_dir, Arc::new(move || ctx.request_repaint()));
-                Ok(Box::new(app::IngleApp::new(engine, handoff, join, tray, updater, plugins, app_title)))
-            }),
-        );
-        match res {
-            Ok(()) => return Ok(()),
-            Err(e) => {
-                tracing::warn!("renderer {r:?} failed: {e}");
-                last_err = Some(e);
+    let mut join = join;
+    'renderers: for r in order {
+        loop {
+            let options = eframe::NativeOptions { viewport: viewport.clone(), renderer: r, ..Default::default() };
+            let (profile_now, join, handoff, app_title) = (profile.clone(), join.take(), handoff.clone(), title.clone());
+            let (kept_now, window_now, repaint_now) = (kept.clone(), window.clone(), repaint.clone());
+            #[cfg(windows)]
+            let (tray_dir, tray_tip) = (config_dir.clone(), title.clone());
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                eframe::run_native(
+                    &title,
+                    options,
+                    Box::new(move |cc| {
+                        theme::install(&cc.egui_ctx);
+                        *window_now.lock().unwrap_or_else(|e| e.into_inner()) = Some(cc.egui_ctx.clone());
+                        // The engine and updater: started the first time, the same ones after.
+                        let mut slot = kept_now.lock().unwrap_or_else(|e| e.into_inner());
+                        let (engine, updater) = match slot.as_ref() {
+                            Some((e, u)) => (e.clone(), u.clone()),
+                            None => {
+                                let engine = Engine::start(EngineOptions { profile: profile_now, repaint: repaint_now.clone(), audio: dev_voice(), ..Default::default() })
+                                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
+                                let engine = Arc::new(engine);
+                                let updater = update::Updater::start(repaint_now.clone(), engine.shared.config_dir.clone());
+                                *slot = Some((engine.clone(), updater.clone()));
+                                (engine, updater)
+                            }
+                        };
+                        drop(slot);
+                        #[cfg(windows)]
+                        let tray = tray::Tray::create(cc, engine.clone(), updater.clone(), &tray_dir, &tray_tip);
+                        // Whether you're looking at Ingle, asked of Windows itself: frames stop
+                        // while it's hidden in the tray or minimized (see Engine::set_focus_probe).
+                        #[cfg(windows)]
+                        engine.set_focus_probe(tray::window_in_front);
+                        // Writes what Ingle was doing to the log if its window ever stops
+                        // responding.
+                        watchdog::start(engine.clone());
+                        // A crash or a freeze the last time Ingle was open is reported by itself
+                        // (once, even if a second renderer is tried).
+                        static LAST_RUN: std::sync::Once = std::sync::Once::new();
+                        LAST_RUN.call_once(|| engine.report_last_run_trouble());
+                        #[cfg(not(windows))]
+                        let tray: Option<tray::Tray> = None;
+                        let plugins = plugins::Plugins::new(&engine.shared.config_dir, repaint_now.clone());
+                        Ok(Box::new(app::IngleApp::new(engine, handoff, join, tray, updater, plugins, app_title)))
+                    }),
+                )
+            }));
+            match run {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(e)) => {
+                    tracing::warn!("renderer {r:?} failed: {e}");
+                    last_err = Some(e);
+                    continue 'renderers;
+                }
+                // The graphics card went away under the window (its driver restarted, or Windows
+                // took it back): Ingle starts again by itself, back in the call it was in (a few
+                // times in a row at most).
+                Err(panic) if reopened < 3 && gpu_lost(&panic_text(&*panic)) => {
+                    tracing::warn!("the graphics card went away under the window ({}); starting Ingle again", panic_text(&*panic));
+                    let engine = kept.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(e, _)| e.clone());
+                    if let Some(engine) = &engine {
+                        let call = engine.state().call.as_ref().map(|c| (c.server_key.clone(), c.channel_id));
+                        if let Some((key, channel)) = call {
+                            update::save_resume(&engine.shared.config_dir, &key, Some(channel));
+                        }
+                    }
+                    // (The new copy must find no Ingle already running.)
+                    drop(instance_lock);
+                    relaunch(profile.as_deref(), renderer.as_deref(), reopened + 1);
+                    std::process::exit(0);
+                }
+                Err(panic) => std::panic::resume_unwind(panic),
             }
         }
     }
@@ -322,10 +372,23 @@ fn install_crash_report(log_path: Option<std::path::PathBuf>) {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
-        tracing::error!("crash in thread {thread}: {info}");
+        let what = info.to_string();
+        let main = thread == "main";
+        // (The graphics card going away under the window: Ingle starts again, see `main`.)
+        let recovered = main && gpu_lost(&what) && REOPENED.load(std::sync::atomic::Ordering::Relaxed) < 3;
+        if recovered {
+            tracing::error!("the window crashed (the graphics card went away), starting Ingle again: {info}");
+        } else {
+            tracing::error!("crash in thread {thread}: {info}");
+        }
         default(info);
+        // Ingle carries on: reported by itself, now. (A crash that ends Ingle is reported the
+        // next time it starts, from the log.)
+        if !main || recovered {
+            ingle_engine::bugs::report_crash(&thread, &what);
+        }
         // Only the UI thread's crash ends the app; others are logged and the app carries on.
-        if thread == "main" {
+        if main && !recovered {
             fatal_message(&format!(
                 "{} ran into a problem and has to close.\n\n{info}\n\nDetails are in {}",
                 ingle_proto::APP_NAME,
@@ -333,6 +396,49 @@ fn install_crash_report(log_path: Option<std::path::PathBuf>) {
             ));
         }
     }));
+}
+
+/// How many times in a row Ingle was started again after the graphics card went away.
+static REOPENED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Whether a crash is the graphics card going away under the window (its driver restarted, or
+/// Windows took it back): drawing or showing a frame failed for that.
+fn gpu_lost(what: &str) -> bool {
+    const SIGNS: [&str; 10] = [
+        "Surface::present",
+        "Surface::get_current_texture",
+        "Surface::configure",
+        "Device is lost",
+        "device lost",
+        "DeviceLost",
+        "Parent device is lost",
+        "has been suspended",
+        "0x887A0005",
+        "DXGI_ERROR_DEVICE",
+    ];
+    SIGNS.iter().any(|s| what.contains(s))
+}
+
+/// Starts Ingle again (after the graphics card went away under its window): the same profile
+/// and renderer, and how many times in a row it's been started again.
+fn relaunch(profile: Option<&str>, renderer: Option<&str>, reopened: u32) {
+    let Ok(exe) = std::env::current_exe() else { return };
+    let mut cmd = std::process::Command::new(exe);
+    if let Some(p) = profile {
+        cmd.args(["--profile", p]);
+    }
+    if let Some(r) = renderer {
+        cmd.args(["--renderer", r]);
+    }
+    cmd.args(["--reopened", &reopened.to_string()]);
+    if let Err(e) = cmd.spawn() {
+        tracing::warn!("couldn't start Ingle again: {e}");
+    }
+}
+
+/// What a caught crash said.
+fn panic_text(panic: &(dyn std::any::Any + Send)) -> String {
+    panic.downcast_ref::<String>().cloned().or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default()
 }
 
 #[cfg(windows)]

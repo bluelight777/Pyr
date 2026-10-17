@@ -216,6 +216,14 @@ CREATE TABLE IF NOT EXISTS vouches (
     at INTEGER NOT NULL,
     PRIMARY KEY (by, for_uid)
 );
+-- Author names in the Ingle Library (0.8): the first signed sender to send a plugin or skin in
+-- under a name has it, by `author_key` (so names that only look different are the same one).
+CREATE TABLE IF NOT EXISTS author_names (
+    key TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    author_id TEXT NOT NULL,
+    at INTEGER NOT NULL
+);
 "#;
 
 /// What `Db::submission_row` reads, in its order.
@@ -313,6 +321,25 @@ fn migrate(c: &Connection) -> Result<()> {
         }
     }
     c.execute_batch("CREATE INDEX IF NOT EXISTS plugin_submissions_author ON plugin_submissions(author_id)")?;
+    // Author names (0.8): the names on what was sent in signed before, first come first served.
+    let filled = c.query_row("SELECT value FROM meta WHERE key = 'author_names_filled'", [], |r| r.get::<_, String>(0)).is_ok();
+    if !filled {
+        let sent: Vec<(String, String, String, i64)> = c
+            .prepare("SELECT author, author_id, files, created_at FROM plugin_submissions WHERE author_id != '' ORDER BY id")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .flatten()
+            .collect();
+        for (author, author_id, files, at) in sent {
+            let files: Vec<ingle_proto::control::SourceFile> = serde_json::from_str(&files).unwrap_or_default();
+            for name in [author, skin_author(&files)] {
+                let key = ingle_proto::control::author_key(&name);
+                if !key.is_empty() {
+                    c.execute("INSERT OR IGNORE INTO author_names(key, name, author_id, at) VALUES (?1, ?2, ?3, ?4)", params![key, name.trim(), author_id, at])?;
+                }
+            }
+        }
+        c.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('author_names_filled', '1')", [])?;
+    }
     // Bots (0.8): members who joined with a bot invite, and the invites that make them.
     let has_bots = c.prepare("SELECT 1 FROM pragma_table_info('users') WHERE name = 'bot'")?.exists([])?;
     if !has_bots {
@@ -322,6 +349,17 @@ fn migrate(c: &Connection) -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+/// The author in a skin's own `skin.json` (empty when it isn't a skin, or says none).
+pub fn skin_author(files: &[ingle_proto::control::SourceFile]) -> String {
+    files
+        .iter()
+        .find(|f| f.path == ingle_proto::skin::MANIFEST)
+        .and_then(|f| ingle_proto::b64::decode(&f.data).ok())
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v.get("author").and_then(|a| a.as_str()).map(str::to_string))
+        .unwrap_or_default()
 }
 
 /// After deleting or editing: copy the zeroed pages into the database file and empty the
@@ -675,6 +713,39 @@ impl Db {
             .lock()
             .execute("UPDATE bug_reports SET status = ?2, status_at = ?3 WHERE id = ?1", params![id, status.as_str(), now_ms()])?
             > 0)
+    }
+
+    /// Who has an author's name (by its `author_key`), if anyone: (the name as they first
+    /// wrote it, their id).
+    pub fn author_name(&self, key: &str) -> Option<(String, String)> {
+        self.conn
+            .lock()
+            .query_row("SELECT name, author_id FROM author_names WHERE key = ?1", [key], |r| Ok((r.get(0)?, r.get(1)?)))
+            .ok()
+    }
+
+    /// Gives `author_id` the name `name` (by `key`) unless someone has it: whether it's theirs.
+    pub fn claim_author_name(&self, key: &str, name: &str, author_id: &str) -> Result<bool> {
+        let c = self.conn.lock();
+        c.execute("INSERT OR IGNORE INTO author_names(key, name, author_id, at) VALUES (?1, ?2, ?3, ?4)", params![key, name, author_id, now_ms()])?;
+        let who: String = c.query_row("SELECT author_id FROM author_names WHERE key = ?1", [key], |r| r.get(0))?;
+        Ok(who == author_id)
+    }
+
+    /// Tests: the author names forgotten, and filled in again from what was sent in.
+    #[cfg(test)]
+    pub fn refill_author_names(&self) {
+        let c = self.conn.lock();
+        c.execute_batch("DELETE FROM author_names; DELETE FROM meta WHERE key = 'author_names_filled';").unwrap();
+        migrate(&c).unwrap();
+    }
+
+    /// The server's owners (their ids).
+    pub fn owner_ids(&self) -> Vec<String> {
+        let c = self.conn.lock();
+        c.prepare("SELECT id FROM users WHERE role = 2 AND banned = 0")
+            .and_then(|mut st| st.query_map([], |r| r.get(0)).map(|rows| rows.flatten().collect()))
+            .unwrap_or_default()
     }
 
     /// A plugin or skin sent in; `files` is its files as JSON, `size` their bytes in all.

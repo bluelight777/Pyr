@@ -538,6 +538,9 @@ pub struct Toast {
     pub text: String,
     pub error: bool,
     pub at: Instant,
+    /// An error that's a bug: reported by itself (see `bugs::watch_errors`). Not a refusal
+    /// (`refused`: the server said no, not connected, a limit), which is no bug.
+    pub report: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -713,13 +716,22 @@ impl AppState {
     /// A notice in the corner. Errors stay until dismissed (and can be copied); the same error
     /// again just moves back to the top instead of piling up.
     pub fn toast(&mut self, text: impl Into<String>, error: bool) {
+        self.toast_as(text.into(), error, error);
+    }
+
+    /// Something asked for that can't be done (the server said no, not connected, over a
+    /// limit): shown like an error, but it's no bug, so it isn't reported.
+    pub fn refused(&mut self, text: impl Into<String>) {
+        self.toast_as(text.into(), true, false);
+    }
+
+    fn toast_as(&mut self, text: String, error: bool, report: bool) {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        let text = text.into();
         if error {
             self.toasts.retain(|t| !(t.error && t.text == text));
         }
         let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.toasts.push(Toast { id, text, error, at: Instant::now() });
+        self.toasts.push(Toast { id, text, error, at: Instant::now(), report });
         // Keep a few: notices go first, then the oldest errors.
         while self.toasts.len() > 8 {
             let i = self.toasts.iter().position(|t| !t.error).unwrap_or(0);
