@@ -202,7 +202,7 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   Make your own (on the Plugins or Skins page) shows whether yours were approved, with the
   reviewer's note. How to make a skin: [`skins/`](skins).
 
-![The Pyr Library: Chimbrowser and Dice](docs/screenshots/plugins.png)
+![The Pyr Library: Chimbrowser, Dice and Firelit Poker, with Dice's panel open](docs/screenshots/plugins.png)
 
 **The app**
 

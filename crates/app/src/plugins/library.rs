@@ -1,4 +1,4 @@
-//! The Pyr Library's list of plugins: fetched from firelitgames.com, believed only with
+//! The Pyr Library's list of plugins: fetched from pyr.gg, believed only with
 //! Firelit Games' signature (the release key) and within its dates, and kept on this PC so
 //! the Plugins page has something to show offline.
 

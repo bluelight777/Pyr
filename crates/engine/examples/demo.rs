@@ -21,6 +21,8 @@
 //! answer calls ringing for them (or, the ones in `--decline`, say no), a few seconds after
 //! they start ringing (`--after`, and two more for each one after the first).
 //!
+//! `setup` also has Sam join once (so someone's offline).
+//!
 //! `--me` is the config folder of the app profile the screenshots are taken with: `setup`
 //! uses its identity to make the server as its owner ("Friend"), so run it before opening
 //! that profile. `--assets` holds friend.png, mara.png, theo.png, rae.png, kai.png (profile
@@ -174,6 +176,11 @@ fn setup() -> Result<()> {
     for n in FRIENDS {
         wait("everyone", 15, || uid_of(&me, &key, n))?;
     }
+    // Sam joined once and is offline (no picture).
+    let sam = person(&dir_of("Sam"), "Sam", None)?;
+    join(&sam, &invite)?;
+    wait("Sam", 15, || uid_of(&me, &key, "Sam"))?;
+    sam.shutdown();
     me.set_member_roles(&key, &uid_of(&me, &key, "Mara").unwrap(), vec![mods]);
     for n in ["Theo", "Rae"] {
         me.set_member_roles(&key, &uid_of(&me, &key, n).unwrap(), vec![crew]);
@@ -210,7 +217,7 @@ fn setup() -> Result<()> {
         say(mara, &key, links, "Friday bracket: reply here to sign up 👇", None)?;
     }
     if let Some(notes) = channel(theo, &key, "📜 Patch notes") {
-        say(theo, &key, notes, "@Friend 0.7.2 is out: plugins! Get Dice from the library and try /roll 2d6+1", None)?;
+        say(theo, &key, notes, "@Friend 0.8.0 is out: we're Pyr now, and invites are short pyr.gg links", None)?;
     }
 
     // Friends: Rae and Kai (accepted), Theo (waiting for you), and Mara messages you.
