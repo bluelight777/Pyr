@@ -185,7 +185,8 @@ impl IngleApp {
                         } else {
                             icons::hash(ui.painter(), r, theme::DIM());
                         }
-                        crate::emoji::label(ui, &ch.name, theme::bold_font(15.5), theme::TEXT(), None, &mut |_| None);
+                        let ctx = ui.ctx().clone();
+                        crate::emoji::name_line(ui, &ch.name, theme::bold_font(15.5), theme::TEXT(), None, &mut |id| self.custom_emoji_tex(&ctx, &key, id));
                     }
                     if !ch.topic.is_empty() && !in_call_panel {
                         let (sep, _) = ui.allocate_exact_size(vec2(1.0, 22.0), Sense::hover());

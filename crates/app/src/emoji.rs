@@ -198,6 +198,36 @@ fn custom_at(chars: &[char], i: usize) -> Option<(usize, EmojiRef)> {
     Some((rest[..=close].chars().count(), EmojiRef::Custom { name: name.into(), id: id.into(), animated }))
 }
 
+/// A name that starts with an emoji ("📜 Rules"): the emoji, and the rest of the name without
+/// the spaces after it. A symbol that's text unless marked as emoji (⚔, ♠ typed without the
+/// marker) counts too, and is drawn as the emoji, so every channel's emoji is the same size
+/// and its name starts in the same place (bug report #6).
+pub fn split_lead(name: &str) -> (Option<EmojiRef>, &str) {
+    let chars: Vec<char> = name.chars().collect();
+    let Some(&first) = chars.first() else { return (None, name) };
+    let found = match_at(&chars, 0).or_else(|| {
+        // Marked as emoji, it's one: take it as that (one char).
+        let marked = [first, '\u{fe0f}'];
+        match match_at(&marked, 0) {
+            Some((2, e @ EmojiRef::Unicode(_))) if !first.is_ascii() => Some((1, e)),
+            _ => None,
+        }
+    });
+    match found {
+        Some((n, e)) => {
+            let at = name.char_indices().nth(n).map(|(i, _)| i).unwrap_or(name.len());
+            (Some(e), name[at..].trim_start())
+        }
+        None => (None, name),
+    }
+}
+
+/// How wide the place for a leading emoji is (see [`split_lead`]), and the gap after it, for
+/// text of size `size`.
+pub fn lead_slot(size: f32) -> (f32, f32) {
+    ((size * SCALE).round(), (size * 0.4).round())
+}
+
 /// Every emoji in `text`: (char index, char count, emoji).
 pub fn find_all(text: &str) -> Vec<(usize, usize, EmojiRef)> {
     let chars: Vec<char> = text.chars().collect();
@@ -405,6 +435,34 @@ pub fn label_line(
     label_job(ui, text, font, color, Some(width), true, custom)
 }
 
+/// A channel's name in a row of widgets: its leading emoji (if any) in a place of its own, then
+/// the rest on one line (cut short to `width` when given), as the channel list shows it.
+pub fn name_line(
+    ui: &mut egui::Ui,
+    name: &str,
+    font: FontId,
+    color: Color32,
+    width: Option<f32>,
+    custom: &mut dyn FnMut(&str) -> Option<egui::TextureId>,
+) {
+    let (lead, title) = split_lead(name);
+    let mut width = width;
+    if let Some(e) = lead {
+        let (w, gap) = lead_slot(font.size);
+        let (r, _) = ui.allocate_exact_size(egui::vec2(w, w), egui::Sense::hover());
+        paint(ui.painter(), r, &e, custom);
+        ui.add_space((gap - ui.spacing().item_spacing.x).max(0.0));
+        width = width.map(|x| (x - w - gap).max(20.0));
+    }
+    if title.is_empty() {
+        return;
+    }
+    match width {
+        Some(w) => label_line(ui, title, font, color, w, custom),
+        None => label(ui, title, font, color, None, custom),
+    };
+}
+
 /// `text` with its emoji taken out (and the spaces they leave tidied up): for places that
 /// show plain text only, like the message box's hint.
 pub fn without_emoji(text: &str) -> String {
@@ -503,6 +561,32 @@ fn job_of(text: &str, font: FontId, color: Color32, wrap: Option<f32>, one_line:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_leading_emoji_is_split_off_however_it_was_typed() {
+        let lead = |n: &str| {
+            let (e, rest) = super::split_lead(n);
+            (e.map(|e| matches!(e, super::EmojiRef::Unicode(_))), rest.to_string())
+        };
+        assert_eq!(lead("📜 Rules"), (Some(true), "Rules".into()));
+        assert_eq!(lead("🎮  Gaming night"), (Some(true), "Gaming night".into()));
+        assert_eq!(lead("🍻Tavern"), (Some(true), "Tavern".into()));
+        assert_eq!(lead("🛡️ Tanks"), (Some(true), "Tanks".into()));
+        // Typed without the emoji marker: still the emoji.
+        assert_eq!(lead("⚔ Raids"), (Some(true), "Raids".into()));
+        assert_eq!(lead("♠ Cards"), (Some(true), "Cards".into()));
+        assert_eq!(lead("1️⃣ First steps"), (Some(true), "First steps".into()));
+        // No emoji first: the name as it is.
+        assert_eq!(lead("General"), (None, "General".into()));
+        assert_eq!(lead("1st raid"), (None, "1st raid".into()));
+        assert_eq!(lead("# links"), (None, "# links".into()));
+        assert_eq!(lead("Game 🎮 night"), (None, "Game 🎮 night".into()));
+        assert_eq!(lead(""), (None, "".into()));
+        assert_eq!(lead("🔥"), (Some(true), "".into()));
+        let (e, rest) = super::split_lead("<:party_cat:abcdEFGH1234> Party");
+        assert!(matches!(e, Some(super::EmojiRef::Custom { .. })));
+        assert_eq!(rest, "Party");
+    }
+
     #[test]
     fn emoji_come_out_of_plain_text() {
         assert_eq!(super::without_emoji("🍺 The Tavern"), "The Tavern");

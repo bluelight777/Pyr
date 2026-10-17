@@ -41,6 +41,11 @@ else
   echo "no dist/library/index.json: the website keeps the library it has" >&2
 fi
 cp installer/site/install-site.sh "$OUT/upload/"
+# The bug reports this release fixes (installer/site/fixed-bugs.txt, a number first on each
+# line): install-site.sh marks them fixed on the VPS's guild server, where reports go.
+if grep -Eq '^[0-9]+' installer/site/fixed-bugs.txt 2>/dev/null; then
+  cp installer/site/fixed-bugs.txt "$OUT/upload/"
+fi
 mkdir -p "$OUT/upload/server" && cp dist/vps/ingle-server-linux-x86_64 dist/vps/ingle-server-linux-aarch64 "$OUT/upload/server/"
 cp installer/site/publish.ps1 installer/site/publish.cmd "$OUT/"
 ls -la "$SITE"

@@ -61,7 +61,13 @@ struct Work {
     /// Add-ons started in the background: (id, what came of it, tried rather than installed).
     started: Vec<(String, Result<AddOn, String>, bool)>,
     icons: Vec<(String, Vec<u8>)>,
+    /// Programs whose files were gone or blocked when looked at again just after installing
+    /// (antivirus often takes a new program away within seconds): what to tell the person.
+    rechecked: Vec<String>,
 }
+
+/// How long after installing a program its files are looked at again.
+const RECHECK_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// An open add-on panel.
 pub struct OpenPanel {
@@ -306,11 +312,22 @@ impl Plugins {
                 w2.lock().installing.insert(id.clone(), (done, total));
                 repaint();
             });
+            // A program is looked at again a few seconds later: antivirus often removes or
+            // blocks a new one right away, and that's better said now than when it's opened.
+            let recheck = r.as_ref().ok().filter(|p| p.kind == Kind::Program).cloned();
             let mut w = work.lock();
             w.installing.remove(&entry.id);
             w.installed.push((entry.id.clone(), r));
             drop(w);
             repaint();
+            if let Some(p) = recheck {
+                std::thread::sleep(RECHECK_AFTER);
+                if let Err(e) = install::verify(&dir, &p) {
+                    tracing::warn!("{} right after installing: {e}", p.id);
+                    work.lock().rechecked.push(e);
+                    repaint();
+                }
+            }
         });
     }
 
@@ -434,10 +451,20 @@ impl Plugins {
     /// do (send messages, show notices).
     pub fn step(&mut self) -> Vec<Outcome> {
         let mut out = Vec::new();
-        let (fetched, installed, started, icons, installed_skins) = {
+        let (fetched, installed, started, icons, installed_skins, rechecked) = {
             let mut w = self.work.lock();
-            (w.fetched.take(), std::mem::take(&mut w.installed), std::mem::take(&mut w.started), std::mem::take(&mut w.icons), std::mem::take(&mut w.installed_skins))
+            (
+                w.fetched.take(),
+                std::mem::take(&mut w.installed),
+                std::mem::take(&mut w.started),
+                std::mem::take(&mut w.icons),
+                std::mem::take(&mut w.installed_skins),
+                std::mem::take(&mut w.rechecked),
+            )
         };
+        for e in rechecked {
+            out.push(Outcome::Toast(e, true));
+        }
         for r in installed_skins {
             match r {
                 Ok(s) => {

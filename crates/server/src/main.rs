@@ -42,6 +42,14 @@ enum Cmd {
     /// Create a new one-time link that grants ownership (if you lost the first one). It works
     /// for a week.
     OwnerInvite,
+    /// Mark bug reports fixed (by number), as the owner's Mark fixed does: new and approved
+    /// ones only. Works while the server is running (publishing a release that fixes them does
+    /// this on the VPS).
+    MarkFixed {
+        /// The reports' numbers, as #3 shows in Bug reports (3, not #3).
+        #[arg(required = true)]
+        ids: Vec<i64>,
+    },
     /// Set up the community without starting it and print its links as
     /// INGLE_NAME=, INGLE_OWNER_LINK= and INGLE_INVITE_LINK= lines (for setup scripts).
     /// The owner link is the unused one, or a new one-time link while the community has no
@@ -93,6 +101,23 @@ fn run() -> Result<()> {
         }
         Some(Cmd::OwnerInvite) => {
             println!("{}", make_invite(&cli, true, None, None)?);
+            return Ok(());
+        }
+        Some(Cmd::MarkFixed { ids }) => {
+            use ingle_proto::control::BugStatus;
+            let path = cli.data.join("ingle.db");
+            if !path.exists() {
+                anyhow::bail!("there's no server in {}", cli.data.display());
+            }
+            let db = ingle_server::db::Db::open(&path)?;
+            for (id, was) in db.mark_bugs_fixed(&ids)? {
+                match was {
+                    Some(BugStatus::New | BugStatus::Approved) => println!("Bug report #{id}: marked fixed"),
+                    Some(BugStatus::Fixed) => println!("Bug report #{id}: already marked fixed"),
+                    Some(BugStatus::Rejected) => println!("Bug report #{id}: rejected, left as it is"),
+                    None => println!("Bug report #{id}: not on this server"),
+                }
+            }
             return Ok(());
         }
         Some(Cmd::Links) => {

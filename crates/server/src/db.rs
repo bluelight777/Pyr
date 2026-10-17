@@ -581,6 +581,27 @@ impl Db {
         .unwrap_or_default()
     }
 
+    /// Report `id`'s status (None: there's no such report).
+    pub fn bug_status(&self, id: i64) -> Option<ingle_proto::control::BugStatus> {
+        let s: String = self.conn.lock().query_row("SELECT status FROM bug_reports WHERE id = ?1", [id], |r| r.get(0)).ok()?;
+        ingle_proto::control::BugStatus::parse(&s)
+    }
+
+    /// Reports a release fixed, marked fixed (as the owner's Mark fixed does): only new and
+    /// approved ones (one the owner rejected stays rejected). What became of each id.
+    pub fn mark_bugs_fixed(&self, ids: &[i64]) -> Result<Vec<(i64, Option<ingle_proto::control::BugStatus>)>> {
+        use ingle_proto::control::BugStatus;
+        let mut out = Vec::new();
+        for &id in ids {
+            let was = self.bug_status(id);
+            if matches!(was, Some(BugStatus::New | BugStatus::Approved)) {
+                self.set_bug_status(id, BugStatus::Fixed)?;
+            }
+            out.push((id, was));
+        }
+        Ok(out)
+    }
+
     pub fn set_bug_status(&self, id: i64, status: ingle_proto::control::BugStatus) -> Result<bool> {
         Ok(self
             .conn
@@ -1571,6 +1592,24 @@ mod tests {
         assert_eq!(got.reactions[0].users, vec!["a", "b"]);
         db.set_reaction(m.id, "🔥", "a", false).unwrap();
         assert_eq!(db.get_message(m.id).unwrap().reactions[0].users, vec!["b"]);
+    }
+
+    #[test]
+    fn a_release_marks_the_reports_it_fixed() {
+        use ingle_proto::control::{BugReport, BugStatus};
+        let db = Db::open_in_memory().unwrap();
+        let r = BugReport { title: "t".into(), ..Default::default() };
+        let (a, b, c, d) = (db.add_bug(&r).unwrap(), db.add_bug(&r).unwrap(), db.add_bug(&r).unwrap(), db.add_bug(&r).unwrap());
+        db.set_bug_status(a, BugStatus::Approved).unwrap();
+        db.set_bug_status(c, BugStatus::Rejected).unwrap();
+        db.set_bug_status(d, BugStatus::Fixed).unwrap();
+        let out = db.mark_bugs_fixed(&[a, b, c, d, 999]).unwrap();
+        let was: Vec<Option<BugStatus>> = out.iter().map(|x| x.1).collect();
+        assert_eq!(was, vec![Some(BugStatus::Approved), Some(BugStatus::New), Some(BugStatus::Rejected), Some(BugStatus::Fixed), None]);
+        assert_eq!(db.bug_status(a), Some(BugStatus::Fixed));
+        assert_eq!(db.bug_status(b), Some(BugStatus::Fixed));
+        assert_eq!(db.bug_status(c), Some(BugStatus::Rejected), "a rejected report stays rejected");
+        assert_eq!(db.bug_status(999), None);
     }
 
     #[test]

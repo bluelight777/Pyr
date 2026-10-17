@@ -2169,9 +2169,22 @@ impl IngleApp {
                         icons::speaker(ui.painter(), icon_rect, if in_this_call { theme::ONLINE() } else { theme::DIM() });
                     }
                     let font = if unread { theme::bold_font(14.5) } else { theme::font(14.5) };
-                    // (In color, emoji and all; room kept for the badges on the right.)
-                    let room = (rect.width() - 34.0 - 44.0).max(40.0);
-                    crate::emoji::paint_text(ui.painter(), rect.left_center() + vec2(34.0, 0.0), egui::Align2::LEFT_CENTER, &c.name, font, fg, Some(room));
+                    // A leading emoji gets a place of its own, the same size on every row, and
+                    // the name starts after it, so names line up however their emoji was typed
+                    // (bug report #6). (In color, emoji and all; room kept for the badges on
+                    // the right.)
+                    let mut x = rect.left() + 34.0;
+                    let (lead, title) = crate::emoji::split_lead(&c.name);
+                    if let Some(e) = &lead {
+                        let (w, gap) = crate::emoji::lead_slot(14.5);
+                        let slot = Rect::from_center_size(pos2(x + w / 2.0, rect.center().y), vec2(w, w));
+                        let faded = if fg == theme::DIM() { 0.5 } else { 1.0 };
+                        let ctx = ui.ctx().clone();
+                        crate::emoji::paint_faded(ui.painter(), slot, e, &mut |id| self.custom_emoji_tex(&ctx, &s.key, id), faded);
+                        x += w + gap;
+                    }
+                    let room = (rect.right() - 44.0 - x).max(40.0);
+                    crate::emoji::paint_text(ui.painter(), pos2(x, rect.center().y), egui::Align2::LEFT_CENTER, title, font, fg, Some(room));
                     if mentions > 0 {
                         let b = Rect::from_center_size(rect.right_center() - vec2(18.0, 0.0), vec2(22.0, 16.0));
                         ui.painter().rect_filled(b, CornerRadius::same(8), theme::LIVE());

@@ -120,3 +120,20 @@ HARDEN
     fi
   fi
 fi
+# Bug reports this release fixed (fixed-bugs.txt: a report's number first on each line) are
+# marked fixed on the guild server here, the one Ingle's bug reports go to, as the owner's
+# Mark fixed does (only new and approved ones; a rejected report stays rejected).
+if [ -f "$HERE/fixed-bugs.txt" ] && [ -x /usr/local/bin/ingle-server ] && systemctl list-unit-files ingle-server.service >/dev/null 2>&1; then
+  IDS=$(grep -Eo '^[0-9]+' "$HERE/fixed-bugs.txt" | tr '\n' ' ' || true)
+  DATA=$(systemctl show -p ExecStart ingle-server 2>/dev/null | sed -n 's/.*--data \([^ ;]*\).*/\1/p' | head -n 1)
+  DATA=${DATA:-/var/lib/ingle-server}
+  RUN_AS=$(systemctl show -p User --value ingle-server 2>/dev/null || true)
+  if [ -n "${IDS// /}" ] && [ -f "$DATA/ingle.db" ]; then
+    # As the server's own user, so the database's files keep their owner.
+    if [ -n "$RUN_AS" ] && [ "$RUN_AS" != "root" ]; then
+      runuser -u "$RUN_AS" -- /usr/local/bin/ingle-server --data "$DATA" mark-fixed $IDS || echo "Couldn't mark the fixed bug reports ($IDS)." >&2
+    else
+      /usr/local/bin/ingle-server --data "$DATA" mark-fixed $IDS || echo "Couldn't mark the fixed bug reports ($IDS)." >&2
+    fi
+  fi
+fi

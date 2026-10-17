@@ -255,7 +255,7 @@ impl IngleApp {
                                 icons::speaker(ui.painter(), r, theme::MUTED());
                             }
                             let w = ui.available_width();
-                            crate::emoji::label_line(ui, &channel_name, theme::bold_font(15.5), theme::TEXT(), w, &mut |_| None);
+                            crate::emoji::name_line(ui, &channel_name, theme::bold_font(15.5), theme::TEXT(), Some(w), &mut |_| None);
                             // The channel's topic, like a text channel's header.
                             if !topic.is_empty() && ui.available_width() > 60.0 {
                                 let (sep, _) = ui.allocate_exact_size(vec2(1.0, 22.0), Sense::hover());

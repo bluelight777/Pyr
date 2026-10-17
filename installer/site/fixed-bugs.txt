@@ -1,0 +1,2 @@
+3 After an update, voice came back muted (and deafened). Fixed in 0.7.2: muted only if you were.
+6 Channel names after a leading emoji didn't line up. Fixed in 0.8.0: the emoji gets a place of its own.
