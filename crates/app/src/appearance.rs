@@ -144,7 +144,8 @@ impl PyrApp {
                 RichText::new(
                     "Pyr's Claude connector lets Claude (the Claude app, or Claude Code) start a skin or an add-on with you, put a skin on Pyr \
                      while you talk it over so you see each change, check it the way the Pyr Library will, send it in for review, and send \
-                     new versions of yours later.",
+                     new versions of yours later. In a server that adds Claude (Server Settings → Bots), it can read and write there too, \
+                     when you ask it to.",
                 )
                 .color(theme::BODY()),
             )
@@ -154,8 +155,10 @@ impl PyrApp {
         ui.add(
             egui::Label::new(
                 RichText::new(
-                    "It signs what it sends with your Pyr identity (the key on this PC), so only you can send a new version of something \
-                     you sent. It can't read your servers or messages, and all it can change in Pyr is the skin you're trying.",
+                    "It signs what it sends to the Library with your Pyr identity (the key on this PC), so only you can send a new version \
+                     of something you sent. It never reads or writes in a server as you: in chat it's Claude, a bot with an identity of its \
+                     own, only in the servers that add it and where its roles let it. In Pyr itself, all it can change is the skin you're \
+                     trying.",
                 )
                 .size(12.5)
                 .color(theme::DIM()),

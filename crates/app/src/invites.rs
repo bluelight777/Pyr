@@ -24,38 +24,87 @@ pub enum Lookup {
 }
 
 /// What short links opened (looked up once, and again once the answer is a few minutes old).
-#[derive(Default)]
 pub struct Lookups {
-    map: Arc<Mutex<HashMap<String, (Instant, Lookup)>>>,
+    map: Arc<Mutex<HashMap<String, Known>>>,
+    /// How a code is looked up: `fetch` (tests use a stand-in).
+    fetcher: Arc<dyn Fn(&str) -> Lookup + Send + Sync>,
+}
+
+/// One short link: what's known, when to ask again, and since when pyr.gg is being asked (if
+/// it is).
+struct Known {
+    what: Lookup,
+    again: Instant,
+    asking: Option<Instant>,
+}
+
+/// How long an answer is good for.
+fn keep(l: &Lookup) -> Duration {
+    match l {
+        Lookup::Pending => Duration::from_secs(30),
+        // (How many are online changes: looked up again every couple of minutes.)
+        Lookup::Found(_) => Duration::from_secs(120),
+        Lookup::Missing => Duration::from_secs(60),
+        Lookup::Failed(_) => Duration::from_secs(15),
+    }
+}
+
+impl Default for Lookups {
+    fn default() -> Self {
+        Lookups { map: Default::default(), fetcher: Arc::new(fetch) }
+    }
 }
 
 impl Lookups {
     /// What `code` opens. Asks pyr.gg (in the background) the first time, and repaints `ctx`
-    /// once it knows.
+    /// once it knows. An answer that's old is asked again while it still shows (a card
+    /// doesn't blink to "Looking up" and back every couple of minutes); after a failure it's
+    /// "Looking up" again while it tries.
     pub fn get(&self, code: &str, ctx: &egui::Context) -> Lookup {
+        let now = Instant::now();
         let mut m = self.map.lock();
-        if let Some((at, v)) = m.get(code) {
-            let keep = match v {
-                Lookup::Pending => Duration::from_secs(30),
-                Lookup::Found(_) => Duration::from_secs(300),
-                Lookup::Missing => Duration::from_secs(60),
-                Lookup::Failed(_) => Duration::from_secs(15),
-            };
-            if at.elapsed() < keep {
-                return v.clone();
+        if let Some(k) = m.get_mut(code) {
+            // (A question that's taking far too long is asked again.)
+            let busy = k.asking.is_some_and(|t| now.duration_since(t) < keep(&Lookup::Pending));
+            if busy || now < k.again {
+                return k.what.clone();
             }
+            k.asking = Some(now);
+            if matches!(k.what, Lookup::Failed(_)) {
+                k.what = Lookup::Pending;
+            }
+            let shown = k.what.clone();
+            drop(m);
+            self.ask(code, ctx);
+            return shown;
         }
         if m.len() > 300 {
-            m.retain(|_, (at, _)| at.elapsed() < Duration::from_secs(60));
+            m.retain(|_, k| k.asking.is_some() || now < k.again + Duration::from_secs(60));
         }
-        m.insert(code.to_string(), (Instant::now(), Lookup::Pending));
-        let (map, code, ctx) = (self.map.clone(), code.to_string(), ctx.clone());
+        m.insert(code.to_string(), Known { what: Lookup::Pending, again: now, asking: Some(now) });
+        drop(m);
+        self.ask(code, ctx);
+        Lookup::Pending
+    }
+
+    /// Asks pyr.gg about `code` in the background.
+    fn ask(&self, code: &str, ctx: &egui::Context) {
+        let (map, fetcher, code, ctx) = (self.map.clone(), self.fetcher.clone(), code.to_string(), ctx.clone());
         std::thread::spawn(move || {
-            let found = fetch(&code);
-            map.lock().insert(code, (Instant::now(), found));
+            let found = fetcher(&code);
+            let now = Instant::now();
+            let mut m = map.lock();
+            let k = m.entry(code).or_insert(Known { what: Lookup::Pending, again: now, asking: None });
+            k.again = now + keep(&found);
+            k.asking = None;
+            // A server that was found stays shown when asking again fails (it's asked again
+            // soon); any other answer replaces what was known.
+            if !matches!((&k.what, &found), (Lookup::Found(_), Lookup::Failed(_))) {
+                k.what = found;
+            }
+            drop(m);
             ctx.request_repaint();
         });
-        Lookup::Pending
     }
 
     /// Asks again next time (Try again).
@@ -113,16 +162,16 @@ pub const DEFAULT_EXPIRE: usize = 5;
 pub const USES: &[(&str, Option<u32>)] =
     &[("No limit", None), ("1 use", Some(1)), ("5 uses", Some(5)), ("10 uses", Some(10)), ("25 uses", Some(25)), ("50 uses", Some(50)), ("100 uses", Some(100))];
 
-/// "6 days", "23 hours", "12 minutes": how long until `at` (ms since 1970), rounded down to
-/// the biggest unit, as Discord says it.
+/// "7 days", "23 hours", "12 minutes": how long until `at` (ms since 1970), in its biggest
+/// unit, rounded (an invite made for 7 days a moment ago has 7 days left, as Discord says).
 pub fn time_left(at: i64, now: i64) -> String {
     let s = ((at - now).max(0) / 1000) as u64;
-    let (n, unit) = if s >= 86_400 {
-        (s / 86_400, "day")
-    } else if s >= 3600 {
-        (s / 3600, "hour")
-    } else if s >= 60 {
-        (s / 60, "minute")
+    let (n, unit) = if s + 1800 >= 86_400 {
+        ((s + 43_200) / 86_400, "day")
+    } else if s + 30 >= 3600 {
+        ((s + 1800) / 3600, "hour")
+    } else if s + 30 >= 60 {
+        ((s + 30) / 60, "minute")
     } else {
         (s.max(1), "second")
     };
@@ -263,7 +312,7 @@ impl crate::app::PyrApp {
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if let Some(f) = &full {
-                        let b = if joined { egui::Button::new(RichText::new("Joined").color(theme::TEXT())) } else { theme::primary_button("Join") };
+                        let b = if joined { egui::Button::new(RichText::new("Joined").color(theme::TEXT())).fill(theme::SIDE()) } else { theme::primary_button("Join") };
                         if ui.add(b.min_size(vec2(84.0, 34.0))).clicked() {
                             // (Joined opens it.)
                             acts.push(Act::OfferJoin(if joined { f.clone() } else { link.to_string() }));
@@ -280,7 +329,7 @@ impl crate::app::PyrApp {
         use crate::app::Act;
         use crate::dialogs::{field_label, notice};
         use crate::theme;
-        use egui::{Align, Layout, RichText, vec2};
+        use egui::{RichText, vec2};
         let key = s.key.clone();
         // Asked for when the tab opens, and again every half minute while it's open.
         let asked_id = egui::Id::new(("invites-asked", &key));
@@ -389,11 +438,9 @@ impl crate::app::PyrApp {
                         None => "Never".into(),
                     };
                     ui.label(RichText::new(if i.bot { format!("{expires} (bot)") } else { expires }).color(theme::BODY()));
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.small_button("×").on_hover_text("Take this invite back: it stops working").clicked() {
-                            acts.push(Act::RevokeInvite { key: key.clone(), code: i.code.clone() });
-                        }
-                    });
+                    if ui.small_button("×").on_hover_text("Take this invite back: it stops working").clicked() {
+                        acts.push(Act::RevokeInvite { key: key.clone(), code: i.code.clone() });
+                    }
                     ui.end_row();
                 }
             });
@@ -424,12 +471,69 @@ mod tests {
     }
 
     #[test]
+    fn old_answers_show_while_asked_again() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        // pyr.gg's answers, in turn: found, then unreachable, then gone.
+        let asked = Arc::new(AtomicUsize::new(0));
+        let n = asked.clone();
+        let found = directory::Lookup { link: "pyr://192.0.2.1:7777/abc".into(), name: "Brethren of Blood".into(), ..Default::default() };
+        let answer = found.clone();
+        let lookups = Lookups {
+            map: Default::default(),
+            fetcher: Arc::new(move |_: &str| match n.fetch_add(1, Ordering::SeqCst) {
+                0 => Lookup::Found(answer.clone()),
+                1 => Lookup::Failed("no network".into()),
+                _ => Lookup::Missing,
+            }),
+        };
+        let ctx = egui::Context::default();
+        let settle = |want: usize| {
+            for _ in 0..200 {
+                if asked.load(Ordering::SeqCst) == want && lookups.map.lock().get("abcdefgh").is_some_and(|k| k.asking.is_none()) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            panic!("never answered");
+        };
+        let age = |l: &Lookups| l.map.lock().get_mut("abcdefgh").unwrap().again = Instant::now() - Duration::from_secs(1);
+        // Asked the first time.
+        assert_eq!(lookups.get("abcdefgh", &ctx), Lookup::Pending);
+        settle(1);
+        assert_eq!(lookups.get("abcdefgh", &ctx), Lookup::Found(found.clone()));
+        // Old: asked again, still showing the server meanwhile, and after the asking fails.
+        age(&lookups);
+        assert_eq!(lookups.get("abcdefgh", &ctx), Lookup::Found(found.clone()));
+        settle(2);
+        assert_eq!(lookups.get("abcdefgh", &ctx), Lookup::Found(found.clone()));
+        // (The failure made it ask again sooner.)
+        assert!(lookups.map.lock()["abcdefgh"].again < Instant::now() + Duration::from_secs(16));
+        // Gone now: says so.
+        age(&lookups);
+        assert_eq!(lookups.get("abcdefgh", &ctx), Lookup::Found(found.clone()));
+        settle(3);
+        assert_eq!(lookups.get("abcdefgh", &ctx), Lookup::Missing);
+        // A failure shows as looking up again while it's asked again; Try again asks at once.
+        lookups.map.lock().get_mut("abcdefgh").unwrap().what = Lookup::Failed("x".into());
+        age(&lookups);
+        assert_eq!(lookups.get("abcdefgh", &ctx), Lookup::Pending);
+        settle(4);
+        lookups.forget("abcdefgh");
+        assert_eq!(lookups.get("abcdefgh", &ctx), Lookup::Pending);
+        settle(5);
+    }
+
+    #[test]
     fn times_and_initials() {
         let now = 1_000_000_000;
-        assert_eq!(time_left(now + 7 * 86_400_000, now), "7 days");
-        assert_eq!(time_left(now + 86_400_000 + 5, now), "1 day");
-        assert_eq!(time_left(now + 23 * 3_600_000 + 59 * 60_000, now), "23 hours");
+        // Just made (a few seconds gone): what it was made for.
+        for (secs, says) in [(7 * 86_400, "7 days"), (86_400, "1 day"), (12 * 3600, "12 hours"), (6 * 3600, "6 hours"), (3600, "1 hour"), (1800, "30 minutes")] {
+            assert_eq!(time_left(now + secs * 1000 - 3000, now), says);
+        }
+        assert_eq!(time_left(now + 6 * 86_400_000 + 3 * 3_600_000, now), "6 days");
+        assert_eq!(time_left(now + 20 * 3_600_000, now), "20 hours");
         assert_eq!(time_left(now + 61_000, now), "1 minute");
+        assert_eq!(time_left(now + 20_000, now), "20 seconds");
         assert_eq!(time_left(now - 5, now), "1 second");
         assert_eq!(initials("Brethren of Blood"), "BoB");
         assert_eq!(initials("  "), "?");

@@ -436,9 +436,16 @@ impl PyrApp {
                             egui::Frame::new().fill(theme::CODE_BG()).corner_radius(6).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     let w = (ui.available_width() - 96.0).max(120.0);
-                                    ui.add_sized([w, 26.0], egui::Label::new(RichText::new(&share).font(theme::mono(13.5)).color(theme::TEXT())).truncate().selectable(true));
+                                    ui.allocate_ui_with_layout(vec2(w, 30.0), Layout::left_to_right(Align::Center), |ui| {
+                                        ui.add(egui::Label::new(RichText::new(&share).font(theme::mono(13.5)).color(theme::TEXT())).truncate().selectable(true));
+                                    });
                                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                        let b = if copied { theme::primary_button("Copied") } else { theme::primary_button("Copy") };
+                                        // (Green once copied, like Discord's.)
+                                        let b = if copied {
+                                            egui::Button::new(RichText::new("Copied").font(theme::bold_font(14.0)).color(Color32::WHITE)).fill(theme::ONLINE())
+                                        } else {
+                                            theme::primary_button("Copy")
+                                        };
                                         if ui.add(b.min_size(vec2(84.0, 30.0))).clicked() {
                                             acts.push(Act::Copy(share.clone()));
                                             ui.data_mut(|d| d.insert_temp(copied_id, now));
@@ -484,13 +491,13 @@ impl PyrApp {
                         egui::Frame::new().fill(theme::ELEV()).corner_radius(8).inner_margin(12).show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             field_label(ui, "Expire after");
-                            egui::ComboBox::from_id_salt("invite-expire").width(220.0).selected_text(crate::invites::EXPIRE[expire].0).show_ui(ui, |ui| {
+                            egui::ComboBox::from_id_salt("invite-expire").width(220.0).height(400.0).selected_text(crate::invites::EXPIRE[expire].0).show_ui(ui, |ui| {
                                 for (i, (label, _)) in crate::invites::EXPIRE.iter().enumerate() {
                                     ui.selectable_value(&mut expire, i, *label);
                                 }
                             });
                             field_label(ui, "Max number of uses");
-                            egui::ComboBox::from_id_salt("invite-uses").width(220.0).selected_text(crate::invites::USES[uses].0).show_ui(ui, |ui| {
+                            egui::ComboBox::from_id_salt("invite-uses").width(220.0).height(400.0).selected_text(crate::invites::USES[uses].0).show_ui(ui, |ui| {
                                 for (i, (label, _)) in crate::invites::USES.iter().enumerate() {
                                     ui.selectable_value(&mut uses, i, *label);
                                 }
@@ -509,7 +516,7 @@ impl PyrApp {
                     }
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
-                        if ui.add(theme::primary_button("Done").min_size(vec2(100.0, 34.0))).clicked() {
+                        if ui.add(egui::Button::new("Done").min_size(vec2(100.0, 34.0))).clicked() {
                             close = true;
                         }
                         if let Some(inv) = made.as_ref().filter(|i| i.short.is_some()) {

@@ -3,8 +3,8 @@
 //!
 //! The whole list goes each time, signed with the server's TLS key (the key its invite links
 //! pin): when an invite is made (and its maker waits for pyr.gg's answer before getting the
-//! short link), taken back or used up, and every ten minutes while something changed (how
-//! many are online). A server with nothing listed tells pyr.gg nothing at all.
+//! short link), taken back or used up, and at most once a minute while something else changed
+//! (how many are online). A server with nothing listed tells pyr.gg nothing at all.
 
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
@@ -20,9 +20,9 @@ use tracing::{info, warn};
 use crate::db::Db;
 use crate::hub::Hub;
 
-/// How often the list goes again while something changed (and how long a failed try waits,
-/// at most, before the next).
-const PERIOD: Duration = Duration::from_secs(600);
+/// How often the list goes again while something changed, at most (how many are online, mostly;
+/// a failed try waits up to this long before the next too).
+const PERIOD: Duration = Duration::from_secs(60);
 /// The same list again at least this often (pyr.gg forgets communities it hasn't heard from
 /// in a month).
 const REFRESH: Duration = Duration::from_secs(6 * 3600);
