@@ -1,14 +1,14 @@
-//! Ingle bug reports: anyone can send one (no account) to the server that collects them;
+//! Pyr bug reports: anyone can send one (no account) to the server that collects them;
 //! only its owner reads them and decides which get fixed.
 
 use std::time::{Duration, Instant};
 
-use ingle_engine::state::{BugSend, ConnStatus};
-use ingle_engine::{Engine, EngineOptions};
-use ingle_proto::control::BugStatus;
+use pyr_engine::state::{BugSend, ConnStatus};
+use pyr_engine::{Engine, EngineOptions};
+use pyr_proto::control::BugStatus;
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("ingle-bugs-{}-{}", name, ingle_proto::now_ms()));
+    let d = std::env::temp_dir().join(format!("pyr-bugs-{}-{}", name, pyr_proto::now_ms()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
@@ -26,9 +26,9 @@ async fn wait_for(what: &str, secs: u64, mut cond: impl FnMut() -> bool) {
 
 fn engine(name: &str) -> Engine {
     let dir = temp_dir(name);
-    let cfg = ingle_engine::config::Config { display_name: name.to_string(), ..Default::default() };
-    ingle_engine::config::save_config(&dir, &cfg).unwrap();
-    std::fs::write(dir.join("ingle.log"), "line one\nINFO something useful happened\n").unwrap();
+    let cfg = pyr_engine::config::Config { display_name: name.to_string(), ..Default::default() };
+    pyr_engine::config::save_config(&dir, &cfg).unwrap();
+    std::fs::write(dir.join("pyr.log"), "line one\nINFO something useful happened\n").unwrap();
     Engine::start(EngineOptions { config_dir: Some(dir), push_to_talk: false, audio: None, ..Default::default() }).unwrap()
 }
 
@@ -50,18 +50,18 @@ async fn report(e: &Engine, title: &str, body: &str, include_log: bool, turn_on:
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn reports_reach_only_the_owner() {
-    let server = ingle_server::start(ingle_server::ServerConfig {
+    let server = pyr_server::start(pyr_server::ServerConfig {
         data_dir: temp_dir("server"),
         bind: "127.0.0.1:0".parse().unwrap(),
         public_host: Some("127.0.0.1".into()),
-        name: Some("Ingle HQ".into()),
+        name: Some("Pyr HQ".into()),
     })
     .await
     .unwrap();
-    // Where this "build" of Ingle sends reports.
-    let key = ingle_proto::b64::encode(&server.fingerprint);
+    // Where this "build" of Pyr sends reports.
+    let key = pyr_proto::b64::encode(&server.fingerprint);
     // SAFETY: set before any engine reads it, in this test's own process.
-    unsafe { std::env::set_var("INGLE_BUG_SERVER", format!("127.0.0.1:{}/{key}", server.local_addr.port())) };
+    unsafe { std::env::set_var("PYR_BUG_SERVER", format!("127.0.0.1:{}/{key}", server.local_addr.port())) };
     let (owner, member, stranger) = (engine("Owner"), engine("Member"), engine("Stranger"));
     owner.add_server(&server.owner_link().unwrap()).unwrap();
     let connected = |e: &Engine| e.state().servers.first().map(|s| s.status == ConnStatus::Connected).unwrap_or(false);
@@ -119,12 +119,12 @@ async fn reports_reach_only_the_owner() {
     owner.list_bugs(&key);
     wait_for("approved", 10, || owner.state().bugs[&key].iter().any(|b| b.id == r.id && b.status == BugStatus::Approved)).await;
     // What's approved is saved on the owner's PC for Claude to read, and nothing else is.
-    let saved = owner.shared.config_dir.join(ingle_engine::bugs::APPROVED_DIR).join(format!("{key}.json"));
+    let saved = owner.shared.config_dir.join(pyr_engine::bugs::APPROVED_DIR).join(format!("{key}.json"));
     wait_for("approved saved", 10, || std::fs::read_to_string(&saved).map(|t| t.contains("Voice cuts out")).unwrap_or(false)).await;
     let text = std::fs::read_to_string(&saved).unwrap();
     assert!(text.contains("something useful happened"), "with its log");
     assert!(!text.contains("Owner's own"), "only approved reports are saved");
-    assert!(!member.shared.config_dir.join(ingle_engine::bugs::APPROVED_DIR).exists(), "only the owner's app saves them");
+    assert!(!member.shared.config_dir.join(pyr_engine::bugs::APPROVED_DIR).exists(), "only the owner's app saves them");
     owner.set_bug_status(&key, r.id, BugStatus::Fixed);
     wait_for("fixed: nothing left to fix", 10, || !saved.exists()).await;
 

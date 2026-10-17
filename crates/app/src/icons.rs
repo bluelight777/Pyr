@@ -292,7 +292,7 @@ pub fn smile(p: &Painter, r: Rect, c: Color32) {
     p.add(Shape::line(arc(ctr + vec2(0.0, s * 0.02), s * 0.18, 0.4, PI - 0.4, 10), Stroke::new(s * 0.07, c)));
 }
 
-/// Ingle's campfire: the app icon's fire without its tile (the home button, the welcome screen).
+/// Pyr's campfire: the app icon's fire without its tile (the home button, the welcome screen).
 /// Drawn from the same shapes as the icon (tools/make-icons.py), on the icon's 512 grid: two
 /// logs crossed in an X seen from a little above, lit by the fire.
 pub fn flame(p: &Painter, r: Rect) {

@@ -1,6 +1,6 @@
 //! Warm "campfire" dark theme: colors, fonts and egui style. A skin (see `crate::looks`) can
 //! change the colors, the fonts and put a picture behind the chat: the colors are read
-//! through the functions below, so everything Ingle draws follows the skin in use.
+//! through the functions below, so everything Pyr draws follows the skin in use.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -9,7 +9,7 @@ use eframe::egui::{
     self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle, Visuals,
 };
 
-/// The palette in use, in `ingle_proto::skin::COLORS`' order (0: Campfire's color).
+/// The palette in use, in `pyr_proto::skin::COLORS`' order (0: Campfire's color).
 static PALETTE: [AtomicU32; 25] = [const { AtomicU32::new(0) }; 25];
 /// A skin's colors are in use (not Campfire's).
 static SKINNED: AtomicBool = AtomicBool::new(false);
@@ -20,7 +20,7 @@ static PICTURE_WHOLE_WINDOW: AtomicBool = AtomicBool::new(false);
 
 fn color(i: usize) -> Color32 {
     let v = PALETTE[i].load(Ordering::Relaxed);
-    let [r, g, b] = if v == 0 { ingle_proto::skin::CAMPFIRE[i] } else { [(v >> 16) as u8, (v >> 8) as u8, v as u8] };
+    let [r, g, b] = if v == 0 { pyr_proto::skin::CAMPFIRE[i] } else { [(v >> 16) as u8, (v >> 8) as u8, v as u8] };
     Color32::from_rgb(r, g, b)
 }
 
@@ -165,7 +165,7 @@ pub fn tile_tint(accent: Color32) -> (Color32, Color32) {
 pub fn on_ember() -> Color32 {
     let dark = [0x1b, 0x14, 0x11];
     let e = EMBER();
-    if ingle_proto::skin::contrast(dark, [e.r(), e.g(), e.b()]) >= 4.5 { Color32::from_rgb(dark[0], dark[1], dark[2]) } else { Color32::WHITE }
+    if pyr_proto::skin::contrast(dark, [e.r(), e.g(), e.b()]) >= 4.5 { Color32::from_rgb(dark[0], dark[1], dark[2]) } else { Color32::WHITE }
 }
 
 const AVATARS: [Color32; 8] = [
@@ -224,7 +224,7 @@ pub struct SkinFonts {
     pub scale: f32,
 }
 
-/// Ingle's fonts, with a skin's first (Inter stays behind them for anything they don't have).
+/// Pyr's fonts, with a skin's first (Inter stays behind them for anything they don't have).
 pub fn install_fonts(ctx: &egui::Context, skin: Option<SkinFonts>) {
     let mut fonts = FontDefinitions::default();
     fonts
@@ -239,8 +239,8 @@ pub fn install_fonts(ctx: &egui::Context, skin: Option<SkinFonts>) {
     if let Some(s) = skin {
         let tweak = egui::FontTweak { scale: s.scale.clamp(0.8, 1.25), ..Default::default() };
         // (Each was parsed already: egui stops the app on a font it can't read.)
-        let body = s.body.filter(|f| ingle_engine::skins::font_ok(f));
-        let bold = s.bold.filter(|f| ingle_engine::skins::font_ok(f)).or_else(|| body.clone());
+        let body = s.body.filter(|f| pyr_engine::skins::font_ok(f));
+        let bold = s.bold.filter(|f| pyr_engine::skins::font_ok(f)).or_else(|| body.clone());
         if let Some(f) = body {
             fonts.font_data.insert("skin-body".into(), Arc::new(FontData::from_owned(f).tweak(tweak)));
             prop.insert(0, "skin-body".into());
@@ -341,7 +341,7 @@ pub fn danger_button(text: &str) -> egui::Button<'static> {
 
 /// Window icon: the campfire from `assets/icon` (made by `tools/make-icons.py`).
 pub fn app_icon() -> egui::IconData {
-    let rgba = include_bytes!("../assets/icon/ingle-128.rgba").to_vec();
+    let rgba = include_bytes!("../assets/icon/pyr-128.rgba").to_vec();
     egui::IconData { rgba, width: 128, height: 128 }
 }
 
@@ -351,9 +351,9 @@ mod tests {
 
     #[test]
     fn the_palette_is_the_skins_list_in_its_order() {
-        assert_eq!(NAMES.len(), ingle_proto::skin::COLORS.len());
+        assert_eq!(NAMES.len(), pyr_proto::skin::COLORS.len());
         for (name, i) in NAMES {
-            assert_eq!(ingle_proto::skin::color_index(&name.to_ascii_lowercase()), Some(*i), "{name}");
+            assert_eq!(pyr_proto::skin::color_index(&name.to_ascii_lowercase()), Some(*i), "{name}");
         }
         // Campfire's colors as before skins.
         assert_eq!(MAIN(), Color32::from_rgb(0x26, 0x20, 0x1c));

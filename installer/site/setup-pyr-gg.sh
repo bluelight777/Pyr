@@ -2,7 +2,7 @@
 # Puts the website on https://pyr.gg (and https://www.pyr.gg, which sends people on to
 # https://pyr.gg) on this VPS: an nginx site with a free Let's Encrypt certificate that renews
 # by itself. Until Pyr 0.8.0 is published there, pyr.gg shows the same page and downloads as
-# https://firelitgames.com/ingle/ (it serves that same folder).
+# https://pyr.gg/ (it serves that same folder).
 #
 # Run on the VPS as root:   bash setup-pyr-gg.sh
 #
@@ -187,7 +187,7 @@ command -v curl > /dev/null 2>&1 || die "curl isn't installed on this server."
 nginx -t > /dev/null 2>&1 || die "nginx's settings already have a problem (nginx -t fails). Nothing was changed."
 if ip -4 -o addr show 2>/dev/null | grep -qF " $VPS_IP/"; then CONNECT=$VPS_IP; else CONNECT=127.0.0.1; fi
 
-say "Finding the folder that serves https://$OLD_SITE/ingle/"
+say "Finding the folder that serves https://$OLD_SITE/pyr/"
 dump
 ROOT=""
 TOKEN=$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')
@@ -199,9 +199,9 @@ for R in $(directive root | cut -f2 | awk '{ print $1 }' | sort -u); do
   if [ "$GOT" = "$TOKEN" ]; then ROOT=$R; break; fi
 done
 [ -n "$ROOT" ] || die "Couldn't find the folder that serves https://$OLD_SITE/. Nothing was changed."
-INGLE=$ROOT/ingle
-[ -f "$INGLE/index.html" ] && [ -f "$INGLE/latest.json" ] || die "$INGLE doesn't hold the Ingle page. Nothing was changed."
-if [ -f "$PYR_DIR/index.html" ] && [ ! -L "$PYR_DIR" ]; then SITE_ROOT=$PYR_DIR; else SITE_ROOT=$INGLE; fi
+PYR=$ROOT/pyr
+[ -f "$PYR/index.html" ] && [ -f "$PYR/latest.json" ] || die "$PYR doesn't hold the Pyr page. Nothing was changed."
+if [ -f "$PYR_DIR/index.html" ] && [ ! -L "$PYR_DIR" ]; then SITE_ROOT=$PYR_DIR; else SITE_ROOT=$PYR; fi
 note "pyr.gg will show $SITE_ROOT"
 
 # Next to the file that has firelitgames.com's settings, named to come after it (so pyr.gg
@@ -257,7 +257,7 @@ if [ -f "$LIVE/fullchain.pem" ] && [ -f "$LIVE/privkey.pem" ] && [ -f "$CONF" ] 
   note "already on (with its certificate); leaving it as it is for now"
 else
   cat > "$WORK/http.conf" <<EOF
-# https://$DOMAIN and https://$WWW: Pyr (Ingle's new name), by Firelit Games.
+# https://$DOMAIN and https://$WWW: Pyr (Pyr's new name), by Firelit Games.
 # Written by setup-pyr-gg.sh; running it again writes this again.
 server {
 $(listen_lines 80)
@@ -331,7 +331,7 @@ TLS="    ssl_certificate $LIVE/fullchain.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     add_header Strict-Transport-Security \"max-age=31536000\" always;"
 cat > "$WORK/https.conf" <<EOF
-# https://$DOMAIN and https://$WWW: Pyr (Ingle's new name), by Firelit Games.
+# https://$DOMAIN and https://$WWW: Pyr (Pyr's new name), by Firelit Games.
 # Written by setup-pyr-gg.sh; running it again writes this again. The certificate is
 # Let's Encrypt's, in $LIVE, and certbot renews it by itself.
 server {
@@ -432,7 +432,7 @@ fi
 
 echo
 if [ "$PROBLEMS" -eq 0 ]; then
-  echo "Done: https://$DOMAIN is up, with the same page and downloads as https://$OLD_SITE/ingle/ for now."
+  echo "Done: https://$DOMAIN is up, with the same page and downloads as https://$OLD_SITE/pyr/ for now."
   echo "https://$WWW sends people to https://$DOMAIN. The certificate renews by itself."
 else
   echo "https://$DOMAIN is on, but $PROBLEMS check(s) above weren't right."

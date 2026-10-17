@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use eframe::egui::{self, Color32, CornerRadius, Rect, RichText, Sense, Stroke, pos2, vec2};
 
-use crate::app::{Act, IngleApp};
+use crate::app::{Act, PyrApp};
 use crate::theme;
 
 /// What the framed picture becomes.
@@ -33,8 +33,8 @@ pub struct AvatarCrop {
 
 impl AvatarCrop {
     pub fn new(bytes: Vec<u8>, target: CropTarget) -> Result<AvatarCrop, String> {
-        let img = crate::images::load_limited(&bytes).map_err(|_| "That file isn't an image Ingle can read (or it's too large).".to_string())?;
-        let key = format!("crop:{}", ingle_proto::release::sha256_hex(&bytes));
+        let img = crate::images::load_limited(&bytes).map_err(|_| "That file isn't an image Pyr can read (or it's too large).".to_string())?;
+        let key = format!("crop:{}", pyr_proto::release::sha256_hex(&bytes));
         Ok(AvatarCrop {
             bytes: Arc::new(bytes),
             target,
@@ -64,7 +64,7 @@ impl AvatarCrop {
 const BOX: f32 = 320.0;
 const CIRCLE: f32 = 260.0;
 
-impl IngleApp {
+impl PyrApp {
     pub(crate) fn avatar_editor(&mut self, ctx: &egui::Context, acts: &mut Vec<Act>) {
         let Some(mut c) = self.ui.avatar_crop.take() else { return };
         let mut keep = true;

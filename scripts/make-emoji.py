@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Builds Ingle's colour emoji assets from Twemoji (graphics CC-BY 4.0, by Twitter/X and
+"""Builds Pyr's colour emoji assets from Twemoji (graphics CC-BY 4.0, by Twitter/X and
 contributors) and Emojibase (names, groups and shortcodes, MIT).
 
   npm pack @twemoji/svg emojibase-data   # then unpack both
@@ -80,7 +80,7 @@ for name, adv in [("blank", 1000), ("zero", 0)]:
     fb.setupGlyf({".notdef": empty, "blank": empty})
     fb.setupHorizontalMetrics({".notdef": (adv, 0), "blank": (adv, 0)})
     fb.setupHorizontalHeader(ascent=800, descent=-200)
-    fb.setupNameTable({"familyName": "Ingle Emoji " + name, "styleName": "Regular"})
+    fb.setupNameTable({"familyName": "Pyr Emoji " + name, "styleName": "Regular"})
     fb.setupOS2(sTypoAscender=800, sTypoDescender=-200, usWinAscent=800, usWinDescent=200)
     fb.setupPost()
     fb.save(os.path.join(out, name + ".ttf"))

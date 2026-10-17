@@ -1,18 +1,18 @@
 [package]
-name = "ingle-dice"
+name = "pyr-dice"
 version = "1.0.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-description = "Dice for Ingle: /roll 2d6+1 in chat, or roll from its panel."
+description = "Dice for Pyr: /roll 2d6+1 in chat, or roll from its panel."
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-ingle-plugin = { path = "../kit" }
+pyr-plugin = { path = "../kit" }
 
-# What the Ingle Library shows about it.
-[package.metadata.ingle]
+# What the Pyr Library shows about it.
+[package.metadata.pyr]
 kind = "addon"
 name = "Dice"
 summary = "Roll dice in chat with /roll 2d6+1, or from its panel."

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Draw the Ingle icon (a campfire on a warm dark tile) and export every size we ship.
+"""Draw the Pyr icon (a campfire on a warm dark tile) and export every size we ship.
 
     python3 tools/make-icons.py
 
 Writes into crates/app/assets/icon/:
-    ingle.ico          Windows icon (16-256 px) for the .exe, shortcuts, tray and installer
-    ingle-<N>.png      16-512 px for the Linux app menu (hicolor theme)
-    ingle-128.rgba     raw RGBA the app uses as its window icon
+    pyr.ico          Windows icon (16-256 px) for the .exe, shortcuts, tray and installer
+    pyr-<N>.png      16-512 px for the Linux app menu (hicolor theme)
+    pyr-128.rgba     raw RGBA the app uses as its window icon
 plus installer/windows/welcome.bmp (the side picture of the Windows setup wizard) and
-installer/site/ingle-icon.png (the download page's logo and favicon).
+installer/site/pyr-icon.png (the download page's logo and favicon).
 Needs Pillow 8.2 or newer (pip install pillow).
 
 The scene is a three-quarter view from about 25 degrees above the ground, and the logs follow it:
@@ -303,7 +303,7 @@ def welcome_bitmap(icon):
     except OSError:
         font = small = ImageFont.load_default()
     d = ImageDraw.Draw(img)
-    d.text((w / 2, 226), "Ingle", font=font, fill=(0xf4, 0xe9, 0xdf), anchor="mm")
+    d.text((w / 2, 226), "Pyr", font=font, fill=(0xf4, 0xe9, 0xdf), anchor="mm")
     d.text((w / 2, 254), "gather round", font=small, fill=(0xc9, 0x9a, 0x78), anchor="mm")
     out = os.path.join(HERE, "..", "installer", "windows", "welcome.bmp")
     os.makedirs(os.path.dirname(out), exist_ok=True)
@@ -317,13 +317,13 @@ def main():
     for n in (40, 48, 64, 128, 256, 512):
         frames[n] = big.resize((n, n), Image.LANCZOS)
     for n in (16, 32, 48, 64, 128, 256, 512):
-        frames[n].save(os.path.join(OUT, f"ingle-{n}.png"))
+        frames[n].save(os.path.join(OUT, f"pyr-{n}.png"))
     ico = [frames[n] for n in (16, 20, 24, 32, 40, 48, 64, 128)]
-    frames[256].save(os.path.join(OUT, "ingle.ico"), sizes=[(n, n) for n in (16, 20, 24, 32, 40, 48, 64, 128, 256)], append_images=ico)
-    with open(os.path.join(OUT, "ingle-128.rgba"), "wb") as f:
+    frames[256].save(os.path.join(OUT, "pyr.ico"), sizes=[(n, n) for n in (16, 20, 24, 32, 40, 48, 64, 128, 256)], append_images=ico)
+    with open(os.path.join(OUT, "pyr-128.rgba"), "wb") as f:
         f.write(frames[128].tobytes())
     welcome_bitmap(big)
-    frames[256].save(os.path.join(ROOT, "installer", "site", "ingle-icon.png"))
+    frames[256].save(os.path.join(ROOT, "installer", "site", "pyr-icon.png"))
     print("icons written to", os.path.normpath(OUT))
 
 

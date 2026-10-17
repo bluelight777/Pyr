@@ -3,41 +3,47 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Ingle: voice, video and chat for your group, on your own server</title>
-<meta name="description" content="Ingle is a free app for your group: voice channels, webcams, 1080p60 screen sharing and Discord-style chat. No account to make, and a server your group owns.">
-<link rel="canonical" href="https://firelitgames.com/ingle/">
+<script>
+  // Pyr was called Ingle, and its page was firelitgames.com/ingle, which serves this same page
+  // (copies from before the rename still find their updates there). People who come to it go
+  // on to pyr.gg, an invite after the # included.
+  if (/(^|\.)firelitgames\.com$/i.test(location.hostname)) location.replace("https://pyr.gg/" + location.hash);
+</script>
+<title>Pyr: voice, video and chat for your group, on your own server</title>
+<meta name="description" content="Pyr is a free app for your group: voice channels, webcams, 1080p60 screen sharing and Discord-style chat. No account to make, and a server your group owns.">
+<link rel="canonical" href="https://pyr.gg/">
 <meta name="theme-color" content="#ff7a3d">
 <meta name="color-scheme" content="dark">
 <link rel="icon" type="image/png" sizes="64x64" href="assets/img/favicon-64.png">
-<link rel="icon" type="image/png" sizes="256x256" href="ingle-icon.png">
+<link rel="icon" type="image/png" sizes="256x256" href="pyr-icon.png">
 <link rel="apple-touch-icon" href="assets/img/apple-touch-icon.png">
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="Ingle by Firelit Games">
-<meta property="og:title" content="Ingle: hang out with your friends on a server you own">
+<meta property="og:site_name" content="Pyr by Firelit Games">
+<meta property="og:title" content="Pyr: hang out with your friends on a server you own">
 <meta property="og:description" content="Voice channels, webcams, free 1080p60 screen sharing and Discord-style chat. No account to make. Free for Windows and Linux.">
-<meta property="og:url" content="https://firelitgames.com/ingle/">
-<meta property="og:image" content="https://firelitgames.com/ingle/assets/img/og.jpg">
+<meta property="og:url" content="https://pyr.gg/">
+<meta property="og:image" content="https://pyr.gg/assets/img/og.jpg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="Ingle: voice, video and chat for your group, on a server you own">
+<meta property="og:image:alt" content="Pyr: voice, video and chat for your group, on a server you own">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Ingle: hang out with your friends on a server you own">
+<meta name="twitter:title" content="Pyr: hang out with your friends on a server you own">
 <meta name="twitter:description" content="Voice channels, webcams, free 1080p60 screen sharing and Discord-style chat. No account to make.">
-<meta name="twitter:image" content="https://firelitgames.com/ingle/assets/img/og.jpg">
+<meta name="twitter:image" content="https://pyr.gg/assets/img/og.jpg">
 <link rel="preload" href="assets/fonts/bricolage-grotesque.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/inter.woff2" as="font" type="font/woff2" crossorigin>
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
-  "name": "Ingle",
+  "name": "Pyr",
   "applicationCategory": "CommunicationApplication",
   "operatingSystem": "Windows 10, Windows 11, Linux",
   "softwareVersion": "{{VERSION}}",
   "description": "Voice channels, webcams, 1080p60 screen sharing and Discord-style chat for your group, on a server you own. No account to make.",
-  "url": "https://firelitgames.com/ingle/",
-  "downloadUrl": "https://firelitgames.com/ingle/Ingle-Setup.exe",
-  "image": "https://firelitgames.com/ingle/assets/img/og.jpg",
+  "url": "https://pyr.gg/",
+  "downloadUrl": "https://pyr.gg/Pyr-Setup.exe",
+  "image": "https://pyr.gg/assets/img/og.jpg",
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
   "publisher": { "@type": "Organization", "name": "Firelit Games, LLC", "url": "https://firelitgames.com/" }
 }
@@ -357,6 +363,8 @@ footer { margin-top: 110px; border-top: 1px solid var(--line); padding: 54px 0 6
 .foot a:hover { color: var(--text); }
 .foot .brand { margin-bottom: 14px; }
 .legal { margin-top: 40px; display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 12.5px; }
+.invite-old { margin: 6px 0 0; font-size: 12.5px; color: var(--dim); }
+.invite-old a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .disclaimer { margin: 12px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--dim); }
 
 /* install dialog */
@@ -475,7 +483,7 @@ dialog[open] { animation: pop .35s var(--ease); }
 
 <header class="top" id="top">
   <div class="wrap">
-    <a class="brand" href="#main" aria-label="Ingle, home"><img src="ingle-icon.png" alt="" width="34" height="34">Ingle<span>by Firelit Games</span></a>
+    <a class="brand" href="#main" aria-label="Pyr, home"><img src="pyr-icon.png" alt="" width="34" height="34">Pyr<span>by Firelit Games</span></a>
     <nav class="nav" aria-label="Sections">
       <a href="#features">Features</a>
       <a href="#how">How it works</a>
@@ -483,7 +491,7 @@ dialog[open] { animation: pop .35s var(--ease); }
       <a href="#plugins">Plugins</a>
       <a href="#faq">FAQ</a>
     </nav>
-    <a class="btn btn-fire btn-small dl" href="Ingle-Setup.exe" data-os="win">Download</a>
+    <a class="btn btn-fire btn-small dl" href="Pyr-Setup.exe" data-os="win">Download</a>
   </div>
 </header>
 
@@ -496,11 +504,12 @@ dialog[open] { animation: pop .35s var(--ease); }
       <div class="invite-card">
         <svg class="flame" viewBox="0 0 48 48" aria-hidden="true"><defs><linearGradient id="fl1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffd27a"/><stop offset=".55" stop-color="#ff8a3d"/><stop offset="1" stop-color="#ff5a3a"/></linearGradient></defs><path fill="url(#fl1)" d="M24 4c2 7 10 11 10 21a10 10 0 0 1-20 0c0-5 3-8 5-10 0 4 2 6 4 6-2-6 1-12 1-17z"/><path fill="#fff1c7" opacity=".85" d="M24 22c1 3 5 5 5 9a5 5 0 0 1-10 0c0-3 2-4 3-5 0 2 1 3 2 3-1-3 0-5 0-7z"/></svg>
         <div class="what">
-          <strong>You're invited to <span id="invite-name">an Ingle server</span>!</strong>
-          <p id="invite-how">Get Ingle (it's free), then open your invite to join.</p>
+          <strong>You're invited to <span id="invite-name">a Pyr server</span>!</strong>
+          <p id="invite-how">Get Pyr (it's free), then open your invite to join.</p>
+          <p class="invite-old">Still on Ingle, Pyr's old name? <a id="invite-open-old" href="#">Open it in Ingle</a> (it updates to Pyr by itself).</p>
         </div>
         <div class="acts">
-          <a class="btn btn-small" id="invite-open" href="#">Open invite in Ingle</a>
+          <a class="btn btn-small" id="invite-open" href="#">Open invite in Pyr</a>
           <button class="copy" type="button" id="invite-copy">Copy invite</button>
         </div>
       </div>
@@ -513,26 +522,26 @@ dialog[open] { animation: pop .35s var(--ease); }
 
         <div class="desk-cta">
           <div class="cta">
-            <a class="btn btn-fire dl" href="Ingle-Setup.exe" data-os="win" id="cta-main">
+            <a class="btn btn-fire dl" href="Pyr-Setup.exe" data-os="win" id="cta-main">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 19h16"/></svg>
               <span class="two"><span id="cta-main-label">Download for Windows</span><small id="cta-main-sub">Free · Windows 10 and 11</small></span>
             </a>
-            <a class="btn dl" href="ingle_amd64.deb" data-os="linux" id="cta-alt">
+            <a class="btn dl" href="pyr_amd64.deb" data-os="linux" id="cta-alt">
               <span class="two"><span id="cta-alt-label">Get it for Linux</span><small id="cta-alt-sub">Ubuntu, Mint, Debian (.deb)</small></span>
             </a>
           </div>
           <p class="meta">Version <b data-version>{{VERSION}}</b> · <span data-size>{{WIN_MB}} MB</span> · Updated <span data-date>{{DATE}}</span></p>
-          <p class="mac-note">Ingle isn't on Mac yet. It runs on Windows and Linux PCs.</p>
+          <p class="mac-note">Pyr isn't on Mac yet. It runs on Windows and Linux PCs.</p>
         </div>
         <div class="mobile-cta">
           <div class="cta">
             <button class="btn btn-fire" type="button" id="send-pc">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
-              <span class="two"><span>Send it to my computer</span><small>Ingle runs on Windows and Linux PCs</small></span>
+              <span class="two"><span>Send it to my computer</span><small>Pyr runs on Windows and Linux PCs</small></span>
             </button>
-            <a class="btn" id="mail-pc" href="mailto:?subject=Ingle&amp;body=https%3A%2F%2Ffirelitgames.com%2Fingle%2F">Email me the link</a>
+            <a class="btn" id="mail-pc" href="mailto:?subject=Pyr&amp;body=https%3A%2F%2Fpyr.gg%2F">Email me the link</a>
           </div>
-          <p>Open this page on your PC to download. Ingle isn't on phones yet.</p>
+          <p>Open this page on your PC to download. Pyr isn't on phones yet.</p>
         </div>
 
         <ul class="ticks">
@@ -544,8 +553,8 @@ dialog[open] { animation: pop .35s var(--ease); }
 
       <div class="stage">
         <div class="window">
-          <div class="bar" aria-hidden="true"><i></i><i></i><i></i><span>Ingle</span></div>
-          <img src="assets/img/chat.webp" width="1280" height="900" alt="Ingle's window: a server's text channel with pictures, reactions and replies, the channel list with a voice channel, and who's online." fetchpriority="high">
+          <div class="bar" aria-hidden="true"><i></i><i></i><i></i><span>Pyr</span></div>
+          <img src="assets/img/chat.webp" width="1280" height="900" alt="Pyr's window: a server's text channel with pictures, reactions and replies, the channel list with a voice channel, and who's online." fetchpriority="high">
         </div>
         <div class="float f-code" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
@@ -572,7 +581,7 @@ dialog[open] { animation: pop .35s var(--ease); }
     <div class="head" data-reveal>
       <span class="eyebrow">Everything in one app</span>
       <h2 id="features-title">All the good parts of Discord. <span class="serif fire-text">None of the strings.</span></h2>
-      <p>Ingle works the way your group already does, so it feels familiar from the first minute. The difference is who it answers to: you.</p>
+      <p>Pyr works the way your group already does, so it feels familiar from the first minute. The difference is who it answers to: you.</p>
     </div>
 
     <div class="bento">
@@ -595,7 +604,7 @@ dialog[open] { animation: pop .35s var(--ease); }
       <article class="card t-sound" data-reveal>
         <div class="icon-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M15 15a4 4 0 0 1 4 4M15 18.5a.5.5 0 0 1 .5.5"/></svg></div>
         <h3>A soundboard everyone hears</h3>
-        <p>Ingle's own sounds and up to 200 of your server's, ready in any call. Play them with a key, even in a game.</p>
+        <p>Pyr's own sounds and up to 200 of your server's, ready in any call. Play them with a key, even in a game.</p>
         <div class="shot"><img src="assets/img/soundboard-popup.webp" width="504" height="370" alt="The soundboard: Air horn, Applause, Ba dum tss, Campfire and more." loading="lazy"></div>
       </article>
 
@@ -610,7 +619,7 @@ dialog[open] { animation: pop .35s var(--ease); }
         <div class="icon-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></div>
         <h3>Your server, on any host</h3>
         <p>Rent a small one in your own DigitalOcean account in a few minutes, or use any VPS you have. A backup moves it anywhere, history and all.</p>
-        <div class="shot"><img src="assets/img/rent-dialog.webp" width="626" height="618" alt="Renting a server in Ingle: pick a size from $4 a month and a place near you." loading="lazy"></div>
+        <div class="shot"><img src="assets/img/rent-dialog.webp" width="626" height="618" alt="Renting a server in Pyr: pick a size from $4 a month and a place near you." loading="lazy"></div>
       </article>
 
       <article class="card t-private" data-reveal>
@@ -655,13 +664,13 @@ dialog[open] { animation: pop .35s var(--ease); }
     <div class="head center" data-reveal>
       <span class="eyebrow">Set up in minutes</span>
       <h2 id="how-title">From nothing to voice chat in <span class="serif fire-text">three steps</span></h2>
-      <p>Only one person in your group needs a server. Everyone else just installs Ingle and clicks the invite.</p>
+      <p>Only one person in your group needs a server. Everyone else just installs Pyr and clicks the invite.</p>
     </div>
     <div class="steps">
       <div class="step" data-reveal>
         <span class="num">1</span>
-        <h3>Install Ingle</h3>
-        <p>Download it free for Windows or Linux. There's no account to make: Ingle creates your identity on your PC.</p>
+        <h3>Install Pyr</h3>
+        <p>Download it free for Windows or Linux. There's no account to make: Pyr creates your identity on your PC.</p>
       </div>
       <div class="step" data-reveal>
         <span class="num">2</span>
@@ -672,7 +681,7 @@ dialog[open] { animation: pop .35s var(--ease); }
       <div class="step" data-reveal>
         <span class="num">3</span>
         <h3>Invite your friends</h3>
-        <p>Send the invite link. Friends install Ingle and open it, and they're in, with every channel ready.</p>
+        <p>Send the invite link. Friends install Pyr and open it, and they're in, with every channel ready.</p>
       </div>
     </div>
   </div>
@@ -681,13 +690,13 @@ dialog[open] { animation: pop .35s var(--ease); }
 <section class="sec" id="compare" aria-labelledby="compare-title">
   <div class="wrap">
     <div class="head" data-reveal>
-      <span class="eyebrow">Ingle and Discord</span>
+      <span class="eyebrow">Pyr and Discord</span>
       <h2 id="compare-title">An honest comparison</h2>
-      <p>Discord does a lot well. Here's where Ingle is different, side by side with Discord's free plan.</p>
+      <p>Discord does a lot well. Here's where Pyr is different, side by side with Discord's free plan.</p>
     </div>
 
-    <div class="compare" role="table" aria-label="Ingle compared with Discord's free plan" data-reveal>
-      <div class="crow head-row" role="row"><span class="k" role="columnheader"><span class="sr">Feature</span></span><span class="us" role="columnheader">Ingle</span><span class="them" role="columnheader">Discord (free)</span></div>
+    <div class="compare" role="table" aria-label="Pyr compared with Discord's free plan" data-reveal>
+      <div class="crow head-row" role="row"><span class="k" role="columnheader"><span class="sr">Feature</span></span><span class="us" role="columnheader">Pyr</span><span class="them" role="columnheader">Discord (free)</span></div>
       <div class="crow" role="row"><span class="k" role="rowheader">Screen sharing</span><span class="us" role="cell"><i class="yes" aria-hidden="true">✓</i>Up to 1080p60, or 1440p30, free</span><span class="them" role="cell"><i class="meh" aria-hidden="true">–</i>720p30. 1080p60 needs Nitro, or a server with 7 boosts</span></div>
       <div class="crow" role="row"><span class="k" role="rowheader">Voice quality</span><span class="us" role="cell"><i class="yes" aria-hidden="true">✓</i>64 kbps, up to 192 kbps</span><span class="them" role="cell"><i class="meh" aria-hidden="true">–</i>Up to 96 kbps (more with boosts)</span></div>
       <div class="crow" role="row"><span class="k" role="rowheader">Account</span><span class="us" role="cell"><i class="yes" aria-hidden="true">✓</i>None: a key on your PC</span><span class="them" role="cell"><i class="meh" aria-hidden="true">–</i>Email account; age checks for some people</span></div>
@@ -700,9 +709,9 @@ dialog[open] { animation: pop .35s var(--ease); }
 
     <div class="anchor">
       <div class="card ours" data-reveal>
-        <p style="margin:0 0 10px;color:var(--ember-2);font-size:13px;font-weight:650;letter-spacing:.1em;text-transform:uppercase">Streaming in 1080p60 on Ingle</p>
+        <p style="margin:0 0 10px;color:var(--ember-2);font-size:13px;font-weight:650;letter-spacing:.1em;text-transform:uppercase">Streaming in 1080p60 on Pyr</p>
         <div class="price">$0<small> for everyone</small></div>
-        <p>Ingle is free. Your group's server costs about $4–6 a month in all, billed by your host, or nothing on a PC you leave on.</p>
+        <p>Pyr is free. Your group's server costs about $4–6 a month in all, billed by your host, or nothing on a PC you leave on.</p>
       </div>
       <div class="card" data-reveal>
         <p style="margin:0 0 10px;color:var(--dim);font-size:13px;font-weight:650;letter-spacing:.1em;text-transform:uppercase">Streaming in 1080p60 on Discord</p>
@@ -720,7 +729,7 @@ dialog[open] { animation: pop .35s var(--ease); }
         <li>Nothing to host: they run the servers</li>
       </ul>
     </div>
-    <p class="sources">Discord details from <a href="https://support.discord.com/hc/en-us/articles/360040816151-Go-Live-and-Screen-Share" rel="noopener">Go Live and Screen Share</a>, <a href="https://support.discord.com/hc/en-us/articles/360028038352-Server-Boosting-FAQ" rel="noopener">Server Boosting FAQ</a>, <a href="https://discord.com/nitro" rel="noopener">Nitro</a> and <a href="https://discord.com/blog/every-voice-and-video-call-on-discord-is-now-end-to-end-encrypted" rel="noopener">Discord's blog</a>, checked October 2026. Prices in US dollars. Discord is a trademark of Discord Inc.; Ingle isn't connected with Discord.</p>
+    <p class="sources">Discord details from <a href="https://support.discord.com/hc/en-us/articles/360040816151-Go-Live-and-Screen-Share" rel="noopener">Go Live and Screen Share</a>, <a href="https://support.discord.com/hc/en-us/articles/360028038352-Server-Boosting-FAQ" rel="noopener">Server Boosting FAQ</a>, <a href="https://discord.com/nitro" rel="noopener">Nitro</a> and <a href="https://discord.com/blog/every-voice-and-video-call-on-discord-is-now-end-to-end-encrypted" rel="noopener">Discord's blog</a>, checked October 2026. Prices in US dollars. Discord is a trademark of Discord Inc.; Pyr isn't connected with Discord.</p>
   </div>
 </section>
 
@@ -728,8 +737,8 @@ dialog[open] { animation: pop .35s var(--ease); }
   <div class="wrap">
     <div class="head" data-reveal>
       <span class="eyebrow">New: Plugins and skins</span>
-      <h2 id="plugins-title">Make Ingle do <span class="serif fire-text">more.</span></h2>
-      <p>Install programs, add-ons and skins from the Ingle Library, right inside Ingle. Every plugin is built from its Rust source code, and only after someone has read it.</p>
+      <h2 id="plugins-title">Make Pyr do <span class="serif fire-text">more.</span></h2>
+      <p>Install programs, add-ons and skins from the Pyr Library, right inside Pyr. Every plugin is built from its Rust source code, and only after someone has read it.</p>
     </div>
     <div class="plug-grid">
       <article class="card plug-hero" data-reveal>
@@ -737,7 +746,7 @@ dialog[open] { animation: pop .35s var(--ease); }
           <img src="assets/img/chimbrowser-icon.png" width="64" height="64" alt="">
           <div><span class="kind">Program · Windows</span><h3>Chimbrowser</h3></div>
         </div>
-        <p>A lean, private browser: it blocks ads and trackers, makes YouTube play smoothly, and has an AI sidebar for Claude, ChatGPT, Gemini and others. Install it, and it opens right inside Ingle.</p>
+        <p>A lean, private browser: it blocks ads and trackers, makes YouTube play smoothly, and has an AI sidebar for Claude, ChatGPT, Gemini and others. Install it, and it opens right inside Pyr.</p>
         <div class="tags"><span class="tag">Blocks ads and trackers</span><span class="tag">Smooth YouTube</span><span class="tag">AI sidebar</span></div>
         <div class="shot"><img src="assets/img/chimbrowser.webp" width="1280" height="820" alt="Chimbrowser's new tab page: search privately, with shortcuts to YouTube, Claude, Gemini and ChatGPT." loading="lazy"></div>
       </article>
@@ -745,28 +754,28 @@ dialog[open] { animation: pop .35s var(--ease); }
         <article class="card" data-reveal>
           <div class="icon-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 7v10l8 4 8-4V7z"/><path d="m4 7 8 4 8-4M12 11v10"/></svg></div>
           <h3>Add-ons, sealed off from your PC</h3>
-          <p>Add-ons run inside Ingle in a sandbox. They can't touch your files or the internet, and they only do what you allow. The first one, Dice, rolls in chat: <code>/roll 2d6+1</code>.</p>
+          <p>Add-ons run inside Pyr in a sandbox. They can't touch your files or the internet, and they only do what you allow. The first one, Dice, rolls in chat: <code>/roll 2d6+1</code>.</p>
         </article>
         <article class="card" data-reveal>
           <div class="icon-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg></div>
           <h3>Make your own with Claude</h3>
-          <p>Add Ingle's Claude connector in Settings → Claude, and Claude can build a skin or a plugin with you, show the skin on your Ingle while you talk it over, and send it to the Ingle Library, where it's reviewed before anyone else sees it. The <a href="https://github.com/bluelight777/ingle/tree/main/plugins" rel="noopener">plugin kit</a> has everything Claude needs.</p>
+          <p>Add Pyr's Claude connector in Settings → Claude, and Claude can build a skin or a plugin with you, show the skin on your Pyr while you talk it over, and send it to the Pyr Library, where it's reviewed before anyone else sees it. The <a href="https://github.com/bluelight777/pyr/tree/main/plugins" rel="noopener">plugin kit</a> has everything Claude needs.</p>
         </article>
         <article class="card" data-reveal>
           <div class="icon-chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4.5 6v6c0 4.4 3.2 8.1 7.5 9 4.3-.9 7.5-4.6 7.5-9V6z"/><path d="m8.6 12.2 2.4 2.4 4.4-4.8"/></svg></div>
           <h3>Checked every time</h3>
-          <p>Ingle checks every file against the library's signed list before it installs a plugin or a skin, and again each time a program opens.</p>
+          <p>Pyr checks every file against the library's signed list before it installs a plugin or a skin, and again each time a program opens.</p>
         </article>
       </div>
     </div>
     <article class="card skin-row" data-reveal>
       <div class="skin-text">
         <span class="kind">Skin · in the Library</span>
-        <h3>Skins: Ingle in your colors</h3>
-        <p>Change Ingle's colors, put a picture behind the chat, and bring fonts and sounds of your own. Skins have no code, and Ingle checks every file before it uses one. Blood Moon is the first; Settings → Appearance brings back Campfire any time.</p>
+        <h3>Skins: Pyr in your colors</h3>
+        <p>Change Pyr's colors, put a picture behind the chat, and bring fonts and sounds of your own. Skins have no code, and Pyr checks every file before it uses one. Blood Moon is the first; Settings → Appearance brings back Campfire any time.</p>
         <div class="tags"><span class="tag">Colors</span><span class="tag">A picture behind the chat</span><span class="tag">Fonts and sounds</span></div>
       </div>
-      <div class="shot"><img src="assets/img/skin-blood-moon.webp" width="1280" height="720" alt="Ingle wearing the Blood Moon skin: deep reds, with a blood-red moon rising over a ridge of pines behind the chat." loading="lazy"></div>
+      <div class="shot"><img src="assets/img/skin-blood-moon.webp" width="1280" height="720" alt="Pyr wearing the Blood Moon skin: deep reds, with a blood-red moon rising over a ridge of pines behind the chat." loading="lazy"></div>
     </article>
   </div>
 </section>
@@ -781,21 +790,21 @@ dialog[open] { animation: pop .35s var(--ease); }
       <div class="card" data-reveal>
         <ul class="checks">
           <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg><span><b>Over 200 automated tests run before each release:</b> real calls between real apps over the network, 1080p screen shares, stream sound that reaches only viewers, voice through server restarts, and backups restored on another server.</span></li>
-          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg><span><b>Signed updates.</b> Ingle only installs updates signed with Firelit Games' key, and won't take an old or expired one.</span></li>
-          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg><span><b>Open source.</b> The code is <a href="https://github.com/bluelight777/ingle" rel="noopener">on GitHub</a> under the MIT or Apache 2.0 license.</span></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg><span><b>Signed updates.</b> Pyr only installs updates signed with Firelit Games' key, and won't take an old or expired one.</span></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg><span><b>Open source.</b> The code is <a href="https://github.com/bluelight777/pyr" rel="noopener">on GitHub</a> under the MIT or Apache 2.0 license.</span></li>
           <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg><span><b>Honest about gaps.</b> Not tested yet: renting through DigitalOcean's real website, and real cloud firewalls. Not built yet: phone and Mac apps, and end-to-end encrypted messages (coming in 0.8).</span></li>
         </ul>
         <div class="links">
-          <a class="btn btn-small" href="https://github.com/bluelight777/ingle" rel="noopener">
+          <a class="btn btn-small" href="https://github.com/bluelight777/pyr" rel="noopener">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 7-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg>Read the code</a>
-          <a class="btn btn-small btn-ghost" href="https://github.com/bluelight777/ingle#how-its-tested" rel="noopener">How it's tested</a>
+          <a class="btn btn-small btn-ghost" href="https://github.com/bluelight777/pyr#how-its-tested" rel="noopener">How it's tested</a>
         </div>
       </div>
       <div class="card release" data-reveal>
         <span class="eyebrow">Latest release</span>
-        <h3 style="margin-top:14px">What's new in Ingle <span data-version>{{VERSION}}</span></h3>
+        <h3 style="margin-top:14px">What's new in Pyr <span data-version>{{VERSION}}</span></h3>
         <p class="when">Released <span data-date>{{DATE}}</span></p>
-        <ul id="notes"><li>See the full list in Ingle after you update.</li></ul>
+        <ul id="notes"><li>See the full list in Pyr after you update.</li></ul>
       </div>
     </div>
   </div>
@@ -813,13 +822,13 @@ dialog[open] { animation: pop .35s var(--ease); }
       <path fill="#7a4a2e" d="M26 100l64-14 4 8-64 14z"/><path fill="#5e3822" d="M94 100 30 86l-4 8 64 14z"/>
     </svg></div>
     <h2 id="final-title">Light your group's <span class="serif fire-text">fire.</span></h2>
-    <p><em>Ingle</em> is an old Scots word for the fire in a hearth: the place people gather. Free for Windows and Linux.</p>
+    <p><em>Pyr</em> is the ancient Greek word for fire: the campfire your group gathers around. Free for Windows and Linux.</p>
     <div class="cta desk-cta">
-      <a class="btn btn-fire dl" href="Ingle-Setup.exe" data-os="win" id="cta-final">
+      <a class="btn btn-fire dl" href="Pyr-Setup.exe" data-os="win" id="cta-final">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 19h16"/></svg>
         <span class="two"><span id="cta-final-label">Download for Windows</span><small>Free · Version <span data-version>{{VERSION}}</span></small></span>
       </a>
-      <a class="btn dl" href="ingle_amd64.deb" data-os="linux" id="cta-final-alt">Get it for Linux</a>
+      <a class="btn dl" href="pyr_amd64.deb" data-os="linux" id="cta-final-alt">Get it for Linux</a>
     </div>
     <div class="cta mobile-cta"><button class="btn btn-fire" type="button" data-send-pc>Send it to my computer</button></div>
   </div>
@@ -833,36 +842,36 @@ dialog[open] { animation: pop .35s var(--ease); }
     </div>
     <div class="faq">
       <details>
-        <summary>Is Ingle really free?</summary>
-        <div class="a"><p>Yes. The app is free and Ingle never charges you. The only cost is your group's server, if you rent one: about $4–6 a month from DigitalOcean (or whichever host you pick), billed by them, for the whole group. Hosting it on your own PC is free; the PC just has to stay on.</p></div>
+        <summary>Is Pyr really free?</summary>
+        <div class="a"><p>Yes. The app is free and Pyr never charges you. The only cost is your group's server, if you rent one: about $4–6 a month from DigitalOcean (or whichever host you pick), billed by them, for the whole group. Hosting it on your own PC is free; the PC just has to stay on.</p></div>
       </details>
       <details>
         <summary>Does everyone need a server?</summary>
-        <div class="a"><p>No. One person sets up the server, and everyone else installs Ingle and opens the invite link. You can be in as many servers as you like.</p></div>
+        <div class="a"><p>No. One person sets up the server, and everyone else installs Pyr and opens the invite link. You can be in as many servers as you like.</p></div>
       </details>
       <details>
-        <summary>Windows says "Windows protected your PC". Is Ingle safe?</summary>
-        <div class="a"><p>Windows shows that for new programs that aren't code-signed yet, and Ingle is new. Click <b>More info</b>, then <b>Run anyway</b>. You don't need to turn anything off.</p><p>Want to check first? The code is <a href="https://github.com/bluelight777/ingle" rel="noopener">on GitHub</a>, and the download's SHA-256 is shown after you click Download. After that, updates are checked against Firelit Games' signature.</p></div>
+        <summary>Windows says "Windows protected your PC". Is Pyr safe?</summary>
+        <div class="a"><p>Windows shows that for new programs that aren't code-signed yet, and Pyr is new. Click <b>More info</b>, then <b>Run anyway</b>. You don't need to turn anything off.</p><p>Want to check first? The code is <a href="https://github.com/bluelight777/pyr" rel="noopener">on GitHub</a>, and the download's SHA-256 is shown after you click Download. After that, updates are checked against Firelit Games' signature.</p></div>
       </details>
       <details>
         <summary>Who can see our messages?</summary>
-        <div class="a"><p>Calls (voice, cameras, screens and stream sound) are end-to-end encrypted: not even the server can listen. Text messages and pictures are stored on your group's server, like Discord's are on theirs, so whoever runs the server could read them. End-to-end encrypted messages are coming in Ingle 0.8.</p></div>
+        <div class="a"><p>Calls (voice, cameras, screens and stream sound) are end-to-end encrypted: not even the server can listen. Text messages and pictures are stored on your group's server, like Discord's are on theirs, so whoever runs the server could read them. End-to-end encrypted messages are coming in Pyr 0.8.</p></div>
       </details>
       <details>
-        <summary>Can I use Ingle on a Mac or my phone?</summary>
-        <div class="a"><p>Not yet. Ingle runs on Windows 10 and 11, and on Linux (Ubuntu 22.04 or newer, Linux Mint 21+, Pop!_OS, Debian 12+).</p></div>
+        <summary>Can I use Pyr on a Mac or my phone?</summary>
+        <div class="a"><p>Not yet. Pyr runs on Windows 10 and 11, and on Linux (Ubuntu 22.04 or newer, Linux Mint 21+, Pop!_OS, Debian 12+).</p></div>
       </details>
       <details>
         <summary>Can we move our server later?</summary>
-        <div class="a"><p>Yes. The owner's Ingle backs the server up to their PC every hour, and a backup sets up the same server on any other host, with all its history. You're never tied to one provider.</p></div>
+        <div class="a"><p>Yes. The owner's Pyr backs the server up to their PC every hour, and a backup sets up the same server on any other host, with all its history. You're never tied to one provider.</p></div>
       </details>
       <details>
         <summary>How do updates work?</summary>
-        <div class="a"><p>Ingle checks for a new version every few hours (or when you click its version number at the top of the window). When there is one, a green Update button shows up there: click it, and Ingle downloads it, checks Firelit Games' signature, installs it and puts you back in your voice channel.</p></div>
+        <div class="a"><p>Pyr checks for a new version every few hours (or when you click its version number at the top of the window). When there is one, a green Update button shows up there: click it, and Pyr downloads it, checks Firelit Games' signature, installs it and puts you back in your voice channel.</p></div>
       </details>
       <details>
         <summary>How do I uninstall it?</summary>
-        <div class="a"><p>On Windows, use Settings → Apps → Ingle → Uninstall. Your identity and settings stay in <code>%APPDATA%\Ingle</code>, in case you come back. On Linux, run <code>sudo apt remove ingle</code>.</p></div>
+        <div class="a"><p>On Windows, use Settings → Apps → Pyr → Uninstall. Your identity and settings stay in <code>%APPDATA%\Pyr</code>, in case you come back. On Linux, run <code>sudo apt remove pyr</code>.</p></div>
       </details>
     </div>
   </div>
@@ -873,21 +882,21 @@ dialog[open] { animation: pop .35s var(--ease); }
   <div class="wrap">
     <div class="foot">
       <div>
-        <a class="brand" href="#main"><img src="ingle-icon.png" alt="" width="34" height="34">Ingle</a>
+        <a class="brand" href="#main"><img src="pyr-icon.png" alt="" width="34" height="34">Pyr</a>
         <p>Voice, video and chat for your group, on a server you own. Made by <a href="https://firelitgames.com/">Firelit Games</a>.</p>
       </div>
       <div>
-        <h4>Ingle</h4>
+        <h4>Pyr</h4>
         <ul>
-          <li><a class="dl" href="Ingle-Setup.exe" data-os="win">Download for Windows</a></li>
-          <li><a class="dl" href="ingle_amd64.deb" data-os="linux">Download for Linux (.deb)</a></li>
-          <li><a href="https://github.com/bluelight777/ingle" rel="noopener">Source code on GitHub</a></li>
+          <li><a class="dl" href="Pyr-Setup.exe" data-os="win">Download for Windows</a></li>
+          <li><a class="dl" href="pyr_amd64.deb" data-os="linux">Download for Linux (.deb)</a></li>
+          <li><a href="https://github.com/bluelight777/pyr" rel="noopener">Source code on GitHub</a></li>
         </ul>
       </div>
       <div>
         <h4>More</h4>
         <ul>
-          <li><a href="#compare">Ingle and Discord</a></li>
+          <li><a href="#compare">Pyr and Discord</a></li>
           <li><a href="#plugins">Plugins</a></li>
           <li><a href="https://firelitgames.com/">Firelit Games</a></li>
         </ul>
@@ -895,10 +904,10 @@ dialog[open] { animation: pop .35s var(--ease); }
     </div>
     <div class="legal">
       <span>© <span id="year">2026</span> Firelit Games, LLC</span>
-      <span>Ingle is open source (MIT or Apache 2.0)</span>
+      <span>Pyr is open source (MIT or Apache 2.0)</span>
       <span>This page has no trackers and sets no cookies</span>
     </div>
-    <p class="disclaimer">Ingle is not affiliated with, endorsed by, or sponsored by Discord Inc. Discord and Nitro are trademarks of Discord Inc.</p>
+    <p class="disclaimer">Pyr is not affiliated with, endorsed by, or sponsored by Discord Inc. Discord and Nitro are trademarks of Discord Inc.</p>
   </div>
 </footer>
 
@@ -909,22 +918,22 @@ dialog[open] { animation: pop .35s var(--ease); }
     <p class="sub only-win">Three quick steps and you're in.</p>
     <p class="sub only-linux">Two quick steps and you're in.</p>
     <ol class="only-win">
-      <li><div><b>Open Ingle-Setup.exe</b><p>Find it in your browser's downloads (<kbd>Ctrl</kbd> + <kbd>J</kbd>) or your Downloads folder.</p></div></li>
-      <li><div><b>If Windows says "Windows protected your PC", click More info, then Run anyway</b><p>Ingle is new and not code-signed yet, so Windows asks first. You don't need to turn anything off.</p>
+      <li><div><b>Open Pyr-Setup.exe</b><p>Find it in your browser's downloads (<kbd>Ctrl</kbd> + <kbd>J</kbd>) or your Downloads folder.</p></div></li>
+      <li><div><b>If Windows says "Windows protected your PC", click More info, then Run anyway</b><p>Pyr is new and not code-signed yet, so Windows asks first. You don't need to turn anything off.</p>
         <div class="ss" aria-hidden="true">
           <div class="ss-win"><div class="t">Windows protected your PC</div><div>Windows stopped an app it doesn't recognize from starting.</div><span class="more ring">More info</span><div class="btns"><span>Don't run</span></div></div>
-          <div class="ss-win"><div class="t">Windows protected your PC</div><div>App: Ingle-Setup.exe<br>Publisher: Unknown publisher</div><div class="btns"><span class="ring">Run anyway</span><span>Don't run</span></div></div>
+          <div class="ss-win"><div class="t">Windows protected your PC</div><div>App: Pyr-Setup.exe<br>Publisher: Unknown publisher</div><div class="btns"><span class="ring">Run anyway</span><span>Don't run</span></div></div>
         </div>
         <p class="ss-cap">What it looks like (simplified).</p></div></li>
-      <li><div><b>Ingle opens</b><p>Got an invite? Click <b>Join a server</b> and paste it. Starting your own group? Click <b>Create a server</b>.</p></div></li>
+      <li><div><b>Pyr opens</b><p>Got an invite? Click <b>Join a server</b> and paste it. Starting your own group? Click <b>Create a server</b>.</p></div></li>
     </ol>
     <ol class="only-linux">
-      <li><div><b>Open ingle_amd64.deb with your software installer</b><p>Or install it from a terminal:</p>
-        <div class="cmd"><code id="apt">sudo apt install ./ingle_amd64.deb</code><button class="copy" type="button" data-copy="#apt">Copy</button></div></div></li>
-      <li><div><b>Open Ingle from your apps menu</b><p>Got an invite? Click <b>Join a server</b> and paste it. Starting your own group? Click <b>Create a server</b>.</p></div></li>
+      <li><div><b>Open pyr_amd64.deb with your software installer</b><p>Or install it from a terminal:</p>
+        <div class="cmd"><code id="apt">sudo apt install ./pyr_amd64.deb</code><button class="copy" type="button" data-copy="#apt">Copy</button></div></div></li>
+      <li><div><b>Open Pyr from your apps menu</b><p>Got an invite? Click <b>Join a server</b> and paste it. Starting your own group? Click <b>Create a server</b>.</p></div></li>
     </ol>
     <div class="foot-row">
-      <span>Didn't start? <a href="Ingle-Setup.exe" id="again">Download again</a></span>
+      <span>Didn't start? <a href="Pyr-Setup.exe" id="again">Download again</a></span>
       <span id="hash-row" hidden>SHA-256 <span class="hash" id="hash"></span> <button class="copy" type="button" data-copy="#hash">Copy</button></span>
     </div>
   </div>
@@ -948,16 +957,16 @@ dialog[open] { animation: pop .35s var(--ease); }
   if (linux) {
     // Linux first: swap the two buttons' places and looks.
     var main = $("#cta-main"), alt = $("#cta-alt");
-    main.href = "ingle_amd64.deb"; main.dataset.os = "linux";
+    main.href = "pyr_amd64.deb"; main.dataset.os = "linux";
     $("#cta-main-label").textContent = "Download for Linux";
     $("#cta-main-sub").textContent = "Free · Ubuntu, Mint, Debian (.deb)";
-    alt.href = "Ingle-Setup.exe"; alt.dataset.os = "win";
+    alt.href = "Pyr-Setup.exe"; alt.dataset.os = "win";
     $("#cta-alt-label").textContent = "Get it for Windows";
     $("#cta-alt-sub").textContent = "Windows 10 and 11";
     var f = $("#cta-final"), fa = $("#cta-final-alt");
-    f.href = "ingle_amd64.deb"; f.dataset.os = "linux"; $("#cta-final-label").textContent = "Download for Linux";
-    fa.href = "Ingle-Setup.exe"; fa.dataset.os = "win"; fa.textContent = "Get it for Windows";
-    var top = $(".top .dl"); top.href = "ingle_amd64.deb"; top.dataset.os = "linux";
+    f.href = "pyr_amd64.deb"; f.dataset.os = "linux"; $("#cta-final-label").textContent = "Download for Linux";
+    fa.href = "Pyr-Setup.exe"; fa.dataset.os = "win"; fa.textContent = "Get it for Windows";
+    var top = $(".top .dl"); top.href = "pyr_amd64.deb"; top.dataset.os = "linux";
   }
 
   // ---- copying
@@ -992,7 +1001,7 @@ dialog[open] { animation: pop .35s var(--ease); }
     if (a && a.size) $$("[data-size]").forEach(function (el) { el.textContent = Math.round(a.size / 1e6) + " MB"; });
     if (linux && !sizes.linux) {
       // This release has no new Linux package: the download is the last one made.
-      var meta = $(".meta"); if (meta) meta.textContent = "Linux packages are made less often, so this one can be a version or two behind Ingle " + m.version + " for Windows.";
+      var meta = $(".meta"); if (meta) meta.textContent = "Linux packages are made less often, so this one can be a version or two behind Pyr " + m.version + " for Windows.";
     }
     if (m.issued) {
       var d = new Date(m.issued * 1000);
@@ -1014,7 +1023,7 @@ dialog[open] { animation: pop .35s var(--ease); }
       var os = a.dataset.os === "linux" ? "linux" : "win";
       var box = $("#dlg");
       box.classList.toggle("linux", os === "linux");
-      $("#again").href = os === "linux" ? "ingle_amd64.deb" : "Ingle-Setup.exe";
+      $("#again").href = os === "linux" ? "pyr_amd64.deb" : "Pyr-Setup.exe";
       var asset = sizes[os];
       if (asset && asset.sha256) { $("#hash").textContent = asset.sha256; $("#hash-row").hidden = false; }
       if (dlg && dlg.showModal && !dlg.open) {
@@ -1029,24 +1038,25 @@ dialog[open] { animation: pop .35s var(--ease); }
   }
 
   // ---- phones: send the page to a computer
-  var here = "https://firelitgames.com/ingle/" + (location.hash || "");
+  var here = "https://pyr.gg/" + (location.hash || "");
   function sendToPc(btn) {
     if (navigator.share) {
-      navigator.share({ title: "Ingle", text: "Ingle: voice, video and chat for your group. Open this on your PC to download it.", url: here }).catch(function () {});
+      navigator.share({ title: "Pyr", text: "Pyr: voice, video and chat for your group. Open this on your PC to download it.", url: here }).catch(function () {});
     } else copy(here, btn);
   }
   var sp = $("#send-pc"); if (sp) sp.addEventListener("click", function () { sendToPc(sp); });
   $$("[data-send-pc]").forEach(function (b) { b.addEventListener("click", function () { sendToPc(b); }); });
   var mail = $("#mail-pc");
-  if (mail) mail.href = "mailto:?subject=" + encodeURIComponent("Ingle") + "&body=" + encodeURIComponent("Download Ingle on my PC: " + here);
+  if (mail) mail.href = "mailto:?subject=" + encodeURIComponent("Pyr") + "&body=" + encodeURIComponent("Download Pyr on my PC: " + here);
 
-  // ---- an invite link: https://firelitgames.com/ingle/#n=<name>&join=<the ingle:// link without "ingle://">
+  // ---- an invite link: https://pyr.gg/#n=<name>&join=<the pyr:// link without "pyr://">
   // (Everything after the # stays in the browser: it's never sent to the website.)
   function readInvite() {
     var h = location.hash.replace(/^#/, "");
     var i = h.indexOf("join=");
     if (i < 0) return null;
-    var link = h.slice(i + 5).replace(/^ingle(:|%3A)(\/\/|%2F%2F)/i, "");
+    // (ingle://: links from before Pyr was called Pyr.)
+    var link = h.slice(i + 5).replace(/^(pyr|ingle)(:|%3A)(\/\/|%2F%2F)/i, "");
     try { if (/%2F/i.test(link)) link = decodeURIComponent(link); } catch (e) { return null; }
     link = link.replace(/%5B/gi, "[").replace(/%5D/gi, "]");
     if (link.length > 400 || !/^[A-Za-z0-9.\-\[\]:%]+\/[A-Za-z0-9._~\-\/?=&%]+$/.test(link)) return null;
@@ -1054,16 +1064,17 @@ dialog[open] { animation: pop .35s var(--ease); }
     var nm = h.slice(0, i).match(/(?:^|&)n=([^&]*)/);
     if (nm) { try { name = decodeURIComponent(nm[1].replace(/\+/g, " ")); } catch (e) {} }
     name = name.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 60);
-    return { link: "ingle://" + link, name: name };
+    return { link: "pyr://" + link, old: "ingle://" + link, name: name };
   }
   var inv = readInvite();
   if (inv) {
     $("#invite").classList.add("show");
     if (inv.name) $("#invite-name").textContent = inv.name;
     $("#invite-open").href = inv.link;
+    $("#invite-open-old").href = inv.old;
     $("#invite-copy").addEventListener("click", function () { copy(inv.link, $("#invite-copy")); });
-    if (mobile) $("#invite-how").textContent = "Open this link on your PC: install Ingle (it's free), then open your invite to join.";
-    doc.title = "You're invited" + (inv.name ? " to " + inv.name : "") + " · Ingle";
+    if (mobile) $("#invite-how").textContent = "Open this link on your PC: install Pyr (it's free), then open your invite to join.";
+    doc.title = "You're invited" + (inv.name ? " to " + inv.name : "") + " · Pyr";
   }
 
   // ---- header

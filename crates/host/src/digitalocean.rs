@@ -1,10 +1,10 @@
 //! Renting a server from DigitalOcean with the person's own account and API token.
 //!
-//! The person pays DigitalOcean directly; Ingle only uses the token to create one small
-//! Ubuntu server ("droplet") that trusts Ingle's SSH key, then installs Ingle Server on it.
+//! The person pays DigitalOcean directly; Pyr only uses the token to create one small
+//! Ubuntu server ("droplet") that trusts Pyr's SSH key, then installs Pyr Server on it.
 //! The token isn't saved anywhere.
 //!
-//! API reference: <https://docs.digitalocean.com/reference/api/>. `INGLE_DO_API` points
+//! API reference: <https://docs.digitalocean.com/reference/api/>. `PYR_DO_API` points
 //! at another base URL (for tests).
 
 use std::path::{Path, PathBuf};
@@ -29,7 +29,7 @@ pub const IMAGE: &str = "ubuntu-24-04-x64";
 pub const RECOMMENDED_SIZE: &str = "s-1vcpu-1gb";
 
 fn base_url() -> String {
-    std::env::var("INGLE_DO_API").unwrap_or_else(|_| "https://api.digitalocean.com".into()).trim_end_matches('/').to_string()
+    pyr_proto::env_var("DO_API").unwrap_or_else(|| "https://api.digitalocean.com".into()).trim_end_matches('/').to_string()
 }
 
 #[derive(Debug, Clone)]
@@ -178,7 +178,7 @@ impl Api {
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(30)))
             .http_status_as_error(false)
-            .user_agent(concat!("Ingle/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("Pyr/", env!("CARGO_PKG_VERSION")))
             .build()
             .into();
         Api { token: token.trim().to_string(), base: base_url(), agent }
@@ -264,7 +264,7 @@ impl Api {
         self.list("/v2/regions", "regions")
     }
 
-    /// Adds Ingle's public key to the account (or finds it if it's there already) and
+    /// Adds Pyr's public key to the account (or finds it if it's there already) and
     /// returns its id.
     pub fn ensure_ssh_key(&self, public_openssh: &str, name: &str) -> Result<u64, ApiError> {
         #[derive(Deserialize)]
@@ -285,7 +285,7 @@ impl Api {
     }
 
     /// `user_data` is the cloud-init setup the server runs on first boot (here: the SSH host
-    /// key Ingle made for it).
+    /// key Pyr made for it).
     pub fn create_droplet(&self, name: &str, region: &str, size: &str, ssh_key: u64, user_data: &str) -> Result<Droplet, ApiError> {
         #[derive(Deserialize)]
         struct R {
@@ -409,9 +409,9 @@ impl std::fmt::Debug for RentRequest {
     }
 }
 
-/// A droplet name from a community name: "Game Night!" -> "ingle-game-night".
+/// A droplet name from a community name: "Game Night!" -> "pyr-game-night".
 pub fn droplet_name(community: &str) -> String {
-    let mut s = String::from("ingle-");
+    let mut s = String::from("pyr-");
     let mut dash = true;
     for c in community.chars().flat_map(char::to_lowercase) {
         if c.is_ascii_alphanumeric() {
@@ -426,7 +426,7 @@ pub fn droplet_name(community: &str) -> String {
         }
     }
     let s = s.trim_end_matches('-').to_string();
-    if s == "ingle" { "ingle-server".into() } else { s }
+    if s == "pyr" { "pyr-server".into() } else { s }
 }
 
 fn install_options(name: &str, ip: &str, payloads: &Payloads, restore: Option<crate::restore::Backup>) -> InstallOptions {
@@ -440,7 +440,7 @@ fn install_options(name: &str, ip: &str, payloads: &Payloads, restore: Option<cr
     }
 }
 
-/// Rents a server and installs Ingle on it. Runs on a worker thread; the result goes to
+/// Rents a server and installs Pyr on it. Runs on a worker thread; the result goes to
 /// `progress`.
 pub fn rent(req: RentRequest, config_dir: PathBuf, payloads: Payloads, progress: Progress) {
     let outcome = rent_inner(&req, &config_dir, &payloads, &progress);
@@ -455,9 +455,9 @@ fn rent_inner(req: &RentRequest, config_dir: &Path, payloads: &Payloads, progres
     payloads.for_machine("x86_64").map_err(Failure::from)?;
     let api = Api::new(&req.token);
 
-    progress.step("Adding Ingle's SSH key to your DigitalOcean account");
+    progress.step("Adding Pyr's SSH key to your DigitalOcean account");
     let key = crate::keys::load_or_create(config_dir).map_err(Failure::from)?;
-    let key_id = api.ensure_ssh_key(&key.public_openssh, "Ingle").map_err(|e| e.explain())?;
+    let key_id = api.ensure_ssh_key(&key.public_openssh, "Pyr").map_err(|e| e.explain())?;
     if progress.stop_requested() {
         return Err(Failure::new("Stopped before creating a server."));
     }
@@ -487,7 +487,7 @@ fn rent_inner(req: &RentRequest, config_dir: &Path, payloads: &Payloads, progres
         region: Some(req.region.clone()),
         size: Some(req.size.clone()),
         host_key: Some(host_fp.clone()),
-        created_ms: ingle_proto::now_ms(),
+        created_ms: pyr_proto::now_ms(),
         ..Default::default()
     };
     let _ = records::save(config_dir, &record);
@@ -627,9 +627,9 @@ mod tests {
 
     #[test]
     fn droplet_names_are_hostnames() {
-        assert_eq!(droplet_name("Game Night!"), "ingle-game-night");
-        assert_eq!(droplet_name("   "), "ingle-server");
-        assert_eq!(droplet_name("Blue's Ingle Server"), "ingle-blue-s-ingle-server");
+        assert_eq!(droplet_name("Game Night!"), "pyr-game-night");
+        assert_eq!(droplet_name("   "), "pyr-server");
+        assert_eq!(droplet_name("Blue's Pyr Server"), "pyr-blue-s-pyr-server");
         assert!(droplet_name(&"x".repeat(100)).len() <= 40);
     }
 

@@ -1,10 +1,10 @@
 [package]
-name = "ingle-engine"
+name = "pyr-engine"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Ingle client engine: networking, audio and video pipelines (no UI)."
+description = "Pyr client engine: networking, audio and video pipelines (no UI)."
 
 [dependencies]
 # Checking a skin's fonts parse before the app's text renderer gets them (the same crate egui
@@ -28,7 +28,7 @@ device_query = "4.0.1"
 directories = "6.0.0"
 fast_image_resize = "6.1.0"
 getrandom = "0.2"
-ingle-proto = { path = "../proto", features = ["quic"] }
+pyr-proto = { path = "../proto", features = ["quic"] }
 nnnoiseless = { version = "0.5.2", default-features = false }
 openh264 = "0.9.8"
 # OpenH264's own option types, for changing a running encoder's bitrate and frame rate.
@@ -53,7 +53,7 @@ tracing = "0.1.44"
 yuv = "0.8.19"
 
 [dev-dependencies]
-ingle-server = { path = "../server" }
+pyr-server = { path = "../server" }
 # The test bot's media log (examples/bot.rs --media-log).
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 

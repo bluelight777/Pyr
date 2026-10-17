@@ -1,17 +1,17 @@
-//! Plugins and skins sent in for the Ingle Library: anyone can send one (no account) to the
+//! Plugins and skins sent in for the Pyr Library: anyone can send one (no account) to the
 //! server that collects them; only its owner sees them, and what they approve is saved on their
 //! PC for building or listing. Nothing a sender writes approves anything. What's sent is signed
-//! with the sender's Ingle identity: only they can send a new version of it, and they can see
+//! with the sender's Pyr identity: only they can send a new version of it, and they can see
 //! where theirs stand (with the owner's note).
 
 use std::time::{Duration, Instant};
 
-use ingle_engine::state::{BugSend, ConnStatus};
-use ingle_engine::{Engine, EngineOptions};
-use ingle_proto::control::{PluginSubmission, SourceFile, SubmissionStatus};
+use pyr_engine::state::{BugSend, ConnStatus};
+use pyr_engine::{Engine, EngineOptions};
+use pyr_proto::control::{PluginSubmission, SourceFile, SubmissionStatus};
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("ingle-plugins-{}-{}", name, ingle_proto::now_ms()));
+    let d = std::env::temp_dir().join(format!("pyr-plugins-{}-{}", name, pyr_proto::now_ms()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
@@ -29,8 +29,8 @@ async fn wait_for(what: &str, secs: u64, mut cond: impl FnMut() -> bool) {
 
 fn engine(name: &str) -> Engine {
     let dir = temp_dir(name);
-    let cfg = ingle_engine::config::Config { display_name: name.to_string(), ..Default::default() };
-    ingle_engine::config::save_config(&dir, &cfg).unwrap();
+    let cfg = pyr_engine::config::Config { display_name: name.to_string(), ..Default::default() };
+    pyr_engine::config::save_config(&dir, &cfg).unwrap();
     Engine::start(EngineOptions { config_dir: Some(dir), push_to_talk: false, audio: None, ..Default::default() }).unwrap()
 }
 
@@ -39,7 +39,7 @@ fn toast(e: &Engine, s: &str) -> bool {
 }
 
 fn plugin(name: &str) -> PluginSubmission {
-    let file = |path: &str, text: &str| SourceFile { path: path.into(), data: ingle_proto::b64::encode(text.as_bytes()) };
+    let file = |path: &str, text: &str| SourceFile { path: path.into(), data: pyr_proto::b64::encode(text.as_bytes()) };
     PluginSubmission {
         name: name.into(),
         kind: "addon".into(),
@@ -69,17 +69,17 @@ async fn send(e: &Engine, p: PluginSubmission, turn_on: Option<&str>) -> BugSend
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn plugins_reach_only_the_owner_and_approved_ones_are_saved() {
-    let server = ingle_server::start(ingle_server::ServerConfig {
+    let server = pyr_server::start(pyr_server::ServerConfig {
         data_dir: temp_dir("server"),
         bind: "127.0.0.1:0".parse().unwrap(),
         public_host: Some("127.0.0.1".into()),
-        name: Some("Ingle Library".into()),
+        name: Some("Pyr Library".into()),
     })
     .await
     .unwrap();
-    let key = ingle_proto::b64::encode(&server.fingerprint);
+    let key = pyr_proto::b64::encode(&server.fingerprint);
     // SAFETY: set before any engine reads it, in this test's own process.
-    unsafe { std::env::set_var("INGLE_LIBRARY_SERVER", format!("127.0.0.1:{}/{key}", server.local_addr.port())) };
+    unsafe { std::env::set_var("PYR_LIBRARY_SERVER", format!("127.0.0.1:{}/{key}", server.local_addr.port())) };
     let (owner, member, stranger) = (engine("Owner"), engine("Member"), engine("Stranger"));
     owner.add_server(&server.owner_link().unwrap()).unwrap();
     let connected = |e: &Engine| e.state().servers.first().map(|s| s.status == ConnStatus::Connected).unwrap_or(false);
@@ -124,11 +124,11 @@ async fn plugins_reach_only_the_owner_and_approved_ones_are_saved() {
 
     // Its summary asking to be listed does nothing: the owner approves, and only then is its
     // source saved on the owner's PC for building.
-    let approved = owner.shared.config_dir.join(ingle_engine::plugins::APPROVED_DIR).join(&key);
+    let approved = owner.shared.config_dir.join(pyr_engine::plugins::APPROVED_DIR).join(&key);
     assert!(!approved.exists());
     member.set_submission_status(&key, dice.id, SubmissionStatus::Approved, String::new());
     wait_for("member can't approve", 10, || toast(&member, "Only the server's owner")).await;
-    assert!(!member.shared.config_dir.join(ingle_engine::plugins::APPROVED_DIR).exists());
+    assert!(!member.shared.config_dir.join(pyr_engine::plugins::APPROVED_DIR).exists());
     owner.set_submission_status(&key, dice.id, SubmissionStatus::Approved, String::new());
     let saved = approved.join(format!("{}-dice", dice.id));
     wait_for("saved", 10, || saved.join("source/src/lib.rs").exists()).await;

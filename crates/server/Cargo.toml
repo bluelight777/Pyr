@@ -1,13 +1,13 @@
 [package]
-name = "ingle-server"
+name = "pyr-server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Self-hostable Ingle community server: text channels, voice/video relay (SFU), invites."
+description = "Self-hostable Pyr community server: text channels, voice/video relay (SFU), invites."
 
 [[bin]]
-name = "ingle-server"
+name = "pyr-server"
 path = "src/main.rs"
 
 [dependencies]
@@ -16,7 +16,7 @@ base64 = "0.22.1"
 bytes = "1.12.1"
 clap = { version = "4.6.7", features = ["derive"] }
 getrandom = "0.2"
-ingle-proto = { path = "../proto", features = ["quic"] }
+pyr-proto = { path = "../proto", features = ["quic"] }
 parking_lot = "0.12.5"
 quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
 rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "pem", "ring"] }

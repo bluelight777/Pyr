@@ -1,25 +1,25 @@
-//! The connector's tools: guides, starting a skin or an add-on, checking them the way the Ingle
-//! Library will, showing a skin on Ingle, making sounds, sending them in (signed with Ingle's
-//! identity, so only this Ingle can send new versions of them), and where they stand; and
+//! The connector's tools: guides, starting a skin or an add-on, checking them the way the Pyr
+//! Library will, showing a skin on Pyr, making sounds, sending them in (signed with Pyr's
+//! identity, so only this Pyr can send new versions of them), and where they stand; and
 //! Claude's own tools in the servers it's been added to as a bot (see `chat`).
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use ingle_engine::{plugin_source, plugins, skins};
-use ingle_proto::control::{PluginSubmission, SKIN_KIND, SubmissionStatus};
-use ingle_proto::crypto::Identity;
+use pyr_engine::{plugin_source, plugins, skins};
+use pyr_proto::control::{PluginSubmission, SKIN_KIND, SubmissionStatus};
+use pyr_proto::crypto::Identity;
 use serde_json::{Value, json};
 
-/// What the tools work with: Ingle's settings folder, a way to reach the library server, and
+/// What the tools work with: Pyr's settings folder, a way to reach the library server, and
 /// Claude's own copy of the engine (a bot, started when it's first needed).
 pub struct Ctx {
     pub config_dir: PathBuf,
     rt: tokio::runtime::Runtime,
-    endpoints: std::sync::Mutex<ingle_engine::net::Endpoints>,
+    endpoints: std::sync::Mutex<pyr_engine::net::Endpoints>,
     /// The library server: (host, port, its key).
     server: Option<(String, u16, [u8; 32])>,
-    bot: std::sync::Mutex<Option<std::sync::Arc<ingle_engine::Engine>>>,
+    bot: std::sync::Mutex<Option<std::sync::Arc<pyr_engine::Engine>>>,
 }
 
 impl Ctx {
@@ -28,13 +28,13 @@ impl Ctx {
     }
 
     pub fn with_server(config_dir: PathBuf, server: Option<(String, u16, [u8; 32])>) -> Result<Ctx> {
-        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).thread_name("ingle-mcp-net").enable_all().build()?;
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).thread_name("pyr-mcp-net").enable_all().build()?;
         Ok(Ctx { config_dir, rt, endpoints: Default::default(), server, bot: Default::default() })
     }
 
-    /// Where Claude keeps its own identity and settings as a bot ([`ingle_engine::claude_dir`]).
+    /// Where Claude keeps its own identity and settings as a bot ([`pyr_engine::claude_dir`]).
     pub fn bot_dir(&self) -> PathBuf {
-        ingle_engine::claude_dir(&self.config_dir)
+        pyr_engine::claude_dir(&self.config_dir)
     }
 
     /// Whether Claude has been added to a server (or is waiting to be), so its engine should
@@ -42,45 +42,45 @@ impl Ctx {
     pub fn bot_wanted(&self) -> bool {
         let dir = self.bot_dir();
         let waiting = std::fs::read_dir(dir.join("join")).is_ok_and(|d| d.flatten().any(|e| e.path().extension().is_some_and(|x| x == "link")));
-        waiting || !ingle_engine::config::load_config(&dir).servers.is_empty()
+        waiting || !pyr_engine::config::load_config(&dir).servers.is_empty()
     }
 
     /// Claude's own copy of the engine, as the bot Claude (with an identity of its own, never
     /// the person's), started the first time it's needed. It writes Claude's member id (a
-    /// public id) next to its identity, for Ingle's Server Settings → Bots.
-    pub fn bot(&self) -> Result<std::sync::Arc<ingle_engine::Engine>> {
+    /// public id) next to its identity, for Pyr's Server Settings → Bots.
+    pub fn bot(&self) -> Result<std::sync::Arc<pyr_engine::Engine>> {
         let mut bot = self.bot.lock().map_err(|_| anyhow!("Claude's engine stopped"))?;
         if let Some(e) = bot.as_ref() {
             return Ok(e.clone());
         }
         let dir = self.bot_dir();
         std::fs::create_dir_all(&dir).with_context(|| format!("couldn't make {}", dir.display()))?;
-        let mut cfg = ingle_engine::config::load_config(&dir);
+        let mut cfg = pyr_engine::config::load_config(&dir);
         if cfg.display_name.trim().is_empty() {
             cfg.display_name = "Claude".into();
             // Sounds off: a bot has no speakers to play them on.
             cfg.settings.sounds = false;
-            ingle_engine::config::save_config(&dir, &cfg)?;
+            pyr_engine::config::save_config(&dir, &cfg)?;
         }
-        let engine = ingle_engine::Engine::start(ingle_engine::EngineOptions { config_dir: Some(dir.clone()), push_to_talk: false, bot: true, ..Default::default() })?;
+        let engine = pyr_engine::Engine::start(pyr_engine::EngineOptions { config_dir: Some(dir.clone()), push_to_talk: false, bot: true, ..Default::default() })?;
         let uid = engine.state().my_uid.clone();
-        std::fs::write(dir.join(ingle_engine::CLAUDE_MEMBER_ID), &uid).with_context(|| format!("couldn't write Claude's member id in {}", dir.display()))?;
+        std::fs::write(dir.join(pyr_engine::CLAUDE_MEMBER_ID), &uid).with_context(|| format!("couldn't write Claude's member id in {}", dir.display()))?;
         let engine = std::sync::Arc::new(engine);
         *bot = Some(engine.clone());
         Ok(engine)
     }
 
-    /// Ingle's identity on this PC (never made here: Ingle makes it the first time it opens).
+    /// Pyr's identity on this PC (never made here: Pyr makes it the first time it opens).
     fn identity(&self) -> Result<Identity> {
         let path = self.config_dir.join("identity.key");
-        let text = std::fs::read_to_string(&path).map_err(|_| anyhow!("Ingle hasn't been opened on this PC yet (there's no identity in {}): open Ingle once, then try again.", self.config_dir.display()))?;
-        let seed = ingle_proto::b64::decode_array::<32>(text.trim()).ok_or_else(|| anyhow!("{} can't be read", path.display()))?;
+        let text = std::fs::read_to_string(&path).map_err(|_| anyhow!("Pyr hasn't been opened on this PC yet (there's no identity in {}): open Pyr once, then try again.", self.config_dir.display()))?;
+        let seed = pyr_proto::b64::decode_array::<32>(text.trim()).ok_or_else(|| anyhow!("{} can't be read", path.display()))?;
         Ok(Identity::from_seed(seed))
     }
 
-    /// The name the person uses in Ingle.
+    /// The name the person uses in Pyr.
     fn my_name(&self) -> String {
-        ingle_engine::config::load_config(&self.config_dir).display_name.trim().to_string()
+        pyr_engine::config::load_config(&self.config_dir).display_name.trim().to_string()
     }
 
     fn library(&self) -> Result<(String, u16, [u8; 32])> {
@@ -105,8 +105,8 @@ pub fn list() -> Value {
     let mut tools = json!([
         {
             "name": "skin_guide",
-            "title": "How Ingle skins are made",
-            "description": "How an Ingle skin is made: skin.json's fields, the 25 colors and what each one colors (with Ingle's own, Campfire's, for reference), the picture behind the chat, fonts, sounds, the limits and the checks. Read it before making or changing a skin.",
+            "title": "How Pyr skins are made",
+            "description": "How a Pyr skin is made: skin.json's fields, the 25 colors and what each one colors (with Pyr's own, Campfire's, for reference), the picture behind the chat, fonts, sounds, the limits and the checks. Read it before making or changing a skin.",
             "inputSchema": none,
             "annotations": read_only,
         },
@@ -117,35 +117,35 @@ pub fn list() -> Value {
             "inputSchema": { "type": "object", "properties": {
                 "folder": folder("The whole path of the folder to make it in (like C:\\Users\\Name\\Documents). Ask the person if you don't know where they keep things."),
                 "name": { "type": "string", "description": "The skin's name, like Blood Moon." },
-                "author": { "type": "string", "description": "Who made it, shown under it in the Library. The person's Ingle name if left out." },
+                "author": { "type": "string", "description": "Who made it, shown under it in the Library. The person's Pyr name if left out." },
             }, "required": ["folder", "name"] },
             "annotations": makes,
         },
         {
             "name": "check_skin",
             "title": "Check a skin",
-            "description": "Checks a skin's folder the way Ingle and the Ingle Library will: skin.json, every color, whether text stays readable on its colors, the picture, fonts and sounds, and the limits. Says what to fix, if anything.",
+            "description": "Checks a skin's folder the way Pyr and the Pyr Library will: skin.json, every color, whether text stays readable on its colors, the picture, fonts and sounds, and the limits. Says what to fix, if anything.",
             "inputSchema": { "type": "object", "properties": { "folder": folder("The whole path of the skin's folder (the one with skin.json).") }, "required": ["folder"] },
             "annotations": read_only,
         },
         {
             "name": "preview_skin",
-            "title": "Show a skin on Ingle",
-            "description": "Puts the skin in a folder on the person's Ingle (if Ingle is open, within a second) without installing it, so they see how it looks; Ingle shows a banner while it's on. Use it again after each change. It stays on until stop_preview, or until they stop it in Ingle.",
+            "title": "Show a skin on Pyr",
+            "description": "Puts the skin in a folder on the person's Pyr (if Pyr is open, within a second) without installing it, so they see how it looks; Pyr shows a banner while it's on. Use it again after each change. It stays on until stop_preview, or until they stop it in Pyr.",
             "inputSchema": { "type": "object", "properties": { "folder": folder("The whole path of the skin's folder (the one with skin.json).") }, "required": ["folder"] },
             "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
         },
         {
             "name": "stop_preview",
             "title": "Stop showing the skin",
-            "description": "Takes the skin shown with preview_skin off Ingle: it goes back to the skin the person wears.",
+            "description": "Takes the skin shown with preview_skin off Pyr: it goes back to the skin the person wears.",
             "inputSchema": none,
             "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
         },
         {
             "name": "make_sound",
-            "title": "Make an Ingle sound",
-            "description": "Makes an Ingle sound file (.ings: Opus, 10 seconds at most) from an MP3, WAV, OGG, FLAC or M4A file, for a skin's sounds.",
+            "title": "Make a Pyr sound",
+            "description": "Makes a Pyr sound file (.ings: Opus, 10 seconds at most) from an MP3, WAV, OGG, FLAC or M4A file, for a skin's sounds.",
             "inputSchema": { "type": "object", "properties": {
                 "input": folder("The whole path of the audio file."),
                 "output": folder("The whole path of the .ings file to make (usually in the skin's sounds folder). Next to the input if left out."),
@@ -154,8 +154,8 @@ pub fn list() -> Value {
         },
         {
             "name": "send_skin",
-            "title": "Send a skin to the Ingle Library",
-            "description": "Sends the skin in a folder to the Ingle Library for review, signed with the person's Ingle identity. Only when the person asks you to send it. It's checked first (check_skin). To send a new version of one they sent before, give its number as update_of (my_submissions lists them): only this Ingle can do that. Returns its number.",
+            "title": "Send a skin to the Pyr Library",
+            "description": "Sends the skin in a folder to the Pyr Library for review, signed with the person's Pyr identity. Only when the person asks you to send it. It's checked first (check_skin). To send a new version of one they sent before, give its number as update_of (my_submissions lists them): only this Pyr can do that. Returns its number.",
             "inputSchema": { "type": "object", "properties": {
                 "folder": folder("The whole path of the skin's folder (the one with skin.json)."),
                 "contact": { "type": "string", "description": "How the reviewer can reach them with questions (optional)." },
@@ -165,15 +165,15 @@ pub fn list() -> Value {
         },
         {
             "name": "plugin_guide",
-            "title": "How Ingle plugins are made",
-            "description": "How Ingle plugins are made: add-ons (Rust built to WebAssembly, run in Ingle's sandbox, with /commands and a panel) and programs, the plugin kit, building and trying one, and sending it in. Read it before making or changing a plugin.",
+            "title": "How Pyr plugins are made",
+            "description": "How Pyr plugins are made: add-ons (Rust built to WebAssembly, run in Pyr's sandbox, with /commands and a panel) and programs, the plugin kit, building and trying one, and sending it in. Read it before making or changing a plugin.",
             "inputSchema": none,
             "annotations": read_only,
         },
         {
             "name": "new_addon",
             "title": "Start an add-on",
-            "description": "Starts a new Ingle add-on: makes a folder named after it inside `folder` with the plugin kit, a /hello command and a panel to change, and a CLAUDE.md about add-ons. Returns the new folder's path.",
+            "description": "Starts a new Pyr add-on: makes a folder named after it inside `folder` with the plugin kit, a /hello command and a panel to change, and a CLAUDE.md about add-ons. Returns the new folder's path.",
             "inputSchema": { "type": "object", "properties": {
                 "folder": folder("The whole path of the folder to make it in."),
                 "name": { "type": "string", "description": "The add-on's name, like Coin Flip." },
@@ -183,17 +183,17 @@ pub fn list() -> Value {
         {
             "name": "check_plugin",
             "title": "Check a plugin",
-            "description": "Checks a plugin's folder the way the Ingle Library will before it's sent: Rust only (a Cargo.toml and .rs files; no built files, C code or scripts), 600 KB at most. Says what would be sent and what to fix.",
+            "description": "Checks a plugin's folder the way the Pyr Library will before it's sent: Rust only (a Cargo.toml and .rs files; no built files, C code or scripts), 600 KB at most. Says what would be sent and what to fix.",
             "inputSchema": { "type": "object", "properties": { "folder": folder("The whole path of the plugin's folder (the one with Cargo.toml).") }, "required": ["folder"] },
             "annotations": read_only,
         },
         {
             "name": "send_plugin",
-            "title": "Send a plugin to the Ingle Library",
-            "description": "Sends the plugin in a folder (its Rust source, never a built file) to the Ingle Library for review, signed with the person's Ingle identity: Firelit Games reads and builds it before anyone can install it. Only when the person asks you to send it. To send a new version of one they sent before, give its number as update_of (my_submissions lists them): only this Ingle can do that. Returns its number.",
+            "title": "Send a plugin to the Pyr Library",
+            "description": "Sends the plugin in a folder (its Rust source, never a built file) to the Pyr Library for review, signed with the person's Pyr identity: Firelit Games reads and builds it before anyone can install it. Only when the person asks you to send it. To send a new version of one they sent before, give its number as update_of (my_submissions lists them): only this Pyr can do that. Returns its number.",
             "inputSchema": { "type": "object", "properties": {
                 "folder": folder("The whole path of the plugin's folder (the one with Cargo.toml)."),
-                "author": { "type": "string", "description": "Who made it, shown under it in the Library. The person's Ingle name if left out." },
+                "author": { "type": "string", "description": "Who made it, shown under it in the Library. The person's Pyr name if left out." },
                 "contact": { "type": "string", "description": "How the reviewer can reach them with questions (optional)." },
                 "kind": { "type": "string", "enum": ["addon", "program"], "description": "What it is, if its Cargo.toml doesn't say." },
                 "summary": { "type": "string", "description": "One line on what it does, if its Cargo.toml doesn't say." },
@@ -203,8 +203,8 @@ pub fn list() -> Value {
         },
         {
             "name": "my_submissions",
-            "title": "What was sent to the Ingle Library",
-            "description": "Lists the plugins and skins sent from this Ingle (by its identity) to the Ingle Library: their numbers, versions, whether they were approved, and the reviewer's note if there is one.",
+            "title": "What was sent to the Pyr Library",
+            "description": "Lists the plugins and skins sent from this Pyr (by its identity) to the Pyr Library: their numbers, versions, whether they were approved, and the reviewer's note if there is one.",
             "inputSchema": none,
             "annotations": { "readOnlyHint": true, "openWorldHint": true },
         },
@@ -276,7 +276,7 @@ fn new_skin(ctx: &Ctx, args: &Value) -> Result<String> {
 }
 
 /// What a skin's report says, for Claude.
-fn describe(files: &[(String, Vec<u8>)], report: &ingle_proto::skin::Report) -> String {
+fn describe(files: &[(String, Vec<u8>)], report: &pyr_proto::skin::Report) -> String {
     let m = &report.manifest;
     let mut out = if report.ok() {
         format!("{} {}{}: ready.", m.name, m.version, if m.author.is_empty() { String::new() } else { format!(", by {}", m.author) })
@@ -295,8 +295,8 @@ fn describe(files: &[(String, Vec<u8>)], report: &ingle_proto::skin::Report) -> 
         "\nFiles: {} ({} in all; {} files and {} at most).",
         list.join(", "),
         kb(total),
-        ingle_proto::skin::MAX_FILES,
-        kb(ingle_proto::skin::MAX_TOTAL)
+        pyr_proto::skin::MAX_FILES,
+        kb(pyr_proto::skin::MAX_TOTAL)
     ));
     out
 }
@@ -313,12 +313,12 @@ fn preview_skin(ctx: &Ctx, args: &Value) -> Result<String> {
     if !report.ok() {
         bail!("It can't be shown yet. {}", describe(&files, &report));
     }
-    // Its files first, then the stamp Ingle watches for (so it never sees half a skin).
+    // Its files first, then the stamp Pyr watches for (so it never sees half a skin).
     let dir = ctx.config_dir.join(skins::PREVIEW_DIR);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).with_context(|| format!("couldn't make {}", dir.display()))?;
     for (p, bytes) in &files {
-        if !ingle_proto::library::valid_path(p) {
+        if !pyr_proto::library::valid_path(p) {
             bail!("{p} isn't a plain path inside the skin's folder");
         }
         let to = dir.join(p);
@@ -330,8 +330,8 @@ fn preview_skin(ctx: &Ctx, args: &Value) -> Result<String> {
     let stamp = json!({
         "name": report.manifest.name,
         "from": folder.display().to_string(),
-        "at": ingle_proto::now_ms(),
-        "n": ingle_proto::b64::encode(&ingle_proto::crypto::random_bytes::<9>()),
+        "at": pyr_proto::now_ms(),
+        "n": pyr_proto::b64::encode(&pyr_proto::crypto::random_bytes::<9>()),
     })
     .to_string();
     let path = ctx.config_dir.join(skins::PREVIEW_STAMP);
@@ -339,8 +339,8 @@ fn preview_skin(ctx: &Ctx, args: &Value) -> Result<String> {
     std::fs::write(&tmp, stamp)?;
     std::fs::rename(&tmp, &path).with_context(|| format!("couldn't write {}", path.display()))?;
     Ok(format!(
-        "Ingle is wearing {} now (if Ingle is open; it looks every second, and shows a banner while it's on). Ask the person how it looks. \
-         It stays on until stop_preview, or until they stop it in Ingle.",
+        "Pyr is wearing {} now (if Pyr is open; it looks every second, and shows a banner while it's on). Ask the person how it looks. \
+         It stays on until stop_preview, or until they stop it in Pyr.",
         report.manifest.name
     ))
 }
@@ -352,7 +352,7 @@ fn stop_preview(ctx: &Ctx) -> Result<String> {
         std::fs::remove_file(&stamp).with_context(|| format!("couldn't remove {}", stamp.display()))?;
     }
     let _ = std::fs::remove_dir_all(ctx.config_dir.join(skins::PREVIEW_DIR));
-    Ok(if had { "Ingle is back to the person's own skin." } else { "No skin was being shown." }.to_string())
+    Ok(if had { "Pyr is back to the person's own skin." } else { "No skin was being shown." }.to_string())
 }
 
 fn make_sound(args: &Value) -> Result<String> {
@@ -368,7 +368,7 @@ fn make_sound(args: &Value) -> Result<String> {
         bail!("Give it a different name from the audio file.");
     }
     let bytes = skins::make_sound(&input)?;
-    let ms = ingle_proto::sound::packets(&bytes).map(|(f, _)| f.length_ms()).unwrap_or(0);
+    let ms = pyr_proto::sound::packets(&bytes).map(|(f, _)| f.length_ms()).unwrap_or(0);
     if let Some(parent) = output.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -383,9 +383,9 @@ fn make_sound(args: &Value) -> Result<String> {
 
 fn sent(id: i64, what: &str) -> String {
     if id > 0 {
-        format!("Sent {what} as #{id}. Firelit Games will look at it before it's in the Ingle Library; my_submissions shows where it stands.")
+        format!("Sent {what} as #{id}. Firelit Games will look at it before it's in the Pyr Library; my_submissions shows where it stands.")
     } else {
-        format!("Sent {what}. Firelit Games will look at it before it's in the Ingle Library.")
+        format!("Sent {what}. Firelit Games will look at it before it's in the Pyr Library.")
     }
 }
 
@@ -407,9 +407,9 @@ fn new_addon(args: &Value) -> Result<String> {
     let name = text(args, "name").ok_or_else(|| anyhow!("Give the add-on a name."))?;
     let dir = plugin_source::start_addon(&folder, &name).map_err(|e| anyhow!(e))?;
     Ok(format!(
-        "Made {}: an Ingle add-on with the plugin kit, a /hello command and a panel to change. Its CLAUDE.md explains add-ons. \
+        "Made {}: a Pyr add-on with the plugin kit, a /hello command and a panel to change. Its CLAUDE.md explains add-ons. \
          Build it with `cargo build --release --target wasm32-unknown-unknown` (once: `rustup target add wasm32-unknown-unknown`); \
-         the person can try the .wasm in Ingle (Plugins → Make your own → Try an add-on file).",
+         the person can try the .wasm in Pyr (Plugins → Make your own → Try an add-on file).",
         dir.display()
     ))
 }
@@ -468,7 +468,7 @@ fn my_submissions(ctx: &Ctx) -> Result<String> {
     let server = ctx.library()?;
     let list = ctx.rt.block_on(plugins::mine(&ctx.endpoints, server, &me))?;
     if list.is_empty() {
-        return Ok("Nothing has been sent from this Ingle yet.".into());
+        return Ok("Nothing has been sent from this Pyr yet.".into());
     }
     let mut out = String::new();
     for e in list {
@@ -476,8 +476,8 @@ fn my_submissions(ctx: &Ctx) -> Result<String> {
         let of = if e.update_of != 0 { format!(", a new version of #{}", e.update_of) } else { String::new() };
         let status = match e.status {
             SubmissionStatus::New => "waiting to be looked at",
-            SubmissionStatus::Approved => "approved: it'll be in the Ingle Library soon",
-            SubmissionStatus::Listed => "in the Ingle Library",
+            SubmissionStatus::Approved => "approved: it'll be in the Pyr Library soon",
+            SubmissionStatus::Listed => "in the Pyr Library",
             SubmissionStatus::Rejected => "not approved",
         };
         out.push_str(&format!("#{} {} ({kind}) {}{of}: {status}", e.id, e.name, e.version));

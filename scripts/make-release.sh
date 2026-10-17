@@ -1,40 +1,40 @@
 #!/usr/bin/env bash
-# Assemble a release for firelitgames.com/ingle from the built installers:
-#   KEY=path/to/ingle-release-key.txt scripts/make-release.sh "What's new in this version"
-# Output: dist/release/ with upload/ingle/ (the website folder, with a signed latest.json),
+# Assemble a release for pyr.gg from the built installers:
+#   KEY=path/to/pyr-release-key.txt scripts/make-release.sh "What's new in this version"
+# Output: dist/release/ with upload/pyr/ (the website folder, with a signed latest.json),
 # upload/install-site.sh and publish.cmd / publish.ps1 to put it on the VPS.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 NOTES=${1:-}
-BASE=https://firelitgames.com/ingle
+BASE=https://pyr.gg
 OUT=dist/release
-rm -rf "$OUT" && mkdir -p "$OUT/upload/ingle"
-SITE=$OUT/upload/ingle
+rm -rf "$OUT" && mkdir -p "$OUT/upload/pyr"
+SITE=$OUT/upload/pyr
 # The page, with this release filled in (the page also reads latest.json when it opens), and
 # what it shows (pictures, fonts).
-WIN_MB=$(( ($(stat -c %s "dist/Ingle-Setup-$VERSION.exe") + 500000) / 1000000 ))
+WIN_MB=$(( ($(stat -c %s "dist/Pyr-Setup-$VERSION.exe") + 500000) / 1000000 ))
 TODAY=$(LC_ALL=C date +"%B %-d, %Y")
 sed -e "s/{{VERSION}}/$VERSION/g" -e "s/{{WIN_MB}}/$WIN_MB/g" -e "s/{{DATE}}/$TODAY/g" installer/site/index.html > "$SITE/index.html"
-cp installer/site/ingle-icon.png "$SITE/"
+cp installer/site/pyr-icon.png "$SITE/"
 cp -r installer/site/assets "$SITE/"
-cp "dist/Ingle-Setup-$VERSION.exe" "$SITE/" && cp "dist/Ingle-Setup-$VERSION.exe" "$SITE/Ingle-Setup.exe"
-if [ -f "dist/ingle_${VERSION}_amd64.deb" ]; then
-  cp "dist/ingle_${VERSION}_amd64.deb" "$SITE/" && cp "dist/ingle_${VERSION}_amd64.deb" "$SITE/ingle_amd64.deb"
-  DEB=(--deb "$SITE/ingle_${VERSION}_amd64.deb")
+cp "dist/Pyr-Setup-$VERSION.exe" "$SITE/" && cp "dist/Pyr-Setup-$VERSION.exe" "$SITE/Pyr-Setup.exe"
+if [ -f "dist/pyr_${VERSION}_amd64.deb" ]; then
+  cp "dist/pyr_${VERSION}_amd64.deb" "$SITE/" && cp "dist/pyr_${VERSION}_amd64.deb" "$SITE/pyr_amd64.deb"
+  DEB=(--deb "$SITE/pyr_${VERSION}_amd64.deb")
 else
   echo "no .deb for $VERSION; the Linux download keeps the last one" >&2
-  rm -f "$SITE/ingle_amd64.deb"
+  rm -f "$SITE/pyr_amd64.deb"
   DEB=()
 fi
 # Every version released so far (apps show how many updates they're behind).
 grep -qx "$VERSION" installer/site/releases.txt || echo "$VERSION" >> installer/site/releases.txt
 RELEASED=$(paste -sd, installer/site/releases.txt)
-cargo run -q -p ingle-proto --example release -- sign --key "$KEY" --version "$VERSION" --notes "$NOTES" --released "$RELEASED" \
-  --base-url "$BASE" --windows "$SITE/Ingle-Setup-$VERSION.exe" "${DEB[@]}" --out "$SITE/latest.json"
-# The Ingle Library (scripts/make-library.sh): its signed list and the plugins' files, in one
+cargo run -q -p pyr-proto --example release -- sign --key "$KEY" --version "$VERSION" --notes "$NOTES" --released "$RELEASED" \
+  --base-url "$BASE" --windows "$SITE/Pyr-Setup-$VERSION.exe" "${DEB[@]}" --out "$SITE/latest.json"
+# The Pyr Library (scripts/make-library.sh): its signed list and the plugins' files, in one
 # tar file (its folders are too deep to copy onto a PC one by one); install-site.sh puts them at
-# ingle/library/ on the website.
+# pyr/library/ on the website.
 if [ -f dist/library/index.json ]; then
   tar --owner=0 --group=0 --numeric-owner -cf "$OUT/upload/library.tar" -C dist library/index.json library/files
 else
@@ -46,6 +46,6 @@ cp installer/site/install-site.sh "$OUT/upload/"
 if grep -Eq '^[0-9]+' installer/site/fixed-bugs.txt 2>/dev/null; then
   cp installer/site/fixed-bugs.txt "$OUT/upload/"
 fi
-mkdir -p "$OUT/upload/server" && cp dist/vps/ingle-server-linux-x86_64 dist/vps/ingle-server-linux-aarch64 "$OUT/upload/server/"
+mkdir -p "$OUT/upload/server" && cp dist/vps/pyr-server-linux-x86_64 dist/vps/pyr-server-linux-aarch64 "$OUT/upload/server/"
 cp installer/site/publish.ps1 installer/site/publish.cmd "$OUT/"
 ls -la "$SITE"

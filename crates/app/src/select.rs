@@ -13,7 +13,7 @@ use std::sync::Arc;
 use eframe::egui::text::CCursor;
 use eframe::egui::text_selection::CCursorRange;
 use eframe::egui::{self, Galley, Pos2, Rect, Sense, vec2};
-use ingle_proto::control::{ChannelId, MessageId};
+use pyr_proto::control::{ChannelId, MessageId};
 
 /// A conversation: (server key, channel).
 pub type Chat = (String, ChannelId);

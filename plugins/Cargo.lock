@@ -3,21 +3,21 @@
 version = 4
 
 [[package]]
-name = "ingle-dice"
+name = "pyr-dice"
 version = "1.0.0"
 dependencies = [
- "ingle-plugin",
+ "pyr-plugin",
 ]
 
 [[package]]
-name = "ingle-hello"
+name = "pyr-hello"
 version = "0.1.0"
 dependencies = [
- "ingle-plugin",
+ "pyr-plugin",
 ]
 
 [[package]]
-name = "ingle-plugin"
+name = "pyr-plugin"
 version = "0.1.0"
 dependencies = [
  "serde",

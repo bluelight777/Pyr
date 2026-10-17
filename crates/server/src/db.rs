@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use ingle_proto::control::{CustomEmoji, Relation, RelationKind, ServerGif, ServerSound,
+use pyr_proto::control::{CustomEmoji, Relation, RelationKind, ServerGif, ServerSound,
     Attachment, Channel, ChannelId, ChannelKind, Dm, FileKind, Group, Member, Message, MessageId, Reaction, Role, RoleDef, RoleId, UserId,
 };
-use ingle_proto::now_ms;
+use pyr_proto::now_ms;
 use parking_lot::Mutex;
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -174,7 +174,7 @@ CREATE TABLE IF NOT EXISTS sounds (
     length_ms INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
 );
--- Ingle bug reports sent to this server (when its owner collects them). Whoever sent one
+-- Pyr bug reports sent to this server (when its owner collects them). Whoever sent one
 -- isn't recorded: no account, no address.
 CREATE TABLE IF NOT EXISTS bug_reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -187,9 +187,9 @@ CREATE TABLE IF NOT EXISTS bug_reports (
     os TEXT NOT NULL DEFAULT '',
     log TEXT NOT NULL DEFAULT ''
 );
--- Plugins and skins sent in for the Ingle Library (when the owner collects them): Rust source
+-- Plugins and skins sent in for the Pyr Library (when the owner collects them): Rust source
 -- or a skin's files, waiting for review. Whoever sent one isn't recorded, beyond what they
--- wrote in it and, when they signed it (0.7.5), their Ingle id (`author_id`, added by migrate):
+-- wrote in it and, when they signed it (0.7.5), their Pyr id (`author_id`, added by migrate):
 -- that's what lets them send new versions of it and see where theirs stand.
 CREATE TABLE IF NOT EXISTS plugin_submissions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -216,7 +216,7 @@ CREATE TABLE IF NOT EXISTS vouches (
     at INTEGER NOT NULL,
     PRIMARY KEY (by, for_uid)
 );
--- Author names in the Ingle Library (0.8): the first signed sender to send a plugin or skin in
+-- Author names in the Pyr Library (0.8): the first signed sender to send a plugin or skin in
 -- under a name has it, by `author_key` (so names that only look different are the same one).
 CREATE TABLE IF NOT EXISTS author_names (
     key TEXT PRIMARY KEY,
@@ -330,9 +330,9 @@ fn migrate(c: &Connection) -> Result<()> {
             .flatten()
             .collect();
         for (author, author_id, files, at) in sent {
-            let files: Vec<ingle_proto::control::SourceFile> = serde_json::from_str(&files).unwrap_or_default();
+            let files: Vec<pyr_proto::control::SourceFile> = serde_json::from_str(&files).unwrap_or_default();
             for name in [author, skin_author(&files)] {
-                let key = ingle_proto::control::author_key(&name);
+                let key = pyr_proto::control::author_key(&name);
                 if !key.is_empty() {
                     c.execute("INSERT OR IGNORE INTO author_names(key, name, author_id, at) VALUES (?1, ?2, ?3, ?4)", params![key, name.trim(), author_id, at])?;
                 }
@@ -352,11 +352,11 @@ fn migrate(c: &Connection) -> Result<()> {
 }
 
 /// The author in a skin's own `skin.json` (empty when it isn't a skin, or says none).
-pub fn skin_author(files: &[ingle_proto::control::SourceFile]) -> String {
+pub fn skin_author(files: &[pyr_proto::control::SourceFile]) -> String {
     files
         .iter()
-        .find(|f| f.path == ingle_proto::skin::MANIFEST)
-        .and_then(|f| ingle_proto::b64::decode(&f.data).ok())
+        .find(|f| f.path == pyr_proto::skin::MANIFEST)
+        .and_then(|f| pyr_proto::b64::decode(&f.data).ok())
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
         .and_then(|v| v.get("author").and_then(|a| a.as_str()).map(str::to_string))
         .unwrap_or_default()
@@ -649,7 +649,7 @@ impl Db {
             .flatten()
     }
 
-    pub fn add_bug(&self, r: &ingle_proto::control::BugReport) -> Result<i64> {
+    pub fn add_bug(&self, r: &pyr_proto::control::BugReport) -> Result<i64> {
         let c = self.conn.lock();
         c.execute(
             "INSERT INTO bug_reports(created_at, title, body, app_version, os, log) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -664,8 +664,8 @@ impl Db {
     }
 
     /// The ones waiting to be looked at first, then the rest; newest first in each.
-    pub fn bugs(&self, limit: usize) -> Vec<ingle_proto::control::BugEntry> {
-        use ingle_proto::control::{BugEntry, BugReport, BugStatus};
+    pub fn bugs(&self, limit: usize) -> Vec<pyr_proto::control::BugEntry> {
+        use pyr_proto::control::{BugEntry, BugReport, BugStatus};
         let c = self.conn.lock();
         let Ok(mut q) = c.prepare(
             "SELECT id, created_at, status, title, body, app_version, os, log FROM bug_reports \
@@ -687,15 +687,15 @@ impl Db {
     }
 
     /// Report `id`'s status (None: there's no such report).
-    pub fn bug_status(&self, id: i64) -> Option<ingle_proto::control::BugStatus> {
+    pub fn bug_status(&self, id: i64) -> Option<pyr_proto::control::BugStatus> {
         let s: String = self.conn.lock().query_row("SELECT status FROM bug_reports WHERE id = ?1", [id], |r| r.get(0)).ok()?;
-        ingle_proto::control::BugStatus::parse(&s)
+        pyr_proto::control::BugStatus::parse(&s)
     }
 
     /// Reports a release fixed, marked fixed (as the owner's Mark fixed does): only new and
     /// approved ones (one the owner rejected stays rejected). What became of each id.
-    pub fn mark_bugs_fixed(&self, ids: &[i64]) -> Result<Vec<(i64, Option<ingle_proto::control::BugStatus>)>> {
-        use ingle_proto::control::BugStatus;
+    pub fn mark_bugs_fixed(&self, ids: &[i64]) -> Result<Vec<(i64, Option<pyr_proto::control::BugStatus>)>> {
+        use pyr_proto::control::BugStatus;
         let mut out = Vec::new();
         for &id in ids {
             let was = self.bug_status(id);
@@ -707,7 +707,7 @@ impl Db {
         Ok(out)
     }
 
-    pub fn set_bug_status(&self, id: i64, status: ingle_proto::control::BugStatus) -> Result<bool> {
+    pub fn set_bug_status(&self, id: i64, status: pyr_proto::control::BugStatus) -> Result<bool> {
         Ok(self
             .conn
             .lock()
@@ -751,7 +751,7 @@ impl Db {
     /// A plugin or skin sent in; `files` is its files as JSON, `size` their bytes in all.
     /// `sub.author_id` is stored only once its signature has been checked (the caller clears
     /// it otherwise); `changes` says how a new version differs from the one it updates.
-    pub fn add_submission(&self, sub: &ingle_proto::control::PluginSubmission, files: &str, size: u64, changes: &str) -> Result<i64> {
+    pub fn add_submission(&self, sub: &pyr_proto::control::PluginSubmission, files: &str, size: u64, changes: &str) -> Result<i64> {
         let c = self.conn.lock();
         c.execute(
             "INSERT INTO plugin_submissions(created_at, name, kind, version, summary, author, contact, app_version, file_count, size, files, author_id, update_of, changes) \
@@ -777,19 +777,19 @@ impl Db {
     }
 
     /// `by`'s vouches, in place of the ones they had.
-    pub fn set_vouches(&self, by: &str, vouches: &[ingle_proto::control::Vouch]) -> Result<()> {
+    pub fn set_vouches(&self, by: &str, vouches: &[pyr_proto::control::Vouch]) -> Result<()> {
         let mut c = self.conn.lock();
         let tx = c.transaction()?;
         tx.execute("DELETE FROM vouches WHERE by = ?1", [by])?;
         for v in vouches {
-            tx.execute("INSERT OR REPLACE INTO vouches(by, for_uid, sig, at) VALUES (?1, ?2, ?3, ?4)", params![by, v.for_uid, ingle_proto::b64::encode(&v.sig), now_ms()])?;
+            tx.execute("INSERT OR REPLACE INTO vouches(by, for_uid, sig, at) VALUES (?1, ?2, ?3, ?4)", params![by, v.for_uid, pyr_proto::b64::encode(&v.sig), now_ms()])?;
         }
         tx.commit()?;
         Ok(())
     }
 
     /// The vouches these people made (at most `max`).
-    pub fn vouches_by(&self, by: &[String], max: usize) -> Vec<ingle_proto::control::Vouch> {
+    pub fn vouches_by(&self, by: &[String], max: usize) -> Vec<pyr_proto::control::Vouch> {
         let c = self.conn.lock();
         let Ok(mut st) = c.prepare("SELECT for_uid, sig FROM vouches WHERE by = ?1 ORDER BY at DESC LIMIT ?2") else { return Vec::new() };
         let mut out = Vec::new();
@@ -800,8 +800,8 @@ impl Db {
             }
             let rows = st.query_map(params![b, left as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)));
             for (for_uid, sig) in rows.map(|r| r.flatten().collect::<Vec<_>>()).unwrap_or_default() {
-                if let Ok(sig) = ingle_proto::b64::decode(&sig) {
-                    out.push(ingle_proto::control::Vouch { by: b.clone(), for_uid, sig });
+                if let Ok(sig) = pyr_proto::b64::decode(&sig) {
+                    out.push(pyr_proto::control::Vouch { by: b.clone(), for_uid, sig });
                 }
             }
         }
@@ -809,14 +809,14 @@ impl Db {
     }
 
     /// The vouches for `uid`, newest first (at most `max`).
-    pub fn vouches_for(&self, uid: &str, max: usize) -> Vec<ingle_proto::control::Vouch> {
+    pub fn vouches_for(&self, uid: &str, max: usize) -> Vec<pyr_proto::control::Vouch> {
         let c = self.conn.lock();
         let Ok(mut st) = c.prepare("SELECT by, sig FROM vouches WHERE for_uid = ?1 ORDER BY at DESC LIMIT ?2") else { return Vec::new() };
         let rows = st.query_map(params![uid, max as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)));
         rows.map(|r| r.flatten().collect::<Vec<_>>())
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|(by, sig)| ingle_proto::b64::decode(&sig).ok().map(|sig| ingle_proto::control::Vouch { by, for_uid: uid.to_string(), sig }))
+            .filter_map(|(by, sig)| pyr_proto::b64::decode(&sig).ok().map(|sig| pyr_proto::control::Vouch { by, for_uid: uid.to_string(), sig }))
             .collect()
     }
 
@@ -829,8 +829,8 @@ impl Db {
             .unwrap_or(0) as u64
     }
 
-    fn submission_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ingle_proto::control::SubmissionEntry> {
-        use ingle_proto::control::{SubmissionEntry, SubmissionStatus};
+    fn submission_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<pyr_proto::control::SubmissionEntry> {
+        use pyr_proto::control::{SubmissionEntry, SubmissionStatus};
         Ok(SubmissionEntry {
             id: r.get(0)?,
             created_at: r.get(1)?,
@@ -852,7 +852,7 @@ impl Db {
     }
 
     /// The ones waiting to be looked at first, then the rest; newest first in each (no files).
-    pub fn submissions(&self, limit: usize) -> Vec<ingle_proto::control::SubmissionEntry> {
+    pub fn submissions(&self, limit: usize) -> Vec<pyr_proto::control::SubmissionEntry> {
         let c = self.conn.lock();
         let Ok(mut q) = c.prepare(&format!("SELECT {SUBMISSION_COLUMNS} FROM plugin_submissions ORDER BY (status = 'new') DESC, id DESC LIMIT ?1")) else {
             return Vec::new();
@@ -860,8 +860,8 @@ impl Db {
         q.query_map([limit as i64], Self::submission_row).map(|rows| rows.filter_map(|r| r.ok()).collect()).unwrap_or_default()
     }
 
-    /// What one sender (by their Ingle id) sent in, newest first (no files).
-    pub fn submissions_by(&self, author_id: &str, limit: usize) -> Vec<ingle_proto::control::SubmissionEntry> {
+    /// What one sender (by their Pyr id) sent in, newest first (no files).
+    pub fn submissions_by(&self, author_id: &str, limit: usize) -> Vec<pyr_proto::control::SubmissionEntry> {
         if author_id.is_empty() {
             return Vec::new();
         }
@@ -873,7 +873,7 @@ impl Db {
     }
 
     /// One submission with its files (as stored: JSON).
-    pub fn submission(&self, id: i64) -> Option<(ingle_proto::control::SubmissionEntry, String)> {
+    pub fn submission(&self, id: i64) -> Option<(pyr_proto::control::SubmissionEntry, String)> {
         let c = self.conn.lock();
         c.query_row(&format!("SELECT {SUBMISSION_COLUMNS}, files FROM plugin_submissions WHERE id = ?1"), [id], |r| {
             Ok((Self::submission_row(r)?, r.get::<_, String>(16)?))
@@ -882,7 +882,7 @@ impl Db {
     }
 
     /// `note` (for the sender) replaces the one before, if any.
-    pub fn set_submission_status(&self, id: i64, status: ingle_proto::control::SubmissionStatus, note: &str) -> Result<bool> {
+    pub fn set_submission_status(&self, id: i64, status: pyr_proto::control::SubmissionStatus, note: &str) -> Result<bool> {
         Ok(self
             .conn
             .lock()
@@ -1778,7 +1778,7 @@ impl Db {
 /// A random invite code (lower-case letters and digits, no look-alikes).
 pub fn new_invite_code(len: usize) -> String {
     const ALPHABET: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
-    let bytes = ingle_proto::crypto::random_bytes::<32>();
+    let bytes = pyr_proto::crypto::random_bytes::<32>();
     bytes.iter().take(len).map(|b| ALPHABET[*b as usize % ALPHABET.len()] as char).collect()
 }
 
@@ -1820,7 +1820,7 @@ mod tests {
 
     #[test]
     fn a_release_marks_the_reports_it_fixed() {
-        use ingle_proto::control::{BugReport, BugStatus};
+        use pyr_proto::control::{BugReport, BugStatus};
         let db = Db::open_in_memory().unwrap();
         let r = BugReport { title: "t".into(), ..Default::default() };
         let (a, b, c, d) = (db.add_bug(&r).unwrap(), db.add_bug(&r).unwrap(), db.add_bug(&r).unwrap(), db.add_bug(&r).unwrap());
@@ -1877,7 +1877,7 @@ mod scrub_tests {
     /// A deleted or edited-away message must not survive anywhere in the database files.
     #[test]
     fn deleted_and_edited_text_leaves_no_trace_on_disk() {
-        let dir = std::env::temp_dir().join(format!("ingle-scrub-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pyr-scrub-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("server.db");

@@ -1,14 +1,14 @@
-//! The updater, where people look for it. On Windows it's a chip in Ingle's own title strip,
+//! The updater, where people look for it. On Windows it's a chip in Pyr's own title strip,
 //! right after the name: the version ("0.7.3", and a check-for-updates arrow beside it), and
-//! when an update is out, a glowing green "Update to 0.7.4" (click it: Ingle downloads it,
-//! installs it and comes back where it was). Without a title strip of Ingle's own (Linux) the
+//! when an update is out, a glowing green "Update to 0.7.4" (click it: Pyr downloads it,
+//! installs it and comes back where it was). Without a title strip of Pyr's own (Linux) the
 //! same states are a button at the bottom of the server rail.
 
 use std::f32::consts::TAU;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Stroke, pos2, vec2};
-use ingle_proto::release::Manifest;
+use pyr_proto::release::Manifest;
 
 use crate::update::{Asker, Status, Updater, current_version};
 use crate::{icons, theme};
@@ -62,11 +62,11 @@ enum Look {
     Available(Manifest, usize),
     /// Downloading it: bytes done, and in all.
     Downloading(u64, u64),
-    /// Downloaded: being installed, and Ingle is about to restart.
+    /// Downloaded: being installed, and Pyr is about to restart.
     Restarting,
 }
 
-/// Where the updater is, for what Ingle says about it ("Click Update …").
+/// Where the updater is, for what Pyr says about it ("Click Update …").
 pub fn where_it_is() -> &'static str {
     if crate::titlebar::enabled() { "at the top of the window" } else { "at the bottom of the server list" }
 }
@@ -150,7 +150,7 @@ impl Chip {
         (0.5 - 0.5 * (age * TAU / PULSE).cos()) * fade
     }
 
-    /// The chip in Ingle's title strip, from `x` along and centred on `y`. Returns where it ends.
+    /// The chip in Pyr's title strip, from `x` along and centred on `y`. Returns where it ends.
     pub fn title_chip(&mut self, ui: &mut egui::Ui, u: &Updater, x: f32, y: f32) -> f32 {
         let look = self.look(u);
         let now = ui.input(|i| i.time) as f32;
@@ -177,7 +177,7 @@ impl Chip {
                         theme::ONLINE(),
                         theme::ONLINE(),
                         GREEN_TINT,
-                        format!("Ingle {} is the newest version.", current_version()),
+                        format!("Pyr {} is the newest version.", current_version()),
                     ),
                     Look::Failed(why) => (
                         Some("Couldn't check"),
@@ -186,7 +186,7 @@ impl Chip {
                         AMBER_TINT,
                         format!("Couldn't check for updates: {why}\nClick to try again."),
                     ),
-                    _ => (None, theme::DIM(), theme::DIM(), Color32::TRANSPARENT, format!("Ingle {}. Click to check for updates.", current_version())),
+                    _ => (None, theme::DIM(), theme::DIM(), Color32::TRANSPARENT, format!("Pyr {}. Click to check for updates.", current_version())),
                 };
                 let text_galley = text.map(|t| ui.painter().layout_no_wrap(t.to_string(), theme::font(11.0), text_col));
                 let target = PAD + vw + GAP + ICON + text_galley.as_ref().map(|g| GAP + g.size().x).unwrap_or(0.0) + PAD - 1.0;
@@ -324,12 +324,12 @@ impl Chip {
         let tip = match &look {
             Look::Available(m, missed) => {
                 let behind = if *missed > 1 { format!(" You're {missed} updates behind.") } else { String::new() };
-                format!("Ingle {} is out.{behind}\nClick to update: Ingle restarts and puts you back where you were.", m.version)
+                format!("Pyr {} is out.{behind}\nClick to update: Pyr restarts and puts you back where you were.", m.version)
             }
             Look::Downloading(done, total) => {
-                format!("Downloading Ingle {version}: {:.1} of {:.1} MB", *done as f64 / 1e6, *total as f64 / 1e6)
+                format!("Downloading Pyr {version}: {:.1} of {:.1} MB", *done as f64 / 1e6, *total as f64 / 1e6)
             }
-            _ => format!("Installing Ingle {version}. Ingle restarts and puts you back where you were."),
+            _ => format!("Installing Pyr {version}. Pyr restarts and puts you back where you were."),
         };
         let resp = if clickable { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp };
         if resp.on_hover_text(tip).clicked() {
@@ -340,7 +340,7 @@ impl Chip {
         rect.right()
     }
 
-    /// The updater at the bottom of the server rail, where there's no title strip of Ingle's own.
+    /// The updater at the bottom of the server rail, where there's no title strip of Pyr's own.
     pub fn rail_button(&mut self, ui: &mut egui::Ui, u: &Updater) {
         let look = self.look(u);
         let now = ui.input(|i| i.time) as f32;
@@ -390,10 +390,10 @@ impl Chip {
                 let tip = match &look {
                     Look::Available(m, missed) => {
                         let behind = if *missed > 1 { format!(" You're {missed} updates behind.") } else { String::new() };
-                        format!("Ingle {} is out.{behind}\nClick to update: Ingle restarts and puts you back where you were.", m.version)
+                        format!("Pyr {} is out.{behind}\nClick to update: Pyr restarts and puts you back where you were.", m.version)
                     }
-                    Look::Downloading(done, total) => format!("Downloading Ingle {version}: {:.1} of {:.1} MB", *done as f64 / 1e6, *total as f64 / 1e6),
-                    _ => format!("Installing Ingle {version}…"),
+                    Look::Downloading(done, total) => format!("Downloading Pyr {version}: {:.1} of {:.1} MB", *done as f64 / 1e6, *total as f64 / 1e6),
+                    _ => format!("Installing Pyr {version}…"),
                 };
                 let resp = if clickable { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp };
                 if resp.on_hover_text(tip).clicked() {
@@ -409,9 +409,9 @@ impl Chip {
                 let hot = ui.ctx().animate_bool_with_time(id.with("hot"), resp.hovered() && !checking, 0.12);
                 let (icon_col, fill, tip) = match &look {
                     Look::Checking => (theme::MUTED(), theme::ELEV(), "Checking for updates…".to_string()),
-                    Look::UpToDate(_) => (theme::ONLINE(), GREEN_TINT, format!("Ingle {} is the newest version.", current_version())),
+                    Look::UpToDate(_) => (theme::ONLINE(), GREEN_TINT, format!("Pyr {} is the newest version.", current_version())),
                     Look::Failed(why) => (AMBER, lerp(AMBER_TINT, AMBER_HOT, hot), format!("Couldn't check for updates: {why}\nClick to try again.")),
-                    _ => (lerp(theme::DIM(), theme::TEXT(), hot), theme::HOVER().gamma_multiply(hot), format!("Ingle {}. Click to check for updates.", current_version())),
+                    _ => (lerp(theme::DIM(), theme::TEXT(), hot), theme::HOVER().gamma_multiply(hot), format!("Pyr {}. Click to check for updates.", current_version())),
                 };
                 let p = ui.painter();
                 p.rect_filled(rect, CornerRadius::same(11), fill);

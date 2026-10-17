@@ -1,27 +1,27 @@
-//! Idle, like Discord: an Ingle that's idle shows its person with a moon on everyone else's
-//! Ingle; while they're on another Ingle that isn't idle, they show as online; coming back
+//! Idle, like Discord: a Pyr that's idle shows its person with a moon on everyone else's
+//! Pyr; while they're on another Pyr that isn't idle, they show as online; coming back
 //! shows at once.
 
 use std::time::{Duration, Instant};
 
-use ingle_engine::state::ConnStatus;
-use ingle_engine::{Engine, EngineOptions};
+use pyr_engine::state::ConnStatus;
+use pyr_engine::{Engine, EngineOptions};
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
     // (Tests run side by side: each folder its own, even made in the same millisecond.)
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let d = std::env::temp_dir().join(format!("ingle-idle-{}-{}-{n}", name, ingle_proto::now_ms()));
+    let d = std::env::temp_dir().join(format!("pyr-idle-{}-{}-{n}", name, pyr_proto::now_ms()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
 
-/// An Ingle named `name`; with `same_as`, one that's the same person (their identity copied,
-/// like Ingle on a second PC).
+/// A Pyr named `name`; with `same_as`, one that's the same person (their identity copied,
+/// like Pyr on a second PC).
 fn client(name: &str, same_as: Option<&std::path::Path>) -> (Engine, std::path::PathBuf) {
     let dir = temp_dir(name);
-    let cfg = ingle_engine::config::Config { display_name: name.to_string(), ..Default::default() };
-    ingle_engine::config::save_config(&dir, &cfg).unwrap();
+    let cfg = pyr_engine::config::Config { display_name: name.to_string(), ..Default::default() };
+    pyr_engine::config::save_config(&dir, &cfg).unwrap();
     if let Some(other) = same_as {
         std::fs::copy(other.join("identity.key"), dir.join("identity.key")).unwrap();
     }
@@ -45,8 +45,8 @@ fn connected(e: &Engine) -> bool {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn idle_shows_as_a_moon_on_everyone_elses_ingle() {
-    let server = ingle_server::start(ingle_server::ServerConfig {
+async fn idle_shows_as_a_moon_on_everyone_elses_pyr() {
+    let server = pyr_server::start(pyr_server::ServerConfig {
         data_dir: temp_dir("server"),
         bind: "127.0.0.1:0".parse().unwrap(),
         public_host: Some("127.0.0.1".into()),
@@ -96,11 +96,11 @@ async fn idle_shows_as_a_moon_on_everyone_elses_ingle() {
     server.shutdown().await;
 }
 
-/// Do Not Disturb, like Discord's: Bob sees Alice's red dot while she says so on an Ingle of
-/// hers, it's remembered, and it goes when she turns it off (or the Ingle that said so leaves).
+/// Do Not Disturb, like Discord's: Bob sees Alice's red dot while she says so on a Pyr of
+/// hers, it's remembered, and it goes when she turns it off (or the Pyr that said so leaves).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn do_not_disturb_shows_to_everyone() {
-    let server = ingle_server::start(ingle_server::ServerConfig {
+    let server = pyr_server::start(pyr_server::ServerConfig {
         data_dir: temp_dir("server-dnd"),
         bind: "127.0.0.1:0".parse().unwrap(),
         public_host: Some("127.0.0.1".into()),

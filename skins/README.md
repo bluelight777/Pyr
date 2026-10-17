@@ -1,9 +1,9 @@
-# Making an Ingle skin
+# Making a Pyr skin
 
-A skin changes how [Ingle](https://firelitgames.com/ingle) looks and sounds: its colors, a
+A skin changes how [Pyr](https://pyr.gg) looks and sounds: its colors, a
 picture behind the chat, its fonts, and the sounds it plays for messages, people joining and
-calls. Skins are made with Claude through the **Claude connector**, tried live in Ingle, and
-sent in for the Ingle Library. Once Firelit Games looks one over and approves it, it's in the
+calls. Skins are made with Claude through the **Claude connector**, tried live in Pyr, and
+sent in for the Pyr Library. Once Firelit Games looks one over and approves it, it's in the
 Library for everyone, in the Skins page's Gallery (the palette under Plugins, at the bottom of
 the server list), shown under the name its maker gave it.
 
@@ -17,7 +17,7 @@ blood-moon/
   fonts/Bold.ttf
   fonts/OFL.txt          (a font's license travels with it)
   sounds/message.ings
-  preview.png            (optional: a picture of Ingle wearing it, for the Library)
+  preview.png            (optional: a picture of Pyr wearing it, for the Library)
 ```
 
 ## skin.json
@@ -35,7 +35,7 @@ blood-moon/
 }
 ```
 
-Only `name` and `version` are needed. Anything left out stays as Ingle's own skin, Campfire.
+Only `name` and `version` are needed. Anything left out stays as Pyr's own skin, Campfire.
 
 ### colors
 
@@ -80,7 +80,7 @@ stage `#100d0b`, tile `#1d1815`, code_bg `#1a1512`, selection `#8a401c`.
 
 ### background
 
-A PNG, JPEG or WebP (4096 pixels a side at most), seen through Ingle's colors.
+A PNG, JPEG or WebP (4096 pixels a side at most), seen through Pyr's colors.
 
 - `show`: how much of it shows through, from 0.1 (a hint) to 0.6. The colors stay on top of
   it, so pick a `main` that text reads well on.
@@ -91,13 +91,13 @@ A PNG, JPEG or WebP (4096 pixels a side at most), seen through Ingle's colors.
 
 TrueType or OpenType files (`.ttf`, `.otf`): `body` for text, `bold` for headings and names (the
 body font if there's none). `scale` (0.8 to 1.25) evens out fonts that look bigger or smaller
-than Ingle's own at the same size. Ingle keeps its own font for any letter or emoji a skin's
+than Pyr's own at the same size. Pyr keeps its own font for any letter or emoji a skin's
 font doesn't have. Most fonts come with a license (the SIL Open Font License, say) that has to
 travel with them: put its text file in the skin.
 
 ### sounds
 
-Ingle sound files (`.ings`: Opus, 10 seconds at most). The connector's `make_sound` makes one
+Pyr sound files (`.ings`: Opus, 10 seconds at most). The connector's `make_sound` makes one
 from an MP3, WAV, OGG or FLAC. The sounds a skin can replace:
 
 | Name | When it plays |
@@ -126,15 +126,15 @@ folder until you stop it, and again each time you save a change to its files.
 
 ## With Claude
 
-With the Claude connector set up (Ingle: Settings → Claude, which adds it to the Claude app),
+With the Claude connector set up (Pyr: Settings → Claude, which adds it to the Claude app),
 ask Claude to make you a skin. It can:
 
 - `new_skin`: start a skin folder with Campfire's colors written out to change,
-- `make_sound`: turn an audio file into an Ingle sound,
-- `check_skin`: check a folder the way Ingle and the Library will,
-- `preview_skin`: show it live in your Ingle (`stop_preview` puts yours back),
-- `send_skin`: send it in for the Ingle Library, and later, a new version of it,
+- `make_sound`: turn an audio file into a Pyr sound,
+- `check_skin`: check a folder the way Pyr and the Library will,
+- `preview_skin`: show it live in your Pyr (`stop_preview` puts yours back),
+- `send_skin`: send it in for the Pyr Library, and later, a new version of it,
 - `my_submissions`: see whether what you sent was approved (and any note about it).
 
-New versions can only come from the Ingle that sent the first one (it's signed with your Ingle
+New versions can only come from the Pyr that sent the first one (it's signed with your Pyr
 identity), through the connector.

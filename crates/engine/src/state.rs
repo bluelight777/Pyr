@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
-use ingle_proto::control::*;
+use pyr_proto::control::*;
 
 use crate::config::Settings;
 
@@ -328,7 +328,7 @@ impl ServerView {
             .get(uid)
             .map(|m| m.name.clone())
             .filter(|n| !n.is_empty())
-            // (By characters: an id from a server that isn't Ingle's own can be any text.)
+            // (By characters: an id from a server that isn't Pyr's own can be any text.)
             .unwrap_or_else(|| format!("user-{}", uid.chars().take(6).collect::<String>()))
     }
 
@@ -591,17 +591,17 @@ pub struct AppState {
     pub bug_send: BugSend,
     pub bug_sends_done: u64,
     /// Bug reports on servers I own (fetched when looked at), by server key.
-    pub bugs: HashMap<String, Vec<ingle_proto::control::BugEntry>>,
+    pub bugs: HashMap<String, Vec<pyr_proto::control::BugEntry>>,
     /// The plugin being sent in for the library, or how the last one went (like `bug_send`).
     pub plugin_send: BugSend,
     pub plugin_sends_done: u64,
-    /// What I sent in to the Ingle Library and where each stands (`Engine::my_submissions`):
+    /// What I sent in to the Pyr Library and where each stands (`Engine::my_submissions`):
     /// none until asked, then the list or why it couldn't be had.
-    pub my_submissions: Option<Result<Vec<ingle_proto::control::SubmissionEntry>, String>>,
+    pub my_submissions: Option<Result<Vec<pyr_proto::control::SubmissionEntry>, String>>,
     /// Plugins sent in to servers I own (fetched when looked at), by server key; and the files
     /// of the ones opened, by (server key, id).
-    pub submissions: HashMap<String, Vec<ingle_proto::control::SubmissionEntry>>,
-    pub submission_files: HashMap<(String, i64), Vec<ingle_proto::control::SourceFile>>,
+    pub submissions: HashMap<String, Vec<pyr_proto::control::SubmissionEntry>>,
+    pub submission_files: HashMap<(String, i64), Vec<pyr_proto::control::SourceFile>>,
     /// Backups of servers I own, by server key.
     pub backups: HashMap<String, BackupStatus>,
     pub devices: DeviceLists,
@@ -629,7 +629,7 @@ pub struct AppState {
     pub incoming_calls: Vec<IncomingCall>,
     /// The call we started in a direct message, while the other person isn't in it yet.
     pub outgoing_call: Option<OutgoingCall>,
-    /// Calls missed so far, and who from last (the tray icon says so while Ingle is hidden).
+    /// Calls missed so far, and who from last (the tray icon says so while Pyr is hidden).
     pub missed_calls: u64,
     pub last_missed_from: String,
 }
@@ -791,7 +791,7 @@ mod tests {
 
     #[test]
     fn any_member_id_has_a_name() {
-        // A server that isn't Ingle's own could send ids that aren't base64: multi-byte
+        // A server that isn't Pyr's own could send ids that aren't base64: multi-byte
         // characters where a name gets cut used to crash the app.
         let s = ServerView::new("k".into(), "S".into(), String::new());
         assert_eq!(s.member_name("abcdéfgh"), "user-abcdéf");

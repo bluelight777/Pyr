@@ -1,4 +1,4 @@
-//! Ingle's words: one short word with its picture (an emoji) for each value of a byte, so a few
+//! Pyr's words: one short word with its picture (an emoji) for each value of a byte, so a few
 //! bytes of a hash can be said aloud or compared by eye instead of a row of digits ("Compare
 //! words", see `handshake`). Chosen to be easy to say and hear apart: common things, no two
 //! that differ by one sound (cat and car, ship and sheep), and no two that said in a row sound

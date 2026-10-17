@@ -1,12 +1,12 @@
 //! Modal dialogs: join server, invites, channels, the screen picker (Settings is in settings.rs).
 
 use eframe::egui::{self, Align, Color32, CornerRadius, Layout, RichText, Sense, pos2, vec2};
-use ingle_engine::config::ScreenPreset;
-use ingle_engine::state::{AppState, BugSend, ConnStatus};
-use ingle_engine::video::SourceKind;
-use ingle_proto::control::{ChannelKind, ROLES_FEATURE, perm};
+use pyr_engine::config::ScreenPreset;
+use pyr_engine::state::{AppState, BugSend, ConnStatus};
+use pyr_engine::video::SourceKind;
+use pyr_proto::control::{ChannelKind, ROLES_FEATURE, perm};
 
-use crate::app::{Act, Dialog, IngleApp, RoleEdit, rgb};
+use crate::app::{Act, Dialog, PyrApp, RoleEdit, rgb};
 use crate::{icons, theme};
 
 fn modal_frame() -> egui::Frame {
@@ -19,9 +19,9 @@ fn modal_frame() -> egui::Frame {
 
 /// Who can see a channel, and (`posting`) who can send messages in it: like Discord's
 /// private channels, by role. Admins and the owner always can.
-fn access_editor(ui: &mut egui::Ui, s: &ingle_engine::state::ServerView, access: &mut crate::app::ChannelAccess, posting: bool) {
+fn access_editor(ui: &mut egui::Ui, s: &pyr_engine::state::ServerView, access: &mut crate::app::ChannelAccess, posting: bool) {
     // The roles to pick from, in their colors (like the Roles menu on a member).
-    let roles = |ui: &mut egui::Ui, salt: &str, picked: &mut Vec<ingle_proto::control::RoleId>| {
+    let roles = |ui: &mut egui::Ui, salt: &str, picked: &mut Vec<pyr_proto::control::RoleId>| {
         if s.roles.is_empty() {
             ui.label(
                 RichText::new("There are no roles yet: make some in Server Settings → Roles. Until then only admins and the owner are in.")
@@ -106,13 +106,13 @@ fn insert_at_cursor(ctx: &egui::Context, id: egui::Id, text: &mut String, insert
 /// How the notice about a bug report that didn't go starts (its "Open it" brings it back).
 pub(crate) const BUG_NOT_SENT: &str = "Your bug report wasn't sent";
 
-/// Ingle's bug server, when it's one of my servers, I'm its owner and I'm connected to it: its
+/// Pyr's bug server, when it's one of my servers, I'm its owner and I'm connected to it: its
 /// key, its name, and whether it collects reports yet.
 fn my_bug_server(st: &AppState) -> Option<(String, String, bool)> {
-    let key = ingle_engine::bugs::server_key()?;
+    let key = pyr_engine::bugs::server_key()?;
     let s = st.server(&key)?;
-    let owner = s.me.as_ref().map(|m| m.role == ingle_proto::control::Role::Owner).unwrap_or(false);
-    (owner && s.status == ConnStatus::Connected && s.has(ingle_proto::control::BUGS_FEATURE)).then(|| (key, s.info.name.clone(), s.info.bug_reports))
+    let owner = s.me.as_ref().map(|m| m.role == pyr_proto::control::Role::Owner).unwrap_or(false);
+    (owner && s.status == ConnStatus::Connected && s.has(pyr_proto::control::BUGS_FEATURE)).then(|| (key, s.info.name.clone(), s.info.bug_reports))
 }
 
 /// A box of text in a dialog: a note, or (`error`) what went wrong.
@@ -128,7 +128,7 @@ pub(crate) fn notice(ui: &mut egui::Ui, text: &str, error: bool) {
         });
 }
 
-impl IngleApp {
+impl PyrApp {
     /// A channel name box with an emoji button beside it (the emoji goes where the cursor is,
     /// like Discord's 🎮-gaming). `salt` keeps each dialog's picker apart.
     fn channel_name_input(&mut self, ui: &mut egui::Ui, st: &AppState, salt: &str, name: &mut String, hint: &str, acts: &mut Vec<Act>) -> egui::Response {
@@ -196,7 +196,7 @@ impl IngleApp {
                 }
             }
             BugSend::Failed { message, not_collecting } if !open && self.ui.bug_draft.is_some() => {
-                let why = if *not_collecting { "Ingle's developers aren't taking bug reports right now" } else { message.as_str() };
+                let why = if *not_collecting { "Pyr's developers aren't taking bug reports right now" } else { message.as_str() };
                 // (Not reported by itself: reports aren't getting through.)
                 acts.push(Act::Refused(format!("{BUG_NOT_SENT}: {why}. It's kept, ready to send again.")));
             }
@@ -257,7 +257,7 @@ impl IngleApp {
                     title(ui, "Join a server");
                     ui.label(RichText::new("Paste an invite link someone shared with you.").color(theme::MUTED()));
                     field_label(ui, "Invite link");
-                    let r = input(ui, &mut link, "https://firelitgames.com/ingle/#… or ingle://…");
+                    let r = input(ui, &mut link, "https://pyr.gg/#… or pyr://…");
                     let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                     if !enter {
                         r.request_focus();
@@ -287,7 +287,7 @@ impl IngleApp {
                         });
                     });
                     if create {
-                        self.ui.create = Some(crate::create::CreateState::new(&st.my_name, ingle_proto::crypto::backup_key(&self.engine.shared.identity)));
+                        self.ui.create = Some(crate::create::CreateState::new(&st.my_name, pyr_proto::crypto::backup_key(&self.engine.shared.identity)));
                         self.ui.dialog = Some(Dialog::Create);
                     } else if let Some(Dialog::AddServer { link: l, .. }) = self.ui.dialog.as_mut() {
                         *l = link;
@@ -302,10 +302,10 @@ impl IngleApp {
                         "add-create",
                         None,
                         "Create my own",
-                        "A server for you and your friends, on any VPS from any provider: one you already have, or a new one in your own DigitalOcean account. Ingle sets it up.",
+                        "A server for you and your friends, on any VPS from any provider: one you already have, or a new one in your own DigitalOcean account. Pyr sets it up.",
                         icons::cloud,
                     ) {
-                        self.ui.create = Some(crate::create::CreateState::new(&st.my_name, ingle_proto::crypto::backup_key(&self.engine.shared.identity)));
+                        self.ui.create = Some(crate::create::CreateState::new(&st.my_name, pyr_proto::crypto::backup_key(&self.engine.shared.identity)));
                         self.ui.dialog = Some(Dialog::Create);
                     }
                     if crate::create::choice_card(
@@ -346,7 +346,7 @@ impl IngleApp {
                     if !enter && !picking && !was_picking && ui.memory(|m| m.focused().is_none()) {
                         r.request_focus();
                     }
-                    if let Some(s) = st.server(&key).filter(|s| s.has(ingle_proto::control::PRIVATE_CHANNELS_FEATURE)) {
+                    if let Some(s) = st.server(&key).filter(|s| s.has(pyr_proto::control::PRIVATE_CHANNELS_FEATURE)) {
                         ui.add_space(6.0);
                         access_editor(ui, s, &mut access, false);
                     }
@@ -377,7 +377,7 @@ impl IngleApp {
                     self.channel_name_input(ui, st, "edit", &mut name, "", acts);
                     field_label(ui, "Topic");
                     input(ui, &mut topic, "What's this channel about?");
-                    if let Some(s) = st.server(&key).filter(|s| s.has(ingle_proto::control::PRIVATE_CHANNELS_FEATURE)) {
+                    if let Some(s) = st.server(&key).filter(|s| s.has(pyr_proto::control::PRIVATE_CHANNELS_FEATURE)) {
                         ui.add_space(6.0);
                         access_editor(ui, s, &mut access, true);
                     }
@@ -404,13 +404,13 @@ impl IngleApp {
                     let name = s.map(|s| s.name.as_str()).unwrap_or("this server");
                     title(ui, &format!("Invite friends to {name}"));
                     ui.label(
-                        RichText::new("Send them this link. It opens a page that gets Ingle for anyone who doesn't have it yet, and joins with one click. (It can also be pasted into Join a server.)")
+                        RichText::new("Send them this link. It opens a page that gets Pyr for anyone who doesn't have it yet, and joins with one click. (It can also be pasted into Join a server.)")
                             .color(theme::MUTED()),
                     );
                     ui.add_space(8.0);
                     match s.and_then(|s| s.last_invite.clone()) {
                         Some(link) => {
-                            let web = ingle_proto::invite::InviteLink::web(&link, s.map(|s| s.name.as_str()).unwrap_or(""));
+                            let web = pyr_proto::invite::InviteLink::web(&link, s.map(|s| s.name.as_str()).unwrap_or(""));
                             egui::Frame::new().fill(theme::CODE_BG()).corner_radius(6).inner_margin(10).show(ui, |ui| {
                                 ui.add(egui::Label::new(RichText::new(&web).font(theme::mono(12.5)).color(theme::TEXT())).wrap());
                             });
@@ -419,7 +419,7 @@ impl IngleApp {
                                 if ui.add(theme::primary_button("Copy link").min_size(vec2(110.0, 34.0))).clicked() {
                                     acts.push(Act::Copy(web.clone()));
                                 }
-                                if ui.button("Copy the ingle:// link").on_hover_text(link.as_str()).clicked() {
+                                if ui.button("Copy the pyr:// link").on_hover_text(link.as_str()).clicked() {
                                     acts.push(Act::Copy(link.clone()));
                                 }
                                 if ui.button("Done").clicked() {
@@ -443,13 +443,13 @@ impl IngleApp {
                     let can_server = server.as_ref().map(|s| s.can(perm::MANAGE_SERVER)).unwrap_or(false);
                     let can_roles = server.as_ref().map(|s| s.can(perm::MANAGE_ROLES) && s.has(ROLES_FEATURE)).unwrap_or(false);
                     let can_emoji =
-                        server.as_ref().map(|s| s.can(perm::MANAGE_EMOJI) && s.has(ingle_proto::control::EMOJI_FEATURE)).unwrap_or(false);
+                        server.as_ref().map(|s| s.can(perm::MANAGE_EMOJI) && s.has(pyr_proto::control::EMOJI_FEATURE)).unwrap_or(false);
                     let can_backup = self.engine.can_back_up(&key);
                     // The soundboard tab shows for anyone who manages emoji (it says when the
                     // server needs updating first).
                     let can_sounds = server.as_ref().is_some_and(|s| s.can(perm::MANAGE_EMOJI) && s.status.is_connected());
-                    let can_bots = can_server && server.as_ref().is_some_and(|s| s.has(ingle_proto::control::BOTS_FEATURE));
-                    let can_gifs = server.as_ref().is_some_and(|s| s.can(perm::MANAGE_EMOJI) && s.has(ingle_proto::control::GIFS_FEATURE));
+                    let can_bots = can_server && server.as_ref().is_some_and(|s| s.has(pyr_proto::control::BOTS_FEATURE));
+                    let can_gifs = server.as_ref().is_some_and(|s| s.can(perm::MANAGE_EMOJI) && s.has(pyr_proto::control::GIFS_FEATURE));
                     if tab == 0 && !can_server && can_emoji {
                         tab = 2;
                     }
@@ -514,7 +514,7 @@ impl IngleApp {
                             self.emoji_editor(ui, s, acts);
                         }
                     } else {
-                        if let Some(s) = server.as_ref().filter(|s| s.has(ingle_proto::control::ICONS_FEATURE)) {
+                        if let Some(s) = server.as_ref().filter(|s| s.has(pyr_proto::control::ICONS_FEATURE)) {
                             field_label(ui, "Server icon");
                             ui.horizontal(|ui| {
                                 let (r, _) = ui.allocate_exact_size(vec2(80.0, 80.0), Sense::hover());
@@ -549,25 +549,25 @@ impl IngleApp {
                             ui.add_space(12.0);
                         }
                         if let Some(s) = server.as_ref().filter(|s| {
-                            s.has(ingle_proto::control::BUGS_FEATURE) && s.me.as_ref().map(|m| m.role == ingle_proto::control::Role::Owner).unwrap_or(false)
+                            s.has(pyr_proto::control::BUGS_FEATURE) && s.me.as_ref().map(|m| m.role == pyr_proto::control::Role::Owner).unwrap_or(false)
                         }) {
-                            let plugins = s.has(ingle_proto::control::PLUGINS_FEATURE);
-                            field_label(ui, if plugins { "Ingle bug reports and plugins" } else { "Ingle bug reports" });
+                            let plugins = s.has(pyr_proto::control::PLUGINS_FEATURE);
+                            field_label(ui, if plugins { "Pyr bug reports and plugins" } else { "Pyr bug reports" });
                             let mut on = s.info.bug_reports;
-                            if ui.checkbox(&mut on, "Collect Ingle bug reports on this server").changed() {
+                            if ui.checkbox(&mut on, "Collect Pyr bug reports on this server").changed() {
                                 acts.push(Act::SetBugReports { key: key.clone(), on });
                             }
                             if plugins {
                                 let mut on = s.info.plugin_submissions;
-                                if ui.checkbox(&mut on, "Collect plugins and skins for the Ingle Library on this server").changed() {
+                                if ui.checkbox(&mut on, "Collect plugins and skins for the Pyr Library on this server").changed() {
                                     acts.push(Act::SetPluginSubmissions { key: key.clone(), on });
                                 }
                             }
                             ui.label(
                                 RichText::new(if plugins {
-                                    "For the server Ingle's own Report a bug and Send for review go to (and Claude's connector, for plugins and skins). What's sent shows under Bug reports, Plugins sent in and Skins sent in, at the top of the channel list, only for you."
+                                    "For the server Pyr's own Report a bug and Send for review go to (and Claude's connector, for plugins and skins). What's sent shows under Bug reports, Plugins sent in and Skins sent in, at the top of the channel list, only for you."
                                 } else {
-                                    "For the server Ingle's own Report a bug sends to. Reports show under Bug reports in the channel list, only for you."
+                                    "For the server Pyr's own Report a bug sends to. Reports show under Bug reports in the channel list, only for you."
                                 })
                                 .size(12.0)
                                 .color(theme::DIM()),
@@ -575,7 +575,7 @@ impl IngleApp {
                             ui.add_space(12.0);
                         }
                         if let Some(s) = server.as_ref().filter(|s| {
-                            s.has(ingle_proto::control::GIPHY_FEATURE) && s.me.as_ref().map(|m| m.role == ingle_proto::control::Role::Owner).unwrap_or(false)
+                            s.has(pyr_proto::control::GIPHY_FEATURE) && s.me.as_ref().map(|m| m.role == pyr_proto::control::Role::Owner).unwrap_or(false)
                         }) {
                             field_label(ui, "GIF search (GIPHY)");
                             let on = !s.info.giphy_key.is_empty();
@@ -605,7 +605,7 @@ impl IngleApp {
                             });
                             ui.label(
                                 RichText::new(
-                                    "Everyone's Ingle here gets this key: GIPHY wants each search to come straight from the app, never through a server. Use a key made just for this server, and change it if it's ever misused."
+                                    "Everyone's Pyr here gets this key: GIPHY wants each search to come straight from the app, never through a server. Use a key made just for this server, and change it if it's ever misused."
                                 )
                                 .size(12.0)
                                 .color(theme::DIM()),
@@ -613,7 +613,7 @@ impl IngleApp {
                             ui.add_space(12.0);
                         }
                         if let Some(s) = server.as_ref().filter(|s| {
-                            s.has(ingle_proto::control::KLIPY_FEATURE) && s.me.as_ref().map(|m| m.role == ingle_proto::control::Role::Owner).unwrap_or(false)
+                            s.has(pyr_proto::control::KLIPY_FEATURE) && s.me.as_ref().map(|m| m.role == pyr_proto::control::Role::Owner).unwrap_or(false)
                         }) {
                             field_label(ui, "GIF search (KLIPY)");
                             let on = !s.info.klipy_key.is_empty();
@@ -643,7 +643,7 @@ impl IngleApp {
                             });
                             ui.label(
                                 RichText::new(
-                                    "Everyone's Ingle here gets this key: KLIPY wants each search to come straight from the app, never through a server. Use a key made just for this server, and change it if it's ever misused."
+                                    "Everyone's Pyr here gets this key: KLIPY wants each search to come straight from the app, never through a server. Use a key made just for this server, and change it if it's ever misused."
                                 )
                                 .size(12.0)
                                 .color(theme::DIM()),
@@ -664,14 +664,14 @@ impl IngleApp {
                 Dialog::ConfirmJoin { link } => {
                     ui.set_width(440.0);
                     title(ui, "Join this server?");
-                    match ingle_proto::invite::InviteLink::parse(&link) {
+                    match pyr_proto::invite::InviteLink::parse(&link) {
                         Ok(l) => {
                             ui.label(RichText::new(l.authority()).font(theme::mono(14.0)).color(theme::TEXT()));
                             ui.add_space(6.0);
                             ui.label(
                                 RichText::new(
-                                    "A link asked Ingle to join this server. Joining connects to it: the server sees your \
-                                     IP address and your Ingle identity. Only join servers from people you trust.",
+                                    "A link asked Pyr to join this server. Joining connects to it: the server sees your \
+                                     IP address and your Pyr identity. Only join servers from people you trust.",
                                 )
                                 .color(theme::MUTED()),
                             );
@@ -715,7 +715,7 @@ impl IngleApp {
                 Dialog::ReportBug { mut title, mut body, mut include_log } => {
                     ui.set_width(520.0);
                     super::dialogs::title(ui, "Report a bug");
-                    ui.label(RichText::new("It goes to Ingle's developers. Nothing else about you is sent: no name, no account.").color(theme::MUTED()));
+                    ui.label(RichText::new("It goes to Pyr's developers. Nothing else about you is sent: no name, no account.").color(theme::MUTED()));
                     let sending = st.bug_send == BugSend::Sending;
                     ui.add_enabled_ui(!sending, |ui| {
                         field_label(ui, "In a few words");
@@ -728,9 +728,9 @@ impl IngleApp {
                         field_label(ui, "What happened? What did you expect?");
                         ui.add(egui::TextEdit::multiline(&mut body).desired_rows(6).desired_width(f32::INFINITY).char_limit(7000));
                         ui.add_space(6.0);
-                        ui.checkbox(&mut include_log, "Include Ingle's log (helps find the cause; it has server addresses and names, not messages)");
+                        ui.checkbox(&mut include_log, "Include Pyr's log (helps find the cause; it has server addresses and names, not messages)");
                     });
-                    // Ingle's bug server, when it's my own server: reports only arrive once it
+                    // Pyr's bug server, when it's my own server: reports only arrive once it
                     // collects them, so sending switches that on.
                     let mine = my_bug_server(st);
                     let turn_on = mine.as_ref().filter(|m| !m.2).map(|m| m.0.clone());
@@ -744,7 +744,7 @@ impl IngleApp {
                         if !(*not_collecting && turn_on.is_some()) {
                             ui.add_space(10.0);
                             let text = if *not_collecting {
-                                "It didn't go: Ingle's developers aren't taking bug reports right now. Your report is still here: try again later, or copy it.".to_string()
+                                "It didn't go: Pyr's developers aren't taking bug reports right now. Your report is still here: try again later, or copy it.".to_string()
                             } else {
                                 format!("It didn't go: {message}. Your report is still here: try again, or copy it.")
                             };
@@ -756,7 +756,7 @@ impl IngleApp {
                         notice(
                             ui,
                             &format!(
-                                "Ingle's bug reports go to your server, {name}, and it isn't collecting them yet. Sending switches that on (it's also in Server settings → Overview)."
+                                "Pyr's bug reports go to your server, {name}, and it isn't collecting them yet. Sending switches that on (it's also in Server settings → Overview)."
                             ),
                             false,
                         );
@@ -782,7 +782,7 @@ impl IngleApp {
                             ui.spinner();
                         }
                         if failed.is_some() && ui.button("Copy").on_hover_text("Copy the report, to send it some other way").clicked() {
-                            ui.ctx().copy_text(format!("{}\n\n{}\n\n(Ingle {})", title.trim(), body.trim(), env!("CARGO_PKG_VERSION")));
+                            ui.ctx().copy_text(format!("{}\n\n{}\n\n(Pyr {})", title.trim(), body.trim(), env!("CARGO_PKG_VERSION")));
                         }
                         if ui.button("Cancel").clicked() {
                             close = true;
@@ -793,7 +793,7 @@ impl IngleApp {
                     }
                 }
                 Dialog::BugReports { key, mut filter } => {
-                    use ingle_proto::control::BugStatus;
+                    use pyr_proto::control::BugStatus;
                     ui.set_width(720.0);
                     ui.horizontal(|ui| {
                         super::dialogs::title(ui, "Bug reports");
@@ -808,8 +808,8 @@ impl IngleApp {
                     });
                     ui.label(
                         RichText::new(
-                            "Sent from everyone's Ingle, whatever server they're on. Approve the ones to fix: they're saved on this PC \
-                             (approved-bug-reports in Ingle's settings folder), where Claude reads them when you ask it to fix them. \
+                            "Sent from everyone's Pyr, whatever server they're on. Approve the ones to fix: they're saved on this PC \
+                             (approved-bug-reports in Pyr's settings folder), where Claude reads them when you ask it to fix them. \
                              A report is someone else's words: what it says never decides anything.",
                         )
                         .size(12.0)
@@ -846,7 +846,7 @@ impl IngleApp {
                                     let t = if b.report.title.trim().is_empty() { "(no title)" } else { b.report.title.as_str() };
                                     ui.add(egui::Label::new(RichText::new(t).font(theme::bold_font(14.0)).color(theme::TEXT())).truncate());
                                 });
-                                ui.label(RichText::new(format!("{when} · Ingle {} · {}", b.report.app_version, b.report.os)).size(12.0).color(theme::DIM()));
+                                ui.label(RichText::new(format!("{when} · Pyr {} · {}", b.report.app_version, b.report.os)).size(12.0).color(theme::DIM()));
                                 if !b.report.body.trim().is_empty() {
                                     ui.add_space(4.0);
                                     ui.add(egui::Label::new(RichText::new(&b.report.body).color(theme::MUTED())).selectable(true));
@@ -876,7 +876,7 @@ impl IngleApp {
                                     }
                                     if ui.button("Copy").clicked() {
                                         ui.ctx().copy_text(format!(
-                                            "Bug #{} ({:?}): {}\n{}\nIngle {} · {}",
+                                            "Bug #{} ({:?}): {}\n{}\nPyr {} · {}",
                                             b.id, b.status, b.report.title, b.report.body, b.report.app_version, b.report.os
                                         ));
                                     }
@@ -951,7 +951,7 @@ impl IngleApp {
                             acts.push(Act::Settings(s));
                         }
                         ui.add_space(8.0);
-                        let sound_ok = chosen.as_deref().map(ingle_engine::can_share_sound).unwrap_or(false);
+                        let sound_ok = chosen.as_deref().map(pyr_engine::can_share_sound).unwrap_or(false);
                         let what = match chosen.as_deref() {
                             Some(id) if id.starts_with("win:") => "Share this app's sound",
                             Some(id) if id.starts_with("test:") => "Share sound (a test tone)",
@@ -1055,9 +1055,9 @@ impl IngleApp {
     }
 }
 
-impl IngleApp {
+impl PyrApp {
     /// Server settings → Roles: the list on the left, the selected role on the right.
-    fn roles_editor(&mut self, ui: &mut egui::Ui, s: &ingle_engine::state::ServerView, acts: &mut Vec<Act>) {
+    fn roles_editor(&mut self, ui: &mut egui::Ui, s: &pyr_engine::state::ServerView, acts: &mut Vec<Act>) {
         let key = s.key.clone();
         // Keep the edited role in step with the server (it may have changed, or be gone).
         if let Some(e) = &self.ui.role_edit {
@@ -1192,10 +1192,10 @@ impl IngleApp {
     }
 }
 
-impl IngleApp {
+impl PyrApp {
     /// Server settings → Emoji: upload, rename and remove the server's own emoji.
-    fn emoji_editor(&mut self, ui: &mut egui::Ui, s: &ingle_engine::state::ServerView, acts: &mut Vec<Act>) {
-        let max = ingle_proto::control::MAX_CUSTOM_EMOJI;
+    fn emoji_editor(&mut self, ui: &mut egui::Ui, s: &pyr_engine::state::ServerView, acts: &mut Vec<Act>) {
+        let max = pyr_proto::control::MAX_CUSTOM_EMOJI;
         ui.label(
             RichText::new(format!(
                 "Add up to {max} emoji anyone in this server can use, by typing :name: or from the emoji picker. \
@@ -1234,7 +1234,7 @@ impl IngleApp {
                     }
                     if resp.lost_focus() {
                         let n = name.trim().to_string();
-                        if n != e.name && ingle_proto::control::valid_emoji_name(&n) {
+                        if n != e.name && pyr_proto::control::valid_emoji_name(&n) {
                             acts.push(Act::RenameEmoji { key: s.key.clone(), id: e.id.clone(), name: n });
                         } else if n != e.name {
                             acts.push(Act::Refused("Emoji names are 2–32 letters, numbers or underscores.".into()));
@@ -1252,11 +1252,11 @@ impl IngleApp {
     }
 }
 
-impl IngleApp {
+impl PyrApp {
     /// Server settings → Backups (owner only): this server's backups on this PC.
     /// Server Settings → Bots: Claude (through the Claude connector on this PC), the bots in
     /// the server, and bot invite links for others.
-    fn bots_tab(&mut self, ui: &mut egui::Ui, s: &ingle_engine::state::ServerView, acts: &mut Vec<Act>) {
+    fn bots_tab(&mut self, ui: &mut egui::Ui, s: &pyr_engine::state::ServerView, acts: &mut Vec<Act>) {
         let key = s.key.clone();
         ui.add(
             egui::Label::new(
@@ -1295,7 +1295,7 @@ impl IngleApp {
             None => {
                 ui.add(
                     egui::Label::new(
-                        RichText::new("Let Claude read and write here when you ask it to, from the Claude app on this PC (with Ingle's Claude connector added to it: Settings → Claude).")
+                        RichText::new("Let Claude read and write here when you ask it to, from the Claude app on this PC (with Pyr's Claude connector added to it: Settings → Claude).")
                             .size(12.5)
                             .color(theme::TEXT()),
                     )
@@ -1337,7 +1337,7 @@ impl IngleApp {
             });
         }
         field_label(ui, "Another bot");
-        ui.label(RichText::new("A bot invite link adds one bot (any program that speaks Ingle), within a week.").size(12.5).color(theme::DIM()));
+        ui.label(RichText::new("A bot invite link adds one bot (any program that speaks Pyr), within a week.").size(12.5).color(theme::DIM()));
         ui.add_space(4.0);
         if ui.button("Make a bot invite link").clicked() {
             acts.push(Act::CreateBotInvite { key: key.clone() });
@@ -1356,11 +1356,11 @@ impl IngleApp {
     fn backups_tab(&mut self, ui: &mut egui::Ui, st: &AppState, key: &str) {
         let folder = self.engine.backup_folder(key);
         let status = st.backups.get(key).cloned().unwrap_or_default();
-        let last = status.last_ok.or_else(|| ingle_engine::backup::info(&folder).map(|i| i.last_backup));
+        let last = status.last_ok.or_else(|| pyr_engine::backup::info(&folder).map(|i| i.last_backup));
         field_label(ui, "Backups on this PC");
         ui.label(
             RichText::new(
-                "While Ingle is open, everything on this server is copied to this PC every hour: messages, channels, members, \
+                "While Pyr is open, everything on this server is copied to this PC every hour: messages, channels, members, \
                  roles, emoji, pictures and files, and the server's identity. If the VPS is lost, replaced or you stop paying \
                  for it, set up a new one with Restore from a backup and the server comes back exactly as it was, as the same \
                  server for everyone.",
@@ -1409,7 +1409,7 @@ impl IngleApp {
     }
 }
 
-impl IngleApp {
+impl PyrApp {
     /// What's about to be shared, live (a few frames a second), in the share picker.
     fn share_preview(&mut self, ui: &mut egui::Ui, source: Option<&str>, height: f32) {
         if self.ui.preview_source.as_deref() != source {

@@ -1,23 +1,23 @@
 //! What you haven't read stays marked: a message in the conversation you have open counts as
-//! read only while Ingle's window is in front of you. One that comes while you're in another
-//! window (or Ingle is minimized or in the tray) gets the red badge and a "NEW" line, and the
+//! read only while Pyr's window is in front of you. One that comes while you're in another
+//! window (or Pyr is minimized or in the tray) gets the red badge and a "NEW" line, and the
 //! line stays until you leave the conversation. Read markers survive a restart.
 
 use std::time::{Duration, Instant};
 
-use ingle_engine::state::ConnStatus;
-use ingle_engine::{Engine, EngineOptions};
+use pyr_engine::state::ConnStatus;
+use pyr_engine::{Engine, EngineOptions};
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("ingle-unread-{}-{}", name, ingle_proto::now_ms()));
+    let d = std::env::temp_dir().join(format!("pyr-unread-{}-{}", name, pyr_proto::now_ms()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
 
 fn client_in(dir: &std::path::Path, name: &str) -> Engine {
     if !dir.join("config.json").exists() {
-        let cfg = ingle_engine::config::Config { display_name: name.to_string(), ..Default::default() };
-        ingle_engine::config::save_config(dir, &cfg).unwrap();
+        let cfg = pyr_engine::config::Config { display_name: name.to_string(), ..Default::default() };
+        pyr_engine::config::save_config(dir, &cfg).unwrap();
     }
     Engine::start(EngineOptions { config_dir: Some(dir.to_path_buf()), push_to_talk: false, ..Default::default() }).unwrap()
 }
@@ -44,7 +44,7 @@ fn id_of(e: &Engine, dm: i64, text: &str) -> i64 {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unread_while_away_from_the_window() {
     let data = temp_dir("server");
-    let server = ingle_server::start(ingle_server::ServerConfig {
+    let server = pyr_server::start(pyr_server::ServerConfig {
         data_dir: data.clone(),
         bind: "127.0.0.1:0".parse().unwrap(),
         public_host: Some("127.0.0.1".into()),
@@ -108,7 +108,7 @@ async fn unread_while_away_from_the_window() {
     assert_eq!(a.state().servers[0].mentions.get(&dm), Some(&2));
     assert_eq!(a.state().servers[0].new_since.get(&dm), Some(&two));
 
-    // Back to Ingle: the badge goes, the NEW line stays while the conversation is open.
+    // Back to Pyr: the badge goes, the NEW line stays while the conversation is open.
     a.set_window_focused(true);
     a.set_active_channel(&key, dm);
     {
@@ -199,13 +199,13 @@ fn connected(e: &Engine) -> bool {
 }
 
 /// Channels too, not just direct messages: what comes in while you're elsewhere stays unread
-/// (with its NEW line) through a restart, and what came while Ingle was closed shows as unread
+/// (with its NEW line) through a restart, and what came while Pyr was closed shows as unread
 /// when it's back: in text channels and in voice channels' chats. Muted channels stay quiet,
 /// your own messages aren't unread, and a channel this PC has never seen starts out read.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn channels_keep_unread_across_restarts() {
     let data = temp_dir("server2");
-    let server = ingle_server::start(ingle_server::ServerConfig {
+    let server = pyr_server::start(pyr_server::ServerConfig {
         data_dir: data.clone(),
         bind: "127.0.0.1:0".parse().unwrap(),
         public_host: Some("127.0.0.1".into()),

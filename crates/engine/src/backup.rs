@@ -8,8 +8,8 @@
 //!   <name> (<key>)/
 //!     server.json           which server, where it was, when it was last backed up
 //!     identity/             server-cert.der, and server-key.der.sealed: the server's private
-//!                           key, sealed to the owner who makes the backup (only their Ingle
-//!                           can put it back: see `ingle_proto::crypto::backup_key`)
+//!                           key, sealed to the owner who makes the backup (only their Pyr
+//!                           can put it back: see `pyr_proto::crypto::backup_key`)
 //!     files/<id>            every stored file, fetched once (ids are never reused)
 //!     database/latest.db    the newest copy of the database
 //!     database/<time>.db    older copies: every hour for two days, then daily for three
@@ -27,11 +27,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use ingle_proto::control::{
+use pyr_proto::control::{
     BACKUP_CERT, BACKUP_DATABASE, BACKUP_FEATURE, BACKUP_FILE_PREFIX, BACKUP_KEY, BACKUP_MANIFEST, BackupManifest, FILE_PREAMBLE,
     FileReply, FileRequest, Role,
 };
-use ingle_proto::framing;
+use pyr_proto::framing;
 use serde::{Deserialize, Serialize};
 
 use crate::Shared;
@@ -54,15 +54,20 @@ pub struct BackupInfo {
     pub server_version: String,
 }
 
-/// Where backups go: the setting, or "Ingle Server Backups" in Documents.
+/// Where backups go: the setting, or "Pyr Server Backups" in Documents.
 pub fn root(shared: &Shared) -> PathBuf {
     if let Some(d) = shared.config.lock().backup_dir.clone() {
         return d;
     }
-    directories::UserDirs::new()
-        .and_then(|u| u.document_dir().map(Path::to_path_buf))
-        .unwrap_or_else(|| shared.config_dir.clone())
-        .join("Ingle Server Backups")
+    let docs = directories::UserDirs::new().and_then(|u| u.document_dir().map(Path::to_path_buf)).unwrap_or_else(|| shared.config_dir.clone());
+    let dir = docs.join("Pyr Server Backups");
+    // Made before Pyr was called Pyr, they're in "Ingle Server Backups": that folder becomes
+    // Pyr's (renamed), so the backups carry on where they were (kept there if it can't be).
+    let old = docs.join("Ingle Server Backups");
+    if !dir.exists() && old.is_dir() && std::fs::rename(&old, &dir).is_err() {
+        return old;
+    }
+    dir
 }
 
 /// This server's backup folder.
@@ -143,7 +148,7 @@ async fn run_inner(shared: &Arc<Shared>, key: &str) -> Result<BackupInfo> {
     let cert = get(&conn, BACKUP_CERT).await.context("the server's certificate")?;
     write_private(&dir.join("identity").join(BACKUP_CERT), &cert)?;
     let private = get(&conn, BACKUP_KEY).await.context("the server's private key")?;
-    let sealed = ingle_proto::crypto::seal(&ingle_proto::crypto::backup_key(&shared.identity), &private);
+    let sealed = pyr_proto::crypto::seal(&pyr_proto::crypto::backup_key(&shared.identity), &private);
     write_private(&dir.join("identity").join(format!("{BACKUP_KEY}.sealed")), &sealed)?;
     // (Backups before 0.8 kept it as it is.)
     let _ = std::fs::remove_file(dir.join("identity").join(BACKUP_KEY));
@@ -182,7 +187,7 @@ async fn run_inner(shared: &Arc<Shared>, key: &str) -> Result<BackupInfo> {
         name: if manifest.name.is_empty() { name } else { manifest.name.clone() },
         host: entry.as_ref().map(|e| e.host.clone()).unwrap_or_default(),
         port: entry.as_ref().map(|e| e.port).unwrap_or_default(),
-        last_backup: ingle_proto::now_ms(),
+        last_backup: pyr_proto::now_ms(),
         files: manifest.files.len(),
         bytes: bytes_total,
         server_version: manifest.version.clone(),
@@ -190,10 +195,10 @@ async fn run_inner(shared: &Arc<Shared>, key: &str) -> Result<BackupInfo> {
     write_private(&dir.join("server.json"), &serde_json::to_vec_pretty(&info)?)?;
     write_private(
         &dir.join("READ ME.txt"),
-        b"This is a backup of an Ingle server you own: every message, channel, member, role, emoji, picture and file,\n\
-         and the server's identity (the identity folder; its private key is sealed to your Ingle identity, so only your Ingle\n\
+        b"This is a backup of a Pyr server you own: every message, channel, member, role, emoji, picture and file,\n\
+         and the server's identity (the identity folder; its private key is sealed to your Pyr identity, so only your Pyr\n\
          can put it back: keep a copy of your identity.key somewhere safe too). Keep this folder to yourself.\n\n\
-         To put the server back (on a new VPS, say): in Ingle, + (Add a server) > Create my own > Restore from a backup,\n\
+         To put the server back (on a new VPS, say): in Pyr, + (Add a server) > Create my own > Restore from a backup,\n\
          and pick this folder. Or by hand, as a server with a new identity (everyone needs a new invite link then), before\n\
          the server first starts: copy database/latest.db to <data folder>/ingle.db and files/ to <data folder>/files/.\n",
     )
@@ -247,7 +252,7 @@ fn write_private(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// A folder (and those above it that are new) only you can open, on Linux: one an older Ingle
+/// A folder (and those above it that are new) only you can open, on Linux: one an older Pyr
 /// made, that others could open, is made yours alone too.
 fn private_dir(dir: &Path) -> std::io::Result<()> {
     let mut b = std::fs::DirBuilder::new();
@@ -308,7 +313,7 @@ pub fn spawn_schedule(shared: Arc<Shared>, key: String, conn: quinn::Connection)
                         let name = st.server(&key).map(|s| s.info.name.clone()).unwrap_or_default();
                         info(&folder(&shared, &key, &name)).map(|i| i.last_backup)
                     });
-                    last.map(|t| ingle_proto::now_ms() - t >= EVERY.as_millis() as i64).unwrap_or(true)
+                    last.map(|t| pyr_proto::now_ms() - t >= EVERY.as_millis() as i64).unwrap_or(true)
                 };
                 if due {
                     let failing = shared.state.read_recursive().backups.get(&key).map(|b| b.error.is_some()).unwrap_or(false);

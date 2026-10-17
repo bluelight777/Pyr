@@ -3,9 +3,9 @@
 
 use std::time::{Duration, Instant};
 
-use ingle_engine::state::ConnStatus;
-use ingle_engine::{Engine, EngineOptions};
-use ingle_proto::control::ChannelKind;
+use pyr_engine::state::ConnStatus;
+use pyr_engine::{Engine, EngineOptions};
+use pyr_proto::control::ChannelKind;
 
 const PNG: &[u8] = &[
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x03,
@@ -15,7 +15,7 @@ const PNG: &[u8] = &[
 ];
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("ingle-backup-{}-{}", name, ingle_proto::now_ms()));
+    let d = std::env::temp_dir().join(format!("pyr-backup-{}-{}", name, pyr_proto::now_ms()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
@@ -33,8 +33,8 @@ async fn wait_for(what: &str, secs: u64, mut cond: impl FnMut() -> bool) {
 
 fn engine(name: &str) -> Engine {
     let dir = temp_dir(name);
-    let cfg = ingle_engine::config::Config { display_name: name.to_string(), ..Default::default() };
-    ingle_engine::config::save_config(&dir, &cfg).unwrap();
+    let cfg = pyr_engine::config::Config { display_name: name.to_string(), ..Default::default() };
+    pyr_engine::config::save_config(&dir, &cfg).unwrap();
     Engine::start(EngineOptions { config_dir: Some(dir), push_to_talk: false, audio: None, ..Default::default() }).unwrap()
 }
 
@@ -48,7 +48,7 @@ fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn back_up_and_restore_elsewhere() {
     let data = temp_dir("server");
-    let server = ingle_server::start(ingle_server::ServerConfig {
+    let server = pyr_server::start(pyr_server::ServerConfig {
         data_dir: data.clone(),
         bind: "127.0.0.1:0".parse().unwrap(),
         public_host: Some("127.0.0.1".into()),
@@ -79,8 +79,8 @@ async fn back_up_and_restore_elsewhere() {
     a.set_backup_dir(Some(backups.clone()));
     a.backup_now(&key);
     let folder = a.backup_folder(&key);
-    wait_for("backed up", 30, || ingle_engine::backup::info(&folder).is_some()).await;
-    let info = ingle_engine::backup::info(&folder).unwrap();
+    wait_for("backed up", 30, || pyr_engine::backup::info(&folder).is_some()).await;
+    let info = pyr_engine::backup::info(&folder).unwrap();
     assert_eq!(info.key, key);
     assert_eq!(info.name, "Brethren");
     assert_eq!(info.files, 1, "the icon");
@@ -89,8 +89,8 @@ async fn back_up_and_restore_elsewhere() {
     // server.
     let sealed = std::fs::read(folder.join("identity/server-key.der.sealed")).unwrap();
     assert!(!folder.join("identity/server-key.der").exists());
-    assert!(ingle_proto::crypto::unseal(&ingle_proto::crypto::backup_key(&b.shared.identity), &sealed).is_none());
-    let server_key = ingle_proto::crypto::unseal(&ingle_proto::crypto::backup_key(&a.shared.identity), &sealed).expect("the owner opens it");
+    assert!(pyr_proto::crypto::unseal(&pyr_proto::crypto::backup_key(&b.shared.identity), &sealed).is_none());
+    let server_key = pyr_proto::crypto::unseal(&pyr_proto::crypto::backup_key(&a.shared.identity), &sealed).expect("the owner opens it");
     assert_eq!(server_key, std::fs::read(data.join("server-key.der")).unwrap());
     // Everything in it is the owner's alone, from the start.
     #[cfg(unix)]
@@ -113,13 +113,13 @@ async fn back_up_and_restore_elsewhere() {
     let _ = std::fs::remove_dir_all(&data);
 
     // A new machine: its data folder from the backup (as the setup script's --restore does,
-    // with the server key the owner's Ingle unsealed).
+    // with the server key the owner's Pyr unsealed).
     let new_data = temp_dir("restored");
     std::fs::copy(folder.join("database/latest.db"), new_data.join("ingle.db")).unwrap();
     std::fs::copy(folder.join("identity/server-cert.der"), new_data.join("server-cert.der")).unwrap();
     std::fs::write(new_data.join("server-key.der"), &server_key).unwrap();
     copy_dir(&folder.join("files"), &new_data.join("files"));
-    let server = ingle_server::start(ingle_server::ServerConfig {
+    let server = pyr_server::start(pyr_server::ServerConfig {
         data_dir: new_data.clone(),
         bind: "127.0.0.1:0".parse().unwrap(),
         public_host: Some("127.0.0.1".into()),
@@ -128,7 +128,7 @@ async fn back_up_and_restore_elsewhere() {
     .await
     .unwrap();
     // The same server: same identity (so everyone's app trusts it), same name.
-    assert_eq!(ingle_proto::b64::encode(&server.fingerprint), key);
+    assert_eq!(pyr_proto::b64::encode(&server.fingerprint), key);
     // Members follow the new invite link (the address changed); it's the same entry.
     b.add_server(&server.invite_link()).unwrap();
     wait_for("member back", 15, || connected(&b)).await;
@@ -146,7 +146,7 @@ async fn back_up_and_restore_elsewhere() {
     assert!(c.state().servers[0].members.values().any(|m| m.name == "Member"), "members kept");
     let icon = c.state().servers[0].info.icon.clone().expect("icon kept");
     let _ = c.file(&key, &icon);
-    wait_for("icon file back", 10, || matches!(c.file(&key, &icon), ingle_engine::files::FileState::Ready(_))).await;
+    wait_for("icon file back", 10, || matches!(c.file(&key, &icon), pyr_engine::files::FileState::Ready(_))).await;
     // And the owner is still the owner.
     a.add_server(&server.invite_link()).unwrap();
     wait_for("owner back", 15, || connected(&a)).await;

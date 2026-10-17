@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# A Library-only update for firelitgames.com/ingle (a plugin listed between releases): signs
+# A Library-only update for pyr.gg (a plugin listed between releases): signs
 # LIST (a plugins.json: the one published with the last release, plus what's new) over FILES,
 # and makes dist/library-upload/ with upload/library.tar (the signed list and only the files it
 # names), upload/install-library.sh, and publish-library.cmd / publish-library.ps1 to put it on
 # the VPS:
-#   KEY=path/to/ingle-release-key.txt LIST=path/to/plugins.json FILES=dist/library/files \
+#   KEY=path/to/pyr-release-key.txt LIST=path/to/plugins.json FILES=dist/library/files \
 #     scripts/make-library-upload.sh
 # Entries already published keep their "updated" time (give it in LIST) so they don't show as
 # new again.
@@ -12,7 +12,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 OUT=dist/library-upload
 rm -rf "$OUT" && mkdir -p "$OUT/upload" "$OUT/stage/library"
-cargo run -q -p ingle-proto --example library -- sign --key "$KEY" --in "$LIST" --files "$FILES" --out "$OUT/stage/library/index.json"
+cargo run -q -p pyr-proto --example library -- sign --key "$KEY" --in "$LIST" --files "$FILES" --out "$OUT/stage/library/index.json"
 python3 - "$OUT/stage/library/index.json" "$FILES" "$OUT/stage/library" <<'PY'
 import json, os, shutil, sys
 signed, files, out = sys.argv[1], sys.argv[2], sys.argv[3]

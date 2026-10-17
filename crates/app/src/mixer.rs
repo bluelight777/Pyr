@@ -10,10 +10,10 @@ use std::f32::consts::{FRAC_PI_2, PI};
 use std::time::Duration;
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
-use ingle_engine::state::{AppState, CallView, ServerView};
-use ingle_proto::media::track;
+use pyr_engine::state::{AppState, CallView, ServerView};
+use pyr_proto::media::track;
 
-use crate::app::{Act, IngleApp, avatar};
+use crate::app::{Act, PyrApp, avatar};
 use crate::{icons, theme};
 
 /// The panel's height, open.
@@ -338,7 +338,7 @@ enum Strip {
     Person { uid: String, session: u32, streaming: bool, sound: bool, muted: bool, deaf: bool, speaking: bool },
 }
 
-impl IngleApp {
+impl PyrApp {
     /// The mixer panel (opened from the call's buttons).
     pub(crate) fn mixer_panel(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, call: &CallView, acts: &mut Vec<Act>) {
         let area = ui.max_rect();

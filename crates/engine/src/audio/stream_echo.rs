@@ -1,13 +1,13 @@
-//! Takes Ingle's own sound back out of a screen share's sound.
+//! Takes Pyr's own sound back out of a screen share's sound.
 //!
-//! A screen share's sound is everything the PC plays except Ingle (WASAPI process loopback,
+//! A screen share's sound is everything the PC plays except Pyr (WASAPI process loopback,
 //! "exclude" mode, see `stream.rs`). But when the PC's sound goes through a program that plays
 //! it again from its own process (Voicemeeter, SteelSeries Sonar, Elgato Wave Link, NVIDIA
-//! Broadcast's speaker effects, "Listen to this device"), Windows can't tell Ingle's part from
+//! Broadcast's speaker effects, "Listen to this device"), Windows can't tell Pyr's part from
 //! the rest, and the call goes out again in the stream: everyone watching hears themselves a
 //! moment after they speak.
 //!
-//! So the sharer's Ingle compares what it played (the call) with the stream's sound:
+//! So the sharer's Pyr compares what it played (the call) with the stream's sound:
 //! 1. Is the call in there at all? Cross-correlation with the phase transform (GCC-PHAT, at
 //!    16 kHz) finds a delayed copy of the call even under loud game sound, and how late it is.
 //!    Until it's found, the stream's sound goes out exactly as captured.
@@ -80,7 +80,7 @@ const MAX_BEHIND: i64 = RATE as i64 / 4;
 
 pub struct StreamEcho {
     fft: Fft,
-    /// What Ingle played, by index (`played_total` counts samples per channel).
+    /// What Pyr played, by index (`played_total` counts samples per channel).
     played: [Vec<f32>; 2],
     played_total: i64,
     /// The stream's sound.
@@ -135,7 +135,7 @@ impl StreamEcho {
         }
     }
 
-    /// Ingle's own sound, as it's played (48 kHz stereo, interleaved).
+    /// Pyr's own sound, as it's played (48 kHz stereo, interleaved).
     pub fn played(&mut self, x: impl IntoIterator<Item = f32>) {
         let mut it = x.into_iter();
         while let (Some(l), Some(r)) = (it.next(), it.next()) {
@@ -152,7 +152,7 @@ impl StreamEcho {
         self.lag.map(|l| l as f32 / RATE as f32 * 1000.0)
     }
 
-    /// 10 ms of the screen share's sound (`FRAME` samples, interleaved stereo), with Ingle's
+    /// 10 ms of the screen share's sound (`FRAME` samples, interleaved stereo), with Pyr's
     /// own sound taken out, in place.
     pub fn clean(&mut self, frame: &mut [f32]) {
         debug_assert_eq!(frame.len(), FRAME);

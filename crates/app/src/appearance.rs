@@ -1,13 +1,13 @@
-//! Settings → Appearance (which skin Ingle wears: Campfire, its own, or one from the Ingle
-//! Library) and Settings → Claude (Ingle's Claude connector, for making plugins and skins with
+//! Settings → Appearance (which skin Pyr wears: Campfire, its own, or one from the Pyr
+//! Library) and Settings → Claude (Pyr's Claude connector, for making plugins and skins with
 //! Claude: see `connector`).
 
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, CornerRadius, RichText, Sense, Stroke, vec2};
-use ingle_engine::state::AppState;
+use pyr_engine::state::AppState;
 
-use crate::app::{Act, IngleApp};
+use crate::app::{Act, PyrApp};
 use crate::connector::{self, Setup};
 use crate::dialogs::{field_label, notice};
 use crate::looks::Trial;
@@ -22,12 +22,12 @@ pub struct ClaudeSetup {
     pub said: Option<(String, bool)>,
 }
 
-impl IngleApp {
+impl PyrApp {
     pub(crate) fn appearance_tab(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>, close: &mut bool) {
         if let Some((name, author, what)) = self.looks.trying_name() {
             let from = match what {
                 Trial::Claude { .. } => "from Claude",
-                Trial::SentIn { .. } => "sent in for the Ingle Library",
+                Trial::SentIn { .. } => "sent in for the Pyr Library",
                 Trial::Folder { .. } => "from a folder",
             };
             let by = if author.is_empty() { String::new() } else { format!(" by {author}") };
@@ -41,14 +41,14 @@ impl IngleApp {
             ui.add_space(6.0);
         }
         if let Some(p) = &self.looks.problem {
-            notice(ui, &format!("Your skin couldn't be put on, so Ingle looks like Campfire for now: {p}"), true);
+            notice(ui, &format!("Your skin couldn't be put on, so Pyr looks like Campfire for now: {p}"), true);
             ui.add_space(6.0);
         }
         field_label(ui, "Skin");
-        ui.label(RichText::new("Colors, a picture behind the chat, fonts and sounds. Skins have no code, and Ingle checks every file before it uses one.").color(theme::MUTED()));
+        ui.label(RichText::new("Colors, a picture behind the chat, fonts and sounds. Skins have no code, and Pyr checks every file before it uses one.").color(theme::MUTED()));
         ui.add_space(6.0);
         let worn = st.settings.skin.clone();
-        let row = |ui: &mut egui::Ui, app: &mut IngleApp, id: &str, name: &str, by: &str, version: &str, acts: &mut Vec<Act>| {
+        let row = |ui: &mut egui::Ui, app: &mut PyrApp, id: &str, name: &str, by: &str, version: &str, acts: &mut Vec<Act>| {
             let wearing = worn == id;
             egui::Frame::new()
                 .fill(theme::ELEV())
@@ -90,7 +90,7 @@ impl IngleApp {
                 });
             ui.add_space(6.0);
         };
-        row(ui, self, "", "Campfire", "Ingle's own look, by Firelit Games", "", acts);
+        row(ui, self, "", "Campfire", "Pyr's own look, by Firelit Games", "", acts);
         let installed = self.plugins.skins.skins.clone();
         for s in &installed {
             row(ui, self, &s.id, &s.name, &s.author, &s.version, acts);
@@ -109,7 +109,7 @@ impl IngleApp {
             if ui.button("Make one with Claude…").clicked() {
                 self.ui.settings_tab_next = Some(6);
             }
-            if ui.button("Try a skin folder…").on_hover_text("A skin you're making yourself: Ingle wears it until you stop").clicked() {
+            if ui.button("Try a skin folder…").on_hover_text("A skin you're making yourself: Pyr wears it until you stop").clicked() {
                 crate::images::pick_folder_async(crate::images::FolderFor::TrySkin, "Choose the skin's folder (with its skin.json)", ui.ctx());
             }
         });
@@ -140,8 +140,8 @@ impl IngleApp {
         ui.add(
             egui::Label::new(
                 RichText::new(
-                    "Ingle's Claude connector lets Claude (the Claude app, or Claude Code) start a skin or an add-on with you, put a skin on Ingle \
-                     while you talk it over so you see each change, check it the way the Ingle Library will, send it in for review, and send \
+                    "Pyr's Claude connector lets Claude (the Claude app, or Claude Code) start a skin or an add-on with you, put a skin on Pyr \
+                     while you talk it over so you see each change, check it the way the Pyr Library will, send it in for review, and send \
                      new versions of yours later.",
                 )
                 .color(theme::BODY()),
@@ -152,8 +152,8 @@ impl IngleApp {
         ui.add(
             egui::Label::new(
                 RichText::new(
-                    "It signs what it sends with your Ingle identity (the key on this PC), so only you can send a new version of something \
-                     you sent. It can't read your servers or messages, and all it can change in Ingle is the skin you're trying.",
+                    "It signs what it sends with your Pyr identity (the key on this PC), so only you can send a new version of something \
+                     you sent. It can't read your servers or messages, and all it can change in Pyr is the skin you're trying.",
                 )
                 .size(12.5)
                 .color(theme::DIM()),
@@ -179,7 +179,7 @@ impl IngleApp {
         let Some(setup) = self.ui.claude_setup.as_ref() else { return };
         let Some(exe) = setup.exe.clone() else {
             ui.add_space(8.0);
-            notice(ui, "The connector (ingle-mcp) isn't next to Ingle on this PC. Reinstall Ingle to get it.", true);
+            notice(ui, "The connector (pyr-mcp) isn't next to Pyr on this PC. Reinstall Pyr to get it.", true);
             return;
         };
         let configs = setup.configs.clone();
@@ -191,13 +191,13 @@ impl IngleApp {
             let unreadable: Vec<&String> = configs.iter().filter_map(|(_, s)| if let Setup::Unreadable(e) = s { Some(e) } else { None }).collect();
             let elsewhere = configs.iter().find_map(|(_, s)| if let Setup::Elsewhere(p) = s { Some(p.clone()) } else { None });
             let (text, color) = if here {
-                ("Set up. In the Claude app, ask Claude to make you a skin, or an add-on for Ingle.".to_string(), theme::ONLINE())
+                ("Set up. In the Claude app, ask Claude to make you a skin, or an add-on for Pyr.".to_string(), theme::ONLINE())
             } else if let Some(p) = &elsewhere {
                 let same_exe = if cfg!(windows) { p.eq_ignore_ascii_case(&exe.display().to_string()) } else { std::path::Path::new(p) == exe };
                 if same_exe {
-                    ("Set up for this Ingle, but with another settings folder (so another Ingle identity). Use this one's so Claude sends things as you.".to_string(), theme::MUTED())
+                    ("Set up for this Pyr, but with another settings folder (so another Pyr identity). Use this one's so Claude sends things as you.".to_string(), theme::MUTED())
                 } else {
-                    (format!("Set up for another copy of Ingle ({p})."), theme::MUTED())
+                    (format!("Set up for another copy of Pyr ({p})."), theme::MUTED())
                 }
             } else {
                 ("Not set up yet.".to_string(), theme::MUTED())
@@ -208,7 +208,7 @@ impl IngleApp {
             }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                let label = if here { "Set it up again" } else if elsewhere.is_some() { "Use this Ingle's connector" } else { "Add it to the Claude app" };
+                let label = if here { "Set it up again" } else if elsewhere.is_some() { "Use this Pyr's connector" } else { "Add it to the Claude app" };
                 if ui.add(theme::primary_button(label)).clicked() {
                     // Into every settings file the Claude app may read (the first is made if
                     // there are none yet).
@@ -220,7 +220,7 @@ impl IngleApp {
                     did = Some(if targets.is_empty() {
                         ("Couldn't find where the Claude app keeps its settings.".into(), true)
                     } else if errors.is_empty() {
-                        ("Added. Now quit the Claude app completely (right-click its icon by the clock and choose Quit) and open it again: its tools show up under \"ingle\".".into(), false)
+                        ("Added. Now quit the Claude app completely (right-click its icon by the clock and choose Quit) and open it again: its tools show up under \"pyr\".".into(), false)
                     } else {
                         (errors.join(" "), true)
                     });
@@ -262,12 +262,12 @@ impl IngleApp {
 }
 
 /// Campfire's own colors, side by side.
-/// Campfire, Ingle's own skin, as a few dabs of its colors (it has no picture), `size` big.
+/// Campfire, Pyr's own skin, as a few dabs of its colors (it has no picture), `size` big.
 pub(crate) fn campfire_swatch(ui: &mut egui::Ui, size: egui::Vec2) {
     let (r, _) = ui.allocate_exact_size(size, Sense::hover());
     let p = ui.painter();
     p.rect_filled(r, CornerRadius::same(8), Color32::from_rgb(0x1b, 0x14, 0x10));
-    let colors = [ingle_proto::skin::CAMPFIRE[13], ingle_proto::skin::CAMPFIRE[14], ingle_proto::skin::CAMPFIRE[15], ingle_proto::skin::CAMPFIRE[9]];
+    let colors = [pyr_proto::skin::CAMPFIRE[13], pyr_proto::skin::CAMPFIRE[14], pyr_proto::skin::CAMPFIRE[15], pyr_proto::skin::CAMPFIRE[9]];
     // Four dabs across the middle, sized to the box (64 x 40 is the small one).
     let k = (size.y / 40.0).min(size.x / 64.0);
     let step = 13.0 * k;

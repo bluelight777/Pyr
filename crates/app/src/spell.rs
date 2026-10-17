@@ -8,7 +8,7 @@ use std::ops::Range;
 use std::sync::mpsc;
 
 use eframe::egui::{self, Color32, Pos2, Stroke, vec2};
-use ingle_engine::state::ServerView;
+use pyr_engine::state::ServerView;
 
 pub struct Lang {
     pub code: &'static str,
@@ -44,7 +44,7 @@ pub fn lang(code: &str) -> &'static Lang {
 /// Chat words no dictionary has, never underlined.
 const CHAT_WORDS: &[&str] = &[
     "afk", "ain't", "bc", "brb", "btw", "cuz", "dm", "dms", "dunno", "emote", "emotes", "ez", "fyi", "gg", "ggs", "gif",
-    "gifs", "giphy", "gimme", "gl", "glhf", "gonna", "gotta", "hf", "hmu", "idc", "idk", "ikr", "imho", "imo", "ingle",
+    "gifs", "giphy", "gimme", "gl", "glhf", "gonna", "gotta", "hf", "hmu", "idc", "idk", "ikr", "imho", "imo", "pyr",
     "irl", "jk", "kinda", "lemme", "lmao", "lmfao", "lmk", "lol", "nah", "ngl", "noob", "np", "nvm", "omg", "omfg", "pls",
     "plz", "pog", "poggers", "rn", "rofl", "smh", "tbh", "tho", "thx", "ty", "wanna", "wp", "wtf", "xd", "y'all", "ya",
     "yea", "yeah", "yep",
@@ -78,7 +78,7 @@ impl Speller {
             self.seen.clear();
             let (tx, rx) = mpsc::channel();
             let ctx = ctx.clone();
-            let spawned = std::thread::Builder::new().name("ingle-spellcheck".into()).spawn(move || {
+            let spawned = std::thread::Builder::new().name("pyr-spellcheck".into()).spawn(move || {
                 let t = std::time::Instant::now();
                 let d = spellbook::Dictionary::new(lang.aff, lang.dic).map_err(|e| e.to_string());
                 tracing::info!("spellcheck: {} ready in {} ms", lang.code, t.elapsed().as_millis());
@@ -342,7 +342,7 @@ mod tests {
         let mut s = ServerView::new("k".into(), "Camp".into(), String::new());
         s.members.insert(
             "u1".into(),
-            ingle_proto::control::Member { user_id: "u1".into(), name: "Kainzor".into(), online: true, ..Default::default() },
+            pyr_proto::control::Member { user_id: "u1".into(), name: "Kainzor".into(), online: true, ..Default::default() },
         );
         sp.know(&s, &["Brethren".to_string()]);
         let text = "Kainzor's helo, the Brethren gg wrld teh";

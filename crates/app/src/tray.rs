@@ -1,9 +1,9 @@
-//! Ingle's icon by the clock (the Windows notification area, or "system tray").
+//! Pyr's icon by the clock (the Windows notification area, or "system tray").
 //!
-//! Click the icon to open Ingle; right-click it to mute, deafen, leave voice, check for
+//! Click the icon to open Pyr; right-click it to mute, deafen, leave voice, check for
 //! updates (and update, when there's one), or quit. The
-//! window's close button (and Alt+F4) never quits: it hides Ingle to the icon, so calls and
-//! messages keep coming in, like Discord. Only the icon's Quit Ingle (or Settings → Quit)
+//! window's close button (and Alt+F4) never quits: it hides Pyr to the icon, so calls and
+//! messages keep coming in, like Discord. Only the icon's Quit Pyr (or Settings → Quit)
 //! ends it.
 //!
 //! Unread messages show here too: a dot on the icon (red for mentions and direct messages,
@@ -13,7 +13,7 @@
 //! egui only runs frames while the window is visible, so nothing here waits for one. The icon's
 //! clicks go to a small hidden window of our own, whose window procedure runs on the UI thread
 //! inside winit's message loop and shows the main window, talks to the engine or quits right
-//! there. Later launches of ingle.exe find that hidden window by its name to bring Ingle back
+//! there. Later launches of pyr.exe find that hidden window by its name to bring Pyr back
 //! ([`show_running`]) or, for the installer, to ask it to quit ([`quit_running`]).
 
 use std::cell::RefCell;
@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::time::Duration;
 
 use eframe::egui;
-use ingle_engine::Engine;
+use pyr_engine::Engine;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Win32::Foundation::{CloseHandle, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -49,23 +49,23 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{PCWSTR, w};
 
 /// Class of our hidden window. Its title names the config folder (see [`window_name`]).
-const CLASS: PCWSTR = w!("IngleTray");
+const CLASS: PCWSTR = w!("PyrTray");
 /// The icon's clicks. With NOTIFYICON_VERSION_4 the event is in the low word of lparam and
 /// the icon's position in wparam.
 const WM_TRAY: u32 = WM_APP + 1;
-/// A later launch of ingle.exe wants the window.
-const WM_INGLE_SHOW: u32 = WM_APP + 2;
-/// `ingle.exe --quit` (the installer) wants us to quit.
-const WM_INGLE_QUIT: u32 = WM_APP + 3;
+/// A later launch of pyr.exe wants the window.
+const WM_PYR_SHOW: u32 = WM_APP + 2;
+/// `pyr.exe --quit` (the installer) wants us to quit.
+const WM_PYR_QUIT: u32 = WM_APP + 3;
 /// The close button: hide the window once the current frame is done.
-const WM_INGLE_HIDE: u32 = WM_APP + 4;
+const WM_PYR_HIDE: u32 = WM_APP + 4;
 /// What's unread changed (see `watch_unread`): show it on the icon and the taskbar button.
-const WM_INGLE_UNREAD: u32 = WM_APP + 5;
+const WM_PYR_UNREAD: u32 = WM_APP + 5;
 /// A check for updates asked for from the icon's menu finished: say what it found.
-const WM_INGLE_UPDATE: u32 = WM_APP + 6;
-/// Someone's calling (or a call was missed) while Ingle isn't in front: say so (see
+const WM_PYR_UPDATE: u32 = WM_APP + 6;
+/// Someone's calling (or a call was missed) while Pyr isn't in front: say so (see
 /// `watch_unread`).
-const WM_INGLE_CALL: u32 = WM_APP + 7;
+const WM_PYR_CALL: u32 = WM_APP + 7;
 /// Enter or Space on the icon (NIN_SELECT | NINF_KEY).
 const NIN_KEYSELECT: u32 = NIN_SELECT | 1;
 const ICON_ID: u32 = 1;
@@ -123,7 +123,7 @@ pub fn main_window() -> Option<HWND> {
     (h != 0).then(|| HWND(h as *mut core::ffi::c_void))
 }
 
-/// Whether Ingle's window is in front of you: the foreground window, not minimized or hidden in
+/// Whether Pyr's window is in front of you: the foreground window, not minimized or hidden in
 /// the tray. `None` until there's a window. egui runs no frames while the window is hidden or
 /// minimized, so the engine asks this rather than trusting what the last frame saw.
 pub fn window_in_front() -> Option<bool> {
@@ -132,8 +132,8 @@ pub fn window_in_front() -> Option<bool> {
         return None;
     }
     let main = HWND(h as *mut core::ffi::c_void);
-    // Plain reads of window state: fine from any thread. A program open inside Ingle that has
-    // the keyboard counts as Ingle.
+    // Plain reads of window state: fine from any thread. A program open inside Pyr that has
+    // the keyboard counts as Pyr.
     unsafe {
         let front = GetForegroundWindow();
         let ours = front == main || crate::plugins::programs::is_embedded(front.0 as isize);
@@ -151,7 +151,7 @@ fn with_state<R>(f: impl FnOnce(&State) -> R) -> Option<R> {
 pub struct Tray(());
 
 impl Tray {
-    /// Adds the icon for the app's main window. `config_dir` names this copy of Ingle (one per
+    /// Adds the icon for the app's main window. `config_dir` names this copy of Pyr (one per
     /// profile) so later launches can find it; `tip` is the icon's tooltip.
     pub fn create(
         cc: &eframe::CreationContext<'_>,
@@ -193,11 +193,11 @@ impl Tray {
                 Ok(h) => h,
                 Err(e) => {
                     tracing::warn!("couldn't create the tray window: {e}");
-                    ingle_engine::errors::report(format!("Couldn't put Ingle by the clock (tray): {e}"));
+                    pyr_engine::errors::report(format!("Couldn't put Pyr by the clock (tray): {e}"));
                     return None;
                 }
             };
-            // Icon 1 in ingle.rc, at the size the tray uses (it follows the display scale).
+            // Icon 1 in pyr.rc, at the size the tray uses (it follows the display scale).
             let (cx, cy) = (GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON));
             let icon = LoadImageW(Some(instance), PCWSTR(1usize as *const u16), IMAGE_ICON, cx, cy, LR_DEFAULTCOLOR)
                 .map(|h| HICON(h.0))
@@ -225,9 +225,9 @@ impl Tray {
         if add_icon() {
             tracing::info!("tray icon added");
         } else {
-            // Often just Windows still starting (Ingle opened with it): the icon is added when
+            // Often just Windows still starting (Pyr opened with it): the icon is added when
             // the taskbar announces itself ("TaskbarCreated").
-            tracing::warn!("couldn't add the tray icon yet; the close button will quit Ingle until it's there");
+            tracing::warn!("couldn't add the tray icon yet; the close button will quit Pyr until it's there");
         }
         Some(Tray(()))
     }
@@ -254,7 +254,7 @@ impl Drop for Tray {
 /// can't be the one to notice) and has the window procedure show it when it changes, or when
 /// the window is back on the taskbar (its button comes without a dot).
 fn watch_unread(engine: Arc<Engine>) {
-    let _ = std::thread::Builder::new().name("ingle-unread".into()).spawn(move || {
+    let _ = std::thread::Builder::new().name("pyr-unread".into()).spawn(move || {
         let mut last: Option<crate::unread::Unread> = None;
         let mut visible = false;
         let mut again = 0u8;
@@ -267,7 +267,7 @@ fn watch_unread(engine: Arc<Engine>) {
             if tray == 0 {
                 continue;
             }
-            // Someone calling, or a call missed, while Ingle's window isn't in front (it rings
+            // Someone calling, or a call missed, while Pyr's window isn't in front (it rings
             // all the same: see the engine's `ring`): a Windows notice, and the taskbar button
             // flashes for a call.
             let note = {
@@ -276,7 +276,7 @@ fn watch_unread(engine: Arc<Engine>) {
                 for c in &st.incoming_calls {
                     if !rang.iter().any(|r| r.0 == c.server_key && r.1 == c.channel_id && r.2 == c.since) {
                         let who = st.server(&c.server_key).map(|s| s.member_name(&c.from)).unwrap_or_default();
-                        let what = if c.video { "A video call. Open Ingle to answer." } else { "Open Ingle to answer." };
+                        let what = if c.video { "A video call. Open Pyr to answer." } else { "Open Pyr to answer." };
                         note = Some((format!("{who} is calling you"), what.to_string(), true));
                     }
                 }
@@ -287,11 +287,11 @@ fn watch_unread(engine: Arc<Engine>) {
                 }
                 note
             };
-            // (Not in Do Not Disturb: the call shows in Ingle, quietly.)
+            // (Not in Do Not Disturb: the call shows in Pyr, quietly.)
             if note.is_some() && window_in_front() != Some(true) && !engine.state().settings.dnd {
                 *CALL_NOTE.lock().unwrap_or_else(|e| e.into_inner()) = note;
                 unsafe {
-                    let _ = PostMessageW(Some(HWND(tray as *mut core::ffi::c_void)), WM_INGLE_CALL, WPARAM(0), LPARAM(0));
+                    let _ = PostMessageW(Some(HWND(tray as *mut core::ffi::c_void)), WM_PYR_CALL, WPARAM(0), LPARAM(0));
                 }
             }
             let now = crate::unread::Unread::of(&engine.state());
@@ -306,7 +306,7 @@ fn watch_unread(engine: Arc<Engine>) {
                 *UNREAD.lock().unwrap_or_else(|e| e.into_inner()) = Some(now.clone());
                 last = Some(now);
                 unsafe {
-                    let _ = PostMessageW(Some(HWND(tray as *mut core::ffi::c_void)), WM_INGLE_UNREAD, WPARAM(0), LPARAM(0));
+                    let _ = PostMessageW(Some(HWND(tray as *mut core::ffi::c_void)), WM_PYR_UNREAD, WPARAM(0), LPARAM(0));
                 }
             }
         }
@@ -516,7 +516,7 @@ pub fn notify(title: &str, text: &str) {
     }
 }
 
-/// Quit Ingle for real (Settings → Quit Ingle): the same as the icon's Quit.
+/// Quit Pyr for real (Settings → Quit Pyr): the same as the icon's Quit.
 pub fn quit() -> ! {
     quit_now("Settings")
 }
@@ -531,7 +531,7 @@ pub fn prepare_exit() {
 pub fn hide_main() {
     if let Some(tray) = with_state(|s| s.tray) {
         unsafe {
-            let _ = PostMessageW(Some(tray), WM_INGLE_HIDE, WPARAM(0), LPARAM(0));
+            let _ = PostMessageW(Some(tray), WM_PYR_HIDE, WPARAM(0), LPARAM(0));
         }
     }
 }
@@ -541,7 +541,7 @@ fn hide_main_now() {
         unsafe {
             let _ = ShowWindow(main, SW_HIDE);
         }
-        // Programs open inside Ingle hide with it.
+        // Programs open inside Pyr hide with it.
         crate::plugins::programs::hide_all();
     }
 }
@@ -583,7 +583,7 @@ fn quit_now(from: &str) -> ! {
         unsafe {
             let _ = ShowWindow(main, SW_HIDE);
         }
-        // Programs open inside Ingle close with it.
+        // Programs open inside Pyr close with it.
         crate::plugins::programs::close_all_now();
         // Leave voice, save settings and read markers, close server connections.
         engine.shutdown();
@@ -596,11 +596,11 @@ fn quit_now(from: &str) -> ! {
 fn show_menu(tray: HWND, x: i32, y: i32) {
     use crate::update::Status;
     let Some((engine, updater)) = with_state(|s| (s.engine.clone(), s.updater.clone())) else { return };
-    // Updating: "Update Ingle to 0.7.3" once there's a newer version (its progress while it
+    // Updating: "Update Pyr to 0.7.3" once there's a newer version (its progress while it
     // downloads), and Check for updates.
     let status = updater.status();
     let update = match &status {
-        Status::Available(m) => Some(format!("Update Ingle to {}", m.version)),
+        Status::Available(m) => Some(format!("Update Pyr to {}", m.version)),
         Status::Downloading(done, total) => Some(format!("Downloading the update ({}%)", done * 100 / (*total).max(1))),
         Status::Ready(..) => Some("Installing the update…".to_string()),
         _ => None,
@@ -625,7 +625,7 @@ fn show_menu(tray: HWND, x: i32, y: i32) {
     let check = |on: bool| -> MENU_ITEM_FLAGS { if on { MF_CHECKED } else { MF_UNCHECKED } };
     let cmd = unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
-        let _ = AppendMenuW(menu, MF_STRING, CMD_OPEN, w!("Open Ingle"));
+        let _ = AppendMenuW(menu, MF_STRING, CMD_OPEN, w!("Open Pyr"));
         let _ = SetMenuDefaultItem(menu, CMD_OPEN as u32, 0);
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, MF_STRING | check(muted), CMD_MUTE, w!("Mute"));
@@ -642,7 +642,7 @@ fn show_menu(tray: HWND, x: i32, y: i32) {
             let _ = AppendMenuW(menu, MF_STRING | grey(checking), CMD_CHECK, label);
         }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let _ = AppendMenuW(menu, MF_STRING, CMD_QUIT, w!("Quit Ingle"));
+        let _ = AppendMenuW(menu, MF_STRING, CMD_QUIT, w!("Quit Pyr"));
         // Without this the menu doesn't go away when you click somewhere else.
         let _ = SetForegroundWindow(tray);
         let align = if GetSystemMetrics(SM_MENUDROPALIGNMENT) != 0 { TPM_RIGHTALIGN } else { TPM_LEFTALIGN };
@@ -673,7 +673,7 @@ fn show_menu(tray: HWND, x: i32, y: i32) {
             updater.check_now(crate::update::Asker::Tray, move || {
                 if tray != 0 {
                     unsafe {
-                        let _ = PostMessageW(Some(HWND(tray as *mut core::ffi::c_void)), WM_INGLE_UPDATE, WPARAM(0), LPARAM(0));
+                        let _ = PostMessageW(Some(HWND(tray as *mut core::ffi::c_void)), WM_PYR_UPDATE, WPARAM(0), LPARAM(0));
                     }
                 }
             });
@@ -683,7 +683,7 @@ fn show_menu(tray: HWND, x: i32, y: i32) {
 }
 
 /// Tells about a call with a Windows notice (and flashes the taskbar button while someone's
-/// calling, until Ingle is brought to the front).
+/// calling, until Pyr is brought to the front).
 fn tell_call() {
     let Some((title, text, flash)) = CALL_NOTE.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
     notify(&title, &text);
@@ -703,11 +703,11 @@ fn tell_update_answers() {
     for answer in answers {
         match answer {
             Checked::UpToDate => {
-                notify("Ingle is up to date", &format!("You have the newest version, Ingle {}.", crate::update::current_version()))
+                notify("Pyr is up to date", &format!("You have the newest version, Pyr {}.", crate::update::current_version()))
             }
             Checked::Found(v) => notify(
-                &format!("Ingle {v} is out"),
-                &format!("Click Update at the top of Ingle's window, or right-click the Ingle icon by the clock and choose Update Ingle to {v}."),
+                &format!("Pyr {v} is out"),
+                &format!("Click Update at the top of Pyr's window, or right-click the Pyr icon by the clock and choose Update Pyr to {v}."),
             ),
             Checked::Failed(e) => notify("Couldn't check for updates", &e),
         }
@@ -729,27 +729,27 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             LRESULT(0)
         }
-        WM_INGLE_SHOW => {
+        WM_PYR_SHOW => {
             show_main();
             LRESULT(0)
         }
-        WM_INGLE_HIDE => {
+        WM_PYR_HIDE => {
             hide_main_now();
             LRESULT(0)
         }
-        WM_INGLE_UNREAD => {
+        WM_PYR_UNREAD => {
             show_unread();
             LRESULT(0)
         }
-        WM_INGLE_UPDATE => {
+        WM_PYR_UPDATE => {
             tell_update_answers();
             LRESULT(0)
         }
-        WM_INGLE_CALL => {
+        WM_PYR_CALL => {
             tell_call();
             LRESULT(0)
         }
-        WM_INGLE_QUIT => quit_now("asked to by another launch, like the installer"),
+        WM_PYR_QUIT => quit_now("asked to by another launch, like the installer"),
         WM_ENDSESSION if wparam.0 != 0 => {
             // Windows is signing out or shutting down: save what quitting would save.
             if let Some(engine) = with_state(|s| s.engine.clone()) {
@@ -815,13 +815,13 @@ fn remove_icon() {
 /// Our hidden window's title: one per config folder, so per profile.
 fn window_name(config_dir: &Path) -> String {
     // FNV-1a, which (unlike std's hasher) is the same in every build, so any version of
-    // ingle.exe finds any other.
+    // pyr.exe finds any other.
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in config_dir.to_string_lossy().bytes() {
         h ^= u64::from(b);
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
-    format!("Ingle tray {h:016x}")
+    format!("Pyr tray {h:016x}")
 }
 
 /// The running copy's hidden window and process id.
@@ -842,17 +842,17 @@ pub fn show_running(config_dir: &Path) -> bool {
     unsafe {
         // The person just started us, so we may let the running copy come to the front.
         let _ = AllowSetForegroundWindow(pid);
-        PostMessageW(Some(hwnd), WM_INGLE_SHOW, WPARAM(0), LPARAM(0)).is_ok()
+        PostMessageW(Some(hwnd), WM_PYR_SHOW, WPARAM(0), LPARAM(0)).is_ok()
     }
 }
 
-/// `ingle.exe --quit`, which the installer runs before replacing files: ask the running copy
+/// `pyr.exe --quit`, which the installer runs before replacing files: ask the running copy
 /// to quit, and wait until it has (at most 10 seconds). Returns false if none was found.
 pub fn quit_running(config_dir: &Path) -> bool {
     let Some((hwnd, pid)) = find_running(config_dir) else { return false };
     unsafe {
         let process = OpenProcess(PROCESS_SYNCHRONIZE, false, pid).ok();
-        let sent = PostMessageW(Some(hwnd), WM_INGLE_QUIT, WPARAM(0), LPARAM(0)).is_ok();
+        let sent = PostMessageW(Some(hwnd), WM_PYR_QUIT, WPARAM(0), LPARAM(0)).is_ok();
         if let Some(p) = process {
             if sent {
                 WaitForSingleObject(p, 10_000);
@@ -873,9 +873,9 @@ mod tests {
 
     #[test]
     fn window_name_is_stable_and_per_folder() {
-        let a = window_name(Path::new(r"C:\Users\me\AppData\Roaming\Ingle\config"));
-        assert_eq!(a, window_name(Path::new(r"C:\Users\me\AppData\Roaming\Ingle\config")));
-        assert_ne!(a, window_name(Path::new(r"C:\Users\me\AppData\Roaming\Ingle\config\profiles\b")));
-        assert!(a.starts_with("Ingle tray ") && a.len() == "Ingle tray ".len() + 16);
+        let a = window_name(Path::new(r"C:\Users\me\AppData\Roaming\Pyr\config"));
+        assert_eq!(a, window_name(Path::new(r"C:\Users\me\AppData\Roaming\Pyr\config")));
+        assert_ne!(a, window_name(Path::new(r"C:\Users\me\AppData\Roaming\Pyr\config\profiles\b")));
+        assert!(a.starts_with("Pyr tray ") && a.len() == "Pyr tray ".len() + 16);
     }
 }

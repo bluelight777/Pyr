@@ -1,13 +1,13 @@
 [Desktop Entry]
 Type=Application
-Name=Ingle
+Name=Pyr
 GenericName=Voice and Video Chat
 Comment=Voice, webcams, screen sharing and text channels for your group
-Exec=ingle %u
-Icon=ingle
+Exec=pyr %u
+Icon=pyr
 Terminal=false
 Categories=Network;Chat;InstantMessaging;
 Keywords=voice;video;chat;call;screen share;webcam;
-MimeType=x-scheme-handler/ingle;
-StartupWMClass=ingle
+MimeType=x-scheme-handler/pyr;x-scheme-handler/ingle;
+StartupWMClass=pyr
 StartupNotify=true

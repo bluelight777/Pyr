@@ -1,4 +1,4 @@
-//! Settings → Claude: Ingle's Claude connector (`ingle-mcp`, installed next to Ingle) set up in
+//! Settings → Claude: Pyr's Claude connector (`pyr-mcp`, installed next to Pyr) set up in
 //! the Claude desktop app, which starts the MCP servers listed under `mcpServers` in its
 //! `claude_desktop_config.json` (`%APPDATA%\Claude` on Windows; a copy of Claude from the
 //! Microsoft Store may keep its own under `%LOCALAPPDATA%\Packages\Claude_*`, so any that's
@@ -9,20 +9,20 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value, json};
 
 /// The connector's name in Claude's settings (its tools show up under it).
-pub const NAME: &str = "ingle";
+pub const NAME: &str = "pyr";
 
-/// The connector next to this Ingle, if it's there.
+/// The connector next to this Pyr, if it's there.
 pub fn connector() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let p = exe.with_file_name(if cfg!(windows) { "ingle-mcp.exe" } else { "ingle-mcp" });
+    let p = exe.with_file_name(if cfg!(windows) { "pyr-mcp.exe" } else { "pyr-mcp" });
     p.is_file().then_some(p)
 }
 
-/// What the connector is started with: nothing, or this Ingle's settings folder when it isn't
-/// the usual one (a test profile, or one `INGLE_HOME` picked, which Claude's apps don't pass on
+/// What the connector is started with: nothing, or this Pyr's settings folder when it isn't
+/// the usual one (a test profile, or one `PYR_HOME` picked, which Claude's apps don't pass on
 /// to what they start), so it signs with the same identity.
 pub fn args(config_dir: &Path) -> Vec<String> {
-    if std::env::var_os("INGLE_HOME").is_none() && config_dir == ingle_engine::config::config_dir(None) {
+    if !pyr_proto::env_set("HOME") && config_dir == pyr_engine::config::config_dir(None) {
         Vec::new()
     } else {
         vec!["--config-dir".into(), config_dir.display().to_string()]
@@ -66,11 +66,11 @@ pub fn claude_configs() -> Vec<PathBuf> {
 pub enum Setup {
     /// No entry (or no file yet).
     Missing,
-    /// This Ingle's connector, started the way it should be.
+    /// This Pyr's connector, started the way it should be.
     Here,
     /// An entry for another copy (where it points).
     Elsewhere(String),
-    /// The file isn't JSON Ingle can read: it's left alone.
+    /// The file isn't JSON Pyr can read: it's left alone.
     Unreadable(String),
 }
 
@@ -87,8 +87,8 @@ fn read(path: &Path) -> Result<Option<Map<String, Value>>, String> {
     }
     match serde_json::from_str::<Value>(text) {
         Ok(Value::Object(m)) => Ok(Some(m)),
-        Ok(_) => Err(format!("{} isn't a settings file Ingle understands", path.display())),
-        Err(e) => Err(format!("{} has a mistake in it ({e}), so Ingle won't change it", path.display())),
+        Ok(_) => Err(format!("{} isn't a settings file Pyr understands", path.display())),
+        Err(e) => Err(format!("{} has a mistake in it ({e}), so Pyr won't change it", path.display())),
     }
 }
 
@@ -111,17 +111,17 @@ fn entry(exe: &Path, args: &[String]) -> Value {
     json!({ "command": exe.display().to_string(), "args": args })
 }
 
-/// Writes `m` over `config`: the old file kept next to it first (`….ingle-backup.json`), and
+/// Writes `m` over `config`: the old file kept next to it first (`….pyr-backup.json`), and
 /// the new one swapped in whole.
 fn write(config: &Path, m: Map<String, Value>) -> Result<(), String> {
     if let Some(dir) = config.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("couldn't make {}: {e}", dir.display()))?;
     }
     if config.exists() {
-        std::fs::copy(config, config.with_extension("ingle-backup.json")).map_err(|e| format!("couldn't keep a copy of {}: {e}", config.display()))?;
+        std::fs::copy(config, config.with_extension("pyr-backup.json")).map_err(|e| format!("couldn't keep a copy of {}: {e}", config.display()))?;
     }
     let text = serde_json::to_string_pretty(&Value::Object(m)).map_err(|e| e.to_string())? + "\n";
-    let tmp = config.with_extension("json.ingle-new");
+    let tmp = config.with_extension("json.pyr-new");
     std::fs::write(&tmp, text).map_err(|e| format!("couldn't write {}: {e}", tmp.display()))?;
     std::fs::rename(&tmp, config).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
@@ -129,12 +129,12 @@ fn write(config: &Path, m: Map<String, Value>) -> Result<(), String> {
     })
 }
 
-/// Adds the connector to `config` (or points its entry at this Ingle), keeping everything else.
+/// Adds the connector to `config` (or points its entry at this Pyr), keeping everything else.
 pub fn add(config: &Path, exe: &Path, args: &[String]) -> Result<(), String> {
     let mut m = read(config)?.unwrap_or_default();
     let servers = m.entry("mcpServers").or_insert_with(|| Value::Object(Map::new()));
     let Some(servers) = servers.as_object_mut() else {
-        return Err(format!("{}'s mcpServers isn't a list Ingle understands, so it's left alone", config.display()));
+        return Err(format!("{}'s mcpServers isn't a list Pyr understands, so it's left alone", config.display()));
     };
     servers.insert(NAME.into(), entry(exe, args));
     write(config, m)
@@ -145,6 +145,27 @@ pub fn remove(config: &Path) -> Result<(), String> {
     let Some(mut m) = read(config)? else { return Ok(()) };
     let gone = m.get_mut("mcpServers").and_then(Value::as_object_mut).is_some_and(|s| s.remove(NAME).is_some());
     if gone { write(config, m) } else { Ok(()) }
+}
+
+/// The connector's name in Claude's settings before Pyr was called Pyr.
+const OLD_NAME: &str = "ingle";
+
+/// Claude's settings still start Ingle's connector (`ingle` → `ingle-mcp`), which went with
+/// Ingle: it becomes this Pyr's (`pyr` → `pyr-mcp`, the old file kept next to it). Anything
+/// else under that name is left alone. Whether it changed anything.
+pub fn migrate_from_ingle(config: &Path, exe: &Path, args: &[String]) -> Result<bool, String> {
+    let Some(mut m) = read(config)? else { return Ok(false) };
+    let Some(servers) = m.get_mut("mcpServers").and_then(Value::as_object_mut) else { return Ok(false) };
+    let ingles = servers.get(OLD_NAME).and_then(|e| e.get("command")).and_then(Value::as_str).is_some_and(|c| {
+        let file = c.rsplit(['/', '\\']).next().unwrap_or("");
+        file.eq_ignore_ascii_case("ingle-mcp") || file.eq_ignore_ascii_case("ingle-mcp.exe")
+    });
+    if !ingles {
+        return Ok(false);
+    }
+    servers.remove(OLD_NAME);
+    servers.entry(NAME).or_insert_with(|| entry(exe, args));
+    write(config, m).map(|()| true)
 }
 
 /// The setup to paste into another app's MCP settings.
@@ -167,28 +188,49 @@ pub fn claude_code_line(exe: &Path, args: &[String]) -> String {
 mod tests {
     use super::*;
 
+    /// Claude's settings that started Ingle's connector start Pyr's instead; an entry called
+    /// "ingle" that isn't Ingle's connector is left alone.
+    #[test]
+    fn ingles_connector_becomes_pyrs() {
+        let dir = std::env::temp_dir().join(format!("pyr-connector-mig-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("claude_desktop_config.json");
+        let exe = PathBuf::from(if cfg!(windows) { r"C:\Users\a\AppData\Local\Programs\Pyr\pyr-mcp.exe" } else { "/usr/bin/pyr-mcp" });
+        std::fs::write(&config, r#"{"mcpServers":{"ingle":{"command":"C:\\Users\\a\\AppData\\Local\\Programs\\Ingle\\ingle-mcp.exe","args":[]},"other":{"command":"x"}},"theme":"dark"}"#).unwrap();
+        assert_eq!(migrate_from_ingle(&config, &exe, &[]), Ok(true));
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+        assert!(v["mcpServers"].get("ingle").is_none());
+        assert_eq!(v["mcpServers"]["pyr"]["command"], exe.display().to_string());
+        assert_eq!((v["mcpServers"]["other"]["command"].as_str(), v["theme"].as_str()), (Some("x"), Some("dark")));
+        assert_eq!(migrate_from_ingle(&config, &exe, &[]), Ok(false), "once");
+        std::fs::write(&config, r#"{"mcpServers":{"ingle":{"command":"/home/a/my-ingle-tool"}}}"#).unwrap();
+        assert_eq!(migrate_from_ingle(&config, &exe, &[]), Ok(false), "not Ingle's connector");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn claudes_settings_get_the_connector_and_keep_everything_else() {
-        let dir = std::env::temp_dir().join(format!("ingle-connector-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pyr-connector-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let config = dir.join("Claude").join("claude_desktop_config.json");
-        let exe = PathBuf::from(if cfg!(windows) { r"C:\Program Files\Ingle\ingle-mcp.exe" } else { "/opt/ingle/ingle-mcp" });
+        let exe = PathBuf::from(if cfg!(windows) { r"C:\Program Files\Pyr\pyr-mcp.exe" } else { "/opt/pyr/pyr-mcp" });
         // No file yet: made.
         assert_eq!(status(&config, &exe, &[]), Setup::Missing);
         add(&config, &exe, &[]).unwrap();
         assert_eq!(status(&config, &exe, &[]), Setup::Here);
-        assert!(!config.with_extension("ingle-backup.json").exists(), "nothing to back up the first time");
+        assert!(!config.with_extension("pyr-backup.json").exists(), "nothing to back up the first time");
         // Someone else's servers and Claude's own settings stay, and the old file is kept.
         std::fs::write(&config, "\u{feff}{ \"mcpServers\": { \"files\": { \"command\": \"npx\", \"args\": [\"-y\", \"files\"] } }, \"preferences\": { \"x\": 1 } }").unwrap();
         assert_eq!(status(&config, &exe, &[]), Setup::Missing);
-        let args = vec!["--config-dir".to_string(), "/tmp/ingle test".to_string()];
+        let args = vec!["--config-dir".to_string(), "/tmp/pyr test".to_string()];
         add(&config, &exe, &args).unwrap();
         assert_eq!(status(&config, &exe, &args), Setup::Here);
         assert_eq!(status(&config, &exe, &[]), Setup::Elsewhere(exe.display().to_string()), "started differently");
         let m: Value = serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
         assert_eq!(m["mcpServers"]["files"]["command"], "npx");
         assert_eq!(m["preferences"]["x"], 1);
-        assert!(std::fs::read_to_string(config.with_extension("ingle-backup.json")).unwrap().contains("\"files\""));
+        assert!(std::fs::read_to_string(config.with_extension("pyr-backup.json")).unwrap().contains("\"files\""));
         // Taken out again, leaving the rest.
         remove(&config).unwrap();
         let m: Value = serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
@@ -200,7 +242,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&config).unwrap(), "{ \"mcpServers\": { ");
         // For other apps.
         assert!(snippet(&exe, &[]).contains("\"mcpServers\""));
-        assert!(claude_code_line(&exe, &args).ends_with("--config-dir \"/tmp/ingle test\""));
+        assert!(claude_code_line(&exe, &args).ends_with("--config-dir \"/tmp/pyr test\""));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

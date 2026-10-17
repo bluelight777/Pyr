@@ -4,8 +4,8 @@
 #
 # Needs: the MinGW-w64 toolchain (Debian/Ubuntu: `apt install mingw-w64 cmake`).
 #
-#   ./scripts/build-windows.sh -p ingle -p ingle-server
-#   ./scripts/build-windows.sh -p ingle-engine --example bot
+#   ./scripts/build-windows.sh -p pyr -p pyr-server
+#   ./scripts/build-windows.sh -p pyr-engine --example bot
 #
 # Output: target-win/x86_64-pc-windows-gnu/release/*.exe
 #

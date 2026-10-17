@@ -1,14 +1,23 @@
 #!/bin/sh
 set -e
 if [ "$1" = configure ]; then
-    # Account the optional ingle-server service runs as.
-    if ! getent passwd ingle-server >/dev/null; then
+    # Account the optional pyr-server service runs as.
+    if ! getent passwd pyr-server >/dev/null; then
         if command -v adduser >/dev/null 2>&1; then
-            adduser --system --group --no-create-home --home /var/lib/ingle-server --quiet ingle-server
+            adduser --system --group --no-create-home --home /var/lib/pyr-server --quiet pyr-server
         else
-            useradd --system --user-group --no-create-home --home-dir /var/lib/ingle-server \
-                --shell /usr/sbin/nologin ingle-server
+            useradd --system --user-group --no-create-home --home-dir /var/lib/pyr-server \
+                --shell /usr/sbin/nologin pyr-server
         fi
+    fi
+    # Pyr was called Ingle before 0.8.0: an ingle-server service's community (its messages,
+    # files and identity) becomes the pyr-server service's. Not started by itself, as it
+    # wasn't before.
+    if [ -d /var/lib/ingle-server ] && [ ! -e /var/lib/pyr-server ]; then
+        mv /var/lib/ingle-server /var/lib/pyr-server
+        chown -R pyr-server:pyr-server /var/lib/pyr-server
+        echo "Pyr: the ingle-server service's community is in /var/lib/pyr-server now." >&2
+        echo "Pyr: if you ran it as a service, start it again with: sudo systemctl enable --now pyr-server" >&2
     fi
     if [ -d /run/systemd/system ]; then
         systemctl daemon-reload >/dev/null 2>&1 || true

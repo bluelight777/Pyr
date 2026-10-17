@@ -116,7 +116,7 @@ impl Default for Images {
     fn default() -> Self {
         let (tx, jobs) = mpsc::channel::<(String, std::sync::Arc<Vec<u8>>, u32, bool)>();
         let (done, rx) = mpsc::channel();
-        let _ = std::thread::Builder::new().name("ingle-images".into()).spawn(move || {
+        let _ = std::thread::Builder::new().name("pyr-images".into()).spawn(move || {
             while let Ok((key, bytes, max_side, still)) = jobs.recv() {
                 let mut r = decode(&bytes, max_side, still);
                 // A profile picture's color, for its call tile (like Discord's).
@@ -326,16 +326,16 @@ fn shrink(img: image::RgbaImage, max_side: u32) -> image::RgbaImage {
 /// "decompression bomb"), so the declared size is checked first and memory is capped.
 fn limits() -> image::Limits {
     let mut l = image::Limits::default();
-    l.max_image_width = Some(ingle_proto::control::MAX_IMAGE_SIDE);
-    l.max_image_height = Some(ingle_proto::control::MAX_IMAGE_SIDE);
+    l.max_image_width = Some(pyr_proto::control::MAX_IMAGE_SIDE);
+    l.max_image_height = Some(pyr_proto::control::MAX_IMAGE_SIDE);
     l.max_alloc = Some(320 << 20);
     l
 }
 
 /// A still picture, decoded within [`limits`].
 pub fn load_limited(bytes: &[u8]) -> Result<image::DynamicImage, String> {
-    if !ingle_proto::control::image_dimensions_ok(bytes) {
-        return Err("That image is too large, or isn't one Ingle can read.".into());
+    if !pyr_proto::control::image_dimensions_ok(bytes) {
+        return Err("That image is too large, or isn't one Pyr can read.".into());
     }
     let mut r = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| e.to_string())?;
     r.limits(limits());
@@ -344,7 +344,7 @@ pub fn load_limited(bytes: &[u8]) -> Result<image::DynamicImage, String> {
 
 /// An animated GIF's decoder, within [`limits`].
 fn gif_decoder(bytes: &[u8]) -> Result<image::codecs::gif::GifDecoder<std::io::Cursor<&[u8]>>, String> {
-    if !ingle_proto::control::image_dimensions_ok(bytes) {
+    if !pyr_proto::control::image_dimensions_ok(bytes) {
         return Err("That GIF is too large.".into());
     }
     let mut dec = image::codecs::gif::GifDecoder::new(std::io::Cursor::new(bytes)).map_err(|e| e.to_string())?;
@@ -358,7 +358,7 @@ const ANIM_BUDGET: usize = 192 << 20;
 /// A moving picture's frames, within [`limits`]: a GIF, an animated WebP or an animated PNG
 /// (`None`: a still picture).
 fn animation(bytes: &[u8]) -> Result<Option<image::Frames<'_>>, String> {
-    if !ingle_proto::control::image_dimensions_ok(bytes) {
+    if !pyr_proto::control::image_dimensions_ok(bytes) {
         return Err("That picture is too large.".into());
     }
     let err = |e: image::ImageError| e.to_string();
@@ -398,7 +398,7 @@ fn delay_of(f: &image::Frame) -> Duration {
 /// Whether a picture moves: a GIF of more than one frame, an animated WebP or an animated PNG
 /// (read from how it starts, without decoding it).
 pub fn is_animated(bytes: &[u8]) -> bool {
-    match ingle_proto::control::sniff_image(bytes) {
+    match pyr_proto::control::sniff_image(bytes) {
         Some("image/gif") => gif_frames(bytes) > 1,
         // A VP8X header with its animation flag.
         Some("image/webp") => bytes.len() > 20 && &bytes[12..16] == b"VP8X" && bytes[20] & 0x02 != 0,
@@ -511,7 +511,7 @@ pub fn max_side_for_chat() -> u32 {
 pub fn make_emoji(bytes: &[u8]) -> Result<(Vec<u8>, bool), String> {
     const STILL: u32 = 128;
     const MOVING: u32 = 96;
-    let bad = || "That file isn't an image Ingle can read.".to_string();
+    let bad = || "That file isn't an image Pyr can read.".to_string();
     let fmt = image::guess_format(bytes).map_err(|_| bad())?;
     if fmt == image::ImageFormat::Gif {
         let dec = gif_decoder(bytes)?;
@@ -531,7 +531,7 @@ pub fn make_emoji(bytes: &[u8]) -> Result<(Vec<u8>, bool), String> {
                     enc.encode_frame(image::Frame::from_parts(small, 0, 0, delay)).map_err(|e| e.to_string())?;
                 }
             }
-            if out.len() as u64 > ingle_proto::control::MAX_AVATAR_BYTES {
+            if out.len() as u64 > pyr_proto::control::MAX_AVATAR_BYTES {
                 return Err("That animated emoji is too big even after shrinking it; try a shorter GIF.".into());
             }
             return Ok((out, true));
@@ -572,7 +572,7 @@ pub fn make_avatar_crop(bytes: &[u8], cx: f32, cy: f32, frac: f32) -> Result<Vec
     if is_animated(bytes) {
         return moving_avatar(bytes, cx, cy, frac);
     }
-    let img = load_limited(bytes).map_err(|_| "That file isn't an image Ingle can read (or it's too large).".to_string())?.to_rgba8();
+    let img = load_limited(bytes).map_err(|_| "That file isn't an image Pyr can read (or it's too large).".to_string())?.to_rgba8();
     let (w, h) = img.dimensions();
     let side = ((w.min(h) as f32 * frac.clamp(0.05, 1.0)).round() as u32).clamp(1, w.min(h));
     let x = ((cx * w as f32 - side as f32 / 2.0).round().max(0.0) as u32).min(w - side);
@@ -631,7 +631,7 @@ pub fn moving_avatar(bytes: &[u8], cx: f32, cy: f32, frac: f32) -> Result<Vec<u8
                     enc.encode_frame(frame).map_err(|e| e.to_string())?;
                 }
             }
-            if out.len() as u64 <= ingle_proto::control::MAX_AVATAR_BYTES {
+            if out.len() as u64 <= pyr_proto::control::MAX_AVATAR_BYTES {
                 return Ok(out);
             }
         }
@@ -651,7 +651,7 @@ pub fn clipboard_png() -> Option<Vec<u8>> {
 
 /// Copy picture: a picture put on the clipboard, to paste anywhere. As a picture (PNG, and a
 /// bitmap for apps like Paint; a moving one's first frame) and, on Windows, as the file itself
-/// too, so pasted into Ingle, Discord or a folder it stays just as it was (a moving GIF keeps
+/// too, so pasted into Pyr, Discord or a folder it stays just as it was (a moving GIF keeps
 /// moving, and a JPEG photo isn't made into a far bigger PNG). Takes a moment for a big one:
 /// call it off the window's thread.
 pub fn copy_picture(name: &str, bytes: &[u8]) -> Result<(), String> {
@@ -708,11 +708,11 @@ fn dib_of(img: &image::RgbaImage) -> Vec<u8> {
     out
 }
 
-/// The picture copied, as a file of its own to go on the clipboard with it (in Ingle's folder
+/// The picture copied, as a file of its own to go on the clipboard with it (in Pyr's folder
 /// in the temp folder; the one copied before is let go).
 #[cfg(windows)]
 fn copied_file(name: &str, bytes: &[u8]) -> std::io::Result<std::path::PathBuf> {
-    let dir = std::env::temp_dir().join("Ingle").join("copied");
+    let dir = std::env::temp_dir().join("Pyr").join("copied");
     std::fs::create_dir_all(&dir)?;
     for old in std::fs::read_dir(&dir)?.flatten() {
         let _ = std::fs::remove_file(old.path());
@@ -728,7 +728,7 @@ fn copied_file(name: &str, bytes: &[u8]) -> std::io::Result<std::path::PathBuf> 
 fn file_name_for(name: &str, bytes: &[u8]) -> String {
     let safe: String = name.chars().map(|c| if c.is_control() || "\\/:*?\"<>|".contains(c) { '_' } else { c }).collect();
     let safe = safe.trim().trim_matches('.').to_string();
-    let ext = match ingle_proto::control::sniff_image(bytes) {
+    let ext = match pyr_proto::control::sniff_image(bytes) {
         Some("image/jpeg") => "jpg",
         Some("image/gif") => "gif",
         Some("image/webp") => "webp",
@@ -762,8 +762,8 @@ fn put_on_clipboard(png: &[u8], dib: &[u8], file: Option<&std::path::Path>) -> R
 }
 
 /// The most an image attached on server `s` can be: 25 MB, or 10 MB on servers older than 0.8.
-pub fn upload_limit(s: &ingle_engine::state::ServerView) -> u64 {
-    use ingle_proto::control::{BIG_FILES_FEATURE, MAX_ATTACHMENT_BYTES, OLD_MAX_ATTACHMENT_BYTES};
+pub fn upload_limit(s: &pyr_engine::state::ServerView) -> u64 {
+    use pyr_proto::control::{BIG_FILES_FEATURE, MAX_ATTACHMENT_BYTES, OLD_MAX_ATTACHMENT_BYTES};
     if s.has(BIG_FILES_FEATURE) { MAX_ATTACHMENT_BYTES } else { OLD_MAX_ATTACHMENT_BYTES }
 }
 
@@ -772,10 +772,10 @@ pub fn check_attachment(name: &str, bytes: &[u8], limit: u64) -> Result<(), Stri
     if bytes.len() as u64 > limit {
         return Err(format!("{name} is over {} MB.", limit >> 20));
     }
-    if ingle_proto::control::sniff_image(bytes).is_none() {
+    if pyr_proto::control::sniff_image(bytes).is_none() {
         return Err(format!("{name} isn't a PNG, JPEG, GIF or WebP image."));
     }
-    if !ingle_proto::control::image_dimensions_ok(bytes) {
+    if !pyr_proto::control::image_dimensions_ok(bytes) {
         return Err(format!("{name} is too large (at most 8192 pixels across; animated GIFs at most 4096)."));
     }
     Ok(())
@@ -784,7 +784,7 @@ pub fn check_attachment(name: &str, bytes: &[u8], limit: u64) -> Result<(), Stri
 /// A picture too big to attach (over `limit`) that can be made smaller to fit instead of
 /// being refused.
 pub fn can_shrink(bytes: &[u8], limit: u64) -> bool {
-    bytes.len() as u64 > limit && ingle_proto::control::sniff_image(bytes).is_some() && ingle_proto::control::image_dimensions_ok(bytes)
+    bytes.len() as u64 > limit && pyr_proto::control::sniff_image(bytes).is_some() && pyr_proto::control::image_dimensions_ok(bytes)
 }
 
 /// A picture made smaller to fit in `limit` bytes: a moving one as a GIF (smaller, then with
@@ -863,7 +863,7 @@ pub fn shrink_to_fit(bytes: &[u8], limit: u64) -> Result<(Vec<u8>, &'static str)
 
 /// A picture being made smaller to fit, then: (the draft it's for, its name, the smaller one
 /// and its extension or why not, how big it was).
-pub type Shrunk = ((String, ingle_proto::control::ChannelId), String, Result<(Vec<u8>, &'static str), String>, u64);
+pub type Shrunk = ((String, pyr_proto::control::ChannelId), String, Result<(Vec<u8>, &'static str), String>, u64);
 
 fn shrunk() -> &'static std::sync::Mutex<Vec<Shrunk>> {
     static S: std::sync::OnceLock<std::sync::Mutex<Vec<Shrunk>>> = std::sync::OnceLock::new();
@@ -871,9 +871,9 @@ fn shrunk() -> &'static std::sync::Mutex<Vec<Shrunk>> {
 }
 
 /// Makes a picture smaller to fit `limit`, on a thread of its own (see `take_shrunk`).
-pub fn shrink_to_fit_async(draft: (String, ingle_proto::control::ChannelId), name: String, bytes: Vec<u8>, limit: u64, ctx: &egui::Context) {
+pub fn shrink_to_fit_async(draft: (String, pyr_proto::control::ChannelId), name: String, bytes: Vec<u8>, limit: u64, ctx: &egui::Context) {
     let ctx = ctx.clone();
-    let _ = std::thread::Builder::new().name("ingle-shrink".into()).spawn(move || {
+    let _ = std::thread::Builder::new().name("pyr-shrink".into()).spawn(move || {
         let was = bytes.len() as u64;
         let r = shrink_to_fit(&bytes, limit);
         shrunk().lock().unwrap_or_else(|e| e.into_inner()).push((draft, name, r, was));
@@ -909,7 +909,7 @@ pub enum PickFor {
     Avatar,
     ServerIcon(String),
     Emoji(String),
-    Attach(String, ingle_proto::control::ChannelId),
+    Attach(String, pyr_proto::control::ChannelId),
     /// A sound file for a server's soundboard (picking nothing is reported too, as no files).
     Sound(String),
     /// An add-on (.wasm) to try (Plugins → Make your own).
@@ -965,7 +965,7 @@ pub fn run_wanted_dialog() {
     if let PickFor::AddonFile = what {
         let file = rfd::FileDialog::new()
             .set_title("Choose an add-on to try")
-            .add_filter("Ingle add-ons", &["wasm"])
+            .add_filter("Pyr add-ons", &["wasm"])
             .pick_file()
             .filter(|p| std::fs::metadata(p).map(|m| m.len() <= 8 << 20).unwrap_or(false));
         DIALOG_CLOSED.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1008,7 +1008,7 @@ pub enum FolderFor {
     Restore,
     /// Where to start a new add-on (Plugins → Make your own).
     NewAddon,
-    /// A plugin's folder, to send in for the Ingle Library.
+    /// A plugin's folder, to send in for the Pyr Library.
     PluginSource,
     /// A skin's folder, to try on (Settings → Appearance).
     TrySkin,
@@ -1174,7 +1174,7 @@ mod tests {
         let d = decode(&out, 1600, false).unwrap();
         assert_eq!(d.frames.len(), 3);
         assert_eq!(d.frames[1].1, Duration::from_millis(70));
-        assert_eq!(ingle_proto::control::image_size(&out), Some((20, 10)));
+        assert_eq!(pyr_proto::control::image_size(&out), Some((20, 10)));
     }
 
     /// An animated WebP of `n` frames 16×8 (lossless, 30 ms each), put together by hand:
@@ -1283,7 +1283,7 @@ mod tests {
         let webp = animated_webp(4);
         let gif = make_avatar_crop(&webp, 0.5, 0.5, 1.0).unwrap();
         assert!(is_animated(&gif), "still moving");
-        assert!(gif.len() as u64 <= ingle_proto::control::MAX_AVATAR_BYTES);
+        assert!(gif.len() as u64 <= pyr_proto::control::MAX_AVATAR_BYTES);
         let d = decode(&gif, 256, false).unwrap();
         assert_eq!(d.frames.len(), 4);
         assert_eq!(d.frames[0].0.size, [8, 8], "the square of a 16×8 picture");
@@ -1322,10 +1322,10 @@ mod tests {
         let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(37, 21, image::Rgb([1, 2, 3])));
         let mut jpg = Vec::new();
         img.write_to(&mut std::io::Cursor::new(&mut jpg), image::ImageFormat::Jpeg).unwrap();
-        assert_eq!(ingle_proto::control::image_size(&jpg), Some((37, 21)));
+        assert_eq!(pyr_proto::control::image_size(&jpg), Some((37, 21)));
         let mut webp = Vec::new();
         image::DynamicImage::ImageRgba8(img.to_rgba8()).write_to(&mut std::io::Cursor::new(&mut webp), image::ImageFormat::WebP).unwrap();
-        assert_eq!(ingle_proto::control::image_size(&webp), Some((37, 21)));
+        assert_eq!(pyr_proto::control::image_size(&webp), Some((37, 21)));
     }
 
     #[test]
@@ -1363,7 +1363,7 @@ mod tests {
         assert_eq!((got.width(), got.height()), (128, 64));
         assert_eq!(super::emoji_name_from("C:\\pics\\Party Cat!.png"), "Party_Cat");
         assert_eq!(super::emoji_name_from("x.gif"), "emojix");
-        assert!(ingle_proto::control::valid_emoji_name(&super::emoji_name_from("a b c d e f g h i j k l m n o p q r s t.png")));
+        assert!(pyr_proto::control::valid_emoji_name(&super::emoji_name_from("a b c d e f g h i j k l m n o p q r s t.png")));
     }
 
     #[test]

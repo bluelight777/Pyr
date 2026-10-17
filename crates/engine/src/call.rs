@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail};
 use bytes::Bytes;
-use ingle_proto::control::*;
-use ingle_proto::media::{self, AAD_LEN, AudioHeader, VideoHeader, flags, track};
+use pyr_proto::control::*;
+use pyr_proto::media::{self, AAD_LEN, AudioHeader, VideoHeader, flags, track};
 use parking_lot::Mutex;
 use quinn::VarInt;
 use tokio::sync::mpsc;
@@ -122,7 +122,7 @@ impl VideoCtx {
             let Some((seq, pkt)) = seal_video(&e2ee, &seqs, track_id, &f, started.elapsed().as_millis() as u32) else {
                 return;
             };
-            debug!(target: "ingle_media", ev = "enc", track = track_id, seq, key = f.keyframe, bytes = pkt.len(), w, h);
+            debug!(target: "pyr_media", ev = "enc", track = track_id, seq, key = f.keyframe, bytes = pkt.len(), w, h);
             counters.call_counters.video_sent.fetch_add(1, Ordering::Relaxed);
             counters.call_counters.video_bytes.fetch_add(pkt.len() as u64, Ordering::Relaxed);
             lk.inflight.fetch_add(1, Ordering::Relaxed);
@@ -218,7 +218,7 @@ fn seal_video(e2ee: &Mutex<E2ee>, seqs: &[AtomicU32; 4], track_id: u8, f: &Encod
 }
 
 async fn video_send_loop(conn: quinn::Connection, mut rx: mpsc::UnboundedReceiver<(u32, Vec<u8>)>, link: Arc<SendLink>, rate: Arc<Mutex<RateControl>>) {
-    let prioritize = !ingle_proto::ab::old("fair");
+    let prioritize = !pyr_proto::ab::old("fair");
     let mut n: u64 = 0;
     while let Some((seq, buf)) = rx.recv().await {
         let sent = Instant::now();
@@ -251,7 +251,7 @@ async fn video_send_loop(conn: quinn::Connection, mut rx: mpsc::UnboundedReceive
             if done.is_err() {
                 let _ = s.reset(VarInt::from_u32(0));
             }
-            debug!(target: "ingle_media", ev = "ack", seq, bytes, ms = sent.elapsed().as_millis() as u64, ok);
+            debug!(target: "pyr_media", ev = "ack", seq, bytes, ms = sent.elapsed().as_millis() as u64, ok);
             rc.lock().on_acked(seq, ok, Instant::now());
             lk.inflight.fetch_sub(1, Ordering::Relaxed);
         });
@@ -281,10 +281,10 @@ async fn rate_loop(conn: quinn::Connection, rate: Arc<Mutex<RateControl>>, link:
         link.late_ms.store(late.as_millis() as u32, Ordering::Relaxed);
         link.rtt_ms.store(p.rtt.as_millis() as u32, Ordering::Relaxed);
         // (The media log: when it changes course, and twice a second.)
-        if tracing::enabled!(target: "ingle_media", tracing::Level::DEBUG) && (why != said.1 || target.abs_diff(said.0) > said.0 / 10) {
+        if tracing::enabled!(target: "pyr_media", tracing::Level::DEBUG) && (why != said.1 || target.abs_diff(said.0) > said.0 / 10) {
             said = (target, why);
             debug!(
-                target: "ingle_media",
+                target: "pyr_media",
                 ev = "rate",
                 track = track_id,
                 kbps = target / 1000,
@@ -298,7 +298,7 @@ async fn rate_loop(conn: quinn::Connection, rate: Arc<Mutex<RateControl>>, link:
     }
 }
 
-/// For measuring calls over test networks (`ingle_media` at debug level): the connection's
+/// For measuring calls over test networks (`pyr_media` at debug level): the connection's
 /// round trip, congestion window and losses, twice a second.
 async fn path_log_loop(conn: quinn::Connection) {
     let mut tick = tokio::time::interval(Duration::from_millis(500));
@@ -307,10 +307,10 @@ async fn path_log_loop(conn: quinn::Connection) {
         if conn.close_reason().is_some() {
             break;
         }
-        if tracing::enabled!(target: "ingle_media", tracing::Level::DEBUG) {
+        if tracing::enabled!(target: "pyr_media", tracing::Level::DEBUG) {
             let p = conn.stats().path;
             debug!(
-                target: "ingle_media",
+                target: "pyr_media",
                 ev = "path",
                 rtt = p.rtt.as_micros() as u64,
                 min_rtt = p.min_rtt.as_micros() as u64,
@@ -382,7 +382,7 @@ async fn uni_loop(shared: Arc<Shared>, conn: quinn::Connection, e2ee: Arc<Mutex<
                 let mut head = [0u8; media::VIDEO_HEADER_LEN];
                 s.read_exact(&mut head).await.ok()?;
                 let h = VideoHeader::parse(&head)?;
-                if h.len as usize > ingle_proto::MAX_VIDEO_FRAME {
+                if h.len as usize > pyr_proto::MAX_VIDEO_FRAME {
                     return None;
                 }
                 let mut data = vec![0u8; media::VIDEO_HEADER_LEN + h.len as usize];
@@ -429,7 +429,7 @@ async fn event_loop(shared: Arc<Shared>, mut rx: mpsc::UnboundedReceiver<CallEve
                 }
                 CallEvent::VideoFeedback(t, viewers) => {
                     let out = if t == track::CAMERA { call.camera.as_ref() } else { call.screen.as_ref() };
-                    if let Some(v) = out.filter(|_| !ingle_proto::ab::old("feedback")) {
+                    if let Some(v) = out.filter(|_| !pyr_proto::ab::old("feedback")) {
                         let reports: Vec<ViewerReport> = viewers
                             .iter()
                             .map(|f| ViewerReport {
@@ -443,14 +443,14 @@ async fn event_loop(shared: Arc<Shared>, mut rx: mpsc::UnboundedReceiver<CallEve
                             })
                             .collect();
                         for r in &reports {
-                            debug!(target: "ingle_media", ev = "feedback", viewer = r.session, rtt = r.rtt_ms, queue = r.queue_ms, late = r.late_ms, kbps = r.kbps, loss_pm = r.loss_pm, shed = r.shed);
+                            debug!(target: "pyr_media", ev = "feedback", viewer = r.session, rtt = r.rtt_ms, queue = r.queue_ms, late = r.late_ms, kbps = r.kbps, loss_pm = r.loss_pm, shed = r.shed);
                         }
                         v.rate.lock().on_viewers(&reports, Instant::now());
                         shared.call_counters.video_feedback.fetch_add(1, Ordering::Relaxed);
                     }
                 }
                 CallEvent::KeyframeRequested(t) => {
-                    debug!(target: "ingle_media", ev = "kfask", track = t);
+                    debug!(target: "pyr_media", ev = "kfask", track = t);
                     let out = if t == track::CAMERA { call.camera.as_ref() } else { call.screen.as_ref() };
                     if let Some(v) = out {
                         v.publisher.keyframe.store(true, Ordering::Relaxed);
@@ -524,7 +524,7 @@ impl Call {
             }
         };
         // Just updated from a version that didn't remember mute and deafen (0.6.1 or older): a
-        // microphone the server saw muted when Ingle closed stays muted (nobody's heard who
+        // microphone the server saw muted when Pyr closed stays muted (nobody's heard who
         // didn't mean to be), but you hear everyone again, and you're told (coming back
         // silently muted and deafened looked like the update had done it: bug report #3).
         // From then on this PC remembers (and is what counts).
@@ -539,7 +539,7 @@ impl Call {
                     shared
                         .state
                         .write()
-                        .toast("You're muted: your microphone was off when Ingle closed to update. Click the microphone to talk.", false);
+                        .toast("You're muted: your microphone was off when Pyr closed to update. Click the microphone to talk.", false);
                 }
             }
         }
@@ -583,7 +583,7 @@ impl Call {
         call.start_audio(&shared, muted, deafened);
         call.tasks.push(tokio::spawn(datagram_loop(shared.clone(), conn.clone(), e2ee.clone())));
         call.tasks.push(tokio::spawn(uni_loop(shared.clone(), conn.clone(), e2ee.clone())));
-        if tracing::enabled!(target: "ingle_media", tracing::Level::DEBUG) {
+        if tracing::enabled!(target: "pyr_media", tracing::Level::DEBUG) {
             call.tasks.push(tokio::spawn(path_log_loop(conn.clone())));
         }
         for p in &participants {

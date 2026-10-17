@@ -2,7 +2,7 @@
 
 Hunspell dictionaries for the message box's spellcheck. They are unmodified copies of
 [wooorm/dictionaries](https://github.com/wooorm/dictionaries) npm packages and are built into
-Ingle (`crates/app/src/spell.rs`).
+Pyr (`crates/app/src/spell.rs`).
 
 | File | Package | Source | License |
 |---|---|---|---|

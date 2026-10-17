@@ -1,6 +1,6 @@
 //! A headless test participant. Handy for trying a call on your own:
 //!
-//!   cargo run --release -p ingle-engine --example bot -- --join "ingle://…" --name Mara \
+//!   cargo run --release -p pyr-engine --example bot -- --join "pyr://…" --name Mara \
 //!       --voice Lounge --camera --screen --say "hi from the bot"
 //!
 //! The bot "talks" with a tone (on/off like speech), and can share a test-pattern
@@ -30,12 +30,12 @@ use std::time::{Duration, Instant};
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
-use ingle_engine::audio::{AudioInput, AudioOutput};
-use ingle_engine::config::{Config, NoiseSuppression, ScreenPreset, Settings};
-use ingle_engine::video::testsrc;
-use ingle_engine::state::ConnStatus;
-use ingle_engine::{Engine, EngineOptions};
-use ingle_proto::control::ChannelKind;
+use pyr_engine::audio::{AudioInput, AudioOutput};
+use pyr_engine::config::{Config, NoiseSuppression, ScreenPreset, Settings};
+use pyr_engine::video::testsrc;
+use pyr_engine::state::ConnStatus;
+use pyr_engine::{Engine, EngineOptions};
+use pyr_proto::control::ChannelKind;
 
 fn main() -> anyhow::Result<()> {
     let mut join = None;
@@ -58,7 +58,7 @@ fn main() -> anyhow::Result<()> {
     let mut avatar: Option<std::path::PathBuf> = None;
     // How loud its voice is (the tone's amplitude).
     let mut amp = 0.18f32;
-    let mut source = ingle_engine::video::capture::TEST_PATTERN_ID.to_string();
+    let mut source = pyr_engine::video::capture::TEST_PATTERN_ID.to_string();
     let mut preset = ScreenPreset::default();
     let mut measure: Option<std::path::PathBuf> = None;
     let mut media_log: Option<std::path::PathBuf> = None;
@@ -90,7 +90,7 @@ fn main() -> anyhow::Result<()> {
                 source = match args.next().as_deref() {
                     Some("motion") => testsrc::MOTION_ID.to_string(),
                     Some("text") => testsrc::TEXT_ID.to_string(),
-                    _ => ingle_engine::video::capture::TEST_PATTERN_ID.to_string(),
+                    _ => pyr_engine::video::capture::TEST_PATTERN_ID.to_string(),
                 }
             }
             "--preset" => {
@@ -117,7 +117,7 @@ fn main() -> anyhow::Result<()> {
         tracing_subscriber::fmt()
             .with_writer(Mutex::new(file))
             .with_ansi(false)
-            .with_env_filter(tracing_subscriber::EnvFilter::new("ingle_media=debug,warn"))
+            .with_env_filter(tracing_subscriber::EnvFilter::new("pyr_media=debug,warn"))
             .init();
     }
     // What a measuring bot writes (from the main loop and the sound thread).
@@ -125,9 +125,9 @@ fn main() -> anyhow::Result<()> {
         Some(p) => Some(Arc::new(Mutex::new(std::fs::File::create(p)?))),
         None => None,
     };
-    let dir = std::env::temp_dir().join(format!("ingle-bot-{}", name.to_lowercase().replace(' ', "-")));
+    let dir = std::env::temp_dir().join(format!("pyr-bot-{}", name.to_lowercase().replace(' ', "-")));
     std::fs::create_dir_all(&dir)?;
-    let mut cfg = ingle_engine::config::load_config(&dir);
+    let mut cfg = pyr_engine::config::load_config(&dir);
     cfg.display_name = name.clone();
     cfg.settings = Settings {
         noise_suppression: NoiseSuppression::Off,
@@ -140,7 +140,7 @@ fn main() -> anyhow::Result<()> {
         screen_preset: preset,
         ..Default::default()
     };
-    ingle_engine::config::save_config(&dir, &Config { ..cfg })?;
+    pyr_engine::config::save_config(&dir, &Config { ..cfg })?;
 
     let out_for_sound = out.clone();
     let engine = Engine::start(EngineOptions {
@@ -304,7 +304,7 @@ fn main() -> anyhow::Result<()> {
         std::thread::sleep(Duration::from_millis(if measure.is_some() { 2 } else { 500 }));
         if let Some(f) = &out {
             for s in &watching {
-                let key = ingle_engine::state::VideoKey { session: *s, track: ingle_proto::media::track::SCREEN };
+                let key = pyr_engine::state::VideoKey { session: *s, track: pyr_proto::media::track::SCREEN };
                 if let Some(frame) = engine.video_frame(key) {
                     if seen.get(s) != Some(&frame.generation) {
                         seen.insert(*s, frame.generation);
@@ -347,7 +347,7 @@ fn main() -> anyhow::Result<()> {
                     (Some(c), Some(s)) => s
                         .voice_in(c.channel_id)
                         .iter()
-                        .filter(|p| p.session != c.session && p.tracks.iter().any(|t| t.id == ingle_proto::media::track::SCREEN))
+                        .filter(|p| p.session != c.session && p.tracks.iter().any(|t| t.id == pyr_proto::media::track::SCREEN))
                         .map(|p| p.session)
                         .collect(),
                     _ => Vec::new(),
@@ -356,13 +356,13 @@ fn main() -> anyhow::Result<()> {
             for s in shares {
                 if watching.insert(s) {
                     println!("{name}: watching screen share from session {s}");
-                    engine.watch(s, ingle_proto::media::track::SCREEN, true);
+                    engine.watch(s, pyr_proto::media::track::SCREEN, true);
                 }
             }
             if last_report.elapsed() > Duration::from_secs(3) {
                 last_report = Instant::now();
                 for s in &watching {
-                    let key = ingle_engine::state::VideoKey { session: *s, track: ingle_proto::media::track::SCREEN };
+                    let key = pyr_engine::state::VideoKey { session: *s, track: pyr_proto::media::track::SCREEN };
                     if let Some(f) = engine.video_frame(key) {
                         println!("{name}: screen from {s}: {}x{} (frame #{})", f.width, f.height, f.generation);
                     }
@@ -390,7 +390,7 @@ fn wall_ms() -> f64 {
 /// Load voice isolation's model (built into the program) and time 3 s of audio through it.
 fn check_isolation() -> anyhow::Result<()> {
     let t = Instant::now();
-    let mut d = ingle_engine::audio::dfn::Dfn::new().map_err(|e| anyhow::anyhow!("voice isolation model failed: {e}"))?;
+    let mut d = pyr_engine::audio::dfn::Dfn::new().map_err(|e| anyhow::anyhow!("voice isolation model failed: {e}"))?;
     let load = t.elapsed();
     let mut frame = vec![0f32; 480];
     let mut worst = Duration::ZERO;

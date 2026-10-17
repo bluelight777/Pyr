@@ -3,17 +3,17 @@
 //! sending a picture, adding you as a friend and messaging you. Then, with `live`, they stay
 //! online and sit in voice: one with a camera, one sharing a screen, one talking.
 //!
-//!   ingle-server --data /tmp/demo-server --name "Firelit Friends" --public-host 127.0.0.1 \
+//!   pyr-server --data /tmp/demo-server --name "Firelit Friends" --public-host 127.0.0.1 \
 //!       --bind 127.0.0.1:7791 run
-//!   cargo run -p ingle-engine --example demo -- setup --owner "<owner link>" \
+//!   cargo run -p pyr-engine --example demo -- setup --owner "<owner link>" \
 //!       --invite "<invite link>" --me <app profile config folder> --assets <folder>
-//!   cargo run -p ingle-engine --example demo -- live --invite "<invite link>" --assets <folder>
-//!   cargo run -p ingle-engine --example demo -- call --invite "<invite link>" --to Friend \
+//!   cargo run -p pyr-engine --example demo -- live --invite "<invite link>" --assets <folder>
+//!   cargo run -p pyr-engine --example demo -- call --invite "<invite link>" --to Friend \
 //!       [--from Mara] [--with Theo,Rae] [--video] [--seconds 120]
 //!
-//!   cargo run -p ingle-engine --example demo -- pickup --invite "<invite link>" --who Theo,Rae \
+//!   cargo run -p pyr-engine --example demo -- pickup --invite "<invite link>" --who Theo,Rae \
 //!       [--decline Rae] [--after 4] [--seconds 120]
-//!   cargo run -p ingle-engine --example demo -- say --invite "<invite link>" --to Friend \
+//!   cargo run -p pyr-engine --example demo -- say --invite "<invite link>" --to Friend \
 //!       [--from Mara] [--with Theo,Rae] --text "<message>"
 //!
 //! `call`: one of the friends calls someone in a direct message (with `--with`, the group of
@@ -30,11 +30,11 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use ingle_engine::audio::{AudioInput, AudioOutput};
-use ingle_engine::config::{Config, NoiseSuppression, Settings};
-use ingle_engine::state::ConnStatus;
-use ingle_engine::{Engine, EngineOptions};
-use ingle_proto::control::{ChannelId, ChannelKind, MessageId, perm};
+use pyr_engine::audio::{AudioInput, AudioOutput};
+use pyr_engine::config::{Config, NoiseSuppression, Settings};
+use pyr_engine::state::ConnStatus;
+use pyr_engine::{Engine, EngineOptions};
+use pyr_proto::control::{ChannelId, ChannelKind, MessageId, perm};
 
 const FRIENDS: [&str; 4] = ["Mara", "Theo", "Rae", "Kai"];
 
@@ -60,7 +60,7 @@ fn wait<T>(what: &str, secs: u64, mut f: impl FnMut() -> Option<T>) -> Result<T>
 /// Someone, in `dir`; `voice`: their "microphone" talks with a tone now and then.
 fn person(dir: &Path, name: &str, voice: Option<f32>) -> Result<Engine> {
     std::fs::create_dir_all(dir)?;
-    let mut cfg = ingle_engine::config::load_config(dir);
+    let mut cfg = pyr_engine::config::load_config(dir);
     cfg.display_name = name.to_string();
     cfg.settings = Settings {
         noise_suppression: NoiseSuppression::Off,
@@ -72,7 +72,7 @@ fn person(dir: &Path, name: &str, voice: Option<f32>) -> Result<Engine> {
         sounds: false,
         ..cfg.settings
     };
-    ingle_engine::config::save_config(dir, &Config { ..cfg })?;
+    pyr_engine::config::save_config(dir, &Config { ..cfg })?;
     let tone = voice.unwrap_or(0.0);
     Engine::start(EngineOptions {
         config_dir: Some(dir.to_path_buf()),
@@ -132,7 +132,7 @@ fn png(assets: &Path, name: &str) -> Result<Vec<u8>> {
 }
 
 fn dir_of(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("ingle-demo-{}", name.to_lowercase()))
+    std::env::temp_dir().join(format!("pyr-demo-{}", name.to_lowercase()))
 }
 
 fn setup() -> Result<()> {
@@ -189,7 +189,7 @@ fn setup() -> Result<()> {
         e.react(&key, sharp, "🔥", true);
     }
     kai.react(&key, sharp, "💯", true);
-    say(theo, &key, general, "Hosting is one command: `ingle-server --public-host play.example.com`", None)?;
+    say(theo, &key, general, "Hosting is one command: `pyr-server --public-host play.example.com`", None)?;
     let before = rae.state().server(&key).and_then(|s| s.logs.get(&general)).map(|l| l.messages.len()).unwrap_or(0);
     rae.send_message_with(&key, general, "Sunset at the lake last weekend 🌅", None, vec![("lake.jpg".into(), png(&assets, "lake.jpg")?)]);
     let photo = wait("the photo", 30, || {
@@ -263,7 +263,7 @@ fn live() -> Result<()> {
                 e.set_mute(true);
                 // (720p30: what a small test machine keeps up with while it also draws the app.)
                 let mut s = e.state().settings.clone();
-                s.screen_preset = ingle_engine::config::ScreenPreset::Saver;
+                s.screen_preset = pyr_engine::config::ScreenPreset::Saver;
                 e.update_settings(s);
                 e.start_screen("test:pattern")
             }
@@ -294,7 +294,7 @@ fn call() -> Result<()> {
             }
             // The group of just them (and us) if there's one already, else a new one.
             let me = e.state().my_uid.clone();
-            let same = |g: &ingle_proto::control::Group| g.members.len() == members.len() + 1 && g.members.iter().all(|m| *m == me || members.contains(m));
+            let same = |g: &pyr_proto::control::Group| g.members.len() == members.len() + 1 && g.members.iter().all(|m| *m == me || members.contains(m));
             let found = e.state().server(&key).and_then(|s| s.groups.iter().find(|g| same(g)).map(|g| g.id));
             match found {
                 Some(id) => id,
@@ -336,7 +336,7 @@ fn say_dm() -> Result<()> {
                 members.push(uid_of(&e, &key, n.trim()).ok_or_else(|| anyhow!("nobody called {n}"))?);
             }
             let me = e.state().my_uid.clone();
-            let same = |g: &ingle_proto::control::Group| g.members.len() == members.len() + 1 && g.members.iter().all(|m| *m == me || members.contains(m));
+            let same = |g: &pyr_proto::control::Group| g.members.len() == members.len() + 1 && g.members.iter().all(|m| *m == me || members.contains(m));
             e.state().server(&key).and_then(|s| s.groups.iter().find(|g| same(g)).map(|g| g.id)).ok_or_else(|| anyhow!("no such group"))?
         }
         None => {

@@ -3,17 +3,17 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use ingle_proto::control::Role;
-use ingle_proto::invite::InviteLink;
+use pyr_proto::control::Role;
+use pyr_proto::invite::InviteLink;
 
 #[derive(Parser)]
-#[command(name = "ingle-server", version, about = "Host an Ingle community: text channels, voice, webcams and screen sharing.")]
+#[command(name = "pyr-server", version, about = "Host a Pyr community: text channels, voice, webcams and screen sharing.")]
 struct Cli {
     /// Folder where the server keeps its database and TLS key.
-    #[arg(long, default_value = "ingle-data", global = true)]
+    #[arg(long, default_value = "pyr-data", global = true)]
     data: PathBuf,
     /// UDP address to listen on.
-    #[arg(long, global = true, default_value_t = SocketAddr::from(([0, 0, 0, 0], ingle_proto::DEFAULT_PORT)))]
+    #[arg(long, global = true, default_value_t = SocketAddr::from(([0, 0, 0, 0], pyr_proto::DEFAULT_PORT)))]
     bind: SocketAddr,
     /// Host name or public IP your friends will connect to (goes into invite links).
     /// Remembered for later starts; `--public-host ""` goes back to the local address.
@@ -51,31 +51,31 @@ enum Cmd {
         ids: Vec<i64>,
     },
     /// Set up the community without starting it and print its links as
-    /// INGLE_NAME=, INGLE_OWNER_LINK= and INGLE_INVITE_LINK= lines (for setup scripts).
+    /// PYR_NAME=, PYR_OWNER_LINK= and PYR_INVITE_LINK= lines (for setup scripts).
     /// The owner link is the unused one, or a new one-time link while the community has no
     /// owner yet (empty once someone owns it).
     Links,
 }
 
 fn make_invite(cli: &Cli, owner: bool, uses: Option<u32>, hours: Option<u64>) -> Result<String> {
-    ingle_server::private_data_dir(&cli.data)?;
-    let tls = ingle_server::tls::load_or_create(&cli.data)?;
-    let db = ingle_server::db::Db::open(&cli.data.join("ingle.db"))?;
+    pyr_server::private_data_dir(&cli.data)?;
+    let tls = pyr_server::tls::load_or_create(&cli.data)?;
+    let db = pyr_server::db::Db::open(&cli.data.join("ingle.db"))?;
     let (code, uses, role) = if owner {
-        (format!("owner-{}", ingle_server::db::new_invite_code(16)), Some(1), Role::Owner)
+        (format!("owner-{}", pyr_server::db::new_invite_code(16)), Some(1), Role::Owner)
     } else {
-        (ingle_server::db::new_invite_code(10), uses, Role::Member)
+        (pyr_server::db::new_invite_code(10), uses, Role::Member)
     };
-    let exp = hours.map(|h| ingle_proto::now_ms() + h.min(24 * 365 * 10) as i64 * 3_600_000);
+    let exp = hours.map(|h| pyr_proto::now_ms() + h.min(24 * 365 * 10) as i64 * 3_600_000);
     // Owner links always expire (a week unless asked for sooner).
-    let exp = if owner { Some(exp.unwrap_or_else(ingle_server::owner_link_expiry).min(ingle_server::owner_link_expiry())) } else { exp };
+    let exp = if owner { Some(exp.unwrap_or_else(pyr_server::owner_link_expiry).min(pyr_server::owner_link_expiry())) } else { exp };
     db.create_invite(&code, "server", uses, exp, role)?;
     let host = cli
         .public_host
         .clone()
         .filter(|h| !h.trim().is_empty())
         .or_else(|| db.get_meta("public_host").filter(|h| !h.is_empty()))
-        .or_else(ingle_server::detect_lan_ip)
+        .or_else(pyr_server::detect_lan_ip)
         .unwrap_or_else(|| "127.0.0.1".into());
     Ok(InviteLink::new(host, cli.bind.port(), Some(code), tls.fingerprint).to_url())
 }
@@ -93,7 +93,12 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    // Run without --data before Pyr was called Pyr, the server kept everything in ./ingle-data:
+    // it carries on there (rather than starting a new, empty community in ./pyr-data).
+    if cli.data == std::path::Path::new("pyr-data") && !cli.data.exists() && std::path::Path::new("ingle-data").join("ingle.db").is_file() {
+        cli.data = PathBuf::from("ingle-data");
+    }
     match cli.command {
         Some(Cmd::Invite { uses, hours }) => {
             println!("{}", make_invite(&cli, false, uses, hours)?);
@@ -104,12 +109,12 @@ fn run() -> Result<()> {
             return Ok(());
         }
         Some(Cmd::MarkFixed { ids }) => {
-            use ingle_proto::control::BugStatus;
+            use pyr_proto::control::BugStatus;
             let path = cli.data.join("ingle.db");
             if !path.exists() {
                 anyhow::bail!("there's no server in {}", cli.data.display());
             }
-            let db = ingle_server::db::Db::open(&path)?;
+            let db = pyr_server::db::Db::open(&path)?;
             for (id, was) in db.mark_bugs_fixed(&ids)? {
                 match was {
                     Some(BugStatus::New | BugStatus::Approved) => println!("Bug report #{id}: marked fixed"),
@@ -121,15 +126,15 @@ fn run() -> Result<()> {
             return Ok(());
         }
         Some(Cmd::Links) => {
-            let links = ingle_server::setup_links(&ingle_server::ServerConfig {
+            let links = pyr_server::setup_links(&pyr_server::ServerConfig {
                 data_dir: cli.data.clone(),
                 bind: cli.bind,
                 public_host: cli.public_host.clone(),
                 name: cli.name.clone(),
             })?;
-            println!("INGLE_NAME={}", links.name);
-            println!("INGLE_OWNER_LINK={}", links.owner);
-            println!("INGLE_INVITE_LINK={}", links.invite);
+            println!("PYR_NAME={}", links.name);
+            println!("PYR_OWNER_LINK={}", links.owner);
+            println!("PYR_INVITE_LINK={}", links.invite);
             return Ok(());
         }
         _ => {}
@@ -141,14 +146,14 @@ fn run() -> Result<()> {
     let color = std::io::stdout().is_terminal() && !cfg!(windows);
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "ingle_server=info,warn".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "pyr_server=info,warn".into()),
         )
         .with_ansi(color)
         .init();
 
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     rt.block_on(async move {
-        let server = ingle_server::start(ingle_server::ServerConfig {
+        let server = pyr_server::start(pyr_server::ServerConfig {
             data_dir: cli.data.clone(),
             bind: cli.bind,
             public_host: cli.public_host.clone(),
@@ -158,7 +163,7 @@ fn run() -> Result<()> {
 
         let info = server.hub.info();
         println!();
-        println!("  {} server \"{}\" is running on UDP {}", ingle_proto::APP_NAME, info.name, server.local_addr);
+        println!("  {} server \"{}\" is running on UDP {}", pyr_proto::APP_NAME, info.name, server.local_addr);
         println!("  Data folder: {}", cli.data.display());
         println!();
         if let Some(owner) = server.owner_link() {

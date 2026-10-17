@@ -21,7 +21,7 @@ pub enum Auth {
     Password(String),
     /// A private key file (OpenSSH, PEM or PKCS#8), optionally protected by a passphrase.
     KeyFile { path: PathBuf, passphrase: Option<String> },
-    /// A key already in memory (Ingle's own key for servers it rents).
+    /// A key already in memory (Pyr's own key for servers it rents).
     Key(Arc<PrivateKey>),
 }
 
@@ -96,7 +96,7 @@ impl std::fmt::Display for ConnectError {
             | ConnectError::HostKey(s)
             | ConnectError::Other(s) => f.write_str(s),
             ConnectError::NewHostKey { kind, fingerprint } => {
-                write!(f, "This is the first time Ingle connects to this server. Its SSH identity is {kind} key {fingerprint}.")
+                write!(f, "This is the first time Pyr connects to this server. Its SSH identity is {kind} key {fingerprint}.")
             }
         }
     }
@@ -139,9 +139,9 @@ impl client::Handler for Client {
         if let Some(expected) = &self.expected {
             if *expected != fp {
                 *self.refused.lock() = Some(format!(
-                    "{} isn't the server Ingle expected: its identity key is {fp}, not {expected}. Someone may be \
+                    "{} isn't the server Pyr expected: its identity key is {fp}, not {expected}. Someone may be \
                      intercepting the connection, so nothing was sent. (If you reinstalled or rebuilt the server, \
-                     remove it from Ingle's list of servers you set up and try again.)",
+                     remove it from Pyr's list of servers you set up and try again.)",
                     self.host
                 ));
                 return Ok(false);

@@ -1,8 +1,8 @@
-//! Making sure people are who they say, with no codes to read out: two ways for two Ingles to
+//! Making sure people are who they say, with no codes to read out: two ways for two Pyrs to
 //! check each other, through the server, which only passes the messages on (`Request::
 //! Handshake`, `Event::Handshake`; [`crate::control::HANDSHAKE_FEATURE`]).
 //!
-//! - **Compare words**: both Ingles show the same six words (each with its picture) when
+//! - **Compare words**: both Pyrs show the same six words (each with its picture) when
 //!   nobody's in between, and different ones when someone is. You say them to each other (in a
 //!   call, on the phone, in person) and say whether they match. A short authentication string
 //!   after a commitment, as in Matrix's emoji verification: whoever starts commits to their key
@@ -13,7 +13,7 @@
 //!   matched without either answer leaving its PC; someone in the middle gets one guess at the
 //!   answer per question, and nothing to test guesses against afterwards.
 //!
-//! Both take in who each Ingle thinks is at each end (their ids, as its server shows them), so
+//! Both take in who each Pyr thinks is at each end (their ids, as its server shows them), so
 //! a server that showed someone else under a name can't make them come out right.
 
 use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
@@ -27,7 +27,7 @@ use crate::b64;
 use crate::crypto::random_bytes;
 use crate::words::words;
 
-/// What goes between two Ingles (as JSON in `Request::Handshake`'s `data`).
+/// What goes between two Pyrs (as JSON in `Request::Handshake`'s `data`).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum Handshake {
@@ -70,7 +70,7 @@ impl Handshake {
         serde_json::to_string(self).unwrap_or_default()
     }
 
-    /// One from someone else's Ingle (anything else, or anything too big, is nothing).
+    /// One from someone else's Pyr (anything else, or anything too big, is nothing).
     pub fn from_json(s: &str) -> Option<Handshake> {
         (s.len() <= HANDSHAKE_MAX).then(|| serde_json::from_str(s).ok()).flatten()
     }

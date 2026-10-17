@@ -1,8 +1,8 @@
-//! The hang recorder (Windows). If Ingle's window stops responding, it writes to the log what
-//! Ingle was doing: the step the window was in, which of Ingle's locks were held, how much CPU
-//! each of Ingle's threads used, Ingle's memory and how busy the whole PC was. A freeze can
+//! The hang recorder (Windows). If Pyr's window stops responding, it writes to the log what
+//! Pyr was doing: the step the window was in, which of Pyr's locks were held, how much CPU
+//! each of Pyr's threads used, Pyr's memory and how busy the whole PC was. A freeze can
 //! then be explained afterwards instead of guessed at. (The log of the run before a restart is
-//! kept as ingle.previous.log, and goes with bug reports.)
+//! kept as pyr.previous.log, and goes with bug reports.)
 //!
 //! It runs on a thread of its own and touches no lock the window might be stuck on.
 
@@ -21,7 +21,7 @@ pub fn step(s: &'static str) {
 pub use win::start;
 
 #[cfg(not(windows))]
-pub fn start(_engine: std::sync::Arc<ingle_engine::Engine>) {}
+pub fn start(_engine: std::sync::Arc<pyr_engine::Engine>) {}
 
 #[cfg(windows)]
 mod win {
@@ -29,7 +29,7 @@ mod win {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use ingle_engine::Engine;
+    use pyr_engine::Engine;
     use windows::Win32::Foundation::{CloseHandle, FILETIME, HLOCAL, HWND, LPARAM, LocalFree, WPARAM};
     use windows::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next};
     use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX};
@@ -53,14 +53,14 @@ mod win {
         }
         // A window handle is just a number; it's fine to use from another thread.
         let main = main.0 as isize;
-        let _ = std::thread::Builder::new().name("ingle-watchdog".into()).spawn(move || run(HWND(main as *mut _), engine));
+        let _ = std::thread::Builder::new().name("pyr-watchdog".into()).spawn(move || run(HWND(main as *mut _), engine));
     }
 
     fn ticks(f: FILETIME) -> u64 {
         (u64::from(f.dwHighDateTime) << 32) | u64::from(f.dwLowDateTime)
     }
 
-    /// CPU time used so far (100 ns ticks), by the PC and by Ingle and each of its threads.
+    /// CPU time used so far (100 ns ticks), by the PC and by Pyr and each of its threads.
     struct Sample {
         at: Instant,
         sys_busy: u64,
@@ -125,7 +125,7 @@ mod win {
         }
     }
 
-    /// Ingle's and the PC's memory: (Ingle's working set MB, Ingle's private MB, PC memory in
+    /// Pyr's and the PC's memory: (Pyr's working set MB, Pyr's private MB, PC memory in
     /// use %, PC free MB).
     fn memory() -> (u64, u64, u32, u64) {
         unsafe {
@@ -142,15 +142,15 @@ mod win {
         }
     }
 
-    /// One line about CPU and memory between two samples; with `threads`, Ingle's busiest
+    /// One line about CPU and memory between two samples; with `threads`, Pyr's busiest
     /// threads too (the window's own marked).
     fn describe(a: &Sample, b: &Sample, ui_thread: u32, threads: bool) -> String {
         let wall = b.at.duration_since(a.at).as_secs_f64().max(0.001) * 1e7;
         let pc = if b.sys_total > a.sys_total { 100.0 * (b.sys_busy - a.sys_busy) as f64 / (b.sys_total - a.sys_total) as f64 } else { 0.0 };
-        let ingle = 100.0 * b.process.saturating_sub(a.process) as f64 / wall;
+        let pyr = 100.0 * b.process.saturating_sub(a.process) as f64 / wall;
         let (ws, private, load, free) = memory();
         let mut line = format!(
-            "Ingle used {ingle:.0}% of a CPU core (the PC {pc:.0}% of all), {ws} MB of memory ({private} MB its own); the PC's memory {load}% in use, {free} MB free"
+            "Pyr used {pyr:.0}% of a CPU core (the PC {pc:.0}% of all), {ws} MB of memory ({private} MB its own); the PC's memory {load}% in use, {free} MB free"
         );
         if threads {
             let mut busy: Vec<(u32, f64)> =
@@ -191,7 +191,7 @@ mod win {
                     let step = *super::STEP.lock().unwrap_or_else(|e| e.into_inner());
                     let sh = &engine.shared;
                     tracing::warn!(
-                        "Ingle's window stopped responding (it was {step}; shared state {}, call {}). {}",
+                        "Pyr's window stopped responding (it was {step}; shared state {}, call {}). {}",
                         if sh.state.is_locked_exclusive() { "being written" } else if sh.state.is_locked() { "being read" } else { "free" },
                         if sh.call.is_locked() { "busy" } else { "free" },
                         describe(&prev, &now, ui_thread, true)
@@ -202,14 +202,14 @@ mod win {
                     tracing::warn!("still not responding: {}", describe(&prev, &now, ui_thread, true));
                 }
                 (true, Some(t)) => {
-                    tracing::info!("Ingle's window responds again after {} s", t.elapsed().as_secs());
+                    tracing::info!("Pyr's window responds again after {} s", t.elapsed().as_secs());
                     // A freeze it came out of is a bug too: reported by itself (with the log of
                     // what it was doing).
                     if t.elapsed() >= Duration::from_secs(4) {
-                        ingle_engine::bugs::auto_report(
+                        pyr_engine::bugs::auto_report(
                             &engine.shared,
-                            "Ingle stopped responding for a while",
-                            &format!("Ingle's window didn't respond for {} s, then carried on.", t.elapsed().as_secs()),
+                            "Pyr stopped responding for a while",
+                            &format!("Pyr's window didn't respond for {} s, then carried on.", t.elapsed().as_secs()),
                         );
                     }
                     hung_since = None;
@@ -219,8 +219,8 @@ mod win {
             // While something's heavy, a line a minute, to see a slowdown coming.
             if answered && last_health.elapsed() >= Duration::from_secs(60) {
                 let (_, private, load, _) = memory();
-                let ingle = 100.0 * now.process.saturating_sub(prev.process) as f64 / (now.at.duration_since(prev.at).as_secs_f64().max(0.001) * 1e7);
-                if ingle > 60.0 || load > 90 || private > 1500 {
+                let pyr = 100.0 * now.process.saturating_sub(prev.process) as f64 / (now.at.duration_since(prev.at).as_secs_f64().max(0.001) * 1e7);
+                if pyr > 60.0 || load > 90 || private > 1500 {
                     tracing::info!("busy: {}", describe(&prev, &now, ui_thread, true));
                 }
                 last_health = Instant::now();

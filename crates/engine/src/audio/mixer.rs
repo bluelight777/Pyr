@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ingle_proto::control::SessionId;
-use ingle_proto::media::track;
+use pyr_proto::control::SessionId;
+use pyr_proto::media::track;
 
 use super::jitter::{JitterStats, PeerAudio};
 use super::spectrum::{Analyzer, BANDS};

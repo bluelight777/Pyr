@@ -93,7 +93,8 @@ pub struct LinkSpan {
 }
 
 fn is_url_start(s: &str) -> bool {
-    s.starts_with("https://") || s.starts_with("http://") || s.starts_with("ingle://")
+    // (ingle://: invite links from before Pyr was called Pyr.)
+    s.starts_with("https://") || s.starts_with("http://") || s.starts_with("pyr://") || s.starts_with("ingle://")
 }
 
 /// Build a styled layout for one paragraph. Returns the job and link spans (in chars).
@@ -274,7 +275,7 @@ pub type CustomEmoji<'a> = &'a mut dyn FnMut(&str) -> Option<egui::TextureId>;
 pub struct Selectable<'a> {
     pub sel: &'a mut crate::select::Selection,
     pub chat: &'a crate::select::Chat,
-    pub msg: ingle_proto::control::MessageId,
+    pub msg: pyr_proto::control::MessageId,
 }
 
 /// Draw a message body; `names` (lowercase) are what @mentions highlight.

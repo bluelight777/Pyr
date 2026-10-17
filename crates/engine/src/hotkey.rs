@@ -44,7 +44,7 @@ impl PttWatcher {
         let key = Arc::new(Mutex::new(key));
         let (st, k) = (stop.clone(), key.clone());
         let thread = std::thread::Builder::new()
-            .name("ingle-ptt".into())
+            .name("pyr-ptt".into())
             .spawn(move || {
                 use device_query::{DeviceQuery, DeviceState, Keycode};
                 let Some(state) = DeviceState::checked_new() else {
@@ -149,7 +149,7 @@ impl ComboWatcher {
         let recorded = Arc::new(Mutex::new(None));
         let (st, cs, rec, out) = (stop.clone(), combos.clone(), recording.clone(), recorded.clone());
         let thread = std::thread::Builder::new()
-            .name("ingle-sound-keys".into())
+            .name("pyr-sound-keys".into())
             .spawn(move || {
                 use device_query::{DeviceQuery, DeviceState};
                 let Some(state) = DeviceState::checked_new() else {

@@ -8,24 +8,24 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ingle_engine::audio::{AudioInput, AudioOutput};
-use ingle_engine::config::{NoiseSuppression, Settings};
-use ingle_engine::state::ConnStatus;
-use ingle_engine::{Engine, EngineOptions};
-use ingle_proto::control::{ChannelId, ChannelKind, PRIVATE_CHANNELS_FEATURE, RoleId};
-use ingle_proto::now_ms;
+use pyr_engine::audio::{AudioInput, AudioOutput};
+use pyr_engine::config::{NoiseSuppression, Settings};
+use pyr_engine::state::ConnStatus;
+use pyr_engine::{Engine, EngineOptions};
+use pyr_proto::control::{ChannelId, ChannelKind, PRIVATE_CHANNELS_FEATURE, RoleId};
+use pyr_proto::now_ms;
 use parking_lot::Mutex;
 
 fn temp_dir(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ingle-private-{}-{}", name, now_ms()));
+    let d = std::env::temp_dir().join(format!("pyr-private-{}-{}", name, now_ms()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
 
-/// A copy of Ingle with a tone for a microphone.
+/// A copy of Pyr with a tone for a microphone.
 fn bot(dir: &Path, name: &str, tone_hz: f32) -> Engine {
-    let cfg = ingle_engine::config::Config { display_name: name.to_string(), ..Default::default() };
-    ingle_engine::config::save_config(dir, &cfg).unwrap();
+    let cfg = pyr_engine::config::Config { display_name: name.to_string(), ..Default::default() };
+    pyr_engine::config::save_config(dir, &cfg).unwrap();
     let heard = Arc::new(Mutex::new(Vec::<f32>::new()));
     let factory = move |_s: &Settings| {
         let mut phase = 0u64;
@@ -104,7 +104,7 @@ fn my_roles(e: &Engine) -> Vec<RoleId> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn private_channels_like_discords() {
-    let server = ingle_server::start(ingle_server::ServerConfig {
+    let server = pyr_server::start(pyr_server::ServerConfig {
         data_dir: temp_dir("server"),
         bind: "127.0.0.1:0".parse().unwrap(),
         public_host: Some("127.0.0.1".into()),

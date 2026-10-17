@@ -1,14 +1,14 @@
 //! Voice isolation against mechanical noise: runs prepared scenes (speech + noise WAVs, 48 kHz
 //! mono) through the real microphone pipeline, Opus and all, and writes what the others would
 //! hear, for scoring.
-//!   cargo run --release -p ingle-engine --example iso_eval -- <scene dir> <out dir> scene...
+//!   cargo run --release -p pyr-engine --example iso_eval -- <scene dir> <out dir> scene...
 //! Each scene is <name>_mix.wav in the scene dir. Variants: strong, iso063, isoA, isoB, isoB2.
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use ingle_engine::audio::Controls;
-use ingle_engine::audio::capture::CapturePipeline;
-use ingle_engine::config::{NoiseSuppression, Settings};
+use pyr_engine::audio::Controls;
+use pyr_engine::audio::capture::CapturePipeline;
+use pyr_engine::config::{NoiseSuppression, Settings};
 
 fn read_wav(p: &Path) -> Vec<f32> {
     let b = std::fs::read(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));

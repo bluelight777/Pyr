@@ -1,6 +1,6 @@
-//! Skins: how Ingle looks and sounds. A skin is a folder with a `skin.json` that sets Ingle's
+//! Skins: how Pyr looks and sounds. A skin is a folder with a `skin.json` that sets Pyr's
 //! colors, and can bring a picture to show behind the chat, fonts, and its own sounds for
-//! Ingle's notifications:
+//! Pyr's notifications:
 //!
 //! ```json
 //! { "name": "Blood Moon", "version": "1.0", "summary": "Deep red and black.", "author": "Blue",
@@ -10,9 +10,9 @@
 //!   "sounds": { "message": "sounds/message.ings" } }
 //! ```
 //!
-//! Colors left out stay Campfire's (Ingle's own). Skins are sent in through the Claude
-//! connector, looked at and approved like plugins, and listed in the Ingle Library for anyone
-//! to use. What's in one is a stranger's work: everything here is checked before Ingle uses
+//! Colors left out stay Campfire's (Pyr's own). Skins are sent in through the Claude
+//! connector, looked at and approved like plugins, and listed in the Pyr Library for anyone
+//! to use. What's in one is a stranger's work: everything here is checked before Pyr uses
 //! it (sizes, kinds of file, a picture's real size, sound files' frames), and the app checks a
 //! font parses before it's handed to the text renderer.
 
@@ -34,7 +34,7 @@ pub const MAX_TEXT: usize = 64_000;
 /// Largest side of the picture.
 pub const MAX_PICTURE_SIDE: u32 = 4096;
 
-/// The colors a skin can set (Ingle's palette), and where each shows.
+/// The colors a skin can set (Pyr's palette), and where each shows.
 pub const COLORS: &[(&str, &str)] = &[
     ("rail", "the strip of server icons on the far left"),
     ("side", "the channel list and the member list"),
@@ -63,7 +63,7 @@ pub const COLORS: &[(&str, &str)] = &[
     ("selection", "selected text"),
 ];
 
-/// Ingle's own colors (Campfire), in [`COLORS`]' order.
+/// Pyr's own colors (Campfire), in [`COLORS`]' order.
 pub const CAMPFIRE: [[u8; 3]; 25] = [
     [0x15, 0x11, 0x0f],
     [0x1e, 0x19, 0x16],
@@ -92,7 +92,7 @@ pub const CAMPFIRE: [[u8; 3]; 25] = [
     [0x8a, 0x40, 0x1c],
 ];
 
-/// Ingle's notification sounds a skin can replace (as [`crate::sound`] files: Opus, 10 s at
+/// Pyr's notification sounds a skin can replace (as [`crate::sound`] files: Opus, 10 s at
 /// most), and when each plays.
 pub const SOUNDS: &[(&str, &str)] = &[
     ("message", "a new message"),
@@ -107,7 +107,7 @@ pub const SOUNDS: &[(&str, &str)] = &[
 ];
 
 /// What `skin.json` says. Unknown keys are left alone when a skin is used (a newer skin on an
-/// older Ingle), and pointed out by [`check`].
+/// older Pyr), and pointed out by [`check`].
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(default)]
 pub struct Manifest {
@@ -123,7 +123,7 @@ pub struct Manifest {
     pub sounds: BTreeMap<String, String>,
 }
 
-/// A picture behind the chat (or the whole window), seen through Ingle's colors.
+/// A picture behind the chat (or the whole window), seen through Pyr's colors.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct Background {
@@ -155,7 +155,7 @@ pub struct Fonts {
     pub body: Option<String>,
     /// For headings and names (the body font is used if there's none).
     pub bold: Option<String>,
-    /// Size next to Ingle's own font: 0.8 to 1.25 (fonts differ in how big they look).
+    /// Size next to Pyr's own font: 0.8 to 1.25 (fonts differ in how big they look).
     pub scale: f32,
 }
 
@@ -367,7 +367,7 @@ pub fn check(files: &[(String, Vec<u8>)]) -> Report {
     }
     for k in m.sounds.keys() {
         if !SOUNDS.iter().any(|(n, _)| n == k) {
-            r.problems.push(format!("sounds: Ingle has no sound called {k:?} (see the list in the guide)."));
+            r.problems.push(format!("sounds: Pyr has no sound called {k:?} (see the list in the guide)."));
         }
     }
     // Every file it names is there and is what it's said to be.
@@ -395,7 +395,7 @@ pub fn check(files: &[(String, Vec<u8>)]) -> Report {
             }
             Use::Sound => {
                 if crate::sound::packets(b).is_none() {
-                    r.problems.push(format!("{path}: not an Ingle sound file (the Claude connector makes one from an MP3, WAV, OGG or FLAC)."));
+                    r.problems.push(format!("{path}: not a Pyr sound file (the Claude connector makes one from an MP3, WAV, OGG or FLAC)."));
                 }
             }
         }
@@ -535,7 +535,7 @@ mod tests {
         assert!(bad(&base(r#""background": { "file": "bg.png" }"#), vec![("bg.png", png(9000, 10))]).contains("PNG, JPEG or WebP"));
         assert!(bad(&base(r#""background": { "file": "bg.png", "show": 0.9 }"#), vec![("bg.png", png(10, 10))]).contains("0.6"));
         assert!(bad(&base(r#""fonts": { "body": "a.ttf" }"#), vec![("a.ttf", b"MZ not a font at all".to_vec())]).contains("TrueType"));
-        assert!(bad(&base(r#""sounds": { "message": "m.mp3" }"#), vec![("m.mp3", b"ID3 mp3".to_vec())]).contains("Ingle sound"));
+        assert!(bad(&base(r#""sounds": { "message": "m.mp3" }"#), vec![("m.mp3", b"ID3 mp3".to_vec())]).contains("Pyr sound"));
         assert!(bad(&base(r#""sounds": { "boom": "m.ings" }"#), vec![("m.ings", sound())]).contains("boom"));
         // Nothing else rides along.
         assert!(bad(&base(""), vec![("run.exe", b"MZ".to_vec())]).contains("doesn't use it"));

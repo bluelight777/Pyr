@@ -1,11 +1,11 @@
-//! Per-call end-to-end encryption state (see `ingle_proto::crypto` for the design).
+//! Per-call end-to-end encryption state (see `pyr_proto::crypto` for the design).
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use ingle_proto::b64;
-use ingle_proto::control::{ChannelId, SessionId, VoiceParticipant, WrappedKey};
-use ingle_proto::crypto::{self, Identity, MediaKey, SessionKeys};
+use pyr_proto::b64;
+use pyr_proto::control::{ChannelId, SessionId, VoiceParticipant, WrappedKey};
+use pyr_proto::crypto::{self, Identity, MediaKey, SessionKeys};
 use tracing::debug;
 
 /// How long after announcing a new key we start using it (lets it reach everyone first).
@@ -215,7 +215,7 @@ impl E2ee {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ingle_proto::media::{AAD_LEN, AudioHeader, track};
+    use pyr_proto::media::{AAD_LEN, AudioHeader, track};
 
     fn participant(e: &E2ee, session: SessionId, id: &Identity) -> VoiceParticipant {
         let (e2ee_pub, e2ee_sig) = e.join_credentials();

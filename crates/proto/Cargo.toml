@@ -1,10 +1,10 @@
 [package]
-name = "ingle-proto"
+name = "pyr-proto"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Wire protocol, identity and end-to-end media encryption shared by the Ingle client and server."
+description = "Wire protocol, identity and end-to-end media encryption shared by the Pyr client and server."
 
 [dependencies]
 base64 = "0.22.1"

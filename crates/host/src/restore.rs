@@ -3,7 +3,7 @@
 //! `server-cert.der`, `server-key.der`) and unpacked there by the setup script
 //! (`--restore`), before the server first starts. The server's private key is sealed in the
 //! backup to the owner who made it (`server-key.der.sealed`, see
-//! `ingle_proto::crypto::backup_key`): only their Ingle can put it back.
+//! `pyr_proto::crypto::backup_key`): only their Pyr can put it back.
 
 use std::path::PathBuf;
 
@@ -24,8 +24,8 @@ impl std::fmt::Debug for Backup {
 }
 
 /// Why a backup can't be put back with the server's identity.
-const LOCKED: &str = "This backup's server identity is locked to the Ingle that made it (its owner's identity). Restore it from that \
-                      Ingle, or from a copy of its identity.key. Without it you can set the server up by hand from the database \
+const LOCKED: &str = "This backup's server identity is locked to the Pyr that made it (its owner's identity). Restore it from that \
+                      Pyr, or from a copy of its identity.key. Without it you can set the server up by hand from the database \
                       and files, as a new server.";
 
 /// Whether `b.key` opens the backup's sealed server key (a quick look, before anything's sent).
@@ -33,7 +33,7 @@ pub fn check(b: &Backup) -> Result<()> {
     let sealed = b.dir.join("identity").join("server-key.der.sealed");
     if sealed.is_file() {
         let data = std::fs::read(&sealed).with_context(|| format!("reading {}", sealed.display()))?;
-        if b.key.as_ref().and_then(|k| ingle_proto::crypto::unseal(k, &data)).is_none() {
+        if b.key.as_ref().and_then(|k| pyr_proto::crypto::unseal(k, &data)).is_none() {
             bail!(LOCKED);
         }
     }
@@ -45,7 +45,7 @@ pub fn pack(b: &Backup) -> Result<Vec<u8>> {
     let backup = b.dir.as_path();
     let db = backup.join("database").join("latest.db");
     if !db.is_file() {
-        bail!("{} isn't an Ingle server backup (it has no database/latest.db).", backup.display());
+        bail!("{} isn't a Pyr server backup (it has no database/latest.db).", backup.display());
     }
     let mut tar = Vec::new();
     add(&mut tar, "ingle.db", &std::fs::read(&db).context("reading the backup's database")?)?;
@@ -56,7 +56,7 @@ pub fn pack(b: &Backup) -> Result<Vec<u8>> {
     // The private key: sealed (backups since 0.8), or as it was in older backups.
     let key = if sealed.is_file() {
         let data = std::fs::read(&sealed).with_context(|| format!("reading {}", sealed.display()))?;
-        match b.key.as_ref().and_then(|k| ingle_proto::crypto::unseal(k, &data)) {
+        match b.key.as_ref().and_then(|k| pyr_proto::crypto::unseal(k, &data)) {
             Some(k) => Some(k),
             None => bail!(LOCKED),
         }
@@ -121,7 +121,7 @@ fn add(tar: &mut Vec<u8>, name: &str, data: &[u8]) -> Result<()> {
 mod tests {
     #[test]
     fn packs_a_backup_that_tar_can_read() {
-        let d = std::env::temp_dir().join(format!("ingle-restore-test-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("pyr-restore-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("database")).unwrap();
         std::fs::create_dir_all(d.join("identity")).unwrap();
@@ -148,8 +148,8 @@ mod tests {
 
     #[test]
     fn a_sealed_server_key_comes_back_only_for_its_owner() {
-        use ingle_proto::crypto::{Identity, backup_key, seal};
-        let d = std::env::temp_dir().join(format!("ingle-restore-sealed-{}", std::process::id()));
+        use pyr_proto::crypto::{Identity, backup_key, seal};
+        let d = std::env::temp_dir().join(format!("pyr-restore-sealed-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("database")).unwrap();
         std::fs::create_dir_all(d.join("identity")).unwrap();
@@ -157,7 +157,7 @@ mod tests {
         std::fs::write(d.join("identity/server-cert.der"), b"cert").unwrap();
         let owner = Identity::generate();
         std::fs::write(d.join("identity/server-key.der.sealed"), seal(&backup_key(&owner), b"the private key")).unwrap();
-        // The owner's Ingle: the key goes back as it was.
+        // The owner's Pyr: the key goes back as it was.
         let tar = super::pack(&super::Backup { dir: d.clone(), key: Some(backup_key(&owner)) }).unwrap();
         let t = d.join("out.tar");
         std::fs::write(&t, &tar).unwrap();
@@ -169,7 +169,7 @@ mod tests {
         // Anyone else's (or none): no restore with the server's identity, and it says so up front.
         let other = super::Backup { dir: d.clone(), key: Some(backup_key(&Identity::generate())) };
         assert!(super::pack(&other).is_err());
-        assert!(super::check(&other).unwrap_err().to_string().contains("locked to the Ingle that made it"));
+        assert!(super::check(&other).unwrap_err().to_string().contains("locked to the Pyr that made it"));
         assert!(super::pack(&super::Backup { dir: d.clone(), key: None }).is_err());
         let _ = std::fs::remove_dir_all(&d);
     }

@@ -1,4 +1,4 @@
-//! Claude in Ingle's servers, as a bot: the tools for chatting (list the servers and channels
+//! Claude in Pyr's servers, as a bot: the tools for chatting (list the servers and channels
 //! Claude can see, read, send, react, edit and delete its own messages, list members, join with
 //! a bot invite), and how each is done. Every answer is plain text for Claude to read, with ids
 //! in [brackets]. They work through Claude's own copy of the engine, as the bot Claude, with
@@ -8,10 +8,10 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail};
-use ingle_engine::Engine;
-use ingle_engine::state::{ConnStatus, ServerView};
-use ingle_proto::MAX_MESSAGE_CHARS;
-use ingle_proto::control::*;
+use pyr_engine::Engine;
+use pyr_engine::state::{ConnStatus, ServerView};
+use pyr_proto::MAX_MESSAGE_CHARS;
+use pyr_proto::control::*;
 use serde_json::{Value, json};
 
 /// How long a request may take.
@@ -28,16 +28,16 @@ pub fn list() -> Value {
     json!([
         {
             "name": "list_servers",
-            "title": "List Ingle servers and channels",
-            "description": "Lists the Ingle servers Claude is in (as the bot Claude) with their channels: each channel's name, [id] and kind, \
+            "title": "List Pyr servers and channels",
+            "description": "Lists the Pyr servers Claude is in (as the bot Claude) with their channels: each channel's name, [id] and kind, \
                 and whether it has new messages or mentions of Claude, is private, or is read-only for Claude. Claude only sees the \
                 channels its roles let it see.",
             "inputSchema": {"type": "object", "properties": {}},
-            "annotations": {"title": "List Ingle servers and channels", "readOnlyHint": true, "openWorldHint": true}
+            "annotations": {"title": "List Pyr servers and channels", "readOnlyHint": true, "openWorldHint": true}
         },
         {
             "name": "read_messages",
-            "title": "Read messages in an Ingle channel",
+            "title": "Read messages in a Pyr channel",
             "description": "Reads messages in a channel, oldest first: each one's [id], time, author and text, what it replies to, its \
                 reactions and the images attached to it (by name). By default the newest ones; `before` goes back to older ones; \
                 `unread_only` gives just what came since Claude last read the channel. Reading the newest messages marks the \
@@ -54,13 +54,13 @@ pub fn list() -> Value {
                 },
                 "required": ["channel"]
             },
-            "annotations": {"title": "Read messages in an Ingle channel", "readOnlyHint": true, "openWorldHint": true}
+            "annotations": {"title": "Read messages in a Pyr channel", "readOnlyHint": true, "openWorldHint": true}
         },
         {
             "name": "send_message",
-            "title": "Send a message in an Ingle channel",
+            "title": "Send a message in a Pyr channel",
             "description": "Sends a message in a channel as Claude (shown with a BOT tag). Only post what the user asked for. `reply_to` \
-                answers a message (by its [id]). @name mentions someone, like in Ingle. Markdown works. Up to 4000 characters.",
+                answers a message (by its [id]). @name mentions someone, like in Pyr. Markdown works. Up to 4000 characters.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -71,11 +71,11 @@ pub fn list() -> Value {
                 },
                 "required": ["channel", "text"]
             },
-            "annotations": {"title": "Send a message in an Ingle channel", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true}
+            "annotations": {"title": "Send a message in a Pyr channel", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true}
         },
         {
             "name": "react",
-            "title": "React to an Ingle message",
+            "title": "React to a Pyr message",
             "description": "Adds an emoji reaction to a message as Claude, or takes Claude's off with `remove`. A Unicode emoji (👍) or one \
                 of the server's own emoji by name (:name:).",
             "inputSchema": {
@@ -88,11 +88,11 @@ pub fn list() -> Value {
                 },
                 "required": ["message_id", "emoji"]
             },
-            "annotations": {"title": "React to an Ingle message", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true}
+            "annotations": {"title": "React to a Pyr message", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true}
         },
         {
             "name": "edit_message",
-            "title": "Edit one of Claude's Ingle messages",
+            "title": "Edit one of Claude's Pyr messages",
             "description": "Changes the text of one of Claude's own messages (it shows as edited).",
             "inputSchema": {
                 "type": "object",
@@ -103,11 +103,11 @@ pub fn list() -> Value {
                 },
                 "required": ["message_id", "text"]
             },
-            "annotations": {"title": "Edit one of Claude's Ingle messages", "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": true}
+            "annotations": {"title": "Edit one of Claude's Pyr messages", "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": true}
         },
         {
             "name": "delete_message",
-            "title": "Delete one of Claude's Ingle messages",
+            "title": "Delete one of Claude's Pyr messages",
             "description": "Deletes one of Claude's own messages, for everyone.",
             "inputSchema": {
                 "type": "object",
@@ -118,27 +118,27 @@ pub fn list() -> Value {
                 },
                 "required": ["channel", "message_id"]
             },
-            "annotations": {"title": "Delete one of Claude's Ingle messages", "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": true}
+            "annotations": {"title": "Delete one of Claude's Pyr messages", "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": true}
         },
         {
             "name": "list_members",
-            "title": "List an Ingle server's members",
+            "title": "List a Pyr server's members",
             "description": "Lists a server's members: each one's name, whether they're online, and whether they're the owner, an admin or \
                 a bot, with their roles.",
             "inputSchema": {"type": "object", "properties": {"server": server}},
-            "annotations": {"title": "List an Ingle server's members", "readOnlyHint": true, "openWorldHint": true}
+            "annotations": {"title": "List a Pyr server's members", "readOnlyHint": true, "openWorldHint": true}
         },
         {
             "name": "join_server",
-            "title": "Join an Ingle server",
-            "description": "Joins an Ingle server as Claude with a bot invite link (ingle://…/bot-…). A server's owner makes one in Ingle \
+            "title": "Join a Pyr server",
+            "description": "Joins a Pyr server as Claude with a bot invite link (pyr://…/bot-…). A server's owner makes one in Pyr \
                 under Server Settings → Bots; on the user's own PC, Add Claude there does this by itself.",
             "inputSchema": {
                 "type": "object",
                 "properties": {"link": {"type": "string", "description": "The bot invite link."}},
                 "required": ["link"]
             },
-            "annotations": {"title": "Join an Ingle server", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true}
+            "annotations": {"title": "Join a Pyr server", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true}
         }
     ])
 }
@@ -196,7 +196,7 @@ fn server_key(engine: &Engine, wanted: Option<&str>) -> Result<String> {
         let st = engine.state();
         let names = || st.servers.iter().map(|s| s.name.clone()).collect::<Vec<_>>().join(", ");
         if st.servers.is_empty() {
-            bail!("Claude isn't in any Ingle server yet. The server's owner adds it in Ingle: Server Settings → Bots → Add Claude.");
+            bail!("Claude isn't in any Pyr server yet. The server's owner adds it in Pyr: Server Settings → Bots → Add Claude.");
         }
         match wanted.map(|w| w.trim().to_lowercase()).filter(|w| !w.is_empty()) {
             None if st.servers.len() == 1 => st.servers[0].key.clone(),
@@ -358,7 +358,7 @@ fn show(s: &ServerView, m: &Message, others: &[Message], me: &str) -> String {
 fn list_servers(engine: &Engine) -> Result<String> {
     let st = engine.state();
     if st.servers.is_empty() {
-        return Ok("Claude isn't in any Ingle server yet. The server's owner adds it in Ingle: Server Settings → Bots → Add Claude.".into());
+        return Ok("Claude isn't in any Pyr server yet. The server's owner adds it in Pyr: Server Settings → Bots → Add Claude.".into());
     }
     let mut out = Vec::new();
     for s in &st.servers {
@@ -480,8 +480,8 @@ fn send_message(engine: &Engine, args: &Value) -> Result<String> {
         bail!("Claude can't send messages in #{} (only some roles can).", ch.name);
     }
     let reply_to = int_arg(args, "reply_to");
-    let nonce = ingle_proto::b64::encode(&ingle_proto::crypto::random_bytes::<9>());
-    let sent_at = ingle_proto::now_ms();
+    let nonce = pyr_proto::b64::encode(&pyr_proto::crypto::random_bytes::<9>());
+    let sent_at = pyr_proto::now_ms();
     engine.request_wait(&key, Request::SendMessage { channel_id: ch.id, content: text.clone(), reply_to, nonce, attachments: Vec::new() }, WAIT)?;
     // Its id, once it's back from the server.
     let until = Instant::now() + Duration::from_secs(3);
@@ -595,7 +595,7 @@ fn join_server(engine: &Engine, args: &Value) -> Result<String> {
     }
 }
 
-/// Joins with the bot invites Ingle left for Claude ("Add Claude"), and clears them away.
+/// Joins with the bot invites Pyr left for Claude ("Add Claude"), and clears them away.
 pub fn join_waiting(engine: &Engine, inbox: &Path) {
     let Ok(dir) = std::fs::read_dir(inbox) else { return };
     for e in dir.flatten() {
@@ -609,7 +609,7 @@ pub fn join_waiting(engine: &Engine, inbox: &Path) {
                 let _ = std::fs::remove_file(&path);
             }
             Err(e) => {
-                eprintln!("ingle-mcp: couldn't use the invite in {}: {e:#}", path.display());
+                eprintln!("pyr-mcp: couldn't use the invite in {}: {e:#}", path.display());
                 let _ = std::fs::rename(&path, path.with_extension("failed"));
             }
         }

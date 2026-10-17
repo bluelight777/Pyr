@@ -3143,168 +3143,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ingle"
-version = "0.8.0"
-dependencies = [
- "anyhow",
- "arboard",
- "chrono",
- "clipboard-win",
- "device_query",
- "directories",
- "eframe",
- "embed-resource",
- "image",
- "ingle-engine",
- "ingle-host",
- "ingle-proto",
- "parking_lot",
- "png",
- "raw-window-handle",
- "rfd",
- "serde",
- "serde_json",
- "spellbook",
- "toml",
- "tracing",
- "tracing-subscriber",
- "ureq",
- "wasmi",
- "wat",
- "windows 0.62.2",
-]
-
-[[package]]
-name = "ingle-engine"
-version = "0.8.0"
-dependencies = [
- "ab_glyph",
- "anyhow",
- "base64 0.22.1",
- "bytes",
- "chrono",
- "cpal",
- "crossbeam-channel",
- "deep_filter",
- "device_query",
- "directories",
- "fast_image_resize",
- "getrandom 0.2.17",
- "ingle-proto",
- "ingle-server",
- "ndarray",
- "nnnoiseless",
- "nokhwa",
- "openh264",
- "openh264-sys2",
- "opus",
- "parking_lot",
- "quinn",
- "realfft",
- "rtrb",
- "rubato 5.0.1",
- "rustls",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "sonora",
- "symphonia",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
- "tract-core",
- "tract-hir",
- "tract-onnx",
- "tract-pulse",
- "wasapi",
- "windows 0.62.2",
- "windows-capture",
- "x11rb",
- "yuv",
-]
-
-[[package]]
-name = "ingle-host"
-version = "0.8.0"
-dependencies = [
- "anyhow",
- "getrandom 0.2.17",
- "ingle-proto",
- "parking_lot",
- "quinn",
- "russh",
- "rustls",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "ureq",
-]
-
-[[package]]
-name = "ingle-mcp"
-version = "0.8.0"
-dependencies = [
- "anyhow",
- "chrono",
- "ingle-engine",
- "ingle-proto",
- "ingle-server",
- "serde_json",
- "tokio",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "ingle-proto"
-version = "0.8.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "bytes",
- "chacha20poly1305",
- "curve25519-dalek 4.1.3",
- "ed25519-dalek 2.2.0",
- "getrandom 0.2.17",
- "hkdf 0.12.4",
- "quinn",
- "rcgen",
- "rustls",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 2.0.21",
- "tokio",
- "x25519-dalek",
-]
-
-[[package]]
-name = "ingle-server"
-version = "0.8.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "bytes",
- "clap",
- "embed-resource",
- "getrandom 0.2.17",
- "ingle-proto",
- "parking_lot",
- "quinn",
- "rcgen",
- "rusqlite",
- "rustls",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "inout"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5140,6 +4978,168 @@ name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
+
+[[package]]
+name = "pyr"
+version = "0.8.0"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "chrono",
+ "clipboard-win",
+ "device_query",
+ "directories",
+ "eframe",
+ "embed-resource",
+ "image",
+ "parking_lot",
+ "png",
+ "pyr-engine",
+ "pyr-host",
+ "pyr-proto",
+ "raw-window-handle",
+ "rfd",
+ "serde",
+ "serde_json",
+ "spellbook",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "ureq",
+ "wasmi",
+ "wat",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "pyr-engine"
+version = "0.8.0"
+dependencies = [
+ "ab_glyph",
+ "anyhow",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "cpal",
+ "crossbeam-channel",
+ "deep_filter",
+ "device_query",
+ "directories",
+ "fast_image_resize",
+ "getrandom 0.2.17",
+ "ndarray",
+ "nnnoiseless",
+ "nokhwa",
+ "openh264",
+ "openh264-sys2",
+ "opus",
+ "parking_lot",
+ "pyr-proto",
+ "pyr-server",
+ "quinn",
+ "realfft",
+ "rtrb",
+ "rubato 5.0.1",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sonora",
+ "symphonia",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "tract-core",
+ "tract-hir",
+ "tract-onnx",
+ "tract-pulse",
+ "wasapi",
+ "windows 0.62.2",
+ "windows-capture",
+ "x11rb",
+ "yuv",
+]
+
+[[package]]
+name = "pyr-host"
+version = "0.8.0"
+dependencies = [
+ "anyhow",
+ "getrandom 0.2.17",
+ "parking_lot",
+ "pyr-proto",
+ "quinn",
+ "russh",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "ureq",
+]
+
+[[package]]
+name = "pyr-mcp"
+version = "0.8.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "pyr-engine",
+ "pyr-proto",
+ "pyr-server",
+ "serde_json",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "pyr-proto"
+version = "0.8.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "bytes",
+ "chacha20poly1305",
+ "curve25519-dalek 4.1.3",
+ "ed25519-dalek 2.2.0",
+ "getrandom 0.2.17",
+ "hkdf 0.12.4",
+ "quinn",
+ "rcgen",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "tokio",
+ "x25519-dalek",
+]
+
+[[package]]
+name = "pyr-server"
+version = "0.8.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "bytes",
+ "clap",
+ "embed-resource",
+ "getrandom 0.2.17",
+ "parking_lot",
+ "pyr-proto",
+ "quinn",
+ "rcgen",
+ "rusqlite",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "quick-error"

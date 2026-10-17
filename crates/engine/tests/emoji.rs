@@ -3,21 +3,21 @@
 
 use std::time::{Duration, Instant};
 
-use ingle_engine::files::FileState;
-use ingle_engine::state::ConnStatus;
-use ingle_engine::{Engine, EngineOptions};
-use ingle_proto::control::ChannelKind;
+use pyr_engine::files::FileState;
+use pyr_engine::state::ConnStatus;
+use pyr_engine::{Engine, EngineOptions};
+use pyr_proto::control::ChannelKind;
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("ingle-emoji-{}-{}", name, ingle_proto::now_ms()));
+    let d = std::env::temp_dir().join(format!("pyr-emoji-{}-{}", name, pyr_proto::now_ms()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
 
 fn client(name: &str) -> Engine {
     let dir = temp_dir(name);
-    let cfg = ingle_engine::config::Config { display_name: name.to_string(), ..Default::default() };
-    ingle_engine::config::save_config(&dir, &cfg).unwrap();
+    let cfg = pyr_engine::config::Config { display_name: name.to_string(), ..Default::default() };
+    pyr_engine::config::save_config(&dir, &cfg).unwrap();
     Engine::start(EngineOptions { config_dir: Some(dir), push_to_talk: false, ..Default::default() }).unwrap()
 }
 
@@ -46,7 +46,7 @@ const PNG: &[u8] = &[
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn server_emoji() {
     let data = temp_dir("server");
-    let server = ingle_server::start(ingle_server::ServerConfig {
+    let server = pyr_server::start(pyr_server::ServerConfig {
         data_dir: data.clone(),
         bind: "127.0.0.1:0".parse().unwrap(),
         public_host: Some("127.0.0.1".into()),
@@ -60,7 +60,7 @@ async fn server_emoji() {
     b.add_server(&server.invite_link()).unwrap();
     wait_for("bob", 10, || b.state().servers.first().map(|s| s.status == ConnStatus::Connected).unwrap_or(false)).await;
     let key = a.state().servers[0].key.clone();
-    assert!(a.state().servers[0].has(ingle_proto::control::EMOJI_FEATURE));
+    assert!(a.state().servers[0].has(pyr_proto::control::EMOJI_FEATURE));
     let text = a.state().servers[0].channels.iter().find(|c| c.kind == ChannelKind::Text).unwrap().id;
 
     // Members can't add emoji; the owner can, and everyone gets it.

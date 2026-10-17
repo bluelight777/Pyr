@@ -60,7 +60,7 @@ pub fn packets(b: &[u8]) -> Option<(SoundFormat, Vec<&[u8]>)> {
     (i == b.len()).then_some((SoundFormat { channels, frames }, out))
 }
 
-/// Whether `b` is a sound file Ingle can play (what the server checks on upload).
+/// Whether `b` is a sound file Pyr can play (what the server checks on upload).
 pub fn check(b: &[u8]) -> Option<SoundFormat> {
     packets(b).map(|(f, _)| f)
 }

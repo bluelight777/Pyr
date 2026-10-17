@@ -1,4 +1,4 @@
-//! Voice packets first: marks Ingle's traffic as voice on Windows (qWAVE, as Discord's
+//! Voice packets first: marks Pyr's traffic as voice on Windows (qWAVE, as Discord's
 //! "Quality of Service High Packet Priority" does), so home routers and Wi-Fi send it ahead
 //! of downloads and other traffic. Voice gets Windows' "Voice" class (DSCP 56, Wi-Fi's voice
 //! queue); while you send video on the same connection it steps down to "Audio/Video"

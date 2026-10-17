@@ -1,4 +1,4 @@
-//! Muted or deafened stays that way through an update: Ingle restarting (the app's update),
+//! Muted or deafened stays that way through an update: Pyr restarting (the app's update),
 //! the server restarting (its update), and the update from a version that didn't remember
 //! (the server tells the app how it left).
 
@@ -6,25 +6,25 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ingle_engine::audio::{AudioInput, AudioOutput};
-use ingle_engine::config::{NoiseSuppression, SelfVoice, Settings};
-use ingle_engine::state::ConnStatus;
-use ingle_engine::{Engine, EngineOptions};
-use ingle_proto::control::{ChannelId, ChannelKind, VoiceParticipant};
+use pyr_engine::audio::{AudioInput, AudioOutput};
+use pyr_engine::config::{NoiseSuppression, SelfVoice, Settings};
+use pyr_engine::state::ConnStatus;
+use pyr_engine::{Engine, EngineOptions};
+use pyr_proto::control::{ChannelId, ChannelKind, VoiceParticipant};
 use parking_lot::Mutex;
 
 fn temp_dir(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ingle-mute-{}-{}", name, ingle_proto::now_ms()));
+    let d = std::env::temp_dir().join(format!("pyr-mute-{}-{}", name, pyr_proto::now_ms()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
 
-/// A copy of Ingle with a tone for a microphone, recording what it hears. `fresh` starts a
-/// new person; otherwise it's the same person's Ingle starting again (same settings folder).
+/// A copy of Pyr with a tone for a microphone, recording what it hears. `fresh` starts a
+/// new person; otherwise it's the same person's Pyr starting again (same settings folder).
 fn bot(dir: &Path, name: &str, tone_hz: f32, heard: Arc<Mutex<Vec<f32>>>, fresh: bool) -> Engine {
     if fresh {
-        let cfg = ingle_engine::config::Config { display_name: name.to_string(), ..Default::default() };
-        ingle_engine::config::save_config(dir, &cfg).unwrap();
+        let cfg = pyr_engine::config::Config { display_name: name.to_string(), ..Default::default() };
+        pyr_engine::config::save_config(dir, &cfg).unwrap();
     }
     let factory = move |_s: &Settings| {
         let mut phase = 0u64;
@@ -99,7 +99,7 @@ async fn connected(e: &Engine, what: &str) {
     wait_for(what, 15, || e.state().servers.first().map(|s| s.status == ConnStatus::Connected).unwrap_or(false)).await;
 }
 
-/// Ingle closing (as for an update) and starting again, then rejoining the call the way the
+/// Pyr closing (as for an update) and starting again, then rejoining the call the way the
 /// app does after an update.
 async fn restart(old: Engine, dir: &Path, heard: &Arc<Mutex<Vec<f32>>>, key: &str, lounge: ChannelId, uid: &str, other: &Engine) -> Engine {
     old.shutdown();
@@ -115,13 +115,13 @@ async fn restart(old: Engine, dir: &Path, heard: &Arc<Mutex<Vec<f32>>>, key: &st
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn mute_and_deafen_survive_updates() {
     let data = temp_dir("server");
-    let cfg = |bind| ingle_server::ServerConfig {
+    let cfg = |bind| pyr_server::ServerConfig {
         data_dir: data.clone(),
         bind,
         public_host: Some("127.0.0.1".into()),
         name: Some("Quiet Camp".into()),
     };
-    let server = ingle_server::start(cfg("127.0.0.1:0".parse().unwrap())).await.unwrap();
+    let server = pyr_server::start(cfg("127.0.0.1:0".parse().unwrap())).await.unwrap();
     let addr = server.local_addr;
     let (adir, bdir) = (temp_dir("alice"), temp_dir("bob"));
     let (ha, hb) = (Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())));
@@ -145,7 +145,7 @@ async fn mute_and_deafen_survive_updates() {
     wait_for("bob sees alice muted", 10, || seen(&b, &alice).map(|p| p.self_mute && !p.self_deaf).unwrap_or(false)).await;
     silent_for(&hb, "bob, alice muted").await;
 
-    // 1. Alice's Ingle updates (closes and starts again): still muted, before a sound goes out.
+    // 1. Alice's Pyr updates (closes and starts again): still muted, before a sound goes out.
     let a = restart(a, &adir, &ha, &key, lounge, &alice, &b).await;
     assert_eq!(a.voice_prefs(), (true, false), "muted after the restart");
     assert!(a.state().call.as_ref().unwrap().muted);
@@ -154,7 +154,7 @@ async fn mute_and_deafen_survive_updates() {
     ha.lock().clear();
     wait_for("muted alice still hears bob", 10, || loud(&ha.lock())).await;
 
-    // 2. Deafened, and Ingle updates again: still deafened (and so muted).
+    // 2. Deafened, and Pyr updates again: still deafened (and so muted).
     a.set_deafen(true);
     wait_for("bob sees alice deafened", 10, || seen(&b, &alice).map(|p| p.self_mute && p.self_deaf).unwrap_or(false)).await;
     silent_for(&ha, "deafened alice").await;
@@ -171,7 +171,7 @@ async fn mute_and_deafen_survive_updates() {
     let mut why = String::new();
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(250)).await;
-        match ingle_server::start(cfg(addr)).await {
+        match pyr_server::start(cfg(addr)).await {
             Ok(s) => {
                 server = Some(s);
                 break;
@@ -194,7 +194,7 @@ async fn mute_and_deafen_survive_updates() {
     a.set_mute(false);
     hb.lock().clear();
     wait_for("bob hears alice again", 10, || loud(&hb.lock())).await;
-    assert_eq!(ingle_engine::config::load_config(&adir).self_voice, Some(SelfVoice { muted: false, deafened: false }));
+    assert_eq!(pyr_engine::config::load_config(&adir).self_voice, Some(SelfVoice { muted: false, deafened: false }));
 
     // 4. The update from a version that didn't remember (0.6.0): its settings say nothing about
     // mute, but the server saw how alice left and tells her app.
@@ -216,7 +216,7 @@ async fn mute_and_deafen_survive_updates() {
     assert!(a.state().call.as_ref().unwrap().muted);
     wait_for("bob sees alice muted (4b)", 10, || seen(&b, &alice).map(|p| p.self_mute && !p.self_deaf).unwrap_or(false)).await;
     silent_for(&hb, "bob, alice muted after updating from 0.6.0").await;
-    assert_eq!(ingle_engine::config::load_config(&adir).self_voice, Some(SelfVoice { muted: true, deafened: false }));
+    assert_eq!(pyr_engine::config::load_config(&adir).self_voice, Some(SelfVoice { muted: true, deafened: false }));
 
     // 5. Once this PC remembers, it's what counts: unmuting while out of the call isn't undone
     // by the server remembering her leaving muted.

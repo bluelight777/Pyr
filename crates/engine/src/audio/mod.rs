@@ -17,7 +17,7 @@ use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use ingle_proto::control::SessionId;
+use pyr_proto::control::SessionId;
 use parking_lot::Mutex;
 use tracing::{debug, info, warn};
 
@@ -235,7 +235,7 @@ impl AudioEngine {
         let status = Arc::new(Mutex::new(AudioStatus::default()));
         let (c, m, s) = (controls.clone(), mixer.clone(), status.clone());
         let thread = std::thread::Builder::new()
-            .name("ingle-audio".into())
+            .name("pyr-audio".into())
             .spawn(move || worker(settings, input, output, sink, c, m, s))
             .expect("spawn audio thread");
         AudioEngine { controls, mixer, status, thread: Some(thread) }
@@ -351,7 +351,7 @@ enum Change {
 /// A sound device, kept working. When it stops (or wasn't there to begin with) it's reopened
 /// in the background, each try a little later than the last, until it's back; the call and
 /// the other device carry on meanwhile. Before this, a microphone or speakers that stopped
-/// (a virtual device restarting, a USB hiccup) stayed silent until Ingle was restarted.
+/// (a virtual device restarting, a USB hiccup) stayed silent until Pyr was restarted.
 ///
 /// If the device asked for stays away, the default one stands in for it until it's back.
 struct Link<T: Device> {
@@ -464,7 +464,7 @@ impl<T: Device> Link<T> {
     fn try_open(&mut self, fall_back: bool, now: Instant) {
         let (tx, rx) = mpsc::channel();
         let open = self.open.clone();
-        let spawned = std::thread::Builder::new().name(format!("ingle-open-{}", self.what)).spawn(move || {
+        let spawned = std::thread::Builder::new().name(format!("pyr-open-{}", self.what)).spawn(move || {
             let _ = tx.send(open(fall_back));
         });
         match spawned {
@@ -798,13 +798,13 @@ mod tests {
         let all = packets.lock();
         let pk = &all[..sent];
         assert!(pk.len() >= 20, "only {} packets", pk.len());
-        assert_eq!(pk[0].1 & ingle_proto::media::flags::TALKSPURT, ingle_proto::media::flags::TALKSPURT);
+        assert_eq!(pk[0].1 & pyr_proto::media::flags::TALKSPURT, pyr_proto::media::flags::TALKSPURT);
 
         // Decode them through the mixer.
         let mut m = Mixer::default();
         let t0 = Instant::now();
         for (i, (_, f, d)) in pk.iter().enumerate() {
-            m.push(7, ingle_proto::media::track::MIC, i as u32, *f, d.clone(), t0);
+            m.push(7, pyr_proto::media::track::MIC, i as u32, *f, d.clone(), t0);
         }
         let mut out = vec![0f32; 960];
         let mut energy = 0f32;
@@ -816,7 +816,7 @@ mod tests {
         assert_eq!(m.speaking(t0 + Duration::from_millis(390)), vec![7]);
         // The mixer panel's meter for their voice: how loud it came, as sent.
         let levels = m.track_levels(t0 + Duration::from_millis(390));
-        assert!(matches!(levels.as_slice(), [(7, t, db)] if *t == ingle_proto::media::track::MIC && *db > -30.0), "{levels:?}");
+        assert!(matches!(levels.as_slice(), [(7, t, db)] if *t == pyr_proto::media::track::MIC && *db > -30.0), "{levels:?}");
         assert!(m.track_levels(t0 + Duration::from_secs(5)).is_empty(), "quiet later");
     }
 
@@ -834,7 +834,7 @@ mod tests {
 
     /// Speakers and a microphone that stop (the way Windows' do when a virtual device restarts,
     /// or that report they've gone) are reopened by themselves, and the call carries on
-    /// meanwhile. Before, you heard nobody (or nobody heard you) until Ingle was restarted.
+    /// meanwhile. Before, you heard nobody (or nobody heard you) until Pyr was restarted.
     #[test]
     fn stopped_speakers_and_microphone_come_back_by_themselves() {
         use std::sync::atomic::{AtomicU64, AtomicU8};

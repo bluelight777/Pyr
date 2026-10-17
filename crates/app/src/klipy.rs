@@ -1,6 +1,6 @@
 //! GIF search from KLIPY, beside GIPHY's (see `giphy.rs`): type `/klipy cats`, or pick the
 //! KLIPY tab of the GIF picker. Like GIPHY's, it's turned on per server by its owner, with a
-//! KLIPY app key everyone's Ingle uses.
+//! KLIPY app key everyone's Pyr uses.
 //!
 //! KLIPY's rules (docs.klipy.com/integration-requirements, /attribution): requests and media
 //! go straight from each person's app to KLIPY (no server in between), media is loaded from
@@ -16,14 +16,14 @@ const API: &str = "https://api.klipy.com/api/v1";
 const RESULTS: usize = 24;
 
 /// The KLIPY app key for a server: the one its owner set up (`ServerInfo::klipy_key`), if it's
-/// one that can go in KLIPY's addresses. (Development builds also take `INGLE_KLIPY_KEY`.)
+/// one that can go in KLIPY's addresses. (Development builds also take `PYR_KLIPY_KEY`.)
 pub fn key(server_key: &str) -> Option<String> {
     let k = server_key.trim();
     if path_safe(k) {
         return Some(k.to_string());
     }
     if cfg!(debug_assertions) {
-        return std::env::var("INGLE_KLIPY_KEY").ok().filter(|k| path_safe(k));
+        return pyr_proto::env_var("KLIPY_KEY").filter(|k| path_safe(k));
     }
     None
 }
@@ -72,7 +72,7 @@ pub fn parse(text: &str) -> Result<Vec<Gif>, String> {
 }
 
 fn read_item(g: &serde_json::Value) -> Option<Gif> {
-    // (Ads only come when asked for, which Ingle doesn't.)
+    // (Ads only come when asked for, which Pyr doesn't.)
     if g.get("type").and_then(|t| t.as_str()).is_some_and(|t| t == "ad") {
         return None;
     }
@@ -122,7 +122,7 @@ pub fn share(key: &str, slug: &str, q: &str) {
     }
     let url = format!("{API}/{key}/gifs/share/{slug}");
     let body = if q.is_empty() { serde_json::json!({}) } else { serde_json::json!({ "q": q }) };
-    let _ = std::thread::Builder::new().name("ingle-klipy-share".into()).spawn(move || {
+    let _ = std::thread::Builder::new().name("pyr-klipy-share".into()).spawn(move || {
         if let Err(e) = agent().post(&url).header("Content-Type", "application/json").send(body.to_string()) {
             tracing::debug!("KLIPY share report didn't go: {e}");
         }
@@ -140,11 +140,11 @@ pub fn is_media(url: &str) -> bool {
     media_host && path.len() > 1 && (path.ends_with(".gif") || path.ends_with(".webp"))
 }
 
-/// Debug builds only, for trying the picker without KLIPY: `INGLE_KLIPY_FAKE=<folder>` answers
+/// Debug builds only, for trying the picker without KLIPY: `PYR_KLIPY_FAKE=<folder>` answers
 /// trending from `trending.json` and searches from `search.json` in that folder.
 #[cfg(debug_assertions)]
 fn fake_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("INGLE_KLIPY_FAKE").map(std::path::PathBuf::from)
+    pyr_proto::env_var("KLIPY_FAKE").map(std::path::PathBuf::from)
 }
 
 #[cfg(test)]

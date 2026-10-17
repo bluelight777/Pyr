@@ -1,19 +1,19 @@
 [package]
-name = "ingle"
+name = "pyr"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Ingle desktop app."
+description = "Pyr desktop app."
 
 [[bin]]
-name = "ingle"
+name = "pyr"
 path = "src/main.rs"
 
 [dependencies]
-ingle-proto = { path = "../proto" }
-ingle-engine = { path = "../engine" }
-ingle-host = { path = "../host" }
+pyr-proto = { path = "../proto" }
+pyr-engine = { path = "../engine" }
+pyr-host = { path = "../host" }
 directories = "6.0.0"
 eframe = { version = "0.33.3", features = ["wgpu"] }
 tracing = "0.1.44"
@@ -35,7 +35,7 @@ spellbook = "0.4.2"
 # Plugins: add-ons are WebAssembly, run in an interpreter with no imports, fuel and memory
 # limits (plugins/addon.rs).
 # (portable-dispatch: the plain loop, never tail calls that LLVM may not turn into jumps, which
-# would let a long-running add-on overflow the stack and take Ingle down with it.)
+# would let a long-running add-on overflow the stack and take Pyr down with it.)
 wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "stable", "portable-dispatch"] }
 # Reading a plugin's Cargo.toml before sending it in.
 toml = "1.1"
@@ -67,8 +67,8 @@ windows = { version = "0.62", features = [
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_ProcessStatus",
     "Win32_System_SystemInformation",
-    # Programs open inside Ingle's window (plugins/programs.rs): following it as it moves,
-    # square corners, and ending with Ingle if it doesn't get to close them (a job).
+    # Programs open inside Pyr's window (plugins/programs.rs): following it as it moves,
+    # square corners, and ending with Pyr if it doesn't get to close them (a job).
     "Win32_UI_Accessibility",
     "Win32_Graphics_Dwm",
     "Win32_System_JobObjects",

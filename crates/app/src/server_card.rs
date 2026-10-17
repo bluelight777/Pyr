@@ -3,11 +3,11 @@
 //! of servers where people are talking right now.
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Stroke, pos2, vec2};
-use ingle_engine::state::{AppState, ConnStatus, ServerView};
-use ingle_proto::control::{ChannelKind, VoiceParticipant};
-use ingle_proto::media::track;
+use pyr_engine::state::{AppState, ConnStatus, ServerView};
+use pyr_proto::control::{ChannelKind, VoiceParticipant};
+use pyr_proto::media::track;
 
-use crate::app::{IngleApp, avatar};
+use crate::app::{PyrApp, avatar};
 use crate::{icons, theme};
 
 /// Faces shown in a voice channel's row (the rest are "+n").
@@ -36,7 +36,7 @@ pub fn voice_badge(p: &egui::Painter, icon: Rect, mine: bool) {
     icons::speaker(p, Rect::from_center_size(c + vec2(0.5, 0.0), vec2(10.0, 10.0)), Color32::WHITE);
 }
 
-impl IngleApp {
+impl PyrApp {
     /// The card beside server `s`'s icon (at `icon`) while it's pointed at.
     pub(crate) fn server_card(&mut self, ctx: &egui::Context, st: &AppState, s: &ServerView, icon: Rect) {
         let busy = busy_voice(s);

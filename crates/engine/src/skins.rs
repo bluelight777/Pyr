@@ -1,17 +1,17 @@
-//! Skins ([`ingle_proto::skin`]) on this PC: a skin's folder gathered and checked (fonts parsed,
+//! Skins ([`pyr_proto::skin`]) on this PC: a skin's folder gathered and checked (fonts parsed,
 //! not just told by their first bytes), sounds made from audio files, new skins started, and a
-//! skin's submission for the Ingle Library. Used by the app and by the Claude connector.
+//! skin's submission for the Pyr Library. Used by the app and by the Claude connector.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use ingle_proto::control::{PluginSubmission, SKIN_KIND, SourceFile};
-use ingle_proto::skin::{self, Report, Use};
+use pyr_proto::control::{PluginSubmission, SKIN_KIND, SourceFile};
+use pyr_proto::skin::{self, Report, Use};
 
 /// How to make a skin (skins/README.md): for the connector's guide and new skins' folders.
 pub const GUIDE: &str = include_str!("../../../skins/README.md");
 
-/// Where the Claude connector puts a skin for Ingle to try (in Ingle's settings folder): its
+/// Where the Claude connector puts a skin for Pyr to try (in Pyr's settings folder): its
 /// files, then [`PREVIEW_STAMP`] saying which (written last; removed to stop).
 pub const PREVIEW_DIR: &str = "skin-preview";
 pub const PREVIEW_STAMP: &str = "skin-preview.json";
@@ -85,12 +85,12 @@ pub fn check_folder(folder: &Path) -> Result<(Vec<(String, Vec<u8>)>, Report)> {
     Ok((files, report))
 }
 
-/// An Ingle sound file (Opus, 10 seconds at most) from an audio file (MP3, WAV, OGG, FLAC, M4A).
+/// A Pyr sound file (Opus, 10 seconds at most) from an audio file (MP3, WAV, OGG, FLAC, M4A).
 pub fn make_sound(input: &Path) -> Result<Vec<u8>> {
     let bytes = std::fs::read(input).with_context(|| format!("couldn't read {}", input.display()))?;
     let ext = input.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
     let imported = crate::soundboard::import(bytes, ext.as_deref())?;
-    let max = ingle_proto::sound::MAX_MS as usize * 48 * 2;
+    let max = pyr_proto::sound::MAX_MS as usize * 48 * 2;
     let pcm = &imported.pcm[..imported.pcm.len().min(max)];
     if pcm.iter().all(|v| v.abs() < 1e-4) {
         bail!("{} is silent", input.display());
@@ -126,7 +126,7 @@ pub fn start(folder: &Path, name: &str, author: &str) -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// A skin's submission for the Ingle Library (what skin.json says about it, and its files);
+/// A skin's submission for the Pyr Library (what skin.json says about it, and its files);
 /// `update_of`: one of mine it's a new version of.
 pub fn submission(files: &[(String, Vec<u8>)], report: &Report, contact: &str, update_of: i64) -> Result<PluginSubmission> {
     if !report.ok() {
@@ -141,7 +141,7 @@ pub fn submission(files: &[(String, Vec<u8>)], report: &Report, contact: &str, u
         author: m.author.trim().to_string(),
         contact: contact.trim().to_string(),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
-        files: files.iter().map(|(p, b)| SourceFile { path: p.clone(), data: ingle_proto::b64::encode(b) }).collect(),
+        files: files.iter().map(|(p, b)| SourceFile { path: p.clone(), data: pyr_proto::b64::encode(b) }).collect(),
         update_of,
         ..Default::default()
     })
@@ -152,7 +152,7 @@ mod tests {
     use super::*;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ingle-skins-{name}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("pyr-skins-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -214,7 +214,7 @@ mod tests {
         }
         std::fs::write(base.join("tone.wav"), &wav).unwrap();
         let ings = make_sound(&base.join("tone.wav")).unwrap();
-        let (fmt, _) = ingle_proto::sound::packets(&ings).expect("an Ingle sound file");
+        let (fmt, _) = pyr_proto::sound::packets(&ings).expect("a Pyr sound file");
         assert!((900..=1100).contains(&fmt.length_ms()), "{} ms", fmt.length_ms());
         std::fs::write(base.join("silence.wav"), [&wav[..44], &vec![0u8; samples.len() * 2][..]].concat()).unwrap();
         assert!(make_sound(&base.join("silence.wav")).unwrap_err().to_string().contains("silent"));

@@ -1,4 +1,4 @@
-//! Voice isolation: its noise remover (DeepFilterNet3, built into Ingle) loads, and mechanical
+//! Voice isolation: its noise remover (DeepFilterNet3, built into Pyr) loads, and mechanical
 //! sounds with nobody talking (typing, a fan's hum) send nothing at all.
 //!
 //! How well it keeps your words while removing such sounds was measured with real recordings
@@ -7,15 +7,15 @@
 use std::f32::consts::PI;
 use std::time::{Duration, Instant};
 
-use ingle_engine::audio::Controls;
-use ingle_engine::audio::capture::CapturePipeline;
-use ingle_engine::config::{NoiseSuppression, Settings};
+use pyr_engine::audio::Controls;
+use pyr_engine::audio::capture::CapturePipeline;
+use pyr_engine::config::{NoiseSuppression, Settings};
 
 #[test]
 fn isolation_loads_its_model_and_typing_alone_sends_nothing() {
     let settings =
         Settings { noise_suppression: NoiseSuppression::Isolation, echo_cancellation: false, auto_gain: false, ..Default::default() };
-    if let Err(e) = ingle_engine::audio::dfn::Dfn::new() {
+    if let Err(e) = pyr_engine::audio::dfn::Dfn::new() {
         panic!("the voice isolation model is built in and loads: {e}");
     }
     let mut p = CapturePipeline::new(&settings).unwrap();

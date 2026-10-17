@@ -14,12 +14,12 @@ use std::ops::RangeInclusive;
 use eframe::egui::{
     self, Align, Align2, Color32, CornerRadius, CursorIcon, Key, Layout, Modifiers, Rect, RichText, Sense, Stroke, StrokeKind, UiBuilder, pos2, vec2,
 };
-use ingle_engine::config::{CameraQuality, InputMode, NoiseSuppression, ScreenPreset, Settings};
-use ingle_engine::hotkey;
-use ingle_engine::state::AppState;
-use ingle_proto::control::FILES_FEATURE;
+use pyr_engine::config::{CameraQuality, InputMode, NoiseSuppression, ScreenPreset, Settings};
+use pyr_engine::hotkey;
+use pyr_engine::state::AppState;
+use pyr_proto::control::FILES_FEATURE;
 
-use crate::app::{Act, Dialog, IngleApp, Presence, avatar};
+use crate::app::{Act, Dialog, PyrApp, Presence, avatar};
 use crate::dialogs::field_label;
 use crate::update::Status;
 use crate::{icons, theme};
@@ -64,7 +64,7 @@ const PAGES: &[Page] = &[
     Page { id: 3, name: "Windows", group: "App settings", words: "windows tray clock icon start startup boot login quit exit minimize close" },
     Page {
         id: 2,
-        name: "About Ingle",
+        name: "About Pyr",
         group: "About",
         words: "about version update updates upgrade bug report error reports crash licenses credits encryption privacy",
     },
@@ -401,7 +401,7 @@ const SENS: RangeInclusive<f32> = -80.0..=-10.0;
 /// Input sensitivity, like Discord's: a bar showing how loud the microphone hears me now
 /// (`level`, dBFS; None while nothing's listening), green from the knob on (what gets
 /// through) and amber up to it (what doesn't), and the knob (`threshold`) to move. With `auto`
-/// there's no knob: Ingle decides by itself, and the bar just shows the level.
+/// there's no knob: Pyr decides by itself, and the bar just shows the level.
 pub(crate) fn sensitivity(ui: &mut egui::Ui, id_salt: impl Hash, threshold: f32, level: Option<f32>, auto: bool) -> Slid {
     let id = ui.make_persistent_id(id_salt);
     let (lo, hi) = (*SENS.start(), *SENS.end());
@@ -620,7 +620,7 @@ fn show_in_folder(path: &std::path::Path) {
 
 // ------------------------------------------------------------------ the sheet
 
-impl IngleApp {
+impl PyrApp {
     pub(crate) fn settings_dialog(&mut self, ui: &mut egui::Ui, st: &AppState, tab: u8, acts: &mut Vec<Act>, close: &mut bool) {
         let size = sheet_size(ui.ctx().content_rect().size());
         let (sheet, _) = ui.allocate_exact_size(size, Sense::hover());
@@ -702,7 +702,7 @@ impl IngleApp {
         }
     }
 
-    /// Settings' pages down its left (narrowed by the search at the top), and Ingle's version
+    /// Settings' pages down its left (narrowed by the search at the top), and Pyr's version
     /// at the bottom (like Discord's, for a bug report: click it to copy it).
     fn settings_sidebar(&mut self, ui: &mut egui::Ui, t: &mut u8, acts: &mut Vec<Act>) {
         let full = ui.max_rect();
@@ -756,7 +756,7 @@ impl IngleApp {
             ui.label(RichText::new("No settings match that.").size(13.0).color(theme::DIM()));
         }
         // The version, at the bottom.
-        let v = format!("Ingle {}", env!("CARGO_PKG_VERSION"));
+        let v = format!("Pyr {}", env!("CARGO_PKG_VERSION"));
         let os = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
         let vr = Rect::from_min_max(pos2(full.left(), full.bottom() - 40.0), full.max);
         let resp = ui.interact(vr, search_id.with("version"), Sense::click()).on_hover_text("Copy the version (for a bug report)").on_hover_cursor(CursorIcon::PointingHand);
@@ -834,7 +834,7 @@ impl IngleApp {
                             egui::TextEdit::singleline(typed).hint_text("Your name").char_limit(32).desired_width(280.0).margin(egui::Margin::symmetric(10, 8)),
                         );
                         crate::textbox::menu(ui, &resp, typed, true);
-                        let name = ingle_proto::control::clean_name(typed, 32).unwrap_or_default();
+                        let name = pyr_proto::control::clean_name(typed, 32).unwrap_or_default();
                         let ok = !name.is_empty() && name != st.my_name;
                         let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                         if (ui.add_enabled(ok, theme::primary_button("Save")).clicked() || (enter && ok)) && ok {
@@ -876,7 +876,7 @@ impl IngleApp {
         });
         if st.servers.iter().any(|s| s.status.is_connected() && !s.has(FILES_FEATURE)) {
             ui.add_space(6.0);
-            fine(ui, "Some of your servers run an older Ingle Server and won't show your picture until they're updated.");
+            fine(ui, "Some of your servers run an older Pyr Server and won't show your picture until they're updated.");
         }
         divider(ui);
         heading(ui, "Making sure of people");
@@ -954,7 +954,7 @@ impl IngleApp {
                     ui,
                     &mut draft.vad_auto,
                     "Automatically determine input sensitivity",
-                    "Ingle listens for speech (and with voice isolation, for your voice) and opens your microphone for it.",
+                    "Pyr listens for speech (and with voice isolation, for your voice) and opens your microphone for it.",
                 );
                 if let Slid::Done(v) = sensitivity(ui, "vad", draft.vad_threshold_db, level, draft.vad_auto) {
                     draft.vad_threshold_db = v;
@@ -1013,7 +1013,7 @@ impl IngleApp {
             ui,
             &mut draft.voice_priority,
             "Prioritize voice packets (Quality of Service)",
-            "Tells your router and Wi-Fi to send Ingle's voice ahead of downloads and other traffic. Turn it off if your voice cuts out or won't connect (a few routers don't handle it).",
+            "Tells your router and Wi-Fi to send Pyr's voice ahead of downloads and other traffic. Turn it off if your voice cuts out or won't connect (a few routers don't handle it).",
         );
         heading(ui, "Voice quality");
         if let Slid::Done(v) = slide(ui, "bitrate", draft.voice_bitrate_kbps as f32, 24.0..=192.0, 8.0, Some(64.0), |v| format!("{v:.0} kbps")) {
@@ -1091,7 +1091,7 @@ impl IngleApp {
                 }
             });
         });
-        fine(ui, "How loud Ingle's own sounds and ringing are (not people's voices: those are under Voice & Video).");
+        fine(ui, "How loud Pyr's own sounds and ringing are (not people's voices: those are under Voice & Video).");
         divider(ui);
         heading(ui, "Messages");
         toggle_row(ui, &mut draft.confirm_delete, "Ask before deleting a message", "Holding Shift when you click Delete skips the question either way.");
@@ -1099,7 +1099,7 @@ impl IngleApp {
         note(ui, "Right-click a channel, a server or a direct message conversation to mute it.");
     }
 
-    /// About Ingle: what it is and which version, updates, reporting bugs, and credits.
+    /// About Pyr: what it is and which version, updates, reporting bugs, and credits.
     /// True when Report a bug was clicked.
     fn about_page(&mut self, ui: &mut egui::Ui, draft: &mut Settings, acts: &mut Vec<Act>) -> bool {
         let mut report = false;
@@ -1114,7 +1114,7 @@ impl IngleApp {
                 ui.vertical(|ui| {
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(ingle_proto::APP_NAME).font(theme::bold_font(24.0)).color(theme::TEXT()));
+                        ui.label(RichText::new(pyr_proto::APP_NAME).font(theme::bold_font(24.0)).color(theme::TEXT()));
                         let v = env!("CARGO_PKG_VERSION");
                         let g = ui.painter().layout_no_wrap(v.to_string(), theme::bold_font(12.0), theme::MUTED());
                         let (pr, _) = ui.allocate_exact_size(g.size() + vec2(14.0, 8.0), Sense::hover());
@@ -1131,7 +1131,7 @@ impl IngleApp {
                 s.button_padding = vec2(14.0, 7.0);
                 match self.updater.status() {
                     Status::Available(m) => {
-                        if ui.add(theme::primary_button(&format!("Update to {}", m.version))).on_hover_text("Ingle restarts and puts you back where you were").clicked() {
+                        if ui.add(theme::primary_button(&format!("Update to {}", m.version))).on_hover_text("Pyr restarts and puts you back where you were").clicked() {
                             self.updater.download(m);
                         }
                     }
@@ -1148,8 +1148,8 @@ impl IngleApp {
                         if let Some((said, at)) = &self.ui.update_answer {
                             if at.elapsed() < std::time::Duration::from_secs(120) && !checking {
                                 let (text, color) = match said {
-                                    crate::update::Checked::UpToDate => ("You have the newest Ingle.".to_string(), theme::ONLINE()),
-                                    crate::update::Checked::Found(v) => (format!("Ingle {v} is out."), theme::EMBER2()),
+                                    crate::update::Checked::UpToDate => ("You have the newest Pyr.".to_string(), theme::ONLINE()),
+                                    crate::update::Checked::Found(v) => (format!("Pyr {v} is out."), theme::EMBER2()),
                                     crate::update::Checked::Failed(e) => (format!("Couldn't check: {e}"), theme::LIVE()),
                                 };
                                 ui.label(RichText::new(text).size(13.0).color(color));
@@ -1157,23 +1157,23 @@ impl IngleApp {
                         }
                     }
                 }
-                if ingle_engine::bugs::can_report() && ui.button("Report a bug").clicked() {
+                if pyr_engine::bugs::can_report() && ui.button("Report a bug").clicked() {
                     report = true;
                 }
             });
         });
-        if ingle_engine::bugs::can_report() {
+        if pyr_engine::bugs::can_report() {
             ui.add_space(14.0);
             toggle_row(
                 ui,
                 &mut draft.auto_reports,
                 "Send error reports automatically",
-                "When something goes wrong (a screen share or camera that won't start or stops working, or Ingle crashed or froze), Ingle sends \
+                "When something goes wrong (a screen share or camera that won't start or stops working, or Pyr crashed or froze), Pyr sends \
                  Firelit Games what happened and its log (never your messages), so it gets fixed.",
             );
         }
         divider(ui);
-        heading(ui, "What makes Ingle different");
+        heading(ui, "What makes Pyr different");
         let points = [
             ("End-to-end encrypted calls", "Voice, cameras and screen shares are encrypted on your PC with keys the server never sees (X25519 + ChaCha20-Poly1305, new keys whenever someone joins or leaves)."),
             ("No accounts", "Your identity is a key on this computer. No email, phone number or ID."),
@@ -1204,7 +1204,7 @@ impl IngleApp {
             "Emoji graphics: Twemoji by Twitter, Inc. and other contributors, licensed CC-BY 4.0. Emoji names: Emojibase (MIT). GIF search \
              powered by GIPHY and KLIPY. Voice isolation: DeepFilterNet (MIT/Apache-2.0) and RNNoise (BSD). Spellcheck: spellbook (MPL-2.0) \
              with dictionaries from SCOWL (MIT/BSD), RLA-ES (MPL-1.1) and Grammalecte (MPL-2.0). Reading sound files for the soundboard: \
-             Symphonia (MPL-2.0). Ingle's own soundboard sounds are synthesized by Ingle (no recordings).",
+             Symphonia (MPL-2.0). Pyr's own soundboard sounds are synthesized by Pyr (no recordings).",
         );
         report
     }
@@ -1225,7 +1225,7 @@ fn moving_pictures(ui: &mut egui::Ui, draft: &mut Settings) {
     ui.add_space(4.0);
     fine(
         ui,
-        "Either way they wait while Ingle's in the background, and clicking one opens it to play, pause or step through. Profile pictures \
+        "Either way they wait while Pyr's in the background, and clicking one opens it to play, pause or step through. Profile pictures \
          move while their person talks, and server icons when you point at them.",
     );
 }
@@ -1235,21 +1235,21 @@ fn windows_page(ui: &mut egui::Ui, draft: &mut Settings, acts: &mut Vec<Act>) {
     heading(ui, "Icon by the clock");
     note(
         ui,
-        "Closing the window keeps Ingle running by the clock, so you stay in voice and friends can still reach you. Click the campfire icon \
-         to open Ingle; right-click it to mute, leave voice or quit.",
+        "Closing the window keeps Pyr running by the clock, so you stay in voice and friends can still reach you. Click the campfire icon \
+         to open Pyr; right-click it to mute, leave voice or quit.",
     );
     ui.add_space(2.0);
     fine(ui, "Windows may tuck the icon under the ^ arrow. To keep it in view, drag it from there to the taskbar next to the clock.");
     if !crate::tray::is_active() {
         ui.add_space(4.0);
-        ui.label(RichText::new("Windows isn't showing the icon right now, so closing the window minimizes Ingle instead.").size(12.5).color(theme::LIVE()));
+        ui.label(RichText::new("Windows isn't showing the icon right now, so closing the window minimizes Pyr instead.").size(12.5).color(theme::LIVE()));
     }
     divider(ui);
     heading(ui, "When Windows starts");
     toggle_row(
         ui,
         &mut draft.start_with_windows,
-        "Open Ingle when Windows starts",
+        "Open Pyr when Windows starts",
         "Like Discord: you're online and friends can reach you as soon as your PC is on.",
     );
     ui.add_enabled_ui(draft.start_with_windows, |ui| {
@@ -1257,7 +1257,7 @@ fn windows_page(ui: &mut egui::Ui, draft: &mut Settings, acts: &mut Vec<Act>) {
     });
     divider(ui);
     ui.add_space(8.0);
-    if ui.add(theme::danger_button("Quit Ingle").min_size(vec2(120.0, 36.0))).clicked() {
+    if ui.add(theme::danger_button("Quit Pyr").min_size(vec2(120.0, 36.0))).clicked() {
         acts.push(Act::Quit);
     }
 }

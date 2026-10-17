@@ -1,7 +1,7 @@
 /target/
 /target-win/
 /target-musl/
-/ingle-data/
+/pyr-data/
 *.log
 /dist/
 # Signing keys never go in the repository.

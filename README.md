@@ -1,18 +1,19 @@
-# Ingle
+# Pyr
 
 **Voice channels, webcams, smooth 1080p60 screen sharing, a soundboard and Discord-style
 text chat for your group. A native Rust app with end-to-end encrypted calls, no accounts, and a server
-you own, on any VPS from any provider: Ingle sets it up for you in a few minutes.**
+you own, on any VPS from any provider: Pyr sets it up for you in a few minutes.**
 
-*Ingle* is an old Scots word for the fire in a hearth: the place people gather.
+*Pyr* is the ancient Greek word for fire (πῦρ, as in *pyre*): the campfire your group
+gathers around. Until 0.8.0 it was called Ingle.
 
-**Download: [firelitgames.com/ingle](https://firelitgames.com/ingle)** (Windows 10 and 11;
+**Download: [pyr.gg](https://pyr.gg)** (Windows 10 and 11;
 a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
 [Firelit Games](https://firelitgames.com/).
 
 ![Text channels: pictures, reactions, replies, mentions and roles](docs/screenshots/chat.png)
 
-| | Ingle | Discord (free) |
+| | Pyr | Discord (free) |
 |---|---|---|
 | Screen share | up to 1080p60 or 1440p30, free | 720p30 (1080p60/4K needs Nitro) |
 | Stream sound | stereo Opus 128 kbps, only to viewers (Windows for now) | yes |
@@ -49,7 +50,7 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
 - **Unread messages are marked everywhere**: channels (a dot and a bold name, red badges for
   mentions), voice channels' chats, servers, direct messages (who sent them, under the home
   button), a NEW line in the conversation, the window title, and on Windows the icon by the
-  clock and the taskbar button. What came while Ingle was closed shows as unread.
+  clock and the taskbar button. What came while Pyr was closed shows as unread.
 - Notification sounds, and muting for a server, a channel or a conversation.
 
 **Friends, direct messages and calls**
@@ -61,7 +62,7 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
 - **Call friends**, like Discord: the call and video buttons at the top of a direct message,
   or **Call** when you right-click someone's name. It rings them for 30 seconds, about as long
   as Discord does (with Accept and Decline, a Windows notice and a flashing taskbar button if
-  Ingle is hidden), then counts as missed; the call shows above
+  Pyr is hidden), then counts as missed; the call shows above
   your chat, and it's end-to-end encrypted like voice channels. Only the two of you see it;
   server moderators can't mute you in it, and blocking someone ends it.
 - **Group conversations and group calls** of up to 10 people: start one with the **+** by
@@ -81,7 +82,7 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
 - Voice activity or **push-to-talk** with a global key that still works in your game (mouse
   buttons 4/5 too), per-person volume, mute and deafen, and a mic test. Right-click your
   name for Mute and Deafen, as in Discord (deafening mutes you too).
-- **Soundboard**, like Discord's but better: Ingle's own sounds, each server's (up to 200,
+- **Soundboard**, like Discord's but better: Pyr's own sounds, each server's (up to 200,
   10 seconds each, trimmed and evened out in loudness as they're added), favorites, recently
   played, a sound when you join voice, and keys that play sounds even in a game. Every
   sound you can reach plays in any call; hover to hear one yourself first, and mute anyone's
@@ -92,14 +93,14 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   server. A moderator can't undo their own (only the owner can).
 - Calls stay connected while the server restarts or updates, and a microphone or speakers
   that drop out mid-call (a USB hiccup, a virtual device restarting) come back by themselves.
-  A camera or screen share that was on stays off until you turn it back on (Ingle offers to):
+  A camera or screen share that was on stays off until you turn it back on (Pyr offers to):
   what's on your screen may have changed meanwhile.
-- On Windows, Ingle marks its packets as voice for your network (Quality of Service), as
+- On Windows, Pyr marks its packets as voice for your network (Quality of Service), as
   Discord does.
 
 ![A voice channel: a camera (the test bot's pattern), a screen share and the call code](docs/screenshots/call.png)
 
-![The soundboard in a call: Ingle's own sounds (and the server's), with an emoji by whoever played one](docs/screenshots/soundboard.png)
+![The soundboard in a call: Pyr's own sounds (and the server's), with an emoji by whoever played one](docs/screenshots/soundboard.png)
 
 **Video and screen sharing**
 
@@ -113,7 +114,7 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
 - **Stream sound** (Windows): a whole-screen share sends everything your PC plays *except
   the call itself*, so viewers never hear themselves; a window share sends just that app's
   sound. If a program like Voicemeeter or SteelSeries Sonar plays your PC's sound again,
-  Ingle finds the call in it and takes it back out.
+  Pyr finds the call in it and takes it back out.
 - Grid or speaker view (the big tile follows whoever talks unless you pick one), full
   screen, a volume for each stream, and right-click to mute a person or a stream's sound.
 
@@ -132,7 +133,7 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   name in chat, the shield at the top of your messages with them, or the button in a call
   with them) and **compare words** (both of you see the same six, each with its picture,
   when nobody's in between; say them to each other in a call, on the phone or in person) or
-  **ask something only they'd know** (Ingle tells you both whether the answers match, and
+  **ask something only they'd know** (Pyr tells you both whether the answers match, and
   neither answer leaves your PC). If one of you says the words don't match, it doesn't count
   for either.
   A green shield then shows by their name everywhere. People you made sure of **vouch** for
@@ -143,7 +144,7 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
 
 **Your server**
 
-- **Create a server** from the app on any Linux VPS from any provider: Ingle sets up one you
+- **Create a server** from the app on any Linux VPS from any provider: Pyr sets up one you
   already have over SSH, or creates a small one in your own DigitalOcean account (about
   $4–6 a month, billed to you by DigitalOcean). You're never tied to one host: a backup
   moves your server to another provider, history and all.
@@ -152,102 +153,102 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   deafening in voice, roles, emoji and sounds, server settings and @everyone. Banning
   someone also turns off the invite link they joined with, so they can't walk back in
   through it as someone new (make a fresh link for everyone else).
-- **Backups**: the owner's Ingle copies the whole server to their PC every hour (messages,
+- **Backups**: the owner's Pyr copies the whole server to their PC every hour (messages,
   pictures and the server's identity), and a new server can be set up from a backup.
 - **Invite links that work anywhere**: Copy link gives a web link
-  (`https://firelitgames.com/ingle/#n=…&join=…`) you can paste in any chat app. Clicking it
-  opens Ingle, which asks before joining; someone who doesn't have Ingle yet gets it from the
-  same page first. Invite links clicked in Ingle's own chat ask right there, and the
-  `ingle://` link still works.
+  (`https://pyr.gg/#n=…&join=…`) you can paste in any chat app. Clicking it
+  opens Pyr, which asks before joining; someone who doesn't have Pyr yet gets it from the
+  same page first. Invite links clicked in Pyr's own chat ask right there, and the
+  `pyr://` link still works.
 
 **Plugins**
 
-- The **Ingle Library** (the puzzle piece in the server list) has programs and add-ons, each
-  built by Firelit Games from its source after someone read it. Ingle checks every file
+- The **Pyr Library** (the puzzle piece in the server list) has programs and add-ons, each
+  built by Firelit Games from its source after someone read it. Pyr checks every file
   against the library's signed list before installing it, and again before opening a program.
-- **Programs** open inside Ingle's window, on a page of their own (with a button in the
+- **Programs** open inside Pyr's window, on a page of their own (with a button in the
   server list while they run); **Pop out** puts one in a window of its own. The first is
   **Chimbrowser** (Windows): a lean, private browser that blocks ads and trackers, makes
   YouTube play smoothly, and has an AI sidebar for Claude, ChatGPT, Gemini and others.
-- **Add-ons** run inside Ingle in a sandbox (WebAssembly with nothing to reach: not your files,
+- **Add-ons** run inside Pyr in a sandbox (WebAssembly with nothing to reach: not your files,
   not the internet, not the rest of your PC). They add /commands to chat (with hints as you
   type), show a small panel and keep a little data. **Dice** rolls dice: `/roll 2d6+1`, or
   click a die in its panel.
-- **Skins** change how Ingle looks and sounds: its colors, a picture behind it, fonts and the
+- **Skins** change how Pyr looks and sounds: its colors, a picture behind it, fonts and the
   sounds for messages, people joining and calls. They have a place of their own, **Skins** (the
-  palette under Plugins): a Gallery of every skin in the Ingle Library with a big picture of
-  Ingle wearing each, the ones that are yours to wear (and Campfire, Ingle's own), and making
-  your own. Ingle made ten to start: Aurora, Neon Drive, Abyss, Sakura Night, Elven Grove,
+  palette under Plugins): a Gallery of every skin in the Pyr Library with a big picture of
+  Pyr wearing each, the ones that are yours to wear (and Campfire, Pyr's own), and making
+  your own. Pyr made ten to start: Aurora, Neon Drive, Abyss, Sakura Night, Elven Grove,
   Nebula, Terminal, Hallow's Eve, Obsidian & Gold and Stormcaller, next to Blood Moon. Skins
-  have no code, and Ingle checks every file (fonts included) before it uses one.
+  have no code, and Pyr checks every file (fonts included) before it uses one.
 - Every plugin and skin shows **who made it** (a skin someone sends in is listed under the
   name they gave it): click their name for everything they made. **Star** the ones you like,
   and sort by favorites, name, author or newest.
 - **Make your own with Claude**: Plugins → Make your own starts an add-on in a folder with the
-  plugin kit and a `CLAUDE.md` that explains Ingle add-ons to Claude. Say what it should do,
-  try the `.wasm` it builds right there in Ingle, then **send it for review**: Ingle sends its
+  plugin kit and a `CLAUDE.md` that explains Pyr add-ons to Claude. Say what it should do,
+  try the `.wasm` it builds right there in Pyr, then **send it for review**: Pyr sends its
   Rust source (never a built file), and nothing is built or listed until it's been looked at.
   The kit, a template and Dice are in [`plugins/`](plugins).
-- **The Claude connector** (`ingle-mcp`, installed with Ingle; Settings → Claude adds it to
+- **The Claude connector** (`pyr-mcp`, installed with Pyr; Settings → Claude adds it to
   the Claude app, or gives the line for Claude Code) lets Claude make skins and plugins with
-  you: it starts one, puts a skin on your Ingle as you talk it over, checks it the way the
+  you: it starts one, puts a skin on your Pyr as you talk it over, checks it the way the
   Library will, and sends it in for review, and new versions of yours later. What it sends is
-  signed with your Ingle identity, so only you can send a new version of what you sent, and
+  signed with your Pyr identity, so only you can send a new version of what you sent, and
   Make your own (on the Plugins or Skins page) shows whether yours were approved, with the
   reviewer's note. How to make a skin: [`skins/`](skins).
 
-![The Ingle Library: Chimbrowser and Dice](docs/screenshots/plugins.png)
+![The Pyr Library: Chimbrowser and Dice](docs/screenshots/plugins.png)
 
 **The app**
 
 - Updates itself: a glowing green **Update** button appears at the top of the window, by
-  Ingle's name and version (on Linux, at the bottom of the server list), when a new version
+  Pyr's name and version (on Linux, at the bottom of the server list), when a new version
   is out, and updating puts you back in the voice channel you were in. **Check for updates**
   (click the version, Settings → About, or the tray icon's menu, which also has **Update
-  Ingle** once there's one) looks right away instead of waiting.
+  Pyr** once there's one) looks right away instead of waiting.
 - On Windows it lives by the clock (closing the window keeps you in voice), and can start
   with Windows, straight into the tray.
 - **Idle**, like Discord: five minutes away from the keyboard and mouse (and quiet in calls)
   and you show with a yellow moon instead of the green dot, back to green the moment you
   return. Click your name at the bottom left to say you're idle yourself.
 - Error messages stay until you dismiss them and have a Copy button. **Report a bug**
-  (Settings → About, or Report on an error) sends Firelit Games what happened, your Ingle
+  (Settings → About, or Report on an error) sends Firelit Games what happened, your Pyr
   version and system, and the log if you tick it. No account needed, and a report that
   can't be sent stays in the window to send again.
 
 ## Install
 
-**Windows 10/11 (64-bit):** download **Ingle-Setup.exe** from
-[firelitgames.com/ingle](https://firelitgames.com/ingle) and run it. It installs for your
-account only (no admin rights), adds Ingle to the Start menu and the desktop, makes
-`ingle://` invite links open Ingle, and shows up in Settings → Apps for uninstalling. It
-can also add **Ingle Server** (to host on your own PC) and a **test bot** (to try calls on
+**Windows 10/11 (64-bit):** download **Pyr-Setup.exe** from
+[pyr.gg](https://pyr.gg) and run it. It installs for your
+account only (no admin rights), adds Pyr to the Start menu and the desktop, makes
+`pyr://` invite links open Pyr, and shows up in Settings → Apps for uninstalling. It
+can also add **Pyr Server** (to host on your own PC) and a **test bot** (to try calls on
 your own). The installer isn't code-signed yet, so Windows SmartScreen may say "Windows
 protected your PC": click **More info → Run anyway**. Uninstalling keeps your identity and
-settings in `%APPDATA%\Ingle`.
+settings in `%APPDATA%\Pyr`.
 
-After that, Ingle updates itself. It looks for a new version when it starts and every few
+After that, Pyr updates itself. It looks for a new version when it starts and every few
 hours; when there is one, a green **Update to …** button appears at the top of the window,
-next to Ingle's version (pointing at it says if you've missed several). Click it: Ingle
+next to Pyr's version (pointing at it says if you've missed several). Click it: Pyr
 downloads the update, checks it against Firelit Games' signature, installs it and opens
-again where you were. The signed release information has dates, and Ingle never takes one
+again where you were. The signed release information has dates, and Pyr never takes one
 past its date or older than one it has already seen, so a hacked website can't hide a newer
 release by serving an old one.
-Running a newer setup by hand also works: it closes a running Ingle by itself, even one in
+Running a newer setup by hand also works: it closes a running Pyr by itself, even one in
 the tray.
 
-While Ingle runs on Windows, its campfire icon sits by the clock (Windows may tuck it under
-the **^** arrow; drag it next to the clock to keep it in view). Click it to open Ingle;
-right-click it to mute, deafen, leave voice or **Quit Ingle**. Closing the window keeps
-Ingle running there, so you stay in voice and friends can still reach you. **Settings →
-Windows** chooses whether Ingle opens when Windows starts (on by default), and whether it
+While Pyr runs on Windows, its campfire icon sits by the clock (Windows may tuck it under
+the **^** arrow; drag it next to the clock to keep it in view). Click it to open Pyr;
+right-click it to mute, deafen, leave voice or **Quit Pyr**. Closing the window keeps
+Pyr running there, so you stay in voice and friends can still reach you. **Settings →
+Windows** chooses whether Pyr opens when Windows starts (on by default), and whether it
 starts as just the icon.
 
 **Linux (Ubuntu, Linux Mint, Pop!_OS, Debian and relatives, 64-bit):** download the `.deb`
 from the same page and open it with your software installer, or run
-`sudo apt install ./ingle_amd64.deb`. Ingle appears in the app menu, `ingle://` links open
-it, and you get the `ingle-server` and `ingle-bot` commands. Updates ask for your password
-("Ingle needs your password to install its update"); the package is checked again as root,
+`sudo apt install ./pyr_amd64.deb`. Pyr appears in the app menu, `pyr://` links open
+it, and you get the `pyr-server` and `pyr-bot` commands. Updates ask for your password
+("Pyr needs your password to install its update"); the package is checked again as root,
 where nothing else can change it, before it's installed. It works on Ubuntu 22.04 or
 newer, Linux Mint 21+, Pop!_OS 22.04+ and Debian 12+. Linux packages are built less often
 than the Windows app, so the Linux version can be a little behind. On Wayland desktops,
@@ -260,23 +261,23 @@ in the link).
 
 ## Quick start
 
-1. **Install Ingle** (above), and have your friends install it too.
+1. **Install Pyr** (above), and have your friends install it too.
 2. **Make a server.** Click **Create a server** (or the **+** on the left, then **Create my
    own**), name it, and pick one. Any VPS from any provider works, so you're never tied to
    one host:
    - **Use a server I already have**: any Linux VPS from any provider (Hetzner, Vultr,
      Linode, OVH, AWS, DigitalOcean...). Type its address and password (or key file) and
-     Ingle sets it up over SSH, or shows you the commands to do it yourself.
+     Pyr sets it up over SSH, or shows you the commands to do it yourself.
    - **Rent a server**: the quickest way if you don't have a VPS yet. You make your own
      DigitalOcean account, with your own card or PayPal, and an API token; the app walks
-     you through both. Ingle then uses the token to create a small server in your account
-     and set it up. DigitalOcean bills you directly, about $4–6 a month. Ingle doesn't
+     you through both. Pyr then uses the token to create a small server in your account
+     and set it up. DigitalOcean bills you directly, about $4–6 a month. Pyr doesn't
      charge anything.
 
    When it's done you're in your new server as its owner, and the app shows an invite link.
 3. **Invite friends.** Click **Copy invite link** and send it. Friends click **Join a
    server** (or **+**, then **Join with an invite link**) and paste it; clicking an
-   `ingle://` link works too. For more links later, click the **+** next to the server's
+   `pyr://` link works too. For more links later, click the **+** next to the server's
    name.
 4. **Talk.** Click a voice channel to join. The buttons under the call turn your mic and
    camera on and off, share your screen, deafen you and leave. Click **Watch Stream** on
@@ -293,18 +294,18 @@ internet on **UDP port 7766**, which is why a small VPS (a server you rent from 
 company) is the easy choice: a few dollars a month, and it doesn't depend on anyone's PC
 being on.
 
-**Use any VPS you like, from any provider: you're never tied to one host.** Ingle sets up
+**Use any VPS you like, from any provider: you're never tied to one host.** Pyr sets up
 any 64-bit Linux server, and a backup moves your server to another provider whenever you
-like, history and all ([below](#backups-and-moving-to-another-server)). Ingle doesn't rent
+like, history and all ([below](#backups-and-moving-to-another-server)). Pyr doesn't rent
 out servers, sell hosting or take payments, and it's free: you rent the VPS yourself, in
-your own account with whichever provider you choose, and they bill you directly. Ingle
+your own account with whichever provider you choose, and they bill you directly. Pyr
 only does the setup work.
 
 Two ways to set one up, both under **Create a server** in the app:
 
 - **Use a server I already have**: any VPS from any provider ([below](#using-any-vps-you-already-have)).
 - **Rent a server**: a shortcut if you don't have a VPS yet. With an API token from your
-  own DigitalOcean account, Ingle creates a small server there and sets it up in one go
+  own DigitalOcean account, Pyr creates a small server there and sets it up in one go
   ([below](#renting-one-from-digitalocean-the-shortcut)). DigitalOcean is just the provider
   this shortcut works with; every other provider works through **Use a server I already
   have**.
@@ -313,7 +314,7 @@ Two ways to set one up, both under **Create a server** in the app:
 
 Any 64-bit (x86-64 or ARM64) Linux server with systemd works: Ubuntu 22.04 or newer,
 Debian 11+, Fedora, Rocky, Alma and so on, from any provider (Hetzner, Vultr, Linode,
-OVH, AWS, Oracle Cloud's free tier...). In Ingle choose **Create a server → Use a server
+OVH, AWS, Oracle Cloud's free tier...). In Pyr choose **Create a server → Use a server
 I already have**, then type:
 
 - **Server address**: its IP address or domain name.
@@ -323,18 +324,18 @@ I already have**, then type:
   passphrase. PuTTY `.ppk` keys need exporting first (PuTTYgen: *Conversions → Export
   OpenSSH key*).
 
-Ingle logs in once and doesn't save the password.
+Pyr logs in once and doesn't save the password.
 
-**Checking it's your server.** The first time Ingle connects to a server, it stops before
+**Checking it's your server.** The first time Pyr connects to a server, it stops before
 sending your password or key and shows the server's SSH identity (like
 `SHA256:7YG79cG6…`). Check it's your server's: your provider's control panel or console
 may show it, or on the server itself run `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`.
-If it's different, someone may be in the way: don't go on. After that Ingle remembers it
+If it's different, someone may be in the way: don't go on. After that Pyr remembers it
 and refuses to log in if it ever changes. If your PC's own SSH already knows the server
-(it's in your `known_hosts`), there's nothing to check. Servers Ingle rents get their
-identity from Ingle, so they're never in question.
+(it's in your `known_hosts`), there's nothing to check. Servers Pyr rents get their
+identity from Pyr, so they're never in question.
 
-**Firewalls.** Ingle opens UDP 7766 in the server's own firewall (ufw, firewalld or plain
+**Firewalls.** Pyr opens UDP 7766 in the server's own firewall (ufw, firewalld or plain
 iptables, including Oracle Cloud's), but some providers also put a firewall in front of
 the server that only their website can change. If the app says it can't reach the server,
 add an inbound rule there for **UDP port 7766 from anywhere (0.0.0.0/0)**, then click
@@ -353,11 +354,11 @@ SSH (TCP port 22) must be allowed too for the setup itself.
 
 ### Renting one from DigitalOcean (the shortcut)
 
-![Renting a server in your own DigitalOcean account, in Ingle: pick a size and a place](docs/screenshots/rent-a-server.png)
+![Renting a server in your own DigitalOcean account, in Pyr: pick a size and a place](docs/screenshots/rent-a-server.png)
 
 DigitalOcean was picked for being cheap, very reliable and simple to sign up for. The
 account is yours, made with your own card or PayPal, and **DigitalOcean bills you
-directly**; Ingle never sees your payment details. Prices when this was written (October
+directly**; Pyr never sees your payment details. Prices when this was written (October
 2026): $4/month (512 MB memory, 500 GB of traffic) or $6/month (1 GB, 1 TB, recommended),
 billed by DigitalOcean only for the time the server exists. The app shows the current
 prices from your account before anything is created.
@@ -365,114 +366,114 @@ prices from your account before anything is created.
 1. Make your own account at [digitalocean.com](https://cloud.digitalocean.com/registrations/new)
    (card or PayPal).
 2. Open the **API** page in DigitalOcean's control panel (the app has a button for it),
-   click **Generate New Token**, name it `Ingle` and pick the shortest expiration (Ingle only
+   click **Generate New Token**, name it `Pyr` and pick the shortest expiration (Pyr only
    needs it while it sets the server up). Choose **Custom Scopes** and tick *droplet*
    (create, read, delete), *ssh_key* (create, read), *regions* (read), *sizes* (read) and
    *account* (read), then click **Generate Token** and copy it (it starts with `dop_v1_`).
-3. In Ingle: **Create a server → Rent a server**, paste the token, pick a size and the
+3. In Pyr: **Create a server → Rent a server**, paste the token, pick a size and the
    place nearest you and your friends, and click **Create my server**.
 
-Ingle then uses the token to add its SSH key to your account (as "Ingle"), create an Ubuntu
-24.04 server in your account named `ingle-<your server name>`, wait for it to start,
-install Ingle Server on it and check that it can be reached. That takes a couple of
+Pyr then uses the token to add its SSH key to your account (as "Pyr"), create an Ubuntu
+24.04 server in your account named `pyr-<your server name>`, wait for it to start,
+install Pyr Server on it and check that it can be reached. That takes a couple of
 minutes. **The token isn't saved**; you can delete it on the API page afterwards. To stop
 paying, delete the server ("droplet") in DigitalOcean's control panel under **Droplets**.
 If the setup fails after the server was created, the app offers to try again or to delete
 it.
 
-Ingle's SSH key is `ssh/ingle_ed25519` in your Ingle settings folder
-(`%APPDATA%\Ingle\config` on Windows, `~/.config/ingle` on Linux), so you can log in
+Pyr's SSH key is `ssh/pyr_ed25519` in your Pyr settings folder
+(`%APPDATA%\Pyr\config` on Windows, `~/.config/pyr` on Linux), so you can log in
 yourself: `ssh -i <that file> root@<server address>`. The app also notes the servers it set
 up in `hosted-servers.json` there.
 
 ### Backups, and moving to another server
 
-The owner's Ingle backs up their server to their PC every hour: the database (channels,
+The owner's Pyr backs up their server to their PC every hour: the database (channels,
 messages, roles, emoji), every picture, and the server's own identity. They go to
-`Documents\Ingle Server Backups` unless you choose another folder in **Server settings →
+`Documents\Pyr Server Backups` unless you choose another folder in **Server settings →
 Backups**, which also shows the last backup and has **Back up now** (a OneDrive, Dropbox or
 Google Drive folder keeps a copy online too). A backup includes direct messages: keep the
-folder to yourself. The server's private key in it is locked to your Ingle identity, so
-someone who gets hold of the folder can't pass for your server, and only your Ingle (or a
+folder to yourself. The server's private key in it is locked to your Pyr identity, so
+someone who gets hold of the folder can't pass for your server, and only your Pyr (or a
 copy of your `identity.key`, see [Your data](#your-data)) can bring the server back as
 itself. Keep a copy of `identity.key` somewhere safe and separate, a USB stick say, not in
 the same online folder.
 
 To bring a server back (on a new VPS, or after deleting the old one), click **Restore from
 a backup...** when you create a server and pick the backup. The new server comes back as
-the same server, with all its history. (A backup made by an older Ingle has the key as it
+the same server, with all its history. (A backup made by an older Pyr has the key as it
 is, and restores the same way.) If its address changed, send everyone a new invite
-link: clicking it points their Ingle at the new address, and they're back as themselves,
+link: clicking it points their Pyr at the new address, and they're back as themselves,
 with their roles.
 
 ### Updating your server
 
 New versions of the app work with older servers (features that need a newer server appear
 once it's updated). To update a server, run the setup again: **Create a server → Use a
-server I already have** with the same address (for a server Ingle set up at DigitalOcean,
-log in as `root` with Ingle's key file, above). It updates the program and keeps the
+server I already have** with the same address (for a server Pyr set up at DigitalOcean,
+log in as `root` with Pyr's key file, above). It updates the program and keeps the
 server, its messages and its links.
 
 ### Setting it up by hand
 
 **Create a server → Use a server I already have → Set it up by hand instead** saves the
-server program and the setup script (`install-ingle-server.sh`) into a folder and shows
+server program and the setup script (`install-pyr-server.sh`) into a folder and shows
 the commands with your server's address filled in. In short:
 
 ```
-scp ingle-server-linux-x86_64 install-ingle-server.sh root@SERVER:/tmp/
-ssh -t root@SERVER sh /tmp/install-ingle-server.sh --binary /tmp/ingle-server-linux-x86_64 --public-host SERVER
+scp pyr-server-linux-x86_64 install-pyr-server.sh root@SERVER:/tmp/
+ssh -t root@SERVER sh /tmp/install-pyr-server.sh --binary /tmp/pyr-server-linux-x86_64 --public-host SERVER
 ```
 
-(Use `ingle-server-linux-aarch64` on ARM servers.) The script prints your **owner link**
+(Use `pyr-server-linux-aarch64` on ARM servers.) The script prints your **owner link**
 (use it first, in **Join a server**: it works once and makes you the owner) and an invite
 link for friends. Options: `--public-host` (address for the links; detected if left out),
 `--name` (name of a new server), `--port` (default 7766).
 
 ### What the setup does on the server
 
-- installs the program as `/usr/local/bin/ingle-server`,
-- creates an `ingle-server` system user and keeps the data in `/var/lib/ingle-server`,
-- adds a systemd service, `ingle-server`, that starts by itself and restarts if it stops,
+- installs the program as `/usr/local/bin/pyr-server`,
+- creates an `pyr-server` system user and keeps the data in `/var/lib/pyr-server`,
+- adds a systemd service, `pyr-server`, that starts by itself and restarts if it stops,
 - opens UDP 7766 in ufw/firewalld/iptables if one of them is active.
 
 Useful commands on the server:
 
 ```
-systemctl status ingle-server                       # is it running?
-journalctl -u ingle-server -n 50                     # its log
-sudo -u ingle-server ingle-server --data /var/lib/ingle-server invite --uses 5 --hours 24
-sudo -u ingle-server ingle-server --data /var/lib/ingle-server owner-invite   # a new owner link
+systemctl status pyr-server                       # is it running?
+journalctl -u pyr-server -n 50                     # its log
+sudo -u pyr-server pyr-server --data /var/lib/pyr-server invite --uses 5 --hours 24
+sudo -u pyr-server pyr-server --data /var/lib/pyr-server owner-invite   # a new owner link
 ```
 
 ### Hosting on your own PC instead
 
 Free, but your PC has to stay on for friends to use the server, and friends outside your
-home need your router to forward a port. On Windows, open **Ingle Server** from the Start
-menu (or double-click `ingle-server.exe`); on Linux run `ingle-server`. Allow it through
+home need your router to forward a port. On Windows, open **Pyr Server** from the Start
+menu (or double-click `pyr-server.exe`); on Linux run `pyr-server`. Allow it through
 the firewall when asked. It prints two links:
 
 - **YOUR OWNER LINK**: use it yourself, once, in **Join a server**, to become the owner.
 - **Invite link for friends**: give this to people you want to invite.
 
-The server keeps everything in a data folder: `%APPDATA%\Ingle\server` when started from
-the Start menu, otherwise `ingle-data` next to where it runs (or `--data <folder>`). Keep
+The server keeps everything in a data folder: `%APPDATA%\Pyr\server` when started from
+the Start menu, otherwise `pyr-data` next to where it runs (or `--data <folder>`). Keep
 that folder: it holds the chat history and the server's TLS key, and invite links pin
 that key's fingerprint. Need another link later? Click the **+** next to the server's name
-in the app, or run `ingle-server.exe invite` (options: `--uses 5`, `--hours 24`). Lost the
-owner link? `ingle-server.exe owner-invite`.
+in the app, or run `pyr-server.exe invite` (options: `--uses 5`, `--hours 24`). Lost the
+owner link? `pyr-server.exe owner-invite`.
 
 To run it as a background service on a Linux desktop or home server (the `.deb` includes
 one):
 
 ```
-sudo nano /etc/default/ingle-server          # INGLE_SERVER_ARGS="--public-host your.domain"
-sudo systemctl enable --now ingle-server
-sudo journalctl -u ingle-server               # your owner link and invite link
+sudo nano /etc/default/pyr-server          # PYR_SERVER_ARGS="--public-host your.domain"
+sudo systemctl enable --now pyr-server
+sudo journalctl -u pyr-server               # your owner link and invite link
 ```
 
-Its data lives in `/var/lib/ingle-server` and survives removing the package (`apt purge
-ingle` deletes it).
+Its data lives in `/var/lib/pyr-server` and survives removing the package (`apt purge
+pyr` deletes it).
 
 #### Friends outside your home network
 
@@ -486,7 +487,7 @@ The links printed at first use your local network address. For friends elsewhere
    Windows, in a Command Prompt:
 
    ```
-   "%LOCALAPPDATA%\Programs\Ingle\ingle-server.exe" --data "%APPDATA%\Ingle\server" --public-host 203.0.113.7
+   "%LOCALAPPDATA%\Programs\Pyr\pyr-server.exe" --data "%APPDATA%\Pyr\server" --public-host 203.0.113.7
    ```
 
    It now prints links with that address. `--public-host ""` goes back to the local one.
@@ -497,19 +498,19 @@ Other options: `--bind 0.0.0.0:7766` (address and port to listen on), `--data <f
 ### Trying it alone
 
 Join your server, then add a pretend participant (on Windows, tick *Test bot* in the
-installer; it lands next to `ingle.exe`):
+installer; it lands next to `pyr.exe`):
 
 ```
-ingle-bot --join "<invite link>" --name Mara --voice Lounge --camera --screen
+pyr-bot --join "<invite link>" --name Mara --voice Lounge --camera --screen
 ```
 
-On Windows that's `"%LOCALAPPDATA%\Programs\Ingle\ingle-bot.exe" --join ...` from a
+On Windows that's `"%LOCALAPPDATA%\Programs\Pyr\pyr-bot.exe" --join ...` from a
 Command Prompt.
 
 Mara joins Lounge, "talks" with a tone, turns on a test-pattern camera and goes live with
 a test pattern and a quiet chord. Add `--no-sound` for a silent stream, `--say "hi"` to
 post a message, `--watch` to have the bot watch other people's streams. You can also run a
-second copy of the app as a different person: `ingle.exe --profile alt`.
+second copy of the app as a different person: `pyr.exe --profile alt`.
 
 ## Settings worth knowing
 
@@ -528,14 +529,14 @@ Open them with the gear next to your name:
   screen-share quality.
 - **Notifications**: sounds and their volume (with Test), whether deleting a message asks
   first, and what you've muted.
-- **Windows** (on Windows): the icon by the clock, starting with Windows, and **Quit Ingle**.
-- **Appearance**: the skin Ingle wears (Campfire, Ingle's own, or one from the Library), and
+- **Windows** (on Windows): the icon by the clock, starting with Windows, and **Quit Pyr**.
+- **Appearance**: the skin Pyr wears (Campfire, Pyr's own, or one from the Library), and
   trying one you're making in a folder.
 - **Claude**: sets up the Claude connector in the Claude app (or gives the line for Claude
   Code), for making skins and plugins with Claude.
 - **About**: the version, **Report a bug**, whether error reports go by themselves (on unless
-  you switch them off: when screen sharing or the camera won't start or stops working, or Ingle
-  crashed or froze last time, Ingle sends what happened and its log, never your messages), and
+  you switch them off: when screen sharing or the camera won't start or stops working, or Pyr
+  crashed or froze last time, Pyr sends what happened and its log, never your messages), and
   credits.
 
 Right-click a person for their volume and options; right-click a stream for its volume
@@ -543,7 +544,7 @@ and to mute its sound.
 
 ### Your data
 
-- Your identity is `identity.key` in `%APPDATA%\Ingle\config` (`~/.config/ingle` on Linux).
+- Your identity is `identity.key` in `%APPDATA%\Pyr\config` (`~/.config/pyr` on Linux).
   It is your account: back it up, and don't share it. Copying it to another PC moves your
   identity. If you own a server, it's also what unlocks the server's identity in its backups.
 - A bug report's log has DigitalOcean tokens, GIF search keys and the codes in invite links
@@ -552,20 +553,20 @@ and to mute its sound.
 
 ## Troubleshooting
 
-- **Closed Ingle and can't find it / it's still running**: closing the window keeps Ingle
+- **Closed Pyr and can't find it / it's still running**: closing the window keeps Pyr
   running by the clock (look under the **^** arrow). Click the campfire icon to open it, or
-  right-click it and choose **Quit Ingle** (also in **Settings → Windows**).
+  right-click it and choose **Quit Pyr** (also in **Settings → Windows**).
 - **"mfplat.dll was not found"**: Windows "N" editions ship without Media Foundation.
   Install the *Media Feature Pack* from Windows Settings → Apps → Optional features.
 - **Blank or broken window**: the app draws with DirectX 12/Vulkan (wgpu) and falls back to
-  OpenGL by itself. To force OpenGL: `ingle.exe --renderer glow`.
+  OpenGL by itself. To force OpenGL: `pyr.exe --renderer glow`.
 - **Stream has no sound / "Sharing without sound"**: capturing app audio needs Windows 10
   build 20348 or newer (Windows 11 is fine). Otherwise the stream works without sound.
 - **Friends can't connect**: for a VPS, see [Firewalls](#using-any-vps-you-already-have)
   (UDP 7766 must be allowed in the provider's firewall) and check
-  `systemctl status ingle-server` on the server. For a server on your PC: check the
+  `systemctl status pyr-server` on the server. For a server on your PC: check the
   server window says it's listening, the router forwards **UDP** 7766, Windows Firewall
-  allows `ingle-server.exe`, and the link has your public address (`--public-host`).
+  allows `pyr-server.exe`, and the link has your public address (`--public-host`).
 - **Setting up a server fails**: the setup dialog's **Details** show what the server
   said. Running the setup again is always safe. "doesn't accept the password": many
   providers turn off password logins for root; use your key file, or the user and password
@@ -574,7 +575,7 @@ and to mute its sound.
   right in the GIF picker) with a free API key from
   [developers.giphy.com](https://developers.giphy.com), a free KLIPY app key from
   [partner.klipy.com](https://partner.klipy.com), or both. (A KLIPY test key allows 100
-  searches an hour; ask KLIPY for production access in its partner panel.) Everyone's Ingle
+  searches an hour; ask KLIPY for production access in its partner panel.) Everyone's Pyr
   on the server gets the key, since GIPHY and KLIPY want each search to come straight from
   the app rather than through a server: use keys made just for that server, and if one is
   ever misused, make a new one and change it in Server settings.
@@ -583,22 +584,22 @@ and to mute its sound.
   a USB hiccup) are reopened by themselves within a second or two; if it takes longer, the
   call screen says so. If it still happens, the log says whether a device stopped or
   someone's sound didn't decrypt: send a bug report with the log.
-- **People hear themselves when you share your screen with sound**: Ingle takes the call
+- **People hear themselves when you share your screen with sound**: Pyr takes the call
   back out of your stream's sound by itself, within a few seconds of people talking (it's
   there when a program like Voicemeeter or SteelSeries Sonar plays your PC's sound again).
   If someone still hears themselves, share a single window instead of the whole screen, or
-  set Ingle's speakers to your headset itself rather than the program's virtual device.
+  set Pyr's speakers to your headset itself rather than the program's virtual device.
 - **The taskbar or Start menu shows an old icon**: Windows keeps the icons it has shown by
-  file name. The installer points Ingle's shortcuts and taskbar pins at a copy of the icon
+  file name. The installer points Pyr's shortcuts and taskbar pins at a copy of the icon
   named after the icon itself, so a new icon shows as soon as it's installed. If a pin
-  still shows the old one, unpin Ingle and pin it again.
-- **Logs**: the app writes `ingle.log` next to your config in `%APPDATA%\Ingle\config`
-  (started fresh each launch, with the run before kept as `ingle.previous.log`; set
+  still shows the old one, unpin Pyr and pin it again.
+- **Logs**: the app writes `pyr.log` next to your config in `%APPDATA%\Pyr\config`
+  (started fresh each launch, with the run before kept as `pyr.previous.log`; set
   `RUST_LOG=debug` for more detail). If the app crashes it says so in a message box and
   records the reason there. If its window ever stops responding, the log records what the
-  window was doing, which of Ingle's threads were busy and how loaded the PC was. Bug reports
+  window was doing, which of Pyr's threads were busy and how loaded the PC was. Bug reports
   include both logs if you tick the box. The server logs to its console (or
-  `journalctl -u ingle-server`).
+  `journalctl -u pyr-server`).
 
 ## Building from source
 
@@ -610,17 +611,17 @@ faster. On Linux: `cmake`, `clang` (bindgen needs libclang), `libasound2-dev` an
 `libx11-dev`.
 
 ```
-cargo build --release                  # target/release/ingle(.exe), ingle-server(.exe), ingle-mcp(.exe)
-cargo build --release -p ingle-engine --example bot
-scripts/build-vps-server.sh            # dist/vps/ingle-server-linux-{x86_64,aarch64} (static)
+cargo build --release                  # target/release/pyr(.exe), pyr-server(.exe), pyr-mcp(.exe)
+cargo build --release -p pyr-engine --example bot
+scripts/build-vps-server.sh            # dist/vps/pyr-server-linux-{x86_64,aarch64} (static)
 cargo test --workspace                 # unit tests + end-to-end tests over real QUIC
-installer/linux/build-deb.sh           # dist/ingle_<version>_amd64.deb (needs dpkg-dev)
-installer/windows/build.sh             # dist/Ingle-Setup-<version>.exe (needs NSIS)
+installer/linux/build-deb.sh           # dist/pyr_<version>_amd64.deb (needs dpkg-dev)
+installer/windows/build.sh             # dist/Pyr-Setup-<version>.exe (needs NSIS)
 ```
 
 Plugins (see [plugins/README.md](plugins/README.md)): in `plugins/`, `cargo build --release
---target wasm32-unknown-unknown -p ingle-dice` builds the Dice add-on (once: `rustup target
-add wasm32-unknown-unknown`), and `scripts/make-library.sh` signs the Ingle Library's list
+--target wasm32-unknown-unknown -p pyr-dice` builds the Dice add-on (once: `rustup target
+add wasm32-unknown-unknown`), and `scripts/make-library.sh` signs the Pyr Library's list
 from `installer/site/library/plugins.json`.
 
 The icons and installer artwork are drawn by `tools/make-icons.py` (needs Pillow). Build the
@@ -633,19 +634,19 @@ The released Windows `.exe` files are cross-compiled from Linux with MinGW
 natively with MSVC should work but hasn't been tried yet. Releases are signed with
 `scripts/make-release.sh`; the app only installs updates signed with Firelit Games' key.
 A signed `latest.json` counts for 180 days; with no release in that time, sign it again
-(`cargo run -p ingle-proto --example release -- refresh --key KEY --in latest.json`) and
+(`cargo run -p pyr-proto --example release -- refresh --key KEY --in latest.json`) and
 put it on the website.
 
 Layout:
 
 ```
 crates/proto    wire protocol, identities, E2EE primitives, invite links, QUIC helpers
-crates/server   ingle-server: SQLite storage, auth, chat, roles, files, SFU media relay
+crates/server   pyr-server: SQLite storage, auth, chat, roles, files, SFU media relay
 crates/engine   client engine: networking, E2EE, audio + video pipelines (no UI)
 crates/host     server setup: renting from DigitalOcean, installing over SSH, reachability
-crates/app      ingle: the egui desktop app
-crates/mcp      ingle-mcp: the Claude connector (an MCP server on stdin and stdout)
-plugins         the plugin kit (ingle-plugin), a template for new add-ons, and Dice
+crates/app      pyr: the egui desktop app
+crates/mcp      pyr-mcp: the Claude connector (an MCP server on stdin and stdout)
+plugins         the plugin kit (pyr-plugin), a template for new add-ons, and Dice
 skins           how to make a skin: the format, the colors and the checks
 ```
 
@@ -654,7 +655,7 @@ for the research behind it.
 
 ## How it's tested
 
-Ingle is used on real Windows 10 and 11 PCs, and every release is also tested in a Linux
+Pyr is used on real Windows 10 and 11 PCs, and every release is also tested in a Linux
 sandbox before it ships: about 200 automated tests, including end-to-end runs with a real
 server and several clients over QUIC (chat, invites, end-to-end encrypted voice in both
 directions, webcam pixels, 1080p screen sharing, stream sound reaching only viewers, late
@@ -688,7 +689,7 @@ encoding yet), no simulcast, no mobile or web client. The roadmap is in
 
 ## License
 
-`Cargo.toml` marks Ingle's own code as MIT OR Apache-2.0 (Firelit Games, LLC). Third-party
+`Cargo.toml` marks Pyr's own code as MIT OR Apache-2.0 (Firelit Games, LLC). Third-party
 parts: Inter font (SIL OFL 1.1, `crates/app/assets/fonts/OFL.txt`), Twemoji graphics (by
 Twitter, Inc. and other contributors, CC-BY 4.0), Emojibase emoji names (MIT), libopus
 (BSD), OpenH264 (BSD, compiled from source; see the H.264 note in the
@@ -697,5 +698,5 @@ control and noise suppressor (via `sonora`, BSD), RNNoise (BSD), DeepFilterNet3 
 model (MIT OR Apache-2.0, run with tract, MIT OR Apache-2.0), spellbook (MPL-2.0) and the
 spellcheck dictionaries (SCOWL, MIT AND BSD; RLA-ES, used under MPL-1.1; Grammalecte,
 MPL-2.0; see `crates/app/assets/dict/README.md`), Symphonia for reading sound files
-(MPL-2.0). GIF search is powered by GIPHY and KLIPY. Ingle's own soundboard sounds are made
+(MPL-2.0). GIF search is powered by GIPHY and KLIPY. Pyr's own soundboard sounds are made
 by the app itself.

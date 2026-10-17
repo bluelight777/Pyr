@@ -6,10 +6,10 @@
 use std::time::Duration;
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, Rect, RichText, Sense, Stroke, pos2, vec2};
-use ingle_engine::state::{AppState, IncomingCall, RingState, ServerView};
-use ingle_proto::control::{ChannelId, DM_CALLS_FEATURE, GROUPS_FEATURE, Group, MAX_GROUP};
+use pyr_engine::state::{AppState, IncomingCall, RingState, ServerView};
+use pyr_proto::control::{ChannelId, DM_CALLS_FEATURE, GROUPS_FEATURE, Group, MAX_GROUP};
 
-use crate::app::{Act, Dialog, IngleApp, avatar};
+use crate::app::{Act, Dialog, PyrApp, avatar};
 use crate::dialogs::{field_label, input, title};
 use crate::{icons, theme};
 
@@ -39,7 +39,7 @@ pub(crate) fn in_call_with(st: &AppState, uid: &str) -> bool {
 }
 
 /// A group's picture: two of its people, one over the other's corner (or the group icon).
-pub(crate) fn group_picture(app: &mut IngleApp, p: &egui::Painter, ctx: &egui::Context, s: &ServerView, g: &Group, me: &str, center: egui::Pos2, radius: f32, bg: Color32) {
+pub(crate) fn group_picture(app: &mut PyrApp, p: &egui::Painter, ctx: &egui::Context, s: &ServerView, g: &Group, me: &str, center: egui::Pos2, radius: f32, bg: Color32) {
     let others: Vec<&String> = g.members.iter().filter(|m| *m != me).take(2).collect();
     match others.as_slice() {
         [a, b] => {
@@ -98,8 +98,8 @@ fn lerp(a: Color32, b: Color32, t: f32) -> Color32 {
     Color32::from_rgba_premultiplied(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()), m(a.a(), b.a()))
 }
 
-impl IngleApp {
-    /// A call ringing here: a card at the top of the window, wherever you are in Ingle, with
+impl PyrApp {
+    /// A call ringing here: a card at the top of the window, wherever you are in Pyr, with
     /// Decline and Accept (and, for a video call, Accept with your camera on).
     pub(crate) fn incoming_call_card(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
         // The newest one (more than one at once is rare).
@@ -129,7 +129,7 @@ impl IngleApp {
                     self.incoming_call_body(ui, st, s, &c, &name, face, acts);
                 });
         });
-        // (A program open inside Ingle keeps clear of it.)
+        // (A program open inside Pyr keeps clear of it.)
         self.ui.overlay_rects.push(card.response.rect);
         ctx.request_repaint_after(Duration::from_millis(33));
     }
@@ -290,7 +290,7 @@ impl IngleApp {
     }
 }
 
-impl IngleApp {
+impl PyrApp {
     /// Pick people: for a new group (`channel` none), to add to a group, or to make a group
     /// with the other person in a direct message (moving its call there, if you're in it).
     #[allow(clippy::too_many_arguments)]
@@ -350,7 +350,7 @@ impl IngleApp {
             .filter(|(_, n, _)| q.is_empty() || n.to_lowercase().contains(&q))
             .collect();
         // Friends first, then who's online, then by name.
-        people.sort_by_key(|(u, n, on)| (st.relation(u) != Some(ingle_proto::control::RelationKind::Friend), !on.here(), n.to_lowercase()));
+        people.sort_by_key(|(u, n, on)| (st.relation(u) != Some(pyr_proto::control::RelationKind::Friend), !on.here(), n.to_lowercase()));
         let left = room.saturating_sub(picked.len());
         ui.label(RichText::new(if left == 0 { "That's as many as a group can have.".to_string() } else { format!("You can add {left} more.") }).size(12.0).color(theme::DIM()));
         ui.add_space(4.0);
@@ -614,8 +614,8 @@ pub(crate) fn can_group(s: &ServerView) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ingle_engine::state::ConnStatus;
-    use ingle_proto::control::{Dm, Member};
+    use pyr_engine::state::ConnStatus;
+    use pyr_proto::control::{Dm, Member};
 
     fn server(key: &str, calls: bool, members: &[&str], dm_with: Option<&str>) -> ServerView {
         let mut s = ServerView::new(key.into(), key.into(), "127.0.0.1:1".into());

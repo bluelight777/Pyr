@@ -1,7 +1,7 @@
-//! Measures how well a screen share's sound has Ingle's own sound (the call) taken out of it
+//! Measures how well a screen share's sound has Pyr's own sound (the call) taken out of it
 //! (`audio::stream_echo`), and that the game or music sound is left alone.
 //!
-//!   cargo run --release -p ingle-engine --example stream_echo_eval -- <dir> [out dir]
+//!   cargo run --release -p pyr-engine --example stream_echo_eval -- <dir> [out dir]
 //!
 //! `<dir>` holds `voice.f32` (the call: 48 kHz mono, raw little-endian f32) and `game.f32`
 //! (the shared sound: 48 kHz stereo interleaved). Each scene builds what a screen share would
@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use ingle_engine::audio::stream_echo::{FRAME, StreamEcho};
+use pyr_engine::audio::stream_echo::{FRAME, StreamEcho};
 
 fn read_f32(p: &Path) -> Vec<f32> {
     let b = std::fs::read(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
@@ -71,7 +71,7 @@ fn main() {
         .collect();
 
     let scenes = [
-        Leak { name: "no leak (Windows leaves Ingle out)", delay_ms: 0, gain: 0.0, shape: |x| x, lowpass: 0.0 },
+        Leak { name: "no leak (Windows leaves Pyr out)", delay_ms: 0, gain: 0.0, shape: |x| x, lowpass: 0.0 },
         Leak { name: "Voicemeeter-like: 40 ms, as is", delay_ms: 40, gain: 0.9, shape: |x| x, lowpass: 0.0 },
         Leak { name: "Sonar-like: 70 ms, louder, equalized", delay_ms: 70, gain: 1.4, shape: |x| x, lowpass: 0.35 },
         Leak { name: "with a compressor: 55 ms, squashed", delay_ms: 55, gain: 1.0, shape: |x| (2.5 * x).tanh() / 2.5, lowpass: 0.0 },

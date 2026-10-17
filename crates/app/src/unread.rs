@@ -1,7 +1,7 @@
-//! What's unread across all of Ingle, for the places outside the window that show it: the icon
+//! What's unread across all of Pyr, for the places outside the window that show it: the icon
 //! by the clock, the taskbar button and the window's title.
 
-use ingle_engine::state::AppState;
+use pyr_engine::state::AppState;
 
 /// Unread conversations, everywhere.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -81,8 +81,8 @@ impl Unread {
         s
     }
 
-    /// The window's title (on the taskbar button and in Alt+Tab): "(2) Ingle" for two
-    /// mentions or direct messages, "• Ingle" for other unread messages.
+    /// The window's title (on the taskbar button and in Alt+Tab): "(2) Pyr" for two
+    /// mentions or direct messages, "• Pyr" for other unread messages.
     pub fn title(&self, app: &str) -> String {
         if self.pings > 0 {
             format!("({}) {app}", self.pings.min(999))
@@ -133,8 +133,8 @@ pub fn paint_dot(px: &mut [u8], w: usize, h: usize, (cx, cy): (f32, f32), r: f32
 
 #[cfg(test)]
 mod tests {
-    use ingle_engine::state::{AppState, ServerView};
-    use ingle_proto::control::{Channel, ChannelKind, Dm};
+    use pyr_engine::state::{AppState, ServerView};
+    use pyr_proto::control::{Channel, ChannelKind, Dm};
 
     use super::*;
 
@@ -155,8 +155,8 @@ mod tests {
     fn nothing_unread() {
         let u = Unread::of(&state());
         assert!(!u.any());
-        assert_eq!(u.title("Ingle"), "Ingle");
-        assert_eq!(u.tooltip("Ingle"), "Ingle");
+        assert_eq!(u.title("Pyr"), "Pyr");
+        assert_eq!(u.tooltip("Pyr"), "Pyr");
     }
 
     #[test]
@@ -171,8 +171,8 @@ mod tests {
         let kain = st.servers[0].member_name("kain");
         assert_eq!(u.places, [kain.as_str(), "#general", "#off-topic"]);
         assert_eq!(u.pings, 3);
-        assert_eq!(u.title("Ingle"), "(3) Ingle");
-        assert_eq!(u.tooltip("Ingle"), format!("Ingle\nUnread: {kain}, #general, #off-topic"));
+        assert_eq!(u.title("Pyr"), "(3) Pyr");
+        assert_eq!(u.tooltip("Pyr"), format!("Pyr\nUnread: {kain}, #general, #off-topic"));
     }
 
     #[test]
@@ -180,7 +180,7 @@ mod tests {
         let mut st = state();
         st.my_uid = "me".into();
         let s = &mut st.servers[0];
-        s.groups.push(ingle_proto::control::Group {
+        s.groups.push(pyr_proto::control::Group {
             id: 12,
             members: vec!["me".into(), "kain".into(), "abel".into()],
             name: "Raid night".into(),
@@ -205,7 +205,7 @@ mod tests {
         st.muted_channels.insert(("k".into(), 9));
         let u = Unread::of(&st);
         assert_eq!(u.places, ["#off-topic"]);
-        assert_eq!(u.title("Ingle"), "• Ingle");
+        assert_eq!(u.title("Pyr"), "• Pyr");
         st.muted_channels.clear();
         st.blocked.insert("kain".into());
         assert_eq!(Unread::of(&st).places, ["#off-topic"]);
@@ -239,7 +239,7 @@ mod tests {
         let s = &mut st.servers[0];
         s.channels = (1..=30).map(|i| channel(i, &format!("channel-number-{i}"))).collect();
         s.unread.extend(1..=30);
-        let t = Unread::of(&st).tooltip("Ingle");
+        let t = Unread::of(&st).tooltip("Pyr");
         assert!(t.chars().count() <= 127, "{} chars: {t}", t.chars().count());
         assert!(t.ends_with("more"), "{t}");
     }

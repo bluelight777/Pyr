@@ -169,8 +169,8 @@ pub struct H264Encoder {
 impl H264Encoder {
     pub fn new(screen: bool, bitrate_bps: u32, fps: u32) -> Result<H264Encoder> {
         // A keyframe every minute by itself, as a safety net: keyframes are big, and viewers who
-        // lose something ask for one anyway. (Before 0.8.0, `INGLE_AB=adapt`: every 10 s.)
-        let every = if ingle_proto::ab::old("adapt") { 10 } else { 60 };
+        // lose something ask for one anyway. (Before 0.8.0, `PYR_AB=adapt`: every 10 s.)
+        let every = if pyr_proto::ab::old("adapt") { 10 } else { 60 };
         let mut e = H264Encoder {
             enc: None,
             screen,
@@ -201,8 +201,8 @@ impl H264Encoder {
             .complexity(if self.screen && !self.motion { Complexity::Low } else { Complexity::Medium })
             // A keyframe whenever the picture changes a lot (a fast pan in a game, at a few
             // frames a second) made shares on slow connections worse: each is several times a
-            // normal frame's size. (`INGLE_AB=scenecut` puts it back.)
-            .scene_change_detect(ingle_proto::ab::old("scenecut"))
+            // normal frame's size. (`PYR_AB=scenecut` puts it back.)
+            .scene_change_detect(pyr_proto::ab::old("scenecut"))
             .intra_frame_period(IntraFramePeriod::from_num_frames(self.intra_frames))
             .num_threads(0);
         Ok(Encoder::with_api_config(OpenH264API::from_source(), cfg)?)
@@ -320,7 +320,7 @@ impl H264Decoder {
             return Ok(None);
         }
         let (w, h) = yuvf.dimensions();
-        // Ingle never sends more than 1440p; anything past 4K is junk (or someone trying to
+        // Pyr never sends more than 1440p; anything past 4K is junk (or someone trying to
         // make us allocate huge pictures).
         if w == 0 || h == 0 || w > 4096 || h > 2304 {
             bail!("video frame of {w}x{h} is too large");

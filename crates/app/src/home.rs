@@ -4,10 +4,10 @@
 use std::collections::BTreeMap;
 
 use eframe::egui::{self, Align, Color32, CornerRadius, Layout, Rect, RichText, Sense, Stroke, pos2, vec2};
-use ingle_engine::state::{AppState, ServerView};
-use ingle_proto::control::{ChannelId, DMS_FEATURE};
+use pyr_engine::state::{AppState, ServerView};
+use pyr_proto::control::{ChannelId, DMS_FEATURE};
 
-use crate::app::{Act, IngleApp, avatar, status_dot};
+use crate::app::{Act, PyrApp, avatar, status_dot};
 use crate::theme;
 
 /// Someone you share at least one server with.
@@ -72,7 +72,7 @@ fn dm_server(st: &AppState, uid: &str) -> Option<String> {
         .map(|s| s.key.clone())
 }
 
-impl IngleApp {
+impl PyrApp {
     pub(crate) fn home_ui(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
         // The open conversation might be gone (left the server).
         let open = self.ui.dm.clone().and_then(|(k, id)| st.server(&k).filter(|s| s.is_private(id)).map(|s| (s.clone(), id)));
@@ -143,7 +143,7 @@ impl IngleApp {
             }
             crate::icons::people(ui.painter(), Rect::from_center_size(pos2(r.left() + 22.0, r.center().y), vec2(20.0, 20.0)), theme::TEXT());
             ui.painter().text(pos2(r.left() + 48.0, r.center().y), egui::Align2::LEFT_CENTER, "Friends", theme::bold_font(14.5), theme::TEXT());
-            let pending = st.relations().iter().filter(|r| r.1 == ingle_proto::control::RelationKind::Incoming).count();
+            let pending = st.relations().iter().filter(|r| r.1 == pyr_proto::control::RelationKind::Incoming).count();
             if pending > 0 {
                 let b = pos2(r.right() - 16.0, r.center().y);
                 ui.painter().circle_filled(b, 8.5, theme::LIVE());
@@ -272,7 +272,7 @@ impl IngleApp {
     }
 
     fn friends_page(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
-        use ingle_proto::control::RelationKind;
+        use pyr_proto::control::RelationKind;
         if self.ui.active_view.is_some() {
             acts.push(Act::ClearActive);
         }
@@ -481,7 +481,7 @@ impl IngleApp {
             .servers
             .iter()
             .filter_map(|k| st.server(k))
-            .find(|s| s.has(ingle_proto::control::HANDSHAKE_FEATURE) && s.members.get(&uid).is_some_and(|m| m.online))
+            .find(|s| s.has(pyr_proto::control::HANDSHAKE_FEATURE) && s.members.get(&uid).is_some_and(|m| m.online))
             .or(s)
             .map(|s| s.key.clone());
         resp.context_menu(|ui| {

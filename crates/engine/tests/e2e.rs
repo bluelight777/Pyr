@@ -4,16 +4,16 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ingle_engine::audio::{AudioInput, AudioOutput};
-use ingle_engine::config::{NoiseSuppression, Settings};
-use ingle_engine::state::{AppState, ConnStatus, VideoKey};
-use ingle_engine::{Engine, EngineOptions};
-use ingle_proto::control::ChannelKind;
-use ingle_proto::media::track;
+use pyr_engine::audio::{AudioInput, AudioOutput};
+use pyr_engine::config::{NoiseSuppression, Settings};
+use pyr_engine::state::{AppState, ConnStatus, VideoKey};
+use pyr_engine::{Engine, EngineOptions};
+use pyr_proto::control::ChannelKind;
+use pyr_proto::media::track;
 use parking_lot::Mutex;
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("ingle-e2e-{}-{}", name, ingle_proto::now_ms()));
+    let d = std::env::temp_dir().join(format!("pyr-e2e-{}-{}", name, pyr_proto::now_ms()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
@@ -21,8 +21,8 @@ fn temp_dir(name: &str) -> std::path::PathBuf {
 /// A client whose "microphone" plays a sine tone and whose "speakers" record.
 fn bot(name: &str, tone_hz: f32, heard: Arc<Mutex<Vec<f32>>>) -> Engine {
     let dir = temp_dir(name);
-    let cfg = ingle_engine::config::Config { display_name: name.to_string(), ..Default::default() };
-    ingle_engine::config::save_config(&dir, &cfg).unwrap();
+    let cfg = pyr_engine::config::Config { display_name: name.to_string(), ..Default::default() };
+    pyr_engine::config::save_config(&dir, &cfg).unwrap();
     let factory = move |_s: &Settings| {
         let mut phase = 0u64;
         let heard = heard.clone();
@@ -92,7 +92,7 @@ fn server_key(st: &AppState) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn chat_voice_video_end_to_end() {
     let _ = tracing_subscriber_init();
-    let server = ingle_server::start(ingle_server::ServerConfig {
+    let server = pyr_server::start(pyr_server::ServerConfig {
         data_dir: temp_dir("server"),
         bind: "127.0.0.1:0".parse().unwrap(),
         public_host: Some("127.0.0.1".into()),
@@ -123,7 +123,7 @@ async fn chat_voice_video_end_to_end() {
     // ---- a stranger without an invite is refused
     {
         let stranger = bot("Mallory", 100.0, Arc::default());
-        let mut link = ingle_proto::invite::InviteLink::parse(&server.invite_link()).unwrap();
+        let mut link = pyr_proto::invite::InviteLink::parse(&server.invite_link()).unwrap();
         link.code = Some("not-a-real-code".into());
         stranger.add_server(&link.to_url()).unwrap();
         wait_for("stranger refused", 10, || matches!(stranger.state().servers[0].status, ConnStatus::Failed(_))).await;
@@ -289,12 +289,12 @@ async fn chat_voice_video_end_to_end() {
     server.shutdown().await;
 }
 
-/// Quiet by default. INGLE_TEST_LOG=FILE writes the media log there (RUST_LOG picks what goes
-/// in it; "ingle_media=debug,warn" if unset): what the rate control and the ladder decided.
+/// Quiet by default. PYR_TEST_LOG=FILE writes the media log there (RUST_LOG picks what goes
+/// in it; "pyr_media=debug,warn" if unset): what the rate control and the ladder decided.
 fn tracing_subscriber_init() -> Option<()> {
-    let path = std::env::var("INGLE_TEST_LOG").ok()?;
+    let path = pyr_proto::env_var("TEST_LOG")?;
     let file = std::fs::File::create(path).ok()?;
-    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "ingle_media=debug,warn".into());
+    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "pyr_media=debug,warn".into());
     tracing_subscriber::fmt()
         .with_writer(std::sync::Mutex::new(file))
         .with_ansi(false)
@@ -307,7 +307,7 @@ fn tracing_subscriber_init() -> Option<()> {
 /// (regression test: keys sent in reaction to our join used to be dropped).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn late_joiner_gets_keys_audio_and_video() {
-    let server = ingle_server::start(ingle_server::ServerConfig {
+    let server = pyr_server::start(pyr_server::ServerConfig {
         data_dir: temp_dir("server2"),
         bind: "127.0.0.1:0".parse().unwrap(),
         public_host: Some("127.0.0.1".into()),
@@ -365,8 +365,8 @@ async fn late_joiner_gets_keys_audio_and_video() {
 /// A client with a silent microphone whose "speakers" record both channels.
 fn listener(name: &str, heard: Arc<Mutex<(Vec<f32>, Vec<f32>)>>) -> Engine {
     let dir = temp_dir(name);
-    let cfg = ingle_engine::config::Config { display_name: name.to_string(), ..Default::default() };
-    ingle_engine::config::save_config(&dir, &cfg).unwrap();
+    let cfg = pyr_engine::config::Config { display_name: name.to_string(), ..Default::default() };
+    pyr_engine::config::save_config(&dir, &cfg).unwrap();
     let factory = move |_s: &Settings| {
         let heard = heard.clone();
         let input = AudioInput::Synthetic(Box::new(|buf: &mut [f32]| buf.fill(0.0)));
@@ -386,8 +386,8 @@ fn listener(name: &str, heard: Arc<Mutex<(Vec<f32>, Vec<f32>)>>) -> Engine {
 /// Screen-share sound reaches people watching the stream (in stereo), and nobody else.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn screen_share_sound_goes_to_viewers_only() {
-    use ingle_engine::audio::stream::{SYNTH_LEFT_HZ, SYNTH_RIGHT_HZ};
-    let server = ingle_server::start(ingle_server::ServerConfig {
+    use pyr_engine::audio::stream::{SYNTH_LEFT_HZ, SYNTH_RIGHT_HZ};
+    let server = pyr_server::start(pyr_server::ServerConfig {
         data_dir: temp_dir("server3"),
         bind: "127.0.0.1:0".parse().unwrap(),
         public_host: Some("127.0.0.1".into()),

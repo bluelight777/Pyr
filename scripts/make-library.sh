@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Assemble the Ingle Library for firelitgames.com/ingle/library from plugins built from their
+# Assemble the Pyr Library for pyr.gg/library from plugins built from their
 # reviewed source, and skins:
-#   KEY=path/to/ingle-release-key.txt scripts/make-library.sh
+#   KEY=path/to/pyr-release-key.txt scripts/make-library.sh
 # The plugins' files must already be under dist/library/files, in the layout
 # installer/site/library/plugins.json names them (Dice: built from plugins/dice for
 # wasm32-unknown-unknown; programs such as Chimbrowser: built from their own source). Signs
@@ -25,4 +25,4 @@ for s in json.load(open("installer/site/library/plugins.json")).get("skins", [])
     shutil.copytree(src, dst, ignore=shutil.ignore_patterns(".*"))
     print(f"skin {s['id']}: {', '.join(sorted(os.listdir(dst)))}")
 PY
-cargo run -q -p ingle-proto --example library -- sign --key "$KEY" --in installer/site/library/plugins.json --files "$FILES" --out dist/library/index.json
+cargo run -q -p pyr-proto --example library -- sign --key "$KEY" --in installer/site/library/plugins.json --files "$FILES" --out dist/library/index.json

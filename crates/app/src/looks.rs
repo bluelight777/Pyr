@@ -1,7 +1,7 @@
-//! How Ingle looks and sounds now: the skin in use (one installed from the Ingle Library, or
-//! Campfire, Ingle's own), or one being tried for a while without installing it: a skin Claude
+//! How Pyr looks and sounds now: the skin in use (one installed from the Pyr Library, or
+//! Campfire, Pyr's own), or one being tried for a while without installing it: a skin Claude
 //! is making with you (the Claude connector puts it in the `skin-preview` folder next to
-//! Ingle's settings, see [`PREVIEW_DIR`]), one you're making in a folder of your own (worn
+//! Pyr's settings, see [`PREVIEW_DIR`]), one you're making in a folder of your own (worn
 //! again whenever its files change), or one sent in that the owner of a server collecting them
 //! is looking at. Putting a skin on sets the palette (`theme`), its fonts (each parsed first),
 //! the picture behind the chat and its sounds.
@@ -10,14 +10,14 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
 use eframe::egui::{self, Color32, Rect, pos2};
-use ingle_engine::Engine;
-use ingle_proto::skin::Use;
+use pyr_engine::Engine;
+use pyr_proto::skin::Use;
 
 use crate::theme;
 
-/// Where the Claude connector puts a skin to try (`ingle-mcp`'s `preview_skin`): its files,
+/// Where the Claude connector puts a skin to try (`pyr-mcp`'s `preview_skin`): its files,
 /// then the stamp saying which (written last, and removed by `stop_preview`).
-pub use ingle_engine::skins::{PREVIEW_DIR, PREVIEW_STAMP};
+pub use pyr_engine::skins::{PREVIEW_DIR, PREVIEW_STAMP};
 
 /// A skin tried for a while instead of the one in use.
 #[derive(Clone, Debug, PartialEq)]
@@ -58,16 +58,16 @@ impl Trying {
 fn author_of(files: &[(String, Vec<u8>)]) -> String {
     files
         .iter()
-        .find(|(p, _)| p == ingle_proto::skin::MANIFEST)
-        .and_then(|(_, b)| serde_json::from_slice::<ingle_proto::skin::Manifest>(b).ok())
+        .find(|(p, _)| p == pyr_proto::skin::MANIFEST)
+        .and_then(|(_, b)| serde_json::from_slice::<pyr_proto::skin::Manifest>(b).ok())
         .map(|m| m.author.trim().to_string())
         .unwrap_or_default()
 }
 
 /// Each file's size and when it was last changed (skin.json first: what it names can change).
 fn stamps(folder: &Path, files: &[(String, Vec<u8>)]) -> Vec<(String, u64, Option<SystemTime>)> {
-    let mut paths: Vec<&str> = vec![ingle_proto::skin::MANIFEST];
-    paths.extend(files.iter().map(|(p, _)| p.as_str()).filter(|p| *p != ingle_proto::skin::MANIFEST));
+    let mut paths: Vec<&str> = vec![pyr_proto::skin::MANIFEST];
+    paths.extend(files.iter().map(|(p, _)| p.as_str()).filter(|p| *p != pyr_proto::skin::MANIFEST));
     paths
         .into_iter()
         .map(|p| {
@@ -98,7 +98,7 @@ pub struct Looks {
 impl Looks {
     pub fn new(config_dir: PathBuf) -> Looks {
         // A preview Claude asked for a while ago (and never stopped) isn't put on again when
-        // Ingle starts; one from the last few minutes is.
+        // Pyr starts; one from the last few minutes is.
         let stamp = config_dir.join(PREVIEW_STAMP);
         let recent = std::fs::metadata(&stamp).ok().and_then(|m| m.modified().ok()).and_then(|t| t.elapsed().ok()).is_some_and(|age| age < Duration::from_secs(600));
         let preview_stamp = if recent { None } else { std::fs::read_to_string(&stamp).ok().map(|s| s.trim().to_string()) };
@@ -130,7 +130,7 @@ impl Looks {
             if stamp != self.preview_stamp {
                 self.preview_stamp = stamp.clone();
                 match stamp {
-                    Some(stamp) => match ingle_engine::skins::check_folder(&self.config_dir.join(PREVIEW_DIR)) {
+                    Some(stamp) => match pyr_engine::skins::check_folder(&self.config_dir.join(PREVIEW_DIR)) {
                         Ok((files, report)) if report.ok() => {
                             let name = report.manifest.name.clone();
                             toast = Some(format!("Trying {name} from Claude."));
@@ -158,7 +158,7 @@ impl Looks {
                     let now = stamps(path, &t.files);
                     if now != t.seen {
                         t.seen = now;
-                        match ingle_engine::skins::check_folder(path) {
+                        match pyr_engine::skins::check_folder(path) {
                             Ok((files, report)) if report.ok() => {
                                 t.name = report.manifest.name.clone();
                                 t.author = report.manifest.author.trim().to_string();
@@ -210,7 +210,7 @@ impl Looks {
         toast
     }
 
-    /// Campfire again: Ingle's colors, fonts and sounds, no picture.
+    /// Campfire again: Pyr's colors, fonts and sounds, no picture.
     fn take_off(&mut self, ctx: &egui::Context, engine: &Engine) {
         let had_fonts = self.worn.as_ref().is_some_and(|w| w.fonts);
         theme::set_palette(None);
@@ -225,7 +225,7 @@ impl Looks {
 
     /// Puts a skin's files on (checked first, its fonts parsed).
     fn put_on(&mut self, ctx: &egui::Context, engine: &Engine, files: &[(String, Vec<u8>)]) -> Result<(), String> {
-        let report = ingle_engine::skins::check(files);
+        let report = pyr_engine::skins::check(files);
         if !report.ok() {
             return Err(report.problems.join(" "));
         }
@@ -247,8 +247,8 @@ impl Looks {
         // Its sounds, decoded.
         let mut sounds = Vec::new();
         for (name, path) in &m.sounds {
-            let (Some(sound), Some(bytes)) = (ingle_engine::sfx::Sound::from_name(name), file(path)) else { continue };
-            let pcm = ingle_engine::soundboard::decode(&bytes).map_err(|e| format!("its {name} sound can't be played: {e:#}"))?;
+            let (Some(sound), Some(bytes)) = (pyr_engine::sfx::Sound::from_name(name), file(path)) else { continue };
+            let pcm = pyr_engine::soundboard::decode(&bytes).map_err(|e| format!("its {name} sound can't be played: {e:#}"))?;
             sounds.push((sound, std::sync::Arc::new(pcm)));
         }
         let had_fonts = self.worn.as_ref().is_some_and(|w| w.fonts);

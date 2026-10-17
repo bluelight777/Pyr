@@ -1,10 +1,10 @@
 //! The call view: video grid / spotlight, screen-share tiles, call controls.
 
 use eframe::egui::{self, Align, Color32, CornerRadius, Layout, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
-use ingle_engine::state::{AppState, RingState, ServerView, Trust, VideoKey};
-use ingle_proto::media::track;
+use pyr_engine::state::{AppState, RingState, ServerView, Trust, VideoKey};
+use pyr_proto::media::track;
 
-use crate::app::{Act, Dialog, IngleApp, avatar, icon_button};
+use crate::app::{Act, Dialog, PyrApp, avatar, icon_button};
 use crate::{icons, theme};
 
 /// Buttons under the call (Leave, a little wider, included).
@@ -31,7 +31,7 @@ struct Tile {
     streaming: bool,
     stream_volume: f32,
     face: Option<egui::TextureId>,
-    /// Their colors (top, bottom), from their picture (see `IngleApp::tile_tint`).
+    /// Their colors (top, bottom), from their picture (see `PyrApp::tile_tint`).
     tint: Option<(Color32, Color32)>,
     /// Who's watching this screen share (names).
     viewers: Vec<String>,
@@ -153,7 +153,7 @@ fn fit(rect: Rect, size: egui::Vec2, cover: bool) -> (Rect, Rect) {
     }
 }
 
-impl IngleApp {
+impl PyrApp {
     pub fn stage(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, st: &AppState, s: &ServerView, acts: &mut Vec<Act>) {
         let Some(call) = st.call.as_ref() else { return };
         // A direct message's or group's call (its chat is under it, not beside it): who else is
@@ -214,7 +214,7 @@ impl IngleApp {
                             ui.add_space(8.0);
                         }
                         let others: Vec<String> = s.voice_in(call.channel_id).iter().map(|p| p.user_id.clone()).filter(|u| *u != st.my_uid).collect();
-                        // Everyone else here made sure of: their Ingles sign their keys, so nobody
+                        // Everyone else here made sure of: their Pyrs sign their keys, so nobody
                         // else can be given the call's (the code has nothing more to say).
                         let all_sure = !others.is_empty() && others.iter().all(|u| st.verified.contains_key(u));
                         let (fill, stroke, text) = if call.e2ee_ready || others.is_empty() {
@@ -248,7 +248,7 @@ impl IngleApp {
                             .response
                             .interact(Sense::click());
                         let tip = if all_sure && call.e2ee_ready {
-                            format!("End-to-end encrypted, and you made sure of everyone here: their Ingles sign their keys, so no one else (not even the server) can listen in. Call code {} (click to copy).", call.call_code)
+                            format!("End-to-end encrypted, and you made sure of everyone here: their Pyrs sign their keys, so no one else (not even the server) can listen in. Call code {} (click to copy).", call.call_code)
                         } else {
                             format!(
                                 "End-to-end encrypted, call code {}. Everyone in the call should see the same code. If they do, no one (not even the server) can listen in. Or make sure of each person (right-click their name: Make sure it's them), and you won't need it. Click to copy.",
@@ -261,10 +261,10 @@ impl IngleApp {
                         // In a call with one other person you haven't made sure of: talking
                         // already, it's the easiest time to compare words.
                         let busy = others.first().is_some_and(|u| st.handshakes.iter().any(|h| &h.with == u));
-                        if others.len() == 1 && !all_sure && wide && !busy && s.has(ingle_proto::control::HANDSHAKE_FEATURE) {
+                        if others.len() == 1 && !all_sure && wide && !busy && s.has(pyr_proto::control::HANDSHAKE_FEATURE) {
                             ui.add_space(6.0);
                             let who = s.member_name(&others[0]);
-                            if ui.button(format!("Make sure it's {who}")).on_hover_text("Compare six words out loud: ten seconds, and Ingle remembers").clicked() {
+                            if ui.button(format!("Make sure it's {who}")).on_hover_text("Compare six words out loud: ten seconds, and Pyr remembers").clicked() {
                                 acts.push(Act::CompareWords { key: s.key.clone(), uid: others[0].clone() });
                             }
                         }
@@ -975,7 +975,7 @@ mod tests {
     }
 }
 
-impl IngleApp {
+impl PyrApp {
     /// A stream or camera filling the whole screen. Returns false (and leaves full screen)
     /// when there's nothing to show, so the normal window draws instead.
     pub fn fullscreen_ui(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) -> bool {

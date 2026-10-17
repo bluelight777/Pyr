@@ -10,7 +10,7 @@
 #   ./scripts/build-vps-server.sh            # both
 #   ./scripts/build-vps-server.sh x86_64     # one
 #
-# Output: dist/vps/ingle-server-linux-x86_64, dist/vps/ingle-server-linux-aarch64
+# Output: dist/vps/pyr-server-linux-x86_64, dist/vps/pyr-server-linux-aarch64
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
@@ -33,7 +33,7 @@ for ARCH in "${ARCHES[@]}"; do
     UPPER=$(echo "$TARGET" | tr 'a-z-' 'A-Z_')
     export "CARGO_TARGET_${UPPER}_RUSTFLAGS=-C link-self-contained=no"
   fi
-  cargo zigbuild --release -p ingle-server --target "$TARGET" "${EXTRA[@]}" --target-dir "$ROOT/target-musl"
-  cp "$ROOT/target-musl/$TARGET/release/ingle-server" "$ROOT/dist/vps/ingle-server-linux-$ARCH"
-  echo "built dist/vps/ingle-server-linux-$ARCH"
+  cargo zigbuild --release -p pyr-server --target "$TARGET" "${EXTRA[@]}" --target-dir "$ROOT/target-musl"
+  cp "$ROOT/target-musl/$TARGET/release/pyr-server" "$ROOT/dist/vps/pyr-server-linux-$ARCH"
+  echo "built dist/vps/pyr-server-linux-$ARCH"
 done

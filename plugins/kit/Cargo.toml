@@ -1,10 +1,10 @@
 [package]
-name = "ingle-plugin"
+name = "pyr-plugin"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-description = "Make add-ons for Ingle in Rust: chat commands, panels and data of their own, built to WebAssembly and run in Ingle's sandbox."
-repository = "https://github.com/bluelight777/ingle"
+description = "Make add-ons for Pyr in Rust: chat commands, panels and data of their own, built to WebAssembly and run in Pyr's sandbox."
+repository = "https://github.com/bluelight777/pyr"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

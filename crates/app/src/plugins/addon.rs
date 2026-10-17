@@ -1,8 +1,8 @@
-//! Add-ons: WebAssembly run inside Ingle in a sandbox.
+//! Add-ons: WebAssembly run inside Pyr in a sandbox.
 //!
 //! A module may import nothing at all (so it can't reach files, the network or anything else
 //! on the PC), and gets a fuel budget per call and a memory limit; each runs on a thread of its
-//! own, so a slow one never holds up Ingle's window. Ingle and an add-on swap JSON: see the
+//! own, so a slow one never holds up Pyr's window. Pyr and an add-on swap JSON: see the
 //! plugin kit (`plugins/kit`) for the other side. An add-on that traps (a panic, running out of
 //! fuel) is stopped until it's started again.
 
@@ -61,7 +61,7 @@ pub enum Widget {
     Unknown,
 }
 
-/// An add-on's answer, as Ingle takes it (sizes already checked).
+/// An add-on's answer, as Pyr takes it (sizes already checked).
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct Response {
     #[serde(default)]
@@ -76,7 +76,7 @@ pub struct Response {
     pub error: Option<String>,
 }
 
-/// What Ingle tells an add-on about where it's being used.
+/// What Pyr tells an add-on about where it's being used.
 #[derive(Clone, Debug, Default)]
 pub struct Place {
     pub me: String,
@@ -151,7 +151,7 @@ fn start(bytes: &[u8], data_path: Option<PathBuf>) -> Result<Running, String> {
     let linker = <Linker<StoreLimits>>::new(&engine);
     let instance = linker.instantiate_and_start(&mut store, &module).map_err(|e| format!("the add-on didn't start: {e}"))?;
     let memory = instance.get_memory(&store, "memory").ok_or("the add-on has no memory to talk through")?;
-    let need = |e: wasmi::Error| format!("it isn't an Ingle add-on (made with the plugin kit): {e}");
+    let need = |e: wasmi::Error| format!("it isn't a Pyr add-on (made with the plugin kit): {e}");
     let alloc = instance.get_typed_func::<i32, i32>(&store, "ingle_alloc").map_err(need)?;
     let free = instance.get_typed_func::<(i32, i32), ()>(&store, "ingle_free").map_err(need)?;
     let call = instance.get_typed_func::<(i32, i32), i64>(&store, "ingle_call").map_err(need)?;
@@ -212,7 +212,7 @@ fn tidy_info(i: &mut AddonInfo) -> Result<(), String> {
     for c in &mut i.commands {
         c.name = c.name.trim_start_matches('/').to_lowercase();
         if c.name.is_empty() || c.name.len() > 24 || !c.name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') {
-            return Err(format!("/{} isn't a command name Ingle can use (letters, digits and dashes)", c.name));
+            return Err(format!("/{} isn't a command name Pyr can use (letters, digits and dashes)", c.name));
         }
         clip(&mut c.help, 120);
     }
@@ -223,12 +223,12 @@ impl Running {
     /// One call: the request (with where it's used, its data and fresh random bits) in, the
     /// answer out.
     fn call(&mut self, request: &Request, place: &Place) -> Result<Response, String> {
-        let seed = u64::from_le_bytes(ingle_proto::crypto::random_bytes::<8>());
+        let seed = u64::from_le_bytes(pyr_proto::crypto::random_bytes::<8>());
         let mut msg = request.json();
         msg["ctx"] = json!({
             "store": self.data,
             "seed": seed,
-            "now_ms": ingle_proto::now_ms(),
+            "now_ms": pyr_proto::now_ms(),
             "me": place.me,
             "server": place.server,
             "channel": place.channel,
@@ -240,7 +240,7 @@ impl Running {
             if s.contains("fuel") { "it took too long, so it was stopped".to_string() } else { format!("it crashed ({s})") }
         };
         let ptr = self.alloc.call(&mut self.store, input.len() as i32).map_err(trap)?;
-        self.memory.write(&mut self.store, ptr as u32 as usize, &input).map_err(|_| "it gave Ingle memory it doesn't have".to_string())?;
+        self.memory.write(&mut self.store, ptr as u32 as usize, &input).map_err(|_| "it gave Pyr memory it doesn't have".to_string())?;
         let packed = self.call.call(&mut self.store, (ptr, input.len() as i32)).map_err(trap)?;
         let (rptr, rlen) = (((packed as u64) >> 32) as usize, (packed as u64 & 0xffff_ffff) as usize);
         if rlen > RESPONSE_MAX {
@@ -249,7 +249,7 @@ impl Running {
         let mut out = vec![0u8; rlen];
         self.memory.read(&self.store, rptr, &mut out).map_err(|_| "its answer wasn't in its memory".to_string())?;
         let _ = self.free.call(&mut self.store, (rptr as i32, rlen as i32));
-        let mut r: Response = serde_json::from_slice(&out).map_err(|e| format!("Ingle couldn't read its answer: {e}"))?;
+        let mut r: Response = serde_json::from_slice(&out).map_err(|e| format!("Pyr couldn't read its answer: {e}"))?;
         if let Some(s) = &mut r.say {
             clip(s, SAY_MAX);
         }
@@ -292,7 +292,7 @@ impl AddOn {
         // Why it stopped, once it has (it answers nothing after that).
         let stop: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         std::thread::Builder::new()
-            .name(format!("ingle-addon-{id}"))
+            .name(format!("pyr-addon-{id}"))
             .stack_size(8 << 20)
             .spawn(move || {
                 let mut running = match start(&bytes, data_path) {
@@ -395,11 +395,11 @@ mod tests {
         assert!(err.contains("env::open_file"), "{err}");
         // Not made with the kit.
         let bare = wat(r#"(module (memory (export "memory") 1))"#);
-        assert!(AddOn::load("x", bare, None, Arc::new(|| {})).err().unwrap().contains("isn't an Ingle add-on"));
+        assert!(AddOn::load("x", bare, None, Arc::new(|| {})).err().unwrap().contains("isn't a Pyr add-on"));
         // Too much memory from the start.
         let huge = wat(r#"(module (memory (export "memory") 2000))"#);
         assert!(AddOn::load("x", huge, None, Arc::new(|| {})).is_err());
-        // Loops forever when asked what it is: out of fuel, stopped (and doesn't hang Ingle).
+        // Loops forever when asked what it is: out of fuel, stopped (and doesn't hang Pyr).
         let spin = wat(
             r#"(module (memory (export "memory") 1)
                  (func (export "ingle_alloc") (param i32) (result i32) i32.const 16)

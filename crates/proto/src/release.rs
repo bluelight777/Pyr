@@ -1,4 +1,4 @@
-//! Signed update manifests: what `firelitgames.com/ingle/latest.json` holds.
+//! Signed update manifests: what `pyr.gg/latest.json` holds.
 //!
 //! The app only installs an update whose manifest is signed with the Firelit release key
 //! (an Ed25519 key kept offline by whoever publishes releases) and whose download matches the

@@ -5,9 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use ingle_proto::control::*;
-use ingle_proto::crypto::{self, Identity};
-use ingle_proto::{PROTOCOL_VERSION, framing};
+use pyr_proto::control::*;
+use pyr_proto::crypto::{self, Identity};
+use pyr_proto::{PROTOCOL_VERSION, framing};
 use quinn::VarInt;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::CryptoProvider;
@@ -77,12 +77,12 @@ pub fn transport_config() -> quinn::TransportConfig {
     // Sound waiting to go out (while the connection is full) is dropped, oldest first, past
     // this: a fraction of a second of voice and a share's sound. Late sound is no use (it's
     // thrown away when it arrives), and a long queue of it only delays what comes after.
-    // (`INGLE_AB=dgram`: 64 KB, seconds of it.)
-    t.datagram_send_buffer_size(if ingle_proto::ab::old("dgram") { 64 * 1024 } else { 4 * 1024 });
+    // (`PYR_AB=dgram`: 64 KB, seconds of it.)
+    t.datagram_send_buffer_size(if pyr_proto::ab::old("dgram") { 64 * 1024 } else { 4 * 1024 });
     t.stream_receive_window(VarInt::from_u32(8 << 20));
     t.receive_window(VarInt::from_u32(64 << 20));
     t.send_window(16 << 20);
-    if ingle_proto::ab::bbr() {
+    if pyr_proto::ab::bbr() {
         t.congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default()));
     }
     t
@@ -103,7 +103,7 @@ fn pinned_config(
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(PinnedVerifier { fingerprint, len: len.clamp(1, 32), seen, provider }))
         .with_no_client_auth();
-    tls.alpn_protocols = vec![ingle_proto::ALPN.to_vec()];
+    tls.alpn_protocols = vec![pyr_proto::ALPN.to_vec()];
     let crypto = quinn::crypto::rustls::QuicClientConfig::try_from(tls)?;
     let mut cfg = quinn::ClientConfig::new(Arc::new(crypto));
     cfg.transport_config(Arc::new(transport_config()));
@@ -124,7 +124,7 @@ impl Endpoints {
             return Ok(e.clone());
         }
         let bind: SocketAddr = if addr.is_ipv4() { "0.0.0.0:0".parse()? } else { "[::]:0".parse()? };
-        let (e, fallback, raw) = ingle_proto::udp::bind_endpoint_raw(bind, None).context("opening UDP socket")?;
+        let (e, fallback, raw) = pyr_proto::udp::bind_endpoint_raw(bind, None).context("opening UDP socket")?;
         if let Some(why) = fallback {
             tracing::warn!("the network stack refused QUIC socket options ({why}); using a plain UDP socket");
         }
@@ -189,13 +189,13 @@ pub async fn read_frame<T: serde::de::DeserializeOwned>(recv: &mut quinn::RecvSt
 /// link's fingerprint and returns the whole fingerprint (which is then pinned from now on).
 pub async fn learn_fingerprint(
     endpoints: &std::sync::Mutex<Endpoints>,
-    link: &ingle_proto::invite::InviteLink,
+    link: &pyr_proto::invite::InviteLink,
 ) -> Result<[u8; 32]> {
     let (host, port) = (link.host.as_str(), link.port);
     let addr = resolve(host, port).await?;
     let endpoint = endpoints.lock().map_err(|_| anyhow!("endpoint lock poisoned"))?.for_addr(addr)?;
     let seen = Arc::new(std::sync::Mutex::new(None));
-    let connecting = endpoint.connect_with(pinned_config(link.fingerprint, link.fp_len, seen.clone())?, addr, ingle_proto::APP_ID)?;
+    let connecting = endpoint.connect_with(pinned_config(link.fingerprint, link.fp_len, seen.clone())?, addr, pyr_proto::APP_ID)?;
     let conn = tokio::time::timeout(Duration::from_secs(8), connecting)
         .await
         .map_err(|_| anyhow!("The server didn't answer (is it running, and is UDP port {port} open?)"))?
@@ -223,7 +223,7 @@ pub async fn connect_and_login(
 ) -> Result<LoggedIn> {
     let addr = resolve(host, port).await?;
     let endpoint = endpoints.lock().map_err(|_| anyhow!("endpoint lock poisoned"))?.for_addr(addr)?;
-    let connecting = endpoint.connect_with(client_config(fingerprint)?, addr, ingle_proto::APP_ID)?;
+    let connecting = endpoint.connect_with(client_config(fingerprint)?, addr, pyr_proto::APP_ID)?;
     let conn = tokio::time::timeout(Duration::from_secs(10), connecting)
         .await
         .map_err(|_| anyhow!("the server didn't answer (is it running, and is UDP port {port} open?)"))?
@@ -240,11 +240,11 @@ pub async fn connect_and_login(
     }
     let (mut send, mut recv) = conn.open_bi().await?;
     // Messages go ahead of video (and of files), see `CONTROL_PRIORITY`.
-    if !ingle_proto::ab::old("fair") {
-        let _ = send.set_priority(ingle_proto::media::CONTROL_PRIORITY);
+    if !pyr_proto::ab::old("fair") {
+        let _ = send.set_priority(pyr_proto::media::CONTROL_PRIORITY);
     }
     // QUIC only announces a stream once data is sent on it.
-    send.write_all(ingle_proto::CONTROL_PREAMBLE).await?;
+    send.write_all(pyr_proto::CONTROL_PREAMBLE).await?;
 
     let hello: ServerFrame = tokio::time::timeout(Duration::from_secs(10), read_frame(&mut recv))
         .await
@@ -270,9 +270,9 @@ pub async fn connect_and_login(
             sig: sig.to_vec(),
             name: name.to_string(),
             invite: invite.map(|s| s.to_string()),
-            client: format!("{} {}", ingle_proto::APP_NAME, env!("CARGO_PKG_VERSION")),
+            client: format!("{} {}", pyr_proto::APP_NAME, env!("CARGO_PKG_VERSION")),
             // (This app knows group conversations, and adjusts its shares to its viewers.)
-            caps: vec![ingle_proto::control::GROUPS_CAP.to_string(), ingle_proto::control::VIDEO_FEEDBACK_CAP.to_string()],
+            caps: vec![pyr_proto::control::GROUPS_CAP.to_string(), pyr_proto::control::VIDEO_FEEDBACK_CAP.to_string()],
         },
     };
     send.write_all(&framing::encode(&login)).await?;
@@ -297,7 +297,7 @@ pub async fn connect_and_login(
 
 /// Download a file (an attachment or a profile picture) from the server.
 pub async fn file_get(conn: &quinn::Connection, id: &str) -> Result<(String, Vec<u8>)> {
-    use ingle_proto::control::{FILE_PREAMBLE, FileReply, FileRequest, MAX_ATTACHMENT_BYTES};
+    use pyr_proto::control::{FILE_PREAMBLE, FileReply, FileRequest, MAX_ATTACHMENT_BYTES};
     let (mut send, mut recv) = conn.open_bi().await?;
     send.write_all(FILE_PREAMBLE).await?;
     send.write_all(&framing::encode(&FileRequest::Get { id: id.to_string() })).await?;
@@ -324,12 +324,12 @@ pub async fn file_get(conn: &quinn::Connection, id: &str) -> Result<(String, Vec
 /// Upload an image; returns its id on the server.
 pub async fn file_put(
     conn: &quinn::Connection,
-    kind: ingle_proto::control::FileKind,
+    kind: pyr_proto::control::FileKind,
     name: &str,
     mime: &str,
     bytes: &[u8],
 ) -> Result<String> {
-    use ingle_proto::control::{FILE_PREAMBLE, FileReply, FileRequest};
+    use pyr_proto::control::{FILE_PREAMBLE, FileReply, FileRequest};
     let (mut send, mut recv) = conn.open_bi().await?;
     send.write_all(FILE_PREAMBLE).await?;
     let req = FileRequest::Put { kind, name: name.to_string(), mime: mime.to_string(), size: bytes.len() as u64 };

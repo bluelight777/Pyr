@@ -8,16 +8,16 @@
 //!   setup delete --token T --droplet ID --config DIR
 //!   setup save-files --to DIR
 //!
-//! The Linux server programs come from INGLE_VPS_DIR (or the usual places).
+//! The Linux server programs come from PYR_VPS_DIR (or the usual places).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use ingle_host::digitalocean::{self, RentRequest};
-use ingle_host::install::{self, InstallOptions};
-use ingle_host::ssh::{Auth, Login};
-use ingle_host::{Outcome, Payloads, Progress};
+use pyr_host::digitalocean::{self, RentRequest};
+use pyr_host::install::{self, InstallOptions};
+use pyr_host::ssh::{Auth, Login};
+use pyr_host::{Outcome, Payloads, Progress};
 
 fn main() {
     tracing_subscriber::fmt().with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "warn".into())).init();
@@ -34,12 +34,12 @@ fn main() {
     // A backup to restore (--restore <folder>); a sealed server key opens with the backing-up
     // owner's identity.key (--identity <file>).
     let backup = || {
-        get("restore").map(|d| ingle_host::restore::Backup {
+        get("restore").map(|d| pyr_host::restore::Backup {
             dir: PathBuf::from(d),
             key: get("identity")
                 .and_then(|f| std::fs::read_to_string(f).ok())
-                .and_then(|t| ingle_proto::b64::decode_array::<32>(t.trim()))
-                .map(|seed| ingle_proto::crypto::backup_key(&ingle_proto::crypto::Identity::from_seed(seed))),
+                .and_then(|t| pyr_proto::b64::decode_array::<32>(t.trim()))
+                .map(|seed| pyr_proto::crypto::backup_key(&pyr_proto::crypto::Identity::from_seed(seed))),
         })
     };
     let payloads = Payloads::find();
@@ -84,7 +84,7 @@ fn main() {
             let opts = InstallOptions {
                 name: get("name").unwrap_or_default(),
                 public_host: get("public-host").unwrap_or(host),
-                port: ingle_host::DEFAULT_PORT,
+                port: pyr_host::DEFAULT_PORT,
                 payloads,
                 wait_for_boot: None,
                 restore: backup(),
@@ -119,7 +119,7 @@ fn main() {
         "rent" => {
             let req = RentRequest {
                 token: need("token"),
-                name: get("name").unwrap_or_else(|| "My Ingle Server".into()),
+                name: get("name").unwrap_or_else(|| "My Pyr Server".into()),
                 region: need("region"),
                 size: need("size"),
                 price_monthly: get("price").map(|p| p.parse().unwrap_or(0.0)).unwrap_or(6.0),
@@ -130,9 +130,9 @@ fn main() {
             digitalocean::rent(req, PathBuf::from(need("config")), payloads, progress.clone());
         }
         "retry" => {
-            let d = ingle_host::DropletRef {
+            let d = pyr_host::DropletRef {
                 id: need("droplet").parse().expect("droplet id"),
-                name: "ingle".into(),
+                name: "pyr".into(),
                 ip: Some(need("ip")),
                 region: String::new(),
                 size: String::new(),
@@ -150,7 +150,7 @@ fn main() {
             return;
         }
         "probe" => {
-            match ingle_host::probe::reachable_blocking(&need("link"), 1, std::time::Duration::from_secs(4)) {
+            match pyr_host::probe::reachable_blocking(&need("link"), 1, std::time::Duration::from_secs(4)) {
                 Ok(()) => println!("REACHABLE"),
                 Err(e) => println!("UNREACHABLE {e:#}"),
             }

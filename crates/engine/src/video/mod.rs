@@ -158,12 +158,12 @@ impl Publisher {
         let mut enc = H264Encoder::new(cfg.screen, cfg.bitrate, cfg.fps)?;
         let (st, kf, lk, sts) = (stop.clone(), keyframe.clone(), link.clone(), stats.clone());
         let thread = std::thread::Builder::new()
-            .name(if cfg.screen { "ingle-screen-enc" } else { "ingle-camera-enc" }.into())
+            .name(if cfg.screen { "pyr-screen-enc" } else { "pyr-camera-enc" }.into())
             .spawn(move || {
                 // Size, frame rate and bitrate follow what the network can take (see `adapt`);
-                // `INGLE_AB=adapt` keeps the preset's, `INGLE_AB=pace` the old limit on frames
+                // `PYR_AB=adapt` keeps the preset's, `PYR_AB=pace` the old limit on frames
                 // in flight (~120 ms of them, whatever the round trip).
-                let (adapting, old_pace) = (!ingle_proto::ab::old("adapt"), ingle_proto::ab::old("pace"));
+                let (adapting, old_pace) = (!pyr_proto::ab::old("adapt"), pyr_proto::ab::old("pace"));
                 let mut period = Duration::from_secs_f64(1.0 / cfg.fps.max(1) as f64);
                 let max_inflight = ((cfg.fps as usize * 12) / 100).max(2);
                 let mut ladder = adapt::Ladder::new(cfg.max_height, cfg.fps, cfg.bitrate, Instant::now());
@@ -273,7 +273,7 @@ impl Publisher {
                         placed = true;
                         enc.set_motion(kind == adapt::Content::Motion);
                         if next != rung {
-                            debug!(target: "ingle_media", ev = "rung", h = next.height, fps = next.fps, kbps = target / 1000, text = (kind == adapt::Content::Text), struggling);
+                            debug!(target: "pyr_media", ev = "rung", h = next.height, fps = next.fps, kbps = target / 1000, text = (kind == adapt::Content::Text), struggling);
                             rung = next;
                             period = Duration::from_secs_f64(1.0 / rung.fps.max(1) as f64);
                             tries.clear();
@@ -401,7 +401,7 @@ pub struct Receiver {
     pub stats: Arc<ReceiverStats>,
 }
 
-/// Before 0.8.0 (`INGLE_AB=recv`): how long a missing frame was waited for, and how many
+/// Before 0.8.0 (`PYR_AB=recv`): how long a missing frame was waited for, and how many
 /// frames after it.
 const OLD_REORDER_WAIT: Duration = Duration::from_millis(120);
 const OLD_REORDER_FRAMES: usize = 8;
@@ -430,9 +430,9 @@ impl Receiver {
         let (tx, rx) = crossbeam_channel::bounded::<Incoming>(QUEUE);
         let stats = Arc::new(ReceiverStats::default());
         let st = stats.clone();
-        let old = ingle_proto::ab::old("recv");
+        let old = pyr_proto::ab::old("recv");
         let thread = std::thread::Builder::new()
-            .name("ingle-video-dec".into())
+            .name("pyr-video-dec".into())
             .spawn(move || {
                 let mut dec = match H264Decoder::new() {
                     Ok(d) => d,
@@ -452,7 +452,7 @@ impl Receiver {
                     if last_request.is_none_or(|t| t.elapsed() > again) {
                         *last_request = Some(Instant::now());
                         st.keyframe_requests.fetch_add(1, Ordering::Relaxed);
-                        debug!(target: "ingle_media", ev = "kfreq");
+                        debug!(target: "pyr_media", ev = "kfreq");
                         request_keyframe();
                     }
                 };
@@ -480,7 +480,7 @@ impl Receiver {
                                     let n = pending.len() as u64;
                                     pending.clear();
                                     st.dropped.fetch_add(n, Ordering::Relaxed);
-                                    debug!(target: "ingle_media", ev = "drop", n, why = "no_key");
+                                    debug!(target: "pyr_media", ev = "drop", n, why = "no_key");
                                 }
                                 if !pending.is_empty() || expected.is_none() {
                                     ask(&st, &mut last_request);
@@ -490,7 +490,7 @@ impl Receiver {
                             let older: Vec<u32> = pending.range(..k).map(|(s, _)| *s).collect();
                             st.dropped.fetch_add(older.len() as u64, Ordering::Relaxed);
                             if !older.is_empty() {
-                                debug!(target: "ingle_media", ev = "drop", n = older.len(), why = "before_key");
+                                debug!(target: "pyr_media", ev = "drop", n = older.len(), why = "before_key");
                             }
                             for s in older {
                                 pending.remove(&s);
@@ -503,7 +503,7 @@ impl Receiver {
                         }
                         let Some(exp) = expected else { break };
                         if let Some(f) = pending.remove(&exp) {
-                            debug!(target: "ingle_media", ev = "dec", seq = f.seq, key = f.keyframe, waited = f.at.elapsed().as_millis() as u64);
+                            debug!(target: "pyr_media", ev = "dec", seq = f.seq, key = f.keyframe, waited = f.at.elapsed().as_millis() as u64);
                             if f.keyframe && !old {
                                 last_request = None;
                             }
@@ -530,7 +530,7 @@ impl Receiver {
                         if !old {
                             // A keyframe after it is here already: nothing before that matters.
                             if let Some(k) = pending.iter().find(|(_, f)| f.keyframe).map(|(s, _)| *s) {
-                                debug!(target: "ingle_media", ev = "drop", n = k - exp, why = "skip_to_key");
+                                debug!(target: "pyr_media", ev = "drop", n = k - exp, why = "skip_to_key");
                                 st.dropped.fetch_add((k - exp) as u64, Ordering::Relaxed);
                                 for s in pending.range(..k).map(|(s, _)| *s).collect::<Vec<_>>() {
                                     pending.remove(&s);
@@ -546,7 +546,7 @@ impl Receiver {
                             oldest.at.elapsed() > missing_frame_wait(rtt()) || pending.len() > MAX_PENDING
                         };
                         if late {
-                            debug!(target: "ingle_media", ev = "drop", n = 1, why = "gave_up", missing = exp, waiting = pending.len());
+                            debug!(target: "pyr_media", ev = "drop", n = 1, why = "gave_up", missing = exp, waiting = pending.len());
                             st.dropped.fetch_add(1, Ordering::Relaxed);
                             need_key = true;
                             ask(&st, &mut last_request);
@@ -561,11 +561,11 @@ impl Receiver {
     }
 
     pub fn push(&self, seq: u32, keyframe: bool, data: Vec<u8>) {
-        debug!(target: "ingle_media", ev = "rx", seq, key = keyframe, bytes = data.len());
+        debug!(target: "pyr_media", ev = "rx", seq, key = keyframe, bytes = data.len());
         if let Some(tx) = &self.tx {
             if let Err(crossbeam_channel::TrySendError::Full(_)) = tx.try_send(Incoming { seq, keyframe, data, at: Instant::now() }) {
                 self.stats.dropped.fetch_add(1, Ordering::Relaxed);
-                debug!(target: "ingle_media", ev = "drop", n = 1, why = "queue_full");
+                debug!(target: "pyr_media", ev = "drop", n = 1, why = "queue_full");
             }
         }
     }

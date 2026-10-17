@@ -6,9 +6,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use bytes::BytesMut;
-use ingle_proto::control::*;
-use ingle_proto::media::{self, AudioHeader, VideoHeader, track};
-use ingle_proto::{MAX_MESSAGE_CHARS, MAX_VIDEO_FRAME, PROTOCOL_VERSION, crypto, framing};
+use pyr_proto::control::*;
+use pyr_proto::media::{self, AudioHeader, VideoHeader, track};
+use pyr_proto::{MAX_MESSAGE_CHARS, MAX_VIDEO_FRAME, PROTOCOL_VERSION, crypto, framing};
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
@@ -30,7 +30,7 @@ const SOUND_BURST: f64 = 4.0;
 /// Ringing someone (and declining): a few in a row, then one every 5 seconds.
 const RING_RATE: f64 = 0.2;
 const RING_BURST: f64 = 4.0;
-/// Idle and back: an Ingle changes it every few minutes at most (one in 10 seconds, after 6).
+/// Idle and back: a Pyr changes it every few minutes at most (one in 10 seconds, after 6).
 const IDLE_RATE: f64 = 0.1;
 const IDLE_BURST: f64 = 6.0;
 /// Making sure of people takes a handful of messages each time (one every 2 seconds, after 20).
@@ -40,13 +40,13 @@ const HANDSHAKE_BURST: f64 = 20.0;
 const VOUCHES_SENT_MAX: usize = 2000;
 /// History pages are kept well under the frame limit (long messages add up).
 const HISTORY_PAGE_BYTES: usize = 700 * 1024;
-/// Video one person may send, in bytes per second and burst (Ingle's sharpest screen share
+/// Video one person may send, in bytes per second and burst (Pyr's sharpest screen share
 /// plus a camera is about 1.5 MB/s): frames past this are dropped, not passed on to
 /// everyone watching.
 const VIDEO_BYTES_PER_SEC: f64 = 5.0 * 1024.0 * 1024.0;
 const VIDEO_BURST_BYTES: f64 = 24.0 * 1024.0 * 1024.0;
 /// Sound one person may send (their microphone and their stream's sound, 50 packets a second
-/// each, up to about 40 KB/s together at Ingle's best quality): packets past this are dropped,
+/// each, up to about 40 KB/s together at Pyr's best quality): packets past this are dropped,
 /// not copied to everyone listening.
 const AUDIO_PACKETS_PER_SEC: f64 = 200.0;
 const AUDIO_PACKET_BURST: f64 = 400.0;
@@ -102,7 +102,7 @@ fn signed_by(conn: &quinn::Connection, nonce: &[u8], author_id: &str, digest: &[
     if conn.export_keying_material(&mut exporter, crypto::SUBMISSION_EXPORTER_LABEL, b"").is_err() {
         return false;
     }
-    let Ok(sig) = ingle_proto::b64::decode(sig) else { return false };
+    let Ok(sig) = pyr_proto::b64::decode(sig) else { return false };
     crypto::is_valid_user_id(author_id) && crypto::verify(author_id, &crypto::submission_transcript(nonce, &exporter, author_id, digest), &sig)
 }
 
@@ -157,13 +157,13 @@ async fn take_submission(
 async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, deadline: tokio::time::Instant) -> Result<()> {
     let (mut send, mut recv) = tokio::time::timeout_at(deadline, conn.accept_bi()).await.context("no control stream")??;
     // Messages to this app go ahead of the video sent to it (see `media::CONTROL_PRIORITY`).
-    if !ingle_proto::ab::old("fair") {
-        let _ = send.set_priority(ingle_proto::media::CONTROL_PRIORITY);
+    if !pyr_proto::ab::old("fair") {
+        let _ = send.set_priority(pyr_proto::media::CONTROL_PRIORITY);
     }
     let mut preamble = [0u8; 4];
     tokio::time::timeout_at(deadline, recv.read_exact(&mut preamble)).await.context("no preamble")??;
-    if &preamble != ingle_proto::CONTROL_PREAMBLE {
-        bail!("not an Ingle client");
+    if &preamble != pyr_proto::CONTROL_PREAMBLE {
+        bail!("not a Pyr client");
     }
 
     let nonce = crypto::random_bytes::<32>();
@@ -184,7 +184,7 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
         tokio::time::sleep(Duration::from_millis(300)).await;
         return Ok(());
     }
-    // Nor this: a plugin or skin sent in for the Ingle Library (where they're collected),
+    // Nor this: a plugin or skin sent in for the Pyr Library (where they're collected),
     // with the rest of its files after it if it's big, and signed by its sender if they can
     // send new versions of it later.
     if let Request::SubmitPlugin { submission } = login.req {
@@ -202,7 +202,7 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
         tokio::time::sleep(Duration::from_millis(300)).await;
         return Ok(());
     }
-    // Or asking for one's own (by an Ingle id this connection proves).
+    // Or asking for one's own (by a Pyr id this connection proves).
     if let Request::MySubmissions { author_id, sig } = login.req {
         let ok = signed_by(&conn, &nonce, &author_id, &my_submissions_digest(), &sig);
         let reply = if !ok {
@@ -235,7 +235,7 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
     // Exactly the way we write ids: the same key spelled with padding or spaces would
     // otherwise count as someone else (a way around a ban) or bloat everything it's sent in.
     let canonical = crypto::is_valid_user_id(&user_id)
-        && ingle_proto::b64::decode(&user_id).map(|b| ingle_proto::b64::encode(&b) == user_id).unwrap_or(false);
+        && pyr_proto::b64::decode(&user_id).map(|b| pyr_proto::b64::encode(&b) == user_id).unwrap_or(false);
     if !canonical || !crypto::verify(&user_id, &crypto::login_transcript(&nonce, &exporter, &user_id), &sig) {
         send.write_all(&reject(ErrorCode::Unauthorized, "identity proof failed")).await?;
         bail!("bad login signature");
@@ -304,7 +304,7 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
             let ev = reply.unwrap_or_else(|(code, message)| Event::Error { code, message });
             if id != 0 {
                 let mut b = frame(id, ev);
-                if b.len() > ingle_proto::MAX_CONTROL_FRAME {
+                if b.len() > pyr_proto::MAX_CONTROL_FRAME {
                     b = frame(id, Event::error(ErrorCode::Internal, "That reply was too big to send."));
                 }
                 tx.send(b);
@@ -466,7 +466,7 @@ async fn file_stream(hub: &Hub, uid: &str, mut send: quinn::SendStream, mut recv
             let limit = match kind {
                 FileKind::Attachment => MAX_ATTACHMENT_BYTES,
                 FileKind::Avatar => MAX_AVATAR_BYTES,
-                FileKind::Sound => ingle_proto::sound::MAX_BYTES as u64,
+                FileKind::Sound => pyr_proto::sound::MAX_BYTES as u64,
             };
             if size == 0 || size > limit {
                 let msg = if kind == FileKind::Sound {
@@ -541,8 +541,8 @@ async fn file_stream(hub: &Hub, uid: &str, mut send: quinn::SendStream, mut recv
     Ok(())
 }
 
-/// A soundboard sound (`FileKind::Sound`): checked (it has to be a sound file Ingle can play,
-/// see `ingle_proto::sound`) and named by its content, so the same sound is kept once however
+/// A soundboard sound (`FileKind::Sound`): checked (it has to be a sound file Pyr can play,
+/// see `pyr_proto::sound`) and named by its content, so the same sound is kept once however
 /// often it's sent.
 async fn sound_put(hub: &Hub, uid: &str, name: &str, size: u64, mut send: quinn::SendStream, mut recv: quinn::RecvStream) -> Result<()> {
     let reply = |r: FileReply| framing::encode(&r);
@@ -561,13 +561,13 @@ async fn sound_put(hub: &Hub, uid: &str, name: &str, size: u64, mut send: quinn:
         let _ = send.finish();
         return Ok(());
     }
-    if ingle_proto::sound::check(&bytes).is_none() {
-        send.write_all(&fail("That isn't a sound Ingle can play.")).await?;
+    if pyr_proto::sound::check(&bytes).is_none() {
+        send.write_all(&fail("That isn't a sound Pyr can play.")).await?;
         let _ = send.finish();
         return Ok(());
     }
-    const MIME: &str = "audio/x-ingle-sound";
-    let id = ingle_proto::sound::sound_id(&bytes);
+    const MIME: &str = "audio/x-pyr-sound";
+    let id = pyr_proto::sound::sound_id(&bytes);
     let have = hub.db.file(&id).is_some_and(|f| f.kind == FileKind::Sound) && hub.file_path(&id).is_some_and(|p| p.is_file());
     if !have {
         let path = hub.file_path(&id).ok_or_else(|| anyhow!("bad id"))?;
@@ -623,7 +623,7 @@ struct Ctx<'a> {
     ring_tokens: Bucket,
     /// Idle and back again (`SetIdle`): everyone hears of each change.
     idle_tokens: Bucket,
-    /// Messages for other members' Ingles (`Handshake`).
+    /// Messages for other members' Pyrs (`Handshake`).
     handshake_tokens: Bucket,
 }
 
@@ -1063,7 +1063,7 @@ impl Ctx<'_> {
                 if !self.handshake_tokens.take(1.0) {
                     return Err((ErrorCode::RateLimited, "Slow down a little.".into()));
                 }
-                if data.len() > ingle_proto::handshake::HANDSHAKE_MAX {
+                if data.len() > pyr_proto::handshake::HANDSHAKE_MAX {
                     return bad("that's too long");
                 }
                 valid_uid(&to)?;
@@ -1172,7 +1172,7 @@ impl Ctx<'_> {
                     return bad("You've made a lot of invite links already. Use one of those.");
                 }
                 let code = new_invite_code(10);
-                let expires_at = expires_secs.map(|s| ingle_proto::now_ms() + (s.min(365 * 86400) as i64) * 1000);
+                let expires_at = expires_secs.map(|s| pyr_proto::now_ms() + (s.min(365 * 86400) as i64) * 1000);
                 db.create_invite(&code, &self.uid, max_uses, expires_at, Role::Member)
                     .map_err(|e| (ErrorCode::Internal, e.to_string()))?;
                 Ok(Event::InviteCreated { link: hub.invite_link(&code), code })
@@ -1184,7 +1184,7 @@ impl Ctx<'_> {
                 }
                 // One bot, within a week.
                 let code = format!("{BOT_INVITE_PREFIX}{}", new_invite_code(16));
-                db.create_bot_invite(&code, &self.uid, ingle_proto::now_ms() + 7 * 86_400_000)
+                db.create_bot_invite(&code, &self.uid, pyr_proto::now_ms() + 7 * 86_400_000)
                     .map_err(|e| (ErrorCode::Internal, e.to_string()))?;
                 Ok(Event::InviteCreated { link: hub.invite_link(&code), code })
             }
@@ -1292,7 +1292,7 @@ impl Ctx<'_> {
             // ---- group conversations
             Request::CreateGroup { members } => {
                 if !self.groups {
-                    return bad("This app doesn't know group conversations yet: update Ingle.");
+                    return bad("This app doesn't know group conversations yet: update Pyr.");
                 }
                 let others = self.group_candidates(&members)?;
                 if others.len() < 2 {
@@ -1641,7 +1641,7 @@ impl Ctx<'_> {
                 let Some(emoji) = clean_sound_emoji(&emoji) else { return bad("That emoji won't do.") };
                 let Some(f) = db.file(&file_id).filter(|f| f.kind == FileKind::Sound) else { return bad("upload the sound first") };
                 let Some(length_ms) =
-                    hub.file_path(&f.id).and_then(|p| std::fs::read(p).ok()).and_then(|b| ingle_proto::sound::check(&b)).map(|s| s.length_ms())
+                    hub.file_path(&f.id).and_then(|p| std::fs::read(p).ok()).and_then(|b| pyr_proto::sound::check(&b)).map(|s| s.length_ms())
                 else {
                     return bad("upload the sound first");
                 };
@@ -1685,7 +1685,7 @@ impl Ctx<'_> {
                 if !self.sound_tokens.take(1.0) {
                     return Err((ErrorCode::RateLimited, "Easy on the sounds: try again in a moment.".into()));
                 }
-                let known = ingle_proto::sound::is_builtin(&sound) || db.file(&sound).is_some_and(|f| f.kind == FileKind::Sound);
+                let known = pyr_proto::sound::is_builtin(&sound) || db.file(&sound).is_some_and(|f| f.kind == FileKind::Sound);
                 if !known {
                     return Err((ErrorCode::NotFound, "upload the sound first".into()));
                 }
@@ -1902,7 +1902,7 @@ mod tests {
     }
 
     fn hub() -> Arc<Hub> {
-        let dir = std::env::temp_dir().join(format!("ingle-conn-test-{}", crypto::random_bytes::<6>().iter().map(|b| format!("{b:02x}")).collect::<String>()));
+        let dir = std::env::temp_dir().join(format!("pyr-conn-test-{}", crypto::random_bytes::<6>().iter().map(|b| format!("{b:02x}")).collect::<String>()));
         Hub::new(Db::open_in_memory().unwrap(), [7u8; 32], "example.org".into(), 7777, dir)
     }
 
@@ -1977,7 +1977,7 @@ mod tests {
         let (key, sig) = {
             let id = crypto::Identity::generate();
             let pk = [9u8; 32];
-            (ingle_proto::b64::encode(&pk), ingle_proto::b64::encode(&id.sign(&pk)))
+            (pyr_proto::b64::encode(&pk), pyr_proto::b64::encode(&id.sign(&pk)))
         };
         assert!(forbidden(c.handle(Request::VoiceJoin { channel_id: lounge.id, e2ee_pub: key, e2ee_sig: sig, self_mute: false, self_deaf: false })));
         // Nobody starts a conversation with one, befriends it or makes it an admin.
@@ -2093,9 +2093,9 @@ mod tests {
         assert!(c.handle(Request::SetVouches { vouches: vec![] }).is_ok());
         assert!(matches!(m.handle(Request::GetVouches { by: vec![b.clone()] }), Ok(Event::Vouches { vouches }) if vouches.is_empty()));
         assert!(matches!(m.handle(Request::GetVouchesForMe {}), Ok(Event::Vouches { vouches }) if vouches.is_empty()));
-        // Messages for someone's Ingle only go to members who are here, and never too big.
+        // Messages for someone's Pyr only go to members who are here, and never too big.
         assert!(matches!(c.handle(Request::Handshake { to: mara.clone(), data: "{}".into() }), Err((ErrorCode::NotFound, _))));
-        assert!(c.handle(Request::Handshake { to: mara.clone(), data: "x".repeat(ingle_proto::handshake::HANDSHAKE_MAX + 1) }).is_err());
+        assert!(c.handle(Request::Handshake { to: mara.clone(), data: "x".repeat(pyr_proto::handshake::HANDSHAKE_MAX + 1) }).is_err());
         assert!(c.handle(Request::Handshake { to: b, data: "{}".into() }).is_err(), "not to yourself");
     }
 
@@ -2297,7 +2297,7 @@ mod tests {
         // It fits in one reply, with what's waiting first.
         assert!(!reports.is_empty());
         let b = frame(1, Event::Bugs { reports: reports.clone() });
-        assert!(b.len() <= ingle_proto::MAX_CONTROL_FRAME, "{} bytes", b.len());
+        assert!(b.len() <= pyr_proto::MAX_CONTROL_FRAME, "{} bytes", b.len());
         assert!(reports.iter().all(|r| r.status == BugStatus::New), "the new ones come first");
         assert_eq!(reports[0].report.title, "report 59", "newest first");
     }
@@ -2309,7 +2309,7 @@ mod tests {
         hub.db.insert_user(&owner, "Owner", Role::Owner).unwrap();
         hub.db.insert_user(&member, "Member", Role::Member).unwrap();
         let ip: std::net::IpAddr = "203.0.113.9".parse().unwrap();
-        let file = |path: &str, data: &[u8]| SourceFile { path: path.into(), data: ingle_proto::b64::encode(data) };
+        let file = |path: &str, data: &[u8]| SourceFile { path: path.into(), data: pyr_proto::b64::encode(data) };
         let good = || PluginSubmission {
             name: "Dice\u{7}".into(),
             kind: "addon".into(),
@@ -2383,11 +2383,11 @@ mod tests {
 
     /// A skin's files, by `author` (in its skin.json).
     fn skin_files(author: &str) -> Vec<SourceFile> {
-        let file = |path: &str, data: &[u8]| SourceFile { path: path.into(), data: ingle_proto::b64::encode(data) };
+        let file = |path: &str, data: &[u8]| SourceFile { path: path.into(), data: pyr_proto::b64::encode(data) };
         let json = r##"{ "name": "Blood Moon", "version": "1.0", "summary": "Red and black.", "author": "AUTHOR",
             "colors": { "main": "#1a0d0f", "ember": "#d4202c" }, "sounds": { "message": "sounds/message.ings" } }"##
             .replace("AUTHOR", author);
-        let sound = ingle_proto::sound::write(1, &[vec![0xf8, 0xff, 0xfe]]);
+        let sound = pyr_proto::sound::write(1, &[vec![0xf8, 0xff, 0xfe]]);
         vec![file("skin.json", json.as_bytes()), file("sounds/message.ings", &sound), file("big.txt", &vec![b'a'; 60_000])]
     }
 
@@ -2404,12 +2404,12 @@ mod tests {
             let author = if by == eve { "Eve" } else { "Mara" };
             PluginSubmission { name: "Blood Moon".into(), kind: SKIN_KIND.into(), version: "1.0".into(), author_id: by.into(), files: skin_files(author), ..Default::default() }
         };
-        // A skin is checked as Ingle checks skins.
+        // A skin is checked as Pyr checks skins.
         let mut bad = skin(&mara);
-        bad.files[0].data = ingle_proto::b64::encode(br##"{ "name": "X", "version": "1", "colors": { "body": "#333333", "main": "#303030" } }"##);
+        bad.files[0].data = pyr_proto::b64::encode(br##"{ "name": "X", "version": "1", "colors": { "body": "#333333", "main": "#303030" } }"##);
         assert!(hub.take_plugin_submission(ip(1), bad, true).unwrap_err().contains("hard to read"));
         let mut bad = skin(&mara);
-        bad.files.push(SourceFile { path: "tool.exe".into(), data: ingle_proto::b64::encode(b"MZ") });
+        bad.files.push(SourceFile { path: "tool.exe".into(), data: pyr_proto::b64::encode(b"MZ") });
         assert!(hub.take_plugin_submission(ip(2), bad, true).unwrap_err().contains("doesn't use it"));
         // Signed: the sender is kept. Not signed: nobody is, and it can't be a new version.
         let first = hub.take_plugin_submission(ip(3), skin(&mara), true).unwrap();
@@ -2427,12 +2427,12 @@ mod tests {
         let mut as_plugin = skin(&mara);
         as_plugin.kind = "addon".into();
         as_plugin.update_of = first;
-        as_plugin.files = vec![SourceFile { path: "Cargo.toml".into(), data: ingle_proto::b64::encode(b"[package]") }];
+        as_plugin.files = vec![SourceFile { path: "Cargo.toml".into(), data: pyr_proto::b64::encode(b"[package]") }];
         assert!(hub.take_plugin_submission(ip(8), as_plugin, true).unwrap_err().contains("is a skin"));
         let mut v2 = skin(&mara);
         v2.version = "1.1".into();
         v2.update_of = first;
-        v2.files[2] = SourceFile { path: "OFL.txt".into(), data: ingle_proto::b64::encode(b"SIL Open Font License") };
+        v2.files[2] = SourceFile { path: "OFL.txt".into(), data: pyr_proto::b64::encode(b"SIL Open Font License") };
         let second = hub.take_plugin_submission(ip(9), v2, true).unwrap();
         // The owner sees skins counted apart, and what the new version changed.
         assert_eq!(hub.info_for(&owner).new_skin_submissions, 3);
@@ -2476,7 +2476,7 @@ mod tests {
         ctx(&hub, &owner).handle(Request::SetPluginSubmissions { on: true }).unwrap();
         let ip = |n: u8| -> std::net::IpAddr { format!("192.0.2.{n}").parse().unwrap() };
         let (mara, eve) = (crypto::Identity::generate().user_id(), crypto::Identity::generate().user_id());
-        let file = |path: &str, data: &[u8]| SourceFile { path: path.into(), data: ingle_proto::b64::encode(data) };
+        let file = |path: &str, data: &[u8]| SourceFile { path: path.into(), data: pyr_proto::b64::encode(data) };
         let plugin = |by: &str, author: &str| PluginSubmission {
             name: "Poker".into(),
             kind: "addon".into(),
@@ -2515,7 +2515,7 @@ mod tests {
         skin.files = skin_files("Eve");
         hub.take_plugin_submission(ip(9), skin, true).unwrap();
         // Firelit Games' names are the owner's alone.
-        for (i, name) in ["Firelit Games", "firelit", "The Firelit Crew", "Ingle"].into_iter().enumerate() {
+        for (i, name) in ["Firelit Games", "firelit", "The Firelit Crew", "Pyr"].into_iter().enumerate() {
             let someone = crypto::Identity::generate().user_id();
             let err = hub.take_plugin_submission(ip(120 + i as u8), plugin(&someone, name), true).unwrap_err();
             assert!(err.contains("Firelit Games' own"), "{name}: {err}");
@@ -2549,7 +2549,7 @@ mod tests {
         let owner = uid();
         hub.db.insert_user(&owner, "Owner", Role::Owner).unwrap();
         ctx(&hub, &owner).handle(Request::SetPluginSubmissions { on: true }).unwrap();
-        let file = |path: &str, data: &[u8]| SourceFile { path: path.into(), data: ingle_proto::b64::encode(data) };
+        let file = |path: &str, data: &[u8]| SourceFile { path: path.into(), data: pyr_proto::b64::encode(data) };
         // A picture and a font too big to come along together with everything else.
         let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\x07\x80\0\0\x04\x38\x08\x06\0\0\0".to_vec();
         png.resize(650_000, 0);
@@ -2563,10 +2563,10 @@ mod tests {
             Ok(Event::PluginSubmission { files: inline, more, .. }) => {
                 assert_eq!(inline.len() + more.len(), files.len());
                 assert_eq!(more.iter().map(|d| d.path.as_str()).collect::<Vec<_>>(), vec!["bg.png"]);
-                let total: usize = inline.iter().map(|f| ingle_proto::b64::decode(&f.data).unwrap().len()).sum();
+                let total: usize = inline.iter().map(|f| pyr_proto::b64::decode(&f.data).unwrap().len()).sum();
                 assert!(total <= INLINE_SUBMISSION_BYTES);
                 match ctx(&hub, &owner).handle(Request::GetSubmissionFile { id, path: "bg.png".into() }) {
-                    Ok(Event::SubmissionFile { data, .. }) => assert_eq!(ingle_proto::b64::decode(&data).unwrap(), png),
+                    Ok(Event::SubmissionFile { data, .. }) => assert_eq!(pyr_proto::b64::decode(&data).unwrap(), png),
                     other => panic!("{other:?}"),
                 }
             }
@@ -2581,7 +2581,7 @@ mod tests {
         let (old, new) = (uid(), uid());
         hub.db.insert_user(&old, "Old", Role::Member).unwrap();
         hub.db.insert_user(&new, "New", Role::Member).unwrap();
-        hub.db.set_joined_at(&old, ingle_proto::now_ms() - 10 * 24 * 3600 * 1000).unwrap();
+        hub.db.set_joined_at(&old, pyr_proto::now_ms() - 10 * 24 * 3600 * 1000).unwrap();
         let mb = |n: u64| n << 20;
         // A newcomer gets 100 MB; someone who's been here a while, a tenth of the server's 5 GB.
         assert!(hub.reserve_upload(&new, mb(150)).is_err());
@@ -2726,7 +2726,7 @@ mod tests {
         let Event::History { messages, complete, .. } = &ev else { panic!() };
         assert!(!complete);
         assert!(messages.len() < 100 && !messages.is_empty());
-        assert!(frame(1, ev.clone()).len() < ingle_proto::MAX_CONTROL_FRAME);
+        assert!(frame(1, ev.clone()).len() < pyr_proto::MAX_CONTROL_FRAME);
     }
 
     #[test]
@@ -2896,10 +2896,10 @@ mod tests {
     }
 }
 
-/// One part of a backup (see [`ingle_proto::control::BACKUP_MANIFEST`]), for the owner only:
+/// One part of a backup (see [`pyr_proto::control::BACKUP_MANIFEST`]), for the owner only:
 /// it's everything on the server, direct messages and the server's own key included.
 async fn backup_item(hub: &Hub, uid: &str, item: &str, send: &mut quinn::SendStream) -> Result<()> {
-    use ingle_proto::control::{BACKUP_CERT, BACKUP_DATABASE, BACKUP_FILE_PREFIX, BACKUP_KEY, BACKUP_MANIFEST, BackupManifest};
+    use pyr_proto::control::{BACKUP_CERT, BACKUP_DATABASE, BACKUP_FILE_PREFIX, BACKUP_KEY, BACKUP_MANIFEST, BackupManifest};
     let reply = |r: FileReply| framing::encode(&r);
     let fail = |msg: &str| reply(FileReply { ok: false, id: String::new(), mime: String::new(), size: 0, error: msg.to_string() });
     if hub.member(uid).map(|m| m.role) != Some(Role::Owner) {
@@ -2912,14 +2912,14 @@ async fn backup_item(hub: &Hub, uid: &str, item: &str, send: &mut quinn::SendStr
         BACKUP_MANIFEST => {
             let m = BackupManifest {
                 version: env!("CARGO_PKG_VERSION").to_string(),
-                made_at: ingle_proto::now_ms(),
+                made_at: pyr_proto::now_ms(),
                 name: hub.info().name,
                 files: hub.db.all_files().into_iter().filter(|(id, _)| hub.file_path(id).map(|p| p.is_file()).unwrap_or(false)).collect(),
             };
             serde_json::to_vec(&m).map_err(|e| e.to_string())
         }
         BACKUP_DATABASE => {
-            let tag: String = ingle_proto::crypto::random_bytes::<8>().iter().map(|b| format!("{b:02x}")).collect();
+            let tag: String = pyr_proto::crypto::random_bytes::<8>().iter().map(|b| format!("{b:02x}")).collect();
             let tmp = data_dir.join(format!("backup-{tag}.db"));
             // Quick (it copies pages), and nothing may write meanwhile anyway.
             let r = hub.db.snapshot(&tmp).and_then(|()| Ok(std::fs::read(&tmp)?));

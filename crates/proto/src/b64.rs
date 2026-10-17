@@ -17,7 +17,7 @@ pub fn decode_array<const N: usize>(s: &str) -> Option<[u8; N]> {
     <[u8; N]>::try_from(v.as_slice()).ok()
 }
 
-/// `#[serde(with = "ingle_proto::b64::bytes")]` for `Vec<u8>` fields.
+/// `#[serde(with = "pyr_proto::b64::bytes")]` for `Vec<u8>` fields.
 pub mod bytes {
     use serde::{Deserialize, Deserializer, Serializer};
 

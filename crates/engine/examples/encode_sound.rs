@@ -1,13 +1,13 @@
-//! Turns audio files into Ingle sound files (`.ings`), prepared the way uploads are: cut to
+//! Turns audio files into Pyr sound files (`.ings`), prepared the way uploads are: cut to
 //! the longest a sound can be, faded at the ends and evened out in loudness.
 //!
 //!   python3 tools/make-sounds.py /tmp/sounds
-//!   cargo run -p ingle-engine --example encode_sound -- /tmp/sounds crates/engine/assets/sounds
+//!   cargo run -p pyr-engine --example encode_sound -- /tmp/sounds crates/engine/assets/sounds
 //!
 //! Every sound file in the first folder (WAV, MP3, OGG Vorbis or Opus, FLAC, M4A) becomes
 //! `<name>.ings` in the second.
 
-use ingle_engine::soundboard;
+use pyr_engine::soundboard;
 
 fn main() -> anyhow::Result<()> {
     let a: Vec<String> = std::env::args().collect();

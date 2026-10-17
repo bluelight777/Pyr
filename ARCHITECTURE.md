@@ -1,7 +1,7 @@
-# How Ingle works
+# How Pyr works
 
 ```
-              ┌──────────────── ingle.exe ─────────────────┐
+              ┌──────────────── pyr.exe ─────────────────┐
               │ app (egui UI)                              │
               │   └─ engine: state, E2EE, audio, video     │
               └──────────────┬─────────────────────────────┘
@@ -10,7 +10,7 @@
                              │  • audio: QUIC datagrams
                              │  • video: one unidirectional stream per frame
               ┌──────────────┴─────────────────────────────┐
-              │ ingle-server                               │
+              │ pyr-server                               │
               │   SQLite (members, channels, messages)     │
               │   SFU: forwards encrypted media, never     │
               │   decrypts it                              │
@@ -20,18 +20,18 @@
 | Crate | What it holds |
 |---|---|
 | `crates/proto` | Wire types (`control.rs`), binary media headers (`media.rs`), identities and E2EE primitives (`crypto.rs`), invite links (`invite.rs`), QUIC endpoint helper with a plain-UDP fallback (`udp.rs`). |
-| `crates/server` | `ingle-server`: TLS identity, SQLite storage, login, chat, roles, the media relay (`hub.rs`, `conn.rs`). |
+| `crates/server` | `pyr-server`: TLS identity, SQLite storage, login, chat, roles, the media relay (`hub.rs`, `conn.rs`). |
 | `crates/engine` | Everything the client does except drawing: connections and reconnects, state the UI reads, calls, E2EE key management, the audio engine, video capture/encode/decode, push-to-talk. |
 | `crates/app` | The desktop UI (eframe/egui): server rail, channels, chat with markdown, call stage, dialogs, theme and icons. |
 
 ## Transport
 
-- **QUIC** (quinn 0.11, rustls + ring, TLS 1.3, ALPN `ingle/1`) on one UDP port. One
+- **QUIC** (quinn 0.11, rustls + ring, TLS 1.3, ALPN `pyr/1`) on one UDP port. One
   connection per server carries text, voice and video, so there's a single port to forward
   and congestion control sees all traffic together.
 - **Server identity without a CA.** The server makes a self-signed certificate on first
   run. Invite links carry its SHA-256 fingerprint
-  (`ingle://host:port/CODE?fp=…`), and the client accepts that certificate only.
+  (`pyr://host:port/CODE?fp=…`), and the client accepts that certificate only.
 - **Control stream.** The client opens one bidirectional stream, writes the preamble
   `ING\x01`, then exchanges length-prefixed JSON frames: requests with ids, replies and
   pushed events (`Hello`, `Ready`, `MessageCreated`, `VoiceUpserted`, `E2eeKey`, …).
@@ -49,7 +49,7 @@
 - Your identity is an Ed25519 key pair in `identity.key`. The base64 public key is your
   user id; there are no accounts, emails or passwords.
 - Login: the server sends a random nonce in `Hello`. The client signs
-  `"ingle-login-v1" ‖ nonce ‖ TLS exporter ‖ user id`. The TLS exporter ties the signature
+  `"pyr-login-v1" ‖ nonce ‖ TLS exporter ‖ user id`. The TLS exporter ties the signature
   to this exact connection, so a login can't be replayed or relayed elsewhere.
 - New people need an invite code (from the link) the first time; members can always log
   back in. Invites can be limited by uses and expiry. The owner link is a one-use invite
@@ -85,8 +85,8 @@ the server sees who talks to whom and when (metadata) and packet sizes.
 ## Making sure it's them (0.7.6)
 
 `proto::handshake`, `engine::verify`, `app::trust`. A server can show you someone else under
-a friend's name (a different identity, same display name), so Ingle gives two ways to check
-an identity that need no codes read out. Both run between the two Ingles through a server
+a friend's name (a different identity, same display name), so Pyr gives two ways to check
+an identity that need no codes read out. Both run between the two Pyrs through a server
 they share (`Request::Handshake` → `Event::Handshake`, relayed only to members who are
 online there and not blocked; the server never reads them), and both take in each end's
 view of who's at each end (both ids), so a server that showed either of them someone else
@@ -95,7 +95,7 @@ can't make them come out right.
 - **Compare words**: a short authentication string after a commitment (like Matrix's emoji
   verification). The starter sends H(sid, its X25519 key); the other replies with its key;
   the starter reveals its key, which must match the commitment. Both show six words (48
-  bits) from `SHA-512(sid, ids, keys, X25519 secret)`, each from Ingle's own list of 256
+  bits) from `SHA-512(sid, ids, keys, X25519 secret)`, each from Pyr's own list of 256
   (`proto::words`: easy to say, no two a sound apart, none that run together into another).
   Whoever is in the middle has to choose their keys before seeing the other's, so they get
   one try: 1 in 2^48. People say the words to each other (a call, the phone, in person).
@@ -123,7 +123,7 @@ What's made sure of is kept in `config.json` (`verified`: id, name then, how, wh
 ## Idle (0.7.6)
 
 `engine::idle`: every 5 seconds the app works out whether you've been away five minutes:
-Windows' `GetLastInputInfo`, X11's screensaver extension on Linux, or Ingle's own window
+Windows' `GetLastInputInfo`, X11's screensaver extension on Linux, or Pyr's own window
 where neither says, and nothing said in a call. `SetIdle` tells each server; it shows a
 member as idle (`Member::idle`, a moon) while every connection of theirs is idle, and tells
 everyone (`MemberUpserted`) when that changes (at most one change in ten seconds a
@@ -140,7 +140,7 @@ connection, after six). "Idle" can also be set by hand from your name.
   the owner can). Both are kept per member in the server's settings, so they last through
   rejoins and restarts.
 - **Soundboard**: a sound played is a small control message (`PlaySound` → `SoundPlayed`
-  to everyone in the channel), not audio: each app mixes the sound itself, from Ingle's own
+  to everyone in the channel), not audio: each app mixes the sound itself, from Pyr's own
   sounds (made by the app) or the Opus file the sound is on its server (cached). Rate-limited
   per person; server muted people's sounds don't play.
 - **Stream sound** (track 3) goes only to people watching that person's screen share.
@@ -186,7 +186,7 @@ processing: AEC3, NS, AGC2, high-pass), `nnnoiseless` (RNNoise), `deep_filter` w
 
 **Stream sound** has its own thread: 48 kHz stereo capture, Opus 128 kbps stereo
 (`Application::Audio`), paused during silence. On Windows it uses WASAPI *process
-loopback*: whole-screen shares capture every process except Ingle's own process tree,
+loopback*: whole-screen shares capture every process except Pyr's own process tree,
 window shares capture just that window's process tree.
 
 Some PCs play all their sound again from another process (Voicemeeter, SteelSeries Sonar,
@@ -224,7 +224,7 @@ capture → latest-frame slot (never queues stale frames) → encoder thread:
 
 ## Server storage
 
-`ingle-data/ingle.db` (SQLite, WAL): meta (the server's name and settings), users (id,
+`pyr-data/ingle.db` (SQLite, WAL): meta (the server's name and settings), users (id,
 name, role, banned), roles and member_roles, channels, messages (with reply and edit time),
 reactions, invites, files (attached pictures, profile pictures and emoji pictures, each
 linked to its message; the bytes sit in `files/`), dms, groups and group_members, relations
@@ -237,7 +237,7 @@ readable only by them from the moment they're written. The server's private key 
 the backup sealed to the owner (`server-key.der.sealed`: ChaCha20-Poly1305 with a key derived
 by HKDF from the owner's identity), so a backup folder that leaks (a synced cloud folder,
 say) can't be used to pass for the server; restoring with the server's identity takes the
-owner's Ingle, or their `identity.key`.
+owner's Pyr, or their `identity.key`.
 
 Each member's row notes the invite they joined with: banning them deletes that invite, so
 they can't walk back in through the same link with a new identity.
@@ -263,10 +263,10 @@ groups when they log in (`GROUPS_CAP`), and the server tells older apps nothing 
 
 ## Bug reports
 
-Every copy of Ingle sends its bug reports to one central inbox, the server named when Ingle
-is built (`INGLE_BUG_SERVER=host:port/<server key>`), whichever servers its user is on: a
+Every copy of Pyr sends its bug reports to one central inbox, the server named when Pyr
+is built (`PYR_BUG_SERVER=host:port/<server key>`), whichever servers its user is on: a
 report is sent instead of logging in, with no account (`engine/src/bugs.rs`). That server
-keeps reports only while its owner has *Collect Ingle bug reports* on, and caps them per
+keeps reports only while its owner has *Collect Pyr bug reports* on, and caps them per
 address and per hour. The owner reads them under Bug reports in the channel list and
 approves the ones to fix; their app saves the approved ones (with their logs) to
 `approved-bug-reports/<server key>.json` in its settings folder, which is what Claude reads
@@ -279,7 +279,7 @@ with collecting off, sending switches it on first.
 **Reports sent by themselves** (`bugs::auto_report`): when screen sharing or the camera
 won't start (after one more try a moment later), when a capture stops working mid-share and
 has to be started again (or can't be), and when the last run ended in a crash or a freeze it
-never came out of (`bugs::last_run_trouble`, read from `ingle.previous.log`), Ingle sends a
+never came out of (`bugs::last_run_trouble`, read from `pyr.previous.log`), Pyr sends a
 report titled "Automatic: …" with what it knows and its log, the same way as one sent by
 hand. Each kind goes at most once every six hours, five in all per run; the first ever sent
 says so in a notice, and Settings → About turns them off.
@@ -293,9 +293,9 @@ capture that doesn't start within 10 seconds counts as failed.
 
 ## Plugins
 
-**The Ingle Library** is a list on the website (`ingle/library/index.json`) of programs and
+**The Pyr Library** is a list on the website (`pyr/library/index.json`) of programs and
 add-ons, with every file's SHA-256 and size, signed with the release key under its own
-context (`ingle plugin library v1`, so an update signature can't pass as a list or the other
+context (`pyr plugin library v1`, so an update signature can't pass as a list or the other
 way round) and dated like a release: the app takes no list past its date or older than one it
 has seen (`proto/src/library.rs`, `app/src/plugins/library.rs`). It's made offline with
 `scripts/make-library.sh` from `installer/site/library/plugins.json` and the built files.
@@ -307,7 +307,7 @@ program).
 
 **Add-ons** (`app/src/plugins/addon.rs`) are WebAssembly modules run by wasmi, an
 interpreter, each on a thread of its own. A module that imports anything is refused, so an
-add-on can reach nothing but the JSON Ingle hands it; each call gets a fuel budget (about 300
+add-on can reach nothing but the JSON Pyr hands it; each call gets a fuel budget (about 300
 million instructions) and the module 64 MB of memory, and one that runs out is stopped. It can
 add /commands, draw a panel from a few kinds of widgets, and keep up to 64 KB of data of its
 own. What it sends (4,000 characters at most) goes only to the channel that's open, as the
@@ -316,24 +316,24 @@ listed. The plugin kit (`plugins/kit`) writes the module's side.
 
 **Programs** are apps of their own, run with the user's rights like anything else they
 install: the protection is that the library only lists programs Firelit Games has read and
-built from source, and Ingle only opens the files the list names. On Windows a program opens
-inside Ingle's window (`app/src/plugins/programs.rs`): Ingle starts it with `INGLE_EMBED`
-set, takes its main window off the taskbar, makes Ingle's window its owner, removes its frame
-and keeps it over the page it has in Ingle (following the window as it moves, and stepping
-aside for Ingle's own menus, dialogs and notices). A window that keeps part of its frame
+built from source, and Pyr only opens the files the list names. On Windows a program opens
+inside Pyr's window (`app/src/plugins/programs.rs`): Pyr starts it with `PYR_EMBED`
+set, takes its main window off the taskbar, makes Pyr's window its owner, removes its frame
+and keeps it over the page it has in Pyr (following the window as it moves, and stepping
+aside for Pyr's own menus, dialogs and notices). A window that keeps part of its frame
 anyway (an undecorated one that keeps room round itself for its shadow, say) is made that much
 bigger and cut down to the part it draws in, so that part fills the page to its edges.
 **Pop out** gives it its frame back.
 
-**Plugins and skins sent in** (`engine/src/plugins.rs`): anyone's Ingle (or the Claude
+**Plugins and skins sent in** (`engine/src/plugins.rs`): anyone's Pyr (or the Claude
 connector) sends a plugin's Rust source (never a built file) or a skin's files to the library
-server, which is the bug report server unless Ingle was built with `INGLE_LIBRARY_SERVER`,
-before logging in and with no account. What's sent is signed with the sender's Ingle
+server, which is the bug report server unless Pyr was built with `PYR_LIBRARY_SERVER`,
+before logging in and with no account. What's sent is signed with the sender's Pyr
 identity over the server's nonce, the connection's TLS exporter and a digest of everything
 in it, file by file (`crypto::submission_transcript`, `control::submission_digest`), so a
 signature can't be replayed, relayed or moved to other files. A skin's files that don't fit
 the first frame follow in parts, checked against the signed list of them. The server keeps
-them only while its owner has *Collect plugins for the Ingle Library* on, after checking
+them only while its owner has *Collect plugins for the Pyr Library* on, after checking
 them (a plugin: a Cargo.toml, plain relative paths, 600 KB and 400 files at most; a skin: the
 skin checks below; a few an hour per address and per sender, a cap on how many wait), and
 only the owner sees them, under Plugins sent in and Skins sent in. A **new version** names
@@ -350,27 +350,27 @@ and words: it never decides anything.
 A skin (`proto/src/skin.rs`, the guide in `skins/README.md`) is a `skin.json` and the files
 it names: up to 25 colors (the palette everything in the app is drawn with, read through
 functions in `app/src/theme.rs`), a picture behind the chat or the whole window, body and
-bold fonts, and sounds for Ingle's chimes (Opus `.ings` files). 24 files, 700 KB each and
+bold fonts, and sounds for Pyr's chimes (Opus `.ings` files). 24 files, 700 KB each and
 4 MB in all at most. The checks, everywhere a skin goes (the connector, the server, the
 Library's list, installing, wearing): plain paths, known fields, colors that keep text
 readable (WCAG contrast 4.5 for text on the chat and side panels, 3 for secondary text),
-pictures that are PNG, JPEG or WebP no bigger than 4096 pixels a side, sounds that are Ingle
+pictures that are PNG, JPEG or WebP no bigger than 4096 pixels a side, sounds that are Pyr
 sound files, and fonts that parse (the app's text renderer would stop the app on a bad one,
 so it's only ever handed fonts that load). The Library lists skins apart from plugins (older
 apps don't see them), and installing one checks every file against the signed list, then the
 whole as a skin, then swaps its folder in; wearing one checks it again (`app/src/looks.rs`).
 A skin can be tried without installing it: one Claude is making (the connector writes it to
-`skin-preview/` in Ingle's settings folder, then a stamp Ingle looks for every second), one in
+`skin-preview/` in Pyr's settings folder, then a stamp Pyr looks for every second), one in
 a folder of your own (worn again when its files change), or one sent in, by the library's
 owner.
 
 ## The Claude connector
 
-`ingle-mcp` (`crates/mcp`) is an MCP server the Claude app (or Claude Code) starts on the
+`pyr-mcp` (`crates/mcp`) is an MCP server the Claude app (or Claude Code) starts on the
 person's PC, speaking JSON-RPC a line at a time on stdin and stdout; it answers both the
 stateless kind of MCP (2026-07-28: `server/discover`, the version in every request) and the
 older kind that begins with `initialize`. Its tools start, check, show and send skins and
-plugins, make sounds, and list what was sent. It reads Ingle's identity and name from Ingle's
+plugins, make sounds, and list what was sent. It reads Pyr's identity and name from Pyr's
 settings folder to sign what it sends, writes nothing there but the skin being previewed,
 and can't reach the person's servers or messages. Settings → Claude adds it to the Claude
 app's `claude_desktop_config.json` (keeping everything else there, with a copy of the file
@@ -379,19 +379,19 @@ as it was) or gives the `claude mcp add` line for Claude Code.
 ## Setting up servers (`crates/host`)
 
 **Create a server** in the app ends with the same step either way: an SSH session to a
-Linux machine that uploads a static `ingle-server` (musl, built for x86-64 and ARM64 by
+Linux machine that uploads a static `pyr-server` (musl, built for x86-64 and ARM64 by
 `scripts/build-vps-server.sh` and shipped inside both installers) plus
-`install-ingle-server.sh`, and runs the script as root (directly, or through `sudo -n` /
+`install-pyr-server.sh`, and runs the script as root (directly, or through `sudo -n` /
 `sudo -S`). The script is idempotent: it installs the program to `/usr/local/bin`,
-creates the `ingle-server` user and `/var/lib/ingle-server`, writes a hardened systemd
+creates the `pyr-server` user and `/var/lib/pyr-server`, writes a hardened systemd
 unit, opens the UDP port in ufw, firewalld or iptables when one of them is active, runs
-`ingle-server links` (sets up the community and prints the owner and invite links as
-`INGLE_*=` lines) and starts the service. Lines starting with `==> ` become progress steps
+`pyr-server links` (sets up the community and prints the owner and invite links as
+`PYR_*=` lines) and starts the service. Lines starting with `==> ` become progress steps
 in the app.
 
-- **Rent** (`digitalocean.rs`): with the person's API token, add Ingle's SSH key
+- **Rent** (`digitalocean.rs`): with the person's API token, add Pyr's SSH key
   (`POST /v2/account/keys`, or find it on a 422), create an `ubuntu-24-04-x64` droplet
-  with that key and an SSH host key Ingle made for it (through cloud-init, so the first login
+  with that key and an SSH host key Pyr made for it (through cloud-init, so the first login
   already knows the server it's talking to), poll until it's `active` with a public IPv4
   address, then install over
   SSH as root, retrying while the droplet boots. Prices and regions come from the API.
@@ -407,7 +407,7 @@ in the app.
 - **Check** (`probe.rs`): a QUIC handshake from this PC to the new server, pinned to the
   fingerprint in the owner link. A timeout means something in front of the server (usually
   the provider's firewall) blocks UDP, and the UI says where to open it.
-- Ingle's own key (`ssh/ingle_ed25519`) and a list of set-up servers
+- Pyr's own key (`ssh/pyr_ed25519`) and a list of set-up servers
   (`hosted-servers.json`) live in the settings folder.
 
 The app joins the new server with the owner link as soon as the setup finishes.
@@ -417,7 +417,7 @@ The app joins the new server with the owner link as soon as the setup finishes.
 What one person, or one place, can use up on a server (`server/src/hub.rs`, `conn.rs`):
 
 - **Connections**: 32 at once from one place (an IPv4 address, or an IPv6 /64), 128 from an
-  IPv6 /48, 6 per member, 4000 in all (`INGLE_MAX_CONNECTIONS`). Before logging in: 8 per
+  IPv6 /48, 6 per member, 4000 in all (`PYR_MAX_CONNECTIONS`). Before logging in: 8 per
   place, 16 per /48 and 256 in all, and 15 seconds to log in, handshake included.
 - **Requests**: a token bucket per connection (20 a second, bursts of 80; heavier requests
   cost more), messages and reactions with buckets of their own.
@@ -428,7 +428,7 @@ What one person, or one place, can use up on a server (`server/src/hub.rs`, `con
   people an hour (bursts of 30).
 - **Ringing**: a call rings (or says no) 4 times in a row, then once every 5 seconds;
   starting or adding to a group costs four requests.
-- **Storage**: 5 GB for a server's pictures and files (`INGLE_STORAGE_MB`), a tenth of that
+- **Storage**: 5 GB for a server's pictures and files (`PYR_STORAGE_MB`), a tenth of that
   (at most 1 GB) per member, 100 MB in a member's first three days, 400 MB an hour.
 - **Bug reports** (only while collecting): 5 an hour per place, 60 an hour in all, 2000
   waiting at most; the owner's list always fits in one reply.
@@ -454,7 +454,7 @@ What one person, or one place, can use up on a server (`server/src/hub.rs`, `con
   codes in invite links taken out first.
 - **Plugins**: an add-on can't reach anything outside its sandbox, and only sends what the
   person asked for to the channel they have open. A program runs with the user's rights, so
-  what keeps a bad one out is the review before it's built and the signed list Ingle checks
+  what keeps a bad one out is the review before it's built and the signed list Pyr checks
   its files against. Whoever holds the release key could list a harmful program, as they
   could sign a harmful update.
 

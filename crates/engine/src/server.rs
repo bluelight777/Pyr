@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ingle_proto::control::*;
-use ingle_proto::framing;
+use pyr_proto::control::*;
+use pyr_proto::framing;
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, info, warn};
@@ -76,7 +76,7 @@ async fn run(
     conn_slot: Arc<Mutex<Option<quinn::Connection>>>,
 ) {
     let key = entry.key.clone();
-    let Some(fp) = ingle_proto::b64::decode_array::<32>(&key) else {
+    let Some(fp) = pyr_proto::b64::decode_array::<32>(&key) else {
         set_status(&shared, &key, ConnStatus::Failed("invalid server fingerprint".into()));
         return;
     };
@@ -395,7 +395,7 @@ fn log_newest(s: &ServerView, cid: ChannelId) -> Option<MessageId> {
 
 
 fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
-    // Someone's Ingle making sure of me (or answering me making sure of them): apart from the rest.
+    // Someone's Pyr making sure of me (or answering me making sure of them): apart from the rest.
     let ev = match ev {
         Event::Handshake { from, data } => return crate::verify::on_handshake(shared, key, &from, &data),
         ev => ev,

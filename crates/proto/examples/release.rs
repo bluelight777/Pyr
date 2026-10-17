@@ -1,11 +1,11 @@
 //! Make a signed `latest.json` for the in-app updater.
 //!
-//!   cargo run -p ingle-proto --example release -- keygen release-key.txt
-//!   cargo run -p ingle-proto --example release -- sign --key release-key.txt --version 0.2.0 \
-//!       --notes "What's new" --base-url https://firelitgames.com/ingle \
-//!       --windows dist/Ingle-Setup-0.2.0.exe --deb dist/ingle_0.2.0_amd64.deb --out latest.json
+//!   cargo run -p pyr-proto --example release -- keygen release-key.txt
+//!   cargo run -p pyr-proto --example release -- sign --key release-key.txt --version 0.2.0 \
+//!       --notes "What's new" --base-url https://pyr.gg \
+//!       --windows dist/Pyr-Setup-0.2.0.exe --deb dist/pyr_0.2.0_amd64.deb --out latest.json
 //!
-//!   cargo run -p ingle-proto --example release -- refresh --key release-key.txt --in latest.json --out latest.json
+//!   cargo run -p pyr-proto --example release -- refresh --key release-key.txt --in latest.json --out latest.json
 //!
 //! A manifest counts for `--valid-days` (180 unless told) after it's signed: apps take no
 //! manifest past its date, so someone who breaks into the website can't keep serving an old one
@@ -19,9 +19,9 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use ingle_proto::b64;
-use ingle_proto::crypto::Identity;
-use ingle_proto::release::{self, Asset, Manifest};
+use pyr_proto::b64;
+use pyr_proto::crypto::Identity;
+use pyr_proto::release::{self, Asset, Manifest};
 
 fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)

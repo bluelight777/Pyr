@@ -8,7 +8,7 @@
       "summary": "A lean, private browser: it blocks ads and trackers, makes YouTube smooth, and has an AI sidebar.",
       "description": "Chimbrowser is a dark, private web browser built on the browser engine Windows already has (Microsoft Edge WebView2). It blocks ads and trackers with Brave's filter engine and the EasyList, EasyPrivacy and uBlock Origin lists, strips tracking codes from links, and sends Global Privacy Control. YouTube plays smoothly: its ads are removed and skipped, and it picks a video format your graphics card plays easily. The AI sidebar (Ctrl+Shift+A) has Claude, ChatGPT, Gemini, Perplexity and others, signed in with your own accounts, and can ask about the page you're on. Its settings are at chim://settings.",
       "license": "MIT OR Apache-2.0",
-      "review": "Read and built from its source for the Ingle Library. This build has four fixes from the review: websites can't read your clipboard without asking, Microsoft Defender SmartScreen keeps checking downloads and sites, pages can only open web pages in new tabs, and Chimbrowser's own pages can't be put inside other websites. It opens inside Ingle's window and fills its page there to the edges (Pop out gives it a window of its own), and carries its name, version and icon like other Windows programs. It needs Microsoft Edge WebView2, which Windows 10 and 11 already have.",
+      "review": "Read and built from its source for the Pyr Library. This build has four fixes from the review: websites can't read your clipboard without asking, Microsoft Defender SmartScreen keeps checking downloads and sites, pages can only open web pages in new tabs, and Chimbrowser's own pages can't be put inside other websites. It opens inside Pyr's window and fills its page there to the edges (Pop out gives it a window of its own), and carries its name, version and icon like other Windows programs. It needs Microsoft Edge WebView2, which Windows 10 and 11 already have.",
       "icon": "chimbrowser/icon.png",
       "windows": [
         "chimbrowser/0.1.3-3/windows/chimbrowser.exe",
@@ -25,7 +25,7 @@
       "description": "Type /roll and some dice (2d6+1, d20, 3d8-2 and so on; just /roll is a d20) and the roll goes to the channel as your message, with every die shown. Its panel has a button for each common die, a box for any other roll, and your last few rolls.",
       "author": "Firelit Games",
       "license": "MIT OR Apache-2.0",
-      "source": "https://github.com/bluelight777/ingle/tree/main/plugins/dice",
+      "source": "https://github.com/bluelight777/pyr/tree/main/plugins/dice",
       "icon": "dice/icon.png",
       "permissions": [
         "commands",
@@ -43,7 +43,7 @@
       "description": "/poker deals a Texas Hold'em showdown and posts everyone's cards, the board and who wins: /poker on its own is you against the dealer, /poker Mara is you against Mara, and /poker Mara, Sam, Lee deals those players (up to 8). /hand deals you five cards and names your hand. Its panel is heads-up Hold'em against a bot: you both start with 1,000 chips and ante 10 a hand, your chips carry over from hand to hand until one of you runs out, and Share in chat posts how you're doing. The bot plays fair: it only sees its own cards and the board.",
       "author": "Maanix",
       "license": "MIT OR Apache-2.0",
-      "review": "Read and built from its source for the Ingle Library. An add-on: it runs in Ingle's sandbox, with no way to reach your files, the internet or anything else on your PC. It sends a message only when you use /poker or /hand, or click Share in chat, and names typed after /poker are sent as plain text. One change from the review: the bot's hidden cards say \"face down\" (the card-back character it showed them with isn't in Ingle's fonts).",
+      "review": "Read and built from its source for the Pyr Library. An add-on: it runs in Pyr's sandbox, with no way to reach your files, the internet or anything else on your PC. It sends a message only when you use /poker or /hand, or click Share in chat, and names typed after /poker are sent as plain text. One change from the review: the bot's hidden cards say \"face down\" (the card-back character it showed them with isn't in Pyr's fonts).",
       "icon": "firelit-poker/icon.png",
       "permissions": [
         "commands",
@@ -59,10 +59,10 @@
       "name": "Blood Moon",
       "version": "1.1",
       "summary": "Deep reds and black, with a blood-red moon rising behind the chat.",
-      "description": "Ingle in the colors of the Brethren of Blood: near-black panels with a red glow, crimson buttons and highlights, and a blood-red moon over a dark ridge of pines that shows faintly through the chat. Only colors and a picture: Ingle's own fonts and sounds stay.",
+      "description": "Pyr in the colors of the Brethren of Blood: near-black panels with a red glow, crimson buttons and highlights, and a blood-red moon over a dark ridge of pines that shows faintly through the chat. Only colors and a picture: Pyr's own fonts and sounds stay.",
       "author": "Firelit Games",
       "license": "MIT OR Apache-2.0",
-      "review": "Made by Firelit Games. The picture is drawn by tools/make-skin-art.py in Ingle's source.",
+      "review": "Made by Firelit Games. The picture is drawn by tools/make-skin-art.py in Pyr's source.",
       "dir": "blood-moon/1.1"
     },
     {
@@ -70,10 +70,10 @@
       "name": "Aurora",
       "version": "1.0",
       "summary": "Northern lights over a frozen lake: deep navy panels and aurora-green highlights.",
-      "description": "Ingle under the northern lights: curtains of green and violet aurora over snowy peaks and a still, frozen lake that mirrors them, behind the whole window. Deep navy panels, aurora-green buttons and highlights, violet for admins.",
-      "author": "Ingle",
+      "description": "Pyr under the northern lights: curtains of green and violet aurora over snowy peaks and a still, frozen lake that mirrors them, behind the whole window. Deep navy panels, aurora-green buttons and highlights, violet for admins.",
+      "author": "Pyr",
       "license": "MIT OR Apache-2.0",
-      "review": "Made by Ingle. The picture was made with Meshy.",
+      "review": "Made by Pyr. The picture was made with Meshy.",
       "dir": "aurora/1.0"
     },
     {
@@ -82,9 +82,9 @@
       "version": "1.0",
       "summary": "A synthwave sunset: indigo panels, hot pink and neon cyan, a striped sun over a glowing grid.",
       "description": "An endless 1980s drive at dusk: a striped sun sinking behind neon-edged mountains, palm trees, and a glowing grid running to the horizon, behind the whole window. Indigo panels, hot-pink buttons, cyan glows, and the Poppins typeface.",
-      "author": "Ingle",
+      "author": "Pyr",
       "license": "MIT OR Apache-2.0",
-      "review": "Made by Ingle. The picture was made with Meshy. The fonts come with their licenses, in the skin's fonts folder.",
+      "review": "Made by Pyr. The picture was made with Meshy. The fonts come with their licenses, in the skin's fonts folder.",
       "dir": "neon-drive/1.0"
     },
     {
@@ -92,10 +92,10 @@
       "name": "Abyss",
       "version": "1.0",
       "summary": "The deep sea: dark blue panels, bioluminescent cyan, and jellyfish glowing in the dark.",
-      "description": "Ingle at the bottom of the ocean: a glowing jellyfish drifting through dark water, smaller pink and violet ones far off, and light falling from the surface far above, behind the whole window. Deep blue panels with bioluminescent cyan buttons and highlights.",
-      "author": "Ingle",
+      "description": "Pyr at the bottom of the ocean: a glowing jellyfish drifting through dark water, smaller pink and violet ones far off, and light falling from the surface far above, behind the whole window. Deep blue panels with bioluminescent cyan buttons and highlights.",
+      "author": "Pyr",
       "license": "MIT OR Apache-2.0",
-      "review": "Made by Ingle. The picture was made with Meshy.",
+      "review": "Made by Pyr. The picture was made with Meshy.",
       "dir": "abyss/1.0"
     },
     {
@@ -104,9 +104,9 @@
       "version": "1.0",
       "summary": "Cherry blossoms under a full moon: plum panels and petal-pink highlights.",
       "description": "A spring night: cherry blossoms reaching across a plum and indigo sky, petals drifting past a full moon, and a pagoda in the misty hills below, behind the whole window. Plum panels, petal-pink buttons and highlights, lavender for admins.",
-      "author": "Ingle",
+      "author": "Pyr",
       "license": "MIT OR Apache-2.0",
-      "review": "Made by Ingle. The picture was made with Meshy.",
+      "review": "Made by Pyr. The picture was made with Meshy.",
       "dir": "sakura-night/1.0"
     },
     {
@@ -115,9 +115,9 @@
       "version": "1.0",
       "summary": "An enchanted forest: emerald panels, golden light and fireflies.",
       "description": "Deep in an ancient forest: mossy giants, golden light falling into a clearing, fireflies and glowing mushrooms, behind the whole window. Emerald panels with gold buttons and highlights, and teal for admins.",
-      "author": "Ingle",
+      "author": "Pyr",
       "license": "MIT OR Apache-2.0",
-      "review": "Made by Ingle. The picture was made with Meshy.",
+      "review": "Made by Pyr. The picture was made with Meshy.",
       "dir": "elven-grove/1.0"
     },
     {
@@ -126,9 +126,9 @@
       "version": "1.0",
       "summary": "Deep space: violet panels and a vast magenta nebula behind the whole window.",
       "description": "A star nursery light-years across: clouds of magenta, violet and teal gas, dark dust lanes and blue-white stars, behind the whole window. Near-black violet panels with orchid buttons and pink glows.",
-      "author": "Ingle",
+      "author": "Pyr",
       "license": "MIT OR Apache-2.0",
-      "review": "Made by Ingle. The picture was made with Meshy.",
+      "review": "Made by Pyr. The picture was made with Meshy.",
       "dir": "nebula/1.0"
     },
     {
@@ -136,10 +136,10 @@
       "name": "Terminal",
       "version": "1.0",
       "summary": "Green phosphor on black, in a monospaced typeface, with code falling behind the chat.",
-      "description": "Ingle as an old green-screen terminal: phosphor-green text on black in DejaVu Sans Mono, and columns of glowing characters falling behind the whole window.",
-      "author": "Ingle",
+      "description": "Pyr as an old green-screen terminal: phosphor-green text on black in DejaVu Sans Mono, and columns of glowing characters falling behind the whole window.",
+      "author": "Pyr",
       "license": "MIT OR Apache-2.0",
-      "review": "Made by Ingle. The picture was made with Meshy. The fonts come with their licenses, in the skin's fonts folder.",
+      "review": "Made by Pyr. The picture was made with Meshy. The fonts come with their licenses, in the skin's fonts folder.",
       "dir": "terminal/1.0"
     },
     {
@@ -148,9 +148,9 @@
       "version": "1.0",
       "summary": "Halloween night: purple-black panels and pumpkin orange, a harvest moon over a graveyard.",
       "description": "All Hallows' Eve: a giant harvest moon, bats, a gnarled tree, and an old graveyard with glowing jack-o'-lanterns in the fog, behind the whole window. Purple-black panels with pumpkin-orange buttons and highlights.",
-      "author": "Ingle",
+      "author": "Pyr",
       "license": "MIT OR Apache-2.0",
-      "review": "Made by Ingle. The picture was made with Meshy.",
+      "review": "Made by Pyr. The picture was made with Meshy.",
       "dir": "hallows-eve/1.0"
     },
     {
@@ -159,9 +159,9 @@
       "version": "1.0",
       "summary": "Black marble veined with gold, an art deco sunburst, and a serif typeface.",
       "description": "Polished black marble veined with gold under an art deco sunburst: 1920s glamour behind the whole window. Black panels, gold buttons and highlights, and the Caladea serif for text.",
-      "author": "Ingle",
+      "author": "Pyr",
       "license": "MIT OR Apache-2.0",
-      "review": "Made by Ingle. The picture was made with Meshy. The fonts come with their licenses, in the skin's fonts folder.",
+      "review": "Made by Pyr. The picture was made with Meshy. The fonts come with their licenses, in the skin's fonts folder.",
       "dir": "obsidian-gold/1.0"
     },
     {
@@ -170,9 +170,9 @@
       "version": "1.0",
       "summary": "A thunderstorm at sea: slate panels and electric blue, lightning behind the chat.",
       "description": "Lightning splits a storm over a raging sea, rain slants through the dark, and a lighthouse holds on at the edge, behind the whole window. Slate panels with electric-blue buttons and highlights.",
-      "author": "Ingle",
+      "author": "Pyr",
       "license": "MIT OR Apache-2.0",
-      "review": "Made by Ingle. The picture was made with Meshy.",
+      "review": "Made by Pyr. The picture was made with Meshy.",
       "dir": "stormcaller/1.0"
     }
   ]

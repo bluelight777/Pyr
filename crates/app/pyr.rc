@@ -1,4 +1,4 @@
-// Windows resources for ingle.exe: the icon Explorer, shortcuts and the taskbar show, and the
+// Windows resources for pyr.exe: the icon Explorer, shortcuts and the taskbar show, and the
 // details in the file's Properties (and Task Manager). A template: build.rs fills in the icon's
 // path and the version from Cargo.toml (Windows' crash and hang reports quote it).
 1 ICON "@ICON@"
@@ -14,11 +14,11 @@ BEGIN
     BLOCK "040904b0"
     BEGIN
       VALUE "CompanyName", "Firelit Games"
-      VALUE "FileDescription", "Ingle"
+      VALUE "FileDescription", "Pyr"
       VALUE "FileVersion", "@VERSION@"
-      VALUE "InternalName", "ingle"
-      VALUE "OriginalFilename", "ingle.exe"
-      VALUE "ProductName", "Ingle"
+      VALUE "InternalName", "pyr"
+      VALUE "OriginalFilename", "pyr.exe"
+      VALUE "ProductName", "Pyr"
       VALUE "ProductVersion", "@VERSION@"
     END
   END

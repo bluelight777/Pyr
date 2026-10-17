@@ -20,14 +20,14 @@ const MAX_GIF_BYTES: usize = 12 << 20;
 const RESULTS: usize = 24;
 
 /// The key for GIF search on a server: the one its owner set up (`ServerInfo::giphy_key`).
-/// (Development builds also take `INGLE_GIPHY_KEY`, for testing against a fake GIPHY.)
+/// (Development builds also take `PYR_GIPHY_KEY`, for testing against a fake GIPHY.)
 pub fn key(server_key: &str) -> Option<String> {
     let k = server_key.trim();
     if !k.is_empty() {
         return Some(k.to_string());
     }
     if cfg!(debug_assertions) {
-        return std::env::var("INGLE_GIPHY_KEY").ok().filter(|k| !k.is_empty());
+        return pyr_proto::env_var("GIPHY_KEY").filter(|k| !k.is_empty());
     }
     None
 }
@@ -69,7 +69,7 @@ pub struct Gif {
 
 impl Gif {
     /// The link posted: with the GIF's size, so everyone's chat keeps its space before it
-    /// loads (`?w=…&h=…`; GIPHY ignores it, and older Ingles show the GIF as before). KLIPY's
+    /// loads (`?w=…&h=…`; GIPHY ignores it, and older Pyrs show the GIF as before). KLIPY's
     /// links are used just as KLIPY gives them: there the size goes after a `#`, which is
     /// never part of what's fetched, with KLIPY's name for it (so whoever sends it again, say
     /// from their favorites, can tell KLIPY it was shared).
@@ -106,7 +106,7 @@ impl Gif {
     }
 }
 
-pub use ingle_engine::config::GifFavorite;
+pub use pyr_engine::config::GifFavorite;
 
 /// Favorite GIFs kept at most (Discord kept 250 for a while; this is roomier).
 pub const MAX_FAVORITES: usize = 500;
@@ -114,7 +114,7 @@ pub const MAX_FAVORITES: usize = 500;
 /// Where favorite pictures from chat are kept (set once, at start: `set_favorites_dir`).
 static FAV_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 /// How a kept picture's favorite link starts (the rest is its file's name).
-const FAV_PREFIX: &str = "ingle-fav:";
+const FAV_PREFIX: &str = "pyr-fav:";
 /// Most room favorite pictures take on this PC.
 pub const MAX_FAVORITE_BYTES: u64 = 500 << 20;
 
@@ -123,7 +123,7 @@ pub fn set_favorites_dir(config_dir: &std::path::Path) {
     let _ = FAV_DIR.set(config_dir.join("favorites"));
 }
 
-/// A kept picture's file, from its favorite's link (only names Ingle makes itself: hex, and the
+/// A kept picture's file, from its favorite's link (only names Pyr makes itself: hex, and the
 /// picture's kind).
 pub fn local_favorite(url: &str) -> Option<std::path::PathBuf> {
     let name = url.strip_prefix(FAV_PREFIX)?;
@@ -155,12 +155,12 @@ fn picture_ext(bytes: &[u8]) -> Option<&'static str> {
 pub fn favorite_picture(bytes: &[u8], name: &str, size: Option<(u32, u32)>) -> Result<GifFavorite, String> {
     let ext = picture_ext(bytes).ok_or("Only pictures (PNG, JPEG, GIF or WebP) can be favorites.")?;
     let dir = FAV_DIR.get().ok_or("Favorites aren't ready yet.")?;
-    let file = format!("{}.{ext}", &ingle_proto::release::sha256_hex(bytes)[..32]);
+    let file = format!("{}.{ext}", &pyr_proto::release::sha256_hex(bytes)[..32]);
     let path = dir.join(&file);
     if !path.is_file() {
         let used: u64 = std::fs::read_dir(dir).map(|rd| rd.flatten().filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum()).unwrap_or(0);
         if used + bytes.len() as u64 > MAX_FAVORITE_BYTES {
-            return Err(format!("Your favorite pictures take {} MB, the most Ingle keeps. Take some out to add more.", MAX_FAVORITE_BYTES >> 20));
+            return Err(format!("Your favorite pictures take {} MB, the most Pyr keeps. Take some out to add more.", MAX_FAVORITE_BYTES >> 20));
         }
         std::fs::create_dir_all(dir).map_err(|e| format!("Couldn't keep the picture: {e}"))?;
         let tmp = path.with_extension("part");
@@ -182,7 +182,7 @@ pub fn favorite_picture(bytes: &[u8], name: &str, size: Option<(u32, u32)>) -> R
 /// what's in it. Empty: it isn't a picture that can be a favorite.
 pub fn picture_favorite_link(bytes: &[u8]) -> String {
     match picture_ext(bytes) {
-        Some(ext) => format!("{FAV_PREFIX}{}.{ext}", &ingle_proto::release::sha256_hex(bytes)[..32]),
+        Some(ext) => format!("{FAV_PREFIX}{}.{ext}", &pyr_proto::release::sha256_hex(bytes)[..32]),
         None => String::new(),
     }
 }
@@ -216,7 +216,7 @@ pub fn toggle_favorite(favs: &[GifFavorite], fav: GifFavorite) -> Result<Vec<Gif
         return Ok(favs.iter().filter(|f| clean_ref(&f.url) != clean_ref(&fav.url)).cloned().collect());
     }
     if favs.len() >= MAX_FAVORITES {
-        return Err(format!("You have {MAX_FAVORITES} favorite GIFs, the most Ingle keeps. Take one out to add another."));
+        return Err(format!("You have {MAX_FAVORITES} favorite GIFs, the most Pyr keeps. Take one out to add another."));
     }
     Ok(std::iter::once(fav).chain(favs.iter().cloned()).collect())
 }
@@ -328,7 +328,7 @@ impl GiphyUi {
         }
         *self.results.lock() = Some((q.clone(), Search::Loading));
         let (slot, cache, key) = (self.results.clone(), self.cache.clone(), api_key.to_string());
-        let _ = std::thread::Builder::new().name("ingle-giphy".into()).spawn(move || {
+        let _ = std::thread::Builder::new().name("pyr-giphy".into()).spawn(move || {
             let r = match provider {
                 Provider::Giphy => search(&key, &q),
                 Provider::Klipy => crate::klipy::search(&key, &q),
@@ -531,7 +531,7 @@ impl Downloads {
         drop(m);
         self.running.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let (map, running, url) = (self.map.clone(), self.running.clone(), url.to_string());
-        let _ = std::thread::Builder::new().name("ingle-gif".into()).spawn(move || {
+        let _ = std::thread::Builder::new().name("pyr-gif".into()).spawn(move || {
             let r = fetch(&url);
             map.lock().insert(url, match r {
                 Some(b) => Dl::Ready(Arc::new(b)),
@@ -612,12 +612,12 @@ fn clean_ref(url: &str) -> &str {
     url.split(['?', '#']).next().unwrap_or(url)
 }
 
-/// Debug builds only, for trying the picker without GIPHY: `INGLE_GIPHY_FAKE=<folder>` answers
+/// Debug builds only, for trying the picker without GIPHY: `PYR_GIPHY_FAKE=<folder>` answers
 /// trending from `trending.json` and searches from `search.json` in that folder, and serves GIF
 /// links from it by file name.
 #[cfg(debug_assertions)]
 fn fake_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("INGLE_GIPHY_FAKE").map(std::path::PathBuf::from)
+    pyr_proto::env_var("GIPHY_FAKE").map(std::path::PathBuf::from)
 }
 
 fn fetch(url: &str) -> Option<Vec<u8>> {
@@ -633,7 +633,7 @@ fn fetch(url: &str) -> Option<Vec<u8>> {
     #[cfg(debug_assertions)]
     {
         let fake = match media_provider(url) {
-            Some(Provider::Klipy) => std::env::var_os("INGLE_KLIPY_FAKE").map(std::path::PathBuf::from),
+            Some(Provider::Klipy) => pyr_proto::env_var("KLIPY_FAKE").map(std::path::PathBuf::from),
             _ => fake_dir(),
         };
         if let Some(dir) = fake {
@@ -674,7 +674,7 @@ mod tests {
         assert_eq!((v[0].preview_w, v[0].preview_h), (200.0, 113.0));
         assert!(is_giphy_media(&v[0].url) && is_giphy_media(&v[0].preview));
         assert!(parse(r#"{"meta":{"status":401,"msg":"Unauthorized"}}"#).is_err());
-        // The link posted says how big the GIF is (and is still a GIPHY GIF to older Ingles).
+        // The link posted says how big the GIF is (and is still a GIPHY GIF to older Pyrs).
         let posted = v[0].posted();
         assert_eq!(posted, "https://media0.giphy.com/media/v1.Y2lkPWU1ZTE5MDI5/tphCApwvdtC1VJabZ1/giphy-downsized.gif?w=480&h=270");
         assert!(is_giphy_media(&posted));
@@ -687,7 +687,7 @@ mod tests {
 
     #[test]
     fn gif_sizes_are_kept_between_runs() {
-        let dir = std::env::temp_dir().join(format!("ingle-gifsizes-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pyr-gifsizes-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut s = GifSizes::load(&dir);
         assert_eq!(s.get("https://media.giphy.com/media/a/giphy.gif"), None);
@@ -758,7 +758,7 @@ mod tests {
 
     #[test]
     fn pictures_from_chat_are_kept_as_favorites() {
-        let dir = std::env::temp_dir().join(format!("ingle-favpics-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pyr-favpics-{}", std::process::id()));
         set_favorites_dir(&dir);
         let dir = FAV_DIR.get().unwrap().clone();
         // A tiny PNG (a meme, say).
@@ -776,10 +776,10 @@ mod tests {
         assert_eq!(picture_favorite_link(png), f.url);
         assert_eq!(favorite_picture(png, "again.png", None).unwrap().url, f.url);
         assert_eq!(kept_picture(std::slice::from_ref(&f), &f.url), Some(("meme.png".to_string(), png.to_vec())));
-        // Only pictures, and only names Ingle makes itself.
+        // Only pictures, and only names Pyr makes itself.
         assert!(favorite_picture(b"just some text", "x.txt", None).is_err());
         assert_eq!(picture_favorite_link(b"just some text"), "");
-        for bad in ["ingle-fav:../../config.json", "ingle-fav:zz.png", "ingle-fav:0123456789abcdef0123456789abcdef.exe", "https://media.giphy.com/a.gif"] {
+        for bad in ["pyr-fav:../../config.json", "pyr-fav:zz.png", "pyr-fav:0123456789abcdef0123456789abcdef.exe", "https://media.giphy.com/a.gif"] {
             assert!(local_favorite(bad).is_none(), "{bad}");
         }
         // Taken out, its copy goes.

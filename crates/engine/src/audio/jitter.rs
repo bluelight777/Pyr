@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::time::Instant;
 
-use ingle_proto::media::flags;
+use pyr_proto::media::flags;
 
 pub const FRAME_MS: f32 = 20.0;
 /// Samples per channel in one 20 ms Opus frame at 48 kHz.
@@ -83,7 +83,7 @@ impl PeerAudio {
 
     pub fn push(&mut self, seq: u32, pkt_flags: u8, payload: Vec<u8>, now: Instant) {
         self.stats.received += 1;
-        let talkspurt = pkt_flags & flags::TALKSPURT != 0 && !ingle_proto::ab::old("jitter");
+        let talkspurt = pkt_flags & flags::TALKSPURT != 0 && !pyr_proto::ab::old("jitter");
         if talkspurt {
             // Someone starts talking again. The time since their last packet is the pause, not
             // the network (nothing is sent while they're quiet, so sequence numbers don't move),

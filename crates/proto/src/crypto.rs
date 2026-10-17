@@ -100,7 +100,7 @@ pub fn login_transcript(server_nonce: &[u8], tls_exporter: &[u8], user_id: &str)
 /// TLS exporter label used for the login transcript.
 pub const LOGIN_EXPORTER_LABEL: &[u8] = b"EXPORTER-ingle-login";
 
-/// What a signed submission (or asking for one's own) proves: this Ingle id, on this
+/// What a signed submission (or asking for one's own) proves: this Pyr id, on this
 /// connection (the server's nonce and the TLS keying material, so it can't be replayed or
 /// relayed), for exactly this content (`digest`, see `control::submission_digest`).
 pub fn submission_transcript(server_nonce: &[u8], tls_exporter: &[u8], user_id: &str, digest: &[u8]) -> Vec<u8> {

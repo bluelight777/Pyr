@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Draw the pictures of the skins Firelit Games makes for the Ingle Library.
+"""Draw the pictures of the skins Firelit Games makes for the Pyr Library.
 
     python3 tools/make-skin-art.py
 
@@ -7,7 +7,7 @@ Writes skins/blood-moon/background.webp: a blood-red moon rising over a dark rid
 night sky with a few stars and a red mist. It's drawn from numbers (a fixed random seed), so
 running this again gives the same picture. Needs Pillow with WebP (pip install pillow).
 
-The picture is seen through Ingle's colours (30% of it, behind the chat), so it's dark with
+The picture is seen through Pyr's colours (30% of it, behind the chat), so it's dark with
 one strong shape, the moon, a little right of the middle and high, where it shows between the
 messages and the member list.
 """

@@ -1,9 +1,9 @@
-//! Sign the Ingle Library's list (`library/index.json` on firelitgames.com/ingle).
+//! Sign the Pyr Library's list (`library/index.json` on pyr.gg).
 //!
-//!   cargo run -p ingle-proto --example library -- sign --key release-key.txt \
+//!   cargo run -p pyr-proto --example library -- sign --key release-key.txt \
 //!       --in installer/site/library/plugins.json --files dist/library/files --out dist/library/index.json
 //!
-//! `plugins.json` describes the plugins (see `ingle_proto::library::Entry`), naming each file by
+//! `plugins.json` describes the plugins (see `pyr_proto::library::Entry`), naming each file by
 //! where it is under `--files` (the same layout as `library/files/` on the website):
 //!
 //!   { "plugins": [ { "id": "dice", "name": "Dice", "kind": "addon", "version": "1.0.0",
@@ -11,7 +11,7 @@
 //!       "icon": "dice/icon.png" }, ... ] }
 //!
 //! Programs list `windows` and `linux` files, and `run` (the file to start). Skins are listed
-//! apart, each by its folder under `--files` (every file in it is the skin's, checked as Ingle
+//! apart, each by its folder under `--files` (every file in it is the skin's, checked as Pyr
 //! checks skins):
 //!
 //!   "skins": [ { "id": "blood-moon", "name": "Blood Moon", "version": "1.0", "summary": "...",
@@ -20,21 +20,21 @@
 //! The tool reads every file, puts its SHA-256 and size in the list, and signs the list with
 //! the release key (with the library's own context), good for `--valid-days` (180 unless told).
 //!
-//!   cargo run -p ingle-proto --example library -- refresh --key release-key.txt --in index.json
+//!   cargo run -p pyr-proto --example library -- refresh --key release-key.txt --in index.json
 //!
 //! signs the same list again with new dates.
 //!
-//!   cargo run -p ingle-proto --example library -- check-skin skins/aurora skins/blood-moon
+//!   cargo run -p pyr-proto --example library -- check-skin skins/aurora skins/blood-moon
 //!
-//! checks skin folders the way Ingle and the library do, without signing anything.
+//! checks skin folders the way Pyr and the library do, without signing anything.
 
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use ingle_proto::b64;
-use ingle_proto::crypto::Identity;
-use ingle_proto::library::{self, Entry, File, Kind, Library, Permission, SkinEntry};
+use pyr_proto::b64;
+use pyr_proto::crypto::Identity;
+use pyr_proto::library::{self, Entry, File, Kind, Library, Permission, SkinEntry};
 use serde::Deserialize;
 
 fn now() -> i64 {
@@ -137,7 +137,7 @@ fn file(files: &Path, rel: &str) -> Result<File> {
     }
     let bytes = std::fs::read(files.join(rel)).with_context(|| format!("reading {rel}"))?;
     let name = Path::new(rel).file_name().context("file name")?.to_string_lossy().to_string();
-    Ok(File { path: name, url: format!("files/{rel}"), sha256: ingle_proto::release::sha256_hex(&bytes), size: bytes.len() as u64 })
+    Ok(File { path: name, url: format!("files/{rel}"), sha256: pyr_proto::release::sha256_hex(&bytes), size: bytes.len() as u64 })
 }
 
 fn main() -> Result<()> {
@@ -178,7 +178,7 @@ fn main() -> Result<()> {
             let mut skins = Vec::new();
             for d in described.skins {
                 let found = skin_files(&files, &d.dir)?;
-                let report = ingle_proto::skin::check(&found);
+                let report = pyr_proto::skin::check(&found);
                 if !report.ok() {
                     bail!("{}: {}", d.id, report.problems.join("; "));
                 }
@@ -187,7 +187,7 @@ fn main() -> Result<()> {
                 }
                 // A skin is listed under its maker's name: the author in its own skin.json (what
                 // came with it when it was sent in; the Claude connector fills in the sender's
-                // Ingle name), never another. The list may leave it out; if it says, it must agree.
+                // Pyr name), never another. The list may leave it out; if it says, it must agree.
                 let m = &report.manifest;
                 let maker = m.author.trim().to_string();
                 if !d.author.trim().is_empty() && d.author.trim() != maker {
@@ -201,11 +201,11 @@ fn main() -> Result<()> {
                     .map(|(rel, bytes)| File {
                         path: rel.clone(),
                         url: format!("files/{}/{rel}", d.dir.trim_end_matches('/')),
-                        sha256: ingle_proto::release::sha256_hex(bytes),
+                        sha256: pyr_proto::release::sha256_hex(bytes),
                         size: bytes.len() as u64,
                     })
                     .collect();
-                let preview = list.iter().find(|f| ingle_proto::skin::is_preview(&f.path)).cloned();
+                let preview = list.iter().find(|f| pyr_proto::skin::is_preview(&f.path)).cloned();
                 let e = SkinEntry {
                     id: d.id,
                     name: d.name,
@@ -245,7 +245,7 @@ fn main() -> Result<()> {
             let mut bad = 0;
             for folder in &args[1..] {
                 let found = skin_files(Path::new(folder), "")?;
-                let report = ingle_proto::skin::check(&found);
+                let report = pyr_proto::skin::check(&found);
                 for n in &report.notes {
                     println!("{folder}: note: {n}");
                 }
@@ -259,7 +259,7 @@ fn main() -> Result<()> {
                 }
             }
             if bad > 0 {
-                bail!("{bad} of {} skins don't pass Ingle's checks", args.len() - 1);
+                bail!("{bad} of {} skins don't pass Pyr's checks", args.len() - 1);
             }
         }
         _ => bail!("usage: library sign --key FILE --in plugins.json --files DIR [--out index.json] [--valid-days N] | library refresh --key FILE --in index.json | library check-skin FOLDER..."),

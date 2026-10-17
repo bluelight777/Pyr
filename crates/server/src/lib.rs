@@ -1,4 +1,4 @@
-//! The Ingle community server.
+//! The Pyr community server.
 //!
 //! One binary hosts one community: text channels with history, voice channels (each with
 //! its own text chat), invites, roles, and a selective forwarding unit (SFU) for voice,
@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use ingle_proto::control::{ChannelKind, Role};
+use pyr_proto::control::{ChannelKind, Role};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
@@ -73,8 +73,8 @@ fn first_run_setup(db: &db::Db, name: Option<&str>) -> Result<()> {
         return Ok(());
     }
     let name = name
-        .and_then(|n| ingle_proto::control::clean_name(n, 48))
-        .unwrap_or_else(|| "My Ingle Server".to_string());
+        .and_then(|n| pyr_proto::control::clean_name(n, 48))
+        .unwrap_or_else(|| "My Pyr Server".to_string());
     db.set_meta("name", &name)?;
     db.set_meta("description", "")?;
     db.create_channel("General", ChannelKind::Text)?;
@@ -93,7 +93,7 @@ fn first_run_setup(db: &db::Db, name: Option<&str>) -> Result<()> {
 
 /// Owner links work for a week: plenty of time to set up, not a key left lying around.
 pub fn owner_link_expiry() -> i64 {
-    ingle_proto::now_ms() + 7 * 24 * 3_600_000
+    pyr_proto::now_ms() + 7 * 24 * 3_600_000
 }
 
 /// The server's data folder, made if it's new, and readable only by the server's own account
@@ -145,7 +145,7 @@ pub fn setup_links(cfg: &ServerConfig) -> Result<SetupLinks> {
         .filter(|h| !h.is_empty())
         .or_else(detect_lan_ip)
         .unwrap_or_else(|| "127.0.0.1".into());
-    // A fresh owner link only while nobody owns the community yet (after that, `ingle-server
+    // A fresh owner link only while nobody owns the community yet (after that, `pyr-server
     // owner-invite` makes one on purpose).
     let owner = match db.usable_invite(Role::Owner) {
         Some(code) => Some(code),
@@ -158,7 +158,7 @@ pub fn setup_links(cfg: &ServerConfig) -> Result<SetupLinks> {
     };
     let invite = db.get_meta("default_invite").unwrap_or_default();
     let link = |code: String| {
-        ingle_proto::invite::InviteLink::new(host.clone(), cfg.bind.port(), Some(code), tls_id.fingerprint)
+        pyr_proto::invite::InviteLink::new(host.clone(), cfg.bind.port(), Some(code), tls_id.fingerprint)
             .to_url()
     };
     Ok(SetupLinks { name: db.get_meta("name").unwrap_or_default(), owner: owner.map(link).unwrap_or_default(), invite: link(invite) })
@@ -174,7 +174,7 @@ pub struct SetupLinks {
 pub async fn start(cfg: ServerConfig) -> Result<RunningServer> {
     let (tls_id, db) = prepare(&cfg)?;
     let server_config = tls::server_config(&tls_id)?;
-    let (endpoint, fallback) = ingle_proto::udp::bind_endpoint(cfg.bind, Some(server_config))
+    let (endpoint, fallback) = pyr_proto::udp::bind_endpoint(cfg.bind, Some(server_config))
         .with_context(|| format!("binding UDP {} (is another server already using this port?)", cfg.bind))?;
     if let Some(why) = fallback {
         warn!("the network stack refused QUIC socket options ({why}); using a plain UDP socket");
@@ -227,7 +227,7 @@ mod tests {
 
     #[tokio::test]
     async fn public_host_is_remembered() {
-        let dir = std::env::temp_dir().join(format!("ingle-pubhost-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pyr-pubhost-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let cfg = |host: Option<&str>| ServerConfig {
             data_dir: dir.clone(),
@@ -236,22 +236,22 @@ mod tests {
             name: None,
         };
         let s = start(cfg(Some("play.example.com"))).await.unwrap();
-        assert!(s.invite_link().starts_with("ingle://play.example.com:"));
+        assert!(s.invite_link().starts_with("pyr://play.example.com:"));
         s.shutdown().await;
         let s = start(cfg(None)).await.unwrap();
         assert_eq!(s.public_host.as_deref(), Some("play.example.com"), "remembered without the flag");
-        assert!(s.invite_link().starts_with("ingle://play.example.com:"));
+        assert!(s.invite_link().starts_with("pyr://play.example.com:"));
         s.shutdown().await;
         let s = start(cfg(Some(""))).await.unwrap();
         assert_eq!(s.public_host, None, "an empty --public-host forgets it");
-        assert!(s.invite_link().starts_with("ingle://127.0.0.1:"));
+        assert!(s.invite_link().starts_with("pyr://127.0.0.1:"));
         s.shutdown().await;
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
     async fn setup_links_match_the_running_server() {
-        let dir = std::env::temp_dir().join(format!("ingle-links-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pyr-links-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let cfg = || ServerConfig {
             data_dir: dir.clone(),
@@ -261,7 +261,7 @@ mod tests {
         };
         let first = setup_links(&cfg()).unwrap();
         assert_eq!(first.name, "Campfire");
-        assert!(first.owner.starts_with("ingle://203.0.113.9/owner-"), "{}", first.owner);
+        assert!(first.owner.starts_with("pyr://203.0.113.9/owner-"), "{}", first.owner);
         // Asking again (say, the setup script runs twice) gives the same unused owner link.
         let again = setup_links(&cfg()).unwrap();
         assert_eq!(again.owner, first.owner);
@@ -282,7 +282,7 @@ mod tests {
         // never expire are removed at start).
         {
             let db = db::Db::open(&dir.join("ingle.db")).unwrap();
-            db.insert_user(&ingle_proto::crypto::Identity::generate().user_id(), "Owner", Role::Owner).unwrap();
+            db.insert_user(&pyr_proto::crypto::Identity::generate().user_id(), "Owner", Role::Owner).unwrap();
             db.create_invite("owner-legacy", "server", Some(1), None, Role::Owner).unwrap();
         }
         let owned = setup_links(&cfg()).unwrap();
@@ -297,10 +297,10 @@ mod tests {
     fn the_data_folder_is_the_servers_alone() {
         use std::os::unix::fs::PermissionsExt;
         let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
-        let base = std::env::temp_dir().join(format!("ingle-private-data-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("pyr-private-data-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
-        // A new one (made by `ingle-server invite`, say, before the server ever ran)...
-        let new = base.join("new").join("ingle-data");
+        // A new one (made by `pyr-server invite`, say, before the server ever ran)...
+        let new = base.join("new").join("pyr-data");
         private_data_dir(&new).unwrap();
         assert_eq!(mode(&new), 0o700);
         // ...and one made earlier that others could read.

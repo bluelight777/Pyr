@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Draws Ingle's built-in soundboard sounds, from scratch (no recordings, so no licences to
+"""Draws Pyr's built-in soundboard sounds, from scratch (no recordings, so no licences to
 worry about): 48 kHz stereo WAV files, one per sound, written to the folder given.
 
     python3 tools/make-sounds.py out/

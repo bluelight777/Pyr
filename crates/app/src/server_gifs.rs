@@ -6,10 +6,10 @@
 use std::time::Duration;
 
 use eframe::egui::{self, Color32, CornerRadius, Rect, RichText, Sense, Stroke, pos2, vec2};
-use ingle_engine::state::{AppState, ServerView};
-use ingle_proto::control::{GIFS_FEATURE, MAX_SERVER_GIFS, ServerGif, perm, server_gif_token, server_gif_tokens};
+use pyr_engine::state::{AppState, ServerView};
+use pyr_proto::control::{GIFS_FEATURE, MAX_SERVER_GIFS, ServerGif, perm, server_gif_token, server_gif_tokens};
 
-use crate::app::{Act, IngleApp};
+use crate::app::{Act, PyrApp};
 use crate::theme;
 
 /// Whether I can add and change server `s`'s GIFs.
@@ -32,16 +32,16 @@ pub fn split(content: &str) -> (String, Vec<(String, String)>) {
 /// A file name as a GIF's name: "party_cat.gif" → "party cat".
 pub fn name_from(file: &str) -> String {
     let stem = std::path::Path::new(file).file_stem().and_then(|s| s.to_str()).unwrap_or("GIF");
-    let n: String = stem.replace(['_', '-'], " ").chars().filter(|c| !matches!(c, '<' | '>' | ':')).take(ingle_proto::control::MAX_GIF_NAME).collect();
+    let n: String = stem.replace(['_', '-'], " ").chars().filter(|c| !matches!(c, '<' | '>' | ':')).take(pyr_proto::control::MAX_GIF_NAME).collect();
     if n.trim().is_empty() { "GIF".into() } else { n.trim().to_string() }
 }
 
-impl IngleApp {
+impl PyrApp {
     /// One of server `s`'s GIFs in `r`: moving (when `plays`), cut to fill, rounded.
     fn paint_server_gif(&mut self, ui: &egui::Ui, s: &ServerView, id: &str, r: Rect, plays: bool, fill: bool) -> Option<egui::Vec2> {
         // (Only the server's own are fetched, never a file a hand-typed <g:…> points at.)
         let bytes = match s.info.gifs.iter().any(|g| g.id == id).then(|| self.engine.file(&s.key, id)) {
-            Some(ingle_engine::files::FileState::Ready(b)) => Some(b),
+            Some(pyr_engine::files::FileState::Ready(b)) => Some(b),
             _ => None,
         };
         let t = if plays && self.ui.anim_on { self.ui.anim_clock } else { 0.0 };
@@ -196,7 +196,7 @@ impl IngleApp {
                     let (r, _) = ui.allocate_exact_size(vec2(72.0, 54.0), Sense::hover());
                     self.paint_server_gif(ui, s, &g.id, r, true, true);
                     let mut name = self.ui.emoji_names.get(&g.id).cloned().unwrap_or_else(|| g.name.clone());
-                    let resp = ui.add_sized([200.0, 26.0], egui::TextEdit::singleline(&mut name).char_limit(ingle_proto::control::MAX_GIF_NAME));
+                    let resp = ui.add_sized([200.0, 26.0], egui::TextEdit::singleline(&mut name).char_limit(pyr_proto::control::MAX_GIF_NAME));
                     if resp.changed() {
                         self.ui.emoji_names.insert(g.id.clone(), name.clone());
                     }

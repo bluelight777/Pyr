@@ -5,12 +5,12 @@ if [ -d /run/systemd/system ]; then
 fi
 if [ "$1" = purge ]; then
     # Only a purge deletes the service's data (its chat history and TLS key).
-    rm -rf /var/lib/ingle-server
-    if getent passwd ingle-server >/dev/null; then
+    rm -rf /var/lib/pyr-server
+    if getent passwd pyr-server >/dev/null; then
         if command -v deluser >/dev/null 2>&1; then
-            deluser --system --quiet ingle-server || true
+            deluser --system --quiet pyr-server || true
         else
-            userdel ingle-server || true
+            userdel pyr-server || true
         fi
     fi
 fi

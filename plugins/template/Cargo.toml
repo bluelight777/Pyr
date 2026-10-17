@@ -1,20 +1,20 @@
 [package]
-name = "ingle-hello"
+name = "pyr-hello"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-description = "A starting point for an Ingle add-on."
+description = "A starting point for a Pyr add-on."
 
 [lib]
-# cdylib: the .wasm Ingle runs; rlib: so `cargo test` works on your PC.
+# cdylib: the .wasm Pyr runs; rlib: so `cargo test` works on your PC.
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# The kit (Ingle's "Start an add-on" puts a copy of it in an ingle-plugin folder next to this).
-ingle-plugin = { path = "../kit" }
+# The kit (Pyr's "Start an add-on" puts a copy of it in a pyr-plugin folder next to this).
+pyr-plugin = { path = "../kit" }
 
-# What the Ingle Library shows about it (and the form to send it in fills itself in from here).
-[package.metadata.ingle]
+# What the Pyr Library shows about it (and the form to send it in fills itself in from here).
+[package.metadata.pyr]
 kind = "addon"
 name = "Hello"
 summary = "Says hello in chat, and counts clicks in its panel."

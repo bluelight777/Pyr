@@ -60,7 +60,7 @@ pub enum Trouble {
 }
 
 impl CaptureHandle {
-    /// For a preview: no "you're sharing" frame around the screen (Ingle's green one).
+    /// For a preview: no "you're sharing" frame around the screen (Pyr's green one).
     #[cfg_attr(not(windows), allow(unused_mut))]
     pub fn without_border(mut self) -> CaptureHandle {
         #[cfg(windows)]
@@ -175,7 +175,7 @@ fn start_test_pattern(slot: Arc<FrameSlot>, w: u32, h: u32, fps: u32) -> Capture
     let stop = Arc::new(AtomicBool::new(false));
     let st = stop.clone();
     let t = std::thread::Builder::new()
-        .name("ingle-testpattern".into())
+        .name("pyr-testpattern".into())
         .spawn(move || {
             let start = Instant::now();
             let background = test_background(w, h);
@@ -199,10 +199,10 @@ fn start_test_pattern(slot: Arc<FrameSlot>, w: u32, h: u32, fps: u32) -> Capture
 
 pub fn list_screens() -> Vec<ScreenSource> {
     let mut v = platform_screens();
-    // Development builds: `INGLE_FAKE_WINDOWS=N` lists N made-up windows, for trying the share
+    // Development builds: `PYR_FAKE_WINDOWS=N` lists N made-up windows, for trying the share
     // picker with a busy desktop.
     #[cfg(debug_assertions)]
-    if let Some(n) = std::env::var("INGLE_FAKE_WINDOWS").ok().and_then(|n| n.parse::<usize>().ok()) {
+    if let Some(n) = pyr_proto::env_var("FAKE_WINDOWS").and_then(|n| n.parse::<usize>().ok()) {
         for i in 0..n.min(40) {
             v.push(ScreenSource {
                 id: format!("fake:{i}"),
@@ -221,8 +221,8 @@ pub fn list_screens() -> Vec<ScreenSource> {
         height: 1080,
     });
     // For trying a share over a slow or far-away connection with any build:
-    // `INGLE_TEST_SOURCES=1` lists the moving and the scrolling test pictures too (testsrc.rs).
-    if std::env::var_os("INGLE_TEST_SOURCES").is_some() {
+    // `PYR_TEST_SOURCES=1` lists the moving and the scrolling test pictures too (testsrc.rs).
+    if pyr_proto::env_set("TEST_SOURCES") {
         for (id, name) in [(super::testsrc::MOTION_ID, "Test: moving picture"), (super::testsrc::TEXT_ID, "Test: scrolling text")] {
             v.push(ScreenSource { id: id.into(), name: name.into(), kind: SourceKind::Test, width: 1920, height: 1080 });
         }
@@ -394,7 +394,7 @@ const START_WITHIN: Duration = Duration::from_secs(10);
 fn platform_start_screen(id: &str, fps: u32, slot: Arc<FrameSlot>) -> Result<CaptureHandle> {
     let (tx, rx) = std::sync::mpsc::channel();
     let id = id.to_string();
-    std::thread::Builder::new().name("ingle-capture-start".into()).spawn(move || {
+    std::thread::Builder::new().name("pyr-capture-start".into()).spawn(move || {
         // Too late: whoever asked has given up on it, so it stops again.
         if let Err(std::sync::mpsc::SendError(late)) = tx.send(start_wgc_source(&id, fps, slot)) {
             drop(late);
@@ -487,7 +487,7 @@ fn start_wgc_source(id: &str, fps: u32, slot: Arc<FrameSlot>) -> Result<CaptureH
     Ok(CaptureHandle { stop: Arc::new(AtomicBool::new(false)), thread: None, wgc: Some(control), watch: Some(watch), border })
 }
 
-/// Starts Windows' capture without its yellow frame and puts up Ingle's green one instead.
+/// Starts Windows' capture without its yellow frame and puts up Pyr's green one instead.
 /// Where Windows doesn't allow turning its frame off, its own frame stays.
 #[cfg(windows)]
 fn start_wgc<T: TryInto<windows_capture::settings::GraphicsCaptureItemType> + Send + 'static>(
@@ -531,7 +531,7 @@ fn platform_start_screen(id: &str, fps: u32, slot: Arc<FrameSlot>) -> Result<Cap
     let stop = Arc::new(AtomicBool::new(false));
     let st = stop.clone();
     let t = std::thread::Builder::new()
-        .name("ingle-x11capture".into())
+        .name("pyr-x11capture".into())
         .spawn(move || {
             let screen = conn.setup().roots[screen_num].clone();
             let (w, h) = (screen.width_in_pixels, screen.height_in_pixels);
@@ -595,7 +595,7 @@ pub fn start_camera(id: &str, w: u32, h: u32, fps: u32, slot: Arc<FrameSlot>) ->
         let st = stop.clone();
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
         let t = std::thread::Builder::new()
-            .name("ingle-camera".into())
+            .name("pyr-camera".into())
             .spawn(move || {
                 let index = match index_str.parse::<u32>() {
                     Ok(i) => CameraIndex::Index(i),

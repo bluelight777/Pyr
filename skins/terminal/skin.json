@@ -2,7 +2,7 @@
   "name": "Terminal",
   "version": "1.0",
   "summary": "Green phosphor on black, in a monospaced typeface, with code falling behind the chat.",
-  "author": "Ingle",
+  "author": "Pyr",
   "colors": {
     "rail": "#010402",
     "side": "#030805",

@@ -4,7 +4,7 @@
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use ingle_proto::media::{flags, track};
+use pyr_proto::media::{flags, track};
 use sonora::config::{AdaptiveDigital, EchoCanceller, GainController2, HighPassFilter, NoiseSuppressionLevel};
 
 use super::Controls;
@@ -403,7 +403,7 @@ impl CapturePipeline {
         }
         // Something said (not just an open microphone in a quiet room): I'm here.
         if open && self.level_db > -50.0 {
-            ctl.last_spoke_ms.store(ingle_proto::now_ms(), Ordering::Relaxed);
+            ctl.last_spoke_ms.store(pyr_proto::now_ms(), Ordering::Relaxed);
         }
         self.acc.extend_from_slice(&frame[..480]);
         if self.acc.len() < 960 {

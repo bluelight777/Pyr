@@ -1,6 +1,6 @@
 //! The soundboard, like Discord's but better. Every sound you can reach plays in any call (none
 //! is locked to its server): your favorites, the ones you played lately, each server's own and
-//! Ingle's built-in ones. Hover one to hear it yourself first, right-click for a key that plays
+//! Pyr's built-in ones. Hover one to hear it yourself first, right-click for a key that plays
 //! it (even in a game), to have it play when you join voice, or to favorite it. Sounds can be
 //! twice as long as Discord's, are trimmed and evened out in loudness on the way in, and
 //! anyone's can be stopped, or one person's muted.
@@ -9,13 +9,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, Id, Rect, RichText, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
-use ingle_engine::config::SoundRef;
-use ingle_engine::hotkey::{combo_label, needs_modifier};
-use ingle_engine::soundboard as sb;
-use ingle_engine::state::{AppState, ServerView};
-use ingle_proto::control::{MAX_SERVER_SOUNDS, MAX_SOUND_NAME, SOUNDBOARD_FEATURE, ServerSound, perm};
+use pyr_engine::config::SoundRef;
+use pyr_engine::hotkey::{combo_label, needs_modifier};
+use pyr_engine::soundboard as sb;
+use pyr_engine::state::{AppState, ServerView};
+use pyr_proto::control::{MAX_SERVER_SOUNDS, MAX_SOUND_NAME, SOUNDBOARD_FEATURE, ServerSound, perm};
 
-use crate::app::{Act, Dialog, IngleApp, icon_button};
+use crate::app::{Act, Dialog, PyrApp, icon_button};
 use crate::dialogs::{field_label, title};
 use crate::emoji;
 use crate::{icons, theme};
@@ -30,7 +30,7 @@ const WIDTH: f32 = GRID_W + RAIL_W + 10.0;
 /// Six rows of sounds.
 const GRID_H: f32 = 6.0 * (CELL.y + GAP);
 /// The longest a sound can be, in seconds (a frame under the limit, see `soundboard::prepare`).
-const MAX_SECS: f32 = ingle_proto::sound::MAX_MS as f32 / 1000.0 - 0.02;
+const MAX_SECS: f32 = pyr_proto::sound::MAX_MS as f32 / 1000.0 - 0.02;
 /// How many recently played sounds show.
 const RECENT_SHOWN: usize = 6;
 /// The shortest cut of a file, in seconds.
@@ -200,7 +200,7 @@ enum Rail {
     Favorites,
     Recent,
     Server(String),
-    Ingle,
+    Pyr,
 }
 
 struct Section {
@@ -237,7 +237,7 @@ fn can_manage(st: &AppState, sound: &SoundRef) -> bool {
     !sound.is_builtin() && st.server(&sound.server).is_some_and(|s| s.can(perm::MANAGE_EMOJI) && s.has(SOUNDBOARD_FEATURE))
 }
 
-impl IngleApp {
+impl PyrApp {
     /// A soundboard button was clicked (`from`: which one): opens or closes the soundboard.
     pub(crate) fn toggle_soundboard(&mut self, st: &AppState, from: u8) {
         if self.ui.sb.open && self.ui.sb.from != from {
@@ -439,7 +439,7 @@ impl IngleApp {
                 let cells = s.info.sounds.iter().map(|x| cell(server_ref(s, x))).collect();
                 sections.push(Section { title: s.name.clone(), rail: Rail::Server(s.key.clone()), cells });
             }
-            sections.push(Section { title: "Ingle".into(), rail: Rail::Ingle, cells: sb::BUILTINS.iter().map(|b| cell(b.sound_ref())).collect() });
+            sections.push(Section { title: "Pyr".into(), rail: Rail::Pyr, cells: sb::BUILTINS.iter().map(|b| cell(b.sound_ref())).collect() });
         } else {
             let mut found: Vec<Cell> = Vec::new();
             let all = servers.iter().flat_map(|s| s.info.sounds.iter().map(|x| server_ref(s, x))).chain(sb::BUILTINS.iter().map(|b| b.sound_ref()));
@@ -456,7 +456,7 @@ impl IngleApp {
                     sbui.flash = Some((c.sound.server.clone(), c.sound.id.clone(), now));
                 }
             }
-            sections.push(Section { title: format!("Results for \u{201c}{}\u{201d}", sbui.search.trim()), rail: Rail::Ingle, cells: found });
+            sections.push(Section { title: format!("Results for \u{201c}{}\u{201d}", sbui.search.trim()), rail: Rail::Pyr, cells: found });
         }
 
         let ctx = ui.ctx().clone();
@@ -474,7 +474,7 @@ impl IngleApp {
                         match &sec.rail {
                             Rail::Favorites => icons::star(ui.painter(), rect.shrink(7.0), theme::GLOW(), true),
                             Rail::Recent => icons::clock(ui.painter(), rect.shrink(8.0), theme::MUTED()),
-                            Rail::Ingle => icons::flame(ui.painter(), rect.shrink(5.0)),
+                            Rail::Pyr => icons::flame(ui.painter(), rect.shrink(5.0)),
                             Rail::Server(k) => {
                                 let s = st.server(k);
                                 let tex = s.and_then(|s| self.server_icon(&ctx, s));
@@ -551,7 +551,7 @@ impl IngleApp {
                     ui.label(RichText::new("Click a sound to play it for everyone here. Right-click it for more.").size(12.0).color(theme::DIM()));
                 }
                 None => {
-                    ui.label(RichText::new("This server needs updating for its own sounds; Ingle's play anywhere.").size(12.0).color(theme::DIM()));
+                    ui.label(RichText::new("This server needs updating for its own sounds; Pyr's play anywhere.").size(12.0).color(theme::DIM()));
                 }
             }
         });
@@ -985,12 +985,12 @@ impl IngleApp {
     /// Server Settings → Soundboard: the server's sounds, to add, edit or delete.
     pub(crate) fn server_sounds_tab(&mut self, ui: &mut egui::Ui, s: &ServerView, back_to: Dialog) {
         ui.label(
-            RichText::new("Sounds anyone here can play in voice. Ingle doesn't lock them to this server: members can play them in any call.")
+            RichText::new("Sounds anyone here can play in voice. Pyr doesn't lock them to this server: members can play them in any call.")
                 .color(theme::MUTED()),
         );
         ui.add_space(8.0);
         if !s.has(SOUNDBOARD_FEATURE) {
-            ui.label(RichText::new("This server needs updating (to Ingle 0.7) before it can have its own sounds.").color(theme::LIVE()));
+            ui.label(RichText::new("This server needs updating (to Pyr 0.7) before it can have its own sounds.").color(theme::LIVE()));
             return;
         }
         ui.horizontal(|ui| {
@@ -1003,7 +1003,7 @@ impl IngleApp {
         });
         ui.add_space(6.0);
         if s.info.sounds.is_empty() {
-            ui.label(RichText::new("No sounds yet. Ingle's own (air horn, ba dum tss, sad trombone…) work everywhere meanwhile.").color(theme::DIM()));
+            ui.label(RichText::new("No sounds yet. Pyr's own (air horn, ba dum tss, sad trombone…) work everywhere meanwhile.").color(theme::DIM()));
             return;
         }
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
@@ -1087,7 +1087,7 @@ impl IngleApp {
     }
 
     /// Settings → Voice & Video → Soundboard.
-    pub(crate) fn soundboard_settings(&mut self, ui: &mut egui::Ui, st: &AppState, draft: &mut ingle_engine::config::Settings) {
+    pub(crate) fn soundboard_settings(&mut self, ui: &mut egui::Ui, st: &AppState, draft: &mut pyr_engine::config::Settings) {
         use crate::settings::{Slid, fine, heading, percent, slide};
         heading(ui, "Soundboard");
         field_label(ui, "Soundboard volume");
@@ -1147,7 +1147,7 @@ impl IngleApp {
 pub const POP_SECS: f32 = 2.6;
 
 /// The sound `session` played last, while its emoji still shows: (it, seconds since).
-pub fn recent_pop(call: &ingle_engine::state::CallView, session: ingle_proto::control::SessionId) -> Option<(&ingle_engine::state::SoundShown, f32)> {
+pub fn recent_pop(call: &pyr_engine::state::CallView, session: pyr_proto::control::SessionId) -> Option<(&pyr_engine::state::SoundShown, f32)> {
     let now = std::time::Instant::now();
     call.sounds
         .iter()

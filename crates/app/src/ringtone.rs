@@ -1,22 +1,22 @@
 //! Ringtones: what calls ring with (Settings → Notifications), and someone's own (right-click
-//! them → Ringtone): Ingle's own ring, any soundboard sound (built in, or one of your servers'),
+//! them → Ringtone): Pyr's own ring, any soundboard sound (built in, or one of your servers'),
 //! or a sound file from this PC, picked and cut like a soundboard sound. The engine plays them
-//! (`ingle_engine::ring`).
+//! (`pyr_engine::ring`).
 
 use eframe::egui::{self, Align, Layout, Rect, RichText, Sense, vec2};
-use ingle_engine::config::Ringtone;
-use ingle_engine::soundboard::{self as sb, SoundRef};
-use ingle_engine::state::AppState;
+use pyr_engine::config::Ringtone;
+use pyr_engine::soundboard::{self as sb, SoundRef};
+use pyr_engine::state::AppState;
 
-use crate::app::{Act, Dialog, IngleApp};
+use crate::app::{Act, Dialog, PyrApp};
 use crate::theme;
 
-/// What a ringtone's called (none: Ingle's own ring).
+/// What a ringtone's called (none: Pyr's own ring).
 pub fn name_of(t: Option<&Ringtone>) -> String {
-    t.map(|t| t.name.clone()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "Ingle ring".into())
+    t.map(|t| t.name.clone()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "Pyr ring".into())
 }
 
-impl IngleApp {
+impl PyrApp {
     /// The ringtones to choose from, in a menu: for everyone (`for_uid` none), or someone's
     /// own (then "the same as everyone" comes first). Choosing one plays it. True when one was
     /// chosen (or the file picker opened).
@@ -39,7 +39,7 @@ impl IngleApp {
         };
         match for_uid {
             Some(_) => pick(ui, &format!("Same as everyone ({})", name_of(st.settings.ringtone.as_ref())), None, current.is_none(), acts),
-            None => pick(ui, "Ingle ring", None, current.is_none(), acts),
+            None => pick(ui, "Pyr ring", None, current.is_none(), acts),
         }
         ui.separator();
         ui.label(RichText::new("SOUNDS").font(theme::bold_font(11.0)).color(theme::DIM()));

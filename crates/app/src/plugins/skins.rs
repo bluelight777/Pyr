@@ -1,12 +1,12 @@
-//! Skins from the Ingle Library (see `ingle_proto::skin`): installing one (every file downloaded,
+//! Skins from the Pyr Library (see `pyr_proto::skin`): installing one (every file downloaded,
 //! checked against the signed list's SHA-256 and then as a skin, and put into its own folder,
 //! all of it or none), what's installed, and reading an installed skin back (checked again).
 //! Wearing one is `crate::looks`.
 
 use std::path::{Path, PathBuf};
 
-use ingle_proto::library::SkinEntry;
-use ingle_proto::release::sha256_hex;
+use pyr_proto::library::SkinEntry;
+use pyr_proto::release::sha256_hex;
 use serde::{Deserialize, Serialize};
 
 use super::install::{InstalledFile, download, now};
@@ -72,9 +72,9 @@ pub fn install(dir: &Path, index_url: &str, entry: &SkinEntry, mut progress: imp
         })?;
         files.push((f.path.clone(), bytes));
     }
-    let report = ingle_engine::skins::check(&files);
+    let report = pyr_engine::skins::check(&files);
     if !report.ok() {
-        return Err(format!("it doesn't pass Ingle's checks for skins ({}), so it wasn't installed", report.problems.join(" ")));
+        return Err(format!("it doesn't pass Pyr's checks for skins ({}), so it wasn't installed", report.problems.join(" ")));
     }
     let staging = dir.join(format!("{}.new", entry.id));
     let _ = std::fs::remove_dir_all(&staging);
@@ -121,7 +121,7 @@ pub fn install(dir: &Path, index_url: &str, entry: &SkinEntry, mut progress: imp
 pub fn files(dir: &Path, s: &InstalledSkin) -> Result<Vec<(String, Vec<u8>)>, String> {
     let mut out = Vec::with_capacity(s.files.len());
     for f in &s.files {
-        if !ingle_proto::library::valid_path(&f.path) {
+        if !pyr_proto::library::valid_path(&f.path) {
             return Err(format!("{} has a file in an odd place", s.name));
         }
         let bytes = std::fs::read(dir.join(&s.id).join(&f.path)).map_err(|e| format!("{}'s {} can't be read ({e}): reinstall it", s.name, f.path))?;
@@ -145,7 +145,7 @@ pub fn uninstall(dir: &Path, id: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ingle_proto::library::File;
+    use pyr_proto::library::File;
 
     #[test]
     fn an_installed_skin_reads_back_only_as_it_was_installed() {

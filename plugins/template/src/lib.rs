@@ -1,7 +1,7 @@
-//! A starting point for an Ingle add-on: a /hello command and a panel with a counter.
-//! Rename it (Cargo.toml's name and [package.metadata.ingle]) and make it yours.
+//! A starting point for a Pyr add-on: a /hello command and a panel with a counter.
+//! Rename it (Cargo.toml's name and [package.metadata.pyr]) and make it yours.
 
-use ingle_plugin::*;
+use pyr_plugin::*;
 
 struct Hello;
 

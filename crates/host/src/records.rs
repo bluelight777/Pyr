@@ -1,4 +1,4 @@
-//! A note of the servers set up from this PC (`hosted-servers.json` in Ingle's settings
+//! A note of the servers set up from this PC (`hosted-servers.json` in Pyr's settings
 //! folder): where they are, how to log in, and for rented ones which droplet they are, so
 //! they can be found, updated or deleted later.
 
@@ -23,7 +23,7 @@ pub struct HostedServer {
     pub invite_link: Option<String>,
     pub host_key: Option<String>,
     pub created_ms: i64,
-    /// False while setup hasn't finished (a rented server may exist without Ingle on it).
+    /// False while setup hasn't finished (a rented server may exist without Pyr on it).
     pub installed: bool,
 }
 
@@ -77,7 +77,7 @@ mod tests {
 
     #[test]
     fn records_update_in_place() {
-        let dir = std::env::temp_dir().join(format!("ingle-records-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pyr-records-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut s = HostedServer { name: "A".into(), droplet_id: Some(7), provider: "digitalocean".into(), ..Default::default() };
         save(&dir, &s).unwrap();

@@ -4,14 +4,14 @@
 
 use std::time::{Duration, Instant};
 
-use ingle_engine::audio::{AudioInput, AudioOutput};
-use ingle_engine::config::Settings;
-use ingle_engine::state::ConnStatus;
-use ingle_engine::{Engine, EngineOptions};
-use ingle_proto::control::ChannelKind;
+use pyr_engine::audio::{AudioInput, AudioOutput};
+use pyr_engine::config::Settings;
+use pyr_engine::state::ConnStatus;
+use pyr_engine::{Engine, EngineOptions};
+use pyr_proto::control::ChannelKind;
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("ingle-letsgo-{}-{}", name, ingle_proto::now_ms()));
+    let d = std::env::temp_dir().join(format!("pyr-letsgo-{}-{}", name, pyr_proto::now_ms()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
@@ -31,8 +31,8 @@ async fn wait_for(what: &str, secs: u64, mut cond: impl FnMut() -> bool) {
 /// free straight away, i.e. nothing of that connection is left behind.
 async fn quits_then_server_stops(voice: bool) {
     let data = temp_dir(&format!("server-{voice}"));
-    let cfg = |bind| ingle_server::ServerConfig { data_dir: data.clone(), bind, public_host: Some("127.0.0.1".into()), name: None };
-    let server = ingle_server::start(cfg("127.0.0.1:0".parse().unwrap())).await.unwrap();
+    let cfg = |bind| pyr_server::ServerConfig { data_dir: data.clone(), bind, public_host: Some("127.0.0.1".into()), name: None };
+    let server = pyr_server::start(cfg("127.0.0.1:0".parse().unwrap())).await.unwrap();
     let addr = server.local_addr;
     let silent = |_s: &Settings| {
         (AudioInput::Synthetic(Box::new(|b: &mut [f32]| b.fill(0.0))), AudioOutput::Synthetic(Box::new(|_: &[f32]| {})))
@@ -59,7 +59,7 @@ async fn quits_then_server_stops(voice: bool) {
     let t = Instant::now();
     let mut why = String::new();
     while t.elapsed() < Duration::from_secs(3) {
-        match ingle_server::start(cfg(addr)).await {
+        match pyr_server::start(cfg(addr)).await {
             Ok(s) => {
                 s.shutdown().await;
                 return;

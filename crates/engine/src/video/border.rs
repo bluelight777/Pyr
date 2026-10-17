@@ -1,7 +1,7 @@
 //! Windows: the green frame around whatever you're sharing.
 //!
 //! Windows draws its own yellow frame around a captured screen or window, and lets apps turn
-//! it off but not recolor it. So Ingle turns it off and draws a green one: four thin windows
+//! it off but not recolor it. So Pyr turns it off and draws a green one: four thin windows
 //! along the edges that clicks pass straight through, kept out of the capture itself so
 //! viewers never see them.
 
@@ -79,7 +79,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
 unsafe fn run(target: Target, hwnds: &Mutex<Vec<isize>>, stop: &AtomicBool) -> windows::core::Result<()> {
     unsafe {
         let hinst = GetModuleHandleW(None)?;
-        let class = w!("IngleShareBorder");
+        let class = w!("PyrShareBorder");
         let wc = WNDCLASSW {
             lpfnWndProc: Some(wndproc),
             hInstance: hinst.into(),
@@ -94,7 +94,7 @@ unsafe fn run(target: Target, hwnds: &Mutex<Vec<isize>>, stop: &AtomicBool) -> w
         }
         let mut wins = Vec::new();
         for _ in 0..4 {
-            let h = CreateWindowExW(ex, class, w!("Ingle sharing"), WS_POPUP, 0, 0, 1, 1, None, None, Some(hinst.into()), None)?;
+            let h = CreateWindowExW(ex, class, w!("Pyr sharing"), WS_POPUP, 0, 0, 1, 1, None, None, Some(hinst.into()), None)?;
             let _ = SetLayeredWindowAttributes(h, COLORREF(0), 255, LWA_ALPHA);
             // Keep it out of the stream. Without this (Windows before 10 2004) it would show up
             // in a whole-screen share, so leave the frame off there.

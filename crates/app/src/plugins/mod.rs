@@ -1,8 +1,8 @@
-//! Plugins: programs and add-ons from the Ingle Library (see `ingle_proto::library`).
+//! Plugins: programs and add-ons from the Pyr Library (see `pyr_proto::library`).
 //!
 //! - `library`: the signed list, fetched from firelitgames.com.
 //! - `install`: downloading, checking, installing, opening and removing.
-//! - `programs`: programs running inside Ingle's window.
+//! - `programs`: programs running inside Pyr's window.
 //! - `addon`: running add-ons (WebAssembly, sandboxed) and talking to them.
 //! - `source`: gathering a plugin's source to send in, and starting a new add-on.
 //! - `skins`: skins from the library (installing, reading back; wearing one is `crate::looks`).
@@ -22,8 +22,8 @@ use std::sync::Arc;
 use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant};
 
-use ingle_proto::control::{ChannelId, MessageId};
-use ingle_proto::library::{Entry, Kind, Library, Permission, SkinEntry};
+use pyr_proto::control::{ChannelId, MessageId};
+use pyr_proto::library::{Entry, Kind, Library, Permission, SkinEntry};
 use parking_lot::Mutex;
 
 use addon::{AddOn, Panel, Place, Request, Response};
@@ -59,7 +59,7 @@ pub enum Page {
 /// Which tab of the Skins page is showing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SkinsTab {
-    /// Every skin in the Ingle Library.
+    /// Every skin in the Pyr Library.
     #[default]
     Gallery,
     /// Campfire and the skins installed, to wear.
@@ -146,7 +146,7 @@ pub struct Plugins {
     pub confirm_remove: Option<String>,
     /// The name for a new add-on ("Start an add-on").
     pub new_name: String,
-    /// Programs running (inside Ingle, on Windows).
+    /// Programs running (inside Pyr, on Windows).
     pub programs: programs::Programs,
     /// The program whose page is showing (instead of the Plugins page).
     pub program_page: Option<String>,
@@ -229,7 +229,7 @@ impl Plugins {
 
     fn start_addon_bg(&self, p: InstalledPlugin) {
         let (dir, work, repaint) = (self.dir.clone(), self.work.clone(), self.repaint.clone());
-        let _ = std::thread::Builder::new().name("ingle-addon-start".into()).spawn(move || {
+        let _ = std::thread::Builder::new().name("pyr-addon-start".into()).spawn(move || {
             let r = install::verify(&dir, &p)
                 .and_then(|_| std::fs::read(dir.join(&p.id).join(&p.run)).map_err(|e| e.to_string()))
                 .and_then(|bytes| AddOn::load(&p.id, bytes, Some(install::data_path(&dir, &p.id)), repaint.clone()));
@@ -273,7 +273,7 @@ impl Plugins {
         }
         let (dir, url, work, repaint, entry) = (self.skins_dir.clone(), self.index_url.clone(), self.work.clone(), self.repaint.clone(), entry.clone());
         work.lock().installing.insert(key.clone(), (0, entry.size()));
-        let _ = std::thread::Builder::new().name("ingle-skin-install".into()).spawn(move || {
+        let _ = std::thread::Builder::new().name("pyr-skin-install".into()).spawn(move || {
             let _ = std::fs::create_dir_all(&dir);
             let w2 = work.clone();
             let k2 = key.clone();
@@ -315,7 +315,7 @@ impl Plugins {
         }
         self.fetched_at = Some(Instant::now());
         let (dir, work, repaint) = (self.dir.clone(), self.work.clone(), self.repaint.clone());
-        let _ = std::thread::Builder::new().name("ingle-library".into()).spawn(move || {
+        let _ = std::thread::Builder::new().name("pyr-library".into()).spawn(move || {
             let _ = std::fs::create_dir_all(&dir);
             let r = library::fetch(&dir);
             let mut w = work.lock();
@@ -343,7 +343,7 @@ impl Plugins {
         self.addons.remove(&entry.id);
         let (dir, url, work, repaint, entry) = (self.dir.clone(), self.index_url.clone(), self.work.clone(), self.repaint.clone(), entry.clone());
         work.lock().installing.insert(entry.id.clone(), (0, entry.size_for(install::os())));
-        let _ = std::thread::Builder::new().name("ingle-plugin-install".into()).spawn(move || {
+        let _ = std::thread::Builder::new().name("pyr-plugin-install".into()).spawn(move || {
             let w2 = work.clone();
             let id = entry.id.clone();
             let r = install::install(&dir, &url, &entry, |done, total| {
@@ -380,11 +380,11 @@ impl Plugins {
         self.installed.save(&self.dir)
     }
 
-    /// Opens a program (inside Ingle on Windows), or finds it open already.
+    /// Opens a program (inside Pyr on Windows), or finds it open already.
     pub fn open_program(&mut self, id: &str) -> Result<(), String> {
         let p = self.installed.get(id).ok_or("it isn't installed")?.clone();
         if self.listed(id) == Some(false) {
-            return Err(format!("{} was taken out of the Ingle Library, so Ingle won't open it. Remove it.", p.name));
+            return Err(format!("{} was taken out of the Pyr Library, so Pyr won't open it. Remove it.", p.name));
         }
         self.programs.start(&self.dir, &p)
     }
@@ -411,7 +411,7 @@ impl Plugins {
             self.panels.retain(|p| p.id != old);
         }
         let (work, repaint) = (self.work.clone(), self.repaint.clone());
-        let _ = std::thread::Builder::new().name("ingle-addon-try".into()).spawn(move || {
+        let _ = std::thread::Builder::new().name("pyr-addon-try".into()).spawn(move || {
             let id = "trying".to_string();
             let r = AddOn::load(&id, bytes, None, repaint.clone());
             work.lock().started.push((id, r, true));
@@ -431,7 +431,7 @@ impl Plugins {
         let rest = text.strip_prefix('/')?;
         let (name, args) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
         let name = name.to_lowercase();
-        // Ingle's own come first.
+        // Pyr's own come first.
         if ["giphy", "gif", "klipy"].contains(&name.as_str()) {
             return None;
         }
@@ -527,7 +527,7 @@ impl Plugins {
                     for id in gone {
                         self.addons.remove(&id);
                         self.panels.retain(|p| p.id != id);
-                        out.push(Outcome::Toast(format!("{id} was taken out of the Ingle Library, so it was turned off."), true));
+                        out.push(Outcome::Toast(format!("{id} was taken out of the Pyr Library, so it was turned off."), true));
                     }
                 }
                 Err(e) => {
@@ -642,13 +642,13 @@ impl Plugins {
     /// skin's as `skin:<id>`).
     fn fetch_icons(&self) {
         let Some(lib) = &self.library else { return };
-        let mut todo: Vec<(String, ingle_proto::library::File)> =
+        let mut todo: Vec<(String, pyr_proto::library::File)> =
             lib.plugins.iter().filter(|p| !self.icons.contains_key(&p.id)).filter_map(|p| p.icon.clone().map(|i| (p.id.clone(), i))).collect();
         todo.extend(
             lib.skins
                 .iter()
                 .filter(|s| !self.icons.contains_key(&format!("skin:{}", s.id)))
-                // Its picture of Ingle wearing it; without one, its own picture (the biggest at
+                // Its picture of Pyr wearing it; without one, its own picture (the biggest at
                 // the top of its folder).
                 .filter_map(|s| {
                     let own = || {
@@ -665,15 +665,15 @@ impl Plugins {
             return;
         }
         let (url, work, repaint) = (self.index_url.clone(), self.work.clone(), self.repaint.clone());
-        let _ = std::thread::Builder::new().name("ingle-plugin-icons".into()).spawn(move || {
+        let _ = std::thread::Builder::new().name("pyr-plugin-icons".into()).spawn(move || {
             for (id, f) in todo {
-                if f.size as usize > ingle_proto::skin::MAX_FILE {
+                if f.size as usize > pyr_proto::skin::MAX_FILE {
                     continue;
                 }
                 let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(20))).build().into();
                 let Ok(mut resp) = agent.get(&library::file_url(&url, &f.url)).call() else { continue };
                 let Ok(bytes) = resp.body_mut().with_config().limit(f.size + 1).read_to_vec() else { continue };
-                if ingle_proto::release::sha256_hex(&bytes) == f.sha256 {
+                if pyr_proto::release::sha256_hex(&bytes) == f.sha256 {
                     work.lock().icons.push((id, bytes));
                     repaint();
                 }

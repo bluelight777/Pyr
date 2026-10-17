@@ -3,7 +3,7 @@
 //! in each direction, delay, jitter, loss and a bottleneck (a speed limit with a buffer, like a
 //! home internet connection's upload).
 //!
-//!   cargo run -p ingle-engine --example pathsim -- --listen 127.0.0.1:7801 --to 127.0.0.1:7800 \
+//!   cargo run -p pyr-engine --example pathsim -- --listen 127.0.0.1:7801 --to 127.0.0.1:7800 \
 //!       --up delay=100,jitter=4,loss=0.2,rate=5000,buffer=300 \
 //!       --down delay=100,jitter=4,loss=0.2,rate=40000,buffer=100 \
 //!       --at 40 up.rate=2000 --log path.log

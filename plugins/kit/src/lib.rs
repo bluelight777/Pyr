@@ -1,15 +1,15 @@
-//! # The Ingle plugin kit
+//! # The Pyr plugin kit
 //!
-//! Make an **add-on** for [Ingle](https://firelitgames.com/ingle) in Rust. An add-on is built
-//! to WebAssembly and runs inside Ingle in a sandbox: it can't reach the internet, your files
-//! or anything else on the PC. Ingle calls it, it answers. It can:
+//! Make an **add-on** for [Pyr](https://pyr.gg) in Rust. An add-on is built
+//! to WebAssembly and runs inside Pyr in a sandbox: it can't reach the internet, your files
+//! or anything else on the PC. Pyr calls it, it answers. It can:
 //!
 //! - add **/commands** to chat (what it answers is sent as the person's message),
 //! - show a **panel** of headings, text, buttons and text boxes,
 //! - keep a little **data** of its own (a JSON value, up to 64 KB).
 //!
 //! ```ignore
-//! use ingle_plugin::*;
+//! use pyr_plugin::*;
 //!
 //! struct Hello;
 //!
@@ -27,25 +27,25 @@
 //! ```
 //!
 //! Build it with `cargo build --release --target wasm32-unknown-unknown` (once:
-//! `rustup target add wasm32-unknown-unknown`), and try the `.wasm` file in Ingle: Plugins →
+//! `rustup target add wasm32-unknown-unknown`), and try the `.wasm` file in Pyr: Plugins →
 //! Make your own → Try an add-on file.
 //!
-//! ## How Ingle talks to an add-on
+//! ## How Pyr talks to an add-on
 //!
 //! The module exports `memory`, `ingle_alloc(len) -> ptr`, `ingle_free(ptr, len)` and
-//! `ingle_call(ptr, len) -> i64`, and imports nothing (Ingle refuses a module that imports
-//! anything). Ingle writes a JSON request into memory it got from `ingle_alloc`, calls
+//! `ingle_call(ptr, len) -> i64`, and imports nothing (Pyr refuses a module that imports
+//! anything). Pyr writes a JSON request into memory it got from `ingle_alloc`, calls
 //! `ingle_call`, and reads the JSON answer at `(result >> 32, result & 0xffffffff)`, then frees
 //! it with `ingle_free`. [`export!`] writes all of that for you.
 
 use serde::{Deserialize, Serialize};
 pub use serde_json::{self, Value, json};
 
-/// What Ingle passes with every call.
+/// What Pyr passes with every call.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(default)]
 pub struct Ctx {
-    /// Your add-on's data: what it left here last time (`null` at first). Change it and Ingle
+    /// Your add-on's data: what it left here last time (`null` at first). Change it and Pyr
     /// keeps the new value (up to 64 KB of JSON).
     pub store: Value,
     /// New random bits with every call, for dice and the like (see [`Ctx::random`]).
@@ -62,7 +62,7 @@ pub struct Ctx {
 impl Ctx {
     /// A random number from `0` to `n - 1` (`n` at least 1).
     pub fn random(&mut self, n: u64) -> u64 {
-        // splitmix64 over the seed Ingle passed in.
+        // splitmix64 over the seed Pyr passed in.
         self.seed = self.seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
         let mut z = self.seed;
         z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
@@ -72,7 +72,7 @@ impl Ctx {
     }
 }
 
-/// A request from Ingle.
+/// A request from Pyr.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
@@ -86,7 +86,7 @@ pub enum Request {
     Event { id: String, value: String },
 }
 
-/// A request with what Ingle passes along.
+/// A request with what Pyr passes along.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Call {
     #[serde(flatten)]
@@ -249,12 +249,12 @@ pub unsafe fn __free(ptr: i32, len: i32) {
 
 #[doc(hidden)]
 /// # Safety
-/// `ptr`/`len` must be memory from `__alloc` that Ingle filled in.
+/// `ptr`/`len` must be memory from `__alloc` that Pyr filled in.
 pub unsafe fn __call<A: AddOn>(ptr: i32, len: i32) -> i64 {
     let input = unsafe { Vec::from_raw_parts(ptr as usize as *mut u8, len.max(0) as usize, len.max(0) as usize) };
     let response = match serde_json::from_slice::<Call>(&input) {
         Ok(call) => handle::<A>(call),
-        Err(e) => Response { error: Some(format!("couldn't read Ingle's request: {e}")), ..Default::default() },
+        Err(e) => Response { error: Some(format!("couldn't read Pyr's request: {e}")), ..Default::default() },
     };
     let mut out = serde_json::to_vec(&response).unwrap_or_default();
     out.shrink_to_fit();

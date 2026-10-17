@@ -1,22 +1,22 @@
-//! The Ingle Library's list of plugins: fetched from firelitgames.com, believed only with
+//! The Pyr Library's list of plugins: fetched from firelitgames.com, believed only with
 //! Firelit Games' signature (the release key) and within its dates, and kept on this PC so
 //! the Plugins page has something to show offline.
 
 use std::path::Path;
 use std::time::Duration;
 
-use ingle_proto::library::{self, Library};
+use pyr_proto::library::{self, Library};
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_URL: &str = "https://firelitgames.com/ingle/library/index.json";
+const DEFAULT_URL: &str = "https://pyr.gg/library/index.json";
 /// The newest list seen (Unix seconds it was signed), so an older one is never believed again.
 const SEEN_FILE: &str = "library-seen.json";
 /// The last list believed, as signed (shown when the website can't be reached).
 const CACHE_FILE: &str = "library.json";
 
-/// Where the list is (`INGLE_LIBRARY_URL` overrides it, for testing).
+/// Where the list is (`PYR_LIBRARY_URL` overrides it, for testing).
 pub fn index_url() -> String {
-    std::env::var("INGLE_LIBRARY_URL").unwrap_or_else(|_| DEFAULT_URL.to_string())
+    pyr_proto::env_var("LIBRARY_URL").unwrap_or_else(|| DEFAULT_URL.to_string())
 }
 
 /// Where a file in the list is: its address is relative to the list's own.
@@ -71,7 +71,7 @@ pub fn fetch(dir: &Path) -> Result<Library, String> {
         .get(&url)
         .header("Cache-Control", "no-cache")
         .call()
-        .map_err(|e| format!("couldn't reach the Ingle Library: {e}"))?
+        .map_err(|e| format!("couldn't reach the Pyr Library: {e}"))?
         .body_mut()
         .with_config()
         .limit(4 << 20)
@@ -94,7 +94,7 @@ pub fn cached(dir: &Path) -> Option<Library> {
 /// For tests: a folder of its own.
 #[cfg(test)]
 pub fn temp_dir(name: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("ingle-lib-{name}-{}-{}", std::process::id(), ingle_proto::now_ms()));
+    let d = std::env::temp_dir().join(format!("pyr-lib-{name}-{}-{}", std::process::id(), pyr_proto::now_ms()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
@@ -105,15 +105,15 @@ mod tests {
 
     #[test]
     fn files_are_found_next_to_the_list() {
-        let idx = "https://firelitgames.com/ingle/library/index.json";
-        assert_eq!(file_url(idx, "files/dice/1.0.0/dice.wasm"), "https://firelitgames.com/ingle/library/files/dice/1.0.0/dice.wasm");
+        let idx = "https://pyr.gg/library/index.json";
+        assert_eq!(file_url(idx, "files/dice/1.0.0/dice.wasm"), "https://pyr.gg/library/files/dice/1.0.0/dice.wasm");
         assert_eq!(file_url(idx, "https://example.com/x"), "https://example.com/x");
     }
 
     #[test]
     fn an_older_list_is_never_believed_again() {
         let dir = temp_dir("seen");
-        let key = ingle_proto::crypto::Identity::generate();
+        let key = pyr_proto::crypto::Identity::generate();
         let list = |issued| serde_json::to_string(&library::sign(&key, &Library { issued, expires: 10_000, ..Default::default() })).unwrap();
         assert!(believe_with(&list(100), &key.user_id(), &dir, 500).is_ok());
         assert!(believe_with(&list(200), &key.user_id(), &dir, 500).is_ok());
@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn a_list_not_signed_by_firelit_is_not_believed() {
         let dir = temp_dir("sig");
-        let other = ingle_proto::crypto::Identity::generate();
+        let other = pyr_proto::crypto::Identity::generate();
         let lib = Library { issued: 10, expires: now_secs() + 1000, plugins: vec![], skins: vec![] };
         let text = serde_json::to_string(&library::sign(&other, &lib)).unwrap();
         assert!(believe(&text, &dir, now_secs()).unwrap_err().contains("isn't signed by Firelit"));

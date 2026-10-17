@@ -1,7 +1,7 @@
 //! Measures the microphone pipeline on real recorded speech: how much of your words get cut
 //! (the thing that sounds bad), and how far other voices and noise are turned down.
 //!
-//!   cargo run --release -p ingle-engine --example voice_eval -- <dir with 48 kHz mono wavs> [out dir]
+//!   cargo run --release -p pyr-engine --example voice_eval -- <dir with 48 kHz mono wavs> [out dir]
 //!
 //! Uses three speech clips (A = you, B and C = other people) and makes scenes from them.
 //! Each run is compared with the same scene through "Strong" (RNNoise only, always sending),
@@ -10,9 +10,9 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use ingle_engine::audio::capture::CapturePipeline;
-use ingle_engine::audio::Controls;
-use ingle_engine::config::{NoiseSuppression, Settings};
+use pyr_engine::audio::capture::CapturePipeline;
+use pyr_engine::audio::Controls;
+use pyr_engine::config::{NoiseSuppression, Settings};
 
 fn read_wav(p: &Path) -> Vec<f32> {
     let b = std::fs::read(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));

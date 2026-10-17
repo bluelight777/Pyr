@@ -1,13 +1,13 @@
 //! "Make sure it's them": the shields by people's names (made sure of, vouched for, or not the
 //! person you made sure of under that name), the section in someone's profile that starts it,
 //! the cards that carry it through (comparing words, asking something only they'd know), and
-//! the dialog for writing a question. The engine does the work (`ingle_engine::verify`).
+//! the dialog for writing a question. The engine does the work (`pyr_engine::verify`).
 
 use eframe::egui::{self, Align, Align2, Color32, CornerRadius, Layout, Pos2, Rect, RichText, Sense, Shape, Stroke, pos2, vec2};
-use ingle_engine::config::VerifiedHow;
-use ingle_engine::state::{AppState, HandshakeKind, HandshakeStage, HandshakeView, ServerView, Trust};
+use pyr_engine::config::VerifiedHow;
+use pyr_engine::state::{AppState, HandshakeKind, HandshakeStage, HandshakeView, ServerView, Trust};
 
-use crate::app::{Act, Dialog, IngleApp, avatar};
+use crate::app::{Act, Dialog, PyrApp, avatar};
 use crate::theme;
 
 /// Made sure of: a green shield.
@@ -144,7 +144,7 @@ fn how_text(how: VerifiedHow) -> &'static str {
     }
 }
 
-impl IngleApp {
+impl PyrApp {
     /// In someone's profile: how sure you can be it's them, and the ways to make sure. True when
     /// one of them was chosen.
     pub(crate) fn trust_section(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, uid: &str, acts: &mut Vec<Act>) -> bool {
@@ -207,7 +207,7 @@ impl IngleApp {
                 ui.label(RichText::new("Nothing says yet that it's really them. Take ten seconds:").size(12.5).color(theme::MUTED()));
             }
         }
-        let can = s.has(ingle_proto::control::HANDSHAKE_FEATURE);
+        let can = s.has(pyr_proto::control::HANDSHAKE_FEATURE);
         let online = s.members.get(uid).is_some_and(|m| m.online) && s.status.is_connected();
         let mut chose = false;
         ui.add_enabled_ui(can && online, |ui| {
@@ -223,7 +223,7 @@ impl IngleApp {
             });
         });
         if !can {
-            ui.label(RichText::new("This server needs updating (Ingle 0.7.6) first.").size(11.5).color(theme::DIM()));
+            ui.label(RichText::new("This server needs updating (Pyr 0.7.6) first.").size(11.5).color(theme::DIM()));
         } else if !online {
             ui.label(RichText::new(format!("When {name} is online.")).size(11.5).color(theme::DIM()));
         }
@@ -239,8 +239,8 @@ impl IngleApp {
             return false;
         }
         let name = s.member_name(uid);
-        let why_not = if !s.has(ingle_proto::control::HANDSHAKE_FEATURE) {
-            Some(format!("{} needs updating to Ingle 0.7.6 first", s.name))
+        let why_not = if !s.has(pyr_proto::control::HANDSHAKE_FEATURE) {
+            Some(format!("{} needs updating to Pyr 0.7.6 first", s.name))
         } else if !s.status.is_connected() || !s.members.get(uid).is_some_and(|m| m.online) {
             Some(format!("When {name} is online"))
         } else {
@@ -278,18 +278,18 @@ impl IngleApp {
         crate::dialogs::title(ui, &format!("Make sure it's really {name}"));
         ui.label(
             RichText::new(format!(
-                "Ask something only {name} would know, and write the answer you expect. {name} types theirs: Ingle tells you both whether they match, and never sends either answer anywhere."
+                "Ask something only {name} would know, and write the answer you expect. {name} types theirs: Pyr tells you both whether they match, and never sends either answer anywhere."
             ))
             .color(theme::MUTED()),
         );
         crate::dialogs::field_label(ui, "Your question");
-        ui.add(egui::TextEdit::singleline(&mut question).hint_text("Where did we first meet?").char_limit(ingle_proto::handshake::QUESTION_MAX).desired_width(f32::INFINITY));
+        ui.add(egui::TextEdit::singleline(&mut question).hint_text("Where did we first meet?").char_limit(pyr_proto::handshake::QUESTION_MAX).desired_width(f32::INFINITY));
         crate::dialogs::field_label(ui, "The answer you expect");
-        ui.add(egui::TextEdit::singleline(&mut answer).hint_text("Only you two know it").char_limit(ingle_proto::handshake::ANSWER_MAX).password(true).desired_width(f32::INFINITY));
+        ui.add(egui::TextEdit::singleline(&mut answer).hint_text("Only you two know it").char_limit(pyr_proto::handshake::ANSWER_MAX).password(true).desired_width(f32::INFINITY));
         ui.label(RichText::new("Capitals, spaces and punctuation don't matter. Not something anyone could guess or look up (and not yes or no). The server sees the question, never the answer.").size(12.0).color(theme::DIM()));
         ui.add_space(10.0);
         ui.horizontal(|ui| {
-            let ready = !question.trim().is_empty() && !ingle_proto::handshake::normalize(&answer).is_empty();
+            let ready = !question.trim().is_empty() && !pyr_proto::handshake::normalize(&answer).is_empty();
             if ui.add_enabled(ready, theme::primary_button("Ask")).clicked() {
                 acts.push(Act::AskThem { key: key.clone(), uid: uid.clone(), question: question.trim().to_string(), answer: std::mem::take(&mut answer) });
                 *close = true;
@@ -376,12 +376,12 @@ impl IngleApp {
                         ui.add(egui::Label::new(RichText::new(&v.question).italics().color(theme::TEXT())).wrap());
                     });
                     let answer = self.ui.handshake_answers.entry(sid.clone()).or_default();
-                    let field = ui.add(egui::TextEdit::singleline(answer).hint_text("Your answer").char_limit(ingle_proto::handshake::ANSWER_MAX).password(true).desired_width(f32::INFINITY));
+                    let field = ui.add(egui::TextEdit::singleline(answer).hint_text("Your answer").char_limit(pyr_proto::handshake::ANSWER_MAX).password(true).desired_width(f32::INFINITY));
                     let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     ui.label(RichText::new("Your answer never leaves this PC: only whether it matches theirs.").size(11.5).color(theme::DIM()));
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        let ready = !ingle_proto::handshake::normalize(answer).is_empty();
+                        let ready = !pyr_proto::handshake::normalize(answer).is_empty();
                         if (ui.add_enabled(ready, theme::primary_button("Answer")).clicked() || (enter && ready)) && ready {
                             acts.push(Act::AnswerQuestion { sid: sid.clone(), answer: std::mem::take(answer) });
                         }
@@ -397,7 +397,7 @@ impl IngleApp {
                     let text = match (v.kind, v.mine) {
                         (HandshakeKind::Words, true) => format!("Waiting for {name} to say yes…"),
                         (HandshakeKind::Ask, true) => format!("Waiting for {name}'s answer…"),
-                        _ => format!("Waiting for {name}'s Ingle…"),
+                        _ => format!("Waiting for {name}'s Pyr…"),
                     };
                     ui.label(RichText::new(text).color(theme::MUTED()));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -437,7 +437,7 @@ impl IngleApp {
                     shield(ui.painter(), r, &Trust::Verified);
                     ui.label(RichText::new(format!("It's really {name}.")).font(theme::bold_font(14.0)).color(SURE));
                 });
-                ui.label(RichText::new("Ingle remembers: this shield shows by their name from now on.").size(12.0).color(theme::MUTED()));
+                ui.label(RichText::new("Pyr remembers: this shield shows by their name from now on.").size(12.0).color(theme::MUTED()));
                 ui.add_space(4.0);
                 if ui.button("Done").clicked() {
                     acts.push(Act::DismissHandshake(sid.clone()));

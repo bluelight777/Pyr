@@ -6,8 +6,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use ingle_proto::library::{Entry, Kind, Permission};
-use ingle_proto::release::sha256_hex;
+use pyr_proto::library::{Entry, Kind, Permission};
+use pyr_proto::release::sha256_hex;
 use serde::{Deserialize, Serialize};
 
 const INSTALLED_FILE: &str = "installed.json";
@@ -24,13 +24,13 @@ pub fn os() -> &'static str {
 }
 
 /// Where plugins live. Programs can be big, so on Windows they go in the local (not roaming)
-/// app data, beside Ingle's settings rather than in them; `INGLE_HOME` and test profiles keep
+/// app data, beside Pyr's settings rather than in them; `PYR_HOME` and test profiles keep
 /// them with their own settings.
 pub fn plugins_dir(config_dir: &Path) -> PathBuf {
-    if std::env::var_os("INGLE_HOME").is_some() || config_dir != ingle_engine::config::config_dir(None) {
+    if pyr_proto::env_set("HOME") || config_dir != pyr_engine::config::config_dir(None) {
         return config_dir.join("plugins");
     }
-    directories::ProjectDirs::from("", "", ingle_proto::APP_NAME)
+    directories::ProjectDirs::from("", "", pyr_proto::APP_NAME)
         .map(|d| d.data_local_dir().join("plugins"))
         .unwrap_or_else(|| config_dir.join("plugins"))
 }
@@ -204,7 +204,7 @@ pub fn install(dir: &Path, index_url: &str, entry: &Entry, mut progress: impl Fn
 /// The plugin's files are still the ones that were checked when it was installed.
 pub fn verify(dir: &Path, p: &InstalledPlugin) -> Result<(), String> {
     for f in &p.files {
-        if !ingle_proto::library::valid_path(&f.path) {
+        if !pyr_proto::library::valid_path(&f.path) {
             return Err(format!("{} has a file in an odd place", p.name));
         }
         let bytes = std::fs::read(dir.join(&p.id).join(&f.path)).map_err(|e| unreadable(p, &f.path, &e))?;
@@ -232,8 +232,8 @@ fn unreadable(p: &InstalledPlugin, file: &str, e: &std::io::Error) -> String {
     }
 }
 
-/// Starts a program (after checking its files). On Windows it's told it opens inside Ingle
-/// (`INGLE_EMBED`), so it can start hidden for Ingle to show once it's in place.
+/// Starts a program (after checking its files). On Windows it's told it opens inside Pyr
+/// (`PYR_EMBED`), so it can start hidden for Pyr to show once it's in place.
 pub fn spawn(dir: &Path, p: &InstalledPlugin) -> Result<std::process::Child, String> {
     if p.kind != Kind::Program {
         return Err("only programs are opened this way".into());
@@ -243,7 +243,7 @@ pub fn spawn(dir: &Path, p: &InstalledPlugin) -> Result<std::process::Child, Str
     let mut cmd = std::process::Command::new(home.join(&p.run));
     cmd.current_dir(&home);
     if cfg!(windows) {
-        cmd.env("INGLE_EMBED", "1");
+        cmd.env("PYR_EMBED", "1");
     }
     cmd.spawn().map_err(|e| match e.raw_os_error() {
         // ERROR_VIRUS_INFECTED, ERROR_VIRUS_DELETED: antivirus said no.
@@ -260,7 +260,7 @@ pub fn launch(dir: &Path, p: &InstalledPlugin) -> Result<(), String> {
 
 /// Removes a plugin's files and data.
 pub fn uninstall(dir: &Path, id: &str) -> Result<(), String> {
-    if !ingle_proto::library::valid_id(id) {
+    if !pyr_proto::library::valid_id(id) {
         return Err("not a plugin".into());
     }
     let home = dir.join(id);
@@ -274,7 +274,7 @@ pub fn uninstall(dir: &Path, id: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ingle_proto::library::File;
+    use pyr_proto::library::File;
 
     /// Serves `files` (path → bytes) over HTTP on localhost, for as many requests as come.
     fn serve(files: Vec<(String, Vec<u8>)>) -> String {

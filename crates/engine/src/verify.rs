@@ -1,4 +1,4 @@
-//! Making sure people are who they say ("Make sure it's them"; see `ingle_proto::handshake`):
+//! Making sure people are who they say ("Make sure it's them"; see `pyr_proto::handshake`):
 //! comparing words, or asking something only they'd know, through a server both are on. Then:
 //! the people I made sure of (`Config::verified`), my vouches for them on the servers we share,
 //! the vouches of theirs I fetch ("vouched for by Mara"), and the alarm when someone else shows
@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ingle_proto::control::{Event, HANDSHAKE_FEATURE, MAX_VOUCHES, MAX_VOUCHES_ASKED, Request, VOUCHES_FEATURE, VOUCHES_FOR_ME_FEATURE, Vouch};
-use ingle_proto::handshake::{self, ANSWER_MAX, Asking, Handshake, QUESTION_MAX, WordsJoiner, WordsStarter};
+use pyr_proto::control::{Event, HANDSHAKE_FEATURE, MAX_VOUCHES, MAX_VOUCHES_ASKED, Request, VOUCHES_FEATURE, VOUCHES_FOR_ME_FEATURE, Vouch};
+use pyr_proto::handshake::{self, ANSWER_MAX, Asking, Handshake, QUESTION_MAX, WordsJoiner, WordsStarter};
 
 use crate::Shared;
 use crate::config::{Verified, VerifiedHow};
@@ -157,7 +157,7 @@ fn reachable(shared: &Shared, key: &str, with: &str) -> Option<String> {
     let why = match st.server(key) {
         None => Some("That server isn't one of yours.".to_string()),
         Some(s) if s.status != ConnStatus::Connected => Some(format!("{} isn't connected right now.", s.name)),
-        Some(s) if !s.has(HANDSHAKE_FEATURE) => Some(format!("{} needs updating to Ingle 0.7.6 before people can make sure of each other through it.", s.name)),
+        Some(s) if !s.has(HANDSHAKE_FEATURE) => Some(format!("{} needs updating to Pyr 0.7.6 before people can make sure of each other through it.", s.name)),
         Some(s) if !s.members.get(with).is_some_and(|m| m.online) => Some(format!("{} isn't online right now: try when they are.", s.member_name(with))),
         _ if with == me => Some("That's you.".to_string()),
         _ => None,
@@ -248,7 +248,7 @@ pub fn accept_words(shared: &Arc<Shared>, sid: &str) {
             set_stage(shared, sid, HandshakeStage::Waiting);
             send(shared, &server, &with, &msg);
         }
-        None => end(shared, sid, HandshakeStage::Failed("Their Ingle's request couldn't be read.".into())),
+        None => end(shared, sid, HandshakeStage::Failed("Their Pyr's request couldn't be read.".into())),
     }
 }
 
@@ -270,7 +270,7 @@ pub fn answer(shared: &Arc<Shared>, sid: &str, answer: &str) {
             set_stage(shared, sid, HandshakeStage::Waiting);
             send(shared, &server, &with, &reply);
         }
-        None => end(shared, sid, HandshakeStage::Failed("Their Ingle's question couldn't be read.".into())),
+        None => end(shared, sid, HandshakeStage::Failed("Their Pyr's question couldn't be read.".into())),
     }
 }
 
@@ -328,7 +328,7 @@ pub fn dismiss(shared: &Shared, sid: &str) {
     (shared.repaint)();
 }
 
-/// A message from `from`'s Ingle, through server `key`.
+/// A message from `from`'s Pyr, through server `key`.
 pub(crate) fn on_handshake(shared: &Arc<Shared>, key: &str, from: &str, data: &str) {
     if shared.state.read_recursive().blocked.contains(from) {
         return;
@@ -364,7 +364,7 @@ pub(crate) fn on_handshake(shared: &Arc<Shared>, key: &str, from: &str, data: &s
                     compare(shared, &sid, words);
                     send(shared, &server, &with, &reveal);
                 }
-                None => end(shared, &sid, HandshakeStage::Failed("Their Ingle sent a key that won't do: someone may be in between you.".into())),
+                None => end(shared, &sid, HandshakeStage::Failed("Their Pyr sent a key that won't do: someone may be in between you.".into())),
             }
         }
         Handshake::WordsReveal { key: theirs, .. } => {
@@ -375,7 +375,7 @@ pub(crate) fn on_handshake(shared: &Arc<Shared>, key: &str, from: &str, data: &s
                 None => end(
                     shared,
                     &sid,
-                    HandshakeStage::Failed("Their key wasn't the one their Ingle promised: someone may be in between you. Don't trust this conversation with anything private.".into()),
+                    HandshakeStage::Failed("Their key wasn't the one their Pyr promised: someone may be in between you. Don't trust this conversation with anything private.".into()),
                 ),
             }
         }
@@ -418,7 +418,7 @@ pub(crate) fn on_handshake(shared: &Arc<Shared>, key: &str, from: &str, data: &s
         Handshake::Confirm { mac, .. } => {
             let Some((_, _, step)) = take(shared, &sid) else { return };
             let Step::Answered(expected) = step else { return };
-            let stage = if handshake::confirmed(&expected, &mac) { HandshakeStage::AnswersMatched } else { HandshakeStage::Failed("Their Ingle's reply didn't check out.".into()) };
+            let stage = if handshake::confirmed(&expected, &mac) { HandshakeStage::AnswersMatched } else { HandshakeStage::Failed("Their Pyr's reply didn't check out.".into()) };
             if stage == HandshakeStage::AnswersMatched {
                 // My answer matched: they made sure of me.
                 refetch_for_me_soon(shared);
@@ -444,7 +444,7 @@ fn took_back(shared: &Arc<Shared>, key: &str, from: &str, sid: &str) {
     }
     shared.verify.lock().pending.remove(sid);
     let name = shared.state.read_recursive().server(key).map(|s| s.member_name(from)).unwrap_or_else(|| "They".into());
-    let why = format!("{name} says the words didn't match, so Ingle doesn't count it as them after all. Compare them again, slowly, when you can talk.");
+    let why = format!("{name} says the words didn't match, so Pyr doesn't count it as them after all. Compare them again, slowly, when you can talk.");
     show(
         shared,
         HandshakeView {
@@ -484,7 +484,7 @@ fn mark(shared: &Arc<Shared>, key: &str, uid: &str, how: VerifiedHow) -> i64 {
         let st = shared.state.read_recursive();
         st.server(key).map(|s| s.member_name(uid)).unwrap_or_else(|| st.name_of(uid))
     };
-    let at_ms = ingle_proto::now_ms();
+    let at_ms = pyr_proto::now_ms();
     let v = Verified { name, how, at_ms };
     {
         let mut cfg = shared.config.lock();

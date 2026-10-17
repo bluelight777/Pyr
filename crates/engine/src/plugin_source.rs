@@ -1,11 +1,11 @@
-//! A plugin's source, gathered from its folder to send in for the Ingle Library, with the
-//! checks Ingle makes first (Rust only: a Cargo.toml and .rs files, no programs or C code
+//! A plugin's source, gathered from its folder to send in for the Pyr Library, with the
+//! checks Pyr makes first (Rust only: a Cargo.toml and .rs files, no programs or C code
 //! inside); and the plugin kit, written into a new folder to start an add-on from. Used by
-//! Ingle's Plugins page and by the Claude connector.
+//! Pyr's Plugins page and by the Claude connector.
 
 use std::path::{Path, PathBuf};
 
-use ingle_proto::control::{PluginSubmission, SUBMISSION_FILES_MAX, SUBMISSION_MAX, SourceFile};
+use pyr_proto::control::{PluginSubmission, SUBMISSION_FILES_MAX, SUBMISSION_MAX, SourceFile};
 
 /// What's found in a folder: the files to send, what Cargo.toml says, and what's wrong (if
 /// anything is, it can't be sent) or worth a look.
@@ -16,7 +16,7 @@ pub struct Gathered {
     pub size: usize,
     pub name: String,
     pub kind: String,
-    /// Its kind is settled by its source (its Cargo.toml says, or it's built with Ingle's
+    /// Its kind is settled by its source (its Cargo.toml says, or it's built with Pyr's
     /// add-on kit), so the form to send it in doesn't ask (Maanix's add-on went in as a program).
     pub kind_fixed: bool,
     pub version: String,
@@ -85,7 +85,7 @@ pub fn gather(folder: &Path) -> Gathered {
             match std::fs::read(&path) {
                 Ok(bytes) => {
                     g.size += bytes.len();
-                    g.files.push(SourceFile { path: rel, data: ingle_proto::b64::encode(&bytes) });
+                    g.files.push(SourceFile { path: rel, data: pyr_proto::b64::encode(&bytes) });
                 }
                 Err(e) => g.problems.push(format!("{rel}: couldn't read it ({e})")),
             }
@@ -104,14 +104,14 @@ pub fn gather(folder: &Path) -> Gathered {
     match g.files.iter().find(|f| f.path == "Cargo.toml") {
         None => g.problems.push("no Cargo.toml at the top of the folder: pick the plugin's own folder".into()),
         Some(f) => {
-            let text = String::from_utf8(ingle_proto::b64::decode(&f.data).unwrap_or_default()).unwrap_or_default();
+            let text = String::from_utf8(pyr_proto::b64::decode(&f.data).unwrap_or_default()).unwrap_or_default();
             read_manifest(&text, &mut g);
         }
     }
     g
 }
 
-/// The name, version and what [package.metadata.ingle] says, from Cargo.toml.
+/// The name, version and what [package.metadata.pyr] says, from Cargo.toml.
 fn read_manifest(text: &str, g: &mut Gathered) {
     let Ok(doc) = text.parse::<toml::Table>() else {
         g.problems.push("Cargo.toml can't be read".into());
@@ -120,14 +120,16 @@ fn read_manifest(text: &str, g: &mut Gathered) {
     let pkg = doc.get("package").and_then(|p| p.as_table());
     let s = |t: Option<&toml::Table>, k: &str| t.and_then(|t| t.get(k)).and_then(|v| v.as_str()).unwrap_or("").to_string();
     g.version = s(pkg, "version");
-    let ingle = pkg.and_then(|p| p.get("metadata")).and_then(|m| m.get("ingle")).and_then(|i| i.as_table());
-    g.name = s(ingle, "name");
+    // ([package.metadata.ingle]: plugins made before Pyr was called Pyr.)
+    let meta = pkg.and_then(|p| p.get("metadata"));
+    let pyr = meta.and_then(|m| m.get("pyr").or_else(|| m.get(pyr_proto::OLD_APP_ID))).and_then(|i| i.as_table());
+    g.name = s(pyr, "name");
     if g.name.is_empty() {
         g.name = s(pkg, "name");
     }
-    g.kind = s(ingle, "kind");
+    g.kind = s(pyr, "kind");
     // Built with the add-on kit: an add-on, whatever else it says.
-    let kit = doc.get("dependencies").and_then(|d| d.get("ingle-plugin")).is_some();
+    let kit = doc.get("dependencies").is_some_and(|d| d.get("pyr-plugin").is_some() || d.get("ingle-plugin").is_some());
     g.kind_fixed = kit || matches!(g.kind.as_str(), "addon" | "program");
     if kit {
         g.kind = "addon".into();
@@ -135,7 +137,7 @@ fn read_manifest(text: &str, g: &mut Gathered) {
         // An add-on is a library built to WebAssembly; anything else is a program.
         g.kind = if doc.get("lib").is_some() { "addon".into() } else { "program".into() };
     }
-    g.summary = s(ingle, "summary");
+    g.summary = s(pyr, "summary");
     if g.summary.is_empty() {
         g.summary = s(pkg, "description");
     }
@@ -159,8 +161,8 @@ impl Gathered {
 
 /// The plugin kit and the starter add-on, as files (for "Start an add-on").
 const KIT: &[(&str, &str)] = &[
-    ("ingle-plugin/Cargo.toml", include_str!("../../../plugins/kit/Cargo.toml")),
-    ("ingle-plugin/src/lib.rs", include_str!("../../../plugins/kit/src/lib.rs")),
+    ("pyr-plugin/Cargo.toml", include_str!("../../../plugins/kit/Cargo.toml")),
+    ("pyr-plugin/src/lib.rs", include_str!("../../../plugins/kit/src/lib.rs")),
     ("src/lib.rs", include_str!("../../../plugins/template/src/lib.rs")),
     ("CLAUDE.md", include_str!("../../../plugins/template/CLAUDE.md")),
     ("README.md", include_str!("../../../plugins/template/README.md")),
@@ -193,10 +195,10 @@ pub fn start_addon(folder: &Path, name: &str) -> Result<PathBuf, String> {
         return Err(format!("there's already a folder called {slug} there"));
     }
     let manifest = TEMPLATE_MANIFEST
-        .replace("name = \"ingle-hello\"", &format!("name = \"{slug}\""))
-        .replace("ingle-plugin = { path = \"../kit\" }", "ingle-plugin = { path = \"ingle-plugin\" }")
+        .replace("name = \"pyr-hello\"", &format!("name = \"{slug}\""))
+        .replace("pyr-plugin = { path = \"../kit\" }", "pyr-plugin = { path = \"pyr-plugin\" }")
         .replace("name = \"Hello\"", &format!("name = \"{}\"", name.replace('"', "'")))
-        .replace("# The kit (Ingle's \"Start an add-on\" puts a copy of it in an ingle-plugin folder next to this).\n", "# The plugin kit (a copy of it, in the ingle-plugin folder).\n");
+        .replace("# The kit (Pyr's \"Start an add-on\" puts a copy of it in a pyr-plugin folder next to this).\n", "# The plugin kit (a copy of it, in the pyr-plugin folder).\n");
     // A project of its own, outside any other Cargo workspace, built small.
     let manifest = format!(
         "{manifest}\n[workspace]\n\n# A small .wasm.\n[profile.release]\nopt-level = \"s\"\nlto = true\ncodegen-units = 1\npanic = \"abort\"\nstrip = true\n"
@@ -226,7 +228,7 @@ mod tests {
     use super::*;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ingle-source-{name}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("pyr-source-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -239,9 +241,13 @@ mod tests {
             read_manifest(toml, &mut g);
             (g.kind, g.kind_fixed)
         };
-        let kit = "[package]\nname = \"poker\"\n[package.metadata.ingle]\nkind = \"program\"\n[dependencies]\ningle-plugin = { path = \"ingle-plugin\" }\n";
+        let kit = "[package]\nname = \"poker\"\n[package.metadata.pyr]\nkind = \"program\"\n[dependencies]\npyr-plugin = { path = \"pyr-plugin\" }\n";
         assert_eq!(kind(kit), ("addon".to_string(), true), "built with the kit: an add-on");
+        // Made before Pyr was called Pyr: the old kit and the old table name.
+        let old = "[package]\nname = \"poker\"\n[package.metadata.ingle]\nkind = \"program\"\n[dependencies]\ningle-plugin = { path = \"ingle-plugin\" }\n";
+        assert_eq!(kind(old), ("addon".to_string(), true), "built with Ingle's kit: an add-on");
         assert_eq!(kind("[package]\nname = \"x\"\n[package.metadata.ingle]\nkind = \"program\"\n"), ("program".to_string(), true));
+        assert_eq!(kind("[package]\nname = \"x\"\n[package.metadata.pyr]\nkind = \"program\"\n"), ("program".to_string(), true));
         assert_eq!(kind("[package]\nname = \"x\"\n[lib]\ncrate-type = [\"cdylib\"]\n"), ("addon".to_string(), false), "a guess: asked");
         assert_eq!(kind("[package]\nname = \"x\"\n"), ("program".to_string(), false));
     }
@@ -258,7 +264,7 @@ mod tests {
         let g = gather(&p);
         assert!(g.problems.is_empty(), "{:?}", g.problems);
         assert_eq!((g.name.as_str(), g.kind.as_str(), g.kind_fixed), ("Coin Flip!", "addon", true));
-        assert!(g.files.iter().any(|f| f.path == "ingle-plugin/src/lib.rs"));
+        assert!(g.files.iter().any(|f| f.path == "pyr-plugin/src/lib.rs"));
         assert!(!g.files.iter().any(|f| f.path.starts_with("target")), "build output is left out");
         // Built files and other languages are refused.
         std::fs::write(p.join("helper.dll"), b"MZ").unwrap();

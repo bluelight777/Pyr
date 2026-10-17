@@ -2,9 +2,9 @@
 //! emoji by category with a skin tone choice, and a preview of the one under the pointer.
 
 use eframe::egui::{self, Color32, CornerRadius, Rect, RichText, Sense, Stroke, pos2, vec2};
-use ingle_engine::state::AppState;
+use pyr_engine::state::AppState;
 
-use crate::app::{Act, IngleApp};
+use crate::app::{Act, PyrApp};
 use crate::emoji::{self, EmojiRef};
 use crate::theme;
 
@@ -39,7 +39,7 @@ pub fn custom_text(name: &str, id: &str, animated: bool) -> String {
 const GROUP_ICONS: [&str; 9] = ["😀", "👋", "🦝", "🍔", "⚽", "🚗", "💡", "❤\u{fe0f}", "🏁"];
 const TONE_HANDS: [&str; 6] = ["👏", "👏🏻", "👏🏼", "👏🏽", "👏🏾", "👏🏿"];
 
-impl IngleApp {
+impl PyrApp {
     /// Draws the picker for server `key` (for its own emoji); returns what was picked.
     pub(crate) fn emoji_picker(&mut self, ui: &mut egui::Ui, st: &AppState, key: Option<&str>, acts: &mut Vec<Act>) -> Option<String> {
         let mut picked: Option<String> = None;
@@ -105,7 +105,7 @@ impl IngleApp {
             });
         }
         // Those who manage the server's emoji can add some right here.
-        if let Some(s) = server.filter(|s| s.can(ingle_proto::control::perm::MANAGE_EMOJI) && s.has(ingle_proto::control::EMOJI_FEATURE) && s.status.is_connected()) {
+        if let Some(s) = server.filter(|s| s.can(pyr_proto::control::perm::MANAGE_EMOJI) && s.has(pyr_proto::control::EMOJI_FEATURE) && s.status.is_connected()) {
             if ui.small_button("+ Add emoji for everyone here").on_hover_text("PNG, JPEG, WebP or GIF (moving ones move)").clicked() {
                 crate::images::pick_async(crate::images::PickFor::Emoji(s.key.clone()), true, ui.ctx());
             }

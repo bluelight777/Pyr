@@ -1,4 +1,4 @@
-Ingle
+Pyr
 Copyright 2026 Firelit Games
 
 Licensed under the MIT license or the Apache License 2.0, at your option.
@@ -8,5 +8,5 @@ The programs include, compiled in:
    SIL Open Font License 1.1 (https://openfontlicense.org)
  - libopus, Copyright Xiph.Org Foundation and contributors, BSD 3-Clause
  - OpenH264, Copyright Cisco Systems, BSD 2-Clause
- - SQLite (ingle-server), public domain
+ - SQLite (pyr-server), public domain
  - many Rust crates under MIT, Apache-2.0, BSD or similar permissive licenses

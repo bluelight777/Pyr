@@ -1,16 +1,16 @@
 //! Runs a recording through the microphone pipeline in each noise mode and reports, per
 //! stretch of time, how loud the result is and how much of it would be sent.
 //!
-//!   cargo run --release -p ingle-engine --example isolation_check -- test.raw 10.6 21.85
+//!   cargo run --release -p pyr-engine --example isolation_check -- test.raw 10.6 21.85
 //!
 //! `test.raw` is 48 kHz mono f32; the two times split it into: you talking, only someone
 //! else (quieter, across the room) talking, and both at once.
 
 use std::time::{Duration, Instant};
 
-use ingle_engine::audio::Controls;
-use ingle_engine::audio::capture::CapturePipeline;
-use ingle_engine::config::{NoiseSuppression, Settings};
+use pyr_engine::audio::Controls;
+use pyr_engine::audio::capture::CapturePipeline;
+use pyr_engine::config::{NoiseSuppression, Settings};
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();

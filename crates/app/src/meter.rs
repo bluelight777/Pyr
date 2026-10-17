@@ -9,9 +9,9 @@ use std::f32::consts::{PI, TAU};
 use std::time::Duration;
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, Mesh, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, pos2, vec2};
-use ingle_engine::audio::Meter;
-use ingle_engine::audio::spectrum::BANDS;
-use ingle_proto::control::SessionId;
+use pyr_engine::audio::Meter;
+use pyr_engine::audio::spectrum::BANDS;
+use pyr_proto::control::SessionId;
 
 use crate::theme;
 
@@ -608,7 +608,7 @@ mod tests {
         assert_eq!(Style::off_setting(&off), off, "off twice is still off, with the same look");
         assert_eq!(Style::look_of("off"), Style::Bars);
         for (setting, on) in [("", true), ("glow", true), ("off", false), ("off:dots", false)] {
-            let s = ingle_engine::config::Settings { voice_meter: setting.into(), ..Default::default() };
+            let s = pyr_engine::config::Settings { voice_meter: setting.into(), ..Default::default() };
             assert_eq!(s.voice_meters_on(), on, "{setting}");
             assert_eq!(Style::from_setting(setting) != Style::Off, on, "{setting}");
         }

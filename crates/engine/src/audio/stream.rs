@@ -2,7 +2,7 @@
 //! are watching the stream (the server enforces that), as stereo Opus.
 //!
 //! Sources:
-//! * Windows, whole screen: everything the PC plays *except Ingle itself*, so viewers never
+//! * Windows, whole screen: everything the PC plays *except Pyr itself*, so viewers never
 //!   hear the call echoed back (WASAPI process loopback, "exclude" mode).
 //! * Windows, one window: just that app and its child processes ("include" mode).
 //! * The test pattern: a synthetic stereo chord, for tests and demos.
@@ -17,7 +17,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
-use ingle_proto::media::{flags, track};
+use pyr_proto::media::{flags, track};
 use parking_lot::Mutex;
 use tracing::{info, warn};
 
@@ -34,7 +34,7 @@ const MAX_PACKET: usize = 1000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StreamAudioSource {
-    /// Everything this PC plays except Ingle itself.
+    /// Everything this PC plays except Pyr itself.
     SystemExceptSelf,
     /// One application (by process id) and its child processes.
     Process(u32),
@@ -77,7 +77,7 @@ impl StreamAudio {
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
         let (st, pk, er) = (stop.clone(), packets.clone(), error.clone());
         let thread = std::thread::Builder::new()
-            .name("ingle-stream-audio".into())
+            .name("pyr-stream-audio".into())
             .spawn(move || run(open, label, bitrate_kbps, sink, played, meter, st, pk, er, ready_tx))
             .map_err(|e| anyhow!("couldn't start the stream audio thread: {e}"))?;
         match ready_rx.recv_timeout(Duration::from_secs(4)) {
@@ -337,7 +337,7 @@ mod tests {
     use super::*;
 
     /// A PC whose sound goes through another program that plays it all again (so Windows
-    /// can't leave Ingle out): each read plays 10 ms of the call (into `tap`, as the call does)
+    /// can't leave Pyr out): each read plays 10 ms of the call (into `tap`, as the call does)
     /// and captures it back `delay` samples later, with nothing else playing.
     struct LeakyPc {
         tap: Arc<PlayedTap>,

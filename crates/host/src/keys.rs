@@ -1,7 +1,7 @@
-//! Ingle's own SSH key, used to log in to servers it rents for you.
+//! Pyr's own SSH key, used to log in to servers it rents for you.
 //!
-//! Kept next to the rest of Ingle's settings as a normal OpenSSH key pair
-//! (`ssh/ingle_ed25519` and `.pub`), so you can also log in yourself:
+//! Kept next to the rest of Pyr's settings as a normal OpenSSH key pair
+//! (`ssh/pyr_ed25519` and `.pub`), so you can also log in yourself:
 //! `ssh -i <that file> root@<server>`.
 
 use std::path::{Path, PathBuf};
@@ -12,19 +12,23 @@ use russh::keys::PrivateKey;
 use russh::keys::ssh_key::LineEnding;
 use russh::keys::ssh_key::private::{Ed25519Keypair, KeypairData};
 
-pub struct IngleKey {
+pub struct PyrKey {
     pub key: Arc<PrivateKey>,
-    /// `ssh-ed25519 AAAA… ingle`, for authorized_keys and provider APIs.
+    /// `ssh-ed25519 AAAA… pyr`, for authorized_keys and provider APIs.
     pub public_openssh: String,
     pub path: PathBuf,
 }
 
 pub fn key_path(config_dir: &Path) -> PathBuf {
-    config_dir.join("ssh").join("ingle_ed25519")
+    // (Made before Pyr was called Pyr, the key is `ingle_ed25519`: the servers it rented trust
+    // that one, so it stays in use.)
+    let old = config_dir.join("ssh").join("ingle_ed25519");
+    let new = config_dir.join("ssh").join("pyr_ed25519");
+    if !new.exists() && old.exists() { old } else { new }
 }
 
-/// Loads Ingle's SSH key, creating it the first time.
-pub fn load_or_create(config_dir: &Path) -> Result<IngleKey> {
+/// Loads Pyr's SSH key, creating it the first time.
+pub fn load_or_create(config_dir: &Path) -> Result<PyrKey> {
     let path = key_path(config_dir);
     let key = match std::fs::read_to_string(&path) {
         Ok(text) => PrivateKey::from_openssh(text.as_bytes()).with_context(|| format!("reading {}", path.display()))?,
@@ -36,7 +40,7 @@ pub fn load_or_create(config_dir: &Path) -> Result<IngleKey> {
         Err(_) => {
             let mut seed = [0u8; 32];
             getrandom::getrandom(&mut seed).map_err(|e| anyhow::anyhow!("getting random bytes for an SSH key: {e}"))?;
-            let key = PrivateKey::new(KeypairData::Ed25519(Ed25519Keypair::from_seed(&seed)), "ingle")
+            let key = PrivateKey::new(KeypairData::Ed25519(Ed25519Keypair::from_seed(&seed)), "pyr")
                 .context("creating an SSH key")?;
             let dir = path.parent().expect("key path has a folder");
             std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -48,10 +52,10 @@ pub fn load_or_create(config_dir: &Path) -> Result<IngleKey> {
         }
     };
     let public_openssh = key.public_key().to_openssh().context("encoding the SSH key")?;
-    Ok(IngleKey { key: Arc::new(key), public_openssh, path })
+    Ok(PyrKey { key: Arc::new(key), public_openssh, path })
 }
 
-/// A fresh host key for a server Ingle rents: given to the server when it's created (so we
+/// A fresh host key for a server Pyr rents: given to the server when it's created (so we
 /// know its identity before ever connecting). Returns (private key in OpenSSH form, public
 /// key line, SHA256 fingerprint).
 pub fn new_host_key() -> Result<(String, String, String)> {
@@ -98,7 +102,7 @@ mod tests {
 
     #[test]
     fn key_is_created_once_and_reloaded() {
-        let dir = std::env::temp_dir().join(format!("ingle-key-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pyr-key-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let a = load_or_create(&dir).unwrap();
         assert!(a.public_openssh.starts_with("ssh-ed25519 "), "{}", a.public_openssh);
@@ -108,6 +112,21 @@ mod tests {
         assert!(text.starts_with("-----BEGIN OPENSSH PRIVATE KEY-----"));
         // OpenSSH's own parser must accept it too (users may log in with it).
         russh::keys::decode_secret_key(&text, None).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The key made before Pyr was called Pyr (`ingle_ed25519`) stays the one used: the
+    /// servers it rented trust it.
+    #[test]
+    fn ingles_key_stays_in_use() {
+        let dir = std::env::temp_dir().join(format!("pyr-key-old-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let made = load_or_create(&dir).unwrap();
+        std::fs::rename(&made.path, dir.join("ssh").join("ingle_ed25519")).unwrap();
+        let again = load_or_create(&dir).unwrap();
+        assert_eq!(again.public_openssh, made.public_openssh);
+        assert!(again.path.ends_with("ingle_ed25519"));
+        assert!(!dir.join("ssh").join("pyr_ed25519").exists(), "no second key");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

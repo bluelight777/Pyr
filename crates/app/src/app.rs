@@ -5,11 +5,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Align, Color32, CornerRadius, Layout, Rect, RichText, Sense, Stroke, pos2, vec2};
-use ingle_engine::Engine;
-use ingle_engine::config::Settings;
-use ingle_engine::state::{AppState, ConnStatus, ServerView, VideoKey};
-use ingle_proto::control::{Attachment, ChannelId, ChannelKind, MessageId, Role, RoleId, SessionId, perm};
-use ingle_proto::media::track;
+use pyr_engine::Engine;
+use pyr_engine::config::Settings;
+use pyr_engine::state::{AppState, ConnStatus, ServerView, VideoKey};
+use pyr_proto::control::{Attachment, ChannelId, ChannelKind, MessageId, Role, RoleId, SessionId, perm};
+use pyr_proto::media::track;
 
 use crate::{icons, theme};
 
@@ -38,7 +38,7 @@ pub enum Act {
     SetServerIcon { key: String, bytes: Option<(Arc<Vec<u8>>, f32, f32, f32)> },
     AddEmoji { key: String, name: String, bytes: Vec<u8> },
     ListBugs(String),
-    SetBugStatus { key: String, id: i64, status: ingle_proto::control::BugStatus },
+    SetBugStatus { key: String, id: i64, status: pyr_proto::control::BugStatus },
     SetBugReports { key: String, on: bool },
     /// Send a bug report; `turn_on`: the bug server is mine, so switch collecting on there first.
     ReportBug { title: String, body: String, include_log: bool, turn_on: Option<String> },
@@ -46,9 +46,9 @@ pub enum Act {
     SetGiphyKey { key: String, giphy: String },
     /// The server's KLIPY app key (owner only; "" turns KLIPY off).
     SetKlipyKey { key: String, klipy: String },
-    /// Quit for real (Settings → Quit Ingle).
+    /// Quit for real (Settings → Quit Pyr).
     Quit,
-    /// Look for a newer Ingle right away (Check for updates).
+    /// Look for a newer Pyr right away (Check for updates).
     CheckUpdates,
     /// Call the other person in a direct message (`video`: with the camera on).
     CallDm { key: String, channel: ChannelId, video: bool },
@@ -74,29 +74,29 @@ pub enum Act {
     AddonPanel(String),
     /// "/name args" in a channel, for an add-on: its answer is sent there.
     AddonCommand { addon: String, name: String, args: String, key: String, channel: ChannelId, reply_to: Option<MessageId> },
-    /// Send a plugin in for the Ingle Library (`turn_on`: the library server, when it's mine).
-    SubmitPlugin { submission: ingle_proto::control::PluginSubmission, turn_on: Option<String> },
+    /// Send a plugin in for the Pyr Library (`turn_on`: the library server, when it's mine).
+    SubmitPlugin { submission: pyr_proto::control::PluginSubmission, turn_on: Option<String> },
     /// The library owner: plugins sent in, one's files, and what becomes of one.
     ListSubmissions(String),
     OpenSubmission { key: String, id: i64 },
     /// `note` goes to the sender.
-    SetSubmissionStatus { key: String, id: i64, status: ingle_proto::control::SubmissionStatus, note: String },
+    SetSubmissionStatus { key: String, id: i64, status: pyr_proto::control::SubmissionStatus, note: String },
     SetPluginSubmissions { key: String, on: bool },
     /// Try a skin sent in (its files fetched with `OpenSubmission`) before approving it.
     TrySentInSkin { key: String, id: i64 },
     /// Back to the skin in use (stop trying one).
     StopTryingSkin,
-    /// Wear an installed skin ("": Campfire, Ingle's own).
+    /// Wear an installed skin ("": Campfire, Pyr's own).
     WearSkin(String),
     /// Idle by my own say-so (true), or worked out from the keyboard and mouse (false).
     SetIdleByHand(bool),
     /// Do Not Disturb, on or off.
     SetDnd(bool),
-    /// The ringtone for everyone (`uid` none) or someone (`tone` none: Ingle's ring, or the
+    /// The ringtone for everyone (`uid` none) or someone (`tone` none: Pyr's ring, or the
     /// same as everyone's).
-    SetRingtone { uid: Option<String>, tone: Option<ingle_engine::config::Ringtone> },
-    /// Hear a ringtone (none: Ingle's ring).
-    PreviewRingtone(Option<ingle_engine::config::Ringtone>),
+    SetRingtone { uid: Option<String>, tone: Option<pyr_engine::config::Ringtone> },
+    /// Hear a ringtone (none: Pyr's ring).
+    PreviewRingtone(Option<pyr_engine::config::Ringtone>),
     /// A picture added as one of a server's own GIFs, for everyone there.
     AddServerGif { key: String, name: String, bytes: Vec<u8> },
     RemoveServerGif { key: String, id: String },
@@ -116,13 +116,13 @@ pub enum Act {
     ForgetVerified(String),
     /// The vouches on this server, fetched again.
     RefreshVouches(String),
-    InstallSkin(ingle_proto::library::SkinEntry),
+    InstallSkin(pyr_proto::library::SkinEntry),
     RemoveSkin(String),
     /// Star (or unstar) a plugin or skin in the Library (`skin:<id>` for a skin).
     ToggleFavorite(String),
     /// How the Library is sorted.
     SortLibrary(String),
-    /// What I sent in to the Ingle Library, and where it stands.
+    /// What I sent in to the Pyr Library, and where it stands.
     MySubmissions,
     AddFriend(String),
     AcceptFriend(String),
@@ -191,9 +191,9 @@ pub enum Act {
     /// but it's no bug, so it isn't reported by itself.
     Refused(String),
     /// Play a soundboard sound for everyone in the call (see `soundboard.rs`).
-    PlaySound(ingle_engine::config::SoundRef),
+    PlaySound(pyr_engine::config::SoundRef),
     /// Hear a soundboard sound yourself, nobody else.
-    PreviewSound(ingle_engine::config::SoundRef),
+    PreviewSound(pyr_engine::config::SoundRef),
     /// Stop every soundboard sound playing here.
     StopSounds,
     /// Add part (`start` to `end` seconds) of a picked file to a server's soundboard.
@@ -235,12 +235,12 @@ pub enum Dialog {
     DeleteMessage { key: String, channel: ChannelId, id: MessageId },
     Settings { tab: u8 },
     ScreenPicker { selected: Option<String> },
-    /// Report a bug in Ingle (see the engine's `bugs.rs`).
+    /// Report a bug in Pyr (see the engine's `bugs.rs`).
     ReportBug { title: String, body: String, include_log: bool },
-    /// The owner's inbox of Ingle bug reports for a server; `filter`: 0 new, 1 approved,
+    /// The owner's inbox of Pyr bug reports for a server; `filter`: 0 new, 1 approved,
     /// 2 fixed, 3 rejected.
     BugReports { key: String, filter: u8 },
-    /// The Ingle Library's owner: plugins sent in (filter: 0 new, 1 approved, 2 listed,
+    /// The Pyr Library's owner: plugins sent in (filter: 0 new, 1 approved, 2 listed,
     /// 3 rejected), and which file is open (submission id, path).
     /// The library owner's plugins (or `skins`) sent in.
     PluginSubmissions { key: String, skins: bool, filter: u8, open_file: Option<(i64, String)> },
@@ -268,7 +268,7 @@ pub struct ChannelAccess {
 }
 
 impl ChannelAccess {
-    pub fn of(c: &ingle_proto::control::Channel) -> ChannelAccess {
+    pub fn of(c: &pyr_proto::control::Channel) -> ChannelAccess {
         ChannelAccess { private: c.private, view_roles: c.view_roles.clone(), read_only: c.read_only, post_roles: c.post_roles.clone() }
     }
 }
@@ -306,7 +306,7 @@ pub struct UiState {
     pub grid_view: bool,
     /// Volumes from before "Mute" in a tile's menu, to go back to on "Unmute".
     pub premute_volume: HashMap<(String, bool), f32>,
-    /// Where moving pictures are in their loop (seconds): this clock only runs while Ingle's
+    /// Where moving pictures are in their loop (seconds): this clock only runs while Pyr's
     /// window is in front, so they wait while it's in the background (and use no power).
     pub anim_clock: f64,
     anim_last: Option<f64>,
@@ -351,7 +351,7 @@ pub struct UiState {
     /// What the last Check for updates asked for here found, and when (Settings → About says).
     pub update_answer: Option<(crate::update::Checked, Instant)>,
     /// My profile picture as last read from its file: (when the file was changed and how big
-    /// it is, its key in `images`, its bytes). See `IngleApp::my_avatar`.
+    /// it is, its key in `images`, its bytes). See `PyrApp::my_avatar`.
     pub my_avatar: Option<((Option<std::time::SystemTime>, u64), String, Arc<Vec<u8>>)>,
     /// The welcome screen's name box, as typed (your name to start with, once: an empty box
     /// stays empty, so typing a new name never ends up in front of the old one).
@@ -434,7 +434,7 @@ pub struct UiState {
     /// Where the program on show goes this frame (its page's area), if a program's page is
     /// showing.
     pub program_area: Option<Rect>,
-    /// What's drawn over everything this frame that a program open inside Ingle must keep
+    /// What's drawn over everything this frame that a program open inside Pyr must keep
     /// clear of (toasts, a call ringing).
     pub overlay_rects: Vec<Rect>,
     /// Text selected in a conversation, and the messages' right-click menu.
@@ -447,27 +447,27 @@ pub struct UiState {
     pub submission_notes: HashMap<i64, String>,
 }
 
-pub struct IngleApp {
+pub struct PyrApp {
     pub engine: Arc<Engine>,
     pub ui: UiState,
     pub textures: HashMap<VideoKey, (egui::TextureHandle, u64)>,
     /// Per video tile: (window start, frames in window, last measured fps)
     pub fps: HashMap<VideoKey, (Instant, u32, f32)>,
     started: Instant,
-    /// Invite links handed over by later launches (e.g. clicking an ingle:// link).
+    /// Invite links handed over by later launches (e.g. clicking a pyr:// link).
     handoff: crate::instance::Handoff,
     /// Invite link the app was started with, joined on the first frame.
     initial_join: Option<String>,
     /// The icon by the clock (Windows); kept here so it goes away with the app.
     _tray: Option<crate::tray::Tray>,
-    /// Showing the one-time note about the close button hiding Ingle to the tray.
+    /// Showing the one-time note about the close button hiding Pyr to the tray.
     /// Decoded images and profile pictures.
     pub images: crate::images::Images,
     pub updater: crate::update::Updater,
     /// Plugins: the library, what's installed, running add-ons.
     pub plugins: crate::plugins::Plugins,
     /// The update we last told the person about (pinged once per version).
-    update_seen: Option<ingle_proto::release::Manifest>,
+    update_seen: Option<pyr_proto::release::Manifest>,
     /// The updater in the title strip (or the rail): what checks asked for there said.
     update_chip: crate::update_chip::Chip,
     /// After an update: where to put the person back, and since when we've been trying.
@@ -483,7 +483,7 @@ pub struct IngleApp {
     pub meters: crate::meter::Meters,
 }
 
-impl IngleApp {
+impl PyrApp {
     pub fn new(
         engine: Arc<Engine>,
         handoff: crate::instance::Handoff,
@@ -492,14 +492,14 @@ impl IngleApp {
         updater: crate::update::Updater,
         plugins: crate::plugins::Plugins,
         title: String,
-    ) -> IngleApp {
+    ) -> PyrApp {
         engine.refresh_devices();
         let resume = crate::update::take_resume(&engine.shared.config_dir).map(|r| (r, Instant::now()));
         let gif_sizes = crate::giphy::GifSizes::load(&engine.shared.config_dir);
         crate::giphy::set_favorites_dir(&engine.shared.config_dir);
         let ui = UiState { members_open: true, call_chat_open: false, gif_sizes, ..Default::default() };
         let looks = crate::looks::Looks::new(engine.shared.config_dir.clone());
-        IngleApp {
+        PyrApp {
             looks,
             engine,
             ui,
@@ -526,9 +526,9 @@ impl IngleApp {
         let e = &self.engine;
         match a {
             Act::OfferJoin(link) => {
-                let known = ingle_proto::invite::InviteLink::parse(&link).ok().and_then(|l| {
+                let known = pyr_proto::invite::InviteLink::parse(&link).ok().and_then(|l| {
                     e.state().servers.iter().find(|s| {
-                        ingle_proto::b64::decode_array::<32>(&s.key).map(|fp| l.matches(&fp)).unwrap_or(false)
+                        pyr_proto::b64::decode_array::<32>(&s.key).map(|fp| l.matches(&fp)).unwrap_or(false)
                     }).map(|s| s.key.clone())
                 });
                 match known {
@@ -588,7 +588,7 @@ impl IngleApp {
                 let mut s = e.state().settings.clone();
                 s.sounds = true;
                 s.sound_volume = v;
-                e.play_sound_with(ingle_engine::sfx::Sound::Message, &s);
+                e.play_sound_with(pyr_engine::sfx::Sound::Message, &s);
             }
             Act::Typing { key, channel } => e.typing(&key, channel),
             Act::CreateChannel { key, name, kind, private, view_roles } => e.create_channel_with(&key, &name, kind, private, view_roles),
@@ -682,7 +682,7 @@ impl IngleApp {
             Act::OutputVolume { volume, save } => e.set_output_volume(volume, save),
             Act::InputGain { gain, save } => e.set_input_gain(gain, save),
             Act::Settings(s) => {
-                if e.shared.config_dir == ingle_engine::config::config_dir(None) {
+                if e.shared.config_dir == pyr_engine::config::config_dir(None) {
                     crate::autostart::apply(s.start_with_windows);
                 }
                 e.update_settings(s)
@@ -726,7 +726,7 @@ impl IngleApp {
             }
             Act::CheckUpdates => self.updater.check_now(crate::update::Asker::Window, || {}),
             Act::PluginOpen(id) => match self.plugins.open_program(&id) {
-                // Inside Ingle (Windows): its page.
+                // Inside Pyr (Windows): its page.
                 Ok(()) if cfg!(windows) => self.show_program(&id),
                 Ok(()) => {}
                 Err(e) => self.toast(&e, true),
@@ -759,7 +759,7 @@ impl IngleApp {
                 let name = e.state().submissions.get(&key).and_then(|l| l.iter().find(|s| s.id == id)).map(|s| s.name.clone()).unwrap_or_default();
                 match found {
                     Some(files) => {
-                        let files: Vec<(String, Vec<u8>)> = files.into_iter().map(|f| (f.path, ingle_proto::b64::decode(&f.data).unwrap_or_default())).collect();
+                        let files: Vec<(String, Vec<u8>)> = files.into_iter().map(|f| (f.path, pyr_proto::b64::decode(&f.data).unwrap_or_default())).collect();
                         self.looks.try_on(crate::looks::Trial::SentIn { key, id }, name, files);
                     }
                     None => e.shared.state.write().refused("Open it first, so its files are here."),
@@ -768,13 +768,13 @@ impl IngleApp {
             Act::StopTryingSkin => self.looks.stop_trying(),
             Act::WearSkin(id) => {
                 let settings = e.state().settings.clone();
-                e.update_settings(ingle_engine::config::Settings { skin: id, ..settings });
+                e.update_settings(pyr_engine::config::Settings { skin: id, ..settings });
             }
             Act::SetIdleByHand(on) => e.set_idle_by_hand(on),
             Act::SetDnd(on) => e.set_dnd(on),
             Act::SetRingtone { uid, tone } => e.set_ringtone(uid.as_deref(), tone),
             Act::AddServerGif { key, name, bytes } => {
-                let limit = e.state().server(&key).map(crate::images::upload_limit).unwrap_or(ingle_proto::control::OLD_MAX_ATTACHMENT_BYTES);
+                let limit = e.state().server(&key).map(crate::images::upload_limit).unwrap_or(pyr_proto::control::OLD_MAX_ATTACHMENT_BYTES);
                 if crate::images::can_shrink(&bytes, limit) {
                     // Too big: made smaller to fit first, off the window's thread.
                     self.toast(format!("{name} is over {} MB: making it smaller to fit…", limit >> 20), false);
@@ -817,7 +817,7 @@ impl IngleApp {
             Act::RemoveSkin(id) => {
                 let settings = e.state().settings.clone();
                 if settings.skin == id {
-                    e.update_settings(ingle_engine::config::Settings { skin: String::new(), ..settings });
+                    e.update_settings(pyr_engine::config::Settings { skin: String::new(), ..settings });
                 }
                 if let Err(err) = self.plugins.uninstall_skin(&id) {
                     e.shared.state.write().toast(err, true);
@@ -834,7 +834,7 @@ impl IngleApp {
             }
             Act::SortLibrary(by) => {
                 let settings = e.state().settings.clone();
-                e.update_settings(ingle_engine::config::Settings { library_sort: by, ..settings });
+                e.update_settings(pyr_engine::config::Settings { library_sort: by, ..settings });
             }
             Act::MySubmissions => e.my_submissions(),
             Act::SetPluginSubmissions { key, on } => e.set_plugin_submissions(&key, on),
@@ -878,7 +878,7 @@ impl IngleApp {
             // (Off the window's thread: a big picture takes a moment to read and put there.)
             Act::CopyPicture { name, bytes } => {
                 let e = e.clone();
-                let _ = std::thread::Builder::new().name("ingle-copy-picture".into()).spawn(move || {
+                let _ = std::thread::Builder::new().name("pyr-copy-picture".into()).spawn(move || {
                     match crate::images::copy_picture(&name, &bytes) {
                         Ok(()) => e.shared.state.write().toast("Picture copied.", false),
                         // (A busy clipboard, say: not a bug to report.)
@@ -923,7 +923,7 @@ impl IngleApp {
     pub fn face_moving(&mut self, ctx: &egui::Context, s: &ServerView, uid: &str, moving: bool) -> Option<egui::TextureId> {
         let id = s.members.get(uid)?.avatar.clone()?;
         let bytes = match self.engine.file(&s.key, &id) {
-            ingle_engine::files::FileState::Ready(b) => Some(b),
+            pyr_engine::files::FileState::Ready(b) => Some(b),
             _ => None,
         };
         self.picture(ctx, &format!("av:{id}"), bytes, moving)
@@ -966,10 +966,10 @@ impl IngleApp {
     /// A server emoji's picture (animated ones play), once downloaded.
     pub fn custom_emoji_tex(&mut self, ctx: &egui::Context, key: &str, id: &str) -> Option<egui::TextureId> {
         let bytes = match self.engine.file(key, id) {
-            ingle_engine::files::FileState::Ready(b) => Some(b),
+            pyr_engine::files::FileState::Ready(b) => Some(b),
             _ => None,
         };
-        // (By the moving pictures' clock: they wait while Ingle's in the background.)
+        // (By the moving pictures' clock: they wait while Pyr's in the background.)
         let t = self.ui.anim_clock;
         let (tex, _, next) = self.images.get(ctx, &format!("emoji:{id}"), bytes, 128).frame(t)?;
         if let (Some(n), true) = (next, self.ui.anim_on) {
@@ -987,7 +987,7 @@ impl IngleApp {
     pub fn server_icon_moving(&mut self, ctx: &egui::Context, s: &ServerView, moving: bool) -> Option<egui::TextureId> {
         let id = s.info.icon.clone()?;
         let bytes = match self.engine.file(&s.key, &id) {
-            ingle_engine::files::FileState::Ready(b) => Some(b),
+            pyr_engine::files::FileState::Ready(b) => Some(b),
             _ => None,
         };
         self.picture(ctx, &format!("icon:{id}"), bytes, moving)
@@ -1010,7 +1010,7 @@ impl IngleApp {
         let stamp = (meta.modified().ok(), meta.len());
         if self.ui.my_avatar.as_ref().is_none_or(|(s, _, _)| *s != stamp) {
             let bytes = self.engine.my_avatar()?;
-            let key = format!("av:me:{}", ingle_proto::release::sha256_hex(&bytes));
+            let key = format!("av:me:{}", pyr_proto::release::sha256_hex(&bytes));
             self.ui.my_avatar = Some((stamp, key, Arc::new(bytes)));
         }
         self.ui.my_avatar.as_ref().map(|(_, k, b)| (k.clone(), b.clone()))
@@ -1048,16 +1048,16 @@ impl IngleApp {
     }
 }
 
-impl eframe::App for IngleApp {
+impl eframe::App for PyrApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Development builds only: `INGLE_DEV_GPU_LOST=<seconds>` makes the window crash once the
+        // Development builds only: `PYR_DEV_GPU_LOST=<seconds>` makes the window crash once the
         // way it does when the graphics card goes away, to see it opened again (see `main`).
         #[cfg(debug_assertions)]
         {
             static FIRED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-            if let Some(secs) = std::env::var("INGLE_DEV_GPU_LOST").ok().and_then(|v| v.parse::<f64>().ok()) {
+            if let Some(secs) = pyr_proto::env_var("DEV_GPU_LOST").and_then(|v| v.parse::<f64>().ok()) {
                 if ctx.input(|i| i.time) > secs && !FIRED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                    panic!("Error in Surface::present: Parent device is lost (made up: INGLE_DEV_GPU_LOST)");
+                    panic!("Error in Surface::present: Parent device is lost (made up: PYR_DEV_GPU_LOST)");
                 }
             }
         }
@@ -1075,10 +1075,10 @@ impl eframe::App for IngleApp {
             self.ui.anim_on = front;
             self.ui.play_gifs = engine.state().settings.play_gifs.clone();
         }
-        for e in ingle_engine::errors::take() {
+        for e in pyr_engine::errors::take() {
             engine.shared.state.write().toast(e, true);
         }
-        // A key or the mouse in the window: I'm here (see `ingle_engine::idle`).
+        // A key or the mouse in the window: I'm here (see `pyr_engine::idle`).
         let active = ctx.input(|i| {
             i.pointer.delta() != egui::Vec2::ZERO
                 || i.events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::PointerButton { .. } | egui::Event::MouseWheel { .. }))
@@ -1108,8 +1108,8 @@ impl eframe::App for IngleApp {
                 acts.push(Act::OfferJoin(link));
             }
         }
-        // The close button (and Alt+F4) never quits while there's an icon by the clock: Ingle
-        // keeps running there, like Discord, until you choose Quit Ingle on the icon. The first
+        // The close button (and Alt+F4) never quits while there's an icon by the clock: Pyr
+        // keeps running there, like Discord, until you choose Quit Pyr on the icon. The first
         // time, the icon says so.
         if ctx.input(|i| i.viewport().close_requested()) && crate::tray::available() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -1127,10 +1127,10 @@ impl eframe::App for IngleApp {
                 let settings = engine.state().settings.clone();
                 if !settings.tray_note_seen {
                     crate::tray::notify(
-                        "Ingle is still running",
-                        "Click the campfire icon to open Ingle. To quit, right-click it and choose Quit Ingle.",
+                        "Pyr is still running",
+                        "Click the campfire icon to open Pyr. To quit, right-click it and choose Quit Pyr.",
                     );
-                    acts.push(Act::Settings(ingle_engine::config::Settings { tray_note_seen: true, ..settings }));
+                    acts.push(Act::Settings(pyr_engine::config::Settings { tray_note_seen: true, ..settings }));
                 }
             } else {
                 // No icon to come back from (Windows wouldn't show it): just minimize.
@@ -1145,14 +1145,14 @@ impl eframe::App for IngleApp {
                 crate::plugins::Outcome::Toast(t, error) => acts.push(Act::Toast(t, error)),
             }
         }
-        // A skin taken out of the Ingle Library comes off (back to Campfire), like a plugin.
+        // A skin taken out of the Pyr Library comes off (back to Campfire), like a plugin.
         {
             let worn = engine.state().settings.skin.clone();
             let gone = !worn.is_empty() && self.plugins.library.as_ref().is_some_and(|l| l.find_skin(&worn).is_none()) && self.plugins.skins.get(&worn).is_some();
             if gone {
                 let name = self.plugins.skins.get(&worn).map(|s| s.name.clone()).unwrap_or(worn);
                 acts.push(Act::WearSkin(String::new()));
-                acts.push(Act::Refused(format!("{name} was taken out of the Ingle Library, so Ingle went back to Campfire.")));
+                acts.push(Act::Refused(format!("{name} was taken out of the Pyr Library, so Pyr went back to Campfire.")));
             }
         }
         if crate::images::dialog_closed() {
@@ -1180,7 +1180,7 @@ impl eframe::App for IngleApp {
                     }
                 }
                 PickFor::Attach(key, ch) => {
-                    let limit = engine.state().server(&key).map(crate::images::upload_limit).unwrap_or(ingle_proto::control::OLD_MAX_ATTACHMENT_BYTES);
+                    let limit = engine.state().server(&key).map(crate::images::upload_limit).unwrap_or(pyr_proto::control::OLD_MAX_ATTACHMENT_BYTES);
                     for (name, bytes) in files {
                         crate::chat::add_attachment(&mut self.ui.attach, &(key.clone(), ch), name, bytes, limit, ctx, &mut acts);
                     }
@@ -1208,7 +1208,7 @@ impl eframe::App for IngleApp {
                 Ok((bytes, ext)) => {
                     let stem = std::path::Path::new(&name).file_stem().and_then(|s| s.to_str()).unwrap_or("image").to_string();
                     let note = format!("Made {name} smaller to fit: {} → {}", crate::chat::human_size(was), crate::chat::human_size(bytes.len() as u64));
-                    let limit = engine.state().server(&draft.0).map(crate::images::upload_limit).unwrap_or(ingle_proto::control::OLD_MAX_ATTACHMENT_BYTES);
+                    let limit = engine.state().server(&draft.0).map(crate::images::upload_limit).unwrap_or(pyr_proto::control::OLD_MAX_ATTACHMENT_BYTES);
                     crate::chat::add_attachment(&mut self.ui.attach, &draft, format!("{stem}.{ext}"), bytes, limit, ctx, &mut acts);
                     acts.push(Act::Toast(note, false));
                 }
@@ -1241,11 +1241,11 @@ impl eframe::App for IngleApp {
                     self.plugins.form = Some(crate::plugins::ui::SubmitForm { gathered, author, contact: String::new(), agree: false, sends_before, scroll: true });
                 }
                 // A skin someone's making: worn until they stop (and again whenever it changes).
-                crate::images::FolderFor::TrySkin => match ingle_engine::skins::check_folder(&dir) {
+                crate::images::FolderFor::TrySkin => match pyr_engine::skins::check_folder(&dir) {
                     Ok((files, report)) if report.ok() => {
                         let name = report.manifest.name.clone();
                         self.looks.try_on(crate::looks::Trial::Folder { path: dir }, name.clone(), files);
-                        self.toast(&format!("Trying {name}. Save a change to its files and Ingle wears it again."), false);
+                        self.toast(&format!("Trying {name}. Save a change to its files and Pyr wears it again."), false);
                     }
                     Ok((_, report)) => self.toast(&format!("That skin can't be worn yet: {}", report.problems.join(" ")), true),
                     Err(e) => self.toast(&format!("{e:#}"), true),
@@ -1266,7 +1266,7 @@ impl eframe::App for IngleApp {
             self.show_dm(key, id);
         }
         ctx.request_repaint_after(std::time::Duration::from_secs(1));
-        // The skin: what Ingle looks like (its picture goes under everything, so first).
+        // The skin: what Pyr looks like (its picture goes under everything, so first).
         {
             let skin = engine.state().settings.skin.clone();
             let plugins = &self.plugins;
@@ -1277,7 +1277,7 @@ impl eframe::App for IngleApp {
         }
         {
             let (chip, updater) = (&mut self.update_chip, &self.updater);
-            crate::titlebar::show(ctx, ingle_proto::APP_NAME, |ui, x, y| chip.title_chip(ui, updater, x, y));
+            crate::titlebar::show(ctx, pyr_proto::APP_NAME, |ui, x, y| chip.title_chip(ui, updater, x, y));
         }
         // Voice meters: how everyone in my call sounds, eased for drawing (read before the
         // state: it takes the call's lock, see Engine::state).
@@ -1313,7 +1313,7 @@ impl eframe::App for IngleApp {
         let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true) && !i.viewport().minimized.unwrap_or(false));
         engine.set_window_focused(focused);
         crate::watchdog::step("doing what was clicked");
-        // Invite links clicked in a message (ingle:// ones, and web invites from
+        // Invite links clicked in a message (pyr:// ones, and web invites from
         // firelitgames.com): ask to join right here, not by way of the browser or Windows.
         let invites = ctx.output_mut(|o| {
             let mut found = Vec::new();
@@ -1353,8 +1353,8 @@ impl eframe::App for IngleApp {
     }
 }
 
-impl IngleApp {
-    /// Programs open inside Ingle: the one whose page is showing goes over it (clear of what's
+impl PyrApp {
+    /// Programs open inside Pyr: the one whose page is showing goes over it (clear of what's
     /// drawn over everything, and out of the way of menus and dialogs), the rest out of sight.
     fn place_programs(&mut self, ctx: &egui::Context) {
         if self.plugins.programs.open.is_empty() {
@@ -1406,7 +1406,7 @@ impl IngleApp {
                     // (Found by a check someone just asked for here: they're looking at it.)
                     if !self.update_chip.just_asked() {
                         let text = format!(
-                            "Ingle {} is out. Click Update {} (Ingle restarts and puts you back where you were).",
+                            "Pyr {} is out. Click Update {} (Pyr restarts and puts you back where you were).",
                             m.version,
                             crate::update_chip::where_it_is()
                         );
@@ -1422,7 +1422,7 @@ impl IngleApp {
             // Something's off with the website (or Firelit hasn't signed the release file again
             // in a long while): say so, once each time it's found.
             Status::Stale(e) => {
-                self.engine.shared.state.write().toast(format!("Couldn't check for Ingle updates: {e}."), true);
+                self.engine.shared.state.write().toast(format!("Couldn't check for Pyr updates: {e}."), true);
                 self.updater.dismiss_error(self.update_seen.clone());
             }
             Status::Ready(path, sha256) => {
@@ -1470,8 +1470,8 @@ impl IngleApp {
                             // Back muted or deafened (as you were before the update): say so, so
                             // it doesn't look like the update did it.
                             let note = match self.engine.voice_prefs() {
-                                (_, true) => Some("You're deafened, as you were before Ingle updated. Click the headphones to hear everyone."),
-                                (true, false) => Some("You're muted, as you were before Ingle updated. Click the microphone to talk."),
+                                (_, true) => Some("You're deafened, as you were before Pyr updated. Click the headphones to hear everyone."),
+                                (true, false) => Some("You're muted, as you were before Pyr updated. Click the microphone to talk."),
                                 _ => None,
                             };
                             if let Some(n) = note {
@@ -1489,12 +1489,13 @@ impl IngleApp {
 
 // ------------------------------------------------------------------- helpers
 
-/// An invite link Ingle can join from: `ingle://…`, or the web form on firelitgames.com.
+/// An invite link Pyr can join from: `pyr://…`, or the web form on firelitgames.com.
 fn is_invite(url: &str) -> bool {
     let u = url.trim();
-    let app = u.get(..8).is_some_and(|p| p.eq_ignore_ascii_case("ingle://"));
-    let web = u.starts_with(ingle_proto::invite::WEB_INVITE) && u.contains("join=");
-    (app || web) && ingle_proto::invite::InviteLink::parse(u).is_ok()
+    // (ingle:// and firelitgames.com/ingle/: links made before Pyr was called Pyr.)
+    let app = ["pyr://", "ingle://"].iter().any(|s| u.get(..s.len()).is_some_and(|p| p.eq_ignore_ascii_case(s)));
+    let web = [pyr_proto::invite::WEB_INVITE, "https://firelitgames.com/ingle/"].iter().any(|w| u.starts_with(w)) && u.contains("join=");
+    (app || web) && pyr_proto::invite::InviteLink::parse(u).is_ok()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1536,7 +1537,7 @@ pub enum Presence {
 }
 
 impl Presence {
-    pub fn of(m: &ingle_proto::control::Member) -> Presence {
+    pub fn of(m: &pyr_proto::control::Member) -> Presence {
         if !m.online {
             Presence::Offline
         } else if m.dnd {
@@ -1680,7 +1681,7 @@ pub fn short_status(s: &ConnStatus) -> Option<(String, bool)> {
     }
 }
 
-impl IngleApp {
+impl PyrApp {
     fn frame_ui(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
         self.watch_when_joined(st, acts);
         if self.fullscreen_ui(ctx, st, acts) {
@@ -1704,7 +1705,7 @@ impl IngleApp {
             .frame(egui::Frame::new().fill(theme::panel(theme::RAIL(), false)))
             .show(ctx, |ui| {
                 self.rail(ui, st, acts);
-                // Without a title strip of Ingle's own, the updater is at the bottom of the rail.
+                // Without a title strip of Pyr's own, the updater is at the bottom of the rail.
                 if !crate::titlebar::enabled() {
                     let r = ui.max_rect();
                     let bottom = Rect::from_min_max(pos2(r.left(), r.bottom() - 72.0), r.max);
@@ -1837,7 +1838,7 @@ impl IngleApp {
     /// stream (when they're sharing their screen) and to message them. (Right-clicking the name
     /// has the other options.)
     fn profile_card(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
-        use ingle_proto::control::RelationKind;
+        use pyr_proto::control::RelationKind;
         let Some((key, uid, row)) = self.ui.profile_card.clone() else { return };
         // (The vouches of the people I made sure of may have grown since they were fetched.)
         if self.ui.vouches_for.as_ref() != Some(&(key.clone(), uid.clone())) {
@@ -1921,7 +1922,7 @@ impl IngleApp {
                 }
                 chose |= self.trust_section(ui, st, s, &uid, acts);
                 ui.add_space(4.0);
-                ui.label(RichText::new(format!("Safety code {}", ingle_proto::crypto::safety_code(&uid))).font(theme::mono(10.5)).color(theme::DIM()))
+                ui.label(RichText::new(format!("Safety code {}", pyr_proto::crypto::safety_code(&uid))).font(theme::mono(10.5)).color(theme::DIM()))
                     .on_hover_text("The same code shows on their welcome screen: another way to check, digit by digit.");
                 // Sharing their screen: watch it from here, like Discord's Watch Stream. From
                 // another voice channel (or none), it joins theirs first.
@@ -1948,7 +1949,7 @@ impl IngleApp {
                         chose = true;
                     }
                 }
-                let can_dm = uid != st.my_uid && s.has(ingle_proto::control::DMS_FEATURE) && s.status.is_connected() && !s.is_bot(&uid);
+                let can_dm = uid != st.my_uid && s.has(pyr_proto::control::DMS_FEATURE) && s.status.is_connected() && !s.is_bot(&uid);
                 if can_dm {
                     ui.add_space(if live.is_some() { 6.0 } else { 10.0 });
                     if ui.add(theme::primary_button(&format!("Message {name}")).min_size(vec2(ui.available_width(), 32.0))).clicked() {
@@ -1986,7 +1987,7 @@ impl IngleApp {
         let me = uid == st.my_uid;
         let name = s.member_name(uid);
         let mut chose = false;
-        let can_dm = !me && s.has(ingle_proto::control::DMS_FEATURE) && s.status.is_connected() && !s.is_bot(uid);
+        let can_dm = !me && s.has(pyr_proto::control::DMS_FEATURE) && s.status.is_connected() && !s.is_bot(uid);
         if can_dm && ui.button("Message").clicked() {
             acts.push(Act::OpenDm { key: s.key.clone(), uid: uid.to_string() });
             chose = true;
@@ -2021,7 +2022,7 @@ impl IngleApp {
             ui.separator();
         }
         if ui.button("Copy safety code").clicked() {
-            acts.push(Act::Copy(ingle_proto::crypto::safety_code(uid)));
+            acts.push(Act::Copy(pyr_proto::crypto::safety_code(uid)));
             chose = true;
         }
         if !me && s.can(perm::KICK) && s.rank(uid) < s.rank(&st.my_uid) {
@@ -2048,7 +2049,7 @@ impl IngleApp {
     fn drop_files(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
         let key = if self.ui.home { self.ui.dm.as_ref().map(|d| d.0.clone()) } else { self.ui.server.clone() };
         let Some(server) = key.and_then(|k| st.server(&k).cloned()) else { return };
-        if !server.has(ingle_proto::control::FILES_FEATURE) {
+        if !server.has(pyr_proto::control::FILES_FEATURE) {
             return;
         }
         let channel = if self.ui.home {
@@ -2120,7 +2121,7 @@ impl IngleApp {
             }
             // (Direct messages and groups count here, not on their server's icon.)
             let dm_count: u32 = st.servers.iter().map(|s| s.mentions.iter().filter(|(c, _)| s.is_private(**c)).map(|(_, n)| n).sum::<u32>()).sum::<u32>()
-                + st.relations().iter().filter(|r| r.1 == ingle_proto::control::RelationKind::Incoming).count() as u32;
+                + st.relations().iter().filter(|r| r.1 == pyr_proto::control::RelationKind::Incoming).count() as u32;
             if dm_count > 0 {
                 let c = r.right_bottom() - vec2(6.0, 6.0);
                 ui.painter().circle_filled(c, 9.0, theme::RAIL());
@@ -2363,8 +2364,8 @@ impl IngleApp {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.add_space(8.0);
             let current = self.ui.channel.get(&s.key).copied();
-            // The owner's bug report inbox (when this server collects Ingle bug reports).
-            let owner = s.me.as_ref().map(|m| m.role == ingle_proto::control::Role::Owner).unwrap_or(false);
+            // The owner's bug report inbox (when this server collects Pyr bug reports).
+            let owner = s.me.as_ref().map(|m| m.role == pyr_proto::control::Role::Owner).unwrap_or(false);
             if owner && s.info.bug_reports {
                 let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
                 let row = r.shrink2(vec2(8.0, 1.0));
@@ -2380,13 +2381,13 @@ impl IngleApp {
                     ui.painter().rect_filled(b, CornerRadius::same(9), theme::LIVE());
                     ui.painter().text(b.center(), egui::Align2::CENTER_CENTER, t, theme::bold_font(11.5), Color32::WHITE);
                 }
-                if resp.on_hover_text("Ingle bug reports people sent here. Only you see this.").clicked() {
+                if resp.on_hover_text("Pyr bug reports people sent here. Only you see this.").clicked() {
                     acts.push(Act::ListBugs(s.key.clone()));
                     self.ui.dialog = Some(Dialog::BugReports { key: s.key.clone(), filter: 0 });
                 }
                 ui.add_space(6.0);
             }
-            // And the plugins and skins sent in for the Ingle Library (when this server
+            // And the plugins and skins sent in for the Pyr Library (when this server
             // collects them).
             if owner && s.info.plugin_submissions {
                 for skins in [false, true] {
@@ -2410,7 +2411,7 @@ impl IngleApp {
                         ui.painter().rect_filled(b, CornerRadius::same(9), theme::LIVE());
                         ui.painter().text(b.center(), egui::Align2::CENTER_CENTER, t, theme::bold_font(11.5), Color32::WHITE);
                     }
-                    let tip = if skins { "Skins people sent in for the Ingle Library. Only you see this." } else { "Plugins people sent in for the Ingle Library. Only you see this." };
+                    let tip = if skins { "Skins people sent in for the Pyr Library. Only you see this." } else { "Plugins people sent in for the Pyr Library. Only you see this." };
                     if resp.on_hover_text(tip).clicked() {
                         crate::plugins::ui::open_submissions(self, &s.key, acts, skins);
                     }
@@ -2599,13 +2600,13 @@ impl IngleApp {
                                 crate::meter::paint(ui.painter(), m, style, track, false);
                                 x -= 36.0;
                             }
-                            if p.tracks.iter().any(|t| t.id == ingle_proto::media::track::SCREEN) {
+                            if p.tracks.iter().any(|t| t.id == pyr_proto::media::track::SCREEN) {
                                 let b = Rect::from_min_max(pos2(x - 34.0, r.center().y - 8.0), pos2(x, r.center().y + 8.0));
                                 ui.painter().rect_filled(b, CornerRadius::same(4), theme::LIVE());
                                 ui.painter().text(b.center(), egui::Align2::CENTER_CENTER, "LIVE", theme::bold_font(10.0), Color32::WHITE);
                                 x -= 40.0;
                             }
-                            if p.tracks.iter().any(|t| t.id == ingle_proto::media::track::CAMERA) {
+                            if p.tracks.iter().any(|t| t.id == pyr_proto::media::track::CAMERA) {
                                 icons::camera(ui.painter(), Rect::from_center_size(pos2(x - 8.0, r.center().y), vec2(16.0, 16.0)), theme::DIM(), false);
                                 x -= 20.0;
                             }
@@ -2625,7 +2626,7 @@ impl IngleApp {
                             }
                             // Hovering someone: a button to message them (like the chat bubble on a
                             // voice channel).
-                            let can_dm = uid != st.my_uid && s.has(ingle_proto::control::DMS_FEATURE) && s.status.is_connected();
+                            let can_dm = uid != st.my_uid && s.has(pyr_proto::control::DMS_FEATURE) && s.status.is_connected();
                             // Their name (emoji and all), cut short before what's on the right.
                             let name_x = indent + 36.0;
                             let end = if can_dm && pointer_in { x - 24.0 } else { x };
@@ -2718,7 +2719,7 @@ impl IngleApp {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
     }
 
-    pub(crate) fn voice_panel(&mut self, ui: &mut egui::Ui, st: &AppState, call: &ingle_engine::state::CallView, acts: &mut Vec<Act>) {
+    pub(crate) fn voice_panel(&mut self, ui: &mut egui::Ui, st: &AppState, call: &pyr_engine::state::CallView, acts: &mut Vec<Act>) {
         let server = st.server(&call.server_key);
         // (A voice channel's name, or "@" and who you're calling.)
         let channel_name = st.call_place(&call.server_key, call.channel_id);
@@ -2771,14 +2772,14 @@ impl IngleApp {
                 crate::menu::header(ui, "Voice meters");
                 for s in crate::meter::Style::LOOKS {
                     if ui.add(egui::Button::selectable(s == style, s.name())).on_hover_text(s.about()).clicked() {
-                        acts.push(Act::Settings(ingle_engine::config::Settings { voice_meter: s.setting().to_string(), ..st.settings.clone() }));
+                        acts.push(Act::Settings(pyr_engine::config::Settings { voice_meter: s.setting().to_string(), ..st.settings.clone() }));
                         ui.close();
                     }
                 }
                 ui.separator();
                 if ui.button("Turn off voice meters").on_hover_text("Turn them back on in Settings → Voice & Video").clicked() {
                     let off = crate::meter::Style::off_setting(&st.settings.voice_meter);
-                    acts.push(Act::Settings(ingle_engine::config::Settings { voice_meter: off, ..st.settings.clone() }));
+                    acts.push(Act::Settings(pyr_engine::config::Settings { voice_meter: off, ..st.settings.clone() }));
                     acts.push(Act::Toast("Voice meters are off. Turn them back on in Settings → Voice & Video.".into(), false));
                     ui.close();
                 }
@@ -2936,13 +2937,13 @@ impl IngleApp {
             members.sort_by(|a, b| s.rank(&b.user_id).cmp(&s.rank(&a.user_id)).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
             // Like Discord: online people with a "shown separately" role are grouped under
             // their highest such role, other online people under Online, then Offline.
-            let group_of = |m: &ingle_proto::control::Member| -> Option<RoleId> {
+            let group_of = |m: &pyr_proto::control::Member| -> Option<RoleId> {
                 if !m.online {
                     return None;
                 }
                 s.roles_of(&m.user_id).into_iter().find(|r| r.hoist).map(|r| r.id)
             };
-            let mut groups: Vec<(String, Vec<&ingle_proto::control::Member>, bool)> = Vec::new();
+            let mut groups: Vec<(String, Vec<&pyr_proto::control::Member>, bool)> = Vec::new();
             for r in s.roles.iter().filter(|r| r.hoist) {
                 let g: Vec<_> = members.iter().copied().filter(|m| group_of(m) == Some(r.id)).collect();
                 if !g.is_empty() {
@@ -3006,11 +3007,11 @@ impl IngleApp {
                     if let Some((_, what)) = crate::trust::shown(st, &uid, &name) {
                         hover.push_str(&format!("\n{what}"));
                     }
-                    hover.push_str(&format!("\nSafety code: {}", ingle_proto::crypto::safety_code(&uid)));
+                    hover.push_str(&format!("\nSafety code: {}", pyr_proto::crypto::safety_code(&uid)));
                     if !their_roles.is_empty() {
                         hover.push_str(&format!("\nRoles: {}", their_roles.join(", ")));
                     }
-                    let can_dm = !me && s.has(ingle_proto::control::DMS_FEATURE) && s.status.is_connected() && !s.is_bot(&uid);
+                    let can_dm = !me && s.has(pyr_proto::control::DMS_FEATURE) && s.status.is_connected() && !s.is_bot(&uid);
                     if can_dm && resp.clicked() {
                         acts.push(Act::OpenDm { key: key.clone(), uid: uid.clone() });
                     }
@@ -3030,7 +3031,7 @@ impl IngleApp {
                         }
                         person_menu(ui, st, &uid, acts);
                         if ui.button("Copy safety code").clicked() {
-                            acts.push(Act::Copy(ingle_proto::crypto::safety_code(&uid)));
+                            acts.push(Act::Copy(pyr_proto::crypto::safety_code(&uid)));
                             ui.close();
                         }
                         // Roles you can hand out (below your own highest), for people below you
@@ -3098,7 +3099,7 @@ impl IngleApp {
             ui.painter().rect_filled(r, CornerRadius::same(22), Color32::from_rgb(0x24, 0x1d, 0x19));
             icons::flame(ui.painter(), r.shrink(14.0));
             ui.add_space(14.0);
-            ui.label(RichText::new(format!("Welcome to {}", ingle_proto::APP_NAME)).font(theme::bold_font(28.0)).color(theme::TEXT()));
+            ui.label(RichText::new(format!("Welcome to {}", pyr_proto::APP_NAME)).font(theme::bold_font(28.0)).color(theme::TEXT()));
             ui.add_space(6.0);
             ui.label(
                 RichText::new("Voice, video, screen share and chat for your group. Calls are end-to-end encrypted. No accounts, no ads.")
@@ -3127,7 +3128,7 @@ impl IngleApp {
                         acts.push(Act::SetName(typed.clone()));
                     }
                     let name = if name_changed { typed.clone() } else { st.my_name.clone() };
-                    self.ui.create = Some(crate::create::CreateState::new(&name, ingle_proto::crypto::backup_key(&self.engine.shared.identity)));
+                    self.ui.create = Some(crate::create::CreateState::new(&name, pyr_proto::crypto::backup_key(&self.engine.shared.identity)));
                     self.ui.dialog = Some(Dialog::Create);
                 }
                 ui.add_space(4.0);
@@ -3203,7 +3204,7 @@ impl IngleApp {
             .toasts
             .iter()
             .filter(|t| match &t.friend {
-                Some(uid) => !self.ui.toasts_dismissed.contains(&t.id) && st.relation(uid) == Some(ingle_proto::control::RelationKind::Incoming),
+                Some(uid) => !self.ui.toasts_dismissed.contains(&t.id) && st.relation(uid) == Some(pyr_proto::control::RelationKind::Incoming),
                 None if t.error => !self.ui.toasts_dismissed.contains(&t.id),
                 None => now.duration_since(t.at) < Duration::from_secs(6),
             })
@@ -3277,8 +3278,8 @@ impl IngleApp {
                                         reopen_report = true;
                                         dismiss = Some(t.id);
                                     }
-                                } else if ingle_engine::bugs::can_report()
-                                    && ui.button("Report").on_hover_text("Tell Ingle's developers about this").clicked()
+                                } else if pyr_engine::bugs::can_report()
+                                    && ui.button("Report").on_hover_text("Tell Pyr's developers about this").clicked()
                                 {
                                     report = Some(t.text.clone());
                                     dismiss = Some(t.id);
@@ -3292,7 +3293,7 @@ impl IngleApp {
         if let Some(id) = copy {
             if let Some(t) = st.toasts.iter().find(|t| t.id == id) {
                 let when = chrono::Local::now().format("%Y-%m-%d %H:%M");
-                ctx.copy_text(format!("{}\n(Ingle {}, {when})", t.text, env!("CARGO_PKG_VERSION")));
+                ctx.copy_text(format!("{}\n(Pyr {}, {when})", t.text, env!("CARGO_PKG_VERSION")));
                 self.ui.toast_copied = Some((id, now));
                 ctx.request_repaint_after(Duration::from_secs(2));
             }
@@ -3338,7 +3339,7 @@ pub(crate) fn server_voice_items(ui: &mut egui::Ui, st: &AppState, s: &ServerVie
 /// and them myself or below me.
 pub(crate) fn moderate(st: &AppState, s: &ServerView, uid: &str) -> (bool, bool) {
     let me = uid == st.my_uid;
-    let reach = s.has(ingle_proto::control::VOICE_MOD_FEATURE) && (me || s.rank(uid) < s.rank(&st.my_uid));
+    let reach = s.has(pyr_proto::control::VOICE_MOD_FEATURE) && (me || s.rank(uid) < s.rank(&st.my_uid));
     // Only the owner undoes their own server mute or deafen: anyone else's is for someone above
     // them to undo (so it isn't offered).
     let owner = s.me.as_ref().is_some_and(|m| m.role == Role::Owner);
@@ -3350,7 +3351,7 @@ pub(crate) fn moderate(st: &AppState, s: &ServerView, uid: &str) -> (bool, bool)
 
 /// How tall the voice panel is: taller while it offers to turn the camera or screen share back
 /// on after a dropped call.
-pub(crate) fn voice_panel_height(st: &AppState, call: &ingle_engine::state::CallView) -> f32 {
+pub(crate) fn voice_panel_height(st: &AppState, call: &pyr_engine::state::CallView) -> f32 {
     let base = match st.resume_offer.as_ref().filter(|o| o.server_key == call.server_key && o.channel_id == call.channel_id) {
         Some(_) => 168.0,
         None => 86.0,
@@ -3398,15 +3399,15 @@ pub(crate) fn volume_items(ui: &mut egui::Ui, st: &AppState, s: &ServerView, uid
             acts.push(Act::Volume { uid: uid.to_string(), volume: v / 100.0 });
         }
     });
-    if let Some(p) = s.voice.values().find(|p| p.user_id == uid && p.tracks.iter().any(|t| t.id == ingle_proto::media::track::SCREEN)) {
-        let has_sound = p.tracks.iter().any(|t| t.id == ingle_proto::media::track::SCREEN_AUDIO);
+    if let Some(p) = s.voice.values().find(|p| p.user_id == uid && p.tracks.iter().any(|t| t.id == pyr_proto::media::track::SCREEN)) {
+        let has_sound = p.tracks.iter().any(|t| t.id == pyr_proto::media::track::SCREEN_AUDIO);
         let volume = st.stream_volumes.get(uid).copied().unwrap_or(1.0);
         crate::stage::stream_volume_slider(ui, uid, has_sound, volume, acts);
     }
 }
 
 pub(crate) fn person_menu(ui: &mut egui::Ui, st: &AppState, uid: &str, acts: &mut Vec<Act>) {
-    use ingle_proto::control::RelationKind;
+    use pyr_proto::control::RelationKind;
     if uid == st.my_uid {
         return;
     }
@@ -3440,12 +3441,15 @@ pub(crate) fn person_menu(ui: &mut egui::Ui, st: &AppState, uid: &str, acts: &mu
 mod tests {
     #[test]
     fn invite_links_are_told_apart_from_other_links() {
-        let fp = ingle_proto::b64::encode(&[7u8; 9]);
-        assert!(super::is_invite(&format!("ingle://2.24.121.231/abc/{fp}")));
-        assert!(super::is_invite(&format!("INGLE://2.24.121.231/abc/{fp}")));
-        assert!(super::is_invite(&format!("https://firelitgames.com/ingle/#n=Camp&join=2.24.121.231/abc/{fp}")));
-        assert!(!super::is_invite("https://firelitgames.com/ingle/"));
+        let fp = pyr_proto::b64::encode(&[7u8; 9]);
+        assert!(super::is_invite(&format!("pyr://2.24.121.231/abc/{fp}")));
+        assert!(super::is_invite(&format!("PYR://2.24.121.231/abc/{fp}")));
+        assert!(super::is_invite(&format!("https://pyr.gg/#n=Camp&join=2.24.121.231/abc/{fp}")));
+        assert!(!super::is_invite("https://pyr.gg/"));
         assert!(!super::is_invite(&format!("https://example.com/#join=2.24.121.231/abc/{fp}")));
-        assert!(!super::is_invite("ingle://not-a-link"));
+        assert!(!super::is_invite("pyr://not-a-link"));
+        // Made before Pyr was called Pyr.
+        assert!(super::is_invite(&format!("ingle://2.24.121.231/abc/{fp}")));
+        assert!(super::is_invite(&format!("https://firelitgames.com/ingle/#n=Camp&join=2.24.121.231/abc/{fp}")));
     }
 }

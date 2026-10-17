@@ -44,7 +44,7 @@ impl Sound {
     pub const ALL: [Sound; 9] =
         [Sound::Message, Sound::Join, Sound::Leave, Sound::StreamStart, Sound::StreamStop, Sound::WatchStart, Sound::WatchStop, Sound::Ring, Sound::Ringback];
 
-    /// Its name in a skin (`ingle_proto::skin::SOUNDS`).
+    /// Its name in a skin (`pyr_proto::skin::SOUNDS`).
     pub fn name(self) -> &'static str {
         match self {
             Sound::Message => "message",
@@ -266,14 +266,14 @@ mod tests {
     fn a_skins_sound_plays_in_place_of_a_chime() {
         for s in Sound::ALL {
             assert_eq!(Sound::from_name(s.name()), Some(s));
-            assert!(ingle_proto::skin::SOUNDS.iter().any(|(n, _)| *n == s.name()), "{s:?}");
+            assert!(pyr_proto::skin::SOUNDS.iter().any(|(n, _)| *n == s.name()), "{s:?}");
         }
-        assert_eq!(ingle_proto::skin::SOUNDS.len(), Sound::ALL.len());
+        assert_eq!(pyr_proto::skin::SOUNDS.len(), Sound::ALL.len());
         let mine = Arc::new(vec![0.25f32; 9600]);
         let skin: HashMap<Sound, Arc<Vec<f32>>> = [(Sound::Message, mine.clone())].into();
         let (pcm, chime) = stereo(Clip::Chime(Sound::Message), &skin);
         assert!(Arc::ptr_eq(&pcm, &mine) && chime, "still a chime: it isn't hushed with the soundboard");
         let (pcm, _) = stereo(Clip::Chime(Sound::Join), &skin);
-        assert_eq!(pcm.len(), render(Sound::Join).len() * 2, "the others stay Ingle's own");
+        assert_eq!(pcm.len(), render(Sound::Join).len() * 2, "the others stay Pyr's own");
     }
 }

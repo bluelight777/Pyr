@@ -1,4 +1,4 @@
-//! Ingle client engine: everything except the UI.
+//! Pyr client engine: everything except the UI.
 //!
 //! The UI owns an [`Engine`], reads [`AppState`] every frame, and calls the command
 //! methods. All networking runs on a tokio runtime; audio and video run on their own
@@ -50,10 +50,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use anyhow::{Result, anyhow};
-use ingle_proto::control::*;
-use ingle_proto::crypto::{self, Identity};
-use ingle_proto::invite::InviteLink;
-use ingle_proto::media::track;
+use pyr_proto::control::*;
+use pyr_proto::crypto::{self, Identity};
+use pyr_proto::invite::InviteLink;
+use pyr_proto::media::track;
 use parking_lot::{Mutex, RwLock, RwLockReadGuard};
 use tracing::{debug, warn};
 
@@ -179,7 +179,7 @@ pub struct Shared {
     pub(crate) ring_clips: Mutex<HashMap<String, Arc<Vec<f32>>>>,
     /// Reports sent by themselves this run: (what, when) (see `bugs::auto_report`).
     pub auto_reports: Mutex<Vec<(String, std::time::Instant)>>,
-    /// When Ingle's window last had a key or the mouse (ms since 1970; see `idle`).
+    /// When Pyr's window last had a key or the mouse (ms since 1970; see `idle`).
     pub last_activity_ms: std::sync::atomic::AtomicI64,
     /// The thread that works out whether you're idle (woken to look again at once).
     pub idle_thread: Mutex<Option<std::thread::Thread>>,
@@ -188,7 +188,7 @@ pub struct Shared {
 }
 
 /// What sound files are, to the file streams.
-const SOUND_MIME: &str = "audio/x-ingle-sound";
+const SOUND_MIME: &str = "audio/x-pyr-sound";
 
 /// Play `sound` in the call on server `key` (see `Engine::play_sound`).
 /// Plays `sound` for everyone in our voice channel (and notes it in the recent sounds).
@@ -242,7 +242,7 @@ async fn play_sound_in_call(shared: &Arc<Shared>, key: &str, sound: &SoundRef) -
             // From another server: sent to this one first. Sound files are named by their
             // content, so one this server has already isn't sent again.
             let file = shared.sound_file(&sound.server, &sound.id).await?;
-            let id = ingle_proto::sound::sound_id(&file);
+            let id = pyr_proto::sound::sound_id(&file);
             let here = (key.to_string(), id.clone());
             if !shared.sounds_on.lock().contains(&here) {
                 let conn = h.connection().ok_or_else(|| anyhow!("not connected to that server"))?;
@@ -270,11 +270,11 @@ const READ_MARKS_SAVED_EVERY: std::time::Duration = std::time::Duration::from_se
 /// Drop something that can take a moment to let go (a capture, decoders) on a thread of its
 /// own, so neither the UI nor whoever holds a lock waits for it.
 pub(crate) fn drop_later<T: Send + 'static>(x: T) {
-    let _ = std::thread::Builder::new().name("ingle-teardown".into()).spawn(move || drop(x));
+    let _ = std::thread::Builder::new().name("pyr-teardown".into()).spawn(move || drop(x));
 }
 
 impl Shared {
-    /// Whether you can see Ingle right now: its window is in front, not hidden or minimized.
+    /// Whether you can see Pyr right now: its window is in front, not hidden or minimized.
     pub fn window_in_front(&self) -> bool {
         if let Some(seen) = self.focus_probe.lock().as_ref().and_then(|p| p()) {
             return seen;
@@ -386,7 +386,7 @@ impl Shared {
         if muted || gain <= 0.0 {
             return;
         }
-        let (server, id) = match sound.strip_prefix(ingle_proto::sound::BUILTIN_PREFIX) {
+        let (server, id) = match sound.strip_prefix(pyr_proto::sound::BUILTIN_PREFIX) {
             Some(b) => (String::new(), b.to_string()),
             None => (key.to_string(), sound),
         };
@@ -433,7 +433,7 @@ impl Shared {
                     self.play_ring_clip(pcm, t.sound.as_ref().map(|s| s.volume).unwrap_or(1.0));
                     return ring::RING_EVERY.max(std::time::Duration::from_secs_f32(secs + 1.0));
                 }
-                // Not ready yet: Ingle's ring this time.
+                // Not ready yet: Pyr's ring this time.
                 None => ring::warm(self, &t),
             }
         }
@@ -669,19 +669,19 @@ impl Default for EngineOptions {
     }
 }
 
-/// Where the Claude connector (`ingle-mcp`) keeps Claude's own identity and settings when it
-/// runs Claude as a bot: next to Ingle's.
+/// Where the Claude connector (`pyr-mcp`) keeps Claude's own identity and settings when it
+/// runs Claude as a bot: next to Pyr's.
 pub fn claude_dir(config_dir: &std::path::Path) -> PathBuf {
     config_dir.join("claude")
 }
 
-/// Bot invites waiting for the Claude connector: Ingle drops them here (Server Settings → Bots
+/// Bot invites waiting for the Claude connector: Pyr drops them here (Server Settings → Bots
 /// → Add Claude) and the connector joins with them, and removes them.
 pub fn claude_inbox(config_dir: &std::path::Path) -> PathBuf {
     claude_dir(config_dir).join("join")
 }
 
-/// Claude's member id, written by the connector in [`claude_dir`] (a public id: Ingle never
+/// Claude's member id, written by the connector in [`claude_dir`] (a public id: Pyr never
 /// reads the connector's identity itself).
 pub const CLAUDE_MEMBER_ID: &str = "member-id";
 
@@ -711,7 +711,7 @@ impl Engine {
             Err(_) => {
                 let rt = tokio::runtime::Builder::new_multi_thread()
                     .worker_threads(2)
-                    .thread_name("ingle-net")
+                    .thread_name("pyr-net")
                     .enable_all()
                     .build()?;
                 let h = rt.handle().clone();
@@ -809,7 +809,7 @@ impl Engine {
             ring_clips: Mutex::new(HashMap::new()),
             auto_reports: Mutex::new(Vec::new()),
             call_group: Mutex::new(None),
-            last_activity_ms: std::sync::atomic::AtomicI64::new(ingle_proto::now_ms()),
+            last_activity_ms: std::sync::atomic::AtomicI64::new(pyr_proto::now_ms()),
             idle_thread: Mutex::new(None),
             verify: Mutex::new(verify::Book::default()),
         });
@@ -866,19 +866,19 @@ impl Engine {
         Ok(engine)
     }
 
-    /// What went wrong the last time Ingle was open (a crash, or a freeze it never came out
+    /// What went wrong the last time Pyr was open (a crash, or a freeze it never came out
     /// of), reported by itself (see `bugs::auto_report`). The app calls it once it's up.
     pub fn report_last_run_trouble(&self) {
-        let log = std::fs::read_to_string(self.shared.config_dir.join("ingle.previous.log")).unwrap_or_default();
+        let log = std::fs::read_to_string(self.shared.config_dir.join("pyr.previous.log")).unwrap_or_default();
         if let Some((what, detail)) = bugs::last_run_trouble(&log) {
-            bugs::auto_report(&self.shared, what, &format!("The last time Ingle was open: {detail}"));
+            bugs::auto_report(&self.shared, what, &format!("The last time Pyr was open: {detail}"));
         }
     }
 
     /// The shared state, for the UI to draw a frame from. Hold it only while drawing: engine
     /// methods called meanwhile read it again (never write it), which is why the engine's own
     /// reads are `read_recursive` — a plain read waits behind a waiting writer, and a thread
-    /// that already holds a read would then wait for itself (Ingle froze that way when a voice
+    /// that already holds a read would then wait for itself (Pyr froze that way when a voice
     /// chime played while voice state was being updated).
     pub fn state(&self) -> RwLockReadGuard<'_, AppState> {
         self.shared.state.read()
@@ -974,7 +974,7 @@ impl Engine {
     /// server already joined at that address, or else ask the server (and check it matches).
     fn full_fingerprint(&self, link: &InviteLink) -> Result<[u8; 32]> {
         let known = self.shared.config.lock().servers.iter().find_map(|s| {
-            let fp = ingle_proto::b64::decode_array::<32>(&s.key)?;
+            let fp = pyr_proto::b64::decode_array::<32>(&s.key)?;
             (s.host == link.host && s.port == link.port && link.matches(&fp)).then_some(fp)
         });
         if let Some(fp) = known {
@@ -996,13 +996,13 @@ impl Engine {
             anyhow::bail!("That link is for adding a bot (like Claude) to a server, not for joining it yourself. Ask for an invite link instead.");
         }
         if self.shared.bot && !bot_link && link.code.is_some() {
-            anyhow::bail!("Bots join with a bot invite: in Ingle, Server Settings → Bots.");
+            anyhow::bail!("Bots join with a bot invite: in Pyr, Server Settings → Bots.");
         }
         if !link.is_full() {
             link.fingerprint = self.full_fingerprint(&link)?;
             link.fp_len = 32;
         }
-        let key = ingle_proto::b64::encode(&link.fingerprint);
+        let key = pyr_proto::b64::encode(&link.fingerprint);
         // Already connected (or connecting) to this server at this address: nothing to redo,
         // and reconnecting would drop a call in progress.
         let same_address = self
@@ -1103,7 +1103,7 @@ impl Engine {
             return;
         }
         let files: Vec<(String, Arc<Vec<u8>>)> = files.into_iter().map(|(n, b)| (n, Arc::new(b))).collect();
-        let nonce = ingle_proto::b64::encode(&crypto::random_bytes::<9>());
+        let nonce = pyr_proto::b64::encode(&crypto::random_bytes::<9>());
         {
             let mut st = self.shared.state.write();
             if let Some(s) = st.server_mut(key) {
@@ -1111,7 +1111,7 @@ impl Engine {
                     nonce: nonce.clone(),
                     content: content.to_string(),
                     reply_to,
-                    created_at: ingle_proto::now_ms(),
+                    created_at: pyr_proto::now_ms(),
                     failed: None,
                     files: files.clone(),
                     progress: (!files.is_empty()).then(|| "Uploading…".to_string()),
@@ -1144,7 +1144,7 @@ impl Engine {
                 };
                 for (i, (name, bytes)) in files.iter().enumerate() {
                     set(&shared, Some(format!("Uploading {} of {}…", i + 1, files.len())), None);
-                    let mime = ingle_proto::control::sniff_image(bytes).unwrap_or("application/octet-stream");
+                    let mime = pyr_proto::control::sniff_image(bytes).unwrap_or("application/octet-stream");
                     match net::file_put(&conn, FileKind::Attachment, name, mime, bytes).await {
                         Ok(id) => {
                             // We have the bytes already: no need to download our own upload.
@@ -1235,7 +1235,7 @@ impl Engine {
             }
         }
         if let Some(b) = png {
-            let id = ingle_proto::control::avatar_id(&self.shared.identity.user_id(), &b);
+            let id = pyr_proto::control::avatar_id(&self.shared.identity.user_id(), &b);
             self.shared.files.lock().insert(id, Arc::new(b));
         }
         let keys: Vec<String> = self.shared.servers.lock().keys().cloned().collect();
@@ -1322,14 +1322,14 @@ impl Engine {
     /// GIFs, for everyone there (`GIFS_FEATURE`; needs Manage emoji, GIFs and sounds).
     pub fn add_server_gif(&self, key: &str, name: &str, bytes: Vec<u8>) {
         let shared = self.shared.clone();
-        let (key, name) = (key.to_string(), name.trim().chars().take(ingle_proto::control::MAX_GIF_NAME).collect::<String>());
+        let (key, name) = (key.to_string(), name.trim().chars().take(pyr_proto::control::MAX_GIF_NAME).collect::<String>());
         self.shared.rt.clone().spawn(async move {
             let Some(h) = shared.servers.lock().get(&key).cloned() else { return };
             let Some(conn) = h.connection() else {
                 shared.state.write().refused("Not connected to that server right now.");
                 return;
             };
-            let mime = ingle_proto::control::sniff_image(&bytes).unwrap_or("image/gif");
+            let mime = pyr_proto::control::sniff_image(&bytes).unwrap_or("image/gif");
             let file_id = match net::file_put(&conn, FileKind::Attachment, &name, mime, &bytes).await {
                 Ok(id) => id,
                 Err(e) => {
@@ -1827,10 +1827,10 @@ impl Engine {
         }
     }
 
-    /// A key or the mouse in Ingle's window (the app calls this as they come): you're here.
+    /// A key or the mouse in Pyr's window (the app calls this as they come): you're here.
     /// Idle until now, every server hears you're back right away.
     pub fn note_activity(&self) {
-        self.shared.last_activity_ms.store(ingle_proto::now_ms(), Ordering::Relaxed);
+        self.shared.last_activity_ms.store(pyr_proto::now_ms(), Ordering::Relaxed);
         let st = self.shared.state.read_recursive();
         if st.my_idle && !st.settings.idle_by_hand {
             drop(st);
@@ -1890,7 +1890,7 @@ impl Engine {
         verify::fetch_vouches_for_me(&self.shared, key);
     }
 
-    /// The ringtone for everyone (`for_uid` none) or for someone, set to `tone` (none: Ingle's
+    /// The ringtone for everyone (`for_uid` none) or for someone, set to `tone` (none: Pyr's
     /// own ring, or for someone, the one for everyone again).
     pub fn set_ringtone(&self, for_uid: Option<&str>, tone: Option<config::Ringtone>) {
         set_ringtone_on(&self.shared, for_uid, tone);
@@ -1908,7 +1908,7 @@ impl Engine {
                 let cut = soundboard::prepare(&pcm, start, end);
                 let file = soundboard::encode(&cut)?;
                 std::fs::create_dir_all(&dir)?;
-                let id = format!("{}.ings", &ingle_proto::release::sha256_hex(&file)[..16]);
+                let id = format!("{}.ings", &pyr_proto::release::sha256_hex(&file)[..16]);
                 std::fs::write(dir.join(&id), &file)?;
                 Ok(id)
             })
@@ -1926,7 +1926,7 @@ impl Engine {
         });
     }
 
-    /// Hear a ringtone once (none: Ingle's own ring), whatever Do Not Disturb says.
+    /// Hear a ringtone once (none: Pyr's own ring), whatever Do Not Disturb says.
     pub fn preview_ringtone(&self, tone: Option<config::Ringtone>) {
         let Some(sfx) = self.shared.sfx.as_ref() else { return };
         let (device, volume) = {
@@ -1968,7 +1968,7 @@ impl Engine {
         (self.shared.repaint)();
     }
 
-    /// Say you're idle yourself (it stays until you say otherwise), or go back to Ingle
+    /// Say you're idle yourself (it stays until you say otherwise), or go back to Pyr
     /// working it out from the keyboard and mouse.
     pub fn set_idle_by_hand(&self, on: bool) {
         let settings = {
@@ -1979,8 +1979,8 @@ impl Engine {
         };
         self.shared.state.write().settings.idle_by_hand = settings.idle_by_hand;
         if !on {
-            // Choosing it was using Ingle.
-            self.shared.last_activity_ms.store(ingle_proto::now_ms(), Ordering::Relaxed);
+            // Choosing it was using Pyr.
+            self.shared.last_activity_ms.store(pyr_proto::now_ms(), Ordering::Relaxed);
         }
         idle::wake(&self.shared);
     }
@@ -2037,7 +2037,7 @@ impl Engine {
             let uid = std::fs::read_to_string(dir.join(CLAUDE_MEMBER_ID))
                 .ok()
                 .map(|t| t.trim().to_string())
-                .filter(|u| ingle_proto::b64::decode_array::<32>(u).is_some());
+                .filter(|u| pyr_proto::b64::decode_array::<32>(u).is_some());
             let waiting = std::fs::read_dir(claude_inbox(&self.shared.config_dir))
                 .map(|d| d.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "link")).count())
                 .unwrap_or(0);
@@ -2357,18 +2357,18 @@ impl Engine {
         backup::folder(&self.shared, key, &name)
     }
 
-    /// Send an Ingle bug report (see `bugs.rs`). How it goes shows in `AppState::bug_send`, with
+    /// Send a Pyr bug report (see `bugs.rs`). How it goes shows in `AppState::bug_send`, with
     /// a thank-you notice once it's sent; a report that doesn't go is logged, and the app keeps
     /// its text. `turn_on`: the bug server, when it's one of my servers and I'm its owner:
     /// switch collecting on there first.
     pub fn report_bug(&self, title: &str, body: &str, include_log: bool, turn_on: Option<&str>) {
         let shared = self.shared.clone();
-        let report = ingle_proto::control::BugReport {
+        let report = pyr_proto::control::BugReport {
             title: title.trim().to_string(),
             body: body.trim().to_string(),
             app_version: env!("CARGO_PKG_VERSION").to_string(),
             os: bugs::os_name(),
-            log: if include_log { bugs::log_tail(&shared, ingle_proto::control::BUG_LOG_MAX - 1000) } else { String::new() },
+            log: if include_log { bugs::log_tail(&shared, pyr_proto::control::BUG_LOG_MAX - 1000) } else { String::new() },
         };
         let mine = turn_on.and_then(|k| self.handle(k));
         shared.state.write().bug_send = BugSend::Sending;
@@ -2419,7 +2419,7 @@ impl Engine {
     }
 
     /// Owner only: approve (for fixing), reject or mark fixed.
-    pub fn set_bug_status(&self, key: &str, id: i64, status: ingle_proto::control::BugStatus) {
+    pub fn set_bug_status(&self, key: &str, id: i64, status: pyr_proto::control::BugStatus) {
         let changed = {
             let mut st = self.shared.state.write();
             let name = st.server(key).map(|s| s.info.name.clone()).unwrap_or_default();
@@ -2441,7 +2441,7 @@ impl Engine {
         });
     }
 
-    /// Owner only: collect Ingle bug reports on this server, or stop.
+    /// Owner only: collect Pyr bug reports on this server, or stop.
     pub fn set_bug_reports(&self, key: &str, on: bool) {
         self.request_then(key, Request::SetBugReports { on }, move |shared, ev| {
             if let Event::Error { message, .. } = ev {
@@ -2450,13 +2450,13 @@ impl Engine {
         });
     }
 
-    /// Send a plugin in for the Ingle Library (see `plugins.rs`). How it goes shows in
+    /// Send a plugin in for the Pyr Library (see `plugins.rs`). How it goes shows in
     /// `AppState::plugin_send`, like a bug report. `turn_on`: the library server, when it's
     /// mine: switch collecting on there first.
-    pub fn submit_plugin(&self, mut submission: ingle_proto::control::PluginSubmission, turn_on: Option<&str>) {
+    pub fn submit_plugin(&self, mut submission: pyr_proto::control::PluginSubmission, turn_on: Option<&str>) {
         let shared = self.shared.clone();
         submission.app_version = env!("CARGO_PKG_VERSION").to_string();
-        let what = if submission.kind == ingle_proto::control::SKIN_KIND { "skin" } else { "plugin" };
+        let what = if submission.kind == pyr_proto::control::SKIN_KIND { "skin" } else { "plugin" };
         let mine = turn_on.and_then(|k| self.handle(k));
         shared.state.write().plugin_send = BugSend::Sending;
         self.shared.rt.spawn(async move {
@@ -2521,11 +2521,11 @@ impl Engine {
     /// Owner only: approve (a plugin's source is saved to this PC for building, a skin's files
     /// for listing, see `plugins::save_approved`), reject, mark listed, or put back. `note`
     /// goes to the sender (they see it with their connector).
-    pub fn set_submission_status(&self, key: &str, id: i64, status: ingle_proto::control::SubmissionStatus, note: String) {
-        use ingle_proto::control::SubmissionStatus;
+    pub fn set_submission_status(&self, key: &str, id: i64, status: pyr_proto::control::SubmissionStatus, note: String) {
+        use pyr_proto::control::SubmissionStatus;
         let Some(h) = self.handle(key) else { return };
         let (shared, k) = (self.shared.clone(), key.to_string());
-        let what = |kind: &str| if kind == ingle_proto::control::SKIN_KIND { "skin" } else { "plugin" };
+        let what = |kind: &str| if kind == pyr_proto::control::SKIN_KIND { "skin" } else { "plugin" };
         let kind = {
             let mut st = self.shared.state.write();
             let e = st.submissions.get_mut(key).and_then(|l| l.iter_mut().find(|e| e.id == id));
@@ -2543,7 +2543,7 @@ impl Engine {
                     let (entry, files) = plugins::fetch(&h, id).await?;
                     let dir = plugins::save_approved(&shared.config_dir, &k, &entry, &files)?;
                     tracing::info!("approved {} saved to {}", what(&entry.kind), dir.display());
-                    let saved = if entry.kind == ingle_proto::control::SKIN_KIND { "Its files are saved for listing in" } else { "Its source is saved for building in" };
+                    let saved = if entry.kind == pyr_proto::control::SKIN_KIND { "Its files are saved for listing in" } else { "Its source is saved for building in" };
                     shared.state.write().toast(format!("Approved. {saved} {}", dir.display()), false);
                 }
                 match tokio::time::timeout(std::time::Duration::from_secs(15), h.request(Request::SetPluginSubmissionStatus { id, status, note })).await {
@@ -2560,13 +2560,13 @@ impl Engine {
         });
     }
 
-    /// What I sent in to the Ingle Library and where each stands, into
+    /// What I sent in to the Pyr Library and where each stands, into
     /// `AppState::my_submissions`.
     pub fn my_submissions(&self) {
         let shared = self.shared.clone();
         self.shared.rt.spawn(async move {
             let r = match plugins::server() {
-                None => Err("This copy of Ingle has nowhere to send plugins.".to_string()),
+                None => Err("This copy of Pyr has nowhere to send plugins.".to_string()),
                 Some(server) => plugins::mine(&shared.endpoints, server, &shared.identity).await.map_err(|e| format!("{e:#}")),
             };
             shared.state.write().my_submissions = Some(r);
@@ -2574,14 +2574,14 @@ impl Engine {
         });
     }
 
-    /// A skin's sounds in place of Ingle's own (none: Ingle's own again).
+    /// A skin's sounds in place of Pyr's own (none: Pyr's own again).
     pub fn set_skin_sounds(&self, sounds: Vec<(sfx::Sound, Arc<Vec<f32>>)>) {
         if let Some(sfx) = &self.shared.sfx {
             sfx.set_overrides(sounds);
         }
     }
 
-    /// Owner only: collect plugins for the Ingle Library on this server, or stop.
+    /// Owner only: collect plugins for the Pyr Library on this server, or stop.
     pub fn set_plugin_submissions(&self, key: &str, on: bool) {
         self.request_then(key, Request::SetPluginSubmissions { on }, move |shared, ev| {
             if let Event::Error { message, .. } = ev {
@@ -2615,7 +2615,7 @@ impl Engine {
         });
     }
 
-    /// Where backups of servers I own go (`None`: "Ingle Server Backups" in Documents).
+    /// Where backups of servers I own go (`None`: "Pyr Server Backups" in Documents).
     pub fn set_backup_dir(&self, dir: Option<std::path::PathBuf>) {
         let mut cfg = self.shared.config.lock();
         cfg.backup_dir = dir;
@@ -3376,7 +3376,7 @@ pub(crate) fn sync_avatar(shared: Arc<Shared>, key: String) {
         let (has_feature, current) = {
             let st = shared.state.read_recursive();
             match st.server(&key) {
-                Some(s) => (s.has(ingle_proto::control::AVATARS_FEATURE), s.me.as_ref().and_then(|m| m.avatar.clone())),
+                Some(s) => (s.has(pyr_proto::control::AVATARS_FEATURE), s.me.as_ref().and_then(|m| m.avatar.clone())),
                 None => return,
             }
         };
@@ -3385,14 +3385,14 @@ pub(crate) fn sync_avatar(shared: Arc<Shared>, key: String) {
         }
         let Some(h) = shared.servers.lock().get(&key).cloned() else { return };
         let local = std::fs::read(shared.config_dir.join(AVATAR_FILE)).ok();
-        let wanted = local.as_ref().map(|b| ingle_proto::control::avatar_id(&shared.identity.user_id(), b));
+        let wanted = local.as_ref().map(|b| pyr_proto::control::avatar_id(&shared.identity.user_id(), b));
         if wanted == current {
             return;
         }
         let file_id = match local {
             Some(bytes) => {
                 let Some(conn) = h.connection() else { return };
-                let mime = ingle_proto::control::sniff_image(&bytes).unwrap_or("image/png");
+                let mime = pyr_proto::control::sniff_image(&bytes).unwrap_or("image/png");
                 match net::file_put(&conn, FileKind::Avatar, "avatar.png", mime, &bytes).await {
                     Ok(id) => Some(id),
                     Err(e) => {

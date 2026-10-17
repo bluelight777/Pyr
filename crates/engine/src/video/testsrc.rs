@@ -372,7 +372,7 @@ pub fn start(id: &str, w: u32, h: u32, fps: u32, slot: Arc<FrameSlot>) -> Option
     let stop = Arc::new(AtomicBool::new(false));
     let st = stop.clone();
     let t = std::thread::Builder::new()
-        .name("ingle-testscreen".into())
+        .name("pyr-testscreen".into())
         .spawn(move || {
             let start = Instant::now();
             let mut i = 0u64;

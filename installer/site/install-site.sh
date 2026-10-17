@@ -1,6 +1,9 @@
 #!/bin/bash
-# Runs on the VPS (publish.ps1 starts it): puts the Ingle download folder into the web folder
-# that serves https://firelitgames.com/, at /ingle/.
+# Runs on the VPS (publish.ps1 starts it): puts the Pyr download folder (the page, the
+# downloads, latest.json and the Library) into the web folder that serves
+# https://firelitgames.com/, at /ingle/: https://pyr.gg serves that same folder (see
+# setup-pyr-gg.sh), and copies of Pyr from before it was called Pyr (Ingle 0.7) look for
+# their updates and the Library at firelitgames.com/ingle/.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 trap 'rm -rf "$HERE"' EXIT
@@ -12,9 +15,9 @@ ROOT=""
 TOKEN=$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')
 for R in $(nginx -T 2>/dev/null | awk '/^[[:space:]]*root[[:space:]]/ { r = $2; gsub(";", "", r); print r }' | sort -u); do
   [ -d "$R" ] || continue
-  echo "$TOKEN" > "$R/ingle-probe-$TOKEN.txt" 2>/dev/null || continue
-  GOT=$(curl -sk --noproxy "*" --max-time 5 --resolve "$SITE:443:127.0.0.1" "https://$SITE/ingle-probe-$TOKEN.txt" || true)
-  rm -f "$R/ingle-probe-$TOKEN.txt"
+  echo "$TOKEN" > "$R/pyr-probe-$TOKEN.txt" 2>/dev/null || continue
+  GOT=$(curl -sk --noproxy "*" --max-time 5 --resolve "$SITE:443:127.0.0.1" "https://$SITE/pyr-probe-$TOKEN.txt" || true)
+  rm -f "$R/pyr-probe-$TOKEN.txt"
   if [ "$GOT" = "$TOKEN" ]; then ROOT=$R; break; fi
 done
 if [ -z "$ROOT" ]; then
@@ -23,10 +26,10 @@ if [ -z "$ROOT" ]; then
 fi
 mkdir -p "$ROOT/ingle"
 # Everything but latest.json first, so the app never sees a version whose files aren't there yet.
-find "$HERE/ingle" -maxdepth 1 -type f ! -name latest.json -exec cp -f {} "$ROOT/ingle/" \;
+find "$HERE/pyr" -maxdepth 1 -type f ! -name latest.json -exec cp -f {} "$ROOT/ingle/" \;
 # The page's pictures and fonts (and any other folders), into folders of the same names.
-find "$HERE/ingle" -mindepth 1 -maxdepth 1 -type d -exec cp -rf {} "$ROOT/ingle/" \;
-# The Ingle Library (library.tar, from make-release.sh): the plugins' files first, then the
+find "$HERE/pyr" -mindepth 1 -maxdepth 1 -type d -exec cp -rf {} "$ROOT/ingle/" \;
+# The Pyr Library (library.tar, from make-release.sh): the plugins' files first, then the
 # signed list that names them.
 if [ -f "$HERE/library.tar" ]; then
   mkdir -p "$HERE/library-x" "$ROOT/ingle/library"
@@ -34,36 +37,48 @@ if [ -f "$HERE/library.tar" ]; then
   if [ -d "$HERE/library-x/library/files" ]; then cp -rf "$HERE/library-x/library/files" "$ROOT/ingle/library/"; fi
   if [ -f "$HERE/library-x/library/index.json" ]; then cp -f "$HERE/library-x/library/index.json" "$ROOT/ingle/library/index.json"; fi
 fi
-cp -f "$HERE/ingle/latest.json" "$ROOT/ingle/latest.json"
+cp -f "$HERE/pyr/latest.json" "$ROOT/ingle/latest.json"
 chmod -R a+rX "$ROOT/ingle"
 echo "Published to $ROOT/ingle"
 # An earlier version of this script could put the files in another site's folder: remove
-# those copies (only folders holding an Ingle release file).
+# those copies (only folders holding a release file).
 for R in $(nginx -T 2>/dev/null | awk '/^[[:space:]]*root[[:space:]]/ { r = $2; gsub(";", "", r); print r }' | sort -u); do
   if [ "$R" != "$ROOT" ] && [ -f "$R/ingle/latest.json" ] && grep -q '"manifest"' "$R/ingle/latest.json"; then
     rm -rf "${R:?}/ingle" && echo "Removed a stray copy from $R/ingle"
   fi
 done
-# Update the Ingle guild server running on this VPS (if one is set up) to the same version.
-# Everyone in it drops for a few seconds and reconnects by themselves.
-if [ -x /usr/local/bin/ingle-server ] && systemctl list-unit-files ingle-server.service >/dev/null 2>&1; then
+# The guild server running on this VPS (if one is set up): the pyr-server service, or
+# ingle-server for one set up before Pyr was called Pyr (it keeps its name: only its program
+# is new). SVC is the service, BIN the program it starts.
+SVC=""
+for S in pyr-server ingle-server; do
+  if systemctl list-unit-files "$S.service" 2>/dev/null | grep -q "^$S\.service"; then SVC=$S; break; fi
+done
+BIN=""
+if [ -n "$SVC" ]; then
+  BIN=$(systemctl show -p ExecStart "$SVC" 2>/dev/null | sed -n 's/^ExecStart={ path=\([^ ;]*\).*/\1/p' | head -n 1)
+  BIN=${BIN:-/usr/local/bin/$SVC}
+fi
+# Update it to the same version. Everyone in it drops for a few seconds and reconnects by
+# themselves.
+if [ -n "$SVC" ] && [ -x "$BIN" ]; then
   case "$(uname -m)" in
-    x86_64) NEW="$HERE/server/ingle-server-linux-x86_64" ;;
-    aarch64) NEW="$HERE/server/ingle-server-linux-aarch64" ;;
+    x86_64) NEW="$HERE/server/pyr-server-linux-x86_64" ;;
+    aarch64) NEW="$HERE/server/pyr-server-linux-aarch64" ;;
     *) NEW="" ;;
   esac
   if [ -n "$NEW" ] && [ -f "$NEW" ]; then
     # Copied from Windows, it arrives without permission to run.
     chmod 0755 "$NEW"
-    OLD_V=$(/usr/local/bin/ingle-server --version 2>/dev/null || echo unknown)
+    OLD_V=$("$BIN" --version 2>/dev/null || echo unknown)
     NEW_V=$("$NEW" --version 2>/dev/null || echo "")
     # Extra walls around the service (it already runs as its own user): no capabilities,
     # devices, kernel settings or new privileges. Added once; taken away again below if the
     # server won't start with them.
-    DROPIN=/etc/systemd/system/ingle-server.service.d/hardening.conf
+    DROPIN=/etc/systemd/system/$SVC.service.d/hardening.conf
     NEW_DROPIN=""
-    PORT_NOW=$(systemctl show -p ExecStart ingle-server 2>/dev/null | sed -n 's/.*--bind [^ ]*:\([0-9]*\).*/\1/p' | head -n 1)
-    if [ ! -f "$DROPIN" ] && [ "$(systemctl show -p User --value ingle-server 2>/dev/null)" = "ingle-server" ] \
+    PORT_NOW=$(systemctl show -p ExecStart "$SVC" 2>/dev/null | sed -n 's/.*--bind [^ ]*:\([0-9]*\).*/\1/p' | head -n 1)
+    if [ ! -f "$DROPIN" ] && [ "$(systemctl show -p User --value "$SVC" 2>/dev/null)" = "$SVC" ] \
        && [ -n "$PORT_NOW" ] && [ "$PORT_NOW" -ge 1024 ]; then
       mkdir -p "$(dirname "$DROPIN")"
       cat > "$DROPIN" <<'HARDEN'
@@ -91,28 +106,28 @@ HARDEN
     fi
     if [ -z "$NEW_V" ]; then
       echo "The new guild server program won't run on this VPS; left the old one alone." >&2
-    elif ! cmp -s "$NEW" /usr/local/bin/ingle-server || [ -n "$NEW_DROPIN" ]; then
-      cp -f /usr/local/bin/ingle-server /usr/local/bin/ingle-server.previous
-      install -m 0755 "$NEW" /usr/local/bin/ingle-server.new
-      mv -f /usr/local/bin/ingle-server.new /usr/local/bin/ingle-server
-      systemctl restart ingle-server || true
+    elif ! cmp -s "$NEW" "$BIN" || [ -n "$NEW_DROPIN" ]; then
+      cp -f "$BIN" "$BIN.previous"
+      install -m 0755 "$NEW" "$BIN.new"
+      mv -f "$BIN.new" "$BIN"
+      systemctl restart "$SVC" || true
       sleep 2
-      if systemctl is-active --quiet ingle-server; then
+      if systemctl is-active --quiet "$SVC"; then
         echo "Guild server updated: $OLD_V -> $NEW_V"
       else
         if [ -n "$NEW_DROPIN" ]; then
           echo "The guild server didn't start with the extra protections; trying without them." >&2
           rm -f "$DROPIN"
           systemctl daemon-reload
-          systemctl restart ingle-server || true
+          systemctl restart "$SVC" || true
           sleep 2
         fi
-        if systemctl is-active --quiet ingle-server; then
+        if systemctl is-active --quiet "$SVC"; then
           echo "Guild server updated: $OLD_V -> $NEW_V"
         else
           echo "The new guild server didn't start; putting the old one back." >&2
-          mv -f /usr/local/bin/ingle-server.previous /usr/local/bin/ingle-server
-          systemctl restart ingle-server || true
+          mv -f "$BIN.previous" "$BIN"
+          systemctl restart "$SVC" || true
         fi
       fi
     else
@@ -121,19 +136,19 @@ HARDEN
   fi
 fi
 # Bug reports this release fixed (fixed-bugs.txt: a report's number first on each line) are
-# marked fixed on the guild server here, the one Ingle's bug reports go to, as the owner's
+# marked fixed on the guild server here, the one Pyr's bug reports go to, as the owner's
 # Mark fixed does (only new and approved ones; a rejected report stays rejected).
-if [ -f "$HERE/fixed-bugs.txt" ] && [ -x /usr/local/bin/ingle-server ] && systemctl list-unit-files ingle-server.service >/dev/null 2>&1; then
+if [ -f "$HERE/fixed-bugs.txt" ] && [ -n "$SVC" ] && [ -x "$BIN" ]; then
   IDS=$(grep -Eo '^[0-9]+' "$HERE/fixed-bugs.txt" | tr '\n' ' ' || true)
-  DATA=$(systemctl show -p ExecStart ingle-server 2>/dev/null | sed -n 's/.*--data \([^ ;]*\).*/\1/p' | head -n 1)
-  DATA=${DATA:-/var/lib/ingle-server}
-  RUN_AS=$(systemctl show -p User --value ingle-server 2>/dev/null || true)
+  DATA=$(systemctl show -p ExecStart "$SVC" 2>/dev/null | sed -n 's/.*--data \([^ ;]*\).*/\1/p' | head -n 1)
+  DATA=${DATA:-/var/lib/$SVC}
+  RUN_AS=$(systemctl show -p User --value "$SVC" 2>/dev/null || true)
   if [ -n "${IDS// /}" ] && [ -f "$DATA/ingle.db" ]; then
     # As the server's own user, so the database's files keep their owner.
     if [ -n "$RUN_AS" ] && [ "$RUN_AS" != "root" ]; then
-      runuser -u "$RUN_AS" -- /usr/local/bin/ingle-server --data "$DATA" mark-fixed $IDS || echo "Couldn't mark the fixed bug reports ($IDS)." >&2
+      runuser -u "$RUN_AS" -- "$BIN" --data "$DATA" mark-fixed $IDS || echo "Couldn't mark the fixed bug reports ($IDS)." >&2
     else
-      /usr/local/bin/ingle-server --data "$DATA" mark-fixed $IDS || echo "Couldn't mark the fixed bug reports ($IDS)." >&2
+      "$BIN" --data "$DATA" mark-fixed $IDS || echo "Couldn't mark the fixed bug reports ($IDS)." >&2
     fi
   fi
 fi

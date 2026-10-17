@@ -5,23 +5,23 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ingle_engine::audio::{AudioInput, AudioOutput};
-use ingle_engine::config::{NoiseSuppression, Settings};
-use ingle_engine::state::ConnStatus;
-use ingle_engine::{Engine, EngineOptions};
-use ingle_proto::control::ChannelKind;
+use pyr_engine::audio::{AudioInput, AudioOutput};
+use pyr_engine::config::{NoiseSuppression, Settings};
+use pyr_engine::state::ConnStatus;
+use pyr_engine::{Engine, EngineOptions};
+use pyr_proto::control::ChannelKind;
 use parking_lot::Mutex;
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("ingle-rejoin-{}-{}", name, ingle_proto::now_ms()));
+    let d = std::env::temp_dir().join(format!("pyr-rejoin-{}-{}", name, pyr_proto::now_ms()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
 
 fn bot(name: &str, tone_hz: f32, heard: Arc<Mutex<Vec<f32>>>) -> Engine {
     let dir = temp_dir(name);
-    let cfg = ingle_engine::config::Config { display_name: name.to_string(), ..Default::default() };
-    ingle_engine::config::save_config(&dir, &cfg).unwrap();
+    let cfg = pyr_engine::config::Config { display_name: name.to_string(), ..Default::default() };
+    pyr_engine::config::save_config(&dir, &cfg).unwrap();
     let factory = move |_s: &Settings| {
         let mut phase = 0u64;
         let heard = heard.clone();
@@ -71,13 +71,13 @@ fn loud(v: &[f32]) -> bool {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn call_survives_a_server_restart() {
     let data = temp_dir("server");
-    let cfg = |bind| ingle_server::ServerConfig {
+    let cfg = |bind| pyr_server::ServerConfig {
         data_dir: data.clone(),
         bind,
         public_host: Some("127.0.0.1".into()),
         name: Some("Restart Camp".into()),
     };
-    let server = ingle_server::start(cfg("127.0.0.1:0".parse().unwrap())).await.unwrap();
+    let server = pyr_server::start(cfg("127.0.0.1:0".parse().unwrap())).await.unwrap();
     let addr = server.local_addr;
     let (ha, hb) = (Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())));
     let (a, b) = (bot("Alice", 440.0, ha.clone()), bot("Bob", 660.0, hb.clone()));
@@ -101,7 +101,7 @@ async fn call_survives_a_server_restart() {
     let toasts: String = a.state().toasts.iter().map(|t| t.text.clone()).collect();
     assert!(!toasts.contains("You left"), "no 'you left' message on a restart: {toasts}");
     tokio::time::sleep(Duration::from_secs(1)).await;
-    let server = ingle_server::start(cfg(addr)).await.unwrap();
+    let server = pyr_server::start(cfg(addr)).await.unwrap();
     let t0 = Instant::now();
 
     wait_for("both back in the call", 20, || {
@@ -142,7 +142,7 @@ async fn call_survives_a_server_restart() {
     let mut server = None;
     for _ in 0..20 {
         tokio::time::sleep(Duration::from_millis(250)).await;
-        if let Ok(s) = ingle_server::start(cfg(addr)).await {
+        if let Ok(s) = pyr_server::start(cfg(addr)).await {
             server = Some(s);
             break;
         }

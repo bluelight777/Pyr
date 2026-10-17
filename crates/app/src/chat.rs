@@ -4,10 +4,10 @@ use std::time::{Duration, Instant};
 
 use chrono::{Datelike, Local, TimeZone};
 use eframe::egui::{self, Align, Color32, CornerRadius, Key, KeyboardShortcut, Layout, Modifiers, Rect, RichText, Sense, Stroke, pos2, vec2};
-use ingle_engine::state::{AppState, ChannelLog, ServerView};
-use ingle_proto::control::{Attachment, ChannelId, ChannelKind, FILES_FEATURE, Message, MessageId, perm};
+use pyr_engine::state::{AppState, ChannelLog, ServerView};
+use pyr_proto::control::{Attachment, ChannelId, ChannelKind, FILES_FEATURE, Message, MessageId, perm};
 
-use crate::app::{Act, IngleApp, avatar, icon_button, name_color};
+use crate::app::{Act, PyrApp, avatar, icon_button, name_color};
 use crate::{icons, markdown, theme};
 
 const GROUP_WINDOW_MS: i64 = 7 * 60 * 1000;
@@ -96,7 +96,7 @@ fn steady_scroll(out: &egui::scroll_area::ScrollAreaOutput<()>, drawn: f32, memo
     }
 }
 
-impl IngleApp {
+impl PyrApp {
     pub fn chat_view(
         &mut self,
         ui: &mut egui::Ui,
@@ -116,7 +116,7 @@ impl IngleApp {
                 (None, Some(g)) => s.group_name(g, &st.my_uid),
                 _ => return None,
             };
-            Some(ingle_proto::control::Channel { id: channel, kind: ChannelKind::Text, name, ..Default::default() })
+            Some(pyr_proto::control::Channel { id: channel, kind: ChannelKind::Text, name, ..Default::default() })
         });
         let Some(ch) = ch else { return };
         let key = s.key.clone();
@@ -210,14 +210,14 @@ impl IngleApp {
                                 }
                             }
                             let can_add = crate::calls::can_group(s)
-                                && group.as_ref().map(|g| g.members.len() < ingle_proto::control::MAX_GROUP).unwrap_or(true)
+                                && group.as_ref().map(|g| g.members.len() < pyr_proto::control::MAX_GROUP).unwrap_or(true)
                                 && dm_with.as_ref().is_none_or(|w| !st.blocked.contains(w));
                             if can_add && icon_button(ui, 30.0, "Add people", false, |p, r, c| icons::add_person(p, r, c)).clicked() {
                                 self.ui.dialog = Some(crate::app::Dialog::AddPeople { key: s.key.clone(), channel: Some(channel), picked: Vec::new(), search: String::new() });
                             }
                             // Calls, like Discord's: voice, and video (not while you're in it).
                             let blocked = dm_with.as_ref().is_some_and(|w| st.blocked.contains(w));
-                            let can_call = s.has(ingle_proto::control::DM_CALLS_FEATURE) && s.status.is_connected() && !blocked;
+                            let can_call = s.has(pyr_proto::control::DM_CALLS_FEATURE) && s.status.is_connected() && !blocked;
                             let in_it = st.call.as_ref().is_some_and(|c| c.server_key == s.key && c.channel_id == channel);
                             if can_call && !in_it {
                                 if icon_button(ui, 30.0, "Start a video call", false, |p, r, c| icons::camera(p, r, c, false)).clicked() {
@@ -514,7 +514,7 @@ impl IngleApp {
         let picked = self.ui.menu_picture.as_ref().and_then(|(id, _)| m.attachments.iter().find(|a| a.id == *id));
         // A picture right-clicked: copy it, save it or open it (like Discord's Copy Image).
         if let Some(pic) = picked {
-            if let ingle_engine::files::FileState::Ready(b) = self.engine.file(&s.key, &pic.id) {
+            if let pyr_engine::files::FileState::Ready(b) = self.engine.file(&s.key, &pic.id) {
                 if ui.button("Copy picture").clicked() {
                     acts.push(Act::CopyPicture { name: pic.name.clone(), bytes: b.clone() });
                     ui.close();
@@ -534,7 +534,7 @@ impl IngleApp {
         if let (Some(pic), true) = (pic, crate::server_gifs::can_manage(s)) {
             if ui.button("Add picture to the server's GIFs").on_hover_text(format!("For everyone on {} to send from the GIF picker", s.name)).clicked() {
                 match self.engine.file(&s.key, &pic.id) {
-                    ingle_engine::files::FileState::Ready(b) => {
+                    pyr_engine::files::FileState::Ready(b) => {
                         acts.push(Act::AddServerGif { key: key.clone(), name: crate::server_gifs::name_from(&pic.name), bytes: b.to_vec() })
                     }
                     _ => acts.push(Act::Refused("The picture hasn't loaded yet: try again in a moment.".into())),
@@ -568,7 +568,7 @@ impl IngleApp {
     }
 
     /// The top of a group's conversation: its picture and name.
-    fn group_intro(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, g: &ingle_proto::control::Group) {
+    fn group_intro(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, g: &pyr_proto::control::Group) {
         let name = s.group_name(g, &st.my_uid);
         ui.add_space(20.0);
         ui.horizontal(|ui| {
@@ -611,7 +611,7 @@ impl IngleApp {
         ui.add_space(12.0);
     }
 
-    fn channel_intro(&self, ui: &mut egui::Ui, ch: &ingle_proto::control::Channel) {
+    fn channel_intro(&self, ui: &mut egui::Ui, ch: &pyr_proto::control::Channel) {
         ui.add_space(20.0);
         ui.horizontal(|ui| {
             ui.add_space(16.0);
@@ -656,7 +656,7 @@ impl IngleApp {
         ui: &mut egui::Ui,
         st: &AppState,
         s: &ServerView,
-        log: &ingle_engine::state::ChannelLog,
+        log: &pyr_engine::state::ChannelLog,
         m: &Message,
         grouped: bool,
         names: &[String],
@@ -914,7 +914,7 @@ impl IngleApp {
         st: &AppState,
         key: &str,
         channel: ChannelId,
-        p: &ingle_engine::state::PendingMessage,
+        p: &pyr_engine::state::PendingMessage,
         acts: &mut Vec<Act>,
     ) {
         ui.add_space(4.0);
@@ -971,7 +971,7 @@ impl IngleApp {
         });
     }
 
-    fn composer(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, ch: &ingle_proto::control::Channel, acts: &mut Vec<Act>) {
+    fn composer(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, ch: &pyr_proto::control::Channel, acts: &mut Vec<Act>) {
         let key = s.key.clone();
         // Typing indicator
         let now = Instant::now();
@@ -1026,7 +1026,7 @@ impl IngleApp {
                         let (r, _) = ui.allocate_exact_size(vec2(110.0, 96.0), Sense::hover());
                         ui.painter().rect_filled(r, CornerRadius::same(6), theme::SIDE());
                         let img = r.shrink(6.0).with_max_y(r.bottom() - 20.0);
-                        let k = format!("draft:{}:{}", ingle_proto::release::sha256_hex(bytes), bytes.len());
+                        let k = format!("draft:{}:{}", pyr_proto::release::sha256_hex(bytes), bytes.len());
                         let t = ui.input(|i| i.time);
                         if let Some((tex, size, next)) = self.images.get(ui.ctx(), &k, Some(std::sync::Arc::new(bytes.clone())), 400).frame(t) {
                             let (fit, uv) = fit_in(img, size);
@@ -1307,7 +1307,7 @@ impl IngleApp {
                         ui.separator();
                     }
                     if menu_check(ui, "Spellcheck", st.settings.spellcheck, false).clicked() {
-                        acts.push(Act::Settings(ingle_engine::config::Settings { spellcheck: !st.settings.spellcheck, ..st.settings.clone() }));
+                        acts.push(Act::Settings(pyr_engine::config::Settings { spellcheck: !st.settings.spellcheck, ..st.settings.clone() }));
                         ui.close();
                     }
                     ui.menu_button("Languages", |ui| {
@@ -1316,7 +1316,7 @@ impl IngleApp {
                         let current = crate::spell::lang(&st.settings.spell_language).code;
                         for l in crate::spell::LANGS {
                             if menu_check(ui, l.name, l.code == current, true).clicked() {
-                                acts.push(Act::Settings(ingle_engine::config::Settings {
+                                acts.push(Act::Settings(pyr_engine::config::Settings {
                                     spell_language: l.code.to_string(),
                                     spellcheck: true,
                                     ..st.settings.clone()
@@ -1396,7 +1396,7 @@ impl IngleApp {
                     }
                     self.ui.paste_down = down;
                 }
-                let tip = if s.has(ingle_proto::control::KLIPY_FEATURE) && !s.info.klipy_key.is_empty() {
+                let tip = if s.has(pyr_proto::control::KLIPY_FEATURE) && !s.info.klipy_key.is_empty() {
                     "Search GIFs (or type /giphy or /klipy)"
                 } else {
                     "Search GIFs (or type /giphy)"
@@ -1597,7 +1597,7 @@ pub fn add_attachment(
     ctx: &egui::Context,
     acts: &mut Vec<Act>,
 ) {
-    if attach.get(draft).is_some_and(|l| l.len() >= ingle_proto::control::MAX_ATTACHMENTS_PER_MESSAGE) {
+    if attach.get(draft).is_some_and(|l| l.len() >= pyr_proto::control::MAX_ATTACHMENTS_PER_MESSAGE) {
         acts.push(Act::Refused("You can send up to 10 images at a time.".into()));
         return;
     }
@@ -1616,7 +1616,7 @@ pub fn add_attachment(
 
 /// What's on the clipboard, attached: files copied (a GIF copied in File Explorer stays
 /// moving), or else a picture (pasted as a PNG).
-fn paste_files(app: &mut IngleApp, draft: &(String, ChannelId), limit: u64, ctx: &egui::Context, acts: &mut Vec<Act>) {
+fn paste_files(app: &mut PyrApp, draft: &(String, ChannelId), limit: u64, ctx: &egui::Context, acts: &mut Vec<Act>) {
     let files = crate::images::clipboard_files();
     if files.is_empty() {
         if let Some(png) = crate::images::clipboard_png() {
@@ -1680,7 +1680,7 @@ fn goes_with_it(m: &Message, log: &ChannelLog) -> Option<String> {
     (!out.is_empty()).then_some(out)
 }
 
-impl IngleApp {
+impl PyrApp {
     /// "Delete message": like Discord's, but the message shows as it is (pictures and all), it
     /// says what goes with it and, for someone else's, whose it is; Enter deletes, Escape keeps.
     #[allow(clippy::too_many_arguments)]
@@ -1855,12 +1855,12 @@ impl IngleApp {
         }
         let state = self.engine.file(&s.key, &a.id);
         let bytes = match &state {
-            ingle_engine::files::FileState::Ready(b) => Some(b.clone()),
+            pyr_engine::files::FileState::Ready(b) => Some(b.clone()),
             _ => None,
         };
         let t = ui.input(|i| i.time);
         // Moving pictures play by Settings → Appearance: always, while pointed at, or never;
-        // and only while Ingle's window is in front.
+        // and only while Pyr's window is in front.
         let pointed = ui.rect_contains_pointer(rect);
         let plays = self.ui.anim_on
             && match self.ui.play_gifs.as_str() {
@@ -1900,7 +1900,7 @@ impl IngleApp {
                     }
                 }
             }
-            (None, ingle_engine::files::FileState::Failed(e)) => {
+            (None, pyr_engine::files::FileState::Failed(e)) => {
                 ui.painter().rect_filled(rect, CornerRadius::same(6), theme::ELEV());
                 ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Image unavailable", theme::font(12.0), theme::DIM());
                 let _ = e;
@@ -1938,7 +1938,7 @@ impl IngleApp {
         let mut close = ctx.input(|i| i.key_pressed(Key::Escape));
         let state = self.engine.file(&key, &a.id);
         let bytes = match &state {
-            ingle_engine::files::FileState::Ready(b) => Some(b.clone()),
+            pyr_engine::files::FileState::Ready(b) => Some(b.clone()),
             _ => None,
         };
         let screen = ctx.content_rect();
@@ -2388,7 +2388,7 @@ fn gif_star(ui: &mut egui::Ui, r: Rect, id: impl std::hash::Hash, fav: bool) -> 
     resp.on_hover_text(if fav { "Remove from favorites" } else { "Add to favorites" }).clicked()
 }
 
-impl IngleApp {
+impl PyrApp {
     /// A GIF from GIPHY or KLIPY in a message, playing. Pointed at, it has a star in its corner
     /// that keeps it in your favorites (the GIF picker's first tab), like Discord's.
     /// Right-clicked, it has its message's menu (with Copy link and the favorite item).
@@ -2413,7 +2413,7 @@ impl IngleApp {
                 if removing {
                     crate::giphy::forget_picture(&fav);
                 }
-                acts.push(Act::Settings(ingle_engine::config::Settings { gif_favorites: v, ..st.settings.clone() }));
+                acts.push(Act::Settings(pyr_engine::config::Settings { gif_favorites: v, ..st.settings.clone() }));
             }
             Err(e) => {
                 if !removing && !fav.file.is_empty() {
@@ -2458,7 +2458,7 @@ impl IngleApp {
         let ctx = ui.ctx().clone();
         let dl = self.ui.gifs.get(url, move || ctx.request_repaint());
         // In chat, it plays by Settings → Appearance (always, pointed at, or never), and only
-        // while Ingle's window is in front.
+        // while Pyr's window is in front.
         let pointed = ui.rect_contains_pointer(Rect::from_min_size(ui.cursor().min, space));
         let plays = !open
             || (self.ui.anim_on
@@ -2551,12 +2551,12 @@ impl IngleApp {
         ui.set_width(PICKER_W);
         let mut send = None;
         let search_id = egui::Id::new("gif-search");
-        let owner = s.me.as_ref().is_some_and(|m| m.role == ingle_proto::control::Role::Owner);
+        let owner = s.me.as_ref().is_some_and(|m| m.role == pyr_proto::control::Role::Owner);
         let key_of = |p: Provider| match p {
             Provider::Giphy => crate::giphy::key(&s.info.giphy_key),
             Provider::Klipy => crate::klipy::key(&s.info.klipy_key),
         };
-        let feature = |p: Provider| s.has(if p == Provider::Giphy { ingle_proto::control::GIPHY_FEATURE } else { ingle_proto::control::KLIPY_FEATURE });
+        let feature = |p: Provider| s.has(if p == Provider::Giphy { pyr_proto::control::GIPHY_FEATURE } else { pyr_proto::control::KLIPY_FEATURE });
         // A tab for each source that's on here (or that the owner could turn on).
         let tabs: Vec<Provider> = [Provider::Giphy, Provider::Klipy].into_iter().filter(|p| feature(*p) && (owner || key_of(*p).is_some())).collect();
         if !tabs.contains(&self.ui.gif_provider) {
@@ -2587,7 +2587,7 @@ impl IngleApp {
                 self.ui.gif_focus = true;
             }
             // The server's own GIFs, for everyone here.
-            if s.has(ingle_proto::control::GIFS_FEATURE) {
+            if s.has(pyr_proto::control::GIFS_FEATURE) {
                 let on = self.ui.gif_server;
                 if ui.add(egui::Button::selectable(on, RichText::new("This server").font(theme::bold_font(12.0)))).on_hover_text(format!("GIFs for everyone on {}", s.name)).clicked() && !on {
                     self.ui.gif_server = true;
@@ -2610,7 +2610,7 @@ impl IngleApp {
         });
         let provider = self.ui.gif_provider;
         ui.add_space(6.0);
-        if self.ui.gif_server && s.has(ingle_proto::control::GIFS_FEATURE) {
+        if self.ui.gif_server && s.has(pyr_proto::control::GIFS_FEATURE) {
             return self.server_gifs_tab(ui, s, acts);
         }
         self.ui.gif_server = false;
@@ -2669,7 +2669,7 @@ impl IngleApp {
                 });
                 ui.label(
                     RichText::new(format!(
-                        "Everyone's Ingle here gets this key: {} wants each search to come straight from the app, never through a server. Use a key made just for this server.",
+                        "Everyone's Pyr here gets this key: {} wants each search to come straight from the app, never through a server. Use a key made just for this server.",
                         provider.name()
                     ))
                     .size(12.0)
@@ -2781,7 +2781,7 @@ impl IngleApp {
         }
         let send = enter.then_some(sel).or(clicked).and_then(|i| favs.get(i)).map(|f| {
             // KLIPY counts what's shared, when it's on here and its name for the GIF is known.
-            if crate::giphy::media_provider(&f.url) == Some(crate::giphy::Provider::Klipy) && !f.slug.is_empty() && s.has(ingle_proto::control::KLIPY_FEATURE) {
+            if crate::giphy::media_provider(&f.url) == Some(crate::giphy::Provider::Klipy) && !f.slug.is_empty() && s.has(pyr_proto::control::KLIPY_FEATURE) {
                 if let Some(k) = crate::klipy::key(&s.info.klipy_key) {
                     crate::klipy::share(&k, &f.slug, "");
                 }
@@ -2898,7 +2898,7 @@ pub(crate) fn cover_uv(r: Rect, size: egui::Vec2) -> Rect {
 #[cfg(test)]
 mod delete_tests {
     use super::*;
-    use ingle_proto::control::Reaction;
+    use pyr_proto::control::Reaction;
 
     fn msg(id: MessageId, reply_to: Option<MessageId>) -> Message {
         Message {
@@ -2949,7 +2949,7 @@ mod emoji_text_tests {
 
     fn server() -> ServerView {
         let mut s = ServerView::new("k".into(), "S".into(), String::new());
-        s.info.emojis.push(ingle_proto::control::CustomEmoji { id: "abcdefgh12".into(), name: "party_cat".into(), animated: false, by: String::new() });
+        s.info.emojis.push(pyr_proto::control::CustomEmoji { id: "abcdefgh12".into(), name: "party_cat".into(), animated: false, by: String::new() });
         s
     }
 

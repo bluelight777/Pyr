@@ -1,4 +1,4 @@
-//! Installing Ingle Server on a Linux machine over SSH.
+//! Installing Pyr Server on a Linux machine over SSH.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -9,10 +9,10 @@ use crate::ssh::{Auth, ConnectError, Login, Session};
 use crate::{Failure, Progress, sh_quote};
 
 /// The setup script that runs on the server (also handy for setting one up by hand).
-pub const INSTALL_SCRIPT: &str = include_str!("../assets/install-ingle-server.sh");
+pub const INSTALL_SCRIPT: &str = include_str!("../assets/install-pyr-server.sh");
 
 /// File name of the setup script when saved for doing it by hand.
-pub const SCRIPT_NAME: &str = "install-ingle-server.sh";
+pub const SCRIPT_NAME: &str = "install-pyr-server.sh";
 
 /// Where the Linux server programs that get uploaded live.
 #[derive(Clone, Debug)]
@@ -22,7 +22,7 @@ pub struct Payloads {
 
 impl Payloads {
     pub fn file_name(arch: &str) -> String {
-        format!("ingle-server-linux-{arch}")
+        format!("pyr-server-linux-{arch}")
     }
 
     /// The program for a CPU as `uname -m` names it.
@@ -30,12 +30,12 @@ impl Payloads {
         let arch = match uname_m.trim() {
             "x86_64" | "amd64" => "x86_64",
             "aarch64" | "arm64" | "armv8l" => "aarch64",
-            other => bail!("This server's processor ({other}) isn't supported: Ingle needs a 64-bit x86 or ARM server."),
+            other => bail!("This server's processor ({other}) isn't supported: Pyr needs a 64-bit x86 or ARM server."),
         };
         let p = self.dir.join(Self::file_name(arch));
         if !p.is_file() {
             bail!(
-                "The Linux server program for {arch} is missing from this Ingle install ({}). Reinstall Ingle to get it back.",
+                "The Linux server program for {arch} is missing from this Pyr install ({}). Reinstall Pyr to get it back.",
                 p.display()
             );
         }
@@ -43,26 +43,26 @@ impl Payloads {
     }
 
     /// The usual place, next to the app: `<app folder>/vps` on Windows (and when run from a
-    /// build folder), `/usr/lib/ingle/vps` for the Linux package. `INGLE_VPS_DIR` overrides.
+    /// build folder), `/usr/lib/pyr/vps` for the Linux package. `PYR_VPS_DIR` overrides.
     pub fn find() -> Payloads {
-        if let Some(d) = std::env::var_os("INGLE_VPS_DIR") {
+        if let Some(d) = pyr_proto::env_var("VPS_DIR") {
             return Payloads { dir: PathBuf::from(d) };
         }
         let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf));
         let mut candidates = Vec::new();
         if let Some(d) = &exe_dir {
             candidates.push(d.join("vps"));
-            // /usr/bin/ingle -> /usr/lib/ingle/vps
+            // /usr/bin/pyr -> /usr/lib/pyr/vps
             #[cfg(unix)]
-            candidates.push(d.join("..").join("lib").join("ingle").join("vps"));
-            // target/release/ingle -> dist/vps (running from a source checkout)
+            candidates.push(d.join("..").join("lib").join("pyr").join("vps"));
+            // target/release/pyr -> dist/vps (running from a source checkout)
             #[cfg(debug_assertions)]
             candidates.push(d.join("..").join("..").join("dist").join("vps"));
         }
         // (Only on Linux: on Windows this would be C:\usr\lib\..., a folder any account can
         // make, and these programs end up running as root on your server.)
         #[cfg(unix)]
-        candidates.push(PathBuf::from("/usr/lib/ingle/vps"));
+        candidates.push(PathBuf::from("/usr/lib/pyr/vps"));
         let dir = candidates
             .iter()
             .find(|d| d.join(Self::file_name("x86_64")).is_file())
@@ -150,7 +150,7 @@ fn connect_failure(e: ConnectError, login: &Login) -> Failure {
                 .to_string(),
         ),
         ConnectError::NewHostKey { kind, .. } => Some(format!(
-            "Before Ingle sends your password or key, check that this is your server's key: your provider's control \
+            "Before Pyr sends your password or key, check that this is your server's key: your provider's control \
              panel or console may show it, or on the server itself run: ssh-keygen -lf /etc/ssh/ssh_host_{}_key.pub",
             kind.to_lowercase()
         )),
@@ -240,7 +240,7 @@ async fn install_with(s: &mut Session, login: &Login, opts: &InstallOptions, pro
     let m = inspect(s).await.map_err(Failure::from)?;
     progress.log(format!("{} ({}), logged in as {}", m.os, m.arch, login.user));
     if !m.systemd {
-        return Err(Failure::new(format!("This server ({}) doesn't use systemd, which Ingle's setup needs.", m.os))
+        return Err(Failure::new(format!("This server ({}) doesn't use systemd, which Pyr's setup needs.", m.os))
             .hint("Ubuntu 22.04 or newer, Debian 11 or newer, Fedora, Rocky or Alma Linux all work."));
     }
     let binary = opts.payloads.for_machine(&m.arch).map_err(Failure::from)?;
@@ -250,13 +250,13 @@ async fn install_with(s: &mut Session, login: &Login, opts: &InstallOptions, pro
     }
 
     let data = std::fs::read(&binary).with_context(|| format!("reading {}", binary.display())).map_err(Failure::from)?;
-    progress.step(format!("Uploading Ingle Server ({:.1} MB)", data.len() as f64 / 1_048_576.0));
-    let tmp = s.output("mktemp -d /tmp/ingle-setup.XXXXXX").await.map_err(Failure::from)?;
+    progress.step(format!("Uploading Pyr Server ({:.1} MB)", data.len() as f64 / 1_048_576.0));
+    let tmp = s.output("mktemp -d /tmp/pyr-setup.XXXXXX").await.map_err(Failure::from)?;
     let dir = tmp.stdout.trim().to_string();
-    if !tmp.ok() || !dir.starts_with("/tmp/ingle-setup.") {
+    if !tmp.ok() || !dir.starts_with("/tmp/pyr-setup.") {
         return Err(Failure::new(format!("Couldn't make a temporary folder on the server: {}", tmp.stderr.trim())));
     }
-    let bin_path = format!("{dir}/ingle-server");
+    let bin_path = format!("{dir}/pyr-server");
     let script_path = format!("{dir}/{SCRIPT_NAME}");
     let restore_path = format!("{dir}/restore.tar");
     let restore = match &opts.restore {
@@ -308,13 +308,13 @@ async fn install_with(s: &mut Session, login: &Login, opts: &InstallOptions, pro
             } else if let Some(e) = line.strip_prefix("ERROR: ") {
                 error = Some(e.to_string());
                 progress.log(line.to_string());
-            } else if let Some(v) = line.strip_prefix("INGLE_OWNER_LINK=") {
+            } else if let Some(v) = line.strip_prefix("PYR_OWNER_LINK=") {
                 owner = Some(v.to_string());
-            } else if let Some(v) = line.strip_prefix("INGLE_INVITE_LINK=") {
+            } else if let Some(v) = line.strip_prefix("PYR_INVITE_LINK=") {
                 invite = Some(v.to_string());
-            } else if let Some(v) = line.strip_prefix("INGLE_NAME=") {
+            } else if let Some(v) = line.strip_prefix("PYR_NAME=") {
                 name = Some(v.to_string());
-            } else if !line.starts_with("INGLE_") {
+            } else if !line.starts_with("PYR_") {
                 progress.log(line.to_string());
             }
         })
@@ -369,7 +369,7 @@ pub fn setup_existing(mut login: Login, opts: InstallOptions, progress: Progress
                 ssh_port: login.port,
                 invite_link: Some(ready.invite_link.clone()),
                 host_key: Some(ready.host_key.clone()).filter(|k| !k.is_empty()),
-                created_ms: ingle_proto::now_ms(),
+                created_ms: pyr_proto::now_ms(),
                 installed: true,
                 ..Default::default()
             },
@@ -416,7 +416,7 @@ pub fn save_manual_files(payloads: &Payloads, folder: &Path) -> Result<Vec<PathB
         }
     }
     if written.is_empty() {
-        bail!("The Linux server programs are missing from this Ingle install ({}).", payloads.dir.display());
+        bail!("The Linux server programs are missing from this Pyr install ({}).", payloads.dir.display());
     }
     let script = folder.join(SCRIPT_NAME);
     std::fs::write(&script, INSTALL_SCRIPT).with_context(|| format!("writing {}", script.display()))?;

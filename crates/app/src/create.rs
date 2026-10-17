@@ -1,18 +1,18 @@
 //! "Create a server": rent one from DigitalOcean, or set up a Linux server you already have.
-//! The work itself is in `ingle-host`; this is the wizard around it.
+//! The work itself is in `pyr-host`; this is the wizard around it.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use eframe::egui::{self, Align, Color32, CornerRadius, Layout, RichText, Sense, Stroke, vec2};
-use ingle_engine::state::AppState;
-use ingle_host::digitalocean::{self, Catalog, RentRequest};
-use ingle_host::install::{self, InstallOptions};
-use ingle_host::ssh::{Auth, Login};
-use ingle_host::{Failure, Outcome, Payloads, Progress, StepState};
+use pyr_engine::state::AppState;
+use pyr_host::digitalocean::{self, Catalog, RentRequest};
+use pyr_host::install::{self, InstallOptions};
+use pyr_host::ssh::{Auth, Login};
+use pyr_host::{Failure, Outcome, Payloads, Progress, StepState};
 use parking_lot::Mutex;
 
-use crate::app::{Act, IngleApp};
+use crate::app::{Act, PyrApp};
 use crate::dialogs::{field_label, input, title};
 use crate::{icons, theme};
 
@@ -36,7 +36,7 @@ type Job<T> = Arc<Mutex<Option<T>>>;
 fn spawn_job<T: Send + 'static>(ctx: &egui::Context, f: impl FnOnce() -> T + Send + 'static) -> Job<T> {
     let job: Job<T> = Arc::new(Mutex::new(None));
     let (j, ctx) = (job.clone(), ctx.clone());
-    let _ = std::thread::Builder::new().name("ingle-setup".into()).spawn(move || {
+    let _ = std::thread::Builder::new().name("pyr-setup".into()).spawn(move || {
         let r = f();
         *j.lock() = Some(r);
         ctx.request_repaint();
@@ -72,7 +72,7 @@ pub struct CreateState {
     key_path: String,
     passphrase: String,
     sudo_password: String,
-    /// A server's SSH identity the person checked (host, port, fingerprint): Ingle logs in only
+    /// A server's SSH identity the person checked (host, port, fingerprint): Pyr logs in only
     /// if the server still has it.
     checked_key: Option<(String, u16, String)>,
     form_error: Option<String>,
@@ -89,7 +89,7 @@ pub struct CreateState {
     reachable_now: Option<bool>,
     copied: bool,
     /// Put back a server from this backup instead of starting a new one.
-    restore: Option<(std::path::PathBuf, ingle_engine::backup::BackupInfo)>,
+    restore: Option<(std::path::PathBuf, pyr_engine::backup::BackupInfo)>,
     /// Opens the server's sealed private key in my backups (made from my identity).
     backup_key: [u8; 32],
     restore_error: Option<String>,
@@ -98,7 +98,7 @@ pub struct CreateState {
 impl CreateState {
     pub fn new(my_name: &str, backup_key: [u8; 32]) -> CreateState {
         let name = if my_name.trim().is_empty() || my_name == "Friend" {
-            "My Ingle Server".to_string()
+            "My Pyr Server".to_string()
         } else {
             format!("{}'s Server", my_name.trim())
         };
@@ -117,7 +117,7 @@ impl CreateState {
             user: "root".into(),
             use_key: false,
             password: String::new(),
-            key_path: ingle_host::keys::default_user_key().map(|p| p.display().to_string()).unwrap_or_default(),
+            key_path: pyr_host::keys::default_user_key().map(|p| p.display().to_string()).unwrap_or_default(),
             passphrase: String::new(),
             sudo_password: String::new(),
             checked_key: None,
@@ -142,10 +142,10 @@ impl CreateState {
     /// True while setup work is running (the dialog can't be closed then).
     /// A backup folder was chosen to restore from (see `images::FolderFor::Restore`).
     pub fn set_restore(&mut self, dir: std::path::PathBuf) {
-        match ingle_engine::backup::info(&dir).filter(|_| dir.join("database").join("latest.db").is_file()) {
+        match pyr_engine::backup::info(&dir).filter(|_| dir.join("database").join("latest.db").is_file()) {
             Some(info) => {
                 // (A backup someone else made: its server key is sealed to them.)
-                if let Err(e) = ingle_host::restore::check(&ingle_host::restore::Backup { dir: dir.clone(), key: Some(self.backup_key) }) {
+                if let Err(e) = pyr_host::restore::check(&pyr_host::restore::Backup { dir: dir.clone(), key: Some(self.backup_key) }) {
                     self.restore_error = Some(format!("{e:#}"));
                     return;
                 }
@@ -153,7 +153,7 @@ impl CreateState {
                 self.restore = Some((dir, info));
                 self.restore_error = None;
             }
-            None => self.restore_error = Some("That folder isn't an Ingle server backup (it needs server.json and database/latest.db).".into()),
+            None => self.restore_error = Some("That folder isn't a Pyr server backup (it needs server.json and database/latest.db).".into()),
         }
     }
 
@@ -269,7 +269,7 @@ const FIREWALL_HELP: &[(&str, &str)] = &[
 ];
 
 fn firewall_help(ui: &mut egui::Ui) {
-    muted(ui, "Calls and chat use UDP port 7766. Ingle opens it in the server's own firewall (ufw, firewalld or iptables), but many providers also have a firewall in their website that only you can change. If yours does, let in UDP port 7766 from anywhere (and SSH, TCP port 22, for the setup):");
+    muted(ui, "Calls and chat use UDP port 7766. Pyr opens it in the server's own firewall (ufw, firewalld or iptables), but many providers also have a firewall in their website that only you can change. If yours does, let in UDP port 7766 from anywhere (and SSH, TCP port 22, for the setup):");
     ui.add_space(4.0);
     for (who, what) in FIREWALL_HELP {
         ui.horizontal_wrapped(|ui| {
@@ -280,7 +280,7 @@ fn firewall_help(ui: &mut egui::Ui) {
     }
 }
 
-impl IngleApp {
+impl PyrApp {
     pub fn create_dialog(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>, close: &mut bool) {
         ui.set_width(580.0);
         let config_dir = self.engine.identity_path().parent().map(|p| p.to_path_buf()).unwrap_or_default();
@@ -344,7 +344,7 @@ fn choose_page(c: &mut CreateState, ui: &mut egui::Ui, close: &mut bool) {
     match &c.restore {
         None => {
             field_label(ui, "Server name");
-            input(ui, &mut c.name, "My Ingle Server");
+            input(ui, &mut c.name, "My Pyr Server");
         }
         Some((dir, info)) => {
             field_label(ui, "Restoring from a backup");
@@ -372,7 +372,7 @@ fn choose_page(c: &mut CreateState, ui: &mut egui::Ui, close: &mut bool) {
         "rent",
         Some("QUICKEST"),
         "Rent a server",
-        "In your own DigitalOcean account, about $4–6 a month, billed to you by DigitalOcean (Ingle doesn't charge anything). Ingle creates it and sets it up for you in a few minutes; delete it any time.",
+        "In your own DigitalOcean account, about $4–6 a month, billed to you by DigitalOcean (Pyr doesn't charge anything). Pyr creates it and sets it up for you in a few minutes; delete it any time.",
         icons::cloud,
     ) {
         c.kind = Kind::Rent;
@@ -383,14 +383,14 @@ fn choose_page(c: &mut CreateState, ui: &mut egui::Ui, close: &mut bool) {
         "own",
         None,
         "Use a server I already have",
-        "Any Linux VPS from any provider (Hetzner, Vultr, Linode, OVH, AWS, DigitalOcean…), so you're never tied to one host. Ingle sets it up over SSH, or shows you how to do it yourself.",
+        "Any Linux VPS from any provider (Hetzner, Vultr, Linode, OVH, AWS, DigitalOcean…), so you're never tied to one host. Pyr sets it up over SSH, or shows you how to do it yourself.",
         icons::server,
     ) {
         c.kind = Kind::Own;
         c.page = Page::Own;
     }
     ui.add_space(2.0);
-    let how = if cfg!(windows) { "start Ingle Server from the Start menu" } else { "run ingle-server in a terminal" };
+    let how = if cfg!(windows) { "start Pyr Server from the Start menu" } else { "run pyr-server in a terminal" };
     dim(ui, format!("Hosting on this PC instead? Close this and {how}: it shows links to paste into Join a server. Friends outside your home need UDP port 7766 forwarded on your router, and your PC must stay on."));
     ui.add_space(12.0);
     if ui.button("Cancel").clicked() {
@@ -400,7 +400,7 @@ fn choose_page(c: &mut CreateState, ui: &mut egui::Ui, close: &mut bool) {
 
 fn rent_page(c: &mut CreateState, ui: &mut egui::Ui, config_dir: &std::path::Path) {
     title(ui, "Rent a server from DigitalOcean");
-    muted(ui, "DigitalOcean is a large, dependable cloud provider. The server is made in your own DigitalOcean account and DigitalOcean bills you for it: $4–6 a month, charged only for the time it exists. Ingle doesn't charge anything, and you can delete the server whenever you like.");
+    muted(ui, "DigitalOcean is a large, dependable cloud provider. The server is made in your own DigitalOcean account and DigitalOcean bills you for it: $4–6 a month, charged only for the time it exists. Pyr doesn't charge anything, and you can delete the server whenever you like.");
 
     if let Some(cat) = &c.catalog {
         ui.add_space(10.0);
@@ -458,7 +458,7 @@ fn rent_page(c: &mut CreateState, ui: &mut egui::Ui, config_dir: &std::path::Pat
         });
         dim(ui, "Pick the place closest to you and your friends: it keeps voice delay low.");
         ui.add_space(6.0);
-        dim(ui, "Ingle uses the token only now, to create the server, and doesn't save it.");
+        dim(ui, "Pyr uses the token only now, to create the server, and doesn't save it.");
         ui.add_space(10.0);
         let price = cat.plans.iter().find(|p| p.slug == c.plan).map(|p| p.price_monthly).unwrap_or(0.0);
         let ok = !c.plan.is_empty() && !c.region.is_empty() && !c.name.trim().is_empty();
@@ -479,12 +479,12 @@ fn rent_page(c: &mut CreateState, ui: &mut egui::Ui, config_dir: &std::path::Pat
             price_monthly: c.price,
             size_label,
             region_label,
-            restore: c.restore.as_ref().map(|(d, _)| ingle_host::restore::Backup { dir: d.clone(), key: Some(c.backup_key) }),
+            restore: c.restore.as_ref().map(|(d, _)| pyr_host::restore::Backup { dir: d.clone(), key: Some(c.backup_key) }),
         };
         let progress = c.new_progress(ui.ctx());
         let dir = config_dir.to_path_buf();
         let _ = std::thread::Builder::new()
-            .name("ingle-setup".into())
+            .name("pyr-setup".into())
             .spawn(move || digitalocean::rent(req, dir, Payloads::find(), progress));
         return;
     }
@@ -502,11 +502,11 @@ fn token_steps(c: &mut CreateState, ui: &mut egui::Ui) {
         dim(ui, "Pay with a card or PayPal. Already have an account? Skip this.");
     });
 
-    step_heading(ui, 2, "Make an API token for Ingle");
+    step_heading(ui, 2, "Make an API token for Pyr");
     ui.horizontal_wrapped(|ui| {
         link_button(ui, "Open the API tokens page", digitalocean::TOKENS_URL);
     });
-    dim(ui, "Click Generate New Token. Name it Ingle and pick the shortest expiration (Ingle only needs it while it sets the server up). Choose Custom Scopes and tick droplet (create, read, delete), ssh_key (create, read), regions (read), sizes (read) and account (read): nothing more. Click Generate Token, then copy the token it shows (it starts with dop_v1_). You can delete the token once your server is running.");
+    dim(ui, "Click Generate New Token. Name it Pyr and pick the shortest expiration (Pyr only needs it while it sets the server up). Choose Custom Scopes and tick droplet (create, read, delete), ssh_key (create, read), regions (read), sizes (read) and account (read): nothing more. Click Generate Token, then copy the token it shows (it starts with dop_v1_). You can delete the token once your server is running.");
 
     step_heading(ui, 3, "Paste the token here");
     let loading = c.catalog_job.is_some();
@@ -540,7 +540,7 @@ fn token_steps(c: &mut CreateState, ui: &mut egui::Ui) {
 
 fn own_page(c: &mut CreateState, ui: &mut egui::Ui, config_dir: &std::path::Path) {
     title(ui, "Use a server you already have");
-    muted(ui, "Any 64-bit Linux server with systemd works: Ubuntu 22.04 or newer, Debian 11 or newer, Fedora, Rocky or Alma Linux, from any provider. Ingle logs in once over SSH to set it up and doesn't save your password.");
+    muted(ui, "Any 64-bit Linux server with systemd works: Ubuntu 22.04 or newer, Debian 11 or newer, Fedora, Rocky or Alma Linux, from any provider. Pyr logs in once over SSH to set it up and doesn't save your password.");
     field_label(ui, "Server address");
     input(ui, &mut c.host, "IP address or domain name, like 203.0.113.5");
     ui.columns(2, |cols| {
@@ -593,7 +593,7 @@ fn own_page(c: &mut CreateState, ui: &mut egui::Ui, config_dir: &std::path::Path
     }
 }
 
-/// Sets up the server in the form (logging in only once its SSH identity is one Ingle knows,
+/// Sets up the server in the form (logging in only once its SSH identity is one Pyr knows,
 /// this PC's SSH knows, or the person checked).
 fn start_own(c: &mut CreateState, ctx: &egui::Context, config_dir: &std::path::Path) {
     match login_from_form(c) {
@@ -606,22 +606,22 @@ fn start_own(c: &mut CreateState, ctx: &egui::Context, config_dir: &std::path::P
             let opts = InstallOptions {
                 name: c.name.trim().to_string(),
                 public_host: login.host.clone(),
-                port: ingle_host::DEFAULT_PORT,
+                port: pyr_host::DEFAULT_PORT,
                 payloads: Payloads::find(),
                 wait_for_boot: None,
-                restore: c.restore.as_ref().map(|(d, _)| ingle_host::restore::Backup { dir: d.clone(), key: Some(c.backup_key) }),
+                restore: c.restore.as_ref().map(|(d, _)| pyr_host::restore::Backup { dir: d.clone(), key: Some(c.backup_key) }),
             };
             let progress = c.new_progress(ctx);
             let dir = config_dir.to_path_buf();
             let _ = std::thread::Builder::new()
-                .name("ingle-setup".into())
+                .name("pyr-setup".into())
                 .spawn(move || install::setup_existing(login, opts, progress, Some(dir)));
         }
     }
 }
 
 fn login_from_form(c: &CreateState) -> Result<Login, String> {
-    let host = ingle_host::clean_host(&c.host);
+    let host = pyr_host::clean_host(&c.host);
     if host.is_empty() {
         return Err("Type the server's address.".into());
     }
@@ -643,7 +643,7 @@ fn login_from_form(c: &CreateState) -> Result<Login, String> {
         Auth::Password(c.password.clone())
     };
     // The host key seen when this server was set up before (if it was) is filled in by
-    // `setup_existing` from Ingle's records; one the person just checked comes from here.
+    // `setup_existing` from Pyr's records; one the person just checked comes from here.
     let host_key = c.checked_key.as_ref().filter(|(h, p, _)| *h == host && *p == port).map(|(_, _, k)| k.clone());
     Ok(Login { host, port, user, auth, sudo_password: Some(c.sudo_password.clone()).filter(|p| !p.is_empty()), host_key })
 }
@@ -652,7 +652,7 @@ fn downloads_folder() -> PathBuf {
     directories::UserDirs::new()
         .and_then(|u| u.download_dir().map(|d| d.to_path_buf()))
         .unwrap_or_else(|| std::env::temp_dir())
-        .join("Ingle server files")
+        .join("Pyr server files")
 }
 
 pub(crate) fn open_folder(path: &std::path::Path) {
@@ -666,7 +666,7 @@ fn manual_page(c: &mut CreateState, ui: &mut egui::Ui, acts: &mut Vec<Act>, clos
     title(ui, "Set up a server by hand");
     muted(ui, "For a 64-bit Linux server with systemd. You'll copy two files to it and run one command.");
     let host = {
-        let h = ingle_host::clean_host(&c.host);
+        let h = pyr_host::clean_host(&c.host);
         if h.is_empty() { "YOUR-SERVER".to_string() } else { h }
     };
     let user = if c.user.trim().is_empty() { "root".to_string() } else { c.user.trim().to_string() };
@@ -703,19 +703,19 @@ fn manual_page(c: &mut CreateState, ui: &mut egui::Ui, acts: &mut Vec<Act>, clos
     // Into your home folder on the server (not /tmp, where other accounts could swap the
     // files before they run).
     let scp = format!(
-        "scp \"{f}{sep}ingle-server-linux-x86_64\" \"{f}{sep}{}\" {user}@{host}:",
+        "scp \"{f}{sep}pyr-server-linux-x86_64\" \"{f}{sep}{}\" {user}@{host}:",
         install::SCRIPT_NAME
     );
     code_box(ui, &scp, acts);
-    dim(ui, "For an ARM server (like Oracle Cloud's free Ampere ones or Hetzner CAX), copy ingle-server-linux-aarch64 instead.");
+    dim(ui, "For an ARM server (like Oracle Cloud's free Ampere ones or Hetzner CAX), copy pyr-server-linux-aarch64 instead.");
 
     step_heading(ui, 3, "Run the setup on the server");
     let run = format!(
-        "ssh -t {user}@{host} sh ./{} --binary ./ingle-server-linux-x86_64 --public-host {host}",
+        "ssh -t {user}@{host} sh ./{} --binary ./pyr-server-linux-x86_64 --public-host {host}",
         install::SCRIPT_NAME
     );
     code_box(ui, &run, acts);
-    dim(ui, "It installs Ingle Server as a service that starts by itself, opens UDP port 7766 in the server's firewall, and prints your owner link and an invite link. Running it again later updates the server and keeps everything.");
+    dim(ui, "It installs Pyr Server as a service that starts by itself, opens UDP port 7766 in the server's firewall, and prints your owner link and an invite link. Running it again later updates the server and keeps everything.");
 
     step_heading(ui, 4, "Check your provider's firewall");
     egui::CollapsingHeader::new(RichText::new("Where to find it").color(theme::TEXT())).id_salt("fw-help-manual").show(ui, firewall_help);
@@ -771,7 +771,7 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
     }
     if task.outcome.is_none() {
         ui.add_space(6.0);
-        dim(ui, if c.kind == Kind::Rent { "This takes a few minutes. Keep Ingle open." } else { "This takes about a minute. Keep Ingle open." });
+        dim(ui, if c.kind == Kind::Rent { "This takes a few minutes. Keep Pyr open." } else { "This takes about a minute. Keep Pyr open." });
     }
 
     match &task.outcome {
@@ -812,7 +812,7 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
                             } else if ui.button("Check again").clicked() {
                                 let link = r.owner_link.clone();
                                 c.probe_job = Some(spawn_job(ui.ctx(), move || {
-                                    ingle_host::probe::reachable_blocking(&link, 2, std::time::Duration::from_secs(4)).is_ok()
+                                    pyr_host::probe::reachable_blocking(&link, 2, std::time::Duration::from_secs(4)).is_ok()
                                 }));
                             }
                         });
@@ -821,7 +821,7 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
                 ui.label(RichText::new("Reachable now.").color(theme::ONLINE()));
             }
             field_label(ui, "Invite link for friends");
-            let web = ingle_proto::invite::InviteLink::web(&r.invite_link, &r.name);
+            let web = pyr_proto::invite::InviteLink::web(&r.invite_link, &r.name);
             egui::Frame::new().fill(theme::CODE_BG()).corner_radius(6).inner_margin(10).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.add(egui::Label::new(RichText::new(&web).font(theme::mono(12.0)).color(theme::TEXT())).wrap().selectable(true));
@@ -832,8 +832,8 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
                     acts.push(Act::Copy(web.clone()));
                     c.copied = true;
                 }
-                let plain = ingle_proto::invite::InviteLink::shorten(&r.invite_link);
-                if ui.button("Copy the ingle:// link").on_hover_text(plain.as_str()).clicked() {
+                let plain = pyr_proto::invite::InviteLink::shorten(&r.invite_link);
+                if ui.button("Copy the pyr:// link").on_hover_text(plain.as_str()).clicked() {
                     acts.push(Act::Copy(plain));
                     c.copied = true;
                 }
@@ -841,7 +841,7 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
             if c.copied {
                 ui.label(RichText::new("Copied. Paste it into a message to your friends.").size(12.5).color(theme::ONLINE()));
             }
-            dim(ui, "Friends click the link: the page gets them Ingle if they don't have it yet, and its Open invite in Ingle button joins. Pasting it into Join a server works too.");
+            dim(ui, "Friends click the link: the page gets them Pyr if they don't have it yet, and its Open invite in Pyr button joins. Pasting it into Join a server works too.");
             if let Some(d) = &r.droplet {
                 ui.add_space(8.0);
                 ui.horizontal_wrapped(|ui| {
@@ -857,19 +857,19 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
                 *close = true;
             }
             ui.add_space(8.0);
-            egui::CollapsingHeader::new(RichText::new("What Ingle did").color(theme::MUTED())).id_salt("setup-steps").show(ui, steps);
+            egui::CollapsingHeader::new(RichText::new("What Pyr did").color(theme::MUTED())).id_salt("setup-steps").show(ui, steps);
         }
-        // A server Ingle has never connected to: nothing was sent. Is it really theirs?
+        // A server Pyr has never connected to: nothing was sent. Is it really theirs?
         Some(Outcome::Failed(f)) if f.new_host_key.is_some() && c.kind == Kind::Own => {
             let (kind, fp) = f.new_host_key.clone().unwrap_or_default();
-            let host = ingle_host::clean_host(&c.host);
+            let host = pyr_host::clean_host(&c.host);
             let port: u16 = c.ssh_port.trim().parse().unwrap_or(22);
             ui.add_space(8.0);
             egui::Frame::new().fill(theme::ELEV()).corner_radius(8).inner_margin(12).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.label(RichText::new("Is this your server?").font(theme::bold_font(15.0)).color(theme::TEXT()));
                 ui.add_space(2.0);
-                ui.label(RichText::new(format!("This is the first time Ingle connects to {host}, so nothing has been sent to it yet. Its SSH identity is this {kind} key:")).color(theme::TEXT()));
+                ui.label(RichText::new(format!("This is the first time Pyr connects to {host}, so nothing has been sent to it yet. Its SSH identity is this {kind} key:")).color(theme::TEXT()));
                 ui.add_space(4.0);
                 egui::Frame::new().fill(theme::CODE_BG()).corner_radius(6).inner_margin(8).show(ui, |ui| {
                     ui.add(egui::Label::new(RichText::new(&fp).font(theme::mono(13.0)).color(theme::TEXT())).wrap().selectable(true));
@@ -877,7 +877,7 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(format!(
-                        "Check that it's your server's before Ingle sends your password or key: your provider's control panel or console may \
+                        "Check that it's your server's before Pyr sends your password or key: your provider's control panel or console may \
                          show it, or on the server itself run  ssh-keygen -lf /etc/ssh/ssh_host_{}_key.pub  and compare. If it's different, \
                          someone may be in the way: don't go on.",
                         kind.to_lowercase()
@@ -940,10 +940,10 @@ fn working_page(c: &mut CreateState, ui: &mut egui::Ui, _st: &AppState, acts: &m
             if retry {
                 if let Some(d) = f.droplet.clone() {
                     let (name, dir) = (c.name.trim().to_string(), config_dir.to_path_buf());
-                    let restore = c.restore.as_ref().map(|(d, _)| ingle_host::restore::Backup { dir: d.clone(), key: Some(c.backup_key) });
+                    let restore = c.restore.as_ref().map(|(d, _)| pyr_host::restore::Backup { dir: d.clone(), key: Some(c.backup_key) });
                     let progress = c.new_progress(ui.ctx());
                     let _ = std::thread::Builder::new()
-                        .name("ingle-setup".into())
+                        .name("pyr-setup".into())
                         .spawn(move || digitalocean::retry_install(d, name, dir, Payloads::find(), progress, restore));
                     return;
                 }

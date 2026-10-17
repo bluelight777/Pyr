@@ -1,15 +1,15 @@
-//! Setting up Ingle servers for people who don't run servers.
+//! Setting up Pyr servers for people who don't run servers.
 //!
 //! Two ways, both ending with the same SSH install:
 //!
 //! * **Rent a server** ([`digitalocean`]): with an API token from the person's own
-//!   DigitalOcean account, create a small Ubuntu server ("droplet") that trusts Ingle's SSH
+//!   DigitalOcean account, create a small Ubuntu server ("droplet") that trusts Pyr's SSH
 //!   key, wait for it to boot, then install.
 //! * **Use a server you have** ([`install`]): log in over SSH with a password or key and
 //!   install, on any 64-bit Linux with systemd.
 //!
-//! The install uploads a static `ingle-server` for the machine's CPU plus
-//! `install-ingle-server.sh`, which sets up a systemd service, opens the UDP port in the
+//! The install uploads a static `pyr-server` for the machine's CPU plus
+//! `install-pyr-server.sh`, which sets up a systemd service, opens the UDP port in the
 //! server's firewall and prints the owner and invite links. Afterwards [`probe`] checks
 //! from this PC that the server can really be reached (a cloud firewall in front of the
 //! server would block it, and only the provider's website can open that).
@@ -31,8 +31,8 @@ use parking_lot::Mutex;
 
 pub use install::{INSTALL_SCRIPT, InstallOptions, Payloads};
 
-/// The UDP port Ingle servers use unless told otherwise.
-pub const DEFAULT_PORT: u16 = ingle_proto::DEFAULT_PORT;
+/// The UDP port Pyr servers use unless told otherwise.
+pub const DEFAULT_PORT: u16 = pyr_proto::DEFAULT_PORT;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StepState {
@@ -81,7 +81,7 @@ pub struct Failure {
     /// (and billing) until deleted, so the UI offers to retry the install or delete it.
     pub droplet: Option<DropletRef>,
     /// A server never connected to before: its SSH identity key (type, `SHA256:…`), for the
-    /// person to check before Ingle logs in (then again with it as `Login::host_key`).
+    /// person to check before Pyr logs in (then again with it as `Login::host_key`).
     pub new_host_key: Option<(String, String)>,
 }
 

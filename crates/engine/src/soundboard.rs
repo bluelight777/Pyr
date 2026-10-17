@@ -1,5 +1,5 @@
 //! The soundboard: short sounds anyone in a voice channel can play for everyone there, like
-//! Discord's. A sound is a small file (see `ingle_proto::sound`); every app plays it itself,
+//! Discord's. A sound is a small file (see `pyr_proto::sound`); every app plays it itself,
 //! so it's heard at full quality, and the call only carries word that it was played.
 //!
 //! Better than Discord's: no sound is locked (one from any of your servers, or a built-in one,
@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow, bail};
-use ingle_proto::sound;
+use pyr_proto::sound;
 use serde::{Deserialize, Serialize};
 
 /// 48 kHz stereo, interleaved.
@@ -146,7 +146,7 @@ fn encode_raw(pcm: &[f32]) -> Result<Vec<u8>> {
 
 /// 48 kHz stereo from a sound file.
 pub fn decode(file: &[u8]) -> Result<Vec<f32>> {
-    let (fmt, packets) = sound::packets(file).ok_or_else(|| anyhow!("not an Ingle sound"))?;
+    let (fmt, packets) = sound::packets(file).ok_or_else(|| anyhow!("not a Pyr sound"))?;
     let stereo = fmt.channels == 2;
     let mut dec = opus::Decoder::new(48_000, if stereo { opus::Channels::Stereo } else { opus::Channels::Mono })?;
     let mut out = Vec::with_capacity(fmt.frames * FRAME);
@@ -214,7 +214,7 @@ enum Decoding {
     Opus { dec: opus::Decoder, channels: usize, skip: usize },
 }
 
-/// Read an audio file (MP3, Ogg Vorbis or Opus, WAV, FLAC, AAC/M4A, or an Ingle sound).
+/// Read an audio file (MP3, Ogg Vorbis or Opus, WAV, FLAC, AAC/M4A, or a Pyr sound).
 pub fn import(bytes: Vec<u8>, extension: Option<&str>) -> Result<Imported> {
     if sound::check(&bytes).is_some() {
         return Ok(Imported { pcm: decode(&bytes)?, cut: false });
@@ -234,7 +234,7 @@ pub fn import(bytes: Vec<u8>, extension: Option<&str>) -> Result<Imported> {
     }
     let probed = symphonia::default::get_probe()
         .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
-        .map_err(|_| anyhow!("That isn't a sound file Ingle can read (try MP3, OGG, WAV, FLAC or M4A)."))?;
+        .map_err(|_| anyhow!("That isn't a sound file Pyr can read (try MP3, OGG, WAV, FLAC or M4A)."))?;
     let mut format = probed.format;
     let track = format
         .tracks()
@@ -246,14 +246,14 @@ pub fn import(bytes: Vec<u8>, extension: Option<&str>) -> Result<Imported> {
     let mut decoding = if params.codec == CODEC_TYPE_OPUS {
         let channels = params.channels.map(|c| c.count()).unwrap_or(2);
         if !(1..=2).contains(&channels) {
-            bail!("Ingle can't read Opus sound with more than two channels (try MP3, OGG, WAV or FLAC).");
+            bail!("Pyr can't read Opus sound with more than two channels (try MP3, OGG, WAV or FLAC).");
         }
         let dec = opus::Decoder::new(48_000, if channels == 2 { opus::Channels::Stereo } else { opus::Channels::Mono })?;
         Decoding::Opus { dec, channels, skip: params.delay.unwrap_or(0) as usize }
     } else {
         let d = symphonia::default::get_codecs()
             .make(&params, &DecoderOptions::default())
-            .map_err(|_| anyhow!("Ingle can't play that kind of sound (try MP3, OGG, WAV or FLAC)."))?;
+            .map_err(|_| anyhow!("Pyr can't play that kind of sound (try MP3, OGG, WAV or FLAC)."))?;
         Decoding::Symphonia(d)
     };
     let mut rate = if params.codec == CODEC_TYPE_OPUS { RATE } else { params.sample_rate.unwrap_or(48_000) as usize };
@@ -316,7 +316,7 @@ pub fn import(bytes: Vec<u8>, extension: Option<&str>) -> Result<Imported> {
         bail!("There's no sound in that file.");
     }
     if !(8_000..=384_000).contains(&rate) {
-        bail!("That file's sample rate ({rate} Hz) is unusual; Ingle can't use it.");
+        bail!("That file's sample rate ({rate} Hz) is unusual; Pyr can't use it.");
     }
     let (l, r) = if rate == RATE { (left, right) } else { (resample(&left, rate), resample(&right, rate)) };
     let mut pcm = Vec::with_capacity(l.len() * 2);
@@ -556,7 +556,7 @@ mod tests {
     #[test]
     fn imports_an_ogg_opus_file() {
         // 0.1 s of silence then 0.3 s of 880 Hz, mono, as an Ogg Opus file (what voice note
-        // and recording apps make). Symphonia reads it; Ingle's Opus decoder plays it.
+        // and recording apps make). Symphonia reads it; Pyr's Opus decoder plays it.
         let mut enc = opus::Encoder::new(48_000, opus::Channels::Mono, opus::Application::Audio).unwrap();
         let pre_skip = enc.get_lookahead().unwrap() as u16;
         let n = RATE * 4 / 10;
@@ -573,8 +573,8 @@ mod tests {
         head.push(0);
         ogg_page(&mut file, 0x02, 0, 0, &head);
         let mut tags = b"OpusTags".to_vec();
-        tags.extend_from_slice(&5u32.to_le_bytes());
-        tags.extend_from_slice(b"ingle");
+        tags.extend_from_slice(&3u32.to_le_bytes());
+        tags.extend_from_slice(b"pyr");
         tags.extend_from_slice(&0u32.to_le_bytes());
         ogg_page(&mut file, 0, 0, 1, &tags);
         // (The encoder's lead-in is pre-skip long: feed that much more at the end.)

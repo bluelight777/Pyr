@@ -1,9 +1,9 @@
-//! Updates, like Discord: Ingle checks firelitgames.com for a newer version, shows a green
+//! Updates, like Discord: Pyr checks firelitgames.com for a newer version, shows a green
 //! Update button when there is one (see `update_chip`), and on a click downloads it, installs
 //! it silently, reopens and rejoins the voice channel you were in.
 //!
 //! The release file (`latest.json`) must be signed with the Firelit release key and the
-//! download must match its SHA-256 (see `ingle_proto::release`), so a hacked website can't
+//! download must match its SHA-256 (see `pyr_proto::release`), so a hacked website can't
 //! push anything else. It must also be within its dates and no older than one this app has
 //! already seen (`update-seen.json`), so a hacked website can't hide a newer release by
 //! serving an old one either.
@@ -14,14 +14,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ingle_proto::control::ChannelId;
-use ingle_proto::release::{self, Asset, Manifest};
+use pyr_proto::control::ChannelId;
+use pyr_proto::release::{self, Asset, Manifest};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 /// Public half of the Firelit release key. The secret half signs `latest.json`.
 pub const RELEASE_KEY: &str = "J0EGQDSoDplSzp3aFrK7EA8C5Of4w4D40kaO-g7iJcE";
-const DEFAULT_URL: &str = "https://firelitgames.com/ingle/latest.json";
+const DEFAULT_URL: &str = "https://pyr.gg/latest.json";
 const CHECK_EVERY: Duration = Duration::from_secs(3 * 60 * 60);
 const RESUME_FILE: &str = "resume.json";
 /// When the newest release file this app has seen was signed (see `check`).
@@ -32,7 +32,7 @@ pub fn current_version() -> &'static str {
 }
 
 fn manifest_url() -> String {
-    std::env::var("INGLE_UPDATE_URL").unwrap_or_else(|_| DEFAULT_URL.to_string())
+    pyr_proto::env_var("UPDATE_URL").unwrap_or_else(|| DEFAULT_URL.to_string())
 }
 
 #[derive(Clone, Debug)]
@@ -75,7 +75,7 @@ pub enum Asker {
 pub struct Updater {
     status: Arc<Mutex<Status>>,
     repaint: Arc<dyn Fn() + Send + Sync>,
-    /// Where what's been seen is kept (Ingle's settings folder).
+    /// Where what's been seen is kept (Pyr's settings folder).
     dir: PathBuf,
     /// One check at a time (the regular one, or one someone asked for).
     check_lock: Arc<Mutex<()>>,
@@ -87,7 +87,7 @@ pub struct Updater {
 
 impl Updater {
     /// Checks shortly after start and then every few hours. `dir` is where what's been seen is
-    /// kept (Ingle's settings folder).
+    /// kept (Pyr's settings folder).
     pub fn start(repaint: Arc<dyn Fn() + Send + Sync>, dir: PathBuf) -> Updater {
         let u = Updater {
             status: Arc::new(Mutex::new(Status::Idle)),
@@ -98,7 +98,7 @@ impl Updater {
             answers: Arc::new(Mutex::new(Vec::new())),
         };
         let me = u.clone();
-        let _ = std::thread::Builder::new().name("ingle-update".into()).spawn(move || {
+        let _ = std::thread::Builder::new().name("pyr-update".into()).spawn(move || {
             std::thread::sleep(Duration::from_secs(8));
             clean_old_downloads(&download_base(), Duration::from_secs(60 * 60));
             loop {
@@ -127,7 +127,7 @@ impl Updater {
             return;
         }
         let me = self.clone();
-        let _ = std::thread::Builder::new().name("ingle-update-check".into()).spawn(move || {
+        let _ = std::thread::Builder::new().name("pyr-update-check".into()).spawn(move || {
             let answer = match me.check_and_apply(true) {
                 Ok(Some(version)) => Checked::Found(version),
                 Ok(None) => Checked::UpToDate,
@@ -202,18 +202,18 @@ impl Updater {
         // (Development builds: a pretend update's pretend download; see dev_pretend_check.)
         #[cfg(debug_assertions)]
         if asset.url == "pretend" {
-            let _ = std::thread::Builder::new().name("ingle-update-pretend".into()).spawn(move || {
+            let _ = std::thread::Builder::new().name("pyr-update-pretend".into()).spawn(move || {
                 for i in 0..=60u64 {
                     *s.lock() = Status::Downloading(asset.size * i / 60, asset.size);
                     r();
                     std::thread::sleep(Duration::from_millis(250));
                 }
-                *s.lock() = Status::Failed("that was a pretend update (INGLE_DEV_FAKE_UPDATE): nothing was downloaded".into());
+                *s.lock() = Status::Failed("that was a pretend update (PYR_DEV_FAKE_UPDATE): nothing was downloaded".into());
                 r();
             });
             return;
         }
-        let _ = std::thread::Builder::new().name("ingle-update-dl".into()).spawn(move || {
+        let _ = std::thread::Builder::new().name("pyr-update-dl".into()).spawn(move || {
             let result = fetch(&asset, &manifest.version, |done| {
                 *s.lock() = Status::Downloading(done, asset.size);
                 r();
@@ -289,12 +289,12 @@ fn check(dir: &Path) -> Result<Option<Manifest>, Check> {
     Ok((release::newer(&m.version, current_version()) && platform_asset(&m).is_some()).then_some(m))
 }
 
-/// Development builds only: `INGLE_DEV_FAKE_UPDATE` stands in for the website, to see how the
+/// Development builds only: `PYR_DEV_FAKE_UPDATE` stands in for the website, to see how the
 /// updater looks in each state: `none` (up to date), `fail` (can't check), or a version that's
 /// "out" (whose download only pretends, and then fails). Never in release builds.
 #[cfg(debug_assertions)]
 fn dev_pretend_check() -> Option<Result<Option<Manifest>, Check>> {
-    let v = std::env::var("INGLE_DEV_FAKE_UPDATE").ok().filter(|v| !v.is_empty())?;
+    let v = pyr_proto::env_var("DEV_FAKE_UPDATE").filter(|v| !v.is_empty())?;
     std::thread::sleep(Duration::from_millis(1200));
     Some(match v.as_str() {
         "none" => Ok(None),
@@ -351,7 +351,7 @@ fn download_base() -> PathBuf {
 fn clean_old_downloads(base: &Path, min_age: Duration) {
     let Ok(entries) = std::fs::read_dir(base) else { return };
     for e in entries.flatten() {
-        if !e.file_name().to_str().is_some_and(|n| n.starts_with("ingle-update")) {
+        if !e.file_name().to_str().is_some_and(|n| n.starts_with("pyr-update")) {
             continue;
         }
         // A real folder (not a link to somewhere else).
@@ -369,8 +369,8 @@ fn clean_old_downloads(base: &Path, min_age: Duration) {
 fn private_dir() -> Result<PathBuf, String> {
     let base = download_base();
     let _ = std::fs::create_dir_all(&base);
-    let name: String = ingle_proto::crypto::random_bytes::<12>().iter().map(|b| format!("{b:02x}")).collect();
-    let dir = base.join(format!("ingle-update-{name}"));
+    let name: String = pyr_proto::crypto::random_bytes::<12>().iter().map(|b| format!("{b:02x}")).collect();
+    let dir = base.join(format!("pyr-update-{name}"));
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
@@ -409,7 +409,7 @@ fn fetch(asset: &Asset, version: &str, mut progress: impl FnMut(u64)) -> Result<
         return Err("the download doesn't match the release (damaged or tampered with), so it wasn't installed".into());
     }
     let dir = private_dir()?;
-    let path = dir.join(format!("ingle-{version}.{ext}"));
+    let path = dir.join(format!("pyr-{version}.{ext}"));
     {
         use std::io::Write;
         let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(|e| e.to_string())?;
@@ -419,7 +419,7 @@ fn fetch(asset: &Asset, version: &str, mut progress: impl FnMut(u64)) -> Result<
     Ok(path)
 }
 
-/// Where you were, so the updated Ingle can put you back.
+/// Where you were, so the updated Pyr can put you back.
 #[derive(Serialize, Deserialize)]
 pub struct Resume {
     pub server_key: String,
@@ -448,8 +448,8 @@ pub fn take_resume(config_dir: &Path) -> Option<Resume> {
 }
 
 /// Starts installing the downloaded update. On Windows the silent setup replaces the files
-/// once we've quit and then reopens Ingle (/RELAUNCH); on Linux the package is installed
-/// with the system's password prompt (pkexec) and Ingle is reopened right after. The caller
+/// once we've quit and then reopens Pyr (/RELAUNCH); on Linux the package is installed
+/// with the system's password prompt (pkexec) and Pyr is reopened right after. The caller
 /// quits the app when this returns Ok.
 pub fn install(path: &Path, sha256: &str) -> Result<(), String> {
     // The very file about to run must still be the one that was checked.
@@ -474,7 +474,7 @@ pub fn install(path: &Path, sha256: &str) -> Result<(), String> {
         if Path::new(LINUX_HELPER).is_file() {
             cmd.arg(LINUX_HELPER);
         } else {
-            cmd.args(["/bin/sh", "-c", LINUX_INSTALL, "ingle-update"]);
+            cmd.args(["/bin/sh", "-c", LINUX_INSTALL, "pyr-update"]);
         }
         let status = cmd
             .arg(path)
@@ -491,23 +491,23 @@ pub fn install(path: &Path, sha256: &str) -> Result<(), String> {
         let exe = std::env::current_exe()
             .ok()
             .map(|p| PathBuf::from(p.to_string_lossy().trim_end_matches(" (deleted)").to_string()))
-            .unwrap_or_else(|| PathBuf::from("/usr/bin/ingle"));
+            .unwrap_or_else(|| PathBuf::from("/usr/bin/pyr"));
         // Reopen once this copy has quit (only one copy runs at a time).
         std::process::Command::new("sh")
             .args(["-c", "sleep 2; exec \"$0\"", &exe.to_string_lossy()])
             .spawn()
-            .map_err(|e| format!("installed, but couldn't reopen Ingle: {e}"))?;
+            .map_err(|e| format!("installed, but couldn't reopen Pyr: {e}"))?;
         Ok(())
     }
 }
 
 /// Run as root by `install` on Linux, with the package and its SHA-256: copied into a new
 /// root-only folder, checked there, installed from there. The package installs it as
-/// [`LINUX_HELPER`] (with its own password prompt, `com.firelitgames.ingle.install-update`).
+/// [`LINUX_HELPER`] (with its own password prompt, `com.firelitgames.pyr.install-update`).
 #[cfg_attr(windows, allow(dead_code))]
 const LINUX_INSTALL: &str = include_str!("../../../installer/linux/install-update");
 #[cfg_attr(windows, allow(dead_code))]
-const LINUX_HELPER: &str = "/usr/lib/ingle/install-update";
+const LINUX_HELPER: &str = "/usr/lib/pyr/install-update";
 
 #[cfg(test)]
 mod tests {
@@ -518,14 +518,14 @@ mod tests {
     fn linux_install_checks_the_copy_it_installs() {
         // The script, with apt-get standing in: a matching package gets to "apt-get" (here a
         // stand-in that records its argument); a changed one stops with code 3 before it.
-        let dir = std::env::temp_dir().join(format!("ingle-inst-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pyr-inst-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("bin")).unwrap();
         let fake = dir.join("bin").join("apt-get");
         std::fs::write(&fake, format!("#!/bin/sh\ncp \"$3\" {}/installed.deb\n", dir.display())).unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let pkg = dir.join("ingle.deb");
+        let pkg = dir.join("pyr.deb");
         std::fs::write(&pkg, b"the real package").unwrap();
         let path = format!("{}:{}", dir.join("bin").display(), std::env::var("PATH").unwrap_or_default());
         // Both ways it runs: the package's own copy, and the same script given to sh.
@@ -536,7 +536,7 @@ mod tests {
                     std::process::Command::new(helper)
                 } else {
                     let mut c = std::process::Command::new("/bin/sh");
-                    c.args(["-c", LINUX_INSTALL, "ingle-update"]);
+                    c.args(["-c", LINUX_INSTALL, "pyr-update"]);
                     c
                 };
                 cmd.env("PATH", &path).arg(&pkg).arg(sha).status().unwrap()
@@ -578,7 +578,7 @@ mod tests {
 
     #[test]
     fn an_old_or_stale_release_file_is_not_believed() {
-        let dir = std::env::temp_dir().join(format!("ingle-seen-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pyr-seen-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let m = |issued, expires| Manifest {
@@ -613,7 +613,7 @@ mod tests {
             assert_eq!(std::fs::metadata(&a).unwrap().permissions().mode() & 0o777, 0o700);
         }
         // A file swapped after the check is never installed.
-        let f = a.join("ingle-9.9.9.deb");
+        let f = a.join("pyr-9.9.9.deb");
         std::fs::write(&f, b"real").unwrap();
         let good = release::sha256_hex(b"real");
         std::fs::write(&f, b"evil").unwrap();
@@ -624,26 +624,26 @@ mod tests {
 
     #[test]
     fn old_downloads_are_cleaned_up_but_nothing_else() {
-        let base = std::env::temp_dir().join(format!("ingle-clean-test-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("pyr-clean-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(base.join("ingle-update-0123abcd")).unwrap();
-        std::fs::write(base.join("ingle-update-0123abcd").join("ingle-9.9.9.exe"), b"x").unwrap();
-        std::fs::create_dir_all(base.join("ingle-update")).unwrap();
+        std::fs::create_dir_all(base.join("pyr-update-0123abcd")).unwrap();
+        std::fs::write(base.join("pyr-update-0123abcd").join("pyr-9.9.9.exe"), b"x").unwrap();
+        std::fs::create_dir_all(base.join("pyr-update")).unwrap();
         std::fs::create_dir_all(base.join("someone-else")).unwrap();
-        std::fs::write(base.join("ingle-update-file"), b"not a folder").unwrap();
+        std::fs::write(base.join("pyr-update-file"), b"not a folder").unwrap();
         // Too new to touch yet.
         clean_old_downloads(&base, Duration::from_secs(3600));
-        assert!(base.join("ingle-update-0123abcd").exists());
+        assert!(base.join("pyr-update-0123abcd").exists());
         // Old enough: our folders go, everything else stays.
         clean_old_downloads(&base, Duration::ZERO);
-        assert!(!base.join("ingle-update-0123abcd").exists());
-        assert!(!base.join("ingle-update").exists());
+        assert!(!base.join("pyr-update-0123abcd").exists());
+        assert!(!base.join("pyr-update").exists());
         assert!(base.join("someone-else").exists());
-        assert!(base.join("ingle-update-file").exists());
+        assert!(base.join("pyr-update-file").exists());
         #[cfg(unix)]
         {
             // A link named like ours is left alone, and so is what it points at.
-            std::os::unix::fs::symlink(base.join("someone-else"), base.join("ingle-update-link")).unwrap();
+            std::os::unix::fs::symlink(base.join("someone-else"), base.join("pyr-update-link")).unwrap();
             clean_old_downloads(&base, Duration::ZERO);
             assert!(base.join("someone-else").exists());
         }

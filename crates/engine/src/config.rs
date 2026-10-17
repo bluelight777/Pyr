@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use ingle_proto::control::{ChannelId, MessageId, UserId};
-use ingle_proto::crypto::Identity;
-use ingle_proto::{APP_NAME, b64};
+use pyr_proto::control::{ChannelId, MessageId, UserId};
+use pyr_proto::crypto::Identity;
+use pyr_proto::{APP_NAME, b64};
 use serde::{Deserialize, Serialize};
 
 pub use crate::soundboard::SoundRef;
@@ -132,12 +132,12 @@ pub struct Settings {
     pub camera_quality: CameraQuality,
     pub screen_preset: ScreenPreset,
     pub share_audio: bool,
-    /// Open Ingle when Windows starts (like Discord), and then only in the tray.
+    /// Open Pyr when Windows starts (like Discord), and then only in the tray.
     pub start_with_windows: bool,
     pub start_hidden: bool,
-    /// No longer used: the close button always keeps Ingle running by the clock (Windows).
+    /// No longer used: the close button always keeps Pyr running by the clock (Windows).
     pub close_to_tray: bool,
-    /// The one-time notice that Ingle is still running by the clock has been shown.
+    /// The one-time notice that Pyr is still running by the clock has been shown.
     pub tray_note_seen: bool,
     /// Notification sounds (messages, people joining voice, streams).
     pub sounds: bool,
@@ -149,7 +149,7 @@ pub struct Settings {
     pub recent_emoji: Vec<String>,
     /// Skin tone for emoji that have them: 0 = default yellow, 1–5 light to dark.
     pub emoji_tone: u8,
-    /// A GIPHY API key of your own (otherwise the one built into Ingle, if any).
+    /// A GIPHY API key of your own (otherwise the one built into Pyr, if any).
     pub giphy_key: String,
     /// Underline misspelled words in the message box (right-click it to switch off).
     pub spellcheck: bool,
@@ -173,16 +173,16 @@ pub struct Settings {
     pub sound_keys: Vec<(String, SoundRef)>,
     /// GIFs kept in the GIF picker's Favorites (the star on a GIF, like Discord's), newest first.
     pub gif_favorites: Vec<GifFavorite>,
-    /// The skin in use: one installed from the Ingle Library, by its id (empty: Campfire,
-    /// Ingle's own).
+    /// The skin in use: one installed from the Pyr Library, by its id (empty: Campfire,
+    /// Pyr's own).
     pub skin: String,
     /// Plugins and skins starred in the Library (`skin:<id>` for a skin), oldest first.
     pub library_favorites: Vec<String>,
     /// How the Library is sorted: "name", "author", "newest" or "favorites".
     pub library_sort: String,
-    /// Send a report by itself when something goes wrong that Ingle can tell (screen sharing
+    /// Send a report by itself when something goes wrong that Pyr can tell (screen sharing
     /// or the camera won't start or stops working, a crash or a freeze last time), so it gets
-    /// fixed: what happened and Ingle's log, to the bug report server (see `bugs::auto_report`).
+    /// fixed: what happened and Pyr's log, to the bug report server (see `bugs::auto_report`).
     pub auto_reports: bool,
     /// The one-time notice that a report was sent by itself has been shown.
     pub auto_report_told: bool,
@@ -197,7 +197,7 @@ pub struct Settings {
     /// Do Not Disturb, like Discord's: no message sounds, calls don't ring or pop up a Windows
     /// notice, and everyone sees a red dot on my picture (see `idle`, which tells servers).
     pub dnd: bool,
-    /// What calls ring with (none: Ingle's own ring; see `ring`), and someone's own ringtone,
+    /// What calls ring with (none: Pyr's own ring; see `ring`), and someone's own ringtone,
     /// by their id (in place of that).
     pub ringtone: Option<Ringtone>,
     pub ringtones: std::collections::BTreeMap<UserId, Ringtone>,
@@ -207,7 +207,7 @@ pub struct Settings {
 }
 
 /// A ringtone: a soundboard sound (built in, or one of a server's), or a sound file from this
-/// PC, kept in the config folder's `rings` as an Ingle sound (see `Engine::add_ringtone_file`).
+/// PC, kept in the config folder's `rings` as a Pyr sound (see `Engine::add_ringtone_file`).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(default)]
 pub struct Ringtone {
@@ -339,7 +339,7 @@ pub struct Config {
     /// Mute and deafen, kept across restarts and updates (like Discord) so nobody comes back
     /// from an update with their microphone on. `None` until this PC first saves them.
     pub self_voice: Option<SelfVoice>,
-    /// Where backups of servers I own go (`None`: "Ingle Server Backups" in Documents).
+    /// Where backups of servers I own go (`None`: "Pyr Server Backups" in Documents).
     pub backup_dir: Option<PathBuf>,
     /// People I made sure are who they say, by id (see `verify`).
     pub verified: std::collections::BTreeMap<UserId, Verified>,
@@ -375,7 +375,7 @@ pub struct SelfVoice {
 /// Where the config lives. `profile` lets several identities coexist on one PC (for testing).
 pub fn config_dir(profile: Option<&str>) -> PathBuf {
     let profile = profile.filter(|p| valid_profile(p));
-    if let Ok(dir) = std::env::var("INGLE_HOME") {
+    if let Some(dir) = pyr_proto::env_var("HOME") {
         let base = PathBuf::from(dir);
         return match profile {
             Some(p) => base.join("profiles").join(p),
@@ -384,7 +384,7 @@ pub fn config_dir(profile: Option<&str>) -> PathBuf {
     }
     let base = directories::ProjectDirs::from("", "", APP_NAME)
         .map(|d| d.config_dir().to_path_buf())
-        .unwrap_or_else(|| PathBuf::from(format!(".{}", ingle_proto::APP_ID)));
+        .unwrap_or_else(|| PathBuf::from(format!(".{}", pyr_proto::APP_ID)));
     match profile {
         Some(p) => base.join("profiles").join(p),
         None => base,
@@ -451,6 +451,80 @@ fn create_private_dir(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Pyr was called Ingle before 0.8.0. The first time Pyr starts, it takes over Ingle's
+/// folders: the settings, the identity (so it's the same person on every server), skins and
+/// test profiles are copied (Ingle's folder stays as it was, as a backup), and the plugins,
+/// which can be big, are moved. Nothing happens once Pyr has a folder of its own, or with
+/// `PYR_HOME` (test setups). Run before anything opens the config folder (the app, the
+/// connector). Returns what it did, for the log.
+pub fn migrate_from_ingle() -> Vec<String> {
+    if pyr_proto::env_set("HOME") {
+        return Vec::new();
+    }
+    let dirs = |name: &str| directories::ProjectDirs::from("", "", name);
+    let (Some(new), Some(old)) = (dirs(APP_NAME), dirs(pyr_proto::OLD_APP_NAME)) else { return Vec::new() };
+    migrate_folders(old.config_dir(), new.config_dir(), &old.data_local_dir().join("plugins"), &new.data_local_dir().join("plugins"))
+}
+
+/// Files in Ingle's folder that stay behind: a running copy's lock and hand-over, its logs,
+/// and a half-finished update.
+const LEFT_BEHIND: &[&str] = &["instance.lock", "handoff", "ingle.log", "ingle.previous.log", "resume.json"];
+
+/// `migrate_from_ingle` with the folders given.
+pub fn migrate_folders(old_config: &Path, new_config: &Path, old_plugins: &Path, new_plugins: &Path) -> Vec<String> {
+    let mut did = Vec::new();
+    let has_files = |d: &Path| std::fs::read_dir(d).map(|mut r| r.next().is_some()).unwrap_or(false);
+    if has_files(old_config) && !has_files(new_config) {
+        match copy_tree(old_config, new_config) {
+            Ok(n) => {
+                let _ = std::fs::write(new_config.join("from-ingle.txt"), format!("Copied from {} by Pyr (it was called Ingle before 0.8.0).\n", old_config.display()));
+                did.push(format!("copied Ingle's settings and identity ({n} files) from {} to {}", old_config.display(), new_config.display()));
+            }
+            Err(e) => did.push(format!("couldn't copy Ingle's settings from {}: {e:#}", old_config.display())),
+        }
+    }
+    // (Moved only into an empty place: Pyr's own plugins are never mixed with Ingle's.)
+    if has_files(old_plugins) && !has_files(new_plugins) {
+        if let Some(parent) = new_plugins.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::remove_dir(new_plugins);
+        let how = match std::fs::rename(old_plugins, new_plugins) {
+            Ok(()) => Ok("moved"),
+            // (Another drive, or a file in use: copied instead, Ingle's left as it is.)
+            Err(_) => copy_tree(old_plugins, new_plugins).map(|_| "copied"),
+        };
+        match how {
+            Ok(how) => did.push(format!("{how} Ingle's plugins from {} to {}", old_plugins.display(), new_plugins.display())),
+            Err(e) => did.push(format!("couldn't bring Ingle's plugins over from {}: {e:#}", old_plugins.display())),
+        }
+    }
+    did
+}
+
+/// Copies a folder and everything in it (but `LEFT_BEHIND` and links), keeping it private;
+/// how many files.
+fn copy_tree(from: &Path, to: &Path) -> Result<usize> {
+    create_private_dir(to)?;
+    let mut n = 0;
+    for entry in std::fs::read_dir(from).with_context(|| format!("reading {}", from.display()))? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let kind = entry.file_type()?;
+        if LEFT_BEHIND.iter().any(|l| name == *l) || kind.is_symlink() {
+            continue;
+        }
+        let (src, dst) = (entry.path(), to.join(&name));
+        if kind.is_dir() {
+            n += copy_tree(&src, &dst)?;
+        } else if kind.is_file() {
+            std::fs::copy(&src, &dst).with_context(|| format!("copying {}", src.display()))?;
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
 /// A profile name is a plain word: never a path (which could point the config, and the
 /// identity key, somewhere else, even a network share).
 pub fn valid_profile(p: &str) -> bool {
@@ -461,9 +535,37 @@ pub fn valid_profile(p: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// Ingle's folders come over to Pyr once: the settings and identity copied (Ingle's kept),
+    /// the plugins moved, a running copy's lock and the logs left behind.
+    #[test]
+    fn ingles_folders_come_over_once() {
+        let root = std::env::temp_dir().join(format!("pyr-migrate-{}-{}", std::process::id(), pyr_proto::now_ms()));
+        let (old_cfg, new_cfg) = (root.join("Ingle/config"), root.join("Pyr/config"));
+        let (old_pl, new_pl) = (root.join("Ingle/data/plugins"), root.join("Pyr/data/plugins"));
+        std::fs::create_dir_all(old_cfg.join("profiles/b")).unwrap();
+        std::fs::create_dir_all(old_pl.join("chim")).unwrap();
+        for (f, t) in [("config.json", "{}"), ("identity.key", "seed"), ("instance.lock", ""), ("ingle.log", "log"), ("profiles/b/identity.key", "b")] {
+            std::fs::write(old_cfg.join(f), t).unwrap();
+        }
+        std::fs::write(old_pl.join("installed.json"), "[]").unwrap();
+        std::fs::write(old_pl.join("chim/chim.exe"), "exe").unwrap();
+        let did = migrate_folders(&old_cfg, &new_cfg, &old_pl, &new_pl);
+        assert_eq!(did.len(), 2, "{did:?}");
+        assert_eq!(std::fs::read_to_string(new_cfg.join("identity.key")).unwrap(), "seed");
+        assert_eq!(std::fs::read_to_string(new_cfg.join("profiles/b/identity.key")).unwrap(), "b");
+        assert!(!new_cfg.join("instance.lock").exists() && !new_cfg.join("ingle.log").exists());
+        assert!(old_cfg.join("identity.key").exists(), "Ingle's own copy stays");
+        assert_eq!(std::fs::read_to_string(new_pl.join("chim/chim.exe")).unwrap(), "exe");
+        // Once only: Pyr's own settings are never replaced.
+        std::fs::write(new_cfg.join("config.json"), "{\"pyr\":1}").unwrap();
+        assert!(migrate_folders(&old_cfg, &new_cfg, &old_pl, &new_pl).is_empty());
+        assert_eq!(std::fs::read_to_string(new_cfg.join("config.json")).unwrap(), "{\"pyr\":1}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn identity_persists() {
-        let dir = std::env::temp_dir().join(format!("ingle-test-{}", ingle_proto::now_ms()));
+        let dir = std::env::temp_dir().join(format!("pyr-test-{}", pyr_proto::now_ms()));
         let a = load_or_create_identity(&dir).unwrap();
         let b = load_or_create_identity(&dir).unwrap();
         assert_eq!(a.user_id(), b.user_id());

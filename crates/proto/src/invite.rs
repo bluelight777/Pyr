@@ -1,18 +1,18 @@
-//! Invite links: `ingle://host/CODE/FP`, where FP is the start of the base64url SHA-256 of
+//! Invite links: `pyr://host/CODE/FP`, where FP is the start of the base64url SHA-256 of
 //! the server's certificate (the port is left out when it's the usual 7766).
 //!
 //! The fingerprint pins the server's self-signed TLS certificate, so connections are
 //! authenticated without any certificate authority. Links carry its first 9 bytes (72 bits):
 //! plenty to stop an impostor server (it would need a certificate whose hash starts the same,
 //! ~2^72 tries), and the app learns and pins the full one on first connect. The older long
-//! form `ingle://host:port/CODE?fp=<all 32 bytes>` is still accepted.
+//! form `pyr://host:port/CODE?fp=<all 32 bytes>` is still accepted.
 
 use crate::b64;
 
-/// Where invite links open on the web: firelitgames.com/ingle, which offers Ingle to anyone
+/// Where invite links open on the web: pyr.gg, which offers Pyr to anyone
 /// who doesn't have it yet and a button that opens the invite in it. A web link can be clicked
-/// anywhere links can (chat apps don't make `ingle://` links clickable).
-pub const WEB_INVITE: &str = "https://firelitgames.com/ingle/";
+/// anywhere links can (chat apps don't make `pyr://` links clickable).
+pub const WEB_INVITE: &str = "https://pyr.gg/";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InviteLink {
@@ -29,7 +29,7 @@ pub const SHORT_FP: usize = 9;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum InviteError {
-    #[error("the link is incomplete (it should look like ingle://host/code/xxxxxxxxxxxx)")]
+    #[error("the link is incomplete (it should look like pyr://host/code/xxxxxxxxxxxx)")]
     MissingFingerprint,
     #[error("the server fingerprint in the link is not valid")]
     BadFingerprint,
@@ -46,7 +46,8 @@ impl InviteLink {
             return InviteLink::parse(&inner);
         }
         let mut s = input.trim();
-        for scheme in [format!("{}://", crate::APP_ID), "https://".into(), "http://".into()] {
+        // (`ingle://`: links made before Pyr was called Pyr.)
+        for scheme in [format!("{}://", crate::APP_ID), format!("{}://", crate::OLD_APP_ID), "https://".into(), "http://".into()] {
             // (`get`: pasted text can have a multi-byte character right where the scheme ends.)
             if s.get(..scheme.len()).is_some_and(|p| p.eq_ignore_ascii_case(&scheme)) {
                 s = &s[scheme.len()..];
@@ -109,7 +110,7 @@ impl InviteLink {
         }
     }
 
-    /// The short form, `ingle://host/CODE/FP` (the port only when it isn't 7766).
+    /// The short form, `pyr://host/CODE/FP` (the port only when it isn't 7766).
     pub fn to_url(&self) -> String {
         let host = if self.port == crate::DEFAULT_PORT {
             if self.host.contains(':') { format!("[{}]", self.host) } else { self.host.clone() }
@@ -129,9 +130,9 @@ impl InviteLink {
         InviteLink::parse(link).map(|l| l.to_url()).unwrap_or_else(|_| link.to_string())
     }
 
-    /// The web form, `https://firelitgames.com/ingle/#n=<server name>&join=<host>/<code>/<fp>`.
+    /// The web form, `https://pyr.gg/#n=<server name>&join=<host>/<code>/<fp>`.
     /// Everything after the `#` stays in the browser (browsers never send it to the website),
-    /// where the page reads it to show the server's name and an Open invite in Ingle button.
+    /// where the page reads it to show the server's name and an Open invite in Pyr button.
     pub fn to_web_url(&self, server_name: &str) -> String {
         let link = self.to_url();
         let rest = link.strip_prefix(&format!("{}://", crate::APP_ID)).unwrap_or(&link);
@@ -151,7 +152,7 @@ impl InviteLink {
     }
 }
 
-/// The `ingle://` link inside a web invite link, if `input` is one (see
+/// The `pyr://` link inside a web invite link, if `input` is one (see
 /// [`InviteLink::to_web_url`]). Only a link with `join=` after its `#` counts.
 fn web_inner(input: &str) -> Option<String> {
     let s = input.trim();
@@ -163,7 +164,8 @@ fn web_inner(input: &str) -> Option<String> {
     }
     let rest = percent_decode(&fragment[at + "join=".len()..]);
     let scheme = format!("{}://", crate::APP_ID);
-    let rest = rest.strip_prefix(&scheme).unwrap_or(&rest);
+    let old = format!("{}://", crate::OLD_APP_ID);
+    let rest = rest.strip_prefix(&scheme).or_else(|| rest.strip_prefix(&old)).unwrap_or(&rest);
     (!rest.is_empty()).then(|| format!("{scheme}{rest}"))
 }
 
@@ -229,8 +231,8 @@ mod tests {
 
     #[test]
     fn odd_text_is_no_link_not_a_crash() {
-        // A multi-byte character right where "ingle://" would end.
-        for t in ["ingle:/€abc", "http:/€", "é", "ingle:€€€€€€", "https:/\u{1F525}x"] {
+        // A multi-byte character right where "pyr://" would end.
+        for t in ["pyr:/€abc", "http:/€", "é", "pyr:€€€€€€", "https:/\u{1F525}x"] {
             let _ = InviteLink::parse(t);
         }
     }
@@ -243,7 +245,7 @@ mod tests {
         }
         let link = InviteLink::new("2.24.121.231".into(), 7766, Some("xykyyqhf".into()), fp);
         let url = link.to_url();
-        assert_eq!(url.len(), "ingle://2.24.121.231/xykyyqhf/".len() + 12, "{url}");
+        assert_eq!(url.len(), "pyr://2.24.121.231/xykyyqhf/".len() + 12, "{url}");
         let back = InviteLink::parse(&url).unwrap();
         assert_eq!((back.host.as_str(), back.port, back.code.as_deref(), back.fp_len), ("2.24.121.231", 7766, Some("xykyyqhf"), SHORT_FP));
         assert!(back.matches(&fp) && !back.is_full());
@@ -255,8 +257,8 @@ mod tests {
         assert!(back.matches(&other), "only the first bytes are pinned by a short link");
         // Other ports stay in the link; the long form still works and shortens.
         let l = InviteLink::new("camp.example.com".into(), 9000, Some("abc".into()), fp);
-        assert!(l.to_url().starts_with("ingle://camp.example.com:9000/abc/"));
-        let long = format!("ingle://2.24.121.231:7766/xykyyqhf?fp={}", b64::encode(&fp));
+        assert!(l.to_url().starts_with("pyr://camp.example.com:9000/abc/"));
+        let long = format!("pyr://2.24.121.231:7766/xykyyqhf?fp={}", b64::encode(&fp));
         let p = InviteLink::parse(&long).unwrap();
         assert!(p.is_full() && p.matches(&fp));
         assert_eq!(InviteLink::shorten(&long), url);
@@ -269,7 +271,7 @@ mod tests {
     #[test]
     fn ipv6_and_defaults() {
         let fp = b64::encode(&[1u8; 32]);
-        let l = InviteLink::parse(&format!("ingle://[::1]:9000/x?fp={fp}")).unwrap();
+        let l = InviteLink::parse(&format!("pyr://[::1]:9000/x?fp={fp}")).unwrap();
         assert_eq!(l.host, "::1");
         assert_eq!(l.port, 9000);
         assert_eq!(l.authority(), "[::1]:9000");
@@ -284,7 +286,7 @@ mod tests {
         fp[0] = 9;
         let link = InviteLink::new("2.24.121.231".into(), 7766, Some("xykyyqhf".into()), fp);
         let web = link.to_web_url("Brethren of Blood");
-        assert_eq!(web, format!("https://firelitgames.com/ingle/#n=Brethren%20of%20Blood&join=2.24.121.231/xykyyqhf/{}", b64::encode(&fp[..SHORT_FP])));
+        assert_eq!(web, format!("https://pyr.gg/#n=Brethren%20of%20Blood&join=2.24.121.231/xykyyqhf/{}", b64::encode(&fp[..SHORT_FP])));
         // Pasted into Join a server, it's the same invite.
         assert_eq!(InviteLink::parse(&web).unwrap(), InviteLink::parse(&link.to_url()).unwrap());
         assert_eq!(InviteLink::web(&link.to_url(), "Camp"), link.to_web_url("Camp"));
@@ -298,7 +300,7 @@ mod tests {
         assert!(w.contains("join=%5B::1%5D:9000/abc/"), "{w}");
         let back = InviteLink::parse(&w).unwrap();
         assert_eq!((back.host.as_str(), back.port), ("::1", 9000));
-        let escaped = format!("https://firelitgames.com/ingle/#join=ingle%3A%2F%2F2.24.121.231%2Fxykyyqhf%2F{}", b64::encode(&fp[..SHORT_FP]));
+        let escaped = format!("https://pyr.gg/#join=pyr%3A%2F%2F2.24.121.231%2Fxykyyqhf%2F{}", b64::encode(&fp[..SHORT_FP]));
         assert_eq!(InviteLink::parse(&escaped).unwrap().host, "2.24.121.231");
         // Not web invites: a plain https link to a server, and a page link without join=.
         assert!(web_inner("https://example.com/x#notjoin=1").is_none());
@@ -308,10 +310,31 @@ mod tests {
 
     #[test]
     fn errors() {
-        assert_eq!(InviteLink::parse("ingle://host:1/x").unwrap_err(), InviteError::MissingFingerprint);
-        assert_eq!(InviteLink::parse("ingle://host:1/x?fp=zz").unwrap_err(), InviteError::BadFingerprint);
-        assert_eq!(InviteLink::parse("ingle://host/x/abc").unwrap_err(), InviteError::BadFingerprint);
+        assert_eq!(InviteLink::parse("pyr://host:1/x").unwrap_err(), InviteError::MissingFingerprint);
+        assert_eq!(InviteLink::parse("pyr://host:1/x?fp=zz").unwrap_err(), InviteError::BadFingerprint);
+        assert_eq!(InviteLink::parse("pyr://host/x/abc").unwrap_err(), InviteError::BadFingerprint);
         let fp = b64::encode(&[1u8; 32]);
-        assert_eq!(InviteLink::parse(&format!("ingle://host:99999/x?fp={fp}")).unwrap_err(), InviteError::BadPort);
+        assert_eq!(InviteLink::parse(&format!("pyr://host:99999/x?fp={fp}")).unwrap_err(), InviteError::BadPort);
+    }
+
+    /// Links made before Pyr was called Pyr keep working: `ingle://` ones, and web ones on
+    /// firelitgames.com/ingle (new links are `pyr://` and pyr.gg).
+    #[test]
+    fn links_from_ingle_still_work() {
+        let fp = [9u8; 32];
+        let new = InviteLink::new("play.example.com".into(), 7766, Some("abc".into()), fp);
+        let short = b64::encode(&fp[..SHORT_FP]);
+        for old in [
+            format!("ingle://play.example.com/abc/{short}"),
+            format!("INGLE://play.example.com/abc/{short}"),
+            format!("https://firelitgames.com/ingle/#n=Game%20Night&join=play.example.com/abc/{short}"),
+            format!("https://firelitgames.com/ingle/#join=ingle://play.example.com/abc/{short}"),
+        ] {
+            let l = InviteLink::parse(&old).unwrap_or_else(|e| panic!("{old}: {e}"));
+            assert_eq!((l.host.as_str(), l.port, l.code.as_deref()), ("play.example.com", 7766, Some("abc")), "{old}");
+            assert!(l.matches(&fp), "{old}");
+        }
+        assert!(new.to_url().starts_with("pyr://"));
+        assert!(new.to_web_url("Game Night").starts_with("https://pyr.gg/#n=Game%20Night&join=play.example.com/abc/"));
     }
 }

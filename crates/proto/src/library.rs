@@ -1,8 +1,8 @@
-//! The Ingle Library: plugins anyone can install from Ingle, listed in
-//! `firelitgames.com/ingle/library/index.json`.
+//! The Pyr Library: plugins anyone can install from Pyr, listed in
+//! `pyr.gg/library/index.json`.
 //!
 //! Every plugin in it was sent in as Rust source, reviewed, and built from that source by
-//! Firelit Games, who signs the list with the same offline key as Ingle's releases (with its
+//! Firelit Games, who signs the list with the same offline key as Pyr's releases (with its
 //! own context, so a list can't pass for a release or the other way round). The app only
 //! believes a list with that signature, within its dates and no older than one it has already
 //! seen; and only installs files whose SHA-256 the list gives. So someone who breaks into the
@@ -10,12 +10,12 @@
 //!
 //! Two kinds of plugin:
 //! - **Programs**: Rust programs of their own (like Chimbrowser, a browser), installed into
-//!   Ingle's plugins folder and opened from Ingle. They run like any program you install.
-//! - **Add-ons**: Rust built to WebAssembly, run inside Ingle in a sandbox: no files, no
-//!   network, no imports at all; just what Ingle passes in (see `ingle-plugin`, the kit).
+//!   Pyr's plugins folder and opened from Pyr. They run like any program you install.
+//! - **Add-ons**: Rust built to WebAssembly, run inside Pyr in a sandbox: no files, no
+//!   network, no imports at all; just what Pyr passes in (see `pyr-plugin`, the kit).
 //!
 //! And **skins** ([`crate::skin`]): colors, a picture, fonts and sounds, no code at all. They're
-//! listed apart (`skins`), so Ingle from before skins reads the list as it always has.
+//! listed apart (`skins`), so Pyr from before skins reads the list as it always has.
 
 use serde::{Deserialize, Serialize};
 
@@ -53,9 +53,9 @@ pub fn valid_path(path: &str) -> bool {
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
-    /// A program of its own, opened from Ingle.
+    /// A program of its own, opened from Pyr.
     Program,
-    /// WebAssembly run inside Ingle, in a sandbox.
+    /// WebAssembly run inside Pyr, in a sandbox.
     Addon,
 }
 
@@ -84,7 +84,7 @@ impl Permission {
     pub fn describe(self) -> &'static str {
         match self {
             Permission::Commands => "Adds /commands to chat. When you use one, what it answers is sent as your message.",
-            Permission::Panel => "Shows a panel of its own inside Ingle.",
+            Permission::Panel => "Shows a panel of its own inside Pyr.",
             Permission::Storage => "Keeps a little data of its own on this PC.",
         }
     }
@@ -217,7 +217,7 @@ pub struct SkinEntry {
     #[serde(default)]
     pub license: String,
     pub files: Vec<File>,
-    /// A picture of Ingle wearing it (one of `files`, or apart).
+    /// A picture of Pyr wearing it (one of `files`, or apart).
     #[serde(default)]
     pub preview: Option<File>,
     /// What reviewing it found worth knowing (shown with it).
@@ -282,7 +282,7 @@ pub struct Library {
     pub issued: i64,
     pub expires: i64,
     pub plugins: Vec<Entry>,
-    /// Skins (Ingle 0.7.5 and later).
+    /// Skins (Pyr 0.7.5 and later).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skins: Vec<SkinEntry>,
 }
@@ -469,7 +469,7 @@ mod tests {
         let back = open(&signed, &key.user_id()).unwrap();
         assert_eq!(back.skins, vec![skin()], "the bad ones and the second blood-moon are dropped");
         assert_eq!(back.find_skin("blood-moon").unwrap().size(), 30);
-        // Ingle from before skins: the list has no `skins` for it, and reads exactly as before.
+        // Pyr from before skins: the list has no `skins` for it, and reads exactly as before.
         #[derive(Deserialize)]
         struct Before {
             plugins: Vec<Entry>,

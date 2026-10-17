@@ -1,5 +1,5 @@
 //! Idle, like Discord: after five minutes without a key or the mouse anywhere on the PC (and
-//! nothing said in a call), Ingle tells your servers you're idle, and everyone sees a moon on
+//! nothing said in a call), Pyr tells your servers you're idle, and everyone sees a moon on
 //! your picture instead of the green dot. Touching anything brings the green dot back. You can
 //! also say you're idle yourself (`Engine::set_idle_by_hand`), and then it stays until you
 //! change it. Do Not Disturb (`Engine::set_dnd`) is told to servers the same way.
@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use ingle_proto::control::{DND_FEATURE, IDLE_FEATURE, Request};
+use pyr_proto::control::{DND_FEATURE, IDLE_FEATURE, Request};
 
 use crate::Shared;
 use crate::state::ConnStatus;
@@ -16,7 +16,7 @@ use crate::state::ConnStatus;
 /// How long without input before you're idle (Discord's is commonly given as five minutes too).
 pub const IDLE_AFTER: Duration = Duration::from_secs(5 * 60);
 
-/// How often Ingle looks (and at the latest how soon a server hears you're back).
+/// How often Pyr looks (and at the latest how soon a server hears you're back).
 pub const CHECK_EVERY: Duration = Duration::from_secs(5);
 
 /// How long since the last key press or mouse move anywhere on this PC, when the system says.
@@ -63,10 +63,10 @@ pub fn since_last_input() -> Option<Duration> {
     None
 }
 
-/// Whether you're idle: nothing on the PC (where the system says; otherwise in Ingle's own
+/// Whether you're idle: nothing on the PC (where the system says; otherwise in Pyr's own
 /// window) for `IDLE_AFTER`, and nothing said in a call for as long. Each is how long ago.
-pub fn idle_now(system: Option<Duration>, in_ingle: Duration, spoke: Option<Duration>) -> bool {
-    let quiet = system.map_or(in_ingle, |s| s.min(in_ingle));
+pub fn idle_now(system: Option<Duration>, in_pyr: Duration, spoke: Option<Duration>) -> bool {
+    let quiet = system.map_or(in_pyr, |s| s.min(in_pyr));
     let quiet = spoke.map_or(quiet, |s| s.min(quiet));
     quiet >= IDLE_AFTER
 }
@@ -78,7 +78,7 @@ fn ago(now_ms: i64, then_ms: i64) -> Duration {
 /// Starts the thread that looks every `CHECK_EVERY` (and when woken by `wake`).
 pub(crate) fn start(shared: &Arc<Shared>) {
     let weak: Weak<Shared> = Arc::downgrade(shared);
-    let thread = std::thread::Builder::new().name("ingle-idle".into()).spawn(move || {
+    let thread = std::thread::Builder::new().name("pyr-idle".into()).spawn(move || {
         loop {
             match weak.upgrade() {
                 Some(shared) => check(&shared),
@@ -102,14 +102,14 @@ pub(crate) fn wake(shared: &Shared) {
 
 /// Works out whether you're idle, shows it, and tells every server that doesn't know yet.
 fn check(shared: &Arc<Shared>) {
-    let now = ingle_proto::now_ms();
-    let in_ingle = ago(now, shared.last_activity_ms.load(Ordering::Relaxed));
+    let now = pyr_proto::now_ms();
+    let in_pyr = ago(now, shared.last_activity_ms.load(Ordering::Relaxed));
     let spoke = shared.call.lock().as_ref().and_then(|c| c.audio.as_ref()).map(|a| a.controls.last_spoke_ms.load(Ordering::Relaxed)).filter(|t| *t > 0).map(|t| ago(now, t));
     let (by_hand, dnd) = {
         let st = shared.state.read_recursive();
         (st.settings.idle_by_hand, st.settings.dnd)
     };
-    let idle = by_hand || idle_now(since_last_input(), in_ingle, spoke);
+    let idle = by_hand || idle_now(since_last_input(), in_pyr, spoke);
     let (mut tell, mut tell_dnd) = (Vec::new(), Vec::new());
     let changed = {
         let mut st = shared.state.write();
@@ -156,12 +156,12 @@ mod tests {
         let s = Duration::from_secs;
         assert!(idle_now(Some(s(301)), s(600), None));
         assert!(!idle_now(Some(s(299)), s(600), None));
-        // Using Ingle counts, whatever the system says.
+        // Using Pyr counts, whatever the system says.
         assert!(!idle_now(Some(s(900)), s(5), None));
         // So does talking in a call.
         assert!(!idle_now(Some(s(900)), s(900), Some(s(30))));
         assert!(idle_now(Some(s(900)), s(900), Some(s(400))));
-        // Where the system can't say, Ingle's own window is what counts.
+        // Where the system can't say, Pyr's own window is what counts.
         assert!(idle_now(None, s(600), None));
         assert!(!idle_now(None, s(60), None));
         assert_eq!(ago(10_000, 4_000), s(6));

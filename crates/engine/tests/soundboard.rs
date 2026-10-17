@@ -1,4 +1,4 @@
-//! The soundboard end to end: a real server and two headless clients in a call. Ingle's own
+//! The soundboard end to end: a real server and two headless clients in a call. Pyr's own
 //! sounds, a server's own (added from a cut of a file), one from another server (sent to the
 //! call's server first), muting someone's sounds, stopping them, editing and deleting, who may
 //! add them, and the join sound.
@@ -6,15 +6,15 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ingle_engine::audio::{AudioInput, AudioOutput};
-use ingle_engine::config::{NoiseSuppression, Settings, SoundRef};
-use ingle_engine::state::ConnStatus;
-use ingle_engine::{Engine, EngineOptions, soundboard};
-use ingle_proto::control::{ChannelKind, SOUNDBOARD_FEATURE};
+use pyr_engine::audio::{AudioInput, AudioOutput};
+use pyr_engine::config::{NoiseSuppression, Settings, SoundRef};
+use pyr_engine::state::ConnStatus;
+use pyr_engine::{Engine, EngineOptions, soundboard};
+use pyr_proto::control::{ChannelKind, SOUNDBOARD_FEATURE};
 use parking_lot::Mutex;
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("ingle-sb-{}-{}", name, ingle_proto::now_ms()));
+    let d = std::env::temp_dir().join(format!("pyr-sb-{}-{}", name, pyr_proto::now_ms()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
@@ -22,8 +22,8 @@ fn temp_dir(name: &str) -> std::path::PathBuf {
 /// A client with a silent "microphone" whose "speakers" record what it plays.
 fn bot(name: &str, heard: Arc<Mutex<Vec<f32>>>) -> Engine {
     let dir = temp_dir(name);
-    let cfg = ingle_engine::config::Config { display_name: name.to_string(), ..Default::default() };
-    ingle_engine::config::save_config(&dir, &cfg).unwrap();
+    let cfg = pyr_engine::config::Config { display_name: name.to_string(), ..Default::default() };
+    pyr_engine::config::save_config(&dir, &cfg).unwrap();
     let factory = move |_s: &Settings| {
         let heard = heard.clone();
         let input = AudioInput::Synthetic(Box::new(|buf: &mut [f32]| buf.fill(0.0)));
@@ -106,7 +106,7 @@ async fn soundboard_end_to_end() {
     let start = |name: &str| {
         let name = name.to_string();
         async move {
-            ingle_server::start(ingle_server::ServerConfig {
+            pyr_server::start(pyr_server::ServerConfig {
                 data_dir: temp_dir(&name),
                 bind: "127.0.0.1:0".parse().unwrap(),
                 public_host: Some("127.0.0.1".into()),
@@ -152,7 +152,7 @@ async fn soundboard_end_to_end() {
     let quiet = listen(&heard_b, 600).await;
     assert!(rms(&quiet) < 0.001, "the call is quiet to start with ({})", rms(&quiet));
 
-    // ---- one of Ingle's own: everyone hears it (Alice too), and sees who played it
+    // ---- one of Pyr's own: everyone hears it (Alice too), and sees who played it
     let ding = soundboard::builtin("ding").unwrap().sound_ref();
     heard_a.lock().clear();
     heard_b.lock().clear();

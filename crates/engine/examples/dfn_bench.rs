@@ -1,5 +1,5 @@
 //! DeepFilterNet3 on a 48 kHz mono WAV, 10 ms at a time: how long each frame takes, and the
-//! result to listen to.  cargo run --release -p ingle-engine --example dfn_bench -- in.wav out.wav
+//! result to listen to.  cargo run --release -p pyr-engine --example dfn_bench -- in.wav out.wav
 use std::time::Instant;
 
 fn read_wav(p: &str) -> Vec<f32> {

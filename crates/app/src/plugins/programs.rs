@@ -1,10 +1,10 @@
-//! Programs from the Ingle Library open inside Ingle. Ingle starts the program and, on Windows,
+//! Programs from the Pyr Library open inside Pyr. Pyr starts the program and, on Windows,
 //! takes its window in: no frame or taskbar button of its own, kept right over the program's
-//! page in Ingle's window (moving, resizing, minimizing and hiding to the tray with Ingle), and
-//! closed when Ingle quits. Pop out puts it back on its own.
+//! page in Pyr's window (moving, resizing, minimizing and hiding to the tray with Pyr), and
+//! closed when Pyr quits. Pop out puts it back on its own.
 //!
-//! The program's window stays a window of its own (owned by Ingle's) rather than becoming part
-//! of Ingle's, so nothing Ingle draws can go over it: it steps aside while a menu or dialog is
+//! The program's window stays a window of its own (owned by Pyr's) rather than becoming part
+//! of Pyr's, so nothing Pyr draws can go over it: it steps aside while a menu or dialog is
 //! open, and makes room for toasts and calls ringing. Elsewhere (there are no programs for
 //! Linux yet) a program opens in a window of its own, as before.
 
@@ -15,13 +15,13 @@ use eframe::egui::{self, Rect};
 
 use super::install::InstalledPlugin;
 
-/// A program Ingle started.
+/// A program Pyr started.
 pub struct Program {
     pub id: String,
     pub name: String,
     child: Child,
     pub started: Instant,
-    /// Out on its own (Pop out): Ingle leaves its window alone.
+    /// Out on its own (Pop out): Pyr leaves its window alone.
     pub popped: bool,
     #[cfg(windows)]
     win: win::Embedded,
@@ -40,13 +40,13 @@ impl Program {
         }
     }
 
-    /// Opening for a while now with no window to show (it may have one Ingle can't find).
+    /// Opening for a while now with no window to show (it may have one Pyr can't find).
     pub fn slow(&self) -> bool {
         !self.ready() && self.started.elapsed() > Duration::from_secs(20)
     }
 }
 
-/// What Ingle shows over a program's page, for the program to keep clear of (its window can't
+/// What Pyr shows over a program's page, for the program to keep clear of (its window can't
 /// be drawn over).
 #[derive(Default, Clone)]
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -67,7 +67,7 @@ impl Programs {
         self.open.iter().find(|p| p.id == id)
     }
 
-    /// Starts an installed program (after checking its files): inside Ingle on Windows.
+    /// Starts an installed program (after checking its files): inside Pyr on Windows.
     pub fn start(&mut self, dir: &std::path::Path, p: &InstalledPlugin) -> Result<(), String> {
         if self.get(&p.id).is_some() {
             return Ok(());
@@ -89,7 +89,7 @@ impl Programs {
 
     /// Each frame: programs that quit are let go of (their names returned), new ones' windows
     /// are found and taken in, and each is put where it goes: `shown` over `area` (points, in
-    /// Ingle's window), clear of `over`; the others hidden.
+    /// Pyr's window), clear of `over`; the others hidden.
     pub fn step(&mut self, ctx: &egui::Context, shown: Option<&str>, area: Option<Rect>, over: &Overlays) -> Vec<String> {
         let mut closed = Vec::new();
         self.open.retain_mut(|p| match p.child.try_wait() {
@@ -147,7 +147,7 @@ impl Programs {
         }
     }
 
-    /// Ingle is quitting: close every program it took in. One that's still open after a moment
+    /// Pyr is quitting: close every program it took in. One that's still open after a moment
     /// (asking whether to save something, say) is put out on its own to finish, rather than
     /// ended; one that's stopped responding is ended.
     pub fn close_all(&mut self) {
@@ -185,7 +185,7 @@ impl Programs {
             #[cfg(not(windows))]
             let _ = p.child.kill();
         }
-        // (What's still open stays open after Ingle.)
+        // (What's still open stays open after Pyr.)
         #[cfg(windows)]
         win::let_go();
     }
@@ -209,8 +209,8 @@ fn clear_of(area: Rect, keep: &[Rect]) -> Rect {
 }
 
 /// What's left of a program's frame around the part it draws in, in pixels (Windows still draws
-/// it): some programs keep a frame Ingle can't take off, like an undecorated window that keeps
-/// room for its shadow. Ingle makes such a window that much bigger, so the part the program
+/// it): some programs keep a frame Pyr can't take off, like an undecorated window that keeps
+/// room for its shadow. Pyr makes such a window that much bigger, so the part the program
 /// draws in fills the page to its edges, and cuts the rest off.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -244,15 +244,15 @@ impl Insets {
     }
 }
 
-/// Ingle hid to the tray (Windows): hide the programs with it (a window it owns doesn't hide by
-/// itself). They're put back by the next frame once Ingle's window is back.
+/// Pyr hid to the tray (Windows): hide the programs with it (a window it owns doesn't hide by
+/// itself). They're put back by the next frame once Pyr's window is back.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn hide_all() {
     #[cfg(windows)]
     win::hide_all();
 }
 
-/// Ingle is quitting (or updating) from outside the window's frames (the tray icon's Quit, the
+/// Pyr is quitting (or updating) from outside the window's frames (the tray icon's Quit, the
 /// installer): close the programs it took in, and end any that won't close.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn close_all_now() {
@@ -260,7 +260,7 @@ pub fn close_all_now() {
     win::close_all_now();
 }
 
-/// The window in front is one of the programs Ingle took in (so Ingle counts as in front).
+/// The window in front is one of the programs Pyr took in (so Pyr counts as in front).
 #[cfg(windows)]
 pub fn is_embedded(hwnd: isize) -> bool {
     win::is_embedded(hwnd)
@@ -308,7 +308,7 @@ mod win {
     pub struct Embedded {
         pub pid: u32,
         pub hwnd: Option<isize>,
-        /// Its styles before Ingle took it in (put back by Pop out).
+        /// Its styles before Pyr took it in (put back by Pop out).
         styles: Option<(isize, isize)>,
         /// Where it was put last (screen pixels), and whether it's showing.
         placed: Option<(i32, i32, i32, i32)>,
@@ -324,7 +324,7 @@ mod win {
             Embedded { pid, hwnd: None, styles: None, placed: None, showing: false, inset: Insets::default(), clipped: None }
         }
 
-        /// `place`: where it goes (physical pixels in Ingle's window), or hidden.
+        /// `place`: where it goes (physical pixels in Pyr's window), or hidden.
         pub fn step(&mut self, place: Option<Rect>) {
             let Some(main) = crate::tray::main_window() else { return };
             if self.hwnd.is_some_and(|h| unsafe { !IsWindow(Some(hwnd(h))).as_bool() }) {
@@ -340,7 +340,7 @@ mod win {
             let w = hwnd(h);
             // Not responding: leave it alone until it is again (anything asked of its window
             // would wait for it), and gone full screen (a video, say): until it's back (shown
-            // whole meanwhile). Before Ingle has put it anywhere, a window as big as the screen
+            // whole meanwhile). Before Pyr has put it anywhere, a window as big as the screen
             // is only how it started (on a small screen, say): it goes in its page.
             if hung(w) {
                 return;
@@ -368,7 +368,7 @@ mod win {
                         if self.placed.is_none() || self.placed.map(|p| (p.0, p.1, p.0 + p.2, p.1 + p.3)) == now {
                             let found = insets(w);
                             if found != self.inset {
-                                tracing::info!(pid = self.pid, ?found, "a program's window keeps part of its frame: Ingle covers it");
+                                tracing::info!(pid = self.pid, ?found, "a program's window keeps part of its frame: Pyr covers it");
                                 self.inset = found;
                             }
                         }
@@ -379,7 +379,7 @@ mod win {
                             self.placed = Some(at);
                         }
                         self.clip(w, (!self.inset.is_none()).then_some((self.inset, target.2, target.3)));
-                        // (Hidden meanwhile with Ingle, to the tray say: shown again.)
+                        // (Hidden meanwhile with Pyr, to the tray say: shown again.)
                         if !self.showing || !IsWindowVisible(w).as_bool() {
                             let _ = ShowWindowAsync(w, SW_SHOWNA);
                             self.showing = true;
@@ -395,7 +395,7 @@ mod win {
             }
         }
 
-        /// Takes its window in: owned by Ingle's (above it, minimized and closed with it), no
+        /// Takes its window in: owned by Pyr's (above it, minimized and closed with it), no
         /// frame, no taskbar button, square corners.
         fn take_in(&mut self, h: isize, main: HWND) {
             let w = hwnd(h);
@@ -589,17 +589,17 @@ mod win {
         s.best.map(|b| b.0)
     }
 
-    // ---- following Ingle's window as it's dragged (no frames run while it is)
+    // ---- following Pyr's window as it's dragged (no frames run while it is)
 
-    /// Ingle's window, the program on show, where it goes in Ingle's window (pixels), and what's
+    /// Pyr's window, the program on show, where it goes in Pyr's window (pixels), and what's
     /// left of its frame.
     #[derive(Clone, Copy)]
     struct Follow(isize, isize, (i32, i32, i32, i32), Insets);
 
     static FOLLOW: Mutex<Option<Follow>> = Mutex::new(None);
     static HOOK: AtomicIsize = AtomicIsize::new(0);
-    /// The program windows taken in, their processes, and whether Ingle cut the window down (for
-    /// hiding to the tray, counting as Ingle in front, and closing with Ingle).
+    /// The program windows taken in, their processes, and whether Pyr cut the window down (for
+    /// hiding to the tray, counting as Pyr in front, and closing with Pyr).
     static EMBEDDED: Mutex<Vec<(isize, u32, bool)>> = Mutex::new(Vec::new());
 
     fn follow(f: Option<(HWND, HWND, (i32, i32, i32, i32), Insets)>) {
@@ -616,7 +616,7 @@ mod win {
         HOOK.store(h.0 as isize, Ordering::Relaxed);
     }
 
-    /// Ingle's window moved: the program on show goes with it.
+    /// Pyr's window moved: the program on show goes with it.
     unsafe extern "system" fn moved(_: HWINEVENTHOOK, _event: u32, w: HWND, object: i32, child: i32, _: u32, _: u32) {
         if object != OBJID_WINDOW.0 || child != CHILDID_SELF as i32 {
             return;
@@ -696,24 +696,24 @@ mod win {
         let_go();
     }
 
-    // ---- ending with Ingle: the programs Ingle starts are in a job of its own, which Windows
-    // ends when Ingle ends without closing them (a crash), rather than leaving them running
+    // ---- ending with Pyr: the programs Pyr starts are in a job of its own, which Windows
+    // ends when Pyr ends without closing them (a crash), rather than leaving them running
     // hidden or with no taskbar button. Closing on purpose lets them go first.
 
     static JOB: AtomicIsize = AtomicIsize::new(0);
 
-    fn set_job_limits(job: HANDLE, kill_with_ingle: bool) -> bool {
+    fn set_job_limits(job: HANDLE, kill_with_pyr: bool) -> bool {
         let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         // (A program's own programs may leave the job: browsers keep theirs in jobs of their own.)
         info.BasicLimitInformation.LimitFlags =
-            if kill_with_ingle { JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK } else { JOB_OBJECT_LIMIT_BREAKAWAY_OK };
+            if kill_with_pyr { JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK } else { JOB_OBJECT_LIMIT_BREAKAWAY_OK };
         unsafe {
             SetInformationJobObject(job, JobObjectExtendedLimitInformation, &info as *const _ as *const core::ffi::c_void, std::mem::size_of_val(&info) as u32)
                 .is_ok()
         }
     }
 
-    /// Puts a program Ingle just started in Ingle's job (made the first time).
+    /// Puts a program Pyr just started in Pyr's job (made the first time).
     pub fn adopt(child: &std::process::Child) {
         use std::os::windows::io::AsRawHandle;
         let mut job = JOB.load(Ordering::Relaxed);
@@ -733,7 +733,7 @@ mod win {
         }
     }
 
-    /// Ingle is closing on purpose: programs still open (popped out, or finishing something)
+    /// Pyr is closing on purpose: programs still open (popped out, or finishing something)
     /// stay open after it.
     pub fn let_go() {
         let job = JOB.load(Ordering::Relaxed);

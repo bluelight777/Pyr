@@ -308,7 +308,7 @@ fn atlas_state() -> &'static Arc<Atlas> {
     A.get_or_init(|| {
         let a = Arc::new(Atlas { image: Mutex::new(None), tex: OnceLock::new() });
         let a2 = a.clone();
-        let _ = std::thread::Builder::new().name("ingle-emoji".into()).spawn(move || {
+        let _ = std::thread::Builder::new().name("pyr-emoji".into()).spawn(move || {
             if let Ok(img) = image::load_from_memory(ATLAS_PNG) {
                 let rgba = img.to_rgba8();
                 let size = [rgba.width() as usize, rgba.height() as usize];

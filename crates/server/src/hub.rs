@@ -7,10 +7,10 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering}
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use ingle_proto::control::*;
-use ingle_proto::invite::InviteLink;
-use ingle_proto::media::track;
-use ingle_proto::{b64, crypto, framing, now_ms};
+use pyr_proto::control::*;
+use pyr_proto::invite::InviteLink;
+use pyr_proto::media::track;
+use pyr_proto::{b64, crypto, framing, now_ms};
 use parking_lot::Mutex;
 use quinn::VarInt;
 use tokio::sync::mpsc;
@@ -67,7 +67,7 @@ impl Place {
     }
 }
 fn max_connections() -> usize {
-    std::env::var("INGLE_MAX_CONNECTIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(4000)
+    pyr_proto::env_var("MAX_CONNECTIONS").and_then(|v| v.parse().ok()).unwrap_or(4000)
 }
 /// A member this new (ms) gets a smaller share of the server's storage (see
 /// `Hub::reserve_upload`).
@@ -98,7 +98,7 @@ impl Outbox {
     /// Queues a frame. Frames too big for the other side to accept are dropped; a client too
     /// far behind is disconnected.
     pub fn send(&self, b: Bytes) -> bool {
-        if b.len() > ingle_proto::MAX_CONTROL_FRAME + 4 {
+        if b.len() > pyr_proto::MAX_CONTROL_FRAME + 4 {
             warn!(len = b.len(), "not sending a control frame that's too big for clients");
             return false;
         }
@@ -263,7 +263,7 @@ struct Client {
     session: Option<SessionId>,
     session_cell: Arc<AtomicU32>,
     last_typing: HashMap<ChannelId, Instant>,
-    /// Its Ingle says it's idle (`SetIdle`).
+    /// Its Pyr says it's idle (`SetIdle`).
     idle: bool,
     /// Its person said Do Not Disturb there (`SetDnd`).
     dnd: bool,
@@ -302,7 +302,7 @@ pub struct SubState {
     /// Frames on their way: (when they were handed over, their size).
     unacked: Mutex<BTreeMap<u64, (Instant, usize)>>,
     next_index: AtomicU64,
-    /// Before 0.8.0 (`INGLE_AB=shed`): how old a frame on its way could get before the viewer
+    /// Before 0.8.0 (`PYR_AB=shed`): how old a frame on its way could get before the viewer
     /// was taken to be stuck.
     old_max_age: Duration,
     /// Bytes that got to them, and frames skipped for them, since the last report.
@@ -354,7 +354,7 @@ impl SubState {
         // time) that they'd be watching the past; skipping to a fresh keyframe catches them up.
         // (Their sharer is told how they're doing, see `Hub::feedback_loop`, and sends less
         // before this; it's for the one who can't keep up whatever happens.)
-        let congested = if ingle_proto::ab::old("shed") {
+        let congested = if pyr_proto::ab::old("shed") {
             self.unacked.lock().first_key_value().map(|(_, (t, _))| t.elapsed() > self.old_max_age).unwrap_or(false)
         } else {
             self.late(rtt) > (rtt * 2).max(Duration::from_millis(700))
@@ -365,7 +365,7 @@ impl SubState {
                 // (Each read on its own: `late` locks `unacked` too.)
                 let unacked = self.unacked.lock().len();
                 let late_ms = self.late(rtt).as_millis() as u64;
-                debug!(target: "ingle_media", ev = "congested", unacked, late_ms);
+                debug!(target: "pyr_media", ev = "congested", unacked, late_ms);
             }
             return Offer::Skip { shed: true };
         }
@@ -435,7 +435,7 @@ impl SubState {
 /// Sends frames to one subscriber, one QUIC stream per frame. Frames that are not
 /// acknowledged within two seconds are abandoned (stream reset) so they can't pile up.
 async fn forward_task(conn: quinn::Connection, mut rx: mpsc::Receiver<(u64, Bytes)>, state: Arc<SubState>) {
-    let prioritize = !ingle_proto::ab::old("fair");
+    let prioritize = !pyr_proto::ab::old("fair");
     while let Some((idx, frame)) = rx.recv().await {
         let sent = Instant::now();
         let mut stream = match conn.open_uni().await {
@@ -444,7 +444,7 @@ async fn forward_task(conn: quinn::Connection, mut rx: mpsc::Receiver<(u64, Byte
         };
         // Oldest frames first (see `media::frame_priority`).
         if prioritize {
-            let _ = stream.set_priority(ingle_proto::media::frame_priority(idx));
+            let _ = stream.set_priority(pyr_proto::media::frame_priority(idx));
         }
         if stream.write_all(&frame).await.is_err() {
             state.ack(idx, None);
@@ -461,7 +461,7 @@ async fn forward_task(conn: quinn::Connection, mut rx: mpsc::Receiver<(u64, Byte
                 st.need_keyframe.store(true, Ordering::Relaxed);
             }
             let ok = matches!(done, Ok(Ok(None)));
-            debug!(target: "ingle_media", ev = "fwd_ack", idx, bytes, ms = sent.elapsed().as_millis() as u64, ok);
+            debug!(target: "pyr_media", ev = "fwd_ack", idx, bytes, ms = sent.elapsed().as_millis() as u64, ok);
             st.ack(idx, ok.then_some(bytes));
         });
     }
@@ -599,14 +599,14 @@ impl Hub {
     /// Reserves room for an upload of `size` bytes by `uid`: within the server's storage, the
     /// member's own share of it, and how much one member may upload in an hour.
     pub fn reserve_upload(&self, uid: &str, size: u64) -> Result<UploadSlot<'_>, String> {
-        let total_cap = env_mb("INGLE_STORAGE_MB", 5 * 1024);
+        let total_cap = env_mb("PYR_STORAGE_MB", 5 * 1024);
         // Each member's share: at most a tenth of it (a few accounts can't fill it), and much
         // less in their first days (new accounts made to fill it get little each).
-        let mut user_cap = env_mb("INGLE_USER_STORAGE_MB", 1024).min(total_cap / 10);
+        let mut user_cap = env_mb("PYR_USER_STORAGE_MB", 1024).min(total_cap / 10);
         if self.db.get_user(uid).is_some_and(|u| now_ms() - u.joined_at < NEW_MEMBER_MS) {
-            user_cap = user_cap.min(env_mb("INGLE_NEW_MEMBER_STORAGE_MB", 100));
+            user_cap = user_cap.min(env_mb("PYR_NEW_MEMBER_STORAGE_MB", 100));
         }
-        let hourly_cap = env_mb("INGLE_USER_UPLOAD_MB_PER_HOUR", 400);
+        let hourly_cap = env_mb("PYR_USER_UPLOAD_MB_PER_HOUR", 400);
         let mut up = self.uploads.lock();
         let in_flight_all: u64 = up.values().map(|v| v.0).sum();
         let mine = up.entry(uid.to_string()).or_default();
@@ -634,7 +634,7 @@ impl Hub {
 
     pub fn info(&self) -> ServerInfo {
         ServerInfo {
-            name: self.db.get_meta("name").unwrap_or_else(|| "Ingle Server".into()),
+            name: self.db.get_meta("name").unwrap_or_else(|| "Pyr Server".into()),
             description: self.db.get_meta("description").unwrap_or_default(),
             fingerprint: b64::encode(&self.fingerprint),
             icon: self.db.get_meta("icon").filter(|i| !i.is_empty()),
@@ -935,7 +935,7 @@ impl Hub {
         }
     }
 
-    /// A connection's Ingle is idle, or back (`SetIdle`): everyone's told when that changes
+    /// A connection's Pyr is idle, or back (`SetIdle`): everyone's told when that changes
     /// how its member shows.
     pub fn set_idle(&self, conn_id: ConnId, idle: bool) {
         let mut inner = self.inner.lock();
@@ -1093,7 +1093,7 @@ impl Hub {
         // A very big community could outgrow one frame: then leave out members who've been
         // away longest (their names show up again when they come back).
         let mut b = frame(re, ready.clone());
-        while b.len() > ingle_proto::MAX_CONTROL_FRAME {
+        while b.len() > pyr_proto::MAX_CONTROL_FRAME {
             let Event::Ready { members, .. } = &mut ready else { break };
             let offline: Vec<usize> = (0..members.len()).filter(|i| !members[*i].online && members[*i].user_id != uid).collect();
             if offline.is_empty() {
@@ -1479,7 +1479,7 @@ impl Hub {
     fn maybe_request_keyframe(p: &mut Voice, track_id: u8, min_interval: Duration) {
         let now = Instant::now();
         let due = p.last_keyframe_request.get(&track_id).map(|t| now.duration_since(*t) >= min_interval).unwrap_or(true);
-        debug!(target: "ingle_media", ev = "kf_wanted", track = track_id, sent = due, every_ms = min_interval.as_millis() as u64);
+        debug!(target: "pyr_media", ev = "kf_wanted", track = track_id, sent = due, every_ms = min_interval.as_millis() as u64);
         if due {
             p.last_keyframe_request.insert(track_id, now);
             let _ = p.tx.send(frame(0, Event::KeyframeRequested { track: track_id }));
@@ -1580,7 +1580,7 @@ impl Hub {
                             sub.state.behind.store(true, Ordering::Relaxed);
                             sub.state.need_keyframe.store(true, Ordering::Relaxed);
                             sub.state.shed.fetch_add(1, Ordering::Relaxed);
-                            debug!(target: "ingle_media", ev = "shed", viewer, why = "queue_full");
+                            debug!(target: "pyr_media", ev = "shed", viewer, why = "queue_full");
                             need_kf = true;
                         }
                     }
@@ -1591,7 +1591,7 @@ impl Hub {
                         if shed {
                             sub.state.shed.fetch_add(1, Ordering::Relaxed);
                         }
-                        debug!(target: "ingle_media", ev = "shed", viewer, why = if shed { "behind" } else { "first_key" });
+                        debug!(target: "pyr_media", ev = "shed", viewer, why = if shed { "behind" } else { "first_key" });
                         need_kf = true
                     }
                 }
@@ -1605,9 +1605,9 @@ impl Hub {
     /// Twice a second, forever: tells everyone sharing a camera or screen (whose app knows
     /// how, `VIDEO_FEEDBACK_CAP`) how each of their viewers' connections is getting on with it,
     /// so they send what their slowest viewer can take instead of what makes them fall
-    /// behind. (`INGLE_AB=feedback`: not told.)
+    /// behind. (`PYR_AB=feedback`: not told.)
     pub async fn feedback_loop(self: Arc<Self>) {
-        if ingle_proto::ab::old("feedback") {
+        if pyr_proto::ab::old("feedback") {
             return;
         }
         let mut tick = tokio::time::interval(Duration::from_millis(500));
@@ -1744,7 +1744,7 @@ impl Hub {
     /// collects them and the sender isn't flooding: at most 6 an hour from one place (and from
     /// one sender), 60 in all, and 300 waiting. A plugin's files must be a Rust project's (a
     /// Cargo.toml at the top) with plain relative paths, 600 KB in all; a skin's pass
-    /// [`ingle_proto::skin::check`]. `signed`: its signature was checked (by the connection);
+    /// [`pyr_proto::skin::check`]. `signed`: its signature was checked (by the connection);
     /// only then is the sender kept, and only then can it be a new version of one of theirs.
     pub fn take_plugin_submission(&self, ip: IpAddr, mut sub: PluginSubmission, signed: bool) -> Result<i64, String> {
         let place = Place::of(ip, 64);
@@ -1810,7 +1810,7 @@ impl Hub {
         if !skin && sub.kind != "program" && sub.kind != "addon" {
             return Err("A plugin is a program or an add-on (or it's a skin).".into());
         }
-        let (max_files, max_size) = if skin { (ingle_proto::skin::MAX_FILES, ingle_proto::skin::MAX_TOTAL) } else { (SUBMISSION_FILES_MAX, SUBMISSION_MAX) };
+        let (max_files, max_size) = if skin { (pyr_proto::skin::MAX_FILES, pyr_proto::skin::MAX_TOTAL) } else { (SUBMISSION_FILES_MAX, SUBMISSION_MAX) };
         if sub.files.is_empty() || sub.files.len() > max_files {
             return Err(format!("It has between 1 and {max_files} files."));
         }
@@ -1832,7 +1832,7 @@ impl Hub {
             decoded.push((f.path.clone(), bytes));
         }
         if skin {
-            let report = ingle_proto::skin::check(&decoded);
+            let report = pyr_proto::skin::check(&decoded);
             if !report.ok() {
                 let mut why = report.problems.join(" ");
                 while why.len() > 900 {
@@ -1874,11 +1874,11 @@ impl Hub {
         Ok(id)
     }
 
-    /// Author names in the Ingle Library (Blue: "once an Author name is taken on the
+    /// Author names in the Pyr Library (Blue: "once an Author name is taken on the
     /// plugin/skin/addon exchange, don't allow anyone else to take it"): the first signed sender
     /// to send a plugin or skin in under a name has it, and every name that looks the same
     /// (`author_key`); nobody else can send one in under it, signed or not. Names with
-    /// "Firelit" in them, and Ingle's own, are the owner's (Firelit Games'). A signed sender gets
+    /// "Firelit" in them, and Pyr's own, are the owner's (Firelit Games'). A signed sender gets
     /// the names they use that nobody has yet (the ones returned, `claim_author_names` once
     /// the rest is right); one that isn't signed gets none.
     fn author_names(&self, names: &[String], author_id: &str) -> Result<Vec<(String, String)>, String> {
@@ -1992,9 +1992,9 @@ fn name_taken(name: &str) -> String {
     format!("The author name \u{201c}{}\u{201d} is taken: someone else sends plugins and skins in under it. Use a name of your own.", name.trim())
 }
 
-/// Author names that are the library owner's (Firelit Games') alone: Ingle's own, and any
+/// Author names that are the library owner's (Firelit Games') alone: Pyr's own, and any
 /// with "Firelit" in them.
-const OWNER_NAMES: &[&str] = &["Ingle", "Ingle Library", "Ingle Team"];
+const OWNER_NAMES: &[&str] = &["Pyr", "Pyr Library", "Pyr Team", "Ingle", "Ingle Library", "Ingle Team"];
 const OWNER_NAME_PART: &str = "Firelit";
 
 /// How a new version's files differ from the one before: "Changed: a, b. Added: c. Taken out: d."

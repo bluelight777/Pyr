@@ -1,6 +1,6 @@
 //! One running copy of the app per profile.
 //!
-//! Clicking an `ingle://` invite link starts the app with that link. If the app is already
+//! Clicking an `pyr://` invite link starts the app with that link. If the app is already
 //! open, the new copy hands the link to it (through a small file next to the config) and
 //! quits, instead of opening a second window logged in as the same person.
 
@@ -77,12 +77,12 @@ mod tests {
 
     #[test]
     fn second_launch_hands_over_its_link() {
-        let dir = std::env::temp_dir().join(format!("ingle-instance-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("pyr-instance-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let Start::First { lock, handoff: mut first } = start(&dir, None) else { panic!("first launch should win") };
-        assert!(matches!(start(&dir, Some("ingle://example.org:7766/abc?fp=x")), Start::AlreadyRunning));
+        assert!(matches!(start(&dir, Some("pyr://example.org:7766/abc?fp=x")), Start::AlreadyRunning));
         std::thread::sleep(Duration::from_millis(550));
-        assert_eq!(first.poll().as_deref(), Some("ingle://example.org:7766/abc?fp=x"));
+        assert_eq!(first.poll().as_deref(), Some("pyr://example.org:7766/abc?fp=x"));
         std::thread::sleep(Duration::from_millis(550));
         assert_eq!(first.poll(), None, "a handoff is delivered once");
         assert!(matches!(start(&dir, None), Start::AlreadyRunning));

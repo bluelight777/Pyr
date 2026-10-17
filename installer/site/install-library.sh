@@ -1,8 +1,9 @@
 #!/bin/bash
-# Runs on the VPS (publish-library.ps1 starts it): puts a new Ingle Library on
-# https://firelitgames.com/ingle/library/ (library.tar, from make-library-upload.sh: the plugins'
+# Runs on the VPS (publish-library.ps1 starts it): puts a new Pyr Library on
+# https://pyr.gg/library/ (the web folder that is also firelitgames.com/ingle/, where copies
+# from before the rename look) (library.tar, from make-library-upload.sh: the plugins'
 # files first, then the signed list that names them), without touching the rest of the site or
-# Ingle's downloads.
+# Pyr's downloads.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 trap 'rm -rf "$HERE"' EXIT
@@ -13,9 +14,9 @@ ROOT=""
 TOKEN=$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')
 for R in $(nginx -T 2>/dev/null | awk '/^[[:space:]]*root[[:space:]]/ { r = $2; gsub(";", "", r); print r }' | sort -u); do
   [ -d "$R" ] || continue
-  echo "$TOKEN" > "$R/ingle-probe-$TOKEN.txt" 2>/dev/null || continue
-  GOT=$(curl -sk --noproxy "*" --max-time 5 --resolve "$SITE:443:127.0.0.1" "https://$SITE/ingle-probe-$TOKEN.txt" || true)
-  rm -f "$R/ingle-probe-$TOKEN.txt"
+  echo "$TOKEN" > "$R/pyr-probe-$TOKEN.txt" 2>/dev/null || continue
+  GOT=$(curl -sk --noproxy "*" --max-time 5 --resolve "$SITE:443:127.0.0.1" "https://$SITE/pyr-probe-$TOKEN.txt" || true)
+  rm -f "$R/pyr-probe-$TOKEN.txt"
   if [ "$GOT" = "$TOKEN" ]; then ROOT=$R; break; fi
 done
 if [ -z "$ROOT" ]; then
@@ -23,7 +24,7 @@ if [ -z "$ROOT" ]; then
   exit 1
 fi
 if [ ! -f "$ROOT/ingle/latest.json" ]; then
-  echo "There's no Ingle on https://$SITE/ingle yet: publish a release first." >&2
+  echo "There's no Pyr on https://$SITE/ingle yet: publish a release first." >&2
   exit 1
 fi
 if [ ! -f "$HERE/library.tar" ]; then
@@ -40,4 +41,4 @@ fi
 if [ -d "$HERE/library-x/library/files" ]; then cp -rf "$HERE/library-x/library/files" "$ROOT/ingle/library/"; fi
 cp -f "$HERE/library-x/library/index.json" "$ROOT/ingle/library/index.json"
 chmod -R a+rX "$ROOT/ingle/library"
-echo "The Ingle Library is updated in $ROOT/ingle/library"
+echo "The Pyr Library is updated in $ROOT/ingle/library"

@@ -1,6 +1,6 @@
 //! Calls in direct messages ringing (see `DM_CALLS_FEATURE`): the ringtone while someone's
 //! calling you, the ringback while you're calling someone, and what happens when nobody
-//! answers. On a little thread of its own, so it rings with Ingle's window hidden too (the
+//! answers. On a little thread of its own, so it rings with Pyr's window hidden too (the
 //! window draws nothing then).
 
 use std::sync::Arc;
@@ -26,7 +26,7 @@ pub(crate) fn ensure(shared: &Arc<Shared>) {
         return;
     }
     let s = shared.clone();
-    let started = std::thread::Builder::new().name("ingle-ring".into()).spawn(move || {
+    let started = std::thread::Builder::new().name("pyr-ring".into()).spawn(move || {
         run(&s);
         s.ringer.store(false, Ordering::SeqCst);
         // Something started ringing just as this was stopping: keep going.
@@ -45,7 +45,7 @@ fn busy(shared: &Shared) -> bool {
     !st.incoming_calls.is_empty() || st.outgoing_call.as_ref().is_some_and(|o| o.state == RingState::Ringing)
 }
 
-/// The ringtone for a call from `from`: their own, or the one for everyone (`None`: Ingle's
+/// The ringtone for a call from `from`: their own, or the one for everyone (`None`: Pyr's
 /// own ring).
 pub fn ringtone_for(st: &AppState, from: Option<&str>) -> Option<Ringtone> {
     from.and_then(|u| st.settings.ringtones.get(u).cloned()).or_else(|| st.settings.ringtone.clone())
@@ -200,14 +200,14 @@ mod tests {
         let tone = |name: &str| Ringtone { name: name.into(), sound: None, file: format!("{name}.ings") };
         let name = |t: Option<Ringtone>| t.map(|t| t.name);
         let mut st = AppState::default();
-        assert_eq!(ringtone_for(&st, Some("mara")), None, "Ingle's own ring");
+        assert_eq!(ringtone_for(&st, Some("mara")), None, "Pyr's own ring");
         st.settings.ringtone = Some(tone("bells"));
         assert_eq!(name(ringtone_for(&st, Some("mara"))).as_deref(), Some("bells"));
         assert_eq!(name(ringtone_for(&st, None)).as_deref(), Some("bells"));
         st.settings.ringtones.insert("mara".into(), tone("harp"));
         assert_eq!(name(ringtone_for(&st, Some("mara"))).as_deref(), Some("harp"));
         assert_eq!(name(ringtone_for(&st, Some("bob"))).as_deref(), Some("bells"));
-        // Hers still, with everyone else back to Ingle's own ring.
+        // Hers still, with everyone else back to Pyr's own ring.
         st.settings.ringtone = None;
         assert_eq!(name(ringtone_for(&st, Some("mara"))).as_deref(), Some("harp"));
         assert_eq!(ringtone_for(&st, Some("bob")), None);
@@ -269,7 +269,7 @@ mod tests {
         let mut s = crate::state::ServerView::new("k".into(), "k".into(), "127.0.0.1:1".into());
         s.voice.insert(
             2,
-            ingle_proto::control::VoiceParticipant {
+            pyr_proto::control::VoiceParticipant {
                 session: 2,
                 user_id: "first".into(),
                 channel_id: 8,

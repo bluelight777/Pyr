@@ -8,23 +8,23 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ingle_engine::audio::{AudioInput, AudioOutput};
-use ingle_engine::config::{NoiseSuppression, Settings};
-use ingle_engine::state::{ConnStatus, RingState};
-use ingle_engine::{Engine, EngineOptions};
-use ingle_proto::control::{ChannelId, ChannelKind, DM_CALLS_FEATURE};
+use pyr_engine::audio::{AudioInput, AudioOutput};
+use pyr_engine::config::{NoiseSuppression, Settings};
+use pyr_engine::state::{ConnStatus, RingState};
+use pyr_engine::{Engine, EngineOptions};
+use pyr_proto::control::{ChannelId, ChannelKind, DM_CALLS_FEATURE};
 use parking_lot::Mutex;
 
 fn temp_dir(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ingle-dmcalls-{}-{}", name, ingle_proto::now_ms()));
+    let d = std::env::temp_dir().join(format!("pyr-dmcalls-{}-{}", name, pyr_proto::now_ms()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
 
-/// A copy of Ingle with a tone for a microphone, recording what it hears.
+/// A copy of Pyr with a tone for a microphone, recording what it hears.
 fn bot(dir: &Path, name: &str, tone_hz: f32, heard: Arc<Mutex<Vec<f32>>>) -> Engine {
-    let cfg = ingle_engine::config::Config { display_name: name.to_string(), ..Default::default() };
-    ingle_engine::config::save_config(dir, &cfg).unwrap();
+    let cfg = pyr_engine::config::Config { display_name: name.to_string(), ..Default::default() };
+    pyr_engine::config::save_config(dir, &cfg).unwrap();
     let factory = move |_s: &Settings| {
         let mut phase = 0u64;
         let heard = heard.clone();
@@ -115,7 +115,7 @@ fn sees_call(seer: &Engine, channel: ChannelId) -> bool {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn friends_call_each_other_privately() {
-    let server = ingle_server::start(ingle_server::ServerConfig {
+    let server = pyr_server::start(pyr_server::ServerConfig {
         data_dir: temp_dir("server"),
         bind: "127.0.0.1:0".parse().unwrap(),
         public_host: Some("127.0.0.1".into()),
@@ -219,7 +219,7 @@ async fn friends_call_each_other_privately() {
 /// and leaving the group leaves its call.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn adding_people_to_a_call_makes_a_group() {
-    let server = ingle_server::start(ingle_server::ServerConfig {
+    let server = pyr_server::start(pyr_server::ServerConfig {
         data_dir: temp_dir("gserver"),
         bind: "127.0.0.1:0".parse().unwrap(),
         public_host: Some("127.0.0.1".into()),
@@ -239,7 +239,7 @@ async fn adding_people_to_a_call_makes_a_group() {
         connected(e, what).await;
     }
     let key = a.state().servers[0].key.clone();
-    assert!(a.state().servers[0].has(ingle_proto::control::GROUPS_FEATURE));
+    assert!(a.state().servers[0].has(pyr_proto::control::GROUPS_FEATURE));
     let (bob, carol, dave) = (b.state().my_uid.clone(), c.state().my_uid.clone(), d.state().my_uid.clone());
 
     // Alice and Bob in a call in their direct message.

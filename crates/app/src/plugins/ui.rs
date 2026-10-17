@@ -3,13 +3,13 @@
 //! library owner's lists of plugins and skins sent in.
 
 use eframe::egui::{self, Color32, CornerRadius, Key, Rect, RichText, Sense, Stroke, vec2};
-use ingle_engine::state::{AppState, BugSend};
-use ingle_proto::control::{SubmissionEntry, SubmissionStatus};
-use ingle_proto::library::{Entry, Kind, SkinEntry};
+use pyr_engine::state::{AppState, BugSend};
+use pyr_proto::control::{SubmissionEntry, SubmissionStatus};
+use pyr_proto::library::{Entry, Kind, SkinEntry};
 
 use super::addon::{Place, Widget};
 use super::{Page, Show, SkinsTab, Tab, source};
-use crate::app::{Act, Dialog, IngleApp};
+use crate::app::{Act, Dialog, PyrApp};
 use crate::{icons, theme};
 
 /// The form for sending a plugin in: what was found in its folder, and who's sending it.
@@ -24,8 +24,8 @@ pub struct SubmitForm {
     pub scroll: bool,
 }
 
-const KIT_URL: &str = "https://github.com/bluelight777/ingle/tree/main/plugins";
-const SKINS_URL: &str = "https://github.com/bluelight777/ingle/tree/main/skins";
+const KIT_URL: &str = "https://github.com/bluelight777/pyr/tree/main/plugins";
+const SKINS_URL: &str = "https://github.com/bluelight777/pyr/tree/main/skins";
 
 /// How many pixels a side a picture shown `size` points big is decoded at: enough for this
 /// screen, in a few steps (so a card's thumbnail and a page-wide picture of the same skin are
@@ -103,9 +103,9 @@ pub(crate) fn cover_uv(pic: egui::Vec2, boxed: egui::Vec2) -> Rect {
     Rect::from_min_max(egui::pos2((1.0 - cw) / 2.0, (1.0 - ch) / 2.0), egui::pos2((1.0 + cw) / 2.0, (1.0 + ch) / 2.0))
 }
 
-impl IngleApp {
+impl PyrApp {
     /// Where an add-on is being used right now: who I am, and the server and channel open.
-    pub(crate) fn addon_place(&self, st: &AppState) -> (Place, Option<(String, ingle_proto::control::ChannelId)>) {
+    pub(crate) fn addon_place(&self, st: &AppState) -> (Place, Option<(String, pyr_proto::control::ChannelId)>) {
         let here = (!self.ui.home && !self.ui.plugins_open)
             .then(|| self.ui.server.clone())
             .flatten()
@@ -144,17 +144,17 @@ impl IngleApp {
         resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tip).clicked()
     }
 
-    /// Plugins and Skins, at the bottom of the server rail (and the programs open inside Ingle
+    /// Plugins and Skins, at the bottom of the server rail (and the programs open inside Pyr
     /// under them).
     pub(crate) fn plugins_button(&mut self, ui: &mut egui::Ui) {
         let here = self.ui.plugins_open && self.plugins.program_page.is_none();
         let updates = self.plugins.plugin_updates();
-        let tip = if updates > 0 { format!("Plugins ({updates} to update)") } else { "Plugins: programs and add-ons for Ingle".to_string() };
+        let tip = if updates > 0 { format!("Plugins ({updates} to update)") } else { "Plugins: programs and add-ons for Pyr".to_string() };
         if self.rail_place(ui, here && self.plugins.page == Page::Plugins, updates, &tip, |p, r, c, _| icons::puzzle(p, r, c)) {
             self.open_place(Page::Plugins);
         }
         let updates = self.plugins.skin_updates();
-        let tip = if updates > 0 { format!("Skins ({updates} to update)") } else { "Skins: change how Ingle looks".to_string() };
+        let tip = if updates > 0 { format!("Skins ({updates} to update)") } else { "Skins: change how Pyr looks".to_string() };
         if self.rail_place(ui, here && self.plugins.page == Page::Skins, updates, &tip, |p, r, c, bg| icons::palette_mono(p, r, c, bg)) {
             self.open_place(Page::Skins);
         }
@@ -170,7 +170,7 @@ impl IngleApp {
         self.plugins.refresh(false);
     }
 
-    /// Programs open inside Ingle, in the rail under Plugins: click one to go to it.
+    /// Programs open inside Pyr, in the rail under Plugins: click one to go to it.
     fn program_buttons(&mut self, ui: &mut egui::Ui) {
         let open: Vec<(String, String, bool)> = self.plugins.programs.open.iter().map(|p| (p.id.clone(), p.name.clone(), p.popped)).collect();
         for (id, name, popped) in open {
@@ -196,7 +196,7 @@ impl IngleApp {
             }
             resp.context_menu(|ui| {
                 if popped {
-                    if cfg!(windows) && ui.button("Bring into Ingle").clicked() {
+                    if cfg!(windows) && ui.button("Bring into Pyr").clicked() {
                         self.plugins.programs.pop_in(&id);
                         self.show_program(&id);
                         ui.close();
@@ -213,7 +213,7 @@ impl IngleApp {
         }
     }
 
-    /// Shows a program's page (where it is, inside Ingle).
+    /// Shows a program's page (where it is, inside Pyr).
     pub(crate) fn show_program(&mut self, id: &str) {
         self.ui.plugins_open = true;
         self.ui.home = false;
@@ -243,7 +243,7 @@ impl IngleApp {
                             }
                             if cfg!(windows) {
                                 if popped {
-                                    if ui.button("Bring into Ingle").clicked() {
+                                    if ui.button("Bring into Pyr").clicked() {
                                         self.plugins.programs.pop_in(id);
                                     }
                                 } else if ui.button("Pop out").on_hover_text(format!("{name} in a window of its own")).clicked() {
@@ -294,7 +294,7 @@ impl IngleApp {
                 ui.add_space(6.0);
                 ui.vertical(|ui| {
                     ui.label(RichText::new("Plugins").font(theme::bold_font(22.0)).color(theme::TEXT()));
-                    ui.label(RichText::new("Programs and add-ons from the Ingle Library, each one built from its source after someone looked at it.").color(theme::MUTED()));
+                    ui.label(RichText::new("Programs and add-ons from the Pyr Library, each one built from its source after someone looked at it.").color(theme::MUTED()));
                 });
             });
             ui.add_space(14.0);
@@ -311,7 +311,7 @@ impl IngleApp {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if self.plugins.fetching() {
                             ui.spinner();
-                        } else if ui.button("Refresh").on_hover_text("Get the latest list from the Ingle Library").clicked() {
+                        } else if ui.button("Refresh").on_hover_text("Get the latest list from the Pyr Library").clicked() {
                             self.plugins.refresh(true);
                         }
                         ui.add(egui::TextEdit::singleline(&mut self.plugins.search).hint_text("Search plugins").desired_width(220.0));
@@ -332,7 +332,7 @@ impl IngleApp {
         });
     }
 
-    /// The Skins page: the Gallery of the Ingle Library's skins, the ones that are yours, and
+    /// The Skins page: the Gallery of the Pyr Library's skins, the ones that are yours, and
     /// making your own.
     fn skins_page(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
         egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::panel(theme::MAIN(), true)).inner_margin(egui::Margin::symmetric(28, 20))).show(ctx, |ui| {
@@ -343,7 +343,7 @@ impl IngleApp {
                 ui.add_space(6.0);
                 ui.vertical(|ui| {
                     ui.label(RichText::new("Skins").font(theme::bold_font(22.0)).color(theme::TEXT()));
-                    ui.label(RichText::new("Change how Ingle looks: its colors, a picture behind it, its fonts and sounds. Skins have no code, and Ingle checks every file first.").color(theme::MUTED()));
+                    ui.label(RichText::new("Change how Pyr looks: its colors, a picture behind it, its fonts and sounds. Skins have no code, and Pyr checks every file first.").color(theme::MUTED()));
                 });
             });
             ui.add_space(14.0);
@@ -360,7 +360,7 @@ impl IngleApp {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if self.plugins.fetching() {
                             ui.spinner();
-                        } else if ui.button("Refresh").on_hover_text("Get the latest list from the Ingle Library").clicked() {
+                        } else if ui.button("Refresh").on_hover_text("Get the latest list from the Pyr Library").clicked() {
                             self.plugins.refresh(true);
                         }
                         ui.add(egui::TextEdit::singleline(&mut self.plugins.skins_search).hint_text("Search skins").desired_width(220.0));
@@ -384,7 +384,7 @@ impl IngleApp {
         });
     }
 
-    /// Every skin in the Ingle Library, as big pictures.
+    /// Every skin in the Pyr Library, as big pictures.
     fn skins_gallery(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
         if !self.library_state(ui) {
             return;
@@ -429,7 +429,7 @@ impl IngleApp {
             } else if self.plugins.skins_favorites {
                 "No favorites yet: star a skin to keep it here."
             } else {
-                "No skins in the Ingle Library yet."
+                "No skins in the Pyr Library yet."
             };
             ui.label(RichText::new(why).color(theme::MUTED()));
             return;
@@ -534,8 +534,8 @@ impl IngleApp {
         ui.add(
             egui::Label::new(
                 RichText::new(
-                    "Skins change Ingle's colors, put a picture behind it, and bring fonts and sounds of their own. Set up the Claude connector, \
-                     then ask Claude to make you one: it shows it to you right here as it goes, and sends it in for the Ingle Library under your \
+                    "Skins change Pyr's colors, put a picture behind it, and bring fonts and sounds of their own. Set up the Claude connector, \
+                     then ask Claude to make you one: it shows it to you right here as it goes, and sends it in for the Pyr Library under your \
                      name. Once it's approved, anyone can wear it.",
                 )
                 .color(theme::MUTED()),
@@ -547,7 +547,7 @@ impl IngleApp {
             if ui.add(theme::primary_button("Set up the Claude connector…")).clicked() {
                 self.ui.dialog = Some(Dialog::Settings { tab: 6 });
             }
-            if ui.button("Try a skin folder…").on_hover_text("A skin you're making yourself: Ingle wears it until you stop, and again whenever you save a change").clicked() {
+            if ui.button("Try a skin folder…").on_hover_text("A skin you're making yourself: Pyr wears it until you stop, and again whenever you save a change").clicked() {
                 crate::images::pick_folder_async(crate::images::FolderFor::TrySkin, "Choose the skin's folder (with its skin.json)", ui.ctx());
             }
             if ui.add(egui::Button::new(RichText::new("How skins are made").color(theme::LINK())).frame(false)).clicked() {
@@ -630,11 +630,11 @@ impl IngleApp {
             if self.plugins.fetching() {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label(RichText::new("Getting the list from the Ingle Library…").color(theme::MUTED()));
+                    ui.label(RichText::new("Getting the list from the Pyr Library…").color(theme::MUTED()));
                 });
             } else {
                 let why = self.plugins.library_error.clone().unwrap_or_else(|| "The list hasn't been fetched yet.".into());
-                note(ui, &format!("Couldn't get the Ingle Library's list: {why}"), true);
+                note(ui, &format!("Couldn't get the Pyr Library's list: {why}"), true);
                 ui.add_space(8.0);
                 if ui.button("Try again").clicked() {
                     self.plugins.refresh(true);
@@ -853,7 +853,7 @@ impl IngleApp {
             acts.push(Act::InstallSkin(s.clone()));
         }
         if st.settings.skin == s.id {
-            if ui.button("Take off").on_hover_text("Back to Campfire, Ingle's own").clicked() {
+            if ui.button("Take off").on_hover_text("Back to Campfire, Pyr's own").clicked() {
                 acts.push(Act::WearSkin(String::new()));
             }
             ui.label(RichText::new("✓ Wearing").color(theme::ONLINE()));
@@ -916,12 +916,12 @@ impl IngleApp {
             .plugins
             .skins
             .get(id)
-            .and_then(|_| std::fs::read(self.plugins.skins_dir.join(id).join(ingle_proto::skin::MANIFEST)).ok())
-            .and_then(|b| serde_json::from_slice::<ingle_proto::skin::Manifest>(&b).ok());
+            .and_then(|_| std::fs::read(self.plugins.skins_dir.join(id).join(pyr_proto::skin::MANIFEST)).ok())
+            .and_then(|b| serde_json::from_slice::<pyr_proto::skin::Manifest>(&b).ok());
         match manifest {
             Some(m) => skin_summary(ui, &m),
             None => {
-                let files: Vec<String> = s.files.iter().filter(|f| f.path != ingle_proto::skin::MANIFEST).map(|f| format!("{} ({})", f.path, size_text(f.size))).collect();
+                let files: Vec<String> = s.files.iter().filter(|f| f.path != pyr_proto::skin::MANIFEST).map(|f| format!("{} ({})", f.path, size_text(f.size))).collect();
                 let text = if files.is_empty() { "Its colors.".to_string() } else { format!("Its colors, and {}.", files.join(", ")) };
                 ui.add(egui::Label::new(RichText::new(text).color(theme::BODY())).wrap());
             }
@@ -929,7 +929,7 @@ impl IngleApp {
         ui.add_space(8.0);
         note(
             ui,
-            "Skins are colors, a picture, fonts and sounds: no code. Ingle checks every file before it uses one, and you can go back to Campfire, Ingle's own, at any time (Settings → Appearance).",
+            "Skins are colors, a picture, fonts and sounds: no code. Pyr checks every file before it uses one, and you can go back to Campfire, Pyr's own, at any time (Settings → Appearance).",
             false,
         );
         if !s.review.is_empty() {
@@ -995,13 +995,13 @@ impl IngleApp {
         match e.kind {
             Kind::Program => note(
                 ui,
-                "It's a program of its own, opened from Ingle: it runs on your PC like any app you install (it isn't sandboxed). \
-                 Firelit Games read its source and built it from that source; Ingle checks it's that build before opening it.",
+                "It's a program of its own, opened from Pyr: it runs on your PC like any app you install (it isn't sandboxed). \
+                 Firelit Games read its source and built it from that source; Pyr checks it's that build before opening it.",
                 false,
             ),
             Kind::Addon => {
                 if e.permissions.is_empty() {
-                    note(ui, "Runs inside Ingle in a sandbox, and asks for nothing.", false);
+                    note(ui, "Runs inside Pyr in a sandbox, and asks for nothing.", false);
                 }
                 for p in &e.permissions {
                     ui.horizontal(|ui| {
@@ -1012,7 +1012,7 @@ impl IngleApp {
                 }
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new("Add-ons run inside Ingle in a sandbox: they can't reach your files, the internet or anything else on your PC.")
+                    RichText::new("Add-ons run inside Pyr in a sandbox: they can't reach your files, the internet or anything else on your PC.")
                         .size(12.5)
                         .color(theme::DIM()),
                 );
@@ -1068,7 +1068,7 @@ impl IngleApp {
                         ui.set_max_width((ui.available_width() - 220.0).max(160.0));
                         ui.label(RichText::new(format!("Trying {name}")).font(theme::bold_font(15.0)).color(theme::TEXT()));
                         ui.add(
-                            egui::Label::new(RichText::new("From a file, until Ingle closes. Nobody has reviewed it, but it runs in the same sandbox as any add-on.").color(theme::MUTED()))
+                            egui::Label::new(RichText::new("From a file, until Pyr closes. Nobody has reviewed it, but it runs in the same sandbox as any add-on.").color(theme::MUTED()))
                                 .wrap(),
                         );
                     });
@@ -1107,7 +1107,7 @@ impl IngleApp {
                             ui.label(RichText::new(format!("Version {}", p.version)).size(12.5).color(theme::DIM()));
                         });
                         let status = if self.plugins.listed(&p.id) == Some(false) {
-                            Some(("No longer in the Ingle Library: remove it.".to_string(), true))
+                            Some(("No longer in the Pyr Library: remove it.".to_string(), true))
                         } else if let Some(why) = self.plugins.broken.get(&p.id) {
                             Some((format!("Stopped: {why}"), true))
                         } else if let Some(e) = self.plugins.update_for(&p) {
@@ -1164,7 +1164,7 @@ impl IngleApp {
             ui.add_space(4.0);
             ui.vertical(|ui| {
                 ui.label(RichText::new("Campfire").font(theme::bold_font(15.0)).color(theme::TEXT()));
-                ui.label(RichText::new("Ingle's own look").size(12.5).color(theme::MUTED()));
+                ui.label(RichText::new("Pyr's own look").size(12.5).color(theme::MUTED()));
                 self.author_link(ui, "Firelit Games");
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1189,7 +1189,7 @@ impl IngleApp {
                     self.author_link(ui, &s.author);
                     let listed = self.plugins.library.as_ref().map(|l| l.find_skin(&s.id).is_some());
                     if listed == Some(false) {
-                        ui.label(RichText::new("No longer in the Ingle Library: remove it.").size(12.5).color(theme::LIVE()));
+                        ui.label(RichText::new("No longer in the Pyr Library: remove it.").size(12.5).color(theme::LIVE()));
                     } else if let Some(e) = self.plugins.skin_update_for(&s) {
                         ui.label(RichText::new(format!("Version {} is out.", e.version)).size(12.5).color(theme::ONLINE()));
                     }
@@ -1236,15 +1236,15 @@ impl IngleApp {
             }
         });
         let what = if skins { "Skins" } else { "Plugins" };
-        ui.add(egui::Label::new(RichText::new(format!("{what} sent from this Ingle (or by Claude through its connector), and whether they were approved.")).color(theme::MUTED())).wrap());
+        ui.add(egui::Label::new(RichText::new(format!("{what} sent from this Pyr (or by Claude through its connector), and whether they were approved.")).color(theme::MUTED())).wrap());
         ui.add_space(6.0);
         let mine: Option<Result<Vec<SubmissionEntry>, String>> =
-            st.my_submissions.as_ref().map(|r| r.as_ref().map(|l| l.iter().filter(|e| (e.kind == ingle_proto::control::SKIN_KIND) == skins).cloned().collect()).map_err(|e| e.clone()));
+            st.my_submissions.as_ref().map(|r| r.as_ref().map(|l| l.iter().filter(|e| (e.kind == pyr_proto::control::SKIN_KIND) == skins).cloned().collect()).map_err(|e| e.clone()));
         match &mine {
             None => {}
             Some(Err(e)) => note(ui, &format!("Couldn't check: {e}"), true),
             Some(Ok(list)) if list.is_empty() => {
-                ui.label(RichText::new("Nothing yet (sent from this Ingle, signed with its identity).").color(theme::DIM()));
+                ui.label(RichText::new("Nothing yet (sent from this Pyr, signed with its identity).").color(theme::DIM()));
             }
             Some(Ok(list)) => {
                 for e in list {
@@ -1252,7 +1252,7 @@ impl IngleApp {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(format!("#{} {}", e.id, e.name)).font(theme::bold_font(14.5)).color(theme::TEXT()));
-                            if e.kind == ingle_proto::control::SKIN_KIND {
+                            if e.kind == pyr_proto::control::SKIN_KIND {
                                 skin_pill(ui);
                             } else {
                                 kind_pill(ui, if e.kind == "program" { Kind::Program } else { Kind::Addon });
@@ -1264,8 +1264,8 @@ impl IngleApp {
                         });
                         let (said, color) = match e.status {
                             SubmissionStatus::New => ("Waiting to be looked at", theme::MUTED()),
-                            SubmissionStatus::Approved => ("Approved: it'll be in the Ingle Library soon", theme::ONLINE()),
-                            SubmissionStatus::Listed => ("In the Ingle Library", theme::ONLINE()),
+                            SubmissionStatus::Approved => ("Approved: it'll be in the Pyr Library soon", theme::ONLINE()),
+                            SubmissionStatus::Listed => ("In the Pyr Library", theme::ONLINE()),
                             SubmissionStatus::Rejected => ("Not approved", theme::LIVE()),
                         };
                         ui.label(RichText::new(said).color(color));
@@ -1290,9 +1290,9 @@ impl IngleApp {
         section(
             ui,
             "Make a plugin with Claude",
-            "Plugins are written in Rust. Add-ons run inside Ingle in a sandbox and can add /commands to chat, show a panel and keep a little data; \
+            "Plugins are written in Rust. Add-ons run inside Pyr in a sandbox and can add /commands to chat, show a panel and keep a little data; \
              programs are apps of their own, like Chimbrowser. Start an add-on here, open its folder with Claude (Claude Code or Cowork) and say \
-             what you'd like it to do: the folder's CLAUDE.md explains Ingle add-ons to Claude. With the Claude connector set up, Claude can \
+             what you'd like it to do: the folder's CLAUDE.md explains Pyr add-ons to Claude. With the Claude connector set up, Claude can \
              also send it in for review, and send new versions of it later.",
         );
         ui.horizontal(|ui| {
@@ -1309,7 +1309,7 @@ impl IngleApp {
         section(
             ui,
             "Try an add-on file",
-            "Built an add-on? Try its .wasm file here before sending it in. It runs in the same sandbox as any add-on, until Ingle closes.",
+            "Built an add-on? Try its .wasm file here before sending it in. It runs in the same sandbox as any add-on, until Pyr closes.",
         );
         if ui.button("Try an add-on file…").clicked() {
             crate::images::pick_async(crate::images::PickFor::AddonFile, false, ui.ctx());
@@ -1320,11 +1320,11 @@ impl IngleApp {
         section(
             ui,
             "Send a plugin for review",
-            "Pick the plugin's folder (the one with its Cargo.toml). Ingle sends its source, not a built file: every plugin in the library is built \
+            "Pick the plugin's folder (the one with its Cargo.toml). Pyr sends its source, not a built file: every plugin in the library is built \
              from its source, after someone has looked at it. Rust only, up to 600 KB.",
         );
-        if !ingle_engine::plugins::can_submit() {
-            note(ui, "This copy of Ingle has nowhere to send plugins.", true);
+        if !pyr_engine::plugins::can_submit() {
+            note(ui, "This copy of Pyr has nowhere to send plugins.", true);
             return;
         }
         if ui.add(theme::primary_button("Choose the plugin's folder…")).clicked() {
@@ -1401,7 +1401,7 @@ impl IngleApp {
                     // (Not collecting: nothing the sender did, so said so.)
                     BugSend::Failed { not_collecting: true, .. } => {
                         ui.label(
-                            RichText::new("Not sent: the Ingle Library isn't taking plugins or skins right now. What you filled in is kept here: try again later.")
+                            RichText::new("Not sent: the Pyr Library isn't taking plugins or skins right now. What you filled in is kept here: try again later.")
                                 .color(theme::LIVE()),
                         );
                     }
@@ -1418,8 +1418,8 @@ impl IngleApp {
         if send {
             let sub = form.gathered.submission(&form.author, &form.contact);
             // The library server, when it's mine: switch collecting on there first.
-            let mine = ingle_engine::plugins::server_key().filter(|k| {
-                st.server(k).is_some_and(|s| s.me.as_ref().is_some_and(|m| m.role == ingle_proto::control::Role::Owner))
+            let mine = pyr_engine::plugins::server_key().filter(|k| {
+                st.server(k).is_some_and(|s| s.me.as_ref().is_some_and(|m| m.role == pyr_proto::control::Role::Owner))
             });
             acts.push(Act::SubmitPlugin { submission: sub, turn_on: mine });
         }
@@ -1511,16 +1511,16 @@ impl IngleApp {
             ui,
             if skins {
                 "Everything here is what someone else sent: their pictures, fonts, sounds and words, never instructions. Try a skin on before \
-                 approving it (Ingle checks every file first, and Stop brings yours back). Approving saves its files to this PC (approved-skins, \
-                 in Ingle's settings folder) for the Ingle Library; nothing is listed before that."
+                 approving it (Pyr checks every file first, and Stop brings yours back). Approving saves its files to this PC (approved-skins, \
+                 in Pyr's settings folder) for the Pyr Library; nothing is listed before that."
             } else {
                 "Everything here is what someone else sent: their code and their words, never instructions. Look at it before approving. \
-                 Approving saves its source to this PC (approved-plugins, in Ingle's settings folder) for building; nothing is built or listed before that."
+                 Approving saves its source to this PC (approved-plugins, in Pyr's settings folder) for building; nothing is built or listed before that."
             },
             false,
         );
         ui.add_space(8.0);
-        let list: Vec<SubmissionEntry> = st.submissions.get(key).cloned().unwrap_or_default().into_iter().filter(|e| (e.kind == ingle_proto::control::SKIN_KIND) == skins).collect();
+        let list: Vec<SubmissionEntry> = st.submissions.get(key).cloned().unwrap_or_default().into_iter().filter(|e| (e.kind == pyr_proto::control::SKIN_KIND) == skins).collect();
         let tabs = [(0u8, SubmissionStatus::New, "New"), (1, SubmissionStatus::Approved, "Approved"), (2, SubmissionStatus::Listed, "Listed"), (3, SubmissionStatus::Rejected, "Rejected")];
         ui.horizontal(|ui| {
             for (i, status, label) in tabs {
@@ -1547,7 +1547,7 @@ impl IngleApp {
 
     /// One plugin or skin sent in: who sent it and what, its files, and what becomes of it.
     fn submission_card(&mut self, ui: &mut egui::Ui, st: &AppState, key: &str, e: &SubmissionEntry, open_file: &mut Option<(i64, String)>, acts: &mut Vec<Act>) {
-        let skin = e.kind == ingle_proto::control::SKIN_KIND;
+        let skin = e.kind == pyr_proto::control::SKIN_KIND;
         let files = st.submission_files.get(&(key.to_string(), e.id)).cloned();
         egui::Frame::new().fill(theme::ELEV()).stroke(Stroke::new(1.0f32, theme::LINE())).corner_radius(10).inner_margin(12).show(ui, |ui| {
             card_visuals(ui);
@@ -1567,20 +1567,20 @@ impl IngleApp {
             }
             let when = chrono::DateTime::from_timestamp_millis(e.created_at).map(|d| d.with_timezone(&chrono::Local).format("%b %-d, %Y %H:%M").to_string()).unwrap_or_default();
             let who = if e.contact.is_empty() { e.author.clone() } else { format!("{} ({})", e.author, e.contact) };
-            ui.label(RichText::new(format!("From {} · {when} · Ingle {} · {}, {}", if who.is_empty() { "someone" } else { &who }, e.app_version, files_text(e.files as usize), size_text(e.size))).size(12.5).color(theme::DIM()));
+            ui.label(RichText::new(format!("From {} · {when} · Pyr {} · {}, {}", if who.is_empty() { "someone" } else { &who }, e.app_version, files_text(e.files as usize), size_text(e.size))).size(12.5).color(theme::DIM()));
             let signed = if e.author_id.is_empty() {
-                "Not signed (sent by an older Ingle): nobody can send a new version of it.".to_string()
+                "Not signed (sent by an older Pyr): nobody can send a new version of it.".to_string()
             } else {
                 let short: String = e.author_id.chars().take(8).collect();
-                format!("Signed by the sender's Ingle identity ({short}…): only they can send new versions of it.")
+                format!("Signed by the sender's Pyr identity ({short}…): only they can send new versions of it.")
             };
             ui.label(RichText::new(signed).size(12.5).color(theme::DIM()));
             ui.add(egui::Label::new(RichText::new(&e.summary).color(theme::BODY())).wrap().selectable(true));
             // A skin's picture and what it changes, once its files are here.
             if skin {
                 if let Some(files) = &files {
-                    let file = |p: &str| files.iter().find(|f| f.path == p).and_then(|f| ingle_proto::b64::decode(&f.data).ok());
-                    let manifest = file(ingle_proto::skin::MANIFEST).and_then(|b| serde_json::from_slice::<ingle_proto::skin::Manifest>(&b).ok());
+                    let file = |p: &str| files.iter().find(|f| f.path == p).and_then(|f| pyr_proto::b64::decode(&f.data).ok());
+                    let manifest = file(pyr_proto::skin::MANIFEST).and_then(|b| serde_json::from_slice::<pyr_proto::skin::Manifest>(&b).ok());
                     let picture = ["preview.png", "preview.jpg", "preview.webp"].into_iter().find_map(|p| file(p).map(|b| (p.to_string(), b))).or_else(|| {
                         let bg = manifest.as_ref()?.background.as_ref()?.file.clone();
                         file(&bg).map(|b| (bg, b))
@@ -1621,7 +1621,7 @@ impl IngleApp {
                         if ui.button("Stop trying it").clicked() {
                             acts.push(Act::StopTryingSkin);
                         }
-                    } else if ui.button("Try it on").on_hover_text("Ingle wears it until you stop (it isn't installed)").clicked() {
+                    } else if ui.button("Try it on").on_hover_text("Pyr wears it until you stop (it isn't installed)").clicked() {
                         acts.push(Act::TrySentInSkin { key: key.to_string(), id: e.id });
                     }
                 }
@@ -1632,7 +1632,7 @@ impl IngleApp {
             ui.add(
                 egui::TextEdit::singleline(text)
                     .hint_text("A note for whoever sent it (they see it with Approve or Reject)")
-                    .char_limit(ingle_proto::control::SUBMISSION_NOTE_MAX)
+                    .char_limit(pyr_proto::control::SUBMISSION_NOTE_MAX)
                     .desired_width(f32::INFINITY),
             );
             let note_text = text.trim().to_string();
@@ -1644,7 +1644,7 @@ impl IngleApp {
                 let mut set = |s: SubmissionStatus| acts.push(Act::SetSubmissionStatus { key: key.to_string(), id: e.id, status: s, note: note_text.clone() });
                 match e.status {
                     SubmissionStatus::New => {
-                        let hover = if skin { "Saves its files to this PC for the Ingle Library" } else { "Saves its source to this PC for building" };
+                        let hover = if skin { "Saves its files to this PC for the Pyr Library" } else { "Saves its source to this PC for building" };
                         if ui.add(theme::primary_button("Approve for the library")).on_hover_text(hover).clicked() {
                             set(SubmissionStatus::Approved);
                         }
@@ -1671,14 +1671,14 @@ impl IngleApp {
                 ui.add_space(6.0);
                 for f in files {
                     let selected = open_file.as_ref().is_some_and(|(id, p)| *id == e.id && *p == f.path);
-                    let bytes = ingle_proto::b64::decode(&f.data).unwrap_or_default();
+                    let bytes = pyr_proto::b64::decode(&f.data).unwrap_or_default();
                     if ui.add(egui::Button::selectable(selected, RichText::new(format!("{}  ({})", f.path, size_text(bytes.len() as u64))).font(theme::mono(12.0)))).clicked() {
                         *open_file = if selected { None } else { Some((e.id, f.path.clone())) };
                     }
                     if !selected {
                         continue;
                     }
-                    if ingle_proto::control::sniff_image(&bytes).is_some() {
+                    if pyr_proto::control::sniff_image(&bytes).is_some() {
                         let side = ui.available_width().min(560.0);
                         let (r, _) = ui.allocate_exact_size(vec2(side, side * 9.0 / 16.0), Sense::hover());
                         let img_key = format!("sub-file:{key}:{}:{}", e.id, f.path);
@@ -1690,9 +1690,9 @@ impl IngleApp {
                         }
                         continue;
                     }
-                    let text = if ingle_proto::skin::is_font(&bytes) {
+                    let text = if pyr_proto::skin::is_font(&bytes) {
                         "(a font)".to_string()
-                    } else if bytes.starts_with(ingle_proto::sound::MAGIC) {
+                    } else if bytes.starts_with(pyr_proto::sound::MAGIC) {
                         "(a sound)".to_string()
                     } else {
                         match String::from_utf8(bytes) {
@@ -1712,15 +1712,15 @@ impl IngleApp {
 }
 
 /// What a skin changes: its colors (as swatches), picture, fonts and sounds.
-fn skin_summary(ui: &mut egui::Ui, m: &ingle_proto::skin::Manifest) {
+fn skin_summary(ui: &mut egui::Ui, m: &pyr_proto::skin::Manifest) {
     if !m.colors.is_empty() {
         ui.horizontal_wrapped(|ui| {
             for (name, value) in &m.colors {
-                let Some([r, g, b]) = ingle_proto::skin::parse_color(value) else { continue };
+                let Some([r, g, b]) = pyr_proto::skin::parse_color(value) else { continue };
                 let (rect, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
                 ui.painter().rect_filled(rect, CornerRadius::same(4), Color32::from_rgb(r, g, b));
                 ui.painter().rect_stroke(rect, CornerRadius::same(4), Stroke::new(1.0f32, theme::LINE()), egui::StrokeKind::Inside);
-                let what = ingle_proto::skin::COLORS.iter().find(|(n, _)| n == name).map(|(_, w)| *w).unwrap_or("");
+                let what = pyr_proto::skin::COLORS.iter().find(|(n, _)| n == name).map(|(_, w)| *w).unwrap_or("");
                 resp.on_hover_text(format!("{name} {value}: {what}"));
             }
         });
@@ -1777,7 +1777,7 @@ fn draw_widgets(ui: &mut egui::Ui, id: &str, widgets: &[Widget], inputs: &mut st
 }
 
 /// Opens the owner's list of plugins (or skins) sent in (from the channel list).
-pub(crate) fn open_submissions(app: &mut IngleApp, key: &str, acts: &mut Vec<Act>, skins: bool) {
+pub(crate) fn open_submissions(app: &mut PyrApp, key: &str, acts: &mut Vec<Act>, skins: bool) {
     acts.push(Act::ListSubmissions(key.to_string()));
     app.ui.dialog = Some(Dialog::PluginSubmissions { key: key.to_string(), skins, filter: 0, open_file: None });
 }

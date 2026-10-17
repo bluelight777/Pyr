@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use ingle_proto::invite::InviteLink;
+use pyr_proto::invite::InviteLink;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
@@ -27,7 +27,7 @@ impl ServerCertVerifier for Pinned {
         _: &[u8],
         _: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        if self.link.matches(&ingle_proto::crypto::fingerprint(end_entity.as_ref())) {
+        if self.link.matches(&pyr_proto::crypto::fingerprint(end_entity.as_ref())) {
             Ok(ServerCertVerified::assertion())
         } else {
             Err(rustls::Error::General("the server's certificate doesn't match the invite link".into()))
@@ -72,11 +72,11 @@ pub async fn reachable(link: &str, timeout: Duration) -> Result<()> {
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(Pinned { link: link.clone(), provider }))
         .with_no_client_auth();
-    tls.alpn_protocols = vec![ingle_proto::ALPN.to_vec()];
+    tls.alpn_protocols = vec![pyr_proto::ALPN.to_vec()];
     let crypto = quinn::crypto::rustls::QuicClientConfig::try_from(tls)?;
     let config = quinn::ClientConfig::new(Arc::new(crypto));
-    let (endpoint, _) = ingle_proto::udp::bind_endpoint("0.0.0.0:0".parse()?, None).context("opening a UDP socket")?;
-    let connecting = endpoint.connect_with(config, addr, ingle_proto::APP_ID)?;
+    let (endpoint, _) = pyr_proto::udp::bind_endpoint("0.0.0.0:0".parse()?, None).context("opening a UDP socket")?;
+    let connecting = endpoint.connect_with(config, addr, pyr_proto::APP_ID)?;
     let result = match tokio::time::timeout(timeout, connecting).await {
         Err(_) => Err(anyhow!("no answer from {} on UDP port {}", link.host, link.port)),
         Ok(Err(e)) => {

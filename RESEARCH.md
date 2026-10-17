@@ -1,5 +1,8 @@
 # Research: building a better Discord for voice, webcams and screen sharing
 
+> Pyr was called **Ingle** until 0.8.0 (October 2026). This research was written under the old name and is left as it was.
+
+
 Compiled 2026-10-10/11 from web research (four research passes: Discord's weak points and
 internals; competitors and media technology; the Rust library ecosystem, with
 cross-compile tests; names). Every claim has a source link. **UNVERIFIED** marks claims

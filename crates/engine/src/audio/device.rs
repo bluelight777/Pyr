@@ -19,7 +19,7 @@ const START_GRACE: Duration = Duration::from_secs(3);
 /// How a sound card stream is doing, kept up to date by the stream's own thread.
 ///
 /// Windows can stop calling a stream back without a word: when a virtual device (NVIDIA
-/// Broadcast, a GoXLR) restarts or changes format, say. Ingle then stopped playing anyone (or
+/// Broadcast, a GoXLR) restarts or changes format, say. Pyr then stopped playing anyone (or
 /// stopped hearing your microphone) until it was restarted. This lets the audio thread notice
 /// and reopen the device instead.
 #[derive(Default)]

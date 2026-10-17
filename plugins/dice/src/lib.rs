@@ -1,6 +1,6 @@
 //! Dice: roll dice in chat with /roll (like `/roll 2d6+1`), or from its panel.
 
-use ingle_plugin::*;
+use pyr_plugin::*;
 
 struct Dice;
 

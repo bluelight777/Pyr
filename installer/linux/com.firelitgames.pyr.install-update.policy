@@ -1,18 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
-<!-- The password prompt for Ingle's in-app updates (see /usr/lib/ingle/install-update). -->
+<!-- The password prompt for Pyr's in-app updates (see /usr/lib/pyr/install-update). -->
 <policyconfig>
   <vendor>Firelit Games</vendor>
-  <action id="com.firelitgames.ingle.install-update">
-    <description>Install an Ingle update</description>
-    <message>Ingle needs your password to install its update</message>
-    <icon_name>ingle</icon_name>
+  <action id="com.firelitgames.pyr.install-update">
+    <description>Install a Pyr update</description>
+    <message>Pyr needs your password to install its update</message>
+    <icon_name>pyr</icon_name>
     <defaults>
       <allow_any>auth_admin</allow_any>
       <allow_inactive>auth_admin</allow_inactive>
       <allow_active>auth_admin</allow_active>
     </defaults>
-    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/ingle/install-update</annotate>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/pyr/install-update</annotate>
   </action>
 </policyconfig>

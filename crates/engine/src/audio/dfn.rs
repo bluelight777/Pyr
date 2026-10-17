@@ -28,7 +28,7 @@ fn params() -> Result<DfParams, String> {
 
 /// Unpack the model in the background, so joining a call doesn't wait for it.
 pub fn preload() {
-    let _ = std::thread::Builder::new().name("ingle-dfn-load".into()).spawn(|| {
+    let _ = std::thread::Builder::new().name("pyr-dfn-load".into()).spawn(|| {
         let _ = params();
     });
 }

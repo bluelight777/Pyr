@@ -1,4 +1,4 @@
-//! Windows: Ingle draws its own dark title strip (like Discord) instead of the system's white
+//! Windows: Pyr draws its own dark title strip (like Discord) instead of the system's white
 //! one. The window has no system frame, so this also handles dragging, double-click to
 //! maximize, the minimize / maximize / close buttons and resizing from the edges.
 
@@ -12,14 +12,14 @@ const BUTTON_W: f32 = 44.0;
 /// How close to the window's edge the pointer must be to resize it.
 const GRIP: f32 = 5.0;
 
-/// True when Ingle draws its own title strip: on Windows (and, to see it elsewhere, in
-/// development builds run with `INGLE_DEV_TITLE_STRIP` set).
+/// True when Pyr draws its own title strip: on Windows (and, to see it elsewhere, in
+/// development builds run with `PYR_DEV_TITLE_STRIP` set).
 pub fn enabled() -> bool {
-    cfg!(windows) || (cfg!(debug_assertions) && std::env::var_os("INGLE_DEV_TITLE_STRIP").is_some())
+    cfg!(windows) || (cfg!(debug_assertions) && pyr_proto::env_set("DEV_TITLE_STRIP"))
 }
 
 /// Draws the strip and handles resizing. Call first thing in `update`. `after_name(ui, x, y)`
-/// draws what goes right after Ingle's name (the version and the updater), from `x` along and
+/// draws what goes right after Pyr's name (the version and the updater), from `x` along and
 /// centred on `y`.
 pub fn show(ctx: &egui::Context, title: &str, after_name: impl FnOnce(&mut egui::Ui, f32, f32) -> f32) {
     if !enabled() {
@@ -32,7 +32,7 @@ pub fn show(ctx: &egui::Context, title: &str, after_name: impl FnOnce(&mut egui:
     if !maximized {
         resize_edges(ctx);
     }
-    egui::TopBottomPanel::top("ingle-title-bar")
+    egui::TopBottomPanel::top("pyr-title-bar")
         .exact_height(HEIGHT)
         .resizable(false)
         .show_separator_line(false)
@@ -49,7 +49,7 @@ pub fn show(ctx: &egui::Context, title: &str, after_name: impl FnOnce(&mut egui:
                 ctx.send_viewport_cmd(ViewportCommand::StartDrag);
             }
             let p = ui.painter().clone();
-            // Ingle's flame and name, then the version and the updater (see `update_chip`).
+            // Pyr's flame and name, then the version and the updater (see `update_chip`).
             crate::icons::flame(&p, Rect::from_center_size(pos2(full.left() + 17.0, full.center().y), vec2(13.0, 13.0)));
             let name = p.text(pos2(full.left() + 28.0, full.center().y), Align2::LEFT_CENTER, title, theme::bold_font(12.0), theme::MUTED());
             after_name(ui, name.right() + 3.0, full.center().y);
