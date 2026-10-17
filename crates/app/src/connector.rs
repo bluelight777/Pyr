@@ -156,16 +156,47 @@ const OLD_NAME: &str = "ingle";
 pub fn migrate_from_ingle(config: &Path, exe: &Path, args: &[String]) -> Result<bool, String> {
     let Some(mut m) = read(config)? else { return Ok(false) };
     let Some(servers) = m.get_mut("mcpServers").and_then(Value::as_object_mut) else { return Ok(false) };
-    let ingles = servers.get(OLD_NAME).and_then(|e| e.get("command")).and_then(Value::as_str).is_some_and(|c| {
-        let file = c.rsplit(['/', '\\']).next().unwrap_or("");
-        file.eq_ignore_ascii_case("ingle-mcp") || file.eq_ignore_ascii_case("ingle-mcp.exe")
-    });
-    if !ingles {
+    if !servers.get(OLD_NAME).is_some_and(starts_ingles) {
         return Ok(false);
     }
     servers.remove(OLD_NAME);
     servers.entry(NAME).or_insert_with(|| entry(exe, args));
     write(config, m).map(|()| true)
+}
+
+/// An `mcpServers` entry that starts Ingle's connector (`ingle-mcp`).
+fn starts_ingles(e: &Value) -> bool {
+    e.get("command").and_then(Value::as_str).is_some_and(|c| {
+        let file = c.rsplit(['/', '\\']).next().unwrap_or("");
+        file.eq_ignore_ascii_case("ingle-mcp") || file.eq_ignore_ascii_case("ingle-mcp.exe")
+    })
+}
+
+/// Claude Code's own settings file (`~/.claude.json`), where `claude mcp add --scope user`
+/// puts what it starts.
+pub fn claude_code_config() -> Option<PathBuf> {
+    let home = if cfg!(windows) { std::env::var_os("USERPROFILE") } else { std::env::var_os("HOME") };
+    Some(PathBuf::from(home?).join(".claude.json"))
+}
+
+/// Whether Claude Code still starts Ingle's connector (set up before Pyr was called Pyr; that
+/// connector went with Ingle). Only read, never changed: Claude Code writes that file all the
+/// time, so it's switched over with Claude Code's own commands ([`claude_code_switch`]).
+pub fn claude_code_has_ingles(config: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(config) else { return false };
+    // (Most of the time it isn't there at all: no need to read the whole file as JSON.)
+    if !text.contains("ingle-mcp") {
+        return false;
+    }
+    serde_json::from_str::<Value>(&text)
+        .ok()
+        .and_then(|v| v.get("mcpServers").and_then(|s| s.get(OLD_NAME)).map(starts_ingles))
+        .unwrap_or(false)
+}
+
+/// The commands that take Ingle's connector out of Claude Code and put this Pyr's in.
+pub fn claude_code_switch(exe: &Path, args: &[String]) -> [String; 2] {
+    [format!("claude mcp remove --scope user {OLD_NAME}"), claude_code_line(exe, args)]
 }
 
 /// The setup to paste into another app's MCP settings.
@@ -206,6 +237,34 @@ mod tests {
         assert_eq!(migrate_from_ingle(&config, &exe, &[]), Ok(false), "once");
         std::fs::write(&config, r#"{"mcpServers":{"ingle":{"command":"/home/a/my-ingle-tool"}}}"#).unwrap();
         assert_eq!(migrate_from_ingle(&config, &exe, &[]), Ok(false), "not Ingle's connector");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Claude Code's settings are only read: when they still start Ingle's connector, Pyr
+    /// says so and gives the two commands that switch it, and the file stays as it was.
+    #[test]
+    fn claude_code_still_on_ingles_connector_is_told() {
+        let dir = std::env::temp_dir().join(format!("pyr-connector-code-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join(".claude.json");
+        assert!(!claude_code_has_ingles(&config), "no file");
+        let old = r#"{"numStartups":3,"mcpServers":{"ingle":{"type":"stdio","command":"C:\\Users\\a\\AppData\\Local\\Programs\\Ingle\\ingle-mcp.exe","args":[],"env":{}}},"projects":{}}"#;
+        std::fs::write(&config, old).unwrap();
+        assert!(claude_code_has_ingles(&config));
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), old, "left as it was");
+        // Pyr's connector, a project-only entry, someone else's "ingle", or a file that isn't JSON: nothing to say.
+        for other in [
+            r#"{"mcpServers":{"pyr":{"command":"C:\\Pyr\\pyr-mcp.exe"}}}"#,
+            r#"{"projects":{"C:/x":{"mcpServers":{"ingle":{"command":"ingle-mcp"}}}}}"#,
+            r#"{"mcpServers":{"ingle":{"command":"/home/a/my-ingle-tool"}},"note":"ingle-mcp"}"#,
+            "{ not json ingle-mcp",
+        ] {
+            std::fs::write(&config, other).unwrap();
+            assert!(!claude_code_has_ingles(&config), "{other}");
+        }
+        let exe = PathBuf::from("/usr/bin/pyr-mcp");
+        assert_eq!(claude_code_switch(&exe, &[]), ["claude mcp remove --scope user ingle".to_string(), "claude mcp add --scope user pyr -- /usr/bin/pyr-mcp".to_string()]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

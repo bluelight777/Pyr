@@ -22,8 +22,25 @@ struct Cli {
     /// Name of the community (used the first time the server starts).
     #[arg(long)]
     name: Option<String>,
+    /// The invite directory that makes invites short links (https://pyr.gg/<code>), or "off"
+    /// for none. (PYR_DIRECTORY sets it too.)
+    #[arg(long, global = true)]
+    directory: Option<String>,
     #[command(subcommand)]
     command: Option<Cmd>,
+}
+
+impl Cli {
+    /// The invite directory to list invites at, if any.
+    fn invite_directory(&self) -> Option<String> {
+        let d = self
+            .directory
+            .clone()
+            .or_else(|| pyr_proto::env_var("DIRECTORY"))
+            .unwrap_or_else(|| pyr_proto::directory::DIRECTORY.to_string());
+        let d = d.trim().trim_end_matches('/').to_string();
+        (!d.is_empty() && !d.eq_ignore_ascii_case("off") && !d.eq_ignore_ascii_case("none")).then_some(d)
+    }
 }
 
 #[derive(Subcommand)]
@@ -64,7 +81,8 @@ fn make_invite(cli: &Cli, owner: bool, uses: Option<u32>, hours: Option<u64>) ->
     let (code, uses, role) = if owner {
         (format!("owner-{}", pyr_server::db::new_invite_code(16)), Some(1), Role::Owner)
     } else {
-        (pyr_server::db::new_invite_code(10), uses, Role::Member)
+        // (The code is the short link too: https://pyr.gg/<code>.)
+        (pyr_proto::directory::new_code(), uses, Role::Member)
     };
     let exp = hours.map(|h| pyr_proto::now_ms() + h.min(24 * 365 * 10) as i64 * 3_600_000);
     // Owner links always expire (a week unless asked for sooner).
@@ -77,7 +95,27 @@ fn make_invite(cli: &Cli, owner: bool, uses: Option<u32>, hours: Option<u64>) ->
         .or_else(|| db.get_meta("public_host").filter(|h| !h.is_empty()))
         .or_else(pyr_server::detect_lan_ip)
         .unwrap_or_else(|| "127.0.0.1".into());
-    Ok(InviteLink::new(host, cli.bind.port(), Some(code), tls.fingerprint).to_url())
+    let full = InviteLink::new(host.clone(), cli.bind.port(), Some(code.clone()), tls.fingerprint).to_url();
+    // An everyday invite is listed at pyr.gg too (while short links are on), and its short
+    // link is the one to share. The running server's own lists include it from now on.
+    let short_links = db.get_meta("short_links").as_deref() != Some("0");
+    if let (false, Some(base), true, true) = (owner, cli.invite_directory(), short_links, pyr_server::directory::reachable_host(&host)) {
+        db.set_listed(&code, true)?;
+        let signing = pyr_server::directory::Signing::new(&tls.cert_der, &tls.key_der)?;
+        let a = pyr_server::directory::announcement(&db, &host, cli.bind.port(), None);
+        match pyr_server::directory::announce_once(&base, &signing, &a) {
+            Ok(r) if !r.taken.contains(&code) => {
+                eprintln!("(The full link, which works without pyr.gg: {full})");
+                return Ok(pyr_proto::directory::short_url(&code));
+            }
+            Ok(_) => {
+                db.set_listed(&code, false)?;
+                eprintln!("(pyr.gg has that code for another community already, so here's the full link.)");
+            }
+            Err(e) => eprintln!("(Couldn't list it at pyr.gg: {e}. Here's the full link, which works without it.)"),
+        }
+    }
+    Ok(full)
 }
 
 fn main() {
@@ -152,13 +190,12 @@ fn run() -> Result<()> {
         .init();
 
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let invite_directory = cli.invite_directory();
     rt.block_on(async move {
-        let server = pyr_server::start(pyr_server::ServerConfig {
-            data_dir: cli.data.clone(),
-            bind: cli.bind,
-            public_host: cli.public_host.clone(),
-            name: cli.name.clone(),
-        })
+        let server = pyr_server::start_with(
+            pyr_server::ServerConfig { data_dir: cli.data.clone(), bind: cli.bind, public_host: cli.public_host.clone(), name: cli.name.clone() },
+            invite_directory,
+        )
         .await?;
 
         let info = server.hub.info();

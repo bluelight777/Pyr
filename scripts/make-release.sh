@@ -34,7 +34,7 @@ cargo run -q -p pyr-proto --example release -- sign --key "$KEY" --version "$VER
   --base-url "$BASE" --windows "$SITE/Pyr-Setup-$VERSION.exe" "${DEB[@]}" --out "$SITE/latest.json"
 # The Pyr Library (scripts/make-library.sh): its signed list and the plugins' files, in one
 # tar file (its folders are too deep to copy onto a PC one by one); install-site.sh puts them at
-# pyr/library/ on the website.
+# /library/ on the website.
 if [ -f dist/library/index.json ]; then
   tar --owner=0 --group=0 --numeric-owner -cf "$OUT/upload/library.tar" -C dist library/index.json library/files
 else
@@ -47,5 +47,14 @@ if grep -Eq '^[0-9]+' installer/site/fixed-bugs.txt 2>/dev/null; then
   cp installer/site/fixed-bugs.txt "$OUT/upload/"
 fi
 mkdir -p "$OUT/upload/server" && cp dist/vps/pyr-server-linux-x86_64 dist/vps/pyr-server-linux-aarch64 "$OUT/upload/server/"
+# Short links (https://pyr.gg/<code>): the invite directory, and the script that sets it up
+# with pyr.gg's nginx settings the first time (install-site.sh runs it then; later releases
+# just bring a new pyr-directory).
+cp installer/site/setup-pyr-gg.sh "$OUT/upload/"
+if [ -f dist/vps/pyr-directory-linux-x86_64 ]; then
+  cp dist/vps/pyr-directory-linux-x86_64 "$OUT/upload/server/"
+else
+  echo "no dist/vps/pyr-directory-linux-x86_64: pyr.gg keeps the invite directory it has" >&2
+fi
 cp installer/site/publish.ps1 installer/site/publish.cmd "$OUT/"
 ls -la "$SITE"

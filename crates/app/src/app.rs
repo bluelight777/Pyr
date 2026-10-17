@@ -142,7 +142,14 @@ pub enum Act {
     SetChannelAccess { key: String, channel: ChannelId, access: ChannelAccess },
     UpdateChannel { key: String, channel: ChannelId, name: Option<String>, topic: Option<String> },
     DeleteChannel { key: String, channel: ChannelId },
-    CreateInvite { key: String },
+    /// An invite for the Invite dialog (one of mine with these settings, if it still works;
+    /// `fresh`: a new one regardless, as Generate a new link makes).
+    CreateInvite { key: String, max_uses: Option<u32>, expires_secs: Option<u64>, fresh: bool },
+    /// Server Settings → Invites.
+    ListInvites { key: String },
+    RevokeInvite { key: String, code: String },
+    SetVanity { key: String, code: Option<String> },
+    SetShortLinks { key: String, on: bool },
     /// A bot invite for the Claude connector on this PC (Server Settings → Bots).
     AddClaude { key: String },
     CreateBotInvite { key: String },
@@ -227,8 +234,10 @@ pub enum Dialog {
     CreateChannel { key: String, kind: ChannelKind, name: String, access: ChannelAccess },
     /// `before`: who could see and post in it when the dialog opened (to tell what changed).
     EditChannel { key: String, channel: ChannelId, name: String, topic: String, access: ChannelAccess, before: ChannelAccess },
-    Invite { key: String },
-    /// Tab 0: overview; 1: roles; 2: emoji; 3: backups; 4: soundboard.
+    /// Invite People: `expire` and `uses` index `invites::EXPIRE` and `invites::USES`;
+    /// `editing` shows those choices.
+    Invite { key: String, expire: usize, uses: usize, editing: bool },
+    /// Tab 0: overview; 1: roles; 2: emoji; 3: backups; 4: soundboard; 5: bots; 6: GIFs; 7: invites.
     ServerSettings { key: String, name: String, tab: u8 },
     LeaveServer { key: String, name: String },
     /// "Delete message?" (see `chat.rs`).
@@ -481,6 +490,8 @@ pub struct PyrApp {
     pub looks: crate::looks::Looks,
     /// Everyone's voice meters in my call, eased for drawing.
     pub meters: crate::meter::Meters,
+    /// What short invite links (pyr.gg/<code>) open.
+    pub invite_lookups: crate::invites::Lookups,
 }
 
 impl PyrApp {
@@ -519,12 +530,20 @@ impl PyrApp {
             title_shown: title.clone(),
             title,
             meters: Default::default(),
+            invite_lookups: Default::default(),
         }
     }
 
     fn apply(&mut self, a: Act, ctx: &egui::Context) {
         let e = &self.engine;
         match a {
+            // A short link (pyr.gg/<code>): the dialog looks it up, then offers to join.
+            Act::OfferJoin(link) if pyr_proto::directory::short_code(&link).is_some() => {
+                self.ui.dialog = Some(Dialog::ConfirmJoin { link });
+            }
+            Act::AddServer(link) if pyr_proto::directory::short_code(&link).is_some() => {
+                self.ui.dialog = Some(Dialog::ConfirmJoin { link });
+            }
             Act::OfferJoin(link) => {
                 let known = pyr_proto::invite::InviteLink::parse(&link).ok().and_then(|l| {
                     e.state().servers.iter().find(|s| {
@@ -597,7 +616,11 @@ impl PyrApp {
             }
             Act::UpdateChannel { key, channel, name, topic } => e.update_channel(&key, channel, name, topic),
             Act::DeleteChannel { key, channel } => e.delete_channel(&key, channel),
-            Act::CreateInvite { key } => e.create_invite(&key, None, None),
+            Act::CreateInvite { key, max_uses, expires_secs, fresh } => e.make_invite(&key, max_uses, expires_secs, !fresh),
+            Act::ListInvites { key } => e.list_invites(&key),
+            Act::RevokeInvite { key, code } => e.revoke_invite(&key, &code),
+            Act::SetVanity { key, code } => e.set_vanity(&key, code),
+            Act::SetShortLinks { key, on } => e.set_short_links(&key, on),
             Act::AddClaude { key } => e.add_claude(&key),
             Act::CreateBotInvite { key } => e.create_bot_invite(&key),
             Act::SettleResume { camera, screen, turn_on_camera } => {
@@ -1489,13 +1512,10 @@ impl PyrApp {
 
 // ------------------------------------------------------------------- helpers
 
-/// An invite link Pyr can join from: `pyr://…`, or the web form on firelitgames.com.
+/// An invite link Pyr can join from: a short one (`https://pyr.gg/<code>`), `pyr://…`, or
+/// the web form on pyr.gg (or, from before the rename, `ingle://…` and firelitgames.com/ingle).
 fn is_invite(url: &str) -> bool {
-    let u = url.trim();
-    // (ingle:// and firelitgames.com/ingle/: links made before Pyr was called Pyr.)
-    let app = ["pyr://", "ingle://"].iter().any(|s| u.get(..s.len()).is_some_and(|p| p.eq_ignore_ascii_case(s)));
-    let web = [pyr_proto::invite::WEB_INVITE, "https://firelitgames.com/ingle/"].iter().any(|w| u.starts_with(w)) && u.contains("join=");
-    (app || web) && pyr_proto::invite::InviteLink::parse(u).is_ok()
+    pyr_proto::directory::short_code(url).is_some() || crate::invites::is_full_invite(url)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2265,8 +2285,7 @@ impl PyrApp {
                 resp.context_menu(|ui| {
                     crate::menu::style(ui);
                     if ui.button("Invite people").clicked() {
-                        acts.push(Act::CreateInvite { key: key.clone() });
-                        self.ui.dialog = Some(Dialog::Invite { key: key.clone() });
+                        acts.extend(crate::dialogs::open_invite(&mut self.ui.dialog, &key));
                         ui.close();
                     }
                     if admin && ui.button("Server settings").clicked() {
@@ -2333,8 +2352,7 @@ impl PyrApp {
                     let title = ui.add(egui::Label::new(RichText::new(&s.name).font(theme::bold_font(15.5)).color(theme::TEXT())).truncate().sense(Sense::click()));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if icon_button(ui, 26.0, "Invite people", false, |p, r, c| icons::plus(p, r, c, 2.0)).clicked() {
-                            acts.push(Act::CreateInvite { key: s.key.clone() });
-                            self.ui.dialog = Some(Dialog::Invite { key: s.key.clone() });
+                            acts.extend(crate::dialogs::open_invite(&mut self.ui.dialog, &s.key));
                         }
                     });
                     if title.clicked() && (s.can(perm::MANAGE_SERVER) || s.can(perm::MANAGE_ROLES) || s.can(perm::MANAGE_EMOJI)) {
@@ -3451,5 +3469,8 @@ mod tests {
         // Made before Pyr was called Pyr.
         assert!(super::is_invite(&format!("ingle://2.24.121.231/abc/{fp}")));
         assert!(super::is_invite(&format!("https://firelitgames.com/ingle/#n=Camp&join=2.24.121.231/abc/{fp}")));
+        // Short links, like Discord's (pyr.gg's own pages aren't invites).
+        assert!(super::is_invite("https://pyr.gg/qrslmnov") && super::is_invite("pyr.gg/invite/brethren"));
+        assert!(!super::is_invite("https://pyr.gg/download") && !super::is_invite("https://pyr.gg/latest.json"));
     }
 }

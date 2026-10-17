@@ -348,6 +348,11 @@ fn migrate(c: &Connection) -> Result<()> {
              ALTER TABLE invites ADD COLUMN bot INTEGER NOT NULL DEFAULT 0;",
         )?;
     }
+    // Short links (0.8): invites the server lists at pyr.gg (see `crate::directory`).
+    let has_listed = c.prepare("SELECT 1 FROM pragma_table_info('invites') WHERE name = 'listed'")?.exists([])?;
+    if !has_listed {
+        c.execute_batch("ALTER TABLE invites ADD COLUMN listed INTEGER NOT NULL DEFAULT 0")?;
+    }
     Ok(())
 }
 
@@ -1775,11 +1780,121 @@ impl Db {
     }
 }
 
-/// A random invite code (lower-case letters and digits, no look-alikes).
+/// A random invite code (lower-case letters and digits, no look-alikes; see
+/// [`pyr_proto::directory::random_code`]).
 pub fn new_invite_code(len: usize) -> String {
-    const ALPHABET: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
-    let bytes = pyr_proto::crypto::random_bytes::<32>();
-    bytes.iter().take(len).map(|b| ALPHABET[*b as usize % ALPHABET.len()] as char).collect()
+    pyr_proto::directory::random_code(len)
+}
+
+/// An invite as `ListInvites` shows it (and what the directory is told).
+#[derive(Clone, Debug, PartialEq)]
+pub struct InviteRow {
+    pub code: String,
+    pub created_by: String,
+    pub created_at: i64,
+    pub uses: u32,
+    pub max_uses: Option<u32>,
+    pub expires_at: Option<i64>,
+    pub grants: Role,
+    pub bot: bool,
+    /// The server lists it at pyr.gg.
+    pub listed: bool,
+}
+
+impl InviteRow {
+    fn from_row(r: &rusqlite::Row) -> rusqlite::Result<InviteRow> {
+        Ok(InviteRow {
+            code: r.get(0)?,
+            created_by: r.get(1)?,
+            created_at: r.get(2)?,
+            uses: r.get::<_, i64>(3)?.max(0) as u32,
+            max_uses: r.get::<_, Option<i64>>(4)?.map(|n| n.max(0) as u32),
+            expires_at: r.get(5)?,
+            grants: Role::from_i64(r.get(6)?),
+            bot: r.get::<_, i64>(7)? != 0,
+            listed: r.get::<_, i64>(8)? != 0,
+        })
+    }
+}
+
+const INVITE_COLUMNS: &str = "code, created_by, created_at, uses, max_uses, expires_at, grants_role, bot, listed";
+/// Invites that still work.
+const USABLE: &str = "(max_uses IS NULL OR uses < max_uses) AND (expires_at IS NULL OR expires_at > ?1)";
+
+impl Db {
+    pub fn invite(&self, code: &str) -> Option<InviteRow> {
+        self.conn
+            .lock()
+            .query_row(&format!("SELECT {INVITE_COLUMNS} FROM invites WHERE code = ?1"), [code], InviteRow::from_row)
+            .optional()
+            .ok()
+            .flatten()
+    }
+
+    /// The invites that still work, newest first: someone's (`by`), or everyone's. Owner
+    /// links (which make whoever uses one an owner) are left out.
+    pub fn usable_invites(&self, by: Option<&str>) -> Vec<InviteRow> {
+        let c = self.conn.lock();
+        let sql = format!(
+            "SELECT {INVITE_COLUMNS} FROM invites WHERE {USABLE} AND grants_role != {} AND (?2 IS NULL OR created_by = ?2)
+             ORDER BY created_at DESC LIMIT 2000",
+            Role::Owner.as_i64()
+        );
+        c.prepare(&sql)
+            .and_then(|mut s| s.query_map(params![now_ms(), by], InviteRow::from_row)?.collect())
+            .unwrap_or_default()
+    }
+
+    /// The invites the server lists at pyr.gg: everyday ones that still work (the community's
+    /// own code, `vanity`, goes separately).
+    pub fn listed_invites(&self) -> Vec<InviteRow> {
+        let c = self.conn.lock();
+        let sql = format!(
+            "SELECT {INVITE_COLUMNS} FROM invites WHERE {USABLE} AND listed = 1 AND grants_role = {} AND bot = 0
+               AND code != COALESCE((SELECT value FROM meta WHERE key = 'vanity'), '')
+             ORDER BY created_at DESC LIMIT {}",
+            Role::Member.as_i64(),
+            pyr_proto::directory::MAX_CODES
+        );
+        c.prepare(&sql).and_then(|mut s| s.query_map([now_ms()], InviteRow::from_row)?.collect()).unwrap_or_default()
+    }
+
+    /// An everyday invite of `uid`'s that still works, made with the same settings, with at
+    /// least half its time left (what `CreateInvite { reuse }` hands back).
+    pub fn reusable_invite(&self, uid: &str, max_uses: Option<u32>, expires_secs: Option<u64>, listed: bool) -> Option<InviteRow> {
+        let now = now_ms();
+        self.usable_invites(Some(uid)).into_iter().find(|i| {
+            let same_time = match (expires_secs, i.expires_at) {
+                (None, None) => true,
+                (Some(s), Some(exp)) => {
+                    let wanted = (s.min(365 * 86400) as i64) * 1000;
+                    (exp - i.created_at - wanted).abs() < 2000 && exp - now >= wanted / 2
+                }
+                _ => false,
+            };
+            i.grants == Role::Member && !i.bot && i.max_uses == max_uses && i.listed == listed && same_time
+                && self.get_meta("vanity").as_deref() != Some(i.code.as_str())
+        })
+    }
+
+    pub fn set_listed(&self, code: &str, listed: bool) -> Result<()> {
+        self.conn.lock().execute("UPDATE invites SET listed = ?2 WHERE code = ?1", params![code, listed as i64])?;
+        Ok(())
+    }
+
+    /// Takes an invite back. Whether there was one.
+    pub fn delete_invite(&self, code: &str) -> Result<bool> {
+        Ok(self.conn.lock().execute("DELETE FROM invites WHERE code = ?1", [code])? > 0)
+    }
+
+    /// Members (not counting bots or the banned).
+    pub fn member_count(&self) -> u32 {
+        self.conn
+            .lock()
+            .query_row("SELECT COUNT(*) FROM users WHERE banned = 0 AND bot = 0", [], |r| r.get::<_, i64>(0))
+            .map(|n| n.max(0) as u32)
+            .unwrap_or(0)
+    }
 }
 
 pub fn user_is_member(db: &Db, id: &UserId) -> bool {

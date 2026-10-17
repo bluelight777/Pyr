@@ -323,6 +323,13 @@ pub const VOUCHES_FEATURE: &str = "vouches";
 /// `GetVouchesForMe`: the vouches for me (who made sure it's me), for the shield by my own
 /// name (0.8.0).
 pub const VOUCHES_FOR_ME_FEATURE: &str = "vouches-for-me";
+/// Invites like Discord's (0.8.0): `CreateInvite { reuse }` hands back an invite of mine with
+/// the same settings instead of making another, `ListInvites` shows the ones that still work
+/// (everyone's to those who can manage the server, one's own to the rest) and `RevokeInvite`
+/// takes one back. Short links: the server lists its invites at pyr.gg, so they open as
+/// `https://pyr.gg/<code>` (`InviteCreated::short`, see [`crate::directory`]); the owner can
+/// give the community its own code (`SetVanity`) or turn short links off (`SetShortLinks`).
+pub const INVITES_FEATURE: &str = "invites";
 /// In `Login::caps`: this app knows group conversations ([`GROUPS_FEATURE`]).
 pub const GROUPS_CAP: &str = "groups";
 /// In `Login::caps`: this app adjusts its camera and screen share to its viewers'
@@ -903,6 +910,28 @@ pub struct ServerInfo {
     pub klipy_key: String,
 }
 
+/// An invite that still works ([`INVITES_FEATURE`], `Event::Invites`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct InviteInfo {
+    pub code: String,
+    /// Who made it: a member's id, or "server" for the server's own (like the one it printed
+    /// when it was set up).
+    pub created_by: String,
+    pub created_at: i64,
+    #[serde(default)]
+    pub uses: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_uses: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
+    /// `https://pyr.gg/<code>` while pyr.gg lists it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short: Option<String>,
+    /// A bot invite ([`BOTS_FEATURE`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bot: bool,
+}
+
 /// One of a server's own emoji. Written in messages as `<:name:id>` (`<a:name:id>` when
 /// animated); the picture is a file uploaded as [`FileKind::Avatar`], fetched by its id.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -1209,6 +1238,28 @@ pub enum Request {
         max_uses: Option<u32>,
         #[serde(default)]
         expires_secs: Option<u64>,
+        /// An invite of mine with the same settings that still works comes back instead of a
+        /// new one ([`INVITES_FEATURE`]).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        reuse: bool,
+    },
+    /// The invites that still work ([`INVITES_FEATURE`]): everyone's for those who can manage
+    /// the server, one's own for the rest. Replies `Invites`.
+    ListInvites {},
+    /// Takes an invite back ([`INVITES_FEATURE`]): one's own, or anyone's for those who can
+    /// manage the server.
+    RevokeInvite {
+        code: String,
+    },
+    /// The community's own short link, `https://pyr.gg/<code>` (the owner only; `None` takes
+    /// it away). Replies `Invites` once pyr.gg has it.
+    SetVanity {
+        #[serde(default)]
+        code: Option<String>,
+    },
+    /// Whether the server lists its invites at pyr.gg (the owner only).
+    SetShortLinks {
+        on: bool,
     },
     /// An invite for one bot ([`BOTS_FEATURE`]; needs Manage server). Replies `InviteCreated`.
     CreateBotInvite {},
@@ -1634,6 +1685,33 @@ pub enum Event {
     InviteCreated {
         code: String,
         link: String,
+        /// `https://pyr.gg/<code>` once pyr.gg lists it ([`INVITES_FEATURE`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        short: Option<String>,
+        /// Why there's no short link, when short links are on but this one couldn't be listed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        short_problem: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expires_at: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_uses: Option<u32>,
+        /// Times it's been used (a reused invite may have been).
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        uses: u32,
+    },
+    /// Reply to `ListInvites` (and to `SetVanity`).
+    Invites {
+        invites: Vec<InviteInfo>,
+        /// The community's own code (`https://pyr.gg/<vanity>`), if it has one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vanity: Option<String>,
+        /// The server lists its invites at pyr.gg.
+        #[serde(default)]
+        short_links: bool,
+        /// Why short links can't work for this server now, if they can't (its address only
+        /// works nearby, or it was started without them).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        short_links_problem: Option<String>,
     },
     /// Reply to `VoiceJoin`.
     VoiceReady {

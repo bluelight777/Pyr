@@ -93,8 +93,14 @@ pub struct LinkSpan {
 }
 
 fn is_url_start(s: &str) -> bool {
-    // (ingle://: invite links from before Pyr was called Pyr.)
-    s.starts_with("https://") || s.starts_with("http://") || s.starts_with("pyr://") || s.starts_with("ingle://")
+    // (ingle://: invite links from before Pyr was called Pyr. pyr.gg/…: short invite links,
+    // written without https:// the way people write discord.gg/….)
+    s.starts_with("https://") || s.starts_with("http://") || s.starts_with("pyr://") || s.starts_with("ingle://") || bare_pyr_gg(s)
+}
+
+/// A pyr.gg link written without its `https://`.
+fn bare_pyr_gg(s: &str) -> bool {
+    s.starts_with("pyr.gg/") || s.starts_with("www.pyr.gg/")
 }
 
 /// Build a styled layout for one paragraph. Returns the job and link spans (in chars).
@@ -172,7 +178,8 @@ pub fn layout_emoji(
             i += 2;
             continue;
         }
-        let rest: String = chars[i..chars.len().min(i + 9)].iter().collect();
+        // (Enough to tell a link's start: the longest is "www.pyr.gg/".)
+        let rest: String = chars[i..chars.len().min(i + 12)].iter().collect();
         // inline code
         if chars[i] == '`' {
             if let Some(end) = chars[i + 1..].iter().position(|c| *c == '`') {
@@ -195,9 +202,10 @@ pub fn layout_emoji(
             while j > i && matches!(chars[j - 1], '.' | ',' | ')' | '!' | '?' | ':' | ';') {
                 j -= 1;
             }
-            let url: String = chars[i..j].iter().collect();
+            let shown: String = chars[i..j].iter().collect();
+            let url = if bare_pyr_gg(&shown) { format!("https://{shown}") } else { shown.clone() };
             let start = chars_out;
-            let mut b = url.clone();
+            let mut b = shown;
             flush(&mut job, &mut b, &mut chars_out, fmt(style, false, true, false));
             links.push(LinkSpan { start, end: chars_out, url });
             i = j;
@@ -418,6 +426,16 @@ mod tests {
         assert_eq!(job.text, "see https://example.com/x, bold and code");
         let span: String = job.text.chars().skip(links[0].start).take(links[0].end - links[0].start).collect();
         assert_eq!(span, "https://example.com/x");
+    }
+
+    /// Short invite links written the way people write discord.gg ones open as https links.
+    #[test]
+    fn bare_pyr_gg_links_are_links() {
+        let (job, links) = layout("join pyr.gg/qrslmnov! or www.pyr.gg/abc but notpyr.gg/x", 14.0, Color32::WHITE, &[], 400.0);
+        assert_eq!(links.iter().map(|l| l.url.as_str()).collect::<Vec<_>>(), vec!["https://pyr.gg/qrslmnov", "https://www.pyr.gg/abc"]);
+        assert_eq!(job.text, "join pyr.gg/qrslmnov! or www.pyr.gg/abc but notpyr.gg/x");
+        let span: String = job.text.chars().skip(links[0].start).take(links[0].end - links[0].start).collect();
+        assert_eq!(span, "pyr.gg/qrslmnov");
     }
 
     #[test]

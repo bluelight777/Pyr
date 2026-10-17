@@ -23,10 +23,11 @@
 | `crates/server` | `pyr-server`: TLS identity, SQLite storage, login, chat, roles, the media relay (`hub.rs`, `conn.rs`). |
 | `crates/engine` | Everything the client does except drawing: connections and reconnects, state the UI reads, calls, E2EE key management, the audio engine, video capture/encode/decode, push-to-talk. |
 | `crates/app` | The desktop UI (eframe/egui): server rail, channels, chat with markdown, call stage, dialogs, theme and icons. |
+| `crates/directory` | `pyr-directory`: the invite directory behind short links, run on pyr.gg behind nginx (signed announcements in, lookups and invite pages out). |
 
 ## Transport
 
-- **QUIC** (quinn 0.11, rustls + ring, TLS 1.3, ALPN `pyr/1`) on one UDP port. One
+- **QUIC** (quinn 0.11, rustls + ring, TLS 1.3, ALPN `ingle/1`) on one UDP port. One
   connection per server carries text, voice and video, so there's a single port to forward
   and congestion control sees all traffic together.
 - **Server identity without a CA.** The server makes a self-signed certificate on first
@@ -49,11 +50,24 @@
 - Your identity is an Ed25519 key pair in `identity.key`. The base64 public key is your
   user id; there are no accounts, emails or passwords.
 - Login: the server sends a random nonce in `Hello`. The client signs
-  `"pyr-login-v1" ‖ nonce ‖ TLS exporter ‖ user id`. The TLS exporter ties the signature
+  `"ingle-login-v1" ‖ nonce ‖ TLS exporter ‖ user id`. The TLS exporter ties the signature
   to this exact connection, so a login can't be replayed or relayed elsewhere.
 - New people need an invite code (from the link) the first time; members can always log
   back in. Invites can be limited by uses and expiry. The owner link is a one-use invite
   that grants the owner role. Roles: owner, admin, member. Bans are by identity.
+- **Short invite links** (`https://pyr.gg/<code>`, `proto/src/directory.rs`): a server lists
+  the invites that open by their code alone at the invite directory on pyr.gg
+  (`crates/directory`), in an announcement signed with its TLS key, so only that server can
+  list or take back codes for itself (and an old announcement sent again is refused by its
+  time). The whole list goes each time; codes are first come, first served, and go when they
+  run out, when the server stops listing them, or a month after the directory last heard from
+  the server. Looking a code up gives the full `pyr://` link, which is what joins: a short link
+  trusts pyr.gg the way a discord.gg link trusts Discord, while the full link needs nobody.
+  `https://pyr.gg/<code>` is pyr.gg's own page with the invite in it (and the server's name in
+  the preview chat apps show). Invite codes are 8 characters from 31 (no look-alikes).
+- The protocol's labels (ALPN `ingle/1`, the control preamble `ING\x01`, `ingle-login-v1` and
+  the other `ingle-…` contexts) keep the name Pyr had before 0.8.0: changing them would cut
+  Pyr off from older servers and apps, and void signatures already made.
 
 ## End-to-end encryption
 
@@ -293,9 +307,9 @@ capture that doesn't start within 10 seconds counts as failed.
 
 ## Plugins
 
-**The Pyr Library** is a list on the website (`pyr/library/index.json`) of programs and
+**The Pyr Library** is a list on the website (`https://pyr.gg/library/index.json`) of programs and
 add-ons, with every file's SHA-256 and size, signed with the release key under its own
-context (`pyr plugin library v1`, so an update signature can't pass as a list or the other
+context (`ingle plugin library v1`, so an update signature can't pass as a list or the other
 way round) and dated like a release: the app takes no list past its date or older than one it
 has seen (`proto/src/library.rs`, `app/src/plugins/library.rs`). It's made offline with
 `scripts/make-library.sh` from `installer/site/library/plugins.json` and the built files.

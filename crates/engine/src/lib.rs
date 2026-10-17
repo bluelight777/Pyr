@@ -930,6 +930,23 @@ impl Engine {
         self.request_then(key, req, |_, _| {});
     }
 
+    /// Send a request; `then` gets the answer, or the refusal in the server's words.
+    fn request_then_or(&self, key: &str, req: Request, then: impl FnOnce(&Arc<Shared>, Result<Event, String>) + Send + 'static) {
+        let Some(h) = self.handle(key) else {
+            then(&self.shared, Err("Not connected to that server right now.".into()));
+            return;
+        };
+        let shared = self.shared.clone();
+        let reply = h.request(req);
+        self.shared.rt.spawn(async move {
+            match reply.await {
+                Ok(Event::Error { message, .. }) => then(&shared, Err(message)),
+                Ok(ev) => then(&shared, Ok(ev)),
+                Err(_) => then(&shared, Err("The connection to the server dropped. Try again in a moment.".into())),
+            }
+        });
+    }
+
     /// Sends a request and waits for the server's answer, for up to `wait`: for bots (like the
     /// Claude connector), which answer for what they did. A refusal is an error, in the
     /// server's words. Not for the app's own thread (it blocks).
@@ -2014,17 +2031,86 @@ impl Engine {
         self.request(key, Request::DeleteChannel { channel_id });
     }
 
+    /// An invite for the Invite dialog (`ServerView::invite`): one of mine with the same
+    /// settings if it still works (servers since 0.8.0), else a new one. `expires_secs`: None
+    /// never runs out; `max_uses`: None has no limit.
     pub fn create_invite(&self, key: &str, max_uses: Option<u32>, expires_secs: Option<u64>) {
+        self.make_invite(key, max_uses, expires_secs, true);
+    }
+
+    /// Like [`Engine::create_invite`]; `reuse` false always makes a new one (Generate a new
+    /// link).
+    pub fn make_invite(&self, key: &str, max_uses: Option<u32>, expires_secs: Option<u64>, reuse: bool) {
+        if let Some(s) = self.shared.state.write().server_mut(key) {
+            s.invite = None;
+            s.invite_error = None;
+        }
         let k = key.to_string();
-        self.request_then(key, Request::CreateInvite { max_uses, expires_secs }, move |shared, ev| {
-            if let Event::InviteCreated { link, .. } = ev {
-                if let Some(s) = shared.state.write().server_mut(&k) {
-                    // Servers before 0.3.0 hand out the long form.
-                    s.last_invite = Some(InviteLink::shorten(&link));
+        self.request_then_or(key, Request::CreateInvite { max_uses, expires_secs, reuse }, move |shared, r| {
+            if let Some(s) = shared.state.write().server_mut(&k) {
+                match r {
+                    Ok(Event::InviteCreated { code, link, short, short_problem, expires_at, max_uses: most, uses }) => {
+                        s.invite = Some(MadeInvite {
+                            code,
+                            // (Servers before 0.3.0 hand out the long form.)
+                            link: InviteLink::shorten(&link),
+                            short,
+                            short_problem,
+                            expires_at,
+                            max_uses: most,
+                            uses,
+                            asked: (max_uses, expires_secs),
+                        });
+                    }
+                    Ok(_) => {}
+                    Err(e) => s.invite_error = Some(e),
                 }
-                (shared.repaint)();
             }
+            (shared.repaint)();
         });
+    }
+
+    /// The invites that still work, for Server Settings → Invites (`ServerView::invites`):
+    /// everyone's if I can manage the server, else mine.
+    pub fn list_invites(&self, key: &str) {
+        let k = key.to_string();
+        self.request_then_or(key, Request::ListInvites {}, move |shared, r| store_invites(shared, &k, r));
+    }
+
+    /// Takes an invite back (mine, or anyone's if I can manage the server).
+    pub fn revoke_invite(&self, key: &str, code: &str) {
+        let (k, c) = (key.to_string(), code.to_string());
+        self.request_then_or(key, Request::RevokeInvite { code: code.to_string() }, move |shared, r| {
+            if let Some(s) = shared.state.write().server_mut(&k) {
+                match r {
+                    Err(e) => s.invites_error = Some(e),
+                    Ok(_) => {
+                        s.invites_error = None;
+                        if let Some(v) = s.invites.as_mut() {
+                            v.invites.retain(|i| i.code != c);
+                        }
+                        // The Invite dialog makes a new one next time.
+                        if s.invite.as_ref().is_some_and(|i| i.code == c) {
+                            s.invite = None;
+                        }
+                    }
+                }
+            }
+            (shared.repaint)();
+        });
+    }
+
+    /// The community's own short link, `https://pyr.gg/<code>` (the owner; None takes it
+    /// away). The answer (or why not) lands in `ServerView::invites` / `invites_error`.
+    pub fn set_vanity(&self, key: &str, code: Option<String>) {
+        let k = key.to_string();
+        self.request_then_or(key, Request::SetVanity { code }, move |shared, r| store_invites(shared, &k, r));
+    }
+
+    /// Whether the server lists its invites at pyr.gg (the owner).
+    pub fn set_short_links(&self, key: &str, on: bool) {
+        let k = key.to_string();
+        self.request_then_or(key, Request::SetShortLinks { on }, move |shared, r| store_invites(shared, &k, r));
     }
 
     /// The Claude connector on this PC ([`claude_dir`]): Claude's member id once it has run (it
@@ -2065,7 +2151,7 @@ impl Engine {
     /// starts it), or the next time it runs.
     pub fn add_claude(&self, key: &str) {
         self.request_then(key, Request::CreateBotInvite {}, move |shared, ev| {
-            if let Event::InviteCreated { link, code } = ev {
+            if let Event::InviteCreated { link, code, .. } = ev {
                 let inbox = claude_inbox(&shared.config_dir);
                 let file = inbox.join(format!("{}.link", code.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect::<String>()));
                 let mut st = shared.state.write();
@@ -3409,4 +3495,19 @@ pub(crate) fn sync_avatar(shared: Arc<Shared>, key: String) {
             errors::report(format!("Couldn't set your profile picture: {message}"));
         }
     });
+}
+
+/// Server Settings → Invites, from a `ListInvites` (or `SetVanity`, `SetShortLinks`) answer.
+fn store_invites(shared: &Arc<Shared>, key: &str, r: Result<Event, String>) {
+    if let Some(s) = shared.state.write().server_mut(key) {
+        match r {
+            Ok(Event::Invites { invites, vanity, short_links, short_links_problem }) => {
+                s.invites = Some(InvitesView { invites, vanity, short_links, short_links_problem });
+                s.invites_error = None;
+            }
+            Ok(_) => {}
+            Err(e) => s.invites_error = Some(e),
+        }
+    }
+    (shared.repaint)();
 }

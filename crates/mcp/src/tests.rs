@@ -322,8 +322,8 @@ fn claude_chats_as_a_bot_in_servers_its_added_to() {
     assert!(said.contains("no channel \"staff\""), "{said}");
     // A bot joins only with a bot invite, and a person can't use one.
     owner.create_invite(&key, None, None);
-    wait_for("an invite link", 10, || owner.state().servers[0].last_invite.is_some());
-    let everyday = owner.state().servers[0].last_invite.clone().unwrap();
+    wait_for("an invite link", 10, || owner.state().servers[0].invite.is_some());
+    let everyday = owner.state().servers[0].invite.clone().unwrap().link;
     let said = call(&c, "join_server", json!({ "link": everyday })).unwrap_err();
     assert!(said.contains("Bots join with a bot invite"), "{said}");
     owner.create_bot_invite(&key);

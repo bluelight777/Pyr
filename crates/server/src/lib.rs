@@ -7,6 +7,7 @@
 
 pub mod conn;
 pub mod db;
+pub mod directory;
 pub mod hub;
 pub mod tls;
 
@@ -171,7 +172,14 @@ pub struct SetupLinks {
     pub invite: String,
 }
 
+/// Runs the community in `cfg.data_dir`, without short links (see [`start_with`]).
 pub async fn start(cfg: ServerConfig) -> Result<RunningServer> {
+    start_with(cfg, None).await
+}
+
+/// Runs the community in `cfg.data_dir`. `invite_directory` is the directory that makes its
+/// invites short links (`https://pyr.gg`, see [`directory`]), or None for none.
+pub async fn start_with(cfg: ServerConfig, invite_directory: Option<String>) -> Result<RunningServer> {
     let (tls_id, db) = prepare(&cfg)?;
     let server_config = tls::server_config(&tls_id)?;
     let (endpoint, fallback) = pyr_proto::udp::bind_endpoint(cfg.bind, Some(server_config))
@@ -185,6 +193,27 @@ pub async fn start(cfg: ServerConfig) -> Result<RunningServer> {
         if local_addr.ip().is_loopback() { local_addr.ip().to_string() } else { detect_lan_ip().unwrap_or_else(|| "127.0.0.1".into()) }
     });
     let hub = Hub::new(db, tls_id.fingerprint, public_host, local_addr.port(), cfg.data_dir.join("files"));
+    // Short links: invites listed at pyr.gg, when the server's address works beyond this PC.
+    match invite_directory {
+        Some(base) if directory::reachable_host(&hub.public_host) => match directory::Signing::new(&tls_id.cert_der, &tls_id.key_der) {
+            Ok(signing) => {
+                let _ = hub.directory.set(directory::start(&hub, base, signing));
+            }
+            Err(e) => {
+                warn!("short links are off: {e:#}");
+                let _ = hub.short_links_off_why.set(format!("Short links can't work for this server: {e:#}."));
+            }
+        },
+        Some(_) => {
+            let _ = hub.short_links_off_why.set(format!(
+                "Short links need an address others can reach, and this server's is {} (start it with --public-host and your public address or domain).",
+                hub.public_host
+            ));
+        }
+        None => {
+            let _ = hub.short_links_off_why.set("This server was started with short links off (--directory off).".into());
+        }
+    }
 
     // How everyone's viewers are getting on with their camera or screen share.
     tokio::spawn(hub.clone().feedback_loop());

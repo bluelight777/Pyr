@@ -1,10 +1,17 @@
 #!/bin/bash
 # Puts the website on https://pyr.gg (and https://www.pyr.gg, which sends people on to
 # https://pyr.gg) on this VPS: an nginx site with a free Let's Encrypt certificate that renews
-# by itself. Until Pyr 0.8.0 is published there, pyr.gg shows the same page and downloads as
-# https://pyr.gg/ (it serves that same folder).
+# by itself. pyr.gg shows the same page and downloads as https://firelitgames.com/ingle/ (it
+# serves that same folder: Pyr was called Ingle, and copies from before the rename still look
+# for their updates there).
 #
 # Run on the VPS as root:   bash setup-pyr-gg.sh
+#
+# Short invite links (https://pyr.gg/<code>, like Discord's discord.gg ones) go through
+# pyr-directory, a small service on this server that nginx hands /api/ and invite addresses
+# to. With a pyr-directory program next to this script (server/pyr-directory-linux-x86_64, as
+# a release brings it) or named with --directory=<program>, it's set up (or updated) too: its
+# own user and folder, a systemd service listening only on 127.0.0.1:7781.
 #
 # Safe to run again. It leaves the other sites alone: it notes how each of them answers before
 # it changes anything and again after every change, and takes its own change back out if
@@ -22,6 +29,21 @@ LIVE=/etc/letsencrypt/live/$DOMAIN
 DNS_WAIT_SECS=${DNS_WAIT_SECS:-900}
 WORK=$(mktemp -d)
 NGX=$WORK/nginx-T.txt
+HERE=$(cd "$(dirname "$0")" && pwd)
+DIR_PORT=7781
+DIR_BIN=""
+for arg in "$@"; do
+  case "$arg" in
+    --directory=*) DIR_BIN=${arg#--directory=} ;;
+    *) printf 'Unknown option %s\n' "$arg" >&2; exit 2 ;;
+  esac
+done
+if [ -z "$DIR_BIN" ]; then
+  case "$(uname -m)" in
+    x86_64) if [ -f "$HERE/server/pyr-directory-linux-x86_64" ]; then DIR_BIN=$HERE/server/pyr-directory-linux-x86_64; fi ;;
+    aarch64) if [ -f "$HERE/server/pyr-directory-linux-aarch64" ]; then DIR_BIN=$HERE/server/pyr-directory-linux-aarch64; fi ;;
+  esac
+fi
 
 say() { printf '\n== %s\n' "$*"; }
 note() { printf '   %s\n' "$*"; }
@@ -187,7 +209,7 @@ command -v curl > /dev/null 2>&1 || die "curl isn't installed on this server."
 nginx -t > /dev/null 2>&1 || die "nginx's settings already have a problem (nginx -t fails). Nothing was changed."
 if ip -4 -o addr show 2>/dev/null | grep -qF " $VPS_IP/"; then CONNECT=$VPS_IP; else CONNECT=127.0.0.1; fi
 
-say "Finding the folder that serves https://$OLD_SITE/pyr/"
+say "Finding the folder that serves https://$OLD_SITE/ingle/"
 dump
 ROOT=""
 TOKEN=$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')
@@ -199,9 +221,10 @@ for R in $(directive root | cut -f2 | awk '{ print $1 }' | sort -u); do
   if [ "$GOT" = "$TOKEN" ]; then ROOT=$R; break; fi
 done
 [ -n "$ROOT" ] || die "Couldn't find the folder that serves https://$OLD_SITE/. Nothing was changed."
-PYR=$ROOT/pyr
-[ -f "$PYR/index.html" ] && [ -f "$PYR/latest.json" ] || die "$PYR doesn't hold the Pyr page. Nothing was changed."
-if [ -f "$PYR_DIR/index.html" ] && [ ! -L "$PYR_DIR" ]; then SITE_ROOT=$PYR_DIR; else SITE_ROOT=$PYR; fi
+# (The folder keeps Ingle's name: Pyr was called Ingle, and its page was firelitgames.com/ingle.)
+INGLE=$ROOT/ingle
+[ -f "$INGLE/index.html" ] && [ -f "$INGLE/latest.json" ] || die "$INGLE doesn't hold the Pyr page. Nothing was changed."
+if [ -f "$PYR_DIR/index.html" ] && [ ! -L "$PYR_DIR" ]; then SITE_ROOT=$PYR_DIR; else SITE_ROOT=$INGLE; fi
 note "pyr.gg will show $SITE_ROOT"
 
 # Next to the file that has firelitgames.com's settings, named to come after it (so pyr.gg
@@ -257,7 +280,7 @@ if [ -f "$LIVE/fullchain.pem" ] && [ -f "$LIVE/privkey.pem" ] && [ -f "$CONF" ] 
   note "already on (with its certificate); leaving it as it is for now"
 else
   cat > "$WORK/http.conf" <<EOF
-# https://$DOMAIN and https://$WWW: Pyr (Pyr's new name), by Firelit Games.
+# https://$DOMAIN and https://$WWW: Pyr (Ingle's new name), by Firelit Games.
 # Written by setup-pyr-gg.sh; running it again writes this again.
 server {
 $(listen_lines 80)
@@ -325,13 +348,93 @@ else
   [ -f "$LIVE/fullchain.pem" ] && [ -f "$LIVE/privkey.pem" ] || die "certbot finished but the certificate isn't in $LIVE."
 fi
 
+# The invite directory: its own user, a folder only it can read, and a service on localhost.
+install_directory() {
+  say "Setting up short links (pyr-directory, https://$DOMAIN/<code>)"
+  chmod 0755 "$DIR_BIN"
+  local v i
+  v=$("$DIR_BIN" --version 2>/dev/null) || die "The pyr-directory program ($DIR_BIN) won't run on this server."
+  if ! id pyr-directory > /dev/null 2>&1; then
+    useradd --system --no-create-home --home-dir /var/lib/pyr-directory --shell /usr/sbin/nologin pyr-directory \
+      || die "Couldn't make the pyr-directory user."
+  fi
+  if ! systemctl is-active --quiet pyr-directory 2>/dev/null \
+     && curl -s --noproxy '*' --max-time 3 -o /dev/null "http://127.0.0.1:$DIR_PORT/" 2>/dev/null; then
+    die "Something else already answers on 127.0.0.1:$DIR_PORT, where pyr-directory listens. Nothing was changed for short links."
+  fi
+  cat > "$WORK/pyr-directory.service" <<UNIT
+[Unit]
+Description=Pyr's invite directory (short links: https://$DOMAIN/<code>)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pyr-directory
+Group=pyr-directory
+ExecStart=/usr/local/bin/pyr-directory --data /var/lib/pyr-directory --bind 127.0.0.1:$DIR_PORT --site $SITE_ROOT
+StateDirectory=pyr-directory
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  if [ -f /usr/local/bin/pyr-directory ]; then cp -f /usr/local/bin/pyr-directory "$WORK/pyr-directory.previous"; fi
+  install -m 0755 "$DIR_BIN" /usr/local/bin/pyr-directory.new
+  mv -f /usr/local/bin/pyr-directory.new /usr/local/bin/pyr-directory
+  install -m 0644 "$WORK/pyr-directory.service" /etc/systemd/system/pyr-directory.service
+  systemctl daemon-reload
+  systemctl enable pyr-directory > /dev/null 2>&1 || true
+  systemctl restart pyr-directory || true
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if [ "$(curl -s --noproxy '*' --max-time 3 "http://127.0.0.1:$DIR_PORT/api/v1/health" 2>/dev/null || true)" = ok ]; then
+      note "$v is running"
+      return 0
+    fi
+    sleep 1
+  done
+  journalctl -u pyr-directory -n 20 --no-pager 2>/dev/null | sed 's/^/   /' >&2 || true
+  if [ -f "$WORK/pyr-directory.previous" ]; then
+    install -m 0755 "$WORK/pyr-directory.previous" /usr/local/bin/pyr-directory
+    systemctl restart pyr-directory || true
+    die "The new pyr-directory didn't start (above): the one before is back. pyr.gg itself is unchanged."
+  fi
+  systemctl disable --now pyr-directory > /dev/null 2>&1 || true
+  die "pyr-directory didn't start (above). pyr.gg itself is unchanged; run this again once that's fixed."
+}
+if [ -n "$DIR_BIN" ]; then
+  install_directory
+fi
+
 say "Turning on https://$DOMAIN"
 TLS="    ssl_certificate $LIVE/fullchain.pem;
     ssl_certificate_key $LIVE/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     add_header Strict-Transport-Security \"max-age=31536000\" always;"
 cat > "$WORK/https.conf" <<EOF
-# https://$DOMAIN and https://$WWW: Pyr (Pyr's new name), by Firelit Games.
+# https://$DOMAIN and https://$WWW: Pyr (Ingle's new name), by Firelit Games.
 # Written by setup-pyr-gg.sh; running it again writes this again. The certificate is
 # Let's Encrypt's, in $LIVE, and certbot renews it by itself.
 server {
@@ -371,6 +474,33 @@ $TLS
     location = /library/index.json {
         expires -1;
     }
+    # Short invite links (https://$DOMAIN/<code>) and their directory, pyr-directory
+    # (127.0.0.1:$DIR_PORT). Files and folders of the site come first; while the directory
+    # is down, an invite's address gets the plain page.
+    location ^~ /api/ {
+        proxy_pass http://127.0.0.1:$DIR_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header Connection "";
+        client_max_body_size 600k;
+        proxy_read_timeout 20s;
+    }
+    location ~ "^/(?:invite[/-])?[A-Za-z0-9][A-Za-z0-9-]{1,30}[A-Za-z0-9]/?\$" {
+        try_files \$uri \$uri/ @invite;
+    }
+    location @invite {
+        proxy_pass http://127.0.0.1:$DIR_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header Connection "";
+        proxy_intercept_errors on;
+        error_page 502 503 504 = @plain;
+    }
+    location @plain {
+        try_files /index.html =404;
+    }
 }
 EOF
 apply_conf "$WORK/https.conf"
@@ -394,6 +524,14 @@ echo "$T" > "$ACME_DIR/.well-known/acme-challenge/$T"
 check "Let's Encrypt can still reach its checks (for renewing)" "$T" \
   "$(curl -s --noproxy '*' --max-time 10 --resolve "$DOMAIN:80:$CONNECT" "http://$DOMAIN/.well-known/acme-challenge/$T" 2>/dev/null || true)"
 rm -f "$ACME_DIR/.well-known/acme-challenge/$T"
+if [ -f /etc/systemd/system/pyr-directory.service ]; then
+  check "the invite directory answers at https://$DOMAIN/api/" ok \
+    "$(curl -s --noproxy '*' --max-time 10 --resolve "$DOMAIN:443:$CONNECT" "https://$DOMAIN/api/v1/health" 2>/dev/null || true)"
+  check "an address that's no invite gets the page, saying so" "404 yes" \
+    "$(curl -s --noproxy '*' --max-time 10 -o "$WORK/inv.html" -w '%{http_code}' --resolve "$DOMAIN:443:$CONNECT" "https://$DOMAIN/zzzzzzzz" 2>/dev/null || true) $(grep -q 'id="pyr-invite"' "$WORK/inv.html" 2>/dev/null && echo yes || echo no)"
+fi
+check "the site's own files still come first" yes \
+  "$(curl -s --noproxy '*' --max-time 10 --resolve "$DOMAIN:443:$CONNECT" "https://$DOMAIN/latest.json" 2>/dev/null | grep -q '"manifest"' && echo yes || echo no)"
 
 # certbot's package renews everything twice a day; make sure something does.
 if systemctl list-unit-files 2>/dev/null | grep -qE '^(certbot|snap\.certbot\.renew)\.timer'; then
@@ -432,7 +570,7 @@ fi
 
 echo
 if [ "$PROBLEMS" -eq 0 ]; then
-  echo "Done: https://$DOMAIN is up, with the same page and downloads as https://$OLD_SITE/pyr/ for now."
+  echo "Done: https://$DOMAIN is up, with the same page and downloads as https://$OLD_SITE/ingle/."
   echo "https://$WWW sends people to https://$DOMAIN. The certificate renews by itself."
 else
   echo "https://$DOMAIN is on, but $PROBLEMS check(s) above weren't right."

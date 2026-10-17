@@ -155,11 +155,16 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   through it as someone new (make a fresh link for everyone else).
 - **Backups**: the owner's Pyr copies the whole server to their PC every hour (messages,
   pictures and the server's identity), and a new server can be set up from a backup.
-- **Invite links that work anywhere**: Copy link gives a web link
-  (`https://pyr.gg/#n=…&join=…`) you can paste in any chat app. Clicking it
-  opens Pyr, which asks before joining; someone who doesn't have Pyr yet gets it from the
-  same page first. Invite links clicked in Pyr's own chat ask right there, and the
-  `pyr://` link still works.
+- **Short invite links, like Discord's**: **Invite People** gives a link like
+  `https://pyr.gg/qrslmnov` that lasts 7 days (or 30 minutes to forever, for as many people
+  as you pick; **Edit invite link**). Pasted anywhere, it shows the server's name; opened, it
+  goes to Pyr, which asks before joining, and someone who doesn't have Pyr yet gets it from
+  the same page first. In Pyr's chat an invite shows as a card with **Join**. **Server
+  Settings → Invites** lists the links that still work and takes them back; the owner can
+  give the server its own (`https://pyr.gg/your-name`). A short link goes through pyr.gg's
+  invite directory, which learns the server's name, address and member counts and its invite
+  codes (never its messages or who's in it); the owner can turn short links off. The full
+  link (`pyr://…`, or `https://pyr.gg/#n=…&join=…`) works without pyr.gg, as before.
 
 **Plugins**
 
@@ -460,8 +465,9 @@ The server keeps everything in a data folder: `%APPDATA%\Pyr\server` when starte
 the Start menu, otherwise `pyr-data` next to where it runs (or `--data <folder>`). Keep
 that folder: it holds the chat history and the server's TLS key, and invite links pin
 that key's fingerprint. Need another link later? Click the **+** next to the server's name
-in the app, or run `pyr-server.exe invite` (options: `--uses 5`, `--hours 24`). Lost the
-owner link? `pyr-server.exe owner-invite`.
+in the app, or run `pyr-server.exe invite` (options: `--uses 5`, `--hours 24`; it prints a
+short pyr.gg link when the server has an address others can reach, `--directory off` for
+none). Lost the owner link? `pyr-server.exe owner-invite`.
 
 To run it as a background service on a Linux desktop or home server (the `.deb` includes
 one):
@@ -646,6 +652,7 @@ crates/engine   client engine: networking, E2EE, audio + video pipelines (no UI)
 crates/host     server setup: renting from DigitalOcean, installing over SSH, reachability
 crates/app      pyr: the egui desktop app
 crates/mcp      pyr-mcp: the Claude connector (an MCP server on stdin and stdout)
+crates/directory pyr-directory: the invite directory behind short links (runs on pyr.gg)
 plugins         the plugin kit (pyr-plugin), a template for new add-ons, and Dice
 skins           how to make a skin: the format, the colors and the checks
 ```

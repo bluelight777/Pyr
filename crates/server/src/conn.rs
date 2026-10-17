@@ -296,10 +296,38 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
         loop {
             let Some(f) = read_frame::<ClientFrame>(&mut recv).await? else { return Ok(()) };
             let id = f.id;
-            let reply = if ctx.req_tokens.take(cost(&f.req)) {
-                ctx.handle(f.req)
-            } else {
+            let reply = if !ctx.req_tokens.take(cost(&f.req)) {
                 Err((ErrorCode::RateLimited, "Slow down a little.".into()))
+            } else if let Request::SetVanity { code } = f.req {
+                // Answered once pyr.gg has it (other requests carry on meanwhile).
+                match ctx.require_owner("give the community its own link") {
+                    Err(e) => Err(e),
+                    Ok(()) => {
+                        let (hub, tx, uid) = (hub.clone(), tx.clone(), ctx.uid.clone());
+                        tokio::spawn(async move {
+                            let ev = hub.set_vanity(&uid, code).await.unwrap_or_else(|(code, message)| Event::Error { code, message });
+                            if id != 0 {
+                                tx.send(frame(id, ev));
+                            }
+                        });
+                        continue;
+                    }
+                }
+            } else {
+                match ctx.handle(f.req) {
+                    // A new invite: answered with its short link once pyr.gg lists it.
+                    Ok(ev @ Event::InviteCreated { .. }) if hub.short_links_on() => {
+                        let (hub, tx) = (hub.clone(), tx.clone());
+                        tokio::spawn(async move {
+                            let ev = hub.with_short_link(ev).await;
+                            if id != 0 {
+                                tx.send(frame(id, ev));
+                            }
+                        });
+                        continue;
+                    }
+                    r => r,
+                }
             };
             let ev = reply.unwrap_or_else(|(code, message)| Event::Error { code, message });
             if id != 0 {
@@ -657,10 +685,13 @@ impl Bucket {
 fn cost(req: &Request) -> f64 {
     match req {
         Request::Ping { .. } | Request::Typing { .. } | Request::VoiceState { .. } => 0.5,
-        Request::FetchHistory { .. } | Request::GetVouches { .. } | Request::GetVouchesForMe {} => 3.0,
+        Request::FetchHistory { .. } | Request::GetVouches { .. } | Request::GetVouchesForMe {} | Request::ListInvites {} => 3.0,
         Request::E2eeKeys { keys, .. } => 1.0 + keys.len() as f64 / 16.0,
         Request::CreateInvite { .. }
         | Request::CreateBotInvite { .. }
+        | Request::RevokeInvite { .. }
+        | Request::SetVanity { .. }
+        | Request::SetShortLinks { .. }
         | Request::FriendRequest { .. }
         | Request::OpenDm { .. }
         | Request::AddEmoji { .. }
@@ -751,7 +782,15 @@ impl Ctx<'_> {
     }
 
     fn require(&self, p: u64, what: &str) -> Result<(), (ErrorCode, String)> {
-        if self.perms() & p == p { Ok(()) } else { Err((ErrorCode::Forbidden, format!("You don't have permission to {what}."))) }
+        if self.can(p) { Ok(()) } else { Err((ErrorCode::Forbidden, format!("You don't have permission to {what}."))) }
+    }
+
+    fn can(&self, p: u64) -> bool {
+        self.perms() & p == p
+    }
+
+    fn require_owner(&self, what: &str) -> Result<(), (ErrorCode, String)> {
+        if self.role() == Role::Owner { Ok(()) } else { Err((ErrorCode::Forbidden, format!("Only the server's owner can {what}."))) }
     }
 
     /// Where someone stands: the owner above admins above every custom role (by its
@@ -919,6 +958,10 @@ impl Ctx<'_> {
                 | Request::FriendAccept { .. }
                 | Request::CreateInvite { .. }
                 | Request::CreateBotInvite { .. }
+                | Request::ListInvites {}
+                | Request::RevokeInvite { .. }
+                | Request::SetVanity { .. }
+                | Request::SetShortLinks { .. }
                 | Request::VoiceJoin { .. }
                 | Request::Handshake { .. }
                 | Request::SetVouches { .. }
@@ -1167,15 +1210,58 @@ impl Ctx<'_> {
                 }
                 Ok(Event::Ok)
             }
-            Request::CreateInvite { max_uses, expires_secs } => {
-                if db.invites_by(&self.uid) >= MAX_INVITES_PER_MEMBER {
-                    return bad("You've made a lot of invite links already. Use one of those.");
+            Request::CreateInvite { max_uses, expires_secs, reuse } => {
+                let max_uses = max_uses.filter(|n| *n > 0);
+                let listed = hub.short_links_on();
+                // One of mine with the same settings, if it still works (like Discord's Invite
+                // People, which doesn't make a new link each time it's opened).
+                if reuse {
+                    if let Some(i) = db.reusable_invite(&self.uid, max_uses, expires_secs, listed) {
+                        return Ok(invite_created(hub, &i.code, i.expires_at, i.max_uses, i.uses));
+                    }
                 }
-                let code = new_invite_code(10);
+                if db.invites_by(&self.uid) >= MAX_INVITES_PER_MEMBER {
+                    return bad("You've made a lot of invite links already. Use one of those (Server Settings → Invites lists them).");
+                }
+                // (pyr.gg's short links are made of the code itself: https://pyr.gg/<code>.)
+                let code = pyr_proto::directory::new_code();
                 let expires_at = expires_secs.map(|s| pyr_proto::now_ms() + (s.min(365 * 86400) as i64) * 1000);
                 db.create_invite(&code, &self.uid, max_uses, expires_at, Role::Member)
                     .map_err(|e| (ErrorCode::Internal, e.to_string()))?;
-                Ok(Event::InviteCreated { link: hub.invite_link(&code), code })
+                if listed {
+                    db.set_listed(&code, true).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                }
+                Ok(invite_created(hub, &code, expires_at, max_uses, 0))
+            }
+            Request::ListInvites {} => Ok(hub.invites_event(&self.uid, self.can(perm::MANAGE_SERVER))),
+            Request::RevokeInvite { code } => {
+                let Some(i) = db.invite(&code) else { return Err((ErrorCode::NotFound, "That invite is gone already.".into())) };
+                if i.created_by != self.uid {
+                    self.require(perm::MANAGE_SERVER, "take back other people's invites")?;
+                }
+                if i.grants == Role::Owner {
+                    return bad("Owner links can't be taken back here.");
+                }
+                if db.get_meta("vanity").as_deref() == Some(code.as_str()) {
+                    return bad("That's the community's own link: change it in Server Settings → Invites.");
+                }
+                db.delete_invite(&code).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                if i.listed {
+                    hub.invites_changed();
+                }
+                Ok(Event::Ok)
+            }
+            // (Answered in the loop above, once pyr.gg has it.)
+            Request::SetVanity { .. } => bad("not here"),
+            Request::SetShortLinks { on } => {
+                self.require_owner("turn short links on or off")?;
+                if on && hub.directory().is_none() {
+                    let why = hub.short_links_off_why.get().cloned().unwrap_or_else(|| "Short links can't work for this server.".into());
+                    return bad(&why);
+                }
+                db.set_meta("short_links", if on { "1" } else { "0" }).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                hub.invites_changed();
+                Ok(hub.invites_event(&self.uid, true))
             }
             Request::CreateBotInvite {} => {
                 self.require(perm::MANAGE_SERVER, "add bots")?;
@@ -1184,9 +1270,9 @@ impl Ctx<'_> {
                 }
                 // One bot, within a week.
                 let code = format!("{BOT_INVITE_PREFIX}{}", new_invite_code(16));
-                db.create_bot_invite(&code, &self.uid, pyr_proto::now_ms() + 7 * 86_400_000)
-                    .map_err(|e| (ErrorCode::Internal, e.to_string()))?;
-                Ok(Event::InviteCreated { link: hub.invite_link(&code), code })
+                let expires_at = pyr_proto::now_ms() + 7 * 86_400_000;
+                db.create_bot_invite(&code, &self.uid, expires_at).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                Ok(invite_created(hub, &code, Some(expires_at), Some(1), 0))
             }
             Request::SetRole { user_id, role } => {
                 valid_uid(&user_id)?;
@@ -1227,6 +1313,8 @@ impl Ctx<'_> {
                 self.require(perm::MANAGE_SERVER, "change the server's settings")?;
                 if let Some(n) = name.and_then(|n| clean_name(&n, 48)) {
                     let _ = db.set_meta("name", &n);
+                    // (pyr.gg shows the name with its short links.)
+                    hub.invites_changed();
                 }
                 if let Some(d) = description {
                     let d: String = d.chars().filter(|c| !c.is_control()).take(300).collect();
@@ -1888,8 +1976,15 @@ impl Ctx<'_> {
         }
         let reason = if ban { "You were banned from this server." } else { "You were kicked from this server." };
         self.hub.eject(&user_id, reason);
+        // (Their invites went with them, and pyr.gg's count of members changed.)
+        self.hub.invites_changed();
         Ok(Event::Ok)
     }
+}
+
+/// The answer to `CreateInvite` (and `CreateBotInvite`), before any short link.
+fn invite_created(hub: &Hub, code: &str, expires_at: Option<i64>, max_uses: Option<u32>, uses: u32) -> Event {
+    Event::InviteCreated { code: code.to_string(), link: hub.invite_link(code), short: None, short_problem: None, expires_at, max_uses, uses }
 }
 
 #[cfg(test)]
@@ -1939,7 +2034,7 @@ mod tests {
         // Only who can manage the server adds bots.
         assert!(forbidden(ctx(&hub, &bob).handle(Request::CreateBotInvite {})));
         let code = match ctx(&hub, &manager).handle(Request::CreateBotInvite {}) {
-            Ok(Event::InviteCreated { code, link }) => {
+            Ok(Event::InviteCreated { code, link, .. }) => {
                 assert!(link.contains(&code));
                 code
             }
@@ -1971,7 +2066,7 @@ mod tests {
         assert!(send(&mut c, general.id, "Hello! I'm Claude.").is_ok());
         assert!(forbidden(c.handle(Request::OpenDm { user_id: bob.clone() })));
         assert!(forbidden(c.handle(Request::CreateGroup { members: vec![bob.clone()] })));
-        assert!(forbidden(c.handle(Request::CreateInvite { max_uses: None, expires_secs: None })));
+        assert!(forbidden(c.handle(Request::CreateInvite { max_uses: None, expires_secs: None, reuse: false })));
         assert!(forbidden(c.handle(Request::CreateBotInvite {})));
         assert!(forbidden(c.handle(Request::FriendRequest { user_id: bob.clone() })));
         let (key, sig) = {
@@ -2810,15 +2905,75 @@ mod tests {
         hub.db.insert_user(&a, "A", Role::Member).unwrap();
         let mut c = ctx(&hub, &a);
         for _ in 0..MAX_INVITES_PER_MEMBER {
-            assert!(c.handle(Request::CreateInvite { max_uses: None, expires_secs: None }).is_ok());
+            assert!(c.handle(Request::CreateInvite { max_uses: None, expires_secs: None, reuse: false }).is_ok());
         }
-        assert!(c.handle(Request::CreateInvite { max_uses: None, expires_secs: None }).is_err());
+        assert!(c.handle(Request::CreateInvite { max_uses: None, expires_secs: None, reuse: false }).is_err());
         let mut bucket = Bucket::new(REQ_RATE, REQ_BURST);
         let allowed = (0..1000).filter(|_| bucket.take(1.0)).count();
         assert!(allowed < 120, "{allowed}");
         // Kicking someone retires the invites they made.
         hub.db.remove_user(&a, false).unwrap();
         assert_eq!(hub.db.invites_by(&a), 0);
+    }
+
+    /// Invites like Discord's: Invite People hands back the same link while it lasts, people
+    /// see and take back their own (managers everyone's), and the community's own code and
+    /// short links are the owner's to change.
+    #[test]
+    fn invites_reused_listed_and_taken_back() {
+        let hub = hub();
+        let (owner, a, b) = (uid(), uid(), uid());
+        hub.db.insert_user(&owner, "Owner", Role::Owner).unwrap();
+        hub.db.insert_user(&a, "A", Role::Member).unwrap();
+        hub.db.insert_user(&b, "B", Role::Member).unwrap();
+        let made = |uid: &str, max_uses: Option<u32>, expires_secs: Option<u64>| match ctx(&hub, uid).handle(Request::CreateInvite { max_uses, expires_secs, reuse: true }) {
+            Ok(Event::InviteCreated { code, link, short, expires_at, max_uses, .. }) => (code, link, short, expires_at, max_uses),
+            other => panic!("{other:?}"),
+        };
+        let week = Some(7 * 86_400);
+        let (first, link, short, expires_at, _) = made(&a, None, week);
+        assert_eq!(first.len(), pyr_proto::directory::CODE_LEN, "short enough to be a short link's code");
+        assert!(link.contains(&format!("/{first}/")) && short.is_none(), "no directory here: no short link");
+        assert!(expires_at.is_some_and(|e| e > pyr_proto::now_ms() + 6 * 86_400_000));
+        // The same settings again: the same invite. Others: a new one.
+        assert_eq!(made(&a, None, week).0, first);
+        let once = made(&a, Some(1), week).0;
+        assert_ne!(once, first);
+        assert_ne!(made(&a, None, None).0, first);
+        assert_ne!(made(&b, None, week).0, first, "someone else's own");
+        // Used up, it isn't handed back.
+        hub.db.redeem_invite(&once).unwrap();
+        assert_ne!(made(&a, Some(1), week).0, once);
+        // Listed: one's own, or everyone's for managers (never owner links).
+        hub.db.create_invite("owner-secret", "server", Some(1), None, Role::Owner).unwrap();
+        let codes = |uid: &str| match ctx(&hub, uid).handle(Request::ListInvites {}) {
+            Ok(Event::Invites { invites, short_links, .. }) => {
+                assert!(!short_links);
+                invites.into_iter().map(|i| (i.code, i.created_by)).collect::<Vec<_>>()
+            }
+            other => panic!("{other:?}"),
+        };
+        let mine = codes(&a);
+        assert!(mine.iter().all(|(_, by)| by == &a) && mine.len() == 3, "{mine:?}");
+        let all = codes(&owner);
+        assert_eq!(all.len(), 4, "{all:?}");
+        assert!(!all.iter().any(|(c, _)| c.starts_with("owner-")));
+        // Taken back: by its maker, or a manager; not by another member.
+        assert!(forbidden(ctx(&hub, &b).handle(Request::RevokeInvite { code: first.clone() })));
+        assert!(ctx(&hub, &a).handle(Request::RevokeInvite { code: first.clone() }).is_ok());
+        assert!(hub.db.invite(&first).is_none());
+        assert!(ctx(&hub, &a).handle(Request::RevokeInvite { code: first }).is_err(), "gone already");
+        let bs = codes(&b)[0].0.clone();
+        assert!(ctx(&hub, &owner).handle(Request::RevokeInvite { code: bs }).is_ok());
+        assert!(ctx(&hub, &owner).handle(Request::RevokeInvite { code: "owner-secret".into() }).is_err());
+        // Short links are the owner's to turn on (and can't be here: no directory).
+        assert!(forbidden(ctx(&hub, &a).handle(Request::SetShortLinks { on: false })));
+        assert!(ctx(&hub, &owner).handle(Request::SetShortLinks { on: true }).is_err());
+        assert!(ctx(&hub, &owner).handle(Request::SetShortLinks { on: false }).is_ok());
+        // Bots can't touch invites.
+        let bot = uid();
+        hub.db.insert_member(&bot, "Bot", Role::Member, true).unwrap();
+        assert!(forbidden(ctx(&hub, &bot).handle(Request::ListInvites {})));
     }
 
     #[test]

@@ -214,6 +214,14 @@ pub struct Hub {
     submission_asks: Mutex<HashMap<Place, Vec<Instant>>>,
     /// Uploads per member: bytes being received now, and what arrived in the last hour.
     uploads: Mutex<HashMap<UserId, (u64, Vec<(Instant, u64)>)>>,
+    /// The invite directory at pyr.gg, while short links can work here (see
+    /// [`crate::directory`]).
+    pub directory: std::sync::OnceLock<crate::directory::Directory>,
+    /// Why short links can't work here (the server's address only works on its own PC, or it
+    /// was started without them).
+    pub short_links_off_why: std::sync::OnceLock<String>,
+    /// One change of the community's own code at a time.
+    vanity_change: tokio::sync::Mutex<()>,
 }
 
 #[derive(Default)]
@@ -524,7 +532,139 @@ impl Hub {
             submission_senders: Mutex::new(HashMap::new()),
             submission_asks: Mutex::new(HashMap::new()),
             uploads: Mutex::new(HashMap::new()),
+            directory: std::sync::OnceLock::new(),
+            short_links_off_why: std::sync::OnceLock::new(),
+            vanity_change: tokio::sync::Mutex::new(()),
         })
+    }
+
+    // ------------------------------------------------------------ short links
+
+    /// The invite directory, while short links can work here at all.
+    pub fn directory(&self) -> Option<&crate::directory::Directory> {
+        self.directory.get()
+    }
+
+    /// Short links are on: the server lists its invites at pyr.gg.
+    pub fn short_links_on(&self) -> bool {
+        self.directory().is_some() && self.db.get_meta("short_links").as_deref() != Some("0")
+    }
+
+    /// Something pyr.gg is told about changed (an invite taken back or used up, the name):
+    /// it's told again in a moment.
+    pub fn invites_changed(&self) {
+        if let Some(d) = self.directory() {
+            d.nudge();
+        }
+    }
+
+    /// An invite just made, with its short link once pyr.gg lists it (or why it doesn't).
+    pub async fn with_short_link(&self, ev: Event) -> Event {
+        let Event::InviteCreated { code, link, expires_at, max_uses, uses, .. } = ev else { return ev };
+        let mut short = None;
+        let mut short_problem = None;
+        let listed = self.db.invite(&code).is_some_and(|i| i.listed);
+        if let (Some(dir), true) = (self.directory(), listed && self.short_links_on()) {
+            match dir.sync().await {
+                Ok(r) if !r.taken.contains(&code) => short = Some(pyr_proto::directory::short_url(&code)),
+                Ok(_) => short_problem = Some("pyr.gg has that code for another community already (very rare): this invite works as a full link.".into()),
+                Err(e) => short_problem = Some(format!("Couldn't list it at pyr.gg ({e}): this invite works as a full link.")),
+            }
+        }
+        Event::InviteCreated { code, link, short, short_problem, expires_at, max_uses, uses }
+    }
+
+    /// The invites that still work (`ListInvites`): everyone's (`all`) or `uid`'s.
+    pub fn invites_event(&self, uid: &str, all: bool) -> Event {
+        let on = self.short_links_on();
+        let vanity = self.db.get_meta("vanity").filter(|v| !v.is_empty());
+        let invites = self
+            .db
+            .usable_invites(if all { None } else { Some(uid) })
+            .into_iter()
+            .filter(|i| Some(&i.code) != vanity.as_ref())
+            .map(|i| InviteInfo {
+                short: (on && i.listed).then(|| pyr_proto::directory::short_url(&i.code)),
+                code: i.code,
+                created_by: i.created_by,
+                created_at: i.created_at,
+                uses: i.uses,
+                max_uses: i.max_uses,
+                expires_at: i.expires_at,
+                bot: i.bot,
+            })
+            .collect();
+        Event::Invites { invites, vanity: vanity.filter(|_| on), short_links: on, short_links_problem: self.short_links_off_why.get().cloned() }
+    }
+
+    /// Gives the community its own code (`SetVanity`; the caller checked it's the owner):
+    /// an everyday invite with that code, listed at pyr.gg, that never runs out. The old one
+    /// stops working. Answered once pyr.gg has it (or says why not).
+    pub async fn set_vanity(&self, owner: &str, code: Option<String>) -> Reply {
+        let _one = self.vanity_change.lock().await;
+        let Some(dir) = self.directory() else {
+            let why = self.short_links_off_why.get().cloned().unwrap_or_else(|| "Short links are off for this server.".into());
+            return err(ErrorCode::BadRequest, why);
+        };
+        if !self.short_links_on() {
+            return err(ErrorCode::BadRequest, "Turn short links on first.");
+        }
+        let new = code.map(|c| c.trim().to_ascii_lowercase()).filter(|c| !c.is_empty());
+        let old = self.db.get_meta("vanity").filter(|v| !v.is_empty());
+        if new == old {
+            return Ok(self.invites_event(owner, true));
+        }
+        let Some(new) = new else {
+            // Taken away: its invite stops working now, and pyr.gg hears of it in a moment.
+            if let Some(o) = &old {
+                let _ = self.db.delete_invite(o);
+            }
+            let _ = self.db.set_meta("vanity", "");
+            dir.nudge();
+            return Ok(self.invites_event(owner, true));
+        };
+        if let Some(why) = pyr_proto::directory::vanity_problem(&new) {
+            return err(ErrorCode::BadRequest, why);
+        }
+        if self.db.invite(&new).is_some() {
+            return err(ErrorCode::BadRequest, "That's one of this server's invites already. Pick another.");
+        }
+        let made = self
+            .db
+            .create_invite(&new, owner, None, None, Role::Member)
+            .and_then(|()| self.db.set_listed(&new, true))
+            .and_then(|()| self.db.set_meta("vanity", &new));
+        if let Err(e) = made {
+            let _ = self.db.delete_invite(&new);
+            let _ = self.db.set_meta("vanity", old.as_deref().unwrap_or(""));
+            return err(ErrorCode::Internal, e.to_string());
+        }
+        // (The old one isn't listed in what pyr.gg is told now, as anything.)
+        if let Some(o) = &old {
+            let _ = self.db.set_listed(o, false);
+        }
+        let refused = match dir.sync().await {
+            Ok(r) => r.vanity_refused,
+            Err(e) => Some(format!("Couldn't reach pyr.gg: {e}. Try again in a moment.")),
+        };
+        match refused {
+            None => {
+                if let Some(o) = &old {
+                    let _ = self.db.delete_invite(o);
+                }
+                Ok(self.invites_event(owner, true))
+            }
+            Some(why) => {
+                // Back to how it was.
+                let _ = self.db.delete_invite(&new);
+                let _ = self.db.set_meta("vanity", old.as_deref().unwrap_or(""));
+                if let Some(o) = &old {
+                    let _ = self.db.set_listed(o, true);
+                }
+                dir.nudge();
+                err(ErrorCode::BadRequest, why)
+            }
+        }
     }
 
     /// Whether to take a new connection from `ip`; while it's alive, keep the slot.
@@ -693,6 +833,11 @@ impl Hub {
 
     pub fn online_count(&self) -> usize {
         self.inner.lock().clients.len()
+    }
+
+    /// People online (one each, however many of their devices are connected; bots too).
+    pub fn online_people(&self) -> usize {
+        self.inner.lock().clients.values().map(|c| &c.user_id).collect::<HashSet<_>>().len()
     }
 
     fn broadcast_locked(inner: &Inner, ev: Event) {
@@ -1020,6 +1165,8 @@ impl Hub {
                 }
                 let _ = self.db.set_joined_with(uid, code);
                 info!(%uid, %name, ?role, bot, "new member joined");
+                // (pyr.gg's count of members, and an invite that's now used up.)
+                self.invites_changed();
                 Ok(())
             }
         }

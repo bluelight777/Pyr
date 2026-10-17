@@ -135,6 +135,49 @@ HARDEN
     fi
   fi
 fi
+# Short links (https://pyr.gg/<code>): the invite directory, pyr-directory, a service of its
+# own. The first time, setup-pyr-gg.sh sets it up along with pyr.gg's nginx settings for it
+# (checking every other site on this server before and after); after that each release
+# brings a new version, swapped in here (and the old one put back if the new one won't start).
+case "$(uname -m)" in
+  x86_64) DIR_NEW="$HERE/server/pyr-directory-linux-x86_64" ;;
+  aarch64) DIR_NEW="$HERE/server/pyr-directory-linux-aarch64" ;;
+  *) DIR_NEW="" ;;
+esac
+dir_answers() {
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if [ "$(curl -s --noproxy "*" --max-time 3 http://127.0.0.1:7781/api/v1/health 2>/dev/null || true)" = ok ]; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
+if [ -n "$DIR_NEW" ] && [ -f "$DIR_NEW" ]; then
+  chmod 0755 "$DIR_NEW"
+  if [ -f /etc/systemd/system/pyr-directory.service ] && [ -x /usr/local/bin/pyr-directory ]; then
+    if cmp -s "$DIR_NEW" /usr/local/bin/pyr-directory; then
+      echo "Invite directory already up to date"
+    elif ! "$DIR_NEW" --version > /dev/null 2>&1; then
+      echo "The new invite directory program won't run on this VPS; left the old one alone." >&2
+    else
+      cp -f /usr/local/bin/pyr-directory /usr/local/bin/pyr-directory.previous
+      install -m 0755 "$DIR_NEW" /usr/local/bin/pyr-directory.new
+      mv -f /usr/local/bin/pyr-directory.new /usr/local/bin/pyr-directory
+      systemctl restart pyr-directory || true
+      if dir_answers; then
+        echo "Invite directory updated: $(/usr/local/bin/pyr-directory --version)"
+      else
+        echo "The new invite directory didn't start; putting the old one back." >&2
+        mv -f /usr/local/bin/pyr-directory.previous /usr/local/bin/pyr-directory
+        systemctl restart pyr-directory || true
+      fi
+    fi
+  elif [ -f "$HERE/setup-pyr-gg.sh" ]; then
+    echo "Turning on short links (https://pyr.gg/<code>): setting up pyr.gg's invite directory"
+    bash "$HERE/setup-pyr-gg.sh" --directory="$DIR_NEW" \
+      || echo "Short links aren't on yet (above). The release itself is published; the next publish tries again." >&2
+  fi
+fi
 # Bug reports this release fixed (fixed-bugs.txt: a report's number first on each line) are
 # marked fixed on the guild server here, the one Pyr's bug reports go to, as the owner's
 # Mark fixed does (only new and approved ones; a rejected report stays rejected).

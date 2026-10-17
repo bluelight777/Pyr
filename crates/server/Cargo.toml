@@ -28,6 +28,8 @@ sha2 = "0.10"
 tokio = { version = "1.53.2", features = ["fs", "rt-multi-thread", "macros", "net", "sync", "time", "signal", "io-util"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+# Telling pyr.gg about invites that work as short links (directory.rs).
+ureq = { version = "3.4.2", default-features = false, features = ["rustls", "json"] }
 
 [build-dependencies]
 embed-resource = "3.0.12"

@@ -5,12 +5,14 @@
 //! * `media` – compact binary headers for audio datagrams and video frames.
 //! * `crypto` – identities (Ed25519), login proof, and end-to-end media encryption.
 //! * `invite` – invite links that pin the server's TLS certificate.
+//! * `directory` – short invite links (`https://pyr.gg/<code>`) and the directory behind them.
 //! * `udp` (feature `quic`) – QUIC endpoints with a plain-UDP fallback.
 
 pub mod ab;
 pub mod b64;
 pub mod control;
 pub mod crypto;
+pub mod directory;
 pub mod framing;
 pub mod handshake;
 pub mod invite;

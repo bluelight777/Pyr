@@ -22,6 +22,7 @@ mod spell;
 mod images;
 mod titlebar;
 mod instance;
+mod invites;
 mod looks;
 mod markdown;
 mod menu;

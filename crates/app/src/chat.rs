@@ -786,6 +786,10 @@ impl PyrApp {
                         for g in &gifs {
                             self.gif_embed(ui, st, g, m.id, acts);
                         }
+                        // Invite links get a card with Join, like Discord's.
+                        for link in crate::invites::links_in(&content) {
+                            self.invite_embed(ui, st, &link, acts);
+                        }
                         if m.edited_at.is_some() {
                             ui.label(RichText::new("(edited)").size(10.5).color(theme::DIM()));
                         }

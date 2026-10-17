@@ -657,7 +657,7 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
             // (Handshakes are handled before this; vouches only come as replies.)
             Event::Pong { .. } | Event::Ok | Event::Hello { .. } | Event::Ready { .. } | Event::Handshake { .. } | Event::Vouches { .. } => {}
             Event::Error { message, .. } => toast = Some(message),
-            Event::History { .. } | Event::InviteCreated { .. } | Event::VoiceReady { .. } | Event::Kicked { .. } | Event::Bugs { .. } | Event::PluginSubmissions { .. } | Event::PluginSubmission { .. } | Event::SubmissionFile { .. } | Event::Submitted { .. } | Event::MySubmissions { .. } => {}
+            Event::History { .. } | Event::InviteCreated { .. } | Event::Invites { .. } | Event::VoiceReady { .. } | Event::Kicked { .. } | Event::Bugs { .. } | Event::PluginSubmissions { .. } | Event::PluginSubmission { .. } | Event::SubmissionFile { .. } | Event::Submitted { .. } | Event::MySubmissions { .. } => {}
         }
         // (The server saying no: no bug.)
         if let Some(t) = toast {

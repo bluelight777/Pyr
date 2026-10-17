@@ -61,6 +61,18 @@ fn access_editor(ui: &mut egui::Ui, s: &pyr_engine::state::ServerView, access: &
     }
 }
 
+/// Opens Invite People for a server: the dialog, and the invite it shows (one of mine with
+/// the usual settings if it still works: 7 days, no limit, like Discord's).
+pub(crate) fn open_invite(dialog: &mut Option<Dialog>, key: &str) -> Vec<Act> {
+    *dialog = Some(Dialog::Invite { key: key.to_string(), expire: crate::invites::DEFAULT_EXPIRE, uses: 0, editing: false });
+    vec![Act::CreateInvite {
+        key: key.to_string(),
+        max_uses: crate::invites::USES[0].1,
+        expires_secs: crate::invites::EXPIRE[crate::invites::DEFAULT_EXPIRE].1,
+        fresh: false,
+    }]
+}
+
 pub(crate) fn title(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).font(theme::bold_font(20.0)).color(theme::TEXT()));
     ui.add_space(4.0);
@@ -257,7 +269,7 @@ impl PyrApp {
                     title(ui, "Join a server");
                     ui.label(RichText::new("Paste an invite link someone shared with you.").color(theme::MUTED()));
                     field_label(ui, "Invite link");
-                    let r = input(ui, &mut link, "https://pyr.gg/#… or pyr://…");
+                    let r = input(ui, &mut link, "https://pyr.gg/… or pyr://…");
                     let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                     if !enter {
                         r.request_focus();
@@ -267,7 +279,7 @@ impl PyrApp {
                     }
                     ui.add_space(6.0);
                     ui.label(
-                        RichText::new("The link includes the server's fingerprint, so your connection is checked against it and can't be impersonated.")
+                        RichText::new("A full link (pyr://…) includes the server's fingerprint, so your connection is checked against it and can't be impersonated. A short one (pyr.gg/…) gets the full link from pyr.gg first.")
                             .size(12.0)
                             .color(theme::DIM()),
                     );
@@ -398,44 +410,118 @@ impl PyrApp {
                         self.ui.dialog = Some(Dialog::EditChannel { key, channel, name, topic, access, before });
                     }
                 }
-                Dialog::Invite { key } => {
+                Dialog::Invite { key, mut expire, mut uses, mut editing } => {
                     ui.set_width(520.0);
                     let s = st.server(&key);
-                    let name = s.map(|s| s.name.as_str()).unwrap_or("this server");
+                    let name = s.map(|s| s.name.clone()).unwrap_or_else(|| "this server".into());
                     title(ui, &format!("Invite friends to {name}"));
                     ui.label(
-                        RichText::new("Send them this link. It opens a page that gets Pyr for anyone who doesn't have it yet, and joins with one click. (It can also be pasted into Join a server.)")
+                        RichText::new("Send a friend this link. It opens a page that gets Pyr for anyone who doesn't have it yet, and joins with one click. It can also be pasted into Join a server.")
                             .color(theme::MUTED()),
                     );
-                    ui.add_space(8.0);
-                    match s.and_then(|s| s.last_invite.clone()) {
-                        Some(link) => {
-                            let web = pyr_proto::invite::InviteLink::web(&link, s.map(|s| s.name.as_str()).unwrap_or(""));
-                            egui::Frame::new().fill(theme::CODE_BG()).corner_radius(6).inner_margin(10).show(ui, |ui| {
-                                ui.add(egui::Label::new(RichText::new(&web).font(theme::mono(12.5)).color(theme::TEXT())).wrap());
+                    ui.add_space(10.0);
+                    let made = s.and_then(|s| s.invite.clone());
+                    let error = s.and_then(|s| s.invite_error.clone());
+                    if let Some(e) = &error {
+                        notice(ui, e, true);
+                        ui.add_space(8.0);
+                    }
+                    match &made {
+                        Some(inv) => {
+                            let share = inv.share(&name);
+                            let copied_id = egui::Id::new(("invite-copied", &inv.code));
+                            let copied_at: Option<f64> = ui.data(|d| d.get_temp(copied_id));
+                            let now = ui.input(|i| i.time);
+                            let copied = copied_at.is_some_and(|t| now - t < 1.5);
+                            egui::Frame::new().fill(theme::CODE_BG()).corner_radius(6).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    let w = (ui.available_width() - 96.0).max(120.0);
+                                    ui.add_sized([w, 26.0], egui::Label::new(RichText::new(&share).font(theme::mono(13.5)).color(theme::TEXT())).truncate().selectable(true));
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        let b = if copied { theme::primary_button("Copied") } else { theme::primary_button("Copy") };
+                                        if ui.add(b.min_size(vec2(84.0, 30.0))).clicked() {
+                                            acts.push(Act::Copy(share.clone()));
+                                            ui.data_mut(|d| d.insert_temp(copied_id, now));
+                                        }
+                                    });
+                                });
+                            });
+                            if copied {
+                                ui.ctx().request_repaint_after(std::time::Duration::from_millis(300));
+                            }
+                            ui.add_space(6.0);
+                            let lasts = match inv.expires_at {
+                                Some(at) => format!("Your invite link expires in {}.", crate::invites::time_left(at, pyr_proto::now_ms())),
+                                None => "Your invite link never expires.".to_string(),
+                            };
+                            let limit = match inv.max_uses {
+                                Some(1) => " One person can use it.".to_string(),
+                                Some(n) => format!(" {n} people can use it."),
+                                None => String::new(),
+                            };
+                            ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
+                                ui.label(RichText::new(format!("{lasts}{limit}")).size(12.5).color(theme::DIM()));
+                                if !editing && ui.link(RichText::new("Edit invite link").size(12.5)).clicked() {
+                                    editing = true;
+                                }
+                            });
+                            if let Some(why) = &inv.short_problem {
+                                ui.add_space(4.0);
+                                ui.label(RichText::new(why).size(12.0).color(theme::DIM()));
+                            }
+                        }
+                        None if error.is_none() => {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(RichText::new("Making the invite link…").color(theme::MUTED()));
+                            });
+                        }
+                        None => {}
+                    }
+                    if editing {
+                        ui.add_space(6.0);
+                        egui::Frame::new().fill(theme::ELEV()).corner_radius(8).inner_margin(12).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            field_label(ui, "Expire after");
+                            egui::ComboBox::from_id_salt("invite-expire").width(220.0).selected_text(crate::invites::EXPIRE[expire].0).show_ui(ui, |ui| {
+                                for (i, (label, _)) in crate::invites::EXPIRE.iter().enumerate() {
+                                    ui.selectable_value(&mut expire, i, *label);
+                                }
+                            });
+                            field_label(ui, "Max number of uses");
+                            egui::ComboBox::from_id_salt("invite-uses").width(220.0).selected_text(crate::invites::USES[uses].0).show_ui(ui, |ui| {
+                                for (i, (label, _)) in crate::invites::USES.iter().enumerate() {
+                                    ui.selectable_value(&mut uses, i, *label);
+                                }
                             });
                             ui.add_space(10.0);
                             ui.horizontal(|ui| {
-                                if ui.add(theme::primary_button("Copy link").min_size(vec2(110.0, 34.0))).clicked() {
-                                    acts.push(Act::Copy(web.clone()));
+                                if ui.add(theme::primary_button("Generate a new link").min_size(vec2(160.0, 32.0))).clicked() {
+                                    acts.push(Act::CreateInvite { key: key.clone(), max_uses: crate::invites::USES[uses].1, expires_secs: crate::invites::EXPIRE[expire].1, fresh: true });
+                                    editing = false;
                                 }
-                                if ui.button("Copy the pyr:// link").on_hover_text(link.as_str()).clicked() {
-                                    acts.push(Act::Copy(link.clone()));
+                                if ui.button("Cancel").clicked() {
+                                    editing = false;
                                 }
-                                if ui.button("Done").clicked() {
-                                    close = true;
+                            });
+                        });
+                    }
+                    ui.add_space(14.0);
+                    ui.horizontal(|ui| {
+                        if ui.add(theme::primary_button("Done").min_size(vec2(100.0, 34.0))).clicked() {
+                            close = true;
+                        }
+                        if let Some(inv) = made.as_ref().filter(|i| i.short.is_some()) {
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if ui.button("Copy the full link").on_hover_text("The pyr:// link: it works even without pyr.gg.").clicked() {
+                                    acts.push(Act::Copy(inv.link.clone()));
                                 }
                             });
                         }
-                        None => {
-                            ui.horizontal(|ui| {
-                                ui.spinner();
-                                ui.label(RichText::new("Creating invite…").color(theme::MUTED()));
-                            });
-                            if ui.button("Close").clicked() {
-                                close = true;
-                            }
-                        }
+                    });
+                    if !close {
+                        self.ui.dialog = Some(Dialog::Invite { key, expire, uses, editing });
                     }
                 }
                 Dialog::ServerSettings { key, mut name, mut tab } => {
@@ -450,12 +536,13 @@ impl PyrApp {
                     let can_sounds = server.as_ref().is_some_and(|s| s.can(perm::MANAGE_EMOJI) && s.status.is_connected());
                     let can_bots = can_server && server.as_ref().is_some_and(|s| s.has(pyr_proto::control::BOTS_FEATURE));
                     let can_gifs = server.as_ref().is_some_and(|s| s.can(perm::MANAGE_EMOJI) && s.has(pyr_proto::control::GIFS_FEATURE));
+                    let can_invites = can_server && server.as_ref().is_some_and(|s| s.has(pyr_proto::control::INVITES_FEATURE));
                     if tab == 0 && !can_server && can_emoji {
                         tab = 2;
                     }
                     ui.set_width(match tab {
                         1 => 680.0,
-                        2 | 4 | 5 | 6 => 560.0,
+                        2 | 4 | 5 | 6 | 7 => 560.0,
                         _ => 440.0,
                     });
                     ui.horizontal(|ui| {
@@ -482,6 +569,9 @@ impl PyrApp {
                         if can_sounds && ui.add(egui::Button::selectable(tab == 4, "Soundboard")).clicked() {
                             tab = 4;
                         }
+                        if can_invites && ui.add(egui::Button::selectable(tab == 7, "Invites")).clicked() {
+                            tab = 7;
+                        }
                         if can_bots && ui.add(egui::Button::selectable(tab == 5, "Bots")).clicked() {
                             tab = 5;
                         }
@@ -490,7 +580,11 @@ impl PyrApp {
                         }
                     });
                     ui.separator();
-                    if tab == 6 {
+                    if tab == 7 {
+                        if let Some(s) = &server {
+                            self.invites_tab(ui, s, acts);
+                        }
+                    } else if tab == 6 {
                         if let Some(s) = &server {
                             self.gifs_editor(ui, st, s, acts);
                         }
@@ -663,33 +757,99 @@ impl PyrApp {
                 }
                 Dialog::ConfirmJoin { link } => {
                     ui.set_width(440.0);
-                    title(ui, "Join this server?");
-                    match pyr_proto::invite::InviteLink::parse(&link) {
-                        Ok(l) => {
-                            ui.label(RichText::new(l.authority()).font(theme::mono(14.0)).color(theme::TEXT()));
-                            ui.add_space(6.0);
-                            ui.label(
-                                RichText::new(
-                                    "A link asked Pyr to join this server. Joining connects to it: the server sees your \
-                                     IP address and your Pyr identity. Only join servers from people you trust.",
-                                )
-                                .color(theme::MUTED()),
-                            );
-                            ui.add_space(14.0);
-                            ui.horizontal(|ui| {
-                                if ui.add(theme::primary_button("Join").min_size(vec2(100.0, 34.0))).clicked() {
-                                    acts.push(Act::AddServer(link.clone()));
-                                    close = true;
-                                }
+                    // A short link is looked up at pyr.gg first: its full link is what joins.
+                    let (full, name, counts, inviter) = match pyr_proto::directory::short_code(&link) {
+                        Some(code) => match self.invite_lookups.get(&code, ui.ctx()) {
+                            crate::invites::Lookup::Found(l) => {
+                                let counts = match (l.online, l.members) {
+                                    (Some(o), Some(m)) => Some(format!("{o} online · {m} {}", if m == 1 { "member" } else { "members" })),
+                                    (None, Some(m)) => Some(format!("{m} {}", if m == 1 { "member" } else { "members" })),
+                                    _ => None,
+                                };
+                                (Some(l.link.clone()), Some(l.name.clone()), counts, l.inviter.clone())
+                            }
+                            crate::invites::Lookup::Pending => {
+                                title(ui, "Opening the invite…");
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.label(RichText::new(format!("Looking up pyr.gg/{code}")).color(theme::MUTED()));
+                                });
+                                ui.add_space(12.0);
                                 if ui.button("Cancel").clicked() {
                                     close = true;
                                 }
-                            });
-                        }
-                        Err(e) => {
-                            ui.label(RichText::new(format!("That link doesn't work: {e}")).color(theme::LIVE()));
-                            if ui.button("OK").clicked() {
-                                close = true;
+                                (None, None, None, None)
+                            }
+                            crate::invites::Lookup::Missing => {
+                                title(ui, "This invite isn't valid");
+                                ui.label(RichText::new("It may have run out, or been taken back. Ask whoever sent it for a new one.").color(theme::MUTED()));
+                                ui.add_space(14.0);
+                                if ui.add(theme::primary_button("OK").min_size(vec2(100.0, 34.0))).clicked() {
+                                    close = true;
+                                }
+                                (None, None, None, None)
+                            }
+                            crate::invites::Lookup::Failed(why) => {
+                                title(ui, "Couldn't open the invite");
+                                notice(ui, &why, true);
+                                ui.add_space(14.0);
+                                ui.horizontal(|ui| {
+                                    if ui.add(theme::primary_button("Try again").min_size(vec2(100.0, 34.0))).clicked() {
+                                        self.invite_lookups.forget(&code);
+                                    }
+                                    if ui.button("Cancel").clicked() {
+                                        close = true;
+                                    }
+                                });
+                                (None, None, None, None)
+                            }
+                        },
+                        None => (Some(link.clone()), crate::invites::name_in(&link), None, None),
+                    };
+                    if let Some(full) = full {
+                        match pyr_proto::invite::InviteLink::parse(&full) {
+                            Ok(l) => {
+                                let known = st.servers.iter().find(|s| pyr_proto::b64::decode_array::<32>(&s.key).is_some_and(|fp| l.matches(&fp)));
+                                ui.label(RichText::new(match &inviter {
+                                    Some(who) => format!("{who} invited you to join"),
+                                    None => "You're invited to join".to_string(),
+                                }).size(13.0).color(theme::MUTED()));
+                                ui.add_space(2.0);
+                                title(ui, name.as_deref().unwrap_or("this server"));
+                                if let Some(c) = &counts {
+                                    ui.label(RichText::new(c).size(13.0).color(theme::DIM()));
+                                }
+                                ui.label(RichText::new(l.authority()).font(theme::mono(12.5)).color(theme::DIM()));
+                                ui.add_space(8.0);
+                                if known.is_some() {
+                                    ui.label(RichText::new("You're in this server already.").color(theme::MUTED()));
+                                } else {
+                                    ui.label(
+                                        RichText::new(
+                                            "Joining connects to it: the server sees your IP address and your Pyr identity. Only join servers \
+                                             from people you trust.",
+                                        )
+                                        .size(12.5)
+                                        .color(theme::MUTED()),
+                                    );
+                                }
+                                ui.add_space(14.0);
+                                ui.horizontal(|ui| {
+                                    let (label, act) = if known.is_some() { ("Open it", Act::OfferJoin(full.clone())) } else { ("Join", Act::AddServer(full.clone())) };
+                                    if ui.add(theme::primary_button(label).min_size(vec2(100.0, 34.0))).clicked() {
+                                        acts.push(act);
+                                        close = true;
+                                    }
+                                    if ui.button("Cancel").clicked() {
+                                        close = true;
+                                    }
+                                });
+                            }
+                            Err(e) => {
+                                ui.label(RichText::new(format!("That link doesn't work: {e}")).color(theme::LIVE()));
+                                if ui.button("OK").clicked() {
+                                    close = true;
+                                }
                             }
                         }
                     }

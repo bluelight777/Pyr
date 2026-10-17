@@ -18,6 +18,8 @@ pub struct ClaudeSetup {
     at: Instant,
     exe: Option<std::path::PathBuf>,
     configs: Vec<(std::path::PathBuf, Setup)>,
+    /// Claude Code still starts Ingle's connector (from before Pyr was called Pyr).
+    code_has_ingles: bool,
     /// What the last button did (or why it didn't).
     pub said: Option<(String, bool)>,
 }
@@ -173,7 +175,8 @@ impl PyrApp {
                 None => Vec::new(),
             };
             let said = self.ui.claude_setup.take().and_then(|c| c.said);
-            self.ui.claude_setup = Some(ClaudeSetup { at: Instant::now(), exe, configs, said });
+            let code_has_ingles = connector::claude_code_config().is_some_and(|c| connector::claude_code_has_ingles(&c));
+            self.ui.claude_setup = Some(ClaudeSetup { at: Instant::now(), exe, configs, code_has_ingles, said });
             ui.ctx().request_repaint_after(Duration::from_secs(2));
         }
         let Some(setup) = self.ui.claude_setup.as_ref() else { return };
@@ -184,6 +187,7 @@ impl PyrApp {
         };
         let configs = setup.configs.clone();
         let said = setup.said.clone();
+        let code_has_ingles = setup.code_has_ingles;
         let mut did: Option<(String, bool)> = None;
         if cfg!(windows) || cfg!(target_os = "macos") {
             field_label(ui, "The Claude app");
@@ -236,17 +240,34 @@ impl PyrApp {
             }
         }
         field_label(ui, "Claude Code");
-        ui.label(RichText::new("Run this once in a terminal:").color(theme::MUTED()));
-        let line = connector::claude_code_line(&exe, &args);
-        ui.horizontal(|ui| {
-            egui::Frame::new().fill(theme::CODE_BG()).corner_radius(6).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
-                ui.set_max_width(480.0);
-                ui.add(egui::Label::new(RichText::new(&line).font(theme::mono(12.0)).color(theme::TEXT())).wrap().selectable(true));
+        let command = |ui: &mut egui::Ui, line: &str| {
+            ui.horizontal(|ui| {
+                egui::Frame::new().fill(theme::CODE_BG()).corner_radius(6).inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
+                    ui.set_max_width(480.0);
+                    ui.add(egui::Label::new(RichText::new(line).font(theme::mono(12.0)).color(theme::TEXT())).wrap().selectable(true));
+                });
+                if ui.small_button("Copy").clicked() {
+                    ui.ctx().copy_text(line.to_string());
+                }
             });
-            if ui.small_button("Copy").clicked() {
-                ui.ctx().copy_text(line.clone());
+        };
+        if code_has_ingles {
+            // (Claude Code's settings file is only read: Claude Code's own commands change it.)
+            notice(
+                ui,
+                "Claude Code still starts Ingle's connector, from before Pyr was called Pyr (it went with Ingle). Run these two in a \
+                 terminal to switch it to Pyr's, then start Claude Code again:",
+                true,
+            );
+            ui.add_space(4.0);
+            for line in connector::claude_code_switch(&exe, &args) {
+                command(ui, &line);
+                ui.add_space(2.0);
             }
-        });
+        } else {
+            ui.label(RichText::new("Run this once in a terminal:").color(theme::MUTED()));
+            command(ui, &connector::claude_code_line(&exe, &args));
+        }
         field_label(ui, "Other apps");
         ui.horizontal(|ui| {
             ui.label(RichText::new("Apps that take MCP servers the same way:").color(theme::MUTED()));
@@ -256,7 +277,7 @@ impl PyrApp {
         });
         if did.is_some() {
             // Look again now, and keep what the button said.
-            self.ui.claude_setup = Some(ClaudeSetup { at: Instant::now() - Duration::from_secs(10), exe: Some(exe), configs, said: did });
+            self.ui.claude_setup = Some(ClaudeSetup { at: Instant::now() - Duration::from_secs(10), exe: Some(exe), configs, code_has_ingles, said: did });
         }
     }
 }

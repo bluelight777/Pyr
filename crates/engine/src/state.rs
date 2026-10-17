@@ -141,7 +141,15 @@ pub struct ServerView {
     /// Kept after you've read them, until you leave the conversation (or write in it), so you
     /// can see who wrote what you missed.
     pub new_since: HashMap<ChannelId, MessageId>,
-    pub last_invite: Option<String>,
+    /// The invite the Invite dialog shows (None while it's being made; see
+    /// `Engine::create_invite`).
+    pub invite: Option<MadeInvite>,
+    /// Why the last invite couldn't be made.
+    pub invite_error: Option<String>,
+    /// What Server Settings → Invites shows (None until it's asked for).
+    pub invites: Option<InvitesView>,
+    /// Why the last change there didn't happen (the community's own code was taken, say).
+    pub invites_error: Option<String>,
     /// The last bot invite made here (Server Settings → Bots).
     pub last_bot_invite: Option<String>,
     pub rtt_ms: u32,
@@ -161,6 +169,41 @@ pub struct ServerView {
     pub dnd_sent: bool,
 }
 
+/// An invite to hand out (`Engine::create_invite`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MadeInvite {
+    pub code: String,
+    /// The full link, `pyr://host/code/fp`: works without pyr.gg.
+    pub link: String,
+    /// `https://pyr.gg/<code>`, once pyr.gg lists it.
+    pub short: Option<String>,
+    /// Why there's no short link (short links on, but pyr.gg couldn't list this one).
+    pub short_problem: Option<String>,
+    pub expires_at: Option<i64>,
+    pub max_uses: Option<u32>,
+    pub uses: u32,
+    /// What it was asked for: (most uses, seconds until it runs out).
+    pub asked: (Option<u32>, Option<u64>),
+}
+
+impl MadeInvite {
+    /// The link to share: the short one when there is one, else the web page with the full
+    /// invite in it (`server_name` shows on it).
+    pub fn share(&self, server_name: &str) -> String {
+        self.short.clone().unwrap_or_else(|| pyr_proto::invite::InviteLink::web(&self.link, server_name))
+    }
+}
+
+/// Server Settings → Invites (`Engine::list_invites`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InvitesView {
+    pub invites: Vec<InviteInfo>,
+    /// The community's own code, `https://pyr.gg/<vanity>`.
+    pub vanity: Option<String>,
+    pub short_links: bool,
+    pub short_links_problem: Option<String>,
+}
+
 impl ServerView {
     pub fn new(key: String, name: String, address: String) -> ServerView {
         ServerView {
@@ -178,7 +221,10 @@ impl ServerView {
             unread: HashSet::new(),
             mentions: HashMap::new(),
             new_since: HashMap::new(),
-            last_invite: None,
+            invite: None,
+            invite_error: None,
+            invites: None,
+            invites_error: None,
             last_bot_invite: None,
             rtt_ms: 0,
             roles: Vec::new(),
