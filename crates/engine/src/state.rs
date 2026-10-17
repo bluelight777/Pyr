@@ -142,6 +142,8 @@ pub struct ServerView {
     /// can see who wrote what you missed.
     pub new_since: HashMap<ChannelId, MessageId>,
     pub last_invite: Option<String>,
+    /// The last bot invite made here (Server Settings → Bots).
+    pub last_bot_invite: Option<String>,
     pub rtt_ms: u32,
     /// Custom roles, highest first.
     pub roles: Vec<RoleDef>,
@@ -175,6 +177,7 @@ impl ServerView {
             mentions: HashMap::new(),
             new_since: HashMap::new(),
             last_invite: None,
+            last_bot_invite: None,
             rtt_ms: 0,
             roles: Vec::new(),
             features: Vec::new(),
@@ -328,6 +331,11 @@ impl ServerView {
 
     pub fn is_admin(&self) -> bool {
         self.me.as_ref().map(|m| m.role.is_admin()).unwrap_or(false)
+    }
+
+    /// Whether a member is a bot ([`BOTS_FEATURE`]).
+    pub fn is_bot(&self, uid: &str) -> bool {
+        self.members.get(uid).is_some_and(|m| m.bot)
     }
 
     pub fn channel(&self, id: ChannelId) -> Option<&Channel> {

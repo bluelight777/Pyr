@@ -1,6 +1,7 @@
 //! The connector's tools: guides, starting a skin or an add-on, checking them the way the Ingle
 //! Library will, showing a skin on Ingle, making sounds, sending them in (signed with Ingle's
-//! identity, so only this Ingle can send new versions of them), and where they stand.
+//! identity, so only this Ingle can send new versions of them), and where they stand; and
+//! Claude's own tools in the servers it's been added to as a bot (see `chat`).
 
 use std::path::{Path, PathBuf};
 
@@ -10,13 +11,15 @@ use ingle_proto::control::{PluginSubmission, SKIN_KIND, SubmissionStatus};
 use ingle_proto::crypto::Identity;
 use serde_json::{Value, json};
 
-/// What the tools work with: Ingle's settings folder and a way to reach the library server.
+/// What the tools work with: Ingle's settings folder, a way to reach the library server, and
+/// Claude's own copy of the engine (a bot, started when it's first needed).
 pub struct Ctx {
     pub config_dir: PathBuf,
     rt: tokio::runtime::Runtime,
     endpoints: std::sync::Mutex<ingle_engine::net::Endpoints>,
     /// The library server: (host, port, its key).
     server: Option<(String, u16, [u8; 32])>,
+    bot: std::sync::Mutex<Option<std::sync::Arc<ingle_engine::Engine>>>,
 }
 
 impl Ctx {
@@ -26,7 +29,45 @@ impl Ctx {
 
     pub fn with_server(config_dir: PathBuf, server: Option<(String, u16, [u8; 32])>) -> Result<Ctx> {
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).thread_name("ingle-mcp-net").enable_all().build()?;
-        Ok(Ctx { config_dir, rt, endpoints: Default::default(), server })
+        Ok(Ctx { config_dir, rt, endpoints: Default::default(), server, bot: Default::default() })
+    }
+
+    /// Where Claude keeps its own identity and settings as a bot ([`ingle_engine::claude_dir`]).
+    pub fn bot_dir(&self) -> PathBuf {
+        ingle_engine::claude_dir(&self.config_dir)
+    }
+
+    /// Whether Claude has been added to a server (or is waiting to be), so its engine should
+    /// run and keep it online while the connector does.
+    pub fn bot_wanted(&self) -> bool {
+        let dir = self.bot_dir();
+        let waiting = std::fs::read_dir(dir.join("join")).is_ok_and(|d| d.flatten().any(|e| e.path().extension().is_some_and(|x| x == "link")));
+        waiting || !ingle_engine::config::load_config(&dir).servers.is_empty()
+    }
+
+    /// Claude's own copy of the engine, as the bot Claude (with an identity of its own, never
+    /// the person's), started the first time it's needed. It writes Claude's member id (a
+    /// public id) next to its identity, for Ingle's Server Settings → Bots.
+    pub fn bot(&self) -> Result<std::sync::Arc<ingle_engine::Engine>> {
+        let mut bot = self.bot.lock().map_err(|_| anyhow!("Claude's engine stopped"))?;
+        if let Some(e) = bot.as_ref() {
+            return Ok(e.clone());
+        }
+        let dir = self.bot_dir();
+        std::fs::create_dir_all(&dir).with_context(|| format!("couldn't make {}", dir.display()))?;
+        let mut cfg = ingle_engine::config::load_config(&dir);
+        if cfg.display_name.trim().is_empty() {
+            cfg.display_name = "Claude".into();
+            // Sounds off: a bot has no speakers to play them on.
+            cfg.settings.sounds = false;
+            ingle_engine::config::save_config(&dir, &cfg)?;
+        }
+        let engine = ingle_engine::Engine::start(ingle_engine::EngineOptions { config_dir: Some(dir.clone()), push_to_talk: false, bot: true, ..Default::default() })?;
+        let uid = engine.state().my_uid.clone();
+        std::fs::write(dir.join(ingle_engine::CLAUDE_MEMBER_ID), &uid).with_context(|| format!("couldn't write Claude's member id in {}", dir.display()))?;
+        let engine = std::sync::Arc::new(engine);
+        *bot = Some(engine.clone());
+        Ok(engine)
     }
 
     /// Ingle's identity on this PC (never made here: Ingle makes it the first time it opens).
@@ -61,7 +102,7 @@ pub fn list() -> Value {
     let makes = json!({ "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false });
     let sends = json!({ "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true });
     let none = json!({ "type": "object", "additionalProperties": false });
-    json!([
+    let mut tools = json!([
         {
             "name": "skin_guide",
             "title": "How Ingle skins are made",
@@ -167,11 +208,19 @@ pub fn list() -> Value {
             "inputSchema": none,
             "annotations": { "readOnlyHint": true, "openWorldHint": true },
         },
-    ])
+    ]);
+    // And Claude's own, in the servers it's been added to.
+    if let (Some(all), Some(chat)) = (tools.as_array_mut(), crate::chat::list().as_array()) {
+        all.extend(chat.iter().cloned());
+    }
+    tools
 }
 
 /// Runs a tool (`None`: there's no such tool).
 pub fn call(ctx: &Ctx, name: &str, args: &Value) -> Option<Result<String>> {
+    if crate::chat::NAMES.contains(&name) {
+        return Some(ctx.bot().and_then(|engine| crate::chat::call(&engine, name, args).unwrap_or_else(|| Err(anyhow!("Unknown tool: {name}")))));
+    }
     Some(match name {
         "skin_guide" => Ok(skins::GUIDE.to_string()),
         "new_skin" => new_skin(ctx, args),

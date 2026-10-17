@@ -1,0 +1,38 @@
+{
+  "name": "Elven Grove",
+  "version": "1.0",
+  "summary": "An enchanted forest: emerald panels, golden light and fireflies.",
+  "author": "Ingle",
+  "colors": {
+    "rail": "#08110c",
+    "side": "#0c1711",
+    "side_dark": "#0a140e",
+    "main": "#102016",
+    "elev": "#172c1f",
+    "elev2": "#203a29",
+    "hover": "#14261b",
+    "line": "#25402e",
+    "shadow_line": "#050a07",
+    "text": "#f2f2e0",
+    "body": "#e3e8d3",
+    "muted": "#a3b399",
+    "dim": "#76886d",
+    "ember": "#d8b44c",
+    "ember2": "#f2d67e",
+    "glow": "#f0e27c",
+    "live": "#e5584d",
+    "online": "#7cd67c",
+    "owner": "#f5c451",
+    "admin": "#6fe0c8",
+    "link": "#e8d38c",
+    "stage": "#040906",
+    "tile": "#0e1c13",
+    "code_bg": "#0a160f",
+    "selection": "#6b5a1e"
+  },
+  "background": {
+    "file": "background.webp",
+    "show": 0.28,
+    "under": "window"
+  }
+}

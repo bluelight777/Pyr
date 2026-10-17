@@ -84,7 +84,10 @@ pub(crate) fn dialog_room(ctx: &egui::Context, top: Option<f32>) -> f32 {
 }
 
 pub(crate) fn input(ui: &mut egui::Ui, text: &mut String, hint: &str) -> egui::Response {
-    ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(f32::INFINITY).margin(egui::Margin::symmetric(10, 8)))
+    let resp = ui.add(egui::TextEdit::singleline(text).hint_text(hint).desired_width(f32::INFINITY).margin(egui::Margin::symmetric(10, 8)));
+    // Right-click: Cut, Copy, Paste, Select all.
+    crate::textbox::menu(ui, &resp, text, true);
+    resp
 }
 
 /// Puts `insert` where the text box `id`'s cursor is (at the end if it has none) and moves the
@@ -440,12 +443,13 @@ impl IngleApp {
                     // The soundboard tab shows for anyone who manages emoji (it says when the
                     // server needs updating first).
                     let can_sounds = server.as_ref().is_some_and(|s| s.can(perm::MANAGE_EMOJI) && s.status.is_connected());
+                    let can_bots = can_server && server.as_ref().is_some_and(|s| s.has(ingle_proto::control::BOTS_FEATURE));
                     if tab == 0 && !can_server && can_emoji {
                         tab = 2;
                     }
                     ui.set_width(match tab {
                         1 => 680.0,
-                        2 | 4 => 560.0,
+                        2 | 4 | 5 => 560.0,
                         _ => 440.0,
                     });
                     ui.horizontal(|ui| {
@@ -469,12 +473,19 @@ impl IngleApp {
                         if can_sounds && ui.add(egui::Button::selectable(tab == 4, "Soundboard")).clicked() {
                             tab = 4;
                         }
+                        if can_bots && ui.add(egui::Button::selectable(tab == 5, "Bots")).clicked() {
+                            tab = 5;
+                        }
                         if can_backup && ui.add(egui::Button::selectable(tab == 3, "Backups")).clicked() {
                             tab = 3;
                         }
                     });
                     ui.separator();
-                    if tab == 4 {
+                    if tab == 5 {
+                        if let Some(s) = &server {
+                            self.bots_tab(ui, s, acts);
+                        }
+                    } else if tab == 4 {
                         if let Some(s) = &server {
                             let back = Dialog::ServerSettings { key: key.clone(), name: name.clone(), tab: 4 };
                             self.server_sounds_tab(ui, s, back);
@@ -1117,9 +1128,12 @@ impl IngleApp {
                 }
                 field_label(ui, "Display name");
                 ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut self.ui.name_draft).desired_width(260.0).margin(egui::Margin::symmetric(10, 8)));
-                    if ui.add(theme::primary_button("Save")).clicked() {
-                        acts.push(Act::SetName(self.ui.name_draft.trim().to_string()));
+                    let draft = self.ui.name_draft.get_or_insert_with(|| st.my_name.clone());
+                    let resp = ui.add(egui::TextEdit::singleline(draft).hint_text("Your name").desired_width(260.0).margin(egui::Margin::symmetric(10, 8)));
+                    crate::textbox::menu(ui, &resp, draft, true);
+                    let name = draft.trim().to_string();
+                    if ui.add_enabled(!name.is_empty() && name != st.my_name, theme::primary_button("Save")).clicked() {
+                        acts.push(Act::SetName(name));
                     }
                 });
                 field_label(ui, "Your identity");
@@ -1685,6 +1699,105 @@ impl IngleApp {
 
 impl IngleApp {
     /// Server settings → Backups (owner only): this server's backups on this PC.
+    /// Server Settings → Bots: Claude (through the Claude connector on this PC), the bots in
+    /// the server, and bot invite links for others.
+    fn bots_tab(&mut self, ui: &mut egui::Ui, s: &ingle_engine::state::ServerView, acts: &mut Vec<Act>) {
+        let key = s.key.clone();
+        ui.add(
+            egui::Label::new(
+                RichText::new(
+                    "Bots are programs that are members, like Claude. A bot sees and writes where its roles let it, like anyone \
+                     (in a private channel only with a role that can see it), and can't join voice, have conversations, make \
+                     friends or invite anyone.",
+                )
+                .size(12.5)
+                .color(theme::MUTED()),
+            )
+            .wrap(),
+        );
+        let (claude, waiting) = self.engine.claude_connector();
+        let claude_here = claude.as_deref().and_then(|u| s.members.get(u)).cloned();
+        field_label(ui, "Claude");
+        match claude_here {
+            Some(m) => {
+                ui.horizontal(|ui| {
+                    let (r, _) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::hover());
+                    let face = self.face(ui.ctx(), s, &m.user_id);
+                    crate::app::avatar(ui.painter(), r.center(), 16.0, &m.user_id, &m.name, false, theme::SIDE(), face);
+                    ui.label(RichText::new(&m.name).font(theme::bold_font(14.5)).color(theme::TEXT()));
+                    crate::app::bot_tag(ui);
+                    ui.label(RichText::new(if m.online { "online" } else { "offline" }).size(12.0).color(theme::DIM()));
+                });
+                ui.add(
+                    egui::Label::new(
+                        RichText::new("Claude is in this server. To let it into a private channel, give it a role that can see the channel (right-click it in the member list, then Roles).")
+                            .size(12.0)
+                            .color(theme::DIM()),
+                    )
+                    .wrap(),
+                );
+            }
+            None => {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new("Let Claude read and write here when you ask it to, from the Claude app on this PC (with Ingle's Claude connector added to it: Settings → Claude).")
+                            .size(12.5)
+                            .color(theme::TEXT()),
+                    )
+                    .wrap(),
+                );
+                ui.add_space(4.0);
+                if ui.add_enabled(waiting == 0, theme::primary_button("Add Claude")).clicked() {
+                    acts.push(Act::AddClaude { key: key.clone() });
+                }
+                if waiting > 0 {
+                    ui.label(RichText::new("Waiting for Claude: it joins as soon as the Claude connector runs (it does while the Claude app is open).").size(12.0).color(theme::DIM()));
+                }
+            }
+        }
+        let mut bots: Vec<_> = s.members.values().filter(|m| m.bot).cloned().collect();
+        bots.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        field_label(ui, &format!("Bots here — {}", bots.len()));
+        if bots.is_empty() {
+            ui.label(RichText::new("No bots yet.").size(12.5).color(theme::DIM()));
+        }
+        for m in bots {
+            ui.horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::hover());
+                let face = self.face(ui.ctx(), s, &m.user_id);
+                crate::app::avatar(ui.painter(), r.center(), 14.0, &m.user_id, &m.name, false, theme::SIDE(), face);
+                ui.label(RichText::new(&m.name).font(theme::bold_font(14.0)).color(theme::TEXT()));
+                crate::app::bot_tag(ui);
+                for r in s.roles_of(&m.user_id) {
+                    let col = if r.color != 0 { crate::app::rgb(r.color) } else { theme::TEXT() };
+                    ui.label(RichText::new(&r.name).size(12.0).color(col));
+                }
+                if s.can(perm::KICK) {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.button(RichText::new("Remove").color(theme::LIVE())).on_hover_text("Kick it from the server (a new bot invite brings it back)").clicked() {
+                            acts.push(Act::Kick { key: key.clone(), uid: m.user_id.clone(), ban: false });
+                        }
+                    });
+                }
+            });
+        }
+        field_label(ui, "Another bot");
+        ui.label(RichText::new("A bot invite link adds one bot (any program that speaks Ingle), within a week.").size(12.5).color(theme::DIM()));
+        ui.add_space(4.0);
+        if ui.button("Make a bot invite link").clicked() {
+            acts.push(Act::CreateBotInvite { key: key.clone() });
+        }
+        if let Some(link) = &s.last_bot_invite {
+            ui.add_space(4.0);
+            egui::Frame::new().fill(theme::CODE_BG()).corner_radius(6).inner_margin(10).show(ui, |ui| {
+                ui.add(egui::Label::new(RichText::new(link).font(theme::mono(12.5)).color(theme::TEXT())).wrap());
+            });
+            if ui.button("Copy link").clicked() {
+                acts.push(Act::Copy(link.clone()));
+            }
+        }
+    }
+
     fn backups_tab(&mut self, ui: &mut egui::Ui, st: &AppState, key: &str) {
         let folder = self.engine.backup_folder(key);
         let status = st.backups.get(key).cloned().unwrap_or_default();

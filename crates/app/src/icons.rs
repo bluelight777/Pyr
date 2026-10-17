@@ -689,6 +689,19 @@ pub fn palette(p: &Painter, r: Rect) {
     }
 }
 
+/// A painter's palette in one color, its thumb hole and dabs of paint cut out to `bg` (what's
+/// under it): the rail's Skins button.
+pub fn palette_mono(p: &Painter, r: Rect, c: Color32, bg: Color32) {
+    let rad = r.width().min(r.height()) * 0.5;
+    let ctr = r.center();
+    p.circle_filled(ctr, rad, c);
+    p.circle_filled(ctr + vec2(rad * 0.38, rad * 0.38), rad * 0.2, bg);
+    for i in 0..4 {
+        let a = PI * (0.85 + i as f32 * 0.33);
+        p.circle_filled(pos2(ctr.x + rad * 0.58 * a.cos(), ctr.y + rad * 0.58 * a.sin()), rad * 0.15, bg);
+    }
+}
+
 /// A rounded square: stop.
 pub fn stop(p: &Painter, r: Rect, c: Color32) {
     let s = r.width().min(r.height());

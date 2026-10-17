@@ -1,0 +1,38 @@
+{
+  "name": "Abyss",
+  "version": "1.0",
+  "summary": "The deep sea: dark blue panels, bioluminescent cyan, and jellyfish glowing in the dark.",
+  "author": "Ingle",
+  "colors": {
+    "rail": "#030c14",
+    "side": "#05121c",
+    "side_dark": "#040f18",
+    "main": "#071a26",
+    "elev": "#0c2635",
+    "elev2": "#123346",
+    "hover": "#0a202e",
+    "line": "#14394d",
+    "shadow_line": "#02080d",
+    "text": "#e4f7fb",
+    "body": "#d2ecf2",
+    "muted": "#8fb2bf",
+    "dim": "#64869a",
+    "ember": "#22c8e0",
+    "ember2": "#7fe9f5",
+    "glow": "#5ff4ff",
+    "live": "#ff5c8a",
+    "online": "#4fe0a8",
+    "owner": "#f5c451",
+    "admin": "#c59bff",
+    "link": "#74dcff",
+    "stage": "#01070b",
+    "tile": "#061722",
+    "code_bg": "#041119",
+    "selection": "#0d5c70"
+  },
+  "background": {
+    "file": "background.webp",
+    "show": 0.4,
+    "under": "window"
+  }
+}

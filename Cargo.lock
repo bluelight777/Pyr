@@ -3244,6 +3244,7 @@ name = "ingle-mcp"
 version = "0.8.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "ingle-engine",
  "ingle-proto",
  "ingle-server",

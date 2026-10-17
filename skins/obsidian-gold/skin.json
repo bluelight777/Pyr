@@ -1,0 +1,43 @@
+{
+  "name": "Obsidian & Gold",
+  "version": "1.0",
+  "summary": "Black marble veined with gold, an art deco sunburst, and a serif typeface.",
+  "author": "Ingle",
+  "colors": {
+    "rail": "#0a0a0a",
+    "side": "#101010",
+    "side_dark": "#0d0d0d",
+    "main": "#141414",
+    "elev": "#1e1e1e",
+    "elev2": "#292929",
+    "hover": "#1a1a1a",
+    "line": "#2e2a20",
+    "shadow_line": "#050505",
+    "text": "#f6edd6",
+    "body": "#e9e3d3",
+    "muted": "#aaa18e",
+    "dim": "#7c7566",
+    "ember": "#d6ab45",
+    "ember2": "#f2d074",
+    "glow": "#ffd97a",
+    "live": "#e5484d",
+    "online": "#6cc070",
+    "owner": "#ffd24a",
+    "admin": "#e8c46c",
+    "link": "#ebc872",
+    "stage": "#070707",
+    "tile": "#121212",
+    "code_bg": "#0f0f0f",
+    "selection": "#6e5520"
+  },
+  "background": {
+    "file": "background.webp",
+    "show": 0.34,
+    "under": "window"
+  },
+  "fonts": {
+    "body": "fonts/Caladea-Regular.ttf",
+    "bold": "fonts/Caladea-Bold.ttf",
+    "scale": 1.08
+  }
+}

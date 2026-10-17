@@ -33,6 +33,8 @@ pub enum Trial {
 pub struct Trying {
     pub what: Trial,
     pub name: String,
+    /// Who made it (its skin.json's author), to say so while it's on.
+    pub author: String,
     files: Vec<(String, Vec<u8>)>,
     /// Counts the times its files changed (each is worn again).
     rev: u32,
@@ -47,8 +49,19 @@ impl Trying {
             Trial::Folder { path } => stamps(path, &files),
             _ => Vec::new(),
         };
-        Trying { what, name, files, rev: 0, seen, checked: Some(Instant::now()) }
+        let author = author_of(&files);
+        Trying { what, name, author, files, rev: 0, seen, checked: Some(Instant::now()) }
     }
+}
+
+/// The author a skin's files name (in its skin.json), or "".
+fn author_of(files: &[(String, Vec<u8>)]) -> String {
+    files
+        .iter()
+        .find(|(p, _)| p == ingle_proto::skin::MANIFEST)
+        .and_then(|(_, b)| serde_json::from_slice::<ingle_proto::skin::Manifest>(b).ok())
+        .map(|m| m.author.trim().to_string())
+        .unwrap_or_default()
 }
 
 /// Each file's size and when it was last changed (skin.json first: what it names can change).
@@ -148,6 +161,7 @@ impl Looks {
                         match ingle_engine::skins::check_folder(path) {
                             Ok((files, report)) if report.ok() => {
                                 t.name = report.manifest.name.clone();
+                                t.author = report.manifest.author.trim().to_string();
                                 t.seen = stamps(path, &files);
                                 t.files = files;
                                 t.rev += 1;
@@ -275,8 +289,9 @@ impl Looks {
         ctx.layer_painter(egui::LayerId::background()).image(tex.id(), screen, uv, Color32::WHITE);
     }
 
-    /// Something's being tried (for the banner that says so and takes it off).
-    pub fn trying_name(&self) -> Option<(&str, &Trial)> {
-        self.trying.as_ref().map(|t| (t.name.as_str(), &t.what))
+    /// Something's being tried: its name and author (for the banner that says so and takes it
+    /// off), and where it's from.
+    pub fn trying_name(&self) -> Option<(&str, &str, &Trial)> {
+        self.trying.as_ref().map(|t| (t.name.as_str(), t.author.as_str(), &t.what))
     }
 }

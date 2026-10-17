@@ -39,13 +39,123 @@
     {
       "id": "blood-moon",
       "name": "Blood Moon",
-      "version": "1.0",
+      "version": "1.1",
       "summary": "Deep reds and black, with a blood-red moon rising behind the chat.",
       "description": "Ingle in the colors of the Brethren of Blood: near-black panels with a red glow, crimson buttons and highlights, and a blood-red moon over a dark ridge of pines that shows faintly through the chat. Only colors and a picture: Ingle's own fonts and sounds stay.",
       "author": "Firelit Games",
       "license": "MIT OR Apache-2.0",
       "review": "Made by Firelit Games. The picture is drawn by tools/make-skin-art.py in Ingle's source.",
-      "dir": "blood-moon/1.0"
+      "dir": "blood-moon/1.1"
+    },
+    {
+      "id": "aurora",
+      "name": "Aurora",
+      "version": "1.0",
+      "summary": "Northern lights over a frozen lake: deep navy panels and aurora-green highlights.",
+      "description": "Ingle under the northern lights: curtains of green and violet aurora over snowy peaks and a still, frozen lake that mirrors them, behind the whole window. Deep navy panels, aurora-green buttons and highlights, violet for admins.",
+      "author": "Ingle",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Ingle. The picture was made with Meshy.",
+      "dir": "aurora/1.0"
+    },
+    {
+      "id": "neon-drive",
+      "name": "Neon Drive",
+      "version": "1.0",
+      "summary": "A synthwave sunset: indigo panels, hot pink and neon cyan, a striped sun over a glowing grid.",
+      "description": "An endless 1980s drive at dusk: a striped sun sinking behind neon-edged mountains, palm trees, and a glowing grid running to the horizon, behind the whole window. Indigo panels, hot-pink buttons, cyan glows, and the Poppins typeface.",
+      "author": "Ingle",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Ingle. The picture was made with Meshy. The fonts come with their licenses, in the skin's fonts folder.",
+      "dir": "neon-drive/1.0"
+    },
+    {
+      "id": "abyss",
+      "name": "Abyss",
+      "version": "1.0",
+      "summary": "The deep sea: dark blue panels, bioluminescent cyan, and jellyfish glowing in the dark.",
+      "description": "Ingle at the bottom of the ocean: a glowing jellyfish drifting through dark water, smaller pink and violet ones far off, and light falling from the surface far above, behind the whole window. Deep blue panels with bioluminescent cyan buttons and highlights.",
+      "author": "Ingle",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Ingle. The picture was made with Meshy.",
+      "dir": "abyss/1.0"
+    },
+    {
+      "id": "sakura-night",
+      "name": "Sakura Night",
+      "version": "1.0",
+      "summary": "Cherry blossoms under a full moon: plum panels and petal-pink highlights.",
+      "description": "A spring night: cherry blossoms reaching across a plum and indigo sky, petals drifting past a full moon, and a pagoda in the misty hills below, behind the whole window. Plum panels, petal-pink buttons and highlights, lavender for admins.",
+      "author": "Ingle",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Ingle. The picture was made with Meshy.",
+      "dir": "sakura-night/1.0"
+    },
+    {
+      "id": "elven-grove",
+      "name": "Elven Grove",
+      "version": "1.0",
+      "summary": "An enchanted forest: emerald panels, golden light and fireflies.",
+      "description": "Deep in an ancient forest: mossy giants, golden light falling into a clearing, fireflies and glowing mushrooms, behind the whole window. Emerald panels with gold buttons and highlights, and teal for admins.",
+      "author": "Ingle",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Ingle. The picture was made with Meshy.",
+      "dir": "elven-grove/1.0"
+    },
+    {
+      "id": "nebula",
+      "name": "Nebula",
+      "version": "1.0",
+      "summary": "Deep space: violet panels and a vast magenta nebula behind the whole window.",
+      "description": "A star nursery light-years across: clouds of magenta, violet and teal gas, dark dust lanes and blue-white stars, behind the whole window. Near-black violet panels with orchid buttons and pink glows.",
+      "author": "Ingle",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Ingle. The picture was made with Meshy.",
+      "dir": "nebula/1.0"
+    },
+    {
+      "id": "terminal",
+      "name": "Terminal",
+      "version": "1.0",
+      "summary": "Green phosphor on black, in a monospaced typeface, with code falling behind the chat.",
+      "description": "Ingle as an old green-screen terminal: phosphor-green text on black in DejaVu Sans Mono, and columns of glowing characters falling behind the whole window.",
+      "author": "Ingle",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Ingle. The picture was made with Meshy. The fonts come with their licenses, in the skin's fonts folder.",
+      "dir": "terminal/1.0"
+    },
+    {
+      "id": "hallows-eve",
+      "name": "Hallow's Eve",
+      "version": "1.0",
+      "summary": "Halloween night: purple-black panels and pumpkin orange, a harvest moon over a graveyard.",
+      "description": "All Hallows' Eve: a giant harvest moon, bats, a gnarled tree, and an old graveyard with glowing jack-o'-lanterns in the fog, behind the whole window. Purple-black panels with pumpkin-orange buttons and highlights.",
+      "author": "Ingle",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Ingle. The picture was made with Meshy.",
+      "dir": "hallows-eve/1.0"
+    },
+    {
+      "id": "obsidian-gold",
+      "name": "Obsidian & Gold",
+      "version": "1.0",
+      "summary": "Black marble veined with gold, an art deco sunburst, and a serif typeface.",
+      "description": "Polished black marble veined with gold under an art deco sunburst: 1920s glamour behind the whole window. Black panels, gold buttons and highlights, and the Caladea serif for text.",
+      "author": "Ingle",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Ingle. The picture was made with Meshy. The fonts come with their licenses, in the skin's fonts folder.",
+      "dir": "obsidian-gold/1.0"
+    },
+    {
+      "id": "stormcaller",
+      "name": "Stormcaller",
+      "version": "1.0",
+      "summary": "A thunderstorm at sea: slate panels and electric blue, lightning behind the chat.",
+      "description": "Lightning splits a storm over a raging sea, rain slants through the dark, and a lighthouse holds on at the edge, behind the whole window. Slate panels with electric-blue buttons and highlights.",
+      "author": "Ingle",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Ingle. The picture was made with Meshy.",
+      "dir": "stormcaller/1.0"
     }
   ]
 }

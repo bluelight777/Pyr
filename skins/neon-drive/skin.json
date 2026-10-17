@@ -1,0 +1,43 @@
+{
+  "name": "Neon Drive",
+  "version": "1.0",
+  "summary": "A synthwave sunset: indigo panels, hot pink and neon cyan, a striped sun over a glowing grid.",
+  "author": "Ingle",
+  "colors": {
+    "rail": "#0b0616",
+    "side": "#110a20",
+    "side_dark": "#0e081b",
+    "main": "#160d29",
+    "elev": "#20133b",
+    "elev2": "#2b1a4f",
+    "hover": "#1b1033",
+    "line": "#321f58",
+    "shadow_line": "#06030c",
+    "text": "#fdf0ff",
+    "body": "#f0defa",
+    "muted": "#b69ccc",
+    "dim": "#8a72a2",
+    "ember": "#ff3fa4",
+    "ember2": "#ff8ccb",
+    "glow": "#3ef0ff",
+    "live": "#ff3b5c",
+    "online": "#3ef0a8",
+    "owner": "#ffcf3f",
+    "admin": "#3ee8ff",
+    "link": "#6ff0ff",
+    "stage": "#06030b",
+    "tile": "#140b25",
+    "code_bg": "#0f0820",
+    "selection": "#8a1f6a"
+  },
+  "background": {
+    "file": "background.webp",
+    "show": 0.3,
+    "under": "window"
+  },
+  "fonts": {
+    "body": "fonts/Poppins-Regular.ttf",
+    "bold": "fonts/Poppins-Bold.ttf",
+    "scale": 0.92
+  }
+}

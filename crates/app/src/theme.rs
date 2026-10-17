@@ -105,8 +105,11 @@ palette! {
     SELECTION = 24, "Selected text.";
 }
 
+/// The BOT tag on bots' names (Discord's blurple; the same in every skin).
+pub const BOT: Color32 = Color32::from_rgb(0x58, 0x65, 0xf2);
+
 /// `a` moved towards `b` by `t`.
-fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
+pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
     Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
 }

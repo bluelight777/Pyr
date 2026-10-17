@@ -1,0 +1,38 @@
+{
+  "name": "Sakura Night",
+  "version": "1.0",
+  "summary": "Cherry blossoms under a full moon: plum panels and petal-pink highlights.",
+  "author": "Ingle",
+  "colors": {
+    "rail": "#130b14",
+    "side": "#1a101c",
+    "side_dark": "#160d18",
+    "main": "#211422",
+    "elev": "#2c1b2e",
+    "elev2": "#3a243c",
+    "hover": "#261728",
+    "line": "#40293f",
+    "shadow_line": "#0b060c",
+    "text": "#fdf0f6",
+    "body": "#f1dfe9",
+    "muted": "#bc9db0",
+    "dim": "#8f7083",
+    "ember": "#ff86bd",
+    "ember2": "#ffb8d6",
+    "glow": "#ffa6cf",
+    "live": "#ff4d6d",
+    "online": "#7ed6a0",
+    "owner": "#f5c451",
+    "admin": "#c6b3ff",
+    "link": "#ffadd2",
+    "stage": "#0a050b",
+    "tile": "#1e1220",
+    "code_bg": "#170e19",
+    "selection": "#8c3a62"
+  },
+  "background": {
+    "file": "background.webp",
+    "show": 0.28,
+    "under": "window"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "name": "Hallow's Eve",
+  "version": "1.0",
+  "summary": "Halloween night: purple-black panels and pumpkin orange, a harvest moon over a graveyard.",
+  "author": "Ingle",
+  "colors": {
+    "rail": "#0e0912",
+    "side": "#150e1a",
+    "side_dark": "#120c16",
+    "main": "#1a1220",
+    "elev": "#251a2e",
+    "elev2": "#31233d",
+    "hover": "#1f1627",
+    "line": "#372742",
+    "shadow_line": "#08050a",
+    "text": "#fcefe2",
+    "body": "#f0e1d2",
+    "muted": "#b5a0ad",
+    "dim": "#87737f",
+    "ember": "#ff8a1f",
+    "ember2": "#ffb44d",
+    "glow": "#ffa13d",
+    "live": "#ff4545",
+    "online": "#9ad65c",
+    "owner": "#ffd04a",
+    "admin": "#c493ff",
+    "link": "#ffb070",
+    "stage": "#09050b",
+    "tile": "#1c1323",
+    "code_bg": "#130c18",
+    "selection": "#8a4210"
+  },
+  "background": {
+    "file": "background.webp",
+    "show": 0.3,
+    "under": "window"
+  }
+}

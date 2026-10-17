@@ -21,6 +21,8 @@ pub struct UserRow {
     pub banned: bool,
     pub joined_at: i64,
     pub avatar: Option<String>,
+    /// Joined with a bot invite (bots, like Discord's).
+    pub bot: bool,
 }
 
 /// A stored file (attachment or profile picture).
@@ -301,6 +303,14 @@ fn migrate(c: &Connection) -> Result<()> {
         }
     }
     c.execute_batch("CREATE INDEX IF NOT EXISTS plugin_submissions_author ON plugin_submissions(author_id)")?;
+    // Bots (0.8): members who joined with a bot invite, and the invites that make them.
+    let has_bots = c.prepare("SELECT 1 FROM pragma_table_info('users') WHERE name = 'bot'")?.exists([])?;
+    if !has_bots {
+        c.execute_batch(
+            "ALTER TABLE users ADD COLUMN bot INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE invites ADD COLUMN bot INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
     Ok(())
 }
 
@@ -364,13 +374,14 @@ impl Db {
     pub fn get_user(&self, id: &str) -> Option<UserRow> {
         self.conn
             .lock()
-            .query_row("SELECT name, role, banned, joined_at, avatar FROM users WHERE id = ?1", [id], |r| {
+            .query_row("SELECT name, role, banned, joined_at, avatar, bot FROM users WHERE id = ?1", [id], |r| {
                 Ok(UserRow {
                     name: r.get(0)?,
                     role: Role::from_i64(r.get(1)?),
                     banned: r.get::<_, i64>(2)? != 0,
                     joined_at: r.get(3)?,
                     avatar: r.get(4)?,
+                    bot: r.get::<_, i64>(5)? != 0,
                 })
             })
             .optional()
@@ -380,12 +391,17 @@ impl Db {
 
     /// Adds a member. False if they're banned (a ban made meanwhile is never undone here).
     pub fn insert_user(&self, id: &str, name: &str, role: Role) -> Result<bool> {
+        self.insert_member(id, name, role, false)
+    }
+
+    /// Adds a member, or a bot. False if they're banned.
+    pub fn insert_member(&self, id: &str, name: &str, role: Role, bot: bool) -> Result<bool> {
         let now = now_ms();
         let n = self.conn.lock().execute(
-            "INSERT INTO users(id, name, role, banned, joined_at, last_seen) VALUES (?1, ?2, ?3, 0, ?4, ?4)
-             ON CONFLICT(id) DO UPDATE SET name = excluded.name, role = excluded.role, joined_at = excluded.joined_at
-             WHERE users.banned = 0",
-            params![id, name, role.as_i64(), now],
+            "INSERT INTO users(id, name, role, banned, joined_at, last_seen, bot) VALUES (?1, ?2, ?3, 0, ?4, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET name = excluded.name, role = excluded.role, joined_at = excluded.joined_at,
+             bot = excluded.bot WHERE users.banned = 0",
+            params![id, name, role.as_i64(), now, bot as i64],
         )?;
         Ok(n > 0)
     }
@@ -441,7 +457,7 @@ impl Db {
     pub fn members(&self) -> Vec<Member> {
         let c = self.conn.lock();
         let mut st = c
-            .prepare("SELECT id, name, role, joined_at, avatar FROM users WHERE banned = 0 ORDER BY joined_at")
+            .prepare("SELECT id, name, role, joined_at, avatar, bot FROM users WHERE banned = 0 ORDER BY joined_at")
             .expect("valid SQL");
         let mut members: Vec<Member> = st
             .query_map([], |r| {
@@ -454,6 +470,7 @@ impl Db {
                     roles: Vec::new(),
                     avatar: r.get(4)?,
                     idle: false,
+                    bot: r.get::<_, i64>(5)? != 0,
                 })
             })
             .map(|rows| rows.filter_map(|r| r.ok()).collect())
@@ -1518,6 +1535,27 @@ impl Db {
             params![code, created_by, now_ms(), max_uses, expires_at, grants.as_i64()],
         )?;
         Ok(())
+    }
+
+    /// An invite for one bot: used once, by a bot.
+    pub fn create_bot_invite(&self, code: &str, created_by: &str, expires_at: i64) -> Result<()> {
+        self.conn.lock().execute(
+            "INSERT INTO invites(code, created_by, created_at, max_uses, uses, expires_at, grants_role, bot)
+             VALUES (?1, ?2, ?3, 1, 0, ?4, 0, 1)",
+            params![code, created_by, now_ms(), expires_at],
+        )?;
+        Ok(())
+    }
+
+    /// Whether whoever joins with this invite is a bot.
+    pub fn invite_is_bot(&self, code: &str) -> bool {
+        self.conn
+            .lock()
+            .query_row("SELECT bot FROM invites WHERE code = ?1", [code], |r| r.get::<_, i64>(0))
+            .optional()
+            .ok()
+            .flatten()
+            .is_some_and(|b| b != 0)
     }
 
     /// The role an invite would grant, if it can still be used (without using it).

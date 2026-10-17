@@ -38,15 +38,33 @@ pub enum Tab {
     Make,
 }
 
-/// What the Library shows (plugins and skins together, or one kind, or the favorites).
+/// What the Plugins page's Library shows (every plugin, one kind, or the favorites).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Show {
     #[default]
     All,
     Programs,
     Addons,
-    Skins,
     Favorites,
+}
+
+/// Which of the two places in the rail is open: Plugins (programs and add-ons) or Skins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Page {
+    #[default]
+    Plugins,
+    Skins,
+}
+
+/// Which tab of the Skins page is showing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SkinsTab {
+    /// Every skin in the Ingle Library.
+    #[default]
+    Gallery,
+    /// Campfire and the skins installed, to wear.
+    Yours,
+    Make,
 }
 
 /// What background work hands back to the window.
@@ -132,9 +150,18 @@ pub struct Plugins {
     pub programs: programs::Programs,
     /// The program whose page is showing (instead of the Plugins page).
     pub program_page: Option<String>,
-    /// What the Library shows, and only one author's (clicked under a plugin or skin).
+    /// What the Library shows, and only one author's (clicked under a plugin).
     pub show: Show,
     pub author: Option<String>,
+    /// Plugins or Skins (when the page is open).
+    pub page: Page,
+    /// The Skins page: its tab, the skin whose page is open, what's searched for, only one
+    /// author's (clicked under a skin), only favorites.
+    pub skins_tab: SkinsTab,
+    pub skin_detail: Option<String>,
+    pub skins_search: String,
+    pub skins_author: Option<String>,
+    pub skins_favorites: bool,
     /// Skins installed from the Library, and where.
     pub skins: skins::InstalledSkins,
     pub skins_dir: PathBuf,
@@ -171,6 +198,12 @@ impl Plugins {
             program_page: None,
             show: Show::default(),
             author: None,
+            page: Page::default(),
+            skins_tab: SkinsTab::default(),
+            skin_detail: None,
+            skins_search: String::new(),
+            skins_author: None,
+            skins_favorites: false,
             skins,
             skins_dir,
             dir,
@@ -222,9 +255,14 @@ impl Plugins {
         (e.version != s.version).then_some(e)
     }
 
-    /// How many installed plugins and skins have an update.
-    pub fn updates(&self) -> usize {
-        self.installed.plugins.iter().filter(|p| self.update_for(p).is_some()).count() + self.skins.skins.iter().filter(|s| self.skin_update_for(s).is_some()).count()
+    /// How many installed plugins have an update.
+    pub fn plugin_updates(&self) -> usize {
+        self.installed.plugins.iter().filter(|p| self.update_for(p).is_some()).count()
+    }
+
+    /// How many installed skins have an update.
+    pub fn skin_updates(&self) -> usize {
+        self.skins.skins.iter().filter(|s| self.skin_update_for(s).is_some()).count()
     }
 
     /// Installs (or updates) a skin from the library, in the background.
@@ -610,7 +648,18 @@ impl Plugins {
             lib.skins
                 .iter()
                 .filter(|s| !self.icons.contains_key(&format!("skin:{}", s.id)))
-                .filter_map(|s| s.preview.clone().map(|f| (format!("skin:{}", s.id), f))),
+                // Its picture of Ingle wearing it; without one, its own picture (the biggest at
+                // the top of its folder).
+                .filter_map(|s| {
+                    let own = || {
+                        s.files
+                            .iter()
+                            .filter(|f| !f.path.contains('/') && [".webp", ".png", ".jpg", ".jpeg"].iter().any(|x| f.path.to_ascii_lowercase().ends_with(x)))
+                            .max_by_key(|f| f.size)
+                            .cloned()
+                    };
+                    s.preview.clone().or_else(own).map(|f| (format!("skin:{}", s.id), f))
+                }),
         );
         if todo.is_empty() {
             return;

@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Ingle's Claude connector: an MCP server that lets Claude make skins and plugins with you, show a skin on your Ingle as it goes, and send them to the Ingle Library for review."
+description = "Ingle's Claude connector: an MCP server that lets Claude make skins and plugins with you, show a skin on your Ingle as it goes, send them to the Ingle Library for review, and chat in your servers as a bot."
 
 [[bin]]
 name = "ingle-mcp"
@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.104"
+chrono = "0.4.45"
 ingle-engine = { path = "../engine" }
 ingle-proto = { path = "../proto" }
 serde_json = "1.0.152"

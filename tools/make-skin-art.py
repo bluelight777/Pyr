@@ -45,17 +45,40 @@ def sky(rng):
     return ImageChops.add(img, grain, scale=1.0, offset=-128)
 
 
-def stars(img, rng, moon):
-    d = ImageDraw.Draw(img)
+def skip_first_stars(rng, moon):
+    """Version 1.0 drew its stars with `rng`, before the moon, mist and ridge took theirs: take
+    the same numbers it did, so those stay exactly as they were (the stars have their own now)."""
     mx, my, mr = moon
     for _ in range(900):
         x, y = rng.uniform(0, W), rng.uniform(0, H * 0.62)
-        if math.hypot(x - mx, y - my) < mr * 2.2:
-            continue
-        b = rng.random() ** 3
-        c = mix((60, 40, 45), (255, 228, 222), b)
-        r = 0.6 + b * 1.6
-        d.ellipse((x - r, y - r, x + r, y + r), fill=c)
+        if math.hypot(x - mx, y - my) >= mr * 2.2:
+            rng.random()
+
+
+def stars(img, moon):
+    """Stars over the whole sky, one in each cell of a loose grid (so there are no empty
+    patches), a few bright and most faint. The moon hides the ones behind it, and its glare the
+    faint ones near it: a star shows only where it's brighter than the glare, which falls away
+    quickly from the moon, so the sky thins out towards it gradually and its brightest
+    neighbours still show. Lower down, the air dims them, and the mist covers them."""
+    rng = random.Random(2063)
+    d = ImageDraw.Draw(img)
+    mx, my, mr = moon
+    cell = 50
+    for gy in range(0, int(H * 0.74), cell):
+        for gx in range(-cell, W, cell):
+            x, y = gx + rng.uniform(0, cell), gy + rng.uniform(0, cell)
+            b = rng.random() ** 3
+            dist = math.hypot(x - mx, y - my)
+            if dist < mr * 1.04:
+                continue
+            b -= 0.62 * (mr / dist) ** 3  # the glare
+            b *= 1.0 - max(0.0, (y / H - 0.5) / 0.24) ** 1.5 * 0.9  # the air, near the horizon
+            if b <= 0.0:
+                continue
+            c = mix((60, 40, 45), (255, 228, 222), b)
+            r = 0.6 + b * 1.6
+            d.ellipse((x - r, y - r, x + r, y + r), fill=c)
 
 
 def moon_layer(rng, moon):
@@ -166,7 +189,8 @@ def main():
     rng = random.Random(1166)
     moon = (W * 0.66, H * 0.34, 250)
     img = sky(rng)
-    stars(img, rng, moon)
+    skip_first_stars(rng, moon)
+    stars(img, moon)
     img = img.convert("RGBA")
     img.alpha_composite(moon_layer(rng, moon))
     img.alpha_composite(mist(rng))

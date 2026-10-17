@@ -650,6 +650,7 @@ fn cost(req: &Request) -> f64 {
         Request::FetchHistory { .. } | Request::GetVouches { .. } => 3.0,
         Request::E2eeKeys { keys, .. } => 1.0 + keys.len() as f64 / 16.0,
         Request::CreateInvite { .. }
+        | Request::CreateBotInvite { .. }
         | Request::FriendRequest { .. }
         | Request::OpenDm { .. }
         | Request::AddEmoji { .. }
@@ -791,6 +792,11 @@ impl Ctx<'_> {
         Ok(())
     }
 
+    /// Whether someone here is a bot.
+    fn is_bot(&self, uid: &str) -> bool {
+        self.hub.db.get_user(uid).is_some_and(|u| u.bot)
+    }
+
     /// Roles that exist here, each once (a channel's access lists).
     fn real_roles(&self, ids: &[RoleId]) -> Vec<RoleId> {
         let all = self.hub.db.roles();
@@ -825,6 +831,7 @@ impl Ctx<'_> {
                 continue;
             }
             match db.get_user(u) {
+                Some(x) if x.bot => return Err((ErrorCode::Forbidden, format!("{} is a bot: bots don't have conversations.", x.name))),
                 Some(x) if !x.banned => {}
                 _ => return Err((ErrorCode::NotFound, "Someone you picked isn't a member of this server.".into())),
             }
@@ -887,6 +894,30 @@ impl Ctx<'_> {
     fn handle(&mut self, req: Request) -> Reply {
         let hub = self.hub;
         let db = &hub.db;
+        // Bots chat where their roles let them, and that's all: no voice, conversations,
+        // calls, friends or invites, and they aren't people to make sure of, vouch for, or
+        // send bug reports and plugins for.
+        if matches!(
+            req,
+            Request::OpenDm { .. }
+                | Request::CreateGroup { .. }
+                | Request::AddToGroup { .. }
+                | Request::Ring { .. }
+                | Request::DeclineCall { .. }
+                | Request::FriendRequest { .. }
+                | Request::FriendAccept { .. }
+                | Request::CreateInvite { .. }
+                | Request::CreateBotInvite { .. }
+                | Request::VoiceJoin { .. }
+                | Request::Handshake { .. }
+                | Request::SetVouches { .. }
+                | Request::ReportBug { .. }
+                | Request::SubmitPlugin { .. }
+                | Request::SubmissionPart { .. }
+        ) && self.is_bot(&self.uid)
+        {
+            return Err((ErrorCode::Forbidden, "Bots can't do that.".into()));
+        }
         match req {
             Request::Login { .. } => bad("already logged in"),
             Request::Ping { t } => Ok(Event::Pong { t }),
@@ -1050,6 +1081,7 @@ impl Ctx<'_> {
                     return bad("you can't message yourself");
                 }
                 match db.get_user(&user_id) {
+                    Some(u) if u.bot => return Err((ErrorCode::Forbidden, "Bots don't have conversations: talk to them in a channel.".into())),
                     Some(u) if !u.banned => {}
                     _ => return Err((ErrorCode::NotFound, "They aren't a member of this server.".into())),
                 }
@@ -1124,6 +1156,17 @@ impl Ctx<'_> {
                     .map_err(|e| (ErrorCode::Internal, e.to_string()))?;
                 Ok(Event::InviteCreated { link: hub.invite_link(&code), code })
             }
+            Request::CreateBotInvite {} => {
+                self.require(perm::MANAGE_SERVER, "add bots")?;
+                if db.invites_by(&self.uid) >= MAX_INVITES_PER_MEMBER {
+                    return bad("You've made a lot of invite links already. Use one of those.");
+                }
+                // One bot, within a week.
+                let code = format!("{BOT_INVITE_PREFIX}{}", new_invite_code(16));
+                db.create_bot_invite(&code, &self.uid, ingle_proto::now_ms() + 7 * 86_400_000)
+                    .map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                Ok(Event::InviteCreated { link: hub.invite_link(&code), code })
+            }
             Request::SetRole { user_id, role } => {
                 valid_uid(&user_id)?;
                 if self.role() != Role::Owner {
@@ -1133,6 +1176,7 @@ impl Ctx<'_> {
                     return bad("ownership can't be changed here");
                 }
                 match db.get_user(&user_id) {
+                    Some(u) if u.bot && role.is_admin() => return Err((ErrorCode::Forbidden, "Bots can't be admins: give them roles instead.".into())),
                     Some(u) if !u.banned && u.role != Role::Owner => {}
                     _ => return Err((ErrorCode::NotFound, "No such member.".into())),
                 }
@@ -1419,6 +1463,9 @@ impl Ctx<'_> {
             Request::FriendRequest { user_id } => {
                 valid_uid(&user_id)?;
                 self.other_member(&user_id)?;
+                if self.is_bot(&user_id) {
+                    return Err((ErrorCode::Forbidden, "Bots can't be friends.".into()));
+                }
                 if db.outgoing_requests(&self.uid) >= 200 {
                     return bad("You have a lot of friend requests waiting already.");
                 }
@@ -1811,6 +1858,81 @@ mod tests {
 
     fn forbidden(r: Reply) -> bool {
         matches!(r, Err((ErrorCode::Forbidden, _)))
+    }
+
+    #[test]
+    fn bots_like_discords() {
+        let hub = hub();
+        let (owner, manager, bob, claude) = (uid(), uid(), uid(), uid());
+        hub.db.insert_user(&owner, "Owner", Role::Owner).unwrap();
+        hub.db.insert_user(&manager, "Manager", Role::Member).unwrap();
+        hub.db.insert_user(&bob, "Bob", Role::Member).unwrap();
+        let managers = hub.db.create_role("Managers", 0, perm::MANAGE_SERVER, false).unwrap();
+        hub.db.set_member_roles(&manager, &[managers.id]).unwrap();
+        let ip: std::net::IpAddr = "203.0.113.7".parse().unwrap();
+        // Only who can manage the server adds bots.
+        assert!(forbidden(ctx(&hub, &bob).handle(Request::CreateBotInvite {})));
+        let code = match ctx(&hub, &manager).handle(Request::CreateBotInvite {}) {
+            Ok(Event::InviteCreated { code, link }) => {
+                assert!(link.contains(&code));
+                code
+            }
+            other => panic!("{other:?}"),
+        };
+        assert!(code.starts_with(BOT_INVITE_PREFIX));
+        // Whatever joins with it is a bot, a plain member otherwise; it's good for one.
+        assert!(hub.authorize(&claude, "Claude", Some(&code), ip).is_ok());
+        let u = hub.db.get_user(&claude).unwrap();
+        assert!(u.bot && u.role == Role::Member);
+        assert!(hub.db.members().iter().any(|m| m.user_id == claude && m.bot));
+        assert!(!hub.db.members().iter().any(|m| m.user_id == bob && m.bot));
+        assert!(hub.member(&claude).is_some_and(|m| m.bot));
+        assert!(hub.authorize(&uid(), "Another", Some(&code), ip).is_err(), "used up");
+        // Someone already here who uses one is still who they were.
+        let code2 = match ctx(&hub, &owner).handle(Request::CreateBotInvite {}) {
+            Ok(Event::InviteCreated { code, .. }) => code,
+            other => panic!("{other:?}"),
+        };
+        assert!(hub.authorize(&bob, "Bob", Some(&code2), ip).is_ok());
+        assert!(!hub.db.get_user(&bob).unwrap().bot);
+        // A bot chats, and that's all.
+        let mut c = ctx(&hub, &claude);
+        let general = hub.db.create_channel("general", ChannelKind::Text).unwrap();
+        let lounge = hub.db.create_channel("lounge", ChannelKind::Voice).unwrap();
+        let send = |c: &mut Ctx, ch: ChannelId, text: &str| {
+            c.handle(Request::SendMessage { channel_id: ch, content: text.into(), reply_to: None, nonce: String::new(), attachments: vec![] })
+        };
+        assert!(send(&mut c, general.id, "Hello! I'm Claude.").is_ok());
+        assert!(forbidden(c.handle(Request::OpenDm { user_id: bob.clone() })));
+        assert!(forbidden(c.handle(Request::CreateGroup { members: vec![bob.clone()] })));
+        assert!(forbidden(c.handle(Request::CreateInvite { max_uses: None, expires_secs: None })));
+        assert!(forbidden(c.handle(Request::CreateBotInvite {})));
+        assert!(forbidden(c.handle(Request::FriendRequest { user_id: bob.clone() })));
+        let (key, sig) = {
+            let id = crypto::Identity::generate();
+            let pk = [9u8; 32];
+            (ingle_proto::b64::encode(&pk), ingle_proto::b64::encode(&id.sign(&pk)))
+        };
+        assert!(forbidden(c.handle(Request::VoiceJoin { channel_id: lounge.id, e2ee_pub: key, e2ee_sig: sig, self_mute: false, self_deaf: false })));
+        // Nobody starts a conversation with one, befriends it or makes it an admin.
+        let mut b = ctx(&hub, &bob);
+        assert!(forbidden(b.handle(Request::OpenDm { user_id: claude.clone() })));
+        assert!(forbidden(b.handle(Request::CreateGroup { members: vec![claude.clone(), owner.clone()] })));
+        assert!(forbidden(b.handle(Request::FriendRequest { user_id: claude.clone() })));
+        assert!(forbidden(ctx(&hub, &owner).handle(Request::SetRole { user_id: claude.clone(), role: Role::Admin })));
+        assert!(!hub.db.get_user(&claude).unwrap().role.is_admin());
+        // It sees what its roles let it see, like anyone.
+        let helpers = hub.db.create_role("Helpers", 0, 0, false).unwrap();
+        let mut o = ctx(&hub, &owner);
+        assert!(o.handle(Request::CreateChannel { name: "helpers".into(), kind: ChannelKind::Text, private: true, view_roles: vec![helpers.id] }).is_ok());
+        let private = hub.db.channels().into_iter().find(|ch| ch.name == "helpers").unwrap();
+        assert!(c.can_see(private.id).is_err());
+        assert!(send(&mut c, private.id, "hi").is_err());
+        assert!(o.handle(Request::SetMemberRoles { user_id: claude.clone(), roles: vec![helpers.id] }).is_ok());
+        assert!(send(&mut c, private.id, "Glad to help.").is_ok());
+        // And it can be removed like anyone.
+        assert!(o.handle(Request::Kick { user_id: claude.clone() }).is_ok());
+        assert!(hub.db.get_user(&claude).is_none());
     }
 
     #[test]

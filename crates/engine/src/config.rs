@@ -192,6 +192,8 @@ pub struct Settings {
     /// Vouch for the people I make sure of, on the servers we share: then people who made sure
     /// of me see them as vouched for (see `verify`).
     pub vouch: bool,
+    /// How voice meters look: "bars", "wave", "dots", "glow" or "off" (empty: bars).
+    pub voice_meter: String,
 }
 
 /// A favorite GIF: just its links (the GIF itself is fetched from GIPHY or KLIPY each time it's
@@ -263,6 +265,7 @@ impl Default for Settings {
             skin: String::new(),
             library_favorites: Vec::new(),
             library_sort: String::new(),
+            voice_meter: String::new(),
             auto_reports: true,
             auto_report_told: false,
             idle_by_hand: false,

@@ -58,7 +58,8 @@ pub(crate) fn group_picture(app: &mut IngleApp, p: &egui::Painter, ctx: &egui::C
 
 /// "Call" in a menu on someone's name, like Discord's (`here`: the server the menu is in).
 pub(crate) fn call_item(ui: &mut egui::Ui, st: &AppState, uid: &str, here: Option<&str>, acts: &mut Vec<Act>) -> bool {
-    if uid == st.my_uid || st.blocked.contains(uid) || in_call_with(st, uid) {
+    // (Bots don't take calls.)
+    if uid == st.my_uid || st.blocked.contains(uid) || in_call_with(st, uid) || crate::app::is_bot(st, uid) {
         return false;
     }
     let Some(key) = call_server(st, uid, here) else { return false };
@@ -612,7 +613,7 @@ mod tests {
         for m in members {
             s.members.insert(
                 m.to_string(),
-                Member { user_id: m.to_string(), name: m.to_string(), role: Role::Member, online: true, joined_at: 0, roles: vec![], avatar: None, idle: false },
+                Member { user_id: m.to_string(), name: m.to_string(), online: true, ..Default::default() },
             );
         }
         if let Some(w) = dm_with {

@@ -1,0 +1,38 @@
+{
+  "name": "Stormcaller",
+  "version": "1.0",
+  "summary": "A thunderstorm at sea: slate panels and electric blue, lightning behind the chat.",
+  "author": "Ingle",
+  "colors": {
+    "rail": "#090d13",
+    "side": "#0e141b",
+    "side_dark": "#0c1117",
+    "main": "#121a23",
+    "elev": "#1a2430",
+    "elev2": "#24303e",
+    "hover": "#161f29",
+    "line": "#283545",
+    "shadow_line": "#05080b",
+    "text": "#ebf3fc",
+    "body": "#dce6f2",
+    "muted": "#9bacbf",
+    "dim": "#6e7f92",
+    "ember": "#4aa8ff",
+    "ember2": "#a0d2ff",
+    "glow": "#8fd4ff",
+    "live": "#ff5a5a",
+    "online": "#5ed08a",
+    "owner": "#f5c451",
+    "admin": "#ffd479",
+    "link": "#7cc4ff",
+    "stage": "#05080c",
+    "tile": "#101820",
+    "code_bg": "#0d131a",
+    "selection": "#1f5a99"
+  },
+  "background": {
+    "file": "background.webp",
+    "show": 0.35,
+    "under": "window"
+  }
+}

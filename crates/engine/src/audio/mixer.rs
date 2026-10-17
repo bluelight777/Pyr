@@ -23,6 +23,8 @@ const MAX_EFFECTS: usize = 6;
 pub struct Mixer {
     peers: HashMap<(SessionId, u8), PeerAudio>,
     effects: Vec<Effect>,
+    /// How loud each session's soundboard sounds were in the last block mixed, and when.
+    effect_levels: HashMap<SessionId, (f32, Instant)>,
     volumes: HashMap<SessionId, f32>,
     /// Separate volume for someone's stream audio (screen share sound).
     stream_volumes: HashMap<SessionId, f32>,
@@ -36,6 +38,7 @@ impl Default for Mixer {
         Mixer {
             peers: HashMap::new(),
             effects: Vec::new(),
+            effect_levels: HashMap::new(),
             volumes: HashMap::new(),
             stream_volumes: HashMap::new(),
             master: 1.0,
@@ -124,12 +127,41 @@ impl Mixer {
                     *o += v * g;
                 }
             }
+            // How loud it is (as sent, before anyone's own volume), for its player's meter.
+            if n > 0 {
+                let sum: f32 = e.pcm[e.pos..e.pos + n].iter().map(|v| v * v).sum();
+                let db = 20.0 * ((sum / n as f32).sqrt() * e.gain).max(1e-6).log10();
+                let lv = self.effect_levels.entry(e.from).or_insert((-100.0, now));
+                *lv = (if now.duration_since(lv.1) < Duration::from_millis(5) { lv.0.max(db) } else { db }, now);
+            }
             e.pos += n;
         }
         self.effects.retain(|e| e.pos < e.pcm.len());
         for v in out[..960].iter_mut() {
             *v = soft_clip(*v);
         }
+    }
+
+    /// How loud each session sounds right now (dBFS): the loudest of its voice, its screen's
+    /// sound and its soundboard sounds, for voice meters. Silent after 120 ms without any.
+    pub fn levels(&self, now: Instant) -> Vec<(SessionId, f32)> {
+        let fresh = |t: Instant| now.saturating_duration_since(t) < Duration::from_millis(120);
+        let mut out: HashMap<SessionId, f32> = HashMap::new();
+        for ((s, _), p) in &self.peers {
+            if p.last_voice.is_some_and(fresh) {
+                let e = out.entry(*s).or_insert(-100.0);
+                *e = e.max(p.level_db);
+            }
+        }
+        for (s, (db, at)) in &self.effect_levels {
+            if fresh(*at) {
+                let e = out.entry(*s).or_insert(-100.0);
+                *e = e.max(*db);
+            }
+        }
+        let mut v: Vec<(SessionId, f32)> = out.into_iter().collect();
+        v.sort_unstable_by_key(|(s, _)| *s);
+        v
     }
 
     /// Sessions whose microphone produced audible audio in the last 250 ms.

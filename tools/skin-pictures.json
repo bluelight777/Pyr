@@ -1,0 +1,72 @@
+{
+  "aurora": {
+    "source": "aurora-2.png",
+    "task": "01a1476d-4658-755a-a895-9c59e8d69749",
+    "exposure": 1.0,
+    "cap": 0.85,
+    "prompt": "Full-bleed 16:9 fantasy wallpaper that fills the entire frame edge to edge (no black bars, no letterbox, no frame, no border). Moody low-key night: swirling curtains of green and violet aurora borealis glow across a deep navy starry sky, brightest just right of center in the upper half. A still frozen lake mirrors the aurora; dark snow-dusted pine forests and distant snowy peaks line the shore in the lower third. Mostly deep shadow with one luminous focal area. Cinematic, ultra-detailed digital painting, soft glow, rich color. No text, no people, no watermark."
+  },
+  "neon-drive": {
+    "source": "neon-drive-1.png",
+    "task": "01a1476b-29f4-732d-874e-b84ef3abd022",
+    "exposure": 0.95,
+    "cap": 0.9,
+    "prompt": "Wide 16:9 synthwave wallpaper, moody and dark. A huge glowing sunset sun with horizontal stripe cutouts, hot pink to orange to gold, sits on the horizon just right of center. Dark purple low-poly mountains with thin neon magenta and cyan ridge lines flank it. A glowing magenta and cyan perspective grid floor runs to the horizon. Deep indigo starry sky fading to magenta at the horizon, two palm tree silhouettes at the far edges. Crisp 1980s outrun digital art with neon bloom. No text, no cars, no people, no watermark."
+  },
+  "abyss": {
+    "source": "abyss-1.png",
+    "task": "01a1476b-319d-724e-9ed8-7c3c73b5e903",
+    "exposure": 1.0,
+    "cap": 0.9,
+    "prompt": "Wide 16:9 deep-ocean wallpaper, very dark and serene. A large glowing bioluminescent jellyfish drifts just right of center in the upper half, its bell translucent cyan with long luminous trailing tentacles; smaller glowing jellyfish in pink and violet float farther off in the darkness. Faint god rays slant down from the distant surface, drifting marine snow, deep blue water fading to black at the bottom. Cinematic underwater photography look, ultra-detailed, soft bloom. No text, no divers, no people, no watermark."
+  },
+  "sakura-night": {
+    "source": "sakura-night-1.png",
+    "task": "01a1476b-39b3-779c-b67f-a775fe24bc4a",
+    "exposure": 0.9,
+    "cap": 0.62,
+    "prompt": "Wide 16:9 Japanese night wallpaper, dreamy and dark. A large pale full moon high and just right of center in a deep plum and indigo sky, softly haloed, a few thin silver clouds. Dark cherry blossom branches heavy with glowing pink sakura flowers reach in from the top left corner; pink petals drift through the air. Far below, a small pagoda and misty layered hills are silhouetted on the horizon. Elegant painterly digital art, soft moonlight glow, rich detail. No text, no people, no watermark."
+  },
+  "elven-grove": {
+    "source": "elven-grove-1.png",
+    "task": "01a1476b-4292-7051-83af-3afe65e75c5c",
+    "exposure": 0.78,
+    "cap": 0.8,
+    "prompt": "Wide 16:9 enchanted forest wallpaper, dark and magical. Towering ancient elven trees with mossy twisting roots fade into blue-green mist; golden shafts of light beam down diagonally through the canopy onto a softly glowing clearing just right of center. Countless tiny golden fireflies and floating light motes, ferns and faintly glowing teal mushrooms on the forest floor. Deep emerald shadows with warm gold highlights, cinematic fantasy concept art, ultra-detailed. No text, no people, no creatures, no watermark."
+  },
+  "nebula": {
+    "source": "nebula-1.png",
+    "task": "01a1476b-4a32-702f-b41d-7625dcab0c33",
+    "exposure": 1.0,
+    "cap": 0.9,
+    "prompt": "Wide 16:9 deep-space wallpaper. A vast nebula of glowing magenta, violet and teal gas clouds with dark dust lanes, its brightest region just right of center in the upper half, set in deep black space. A dense field of tiny stars and a few bright blue-white stars with soft diffraction spikes. Majestic, rich color, space-telescope astrophotography style, ultra-detailed, dark edges. No text, no planets, no spaceships, no watermark."
+  },
+  "terminal": {
+    "source": "terminal-1.png",
+    "task": "01a1476b-51e0-706b-b40e-10b24fa49154",
+    "exposure": 1.0,
+    "cap": 0.9,
+    "prompt": "Wide 16:9 retro computer wallpaper, pitch black and minimal. Columns of glowing green phosphor characters cascade down like falling code, each column led by a bright white-green character and fading behind it; some columns dim and blurred in the distance for depth. The densest, brightest columns sit just right of center. Subtle CRT glow and vignette. Crisp digital art. The characters are random symbols and digits, no readable words. No logos, no people, no watermark."
+  },
+  "hallows-eve": {
+    "source": "hallows-eve-1.png",
+    "task": "01a1476b-5a3e-73ff-942b-2aebed9317e0",
+    "exposure": 0.92,
+    "cap": 0.85,
+    "prompt": "Wide 16:9 Halloween night wallpaper, eerie and dark. A giant glowing orange harvest moon just right of center with bats flying across it and wisps of dark cloud. A gnarled bare tree silhouette on the left; an old graveyard of crooked tombstones and a wrought-iron fence on a misty hill below, with a few glowing carved jack-o'-lanterns in the grass. Deep purple and black sky with orange glow, low fog. Atmospheric storybook digital painting, rich detail. No text, no people, no gore, no watermark."
+  },
+  "obsidian-gold": {
+    "source": "obsidian-gold-2.png",
+    "task": "01a1477d-d59f-7536-a7a4-b1a5af50e538",
+    "exposure": 0.95,
+    "cap": 0.75,
+    "prompt": "Full-bleed 16:9 luxurious dark wallpaper, edge to edge. Polished black obsidian marble with thin flowing veins of molten gold running diagonally. In the upper right area of the frame (centered about two thirds of the way across and one third down), a small elegant art deco emblem in fine gold lines: a radiating sunburst inside concentric stepped arcs, about one fifth of the frame wide. The left and middle of the frame are plain dark marble. Subtle gold dust sparkles, deep black, minimal and premium, 1920s glamour, ultra-detailed. No text, no letters, no logos, no watermark."
+  },
+  "stormcaller": {
+    "source": "stormcaller-1.png",
+    "task": "01a1476b-6b0a-72da-be4d-31e8f9f73c23",
+    "exposure": 1.0,
+    "cap": 0.85,
+    "prompt": "Wide 16:9 epic thunderstorm wallpaper, dark and dramatic. A massive branching bolt of electric blue-white lightning strikes down just right of center from towering storm clouds lit from within; fainter lightning flickers in the distance. Heavy slanting rain, a dark stormy sea with crashing waves reflecting the flash, a lone lighthouse on rocky cliffs at the far left with a faint beam. Slate blue and electric blue palette, cinematic, ultra-detailed digital painting. No text, no people, no watermark."
+  }
+}

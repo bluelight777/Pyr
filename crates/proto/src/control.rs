@@ -68,9 +68,10 @@ impl Channel {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
+    #[default]
     Member,
     Admin,
     Owner,
@@ -96,7 +97,7 @@ impl Role {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct Member {
     pub user_id: UserId,
     pub name: String,
@@ -115,6 +116,9 @@ pub struct Member {
     /// a moon, like Discord's Idle.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub idle: bool,
+    /// A bot, like Claude through the Claude connector ([`BOTS_FEATURE`]): shown with a BOT tag.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bot: bool,
 }
 
 pub type RoleId = i64;
@@ -290,6 +294,13 @@ pub const GROUPS_FEATURE: &str = "groups";
 /// the mouse (or its person said they're idle), and `Member::idle` shows who's idle on every
 /// Ingle they're connected from (sent again as `MemberUpserted` when it changes).
 pub const IDLE_FEATURE: &str = "idle";
+/// Bots as members, like Discord's: someone who can manage the server makes a bot invite
+/// (`CreateBotInvite`; its code starts with [`BOT_INVITE_PREFIX`]), and whatever joins with it
+/// is a bot ([`Member::bot`]): it sees and writes where its roles let it, like anyone, but
+/// can't join voice, have conversations or friends, make invites, or be made an admin.
+pub const BOTS_FEATURE: &str = "bots";
+/// How a bot invite's code starts (an everyday invite's never does).
+pub const BOT_INVITE_PREFIX: &str = "bot-";
 /// Making sure people are who they say ([`crate::handshake`]): `Handshake` passes a message
 /// on to another member's Ingle (`Event::Handshake`, on each of their connections) while
 /// they're online here, unless one of them blocked the other. The server never reads it.
@@ -1104,6 +1115,8 @@ pub enum Request {
         #[serde(default)]
         expires_secs: Option<u64>,
     },
+    /// An invite for one bot ([`BOTS_FEATURE`]; needs Manage server). Replies `InviteCreated`.
+    CreateBotInvite {},
     SetRole {
         user_id: UserId,
         role: Role,

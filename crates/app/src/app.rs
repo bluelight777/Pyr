@@ -130,6 +130,9 @@ pub enum Act {
     UpdateChannel { key: String, channel: ChannelId, name: Option<String>, topic: Option<String> },
     DeleteChannel { key: String, channel: ChannelId },
     CreateInvite { key: String },
+    /// A bot invite for the Claude connector on this PC (Server Settings → Bots).
+    AddClaude { key: String },
+    CreateBotInvite { key: String },
     /// After a dropped call came back: turn the camera back on (`camera`), or not, and done
     /// with the offer to share the screen again (`screen`).
     SettleResume { camera: bool, screen: bool, turn_on_camera: bool },
@@ -304,8 +307,11 @@ pub struct UiState {
     pub last_typing: Option<Instant>,
     pub requested: HashSet<(String, ChannelId)>,
     pub settings_draft: Option<Settings>,
-    pub name_draft: String,
-    pub welcome_name: String,
+    /// Settings → My Account's name box, as typed (from your name when Settings opens).
+    pub name_draft: Option<String>,
+    /// The welcome screen's name box, as typed (your name to start with, once: an empty box
+    /// stays empty, so typing a new name never ends up in front of the old one).
+    pub welcome_name: Option<String>,
     pub create: Option<crate::create::CreateState>,
     /// Images waiting to be sent, per channel: (file name, bytes).
     pub attach: HashMap<(String, ChannelId), Vec<(String, Vec<u8>)>>,
@@ -538,6 +544,8 @@ impl IngleApp {
             Act::UpdateChannel { key, channel, name, topic } => e.update_channel(&key, channel, name, topic),
             Act::DeleteChannel { key, channel } => e.delete_channel(&key, channel),
             Act::CreateInvite { key } => e.create_invite(&key, None, None),
+            Act::AddClaude { key } => e.add_claude(&key),
+            Act::CreateBotInvite { key } => e.create_bot_invite(&key),
             Act::SettleResume { camera, screen, turn_on_camera } => {
                 e.settle_resume_offer(camera, screen);
                 if turn_on_camera {
@@ -1442,8 +1450,9 @@ impl IngleApp {
         if self.ui.server.as_ref().map(|k| st.server(k).is_none()).unwrap_or(true) {
             self.ui.server = st.servers.first().map(|s| s.key.clone());
         }
-        if self.ui.name_draft.is_empty() {
-            self.ui.name_draft = st.my_name.clone();
+        // Settings → My Account starts from your name each time it opens.
+        if !matches!(self.ui.dialog, Some(Dialog::Settings { .. })) {
+            self.ui.name_draft = None;
         }
 
         egui::SidePanel::left("rail")
@@ -1625,6 +1634,9 @@ impl IngleApp {
                         let (cr, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
                         icons::crown(ui.painter(), cr, theme::OWNER());
                     }
+                    if s.is_bot(&uid) {
+                        bot_tag(ui);
+                    }
                     crate::trust::badge(ui, st, &uid, &name, 17.0);
                 });
                 let how = match st.relation(&uid) {
@@ -1690,7 +1702,7 @@ impl IngleApp {
                         chose = true;
                     }
                 }
-                let can_dm = uid != st.my_uid && s.has(ingle_proto::control::DMS_FEATURE) && s.status.is_connected();
+                let can_dm = uid != st.my_uid && s.has(ingle_proto::control::DMS_FEATURE) && s.status.is_connected() && !s.is_bot(&uid);
                 if can_dm {
                     ui.add_space(if live.is_some() { 6.0 } else { 10.0 });
                     if ui.add(theme::primary_button(&format!("Message {name}")).min_size(vec2(ui.available_width(), 32.0))).clicked() {
@@ -1728,7 +1740,7 @@ impl IngleApp {
         let me = uid == st.my_uid;
         let name = s.member_name(uid);
         let mut chose = false;
-        let can_dm = !me && s.has(ingle_proto::control::DMS_FEATURE) && s.status.is_connected();
+        let can_dm = !me && s.has(ingle_proto::control::DMS_FEATURE) && s.status.is_connected() && !s.is_bot(uid);
         if can_dm && ui.button("Message").clicked() {
             acts.push(Act::OpenDm { key: s.key.clone(), uid: uid.to_string() });
             chose = true;
@@ -2661,6 +2673,10 @@ impl IngleApp {
                         icons::crown(ui.painter(), Rect::from_center_size(pos2(r.left() + 58.0 + w, r.center().y), vec2(14.0, 14.0)), theme::OWNER());
                         after += 18.0;
                     }
+                    if m.bot {
+                        paint_bot_tag(ui, pos2(after, r.center().y));
+                        after += bot_tag_width(ui) + 4.0;
+                    }
                     // Made sure of, vouched for, or not who you made sure of under that name.
                     // (What it means goes in the row's hover text: two would cover each other.)
                     crate::trust::paint_badge(ui.painter(), st, &m.user_id, &m.name, pos2(after, r.center().y), 14.0);
@@ -2679,7 +2695,7 @@ impl IngleApp {
                     if !their_roles.is_empty() {
                         hover.push_str(&format!("\nRoles: {}", their_roles.join(", ")));
                     }
-                    let can_dm = !me && s.has(ingle_proto::control::DMS_FEATURE) && s.status.is_connected();
+                    let can_dm = !me && s.has(ingle_proto::control::DMS_FEATURE) && s.status.is_connected() && !s.is_bot(&uid);
                     if can_dm && resp.clicked() {
                         acts.push(Act::OpenDm { key: key.clone(), uid: uid.clone() });
                     }
@@ -2765,23 +2781,25 @@ impl IngleApp {
             ui.add_space(26.0);
             ui.label(RichText::new("What should people call you?").color(theme::MUTED()));
             ui.add_space(4.0);
-            if self.ui.welcome_name.is_empty() {
-                self.ui.welcome_name = st.my_name.clone();
-            }
-            let resp = ui.add(egui::TextEdit::singleline(&mut self.ui.welcome_name).desired_width(280.0).margin(egui::Margin::symmetric(10, 8)));
-            if resp.lost_focus() && self.ui.welcome_name.trim() != st.my_name {
-                acts.push(Act::SetName(self.ui.welcome_name.trim().to_string()));
+            // Your name to start with (your Windows account's, the first time), filled in once:
+            // clearing the box leaves it empty for the name you type.
+            let typed = self.ui.welcome_name.get_or_insert_with(|| st.my_name.clone());
+            let resp = ui.add(egui::TextEdit::singleline(typed).hint_text("Your name").desired_width(280.0).margin(egui::Margin::symmetric(10, 8)));
+            crate::textbox::menu(ui, &resp, typed, true);
+            let typed = typed.trim().to_string();
+            let name_changed = !typed.is_empty() && typed != st.my_name;
+            if resp.lost_focus() && name_changed {
+                acts.push(Act::SetName(typed.clone()));
             }
             ui.add_space(24.0);
-            let name_changed = self.ui.welcome_name.trim() != st.my_name && !self.ui.welcome_name.trim().is_empty();
             // Two buttons side by side, centred.
             let w = 220.0 * 2.0 + 12.0;
             ui.allocate_ui_with_layout(vec2(w, 44.0), Layout::left_to_right(Align::Center), |ui| {
                 if ui.add(theme::primary_button("Create a server").min_size(vec2(220.0, 42.0))).on_hover_text("Rent one for a few dollars a month, or use a server you have").clicked() {
                     if name_changed {
-                        acts.push(Act::SetName(self.ui.welcome_name.trim().to_string()));
+                        acts.push(Act::SetName(typed.clone()));
                     }
-                    let name = if name_changed { self.ui.welcome_name.trim().to_string() } else { st.my_name.clone() };
+                    let name = if name_changed { typed.clone() } else { st.my_name.clone() };
                     self.ui.create = Some(crate::create::CreateState::new(&name, ingle_proto::crypto::backup_key(&self.engine.shared.identity)));
                     self.ui.dialog = Some(Dialog::Create);
                 }
@@ -2792,7 +2810,7 @@ impl IngleApp {
                     .clicked()
                 {
                     if name_changed {
-                        acts.push(Act::SetName(self.ui.welcome_name.trim().to_string()));
+                        acts.push(Act::SetName(typed.clone()));
                     }
                     self.ui.dialog = Some(Dialog::AddServer { link: String::new(), error: None });
                 }
@@ -2815,7 +2833,8 @@ impl IngleApp {
     /// and where it's from, with Stop. It takes its own room, so it never covers a dialog's title
     /// or a channel's header.
     fn trying_banner(&mut self, ctx: &egui::Context, acts: &mut Vec<Act>) {
-        let Some((name, what)) = self.looks.trying_name() else { return };
+        let Some((name, author, what)) = self.looks.trying_name() else { return };
+        let by = if author.is_empty() { String::new() } else { format!(" by {author}") };
         let from = match what {
             crate::looks::Trial::Claude { .. } => "from Claude",
             crate::looks::Trial::SentIn { .. } => "sent in",
@@ -2835,6 +2854,9 @@ impl IngleApp {
                     icons::palette(ui.painter(), icon);
                     ui.add_space(2.0);
                     ui.label(RichText::new(format!("Trying {name}")).font(theme::bold_font(13.5)).color(theme::TEXT()));
+                    if !by.is_empty() {
+                        ui.label(RichText::new(by.trim_start()).color(theme::TEXT()));
+                    }
                     ui.label(RichText::new(format!("({from}): your own skin comes back when you stop.")).color(theme::MUTED()));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.button("Stop trying it").on_hover_text("Back to your own skin").clicked() {
@@ -2979,12 +3001,36 @@ pub(crate) fn voice_panel_height(st: &AppState, call: &ingle_engine::state::Call
 }
 
 /// Friend and block choices for someone (right-click menus), like Discord's.
+/// The BOT tag after a bot's name, like Discord's.
+pub(crate) fn bot_tag(ui: &mut egui::Ui) {
+    let (r, _) = ui.allocate_exact_size(vec2(bot_tag_width(ui), 16.0), Sense::hover());
+    paint_bot_tag(ui, r.left_center());
+}
+
+pub(crate) fn bot_tag_width(ui: &egui::Ui) -> f32 {
+    ui.fonts_mut(|f| f.layout_no_wrap("BOT".into(), theme::bold_font(10.0), Color32::WHITE).size().x) + 9.0
+}
+
+/// The BOT tag, drawn starting at `left` (its middle, vertically).
+pub(crate) fn paint_bot_tag(ui: &egui::Ui, left: egui::Pos2) {
+    let w = bot_tag_width(ui);
+    let r = Rect::from_min_size(left - vec2(0.0, 8.0), vec2(w, 16.0));
+    ui.painter().rect_filled(r, CornerRadius::same(4), theme::BOT);
+    ui.painter().text(r.center() + vec2(0.0, 0.5), egui::Align2::CENTER_CENTER, "BOT", theme::bold_font(10.0), Color32::WHITE);
+}
+
+/// Whether someone is a bot in any of my servers (bots have no conversations, calls or friends).
+pub(crate) fn is_bot(st: &AppState, uid: &str) -> bool {
+    st.servers.iter().any(|s| s.is_bot(uid))
+}
+
 pub(crate) fn person_menu(ui: &mut egui::Ui, st: &AppState, uid: &str, acts: &mut Vec<Act>) {
     use ingle_proto::control::RelationKind;
     if uid == st.my_uid {
         return;
     }
     let rel = st.relation(uid);
+    let bot = is_bot(st, uid);
     let mut item = |ui: &mut egui::Ui, label: &str, act: Act| {
         if ui.button(label).clicked() {
             acts.push(act);
@@ -2992,6 +3038,7 @@ pub(crate) fn person_menu(ui: &mut egui::Ui, st: &AppState, uid: &str, acts: &mu
         }
     };
     match rel {
+        None if bot => {}
         Some(RelationKind::Friend) => item(ui, "Remove Friend", Act::RemoveFriend(uid.into())),
         Some(RelationKind::Incoming) => {
             item(ui, "Accept Friend Request", Act::AcceptFriend(uid.into()));

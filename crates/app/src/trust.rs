@@ -202,7 +202,8 @@ impl IngleApp {
     /// something only they'd know (nothing for yourself or someone you made sure of already).
     /// True when one was chosen.
     pub(crate) fn make_sure_menu(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, uid: &str, acts: &mut Vec<Act>) -> bool {
-        if uid == st.my_uid || st.verified.contains_key(uid) {
+        // (A bot isn't a person to make sure of.)
+        if uid == st.my_uid || st.verified.contains_key(uid) || s.is_bot(uid) {
             return false;
         }
         let name = s.member_name(uid);

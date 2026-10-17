@@ -4,7 +4,8 @@ A skin changes how [Ingle](https://firelitgames.com/ingle) looks and sounds: its
 picture behind the chat, its fonts, and the sounds it plays for messages, people joining and
 calls. Skins are made with Claude through the **Claude connector**, tried live in Ingle, and
 sent in for the Ingle Library. Once Firelit Games looks one over and approves it, it's in the
-Library for everyone (Plugins → Skins).
+Library for everyone, in the Skins page's Gallery (the palette under Plugins, at the bottom of
+the server list), shown under the name its maker gave it.
 
 A skin is a folder with a `skin.json` and the files it uses:
 
@@ -120,7 +121,7 @@ a readme) and `preview.png`/`.jpg`/`.webp` can be in the folder.
 
 ## Trying one you're making
 
-Plugins → Make your own → **Try a skin folder** (or Settings → Appearance) wears the skin in a
+Skins → Make your own → **Try a skin folder** (or Settings → Appearance) wears the skin in a
 folder until you stop it, and again each time you save a change to its files.
 
 ## With Claude

@@ -173,12 +173,16 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   not the internet, not the rest of your PC). They add /commands to chat (with hints as you
   type), show a small panel and keep a little data. **Dice** rolls dice: `/roll 2d6+1`, or
   click a die in its panel.
-- **Skins** change how Ingle looks and sounds: its colors, a picture behind the chat, fonts
-  and the sounds for messages, people joining and calls. They're in the Library next to the
-  plugins, and Settings → Appearance switches between them and Campfire, Ingle's own. Skins
+- **Skins** change how Ingle looks and sounds: its colors, a picture behind it, fonts and the
+  sounds for messages, people joining and calls. They have a place of their own, **Skins** (the
+  palette under Plugins): a Gallery of every skin in the Ingle Library with a big picture of
+  Ingle wearing each, the ones that are yours to wear (and Campfire, Ingle's own), and making
+  your own. Ingle made ten to start: Aurora, Neon Drive, Abyss, Sakura Night, Elven Grove,
+  Nebula, Terminal, Hallow's Eve, Obsidian & Gold and Stormcaller, next to Blood Moon. Skins
   have no code, and Ingle checks every file (fonts included) before it uses one.
-- Every plugin and skin shows **who made it**: click their name for everything they made.
-  **Star** the ones you like, and sort the Library by favorites, name, author or newest.
+- Every plugin and skin shows **who made it** (a skin someone sends in is listed under the
+  name they gave it): click their name for everything they made. **Star** the ones you like,
+  and sort by favorites, name, author or newest.
 - **Make your own with Claude**: Plugins → Make your own starts an add-on in a folder with the
   plugin kit and a `CLAUDE.md` that explains Ingle add-ons to Claude. Say what it should do,
   try the `.wasm` it builds right there in Ingle, then **send it for review**: Ingle sends its
@@ -189,8 +193,8 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   you: it starts one, puts a skin on your Ingle as you talk it over, checks it the way the
   Library will, and sends it in for review, and new versions of yours later. What it sends is
   signed with your Ingle identity, so only you can send a new version of what you sent, and
-  Plugins → Make your own shows whether yours were approved (with the reviewer's note). How
-  to make a skin: [`skins/`](skins).
+  Make your own (on the Plugins or Skins page) shows whether yours were approved, with the
+  reviewer's note. How to make a skin: [`skins/`](skins).
 
 ![The Ingle Library: Chimbrowser and Dice](docs/screenshots/plugins.png)
 

@@ -1,0 +1,43 @@
+{
+  "name": "Terminal",
+  "version": "1.0",
+  "summary": "Green phosphor on black, in a monospaced typeface, with code falling behind the chat.",
+  "author": "Ingle",
+  "colors": {
+    "rail": "#010402",
+    "side": "#030805",
+    "side_dark": "#020604",
+    "main": "#040b06",
+    "elev": "#08170d",
+    "elev2": "#0d2214",
+    "hover": "#06120a",
+    "line": "#10291a",
+    "shadow_line": "#000201",
+    "text": "#c2ffd0",
+    "body": "#a6f5b9",
+    "muted": "#62b078",
+    "dim": "#3f7b51",
+    "ember": "#33ff66",
+    "ember2": "#9dffb5",
+    "glow": "#66ff8c",
+    "live": "#ff5050",
+    "online": "#33ff66",
+    "owner": "#e8ff66",
+    "admin": "#66ffcc",
+    "link": "#66ffd0",
+    "stage": "#000301",
+    "tile": "#051009",
+    "code_bg": "#021006",
+    "selection": "#11662f"
+  },
+  "background": {
+    "file": "background.webp",
+    "show": 0.3,
+    "under": "window"
+  },
+  "fonts": {
+    "body": "fonts/DejaVuSansMono.ttf",
+    "bold": "fonts/DejaVuSansMono-Bold.ttf",
+    "scale": 0.9
+  }
+}

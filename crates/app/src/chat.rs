@@ -681,6 +681,9 @@ impl IngleApp {
                         let col = author.map(|a| name_color(s, &m.author, a.role)).unwrap_or(theme::TEXT());
                         let named = ui.add(egui::Label::new(RichText::new(&name).font(theme::bold_font(14.5)).color(col)).sense(Sense::click()));
                         self.profile_toggle(&named, &key, &m.author);
+                        if author.is_some_and(|a| a.bot) {
+                            crate::app::bot_tag(ui);
+                        }
                         crate::trust::badge(ui, st, &m.author, &name, 14.0);
                         ui.label(RichText::new(crate::chat::when(m.created_at)).size(11.5).color(theme::DIM()));
                     });

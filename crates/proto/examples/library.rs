@@ -23,6 +23,10 @@
 //!   cargo run -p ingle-proto --example library -- refresh --key release-key.txt --in index.json
 //!
 //! signs the same list again with new dates.
+//!
+//!   cargo run -p ingle-proto --example library -- check-skin skins/aurora skins/blood-moon
+//!
+//! checks skin folders the way Ingle and the library do, without signing anything.
 
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -181,6 +185,17 @@ fn main() -> Result<()> {
                 for n in &report.notes {
                     println!("{}: note: {n}", d.id);
                 }
+                // A skin is listed under its maker's name: the author in its own skin.json (what
+                // came with it when it was sent in; the Claude connector fills in the sender's
+                // Ingle name), never another. The list may leave it out; if it says, it must agree.
+                let m = &report.manifest;
+                let maker = m.author.trim().to_string();
+                if !d.author.trim().is_empty() && d.author.trim() != maker {
+                    bail!("{}: listed as by {:?}, but its skin.json says {:?} (a skin is listed under its maker's name)", d.id, d.author.trim(), maker);
+                }
+                if d.version.trim() != m.version.trim() || d.name.trim() != m.name.trim() {
+                    bail!("{}: listed as {} {}, but its skin.json says {} {}", d.id, d.name, d.version, m.name, m.version);
+                }
                 let list: Vec<File> = found
                     .iter()
                     .map(|(rel, bytes)| File {
@@ -197,7 +212,7 @@ fn main() -> Result<()> {
                     version: d.version,
                     summary: d.summary,
                     description: d.description,
-                    author: d.author,
+                    author: maker,
                     license: d.license,
                     files: list,
                     preview,
@@ -226,7 +241,28 @@ fn main() -> Result<()> {
             std::fs::write(&out, serde_json::to_string_pretty(&library::sign(&key, &lib))?)?;
             println!("wrote {out}: signed again, good for {days} days");
         }
-        _ => bail!("usage: library sign --key FILE --in plugins.json --files DIR [--out index.json] [--valid-days N] | library refresh --key FILE --in index.json"),
+        Some("check-skin") => {
+            let mut bad = 0;
+            for folder in &args[1..] {
+                let found = skin_files(Path::new(folder), "")?;
+                let report = ingle_proto::skin::check(&found);
+                for n in &report.notes {
+                    println!("{folder}: note: {n}");
+                }
+                if report.ok() {
+                    println!("{folder}: ok, {} ({} files, {} KB)", report.manifest.name, found.len(), found.iter().map(|(_, b)| b.len()).sum::<usize>() / 1000);
+                } else {
+                    bad += 1;
+                    for p in &report.problems {
+                        println!("{folder}: {p}");
+                    }
+                }
+            }
+            if bad > 0 {
+                bail!("{bad} of {} skins don't pass Ingle's checks", args.len() - 1);
+            }
+        }
+        _ => bail!("usage: library sign --key FILE --in plugins.json --files DIR [--out index.json] [--valid-days N] | library refresh --key FILE --in index.json | library check-skin FOLDER..."),
     }
     Ok(())
 }

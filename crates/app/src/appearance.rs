@@ -24,13 +24,14 @@ pub struct ClaudeSetup {
 
 impl IngleApp {
     pub(crate) fn appearance_tab(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>, close: &mut bool) {
-        if let Some((name, what)) = self.looks.trying_name() {
+        if let Some((name, author, what)) = self.looks.trying_name() {
             let from = match what {
                 Trial::Claude { .. } => "from Claude",
                 Trial::SentIn { .. } => "sent in for the Ingle Library",
                 Trial::Folder { .. } => "from a folder",
             };
-            let text = format!("Trying {name} ({from}). Your own skin comes back when you stop.");
+            let by = if author.is_empty() { String::new() } else { format!(" by {author}") };
+            let text = format!("Trying {name}{by} ({from}). Your own skin comes back when you stop.");
             ui.horizontal(|ui| {
                 ui.label(RichText::new(text).color(theme::TEXT()));
                 if ui.button("Stop trying it").clicked() {
@@ -58,7 +59,7 @@ impl IngleApp {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
                         if id.is_empty() {
-                            campfire_swatch(ui);
+                            campfire_swatch(ui, vec2(64.0, 40.0));
                         } else {
                             app.skin_thumbnail(ui, id, vec2(64.0, 40.0));
                         }
@@ -99,14 +100,10 @@ impl IngleApp {
         }
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            if ui.add(theme::primary_button("Find skins in the Library")).clicked() {
-                self.ui.plugins_open = true;
-                self.ui.home = false;
-                self.plugins.program_page = None;
-                self.plugins.tab = crate::plugins::Tab::Library;
-                self.plugins.detail = None;
-                self.plugins.show = crate::plugins::Show::Skins;
-                self.plugins.refresh(false);
+            if ui.add(theme::primary_button("Find skins in the Gallery")).clicked() {
+                self.open_place(crate::plugins::Page::Skins);
+                self.plugins.skins_tab = crate::plugins::SkinsTab::Gallery;
+                self.plugins.skin_detail = None;
                 *close = true;
             }
             if ui.button("Make one with Claude…").clicked() {
@@ -265,13 +262,18 @@ impl IngleApp {
 }
 
 /// Campfire's own colors, side by side.
-fn campfire_swatch(ui: &mut egui::Ui) {
-    let (r, _) = ui.allocate_exact_size(vec2(64.0, 40.0), Sense::hover());
+/// Campfire, Ingle's own skin, as a few dabs of its colors (it has no picture), `size` big.
+pub(crate) fn campfire_swatch(ui: &mut egui::Ui, size: egui::Vec2) {
+    let (r, _) = ui.allocate_exact_size(size, Sense::hover());
     let p = ui.painter();
     p.rect_filled(r, CornerRadius::same(8), Color32::from_rgb(0x1b, 0x14, 0x10));
     let colors = [ingle_proto::skin::CAMPFIRE[13], ingle_proto::skin::CAMPFIRE[14], ingle_proto::skin::CAMPFIRE[15], ingle_proto::skin::CAMPFIRE[9]];
+    // Four dabs across the middle, sized to the box (64 x 40 is the small one).
+    let k = (size.y / 40.0).min(size.x / 64.0);
+    let step = 13.0 * k;
+    let left = r.center().x - step * 1.5;
     for (i, [cr, cg, cb]) in colors.into_iter().enumerate() {
-        let c = egui::pos2(r.left() + 12.0 + i as f32 * 13.0, r.center().y);
-        p.circle_filled(c, 5.5, Color32::from_rgb(cr, cg, cb));
+        let c = egui::pos2(left + i as f32 * step, r.center().y);
+        p.circle_filled(c, 5.5 * k, Color32::from_rgb(cr, cg, cb));
     }
 }

@@ -123,6 +123,8 @@ pub struct AudioStatus {
     pub input_error: Option<String>,
     pub output_error: Option<String>,
     pub speaking: Vec<SessionId>,
+    /// How loud each other session sounds right now (see `Mixer::levels`), every 20 ms.
+    pub levels: Vec<(SessionId, f32)>,
     pub packets_sent: u64,
 }
 
@@ -530,6 +532,7 @@ fn worker(
     let mut mix = vec![0f32; 960];
     let mut monitor: VecDeque<f32> = VecDeque::new();
     let mut last_status = Instant::now();
+    let mut last_levels = Instant::now();
 
     while !ctl.stop.load(Ordering::Relaxed) {
         let now = Instant::now();
@@ -649,6 +652,11 @@ fn worker(
             In::None => {}
         }
 
+        if now.duration_since(last_levels) > Duration::from_millis(20) {
+            last_levels = now;
+            let levels = mixer.lock().levels(now);
+            status.lock().levels = levels;
+        }
         if now.duration_since(last_status) > Duration::from_millis(80) {
             last_status = now;
             let speaking = mixer.lock().speaking(now);

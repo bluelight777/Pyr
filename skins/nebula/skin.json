@@ -1,0 +1,38 @@
+{
+  "name": "Nebula",
+  "version": "1.0",
+  "summary": "Deep space: violet panels and a vast magenta nebula behind the whole window.",
+  "author": "Ingle",
+  "colors": {
+    "rail": "#08070f",
+    "side": "#0d0b17",
+    "side_dark": "#0b0913",
+    "main": "#120f1f",
+    "elev": "#1b172d",
+    "elev2": "#252040",
+    "hover": "#171327",
+    "line": "#2a2447",
+    "shadow_line": "#05040a",
+    "text": "#f3eeff",
+    "body": "#e4ddf6",
+    "muted": "#a69dc3",
+    "dim": "#7a7197",
+    "ember": "#c45cff",
+    "ember2": "#e0a3ff",
+    "glow": "#ff6fc8",
+    "live": "#ff4f7b",
+    "online": "#5ee0c0",
+    "owner": "#f5c451",
+    "admin": "#ff8fd1",
+    "link": "#a9b8ff",
+    "stage": "#04030a",
+    "tile": "#100d1c",
+    "code_bg": "#0d0b18",
+    "selection": "#5a2a8c"
+  },
+  "background": {
+    "file": "background.webp",
+    "show": 0.35,
+    "under": "window"
+  }
+}

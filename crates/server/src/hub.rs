@@ -833,6 +833,7 @@ impl Hub {
             roles: self.db.member_roles(uid),
             avatar: u.avatar,
             idle: Self::is_idle_locked(inner, uid),
+            bot: u.bot,
         })
     }
 
@@ -863,6 +864,7 @@ impl Hub {
                 if self.invite_throttled(ip) {
                     return err(ErrorCode::RateLimited, "Too many wrong invite links from your address. Try again in a few minutes.");
                 }
+                let bot = self.db.invite_is_bot(code);
                 let role = match self.db.redeem_invite(code) {
                     Ok(r) => r,
                     Err(e) => {
@@ -874,16 +876,17 @@ impl Hub {
                         };
                     }
                 };
-                // Owner links always work; everyday invites are rate-limited against raids of
-                // throwaway accounts.
-                if role < Role::Owner && !self.take_join_token() {
+                // Owner links (and bot invites, one bot each) always work; everyday invites are
+                // rate-limited against raids of throwaway accounts.
+                if role < Role::Owner && !bot && !self.take_join_token() {
                     return err(ErrorCode::RateLimited, "Lots of people are joining right now. Try again in a few minutes.");
                 }
-                if !self.db.insert_user(uid, name, role).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
+                let role = if bot { Role::Member } else { role };
+                if !self.db.insert_member(uid, name, role, bot).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
                     return err(ErrorCode::Banned, "You are banned from this server.");
                 }
                 let _ = self.db.set_joined_with(uid, code);
-                info!(%uid, %name, ?role, "new member joined");
+                info!(%uid, %name, ?role, bot, "new member joined");
                 Ok(())
             }
         }
@@ -931,13 +934,9 @@ impl Hub {
         }
         let me = members.iter().find(|m| m.user_id == uid).cloned().unwrap_or(Member {
             user_id: uid.to_string(),
-            name: String::new(),
-            role: Role::Member,
             online: true,
             joined_at: now_ms(),
-            roles: Vec::new(),
-            avatar: None,
-            idle: false,
+            ..Default::default()
         });
         let (admin, my_roles) = (me.role.is_admin(), me.roles.clone());
         let channels: Vec<Channel> = self.db.channels().into_iter().filter(|c| c.visible_to(admin, &my_roles)).collect();
@@ -949,7 +948,7 @@ impl Hub {
             // (Private conversations' calls only for their own people.)
             voice: inner.voice.values().filter(|v| v.audience.as_ref().is_none_or(|who| who.iter().any(|w| w == uid))).map(|v| v.p.clone()).collect(),
             roles: self.db.roles(),
-            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE, PRIVATE_CHANNELS_FEATURE].iter().map(|s| s.to_string()).collect(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE, PRIVATE_CHANNELS_FEATURE, BOTS_FEATURE].iter().map(|s| s.to_string()).collect(),
             dms: self.db.dms_of(uid),
             relations: self.db.relations_of(uid),
             groups: if groups { self.db.groups_of(uid) } else { Vec::new() },
@@ -1075,6 +1074,10 @@ impl Hub {
         let mut inner = self.inner.lock();
         let Some(client) = inner.clients.get(&conn_id) else { return err(ErrorCode::Unauthorized, "not logged in") };
         let uid = client.user_id.clone();
+        // Bots chat; they don't talk.
+        if self.db.get_user(&uid).is_some_and(|u| u.bot) {
+            return err(ErrorCode::Forbidden, "Bots can't join voice channels.");
+        }
         if let Some(who) = &audience {
             if !who.contains(&uid) || (conversation && dm.is_none() && !client.groups) {
                 return err(ErrorCode::NotFound, "No such voice channel.");

@@ -27,6 +27,7 @@ mod markdown;
 mod plugins;
 mod select;
 mod stage;
+mod textbox;
 mod theme;
 #[cfg(windows)]
 mod tray;

@@ -1,0 +1,38 @@
+{
+  "name": "Aurora",
+  "version": "1.0",
+  "summary": "Northern lights over a frozen lake: deep navy panels and aurora-green highlights.",
+  "author": "Ingle",
+  "colors": {
+    "rail": "#070c16",
+    "side": "#0b111e",
+    "side_dark": "#090f1a",
+    "main": "#0e1626",
+    "elev": "#152034",
+    "elev2": "#1d2b44",
+    "hover": "#121b2e",
+    "line": "#21304a",
+    "shadow_line": "#05080f",
+    "text": "#eaf6f4",
+    "body": "#d9e9ec",
+    "muted": "#96aabb",
+    "dim": "#6b7f92",
+    "ember": "#34d8a4",
+    "ember2": "#8ff2cd",
+    "glow": "#66f5bf",
+    "live": "#ff5a7e",
+    "online": "#5ee08a",
+    "owner": "#f5c451",
+    "admin": "#b38cff",
+    "link": "#7fe0ff",
+    "stage": "#04070d",
+    "tile": "#0c1422",
+    "code_bg": "#0a111d",
+    "selection": "#1c6b5a"
+  },
+  "background": {
+    "file": "background.webp",
+    "show": 0.35,
+    "under": "window"
+  }
+}

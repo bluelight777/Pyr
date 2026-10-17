@@ -112,6 +112,10 @@ impl CallCounters {
 }
 
 pub struct Shared {
+    /// This copy of the engine is a bot's ([`EngineOptions::bot`]).
+    pub bot: bool,
+    /// What [`Engine::claude_connector`] last found, and when.
+    claude_seen: Mutex<(Option<std::time::Instant>, Option<String>, usize)>,
     pub state: RwLock<AppState>,
     pub video: Arc<VideoStore>,
     pub repaint: Arc<dyn Fn() + Send + Sync>,
@@ -605,13 +609,32 @@ pub struct EngineOptions {
     pub audio: Option<AudioIoFactory>,
     /// Watch the global push-to-talk key.
     pub push_to_talk: bool,
+    /// A bot ([`BOTS_FEATURE`], like the Claude connector's Claude): it joins with bot invites
+    /// only, makes no sounds and is never idle.
+    pub bot: bool,
 }
 
 impl Default for EngineOptions {
     fn default() -> Self {
-        EngineOptions { profile: None, config_dir: None, repaint: Arc::new(|| {}), audio: None, push_to_talk: true }
+        EngineOptions { profile: None, config_dir: None, repaint: Arc::new(|| {}), audio: None, push_to_talk: true, bot: false }
     }
 }
+
+/// Where the Claude connector (`ingle-mcp`) keeps Claude's own identity and settings when it
+/// runs Claude as a bot: next to Ingle's.
+pub fn claude_dir(config_dir: &std::path::Path) -> PathBuf {
+    config_dir.join("claude")
+}
+
+/// Bot invites waiting for the Claude connector: Ingle drops them here (Server Settings → Bots
+/// → Add Claude) and the connector joins with them, and removes them.
+pub fn claude_inbox(config_dir: &std::path::Path) -> PathBuf {
+    claude_dir(config_dir).join("join")
+}
+
+/// Claude's member id, written by the connector in [`claude_dir`] (a public id: Ingle never
+/// reads the connector's identity itself).
+pub const CLAUDE_MEMBER_ID: &str = "member-id";
 
 pub struct Engine {
     pub shared: Arc<Shared>,
@@ -687,8 +710,8 @@ impl Engine {
             missed_calls: 0,
             last_missed_from: String::new(),
         };
-        // Tests and bots (which bring their own audio) stay quiet.
-        let sfx = if opts.audio.is_none() { Some(sfx::Sfx::start()) } else { None };
+        // Tests (which bring their own audio) and bots (which have none) stay quiet.
+        let sfx = if opts.audio.is_none() && !opts.bot { Some(sfx::Sfx::start()) } else { None };
         let ptt_down = Arc::new(AtomicBool::new(false));
         let ptt_key = cfg.settings.ptt_key.clone();
         qos::set_enabled(cfg.settings.voice_priority);
@@ -699,6 +722,8 @@ impl Engine {
         let entries = cfg.servers.clone();
         let voice_prefs = cfg.self_voice.map(|v| (v.muted, v.deafened)).unwrap_or_default();
         let shared = Arc::new(Shared {
+            bot: opts.bot,
+            claude_seen: Mutex::new((None, None, 0)),
             state: RwLock::new(state),
             video: Arc::new(VideoStore::new(opts.repaint.clone())),
             repaint: opts.repaint.clone(),
@@ -736,7 +761,10 @@ impl Engine {
             idle_thread: Mutex::new(None),
             verify: Mutex::new(verify::Book::default()),
         });
-        idle::start(&shared);
+        // (A bot isn't at a keyboard: it's never idle.)
+        if !opts.bot {
+            idle::start(&shared);
+        }
         // Read marks for channels are saved a few at a time (reading a busy channel moves them
         // with every message), so what you've read stays read after a restart or a crash.
         {
@@ -837,6 +865,44 @@ impl Engine {
         self.request_then(key, req, |_, _| {});
     }
 
+    /// Sends a request and waits for the server's answer, for up to `wait`: for bots (like the
+    /// Claude connector), which answer for what they did. A refusal is an error, in the
+    /// server's words. Not for the app's own thread (it blocks).
+    pub fn request_wait(&self, key: &str, req: Request, wait: std::time::Duration) -> Result<Event> {
+        let h = self.handle(key).ok_or_else(|| anyhow!("Not connected to that server."))?;
+        let rx = h.request(req);
+        let ev = self
+            .shared
+            .rt
+            .block_on(async { tokio::time::timeout(wait, rx).await })
+            .map_err(|_| anyhow!("The server didn't answer in time."))?
+            .map_err(|_| anyhow!("The connection to the server closed."))?;
+        match ev {
+            Event::Error { message, .. } => Err(anyhow!(message)),
+            ev => Ok(ev),
+        }
+    }
+
+    /// Read up to `id` in a channel (a bot, which reads without a window): it isn't unread
+    /// anymore, and the mark is kept.
+    pub fn mark_read_upto(&self, key: &str, channel_id: ChannelId, id: MessageId) {
+        {
+            let mut st = self.shared.state.write();
+            if let Some(s) = st.server_mut(key) {
+                s.unread.remove(&channel_id);
+                s.mentions.remove(&channel_id);
+                s.new_since.remove(&channel_id);
+            }
+        }
+        // (Saved at once: the connector can be closed any moment, with Claude.)
+        self.shared.mark_read(key, channel_id, id, true);
+    }
+
+    /// How far I've read in a channel, on this PC.
+    pub fn read_mark(&self, key: &str, channel_id: ChannelId) -> Option<MessageId> {
+        self.shared.config.lock().last_read.get(key).and_then(|m| m.get(&channel_id)).copied()
+    }
+
     // ------------------------------------------------------------- servers
 
     /// A short link only has the start of the server's fingerprint: use the full one of a
@@ -859,6 +925,14 @@ impl Engine {
     /// Join a server from an invite link.
     pub fn add_server(&self, invite: &str) -> Result<String> {
         let mut link = InviteLink::parse(invite)?;
+        // A bot invite is for a bot, and a bot joins only with one.
+        let bot_link = link.code.as_deref().is_some_and(|c| c.starts_with(BOT_INVITE_PREFIX));
+        if bot_link && !self.shared.bot {
+            anyhow::bail!("That link is for adding a bot (like Claude) to a server, not for joining it yourself. Ask for an invite link instead.");
+        }
+        if self.shared.bot && !bot_link && link.code.is_some() {
+            anyhow::bail!("Bots join with a bot invite: in Ingle, Server Settings → Bots.");
+        }
         if !link.is_full() {
             link.fingerprint = self.full_fingerprint(&link)?;
             link.fp_len = 32;
@@ -1462,12 +1536,25 @@ impl Engine {
             if older { log.messages.first().map(|m| m.id) } else { None }
         };
         let k = key.to_string();
-        self.request_then(key, Request::FetchHistory { channel_id, before, limit: 50 }, move |shared, ev| {
+        let Some(h) = self.handle(key) else {
+            if let Some(s) = self.shared.state.write().server_mut(key) {
+                s.logs.entry(channel_id).or_default().loading = false;
+            }
+            return;
+        };
+        let shared = self.shared.clone();
+        let reply = h.request(Request::FetchHistory { channel_id, before, limit: 50 });
+        self.shared.rt.spawn(async move {
+            let ev = reply.await.unwrap_or_else(|_| Event::error(ErrorCode::Internal, "not connected"));
             let mut st = shared.state.write();
             let mut newest = None;
+            if let Event::Error { message, .. } = &ev {
+                st.toast(message.clone(), true);
+            }
             if let Some(s) = st.server_mut(&k) {
                 let dm = s.is_private(channel_id);
                 let log = s.logs.entry(channel_id).or_default();
+                // (Done, either way: a refusal mustn't leave it loading forever.)
                 log.loading = false;
                 if let Event::History { messages, complete, .. } = ev {
                     if !older {
@@ -1746,6 +1833,58 @@ impl Engine {
                     // Servers before 0.3.0 hand out the long form.
                     s.last_invite = Some(InviteLink::shorten(&link));
                 }
+                (shared.repaint)();
+            }
+        });
+    }
+
+    /// The Claude connector on this PC ([`claude_dir`]): Claude's member id once it has run (it
+    /// makes Claude's identity then, and writes the id in [`CLAUDE_MEMBER_ID`]), and how many
+    /// invites wait for it to pick them up. Looked up at most every couple of seconds.
+    pub fn claude_connector(&self) -> (Option<String>, usize) {
+        let mut seen = self.shared.claude_seen.lock();
+        if seen.0.is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(2)) {
+            let dir = claude_dir(&self.shared.config_dir);
+            let uid = std::fs::read_to_string(dir.join(CLAUDE_MEMBER_ID))
+                .ok()
+                .map(|t| t.trim().to_string())
+                .filter(|u| ingle_proto::b64::decode_array::<32>(u).is_some());
+            let waiting = std::fs::read_dir(claude_inbox(&self.shared.config_dir))
+                .map(|d| d.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "link")).count())
+                .unwrap_or(0);
+            *seen = (Some(std::time::Instant::now()), uid, waiting);
+        }
+        (seen.1.clone(), seen.2)
+    }
+
+    /// A link that adds one bot ([`BOTS_FEATURE`]; needs Manage server), for Server Settings →
+    /// Bots (`ServerView::last_bot_invite`).
+    pub fn create_bot_invite(&self, key: &str) {
+        let k = key.to_string();
+        self.request_then(key, Request::CreateBotInvite {}, move |shared, ev| {
+            if let Event::InviteCreated { link, .. } = ev {
+                if let Some(s) = shared.state.write().server_mut(&k) {
+                    s.last_bot_invite = Some(link);
+                }
+                (shared.repaint)();
+            }
+        });
+    }
+
+    /// Adds Claude to a server: a bot invite for the Claude connector on this PC
+    /// ([`claude_inbox`]), which joins with it right away if it's running (the Claude app
+    /// starts it), or the next time it runs.
+    pub fn add_claude(&self, key: &str) {
+        self.request_then(key, Request::CreateBotInvite {}, move |shared, ev| {
+            if let Event::InviteCreated { link, code } = ev {
+                let inbox = claude_inbox(&shared.config_dir);
+                let file = inbox.join(format!("{}.link", code.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect::<String>()));
+                let mut st = shared.state.write();
+                match std::fs::create_dir_all(&inbox).and_then(|_| std::fs::write(&file, link.as_bytes())) {
+                    Ok(()) => st.toast("Claude is on its way: it joins as soon as the Claude connector runs (the Claude app starts it).", false),
+                    Err(e) => st.toast(format!("Couldn't hand Claude its invite: {e}"), true),
+                }
+                drop(st);
                 (shared.repaint)();
             }
         });
@@ -2337,6 +2476,19 @@ impl Engine {
             c.watch(&self.shared, VideoKey { session, track: track_id }, on);
         }
         self.shared.refresh_call_view();
+    }
+
+    /// How loud each person in my call sounds right now (dBFS), me too while I'm sending: for
+    /// the voice meters, read every frame. Empty outside a call.
+    pub fn voice_levels(&self) -> Vec<(SessionId, f32)> {
+        let guard = self.shared.call.lock();
+        let Some(c) = guard.as_ref() else { return Vec::new() };
+        let Some(a) = &c.audio else { return Vec::new() };
+        let mut v = a.status.lock().levels.clone();
+        if a.controls.transmitting.load(Ordering::Relaxed) {
+            v.push((c.session, a.controls.mic_level_db()));
+        }
+        v
     }
 
     /// Volume of someone's screen-share sound, separate from their voice.

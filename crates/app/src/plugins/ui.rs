@@ -1,5 +1,6 @@
-//! The Plugins page (the library of plugins and skins, what's installed, making your own),
-//! add-ons' panels, and the library owner's lists of plugins and skins sent in.
+//! The Plugins page (the library's programs and add-ons, what's installed, making your own),
+//! the Skins page (the library's skins, yours, making your own), add-ons' panels, and the
+//! library owner's lists of plugins and skins sent in.
 
 use eframe::egui::{self, Color32, CornerRadius, Key, Rect, RichText, Sense, Stroke, vec2};
 use ingle_engine::state::{AppState, BugSend};
@@ -7,7 +8,7 @@ use ingle_proto::control::{SubmissionEntry, SubmissionStatus};
 use ingle_proto::library::{Entry, Kind, SkinEntry};
 
 use super::addon::{Place, Widget};
-use super::{Show, Tab, source};
+use super::{Page, Show, SkinsTab, Tab, source};
 use crate::app::{Act, Dialog, IngleApp};
 use crate::{icons, theme};
 
@@ -80,53 +81,6 @@ fn card_visuals(ui: &mut egui::Ui) {
 }
 
 
-/// A plugin or a skin, as the Library lists them together.
-#[derive(Clone)]
-enum Item {
-    Plugin(Entry),
-    Skin(SkinEntry),
-}
-
-impl Item {
-    /// Its key among favorites (and in `Plugins::detail`): a plugin's id, `skin:<id>` for a skin.
-    fn key(&self) -> String {
-        match self {
-            Item::Plugin(e) => e.id.clone(),
-            Item::Skin(s) => format!("skin:{}", s.id),
-        }
-    }
-    fn name(&self) -> &str {
-        match self {
-            Item::Plugin(e) => &e.name,
-            Item::Skin(s) => &s.name,
-        }
-    }
-    fn author(&self) -> &str {
-        match self {
-            Item::Plugin(e) => &e.author,
-            Item::Skin(s) => &s.author,
-        }
-    }
-    fn summary(&self) -> &str {
-        match self {
-            Item::Plugin(e) => &e.summary,
-            Item::Skin(s) => &s.summary,
-        }
-    }
-    fn description(&self) -> &str {
-        match self {
-            Item::Plugin(e) => &e.description,
-            Item::Skin(s) => &s.description,
-        }
-    }
-    fn updated(&self) -> i64 {
-        match self {
-            Item::Plugin(e) => e.updated,
-            Item::Skin(s) => s.updated,
-        }
-    }
-}
-
 fn skin_pill(ui: &mut egui::Ui) {
     pill(ui, "SKIN", Color32::from_rgb(0x2b, 0x3a, 0x2e), Color32::from_rgb(0x9f, 0xe0, 0xb0));
 }
@@ -162,40 +116,58 @@ impl IngleApp {
         (place, here)
     }
 
-    /// The Plugins button, at the bottom of the server rail (and the programs open inside
-    /// Ingle under it).
-    pub(crate) fn plugins_button(&mut self, ui: &mut egui::Ui) {
+    /// One of the rail's places (Plugins, Skins): a round button that squares up when it's
+    /// open or under the pointer, with how many updates it has. True when clicked.
+    fn rail_place(&mut self, ui: &mut egui::Ui, on: bool, updates: usize, tip: &str, icon: impl FnOnce(&egui::Painter, Rect, Color32, Color32)) -> bool {
         ui.add_space(8.0);
         let (rect, resp) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::click());
-        let on = self.ui.plugins_open && self.plugins.program_page.is_none();
+        let hot = on || resp.hovered();
         let fill = if on {
-            Color32::from_rgb(0x4a, 0x30, 0x22)
+            theme::mix(theme::ELEV(), theme::EMBER(), 0.28)
         } else if resp.hovered() {
             theme::ELEV2()
         } else {
             theme::ELEV()
         };
-        ui.painter().rect_filled(rect, CornerRadius::same(if on || resp.hovered() { 16 } else { 24 }), fill);
-        icons::puzzle(ui.painter(), rect.shrink(13.0), if on || resp.hovered() { theme::EMBER2() } else { theme::EMBER() });
-        if on || resp.hovered() {
+        ui.painter().rect_filled(rect, CornerRadius::same(if hot { 16 } else { 24 }), fill);
+        icon(ui.painter(), rect.shrink(13.0), if hot { theme::EMBER2() } else { theme::EMBER() }, fill);
+        if hot {
             let pill = Rect::from_center_size(egui::pos2(ui.max_rect().left() + 2.0, rect.center().y), vec2(4.0, if on { 40.0 } else { 20.0 }));
             ui.painter().rect_filled(pill, CornerRadius::same(2), theme::TEXT());
         }
-        let updates = self.plugins.updates();
         if updates > 0 {
             let c = rect.right_bottom() - vec2(6.0, 6.0);
             ui.painter().circle_filled(c, 9.0, theme::RAIL());
             ui.painter().circle_filled(c, 7.5, Color32::from_rgb(0x23, 0xa5, 0x5a));
             ui.painter().text(c, egui::Align2::CENTER_CENTER, updates.min(9).to_string(), theme::bold_font(10.0), Color32::WHITE);
         }
-        let tip = if updates > 0 { format!("Plugins ({updates} to update)") } else { "Plugins: programs, add-ons and skins for Ingle".to_string() };
-        if resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tip).clicked() {
-            self.ui.plugins_open = true;
-            self.ui.home = false;
-            self.plugins.program_page = None;
-            self.plugins.refresh(false);
+        resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tip).clicked()
+    }
+
+    /// Plugins and Skins, at the bottom of the server rail (and the programs open inside Ingle
+    /// under them).
+    pub(crate) fn plugins_button(&mut self, ui: &mut egui::Ui) {
+        let here = self.ui.plugins_open && self.plugins.program_page.is_none();
+        let updates = self.plugins.plugin_updates();
+        let tip = if updates > 0 { format!("Plugins ({updates} to update)") } else { "Plugins: programs and add-ons for Ingle".to_string() };
+        if self.rail_place(ui, here && self.plugins.page == Page::Plugins, updates, &tip, |p, r, c, _| icons::puzzle(p, r, c)) {
+            self.open_place(Page::Plugins);
+        }
+        let updates = self.plugins.skin_updates();
+        let tip = if updates > 0 { format!("Skins ({updates} to update)") } else { "Skins: change how Ingle looks".to_string() };
+        if self.rail_place(ui, here && self.plugins.page == Page::Skins, updates, &tip, |p, r, c, bg| icons::palette_mono(p, r, c, bg)) {
+            self.open_place(Page::Skins);
         }
         self.program_buttons(ui);
+    }
+
+    /// Opens the Plugins or Skins page (the list fetched again if it's old).
+    pub(crate) fn open_place(&mut self, page: Page) {
+        self.ui.plugins_open = true;
+        self.ui.home = false;
+        self.plugins.program_page = None;
+        self.plugins.page = page;
+        self.plugins.refresh(false);
     }
 
     /// Programs open inside Ingle, in the rail under Plugins: click one to go to it.
@@ -309,8 +281,11 @@ impl IngleApp {
         });
     }
 
-    /// The Plugins page.
+    /// The Plugins page, or the Skins page.
     pub(crate) fn plugins_page(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
+        if self.plugins.page == Page::Skins {
+            return self.skins_page(ctx, st, acts);
+        }
         egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::panel(theme::MAIN(), true)).inner_margin(egui::Margin::symmetric(28, 20))).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 let (r, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
@@ -319,12 +294,12 @@ impl IngleApp {
                 ui.add_space(6.0);
                 ui.vertical(|ui| {
                     ui.label(RichText::new("Plugins").font(theme::bold_font(22.0)).color(theme::TEXT()));
-                    ui.label(RichText::new("Programs, add-ons and skins from the Ingle Library: every plugin built from its source after someone looked at it, every skin checked.").color(theme::MUTED()));
+                    ui.label(RichText::new("Programs and add-ons from the Ingle Library, each one built from its source after someone looked at it.").color(theme::MUTED()));
                 });
             });
             ui.add_space(14.0);
             ui.horizontal(|ui| {
-                let installed = self.plugins.installed.plugins.len() + self.plugins.skins.skins.len();
+                let installed = self.plugins.installed.plugins.len();
                 for (tab, label) in [(Tab::Library, "Library".to_string()), (Tab::Installed, format!("Installed ({installed})")), (Tab::Make, "Make your own".to_string())] {
                     let selected = self.plugins.tab == tab;
                     if ui.add(egui::Button::selectable(selected, RichText::new(label).font(theme::bold_font(14.0))).min_size(vec2(0.0, 30.0))).clicked() {
@@ -339,7 +314,7 @@ impl IngleApp {
                         } else if ui.button("Refresh").on_hover_text("Get the latest list from the Ingle Library").clicked() {
                             self.plugins.refresh(true);
                         }
-                        ui.add(egui::TextEdit::singleline(&mut self.plugins.search).hint_text("Search plugins and skins").desired_width(220.0));
+                        ui.add(egui::TextEdit::singleline(&mut self.plugins.search).hint_text("Search plugins").desired_width(220.0));
                     });
                 }
             });
@@ -351,10 +326,236 @@ impl IngleApp {
                     Some(id) => self.plugin_detail(ui, &id, st, acts),
                     None => self.library_grid(ui, st, acts),
                 },
-                Tab::Installed => self.installed_list(ui, st, acts),
+                Tab::Installed => self.installed_list(ui, acts),
                 Tab::Make => self.make_your_own(ui, st, acts),
             });
         });
+    }
+
+    /// The Skins page: the Gallery of the Ingle Library's skins, the ones that are yours, and
+    /// making your own.
+    fn skins_page(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::panel(theme::MAIN(), true)).inner_margin(egui::Margin::symmetric(28, 20))).show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
+                ui.painter().rect_filled(r, CornerRadius::same(10), theme::ELEV());
+                icons::palette_mono(ui.painter(), r.shrink(8.0), theme::EMBER(), theme::ELEV());
+                ui.add_space(6.0);
+                ui.vertical(|ui| {
+                    ui.label(RichText::new("Skins").font(theme::bold_font(22.0)).color(theme::TEXT()));
+                    ui.label(RichText::new("Change how Ingle looks: its colors, a picture behind it, its fonts and sounds. Skins have no code, and Ingle checks every file first.").color(theme::MUTED()));
+                });
+            });
+            ui.add_space(14.0);
+            ui.horizontal(|ui| {
+                let yours = self.plugins.skins.skins.len() + 1;
+                for (tab, label) in [(SkinsTab::Gallery, "Gallery".to_string()), (SkinsTab::Yours, format!("Yours ({yours})")), (SkinsTab::Make, "Make your own".to_string())] {
+                    let selected = self.plugins.skins_tab == tab;
+                    if ui.add(egui::Button::selectable(selected, RichText::new(label).font(theme::bold_font(14.0))).min_size(vec2(0.0, 30.0))).clicked() {
+                        self.plugins.skins_tab = tab;
+                        self.plugins.skin_detail = None;
+                    }
+                }
+                if self.plugins.skins_tab == SkinsTab::Gallery && self.plugins.skin_detail.is_none() {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if self.plugins.fetching() {
+                            ui.spinner();
+                        } else if ui.button("Refresh").on_hover_text("Get the latest list from the Ingle Library").clicked() {
+                            self.plugins.refresh(true);
+                        }
+                        ui.add(egui::TextEdit::singleline(&mut self.plugins.skins_search).hint_text("Search skins").desired_width(220.0));
+                    });
+                }
+            });
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(8.0);
+            egui::ScrollArea::vertical().id_salt("skins-page").auto_shrink([false, false]).show(ui, |ui| match self.plugins.skins_tab {
+                SkinsTab::Gallery => match self.plugins.skin_detail.clone() {
+                    Some(id) => self.skin_detail(ui, &id, st, acts),
+                    None => self.skins_gallery(ui, st, acts),
+                },
+                SkinsTab::Yours => {
+                    ui.set_max_width(980.0);
+                    self.yours_list(ui, st, acts);
+                }
+                SkinsTab::Make => self.make_skin(ui, st, acts),
+            });
+        });
+    }
+
+    /// Every skin in the Ingle Library, as big pictures.
+    fn skins_gallery(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
+        if !self.library_state(ui) {
+            return;
+        }
+        let Some(lib) = self.plugins.library.clone() else { return };
+        let favorites = &st.settings.library_favorites;
+        let sort = if st.settings.library_sort.is_empty() { "favorites" } else { st.settings.library_sort.as_str() };
+        ui.horizontal_wrapped(|ui| {
+            for (only, label) in [(false, "All"), (true, "★ Favorites")] {
+                if ui.add(egui::Button::selectable(self.plugins.skins_favorites == only, label)).clicked() {
+                    self.plugins.skins_favorites = only;
+                }
+            }
+            if let Some(a) = self.plugins.skins_author.clone() {
+                ui.add_space(6.0);
+                if ui.add(egui::Button::new(RichText::new(format!("by {a}  ✕")).color(theme::TEXT())).fill(theme::ELEV2())).on_hover_text("Show everyone's").clicked() {
+                    self.plugins.skins_author = None;
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| Self::sort_box(ui, sort, acts));
+        });
+        ui.add_space(10.0);
+        let q = self.plugins.skins_search.trim().to_lowercase();
+        let key = |s: &SkinEntry| format!("skin:{}", s.id);
+        let mut shown: Vec<SkinEntry> = lib.skins.clone();
+        shown.retain(|s| {
+            let fav_ok = !self.plugins.skins_favorites || favorites.contains(&key(s));
+            let author_ok = self.plugins.skins_author.as_ref().is_none_or(|a| s.author.eq_ignore_ascii_case(a));
+            let text_ok = q.is_empty() || format!("{} {} {} {}", s.name, s.summary, s.author, s.description).to_lowercase().contains(&q);
+            fav_ok && author_ok && text_ok
+        });
+        let by_name = |a: &SkinEntry, b: &SkinEntry| a.name.to_lowercase().cmp(&b.name.to_lowercase());
+        match sort {
+            "name" => shown.sort_by(by_name),
+            "author" => shown.sort_by(|a, b| (a.author.is_empty(), a.author.to_lowercase()).cmp(&(b.author.is_empty(), b.author.to_lowercase())).then(by_name(a, b))),
+            "newest" => shown.sort_by(|a, b| b.updated.cmp(&a.updated).then(by_name(a, b))),
+            _ => shown.sort_by(|a, b| (!favorites.contains(&key(a))).cmp(&!favorites.contains(&key(b))).then(by_name(a, b))),
+        }
+        if shown.is_empty() {
+            let why = if !q.is_empty() {
+                "Nothing matches that."
+            } else if self.plugins.skins_favorites {
+                "No favorites yet: star a skin to keep it here."
+            } else {
+                "No skins in the Ingle Library yet."
+            };
+            ui.label(RichText::new(why).color(theme::MUTED()));
+            return;
+        }
+        const GAP: f32 = 14.0;
+        let width = ui.available_width();
+        let cols = ((width + GAP) / 300.0).floor().max(1.0) as usize;
+        let card_w = (width - GAP * (cols as f32 - 1.0)) / cols as f32;
+        for row in shown.chunks(cols) {
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = GAP;
+                for s in row {
+                    self.skin_card(ui, s, card_w, st, acts);
+                }
+            });
+            ui.add_space(GAP);
+        }
+    }
+
+    /// A skin in the Gallery: its picture, its name and who made it, what it is, and its buttons.
+    fn skin_card(&mut self, ui: &mut egui::Ui, s: &SkinEntry, card_w: f32, st: &AppState, acts: &mut Vec<Act>) {
+        let key = format!("skin:{}", s.id);
+        let favorite = st.settings.library_favorites.contains(&key);
+        let wearing = st.settings.skin == s.id;
+        let mut open = false;
+        // (Senses clicks behind the card's own buttons, which are registered after it.)
+        let card = ui.scope_builder(
+            egui::UiBuilder::new().id_salt(("skin-card", &s.id)).layout(egui::Layout::top_down(egui::Align::Min)).sense(Sense::click()),
+            |ui| {
+                let hovered = ui.response().hovered();
+                let stroke = if wearing {
+                    theme::EMBER()
+                } else if hovered {
+                    theme::ELEV2().gamma_multiply(1.6)
+                } else {
+                    theme::LINE()
+                };
+                egui::Frame::new().fill(theme::ELEV()).stroke(Stroke::new(if wearing { 1.5f32 } else { 1.0 }, stroke)).corner_radius(14).inner_margin(10).show(ui, |ui| {
+                    card_visuals(ui);
+                    let inner = card_w - 22.0;
+                    ui.set_width(inner);
+                    let pic = vec2(inner, (inner * 9.0 / 16.0).round());
+                    let top_left = ui.cursor().min;
+                    self.skin_picture(ui, &s.id, pic);
+                    if wearing {
+                        let r = Rect::from_min_size(top_left + vec2(8.0, 8.0), vec2(82.0, 22.0));
+                        ui.painter().rect_filled(r, CornerRadius::same(11), theme::EMBER());
+                        ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, "✓ Wearing", theme::bold_font(11.5), theme::on_ember());
+                    }
+                    ui.add_space(8.0);
+                    // The words under the picture, a little in from its edges (laid out top to
+                    // bottom, so the summary wraps instead of stretching the card).
+                    egui::Frame::new().inner_margin(egui::Margin::symmetric(4, 0)).show(ui, |ui| {
+                        ui.set_width(inner - 8.0);
+                        let text_top = ui.min_rect().top();
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                ui.set_max_width(inner - 44.0);
+                                ui.add(egui::Label::new(RichText::new(&s.name).font(theme::bold_font(17.0)).color(theme::TEXT())).truncate());
+                                self.author_link(ui, &s.author);
+                            });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                                if star_button(ui, favorite).clicked() {
+                                    acts.push(Act::ToggleFavorite(key.clone()));
+                                }
+                            });
+                        });
+                        ui.add_space(6.0);
+                        let mut job = egui::text::LayoutJob::simple(s.summary.clone(), egui::TextStyle::Body.resolve(ui.style()), theme::BODY(), inner - 8.0);
+                        job.wrap.max_rows = 2;
+                        ui.add(egui::Label::new(job).wrap());
+                        // The buttons line up across a row of cards, whatever the summaries' lengths.
+                        let used = ui.min_rect().bottom() - text_top;
+                        ui.add_space((96.0 - used).max(8.0));
+                        ui.horizontal(|ui| {
+                            ui.set_min_height(30.0);
+                            let update = self.plugins.skins.get(&s.id).is_some_and(|i| self.plugins.skin_update_for(i).is_some());
+                            if !update {
+                                ui.label(RichText::new(format!("{} · {}", s.version, size_text(s.size()))).size(12.5).color(theme::DIM()));
+                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button("Details").clicked() {
+                                    open = true;
+                                }
+                                self.skin_action(ui, s, st, acts);
+                            });
+                        });
+                    });
+                });
+            },
+        );
+        if open || card.response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+            self.plugins.skin_detail = Some(s.id.clone());
+        }
+    }
+
+    /// Making a skin: with Claude, or by hand (a folder tried as it's made), and what was sent in.
+    fn make_skin(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
+        ui.set_max_width(760.0);
+        ui.label(RichText::new("Make a skin with Claude").font(theme::bold_font(17.0)).color(theme::TEXT()));
+        ui.add_space(2.0);
+        ui.add(
+            egui::Label::new(
+                RichText::new(
+                    "Skins change Ingle's colors, put a picture behind it, and bring fonts and sounds of their own. Set up the Claude connector, \
+                     then ask Claude to make you one: it shows it to you right here as it goes, and sends it in for the Ingle Library under your \
+                     name. Once it's approved, anyone can wear it.",
+                )
+                .color(theme::MUTED()),
+            )
+            .wrap(),
+        );
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.add(theme::primary_button("Set up the Claude connector…")).clicked() {
+                self.ui.dialog = Some(Dialog::Settings { tab: 6 });
+            }
+            if ui.button("Try a skin folder…").on_hover_text("A skin you're making yourself: Ingle wears it until you stop, and again whenever you save a change").clicked() {
+                crate::images::pick_folder_async(crate::images::FolderFor::TrySkin, "Choose the skin's folder (with its skin.json)", ui.ctx());
+            }
+            if ui.add(egui::Button::new(RichText::new("How skins are made").color(theme::LINK())).frame(false)).clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(SKINS_URL));
+            }
+        });
+        ui.add_space(22.0);
+        self.sent_in_list(ui, st, acts, true);
     }
 
     fn plugin_icon(&mut self, ui: &mut egui::Ui, id: &str, kind: Kind, side: f32) {
@@ -423,8 +624,9 @@ impl IngleApp {
         }
     }
 
-    fn library_grid(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
-        let Some(lib) = self.plugins.library.clone() else {
+    /// The list isn't here: why, and a way to try again. False when there's nothing to show.
+    fn library_state(&mut self, ui: &mut egui::Ui) -> bool {
+        if self.plugins.library.is_none() {
             if self.plugins.fetching() {
                 ui.horizontal(|ui| {
                     ui.spinner();
@@ -432,23 +634,48 @@ impl IngleApp {
                 });
             } else {
                 let why = self.plugins.library_error.clone().unwrap_or_else(|| "The list hasn't been fetched yet.".into());
-                note(ui, &format!("Couldn't get the plugin list: {why}"), true);
+                note(ui, &format!("Couldn't get the Ingle Library's list: {why}"), true);
                 ui.add_space(8.0);
                 if ui.button("Try again").clicked() {
                     self.plugins.refresh(true);
                 }
             }
-            return;
-        };
+            return false;
+        }
         if let Some(e) = &self.plugins.library_error {
             note(ui, &format!("Showing the list from before: {e}"), false);
             ui.add_space(8.0);
         }
+        true
+    }
+
+    /// The sort box (shared by the Plugins and Skins pages).
+    fn sort_box(ui: &mut egui::Ui, sort: &str, acts: &mut Vec<Act>) {
+        let label = |s: &str| match s {
+            "name" => "Name",
+            "author" => "Author",
+            "newest" => "Newest",
+            _ => "Favorites first",
+        };
+        egui::ComboBox::from_id_salt("library-sort").selected_text(format!("Sort: {}", label(sort))).width(170.0).show_ui(ui, |ui| {
+            for by in ["favorites", "name", "author", "newest"] {
+                if ui.selectable_label(sort == by, label(by)).clicked() && sort != by {
+                    acts.push(Act::SortLibrary(by.to_string()));
+                }
+            }
+        });
+    }
+
+    fn library_grid(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
+        if !self.library_state(ui) {
+            return;
+        }
+        let Some(lib) = self.plugins.library.clone() else { return };
         // What to show, and in what order.
         let favorites = &st.settings.library_favorites;
         let sort = if st.settings.library_sort.is_empty() { "favorites" } else { st.settings.library_sort.as_str() };
         ui.horizontal_wrapped(|ui| {
-            for (show, label) in [(Show::All, "All"), (Show::Programs, "Programs"), (Show::Addons, "Add-ons"), (Show::Skins, "Skins"), (Show::Favorites, "★ Favorites")] {
+            for (show, label) in [(Show::All, "All"), (Show::Programs, "Programs"), (Show::Addons, "Add-ons"), (Show::Favorites, "★ Favorites")] {
                 if ui.add(egui::Button::selectable(self.plugins.show == show, label)).clicked() {
                     self.plugins.show = show;
                 }
@@ -459,49 +686,33 @@ impl IngleApp {
                     self.plugins.author = None;
                 }
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let label = |s: &str| match s {
-                    "name" => "Name",
-                    "author" => "Author",
-                    "newest" => "Newest",
-                    _ => "Favorites first",
-                };
-                egui::ComboBox::from_id_salt("library-sort").selected_text(format!("Sort: {}", label(sort))).width(170.0).show_ui(ui, |ui| {
-                    for by in ["favorites", "name", "author", "newest"] {
-                        if ui.selectable_label(sort == by, label(by)).clicked() && sort != by {
-                            acts.push(Act::SortLibrary(by.to_string()));
-                        }
-                    }
-                });
-            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| Self::sort_box(ui, sort, acts));
         });
         ui.add_space(10.0);
         let q = self.plugins.search.trim().to_lowercase();
-        let mut shown: Vec<Item> = lib.plugins.iter().cloned().map(Item::Plugin).chain(lib.skins.iter().cloned().map(Item::Skin)).collect();
-        shown.retain(|it| {
+        let mut shown: Vec<Entry> = lib.plugins.clone();
+        shown.retain(|e| {
             let kind_ok = match self.plugins.show {
                 Show::All => true,
-                Show::Programs => matches!(it, Item::Plugin(e) if e.kind == Kind::Program),
-                Show::Addons => matches!(it, Item::Plugin(e) if e.kind == Kind::Addon),
-                Show::Skins => matches!(it, Item::Skin(_)),
-                Show::Favorites => favorites.contains(&it.key()),
+                Show::Programs => e.kind == Kind::Program,
+                Show::Addons => e.kind == Kind::Addon,
+                Show::Favorites => favorites.contains(&e.id),
             };
-            let author_ok = self.plugins.author.as_ref().is_none_or(|a| it.author().eq_ignore_ascii_case(a));
-            let text_ok = q.is_empty() || format!("{} {} {} {}", it.name(), it.summary(), it.author(), it.description()).to_lowercase().contains(&q);
+            let author_ok = self.plugins.author.as_ref().is_none_or(|a| e.author.eq_ignore_ascii_case(a));
+            let text_ok = q.is_empty() || format!("{} {} {} {}", e.name, e.summary, e.author, e.description).to_lowercase().contains(&q);
             kind_ok && author_ok && text_ok
         });
-        let by_name = |a: &Item, b: &Item| a.name().to_lowercase().cmp(&b.name().to_lowercase());
+        let by_name = |a: &Entry, b: &Entry| a.name.to_lowercase().cmp(&b.name.to_lowercase());
         match sort {
             "name" => shown.sort_by(by_name),
-            "author" => shown.sort_by(|a, b| (a.author().is_empty(), a.author().to_lowercase()).cmp(&(b.author().is_empty(), b.author().to_lowercase())).then(by_name(a, b))),
-            "newest" => shown.sort_by(|a, b| b.updated().cmp(&a.updated()).then(by_name(a, b))),
-            _ => shown.sort_by(|a, b| (!favorites.contains(&a.key())).cmp(&!favorites.contains(&b.key())).then(by_name(a, b))),
+            "author" => shown.sort_by(|a, b| (a.author.is_empty(), a.author.to_lowercase()).cmp(&(b.author.is_empty(), b.author.to_lowercase())).then(by_name(a, b))),
+            "newest" => shown.sort_by(|a, b| b.updated.cmp(&a.updated).then(by_name(a, b))),
+            _ => shown.sort_by(|a, b| (!favorites.contains(&a.id)).cmp(&!favorites.contains(&b.id)).then(by_name(a, b))),
         }
         if shown.is_empty() {
             let why = match (self.plugins.show, q.is_empty()) {
                 (_, false) => "Nothing matches that.",
-                (Show::Favorites, _) => "No favorites yet: star a plugin or skin to keep it here.",
-                (Show::Skins, _) => "No skins in the Library yet.",
+                (Show::Favorites, _) => "No favorites yet: star a plugin to keep it here.",
                 _ => "The library is empty for now.",
             };
             ui.label(RichText::new(why).color(theme::MUTED()));
@@ -515,13 +726,12 @@ impl IngleApp {
         for row in shown.chunks(cols) {
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 12.0;
-                for it in row {
+                for e in row {
                     let mut open = false;
-                    let key = it.key();
                     // A Ui that senses clicks behind the card's own buttons (it's registered before them),
                     // laid out top to bottom (a Frame takes its parent's layout, and this row's is sideways).
                     let card = ui.scope_builder(
-                        egui::UiBuilder::new().id_salt(("plugin-card", &key)).layout(egui::Layout::top_down(egui::Align::Min)).sense(Sense::click()),
+                        egui::UiBuilder::new().id_salt(("plugin-card", &e.id)).layout(egui::Layout::top_down(egui::Align::Min)).sense(Sense::click()),
                         |ui| {
                             let hovered = ui.response().hovered();
                             let stroke = if hovered { theme::ELEV2().gamma_multiply(1.6) } else { theme::LINE() };
@@ -530,71 +740,49 @@ impl IngleApp {
                                 ui.set_width(card_w - 34.0);
                                 let top = ui.min_rect().top();
                                 ui.horizontal(|ui| {
-                                    match it {
-                                        Item::Plugin(e) => self.plugin_icon(ui, &e.id, e.kind, 48.0),
-                                        Item::Skin(s) => self.skin_picture(ui, &s.id, vec2(48.0, 48.0)),
-                                    }
+                                    self.plugin_icon(ui, &e.id, e.kind, 48.0);
                                     ui.add_space(4.0);
                                     ui.vertical(|ui| {
                                         ui.set_max_width(ui.available_width() - 30.0);
-                                        ui.add(egui::Label::new(RichText::new(it.name()).font(theme::bold_font(17.0)).color(theme::TEXT())).truncate());
+                                        ui.add(egui::Label::new(RichText::new(&e.name).font(theme::bold_font(17.0)).color(theme::TEXT())).truncate());
                                         ui.horizontal(|ui| {
-                                            match it {
-                                                Item::Plugin(e) => kind_pill(ui, e.kind),
-                                                Item::Skin(_) => skin_pill(ui),
-                                            }
-                                            self.author_link(ui, it.author());
+                                            kind_pill(ui, e.kind);
+                                            self.author_link(ui, &e.author);
                                         });
                                     });
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                                        if star_button(ui, favorites.contains(&key)).clicked() {
-                                            acts.push(Act::ToggleFavorite(key.clone()));
+                                        if star_button(ui, favorites.contains(&e.id)).clicked() {
+                                            acts.push(Act::ToggleFavorite(e.id.clone()));
                                         }
                                     });
                                 });
                                 ui.add_space(10.0);
-                                let mut job = egui::text::LayoutJob::simple(it.summary().to_string(), egui::TextStyle::Body.resolve(ui.style()), theme::BODY(), ui.available_width());
+                                let mut job = egui::text::LayoutJob::simple(e.summary.clone(), egui::TextStyle::Body.resolve(ui.style()), theme::BODY(), ui.available_width());
                                 job.wrap.max_rows = 3;
                                 ui.label(job);
                                 let used = ui.min_rect().bottom() - top;
                                 ui.add_space((CARD_H - 30.0 - used).max(10.0));
                                 ui.horizontal(|ui| {
                                     ui.set_min_height(30.0);
-                                    match it {
-                                        Item::Plugin(e) => {
-                                            let size = e.size_for(super::install::os()).max(e.wasm.as_ref().map(|w| w.size).unwrap_or(0));
-                                            // (With an update to offer, its button says the version, and
-                                            // there's no room for this as well.)
-                                            let update = self.plugins.installed.get(&e.id).is_some_and(|p| self.plugins.update_for(p).is_some());
-                                            if !update {
-                                                ui.label(RichText::new(if size > 0 { format!("{} · {}", e.version, size_text(size)) } else { e.version.clone() }).size(12.5).color(theme::DIM()));
-                                            }
-                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                if ui.button("Details").clicked() {
-                                                    open = true;
-                                                }
-                                                self.plugin_action(ui, e, acts);
-                                            });
-                                        }
-                                        Item::Skin(sk) => {
-                                            let update = self.plugins.skins.get(&sk.id).is_some_and(|i| self.plugins.skin_update_for(i).is_some());
-                                            if !update {
-                                                ui.label(RichText::new(format!("{} · {}", sk.version, size_text(sk.size()))).size(12.5).color(theme::DIM()));
-                                            }
-                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                if ui.button("Details").clicked() {
-                                                    open = true;
-                                                }
-                                                self.skin_action(ui, sk, st, acts);
-                                            });
-                                        }
+                                    let size = e.size_for(super::install::os()).max(e.wasm.as_ref().map(|w| w.size).unwrap_or(0));
+                                    // (With an update to offer, its button says the version, and
+                                    // there's no room for this as well.)
+                                    let update = self.plugins.installed.get(&e.id).is_some_and(|p| self.plugins.update_for(p).is_some());
+                                    if !update {
+                                        ui.label(RichText::new(if size > 0 { format!("{} · {}", e.version, size_text(size)) } else { e.version.clone() }).size(12.5).color(theme::DIM()));
                                     }
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if ui.button("Details").clicked() {
+                                            open = true;
+                                        }
+                                        self.plugin_action(ui, e, acts);
+                                    });
                                 });
                             });
                         },
                     );
                     if open || card.response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
-                        self.plugins.detail = Some(key.clone());
+                        self.plugins.detail = Some(e.id.clone());
                     }
                 }
             });
@@ -602,7 +790,7 @@ impl IngleApp {
         }
     }
 
-    /// "by <author>" under a plugin or skin: click it for everything they made.
+    /// "by <author>" under a plugin or skin: click it for everything they made (of that kind).
     fn author_link(&mut self, ui: &mut egui::Ui, author: &str) {
         if author.trim().is_empty() {
             return;
@@ -611,9 +799,18 @@ impl IngleApp {
         if resp.hovered() {
             ui.painter().hline(resp.rect.x_range(), resp.rect.bottom() - 1.0, Stroke::new(1.0f32, theme::MUTED()));
         }
-        if resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(format!("Everything by {author}")).clicked() {
-            self.plugins.author = Some(author.trim().to_string());
-            self.plugins.detail = None;
+        let skins = self.plugins.page == Page::Skins;
+        let tip = format!("Every {} by {author}", if skins { "skin" } else { "plugin" });
+        if resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tip).clicked() {
+            if skins {
+                self.plugins.skins_author = Some(author.trim().to_string());
+                self.plugins.skin_detail = None;
+                self.plugins.skins_tab = SkinsTab::Gallery;
+            } else {
+                self.plugins.author = Some(author.trim().to_string());
+                self.plugins.detail = None;
+                self.plugins.tab = Tab::Library;
+            }
         }
     }
 
@@ -633,7 +830,8 @@ impl IngleApp {
             }
             None => {
                 ui.painter().rect_filled(r, CornerRadius::same((size.y / 4.5).min(14.0) as u8), theme::ELEV2());
-                icons::palette(ui.painter(), r.shrink(size.y.min(size.x) * 0.2));
+                let side = (size.y.min(size.x) * 0.6).min(64.0);
+                icons::palette(ui.painter(), Rect::from_center_size(r.center(), vec2(side, side)));
             }
         }
     }
@@ -666,12 +864,12 @@ impl IngleApp {
 
     fn skin_detail(&mut self, ui: &mut egui::Ui, id: &str, st: &AppState, acts: &mut Vec<Act>) {
         let Some(s) = self.plugins.library.as_ref().and_then(|l| l.find_skin(id)).cloned() else {
-            self.plugins.detail = None;
+            self.plugins.skin_detail = None;
             return;
         };
         ui.set_max_width(860.0);
-        if ui.add(egui::Button::new(RichText::new("← All plugins and skins").color(theme::LINK())).frame(false)).clicked() {
-            self.plugins.detail = None;
+        if ui.add(egui::Button::new(RichText::new("← All skins").color(theme::LINK())).frame(false)).clicked() {
+            self.plugins.skin_detail = None;
         }
         ui.add_space(10.0);
         if self.plugins.icons.contains_key(&format!("skin:{id}")) {
@@ -689,7 +887,6 @@ impl IngleApp {
             });
         });
         ui.horizontal(|ui| {
-            skin_pill(ui);
             let mut bits = vec![format!("Version {}", s.version)];
             if !s.license.is_empty() {
                 bits.push(s.license.clone());
@@ -746,16 +943,13 @@ impl IngleApp {
     }
 
     fn plugin_detail(&mut self, ui: &mut egui::Ui, id: &str, st: &AppState, acts: &mut Vec<Act>) {
-        if let Some(skin) = id.strip_prefix("skin:") {
-            return self.skin_detail(ui, skin, st, acts);
-        }
         let Some(e) = self.plugins.library.as_ref().and_then(|l| l.find(id)).cloned() else {
             self.plugins.detail = None;
             return;
         };
         // Lines that span a wide window are hard to read.
         ui.set_max_width(860.0);
-        if ui.add(egui::Button::new(RichText::new("← All plugins and skins").color(theme::LINK())).frame(false)).clicked() {
+        if ui.add(egui::Button::new(RichText::new("← All plugins").color(theme::LINK())).frame(false)).clicked() {
             self.plugins.detail = None;
         }
         ui.add_space(10.0);
@@ -861,7 +1055,7 @@ impl IngleApp {
         });
     }
 
-    fn installed_list(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
+    fn installed_list(&mut self, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
         if let Some(tried) = self.plugins.tried.clone().filter(|t| self.plugins.addons.contains_key(t)) {
             let name = self.plugins.addons[&tried].info.name.clone();
             egui::Frame::new().fill(theme::ELEV()).stroke(Stroke::new(1.0f32, theme::EMBER2())).corner_radius(10).inner_margin(12).show(ui, |ui| {
@@ -891,11 +1085,10 @@ impl IngleApp {
             ui.add_space(10.0);
         }
         let list = self.plugins.installed.plugins.clone();
-        if list.is_empty() && self.plugins.skins.skins.is_empty() {
-            ui.label(RichText::new("Nothing installed yet. Have a look in the Library.").color(theme::MUTED()));
+        if list.is_empty() {
+            ui.label(RichText::new("No plugins installed yet. Have a look in the Library.").color(theme::MUTED()));
             return;
         }
-        self.installed_skins(ui, st, acts);
         for p in list {
             egui::Frame::new().fill(theme::ELEV()).stroke(Stroke::new(1.0f32, theme::LINE())).corner_radius(10).inner_margin(12).show(ui, |ui| {
                 card_visuals(ui);
@@ -953,84 +1146,99 @@ impl IngleApp {
         }
     }
 
-    /// Installed skins (first in the Installed tab), and Campfire.
-    fn installed_skins(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
-        let skins = self.plugins.skins.skins.clone();
-        if skins.is_empty() {
-            return;
-        }
-        ui.label(RichText::new("SKINS").font(theme::bold_font(11.5)).color(theme::DIM()));
-        ui.add_space(4.0);
-        for s in skins {
+    /// The Skins page's Yours: Campfire, then the skins installed, each to wear.
+    fn yours_list(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
+        let row = |ui: &mut egui::Ui, body: &mut dyn FnMut(&mut egui::Ui)| {
             egui::Frame::new().fill(theme::ELEV()).stroke(Stroke::new(1.0f32, theme::LINE())).corner_radius(10).inner_margin(12).show(ui, |ui| {
                 card_visuals(ui);
                 ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    self.skin_picture(ui, &s.id, vec2(64.0, 40.0));
-                    ui.add_space(4.0);
-                    ui.vertical(|ui| {
-                        ui.set_max_width((ui.available_width() - 300.0).max(160.0));
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(&s.name).font(theme::bold_font(15.0)).color(theme::TEXT()));
-                            skin_pill(ui);
-                            ui.label(RichText::new(format!("Version {}", s.version)).size(12.5).color(theme::DIM()));
-                        });
-                        let listed = self.plugins.library.as_ref().map(|l| l.find_skin(&s.id).is_some());
-                        if listed == Some(false) {
-                            ui.label(RichText::new("No longer in the Ingle Library: remove it.").size(12.5).color(theme::LIVE()));
-                        } else if let Some(e) = self.plugins.skin_update_for(&s) {
-                            ui.label(RichText::new(format!("Version {} is out.", e.version)).size(12.5).color(theme::ONLINE()));
-                        } else {
-                            self.author_link(ui, &s.author);
-                        }
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Remove").clicked() {
-                            acts.push(Act::RemoveSkin(s.id.clone()));
-                        }
-                        match self.plugins.library.as_ref().and_then(|l| l.find_skin(&s.id)).cloned() {
-                            Some(e) => {
-                                if ui.button("Details").clicked() {
-                                    self.plugins.tab = Tab::Library;
-                                    self.plugins.detail = Some(format!("skin:{}", s.id));
-                                }
-                                self.skin_action(ui, &e, st, acts);
-                            }
-                            None if st.settings.skin == s.id => {
-                                if ui.button("Take off").clicked() {
-                                    acts.push(Act::WearSkin(String::new()));
-                                }
-                            }
-                            None => {}
-                        }
-                    });
-                });
+                ui.horizontal(|ui| body(ui));
             });
             ui.add_space(8.0);
-        }
-        ui.add_space(8.0);
-        if !self.plugins.installed.plugins.is_empty() {
-            ui.label(RichText::new("PLUGINS").font(theme::bold_font(11.5)).color(theme::DIM()));
+        };
+        let worn = st.settings.skin.clone();
+        row(ui, &mut |ui| {
+            crate::appearance::campfire_swatch(ui, vec2(96.0, 54.0));
             ui.add_space(4.0);
+            ui.vertical(|ui| {
+                ui.label(RichText::new("Campfire").font(theme::bold_font(15.0)).color(theme::TEXT()));
+                ui.label(RichText::new("Ingle's own look").size(12.5).color(theme::MUTED()));
+                self.author_link(ui, "Firelit Games");
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if worn.is_empty() {
+                    ui.label(RichText::new("✓ Wearing").color(theme::ONLINE()));
+                } else if ui.add(egui::Button::new("Wear").min_size(vec2(72.0, 30.0))).clicked() {
+                    acts.push(Act::WearSkin(String::new()));
+                }
+            });
+        });
+        let skins = self.plugins.skins.skins.clone();
+        for s in skins {
+            row(ui, &mut |ui| {
+                self.skin_picture(ui, &s.id, vec2(96.0, 54.0));
+                ui.add_space(4.0);
+                ui.vertical(|ui| {
+                    ui.set_max_width((ui.available_width() - 330.0).max(160.0));
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(&s.name).font(theme::bold_font(15.0)).color(theme::TEXT()));
+                        ui.label(RichText::new(format!("Version {}", s.version)).size(12.5).color(theme::DIM()));
+                    });
+                    self.author_link(ui, &s.author);
+                    let listed = self.plugins.library.as_ref().map(|l| l.find_skin(&s.id).is_some());
+                    if listed == Some(false) {
+                        ui.label(RichText::new("No longer in the Ingle Library: remove it.").size(12.5).color(theme::LIVE()));
+                    } else if let Some(e) = self.plugins.skin_update_for(&s) {
+                        ui.label(RichText::new(format!("Version {} is out.", e.version)).size(12.5).color(theme::ONLINE()));
+                    }
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Remove").clicked() {
+                        acts.push(Act::RemoveSkin(s.id.clone()));
+                    }
+                    match self.plugins.library.as_ref().and_then(|l| l.find_skin(&s.id)).cloned() {
+                        Some(e) => {
+                            if ui.button("Details").clicked() {
+                                self.plugins.skins_tab = SkinsTab::Gallery;
+                                self.plugins.skin_detail = Some(s.id.clone());
+                            }
+                            self.skin_action(ui, &e, st, acts);
+                        }
+                        None if worn == s.id => {
+                            if ui.button("Take off").clicked() {
+                                acts.push(Act::WearSkin(String::new()));
+                            }
+                        }
+                        None => {}
+                    }
+                });
+            });
+        }
+        if self.plugins.skins.skins.is_empty() {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("No skins installed yet.").color(theme::MUTED()));
+                if ui.add(egui::Button::new(RichText::new("Find one in the Gallery").color(theme::LINK())).frame(false)).clicked() {
+                    self.plugins.skins_tab = SkinsTab::Gallery;
+                }
+            });
         }
     }
 
-    /// What I sent in, and where each stands (asked for with Check).
-    fn sent_in_list(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
+    /// What I sent in (skins, or plugins), and where each stands (asked for with Check).
+    fn sent_in_list(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>, skins: bool) {
         ui.horizontal(|ui| {
             ui.label(RichText::new("What you sent in").font(theme::bold_font(17.0)).color(theme::TEXT()));
             if ui.button(if st.my_submissions.is_some() { "Check again" } else { "Check" }).clicked() {
                 acts.push(Act::MySubmissions);
             }
         });
-        ui.add(
-            egui::Label::new(
-                RichText::new("Plugins and skins sent from this Ingle (or by Claude through its connector), and whether they were approved.").color(theme::MUTED()),
-            )
-            .wrap(),
-        );
+        let what = if skins { "Skins" } else { "Plugins" };
+        ui.add(egui::Label::new(RichText::new(format!("{what} sent from this Ingle (or by Claude through its connector), and whether they were approved.")).color(theme::MUTED())).wrap());
         ui.add_space(6.0);
-        match &st.my_submissions {
+        let mine: Option<Result<Vec<SubmissionEntry>, String>> =
+            st.my_submissions.as_ref().map(|r| r.as_ref().map(|l| l.iter().filter(|e| (e.kind == ingle_proto::control::SKIN_KIND) == skins).cloned().collect()).map_err(|e| e.clone()));
+        match &mine {
             None => {}
             Some(Err(e)) => note(ui, &format!("Couldn't check: {e}"), true),
             Some(Ok(list)) if list.is_empty() => {
@@ -1105,26 +1313,7 @@ impl IngleApp {
             crate::images::pick_async(crate::images::PickFor::AddonFile, false, ui.ctx());
         }
         ui.add_space(22.0);
-        section(
-            ui,
-            "Make a skin with Claude",
-            "Skins change Ingle's colors, put a picture behind the chat, and bring fonts and sounds of their own. Set up the Claude connector, \
-             then ask Claude to make you one: it can show it to you right here as it goes, and send it in for the Ingle Library. Once it's \
-             approved, anyone can wear it.",
-        );
-        ui.horizontal(|ui| {
-            if ui.add(theme::primary_button("Set up the Claude connector…")).clicked() {
-                self.ui.dialog = Some(Dialog::Settings { tab: 6 });
-            }
-            if ui.button("Try a skin folder…").on_hover_text("A skin you're making yourself: Ingle wears it until you stop, and again whenever you save a change").clicked() {
-                crate::images::pick_folder_async(crate::images::FolderFor::TrySkin, "Choose the skin's folder (with its skin.json)", ui.ctx());
-            }
-            if ui.add(egui::Button::new(RichText::new("How skins are made").color(theme::LINK())).frame(false)).clicked() {
-                ui.ctx().open_url(egui::OpenUrl::new_tab(SKINS_URL));
-            }
-        });
-        ui.add_space(22.0);
-        self.sent_in_list(ui, st, acts);
+        self.sent_in_list(ui, st, acts, false);
         ui.add_space(22.0);
         section(
             ui,
@@ -1412,7 +1601,7 @@ impl IngleApp {
                     acts.push(Act::OpenSubmission { key: key.to_string(), id: e.id });
                 }
                 if skin && files.is_some() {
-                    let trying = matches!(self.looks.trying_name(), Some((_, crate::looks::Trial::SentIn { key: k, id })) if k == key && *id == e.id);
+                    let trying = matches!(self.looks.trying_name(), Some((_, _, crate::looks::Trial::SentIn { key: k, id })) if k == key && *id == e.id);
                     if trying {
                         if ui.button("Stop trying it").clicked() {
                             acts.push(Act::StopTryingSkin);
