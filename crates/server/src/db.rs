@@ -1,5 +1,6 @@
 //! SQLite persistence: members, channels, message history, reactions and invites.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -241,6 +242,34 @@ fn kind_from_i(v: i64) -> ChannelKind {
     if v == 1 { ChannelKind::Voice } else { ChannelKind::Text }
 }
 
+/// Role ids as kept in a channel's row ("3,7").
+fn role_list(ids: &[RoleId]) -> String {
+    ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",")
+}
+
+fn parse_roles(s: &str) -> Vec<RoleId> {
+    s.split(',').filter_map(|x| x.trim().parse().ok()).collect()
+}
+
+/// A channel from a row of `CHANNEL_COLUMNS` (then its newest message and author, if asked for).
+fn channel_row(r: &rusqlite::Row, newest: bool) -> rusqlite::Result<Channel> {
+    Ok(Channel {
+        id: r.get(0)?,
+        kind: kind_from_i(r.get(1)?),
+        name: r.get(2)?,
+        topic: r.get(3)?,
+        position: r.get(4)?,
+        private: r.get::<_, i64>(5)? != 0,
+        view_roles: parse_roles(&r.get::<_, String>(6)?),
+        read_only: r.get::<_, i64>(7)? != 0,
+        post_roles: parse_roles(&r.get::<_, String>(8)?),
+        last_message: if newest { r.get(9)? } else { None },
+        last_from: if newest { r.get(10)? } else { None },
+    })
+}
+
+const CHANNEL_COLUMNS: &str = "c.id, c.kind, c.name, c.topic, c.position, c.private, c.view_roles, c.read_only, c.post_roles";
+
 /// Columns added after the first release.
 fn migrate(c: &Connection) -> Result<()> {
     let has_avatar = c
@@ -253,6 +282,16 @@ fn migrate(c: &Connection) -> Result<()> {
     let has_joined_with = c.prepare("SELECT 1 FROM pragma_table_info('users') WHERE name = 'joined_with'")?.exists([])?;
     if !has_joined_with {
         c.execute_batch("ALTER TABLE users ADD COLUMN joined_with TEXT")?;
+    }
+    // Private and read-only channels (0.8): the roles are comma-separated ids.
+    let has_access = c.prepare("SELECT 1 FROM pragma_table_info('channels') WHERE name = 'private'")?.exists([])?;
+    if !has_access {
+        c.execute_batch(
+            "ALTER TABLE channels ADD COLUMN private INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE channels ADD COLUMN view_roles TEXT NOT NULL DEFAULT '';
+             ALTER TABLE channels ADD COLUMN read_only INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE channels ADD COLUMN post_roles TEXT NOT NULL DEFAULT '';",
+        )?;
     }
     // Signed submissions and new versions of them, and the owner's note to the sender (0.7.5).
     for (column, kind) in [("author_id", "TEXT NOT NULL DEFAULT ''"), ("update_of", "INTEGER NOT NULL DEFAULT 0"), ("changes", "TEXT NOT NULL DEFAULT ''"), ("note", "TEXT NOT NULL DEFAULT ''")] {
@@ -1043,58 +1082,72 @@ impl Db {
     pub fn channels(&self) -> Vec<Channel> {
         let c = self.conn.lock();
         let mut st = c
-            .prepare(
-                "SELECT c.id, c.kind, c.name, c.topic, c.position, m.id, m.author \
+            .prepare(&format!(
+                "SELECT {CHANNEL_COLUMNS}, m.id, m.author \
                  FROM channels c LEFT JOIN messages m ON m.id = (SELECT MAX(id) FROM messages WHERE channel_id = c.id) \
-                 WHERE c.kind < 2 ORDER BY c.kind, c.position, c.id",
-            )
+                 WHERE c.kind < 2 ORDER BY c.kind, c.position, c.id"
+            ))
             .expect("valid SQL");
-        st.query_map([], |r| {
-            Ok(Channel {
-                id: r.get(0)?,
-                kind: kind_from_i(r.get(1)?),
-                name: r.get(2)?,
-                topic: r.get(3)?,
-                position: r.get(4)?,
-                last_message: r.get(5)?,
-                last_from: r.get(6)?,
-            })
-        })
-        .map(|rows| rows.filter_map(|r| r.ok()).collect())
-        .unwrap_or_default()
+        st.query_map([], |r| channel_row(r, true)).map(|rows| rows.filter_map(|r| r.ok()).collect()).unwrap_or_default()
     }
 
     pub fn channel(&self, id: ChannelId) -> Option<Channel> {
         self.conn
             .lock()
-            .query_row("SELECT id, kind, name, topic, position FROM channels WHERE id = ?1 AND kind < 2", [id], |r| {
-                Ok(Channel {
-                    id: r.get(0)?,
-                    kind: kind_from_i(r.get(1)?),
-                    name: r.get(2)?,
-                    topic: r.get(3)?,
-                    position: r.get(4)?,
-                    last_message: None,
-                    last_from: None,
-                })
-            })
+            .query_row(&format!("SELECT {CHANNEL_COLUMNS} FROM channels c WHERE c.id = ?1 AND c.kind < 2"), [id], |r| channel_row(r, false))
             .optional()
             .ok()
             .flatten()
     }
 
     pub fn create_channel(&self, name: &str, kind: ChannelKind) -> Result<Channel> {
+        self.create_channel_with(name, kind, false, &[])
+    }
+
+    /// A new channel, private from the start (seen only by `view_roles`) or not.
+    pub fn create_channel_with(&self, name: &str, kind: ChannelKind, private: bool, view_roles: &[RoleId]) -> Result<Channel> {
         let c = self.conn.lock();
         let position: i32 = c
             .query_row("SELECT COALESCE(MAX(position), -1) + 1 FROM channels WHERE kind = ?1", [kind_to_i(kind)], |r| {
                 r.get(0)
             })
             .unwrap_or(0);
+        let view_roles = if private { view_roles.to_vec() } else { Vec::new() };
         c.execute(
-            "INSERT INTO channels(kind, name, topic, position, created_at) VALUES (?1, ?2, '', ?3, ?4)",
-            params![kind_to_i(kind), name, position, now_ms()],
+            "INSERT INTO channels(kind, name, topic, position, created_at, private, view_roles) VALUES (?1, ?2, '', ?3, ?4, ?5, ?6)",
+            params![kind_to_i(kind), name, position, now_ms(), private as i64, role_list(&view_roles)],
         )?;
-        Ok(Channel { id: c.last_insert_rowid(), kind, name: name.to_string(), topic: String::new(), position, last_message: None, last_from: None })
+        Ok(Channel { id: c.last_insert_rowid(), kind, name: name.to_string(), position, private, view_roles, ..Default::default() })
+    }
+
+    /// Who can see a channel, and who can post in it.
+    pub fn set_channel_access(&self, id: ChannelId, private: bool, view_roles: &[RoleId], read_only: bool, post_roles: &[RoleId]) -> Result<Option<Channel>> {
+        let view_roles = if private { view_roles } else { &[] };
+        let post_roles = if read_only { post_roles } else { &[] };
+        self.conn.lock().execute(
+            "UPDATE channels SET private = ?2, view_roles = ?3, read_only = ?4, post_roles = ?5 WHERE id = ?1 AND kind < 2",
+            params![id, private as i64, role_list(view_roles), read_only as i64, role_list(post_roles)],
+        )?;
+        Ok(self.channel(id))
+    }
+
+    /// Everyone here who can see a channel (admins and the owner always can).
+    pub fn viewers(&self, ch: &Channel) -> Vec<UserId> {
+        let c = self.conn.lock();
+        let mut st = c.prepare_cached("SELECT id, role FROM users WHERE banned = 0").expect("valid SQL");
+        let users: Vec<(String, i64)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).map(|rows| rows.filter_map(|r| r.ok()).collect()).unwrap_or_default();
+        let mut st = c.prepare_cached("SELECT user_id, role_id FROM member_roles").expect("valid SQL");
+        let mut roles: HashMap<String, Vec<RoleId>> = HashMap::new();
+        if let Ok(rows) = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, RoleId>(1)?))) {
+            for (u, r) in rows.filter_map(|r| r.ok()) {
+                roles.entry(u).or_default().push(r);
+            }
+        }
+        users
+            .into_iter()
+            .filter(|(u, role)| ch.visible_to(Role::from_i64(*role).is_admin(), roles.get(u).map(|v| v.as_slice()).unwrap_or(&[])))
+            .map(|(u, _)| u)
+            .collect()
     }
 
     pub fn update_channel(&self, id: ChannelId, name: Option<&str>, topic: Option<&str>) -> Result<Option<Channel>> {

@@ -116,15 +116,7 @@ impl IngleApp {
                 (None, Some(g)) => s.group_name(g, &st.my_uid),
                 _ => return None,
             };
-            Some(ingle_proto::control::Channel {
-                id: channel,
-                kind: ChannelKind::Text,
-                name,
-                topic: String::new(),
-                position: 0,
-                last_message: None,
-                last_from: None,
-            })
+            Some(ingle_proto::control::Channel { id: channel, kind: ChannelKind::Text, name, ..Default::default() })
         });
         let Some(ch) = ch else { return };
         let key = s.key.clone();
@@ -184,6 +176,11 @@ impl IngleApp {
                             icons::chat(ui.painter(), r, theme::DIM());
                         } else {
                             icons::hash(ui.painter(), r, theme::DIM());
+                        }
+                        if ch.private {
+                            let lr = Rect::from_center_size(r.right_top() + vec2(-1.0, 4.0), vec2(12.0, 12.0));
+                            ui.painter().circle_filled(lr.center() + vec2(0.0, 1.0), 6.5, theme::inner(theme::MAIN(), true));
+                            icons::lock(ui.painter(), lr, theme::DIM());
                         }
                         let ctx = ui.ctx().clone();
                         crate::emoji::name_line(ui, &ch.name, theme::bold_font(15.5), theme::TEXT(), None, &mut |id| self.custom_emoji_tex(&ctx, &key, id));
@@ -588,6 +585,12 @@ impl IngleApp {
                 } else {
                     icons::hash(ui.painter(), r.shrink(16.0), theme::TEXT());
                 }
+                if ch.private {
+                    let lr = Rect::from_center_size(r.right_top() + vec2(-8.0, 10.0), vec2(20.0, 20.0));
+                    ui.painter().circle_filled(lr.center() + vec2(0.0, 1.0), 13.0, theme::MAIN());
+                    ui.painter().circle_filled(lr.center() + vec2(0.0, 1.0), 11.0, theme::ELEV2());
+                    icons::lock(ui.painter(), lr.shrink(3.0), theme::TEXT());
+                }
                 ui.add_space(8.0);
                 let title = if ch.kind == ChannelKind::Voice { format!("{} chat", ch.name) } else { format!("Welcome to #{}!", ch.name) };
                 let w = ui.available_width();
@@ -595,7 +598,7 @@ impl IngleApp {
                 let sub = if ch.kind == ChannelKind::Voice {
                     "Messages here stay with the voice channel — handy for links while you talk.".to_string()
                 } else {
-                    format!("This is the start of the #{} channel.", ch.name)
+                    format!("This is the start of the #{} {}channel.", ch.name, if ch.private { "private " } else { "" })
                 };
                 // The channel's topic first, when it has one (it's also in the header).
                 if !ch.topic.trim().is_empty() {
@@ -930,6 +933,21 @@ impl IngleApp {
             }
             ui.painter().text(pos2(r.left() + 28.0, r.center().y), egui::Align2::LEFT_CENTER, text, theme::font(12.5), theme::MUTED());
             ui.ctx().request_repaint_after(Duration::from_millis(50));
+        }
+
+        // A read-only channel (an announcements channel, say), like Discord's: only some roles
+        // can write in it, everyone who can see it can read it.
+        if !s.can_post(ch.id) {
+            egui::Frame::new().fill(theme::ELEV().gamma_multiply(0.6)).corner_radius(8).inner_margin(egui::Margin::symmetric(14, 13)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                    icons::lock(ui.painter(), r, theme::DIM());
+                    ui.add_space(4.0);
+                    ui.label(RichText::new("You don't have permission to send messages in this channel.").size(14.0).color(theme::DIM()));
+                });
+            });
+            return;
         }
 
         let draft_key = (key.clone(), ch.id);

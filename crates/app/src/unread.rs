@@ -139,7 +139,7 @@ mod tests {
     use super::*;
 
     fn channel(id: i64, name: &str) -> Channel {
-        Channel { id, kind: ChannelKind::Text, name: name.into(), topic: String::new(), position: 0, last_message: None, last_from: None }
+        Channel { id, kind: ChannelKind::Text, name: name.into(), ..Default::default() }
     }
 
     fn state() -> AppState {

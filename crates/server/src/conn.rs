@@ -432,7 +432,11 @@ async fn file_stream(hub: &Hub, uid: &str, mut send: quinn::SendStream, mut recv
                 None => row.kind == FileKind::Attachment && row.owner != uid,
                 Some(m) => match hub.db.get_message(m) {
                     None => true,
-                    Some(msg) => hub.db.private_members(msg.channel_id).is_some_and(|who| !who.iter().any(|w| w == uid)),
+                    Some(msg) => match hub.db.private_members(msg.channel_id) {
+                        Some(who) => !who.iter().any(|w| w == uid),
+                        // A picture in a private channel is only for those who can see it.
+                        None => hub.db.channel(msg.channel_id).is_some_and(|ch| !hub.sees(uid, &ch)),
+                    },
                 },
             };
             let bytes = if private { Vec::new() } else { tokio::fs::read(&path).await.unwrap_or_default() };
@@ -651,6 +655,7 @@ fn cost(req: &Request) -> f64 {
         | Request::AddEmoji { .. }
         | Request::AddSound { .. }
         | Request::CreateChannel { .. }
+        | Request::SetChannelAccess { .. }
         | Request::CreateRole { .. }
         | Request::SetAvatar { .. }
         | Request::SetServerIcon { .. }
@@ -758,8 +763,9 @@ impl Ctx<'_> {
     /// A text channel, or a direct message or group I'm in.
     fn can_see(&self, channel_id: ChannelId) -> Result<(), (ErrorCode, String)> {
         let db = &self.hub.db;
-        if db.channel(channel_id).is_some() {
-            return Ok(());
+        if let Some(ch) = db.channel(channel_id) {
+            // (A private channel only for the roles it's for, and admins: see `Channel::visible_to`.)
+            return if self.hub.sees(&self.uid, &ch) { Ok(()) } else { Err((ErrorCode::NotFound, "No such channel.".into())) };
         }
         if let Some((a, b)) = db.dm_members(channel_id) {
             if a == self.uid || b == self.uid {
@@ -771,6 +777,27 @@ impl Ctx<'_> {
             }
         }
         Err((ErrorCode::NotFound, "No such channel.".into()))
+    }
+
+    /// Where I can send messages: a channel I may post in, or a conversation I'm in.
+    fn can_post(&self, channel_id: ChannelId) -> Result<(), (ErrorCode, String)> {
+        self.can_see(channel_id)?;
+        if let Some(ch) = self.hub.db.channel(channel_id) {
+            let (admin, roles) = self.hub.access_of(&self.uid);
+            if !ch.postable_by(admin, &roles) {
+                return Err((ErrorCode::Forbidden, "You don't have permission to send messages in this channel.".into()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Roles that exist here, each once (a channel's access lists).
+    fn real_roles(&self, ids: &[RoleId]) -> Vec<RoleId> {
+        let all = self.hub.db.roles();
+        let mut v: Vec<RoleId> = ids.iter().copied().filter(|id| all.iter().any(|r| r.id == *id)).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
     }
 
     /// The others in a private conversation I'm in (a direct message's other person, or a
@@ -883,7 +910,7 @@ impl Ctx<'_> {
                     None if !attachments.is_empty() && content.trim().is_empty() => String::new(),
                     None => return bad("message is empty or too long"),
                 };
-                self.can_see(channel_id)?;
+                self.can_post(channel_id)?;
                 self.not_blocked_in(channel_id)?;
                 let reply_to = reply_to.filter(|id| db.get_message(*id).map(|m| m.channel_id == channel_id).unwrap_or(false));
                 let message = db
@@ -911,7 +938,7 @@ impl Ctx<'_> {
                 let Some(m) = db.get_message(message_id) else { return Ok(Event::Ok) };
                 // In direct messages only the author can; elsewhere moderators can too.
                 let in_dm = db.private_members(m.channel_id).is_some();
-                if m.author != self.uid && (in_dm || self.perms() & perm::MANAGE_MESSAGES == 0) {
+                if m.author != self.uid && (in_dm || self.perms() & perm::MANAGE_MESSAGES == 0 || self.can_see(m.channel_id).is_err()) {
                     return Err((ErrorCode::Forbidden, "You can't delete that message.".into()));
                 }
                 let files = db.delete_message(message_id).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
@@ -970,7 +997,7 @@ impl Ctx<'_> {
                 }
                 Ok(Event::History { channel_id, messages, complete })
             }
-            Request::Typing { channel_id } => match self.can_see(channel_id).and_then(|_| self.not_blocked_in(channel_id)) {
+            Request::Typing { channel_id } => match self.can_post(channel_id).and_then(|_| self.not_blocked_in(channel_id)) {
                 Ok(()) => hub.typing(self.conn_id, &self.uid, channel_id),
                 Err(_) => Ok(Event::Ok),
             },
@@ -1039,11 +1066,25 @@ impl Ctx<'_> {
                 Ok(Event::DmOpened { dm: Dm { id, with: user_id, last_message, last_from } })
             }
 
-            Request::CreateChannel { name, kind } => {
+            Request::CreateChannel { name, kind, private, view_roles } => {
                 self.require(perm::MANAGE_CHANNELS, "manage channels")?;
                 let Some(name) = clean_channel_name(&name, kind) else { return bad("channel name is empty") };
-                let channel = db.create_channel(&name, kind).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
-                hub.broadcast(Event::ChannelUpserted { channel });
+                let view_roles = self.real_roles(&view_roles);
+                let channel = db.create_channel_with(&name, kind, private, &view_roles).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                hub.channel_changed(&channel);
+                Ok(Event::Ok)
+            }
+            Request::SetChannelAccess { channel_id, private, view_roles, read_only, post_roles } => {
+                self.require(perm::MANAGE_CHANNELS, "manage channels")?;
+                if db.channel(channel_id).is_none() {
+                    return Err((ErrorCode::NotFound, "No such channel.".into()));
+                }
+                let (view_roles, post_roles) = (self.real_roles(&view_roles), self.real_roles(&post_roles));
+                match db.set_channel_access(channel_id, private, &view_roles, read_only, &post_roles) {
+                    Ok(Some(channel)) => hub.channel_changed(&channel),
+                    Ok(None) => {}
+                    Err(e) => return Err((ErrorCode::Internal, e.to_string())),
+                }
                 Ok(Event::Ok)
             }
             Request::UpdateChannel { channel_id, name, topic } => {
@@ -1055,7 +1096,7 @@ impl Ctx<'_> {
                 };
                 let topic = topic.map(|t| t.chars().filter(|c| !c.is_control()).take(300).collect::<String>());
                 if let Ok(Some(channel)) = db.update_channel(channel_id, name.as_deref(), topic.as_deref()) {
-                    hub.broadcast(Event::ChannelUpserted { channel });
+                    hub.channel_changed(&channel);
                 }
                 Ok(Event::Ok)
             }
@@ -1099,6 +1140,8 @@ impl Ctx<'_> {
                 if let Some(member) = hub.member(&user_id) {
                     hub.broadcast(Event::MemberUpserted { member });
                 }
+                // Admins see every channel; members only theirs.
+                hub.access_changed(&user_id);
                 Ok(Event::Ok)
             }
             Request::Kick { user_id } | Request::Ban { user_id } if user_id == self.uid => bad("you can't remove yourself"),
@@ -1309,10 +1352,12 @@ impl Ctx<'_> {
                 }
                 let had = db.delete_role(role_id).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
                 hub.broadcast(Event::RoleDeleted { role_id });
-                for uid in had {
-                    if let Some(member) = hub.member(&uid) {
+                for uid in &had {
+                    if let Some(member) = hub.member(uid) {
                         hub.broadcast(Event::MemberUpserted { member });
                     }
+                    // Channels only that role could see are gone for them.
+                    hub.access_changed(uid);
                 }
                 Ok(Event::Ok)
             }
@@ -1349,6 +1394,8 @@ impl Ctx<'_> {
                 if let Some(member) = hub.member(&user_id) {
                     hub.broadcast(Event::MemberUpserted { member });
                 }
+                // What they can see may have changed with their roles.
+                hub.access_changed(&user_id);
                 Ok(Event::Ok)
             }
             Request::SetAvatar { file_id } => {
@@ -1764,6 +1811,68 @@ mod tests {
 
     fn forbidden(r: Reply) -> bool {
         matches!(r, Err((ErrorCode::Forbidden, _)))
+    }
+
+    #[test]
+    fn private_and_read_only_channels() {
+        let hub = hub();
+        let (owner, admin, mod_, bob) = (uid(), uid(), uid(), uid());
+        hub.db.insert_user(&owner, "Owner", Role::Owner).unwrap();
+        hub.db.insert_user(&admin, "Admin", Role::Admin).unwrap();
+        hub.db.insert_user(&mod_, "Mod", Role::Member).unwrap();
+        hub.db.insert_user(&bob, "Bob", Role::Member).unwrap();
+        let mods = hub.db.create_role("Mods", 0, perm::MANAGE_CHANNELS, false).unwrap();
+        let news = hub.db.create_role("News team", 0, 0, false).unwrap();
+        hub.db.set_member_roles(&mod_, &[mods.id]).unwrap();
+        let mut o = ctx(&hub, &owner);
+        // A private channel only Mods (and admins) can see.
+        assert!(o.handle(Request::CreateChannel { name: "mod chat".into(), kind: ChannelKind::Text, private: true, view_roles: vec![mods.id, 999] }).is_ok());
+        let private = hub.db.channels().into_iter().find(|c| c.name == "mod chat").unwrap();
+        assert!(private.private && private.view_roles == vec![mods.id], "unknown roles are dropped");
+        let send = |c: &mut Ctx, ch: ChannelId, text: &str| {
+            c.handle(Request::SendMessage { channel_id: ch, content: text.into(), reply_to: None, nonce: String::new(), attachments: vec![] })
+        };
+        let (mut a, mut m, mut b) = (ctx(&hub, &admin), ctx(&hub, &mod_), ctx(&hub, &bob));
+        assert!(send(&mut m, private.id, "mods only").is_ok());
+        assert!(send(&mut a, private.id, "admins see everything").is_ok());
+        assert!(send(&mut b, private.id, "let me in").is_err());
+        assert!(b.handle(Request::FetchHistory { channel_id: private.id, before: None, limit: 50 }).is_err());
+        assert!(b.can_see(private.id).is_err() && m.can_see(private.id).is_ok() && a.can_see(private.id).is_ok());
+        // Who gets what's said in it.
+        let mut seen = hub.db.viewers(&private);
+        seen.sort();
+        let mut want = vec![owner.clone(), admin.clone(), mod_.clone()];
+        want.sort();
+        assert_eq!(seen, want);
+        // A moderator who can't see it can't delete in it either.
+        let mid = match hub.db.history(private.id, None, 10).0.first() {
+            Some(m) => m.id,
+            None => panic!("no message"),
+        };
+        let deleters = hub.db.create_role("Deleters", 0, perm::MANAGE_MESSAGES, false).unwrap();
+        hub.db.set_member_roles(&bob, &[deleters.id]).unwrap();
+        assert!(forbidden(b.handle(Request::DeleteMessage { message_id: mid })));
+        // Bob gets the role: he can see it now.
+        hub.db.set_member_roles(&bob, &[mods.id]).unwrap();
+        assert!(send(&mut b, private.id, "thanks").is_ok());
+        hub.db.set_member_roles(&bob, &[]).unwrap();
+        assert!(b.can_see(private.id).is_err());
+
+        // A read-only announcements channel: everyone reads, only the News team posts.
+        let general = hub.db.create_channel("announcements", ChannelKind::Text).unwrap();
+        // (Only who can manage channels sets it.)
+        assert!(forbidden(b.handle(Request::SetChannelAccess { channel_id: general.id, private: false, view_roles: vec![], read_only: true, post_roles: vec![] })));
+        assert!(m.handle(Request::SetChannelAccess { channel_id: general.id, private: false, view_roles: vec![], read_only: true, post_roles: vec![news.id] }).is_ok());
+        assert!(b.can_see(general.id).is_ok());
+        assert!(matches!(send(&mut b, general.id, "hi"), Err((ErrorCode::Forbidden, _))));
+        assert!(b.handle(Request::FetchHistory { channel_id: general.id, before: None, limit: 50 }).is_ok());
+        hub.db.set_member_roles(&bob, &[news.id]).unwrap();
+        assert!(send(&mut b, general.id, "news!").is_ok());
+        assert!(send(&mut a, general.id, "admins can always post").is_ok());
+        assert!(!hub.db.channel(general.id).unwrap().private);
+        // Making it private hides it from Bob (he isn't a Mod).
+        assert!(o.handle(Request::SetChannelAccess { channel_id: general.id, private: true, view_roles: vec![mods.id], read_only: false, post_roles: vec![] }).is_ok());
+        assert!(b.can_see(general.id).is_err());
     }
 
     #[test]

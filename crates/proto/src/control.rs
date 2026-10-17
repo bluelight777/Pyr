@@ -17,14 +17,15 @@ pub type MessageId = i64;
 /// Server-assigned id of one voice session (one person in one voice channel).
 pub type SessionId = u32;
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelKind {
+    #[default]
     Text,
     Voice,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct Channel {
     pub id: ChannelId,
     pub kind: ChannelKind,
@@ -40,6 +41,31 @@ pub struct Channel {
     /// Who wrote it (your own last message isn't unread).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_from: Option<UserId>,
+    /// Only people with one of `view_roles` can see it (and admins and the owner, always),
+    /// like Discord's private channels ([`PRIVATE_CHANNELS_FEATURE`]). Nobody else is even
+    /// told it's there.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub view_roles: Vec<RoleId>,
+    /// Only people with one of `post_roles` can send messages in it (and admins and the owner);
+    /// everyone who can see it can still read it and react.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub post_roles: Vec<RoleId>,
+}
+
+impl Channel {
+    /// Whether someone (an admin or not, with these roles) can see it.
+    pub fn visible_to(&self, admin: bool, roles: &[RoleId]) -> bool {
+        admin || !self.private || self.view_roles.iter().any(|r| roles.contains(r))
+    }
+
+    /// Whether they can send messages in it (seeing it, and allowed to post).
+    pub fn postable_by(&self, admin: bool, roles: &[RoleId]) -> bool {
+        self.visible_to(admin, roles) && (admin || !self.read_only || self.post_roles.iter().any(|r| roles.contains(r)))
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -250,6 +276,10 @@ pub const VOICE_MOD_FEATURE: &str = "voice_moderation";
 /// doesn't reach it, and blocking ends it. `Ring` rings the other person (`Ringing`), and
 /// `DeclineCall` says no (`CallDeclined`).
 pub const DM_CALLS_FEATURE: &str = "dm_calls";
+/// Channels only some roles can see, or post in ([`Channel::private`], [`Channel::read_only`],
+/// `SetChannelAccess`), like Discord's channel permissions. The server sends each member only
+/// the channels they can see (and what's said in them).
+pub const PRIVATE_CHANNELS_FEATURE: &str = "private_channels";
 /// Group conversations ([`Group`]), like Discord's group DMs: up to [`MAX_GROUP`] people, with
 /// a chat and a call only they see. Made with `CreateGroup`, grown with `AddToGroup`, left with
 /// `LeaveGroup`, named with `RenameGroup`; calls work as in direct messages
@@ -1041,6 +1071,11 @@ pub enum Request {
     CreateChannel {
         name: String,
         kind: ChannelKind,
+        /// Private from the start ([`PRIVATE_CHANNELS_FEATURE`]): only these roles (and admins).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        private: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        view_roles: Vec<RoleId>,
     },
     UpdateChannel {
         channel_id: ChannelId,
@@ -1051,6 +1086,17 @@ pub enum Request {
     },
     DeleteChannel {
         channel_id: ChannelId,
+    },
+    /// Who can see a channel and who can send messages in it ([`PRIVATE_CHANNELS_FEATURE`];
+    /// needs Manage channels).
+    SetChannelAccess {
+        channel_id: ChannelId,
+        private: bool,
+        #[serde(default)]
+        view_roles: Vec<RoleId>,
+        read_only: bool,
+        #[serde(default)]
+        post_roles: Vec<RoleId>,
     },
     CreateInvite {
         #[serde(default)]

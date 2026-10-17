@@ -334,6 +334,22 @@ impl ServerView {
         self.channels.iter().find(|c| c.id == id)
     }
 
+    /// Whether a member can see a channel ([`PRIVATE_CHANNELS_FEATURE`]: only some roles see
+    /// a private one; admins and the owner see everything).
+    pub fn sees(&self, uid: &str, ch: &Channel) -> bool {
+        match self.members.get(uid) {
+            Some(m) => ch.visible_to(m.role.is_admin(), &m.roles),
+            None => !ch.private,
+        }
+    }
+
+    /// Whether I can send messages in a channel (or a conversation: always).
+    pub fn can_post(&self, channel_id: ChannelId) -> bool {
+        let Some(ch) = self.channel(channel_id) else { return true };
+        let Some(me) = &self.me else { return false };
+        ch.postable_by(me.role.is_admin(), &me.roles)
+    }
+
     pub fn voice_in(&self, channel_id: ChannelId) -> Vec<&VoiceParticipant> {
         self.voice.values().filter(|p| p.channel_id == channel_id).collect()
     }

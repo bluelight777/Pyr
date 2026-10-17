@@ -1712,7 +1712,22 @@ impl Engine {
     // --------------------------------------------------------------- admin
 
     pub fn create_channel(&self, key: &str, name: &str, kind: ChannelKind) {
-        self.request(key, Request::CreateChannel { name: name.to_string(), kind });
+        self.create_channel_with(key, name, kind, false, Vec::new());
+    }
+
+    /// A new channel, private from the start (only `view_roles`, admins and the owner see it)
+    /// if `private`.
+    pub fn create_channel_with(&self, key: &str, name: &str, kind: ChannelKind, private: bool, view_roles: Vec<RoleId>) {
+        let view_roles = if private { view_roles } else { Vec::new() };
+        self.request(key, Request::CreateChannel { name: name.to_string(), kind, private, view_roles });
+    }
+
+    /// Who can see a channel, and who can send messages in it (like Discord's channel
+    /// permissions; needs Manage channels).
+    pub fn set_channel_access(&self, key: &str, channel_id: ChannelId, private: bool, view_roles: Vec<RoleId>, read_only: bool, post_roles: Vec<RoleId>) {
+        let view_roles = if private { view_roles } else { Vec::new() };
+        let post_roles = if read_only { post_roles } else { Vec::new() };
+        self.request(key, Request::SetChannelAccess { channel_id, private, view_roles, read_only, post_roles });
     }
 
     pub fn update_channel(&self, key: &str, channel_id: ChannelId, name: Option<String>, topic: Option<String>) {

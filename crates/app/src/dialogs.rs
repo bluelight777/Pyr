@@ -18,6 +18,50 @@ fn modal_frame() -> egui::Frame {
         .inner_margin(egui::Margin::same(22))
 }
 
+/// Who can see a channel, and (`posting`) who can send messages in it: like Discord's
+/// private channels, by role. Admins and the owner always can.
+fn access_editor(ui: &mut egui::Ui, s: &ingle_engine::state::ServerView, access: &mut crate::app::ChannelAccess, posting: bool) {
+    // The roles to pick from, in their colors (like the Roles menu on a member).
+    let roles = |ui: &mut egui::Ui, salt: &str, picked: &mut Vec<ingle_proto::control::RoleId>| {
+        if s.roles.is_empty() {
+            ui.label(
+                RichText::new("There are no roles yet: make some in Server Settings → Roles. Until then only admins and the owner are in.")
+                    .size(12.5)
+                    .color(theme::DIM()),
+            );
+            return;
+        }
+        ui.indent(salt, |ui| {
+            for r in &s.roles {
+                let mut on = picked.contains(&r.id);
+                let col = if r.color == 0 { theme::TEXT() } else { rgb(r.color) };
+                if ui.checkbox(&mut on, RichText::new(&r.name).color(col)).changed() {
+                    if on {
+                        picked.push(r.id);
+                    } else {
+                        picked.retain(|x| *x != r.id);
+                    }
+                }
+            }
+        });
+    };
+    ui.checkbox(&mut access.private, RichText::new("Private channel").font(theme::bold_font(14.0)).color(theme::TEXT()));
+    ui.label(RichText::new("Only the roles you pick (and admins and the owner) can see it. Nobody else even sees it's there.").size(12.5).color(theme::MUTED()));
+    if access.private {
+        ui.add_space(4.0);
+        roles(ui, "view-roles", &mut access.view_roles);
+    }
+    if posting {
+        ui.add_space(8.0);
+        ui.checkbox(&mut access.read_only, RichText::new("Only some roles can send messages").font(theme::bold_font(14.0)).color(theme::TEXT()));
+        ui.label(RichText::new("Everyone who can see it can still read it and react, like an announcements channel.").size(12.5).color(theme::MUTED()));
+        if access.read_only {
+            ui.add_space(4.0);
+            roles(ui, "post-roles", &mut access.post_roles);
+        }
+    }
+}
+
 pub(crate) fn title(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).font(theme::bold_font(20.0)).color(theme::TEXT()));
     ui.add_space(4.0);
@@ -274,8 +318,8 @@ impl IngleApp {
                 Dialog::Create => {
                     self.create_dialog(ui, st, acts, &mut close);
                 }
-                Dialog::CreateChannel { key, kind, mut name } => {
-                    ui.set_width(420.0);
+                Dialog::CreateChannel { key, kind, mut name, mut access } => {
+                    ui.set_width(440.0);
                     title(ui, "Create channel");
                     let mut k = kind;
                     field_label(ui, "Channel type");
@@ -289,13 +333,25 @@ impl IngleApp {
                     // (Enter in the emoji picker's search picks an emoji: it doesn't create the
                     // channel. The cursor stays in the name, except while that search has it.)
                     let enter = !was_picking && !picking && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if !enter && !picking && !was_picking {
+                    // (The name keeps the cursor, except while a checkbox below was just
+                    // clicked: that's where the person is.)
+                    if !enter && !picking && !was_picking && ui.memory(|m| m.focused().is_none()) {
                         r.request_focus();
+                    }
+                    if let Some(s) = st.server(&key).filter(|s| s.has(ingle_proto::control::PRIVATE_CHANNELS_FEATURE)) {
+                        ui.add_space(6.0);
+                        access_editor(ui, s, &mut access, false);
                     }
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
                         if (ui.add(theme::primary_button("Create").min_size(vec2(100.0, 34.0))).clicked() || enter) && !name.trim().is_empty() {
-                            acts.push(Act::CreateChannel { key: key.clone(), name: name.trim().to_string(), kind: k });
+                            acts.push(Act::CreateChannel {
+                                key: key.clone(),
+                                name: name.trim().to_string(),
+                                kind: k,
+                                private: access.private,
+                                view_roles: if access.private { access.view_roles.clone() } else { Vec::new() },
+                            });
                             close = true;
                         }
                         if ui.button("Cancel").clicked() {
@@ -303,20 +359,27 @@ impl IngleApp {
                         }
                     });
                     if !close {
-                        self.ui.dialog = Some(Dialog::CreateChannel { key, kind: k, name });
+                        self.ui.dialog = Some(Dialog::CreateChannel { key, kind: k, name, access });
                     }
                 }
-                Dialog::EditChannel { key, channel, mut name, mut topic } => {
-                    ui.set_width(440.0);
+                Dialog::EditChannel { key, channel, mut name, mut topic, mut access, before } => {
+                    ui.set_width(460.0);
                     title(ui, "Edit channel");
                     field_label(ui, "Name");
                     self.channel_name_input(ui, st, "edit", &mut name, "", acts);
                     field_label(ui, "Topic");
                     input(ui, &mut topic, "What's this channel about?");
+                    if let Some(s) = st.server(&key).filter(|s| s.has(ingle_proto::control::PRIVATE_CHANNELS_FEATURE)) {
+                        ui.add_space(6.0);
+                        access_editor(ui, s, &mut access, true);
+                    }
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
                         if ui.add(theme::primary_button("Save").min_size(vec2(100.0, 34.0))).clicked() {
                             acts.push(Act::UpdateChannel { key: key.clone(), channel, name: Some(name.clone()), topic: Some(topic.clone()) });
+                            if access != before {
+                                acts.push(Act::SetChannelAccess { key: key.clone(), channel, access: access.clone() });
+                            }
                             close = true;
                         }
                         if ui.button("Cancel").clicked() {
@@ -324,7 +387,7 @@ impl IngleApp {
                         }
                     });
                     if !close {
-                        self.ui.dialog = Some(Dialog::EditChannel { key, channel, name, topic });
+                        self.ui.dialog = Some(Dialog::EditChannel { key, channel, name, topic, access, before });
                     }
                 }
                 Dialog::Invite { key } => {

@@ -563,10 +563,14 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
                 }
                 sort_channels(&mut s.channels);
             }
+            // Deleted, or I can't see it any more (a private channel I lost the role for).
             Event::ChannelDeleted { channel_id } => {
                 s.channels.retain(|c| c.id != channel_id);
                 s.logs.remove(&channel_id);
                 s.unread.remove(&channel_id);
+                s.mentions.remove(&channel_id);
+                s.new_since.remove(&channel_id);
+                s.typing.remove(&channel_id);
             }
             Event::MemberUpserted { member } => {
                 if member.user_id == my_uid {

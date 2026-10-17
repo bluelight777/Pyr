@@ -267,9 +267,11 @@ struct Client {
 
 struct Voice {
     p: VoiceParticipant,
-    /// A direct message's or group's call: its people, the only ones who see it (see
-    /// `DM_CALLS_FEATURE`).
+    /// Who sees it: a direct message's or group's call's people (see `DM_CALLS_FEATURE`), or
+    /// those who can see a private voice channel; everyone when None.
     audience: Option<Vec<UserId>>,
+    /// A direct message's or group's call (not the server's to moderate).
+    conversation: bool,
     conn_id: ConnId,
     conn: quinn::Connection,
     tx: Outbox,
@@ -610,12 +612,18 @@ impl Hub {
     }
 
     fn broadcast_in_except(&self, channel_id: ChannelId, except: Option<ConnId>, ev: Event) {
-        // A direct message's two people, or a group's members (with apps that know groups).
+        // A direct message's two people, or a group's members (with apps that know groups), or
+        // those who can see a private channel.
         let dm = self.db.dm_members(channel_id);
         let group = if dm.is_none() { self.db.group(channel_id).map(|g| g.members) } else { None };
+        let viewers: Option<HashSet<UserId>> =
+            if dm.is_none() && group.is_none() { self.db.channel(channel_id).filter(|c| c.private).map(|c| self.db.viewers(&c).into_iter().collect()) } else { None };
         let b = frame(0, ev);
         for (id, c) in self.inner.lock().clients.iter() {
             if Some(*id) == except {
+                continue;
+            }
+            if viewers.as_ref().is_some_and(|v| !v.contains(&c.user_id)) {
                 continue;
             }
             if let Some((a, z)) = &dm {
@@ -676,6 +684,106 @@ impl Hub {
         for c in self.inner.lock().clients.values() {
             if c.user_id == uid {
                 let _ = c.tx.send(b.clone());
+            }
+        }
+    }
+
+    /// Whether someone's an admin (or the owner), and their roles: what decides which channels
+    /// they see and post in.
+    pub fn access_of(&self, uid: &str) -> (bool, Vec<RoleId>) {
+        let admin = self.db.get_user(uid).is_some_and(|u| u.role.is_admin());
+        (admin, self.db.member_roles(uid))
+    }
+
+    /// Whether someone can see a channel (a server channel: conversations are checked by who's
+    /// in them).
+    pub fn sees(&self, uid: &str, ch: &Channel) -> bool {
+        if !ch.private {
+            return true;
+        }
+        let (admin, roles) = self.access_of(uid);
+        ch.visible_to(admin, &roles)
+    }
+
+    /// Who's in a private voice channel's voice sees it again as who can see it now (and
+    /// everyone sees a channel's that isn't private anymore).
+    fn refresh_voice_audiences_locked(&self, inner: &mut Inner, channels: &[Channel]) {
+        for v in inner.voice.values_mut().filter(|v| !v.conversation) {
+            if let Some(ch) = channels.iter().find(|c| c.id == v.p.channel_id) {
+                v.audience = if ch.private { Some(self.db.viewers(ch)) } else { None };
+            }
+        }
+    }
+
+    /// Who's talking in a channel, for someone who can see it now (`VoiceUpserted`s), or their
+    /// leaving, for someone who can't (`VoiceRemoved`s).
+    fn voice_frames_locked(inner: &Inner, channel_id: ChannelId, visible: bool) -> Vec<Bytes> {
+        inner
+            .voice
+            .values()
+            .filter(|v| v.p.channel_id == channel_id)
+            .map(|v| {
+                if visible {
+                    frame(0, Event::VoiceUpserted { participant: v.p.clone() })
+                } else {
+                    frame(0, Event::VoiceRemoved { session: v.p.session, user_id: v.p.user_id.clone(), channel_id })
+                }
+            })
+            .collect()
+    }
+
+    /// A channel was made or changed: everyone who can see it is told (`ChannelUpserted`),
+    /// everyone who can't is told it's gone (`ChannelDeleted`, if they had it); anyone in its
+    /// voice who can't see it now is out of it.
+    pub fn channel_changed(&self, ch: &Channel) {
+        let viewers: HashSet<UserId> = if ch.private { self.db.viewers(ch).into_iter().collect() } else { HashSet::new() };
+        let sees = |uid: &str| !ch.private || viewers.contains(uid);
+        let mut inner = self.inner.lock();
+        let out: Vec<SessionId> = inner.voice.values().filter(|v| v.p.channel_id == ch.id && !sees(&v.p.user_id)).map(|v| v.p.session).collect();
+        for s in out {
+            Self::remove_session_locked(&mut inner, s);
+        }
+        self.refresh_voice_audiences_locked(&mut inner, std::slice::from_ref(ch));
+        let mut shown = vec![frame(0, Event::ChannelUpserted { channel: ch.clone() })];
+        shown.extend(Self::voice_frames_locked(&inner, ch.id, true));
+        let mut hidden = vec![frame(0, Event::ChannelDeleted { channel_id: ch.id })];
+        hidden.extend(Self::voice_frames_locked(&inner, ch.id, false));
+        for c in inner.clients.values() {
+            for f in if sees(&c.user_id) { &shown } else { &hidden } {
+                let _ = c.tx.send(f.clone());
+            }
+        }
+    }
+
+    /// Someone's roles (or admin) changed: their apps get the channels they can see now and
+    /// lose the ones they can't, and they're out of a voice channel they can't see anymore.
+    pub fn access_changed(&self, uid: &str) {
+        let channels = self.db.channels();
+        let (admin, roles) = self.access_of(uid);
+        let mut inner = self.inner.lock();
+        let out: Vec<SessionId> = inner
+            .voice
+            .values()
+            .filter(|v| v.p.user_id == uid && !v.conversation)
+            .filter(|v| channels.iter().any(|ch| ch.id == v.p.channel_id && !ch.visible_to(admin, &roles)))
+            .map(|v| v.p.session)
+            .collect();
+        for s in out {
+            Self::remove_session_locked(&mut inner, s);
+        }
+        self.refresh_voice_audiences_locked(&mut inner, &channels);
+        let mut frames: Vec<Bytes> = Vec::new();
+        for ch in &channels {
+            let visible = ch.visible_to(admin, &roles);
+            frames.push(if visible { frame(0, Event::ChannelUpserted { channel: ch.clone() }) } else { frame(0, Event::ChannelDeleted { channel_id: ch.id }) });
+            // Only a private channel can have come or gone.
+            if ch.private {
+                frames.extend(Self::voice_frames_locked(&inner, ch.id, visible));
+            }
+        }
+        for c in inner.clients.values().filter(|c| c.user_id == uid) {
+            for f in &frames {
+                let _ = c.tx.send(f.clone());
             }
         }
     }
@@ -831,15 +939,17 @@ impl Hub {
             avatar: None,
             idle: false,
         });
+        let (admin, my_roles) = (me.role.is_admin(), me.roles.clone());
+        let channels: Vec<Channel> = self.db.channels().into_iter().filter(|c| c.visible_to(admin, &my_roles)).collect();
         let mut ready = Event::Ready {
             me: me.clone(),
             server: self.info_for(uid),
-            channels: self.db.channels(),
+            channels,
             members,
             // (Private conversations' calls only for their own people.)
             voice: inner.voice.values().filter(|v| v.audience.as_ref().is_none_or(|who| who.iter().any(|w| w == uid))).map(|v| v.p.clone()).collect(),
             roles: self.db.roles(),
-            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE].iter().map(|s| s.to_string()).collect(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE, PRIVATE_CHANNELS_FEATURE].iter().map(|s| s.to_string()).collect(),
             dms: self.db.dms_of(uid),
             relations: self.db.relations_of(uid),
             groups: if groups { self.db.groups_of(uid) } else { Vec::new() },
@@ -953,11 +1063,12 @@ impl Hub {
         // A voice channel, or a private conversation's call: a direct message's (for its two
         // people, while neither has blocked the other) or a group's (for its members).
         let dm = self.db.dm_members(channel_id);
-        let audience = match self.db.channel(channel_id) {
-            Some(c) if c.kind == ChannelKind::Voice => None,
+        // (A private voice channel is seen, and talked in, only by those who can see it.)
+        let (audience, conversation) = match self.db.channel(channel_id) {
+            Some(c) if c.kind == ChannelKind::Voice => (c.private.then(|| self.db.viewers(&c)), false),
             Some(_) => return err(ErrorCode::NotFound, "No such voice channel."),
             None => match self.db.private_members(channel_id) {
-                Some(who) => Some(who),
+                Some(who) => (Some(who), true),
                 None => return err(ErrorCode::NotFound, "No such voice channel."),
             },
         };
@@ -965,7 +1076,7 @@ impl Hub {
         let Some(client) = inner.clients.get(&conn_id) else { return err(ErrorCode::Unauthorized, "not logged in") };
         let uid = client.user_id.clone();
         if let Some(who) = &audience {
-            if !who.contains(&uid) || (dm.is_none() && !client.groups) {
+            if !who.contains(&uid) || (conversation && dm.is_none() && !client.groups) {
                 return err(ErrorCode::NotFound, "No such voice channel.");
             }
         }
@@ -994,8 +1105,8 @@ impl Hub {
         client.session_cell.store(session, Ordering::Relaxed);
         // A moderator's mute or deafen follows them from channel to channel, and visit to visit
         // (but not into a private conversation's call: that isn't the server's to moderate).
-        let server_mute = audience.is_none() && self.moderated(ModeratedVoice::Muted).contains(&uid);
-        let server_deaf = audience.is_none() && self.moderated(ModeratedVoice::Deafened).contains(&uid);
+        let server_mute = !conversation && self.moderated(ModeratedVoice::Muted).contains(&uid);
+        let server_deaf = !conversation && self.moderated(ModeratedVoice::Deafened).contains(&uid);
         let p = VoiceParticipant {
             session,
             user_id: uid,
@@ -1012,6 +1123,7 @@ impl Hub {
         let voice = Voice {
             p: p.clone(),
             audience: audience.clone(),
+            conversation,
             conn_id,
             conn: client.conn.clone(),
             tx: client.tx.clone(),
@@ -1076,18 +1188,18 @@ impl Hub {
         }
         let mut now = Vec::new();
         // (Not in a private conversation's call: that isn't the server's to moderate.)
-        for v in inner.voice.values_mut().filter(|v| v.p.user_id == user_id && v.audience.is_none()) {
+        for v in inner.voice.values_mut().filter(|v| v.p.user_id == user_id && !v.conversation) {
             let flag = match what {
                 ModeratedVoice::Muted => &mut v.p.server_mute,
                 ModeratedVoice::Deafened => &mut v.p.server_deaf,
             };
             if *flag != on {
                 *flag = on;
-                now.push(v.p.clone());
+                now.push((v.p.clone(), v.audience.clone()));
             }
         }
-        for p in now {
-            Self::broadcast_locked(&inner, Event::VoiceUpserted { participant: p });
+        for (p, audience) in now {
+            Self::voice_news_locked(&inner, audience.as_ref(), Event::VoiceUpserted { participant: p });
         }
         Ok(Event::Ok)
     }

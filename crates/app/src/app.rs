@@ -125,7 +125,8 @@ pub enum Act {
     /// Open the direct message conversation with someone on this server.
     OpenDm { key: String, uid: String },
     Typing { key: String, channel: ChannelId },
-    CreateChannel { key: String, name: String, kind: ChannelKind },
+    CreateChannel { key: String, name: String, kind: ChannelKind, private: bool, view_roles: Vec<RoleId> },
+    SetChannelAccess { key: String, channel: ChannelId, access: ChannelAccess },
     UpdateChannel { key: String, channel: ChannelId, name: Option<String>, topic: Option<String> },
     DeleteChannel { key: String, channel: ChannelId },
     CreateInvite { key: String },
@@ -195,8 +196,9 @@ pub enum Dialog {
     AddChoice,
     /// The create-a-server wizard (its state is in `UiState::create`).
     Create,
-    CreateChannel { key: String, kind: ChannelKind, name: String },
-    EditChannel { key: String, channel: ChannelId, name: String, topic: String },
+    CreateChannel { key: String, kind: ChannelKind, name: String, access: ChannelAccess },
+    /// `before`: who could see and post in it when the dialog opened (to tell what changed).
+    EditChannel { key: String, channel: ChannelId, name: String, topic: String, access: ChannelAccess, before: ChannelAccess },
     Invite { key: String },
     /// Tab 0: overview; 1: roles; 2: emoji; 3: backups; 4: soundboard.
     ServerSettings { key: String, name: String, tab: u8 },
@@ -225,6 +227,22 @@ pub enum Dialog {
     LeaveGroup { key: String, channel: ChannelId, name: String },
     /// "Make sure it's really them": the question to ask, and the answer I expect.
     AskThem { key: String, uid: String, question: String, answer: String },
+}
+
+/// Who can see a channel and who can send messages in it (see `Channel::private`), as the
+/// channel dialogs edit it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ChannelAccess {
+    pub private: bool,
+    pub view_roles: Vec<RoleId>,
+    pub read_only: bool,
+    pub post_roles: Vec<RoleId>,
+}
+
+impl ChannelAccess {
+    pub fn of(c: &ingle_proto::control::Channel) -> ChannelAccess {
+        ChannelAccess { private: c.private, view_roles: c.view_roles.clone(), read_only: c.read_only, post_roles: c.post_roles.clone() }
+    }
 }
 
 /// What the microphone buttons say when a moderator has server muted you.
@@ -513,7 +531,10 @@ impl IngleApp {
                 e.play_sound_with(ingle_engine::sfx::Sound::Message, &s);
             }
             Act::Typing { key, channel } => e.typing(&key, channel),
-            Act::CreateChannel { key, name, kind } => e.create_channel(&key, &name, kind),
+            Act::CreateChannel { key, name, kind, private, view_roles } => e.create_channel_with(&key, &name, kind, private, view_roles),
+            Act::SetChannelAccess { key, channel, access } => {
+                e.set_channel_access(&key, channel, access.private, access.view_roles, access.read_only, access.post_roles)
+            }
             Act::UpdateChannel { key, channel, name, topic } => e.update_channel(&key, channel, name, topic),
             Act::DeleteChannel { key, channel } => e.delete_channel(&key, channel),
             Act::CreateInvite { key } => e.create_invite(&key, None, None),
@@ -1503,7 +1524,7 @@ impl IngleApp {
                             .resizable(false)
                             .show_separator_line(false)
                             .frame(egui::Frame::new().fill(theme::panel(theme::SIDE(), false)))
-                            .show(ctx, |ui| self.member_list(ui, st, &server, acts));
+                            .show(ctx, |ui| self.member_list(ui, st, &server, channel, acts));
                     }
                     egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::panel(theme::MAIN(), true))).show(ctx, |ui| {
                         match channel {
@@ -2134,7 +2155,7 @@ impl IngleApp {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             ui.add_space(8.0);
                             if icon_button(ui, 20.0, "Create channel", false, |p, r, c| icons::plus(p, r, c, 1.8)).clicked() {
-                                self.ui.dialog = Some(Dialog::CreateChannel { key: s.key.clone(), kind, name: String::new() });
+                                self.ui.dialog = Some(Dialog::CreateChannel { key: s.key.clone(), kind, name: String::new(), access: ChannelAccess::default() });
                             }
                         });
                     }
@@ -2167,6 +2188,12 @@ impl IngleApp {
                         icons::hash(ui.painter(), icon_rect, theme::DIM());
                     } else {
                         icons::speaker(ui.painter(), icon_rect, if in_this_call { theme::ONLINE() } else { theme::DIM() });
+                    }
+                    // A private channel: a little lock on its icon, like Discord's.
+                    if c.private {
+                        let lr = Rect::from_center_size(icon_rect.right_top() + vec2(-1.0, 4.0), vec2(12.0, 12.0));
+                        ui.painter().circle_filled(lr.center() + vec2(0.0, 1.0), 6.5, if bg == Color32::TRANSPARENT { theme::SIDE() } else { bg });
+                        icons::lock(ui.painter(), lr, theme::DIM());
                     }
                     let font = if unread { theme::bold_font(14.5) } else { theme::font(14.5) };
                     // A leading emoji gets a place of its own, the same size on every row, and
@@ -2230,7 +2257,7 @@ impl IngleApp {
                             }
                         }
                     }
-                    let (key, cid, cname, ctopic) = (s.key.clone(), c.id, c.name.clone(), c.topic.clone());
+                    let (key, cid, cname, ctopic, caccess) = (s.key.clone(), c.id, c.name.clone(), c.topic.clone(), ChannelAccess::of(c));
                     let muted = st.is_muted(&s.key, cid);
                     let can_manage = s.can(perm::MANAGE_CHANNELS);
                     {
@@ -2245,7 +2272,14 @@ impl IngleApp {
                             }
                             ui.separator();
                             if ui.button("Edit channel").clicked() {
-                                self.ui.dialog = Some(Dialog::EditChannel { key: key.clone(), channel: cid, name: cname.clone(), topic: ctopic.clone() });
+                                self.ui.dialog = Some(Dialog::EditChannel {
+                                    key: key.clone(),
+                                    channel: cid,
+                                    name: cname.clone(),
+                                    topic: ctopic.clone(),
+                                    access: caccess.clone(),
+                                    before: caccess.clone(),
+                                });
                                 ui.close();
                             }
                             if ui.button(RichText::new("Delete channel").color(theme::LIVE())).clicked() {
@@ -2565,10 +2599,12 @@ impl IngleApp {
 
     // ------------------------------------------------------------ member list
 
-    fn member_list(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, acts: &mut Vec<Act>) {
+    fn member_list(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, channel: Option<ChannelId>, acts: &mut Vec<Act>) {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.add_space(14.0);
-            let mut members: Vec<_> = s.members.values().collect();
+            // Like Discord: a private channel's list is just the people who can see it.
+            let private = channel.and_then(|c| s.channel(c)).filter(|c| c.private);
+            let mut members: Vec<_> = s.members.values().filter(|m| private.is_none_or(|c| s.sees(&m.user_id, c))).collect();
             members.sort_by(|a, b| s.rank(&b.user_id).cmp(&s.rank(&a.user_id)).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
             // Like Discord: online people with a "shown separately" role are grouped under
             // their highest such role, other online people under Online, then Offline.
