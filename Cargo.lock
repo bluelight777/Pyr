@@ -5183,6 +5183,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyr-poker"
+version = "0.8.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "pyr-proto"
 version = "0.8.1"
 dependencies = [
