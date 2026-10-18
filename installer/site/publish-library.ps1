@@ -14,7 +14,7 @@ scp -r "$here\upload" "${server}:$folder"
 if ($LASTEXITCODE -ne 0) { throw "The upload didn't work." }
 ssh $server "bash ~/$folder/install-library.sh"
 if ($LASTEXITCODE -ne 0) { throw "Putting the library on the website didn't work." }
-$lib = Invoke-RestMethod -Uri "https://pyr.gg/library/index.json" -Headers @{ "Cache-Control" = "no-cache" }
+$lib = Invoke-RestMethod -Uri "https://pyr.gg/library/index2.json" -Headers @{ "Cache-Control" = "no-cache" }
 $index = $lib.index | ConvertFrom-Json
 $names = ($index.plugins | ForEach-Object { $_.name }) -join ", "
 Write-Host ""

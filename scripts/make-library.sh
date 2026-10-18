@@ -5,7 +5,8 @@
 # The plugins' files must already be under dist/library/files, in the layout
 # installer/site/library/plugins.json names them (Dice: built from plugins/dice for
 # wasm32-unknown-unknown; programs such as Chimbrowser: built from their own source). Signs
-# the list with the release key into dist/library/index.json; make-release.sh puts
+# the list with the release key into dist/library/index2.json (and index.json, the list Pyr
+# 0.8.0 and older read, without the skins they can't wear); make-release.sh puts
 # dist/library on the website with the release.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -25,4 +26,4 @@ for s in json.load(open("installer/site/library/plugins.json")).get("skins", [])
     shutil.copytree(src, dst, ignore=shutil.ignore_patterns(".*"))
     print(f"skin {s['id']}: {', '.join(sorted(os.listdir(dst)))}")
 PY
-cargo run -q -p pyr-proto --example library -- sign --key "$KEY" --in installer/site/library/plugins.json --files "$FILES" --out dist/library/index.json
+cargo run -q -p pyr-proto --example library -- sign --key "$KEY" --in installer/site/library/plugins.json --files "$FILES" --out dist/library/index2.json --older-out dist/library/index.json

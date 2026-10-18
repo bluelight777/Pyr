@@ -36,7 +36,8 @@ cargo run -q -p pyr-proto --example release -- sign --key "$KEY" --version "$VER
 # tar file (its folders are too deep to copy onto a PC one by one); install-site.sh puts them at
 # /library/ on the website.
 if [ -f dist/library/index.json ]; then
-  tar --owner=0 --group=0 --numeric-owner -cf "$OUT/upload/library.tar" -C dist library/index.json library/files
+  # (index2.json: the list Pyr 0.8.1 and newer read; index.json: older Pyrs'.)
+  tar --owner=0 --group=0 --numeric-owner -cf "$OUT/upload/library.tar" -C dist library/index.json $( [ -f dist/library/index2.json ] && echo library/index2.json ) library/files
 else
   echo "no dist/library/index.json: the website keeps the library it has" >&2
 fi

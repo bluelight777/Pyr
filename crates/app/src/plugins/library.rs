@@ -8,7 +8,9 @@ use std::time::Duration;
 use pyr_proto::library::{self, Library};
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_URL: &str = "https://pyr.gg/library/index.json";
+/// (`index2.json` since 0.8.1: it has skins with shapes of their own, which `index.json`, the
+/// list older Pyrs read, leaves out.)
+const DEFAULT_URL: &str = "https://pyr.gg/library/index2.json";
 /// The newest list seen (Unix seconds it was signed), so an older one is never believed again.
 const SEEN_FILE: &str = "library-seen.json";
 /// The last list believed, as signed (shown when the website can't be reached).

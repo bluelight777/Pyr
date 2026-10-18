@@ -1,5 +1,6 @@
 //! The Pyr Library: plugins anyone can install from Pyr, listed in
-//! `pyr.gg/library/index.json`.
+//! `pyr.gg/library/index2.json` (Pyr 0.8.0 and older read `index.json`, which leaves out skins
+//! that need a newer Pyr).
 //!
 //! Every plugin in it was sent in as Rust source, reviewed, and built from that source by
 //! Firelit Games, who signs the list with the same offline key as Pyr's releases (with its

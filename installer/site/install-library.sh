@@ -40,5 +40,7 @@ fi
 # The files first, so the list never names one that isn't there yet.
 if [ -d "$HERE/library-x/library/files" ]; then cp -rf "$HERE/library-x/library/files" "$ROOT/ingle/library/"; fi
 cp -f "$HERE/library-x/library/index.json" "$ROOT/ingle/library/index.json"
+# (Pyr 0.8.1 and newer read index2.json; index.json is older Pyrs' list.)
+if [ -f "$HERE/library-x/library/index2.json" ]; then cp -f "$HERE/library-x/library/index2.json" "$ROOT/ingle/library/index2.json"; fi
 chmod -R a+rX "$ROOT/ingle/library"
 echo "The Pyr Library is updated in $ROOT/ingle/library"

@@ -1,7 +1,12 @@
-//! Sign the Pyr Library's list (`library/index.json` on pyr.gg).
+//! Sign the Pyr Library's lists (`library/index2.json` on pyr.gg, and `library/index.json` for
+//! Pyr 0.8.0 and older).
 //!
 //!   cargo run -p pyr-proto --example library -- sign --key release-key.txt \
-//!       --in installer/site/library/plugins.json --files dist/library/files --out dist/library/index.json
+//!       --in installer/site/library/plugins.json --files dist/library/files \
+//!       --out dist/library/index2.json --older-out dist/library/index.json
+//!
+//! `--older-out` also writes the list Pyr 0.8.0 and older read: the same, less the skins that
+//! need a newer Pyr (a skin with shapes of its own, `look`), which those would refuse.
 //!
 //! `plugins.json` describes the plugins (see `pyr_proto::library::Entry`), naming each file by
 //! where it is under `--files` (the same layout as `library/files/` on the website):
@@ -227,11 +232,17 @@ fn main() -> Result<()> {
                 skins.push(e);
             }
             let lib = Library { issued: now(), expires: now() + days * 86_400, plugins, skins };
-            let out = get("--out").unwrap_or_else(|| "index.json".into());
+            let out = get("--out").unwrap_or_else(|| "index2.json".into());
             std::fs::write(&out, serde_json::to_string_pretty(&library::sign(&key, &lib))?)?;
             // Check it opens with the key it was signed with, as the app will.
             library::open(&std::fs::read_to_string(&out)?, &key.user_id()).map_err(anyhow::Error::msg)?;
             println!("wrote {out}: {} plugins and {} skins, signed by {}, good for {days} days", lib.plugins.len(), lib.skins.len(), key.user_id());
+            if let Some(older) = get("--older-out") {
+                let mut old = lib.clone();
+                old.skins.retain(|s| s.needs.is_empty());
+                std::fs::write(&older, serde_json::to_string_pretty(&library::sign(&key, &old))?)?;
+                println!("wrote {older} (for Pyr 0.8.0 and older): {} plugins and {} skins", old.plugins.len(), old.skins.len());
+            }
         }
         Some("refresh") => {
             let key = load_key(&get("--key").context("--key")?)?;
@@ -265,7 +276,7 @@ fn main() -> Result<()> {
                 bail!("{bad} of {} skins don't pass Pyr's checks", args.len() - 1);
             }
         }
-        _ => bail!("usage: library sign --key FILE --in plugins.json --files DIR [--out index.json] [--valid-days N] | library refresh --key FILE --in index.json | library check-skin FOLDER..."),
+        _ => bail!("usage: library sign --key FILE --in plugins.json --files DIR [--out index2.json] [--older-out index.json] [--valid-days N] | library refresh --key FILE --in index.json | library check-skin FOLDER..."),
     }
     Ok(())
 }

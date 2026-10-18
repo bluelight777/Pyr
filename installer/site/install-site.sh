@@ -36,6 +36,8 @@ if [ -f "$HERE/library.tar" ]; then
   tar --no-same-owner --no-same-permissions -xf "$HERE/library.tar" -C "$HERE/library-x"
   if [ -d "$HERE/library-x/library/files" ]; then cp -rf "$HERE/library-x/library/files" "$ROOT/ingle/library/"; fi
   if [ -f "$HERE/library-x/library/index.json" ]; then cp -f "$HERE/library-x/library/index.json" "$ROOT/ingle/library/index.json"; fi
+  # (Pyr 0.8.1 and newer read index2.json; index.json is older Pyrs' list.)
+  if [ -f "$HERE/library-x/library/index2.json" ]; then cp -f "$HERE/library-x/library/index2.json" "$ROOT/ingle/library/index2.json"; fi
 fi
 cp -f "$HERE/pyr/latest.json" "$ROOT/ingle/latest.json"
 chmod -R a+rX "$ROOT/ingle"
