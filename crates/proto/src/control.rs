@@ -330,6 +330,10 @@ pub const VOUCHES_FOR_ME_FEATURE: &str = "vouches-for-me";
 /// `https://pyr.gg/<code>` (`InviteCreated::short`, see [`crate::directory`]); the owner can
 /// give the community its own code (`SetVanity`) or turn short links off (`SetShortLinks`).
 pub const INVITES_FEATURE: &str = "invites";
+/// Poker tables on the server (`Request::Poker`, `Event::Poker`): Hold'em and Omaha with
+/// play chips, against each other and bots, dealt by the server with a shuffle every player's
+/// Pyr adds to and can check (see `pyr_poker`).
+pub const POKER_FEATURE: &str = "poker";
 /// In `Login::caps`: this app knows group conversations ([`GROUPS_FEATURE`]).
 pub const GROUPS_CAP: &str = "groups";
 /// In `Login::caps`: this app adjusts its camera and screen share to its viewers'
@@ -1420,6 +1424,10 @@ pub enum Request {
         #[serde(default = "full_volume")]
         volume: f32,
     },
+    /// Poker ([`POKER_FEATURE`]).
+    Poker {
+        msg: pyr_poker::net::ToServer,
+    },
     /// Ask someone to be friends ([`FRIENDS_FEATURE`]); accepts if they already asked you.
     FriendRequest {
         user_id: UserId,
@@ -1611,6 +1619,10 @@ pub enum ErrorCode {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
+    /// Poker ([`POKER_FEATURE`]): a table's news, a record, the lobby.
+    Poker {
+        msg: pyr_poker::net::ToApp,
+    },
     /// First frame from the server. `nonce` is signed in the login transcript.
     Hello {
         proto: u32,

@@ -222,6 +222,8 @@ pub struct Hub {
     pub short_links_off_why: std::sync::OnceLock<String>,
     /// One change of the community's own code at a time.
     vanity_change: tokio::sync::Mutex<()>,
+    /// Poker tables (see [`crate::poker`]).
+    pub poker: crate::poker::Poker,
 }
 
 #[derive(Default)]
@@ -535,6 +537,7 @@ impl Hub {
             directory: std::sync::OnceLock::new(),
             short_links_off_why: std::sync::OnceLock::new(),
             vanity_change: tokio::sync::Mutex::new(()),
+            poker: crate::poker::Poker::default(),
         })
     }
 
@@ -1235,7 +1238,7 @@ impl Hub {
             // (Private conversations' calls only for their own people.)
             voice: inner.voice.values().filter(|v| v.audience.as_ref().is_none_or(|who| who.iter().any(|w| w == uid))).map(|v| v.p.clone()).collect(),
             roles: self.db.roles(),
-            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, DND_FEATURE, BIG_FILES_FEATURE, GIFS_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE, VOUCHES_FOR_ME_FEATURE, PRIVATE_CHANNELS_FEATURE, BOTS_FEATURE, INVITES_FEATURE].iter().map(|s| s.to_string()).collect(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, DND_FEATURE, BIG_FILES_FEATURE, GIFS_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE, VOUCHES_FOR_ME_FEATURE, PRIVATE_CHANNELS_FEATURE, BOTS_FEATURE, INVITES_FEATURE, POKER_FEATURE].iter().map(|s| s.to_string()).collect(),
             dms: self.db.dms_of(uid),
             relations: self.db.relations_of(uid),
             groups: if groups { self.db.groups_of(uid) } else { Vec::new() },
@@ -1271,13 +1274,27 @@ impl Hub {
     }
 
     pub fn unregister(&self, conn_id: ConnId) {
+        let gone = self.unregister_locked(conn_id);
+        // Gone from here altogether: out of their poker seats (after the lock: poker tells
+        // people what happened).
+        if let Some(uid) = gone {
+            self.poker.gone(self, &uid);
+        }
+    }
+
+    /// (The person, when this was their last connection.)
+    fn unregister_locked(&self, conn_id: ConnId) -> Option<UserId> {
         let mut inner = self.inner.lock();
         if let Some(session) = inner.clients.get(&conn_id).and_then(|c| c.session) {
             Self::remove_session_locked(&mut inner, session);
         }
         let was_idle = inner.clients.get(&conn_id).map(|c| Self::is_idle_locked(&inner, &c.user_id));
         let was_dnd = inner.clients.get(&conn_id).map(|c| Self::is_dnd_locked(&inner, &c.user_id));
+        let mut gone = None;
         if let Some(c) = inner.clients.remove(&conn_id) {
+            if !Self::is_online_locked(&inner, &c.user_id) {
+                gone = Some(c.user_id.clone());
+            }
             // Gone, idle now that the one place they weren't idle has gone, or no longer Do
             // Not Disturb now that the place they said so has gone.
             if !Self::is_online_locked(&inner, &c.user_id)
@@ -1289,6 +1306,7 @@ impl Hub {
                 }
             }
         }
+        gone
     }
 
     // ------------------------------------------------------------------ voice

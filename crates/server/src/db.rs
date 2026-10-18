@@ -48,6 +48,11 @@ pub enum InviteError {
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS poker_records (
+    uid TEXT PRIMARY KEY,
+    record TEXT NOT NULL,
+    held INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -420,6 +425,49 @@ impl Db {
             params![key, value],
         )?;
         Ok(())
+    }
+
+    // ---------------------------------------------------------------- poker
+
+    /// A player's poker record (a new one the first time), and the chips they have at tables.
+    pub fn poker_record(&self, uid: &str) -> (pyr_poker::progress::Record, u64) {
+        let row: Option<(String, i64)> = self.conn.lock().query_row("SELECT record, held FROM poker_records WHERE uid = ?1", [uid], |r| Ok((r.get(0)?, r.get(1)?))).optional().ok().flatten();
+        match row {
+            Some((json, held)) => (serde_json::from_str(&json).unwrap_or_else(|_| pyr_poker::progress::Record::new()), held.max(0) as u64),
+            None => (pyr_poker::progress::Record::new(), 0),
+        }
+    }
+
+    pub fn set_poker_record(&self, uid: &str, rec: &pyr_poker::progress::Record, held: u64) -> Result<()> {
+        let json = serde_json::to_string(rec)?;
+        self.conn.lock().execute(
+            "INSERT INTO poker_records(uid, record, held) VALUES (?1, ?2, ?3) ON CONFLICT(uid) DO UPDATE SET record = excluded.record, held = excluded.held",
+            params![uid, json, held as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Every poker record (for the leaderboard).
+    pub fn poker_records(&self) -> Vec<(String, pyr_poker::progress::Record, u64)> {
+        let conn = self.conn.lock();
+        let Ok(mut st) = conn.prepare("SELECT uid, record, held FROM poker_records") else { return Vec::new() };
+        st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))
+            .map(|rows| rows.flatten().filter_map(|(u, j, h)| Some((u, serde_json::from_str(&j).ok()?, h.max(0) as u64))).collect())
+            .unwrap_or_default()
+    }
+
+    /// When the server starts: chips that were at tables when it stopped go back to their owners.
+    pub fn poker_return_held(&self) -> usize {
+        let mut n = 0;
+        for (uid, mut rec, held) in self.poker_records() {
+            if held > 0 {
+                rec.chips += held;
+                if self.set_poker_record(&uid, &rec, 0).is_ok() {
+                    n += 1;
+                }
+            }
+        }
+        n
     }
 
     // ---------------------------------------------------------------- users

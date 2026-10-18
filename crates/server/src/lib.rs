@@ -9,6 +9,7 @@ pub mod conn;
 pub mod db;
 pub mod directory;
 pub mod hub;
+pub mod poker;
 pub mod tls;
 
 use std::net::SocketAddr;
@@ -217,6 +218,21 @@ pub async fn start_with(cfg: ServerConfig, invite_directory: Option<String>) -> 
 
     // How everyone's viewers are getting on with their camera or screen share.
     tokio::spawn(hub.clone().feedback_loop());
+
+    // Poker: chips left at tables when the server last stopped go back to their owners, and
+    // the tables' clock (deals, bots' turns, people's time running out).
+    let n = hub.db.poker_return_held();
+    if n > 0 {
+        tracing::info!("gave {n} people back the poker chips they had at tables");
+    }
+    let h = hub.clone();
+    tokio::spawn(async move {
+        let mut every = tokio::time::interval(std::time::Duration::from_millis(200));
+        loop {
+            every.tick().await;
+            h.poker.tick(&h);
+        }
+    });
 
     // Attachments that were uploaded but never sent, and unused profile pictures.
     let h = hub.clone();

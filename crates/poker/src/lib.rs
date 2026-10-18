@@ -8,7 +8,9 @@ pub mod cards;
 pub mod eval;
 pub mod fair;
 pub mod game;
+pub mod net;
 pub mod progress;
+pub mod room;
 
 pub use cards::{Card, CardSet};
 pub use eval::{Category, Value};

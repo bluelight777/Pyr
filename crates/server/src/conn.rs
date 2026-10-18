@@ -967,6 +967,7 @@ impl Ctx<'_> {
                 | Request::SetVouches { .. }
                 | Request::GetVouchesForMe {}
                 | Request::ReportBug { .. }
+                | Request::Poker { .. }
                 | Request::SubmitPlugin { .. }
                 | Request::SubmissionPart { .. }
         ) && self.is_bot(&self.uid)
@@ -1768,6 +1769,14 @@ impl Ctx<'_> {
                     hub.broadcast_info();
                 }
                 Ok(Event::Ok)
+            }
+            Request::Poker { msg } => {
+                let can_manage = self.can(perm::MANAGE_SERVER);
+                match hub.poker.handle(hub, &self.uid, can_manage, msg) {
+                    Ok(Some(msg)) => Ok(Event::Poker { msg }),
+                    Ok(None) => Ok(Event::Ok),
+                    Err(e) => Err((ErrorCode::BadRequest, e)),
+                }
             }
             Request::PlaySound { sound, name, emoji, volume } => {
                 if !self.sound_tokens.take(1.0) {
