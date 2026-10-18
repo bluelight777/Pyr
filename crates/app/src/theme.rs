@@ -3,7 +3,7 @@
 //! through the functions below, so everything Pyr draws follows the skin in use.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 use eframe::egui::{
     self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle, Visuals,
@@ -17,6 +17,94 @@ static SKINNED: AtomicBool = AtomicBool::new(false);
 /// whether through the side panels too (not just the chat).
 static PICTURE_SHOW: AtomicU32 = AtomicU32::new(0);
 static PICTURE_WHOLE_WINDOW: AtomicBool = AtomicBool::new(false);
+
+/// A skin's shapes (see `pyr_proto::skin::Look`): how round corners are (thousandths of
+/// Pyr's own), people's pictures (0 circle, 1 rounded, 2 square), how what's selected is
+/// marked (0 fill, 1 bar, 2 outline), and outlines on buttons and boxes.
+static CORNERS: AtomicU32 = AtomicU32::new(1000);
+static FACES: AtomicU8 = AtomicU8::new(0);
+static SELECTED: AtomicU8 = AtomicU8::new(0);
+static OUTLINES: AtomicBool = AtomicBool::new(false);
+
+/// Use a skin's shapes (`None`: Campfire's). Call `apply_style` after.
+pub fn set_look(l: Option<&pyr_proto::skin::Look>) {
+    let d = pyr_proto::skin::Look::default();
+    let l = l.unwrap_or(&d);
+    CORNERS.store((l.corners.clamp(0.0, 2.0) * 1000.0).round() as u32, Ordering::Relaxed);
+    FACES.store(
+        match l.avatars.as_str() {
+            "rounded" => 1,
+            "square" => 2,
+            _ => 0,
+        },
+        Ordering::Relaxed,
+    );
+    SELECTED.store(
+        match l.selected.as_str() {
+            "bar" => 1,
+            "outline" => 2,
+            _ => 0,
+        },
+        Ordering::Relaxed,
+    );
+    OUTLINES.store(l.outlines, Ordering::Relaxed);
+}
+
+/// Corners `n` round in Campfire, as round as the skin in use has them.
+pub fn r(n: u8) -> CornerRadius {
+    CornerRadius::same(rf(n as f32).round().min(255.0) as u8)
+}
+
+/// The same, for a radius worked out (not a fixed one).
+pub fn rf(n: f32) -> f32 {
+    n * CORNERS.load(Ordering::Relaxed) as f32 / 1000.0
+}
+
+/// How round the corners of someone's picture `radius` across are: a circle, or the skin's
+/// rounded square or square.
+pub fn face_round(radius: f32) -> f32 {
+    match FACES.load(Ordering::Relaxed) {
+        0 => radius,
+        1 => radius * 0.42,
+        _ => radius * 0.14,
+    }
+}
+
+/// Whether people's pictures are circles (the skin in use hasn't made them squares).
+pub fn round_faces() -> bool {
+    FACES.load(Ordering::Relaxed) == 0
+}
+
+/// Whether what's selected is marked by filling it (Campfire's way).
+pub fn selected_fills() -> bool {
+    SELECTED.load(Ordering::Relaxed) == 0
+}
+
+/// Whether buttons, boxes and cards have outlines.
+pub fn outlines() -> bool {
+    OUTLINES.load(Ordering::Relaxed)
+}
+
+/// Marks a row as the one selected (a channel, a conversation, a page), the skin's way: filled
+/// (`fill`, see-through over a skin's picture), a bar of the accent at its left, or an outline
+/// of the accent. `round`: its corners, in Campfire.
+pub fn selected(p: &egui::Painter, rect: egui::Rect, round: u8, fill: Color32) {
+    let corners = r(round);
+    match SELECTED.load(Ordering::Relaxed) {
+        1 => {
+            p.rect_filled(rect, corners, row(fill).gamma_multiply(0.6));
+            let bar = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + 5.0), egui::pos2(rect.left() + 3.0, rect.bottom() - 5.0));
+            p.rect_filled(bar, r(2), EMBER());
+        }
+        2 => {
+            p.rect_filled(rect, corners, row(fill).gamma_multiply(0.4));
+            p.rect_stroke(rect.shrink(0.5), corners, Stroke::new(1.0f32, EMBER()), egui::StrokeKind::Inside);
+        }
+        _ => {
+            p.rect_filled(rect, corners, row(fill));
+        }
+    }
+}
 
 fn color(i: usize) -> Color32 {
     let v = PALETTE[i].load(Ordering::Relaxed);
@@ -84,7 +172,7 @@ palette! {
     MAIN = 3, "The chat.";
     ELEV = 4, "Cards, boxes to type in, buttons.";
     ELEV2 = 5, "A button or card under the pointer.";
-    HOVER = 6, "A row under the pointer.";
+    HOVER_SOLID = 6, "A row under the pointer (see `HOVER`).";
     LINE = 7, "Lines between things.";
     SHADOW_LINE = 8, "The darker line under headers.";
     TEXT = 9, "Headings and names.";
@@ -104,6 +192,28 @@ palette! {
     CODE_BG = 23, "Code blocks.";
     SELECTION = 24, "Selected text.";
 }
+
+/// A row under the pointer: the skin's hover color, see-through where a skin's picture shows
+/// (see `row`).
+#[allow(non_snake_case)]
+#[inline]
+pub fn HOVER() -> Color32 {
+    row(HOVER_SOLID())
+}
+
+/// A row's highlight (under the pointer, or the one chosen): `c` as it is, or, while a skin's
+/// picture shows, a little lighter and see-through, so the picture still shows behind the row
+/// instead of being hidden by a solid block.
+pub fn row(c: Color32) -> Color32 {
+    if PICTURE_SHOW.load(Ordering::Relaxed) == 0 {
+        return c;
+    }
+    let lit = mix(c, TEXT(), 0.10);
+    Color32::from_rgba_unmultiplied(lit.r(), lit.g(), lit.b(), ROW_ALPHA)
+}
+
+/// How solid a row's highlight is over a skin's picture (of 255).
+const ROW_ALPHA: u8 = 120;
 
 /// The BOT tag on bots' names (Discord's blurple; the same in every skin).
 pub const BOT: Color32 = Color32::from_rgb(0x58, 0x65, 0xf2);
@@ -290,9 +400,9 @@ pub fn apply_style(ctx: &egui::Context) {
         v.panel_fill = MAIN();
         v.window_fill = SIDE();
         v.window_stroke = Stroke::new(1.0f32, LINE());
-        v.window_corner_radius = CornerRadius::same(10);
+        v.window_corner_radius = r(10);
         // Menus and tooltips: rounded, roomy, floating over things on a soft shadow.
-        v.menu_corner_radius = CornerRadius::same(10);
+        v.menu_corner_radius = r(10);
         v.popup_shadow = egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(150) };
         v.extreme_bg_color = CODE_BG();
         v.faint_bg_color = ELEV();
@@ -308,18 +418,19 @@ pub fn apply_style(ctx: &egui::Context) {
         w.noninteractive.fg_stroke = Stroke::new(1.0f32, BODY());
         w.inactive.bg_fill = ELEV();
         w.inactive.weak_bg_fill = ELEV();
-        w.inactive.bg_stroke = Stroke::NONE;
+        // (A skin can outline buttons and boxes: crisper, like an older program's.)
+        w.inactive.bg_stroke = if outlines() { Stroke::new(1.0f32, mix(LINE(), TEXT(), 0.12)) } else { Stroke::NONE };
         w.inactive.fg_stroke = Stroke::new(1.0f32, TEXT());
-        w.inactive.corner_radius = CornerRadius::same(6);
+        w.inactive.corner_radius = r(6);
         w.hovered.bg_fill = ELEV2();
         w.hovered.weak_bg_fill = ELEV2();
         w.hovered.bg_stroke = Stroke::new(1.0f32, if skinned { mix(ELEV2(), TEXT(), 0.12) } else { Color32::from_rgb(0x55, 0x48, 0x3f) });
         w.hovered.fg_stroke = Stroke::new(1.5f32, TEXT());
-        w.hovered.corner_radius = CornerRadius::same(6);
+        w.hovered.corner_radius = r(6);
         w.active.bg_fill = active;
         w.active.weak_bg_fill = active;
         w.active.fg_stroke = Stroke::new(1.5f32, EMBER2());
-        w.active.corner_radius = CornerRadius::same(6);
+        w.active.corner_radius = r(6);
         w.open.bg_fill = ELEV2();
         w.open.weak_bg_fill = ELEV2();
         s.visuals = v;
@@ -330,13 +441,13 @@ pub fn apply_style(ctx: &egui::Context) {
 pub fn primary_button(text: &str) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(text.to_string()).color(on_ember()).font(bold_font(14.0)))
         .fill(EMBER())
-        .corner_radius(CornerRadius::same(6))
+        .corner_radius(r(6))
 }
 
 pub fn danger_button(text: &str) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(text.to_string()).color(Color32::WHITE).font(bold_font(14.0)))
         .fill(LIVE())
-        .corner_radius(CornerRadius::same(6))
+        .corner_radius(r(6))
 }
 
 /// Window icon: the campfire from `assets/icon` (made by `tools/make-icons.py`).
@@ -353,7 +464,7 @@ mod tests {
     fn the_palette_is_the_skins_list_in_its_order() {
         assert_eq!(NAMES.len(), pyr_proto::skin::COLORS.len());
         for (name, i) in NAMES {
-            assert_eq!(pyr_proto::skin::color_index(&name.to_ascii_lowercase()), Some(*i), "{name}");
+            assert_eq!(pyr_proto::skin::color_index(&name.trim_end_matches("_SOLID").to_ascii_lowercase()), Some(*i), "{name}");
         }
         // Campfire's colors as before skins.
         assert_eq!(MAIN(), Color32::from_rgb(0x26, 0x20, 0x1c));

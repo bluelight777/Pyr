@@ -523,6 +523,7 @@ pub fn quit() -> ! {
 
 /// Take the icon away before the process exits by itself (an update quitting the app).
 pub fn prepare_exit() {
+    crate::watchdog::quitting();
     remove_icon();
     crate::plugins::programs::close_all_now();
 }
@@ -577,6 +578,7 @@ unsafe fn refresh_pointer(main: HWND) {
 /// the window does, then exit.
 fn quit_now(from: &str) -> ! {
     tracing::info!("quitting ({from})");
+    crate::watchdog::quitting();
     let state = with_state(|s| (s.main, s.engine.clone()));
     remove_icon();
     if let Some((main, engine)) = state {

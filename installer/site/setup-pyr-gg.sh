@@ -461,6 +461,10 @@ $H2_ON
     server_name $DOMAIN;
 $TLS
     add_header X-Content-Type-Options nosniff always;
+    # Browsers check for a newer page and pictures every time (answered "not changed" when
+    # nothing is), so a new release shows right away instead of an old copy for hours.
+    # (pyr.gg settings v2: install-site.sh runs this script again for servers set up before.)
+    add_header Cache-Control "no-cache" always;
     root $SITE_ROOT;
     index index.html;
     charset utf-8;

@@ -1,7 +1,7 @@
 //! The emoji picker, like Discord's: search, the server's own emoji, frequently used, every
 //! emoji by category with a skin tone choice, and a preview of the one under the pointer.
 
-use eframe::egui::{self, Color32, CornerRadius, Rect, RichText, Sense, Stroke, pos2, vec2};
+use eframe::egui::{self, Color32, Rect, RichText, Sense, Stroke, pos2, vec2};
 use pyr_engine::state::AppState;
 
 use crate::app::{Act, PyrApp};
@@ -94,7 +94,7 @@ impl PyrApp {
                     let e = EmojiRef::Unicode(emoji::cell_of(h).unwrap_or(0));
                     let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
                     if i as u8 == tone {
-                        ui.painter().rect_filled(rect, CornerRadius::same(6), theme::HOVER());
+                        ui.painter().rect_filled(rect, crate::theme::r(6), theme::HOVER());
                     }
                     emoji::paint(ui.painter(), rect.shrink(4.0), &e, &mut custom_tex);
                     if resp.clicked() {
@@ -189,7 +189,7 @@ impl PyrApp {
                         };
                         let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
                         if resp.hovered() {
-                            ui.painter().rect_filled(rect, CornerRadius::same(6), theme::HOVER());
+                            ui.painter().rect_filled(rect, crate::theme::r(6), theme::HOVER());
                         }
                         match &icon {
                             Some(e) => emoji::paint(ui.painter(), rect.shrink(6.0), e, &mut custom_tex),
@@ -223,7 +223,7 @@ impl PyrApp {
                                         continue;
                                     }
                                     if resp.hovered() {
-                                        ui.painter().rect_filled(rect, CornerRadius::same(6), theme::HOVER());
+                                        ui.painter().rect_filled(rect, crate::theme::r(6), theme::HOVER());
                                         hovered = Some((c.e.clone(), c.label.clone()));
                                     }
                                     emoji::paint(ui.painter(), rect.shrink(5.0), &c.e, &mut custom_tex);
@@ -293,11 +293,11 @@ pub fn reaction_pill(
     } else {
         theme::ELEV()
     };
-    ui.painter().rect_filled(rect, CornerRadius::same(8), fill);
+    ui.painter().rect_filled(rect, crate::theme::r(8), fill);
     if mine {
-        ui.painter().rect_stroke(rect, CornerRadius::same(8), Stroke::new(1.0f32, theme::EMBER()), egui::StrokeKind::Inside);
+        ui.painter().rect_stroke(rect, crate::theme::r(8), Stroke::new(1.0f32, theme::EMBER()), egui::StrokeKind::Inside);
     } else if resp.hovered() {
-        ui.painter().rect_stroke(rect, CornerRadius::same(8), Stroke::new(1.0f32, theme::LINE()), egui::StrokeKind::Inside);
+        ui.painter().rect_stroke(rect, crate::theme::r(8), Stroke::new(1.0f32, theme::LINE()), egui::StrokeKind::Inside);
     }
     let er = Rect::from_min_size(pos2(rect.left() + 8.0, rect.center().y - 10.0), vec2(20.0, 20.0));
     match &e {

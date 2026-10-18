@@ -853,8 +853,8 @@ impl PyrApp {
             let n = 2 + mine as usize + (mine || admin) as usize;
             let w = n as f32 * 30.0 + 8.0;
             let tools = Rect::from_min_size(pos2(rect.right() - w - 16.0, rect.top() - 10.0), vec2(w, 32.0));
-            ui.painter().rect_filled(tools, CornerRadius::same(6), theme::ELEV());
-            ui.painter().rect_stroke(tools, CornerRadius::same(6), Stroke::new(1.0f32, theme::LINE()), egui::StrokeKind::Inside);
+            ui.painter().rect_filled(tools, crate::theme::r(6), theme::ELEV());
+            ui.painter().rect_stroke(tools, crate::theme::r(6), Stroke::new(1.0f32, theme::LINE()), egui::StrokeKind::Inside);
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(tools.shrink2(vec2(4.0, 2.0))).layout(Layout::left_to_right(Align::Center)));
             child.spacing_mut().item_spacing.x = 2.0;
             if icon_button(&mut child, 28.0, "Add reaction", self.ui.react_picker == Some(m.id), |p, r, c| icons::smile(p, r, c)).clicked() {
@@ -873,7 +873,7 @@ impl PyrApp {
                 let now = ui.input(|i| i.modifiers.shift);
                 let del = if now {
                     let (r, resp) = child.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
-                    child.painter().rect_filled(r, CornerRadius::same(6), theme::LIVE());
+                    child.painter().rect_filled(r, crate::theme::r(6), theme::LIVE());
                     icons::trash(child.painter(), r.shrink(28.0 * 0.2), Color32::WHITE);
                     resp.on_hover_text("Delete now")
                 } else {
@@ -945,7 +945,7 @@ impl PyrApp {
                                     ui.painter().add(egui::Shape::mesh(mesh));
                                 }
                                 None => {
-                                    ui.painter().rect_filled(r, CornerRadius::same(6), theme::ELEV());
+                                    ui.painter().rect_filled(r, crate::theme::r(6), theme::ELEV());
                                     ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, name, theme::font(11.0), theme::DIM());
                                 }
                             }
@@ -1028,7 +1028,7 @@ impl PyrApp {
                 ui.horizontal_wrapped(|ui| {
                     for (i, (name, bytes)) in files.iter().enumerate() {
                         let (r, _) = ui.allocate_exact_size(vec2(110.0, 96.0), Sense::hover());
-                        ui.painter().rect_filled(r, CornerRadius::same(6), theme::SIDE());
+                        ui.painter().rect_filled(r, crate::theme::r(6), theme::SIDE());
                         let img = r.shrink(6.0).with_max_y(r.bottom() - 20.0);
                         let k = format!("draft:{}:{}", pyr_proto::release::sha256_hex(bytes), bytes.len());
                         let t = ui.input(|i| i.time);
@@ -1098,7 +1098,7 @@ impl PyrApp {
                         for (name, help) in &cmds {
                             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::click());
                             if resp.hovered() {
-                                ui.painter().rect_filled(r, CornerRadius::same(5), theme::HOVER());
+                                ui.painter().rect_filled(r, crate::theme::r(5), theme::HOVER());
                             }
                             let g = ui.painter().layout_no_wrap(format!("/{name}"), theme::bold_font(14.0), theme::TEXT());
                             let w = g.size().x;
@@ -1155,7 +1155,7 @@ impl PyrApp {
                             self.ui.mention_sel = i;
                         }
                         if i == self.ui.mention_sel {
-                            ui.painter().rect_filled(r, CornerRadius::same(5), theme::HOVER());
+                            ui.painter().rect_filled(r, crate::theme::r(5), theme::HOVER());
                         }
                         let mut x = r.left() + 8.0;
                         if let Some(e) = &sg.emoji {
@@ -1552,11 +1552,11 @@ fn menu_check(ui: &mut egui::Ui, label: &str, on: bool, radio: bool) -> egui::Re
     let p = ui.painter();
     match (radio, on) {
         (false, true) => {
-            p.rect_filled(b, CornerRadius::same(4), theme::EMBER());
+            p.rect_filled(b, crate::theme::r(4), theme::EMBER());
             icons::tick(p, b, Color32::WHITE);
         }
         (false, false) => {
-            p.rect_stroke(b, CornerRadius::same(4), Stroke::new(1.5f32, theme::MUTED()), egui::StrokeKind::Inside);
+            p.rect_stroke(b, crate::theme::r(4), Stroke::new(1.5f32, theme::MUTED()), egui::StrokeKind::Inside);
         }
         (true, on) => {
             p.circle_stroke(b.center(), 7.0, Stroke::new(1.5f32, if on { theme::EMBER() } else { theme::MUTED() }));
@@ -1572,7 +1572,7 @@ fn menu_check(ui: &mut egui::Ui, label: &str, on: bool, radio: bool) -> egui::Re
 fn send_button(ui: &mut egui::Ui, ready: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(30.0, 30.0), if ready { Sense::click() } else { Sense::hover() });
     if ready && resp.hovered() {
-        ui.painter().rect_filled(rect, CornerRadius::same(6), theme::ELEV2());
+        ui.painter().rect_filled(rect, crate::theme::r(6), theme::ELEV2());
     }
     let color = if !ready {
         theme::DIM()
@@ -1854,7 +1854,7 @@ impl PyrApp {
         // Far from the screen: just its space. It's fetched when it comes near, so opening a
         // conversation doesn't load every picture in it at once.
         if self.ui.load_rect.is_some_and(|r| !r.intersects(rect)) && !self.images.has(&a.id) {
-            ui.painter().rect_filled(rect, CornerRadius::same(6), theme::ELEV());
+            ui.painter().rect_filled(rect, crate::theme::r(6), theme::ELEV());
             return None;
         }
         let state = self.engine.file(&s.key, &a.id);
@@ -1878,7 +1878,7 @@ impl PyrApp {
             (Some((id, isize, next)), _) => {
                 let (fit, uv) = fit_in(rect, isize);
                 ui.painter().add(
-                    egui::epaint::RectShape::filled(fit, CornerRadius::same(6), Color32::WHITE).with_texture(id, uv),
+                    egui::epaint::RectShape::filled(fit, crate::theme::r(6), Color32::WHITE).with_texture(id, uv),
                 );
                 if let (Some(n), true) = (next, plays) {
                     ui.ctx().request_repaint_after(n);
@@ -1905,12 +1905,12 @@ impl PyrApp {
                 }
             }
             (None, pyr_engine::files::FileState::Failed(e)) => {
-                ui.painter().rect_filled(rect, CornerRadius::same(6), theme::ELEV());
+                ui.painter().rect_filled(rect, crate::theme::r(6), theme::ELEV());
                 ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Image unavailable", theme::font(12.0), theme::DIM());
                 let _ = e;
             }
             _ => {
-                ui.painter().rect_filled(rect, CornerRadius::same(6), theme::ELEV());
+                ui.painter().rect_filled(rect, crate::theme::r(6), theme::ELEV());
                 let c = rect.center();
                 let a0 = t as f32 * 4.0;
                 ui.painter().add(egui::Shape::line(
@@ -1997,7 +1997,7 @@ impl PyrApp {
                     })
                     .collect();
                 let bar = Rect::from_center_size(pos2(r.center().x, r.bottom() - 84.0), vec2(420.0, 36.0));
-                ui.painter().rect_filled(bar, CornerRadius::same(10), Color32::from_black_alpha(170));
+                ui.painter().rect_filled(bar, crate::theme::r(10), Color32::from_black_alpha(170));
                 let mut row = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(10.0, 4.0))).layout(Layout::left_to_right(Align::Center)));
                 // (The keys are the viewer's: they don't reach the message box under it.)
                 let (step_back, toggle, step_on) = ui.input_mut(|i| {
@@ -2080,7 +2080,7 @@ impl Default for ViewerPlay {
 /// it's set not to).
 pub(crate) fn gif_badge(p: &egui::Painter, r: Rect) {
     let b = Rect::from_min_size(r.left_top() + vec2(6.0, 6.0), vec2(30.0, 17.0));
-    p.rect_filled(b, CornerRadius::same(4), Color32::from_black_alpha(170));
+    p.rect_filled(b, crate::theme::r(4), Color32::from_black_alpha(170));
     p.text(b.center(), egui::Align2::CENTER_CENTER, "GIF", theme::bold_font(10.5), Color32::WHITE);
 }
 
@@ -2106,7 +2106,7 @@ fn new_divider(ui: &mut egui::Ui) {
         theme::LIVE(),
         Stroke::NONE,
     ));
-    ui.painter().rect_filled(tag, CornerRadius::same(3), theme::LIVE());
+    ui.painter().rect_filled(tag, crate::theme::r(3), theme::LIVE());
     ui.painter().galley(tag.center() - galley.size() / 2.0, galley, Color32::WHITE);
 }
 
@@ -2387,7 +2387,7 @@ fn gif_star(ui: &mut egui::Ui, r: Rect, id: impl std::hash::Hash, fav: bool) -> 
     let sr = Rect::from_min_size(pos2(r.right() - 32.0, r.top() + 6.0), vec2(26.0, 26.0));
     let resp = ui.interact(sr, ui.id().with(id), Sense::click());
     let lit = resp.hovered();
-    ui.painter().rect_filled(sr, CornerRadius::same(7), if lit { theme::ELEV2() } else { Color32::from_black_alpha(150) });
+    ui.painter().rect_filled(sr, crate::theme::r(7), if lit { theme::ELEV2() } else { Color32::from_black_alpha(150) });
     icons::star(ui.painter(), sr.shrink(if lit { 4.5 } else { 5.5 }), theme::GLOW(), fav);
     resp.on_hover_text(if fav { "Remove from favorites" } else { "Add to favorites" }).clicked()
 }
@@ -2456,7 +2456,7 @@ impl PyrApp {
         let far = self.ui.load_rect.is_some_and(|r| !r.intersects(Rect::from_min_size(ui.cursor().min, space)));
         if far && !self.images.has(&k) {
             let (r, _) = ui.allocate_exact_size(space, Sense::hover());
-            ui.painter().rect_filled(r, CornerRadius::same(8), theme::ELEV());
+            ui.painter().rect_filled(r, crate::theme::r(8), theme::ELEV());
             return (false, false);
         }
         let ctx = ui.ctx().clone();
@@ -2492,7 +2492,7 @@ impl PyrApp {
                 // In the space it was given (fitted), or at its own size.
                 let (r, resp) = ui.allocate_exact_size(if known.is_some() { space } else { fit(size) }, Sense::click());
                 let (img, uv) = fit_in(r, size);
-                ui.painter().add(egui::epaint::RectShape::filled(img, CornerRadius::same(8), Color32::WHITE).with_texture(tex, uv));
+                ui.painter().add(egui::epaint::RectShape::filled(img, crate::theme::r(8), Color32::WHITE).with_texture(tex, uv));
                 if let (Some(n), true) = (next, plays) {
                     ui.ctx().request_repaint_after(n);
                 }
@@ -2517,7 +2517,7 @@ impl PyrApp {
                     self.ui.gifs_waiting += 1;
                 }
                 let (r, _) = ui.allocate_exact_size(space, Sense::hover());
-                ui.painter().rect_filled(r, CornerRadius::same(8), theme::ELEV());
+                ui.painter().rect_filled(r, crate::theme::r(8), theme::ELEV());
                 ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, "Loading GIF…", theme::font(12.5), theme::DIM());
             }
         }
@@ -2829,7 +2829,7 @@ impl PyrApp {
                 if !ui.is_rect_visible(r) {
                     continue;
                 }
-                ui.painter().rect_filled(r, CornerRadius::same(6), theme::ELEV());
+                ui.painter().rect_filled(r, crate::theme::r(6), theme::ELEV());
                 // Its small version, else the GIF itself.
                 let ctx = ui.ctx().clone();
                 let mut src = t.show;
@@ -2845,7 +2845,7 @@ impl PyrApp {
                         if t.w <= 0.0 || t.h <= 0.0 {
                             self.ui.gif_sizes.set(t.fallback, size);
                         }
-                        ui.painter().add(egui::epaint::RectShape::filled(r, CornerRadius::same(6), Color32::WHITE).with_texture(tex, cover_uv(r, size)));
+                        ui.painter().add(egui::epaint::RectShape::filled(r, crate::theme::r(6), Color32::WHITE).with_texture(tex, cover_uv(r, size)));
                         if let Some(nx) = next {
                             ui.ctx().request_repaint_after(nx);
                         }
@@ -2853,7 +2853,7 @@ impl PyrApp {
                 }
                 let inside = ui.rect_contains_pointer(r);
                 if i == sel || inside {
-                    ui.painter().rect_stroke(r, CornerRadius::same(6), Stroke::new(2.0f32, theme::EMBER()), egui::StrokeKind::Inside);
+                    ui.painter().rect_stroke(r, crate::theme::r(6), Stroke::new(2.0f32, theme::EMBER()), egui::StrokeKind::Inside);
                 }
                 let resp = if t.title.is_empty() { resp } else { resp.on_hover_text(t.title) };
                 if resp.clicked() {

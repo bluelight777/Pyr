@@ -88,7 +88,7 @@ impl PyrApp {
                 ui.add_space(10.0);
                 let (area, resp) = ui.allocate_exact_size(vec2(BOX, BOX), Sense::drag());
                 let p = ui.painter().with_clip_rect(area);
-                p.rect_filled(area, CornerRadius::same(8), theme::STAGE());
+                p.rect_filled(area, crate::theme::r(8), theme::STAGE());
                 // How big an image pixel is on screen: the chosen square fills the circle.
                 let side_px = c.w.min(c.h) * c.frac();
                 let scale = CIRCLE / side_px;

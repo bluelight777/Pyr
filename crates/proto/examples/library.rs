@@ -218,6 +218,9 @@ fn main() -> Result<()> {
                     preview,
                     review: d.review,
                     updated: if d.updated > 0 { d.updated } else { now() },
+                    // A skin with shapes of its own (`look`) is only listed for the Pyrs that
+                    // know them; older ones would refuse its skin.json.
+                    needs: if m.look.is_set() { pyr_proto::skin::Look::SINCE.to_string() } else { String::new() },
                 };
                 e.check().map_err(anyhow::Error::msg)?;
                 println!("{} {} (Skin): {} bytes", e.id, e.version, e.size());

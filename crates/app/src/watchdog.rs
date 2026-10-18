@@ -10,6 +10,18 @@ use std::sync::Mutex;
 
 static STEP: Mutex<&'static str> = Mutex::new("starting");
 
+/// Pyr is quitting (to install an update, or from the tray): its window going quiet now is
+/// the goodbye, not a freeze, so nothing more is watched (bug report 20: quitting to install
+/// an update was logged as the window not responding, and reported by itself next time).
+#[cfg_attr(not(windows), allow(dead_code))]
+static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Call when Pyr starts quitting.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn quitting() {
+    QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// What the window is doing now (named in the log if it hangs). Never waits.
 pub fn step(s: &'static str) {
     if let Ok(mut g) = STEP.try_lock() {
@@ -175,6 +187,9 @@ mod win {
         let mut last_health = Instant::now();
         loop {
             std::thread::sleep(Duration::from_secs(2));
+            if super::QUITTING.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
             // (The window there is now: after it's opened again, the new one.)
             let main = crate::tray::main_window().unwrap_or(main);
             // Answered by the window's thread whenever it checks its messages (even while the
@@ -183,6 +198,9 @@ mod win {
                 let mut r = 0usize;
                 SendMessageTimeoutW(main, WM_NULL, WPARAM(0), LPARAM(0), SMTO_ABORTIFHUNG | SMTO_BLOCK, ANSWER_WITHIN_MS, Some(&mut r)).0 != 0
             };
+            if super::QUITTING.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
             let now = sample();
             match (answered, hung_since) {
                 (false, None) => {

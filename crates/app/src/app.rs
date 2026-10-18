@@ -288,6 +288,49 @@ pub(crate) const SERVER_MUTED: &str = "A moderator server muted you here. Only a
 pub(crate) const SERVER_DEAFENED: &str = "A moderator server deafened you here. Only a moderator can undeafen you.";
 /// The height of a person's row under a voice channel (Discord's spacing).
 const VOICE_MEMBER_H: f32 = 30.0;
+/// The same, when what's by their name goes on a line under it.
+const VOICE_MEMBER_TWO_H: f32 = 44.0;
+
+/// What can show by someone's name under a voice channel.
+#[derive(Clone, Copy)]
+enum VoiceMark {
+    Meter,
+    Live,
+    Camera,
+    Deaf(Color32),
+    Mute(Color32),
+}
+
+impl VoiceMark {
+    /// The room it takes, gap included.
+    fn width(&self) -> f32 {
+        match self {
+            VoiceMark::Meter => 36.0,
+            VoiceMark::Live => 40.0,
+            _ => 20.0,
+        }
+    }
+
+    /// Drawn in its room, which starts at `at.x` (centered on `at.y`).
+    fn paint(&self, p: &egui::Painter, at: egui::Pos2, track: Option<&crate::meter::Track>, style: crate::meter::Style) {
+        let y = at.y;
+        let icon = |x: f32| Rect::from_center_size(pos2(x + 10.0, y), vec2(16.0, 16.0));
+        match *self {
+            VoiceMark::Meter => {
+                let m = Rect::from_min_max(pos2(at.x + 4.0, y - 7.0), pos2(at.x + 32.0, y + 7.0));
+                crate::meter::paint(p, m, style, track, false);
+            }
+            VoiceMark::Live => {
+                let b = Rect::from_min_max(pos2(at.x + 3.0, y - 8.0), pos2(at.x + 37.0, y + 8.0));
+                p.rect_filled(b, crate::theme::r(4), theme::LIVE());
+                p.text(b.center(), egui::Align2::CENTER_CENTER, "LIVE", theme::bold_font(10.0), Color32::WHITE);
+            }
+            VoiceMark::Camera => icons::camera(p, icon(at.x), theme::DIM(), false),
+            VoiceMark::Deaf(c) => icons::headphones(p, icon(at.x), c, true),
+            VoiceMark::Mute(c) => icons::mic(p, icon(at.x), c, true),
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct UiState {
@@ -1291,7 +1334,17 @@ impl eframe::App for PyrApp {
         ctx.request_repaint_after(std::time::Duration::from_secs(1));
         // The skin: what Pyr looks like (its picture goes under everything, so first).
         {
-            let skin = engine.state().settings.skin.clone();
+            let mut skin = engine.state().settings.skin.clone();
+            // A skin that isn't installed (its folder removed, or, with 0.8.0, left behind in
+            // Ingle's folder): back to Campfire for good, said once, not as an error.
+            if !skin.is_empty() && self.plugins.skins.get(&skin).is_none() {
+                let name = self.plugins.library.as_ref().and_then(|l| l.find_skin(&skin)).map(|s| s.name.clone()).unwrap_or_else(|| skin.clone());
+                tracing::info!("the skin being worn ({skin}) isn't installed; back to Campfire");
+                let settings = engine.state().settings.clone();
+                engine.update_settings(pyr_engine::config::Settings { skin: String::new(), ..settings });
+                engine.shared.state.write().toast(format!("{name} isn't installed any more, so Pyr is back to Campfire. Get it again from Skins."), false);
+                skin.clear();
+            }
             let plugins = &self.plugins;
             if let Some(msg) = self.looks.step(ctx, &engine, &skin, |id| plugins.skin_files(id)) {
                 let error = !msg.starts_with("Trying");
@@ -1529,18 +1582,28 @@ pub fn avatar(
     ring_bg: Color32,
     face: Option<egui::TextureId>,
 ) {
+    // (A circle, or the skin's rounded square or square: the ring around someone talking
+    // follows the same shape.)
+    let shape = |grow: f32| {
+        let rr = radius + grow;
+        let round = if theme::round_faces() { rr } else { theme::face_round(radius) + grow.max(0.0) };
+        (Rect::from_center_size(center, vec2(rr * 2.0, rr * 2.0)), CornerRadius::same(round.clamp(0.0, 255.0) as u8))
+    };
     if speaking {
-        p.circle_filled(center, radius + 4.0, theme::GLOW().gamma_multiply(0.25));
-        p.circle_stroke(center, radius + 2.5, Stroke::new(2.5f32, theme::GLOW()));
-        p.circle_stroke(center, radius + 0.5, Stroke::new(1.5f32, ring_bg));
+        let (r4, c4) = shape(4.0);
+        p.rect_filled(r4, c4, theme::GLOW().gamma_multiply(0.25));
+        let (r2, c2) = shape(2.5);
+        p.rect_stroke(r2, c2, Stroke::new(2.5f32, theme::GLOW()), egui::StrokeKind::Middle);
+        let (r0, c0) = shape(0.5);
+        p.rect_stroke(r0, c0, Stroke::new(1.5f32, ring_bg), egui::StrokeKind::Middle);
     }
+    let (rect, round) = shape(0.0);
     if let Some(tex) = face {
-        let rect = Rect::from_center_size(center, vec2(radius * 2.0, radius * 2.0));
         let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-        p.add(egui::epaint::RectShape::filled(rect, CornerRadius::same(radius.min(255.0) as u8), Color32::WHITE).with_texture(tex, uv));
+        p.add(egui::epaint::RectShape::filled(rect, round, Color32::WHITE).with_texture(tex, uv));
         return;
     }
-    p.circle_filled(center, radius, theme::avatar_color(uid));
+    p.rect_filled(rect, round, theme::avatar_color(uid));
     let initial: String = name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_else(|| "?".into());
     p.text(center, egui::Align2::CENTER_CENTER, initial, theme::bold_font(radius * 0.95), Color32::from_rgb(0x1b, 0x14, 0x11));
 }
@@ -1643,7 +1706,7 @@ fn status_choice(ui: &mut egui::Ui, p: Presence, chosen: bool, what: &str) -> bo
     } else {
         ui.visuals().window_fill
     };
-    ui.painter().rect_filled(r, CornerRadius::same(6), bg);
+    ui.painter().rect_filled(r, crate::theme::r(6), bg);
     status_dot(ui.painter(), pos2(r.left() + 16.0, r.center().y), p, bg);
     ui.painter().text(pos2(r.left() + 32.0, r.center().y - 8.0), egui::Align2::LEFT_CENTER, p.label(), theme::bold_font(13.5), theme::TEXT());
     ui.painter().text(pos2(r.left() + 32.0, r.center().y + 9.0), egui::Align2::LEFT_CENTER, what, theme::font(11.5), theme::MUTED());
@@ -1669,7 +1732,7 @@ pub fn icon_button(
     } else {
         Color32::TRANSPARENT
     };
-    ui.painter().rect_filled(rect, CornerRadius::same(6), bg);
+    ui.painter().rect_filled(rect, crate::theme::r(6), bg);
     let color = if active { theme::EMBER2() } else if resp.hovered() { theme::TEXT() } else { theme::MUTED() };
     draw(ui.painter(), rect.shrink(size * 0.2), color);
     resp.on_hover_text(tooltip)
@@ -2093,7 +2156,7 @@ impl PyrApp {
                     .or_else(|| server.group(channel).map(|g| server.group_name(g, &st.my_uid)))
                     .unwrap_or_default();
                 let b = Rect::from_center_size(r.center(), vec2(420.0, 120.0));
-                ui.painter().rect_filled(b, CornerRadius::same(14), theme::EMBER());
+                ui.painter().rect_filled(b, crate::theme::r(14), theme::EMBER());
                 ui.painter().text(b.center() - vec2(0.0, 12.0), egui::Align2::CENTER_CENTER, "Drop images to send", theme::bold_font(20.0), Color32::from_rgb(0x1b, 0x14, 0x11));
                 ui.painter().text(b.center() + vec2(0.0, 18.0), egui::Align2::CENTER_CENTER, format!("in {name}"), theme::font(14.0), Color32::from_rgb(0x3a, 0x22, 0x14));
             });
@@ -2133,11 +2196,11 @@ impl PyrApp {
             let (r, resp) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::click());
             let home = self.ui.home;
             let fill = if home { Color32::from_rgb(0x4a, 0x30, 0x22) } else if resp.hovered() { theme::ELEV2() } else { Color32::from_rgb(0x24, 0x1d, 0x19) };
-            ui.painter().rect_filled(r, CornerRadius::same(if home || resp.hovered() { 16 } else { 24 }), fill);
+            ui.painter().rect_filled(r, crate::theme::r(if home || resp.hovered() { 16 } else { 24 }), fill);
             icons::flame(ui.painter(), r.shrink(10.0));
             if home || resp.hovered() {
                 let pill = Rect::from_center_size(pos2(ui.max_rect().left() + 2.0, r.center().y), vec2(4.0, if home { 40.0 } else { 20.0 }));
-                ui.painter().rect_filled(pill, CornerRadius::same(2), theme::TEXT());
+                ui.painter().rect_filled(pill, crate::theme::r(2), theme::TEXT());
             }
             // (Direct messages and groups count here, not on their server's icon.)
             let dm_count: u32 = st.servers.iter().map(|s| s.mentions.iter().filter(|(c, _)| s.is_private(**c)).map(|(_, n)| n).sum::<u32>()).sum::<u32>()
@@ -2189,7 +2252,7 @@ impl PyrApp {
                     (None, None) => continue,
                 };
                 let pill = Rect::from_center_size(pos2(ui.max_rect().left() + 2.0, r.center().y), vec2(4.0, if resp.hovered() { 20.0 } else { 8.0 }));
-                ui.painter().rect_filled(pill, CornerRadius::same(2), theme::TEXT());
+                ui.painter().rect_filled(pill, crate::theme::r(2), theme::TEXT());
                 let c = r.right_bottom() - vec2(6.0, 6.0);
                 ui.painter().circle_filled(c, 9.0, theme::RAIL());
                 ui.painter().circle_filled(c, 7.5, theme::LIVE());
@@ -2204,7 +2267,7 @@ impl PyrApp {
             }
             ui.add_space(6.0);
             let (sep, _) = ui.allocate_exact_size(vec2(32.0, 2.0), Sense::hover());
-            ui.painter().rect_filled(sep, CornerRadius::same(1), theme::LINE());
+            ui.painter().rect_filled(sep, crate::theme::r(1), theme::LINE());
             ui.add_space(6.0);
             for s in &st.servers {
                 let selected = !self.ui.home && !self.ui.plugins_open && self.ui.server.as_deref() == Some(s.key.as_str());
@@ -2224,11 +2287,11 @@ impl PyrApp {
                 // Discord); the colored tile is only behind initials. The pill on the left shows
                 // which server is open.
                 if icon.is_none() {
-                    ui.painter().rect_filled(rect, CornerRadius::same(radius), fill);
+                    ui.painter().rect_filled(rect, crate::theme::r(radius), fill);
                 }
                 if let Some(t) = icon {
                     let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-                    ui.painter().add(egui::epaint::RectShape::filled(rect, CornerRadius::same(radius), Color32::WHITE).with_texture(t, uv));
+                    ui.painter().add(egui::epaint::RectShape::filled(rect, crate::theme::r(radius), Color32::WHITE).with_texture(t, uv));
                 }
                 let initials: String = s
                     .name
@@ -2247,7 +2310,7 @@ impl PyrApp {
                 let pill_h = if selected { 40.0 } else if hovered { 20.0 } else if unread { 8.0 } else { 0.0 };
                 if pill_h > 0.0 {
                     let pill = Rect::from_center_size(pos2(ui.max_rect().left() + 2.0, rect.center().y), vec2(4.0, pill_h));
-                    ui.painter().rect_filled(pill, CornerRadius::same(2), theme::TEXT());
+                    ui.painter().rect_filled(pill, crate::theme::r(2), theme::TEXT());
                 }
                 let mentions: u32 = s.mentions.iter().filter(|(c, _)| !s.is_private(**c)).map(|(_, n)| n).sum();
                 if mentions > 0 {
@@ -2261,10 +2324,10 @@ impl PyrApp {
                     let col = if matches!(s.status, ConnStatus::Failed(_)) { theme::LIVE() } else { theme::DIM() };
                     ui.painter().circle_filled(c, 6.0, theme::RAIL());
                     ui.painter().circle_filled(c, 4.0, col);
-                } else if s.voice.values().any(|v| s.channel(v.channel_id).is_some()) {
-                    // People talking here: a little speaker (brighter when I'm there too).
-                    let mine = st.call.as_ref().is_some_and(|c| c.server_key == s.key);
-                    crate::server_card::voice_badge(ui.painter(), rect, mine);
+                } else if st.call.as_ref().is_some_and(|c| c.server_key == s.key && s.channel(c.channel_id).is_some()) {
+                    // I'm in a voice channel here: the green speaker, where Discord has it
+                    // (who else is talking shows on the card when it's pointed at).
+                    crate::server_card::voice_badge(ui.painter(), rect, true);
                 }
                 if resp.clicked() {
                     self.ui.home = false;
@@ -2311,7 +2374,7 @@ impl PyrApp {
             }
             let (rect, resp) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::click());
             let fill = if resp.hovered() { theme::EMBER() } else { theme::ELEV() };
-            ui.painter().rect_filled(rect, CornerRadius::same(if resp.hovered() { 16 } else { 24 }), fill);
+            ui.painter().rect_filled(rect, crate::theme::r(if resp.hovered() { 16 } else { 24 }), fill);
             icons::plus(ui.painter(), rect.shrink(12.0), if resp.hovered() { theme::RAIL() } else { theme::EMBER() }, 2.5);
             if resp.on_hover_text("Add a server").clicked() {
                 self.ui.dialog = Some(Dialog::AddChoice);
@@ -2388,7 +2451,7 @@ impl PyrApp {
                 let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
                 let row = r.shrink2(vec2(8.0, 1.0));
                 if resp.hovered() {
-                    ui.painter().rect_filled(row, CornerRadius::same(6), theme::ELEV());
+                    ui.painter().rect_filled(row, crate::theme::r(6), theme::ELEV());
                 }
                 ui.painter().text(row.left_center() + vec2(12.0, 0.0), egui::Align2::LEFT_CENTER, "!", theme::bold_font(17.0), theme::MUTED());
                 ui.painter().text(row.left_center() + vec2(32.0, 0.0), egui::Align2::LEFT_CENTER, "Bug reports", theme::font(15.0), theme::MUTED());
@@ -2396,7 +2459,7 @@ impl PyrApp {
                 if n > 0 {
                     let t = if n > 99 { "99+".to_string() } else { n.to_string() };
                     let b = Rect::from_center_size(pos2(row.right() - 18.0, row.center().y), vec2(14.0 + 7.0 * t.len() as f32, 18.0));
-                    ui.painter().rect_filled(b, CornerRadius::same(9), theme::LIVE());
+                    ui.painter().rect_filled(b, crate::theme::r(9), theme::LIVE());
                     ui.painter().text(b.center(), egui::Align2::CENTER_CENTER, t, theme::bold_font(11.5), Color32::WHITE);
                 }
                 if resp.on_hover_text("Pyr bug reports people sent here. Only you see this.").clicked() {
@@ -2412,7 +2475,7 @@ impl PyrApp {
                     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
                     let row = r.shrink2(vec2(8.0, 1.0));
                     if resp.hovered() {
-                        ui.painter().rect_filled(row, CornerRadius::same(6), theme::ELEV());
+                        ui.painter().rect_filled(row, crate::theme::r(6), theme::ELEV());
                     }
                     let icon = Rect::from_center_size(row.left_center() + vec2(14.0, 0.0), vec2(15.0, 15.0));
                     if skins {
@@ -2426,7 +2489,7 @@ impl PyrApp {
                     if n > 0 {
                         let t = if n > 99 { "99+".to_string() } else { n.to_string() };
                         let b = Rect::from_center_size(pos2(row.right() - 18.0, row.center().y), vec2(14.0 + 7.0 * t.len() as f32, 18.0));
-                        ui.painter().rect_filled(b, CornerRadius::same(9), theme::LIVE());
+                        ui.painter().rect_filled(b, crate::theme::r(9), theme::LIVE());
                         ui.painter().text(b.center(), egui::Align2::CENTER_CENTER, t, theme::bold_font(11.5), Color32::WHITE);
                     }
                     let tip = if skins { "Skins people sent in for the Pyr Library. Only you see this." } else { "Plugins people sent in for the Pyr Library. Only you see this." };
@@ -2464,8 +2527,13 @@ impl PyrApp {
                     // bubble the row itself isn't "hovered", and going by that made the bubble
                     // blink (and miss clicks).
                     let hot = ui.rect_contains_pointer(rect);
-                    let bg = if selected { theme::ELEV2() } else if hot { theme::ELEV() } else { Color32::TRANSPARENT };
-                    ui.painter().rect_filled(rect, CornerRadius::same(6), bg);
+                    // (Behind the lock on a private channel's icon.)
+                    let bg = if selected { theme::row(theme::ELEV2()) } else if hot { theme::row(theme::ELEV()) } else { Color32::TRANSPARENT };
+                    if selected {
+                        theme::selected(ui.painter(), rect, 6, theme::ELEV2());
+                    } else if hot {
+                        ui.painter().rect_filled(rect, crate::theme::r(6), theme::row(theme::ELEV()));
+                    }
                     let icon_rect = Rect::from_min_size(rect.left_top() + vec2(8.0, 7.0), vec2(18.0, 18.0));
                     let fg = if selected || unread || hot {
                         theme::TEXT()
@@ -2504,13 +2572,13 @@ impl PyrApp {
                     crate::emoji::paint_text(ui.painter(), pos2(x, rect.center().y), egui::Align2::LEFT_CENTER, title, font, fg, Some(room));
                     if mentions > 0 {
                         let b = Rect::from_center_size(rect.right_center() - vec2(18.0, 0.0), vec2(22.0, 16.0));
-                        ui.painter().rect_filled(b, CornerRadius::same(8), theme::LIVE());
+                        ui.painter().rect_filled(b, crate::theme::r(8), theme::LIVE());
                         ui.painter().text(b.center(), egui::Align2::CENTER_CENTER, mentions.to_string(), theme::bold_font(11.0), Color32::WHITE);
                     }
                     // Unread (text channels, and voice channels' chats): the dot on the left.
                     if unread || mentions > 0 {
                         let p = pos2(rect.left() - 6.0, rect.center().y);
-                        ui.painter().rect_filled(Rect::from_center_size(p, vec2(4.0, 8.0)), CornerRadius::same(2), theme::TEXT());
+                        ui.painter().rect_filled(Rect::from_center_size(p, vec2(4.0, 8.0)), crate::theme::r(2), theme::TEXT());
                     }
                     // Voice channels: a chat bubble opens the channel's text chat without joining.
                     // Always there to click; shown while the pointer is on the row (or unread).
@@ -2522,7 +2590,7 @@ impl PyrApp {
                         let cresp = ui.interact(cr, ui.id().with(("chat", c.id)), Sense::click());
                         if hot || unread {
                             if cresp.hovered() {
-                                ui.painter().rect_filled(cr, CornerRadius::same(5), theme::ELEV2());
+                                ui.painter().rect_filled(cr, crate::theme::r(5), theme::ELEV2());
                             }
                             icons::chat(ui.painter(), cr.shrink(5.0), if cresp.hovered() || unread { theme::TEXT() } else { theme::MUTED() });
                         }
@@ -2588,7 +2656,41 @@ impl PyrApp {
                         let style = if in_my_call { crate::meter::Style::from_setting(&st.settings.voice_meter) } else { crate::meter::Style::Off };
                         for p in s.voice_in(c.id) {
                             let name = s.member_name(&p.user_id);
-                            let (r, _) = ui.allocate_exact_size(vec2(ui.available_width() - 8.0, VOICE_MEMBER_H), Sense::hover());
+                            // What shows by their name: their voice meter (rightmost, so
+                            // everyone's line up), LIVE, camera, deafened, muted.
+                            let meter_on = !matches!(style, crate::meter::Style::Off | crate::meter::Style::Glow);
+                            let mut marks: Vec<VoiceMark> = Vec::new();
+                            if meter_on {
+                                marks.push(VoiceMark::Meter);
+                            }
+                            if p.tracks.iter().any(|t| t.id == pyr_proto::media::track::SCREEN) {
+                                marks.push(VoiceMark::Live);
+                            }
+                            if p.tracks.iter().any(|t| t.id == pyr_proto::media::track::CAMERA) {
+                                marks.push(VoiceMark::Camera);
+                            }
+                            // Deafened (red: by a moderator), and muted (red: by a moderator), like
+                            // Discord's; deafening yourself mutes you too, so that shows just the one.
+                            if p.server_deaf || p.self_deaf {
+                                marks.push(VoiceMark::Deaf(if p.server_deaf { theme::LIVE() } else { theme::DIM() }));
+                            }
+                            if p.server_mute {
+                                marks.push(VoiceMark::Mute(theme::LIVE()));
+                            } else if p.self_mute && !p.self_deaf {
+                                marks.push(VoiceMark::Mute(theme::DIM()));
+                            }
+                            let marks_w: f32 = marks.iter().map(|m| m.width()).sum();
+                            // Their name comes first: when it and the marks don't both fit on
+                            // one line, the marks go on a line of their own under the name, so
+                            // the name is never cut down to a couple of letters.
+                            let shield_room = if crate::trust::shown(st, &p.user_id, &name).is_some() { 16.0 } else { 0.0 };
+                            let name_font = theme::font(14.0);
+                            let name_w = crate::emoji::text_width(ui.painter(), &name, name_font.clone());
+                            let row_w = ui.available_width() - 8.0;
+                            // (The name starts 78 in and stops 10 short of the right.)
+                            let two_lines = !marks.is_empty() && name_w + shield_room + 6.0 + marks_w > row_w - 88.0;
+                            let h = if two_lines { VOICE_MEMBER_TWO_H } else { VOICE_MEMBER_H };
+                            let (r, _) = ui.allocate_exact_size(vec2(row_w, h), Sense::hover());
                             // Where the channel's name starts (its row is 8 in, the name 34 more).
                             let indent = r.left() + 42.0;
                             // Only that part lights up and takes clicks, like Discord.
@@ -2598,7 +2700,7 @@ impl PyrApp {
                             let pointer_in = presp.contains_pointer();
                             let card_open = self.ui.profile_card.as_ref().is_some_and(|(k, u, _)| *k == s.key && *u == uid);
                             if pointer_in || card_open {
-                                ui.painter().rect_filled(row, CornerRadius::same(6), theme::HOVER());
+                                ui.painter().rect_filled(row, crate::theme::r(6), theme::HOVER());
                             }
                             // (A hair in from the name's first letter, as in Discord.)
                             let center = pos2(indent + 13.5, r.center().y);
@@ -2609,67 +2711,57 @@ impl PyrApp {
                                 crate::meter::halo(ui.painter(), center, 12.0, t);
                             }
                             avatar(ui.painter(), center, 12.0, &uid, &name, speaking.contains(&p.session), theme::SIDE(), face);
-                            let col = if speaking.contains(&p.session) || pointer_in { theme::TEXT() } else { theme::MUTED() };
-                            let mut x = r.right() - 10.0;
-                            // Their voice meter first, at the right, so everyone's line up (Glow's
-                            // is the light around their picture); LIVE and the rest go left of it.
-                            if !matches!(style, crate::meter::Style::Off | crate::meter::Style::Glow) {
-                                let m = Rect::from_min_max(pos2(x - 30.0, r.center().y - 7.0), pos2(x - 2.0, r.center().y + 7.0));
-                                crate::meter::paint(ui.painter(), m, style, track, false);
-                                x -= 36.0;
+                            // (Names a step brighter than Discord's grey, so they stand out over a
+                            // skin's picture too; the one talking or pointed at, brightest.)
+                            let col = if speaking.contains(&p.session) || pointer_in { theme::TEXT() } else { theme::BODY() };
+                            // The name's line, and the marks' (the same line, or the one under it).
+                            let name_y = if two_lines { r.top() + 14.0 } else { r.center().y };
+                            let marks_y = if two_lines { r.bottom() - 11.0 } else { r.center().y };
+                            let right = r.right() - 10.0;
+                            if two_lines {
+                                // Under the name, left to right (the meter stays at the right).
+                                let mut mx = indent + 36.0;
+                                for m in marks.iter().rev().filter(|m| !matches!(m, VoiceMark::Meter)) {
+                                    m.paint(ui.painter(), pos2(mx, marks_y), track, style);
+                                    mx += m.width();
+                                }
+                                if meter_on {
+                                    VoiceMark::Meter.paint(ui.painter(), pos2(right - VoiceMark::Meter.width(), marks_y), track, style);
+                                }
+                            } else {
+                                let mut mx = right;
+                                for m in &marks {
+                                    mx -= m.width();
+                                    m.paint(ui.painter(), pos2(mx, marks_y), track, style);
+                                }
                             }
-                            if p.tracks.iter().any(|t| t.id == pyr_proto::media::track::SCREEN) {
-                                let b = Rect::from_min_max(pos2(x - 34.0, r.center().y - 8.0), pos2(x, r.center().y + 8.0));
-                                ui.painter().rect_filled(b, CornerRadius::same(4), theme::LIVE());
-                                ui.painter().text(b.center(), egui::Align2::CENTER_CENTER, "LIVE", theme::bold_font(10.0), Color32::WHITE);
-                                x -= 40.0;
-                            }
-                            if p.tracks.iter().any(|t| t.id == pyr_proto::media::track::CAMERA) {
-                                icons::camera(ui.painter(), Rect::from_center_size(pos2(x - 8.0, r.center().y), vec2(16.0, 16.0)), theme::DIM(), false);
-                                x -= 20.0;
-                            }
-                            // Deafened (red: by a moderator), and muted (red: by a moderator), like
-                            // Discord's; deafening yourself mutes you too, so that shows just the one.
-                            if p.server_deaf || p.self_deaf {
-                                let c = if p.server_deaf { theme::LIVE() } else { theme::DIM() };
-                                icons::headphones(ui.painter(), Rect::from_center_size(pos2(x - 8.0, r.center().y), vec2(16.0, 16.0)), c, true);
-                                x -= 20.0;
-                            }
-                            if p.server_mute {
-                                icons::mic(ui.painter(), Rect::from_center_size(pos2(x - 8.0, r.center().y), vec2(16.0, 16.0)), theme::LIVE(), true);
-                                x -= 20.0;
-                            } else if p.self_mute && !p.self_deaf {
-                                icons::mic(ui.painter(), Rect::from_center_size(pos2(x - 8.0, r.center().y), vec2(16.0, 16.0)), theme::DIM(), true);
-                                x -= 20.0;
-                            }
+                            let x = if two_lines { right } else { right - marks_w };
                             // Hovering someone: a button to message them (like the chat bubble on a
                             // voice channel).
                             let can_dm = uid != st.my_uid && s.has(pyr_proto::control::DMS_FEATURE) && s.status.is_connected();
                             // Their name (emoji and all), cut short before what's on the right.
                             let name_x = indent + 36.0;
                             let end = if can_dm && pointer_in { x - 24.0 } else { x };
-                            // (Room for the shield, when there is one.)
-                            let shield_room = if crate::trust::shown(st, &uid, &name).is_some() { 16.0 } else { 0.0 };
                             let name_rect = crate::emoji::paint_text(
                                 ui.painter(),
-                                pos2(name_x, r.center().y),
+                                pos2(name_x, name_y),
                                 egui::Align2::LEFT_CENTER,
                                 &name,
-                                theme::font(14.0),
+                                name_font,
                                 col,
                                 Some((end - name_x - 6.0 - shield_room).max(24.0)),
                             );
-                            let shield_w = crate::trust::badge_at(ui, st, &uid, &name, pos2(name_rect.right() + 4.0, r.center().y), 13.0);
+                            let shield_w = crate::trust::badge_at(ui, st, &uid, &name, pos2(name_rect.right() + 4.0, name_y), 13.0);
                             // A soundboard sound they just played: its emoji by their name.
                             if let Some((x, age)) = st.call.as_ref().filter(|c| c.server_key == s.key).and_then(|c| crate::soundboard::recent_pop(c, p.session)) {
                                 let tex = crate::soundboard::custom_emoji_id(&x.emoji).and_then(|id| self.custom_emoji_tex(ui.ctx(), &s.key, &id));
-                                let at = pos2(name_rect.right() + shield_w + 13.0, r.center().y + 4.0);
+                                let at = pos2(name_rect.right() + shield_w + 13.0, name_y + 4.0);
                                 crate::soundboard::paint_pop(ui.painter(), at, 18.0, &x.emoji, age, &mut |_| tex);
                                 ui.ctx().request_repaint();
                             }
                             let mut dm_clicked = false;
                             if can_dm && pointer_in {
-                                let br = Rect::from_center_size(pos2(x - 10.0, r.center().y), vec2(22.0, 22.0));
+                                let br = Rect::from_center_size(pos2(x - 10.0, name_y), vec2(22.0, 22.0));
                                 let bresp = ui.interact(br, ui.id().with(("dm", c.id, &uid)), Sense::click());
                                 icons::chat(ui.painter(), br.shrink(3.0), if bresp.hovered() { theme::TEXT() } else { theme::MUTED() });
                                 if bresp.on_hover_text(format!("Message {name}")).clicked() {
@@ -2809,7 +2901,7 @@ impl PyrApp {
             let btn = |ui: &mut egui::Ui, active: bool, tip: &str, draw: &dyn Fn(&egui::Painter, Rect, Color32)| {
                 let (rect, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
                 let bg = if active { Color32::from_rgb(0x3a, 0x2a, 0x20) } else if resp.hovered() { theme::ELEV2() } else { theme::ELEV() };
-                ui.painter().rect_filled(rect, CornerRadius::same(6), bg);
+                ui.painter().rect_filled(rect, crate::theme::r(6), bg);
                 draw(ui.painter(), Rect::from_center_size(rect.center(), vec2(18.0, 18.0)), if active { theme::EMBER2() } else { theme::TEXT() });
                 resp.on_hover_text(tip)
             };
@@ -2985,7 +3077,7 @@ impl PyrApp {
                     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width() - 8.0, 42.0), Sense::click());
                     let r = r.translate(vec2(8.0, 0.0)).with_max_x(r.right());
                     if resp.hovered() {
-                        ui.painter().rect_filled(r, CornerRadius::same(6), theme::HOVER());
+                        ui.painter().rect_filled(r, crate::theme::r(6), theme::HOVER());
                     }
                     let alpha = if online { 1.0 } else { 0.45 };
                     let c = pos2(r.left() + 22.0, r.center().y);
@@ -3114,7 +3206,7 @@ impl PyrApp {
         ui.vertical_centered(|ui| {
             ui.add_space((ui.available_height() * 0.18).max(30.0));
             let (r, _) = ui.allocate_exact_size(vec2(72.0, 72.0), Sense::hover());
-            ui.painter().rect_filled(r, CornerRadius::same(22), Color32::from_rgb(0x24, 0x1d, 0x19));
+            ui.painter().rect_filled(r, crate::theme::r(22), Color32::from_rgb(0x24, 0x1d, 0x19));
             icons::flame(ui.painter(), r.shrink(14.0));
             ui.add_space(14.0);
             ui.label(RichText::new(format!("Welcome to {}", pyr_proto::APP_NAME)).font(theme::bold_font(28.0)).color(theme::TEXT()));
@@ -3396,7 +3488,7 @@ pub(crate) fn bot_tag_width(ui: &egui::Ui) -> f32 {
 pub(crate) fn paint_bot_tag(ui: &egui::Ui, left: egui::Pos2) {
     let w = bot_tag_width(ui);
     let r = Rect::from_min_size(left - vec2(0.0, 8.0), vec2(w, 16.0));
-    ui.painter().rect_filled(r, CornerRadius::same(4), theme::BOT);
+    ui.painter().rect_filled(r, crate::theme::r(4), theme::BOT);
     ui.painter().text(r.center() + vec2(0.0, 0.5), egui::Align2::CENTER_CENTER, "BOT", theme::bold_font(10.0), Color32::WHITE);
 }
 

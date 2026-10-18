@@ -1,0 +1,49 @@
+{
+  "name": "Alloy",
+  "version": "1.0",
+  "summary": "Machined aluminium and ice-white light: square-shouldered, outlined and exact.",
+  "author": "Pyr",
+  "colors": {
+    "rail": "#0b0b0c",
+    "side": "#101012",
+    "side_dark": "#0d0e0f",
+    "main": "#151618",
+    "elev": "#1e2022",
+    "elev2": "#292c2f",
+    "hover": "#1a1c1e",
+    "line": "#2e3033",
+    "shadow_line": "#070708",
+    "text": "#eceef0",
+    "body": "#dee0e3",
+    "muted": "#a5a8ac",
+    "dim": "#7b8084",
+    "ember": "#c9d6e3",
+    "ember2": "#eef3f8",
+    "glow": "#a9d4ff",
+    "live": "#ff5a5f",
+    "online": "#5fd38d",
+    "owner": "#f2c94c",
+    "admin": "#b9c7ff",
+    "link": "#9db4ff",
+    "stage": "#060606",
+    "tile": "#131415",
+    "code_bg": "#0e0e0f",
+    "selection": "#3a4a5c"
+  },
+  "background": {
+    "file": "background.webp",
+    "show": 0.36,
+    "under": "window"
+  },
+  "fonts": {
+    "body": "fonts/SpaceGrotesk-Regular.ttf",
+    "bold": "fonts/SpaceGrotesk-Bold.ttf",
+    "scale": 1.0
+  },
+  "look": {
+    "corners": 0.35,
+    "avatars": "rounded",
+    "selected": "outline",
+    "outlines": true
+  }
+}

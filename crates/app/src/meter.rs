@@ -492,7 +492,7 @@ fn dots(p: &egui::Painter, r: Rect, t: &Track, c: &Colors) {
 fn glow(p: &egui::Painter, r: Rect, t: &Track, c: &Colors) {
     let mid = r.center();
     let round = |h: f32| CornerRadius::same((h / 2.0).clamp(0.0, 255.0) as u8);
-    p.rect_filled(Rect::from_center_size(mid, vec2(r.width() * 0.9, 1.5)), CornerRadius::same(1), c.dim.gamma_multiply(0.4));
+    p.rect_filled(Rect::from_center_size(mid, vec2(r.width() * 0.9, 1.5)), crate::theme::r(1), c.dim.gamma_multiply(0.4));
     for (age, loud) in &t.ripples {
         let k = age / RIPPLE_LIFE;
         let ring = Rect::from_center_size(mid, vec2(r.width() * (0.2 + 0.85 * k), r.height() * (0.3 + 0.75 * k)));
@@ -537,12 +537,12 @@ pub fn picker(ui: &mut egui::Ui, meters: &mut Meters, chosen: &mut String) {
                 p.set_opacity(if resp.hovered() { 0.75 } else { 0.4 });
             }
             let p = &p;
-            p.rect_filled(r, CornerRadius::same(8), if resp.hovered() { theme::ELEV2() } else { theme::ELEV() });
+            p.rect_filled(r, crate::theme::r(8), if resp.hovered() { theme::ELEV2() } else { theme::ELEV() });
             if on {
-                p.rect_stroke(r, CornerRadius::same(8), Stroke::new(2.0f32, theme::EMBER()), StrokeKind::Inside);
+                p.rect_stroke(r, crate::theme::r(8), Stroke::new(2.0f32, theme::EMBER()), StrokeKind::Inside);
             }
             let screen = Rect::from_min_size(r.min + vec2(9.0, 9.0), vec2(r.width() - 18.0, 36.0));
-            p.rect_filled(screen, CornerRadius::same(5), theme::SIDE_DARK());
+            p.rect_filled(screen, crate::theme::r(5), theme::SIDE_DARK());
             match s {
                 Style::Off => {}
                 Style::Glow => {

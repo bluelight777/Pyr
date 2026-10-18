@@ -174,6 +174,116 @@
       "license": "MIT OR Apache-2.0",
       "review": "Made by Pyr. The picture was made with Meshy.",
       "dir": "stormcaller/1.0"
+    },
+    {
+      "id": "alloy",
+      "name": "Alloy",
+      "version": "1.0",
+      "summary": "Machined aluminium and ice-white light: square-shouldered, outlined and exact.",
+      "description": "Pyr machined from metal: a dark brushed-aluminium panel with hex screws and a softly glowing ice-white light ring, behind the whole window. Steel panels with outlined buttons and boxes, tight corners, rounded-square pictures, the selected channel outlined, and the Space Grotesk typeface.",
+      "author": "Pyr",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Pyr. The picture was made with Meshy. Its fonts are under the SIL Open Font License (in fonts/OFL.txt).",
+      "dir": "alloy/1.0"
+    },
+    {
+      "id": "dot-matrix",
+      "name": "Dot Matrix",
+      "version": "1.0",
+      "summary": "A landscape of glowing amber dots on black, in a pixel typeface: square and sharp.",
+      "description": "Pyr as an amber dot-matrix screen: mountains and contour lines drawn in glowing amber dots on black, behind the whole window. Square corners and square pictures, outlined boxes, an amber bar beside what you have open, the DotGothic16 pixel typeface for names and headings, and B612 (made for aircraft cockpit screens) for messages.",
+      "author": "Pyr",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Pyr. The picture was made with Meshy. Its fonts are under the SIL Open Font License (in fonts/OFL.txt).",
+      "dir": "dot-matrix/1.0"
+    },
+    {
+      "id": "walnut",
+      "name": "Walnut",
+      "version": "1.0",
+      "summary": "A walnut-panelled study at night, a green banker's lamp and a book-face serif.",
+      "description": "Pyr in an old study: walnut panelling with brass inlay, a green-glass banker's lamp lighting a brass globe and an open book, behind the whole window. Wood-brown panels, soft round corners, lamp-green buttons and the Vollkorn serif typeface.",
+      "author": "Pyr",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Pyr. The picture was made with Meshy. Its fonts are under the SIL Open Font License (in fonts/OFL.txt).",
+      "dir": "walnut/1.0"
+    },
+    {
+      "id": "candy-glass",
+      "name": "Candy Glass",
+      "version": "1.0",
+      "summary": "Y2K candy: glossy lime and frosted glass, bubble-round corners and a round typeface.",
+      "description": "Pyr in Y2K candy plastic: glossy lime and frosted-glass cubes, rings and drops glowing on dark slate, behind the whole window. The roundest corners in Pyr, lime buttons and the Comfortaa typeface.",
+      "author": "Pyr",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Pyr. The picture was made with Meshy. Its fonts are under the SIL Open Font License (in fonts/OFL.txt).",
+      "dir": "candy-glass/1.0"
+    },
+    {
+      "id": "circuit",
+      "name": "Circuit",
+      "version": "1.0",
+      "summary": "A black circuit board with coral-lit copper traces, drawn like a schematic.",
+      "description": "Pyr as hardware: a matte black circuit board with polished copper traces and coral light racing along them, behind the whole window. Near-square corners and square pictures, outlined everything, the selected channel outlined in coral, and the IBM Plex Sans Condensed typeface.",
+      "author": "Pyr",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Pyr. The picture was made with Meshy. Its fonts are under the SIL Open Font License (in fonts/OFL.txt).",
+      "dir": "circuit/1.0"
+    },
+    {
+      "id": "carbon",
+      "name": "Carbon",
+      "version": "1.0",
+      "summary": "Carbon fibre, racing-yellow stripes and a lit gauge, with tall condensed headings.",
+      "description": "Pyr as a race car: black carbon-fibre weave, two racing-yellow stripes and a yellow-lit gauge, behind the whole window. Black panels, racing-yellow buttons, a yellow bar beside what you have open, Bebas Neue for names and headings and Manrope for messages.",
+      "author": "Pyr",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Pyr. The picture was made with Meshy. Its fonts are under the SIL Open Font License (in fonts/OFL.txt).",
+      "dir": "carbon/1.0"
+    },
+    {
+      "id": "kaleidoscope",
+      "name": "Kaleidoscope",
+      "version": "1.0",
+      "summary": "A turquoise and tangerine kaleidoscope swirling in the dark, all soft and round.",
+      "description": "Pyr gone psychedelic: a kaleidoscope of swirling turquoise and tangerine light with sparkles, behind the whole window. Deep teal panels, very round corners, tangerine buttons, the selected channel outlined, Cherry Bomb for names and headings and Quicksand for messages.",
+      "author": "Pyr",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Pyr. The picture was made with Meshy. Its fonts are under the SIL Open Font License (in fonts/OFL.txt).",
+      "dir": "kaleidoscope/1.0"
+    },
+    {
+      "id": "field-kit",
+      "name": "Field Kit",
+      "version": "1.0",
+      "summary": "Olive-drab steel and a green radar sweep, typed up like a field report.",
+      "description": "Pyr as army field gear: a worn olive-drab steel panel with rivets, guarded toggle switches and a green radar sweeping, behind the whole window. Olive panels, square corners and pictures, outlined boxes, a khaki bar beside what you have open, and the Courier Prime typewriter typeface.",
+      "author": "Pyr",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Pyr. The picture was made with Meshy. Its fonts are under the SIL Open Font License (in fonts/OFL.txt).",
+      "dir": "field-kit/1.0"
+    },
+    {
+      "id": "starship",
+      "name": "Starship",
+      "version": "1.0",
+      "summary": "The bridge of a starship: periwinkle holo-rings, a ringed planet and a sci-fi typeface.",
+      "description": "Pyr on the bridge of a starship: periwinkle holographic rings over a curved console, and a ringed planet through the window, behind the whole window. Indigo panels, outlined boxes, the selected channel outlined in periwinkle, and the Jura typeface.",
+      "author": "Pyr",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Pyr. The picture was made with Meshy. Its fonts are under the SIL Open Font License (in fonts/OFL.txt).",
+      "dir": "starship/1.0"
+    },
+    {
+      "id": "cathedral",
+      "name": "Cathedral",
+      "version": "1.0",
+      "summary": "A gothic cathedral at night: a ruby rose window over cold stone, set in Garamond.",
+      "description": "Pyr in a gothic cathedral at night: carved stone arches in shadow and a rose window of crimson and violet stained glass, behind the whole window. Cold stone panels, ruby buttons, a ruby bar beside what you have open, and the EB Garamond typeface.",
+      "author": "Pyr",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Pyr. The picture was made with Meshy. Its fonts are under the SIL Open Font License (in fonts/OFL.txt).",
+      "dir": "cathedral/1.0"
     }
   ]
 }

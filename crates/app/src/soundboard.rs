@@ -8,7 +8,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use eframe::egui::{self, Align2, Color32, CornerRadius, Id, Rect, RichText, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
+use eframe::egui::{self, Align2, Color32, Id, Rect, RichText, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use pyr_engine::config::SoundRef;
 use pyr_engine::hotkey::{combo_label, needs_modifier};
 use pyr_engine::soundboard as sb;
@@ -469,7 +469,7 @@ impl PyrApp {
                     for (i, sec) in sections.iter().enumerate() {
                         let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
                         if resp.hovered() {
-                            ui.painter().rect_filled(rect, CornerRadius::same(8), theme::HOVER());
+                            ui.painter().rect_filled(rect, crate::theme::r(8), theme::HOVER());
                         }
                         match &sec.rail {
                             Rail::Favorites => icons::star(ui.painter(), rect.shrink(7.0), theme::GLOW(), true),
@@ -482,10 +482,10 @@ impl PyrApp {
                                 match tex {
                                     Some(t) => {
                                         let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-                                        ui.painter().add(egui::epaint::RectShape::filled(r, CornerRadius::same(8), Color32::WHITE).with_texture(t, uv));
+                                        ui.painter().add(egui::epaint::RectShape::filled(r, crate::theme::r(8), Color32::WHITE).with_texture(t, uv));
                                     }
                                     None => {
-                                        ui.painter().rect_filled(r, CornerRadius::same(8), theme::ELEV2());
+                                        ui.painter().rect_filled(r, crate::theme::r(8), theme::ELEV2());
                                         let initials: String = s
                                             .map(|s| s.name.split_whitespace().filter_map(|w| w.chars().next()).take(2).collect::<String>().to_uppercase())
                                             .unwrap_or_default();
@@ -579,9 +579,9 @@ impl PyrApp {
             theme::ELEV()
         };
         let p = ui.painter();
-        p.rect_filled(rect, CornerRadius::same(9), fill);
+        p.rect_filled(rect, crate::theme::r(9), fill);
         if lit {
-            p.rect_stroke(rect, CornerRadius::same(9), Stroke::new(1.5f32, theme::EMBER()), StrokeKind::Inside);
+            p.rect_stroke(rect, crate::theme::r(9), Stroke::new(1.5f32, theme::EMBER()), StrokeKind::Inside);
             ui.ctx().request_repaint();
         }
         let key = sound.server.clone();
@@ -619,7 +619,7 @@ impl PyrApp {
         let mut previewed = false;
         if inside {
             let pv = ui.interact(pr, ui.id().with(("hear", &sound.server, &sound.id)), Sense::click());
-            ui.painter().rect_filled(pr, CornerRadius::same(7), if pv.hovered() { theme::HOVER() } else { theme::ELEV() });
+            ui.painter().rect_filled(pr, crate::theme::r(7), if pv.hovered() { theme::HOVER() } else { theme::ELEV() });
             icons::speaker(ui.painter(), pr.shrink(6.0), if pv.hovered() { theme::TEXT() } else { theme::MUTED() });
             if pv.on_hover_text("Hear it yourself (nobody else does)").clicked() {
                 acts.push(Act::PreviewSound(sound.clone()));
@@ -804,7 +804,7 @@ impl PyrApp {
             let (r, resp) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::click());
             emoji_button = r;
             let lit = resp.hovered() || ed.emoji_open;
-            ui.painter().rect_filled(r, CornerRadius::same(8), if lit { theme::HOVER() } else { theme::ELEV() });
+            ui.painter().rect_filled(r, crate::theme::r(8), if lit { theme::HOVER() } else { theme::ELEV() });
             let ctx = ui.ctx().clone();
             let key = ed.key.clone();
             paint_emoji(ui.painter(), r.shrink(6.0), &ed.emoji, &mut |id| self.custom_emoji_tex(&ctx, &key, id));
@@ -954,9 +954,9 @@ impl PyrApp {
         }
         let (a, b) = (x_of(ed.start), x_of(ed.end));
         let p = ui.painter();
-        p.rect_filled(rect, CornerRadius::same(8), theme::MAIN());
+        p.rect_filled(rect, crate::theme::r(8), theme::MAIN());
         let sel = Rect::from_min_max(pos2(a, rect.top()), pos2(b, rect.bottom()));
-        p.rect_filled(sel, CornerRadius::same(4), Color32::from_rgba_unmultiplied(0xff, 0x8a, 0x3d, 34));
+        p.rect_filled(sel, crate::theme::r(4), Color32::from_rgba_unmultiplied(0xff, 0x8a, 0x3d, 34));
         let n = ed.outline.len().max(1);
         let w = rect.width() / n as f32;
         for (i, v) in ed.outline.iter().enumerate() {
@@ -967,9 +967,9 @@ impl PyrApp {
         }
         for x in [a, b] {
             let handle = Rect::from_center_size(pos2(x, rect.center().y), vec2(6.0, rect.height() - 6.0));
-            p.rect_filled(handle, CornerRadius::same(3), theme::EMBER2());
+            p.rect_filled(handle, crate::theme::r(3), theme::EMBER2());
         }
-        p.rect_stroke(sel, CornerRadius::same(4), Stroke::new(1.0f32, theme::EMBER()), StrokeKind::Inside);
+        p.rect_stroke(sel, crate::theme::r(4), Stroke::new(1.0f32, theme::EMBER()), StrokeKind::Inside);
         if resp.hovered() || ed.drag.is_some() {
             let near = pointer.or(ui.input(|i| i.pointer.hover_pos())).is_some_and(|p| (p.x - a).abs() < 10.0 || (p.x - b).abs() < 10.0);
             let icon = match ed.drag {

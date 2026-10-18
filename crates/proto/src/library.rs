@@ -226,9 +226,17 @@ pub struct SkinEntry {
     /// When this version was listed (Unix seconds).
     #[serde(default)]
     pub updated: i64,
+    /// The oldest Pyr that can wear it (empty: any). Older ones don't list it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub needs: String,
 }
 
 impl SkinEntry {
+    /// Whether this Pyr (`version`) can wear it.
+    pub fn fits(&self, version: &str) -> bool {
+        self.needs.is_empty() || !crate::release::newer(&self.needs, version)
+    }
+
     pub fn size(&self) -> u64 {
         self.files.iter().map(|f| f.size).sum()
     }
@@ -337,7 +345,7 @@ pub fn open(signed_json: &str, key: &str) -> Result<Library, String> {
     lib.plugins.retain(|p| p.check().is_ok());
     let mut seen = std::collections::HashSet::new();
     lib.plugins.retain(|p| seen.insert(p.id.clone()));
-    lib.skins.retain(|s| s.check().is_ok());
+    lib.skins.retain(|s| s.check().is_ok() && s.fits(env!("CARGO_PKG_VERSION")));
     let mut seen = std::collections::HashSet::new();
     lib.skins.retain(|s| seen.insert(s.id.clone()));
     Ok(lib)
@@ -449,7 +457,20 @@ mod tests {
             preview: Some(file("preview.webp")),
             review: String::new(),
             updated: 0,
+            needs: String::new(),
         }
+    }
+
+    #[test]
+    fn skins_for_newer_pyrs_are_only_listed_for_them() {
+        let mut s = skin();
+        assert!(s.fits("0.8.0"));
+        s.needs = "0.8.1".into();
+        assert!(!s.fits("0.8.0"));
+        assert!(s.fits("0.8.1"));
+        assert!(s.fits("0.9.0"));
+        // (Left out of the list when it's empty, so older lists read the same.)
+        assert!(!serde_json::to_string(&skin()).unwrap().contains("needs"));
     }
 
     #[test]

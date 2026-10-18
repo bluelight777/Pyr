@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use eframe::egui::{self, Align, Color32, CornerRadius, Layout, RichText, Sense, Stroke, vec2};
+use eframe::egui::{self, Align, Color32, Layout, RichText, Sense, Stroke, vec2};
 use pyr_engine::state::AppState;
 use pyr_host::digitalocean::{self, Catalog, RentRequest};
 use pyr_host::install::{self, InstallOptions};
@@ -219,7 +219,7 @@ pub(crate) fn choice_card(ui: &mut egui::Ui, id: &str, badge: Option<&str>, head
         ui.set_width(width - 28.0);
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::hover());
-            ui.painter().rect_filled(r, CornerRadius::same(10), theme::SIDE());
+            ui.painter().rect_filled(r, crate::theme::r(10), theme::SIDE());
             icon(ui.painter(), r.shrink(7.0), theme::EMBER());
             ui.add_space(6.0);
             ui.vertical(|ui| {
@@ -238,8 +238,8 @@ pub(crate) fn choice_card(ui: &mut egui::Ui, id: &str, badge: Option<&str>, head
     let rect = inner.response.rect;
     let resp = ui.interact(rect, ui.id().with(id), Sense::click());
     let (fill, stroke) = if resp.hovered() { (theme::ELEV2(), theme::EMBER()) } else { (theme::ELEV(), theme::LINE()) };
-    ui.painter().set(bg, egui::Shape::rect_filled(rect, CornerRadius::same(10), fill));
-    ui.painter().rect_stroke(rect, CornerRadius::same(10), Stroke::new(1.0f32, stroke), egui::StrokeKind::Inside);
+    ui.painter().set(bg, egui::Shape::rect_filled(rect, crate::theme::r(10), fill));
+    ui.painter().rect_stroke(rect, crate::theme::r(10), Stroke::new(1.0f32, stroke), egui::StrokeKind::Inside);
     ui.add_space(8.0);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
 }

@@ -208,9 +208,9 @@ pub(crate) fn choice_row(ui: &mut egui::Ui, chosen: bool, title: &str, about: &s
     } else {
         theme::mix(theme::ELEV(), theme::MAIN(), 0.45)
     };
-    p.rect_filled(r, CornerRadius::same(8), fill);
+    p.rect_filled(r, crate::theme::r(8), fill);
     if chosen {
-        p.rect_stroke(r, CornerRadius::same(8), Stroke::new(1.0, theme::mix(theme::EMBER(), theme::ELEV(), 0.45)), StrokeKind::Inside);
+        p.rect_stroke(r, crate::theme::r(8), Stroke::new(1.0, theme::mix(theme::EMBER(), theme::ELEV(), 0.45)), StrokeKind::Inside);
     }
     let ring = pos2(r.left() + 22.0, r.center().y);
     if chosen {
@@ -235,7 +235,7 @@ pub(crate) fn segmented(ui: &mut egui::Ui, id_salt: impl Hash, chosen: usize, la
     let id = ui.make_persistent_id(id_salt);
     let w = ui.available_width().min(600.0);
     let (r, _) = ui.allocate_exact_size(vec2(w, 38.0), Sense::hover());
-    ui.painter().rect_filled(r, CornerRadius::same(9), theme::SIDE());
+    ui.painter().rect_filled(r, crate::theme::r(9), theme::SIDE());
     let seg = (w - 6.0) / labels.len() as f32;
     let mut clicked = None;
     for (i, label) in labels.iter().enumerate() {
@@ -245,9 +245,9 @@ pub(crate) fn segmented(ui: &mut egui::Ui, id_salt: impl Hash, chosen: usize, la
         let hovered = resp.hovered() && ui.is_enabled();
         let p = ui.painter();
         if on {
-            p.rect_filled(s, CornerRadius::same(7), theme::EMBER());
+            p.rect_filled(s, crate::theme::r(7), theme::EMBER());
         } else if hovered {
-            p.rect_filled(s, CornerRadius::same(7), theme::ELEV());
+            p.rect_filled(s, crate::theme::r(7), theme::ELEV());
         }
         let (font, color) = if on {
             (theme::bold_font(13.5), theme::on_ember())
@@ -305,8 +305,8 @@ fn value_tag(ui: &egui::Ui, id: egui::Id, at: egui::Pos2, text: &str) {
     let p = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, id.with("tag")));
     let g = p.layout_no_wrap(text.to_string(), theme::bold_font(12.0), theme::TEXT());
     let r = Rect::from_center_size(at - vec2(0.0, 26.0), g.size() + vec2(14.0, 8.0));
-    p.rect_filled(r.translate(vec2(0.0, 1.0)), CornerRadius::same(6), Color32::from_black_alpha(80));
-    p.rect_filled(r, CornerRadius::same(6), theme::RAIL());
+    p.rect_filled(r.translate(vec2(0.0, 1.0)), crate::theme::r(6), Color32::from_black_alpha(80));
+    p.rect_filled(r, crate::theme::r(6), theme::RAIL());
     p.galley(r.center() - g.size() / 2.0, g, theme::TEXT());
 }
 
@@ -362,9 +362,9 @@ pub(crate) fn slide(
             Slid::No => held.unwrap_or(value),
         };
         let p = ui.painter();
-        p.rect_filled(track, CornerRadius::same(3), theme::mix(theme::ELEV2(), theme::MAIN(), 0.2));
+        p.rect_filled(track, crate::theme::r(3), theme::mix(theme::ELEV2(), theme::MAIN(), 0.2));
         let x = x_of(v);
-        p.rect_filled(Rect::from_min_max(track.min, pos2(x, track.bottom())), CornerRadius::same(3), theme::EMBER());
+        p.rect_filled(Rect::from_min_max(track.min, pos2(x, track.bottom())), crate::theme::r(3), theme::EMBER());
         if let Some(m) = mark {
             let mx = x_of(m);
             p.line_segment([pos2(mx, track.top() - 5.0), pos2(mx, track.bottom() + 5.0)], Stroke::new(2.0, theme::DIM()));
@@ -424,7 +424,7 @@ pub(crate) fn sensitivity(ui: &mut egui::Ui, id_salt: impl Hash, threshold: f32,
         };
         let p = ui.painter();
         let amber = crate::app::IDLE;
-        let round = CornerRadius::same(5);
+        let round = crate::theme::r(5);
         if auto {
             p.rect_filled(bar, round, theme::mix(theme::ELEV2(), theme::MAIN(), 0.2));
             if let Some(l) = level {
@@ -445,8 +445,8 @@ pub(crate) fn sensitivity(ui: &mut egui::Ui, id_salt: impl Hash, threshold: f32,
             // The knob: a white bar standing across it.
             let hot = resp.hovered() || held.is_some();
             let knob = Rect::from_center_size(pos2(tx, bar.center().y), vec2(if hot { 10.0 } else { 8.0 }, 26.0));
-            p.rect_filled(knob.translate(vec2(0.0, 1.0)), CornerRadius::same(4), Color32::from_black_alpha(70));
-            p.rect_filled(knob, CornerRadius::same(4), Color32::WHITE);
+            p.rect_filled(knob.translate(vec2(0.0, 1.0)), crate::theme::r(4), Color32::from_black_alpha(70));
+            p.rect_filled(knob, crate::theme::r(4), Color32::WHITE);
             if held.is_some() {
                 value_tag(ui, id, pos2(tx, bar.center().y - 2.0), &format!("{th:.0} dB"));
             }
@@ -481,7 +481,7 @@ fn level_pills(ui: &mut egui::Ui, level: Option<f32>) {
         } else {
             theme::LIVE()
         };
-        p.rect_filled(pill, CornerRadius::same(2), c);
+        p.rect_filled(pill, crate::theme::r(2), c);
     }
 }
 
@@ -509,11 +509,14 @@ fn nav_row(ui: &mut egui::Ui, open: bool, page: &Page) -> bool {
         theme::SIDE()
     };
     let p = ui.painter();
-    if open || hovered {
-        p.rect_filled(r, CornerRadius::same(6), bg);
-    }
     if open {
-        p.rect_filled(Rect::from_min_size(pos2(r.left(), r.center().y - 8.0), vec2(3.0, 16.0)), CornerRadius::same(2), theme::EMBER());
+        theme::selected(p, r, 6, bg);
+        // (Campfire's way here: filled, with the accent's bar too.)
+        if theme::selected_fills() {
+            p.rect_filled(Rect::from_min_size(pos2(r.left(), r.center().y - 8.0), vec2(3.0, 16.0)), crate::theme::r(2), theme::EMBER());
+        }
+    } else if hovered {
+        p.rect_filled(r, crate::theme::r(6), bg);
     }
     let fg = if open {
         theme::TEXT()
@@ -708,7 +711,7 @@ impl PyrApp {
         let full = ui.max_rect();
         let search_id = ui.make_persistent_id("settings-search");
         let (sr, _) = ui.allocate_exact_size(vec2(full.width(), 32.0), Sense::hover());
-        ui.painter().rect_filled(sr, CornerRadius::same(6), theme::RAIL());
+        ui.painter().rect_filled(sr, crate::theme::r(6), theme::RAIL());
         let mut box_ui = ui.new_child(UiBuilder::new().max_rect(Rect::from_min_max(sr.min + vec2(10.0, 0.0), sr.max - vec2(30.0, 0.0))).layout(Layout::left_to_right(Align::Center)));
         let resp = box_ui.add(
             egui::TextEdit::singleline(&mut self.ui.settings_search)
@@ -1118,7 +1121,7 @@ impl PyrApp {
                         let v = env!("CARGO_PKG_VERSION");
                         let g = ui.painter().layout_no_wrap(v.to_string(), theme::bold_font(12.0), theme::MUTED());
                         let (pr, _) = ui.allocate_exact_size(g.size() + vec2(14.0, 8.0), Sense::hover());
-                        ui.painter().rect_filled(pr, CornerRadius::same(8), theme::ELEV2());
+                        ui.painter().rect_filled(pr, crate::theme::r(8), theme::ELEV2());
                         ui.painter().galley(pr.center() - g.size() / 2.0, g, theme::MUTED());
                     });
                     ui.label(RichText::new("Lean voice, video, screen share and chat. Written in Rust.").color(theme::MUTED()));

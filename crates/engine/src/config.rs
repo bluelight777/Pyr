@@ -452,10 +452,12 @@ fn create_private_dir(dir: &Path) -> Result<()> {
 }
 
 /// Pyr was called Ingle before 0.8.0. The first time Pyr starts, it takes over Ingle's
-/// folders: the settings, the identity (so it's the same person on every server), skins and
-/// test profiles are copied (Ingle's folder stays as it was, as a backup), and the plugins,
-/// which can be big, are moved. Nothing happens once Pyr has a folder of its own, or with
-/// `PYR_HOME` (test setups). Run before anything opens the config folder (the app, the
+/// folders: the settings, the identity (so it's the same person on every server), and test
+/// profiles are copied (Ingle's folder stays as it was, as a backup), and the plugins and
+/// installed skins, which can be big, are moved. The settings come over only while Pyr has
+/// none of its own; the plugins and skins whenever Pyr has none (0.8.0 left the skins
+/// behind, so a skin being worn "wasn't installed": they come over on the next start). Not
+/// with `PYR_HOME` (test setups). Run before anything opens the config folder (the app, the
 /// connector). Returns what it did, for the log.
 pub fn migrate_from_ingle() -> Vec<String> {
     if pyr_proto::env_set("HOME") {
@@ -463,15 +465,20 @@ pub fn migrate_from_ingle() -> Vec<String> {
     }
     let dirs = |name: &str| directories::ProjectDirs::from("", "", name);
     let (Some(new), Some(old)) = (dirs(APP_NAME), dirs(pyr_proto::OLD_APP_NAME)) else { return Vec::new() };
-    migrate_folders(old.config_dir(), new.config_dir(), &old.data_local_dir().join("plugins"), &new.data_local_dir().join("plugins"))
+    migrate_folders(old.config_dir(), new.config_dir(), old.data_local_dir(), new.data_local_dir())
 }
 
 /// Files in Ingle's folder that stay behind: a running copy's lock and hand-over, its logs,
 /// and a half-finished update.
 const LEFT_BEHIND: &[&str] = &["instance.lock", "handoff", "ingle.log", "ingle.previous.log", "resume.json"];
 
-/// `migrate_from_ingle` with the folders given.
-pub fn migrate_folders(old_config: &Path, new_config: &Path, old_plugins: &Path, new_plugins: &Path) -> Vec<String> {
+/// What's kept in the local (not roaming) data folder and comes over from Ingle's: the
+/// plugins and the installed skins.
+const DATA_FOLDERS: &[(&str, &str)] = &[("plugins", "plugins"), ("skins", "skins")];
+
+/// `migrate_from_ingle` with the folders given (the config folders, and the data folders that
+/// hold `plugins` and `skins`).
+pub fn migrate_folders(old_config: &Path, new_config: &Path, old_data: &Path, new_data: &Path) -> Vec<String> {
     let mut did = Vec::new();
     let has_files = |d: &Path| std::fs::read_dir(d).map(|mut r| r.next().is_some()).unwrap_or(false);
     if has_files(old_config) && !has_files(new_config) {
@@ -483,20 +490,23 @@ pub fn migrate_folders(old_config: &Path, new_config: &Path, old_plugins: &Path,
             Err(e) => did.push(format!("couldn't copy Ingle's settings from {}: {e:#}", old_config.display())),
         }
     }
-    // (Moved only into an empty place: Pyr's own plugins are never mixed with Ingle's.)
-    if has_files(old_plugins) && !has_files(new_plugins) {
-        if let Some(parent) = new_plugins.parent() {
-            let _ = std::fs::create_dir_all(parent);
+    // (Moved only into an empty place: Pyr's own plugins and skins are never mixed with
+    // Ingle's.)
+    for (folder, what) in DATA_FOLDERS {
+        let (from, to) = (old_data.join(folder), new_data.join(folder));
+        if !has_files(&from) || has_files(&to) {
+            continue;
         }
-        let _ = std::fs::remove_dir(new_plugins);
-        let how = match std::fs::rename(old_plugins, new_plugins) {
+        let _ = std::fs::create_dir_all(new_data);
+        let _ = std::fs::remove_dir(&to);
+        let how = match std::fs::rename(&from, &to) {
             Ok(()) => Ok("moved"),
             // (Another drive, or a file in use: copied instead, Ingle's left as it is.)
-            Err(_) => copy_tree(old_plugins, new_plugins).map(|_| "copied"),
+            Err(_) => copy_tree(&from, &to).map(|_| "copied"),
         };
         match how {
-            Ok(how) => did.push(format!("{how} Ingle's plugins from {} to {}", old_plugins.display(), new_plugins.display())),
-            Err(e) => did.push(format!("couldn't bring Ingle's plugins over from {}: {e:#}", old_plugins.display())),
+            Ok(how) => did.push(format!("{how} Ingle's {what} from {} to {}", from.display(), to.display())),
+            Err(e) => did.push(format!("couldn't bring Ingle's {what} over from {}: {e:#}", from.display())),
         }
     }
     did
@@ -536,30 +546,59 @@ mod tests {
     use super::*;
 
     /// Ingle's folders come over to Pyr once: the settings and identity copied (Ingle's kept),
-    /// the plugins moved, a running copy's lock and the logs left behind.
+    /// the plugins and skins moved, a running copy's lock and the logs left behind.
     #[test]
     fn ingles_folders_come_over_once() {
         let root = std::env::temp_dir().join(format!("pyr-migrate-{}-{}", std::process::id(), pyr_proto::now_ms()));
         let (old_cfg, new_cfg) = (root.join("Ingle/config"), root.join("Pyr/config"));
-        let (old_pl, new_pl) = (root.join("Ingle/data/plugins"), root.join("Pyr/data/plugins"));
+        let (old_data, new_data) = (root.join("Ingle/data"), root.join("Pyr/data"));
         std::fs::create_dir_all(old_cfg.join("profiles/b")).unwrap();
-        std::fs::create_dir_all(old_pl.join("chim")).unwrap();
+        std::fs::create_dir_all(old_data.join("plugins/chim")).unwrap();
+        std::fs::create_dir_all(old_data.join("skins/blood-moon")).unwrap();
         for (f, t) in [("config.json", "{}"), ("identity.key", "seed"), ("instance.lock", ""), ("ingle.log", "log"), ("profiles/b/identity.key", "b")] {
             std::fs::write(old_cfg.join(f), t).unwrap();
         }
-        std::fs::write(old_pl.join("installed.json"), "[]").unwrap();
-        std::fs::write(old_pl.join("chim/chim.exe"), "exe").unwrap();
-        let did = migrate_folders(&old_cfg, &new_cfg, &old_pl, &new_pl);
-        assert_eq!(did.len(), 2, "{did:?}");
+        std::fs::write(old_data.join("plugins/installed.json"), "[]").unwrap();
+        std::fs::write(old_data.join("plugins/chim/chim.exe"), "exe").unwrap();
+        std::fs::write(old_data.join("skins/installed.json"), "[]").unwrap();
+        std::fs::write(old_data.join("skins/blood-moon/skin.json"), "{}").unwrap();
+        let did = migrate_folders(&old_cfg, &new_cfg, &old_data, &new_data);
+        assert_eq!(did.len(), 3, "{did:?}");
         assert_eq!(std::fs::read_to_string(new_cfg.join("identity.key")).unwrap(), "seed");
         assert_eq!(std::fs::read_to_string(new_cfg.join("profiles/b/identity.key")).unwrap(), "b");
         assert!(!new_cfg.join("instance.lock").exists() && !new_cfg.join("ingle.log").exists());
         assert!(old_cfg.join("identity.key").exists(), "Ingle's own copy stays");
-        assert_eq!(std::fs::read_to_string(new_pl.join("chim/chim.exe")).unwrap(), "exe");
+        assert_eq!(std::fs::read_to_string(new_data.join("plugins/chim/chim.exe")).unwrap(), "exe");
+        assert_eq!(std::fs::read_to_string(new_data.join("skins/blood-moon/skin.json")).unwrap(), "{}");
         // Once only: Pyr's own settings are never replaced.
         std::fs::write(new_cfg.join("config.json"), "{\"pyr\":1}").unwrap();
-        assert!(migrate_folders(&old_cfg, &new_cfg, &old_pl, &new_pl).is_empty());
+        assert!(migrate_folders(&old_cfg, &new_cfg, &old_data, &new_data).is_empty());
         assert_eq!(std::fs::read_to_string(new_cfg.join("config.json")).unwrap(), "{\"pyr\":1}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Someone who came over with 0.8.0 (settings and plugins moved, skins left in Ingle's
+    /// folder): the skins come over on the next start, and nothing else is touched.
+    #[test]
+    fn skins_left_behind_by_0_8_0_come_over() {
+        let root = std::env::temp_dir().join(format!("pyr-migrate-skins-{}-{}", std::process::id(), pyr_proto::now_ms()));
+        let (old_cfg, new_cfg) = (root.join("Ingle/config"), root.join("Pyr/config"));
+        let (old_data, new_data) = (root.join("Ingle/data"), root.join("Pyr/data"));
+        for d in [&old_cfg, &new_cfg, &new_data.join("plugins"), &old_data.join("skins/blood-moon")] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(old_cfg.join("config.json"), "{\"ingle\":1}").unwrap();
+        std::fs::write(new_cfg.join("config.json"), "{\"skin\":\"blood-moon\"}").unwrap();
+        std::fs::write(new_data.join("plugins/installed.json"), "[\"pyr\"]").unwrap();
+        std::fs::write(old_data.join("skins/installed.json"), "[\"blood-moon\"]").unwrap();
+        std::fs::write(old_data.join("skins/blood-moon/background.webp"), "moon").unwrap();
+        let did = migrate_folders(&old_cfg, &new_cfg, &old_data, &new_data);
+        assert_eq!(did.len(), 1, "{did:?}");
+        assert!(did[0].contains("skins"), "{did:?}");
+        assert_eq!(std::fs::read_to_string(new_data.join("skins/blood-moon/background.webp")).unwrap(), "moon");
+        assert_eq!(std::fs::read_to_string(new_cfg.join("config.json")).unwrap(), "{\"skin\":\"blood-moon\"}");
+        assert_eq!(std::fs::read_to_string(new_data.join("plugins/installed.json")).unwrap(), "[\"pyr\"]");
+        assert!(migrate_folders(&old_cfg, &new_cfg, &old_data, &new_data).is_empty(), "once");
         let _ = std::fs::remove_dir_all(&root);
     }
 

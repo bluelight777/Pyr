@@ -1698,6 +1698,13 @@ pub enum Event {
         /// Times it's been used (a reused invite may have been).
         #[serde(default, skip_serializing_if = "is_zero_u32")]
         uses: u32,
+        /// The community's own link, when it has one (`https://pyr.gg/<vanity>`, set by the
+        /// owner or someone who can manage the server): what Invite People shows everyone.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vanity: Option<String>,
+        /// Its full link (`pyr://host/<vanity>/fp`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vanity_link: Option<String>,
     },
     /// Reply to `ListInvites` (and to `SetVanity`).
     Invites {

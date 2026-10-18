@@ -53,7 +53,7 @@ async fn invites_open_by_their_code_and_go_when_taken_back() {
     // An invite made the way CreateInvite makes one: its short link comes back once listed.
     hub.db.create_invite("qrstuvwx", "server", None, None, Role::Member).unwrap();
     hub.db.set_listed("qrstuvwx", true).unwrap();
-    let made = Event::InviteCreated { code: "qrstuvwx".into(), link: hub.invite_link("qrstuvwx"), short: None, short_problem: None, expires_at: None, max_uses: None, uses: 0 };
+    let made = Event::InviteCreated { code: "qrstuvwx".into(), link: hub.invite_link("qrstuvwx"), short: None, short_problem: None, expires_at: None, max_uses: None, uses: 0, vanity: None, vanity_link: None };
     let Event::InviteCreated { short, short_problem, .. } = hub.with_short_link(made).await else { panic!() };
     assert_eq!((short.as_deref(), short_problem), (Some("https://pyr.gg/qrstuvwx"), None));
 
@@ -98,6 +98,13 @@ async fn invites_open_by_their_code_and_go_when_taken_back() {
     hub.db.insert_member(&owner, "Blue", Role::Owner, false).unwrap();
     let Ok(Event::Invites { vanity, short_links, .. }) = hub.set_vanity(&owner, Some("Camp-Fire".into())).await else { panic!() };
     assert_eq!((vanity.as_deref(), short_links), (Some("camp-fire"), true));
+    // Everyone's Invite People now shows the community's own link (with its full link too).
+    hub.db.create_invite("abcdefgh", "someone", None, None, Role::Member).unwrap();
+    hub.db.set_listed("abcdefgh", true).unwrap();
+    let made = Event::InviteCreated { code: "abcdefgh".into(), link: hub.invite_link("abcdefgh"), short: None, short_problem: None, expires_at: None, max_uses: None, uses: 0, vanity: None, vanity_link: None };
+    let Event::InviteCreated { vanity, vanity_link, .. } = hub.with_short_link(made).await else { panic!() };
+    assert_eq!(vanity.as_deref(), Some("https://pyr.gg/camp-fire"));
+    assert_eq!(vanity_link, Some(hub.invite_link("camp-fire")));
     assert!(hub.db.invite("camp-fire").is_some(), "it's an invite here too");
     let l: Lookup = serde_json::from_str(&tokio::task::spawn_blocking({
         let base = base.clone();

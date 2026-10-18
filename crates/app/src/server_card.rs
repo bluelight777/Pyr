@@ -2,7 +2,7 @@
 //! there, and who's in its voice channels, faces and all. And a little speaker on the icons
 //! of servers where people are talking right now.
 
-use eframe::egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Stroke, pos2, vec2};
+use eframe::egui::{self, Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
 use pyr_engine::state::{AppState, ConnStatus, ServerView};
 use pyr_proto::control::{ChannelKind, VoiceParticipant};
 use pyr_proto::media::track;
@@ -30,10 +30,11 @@ pub fn busy_voice(s: &ServerView) -> Vec<(String, Vec<&VoiceParticipant>)> {
 
 /// The little speaker on a server's icon while people are in its voice channels.
 pub fn voice_badge(p: &egui::Painter, icon: Rect, mine: bool) {
-    let c = icon.right_top() + vec2(-5.0, 5.0);
-    p.circle_filled(c, 10.0, theme::RAIL());
-    p.circle_filled(c, 8.5, if mine { theme::ONLINE() } else { theme::mix(theme::ONLINE(), theme::RAIL(), 0.35) });
-    icons::speaker(p, Rect::from_center_size(c + vec2(0.5, 0.0), vec2(10.0, 10.0)), Color32::WHITE);
+    // (Where Discord puts it: over the icon's top right corner, a little in from it.)
+    let c = icon.right_top() + vec2(-11.0, 12.0);
+    p.circle_filled(c, 9.5, theme::RAIL());
+    p.circle_filled(c, 8.0, if mine { theme::ONLINE() } else { theme::mix(theme::ONLINE(), theme::RAIL(), 0.35) });
+    icons::speaker(p, Rect::from_center_size(c + vec2(0.5, 0.0), vec2(9.0, 9.0)), Color32::WHITE);
 }
 
 impl PyrApp {
@@ -60,7 +61,7 @@ impl PyrApp {
                 egui::Frame::new()
                     .fill(theme::ELEV())
                     .stroke(Stroke::new(1.0, theme::LINE()))
-                    .corner_radius(CornerRadius::same(10))
+                    .corner_radius(crate::theme::r(10))
                     .shadow(egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(110) })
                     .inner_margin(egui::Margin { left: 12, right: 14, top: 10, bottom: 10 })
                     .show(ui, |ui| {
@@ -72,10 +73,10 @@ impl PyrApp {
                             match self.server_icon(ui.ctx(), s) {
                                 Some(t) => {
                                     let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-                                    ui.painter().add(egui::epaint::RectShape::filled(r, CornerRadius::same(6), Color32::WHITE).with_texture(t, uv));
+                                    ui.painter().add(egui::epaint::RectShape::filled(r, crate::theme::r(6), Color32::WHITE).with_texture(t, uv));
                                 }
                                 None => {
-                                    ui.painter().rect_filled(r, CornerRadius::same(6), theme::EMBER());
+                                    ui.painter().rect_filled(r, crate::theme::r(6), theme::EMBER());
                                     let initial: String = s.name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
                                     ui.painter().text(r.center(), Align2::CENTER_CENTER, initial, theme::bold_font(11.0), theme::on_ember());
                                 }
@@ -119,7 +120,7 @@ impl PyrApp {
                                 }
                                 if live {
                                     let (b, _) = ui.allocate_exact_size(vec2(34.0, 16.0), Sense::hover());
-                                    ui.painter().rect_filled(b, CornerRadius::same(4), theme::LIVE());
+                                    ui.painter().rect_filled(b, crate::theme::r(4), theme::LIVE());
                                     ui.painter().text(b.center(), Align2::CENTER_CENTER, "LIVE", theme::bold_font(9.5), Color32::WHITE);
                                 }
                             });

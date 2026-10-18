@@ -184,6 +184,13 @@ pub struct MadeInvite {
     pub uses: u32,
     /// What it was asked for: (most uses, seconds until it runs out).
     pub asked: (Option<u32>, Option<u64>),
+    /// The community's own link (`https://pyr.gg/<vanity>`), when it has one: shown instead,
+    /// unless this one was made by Edit invite link.
+    pub vanity: Option<String>,
+    /// Its full link.
+    pub vanity_link: Option<String>,
+    /// Made by Edit invite link (Generate a new link), rather than for opening Invite People.
+    pub chosen: bool,
 }
 
 impl MadeInvite {

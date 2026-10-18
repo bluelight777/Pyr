@@ -133,7 +133,7 @@ impl PyrApp {
         icon(ui.painter(), rect.shrink(13.0), if hot { theme::EMBER2() } else { theme::EMBER() }, fill);
         if hot {
             let pill = Rect::from_center_size(egui::pos2(ui.max_rect().left() + 2.0, rect.center().y), vec2(4.0, if on { 40.0 } else { 20.0 }));
-            ui.painter().rect_filled(pill, CornerRadius::same(2), theme::TEXT());
+            ui.painter().rect_filled(pill, crate::theme::r(2), theme::TEXT());
         }
         if updates > 0 {
             let c = rect.right_bottom() - vec2(6.0, 6.0);
@@ -183,7 +183,7 @@ impl PyrApp {
             self.plugin_icon(&mut icon_ui, &id, Kind::Program, 32.0);
             if hot {
                 let pill = Rect::from_center_size(egui::pos2(ui.max_rect().left() + 2.0, rect.center().y), vec2(4.0, if on { 40.0 } else { 20.0 }));
-                ui.painter().rect_filled(pill, CornerRadius::same(2), theme::TEXT());
+                ui.painter().rect_filled(pill, crate::theme::r(2), theme::TEXT());
             }
             // A green dot: it's running.
             let c = rect.right_bottom() - vec2(6.0, 6.0);
@@ -289,7 +289,7 @@ impl PyrApp {
         egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::panel(theme::MAIN(), true)).inner_margin(egui::Margin::symmetric(28, 20))).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 let (r, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
-                ui.painter().rect_filled(r, CornerRadius::same(10), theme::ELEV());
+                ui.painter().rect_filled(r, crate::theme::r(10), theme::ELEV());
                 icons::puzzle(ui.painter(), r.shrink(8.0), theme::EMBER());
                 ui.add_space(6.0);
                 ui.vertical(|ui| {
@@ -338,7 +338,7 @@ impl PyrApp {
         egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::panel(theme::MAIN(), true)).inner_margin(egui::Margin::symmetric(28, 20))).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 let (r, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
-                ui.painter().rect_filled(r, CornerRadius::same(10), theme::ELEV());
+                ui.painter().rect_filled(r, crate::theme::r(10), theme::ELEV());
                 icons::palette_mono(ui.painter(), r.shrink(8.0), theme::EMBER(), theme::ELEV());
                 ui.add_space(6.0);
                 ui.vertical(|ui| {
@@ -476,7 +476,7 @@ impl PyrApp {
                     self.skin_picture(ui, &s.id, pic);
                     if wearing {
                         let r = Rect::from_min_size(top_left + vec2(8.0, 8.0), vec2(82.0, 22.0));
-                        ui.painter().rect_filled(r, CornerRadius::same(11), theme::EMBER());
+                        ui.painter().rect_filled(r, crate::theme::r(11), theme::EMBER());
                         ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, "✓ Wearing", theme::bold_font(11.5), theme::on_ember());
                     }
                     ui.add_space(8.0);
@@ -1593,10 +1593,10 @@ impl PyrApp {
                             match self.images.get(ui.ctx(), &img_key, Some(std::sync::Arc::new(bytes)), 512).frame(0.0) {
                                 Some((tex, ts, _)) => {
                                     let uv = cover_uv(ts, r.size());
-                                    ui.painter().add(egui::epaint::RectShape::filled(r, CornerRadius::same(8), Color32::WHITE).with_texture(tex, uv));
+                                    ui.painter().add(egui::epaint::RectShape::filled(r, crate::theme::r(8), Color32::WHITE).with_texture(tex, uv));
                                 }
                                 None => {
-                                    ui.painter().rect_filled(r, CornerRadius::same(8), theme::ELEV2());
+                                    ui.painter().rect_filled(r, crate::theme::r(8), theme::ELEV2());
                                 }
                             }
                             ui.add_space(8.0);
@@ -1718,8 +1718,8 @@ fn skin_summary(ui: &mut egui::Ui, m: &pyr_proto::skin::Manifest) {
             for (name, value) in &m.colors {
                 let Some([r, g, b]) = pyr_proto::skin::parse_color(value) else { continue };
                 let (rect, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
-                ui.painter().rect_filled(rect, CornerRadius::same(4), Color32::from_rgb(r, g, b));
-                ui.painter().rect_stroke(rect, CornerRadius::same(4), Stroke::new(1.0f32, theme::LINE()), egui::StrokeKind::Inside);
+                ui.painter().rect_filled(rect, crate::theme::r(4), Color32::from_rgb(r, g, b));
+                ui.painter().rect_stroke(rect, crate::theme::r(4), Stroke::new(1.0f32, theme::LINE()), egui::StrokeKind::Inside);
                 let what = pyr_proto::skin::COLORS.iter().find(|(n, _)| n == name).map(|(_, w)| *w).unwrap_or("");
                 resp.on_hover_text(format!("{name} {value}: {what}"));
             }

@@ -257,7 +257,11 @@ pub fn last_run_trouble(previous_log: &str) -> Option<(&'static str, String)> {
     let lines: Vec<&str> = previous_log.lines().collect();
     let hung = lines.iter().rposition(|l| l.contains("Pyr's window stopped responding"));
     let back = lines.iter().rposition(|l| l.contains("Pyr's window responds again"));
+    // (Once Pyr was quitting, its window going quiet was the goodbye: 0.8.0 and before still
+    // logged it as not responding when quitting to install an update. Bug report 20.)
+    let quit = lines.iter().rposition(|l| l.contains("INFO pyr::app: quitting") || l.contains("INFO pyr::tray: quitting"));
     match (hung, back) {
+        (Some(h), _) if quit.is_some_and(|q| q < h) => None,
         (Some(h), b) if b.is_none_or(|b| b < h) => {
             let line = lines[h];
             let at = line.find("Pyr's window").unwrap_or(0);
@@ -375,6 +379,13 @@ mod tests {
         let came_back = format!("{froze}2026-10-16T06:01:09Z  INFO pyr::watchdog::win: Pyr's window responds again after 9 s\n");
         assert_eq!(last_run_trouble(&came_back), None);
         assert!(last_run_trouble(&format!("{came_back}{}", froze.lines().last().unwrap())).is_some(), "froze again later");
+        // Bug report 20: quitting to install an update, the window went quiet: no trouble.
+        for quit in ["2026-10-18T09:37:43.578410Z  INFO pyr::app: quitting to install the update\n", "2026-10-18T09:37:43.578410Z  INFO pyr::tray: quitting (tray icon)\n"] {
+            let updating = format!("{fine}{quit}2026-10-18T09:37:43.833934Z  WARN pyr::watchdog::win: Pyr's window stopped responding (it was starting a frame; shared state free, call free). busy\n");
+            assert_eq!(last_run_trouble(&updating), None, "{quit}");
+        }
+        // A freeze before quitting still counts (the person quit because it froze).
+        assert!(last_run_trouble(&format!("{froze}2026-10-16T06:02:00Z  INFO pyr::tray: quitting (tray icon)\n")).is_some());
     }
 
     #[test]

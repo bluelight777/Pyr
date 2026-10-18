@@ -215,6 +215,7 @@ impl Looks {
         let had_fonts = self.worn.as_ref().is_some_and(|w| w.fonts);
         theme::set_palette(None);
         theme::set_picture(0.0, false);
+        theme::set_look(None);
         theme::apply_style(ctx);
         if had_fonts {
             theme::install_fonts(ctx, None);
@@ -254,6 +255,7 @@ impl Looks {
         let had_fonts = self.worn.as_ref().is_some_and(|w| w.fonts);
         let fonts = m.uses().iter().any(|(_, u)| *u == Use::Font);
         theme::set_palette(Some(m.palette()));
+        theme::set_look(Some(&m.look));
         match &m.background {
             Some(b) => theme::set_picture(b.show, b.whole_window()),
             None => theme::set_picture(0.0, false),

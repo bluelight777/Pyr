@@ -1,2 +1,14 @@
-3 After an update, voice came back muted (and deafened). Fixed in 0.7.2: muted only if you were.
-6 Channel names after a leading emoji didn't line up. Fixed in 0.8.0: the emoji gets a place of its own.
+7 Sharing a screen gave up while Windows was still getting the capture ready. Fixed in 0.8.0: Pyr keeps trying for 30 seconds.
+8 Pyr crashed when the graphics card reset ("parent device is lost"). Fixed in 0.8.0: Pyr starts its window again.
+9 A friend's notice showed as an error. Fixed in 0.8.0.
+10 A friend's notice showed as an error. Fixed in 0.8.0.
+11 A friend's notice showed as an error. Fixed in 0.8.0.
+12 A friend's notice showed as an error. Fixed in 0.8.0.
+13 Pyr crashed when the graphics card went away ("Failed to create staging buffer"). Fixed in 0.8.1: Pyr starts its window again.
+14 Pyr crashed when the graphics card went away ("Failed to create staging buffer"). Fixed in 0.8.1: Pyr starts its window again.
+15 "Your skin isn't installed" after updating from Ingle. Fixed in 0.8.1: skins left in Ingle's folder come over, and a missing skin quietly goes back to Campfire.
+16 "Your skin isn't installed" after updating from Ingle. Fixed in 0.8.1.
+17 "Your skin isn't installed" after updating from Ingle. Fixed in 0.8.1.
+18 "Your skin isn't installed" after updating from Ingle. Fixed in 0.8.1.
+19 "Your skin isn't installed" after updating from Ingle. Fixed in 0.8.1.
+20 Quitting to install an update was reported as Pyr freezing. Fixed in 0.8.1.

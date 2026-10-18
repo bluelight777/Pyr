@@ -1,0 +1,49 @@
+{
+  "name": "Starship",
+  "version": "1.0",
+  "summary": "The bridge of a starship: periwinkle holo-rings, a ringed planet and a sci-fi typeface.",
+  "author": "Pyr",
+  "colors": {
+    "rail": "#060711",
+    "side": "#090a18",
+    "side_dark": "#080914",
+    "main": "#0c0e21",
+    "elev": "#12142f",
+    "elev2": "#181c40",
+    "hover": "#0f1229",
+    "line": "#1b1e46",
+    "shadow_line": "#04050b",
+    "text": "#e8eaf5",
+    "body": "#d8dbe9",
+    "muted": "#9ca0b4",
+    "dim": "#70758f",
+    "ember": "#8c9cff",
+    "ember2": "#c3cbff",
+    "glow": "#b8c2ff",
+    "live": "#ff5c7a",
+    "online": "#5fe0b0",
+    "owner": "#ffd166",
+    "admin": "#e0b8ff",
+    "link": "#b0c4ff",
+    "stage": "#030409",
+    "tile": "#0b0c1d",
+    "code_bg": "#080915",
+    "selection": "#2e3a80"
+  },
+  "background": {
+    "file": "background.webp",
+    "show": 0.3,
+    "under": "window"
+  },
+  "fonts": {
+    "body": "fonts/Jura-Regular.otf",
+    "bold": "fonts/Jura-Bold.otf",
+    "scale": 1.05
+  },
+  "look": {
+    "corners": 0.6,
+    "avatars": "circle",
+    "selected": "outline",
+    "outlines": true
+  }
+}

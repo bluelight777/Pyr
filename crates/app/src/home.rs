@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use eframe::egui::{self, Align, Color32, CornerRadius, Layout, Rect, RichText, Sense, Stroke, pos2, vec2};
+use eframe::egui::{self, Align, Color32, Layout, Rect, RichText, Sense, Stroke, pos2, vec2};
 use pyr_engine::state::{AppState, ServerView};
 use pyr_proto::control::{ChannelId, DMS_FEATURE};
 
@@ -139,7 +139,11 @@ impl PyrApp {
             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width() - 16.0, 42.0), Sense::click());
             let r = r.translate(vec2(8.0, 0.0));
             if on_friends || resp.hovered() {
-                ui.painter().rect_filled(r, CornerRadius::same(6), if on_friends { theme::ELEV2() } else { theme::HOVER() });
+                if on_friends {
+                    theme::selected(ui.painter(), r, 6, theme::ELEV2());
+                } else {
+                    ui.painter().rect_filled(r, crate::theme::r(6), theme::HOVER());
+                }
             }
             crate::icons::people(ui.painter(), Rect::from_center_size(pos2(r.left() + 22.0, r.center().y), vec2(20.0, 20.0)), theme::TEXT());
             ui.painter().text(pos2(r.left() + 48.0, r.center().y), egui::Align2::LEFT_CENTER, "Friends", theme::bold_font(14.5), theme::TEXT());
@@ -224,7 +228,11 @@ impl PyrApp {
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width() - 16.0, 44.0), Sense::click());
         let r = r.translate(vec2(8.0, 0.0));
         if selected || resp.hovered() {
-            ui.painter().rect_filled(r, CornerRadius::same(6), if selected { theme::ELEV2() } else { theme::HOVER() });
+            if selected {
+                theme::selected(ui.painter(), r, 6, theme::ELEV2());
+            } else {
+                ui.painter().rect_filled(r, crate::theme::r(6), theme::HOVER());
+            }
         }
         let name = s.member_name(with);
         let presence = crate::app::Presence::in_server(s, with);
@@ -292,7 +300,7 @@ impl PyrApp {
                     for (label, tab) in [("Online", 0u8), ("All", 1), ("Pending", 2), ("Blocked", 3)] {
                         let on = self.ui.friends_tab == tab;
                         let b = egui::Button::new(RichText::new(label).color(if on { theme::TEXT() } else { theme::MUTED() }))
-                            .fill(if on { theme::ELEV2() } else { Color32::TRANSPARENT })
+                            .fill(if on { theme::row(theme::ELEV2()) } else { Color32::TRANSPARENT })
                             .corner_radius(4);
                         let r = ui.add(b);
                         if tab == 2 && pending > 0 {
@@ -460,7 +468,7 @@ impl PyrApp {
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 58.0), Sense::click());
         ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0f32, theme::LINE()));
         if resp.hovered() {
-            ui.painter().rect_filled(r.shrink2(vec2(0.0, 2.0)), CornerRadius::same(8), theme::HOVER());
+            ui.painter().rect_filled(r.shrink2(vec2(0.0, 2.0)), crate::theme::r(8), theme::HOVER());
         }
         let s = f.servers.first().and_then(|k| st.server(k));
         let face = s.and_then(|s| self.face(ui.ctx(), s, &f.uid));

@@ -180,6 +180,7 @@ mod tests {
             preview: None,
             review: String::new(),
             updated: 0,
+            needs: String::new(),
         };
         assert!(install(&dir, "http://127.0.0.1:9/library/index.json", &entry, |_, _| {}).is_err());
         let mut installed = InstalledSkins::default();

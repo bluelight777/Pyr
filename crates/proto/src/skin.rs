@@ -7,8 +7,13 @@
 //!   "colors": { "main": "#1a0d0f", "side": "#140a0b", "ember": "#d4202c" },
 //!   "background": { "file": "background.webp", "show": 0.3, "under": "chat" },
 //!   "fonts": { "body": "fonts/Body.ttf", "bold": "fonts/Bold.ttf", "scale": 1.0 },
-//!   "sounds": { "message": "sounds/message.ings" } }
+//!   "sounds": { "message": "sounds/message.ings" },
+//!   "look": { "corners": 0.5, "avatars": "rounded", "selected": "bar", "outlines": true } }
 //! ```
+//!
+//! `look` (Pyr 0.8.1 and newer) changes Pyr's shapes, not just its colors: how round corners
+//! are, the shape of people's pictures, how what's selected is marked, and thin outlines on
+//! buttons and boxes. A skin that sets it is listed in the Library for 0.8.1 and newer only.
 //!
 //! Colors left out stay Campfire's (Pyr's own). Skins are sent in through the Claude
 //! connector, looked at and approved like plugins, and listed in the Pyr Library for anyone
@@ -121,6 +126,41 @@ pub struct Manifest {
     pub fonts: Fonts,
     /// Sound name → file.
     pub sounds: BTreeMap<String, String>,
+    pub look: Look,
+}
+
+/// A skin's shapes (Pyr 0.8.1 and newer). Left out: Campfire's.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct Look {
+    /// How round corners are: 0 square, 1 Pyr's own, 2 twice as round.
+    pub corners: f32,
+    /// People's pictures: "circle", "rounded" or "square".
+    pub avatars: String,
+    /// What's selected (a channel, a conversation): "fill", "bar" (a bar of the accent at its
+    /// left) or "outline" (a line of the accent around it).
+    pub selected: String,
+    /// Thin outlines around buttons, boxes to type in and cards.
+    pub outlines: bool,
+}
+
+impl Default for Look {
+    fn default() -> Look {
+        Look { corners: 1.0, avatars: "circle".into(), selected: "fill".into(), outlines: false }
+    }
+}
+
+impl Look {
+    pub const CORNERS: std::ops::RangeInclusive<f32> = 0.0..=2.0;
+    pub const AVATARS: &[&str] = &["circle", "rounded", "square"];
+    pub const SELECTED: &[&str] = &["fill", "bar", "outline"];
+    /// The first Pyr that knows `look`.
+    pub const SINCE: &str = "0.8.1";
+
+    /// Whether it's anything but Campfire's.
+    pub fn is_set(&self) -> bool {
+        *self != Look::default()
+    }
 }
 
 /// A picture behind the chat (or the whole window), seen through Pyr's colors.
@@ -365,6 +405,15 @@ pub fn check(files: &[(String, Vec<u8>)]) -> Report {
     if !Fonts::SCALE.contains(&m.fonts.scale) {
         r.problems.push(format!("fonts.scale is {}: it goes from 0.8 to 1.25.", m.fonts.scale));
     }
+    if !Look::CORNERS.contains(&m.look.corners) {
+        r.problems.push(format!("look.corners is {}: it goes from 0 (square) to 2 (twice as round).", m.look.corners));
+    }
+    if !Look::AVATARS.contains(&m.look.avatars.as_str()) {
+        r.problems.push(format!("look.avatars is \"circle\", \"rounded\" or \"square\", not {:?}.", m.look.avatars));
+    }
+    if !Look::SELECTED.contains(&m.look.selected.as_str()) {
+        r.problems.push(format!("look.selected is \"fill\", \"bar\" or \"outline\", not {:?}.", m.look.selected));
+    }
     for k in m.sounds.keys() {
         if !SOUNDS.iter().any(|(n, _)| n == k) {
             r.problems.push(format!("sounds: Pyr has no sound called {k:?} (see the list in the guide)."));
@@ -439,7 +488,8 @@ fn unknown_keys(v: &serde_json::Value, problems: &mut Vec<String>) {
             }
         }
     };
-    known(v, &["name", "version", "summary", "author", "colors", "background", "fonts", "sounds"], "", problems);
+    known(v, &["name", "version", "summary", "author", "colors", "background", "fonts", "sounds", "look"], "", problems);
+    known(&v["look"], &["corners", "avatars", "selected", "outlines"], " look", problems);
     known(&v["background"], &["file", "show", "under"], " background", problems);
     known(&v["fonts"], &["body", "bold", "scale"], " fonts", problems);
 }
@@ -541,9 +591,29 @@ mod tests {
         assert!(bad(&base(""), vec![("run.exe", b"MZ".to_vec())]).contains("doesn't use it"));
         assert!(bad(&base(""), vec![("../x.txt", b"x".to_vec())]).contains("folders deep"));
         assert!(bad(&base(""), vec![("big.txt", vec![b'a'; MAX_FILE + 1])]).contains("at most"));
+        // Shapes Pyr doesn't have.
+        assert!(bad(&base(r#""look": { "corners": 3 }"#), vec![]).contains("corners"));
+        assert!(bad(&base(r#""look": { "avatars": "star" }"#), vec![]).contains("avatars"));
+        assert!(bad(&base(r#""look": { "selected": "glow" }"#), vec![]).contains("selected"));
+        assert!(bad(&base(r#""look": { "bevel": true }"#), vec![]).contains("bevel"));
         assert!(bad(r#"{ "version": "1" }"#, vec![]).contains("name"));
         assert!(bad("not json", vec![]).contains("JSON"));
         assert!(!check(&[]).ok());
+    }
+
+    #[test]
+    fn a_skins_shapes() {
+        let plain = check(&skin(r#"{ "name": "X", "version": "1" }"#, vec![]));
+        assert!(plain.ok() && !plain.manifest.look.is_set(), "left out: Campfire's");
+        let json = r#"{ "name": "X", "version": "1", "look": { "corners": 0, "avatars": "square", "selected": "bar", "outlines": true } }"#;
+        let r = check(&skin(json, vec![]));
+        assert!(r.ok(), "{:?}", r.problems);
+        assert!(r.manifest.look.is_set());
+        assert_eq!(r.manifest.look.corners, 0.0);
+        assert_eq!(r.manifest.look.avatars, "square");
+        // Some of it set, the rest Campfire's.
+        let r = check(&skin(r#"{ "name": "X", "version": "1", "look": { "outlines": true } }"#, vec![]));
+        assert!(r.ok() && r.manifest.look.corners == 1.0 && r.manifest.look.selected == "fill");
     }
 
     #[test]

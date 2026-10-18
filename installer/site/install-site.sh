@@ -178,6 +178,14 @@ if [ -n "$DIR_NEW" ] && [ -f "$DIR_NEW" ]; then
       || echo "Short links aren't on yet (above). The release itself is published; the next publish tries again." >&2
   fi
 fi
+# pyr.gg set up before its settings said "check for a newer page every time" (pyr.gg settings
+# v2; browsers kept showing Ingle's old page and pictures for hours after 0.8.0): set up again
+# (it checks every other site on this server before and after, and leaves the certificate).
+if [ -f "$HERE/setup-pyr-gg.sh" ] && [ -f /etc/systemd/system/pyr-directory.service ] \
+   && nginx -T 2>/dev/null | grep -q "server_name pyr.gg;" && ! nginx -T 2>/dev/null | grep -q "pyr.gg settings v2"; then
+  echo "Updating pyr.gg's settings (browsers check for a newer page every time)"
+  bash "$HERE/setup-pyr-gg.sh" || echo "pyr.gg's settings stay as they were (above); the release itself is published." >&2
+fi
 # Bug reports this release fixed (fixed-bugs.txt: a report's number first on each line) are
 # marked fixed on the guild server here, the one Pyr's bug reports go to, as the owner's
 # Mark fixed does (only new and approved ones; a rejected report stays rejected).

@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::f32::consts::{FRAC_PI_2, PI};
 use std::time::Duration;
 
-use eframe::egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use eframe::egui::{self, Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use pyr_engine::state::{AppState, CallView, ServerView};
 use pyr_proto::media::track;
 
@@ -206,10 +206,10 @@ fn meter(p: &egui::Painter, r: Rect, led: Led, faint: bool) {
         let on = i < lit_n || (peak_i > 0 && i + 1 == peak_i && led.peak > 0.02);
         if on {
             let a = if faint { 0.45 } else { 1.0 };
-            p.rect_filled(seg.expand2(vec2(2.0, 1.0)), CornerRadius::same(2), c.gamma_multiply(0.22 * a));
-            p.rect_filled(seg, CornerRadius::same(1), c.gamma_multiply(a));
+            p.rect_filled(seg.expand2(vec2(2.0, 1.0)), crate::theme::r(2), c.gamma_multiply(0.22 * a));
+            p.rect_filled(seg, crate::theme::r(1), c.gamma_multiply(a));
         } else {
-            p.rect_filled(seg, CornerRadius::same(1), c.gamma_multiply(0.09));
+            p.rect_filled(seg, crate::theme::r(1), c.gamma_multiply(0.09));
         }
     }
 }
@@ -266,14 +266,14 @@ fn fader(ui: &mut egui::Ui, id: egui::Id, col: Rect, value: f32, accent: Color32
     }
     // The groove, sunk in.
     let groove = Rect::from_min_max(pos2(gx - 3.0, top - 2.0), pos2(gx + 3.0, bottom + 2.0));
-    p.rect_filled(groove, CornerRadius::same(3), Color32::from_black_alpha(170));
-    p.rect_stroke(groove, CornerRadius::same(3), Stroke::new(1.0, Color32::from_white_alpha(10)), StrokeKind::Outside);
+    p.rect_filled(groove, crate::theme::r(3), Color32::from_black_alpha(170));
+    p.rect_stroke(groove, crate::theme::r(3), Stroke::new(1.0, Color32::from_white_alpha(10)), StrokeKind::Outside);
     // Lit from the bottom up to the cap, in their color.
     let y = y_of(shown);
     if shown > 0.0 {
         let fill = Rect::from_min_max(pos2(gx - 1.5, y), pos2(gx + 1.5, bottom));
-        p.rect_filled(fill.expand2(vec2(3.5, 0.0)), CornerRadius::same(4), accent.gamma_multiply(0.18 * fade));
-        p.rect_filled(fill, CornerRadius::same(2), accent.gamma_multiply(fade));
+        p.rect_filled(fill.expand2(vec2(3.5, 0.0)), crate::theme::r(4), accent.gamma_multiply(0.18 * fade));
+        p.rect_filled(fill, crate::theme::r(2), accent.gamma_multiply(fade));
     }
     // The meter beside it.
     let m = Rect::from_min_max(pos2(gx + 15.0, top), pos2(gx + 22.0, bottom));
@@ -290,13 +290,13 @@ fn fader(ui: &mut egui::Ui, id: egui::Id, col: Rect, value: f32, accent: Color32
     }
     // The cap: a little metal block with a line across it, lit while it's held.
     let cap = Rect::from_center_size(pos2(gx, y), vec2(32.0, 15.0));
-    p.rect_filled(cap.translate(vec2(0.0, 3.0)).expand(1.0), CornerRadius::same(5), Color32::from_black_alpha(110));
+    p.rect_filled(cap.translate(vec2(0.0, 3.0)).expand(1.0), crate::theme::r(5), Color32::from_black_alpha(110));
     gradient_rect(&p, cap, 4.0, Color32::from_rgb(0xf4, 0xee, 0xe8), Color32::from_rgb(0x9a, 0x91, 0x89));
-    p.rect_stroke(cap, CornerRadius::same(4), Stroke::new(1.0, Color32::from_black_alpha(140)), StrokeKind::Inside);
+    p.rect_stroke(cap, crate::theme::r(4), Stroke::new(1.0, Color32::from_black_alpha(140)), StrokeKind::Inside);
     let line = if active { accent } else { Color32::from_rgb(0x3a, 0x33, 0x2e) };
     p.line_segment([pos2(cap.left() + 4.0, y), pos2(cap.right() - 4.0, y)], Stroke::new(2.0, line));
     if resp.dragged() {
-        p.rect_stroke(cap.expand(2.5), CornerRadius::same(6), Stroke::new(1.5, accent.gamma_multiply(0.7)), StrokeKind::Outside);
+        p.rect_stroke(cap.expand(2.5), crate::theme::r(6), Stroke::new(1.5, accent.gamma_multiply(0.7)), StrokeKind::Outside);
     }
     if !resp.dragged() {
         resp.on_hover_text(tip);
@@ -323,9 +323,9 @@ fn pill(ui: &mut egui::Ui, id: egui::Id, r: Rect, label: &str, on: bool, on_colo
     } else {
         (Color32::from_black_alpha(90), theme::MUTED())
     };
-    p.rect_filled(r, CornerRadius::same(7), fill);
+    p.rect_filled(r, crate::theme::r(7), fill);
     if on {
-        p.rect_stroke(r.expand(1.5), CornerRadius::same(8), Stroke::new(1.0, on_color.gamma_multiply(0.45)), StrokeKind::Outside);
+        p.rect_stroke(r.expand(1.5), crate::theme::r(8), Stroke::new(1.0, on_color.gamma_multiply(0.45)), StrokeKind::Outside);
     }
     p.text(r.center(), Align2::CENTER_CENTER, label, theme::bold_font(11.0), text);
     resp.on_hover_text(tip).clicked()
@@ -348,9 +348,9 @@ impl PyrApp {
         }
         let p = ui.painter_at(area);
         // The desk: a dark slab with a soft light along its top.
-        p.rect_filled(card.translate(vec2(0.0, 4.0)).expand(2.0), CornerRadius::same(18), Color32::from_black_alpha(70));
+        p.rect_filled(card.translate(vec2(0.0, 4.0)).expand(2.0), crate::theme::r(18), Color32::from_black_alpha(70));
         gradient_rect(&p, card, 16.0, theme::mix(theme::ELEV(), theme::STAGE(), 0.15), theme::mix(theme::SIDE_DARK(), theme::STAGE(), 0.4));
-        p.rect_stroke(card, CornerRadius::same(16), Stroke::new(1.0, theme::LINE()), StrokeKind::Inside);
+        p.rect_stroke(card, crate::theme::r(16), Stroke::new(1.0, theme::LINE()), StrokeKind::Inside);
         let lamp = Rect::from_center_size(pos2(card.center().x, card.top() + 1.0), vec2(card.width() * 0.5, 2.0));
         let mut glow = egui::Mesh::default();
         for (x, a) in [(lamp.left(), 0.0), (lamp.center().x, 0.55), (lamp.right(), 0.0)] {
@@ -386,7 +386,7 @@ impl PyrApp {
         let close = Rect::from_center_size(pos2(head.right() - 10.0, head.center().y), vec2(24.0, 24.0));
         let cr = ui.interact(close, ui.id().with("mixer-close"), Sense::click());
         if cr.hovered() {
-            p.rect_filled(close, CornerRadius::same(6), theme::ELEV2());
+            p.rect_filled(close, crate::theme::r(6), theme::ELEV2());
         }
         icons::close(&p, close.shrink(6.0), if cr.hovered() { theme::TEXT() } else { theme::MUTED() });
         if cr.on_hover_text("Close the mixer").clicked() {
@@ -418,7 +418,7 @@ impl PyrApp {
         let lit = er.hovered() || gliding;
         gradient_rect(&p, even, 8.0, if lit { theme::EMBER2() } else { theme::EMBER() }, theme::mix(theme::EMBER(), Color32::BLACK, 0.25));
         if lit {
-            p.rect_stroke(even.expand(1.5), CornerRadius::same(9), Stroke::new(1.0, theme::EMBER2().gamma_multiply(0.6)), StrokeKind::Outside);
+            p.rect_stroke(even.expand(1.5), crate::theme::r(9), Stroke::new(1.0, theme::EMBER2().gamma_multiply(0.6)), StrokeKind::Outside);
         }
         // (Three bars coming level.)
         let ic = Rect::from_center_size(pos2(even.left() + 16.0, even.center().y), vec2(12.0, 12.0));
@@ -458,7 +458,7 @@ impl PyrApp {
             let x = (reset.left() - 14.0 - g.size().x - 52.0).max(title.right() + 12.0);
             let undo_r = Rect::from_min_size(pos2(x + g.size().x + 8.0, head.center().y - 11.0), vec2(44.0, 22.0));
             // (Over the line saying what the mixer is for.)
-            p.rect_filled(Rect::from_min_max(pos2(x - 6.0, head.top()), pos2(undo_r.right() + 4.0, head.bottom())), CornerRadius::same(6), theme::mix(theme::ELEV(), theme::STAGE(), 0.15));
+            p.rect_filled(Rect::from_min_max(pos2(x - 6.0, head.top()), pos2(undo_r.right() + 4.0, head.bottom())), crate::theme::r(6), theme::mix(theme::ELEV(), theme::STAGE(), 0.15));
             p.galley(pos2(x, head.center().y - g.size().y / 2.0), g, theme::TEXT());
             if self.ui.mixer.undo.is_some() && pill(ui, ui.id().with("mixer-undo"), undo_r, "Undo", false, theme::EMBER(), "Put the faders back where they were") {
                 if let Some((_, before)) = self.ui.mixer.undo.take() {
@@ -741,7 +741,7 @@ impl PyrApp {
         gradient_rect(p, r, 12.0, theme::mix(tint.1, Color32::BLACK, 0.55).gamma_multiply(0.55), Color32::from_black_alpha(110));
         let top = Rect::from_min_size(r.min, vec2(r.width(), HEAD_H));
         gradient_rect(p, top, 12.0, tint.0, theme::mix(tint.1, tint.0, 0.15));
-        p.rect_stroke(r, CornerRadius::same(12), Stroke::new(1.0, if speaking { theme::GLOW().gamma_multiply(0.8) } else { Color32::from_white_alpha(14) }), StrokeKind::Inside);
+        p.rect_stroke(r, crate::theme::r(12), Stroke::new(1.0, if speaking { theme::GLOW().gamma_multiply(0.8) } else { Color32::from_white_alpha(14) }), StrokeKind::Inside);
         let c = pos2(r.center().x, top.top() + 25.0);
         match who {
             Some((uid, name, face)) => {

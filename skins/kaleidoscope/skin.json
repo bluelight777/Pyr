@@ -1,0 +1,49 @@
+{
+  "name": "Kaleidoscope",
+  "version": "1.0",
+  "summary": "A turquoise and tangerine kaleidoscope swirling in the dark, all soft and round.",
+  "author": "Pyr",
+  "colors": {
+    "rail": "#060e10",
+    "side": "#091517",
+    "side_dark": "#071213",
+    "main": "#0c1c1f",
+    "elev": "#11292d",
+    "elev2": "#17383d",
+    "hover": "#0f2327",
+    "line": "#193d43",
+    "shadow_line": "#04090a",
+    "text": "#e6f7f6",
+    "body": "#d6ebea",
+    "muted": "#99b7b6",
+    "dim": "#6c9391",
+    "ember": "#ffa040",
+    "ember2": "#ffcf8a",
+    "glow": "#3ff0d8",
+    "live": "#ff5c7a",
+    "online": "#5cf0b0",
+    "owner": "#ffd84d",
+    "admin": "#8ff0ff",
+    "link": "#5ff0dc",
+    "stage": "#030808",
+    "tile": "#0a191b",
+    "code_bg": "#081214",
+    "selection": "#7a4a10"
+  },
+  "background": {
+    "file": "background.webp",
+    "show": 0.38,
+    "under": "window"
+  },
+  "fonts": {
+    "body": "fonts/Quicksand-Regular.ttf",
+    "bold": "fonts/CherryBomb-Regular.otf",
+    "scale": 1.0
+  },
+  "look": {
+    "corners": 1.8,
+    "avatars": "circle",
+    "selected": "outline",
+    "outlines": false
+  }
+}

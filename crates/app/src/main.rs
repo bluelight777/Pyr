@@ -438,7 +438,10 @@ static REOPENED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::ne
 /// Whether a crash is the graphics card going away under the window (its driver restarted, or
 /// Windows took it back): drawing or showing a frame failed for that.
 fn gpu_lost(what: &str) -> bool {
-    const SIGNS: [&str; 10] = [
+    const SIGNS: [&str; 11] = [
+        // egui's renderer, when the graphics card can't give it memory any more (after "Acquiring
+        // a texture failed": the card was out of memory, or resetting).
+        "Failed to create staging buffer",
         "Surface::present",
         "Surface::get_current_texture",
         "Surface::configure",
@@ -487,4 +490,20 @@ fn fatal_message(text: &str) {
 #[cfg(not(windows))]
 fn fatal_message(text: &str) {
     eprintln!("{text}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gpu_lost;
+
+    /// The crashes in bug reports 8, 13 and 14 were the graphics card going away (Pyr starts
+    /// again, back where it was); a bug in Pyr isn't.
+    #[test]
+    fn graphics_card_crashes_are_told_apart() {
+        assert!(gpu_lost(
+            "panicked at egui-wgpu-0.33.3/src/renderer.rs:958:17:\nFailed to create staging buffer for index data. Index count: 44526. Required index buffer size: 178104. Actual size 570912 and capacity: 570912 (bytes)"
+        ));
+        assert!(gpu_lost("panicked at wgpu-27.0.1/src/backend/wgpu_core.rs:3858:38:\nError in Surface::present: Validation Error\n\nCaused by:\n  Parent device is lost"));
+        assert!(!gpu_lost("panicked at crates/app/src/chat.rs:10:5:\nindex out of bounds: the len is 3 but the index is 7"));
+    }
 }

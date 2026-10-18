@@ -3,7 +3,7 @@
 //! the cards that carry it through (comparing words, asking something only they'd know), and
 //! the dialog for writing a question. The engine does the work (`pyr_engine::verify`).
 
-use eframe::egui::{self, Align, Align2, Color32, CornerRadius, Layout, Pos2, Rect, RichText, Sense, Shape, Stroke, pos2, vec2};
+use eframe::egui::{self, Align, Align2, Color32, Layout, Pos2, Rect, RichText, Sense, Shape, Stroke, pos2, vec2};
 use pyr_engine::config::VerifiedHow;
 use pyr_engine::state::{AppState, HandshakeKind, HandshakeStage, HandshakeView, ServerView, Trust};
 
@@ -422,7 +422,7 @@ impl PyrApp {
                     None => {}
                 }
                 ui.horizontal(|ui| {
-                    let yes = egui::Button::new(RichText::new("They match").color(Color32::WHITE).font(theme::bold_font(14.0))).fill(SURE).corner_radius(CornerRadius::same(6));
+                    let yes = egui::Button::new(RichText::new("They match").color(Color32::WHITE).font(theme::bold_font(14.0))).fill(SURE).corner_radius(crate::theme::r(6));
                     if ui.add(yes).clicked() {
                         acts.push(Act::WordsSaid { sid: sid.clone(), matched: true });
                     }
@@ -447,7 +447,7 @@ impl PyrApp {
                 ui.label(RichText::new(format!("Your answer matched the one {name} expected. If only {name} could have known it, it's really them.")).color(theme::TEXT()));
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    let yes = egui::Button::new(RichText::new(format!("It's {name}")).color(Color32::WHITE).font(theme::bold_font(14.0))).fill(SURE).corner_radius(CornerRadius::same(6));
+                    let yes = egui::Button::new(RichText::new(format!("It's {name}")).color(Color32::WHITE).font(theme::bold_font(14.0))).fill(SURE).corner_radius(crate::theme::r(6));
                     if ui.add(yes).clicked() {
                         acts.push(Act::ItIsThem(sid.clone()));
                     }
@@ -476,7 +476,7 @@ fn word_grid(ui: &mut egui::Ui, words: &[(String, String)]) {
             ui.spacing_mut().item_spacing.x = 8.0;
             for (emoji, word) in row {
                 let (r, _) = ui.allocate_exact_size(cell, Sense::hover());
-                ui.painter().rect_filled(r, CornerRadius::same(8), theme::ELEV2());
+                ui.painter().rect_filled(r, crate::theme::r(8), theme::ELEV2());
                 crate::emoji::paint_text(ui.painter(), pos2(r.center().x, r.top() + 20.0), Align2::CENTER_CENTER, emoji, theme::font(24.0), theme::TEXT(), None);
                 ui.painter().text(pos2(r.center().x, r.bottom() - 13.0), Align2::CENTER_CENTER, word, theme::bold_font(13.5), theme::TEXT());
             }

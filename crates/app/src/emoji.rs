@@ -483,6 +483,12 @@ pub fn without_emoji(text: &str) -> String {
 
 /// Like `Painter::text`, with color emoji: on one line, cut with "…" past `max_width`
 /// (a channel's name in the list). Where it went.
+/// How wide `text` is on one line (emoji and all), as `paint_text` would draw it.
+pub fn text_width(painter: &egui::Painter, text: &str, font: FontId) -> f32 {
+    let (job, _) = job_of(text, font, Color32::WHITE, None, true);
+    painter.layout_job(job).size().x
+}
+
 pub fn paint_text(
     painter: &egui::Painter,
     pos: Pos2,

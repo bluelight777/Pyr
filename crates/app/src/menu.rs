@@ -2,7 +2,7 @@
 //! under the pointer, red ones for what can't be undone, checks on the right, and small
 //! headings. Every menu calls `style` first; its rows are ordinary buttons after that.
 
-use eframe::egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use eframe::egui::{self, Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 
 use crate::theme;
 
@@ -18,7 +18,7 @@ pub fn style(ui: &mut egui::Ui) {
     s.spacing.menu_spacing = 4.0;
     let w = &mut s.visuals.widgets;
     for v in [&mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
-        v.corner_radius = CornerRadius::same(6);
+        v.corner_radius = crate::theme::r(6);
         v.bg_stroke = Stroke::NONE;
         v.expansion = 0.0;
     }
@@ -71,7 +71,7 @@ pub fn check(ui: &mut egui::Ui, on: bool, text: impl Into<String>, red: bool) ->
     };
     let p = ui.painter();
     if fill != Color32::TRANSPARENT {
-        p.rect_filled(r, CornerRadius::same(6), fill);
+        p.rect_filled(r, crate::theme::r(6), fill);
     }
     let g = p.layout(text, theme::font(14.0), fg, w - 46.0);
     p.galley(pos2(r.left() + 10.0, r.center().y - g.size().y / 2.0), g, fg);
@@ -79,14 +79,14 @@ pub fn check(ui: &mut egui::Ui, on: bool, text: impl Into<String>, red: bool) ->
     let b = Rect::from_center_size(pos2(r.right() - 18.0, r.center().y), vec2(18.0, 18.0));
     let mark = if red { theme::LIVE() } else { theme::EMBER() };
     if on {
-        p.rect_filled(b, CornerRadius::same(4), if hovered { Color32::WHITE } else { mark });
+        p.rect_filled(b, crate::theme::r(4), if hovered { Color32::WHITE } else { mark });
         let tick = if hovered { if red { theme::LIVE() } else { theme::EMBER() } } else { theme::on_ember() };
         p.add(egui::Shape::line(
             vec![pos2(b.left() + 4.0, b.center().y), pos2(b.left() + 7.5, b.bottom() - 4.5), pos2(b.right() - 3.5, b.top() + 4.5)],
             Stroke::new(2.0, tick),
         ));
     } else {
-        p.rect_stroke(b, CornerRadius::same(4), Stroke::new(1.5, if hovered { fg } else { theme::DIM() }), StrokeKind::Inside);
+        p.rect_stroke(b, crate::theme::r(4), Stroke::new(1.5, if hovered { fg } else { theme::DIM() }), StrokeKind::Inside);
     }
     resp
 }

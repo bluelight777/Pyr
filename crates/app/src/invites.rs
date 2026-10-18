@@ -246,7 +246,7 @@ impl crate::app::PyrApp {
     pub(crate) fn invite_embed(&mut self, ui: &mut egui::Ui, st: &pyr_engine::state::AppState, link: &str, acts: &mut Vec<crate::app::Act>) {
         use crate::app::Act;
         use crate::theme;
-        use egui::{Align, Align2, CornerRadius, Layout, RichText, Sense, vec2};
+        use egui::{Align, Align2, Layout, RichText, Sense, vec2};
         // What it opens: (what to say instead of a server, the server's name, counts, its full link).
         let (status, name, online, members, full) = match directory::short_code(link) {
             Some(code) => match self.invite_lookups.get(&code, ui.ctx()) {
@@ -270,7 +270,7 @@ impl crate::app::PyrApp {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 let (r, _) = ui.allocate_exact_size(vec2(50.0, 50.0), Sense::hover());
-                ui.painter().rect_filled(r, CornerRadius::same(15), theme::SIDE());
+                ui.painter().rect_filled(r, crate::theme::r(15), theme::SIDE());
                 let mark = match &name {
                     Some(n) => initials(n),
                     None if status == Some("This invite isn't valid any more") => "×".into(),
@@ -352,7 +352,11 @@ impl crate::app::PyrApp {
             });
             return;
         };
-        if owner {
+        // The owner turns short links on or off; the owner, and anyone whose role can manage
+        // the server, names the community's own link.
+        let manager = owner || s.can(pyr_proto::control::perm::MANAGE_SERVER);
+        if manager {
+            if owner {
             field_label(ui, "Short links");
             let mut on = view.short_links;
             if ui.checkbox(&mut on, "List invites at pyr.gg, so they work as short links like pyr.gg/qrslmnov").changed() {
@@ -369,6 +373,7 @@ impl crate::app::PyrApp {
             if let Some(why) = &view.short_links_problem {
                 ui.add_space(4.0);
                 notice(ui, why, false);
+            }
             }
             if view.short_links {
                 field_label(ui, "Custom invite link");
@@ -399,7 +404,7 @@ impl crate::app::PyrApp {
                     }
                     _ => {
                         ui.label(
-                            RichText::new("Anyone with it can join, and it never runs out (like the community's everyday link). Changing it stops the old one working.")
+                            RichText::new("Everyone's Invite People shows this link. Anyone with it can join, and it never runs out. Changing it stops the old one working.")
                                 .size(12.0)
                                 .color(theme::DIM()),
                         );

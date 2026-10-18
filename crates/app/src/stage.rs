@@ -470,7 +470,7 @@ impl PyrApp {
                 theme::mix(top, bottom, 0.5)
             }
             None => {
-                p.rect_filled(rect, CornerRadius::same(12), theme::TILE());
+                p.rect_filled(rect, crate::theme::r(12), theme::TILE());
                 theme::TILE()
             }
         };
@@ -479,13 +479,13 @@ impl PyrApp {
             Some((id, size)) => {
                 let (r, uv) = fit(rect, size, !t.screen);
                 if t.screen {
-                    p.rect_filled(rect, CornerRadius::same(12), Color32::BLACK);
+                    p.rect_filled(rect, crate::theme::r(12), Color32::BLACK);
                 }
                 let mut mesh = egui::Mesh::with_texture(id);
                 mesh.add_rect_with_uv(r, uv, Color32::WHITE);
                 p.add(egui::Shape::mesh(mesh));
                 // Round the video's corners by painting over them with the stage color.
-                p.rect_stroke(rect.expand(6.0), CornerRadius::same(18), Stroke::new(12.0f32, theme::STAGE()), StrokeKind::Inside);
+                p.rect_stroke(rect.expand(6.0), crate::theme::r(18), Stroke::new(12.0f32, theme::STAGE()), StrokeKind::Inside);
                 if t.screen && !t.is_me {
                     let fps = self.fps.get(&t.key).map(|f| f.2).unwrap_or(0.0);
                     quality = Some(format!("{}p · {:.0} fps", size.y as u32, fps));
@@ -493,7 +493,7 @@ impl PyrApp {
             }
             None => {
                 if t.screen {
-                    p.rect_filled(rect, CornerRadius::same(12), Color32::from_rgb(0x16, 0x12, 0x10));
+                    p.rect_filled(rect, crate::theme::r(12), Color32::from_rgb(0x16, 0x12, 0x10));
                     // LIVE, who's sharing and Watch Stream, stacked in the room above the name
                     // label; a small tile (the row under the big one) keeps what fits.
                     let (top, bottom) = (rect.top() + 8.0, rect.bottom() - 40.0);
@@ -512,7 +512,7 @@ impl PyrApp {
                     let mut y = top + ((room - h) / 2.0).max(0.0);
                     if show_badge {
                         let badge = Rect::from_center_size(pos2(x, y + 11.0), vec2(48.0, 22.0));
-                        p.rect_filled(badge, CornerRadius::same(5), theme::LIVE());
+                        p.rect_filled(badge, crate::theme::r(5), theme::LIVE());
                         p.text(badge.center(), egui::Align2::CENTER_CENTER, "LIVE", theme::bold_font(12.0), Color32::WHITE);
                         y += 30.0;
                     }
@@ -549,7 +549,7 @@ impl PyrApp {
         let meter_w = if style == crate::meter::Style::Off { 0.0 } else { 34.0 };
         let text_w = galley.size().x;
         let lr = Rect::from_min_size(rect.left_bottom() + vec2(10.0, -34.0), vec2(text_w + 16.0 + icon_w + shield_w + meter_w, 24.0));
-        p.rect_filled(lr, CornerRadius::same(6), Color32::from_black_alpha(150));
+        p.rect_filled(lr, crate::theme::r(6), Color32::from_black_alpha(150));
         if t.deaf {
             icons::headphones(&p, Rect::from_min_size(lr.min + vec2(6.0, 4.0), vec2(16.0, 16.0)), theme::LIVE(), true);
         } else if t.muted {
@@ -566,7 +566,7 @@ impl PyrApp {
         let mut right = rect.right() - 10.0;
         if t.screen && t.watching && !t.is_me {
             let b = Rect::from_min_size(pos2(right - 48.0, rect.top() + 10.0), vec2(48.0, 22.0));
-            p.rect_filled(b, CornerRadius::same(5), theme::LIVE());
+            p.rect_filled(b, crate::theme::r(5), theme::LIVE());
             p.text(b.center(), egui::Align2::CENTER_CENTER, "LIVE", theme::bold_font(12.0), Color32::WHITE);
             right = b.left() - 6.0;
         }
@@ -575,7 +575,7 @@ impl PyrApp {
             let n = t.viewers.len().to_string();
             let g = ui.painter().layout_no_wrap(n, theme::bold_font(12.0), Color32::WHITE);
             let b = Rect::from_min_size(pos2(right - (30.0 + g.size().x), rect.top() + 10.0), vec2(30.0 + g.size().x, 22.0));
-            p.rect_filled(b, CornerRadius::same(5), Color32::from_black_alpha(170));
+            p.rect_filled(b, crate::theme::r(5), Color32::from_black_alpha(170));
             icons::eye(&p, Rect::from_min_size(b.min + vec2(6.0, 4.0), vec2(16.0, 14.0)), Color32::WHITE);
             p.galley(pos2(b.left() + 25.0, b.center().y - g.size().y / 2.0), g, Color32::WHITE);
             let id = ui.id().with(("viewers", t.key.session));
@@ -586,18 +586,18 @@ impl PyrApp {
         if let Some(q) = quality {
             let g = ui.fonts_mut(|f| f.layout_no_wrap(q, theme::font(11.5), theme::MUTED()));
             let b = Rect::from_min_size(pos2(right - g.size().x - 12.0, rect.top() + 10.0), vec2(g.size().x + 12.0, 22.0));
-            p.rect_filled(b, CornerRadius::same(5), Color32::from_black_alpha(150));
+            p.rect_filled(b, crate::theme::r(5), Color32::from_black_alpha(150));
             p.galley(b.min + vec2(6.0, 11.0 - g.size().y / 2.0), g, theme::MUTED());
         }
         if t.screen && t.has_sound && (t.watching || t.is_me) {
             // Little speaker next to the name: this stream has sound (muted look at 0%).
             let s = Rect::from_min_size(lr.right_top() + vec2(6.0, 0.0), vec2(24.0, 24.0));
-            p.rect_filled(s, CornerRadius::same(6), Color32::from_black_alpha(150));
+            p.rect_filled(s, crate::theme::r(6), Color32::from_black_alpha(150));
             let c = if t.stream_volume <= 0.001 && !t.is_me { theme::LIVE() } else { theme::TEXT() };
             icons::speaker(&p, s.shrink(4.0), c);
         }
         if t.speaking {
-            p.rect_stroke(rect, CornerRadius::same(12), Stroke::new(3.0f32, theme::GLOW()), StrokeKind::Inside);
+            p.rect_stroke(rect, crate::theme::r(12), Stroke::new(3.0f32, theme::GLOW()), StrokeKind::Inside);
         }
         // A soundboard sound they just played: its emoji pops up over them, and what it was
         // shows in the corner.
@@ -610,13 +610,13 @@ impl PyrApp {
             let (_, _, alpha) = crate::soundboard::pop_motion(pop.age);
             let g = ui.fonts_mut(|f| f.layout_no_wrap(pop.name.clone(), theme::bold_font(12.0), theme::TEXT().gamma_multiply(alpha)));
             let b = Rect::from_min_size(rect.left_top() + vec2(10.0, 10.0), vec2(g.size().x + 34.0, 24.0));
-            p.rect_filled(b, CornerRadius::same(6), Color32::from_black_alpha((150.0 * alpha) as u8));
+            p.rect_filled(b, crate::theme::r(6), Color32::from_black_alpha((150.0 * alpha) as u8));
             icons::soundboard(&p, Rect::from_min_size(b.min + vec2(7.0, 4.0), vec2(16.0, 16.0)), theme::EMBER2().gamma_multiply(alpha));
             p.galley(pos2(b.left() + 28.0, b.center().y - g.size().y / 2.0), g, theme::TEXT());
             ctx.request_repaint();
         }
         if resp.hovered() {
-            p.rect_stroke(rect, CornerRadius::same(12), Stroke::new(1.0f32, theme::LINE()), StrokeKind::Inside);
+            p.rect_stroke(rect, crate::theme::r(12), Stroke::new(1.0f32, theme::LINE()), StrokeKind::Inside);
         }
         // Full screen: for a stream (or camera) that's showing video.
         let can_full = tex.is_some();
@@ -626,7 +626,7 @@ impl PyrApp {
         if can_full && ui.rect_contains_pointer(rect) {
             let b = Rect::from_min_size(rect.right_bottom() + vec2(-44.0, -44.0), vec2(34.0, 34.0));
             let br = ui.interact(b, ui.id().with(("full", t.key.session, t.key.track)), Sense::click());
-            p.rect_filled(b, CornerRadius::same(6), Color32::from_black_alpha(if br.hovered() { 210 } else { 150 }));
+            p.rect_filled(b, crate::theme::r(6), Color32::from_black_alpha(if br.hovered() { 210 } else { 150 }));
             icons::fullscreen(&p, b.shrink(9.0), theme::TEXT(), false);
             go_full |= br.on_hover_text("Full screen (double-click)").clicked();
         }
@@ -825,7 +825,7 @@ impl PyrApp {
             x += w + gap;
             let resp = ui.allocate_rect(r, Sense::click());
             let f = if resp.hovered() { fill.gamma_multiply(1.25) } else { fill };
-            ui.painter().rect_filled(r, CornerRadius::same((size / 2.0) as u8), f);
+            ui.painter().rect_filled(r, crate::theme::r((size / 2.0) as u8), f);
             draw(ui.painter(), Rect::from_center_size(r.center(), vec2(24.0, 24.0)));
             resp.on_hover_text(tip)
         };
@@ -1029,7 +1029,7 @@ impl PyrApp {
                 // Exit at the bottom right, like Discord's.
                 let b = Rect::from_min_size(rect.right_bottom() + vec2(-58.0, -58.0), vec2(42.0, 42.0));
                 let br = ui.interact(b, ui.id().with("exit-full"), Sense::click());
-                ui.painter().rect_filled(b, CornerRadius::same(8), Color32::from_black_alpha(if br.hovered() { 220 } else { 160 }));
+                ui.painter().rect_filled(b, crate::theme::r(8), Color32::from_black_alpha(if br.hovered() { 220 } else { 160 }));
                 icons::fullscreen(ui.painter(), b.shrink(11.0), theme::TEXT(), true);
                 leave |= br.on_hover_text("Exit full screen").clicked();
                 ctx.request_repaint_after(std::time::Duration::from_millis(500));
@@ -1057,5 +1057,5 @@ pub(crate) fn paint_tint(p: &egui::Painter, rect: Rect, top: Color32, bottom: Co
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(1, 3, 2);
     p.add(egui::Shape::mesh(mesh));
-    p.rect_stroke(rect.expand(6.0), CornerRadius::same(18), Stroke::new(6.0f32, theme::STAGE()), StrokeKind::Inside);
+    p.rect_stroke(rect.expand(6.0), crate::theme::r(18), Stroke::new(6.0f32, theme::STAGE()), StrokeKind::Inside);
 }

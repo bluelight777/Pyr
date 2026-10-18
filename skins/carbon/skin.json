@@ -1,0 +1,49 @@
+{
+  "name": "Carbon",
+  "version": "1.0",
+  "summary": "Carbon fibre, racing-yellow stripes and a lit gauge, with tall condensed headings.",
+  "author": "Pyr",
+  "colors": {
+    "rail": "#0a0a0a",
+    "side": "#0f0f0f",
+    "side_dark": "#0d0d0d",
+    "main": "#141414",
+    "elev": "#1d1d1d",
+    "elev2": "#282828",
+    "hover": "#191919",
+    "line": "#2c2c2c",
+    "shadow_line": "#070707",
+    "text": "#f0f0ed",
+    "body": "#e3e2de",
+    "muted": "#abaaa5",
+    "dim": "#83827c",
+    "ember": "#ffd60a",
+    "ember2": "#ffe766",
+    "glow": "#ffe14d",
+    "live": "#ff3b3b",
+    "online": "#4cd17a",
+    "owner": "#ffb020",
+    "admin": "#ffe9a0",
+    "link": "#ffe27a",
+    "stage": "#060606",
+    "tile": "#121212",
+    "code_bg": "#0d0d0d",
+    "selection": "#5c4d00"
+  },
+  "background": {
+    "file": "background.webp",
+    "show": 0.34,
+    "under": "window"
+  },
+  "fonts": {
+    "body": "fonts/Manrope-Regular.ttf",
+    "bold": "fonts/BebasNeue-Bold.otf",
+    "scale": 1.0
+  },
+  "look": {
+    "corners": 0.5,
+    "avatars": "rounded",
+    "selected": "bar",
+    "outlines": false
+  }
+}

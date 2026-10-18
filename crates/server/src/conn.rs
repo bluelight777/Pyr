@@ -300,7 +300,7 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
                 Err((ErrorCode::RateLimited, "Slow down a little.".into()))
             } else if let Request::SetVanity { code } = f.req {
                 // Answered once pyr.gg has it (other requests carry on meanwhile).
-                match ctx.require_owner("give the community its own link") {
+                match ctx.require(perm::MANAGE_SERVER, "give the community its own link") {
                     Err(e) => Err(e),
                     Ok(()) => {
                         let (hub, tx, uid) = (hub.clone(), tx.clone(), ctx.uid.clone());
@@ -1984,7 +1984,7 @@ impl Ctx<'_> {
 
 /// The answer to `CreateInvite` (and `CreateBotInvite`), before any short link.
 fn invite_created(hub: &Hub, code: &str, expires_at: Option<i64>, max_uses: Option<u32>, uses: u32) -> Event {
-    Event::InviteCreated { code: code.to_string(), link: hub.invite_link(code), short: None, short_problem: None, expires_at, max_uses, uses }
+    Event::InviteCreated { code: code.to_string(), link: hub.invite_link(code), short: None, short_problem: None, expires_at, max_uses, uses, vanity: None, vanity_link: None }
 }
 
 #[cfg(test)]

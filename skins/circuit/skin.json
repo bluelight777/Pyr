@@ -1,0 +1,49 @@
+{
+  "name": "Circuit",
+  "version": "1.0",
+  "summary": "A black circuit board with coral-lit copper traces, drawn like a schematic.",
+  "author": "Pyr",
+  "colors": {
+    "rail": "#0b0a09",
+    "side": "#100e0d",
+    "side_dark": "#0e0c0b",
+    "main": "#161412",
+    "elev": "#201c1a",
+    "elev2": "#2c2624",
+    "hover": "#1c1817",
+    "line": "#302a27",
+    "shadow_line": "#070606",
+    "text": "#f2edeb",
+    "body": "#e5dfdc",
+    "muted": "#aea6a2",
+    "dim": "#877c78",
+    "ember": "#ff7a5c",
+    "ember2": "#ffb39e",
+    "glow": "#ff9070",
+    "live": "#ff4f6d",
+    "online": "#5fe0a0",
+    "owner": "#f0c64a",
+    "admin": "#e8b48a",
+    "link": "#ffb08c",
+    "stage": "#060505",
+    "tile": "#141110",
+    "code_bg": "#0e0d0c",
+    "selection": "#6a2a1c"
+  },
+  "background": {
+    "file": "background.webp",
+    "show": 0.34,
+    "under": "window"
+  },
+  "fonts": {
+    "body": "fonts/IBMPlexSansCondensed-Regular.ttf",
+    "bold": "fonts/IBMPlexSansCondensed-Bold.ttf",
+    "scale": 1.0
+  },
+  "look": {
+    "corners": 0.15,
+    "avatars": "square",
+    "selected": "outline",
+    "outlines": true
+  }
+}

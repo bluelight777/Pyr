@@ -1,6 +1,6 @@
 //! Modal dialogs: join server, invites, channels, the screen picker (Settings is in settings.rs).
 
-use eframe::egui::{self, Align, Color32, CornerRadius, Layout, RichText, Sense, pos2, vec2};
+use eframe::egui::{self, Align, Color32, Layout, RichText, Sense, pos2, vec2};
 use pyr_engine::config::ScreenPreset;
 use pyr_engine::state::{AppState, BugSend, ConnStatus};
 use pyr_engine::video::SourceKind;
@@ -428,7 +428,11 @@ impl PyrApp {
                     }
                     match &made {
                         Some(inv) => {
-                            let share = inv.share(&name);
+                            // The community's own link (pyr.gg/brethren), set by whoever manages
+                            // the server, is what everyone shares, unless they made one of their
+                            // own with Edit invite link.
+                            let community = inv.vanity.clone().filter(|_| !inv.chosen);
+                            let share = community.clone().unwrap_or_else(|| inv.share(&name));
                             let copied_id = egui::Id::new(("invite-copied", &inv.code));
                             let copied_at: Option<f64> = ui.data(|d| d.get_temp(copied_id));
                             let now = ui.input(|i| i.time);
@@ -458,10 +462,12 @@ impl PyrApp {
                             }
                             ui.add_space(6.0);
                             let lasts = match inv.expires_at {
+                                _ if community.is_some() => format!("This is {name}'s own link: it never expires."),
                                 Some(at) => format!("Your invite link expires in {}.", crate::invites::time_left(at, pyr_proto::now_ms())),
                                 None => "Your invite link never expires.".to_string(),
                             };
                             let limit = match inv.max_uses {
+                                _ if community.is_some() => String::new(),
                                 Some(1) => " One person can use it.".to_string(),
                                 Some(n) => format!(" {n} people can use it."),
                                 None => String::new(),
@@ -519,10 +525,15 @@ impl PyrApp {
                         if ui.add(egui::Button::new("Done").min_size(vec2(100.0, 34.0))).clicked() {
                             close = true;
                         }
-                        if let Some(inv) = made.as_ref().filter(|i| i.short.is_some()) {
+                        // (The community's own link's, when that's the one shown.)
+                        let full = made.as_ref().and_then(|i| match (&i.vanity, &i.vanity_link) {
+                            (Some(_), Some(l)) if !i.chosen => Some(l.clone()),
+                            _ => i.short.as_ref().map(|_| i.link.clone()),
+                        });
+                        if let Some(full) = full {
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 if ui.button("Copy the full link").on_hover_text("The pyr:// link: it works even without pyr.gg.").clicked() {
-                                    acts.push(Act::Copy(inv.link.clone()));
+                                    acts.push(Act::Copy(full));
                                 }
                             });
                         }
@@ -622,12 +633,12 @@ impl PyrApp {
                                 match self.server_icon(ui.ctx(), s) {
                                     Some(t) => {
                                         ui.painter().add(
-                                            egui::epaint::RectShape::filled(r, CornerRadius::same(24), Color32::WHITE)
+                                            egui::epaint::RectShape::filled(r, crate::theme::r(24), Color32::WHITE)
                                                 .with_texture(t, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))),
                                         );
                                     }
                                     None => {
-                                        ui.painter().rect_filled(r, CornerRadius::same(24), theme::ELEV());
+                                        ui.painter().rect_filled(r, crate::theme::r(24), theme::ELEV());
                                         let initials: String =
                                             s.name.split_whitespace().filter_map(|w| w.chars().next()).take(2).collect::<String>().to_uppercase();
                                         ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, initials, theme::bold_font(24.0), theme::TEXT());
@@ -1291,7 +1302,7 @@ impl PyrApp {
                     ui.color_edit_button_srgb(&mut e.color);
                     for c in [0x1abc9c, 0x2ecc71, 0x3498db, 0x9b59b6, 0xe91e63, 0xf1c40f, 0xe67e22, 0xe74c3c, 0x95a5a6] {
                         let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
-                        ui.painter().rect_filled(r, CornerRadius::same(4), rgb(c));
+                        ui.painter().rect_filled(r, crate::theme::r(4), rgb(c));
                         if resp.clicked() {
                             e.color = [(c >> 16) as u8, (c >> 8) as u8, c as u8];
                         }
@@ -1600,7 +1611,7 @@ impl PyrApp {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
         field_label(ui, "PREVIEW");
         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
-        ui.painter().rect_filled(r, CornerRadius::same(8), Color32::BLACK);
+        ui.painter().rect_filled(r, crate::theme::r(8), Color32::BLACK);
         match &self.ui.preview_tex {
             Some((t, _)) => {
                 let size = t.size_vec2();

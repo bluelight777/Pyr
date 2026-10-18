@@ -1,0 +1,49 @@
+{
+  "name": "Dot Matrix",
+  "version": "1.0",
+  "summary": "A landscape of glowing amber dots on black, in a pixel typeface: square and sharp.",
+  "author": "Pyr",
+  "colors": {
+    "rail": "#0b0907",
+    "side": "#100d0a",
+    "side_dark": "#0e0b09",
+    "main": "#16120e",
+    "elev": "#201a14",
+    "elev2": "#2b231c",
+    "hover": "#1b1612",
+    "line": "#2f271e",
+    "shadow_line": "#070605",
+    "text": "#f8f0e5",
+    "body": "#ece2d5",
+    "muted": "#b9ab98",
+    "dim": "#95836a",
+    "ember": "#ffb020",
+    "ember2": "#ffd27a",
+    "glow": "#ffc04d",
+    "live": "#ff5a3c",
+    "online": "#c8e05a",
+    "owner": "#ffe08a",
+    "admin": "#ffcf9e",
+    "link": "#ffcc66",
+    "stage": "#060504",
+    "tile": "#13100c",
+    "code_bg": "#0e0c09",
+    "selection": "#6b4a0c"
+  },
+  "background": {
+    "file": "background.webp",
+    "show": 0.38,
+    "under": "window"
+  },
+  "fonts": {
+    "body": "fonts/B612-Regular.otf",
+    "bold": "fonts/DotGothic16-Regular.ttf",
+    "scale": 0.95
+  },
+  "look": {
+    "corners": 0,
+    "avatars": "square",
+    "selected": "bar",
+    "outlines": true
+  }
+}

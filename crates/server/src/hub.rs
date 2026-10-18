@@ -571,7 +571,10 @@ impl Hub {
                 Err(e) => short_problem = Some(format!("Couldn't list it at pyr.gg ({e}): this invite works as a full link.")),
             }
         }
-        Event::InviteCreated { code, link, short, short_problem, expires_at, max_uses, uses }
+        // The community's own link, if it has one that works: Invite People shows it.
+        let vanity = self.db.get_meta("vanity").filter(|v| !v.is_empty() && self.db.invite(v).is_some());
+        let vanity_link = vanity.as_deref().map(|v| self.invite_link(v));
+        Event::InviteCreated { code, link, short, short_problem, expires_at, max_uses, uses, vanity: vanity.map(|v| pyr_proto::directory::short_url(&v)), vanity_link }
     }
 
     /// The invites that still work (`ListInvites`): everyone's (`all`) or `uid`'s.
@@ -597,10 +600,10 @@ impl Hub {
         Event::Invites { invites, vanity: vanity.filter(|_| on), short_links: on, short_links_problem: self.short_links_off_why.get().cloned() }
     }
 
-    /// Gives the community its own code (`SetVanity`; the caller checked it's the owner):
+    /// Gives the community its own code (`SetVanity`; the caller checked they may manage the server):
     /// an everyday invite with that code, listed at pyr.gg, that never runs out. The old one
     /// stops working. Answered once pyr.gg has it (or says why not).
-    pub async fn set_vanity(&self, owner: &str, code: Option<String>) -> Reply {
+    pub async fn set_vanity(&self, by: &str, code: Option<String>) -> Reply {
         let _one = self.vanity_change.lock().await;
         let Some(dir) = self.directory() else {
             let why = self.short_links_off_why.get().cloned().unwrap_or_else(|| "Short links are off for this server.".into());
@@ -612,7 +615,7 @@ impl Hub {
         let new = code.map(|c| c.trim().to_ascii_lowercase()).filter(|c| !c.is_empty());
         let old = self.db.get_meta("vanity").filter(|v| !v.is_empty());
         if new == old {
-            return Ok(self.invites_event(owner, true));
+            return Ok(self.invites_event(by, true));
         }
         let Some(new) = new else {
             // Taken away: its invite stops working now, and pyr.gg hears of it in a moment.
@@ -621,7 +624,7 @@ impl Hub {
             }
             let _ = self.db.set_meta("vanity", "");
             dir.nudge();
-            return Ok(self.invites_event(owner, true));
+            return Ok(self.invites_event(by, true));
         };
         if let Some(why) = pyr_proto::directory::vanity_problem(&new) {
             return err(ErrorCode::BadRequest, why);
@@ -631,7 +634,7 @@ impl Hub {
         }
         let made = self
             .db
-            .create_invite(&new, owner, None, None, Role::Member)
+            .create_invite(&new, by, None, None, Role::Member)
             .and_then(|()| self.db.set_listed(&new, true))
             .and_then(|()| self.db.set_meta("vanity", &new));
         if let Err(e) = made {
@@ -652,7 +655,7 @@ impl Hub {
                 if let Some(o) = &old {
                     let _ = self.db.delete_invite(o);
                 }
-                Ok(self.invites_event(owner, true))
+                Ok(self.invites_event(by, true))
             }
             Some(why) => {
                 // Back to how it was.

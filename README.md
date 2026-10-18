@@ -58,7 +58,7 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
 - Add friends, accept or decline requests, and block people.
 - **Direct messages** with anyone you share a server with. Other members can't see them,
   but they aren't end-to-end encrypted yet: they're stored on the server, so whoever runs it
-  could read them (end-to-end encrypted messages are coming in 0.8).
+  could read them (end-to-end encrypted messages are on the way).
 - **Call friends**, like Discord: the call and video buttons at the top of a direct message,
   or **Call** when you right-click someone's name. It rings them for 30 seconds, about as long
   as Discord does (with Accept and Decline, a Windows notice and a flashing taskbar button if
@@ -183,8 +183,12 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   sounds for messages, people joining and calls. They have a place of their own, **Skins** (the
   palette under Plugins): a Gallery of every skin in the Pyr Library with a big picture of
   Pyr wearing each, the ones that are yours to wear (and Campfire, Pyr's own), and making
-  your own. Pyr made ten to start: Aurora, Neon Drive, Abyss, Sakura Night, Elven Grove,
-  Nebula, Terminal, Hallow's Eve, Obsidian & Gold and Stormcaller, next to Blood Moon. Skins
+  your own. Pyr made twenty to start: Aurora, Neon Drive, Abyss, Sakura Night, Elven Grove,
+  Nebula, Terminal, Hallow's Eve, Obsidian & Gold and Stormcaller, next to Blood Moon, and ten
+  inspired by the old Winamp skins, each with its own shapes and typeface: Alloy, Dot Matrix,
+  Walnut, Candy Glass, Circuit, Carbon, Kaleidoscope, Field Kit, Starship and Cathedral.
+  Since Pyr 0.8.1 a skin can change Pyr's shapes too: how round corners are, the shape of
+  people's pictures, how what's selected is marked, and outlines on buttons and boxes. Skins
   have no code, and Pyr checks every file (fonts included) before it uses one.
 - Every plugin and skin shows **who made it** (a skin someone sends in is listed under the
   name they gave it): click their name for everything they made. **Star** the ones you like,

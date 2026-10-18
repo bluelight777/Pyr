@@ -248,7 +248,7 @@ pub fn signal(p: &Painter, r: Rect, c: Color32) {
     for (i, h) in [0.3f32, 0.55, 0.8].iter().enumerate() {
         let x = r.left() + s * (0.12 + i as f32 * 0.3);
         let bar = Rect::from_min_max(pos2(x, r.bottom() - s * h), pos2(x + s * 0.18, r.bottom()));
-        p.rect_filled(bar, CornerRadius::same(1), c);
+        p.rect_filled(bar, crate::theme::r(1), c);
     }
 }
 
@@ -278,7 +278,7 @@ pub fn pencil(p: &Painter, r: Rect, c: Color32) {
 pub fn trash(p: &Painter, r: Rect, c: Color32) {
     let s = r.width();
     let body = Rect::from_min_max(pos2(r.left() + s * 0.28, r.top() + s * 0.34), pos2(r.right() - s * 0.28, r.bottom() - s * 0.14));
-    p.rect_filled(body, CornerRadius::same(2), c);
+    p.rect_filled(body, crate::theme::r(2), c);
     p.line_segment([pos2(r.left() + s * 0.2, r.top() + s * 0.26), pos2(r.right() - s * 0.2, r.top() + s * 0.26)], Stroke::new(s * 0.08, c));
     p.line_segment([pos2(r.center().x - s * 0.08, r.top() + s * 0.18), pos2(r.center().x + s * 0.08, r.top() + s * 0.18)], Stroke::new(s * 0.08, c));
 }
@@ -501,7 +501,7 @@ fn triangulate(pts: &[Pos2]) -> Vec<[u32; 3]> {
 pub fn crown(p: &Painter, r: Rect, c: Color32) {
     let s = r.width();
     let base = Rect::from_min_max(pos2(r.left() + s * 0.15, r.top() + s * 0.55), pos2(r.right() - s * 0.15, r.bottom() - s * 0.18));
-    p.rect_filled(base, CornerRadius::same(1), c);
+    p.rect_filled(base, crate::theme::r(1), c);
     for (x0, x1, tip) in [(0.15f32, 0.45f32, 0.30f32), (0.35, 0.65, 0.50), (0.55, 0.85, 0.70)] {
         let tri = vec![
             pos2(r.left() + s * x0, r.top() + s * 0.58),

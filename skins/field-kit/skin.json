@@ -1,0 +1,49 @@
+{
+  "name": "Field Kit",
+  "version": "1.0",
+  "summary": "Olive-drab steel and a green radar sweep, typed up like a field report.",
+  "author": "Pyr",
+  "colors": {
+    "rail": "#0d0e09",
+    "side": "#13150c",
+    "side_dark": "#10120b",
+    "main": "#191c11",
+    "elev": "#242818",
+    "elev2": "#323721",
+    "hover": "#202315",
+    "line": "#373d24",
+    "shadow_line": "#080906",
+    "text": "#f3f3e9",
+    "body": "#e7e7da",
+    "muted": "#b1b19f",
+    "dim": "#8b8b74",
+    "ember": "#d8c27a",
+    "ember2": "#efe2b0",
+    "glow": "#8fe05a",
+    "live": "#ff6a4d",
+    "online": "#8fe05a",
+    "owner": "#f0c850",
+    "admin": "#d8c48a",
+    "link": "#c8e07a",
+    "stage": "#070805",
+    "tile": "#16190f",
+    "code_bg": "#10120b",
+    "selection": "#4a5a1e"
+  },
+  "background": {
+    "file": "background.webp",
+    "show": 0.34,
+    "under": "window"
+  },
+  "fonts": {
+    "body": "fonts/CourierPrime.otf",
+    "bold": "fonts/CourierPrimeBold.otf",
+    "scale": 1.0
+  },
+  "look": {
+    "corners": 0,
+    "avatars": "square",
+    "selected": "bar",
+    "outlines": true
+  }
+}

@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, Color32, CornerRadius, RichText, Sense, Stroke, vec2};
+use eframe::egui::{self, Color32, RichText, Sense, Stroke, vec2};
 use pyr_engine::state::AppState;
 
 use crate::app::{Act, PyrApp};
@@ -123,7 +123,7 @@ impl PyrApp {
         let bytes = self.plugins.icons.get(&format!("skin:{id}")).cloned();
         let side = crate::plugins::ui::picture_side(ui.ctx(), size);
         let tex = bytes.and_then(|b| self.images.get(ui.ctx(), &format!("skin-preview:{id}:{side}"), Some(b), side).frame(0.0));
-        let rounding = CornerRadius::same(8);
+        let rounding = crate::theme::r(8);
         match tex {
             Some((tex, ts, _)) => {
                 let uv = crate::plugins::ui::cover_uv(ts, r.size());
@@ -290,7 +290,7 @@ impl PyrApp {
 pub(crate) fn campfire_swatch(ui: &mut egui::Ui, size: egui::Vec2) {
     let (r, _) = ui.allocate_exact_size(size, Sense::hover());
     let p = ui.painter();
-    p.rect_filled(r, CornerRadius::same(8), Color32::from_rgb(0x1b, 0x14, 0x10));
+    p.rect_filled(r, crate::theme::r(8), Color32::from_rgb(0x1b, 0x14, 0x10));
     let colors = [pyr_proto::skin::CAMPFIRE[13], pyr_proto::skin::CAMPFIRE[14], pyr_proto::skin::CAMPFIRE[15], pyr_proto::skin::CAMPFIRE[9]];
     // Four dabs across the middle, sized to the box (64 x 40 is the small one).
     let k = (size.y / 40.0).min(size.x / 64.0);

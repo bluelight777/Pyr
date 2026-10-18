@@ -68,5 +68,75 @@
     "exposure": 1.0,
     "cap": 0.85,
     "prompt": "Wide 16:9 epic thunderstorm wallpaper, dark and dramatic. A massive branching bolt of electric blue-white lightning strikes down just right of center from towering storm clouds lit from within; fainter lightning flickers in the distance. Heavy slanting rain, a dark stormy sea with crashing waves reflecting the flash, a lone lighthouse on rocky cliffs at the far left with a faint beam. Slate blue and electric blue palette, cinematic, ultra-detailed digital painting. No text, no people, no watermark."
+  },
+  "alloy": {
+    "source": "alloy-2.png",
+    "task": "01a15017-b2c8-75aa-a983-eb61b65c5567",
+    "exposure": 0.9,
+    "cap": 0.85,
+    "prompt": "Full-bleed 16:9 dark wallpaper, edge to edge. A vast dark brushed-aluminium panel with fine horizontal grain, machined beveled seams, small hex screws and precise engraved geometric lines. Just right of center, a recessed circular port glows with a soft ice-blue light ring, light spilling along the brushed grooves. Low-key lighting, deep gunmetal shadows on the left half, subtle specular sheen. Ultra-detailed premium industrial design. No screens, no displays, no buttons, no knobs, no text, no letters, no logos, no watermark."
+  },
+  "dot-matrix": {
+    "source": "dot-matrix-3.png",
+    "task": "01a15020-fc64-7621-8d95-ce44dde32959",
+    "exposure": 1.0,
+    "cap": 0.85,
+    "prompt": "Full-bleed 16:9 wallpaper that fills the entire frame edge to edge: no border, no frame, no white margin, no device, no screen bezel. Pure black background. Just right of center, a vast landscape of mountain ridges and rolling contour lines drawn entirely in tiny glowing amber dots, like a retro dot-matrix display, with a faint grid of unlit dots across the whole frame and a few amber dot stars above. Warm amber bloom. Mostly deep black on the left. Crisp, ultra-detailed. No text, no letters, no numbers, no logos, no watermark."
+  },
+  "walnut": {
+    "source": "walnut-2.png",
+    "task": "01a15017-c38a-72a5-8c89-399a92f7fef4",
+    "exposure": 0.85,
+    "cap": 0.8,
+    "prompt": "Full-bleed 16:9 moody wallpaper, edge to edge. A dark wood-panelled study at night: rich walnut wall panels with deep grain and thin brass inlay lines fill the left; just right of center a heavy walnut desk with a green-glass brass banker's lamp casting warm golden light over an antique brass globe and a leather-bound book. Deep shadows, cozy, low lamplight. Ultra-detailed photographic style. No people, no music instruments, no speakers, no text, no letters, no logos, no watermark."
+  },
+  "circuit": {
+    "source": "circuit-2.png",
+    "task": "01a15019-9029-73c1-aca9-487a9531135e",
+    "exposure": 0.85,
+    "cap": 0.8,
+    "prompt": "Full-bleed 16:9 dark wallpaper, edge to edge. Macro view of a matte black printed circuit board with fine polished copper traces branching across it, tiny black chips, vias and gold pads. Warm coral-orange light pulses travel along the copper traces, brightest just right of center, with a few small glowing coral LEDs. Low-key lighting, shallow depth of field, darker toward the left. Ultra-detailed macro photography. No green, no text, no letters, no logos, no watermark."
+  },
+  "carbon": {
+    "source": "carbon-2.png",
+    "task": "01a15019-9861-7072-8242-efd99cc08f5f",
+    "exposure": 0.9,
+    "cap": 0.85,
+    "prompt": "Full-bleed 16:9 dark wallpaper, edge to edge, inspired by racing cars. Glossy black carbon-fiber weave fills the frame with subtle diagonal reflections; two bold bright racing-yellow stripes sweep diagonally through the right side; just right of center a glowing yellow-lit analog speedometer gauge with a needle and fine chrome bezel. Low-key studio lighting, deep blacks on the left half. Ultra-detailed, premium automotive look. No red, no text, no letters, no numbers, no logos, no watermark."
+  },
+  "field-kit": {
+    "source": "field-kit-1.png",
+    "task": "01a14fe7-258a-772c-8546-4db77f8d7f15",
+    "exposure": 0.75,
+    "cap": 0.8,
+    "prompt": "Full-bleed 16:9 dark wallpaper, edge to edge, inspired by military field-equipment themed 1990s media player skins. Worn olive-drab painted steel panel with rivets, scuffed edges, canvas strap and toggle switches with guard covers; just right of center a round green phosphor radar scope with a sweeping beam, faint grid rings and a few glowing blips. Low-key lighting, deep shadows on the left half, gritty realistic texture. Ultra-detailed. No text, no letters, no numbers, no stencils, no insignia, no logos, no watermark."
+  },
+  "starship": {
+    "source": "starship-2.png",
+    "task": "01a15019-aa5f-7044-aaab-910b60f00e3f",
+    "exposure": 0.6,
+    "cap": 0.7,
+    "prompt": "Full-bleed 16:9 dark wallpaper, edge to edge. The dim bridge of a starship: a curved dark indigo console with glowing soft periwinkle and lavender-white holographic rings and thin HUD arcs, and through a wide window just right of center a pale ringed gas giant and distant stars. Mostly deep indigo and black on the left half. Cinematic, ultra-detailed digital art, soft bloom. No cyan, no readable text, no letters, no numbers, no logos, no people, no watermark."
+  },
+  "cathedral": {
+    "source": "cathedral-1.png",
+    "task": "01a14fe7-3b44-7441-9512-fc5827951950",
+    "exposure": 0.95,
+    "cap": 0.85,
+    "prompt": "Full-bleed 16:9 dark wallpaper, edge to edge, inspired by gothic-themed 1990s media player skins. The dark interior of an ancient stone cathedral at night: carved stone arches and pillars fade into shadow on the left; just right of center a tall gothic rose window of deep crimson, violet and sapphire stained glass glows with moonlight, casting colored light across dusty air and worn flagstones. Candle glow far below. Low-key, cinematic, ultra-detailed digital painting. No text, no letters, no people, no logos, no watermark."
+  },
+  "candy-glass": {
+    "source": "candy-glass-1.png",
+    "task": "01a15019-87a7-77b7-8fa0-27df4355109b",
+    "exposure": 0.7,
+    "cap": 0.65,
+    "prompt": "Full-bleed 16:9 dark wallpaper, edge to edge, inspired by Y2K translucent candy-colored plastic. Deep charcoal-slate background; just right of center, glossy translucent lime-green and clear frosted candy-glass shapes (smooth rounded cubes, rings and droplets) float and overlap, lit from within, casting lime caustics and soft reflections. Mostly dark on the left half. Polished 3D render, glassy, ultra-detailed, soft bloom. No pills, no capsules, no text, no letters, no logos, no watermark."
+  },
+  "kaleidoscope": {
+    "source": "kaleidoscope-1.png",
+    "task": "01a15019-a1c5-776e-a6a7-35ee692913ed",
+    "exposure": 0.85,
+    "cap": 0.8,
+    "prompt": "Full-bleed 16:9 dark wallpaper, edge to edge, inspired by 1990s psychedelic computer art. Deep teal-black background; just right of center a glowing kaleidoscope mandala of swirling liquid light in turquoise, teal, tangerine and warm gold, with mirrored fractal petals, flowing ribbons and tiny sparkles. Mostly dark on the left half. Vivid glow, smooth digital art, ultra-detailed. No pink, no purple, no text, no letters, no logos, no watermark."
   }
 }

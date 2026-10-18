@@ -1,0 +1,49 @@
+{
+  "name": "Cathedral",
+  "version": "1.0",
+  "summary": "A gothic cathedral at night: a ruby rose window over cold stone, set in Garamond.",
+  "author": "Pyr",
+  "colors": {
+    "rail": "#0b0b0c",
+    "side": "#100f12",
+    "side_dark": "#0d0d0f",
+    "main": "#151518",
+    "elev": "#1f1e23",
+    "elev2": "#2a2930",
+    "hover": "#1b1a1e",
+    "line": "#2e2d34",
+    "shadow_line": "#070708",
+    "text": "#f1eeeb",
+    "body": "#e4e0dd",
+    "muted": "#aea8a3",
+    "dim": "#868079",
+    "ember": "#c8304e",
+    "ember2": "#ee8aa0",
+    "glow": "#ffcf7a",
+    "live": "#ff4f5e",
+    "online": "#6fd39a",
+    "owner": "#e8c25a",
+    "admin": "#b8a0ff",
+    "link": "#e8b0c8",
+    "stage": "#060607",
+    "tile": "#131215",
+    "code_bg": "#0e0d10",
+    "selection": "#5c1e3c"
+  },
+  "background": {
+    "file": "background.webp",
+    "show": 0.38,
+    "under": "window"
+  },
+  "fonts": {
+    "body": "fonts/EBGaramond12-Regular.otf",
+    "bold": "fonts/EBGaramond12-Bold.otf",
+    "scale": 1.1
+  },
+  "look": {
+    "corners": 0.15,
+    "avatars": "rounded",
+    "selected": "bar",
+    "outlines": false
+  }
+}

@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use eframe::egui::{self, Align2, Color32, CornerRadius, Rect, RichText, Sense, Stroke, pos2, vec2};
+use eframe::egui::{self, Align2, Color32, Rect, RichText, Sense, Stroke, pos2, vec2};
 use pyr_engine::state::{AppState, IncomingCall, RingState, ServerView};
 use pyr_proto::control::{ChannelId, DM_CALLS_FEATURE, GROUPS_FEATURE, Group, MAX_GROUP};
 
@@ -195,7 +195,7 @@ impl PyrApp {
                 theme::mix(top, bottom, 0.5)
             }
             None => {
-                p.rect_filled(rect, CornerRadius::same(12), theme::TILE());
+                p.rect_filled(rect, crate::theme::r(12), theme::TILE());
                 theme::TILE()
             }
         };
@@ -226,7 +226,7 @@ impl PyrApp {
             let b = Rect::from_center_size(pos2(rect.center().x, ny + 52.0), vec2(118.0, 30.0));
             let resp = ui.interact(b, ui.id().with(("ring-again", uid)), Sense::click());
             let h = ui.ctx().animate_bool_with_time(resp.id, resp.hovered(), 0.12);
-            ui.painter().rect_filled(b, CornerRadius::same(15), lerp(GREEN, GREEN_HOT, h));
+            ui.painter().rect_filled(b, crate::theme::r(15), lerp(GREEN, GREEN_HOT, h));
             icons::phone(ui.painter(), Rect::from_center_size(pos2(b.left() + 20.0, b.center().y), vec2(14.0, 14.0)), Color32::WHITE);
             ui.painter().text(pos2(b.left() + 34.0, b.center().y), Align2::LEFT_CENTER, if state.is_some() { "Ring again" } else { "Ring" }, theme::bold_font(13.0), Color32::WHITE);
             if resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(format!("Ring {name}")).clicked() {
@@ -279,7 +279,7 @@ impl PyrApp {
                     x -= bw + 8.0;
                     let resp = ui.interact(b, ui.id().with(("join-dm-call", video)), Sense::click());
                     let h = ui.ctx().animate_bool_with_time(resp.id, resp.hovered(), 0.12);
-                    ui.painter().rect_filled(b, CornerRadius::same(15), lerp(fill, hot, h));
+                    ui.painter().rect_filled(b, crate::theme::r(15), lerp(fill, hot, h));
                     ui.painter().galley(pos2(b.center().x - galley.size().x / 2.0, b.center().y - galley.size().y / 2.0), galley, Color32::WHITE);
                     if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                         acts.push(Act::AnswerCall { key: key.clone(), channel, video });
@@ -362,7 +362,11 @@ impl PyrApp {
                 let on = picked.contains(uid);
                 let (row, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::click());
                 if resp.hovered() || on {
-                    ui.painter().rect_filled(row, CornerRadius::same(6), if on { theme::ELEV2() } else { theme::HOVER() });
+                    if on {
+                        theme::selected(ui.painter(), row, 6, theme::ELEV2());
+                    } else {
+                        ui.painter().rect_filled(row, crate::theme::r(6), theme::HOVER());
+                    }
                 }
                 let face = self.face(ui.ctx(), s, uid);
                 avatar(ui.painter(), pos2(row.left() + 22.0, row.center().y), 14.0, uid, name, false, theme::ELEV(), face);
@@ -372,8 +376,8 @@ impl PyrApp {
                 crate::emoji::paint_text(ui.painter(), pos2(row.left() + 46.0, row.center().y), Align2::LEFT_CENTER, name, theme::font(14.5), theme::TEXT(), Some(row.width() - 90.0));
                 // A tick box on the right.
                 let b = Rect::from_center_size(pos2(row.right() - 20.0, row.center().y), vec2(20.0, 20.0));
-                ui.painter().rect_filled(b, CornerRadius::same(5), if on { theme::EMBER() } else { theme::MAIN() });
-                ui.painter().rect_stroke(b, CornerRadius::same(5), Stroke::new(1.0_f32, if on { theme::EMBER() } else { theme::LINE() }), egui::StrokeKind::Inside);
+                ui.painter().rect_filled(b, crate::theme::r(5), if on { theme::EMBER() } else { theme::MAIN() });
+                ui.painter().rect_stroke(b, crate::theme::r(5), Stroke::new(1.0_f32, if on { theme::EMBER() } else { theme::LINE() }), egui::StrokeKind::Inside);
                 if on {
                     icons::tick(ui.painter(), b.shrink(3.0), theme::RAIL());
                 }
@@ -466,7 +470,11 @@ impl PyrApp {
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width() - 16.0, 44.0), Sense::click());
         let r = r.translate(vec2(8.0, 0.0));
         if selected || resp.hovered() {
-            ui.painter().rect_filled(r, CornerRadius::same(6), if selected { theme::ELEV2() } else { theme::HOVER() });
+            if selected {
+                theme::selected(ui.painter(), r, 6, theme::ELEV2());
+            } else {
+                ui.painter().rect_filled(r, crate::theme::r(6), theme::HOVER());
+            }
         }
         let bg = if selected { theme::ELEV2() } else if resp.hovered() { theme::HOVER() } else { theme::SIDE() };
         let p = ui.painter().clone();
@@ -538,7 +546,7 @@ impl PyrApp {
             let (row, resp) = ui.allocate_exact_size(vec2(ui.available_width() - 16.0, 40.0), Sense::click());
             let row = row.translate(vec2(8.0, 0.0));
             if resp.hovered() {
-                ui.painter().rect_filled(row, CornerRadius::same(6), theme::HOVER());
+                ui.painter().rect_filled(row, crate::theme::r(6), theme::HOVER());
             }
             let face = self.face(ui.ctx(), s, uid);
             let c = pos2(row.left() + 20.0, row.center().y);
@@ -596,7 +604,7 @@ fn panel_row(ui: &mut egui::Ui, label: &str, color: Color32, hot: Color32, icon:
     let row = row.translate(vec2(8.0, 0.0));
     let h = ui.ctx().animate_bool_with_time(resp.id, resp.hovered(), 0.12);
     if h > 0.0 {
-        ui.painter().rect_filled(row, CornerRadius::same(6), theme::HOVER().gamma_multiply(h));
+        ui.painter().rect_filled(row, crate::theme::r(6), theme::HOVER().gamma_multiply(h));
     }
     let col = lerp(color, hot, h);
     let c = pos2(row.left() + 20.0, row.center().y);

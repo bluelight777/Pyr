@@ -31,7 +31,8 @@ blood-moon/
   "colors": { "main": "#1a0d0f", "side": "#140a0b", "ember": "#d4202c" },
   "background": { "file": "background.webp", "show": 0.3, "under": "chat" },
   "fonts": { "body": "fonts/Body.ttf", "bold": "fonts/Bold.ttf", "scale": 1.0 },
-  "sounds": { "message": "sounds/message.ings", "join": "sounds/join.ings" }
+  "sounds": { "message": "sounds/message.ings", "join": "sounds/join.ings" },
+  "look": { "corners": 0.5, "avatars": "rounded", "selected": "bar", "outlines": true }
 }
 ```
 
@@ -113,6 +114,20 @@ from an MP3, WAV, OGG or FLAC. The sounds a skin can replace:
 | `ringback` | you're calling someone and it's ringing |
 
 Keep them short and gentle: they play often.
+
+### look
+
+Pyr 0.8.1 and newer: the shapes, so a skin can feel like a different program, not just a new
+coat of paint.
+
+| Key | What it does |
+|---|---|
+| `corners` | How round corners are, from 0 (square) through 1 (Pyr's own) to 2 (twice as round): buttons, boxes, cards, menus, server icons and the call buttons. |
+| `avatars` | People's pictures: `"circle"`, `"rounded"` (a rounded square) or `"square"`. |
+| `selected` | How the channel or page you have open is marked: `"fill"`, `"bar"` (a bar of the accent at its left) or `"outline"` (a line of the accent around it). |
+| `outlines` | `true` gives buttons and boxes to type in a thin outline. |
+
+A skin that sets `look` is listed in the Pyr Library for 0.8.1 and newer only.
 
 ## Limits
 

@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use eframe::egui::{self, Color32, CornerRadius, Rect, RichText, Sense, Stroke, pos2, vec2};
+use eframe::egui::{self, Color32, Rect, RichText, Sense, Stroke, pos2, vec2};
 use pyr_engine::state::{AppState, ServerView};
 use pyr_proto::control::{GIFS_FEATURE, MAX_SERVER_GIFS, ServerGif, perm, server_gif_token, server_gif_tokens};
 
@@ -50,7 +50,7 @@ impl PyrApp {
         match tex.frame(t) {
             Some((tex, size, next)) => {
                 let uv = if fill { crate::chat::cover_uv(r, size) } else { Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)) };
-                ui.painter().add(egui::epaint::RectShape::filled(r, CornerRadius::same(8), Color32::WHITE).with_texture(tex, uv));
+                ui.painter().add(egui::epaint::RectShape::filled(r, crate::theme::r(8), Color32::WHITE).with_texture(tex, uv));
                 if let (Some(n), true) = (next, plays && self.ui.anim_on) {
                     ui.ctx().request_repaint_after(n);
                 }
@@ -60,7 +60,7 @@ impl PyrApp {
                 Some(size)
             }
             None => {
-                ui.painter().rect_filled(r, CornerRadius::same(8), theme::ELEV());
+                ui.painter().rect_filled(r, crate::theme::r(8), theme::ELEV());
                 ui.ctx().request_repaint_after(Duration::from_millis(100));
                 None
             }
@@ -139,7 +139,7 @@ impl PyrApp {
                 let resp = ui.interact(r, ui.id().with(("server-gif", &g.id)), Sense::click());
                 self.paint_server_gif(ui, s, &g.id, r, true, true);
                 if resp.hovered() {
-                    ui.painter().rect_stroke(r, CornerRadius::same(8), Stroke::new(2.0f32, theme::EMBER()), egui::StrokeKind::Inside);
+                    ui.painter().rect_stroke(r, crate::theme::r(8), Stroke::new(2.0f32, theme::EMBER()), egui::StrokeKind::Inside);
                 }
                 let resp = resp.on_hover_text(&g.name);
                 if resp.clicked() {

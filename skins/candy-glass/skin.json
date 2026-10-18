@@ -1,0 +1,49 @@
+{
+  "name": "Candy Glass",
+  "version": "1.0",
+  "summary": "Y2K candy: glossy lime and frosted glass, bubble-round corners and a round typeface.",
+  "author": "Pyr",
+  "colors": {
+    "rail": "#0a0c0d",
+    "side": "#0e1113",
+    "side_dark": "#0c0e10",
+    "main": "#13171a",
+    "elev": "#1c2125",
+    "elev2": "#262d32",
+    "hover": "#181d20",
+    "line": "#2a3237",
+    "shadow_line": "#060808",
+    "text": "#e9f0f3",
+    "body": "#dae3e7",
+    "muted": "#9fabb1",
+    "dim": "#74838b",
+    "ember": "#b6f03c",
+    "ember2": "#dcff9a",
+    "glow": "#c8ff5a",
+    "live": "#ff5f8f",
+    "online": "#7dffb0",
+    "owner": "#ffd84d",
+    "admin": "#d6b8ff",
+    "link": "#a8f0ff",
+    "stage": "#050607",
+    "tile": "#111417",
+    "code_bg": "#0d0f11",
+    "selection": "#4a6a1a"
+  },
+  "background": {
+    "file": "background.webp",
+    "show": 0.32,
+    "under": "window"
+  },
+  "fonts": {
+    "body": "fonts/Comfortaa-Regular.ttf",
+    "bold": "fonts/Comfortaa-Bold.ttf",
+    "scale": 0.95
+  },
+  "look": {
+    "corners": 2.0,
+    "avatars": "circle",
+    "selected": "fill",
+    "outlines": false
+  }
+}

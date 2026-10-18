@@ -206,7 +206,7 @@ impl Chip {
                     _ => fill.gamma_multiply(fade),
                 };
                 let p = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-                p.rect_filled(rect, CornerRadius::same((H / 2.0) as u8), fill);
+                p.rect_filled(rect, crate::theme::r((H / 2.0) as u8), fill);
                 let ver_col = lerp(if matches!(look, Look::Version) { theme::DIM() } else { theme::MUTED() }, theme::TEXT(), hot);
                 p.text(pos2(x + PAD, y), Align2::LEFT_CENTER, current_version(), theme::font(11.0), ver_col);
                 let icon = Rect::from_min_size(pos2(x + PAD + vw + GAP, y - ICON / 2.0), vec2(ICON, ICON));
@@ -269,7 +269,7 @@ impl Chip {
         let resp = ui.interact(rect, id.with("update"), if clickable { Sense::click() } else { Sense::hover() });
         let hot = ui.ctx().animate_bool_with_time(id.with("bhot"), resp.hovered() && clickable, 0.15);
         let pulse = if clickable { self.pulse(now) } else { 0.0 };
-        let radius = CornerRadius::same((H / 2.0) as u8);
+        let radius = crate::theme::r((H / 2.0) as u8);
         let p = ui.painter().with_clip_rect(ui.clip_rect());
 
         // The glow around it: a breath while it's new, brighter under the pointer.
@@ -351,7 +351,7 @@ impl Chip {
                 let clickable = matches!(look, Look::Available(..));
                 let hot = ui.ctx().animate_bool_with_time(id.with("hot"), resp.hovered() && clickable, 0.15);
                 let pulse = if clickable { self.pulse(now) } else { 0.0 };
-                let radius = CornerRadius::same(if hot > 0.5 { 16 } else { 24 });
+                let radius = crate::theme::r(if hot > 0.5 { 16 } else { 24 });
                 let p = ui.painter();
                 p.add(egui::epaint::Shadow { offset: [0, 0], blur: 14, spread: 1, color: GREEN.gamma_multiply(0.30 + 0.45 * pulse.max(hot)) }.as_shape(rect, radius));
                 match &look {
@@ -379,8 +379,8 @@ impl Chip {
                         if *missed > 1 {
                             let t = if *missed > 9 { "9+".to_string() } else { missed.to_string() };
                             let b = Rect::from_center_size(rect.right_bottom() + vec2(-6.0, -6.0), vec2(if *missed > 9 { 24.0 } else { 20.0 }, 20.0));
-                            p.rect_filled(b.expand(3.0), CornerRadius::same(13), theme::RAIL());
-                            p.rect_filled(b, CornerRadius::same(10), theme::LIVE());
+                            p.rect_filled(b.expand(3.0), crate::theme::r(13), theme::RAIL());
+                            p.rect_filled(b, crate::theme::r(10), theme::LIVE());
                             p.text(b.center(), Align2::CENTER_CENTER, t, theme::bold_font(12.0), Color32::WHITE);
                         }
                     }
@@ -414,7 +414,7 @@ impl Chip {
                     _ => (lerp(theme::DIM(), theme::TEXT(), hot), theme::HOVER().gamma_multiply(hot), format!("Pyr {}. Click to check for updates.", current_version())),
                 };
                 let p = ui.painter();
-                p.rect_filled(rect, CornerRadius::same(11), fill);
+                p.rect_filled(rect, crate::theme::r(11), fill);
                 let g = p.layout_no_wrap(current_version().to_string(), theme::font(10.5), lerp(theme::DIM(), theme::TEXT(), hot));
                 let total = g.size().x + 4.0 + 11.0;
                 let left = rect.center().x - total / 2.0;

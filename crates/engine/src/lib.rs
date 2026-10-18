@@ -2049,7 +2049,7 @@ impl Engine {
         self.request_then_or(key, Request::CreateInvite { max_uses, expires_secs, reuse }, move |shared, r| {
             if let Some(s) = shared.state.write().server_mut(&k) {
                 match r {
-                    Ok(Event::InviteCreated { code, link, short, short_problem, expires_at, max_uses: most, uses }) => {
+                    Ok(Event::InviteCreated { code, link, short, short_problem, expires_at, max_uses: most, uses, vanity, vanity_link }) => {
                         s.invite = Some(MadeInvite {
                             code,
                             // (Servers before 0.3.0 hand out the long form.)
@@ -2060,6 +2060,9 @@ impl Engine {
                             max_uses: most,
                             uses,
                             asked: (max_uses, expires_secs),
+                            vanity,
+                            vanity_link: vanity_link.map(|l| InviteLink::shorten(&l)),
+                            chosen: !reuse,
                         });
                     }
                     Ok(_) => {}
