@@ -99,6 +99,8 @@ esac
 ETC=/etc/pyr-keeper
 mkdir -p "$ETC"
 [ -f "$ETC/keeper-key.txt" ] || install -m 600 "$HERE/keeper/keeper-key.txt" "$ETC/keeper-key.txt"
+# (Kept only there from now on.)
+rm -f "$HERE/keeper/keeper-key.txt"
 install -m 644 "$HERE/keeper/keeper-cert.json" "$ETC/keeper-cert.json"
 if [ ! -s "$ETC/api-key" ]; then
   echo

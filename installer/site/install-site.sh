@@ -189,6 +189,24 @@ if [ -f "$HERE/setup-pyr-gg.sh" ] && [ -f /etc/systemd/system/pyr-directory.serv
   echo "Updating pyr.gg's settings (invite pages' downloads carry the invite)"
   bash "$HERE/setup-pyr-gg.sh" || echo "pyr.gg's settings stay as they were (above); the release itself is published." >&2
 fi
+# The Pyr Library Keeper (setup-keeper.sh): kept in /root/pyr-keeper-setup (only root can read
+# it: it holds the Keeper's key until it's set up). Once its Claude API key is in, each release
+# sets it up again (the new program; its key, list and state stay). Before that it's one
+# command away (said below), since it asks for the key. It never holds up the release.
+if [ -d "$HERE/keeper" ] && [ -f "$HERE/setup-keeper.sh" ]; then
+  KS=/root/pyr-keeper-setup
+  rm -rf "$KS" && mkdir -m 700 "$KS" && cp -r "$HERE/keeper" "$HERE/setup-keeper.sh" "$KS/"
+  if [ -s /etc/pyr-keeper/api-key ]; then
+    echo "Updating the Pyr Library Keeper"
+    bash "$KS/setup-keeper.sh" || echo "The Library Keeper wasn't updated (above); the release itself is published." >&2
+  else
+    echo
+    echo "The Pyr Library Keeper (new versions of Library plugins and skins go up once Claude has"
+    echo "checked them) isn't on yet. To turn it on, run this (it asks for a Claude API key):"
+    echo "  ssh -t root@2.24.121.231 bash /root/pyr-keeper-setup/setup-keeper.sh"
+    echo
+  fi
+fi
 # Bug reports this release fixed (fixed-bugs.txt: a report's number first on each line) are
 # marked fixed on the guild server here, the one Pyr's bug reports go to, as the owner's
 # Mark fixed does (only new and approved ones; a rejected report stays rejected).

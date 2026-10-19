@@ -57,5 +57,13 @@ if [ -f dist/vps/pyr-directory-linux-x86_64 ]; then
 else
   echo "no dist/vps/pyr-directory-linux-x86_64: pyr.gg keeps the invite directory it has" >&2
 fi
+# The Pyr Library Keeper (dist/keeper, from scripts/make-keeper.sh): install-site.sh keeps it on
+# the VPS, and sets it up again there once its Claude API key is in (setup-keeper.sh).
+if [ -f dist/keeper/keeper-cert.json ]; then
+  mkdir -p "$OUT/upload/keeper" && cp -r dist/keeper/. "$OUT/upload/keeper/"
+  cp installer/site/setup-keeper.sh "$OUT/upload/"
+else
+  echo "no dist/keeper: the Library Keeper isn't in this release" >&2
+fi
 cp installer/site/publish.ps1 installer/site/publish.cmd "$OUT/"
 ls -la "$SITE"

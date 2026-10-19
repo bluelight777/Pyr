@@ -32,6 +32,10 @@
 //!   cargo run -p pyr-proto --example library -- certify --key release-key.txt --keeper <public key> \
 //!       --days 400 --out keeper-cert.json
 //!
+//!   cargo run -p pyr-proto --example library -- pubkey --key keeper-key.txt
+//!
+//! prints a key file's public half.
+//!
 //! certifies the Library Keeper's key (it signs `index3.json` with it until then).
 //!
 //!   cargo run -p pyr-proto --example library -- endorse --key release-key.txt --in index3.json \
@@ -255,6 +259,10 @@ fn main() -> Result<()> {
                 std::fs::write(&older, serde_json::to_string_pretty(&library::sign(&key, &old))?)?;
                 println!("wrote {older} (for Pyr 0.8.0 and older): {} plugins and {} skins", old.plugins.len(), old.skins.len());
             }
+        }
+        Some("pubkey") => {
+            // A key file's public half (its user id): what a certificate or `release_key` names.
+            println!("{}", load_key(&get("--key").context("--key")?)?.user_id());
         }
         Some("certify") => {
             let key = load_key(&get("--key").context("--key")?)?;
