@@ -117,22 +117,46 @@ em.serif, .serif { font-family: var(--serif); font-style: italic; font-weight: 4
 .top .btn { margin-left: auto; }
 @media (max-width: 860px) { .nav, .brand span { display: none; } }
 
-/* ---------- invite banner */
-.invite { display: none; position: relative; z-index: 2; margin: 0 auto 44px; max-width: 980px; }
-.invite.show { display: block; }
-.invite-card { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding: 18px 20px; border-radius: 18px;
+/* ---------- an invite (pyr.gg/<code>): its own screen, like a door with the name on it */
+.join { display: none; position: relative; z-index: 2; min-height: 100vh; padding: 110px var(--gutter) 60px; }
+.inviting .join { display: flex; align-items: flex-start; justify-content: center; }
+.inviting main > section:not(.join), .inviting footer, .inviting .nav { display: none; }
+.join-card { width: 100%; max-width: 520px; padding: 34px 32px 28px; border-radius: 26px; text-align: center;
+  background: linear-gradient(180deg, rgba(46, 38, 33, .92), rgba(29, 23, 20, .94)); border: 1px solid var(--line-2);
+  box-shadow: 0 40px 90px -30px rgba(0, 0, 0, .8), 0 0 0 1px rgba(255, 150, 80, .06), 0 0 120px -40px rgba(255, 122, 61, .35);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+.join-badge { width: 86px; height: 86px; margin: 0 auto 16px; border-radius: 26px; display: grid; place-items: center;
+  font: 800 38px/1 var(--display); color: #1d120b; background: linear-gradient(160deg, #ffd08a, var(--ember) 70%, var(--ember-3));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), 0 14px 40px -12px rgba(255, 110, 50, .8); }
+.join-lead { color: var(--muted); font-size: 15px; }
+.join-name { margin: 4px 0 6px; font: 780 clamp(26px, 5vw, 34px)/1.15 var(--display); color: var(--text); letter-spacing: -.02em; overflow-wrap: anywhere; }
+.join-counts { color: var(--muted); font-size: 14px; display: flex; justify-content: center; gap: 16px; }
+.join-counts i { display: inline-block; width: 9px; height: 9px; margin-right: 6px; border-radius: 50%; background: var(--online); }
+.join-counts i.all { background: var(--dim); }
+.join-step { margin-top: 24px; }
+.join-step[hidden] { display: none; }
+.join-step .btn { width: 100%; }
+.join-step .btn + .btn, .join-step .btn + .row { margin-top: 10px; }
+.join-step .row { display: flex; gap: 10px; }
+.join-step .row .btn { flex: 1; margin-top: 0; }
+.join-note { margin-top: 12px; font-size: 13.5px; color: var(--muted); }
+.join-note b { color: var(--body); }
+.join-status { display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--body); font-weight: 600; }
+.join-spin { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid rgba(255, 180, 120, .25); border-top-color: var(--ember-2); animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.join-ok { width: 46px; height: 46px; margin: 0 auto 10px; border-radius: 50%; display: grid; place-items: center; background: rgba(108, 192, 112, .16); color: var(--online); }
+.join-safe { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--line); text-align: left; }
+.join-safe summary { cursor: pointer; color: var(--muted); font-size: 13.5px; font-weight: 600; list-style: none; display: flex; align-items: center; gap: 8px; }
+.join-safe summary::-webkit-details-marker { display: none; }
+.join-safe summary svg { width: 16px; height: 16px; color: var(--online); }
+.join-safe ul { margin: 10px 0 0; padding-left: 20px; font-size: 13.5px; color: var(--muted); }
+.join-safe li { margin: 6px 0; }
+.join-safe .hash { font: 500 11.5px/1.4 var(--mono); color: var(--dim); word-break: break-all; }
+.join-more { display: inline-block; margin-top: 18px; font-size: 13.5px; color: var(--dim); background: none; border: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.join-more:hover { color: var(--body); }
+
                background: linear-gradient(120deg, rgba(255, 122, 61, .2), rgba(255, 179, 71, .1) 60%, rgba(255, 122, 61, .05));
                border: 1px solid rgba(255, 150, 90, .35); box-shadow: 0 20px 60px -30px rgba(255, 110, 50, .6); }
-.invite-card .flame { width: 44px; height: 44px; flex: none; }
-.invite-card .what { flex: 1 1 280px; }
-.invite-card strong { display: block; color: var(--text); font: 700 18px/1.3 var(--display); }
-.invite-card p { color: var(--body); font-size: 15px; }
-.invite-card .acts { display: flex; gap: 10px; flex-wrap: wrap; }
-.invite-card .counts { margin-top: 4px; font-size: 13.5px; color: var(--muted); }
-.invite-card .counts i { display: inline-block; width: 8px; height: 8px; margin: 0 5px 1px 0; border-radius: 50%; background: #3ba55d; vertical-align: middle; }
-.invite-card .counts i.all { background: var(--dim); margin-left: 12px; }
-.invite-card .counts i.first { margin-left: 0; }
-.invite.invalid .acts, .invite.invalid .invite-old { display: none; }
 
 /* ---------- hero */
 .hero { position: relative; isolation: isolate; padding: 118px 0 80px; overflow: hidden; }
@@ -368,8 +392,6 @@ footer { margin-top: 110px; border-top: 1px solid var(--line); padding: 54px 0 6
 .foot a:hover { color: var(--text); }
 .foot .brand { margin-bottom: 14px; }
 .legal { margin-top: 40px; display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 12.5px; }
-.invite-old { margin: 6px 0 0; font-size: 12.5px; color: var(--dim); }
-.invite-old a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .disclaimer { margin: 12px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--dim); }
 
 /* install dialog */
@@ -503,23 +525,72 @@ dialog[open] { animation: pop .35s var(--ease); }
 
 <main id="main">
 <canvas id="embers" aria-hidden="true"></canvas>
-<section class="hero" aria-labelledby="hero-title">
-  <div class="wrap">
-    <div class="invite" id="invite" role="region" aria-label="Your invite">
-      <div class="invite-card">
-        <svg class="flame" viewBox="0 0 48 48" aria-hidden="true"><defs><linearGradient id="fl1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffd27a"/><stop offset=".55" stop-color="#ff8a3d"/><stop offset="1" stop-color="#ff5a3a"/></linearGradient></defs><path fill="url(#fl1)" d="M24 4c2 7 10 11 10 21a10 10 0 0 1-20 0c0-5 3-8 5-10 0 4 2 6 4 6-2-6 1-12 1-17z"/><path fill="#fff1c7" opacity=".85" d="M24 22c1 3 5 5 5 9a5 5 0 0 1-10 0c0-3 2-4 3-5 0 2 1 3 2 3-1-3 0-5 0-7z"/></svg>
-        <div class="what">
-          <strong><span id="invite-lead">You're invited to</span> <span id="invite-name">a Pyr server</span>!</strong>
-          <p class="counts" id="invite-counts" hidden></p>
-          <p id="invite-how">Get Pyr (it's free), then open your invite to join.</p>
-          <p class="invite-old">Still on Ingle, Pyr's old name? <a id="invite-open-old" href="#">Open it in Ingle</a> (it updates to Pyr by itself).</p>
-        </div>
-        <div class="acts">
-          <a class="btn btn-small" id="invite-open" href="#">Open invite in Pyr</a>
-          <button class="copy" type="button" id="invite-copy">Copy invite</button>
-        </div>
+<section class="join" id="join" aria-labelledby="join-name">
+  <div class="join-card">
+    <div class="join-badge" id="join-badge" aria-hidden="true">P</div>
+    <p class="join-lead" id="join-lead">You've been invited to join</p>
+    <h1 class="join-name" id="join-name">a Pyr server</h1>
+    <p class="join-counts" id="join-counts" hidden></p>
+
+    <!-- Trying Pyr on this computer -->
+    <div class="join-step" id="step-open">
+      <p class="join-status"><span class="join-spin" aria-hidden="true"></span><span id="open-text">Opening Pyr…</span></p>
+      <p class="join-note" id="open-note">Your browser may ask to open Pyr: choose <b>Open</b>.</p>
+      <a class="btn btn-fire" id="join-open" href="#" style="margin-top:18px">Open in Pyr</a>
+    </div>
+
+    <!-- Pyr opened -->
+    <div class="join-step" id="step-opened" hidden>
+      <div class="join-ok" aria-hidden="true"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></div>
+      <p class="join-status">Opened in Pyr</p>
+      <p class="join-note">Carry on there: Pyr shows you the server and asks before joining. You can close this tab.</p>
+      <a class="btn btn-small" id="join-open-again" href="#" style="margin-top:16px">Didn't open? Try again</a>
+    </div>
+
+    <!-- No Pyr yet -->
+    <div class="join-step" id="step-get" hidden>
+      <p class="join-note" style="margin-top:0">Pyr isn't on this computer yet (or it didn't open). It's free, with no account to make.</p>
+      <a class="btn btn-fire dl" id="join-dl" href="Pyr-Setup.exe" data-os="win" style="margin-top:16px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 19h16"/></svg>
+        <span class="two"><span id="join-dl-label">Download Pyr for Windows</span><small id="join-dl-sub">Your invite comes with it</small></span>
+      </a>
+      <div class="row">
+        <a class="btn btn-small dl" id="join-dl-alt" href="pyr_amd64.deb" data-os="linux">Linux (.deb)</a>
+        <a class="btn btn-small" id="join-open-2" href="#">I have Pyr: open it</a>
       </div>
     </div>
+
+    <!-- On a phone -->
+    <div class="join-step" id="step-phone" hidden>
+      <p class="join-note" style="margin-top:0">Pyr runs on Windows and Linux PCs. Open this invite on your computer to join.</p>
+      <div class="row" style="margin-top:16px">
+        <button class="btn btn-fire btn-small" type="button" data-send-pc>Send it to my computer</button>
+        <button class="btn btn-small" type="button" id="join-copy-phone">Copy invite</button>
+      </div>
+    </div>
+
+    <!-- Not an invite any more -->
+    <div class="join-step" id="step-bad" hidden>
+      <p class="join-note" style="margin-top:0">It may have run out, or been taken back. Ask whoever sent it for a new one.</p>
+    </div>
+
+    <details class="join-safe" id="join-safe">
+      <summary><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4.5 6v5.5c0 4.6 3.2 8.4 7.5 9.5 4.3-1.1 7.5-4.9 7.5-9.5V6L12 3z"/><path d="m8.8 12.2 2.3 2.3 4.2-4.6"/></svg>How this stays safe</summary>
+      <ul>
+        <li>Nothing downloads or installs unless you click. Pyr comes only from <b>pyr.gg</b>, over HTTPS.</li>
+        <li>Pyr always asks before joining, and shows you the server's name and address first.</li>
+        <li>The invite carries the server's fingerprint: Pyr checks it's really this server, so nobody in between can pose as it.</li>
+        <li>Joining shares your IP address and your Pyr identity with that server (no email, no account). Only join servers from people you trust.</li>
+        <li>Pyr checks every update against Firelit Games' signature before installing it.</li>
+        <li id="join-hash-row" hidden>The download's SHA-256: <span class="hash" id="join-hash"></span></li>
+      </ul>
+    </details>
+    <button class="join-more" type="button" id="join-more">What's Pyr?</button>
+  </div>
+</section>
+
+<section class="hero" aria-labelledby="hero-title">
+  <div class="wrap">
     <div class="hero-grid">
       <div class="hero-copy">
         <a class="pill" href="#features"><b>New</b> Call friends, or a group of up to 10 <i aria-hidden="true">→</i></a>
@@ -931,12 +1002,12 @@ dialog[open] { animation: pop .35s var(--ease); }
           <div class="ss-win"><div class="t">Windows protected your PC</div><div>App: Pyr-Setup.exe<br>Publisher: Unknown publisher</div><div class="btns"><span class="ring">Run anyway</span><span>Don't run</span></div></div>
         </div>
         <p class="ss-cap">What it looks like (simplified).</p></div></li>
-      <li><div><b>Pyr opens</b><p>Got an invite? Click <b>Join a server</b> and paste it. Starting your own group? Click <b>Create a server</b>.</p></div></li>
+      <li class="last-step"><div><b>Pyr opens</b><p>Got an invite? Click <b>Join a server</b> and paste it. Starting your own group? Click <b>Create a server</b>.</p></div></li>
     </ol>
     <ol class="only-linux">
       <li><div><b>Open pyr_amd64.deb with your software installer</b><p>Or install it from a terminal:</p>
         <div class="cmd"><code id="apt">sudo apt install ./pyr_amd64.deb</code><button class="copy" type="button" data-copy="#apt">Copy</button></div></div></li>
-      <li><div><b>Open Pyr from your apps menu</b><p>Got an invite? Click <b>Join a server</b> and paste it. Starting your own group? Click <b>Create a server</b>.</p></div></li>
+      <li class="last-step"><div><b>Open Pyr from your apps menu</b><p>Got an invite? Click <b>Join a server</b> and paste it. Starting your own group? Click <b>Create a server</b>.</p></div></li>
     </ol>
     <div class="foot-row">
       <span>Didn't start? <a href="Pyr-Setup.exe" id="again">Download again</a></span>
@@ -1004,6 +1075,7 @@ dialog[open] { animation: pop .35s var(--ease); }
     if (m.windows) sizes.win = m.windows;
     if (m.linux_deb) sizes.linux = m.linux_deb;
     var a = linux ? sizes.linux : sizes.win;
+    if (a && a.sha256) { $("#join-hash").textContent = a.sha256; $("#join-hash-row").hidden = false; }
     if (a && a.size) $$("[data-size]").forEach(function (el) { el.textContent = Math.round(a.size / 1e6) + " MB"; });
     if (linux && !sizes.linux) {
       // This release has no new Linux package: the download is the last one made.
@@ -1032,6 +1104,18 @@ dialog[open] { animation: pop .35s var(--ease); }
       $("#again").href = os === "linux" ? "pyr_amd64.deb" : "Pyr-Setup.exe";
       var asset = sizes[os];
       if (asset && asset.sha256) { $("#hash").textContent = asset.sha256; $("#hash-row").hidden = false; }
+      $("#again").href = a.getAttribute("href");
+      if (invited && !invited.invalid) {
+        var nm = invited.name || "the server";
+        var carried = os === "win" && /^\/join\//.test(a.getAttribute("href") || "");
+        var first = $("#dlg .only-win li b");
+        if (first) first.textContent = carried ? "Open Pyr-Setup-join-" + shortCode() + ".exe" : "Open Pyr-Setup.exe";
+        $$(".last-step").forEach(function (el) {
+          el.querySelector("p").textContent = carried
+            ? "When setup finishes, leave \"Start Pyr\" ticked: Pyr opens and asks to join " + nm + "."
+            : "Come back to this page and click \"I have Pyr: open it\" to join " + nm + ".";
+        });
+      }
       if (dlg && dlg.showModal && !dlg.open) {
         // After the browser has started the download.
         setTimeout(function () { try { dlg.showModal(); } catch (e) {} }, 350);
@@ -1090,32 +1174,91 @@ dialog[open] { animation: pop .35s var(--ease); }
       online: n(d.invite.online), members: n(d.invite.members)
     };
   }
+  // The invite's own screen. Pyr is tried first (if it's here, it opens on this server);
+  // if nothing answers, the download (with the invite riding along in its file name, for
+  // Windows' setup to hand to Pyr when it starts).
+  function step(name) {
+    ["open", "opened", "get", "phone", "bad"].forEach(function (k) { $("#step-" + k).hidden = k !== name; });
+  }
+  var launched = false;
+  function launch(link) {
+    var left = false;
+    var gone = function () { left = true; };
+    window.addEventListener("blur", gone);
+    doc.addEventListener("visibilitychange", function () { if (doc.hidden) gone(); });
+    window.addEventListener("pagehide", gone);
+    step("open");
+    // Chromium browsers ignore a link they've no program for; others may show an error page
+    // for it, so there it's tried in a hidden frame instead.
+    var chromium = /Chrome\/|Chromium\/|Edg\//.test(ua) && !/Firefox\//.test(ua);
+    try {
+      if (chromium) location.href = link;
+      else {
+        var f = doc.createElement("iframe"); f.style.display = "none"; f.src = link; doc.body.appendChild(f);
+        setTimeout(function () { try { f.remove(); } catch (e) {} }, 4000);
+      }
+    } catch (e) {}
+    // Pyr took it if the browser lost the window (its "Open Pyr?" question, or Pyr itself).
+    setTimeout(function () { step(left || doc.hidden ? "opened" : "get"); }, 2600);
+  }
   function showInvite(inv) {
-    var box = $("#invite");
-    box.classList.add("show");
+    root.classList.add("inviting");
+    window.scrollTo(0, 0);
     if (inv.invalid) {
-      box.classList.add("invalid");
-      $("#invite-lead").textContent = "This invite isn't valid";
-      $("#invite-name").textContent = "any more";
-      $("#invite-how").textContent = "It may have run out, or been taken back. Ask whoever sent it for a new one (you can get Pyr below meanwhile).";
+      $("#join-badge").textContent = "?";
+      $("#join-lead").textContent = "Sorry,";
+      $("#join-name").textContent = "this invite isn't valid";
+      step("bad");
+      doc.title = "Pyr: this invite isn't valid";
       return;
     }
-    if (inv.inviter) $("#invite-lead").textContent = inv.inviter + " invited you to";
-    if (inv.name) $("#invite-name").textContent = inv.name;
-    if (inv.online !== null && inv.online !== undefined || inv.members !== null && inv.members !== undefined) {
-      var c = $("#invite-counts");
-      c.textContent = "";
-      var add = function (cls, text) { var i = doc.createElement("i"); if (cls) i.className = cls; c.appendChild(i); c.appendChild(doc.createTextNode(text)); };
-      if (inv.online !== null && inv.online !== undefined) add("", inv.online + " online");
-      if (inv.members !== null && inv.members !== undefined) add(inv.online !== null && inv.online !== undefined ? "all" : "all first", inv.members + (inv.members === 1 ? " member" : " members"));
+    var name = inv.name || "a Pyr server";
+    $("#join-lead").textContent = inv.inviter ? inv.inviter + " invited you to join" : "You've been invited to join";
+    $("#join-name").textContent = name;
+    var first = (inv.name || "P").replace(/^[^A-Za-z0-9À-￿]+/, "").charAt(0) || "P";
+    $("#join-badge").textContent = first.toUpperCase();
+    var has = function (x) { return x !== null && x !== undefined; };
+    if (has(inv.online) || has(inv.members)) {
+      var c = $("#join-counts"); c.textContent = "";
+      var add = function (cls, text) { var sp = doc.createElement("span"); var i = doc.createElement("i"); if (cls) i.className = cls; sp.appendChild(i); sp.appendChild(doc.createTextNode(text)); c.appendChild(sp); };
+      if (has(inv.online)) add("", inv.online + " online");
+      if (has(inv.members)) add("all", inv.members + (inv.members === 1 ? " member" : " members"));
       c.hidden = false;
     }
-    $("#invite-open").href = inv.link;
-    $("#invite-open-old").href = inv.old;
-    $("#invite-copy").addEventListener("click", function () { copy(inv.share || inv.link, $("#invite-copy")); });
-    if (mobile) $("#invite-how").textContent = "Open this link on your PC: install Pyr (it's free), then open your invite to join.";
-    doc.title = "Join " + (inv.name || "a Pyr server") + " on Pyr";
+    doc.title = "Join " + name + " on Pyr";
+    ["#join-open", "#join-open-again", "#join-open-2"].forEach(function (id) {
+      var a = $(id); a.href = inv.link;
+      a.addEventListener("click", function (e) { e.preventDefault(); launch(inv.link); });
+    });
+    $("#join-copy-phone").addEventListener("click", function () { copy(inv.share || location.href, $("#join-copy-phone")); });
+    // The download: on a short link, setup that knows the invite (when pyr.gg serves it).
+    var code = shortCode(), dl = $("#join-dl"), alt = $("#join-dl-alt");
+    if (linux) {
+      dl.href = "pyr_amd64.deb"; dl.dataset.os = "linux";
+      $("#join-dl-label").textContent = "Download Pyr for Linux";
+      $("#join-dl-sub").textContent = "Then come back here and open the invite";
+      alt.href = "Pyr-Setup.exe"; alt.dataset.os = "win"; alt.textContent = "Windows";
+    } else if (code && window.fetch) {
+      var withInvite = "/join/" + code + "/Pyr-Setup.exe";
+      fetch(withInvite, { method: "HEAD", cache: "no-store" }).then(function (r) {
+        if (r.ok) dl.href = withInvite;
+        else $("#join-dl-sub").textContent = "Then come back here and open the invite";
+      }).catch(function () { $("#join-dl-sub").textContent = "Then come back here and open the invite"; });
+    } else {
+      $("#join-dl-sub").textContent = "Then come back here and open the invite";
+    }
+    invited = inv;
+    if (mobile) { step("phone"); return; }
+    if (mac) { $("#join-dl-label").textContent = "Pyr isn't on Mac yet"; step("get"); return; }
+    // Once per visit (a reload doesn't keep asking).
+    var key = "pyr-tried:" + inv.link;
+    var tried = false;
+    try { tried = sessionStorage.getItem(key) === "1"; sessionStorage.setItem(key, "1"); } catch (e) {}
+    if (!tried && !launched) { launched = true; setTimeout(function () { launch(inv.link); }, 500); }
+    else step("get");
   }
+  var invited = null;
+  $("#join-more").addEventListener("click", function () { root.classList.remove("inviting"); window.scrollTo(0, 0); });
   // (`{"none":true}`: pyr.gg says this address is no invite at all.)
   var inv = null, made = $("#pyr-invite"), said = null;
   if (made) { try { said = JSON.parse(made.textContent); } catch (e) {} }
@@ -1190,6 +1333,7 @@ dialog[open] { animation: pop .35s var(--ease); }
   function campfire() {
     if (!fire) return null;
     var r = fire.getBoundingClientRect();
+    if (!r.height) return null; // (hidden: an invite's screen is showing)
     var shown = (Math.min(r.bottom, H) - Math.max(r.top, 0)) / r.height;
     if (shown <= 0) return null;
     return { x: r.left + r.width / 2, y: r.top + r.height * 0.4, w: r.width * 0.34, shown: Math.min(1, shown) };

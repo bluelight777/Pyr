@@ -60,6 +60,13 @@ VIAddVersionKey "LegalCopyright" "${COMPANY}"
 !define MUI_ABORTWARNING
 !define MUI_COMPONENTSPAGE_SMALLDESC
 
+; Downloaded from an invite's page on pyr.gg, setup is named Pyr-Setup-join-<code>.exe: the
+; invite's code (checked: 3 to 32 of a-z, 0-9 and -), offered when Pyr starts. Pyr looks it up
+; at pyr.gg and still shows the server and asks before joining.
+Var JoinCode
+Var RunText
+Var FinishText
+
 !define MUI_WELCOMEPAGE_TITLE "Welcome to Pyr"
 !define MUI_WELCOMEPAGE_TEXT "Pyr is voice, webcams and screen sharing for your group, with text channels.$\r$\n$\r$\nThis installs Pyr for your Windows account only, so it doesn't need administrator rights.$\r$\n$\r$\nClick Next to continue."
 !insertmacro MUI_PAGE_WELCOME
@@ -67,9 +74,10 @@ VIAddVersionKey "LegalCopyright" "${COMPANY}"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_TITLE "Pyr is installed"
-!define MUI_FINISHPAGE_TEXT "Open Pyr and choose Create a server: Pyr can rent one for you (about $$6 a month from DigitalOcean) or set up a Linux server you already have.$\r$\n$\r$\nGot an invite link from a friend? Choose Join a server and paste it."
-!define MUI_FINISHPAGE_RUN "$INSTDIR\pyr.exe"
-!define MUI_FINISHPAGE_RUN_TEXT "Start Pyr now"
+!define MUI_FINISHPAGE_TEXT "$FinishText"
+!define MUI_FINISHPAGE_RUN
+!define MUI_FINISHPAGE_RUN_FUNCTION StartPyr
+!define MUI_FINISHPAGE_RUN_TEXT "$RunText"
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM
@@ -133,6 +141,14 @@ Var ServerData
 !define HOWTO_BOT "The Pyr test bot is running.$\r$\n$\r$\nClose its window, then click Retry."
 
 Function .onInit
+  Call FindJoinCode
+  ${If} $JoinCode != ""
+    StrCpy $RunText "Start Pyr and open your invite (pyr.gg/$JoinCode)"
+    StrCpy $FinishText "Pyr is ready.$\r$\n$\r$\nLeave the box below ticked: Pyr opens with your invite, shows you the server, and asks before joining it."
+  ${Else}
+    StrCpy $RunText "Start Pyr now"
+    StrCpy $FinishText "Open Pyr and choose Create a server: Pyr can rent one for you (about $$6 a month from DigitalOcean) or set up a Linux server you already have.$\r$\n$\r$\nGot an invite link from a friend? Choose Join a server and paste it."
+  ${EndIf}
   ; Pyr's own updater runs us with /S /RELAUNCH: wait for it to quit, and reopen it after.
   StrCpy $UpdateWait 20
   ${GetParameters} $R0
@@ -140,6 +156,17 @@ Function .onInit
   ${GetOptions} $R0 "/RELAUNCH" $R1
   ${IfNot} ${Errors}
     StrCpy $UpdateWait 0
+  ${EndIf}
+FunctionEnd
+
+!include "join-code.nsh"
+
+; The finish page's "Start Pyr" (with the invite, when there is one).
+Function StartPyr
+  ${If} $JoinCode != ""
+    Exec '"$INSTDIR\pyr.exe" --join "https://pyr.gg/$JoinCode"'
+  ${Else}
+    Exec '"$INSTDIR\pyr.exe"'
   ${EndIf}
 FunctionEnd
 

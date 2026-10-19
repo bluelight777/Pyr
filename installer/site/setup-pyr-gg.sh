@@ -463,7 +463,8 @@ $TLS
     add_header X-Content-Type-Options nosniff always;
     # Browsers check for a newer page and pictures every time (answered "not changed" when
     # nothing is), so a new release shows right away instead of an old copy for hours.
-    # (pyr.gg settings v2: install-site.sh runs this script again for servers set up before.)
+    # (pyr.gg settings v3: install-site.sh runs this script again for servers set up before.
+    # v2: check for a newer page every time; v3: downloads that carry an invite.)
     add_header Cache-Control "no-cache" always;
     root $SITE_ROOT;
     index index.html;
@@ -504,6 +505,16 @@ $TLS
     }
     location @plain {
         try_files /index.html =404;
+    }
+    # The Windows setup from an invite's page: the very same Pyr-Setup.exe (same bytes, same
+    # SHA-256), only saved as Pyr-Setup-join-<code>.exe, so setup can offer that invite when
+    # Pyr starts. (Pyr still shows the server and asks before joining.)
+    location ~ "^/join/(?<join_code>[a-z0-9][a-z0-9-]{1,30}[a-z0-9])/Pyr-Setup\.exe\$" {
+        add_header X-Content-Type-Options nosniff always;
+        add_header Cache-Control "no-cache" always;
+        add_header Content-Disposition "attachment; filename=\"Pyr-Setup-join-\$join_code.exe\"" always;
+        default_type application/octet-stream;
+        try_files /Pyr-Setup.exe =404;
     }
 }
 EOF
