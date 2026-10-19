@@ -1053,7 +1053,25 @@ fn describe_mine(variant: Variant, hole: &[Card], board: &[Card]) -> String {
         let suited = if hi.suit() == lo.suit() { "suited" } else { "offsuit" };
         return format!("{}-{} {suited}", Card::rank_name(hi.rank()), Card::rank_name(lo.rank()));
     }
-    format!("{} cards", hole.len())
+    // Omaha before the flop: the best pair in hand, and how the suits pair up.
+    let mut suits = [0u8; 4];
+    for c in hole {
+        suits[c.suit() as usize] += 1;
+    }
+    let pairs = suits.iter().filter(|n| **n >= 2).count();
+    let suited = match pairs {
+        2 => " double-suited",
+        1 => " suited",
+        _ => "",
+    };
+    let mut ranks: Vec<u8> = hole.iter().map(|c| c.rank()).collect();
+    ranks.sort_unstable_by(|a, b| b.cmp(a));
+    let pair = ranks.windows(2).find(|w| w[0] == w[1]).map(|w| w[0]);
+    match (pair, ranks.first()) {
+        (Some(r), _) => format!("Pair of {}{suited}", Card::rank_plural(r)),
+        (None, Some(r)) => format!("{} high{suited}", Card::rank_name(*r)),
+        _ => String::new(),
+    }
 }
 
 /// A line for the log.
@@ -1112,5 +1130,8 @@ mod tests {
         assert_eq!(describe_mine(Variant::Holdem, &h("AhKh"), &[]), "Ace-King suited");
         assert_eq!(describe_mine(Variant::Holdem, &h("7c7d"), &[]), "Pair of Sevens");
         assert_eq!(describe_mine(Variant::Holdem, &h("AhKd"), &h("AsKc2d")), "Two Pair, Aces and Kings");
+        assert_eq!(describe_mine(Variant::Omaha, &h("JhJs4h4s"), &[]), "Pair of Jacks double-suited");
+        assert_eq!(describe_mine(Variant::Omaha, &h("2d4dJcJh"), &[]), "Pair of Jacks suited");
+        assert_eq!(describe_mine(Variant::Omaha, &h("Ac9d5h2s"), &[]), "Ace high");
     }
 }
