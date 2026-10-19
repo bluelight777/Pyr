@@ -1295,14 +1295,21 @@ impl PyrApp {
              what you'd like it to do: the folder's CLAUDE.md explains Pyr add-ons to Claude. With the Claude connector set up, Claude can \
              also send it in for review, and send new versions of it later.",
         );
+        // As on the skins page: the connector first.
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.plugins.new_name).hint_text("Its name, like Coin Flip").desired_width(220.0));
-            let ok = !self.plugins.new_name.trim().is_empty();
-            if ui.add_enabled(ok, theme::primary_button("Start an add-on in a folder…")).clicked() {
-                crate::images::pick_folder_async(crate::images::FolderFor::NewAddon, "Where should the add-on's folder go?", ui.ctx());
+            if ui.add(theme::primary_button("Set up the Claude connector…")).clicked() {
+                self.ui.dialog = Some(Dialog::Settings { tab: 6 });
             }
             if ui.add(egui::Button::new(RichText::new("The plugin kit on GitHub").color(theme::LINK())).frame(false)).clicked() {
                 ui.ctx().open_url(egui::OpenUrl::new_tab(KIT_URL));
+            }
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut self.plugins.new_name).hint_text("Its name, like Coin Flip").desired_width(220.0));
+            let ok = !self.plugins.new_name.trim().is_empty();
+            if ui.add_enabled(ok, egui::Button::new("Start an add-on in a folder…")).clicked() {
+                crate::images::pick_folder_async(crate::images::FolderFor::NewAddon, "Where should the add-on's folder go?", ui.ctx());
             }
         });
         ui.add_space(22.0);
