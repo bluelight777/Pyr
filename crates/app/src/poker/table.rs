@@ -107,7 +107,7 @@ impl PyrApp {
             self.poker.cloth = Some((felt_id.clone(), super::felt::cloth_texture(ui.ctx(), &felt_id)));
         }
         if let Some((_, tex)) = &self.poker.cloth {
-            super::felt::table(&p, lay.c, lay.a, lay.b, tex, &s.name, &v.rules.name());
+            super::felt::table(&p, lay.c, lay.a, lay.b, tex, "PYR POKER", &format!("{} · {}", s.name, v.rules.name()));
         }
         self.board_and_pot(&p, &lay, t);
         // The seats.

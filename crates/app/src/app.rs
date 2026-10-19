@@ -2490,13 +2490,13 @@ impl PyrApp {
                 }
                 let ink = if open || resp.hovered() { theme::TEXT() } else { theme::MUTED() };
                 crate::poker::cards::suit(ui.painter(), Rect::from_center_size(row.left_center() + vec2(18.0, 0.0), vec2(15.0, 15.0)), 3, ink);
-                ui.painter().text(row.left_center() + vec2(32.0, 0.0), egui::Align2::LEFT_CENTER, "Poker room", theme::font(15.0), ink);
+                ui.painter().text(row.left_center() + vec2(32.0, 0.0), egui::Align2::LEFT_CENTER, "Pyr Poker", theme::font(15.0), ink);
                 let playing = s.poker.tables.values().filter(|t| t.view.my_seat.is_some()).count();
                 if playing > 0 {
                     let b = Rect::from_center_size(pos2(row.right() - 16.0, row.center().y), vec2(8.0, 8.0));
                     ui.painter().circle_filled(b.center(), 4.0, theme::ONLINE());
                 }
-                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Play Hold'em and Omaha with people here and with bots, for play chips.").clicked() {
+                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Pyr Poker: Hold'em and Omaha with people here and with bots, for play chips.").clicked() {
                     self.open_poker(&s.key);
                     self.ui.call_view = false;
                 }

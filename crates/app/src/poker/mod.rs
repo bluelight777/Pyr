@@ -212,7 +212,7 @@ impl PyrApp {
                 cards::suit(ui.painter(), Rect::from_center_size(c, vec2(26.0, 26.0)), 3, theme::TEXT());
                 ui.add_space(10.0);
                 ui.vertical(|ui| {
-                    ui.label(RichText::new("Poker Room").font(theme::bold_font(26.0)).color(theme::TEXT()));
+                    ui.label(RichText::new("Pyr Poker").font(theme::bold_font(26.0)).color(theme::TEXT()));
                     ui.label(RichText::new(format!("{}: Hold'em and Omaha with play chips, against friends and bots. Every shuffle is checked by your own Pyr.", s.name)).color(theme::MUTED()));
                 });
             });
