@@ -195,9 +195,10 @@ impl Builder for Sandbox {
             let out = cmd.output().context("starting the sandbox")?;
             let wasm_path = src.join("out.wasm");
             if !wasm_path.exists() {
-                let log = String::from_utf8_lossy(&out.stdout);
+                // (The sandbox's own complaints, if it didn't start, are on stderr.)
+                let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
                 let tail: String = log.lines().rev().take(12).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
-                bail!("it didn't build:\n{tail}");
+                bail!("it didn't build ({}):\n{tail}", out.status);
             }
             let wasm = std::fs::read(&wasm_path)?;
             if wasm.len() > MAX_WASM {
