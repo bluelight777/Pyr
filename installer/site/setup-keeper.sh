@@ -55,6 +55,8 @@ note "library folder: $LIB"
 
 say "The sandbox (bubblewrap) and the Rust toolchain for WebAssembly"
 command -v bwrap >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq bubblewrap >/dev/null; }
+# A C linker: build scripts and macros (serde's) are built for this machine, not WebAssembly.
+command -v cc >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gcc >/dev/null; }
 # Ubuntu 24.04 lets programs make sandboxes (user namespaces) only with an AppArmor profile:
 # bubblewrap's package brings one.
 bwrap --unshare-all --ro-bind / / true || { echo "bubblewrap can't make a sandbox here." >&2; exit 1; }
