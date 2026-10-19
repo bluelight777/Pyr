@@ -321,6 +321,7 @@ mod tests {
             run: "tool.exe".into(),
             review: String::new(),
             updated: 0,
+            endorsement: String::new(),
         }
     }
 

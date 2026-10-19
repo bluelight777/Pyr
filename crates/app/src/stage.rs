@@ -481,11 +481,9 @@ impl PyrApp {
                 if t.screen {
                     p.rect_filled(rect, crate::theme::r(12), Color32::BLACK);
                 }
-                let mut mesh = egui::Mesh::with_texture(id);
-                mesh.add_rect_with_uv(r, uv, Color32::WHITE);
-                p.add(egui::Shape::mesh(mesh));
-                // Round the video's corners by painting over them with the stage color.
-                p.rect_stroke(rect.expand(6.0), crate::theme::r(18), Stroke::new(12.0f32, theme::STAGE()), StrokeKind::Inside);
+                // The picture itself rounded like the tile (whatever's behind shows round it).
+                let radius = crate::theme::rf(12.0).min(r.width() / 2.0).min(r.height() / 2.0).max(0.0);
+                p.add(egui::epaint::RectShape::filled(r, egui::CornerRadius::same(radius.round() as u8), Color32::WHITE).with_texture(id, uv));
                 if t.screen && !t.is_me {
                     let fps = self.fps.get(&t.key).map(|f| f.2).unwrap_or(0.0);
                     quality = Some(format!("{}p · {:.0} fps", size.y as u32, fps));
@@ -1046,16 +1044,49 @@ impl PyrApp {
     }
 }
 
-/// A call tile's background: `top` fading to `bottom`, rounded like the others (the stage's
-/// color goes over its corners).
+/// A call tile's background: `top` fading to `bottom`, rounded like the others (truly rounded:
+/// what's behind the tile, a skin's picture too, shows round its corners).
 pub(crate) fn paint_tint(p: &egui::Painter, rect: Rect, top: Color32, bottom: Color32) {
+    let radius = crate::theme::rf(12.0).min(rect.width() / 2.0).min(rect.height() / 2.0).max(0.0);
+    let outline = rounded_outline(rect, radius);
     let mut mesh = egui::Mesh::default();
-    mesh.colored_vertex(rect.left_top(), top);
-    mesh.colored_vertex(rect.right_top(), top);
-    mesh.colored_vertex(rect.left_bottom(), bottom);
-    mesh.colored_vertex(rect.right_bottom(), bottom);
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(1, 3, 2);
+    let at = |y: f32| theme::mix(top, bottom, ((y - rect.top()) / rect.height().max(1.0)).clamp(0.0, 1.0));
+    mesh.colored_vertex(rect.center(), at(rect.center().y));
+    for q in &outline {
+        mesh.colored_vertex(*q, at(q.y));
+    }
+    let n = outline.len() as u32;
+    for i in 0..n {
+        mesh.add_triangle(0, 1 + i, 1 + (i + 1) % n);
+    }
     p.add(egui::Shape::mesh(mesh));
-    p.rect_stroke(rect.expand(6.0), crate::theme::r(18), Stroke::new(6.0f32, theme::STAGE()), StrokeKind::Inside);
+    old_corner_mask(p, rect);
+}
+
+/// (Development builds' A/B: PYR_DEV_TILE_MASK set paints the old square corners' mask over a
+/// tile, as before tiles were drawn round.)
+fn old_corner_mask(p: &egui::Painter, rect: Rect) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| std::env::var_os("PYR_DEV_TILE_MASK").is_some()) {
+        p.rect_stroke(rect.expand(6.0), crate::theme::r(18), Stroke::new(6.0f32, theme::STAGE()), StrokeKind::Inside);
+    }
+}
+
+/// The outline of `rect` with corners of `radius`, clockwise from the top left.
+fn rounded_outline(rect: Rect, radius: f32) -> Vec<egui::Pos2> {
+    let steps = 10;
+    let corners = [
+        (pos2(rect.left() + radius, rect.top() + radius), std::f32::consts::PI),
+        (pos2(rect.right() - radius, rect.top() + radius), 1.5 * std::f32::consts::PI),
+        (pos2(rect.right() - radius, rect.bottom() - radius), 0.0),
+        (pos2(rect.left() + radius, rect.bottom() - radius), 0.5 * std::f32::consts::PI),
+    ];
+    let mut out = Vec::with_capacity(4 * (steps + 1));
+    for (c, start) in corners {
+        for k in 0..=steps {
+            let a = start + k as f32 / steps as f32 * std::f32::consts::FRAC_PI_2;
+            out.push(c + vec2(a.cos(), a.sin()) * radius);
+        }
+    }
+    out
 }
