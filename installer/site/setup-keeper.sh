@@ -57,9 +57,25 @@ say "The sandbox (bubblewrap) and the Rust toolchain for WebAssembly"
 command -v bwrap >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq bubblewrap >/dev/null; }
 # A C linker: build scripts and macros (serde's) are built for this machine, not WebAssembly.
 command -v cc >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gcc >/dev/null; }
-# Ubuntu 24.04 lets programs make sandboxes (user namespaces) only with an AppArmor profile:
-# bubblewrap's package brings one.
-bwrap --unshare-all --ro-bind / / true || { echo "bubblewrap can't make a sandbox here." >&2; exit 1; }
+# Ubuntu 24.04 (kernel.apparmor_restrict_unprivileged_userns = 1) lets a program other than
+# root's make a sandbox (a user namespace) only with an AppArmor profile that allows it, and
+# bubblewrap's package doesn't bring one: without it the sandbox can't even set up its own
+# network ("loopback: Failed RTM_NEWADDR"). This is the profile Ubuntu documents for it.
+if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = 1 ] && [ ! -f /etc/apparmor.d/bwrap ]; then
+  cat > /etc/apparmor.d/bwrap <<'PROFILE'
+abi <abi/4.0>,
+include <tunables/global>
+
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+
+  include if exists <local/bwrap>
+}
+PROFILE
+  apparmor_parser -r /etc/apparmor.d/bwrap
+fi
+# (As the user the Keeper runs as: root may make one where it can't.)
+runuser -u "$RUN_AS" -- bwrap --unshare-all --die-with-parent --ro-bind / / true || { echo "bubblewrap can't make a sandbox here." >&2; exit 1; }
 OPT=/opt/pyr-keeper
 mkdir -p "$OPT"
 export RUSTUP_HOME=$OPT/rustup CARGO_HOME=$OPT/cargo
