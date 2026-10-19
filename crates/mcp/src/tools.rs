@@ -155,7 +155,7 @@ pub fn list() -> Value {
         {
             "name": "send_skin",
             "title": "Send a skin to the Pyr Library",
-            "description": "Sends the skin in a folder to the Pyr Library for review, signed with the person's Pyr identity. Only when the person asks you to send it. It's checked first (check_skin). To send a new version of one they sent before, give its number as update_of (my_submissions lists them): only this Pyr can do that. Returns its number.",
+            "description": "Sends the skin in a folder to the Pyr Library for review, signed with the person's Pyr identity. Only when the person asks you to send it. It's checked first (check_skin). To send a new version of one they sent before, give its number as update_of (my_submissions lists them): only this Pyr can do that. A new version of a listed skin is reviewed by the Pyr Library Keeper (pictures included) and listed within minutes when it passes. Returns its number.",
             "inputSchema": { "type": "object", "properties": {
                 "folder": folder("The whole path of the skin's folder (the one with skin.json)."),
                 "contact": { "type": "string", "description": "How the reviewer can reach them with questions (optional)." },
@@ -190,7 +190,7 @@ pub fn list() -> Value {
         {
             "name": "send_plugin",
             "title": "Send a plugin to the Pyr Library",
-            "description": "Sends the plugin in a folder (its Rust source, never a built file) to the Pyr Library for review, signed with the person's Pyr identity: Firelit Games reads and builds it before anyone can install it. Only when the person asks you to send it. To send a new version of one they sent before, give its number as update_of (my_submissions lists them): only this Pyr can do that. Returns its number.",
+            "description": "Sends the plugin in a folder (its Rust source, never a built file) to the Pyr Library for review, signed with the person's Pyr identity: Firelit Games reads and builds a first version before anyone can install it. A new version of one that's listed (update_of: its number, from my_submissions; only this Pyr can send one) is checked, built in a sandbox and reviewed by the Pyr Library Keeper, and listed within minutes when it passes (an add-on that asks for new permissions, or uses crates beyond the plugin kit, serde and serde_json, waits for a person). Only when the person asks you to send it. Returns its number.",
             "inputSchema": { "type": "object", "properties": {
                 "folder": folder("The whole path of the plugin's folder (the one with Cargo.toml)."),
                 "author": { "type": "string", "description": "Who made it, shown under it in the Library. The person's Pyr name if left out." },

@@ -29,6 +29,17 @@
 //!
 //! signs the same list again with new dates.
 //!
+//!   cargo run -p pyr-proto --example library -- certify --key release-key.txt --keeper <public key> \
+//!       --days 400 --out keeper-cert.json
+//!
+//! certifies the Library Keeper's key (it signs `index3.json` with it until then).
+//!
+//!   cargo run -p pyr-proto --example library -- endorse --key release-key.txt --in index3.json \
+//!       --out index3-signed.json
+//!
+//! signs a list again with the release key itself (it may be one the Keeper signed: the live
+//! one), endorsing each program in it, ready for `pyr-keeper import`.
+//!
 //!   cargo run -p pyr-proto --example library -- check-skin skins/aurora skins/blood-moon
 //!
 //! checks skin folders the way Pyr and the library do, without signing anything.
@@ -175,6 +186,7 @@ fn main() -> Result<()> {
                     permissions: d.permissions,
                     run: d.run,
                     updated: if d.updated > 0 { d.updated } else { now() },
+                    endorsement: String::new(),
                 };
                 e.check().map_err(anyhow::Error::msg)?;
                 println!("{} {} ({}): {} bytes", e.id, e.version, e.kind.label(), e.windows.iter().chain(&e.linux).chain(&e.wasm).map(|f| f.size).sum::<u64>());
@@ -243,6 +255,34 @@ fn main() -> Result<()> {
                 std::fs::write(&older, serde_json::to_string_pretty(&library::sign(&key, &old))?)?;
                 println!("wrote {older} (for Pyr 0.8.0 and older): {} plugins and {} skins", old.plugins.len(), old.skins.len());
             }
+        }
+        Some("certify") => {
+            let key = load_key(&get("--key").context("--key")?)?;
+            let keeper = get("--keeper").context("--keeper")?;
+            let days: i64 = get("--days").map(|d| d.parse()).transpose()?.unwrap_or(400);
+            let cert = library::certify(&key, &keeper, now() + days * 86_400);
+            let out = get("--out").unwrap_or_else(|| "keeper-cert.json".into());
+            std::fs::write(&out, serde_json::to_string_pretty(&cert)?)?;
+            println!("wrote {out}: {keeper} may sign Library lists for {days} days");
+        }
+        Some("endorse") => {
+            let key = load_key(&get("--key").context("--key")?)?;
+            let input = get("--in").context("--in")?;
+            let text = std::fs::read_to_string(&input)?;
+            // Signed by the release key, or by a Keeper it certified (the live list).
+            let mut lib = library::open(&text, &key.user_id()).map_err(anyhow::Error::msg)?;
+            for p in &mut lib.plugins {
+                if p.kind == library::Kind::Program {
+                    p.endorsement = library::endorse(&key, p);
+                    println!("endorsed {} {}", p.id, p.version);
+                }
+            }
+            let days: i64 = get("--valid-days").map(|d| d.parse()).transpose()?.unwrap_or(library::VALID_DAYS);
+            lib.issued = now();
+            lib.expires = now() + days * 86_400;
+            let out = get("--out").context("--out")?;
+            std::fs::write(&out, serde_json::to_string_pretty(&library::sign(&key, &lib))?)?;
+            println!("wrote {out}: {} plugins, {} skins, signed with the release key", lib.plugins.len(), lib.skins.len());
         }
         Some("refresh") => {
             let key = load_key(&get("--key").context("--key")?)?;

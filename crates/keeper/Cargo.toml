@@ -1,0 +1,28 @@
+[package]
+name = "pyr-keeper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The Pyr Library Keeper: checks, builds, reviews (with Claude) and lists new versions of what's already in the Pyr Library."
+
+[[bin]]
+name = "pyr-keeper"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
+pyr-proto = { path = "../proto" }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.152"
+sha2 = "0.10"
+base64 = "0.22"
+toml = "1.1"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+ureq = { version = "3.4.2", default-features = false, features = ["rustls", "json"] }
+
+[dev-dependencies]
+pyr-server = { path = "../server" }

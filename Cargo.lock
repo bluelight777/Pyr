@@ -5171,6 +5171,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyr-keeper"
+version = "0.8.1"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "clap",
+ "pyr-proto",
+ "pyr-server",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "ureq",
+]
+
+[[package]]
 name = "pyr-mcp"
 version = "0.8.1"
 dependencies = [

@@ -8,9 +8,11 @@ use std::time::Duration;
 use pyr_proto::library::{self, Library};
 use serde::{Deserialize, Serialize};
 
-/// (`index2.json` since 0.8.1: it has skins with shapes of their own, which `index.json`, the
-/// list older Pyrs read, leaves out.)
-const DEFAULT_URL: &str = "https://pyr.gg/library/index2.json";
+/// (`index3.json` since 0.9: the list the Library Keeper keeps, signed with its certified key;
+/// `index2.json` until the Keeper is running. `index2.json` since 0.8.1: it has skins with
+/// shapes of their own, which `index.json`, the list older Pyrs read, leaves out.)
+const DEFAULT_URL: &str = "https://pyr.gg/library/index3.json";
+const BEFORE_KEEPER_URL: &str = "https://pyr.gg/library/index2.json";
 /// The newest list seen (Unix seconds it was signed), so an older one is never believed again.
 const SEEN_FILE: &str = "library-seen.json";
 /// The last list believed, as signed (shown when the website can't be reached).
@@ -69,11 +71,14 @@ pub fn fetch(dir: &Path) -> Result<Library, String> {
         .timeout_recv_body(Some(Duration::from_secs(60)))
         .build()
         .into();
-    let text = agent
-        .get(&url)
-        .header("Cache-Control", "no-cache")
-        .call()
-        .map_err(|e| format!("couldn't reach the Pyr Library: {e}"))?
+    let get = |url: &str| agent.get(url).header("Cache-Control", "no-cache").call();
+    let mut resp = match get(&url) {
+        // No Keeper's list there yet: the one before it.
+        Err(ureq::Error::StatusCode(404)) if url == DEFAULT_URL => get(BEFORE_KEEPER_URL),
+        r => r,
+    }
+    .map_err(|e| format!("couldn't reach the Pyr Library: {e}"))?;
+    let text = resp
         .body_mut()
         .with_config()
         .limit(4 << 20)

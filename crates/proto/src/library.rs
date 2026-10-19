@@ -17,6 +17,14 @@
 //!
 //! And **skins** ([`crate::skin`]): colors, a picture, fonts and sounds, no code at all. They're
 //! listed apart (`skins`), so Pyr from before skins reads the list as it always has.
+//!
+//! **The Library Keeper** (Pyr 0.9, `index3.json`): new versions of what's already listed are
+//! checked, built and reviewed by a service on pyr.gg, which signs the list with a key of its
+//! own. That key counts only with a certificate ([`KeeperCert`]) signed by the release key,
+//! only until the certificate's date, and only for lists: never for Pyr's releases. And a list
+//! the Keeper signs can't bring in native code: each program in it needs an endorsement made
+//! with the release key itself ([`endorse`]), so whoever got the Keeper's key could change
+//! add-ons (sandboxed) and skins (no code), but not put a program on anyone's PC.
 
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +33,10 @@ use crate::crypto::{self, Identity};
 
 /// Signed lists start with this (a release manifest's signature can't pass for a list's).
 const CONTEXT: &[u8] = b"ingle plugin library v1\n";
+/// A Keeper certificate starts with this.
+const CERT_CONTEXT: &[u8] = b"pyr library keeper key v1\n";
+/// A program's endorsement starts with this.
+const ENDORSE_CONTEXT: &[u8] = b"pyr library program v1\n";
 
 /// How long a signed list counts for, unless told otherwise.
 pub const VALID_DAYS: i64 = 180;
@@ -140,6 +152,10 @@ pub struct Entry {
     /// When this version was listed (Unix seconds).
     #[serde(default)]
     pub updated: i64,
+    /// A program's endorsement: the release key's signature over what it is ([`endorse`]).
+    /// Needed in a list the Keeper signs.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub endorsement: String,
 }
 
 impl Entry {
@@ -317,11 +333,58 @@ impl Library {
     }
 }
 
-/// The file on the website: the list exactly as signed, and its signature.
+/// The file on the website: the list exactly as signed, and its signature (by the release key,
+/// or by the Keeper's, with its certificate).
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Signed {
     pub index: String,
     pub sig: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cert: Option<KeeperCert>,
+}
+
+/// The release key's word that `key` (a public key, as a user id) may sign Library lists until
+/// `not_after` (Unix seconds).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct KeeperCert {
+    pub key: String,
+    pub not_after: i64,
+    pub sig: String,
+}
+
+fn cert_message(key: &str, not_after: i64) -> Vec<u8> {
+    [CERT_CONTEXT, format!("{key}\n{not_after}").as_bytes()].concat()
+}
+
+/// Certifies the Keeper's key (signed with the release key).
+pub fn certify(release: &Identity, key: &str, not_after: i64) -> KeeperCert {
+    KeeperCert { key: key.to_string(), not_after, sig: b64::encode(&release.sign(&cert_message(key, not_after))) }
+}
+
+fn cert_ok(cert: &KeeperCert, release_key: &str) -> bool {
+    b64::decode(&cert.sig).is_ok_and(|sig| crypto::verify(release_key, &cert_message(&cert.key, cert.not_after), &sig))
+}
+
+/// What a program's endorsement covers: its id, version, what it starts, and every file (each
+/// system's, by path and SHA-256).
+fn endorse_message(e: &Entry) -> Vec<u8> {
+    let mut m = ENDORSE_CONTEXT.to_vec();
+    m.extend(format!("{}\n{}\n{}\n", e.id, e.version, e.run).as_bytes());
+    for (os, files) in [("windows", &e.windows), ("linux", &e.linux)] {
+        for f in files {
+            m.extend(format!("{os} {} {} {}\n", f.path, f.sha256, f.size).as_bytes());
+        }
+    }
+    m
+}
+
+/// Endorses a program for lists the Keeper signs (with the release key).
+pub fn endorse(release: &Identity, e: &Entry) -> String {
+    b64::encode(&release.sign(&endorse_message(e)))
+}
+
+pub fn endorsed(e: &Entry, release_key: &str) -> bool {
+    b64::decode(&e.endorsement).is_ok_and(|sig| crypto::verify(release_key, &endorse_message(e), &sig))
 }
 
 fn message(index: &str) -> Vec<u8> {
@@ -331,7 +394,12 @@ fn message(index: &str) -> Vec<u8> {
 pub fn sign(key: &Identity, library: &Library) -> Signed {
     let text = serde_json::to_string_pretty(library).expect("library serializes");
     let sig = key.sign(&message(&text));
-    Signed { index: text, sig: b64::encode(&sig) }
+    Signed { index: text, sig: b64::encode(&sig), cert: None }
+}
+
+/// Signed by the Keeper, with its certificate.
+pub fn sign_as_keeper(key: &Identity, cert: &KeeperCert, library: &Library) -> Signed {
+    Signed { cert: Some(cert.clone()), ..sign(key, library) }
 }
 
 /// Checks the signature against `key` (the release key's public half), parses, and checks
@@ -339,10 +407,24 @@ pub fn sign(key: &Identity, library: &Library) -> Signed {
 pub fn open(signed_json: &str, key: &str) -> Result<Library, String> {
     let signed: Signed = serde_json::from_str(signed_json).map_err(|e| format!("not a plugin list: {e}"))?;
     let sig = b64::decode(&signed.sig).map_err(|_| "bad signature encoding".to_string())?;
-    if !crypto::verify(key, &message(&signed.index), &sig) {
+    // Signed by the release key, or by a Keeper it certified.
+    let signer = match &signed.cert {
+        None => key,
+        Some(c) if cert_ok(c, key) => c.key.as_str(),
+        Some(_) => return Err("the plugin list's signer isn't certified by Firelit Games".into()),
+    };
+    if !crypto::verify(signer, &message(&signed.index), &sig) {
         return Err("the plugin list isn't signed by Firelit Games".into());
     }
     let mut lib: Library = serde_json::from_str(&signed.index).map_err(|e| format!("bad plugin list: {e}"))?;
+    if let Some(c) = &signed.cert {
+        // Only within the certificate's dates; and programs only as the release key endorsed them.
+        if lib.issued > c.not_after {
+            return Err("the plugin list was signed after its signer's certificate ran out".into());
+        }
+        lib.expires = lib.expires.min(c.not_after);
+        lib.plugins.retain(|p| p.kind != Kind::Program || endorsed(p, key));
+    }
     lib.plugins.retain(|p| p.check().is_ok());
     let mut seen = std::collections::HashSet::new();
     lib.plugins.retain(|p| seen.insert(p.id.clone()));
@@ -379,6 +461,7 @@ mod tests {
             run: "chimbrowser.exe".into(),
             review: String::new(),
             updated: 0,
+            endorsement: String::new(),
         }
     }
 
@@ -427,6 +510,50 @@ mod tests {
         assert!(back.fresh(150, 100).is_ok());
         assert!(back.fresh(250, 0).is_err());
         assert!(back.fresh(150, 101).is_err());
+    }
+
+    #[test]
+    fn the_keeper_signs_only_with_its_certificate_and_never_a_program_of_its_own() {
+        let release = Identity::generate();
+        let keeper = Identity::generate();
+        let cert = certify(&release, &keeper.user_id(), 1000);
+        let mut addon = entry();
+        addon.id = "dice".into();
+        addon.kind = Kind::Addon;
+        addon.windows = vec![];
+        addon.run = String::new();
+        addon.wasm = Some(file("dice.wasm"));
+        // A program the release key endorsed, and one it didn't.
+        let mut endorsed_prog = entry();
+        endorsed_prog.endorsement = endorse(&release, &endorsed_prog);
+        let mut sneaky = entry();
+        sneaky.id = "sneaky".into();
+        sneaky.endorsement = endorse(&keeper, &sneaky);
+        let lib = Library { issued: 100, expires: 5000, plugins: vec![addon.clone(), endorsed_prog.clone(), sneaky], ..Default::default() };
+        let signed = serde_json::to_string(&sign_as_keeper(&keeper, &cert, &lib)).unwrap();
+        let back = open(&signed, &release.user_id()).unwrap();
+        let ids: Vec<&str> = back.plugins.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["dice", "chimbrowser"], "the program the Keeper endorsed itself is dropped");
+        assert_eq!(back.expires, 1000, "no longer than the certificate");
+        // An endorsed program changed (another file) isn't endorsed any more.
+        let mut swapped = endorsed_prog.clone();
+        swapped.windows[0].sha256 = "cd".repeat(32);
+        assert!(!endorsed(&swapped, &release.user_id()));
+        // A certificate from another key, or a changed one, counts for nothing.
+        let fake = certify(&keeper, &keeper.user_id(), 1000);
+        let s2 = serde_json::to_string(&sign_as_keeper(&keeper, &fake, &lib)).unwrap();
+        assert!(open(&s2, &release.user_id()).unwrap_err().contains("certified"));
+        let mut longer = cert.clone();
+        longer.not_after = 9_999_999;
+        let s3 = serde_json::to_string(&sign_as_keeper(&keeper, &longer, &lib)).unwrap();
+        assert!(open(&s3, &release.user_id()).is_err());
+        // Signed after the certificate ran out.
+        let late = Library { issued: 1001, ..lib.clone() };
+        let s4 = serde_json::to_string(&sign_as_keeper(&keeper, &cert, &late)).unwrap();
+        assert!(open(&s4, &release.user_id()).unwrap_err().contains("ran out"));
+        // And the Keeper's key alone (no certificate) isn't the release key.
+        let s5 = serde_json::to_string(&sign(&keeper, &lib)).unwrap();
+        assert!(open(&s5, &release.user_id()).is_err());
     }
 
     #[test]
