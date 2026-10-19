@@ -261,6 +261,19 @@ pub fn read_hand(events: &[Event], seat: usize, values: &dyn Fn(usize) -> Option
     r
 }
 
+/// A tournament finished: experience for how far they got (more for bigger fields), and
+/// the wins counted.
+pub fn apply_placed(rec: &mut Record, place: usize, entrants: usize) -> Gains {
+    let before = rec.level();
+    let entrants = entrants.max(2) as u64;
+    let place = (place.max(1) as u64).min(entrants);
+    let beaten = entrants - place;
+    let xp = 50 + beaten * 400 / (entrants - 1) * (entrants.min(50)) / 10 + if place == 1 { 250 } else { 0 };
+    rec.xp += xp;
+    let after = rec.level();
+    Gains { xp, new_achievements: Vec::new(), level_up: (after > before).then_some(after) }
+}
+
 /// What a hand added: experience and newly earned achievements.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Gains {

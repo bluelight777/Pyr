@@ -216,14 +216,31 @@ impl PyrApp {
         let p = ui.painter().clone();
         p.rect_filled(r, 0, Color32::from_black_alpha(90));
         let back = Rect::from_min_size(r.left_top() + vec2(12.0, 9.0), vec2(96.0, 32.0));
-        if ui.put(back, egui::Button::new(RichText::new("‹ Lobby").font(theme::bold_font(13.5))).corner_radius(theme::r(8))).clicked() {
-            self.engine.poker(&s.key, ToServer::Unwatch { table: v.id });
+        let back_label = if v.tourney.is_some() { "‹ Tournament" } else { "‹ Lobby" };
+        let back = if v.tourney.is_some() { Rect::from_min_size(back.min, vec2(122.0, 32.0)) } else { back };
+        if ui.put(back, egui::Button::new(RichText::new(back_label).font(theme::bold_font(13.5))).corner_radius(theme::r(8))).clicked() {
+            // (At my own tournament table I stay seated: it's only out of sight.)
+            if v.my_seat.is_none() {
+                self.engine.poker(&s.key, ToServer::Unwatch { table: v.id });
+            }
             self.poker.table = None;
             self.poker.lobby_asked = None;
+            if let Some(tid) = v.tourney {
+                self.open_tourney(&s.key, tid);
+            }
         }
         p.text(pos2(back.right() + 16.0, r.center().y - 8.0), Align2::LEFT_CENTER, &v.name, theme::bold_font(15.5), theme::TEXT());
         let hand = v.hand.map(|h| format!(" · hand #{h}")).unwrap_or_default();
-        p.text(pos2(back.right() + 16.0, r.center().y + 10.0), Align2::LEFT_CENTER, format!("{}{hand}", v.rules.name()), theme::font(12.0), theme::MUTED());
+        let sub = match v.tourney.and_then(|tid| s.poker.tourney.get(&tid)) {
+            Some(tv) => {
+                let b = tv.rules.levels[tv.level.min(tv.rules.levels.len() - 1)];
+                let next = tv.next_level_ms.map(|ms| format!(" · next {}", super::tourneys::until(ms))).unwrap_or_default();
+                let left = tv.entrants.iter().filter(|e| e.place.is_none()).count();
+                format!("Level {} · {}/{}{} · {left} left{next}", tv.level + 1, chips_short(b.small), chips_short(b.big), if b.ante > 0 { format!(" ante {}", chips_short(b.ante)) } else { String::new() })
+            }
+            None => format!("{}{hand}", v.rules.name()),
+        };
+        p.text(pos2(back.right() + 16.0, r.center().y + 10.0), Align2::LEFT_CENTER, sub, theme::font(12.0), theme::MUTED());
         // On the right: log, history, sit out, add chips, leave.
         let mut x = r.right() - 12.0;
         let mut button = |ui: &mut egui::Ui, text: &str, w: f32| -> egui::Response {
@@ -244,14 +261,19 @@ impl PyrApp {
         }
         if let Some(seat) = v.my_seat {
             let out = v.seats[seat].as_ref().is_some_and(|x| x.sitting_out);
-            if button(ui, "Leave seat", 100.0).clicked() {
+            let tourney = v.tourney.is_some();
+            if !tourney && button(ui, "Leave seat", 100.0).clicked() {
                 self.engine.poker(&s.key, ToServer::Stand { table: v.id });
             }
-            if button(ui, if out { "I'm back" } else { "Sit out" }, 86.0).clicked() {
+            let away = if tourney { "Away" } else { "Sit out" };
+            if button(ui, if out { "I'm back" } else { away }, 86.0)
+                .on_hover_text(if tourney { "Folded for (and blinded) until you're back" } else { "Not dealt in until you're back" })
+                .clicked()
+            {
                 self.engine.poker(&s.key, ToServer::SitOut { table: v.id, out: !out });
             }
             let in_hand = v.seats[seat].as_ref().is_some_and(|x| x.in_hand) && v.hand.is_some() && v.to_act.is_some();
-            if !in_hand && button(ui, "Add chips", 92.0).clicked() {
+            if !tourney && !in_hand && button(ui, "Add chips", 92.0).clicked() {
                 self.poker.top_up = Some((v.id, v.rules.big_blind * 50));
             }
         }
@@ -324,9 +346,13 @@ impl PyrApp {
             // An empty seat: sit here, or (whoever made the table) a bot.
             let r = Rect::from_center_size(at, vec2(64.0, 64.0));
             let resp = ui.interact(r, ui.id().with(("empty", i)), Sense::click());
-            let col = if resp.hovered() { theme::TEXT() } else { theme::DIM() };
+            let col = if resp.hovered() && v.tourney.is_none() { theme::TEXT() } else { theme::DIM() };
             p.circle_filled(at, 30.0, Color32::from_black_alpha(80));
             dashed_circle(&p, at, 30.0, Stroke::new(1.5f32, col));
+            if v.tourney.is_some() {
+                // A tournament seats people itself.
+                return;
+            }
             if v.my_seat.is_none() {
                 p.text(at, Align2::CENTER_CENTER, "Sit", theme::bold_font(14.0), col);
                 if resp.on_hover_text("Sit here").clicked() {
@@ -577,7 +603,8 @@ impl PyrApp {
         m.add_triangle(0, 2, 3);
         p.add(Shape::mesh(m));
         let Some(me) = v.my_seat else {
-            p.text(bar.center(), Align2::CENTER_CENTER, "Watching. Click an empty seat to sit down.", theme::font(14.0), theme::MUTED());
+            let msg = if v.tourney.is_some() { "Watching this tournament table." } else { "Watching. Click an empty seat to sit down." };
+            p.text(bar.center(), Align2::CENTER_CENTER, msg, theme::font(14.0), theme::MUTED());
             return;
         };
         let hand = v.hand.unwrap_or(0);

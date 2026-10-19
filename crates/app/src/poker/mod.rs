@@ -5,6 +5,7 @@
 pub mod cards;
 pub mod felt;
 pub mod table;
+pub mod tourneys;
 
 use std::time::Instant;
 
@@ -23,6 +24,7 @@ use cards::{chips_short, chips_text};
 pub enum Tab {
     #[default]
     Tables,
+    Tourneys,
     Leaderboard,
     Me,
 }
@@ -99,6 +101,12 @@ pub struct PokerUi {
     /// The engine's celebrations already shown, and whether its error has been.
     pub gains_seen: usize,
     pub error_shown: bool,
+    /// A tournament's lobby open; setting one up; when the list was last asked for; and the
+    /// table each tournament had me at (to follow me when I'm moved).
+    pub tourney: Option<pyr_poker::net::TourneyId>,
+    pub new_tourney: Option<tourneys::NewTourney>,
+    pub tourneys_asked: Option<Instant>,
+    pub my_tables: std::collections::HashMap<pyr_poker::net::TourneyId, Option<TableId>>,
 }
 
 impl PyrApp {
@@ -156,6 +164,7 @@ impl PyrApp {
             Some(_) => {}
             None => self.poker.error_shown = false,
         }
+        self.follow_tourneys(s);
         if self.poker.awaiting_new
             && let Some(mine) = s.me.as_ref()
             && let Some((id, _)) = s.poker.tables.iter().rev().find(|(_, t)| t.view.owner == mine.user_id)
@@ -170,14 +179,26 @@ impl PyrApp {
                     self.poker_table(ui, st, s, &t);
                 }
                 None => {
-                    // It closed (or the connection dropped): back to the room.
+                    // It closed (or the connection dropped): back to the room (or, for a
+                    // tournament's table, to its lobby).
                     if s.poker.lobby.is_some() {
                         self.poker.table = None;
+                        if let Some((tid, _)) = s.poker.tourney.iter().find(|(_, v)| v.tables.contains(&id) || v.my_table == Some(id) || v.entrants.iter().any(|e| e.table == Some(id))) {
+                            self.poker.tourney = Some(*tid);
+                        }
                     }
                     ui.centered_and_justified(|ui| ui.label(RichText::new("Opening the table…").color(theme::MUTED())));
                 }
             }
             return;
+        }
+        if let Some(tid) = self.poker.tourney {
+            self.tourney_page(ui, s, tid);
+            return;
+        }
+        if self.poker.tourneys_asked.is_none_or(|t| t.elapsed().as_secs() >= 5) {
+            self.poker.tourneys_asked = Some(Instant::now());
+            self.engine.poker(&s.key, ToServer::Tourneys);
         }
         // The lobby refreshes every few seconds while it's open.
         if self.poker.lobby_asked.is_none_or(|t| t.elapsed().as_secs() >= 5) {
@@ -190,6 +211,7 @@ impl PyrApp {
         ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
         self.lobby(ui, s);
         self.new_table_dialog(ui.ctx(), s);
+        self.new_tourney_dialog(ui.ctx(), s);
     }
 
     fn lobby(&mut self, ui: &mut egui::Ui, s: &ServerView) {
@@ -223,7 +245,7 @@ impl PyrApp {
             ui.add_space(14.0);
             ui.horizontal(|ui| {
                 ui.add_space(28.0);
-                for (tab, name) in [(Tab::Tables, "Tables"), (Tab::Leaderboard, "Leaderboard"), (Tab::Me, "Profile & Looks")] {
+                for (tab, name) in [(Tab::Tables, "Tables"), (Tab::Tourneys, "Tournaments"), (Tab::Leaderboard, "Leaderboard"), (Tab::Me, "Profile & Looks")] {
                     let on = self.poker.tab == tab;
                     let b = egui::Button::new(RichText::new(name).font(theme::bold_font(14.0)).color(if on { theme::on_ember() } else { theme::TEXT() }))
                         .fill(if on { theme::EMBER() } else { theme::ELEV() })
@@ -235,6 +257,14 @@ impl PyrApp {
                             self.engine.poker(&s.key, ToServer::Leaderboard);
                         }
                     }
+                }
+                if self.poker.tab == Tab::Tourneys && s.can(pyr_proto::control::perm::MANAGE_SERVER) {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.add_space(28.0);
+                        if ui.add(theme::primary_button("New tournament").min_size(vec2(150.0, 34.0))).clicked() {
+                            self.poker.new_tourney = Some(tourneys::NewTourney { name: format!("{} Championship", s.name.chars().take(24).collect::<String>()), ..Default::default() });
+                        }
+                    });
                 }
                 if self.poker.tab == Tab::Tables {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -250,6 +280,7 @@ impl PyrApp {
             ui.add_space(12.0);
             match self.poker.tab {
                 Tab::Tables => self.tables_list(ui, s),
+                Tab::Tourneys => self.tourneys_list(ui, s),
                 Tab::Leaderboard => self.leaderboard(ui, s),
                 Tab::Me => self.profile(ui, s),
             }

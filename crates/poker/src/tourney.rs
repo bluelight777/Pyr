@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::bots::Level;
 use crate::game::Rules;
 use crate::net::{BlindLevel, BuyIn, EntrantView, TableId, ToApp, TourneyId, TourneyPhase, TourneyRules, TourneySummary, TourneyView};
-use crate::room::{Effect, Look, Output, Random, Room};
+use crate::room::{Effect, Look, Output, Random, Rcpt, Room};
 
 /// The most people in one tournament.
 pub const MAX_ENTRANTS: usize = 180;
@@ -66,6 +66,15 @@ impl Tourney {
             ended: None,
             bot_names: 0,
         })
+    }
+
+    /// Play chips someone has riding on it until it's over (their buy-in), for the server's
+    /// books: given back if the server stops before the end.
+    pub fn at_stake(&self, uid: &str) -> u64 {
+        match self.phase {
+            TourneyPhase::Registering | TourneyPhase::Running => self.entrants.iter().filter(|e| e.uid == uid && e.place.is_none()).map(|e| e.paid).sum(),
+            _ => 0,
+        }
     }
 
     pub fn prize_pool(&self) -> u64 {
@@ -355,7 +364,18 @@ impl Tourney {
         let mut busted: Vec<(String, u64)> = Vec::new();
         let ids: Vec<TableId> = self.tables.keys().copied().collect();
         for id in ids {
-            let mut o = self.tables.get_mut(&id).unwrap().tick(now, rng);
+            let r = self.tables.get_mut(&id).unwrap();
+            let mut o = r.tick(now, rng);
+            // "Everyone at the table", spelled out (the tables are many; the server sees one
+            // tournament).
+            let aud = r.audience();
+            o.msgs = std::mem::take(&mut o.msgs)
+                .into_iter()
+                .flat_map(|(to, m)| match to {
+                    Rcpt::All => aud.iter().map(|u| (Rcpt::User(u.clone()), m.clone())).collect::<Vec<_>>(),
+                    x => vec![(x, m)],
+                })
+                .collect();
             busted.append(&mut o.busted);
             out.extend(o);
         }

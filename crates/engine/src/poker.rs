@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use pyr_poker::cards::Card;
 use pyr_poker::fair;
 use pyr_poker::game::Event;
-use pyr_poker::net::{GainsView, HandHistory, LeaderRow, RecordView, TableId, TableSummary, TableView, ToApp};
+use pyr_poker::net::{GainsView, HandHistory, LeaderRow, RecordView, TableId, TableSummary, TableView, ToApp, TourneyId, TourneySummary, TourneyView};
 
 /// How a hand's shuffle checked out.
 #[derive(Clone, Debug, PartialEq)]
@@ -62,6 +62,9 @@ pub struct PokerState {
     pub daily: Option<Option<u64>>,
     /// The last refusal, in the server's words.
     pub error: Option<String>,
+    /// Tournaments here, and the ones followed in full.
+    pub tourneys: Option<Vec<TourneySummary>>,
+    pub tourney: BTreeMap<TourneyId, TourneyView>,
 }
 
 /// What the engine does after taking a message in: send this Pyr's seed for a shuffle.
@@ -207,6 +210,20 @@ impl PokerState {
                 }
             }
             ToApp::Daily { chips, .. } => self.daily = Some(chips),
+            ToApp::Tourneys { list } => self.tourneys = Some(list),
+            ToApp::Tourney { view } => {
+                // Its line in the list follows along.
+                if let Some(l) = &mut self.tourneys
+                    && let Some(row) = l.iter_mut().find(|t| t.id == view.id)
+                {
+                    row.phase = view.phase;
+                    row.entrants = view.entrants.len();
+                    row.players_left = view.entrants.iter().filter(|e| e.place.is_none()).count();
+                    row.prize_pool = view.prize_pool;
+                    row.level = view.level;
+                }
+                self.tourney.insert(view.id, view);
+            }
         }
         None
     }
