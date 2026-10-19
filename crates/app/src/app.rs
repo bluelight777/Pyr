@@ -2724,7 +2724,10 @@ impl PyrApp {
                             let name_w = crate::emoji::text_width(ui.painter(), &name, name_font.clone());
                             let row_w = ui.available_width() - 8.0;
                             // (The name starts 78 in and stops 10 short of the right.)
-                            let two_lines = !marks.is_empty() && name_w + shield_room + 6.0 + marks_w > row_w - 88.0;
+                            // (Someone streaming: LIVE always goes under their name, so it sits in
+                            // the same place for everyone who's live.)
+                            let live = marks.iter().any(|m| matches!(m, VoiceMark::Live));
+                            let two_lines = !marks.is_empty() && (live || name_w + shield_room + 6.0 + marks_w > row_w - 88.0);
                             let h = if two_lines { VOICE_MEMBER_TWO_H } else { VOICE_MEMBER_H };
                             let (r, _) = ui.allocate_exact_size(vec2(row_w, h), Sense::hover());
                             // Where the channel's name starts (its row is 8 in, the name 34 more).

@@ -635,13 +635,96 @@ impl PyrApp {
                 let y = bottom - meter_level(target) * (bottom - top);
                 let x0 = body.left() + 2.0 * (COL_W + 30.0) + 2.0 * GAP + 8.0;
                 let x1 = body.right().min(body.left() + total);
-                let c = theme::EMBER2().gamma_multiply(0.75 * fade);
-                let mut x = x0;
-                while x < x1 {
-                    p.line_segment([pos2(x, y), pos2((x + 6.0).min(x1), y)], Stroke::new(1.2, c));
-                    x += 10.0;
+                // It sweeps across when it comes, glows, and a spark runs along it now and then.
+                let age = (now - at) as f32;
+                let reach = ease((age / 0.45).min(1.0));
+                let xe = x0 + (x1 - x0) * reach;
+                let hot = theme::EMBER2();
+                let core = theme::mix(hot, Color32::WHITE, 0.35);
+                // Soft light either side of it, and a bright core: one smooth band (a mesh, so no
+                // seams), fading in at both ends.
+                let glow_c = theme::EMBER();
+                let ends = |t: f32| (t.min(1.0 - t) * 7.0).clamp(0.0, 1.0);
+                let band = |half: f32, col: Color32, alpha: f32| {
+                    let mut m = egui::Mesh::default();
+                    let n = 40;
+                    for k in 0..=n {
+                        let t = k as f32 / n as f32;
+                        let x = x0 + (xe - x0) * t;
+                        let a = alpha * fade * ends(t);
+                        m.colored_vertex(pos2(x, y - half), Color32::TRANSPARENT);
+                        m.colored_vertex(pos2(x, y), col.gamma_multiply(a));
+                        m.colored_vertex(pos2(x, y + half), Color32::TRANSPARENT);
+                    }
+                    for k in 0..n as u32 {
+                        let (a, b) = (3 * k, 3 * (k + 1));
+                        m.add_triangle(a, a + 1, b + 1);
+                        m.add_triangle(a, b, b + 1);
+                        m.add_triangle(a + 1, a + 2, b + 2);
+                        m.add_triangle(a + 1, b + 1, b + 2);
+                    }
+                    p.add(egui::Shape::mesh(m));
+                };
+                band(14.0, glow_c, 0.22);
+                band(6.0, hot, 0.55);
+                band(1.6, core, 1.0);
+                // The spark: every couple of seconds a bright comet runs left to right.
+                let run = ((age - 0.45).max(0.0) % 2.2) / 0.9;
+                if run < 1.0 && reach >= 1.0 {
+                    let sx = x0 + (x1 - x0) * ease(run);
+                    let tail = 70.0;
+                    let mut m = egui::Mesh::default();
+                    let n = 16;
+                    for k in 0..=n {
+                        let t = k as f32 / n as f32;
+                        let x = sx - tail * (1.0 - t);
+                        let h = 0.6 + 2.4 * t;
+                        let c = theme::mix(hot, Color32::WHITE, 0.6).gamma_multiply(t * t * fade);
+                        m.colored_vertex(pos2(x, y - h), c);
+                        m.colored_vertex(pos2(x, y + h), c);
+                    }
+                    for k in 0..n as u32 {
+                        m.add_triangle(2 * k, 2 * k + 1, 2 * k + 3);
+                        m.add_triangle(2 * k, 2 * k + 2, 2 * k + 3);
+                    }
+                    p.add(egui::Shape::mesh(m));
+                    for (r, alpha) in [(12.0, 0.08), (6.0, 0.25), (2.6, 1.0)] {
+                        p.circle_filled(pos2(sx, y), r, theme::mix(hot, Color32::WHITE, 0.7).gamma_multiply(alpha * fade));
+                    }
                 }
-                p.text(pos2(x1 - 4.0, y - 8.0), Align2::RIGHT_CENTER, format!("everyone ≈ {target:.0} dB"), theme::font(10.5), c);
+                // Notches where it crosses each person's faders: the level they were set to.
+                let mut sx0 = body.left();
+                let mut spots = Vec::new();
+                for (i, strip) in strips.iter().enumerate() {
+                    let w = if matches!(strip, Strip::Person { .. }) { 2.0 * COL_W + 20.0 } else { COL_W + 30.0 };
+                    if let Strip::Person { streaming, .. } = strip {
+                        let r = Rect::from_min_size(pos2(sx0, body.top()), vec2(w, STRIP_H));
+                        spots.push(column(r, 0).center().x);
+                        if *streaming {
+                            spots.push(column(r, 1).center().x);
+                        }
+                    }
+                    let _ = i;
+                    sx0 += w + GAP;
+                }
+                for cx in spots {
+                    if cx > xe {
+                        continue;
+                    }
+                    let d = 4.0;
+                    let pts = vec![pos2(cx, y - d), pos2(cx + d, y), pos2(cx, y + d), pos2(cx - d, y)];
+                    p.add(egui::Shape::convex_polygon(pts, core.gamma_multiply(fade), Stroke::new(1.0, hot.gamma_multiply(0.6 * fade))));
+                }
+                // Its label: a little glowing tag at the end.
+                if reach >= 1.0 {
+                    let text = format!("evened out \u{2248} {target:.0} dB");
+                    let galley = p.layout_no_wrap(text, theme::bold_font(10.5), Color32::WHITE);
+                    let tag = Rect::from_min_size(pos2(x1 - galley.size().x - 18.0, y - galley.size().y - 14.0), galley.size() + vec2(14.0, 6.0));
+                    p.rect_filled(tag.expand(2.0), theme::r(8), hot.gamma_multiply(0.15 * fade));
+                    p.rect_filled(tag, theme::r(7), theme::mix(Color32::BLACK, hot, 0.22).gamma_multiply(0.92 * fade));
+                    p.rect_stroke(tag, theme::r(7), Stroke::new(1.0, hot.gamma_multiply(0.8 * fade)), egui::StrokeKind::Inside);
+                    p.galley(tag.min + vec2(7.0, 3.0), galley, core.gamma_multiply(fade));
+                }
             }
         }
         if strips.len() == 2 {

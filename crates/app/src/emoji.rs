@@ -489,6 +489,22 @@ pub fn text_width(painter: &egui::Painter, text: &str, font: FontId) -> f32 {
     painter.layout_job(job).size().x
 }
 
+/// How far below the middle of a line of `font` the middle of its capital letters is (cap
+/// height to baseline), in points: what to move text up by to center its letters.
+pub fn cap_offset(painter: &egui::Painter, font: &FontId) -> f32 {
+    let galley = painter.layout_no_wrap("H".into(), font.clone(), Color32::WHITE);
+    let Some(row) = galley.rows.first() else { return 0.0 };
+    let Some(g) = row.row.glyphs.first() else { return 0.0 };
+    if g.uv_rect.size.y <= 0.0 {
+        return 0.0;
+    }
+    let top = row.pos.y + g.pos.y + g.uv_rect.offset.y;
+    let bottom = top + g.uv_rect.size.y;
+    let off = (top + bottom) / 2.0 - galley.rect.center().y;
+    // (Bounded: a font that misreports shouldn't throw text off its row.)
+    off.clamp(-font.size * 0.3, font.size * 0.3)
+}
+
 pub fn paint_text(
     painter: &egui::Painter,
     pos: Pos2,
@@ -498,6 +514,13 @@ pub fn paint_text(
     color: Color32,
     max_width: Option<f32>,
 ) -> Rect {
+    // (Development builds' A/B: PYR_DEV_LINE_BOX_CENTER set centers by the line box, as before.)
+    // Centered on a line: by the letters themselves (the middle of a capital), not the font's
+    // line box, whose middle sits higher or lower than the letters by the font (so names line up
+    // with the icon or picture beside them, whatever the skin's font).
+    static OFF: OnceLock<bool> = OnceLock::new();
+    let off = *OFF.get_or_init(|| std::env::var_os("PYR_DEV_LINE_BOX_CENTER").is_some());
+    let pos = if anchor.y() == egui::Align::Center && !off { pos2(pos.x, pos.y - cap_offset(painter, &font)) } else { pos };
     let (job, found) = job_of(text, font, color, max_width, true);
     let galley = painter.layout_job(job);
     let rect = anchor.anchor_size(pos, galley.size());
