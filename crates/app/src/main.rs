@@ -32,6 +32,7 @@ mod ringtone;
 mod server_card;
 mod server_gifs;
 mod plugins;
+mod poker;
 mod select;
 mod settings;
 mod stage;

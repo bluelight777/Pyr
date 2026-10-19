@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 pyr-proto = { path = "../proto" }
+pyr-poker = { path = "../poker" }
 pyr-engine = { path = "../engine" }
 pyr-host = { path = "../host" }
 directories = "6.0.0"

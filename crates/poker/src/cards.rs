@@ -59,6 +59,11 @@ impl Card {
         ["Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Jack", "Queen", "King", "Ace"][rank as usize]
     }
 
+    /// As printed on a card: "2" to "10", "J", "Q", "K", "A".
+    pub fn rank_label(rank: u8) -> &'static str {
+        ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"][rank as usize]
+    }
+
     /// Plural: "Aces", "Sixes".
     pub fn rank_plural(rank: u8) -> &'static str {
         ["Twos", "Threes", "Fours", "Fives", "Sixes", "Sevens", "Eights", "Nines", "Tens", "Jacks", "Queens", "Kings", "Aces"][rank as usize]

@@ -203,6 +203,7 @@ pub fn read_hand(events: &[Event], seat: usize, values: &dyn Fn(usize) -> Option
     let mut street = Street::Preflop;
     let mut river_aggressor = None;
     let mut anyone_shown = false;
+    let mut folded = false;
     for e in events {
         match e {
             Event::HandStarted { seats, .. } => r.played = seats.contains(&seat),
@@ -216,6 +217,7 @@ pub fn read_hand(events: &[Event], seat: usize, values: &dyn Fn(usize) -> Option
                     river_aggressor = Some(*s);
                 }
                 if *s == seat {
+                    folded |= matches!(action, Action::Fold);
                     r.put_in += amount;
                     if *stack == 0 && *amount > 0 {
                         r.went_all_in = true;
@@ -251,6 +253,11 @@ pub fn read_hand(events: &[Event], seat: usize, values: &dyn Fn(usize) -> Option
         }
     }
     r.river_bluff = r.won > 0 && !anyone_shown && river_aggressor == Some(seat);
+    // Held to the river without showing (everyone else folded): the hand they made still
+    // counts as theirs (best hand, the made-a-straight kind of achievement).
+    if r.shown.is_none() && r.played && !folded && street == Street::River {
+        r.shown = values(seat);
+    }
     r
 }
 
@@ -444,5 +451,45 @@ mod tests {
         rec.xp = xp_for_level(5);
         let ids: Vec<&str> = rec.unlocked().iter().map(|c| c.id).collect();
         assert!(ids.contains(&"felt_royal") && !ids.contains(&"felt_crimson"));
+    }
+
+    #[test]
+    fn a_hand_held_to_the_river_counts_without_a_showdown() {
+        let mut t = Table::new(Rules::holdem(5, 10, 2));
+        t.sit(0, "a", "A", 1000).unwrap();
+        t.sit(1, "b", "B", 1000).unwrap();
+        let deck0 = parse_cards("AhKc QhQd").unwrap();
+        let mut deck = vec![deck0[0], deck0[1], deck0[2], deck0[3]];
+        let board = parse_cards("2s 9h 4h Jc 7h").unwrap();
+        let mut rest: Vec<_> = crate::cards::Card::all().filter(|c| !deck.contains(c) && !board.contains(c)).collect();
+        deck.push(rest.remove(0));
+        deck.extend(&board[..3]);
+        deck.push(rest.remove(0));
+        deck.push(board[3]);
+        deck.push(rest.remove(0));
+        deck.push(board[4]);
+        deck.extend(rest);
+        let mut events: Vec<Event> = t.start_hand(1, deck).unwrap().into_iter().map(|(_, e)| e).collect();
+        events.extend(t.act(0, Action::Call).unwrap().into_iter().map(|(_, e)| e));
+        events.extend(t.act(1, Action::Check).unwrap().into_iter().map(|(_, e)| e));
+        for _ in 0..2 {
+            events.extend(t.act(1, Action::Check).unwrap().into_iter().map(|(_, e)| e));
+            events.extend(t.act(0, Action::Check).unwrap().into_iter().map(|(_, e)| e));
+        }
+        // The river: B checks, A bets, B folds.
+        events.extend(t.act(1, Action::Check).unwrap().into_iter().map(|(_, e)| e));
+        events.extend(t.act(0, Action::Raise { to: 20 }).unwrap().into_iter().map(|(_, e)| e));
+        events.extend(t.act(1, Action::Fold).unwrap().into_iter().map(|(_, e)| e));
+        assert!(!events.iter().any(|e| matches!(e, Event::Shown { .. })));
+        let holes = [parse_cards("AhQh").unwrap(), parse_cards("KcQd").unwrap()];
+        let values = |s: usize| {
+            let v = eval::evaluate(&[holes[s].clone(), board.clone()].concat());
+            Some((v.0, v.category(), v.describe()))
+        };
+        let a = read_hand(&events, 0, &values);
+        assert!(!a.showdown && a.won > 0);
+        assert_eq!(a.shown.as_ref().map(|x| x.2.as_str()), Some("Flush, Ace high"));
+        let b = read_hand(&events, 1, &values);
+        assert!(b.shown.is_none(), "folded: not counted");
     }
 }

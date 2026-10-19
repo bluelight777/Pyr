@@ -426,6 +426,8 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
     // call here (and so leave it).
     let mut gone_group: Option<ChannelId> = None;
     let mut leave_call = false;
+    // This Pyr's part of a poker shuffle, to send.
+    let mut poker_seed: Option<crate::poker::SendSeed> = None;
     {
         let mut st = shared.state.write();
         let my_uid = st.my_uid.clone();
@@ -435,6 +437,9 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
         let blocked = st.blocked.clone();
         let Some(s) = st.server_mut(key) else { return };
         match ev {
+            Event::Poker { msg } => {
+                poker_seed = s.poker.apply(msg, Instant::now());
+            }
             Event::RelationUpdated { user_id, kind } => {
                 let before = s.relations.get(&user_id).copied();
                 match kind {
@@ -740,6 +745,12 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
                     st.missed_call(key, cid, &name);
                 }
             }
+        }
+    }
+    if let Some(s) = poker_seed {
+        let h = shared.servers.lock().get(key).cloned();
+        if let Some(h) = h {
+            let _ = h.request(Request::Poker { msg: pyr_poker::net::ToServer::Seed { table: s.table, hand: s.hand, seed: s.seed } });
         }
     }
     if ring {

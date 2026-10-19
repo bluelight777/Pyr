@@ -167,6 +167,8 @@ pub struct ServerView {
     pub idle_sent: bool,
     /// Whether this server was told Do Not Disturb (see `idle`; a new connection starts without).
     pub dnd_sent: bool,
+    /// Poker here (see [`crate::poker`]).
+    pub poker: crate::poker::PokerState,
 }
 
 /// An invite to hand out (`Engine::create_invite`).
@@ -241,6 +243,7 @@ impl ServerView {
             relations: HashMap::new(),
             idle_sent: false,
             dnd_sent: false,
+            poker: Default::default(),
         }
     }
 

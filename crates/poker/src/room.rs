@@ -307,7 +307,7 @@ impl Room {
         let taken: Vec<String> = self.table.seats.iter().flatten().map(|s| s.name.clone()).collect();
         let free: Vec<&&str> = names.iter().filter(|n| !taken.iter().any(|t| t.starts_with(**n))).collect();
         let base = free.get(rng.below(free.len().max(1) as u32) as usize).map(|n| n.to_string()).unwrap_or_else(|| "Bot".into());
-        let name = format!("{base} ({})", level.name());
+        let name = base;
         let id = format!("bot:{}:{seat}:{}", self.id, rng.below(1_000_000));
         // Bots sit with the most chips the table allows.
         let chips = self.max_buy_in();
@@ -520,7 +520,16 @@ impl Room {
         let rules = self.table.rules.clone();
         let events: Vec<Event> = p.log.iter().map(|(_, e)| e.clone()).collect();
         let board_final = board.clone();
-        let holes: HashMap<usize, Vec<Card>> = p.log.iter().filter_map(|(_, e)| if let Event::Shown { seat, cards, .. } = e { Some((*seat, cards.clone())) } else { None }).collect();
+        // Everyone's cards (as dealt; what's shown is the same), for the hands they made.
+        let holes: HashMap<usize, Vec<Card>> = p
+            .log
+            .iter()
+            .filter_map(|(_, e)| match e {
+                Event::Dealt { seat, cards } | Event::Shown { seat, cards, .. } => Some((*seat, cards.clone())),
+                _ => None,
+            })
+            .collect();
+        let shown: BTreeSet<usize> = p.log.iter().filter_map(|(_, e)| if let Event::Shown { seat, .. } = e { Some(*seat) } else { None }).collect();
         let values = |seat: usize| {
             let h = holes.get(&seat)?;
             let (v, _) = match rules.variant {
@@ -529,7 +538,7 @@ impl Room {
             };
             Some((v.0, v.category(), v.describe()))
         };
-        let shark_in_showdown = holes.keys().any(|s| self.meta.get(s).is_some_and(|m| m.bot == Some(Level::Shark)));
+        let shark_in_showdown = shown.iter().any(|s| self.meta.get(s).is_some_and(|m| m.bot == Some(Level::Shark)));
         for (seat, s) in p.seats_at_start.iter().enumerate() {
             let Some((uid, _)) = s else { continue };
             if uid.starts_with("bot:") {
@@ -699,13 +708,26 @@ impl Room {
         let deck = fair::shuffle(fair::deck_seed(&dealer, &seeds, hand));
         out.all(ToApp::Seeds { table: self.id, hand, fingerprint: fair::seeds_fingerprint(&seeds), seeds: seeds.clone() });
         let seats_at_start = self.table.seats.iter().map(|s| s.as_ref().map(|s| (s.player.clone(), s.stack))).collect();
+        // Everyone's view as the hand starts, before the blinds go in: the hand's events (the
+        // blinds among them) are played onto it.
+        let views: Vec<(String, TableView)> = self
+            .audience()
+            .into_iter()
+            .map(|uid| {
+                let mut v = self.view(Some(&uid));
+                v.hand = Some(hand);
+                (uid, v)
+            })
+            .collect();
         let events = match self.table.start_hand(hand, deck.clone()) {
             Ok(e) => e,
             Err(_) => return,
         };
         let button = self.table.button.unwrap_or(0);
         self.phase = Phase::Playing(Box::new(Playing { hand, dealer, commit, seeds, deck, log: Vec::new(), seats_at_start, button, deadline: now, using_bank: false }));
-        self.changed(out);
+        for (uid, table) in views {
+            out.to(&uid, ToApp::Snapshot { table });
+        }
         self.deliver(events, now, out);
     }
 

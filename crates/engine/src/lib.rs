@@ -36,6 +36,8 @@ pub mod errors {
 pub mod net;
 pub mod plugin_source;
 pub mod plugins;
+pub mod poker;
+pub mod poker_sfx;
 pub mod server;
 pub mod sfx;
 pub mod skins;
@@ -930,6 +932,66 @@ impl Engine {
         self.request_then(key, req, |_, _| {});
     }
 
+    /// Changes a server's poker state later, off this thread: these are called while the
+    /// app draws, holding the state to read (writing here would wait on itself).
+    fn poker_later(&self, key: &str, f: impl FnOnce(&mut poker::PokerState) + Send + 'static) {
+        let shared = self.shared.clone();
+        let k = key.to_string();
+        self.shared.rt.spawn(async move {
+            if let Some(s) = shared.state.write().server_mut(&k) {
+                f(&mut s.poker);
+            }
+            (shared.repaint)();
+        });
+    }
+
+    /// The poker celebrations shown (experience, achievements, level-ups): forgotten.
+    pub fn take_poker_gains(&self, key: &str) {
+        self.poker_later(key, |p| p.gains.clear());
+    }
+
+    /// The hand history window closed: its hand forgotten.
+    pub fn clear_poker_history(&self, key: &str) {
+        self.poker_later(key, |p| p.history = None);
+    }
+
+    pub fn clear_poker_error(&self, key: &str) {
+        self.poker_later(key, |p| p.error = None);
+    }
+
+    /// Poker on a server: what the server answers goes into `ServerView::poker` (and a refusal
+    /// into its `error`).
+    pub fn poker(&self, key: &str, msg: pyr_poker::net::ToServer) {
+        let k = key.to_string();
+        if self.handle(key).is_none() {
+            // (Not inline: the app calls this while drawing, holding the state.)
+            self.poker_later(key, |p| p.error = Some("Not connected to that server right now.".into()));
+            return;
+        }
+        self.request_then_or(key, Request::Poker { msg }, move |shared, r| {
+            let mut seed = None;
+            {
+                let mut st = shared.state.write();
+                if let Some(s) = st.server_mut(&k) {
+                    match r {
+                        Ok(Event::Poker { msg }) => {
+                            s.poker.error = None;
+                            seed = s.poker.apply(msg, std::time::Instant::now());
+                        }
+                        Ok(_) => s.poker.error = None,
+                        Err(e) => s.poker.error = Some(e),
+                    }
+                }
+            }
+            if let Some(sd) = seed
+                && let Some(h) = shared.servers.lock().get(&k).cloned()
+            {
+                let _ = h.request(Request::Poker { msg: pyr_poker::net::ToServer::Seed { table: sd.table, hand: sd.hand, seed: sd.seed } });
+            }
+            (shared.repaint)();
+        });
+    }
+
     /// Send a request; `then` gets the answer, or the refusal in the server's words.
     fn request_then_or(&self, key: &str, req: Request, then: impl FnOnce(&Arc<Shared>, Result<Event, String>) + Send + 'static) {
         let Some(h) = self.handle(key) else {
@@ -1706,6 +1768,21 @@ impl Engine {
             }
             (shared.repaint)();
         });
+    }
+
+    /// A poker table's sound (heard here only; through the call when in one), `pan` -1 to 1.
+    pub fn play_poker(&self, cue: poker_sfx::Cue, pan: f32, volume: f32) {
+        let pcm: soundboard::Pcm = std::sync::Arc::new(poker_sfx::render(cue, pan));
+        let (volume, device) = {
+            let st = self.shared.state.read_recursive();
+            ((st.settings.sound_volume * volume).clamp(0.0, 1.0), st.settings.output_device.clone())
+        };
+        let call = self.shared.call.lock().as_ref().and_then(|c| c.audio.as_ref().map(|a| (a.mixer.clone(), c.session)));
+        match (call, &self.shared.sfx) {
+            (Some((mixer, me)), _) => mixer.lock().play_effect(pcm, volume, me),
+            (None, Some(sfx)) => sfx.play_stereo(pcm, device, volume),
+            (None, None) => {}
+        }
     }
 
     pub fn play_sound(&self, sound: sfx::Sound) {

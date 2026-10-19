@@ -29,6 +29,7 @@ directories = "6.0.0"
 fast_image_resize = "6.1.0"
 getrandom = "0.2"
 pyr-proto = { path = "../proto", features = ["quic"] }
+pyr-poker = { path = "../poker" }
 nnnoiseless = { version = "0.5.2", default-features = false }
 openh264 = "0.9.8"
 # OpenH264's own option types, for changing a running encoder's bitrate and frame rate.

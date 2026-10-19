@@ -535,6 +535,8 @@ pub struct PyrApp {
     pub meters: crate::meter::Meters,
     /// What short invite links (pyr.gg/<code>) open.
     pub invite_lookups: crate::invites::Lookups,
+    /// The poker room and table (when one's open).
+    pub poker: crate::poker::PokerUi,
 }
 
 impl PyrApp {
@@ -574,6 +576,7 @@ impl PyrApp {
             title,
             meters: Default::default(),
             invite_lookups: Default::default(),
+            poker: Default::default(),
         }
     }
 
@@ -1835,7 +1838,17 @@ impl PyrApp {
                     .frame(egui::Frame::new().fill(theme::panel(theme::SIDE(), false)))
                     .show(ctx, |ui| self.channel_sidebar(ui, st, &server, acts));
                 let in_call_here = st.call.as_ref().map(|c| c.server_key == server.key).unwrap_or(false);
-                if self.ui.call_view && in_call_here {
+                if self.poker.open.is_some() && self.poker.open.as_deref() != Some(server.key.as_str()) {
+                    self.close_poker();
+                }
+                if self.poker.open.is_some() && !(self.ui.call_view && in_call_here) {
+                    if self.ui.active_view.is_some() {
+                        acts.push(Act::ClearActive);
+                    }
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::new().fill(theme::panel(theme::MAIN(), true)))
+                        .show(ctx, |ui| self.poker_page(ui, st, &server, acts));
+                } else if self.ui.call_view && in_call_here {
                     let call = st.call.as_ref().expect("checked");
                     if self.ui.call_chat_open {
                         egui::SidePanel::right("call-chat")
@@ -2468,6 +2481,27 @@ impl PyrApp {
                 }
                 ui.add_space(6.0);
             }
+            if s.has(pyr_proto::control::POKER_FEATURE) {
+                let open = self.poker.open.as_deref() == Some(s.key.as_str());
+                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
+                let row = r.shrink2(vec2(8.0, 1.0));
+                if open || resp.hovered() {
+                    ui.painter().rect_filled(row, crate::theme::r(6), theme::ELEV());
+                }
+                let ink = if open || resp.hovered() { theme::TEXT() } else { theme::MUTED() };
+                crate::poker::cards::suit(ui.painter(), Rect::from_center_size(row.left_center() + vec2(18.0, 0.0), vec2(15.0, 15.0)), 3, ink);
+                ui.painter().text(row.left_center() + vec2(32.0, 0.0), egui::Align2::LEFT_CENTER, "Poker room", theme::font(15.0), ink);
+                let playing = s.poker.tables.values().filter(|t| t.view.my_seat.is_some()).count();
+                if playing > 0 {
+                    let b = Rect::from_center_size(pos2(row.right() - 16.0, row.center().y), vec2(8.0, 8.0));
+                    ui.painter().circle_filled(b.center(), 4.0, theme::ONLINE());
+                }
+                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Play Hold'em and Omaha with people here and with bots, for play chips.").clicked() {
+                    self.open_poker(&s.key);
+                    self.ui.call_view = false;
+                }
+                ui.add_space(6.0);
+            }
             // And the plugins and skins sent in for the Pyr Library (when this server
             // collects them).
             if owner && s.info.plugin_submissions {
@@ -2514,7 +2548,7 @@ impl PyrApp {
                     }
                 });
                 for c in s.channels.iter().filter(|c| c.kind == kind) {
-                    let is_current = current == Some(c.id)
+                    let is_current = current == Some(c.id) && self.poker.open.is_none()
                         && (kind == ChannelKind::Text || !self.ui.call_view || st.call.as_ref().map(|x| x.channel_id != c.id).unwrap_or(true));
                     let in_this_call = st.call.as_ref().map(|x| x.server_key == s.key && x.channel_id == c.id).unwrap_or(false);
                     let selected = (kind == ChannelKind::Text && is_current && !self.ui.call_view)
@@ -2601,11 +2635,13 @@ impl PyrApp {
                     if chat_clicked {
                         self.ui.channel.insert(s.key.clone(), c.id);
                         self.ui.call_view = false;
+                        self.close_poker();
                     } else if resp.clicked() {
                         match kind {
                             ChannelKind::Text => {
                                 self.ui.channel.insert(s.key.clone(), c.id);
                                 self.ui.call_view = false;
+                                self.close_poker();
                             }
                             ChannelKind::Voice => {
                                 if !in_this_call {
