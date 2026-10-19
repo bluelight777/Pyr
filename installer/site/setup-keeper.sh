@@ -154,7 +154,18 @@ cat > "$ETC/keeper.json" <<EOF
 EOF
 chown -R "$RUN_AS": "$STATE" "$ETC"
 chmod 700 "$ETC"
-# The library folder is the one part of the website the Keeper may write.
+# The library folder is the one part of the website the Keeper may write. A folder on the way
+# to it that only the web server may enter (Hostinger's /var/www/<site>, say) lets the Keeper
+# through, and no more: passing, not listing (an ACL for its user alone).
+D=$(dirname "$LIB")
+while [ "$D" != / ]; do
+  if ! runuser -u "$RUN_AS" -- test -x "$D"; then
+    command -v setfacl >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq acl >/dev/null; }
+    setfacl -m "u:$RUN_AS:--x" "$D"
+    note "let $RUN_AS through $D (only through)"
+  fi
+  D=$(dirname "$D")
+done
 chown -R "$RUN_AS" "$LIB"
 chmod -R u+rwX,a+rX "$LIB"
 
