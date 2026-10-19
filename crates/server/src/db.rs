@@ -8,6 +8,7 @@ use pyr_proto::control::{CustomEmoji, Relation, RelationKind, ServerGif, ServerS
     Attachment, Channel, ChannelId, ChannelKind, Dm, FileKind, Group, Member, Message, MessageId, Reaction, Role, RoleDef, RoleId, UserId,
 };
 use pyr_proto::now_ms;
+use pyr_proto::sealed::{KeyRef, KeyShare, MessageKey, NewShare, PLACEHOLDER, Sealed};
 use parking_lot::Mutex;
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -229,6 +230,35 @@ CREATE TABLE IF NOT EXISTS author_names (
     author_id TEXT NOT NULL,
     at INTEGER NOT NULL
 );
+-- End-to-end encrypted messages (0.9, see `pyr_proto::sealed`): members' message keys (signed
+-- by them), the conversation keys they give each other (each wrapped for its receiver: the
+-- server can't open them), and the keys someone asked for that nobody's given them yet.
+CREATE TABLE IF NOT EXISTS message_keys (
+    user_id TEXT PRIMARY KEY,
+    key TEXT NOT NULL,
+    sig TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS key_shares (
+    channel_id INTEGER NOT NULL,
+    owner TEXT NOT NULL,
+    key_id TEXT NOT NULL,
+    recipient TEXT NOT NULL,
+    giver TEXT NOT NULL,
+    nonce TEXT NOT NULL,
+    ct TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (channel_id, owner, key_id, recipient, giver)
+);
+CREATE INDEX IF NOT EXISTS key_shares_by_recipient ON key_shares(recipient, channel_id);
+CREATE TABLE IF NOT EXISTS key_wants (
+    channel_id INTEGER NOT NULL,
+    owner TEXT NOT NULL,
+    key_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (channel_id, owner, key_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS key_wants_by_user ON key_wants(user_id);
 "#;
 
 /// What `Db::submission_row` reads, in its order.
@@ -245,6 +275,7 @@ fn file_kind_to_i(k: FileKind) -> i64 {
         FileKind::Attachment => 0,
         FileKind::Avatar => 1,
         FileKind::Sound => 2,
+        FileKind::Sealed => 3,
     }
 }
 
@@ -252,6 +283,7 @@ fn file_kind_from_i(v: i64) -> FileKind {
     match v {
         1 => FileKind::Avatar,
         2 => FileKind::Sound,
+        3 => FileKind::Sealed,
         _ => FileKind::Attachment,
     }
 }
@@ -357,6 +389,11 @@ fn migrate(c: &Connection) -> Result<()> {
     let has_listed = c.prepare("SELECT 1 FROM pragma_table_info('invites') WHERE name = 'listed'")?.exists([])?;
     if !has_listed {
         c.execute_batch("ALTER TABLE invites ADD COLUMN listed INTEGER NOT NULL DEFAULT 0")?;
+    }
+    // End-to-end encrypted messages (0.9): the ciphertext (`Sealed`, as JSON), `content` then empty.
+    let has_sealed = c.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'sealed'")?.exists([])?;
+    if !has_sealed {
+        c.execute_batch("ALTER TABLE messages ADD COLUMN sealed TEXT")?;
     }
     Ok(())
 }
@@ -981,7 +1018,7 @@ impl Db {
     pub fn unsent_files_of(&self, uid: &str) -> usize {
         self.conn
             .lock()
-            .query_row("SELECT COUNT(*) FROM files WHERE owner = ?1 AND kind = 0 AND message_id IS NULL AND id NOT IN (SELECT id FROM gifs)", [uid], |r| {
+            .query_row("SELECT COUNT(*) FROM files WHERE owner = ?1 AND kind IN (0, 3) AND message_id IS NULL AND id NOT IN (SELECT id FROM gifs)", [uid], |r| {
                 r.get::<_, i64>(0)
             })
             .unwrap_or(0) as usize
@@ -995,6 +1032,7 @@ impl Db {
         let cutoff = now_ms() - max_age_ms;
         let sql = "SELECT id FROM files WHERE created_at < ?1 AND (
                        (kind = 0 AND message_id IS NULL AND id NOT IN (SELECT id FROM gifs))
+                    OR (kind = 3 AND message_id IS NULL)
                     OR (kind = 1 AND id NOT IN (SELECT avatar FROM users WHERE avatar IS NOT NULL)
                                  AND id NOT IN (SELECT value FROM meta WHERE key = 'icon')
                                  AND id NOT IN (SELECT id FROM emojis))
@@ -1379,6 +1417,7 @@ impl Db {
         let files = Self::file_ids_where(&c, "message_id IN (SELECT id FROM messages WHERE channel_id = ?1)", id);
         c.execute("DELETE FROM files WHERE message_id IN (SELECT id FROM messages WHERE channel_id = ?1)", [id])?;
         c.execute("DELETE FROM messages WHERE channel_id = ?1", [id])?;
+        Self::forget_keys(&c, id)?;
         scrub(&c);
         Ok((n > 0, files))
     }
@@ -1509,6 +1548,7 @@ impl Db {
         let files = Self::file_ids_where(&c, "message_id IN (SELECT id FROM messages WHERE channel_id = ?1)", channel_id);
         c.execute("DELETE FROM files WHERE message_id IN (SELECT id FROM messages WHERE channel_id = ?1)", [channel_id])?;
         c.execute("DELETE FROM messages WHERE channel_id = ?1", [channel_id])?;
+        Self::forget_keys(&c, channel_id)?;
         scrub(&c);
         Ok(files)
     }
@@ -1542,7 +1582,7 @@ impl Db {
         content: &str,
         reply_to: Option<MessageId>,
     ) -> Result<Message> {
-        self.insert_message_with(channel_id, author, content, reply_to, &[])
+        self.insert_message_with(channel_id, author, content, reply_to, &[], None)
     }
 
     /// A message with files the author uploaded (checked by the caller); links them to it.
@@ -1553,12 +1593,15 @@ impl Db {
         content: &str,
         reply_to: Option<MessageId>,
         files: &[String],
+        sealed: Option<&Sealed>,
     ) -> Result<Message> {
         let now = now_ms();
         let c = self.conn.lock();
+        let sealed_json = sealed.map(|s| serde_json::to_string(s).expect("serializes"));
+        let content = if sealed.is_some() { "" } else { content };
         c.execute(
-            "INSERT INTO messages(channel_id, author, content, created_at, reply_to) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![channel_id, author, content, now, reply_to],
+            "INSERT INTO messages(channel_id, author, content, created_at, reply_to, sealed) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![channel_id, author, content, now, reply_to, sealed_json],
         )?;
         let id = c.last_insert_rowid();
         for f in files {
@@ -1569,12 +1612,14 @@ impl Db {
             id,
             channel_id,
             author: author.to_string(),
-            content: content.to_string(),
+            content: if sealed.is_some() { PLACEHOLDER.to_string() } else { content.to_string() },
             created_at: now,
             edited_at: None,
             reply_to,
             reactions: Vec::new(),
             attachments,
+            sealed: sealed.cloned(),
+            lock: Default::default(),
         })
     }
 
@@ -1602,16 +1647,20 @@ impl Db {
     }
 
     fn row_to_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
+        // (Encrypted: older Pyrs show the note in `content`.)
+        let sealed: Option<Sealed> = r.get::<_, Option<String>>(7)?.and_then(|j| serde_json::from_str(&j).ok());
         Ok(Message {
             id: r.get(0)?,
             channel_id: r.get(1)?,
             author: r.get(2)?,
-            content: r.get(3)?,
+            content: if sealed.is_some() { PLACEHOLDER.to_string() } else { r.get(3)? },
             created_at: r.get(4)?,
             edited_at: r.get(5)?,
             reply_to: r.get(6)?,
             reactions: Vec::new(),
             attachments: Vec::new(),
+            sealed,
+            lock: Default::default(),
         })
     }
 
@@ -1619,7 +1668,7 @@ impl Db {
         let c = self.conn.lock();
         let mut m = c
             .query_row(
-                "SELECT id, channel_id, author, content, created_at, edited_at, reply_to FROM messages WHERE id = ?1",
+                "SELECT id, channel_id, author, content, created_at, edited_at, reply_to, sealed FROM messages WHERE id = ?1",
                 [id],
                 Self::row_to_message,
             )
@@ -1631,10 +1680,12 @@ impl Db {
         Some(m)
     }
 
-    pub fn edit_message(&self, id: MessageId, content: &str) -> Result<Option<Message>> {
+    pub fn edit_message(&self, id: MessageId, content: &str, sealed: Option<&Sealed>) -> Result<Option<Message>> {
         {
             let c = self.conn.lock();
-            c.execute("UPDATE messages SET content = ?2, edited_at = ?3 WHERE id = ?1", params![id, content, now_ms()])?;
+            let sealed_json = sealed.map(|s| serde_json::to_string(s).expect("serializes"));
+            let content = if sealed.is_some() { "" } else { content };
+            c.execute("UPDATE messages SET content = ?2, edited_at = ?3, sealed = ?4 WHERE id = ?1", params![id, content, now_ms(), sealed_json])?;
             scrub(&c);
         }
         Ok(self.get_message(id))
@@ -1658,7 +1709,7 @@ impl Db {
         let before = before.unwrap_or(i64::MAX);
         let mut st = c
             .prepare(
-                "SELECT id, channel_id, author, content, created_at, edited_at, reply_to FROM messages
+                "SELECT id, channel_id, author, content, created_at, edited_at, reply_to, sealed FROM messages
                  WHERE channel_id = ?1 AND id < ?2 ORDER BY id DESC LIMIT ?3",
             )
             .expect("valid SQL");
@@ -1945,6 +1996,162 @@ impl Db {
     }
 }
 
+/// The most givers besides a key's owner whose copies of one key are kept for one receiver
+/// (so nobody can crowd out the real one with junk).
+const MAX_OTHER_GIVERS: i64 = 4;
+/// The most keys one member may have asked for and not been given yet.
+const MAX_WANTS: i64 = 5000;
+
+// ------------------------------------------------------------- end-to-end encryption
+impl Db {
+    /// A member's message key (checked by the caller).
+    pub fn set_message_key(&self, k: &MessageKey) -> Result<()> {
+        self.conn.lock().execute(
+            "INSERT OR REPLACE INTO message_keys(user_id, key, sig) VALUES (?1, ?2, ?3)",
+            params![k.user, k.key, k.sig],
+        )?;
+        Ok(())
+    }
+
+    /// Message keys of these members (those who have one).
+    pub fn message_keys(&self, uids: &[UserId]) -> HashMap<UserId, MessageKey> {
+        let c = self.conn.lock();
+        let mut st = c.prepare_cached("SELECT key, sig FROM message_keys WHERE user_id = ?1").expect("valid SQL");
+        let mut out = HashMap::new();
+        for u in uids {
+            if let Ok(Some((key, sig))) = st.query_row([u], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).optional() {
+                out.insert(u.clone(), MessageKey { user: u.clone(), key, sig });
+            }
+        }
+        out
+    }
+
+    /// Keeps keys `giver` gives in a conversation (each receiver checked by the caller); the
+    /// ones kept, and what was asked for is answered.
+    pub fn add_shares(&self, channel_id: ChannelId, giver: &str, shares: &[NewShare]) -> Result<Vec<NewShare>> {
+        let mut c = self.conn.lock();
+        let tx = c.transaction()?;
+        let mut kept = Vec::new();
+        for s in shares {
+            if s.key.owner != giver {
+                let others: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM key_shares WHERE channel_id = ?1 AND owner = ?2 AND key_id = ?3 AND recipient = ?4 AND giver != owner AND giver != ?5",
+                    params![channel_id, s.key.owner, s.key.id, s.to, giver],
+                    |r| r.get(0),
+                )?;
+                if others >= MAX_OTHER_GIVERS {
+                    continue;
+                }
+            }
+            tx.execute(
+                "INSERT OR REPLACE INTO key_shares(channel_id, owner, key_id, recipient, giver, nonce, ct, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![channel_id, s.key.owner, s.key.id, s.to, giver, s.nonce, s.ct, now_ms()],
+            )?;
+            tx.execute(
+                "DELETE FROM key_wants WHERE channel_id = ?1 AND owner = ?2 AND key_id = ?3 AND user_id = ?4",
+                params![channel_id, s.key.owner, s.key.id, s.to],
+            )?;
+            kept.push(s.clone());
+        }
+        tx.commit()?;
+        Ok(kept)
+    }
+
+    /// The keys given to `uid` in a conversation, of those asked for (with whoever gave them);
+    /// the key's owner's copy first.
+    pub fn shares_for(&self, channel_id: ChannelId, uid: &str, keys: &[KeyRef]) -> Vec<KeyShare> {
+        let c = self.conn.lock();
+        let mut st = c
+            .prepare_cached(
+                "SELECT s.giver, s.nonce, s.ct, m.key, m.sig FROM key_shares s JOIN message_keys m ON m.user_id = s.giver
+                 WHERE s.channel_id = ?1 AND s.owner = ?2 AND s.key_id = ?3 AND s.recipient = ?4 ORDER BY s.giver != s.owner, s.at",
+            )
+            .expect("valid SQL");
+        let mut out = Vec::new();
+        for k in keys {
+            let rows = st.query_map(params![channel_id, k.owner, k.id, uid], |r| {
+                Ok(KeyShare {
+                    key: k.clone(),
+                    from: MessageKey { user: r.get(0)?, key: r.get(3)?, sig: r.get(4)? },
+                    nonce: r.get(1)?,
+                    ct: r.get(2)?,
+                })
+            });
+            if let Ok(rows) = rows {
+                out.extend(rows.flatten());
+            }
+        }
+        out
+    }
+
+    /// Whether `uid` was given a key (or it's theirs).
+    pub fn has_key(&self, channel_id: ChannelId, key: &KeyRef, uid: &str) -> bool {
+        key.owner == uid
+            || self
+                .conn
+                .lock()
+                .prepare_cached("SELECT 1 FROM key_shares WHERE channel_id = ?1 AND owner = ?2 AND key_id = ?3 AND recipient = ?4")
+                .and_then(|mut st| st.exists(params![channel_id, key.owner, key.id, uid]))
+                .unwrap_or(false)
+    }
+
+    /// `uid` asked for these keys and nobody's given them yet.
+    pub fn add_wants(&self, channel_id: ChannelId, uid: &str, keys: &[KeyRef]) -> Result<()> {
+        let c = self.conn.lock();
+        let have: i64 = c.query_row("SELECT COUNT(*) FROM key_wants WHERE user_id = ?1", [uid], |r| r.get(0))?;
+        if have >= MAX_WANTS {
+            return Ok(());
+        }
+        for k in keys {
+            c.execute(
+                "INSERT OR IGNORE INTO key_wants(channel_id, owner, key_id, user_id, at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![channel_id, k.owner, k.id, uid, now_ms()],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Who has a key (was given it, its owner first): who to ask for it.
+    pub fn holders(&self, channel_id: ChannelId, key: &KeyRef) -> Vec<UserId> {
+        let c = self.conn.lock();
+        c.prepare_cached(
+            "SELECT recipient FROM key_shares WHERE channel_id = ?1 AND owner = ?2 AND key_id = ?3
+             GROUP BY recipient ORDER BY recipient != ?2, MIN(at)",
+        )
+        .and_then(|mut st| st.query_map(params![channel_id, key.owner, key.id], |r| r.get(0)).map(|rows| rows.flatten().collect()))
+        .unwrap_or_default()
+    }
+
+    /// What others asked for that `uid` has: (conversation, who asked, key), oldest first.
+    pub fn wants_for_holder(&self, uid: &str, limit: usize) -> Vec<(ChannelId, UserId, KeyRef)> {
+        let c = self.conn.lock();
+        c.prepare_cached(
+            "SELECT w.channel_id, w.user_id, w.owner, w.key_id FROM key_wants w
+             WHERE w.user_id != ?1 AND EXISTS (SELECT 1 FROM key_shares s WHERE s.channel_id = w.channel_id
+                AND s.owner = w.owner AND s.key_id = w.key_id AND s.recipient = ?1)
+             ORDER BY w.at LIMIT ?2",
+        )
+        .and_then(|mut st| {
+            st.query_map(params![uid, limit as i64], |r| Ok((r.get(0)?, r.get(1)?, KeyRef { owner: r.get(2)?, id: r.get(3)? })))
+                .map(|rows| rows.flatten().collect())
+        })
+        .unwrap_or_default()
+    }
+
+    /// Asked-for keys that whoever asked can't read anymore aren't theirs to have.
+    pub fn drop_wants(&self, channel_id: ChannelId, uid: &str) -> Result<()> {
+        self.conn.lock().execute("DELETE FROM key_wants WHERE channel_id = ?1 AND user_id = ?2", params![channel_id, uid])?;
+        Ok(())
+    }
+
+    /// A conversation's keys, when it's gone.
+    fn forget_keys(c: &Connection, channel_id: ChannelId) -> Result<()> {
+        c.execute("DELETE FROM key_shares WHERE channel_id = ?1", [channel_id])?;
+        c.execute("DELETE FROM key_wants WHERE channel_id = ?1", [channel_id])?;
+        Ok(())
+    }
+}
+
 pub fn user_is_member(db: &Db, id: &UserId) -> bool {
     db.get_user(id).map(|u| !u.banned).unwrap_or(false)
 }
@@ -2050,7 +2257,7 @@ mod scrub_tests {
         let edited = "the-old-version-giraffe-4410";
         let m1 = db.insert_message(ch, "u1", secret, None).unwrap();
         let m2 = db.insert_message(ch, "u1", edited, None).unwrap();
-        db.edit_message(m2.id, "fine now").unwrap();
+        db.edit_message(m2.id, "fine now", None).unwrap();
         db.delete_message(m1.id).unwrap();
         let mut found = Vec::new();
         for entry in std::fs::read_dir(&dir).unwrap() {

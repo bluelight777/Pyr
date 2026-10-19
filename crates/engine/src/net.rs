@@ -309,7 +309,8 @@ pub async fn file_get(conn: &quinn::Connection, id: &str) -> Result<(String, Vec
     if !reply.ok {
         bail!("{}", reply.error);
     }
-    if reply.size > MAX_ATTACHMENT_BYTES {
+    // (An encrypted picture has its tag on top.)
+    if reply.size > MAX_ATTACHMENT_BYTES + 16 {
         bail!("file too large");
     }
     let bytes = tokio::time::timeout(Duration::from_secs(120), recv.read_to_end(reply.size as usize + 1))

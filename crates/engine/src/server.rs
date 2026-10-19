@@ -173,6 +173,7 @@ async fn session(
 ) -> SessionEnd {
     let net::LoggedIn { conn, mut send, mut recv, ready } = li;
     apply_ready(shared, key, ready);
+    crate::sealed::start(shared, key);
     // (A new connection starts out not idle: if I am, it hears so now.)
     crate::idle::wake(shared);
     crate::verify::publish_vouches(shared, key);
@@ -223,6 +224,19 @@ async fn session(
                     shared.state.write().toast(reason.clone(), true);
                     break SessionEnd::Kicked(reason);
                 }
+                // Encrypted messages are opened before anything else sees them.
+                let mut f = f;
+                let missing = crate::sealed::on_frame(shared, key, &mut f.ev);
+                if !missing.is_empty() {
+                    fetch_missing(shared, key, missing);
+                }
+                match &f.ev {
+                    Event::KeyShares { channel_id, .. } => crate::sealed::reopen(shared, key, *channel_id),
+                    Event::KeysWanted { channel_id, by, keys } => {
+                        shared.rt.spawn(crate::sealed::give(shared.clone(), key.to_string(), *channel_id, by.clone(), keys.clone()));
+                    }
+                    _ => {}
+                }
                 if f.re != 0 {
                     if let Some(tx) = pending.remove(&f.re) {
                         let _ = tx.send(f.ev);
@@ -267,6 +281,19 @@ async fn session(
         let _ = tx.send(Event::error(ErrorCode::Internal, "connection lost"));
     }
     end
+}
+
+/// Keys messages came without: asked for (in the background), and what waited for them opened.
+fn fetch_missing(shared: &Arc<Shared>, key: &str, missing: Vec<(ChannelId, pyr_proto::sealed::KeyRef)>) {
+    let Some(h) = shared.servers.lock().get(key).cloned() else { return };
+    let mut by_channel: HashMap<ChannelId, Vec<pyr_proto::sealed::KeyRef>> = HashMap::new();
+    for (c, k) in missing {
+        by_channel.entry(c).or_default().push(k);
+    }
+    for (channel, refs) in by_channel {
+        let (shared, key, h) = (shared.clone(), key.to_string(), h.clone());
+        shared.rt.clone().spawn(async move { crate::sealed::fetch_keys(&shared, &key, &h, channel, refs).await });
+    }
 }
 
 fn sort_channels(v: &mut [Channel]) {
@@ -660,7 +687,7 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
                 sound = Some((session, channel_id, s, name, emoji, volume));
             }
             // (Handshakes are handled before this; vouches only come as replies.)
-            Event::Pong { .. } | Event::Ok | Event::Hello { .. } | Event::Ready { .. } | Event::Handshake { .. } | Event::Vouches { .. } => {}
+            Event::Pong { .. } | Event::Ok | Event::Hello { .. } | Event::Ready { .. } | Event::Handshake { .. } | Event::Vouches { .. } | Event::Readers { .. } | Event::KeyShares { .. } | Event::KeysWanted { .. } => {}
             Event::Error { message, .. } => toast = Some(message),
             Event::History { .. } | Event::InviteCreated { .. } | Event::Invites { .. } | Event::VoiceReady { .. } | Event::Kicked { .. } | Event::Bugs { .. } | Event::PluginSubmissions { .. } | Event::PluginSubmission { .. } | Event::SubmissionFile { .. } | Event::Submitted { .. } | Event::MySubmissions { .. } => {}
         }

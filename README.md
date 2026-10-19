@@ -57,8 +57,8 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
 
 - Add friends, accept or decline requests, and block people.
 - **Direct messages** with anyone you share a server with. Other members can't see them,
-  but they aren't end-to-end encrypted yet: they're stored on the server, so whoever runs it
-  could read them (end-to-end encrypted messages are on the way).
+  and like everything written in Pyr they're end-to-end encrypted (0.9): the server keeps
+  only ciphertext, so whoever runs it can't read them.
 - **Call friends**, like Discord: the call and video buttons at the top of a direct message,
   or **Call** when you right-click someone's name. It rings them for 30 seconds, about as long
   as Discord does (with Accept and Decline, a Windows notice and a flashing taskbar button if
@@ -692,8 +692,7 @@ through it. Renting is tested against a stand-in for DigitalOcean's API that fol
 documented requests and answers. **Not tested here: the real DigitalOcean API and
 payment** (the sandbox can't reach DigitalOcean), and real cloud firewalls.
 
-Known gaps: pictures are the only attachments (no other files yet), text messages aren't
-end-to-end encrypted, no message search or threads, no macOS app, screen sharing on Wayland
+Known gaps: pictures are the only attachments (no other files yet), no message search or threads, no macOS app, screen sharing on Wayland
 isn't implemented (X11 works), stream sound is Windows-only, software H.264 only (no GPU
 encoding yet), no simulcast, no mobile or web client. The roadmap is in
 [ARCHITECTURE.md](ARCHITECTURE.md#roadmap).

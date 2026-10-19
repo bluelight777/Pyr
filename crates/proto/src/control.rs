@@ -334,6 +334,12 @@ pub const INVITES_FEATURE: &str = "invites";
 /// play chips, against each other and bots, dealt by the server with a shuffle every player's
 /// Pyr adds to and can check (see `pyr_poker`).
 pub const POKER_FEATURE: &str = "poker";
+/// End-to-end encrypted messages ([`crate::sealed`], 0.9): everything written in channels,
+/// direct messages and groups is sent `sealed`, with its pictures as [`FileKind::Sealed`]
+/// uploads; the server keeps message keys (`PublishMessageKey`), tells who can read where
+/// (`ChannelReaders`), and keeps and passes on the conversation keys people give each other
+/// (`ShareKeys`, `GetKeys`, `KeyShares`, `KeysWanted`). It takes no unencrypted messages.
+pub const SEALED_FEATURE: &str = "sealed_messages";
 /// In `Login::caps`: this app knows group conversations ([`GROUPS_FEATURE`]).
 pub const GROUPS_CAP: &str = "groups";
 /// In `Login::caps`: this app adjusts its camera and screen share to its viewers'
@@ -757,6 +763,10 @@ pub enum FileKind {
     Avatar,
     /// A soundboard sound ([`SOUNDBOARD_FEATURE`]): see [`crate::sound`].
     Sound,
+    /// A picture for an end-to-end encrypted message ([`SEALED_FEATURE`]): ciphertext, which
+    /// the server keeps as it is (only the Pyrs that open the message know what it is). Sent
+    /// like an attachment.
+    Sealed,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1050,6 +1060,30 @@ pub struct Message {
     pub reactions: Vec<Reaction>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<Attachment>,
+    /// End-to-end encrypted ([`SEALED_FEATURE`]): `content` is then only a note for older
+    /// Pyrs, and the attachments are ciphertext; the app opens it into `content` and
+    /// `attachments` (see [`Message::lock`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sealed: Option<crate::sealed::Sealed>,
+    /// What the app made of `sealed` (never sent).
+    #[serde(skip)]
+    pub lock: Lock,
+}
+
+/// Whether a message was encrypted, and whether it could be opened (the app's, never sent).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Lock {
+    /// Not encrypted (written before the server encrypted messages, or on an older server).
+    #[default]
+    Plain,
+    /// Encrypted, and opened.
+    Open,
+    /// Encrypted with a key this Pyr hasn't been given (yet).
+    Waiting,
+    /// Not signed by its author as it is: someone changed it on the way.
+    Forged,
+    /// Signed, but it doesn't open.
+    Damaged,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1177,10 +1211,18 @@ pub enum Request {
         /// Files uploaded with a file stream first (needs [`FILES_FEATURE`]).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attachments: Vec<String>,
+        /// The message, end-to-end encrypted ([`SEALED_FEATURE`]; `content` is then empty,
+        /// and the attachments are [`FileKind::Sealed`] uploads).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sealed: Option<crate::sealed::Sealed>,
     },
     EditMessage {
         message_id: MessageId,
+        #[serde(default)]
         content: String,
+        /// The new text, end-to-end encrypted ([`SEALED_FEATURE`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sealed: Option<crate::sealed::Sealed>,
     },
     DeleteMessage {
         message_id: MessageId,
@@ -1590,6 +1632,30 @@ pub enum Request {
     /// The vouches for me here, made by the people who made sure it's me
     /// ([`VOUCHES_FOR_ME_FEATURE`]): answered with `Vouches`.
     GetVouchesForMe {},
+    /// My message key ([`SEALED_FEATURE`]), so others can give me conversation keys.
+    PublishMessageKey {
+        key: crate::sealed::MessageKey,
+    },
+    /// Who can read a conversation, with their message keys ([`SEALED_FEATURE`]): answered
+    /// with `Readers`, a page at a time (from after `after`).
+    ChannelReaders {
+        channel_id: ChannelId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after: Option<UserId>,
+    },
+    /// Give conversation keys to people who can read there ([`SEALED_FEATURE`]): each is
+    /// passed on to its Pyrs that are online (`KeyShares`) and kept for when they ask.
+    ShareKeys {
+        channel_id: ChannelId,
+        shares: Vec<crate::sealed::NewShare>,
+    },
+    /// The conversation keys given to me ([`SEALED_FEATURE`]): answered with `KeyShares`.
+    /// The ones nobody gave me yet are asked for: the Pyrs that have them hear of it
+    /// (`KeysWanted`), now or when they're next here.
+    GetKeys {
+        channel_id: ChannelId,
+        keys: Vec<crate::sealed::KeyRef>,
+    },
     /// A request this server doesn't know (from a newer app).
     #[serde(other)]
     Unknown,
@@ -1868,6 +1934,28 @@ pub enum Event {
     /// The vouches asked for (`GetVouches`).
     Vouches {
         vouches: Vec<Vouch>,
+    },
+    /// Who can read a conversation (`ChannelReaders`): with their message keys, and those
+    /// without one yet (their Pyr hasn't published one: older, or not here since).
+    Readers {
+        channel_id: ChannelId,
+        readers: Vec<crate::sealed::MessageKey>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        keyless: Vec<UserId>,
+        /// More after the last of these (ask again with `after`).
+        #[serde(default)]
+        more: bool,
+    },
+    /// Conversation keys given to me (`GetKeys`, or just given).
+    KeyShares {
+        channel_id: ChannelId,
+        shares: Vec<crate::sealed::KeyShare>,
+    },
+    /// Someone who can read a conversation asks for keys I have (`GetKeys`).
+    KeysWanted {
+        channel_id: ChannelId,
+        by: crate::sealed::MessageKey,
+        keys: Vec<crate::sealed::KeyRef>,
     },
     /// An event this app doesn't know (from a newer server); ignored.
     #[serde(other)]

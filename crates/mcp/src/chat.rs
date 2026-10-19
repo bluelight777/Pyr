@@ -329,7 +329,12 @@ fn show(s: &ServerView, m: &Message, others: &[Message], me: &str) -> String {
         }
     }
     out.push_str(": ");
-    out.push_str(&readable(&m.content).replace('\n', "\n    "));
+    match m.lock {
+        Lock::Waiting => out.push_str("(encrypted: Claude hasn't been given its key yet)"),
+        Lock::Forged => out.push_str("(encrypted, and not as its author wrote it: changed on the way, so not shown)"),
+        Lock::Damaged => out.push_str("(encrypted, and it doesn't open)"),
+        Lock::Plain | Lock::Open => out.push_str(&readable(&m.content).replace('\n', "\n    ")),
+    }
     for a in &m.attachments {
         out.push_str(&format!(" [image: {}]", a.name));
     }
@@ -419,8 +424,8 @@ fn read_messages(engine: &Engine, args: &Value) -> Result<String> {
     // only what's been read already).
     while got.len() < limit {
         let want = (limit - got.len()).min(MAX_READ as usize) as u32;
-        let ev = engine.request_wait(&key, Request::FetchHistory { channel_id: ch.id, before, limit: want }, WAIT)?;
-        let Event::History { mut messages, complete: done, .. } = ev else { bail!("The server answered something else.") };
+        // (Opened: end-to-end encrypted messages are decrypted by the engine.)
+        let (mut messages, done) = engine.history_wait(&key, ch.id, before, want, WAIT)?;
         messages.sort_by_key(|m| m.id);
         let oldest = messages.first().map(|m| m.id);
         let reached_mark = mark.is_some_and(|mk| oldest.is_some_and(|o| o <= mk + 1));
@@ -480,9 +485,9 @@ fn send_message(engine: &Engine, args: &Value) -> Result<String> {
         bail!("Claude can't send messages in #{} (only some roles can).", ch.name);
     }
     let reply_to = int_arg(args, "reply_to");
-    let nonce = pyr_proto::b64::encode(&pyr_proto::crypto::random_bytes::<9>());
     let sent_at = pyr_proto::now_ms();
-    engine.request_wait(&key, Request::SendMessage { channel_id: ch.id, content: text.clone(), reply_to, nonce, attachments: Vec::new() }, WAIT)?;
+    // (Encrypted by the engine where the server encrypts messages.)
+    engine.send_wait(&key, ch.id, &text, reply_to, WAIT)?;
     // Its id, once it's back from the server.
     let until = Instant::now() + Duration::from_secs(3);
     let id = loop {
@@ -536,7 +541,7 @@ fn edit_message(engine: &Engine, args: &Value) -> Result<String> {
     if text.chars().count() > MAX_MESSAGE_CHARS {
         bail!("That's {} characters: a message can have up to {MAX_MESSAGE_CHARS}.", text.chars().count());
     }
-    engine.request_wait(&key, Request::EditMessage { message_id, content: text }, WAIT)?;
+    engine.edit_wait(&key, message_id, &text, WAIT)?;
     Ok(format!("Edited message [{message_id}]."))
 }
 
@@ -545,11 +550,8 @@ fn delete_message(engine: &Engine, args: &Value) -> Result<String> {
     let (ch, _) = find_channel(engine, &key, need_text(args, "channel")?)?;
     let message_id = int_arg(args, "message_id").ok_or_else(|| anyhow!("`message_id` is missing."))?;
     // Claude's own messages only, even with a role that could delete anyone's.
-    let ev = engine.request_wait(&key, Request::FetchHistory { channel_id: ch.id, before: Some(message_id + 1), limit: 1 }, WAIT)?;
-    let author = match ev {
-        Event::History { messages, .. } => messages.into_iter().find(|m| m.id == message_id).map(|m| m.author),
-        _ => None,
-    };
+    let (messages, _) = engine.history_wait(&key, ch.id, Some(message_id + 1), 1, WAIT)?;
+    let author = messages.into_iter().find(|m| m.id == message_id).map(|m| m.author);
     let me = engine.state().my_uid.clone();
     match author {
         None => bail!("There's no message [{message_id}] in #{}.", ch.name),

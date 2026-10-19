@@ -552,7 +552,7 @@ impl PyrApp {
             self.ui.reply = Some((m.id, s.member_name(&m.author)));
             ui.close();
         }
-        if mine && ui.button("Edit message").clicked() {
+        if mine && editable(m) && ui.button("Edit message").clicked() {
             self.ui.editing = Some((m.id, m.content.clone()));
             ui.close();
         }
@@ -764,6 +764,16 @@ impl PyrApp {
                             self.ui.editing = None;
                         }
                     }
+                    None if locked_note(m).is_some() => {
+                        // End-to-end encrypted, and not opened (yet).
+                        let (note, bad) = locked_note(m).unwrap_or_default();
+                        let color = if bad { theme::LIVE() } else { theme::DIM() };
+                        ui.horizontal(|ui| {
+                            let (r, _) = ui.allocate_exact_size(vec2(12.0, 14.0), egui::Sense::hover());
+                            icons::lock(ui.painter(), r, color);
+                            ui.label(RichText::new(note).italics().size(13.0).color(color));
+                        });
+                    }
                     None => {
                         // The server's own GIFs it sends show as pictures (their tokens left out
                         // of the text).
@@ -865,7 +875,7 @@ impl PyrApp {
             if icon_button(&mut child, 28.0, "Reply", false, |p, r, c| icons::reply(p, r, c)).clicked() {
                 self.ui.reply = Some((m.id, name.clone()));
             }
-            if mine && icon_button(&mut child, 28.0, "Edit", false, |p, r, c| icons::pencil(p, r, c)).clicked() {
+            if mine && editable(m) && icon_button(&mut child, 28.0, "Edit", false, |p, r, c| icons::pencil(p, r, c)).clicked() {
                 self.ui.editing = Some((m.id, m.content.clone()));
             }
             if mine || admin {
@@ -1198,6 +1208,9 @@ impl PyrApp {
                 let name = crate::emoji::without_emoji(&ch.name);
                 let hint = if !connected {
                     "Reconnecting…".to_string()
+                } else if !s.has(pyr_proto::control::SEALED_FEATURE) {
+                    // (Said where it's typed: what's sent here isn't end-to-end encrypted.)
+                    "Not end-to-end encrypted: this server runs an older Pyr".to_string()
                 } else if name.is_empty() {
                     "Send a message".to_string()
                 } else if ch.kind == ChannelKind::Voice || ch.name.starts_with('@') || s.group(ch.id).is_some() {
@@ -2915,6 +2928,8 @@ mod delete_tests {
             reply_to,
             reactions: Vec::new(),
             attachments: Vec::new(),
+            sealed: None,
+            lock: Default::default(),
         }
     }
 
@@ -2991,5 +3006,21 @@ mod emoji_text_tests {
         assert_eq!(gif_query("/giphy dogs"), Some(("dogs".into(), Some(Provider::Giphy))));
         assert_eq!(gif_query("/gif dogs"), Some(("dogs".into(), None)));
         assert_eq!(gif_query("hello /klipy"), None);
+    }
+}
+
+/// Whether a message can be edited here: not one that's encrypted and wasn't opened.
+fn editable(m: &Message) -> bool {
+    matches!(m.lock, pyr_proto::control::Lock::Plain | pyr_proto::control::Lock::Open)
+}
+
+/// What an encrypted message that wasn't opened shows instead, and whether it's a warning.
+fn locked_note(m: &Message) -> Option<(&'static str, bool)> {
+    use pyr_proto::control::Lock;
+    match m.lock {
+        Lock::Plain | Lock::Open => None,
+        Lock::Waiting => Some(("Encrypted. Waiting for its key from someone who has it…", false)),
+        Lock::Forged => Some(("Encrypted, but not as its author wrote it: changed on the way, so it isn't shown.", true)),
+        Lock::Damaged => Some(("Encrypted, and it doesn't open.", true)),
     }
 }

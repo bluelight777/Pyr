@@ -93,8 +93,47 @@ SFrame + MLS (Discord's DAVE and Signal's group calls do similar things):
    left to check: their session keys are signed with identities you checked, and media
    keys only go to peers whose signatures verify. The call header says so instead.
 
-Not covered: text chat is not end-to-end encrypted (the server stores it, like Discord);
-the server sees who talks to whom and when (metadata) and packet sizes.
+Not covered here: the server sees who talks to whom and when (metadata) and packet sizes.
+Text is covered below.
+
+## End-to-end encrypted messages (0.9)
+
+Everything written in channels, direct messages and groups, and every picture sent with it,
+is encrypted by the sender's Pyr and opened only by the Pyrs of people who can read there
+(`pyr_proto::sealed`, `pyr_engine::sealed`). The server keeps ciphertext, and takes no
+unencrypted message (`SEALED_FEATURE`); older Pyrs see a note to update.
+
+1. **Message keys.** Each identity has a long-term X25519 key derived from its seed (the
+   same on every PC with that identity), published signed by the identity
+   (`PublishMessageKey`). The server can't swap in its own: the signature wouldn't verify.
+2. **Conversation keys.** Each sender writes with a random 32-byte key of their own per
+   conversation, made fresh each time their Pyr starts and whenever anyone it was given to
+   can no longer read there (left, removed, lost the role). It's given to everyone who can
+   read there, the sender's own identity included, wrapped for each with X25519 between the
+   giver's and receiver's message keys → HKDF → ChaCha20-Poly1305 (`ShareKeys`). The server
+   keeps these wrapped keys and passes them on (`KeyShares`); it can't open them.
+3. **Messages.** The text and each picture's name, size and own key are encrypted with
+   ChaCha20-Poly1305 under the sender's conversation key and signed by the sender's identity
+   together with the conversation, the key's id and a commitment to the key. So the server
+   can't read, change or move a message, and nobody can hand out a different key that opens
+   it to something else. Pictures are encrypted with their own random key before upload
+   (`FileKind::Sealed`); the receiving Pyr checks the result is a picture it shows.
+4. **History.** Someone who can read a conversation but wasn't given a key (they joined
+   later, or their Pyr was older) asks for it (`GetKeys`); the server passes the asking to a
+   few Pyrs online that have it (`KeysWanted`, or when they're next here), and each gives it
+   only if it agrees, from what it knows of the conversation, that the asker can read there
+   (exactly the two people of a direct message, a group's members, a private channel's roles).
+5. **Nothing on disk.** Keys stay in memory; a Pyr that starts again fetches the ones given
+   to it from the server and opens them with its identity.
+
+What the server still sees: who wrote when and where, which message a reply answers,
+reactions, how long messages and pictures are, and who can read where. It decides who can
+read (as before), and whoever it lets in gets the keys: a server owner who adds a member, or
+gives someone a role, lets them read what came before. Messages from before 0.9 stay as
+they were stored (not encrypted). There's no forward secrecy against a stolen identity: with
+someone's identity file, their history can be fetched and opened, as it could be read
+before. Third parties: GIF links and pyr.gg invite cards in messages are fetched by the
+reading Pyrs, as before.
 
 ## Making sure it's them (0.7.6)
 
@@ -489,7 +528,7 @@ In rough priority order:
    (ScreenCaptureKit); stream sound on Linux (PipeWire) and macOS.
 7. Opus 1.5/1.6 neural features (deep PLC, NoLACE) and DRED once its format is final;
    RED (redundant audio) under heavy loss.
-8. MLS (`openmls`) for key management in big calls; optional E2EE text channels.
+8. MLS (`openmls`) for key management in big calls and big encrypted conversations.
 9. Bots as members; attachments beyond pictures, threads, search. (Plugins came in 0.7.2,
    Rust only: the kit is a Rust crate, and plugins come as Rust source that's built from it.)
 10. A web client over WebTransport + WebCodecs, then mobile.

@@ -38,6 +38,7 @@ pub mod plugin_source;
 pub mod plugins;
 pub mod poker;
 pub mod poker_sfx;
+pub mod sealed;
 pub mod server;
 pub mod sfx;
 pub mod skins;
@@ -187,6 +188,8 @@ pub struct Shared {
     pub idle_thread: Mutex<Option<std::thread::Thread>>,
     /// Making sure of people: handshakes under way (see `verify`).
     pub(crate) verify: Mutex<verify::Book>,
+    /// End-to-end encrypted messages: keys (see `sealed`).
+    pub(crate) sealed: Mutex<sealed::Book>,
 }
 
 /// What sound files are, to the file streams.
@@ -700,6 +703,7 @@ impl Engine {
         let config_dir = opts.config_dir.clone().unwrap_or_else(|| config::config_dir(opts.profile.as_deref()));
         std::fs::create_dir_all(&config_dir)?;
         let identity = config::load_or_create_identity(&config_dir)?;
+        let sealed_book = sealed::Book::new(&identity);
         let mut cfg = config::load_config(&config_dir);
         if cfg.display_name.is_empty() {
             cfg.display_name = std::env::var("USERNAME")
@@ -814,6 +818,7 @@ impl Engine {
             last_activity_ms: std::sync::atomic::AtomicI64::new(pyr_proto::now_ms()),
             idle_thread: Mutex::new(None),
             verify: Mutex::new(verify::Book::default()),
+            sealed: Mutex::new(sealed_book),
         });
         // (A bot isn't at a keyboard: it's never idle.)
         if !opts.bot {
@@ -1215,32 +1220,9 @@ impl Engine {
                 drop(st);
                 (shared.repaint)();
             };
-            let mut ids = Vec::new();
-            if !files.is_empty() {
-                let Some(conn) = h.connection() else {
-                    set(&shared, None, Some("not connected".into()));
-                    return;
-                };
-                for (i, (name, bytes)) in files.iter().enumerate() {
-                    set(&shared, Some(format!("Uploading {} of {}…", i + 1, files.len())), None);
-                    let mime = pyr_proto::control::sniff_image(bytes).unwrap_or("application/octet-stream");
-                    match net::file_put(&conn, FileKind::Attachment, name, mime, bytes).await {
-                        Ok(id) => {
-                            // We have the bytes already: no need to download our own upload.
-                            shared.files.lock().insert(id.clone(), bytes.clone());
-                            ids.push(id);
-                        }
-                        Err(e) => {
-                            set(&shared, None, Some(format!("Couldn't upload {name}: {e:#}")));
-                            return;
-                        }
-                    }
-                }
-                set(&shared, None, None);
-            }
-            let req = Request::SendMessage { channel_id, content, reply_to, nonce: nonce.clone(), attachments: ids };
-            if let Ok(Event::Error { message, .. }) = h.request(req).await {
-                set(&shared, None, Some(message));
+            let progress = |p: Option<String>| set(&shared, p, None);
+            if let Err(e) = sealed::send(&shared, &key, &h, channel_id, content, reply_to, nonce.clone(), files, &progress).await {
+                set(&shared, None, Some(e));
             }
         });
         (self.shared.repaint)();
@@ -1259,9 +1241,10 @@ impl Engine {
         let shared = self.shared.clone();
         let id = id.to_string();
         self.shared.rt.spawn(async move {
-            match net::file_get(&conn, &id).await {
-                Ok((_, bytes)) => shared.files.lock().insert(id, Arc::new(bytes)),
-                Err(e) => shared.files.lock().set_failed(&id, format!("{e:#}")),
+            // (An encrypted picture is opened, and checked to be one.)
+            match net::file_get(&conn, &id).await.map_err(|e| format!("{e:#}")).and_then(|(_, bytes)| sealed::open_download(&shared, &id, bytes)) {
+                Ok(bytes) => shared.files.lock().insert(id, Arc::new(bytes)),
+                Err(e) => shared.files.lock().set_failed(&id, e),
             }
             (shared.repaint)();
         });
@@ -1692,7 +1675,49 @@ impl Engine {
     }
 
     pub fn edit_message(&self, key: &str, message_id: MessageId, content: &str) {
-        self.request(key, Request::EditMessage { message_id, content: content.to_string() });
+        let Some(h) = self.handle(key) else { return };
+        let (shared, key, content) = (self.shared.clone(), key.to_string(), content.trim().to_string());
+        self.shared.rt.spawn(async move {
+            if let Err(e) = sealed::edit(&shared, &key, &h, message_id, content).await {
+                shared.state.write().refused(format!("Couldn't change that message: {e}"));
+                (shared.repaint)();
+            }
+        });
+    }
+
+    /// Sends a message and waits until the server has it (encrypted where the server
+    /// encrypts): for bots, like the Claude connector. Not for the app's own thread.
+    pub fn send_wait(&self, key: &str, channel_id: ChannelId, text: &str, reply_to: Option<MessageId>, wait: std::time::Duration) -> Result<()> {
+        let h = self.handle(key).ok_or_else(|| anyhow!("Not connected to that server."))?;
+        let nonce = pyr_proto::b64::encode(&crypto::random_bytes::<9>());
+        let shared = self.shared.clone();
+        self.shared
+            .rt
+            .block_on(async { tokio::time::timeout(wait, sealed::send(&shared, key, &h, channel_id, text.trim().to_string(), reply_to, nonce, Vec::new(), &|_| {})).await })
+            .map_err(|_| anyhow!("The server didn't answer in time."))?
+            .map_err(|e| anyhow!(e))
+    }
+
+    /// Changes a message of mine and waits until the server has it (for bots).
+    pub fn edit_wait(&self, key: &str, message_id: MessageId, text: &str, wait: std::time::Duration) -> Result<()> {
+        let h = self.handle(key).ok_or_else(|| anyhow!("Not connected to that server."))?;
+        let shared = self.shared.clone();
+        self.shared
+            .rt
+            .block_on(async { tokio::time::timeout(wait, sealed::edit(&shared, key, &h, message_id, text.trim().to_string())).await })
+            .map_err(|_| anyhow!("The server didn't answer in time."))?
+            .map_err(|e| anyhow!(e))
+    }
+
+    /// A page of history, opened (for bots): newest last, and whether there's nothing older.
+    pub fn history_wait(&self, key: &str, channel_id: ChannelId, before: Option<MessageId>, limit: u32, wait: std::time::Duration) -> Result<(Vec<Message>, bool)> {
+        let h = self.handle(key).ok_or_else(|| anyhow!("Not connected to that server."))?;
+        let shared = self.shared.clone();
+        self.shared
+            .rt
+            .block_on(async { tokio::time::timeout(wait, sealed::history(&shared, key, &h, channel_id, before, limit, wait / 2)).await })
+            .map_err(|_| anyhow!("The server didn't answer in time."))?
+            .map_err(|e| anyhow!(e))
     }
 
     pub fn delete_message(&self, key: &str, message_id: MessageId) {
@@ -1762,6 +1787,8 @@ impl Engine {
                 }
             }
             drop(st);
+            // (Keys that came while the page was on its way.)
+            sealed::reopen(&shared, &k, channel_id);
             // Opened before its messages arrived: they're read now that you can see them.
             if let Some((id, dm)) = newest.filter(|_| shared.looking_at(&k, channel_id)) {
                 shared.mark_read(&k, channel_id, id, dm);

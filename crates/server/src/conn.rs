@@ -1,5 +1,6 @@
 //! One client connection: login handshake, control requests, and media ingest.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
@@ -8,7 +9,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use bytes::BytesMut;
 use pyr_proto::control::*;
 use pyr_proto::media::{self, AudioHeader, VideoHeader, track};
-use pyr_proto::{MAX_MESSAGE_CHARS, MAX_VIDEO_FRAME, PROTOCOL_VERSION, crypto, framing};
+use pyr_proto::sealed::{KeyRef, KeyShare, MAX_KEYS_ASKED, MAX_SHARES, NewShare, Sealed};
+use pyr_proto::{MAX_VIDEO_FRAME, PROTOCOL_VERSION, crypto, framing};
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
@@ -40,6 +42,10 @@ const HANDSHAKE_BURST: f64 = 20.0;
 const VOUCHES_SENT_MAX: usize = 2000;
 /// History pages are kept well under the frame limit (long messages add up).
 const HISTORY_PAGE_BYTES: usize = 700 * 1024;
+/// Who can read a conversation, at most this many at a time (`ChannelReaders`).
+const READERS_PAGE: usize = 2000;
+/// How an encrypted picture's file is listed (the server doesn't know what it is).
+const SEALED_MIME: &str = "application/octet-stream";
 /// Video one person may send, in bytes per second and burst (Pyr's sharpest screen share
 /// plus a camera is about 1.5 MB/s): frames past this are dropped, not passed on to
 /// everyone watching.
@@ -449,7 +455,7 @@ async fn file_loop(hub: Arc<Hub>, conn: quinn::Connection, uid: String) {
 /// message can't be found, nobody gets it: never fail open.)
 fn hidden_from(hub: &Hub, uid: &str, row: &crate::db::FileRow) -> bool {
     match row.message_id {
-        None => row.kind == FileKind::Attachment && row.owner != uid && !hub.db.is_gif(&row.id),
+        None => matches!(row.kind, FileKind::Attachment | FileKind::Sealed) && row.owner != uid && !hub.db.is_gif(&row.id),
         Some(m) => match hub.db.get_message(m) {
             None => true,
             Some(msg) => match hub.db.private_members(msg.channel_id) {
@@ -493,6 +499,8 @@ async fn file_stream(hub: &Hub, uid: &str, mut send: quinn::SendStream, mut recv
         FileRequest::Put { kind, name, mime: _, size } => {
             let limit = match kind {
                 FileKind::Attachment => MAX_ATTACHMENT_BYTES,
+                // (Its tag on top.)
+                FileKind::Sealed => MAX_ATTACHMENT_BYTES + 16,
                 FileKind::Avatar => MAX_AVATAR_BYTES,
                 FileKind::Sound => pyr_proto::sound::MAX_BYTES as u64,
             };
@@ -523,6 +531,31 @@ async fn file_stream(hub: &Hub, uid: &str, mut send: quinn::SendStream, mut recv
                 let _ = send.finish();
                 return Ok(());
             }
+            if kind == FileKind::Sealed {
+                // Ciphertext: kept as it is, under a random id; what it is, only the Pyrs that
+                // open its message know (and they check it's a picture).
+                let id: String = crypto::random_bytes::<16>().iter().map(|b| format!("{b:02x}")).collect();
+                let path = hub.file_path(&id).ok_or_else(|| anyhow!("bad id"))?;
+                let tmp = path.with_extension("part");
+                tokio::fs::write(&tmp, &bytes).await?;
+                tokio::fs::rename(&tmp, &path).await?;
+                hub.db.insert_file(&crate::db::FileRow {
+                    id: id.clone(),
+                    owner: uid.to_string(),
+                    kind,
+                    name: String::new(),
+                    mime: SEALED_MIME.to_string(),
+                    size,
+                    width: 0,
+                    height: 0,
+                    message_id: None,
+                })?;
+                slot.stored();
+                send.write_all(&reply(FileReply { ok: true, id, mime: SEALED_MIME.to_string(), size, error: String::new() })).await?;
+                let _ = send.finish();
+                let _ = timeout(Duration::from_secs(10), send.stopped()).await;
+                return Ok(());
+            }
             let Some(mime) = sniff_image(&bytes) else {
                 send.write_all(&fail("Only PNG, JPEG, GIF and WebP images can be sent.")).await?;
                 let _ = send.finish();
@@ -541,7 +574,7 @@ async fn file_stream(hub: &Hub, uid: &str, mut send: quinn::SendStream, mut recv
                 // server already has its current one.
                 FileKind::Avatar => avatar_id(uid, &bytes),
                 // (Sounds are handled by `sound_put` before this.)
-                FileKind::Attachment | FileKind::Sound => crypto::random_bytes::<16>().iter().map(|b| format!("{b:02x}")).collect(),
+                FileKind::Attachment | FileKind::Sound | FileKind::Sealed => crypto::random_bytes::<16>().iter().map(|b| format!("{b:02x}")).collect(),
             };
             let path = hub.file_path(&id).ok_or_else(|| anyhow!("bad id"))?;
             let tmp = path.with_extension("part");
@@ -687,6 +720,9 @@ fn cost(req: &Request) -> f64 {
         Request::Ping { .. } | Request::Typing { .. } | Request::VoiceState { .. } => 0.5,
         Request::FetchHistory { .. } | Request::GetVouches { .. } | Request::GetVouchesForMe {} | Request::ListInvites {} => 3.0,
         Request::E2eeKeys { keys, .. } => 1.0 + keys.len() as f64 / 16.0,
+        Request::ShareKeys { shares, .. } => 1.0 + shares.len() as f64 / 50.0,
+        Request::GetKeys { keys, .. } => 1.0 + keys.len() as f64 / 20.0,
+        Request::ChannelReaders { .. } => 2.0,
         Request::CreateInvite { .. }
         | Request::CreateBotInvite { .. }
         | Request::RevokeInvite { .. }
@@ -739,13 +775,14 @@ fn bad<T>(msg: &str) -> Result<T, (ErrorCode, String)> {
     Err((ErrorCode::BadRequest, msg.to_string()))
 }
 
-fn clean_content(raw: &str) -> Option<String> {
-    let s = raw.trim_matches(|c: char| c.is_whitespace());
-    if s.is_empty() || s.chars().count() > MAX_MESSAGE_CHARS {
-        return None;
+/// An encrypted message as the server takes it: well formed, and with its author's own key
+/// (what's inside only the Pyrs that open it can check).
+fn check_sealed(sealed: Option<Sealed>, uid: &str) -> Result<Sealed, (ErrorCode, String)> {
+    match sealed {
+        None => Err((ErrorCode::BadRequest, "Messages here are end-to-end encrypted: update Pyr to send them.".into())),
+        Some(s) if !s.well_formed() || s.key.owner != uid => bad("that encrypted message isn't well formed"),
+        Some(s) => Ok(s),
     }
-    // Strip control characters except newlines and tabs.
-    Some(s.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').collect())
 }
 
 impl Ctx<'_> {
@@ -978,7 +1015,7 @@ impl Ctx<'_> {
             Request::Login { .. } => bad("already logged in"),
             Request::Ping { t } => Ok(Event::Pong { t }),
 
-            Request::SendMessage { channel_id, content, reply_to, nonce, attachments } => {
+            Request::SendMessage { channel_id, content: _, reply_to, nonce, attachments, sealed } => {
                 self.take_message_token()?;
                 if nonce.len() > MAX_NONCE_LEN {
                     return bad("bad message nonce");
@@ -986,30 +1023,26 @@ impl Ctx<'_> {
                 if attachments.len() > MAX_ATTACHMENTS_PER_MESSAGE {
                     return bad("too many attachments");
                 }
+                // Messages are end-to-end encrypted here: none are taken in the clear.
+                let sealed = check_sealed(sealed, &self.uid)?;
                 for id in &attachments {
                     match db.file(id) {
-                        // (Not one of the server's GIFs: its message being deleted would take it.)
-                        Some(f) if f.owner == self.uid && f.kind == FileKind::Attachment && f.message_id.is_none() && !db.is_gif(id) => {}
+                        Some(f) if f.owner == self.uid && f.kind == FileKind::Sealed && f.message_id.is_none() => {}
                         _ => return bad("an attachment is missing; try sending it again"),
                     }
                 }
-                let content = match clean_content(&content) {
-                    Some(c) => c,
-                    None if !attachments.is_empty() && content.trim().is_empty() => String::new(),
-                    None => return bad("message is empty or too long"),
-                };
                 self.can_post(channel_id)?;
                 self.not_blocked_in(channel_id)?;
                 let reply_to = reply_to.filter(|id| db.get_message(*id).map(|m| m.channel_id == channel_id).unwrap_or(false));
                 let message = db
-                    .insert_message_with(channel_id, &self.uid, &content, reply_to, &attachments)
+                    .insert_message_with(channel_id, &self.uid, "", reply_to, &attachments, Some(&sealed))
                     .map_err(|e| (ErrorCode::Internal, e.to_string()))?;
                 hub.broadcast_in(channel_id, Event::MessageCreated { message, nonce });
                 Ok(Event::Ok)
             }
-            Request::EditMessage { message_id, content } => {
+            Request::EditMessage { message_id, content: _, sealed } => {
                 self.take_message_token()?;
-                let Some(content) = clean_content(&content) else { return bad("message is empty or too long") };
+                let sealed = check_sealed(sealed, &self.uid)?;
                 let Some(m) = db.get_message(message_id) else { return Err((ErrorCode::NotFound, "gone".into())) };
                 if m.author != self.uid {
                     return Err((ErrorCode::Forbidden, "You can only edit your own messages.".into()));
@@ -1017,7 +1050,7 @@ impl Ctx<'_> {
                 // (Not in a group you've left.)
                 self.can_see(m.channel_id)?;
                 self.not_blocked_in(m.channel_id)?;
-                if let Ok(Some(message)) = db.edit_message(message_id, &content) {
+                if let Ok(Some(message)) = db.edit_message(message_id, "", Some(&sealed)) {
                     hub.broadcast_in(message.channel_id, Event::MessageUpdated { message });
                 }
                 Ok(Event::Ok)
@@ -1067,6 +1100,79 @@ impl Ctx<'_> {
                 }
                 Ok(Event::Ok)
             }
+            Request::PublishMessageKey { key } => {
+                if key.user != self.uid || key.verified().is_none() {
+                    return bad("that isn't your message key");
+                }
+                db.set_message_key(&key).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                // Ready for keys: what others asked for that this Pyr has.
+                hub.send_pending_wants(&self.uid, self.conn_id);
+                Ok(Event::Ok)
+            }
+            Request::ChannelReaders { channel_id, after } => {
+                self.can_see(channel_id)?;
+                let mut all = hub.readers(channel_id).unwrap_or_default();
+                all.sort();
+                all.dedup();
+                if let Some(after) = after {
+                    all.retain(|u| *u > after);
+                }
+                let more = all.len() > READERS_PAGE;
+                all.truncate(READERS_PAGE);
+                let mut keys = db.message_keys(&all);
+                let (mut readers, mut keyless) = (Vec::new(), Vec::new());
+                for u in all {
+                    match keys.remove(&u) {
+                        Some(k) => readers.push(k),
+                        None => keyless.push(u),
+                    }
+                }
+                Ok(Event::Readers { channel_id, readers, keyless, more })
+            }
+            Request::ShareKeys { channel_id, shares } => {
+                self.can_see(channel_id)?;
+                if shares.len() > MAX_SHARES || !shares.iter().all(|s| s.well_formed()) {
+                    return bad("bad key shares");
+                }
+                // (Receivers need my message key to open them.)
+                let Some(mine) = db.message_keys(std::slice::from_ref(&self.uid)).remove(&self.uid) else {
+                    return bad("publish your message key first");
+                };
+                let readers: HashSet<UserId> = hub.readers(channel_id).unwrap_or_default().into_iter().collect();
+                // Only to people who can read here, and only keys that are mine or I was given.
+                let mut known: HashMap<KeyRef, bool> = HashMap::new();
+                let ok: Vec<NewShare> = shares
+                    .into_iter()
+                    .filter(|s| readers.contains(&s.to))
+                    .filter(|s| *known.entry(s.key.clone()).or_insert_with(|| db.has_key(channel_id, &s.key, &self.uid)))
+                    .collect();
+                let kept = db.add_shares(channel_id, &self.uid, &ok).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                let mut to: HashMap<UserId, Vec<KeyShare>> = HashMap::new();
+                for s in kept {
+                    to.entry(s.to.clone()).or_default().push(KeyShare { key: s.key, from: mine.clone(), nonce: s.nonce, ct: s.ct });
+                }
+                for (uid, shares) in to {
+                    hub.send_to_user(&uid, Event::KeyShares { channel_id, shares });
+                }
+                Ok(Event::Ok)
+            }
+            Request::GetKeys { channel_id, keys } => {
+                self.can_see(channel_id)?;
+                if keys.len() > MAX_KEYS_ASKED || !keys.iter().all(|k| k.well_formed()) {
+                    return bad("bad keys");
+                }
+                let shares = db.shares_for(channel_id, &self.uid, &keys);
+                let mut missing: Vec<KeyRef> = keys.into_iter().filter(|k| !shares.iter().any(|s| &s.key == k)).collect();
+                missing.sort();
+                missing.dedup();
+                if !missing.is_empty() {
+                    db.add_wants(channel_id, &self.uid, &missing).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                    if let Some(by) = db.message_keys(std::slice::from_ref(&self.uid)).remove(&self.uid) {
+                        hub.ask_holders(channel_id, &by, &missing);
+                    }
+                }
+                Ok(Event::KeyShares { channel_id, shares })
+            }
             Request::FetchHistory { channel_id, before, limit } => {
                 self.can_see(channel_id)?;
                 let (mut messages, mut complete) = db.history(channel_id, before, limit);
@@ -1074,6 +1180,7 @@ impl Ctx<'_> {
                 // oldest (the app asks for those next).
                 let size = |m: &Message| {
                     m.content.len()
+                        + m.sealed.as_ref().map(|s| s.ct.len() + 300).unwrap_or(0)
                         + 400
                         + m.attachments.iter().map(|a| a.name.len() + 160).sum::<usize>()
                         + m.reactions.iter().map(|r| r.emoji.len() + 24 + r.users.iter().map(|u| u.len() + 3).sum::<usize>()).sum::<usize>()
@@ -2005,6 +2112,16 @@ mod tests {
         crypto::Identity::generate().user_id()
     }
 
+    /// An encrypted message as far as the server can tell (it can't check more).
+    fn sealed_by(uid: &str) -> Option<Sealed> {
+        Some(Sealed {
+            key: KeyRef { owner: uid.to_string(), id: pyr_proto::sealed::new_key_id() },
+            nonce: pyr_proto::b64::encode(&[1u8; 12]),
+            ct: pyr_proto::b64::encode(&[2u8; 40]),
+            sig: pyr_proto::b64::encode(&[3u8; 64]),
+        })
+    }
+
     fn hub() -> Arc<Hub> {
         let dir = std::env::temp_dir().join(format!("pyr-conn-test-{}", crypto::random_bytes::<6>().iter().map(|b| format!("{b:02x}")).collect::<String>()));
         Hub::new(Db::open_in_memory().unwrap(), [7u8; 32], "example.org".into(), 7777, dir)
@@ -2070,7 +2187,7 @@ mod tests {
         let general = hub.db.create_channel("general", ChannelKind::Text).unwrap();
         let lounge = hub.db.create_channel("lounge", ChannelKind::Voice).unwrap();
         let send = |c: &mut Ctx, ch: ChannelId, text: &str| {
-            c.handle(Request::SendMessage { channel_id: ch, content: text.into(), reply_to: None, nonce: String::new(), attachments: vec![] })
+            c.handle(Request::SendMessage { channel_id: ch, content: text.into(), reply_to: None, nonce: String::new(), attachments: vec![], sealed: sealed_by(&c.uid) })
         };
         assert!(send(&mut c, general.id, "Hello! I'm Claude.").is_ok());
         assert!(forbidden(c.handle(Request::OpenDm { user_id: bob.clone() })));
@@ -2122,7 +2239,7 @@ mod tests {
         let private = hub.db.channels().into_iter().find(|c| c.name == "mod chat").unwrap();
         assert!(private.private && private.view_roles == vec![mods.id], "unknown roles are dropped");
         let send = |c: &mut Ctx, ch: ChannelId, text: &str| {
-            c.handle(Request::SendMessage { channel_id: ch, content: text.into(), reply_to: None, nonce: String::new(), attachments: vec![] })
+            c.handle(Request::SendMessage { channel_id: ch, content: text.into(), reply_to: None, nonce: String::new(), attachments: vec![], sealed: sealed_by(&c.uid) })
         };
         let (mut a, mut m, mut b) = (ctx(&hub, &admin), ctx(&hub, &mod_), ctx(&hub, &bob));
         assert!(send(&mut m, private.id, "mods only").is_ok());
@@ -2258,10 +2375,10 @@ mod tests {
         // It can't be sent as an attachment: deleting that message would take it from everyone.
         let general = hub.db.create_channel("general", ChannelKind::Text).unwrap();
         let send = |c: &mut Ctx, file: &str| {
-            c.handle(Request::SendMessage { channel_id: general.id, content: "look".into(), reply_to: None, nonce: String::new(), attachments: vec![file.into()] })
+            c.handle(Request::SendMessage { channel_id: general.id, content: "look".into(), reply_to: None, nonce: String::new(), attachments: vec![file.into()], sealed: sealed_by(&c.uid) })
         };
         assert!(send(&mut k, &a).is_err());
-        assert!(send(&mut k, &c2).is_ok(), "a picture that isn't one sends as before");
+        assert!(send(&mut k, &c2).is_err(), "pictures are sent encrypted now (FileKind::Sealed)");
         // Renamed (not to another's name), then removed, its picture with it.
         assert!(matches!(add(&mut k, "dance", &"d".repeat(32)), Err(_)), "no such upload");
         assert!(forbidden(b.handle(Request::RenameGif { id: a.clone(), name: "mine".into() })));
@@ -2749,7 +2866,7 @@ mod tests {
         let ch = hub.db.create_channel("general", ChannelKind::Text).unwrap();
         let mut b = ctx(&hub, &bob);
         let send = |c: &mut Ctx, nonce: String| {
-            c.handle(Request::SendMessage { channel_id: ch.id, content: "hi".into(), reply_to: None, nonce, attachments: vec![] })
+            c.handle(Request::SendMessage { channel_id: ch.id, content: "hi".into(), reply_to: None, nonce, attachments: vec![], sealed: sealed_by(&c.uid) })
         };
         assert!(send(&mut b, "x".repeat(MAX_NONCE_LEN + 1)).is_err(), "a huge nonce would be echoed to everyone");
         assert!(send(&mut b, "n1".into()).is_ok());
@@ -2815,13 +2932,73 @@ mod tests {
     }
 
     #[test]
+    fn messages_are_taken_only_encrypted_and_keys_go_only_to_who_can_read() {
+        use pyr_proto::sealed::MessageKeys;
+        let hub = hub();
+        let (ia, ib, ic) = (crypto::Identity::generate(), crypto::Identity::generate(), crypto::Identity::generate());
+        let (a, b, c) = (ia.user_id(), ib.user_id(), ic.user_id());
+        hub.db.insert_user(&a, "A", Role::Owner).unwrap();
+        hub.db.insert_user(&b, "B", Role::Member).unwrap();
+        hub.db.insert_user(&c, "C", Role::Member).unwrap();
+        let (dm, _) = hub.db.open_dm(&a, &b).unwrap();
+        let (mut ca, mut cb, mut cc) = (ctx(&hub, &a), ctx(&hub, &b), ctx(&hub, &c));
+        let send = |x: &mut Ctx, sealed: Option<Sealed>| {
+            x.handle(Request::SendMessage { channel_id: dm, content: "hi".into(), reply_to: None, nonce: String::new(), attachments: vec![], sealed })
+        };
+        // Nothing in the clear, nor with someone else's key.
+        assert!(send(&mut ca, None).is_err());
+        assert!(send(&mut ca, sealed_by(&b)).is_err());
+        assert!(send(&mut ca, sealed_by(&a)).is_ok());
+        let m = hub.db.history(dm, None, 10).0.pop().unwrap();
+        assert!(m.sealed.is_some() && m.content == pyr_proto::sealed::PLACEHOLDER, "older Pyrs see a note");
+        // Message keys: only one's own.
+        let (ka, kb, kc) = (MessageKeys::derive(&ia), MessageKeys::derive(&ib), MessageKeys::derive(&ic));
+        assert!(cb.handle(Request::PublishMessageKey { key: ka.publication(&ia) }).is_err());
+        for (x, k, id) in [(&mut ca, &ka, &ia), (&mut cb, &kb, &ib), (&mut cc, &kc, &ic)] {
+            assert!(x.handle(Request::PublishMessageKey { key: k.publication(id) }).is_ok());
+        }
+        // Who reads a direct message: its two people (and nobody else may ask).
+        let Ok(Event::Readers { readers, keyless, more, .. }) = ca.handle(Request::ChannelReaders { channel_id: dm, after: None }) else { panic!() };
+        let mut who: Vec<_> = readers.iter().map(|r| r.user.clone()).collect();
+        who.sort();
+        let mut want = vec![a.clone(), b.clone()];
+        want.sort();
+        assert_eq!((who, keyless.is_empty(), more), (want, true, false));
+        assert!(cc.handle(Request::ChannelReaders { channel_id: dm, after: None }).is_err());
+        // A key given to B and (wrongly) to C: only B's is kept.
+        let kref = KeyRef { owner: a.clone(), id: pyr_proto::sealed::new_key_id() };
+        let secret = crypto::random_bytes::<32>();
+        let to = |uid: &str, them: &MessageKeys, kr: &KeyRef| ka.wrap(&a, uid, &them.public(), dm, kr, &secret).unwrap();
+        assert!(ca.handle(Request::ShareKeys { channel_id: dm, shares: vec![to(&b, &kb, &kref), to(&c, &kc, &kref)] }).is_ok());
+        let Ok(Event::KeyShares { shares, .. }) = cb.handle(Request::GetKeys { channel_id: dm, keys: vec![kref.clone()] }) else { panic!() };
+        assert_eq!(shares.len(), 1);
+        assert_eq!(kb.unwrap(&b, dm, &shares[0]), Some(secret));
+        assert!(cc.handle(Request::GetKeys { channel_id: dm, keys: vec![kref.clone()] }).is_err());
+        // Nobody gives out a key they weren't given.
+        let other = KeyRef { owner: a.clone(), id: pyr_proto::sealed::new_key_id() };
+        let fake = kb.wrap(&b, &a, &ka.public(), dm, &other, &secret).unwrap();
+        assert!(cb.handle(Request::ShareKeys { channel_id: dm, shares: vec![fake] }).is_ok());
+        assert!(hub.db.shares_for(dm, &a, std::slice::from_ref(&other)).is_empty());
+        // A key A gave only to themself: B asks for it, and A's Pyr hears so when it's next here.
+        let mine = KeyRef { owner: a.clone(), id: pyr_proto::sealed::new_key_id() };
+        assert!(ca.handle(Request::ShareKeys { channel_id: dm, shares: vec![ka.wrap(&a, &a, &ka.public(), dm, &mine, &secret).unwrap()] }).is_ok());
+        let Ok(Event::KeyShares { shares, .. }) = cb.handle(Request::GetKeys { channel_id: dm, keys: vec![mine.clone()] }) else { panic!() };
+        assert!(shares.is_empty());
+        assert_eq!(hub.db.wants_for_holder(&a, 10), vec![(dm, b.clone(), mine.clone())]);
+        assert!(hub.db.wants_for_holder(&c, 10).is_empty());
+        // Given: no longer wanted.
+        assert!(ca.handle(Request::ShareKeys { channel_id: dm, shares: vec![to(&b, &kb, &mine)] }).is_ok());
+        assert!(hub.db.wants_for_holder(&a, 10).is_empty());
+    }
+
+    #[test]
     fn history_pages_stay_inside_one_frame() {
         let hub = hub();
         let a = uid();
         hub.db.insert_user(&a, "A", Role::Owner).unwrap();
         let ch = hub.db.create_channel("general", ChannelKind::Text).unwrap();
         // 100 messages of 4000 four-byte characters: 1.6 MB, more than a frame.
-        let big: String = "😀".repeat(MAX_MESSAGE_CHARS);
+        let big: String = "😀".repeat(pyr_proto::MAX_MESSAGE_CHARS);
         for _ in 0..100 {
             hub.db.insert_message(ch.id, &a, &big, None).unwrap();
         }
@@ -2855,10 +3032,10 @@ mod tests {
         let g = group.id;
         // Its members read and write in it; nobody else can, nor an app that doesn't know groups.
         let mut cb = ctx(&hub, b);
-        assert!(cb.handle(Request::SendMessage { channel_id: g, content: "hi all".into(), reply_to: None, nonce: String::new(), attachments: vec![] }).is_ok());
+        assert!(cb.handle(Request::SendMessage { channel_id: g, content: "hi all".into(), reply_to: None, nonce: String::new(), attachments: vec![], sealed: sealed_by(b) }).is_ok());
         let mut co = ctx(&hub, out);
         assert!(co.handle(Request::FetchHistory { channel_id: g, before: None, limit: 50 }).is_err());
-        assert!(co.handle(Request::SendMessage { channel_id: g, content: "let me in".into(), reply_to: None, nonce: String::new(), attachments: vec![] }).is_err());
+        assert!(co.handle(Request::SendMessage { channel_id: g, content: "let me in".into(), reply_to: None, nonce: String::new(), attachments: vec![], sealed: sealed_by(out) }).is_err());
         assert!(co.handle(Request::AddToGroup { channel_id: g, members: vec![out.clone()] }).is_err());
         assert!(co.handle(Request::RenameGroup { channel_id: g, name: "mine now".into() }).is_err());
         let mut old_app = ctx(&hub, c);
@@ -2902,7 +3079,7 @@ mod tests {
         let mid = hub.db.insert_message(dm, &b, "hi", None).unwrap().id;
         hub.db.set_relation(&a, &b, 2).unwrap();
         let mut cb = ctx(&hub, &b);
-        assert!(forbidden(cb.handle(Request::EditMessage { message_id: mid, content: "something mean".into() })));
+        assert!(forbidden(cb.handle(Request::EditMessage { message_id: mid, content: "something mean".into(), sealed: sealed_by(&b) })));
         assert!(forbidden(cb.handle(Request::React { message_id: mid, emoji: "😠".into(), add: true })));
         assert_eq!(hub.db.get_message(mid).unwrap().content, "hi");
     }

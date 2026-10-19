@@ -19,6 +19,7 @@ pub mod invite;
 pub mod library;
 pub mod media;
 pub mod release;
+pub mod sealed;
 pub mod skin;
 pub mod sound;
 #[cfg(feature = "quic")]

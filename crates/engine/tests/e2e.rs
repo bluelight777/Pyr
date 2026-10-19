@@ -291,6 +291,138 @@ async fn chat_voice_video_end_to_end() {
 
 /// Quiet by default. PYR_TEST_LOG=FILE writes the media log there (RUST_LOG picks what goes
 /// in it; "pyr_media=debug,warn" if unset): what the rate control and the ladder decided.
+/// Every file under `dir`, whole (the server's database, its log, its files).
+fn all_bytes(dir: &std::path::Path) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if let Ok(b) = std::fs::read(&p) {
+                out.extend(b);
+            }
+        }
+    }
+    out
+}
+
+fn contains(hay: &[u8], needle: &[u8]) -> bool {
+    hay.windows(needle.len()).any(|w| w == needle)
+}
+
+/// A 1×1 PNG, with something to look for after its end.
+fn marked_png() -> Vec<u8> {
+    let mut b = vec![
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64, 0xf8,
+        0xcf, 0x50, 0x0f, 0x00, 0x03, 0x86, 0x01, 0x80, 0x5a, 0x34, 0x7d, 0x6b, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60,
+        0x82,
+    ];
+    b.extend_from_slice(b"PICTURE-MARKER-8812");
+    b
+}
+
+/// Messages and pictures are end-to-end encrypted: the server keeps only ciphertext, whoever
+/// can read there opens them (someone who joins later too, once a Pyr that has the keys gives
+/// them), and someone who's removed doesn't get the keys for what's written after.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn messages_are_end_to_end_encrypted() {
+    let data = temp_dir("sealed-server");
+    let server = pyr_server::start(pyr_server::ServerConfig {
+        data_dir: data.clone(),
+        bind: "127.0.0.1:0".parse().unwrap(),
+        public_host: Some("127.0.0.1".into()),
+        name: Some("Sealed Camp".into()),
+    })
+    .await
+    .unwrap();
+    let a = bot("Alice", 440.0, Arc::default());
+    let b = bot("Bob", 660.0, Arc::default());
+    a.add_server(&server.owner_link().unwrap()).unwrap();
+    wait_for("alice connected", 10, || a.state().servers.first().is_some_and(|s| s.status == ConnStatus::Connected)).await;
+    b.add_server(&server.invite_link()).unwrap();
+    wait_for("bob connected", 10, || b.state().servers.first().is_some_and(|s| s.status == ConnStatus::Connected)).await;
+    let key = server_key(&a.state());
+    assert!(a.state().servers[0].has(pyr_proto::control::SEALED_FEATURE));
+    let general = a.state().servers[0].channels.iter().find(|c| c.name == "General").unwrap().id;
+    let opened = |e: &Engine, text: &str| {
+        e.state().servers[0].logs.get(&general).is_some_and(|l| l.messages.iter().any(|m| m.content == text && m.lock == pyr_proto::control::Lock::Open))
+    };
+
+    // Text and a picture: Bob opens both.
+    b.load_history(&key, general, false);
+    a.send_message_with(&key, general, "secret-zebra-7731", None, vec![("dot.png".into(), marked_png())]);
+    wait_for("bob opens the message", 10, || opened(&b, "secret-zebra-7731")).await;
+    let att = b.state().servers[0].logs[&general].messages.iter().find(|m| m.content == "secret-zebra-7731").unwrap().attachments.clone();
+    assert_eq!(att.len(), 1);
+    assert_eq!((att[0].name.as_str(), att[0].mime.as_str(), att[0].width), ("dot.png", "image/png", 1));
+    let mut got = None;
+    for _ in 0..100 {
+        if let pyr_engine::files::FileState::Ready(bytes) = b.file(&key, &att[0].id) {
+            got = Some(bytes);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(got.as_deref().map(|v| v.as_slice()), Some(marked_png().as_slice()), "Bob's Pyr downloads and opens the picture");
+    // An edit, encrypted too.
+    let first = b.state().servers[0].logs[&general].messages.iter().find(|m| m.content == "secret-zebra-7731").unwrap().id;
+    a.edit_message(&key, first, "secret-giraffe-4410");
+    wait_for("bob opens the edit", 10, || opened(&b, "secret-giraffe-4410")).await;
+    assert_eq!(b.state().servers[0].logs[&general].find(first).unwrap().attachments.len(), 1, "its picture stays");
+
+    // Carol joins later: her Pyr is given the keys of what came before (by Alice's or Bob's).
+    let c = bot("Carol", 550.0, Arc::default());
+    c.add_server(&server.invite_link()).unwrap();
+    wait_for("carol connected", 10, || c.state().servers.first().is_some_and(|s| s.status == ConnStatus::Connected)).await;
+    c.load_history(&key, general, false);
+    wait_for("carol opens the history", 15, || opened(&c, "secret-giraffe-4410")).await;
+    let (page, _) = tokio::task::block_in_place(|| c.history_wait(&key, general, None, 50, Duration::from_secs(10))).unwrap();
+    assert!(page.iter().any(|m| m.content == "secret-giraffe-4410"), "and so does the connector's way of reading");
+
+    // Bob's removed: what Alice writes next is under a new key he was never given.
+    let key_of = |e: &Engine, text: &str| {
+        e.state().servers[0].logs[&general].messages.iter().find(|m| m.content == text).and_then(|m| m.sealed.as_ref().map(|s| s.key.clone()))
+    };
+    let old_key = key_of(&a, "secret-giraffe-4410").or_else(|| key_of(&c, "secret-giraffe-4410")).unwrap();
+    let bob_id = b.state().my_uid.clone();
+    a.kick(&key, &bob_id, false);
+    wait_for("bob's gone", 10, || !a.state().servers[0].members.contains_key(&bob_id)).await;
+    a.send_message(&key, general, "after-bob-5150", None);
+    wait_for("carol opens the new one", 10, || opened(&c, "after-bob-5150")).await;
+    let new_key = key_of(&c, "after-bob-5150").unwrap();
+    assert_ne!(new_key, old_key, "a new key once someone can't read here anymore");
+    assert_eq!(new_key.owner, a.state().my_uid);
+    assert!(server.hub.db.shares_for(general, &bob_id, std::slice::from_ref(&new_key)).is_empty(), "Bob was never given it");
+
+    // A direct message: only its two people are given its key.
+    let carol_id = c.state().my_uid.clone();
+    a.open_dm(&key, &carol_id);
+    wait_for("the dm's open", 10, || a.state().servers[0].dm_with(&carol_id).is_some()).await;
+    let dm = a.state().servers[0].dm_with(&carol_id).unwrap().id;
+    c.load_history(&key, dm, false);
+    a.send_message(&key, dm, "just-us-9090", None);
+    wait_for("carol opens the dm", 10, || {
+        c.state().servers[0].logs.get(&dm).is_some_and(|l| l.messages.iter().any(|m| m.content == "just-us-9090" && m.lock == pyr_proto::control::Lock::Open))
+    })
+    .await;
+
+    // The server has none of it in the clear: not in its database, its log, or its files.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let everything = all_bytes(&data);
+    // (What isn't secret is there: the search looks in the right place.)
+    assert!(contains(&everything, b"Sealed Camp"));
+    for secret in [&b"secret-zebra-7731"[..], b"secret-giraffe-4410", b"after-bob-5150", b"just-us-9090", b"PICTURE-MARKER-8812", b"dot.png"] {
+        assert!(!contains(&everything, secret), "the server has {:?} in the clear", String::from_utf8_lossy(secret));
+    }
+    a.shutdown();
+    b.shutdown();
+    c.shutdown();
+    server.shutdown().await;
+}
+
 fn tracing_subscriber_init() -> Option<()> {
     let path = pyr_proto::env_var("TEST_LOG")?;
     let file = std::fs::File::create(path).ok()?;

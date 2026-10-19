@@ -11,6 +11,7 @@ use pyr_proto::control::*;
 use pyr_proto::invite::InviteLink;
 use pyr_proto::media::track;
 use pyr_proto::{b64, crypto, framing, now_ms};
+use pyr_proto::sealed::{KeyRef, MessageKey};
 use parking_lot::Mutex;
 use quinn::VarInt;
 use tokio::sync::mpsc;
@@ -33,6 +34,8 @@ pub const MAX_QUEUED_BYTES: usize = 16 << 20;
 pub const MAX_CONNECTIONS_PER_IP: usize = 32;
 pub const MAX_CONNECTIONS_PER_NETWORK: usize = 128;
 pub const MAX_CONNECTIONS_PER_USER: usize = 6;
+/// How many Pyrs online that have a conversation key are asked to give it to someone who asks.
+const ASKED_HOLDERS: usize = 3;
 /// Connections that haven't logged in yet: from one place, one wider network, and in all, so
 /// nobody can fill the server's slots with connections that never log in.
 pub const MAX_WAITING_PER_IP: usize = 8;
@@ -940,6 +943,65 @@ impl Hub {
         }
     }
 
+    /// Who can read a conversation (end-to-end encryption gives its keys to them): a direct
+    /// message's two people, a group's members, or everyone who can see a channel.
+    pub fn readers(&self, channel_id: ChannelId) -> Option<Vec<UserId>> {
+        if let Some(who) = self.db.private_members(channel_id) {
+            return Some(who);
+        }
+        self.db.channel(channel_id).map(|ch| self.db.viewers(&ch))
+    }
+
+    /// Someone (`by`) asked for conversation keys nobody's given them: a few of the Pyrs online
+    /// that have each are asked to give it (the key's owner's first).
+    pub fn ask_holders(&self, channel_id: ChannelId, by: &MessageKey, keys: &[KeyRef]) {
+        let mut asks: HashMap<UserId, Vec<KeyRef>> = HashMap::new();
+        {
+            let inner = self.inner.lock();
+            for k in keys {
+                let online = self.db.holders(channel_id, k).into_iter().filter(|h| *h != by.user && Self::is_online_locked(&inner, h));
+                for h in online.take(ASKED_HOLDERS) {
+                    asks.entry(h).or_default().push(k.clone());
+                }
+            }
+        }
+        for (holder, keys) in asks {
+            self.send_to_user(&holder, Event::KeysWanted { channel_id, by: by.clone(), keys });
+        }
+    }
+
+    /// What others asked for that `uid` has, for their Pyr that just came (while the asker can
+    /// still read there).
+    pub fn send_pending_wants(&self, uid: &str, conn_id: ConnId) {
+        let wants = self.db.wants_for_holder(uid, 500);
+        if wants.is_empty() {
+            return;
+        }
+        let mut by_ask: HashMap<(ChannelId, UserId), Vec<KeyRef>> = HashMap::new();
+        for (ch, who, key) in wants {
+            by_ask.entry((ch, who)).or_default().push(key);
+        }
+        let mut readers: HashMap<ChannelId, HashSet<UserId>> = HashMap::new();
+        let mut frames = Vec::new();
+        for ((channel_id, who), keys) in by_ask {
+            let r = readers.entry(channel_id).or_insert_with(|| self.readers(channel_id).unwrap_or_default().into_iter().collect());
+            if !r.contains(uid) {
+                continue;
+            }
+            if !r.contains(&who) {
+                let _ = self.db.drop_wants(channel_id, &who);
+                continue;
+            }
+            let Some(by) = self.db.message_keys(std::slice::from_ref(&who)).remove(&who) else { continue };
+            frames.push(frame(0, Event::KeysWanted { channel_id, by, keys }));
+        }
+        if let Some(c) = self.inner.lock().clients.get(&conn_id) {
+            for f in frames {
+                let _ = c.tx.send(f);
+            }
+        }
+    }
+
     /// Sends to every open connection of one member.
     pub fn send_to_user(&self, uid: &str, ev: Event) {
         let b = frame(0, ev);
@@ -1238,7 +1300,7 @@ impl Hub {
             // (Private conversations' calls only for their own people.)
             voice: inner.voice.values().filter(|v| v.audience.as_ref().is_none_or(|who| who.iter().any(|w| w == uid))).map(|v| v.p.clone()).collect(),
             roles: self.db.roles(),
-            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, DND_FEATURE, BIG_FILES_FEATURE, GIFS_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE, VOUCHES_FOR_ME_FEATURE, PRIVATE_CHANNELS_FEATURE, BOTS_FEATURE, INVITES_FEATURE, POKER_FEATURE].iter().map(|s| s.to_string()).collect(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, DND_FEATURE, BIG_FILES_FEATURE, GIFS_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE, VOUCHES_FOR_ME_FEATURE, PRIVATE_CHANNELS_FEATURE, BOTS_FEATURE, INVITES_FEATURE, POKER_FEATURE, SEALED_FEATURE].iter().map(|s| s.to_string()).collect(),
             dms: self.db.dms_of(uid),
             relations: self.db.relations_of(uid),
             groups: if groups { self.db.groups_of(uid) } else { Vec::new() },
