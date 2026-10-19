@@ -24,6 +24,8 @@ pub const AFTER_SHOWDOWN_MS: u64 = 5_000;
 pub const SHUFFLE_MS: u64 = 1_200;
 /// Turns missed in a row before a player is sat out.
 pub const MISSES_TO_SIT_OUT: u32 = 2;
+/// How long an away tournament player is waited for.
+pub const AWAY_MS: u64 = 1_200;
 /// Hands kept for the history.
 pub const HISTORY: usize = 30;
 
@@ -62,22 +64,46 @@ pub enum Effect {
     Credit { uid: String, chips: u64 },
     /// A hand ended: what it meant for each person in it (for their records).
     Hand { uid: String, result: HandResult, big_blind: u64, beat_shark: bool },
+    /// Out of a tournament (or won it): where they finished, of how many, and the prize.
+    Placed { uid: String, place: usize, entrants: usize, prize: u64, tourney: u64 },
 }
 
 #[derive(Default)]
 pub struct Output {
     pub msgs: Vec<(Rcpt, ToApp)>,
     pub effects: Vec<Effect>,
+    /// A tournament table: who ran out of chips in the hand just over (taken off the table),
+    /// with what they started that hand with (bigger stacks finish higher).
+    pub busted: Vec<(String, u64)>,
 }
 
 impl Output {
-    fn all(&mut self, m: ToApp) {
+    pub fn extend(&mut self, o: Output) {
+        self.msgs.extend(o.msgs);
+        self.effects.extend(o.effects);
+        self.busted.extend(o.busted);
+    }
+}
+
+impl Output {
+    pub(crate) fn all(&mut self, m: ToApp) {
         self.msgs.push((Rcpt::All, m));
     }
 
-    fn to(&mut self, uid: &str, m: ToApp) {
+    pub(crate) fn to(&mut self, uid: &str, m: ToApp) {
         self.msgs.push((Rcpt::User(uid.to_string()), m));
     }
+}
+
+/// Someone taken off a tournament table to move to another.
+#[derive(Clone, Debug)]
+pub struct Taken {
+    pub uid: String,
+    pub name: String,
+    pub chips: u64,
+    pub look: Look,
+    pub bot: Option<Level>,
+    pub misses: u32,
 }
 
 /// A seated person's looks and level (from their record).
@@ -133,6 +159,13 @@ pub struct Room {
     history: VecDeque<(HandHistory, Vec<(To, Event)>)>,
     pots: VecDeque<u64>,
     hand_times: VecDeque<u64>,
+    /// Part of a tournament: nobody sits, stands or buys chips here themselves (the
+    /// tournament seats and moves them), the broke are out, the absent are blinded away.
+    pub tourney: Option<u64>,
+    /// No new hand until let go (a tournament moving players).
+    pub hold: bool,
+    /// Blinds for the next hand (a tournament's level went up mid-hand).
+    next_rules: Option<Rules>,
 }
 
 impl Room {
@@ -158,6 +191,9 @@ impl Room {
             history: VecDeque::new(),
             pots: VecDeque::new(),
             hand_times: VecDeque::new(),
+            tourney: None,
+            hold: false,
+            next_rules: None,
         })
     }
 
@@ -256,7 +292,7 @@ impl Room {
                     name: s.name.clone(),
                     stack: self.table.behind(i),
                     bot: m.and_then(|m| m.bot),
-                    sitting_out: s.sitting_out,
+                    sitting_out: s.sitting_out || (self.tourney.is_some() && m.is_some_and(|m| m.bot.is_none() && m.misses >= MISSES_TO_SIT_OUT)),
                     level: m.map(|m| m.look.level).unwrap_or(1),
                     card_back: m.map(|m| m.look.card_back.clone()).unwrap_or_default(),
                     frame: m.map(|m| m.look.frame.clone()).unwrap_or_default(),
@@ -284,12 +320,16 @@ impl Room {
             legal: my_seat.and_then(|s| self.table.legal(s)),
             my_seat,
             recent: self.history.iter().map(|(h, _)| h.number).collect(),
+            tourney: self.tourney,
         }
     }
 
     /// Sits a person down with chips already taken from their record (the caller gives them
     /// back if this fails).
     pub fn sit(&mut self, uid: &str, name: &str, seat: usize, chips: u64, look: Look, now: u64) -> Result<Output, String> {
+        if self.tourney.is_some() {
+            return Err("this is a tournament table: register for the tournament to play".into());
+        }
         if chips < self.min_buy_in() || chips > self.max_buy_in() {
             return Err(format!("sit down with {} to {} chips", self.min_buy_in(), self.max_buy_in()));
         }
@@ -303,6 +343,9 @@ impl Room {
     }
 
     pub fn add_bot(&mut self, seat: usize, level: Level, now: u64, rng: &mut dyn Random) -> Result<Output, String> {
+        if self.tourney.is_some() {
+            return Err("this is a tournament table".into());
+        }
         let names = ["Ace", "Blaze", "Cinder", "Dusk", "Ember", "Flint", "Gale", "Hex", "Ivy", "Jinx", "Koda", "Lux", "Moss", "Nova", "Onyx", "Pike", "Quill", "Rook", "Sage", "Tarn"];
         let taken: Vec<String> = self.table.seats.iter().flatten().map(|s| s.name.clone()).collect();
         let free: Vec<&&str> = names.iter().filter(|n| !taken.iter().any(|t| t.starts_with(**n))).collect();
@@ -325,6 +368,9 @@ impl Room {
     }
 
     pub fn remove_bot(&mut self, seat: usize) -> Result<Output, String> {
+        if self.tourney.is_some() {
+            return Err("this is a tournament table".into());
+        }
         if !self.is_bot(seat) {
             return Err("there's no bot in that seat".into());
         }
@@ -341,6 +387,9 @@ impl Room {
 
     /// A person leaves: now, or (in a hand) after folding, when the hand is over.
     pub fn stand(&mut self, uid: &str, now: u64) -> Result<Output, String> {
+        if self.tourney.is_some() {
+            return Err("in a tournament you play until you're out (sit out to be folded for)".into());
+        }
         let seat = self.table.seat_of(uid).ok_or("you aren't sitting here")?;
         let mut out = Output::default();
         let in_hand = self.table.hand.as_ref().is_some_and(|h| h.player(seat).is_some_and(|p| !p.folded));
@@ -369,9 +418,16 @@ impl Room {
 
     pub fn sit_out(&mut self, uid: &str, sitting_out: bool) -> Result<Output, String> {
         let seat = self.table.seat_of(uid).ok_or("you aren't sitting here")?;
-        self.table.seats[seat].as_mut().unwrap().sitting_out = sitting_out;
-        if let Some(m) = self.meta.get_mut(&seat) {
-            m.misses = 0;
+        if self.tourney.is_some() {
+            // Still dealt in (the blinds come round), folded for at once.
+            if let Some(m) = self.meta.get_mut(&seat) {
+                m.misses = if sitting_out { MISSES_TO_SIT_OUT } else { 0 };
+            }
+        } else {
+            self.table.seats[seat].as_mut().unwrap().sitting_out = sitting_out;
+            if let Some(m) = self.meta.get_mut(&seat) {
+                m.misses = 0;
+            }
         }
         let mut out = Output::default();
         self.changed(&mut out);
@@ -379,6 +435,9 @@ impl Room {
     }
 
     pub fn top_up(&mut self, uid: &str, chips: u64) -> Result<Output, String> {
+        if self.tourney.is_some() {
+            return Err("no adding chips in a tournament".into());
+        }
         let seat = self.table.seat_of(uid).ok_or("you aren't sitting here")?;
         if self.table.hand.as_ref().is_some_and(|h| h.player(seat).is_some()) {
             return Err("you can add chips between hands".into());
@@ -494,6 +553,9 @@ impl Room {
             if bot {
                 // Bots think for a moment (longer on bigger decisions), like people.
                 p.deadline = now + 900 + (seat as u64 * 377 + hand * 131) % 1600;
+            } else if self.tourney.is_some() && self.meta.get(&seat).is_some_and(|m| m.misses >= MISSES_TO_SIT_OUT) {
+                // Away in a tournament: folded for (or checked) after a moment.
+                p.deadline = now + AWAY_MS;
             } else {
                 p.deadline = now + TURN_MS;
                 let bank = self.meta.get(&seat).map(|m| m.bank_ms).unwrap_or(0);
@@ -556,6 +618,7 @@ impl Room {
         if self.hand_times.len() > 50 {
             self.hand_times.pop_front();
         }
+        let p_start = p.seats_at_start.clone();
         let hist = HandHistory {
             number: p.hand,
             rules: rules.clone(),
@@ -571,6 +634,9 @@ impl Room {
         if self.history.len() > HISTORY {
             self.history.pop_front();
         }
+        if let Some(r) = self.next_rules.take() {
+            self.table.rules = r;
+        }
         // Time banks grow; leavers leave; the broke and the absent sit out.
         let seats: Vec<usize> = self.meta.keys().copied().collect();
         for seat in seats {
@@ -584,6 +650,17 @@ impl Room {
             }
             let bot = m.bot.is_some();
             let misses = m.misses;
+            if self.tourney.is_some() {
+                // Out of chips: out of the tournament (away players stay, and are blinded).
+                if self.table.seats[seat].as_ref().is_some_and(|s| s.stack == 0)
+                    && let Some(s) = self.table.stand(seat)
+                {
+                    let started = p_start.get(seat).cloned().flatten().map(|(_, c)| c).unwrap_or(0);
+                    out.busted.push((s.player, started));
+                    self.meta.remove(&seat);
+                }
+                continue;
+            }
             if let Some(s) = self.table.seats[seat].as_mut() {
                 if bot && s.stack == 0 {
                     // A bot that's out of chips buys in again.
@@ -628,7 +705,7 @@ impl Room {
         let mut out = Output::default();
         match &mut self.phase {
             Phase::Idle { next } => {
-                if self.table.ready().len() < 2 {
+                if self.hold || self.table.ready().len() < 2 {
                     *next = None;
                     return out;
                 }
@@ -669,8 +746,9 @@ impl Room {
                     return out;
                 }
                 let leaving = self.meta.get(&seat).is_some_and(|m| m.leaving);
+                let away = self.tourney.is_some() && self.meta.get(&seat).is_some_and(|m| m.misses >= MISSES_TO_SIT_OUT);
                 let bank = self.meta.get(&seat).map(|m| m.bank_ms).unwrap_or(0);
-                if !leaving && !p.using_bank && bank > 0 {
+                if !leaving && !away && !p.using_bank && bank > 0 {
                     // Into the time bank.
                     p.using_bank = true;
                     p.deadline = now + bank;
@@ -679,10 +757,12 @@ impl Room {
                 }
                 // Out of time: check if they can, fold if not.
                 if let Some(m) = self.meta.get_mut(&seat) {
-                    if !leaving {
+                    if !leaving && !away {
                         m.misses += 1;
                     }
-                    m.bank_ms = 0;
+                    if !away {
+                        m.bank_ms = 0;
+                    }
                 }
                 let can_check = self.table.legal(seat).is_some_and(|l| l.can_check);
                 let a = if can_check && !leaving { Action::Check } else { Action::Fold };
@@ -749,6 +829,69 @@ impl Room {
         }
         out.all(ToApp::Closed { table: self.id });
         out
+    }
+
+    /// Tournaments: seats someone (a person or a bot) with their tournament chips.
+    pub fn place(&mut self, uid: &str, name: &str, seat: usize, chips: u64, look: Look, bot: Option<Level>, out: &mut Output) -> Result<(), String> {
+        self.table.sit(seat, uid, name, chips)?;
+        let bank = if bot.is_some() { 0 } else { BANK_START_MS };
+        self.meta.insert(seat, SeatMeta { bot, look, bank_ms: bank, misses: 0, leaving: false });
+        if bot.is_none() {
+            self.watchers.insert(uid.into());
+        }
+        self.changed(out);
+        Ok(())
+    }
+
+    /// Tournaments: takes someone off the table between hands (to move them), with their
+    /// chips, looks, bot level and time bank.
+    pub fn take(&mut self, seat: usize, out: &mut Output) -> Option<Taken> {
+        if !self.between_hands() {
+            return None;
+        }
+        let s = self.table.stand(seat)?;
+        let m = self.meta.remove(&seat);
+        self.watchers.remove(&s.player);
+        // They're told the table's gone from under them (the tournament sends the new one).
+        out.to(&s.player, ToApp::Closed { table: self.id });
+        self.changed(out);
+        Some(Taken { uid: s.player, name: s.name, chips: s.stack, look: m.as_ref().map(|m| m.look.clone()).unwrap_or_default(), bot: m.as_ref().and_then(|m| m.bot), misses: m.map(|m| m.misses).unwrap_or(0) })
+    }
+
+    /// Tournaments: someone who was away is back (or went away), kept when they move.
+    pub fn set_misses(&mut self, seat: usize, misses: u32) {
+        if let Some(m) = self.meta.get_mut(&seat) {
+            m.misses = misses;
+        }
+    }
+
+    /// No hand being dealt or played.
+    pub fn between_hands(&self) -> bool {
+        matches!(self.phase, Phase::Idle { .. })
+    }
+
+    /// New blinds: now if between hands, else from the next hand.
+    pub fn set_blinds(&mut self, small: u64, big: u64, ante: u64) {
+        let mut r = self.next_rules.clone().unwrap_or_else(|| self.table.rules.clone());
+        r.small_blind = small;
+        r.big_blind = big;
+        r.ante = ante;
+        if self.between_hands() && self.table.hand.is_none() {
+            self.table.rules = r;
+            self.next_rules = None;
+        } else {
+            self.next_rules = Some(r);
+        }
+    }
+
+    /// Who sits where: (seat, uid) for everyone at the table.
+    pub fn seated(&self) -> Vec<(usize, String)> {
+        self.table.seats.iter().enumerate().filter_map(|(i, s)| s.as_ref().map(|s| (i, s.player.clone()))).collect()
+    }
+
+    /// Empty seats.
+    pub fn free_seats(&self) -> Vec<usize> {
+        self.table.seats.iter().enumerate().filter(|(_, s)| s.is_none()).map(|(i, _)| i).collect()
     }
 
     /// Chips each person has at this table now (what they'd get back if it closed).

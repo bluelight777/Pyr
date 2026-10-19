@@ -11,6 +11,7 @@ pub mod game;
 pub mod net;
 pub mod progress;
 pub mod room;
+pub mod tourney;
 
 pub use cards::{Card, CardSet};
 pub use eval::{Category, Value};

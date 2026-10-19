@@ -5,9 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::bots::Level;
 use crate::cards::Card;
-use crate::game::{Action, Event, Legal, Rules, Street};
+use crate::game::{Action, Event, Legal, Limit, Rules, Street, Variant};
 
 pub type TableId = u64;
+pub type TourneyId = u64;
 
 /// Seeds and fingerprints travel as hex.
 pub mod hex32 {
@@ -85,6 +86,117 @@ pub enum ToServer {
     History { table: TableId, hand: u64 },
     /// Close a table I made (or any, with Manage server): everyone's chips go back.
     Close { table: TableId },
+    /// Tournaments here (multi-table, with play-chip buy-ins).
+    Tourneys,
+    /// A new tournament (Manage server, or anyone where the server allows it); bots join it
+    /// at once.
+    TourneyCreate {
+        rules: TourneyRules,
+        #[serde(default)]
+        bots: Vec<Level>,
+    },
+    /// Register: the buy-in comes off my chips.
+    TourneyRegister { id: TourneyId },
+    /// Before it starts: my buy-in back.
+    TourneyUnregister { id: TourneyId },
+    /// Follow a tournament (its standings and levels; my table when I'm in it).
+    TourneyWatch { id: TourneyId },
+    TourneyUnwatch { id: TourneyId },
+    /// Call one off before it starts (whoever made it, or Manage server): buy-ins go back.
+    TourneyCancel { id: TourneyId },
+}
+
+/// One level of a tournament's blinds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlindLevel {
+    pub small: u64,
+    pub big: u64,
+    #[serde(default)]
+    pub ante: u64,
+}
+
+/// What a tournament is.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TourneyRules {
+    pub name: String,
+    pub variant: Variant,
+    pub limit: Limit,
+    /// Players at each table (2 to 9).
+    pub seats: usize,
+    /// Everyone starts with these chips (tournament chips, not play chips).
+    pub stack: u64,
+    /// Play chips to enter (0: free).
+    pub buy_in: u64,
+    pub min_players: usize,
+    pub max_players: usize,
+    /// When it starts (Unix ms). It's called off if there aren't `min_players` then.
+    pub start_ms: u64,
+    /// How long each level of blinds lasts.
+    pub level_ms: u64,
+    pub levels: Vec<BlindLevel>,
+    /// Registration stays open for this many levels after the start.
+    #[serde(default)]
+    pub late_levels: u32,
+}
+
+/// Where a tournament is in its life.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TourneyPhase {
+    Registering,
+    Running,
+    Finished,
+    Cancelled,
+}
+
+/// A tournament in a list.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TourneySummary {
+    pub id: TourneyId,
+    pub rules: TourneyRules,
+    pub phase: TourneyPhase,
+    pub entrants: usize,
+    pub players_left: usize,
+    pub prize_pool: u64,
+    /// The level being played (0 before it starts).
+    pub level: usize,
+    /// Am I in it (still, or was)?
+    pub registered: bool,
+    /// Who made it.
+    pub host: String,
+}
+
+/// Someone in a tournament.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EntrantView {
+    pub uid: String,
+    pub name: String,
+    pub bot: Option<Level>,
+    /// Chips now (0 once out).
+    pub chips: u64,
+    /// Where they finished (once out, or the winner).
+    pub place: Option<usize>,
+    pub prize: u64,
+    pub table: Option<TableId>,
+}
+
+/// A tournament in full.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TourneyView {
+    pub id: TourneyId,
+    pub rules: TourneyRules,
+    pub phase: TourneyPhase,
+    pub host: String,
+    pub entrants: Vec<EntrantView>,
+    /// The level now (index into the rules' levels) and when the next starts (Unix ms).
+    pub level: usize,
+    pub next_level_ms: Option<u64>,
+    pub prize_pool: u64,
+    /// What each paid place wins, first place first.
+    pub payouts: Vec<u64>,
+    /// The table I'm at, when I'm still in it.
+    pub my_table: Option<TableId>,
+    pub tables: Vec<TableId>,
 }
 
 /// How many chips a player sits down with, in big blinds.
@@ -146,6 +258,8 @@ pub enum ToApp {
     Closed { table: TableId },
     /// The daily chips: how many (none: already taken today), and when the next can be taken.
     Daily { chips: Option<u64>, streak: u32 },
+    Tourneys { list: Vec<TourneySummary> },
+    Tourney { view: TourneyView },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -202,6 +316,9 @@ pub struct TableView {
     pub my_seat: Option<usize>,
     /// The last few hands' numbers (for the history).
     pub recent: Vec<u64>,
+    /// A tournament's table (nobody buys in or leaves here; the tournament moves players).
+    #[serde(default)]
+    pub tourney: Option<TourneyId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
