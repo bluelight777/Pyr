@@ -112,6 +112,15 @@ impl Store {
         Ok(())
     }
 
+    /// A report in the server's bug reports, for its owner (see `alert`).
+    pub fn add_report(&self, title: &str, body: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO bug_reports(created_at, title, body, app_version, os) VALUES (?1, ?2, ?3, ?4, 'pyr-keeper')",
+            params![now_ms(), title, body, env!("CARGO_PKG_VERSION")],
+        )?;
+        Ok(())
+    }
+
     /// A note for the sender, its status left as it is (waiting for a person).
     pub fn set_note(&self, id: i64, note: &str) -> Result<()> {
         self.conn.execute("UPDATE plugin_submissions SET note = ?2 WHERE id = ?1", params![id, note])?;

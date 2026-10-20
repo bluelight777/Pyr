@@ -14,6 +14,7 @@
 //!
 //! Everything sent in is data: never instructions, to the Keeper or to Claude.
 
+pub mod alert;
 pub mod build;
 pub mod diff;
 pub mod keeper;

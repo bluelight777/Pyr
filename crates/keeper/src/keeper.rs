@@ -176,11 +176,16 @@ impl<'a> Keeper<'a> {
                     info!(id, name = %sub.name, "held: {why}");
                 }
                 Err(e) => {
-                    // (The API down, a disk problem: tried again next time.)
+                    // (The API down, a disk problem: tried again next time. Out of credits, or
+                    // a key turned down: the owner hears of it, once.)
                     warn!(id, "couldn't decide yet: {e:#}");
+                    if let Some(t) = crate::alert::trouble(&e) {
+                        crate::alert::raise(&self.store, &self.cfg.state_dir, t);
+                    }
                     continue;
                 }
             }
+            crate::alert::clear(&self.cfg.state_dir);
             done += 1;
             self.save()?;
         }

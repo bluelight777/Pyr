@@ -139,7 +139,28 @@ fn main() -> Result<()> {
             let once = matches!(Cli::parse().cmd, Cmd::Once { .. });
             let cfg = load(&config)?;
             let api_key = std::fs::read_to_string(&cfg.api_key_file).context("the Claude API key")?.trim().to_string();
-            let model = if cfg.model.is_empty() { Claude::newest_model(&api_key)? } else { cfg.model.clone() };
+            let model = if cfg.model.is_empty() {
+                // (A key the API turns down: the owner hears of it, and it's tried again.)
+                loop {
+                    match Claude::newest_model(&api_key) {
+                        Ok(m) => break m,
+                        Err(e) => {
+                            tracing::warn!("couldn't ask the Claude API for its models: {e:#}");
+                            if let Some(t) = pyr_keeper::alert::trouble(&e)
+                                && let Ok(store) = pyr_keeper::store::Store::open(&cfg.guild_db)
+                            {
+                                pyr_keeper::alert::raise(&store, &cfg.state_dir, t);
+                            }
+                            if once {
+                                return Err(e);
+                            }
+                            std::thread::sleep(Duration::from_secs(300));
+                        }
+                    }
+                }
+            } else {
+                cfg.model.clone()
+            };
             tracing::info!("reviewing with {model}");
             let reviewer = Claude { api_key, model };
             let builder = sandbox(&cfg);

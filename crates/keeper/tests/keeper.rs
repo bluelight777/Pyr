@@ -213,3 +213,42 @@ fn new_versions_of_listed_things_are_listed_rejected_or_left_for_a_person() {
     assert_eq!(k2.pass().unwrap(), 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+struct BrokeClaude;
+impl Reviewer for BrokeClaude {
+    fn review(&self, _: &Request) -> Result<Verdict> {
+        anyhow::bail!("the Claude API said 400 Bad Request: Your credit balance is too low to access the Anthropic API.")
+    }
+}
+
+/// Out of Claude API credits: nothing is decided (nothing goes up unchecked), and the owner
+/// hears of it once, in the server's bug reports; working again, a later run-out is said again.
+#[test]
+fn running_out_of_credits_is_said_once_in_the_bug_reports() {
+    let dir = std::env::temp_dir().join(format!("pyr-keeper-credits-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let release = Identity::generate();
+    let (db, cfg) = setup(&dir, &release);
+    let mara = Identity::generate().user_id();
+    let skin1 = submit(&db, &mara, "Sunset", "skin", "1.0", 0, src(&[("skin.json", &skin_json("1.0", "#ff7a3d"))]));
+    db.set_submission_status(skin1, SubmissionStatus::Listed, "").unwrap();
+    let skin2 = submit(&db, &mara, "Sunset", "skin", "1.1", skin1, src(&[("skin.json", &skin_json("1.1", "#ff9a3d"))]));
+    assert_eq!(db.new_bug_count(), 0);
+    let mut k = Keeper::new(cfg.clone(), &BrokeClaude, &FakeBuild).unwrap();
+    k.pass().unwrap();
+    k.pass().unwrap();
+    assert_eq!(status(&db, skin2).0, SubmissionStatus::New, "waits");
+    assert_eq!(db.new_bug_count(), 1, "said once, not every minute");
+    // Credits again: it's reviewed, and the next run-out is said again.
+    let claude = FakeClaude { answer: RefCell::new(vec!["approve"]), seen: RefCell::new(vec![]) };
+    let mut k = Keeper::new(cfg.clone(), &claude, &FakeBuild).unwrap();
+    k.pass().unwrap();
+    assert_eq!(status(&db, skin2).0, SubmissionStatus::Listed);
+    let skin3 = submit(&db, &mara, "Sunset", "skin", "1.2", skin1, src(&[("skin.json", &skin_json("1.2", "#ffaa3d"))]));
+    let mut k = Keeper::new(cfg, &BrokeClaude, &FakeBuild).unwrap();
+    k.pass().unwrap();
+    assert_eq!(status(&db, skin3).0, SubmissionStatus::New);
+    assert_eq!(db.new_bug_count(), 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
