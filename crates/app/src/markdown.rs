@@ -93,9 +93,9 @@ pub struct LinkSpan {
 }
 
 fn is_url_start(s: &str) -> bool {
-    // (ingle://: invite links from before Pyr was called Pyr. pyr.gg/…: short invite links,
+    // (`legacy::SCHEME`: invite links from before the rename. pyr.gg/…: short invite links,
     // written without https:// the way people write discord.gg/….)
-    s.starts_with("https://") || s.starts_with("http://") || s.starts_with("pyr://") || s.starts_with("ingle://") || bare_pyr_gg(s)
+    s.starts_with("https://") || s.starts_with("http://") || s.starts_with("pyr://") || s.starts_with(pyr_proto::legacy::SCHEME) || bare_pyr_gg(s)
 }
 
 /// A pyr.gg link written without its `https://`.

@@ -5,6 +5,7 @@ mod app;
 mod appearance;
 mod autostart;
 mod calls;
+mod casino;
 mod chat;
 mod connector;
 mod create;
@@ -76,8 +77,8 @@ fn main() -> eframe::Result<()> {
     let mut quit = false;
     let mut autostart = false;
     let mut reopened: u32 = 0;
-    // Invite links: pyr://, and ingle:// from before the rename (both open Pyr).
-    let link_prefixes = [format!("{}://", pyr_proto::APP_ID), format!("{}://", pyr_proto::OLD_APP_ID)];
+    // Invite links: pyr://, and the scheme from before the rename (both open Pyr).
+    let link_prefixes = [format!("{}://", pyr_proto::APP_ID), pyr_proto::legacy::SCHEME.to_string()];
     let is_link = |a: &str| link_prefixes.iter().any(|p| a.get(..p.len()).is_some_and(|x| x.eq_ignore_ascii_case(p)));
     let all: Vec<String> = std::env::args().skip(1).collect();
     // Opened for an invite link (the pyr:// handler): that link is all we take, so nothing
@@ -122,9 +123,9 @@ fn main() -> eframe::Result<()> {
         tray::quit_running(&config_dir);
         return Ok(());
     }
-    // The first start after Ingle became Pyr: Ingle's settings, identity and plugins come over.
-    let migrated = pyr_engine::config::migrate_from_ingle();
-    let came_from_ingle = migrated.iter().any(|m| m.starts_with("copied Ingle's settings"));
+    // The first start after the rename: the settings, identity and plugins from before come over.
+    let migrated = pyr_engine::config::migrate_from_old_name();
+    let came_over = migrated.iter().any(|m| m.starts_with(pyr_engine::config::COPIED_SETTINGS));
     let (instance_lock, handoff) = match instance::start(&config_dir, join.as_deref()) {
         instance::Start::First { lock, handoff } => (lock, handoff),
         instance::Start::AlreadyRunning => {
@@ -139,9 +140,9 @@ fn main() -> eframe::Result<()> {
     let log_path = init_logging(profile.as_deref());
     install_crash_report(log_path.clone());
     for m in &migrated {
-        tracing::info!("from Ingle: {m}");
+        tracing::info!("from before the rename: {m}");
     }
-    // Claude's settings that started Ingle's connector start Pyr's now (your own identity
+    // Claude's settings that started the connector from before the rename start Pyr's now (your own identity
     // only, never a test profile's).
     if profile.is_none()
         && !pyr_proto::env_set("HOME")
@@ -149,10 +150,10 @@ fn main() -> eframe::Result<()> {
     {
         let args = connector::args(&config_dir);
         for c in connector::claude_configs() {
-            match connector::migrate_from_ingle(&c, &exe, &args) {
-                Ok(true) => tracing::info!("from Ingle: Claude's settings ({}) start Pyr's connector now", c.display()),
+            match connector::migrate_from_old_name(&c, &exe, &args) {
+                Ok(true) => tracing::info!("Claude's settings ({}) start Pyr's connector now (instead of the one from before the rename)", c.display()),
                 Ok(false) => {}
-                Err(e) => tracing::warn!("couldn't move Claude's settings over from Ingle's connector: {e}"),
+                Err(e) => tracing::warn!("couldn't move Claude's settings over from the connector from before the rename: {e}"),
             }
         }
     }
@@ -241,12 +242,12 @@ fn main() -> eframe::Result<()> {
                         // (once, even if a second renderer is tried).
                         static LAST_RUN: std::sync::Once = std::sync::Once::new();
                         LAST_RUN.call_once(|| engine.report_last_run_trouble());
-                        // The first start after Ingle became Pyr says so (once).
+                        // The first start after the rename says so (once).
                         static RENAMED: std::sync::Once = std::sync::Once::new();
-                        if came_from_ingle {
+                        if came_over {
                             RENAMED.call_once(|| {
                                 engine.shared.state.write().toast(
-                                    "Ingle is Pyr now: the same app, with your servers, friends and identity. Its new home is pyr.gg.",
+                                    "Welcome to Pyr: the same app under its new name, with your servers, friends and identity. Its home is pyr.gg.",
                                     false,
                                 )
                             });

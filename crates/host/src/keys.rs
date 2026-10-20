@@ -20,9 +20,9 @@ pub struct PyrKey {
 }
 
 pub fn key_path(config_dir: &Path) -> PathBuf {
-    // (Made before Pyr was called Pyr, the key is `ingle_ed25519`: the servers it rented trust
-    // that one, so it stays in use.)
-    let old = config_dir.join("ssh").join("ingle_ed25519");
+    // (Made before the rename, the key has the old name (`legacy::SSH_KEY`): the servers it
+    // rented trust that one, so it stays in use.)
+    let old = config_dir.join("ssh").join(pyr_proto::legacy::SSH_KEY);
     let new = config_dir.join("ssh").join("pyr_ed25519");
     if !new.exists() && old.exists() { old } else { new }
 }
@@ -115,17 +115,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The key made before Pyr was called Pyr (`ingle_ed25519`) stays the one used: the
-    /// servers it rented trust it.
+    /// The key made before the rename (`legacy::SSH_KEY`) stays the one used: the servers it
+    /// rented trust it.
     #[test]
-    fn ingles_key_stays_in_use() {
+    fn the_key_from_before_the_rename_stays_in_use() {
         let dir = std::env::temp_dir().join(format!("pyr-key-old-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let made = load_or_create(&dir).unwrap();
-        std::fs::rename(&made.path, dir.join("ssh").join("ingle_ed25519")).unwrap();
+        std::fs::rename(&made.path, dir.join("ssh").join(pyr_proto::legacy::SSH_KEY)).unwrap();
         let again = load_or_create(&dir).unwrap();
         assert_eq!(again.public_openssh, made.public_openssh);
-        assert!(again.path.ends_with("ingle_ed25519"));
+        assert!(again.path.ends_with(pyr_proto::legacy::SSH_KEY));
         assert!(!dir.join("ssh").join("pyr_ed25519").exists(), "no second key");
         let _ = std::fs::remove_dir_all(&dir);
     }

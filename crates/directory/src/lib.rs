@@ -57,7 +57,8 @@ impl Running {
 }
 
 /// Biggest announcement (a thousand codes with names is well under this).
-const MAX_BODY: usize = 512 * 1024;
+/// (An announcement can carry the community's icon, see `pyr_proto::directory::ICON_MAX`.)
+const MAX_BODY: usize = 1024 * 1024;
 /// Connections at once.
 const MAX_CONNECTIONS: usize = 512;
 
@@ -209,6 +210,22 @@ impl State {
                 match is_code(&code).then(|| self.db.lookup(&code)).flatten() {
                     Some(l) => json(StatusCode::OK, &l),
                     None => error(StatusCode::NOT_FOUND, "This invite isn't valid: it may have expired, or been taken back."),
+                }
+            }
+            (Method::GET | Method::HEAD, p) if p.starts_with("/api/v1/icons/") => {
+                if !self.allow(ip, Kind::Read) {
+                    return error(StatusCode::TOO_MANY_REQUESTS, "Too many lookups. Try again in a minute.");
+                }
+                let code = p["/api/v1/icons/".len()..].trim_end_matches(".png").to_ascii_lowercase();
+                match is_code(&code).then(|| self.db.icon(&code)).flatten() {
+                    Some(png) => {
+                        let mut r = Response::new(Full::new(Bytes::from(png)));
+                        r.headers_mut().insert(CONTENT_TYPE, HeaderValue::from_static("image/png"));
+                        r.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("public, max-age=300"));
+                        r.headers_mut().insert("x-content-type-options", HeaderValue::from_static("nosniff"));
+                        r
+                    }
+                    None => error(StatusCode::NOT_FOUND, "No icon here."),
                 }
             }
             (Method::POST, "/api/v1/announce") => {

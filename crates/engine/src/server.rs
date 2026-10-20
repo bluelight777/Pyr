@@ -181,6 +181,7 @@ async fn session(
     crate::verify::fetch_vouches_for_me(shared, key);
     crate::sync_avatar(shared.clone(), key.to_string());
     crate::resume_voice(shared.clone(), key.to_string());
+    crate::rewatch_poker(shared.clone(), key.to_string());
     crate::backup::spawn_schedule(shared.clone(), key.to_string(), conn.clone());
     crate::sync_blocks(shared, key);
     {
@@ -689,7 +690,7 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
             // (Handshakes are handled before this; vouches only come as replies.)
             Event::Pong { .. } | Event::Ok | Event::Hello { .. } | Event::Ready { .. } | Event::Handshake { .. } | Event::Vouches { .. } | Event::Readers { .. } | Event::KeyShares { .. } | Event::KeysWanted { .. } => {}
             Event::Error { message, .. } => toast = Some(message),
-            Event::History { .. } | Event::InviteCreated { .. } | Event::Invites { .. } | Event::VoiceReady { .. } | Event::Kicked { .. } | Event::Bugs { .. } | Event::PluginSubmissions { .. } | Event::PluginSubmission { .. } | Event::SubmissionFile { .. } | Event::Submitted { .. } | Event::MySubmissions { .. } => {}
+            Event::History { .. } | Event::InviteCreated { .. } | Event::Invites { .. } | Event::VoiceReady { .. } | Event::Kicked { .. } | Event::Bugs { .. } | Event::PluginSubmissions { .. } | Event::PluginSubmission { .. } | Event::SubmissionFile { .. } | Event::Submitted { .. } | Event::MySubmissions { .. } | Event::IdeaJoined { .. } => {}
         }
         // (The server saying no: no bug.)
         if let Some(t) = toast {

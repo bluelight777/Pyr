@@ -1,5 +1,5 @@
 //! Putting a server back from a backup (see the app's `backup.rs`): the backup folder is
-//! packed as a tar of exactly what the server's data folder holds (`ingle.db`, `files/`,
+//! packed as a tar of exactly what the server's data folder holds (`pyr.db`, `files/`,
 //! `server-cert.der`, `server-key.der`) and unpacked there by the setup script
 //! (`--restore`), before the server first starts. The server's private key is sealed in the
 //! backup to the owner who made it (`server-key.der.sealed`, see
@@ -48,7 +48,7 @@ pub fn pack(b: &Backup) -> Result<Vec<u8>> {
         bail!("{} isn't a Pyr server backup (it has no database/latest.db).", backup.display());
     }
     let mut tar = Vec::new();
-    add(&mut tar, "ingle.db", &std::fs::read(&db).context("reading the backup's database")?)?;
+    add(&mut tar, "pyr.db", &std::fs::read(&db).context("reading the backup's database")?)?;
     let identity = backup.join("identity");
     let cert = identity.join("server-cert.der");
     let sealed = identity.join("server-key.der.sealed");
@@ -137,7 +137,7 @@ mod tests {
         let out = std::process::Command::new("tar").arg("-tvf").arg(&t).output().unwrap();
         let list = String::from_utf8_lossy(&out.stdout);
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-        assert!(list.contains("ingle.db") && list.contains("server-key.der") && list.contains("files/0123456789abcdef0123456789abcdef"), "{list}");
+        assert!(list.contains("pyr.db") && list.contains("server-key.der") && list.contains("files/0123456789abcdef0123456789abcdef"), "{list}");
         assert!(!list.contains("not-ours"), "{list}");
         let x = d.join("x");
         std::fs::create_dir_all(&x).unwrap();

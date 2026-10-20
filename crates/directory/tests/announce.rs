@@ -124,6 +124,40 @@ async fn invites_open_by_their_code_and_go_when_taken_back() {
     assert!(hub.db.invite("camp-fire").is_none());
     other.hub.set_vanity(&owner, Some("camp-fire".into())).await.unwrap();
 
+    // The server's icon: pyr.gg asks for it, keeps a copy, and shows it on the invite's page
+    // and in its link preview.
+    let png = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../installer/site/pyr-icon.png")).unwrap();
+    let id = "0123456789abcdef0123456789abcdef";
+    std::fs::write(hub.files_dir.join(id), &png).unwrap();
+    hub.db.set_meta("icon", id).unwrap();
+    hub.directory().unwrap().sync().await.unwrap();
+    let mut shown = None;
+    for _ in 0..50 {
+        let got = tokio::task::spawn_blocking({
+            let base = base.clone();
+            move || {
+                let mut r = agent().get(&format!("{base}/api/v1/icons/campfire2.png")).call().unwrap();
+                (r.status().as_u16(), r.headers().get("content-type").and_then(|v| v.to_str().ok()).map(str::to_string), r.body_mut().with_config().limit(1 << 20).read_to_vec().unwrap())
+            }
+        })
+        .await
+        .unwrap();
+        if got.0 == 200 {
+            shown = Some(got);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let (_, kind, bytes) = shown.expect("pyr.gg has the icon");
+    assert_eq!((kind.as_deref(), bytes == png), (Some("image/png"), true));
+    let page = tokio::task::spawn_blocking({
+        let base = base.clone();
+        move || get(&base, "/campfire2").1
+    })
+    .await
+    .unwrap();
+    assert!(page.contains("\"icon\":true"), "{page}");
+
     // Short links off: everything of the community's goes from the directory.
     hub.db.set_meta("short_links", "0").unwrap();
     hub.directory().unwrap().sync().await.unwrap();

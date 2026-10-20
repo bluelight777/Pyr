@@ -9,11 +9,12 @@ Write-Host "If it asks 'Are you sure you want to continue connecting', type yes.
 # Into a new folder with a random name in root's own home folder (not /tmp, where another
 # account on the VPS could put its own files in the way before they run as root).
 $folder = "pyr-release-" + [guid]::NewGuid().ToString("N").Substring(0, 16)
-# Big downloads can arrive in parts (name.part1, name.part2, ...): put each back together,
-# check it against latest.json, and add the copies under the names that never change.
+# Big files can arrive in parts (name.part1, name.part2, ...), anywhere in the upload (the
+# downloads, the Library): put each back together, check the downloads against latest.json,
+# and add the copies under the names that never change.
 $site = Join-Path $here "upload\pyr"
-foreach ($first in @(Get-ChildItem -Path $site -Filter "*.part1")) {
-    $whole = Join-Path $site ($first.Name -replace '\.part1$', '')
+foreach ($first in @(Get-ChildItem -Path (Join-Path $here "upload") -Recurse -Filter "*.part1")) {
+    $whole = Join-Path $first.DirectoryName ($first.Name -replace '\.part1$', '')
     $out = [System.IO.File]::Create($whole)
     try {
         $i = 1
@@ -25,15 +26,16 @@ foreach ($first in @(Get-ChildItem -Path $site -Filter "*.part1")) {
     } finally {
         $out.Close()
     }
-    Get-ChildItem -Path $site -Filter "$(Split-Path -Leaf $whole).part*" | Remove-Item
+    Get-ChildItem -Path $first.DirectoryName -Filter "$(Split-Path -Leaf $whole).part*" | Remove-Item
 }
 $manifest = (Get-Content -Raw (Join-Path $site "latest.json") | ConvertFrom-Json).manifest | ConvertFrom-Json
-# (And under the names they had before Pyr was called Pyr, for links to them out there.)
+# (And under the names they had before Pyr's rename, for links to them out there.)
+$old = "ingle"
 $downloads = @(
     @{ Item = $manifest.windows; Stable = "Pyr-Setup.exe" },
-    @{ Item = $manifest.windows; Stable = "Ingle-Setup.exe" },
+    @{ Item = $manifest.windows; Stable = "$((Get-Culture).TextInfo.ToTitleCase($old))-Setup.exe" },
     @{ Item = $manifest.linux_deb; Stable = "pyr_amd64.deb" },
-    @{ Item = $manifest.linux_deb; Stable = "ingle_amd64.deb" }
+    @{ Item = $manifest.linux_deb; Stable = "$($old)_amd64.deb" }
 )
 foreach ($d in $downloads) {
     if ($null -eq $d.Item) { continue }
@@ -50,8 +52,8 @@ ssh $server "bash ~/$folder/install-site.sh"
 if ($LASTEXITCODE -ne 0) { throw "Putting the files on the website didn't work." }
 $f = Invoke-RestMethod -Uri "https://pyr.gg/latest.json" -Headers @{ "Cache-Control" = "no-cache" }
 $m = $f.manifest | ConvertFrom-Json
-# Copies from before the rename look here (the same folder).
-$o = Invoke-RestMethod -Uri "https://firelitgames.com/ingle/latest.json" -Headers @{ "Cache-Control" = "no-cache" }
+# Copies from before the rename look under the old name (the same folder).
+$o = Invoke-RestMethod -Uri "https://firelitgames.com/$old/latest.json" -Headers @{ "Cache-Control" = "no-cache" }
 $om = $o.manifest | ConvertFrom-Json
 Write-Host ""
-Write-Host "Done: pyr.gg now offers Pyr $($m.version) (and firelitgames.com/ingle offers $($om.version) to copies from before the rename). Running copies will offer the update within a few hours (or right away when reopened)."
+Write-Host "Done: pyr.gg now offers Pyr $($m.version) (and $($om.version) to copies from before the rename, at their old address). Running copies will offer the update within a few hours (or right away when reopened)."

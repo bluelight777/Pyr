@@ -51,6 +51,22 @@
         "storage"
       ],
       "wasm": "firelit-poker/0.1.0/poker.wasm"
+    },
+    {
+      "id": "domino-cubano",
+      "name": "Dominó Cubano",
+      "kind": "program",
+      "version": "0.1.0",
+      "summary": "Cuban double-nine dominoes against the computer: mano a mano (1 vs 1) or en pareja (2 vs 2 teams).",
+      "description": "Cuban double-nine dominoes on a mahogany park table in old Havana. Mano a mano, you play Abuelo Cheo and draw from the pozo when you can't play; en pareja, you and Yoli take on Cheo and Pancho, fifteen tiles sleep face down and you pass when you can't play. Games run to 100, 150 or 200 points: going out scores every pip left in the other side's hands, a capicúa is worth 25 more, and a locked table (tranque) goes to the lightest hand. The pizarra keeps score, and every sound, the clack of the tiles, the knock for a pass and the optional son clave, is made in code.",
+      "author": "Chimbita",
+      "license": "MIT",
+      "review": "Read and built from its source for the Pyr Library. A program: one window, with no internet, no files read and nothing saved between games. The one exception: if it ever crashes it writes a short report to domino-cubano-crash.txt in your temporary folder, so it can be fixed. It opens inside Pyr's window like Chimbrowser.",
+      "icon": "domino-cubano/icon.png",
+      "windows": [
+        "domino-cubano/0.1.0/windows/domino-cubano.exe"
+      ],
+      "run": "domino-cubano.exe"
     }
   ],
   "skins": [

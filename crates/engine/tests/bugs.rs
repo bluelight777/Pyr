@@ -128,6 +128,21 @@ async fn reports_reach_only_the_owner() {
     owner.set_bug_status(&key, r.id, BugStatus::Fixed);
     wait_for("fixed: nothing left to fix", 10, || !saved.exists()).await;
 
+    // Ideas: the same one asked twice is one idea, asked by two; a different one is its own.
+    stranger.suggest_idea("Drag channels to reorder", "Let me drag and drop channels up and down");
+    wait_for("idea sent", 15, || toast(&stranger, "Your idea was sent")).await;
+    member.suggest_idea("Reorder channels by dragging", "I want to drag the channels into a different order");
+    wait_for("the same idea joined", 15, || toast(&member, "Someone had the same idea already (“Drag channels to reorder”)")).await;
+    stranger.suggest_idea("Mute my stream's sound", "");
+    wait_for("another idea", 15, || stranger.state().toasts.iter().filter(|t| t.text.contains("Your idea was sent")).count() == 2).await;
+    owner.list_bugs(&key);
+    wait_for("owner sees the ideas", 10, || owner.state().bugs[&key].iter().filter(|b| b.report.kind == pyr_proto::control::ReportKind::Idea).count() == 2).await;
+    let ideas: Vec<_> = owner.state().bugs[&key].iter().filter(|b| b.report.kind == pyr_proto::control::ReportKind::Idea).cloned().collect();
+    let drag = ideas.iter().find(|b| b.report.title == "Drag channels to reorder").unwrap();
+    assert_eq!(drag.asked, 2);
+    assert!(drag.report.body.contains("different order"), "what the second one wrote is kept with it");
+    assert_eq!(ideas.iter().find(|b| b.report.title.starts_with("Mute")).unwrap().asked, 1);
+
     // A flood from one address is cut off (everything here comes from 127.0.0.1).
     let mut refused = 0;
     for i in 0..6 {

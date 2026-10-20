@@ -60,6 +60,10 @@ pub struct CapturePipeline {
     /// Voice isolation: how loud your own voice usually is at the mic (dB), the gain being
     /// applied, and until when the voice going on is yours (close to the mic, and speech).
     iso_ref_db: f32,
+    /// How loud your confident speech has been (see `isolate`).
+    iso_levels: Levels,
+    /// Confident speech much quieter than your level, in a row (10 ms frames).
+    iso_below: u32,
     iso_gain: f32,
     mine_until: Instant,
     settings: Settings,
@@ -70,6 +74,10 @@ pub struct CapturePipeline {
     analyzer: super::spectrum::Analyzer,
     /// When my voice last went out (to start the bands afresh after a silence).
     went_out: Option<Instant>,
+    /// Watching for my voice going up and down for the others (see `swells`).
+    swells: super::swells::Swells,
+    /// This frame's level after echo cancellation and automatic gain.
+    apm_db: f32,
 }
 
 /// How long speech counts as going on after RNNoise last heard it (bridges the quiet parts of
@@ -79,6 +87,9 @@ const SPEECH_HOLD_MS: u64 = 350;
 /// you, and once it is, stays you down to this many dB (people trail off within sentences).
 const ISO_START_DB: f32 = 12.0;
 const ISO_KEEP_DB: f32 = 20.0;
+/// Voice isolation: after this much confident speech (10 ms frames) all much quieter than
+/// your level, it's taken as your level now.
+const ISO_RELEARN_FRAMES: u32 = 3000;
 /// Voice isolation: whether speech is detected in DeepFilterNet's cleaned sound, and the
 /// look-ahead in 10 ms frames (see `tune_isolation`). Detecting it in the microphone's own
 /// sound needs no look-ahead of its own: DeepFilterNet's output is 30 ms behind its input, so
@@ -94,6 +105,46 @@ const ISO_FLOOR: f32 = 0.03;
 fn rms_db(x: &[f32]) -> f32 {
     let s = x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32;
     if s > 1e-10 { 10.0 * s.log10() } else { -100.0 }
+}
+
+/// Levels heard (1 dB steps from -80 dBFS), what's older counting less: half as much after
+/// every 30 seconds of what's counted.
+#[derive(Default)]
+struct Levels {
+    bins: Vec<f32>,
+    total: f32,
+}
+
+impl Levels {
+    const FADE: f32 = 0.999_769; // 0.5^(1/3000): half-life of 3000 frames of 10 ms
+    /// Enough to go by: half a second.
+    const ENOUGH: f32 = 50.0;
+
+    fn add(&mut self, db: f32) {
+        if self.bins.is_empty() {
+            self.bins = vec![0.0; 80];
+        }
+        self.bins.iter_mut().for_each(|b| *b *= Self::FADE);
+        self.total *= Self::FADE;
+        let i = ((db + 80.0).floor().max(0.0) as usize).min(79);
+        self.bins[i] += 1.0;
+        self.total += 1.0;
+    }
+
+    /// The usual level (dBFS): what three quarters of it is at or under, once there's enough.
+    fn usual(&self) -> Option<f32> {
+        if self.total < Self::ENOUGH {
+            return None;
+        }
+        let mut seen = 0.0;
+        for (i, b) in self.bins.iter().enumerate() {
+            seen += b;
+            if seen >= self.total * 0.75 {
+                return Some(i as f32 - 80.0 + 0.5);
+            }
+        }
+        None
+    }
 }
 
 impl CapturePipeline {
@@ -164,6 +215,8 @@ impl CapturePipeline {
             raw_recent_at: 0,
             iso_delay: std::iter::repeat_n(0.0, iso_lookahead * 480).collect(),
             iso_ref_db: -100.0,
+            iso_levels: Levels::default(),
+            iso_below: 0,
             iso_gain: 1.0,
             mine_until: now,
             settings: settings.clone(),
@@ -172,6 +225,8 @@ impl CapturePipeline {
             encoded: vec![0u8; 1500],
             analyzer: super::spectrum::Analyzer::new(),
             went_out: None,
+            swells: Default::default(),
+            apm_db: -100.0,
         })
     }
 
@@ -284,14 +339,37 @@ impl CapturePipeline {
         let speech = now < self.speech_until;
         let e = self.raw_recent.iter().sum::<f32>() / self.raw_recent.len() as f32;
         let level = if e > 1e-10 { 10.0 * e.log10() } else { -100.0 };
-        // Learn your level from confident speech, gently: it rises toward a louder voice and
-        // sinks only with speech close to it (you talking more softly), never toward a quieter
-        // voice further away, or it would end up learning the other person.
-        if self.voice_prob > 0.8 && level > -70.0 {
+        // Learn your level from confident speech: the level three quarters of your speech is
+        // at or under (recent speech counting most). A laugh, a shout or a loud moment from a
+        // game or a speaker doesn't move it: those used to raise it quickly and for good, and
+        // then your normal voice was turned down as if it were someone else's, in and out, for
+        // as long as Pyr was open. A voice much quieter than yours (across the room) isn't
+        // counted, unless for half a minute of speech there's nothing else.
+        if self.voice_prob > 0.8 && level > -70.0 && pyr_proto::ab::old("isoref") {
+            // (Before 0.9.1: rose quickly toward louder speech, sank only slowly.)
             if level > self.iso_ref_db {
                 self.iso_ref_db += (level - self.iso_ref_db) * if self.iso_ref_db < -90.0 { 1.0 } else { 0.05 };
             } else if level > self.iso_ref_db - 8.0 {
                 self.iso_ref_db += (level - self.iso_ref_db) * 0.01;
+            }
+        } else if self.voice_prob > 0.8 && level > -70.0 && speech {
+            if self.iso_ref_db < -90.0 || level > self.iso_ref_db - ISO_START_DB {
+                self.iso_levels.add(level);
+                self.iso_below = 0;
+                match self.iso_levels.usual() {
+                    Some(r) => self.iso_ref_db = r,
+                    // (Not enough yet: the loudest so far, as a start.)
+                    None => self.iso_ref_db = self.iso_ref_db.max(level),
+                }
+            } else {
+                // Only quieter speech for a long while: that's you now (further from the
+                // microphone, or it was turned down), not someone across the room.
+                self.iso_below += 1;
+                if self.iso_below >= ISO_RELEARN_FRAMES {
+                    self.iso_levels = Levels::default();
+                    self.iso_ref_db = level;
+                    self.iso_below = 0;
+                }
             }
         }
         // Becoming "you" takes speech nearly as loud as you; staying "you" through the softer
@@ -358,6 +436,7 @@ impl CapturePipeline {
         let raw_db = rms_db(&frame[..480]);
         self.scratch.copy_from_slice(&frame[..480]);
         let _ = self.apm.process_capture_f32(&[&self.scratch], &mut [&mut frame[..480]]);
+        self.apm_db = rms_db(&frame[..480]);
 
         if let Some(d) = self.dfn.as_mut() {
             // Voice isolation: DeepFilterNet cleans; RNNoise only listens for speech.
@@ -391,6 +470,10 @@ impl CapturePipeline {
         ctl.mic_level.store(self.level_db.to_bits(), Ordering::Relaxed);
 
         let open = self.gate(now, ctl);
+        if let Some(what) = self.swells.feed([raw_db, self.apm_db, db, rms_db(&frame[..480])], open) {
+            tracing::warn!("{what}");
+            *ctl.swelled.lock() = Some(what);
+        }
         ctl.transmitting.store(open, Ordering::Relaxed);
         // My voice meter: what goes out, while it does (unless voice meters are off).
         if open && !ctl.meters_off.load(Ordering::Relaxed) {

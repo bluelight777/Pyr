@@ -1300,7 +1300,7 @@ impl Hub {
             // (Private conversations' calls only for their own people.)
             voice: inner.voice.values().filter(|v| v.audience.as_ref().is_none_or(|who| who.iter().any(|w| w == uid))).map(|v| v.p.clone()).collect(),
             roles: self.db.roles(),
-            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, DND_FEATURE, BIG_FILES_FEATURE, GIFS_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE, VOUCHES_FOR_ME_FEATURE, PRIVATE_CHANNELS_FEATURE, BOTS_FEATURE, INVITES_FEATURE, POKER_FEATURE, SEALED_FEATURE].iter().map(|s| s.to_string()).collect(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, DND_FEATURE, BIG_FILES_FEATURE, GIFS_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE, VOUCHES_FOR_ME_FEATURE, PRIVATE_CHANNELS_FEATURE, BOTS_FEATURE, INVITES_FEATURE, POKER_FEATURE, SEALED_FEATURE, CHANNEL_ORDER_FEATURE].iter().map(|s| s.to_string()).collect(),
             dms: self.db.dms_of(uid),
             relations: self.db.relations_of(uid),
             groups: if groups { self.db.groups_of(uid) } else { Vec::new() },
@@ -1906,7 +1906,9 @@ impl Hub {
     /// Take a bug report (sent instead of logging in), if the owner collects them and the
     /// sender isn't flooding: at most 5 an hour from one address, 60 in all, and 2,000
     /// waiting to be read.
-    pub fn take_bug_report(&self, ip: IpAddr, mut r: BugReport) -> Result<(), String> {
+    /// Takes a bug report or an idea. An idea that's the same as one already here counts as one
+    /// more asking for that one instead (its title comes back).
+    pub fn take_bug_report(&self, ip: IpAddr, mut r: BugReport) -> Result<Option<String>, String> {
         // (Counted per place: one IPv6 /64 is one sender, whichever of its addresses.)
         let place = Place::of(ip, 64);
         if self.db.get_meta("bug_reports").as_deref() != Some("1") {
@@ -1946,11 +1948,18 @@ impl Hub {
         if r.title.trim().is_empty() && r.body.trim().is_empty() {
             return Err("The report is empty.".into());
         }
+        if !r.kind.is_bug() {
+            if let Some((id, title)) = self.db.same_idea(&r) {
+                self.db.join_idea(id, &r, 4 * BUG_BODY_MAX).map_err(|e| format!("{e:#}"))?;
+                info!(id, "idea asked for again");
+                return Ok(Some(title));
+            }
+        }
         let id = self.db.add_bug(&r).map_err(|e| format!("{e:#}"))?;
-        info!(id, "bug report received");
+        info!(id, "{} received", if r.kind.is_bug() { "bug report" } else { "idea" });
         // Tell the owner's open apps there's something new (it shows as a count).
         self.broadcast_info();
-        Ok(())
+        Ok(None)
     }
 
     /// Whether a plugin or skin from `ip` would be taken now: checked before the rest of a
@@ -2120,7 +2129,7 @@ impl Hub {
             if key.is_empty() || claim.iter().any(|(k, _)| *k == key) {
                 continue;
             }
-            let ours = key.contains(&firelit) || OWNER_NAMES.iter().any(|n| author_key(n) == key);
+            let ours = key.contains(&firelit) || OWNER_NAMES.iter().chain(pyr_proto::legacy::RESERVED_NAMES).any(|n| author_key(n) == key);
             if ours && !owner {
                 return Err(format!("The author name \u{201c}{}\u{201d} is Firelit Games' own. Use a name of your own.", name.trim()));
             }
@@ -2224,7 +2233,8 @@ fn name_taken(name: &str) -> String {
 
 /// Author names that are the library owner's (Firelit Games') alone: Pyr's own, and any
 /// with "Firelit" in them.
-const OWNER_NAMES: &[&str] = &["Pyr", "Pyr Library", "Pyr Team", "Ingle", "Ingle Library", "Ingle Team"];
+/// (And the names from before the rename, `legacy::RESERVED_NAMES`.)
+const OWNER_NAMES: &[&str] = &["Pyr", "Pyr Library", "Pyr Team"];
 const OWNER_NAME_PART: &str = "Firelit";
 
 /// How a new version's files differ from the one before: "Changed: a, b. Added: c. Taken out: d."

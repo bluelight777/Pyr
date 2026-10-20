@@ -299,7 +299,7 @@ impl PyrApp {
             });
             ui.add_space(14.0);
             ui.horizontal(|ui| {
-                let installed = self.plugins.installed.plugins.len();
+                let installed = self.plugins.installed.plugins.len() + st.settings.poker_installed as usize;
                 for (tab, label) in [(Tab::Library, "Library".to_string()), (Tab::Installed, format!("Installed ({installed})")), (Tab::Make, "Make your own".to_string())] {
                     let selected = self.plugins.tab == tab;
                     if ui.add(egui::Button::selectable(selected, RichText::new(label).font(theme::bold_font(14.0))).min_size(vec2(0.0, 30.0))).clicked() {
@@ -326,7 +326,7 @@ impl PyrApp {
                     Some(id) => self.plugin_detail(ui, &id, st, acts),
                     None => self.library_grid(ui, st, acts),
                 },
-                Tab::Installed => self.installed_list(ui, acts),
+                Tab::Installed => self.installed_list(ui, st, acts),
                 Tab::Make => self.make_your_own(ui, st, acts),
             });
         });
@@ -667,6 +667,15 @@ impl PyrApp {
     }
 
     fn library_grid(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
+        // Pyr's own (there whether or not the Library's list came).
+        let q = self.plugins.search.trim().to_lowercase();
+        if matches!(self.plugins.show, Show::All | Show::Programs)
+            && self.plugins.author.is_none()
+            && (q.is_empty() || format!("pyr casino poker {POKER_SUMMARY} hold'em omaha cards slots").to_lowercase().contains(&q))
+        {
+            poker_card(ui, st, acts);
+            ui.add_space(12.0);
+        }
         if !self.library_state(ui) {
             return;
         }
@@ -1057,7 +1066,7 @@ impl PyrApp {
         });
     }
 
-    fn installed_list(&mut self, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
+    fn installed_list(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
         if let Some(tried) = self.plugins.tried.clone().filter(|t| self.plugins.addons.contains_key(t)) {
             let name = self.plugins.addons[&tried].info.name.clone();
             egui::Frame::new().fill(theme::ELEV()).stroke(Stroke::new(1.0f32, theme::EMBER2())).corner_radius(10).inner_margin(12).show(ui, |ui| {
@@ -1086,7 +1095,14 @@ impl PyrApp {
             });
             ui.add_space(10.0);
         }
+        if st.settings.poker_installed {
+            poker_card(ui, st, acts);
+            ui.add_space(8.0);
+        }
         let list = self.plugins.installed.plugins.clone();
+        if list.is_empty() && st.settings.poker_installed {
+            return;
+        }
         if list.is_empty() {
             ui.label(RichText::new("No plugins installed yet. Have a look in the Library.").color(theme::MUTED()));
             return;
@@ -1787,4 +1803,46 @@ fn draw_widgets(ui: &mut egui::Ui, id: &str, widgets: &[Widget], inputs: &mut st
 pub(crate) fn open_submissions(app: &mut PyrApp, key: &str, acts: &mut Vec<Act>, skins: bool) {
     acts.push(Act::ListSubmissions(key.to_string()));
     app.ui.dialog = Some(Dialog::PluginSubmissions { key: key.to_string(), skins, filter: 0, open_file: None });
+}
+
+const POKER_SUMMARY: &str = "Poker with people on your servers and with bots, at tables or in tournaments, and Pyr Sevens slots, blackjack, roulette, baccarat, craps, dice and keno against the house. Play chips only, every round checked by your own Pyr.";
+
+/// Pyr Poker's card: made by Pyr and part of it, so installing it only puts it in the channel
+/// list of each server that has it (and removing it takes it out again).
+fn poker_card(ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
+    let installed = st.settings.poker_installed;
+    egui::Frame::new().fill(theme::ELEV()).stroke(Stroke::new(1.0f32, if installed { theme::LINE() } else { theme::EMBER2() })).corner_radius(12).inner_margin(16).show(ui, |ui| {
+        card_visuals(ui);
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            let (r, _) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::hover());
+            ui.painter().rect_filled(r, CornerRadius::same(11), theme::ELEV2());
+            crate::poker::mark::icon(ui.painter(), r.center(), r.shrink(10.0).width(), theme::EMBER2());
+            ui.add_space(4.0);
+            ui.vertical(|ui| {
+                ui.set_max_width((ui.available_width() - 200.0).max(160.0));
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Pyr Casino").font(theme::bold_font(17.0)).color(theme::TEXT()));
+                    pill(ui, "Made by Pyr", theme::ELEV2(), theme::EMBER2());
+                });
+                ui.add(egui::Label::new(RichText::new(POKER_SUMMARY).color(theme::BODY())).wrap());
+                let where_ = if installed {
+                    "In the channel list of each of your servers that has it."
+                } else {
+                    "Once installed, it's in the channel list of each of your servers that has it."
+                };
+                ui.label(RichText::new(where_).size(12.5).color(theme::DIM()));
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if installed {
+                    if ui.button("Remove").on_hover_text("Takes it out of your channel lists (your chips stay)").clicked() {
+                        acts.push(Act::InstallPoker(false));
+                    }
+                    ui.label(RichText::new("Installed").color(theme::ONLINE()));
+                } else if ui.add(theme::primary_button("Install").min_size(vec2(92.0, 30.0))).clicked() {
+                    acts.push(Act::InstallPoker(true));
+                }
+            });
+        });
+    });
 }

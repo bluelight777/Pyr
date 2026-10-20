@@ -15,6 +15,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
+# What a released Pyr has built in (unless already set, as tests set it to a dead address).
+[ -n "${PYR_BUG_SERVER:-}" ] || . scripts/release-env.sh
 TARGET=x86_64-pc-windows-gnu
 
 export CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc-win32

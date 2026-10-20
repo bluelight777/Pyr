@@ -10,6 +10,7 @@ pub mod resample;
 pub mod spectrum;
 pub mod stream;
 pub mod stream_echo;
+pub mod swells;
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -56,6 +57,8 @@ pub struct Controls {
     /// release delay, voice quality): the microphone takes them up within 10 ms, without
     /// starting the sound again (see `CapturePipeline::retune`).
     pub retune: Mutex<Option<Settings>>,
+    /// My voice went up and down for the others just now, and why (see `swells`).
+    pub swelled: Mutex<Option<String>>,
 }
 
 /// A volume that can change while sound flows (an f32's bits); 1.0 to start with.

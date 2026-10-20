@@ -18,8 +18,8 @@ pub struct ClaudeSetup {
     at: Instant,
     exe: Option<std::path::PathBuf>,
     configs: Vec<(std::path::PathBuf, Setup)>,
-    /// Claude Code still starts Ingle's connector (from before Pyr was called Pyr).
-    code_has_ingles: bool,
+    /// Claude Code still starts the connector from before the rename.
+    code_has_old_connector: bool,
     /// What the last button did (or why it didn't).
     pub said: Option<(String, bool)>,
 }
@@ -178,8 +178,8 @@ impl PyrApp {
                 None => Vec::new(),
             };
             let said = self.ui.claude_setup.take().and_then(|c| c.said);
-            let code_has_ingles = connector::claude_code_config().is_some_and(|c| connector::claude_code_has_ingles(&c));
-            self.ui.claude_setup = Some(ClaudeSetup { at: Instant::now(), exe, configs, code_has_ingles, said });
+            let code_has_old_connector = connector::claude_code_config().is_some_and(|c| connector::claude_code_has_old_connector(&c));
+            self.ui.claude_setup = Some(ClaudeSetup { at: Instant::now(), exe, configs, code_has_old_connector, said });
             ui.ctx().request_repaint_after(Duration::from_secs(2));
         }
         let Some(setup) = self.ui.claude_setup.as_ref() else { return };
@@ -190,7 +190,7 @@ impl PyrApp {
         };
         let configs = setup.configs.clone();
         let said = setup.said.clone();
-        let code_has_ingles = setup.code_has_ingles;
+        let code_has_old_connector = setup.code_has_old_connector;
         let mut did: Option<(String, bool)> = None;
         if cfg!(windows) || cfg!(target_os = "macos") {
             field_label(ui, "The Claude app");
@@ -254,11 +254,11 @@ impl PyrApp {
                 }
             });
         };
-        if code_has_ingles {
+        if code_has_old_connector {
             // (Claude Code's settings file is only read: Claude Code's own commands change it.)
             notice(
                 ui,
-                "Claude Code still starts Ingle's connector, from before Pyr was called Pyr (it went with Ingle). Run these two in a \
+                "Claude Code still starts the connector from before Pyr's rename, which no longer exists. Run these two in a \
                  terminal to switch it to Pyr's, then start Claude Code again:",
                 true,
             );
@@ -280,7 +280,7 @@ impl PyrApp {
         });
         if did.is_some() {
             // Look again now, and keep what the button said.
-            self.ui.claude_setup = Some(ClaudeSetup { at: Instant::now() - Duration::from_secs(10), exe: Some(exe), configs, code_has_ingles, said: did });
+            self.ui.claude_setup = Some(ClaudeSetup { at: Instant::now() - Duration::from_secs(10), exe: Some(exe), configs, code_has_old_connector, said: did });
         }
     }
 }

@@ -7,19 +7,22 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use parking_lot::Mutex;
-use pyr_poker::net::{GainsView, LeaderRow, RecordView, TableId, ToApp, ToServer, TourneyId};
+use pyr_poker::net::{GainsView, LeaderRow, PrizeView, RecordView, Role, StaffLog, StaffMember, StaffView, TableId, ToApp, ToServer, TourneyId};
 use pyr_poker::progress::{self, COSMETICS, Kind, Record};
 use pyr_poker::room::{Effect, Look, Output, Random, Rcpt, Room};
-use pyr_poker::tourney::Tourney;
+use pyr_poker::net::TourneyPhase;
+use pyr_poker::tourney::{self as tourney, Tourney};
 use pyr_proto::control::Event;
 use tracing::info;
 
 use crate::hub::Hub;
 
+mod casino;
+
 /// The most tables a server keeps, and that one person can have made at once.
 pub const MAX_TABLES: usize = 40;
 pub const MAX_TABLES_EACH: usize = 3;
-/// A table nobody (no person) has sat at for this long is closed.
+/// A table nobody (no person) has sat at or watched for this long is closed.
 pub const EMPTY_CLOSE_MS: u64 = 30 * 60 * 1000;
 
 /// The system's random numbers.
@@ -47,13 +50,28 @@ impl Random for SysRandom {
 
 /// The most tournaments kept at once (running, waiting or just over).
 pub const MAX_TOURNEYS: usize = 20;
+/// The database's notes: the Friday Night pool (chips), and the start of the last one begun.
+const FRIDAY_POOL: &str = "poker_friday_pool";
+const FRIDAY_STARTED: &str = "poker_friday_started";
+/// Staff: everyone's role, what each gave away today, the week's rake by day, and the log.
+const ROLES: &str = "poker_roles";
+const STAFF_LOG: &str = "poker_staff_log";
+const STAFF_LOG_KEEP: usize = 300;
+/// The least a Game Master / Ambassador may give a day, however little has been raked.
+const GM_FLOOR: u64 = 25_000;
+const AMBASSADOR_FLOOR: u64 = 5_000;
 /// A finished tournament's results are kept this long.
 pub const TOURNEY_KEEP_MS: u64 = 2 * 60 * 60 * 1000;
+/// Time Bombs: how many at once (they don't count toward `MAX_TOURNEYS`), and how long a
+/// finished one stays to be seen.
+pub const MAX_BOMBS: usize = 40;
+pub const BOMB_KEEP_MS: u64 = 10 * 60 * 1000;
 
 #[derive(Default)]
 pub struct State {
     pub rooms: BTreeMap<TableId, Room>,
     pub tourneys: BTreeMap<TourneyId, Tourney>,
+    pub casino: casino::CasinoState,
 }
 
 impl State {
@@ -88,6 +106,19 @@ impl Default for Poker {
     fn default() -> Self {
         Poker { state: Mutex::new(State::default()), next_tourney: AtomicU64::new(1), next_id: AtomicU64::new(1), start: Instant::now(), last_people: Mutex::new(HashMap::new()) }
     }
+}
+
+/// 12,345 chips, written as people write it.
+fn progress_chips(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 fn today() -> u64 {
@@ -135,6 +166,7 @@ impl Poker {
             chip_set: rec.chip_set.clone(),
             frame: rec.frame.clone(),
             unlocked: rec.unlocked().iter().map(|c| c.id.to_string()).collect(),
+            role: Self::role(hub, uid),
         }
     }
 
@@ -145,6 +177,130 @@ impl Poker {
     fn me(&self, hub: &Hub, st: &State, uid: &str) -> RecordView {
         let (rec, _) = hub.db.poker_record(uid);
         Self::view(hub, uid, &rec, st.held(uid))
+    }
+
+    /// Everyone with a role.
+    fn roles(hub: &Hub) -> BTreeMap<String, Role> {
+        hub.db.get_meta(ROLES).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+    }
+
+    pub fn role(hub: &Hub, uid: &str) -> Option<Role> {
+        Self::roles(hub).get(uid).copied()
+    }
+
+    /// Chips raked over the last 7 days.
+    fn rake_week(hub: &Hub) -> u64 {
+        let d = today();
+        (d.saturating_sub(6)..=d).map(|d| hub.db.get_meta(&format!("poker_rake:{d}")).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0)).sum()
+    }
+
+    /// What a role may give away a day: a Game Master, a day's rake (the week's average); an
+    /// Ambassador, a quarter of that; never less than their floor.
+    fn allowance(hub: &Hub, role: Role) -> u64 {
+        let day = Self::rake_week(hub) / 7;
+        match role {
+            Role::GameMaster => day.max(GM_FLOOR),
+            Role::Ambassador => (day / 4).max(AMBASSADOR_FLOOR),
+        }
+    }
+
+    fn spent_today(hub: &Hub, uid: &str) -> u64 {
+        hub.db.get_meta(&format!("poker_spent:{}:{uid}", today())).and_then(|v| v.parse().ok()).unwrap_or(0)
+    }
+
+    /// Takes `chips` from `uid`'s allowance today (refused when it's not there).
+    fn spend(hub: &Hub, uid: &str, role: Role, chips: u64) -> Result<(), String> {
+        let spent = Self::spent_today(hub, uid);
+        let left = Self::allowance(hub, role).saturating_sub(spent);
+        if chips > left {
+            return Err(format!("that's more than you have left to give today ({})", progress_chips(left)));
+        }
+        hub.db.set_meta(&format!("poker_spent:{}:{uid}", today()), &(spent + chips).to_string()).map_err(|e| e.to_string())
+    }
+
+    fn log_staff(&self, hub: &Hub, by: &str, what: String) {
+        let mut log: Vec<StaffLog> = hub.db.get_meta(STAFF_LOG).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+        info!("poker staff: {by}: {what}");
+        log.insert(0, StaffLog { at_ms: self.wall(), by: Self::name_of(hub, by), what });
+        log.truncate(STAFF_LOG_KEEP);
+        if let Ok(j) = serde_json::to_string(&log) {
+            let _ = hub.db.set_meta(STAFF_LOG, &j);
+        }
+    }
+
+    fn staff_view(hub: &Hub, uid: &str, can_manage: bool) -> StaffView {
+        let me = Self::role(hub, uid);
+        let allowance = me.map(|r| Self::allowance(hub, r)).unwrap_or(0);
+        StaffView {
+            me,
+            owner: can_manage,
+            allowance,
+            left: allowance.saturating_sub(Self::spent_today(hub, uid)),
+            rake_week: Self::rake_week(hub),
+            staff: Self::roles(hub).into_iter().map(|(u, role)| StaffMember { name: Self::name_of(hub, &u), uid: u, role }).collect(),
+            log: if can_manage { hub.db.get_meta(STAFF_LOG).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default() } else { vec![] },
+        }
+    }
+
+    /// A gift's or prize box's look, checked: one of Pyr Poker's.
+    fn item_name(item: &Option<String>) -> Result<Option<&'static str>, String> {
+        match item {
+            None => Ok(None),
+            Some(id) => progress::cosmetic(id).map(|c| Some(c.name)).ok_or_else(|| "there's no such look".to_string()),
+        }
+    }
+
+    /// Chips into the Friday Night pool (kept in the database, so a restart keeps them), counted
+    /// as the day's rake too (staff allowances follow it).
+    pub(crate) fn add_rake(hub: &Hub, chips: u64) {
+        if chips == 0 {
+            return;
+        }
+        let pool = Self::friday_pool(hub) + chips;
+        let _ = hub.db.set_meta(FRIDAY_POOL, &pool.to_string());
+        let key = format!("poker_rake:{}", today());
+        let day = hub.db.get_meta(&key).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0) + chips;
+        let _ = hub.db.set_meta(&key, &day.to_string());
+    }
+
+    /// The chips raked at the cash tables since the last Friday Night started.
+    pub fn friday_pool(hub: &Hub) -> u64 {
+        hub.db.get_meta(FRIDAY_POOL).and_then(|v| v.parse().ok()).unwrap_or(0)
+    }
+
+    /// Pyr Friday Night: there's always the next one on the list (its prize money growing with
+    /// the week's rake until it starts, when the pool starts over for the next week).
+    fn friday_night(&self, hub: &Hub, st: &mut State, wall: u64) {
+        let pool = Self::friday_pool(hub);
+        let mut have = false;
+        for t in st.tourneys.values_mut().filter(|t| t.host == tourney::FRIDAY_HOST) {
+            match t.phase {
+                TourneyPhase::Registering => {
+                    t.rules.added = tourney::FRIDAY_FLOOR + pool;
+                    have = true;
+                }
+                TourneyPhase::Running => {
+                    have = true;
+                    let started = t.rules.start_ms.to_string();
+                    if hub.db.get_meta(FRIDAY_STARTED).as_deref() != Some(&started) {
+                        // Its prize money is fixed now: the pool starts over.
+                        let _ = hub.db.set_meta(FRIDAY_STARTED, &started);
+                        let _ = hub.db.set_meta(FRIDAY_POOL, &pool.saturating_sub(t.rules.added.saturating_sub(tourney::FRIDAY_FLOOR)).to_string());
+                        info!(tourney = t.id, prize = t.rules.added, "Pyr Friday Night started");
+                    }
+                }
+                _ => {}
+            }
+        }
+        if have || st.tourneys.values().filter(|t| t.rules.bomb.is_none()).count() >= MAX_TOURNEYS {
+            return;
+        }
+        let start = tourney::next_friday_night(wall);
+        let id = self.next_tourney.fetch_add(1, Ordering::Relaxed);
+        if let Ok(t) = Tourney::new(id, tourney::friday_rules(start, tourney::FRIDAY_FLOOR + pool), tourney::FRIDAY_HOST, "Pyr") {
+            info!(tourney = id, start, "Pyr Friday Night listed");
+            st.tourneys.insert(id, t);
+        }
     }
 
     /// Sends a table's news on, and records what hands and leaving meant.
@@ -181,6 +337,17 @@ impl Poker {
                         net: result.won as i64 - result.put_in as i64,
                     };
                     hub.send_to_user(&uid, Event::Poker { msg: ToApp::Record { me: Self::view(hub, &uid, &rec, held), gains: Some(gains) } });
+                }
+                Effect::Raked { chips } => Self::add_rake(hub, chips),
+                Effect::Prize { uid, chips, item } => {
+                    let (mut rec, _) = hub.db.poker_record(&uid);
+                    rec.chips += chips;
+                    if let Some(i) = item {
+                        rec.gifts.insert(i);
+                    }
+                    let held = st.held(&uid);
+                    let _ = hub.db.set_poker_record(&uid, &rec, held);
+                    hub.send_to_user(&uid, Event::Poker { msg: ToApp::Record { me: Self::view(hub, &uid, &rec, held), gains: None } });
                 }
                 Effect::Placed { uid, place, entrants, prize, tourney } => {
                     let (mut rec, _) = hub.db.poker_record(&uid);
@@ -368,6 +535,113 @@ impl Poker {
                 let h = room!(table).history(uid, hand).ok_or("that hand isn't kept any more")?;
                 Ok(Some(ToApp::History { table, hand: h }))
             }
+            ToServer::Player { table, seat } => {
+                let room = room!(table);
+                let them = room.player_at(seat).ok_or("nobody sits there now")?.to_string();
+                let overall = (!them.starts_with("bot:")).then(|| hub.db.poker_record(&them)).map(|(rec, _)| pyr_poker::net::Tally {
+                    hands: rec.hands,
+                    won: rec.hands_won,
+                    showdowns: rec.showdowns,
+                    showdowns_won: rec.showdowns_won,
+                    vpip: rec.vpip,
+                    pfr: rec.pfr,
+                    net: 0,
+                    biggest_pot: rec.biggest_pot,
+                    best_hand: rec.best_hand_name.clone(),
+                    best_value: rec.best_hand,
+                });
+                let player = room.player(seat, uid, overall).ok_or("nobody sits there now")?;
+                Ok(Some(ToApp::Player { table, player }))
+            }
+            ToServer::Casino { req } => self.casino(hub, st, uid, req),
+            ToServer::Staff => Ok(Some(ToApp::Staff { view: Self::staff_view(hub, uid, can_manage) })),
+            ToServer::SetRole { uid: them, role } => {
+                if !can_manage {
+                    return Err("only people who can manage the server name Game Masters and Ambassadors".into());
+                }
+                if hub.db.get_user(&them).is_none() {
+                    return Err("there's nobody by that id here".into());
+                }
+                let mut roles = Self::roles(hub);
+                match role {
+                    Some(r) => roles.insert(them.clone(), r),
+                    None => roles.remove(&them),
+                };
+                hub.db.set_meta(ROLES, &serde_json::to_string(&roles).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+                let what = match role {
+                    Some(r) => format!("made {} a {}", Self::name_of(hub, &them), r.name()),
+                    None => format!("took {}'s role away", Self::name_of(hub, &them)),
+                };
+                self.log_staff(hub, uid, what);
+                // (Their own Pyr learns it with their record.)
+                let (rec, _) = hub.db.poker_record(&them);
+                hub.send_to_user(&them, Event::Poker { msg: ToApp::Record { me: Self::view(hub, &them, &rec, st.held(&them)), gains: None } });
+                Ok(Some(ToApp::Staff { view: Self::staff_view(hub, uid, can_manage) }))
+            }
+            ToServer::Gift { uid: them, chips, item, note } => {
+                if Self::role(hub, uid) != Some(Role::GameMaster) {
+                    return Err("only Game Masters give gifts".into());
+                }
+                if them == uid {
+                    return Err("not to yourself".into());
+                }
+                if hub.db.get_user(&them).is_none() {
+                    return Err("there's nobody by that id here".into());
+                }
+                let look = Self::item_name(&item)?;
+                if chips == 0 && look.is_none() {
+                    return Err("give some chips, a look, or both".into());
+                }
+                let note: String = note.trim().chars().take(140).collect();
+                Self::spend(hub, uid, Role::GameMaster, chips)?;
+                let (mut rec, _) = hub.db.poker_record(&them);
+                rec.chips += chips;
+                if let Some(i) = &item {
+                    rec.gifts.insert(i.clone());
+                }
+                let held = st.held(&them);
+                hub.db.set_poker_record(&them, &rec, held).map_err(|e| e.to_string())?;
+                hub.send_to_user(&them, Event::Poker { msg: ToApp::Record { me: Self::view(hub, &them, &rec, held), gains: None } });
+                hub.send_to_user(&them, Event::Poker { msg: ToApp::Gifted { from: Self::name_of(hub, uid), chips, item: item.clone(), note: note.clone() } });
+                let what = format!(
+                    "gave {} {}{}{}",
+                    Self::name_of(hub, &them),
+                    if chips > 0 { format!("{} chips", progress_chips(chips)) } else { String::new() },
+                    look.map(|l| format!("{}the {l} look", if chips > 0 { " and " } else { "" })).unwrap_or_default(),
+                    if note.is_empty() { String::new() } else { format!(" (\u{201c}{note}\u{201d})") }
+                );
+                self.log_staff(hub, uid, what);
+                Ok(Some(ToApp::Staff { view: Self::staff_view(hub, uid, can_manage) }))
+            }
+            ToServer::DropPrize { table, chips, item } => {
+                let Some(role) = Self::role(hub, uid) else {
+                    return Err("only Game Masters and Ambassadors drop prize boxes".into());
+                };
+                let look = Self::item_name(&item)?;
+                if chips == 0 && look.is_none() {
+                    return Err("put some chips, a look, or both in it".into());
+                }
+                let name = Self::name_of(hub, uid);
+                let room = st.rooms.get_mut(&table).ok_or("that table has closed")?;
+                let table_name = room.name.clone();
+                if room.prize.is_some() {
+                    return Err("there's a prize box on this table already: it goes to the next hand's winner".into());
+                }
+                Self::spend(hub, uid, role, chips)?;
+                let mut out = Output::default();
+                room.drop_prize(PrizeView { chips, item, from: name }, &mut out)?;
+                self.flush(hub, st, table, out);
+                self.log_staff(
+                    hub,
+                    uid,
+                    format!(
+                        "dropped a prize box on {table_name}: {}{}",
+                        if chips > 0 { format!("{} chips", progress_chips(chips)) } else { String::new() },
+                        look.map(|l| format!("{}the {l} look", if chips > 0 { " and " } else { "" })).unwrap_or_default()
+                    ),
+                );
+                Ok(None)
+            }
             ToServer::Close { table } => {
                 let room = st.rooms.get_mut(&table).ok_or("that table has closed (a tournament's tables close when it's over)")?;
                 if room.owner != uid && !can_manage {
@@ -380,11 +654,15 @@ impl Poker {
                 Ok(None)
             }
             ToServer::Tourneys => Ok(Some(ToApp::Tourneys { list: st.tourneys.values().map(|t| t.summary(uid)).collect() })),
-            ToServer::TourneyCreate { rules, bots } => {
+            ToServer::TourneyCreate { mut rules, bots } => {
+                // (Only Pyr Friday Night has prize money the house adds.)
+                rules.added = 0;
                 if !can_manage {
                     return Err("tournaments here are set up by people who can manage the server".into());
                 }
-                if st.tourneys.len() >= MAX_TOURNEYS {
+                // (Time Bombs are only started by `TimeBomb`, by the house.)
+                rules.bomb = None;
+                if st.tourneys.values().filter(|t| t.rules.bomb.is_none()).count() >= MAX_TOURNEYS {
                     return Err(format!("this server keeps {MAX_TOURNEYS} tournaments at most"));
                 }
                 if rules.start_ms > self.wall() + 30 * 86_400_000 {
@@ -431,9 +709,52 @@ impl Poker {
                 }
                 Ok(None)
             }
+            ToServer::TimeBomb { buy_in } => {
+                let wall = self.wall();
+                if !tourney::BOMB_BUY_INS.contains(&buy_in) {
+                    return Err("Time Bombs are 100, 1,000 or 10,000 chips to play".into());
+                }
+                let (mut rec, _) = hub.db.poker_record(uid);
+                if rec.chips < buy_in {
+                    return Err(format!("this Time Bomb is {buy_in} chips to play and you have {}", rec.chips));
+                }
+                if st.tourneys.values().any(|t| t.rules.bomb.is_some() && t.phase == TourneyPhase::Registering && t.is_entrant(uid)) {
+                    return Err("you're waiting for a Time Bomb already".into());
+                }
+                // A seat in one that's filling up at this buy-in, or a new one.
+                let open = st.tourneys.iter().find(|(_, t)| t.rules.bomb.is_some() && t.rules.buy_in == buy_in && t.can_register() && !t.is_entrant(uid)).map(|(id, _)| *id);
+                let id = match open {
+                    Some(id) => id,
+                    None => {
+                        if st.tourneys.values().filter(|t| t.rules.bomb.is_some() && t.ended.is_none()).count() >= MAX_BOMBS {
+                            return Err("every Time Bomb table is busy: try again in a minute".into());
+                        }
+                        let id = self.next_tourney.fetch_add(1, Ordering::Relaxed);
+                        let t = Tourney::new(id, tourney::bomb_rules(buy_in, wall), tourney::BOMB_HOST, "Pyr Casino")?;
+                        st.tourneys.insert(id, t);
+                        id
+                    }
+                };
+                let t = st.tourneys.get_mut(&id).expect("just found or made");
+                let mut out = Output::default();
+                t.register(uid, &Self::name_of(hub, uid), Self::look(&rec), buy_in, wall, &mut out)?;
+                rec.chips -= buy_in;
+                let held = st.held(uid);
+                hub.db.set_poker_record(uid, &rec, held).map_err(|e| e.to_string())?;
+                out.msgs.push((Rcpt::User(uid.to_string()), ToApp::Record { me: Self::view(hub, uid, &rec, held), gains: None }));
+                let view = st.tourneys.get_mut(&id).expect("there").watch(uid);
+                self.flush_tourney(hub, st, out);
+                Ok(Some(view))
+            }
             ToServer::TourneyCancel { id } => {
                 let wall = self.wall();
                 let t = st.tourneys.get_mut(&id).ok_or("that tournament is gone")?;
+                if t.host == tourney::FRIDAY_HOST {
+                    return Err("Pyr Friday Night happens every week; it can't be called off".into());
+                }
+                if t.host == tourney::BOMB_HOST {
+                    return Err("a Time Bomb starts by itself (leave it with Unregister before it does)".into());
+                }
                 if t.host != uid && !can_manage {
                     return Err("only whoever set it up can call it off".into());
                 }
@@ -462,6 +783,7 @@ impl Poker {
             }
         }
         // (In a tournament they stay in: folded for until they're back, or out.)
+        st.casino.watchers.remove(uid);
     }
 
     /// The clock (a few times a second).
@@ -472,13 +794,16 @@ impl Poker {
         let mut rng = SysRandom;
         // Tournaments (on the wall clock: they start at a time).
         let wall = self.wall();
+        self.friday_night(hub, st, wall);
+        Self::casino_after_restart(hub, st);
         let tids: Vec<TourneyId> = st.tourneys.keys().copied().collect();
         for tid in tids {
             let mut next = self.next_id.load(Ordering::Relaxed);
             let t = st.tourneys.get_mut(&tid).unwrap();
             let out = t.tick(wall, &mut next, &mut rng);
             self.next_id.store(next, Ordering::Relaxed);
-            if t.ended.is_some_and(|e| wall.saturating_sub(e) > TOURNEY_KEEP_MS) {
+            let keep = if t.rules.bomb.is_some() { BOMB_KEEP_MS } else { TOURNEY_KEEP_MS };
+            if t.ended.is_some_and(|e| wall.saturating_sub(e) > keep) {
                 st.tourneys.remove(&tid);
             }
             if !out.msgs.is_empty() || !out.effects.is_empty() {
@@ -490,7 +815,8 @@ impl Poker {
         for id in ids {
             let Some(r) = st.rooms.get_mut(&id) else { continue };
             let out = r.tick(now, &mut rng);
-            let has_people = !r.people().is_empty();
+            // (Someone watching keeps it open too: a table shouldn't close under them.)
+            let has_people = !r.people().is_empty() || r.watchers().next().is_some();
             if !out.msgs.is_empty() || !out.effects.is_empty() {
                 self.flush(hub, st, id, out);
             }
@@ -508,7 +834,7 @@ impl Poker {
                 self.flush(hub, st, id, out);
                 st.rooms.remove(&id);
                 self.last_people.lock().remove(&id);
-                info!(table = id, "poker table closed: nobody played for half an hour");
+                info!(table = id, "poker table closed: nobody played or watched for half an hour");
             }
         }
     }
@@ -602,6 +928,8 @@ mod tests {
             level_ms: 600_000,
             levels: pyr_poker::tourney::standard_levels(3000),
             late_levels: 3,
+            added: 0,
+            bomb: None,
         };
         // Only managers set them up.
         assert!(p.handle(&hub, "alice", false, ToServer::TourneyCreate { rules: rules.clone(), bots: vec![] }).is_err());
@@ -623,5 +951,37 @@ mod tests {
         assert!(p.handle(&hub, "alice", false, ToServer::TourneyCancel { id: view.id }).is_err());
         p.handle(&hub, "host", true, ToServer::TourneyCancel { id: view.id }).unwrap();
         assert_eq!(hub.db.poker_record("alice"), (Record { chips: progress::STARTING_CHIPS, ..Record::new() }, 0));
+    }
+
+    #[test]
+    fn time_bombs_seat_people_together_and_start_when_full() {
+        let hub = hub();
+        let p = &hub.poker;
+        assert!(p.handle(&hub, "alice", false, ToServer::TimeBomb { buy_in: 777 }).is_err());
+        let Some(ToApp::Tourney { view: a }) = p.handle(&hub, "alice", false, ToServer::TimeBomb { buy_in: 1_000 }).unwrap() else { panic!() };
+        assert!(a.bomb.is_some() && a.phase == TourneyPhase::Registering);
+        assert_eq!(hub.db.poker_record("alice").0.chips, progress::STARTING_CHIPS - 1_000);
+        assert!(p.handle(&hub, "alice", false, ToServer::TimeBomb { buy_in: 1_000 }).unwrap_err().contains("already"));
+        // Bob joins Alice's; Carol fills it, and it starts at the next tick.
+        let Some(ToApp::Tourney { view: b }) = p.handle(&hub, "bob", false, ToServer::TimeBomb { buy_in: 1_000 }).unwrap() else { panic!() };
+        assert_eq!(b.id, a.id);
+        let Some(ToApp::Tourney { view: c }) = p.handle(&hub, "carol", false, ToServer::TimeBomb { buy_in: 1_000 }).unwrap() else { panic!() };
+        assert_eq!(c.id, a.id);
+        p.tick(&hub);
+        {
+            let st = p.state.lock();
+            let t = &st.tourneys[&a.id];
+            assert_eq!(t.phase, TourneyPhase::Running);
+            assert!(t.bomb_view().unwrap().multiplier.is_some(), "the wheel spun");
+        }
+        // Dee gets a new one; a different buy-in is a different one.
+        let Some(ToApp::Tourney { view: d }) = p.handle(&hub, "dee", false, ToServer::TimeBomb { buy_in: 1_000 }).unwrap() else { panic!() };
+        assert_ne!(d.id, a.id);
+        let Some(ToApp::Tourney { view: e }) = p.handle(&hub, "erin", false, ToServer::TimeBomb { buy_in: 100 }).unwrap() else { panic!() };
+        assert_ne!(e.id, d.id);
+        // Nobody calls one off; leaving before it starts gives the buy-in back.
+        assert!(p.handle(&hub, "dee", true, ToServer::TourneyCancel { id: d.id }).is_err());
+        p.handle(&hub, "dee", false, ToServer::TourneyUnregister { id: d.id }).unwrap();
+        assert_eq!(hub.db.poker_record("dee").0.chips, progress::STARTING_CHIPS);
     }
 }

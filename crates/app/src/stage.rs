@@ -812,7 +812,8 @@ impl PyrApp {
         // Deafened is muted too (unmuting undeafens), like Discord.
         let muted = muted || deafened;
         let full = ui.max_rect();
-        let n = CALL_BUTTONS;
+        // (One more while my share has sound: its mute.)
+        let n = CALL_BUTTONS + (call.screen_on && call.stream_audio_on) as u8 as f32;
         let size = 54.0;
         let gap = 14.0;
         let total = n * size + (n - 1.0) * gap + 18.0;
@@ -860,6 +861,17 @@ impl PyrApp {
             } else {
                 acts.push(Act::RefreshDevices);
                 self.ui.dialog = Some(Dialog::ScreenPicker { selected: None });
+            }
+        }
+        // My stream's sound, muted from my end (while sharing with sound).
+        if call.screen_on && call.stream_audio_on {
+            let m = call.stream_muted;
+            if button(ui, size, if m { Color32::from_rgb(0x4a, 0x1f, 0x1f) } else { base }, if m { "Unmute your stream's sound" } else { "Mute your stream's sound (the picture goes on)" }, &|p, r| {
+                if m { icons::speaker_off(p, r, theme::LIVE()) } else { icons::speaker(p, r, theme::TEXT()) }
+            })
+            .clicked()
+            {
+                acts.push(Act::StreamMuted(!m));
             }
         }
         let sb_open = self.soundboard_open();

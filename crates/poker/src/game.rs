@@ -236,7 +236,13 @@ pub enum Event {
     Shown { seat: usize, cards: Vec<Card>, hand: String },
     Mucked { seat: usize },
     Won { pot: usize, seats: Vec<usize>, amounts: Vec<u64>, hand: Option<String>, best: Vec<Card> },
-    HandEnded { number: u64, stacks: Vec<(usize, u64)> },
+    HandEnded {
+        number: u64,
+        stacks: Vec<(usize, u64)>,
+        /// Chips the house took from the pot (the rake: it goes to the Friday Night pool).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        rake: u64,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -261,6 +267,25 @@ pub struct Table {
     pub button: Option<usize>,
     pub hand: Option<HandState>,
     pub hands_played: u64,
+    /// Whether this hand is raked (the room decides as it deals).
+    #[serde(default)]
+    pub raked: bool,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+/// The rake: 5% of the pot, at most 3 big blinds, and none when there's no flop.
+pub const RAKE_PERCENT: u64 = 5;
+pub const RAKE_CAP_BB: u64 = 3;
+
+/// What the house takes from a pot of `pot` chips (`flop`: the flop came).
+pub fn rake_for(pot: u64, big_blind: u64, flop: bool) -> u64 {
+    if !flop {
+        return 0;
+    }
+    (pot * RAKE_PERCENT / 100).min(RAKE_CAP_BB * big_blind)
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -285,7 +310,7 @@ pub type Out = Vec<(To, Event)>;
 impl Table {
     pub fn new(rules: Rules) -> Table {
         let n = rules.seats;
-        Table { rules, seats: vec![None; n], button: None, hand: None, hands_played: 0 }
+        Table { rules, seats: vec![None; n], button: None, hand: None, hands_played: 0, raked: false }
     }
 
     pub fn sit(&mut self, seat: usize, player: &str, name: &str, chips: u64) -> Result<(), String> {
@@ -737,8 +762,19 @@ impl Table {
                 out.push((To::Everyone, Event::Returned { seat: p.seat, amount: back }));
             }
         }
-        let pots = Table::pots(&hs);
+        let mut pots = Table::pots(&hs);
+        // The rake, from the main pot first.
+        let rake = if self.raked { rake_for(pots.iter().map(|p| p.amount).sum(), self.rules.big_blind, hs.board.len() >= 3) } else { 0 };
+        let mut left = rake;
+        for pot in pots.iter_mut() {
+            let take = left.min(pot.amount);
+            pot.amount -= take;
+            left -= take;
+        }
         for (i, pot) in pots.iter().enumerate() {
+            if pot.amount == 0 {
+                continue;
+            }
             let contenders: Vec<usize> = pot.eligible.clone();
             if contenders.len() == 1 {
                 // Everyone else in it folded.
@@ -783,7 +819,7 @@ impl Table {
             }
         }
         let stacks = self.seats.iter().enumerate().filter_map(|(i, s)| s.as_ref().map(|s| (i, s.stack))).collect();
-        out.push((To::Everyone, Event::HandEnded { number: hs.number, stacks }));
+        out.push((To::Everyone, Event::HandEnded { number: hs.number, stacks, rake }));
         // Keep the finished hand's cards for the dealer's check (the caller has them in the events).
     }
 }

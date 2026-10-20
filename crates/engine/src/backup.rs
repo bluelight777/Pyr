@@ -16,7 +16,7 @@
 //!                           months, then monthly, kept for good
 //!
 //! To restore, set up a server with "Restore from a backup" (or by hand, as a server with a new
-//! identity: copy latest.db to `ingle.db` and files/ into the server's data folder before it
+//! identity: copy latest.db to `pyr.db` and files/ into the server's data folder before it
 //! first starts).
 //!
 //! Everything in it is written readable only by you (on Linux; on Windows it's as private as
@@ -61,9 +61,9 @@ pub fn root(shared: &Shared) -> PathBuf {
     }
     let docs = directories::UserDirs::new().and_then(|u| u.document_dir().map(Path::to_path_buf)).unwrap_or_else(|| shared.config_dir.clone());
     let dir = docs.join("Pyr Server Backups");
-    // Made before Pyr was called Pyr, they're in "Ingle Server Backups": that folder becomes
-    // Pyr's (renamed), so the backups carry on where they were (kept there if it can't be).
-    let old = docs.join("Ingle Server Backups");
+    // Made before the rename, they're in the old folder (`legacy::BACKUP_FOLDER`): that folder
+    // becomes Pyr's (renamed), so the backups carry on where they were (kept there if it can't be).
+    let old = docs.join(pyr_proto::legacy::BACKUP_FOLDER);
     if !dir.exists() && old.is_dir() && std::fs::rename(&old, &dir).is_err() {
         return old;
     }
@@ -200,7 +200,7 @@ async fn run_inner(shared: &Arc<Shared>, key: &str) -> Result<BackupInfo> {
          can put it back: keep a copy of your identity.key somewhere safe too). Keep this folder to yourself.\n\n\
          To put the server back (on a new VPS, say): in Pyr, + (Add a server) > Create my own > Restore from a backup,\n\
          and pick this folder. Or by hand, as a server with a new identity (everyone needs a new invite link then), before\n\
-         the server first starts: copy database/latest.db to <data folder>/ingle.db and files/ to <data folder>/files/.\n",
+         the server first starts: copy database/latest.db to <data folder>/pyr.db and files/ to <data folder>/files/.\n",
     )
     .ok();
     tracing::info!(server = %info.name, files = info.files, "backed up to {}", dir.display());

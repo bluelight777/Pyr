@@ -51,6 +51,8 @@ pub struct StreamAudio {
     pub packets: Arc<AtomicU64>,
     /// Set if capture stopped working after it started.
     pub error: Arc<Mutex<Option<String>>>,
+    /// My stream's sound muted from my end: nothing of it is sent (the picture goes on).
+    pub muted: Arc<AtomicBool>,
 }
 
 impl StreamAudio {
@@ -75,13 +77,14 @@ impl StreamAudio {
         let packets = Arc::new(AtomicU64::new(0));
         let error = Arc::new(Mutex::new(None));
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
-        let (st, pk, er) = (stop.clone(), packets.clone(), error.clone());
+        let muted = Arc::new(AtomicBool::new(false));
+        let (st, pk, er, mu) = (stop.clone(), packets.clone(), error.clone(), muted.clone());
         let thread = std::thread::Builder::new()
             .name("pyr-stream-audio".into())
-            .spawn(move || run(open, label, bitrate_kbps, sink, played, meter, st, pk, er, ready_tx))
+            .spawn(move || run(open, label, bitrate_kbps, sink, played, meter, st, pk, er, mu, ready_tx))
             .map_err(|e| anyhow!("couldn't start the stream audio thread: {e}"))?;
         match ready_rx.recv_timeout(Duration::from_secs(4)) {
-            Ok(Ok(())) => Ok(StreamAudio { stop, thread: Some(thread), packets, error }),
+            Ok(Ok(())) => Ok(StreamAudio { stop, thread: Some(thread), packets, error, muted }),
             Ok(Err(e)) => {
                 let _ = thread.join();
                 Err(e)
@@ -162,11 +165,16 @@ fn run(
     stop: Arc<AtomicBool>,
     packets: Arc<AtomicU64>,
     error: Arc<Mutex<Option<String>>>,
+    muted: Arc<AtomicBool>,
     ready: std::sync::mpsc::Sender<Result<()>>,
 ) {
     let setup = move || -> Result<(Box<dyn Capture>, opus::Encoder)> {
         let mut enc = opus::Encoder::new(48_000, opus::Channels::Stereo, opus::Application::Audio)?;
         enc.set_bitrate(opus::Bitrate::Bits((bitrate_kbps.clamp(32, 256) * 1000) as i32))?;
+        // A lost packet is rebuilt from the next one (as voice's are) instead of guessed at:
+        // what makes a stream's sound skip on a busy connection.
+        enc.set_inband_fec(true)?;
+        enc.set_packet_loss_perc(10)?;
         enc.set_vbr(true)?;
         enc.set_complexity(9)?;
         Ok((open()?, enc))
@@ -225,6 +233,11 @@ fn run(
         while pending.len() >= FRAME_SAMPLES {
             for (d, s) in frame.iter_mut().zip(pending.drain(..FRAME_SAMPLES)) {
                 *d = s;
+            }
+            // (Muted from my end: as if nothing were playing. Silence goes out for a moment
+            // before it pauses, like after any sound, and silence it is.)
+            if muted.load(Ordering::Relaxed) {
+                frame.fill(0.0);
             }
             let peak = frame.iter().fold(0f32, |m, v| m.max(v.abs()));
             let fl = if peak < 1e-4 {
@@ -407,6 +420,25 @@ mod tests {
         let (first, last) = (l[0], *l.last().unwrap());
         assert!(first > -40.0, "the leak should be heard at first: {first:.1} dBFS");
         assert!(last < first - 20.0, "the call wasn't taken out: {l:?}");
+    }
+
+    #[test]
+    fn muted_from_my_end_sends_none_of_its_sound() {
+        let got = Arc::new(AtomicU64::new(0));
+        let g = got.clone();
+        let mut sa = StreamAudio::start(StreamAudioSource::Synthetic, 128, Box::new(move |_, _, _| { g.fetch_add(1, Ordering::Relaxed); }), None, None).unwrap();
+        std::thread::sleep(Duration::from_millis(400));
+        assert!(got.load(Ordering::Relaxed) > 5, "sending");
+        sa.muted.store(true, Ordering::Relaxed);
+        // (The moment of silence that goes before a pause.)
+        std::thread::sleep(Duration::from_millis(20 * SILENT_FRAMES_BEFORE_PAUSE as u64 + 300));
+        let at = got.load(Ordering::Relaxed);
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(got.load(Ordering::Relaxed), at, "muted: nothing more goes out");
+        sa.muted.store(false, Ordering::Relaxed);
+        std::thread::sleep(Duration::from_millis(400));
+        assert!(got.load(Ordering::Relaxed) > at + 5, "unmuted: its sound goes out again");
+        sa.stop();
     }
 
     #[test]

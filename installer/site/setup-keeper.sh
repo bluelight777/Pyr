@@ -21,10 +21,13 @@ say() { echo; echo "== $*"; }
 note() { echo "   $*"; }
 
 [ "$(id -u)" = 0 ] || { echo "Run as root." >&2; exit 1; }
+# Pyr's name before 0.8.0 (see pyr_proto::legacy): a guild server or website folder set up
+# before the rename may still have it.
+OLD=ingle
 
 # The guild server: whose submissions these are.
 SVC=""
-for S in pyr-server ingle-server; do
+for S in pyr-server "$OLD-server"; do
   if systemctl list-unit-files "$S.service" 2>/dev/null | grep -q "^$S\.service"; then SVC=$S; break; fi
 done
 [ -n "$SVC" ] || { echo "There's no guild server here (pyr-server.service) to keep the Library for." >&2; exit 1; }
@@ -32,8 +35,9 @@ DATA=$(systemctl show -p ExecStart "$SVC" 2>/dev/null | sed -n 's/.*--data \([^ 
 DATA=${DATA:-/var/lib/$SVC}
 RUN_AS=$(systemctl show -p User --value "$SVC" 2>/dev/null || true)
 [ -n "$RUN_AS" ] && [ "$RUN_AS" != root ] || { echo "The guild server runs as root; the Keeper won't (give the server a user of its own first)." >&2; exit 1; }
-DB="$DATA/ingle.db"
-[ -f "$DB" ] || DB="$DATA/pyr.db"
+# (pyr.db since 0.9.1; a server from before has the old name until it starts once.)
+DB="$DATA/pyr.db"
+[ -f "$DB" ] || DB="$DATA/$OLD.db"
 [ -f "$DB" ] || { echo "Can't find the guild server's database in $DATA." >&2; exit 1; }
 note "guild server: $SVC as $RUN_AS, database $DB"
 
@@ -49,7 +53,8 @@ for R in $(nginx -T 2>/dev/null | awk '/^[[:space:]]*root[[:space:]]/ { r = $2; 
   if [ "$GOT" = "$TOKEN" ]; then ROOT=$R; break; fi
 done
 [ -n "$ROOT" ] || { echo "Couldn't find the web folder that serves https://$SITE/." >&2; exit 1; }
-LIB="$ROOT/ingle/library"
+LIB="$ROOT/pyr/library"
+[ -d "$ROOT/pyr" ] || LIB="$ROOT/$OLD/library"
 mkdir -p "$LIB/files"
 note "library folder: $LIB"
 

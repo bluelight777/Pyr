@@ -4,7 +4,11 @@
 use serde::{Deserialize, Serialize};
 
 use crate::bots::Level;
+use std::collections::BTreeMap;
+
 use crate::cards::Card;
+use crate::casino::{Bet, Game, Outcome, blackjack, craps};
+use crate::progress::CasinoStats;
 use crate::game::{Action, Event, Legal, Limit, Rules, Street, Variant};
 
 pub type TableId = u64;
@@ -84,6 +88,20 @@ pub enum ToServer {
     Leaderboard,
     /// A finished hand at a table, everything about it (to replay it).
     History { table: TableId, hand: u64 },
+    /// Someone at a table (a bot too): how they've played, and their last hands.
+    Player { table: TableId, seat: usize },
+    /// The Game Masters and Ambassadors, my allowance today, and (for the owner) what
+    /// they've given.
+    Staff,
+    /// Make someone a Game Master or an Ambassador, or neither (Manage server only).
+    SetRole { uid: String, role: Option<Role> },
+    /// A Game Master gives someone chips and/or a look.
+    Gift { uid: String, chips: u64, item: Option<String>, note: String },
+    /// A Game Master or Ambassador puts a prize box on a table: whoever wins the next hand
+    /// (a person, not a bot) opens it.
+    DropPrize { table: TableId, chips: u64, item: Option<String> },
+    /// Pyr Casino's games against the house.
+    Casino { req: CasinoReq },
     /// Close a table I made (or any, with Manage server): everyone's chips go back.
     Close { table: TableId },
     /// Tournaments here (multi-table, with play-chip buy-ins).
@@ -104,6 +122,21 @@ pub enum ToServer {
     TourneyUnwatch { id: TourneyId },
     /// Call one off before it starts (whoever made it, or Manage server): buy-ins go back.
     TourneyCancel { id: TourneyId },
+    /// Play a Time Bomb for this buy-in: a seat in one that's filling up, or a new one.
+    TimeBomb { buy_in: u64 },
+}
+
+impl ToServer {
+    /// The table it's about, if it's about one.
+    pub fn table(&self) -> Option<TableId> {
+        use ToServer::*;
+        match self {
+            Watch { table } | Unwatch { table } | Sit { table, .. } | Stand { table } | SitOut { table, .. } | TopUp { table, .. } | Act { table, .. }
+            | Seed { table, .. } | TimeBank { table } | AddBot { table, .. } | RemoveBot { table, .. } | Emote { table, .. } | History { table, .. }
+            | Player { table, .. } | DropPrize { table, .. } | Close { table } => Some(*table),
+            _ => None,
+        }
+    }
 }
 
 /// One level of a tournament's blinds.
@@ -137,6 +170,33 @@ pub struct TourneyRules {
     /// Registration stays open for this many levels after the start.
     #[serde(default)]
     pub late_levels: u32,
+    /// Prize money the house puts in on top of the buy-ins (Pyr Friday Night: the week's rake).
+    #[serde(default)]
+    pub added: u64,
+    /// A Time Bomb: a fast sit-and-go for a prize the wheel picks, where after the fuse burns
+    /// down every hand is all in.
+    #[serde(default)]
+    pub bomb: Option<Bomb>,
+}
+
+/// A Time Bomb's fuse.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Bomb {
+    /// From the first hand until it goes off.
+    pub fuse_ms: u64,
+}
+
+/// A Time Bomb as it stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BombView {
+    pub fuse_ms: u64,
+    /// The prize wheel's pick (times the buy-in), and when it was spun (Unix ms; the first hand
+    /// is dealt once the wheel has stopped).
+    pub multiplier: Option<u32>,
+    pub spun_ms: Option<u64>,
+    /// When it goes off (Unix ms), once the first hand's dealt; and whether it has.
+    pub goes_off_ms: Option<u64>,
+    pub exploded: bool,
 }
 
 /// Where a tournament is in its life.
@@ -164,6 +224,9 @@ pub struct TourneySummary {
     pub registered: bool,
     /// Who made it.
     pub host: String,
+    /// A Time Bomb's prize multiplier, once the wheel has spun.
+    #[serde(default)]
+    pub multiplier: Option<u32>,
 }
 
 /// Someone in a tournament.
@@ -197,6 +260,9 @@ pub struct TourneyView {
     /// The table I'm at, when I'm still in it.
     pub my_table: Option<TableId>,
     pub tables: Vec<TableId>,
+    /// A Time Bomb's wheel and fuse.
+    #[serde(default)]
+    pub bomb: Option<BombView>,
 }
 
 /// How many chips a player sits down with, in big blinds.
@@ -255,6 +321,13 @@ pub enum ToApp {
     Record { me: RecordView, gains: Option<GainsView> },
     Leaderboard { rows: Vec<LeaderRow> },
     History { table: TableId, hand: HandHistory },
+    Player { table: TableId, player: PlayerView },
+    Staff { view: StaffView },
+    /// A Game Master gave me something.
+    Gifted { from: String, chips: u64, item: Option<String>, note: String },
+    /// Someone won a table's prize box.
+    PrizeWon { table: TableId, seat: usize, name: String, prize: PrizeView },
+    Casino { res: CasinoRes },
     Closed { table: TableId },
     /// The daily chips: how many (none: already taken today), and when the next can be taken.
     Daily { chips: Option<u64>, streak: u32 },
@@ -319,6 +392,167 @@ pub struct TableView {
     /// A tournament's table (nobody buys in or leaves here; the tournament moves players).
     #[serde(default)]
     pub tourney: Option<TourneyId>,
+    /// A prize box on the table, for whoever wins the next hand.
+    #[serde(default)]
+    pub prize: Option<PrizeView>,
+    /// A Time Bomb gone off: everyone's all in, every hand (nobody chooses anything).
+    #[serde(default)]
+    pub bomb: bool,
+}
+
+/// What I ask Pyr Casino.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "do", rename_all = "snake_case")]
+pub enum CasinoReq {
+    /// The casino as it is for me (and tell me of big wins and the jackpot while I'm in).
+    Open,
+    Close,
+    /// A round: the fingerprint of the house's seed I was shown, a seed of my own, my bet.
+    Play {
+        #[serde(with = "hex32")]
+        commit: [u8; 32],
+        #[serde(with = "hex32")]
+        seed: [u8; 32],
+        bet: Bet,
+    },
+    /// A move in my blackjack hand.
+    Blackjack { action: blackjack::Action },
+    /// My craps bets as they should be before the next roll (chips go between me and the table).
+    CrapsBets { bets: craps::Bets },
+    /// Roll the dice (my craps bets stay as they are).
+    CrapsRoll {
+        #[serde(with = "hex32")]
+        commit: [u8; 32],
+        #[serde(with = "hex32")]
+        seed: [u8; 32],
+    },
+}
+
+/// What Pyr Casino answers (or tells everyone in it).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "is", rename_all = "snake_case")]
+pub enum CasinoRes {
+    State { view: CasinoView },
+    /// A round that's over, with the house's seed shown (and the next round's fingerprint).
+    Round { round: Box<RoundView> },
+    /// My blackjack hand, still being played (and the fingerprint for any other game meanwhile).
+    Blackjack {
+        view: blackjack::View,
+        chips: u64,
+        #[serde(with = "hex32")]
+        next_commit: [u8; 32],
+        next_nonce: u64,
+    },
+    /// My craps bets, changed.
+    Craps { table: craps::Table, chips: u64 },
+    BigWin { win: BigWin },
+    Jackpot { pool: u64 },
+}
+
+/// The casino as it is for me.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CasinoView {
+    pub chips: u64,
+    /// The fingerprint of the house's seed for my next round, and its number.
+    #[serde(with = "hex32")]
+    pub commit: [u8; 32],
+    pub nonce: u64,
+    pub jackpot: u64,
+    /// Pyr Friday Night: when it starts, and its prize money so far.
+    pub friday_ms: u64,
+    pub friday_prize: u64,
+    pub big_wins: Vec<BigWin>,
+    pub blackjack: Option<blackjack::View>,
+    pub craps: craps::Table,
+    pub stats: BTreeMap<String, CasinoStats>,
+}
+
+/// A round that's over, and everything to check it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RoundView {
+    pub nonce: u64,
+    #[serde(with = "hex32")]
+    pub commit: [u8; 32],
+    #[serde(with = "hex32")]
+    pub server_seed: [u8; 32],
+    #[serde(with = "hex32")]
+    pub client_seed: [u8; 32],
+    pub outcome: Outcome,
+    #[serde(with = "hex32")]
+    pub next_commit: [u8; 32],
+    pub next_nonce: u64,
+    /// My chips after it, and the jackpot's pool.
+    pub chips: u64,
+    pub jackpot: u64,
+    /// Craps: the table after the roll.
+    #[serde(default)]
+    pub craps: Option<craps::Table>,
+}
+
+/// Someone's big win, for the floor's ticker.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BigWin {
+    pub name: String,
+    pub game: Game,
+    pub wagered: u64,
+    pub paid: u64,
+    pub what: String,
+    pub at_ms: u64,
+}
+
+/// Pyr Poker's staff: Game Masters (the owner's admins for the game: they gift chips and looks
+/// and drop prize boxes) and Ambassadors (they drop prize boxes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Role {
+    GameMaster,
+    Ambassador,
+}
+
+impl Role {
+    pub fn name(self) -> &'static str {
+        match self {
+            Role::GameMaster => "Game Master",
+            Role::Ambassador => "Ambassador",
+        }
+    }
+}
+
+/// A prize box: chips and/or a look (a cosmetic's id), and who put it there.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PrizeView {
+    pub chips: u64,
+    pub item: Option<String>,
+    pub from: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StaffMember {
+    pub uid: String,
+    pub name: String,
+    pub role: Role,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StaffLog {
+    pub at_ms: u64,
+    pub by: String,
+    pub what: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StaffView {
+    pub me: Option<Role>,
+    /// Manage server: may name staff and read the log.
+    pub owner: bool,
+    /// Chips I may give away a day (gifts and prize boxes together), and what's left today.
+    pub allowance: u64,
+    pub left: u64,
+    /// Chips raked at the cash tables over the last 7 days (the allowances follow it).
+    pub rake_week: u64,
+    pub staff: Vec<StaffMember>,
+    /// Newest first (the owner only).
+    pub log: Vec<StaffLog>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -349,6 +583,9 @@ pub struct RecordView {
     pub chip_set: String,
     pub frame: String,
     pub unlocked: Vec<String>,
+    /// Game Master or Ambassador.
+    #[serde(default)]
+    pub role: Option<Role>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -369,6 +606,55 @@ pub struct LeaderRow {
     pub hands: u64,
     pub biggest_pot: u64,
     pub best_hand: String,
+}
+
+/// How someone has played: hands dealt in, won, seen to a showdown and won there, chips up or
+/// down, and the like.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Tally {
+    pub hands: u64,
+    pub won: u64,
+    pub showdowns: u64,
+    pub showdowns_won: u64,
+    /// Hands they put chips in before the flop by choice, and raised before the flop.
+    pub vpip: u64,
+    pub pfr: u64,
+    /// Chips up (or down) over these hands.
+    pub net: i64,
+    pub biggest_pot: u64,
+    pub best_hand: String,
+    #[serde(default, skip_serializing)]
+    pub best_value: u32,
+}
+
+/// One of someone's hands, as whoever asks may see it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PlayerHand {
+    pub number: u64,
+    pub ended_ms: u64,
+    /// Their cards, when they were shown (or they're mine); empty otherwise.
+    pub cards: Vec<Card>,
+    pub board: Vec<Card>,
+    /// Chips up or down in it.
+    pub net: i64,
+    /// What happened: "Won with Two Pair, Kings and Sevens", "Folded before the flop".
+    pub how: String,
+    /// Whether the whole hand is still kept (to open it).
+    pub kept: bool,
+}
+
+/// Someone at a table, when right-clicked.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PlayerView {
+    pub seat: usize,
+    pub name: String,
+    pub bot: Option<Level>,
+    /// At this table.
+    pub here: Tally,
+    /// Everywhere on this server (people; a bot's whole life is at its table).
+    pub overall: Option<Tally>,
+    /// Their last hands here, newest first.
+    pub hands: Vec<PlayerHand>,
 }
 
 /// Everything about a finished hand.

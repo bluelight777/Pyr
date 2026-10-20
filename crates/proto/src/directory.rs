@@ -102,7 +102,7 @@ pub fn is_code(code: &str) -> bool {
 const RESERVED: &[&str] = &[
     "about", "account", "admin", "alpha", "android", "anthropic", "api", "app", "apps", "assets", "beta", "blog", "bot", "bots",
     "claude", "css", "dev", "discord", "doc", "docs", "download", "downloads", "faq", "favicon", "firelit", "fonts", "get",
-    "help", "home", "icons", "images", "img", "index", "ingle", "install", "invite", "invites", "ios", "js", "latest", "legal",
+    "help", "home", "icons", "images", "img", "index", crate::legacy::APP_ID, "install", "invite", "invites", "ios", "js", "latest", "legal",
     "library", "linux", "login", "mac", "macos", "mail", "mod", "moderator", "mods", "news", "null", "official", "og",
     "owner", "plugin", "plugins", "privacy", "pyr", "register", "release", "releases", "robots", "root", "security", "server",
     "servers", "settings", "setup", "signin", "signup", "sitemap", "skin", "skins", "staff", "static", "status", "support",
@@ -146,6 +146,32 @@ pub struct Announce {
     /// The community's own code (`pyr.gg/<vanity>`), if it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vanity: Option<String>,
+    /// Its icon's SHA-256 (hex), if it has one (shown on its invite pages and link previews).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_sha: Option<String>,
+    /// The icon itself (a PNG, base64url, at most [`ICON_MAX`] bytes): only when the
+    /// directory asked for it (see [`AnnounceReply::want_icon`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+}
+
+/// The biggest icon the directory takes (a server's icon is a PNG of at most 256×256).
+pub const ICON_MAX: usize = 256 * 1024;
+
+/// An icon's SHA-256, as [`Announce::icon_sha`] says it.
+pub fn icon_sha(png: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(png).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Whether `bytes` is a PNG the directory takes for an icon.
+pub fn icon_ok(bytes: &[u8]) -> bool {
+    bytes.len() <= ICON_MAX && bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+}
+
+/// Where a short link's community icon is (a PNG), for its page and link previews.
+pub fn icon_url(code: &str) -> String {
+    format!("{DIRECTORY}/api/v1/icons/{code}.png")
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -184,6 +210,9 @@ pub struct AnnounceReply {
     /// Why the announcement wasn't taken at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The directory doesn't have the icon in `icon_sha`: send it (with the next announcement).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub want_icon: bool,
 }
 
 /// What a code opens (`GET /api/v1/invites/<code>`).
@@ -205,6 +234,9 @@ pub struct Lookup {
     /// The community's own code rather than one person's invite.
     #[serde(default)]
     pub vanity: bool,
+    /// The community has an icon (at [`icon_url`]).
+    #[serde(default)]
+    pub icon: bool,
 }
 
 #[cfg(test)]
@@ -279,9 +311,13 @@ mod tests {
             online: None,
             codes: vec![ListedCode { code: "qrslmnov".into(), expires_at: Some(9), inviter: Some("Blue".into()) }],
             vanity: Some("brethren".into()),
+            icon_sha: Some(icon_sha(b"x")),
+            icon: None,
         };
         let json = serde_json::to_string(&a).unwrap();
-        assert!(!json.contains("online"), "{json}");
+        assert!(!json.contains("online") && !json.contains("\"icon\""), "{json}");
+        // (A directory from before icons reads it as ever.)
+        assert!(json.contains("\"icon_sha\":\"2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881\""), "{json}");
         assert_eq!(serde_json::from_str::<Announce>(&json).unwrap(), a);
         let r: AnnounceReply = serde_json::from_str("{}").unwrap();
         assert_eq!(r, AnnounceReply::default());

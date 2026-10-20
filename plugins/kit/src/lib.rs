@@ -32,11 +32,12 @@
 //!
 //! ## How Pyr talks to an add-on
 //!
-//! The module exports `memory`, `ingle_alloc(len) -> ptr`, `ingle_free(ptr, len)` and
-//! `ingle_call(ptr, len) -> i64`, and imports nothing (Pyr refuses a module that imports
-//! anything). Pyr writes a JSON request into memory it got from `ingle_alloc`, calls
-//! `ingle_call`, and reads the JSON answer at `(result >> 32, result & 0xffffffff)`, then frees
-//! it with `ingle_free`. [`export!`] writes all of that for you.
+//! The module exports `memory`, `pyr_alloc(len) -> ptr`, `pyr_free(ptr, len)` and
+//! `pyr_call(ptr, len) -> i64`, and imports nothing (Pyr refuses a module that imports
+//! anything). Pyr writes a JSON request into memory it got from `pyr_alloc`, calls
+//! `pyr_call`, and reads the JSON answer at `(result >> 32, result & 0xffffffff)`, then frees
+//! it with `pyr_free`. [`export!`] writes all of that for you (and the same three under the
+//! names Pyr 0.9.0 and older look for).
 
 use serde::{Deserialize, Serialize};
 pub use serde_json::{self, Value, json};
@@ -277,6 +278,19 @@ macro_rules! export {
         }
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn ingle_call(ptr: i32, len: i32) -> i64 {
+            unsafe { $crate::__call::<$addon>(ptr, len) }
+        }
+        // (Pyr 0.9.1 and newer look for these first; the three above are for older Pyrs.)
+        #[unsafe(no_mangle)]
+        pub extern "C" fn pyr_alloc(len: i32) -> i32 {
+            $crate::__alloc(len)
+        }
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn pyr_free(ptr: i32, len: i32) {
+            unsafe { $crate::__free(ptr, len) }
+        }
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn pyr_call(ptr: i32, len: i32) -> i64 {
             unsafe { $crate::__call::<$addon>(ptr, len) }
         }
     };

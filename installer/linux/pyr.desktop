@@ -8,6 +8,6 @@ Icon=pyr
 Terminal=false
 Categories=Network;Chat;InstantMessaging;
 Keywords=voice;video;chat;call;screen share;webcam;
-MimeType=x-scheme-handler/pyr;x-scheme-handler/ingle;
+MimeType=x-scheme-handler/pyr;
 StartupWMClass=pyr
 StartupNotify=true

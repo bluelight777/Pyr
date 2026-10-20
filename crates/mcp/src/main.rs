@@ -80,13 +80,13 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_ansi(false)
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_env("PYR_LOG").or_else(|_| tracing_subscriber::EnvFilter::try_from_env("INGLE_LOG")).unwrap_or_else(|_| "warn".into()))
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_env("PYR_LOG").or_else(|_| tracing_subscriber::EnvFilter::try_from_env(format!("{}LOG", pyr_proto::legacy::ENV_PREFIX))).unwrap_or_else(|_| "warn".into()))
         .init();
     let profile = profile.filter(|p| pyr_engine::config::valid_profile(p));
-    // (Claude can start the connector before Pyr has ever run since it was called Ingle.)
+    // (Claude can start the connector before Pyr has ever run since the rename.)
     if config_dir.is_none() {
-        for m in pyr_engine::config::migrate_from_ingle() {
-            eprintln!("pyr-mcp: from Ingle: {m}");
+        for m in pyr_engine::config::migrate_from_old_name() {
+            eprintln!("pyr-mcp: from before the rename: {m}");
         }
     }
     let dir = config_dir.unwrap_or_else(|| pyr_engine::config::config_dir(profile.as_deref()));

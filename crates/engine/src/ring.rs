@@ -178,6 +178,7 @@ mod tests {
             camera_on: false,
             screen_on: false,
             stream_audio_on: false,
+            stream_muted: false,
             transmitting: false,
             speaking: Default::default(),
             watching: Default::default(),

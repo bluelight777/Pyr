@@ -180,6 +180,13 @@ pub struct Settings {
     pub library_favorites: Vec<String>,
     /// How the Library is sorted: "name", "author", "newest" or "favorites".
     pub library_sort: String,
+    /// Pyr Poker installed (from Plugins): only then is it in the channel list of the servers
+    /// that have it.
+    pub poker_installed: bool,
+    /// Streamer mode: my cards at the poker table stay face down until I peek, the hand
+    /// strength meter with them, and pop-ups don't show what messages say. (It also turns on by
+    /// itself while I'm sharing my screen; see the app.)
+    pub streamer_mode: bool,
     /// Send a report by itself when something goes wrong that Pyr can tell (screen sharing
     /// or the camera won't start or stops working, a crash or a freeze last time), so it gets
     /// fixed: what happened and Pyr's log, to the bug report server (see `bugs::auto_report`).
@@ -307,6 +314,8 @@ impl Default for Settings {
             skin: String::new(),
             library_favorites: Vec::new(),
             library_sort: String::new(),
+            poker_installed: false,
+            streamer_mode: false,
             voice_meter: String::new(),
             dnd: false,
             ringtone: None,
@@ -451,32 +460,39 @@ fn create_private_dir(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Pyr was called Ingle before 0.8.0. The first time Pyr starts, it takes over Ingle's
-/// folders: the settings, the identity (so it's the same person on every server), and test
-/// profiles are copied (Ingle's folder stays as it was, as a backup), and the plugins and
+/// Pyr had another name before 0.8.0 (see `pyr_proto::legacy`). The first time Pyr starts, it
+/// takes over the folders from then: the settings, the identity (so it's the same person on
+/// every server), and test profiles are copied (the old folder stays as it was, as a backup), and the plugins and
 /// installed skins, which can be big, are moved. The settings come over only while Pyr has
 /// none of its own; the plugins and skins whenever Pyr has none (0.8.0 left the skins
 /// behind, so a skin being worn "wasn't installed": they come over on the next start). Not
 /// with `PYR_HOME` (test setups). Run before anything opens the config folder (the app, the
 /// connector). Returns what it did, for the log.
-pub fn migrate_from_ingle() -> Vec<String> {
+pub fn migrate_from_old_name() -> Vec<String> {
     if pyr_proto::env_set("HOME") {
         return Vec::new();
     }
     let dirs = |name: &str| directories::ProjectDirs::from("", "", name);
-    let (Some(new), Some(old)) = (dirs(APP_NAME), dirs(pyr_proto::OLD_APP_NAME)) else { return Vec::new() };
+    let (Some(new), Some(old)) = (dirs(APP_NAME), dirs(pyr_proto::legacy::APP_NAME)) else { return Vec::new() };
     migrate_folders(old.config_dir(), new.config_dir(), old.data_local_dir(), new.data_local_dir())
 }
 
-/// Files in Ingle's folder that stay behind: a running copy's lock and hand-over, its logs,
-/// and a half-finished update.
-const LEFT_BEHIND: &[&str] = &["instance.lock", "handoff", "ingle.log", "ingle.previous.log", "resume.json"];
+/// Files in the old folder that stay behind: a running copy's lock and hand-over, its logs
+/// (`legacy::LOG_FILES`), and a half-finished update.
+const LEFT_BEHIND: &[&str] = &["instance.lock", "handoff", "resume.json"];
 
-/// What's kept in the local (not roaming) data folder and comes over from Ingle's: the
+fn left_behind(name: &std::ffi::OsStr) -> bool {
+    LEFT_BEHIND.iter().chain(pyr_proto::legacy::LOG_FILES).any(|l| name == *l)
+}
+
+/// What a successful copy of the settings says (the app greets people who came over).
+pub const COPIED_SETTINGS: &str = "copied the settings and identity from before the rename";
+
+/// What's kept in the local (not roaming) data folder and comes over from the old one: the
 /// plugins and the installed skins.
 const DATA_FOLDERS: &[(&str, &str)] = &[("plugins", "plugins"), ("skins", "skins")];
 
-/// `migrate_from_ingle` with the folders given (the config folders, and the data folders that
+/// `migrate_from_old_name` with the folders given (the config folders, and the data folders that
 /// hold `plugins` and `skins`).
 pub fn migrate_folders(old_config: &Path, new_config: &Path, old_data: &Path, new_data: &Path) -> Vec<String> {
     let mut did = Vec::new();
@@ -484,14 +500,14 @@ pub fn migrate_folders(old_config: &Path, new_config: &Path, old_data: &Path, ne
     if has_files(old_config) && !has_files(new_config) {
         match copy_tree(old_config, new_config) {
             Ok(n) => {
-                let _ = std::fs::write(new_config.join("from-ingle.txt"), format!("Copied from {} by Pyr (it was called Ingle before 0.8.0).\n", old_config.display()));
-                did.push(format!("copied Ingle's settings and identity ({n} files) from {} to {}", old_config.display(), new_config.display()));
+                let _ = std::fs::write(new_config.join("copied-over.txt"), format!("Copied from {} by Pyr, from before the rename (0.8.0).\n", old_config.display()));
+                did.push(format!("{COPIED_SETTINGS} ({n} files) from {} to {}", old_config.display(), new_config.display()));
             }
-            Err(e) => did.push(format!("couldn't copy Ingle's settings from {}: {e:#}", old_config.display())),
+            Err(e) => did.push(format!("couldn't copy the settings from before the rename from {}: {e:#}", old_config.display())),
         }
     }
-    // (Moved only into an empty place: Pyr's own plugins and skins are never mixed with
-    // Ingle's.)
+    // (Moved only into an empty place: Pyr's own plugins and skins are never mixed with the
+    // old ones.)
     for (folder, what) in DATA_FOLDERS {
         let (from, to) = (old_data.join(folder), new_data.join(folder));
         if !has_files(&from) || has_files(&to) {
@@ -501,12 +517,12 @@ pub fn migrate_folders(old_config: &Path, new_config: &Path, old_data: &Path, ne
         let _ = std::fs::remove_dir(&to);
         let how = match std::fs::rename(&from, &to) {
             Ok(()) => Ok("moved"),
-            // (Another drive, or a file in use: copied instead, Ingle's left as it is.)
+            // (Another drive, or a file in use: copied instead, the old ones left as they are.)
             Err(_) => copy_tree(&from, &to).map(|_| "copied"),
         };
         match how {
-            Ok(how) => did.push(format!("{how} Ingle's {what} from {} to {}", from.display(), to.display())),
-            Err(e) => did.push(format!("couldn't bring Ingle's {what} over from {}: {e:#}", from.display())),
+            Ok(how) => did.push(format!("{how} the {what} from before the rename from {} to {}", from.display(), to.display())),
+            Err(e) => did.push(format!("couldn't bring the {what} from before the rename over from {}: {e:#}", from.display())),
         }
     }
     did
@@ -521,7 +537,7 @@ fn copy_tree(from: &Path, to: &Path) -> Result<usize> {
         let entry = entry?;
         let name = entry.file_name();
         let kind = entry.file_type()?;
-        if LEFT_BEHIND.iter().any(|l| name == *l) || kind.is_symlink() {
+        if left_behind(&name) || kind.is_symlink() {
             continue;
         }
         let (src, dst) = (entry.path(), to.join(&name));
@@ -545,17 +561,17 @@ pub fn valid_profile(p: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// Ingle's folders come over to Pyr once: the settings and identity copied (Ingle's kept),
+    /// The folders from before the rename come over once: the settings and identity copied (the old ones kept),
     /// the plugins and skins moved, a running copy's lock and the logs left behind.
     #[test]
-    fn ingles_folders_come_over_once() {
+    fn old_folders_come_over_once() {
         let root = std::env::temp_dir().join(format!("pyr-migrate-{}-{}", std::process::id(), pyr_proto::now_ms()));
-        let (old_cfg, new_cfg) = (root.join("Ingle/config"), root.join("Pyr/config"));
-        let (old_data, new_data) = (root.join("Ingle/data"), root.join("Pyr/data"));
+        let (old_cfg, new_cfg) = (root.join(pyr_proto::legacy::APP_NAME).join("config"), root.join("Pyr/config"));
+        let (old_data, new_data) = (root.join(pyr_proto::legacy::APP_NAME).join("data"), root.join("Pyr/data"));
         std::fs::create_dir_all(old_cfg.join("profiles/b")).unwrap();
         std::fs::create_dir_all(old_data.join("plugins/chim")).unwrap();
         std::fs::create_dir_all(old_data.join("skins/blood-moon")).unwrap();
-        for (f, t) in [("config.json", "{}"), ("identity.key", "seed"), ("instance.lock", ""), ("ingle.log", "log"), ("profiles/b/identity.key", "b")] {
+        for (f, t) in [("config.json", "{}"), ("identity.key", "seed"), ("instance.lock", ""), (pyr_proto::legacy::LOG_FILES[0], "log"), ("profiles/b/identity.key", "b")] {
             std::fs::write(old_cfg.join(f), t).unwrap();
         }
         std::fs::write(old_data.join("plugins/installed.json"), "[]").unwrap();
@@ -566,8 +582,8 @@ mod tests {
         assert_eq!(did.len(), 3, "{did:?}");
         assert_eq!(std::fs::read_to_string(new_cfg.join("identity.key")).unwrap(), "seed");
         assert_eq!(std::fs::read_to_string(new_cfg.join("profiles/b/identity.key")).unwrap(), "b");
-        assert!(!new_cfg.join("instance.lock").exists() && !new_cfg.join("ingle.log").exists());
-        assert!(old_cfg.join("identity.key").exists(), "Ingle's own copy stays");
+        assert!(!new_cfg.join("instance.lock").exists() && !new_cfg.join(pyr_proto::legacy::LOG_FILES[0]).exists());
+        assert!(old_cfg.join("identity.key").exists(), "the old copy stays");
         assert_eq!(std::fs::read_to_string(new_data.join("plugins/chim/chim.exe")).unwrap(), "exe");
         assert_eq!(std::fs::read_to_string(new_data.join("skins/blood-moon/skin.json")).unwrap(), "{}");
         // Once only: Pyr's own settings are never replaced.
@@ -577,17 +593,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// Someone who came over with 0.8.0 (settings and plugins moved, skins left in Ingle's
+    /// Someone who came over with 0.8.0 (settings and plugins moved, skins left in the old
     /// folder): the skins come over on the next start, and nothing else is touched.
     #[test]
     fn skins_left_behind_by_0_8_0_come_over() {
         let root = std::env::temp_dir().join(format!("pyr-migrate-skins-{}-{}", std::process::id(), pyr_proto::now_ms()));
-        let (old_cfg, new_cfg) = (root.join("Ingle/config"), root.join("Pyr/config"));
-        let (old_data, new_data) = (root.join("Ingle/data"), root.join("Pyr/data"));
+        let (old_cfg, new_cfg) = (root.join(pyr_proto::legacy::APP_NAME).join("config"), root.join("Pyr/config"));
+        let (old_data, new_data) = (root.join(pyr_proto::legacy::APP_NAME).join("data"), root.join("Pyr/data"));
         for d in [&old_cfg, &new_cfg, &new_data.join("plugins"), &old_data.join("skins/blood-moon")] {
             std::fs::create_dir_all(d).unwrap();
         }
-        std::fs::write(old_cfg.join("config.json"), "{\"ingle\":1}").unwrap();
+        std::fs::write(old_cfg.join("config.json"), "{\"old\":1}").unwrap();
         std::fs::write(new_cfg.join("config.json"), "{\"skin\":\"blood-moon\"}").unwrap();
         std::fs::write(new_data.join("plugins/installed.json"), "[\"pyr\"]").unwrap();
         std::fs::write(old_data.join("skins/installed.json"), "[\"blood-moon\"]").unwrap();

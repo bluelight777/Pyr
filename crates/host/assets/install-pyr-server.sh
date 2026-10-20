@@ -12,14 +12,17 @@
 #   --public-host HOST   IP address or domain name friends connect to (default: detected)
 #   --name NAME          name for a new community (default: My Pyr Server)
 #   --port PORT          UDP port to use (default: 7766)
-#   --restore FILE       put back a server from a backup (a .tar of ingle.db, files/ and its
+#   --restore FILE       put back a server from a backup (a .tar of pyr.db, files/ and its
 #                        identity, as Pyr's "Restore from a backup" makes). Whatever is
 #                        already here is kept in /var/lib/pyr-server-before-restore-<time>.
 #
 # Running it again updates the program and keeps the community and its messages, which
-# live in /var/lib/pyr-server. A server set up before Pyr was called Pyr (the ingle-server
-# service) becomes this one, with its community, messages, files and identity.
+# live in /var/lib/pyr-server. A server set up before Pyr's rename (its service had the old
+# name, OLD below) becomes this one, with its community, messages, files and identity.
 set -eu
+# The server's service name before Pyr's rename (see pyr_proto::legacy), and its database's.
+OLD=ingle-server
+OLD_DB=ingle.db
 
 step() { echo "==> $*"; }
 warn() { echo "WARNING: $*"; }
@@ -62,29 +65,28 @@ case "$ARCH" in
 esac
 [ -d /run/systemd/system ] || die "This server doesn't run systemd, which the setup needs. Ubuntu, Debian, Fedora, Rocky, Alma and most VPS images do."
 
-# Pyr was called Ingle before 0.8.0. A server set up then (the ingle-server service, its
-# data in /var/lib/ingle-server) is moved over, on the port it had; if Pyr's then won't
-# start, everything is put back the way it was.
+# A server set up before the rename (the $OLD service, its data in /var/lib/$OLD) is moved
+# over, on the port it had; if Pyr's then won't start, everything is put back the way it was.
 MIGRATED=""
-if [ -f /etc/systemd/system/ingle-server.service ] || [ -e /usr/local/bin/ingle-server ]; then
-  step "Moving the Ingle server over to Pyr"
-  OLD_PORT=$(sed -n 's/.*--bind [^ ]*:\([0-9][0-9]*\).*/\1/p' /etc/systemd/system/ingle-server.service 2>/dev/null | head -n 1)
+if [ -f /etc/systemd/system/$OLD.service ] || [ -e /usr/local/bin/$OLD ]; then
+  step "Moving the server from before the rename over to Pyr"
+  OLD_PORT=$(sed -n 's/.*--bind [^ ]*:\([0-9][0-9]*\).*/\1/p' /etc/systemd/system/$OLD.service 2>/dev/null | head -n 1)
   if [ -z "$PORT_GIVEN" ] && [ -n "$OLD_PORT" ]; then
     PORT=$OLD_PORT
   fi
-  systemctl stop ingle-server >/dev/null 2>&1 || true
-  systemctl disable ingle-server >/dev/null 2>&1 || true
-  if [ -d /var/lib/ingle-server ] && [ ! -e /var/lib/pyr-server ]; then
-    mv /var/lib/ingle-server /var/lib/pyr-server
+  systemctl stop $OLD >/dev/null 2>&1 || true
+  systemctl disable $OLD >/dev/null 2>&1 || true
+  if [ -d /var/lib/$OLD ] && [ ! -e /var/lib/pyr-server ]; then
+    mv /var/lib/$OLD /var/lib/pyr-server
     MIGRATED="data"
     echo "    its community, messages and files are in /var/lib/pyr-server now"
   else
     MIGRATED="service"
   fi
   # Set aside (not deleted) until Pyr's server is running.
-  [ -f /etc/systemd/system/ingle-server.service ] && mv -f /etc/systemd/system/ingle-server.service /etc/systemd/system/ingle-server.service.before-pyr
-  [ -d /etc/systemd/system/ingle-server.service.d ] && mv -f /etc/systemd/system/ingle-server.service.d /etc/systemd/system/ingle-server.service.d.before-pyr
-  [ -e /usr/local/bin/ingle-server ] && mv -f /usr/local/bin/ingle-server /usr/local/bin/ingle-server.before-pyr
+  [ -f /etc/systemd/system/$OLD.service ] && mv -f /etc/systemd/system/$OLD.service /etc/systemd/system/$OLD.service.before-pyr
+  [ -d /etc/systemd/system/$OLD.service.d ] && mv -f /etc/systemd/system/$OLD.service.d /etc/systemd/system/$OLD.service.d.before-pyr
+  [ -e /usr/local/bin/$OLD ] && mv -f /usr/local/bin/$OLD /usr/local/bin/$OLD.before-pyr
   systemctl daemon-reload
 fi
 # Run again on a server that's already Pyr's: it keeps the port it has (unless --port says).
@@ -94,25 +96,29 @@ if [ -z "$PORT_GIVEN" ] && [ -f /etc/systemd/system/pyr-server.service ]; then
     PORT=$CUR_PORT
   fi
 fi
-# Puts the Ingle server back (Pyr's didn't start).
+# Puts the server from before the rename back (Pyr's didn't start).
 undo_migration() {
   [ -n "$MIGRATED" ] || return 0
-  warn "Putting the Ingle server back the way it was."
+  warn "Putting the server from before the rename back the way it was."
   systemctl stop pyr-server >/dev/null 2>&1 || true
   systemctl disable pyr-server >/dev/null 2>&1 || true
   rm -f /etc/systemd/system/pyr-server.service /usr/local/bin/pyr-server
-  if [ "$MIGRATED" = data ] && [ ! -e /var/lib/ingle-server ]; then
-    mv /var/lib/pyr-server /var/lib/ingle-server
-    if id ingle-server >/dev/null 2>&1; then
-      chown -R "ingle-server:$(id -gn ingle-server)" /var/lib/ingle-server
+  if [ "$MIGRATED" = data ] && [ ! -e /var/lib/$OLD ]; then
+    # (Its database under the name that program knows: Pyr renames it when it starts.)
+    for X in "" -wal -shm; do
+      [ -e "/var/lib/pyr-server/pyr.db$X" ] && [ ! -e "/var/lib/pyr-server/$OLD_DB$X" ] && mv "/var/lib/pyr-server/pyr.db$X" "/var/lib/pyr-server/$OLD_DB$X"
+    done
+    mv /var/lib/pyr-server /var/lib/$OLD
+    if id $OLD >/dev/null 2>&1; then
+      chown -R "$OLD:$(id -gn $OLD)" /var/lib/$OLD
     fi
   fi
-  [ -f /etc/systemd/system/ingle-server.service.before-pyr ] && mv -f /etc/systemd/system/ingle-server.service.before-pyr /etc/systemd/system/ingle-server.service
-  [ -d /etc/systemd/system/ingle-server.service.d.before-pyr ] && mv -f /etc/systemd/system/ingle-server.service.d.before-pyr /etc/systemd/system/ingle-server.service.d
-  [ -e /usr/local/bin/ingle-server.before-pyr ] && mv -f /usr/local/bin/ingle-server.before-pyr /usr/local/bin/ingle-server
+  [ -f /etc/systemd/system/$OLD.service.before-pyr ] && mv -f /etc/systemd/system/$OLD.service.before-pyr /etc/systemd/system/$OLD.service
+  [ -d /etc/systemd/system/$OLD.service.d.before-pyr ] && mv -f /etc/systemd/system/$OLD.service.d.before-pyr /etc/systemd/system/$OLD.service.d
+  [ -e /usr/local/bin/$OLD.before-pyr ] && mv -f /usr/local/bin/$OLD.before-pyr /usr/local/bin/$OLD
   systemctl daemon-reload
-  systemctl enable ingle-server >/dev/null 2>&1 || true
-  systemctl start ingle-server >/dev/null 2>&1 || true
+  systemctl enable $OLD >/dev/null 2>&1 || true
+  systemctl start $OLD >/dev/null 2>&1 || true
 }
 
 step "Installing the Pyr server program"
@@ -150,9 +156,10 @@ if [ -n "$RESTORE" ]; then
     chmod 700 "$KEPT"
     echo "    what was here before is kept in $KEPT"
   fi
-  rm -f /var/lib/pyr-server/ingle.db /var/lib/pyr-server/ingle.db-wal /var/lib/pyr-server/ingle.db-shm
+  for X in "" -wal -shm; do rm -f "/var/lib/pyr-server/pyr.db$X" "/var/lib/pyr-server/$OLD_DB$X"; done
   tar -x -f "$RESTORE" -C /var/lib/pyr-server || die "Couldn't unpack the backup."
-  [ -f /var/lib/pyr-server/ingle.db ] || die "The backup has no database in it."
+  # (A backup made before 0.9.1 has the database under its old name: the server renames it.)
+  [ -f /var/lib/pyr-server/pyr.db ] || [ -f "/var/lib/pyr-server/$OLD_DB" ] || die "The backup has no database in it."
   chown -R "pyr-server:$GROUP" /var/lib/pyr-server
   chmod 700 /var/lib/pyr-server
   echo "    messages, members, roles, files and the server's identity are back"
@@ -318,10 +325,10 @@ if ! server_up; then
     die "The server didn't start (see the log above)."
   fi
 fi
-# Running: what was set aside from Ingle's goes.
+# Running: what was set aside from before the rename goes.
 if [ -n "$MIGRATED" ]; then
-  rm -rf /etc/systemd/system/ingle-server.service.before-pyr /etc/systemd/system/ingle-server.service.d.before-pyr /usr/local/bin/ingle-server.before-pyr
-  echo "    the Ingle server is Pyr's now (same community, same links)"
+  rm -rf /etc/systemd/system/$OLD.service.before-pyr /etc/systemd/system/$OLD.service.d.before-pyr /usr/local/bin/$OLD.before-pyr
+  echo "    the server from before the rename is Pyr's now (same community, same links)"
 fi
 
 echo

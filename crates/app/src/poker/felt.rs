@@ -37,7 +37,7 @@ fn hash(x: u32, y: u32) -> f32 {
 }
 
 /// The cloth as a picture: lit in the middle, darker toward the rail, with a fine weave and
-/// a printed spade.
+/// the room's mark printed on it.
 pub fn cloth_image(id: &str) -> ColorImage {
     let (w, h) = (768usize, 400usize);
     let (lit, dark) = cloth(id);
@@ -187,10 +187,11 @@ pub fn table(p: &Painter, c: Pos2, a: f32, b: f32, tex: &TextureHandle, mark: &s
     let mut pts: Vec<Pos2> = (0..=STEPS).map(|i| on_oval(c, ca * 0.74, cb * 0.68, i as f32 / STEPS as f32 * TAU)).collect();
     pts.dedup();
     p.add(Shape::line(pts, Stroke::new(1.5f32, ink)));
-    let spade = Rect::from_center_size(c + vec2(0.0, cb * 0.36), vec2(cb * 0.16, cb * 0.16));
-    super::cards::suit(p, spade, 3, Color32::from_white_alpha(18));
-    p.text(c + vec2(0.0, cb * 0.52), egui::Align2::CENTER_CENTER, mark, crate::theme::bold_font((cb * 0.085).clamp(12.0, 22.0)), Color32::from_white_alpha(26));
-    p.text(c + vec2(0.0, cb * 0.62), egui::Align2::CENTER_CENTER, rules, crate::theme::font(12.0), Color32::from_white_alpha(40));
+    // The mark (see `mark`), and the room's name spaced out under it like a casino's print.
+    super::mark::paint(p, c + vec2(0.0, cb * 0.44), cb * 0.2, Color32::from_white_alpha(30));
+    let spaced: String = mark.chars().map(|ch| if ch == ' ' { "\u{2003}".to_string() } else { format!("{ch}\u{200A}") }).collect();
+    p.text(c + vec2(0.0, cb * 0.585), egui::Align2::CENTER_CENTER, spaced.trim_end(), crate::theme::bold_font((cb * 0.06).clamp(11.0, 17.0)), Color32::from_white_alpha(34));
+    p.text(c + vec2(0.0, cb * 0.64), egui::Align2::CENTER_CENTER, rules, crate::theme::font(12.0), Color32::from_white_alpha(40));
 }
 
 #[cfg(test)]

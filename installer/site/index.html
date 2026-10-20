@@ -4,9 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <script>
-  // Pyr was called Ingle, and its page was firelitgames.com/ingle, which serves this same page
-  // (copies from before the rename still find their updates there). People who come to it go
-  // on to pyr.gg, an invite after the # included.
+  // Pyr's name before 0.8.0 (see pyr_proto::legacy): its invite links' scheme, which copies
+  // from then still open.
+  var OLD = "ingle";
+  // firelitgames.com serves this same page under Pyr's old address (copies from before the
+  // rename find their updates there). People who come to it go on to pyr.gg, an invite after
+  // the # included.
   if (/(^|\.)firelitgames\.com$/i.test(location.hostname)) location.replace("https://pyr.gg/" + location.hash);
 </script>
 <title>Pyr: voice, video and chat for your group, on your own server</title>
@@ -128,6 +131,8 @@ em.serif, .serif { font-family: var(--serif); font-style: italic; font-weight: 4
 .join-badge { width: 86px; height: 86px; margin: 0 auto 16px; border-radius: 26px; display: grid; place-items: center;
   font: 800 38px/1 var(--display); color: #1d120b; background: linear-gradient(160deg, #ffd08a, var(--ember) 70%, var(--ember-3));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), 0 14px 40px -12px rgba(255, 110, 50, .8); }
+.join-badge.has-icon { background: none; box-shadow: 0 10px 30px rgba(0,0,0,.35); overflow: hidden; }
+.join-badge.has-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .join-lead { color: var(--muted); font-size: 15px; }
 .join-name { margin: 4px 0 6px; font: 780 clamp(26px, 5vw, 34px)/1.15 var(--display); color: var(--text); letter-spacing: -.02em; overflow-wrap: anywhere; }
 .join-counts { color: var(--muted); font-size: 14px; display: flex; justify-content: center; gap: 16px; }
@@ -155,8 +160,6 @@ em.serif, .serif { font-family: var(--serif); font-style: italic; font-weight: 4
 .join-more { display: inline-block; margin-top: 18px; font-size: 13.5px; color: var(--dim); background: none; border: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 .join-more:hover { color: var(--body); }
 
-               background: linear-gradient(120deg, rgba(255, 122, 61, .2), rgba(255, 179, 71, .1) 60%, rgba(255, 122, 61, .05));
-               border: 1px solid rgba(255, 150, 90, .35); box-shadow: 0 20px 60px -30px rgba(255, 110, 50, .6); }
 
 /* ---------- hero */
 .hero { position: relative; isolation: isolate; padding: 118px 0 80px; overflow: hidden; }
@@ -346,6 +349,15 @@ section { position: relative; }
 .skin-row .shot { margin: 26px 0 0; border-radius: 14px 0 0 0; border-right: 0; border-bottom: 0; }
 .skin-row .shot img { display: block; width: 100%; height: auto; }
 .plug-side .card h3 { font-size: 20px; }
+.casino-row { margin-top: 52px; padding: 0; display: grid; grid-template-columns: 1fr 1.35fr; gap: 28px; align-items: end; overflow: hidden; }
+.casino-row .casino-text { padding: 30px 0 30px 30px; align-self: center; }
+.casino-row .kind { font-size: 12.5px; font-weight: 650; color: #ffd27a; letter-spacing: .06em; text-transform: uppercase; }
+.casino-row h3 { margin-top: 6px; }
+.casino-row .shot { margin: 26px 0 0; border-radius: 14px 0 0 0; border-right: 0; border-bottom: 0; }
+.casino-row .shot img { display: block; width: 100%; height: auto; }
+.games { margin-top: 16px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.games .card h3 { font-size: 18px; }
+.games .card p { font-size: 14.5px; }
 
 /* trust */
 .trust { margin-top: 52px; display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; }
@@ -456,6 +468,10 @@ dialog[open] { animation: pop .35s var(--ease); }
   .skin-row { grid-template-columns: 1fr; gap: 0; }
   .skin-row .skin-text { padding: 30px 30px 0; }
   .skin-row .shot { margin: 24px 0 0 30px; }
+  .casino-row { grid-template-columns: 1fr; gap: 0; }
+  .casino-row .casino-text { padding: 30px 30px 0; }
+  .casino-row .shot { margin: 24px 0 0 30px; }
+  .games { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 760px) {
   body { font-size: 16px; }
@@ -516,6 +532,7 @@ dialog[open] { animation: pop .35s var(--ease); }
       <a href="#how">How it works</a>
       <a href="#compare">Compare</a>
       <a href="#plugins">Plugins</a>
+      <a href="#casino">Casino</a>
       <a href="#faq">FAQ</a>
     </nav>
     <a class="btn btn-fire btn-small dl" href="Pyr-Setup.exe" data-os="win">Download</a>
@@ -857,6 +874,44 @@ dialog[open] { animation: pop .35s var(--ease); }
   </div>
 </section>
 
+<section class="sec" id="casino" aria-labelledby="casino-title">
+  <div class="wrap">
+    <div class="head" data-reveal>
+      <span class="eyebrow">New: Pyr Casino</span>
+      <h2 id="casino-title">A casino your friends can't cheat. <span class="serif fire-text">Neither can the house.</span></h2>
+      <p>Poker with the people on your server, Time Bombs, and seven games against the house, for play chips. Before every round the house commits to a secret seed, your Pyr adds its own, and afterwards your Pyr plays the round again to check every card, reel, ball and die.</p>
+    </div>
+    <article class="card casino-row" data-reveal>
+      <div class="casino-text">
+        <span class="kind">Slots · the Phoenix Jackpot</span>
+        <h3>Pyr Sevens</h3>
+        <p>Five reels, twenty lines, wild flames and free spins that pay triple. Five flames on a line win the Phoenix Jackpot, which grows with every spin anyone makes on your server.</p>
+        <div class="tags"><span class="tag">95.5% paid back</span><span class="tag">Free spins</span><span class="tag">Autoplay and turbo</span></div>
+      </div>
+      <div class="shot"><img src="assets/img/casino-slots.webp" width="1280" height="800" alt="Pyr Sevens: a red and gold slot cabinet, five reels of sevens, bells, diamonds and wild flames, the Phoenix Jackpot counter above them." loading="lazy"></div>
+    </article>
+    <article class="card casino-row" data-reveal>
+      <div class="casino-text">
+        <span class="kind">Sit &amp; go · up to 1,000× the buy-in</span>
+        <h3>Time Bomb</h3>
+        <p>Three players, 500 chips each, blinds up every minute. A wheel picks the prize the moment the table fills, and the winner takes it all. Take the chip lead while you can: when the fuse burns down, the bomb goes off and every hand is all in.</p>
+        <div class="tags"><span class="tag">3-minute fuse</span><span class="tag">Prize wheel</span><span class="tag">Bots fill empty seats</span></div>
+      </div>
+      <div class="shot"><img src="assets/img/casino-timebomb.webp" width="1280" height="800" alt="A Time Bomb table: three players round the felt, the prize wheel landing on its multiplier, and the bomb's fuse counting down above the cards." loading="lazy"></div>
+    </article>
+    <div class="games">
+      <article class="card" data-reveal><h3>Poker</h3><p>Hold'em and Omaha at tables and in tournaments, with a hand strength meter, a time bank and bots that only see their own cards.</p></article>
+      <article class="card" data-reveal><h3>Blackjack</h3><p>Six decks, 3 to 2 blackjacks, doubles, splits and insurance, with basic strategy's hint if you want it.</p></article>
+      <article class="card" data-reveal><h3>Roulette</h3><p>A single-zero wheel. Click the line between two numbers for a split, a corner for four.</p></article>
+      <article class="card" data-reveal><h3>Craps</h3><p>Pass line, odds at true odds, place bets and hardways, and the stickman's call on every roll.</p></article>
+      <article class="card" data-reveal><h3>Baccarat</h3><p>Player, Banker or Tie, dealt by the tableau, with the bead road of every coup.</p></article>
+      <article class="card" data-reveal><h3>Dice</h3><p>Slide your chance from 2% to 98%: the lower it is, the more it pays.</p></article>
+      <article class="card" data-reveal><h3>Keno</h3><p>Pick up to ten numbers. Ten for ten pays 100,000 to 1.</p></article>
+      <article class="card" data-reveal><h3>Pyr Friday Night</h3><p>A free tournament every Friday at 10 PM Eastern, its prize money the week's rake.</p></article>
+    </div>
+  </div>
+</section>
+
 <section class="sec" id="open" aria-labelledby="open-title">
   <div class="wrap">
     <div class="head" data-reveal>
@@ -1146,8 +1201,8 @@ dialog[open] { animation: pop .35s var(--ease); }
     var h = location.hash.replace(/^#/, "");
     var i = h.indexOf("join=");
     if (i < 0) return null;
-    // (ingle://: links from before Pyr was called Pyr.)
-    var link = h.slice(i + 5).replace(/^(pyr|ingle)(:|%3A)(\/\/|%2F%2F)/i, "");
+    // (Or with the scheme from before the rename.)
+    var link = h.slice(i + 5).replace(new RegExp("^(pyr|" + OLD + ")(:|%3A)(//|%2F%2F)", "i"), "");
     try { if (/%2F/i.test(link)) link = decodeURIComponent(link); } catch (e) { return null; }
     link = link.replace(/%5B/gi, "[").replace(/%5D/gi, "]");
     if (link.length > 400 || !/^[A-Za-z0-9.\-\[\]:%]+\/[A-Za-z0-9._~\-\/?=&%]+$/.test(link)) return null;
@@ -1155,7 +1210,7 @@ dialog[open] { animation: pop .35s var(--ease); }
     var nm = h.slice(0, i).match(/(?:^|&)n=([^&]*)/);
     if (nm) { try { name = decodeURIComponent(nm[1].replace(/\+/g, " ")); } catch (e) {} }
     name = name.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 60);
-    return { link: "pyr://" + link, old: "ingle://" + link, name: name };
+    return { link: "pyr://" + link, old: OLD + "://" + link, name: name };
   }
   // ---- a short link, https://pyr.gg/<code> (like Discord's discord.gg ones): pyr.gg put
   // what it opens in this page (#pyr-invite), or it's asked for (when the page came without).
@@ -1169,9 +1224,11 @@ dialog[open] { animation: pop .35s var(--ease); }
     if (!/^pyr:\/\//i.test(link)) return { invalid: true };
     var n = function (x) { return typeof x === "number" && x >= 0 ? x : null; };
     return {
-      link: link, old: "ingle://" + link.replace(/^pyr:\/\//i, ""), share: d.url || location.href,
+      link: link, old: OLD + "://" + link.replace(/^pyr:\/\//i, ""), share: d.url || location.href,
       name: String(d.invite.name || "").slice(0, 100), inviter: d.invite.inviter ? String(d.invite.inviter).slice(0, 64) : "",
-      online: n(d.invite.online), members: n(d.invite.members)
+      online: n(d.invite.online), members: n(d.invite.members),
+      // The community's icon (pyr.gg keeps a copy, sent by its server).
+      icon: d.invite.icon === true && d.invite.code ? "/api/v1/icons/" + encodeURIComponent(String(d.invite.code)) + ".png" : ""
     };
   }
   // The invite's own screen. Pyr is tried first (if it's here, it opens on this server);
@@ -1217,6 +1274,11 @@ dialog[open] { animation: pop .35s var(--ease); }
     $("#join-name").textContent = name;
     var first = (inv.name || "P").replace(/^[^A-Za-z0-9À-￿]+/, "").charAt(0) || "P";
     $("#join-badge").textContent = first.toUpperCase();
+    if (inv.icon) {
+      var img = doc.createElement("img");
+      img.alt = ""; img.src = inv.icon; img.width = 86; img.height = 86;
+      img.onload = function () { var b = $("#join-badge"); b.textContent = ""; b.appendChild(img); b.classList.add("has-icon"); };
+    }
     var has = function (x) { return x !== null && x !== undefined; };
     if (has(inv.online) || has(inv.members)) {
       var c = $("#join-counts"); c.textContent = "";

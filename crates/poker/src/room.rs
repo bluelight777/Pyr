@@ -9,8 +9,8 @@ use crate::bots::{self, Level};
 use crate::cards::Card;
 use crate::eval;
 use crate::fair::{self, Stream};
-use crate::game::{Action, Event, Rules, Table, To, Variant};
-use crate::net::{BuyIn, HandHistory, SeatView, TableId, TableSummary, TableView, ToApp};
+use crate::game::{Action, Event, Rules, Street, Table, To, Variant};
+use crate::net::{BuyIn, HandHistory, PlayerHand, PlayerView, PrizeView, SeatView, Tally, TableId, TableSummary, TableView, ToApp};
 use crate::progress::{self, HandResult};
 
 /// How long a player has to act, the time bank they start with and what each hand adds to it.
@@ -28,6 +28,8 @@ pub const MISSES_TO_SIT_OUT: u32 = 2;
 pub const AWAY_MS: u64 = 1_200;
 /// Hands kept for the history.
 pub const HISTORY: usize = 30;
+/// A Time Bomb gone off: each push, a moment apart.
+pub const BOMB_PUSH_MS: u64 = 700;
 
 /// Where the server gets random numbers (its system's generator; tests use a seeded stream).
 pub trait Random {
@@ -66,6 +68,11 @@ pub enum Effect {
     Hand { uid: String, result: HandResult, big_blind: u64, beat_shark: bool },
     /// Out of a tournament (or won it): where they finished, of how many, and the prize.
     Placed { uid: String, place: usize, entrants: usize, prize: u64, tourney: u64 },
+    /// Chips into the Friday Night pool: a hand's rake (or a called-off Friday Night's prize
+    /// money, back again).
+    Raked { chips: u64 },
+    /// A prize box opened by whoever won the hand.
+    Prize { uid: String, chips: u64, item: Option<String> },
 }
 
 #[derive(Default)]
@@ -157,6 +164,12 @@ pub struct Room {
     phase: Phase,
     next_hand: u64,
     history: VecDeque<(HandHistory, Vec<(To, Event)>)>,
+    /// How each person (and bot) has played here, and their last hands: (the hand, their
+    /// cards, whether everyone saw them).
+    tallies: HashMap<String, Tally>,
+    /// A prize box waiting for the next hand's winner.
+    pub prize: Option<PrizeView>,
+    hands_of: HashMap<String, VecDeque<(PlayerHand, Vec<Card>, bool)>>,
     pots: VecDeque<u64>,
     hand_times: VecDeque<u64>,
     /// Part of a tournament: nobody sits, stands or buys chips here themselves (the
@@ -164,6 +177,8 @@ pub struct Room {
     pub tourney: Option<u64>,
     /// No new hand until let go (a tournament moving players).
     pub hold: bool,
+    /// A Time Bomb gone off: everyone is all in, every hand (a moment for each to see it).
+    pub bomb: bool,
     /// Blinds for the next hand (a tournament's level went up mid-hand).
     next_rules: Option<Rules>,
 }
@@ -189,10 +204,14 @@ impl Room {
             phase: Phase::Idle { next: None },
             next_hand: 1,
             history: VecDeque::new(),
+            tallies: HashMap::new(),
+            prize: None,
+            hands_of: HashMap::new(),
             pots: VecDeque::new(),
             hand_times: VecDeque::new(),
             tourney: None,
             hold: false,
+            bomb: false,
             next_rules: None,
         })
     }
@@ -317,10 +336,13 @@ impl Room {
             board: hs.map(|h| h.board.clone()).unwrap_or_default(),
             pot: hs.map(|h| h.pot()).unwrap_or(0),
             to_act: hs.and_then(|h| h.to_act),
-            legal: my_seat.and_then(|s| self.table.legal(s)),
+            // (A Time Bomb gone off leaves nothing to choose.)
+            legal: my_seat.filter(|_| !self.bomb).and_then(|s| self.table.legal(s)),
             my_seat,
             recent: self.history.iter().map(|(h, _)| h.number).collect(),
             tourney: self.tourney,
+            prize: self.prize.clone(),
+            bomb: self.bomb,
         }
     }
 
@@ -494,6 +516,9 @@ impl Room {
         if self.table.hand.as_ref().map(|h| h.number) != Some(hand) {
             return Err("that hand is over".into());
         }
+        if self.bomb {
+            return Err("the bomb's gone off: everyone's all in, every hand".into());
+        }
         let mut out = Output::default();
         if let Some(m) = self.meta.get_mut(&seat) {
             m.misses = 0;
@@ -550,7 +575,10 @@ impl Room {
             let bot = self.is_bot(seat);
             let Phase::Playing(p) = &mut self.phase else { return };
             p.using_bank = false;
-            if bot {
+            if self.bomb {
+                // (All in, for everyone: a moment to see each push.)
+                p.deadline = now + BOMB_PUSH_MS;
+            } else if bot {
                 // Bots think for a moment (longer on bigger decisions), like people.
                 p.deadline = now + 900 + (seat as u64 * 377 + hand * 131) % 1600;
             } else if self.tourney.is_some() && self.meta.get(&seat).is_some_and(|m| m.misses >= MISSES_TO_SIT_OUT) {
@@ -603,13 +631,32 @@ impl Room {
         let shark_in_showdown = shown.iter().any(|s| self.meta.get(s).is_some_and(|m| m.bot == Some(Level::Shark)));
         for (seat, s) in p.seats_at_start.iter().enumerate() {
             let Some((uid, _)) = s else { continue };
+            let result = progress::read_hand(&events, seat, &values);
+            if result.played {
+                self.note_hand(uid, seat, &result, &events, holes.get(&seat), shown.contains(&seat), &board_final, p.hand, now);
+            }
             if uid.starts_with("bot:") {
                 continue;
             }
-            let result = progress::read_hand(&events, seat, &values);
             out.effects.push(Effect::Hand { uid: uid.clone(), result, big_blind: rules.big_blind, beat_shark: shark_in_showdown });
         }
         let pot: u64 = events.iter().filter_map(|e| if let Event::Won { amounts, .. } = e { Some(amounts.iter().sum::<u64>()) } else { None }).sum();
+        let rake: u64 = events.iter().map(|e| if let Event::HandEnded { rake, .. } = e { *rake } else { 0 }).sum();
+        if rake > 0 {
+            out.effects.push(Effect::Raked { chips: rake });
+        }
+        // A prize box: to whoever won the hand (the main pot's first winner), a person; a bot's
+        // win leaves it for the next hand.
+        let winner = events.iter().find_map(|e| if let Event::Won { pot: 0, seats, .. } = e { seats.first().copied() } else { None });
+        if let Some(seat) = winner
+            && let Some(Some((uid, _))) = p.seats_at_start.get(seat)
+            && !uid.starts_with("bot:")
+            && let Some(prize) = self.prize.take()
+        {
+            let name = self.table.seats.get(seat).cloned().flatten().map(|s| s.name).unwrap_or_default();
+            out.effects.push(Effect::Prize { uid: uid.clone(), chips: prize.chips, item: prize.item.clone() });
+            out.all(ToApp::PrizeWon { table: self.id, seat, name, prize });
+        }
         self.pots.push_back(pot);
         if self.pots.len() > 50 {
             self.pots.pop_front();
@@ -674,6 +721,113 @@ impl Room {
         self.changed(out);
     }
 
+    /// Notes a finished hand for whoever played it from `seat`.
+    #[allow(clippy::too_many_arguments)]
+    fn note_hand(&mut self, uid: &str, seat: usize, r: &progress::HandResult, events: &[Event], hole: Option<&Vec<Card>>, shown: bool, board: &[Card], number: u64, now: u64) {
+        let net = r.won as i64 - r.put_in as i64;
+        let pot: u64 = events.iter().filter_map(|e| if let Event::Won { amounts, .. } = e { Some(amounts.iter().sum::<u64>()) } else { None }).sum();
+        let t = self.tallies.entry(uid.to_string()).or_default();
+        t.hands += 1;
+        t.won += (r.won > 0) as u64;
+        t.showdowns += r.showdown as u64;
+        t.showdowns_won += (r.showdown && r.won > 0) as u64;
+        t.vpip += r.vpip as u64;
+        t.pfr += r.pfr as u64;
+        t.net += net;
+        if r.won > 0 {
+            t.biggest_pot = t.biggest_pot.max(pot);
+        }
+        if let Some((v, _, name)) = &r.shown
+            && *v > t.best_value
+        {
+            t.best_value = *v;
+            t.best_hand = name.clone();
+        }
+        // What happened, in words.
+        let mut street = Street::Preflop;
+        let mut folded_on = None;
+        for e in events {
+            match e {
+                Event::Street { street: s, .. } => street = *s,
+                Event::Acted { seat: s, action: Action::Fold, .. } if *s == seat && folded_on.is_none() => folded_on = Some(street),
+                _ => {}
+            }
+        }
+        let made = r.shown.as_ref().map(|(_, _, n)| n.clone());
+        let how = match (folded_on, r.won > 0) {
+            (Some(st), _) => format!("Folded {}", match st {
+                Street::Preflop => "before the flop",
+                Street::Flop => "on the flop",
+                Street::Turn => "on the turn",
+                _ => "on the river",
+            }),
+            (None, true) if r.showdown => format!("Won at the showdown with {}", made.unwrap_or_default()),
+            (None, true) => "Won (everyone else folded)".to_string(),
+            (None, false) => match made {
+                Some(m) if r.showdown => format!("Lost at the showdown with {m}"),
+                _ => "Lost".to_string(),
+            },
+        };
+        let h = PlayerHand { number, ended_ms: now, cards: vec![], board: board.to_vec(), net, how, kept: true };
+        let q = self.hands_of.entry(uid.to_string()).or_default();
+        q.push_front((h, hole.cloned().unwrap_or_default(), shown));
+        q.truncate(HISTORY);
+    }
+
+    /// Whoever sits at `seat`, as `asker` may see them (their own cards only when shown, or
+    /// when they're the asker's). `overall`: their record across the server, for people.
+    pub fn player(&self, seat: usize, asker: &str, overall: Option<Tally>) -> Option<PlayerView> {
+        let s = self.table.seats.get(seat)?.as_ref()?;
+        let bot = self.meta.get(&seat).and_then(|m| m.bot);
+        let hands = self
+            .hands_of
+            .get(&s.player)
+            .map(|q| {
+                q.iter()
+                    .map(|(h, cards, shown)| {
+                        let mut h = h.clone();
+                        if *shown || s.player == asker {
+                            h.cards = cards.clone();
+                        }
+                        h.kept = self.history.iter().any(|(hh, _)| hh.number == h.number);
+                        h
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(PlayerView {
+            seat,
+            name: s.name.clone(),
+            bot,
+            here: self.tallies.get(&s.player).cloned().unwrap_or_default(),
+            overall: if bot.is_some() { None } else { overall },
+            hands,
+        })
+    }
+
+    /// Puts a prize box on the table (one at a time).
+    pub fn drop_prize(&mut self, prize: PrizeView, out: &mut Output) -> Result<(), String> {
+        if self.prize.is_some() {
+            return Err("there's a prize box on this table already: it goes to the next hand's winner".into());
+        }
+        if self.tourney.is_some() {
+            return Err("not at a tournament's table".into());
+        }
+        self.prize = Some(prize);
+        self.changed(out);
+        Ok(())
+    }
+
+    /// The prize box back (the table closed with it unopened).
+    pub fn take_prize(&mut self) -> Option<PrizeView> {
+        self.prize.take()
+    }
+
+    /// Who sits at `seat` (their id).
+    pub fn player_at(&self, seat: usize) -> Option<&str> {
+        self.table.seats.get(seat)?.as_ref().map(|s| s.player.as_str())
+    }
+
     /// A finished hand as `uid` may see it: everything shown to everyone, and their own cards.
     pub fn history(&self, uid: &str, hand: u64) -> Option<HandHistory> {
         let (h, log) = self.history.iter().find(|(h, _)| h.number == hand)?;
@@ -735,6 +889,15 @@ impl Room {
                     return out;
                 }
                 let Some(seat) = self.table.hand.as_ref().and_then(|h| h.to_act) else { return out };
+                if self.bomb {
+                    // The bomb's gone off: all in (calling, when that's all it can be).
+                    for a in [Action::AllIn, Action::Call, Action::Check, Action::Fold] {
+                        if self.apply(seat, a, now, &mut out).is_ok() {
+                            break;
+                        }
+                    }
+                    return out;
+                }
                 let bot = self.meta.get(&seat).and_then(|m| m.bot);
                 if let Some(level) = bot {
                     let view = self.table.bot_view(seat);
@@ -799,6 +962,9 @@ impl Room {
                 (uid, v)
             })
             .collect();
+        // Raked when at least two people (not bots) are dealt in, outside tournaments.
+        let people = self.table.ready().iter().filter(|&&i| self.table.seats[i].as_ref().is_some_and(|s| !s.player.starts_with("bot:"))).count();
+        self.table.raked = self.tourney.is_none() && people >= 2;
         let events = match self.table.start_hand(hand, deck.clone()) {
             Ok(e) => e,
             Err(_) => return,

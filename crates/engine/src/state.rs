@@ -492,6 +492,8 @@ pub struct CallView {
     pub screen_on: bool,
     /// Our screen share is sending sound too.
     pub stream_audio_on: bool,
+    /// Our screen share's sound is muted from our end.
+    pub stream_muted: bool,
     pub transmitting: bool,
     /// Sessions currently speaking (including our own).
     pub speaking: HashSet<SessionId>,

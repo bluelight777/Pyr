@@ -1,0 +1,540 @@
+//! Roulette at the app: the wheel turning and the ball circling, slowing, dropping and
+//! rattling into its pocket; and the layout, where a click puts the chip picked on a number,
+//! on the line between two (a split), at a corner, at the end of a row (a street or six), or
+//! on the outside bets.
+
+use std::time::Instant;
+
+use eframe::egui::{self, Align2, Color32, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, pos2, vec2};
+use pyr_engine::poker_sfx::Cue;
+use pyr_engine::state::ServerView;
+use pyr_poker::casino::roulette::{self as rl, Chip, Spot, WHEEL};
+use pyr_poker::casino::{Bet, Outcome};
+use pyr_poker::net::RoundView;
+
+use super::{chip_stack, col, ease_out, glow_text, radial, vgrad};
+use crate::app::PyrApp;
+use crate::poker::cards::chips_text;
+use crate::theme;
+
+const SPIN_SECS: f32 = 5.2;
+const TAU: f32 = std::f32::consts::TAU;
+
+#[derive(Default)]
+pub struct RouletteUi {
+    /// The bets on the layout, in the order placed (Undo takes the last off).
+    pub chips: Vec<Chip>,
+    last: Vec<Chip>,
+    /// The spin being shown: the round, when it started, where the wheel was, and whether it's
+    /// been settled (the number in the history, the win counted).
+    spin: Option<(RoundView, Instant, f32, bool)>,
+    /// Where the wheel rests between spins.
+    wheel_at: f32,
+    /// The last numbers.
+    pub history: Vec<u8>,
+}
+
+impl RouletteUi {
+    fn total(&self) -> u64 {
+        self.chips.iter().map(|c| c.chips).sum()
+    }
+
+    fn on(&self, spot: &Spot) -> u64 {
+        self.chips.iter().filter(|c| c.spot == *spot).map(|c| c.chips).sum()
+    }
+
+    /// The layout's bets merged by spot (what's sent).
+    fn merged(&self) -> Vec<Chip> {
+        let mut out: Vec<Chip> = Vec::new();
+        for c in &self.chips {
+            match out.iter_mut().find(|o| o.spot == c.spot) {
+                Some(o) => o.chips += c.chips,
+                None => out.push(c.clone()),
+            }
+        }
+        out
+    }
+}
+
+/// The wheel's angle at `t` seconds into a spin that started at `a0` (turning one way, slowing
+/// to a stop), and the ball's (the other way, then riding the wheel in its pocket).
+fn wheel_angle(a0: f32, t: f32) -> f32 {
+    let t = t.min(SPIN_SECS);
+    a0 + 2.2 * (t - t * t / (2.0 * SPIN_SECS))
+}
+
+fn pocket_angle(pocket: usize) -> f32 {
+    (pocket as f32 + 0.5) / 37.0 * TAU
+}
+
+/// The ball: its angle and how far out it is (1 the track, 0 the pockets).
+fn ball(a0: f32, pocket: usize, t: f32) -> (f32, f32) {
+    let drop = SPIN_SECS * 0.72;
+    let rest = wheel_angle(a0, drop) + pocket_angle(pocket);
+    if t >= drop {
+        return (wheel_angle(a0, t) + pocket_angle(pocket), 0.0);
+    }
+    // Backwards round the track, slowing, ending where its pocket is when it drops.
+    let w = 9.0;
+    let run = |t: f32| -w * (t - t * t / (2.0 * drop * 1.15));
+    let a = rest - run(drop) + run(t);
+    let out = if t < drop * 0.62 {
+        1.0
+    } else {
+        let k = (t - drop * 0.62) / (drop * 0.38);
+        let bounce = ((k * 18.0).sin() * (1.0 - k) * 0.18).abs();
+        ((1.0 - ease_out(k)) + bounce).clamp(0.0, 1.0)
+    };
+    (a, out)
+}
+
+impl PyrApp {
+    pub(super) fn roulette_round(&mut self, r: &RoundView) {
+        let Outcome::Roulette(_) = &r.outcome else { return };
+        let ui = &mut self.poker.casino.roulette;
+        let at = ui.wheel_at;
+        ui.spin = Some((r.clone(), Instant::now(), at, false));
+        self.poker.casino.sound_in(0.0, Cue::BallRoll, 0.0, 0.7);
+        self.poker.casino.sound_in(SPIN_SECS * 0.72 * 0.62, Cue::BallDrop, 0.0, 0.8);
+    }
+
+    pub(super) fn roulette_page(&mut self, ui: &mut egui::Ui, s: &ServerView, area: Rect) {
+        let now = Instant::now();
+        let p = ui.painter().clone();
+        vgrad(&p, area, Color32::from_rgb(0x0c, 0x24, 0x18), Color32::from_rgb(0x04, 0x10, 0x0a));
+        radial(&p, area.center(), area.width() * 0.6, Color32::from_rgba_unmultiplied(0x30, 0x90, 0x60, 40), Color32::TRANSPARENT);
+        let bar_h = 86.0;
+        let play = Rect::from_min_max(area.min + vec2(20.0, 16.0), area.max - vec2(20.0, bar_h + 10.0));
+        // The layout along the bottom, as big as fits; the wheel above it on the left; the
+        // result, the last numbers and the bet under the pointer beside the wheel.
+        let cw = ((play.width() - 12.0) / 14.0).min(play.height() * 0.52 / 3.68).min(92.0);
+        let lay = Rect::from_min_size(pos2(play.center().x - cw * 7.0, play.bottom() - cw * 3.68 - 6.0), vec2(cw * 14.0, cw * 3.68));
+        let above = Rect::from_min_max(pos2(lay.left(), play.top()), pos2(lay.right(), lay.top() - 22.0));
+        let wheel_d = above.height().min(above.width() * 0.46);
+        let wc = pos2(above.left() + wheel_d / 2.0 + 6.0, above.center().y);
+        let side = Rect::from_min_max(pos2(wc.x + wheel_d / 2.0 + 40.0, above.top() + 6.0), above.max);
+        // Where the spin is.
+        let (spin_t, spin, settled) = match &self.poker.casino.roulette.spin {
+            Some((r, start, a0, settled)) => ((now - *start).as_secs_f32(), Some((r.clone(), *a0)), *settled),
+            None => (0.0, None, true),
+        };
+        let done = spin.as_ref().is_none_or(|_| spin_t >= SPIN_SECS + 0.2);
+        let wheel_a = match &spin {
+            Some((_, a0)) => wheel_angle(*a0, spin_t),
+            None => self.poker.casino.roulette.wheel_at,
+        };
+        draw_wheel(&p, wc, wheel_d / 2.0, wheel_a);
+        // The ball.
+        let mut result: Option<(u8, u64)> = None;
+        if let Some((r, a0)) = &spin
+            && let Outcome::Roulette(o) = &r.outcome
+        {
+            let (a, out) = ball(*a0, o.pocket as usize, spin_t);
+            let rad = wheel_d / 2.0;
+            let br = rad * (0.62 + 0.26 * out);
+            p.circle_filled(wc + vec2(a.cos(), a.sin()) * br + vec2(1.5, 2.5), rad * 0.035, Color32::from_black_alpha(120));
+            p.circle_filled(wc + vec2(a.cos(), a.sin()) * br, rad * 0.035, Color32::WHITE);
+            if done && !settled {
+                let ui_s = &mut self.poker.casino.roulette;
+                if let Some(sp) = ui_s.spin.as_mut() {
+                    sp.3 = true;
+                }
+                ui_s.history.insert(0, o.number);
+                ui_s.history.truncate(40);
+                ui_s.wheel_at = wheel_angle(*a0, SPIN_SECS);
+                let (paid, wagered) = (o.paid, o.chips.iter().map(|c| c.chips).sum::<u64>());
+                if paid > 0 {
+                    self.poker.casino.sound_in(0.0, Cue::WinSmall, 0.0, 0.8);
+                    self.poker.casino.sound_in(0.15, Cue::Chips, 0.0, 0.7);
+                }
+                self.poker.casino.settle_balance();
+                self.poker.casino.celebrate(paid, wagered, false, 0.1);
+            }
+            if done {
+                // The number, big, in the middle of the wheel.
+                let color = number_color(o.number);
+                p.circle_filled(wc, 48.0, color);
+                p.circle_stroke(wc, 48.0, Stroke::new(3.0f32, col::GOLD));
+                glow_text(&p, wc, Align2::CENTER_CENTER, &o.number.to_string(), theme::bold_font(40.0), Color32::WHITE, Color32::from_black_alpha(120));
+                result = Some((o.number, o.paid));
+            }
+        }
+        // Beside the wheel: the result, then the last numbers.
+        let mut y = side.top() + 8.0;
+        match result {
+            Some((n, won)) => {
+                let name = format!("{n} {}", rl::color_name(n).to_uppercase());
+                glow_text(&p, pos2(side.left(), y + 18.0), Align2::LEFT_CENTER, &name, theme::bold_font(34.0), Color32::WHITE, number_color(n).gamma_multiply(0.8));
+                let (text, color) = if won > 0 { (format!("You won {}", chips_text(won)), col::WIN) } else { ("No win this spin".to_string(), col::MUTED) };
+                p.text(pos2(side.left(), y + 52.0), Align2::LEFT_CENTER, text, theme::bold_font(18.0), color);
+            }
+            None => {
+                let text = if spin.is_some() { "No more bets…" } else { "Place your bets" };
+                glow_text(&p, pos2(side.left(), y + 18.0), Align2::LEFT_CENTER, text, theme::bold_font(30.0), col::GOLD2, Color32::from_black_alpha(140));
+                p.text(pos2(side.left(), y + 52.0), Align2::LEFT_CENTER, "Single zero: the house keeps 2.7%", theme::font(14.0), col::MUTED);
+            }
+        }
+        y += 92.0;
+        let hist = self.poker.casino.roulette.history.clone();
+        p.text(pos2(side.left(), y), Align2::LEFT_CENTER, "LAST NUMBERS", theme::bold_font(11.5), col::MUTED);
+        y += 22.0;
+        let per_row = (((side.width() + 6.0) / 34.0).floor() as usize).max(4);
+        for (i, n) in hist.iter().take(per_row * 2).enumerate() {
+            let c = pos2(side.left() + 15.0 + (i % per_row) as f32 * 34.0, y + 15.0 + (i / per_row) as f32 * 34.0);
+            p.circle_filled(c, if i == 0 { 15.0 } else { 14.0 }, number_color(*n));
+            if i == 0 {
+                p.circle_stroke(c, 15.0, Stroke::new(2.0f32, col::GOLD));
+            }
+            p.text(c, Align2::CENTER_CENTER, n.to_string(), theme::bold_font(12.0), Color32::WHITE);
+        }
+        if hist.is_empty() {
+            p.text(pos2(side.left(), y + 14.0), Align2::LEFT_CENTER, "None yet", theme::font(13.0), theme::DIM());
+        }
+        y += if hist.len() > per_row { 76.0 } else { 42.0 };
+        // How the last numbers fell: red, black and zero.
+        if hist.len() >= 5 {
+            let reds = hist.iter().filter(|n| **n != 0 && rl::is_red(**n)).count() as f32;
+            let zeros = hist.iter().filter(|n| **n == 0).count() as f32;
+            let total = hist.len() as f32;
+            let blacks = total - reds - zeros;
+            let bar = Rect::from_min_size(pos2(side.left(), y), vec2((side.width() - 10.0).min(320.0), 10.0));
+            let mut x = bar.left();
+            for (k, c) in [(reds, col::RED), (zeros, col::GREEN), (blacks, Color32::from_rgb(0x30, 0x30, 0x38))] {
+                let w = bar.width() * k / total;
+                if w > 0.0 {
+                    p.rect_filled(Rect::from_min_size(pos2(x, bar.top()), vec2(w, bar.height())), 0, c);
+                }
+                x += w;
+            }
+            p.text(pos2(bar.left(), bar.bottom() + 12.0), Align2::LEFT_CENTER, format!("Red {:.0}%  ·  Zero {:.0}%  ·  Black {:.0}%   (last {})", reds / total * 100.0, zeros / total * 100.0, blacks / total * 100.0, hist.len()), theme::font(12.0), col::MUTED);
+        }
+        // The layout.
+        let hits = spin.as_ref().filter(|_| done).and_then(|(r, _)| if let Outcome::Roulette(o) = &r.outcome { Some(o.number) } else { None });
+        self.roulette_layout(ui, lay, hits, done);
+        // The controls.
+        let bar = Rect::from_min_max(pos2(area.left() + 20.0, area.bottom() - bar_h), pos2(area.right() - 20.0, area.bottom() - 14.0));
+        self.roulette_controls(ui, s, bar, done);
+    }
+
+    fn roulette_layout(&mut self, ui: &mut egui::Ui, lay: Rect, hit: Option<u8>, done: bool) {
+        let p = ui.painter().clone();
+        // 1 zero column, 12 number columns, 1 "2 to 1" column; 3 rows, then dozens and the
+        // outside bets.
+        let cw = (lay.width() / 14.0).min(lay.height() / 3.68);
+        let chh = cw * 0.8;
+        let grid = Rect::from_min_size(pos2(lay.left() + cw, lay.top()), vec2(cw * 12.0, chh * 3.0));
+        let zero = Rect::from_min_size(lay.left_top(), vec2(cw, chh * 3.0));
+        let cols = Rect::from_min_size(pos2(grid.right(), grid.top()), vec2(cw, chh * 3.0));
+        let dozens = Rect::from_min_size(pos2(grid.left(), grid.bottom()), vec2(cw * 12.0, chh * 0.8));
+        let outside = Rect::from_min_size(pos2(grid.left(), dozens.bottom()), vec2(cw * 12.0, chh * 0.8));
+        let felt = Rect::from_min_max(zero.min - vec2(6.0, 6.0), pos2(cols.right() + 6.0, outside.bottom() + 6.0));
+        p.rect_filled(felt, theme::r(10), Color32::from_rgb(0x0e, 0x5e, 0x38));
+        p.rect_stroke(felt, theme::r(10), Stroke::new(2.0f32, col::GOLD_DARK), StrokeKind::Inside);
+        let line = Stroke::new(1.5f32, Color32::from_white_alpha(170));
+        let num_at = |i: usize, j: usize| -> u8 { (3 * i + (3 - j)) as u8 };
+        // Numbers.
+        for i in 0..12 {
+            for j in 0..3 {
+                let n = num_at(i, j);
+                let r = Rect::from_min_size(pos2(grid.left() + i as f32 * cw, grid.top() + j as f32 * chh), vec2(cw, chh));
+                p.rect_stroke(r, 0, line, StrokeKind::Inside);
+                let color = if rl::is_red(n) { col::RED } else { Color32::from_rgb(0x16, 0x16, 0x1a) };
+                p.add(egui::epaint::EllipseShape::filled(r.center(), vec2(cw * 0.32, chh * 0.34), color));
+                p.text(r.center(), Align2::CENTER_CENTER, n.to_string(), theme::bold_font(cw * 0.3), Color32::WHITE);
+                if hit == Some(n) {
+                    p.rect_stroke(r.shrink(2.0), 0, Stroke::new(3.0f32, col::GOLD2), StrokeKind::Inside);
+                }
+            }
+        }
+        p.rect_stroke(zero, 0, line, StrokeKind::Inside);
+        p.add(egui::epaint::EllipseShape::filled(zero.center(), vec2(cw * 0.32, chh * 0.5), col::GREEN));
+        p.text(zero.center(), Align2::CENTER_CENTER, "0", theme::bold_font(cw * 0.34), Color32::WHITE);
+        if hit == Some(0) {
+            p.rect_stroke(zero.shrink(2.0), 0, Stroke::new(3.0f32, col::GOLD2), StrokeKind::Inside);
+        }
+        for j in 0..3 {
+            let r = Rect::from_min_size(pos2(cols.left(), cols.top() + j as f32 * chh), vec2(cw, chh));
+            p.rect_stroke(r, 0, line, StrokeKind::Inside);
+            p.text(r.center(), Align2::CENTER_CENTER, "2 to 1", theme::bold_font(cw * 0.2), Color32::WHITE);
+        }
+        for d in 0..3 {
+            let r = Rect::from_min_size(pos2(dozens.left() + d as f32 * cw * 4.0, dozens.top()), vec2(cw * 4.0, dozens.height()));
+            p.rect_stroke(r, 0, line, StrokeKind::Inside);
+            p.text(r.center(), Align2::CENTER_CENTER, ["1st 12", "2nd 12", "3rd 12"][d], theme::bold_font(cw * 0.26), Color32::WHITE);
+        }
+        let outs = [("1-18", Spot::Low), ("EVEN", Spot::Even), ("", Spot::Red), ("", Spot::Black), ("ODD", Spot::Odd), ("19-36", Spot::High)];
+        for (k, (label, spot)) in outs.iter().enumerate() {
+            let r = Rect::from_min_size(pos2(outside.left() + k as f32 * cw * 2.0, outside.top()), vec2(cw * 2.0, outside.height()));
+            p.rect_stroke(r, 0, line, StrokeKind::Inside);
+            match spot {
+                Spot::Red | Spot::Black => {
+                    let c = r.center();
+                    let (w, h) = (cw * 0.5, outside.height() * 0.32);
+                    p.add(Shape::convex_polygon(vec![c + vec2(0.0, -h), c + vec2(w, 0.0), c + vec2(0.0, h), c + vec2(-w, 0.0)], if *spot == Spot::Red { col::RED } else { Color32::from_rgb(0x16, 0x16, 0x1a) }, Stroke::new(1.0f32, Color32::WHITE)));
+                }
+                _ => {
+                    p.text(r.center(), Align2::CENTER_CENTER, *label, theme::bold_font(cw * 0.26), Color32::WHITE);
+                }
+            }
+        }
+        // Where the pointer is: which bet, its numbers lit.
+        let pointer = ui.ctx().pointer_hover_pos();
+        let spot_at = |q: Pos2| -> Option<(Spot, Pos2)> {
+            let edge = 0.2;
+            if grid.expand2(vec2(cw * 0.1, chh * 0.25)).contains(q) && !zero.contains(q) && !cols.contains(q) {
+                let fx = ((q.x - grid.left()) / cw).clamp(0.0, 11.999);
+                let fy = (q.y - grid.top()) / chh;
+                let i = fx.floor() as usize;
+                let j = (fy.floor().max(0.0) as usize).min(2);
+                let near_v = fx.fract() < edge && i > 0;
+                let near_v2 = fx.fract() > 1.0 - edge && i < 11;
+                let near_h = fy.fract() < edge && fy > 0.5 && fy < 3.0;
+                let near_h2 = fy.fract() > 1.0 - edge && fy < 2.5;
+                let bottom = fy > 3.0 - edge;
+                let at = |x: f32, y: f32| pos2(grid.left() + x * cw, grid.top() + y * chh);
+                // A street or a six line, at the bottom edge.
+                if bottom {
+                    if near_v {
+                        return Some((Spot::Line { row: (i - 1) as u8 }, at(i as f32, 3.0)));
+                    }
+                    if near_v2 {
+                        return Some((Spot::Line { row: i as u8 }, at(i as f32 + 1.0, 3.0)));
+                    }
+                    return Some((Spot::Street { row: i as u8 }, at(i as f32 + 0.5, 3.0)));
+                }
+                let (vi, vx) = if near_v { (Some(i - 1), i as f32) } else if near_v2 { (Some(i), i as f32 + 1.0) } else { (None, 0.0) };
+                let (hj, hy) = if near_h { (Some(j - 1), j as f32) } else if near_h2 { (Some(j), j as f32 + 1.0) } else { (None, 0.0) };
+                match (vi, hj) {
+                    (Some(a), Some(b)) => {
+                        let ns = [num_at(a, b), num_at(a, b + 1), num_at(a + 1, b), num_at(a + 1, b + 1)];
+                        let min = *ns.iter().min().unwrap();
+                        return Some((Spot::Corner { a: min }, at(vx, hy)));
+                    }
+                    (Some(a), None) => {
+                        let (x, y) = (num_at(a, j), num_at(a + 1, j));
+                        return Some((Spot::Split { a: x.min(y), b: x.max(y) }, at(vx, j as f32 + 0.5)));
+                    }
+                    (None, Some(b)) => {
+                        let (x, y) = (num_at(i, b), num_at(i, b + 1));
+                        return Some((Spot::Split { a: x.min(y), b: x.max(y) }, at(i as f32 + 0.5, hy)));
+                    }
+                    _ => {}
+                }
+                if fx.fract() < edge && i == 0 {
+                    let n = num_at(0, j);
+                    return Some((Spot::Split { a: 0, b: n }, pos2(grid.left(), grid.top() + (j as f32 + 0.5) * chh)));
+                }
+                return Some((Spot::Straight { n: num_at(i, j) }, at(i as f32 + 0.5, j as f32 + 0.5)));
+            }
+            if zero.contains(q) {
+                return Some((Spot::Straight { n: 0 }, zero.center()));
+            }
+            if cols.contains(q) {
+                let j = (((q.y - cols.top()) / chh).floor() as usize).min(2);
+                return Some((Spot::Column { c: (2 - j) as u8 }, pos2(cols.center().x, cols.top() + (j as f32 + 0.5) * chh)));
+            }
+            if dozens.contains(q) {
+                let d = (((q.x - dozens.left()) / (cw * 4.0)).floor() as usize).min(2);
+                return Some((Spot::Dozen { d: d as u8 }, pos2(dozens.left() + (d as f32 + 0.5) * cw * 4.0, dozens.center().y)));
+            }
+            if outside.contains(q) {
+                let k = (((q.x - outside.left()) / (cw * 2.0)).floor() as usize).min(5);
+                return Some((outs[k].1, pos2(outside.left() + (k as f32 + 0.5) * cw * 2.0, outside.center().y)));
+            }
+            None
+        };
+        let spot_pos = |spot: &Spot| -> Pos2 {
+            // Where a bet's chips sit.
+            let at = |x: f32, y: f32| pos2(grid.left() + x * cw, grid.top() + y * chh);
+            let cell = |n: u8| -> (f32, f32) {
+                let i = ((n - 1) / 3) as f32;
+                let j = (2 - (n - 1) % 3) as f32;
+                (i, j)
+            };
+            match *spot {
+                Spot::Straight { n: 0 } => zero.center(),
+                Spot::Straight { n } => {
+                    let (i, j) = cell(n);
+                    at(i + 0.5, j + 0.5)
+                }
+                Spot::Split { a: 0, b } => {
+                    let (_, j) = cell(b);
+                    at(0.0, j + 0.5)
+                }
+                Spot::Split { a, b } => {
+                    let (i1, j1) = cell(a);
+                    let (i2, j2) = cell(b);
+                    at((i1 + i2) / 2.0 + 0.5, (j1 + j2) / 2.0 + 0.5)
+                }
+                Spot::Street { row } => at(row as f32 + 0.5, 3.0),
+                Spot::Line { row } => at(row as f32 + 1.0, 3.0),
+                Spot::Corner { a } => {
+                    let (i, j) = cell(a);
+                    at(i + 1.0, j)
+                }
+                Spot::Column { c } => pos2(cols.center().x, cols.top() + ((2 - c) as f32 + 0.5) * chh),
+                Spot::Dozen { d } => pos2(dozens.left() + (d as f32 + 0.5) * cw * 4.0, dozens.center().y),
+                other => {
+                    let k = outs.iter().position(|(_, s)| *s == other).unwrap_or(0);
+                    pos2(outside.left() + (k as f32 + 0.5) * cw * 2.0, outside.center().y)
+                }
+            }
+        };
+        let hovered = pointer.and_then(|q| if felt.contains(q) { spot_at(q) } else { None });
+        if let Some((spot, _)) = &hovered {
+            for n in 0..=36u8 {
+                if spot.covers(n) {
+                    let r = if n == 0 {
+                        zero
+                    } else {
+                        let i = ((n - 1) / 3) as f32;
+                        let j = (2 - (n - 1) % 3) as f32;
+                        Rect::from_min_size(pos2(grid.left() + i * cw, grid.top() + j * chh), vec2(cw, chh))
+                    };
+                    p.rect_filled(r, 0, Color32::from_white_alpha(46));
+                }
+            }
+            let on = self.poker.casino.roulette.on(spot);
+            let tip = if on > 0 { format!("{}  ·  pays {} to 1  ·  on it {}", spot.name(), spot.pays(), chips_text(on)) } else { format!("{}  ·  pays {} to 1", spot.name(), spot.pays()) };
+            let galley = p.layout_no_wrap(tip, theme::bold_font(13.0), col::GOLD2);
+            let size = galley.size() + vec2(20.0, 8.0);
+            let tr = Rect::from_min_size(pos2(felt.right() - size.x, felt.top() - size.y - 10.0), size);
+            p.rect_filled(tr, theme::r(8), Color32::from_black_alpha(190));
+            p.galley(tr.min + vec2(10.0, 4.0), galley, col::GOLD2);
+        }
+        // Clicks: put a chip down; right-click takes that bet off.
+        let resp = ui.interact(felt, ui.id().with("roulette-layout"), Sense::click());
+        if done && let Some((spot, _)) = hovered {
+            if resp.clicked() {
+                let max = rl::max_on(&spot);
+                let have = self.poker.casino.roulette.on(&spot);
+                let add = self.poker.casino.chip.min(max.saturating_sub(have));
+                if add > 0 {
+                    self.poker.casino.roulette.chips.push(Chip { spot, chips: add });
+                    self.poker.casino.sound_in(0.0, Cue::Chips, 0.0, 0.4);
+                }
+            }
+            if resp.secondary_clicked() {
+                self.poker.casino.roulette.chips.retain(|c| c.spot != spot);
+            }
+        }
+        // The chips on the layout.
+        let won: Vec<Spot> = hit.map(|n| self.poker.casino.roulette.merged().into_iter().filter(|c| c.spot.covers(n)).map(|c| c.spot).collect()).unwrap_or_default();
+        for c in self.poker.casino.roulette.merged() {
+            let at = spot_pos(&c.spot);
+            if won.contains(&c.spot) {
+                p.circle_filled(at, cw * 0.36, col::GOLD.gamma_multiply(0.45));
+            }
+            chip_stack(&p, at, (cw * 0.24).clamp(9.0, 16.0), c.chips);
+        }
+    }
+
+    fn roulette_controls(&mut self, ui: &mut egui::Ui, s: &ServerView, bar: Rect, done: bool) {
+        let p = ui.painter().clone();
+        p.rect_filled(bar, theme::r(18), Color32::from_black_alpha(170));
+        self.chip_rack(ui, pos2(bar.left() + 16.0, bar.center().y - 26.0), 5_000);
+        let total = self.poker.casino.roulette.total();
+        let c = &s.poker.casino;
+        let busy = self.poker.casino.busy() || !done;
+        let mut x = bar.right() - 16.0;
+        let mut button = |ui: &mut egui::Ui, text: &str, w: f32, primary: bool, enabled: bool| -> bool {
+            let r = Rect::from_min_size(pos2(x - w, bar.center().y - 22.0), vec2(w, 44.0));
+            x -= w + 10.0;
+            let resp = ui.interact(r, ui.id().with(("rl", text)), Sense::click());
+            let fill = if !enabled { Color32::from_white_alpha(18) } else if primary { if resp.hovered() { col::GOLD2 } else { col::GOLD } } else if resp.hovered() { Color32::from_white_alpha(46) } else { Color32::from_white_alpha(24) };
+            ui.painter().rect_filled(r, theme::r(12), fill);
+            ui.painter().text(r.center(), Align2::CENTER_CENTER, text, theme::bold_font(15.0), if primary && enabled { Color32::from_rgb(0x2a, 0x10, 0x04) } else if enabled { Color32::WHITE } else { Color32::from_white_alpha(70) });
+            enabled && resp.clicked()
+        };
+        let space = ui.ctx().input(|i| i.key_pressed(egui::Key::Space)) && !ui.ctx().wants_keyboard_input();
+        let can = total > 0 && total <= super::chips_now(s) && !busy;
+        if (button(ui, "Spin", 130.0, true, can) || (space && can))
+            && let Some(commit) = c.commit
+        {
+            let chips = self.poker.casino.roulette.merged();
+            self.poker.casino.roulette.last = self.poker.casino.roulette.chips.clone();
+            self.poker.casino.pending = Some(Instant::now());
+            self.poker.casino.celebration = None;
+            self.engine.casino_play(&s.key, commit, Bet::Roulette { chips });
+        }
+        if button(ui, "Double", 96.0, false, !busy && total > 0) {
+            // (Each bet up to its limit.)
+            let more: Vec<Chip> = self
+                .poker
+                .casino
+                .roulette
+                .merged()
+                .into_iter()
+                .map(|c| Chip { chips: c.chips.min(rl::max_on(&c.spot).saturating_sub(c.chips)), spot: c.spot })
+                .filter(|c| c.chips > 0)
+                .collect();
+            self.poker.casino.roulette.chips.extend(more);
+        }
+        let last = !self.poker.casino.roulette.last.is_empty();
+        if button(ui, "Rebet", 90.0, false, !busy && last && total == 0) {
+            self.poker.casino.roulette.chips = self.poker.casino.roulette.last.clone();
+        }
+        if button(ui, "Undo", 80.0, false, !busy && total > 0) {
+            self.poker.casino.roulette.chips.pop();
+        }
+        if button(ui, "Clear", 80.0, false, !busy && total > 0) {
+            self.poker.casino.roulette.chips.clear();
+        }
+        p.text(pos2(x - 10.0, bar.center().y), Align2::RIGHT_CENTER, format!("Bet {}", chips_text(total)), theme::bold_font(16.0), if total > super::chips_now(s) { col::LOSE } else { col::GOLD2 });
+    }
+}
+
+/// A number's color on the wheel and the layout.
+fn number_color(n: u8) -> Color32 {
+    if n == 0 {
+        col::GREEN
+    } else if rl::is_red(n) {
+        col::RED
+    } else {
+        Color32::from_rgb(0x1a, 0x1a, 0x20)
+    }
+}
+
+/// The wheel: its wooden bowl, the ball track, 37 pockets in order, and the turret.
+fn draw_wheel(p: &egui::Painter, c: Pos2, r: f32, angle: f32) {
+    p.circle_filled(c + vec2(0.0, 8.0), r * 1.02, Color32::from_black_alpha(120));
+    radial(p, c, r, Color32::from_rgb(0x8a, 0x52, 0x26), Color32::from_rgb(0x3a, 0x1e, 0x0c));
+    p.circle_stroke(c, r, Stroke::new(3.0f32, col::GOLD_DARK));
+    // The ball track.
+    p.circle_filled(c, r * 0.92, Color32::from_rgb(0x2a, 0x1a, 0x10));
+    radial(p, c, r * 0.9, Color32::from_rgb(0x5a, 0x3a, 0x22), Color32::from_rgb(0x1a, 0x0e, 0x08));
+    // The pockets.
+    let (outer, inner) = (r * 0.8, r * 0.56);
+    for (i, n) in WHEEL.iter().enumerate() {
+        let a0 = angle + i as f32 / 37.0 * TAU;
+        let a1 = angle + (i + 1) as f32 / 37.0 * TAU;
+        let fill = if *n == 0 { col::GREEN } else if rl::is_red(*n) { Color32::from_rgb(0xb8, 0x1c, 0x2a) } else { Color32::from_rgb(0x14, 0x14, 0x18) };
+        let steps = 3;
+        let mut pts = Vec::new();
+        for k in 0..=steps {
+            let a = a0 + (a1 - a0) * k as f32 / steps as f32;
+            pts.push(c + vec2(a.cos(), a.sin()) * outer);
+        }
+        for k in (0..=steps).rev() {
+            let a = a0 + (a1 - a0) * k as f32 / steps as f32;
+            pts.push(c + vec2(a.cos(), a.sin()) * inner);
+        }
+        p.add(Shape::convex_polygon(pts, fill, Stroke::new(1.0f32, col::GOLD_DARK)));
+        // The number, upright to the rim.
+        let mid = (a0 + a1) / 2.0;
+        let at = c + vec2(mid.cos(), mid.sin()) * (outer - r * 0.075);
+        let galley = p.layout_no_wrap(n.to_string(), theme::bold_font(r * 0.062), Color32::WHITE);
+        let pos = at - galley.size() / 2.0;
+        p.add(egui::epaint::TextShape::new(pos, galley, Color32::WHITE).with_angle_and_anchor(mid + TAU / 4.0, Align2::CENTER_CENTER));
+    }
+    p.circle_stroke(c, outer, Stroke::new(2.0f32, col::GOLD));
+    // The cone and the turret.
+    radial(p, c, inner, Color32::from_rgb(0xb0, 0x74, 0x36), Color32::from_rgb(0x5a, 0x32, 0x14));
+    p.circle_stroke(c, inner, Stroke::new(2.0f32, col::GOLD_DARK));
+    for k in 0..4 {
+        let a = angle * 1.0 + k as f32 * TAU / 4.0;
+        p.line_segment([c, c + vec2(a.cos(), a.sin()) * inner * 0.42], Stroke::new(r * 0.035, col::GOLD));
+        p.circle_filled(c + vec2(a.cos(), a.sin()) * inner * 0.42, r * 0.03, col::GOLD2);
+    }
+    radial(p, c, r * 0.1, col::GOLD2, col::GOLD_DARK);
+}

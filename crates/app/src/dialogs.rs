@@ -412,6 +412,7 @@ impl PyrApp {
                 }
                 Dialog::Invite { key, mut expire, mut uses, mut editing } => {
                     ui.set_width(520.0);
+                    let streamer = self.streamer_mode();
                     let s = st.server(&key);
                     let name = s.map(|s| s.name.clone()).unwrap_or_else(|| "this server".into());
                     title(ui, &format!("Invite friends to {name}"));
@@ -441,7 +442,13 @@ impl PyrApp {
                                 ui.horizontal(|ui| {
                                     let w = (ui.available_width() - 96.0).max(120.0);
                                     ui.allocate_ui_with_layout(vec2(w, 30.0), Layout::left_to_right(Align::Center), |ui| {
-                                        ui.add(egui::Label::new(RichText::new(&share).font(theme::mono(13.5)).color(theme::TEXT())).truncate().selectable(true));
+                                        // (Streamer mode: the link isn't shown, so a stream can't leak it; Copy
+                                        // still copies it.)
+                                        if streamer {
+                                            ui.add(egui::Label::new(RichText::new("pyr.gg/•••••••• (hidden: streamer mode)").font(theme::mono(13.5)).color(theme::MUTED())).truncate());
+                                        } else {
+                                            ui.add(egui::Label::new(RichText::new(&share).font(theme::mono(13.5)).color(theme::TEXT())).truncate().selectable(true));
+                                        }
                                     });
                                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                         // (Green once copied, like Discord's.)
@@ -970,11 +977,36 @@ impl PyrApp {
                         self.ui.dialog = Some(Dialog::ReportBug { title, body, include_log });
                     }
                 }
+                Dialog::SuggestIdea { mut title, mut body } => {
+                    ui.set_width(520.0);
+                    super::dialogs::title(ui, "Suggest a feature");
+                    ui.label(
+                        RichText::new("Your idea goes to Pyr's developers, with nothing else about you. If someone asked for the same thing already, yours counts as one more for it.")
+                            .color(theme::MUTED()),
+                    );
+                    field_label(ui, "Your idea, in a few words");
+                    ui.add(egui::TextEdit::singleline(&mut title).hint_text("Drag channels into any order").desired_width(f32::INFINITY).char_limit(140));
+                    field_label(ui, "What would it let you do? (optional)");
+                    ui.add(egui::TextEdit::multiline(&mut body).desired_rows(5).desired_width(f32::INFINITY).char_limit(4000));
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(!title.trim().is_empty(), theme::primary_button("Send").min_size(vec2(100.0, 34.0))).clicked() {
+                            acts.push(Act::SuggestIdea { title: title.clone(), body: body.clone() });
+                            close = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close = true;
+                        }
+                    });
+                    if !close {
+                        self.ui.dialog = Some(Dialog::SuggestIdea { title, body });
+                    }
+                }
                 Dialog::BugReports { key, mut filter } => {
                     use pyr_proto::control::BugStatus;
                     ui.set_width(720.0);
                     ui.horizontal(|ui| {
-                        super::dialogs::title(ui, "Bug reports");
+                        super::dialogs::title(ui, "Bug reports and feature requests");
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui.button("Done").clicked() {
                                 close = true;
@@ -993,19 +1025,39 @@ impl PyrApp {
                         .size(12.0)
                         .color(theme::DIM()),
                     );
-                    let all = st.bugs.get(&key).cloned().unwrap_or_default();
-                    let tabs = [(BugStatus::New, "New"), (BugStatus::Approved, "Approved"), (BugStatus::Fixed, "Fixed"), (BugStatus::Rejected, "Rejected")];
+                    // Bugs, or ideas (feature requests): `filter` 10 and up is ideas.
+                    let ideas = filter >= 10;
+                    let all: Vec<_> = st.bugs.get(&key).cloned().unwrap_or_default().into_iter().filter(|b| b.report.kind.is_bug() != ideas).collect();
+                    let tabs = if ideas {
+                        [(BugStatus::New, "New"), (BugStatus::Approved, "Approved"), (BugStatus::Fixed, "Done"), (BugStatus::Rejected, "Rejected")]
+                    } else {
+                        [(BugStatus::New, "New"), (BugStatus::Approved, "Approved"), (BugStatus::Fixed, "Fixed"), (BugStatus::Rejected, "Rejected")]
+                    };
+                    ui.horizontal(|ui| {
+                        let count = |want_ideas: bool| st.bugs.get(&key).map(|v| v.iter().filter(|b| b.report.kind.is_bug() != want_ideas && b.status == BugStatus::New).count()).unwrap_or(0);
+                        if ui.add(egui::Button::selectable(!ideas, RichText::new(format!("Bugs ({} new)", count(false))).font(theme::bold_font(13.5)))).clicked() {
+                            filter = 0;
+                        }
+                        if ui.add(egui::Button::selectable(ideas, RichText::new(format!("Feature requests ({} new)", count(true))).font(theme::bold_font(13.5)))).clicked() {
+                            filter = 10;
+                        }
+                    });
                     ui.horizontal(|ui| {
                         for (i, (status, label)) in tabs.iter().enumerate() {
                             let n = all.iter().filter(|b| b.status == *status).count();
-                            if ui.add(egui::Button::selectable(filter == i as u8, format!("{label} ({n})"))).clicked() {
-                                filter = i as u8;
+                            let f = i as u8 + if ideas { 10 } else { 0 };
+                            if ui.add(egui::Button::selectable(filter == f, format!("{label} ({n})"))).clicked() {
+                                filter = f;
                             }
                         }
                     });
                     ui.separator();
-                    let want = tabs[(filter as usize).min(3)].0;
-                    let shown: Vec<_> = all.iter().filter(|b| b.status == want).collect();
+                    let want = tabs[((filter % 10) as usize).min(3)].0;
+                    let mut shown: Vec<_> = all.iter().filter(|b| b.status == want).collect();
+                    // Ideas: the most asked for first.
+                    if ideas {
+                        shown.sort_by_key(|b| std::cmp::Reverse(b.asked));
+                    }
                     // A fixed-height list: the dialog keeps the size it had while loading, so a
                     // list that sized itself would stay cut off.
                     let list_h = (ui.ctx().content_rect().height() - 320.0).clamp(220.0, 520.0);
@@ -1022,6 +1074,11 @@ impl PyrApp {
                                 ui.horizontal(|ui| {
                                     ui.label(RichText::new(format!("#{}", b.id)).color(theme::DIM()));
                                     let t = if b.report.title.trim().is_empty() { "(no title)" } else { b.report.title.as_str() };
+                                    if ideas && b.asked > 1 {
+                                        egui::Frame::new().fill(theme::ELEV2()).corner_radius(6).inner_margin(egui::Margin::symmetric(7, 1)).show(ui, |ui| {
+                                            ui.label(RichText::new(format!("{} asked for this", b.asked)).size(12.0).color(theme::EMBER2()));
+                                        });
+                                    }
                                     ui.add(egui::Label::new(RichText::new(t).font(theme::bold_font(14.0)).color(theme::TEXT())).truncate());
                                 });
                                 ui.label(RichText::new(format!("{when} · Pyr {} · {}", b.report.app_version, b.report.os)).size(12.0).color(theme::DIM()));
@@ -1046,15 +1103,16 @@ impl PyrApp {
                                             }
                                         }
                                     };
-                                    set(ui, "Approve for fixing", BugStatus::Approved, true);
+                                    set(ui, if ideas { "Approve" } else { "Approve for fixing" }, BugStatus::Approved, true);
                                     set(ui, "Reject", BugStatus::Rejected, false);
-                                    set(ui, "Mark fixed", BugStatus::Fixed, false);
+                                    set(ui, if ideas { "Mark done" } else { "Mark fixed" }, BugStatus::Fixed, false);
                                     if b.status != BugStatus::New {
                                         set(ui, "Back to new", BugStatus::New, false);
                                     }
                                     if ui.button("Copy").clicked() {
                                         ui.ctx().copy_text(format!(
-                                            "Bug #{} ({:?}): {}\n{}\nPyr {} · {}",
+                                            "{} #{} ({:?}): {}\n{}\nPyr {} · {}",
+                                            if ideas { "Idea" } else { "Bug" },
                                             b.id, b.status, b.report.title, b.report.body, b.report.app_version, b.report.os
                                         ));
                                     }

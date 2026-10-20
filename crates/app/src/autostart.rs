@@ -16,9 +16,10 @@ pub fn apply(on: bool) {
         let r = RegGetValueW(HKEY_CURRENT_USER, run, name, RRF_RT_REG_SZ, None, Some(buf.as_mut_ptr() as *mut _), Some(&mut len));
         (r == ERROR_SUCCESS).then(|| String::from_utf16_lossy(&buf[..(len as usize / 2).saturating_sub(1)]))
     };
-    // Ingle's own value (Pyr was called Ingle before 0.8.0): it starts the old program, so
-    // it goes, whichever way the setting is (Pyr's value below takes its place).
-    let old = w!("Ingle");
+    // The value from before the rename (`legacy::APP_NAME`): it starts the old program, so it
+    // goes, whichever way the setting is (Pyr's value below takes its place).
+    let old_name = windows::core::HSTRING::from(pyr_proto::legacy::APP_NAME);
+    let old = windows::core::PCWSTR(old_name.as_ptr());
     let had_old = unsafe { RegGetValueW(HKEY_CURRENT_USER, run, old, RRF_RT_REG_SZ, None, None, None) } == ERROR_SUCCESS;
     if had_old {
         let _ = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, run, old) };

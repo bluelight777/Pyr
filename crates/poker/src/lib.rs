@@ -5,6 +5,7 @@
 
 pub mod bots;
 pub mod cards;
+pub mod casino;
 pub mod eval;
 pub mod fair;
 pub mod game;

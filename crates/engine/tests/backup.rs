@@ -115,7 +115,7 @@ async fn back_up_and_restore_elsewhere() {
     // A new machine: its data folder from the backup (as the setup script's --restore does,
     // with the server key the owner's Pyr unsealed).
     let new_data = temp_dir("restored");
-    std::fs::copy(folder.join("database/latest.db"), new_data.join("ingle.db")).unwrap();
+    std::fs::copy(folder.join("database/latest.db"), new_data.join("pyr.db")).unwrap();
     std::fs::copy(folder.join("identity/server-cert.der"), new_data.join("server-cert.der")).unwrap();
     std::fs::write(new_data.join("server-key.der"), &server_key).unwrap();
     copy_dir(&folder.join("files"), &new_data.join("files"));

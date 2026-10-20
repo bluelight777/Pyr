@@ -282,3 +282,37 @@ fn random_play_keeps_every_chip() {
         }
     }
 }
+
+#[test]
+fn the_rake_is_five_percent_capped_and_none_without_a_flop() {
+    assert_eq!(rake_for(600, 10, true), 30);
+    assert_eq!(rake_for(10_000, 10, true), 30, "at most 3 big blinds");
+    assert_eq!(rake_for(10_000, 10, false), 0, "no flop, no drop");
+    // To the showdown: a 30-chip pot (three 10s), raked 1; the winner gets 29.
+    let mut t = table(3, &[1000, 1000, 1000]);
+    t.raked = true;
+    let d = deck(&["AhAd", "KcKd", "2c7d"], "As 9h 4c Tc 3s");
+    t.start_hand(1, d).unwrap();
+    t.act(0, Action::Call).unwrap();
+    t.act(1, Action::Call).unwrap();
+    t.act(2, Action::Check).unwrap();
+    let mut last = Vec::new();
+    for _ in 0..3 {
+        for s in [1, 2, 0] {
+            last = t.act(s, Action::Check).unwrap();
+        }
+    }
+    assert!(last.iter().any(|(_, e)| matches!(e, Event::HandEnded { rake: 1, .. })));
+    assert_eq!(stacks(&t), vec![990, 1019, 990]);
+    // Everyone folds to a raise before the flop: no rake.
+    t.raked = true;
+    let out = t.start_hand(2, shuffle(seed_from(9))).unwrap();
+    let mut seat = turn(&out).unwrap();
+    let mut out = t.act(seat, Action::Raise { to: 40 }).unwrap();
+    while let Some(s) = turn(&out).filter(|s| *s != usize::MAX) {
+        seat = s;
+        out = t.act(seat, Action::Fold).unwrap();
+    }
+    assert!(out.iter().any(|(_, e)| matches!(e, Event::HandEnded { rake: 0, .. })));
+    assert_eq!(stacks(&t).iter().sum::<u64>(), 2999);
+}

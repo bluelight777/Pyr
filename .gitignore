@@ -8,3 +8,5 @@
 *release-key*
 *.key
 /plugins/target
+# The release build environment holds the bug server key: never in the repository.
+scripts/release-env.sh

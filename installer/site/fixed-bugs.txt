@@ -6,9 +6,9 @@
 12 A friend's notice showed as an error. Fixed in 0.8.0.
 13 Pyr crashed when the graphics card went away ("Failed to create staging buffer"). Fixed in 0.8.1: Pyr starts its window again.
 14 Pyr crashed when the graphics card went away ("Failed to create staging buffer"). Fixed in 0.8.1: Pyr starts its window again.
-15 "Your skin isn't installed" after updating from Ingle. Fixed in 0.8.1: skins left in Ingle's folder come over, and a missing skin quietly goes back to Campfire.
-16 "Your skin isn't installed" after updating from Ingle. Fixed in 0.8.1.
-17 "Your skin isn't installed" after updating from Ingle. Fixed in 0.8.1.
-18 "Your skin isn't installed" after updating from Ingle. Fixed in 0.8.1.
-19 "Your skin isn't installed" after updating from Ingle. Fixed in 0.8.1.
+15 "Your skin isn't installed" after the update to Pyr. Fixed in 0.8.1: skins left in the folder from before the rename come over, and a missing skin quietly goes back to Campfire.
+16 "Your skin isn't installed" after the update to Pyr. Fixed in 0.8.1.
+17 "Your skin isn't installed" after the update to Pyr. Fixed in 0.8.1.
+18 "Your skin isn't installed" after the update to Pyr. Fixed in 0.8.1.
+19 "Your skin isn't installed" after the update to Pyr. Fixed in 0.8.1.
 20 Quitting to install an update was reported as Pyr freezing. Fixed in 0.8.1.

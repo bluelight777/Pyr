@@ -760,10 +760,18 @@ impl PyrApp {
         let others: Vec<_> = s.voice_in(call.channel_id).into_iter().filter(|v| v.session != call.session).collect();
         let mut measured: Vec<(String, bool, f32)> = Vec::new();
         let mut unheard: Vec<String> = Vec::new();
+        let mut muted: Vec<String> = Vec::new();
         for v in &others {
-            match loud.iter().find(|(se, t, _)| *se == v.session && *t == track::MIC) {
-                Some(x) => measured.push((v.user_id.clone(), false, x.2)),
-                None => unheard.push(s.member_name(&v.user_id)),
+            // Someone muted can't be heard now: their voice fader stays where it is (what was
+            // measured of them may be from long ago, or from before something changed; it
+            // turned a muted friend up to 188%).
+            if v.self_mute || v.server_mute {
+                muted.push(s.member_name(&v.user_id));
+            } else {
+                match loud.iter().find(|(se, t, _)| *se == v.session && *t == track::MIC) {
+                    Some(x) => measured.push((v.user_id.clone(), false, x.2)),
+                    None => unheard.push(s.member_name(&v.user_id)),
+                }
             }
             if let Some(x) = loud.iter().find(|(se, t, _)| *se == v.session && *t == track::SCREEN_AUDIO) {
                 measured.push((v.user_id.clone(), true, x.2));
@@ -804,6 +812,11 @@ impl PyrApp {
             [] => {}
             [one] => more.push_str(&format!("{one} hasn't talked enough to tell how loud they are yet.")),
             many => more.push_str(&format!("{} people haven't talked enough to tell how loud they are yet.", many.len())),
+        }
+        match muted.as_slice() {
+            [] => {}
+            [one] => more.push_str(&format!(" {one} is muted, so their voice was left as it is.")),
+            many => more.push_str(&format!(" {} people are muted, so their voices were left as they are.", many.len())),
         }
         if !more.is_empty() {
             acts.push(Act::Toast(more.trim().to_string(), false));

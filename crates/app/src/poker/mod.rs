@@ -2,8 +2,11 @@
 //! the table itself (see `table`). The server deals and keeps the chips; this draws it all and
 //! sends what the player does.
 
+pub mod bomb;
 pub mod cards;
 pub mod felt;
+pub mod mark;
+pub mod staff;
 pub mod table;
 pub mod tourneys;
 
@@ -22,11 +25,14 @@ use cards::{chips_short, chips_text};
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
+    /// The casino floor: every game.
     #[default]
+    Floor,
     Tables,
     Tourneys,
     Leaderboard,
     Me,
+    Staff,
 }
 
 /// What a new table will be.
@@ -81,12 +87,15 @@ pub struct PokerUi {
     pub raise_for: Option<(u64, usize, u64)>,
     pub raise_text: String,
     pub four_color: bool,
-    pub show_odds: bool,
+    /// The hand strength meter turned off (it's on unless turned off).
+    pub hide_odds: bool,
     pub log_open: bool,
     /// The last time the lobby was asked for.
     pub lobby_asked: Option<Instant>,
     /// The chance of winning shown for my hand: (what it was worked out for, the chance).
     pub odds: Option<(String, f64)>,
+    /// Being worked out (off the screen's thread): what for, and where it comes back.
+    pub odds_job: Option<(String, std::sync::mpsc::Receiver<f64>)>,
     /// A celebration showing: (text, since).
     pub banner: Option<(String, Instant)>,
     /// A table was just asked for: open it when it comes.
@@ -97,9 +106,20 @@ pub struct PokerUi {
     pub heard: Option<(TableId, Option<u64>, usize)>,
     /// The hand and turn the hurry-up chime played for.
     pub hurried: Option<(u64, usize)>,
+    /// The clock's last sound: (hand, events then, the second ticked or 0 for out of time,
+    /// in the bank).
+    pub clock_heard: Option<(u64, usize, u64, bool)>,
+    /// Staff: a gift or prize box being made up; who's picked to be named staff; the table
+    /// a prize box is being made for.
+    pub giving: staff::Giving,
+    /// Pyr Casino's games against the house.
+    pub casino: crate::casino::CasinoUi,
+    pub staff_pick: Option<String>,
+    pub prize_for: Option<TableId>,
     pub mute: bool,
     /// The engine's celebrations already shown, and whether its error has been.
     pub gains_seen: usize,
+    pub notices_seen: usize,
     pub error_shown: bool,
     /// A tournament's lobby open; setting one up; when the list was last asked for; and the
     /// table each tournament had me at (to follow me when I'm moved).
@@ -107,6 +127,13 @@ pub struct PokerUi {
     pub new_tourney: Option<tourneys::NewTourney>,
     pub tourneys_asked: Option<Instant>,
     pub my_tables: std::collections::HashMap<pyr_poker::net::TourneyId, Option<TableId>>,
+    /// Time Bombs: the sounds already played for each (the wheel, the fuse, the bang).
+    pub bomb_fx: bomb::BombSounds,
+    /// The tournament of the table on screen (its lobby opens when the table closes).
+    pub table_tourney: Option<pyr_poker::net::TourneyId>,
+    /// Where I'd finished in each tournament when last seen (to know the moment I'm out, or
+    /// it's won).
+    pub my_place: std::collections::HashMap<pyr_poker::net::TourneyId, Option<usize>>,
 }
 
 impl PyrApp {
@@ -122,6 +149,7 @@ impl PyrApp {
         if let (Some(key), Some(t)) = (self.poker.open.clone(), self.poker.table) {
             self.engine.poker(&key, ToServer::Unwatch { table: t });
         }
+        self.casino_close();
         self.poker.open = None;
         self.poker.table = None;
     }
@@ -139,7 +167,10 @@ impl PyrApp {
         if s.poker.gains.len() < self.poker.gains_seen {
             self.poker.gains_seen = 0;
         }
-        if s.poker.gains.len() > self.poker.gains_seen {
+        // (A casino round still playing out on its table keeps its news until it settles there:
+        // an achievement for a tie mustn't give away the coup before its cards are turned.)
+        let casino_playing = self.poker.casino.game.is_some() && (self.poker.casino.hold.is_some() || s.poker.casino.round_seq != self.poker.casino.seen_round);
+        if s.poker.gains.len() > self.poker.gains_seen && !casino_playing {
             self.engine.take_poker_gains(&s.key);
             let from = self.poker.gains_seen;
             self.poker.gains_seen = s.poker.gains.len();
@@ -154,6 +185,21 @@ impl PyrApp {
                     acts.push(Act::Toast(format!("You reached level {l}. New looks may be waiting in your profile."), false));
                 }
             }
+        }
+        // Gifts and prize boxes: big, and in a toast.
+        if !s.poker.notices.is_empty() {
+            self.engine.take_poker_notices(&s.key);
+            if self.poker.notices_seen != s.poker.notices.len() {
+                for n in &s.poker.notices {
+                    acts.push(Act::Toast(n.clone(), false));
+                }
+                if let Some(n) = s.poker.notices.last() {
+                    self.poker.banner = Some((n.clone(), Instant::now()));
+                }
+                self.poker.notices_seen = s.poker.notices.len();
+            }
+        } else {
+            self.poker.notices_seen = 0;
         }
         match &s.poker.error {
             Some(e) if !self.poker.error_shown => {
@@ -176,14 +222,18 @@ impl PyrApp {
             match s.poker.table(id) {
                 Some(t) => {
                     let t = t.clone();
+                    self.poker.table_tourney = t.view.tourney;
                     self.poker_table(ui, st, s, &t);
                 }
                 None => {
                     // It closed (or the connection dropped): back to the room (or, for a
-                    // tournament's table, to its lobby).
+                    // tournament's table, to its lobby: how it ended).
                     if s.poker.lobby.is_some() {
                         self.poker.table = None;
-                        if let Some((tid, _)) = s.poker.tourney.iter().find(|(_, v)| v.tables.contains(&id) || v.my_table == Some(id) || v.entrants.iter().any(|e| e.table == Some(id))) {
+                        let was = self.poker.table_tourney.take().filter(|tid| s.poker.tourney.contains_key(tid));
+                        if let Some(tid) = was {
+                            self.poker.tourney = Some(tid);
+                        } else if let Some((tid, _)) = s.poker.tourney.iter().find(|(_, v)| v.tables.contains(&id) || v.my_table == Some(id) || v.entrants.iter().any(|e| e.table == Some(id))) {
                             self.poker.tourney = Some(*tid);
                         }
                     }
@@ -194,6 +244,10 @@ impl PyrApp {
         }
         if let Some(tid) = self.poker.tourney {
             self.tourney_page(ui, s, tid);
+            return;
+        }
+        if let Some(game) = self.poker.casino.game {
+            self.casino_game(ui, s, game);
             return;
         }
         if self.poker.tourneys_asked.is_none_or(|t| t.elapsed().as_secs() >= 5) {
@@ -231,11 +285,11 @@ impl PyrApp {
                 let (r, _) = ui.allocate_exact_size(vec2(46.0, 46.0), Sense::hover());
                 let c = r.center();
                 ui.painter().circle_filled(c, 23.0, theme::ELEV());
-                cards::suit(ui.painter(), Rect::from_center_size(c, vec2(26.0, 26.0)), 3, theme::TEXT());
+                mark::icon(ui.painter(), c, 30.0, theme::TEXT());
                 ui.add_space(10.0);
                 ui.vertical(|ui| {
-                    ui.label(RichText::new("Pyr Poker").font(theme::bold_font(26.0)).color(theme::TEXT()));
-                    ui.label(RichText::new(format!("{}: Hold'em and Omaha with play chips, against friends and bots. Every shuffle is checked by your own Pyr.", s.name)).color(theme::MUTED()));
+                    ui.label(RichText::new("Pyr Casino").font(theme::bold_font(26.0)).color(theme::TEXT()));
+                    ui.label(RichText::new(format!("{}: poker with friends and bots, and seven games against the house, for play chips. Every shuffle, spin and roll is checked by your own Pyr.", s.name)).color(theme::MUTED()));
                 });
             });
             ui.add_space(16.0);
@@ -245,7 +299,12 @@ impl PyrApp {
             ui.add_space(14.0);
             ui.horizontal(|ui| {
                 ui.add_space(28.0);
-                for (tab, name) in [(Tab::Tables, "Tables"), (Tab::Tourneys, "Tournaments"), (Tab::Leaderboard, "Leaderboard"), (Tab::Me, "Profile & Looks")] {
+                let staff = self.my_poker_role(s).is_some() || s.can(pyr_proto::control::perm::MANAGE_SERVER);
+                let mut tabs = vec![(Tab::Floor, "Casino"), (Tab::Tables, "Poker"), (Tab::Tourneys, "Tournaments"), (Tab::Leaderboard, "Leaderboard"), (Tab::Me, "Profile & Looks")];
+                if staff {
+                    tabs.push((Tab::Staff, "Staff"));
+                }
+                for (tab, name) in tabs {
                     let on = self.poker.tab == tab;
                     let b = egui::Button::new(RichText::new(name).font(theme::bold_font(14.0)).color(if on { theme::on_ember() } else { theme::TEXT() }))
                         .fill(if on { theme::EMBER() } else { theme::ELEV() })
@@ -255,6 +314,9 @@ impl PyrApp {
                         self.poker.tab = tab;
                         if tab == Tab::Leaderboard {
                             self.engine.poker(&s.key, ToServer::Leaderboard);
+                        }
+                        if tab == Tab::Staff {
+                            self.engine.poker(&s.key, ToServer::Staff);
                         }
                     }
                 }
@@ -279,10 +341,12 @@ impl PyrApp {
             });
             ui.add_space(12.0);
             match self.poker.tab {
+                Tab::Floor => self.casino_floor(ui, s),
                 Tab::Tables => self.tables_list(ui, s),
                 Tab::Tourneys => self.tourneys_list(ui, s),
                 Tab::Leaderboard => self.leaderboard(ui, s),
                 Tab::Me => self.profile(ui, s),
+                Tab::Staff => self.staff_tab(ui, s),
             }
             ui.add_space(30.0);
         });
@@ -529,7 +593,9 @@ impl PyrApp {
             ui.add_space(28.0);
             ui.checkbox(&mut self.poker.four_color, "Four-color deck (clubs green, diamonds blue)");
             ui.add_space(20.0);
-            ui.checkbox(&mut self.poker.show_odds, "Show my chance of winning at the table");
+            let mut show = !self.poker.hide_odds;
+            ui.checkbox(&mut show, "Hand strength meter (my chance of winning)");
+            self.poker.hide_odds = !show;
         });
     }
 

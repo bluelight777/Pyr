@@ -1,8 +1,5 @@
 # Research: building a better Discord for voice, webcams and screen sharing
 
-> Pyr was called **Ingle** until 0.8.0 (October 2026). This research was written under the old name and is left as it was.
-
-
 Compiled 2026-10-10/11 from web research (four research passes: Discord's weak points and
 internals; competitors and media technology; the Rust library ecosystem, with
 cross-compile tests; names). Every claim has a source link. **UNVERIFIED** marks claims
@@ -16,7 +13,7 @@ Contents:
 5. [Media technology findings](#5-media-technology-findings)
 6. [The Rust stack](#6-the-rust-stack)
 7. [Naming](#7-naming)
-8. [What Ingle took from this](#8-what-ingle-took-from-this)
+8. [What Pyr took from this](#8-what-pyr-took-from-this)
 
 ---
 
@@ -346,42 +343,20 @@ Gotchas found while testing:
 
 ## 7. Naming
 
-Brief: warm / campfire, a name that isn't taken. Checked 2026-10-11 with RDAP lookups
-(each method tested first against names known to exist and names known to be free),
-GitHub profile pages, crates.io and US trademark search (Trademarkia).
-
-| # | Name | Why | .com | .app | .chat | GitHub | crates.io | Conflicts | Risk |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | **Ingle** | Scots/archaic for the hearth fire; sounds like *mingle* | taken; inglechat.com free | listed for sale ([ingle.app](https://ingle.app)) | free | `ingle` taken (person), `inglechat` free | free | Canadian travel insurer ([source](https://www.insurancebusinessmag.com/ca/news/breaking-news/ingle-international-rolls-out-travel-insurance-platform-64585.aspx)); a pulled dating app ([AppBrain](https://www.appbrain.com/app/ingle-meet-match-monetize/com.ingle.app)); all 15 US INGLE marks dead ([Trademarkia](https://www.trademarkia.com/search/trademarks?query=ingle)) | Low |
-| 2 | **Firefolk** | "the people around the fire" | taken; firefolkchat.com free | taken (Mar 2026, unknown) | free (.dev free) | `firefolkchat` free | free | an art gallery, a band, a fan D&D race; 0 US marks ([Trademarkia](https://www.trademarkia.com/search/trademarks?query=firefolk)) | Low |
-| 3 | **Irori** | Japanese sunken hearth people gather round | taken | pending delete | free | taken | free | Irori Inc., Tokyo startup ([source](https://www.vcbacked.co/company/irori)) | Low–med |
-| 4 | **Ingleside** | "the fireside" | taken | taken | free | taken | free | marks in senior housing, finance, wine | Low |
-| 5 | **Hobfire** | coinage: the hob beside the hearth; a hob is a hearth spirit | **free** | **free** | free | free | free | none found; 0 US marks | Low (less obvious) |
-| 6 | **Bothy** | Scottish open hut where strangers share the stove; mirrors self-hosting | taken | taken | free | taken | free | GIN BOTHY | Low |
-| 7 | **Kokko** | Finnish midsummer bonfire | taken | taken | free | taken | free | "Kokko Party" chat app (pulled 2025) | Low–med |
-| 8 | **Firelit** | "lit by fire" | taken (Firelit LLC) | a live "Firelit" macOS app | free | taken | free | that app; close to Firelight/FMOD | Med |
-
-Ruled out: Emberhall (a game renamed to it on 2026-10-09), Hearthline (a game in beta),
-Campwire (a course platform; close to 37signals' Campfire), Firenook (a Rust project),
-Noroshi (a Japanese messaging app), Inglenook (live marks), Hearthkin (registered 2026),
-Fogata (all taken).
-
-Caveats: "free" means an RDAP 404 (likely available), not a price check; `.gg` couldn't be
-checked; GitHub API lookups were blocked, so profile pages were used; trademark search was
-US federal only and loose. **This is not legal clearance.**
-
-Recommendation: **Ingle** (short, warm, a real word for the hearth, ownable), with
-**Firefolk** as runner-up.
+Brief: warm / campfire, a name that isn't taken. Candidates were checked in October 2026 with
+RDAP lookups, GitHub profile pages, crates.io and US trademark search. The app is **Pyr**
+(ancient Greek for fire, as in *pyre*), at [pyr.gg](https://pyr.gg). This is not legal
+clearance.
 
 ---
 
-## 8. What Ingle took from this
+## 8. What Pyr took from this
 
-| Finding | What Ingle does now | Later |
+| Finding | What Pyr does now | Later |
 |---|---|---|
 | Free 720p30 cap is Discord's sorest paywall | 720p30 → 1080p60 / 1440p30 presets, free | AV1, hardware encode, 4K |
 | One slow viewer drags everyone down | Per-viewer queues; frames dropped and keyframes requested for that viewer only | Simulcast / SVC layers |
-| Stream audio must not echo the call | Process loopback that excludes Ingle's own process; window shares capture just that app | Linux (PipeWire), macOS (SCK) |
+| Stream audio must not echo the call | Process loopback that excludes Pyr's own process; window shares capture just that app | Linux (PipeWire), macOS (SCK) |
 | Voice quality paywalled at 96 kbps | Up to 192 kbps for everyone; 64 kbps default | RED, DRED, NoLACE |
 | Krisp turns off under load | RNNoise by default, and it never switches itself off; plus WebRTC AEC3/AGC2 via sonora | DeepFilterNet as an option |
 | E2EE is now expected (DAVE) | Always-on E2EE for voice, video and stream sound; key rotation on join/leave; call code | MLS for large calls |
@@ -426,9 +401,9 @@ How the rental works, from DigitalOcean's API documentation:
   Full Access or custom scopes ([how](https://docs.digitalocean.com/reference/api/create-personal-access-token/),
   [scopes](https://docs.digitalocean.com/reference/api/scopes/)). Creating droplets
   (`droplet:create`) also needs `droplet:read`, `regions:read`, `sizes:read`,
-  `actions:read` and `image:read`; tagging needs `tag:create`, so Ingle doesn't tag
+  `actions:read` and `image:read`; tagging needs `tag:create`, so Pyr doesn't tag
   ([droplet:create](https://docs.digitalocean.com/reference/api/scopes/droplet/create/)).
-- `POST /v2/account/keys` adds Ingle's SSH public key; `POST /v2/droplets` with
+- `POST /v2/account/keys` adds Pyr's SSH public key; `POST /v2/droplets` with
   `name`, `region`, `size`, `image` (`ubuntu-24-04-x64`) and `ssh_keys` creates the
   server; `GET /v2/droplets/{id}` reports `status` (`new` → `active`) and
   `networks.v4[].ip_address` with `type: public`; `DELETE /v2/droplets/{id}` removes it

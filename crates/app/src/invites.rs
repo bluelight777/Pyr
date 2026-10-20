@@ -196,12 +196,13 @@ pub fn links_in(text: &str) -> Vec<String> {
     out
 }
 
-/// A full invite link Pyr can join from: `pyr://…` (or `ingle://…`, from before the rename),
-/// or the web form on pyr.gg (or firelitgames.com/ingle, before it).
+/// A full invite link Pyr can join from: `pyr://…`, or the web form on pyr.gg (or either form
+/// from before the rename, see `pyr_proto::legacy`).
 pub fn is_full_invite(url: &str) -> bool {
+    use pyr_proto::legacy;
     let u = url.trim();
-    let app = ["pyr://", "ingle://"].iter().any(|s| u.get(..s.len()).is_some_and(|p| p.eq_ignore_ascii_case(s)));
-    let web = [pyr_proto::invite::WEB_INVITE, "https://firelitgames.com/ingle/"].iter().any(|w| u.starts_with(w)) && u.contains("join=");
+    let app = ["pyr://", legacy::SCHEME].iter().any(|s| u.get(..s.len()).is_some_and(|p| p.eq_ignore_ascii_case(s)));
+    let web = [pyr_proto::invite::WEB_INVITE, legacy::WEB_INVITE].iter().any(|w| u.starts_with(w)) && u.contains("join=");
     (app || web) && InviteLink::parse(u).is_ok()
 }
 
@@ -428,7 +429,8 @@ impl crate::app::PyrApp {
                 for i in &view.invites {
                     let who = if i.created_by == "server" { "The server".to_string() } else { s.member_name(&i.created_by) };
                     ui.label(RichText::new(who).color(theme::TEXT()));
-                    let code = ui.add(egui::Label::new(RichText::new(&i.code).font(theme::mono(13.0)).color(theme::TEXT())).sense(egui::Sense::click()));
+                    let shown = if self.streamer_mode() { "••••••••".to_string() } else { i.code.clone() };
+                    let code = ui.add(egui::Label::new(RichText::new(shown).font(theme::mono(13.0)).color(theme::TEXT())).sense(egui::Sense::click()));
                     let link = i.short.clone().unwrap_or_else(|| format!("{} (a full link)", i.code));
                     if code.on_hover_text(format!("{link}\nClick to copy")).clicked() {
                         acts.push(Act::Copy(i.short.clone().unwrap_or_else(|| i.code.clone())));

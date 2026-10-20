@@ -97,9 +97,17 @@ pub fn reachable_host(host: &str) -> bool {
     }
 }
 
-/// What the directory is told: where the server is, its name and counts, and (while short
-/// links are on) its listed invites and own code.
-pub fn announcement(db: &Db, host: &str, port: u16, online: Option<u32>) -> Announce {
+/// The server's icon (a PNG small enough for the directory), from its files folder.
+pub fn icon(db: &Db, files_dir: &std::path::Path) -> Option<Vec<u8>> {
+    let id = db.get_meta("icon").filter(|i| i.len() == 32 && i.bytes().all(|b| b.is_ascii_hexdigit()))?;
+    std::fs::read(files_dir.join(id)).ok().filter(|b| pyr_proto::directory::icon_ok(b))
+}
+
+/// What the directory is told: where the server is, its name, icon and counts, and (while
+/// short links are on) its listed invites and own code. The icon itself goes along only with
+/// `send_icon` (the directory asks for it when it doesn't have it).
+pub fn announcement(db: &Db, files_dir: &std::path::Path, host: &str, port: u16, online: Option<u32>, send_icon: bool) -> Announce {
+    let png = icon(db, files_dir);
     let on = db.get_meta("short_links").as_deref() != Some("0");
     let (codes, vanity) = if on {
         let names = |uid: &str| db.get_user(uid).map(|u| u.name).filter(|n| !n.trim().is_empty());
@@ -121,6 +129,8 @@ pub fn announcement(db: &Db, host: &str, port: u16, online: Option<u32>) -> Anno
         online,
         codes,
         vanity,
+        icon_sha: png.as_deref().map(pyr_proto::directory::icon_sha),
+        icon: png.filter(|_| send_icon).map(|b| pyr_proto::b64::encode(&b)),
     }
 }
 
@@ -175,6 +185,8 @@ pub fn start(hub: &Arc<Hub>, base: String, signing: Signing) -> Directory {
         let mut wait = Duration::from_secs(5);
         // The last trouble told of (the same again goes to the debug log only).
         let mut said: Option<String> = None;
+        // pyr.gg asked for the icon: it goes with the next announcement.
+        let mut send_icon = false;
         loop {
             let mut waiting: Vec<oneshot::Sender<Answer>> = Vec::new();
             let woken = tokio::select! {
@@ -195,7 +207,7 @@ pub fn start(hub: &Arc<Hub>, base: String, signing: Signing) -> Directory {
                 waiting.extend(w);
             }
             let Some(hub) = weak.upgrade() else { return };
-            let a = announcement(&hub.db, &hub.public_host, hub.port, Some(hub.online_people() as u32));
+            let a = announcement(&hub.db, &hub.files_dir, &hub.public_host, hub.port, Some(hub.online_people() as u32), send_icon);
             let has_any = !a.codes.is_empty() || a.vanity.is_some();
             let same = last.as_ref().is_some_and(|(l, when)| Announce { ts: a.ts, ..l.clone() } == a && when.elapsed() < REFRESH);
             if !has_any && !listed_there {
@@ -231,8 +243,15 @@ pub fn start(hub: &Arc<Hub>, base: String, signing: Signing) -> Directory {
                     }
                     listed_there = has_any;
                     let _ = hub.db.set_meta("directory_listed", if has_any { "1" } else { "0" });
-                    last = Some((a, Instant::now()));
+                    let sent_icon = a.icon.is_some();
+                    last = Some((Announce { icon: None, ..a }, Instant::now()));
                     wait = PERIOD;
+                    send_icon = r.want_icon && !sent_icon;
+                    if send_icon {
+                        // (Again in a moment, with the icon.)
+                        last = None;
+                        wait = Duration::from_secs(2);
+                    }
                     if said.take().is_some() {
                         info!("{} can be reached again", host_of(&at));
                     }
@@ -286,11 +305,11 @@ mod tests {
         db.create_invite("brethren", "server", None, None, pyr_proto::control::Role::Member).unwrap();
         db.set_listed("brethren", true).unwrap();
         db.set_meta("vanity", "brethren").unwrap();
-        let a = announcement(&db, "2.24.121.231", 7766, Some(3));
+        let a = announcement(&db, std::path::Path::new("/nonexistent"), "2.24.121.231", 7766, Some(3), false);
         assert_eq!(a.codes.iter().map(|c| c.code.as_str()).collect::<Vec<_>>(), vec!["listedaa"], "never owner links, used-up ones or the own code twice");
         assert_eq!((a.name.as_str(), a.vanity.as_deref(), a.online, a.members), ("Camp", Some("brethren"), Some(3), Some(0)));
         db.set_meta("short_links", "0").unwrap();
-        let a = announcement(&db, "2.24.121.231", 7766, None);
+        let a = announcement(&db, std::path::Path::new("/nonexistent"), "2.24.121.231", 7766, None, false);
         assert!(a.codes.is_empty() && a.vanity.is_none(), "short links off: nothing listed");
     }
 

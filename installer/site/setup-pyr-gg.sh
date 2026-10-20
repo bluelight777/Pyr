@@ -1,9 +1,8 @@
 #!/bin/bash
 # Puts the website on https://pyr.gg (and https://www.pyr.gg, which sends people on to
 # https://pyr.gg) on this VPS: an nginx site with a free Let's Encrypt certificate that renews
-# by itself. pyr.gg shows the same page and downloads as https://firelitgames.com/ingle/ (it
-# serves that same folder: Pyr was called Ingle, and copies from before the rename still look
-# for their updates there).
+# by itself. pyr.gg shows the Pyr folder of https://firelitgames.com's web folder (pyr/; copies
+# from before Pyr's rename reach it under the old name, a link to it, for their updates).
 #
 # Run on the VPS as root:   bash setup-pyr-gg.sh
 #
@@ -24,6 +23,7 @@ WWW=www.pyr.gg
 OLD_SITE=firelitgames.com
 VPS_IP=${VPS_IP:-2.24.121.231}
 PYR_DIR=/var/www/pyr.gg          # Pyr's own page, once 0.8.0 is published there
+OLD=ingle                        # Pyr's name before 0.8.0: the folder had it until 0.9.1
 ACME_DIR=/var/www/pyr.gg-acme    # for Let's Encrypt's checks (http://pyr.gg/.well-known/acme-challenge/)
 LIVE=/etc/letsencrypt/live/$DOMAIN
 DNS_WAIT_SECS=${DNS_WAIT_SECS:-900}
@@ -209,7 +209,7 @@ command -v curl > /dev/null 2>&1 || die "curl isn't installed on this server."
 nginx -t > /dev/null 2>&1 || die "nginx's settings already have a problem (nginx -t fails). Nothing was changed."
 if ip -4 -o addr show 2>/dev/null | grep -qF " $VPS_IP/"; then CONNECT=$VPS_IP; else CONNECT=127.0.0.1; fi
 
-say "Finding the folder that serves https://$OLD_SITE/ingle/"
+say "Finding the folder that serves https://$OLD_SITE/"
 dump
 ROOT=""
 TOKEN=$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')
@@ -221,10 +221,11 @@ for R in $(directive root | cut -f2 | awk '{ print $1 }' | sort -u); do
   if [ "$GOT" = "$TOKEN" ]; then ROOT=$R; break; fi
 done
 [ -n "$ROOT" ] || die "Couldn't find the folder that serves https://$OLD_SITE/. Nothing was changed."
-# (The folder keeps Ingle's name: Pyr was called Ingle, and its page was firelitgames.com/ingle.)
-INGLE=$ROOT/ingle
-[ -f "$INGLE/index.html" ] && [ -f "$INGLE/latest.json" ] || die "$INGLE doesn't hold the Pyr page. Nothing was changed."
-if [ -f "$PYR_DIR/index.html" ] && [ ! -L "$PYR_DIR" ]; then SITE_ROOT=$PYR_DIR; else SITE_ROOT=$INGLE; fi
+# (pyr/ since 0.9.1, install-site.sh renames it; before, it had the old name.)
+WEB=$ROOT/pyr
+{ [ -d "$WEB" ] && [ ! -L "$WEB" ]; } || WEB=$ROOT/$OLD
+[ -f "$WEB/index.html" ] && [ -f "$WEB/latest.json" ] || die "$WEB doesn't hold the Pyr page. Nothing was changed."
+if [ -f "$PYR_DIR/index.html" ] && [ ! -L "$PYR_DIR" ]; then SITE_ROOT=$PYR_DIR; else SITE_ROOT=$WEB; fi
 note "pyr.gg will show $SITE_ROOT"
 
 # Next to the file that has firelitgames.com's settings, named to come after it (so pyr.gg
@@ -280,7 +281,7 @@ if [ -f "$LIVE/fullchain.pem" ] && [ -f "$LIVE/privkey.pem" ] && [ -f "$CONF" ] 
   note "already on (with its certificate); leaving it as it is for now"
 else
   cat > "$WORK/http.conf" <<EOF
-# https://$DOMAIN and https://$WWW: Pyr (Ingle's new name), by Firelit Games.
+# https://$DOMAIN and https://$WWW: Pyr, by Firelit Games.
 # Written by setup-pyr-gg.sh; running it again writes this again.
 server {
 $(listen_lines 80)
@@ -358,6 +359,22 @@ install_directory() {
     useradd --system --no-create-home --home-dir /var/lib/pyr-directory --shell /usr/sbin/nologin pyr-directory \
       || die "Couldn't make the pyr-directory user."
   fi
+  # It shows the website's page (with the invite in it) at each short link, so it must be able
+  # to read it. A folder on the way that only the web server may enter (Hostinger's
+  # /var/www/<site>, say) lets it through, and no more: passing, not listing (an ACL for its
+  # user alone), checked from the top down. Without this every invite was a blank page with
+  # only the word Pyr on it.
+  local p="" part
+  for part in $(echo "$SITE_ROOT" | tr '/' ' '); do
+    p="$p/$part"
+    if ! runuser -u pyr-directory -- test -x "$p"; then
+      command -v setfacl > /dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq acl > /dev/null; }
+      setfacl -m "u:pyr-directory:--x" "$p"
+      note "let pyr-directory through $p (only through)"
+    fi
+  done
+  runuser -u pyr-directory -- test -r "$SITE_ROOT/index.html" \
+    || die "pyr-directory can't read $SITE_ROOT/index.html, the page short links show. Nothing was changed for short links."
   if ! systemctl is-active --quiet pyr-directory 2>/dev/null \
      && curl -s --noproxy '*' --max-time 3 -o /dev/null "http://127.0.0.1:$DIR_PORT/" 2>/dev/null; then
     die "Something else already answers on 127.0.0.1:$DIR_PORT, where pyr-directory listens. Nothing was changed for short links."
@@ -434,7 +451,7 @@ TLS="    ssl_certificate $LIVE/fullchain.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     add_header Strict-Transport-Security \"max-age=31536000\" always;"
 cat > "$WORK/https.conf" <<EOF
-# https://$DOMAIN and https://$WWW: Pyr (Ingle's new name), by Firelit Games.
+# https://$DOMAIN and https://$WWW: Pyr, by Firelit Games.
 # Written by setup-pyr-gg.sh; running it again writes this again. The certificate is
 # Let's Encrypt's, in $LIVE, and certbot renews it by itself.
 server {
@@ -463,8 +480,9 @@ $TLS
     add_header X-Content-Type-Options nosniff always;
     # Browsers check for a newer page and pictures every time (answered "not changed" when
     # nothing is), so a new release shows right away instead of an old copy for hours.
-    # (pyr.gg settings v3: install-site.sh runs this script again for servers set up before.
-    # v2: check for a newer page every time; v3: downloads that carry an invite.)
+    # (pyr.gg settings v5: install-site.sh runs this script again for servers set up before.
+    # v2: check for a newer page every time; v3: downloads that carry an invite; v4: the
+    # website's folder is pyr/; v5: the invite directory can read the page.)
     add_header Cache-Control "no-cache" always;
     root $SITE_ROOT;
     index index.html;
@@ -542,8 +560,9 @@ rm -f "$ACME_DIR/.well-known/acme-challenge/$T"
 if [ -f /etc/systemd/system/pyr-directory.service ]; then
   check "the invite directory answers at https://$DOMAIN/api/" ok \
     "$(curl -s --noproxy '*' --max-time 10 --resolve "$DOMAIN:443:$CONNECT" "https://$DOMAIN/api/v1/health" 2>/dev/null || true)"
+  # (The website's own page, with its invite screen: not the directory's bare stand-in.)
   check "an address that's no invite gets the page, saying so" "404 yes" \
-    "$(curl -s --noproxy '*' --max-time 10 -o "$WORK/inv.html" -w '%{http_code}' --resolve "$DOMAIN:443:$CONNECT" "https://$DOMAIN/zzzzzzzz" 2>/dev/null || true) $(grep -q 'id="pyr-invite"' "$WORK/inv.html" 2>/dev/null && echo yes || echo no)"
+    "$(curl -s --noproxy '*' --max-time 10 -o "$WORK/inv.html" -w '%{http_code}' --resolve "$DOMAIN:443:$CONNECT" "https://$DOMAIN/zzzzzzzz" 2>/dev/null || true) $(grep -q 'id="pyr-invite"' "$WORK/inv.html" 2>/dev/null && grep -q 'id="join-name"' "$WORK/inv.html" 2>/dev/null && echo yes || echo no)"
 fi
 check "the site's own files still come first" yes \
   "$(curl -s --noproxy '*' --max-time 10 --resolve "$DOMAIN:443:$CONNECT" "https://$DOMAIN/latest.json" 2>/dev/null | grep -q '"manifest"' && echo yes || echo no)"
@@ -585,7 +604,7 @@ fi
 
 echo
 if [ "$PROBLEMS" -eq 0 ]; then
-  echo "Done: https://$DOMAIN is up, with the same page and downloads as https://$OLD_SITE/ingle/."
+  echo "Done: https://$DOMAIN is up, showing $SITE_ROOT."
   echo "https://$WWW sends people to https://$DOMAIN. The certificate renews by itself."
 else
   echo "https://$DOMAIN is on, but $PROBLEMS check(s) above weren't right."

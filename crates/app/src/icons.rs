@@ -143,6 +143,12 @@ pub fn speaker(p: &Painter, r: Rect, c: Color32) {
     p.add(Shape::line(arc(ctr, s * 0.32, -0.9, 0.9, 12), Stroke::new(s * 0.08, c)));
 }
 
+/// A speaker with a slash: sound off.
+pub fn speaker_off(p: &Painter, r: Rect, c: Color32) {
+    speaker(p, r, c);
+    slash(p, r);
+}
+
 pub fn hash(p: &Painter, r: Rect, c: Color32) {
     let s = r.width();
     let st = Stroke::new(s * 0.09, c);

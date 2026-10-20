@@ -27,7 +27,7 @@
 
 ## Transport
 
-- **QUIC** (quinn 0.11, rustls + ring, TLS 1.3, ALPN `ingle/1`) on one UDP port. One
+- **QUIC** (quinn 0.11, rustls + ring, TLS 1.3, its own ALPN, see below) on one UDP port. One
   connection per server carries text, voice and video, so there's a single port to forward
   and congestion control sees all traffic together.
 - **Server identity without a CA.** The server makes a self-signed certificate on first
@@ -50,7 +50,7 @@
 - Your identity is an Ed25519 key pair in `identity.key`. The base64 public key is your
   user id; there are no accounts, emails or passwords.
 - Login: the server sends a random nonce in `Hello`. The client signs
-  `"ingle-login-v1" ‖ nonce ‖ TLS exporter ‖ user id`. The TLS exporter ties the signature
+  `login label ‖ nonce ‖ TLS exporter ‖ user id`. The TLS exporter ties the signature
   to this exact connection, so a login can't be replayed or relayed elsewhere.
 - New people need an invite code (from the link) the first time; members can always log
   back in. Invites can be limited by uses and expiry. The owner link is a one-use invite
@@ -65,9 +65,11 @@
   trusts pyr.gg the way a discord.gg link trusts Discord, while the full link needs nobody.
   `https://pyr.gg/<code>` is pyr.gg's own page with the invite in it (and the server's name in
   the preview chat apps show). Invite codes are 8 characters from 31 (no look-alikes).
-- The protocol's labels (ALPN `ingle/1`, the control preamble `ING\x01`, `ingle-login-v1` and
-  the other `ingle-…` contexts) keep the name Pyr had before 0.8.0: changing them would cut
-  Pyr off from older servers and apps, and void signatures already made.
+- The protocol's labels (the ALPN, the control preamble, the login label and the other
+  signing and key-derivation contexts) keep the name Pyr had before 0.8.0, for good: changing
+  them would cut Pyr off from older servers and apps, and void signatures already made. They,
+  and everything else that keeps the old name so what's out there keeps working, are listed
+  in one place: `proto/src/legacy.rs`.
 
 ## End-to-end encryption
 
@@ -277,7 +279,8 @@ capture → latest-frame slot (never queues stale frames) → encoder thread:
 
 ## Server storage
 
-`pyr-data/ingle.db` (SQLite, WAL): meta (the server's name and settings), users (id,
+`pyr-data/pyr.db` (SQLite, WAL; a data folder from before 0.9.1 has its database renamed on
+the first start): meta (the server's name and settings), users (id,
 name, role, banned), roles and member_roles, channels, messages (with reply and edit time),
 reactions, invites, files (attached pictures, profile pictures and emoji pictures, each
 linked to its message; the bytes sit in `files/`), dms, groups and group_members, relations
@@ -348,7 +351,7 @@ capture that doesn't start within 10 seconds counts as failed.
 
 **The Pyr Library** is a list on the website (`https://pyr.gg/library/index.json`) of programs and
 add-ons, with every file's SHA-256 and size, signed with the release key under its own
-context (`ingle plugin library v1`, so an update signature can't pass as a list or the other
+context (its own label, so an update signature can't pass as a list or the other
 way round) and dated like a release: the app takes no list past its date or older than one it
 has seen (`proto/src/library.rs`, `app/src/plugins/library.rs`). It's made offline with
 `scripts/make-library.sh` from `installer/site/library/plugins.json` and the built files.
@@ -428,6 +431,34 @@ settings folder to sign what it sends, writes nothing there but the skin being p
 and can't reach the person's servers or messages. Settings → Claude adds it to the Claude
 app's `claude_desktop_config.json` (keeping everything else there, with a copy of the file
 as it was) or gives the `claude mcp add` line for Claude Code.
+
+## Pyr Casino (0.9, 0.10)
+
+Poker and the casino games run on the server, for play chips kept in each member's record in
+the server's database (`crates/poker` has the rules, `crates/server/src/poker.rs` and
+`poker/casino.rs` the server's side, `crates/engine/src/poker.rs` and `casino.rs` the
+client's, `crates/app/src/poker` and `casino` the screens).
+
+- **Poker shuffles** are made by the server and every seated Pyr together: the server commits
+  to its seed (SHA-256), each Pyr sends one, the deck is SHA-256 in counter mode over all of
+  them and the hand's number (Fisher-Yates), and after the hand the server shows its seed so
+  each Pyr checks the cards it saw. Bots see only their own cards (`bots::decide` is given a
+  view without the others').
+- **House games** (`poker::casino`): before a round the server shows the SHA-256 of a fresh
+  secret seed; the bet carries the Pyr's seed; the round's random numbers come from
+  SHA-256("pyr-casino round v1" ‖ both seeds ‖ game ‖ round number), drawn by rejection
+  sampling; the outcome, the seed and the next commitment come back, and the Pyr replays the
+  round (`casino::verify`) and counts it as checked. Each game's return to player is a
+  tested constant (slots 94.5% plus 1% to the progressive jackpot, roulette 36/37, and so on).
+- **The rake** (5% of a cash-table pot, at most 3 big blinds, none without a flop or with fewer
+  than two people dealt in) and half the casino's edge (at most 1%) go to the Pyr Friday Night
+  prize pool; the same week's total sets Game Masters' and Ambassadors' daily allowances.
+- **Tournaments** (`poker::tourney`) seat people across tables, raise the blinds, balance and
+  break tables, and pay the top places; the final table stays up 7 seconds after the end.
+  **Time Bombs** are three-seat tournaments the house starts on demand: bots take seats nobody
+  takes within 30 seconds, a weighted wheel (`tourney::MULTIPLIERS`, about 2.91 buy-ins back
+  for three paid in) sets the prize, and when the fuse runs out the tables' `bomb` flag makes
+  every later hand all in (`Room::tick` pushes for everyone; people's own actions are refused).
 
 ## Setting up servers (`crates/host`)
 

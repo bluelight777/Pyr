@@ -9,6 +9,7 @@ pub mod backup;
 pub mod bugs;
 pub mod files;
 pub mod call;
+pub mod casino;
 pub mod config;
 pub mod e2ee;
 pub mod hotkey;
@@ -590,12 +591,12 @@ impl Shared {
                 c.watching(),
                 c.video_on(track::CAMERA),
                 c.video_on(track::SCREEN),
-                c.stream_audio_on(),
+                (c.stream_audio_on(), c.stream_muted),
                 c.conn_rtt(),
                 c.sending(),
             )
         };
-        let (session, speaking, transmitting, mic_db, jitter, audio_err, code, ready, watching, cam, scr, scr_audio, rtt, sending) = snapshot;
+        let (session, speaking, transmitting, mic_db, jitter, audio_err, code, ready, watching, cam, scr, (scr_audio, scr_muted), rtt, sending) = snapshot;
         let now = std::time::Instant::now();
         let video_bytes = self.call_counters.video_bytes.load(Ordering::Relaxed);
         let kbps = {
@@ -625,6 +626,7 @@ impl Shared {
             cv.screen_on = scr;
             qos::set_video(cam || scr);
             cv.stream_audio_on = scr_audio;
+            cv.stream_muted = scr_muted;
             // A microphone or speaker problem: say so (once), not only on the call screen.
             if let Some(e) = audio_err.as_ref().filter(|e| cv.audio_error.as_ref() != Some(*e) && e.as_str() != "audio not running") {
                 errors::report(format!("Sound problem in the call: {e}"));
@@ -955,9 +957,54 @@ impl Engine {
         self.poker_later(key, |p| p.gains.clear());
     }
 
+    /// The poker news shown (gifts, prize boxes won): forgotten.
+    pub fn take_poker_notices(&self, key: &str) {
+        self.poker_later(key, |p| p.notices.clear());
+    }
+
     /// The hand history window closed: its hand forgotten.
     pub fn clear_poker_history(&self, key: &str) {
         self.poker_later(key, |p| p.history = None);
+    }
+
+    /// Pyr Casino: opened (its state comes, and big wins while it's open) or closed.
+    pub fn casino_open(&self, key: &str, open: bool) {
+        use pyr_poker::net::{CasinoReq, ToServer};
+        self.poker(key, ToServer::Casino { req: if open { CasinoReq::Open } else { CasinoReq::Close } });
+    }
+
+    /// A casino round: `commit` is the house's fingerprint I was shown; this Pyr adds a seed of
+    /// its own (fresh from the system) to the bet.
+    pub fn casino_play(&self, key: &str, commit: [u8; 32], bet: pyr_poker::casino::Bet) {
+        use pyr_poker::net::{CasinoReq, ToServer};
+        let mut seed = [0u8; 32];
+        let _ = getrandom::getrandom(&mut seed);
+        self.poker_later(key, |p| p.casino.busy = true);
+        self.poker(key, ToServer::Casino { req: CasinoReq::Play { commit, seed, bet } });
+    }
+
+    pub fn casino_blackjack(&self, key: &str, action: pyr_poker::casino::blackjack::Action) {
+        use pyr_poker::net::{CasinoReq, ToServer};
+        self.poker_later(key, |p| p.casino.busy = true);
+        self.poker(key, ToServer::Casino { req: CasinoReq::Blackjack { action } });
+    }
+
+    pub fn casino_craps_bets(&self, key: &str, bets: pyr_poker::casino::craps::Bets) {
+        use pyr_poker::net::{CasinoReq, ToServer};
+        self.poker_later(key, |p| p.casino.busy = true);
+        self.poker(key, ToServer::Casino { req: CasinoReq::CrapsBets { bets } });
+    }
+
+    pub fn casino_craps_roll(&self, key: &str, commit: [u8; 32]) {
+        use pyr_poker::net::{CasinoReq, ToServer};
+        let mut seed = [0u8; 32];
+        let _ = getrandom::getrandom(&mut seed);
+        self.poker_later(key, |p| p.casino.busy = true);
+        self.poker(key, ToServer::Casino { req: CasinoReq::CrapsRoll { commit, seed } });
+    }
+
+    pub fn clear_poker_player(&self, key: &str) {
+        self.poker_later(key, |p| p.player = None);
     }
 
     pub fn clear_poker_error(&self, key: &str) {
@@ -973,8 +1020,11 @@ impl Engine {
             self.poker_later(key, |p| p.error = Some("Not connected to that server right now.".into()));
             return;
         }
+        let about = msg.table();
+        let casino = matches!(msg, pyr_poker::net::ToServer::Casino { .. });
         self.request_then_or(key, Request::Poker { msg }, move |shared, r| {
             let mut seed = None;
+            let mut resync = false;
             {
                 let mut st = shared.state.write();
                 if let Some(s) = st.server_mut(&k) {
@@ -984,9 +1034,29 @@ impl Engine {
                             seed = s.poker.apply(msg, std::time::Instant::now());
                         }
                         Ok(_) => s.poker.error = None,
-                        Err(e) => s.poker.error = Some(e),
+                        // A table that's gone (closed while I was away, say): off my screen,
+                        // back to the lobby, saying why.
+                        Err(e) if e.contains("that table has closed") => {
+                            if let Some(t) = about {
+                                s.poker.apply(pyr_poker::net::ToApp::Closed { table: t }, std::time::Instant::now());
+                            }
+                            s.poker.error = Some("That table has closed: nobody had played at it or watched it for half an hour. Pick another, or make one.".into());
+                        }
+                        Err(e) => {
+                            s.poker.casino.busy = false;
+                            if casino {
+                                s.poker.casino.answers += 1;
+                            }
+                            if e.contains("out of step with the house") {
+                                resync = true;
+                            }
+                            s.poker.error = Some(e);
+                        }
                     }
                 }
+            }
+            if resync && let Some(h) = shared.servers.lock().get(&k).cloned() {
+                let _ = h.request(Request::Poker { msg: pyr_poker::net::ToServer::Casino { req: pyr_poker::net::CasinoReq::Open } });
             }
             if let Some(sd) = seed
                 && let Some(h) = shared.servers.lock().get(&k).cloned()
@@ -2135,6 +2205,33 @@ impl Engine {
         self.request(key, Request::DeleteChannel { channel_id });
     }
 
+    /// Mutes (or unmutes) my screen share's sound from my end; the picture goes on.
+    pub fn set_stream_muted(&self, muted: bool) {
+        if let Some(c) = self.shared.call.lock().as_mut() {
+            c.set_stream_muted(muted);
+        }
+        self.shared.refresh_call_view();
+    }
+
+    /// Drags a channel into place: just above `before`, or last (see `Request::MoveChannel`).
+    /// It moves here at once, and stays there once the server says so.
+    pub fn move_channel(&self, key: &str, channel_id: ChannelId, before: Option<ChannelId>) {
+        if let Some(s) = self.shared.state.write().servers.iter_mut().find(|s| s.key == key) {
+            if let Some(kind) = s.channels.iter().find(|c| c.id == channel_id).map(|c| c.kind) {
+                let mut ids: Vec<ChannelId> = s.channels.iter().filter(|c| c.kind == kind && c.id != channel_id).map(|c| c.id).collect();
+                let at = before.and_then(|b| ids.iter().position(|i| *i == b)).unwrap_or(ids.len());
+                ids.insert(at, channel_id);
+                for c in s.channels.iter_mut() {
+                    if let Some(p) = ids.iter().position(|i| *i == c.id) {
+                        c.position = p as i32;
+                    }
+                }
+                s.channels.sort_by_key(|c| (matches!(c.kind, ChannelKind::Voice), c.position, c.id));
+            }
+        }
+        self.request(key, Request::MoveChannel { channel_id, before });
+    }
+
     /// An invite for the Invite dialog (`ServerView::invite`): one of mine with the same
     /// settings if it still works (servers since 0.8.0), else a new one. `expires_secs`: None
     /// never runs out; `max_uses`: None has no limit.
@@ -2554,6 +2651,34 @@ impl Engine {
     /// a thank-you notice once it's sent; a report that doesn't go is logged, and the app keeps
     /// its text. `turn_on`: the bug server, when it's one of my servers and I'm its owner:
     /// switch collecting on there first.
+    /// Sends an idea for Pyr (a feature request) to the same place bug reports go. One the same
+    /// as an idea already there counts as one more asking for it, and says so.
+    pub fn suggest_idea(&self, title: &str, body: &str) {
+        let shared = self.shared.clone();
+        let report = pyr_proto::control::BugReport {
+            title: title.trim().to_string(),
+            body: body.trim().to_string(),
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            os: bugs::os_name(),
+            log: String::new(),
+            kind: pyr_proto::control::ReportKind::Idea,
+        };
+        self.shared.rt.spawn(async move {
+            let r = bugs::send_report(shared.clone(), report).await;
+            let mut st = shared.state.write();
+            match r {
+                Ok(None) => st.toast("Thanks! Your idea was sent.", false),
+                Ok(Some(title)) => st.toast(format!("Thanks! Someone had the same idea already (“{title}”), so yours was added to it: it now counts one more."), false),
+                Err(e) => {
+                    warn!("idea not sent: {e:#}");
+                    st.toast(format!("Your idea wasn't sent: {e:#}"), true);
+                }
+            }
+            drop(st);
+            (shared.repaint)();
+        });
+    }
+
     pub fn report_bug(&self, title: &str, body: &str, include_log: bool, turn_on: Option<&str>) {
         let shared = self.shared.clone();
         let report = pyr_proto::control::BugReport {
@@ -2562,6 +2687,7 @@ impl Engine {
             app_version: env!("CARGO_PKG_VERSION").to_string(),
             os: bugs::os_name(),
             log: if include_log { bugs::log_tail(&shared, pyr_proto::control::BUG_LOG_MAX - 1000) } else { String::new() },
+            kind: Default::default(),
         };
         let mine = turn_on.and_then(|k| self.handle(k));
         shared.state.write().bug_send = BugSend::Sending;
@@ -3513,6 +3639,35 @@ fn set_ringtone_on(shared: &Arc<Shared>, for_uid: Option<&str>, tone: Option<con
         }
     }
     (shared.repaint)();
+}
+
+/// Back on a server after the connection dropped: follow the poker tables I had open again
+/// (the server forgot I was watching when the connection went), each from a fresh snapshot,
+/// or off my screen if it closed meanwhile.
+pub(crate) fn rewatch_poker(shared: Arc<Shared>, key: String) {
+    let tables: Vec<pyr_poker::net::TableId> = shared.state.read_recursive().servers.iter().find(|s| s.key == key).map(|s| s.poker.tables.keys().copied().collect()).unwrap_or_default();
+    let Some(h) = shared.servers.lock().get(&key).cloned() else { return };
+    for table in tables {
+        let reply = h.request(Request::Poker { msg: pyr_poker::net::ToServer::Watch { table } });
+        let (shared, key) = (shared.clone(), key.clone());
+        shared.rt.clone().spawn(async move {
+            let r = reply.await;
+            {
+                let mut st = shared.state.write();
+                let Some(s) = st.server_mut(&key) else { return };
+                match r {
+                    Ok(Event::Poker { msg }) => {
+                        let _ = s.poker.apply(msg, std::time::Instant::now());
+                    }
+                    Ok(Event::Error { .. }) => {
+                        let _ = s.poker.apply(pyr_poker::net::ToApp::Closed { table }, std::time::Instant::now());
+                    }
+                    _ => {}
+                }
+            }
+            (shared.repaint)();
+        });
+    }
 }
 
 /// Back on a server after the connection dropped mid-call: rejoin that call. A camera or

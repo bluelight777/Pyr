@@ -5,7 +5,7 @@ text chat for your group. A native Rust app with end-to-end encrypted calls, no 
 you own, on any VPS from any provider: Pyr sets it up for you in a few minutes.**
 
 *Pyr* is the ancient Greek word for fire (πῦρ, as in *pyre*): the campfire your group
-gathers around. Until 0.8.0 it was called Ingle.
+gathers around.
 
 **Download: [pyr.gg](https://pyr.gg)** (Windows 10 and 11;
 a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
@@ -207,6 +207,34 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   reviewer's note. How to make a skin: [`skins/`](skins).
 
 ![The Pyr Library: Chimbrowser, Dice and Firelit Poker, with Dice's panel open](docs/screenshots/plugins.png)
+
+**Pyr Casino** (0.10)
+
+- Every server has a casino for **play chips** (they can't be bought or cashed out): poker
+  with the people there and with bots, and seven games against the house: **Pyr Sevens**
+  (five reels, twenty lines, wild flames, free spins and the Phoenix Jackpot, which grows
+  with every spin anyone makes there), **blackjack**, single-zero **roulette**, **baccarat**,
+  **craps**, **dice** and **keno**.
+- **Nobody can rig it, the house included.** Before each round the server commits to a secret
+  seed (it shows only its SHA-256), your Pyr adds a seed of its own with the bet, and when
+  the round is over the server shows its seed and your Pyr plays the whole round again to
+  check every reel, card, ball and die. Poker shuffles are checked the same way. The count
+  of rounds checked is on every table.
+- **Time Bombs**: a three-player sit & go. A wheel picks the prize when the table fills (2
+  to 1,000 times the buy-in) and the winner takes it all; after a three-minute fuse the bomb
+  goes off and every hand is all in. Bots take any seat nobody sits in.
+- **Pyr Friday Night**: a free tournament every Friday at 10 PM US Eastern, its prize money
+  the week's rake (5% of a cash-table pot, 3 big blinds at most, nothing without a flop).
+- Poker extras: a hand strength meter, right-click anyone for their hands and stats, a time
+  bank with a countdown, tournaments with climbing blinds, and **Game Masters and
+  Ambassadors** who give chips, looks and prize boxes (within an allowance set by the rake,
+  logged for the owner).
+- **Fullscreen** (F11) and **Streamer mode**: hole cards stay face down until you hold Space,
+  and invite links are hidden; it turns on by itself while you share your screen.
+
+![Pyr Casino's floor: the Phoenix Jackpot, Pyr Friday Night, big wins as they happen, and a tile for every game](docs/screenshots/casino.png)
+
+![A Time Bomb table: the prize wheel lands on 10×, so the winner takes 1,000 chips](docs/screenshots/time-bomb.png)
 
 **The app**
 
@@ -679,7 +707,10 @@ expire; and for
 plugins, the library's signed list, installs checked file by file, add-ons that reach
 outside or run away being stopped, plugins and skins sent in kept for the library's owner,
 signed so only their sender can send new versions, a skin's big files sent in parts and
-fetched one by one; and the Claude connector's tools over both kinds of MCP). The
+fetched one by one; the Claude connector's tools over both kinds of MCP; and for Pyr Casino,
+each game's return to player worked out exactly and over many played rounds, every round
+replayed from its seeds and checked, tournaments played down to one winner, and Time Bombs
+filled with bots, spun and set off). The
 app is driven through its real UI on a virtual display (visual fixes are checked with
 before-and-after captures), and the Windows builds are run under Wine (the app, the server,
 the bot and the setup).

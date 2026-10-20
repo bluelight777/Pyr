@@ -126,7 +126,7 @@ pub fn private_data_dir(dir: &std::path::Path) -> Result<()> {
 fn prepare(cfg: &ServerConfig) -> Result<(tls::TlsIdentity, db::Db)> {
     private_data_dir(&cfg.data_dir)?;
     let tls_id = tls::load_or_create(&cfg.data_dir)?;
-    let db = db::Db::open(&cfg.data_dir.join("ingle.db"))?;
+    let db = db::Db::open(&db::path_in(&cfg.data_dir)?)?;
     first_run_setup(&db, cfg.name.as_deref())?;
     db.prune_invites()?;
     // --public-host is remembered, so starting the server again (say, from a shortcut)
@@ -326,13 +326,13 @@ mod tests {
         // Once someone owns the community, no new owner links are made (and old ones that
         // never expire are removed at start).
         {
-            let db = db::Db::open(&dir.join("ingle.db")).unwrap();
+            let db = db::Db::open(&db::path_in(&dir).unwrap()).unwrap();
             db.insert_user(&pyr_proto::crypto::Identity::generate().user_id(), "Owner", Role::Owner).unwrap();
             db.create_invite("owner-legacy", "server", Some(1), None, Role::Owner).unwrap();
         }
         let owned = setup_links(&cfg()).unwrap();
         assert!(owned.owner.is_empty() || owned.owner == after.owner, "{}", owned.owner);
-        let db = db::Db::open(&dir.join("ingle.db")).unwrap();
+        let db = db::Db::open(&db::path_in(&dir).unwrap()).unwrap();
         assert_eq!(db.invite_role("owner-legacy"), None, "a never-expiring owner link is removed once there's an owner");
         let _ = std::fs::remove_dir_all(&dir);
     }

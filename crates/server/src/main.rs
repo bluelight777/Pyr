@@ -77,7 +77,7 @@ enum Cmd {
 fn make_invite(cli: &Cli, owner: bool, uses: Option<u32>, hours: Option<u64>) -> Result<String> {
     pyr_server::private_data_dir(&cli.data)?;
     let tls = pyr_server::tls::load_or_create(&cli.data)?;
-    let db = pyr_server::db::Db::open(&cli.data.join("ingle.db"))?;
+    let db = pyr_server::db::Db::open(&pyr_server::db::path_in(&cli.data)?)?;
     let (code, uses, role) = if owner {
         (format!("owner-{}", pyr_server::db::new_invite_code(16)), Some(1), Role::Owner)
     } else {
@@ -102,7 +102,7 @@ fn make_invite(cli: &Cli, owner: bool, uses: Option<u32>, hours: Option<u64>) ->
     if let (false, Some(base), true, true) = (owner, cli.invite_directory(), short_links, pyr_server::directory::reachable_host(&host)) {
         db.set_listed(&code, true)?;
         let signing = pyr_server::directory::Signing::new(&tls.cert_der, &tls.key_der)?;
-        let a = pyr_server::directory::announcement(&db, &host, cli.bind.port(), None);
+        let a = pyr_server::directory::announcement(&db, &cli.data.join("files"), &host, cli.bind.port(), None, false);
         match pyr_server::directory::announce_once(&base, &signing, &a) {
             Ok(r) if !r.taken.contains(&code) => {
                 eprintln!("(The full link, which works without pyr.gg: {full})");
@@ -132,10 +132,12 @@ fn main() {
 
 fn run() -> Result<()> {
     let mut cli = Cli::parse();
-    // Run without --data before Pyr was called Pyr, the server kept everything in ./ingle-data:
-    // it carries on there (rather than starting a new, empty community in ./pyr-data).
-    if cli.data == std::path::Path::new("pyr-data") && !cli.data.exists() && std::path::Path::new("ingle-data").join("ingle.db").is_file() {
-        cli.data = PathBuf::from("ingle-data");
+    // Run without --data before the rename, the server kept everything in another folder
+    // (`legacy::DATA_DIR`): it becomes ./pyr-data (rather than a new, empty community starting
+    // there), or the server carries on in it if it can't be renamed.
+    let old_data = std::path::Path::new(pyr_proto::legacy::DATA_DIR);
+    if cli.data == std::path::Path::new("pyr-data") && !cli.data.exists() && old_data.join(pyr_proto::legacy::DB_FILE).is_file() && std::fs::rename(old_data, &cli.data).is_err() {
+        cli.data = old_data.to_path_buf();
     }
     match cli.command {
         Some(Cmd::Invite { uses, hours }) => {
@@ -148,11 +150,10 @@ fn run() -> Result<()> {
         }
         Some(Cmd::MarkFixed { ids }) => {
             use pyr_proto::control::BugStatus;
-            let path = cli.data.join("ingle.db");
-            if !path.exists() {
+            if !cli.data.join(pyr_server::db::DB_FILE).exists() && !cli.data.join(pyr_proto::legacy::DB_FILE).exists() {
                 anyhow::bail!("there's no server in {}", cli.data.display());
             }
-            let db = pyr_server::db::Db::open(&path)?;
+            let db = pyr_server::db::Db::open(&pyr_server::db::path_in(&cli.data)?)?;
             for (id, was) in db.mark_bugs_fixed(&ids)? {
                 match was {
                     Some(BugStatus::New | BugStatus::Approved) => println!("Bug report #{id}: marked fixed"),

@@ -147,16 +147,16 @@ pub fn remove(config: &Path) -> Result<(), String> {
     if gone { write(config, m) } else { Ok(()) }
 }
 
-/// The connector's name in Claude's settings before Pyr was called Pyr.
-const OLD_NAME: &str = "ingle";
+/// The connector's name in Claude's settings before the rename (see `pyr_proto::legacy`).
+const OLD_NAME: &str = pyr_proto::legacy::APP_ID;
 
-/// Claude's settings still start Ingle's connector (`ingle` → `ingle-mcp`), which went with
-/// Ingle: it becomes this Pyr's (`pyr` → `pyr-mcp`, the old file kept next to it). Anything
-/// else under that name is left alone. Whether it changed anything.
-pub fn migrate_from_ingle(config: &Path, exe: &Path, args: &[String]) -> Result<bool, String> {
+/// Claude's settings still start the connector from before the rename (`legacy::CONNECTOR`),
+/// which went with the old app: it becomes this Pyr's (`pyr` → `pyr-mcp`, the old file kept
+/// next to it). Anything else under that name is left alone. Whether it changed anything.
+pub fn migrate_from_old_name(config: &Path, exe: &Path, args: &[String]) -> Result<bool, String> {
     let Some(mut m) = read(config)? else { return Ok(false) };
     let Some(servers) = m.get_mut("mcpServers").and_then(Value::as_object_mut) else { return Ok(false) };
-    if !servers.get(OLD_NAME).is_some_and(starts_ingles) {
+    if !servers.get(OLD_NAME).is_some_and(starts_old_connector) {
         return Ok(false);
     }
     servers.remove(OLD_NAME);
@@ -164,11 +164,12 @@ pub fn migrate_from_ingle(config: &Path, exe: &Path, args: &[String]) -> Result<
     write(config, m).map(|()| true)
 }
 
-/// An `mcpServers` entry that starts Ingle's connector (`ingle-mcp`).
-fn starts_ingles(e: &Value) -> bool {
+/// An `mcpServers` entry that starts the connector from before the rename.
+fn starts_old_connector(e: &Value) -> bool {
+    let old = pyr_proto::legacy::CONNECTOR;
     e.get("command").and_then(Value::as_str).is_some_and(|c| {
         let file = c.rsplit(['/', '\\']).next().unwrap_or("");
-        file.eq_ignore_ascii_case("ingle-mcp") || file.eq_ignore_ascii_case("ingle-mcp.exe")
+        file.eq_ignore_ascii_case(old) || file.eq_ignore_ascii_case(&format!("{old}.exe"))
     })
 }
 
@@ -179,22 +180,22 @@ pub fn claude_code_config() -> Option<PathBuf> {
     Some(PathBuf::from(home?).join(".claude.json"))
 }
 
-/// Whether Claude Code still starts Ingle's connector (set up before Pyr was called Pyr; that
-/// connector went with Ingle). Only read, never changed: Claude Code writes that file all the
+/// Whether Claude Code still starts the connector from before the rename (that connector went
+/// with the old app). Only read, never changed: Claude Code writes that file all the
 /// time, so it's switched over with Claude Code's own commands ([`claude_code_switch`]).
-pub fn claude_code_has_ingles(config: &Path) -> bool {
+pub fn claude_code_has_old_connector(config: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(config) else { return false };
     // (Most of the time it isn't there at all: no need to read the whole file as JSON.)
-    if !text.contains("ingle-mcp") {
+    if !text.contains(pyr_proto::legacy::CONNECTOR) {
         return false;
     }
     serde_json::from_str::<Value>(&text)
         .ok()
-        .and_then(|v| v.get("mcpServers").and_then(|s| s.get(OLD_NAME)).map(starts_ingles))
+        .and_then(|v| v.get("mcpServers").and_then(|s| s.get(OLD_NAME)).map(starts_old_connector))
         .unwrap_or(false)
 }
 
-/// The commands that take Ingle's connector out of Claude Code and put this Pyr's in.
+/// The commands that take the old connector out of Claude Code and put this Pyr's in.
 pub fn claude_code_switch(exe: &Path, args: &[String]) -> [String; 2] {
     [format!("claude mcp remove --scope user {OLD_NAME}"), claude_code_line(exe, args)]
 }
@@ -219,52 +220,59 @@ pub fn claude_code_line(exe: &Path, args: &[String]) -> String {
 mod tests {
     use super::*;
 
-    /// Claude's settings that started Ingle's connector start Pyr's instead; an entry called
-    /// "ingle" that isn't Ingle's connector is left alone.
+    /// Test data with `OLD` standing for the name from before the rename.
+    fn old_name(s: &str) -> String {
+        s.replace("OLD", pyr_proto::legacy::APP_ID)
+    }
+
+    /// Claude's settings that started the old connector start Pyr's instead; an entry with the
+    /// old name that isn't the old connector is left alone.
     #[test]
-    fn ingles_connector_becomes_pyrs() {
+    fn the_old_connector_becomes_pyrs() {
         let dir = std::env::temp_dir().join(format!("pyr-connector-mig-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let config = dir.join("claude_desktop_config.json");
         let exe = PathBuf::from(if cfg!(windows) { r"C:\Users\a\AppData\Local\Programs\Pyr\pyr-mcp.exe" } else { "/usr/bin/pyr-mcp" });
-        std::fs::write(&config, r#"{"mcpServers":{"ingle":{"command":"C:\\Users\\a\\AppData\\Local\\Programs\\Ingle\\ingle-mcp.exe","args":[]},"other":{"command":"x"}},"theme":"dark"}"#).unwrap();
-        assert_eq!(migrate_from_ingle(&config, &exe, &[]), Ok(true));
+        std::fs::write(&config, old_name(r#"{"mcpServers":{"OLD":{"command":"C:\\Users\\a\\AppData\\Local\\Programs\\Old\\OLD-mcp.exe","args":[]},"other":{"command":"x"}},"theme":"dark"}"#)).unwrap();
+        assert_eq!(migrate_from_old_name(&config, &exe, &[]), Ok(true));
         let v: Value = serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
-        assert!(v["mcpServers"].get("ingle").is_none());
+        assert!(v["mcpServers"].get(pyr_proto::legacy::APP_ID).is_none());
         assert_eq!(v["mcpServers"]["pyr"]["command"], exe.display().to_string());
         assert_eq!((v["mcpServers"]["other"]["command"].as_str(), v["theme"].as_str()), (Some("x"), Some("dark")));
-        assert_eq!(migrate_from_ingle(&config, &exe, &[]), Ok(false), "once");
-        std::fs::write(&config, r#"{"mcpServers":{"ingle":{"command":"/home/a/my-ingle-tool"}}}"#).unwrap();
-        assert_eq!(migrate_from_ingle(&config, &exe, &[]), Ok(false), "not Ingle's connector");
+        assert_eq!(migrate_from_old_name(&config, &exe, &[]), Ok(false), "once");
+        std::fs::write(&config, old_name(r#"{"mcpServers":{"OLD":{"command":"/home/a/my-OLD-tool"}}}"#)).unwrap();
+        assert_eq!(migrate_from_old_name(&config, &exe, &[]), Ok(false), "not the old connector");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Claude Code's settings are only read: when they still start Ingle's connector, Pyr
+    /// Claude Code's settings are only read: when they still start the old connector, Pyr
     /// says so and gives the two commands that switch it, and the file stays as it was.
     #[test]
-    fn claude_code_still_on_ingles_connector_is_told() {
+    fn claude_code_still_on_the_old_connector_is_told() {
         let dir = std::env::temp_dir().join(format!("pyr-connector-code-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let config = dir.join(".claude.json");
-        assert!(!claude_code_has_ingles(&config), "no file");
-        let old = r#"{"numStartups":3,"mcpServers":{"ingle":{"type":"stdio","command":"C:\\Users\\a\\AppData\\Local\\Programs\\Ingle\\ingle-mcp.exe","args":[],"env":{}}},"projects":{}}"#;
-        std::fs::write(&config, old).unwrap();
-        assert!(claude_code_has_ingles(&config));
+        assert!(!claude_code_has_old_connector(&config), "no file");
+        let old = old_name(r#"{"numStartups":3,"mcpServers":{"OLD":{"type":"stdio","command":"C:\\Users\\a\\AppData\\Local\\Programs\\Old\\OLD-mcp.exe","args":[],"env":{}}},"projects":{}}"#);
+        std::fs::write(&config, &old).unwrap();
+        assert!(claude_code_has_old_connector(&config));
         assert_eq!(std::fs::read_to_string(&config).unwrap(), old, "left as it was");
-        // Pyr's connector, a project-only entry, someone else's "ingle", or a file that isn't JSON: nothing to say.
+        // Pyr's connector, a project-only entry, someone else's entry with the old name, or a file that isn't JSON: nothing to say.
         for other in [
             r#"{"mcpServers":{"pyr":{"command":"C:\\Pyr\\pyr-mcp.exe"}}}"#,
-            r#"{"projects":{"C:/x":{"mcpServers":{"ingle":{"command":"ingle-mcp"}}}}}"#,
-            r#"{"mcpServers":{"ingle":{"command":"/home/a/my-ingle-tool"}},"note":"ingle-mcp"}"#,
-            "{ not json ingle-mcp",
-        ] {
-            std::fs::write(&config, other).unwrap();
-            assert!(!claude_code_has_ingles(&config), "{other}");
+            r#"{"projects":{"C:/x":{"mcpServers":{"OLD":{"command":"OLD-mcp"}}}}}"#,
+            r#"{"mcpServers":{"OLD":{"command":"/home/a/my-OLD-tool"}},"note":"OLD-mcp"}"#,
+            "{ not json OLD-mcp",
+        ]
+        .map(old_name)
+        {
+            std::fs::write(&config, &other).unwrap();
+            assert!(!claude_code_has_old_connector(&config), "{other}");
         }
         let exe = PathBuf::from("/usr/bin/pyr-mcp");
-        assert_eq!(claude_code_switch(&exe, &[]), ["claude mcp remove --scope user ingle".to_string(), "claude mcp add --scope user pyr -- /usr/bin/pyr-mcp".to_string()]);
+        assert_eq!(claude_code_switch(&exe, &[]), [old_name("claude mcp remove --scope user OLD"), "claude mcp add --scope user pyr -- /usr/bin/pyr-mcp".to_string()]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -166,8 +166,8 @@ impl Mixer {
     }
 
     pub fn push(&mut self, session: SessionId, track_id: u8, seq: u32, flags: u8, payload: Vec<u8>, now: Instant) {
-        let channels = if track_id == track::SCREEN_AUDIO { 2 } else { 1 };
-        self.peers.entry((session, track_id)).or_insert_with(|| PeerAudio::new(channels)).push(seq, flags, payload, now);
+        let stream = track_id == track::SCREEN_AUDIO;
+        self.peers.entry((session, track_id)).or_insert_with(|| if stream { PeerAudio::for_stream(2) } else { PeerAudio::new(1) }).push(seq, flags, payload, now);
     }
 
     pub fn remove_session(&mut self, session: SessionId) {

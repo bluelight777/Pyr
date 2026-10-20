@@ -1,7 +1,7 @@
 #!/bin/bash
 # Runs on the VPS (publish-library.ps1 starts it): puts a new Pyr Library on
-# https://pyr.gg/library/ (the web folder that is also firelitgames.com/ingle/, where copies
-# from before the rename look) (library.tar, from make-library-upload.sh: the plugins'
+# https://pyr.gg/library/ (the web folder pyr/, which copies from before the rename also
+# reach under the old name) (library.tar, from make-library-upload.sh: the plugins'
 # files first, then the signed list that names them), without touching the rest of the site or
 # Pyr's downloads.
 set -euo pipefail
@@ -23,24 +23,27 @@ if [ -z "$ROOT" ]; then
   echo "Couldn't find the web folder that serves https://$SITE/." >&2
   exit 1
 fi
-if [ ! -f "$ROOT/ingle/latest.json" ]; then
-  echo "There's no Pyr on https://$SITE/ingle yet: publish a release first." >&2
+# (pyr/ since 0.9.1; before, the folder had the name from before the rename.)
+WEB=$ROOT/pyr
+[ -d "$WEB" ] || WEB=$ROOT/ingle
+if [ ! -f "$WEB/latest.json" ]; then
+  echo "There's no Pyr on https://$SITE yet: publish a release first." >&2
   exit 1
 fi
 if [ ! -f "$HERE/library.tar" ]; then
   echo "library.tar is missing." >&2
   exit 1
 fi
-mkdir -p "$HERE/library-x" "$ROOT/ingle/library"
+mkdir -p "$HERE/library-x" "$WEB/library"
 tar --no-same-owner --no-same-permissions -xf "$HERE/library.tar" -C "$HERE/library-x"
 if [ ! -f "$HERE/library-x/library/index.json" ]; then
   echo "library.tar has no index.json." >&2
   exit 1
 fi
 # The files first, so the list never names one that isn't there yet.
-if [ -d "$HERE/library-x/library/files" ]; then cp -rf "$HERE/library-x/library/files" "$ROOT/ingle/library/"; fi
-cp -f "$HERE/library-x/library/index.json" "$ROOT/ingle/library/index.json"
+if [ -d "$HERE/library-x/library/files" ]; then cp -rf "$HERE/library-x/library/files" "$WEB/library/"; fi
+cp -f "$HERE/library-x/library/index.json" "$WEB/library/index.json"
 # (Pyr 0.8.1 and newer read index2.json; index.json is older Pyrs' list.)
-if [ -f "$HERE/library-x/library/index2.json" ]; then cp -f "$HERE/library-x/library/index2.json" "$ROOT/ingle/library/index2.json"; fi
-chmod -R a+rX "$ROOT/ingle/library"
-echo "The Pyr Library is updated in $ROOT/ingle/library"
+if [ -f "$HERE/library-x/library/index2.json" ]; then cp -f "$HERE/library-x/library/index2.json" "$WEB/library/index2.json"; fi
+chmod -R a+rX "$WEB/library"
+echo "The Pyr Library is updated in $WEB/library"

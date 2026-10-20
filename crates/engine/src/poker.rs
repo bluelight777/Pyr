@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use pyr_poker::cards::Card;
 use pyr_poker::fair;
 use pyr_poker::game::Event;
-use pyr_poker::net::{GainsView, HandHistory, LeaderRow, RecordView, TableId, TableSummary, TableView, ToApp, TourneyId, TourneySummary, TourneyView};
+use pyr_poker::net::{GainsView, HandHistory, LeaderRow, PlayerView, PrizeView, StaffView, RecordView, TableId, TableSummary, TableView, ToApp, TourneyId, TourneySummary, TourneyView};
 
 /// How a hand's shuffle checked out.
 #[derive(Clone, Debug, PartialEq)]
@@ -45,6 +45,13 @@ pub struct TableLive {
     pub emotes: Vec<(usize, String, Instant)>,
     /// Shuffle checks by hand.
     pub checks: BTreeMap<u64, HandCheck>,
+    /// Every shuffle checked and found fair at this table since I opened it (the count shown:
+    /// `checks` keeps only the last few, so counting those would go 29, 30, 29, 30).
+    pub fair_total: u64,
+    /// The player to act ran out of time and is on their time bank now.
+    pub in_bank: bool,
+    /// How many of the hand's events there were when the clock last started.
+    pub clock_events: usize,
     /// When the last hand ended (to leave the result on the table for a moment).
     pub ended_at: Option<Instant>,
 }
@@ -56,8 +63,14 @@ pub struct PokerState {
     pub tables: BTreeMap<TableId, TableLive>,
     pub leaderboard: Option<Vec<LeaderRow>>,
     pub history: Option<(TableId, HandHistory)>,
+    /// Someone right-clicked at a table: how they've played, and their last hands.
+    pub player: Option<(TableId, PlayerView)>,
     /// Experience, achievements and level-ups to celebrate (the app takes them).
     pub gains: Vec<GainsView>,
+    /// News to show big: a Game Master's gift to me, a prize box won.
+    pub notices: Vec<String>,
+    /// Pyr Poker's staff, when asked for.
+    pub staff: Option<StaffView>,
     /// The daily chips just taken (how many; none: already taken today).
     pub daily: Option<Option<u64>>,
     /// The last refusal, in the server's words.
@@ -65,6 +78,8 @@ pub struct PokerState {
     /// Tournaments here, and the ones followed in full.
     pub tourneys: Option<Vec<TourneySummary>>,
     pub tourney: BTreeMap<TourneyId, TourneyView>,
+    /// Pyr Casino.
+    pub casino: crate::casino::CasinoLive,
 }
 
 /// What the engine does after taking a message in: send this Pyr's seed for a shuffle.
@@ -114,7 +129,7 @@ impl PokerState {
                         t.view = table;
                     }
                     None => {
-                        self.tables.insert(id, TableLive { view: table, events: Vec::new(), clock: None, emotes: Vec::new(), checks: BTreeMap::new(), ended_at: None });
+                        self.tables.insert(id, TableLive { view: table, events: Vec::new(), clock: None, emotes: Vec::new(), checks: BTreeMap::new(), fair_total: 0, in_bank: false, clock_events: 0, ended_at: None });
                     }
                 }
             }
@@ -157,7 +172,8 @@ impl PokerState {
                 c.seeds = Some(seeds);
             }
             ToApp::Reveal { table, hand, dealer, dealt } => {
-                let Some(c) = self.tables.get_mut(&table).and_then(|t| t.checks.get_mut(&hand)) else { return None };
+                let Some(t) = self.tables.get_mut(&table) else { return None };
+                let Some(c) = t.checks.get_mut(&hand) else { return None };
                 if c.check != Check::Pending {
                     return None;
                 }
@@ -183,9 +199,15 @@ impl PokerState {
                     Ok(()) => Check::Fair,
                     Err(e) => Check::Problem(e),
                 };
+                if c.check == Check::Fair {
+                    t.fair_total += 1;
+                }
             }
             ToApp::Clock { table, seat, ms, bank_ms } => {
                 if let Some(t) = self.tables.get_mut(&table) {
+                    // A second clock for the same turn (nothing happened since): the time bank.
+                    t.in_bank = t.clock.is_some_and(|(s, ..)| s == seat) && t.view.to_act == Some(seat) && t.clock_events == t.events.len();
+                    t.clock_events = t.events.len();
                     t.clock = Some((seat, now + Duration::from_millis(ms), Duration::from_millis(ms), bank_ms));
                 }
             }
@@ -203,6 +225,27 @@ impl PokerState {
             }
             ToApp::Leaderboard { rows } => self.leaderboard = Some(rows),
             ToApp::History { table, hand } => self.history = Some((table, hand)),
+            ToApp::Player { table, player } => self.player = Some((table, player)),
+            ToApp::Staff { view } => self.staff = Some(view),
+            ToApp::Casino { res } => {
+                self.casino.apply(res);
+                if let Some(me) = self.me.as_mut()
+                    && self.casino.open
+                {
+                    me.chips = self.casino.chips;
+                }
+            }
+            ToApp::Gifted { from, chips, item, note } => {
+                let what = prize_words(&PrizeView { chips, item, from: from.clone() });
+                let note = if note.is_empty() { String::new() } else { format!(": \u{201c}{note}\u{201d}") };
+                self.notices.push(format!("{from} gave you {what}{note}"));
+            }
+            ToApp::PrizeWon { table, name, prize, .. } => {
+                if let Some(t) = self.tables.get_mut(&table) {
+                    t.view.prize = None;
+                    self.notices.push(format!("{name} won the prize box: {}", prize_words(&prize)));
+                }
+            }
             ToApp::Closed { table } => {
                 self.tables.remove(&table);
                 if let Some(l) = &mut self.lobby {
@@ -313,7 +356,8 @@ fn apply_event(t: &mut TableLive, hand: u64, e: &Event) {
         }
         Event::Turn { seat, legal } => {
             v.to_act = Some(*seat);
-            v.legal = (v.my_seat == Some(*seat)).then_some(*legal);
+            // (Nothing to choose once a Time Bomb's gone off: everyone's all in.)
+            v.legal = (v.my_seat == Some(*seat) && !v.bomb).then_some(*legal);
         }
         Event::Shown { seat, cards, .. } => {
             if let Some(Some(s)) = v.seats.get_mut(*seat) {
@@ -345,8 +389,40 @@ fn apply_event(t: &mut TableLive, hand: u64, e: &Event) {
 }
 
 /// How the shuffles of the last hands at a table checked out: (fair, problems).
+/// What's in a prize box (or a gift): "25,000 chips and the Inferno card back".
+pub fn prize_words(p: &PrizeView) -> String {
+    let chips = if p.chips > 0 {
+        let s = p.chips.to_string();
+        let mut out = String::new();
+        for (i, c) in s.chars().enumerate() {
+            if i > 0 && (s.len() - i) % 3 == 0 {
+                out.push(',');
+            }
+            out.push(c);
+        }
+        Some(format!("{out} chips"))
+    } else {
+        None
+    };
+    let look = p.item.as_deref().and_then(pyr_poker::progress::cosmetic).map(|c| {
+        let kind = match c.kind {
+            pyr_poker::progress::Kind::CardBack => "card back",
+            pyr_poker::progress::Kind::Felt => "table",
+            pyr_poker::progress::Kind::Chips => "chips",
+            pyr_poker::progress::Kind::Frame => "picture frame",
+        };
+        format!("the {} {kind}", c.name)
+    });
+    match (chips, look) {
+        (Some(c), Some(l)) => format!("{c} and {l}"),
+        (Some(c), None) => c,
+        (None, Some(l)) => l,
+        (None, None) => "nothing".into(),
+    }
+}
+
 pub fn checks_summary(t: &TableLive) -> (usize, Vec<(u64, String)>) {
-    let fair = t.checks.values().filter(|c| c.check == Check::Fair).count();
+    let fair = t.fair_total as usize;
     let problems = t.checks.iter().filter_map(|(h, c)| if let Check::Problem(p) = &c.check { Some((*h, p.clone())) } else { None }).collect();
     (fair, problems)
 }

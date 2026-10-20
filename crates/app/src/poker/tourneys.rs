@@ -103,7 +103,10 @@ fn state_line(t: &TourneySummary) -> (String, Color32) {
 
 impl PyrApp {
     pub fn tourneys_list(&mut self, ui: &mut egui::Ui, s: &ServerView) {
-        let Some(list) = s.poker.tourneys.clone() else {
+        // Time Bombs first (they're a sit-and-go each: the card finds you a seat).
+        self.time_bomb_card(ui, s);
+        ui.add_space(16.0);
+        let Some(list) = s.poker.tourneys.clone().map(|l| l.into_iter().filter(|t| t.rules.bomb.is_none()).collect::<Vec<_>>()) else {
             ui.horizontal(|ui| {
                 ui.add_space(28.0);
                 ui.label(RichText::new("Finding tournaments…").color(theme::MUTED()));
@@ -183,7 +186,7 @@ impl PyrApp {
             ui.add_space(18.0);
             ui.horizontal(|ui| {
                 ui.add_space(28.0);
-                if ui.add(egui::Button::new(RichText::new("‹ Pyr Poker").font(theme::bold_font(13.5))).corner_radius(theme::r(8))).clicked() {
+                if ui.add(egui::Button::new(RichText::new("‹ Pyr Casino").font(theme::bold_font(13.5))).corner_radius(theme::r(8))).clicked() {
                     self.engine.poker(&s.key, ToServer::TourneyUnwatch { id });
                     self.poker.tourney = None;
                 }
@@ -198,6 +201,20 @@ impl PyrApp {
                     ui.label(RichText::new(format!("{} · {} · starting stack {} · set up by {}", game_name(&v.rules), fee, chips_text(v.rules.stack), v.host)).color(theme::MUTED()));
                 });
             });
+            // A Time Bomb that's over: another, at the same buy-in.
+            if v.bomb.is_some() && matches!(v.phase, TourneyPhase::Finished | TourneyPhase::Cancelled) {
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(28.0);
+                    let label = format!("Play another Time Bomb · {}", chips_text(v.rules.buy_in));
+                    if ui.add(theme::primary_button(&label)).clicked() {
+                        self.engine.poker(&s.key, ToServer::TimeBomb { buy_in: v.rules.buy_in });
+                        self.engine.poker(&s.key, ToServer::TourneyUnwatch { id });
+                        self.poker.tourney = None;
+                        self.poker.tab = super::Tab::Tourneys;
+                    }
+                });
+            }
             ui.add_space(14.0);
             self.tourney_status(ui, s, &v, mine.as_ref());
             ui.add_space(16.0);
@@ -322,7 +339,14 @@ impl PyrApp {
                 });
             });
         }
-        ui.label(RichText::new("The prize pool is the buy-ins; it grows as people register.").size(12.0).color(theme::DIM()));
+        let note = match v.bomb {
+            Some(b) => match b.multiplier {
+                Some(m) => format!("A Time Bomb: the wheel picked {m}× the buy-in, and the winner takes it all."),
+                None => "A Time Bomb: the wheel picks the prize (2 to 1,000 times the buy-in) when the table's full, and the winner takes it all.".to_string(),
+            },
+            None => "The prize pool is the buy-ins; it grows as people register.".to_string(),
+        };
+        ui.label(RichText::new(note).size(12.0).color(theme::DIM()));
     }
 
     fn blinds_sheet(&self, ui: &mut egui::Ui, v: &TourneyView) {
@@ -475,6 +499,8 @@ impl PyrApp {
                 level_ms: n.level_min * 60_000,
                 levels: standard_levels(n.stack),
                 late_levels: n.late_levels,
+                added: 0,
+                bomb: None,
             };
             let bots = vec![n.bot_level; n.bots];
             self.engine.poker(&s.key, ToServer::TourneyCreate { rules, bots });
@@ -488,6 +514,25 @@ impl PyrApp {
     /// Follows me round a tournament: when it seats me (it started, or I was moved to
     /// another table), that table opens.
     pub fn follow_tourneys(&mut self, s: &ServerView) {
+        // I'm out of one I was playing, or I won it: where I finished, big on the table (it
+        // stays up a moment for its last hand).
+        let me = s.me.as_ref().map(|m| m.user_id.clone()).unwrap_or_default();
+        for (id, v) in &s.poker.tourney {
+            let Some(e) = v.entrants.iter().find(|e| e.uid == me) else { continue };
+            let was = self.poker.my_place.insert(*id, e.place);
+            if was == Some(None)
+                && let Some(place) = e.place
+            {
+                let text = if place == 1 && e.prize > 0 {
+                    format!("You won {}!", chips_text(e.prize))
+                } else if place == 1 {
+                    "You won!".to_string()
+                } else {
+                    format!("You finished {}", ordinal(place))
+                };
+                self.poker.banner = Some((text, Instant::now()));
+            }
+        }
         for (id, v) in &s.poker.tourney {
             let seen = self.poker.my_tables.get(id).copied().flatten();
             if v.my_table != seen {

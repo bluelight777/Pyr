@@ -334,6 +334,9 @@ pub const INVITES_FEATURE: &str = "invites";
 /// play chips, against each other and bots, dealt by the server with a shuffle every player's
 /// Pyr adds to and can check (see `pyr_poker`).
 pub const POKER_FEATURE: &str = "poker";
+/// Channels can be dragged into any order by anyone with Manage channels
+/// ([`Request::MoveChannel`]; servers since 0.9.1).
+pub const CHANNEL_ORDER_FEATURE: &str = "channel_order";
 /// End-to-end encrypted messages ([`crate::sealed`], 0.9): everything written in channels,
 /// direct messages and groups is sent `sealed`, with its pictures as [`FileKind::Sealed`]
 /// uploads; the server keeps message keys (`PublishMessageKey`), tells who can read where
@@ -360,7 +363,98 @@ pub struct BugReport {
     pub os: String,
     /// The end of the app's log, if they chose to include it.
     pub log: String,
+    /// A bug, or an idea for Pyr (a feature request; servers since 0.9.1 put the same idea
+    /// asked twice together, see [`same_idea`]).
+    #[serde(skip_serializing_if = "ReportKind::is_bug")]
+    pub kind: ReportKind,
 }
+
+/// What a report is.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportKind {
+    #[default]
+    Bug,
+    /// A feature request.
+    Idea,
+}
+
+impl ReportKind {
+    pub fn is_bug(&self) -> bool {
+        *self == ReportKind::Bug
+    }
+}
+
+/// The words an idea is about: lower case, without the little ones every sentence has, and
+/// with plurals and -ing/-ed endings taken off ("channels" and "channel" are one word).
+fn idea_words(text: &str) -> std::collections::BTreeSet<String> {
+    const SMALL: &[&str] = &[
+        "the", "and", "for", "you", "your", "can", "could", "would", "should", "please", "add", "make", "able", "have", "with",
+        "that", "this", "there", "when", "what", "want", "wish", "like", "into", "from", "they", "them", "then", "than", "also",
+        "will", "just", "more", "some", "any", "all", "but", "not", "was", "are", "its", "it's", "pyr", "feature", "option",
+        "way", "let", "lets", "get", "use", "using", "being", "been", "does", "doesn't", "dont", "don't", "way", "thing",
+        "things", "really", "very", "much", "other", "our", "out", "about", "over", "only", "too", "who", "how", "why",
+    ];
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric() && c != '\'')
+        .filter(|w| w.chars().count() >= 3 && !SMALL.contains(w))
+        .map(|w| {
+            let w = w.trim_matches('\'');
+            let w = w.strip_suffix("'s").unwrap_or(w);
+            // (A few words people use for the same thing.)
+            let w = match w {
+                "audio" => "sound",
+                "mic" => "microphone",
+                "reorder" | "rearrange" | "sort" => "order",
+                "vc" => "voice",
+                "dm" | "dms" => "message",
+                "pic" | "picture" | "photo" | "photos" => "image",
+                w => w,
+            };
+            for end in ["ing", "ed", "es", "s"] {
+                if let Some(stem) = w.strip_suffix(end) {
+                    if stem.chars().count() >= 3 {
+                        // ("dragging" → "drag", "muted" → "mut", as "mute" is)
+                        let b = stem.as_bytes();
+                        if end != "s" && b.len() >= 4 && b[b.len() - 1] == b[b.len() - 2] {
+                            return stem[..stem.len() - 1].to_string();
+                        }
+                        return stem.to_string();
+                    }
+                }
+            }
+            if let Some(stem) = w.strip_suffix('e').filter(|s| s.chars().count() >= 3) {
+                return stem.to_string();
+            }
+            w.to_string()
+        })
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
+/// How much two ideas (title, text) are the same one, 0 to 1: the words their titles share
+/// (counting twice) and the share of the shorter one's words that the other has. 0.6 and over: the same idea (see the
+/// tests for where that falls).
+pub fn same_idea(a: (&str, &str), b: (&str, &str)) -> f32 {
+    let (at, bt) = (idea_words(a.0), idea_words(b.0));
+    let (aw, bw) = (idea_words(&format!("{} {}", a.0, a.1)), idea_words(&format!("{} {}", b.0, b.1)));
+    let overlap = |x: &std::collections::BTreeSet<String>, y: &std::collections::BTreeSet<String>| {
+        let small = x.len().min(y.len());
+        if small == 0 { 0.0 } else { x.intersection(y).count() as f32 / small as f32 }
+    };
+    // (Titles: what both have, of what either has. A title's one different word is often
+    // the whole point: dark mode for the website, or for the app.)
+    let titles = if at.is_empty() || bt.is_empty() { 0.0 } else { at.intersection(&bt).count() as f32 / at.union(&bt).count() as f32 };
+    let all = overlap(&aw, &bw);
+    // (Two shared words aren't enough to go by, however short the ideas.)
+    if aw.intersection(&bw).count() < 2 {
+        return 0.0;
+    }
+    (2.0 * titles + all) / 3.0
+}
+
+/// At or above this, two ideas are one (see [`same_idea`]).
+pub const SAME_IDEA: f32 = 0.6;
 
 /// Where a report stands; only the owner changes it.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -401,6 +495,9 @@ pub struct BugEntry {
     pub created_at: i64,
     pub status: BugStatus,
     pub report: BugReport,
+    /// For an idea: how many asked for it (the first and everyone whose idea was the same).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub asked: u32,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -1268,6 +1365,13 @@ pub enum Request {
     DeleteChannel {
         channel_id: ChannelId,
     },
+    /// Puts a channel just above `before` (another of the same kind), or last with none
+    /// ([`CHANNEL_ORDER_FEATURE`]; needs Manage channels).
+    MoveChannel {
+        channel_id: ChannelId,
+        #[serde(default)]
+        before: Option<ChannelId>,
+    },
     /// Who can see a channel and who can send messages in it ([`PRIVATE_CHANNELS_FEATURE`];
     /// needs Manage channels).
     SetChannelAccess {
@@ -1719,6 +1823,11 @@ pub enum Event {
         groups: Vec<Group>,
     },
     Ok,
+    /// Reply to an idea sent with `ReportBug` that was the same as one already there: it
+    /// counts as one more asking for that one (its title).
+    IdeaJoined {
+        title: String,
+    },
     /// Reply to `ListBugs`.
     Bugs {
         reports: Vec<BugEntry>,
@@ -2111,6 +2220,30 @@ fn is_pictograph(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_same_idea_asked_two_ways_is_one_idea() {
+        let same = [
+            (("Drag channels to reorder", "Let me drag and drop channels up and down"), ("Reorder channels by dragging", "I want to drag the channels into a different order")),
+            (("Mute my stream's sound", "A button to mute my stream audio from my end"), ("Stream audio mute", "Please let me mute the sound of my stream")),
+            (("Dark mode for the website", ""), ("Website dark mode", "the site is too bright")),
+            (("Push to talk on a mouse button", "Use mouse button 4 for PTT"), ("Mouse buttons for push to talk", "")),
+        ];
+        for (a, b) in same {
+            assert!(same_idea(a, b) >= SAME_IDEA, "{a:?} / {b:?}: {}", same_idea(a, b));
+            assert!(same_idea(b, a) >= SAME_IDEA, "both ways round");
+        }
+        let different = [
+            (("Drag channels to reorder", "Let me drag and drop channels up and down"), ("Mute my stream's sound", "A button to mute my stream audio")),
+            (("Dark mode for the website", ""), ("Dark mode for the app", "the app should have a dark mode for night")),
+            (("Push to talk on a mouse button", ""), ("Mute button for my stream", "")),
+            (("Poker tournaments with prizes", ""), ("Poker chips for winning", "")),
+            (("Add emoji reactions to messages", ""), ("Add custom emoji uploads", "")),
+        ];
+        for (a, b) in different {
+            assert!(same_idea(a, b) < SAME_IDEA, "{a:?} / {b:?}: {}", same_idea(a, b));
+        }
+    }
 
     #[test]
     fn server_gifs_go_by_name_and_id() {

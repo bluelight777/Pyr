@@ -47,9 +47,28 @@ pub struct PeerAudio {
     pub level_db: f32,
     pub last_voice: Option<Instant>,
     scratch: Vec<f32>,
+    /// The fewest and most 20 ms frames held (see `target_frames`).
+    min_target: usize,
+    max_target: usize,
+    /// Queued past the target before latency is trimmed (by dropping a frame now and then).
+    trim_after: usize,
 }
 
+/// A stream's sound (music, a video's soundtrack) is held longer than a voice: a few tens of
+/// milliseconds more delay go unnoticed under a picture that's a moment behind anyway, while a
+/// gap or a skipped frame in music is heard at once. Sized for a share's frames arriving in
+/// bursts (a keyframe of a 1080p share at a few megabits takes tens of milliseconds to go out,
+/// and sound queued behind it arrives late): measured in `stream_sound_rides_out_bursts`.
+const STREAM_MIN_TARGET: usize = 6; // 120 ms
+const STREAM_MAX_TARGET: usize = 20; // 400 ms
+const STREAM_TRIM_AFTER: usize = 8;
+
 impl PeerAudio {
+    /// A screen share's sound (see `STREAM_MIN_TARGET`).
+    pub fn for_stream(channels: usize) -> PeerAudio {
+        PeerAudio { min_target: STREAM_MIN_TARGET, max_target: STREAM_MAX_TARGET, trim_after: STREAM_TRIM_AFTER, ..PeerAudio::new(channels) }
+    }
+
     pub fn new(channels: usize) -> PeerAudio {
         let ch = if channels == 2 { opus::Channels::Stereo } else { opus::Channels::Mono };
         PeerAudio {
@@ -68,6 +87,9 @@ impl PeerAudio {
             level_db: -100.0,
             last_voice: None,
             scratch: vec![0.0; FRAME * 2 * 6],
+            min_target: MIN_TARGET,
+            max_target: MAX_TARGET,
+            trim_after: 3,
         }
     }
 
@@ -78,7 +100,7 @@ impl PeerAudio {
     fn target_frames(&self) -> usize {
         // Hold roughly 3x the measured jitter plus one frame of headroom.
         let frames = ((self.jitter_ms * 3.0) / FRAME_MS).ceil() as usize + 1;
-        frames.clamp(MIN_TARGET, MAX_TARGET)
+        frames.clamp(self.min_target, self.max_target)
     }
 
     pub fn push(&mut self, seq: u32, pkt_flags: u8, payload: Vec<u8>, now: Instant) {
@@ -195,7 +217,7 @@ impl PeerAudio {
         // Latency trimming: if too much audio is queued (e.g. after a network burst or a
         // CPU stall), skip packets — gently when slightly over target, quickly when far over.
         let excess = self.packets.len().saturating_sub(target);
-        let interval_ms = if excess > 8 { 40 } else if excess > 3 { 400 } else { u128::MAX };
+        let interval_ms = if excess > self.trim_after + 5 { 40 } else if excess > self.trim_after { 400 } else { u128::MAX };
         if now.duration_since(self.last_trim).as_millis() > interval_ms {
             self.packets.remove(&seq);
             self.next_seq = Some(seq + 1);
@@ -313,6 +335,57 @@ mod tests {
         assert!(played > 180, "played {played} of 200 10ms blocks");
         assert!(peer.stats.fec_recovered >= 8, "fec {}", peer.stats.fec_recovered);
         assert!(peer.level_db > -20.0, "level {}", peer.level_db);
+    }
+
+    /// A stream's sound with a busy share beside it: every second, a keyframe holds the
+    /// sound back for 90 ms and it arrives in a burst. Stream sound plays straight through
+    /// it (nothing made up, nothing skipped); voice's short buffer would have gaps. (A/B with
+    /// only the buffer different.)
+    #[test]
+    fn stream_sound_rides_out_bursts() {
+        let run = |stream: bool| {
+            let mut enc = opus::Encoder::new(48_000, opus::Channels::Stereo, opus::Application::Audio).unwrap();
+            let mut peer = if stream { PeerAudio::for_stream(2) } else { PeerAudio::new(2) };
+            let t0 = Instant::now();
+            let mut out = vec![0f32; 960];
+            let mut arrivals: Vec<(u64, u32, Vec<u8>)> = Vec::new();
+            for seq in 0..500u32 {
+                let mono = tone_frame(seq as usize * FRAME);
+                let pcm: Vec<f32> = mono.iter().flat_map(|v| [*v, *v]).collect();
+                let pkt = enc.encode_vec_float(&pcm, 4000).unwrap();
+                let sent = seq as u64 * 20;
+                // Held behind a keyframe: everything sent in the first 90 ms of each second (from
+                // the second one on) arrives together at its end.
+                let at = if sent >= 1000 && sent % 1000 < 90 { sent - sent % 1000 + 90 } else { sent } + 15;
+                arrivals.push((at, seq, pkt));
+            }
+            let (mut gaps, mut k) = (0, 0);
+            let mut started = false;
+            // (Counted until the last packet has played: after it, the stream has ended.)
+            let mut concealed_while_playing = 0;
+            for ms10 in 0..1050u64 {
+                let now_ms = ms10 * 10;
+                while k < arrivals.len() && arrivals[k].0 <= now_ms {
+                    let (_, seq, pkt) = arrivals[k].clone();
+                    peer.push(seq, if seq == 0 { flags::TALKSPURT } else { 0 }, pkt, t0 + Duration::from_millis(now_ms));
+                    k += 1;
+                }
+                let got = peer.take_10ms(&mut out, t0 + Duration::from_millis(now_ms));
+                if got {
+                    started = true;
+                } else if started && k < arrivals.len() {
+                    gaps += 1;
+                }
+                if k < arrivals.len() || !peer.packets.is_empty() {
+                    concealed_while_playing = peer.stats.concealed;
+                }
+            }
+            (gaps, concealed_while_playing, peer.stats.late)
+        };
+        let (gaps, concealed, late) = run(true);
+        assert_eq!((gaps, concealed, late), (0, 0, 0), "stream sound: no gaps, nothing made up or dropped");
+        let (vg, vc, vl) = run(false);
+        assert!(vg + vc as usize + vl as usize > 0, "voice's buffer has gaps there ({vg} gaps, {vc} concealed, {vl} late)");
     }
 
     /// After the audio thread stalls for seconds, latency must come back down at once.

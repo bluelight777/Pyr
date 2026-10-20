@@ -8,7 +8,8 @@
 //! `adapt` (video: the preset's size, frame rate and bitrate, whatever the network),
 //! `scenecut` (video: a keyframe at every big change), `fair` (QUIC: frames sent side by side),
 //! `dgram` (QUIC: seconds of sound queued), `feedback` (server: no reports on viewers),
-//! `shed` (server: a viewer counted as stuck after 350 ms plus a round trip).
+//! `shed` (server: a viewer counted as stuck after 350 ms plus a round trip), `isoref` (voice
+//! isolation: your usual level followed louder moments quickly, before 0.9.1).
 //!
 //! `PYR_CC=cubic` puts back QUIC's CUBIC congestion control instead of BBR (see [`bbr`]).
 

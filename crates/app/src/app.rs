@@ -122,6 +122,10 @@ pub enum Act {
     ToggleFavorite(String),
     /// How the Library is sorted.
     SortLibrary(String),
+    /// Pyr Poker installed or removed (see `Settings::poker_installed`).
+    InstallPoker(bool),
+    /// Streamer mode on or off (kept in the settings).
+    StreamerMode(bool),
     /// What I sent in to the Pyr Library, and where it stands.
     MySubmissions,
     AddFriend(String),
@@ -142,6 +146,12 @@ pub enum Act {
     SetChannelAccess { key: String, channel: ChannelId, access: ChannelAccess },
     UpdateChannel { key: String, channel: ChannelId, name: Option<String>, topic: Option<String> },
     DeleteChannel { key: String, channel: ChannelId },
+    /// Send an idea for Pyr.
+    SuggestIdea { title: String, body: String },
+    /// My screen share's sound muted (or not) from my end.
+    StreamMuted(bool),
+    /// A channel dragged just above `before` (or last).
+    MoveChannel { key: String, channel: ChannelId, before: Option<ChannelId> },
     /// An invite for the Invite dialog (one of mine with these settings, if it still works;
     /// `fresh`: a new one regardless, as Generate a new link makes).
     CreateInvite { key: String, max_uses: Option<u32>, expires_secs: Option<u64>, fresh: bool },
@@ -246,6 +256,8 @@ pub enum Dialog {
     ScreenPicker { selected: Option<String> },
     /// Report a bug in Pyr (see the engine's `bugs.rs`).
     ReportBug { title: String, body: String, include_log: bool },
+    /// An idea for Pyr (a feature request).
+    SuggestIdea { title: String, body: String },
     /// The owner's inbox of Pyr bug reports for a server; `filter`: 0 new, 1 approved,
     /// 2 fixed, 3 rejected.
     BugReports { key: String, filter: u8 },
@@ -342,6 +354,8 @@ pub struct UiState {
     /// their stream (server, channel, their session, when it was asked).
     pub watch_after_join: Option<(String, ChannelId, SessionId, Instant)>,
     pub channel: HashMap<String, ChannelId>,
+    /// A channel being dragged into another place in the list: (server, channel).
+    pub channel_drag: Option<(String, ChannelId)>,
     pub call_view: bool,
     pub drafts: HashMap<(String, ChannelId), String>,
     pub reply: Option<(MessageId, String)>,
@@ -371,6 +385,12 @@ pub struct UiState {
     /// A stream filling the whole screen, and whether the window is in full screen for it.
     pub fullscreen: Option<VideoKey>,
     pub fullscreen_on: bool,
+    /// Streamer mode, as the settings have it (read each frame); on by itself while I share my
+    /// screen (unless I turned it off meanwhile); and a change asked for, to save.
+    pub streamer_mode: bool,
+    pub streamer_auto_live: bool,
+    pub streamer_auto_off: bool,
+    pub streamer_set: Option<bool>,
     /// A click on a video tile, acted on once it's clearly not a double-click.
     pub pending_click: Option<(VideoKey, Instant)>,
     /// The share picker's live preview: what it shows, and its picture (with when it came).
@@ -662,6 +682,9 @@ impl PyrApp {
             }
             Act::UpdateChannel { key, channel, name, topic } => e.update_channel(&key, channel, name, topic),
             Act::DeleteChannel { key, channel } => e.delete_channel(&key, channel),
+            Act::MoveChannel { key, channel, before } => e.move_channel(&key, channel, before),
+            Act::StreamMuted(m) => e.set_stream_muted(m),
+            Act::SuggestIdea { title, body } => e.suggest_idea(&title, &body),
             Act::CreateInvite { key, max_uses, expires_secs, fresh } => e.make_invite(&key, max_uses, expires_secs, !fresh),
             Act::ListInvites { key } => e.list_invites(&key),
             Act::RevokeInvite { key, code } => e.revoke_invite(&key, &code),
@@ -900,6 +923,19 @@ impl PyrApp {
                     settings.library_favorites.push(id);
                 }
                 e.update_settings(settings);
+            }
+            Act::StreamerMode(on) => {
+                let mut settings = e.state().settings.clone();
+                settings.streamer_mode = on;
+                e.update_settings(settings);
+            }
+            Act::InstallPoker(on) => {
+                let mut settings = e.state().settings.clone();
+                settings.poker_installed = on;
+                e.update_settings(settings);
+                if !on {
+                    self.close_poker();
+                }
             }
             Act::SortLibrary(by) => {
                 let settings = e.state().settings.clone();
@@ -1339,7 +1375,7 @@ impl eframe::App for PyrApp {
         {
             let mut skin = engine.state().settings.skin.clone();
             // A skin that isn't installed (its folder removed, or, with 0.8.0, left behind in
-            // Ingle's folder): back to Campfire for good, said once, not as an error.
+            // the folder from before the rename): back to Campfire for good, said once, not as an error.
             if !skin.is_empty() && self.plugins.skins.get(&skin).is_none() {
                 let name = self.plugins.library.as_ref().and_then(|l| l.find_skin(&skin)).map(|s| s.name.clone()).unwrap_or_else(|| skin.clone());
                 tracing::info!("the skin being worn ({skin}) isn't installed; back to Campfire");
@@ -1569,7 +1605,8 @@ impl PyrApp {
 // ------------------------------------------------------------------- helpers
 
 /// An invite link Pyr can join from: a short one (`https://pyr.gg/<code>`), `pyr://…`, or
-/// the web form on pyr.gg (or, from before the rename, `ingle://…` and firelitgames.com/ingle).
+/// the web form on pyr.gg (or the forms from before the rename, `legacy::SCHEME` and
+/// `legacy::WEB_INVITE`).
 fn is_invite(url: &str) -> bool {
     pyr_proto::directory::short_code(url).is_some() || crate::invites::is_full_invite(url)
 }
@@ -1770,6 +1807,31 @@ pub fn short_status(s: &ConnStatus) -> Option<(String, bool)> {
 impl PyrApp {
     fn frame_ui(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
         self.watch_when_joined(st, acts);
+        // Streamer mode: the saved choice, a change to save, and on by itself while sharing.
+        if let Some(on) = self.ui.streamer_set.take() {
+            acts.push(Act::StreamerMode(on));
+            self.ui.streamer_mode = on;
+        } else {
+            if self.ui.streamer_mode && !st.settings.streamer_mode && self.ui.streamer_auto_live {
+                // (Turned off in Settings while sharing: off until the next share.)
+                self.ui.streamer_auto_live = false;
+                self.ui.streamer_auto_off = true;
+            }
+            self.ui.streamer_mode = st.settings.streamer_mode;
+        }
+        let sharing = st.call.as_ref().is_some_and(|c| c.screen_on);
+        if sharing && !self.ui.streamer_auto_off {
+            self.ui.streamer_auto_live = true;
+        }
+        if !sharing {
+            self.ui.streamer_auto_live = false;
+            self.ui.streamer_auto_off = false;
+        }
+        if self.casino_fullscreen_ui(ctx, st, acts) {
+            self.dialogs(ctx, st, acts);
+            self.toasts(ctx, st, acts);
+            return;
+        }
         if self.fullscreen_ui(ctx, st, acts) {
             self.toasts(ctx, st, acts);
             return;
@@ -2399,6 +2461,10 @@ impl PyrApp {
     // ----------------------------------------------------------- channel list
 
     fn channel_sidebar(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, acts: &mut Vec<Act>) {
+        // (A drag from another server's list, left behind when it was switched away from.)
+        if self.ui.channel_drag.as_ref().is_some_and(|(k, _)| *k != s.key) {
+            self.ui.channel_drag = None;
+        }
         // Bottom: user panel, and the voice panel above it when in a call.
         egui::TopBottomPanel::bottom("user-panel")
             .exact_height(56.0)
@@ -2481,7 +2547,8 @@ impl PyrApp {
                 }
                 ui.add_space(6.0);
             }
-            if s.has(pyr_proto::control::POKER_FEATURE) {
+            // (Once it's installed, from Plugins.)
+            if s.has(pyr_proto::control::POKER_FEATURE) && st.settings.poker_installed {
                 let open = self.poker.open.as_deref() == Some(s.key.as_str());
                 let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
                 let row = r.shrink2(vec2(8.0, 1.0));
@@ -2489,14 +2556,14 @@ impl PyrApp {
                     ui.painter().rect_filled(row, crate::theme::r(6), theme::ELEV());
                 }
                 let ink = if open || resp.hovered() { theme::TEXT() } else { theme::MUTED() };
-                crate::poker::cards::suit(ui.painter(), Rect::from_center_size(row.left_center() + vec2(18.0, 0.0), vec2(15.0, 15.0)), 3, ink);
-                ui.painter().text(row.left_center() + vec2(32.0, 0.0), egui::Align2::LEFT_CENTER, "Pyr Poker", theme::font(15.0), ink);
+                crate::poker::mark::icon(ui.painter(), row.left_center() + vec2(18.0, 0.0), 17.0, ink);
+                ui.painter().text(row.left_center() + vec2(32.0, 0.0), egui::Align2::LEFT_CENTER, "Pyr Casino", theme::font(15.0), ink);
                 let playing = s.poker.tables.values().filter(|t| t.view.my_seat.is_some()).count();
                 if playing > 0 {
                     let b = Rect::from_center_size(pos2(row.right() - 16.0, row.center().y), vec2(8.0, 8.0));
                     ui.painter().circle_filled(b.center(), 4.0, theme::ONLINE());
                 }
-                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Pyr Poker: Hold'em and Omaha with people here and with bots, for play chips.").clicked() {
+                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Pyr Casino: poker with people here and with bots, slots, blackjack, roulette, baccarat, craps, dice and keno, for play chips.").clicked() {
                     self.open_poker(&s.key);
                     self.ui.call_view = false;
                 }
@@ -2547,6 +2614,12 @@ impl PyrApp {
                         });
                     }
                 });
+                // Dragging channels into order (Manage channels, on servers that keep it): each
+                // row's place this frame, for where a dragged one would land.
+                let can_drag = s.can(perm::MANAGE_CHANNELS) && s.has(pyr_proto::control::CHANNEL_ORDER_FEATURE);
+                let dragging = self.ui.channel_drag.as_ref().filter(|(k, _)| *k == s.key).map(|(_, c)| *c).filter(|d| s.channels.iter().any(|c| c.id == *d && c.kind == kind));
+                let mut rows: Vec<(ChannelId, Rect)> = Vec::new();
+                let mut dropped = false;
                 for c in s.channels.iter().filter(|c| c.kind == kind) {
                     let is_current = current == Some(c.id) && self.poker.open.is_none()
                         && (kind == ChannelKind::Text || !self.ui.call_view || st.call.as_ref().map(|x| x.channel_id != c.id).unwrap_or(true));
@@ -2555,8 +2628,15 @@ impl PyrApp {
                         || (kind == ChannelKind::Voice && ((in_this_call && self.ui.call_view) || (is_current && !self.ui.call_view)));
                     let unread = s.unread.contains(&c.id);
                     let mentions = s.mentions.get(&c.id).copied().unwrap_or(0);
-                    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width() - 8.0, 32.0), Sense::click());
+                    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width() - 8.0, 32.0), if can_drag { Sense::click_and_drag() } else { Sense::click() });
                     let rect = rect.translate(vec2(8.0, 0.0)).with_max_x(rect.right());
+                    rows.push((c.id, rect));
+                    if can_drag && resp.drag_started() {
+                        self.ui.channel_drag = Some((s.key.clone(), c.id));
+                    }
+                    if dragging == Some(c.id) && resp.drag_stopped() {
+                        dropped = true;
+                    }
                     // Hover by where the pointer is, not by which widget has it: over the chat
                     // bubble the row itself isn't "hovered", and going by that made the bubble
                     // blink (and miss clicks).
@@ -2841,6 +2921,50 @@ impl PyrApp {
                         }
                     }
                 }
+                // Where a dragged channel would go: just above the row the pointer is above the
+                // middle of (or last), shown by a line there and the channel's name by the
+                // pointer; let go, and it moves there.
+                if let Some(d) = dragging {
+                    let y = ui.ctx().pointer_latest_pos().map(|p| p.y).unwrap_or(f32::MAX);
+                    let at = rows.iter().position(|(_, r)| y < r.center().y).unwrap_or(rows.len());
+                    let before = rows.get(at).map(|(id, _)| *id);
+                    // (Where it is already: right above itself, or right after.)
+                    let here = rows.iter().position(|(id, _)| *id == d);
+                    let moves = here.is_some_and(|h| at != h && at != h + 1);
+                    if moves {
+                        let line_y = match rows.get(at) {
+                            Some((_, r)) => r.top() - 1.0,
+                            None => rows.last().map(|(_, r)| r.bottom() + 1.0).unwrap_or(0.0),
+                        };
+                        let x = rows.first().map(|(_, r)| r.x_range()).unwrap_or(egui::Rangef::new(0.0, 0.0));
+                        let p = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("channel-drag")));
+                        p.line_segment([pos2(x.min, line_y), pos2(x.max, line_y)], egui::Stroke::new(2.5, theme::EMBER()));
+                        p.circle_filled(pos2(x.min, line_y), 4.0, theme::EMBER());
+                    }
+                    if let (Some(name), Some(pt)) = (s.channels.iter().find(|c| c.id == d).map(|c| c.name.clone()), ui.ctx().pointer_latest_pos()) {
+                        // (Its name as its row shows it: the emoji in color, the rest as text.)
+                        let p = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("channel-drag-name")));
+                        let (lead, title) = crate::emoji::split_lead(&name);
+                        let (w, gap) = crate::emoji::lead_slot(14.5);
+                        let lead_w = if lead.is_some() { w + gap } else { 0.0 };
+                        let g = p.layout_no_wrap(title.to_string(), theme::font(14.5), theme::TEXT());
+                        let r = Rect::from_min_size(pt + vec2(14.0, -14.0), vec2(g.size().x + lead_w + 20.0, g.size().y.max(w) + 10.0));
+                        p.rect_filled(r, crate::theme::r(6), theme::ELEV2().gamma_multiply(0.95));
+                        if let Some(e) = &lead {
+                            let slot = Rect::from_center_size(pos2(r.left() + 10.0 + w / 2.0, r.center().y), vec2(w, w));
+                            let ctx = ui.ctx().clone();
+                            crate::emoji::paint_faded(&p, slot, e, &mut |id| self.custom_emoji_tex(&ctx, &s.key, id), 1.0);
+                        }
+                        p.galley(pos2(r.left() + 10.0 + lead_w, r.center().y - g.size().y / 2.0), g, theme::TEXT());
+                    }
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    if dropped || !ui.ctx().input(|i| i.pointer.any_down()) {
+                        if moves {
+                            acts.push(Act::MoveChannel { key: s.key.clone(), channel: d, before });
+                        }
+                        self.ui.channel_drag = None;
+                    }
+                }
                 ui.add_space(10.0);
             }
         });
@@ -2947,13 +3071,35 @@ impl PyrApp {
             if btn(ui, call.camera_on, if call.camera_on { "Turn off camera" } else { "Turn on camera" }, &|p, r, c| icons::camera(p, r, c, false)).clicked() {
                 acts.push(Act::Camera(!call.camera_on));
             }
-            if btn(ui, call.screen_on, if call.screen_on { "Stop sharing" } else { "Share your screen" }, &|p, r, c| icons::screen(p, r, c)).clicked() {
+            let share_tip = match (call.screen_on, call.stream_audio_on, call.stream_muted) {
+                (false, ..) => "Share your screen",
+                (true, true, true) => "Stop sharing\nRight-click: your stream's sound is muted (turn it back on)",
+                (true, true, false) => "Stop sharing\nRight-click: mute your stream's sound",
+                (true, false, _) => "Stop sharing",
+            };
+            let share = btn(ui, call.screen_on, share_tip, &|p, r, c| icons::screen(p, r, c));
+            if call.screen_on && call.stream_audio_on && call.stream_muted {
+                // (Its sound muted: a little crossed-out speaker on the button.)
+                let b = Rect::from_center_size(share.rect.right_top() + vec2(-7.0, 7.0), vec2(11.0, 11.0));
+                ui.painter().circle_filled(b.center(), 7.0, theme::ELEV());
+                icons::speaker_off(ui.painter(), b, theme::LIVE());
+            }
+            if share.clicked() {
                 if call.screen_on {
                     acts.push(Act::StopScreen);
                 } else {
                     acts.push(Act::RefreshDevices);
                     self.ui.dialog = Some(Dialog::ScreenPicker { selected: None });
                 }
+            }
+            if call.screen_on && call.stream_audio_on {
+                share.context_menu(|ui| {
+                    crate::menu::style(ui);
+                    if crate::menu::check(ui, call.stream_muted, "Mute my stream's sound", false).clicked() {
+                        acts.push(Act::StreamMuted(!call.stream_muted));
+                        ui.close();
+                    }
+                });
             }
             let sb = btn(ui, self.soundboard_open(), "Soundboard", &|p, r, c| icons::soundboard(p, r, c));
             self.soundboard_anchor(crate::soundboard::FROM_PANEL, sb.rect);
@@ -3597,9 +3743,10 @@ mod tests {
         assert!(!super::is_invite("https://pyr.gg/"));
         assert!(!super::is_invite(&format!("https://example.com/#join=2.24.121.231/abc/{fp}")));
         assert!(!super::is_invite("pyr://not-a-link"));
-        // Made before Pyr was called Pyr.
-        assert!(super::is_invite(&format!("ingle://2.24.121.231/abc/{fp}")));
-        assert!(super::is_invite(&format!("https://firelitgames.com/ingle/#n=Camp&join=2.24.121.231/abc/{fp}")));
+        // Made before the rename.
+        use pyr_proto::legacy::{SCHEME, WEB_INVITE};
+        assert!(super::is_invite(&format!("{SCHEME}2.24.121.231/abc/{fp}")));
+        assert!(super::is_invite(&format!("{WEB_INVITE}#n=Camp&join=2.24.121.231/abc/{fp}")));
         // Short links, like Discord's (pyr.gg's own pages aren't invites).
         assert!(super::is_invite("https://pyr.gg/qrslmnov") && super::is_invite("pyr.gg/invite/brethren"));
         assert!(!super::is_invite("https://pyr.gg/download") && !super::is_invite("https://pyr.gg/latest.json"));

@@ -444,14 +444,17 @@ pub enum Content {
 /// grid of samples, cheap enough for every frame).
 pub struct ContentWatch {
     last: Vec<u8>,
-    /// (when, share of the grid that changed)
-    recent: VecDeque<(Instant, f32)>,
+    /// (when, share of the grid that changed, which of its cells did)
+    recent: VecDeque<(Instant, f32, Vec<bool>)>,
     kind: Content,
     /// When it last switched, and since when it has seemed the other kind.
     since: Instant,
     other_since: Option<Instant>,
 }
 
+/// A share of the picture changing in a quarter of the frames or more that means something's playing
+/// there (a video in a window: a typing cursor, a clock or a spinner are a few cells).
+const LIVELY_MOTION: f32 = 0.05;
 const GRID_W: u32 = 48;
 const GRID_H: u32 = 27;
 
@@ -478,21 +481,36 @@ impl ContentWatch {
             }
         }
         if self.last.len() == grid.len() {
-            let changed = grid.iter().zip(&self.last).filter(|(a, b)| a.abs_diff(**b) > 3).count();
-            self.recent.push_back((now, changed as f32 / grid.len() as f32));
+            let cells: Vec<bool> = grid.iter().zip(&self.last).map(|(a, b)| a.abs_diff(*b) > 3).collect();
+            let changed = cells.iter().filter(|c| **c).count();
+            self.recent.push_back((now, changed as f32 / grid.len() as f32, cells));
         }
         self.last = grid;
-        while self.recent.front().is_some_and(|(t, _)| now.duration_since(*t) > Duration::from_secs(3)) {
+        while self.recent.front().is_some_and(|(t, ..)| now.duration_since(*t) > Duration::from_secs(3)) {
             self.recent.pop_front();
         }
         // Motion: in most frames of the last few seconds, a fair part of the picture moved (a
         // game, a video, even in a window); text: in few of them (typing, a scroll now and
         // then). In between, it stays what it was.
         if self.recent.len() >= 8 {
-            let busy = self.recent.iter().filter(|(_, c)| *c > 0.15).count() as f32 / self.recent.len() as f32;
-            let seems = if busy > 0.6 {
+            let busy = self.recent.iter().filter(|(_, c, _)| *c > 0.15).count() as f32 / self.recent.len() as f32;
+            // A video in a window (a stream in a browser, a clip in a chat): a part of the
+            // picture that changes in most frames, however small a share of the whole it is,
+            // and however still the person in it (0.9.1: such a share was taken for text, sent
+            // at 5 frames a second, and looked like a slideshow).
+            let n = self.recent.len();
+            let mut counts = vec![0u32; self.last.len()];
+            for (_, _, cells) in &self.recent {
+                for (k, c) in cells.iter().enumerate() {
+                    counts[k] += *c as u32;
+                }
+            }
+            // (A cell is lively when it changed in a quarter of the frames or more: a blinking cursor
+            // changes in a few, a video's noise and movement in many.)
+            let lively = counts.iter().filter(|c| **c as usize * 4 >= n).count() as f32 / counts.len().max(1) as f32;
+            let seems = if busy > 0.6 || lively >= LIVELY_MOTION {
                 Some(Content::Motion)
-            } else if busy < 0.3 {
+            } else if busy < 0.3 && lively < LIVELY_MOTION / 2.0 {
                 Some(Content::Text)
             } else {
                 None
@@ -968,6 +986,55 @@ mod tests {
         // A long one does.
         l.decide(3_300_000, Content::Motion, false, t + Duration::from_secs(2));
         assert_eq!(l.decide(3_300_000, Content::Motion, false, t + Duration::from_secs(4)).height, 720);
+    }
+
+    #[test]
+    fn a_video_playing_in_a_window_is_motion() {
+        use super::super::codec::PixelFormat;
+        // A browser at 1080p: still page, a quarter of it a stream of someone sitting and
+        // talking (much of it barely changing, the rest a little, every frame), and a
+        // blinking cursor. Before 0.9.1 this was taken for text.
+        let (w, h) = (1920u32, 1080u32);
+        let t0 = Instant::now();
+        let mut watch = ContentWatch::new(t0);
+        let mut seed = 7u32;
+        let mut got = watch.kind();
+        for i in 0..300u64 {
+            let mut data = vec![230u8; (w * h * 3) as usize];
+            for y in 300..800u32 {
+                for x in 500..1400u32 {
+                    // The video: a face and a room, with the camera's noise and small moves.
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    let base = 60 + ((x / 40 + y / 40) % 5) as u32 * 25;
+                    let moving = ((x as u64 + i * 3) / 60 % 2) as u32 * 6;
+                    let v = (base + moving + (seed >> 29)) as u8;
+                    let o = ((y * w + x) * 3) as usize;
+                    data[o..o + 3].copy_from_slice(&[v, v, v]);
+                }
+            }
+            if i / 15 % 2 == 0 {
+                for y in 900..920u32 {
+                    let o = ((y * w + 100) * 3) as usize;
+                    data[o..o + 6].copy_from_slice(&[0; 6]);
+                }
+            }
+            got = watch.feed(&RawFrame { width: w, height: h, format: PixelFormat::Rgb, data }, t0 + Duration::from_millis(i * 33));
+        }
+        assert_eq!(got, Content::Motion);
+        // The same page with nothing playing (only the cursor): text.
+        let mut watch = ContentWatch::new(t0);
+        let mut got = Content::Motion;
+        for i in 0..300u64 {
+            let mut data = vec![230u8; (w * h * 3) as usize];
+            if i / 15 % 2 == 0 {
+                for y in 900..920u32 {
+                    let o = ((y * w + 100) * 3) as usize;
+                    data[o..o + 6].copy_from_slice(&[0; 6]);
+                }
+            }
+            got = watch.feed(&RawFrame { width: w, height: h, format: PixelFormat::Rgb, data }, t0 + Duration::from_millis(i * 33));
+        }
+        assert_eq!(got, Content::Text);
     }
 
     #[test]

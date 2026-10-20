@@ -159,6 +159,8 @@ pub struct Call {
     screen: Option<VideoOut>,
     /// Sound for our screen share (only while sharing, and only if available).
     stream_audio: Option<StreamAudio>,
+    /// My stream's sound muted from my end (kept for the next share in this call too).
+    pub stream_muted: bool,
     receivers: HashMap<VideoKey, Receiver>,
     watching: HashSet<VideoKey>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
@@ -485,8 +487,23 @@ async fn status_loop(shared: Arc<Shared>) {
     let mut tick = tokio::time::interval(Duration::from_millis(120));
     loop {
         tick.tick().await;
-        if shared.call.lock().is_none() {
-            break;
+        let swelled = {
+            let guard = shared.call.lock();
+            let Some(c) = guard.as_ref() else { break };
+            c.audio.as_ref().and_then(|a| a.controls.swelled.lock().take())
+        };
+        if let Some(what) = swelled {
+            // (Into the bug reports, for the owner to look at, when automatic reports are on.)
+            let settings = shared.state.read_recursive().settings.clone();
+            let detail = format!(
+                "{what}.\n\nVoice settings: noise suppression {:?}, echo cancellation {}, automatic gain {}, {:?}, {} kbps.",
+                settings.noise_suppression,
+                if settings.echo_cancellation { "on" } else { "off" },
+                if settings.auto_gain { "on" } else { "off" },
+                settings.input_mode,
+                settings.voice_bitrate_kbps
+            );
+            crate::bugs::auto_report(&shared, "my voice went up and down for the others", &detail);
         }
         shared.refresh_call_view();
     }
@@ -572,6 +589,7 @@ impl Call {
             camera: None,
             screen: None,
             stream_audio: None,
+            stream_muted: false,
             receivers: HashMap::new(),
             watching: HashSet::new(),
             tasks: Vec::new(),
@@ -600,6 +618,7 @@ impl Call {
                 camera_on: false,
                 screen_on: false,
                 stream_audio_on: false,
+                stream_muted: false,
                 transmitting: false,
                 speaking: HashSet::new(),
                 watching: HashSet::new(),
@@ -777,10 +796,20 @@ impl Call {
         if self.screen.is_none() {
             return Some(sa);
         }
+        sa.muted.store(self.stream_muted, Ordering::Relaxed);
         self.stream_audio = Some(sa);
         let info = TrackInfo { id: track::SCREEN_AUDIO, kind: TrackKind::ScreenAudio, width: 0, height: 0, fps: 0, viewers: Vec::new() };
         self.handle.notify(Request::Publish { track: info });
         None
+    }
+
+    /// Mutes (or unmutes) my stream's sound from my end: the picture goes on, its sound stops
+    /// going out.
+    pub fn set_stream_muted(&mut self, muted: bool) {
+        self.stream_muted = muted;
+        if let Some(sa) = &self.stream_audio {
+            sa.muted.store(muted, Ordering::Relaxed);
+        }
     }
 
     /// Our screen share is sending sound (and capture hasn't failed since it started).

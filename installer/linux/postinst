@@ -10,13 +10,14 @@ if [ "$1" = configure ]; then
                 --shell /usr/sbin/nologin pyr-server
         fi
     fi
-    # Pyr was called Ingle before 0.8.0: an ingle-server service's community (its messages,
-    # files and identity) becomes the pyr-server service's. Not started by itself, as it
-    # wasn't before.
-    if [ -d /var/lib/ingle-server ] && [ ! -e /var/lib/pyr-server ]; then
-        mv /var/lib/ingle-server /var/lib/pyr-server
+    # A server service set up before Pyr's rename (its old name: see pyr_proto::legacy): its
+    # community (messages, files and identity) becomes the pyr-server service's. Not started
+    # by itself, as it wasn't before.
+    OLD=ingle-server
+    if [ -d "/var/lib/$OLD" ] && [ ! -e /var/lib/pyr-server ]; then
+        mv "/var/lib/$OLD" /var/lib/pyr-server
         chown -R pyr-server:pyr-server /var/lib/pyr-server
-        echo "Pyr: the ingle-server service's community is in /var/lib/pyr-server now." >&2
+        echo "Pyr: the community from before the rename is in /var/lib/pyr-server now." >&2
         echo "Pyr: if you ran it as a service, start it again with: sudo systemctl enable --now pyr-server" >&2
     fi
     if [ -d /run/systemd/system ]; then

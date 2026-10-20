@@ -9,6 +9,30 @@ VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 NOTES=${1:-}
 BASE=https://pyr.gg
 OUT=dist/release
+# Bug reports go to the server in release-env.sh: an installer without it built in (no Report
+# a bug button, no error reports) isn't released.
+. scripts/release-env.sh
+BUGS=${PYR_BUG_SERVER%%/*}
+for B in target-win/x86_64-pc-windows-gnu/release/pyr.exe target/release/pyr; do
+  if [ -f "$B" ] && ! grep -qaF "$BUGS" "$B"; then
+    echo "$B has no bug report server built in: build it with scripts/release-env.sh sourced." >&2
+    exit 1
+  fi
+done
+# The page's stylesheet must be whole: one stray "}" (0.9.0) made browsers drop the rule after
+# it, and the top of the page piled up under the header.
+python3 - installer/site/index.html <<'PY' || exit 1
+import sys
+s = open(sys.argv[1]).read()
+css = s[s.index("<style>"):s.index("</style>")]
+d = 0
+for i, ch in enumerate(css):
+    d += (ch == "{") - (ch == "}")
+    if d < 0:
+        sys.exit("index.html: a } with no { before it, line %d" % (s[:s.index("<style>") + i].count("\n") + 1))
+if d:
+    sys.exit("index.html: %d { never closed in the stylesheet" % d)
+PY
 rm -rf "$OUT" && mkdir -p "$OUT/upload/pyr"
 SITE=$OUT/upload/pyr
 # The page, with this release filled in (the page also reads latest.json when it opens), and

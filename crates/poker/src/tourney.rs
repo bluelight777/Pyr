@@ -11,11 +11,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::bots::Level;
 use crate::game::Rules;
-use crate::net::{BlindLevel, BuyIn, EntrantView, TableId, ToApp, TourneyId, TourneyPhase, TourneyRules, TourneySummary, TourneyView};
+use crate::net::{BlindLevel, Bomb, BombView, BuyIn, EntrantView, TableId, ToApp, TourneyId, TourneyPhase, TourneyRules, TourneySummary, TourneyView};
 use crate::room::{Effect, Look, Output, Random, Rcpt, Room};
 
 /// The most people in one tournament.
 pub const MAX_ENTRANTS: usize = 180;
+/// How long the final table stays up after the last hand (to see how it ended).
+pub const FINAL_MS: u64 = 7_000;
 /// The shortest and longest levels.
 pub const MIN_LEVEL_MS: u64 = 60_000;
 pub const MAX_LEVEL_MS: u64 = 60 * 60_000;
@@ -47,6 +49,12 @@ pub struct Tourney {
     /// When it finished (the server forgets it a while after).
     pub ended: Option<u64>,
     bot_names: usize,
+    /// A Time Bomb: the wheel's multiplier and when it was spun, and whether it's gone off.
+    multiplier: Option<u32>,
+    spun: Option<u64>,
+    exploded: bool,
+    /// Over: when the last table closes (it stays a moment, for its final hand to be seen).
+    close_at: Option<u64>,
 }
 
 impl Tourney {
@@ -65,6 +73,10 @@ impl Tourney {
             level: 0,
             ended: None,
             bot_names: 0,
+            multiplier: None,
+            spun: None,
+            exploded: false,
+            close_at: None,
         })
     }
 
@@ -78,7 +90,29 @@ impl Tourney {
     }
 
     pub fn prize_pool(&self) -> u64 {
-        self.entrants.iter().map(|e| e.paid).sum()
+        if self.rules.bomb.is_some() {
+            // A Time Bomb's prize is the buy-in times what the wheel picks (the house stakes
+            // the bots' seats); before the spin, the least it can be.
+            return self.rules.buy_in * self.multiplier.unwrap_or(MULTIPLIERS[0].0) as u64;
+        }
+        self.entrants.iter().map(|e| e.paid).sum::<u64>() + self.rules.added
+    }
+
+    /// What each place wins, first first (a Time Bomb: the winner takes it all).
+    fn pay_table(&self) -> Vec<u64> {
+        if self.rules.bomb.is_some() { vec![self.prize_pool()] } else { payouts(self.prize_pool(), self.entrants.len()) }
+    }
+
+    /// A Time Bomb's wheel and fuse, as they stand.
+    pub fn bomb_view(&self) -> Option<BombView> {
+        let b = self.rules.bomb?;
+        Some(BombView {
+            fuse_ms: b.fuse_ms,
+            multiplier: self.multiplier,
+            spun_ms: self.spun,
+            goes_off_ms: self.started.filter(|_| self.phase == TourneyPhase::Running).map(|t| t + b.fuse_ms),
+            exploded: self.exploded,
+        })
     }
 
     /// Still playing.
@@ -205,6 +239,7 @@ impl Tourney {
             level: self.level,
             registered: self.is_entrant(uid),
             host: self.host_name.clone(),
+            multiplier: self.multiplier,
         }
     }
 
@@ -244,9 +279,10 @@ impl Tourney {
             level: self.level,
             next_level_ms,
             prize_pool: self.prize_pool(),
-            payouts: payouts(self.prize_pool(), self.entrants.len()),
+            payouts: self.pay_table(),
             my_table: self.table_of(uid),
             tables: self.tables.keys().copied().collect(),
+            bomb: self.bomb_view(),
         }
     }
 
@@ -324,6 +360,15 @@ impl Tourney {
             let seat = room.free_seats()[0];
             let _ = room.place(&e.uid, &e.name, seat, self.rules.stack, e.look.clone(), e.bot, out);
         }
+        if self.rules.bomb.is_some() {
+            // The prize wheel spins; the first hand is dealt once it's stopped.
+            self.multiplier = Some(spin(rng));
+            self.spun = Some(now);
+            self.started = Some(now + WHEEL_MS);
+            for r in self.tables.values_mut() {
+                r.hold = true;
+            }
+        }
         for (_, room) in self.tables.iter() {
             for (_, uid) in room.seated() {
                 if !uid.starts_with("bot:") {
@@ -339,6 +384,25 @@ impl Tourney {
     pub fn tick(&mut self, now: u64, next_table: &mut TableId, rng: &mut dyn Random) -> Output {
         let mut out = Output::default();
         match self.phase {
+            TourneyPhase::Registering if self.rules.bomb.is_some() => {
+                // A Time Bomb starts the moment it's full; when the wait is over, bots take the
+                // empty seats (nobody waits long), unless nobody's left in it.
+                if self.entrants.len() < self.rules.max_players && now >= self.rules.start_ms {
+                    if self.entrants.iter().all(|e| e.bot.is_some()) {
+                        let _ = self.cancel(now, &mut out);
+                        return out;
+                    }
+                    while self.entrants.len() < self.rules.max_players {
+                        if self.add_bot(Level::Regular, &mut out).is_err() {
+                            break;
+                        }
+                    }
+                }
+                if self.entrants.len() >= self.rules.max_players {
+                    self.start(now, next_table, rng, &mut out);
+                }
+                return out;
+            }
             TourneyPhase::Registering => {
                 if now >= self.rules.start_ms {
                     self.start(now, next_table, rng, &mut out);
@@ -346,12 +410,46 @@ impl Tourney {
                 return out;
             }
             TourneyPhase::Running => {}
+            TourneyPhase::Finished => {
+                // The final table goes once its last hand has been seen.
+                if self.close_at.is_some_and(|t| now >= t) {
+                    self.close_at = None;
+                    for (id, r) in std::mem::take(&mut self.tables) {
+                        for uid in r.audience() {
+                            out.to(&uid, ToApp::Closed { table: id });
+                        }
+                    }
+                }
+                return out;
+            }
             _ => return out,
+        }
+        let mut news = false;
+        if let Some(b) = self.rules.bomb {
+            let first_hand = self.started.unwrap_or(now);
+            if now < first_hand {
+                // (The wheel is still spinning.)
+                return out;
+            }
+            for r in self.tables.values_mut() {
+                r.hold = false;
+            }
+            if !self.exploded && now >= first_hand + b.fuse_ms {
+                self.exploded = true;
+                news = true;
+            }
+            // From the hand after it goes off, every hand is all in.
+            if self.exploded {
+                for r in self.tables.values_mut() {
+                    if !r.bomb && r.between_hands() {
+                        r.bomb = true;
+                    }
+                }
+            }
         }
         // The blinds.
         let started = self.started.unwrap_or(now);
         let level = (((now.saturating_sub(started)) / self.rules.level_ms) as usize).min(self.rules.levels.len() - 1);
-        let mut news = false;
         if level != self.level {
             self.level = level;
             let b = self.blinds();
@@ -383,7 +481,8 @@ impl Tourney {
             self.knock_out(busted, now, &mut out);
             news = true;
         }
-        if self.phase == TourneyPhase::Running && self.balance(now, &mut out) {
+        // (A Time Bomb is one table.)
+        if self.phase == TourneyPhase::Running && self.rules.bomb.is_none() && self.balance(now, &mut out) {
             news = true;
         }
         if news {
@@ -396,9 +495,8 @@ impl Tourney {
     /// higher), and the end when one is left.
     fn knock_out(&mut self, mut busted: Vec<(String, u64)>, now: u64, out: &mut Output) {
         busted.sort_by_key(|(_, started)| *started);
-        let pool = self.prize_pool();
         let n = self.entrants.len();
-        let pay = payouts(pool, n);
+        let pay = self.pay_table();
         for (uid, _) in busted {
             let left = self.alive().count();
             let Some(e) = self.entrants.iter_mut().find(|e| e.uid == uid && e.place.is_none()) else { continue };
@@ -426,12 +524,9 @@ impl Tourney {
             }
             self.phase = TourneyPhase::Finished;
             self.ended = Some(now);
-            // The tables go; everyone sees the results.
-            for (id, r) in std::mem::take(&mut self.tables) {
-                for uid in r.audience() {
-                    out.to(&uid, ToApp::Closed { table: id });
-                }
-            }
+            // The tables go (in a moment: the last hand's cards stay up to be seen), and
+            // everyone sees the results.
+            self.close_at = Some(now + FINAL_MS);
         }
     }
 
@@ -531,6 +626,146 @@ fn short(s: &str) -> String {
 }
 
 /// Checks a tournament's rules.
+/// Pyr Friday Night: a free tournament every Friday at 10 pm (US Eastern time), its prize
+/// money a guaranteed `FRIDAY_FLOOR` plus every chip raked at the cash tables that week.
+pub const FRIDAY_HOST: &str = "pyr:friday";
+pub const FRIDAY_FLOOR: u64 = 100_000;
+pub const FRIDAY_STACK: u64 = 10_000;
+
+/// The next Friday Night after `now_ms` (Unix ms): Friday 22:00 in New York, summer time or not.
+pub fn next_friday_night(now_ms: u64) -> u64 {
+    let day_ms = 86_400_000u64;
+    let today = (now_ms / day_ms) as i64;
+    (today - 1..today + 9)
+        .filter(|&d| (d + 4).rem_euclid(7) == 5) // 1970-01-01 was a Thursday
+        .map(|d| {
+            let (y, m, dd) = civil(d);
+            let offset_h = if eastern_summer(y, m, dd) { 4 } else { 5 };
+            d as u64 * day_ms + (22 + offset_h) * 3_600_000
+        })
+        .find(|&t| t > now_ms)
+        .unwrap_or(now_ms + 7 * day_ms)
+}
+
+/// Days since 1970-01-01 to (year, month, day).
+fn civil(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (yoe + era * 400 + (m <= 2) as i64, m, d)
+}
+
+/// Whether New York is on summer time on that day at 10 pm: from the second Sunday of March
+/// to the first Sunday of November.
+fn eastern_summer(y: i64, m: u32, d: u32) -> bool {
+    // The weekday (0 = Sunday) of the first of a month.
+    let first = |m: u32| {
+        let (yy, mm) = if m < 3 { (y - 1, m + 12) } else { (y, m) };
+        let k = yy % 100;
+        let j = yy / 100;
+        let h = (1 + 13 * (mm as i64 + 1) / 5 + k + k / 4 + j / 4 + 5 * j).rem_euclid(7); // 0 = Saturday
+        ((h + 6) % 7) as u32
+    };
+    let second_sunday_march = 1 + (7 - first(3)) % 7 + 7;
+    let first_sunday_nov = 1 + (7 - first(11)) % 7;
+    match m {
+        4..=10 => true,
+        3 => d >= second_sunday_march,
+        11 => d < first_sunday_nov,
+        _ => false,
+    }
+}
+
+/// Pyr Friday Night's rules, starting at `start_ms`, with `added` prize money.
+pub fn friday_rules(start_ms: u64, added: u64) -> TourneyRules {
+    TourneyRules {
+        name: "Pyr Friday Night".into(),
+        variant: crate::game::Variant::Holdem,
+        limit: crate::game::Limit::NoLimit,
+        seats: 9,
+        stack: FRIDAY_STACK,
+        buy_in: 0,
+        min_players: 2,
+        max_players: MAX_ENTRANTS,
+        start_ms,
+        level_ms: 10 * 60_000,
+        levels: standard_levels(FRIDAY_STACK),
+        late_levels: 6,
+        added,
+        bomb: None,
+    }
+}
+
+/// Time Bombs: three seats, 500 chips each, the blinds up every minute, and a three-minute
+/// fuse; after it, every hand is all in. Buy-ins (play chips), and the prize wheel's
+/// multipliers with their weights (out of 10,000): about 2.91 buy-ins come back for the three
+/// paid in, so the house keeps about 3%.
+pub const BOMB_HOST: &str = "pyr:bomb";
+pub const BOMB_BUY_INS: [u64; 3] = [100, 1_000, 10_000];
+pub const BOMB_SEATS: usize = 3;
+pub const BOMB_STACK: u64 = 500;
+pub const BOMB_FUSE_MS: u64 = 180_000;
+/// How long a Time Bomb waits for people before bots take the empty seats.
+pub const BOMB_WAIT_MS: u64 = 30_000;
+/// The wheel's spin, before the first hand.
+pub const WHEEL_MS: u64 = 5_000;
+pub const MULTIPLIERS: [(u32, u32); 7] = [(2, 7504), (3, 1400), (5, 760), (10, 270), (25, 55), (100, 10), (1000, 1)];
+
+/// The prize wheel: a multiplier, by its weight.
+pub fn spin(rng: &mut dyn Random) -> u32 {
+    let total: u32 = MULTIPLIERS.iter().map(|m| m.1).sum();
+    let mut x = rng.below(total);
+    for (m, w) in MULTIPLIERS {
+        if x < w {
+            return m;
+        }
+        x -= w;
+    }
+    MULTIPLIERS[0].0
+}
+
+/// A Time Bomb's rules, open from `now` (it waits `BOMB_WAIT_MS` for people).
+pub fn bomb_rules(buy_in: u64, now: u64) -> TourneyRules {
+    let levels = [(10, 20), (15, 30), (20, 40), (30, 60), (50, 100), (75, 150), (100, 200), (150, 300), (200, 400), (300, 600), (500, 1000), (750, 1500)]
+        .into_iter()
+        .map(|(small, big)| BlindLevel { small, big, ante: 0 })
+        .collect();
+    TourneyRules {
+        name: format!("Time Bomb · {}", group(buy_in)),
+        variant: crate::game::Variant::Holdem,
+        limit: crate::game::Limit::NoLimit,
+        seats: BOMB_SEATS,
+        stack: BOMB_STACK,
+        buy_in,
+        min_players: BOMB_SEATS,
+        max_players: BOMB_SEATS,
+        start_ms: now + BOMB_WAIT_MS,
+        level_ms: 60_000,
+        levels,
+        late_levels: 0,
+        added: 0,
+        bomb: Some(Bomb { fuse_ms: BOMB_FUSE_MS }),
+    }
+}
+
+/// 12345 as "12,345".
+fn group(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 pub fn check(r: &TourneyRules) -> Result<(), String> {
     let name = r.name.trim();
     if name.is_empty() || name.chars().count() > 40 {

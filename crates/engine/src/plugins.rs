@@ -26,7 +26,7 @@ use crate::Shared;
 
 /// Where plugins go: (host, port, server key).
 pub fn server() -> Option<(String, u16, [u8; 32])> {
-    let own = pyr_proto::env_var("LIBRARY_SERVER").or_else(|| option_env!("PYR_LIBRARY_SERVER").or(option_env!("INGLE_LIBRARY_SERVER")).map(String::from));
+    let own = pyr_proto::env_var("LIBRARY_SERVER").or_else(|| option_env!("PYR_LIBRARY_SERVER").map(String::from));
     match own {
         Some(s) => {
             let (addr, key) = s.trim().split_once('/')?;

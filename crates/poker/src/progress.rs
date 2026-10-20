@@ -2,7 +2,7 @@
 //! experience and levels, achievements, statistics, and the looks they unlock by playing
 //! (never by paying). A record is kept by the server a player plays on.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -40,6 +40,24 @@ pub struct Record {
     pub felt: String,
     pub chip_set: String,
     pub frame: String,
+    /// Looks given to them (prize boxes, Game Masters' gifts).
+    #[serde(default)]
+    pub gifts: BTreeSet<String>,
+    /// Pyr Casino, by game (its id).
+    #[serde(default)]
+    pub casino: BTreeMap<String, CasinoStats>,
+}
+
+/// How someone's done at one of the casino's games.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CasinoStats {
+    pub rounds: u64,
+    pub wagered: u64,
+    /// Chips back (stakes of winners included).
+    pub paid: u64,
+    pub best_win: u64,
+    /// The best round's multiple of its bet, in hundredths.
+    pub best_multiple_x100: u64,
 }
 
 impl Record {
@@ -69,7 +87,7 @@ impl Record {
 
     /// The looks they've unlocked so far.
     pub fn unlocked(&self) -> Vec<&'static Cosmetic> {
-        COSMETICS.iter().filter(|c| c.unlock.met(self)).collect()
+        COSMETICS.iter().filter(|c| c.unlock.met(self) || self.gifts.contains(c.id)).collect()
     }
 }
 
@@ -114,6 +132,19 @@ pub const ACHIEVEMENTS: &[Achievement] = &[
     Achievement { id: "hands_1000", name: "Marathon", about: "Play 1,000 hands.", xp: 1000 },
     Achievement { id: "shark_hunter", name: "Shark Hunter", about: "Win a showdown against a Shark bot.", xp: 300 },
     Achievement { id: "streak_7", name: "Every Day", about: "Take the daily chips seven days in a row.", xp: 300 },
+    // Pyr Casino.
+    Achievement { id: "casino_first", name: "Bright Lights", about: "Play your first game in Pyr Casino.", xp: 50 },
+    Achievement { id: "free_spins", name: "Rising Phoenix", about: "Start free spins on Pyr Sevens.", xp: 150 },
+    Achievement { id: "jackpot", name: "Phoenix Jackpot", about: "Win the Phoenix Jackpot: five flames on a line.", xp: 2500 },
+    Achievement { id: "natural", name: "Natural", about: "Get a blackjack.", xp: 100 },
+    Achievement { id: "split_sweep", name: "Double Trouble", about: "Split at blackjack and win every hand.", xp: 200 },
+    Achievement { id: "straight_up", name: "Straight Up", about: "Hit a single number at roulette.", xp: 200 },
+    Achievement { id: "dead_heat", name: "Dead Heat", about: "Win a Tie bet at baccarat.", xp: 200 },
+    Achievement { id: "hot_shooter", name: "Hot Shooter", about: "Make four points in a row at craps.", xp: 400 },
+    Achievement { id: "long_shot", name: "Long Shot", about: "Win a dice roll at a 5% chance or less.", xp: 300 },
+    Achievement { id: "seer", name: "Seer", about: "Catch 7 or more numbers in one keno draw.", xp: 800 },
+    Achievement { id: "big_win", name: "Big Win", about: "Win 50 times your bet or more in one round.", xp: 300 },
+    Achievement { id: "whale", name: "Whale", about: "Bet 25,000 or more on one round.", xp: 200 },
 ];
 
 pub fn achievement(id: &str) -> Option<&'static Achievement> {
@@ -125,6 +156,8 @@ pub enum Unlock {
     Always,
     Level(u32),
     Achievement(&'static str),
+    /// Only from a prize box or a Game Master's gift.
+    Prize,
 }
 
 impl Unlock {
@@ -133,6 +166,7 @@ impl Unlock {
             Unlock::Always => true,
             Unlock::Level(l) => r.level() >= *l,
             Unlock::Achievement(a) => r.achievements.contains(*a),
+            Unlock::Prize => false,
         }
     }
 
@@ -141,6 +175,7 @@ impl Unlock {
             Unlock::Always => "Yours from the start".into(),
             Unlock::Level(l) => format!("Reach level {l}"),
             Unlock::Achievement(a) => format!("Earn \u{201c}{}\u{201d}", achievement(a).map(|a| a.name).unwrap_or(a)),
+            Unlock::Prize => "Only from a prize box or a Game Master".into(),
         }
     }
 }
@@ -178,7 +213,19 @@ pub const COSMETICS: &[Cosmetic] = &[
     Cosmetic { id: "frame_silver", kind: Kind::Frame, name: "Silver", unlock: Unlock::Level(15) },
     Cosmetic { id: "frame_gold", kind: Kind::Frame, name: "Gold", unlock: Unlock::Level(30) },
     Cosmetic { id: "frame_shark", kind: Kind::Frame, name: "Shark Hunter", unlock: Unlock::Achievement("shark_hunter") },
+    // Prize boxes' and Game Masters' own.
+    Cosmetic { id: "back_inferno", kind: Kind::CardBack, name: "Inferno", unlock: Unlock::Prize },
+    Cosmetic { id: "back_aurora", kind: Kind::CardBack, name: "Aurora", unlock: Unlock::Prize },
+    Cosmetic { id: "felt_amethyst", kind: Kind::Felt, name: "Amethyst", unlock: Unlock::Prize },
+    Cosmetic { id: "felt_blackgold", kind: Kind::Felt, name: "Black & Gold", unlock: Unlock::Prize },
+    Cosmetic { id: "frame_ember", kind: Kind::Frame, name: "Ember Crown", unlock: Unlock::Prize },
+    Cosmetic { id: "frame_diamond", kind: Kind::Frame, name: "Diamond", unlock: Unlock::Prize },
 ];
+
+/// A look by its id.
+pub fn cosmetic(id: &str) -> Option<&'static Cosmetic> {
+    COSMETICS.iter().find(|c| c.id == id)
+}
 
 /// What happened to one seat in a hand, worked out from the hand's events.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -272,6 +319,89 @@ pub fn apply_placed(rec: &mut Record, place: usize, entrants: usize) -> Gains {
     rec.xp += xp;
     let after = rec.level();
     Gains { xp, new_achievements: Vec::new(), level_up: (after > before).then_some(after) }
+}
+
+/// Adds a casino round to a record: its game's numbers, a little experience (a point for every
+/// 500 chips bet, ten at most) and any achievement it earned.
+pub fn apply_casino(rec: &mut Record, o: &crate::casino::Outcome) -> Gains {
+    use crate::casino::{Outcome, blackjack};
+    let before = rec.level();
+    let mut g = Gains::default();
+    let wagered = o.wagered();
+    let back = match o {
+        Outcome::Craps(c) => c.paid + c.kept,
+        _ => o.paid(),
+    };
+    let st = rec.casino.entry(o.game().id().to_string()).or_default();
+    st.rounds += 1;
+    st.wagered += wagered;
+    st.paid += back;
+    st.best_win = st.best_win.max(back.saturating_sub(wagered));
+    let mult = crate::casino::multiple_x100(back, wagered);
+    if back > wagered {
+        st.best_multiple_x100 = st.best_multiple_x100.max(mult);
+    }
+    g.xp += (wagered / 500).min(10);
+    let earn = |id: &'static str, rec: &mut Record, g: &mut Gains| {
+        if rec.achievements.insert(id.to_string()) {
+            g.new_achievements.push(id);
+            g.xp += achievement(id).map(|a| a.xp).unwrap_or(0);
+        }
+    };
+    earn("casino_first", rec, &mut g);
+    if wagered >= 25_000 {
+        earn("whale", rec, &mut g);
+    }
+    if wagered > 0 && mult >= 5_000 {
+        earn("big_win", rec, &mut g);
+    }
+    match o {
+        Outcome::Slots(s) => {
+            if s.spins.len() > 1 {
+                earn("free_spins", rec, &mut g);
+            }
+            if s.jackpot_won > 0 {
+                earn("jackpot", rec, &mut g);
+            }
+        }
+        Outcome::Blackjack(b) => {
+            if b.hands.iter().any(|h| h.result == Some(blackjack::Result::Blackjack)) {
+                earn("natural", rec, &mut g);
+            }
+            if b.hands.len() > 1 && b.hands.iter().all(|h| h.result == Some(blackjack::Result::Win)) {
+                earn("split_sweep", rec, &mut g);
+            }
+        }
+        Outcome::Roulette(r) => {
+            if r.chips.iter().zip(&r.returns).any(|(c, back)| *back > 0 && matches!(c.spot, crate::casino::roulette::Spot::Straight { .. })) {
+                earn("straight_up", rec, &mut g);
+            }
+        }
+        Outcome::Baccarat(b) => {
+            if b.winner == crate::casino::baccarat::Side::Tie && b.bets.tie > 0 {
+                earn("dead_heat", rec, &mut g);
+            }
+        }
+        Outcome::Craps(c) => {
+            if c.streak >= 4 {
+                earn("hot_shooter", rec, &mut g);
+            }
+        }
+        Outcome::Dice(d) => {
+            if d.won && d.chance <= 500 {
+                earn("long_shot", rec, &mut g);
+            }
+        }
+        Outcome::Keno(k) => {
+            if k.hits.len() >= 7 {
+                earn("seer", rec, &mut g);
+            }
+        }
+    }
+    rec.xp += g.xp;
+    let after = rec.level();
+    g.level_up = (after > before).then_some(after);
+    g
 }
 
 /// What a hand added: experience and newly earned achievements.

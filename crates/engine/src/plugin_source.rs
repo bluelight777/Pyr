@@ -120,16 +120,16 @@ fn read_manifest(text: &str, g: &mut Gathered) {
     let pkg = doc.get("package").and_then(|p| p.as_table());
     let s = |t: Option<&toml::Table>, k: &str| t.and_then(|t| t.get(k)).and_then(|v| v.as_str()).unwrap_or("").to_string();
     g.version = s(pkg, "version");
-    // ([package.metadata.ingle]: plugins made before Pyr was called Pyr.)
+    // (Or under the name from before the rename: plugins made then, see `pyr_proto::legacy`.)
     let meta = pkg.and_then(|p| p.get("metadata"));
-    let pyr = meta.and_then(|m| m.get("pyr").or_else(|| m.get(pyr_proto::OLD_APP_ID))).and_then(|i| i.as_table());
+    let pyr = meta.and_then(|m| m.get("pyr").or_else(|| m.get(pyr_proto::legacy::APP_ID))).and_then(|i| i.as_table());
     g.name = s(pyr, "name");
     if g.name.is_empty() {
         g.name = s(pkg, "name");
     }
     g.kind = s(pyr, "kind");
     // Built with the add-on kit: an add-on, whatever else it says.
-    let kit = doc.get("dependencies").is_some_and(|d| d.get("pyr-plugin").is_some() || d.get("ingle-plugin").is_some());
+    let kit = doc.get("dependencies").is_some_and(|d| d.get("pyr-plugin").is_some() || d.get(pyr_proto::legacy::KIT_CRATE).is_some());
     g.kind_fixed = kit || matches!(g.kind.as_str(), "addon" | "program");
     if kit {
         g.kind = "addon".into();
@@ -243,10 +243,11 @@ mod tests {
         };
         let kit = "[package]\nname = \"poker\"\n[package.metadata.pyr]\nkind = \"program\"\n[dependencies]\npyr-plugin = { path = \"pyr-plugin\" }\n";
         assert_eq!(kind(kit), ("addon".to_string(), true), "built with the kit: an add-on");
-        // Made before Pyr was called Pyr: the old kit and the old table name.
-        let old = "[package]\nname = \"poker\"\n[package.metadata.ingle]\nkind = \"program\"\n[dependencies]\ningle-plugin = { path = \"ingle-plugin\" }\n";
-        assert_eq!(kind(old), ("addon".to_string(), true), "built with Ingle's kit: an add-on");
-        assert_eq!(kind("[package]\nname = \"x\"\n[package.metadata.ingle]\nkind = \"program\"\n"), ("program".to_string(), true));
+        // Made before the rename: the old kit and the old table name.
+        let (id, crate_) = (pyr_proto::legacy::APP_ID, pyr_proto::legacy::KIT_CRATE);
+        let old = format!("[package]\nname = \"poker\"\n[package.metadata.{id}]\nkind = \"program\"\n[dependencies]\n{crate_} = {{ path = \"{crate_}\" }}\n");
+        assert_eq!(kind(&old), ("addon".to_string(), true), "built with the old kit: an add-on");
+        assert_eq!(kind(&format!("[package]\nname = \"x\"\n[package.metadata.{id}]\nkind = \"program\"\n")), ("program".to_string(), true));
         assert_eq!(kind("[package]\nname = \"x\"\n[package.metadata.pyr]\nkind = \"program\"\n"), ("program".to_string(), true));
         assert_eq!(kind("[package]\nname = \"x\"\n[lib]\ncrate-type = [\"cdylib\"]\n"), ("addon".to_string(), false), "a guess: asked");
         assert_eq!(kind("[package]\nname = \"x\"\n"), ("program".to_string(), false));

@@ -46,8 +46,8 @@ impl InviteLink {
             return InviteLink::parse(&inner);
         }
         let mut s = input.trim();
-        // (`ingle://`: links made before Pyr was called Pyr.)
-        for scheme in [format!("{}://", crate::APP_ID), format!("{}://", crate::OLD_APP_ID), "https://".into(), "http://".into()] {
+        // (And links made before the rename: see `legacy`.)
+        for scheme in [format!("{}://", crate::APP_ID), crate::legacy::SCHEME.to_string(), "https://".into(), "http://".into()] {
             // (`get`: pasted text can have a multi-byte character right where the scheme ends.)
             if s.get(..scheme.len()).is_some_and(|p| p.eq_ignore_ascii_case(&scheme)) {
                 s = &s[scheme.len()..];
@@ -164,8 +164,7 @@ fn web_inner(input: &str) -> Option<String> {
     }
     let rest = percent_decode(&fragment[at + "join=".len()..]);
     let scheme = format!("{}://", crate::APP_ID);
-    let old = format!("{}://", crate::OLD_APP_ID);
-    let rest = rest.strip_prefix(&scheme).or_else(|| rest.strip_prefix(&old)).unwrap_or(&rest);
+    let rest = rest.strip_prefix(&scheme).or_else(|| rest.strip_prefix(crate::legacy::SCHEME)).unwrap_or(&rest);
     (!rest.is_empty()).then(|| format!("{scheme}{rest}"))
 }
 
@@ -317,18 +316,19 @@ mod tests {
         assert_eq!(InviteLink::parse(&format!("pyr://host:99999/x?fp={fp}")).unwrap_err(), InviteError::BadPort);
     }
 
-    /// Links made before Pyr was called Pyr keep working: `ingle://` ones, and web ones on
-    /// firelitgames.com/ingle (new links are `pyr://` and pyr.gg).
+    /// Links made before the rename keep working, in the app's form and the web's (new links
+    /// are `pyr://` and pyr.gg).
     #[test]
-    fn links_from_ingle_still_work() {
+    fn links_from_before_the_rename_still_work() {
+        use crate::legacy::{SCHEME, WEB_INVITE};
         let fp = [9u8; 32];
         let new = InviteLink::new("play.example.com".into(), 7766, Some("abc".into()), fp);
         let short = b64::encode(&fp[..SHORT_FP]);
         for old in [
-            format!("ingle://play.example.com/abc/{short}"),
-            format!("INGLE://play.example.com/abc/{short}"),
-            format!("https://firelitgames.com/ingle/#n=Game%20Night&join=play.example.com/abc/{short}"),
-            format!("https://firelitgames.com/ingle/#join=ingle://play.example.com/abc/{short}"),
+            format!("{SCHEME}play.example.com/abc/{short}"),
+            format!("{}play.example.com/abc/{short}", SCHEME.to_uppercase()),
+            format!("{WEB_INVITE}#n=Game%20Night&join=play.example.com/abc/{short}"),
+            format!("{WEB_INVITE}#join={SCHEME}play.example.com/abc/{short}"),
         ] {
             let l = InviteLink::parse(&old).unwrap_or_else(|e| panic!("{old}: {e}"));
             assert_eq!((l.host.as_str(), l.port, l.code.as_deref()), ("play.example.com", 7766, Some("abc")), "{old}");

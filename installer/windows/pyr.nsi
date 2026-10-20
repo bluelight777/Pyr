@@ -14,6 +14,9 @@ Target amd64-unicode
 !include "FileFunc.nsh"
 
 !define APPNAME "Pyr"
+; Pyr's name before 0.8.0 (see pyr_proto::legacy): only to find and replace an install from then.
+!define OLD "Ingle"
+!define OLD_ID "ingle"
 !define COMPANY "Firelit Games"
 !ifndef VERSION
   !define VERSION "0.2.0"
@@ -91,7 +94,7 @@ Var FinishText
 Var QuitAsked
 ; Retries while an updating Pyr finishes quitting (only with /RELAUNCH).
 Var UpdateWait
-; Where Ingle was installed (Pyr's name before 0.8.0), and where Pyr Server keeps its data.
+; Where Pyr was installed under its name before 0.8.0 (OLD), and where Pyr Server keeps its data.
 Var OldDir
 Var ServerData
 
@@ -214,10 +217,10 @@ Function PinsUseIcon
           ${If} $9 <> 0
             StrCpy $4 ""
           ${EndIf}
-          ${If} $4 == "$OldDir\ingle.exe"
+          ${If} $4 == "$OldDir\${OLD_ID}.exe"
           ${AndIf} $OldDir != ""
-            ; A pin made for Ingle: it opens Pyr now (IShellLinkW::SetPath), from Pyr's folder
-            ; (SetWorkingDirectory: Ingle's is gone).
+            ; A pin made before the rename: it opens Pyr now (IShellLinkW::SetPath), from Pyr's
+            ; folder (SetWorkingDirectory: the old one is gone).
             StrCpy $4 "$INSTDIR\pyr.exe"
             System::Call "$2->20(w r4) i .r9"
             System::Call "$2->9(w '$INSTDIR') i .r9"
@@ -256,72 +259,72 @@ Function PinsUseIcon
   Pop $0
 FunctionEnd
 
-; ---- Pyr was called Ingle before 0.8.0 ---------------------------------------------------
-; Ingle's install gives way to Pyr's: a running Ingle is asked to quit first; once Pyr is in,
-; Ingle's program files, shortcuts, uninstall entry and start-with-Windows entry go, taskbar
-; pins that opened Ingle open Pyr, and ingle:// links open Pyr. Its server's community comes
-; to Pyr Server's folder. Your identity and settings (%APPDATA%\Ingle) are copied over by Pyr
-; itself when it first starts; Ingle's own are kept.
-Function FindIngle
-  ReadRegStr $OldDir HKCU "Software\Ingle" "InstallDir"
+; ---- Pyr had another name before 0.8.0 (OLD, see pyr_proto::legacy) ----------------------
+; The install from then gives way to Pyr's: a running copy is asked to quit first; once Pyr is
+; in, its program files, shortcuts, uninstall entry and start-with-Windows entry go, taskbar
+; pins that opened it open Pyr, and invite links with the old scheme open Pyr. Its server's
+; community comes to Pyr Server's folder. Your identity and settings (%APPDATA%\<OLD>) are
+; copied over by Pyr itself when it first starts; the old ones are kept.
+Function FindOld
+  ReadRegStr $OldDir HKCU "Software\${OLD}" "InstallDir"
   ${If} $OldDir == ""
-    StrCpy $OldDir "$LOCALAPPDATA\Programs\Ingle"
+    StrCpy $OldDir "$LOCALAPPDATA\Programs\${OLD}"
   ${EndIf}
 FunctionEnd
 
-Function QuitIngle
-  Call FindIngle
-  ${If} ${FileExists} "$OldDir\ingle.exe"
-    ; (It may be hidden in the tray; when Ingle's own updater started us, it's quitting already.)
-    ExecWait '"$OldDir\ingle.exe" --quit'
+Function QuitOld
+  Call FindOld
+  ${If} ${FileExists} "$OldDir\${OLD_ID}.exe"
+    ; (It may be hidden in the tray; when its own updater started us, it's quitting already.)
+    ExecWait '"$OldDir\${OLD_ID}.exe" --quit'
     Sleep 500
   ${EndIf}
 FunctionEnd
 
-Function RemoveIngle
-  Call FindIngle
+Function RemoveOld
+  Call FindOld
   ${If} $OldDir != $INSTDIR
-    Delete "$OldDir\ingle.exe"
-    Delete "$OldDir\ingle-bot.exe"
-    Delete "$OldDir\ingle-mcp.exe.old"
-    ; (Claude may be running Ingle's connector: then it's set aside, and goes next time.)
+    Delete "$OldDir\${OLD_ID}.exe"
+    Delete "$OldDir\${OLD_ID}-bot.exe"
+    Delete "$OldDir\${OLD_ID}-mcp.exe.old"
+    ; (Claude may be running the old connector: then it's set aside, and goes next time.)
     ClearErrors
-    Delete "$OldDir\ingle-mcp.exe"
+    Delete "$OldDir\${OLD_ID}-mcp.exe"
     ${If} ${Errors}
-      Rename "$OldDir\ingle-mcp.exe" "$OldDir\ingle-mcp.exe.old"
+      Rename "$OldDir\${OLD_ID}-mcp.exe" "$OldDir\${OLD_ID}-mcp.exe.old"
     ${EndIf}
-    ; (Ingle Server, if it's still running, stays: see the server section.)
-    Delete "$OldDir\ingle-server.exe"
+    ; (The old server, if it's still running, stays: see the server section.)
+    Delete "$OldDir\${OLD_ID}-server.exe"
     Delete "$OldDir\README.txt"
     Delete "$OldDir\Inter font license.txt"
-    Delete "$OldDir\vps\ingle-server-linux-x86_64"
-    Delete "$OldDir\vps\ingle-server-linux-aarch64"
+    Delete "$OldDir\vps\${OLD_ID}-server-linux-x86_64"
+    Delete "$OldDir\vps\${OLD_ID}-server-linux-aarch64"
     RMDir "$OldDir\vps"
-    Delete "$OldDir\icons\ingle*.ico"
+    Delete "$OldDir\icons\${OLD_ID}*.ico"
     RMDir "$OldDir\icons"
-    Delete "$OldDir\Uninstall Ingle.exe"
+    Delete "$OldDir\Uninstall ${OLD}.exe"
     RMDir "$OldDir"
   ${EndIf}
-  ; Its shortcuts: Pyr's take their place (on the desktop too, if Ingle had one there).
-  Delete "$SMPROGRAMS\Ingle.lnk"
-  Delete "$SMPROGRAMS\Ingle Server.lnk"
-  ${If} ${FileExists} "$DESKTOP\Ingle.lnk"
-    Delete "$DESKTOP\Ingle.lnk"
+  ; Its shortcuts: Pyr's take their place (on the desktop too, if it had one there).
+  Delete "$SMPROGRAMS\${OLD}.lnk"
+  Delete "$SMPROGRAMS\${OLD} Server.lnk"
+  ${If} ${FileExists} "$DESKTOP\${OLD}.lnk"
+    Delete "$DESKTOP\${OLD}.lnk"
     CreateShortcut "$DESKTOP\Pyr.lnk" "$INSTDIR\pyr.exe" "" "${ICONPATH}" 0 SW_SHOWNORMAL "" "Voice, webcams, screen sharing and chat"
   ${EndIf}
-  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Ingle"
-  DeleteRegKey HKCU "Software\Ingle"
-  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Ingle"
-  ; ingle:// invite links (made before the rename) open Pyr.
-  WriteRegStr HKCU "Software\Classes\ingle" "" "URL:Pyr invite link"
-  WriteRegStr HKCU "Software\Classes\ingle" "URL Protocol" ""
-  WriteRegStr HKCU "Software\Classes\ingle\DefaultIcon" "" "${ICONPATH}"
-  WriteRegStr HKCU "Software\Classes\ingle\shell\open\command" "" '${LINKCMD}'
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${OLD}"
+  DeleteRegKey HKCU "Software\${OLD}"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${OLD}"
+  ; Invite links with the old scheme (made before the rename) open Pyr.
+  WriteRegStr HKCU "Software\Classes\${OLD_ID}" "" "URL:Pyr invite link"
+  WriteRegStr HKCU "Software\Classes\${OLD_ID}" "URL Protocol" ""
+  WriteRegStr HKCU "Software\Classes\${OLD_ID}\DefaultIcon" "" "${ICONPATH}"
+  WriteRegStr HKCU "Software\Classes\${OLD_ID}\shell\open\command" "" '${LINKCMD}'
 FunctionEnd
 
 Section "Pyr" SecApp
   SectionIn RO
-  Call QuitIngle
+  Call QuitOld
   SetOutPath "$INSTDIR"
   !insertmacro ReplaceFile "pyr.exe" app "${HOWTO_APP}"
   File "${BINDIR}/pyr.exe"
@@ -346,7 +349,7 @@ Section "Pyr" SecApp
   WriteRegStr HKCU "Software\Classes\pyr\shell\open\command" "" '${LINKCMD}'
 
   CreateShortcut "$SMPROGRAMS\Pyr.lnk" "$INSTDIR\pyr.exe" "" "${ICONPATH}" 0 SW_SHOWNORMAL "" "Voice, webcams, screen sharing and chat"
-  Call FindIngle
+  Call FindOld
   Call PinsUseIcon
 
   WriteUninstaller "$INSTDIR\Uninstall Pyr.exe"
@@ -373,22 +376,23 @@ Section "Pyr Server (host a community on this PC)" SecServer
   ; The server keeps its database and TLS key with your other Pyr data, not in the
   ; install folder, so reinstalling or uninstalling never touches it.
   StrCpy $ServerData "$APPDATA\Pyr\server"
-  ; A community hosted with Ingle Server comes along (copied; Ingle's folder is kept). While
-  ; Ingle Server is still running its database can't be copied safely: Pyr Server then uses
-  ; Ingle's folder as it is.
-  Call FindIngle
-  ${If} ${FileExists} "$APPDATA\Ingle\server\ingle.db"
-  ${AndIfNot} ${FileExists} "$APPDATA\Pyr\server\ingle.db"
+  ; A community hosted with the old server comes along (copied; the old folder is kept). While
+  ; the old server is still running its database can't be copied safely: Pyr Server then
+  ; uses the old folder as it is (it renames the database to pyr.db, see pyr_server::db).
+  Call FindOld
+  ${If} ${FileExists} "$APPDATA\${OLD}\server\${OLD_ID}.db"
+  ${AndIfNot} ${FileExists} "$APPDATA\Pyr\server\pyr.db"
+  ${AndIfNot} ${FileExists} "$APPDATA\Pyr\server\${OLD_ID}.db"
     ClearErrors
-    ${If} ${FileExists} "$OldDir\ingle-server.exe"
-      Rename "$OldDir\ingle-server.exe" "$OldDir\ingle-server.exe.moving"
+    ${If} ${FileExists} "$OldDir\${OLD_ID}-server.exe"
+      Rename "$OldDir\${OLD_ID}-server.exe" "$OldDir\${OLD_ID}-server.exe.moving"
     ${EndIf}
     ${If} ${Errors}
-      StrCpy $ServerData "$APPDATA\Ingle\server"
+      StrCpy $ServerData "$APPDATA\${OLD}\server"
     ${Else}
-      Rename "$OldDir\ingle-server.exe.moving" "$OldDir\ingle-server.exe"
+      Rename "$OldDir\${OLD_ID}-server.exe.moving" "$OldDir\${OLD_ID}-server.exe"
       CreateDirectory "$APPDATA\Pyr\server"
-      CopyFiles /SILENT "$APPDATA\Ingle\server\*.*" "$APPDATA\Pyr\server"
+      CopyFiles /SILENT "$APPDATA\${OLD}\server\*.*" "$APPDATA\Pyr\server"
     ${EndIf}
   ${EndIf}
   CreateDirectory "$ServerData"
@@ -403,8 +407,8 @@ Section /o "Test bot (try calls on your own)" SecBot
   File "${BINDIR}/pyr-bot.exe"
 SectionEnd
 
-Section "-Ingle"
-  Call RemoveIngle
+Section "-Old"
+  Call RemoveOld
 SectionEnd
 
 Section "-Size"
@@ -454,9 +458,9 @@ Section "Uninstall"
   ${If} $0 == '${LINKCMD}'
     DeleteRegKey HKCU "Software\Classes\pyr"
   ${EndIf}
-  ReadRegStr $0 HKCU "Software\Classes\ingle\shell\open\command" ""
+  ReadRegStr $0 HKCU "Software\Classes\${OLD_ID}\shell\open\command" ""
   ${If} $0 == '${LINKCMD}'
-    DeleteRegKey HKCU "Software\Classes\ingle"
+    DeleteRegKey HKCU "Software\Classes\${OLD_ID}"
   ${EndIf}
   DeleteRegKey HKCU "${UNINSTKEY}"
   DeleteRegKey HKCU "Software\Pyr"

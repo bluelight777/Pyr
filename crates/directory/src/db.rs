@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
-use pyr_proto::directory::{Announce, AnnounceReply, CODE_MAX, INVITER_MAX, Lookup, MAX_CODES, NAME_MAX, is_code, is_reserved, vanity_problem};
+use pyr_proto::directory::{Announce, AnnounceReply, CODE_MAX, INVITER_MAX, Lookup, MAX_CODES, NAME_MAX, icon_ok, icon_sha, is_code, is_reserved, vanity_problem};
 use pyr_proto::invite::InviteLink;
 use pyr_proto::now_ms;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS codes (
 CREATE INDEX IF NOT EXISTS codes_fp ON codes(fp);
 CREATE TABLE IF NOT EXISTS blocked_codes (code TEXT PRIMARY KEY, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS new_servers (place TEXT NOT NULL, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS icons (fp BLOB PRIMARY KEY, sha TEXT NOT NULL, png BLOB NOT NULL);
 ";
 
 /// A community that hasn't announced itself for this long is forgotten (servers announce at
@@ -178,6 +179,36 @@ impl Db {
         .map_err(internal)?;
 
         let mut reply = AnnounceReply::default();
+        // Its icon: kept until it says it has another (or none); asked for when it's one the
+        // directory doesn't have.
+        match &a.icon_sha {
+            None => {
+                tx.execute("DELETE FROM icons WHERE fp = ?1", [&fp[..]]).map_err(internal)?;
+            }
+            Some(sha) => {
+                let have: Option<String> = tx.query_row("SELECT sha FROM icons WHERE fp = ?1", [&fp[..]], |r| r.get(0)).optional().map_err(internal)?;
+                if have.as_ref() != Some(sha) {
+                    let png = a.icon.as_deref().and_then(|b| pyr_proto::b64::decode(b).ok());
+                    match png {
+                        Some(png) if icon_ok(&png) && &icon_sha(&png) == sha => {
+                            tx.execute(
+                                "INSERT INTO icons(fp, sha, png) VALUES (?1, ?2, ?3) ON CONFLICT(fp) DO UPDATE SET sha = excluded.sha, png = excluded.png",
+                                params![&fp[..], sha, png],
+                            )
+                            .map_err(internal)?;
+                        }
+                        // (Not sent yet, or not one it takes: none shown till it is.)
+                        Some(_) => {
+                            tx.execute("DELETE FROM icons WHERE fp = ?1", [&fp[..]]).map_err(internal)?;
+                        }
+                        None => {
+                            tx.execute("DELETE FROM icons WHERE fp = ?1", [&fp[..]]).map_err(internal)?;
+                            reply.want_icon = true;
+                        }
+                    }
+                }
+            }
+        }
         // What it wants listed: (code, expires, inviter, its own code).
         let mut wanted: Vec<(String, Option<i64>, Option<String>, bool)> = Vec::new();
         for l in &a.codes {
@@ -299,6 +330,7 @@ impl Db {
             .ok()
             .flatten();
         let (fp, host, port, name, members, online, inviter, expires_at, vanity) = row?;
+        let icon = c.query_row("SELECT 1 FROM icons WHERE fp = ?1", [&fp], |_| Ok(())).optional().ok().flatten().is_some();
         let fp: [u8; 32] = fp.try_into().ok()?;
         Some(Lookup {
             code: code.to_string(),
@@ -309,7 +341,15 @@ impl Db {
             inviter,
             expires_at,
             vanity,
+            icon,
         })
+    }
+
+    /// The icon of the community a code opens (a PNG), while the code does.
+    pub fn icon(&self, code: &str) -> Option<Vec<u8>> {
+        self.lookup(code)?;
+        let c = self.conn.lock();
+        c.query_row("SELECT i.png FROM codes c JOIN icons i ON i.fp = c.fp WHERE c.code = ?1", [code], |r| r.get(0)).optional().ok().flatten()
     }
 
     /// Forgets codes that ran out, communities not heard from in a month, and old counts of
@@ -319,6 +359,7 @@ impl Db {
         let c = self.conn.lock();
         c.execute("DELETE FROM codes WHERE expires_at IS NOT NULL AND expires_at <= ?1", [now])?;
         c.execute("DELETE FROM codes WHERE fp IN (SELECT fp FROM servers WHERE seen_at < ?1 AND blocked = 0)", [now - FORGET_AFTER_MS])?;
+        c.execute("DELETE FROM icons WHERE fp IN (SELECT fp FROM servers WHERE seen_at < ?1 AND blocked = 0)", [now - FORGET_AFTER_MS])?;
         c.execute("DELETE FROM servers WHERE seen_at < ?1 AND blocked = 0", [now - FORGET_AFTER_MS])?;
         c.execute("DELETE FROM new_servers WHERE at < ?1", [now - 86_400_000])?;
         Ok(())
@@ -377,7 +418,48 @@ mod tests {
             online: Some(7),
             codes: codes.iter().map(|c| ListedCode { code: c.to_string(), expires_at: None, inviter: Some("Blue".into()) }).collect(),
             vanity: None,
+            ..Default::default()
         }
+    }
+
+    /// A tiny PNG (only its signature matters to the directory).
+    fn png(n: u8) -> Vec<u8> {
+        let mut b = b"\x89PNG\r\n\x1a\n".to_vec();
+        b.extend([n; 40]);
+        b
+    }
+
+    #[test]
+    fn an_icon_is_asked_for_kept_shown_and_dropped() {
+        let db = Db::open_in_memory().unwrap();
+        let fp = [9u8; 32];
+        let icon = png(1);
+        let sha = icon_sha(&icon);
+        // Only its SHA: the directory asks for the icon itself.
+        let r = db.apply(&fp, b"cert", "1.2.3.4", &Announce { icon_sha: Some(sha.clone()), ..ann(1, &["qrslmnov"]) }).unwrap();
+        assert!(r.want_icon);
+        assert!(!db.lookup("qrslmnov").unwrap().icon);
+        // Sent: kept, and not asked for again.
+        let r = db.apply(&fp, b"cert", "1.2.3.4", &Announce { icon_sha: Some(sha.clone()), icon: Some(pyr_proto::b64::encode(&icon)), ..ann(2, &["qrslmnov"]) }).unwrap();
+        assert!(!r.want_icon);
+        assert!(db.lookup("qrslmnov").unwrap().icon);
+        assert_eq!(db.icon("qrslmnov"), Some(icon.clone()));
+        let r = db.apply(&fp, b"cert", "1.2.3.4", &Announce { icon_sha: Some(sha.clone()), ..ann(3, &["qrslmnov"]) }).unwrap();
+        assert!(!r.want_icon, "the same icon isn't asked for again");
+        // One that isn't the SHA it claims, or isn't a PNG: not taken (and not asked for again).
+        let other = png(2);
+        let r = db.apply(&fp, b"cert", "1.2.3.4", &Announce { icon_sha: Some(icon_sha(&other)), icon: Some(pyr_proto::b64::encode(&icon)), ..ann(4, &["qrslmnov"]) }).unwrap();
+        assert!(!r.want_icon);
+        assert_eq!(db.icon("qrslmnov"), None);
+        let gif = b"GIF89a....".to_vec();
+        db.apply(&fp, b"cert", "1.2.3.4", &Announce { icon_sha: Some(icon_sha(&gif)), icon: Some(pyr_proto::b64::encode(&gif)), ..ann(5, &["qrslmnov"]) }).unwrap();
+        assert_eq!(db.icon("qrslmnov"), None);
+        // No icon any more: none shown.
+        db.apply(&fp, b"cert", "1.2.3.4", &Announce { icon_sha: Some(sha.clone()), icon: Some(pyr_proto::b64::encode(&icon)), ..ann(6, &["qrslmnov"]) }).unwrap();
+        assert!(db.icon("qrslmnov").is_some());
+        db.apply(&fp, b"cert", "1.2.3.4", &ann(7, &["qrslmnov"])).unwrap();
+        assert_eq!(db.icon("qrslmnov"), None);
+        assert!(!db.lookup("qrslmnov").unwrap().icon);
     }
 
     #[test]

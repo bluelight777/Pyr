@@ -152,9 +152,15 @@ fn start(bytes: &[u8], data_path: Option<PathBuf>) -> Result<Running, String> {
     let instance = linker.instantiate_and_start(&mut store, &module).map_err(|e| format!("the add-on didn't start: {e}"))?;
     let memory = instance.get_memory(&store, "memory").ok_or("the add-on has no memory to talk through")?;
     let need = |e: wasmi::Error| format!("it isn't a Pyr add-on (made with the plugin kit): {e}");
-    let alloc = instance.get_typed_func::<i32, i32>(&store, "ingle_alloc").map_err(need)?;
-    let free = instance.get_typed_func::<(i32, i32), ()>(&store, "ingle_free").map_err(need)?;
-    let call = instance.get_typed_func::<(i32, i32), i64>(&store, "ingle_call").map_err(need)?;
+    // `pyr_alloc`, `pyr_free` and `pyr_call` (the kit since 0.9.1), or the same under the name
+    // from before the rename (every add-on made before; see `pyr_proto::legacy`).
+    let export = |f: &str| {
+        let new = format!("pyr_{f}");
+        if instance.get_export(&store, &new).is_some() { new } else { format!("{}_{f}", pyr_proto::legacy::APP_ID) }
+    };
+    let alloc = instance.get_typed_func::<i32, i32>(&store, &export("alloc")).map_err(need)?;
+    let free = instance.get_typed_func::<(i32, i32), ()>(&store, &export("free")).map_err(need)?;
+    let call = instance.get_typed_func::<(i32, i32), i64>(&store, &export("call")).map_err(need)?;
     let data = data_path
         .as_ref()
         .and_then(|p| std::fs::read(p).ok())
@@ -402,9 +408,9 @@ mod tests {
         // Loops forever when asked what it is: out of fuel, stopped (and doesn't hang Pyr).
         let spin = wat(
             r#"(module (memory (export "memory") 1)
-                 (func (export "ingle_alloc") (param i32) (result i32) i32.const 16)
-                 (func (export "ingle_free") (param i32 i32))
-                 (func (export "ingle_call") (param i32 i32) (result i64) (loop br 0) i64.const 0))"#,
+                 (func (export "pyr_alloc") (param i32) (result i32) i32.const 16)
+                 (func (export "pyr_free") (param i32 i32))
+                 (func (export "pyr_call") (param i32 i32) (result i64) (loop br 0) i64.const 0))"#,
         );
         let started = std::time::Instant::now();
         let err = AddOn::load("spin", spin, None, Arc::new(|| {})).err().unwrap();
@@ -413,9 +419,9 @@ mod tests {
         // Claims an answer far outside its memory.
         let liar = wat(
             r#"(module (memory (export "memory") 1)
-                 (func (export "ingle_alloc") (param i32) (result i32) i32.const 16)
-                 (func (export "ingle_free") (param i32 i32))
-                 (func (export "ingle_call") (param i32 i32) (result i64) i64.const 0x7fff000000000100))"#,
+                 (func (export "pyr_alloc") (param i32) (result i32) i32.const 16)
+                 (func (export "pyr_free") (param i32 i32))
+                 (func (export "pyr_call") (param i32 i32) (result i64) i64.const 0x7fff000000000100))"#,
         );
         assert!(AddOn::load("liar", liar, None, Arc::new(|| {})).err().unwrap().contains("wasn't in its memory"));
     }

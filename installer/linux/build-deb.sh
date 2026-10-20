@@ -17,8 +17,10 @@ PKG=$WORK/pyr_${VERSION}_${ARCH}
 L=installer/linux
 
 install -Dm755 "$REL/pyr" "$PKG/usr/bin/pyr"
-# Pyr was called Ingle before 0.8.0: an Ingle updating itself reopens /usr/bin/ingle.
-ln -s pyr "$PKG/usr/bin/ingle"
+# Pyr's name before 0.8.0 (see pyr_proto::legacy): a copy from then updating itself reopens
+# /usr/bin/<that name>, and this package takes the place of that one.
+OLD=ingle
+ln -s pyr "$PKG/usr/bin/$OLD"
 install -Dm755 "$REL/pyr-mcp" "$PKG/usr/bin/pyr-mcp"
 install -Dm755 "$REL/pyr-server" "$PKG/usr/bin/pyr-server"
 install -Dm755 "$REL/examples/bot" "$PKG/usr/bin/pyr-bot"
@@ -31,6 +33,8 @@ for a in x86_64 aarch64; do
   install -Dm755 "$VPS/pyr-server-linux-$a" "$PKG/usr/lib/pyr/vps/pyr-server-linux-$a"
 done
 install -Dm644 $L/pyr.desktop "$PKG/usr/share/applications/pyr.desktop"
+# (Invite links from before the rename open Pyr too.)
+sed -i "s|^MimeType=.*|&x-scheme-handler/$OLD;|" "$PKG/usr/share/applications/pyr.desktop"
 for n in 16 32 48 64 128 256 512; do
   install -Dm644 crates/app/assets/icon/pyr-$n.png "$PKG/usr/share/icons/hicolor/${n}x${n}/apps/pyr.png"
 done
@@ -66,9 +70,9 @@ Architecture: $ARCH
 Maintainer: Firelit Games <noreply@pyr.invalid>
 Installed-Size: $(du -sk "$PKG" | cut -f1)
 Depends: $LINKED, $RUNTIME
-Conflicts: ingle
-Replaces: ingle
-Provides: ingle
+Conflicts: $OLD
+Replaces: $OLD
+Provides: $OLD
 Recommends: libvulkan1, libwayland-client0, libwayland-cursor0, libegl1
 Section: net
 Priority: optional

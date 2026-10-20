@@ -182,7 +182,8 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
     // Not logging in, just a bug report (anyone may send one where they're collected).
     if let Request::ReportBug { report } = login.req {
         let reply = match hub.take_bug_report(conn.remote_address().ip(), report) {
-            Ok(()) => frame(login.id, Event::Ok),
+            Ok(None) => frame(login.id, Event::Ok),
+            Ok(Some(title)) => frame(login.id, Event::IdeaJoined { title }),
             Err(msg) => reject(ErrorCode::RateLimited, &msg),
         };
         send.write_all(&reply).await?;
@@ -1278,6 +1279,18 @@ impl Ctx<'_> {
                 hub.channel_changed(&channel);
                 Ok(Event::Ok)
             }
+            Request::MoveChannel { channel_id, before } => {
+                self.require(perm::MANAGE_CHANNELS, "manage channels")?;
+                match db.move_channel(channel_id, before).map_err(|e| (ErrorCode::Internal, e.to_string()))? {
+                    None => Err((ErrorCode::NotFound, "No such channel.".into())),
+                    Some(changed) => {
+                        for ch in &changed {
+                            hub.channel_changed(ch);
+                        }
+                        Ok(Event::Ok)
+                    }
+                }
+            }
             Request::SetChannelAccess { channel_id, private, view_roles, read_only, post_roles } => {
                 self.require(perm::MANAGE_CHANNELS, "manage channels")?;
                 if db.channel(channel_id).is_none() {
@@ -1913,6 +1926,8 @@ impl Ctx<'_> {
                     }
                 }
                 hub.broadcast_info();
+                // (Its invite pages at pyr.gg show the icon.)
+                hub.invites_changed();
                 Ok(Event::Ok)
             }
             Request::ListBugs => {

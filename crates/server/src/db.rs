@@ -358,6 +358,13 @@ fn migrate(c: &Connection) -> Result<()> {
         }
     }
     c.execute_batch("CREATE INDEX IF NOT EXISTS plugin_submissions_author ON plugin_submissions(author_id)")?;
+    // Ideas for Pyr (feature requests) beside bug reports, and how many asked for each (0.9.1).
+    for (column, kind) in [("kind", "TEXT NOT NULL DEFAULT 'bug'"), ("asked", "INTEGER NOT NULL DEFAULT 1")] {
+        let has = c.prepare(&format!("SELECT 1 FROM pragma_table_info('bug_reports') WHERE name = '{column}'"))?.exists([])?;
+        if !has {
+            c.execute_batch(&format!("ALTER TABLE bug_reports ADD COLUMN {column} {kind}"))?;
+        }
+    }
     // Author names (0.8): the names on what was sent in signed before, first come first served.
     let filled = c.query_row("SELECT value FROM meta WHERE key = 'author_names_filled'", [], |r| r.get::<_, String>(0)).is_ok();
     if !filled {
@@ -396,6 +403,32 @@ fn migrate(c: &Connection) -> Result<()> {
         c.execute_batch("ALTER TABLE messages ADD COLUMN sealed TEXT")?;
     }
     Ok(())
+}
+
+/// The database's file in a server's data folder.
+pub const DB_FILE: &str = "pyr.db";
+
+/// The database in a data folder (`pyr.db`). One from before 0.9.1 (`legacy::DB_FILE`) is
+/// renamed first: its write-ahead log written into it, then the file (and what's left of its
+/// log) given the new name, so nothing is lost or left behind.
+pub fn path_in(dir: &Path) -> Result<std::path::PathBuf> {
+    let new = dir.join(DB_FILE);
+    let old = dir.join(pyr_proto::legacy::DB_FILE);
+    if !new.exists() && old.exists() {
+        {
+            let c = Connection::open(&old).with_context(|| format!("opening {}", old.display()))?;
+            c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(())).context("writing the database's log into it")?;
+        }
+        for ext in ["-wal", "-shm"] {
+            let (from, to) = (dir.join(format!("{}{ext}", pyr_proto::legacy::DB_FILE)), dir.join(format!("{DB_FILE}{ext}")));
+            if from.exists() {
+                std::fs::rename(&from, &to).with_context(|| format!("renaming {}", from.display()))?;
+            }
+        }
+        std::fs::rename(&old, &new).with_context(|| format!("renaming {} to {DB_FILE}", old.display()))?;
+        tracing::info!("the database is {} now (renamed from {})", new.display(), old.display());
+    }
+    Ok(new)
 }
 
 /// The author in a skin's own `skin.json` (empty when it isn't a skin, or says none).
@@ -742,8 +775,8 @@ impl Db {
     pub fn add_bug(&self, r: &pyr_proto::control::BugReport) -> Result<i64> {
         let c = self.conn.lock();
         c.execute(
-            "INSERT INTO bug_reports(created_at, title, body, app_version, os, log) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![now_ms(), r.title, r.body, r.app_version, r.os, r.log],
+            "INSERT INTO bug_reports(created_at, title, body, app_version, os, log, kind) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![now_ms(), r.title, r.body, r.app_version, r.os, r.log, if r.kind.is_bug() { "bug" } else { "idea" }],
         )?;
         Ok(c.last_insert_rowid())
     }
@@ -758,7 +791,7 @@ impl Db {
         use pyr_proto::control::{BugEntry, BugReport, BugStatus};
         let c = self.conn.lock();
         let Ok(mut q) = c.prepare(
-            "SELECT id, created_at, status, title, body, app_version, os, log FROM bug_reports \
+            "SELECT id, created_at, status, title, body, app_version, os, log, kind, asked FROM bug_reports \
              ORDER BY (status = 'new') DESC, id DESC LIMIT ?1",
         )
         else {
@@ -769,11 +802,46 @@ impl Db {
                 id: r.get(0)?,
                 created_at: r.get(1)?,
                 status: BugStatus::parse(&r.get::<_, String>(2)?).unwrap_or_default(),
-                report: BugReport { title: r.get(3)?, body: r.get(4)?, app_version: r.get(5)?, os: r.get(6)?, log: r.get(7)? },
+                report: BugReport {
+                    title: r.get(3)?,
+                    body: r.get(4)?,
+                    app_version: r.get(5)?,
+                    os: r.get(6)?,
+                    log: r.get(7)?,
+                    kind: if r.get::<_, String>(8)? == "idea" { pyr_proto::control::ReportKind::Idea } else { Default::default() },
+                },
+                asked: r.get::<_, i64>(9)? as u32,
             })
         })
         .map(|rows| rows.filter_map(|r| r.ok()).collect())
         .unwrap_or_default()
+    }
+
+    /// An idea already here that `r` is the same as (waiting, or approved): its id and title.
+    pub fn same_idea(&self, r: &pyr_proto::control::BugReport) -> Option<(i64, String)> {
+        let c = self.conn.lock();
+        let mut q = c.prepare("SELECT id, title, body FROM bug_reports WHERE kind = 'idea' AND status IN ('new', 'approved') ORDER BY id DESC LIMIT 2000").ok()?;
+        let ideas: Vec<(i64, String, String)> = q.query_map([], |x| Ok((x.get(0)?, x.get(1)?, x.get(2)?))).ok()?.filter_map(|x| x.ok()).collect();
+        ideas
+            .into_iter()
+            .map(|(id, t, b)| (pyr_proto::control::same_idea((&r.title, &r.body), (&t, &b)), id, t))
+            .filter(|(s, ..)| *s >= pyr_proto::control::SAME_IDEA)
+            .max_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, id, t)| (id, t))
+    }
+
+    /// One more asked for idea `id`: counted, and what they wrote kept with it (up to
+    /// `max_body` in all).
+    pub fn join_idea(&self, id: i64, r: &pyr_proto::control::BugReport, max_body: usize) -> Result<()> {
+        let c = self.conn.lock();
+        let body: String = c.query_row("SELECT body FROM bug_reports WHERE id = ?1", [id], |x| x.get(0))?;
+        let mut more = format!("\n\n— Also asked ({}):\n{}", r.app_version, r.title.trim());
+        if !r.body.trim().is_empty() {
+            more.push_str(&format!("\n{}", r.body.trim()));
+        }
+        let body = if body.len() + more.len() <= max_body { body + &more } else { body };
+        c.execute("UPDATE bug_reports SET asked = asked + 1, body = ?2 WHERE id = ?1", params![id, body])?;
+        Ok(())
     }
 
     /// Report `id`'s status (None: there's no such report).
@@ -1407,6 +1475,47 @@ impl Db {
 
     /// Deletes a channel and its messages; returns whether it existed and the ids of the
     /// files that were attached (to wipe).
+    /// Puts channel `id` just above `before` (one of the same kind), or last, and numbers that
+    /// kind's channels in their new order. The channels whose place changed (None: no such
+    /// channel, or `before` isn't one of its kind).
+    pub fn move_channel(&self, id: ChannelId, before: Option<ChannelId>) -> Result<Option<Vec<Channel>>> {
+        let order: Vec<(ChannelId, i64)> = {
+            let c = self.conn.lock();
+            let Some(kind): Option<i64> = c.query_row("SELECT kind FROM channels WHERE id = ?1 AND kind < 2", [id], |r| r.get(0)).optional()? else {
+                return Ok(None);
+            };
+            let mut s = c.prepare("SELECT id, position FROM channels WHERE kind = ?1 ORDER BY position, id")?;
+            let v = s.query_map([kind], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            v
+        };
+        if before == Some(id) {
+            return Ok(Some(Vec::new()));
+        }
+        let mut ids: Vec<ChannelId> = order.iter().map(|(i, _)| *i).filter(|i| *i != id).collect();
+        let at = match before {
+            None => ids.len(),
+            Some(b) => match ids.iter().position(|i| *i == b) {
+                Some(at) => at,
+                None => return Ok(None),
+            },
+        };
+        ids.insert(at, id);
+        let mut changed = Vec::new();
+        {
+            let mut c = self.conn.lock();
+            let tx = c.transaction()?;
+            for (pos, cid) in ids.iter().enumerate() {
+                let was = order.iter().find(|(i, _)| i == cid).map(|(_, p)| *p);
+                if was != Some(pos as i64) {
+                    tx.execute("UPDATE channels SET position = ?2 WHERE id = ?1", params![cid, pos as i64])?;
+                    changed.push(*cid);
+                }
+            }
+            tx.commit()?;
+        }
+        Ok(Some(changed.into_iter().filter_map(|c| self.channel(c)).collect()))
+    }
+
     pub fn delete_channel(&self, id: ChannelId) -> Result<(bool, Vec<String>)> {
         let c = self.conn.lock();
         let n = c.execute("DELETE FROM channels WHERE id = ?1 AND kind < 2", [id])?;
@@ -2161,6 +2270,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn channels_are_dragged_into_any_order() {
+        let db = Db::open_in_memory().unwrap();
+        let names = |db: &Db| db.channels().iter().filter(|c| c.kind == ChannelKind::Text).map(|c| c.name.clone()).collect::<Vec<_>>();
+        let before = names(&db);
+        let a = db.create_channel("a", ChannelKind::Text).unwrap();
+        let b = db.create_channel("b", ChannelKind::Text).unwrap();
+        let v = db.create_channel("v", ChannelKind::Voice).unwrap();
+        let mut want = before.clone();
+        want.extend(["a".to_string(), "b".to_string()]);
+        assert_eq!(names(&db), want);
+        // b above a.
+        let changed = db.move_channel(b.id, Some(a.id)).unwrap().unwrap();
+        assert!(changed.iter().any(|c| c.id == b.id) && changed.iter().any(|c| c.id == a.id));
+        let pos = |n: &str| names(&db).iter().position(|x| x == n).unwrap();
+        assert!(pos("b") < pos("a"));
+        // a to the very top.
+        let first = db.channels().iter().find(|c| c.kind == ChannelKind::Text).unwrap().id;
+        db.move_channel(a.id, Some(first)).unwrap().unwrap();
+        assert_eq!(pos("a"), 0);
+        // Last.
+        db.move_channel(a.id, None).unwrap().unwrap();
+        assert_eq!(pos("a"), names(&db).len() - 1);
+        // Where it is already: nothing changes.
+        assert!(db.move_channel(a.id, None).unwrap().unwrap().is_empty());
+        // Not among another kind's, and not a channel at all.
+        assert!(db.move_channel(a.id, Some(v.id)).unwrap().is_none());
+        assert!(db.move_channel(9999, None).unwrap().is_none());
+    }
+
+    #[test]
     fn history_paging_and_reactions() {
         let db = Db::open_in_memory().unwrap();
         let ch = db.create_channel("general", ChannelKind::Text).unwrap();
@@ -2237,6 +2376,39 @@ mod tests {
         assert_eq!(newest(general), Some((Some(third.id), Some("a".to_string()))));
         db.delete_message(third.id).unwrap();
         assert_eq!(newest(general), Some((Some(second.id), Some("b".to_string()))));
+    }
+}
+
+#[cfg(test)]
+mod rename_tests {
+    use super::*;
+
+    /// A data folder from before 0.9.1: its database (with what's still only in its log) is
+    /// renamed to pyr.db on the first start, nothing lost, nothing left with the old name.
+    #[test]
+    fn the_database_from_before_is_renamed_with_everything_in_it() {
+        let dir = std::env::temp_dir().join(format!("pyr-dbname-{}-{}", std::process::id(), now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let old = dir.join(pyr_proto::legacy::DB_FILE);
+        let ch = {
+            let db = Db::open(&old).unwrap();
+            let ch = db.create_channel("general", ChannelKind::Text).unwrap().id;
+            db.insert_user("u", "U", Role::Owner).unwrap();
+            db.insert_message(ch, "u", "kept-through-the-rename", None).unwrap();
+            // (Left open with its log: as a server that was stopped.)
+            std::mem::forget(db);
+            ch
+        };
+        let path = path_in(&dir).unwrap();
+        assert_eq!(path, dir.join(DB_FILE));
+        let db = Db::open(&path).unwrap();
+        assert_eq!(db.history(ch, None, 10).0[0].content, "kept-through-the-rename");
+        let left: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert!(!left.iter().any(|n| n.starts_with(pyr_proto::legacy::DB_FILE)), "{left:?}");
+        // Once: the next start just opens it.
+        assert_eq!(path_in(&dir).unwrap(), path);
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

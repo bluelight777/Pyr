@@ -52,7 +52,7 @@ const PAGES: &[Page] = &[
         id: 4,
         name: "Notifications",
         group: "App settings",
-        words: "notifications sounds ping chime ring ringtone calls volume test delete messages confirm mute muting",
+        words: "notifications sounds ping chime ring ringtone calls volume test delete messages confirm mute muting streamer mode stream streaming live twitch obs hide privacy",
     },
     Page {
         id: 5,
@@ -634,7 +634,8 @@ impl PyrApp {
         if !pages().any(|p| p.id == t) {
             t = 1;
         }
-        let mut report_bug = false;
+        // Report a bug (1) or Suggest a feature (2), clicked on the About page.
+        let mut about_click = 0u8;
 
         // The pages, down the left.
         let side = Rect::from_min_max(sheet.min + vec2(1.0, 1.0), pos2(sheet.left() + SIDEBAR_W, sheet.bottom() - 1.0));
@@ -671,7 +672,7 @@ impl PyrApp {
                     }
                     6 => self.claude_tab(ui, st, acts),
                     3 => windows_page(ui, &mut draft, acts),
-                    _ => report_bug = self.about_page(ui, &mut draft, acts),
+                    _ => about_click = self.about_page(ui, &mut draft, acts),
                 }
             });
         });
@@ -692,12 +693,12 @@ impl PyrApp {
         if draft != before {
             acts.push(Act::Settings(draft));
         }
-        if report_bug {
+        if about_click > 0 {
             if st.mic_test {
                 acts.push(Act::MicTest(false));
             }
             // Replaces this dialog (not "close", which would clear it).
-            self.ui.dialog = Some(self.report_bug_dialog());
+            self.ui.dialog = Some(if about_click == 1 { self.report_bug_dialog() } else { Dialog::SuggestIdea { title: String::new(), body: String::new() } });
             return;
         }
         if !*close {
@@ -1100,12 +1101,22 @@ impl PyrApp {
         toggle_row(ui, &mut draft.confirm_delete, "Ask before deleting a message", "Holding Shift when you click Delete skips the question either way.");
         heading(ui, "Muting");
         note(ui, "Right-click a channel, a server or a direct message conversation to mute it.");
+        divider(ui);
+        heading(ui, "Streamer mode");
+        toggle_row(
+            ui,
+            &mut draft.streamer_mode,
+            "Streamer mode",
+            "For when you're live: at a poker table your cards stay face down until you peek (hold Space, or point at them), and so does the \
+             hand strength meter; invite links and codes are hidden (Copy still copies them). It turns on by itself while you share your \
+             screen.",
+        );
     }
 
-    /// About Pyr: what it is and which version, updates, reporting bugs, and credits.
-    /// True when Report a bug was clicked.
-    fn about_page(&mut self, ui: &mut egui::Ui, draft: &mut Settings, acts: &mut Vec<Act>) -> bool {
-        let mut report = false;
+    /// About Pyr: what it is and which version, updates, reporting bugs and ideas, and
+    /// credits. 1 when Report a bug was clicked, 2 for Suggest a feature.
+    fn about_page(&mut self, ui: &mut egui::Ui, draft: &mut Settings, acts: &mut Vec<Act>) -> u8 {
+        let mut report = 0u8;
         ui.add_space(4.0);
         egui::Frame::new().fill(theme::SIDE()).corner_radius(12).inner_margin(20).show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -1160,8 +1171,13 @@ impl PyrApp {
                         }
                     }
                 }
-                if pyr_engine::bugs::can_report() && ui.button("Report a bug").clicked() {
-                    report = true;
+                if pyr_engine::bugs::can_report() {
+                    if ui.button("Suggest a feature").on_hover_text("An idea for Pyr. Asked for already? Yours counts as one more for it.").clicked() {
+                        report = 2;
+                    }
+                    if ui.button("Report a bug").clicked() {
+                        report = 1;
+                    }
                 }
             });
         });

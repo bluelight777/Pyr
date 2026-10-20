@@ -14,7 +14,7 @@ use crate::Shared;
 
 /// Where reports go: (host, port, server key).
 pub fn server() -> Option<(String, u16, [u8; 32])> {
-    let s = pyr_proto::env_var("BUG_SERVER").or_else(|| option_env!("PYR_BUG_SERVER").or(option_env!("INGLE_BUG_SERVER")).map(String::from))?;
+    let s = pyr_proto::env_var("BUG_SERVER").or_else(|| option_env!("PYR_BUG_SERVER").map(String::from))?;
     let (addr, key) = s.trim().split_once('/')?;
     let (host, port) = addr.rsplit_once(':')?;
     let fp = pyr_proto::b64::decode_array::<32>(key.trim())?;
@@ -66,12 +66,12 @@ pub fn scrub(log: &str) -> String {
         ("bot-", |c| c.is_ascii_alphanumeric()),
     ];
     loop {
-        // The next thing to scrub: a rule's marker, or an invite link (pyr://, ingle:// from
+        // The next thing to scrub: a rule's marker, or an invite link (pyr://, the scheme from
         // before the rename, or the part after join= in a web one: host/code/fingerprint).
         let next = rules
             .iter()
             .filter_map(|(m, f)| rest.find(m).map(|i| (i, m.len(), Some(*f))))
-            .chain(["pyr://", "ingle://", "join="].iter().filter_map(|m| rest.find(m).map(|i| (i, m.len(), None))))
+            .chain(["pyr://", pyr_proto::legacy::SCHEME, "join="].iter().filter_map(|m| rest.find(m).map(|i| (i, m.len(), None))))
             .min_by_key(|(i, _, _)| *i);
         let Some((i, len, rule)) = next else { break };
         out.push_str(&rest[..i + len]);
@@ -90,7 +90,8 @@ pub fn scrub(log: &str) -> String {
                 let mut link = &after[..end];
                 // After join= can come the app link itself, maybe percent-encoded
                 // (pyr%3A%2F%2Fhost%2Fcode%2F…): its scheme stays, the rest is taken apart below.
-                let scheme = ["pyr://", "ingle://", "pyr%3A%2F%2F", "ingle%3A%2F%2F"]
+                let old_escaped = format!("{}%3A%2F%2F", pyr_proto::legacy::APP_ID);
+                let scheme = ["pyr://", pyr_proto::legacy::SCHEME, "pyr%3A%2F%2F", old_escaped.as_str()]
                     .into_iter()
                     .find(|s| link.get(..s.len()).is_some_and(|p| p.eq_ignore_ascii_case(s)));
                 if let Some(s) = scheme {
@@ -218,7 +219,7 @@ pub fn auto_report(shared: &Arc<Shared>, what: &str, detail: &str) {
     }
     let title: String = format!("Automatic: {what}").chars().take(pyr_proto::control::BUG_TITLE_MAX / 2).collect();
     let body: String = format!("{detail}\n\n(Pyr sent this by itself when it happened.)").chars().take(pyr_proto::control::BUG_BODY_MAX / 2).collect();
-    let report = BugReport { title, body, app_version: env!("CARGO_PKG_VERSION").to_string(), os: os_name(), log: log_tail(shared, pyr_proto::control::BUG_LOG_MAX - 1000) };
+    let report = BugReport { title, body, app_version: env!("CARGO_PKG_VERSION").to_string(), os: os_name(), log: log_tail(shared, pyr_proto::control::BUG_LOG_MAX - 1000), ..Default::default() };
     let s = shared.clone();
     let what = what.to_string();
     shared.rt.spawn(async move {
@@ -273,14 +274,23 @@ pub fn last_run_trouble(previous_log: &str) -> Option<(&'static str, String)> {
 
 /// Send a report to the bug server.
 pub async fn send(shared: Arc<Shared>, report: BugReport) -> Result<()> {
+    send_report(shared, report).await.map(|_| ())
+}
+
+/// Send a report or an idea to the bug server: for an idea that was the same as one already
+/// there, that one's title.
+pub async fn send_report(shared: Arc<Shared>, report: BugReport) -> Result<Option<String>> {
     let server = server().ok_or_else(|| anyhow!("This copy of Pyr has nowhere to send bug reports."))?;
-    send_alone(shared, server, Request::ReportBug { report }, "the bug report server").await
+    match send_alone(shared, server, Request::ReportBug { report }, "the bug report server").await? {
+        Event::IdeaJoined { title } => Ok(Some(title)),
+        _ => Ok(None),
+    }
 }
 
 /// Sends one request that's sent instead of logging in (a bug report, a plugin for the
-/// library) to `server` (host, port, key) and waits for its Ok. `who` names the server in
-/// errors.
-pub(crate) async fn send_alone(shared: Arc<Shared>, server: (String, u16, [u8; 32]), req: Request, who: &str) -> Result<()> {
+/// library) to `server` (host, port, key) and waits for its answer (Ok, or for an idea,
+/// `IdeaJoined`). `who` names the server in errors.
+pub(crate) async fn send_alone(shared: Arc<Shared>, server: (String, u16, [u8; 32]), req: Request, who: &str) -> Result<Event> {
     let (host, port, fp) = server;
     let addr = crate::net::resolve(&host, port).await?;
     let endpoint = shared.endpoints.lock().map_err(|_| anyhow!("network unavailable"))?.for_addr(addr)?;
@@ -306,7 +316,7 @@ pub(crate) async fn send_alone(shared: Arc<Shared>, server: (String, u16, [u8; 3
             .map_err(|_| anyhow!("{who} didn't answer"))??
             .ok_or_else(|| anyhow!("{who} closed the connection"))?;
         match reply.ev {
-            Event::Ok => Ok(()),
+            ev @ (Event::Ok | Event::IdeaJoined { .. }) => Ok(ev),
             Event::Error { message, .. } => bail!("{message}"),
             _ => bail!("unexpected reply"),
         }
@@ -397,12 +407,14 @@ mod tests {
                    owner link pyr://play.example.com/owner-8utue4bt6ca44s5a/eIbQ7wcA9qSj\n\
                    bot link pyr://203.0.113.5/bot-abcdef0123456789/eIbQ7wcA9qSj\n\
                    plain pyr://203.0.113.5/eIbQ7wcA9qSj and é ünïcode\n\
-                   from before the rename ingle://203.0.113.5:7766/oldcodea/eIbQ7wcA9qSj\n\
+                   from before the rename OLD://203.0.113.5:7766/oldcodea/eIbQ7wcA9qSj\n\
                    web https://pyr.gg/#n=Camp&join=203.0.113.5:7766/webcodea/eIbQ7wcA9qSj\n\
-                   old web https://firelitgames.com/ingle/#join=ingle://play.example.com/inscheme/eIbQ7wcA9qSj\n\
+                   old web OLDWEB/#join=OLD://play.example.com/inscheme/eIbQ7wcA9qSj\n\
                    pasted https://pyr.gg/#join=pyr%3A%2F%2F203.0.113.5%2Fescapedc%2FeIbQ7wcA9qSj\n\
                    not a link ?join=1&x=2";
-        let s = scrub(log);
+        // (OLD: the forms from before the rename.)
+        let old = |s: &str| s.replace("OLDWEB/", pyr_proto::legacy::WEB_INVITE).replace("OLD://", pyr_proto::legacy::SCHEME);
+        let s = scrub(&old(log));
         for secret in [
             "0123456789abcdef0123",
             "AbCdEf123",
@@ -425,9 +437,9 @@ mod tests {
             "q=cat",
             "ünïcode",
             "joining pyr://",
-            "rename ingle://203.0.113.5:7766/[code]/",
+            &old("rename OLD://203.0.113.5:7766/[code]/"),
             "#n=Camp&join=203.0.113.5:7766/[code]/eIbQ7wcA9qSj",
-            "#join=ingle://play.example.com/[code]/eIbQ7wcA9qSj",
+            &old("#join=OLD://play.example.com/[code]/eIbQ7wcA9qSj"),
             "#join=pyr%3A%2F%2F203.0.113.5%2F[code]%2FeIbQ7wcA9qSj",
             "?join=1&x=2",
         ] {
