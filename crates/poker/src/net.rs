@@ -93,7 +93,7 @@ pub enum ToServer {
     /// The Game Masters and Ambassadors, my allowance today, and (for the owner) what
     /// they've given.
     Staff,
-    /// Make someone a Game Master or an Ambassador, or neither (Manage server only).
+    /// Make someone a Game Master or an Ambassador, or neither (the server's owner only).
     SetRole { uid: String, role: Option<Role> },
     /// A Game Master gives someone chips and/or a look.
     Gift { uid: String, chips: u64, item: Option<String>, note: String },
@@ -543,7 +543,7 @@ pub struct StaffLog {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StaffView {
     pub me: Option<Role>,
-    /// Manage server: may name staff and read the log.
+    /// The server's owner: may name staff and read the log.
     pub owner: bool,
     /// Chips I may give away a day (gifts and prize boxes together), and what's left today.
     pub allowance: u64,

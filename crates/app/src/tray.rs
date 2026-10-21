@@ -141,6 +141,12 @@ pub fn window_in_front() -> Option<bool> {
     }
 }
 
+/// Whether Pyr's window is hidden in the tray (not drawn while it is).
+pub fn window_hidden() -> bool {
+    let h = MAIN.load(Ordering::Relaxed);
+    h != 0 && !unsafe { IsWindowVisible(HWND(h as *mut core::ffi::c_void)) }.as_bool()
+}
+
 /// Reads the state without holding a borrow across Win32 calls (those can dispatch messages
 /// that end up back here, or in an egui frame that asks [`is_active`]).
 fn with_state<R>(f: impl FnOnce(&State) -> R) -> Option<R> {

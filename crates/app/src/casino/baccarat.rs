@@ -123,9 +123,14 @@ impl PyrApp {
                 };
                 let natural = (o.player.len() == 2 && o.player_total >= 8) || (o.banker.len() == 2 && o.banker_total >= 8);
                 let line = format!("{word}  {} to {}{}", o.player_total.max(o.banker_total), o.player_total.min(o.banker_total), if natural { "  ·  natural" } else { "" });
-                glow_text(&p, pos2(cx, py + ch * 0.95), Align2::CENTER_CENTER, &line, theme::bold_font(26.0), color, Color32::from_black_alpha(160));
+                // (Big: the size a stream's viewers can read.)
+                let big = (area.width() / 40.0).clamp(26.0, 40.0);
+                let at = pos2(cx, py + ch * 0.95 + big * 0.2);
+                let plate = Rect::from_center_size(at + vec2(0.0, if o.paid > 0 { big * 0.55 } else { 0.0 }), vec2(line.chars().count() as f32 * big * 0.56 + 60.0, if o.paid > 0 { big * 2.4 } else { big * 1.5 }));
+                p.rect_filled(plate, theme::r(18), Color32::from_black_alpha(150));
+                glow_text(&p, at, Align2::CENTER_CENTER, &line, theme::bold_font(big), color, Color32::from_black_alpha(160));
                 if o.paid > 0 {
-                    p.text(pos2(cx, py + ch * 0.95 + 30.0), Align2::CENTER_CENTER, format!("You won {}", chips_text(o.paid)), theme::bold_font(17.0), col::WIN);
+                    p.text(at + vec2(0.0, big * 1.15), Align2::CENTER_CENTER, format!("You won {}", chips_text(o.paid)), theme::bold_font(big * 0.62), col::WIN);
                 }
                 if !*settled {
                     let ui_s = &mut self.poker.casino.baccarat;
@@ -235,7 +240,6 @@ impl PyrApp {
     fn baccarat_controls(&mut self, ui: &mut egui::Ui, s: &ServerView, bar: Rect, can_bet: bool) {
         let p = ui.painter().clone();
         p.rect_filled(bar, theme::r(18), Color32::from_black_alpha(170));
-        self.chip_rack(ui, pos2(bar.left() + 16.0, bar.center().y - 26.0), 25_000);
         let bets = self.poker.casino.baccarat.bets.clone();
         let total = bets.total();
         let c = &s.poker.casino;
@@ -267,7 +271,8 @@ impl PyrApp {
         if button(ui, "Clear", 80.0, false, !busy && total > 0) {
             self.poker.casino.baccarat.bets = Bets::default();
         }
-        p.text(pos2(x - 10.0, bar.center().y), Align2::RIGHT_CENTER, format!("Bet {}", chips_text(total)), theme::bold_font(16.0), if total > super::chips_now(s) { col::LOSE } else { col::GOLD2 });
+        let color = if total > super::chips_now(s) { col::LOSE } else { col::GOLD2 };
+        self.rack_and_bet(ui, bar, x, 25_000, format!("Bet {}", chips_text(total)), color);
         if total == 0 && can_bet {
             p.text(pos2(bar.center().x, bar.top() - 14.0), Align2::CENTER_CENTER, "Pick a chip, then click Player, Banker or Tie (right-click a bet to take it off)", theme::font(12.5), col::MUTED);
         } else if total > 0 && total < 10 {

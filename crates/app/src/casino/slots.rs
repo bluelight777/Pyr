@@ -314,9 +314,9 @@ impl PyrApp {
                     }
                     if which.is_some() {
                         let msg = format!("Line {}: {} × {} pays {}", w.line + 1, w.count, sl::symbol_name(w.symbol), chips_text(w.pay));
-                        let mr = Rect::from_center_size(pos2(reels.center().x, reels.bottom() + 22.0), vec2(20.0 + msg.len() as f32 * 7.6, 28.0));
-                        p.rect_filled(mr, theme::r(14), Color32::from_black_alpha(200));
-                        p.text(mr.center(), Align2::CENTER_CENTER, msg, theme::bold_font(13.5), col::GOLD2);
+                        let mr = Rect::from_center_size(pos2(reels.center().x, reels.bottom() + 24.0), vec2(26.0 + msg.len() as f32 * 9.6, 34.0));
+                        p.rect_filled(mr, theme::r(17), Color32::from_black_alpha(210));
+                        p.text(mr.center(), Align2::CENTER_CENTER, msg, theme::bold_font(17.0), col::GOLD2);
                     }
                 }
             }
@@ -424,6 +424,10 @@ impl PyrApp {
         let total = o.paid;
         let jackpot = o.jackpot_won > 0;
         self.poker.casino.celebrate(total, o.line_bet * LINES as u64, jackpot, 0.2);
+        if total > 0 {
+            let lines = o.spins.iter().map(|s| s.wins.len()).sum::<usize>();
+            self.poker.casino.announce(format!("WIN {}", chips_text(total)), if lines > 1 { format!("{lines} winning lines") } else { String::new() }, col::GOLD2, (0.5, 0.16), 0.15);
+        }
         let big = total >= o.line_bet * LINES as u64 * 10 || jackpot;
         let ui = &mut self.poker.casino.slots;
         if big && ui.auto_left > 0 {

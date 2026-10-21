@@ -167,6 +167,9 @@ fn main() -> eframe::Result<()> {
     if profile.is_none() {
         autostart::apply(start_settings.start_with_windows);
     }
+    if autostart {
+        watchdog::started_with_windows();
+    }
     // Started with Windows: stay in the tray (the icon opens the window), like Discord.
     let hidden = autostart && cfg!(windows) && start_settings.start_hidden;
     let viewport = egui::ViewportBuilder::default()
@@ -203,7 +206,8 @@ fn main() -> eframe::Result<()> {
     let mut join = join;
     'renderers: for r in order {
         loop {
-            let options = eframe::NativeOptions { viewport: viewport.clone(), renderer: r, ..Default::default() };
+            let mut options = eframe::NativeOptions { viewport: viewport.clone(), renderer: r, ..Default::default() };
+            options.wgpu_options.on_surface_error = std::sync::Arc::new(surface_error);
             let (profile_now, join, handoff, app_title) = (profile.clone(), join.take(), handoff.clone(), title.clone());
             let (kept_now, window_now, repaint_now) = (kept.clone(), window.clone(), repaint.clone());
             #[cfg(windows)]
@@ -214,6 +218,10 @@ fn main() -> eframe::Result<()> {
                     options,
                     Box::new(move |cc| {
                         theme::install(&cc.egui_ctx);
+                        // (For `surface_error`: the graphics card's queue.)
+                        if let Some(rs) = &cc.wgpu_render_state {
+                            *GPU_QUEUE.lock().unwrap_or_else(|e| e.into_inner()) = Some(rs.queue.clone());
+                        }
                         *window_now.lock().unwrap_or_else(|e| e.into_inner()) = Some(cc.egui_ctx.clone());
                         // The engine and updater: started the first time, the same ones after.
                         let mut slot = kept_now.lock().unwrap_or_else(|e| e.into_inner());
@@ -401,6 +409,30 @@ fn init_logging(profile: Option<&str>) -> Option<std::path::PathBuf> {
             None
         }
     }
+}
+
+/// The graphics card's queue (wgpu), for `surface_error`.
+static GPU_QUEUE: std::sync::Mutex<Option<eframe::wgpu::Queue>> = std::sync::Mutex::new(None);
+
+/// A frame that couldn't be shown: the window minimized, the screen off or locked, the
+/// graphics card busy. egui has handed the frame's pictures and shapes to the graphics card's
+/// queue by then, and there they waited for the next frame that could be shown: at a casino
+/// game, which redraws 60 times a second, Pyr minimized for a minute or two piled up 10 to 17
+/// GB of them, and the window crashed (bug report 35). Sent on now, they're done with at once.
+fn surface_error(err: eframe::wgpu::SurfaceError) -> eframe::egui_wgpu::SurfaceErrorAction {
+    if let Some(q) = GPU_QUEUE.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        q.submit(std::iter::empty());
+    }
+    // (Minimized on Windows, every frame is "outdated": not worth a line each.)
+    if err != eframe::wgpu::SurfaceError::Outdated {
+        static LAST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        if last.is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(10)) {
+            *last = Some(std::time::Instant::now());
+            tracing::warn!("a frame couldn't be shown: {err}");
+        }
+    }
+    eframe::egui_wgpu::SurfaceErrorAction::SkipFrame
 }
 
 /// On a crash, write what happened to the log and tell the person where it is.

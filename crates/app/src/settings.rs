@@ -52,7 +52,7 @@ const PAGES: &[Page] = &[
         id: 4,
         name: "Notifications",
         group: "App settings",
-        words: "notifications sounds ping chime ring ringtone calls volume test delete messages confirm mute muting streamer mode stream streaming live twitch obs hide privacy",
+        words: "notifications sounds ping chime ring ringtone calls volume test delete messages confirm mute muting streamer mode stream streaming live twitch obs hide privacy camera webcam overlays stage layout",
     },
     Page {
         id: 5,
@@ -1103,14 +1103,44 @@ impl PyrApp {
         note(ui, "Right-click a channel, a server or a direct message conversation to mute it.");
         divider(ui);
         heading(ui, "Streamer mode");
+        // What's in effect: on by choice, or by itself while I share my screen (the saved choice
+        // alone showed "off" then, with my cards still face down).
+        let auto = self.streamer_auto();
+        let mut on = self.streamer_mode();
+        let was = on;
         toggle_row(
             ui,
-            &mut draft.streamer_mode,
+            &mut on,
             "Streamer mode",
-            "For when you're live: at a poker table your cards stay face down until you peek (hold Space, or point at them), and so does the \
-             hand strength meter; invite links and codes are hidden (Copy still copies them). It turns on by itself while you share your \
-             screen.",
+            if auto {
+                "On by itself: you're sharing your screen in a call. Turn it off here and it stays off until your next share. At a poker table \
+                 your cards stay face down until you peek (hold Space, or point at them); invite links and codes are hidden."
+            } else {
+                "For when you're live: at a poker table your cards stay face down until you peek (hold Space, or point at them), and so does the \
+                 hand strength meter; invite links and codes are hidden (Copy still copies them). It turns on by itself while you share your \
+                 screen."
+            },
         );
+        if on != was {
+            self.set_streamer_mode(on);
+            draft.streamer_mode = on;
+        }
+        toggle_row(
+            ui,
+            &mut draft.stream_stage,
+            "Just the game in Pyr's window",
+            "In streamer mode, while you play at Pyr Casino or a poker table, Pyr's server and channel lists are put away: a window \
+             capture shows the game and nothing of your servers. Esc brings them back.",
+        );
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Room for your camera and overlays").color(theme::TEXT()));
+            for (key, name) in [("", "None"), ("left", "Left side"), ("right", "Right side")] {
+                if ui.selectable_label(draft.stream_room == key, name).clicked() {
+                    draft.stream_room = key.to_string();
+                }
+            }
+        });
+        note(ui, "In streamer mode, a quarter of the window down that side stays clear at a game or a poker table, for your camera and overlays; the game fits itself into the rest.");
     }
 
     /// About Pyr: what it is and which version, updates, reporting bugs and ideas, and

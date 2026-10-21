@@ -823,6 +823,17 @@ impl Ctx<'_> {
         if self.can(p) { Ok(()) } else { Err((ErrorCode::Forbidden, format!("You don't have permission to {what}."))) }
     }
 
+    /// Roles are given out (made, changed, handed to people or taken back) by Manage roles,
+    /// but never by Pyr Casino's Game Masters or Ambassadors: only the server's owner names
+    /// them, and they can't hand themselves or others power through a server role either.
+    fn may_give_out_roles(&self) -> Result<(), (ErrorCode, String)> {
+        self.require(perm::MANAGE_ROLES, "manage roles")?;
+        if self.role() != Role::Owner && crate::poker::Poker::role(self.hub, &self.uid).is_some() {
+            return Err((ErrorCode::Forbidden, "Pyr Casino's staff don't give out roles: only the server's owner does.".into()));
+        }
+        Ok(())
+    }
+
     fn can(&self, p: u64) -> bool {
         self.perms() & p == p
     }
@@ -1555,7 +1566,7 @@ impl Ctx<'_> {
 
             // ---- roles
             Request::CreateRole { name, color, perms, hoist } => {
-                self.require(perm::MANAGE_ROLES, "manage roles")?;
+                self.may_give_out_roles()?;
                 let Some(name) = clean_name(&name, 32) else { return bad("role name is empty") };
                 if db.roles().len() >= 100 {
                     return bad("this server has the most roles it can have (100)");
@@ -1570,7 +1581,7 @@ impl Ctx<'_> {
                 Ok(Event::Ok)
             }
             Request::UpdateRole { role_id, name, color, perms, hoist, shift } => {
-                self.require(perm::MANAGE_ROLES, "manage roles")?;
+                self.may_give_out_roles()?;
                 let Some(mut role) = db.role(role_id) else { return Err((ErrorCode::NotFound, "No such role.".into())) };
                 if !self.can_manage_role(&role) {
                     return Err((ErrorCode::Forbidden, "That role is at or above your own highest role.".into()));
@@ -1619,7 +1630,7 @@ impl Ctx<'_> {
                 Ok(Event::Ok)
             }
             Request::DeleteRole { role_id } => {
-                self.require(perm::MANAGE_ROLES, "manage roles")?;
+                self.may_give_out_roles()?;
                 let Some(role) = db.role(role_id) else { return Ok(Event::Ok) };
                 if !self.can_manage_role(&role) {
                     return Err((ErrorCode::Forbidden, "That role is at or above your own highest role.".into()));
@@ -1636,7 +1647,7 @@ impl Ctx<'_> {
                 Ok(Event::Ok)
             }
             Request::SetMemberRoles { user_id, roles } => {
-                self.require(perm::MANAGE_ROLES, "manage roles")?;
+                self.may_give_out_roles()?;
                 let Some(target) = db.get_user(&user_id).filter(|u| !u.banned) else {
                     return Err((ErrorCode::NotFound, "No such member.".into()));
                 };
@@ -2160,6 +2171,51 @@ mod tests {
 
     fn forbidden(r: Reply) -> bool {
         matches!(r, Err((ErrorCode::Forbidden, _)))
+    }
+
+    #[test]
+    fn only_the_owner_names_casino_staff_and_staff_give_out_no_roles() {
+        use pyr_poker::net::{Role as Staff, ToServer};
+        let hub = hub();
+        let (owner, admin, gm, amb, bob) = (uid(), uid(), uid(), uid(), uid());
+        hub.db.insert_user(&owner, "Owner", Role::Owner).unwrap();
+        hub.db.insert_user(&admin, "Admin", Role::Admin).unwrap();
+        hub.db.insert_user(&gm, "Game Master", Role::Admin).unwrap();
+        hub.db.insert_user(&amb, "Ambassador", Role::Member).unwrap();
+        hub.db.insert_user(&bob, "Bob", Role::Member).unwrap();
+        let managers = hub.db.create_role("Role managers", 0, perm::MANAGE_ROLES, false).unwrap();
+        hub.db.set_member_roles(&amb, &[managers.id]).unwrap();
+        let set = |who: &str, them: &str, role: Option<Staff>| hub.poker.handle(&hub, who, true, ToServer::SetRole { uid: them.into(), role });
+        // The owner names Game Masters and Ambassadors; an admin can't, nor can a Game Master.
+        assert!(set(&owner, &gm, Some(Staff::GameMaster)).is_ok());
+        assert!(set(&owner, &amb, Some(Staff::Ambassador)).is_ok());
+        assert!(set(&admin, &bob, Some(Staff::GameMaster)).unwrap_err().contains("owner"));
+        assert!(set(&gm, &bob, Some(Staff::GameMaster)).unwrap_err().contains("owner"));
+        assert!(set(&gm, &bob, Some(Staff::Ambassador)).is_err());
+        assert!(set(&gm, &amb, None).is_err(), "nor take a role away");
+        assert_eq!(crate::poker::Poker::role(&hub, &bob), None);
+        // Staff hand out no server roles either, whatever their powers.
+        let helpers = hub.db.create_role("Helpers", 0, 0, false).unwrap();
+        for who in [&gm, &amb] {
+            let mut c = ctx(&hub, who);
+            assert!(forbidden(c.handle(Request::SetMemberRoles { user_id: bob.clone(), roles: vec![helpers.id] })));
+            assert!(forbidden(c.handle(Request::CreateRole { name: "Mine".into(), color: 0, perms: 0, hoist: false })));
+            assert!(forbidden(c.handle(Request::UpdateRole { role_id: helpers.id, name: Some("Renamed".into()), color: None, perms: None, hoist: None, shift: 0 })));
+            assert!(forbidden(c.handle(Request::DeleteRole { role_id: helpers.id })));
+            assert!(forbidden(c.handle(Request::SetRole { user_id: bob.clone(), role: Role::Admin })));
+        }
+        assert!(hub.db.member_roles(&bob).is_empty());
+        // An admin who isn't staff still manages roles; so does the owner.
+        assert!(ctx(&hub, &admin).handle(Request::SetMemberRoles { user_id: bob.clone(), roles: vec![helpers.id] }).is_ok());
+        assert!(ctx(&hub, &owner).handle(Request::SetMemberRoles { user_id: bob.clone(), roles: vec![] }).is_ok());
+        // What the Staff page offers: naming staff and the log, to the owner only.
+        let view = |who: &str| match hub.poker.handle(&hub, who, true, ToServer::Staff) {
+            Ok(Some(pyr_poker::net::ToApp::Staff { view })) => view,
+            other => panic!("{other:?}"),
+        };
+        assert!(view(&owner).owner);
+        assert!(!view(&admin).owner && !view(&gm).owner);
+        assert!(view(&gm).log.is_empty() && !view(&owner).log.is_empty());
     }
 
     #[test]

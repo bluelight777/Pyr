@@ -22,6 +22,23 @@ pub fn quitting() {
     QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
+/// When Pyr was started by Windows at sign-in (see `started_with_windows`).
+#[cfg_attr(not(windows), allow(dead_code))]
+static WITH_WINDOWS: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Pyr was started by Windows at sign-in: a short freeze in its first minutes, while the PC is
+/// still starting everything else, is logged but not reported (bug report 21: 6 seconds just
+/// after sign-in, with Pyr itself all but idle).
+pub fn started_with_windows() {
+    let _ = WITH_WINDOWS.set(std::time::Instant::now());
+}
+
+/// Whether a freeze of `took` now is the PC starting up rather than Pyr.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn while_windows_starts(took: std::time::Duration) -> bool {
+    WITH_WINDOWS.get().is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(180)) && took < std::time::Duration::from_secs(15)
+}
+
 /// What the window is doing now (named in the log if it hangs). Never waits.
 pub fn step(s: &'static str) {
     if let Ok(mut g) = STEP.try_lock() {
@@ -222,8 +239,10 @@ mod win {
                 (true, Some(t)) => {
                     tracing::info!("Pyr's window responds again after {} s", t.elapsed().as_secs());
                     // A freeze it came out of is a bug too: reported by itself (with the log of
-                    // what it was doing).
-                    if t.elapsed() >= Duration::from_secs(4) {
+                    // what it was doing). Not one while Windows is still starting up.
+                    if t.elapsed() >= Duration::from_secs(4) && super::while_windows_starts(t.elapsed()) {
+                        tracing::info!("(not reported: Windows was still starting up)");
+                    } else if t.elapsed() >= Duration::from_secs(4) {
                         pyr_engine::bugs::auto_report(
                             &engine.shared,
                             "Pyr stopped responding for a while",

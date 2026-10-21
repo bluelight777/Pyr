@@ -12,3 +12,24 @@
 18 "Your skin isn't installed" after the update to Pyr. Fixed in 0.8.1.
 19 "Your skin isn't installed" after the update to Pyr. Fixed in 0.8.1.
 20 Quitting to install an update was reported as Pyr freezing. Fixed in 0.8.1.
+21 Pyr froze for 6 seconds just after Windows started (Pyr itself was idle; Windows was still starting everything else). From 0.11.0 a short freeze in the first minutes after Pyr starts with Windows is noted in the log, not reported.
+22 Your speakers stopped and couldn't be opened again ("Cannot change thread mode after it is set"). Fixed in 0.11.0: Pyr opens sound devices the way Windows needs, and follows the default ones itself.
+23 The microphone couldn't be opened after the speakers went away ("Cannot change thread mode after it is set"). Fixed in 0.11.0.
+24 Your speakers stopped and couldn't be opened again ("Cannot change thread mode after it is set"). Fixed in 0.11.0.
+25 The microphone couldn't be opened ("Cannot change thread mode after it is set"). Fixed in 0.11.0.
+26 The microphone couldn't be opened ("Cannot change thread mode after it is set"). Fixed in 0.11.0.
+27 My voice went up and down for the others. Fixed in 0.11.0: the echo canceller no longer turns your voice down while others talk or music plays.
+28 "Easy on the sounds" was reported as an error. Fixed in 0.11.0: it's the server's limit on sounds, shown as a notice and not reported.
+29 "Easy on the sounds" was reported as an error. Fixed in 0.11.0.
+30 "Your skin couldn't be put on: it isn't installed" (Pyr 0.8.0). Fixed in 0.8.1: a missing skin quietly goes back to Campfire.
+31 "Your skin couldn't be put on: it isn't installed" (Pyr 0.8.0). Fixed in 0.8.1.
+32 My voice went up and down for the others. Fixed in 0.11.0: the echo canceller no longer turns your voice down while others talk or music plays.
+33 My voice went up and down for the others. Fixed in 0.11.0.
+34 My voice went up and down for the others. Fixed in 0.11.0.
+35 Pyr crashed after taking 10 to 17 GB of memory while it was minimized at a casino game. Fixed in 0.11.0: frames that can't be shown no longer pile up, and nothing is drawn while Pyr is minimized.
+36 My voice went up and down for the others. Fixed in 0.11.0.
+37 My voice went up and down for the others. Fixed in 0.11.0.
+38 My voice went up and down for the others. Fixed in 0.11.0.
+39 My voice went up and down for the others. Fixed in 0.11.0.
+40 My voice went up and down for the others. Fixed in 0.11.0.
+41 My voice went up and down for the others. Fixed in 0.11.0.

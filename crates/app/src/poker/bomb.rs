@@ -11,7 +11,7 @@ use eframe::egui::{self, Align2, Color32, Pos2, Rect, Sense, Shape, Stroke, Stro
 use pyr_engine::poker_sfx::Cue;
 use pyr_engine::state::ServerView;
 use pyr_poker::net::{ToServer, TourneyId, TourneyPhase, TourneyView};
-use pyr_poker::tourney::{BOMB_BUY_INS, BOMB_FUSE_MS, BOMB_WAIT_MS, WHEEL_MS};
+use pyr_poker::tourney::{BOMB_BUY_INS, BOMB_FUSE_MS, BOMB_SEATS, BOMB_WAIT_MS, WHEEL_MS};
 
 use super::cards::chips_text;
 use crate::app::PyrApp;
@@ -19,9 +19,9 @@ use crate::casino::{col, ease_out, glow_text, radial, vgrad_round};
 use crate::theme;
 
 const TAU: f32 = std::f32::consts::TAU;
-/// The wheel's segments, clockwise from the top: mostly 2s, the big ones few (the odds are the
+/// The wheel's segments, clockwise from the top: mostly 3s, the big ones few (the odds are the
 /// server's; this is the picture).
-const WHEEL: [u32; 16] = [2, 3, 2, 5, 2, 10, 2, 3, 2, 25, 2, 5, 2, 100, 3, 1000];
+const WHEEL: [u32; 16] = [3, 5, 3, 8, 3, 15, 3, 5, 3, 40, 3, 8, 3, 150, 5, 1000];
 /// How long the wheel turns (its sound's ding lands on the stop).
 const SPIN_S: f32 = 4.05;
 /// The bang, then the warning stays.
@@ -46,12 +46,12 @@ fn wall() -> u64 {
 /// A multiplier's color on the wheel.
 fn seg_color(m: u32) -> Color32 {
     match m {
-        2 => Color32::from_rgb(0x24, 0x3a, 0x7a),
-        3 => Color32::from_rgb(0x1c, 0x6a, 0x7a),
-        5 => Color32::from_rgb(0x1f, 0x7a, 0x48),
-        10 => Color32::from_rgb(0x6a, 0x2a, 0x9a),
-        25 => Color32::from_rgb(0xd0, 0x6a, 0x14),
-        100 => Color32::from_rgb(0xc0, 0x1c, 0x2e),
+        3 => Color32::from_rgb(0x24, 0x3a, 0x7a),
+        5 => Color32::from_rgb(0x1c, 0x6a, 0x7a),
+        8 => Color32::from_rgb(0x1f, 0x7a, 0x48),
+        15 => Color32::from_rgb(0x6a, 0x2a, 0x9a),
+        40 => Color32::from_rgb(0xd0, 0x6a, 0x14),
+        150 => Color32::from_rgb(0xc0, 0x1c, 0x2e),
         _ => Color32::from_rgb(0xe0, 0xa8, 0x20),
     }
 }
@@ -193,11 +193,14 @@ impl PyrApp {
             bomb_icon(&p, r.left_center() + vec2(68.0, 18.0), 40.0, t, true, 0.55 + 0.45 * (t * 0.25).sin().abs());
             let x = r.left() + 170.0;
             glow_text(&p, pos2(x, r.top() + 30.0), Align2::LEFT_CENTER, "TIME BOMB", theme::bold_font(24.0), col::GOLD2, Color32::from_rgba_unmultiplied(0xff, 0x50, 0x10, 90));
-            p.text(pos2(x + 168.0, r.top() + 31.0), Align2::LEFT_CENTER, if playing_now > 0 { format!("{playing_now} going off now") } else { "Sit & go · 3 players".to_string() }, theme::bold_font(12.0), col::MUTED);
-            let text_w = (w - 170.0 - 380.0).max(260.0);
+            p.text(pos2(x + 168.0, r.top() + 31.0), Align2::LEFT_CENTER, if playing_now > 0 { format!("{playing_now} going off now") } else { format!("Sit & go · {BOMB_SEATS} players") }, theme::bold_font(12.0), col::MUTED);
+            // (What it says ends before the right side's buttons and words.)
+            let hint = mine.is_none().then(|| p.layout_no_wrap("Starts with five in; bots fill empty seats after 30 s".to_string(), theme::font(12.5), col::MUTED));
+            let right_w = hint.as_ref().map(|g| g.size().x).unwrap_or(0.0).max(356.0) + 24.0;
+            let text_w = (r.right() - 20.0 - right_w - x).max(240.0);
             let galley = p.layout(
                 format!(
-                    "Three players, 500 chips each, the blinds up every minute. The wheel picks the prize, up to 1,000 times the buy-in, and the winner takes it all. Get the chip lead before the fuse burns down: after {} minutes the bomb goes off and every hand is all in.",
+                    "Five players, 500 chips each, the blinds up every minute. The wheel picks the prize, up to 1,000 times the buy-in, and the winner takes it all. Get the chip lead before the fuse burns down: after {} minutes the bomb goes off and every hand is all in.",
                     BOMB_FUSE_MS / 60_000
                 ),
                 theme::font(13.0),
@@ -213,9 +216,10 @@ impl PyrApp {
                     let bots_in = (v.rules.start_ms.saturating_sub(wall()) / 1000).min(BOMB_WAIT_MS / 1000);
                     p.text(pos2(right, r.top() + 40.0), Align2::RIGHT_CENTER, format!("Waiting for players · {n} of {}", v.rules.max_players), theme::bold_font(16.0), col::GOLD2);
                     p.text(pos2(right, r.top() + 64.0), Align2::RIGHT_CENTER, format!("Bots take any empty seats in 0:{bots_in:02}"), theme::font(13.0), col::MUTED);
-                    // Three seats: who's in.
-                    for k in 0..v.rules.max_players {
-                        let c = pos2(right - 200.0 + k as f32 * 40.0 + 20.0, r.top() + 98.0);
+                    // The seats: who's in (left of the Leave button).
+                    let seats = v.rules.max_players;
+                    for k in 0..seats {
+                        let c = pos2(right - 112.0 - (seats - 1 - k) as f32 * 38.0, r.top() + 98.0);
                         let filled = k < n;
                         p.circle_filled(c, 15.0, if filled { col::EMBER } else { Color32::from_white_alpha(14) });
                         p.circle_stroke(c, 15.0, Stroke::new(1.5f32, if filled { col::GOLD2 } else { Color32::from_white_alpha(50) }));
@@ -259,7 +263,9 @@ impl PyrApp {
                             self.engine.poker(&s.key, ToServer::TimeBomb { buy_in: *buy_in });
                         }
                     }
-                    p.text(pos2(right, r.top() + 64.0), Align2::RIGHT_CENTER, "Pick a buy-in: you're seated as soon as there are three", theme::font(12.5), col::MUTED);
+                    if let Some(g) = hint {
+                        p.galley(pos2(right - g.size().x, r.top() + 64.0 - g.size().y / 2.0), g, col::MUTED);
+                    }
                 }
             }
         });
@@ -405,7 +411,7 @@ mod tests {
     #[test]
     fn the_wheel_lands_on_the_multiplier_under_the_pointer() {
         let seg = TAU / WHEEL.len() as f32;
-        for m in [2u32, 3, 5, 10, 25, 100, 1000] {
+        for (m, _) in pyr_poker::tourney::MULTIPLIERS {
             for spun in [0u64, 1, 7, 12_345, 99_999] {
                 let i = landing(m, spun);
                 assert_eq!(WHEEL[i], m);

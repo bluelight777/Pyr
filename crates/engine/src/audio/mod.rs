@@ -284,6 +284,8 @@ const TELL_AFTER: Duration = Duration::from_millis(1500);
 const FALL_BACK_AFTER: Duration = if cfg!(test) { Duration::from_secs(2) } else { Duration::from_secs(10) };
 /// How often a stand-in checks whether the device asked for is back.
 const SWITCH_BACK_EVERY: Duration = if cfg!(test) { Duration::from_secs(1) } else { Duration::from_secs(5) };
+/// How often the default device's checked for being still the default (when none is chosen).
+const DEFAULT_CHECK_EVERY: Duration = Duration::from_secs(2);
 
 /// How long to wait before opening a device again, after `failures` tries in a row.
 fn retry_delay(failures: u32) -> Duration {
@@ -309,6 +311,17 @@ trait Device: Send + 'static {
     fn stand_in(&self) -> bool;
     /// Why it should be reopened, if it should.
     fn trouble(&mut self, stall: Duration) -> Option<String>;
+    /// Opened as the default device (none was chosen): its id.
+    fn default_id(&self) -> Option<&str> {
+        None
+    }
+    /// The default device's id right now (when this kind of device follows the default).
+    fn current_default() -> Option<String>
+    where
+        Self: Sized,
+    {
+        None
+    }
 }
 
 impl Device for InputDevice {
@@ -323,6 +336,14 @@ impl Device for InputDevice {
     fn trouble(&mut self, stall: Duration) -> Option<String> {
         InputDevice::trouble(self, stall)
     }
+
+    fn default_id(&self) -> Option<&str> {
+        self.default_id.as_deref()
+    }
+
+    fn current_default() -> Option<String> {
+        device::default_id(true)
+    }
 }
 
 impl Device for OutputDevice {
@@ -336,6 +357,14 @@ impl Device for OutputDevice {
 
     fn trouble(&mut self, stall: Duration) -> Option<String> {
         OutputDevice::trouble(self, stall)
+    }
+
+    fn default_id(&self) -> Option<&str> {
+        self.default_id.as_deref()
+    }
+
+    fn current_default() -> Option<String> {
+        device::default_id(false)
     }
 }
 
@@ -375,6 +404,8 @@ struct Link<T: Device> {
     fall_back_from: Instant,
     /// A try in progress (on a thread of its own: a stuck driver can take seconds to answer).
     trying: Option<mpsc::Receiver<anyhow::Result<T>>>,
+    /// Asking which device is the default now (see `step`).
+    checking: Option<mpsc::Receiver<Option<String>>>,
     told: bool,
 }
 
@@ -395,6 +426,7 @@ impl<T: Device> Link<T> {
             next_check: now + SWITCH_BACK_EVERY,
             fall_back_from: now,
             trying: None,
+            checking: None,
             told: false,
         };
         match (link.open)(true) {
@@ -447,10 +479,32 @@ impl<T: Device> Link<T> {
                 self.told = false;
                 return Change::Lost;
             }
+            let (stand_in, default_id) = (d.stand_in(), d.default_id().map(String::from));
             // Standing in for the device asked for: see now and then whether it's back.
-            if d.stand_in() && self.trying.is_none() && now >= self.next_check {
+            if stand_in && self.trying.is_none() && now >= self.next_check {
                 self.next_check = now + SWITCH_BACK_EVERY;
                 self.try_open(false, now);
+            }
+            // The default device, with none chosen: when another becomes the default (in
+            // Windows' sound settings, or headphones plugged in), switch to it. (Asked on a
+            // thread of its own: this one keeps the sound going.)
+            if let Some(rx) = &self.checking {
+                match rx.try_recv() {
+                    Ok(cur) => {
+                        self.checking = None;
+                        if cur.is_some() && cur != default_id && self.trying.is_none() {
+                            self.try_open(false, now);
+                        }
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {}
+                    Err(mpsc::TryRecvError::Disconnected) => self.checking = None,
+                }
+            } else if !stand_in && self.trying.is_none() && now >= self.next_check && default_id.is_some() {
+                self.next_check = now + DEFAULT_CHECK_EVERY;
+                let (tx, rx) = mpsc::channel();
+                if std::thread::Builder::new().name(format!("pyr-default-{}", self.what)).spawn(move || drop(tx.send(T::current_default()))).is_ok() {
+                    self.checking = Some(rx);
+                }
             }
             return Change::None;
         }
@@ -479,12 +533,19 @@ impl<T: Device> Link<T> {
     /// A try came back with a device.
     fn got(&mut self, d: T, now: Instant) -> Change {
         if let Some(cur) = &self.dev {
-            // A look for the device asked for, while another stands in for it.
-            if d.stand_in() || !cur.stand_in() {
+            // A look for the device asked for, while another stands in for it; or the new
+            // default device, with none chosen.
+            let back = cur.stand_in() && !d.stand_in();
+            let new_default = !cur.stand_in() && cur.default_id().is_some() && d.default_id().is_some() && cur.default_id() != d.default_id();
+            if !back && !new_default {
                 crate::drop_later(d);
                 return Change::None;
             }
-            info!("{} “{}” is back; switching to it from “{}”", self.what, d.name(), cur.name());
+            if back {
+                info!("{} “{}” is back; switching to it from “{}”", self.what, d.name(), cur.name());
+            } else {
+                info!("the default {} is “{}” now; switching to it from “{}”", self.what, d.name(), cur.name());
+            }
             crate::drop_later(self.dev.take());
         } else {
             let down = self.down_since.map(|t| now.duration_since(t)).unwrap_or_default();

@@ -285,11 +285,11 @@ impl PyrApp {
                 // The stickman's call, over the dice, on a dark plate so it reads on any part of
                 // the layout.
                 let text = call(o);
-                let galley = p.layout_no_wrap(text.clone(), theme::bold_font(28.0), col::GOLD2);
+                let galley = p.layout_no_wrap(text.clone(), theme::bold_font(36.0), col::GOLD2);
                 let plate = Rect::from_center_size(pos2(land.x + 37.0, land.y - 66.0), galley.size() + vec2(36.0, 14.0));
                 p.rect_filled(plate, theme::r(14), Color32::from_black_alpha((200.0 * a) as u8));
                 p.rect_stroke(plate, theme::r(14), Stroke::new(1.0f32, col::GOLD.gamma_multiply(0.6 * a)), StrokeKind::Inside);
-                glow_text(&p, plate.center(), Align2::CENTER_CENTER, &text, theme::bold_font(28.0), col::GOLD2.gamma_multiply(a), Color32::from_black_alpha((120.0 * a) as u8));
+                glow_text(&p, plate.center(), Align2::CENTER_CENTER, &text, theme::bold_font(36.0), col::GOLD2.gamma_multiply(a), Color32::from_black_alpha((120.0 * a) as u8));
                 // What the roll decided, under the dice.
                 let lines: Vec<(String, Color32)> = o
                     .decided
@@ -303,11 +303,11 @@ impl PyrApp {
                     })
                     .collect();
                 if !lines.is_empty() {
-                    let wmax = lines.iter().map(|(t, _)| t.len()).max().unwrap_or(0) as f32 * 8.2 + 28.0;
-                    let list = Rect::from_min_size(pos2(land.x + 37.0 - wmax / 2.0, land.y + 40.0), vec2(wmax, lines.len() as f32 * 21.0 + 12.0));
-                    p.rect_filled(list, theme::r(12), Color32::from_black_alpha((190.0 * a) as u8));
+                    let wmax = lines.iter().map(|(t, _)| t.len()).max().unwrap_or(0) as f32 * 9.8 + 32.0;
+                    let list = Rect::from_min_size(pos2(land.x + 37.0 - wmax / 2.0, land.y + 40.0), vec2(wmax, lines.len() as f32 * 25.0 + 14.0));
+                    p.rect_filled(list, theme::r(12), Color32::from_black_alpha((200.0 * a) as u8));
                     for (i, (t, color)) in lines.iter().enumerate() {
-                        p.text(pos2(list.center().x, list.top() + 16.0 + i as f32 * 21.0), Align2::CENTER_CENTER, t, theme::bold_font(14.0), color.gamma_multiply(a));
+                        p.text(pos2(list.center().x, list.top() + 19.0 + i as f32 * 25.0), Align2::CENTER_CENTER, t, theme::bold_font(17.0), color.gamma_multiply(a));
                     }
                 }
             }
@@ -333,7 +333,6 @@ impl PyrApp {
     fn craps_controls(&mut self, ui: &mut egui::Ui, s: &ServerView, bar: Rect, rolling: bool) {
         let p = ui.painter().clone();
         p.rect_filled(bar, theme::r(18), Color32::from_black_alpha(170));
-        self.chip_rack(ui, pos2(bar.left() + 16.0, bar.center().y - 26.0), 5_000);
         let c = &s.poker.casino;
         let table = c.craps.clone();
         let desired = self.poker.casino.craps.desired.clone().unwrap_or_default();
@@ -367,6 +366,6 @@ impl PyrApp {
             }
             self.poker.casino.craps.desired = Some(want);
         }
-        p.text(pos2(x - 10.0, bar.center().y), Align2::RIGHT_CENTER, format!("On the table {}", chips_text(on_table)), theme::bold_font(16.0), col::GOLD2);
+        self.rack_and_bet(ui, bar, x, 5_000, format!("On the table {}", chips_text(on_table)), col::GOLD2);
     }
 }

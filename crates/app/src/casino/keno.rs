@@ -167,9 +167,12 @@ impl PyrApp {
             && let Outcome::Keno(o) = &r.outcome
         {
             let line = format!("Caught {} of {}", o.hits.len(), o.picks.len());
-            glow_text(&p, pos2(side.center().x, side.bottom() - 54.0), Align2::CENTER_CENTER, &line, theme::bold_font(22.0), Color32::WHITE, Color32::from_black_alpha(140));
-            p.text(pos2(side.center().x, side.bottom() - 24.0), Align2::CENTER_CENTER, if o.paid > 0 { format!("You won {}", chips_text(o.paid)) } else { "No win this time".into() }, theme::bold_font(16.0), if o.paid > 0 { col::WIN } else { col::MUTED });
+            glow_text(&p, pos2(side.center().x, side.bottom() - 62.0), Align2::CENTER_CENTER, &line, theme::bold_font(30.0), Color32::WHITE, Color32::from_black_alpha(140));
+            p.text(pos2(side.center().x, side.bottom() - 26.0), Align2::CENTER_CENTER, if o.paid > 0 { format!("You won {}", chips_text(o.paid)) } else { "No win this time".into() }, theme::bold_font(21.0), if o.paid > 0 { col::WIN } else { col::MUTED });
             if !*settled {
+                // Called out over the board too, the size a stream's viewers can read.
+                let (title, color) = if o.paid > 0 { (format!("{} OF {} · WIN {}", o.hits.len(), o.picks.len(), chips_text(o.paid)), col::GOLD2) } else { (format!("{} OF {}", o.hits.len(), o.picks.len()), col::TEXT) };
+                self.poker.casino.announce(title, if o.paid > 0 { String::new() } else { "No win this time".to_string() }, color, (0.32, 0.42), 0.1);
                 let ui_s = &mut self.poker.casino.keno;
                 if let Some(sh) = ui_s.show.as_mut() {
                     sh.2 = true;
@@ -194,7 +197,6 @@ impl PyrApp {
         // The controls.
         let cb = Rect::from_min_max(pos2(area.left() + 20.0, area.bottom() - 84.0), pos2(area.right() - 20.0, area.bottom() - 14.0));
         p.rect_filled(cb, theme::r(18), Color32::from_black_alpha(170));
-        self.chip_rack(ui, pos2(cb.left() + 16.0, cb.center().y - 26.0), 500);
         let bet = self.poker.casino.keno.chips;
         let picked = self.poker.casino.chip;
         let auto = self.poker.casino.keno.auto_left;
@@ -251,11 +253,12 @@ impl PyrApp {
             self.poker.casino.keno.chips = (bet + picked).min(1_000);
         }
         // The bet (right-click it for the least).
-        let br = Rect::from_min_max(pos2(x - 110.0, cb.center().y - 16.0), pos2(x - 4.0, cb.center().y + 16.0));
-        let bresp = ui.interact(br, ui.id().with("kn-bet"), Sense::click());
-        p.text(pos2(x - 10.0, cb.center().y), Align2::RIGHT_CENTER, format!("Bet {}", chips_text(bet)), theme::bold_font(16.0), if bet > super::chips_now(s) { col::LOSE } else { col::GOLD2 });
-        if bresp.on_hover_text("Right-click: back to 1").secondary_clicked() && !busy {
-            self.poker.casino.keno.chips = 1;
+        let color = if bet > super::chips_now(s) { col::LOSE } else { col::GOLD2 };
+        if let Some(br) = self.rack_and_bet(ui, cb, x, 500, format!("Bet {}", chips_text(bet)), color) {
+            let bresp = ui.interact(br.expand2(vec2(6.0, 8.0)), ui.id().with("kn-bet"), Sense::click());
+            if bresp.on_hover_text("Right-click: back to 1").secondary_clicked() && !busy {
+                self.poker.casino.keno.chips = 1;
+            }
         }
     }
 }

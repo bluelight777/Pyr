@@ -239,6 +239,19 @@ Libraries: `cpal` (WASAPI/ALSA/CoreAudio), `sonora` (pure-Rust port of WebRTC's 
 processing: AEC3, NS, AGC2, high-pass), `nnnoiseless` (RNNoise), `deep_filter` with `tract`
 (DeepFilterNet3, its model built in), `opus` (libopus 1.6).
 
+`sonora` is vendored (`vendor/sonora`, see its `PYR.md`) for one addition: AEC3's detailed
+settings can be changed (`capture::tune_aec3`). With WebRTC's defaults the canceller first
+takes the echo path to be as loud as the speakers, and with headphones (no echo at all) it
+took every loud moment from them as echo and your voice out with it, 15 to 90 dB for 200 ms at
+a time (0.11.0: `default_gain` 0.1, `default_len` 0.5, the HMM transparent mode;
+`examples/aec_eval.rs` measures it, `PYR_AB=aectune` for the defaults).
+
+Devices are looked up and opened from COM's multithreaded apartment (`device::com_mta`): cpal
+makes a thread single-threaded otherwise, and Windows' default devices opened from such a
+thread failed with "Cannot change thread mode after it is set". The default device is opened
+as itself, not cpal's stand-in for "whatever's default", and `Link` switches when Windows'
+default changes (checked every 2 s, off the audio thread).
+
 **Stream sound** has its own thread: 48 kHz stereo capture, Opus 128 kbps stereo
 (`Application::Audio`), paused during silence. On Windows it uses WASAPI *process
 loopback*: whole-screen shares capture every process except Pyr's own process tree,
@@ -432,7 +445,7 @@ and can't reach the person's servers or messages. Settings → Claude adds it to
 app's `claude_desktop_config.json` (keeping everything else there, with a copy of the file
 as it was) or gives the `claude mcp add` line for Claude Code.
 
-## Pyr Casino (0.9, 0.10)
+## Pyr Casino (0.9 to 0.11)
 
 Poker and the casino games run on the server, for play chips kept in each member's record in
 the server's database (`crates/poker` has the rules, `crates/server/src/poker.rs` and
@@ -455,10 +468,25 @@ client's, `crates/app/src/poker` and `casino` the screens).
   prize pool; the same week's total sets Game Masters' and Ambassadors' daily allowances.
 - **Tournaments** (`poker::tourney`) seat people across tables, raise the blinds, balance and
   break tables, and pay the top places; the final table stays up 7 seconds after the end.
-  **Time Bombs** are three-seat tournaments the house starts on demand: bots take seats nobody
-  takes within 30 seconds, a weighted wheel (`tourney::MULTIPLIERS`, about 2.91 buy-ins back
-  for three paid in) sets the prize, and when the fuse runs out the tables' `bomb` flag makes
+  **Time Bombs** are five-seat tournaments the house starts on demand: bots take seats nobody
+  takes within 30 seconds, a weighted wheel (`tourney::MULTIPLIERS`, about 4.85 buy-ins back
+  for five paid in) sets the prize, and when the fuse runs out the tables' `bomb` flag makes
   every later hand all in (`Room::tick` pushes for everyone; people's own actions are refused).
+- **Staff**: only the server's owner names Game Masters and Ambassadors (`SetRole`), and they
+  can't make, change or hand out the server's own roles either (`Ctx::may_give_out_roles`).
+- **Streamer mode** at a game or a table (0.11): `staged` puts Pyr's own lists away while it's
+  open (the casino's fullscreen path, without going fullscreen), `stream_split` keeps a
+  full-height column clear for a camera and overlays (`Settings::stream_room`; the game's
+  own UI is clipped to the rest, so nothing spills into it), and `CasinoUi::announce` calls a
+  round's result out over the table. In a game that narrow, `CasinoUi::rack_and_bet` lets the
+  bet in words, then the biggest chips, make way rather than drawing one over the other.
+- **Drawing for nobody**: casino games redraw 60 times a second. Frames run while Pyr is
+  minimized too, and on Windows they can't be shown; egui-wgpu hands a frame's shapes and
+  pictures to the graphics card's queue before it asks for the window's surface, and when that
+  fails they waited in the queue for the next submit, 10 to 17 GB of them after a minute or
+  two (bug report 35). So nothing is drawn while Pyr is minimized or in the tray, and a frame
+  that can't be shown submits nothing at once (`surface_error` in `main.rs`), which sends what
+  it queued on; `examples/wgpu_pending.rs` shows both on any graphics card.
 
 ## Setting up servers (`crates/host`)
 

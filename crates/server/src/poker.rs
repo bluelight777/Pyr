@@ -188,6 +188,12 @@ impl Poker {
         Self::roles(hub).get(uid).copied()
     }
 
+    /// The server's owner: the only one who names Game Masters and Ambassadors (not admins,
+    /// and not Game Masters, whatever else they may do).
+    pub fn is_owner(hub: &Hub, uid: &str) -> bool {
+        hub.db.get_user(uid).is_some_and(|u| u.role == pyr_proto::control::Role::Owner)
+    }
+
     /// Chips raked over the last 7 days.
     fn rake_week(hub: &Hub) -> u64 {
         let d = today();
@@ -228,17 +234,18 @@ impl Poker {
         }
     }
 
-    fn staff_view(hub: &Hub, uid: &str, can_manage: bool) -> StaffView {
+    fn staff_view(hub: &Hub, uid: &str, _can_manage: bool) -> StaffView {
         let me = Self::role(hub, uid);
         let allowance = me.map(|r| Self::allowance(hub, r)).unwrap_or(0);
+        let owner = Self::is_owner(hub, uid);
         StaffView {
             me,
-            owner: can_manage,
+            owner,
             allowance,
             left: allowance.saturating_sub(Self::spent_today(hub, uid)),
             rake_week: Self::rake_week(hub),
             staff: Self::roles(hub).into_iter().map(|(u, role)| StaffMember { name: Self::name_of(hub, &u), uid: u, role }).collect(),
-            log: if can_manage { hub.db.get_meta(STAFF_LOG).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default() } else { vec![] },
+            log: if owner { hub.db.get_meta(STAFF_LOG).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default() } else { vec![] },
         }
     }
 
@@ -556,8 +563,8 @@ impl Poker {
             ToServer::Casino { req } => self.casino(hub, st, uid, req),
             ToServer::Staff => Ok(Some(ToApp::Staff { view: Self::staff_view(hub, uid, can_manage) })),
             ToServer::SetRole { uid: them, role } => {
-                if !can_manage {
-                    return Err("only people who can manage the server name Game Masters and Ambassadors".into());
+                if !Self::is_owner(hub, uid) {
+                    return Err("only the server's owner names Game Masters and Ambassadors".into());
                 }
                 if hub.db.get_user(&them).is_none() {
                     return Err("there's nobody by that id here".into());
@@ -962,11 +969,16 @@ mod tests {
         assert!(a.bomb.is_some() && a.phase == TourneyPhase::Registering);
         assert_eq!(hub.db.poker_record("alice").0.chips, progress::STARTING_CHIPS - 1_000);
         assert!(p.handle(&hub, "alice", false, ToServer::TimeBomb { buy_in: 1_000 }).unwrap_err().contains("already"));
-        // Bob joins Alice's; Carol fills it, and it starts at the next tick.
-        let Some(ToApp::Tourney { view: b }) = p.handle(&hub, "bob", false, ToServer::TimeBomb { buy_in: 1_000 }).unwrap() else { panic!() };
-        assert_eq!(b.id, a.id);
-        let Some(ToApp::Tourney { view: c }) = p.handle(&hub, "carol", false, ToServer::TimeBomb { buy_in: 1_000 }).unwrap() else { panic!() };
-        assert_eq!(c.id, a.id);
+        // Bob, Carol and Fay join Alice's (it isn't full yet: five seats); Gus fills it, and it
+        // starts at the next tick.
+        for who in ["bob", "carol", "fay"] {
+            let Some(ToApp::Tourney { view }) = p.handle(&hub, who, false, ToServer::TimeBomb { buy_in: 1_000 }).unwrap() else { panic!() };
+            assert_eq!(view.id, a.id);
+        }
+        p.tick(&hub);
+        assert_eq!(p.state.lock().tourneys[&a.id].phase, TourneyPhase::Registering, "four of five: still waiting");
+        let Some(ToApp::Tourney { view: g }) = p.handle(&hub, "gus", false, ToServer::TimeBomb { buy_in: 1_000 }).unwrap() else { panic!() };
+        assert_eq!(g.id, a.id);
         p.tick(&hub);
         {
             let st = p.state.lock();

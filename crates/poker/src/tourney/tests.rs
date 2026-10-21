@@ -216,7 +216,10 @@ fn the_prize_wheel_keeps_about_three_percent() {
     let total: u32 = MULTIPLIERS.iter().map(|m| m.1).sum();
     assert_eq!(total, 10_000);
     let ev = MULTIPLIERS.iter().map(|(m, w)| *m as f64 * *w as f64).sum::<f64>() / total as f64;
-    assert!((2.85..3.0).contains(&ev), "{ev}: about 2.91 buy-ins back for the 3 paid in");
+    assert_eq!(BOMB_SEATS, 5);
+    assert!((4.8..4.9).contains(&ev), "{ev}: about 4.85 buy-ins back for the 5 paid in");
+    // The least the winner takes is more than their own buy-in and a bit: 3 of the 5.
+    assert_eq!(MULTIPLIERS[0].0, 3);
     // Spun many times, it picks each multiplier about as often as its weight says.
     let mut rng = Stream::new(seed_from(77));
     let mut seen = std::collections::BTreeMap::new();
@@ -254,11 +257,12 @@ fn a_time_bomb_fills_with_bots_spins_and_goes_off() {
     t.tick(10_000, &mut ids, &mut rng);
     assert_eq!(t.phase, TourneyPhase::Registering);
     assert_eq!(t.view("alice").bomb.unwrap().multiplier, None);
-    // The wait's over: bots take the two empty seats, and the wheel spins.
+    // The wait's over: bots take the four empty seats, and the wheel spins.
     let mut effects = Vec::new();
     effects.extend(t.tick(BOMB_WAIT_MS, &mut ids, &mut rng).effects);
     assert_eq!(t.phase, TourneyPhase::Running);
-    assert_eq!(t.entrants_count(), 3);
+    assert_eq!(t.entrants_count(), 5);
+    assert_eq!(t.tables.len(), 1, "one table of five");
     let v = t.view("alice");
     let b = v.bomb.unwrap();
     let m = b.multiplier.expect("spun") as u64;

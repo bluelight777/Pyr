@@ -147,10 +147,44 @@ impl Levels {
     }
 }
 
+/// AEC3's own settings, changed from WebRTC's defaults (see vendor/sonora/PYR.md). With the
+/// defaults, while others talked or music played, your voice was turned down 15 to 90 dB for
+/// a moment, three to six times a minute, headphones or not (bug reports 27 and 32 to 41).
+/// Measured with `examples/aec_eval.rs` (your talking, 200 ms at a time, turned down 10 dB or
+/// more, of 308; and the echo that got through):
+///
+/// |                                     | defaults (0.10.0) | these      |
+/// |-------------------------------------|-------------------|------------|
+/// | headphones, others talking          | 23, -87 dB        | 2, -88 dB  |
+/// | headphones, music playing           | 39, -85 dB        | 6, -87 dB  |
+/// | headphones, loud music and voices   | 28, -96 dB        | 15, -96 dB |
+/// | speakers, others talking            | 8, -88 dB         | 4, -87 dB  |
+/// | speakers, music playing             | 17, -80 dB        | 12, -77 dB |
+/// | speakers turned low, music playing  | 18, -79 dB        | 6, -74 dB  |
+///
+/// The echo path is first taken to be 20 dB weaker than the speakers (`default_gain`, 1.0
+/// before): with headphones there's none, and until the canceller had learned that it took
+/// every loud moment from the speakers to be coming back into the microphone, and took your
+/// voice out with it. Its tail is taken to die away sooner (`default_len`, 0.83 before): the
+/// canceller's own filter learns the room as it is. Telling whether there's any echo at all
+/// uses the newer of the two ways (transparent mode, `Hmm`). `PYR_AB=aectune` for the defaults.
+fn tune_aec3(c: &mut sonora::config::EchoCanceller3Config) {
+    if pyr_proto::ab::old("aectune") {
+        return;
+    }
+    c.ep_strength.default_gain = 0.1;
+    c.ep_strength.default_len = 0.5;
+    c.ep_strength.nearend_len = 0.5;
+}
+
 impl CapturePipeline {
     pub fn new(settings: &Settings) -> anyhow::Result<CapturePipeline> {
         let config = sonora::Config {
-            echo_canceller: settings.echo_cancellation.then(EchoCanceller::default),
+            echo_canceller: settings.echo_cancellation.then(|| EchoCanceller {
+                transparent_mode: if pyr_proto::ab::old("aectune") { Default::default() } else { sonora::config::TransparentModeType::Hmm },
+                tune: Some(sonora::config::Aec3Tuning(tune_aec3)),
+                ..Default::default()
+            }),
             noise_suppression: (settings.noise_suppression == NoiseSuppression::Standard).then(|| {
                 sonora::config::NoiseSuppression { level: NoiseSuppressionLevel::High, ..Default::default() }
             }),
@@ -268,6 +302,19 @@ impl CapturePipeline {
     }
 
     /// Feed what the speakers are about to play (stereo, 480 frames) for echo cancellation.
+    /// The echo canceller's own figures (for evaluations): echo return loss, its enhancement,
+    /// the delay it found, and how sure the residual echo detector is there's echo.
+    pub fn echo_stats(&self) -> String {
+        let s = self.apm.statistics();
+        format!(
+            "erl {:?} erle {:?} delay {:?} divergent {:?}",
+            s.echo_return_loss.map(|v| v.round()),
+            s.echo_return_loss_enhancement.map(|v| v.round()),
+            s.delay_ms,
+            s.divergent_filter_fraction.map(|v| (v * 100.0).round())
+        )
+    }
+
     pub fn render(&mut self, stereo: &[f32]) {
         if !self.settings.echo_cancellation {
             return;

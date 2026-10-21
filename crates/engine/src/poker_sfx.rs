@@ -7,6 +7,54 @@ use std::f32::consts::TAU;
 
 const RATE: f32 = 48_000.0;
 
+/// Roulette's timing, in seconds from the launch, shared by the wheel on screen and its
+/// sounds so the clicks land with the ball. Measured against a real wheel's: the ball goes
+/// round the track a good six times, slowing (fast at first, air and friction, then more
+/// gently), leaves it, hits a diamond on the way down the cone, and hops a few pockets before it
+/// settles; the wheel keeps turning the whole time and after. (Until 0.10.0 the whole spin took
+/// 5.2 s, the ball fell in after 2.3, and the wheel braked to a dead stop with it.)
+pub mod roulette {
+    /// The ball leaves the track.
+    pub const LEAVE_S: f32 = 5.6;
+    /// It hits a diamond on the way down the cone.
+    pub const DIAMOND_S: f32 = LEAVE_S + 0.42;
+    /// It drops into the pockets the first time.
+    pub const POCKETS_S: f32 = LEAVE_S + 0.7;
+    /// Its hops from pocket to pocket: (seconds in the air, how high, of the wheel's radius).
+    pub const HOPS: [(f32, f32); 4] = [(0.40, 0.10), (0.32, 0.07), (0.25, 0.045), (0.18, 0.025)];
+    /// Still in its pocket (a little rattle after the last hop).
+    pub const SETTLED_S: f32 = POCKETS_S + 0.40 + 0.32 + 0.25 + 0.18 + 0.12;
+    /// The number's called.
+    pub const RESULT_S: f32 = SETTLED_S + 0.35;
+
+    // The ball's speed round the wheel (rad/s): A·e^(-t/τ) + B, 13.5 at the launch and 3.4 as
+    // it leaves the track.
+    const TAU_S: f32 = 3.2;
+    const A: f32 = 12.225;
+    const B: f32 = 1.275;
+
+    /// The ball's speed (rad/s, against the table) at `t`.
+    pub fn ball_speed(t: f32) -> f32 {
+        A * (-t / TAU_S).exp() + B
+    }
+
+    /// How far the ball has gone round (radians) by `t`.
+    pub fn ball_run(t: f32) -> f32 {
+        B * t + A * TAU_S * (1.0 - (-t / TAU_S).exp())
+    }
+
+    /// When each hop lands (seconds from the launch).
+    pub fn landings() -> [f32; 4] {
+        let mut at = POCKETS_S;
+        let mut out = [0.0; 4];
+        for (i, (d, _)) in HOPS.iter().enumerate() {
+            at += d;
+            out[i] = at;
+        }
+        out
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Cue {
     /// A card dealt (slid off the deck).
@@ -155,8 +203,8 @@ pub fn render_mono(c: Cue) -> Vec<f32> {
         Cue::WinSmall => ms(520.0),
         Cue::WinBig => ms(2200.0),
         Cue::Jackpot => ms(3600.0),
-        Cue::BallRoll => ms(3200.0),
-        Cue::BallDrop => ms(900.0),
+        Cue::BallRoll => ms((roulette::LEAVE_S + 0.5) * 1000.0),
+        Cue::BallDrop => ms((roulette::SETTLED_S - roulette::DIAMOND_S + 0.25) * 1000.0),
         Cue::DiceRoll => ms(1100.0),
         Cue::KenoBall => ms(180.0),
         Cue::Coin => ms(140.0),
@@ -265,31 +313,44 @@ pub fn render_mono(c: Cue) -> Vec<f32> {
                 click(&mut o, ms(at), 0.12, 3000.0 + (k * 173 % 1100) as f32, 151 + k);
             }
         }
-        // The ball round the wheel: a hum that rises and falls with each lap, slowing down.
+        // The ball round the track: a rolling rumble that swells once a lap (the laps it really
+        // goes, see `roulette`), lower and softer as it slows, gone as it leaves the track.
         Cue::BallRoll => {
-            let len = o.len();
             let mut n = Noise(171);
-            let mut lp = 0.0f32;
+            let (mut lp, mut lp2) = (0.0f32, 0.0f32);
             for (i, x) in o.iter_mut().enumerate() {
                 let t = i as f32 / RATE;
-                let f = len as f32 / RATE;
-                let laps = 5.0 * t - 1.1 * t * t;
-                let wobble = 0.65 + 0.35 * (TAU * laps).sin();
-                let env = (t / 0.15).min(1.0) * (1.0 - t / f).max(0.0).powf(0.7);
-                lp += (n.next() - lp) * 0.05;
-                *x += (lp * 0.8 + (TAU * 210.0 * t).sin() * 0.05) * wobble * env * 0.5;
+                let laps = roulette::ball_run(t) / TAU;
+                let speed = (roulette::ball_speed(t) / 13.5).clamp(0.0, 1.0);
+                let wobble = 0.7 + 0.3 * (TAU * laps).sin();
+                let leave = ((roulette::LEAVE_S + 0.35 - t) / 0.45).clamp(0.0, 1.0);
+                let env = (t / 0.12).min(1.0) * (0.45 + 0.55 * speed) * leave;
+                // Brighter the faster it goes.
+                lp += (n.next() - lp) * (0.025 + 0.06 * speed);
+                lp2 += (lp - lp2) * 0.3;
+                *x += (lp2 * 0.9 + (TAU * (150.0 + 90.0 * speed) * t).sin() * 0.04) * wobble * env * 0.55;
             }
         }
-        // Clicks against the frets, closer together, then still.
+        // From the diamond on the way down: a clack, then a click as each hop lands in a pocket
+        // (when the wheel on screen shows it), and a last little rattle.
         Cue::BallDrop => {
-            let mut t = 0.0f32;
-            let mut gap = 140.0f32;
-            let mut k = 0;
-            while t < 820.0 && gap > 12.0 {
-                click(&mut o, ms(t), 0.3 * (1.0 - t / 1100.0), 2600.0 + (k * 131 % 500) as f32, 191 + k);
-                t += gap;
-                gap *= 0.72;
-                k += 1;
+            knock(&mut o, 0, 0.32);
+            click(&mut o, 0, 0.42, 3300.0, 190);
+            let start = roulette::DIAMOND_S;
+            let pockets = roulette::POCKETS_S - start;
+            click(&mut o, ms(pockets * 1000.0), 0.36, 2700.0, 191);
+            for (k, at) in roulette::landings().iter().enumerate() {
+                let amp = 0.34 - k as f32 * 0.07;
+                click(&mut o, ms((at - start) * 1000.0), amp, 2500.0 + (k * 137 % 600) as f32, 192 + k as u32);
+                // (Skittering over a fret in the air, now and then.)
+                if k < 2 {
+                    let mid = at - roulette::HOPS[k].0 * 0.45;
+                    click(&mut o, ms((mid - start) * 1000.0), amp * 0.3, 3600.0, 200 + k as u32);
+                }
+            }
+            let last = roulette::landings()[3] - start;
+            for (k, d) in [0.035f32, 0.075, 0.105].iter().enumerate() {
+                click(&mut o, ms((last + d) * 1000.0), 0.09 - k as f32 * 0.025, 2900.0, 210 + k as u32);
             }
         }
         // A rattle in the hand, then two dice bouncing down the felt.

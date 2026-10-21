@@ -59,6 +59,17 @@ pub struct Celebration {
     pub tier: u8,
 }
 
+/// A round's result called out big over its table (the size a stream's viewers can read):
+/// what, a line under it, its color, where (a fraction of the table's area across and down),
+/// and from when.
+pub struct Announcement {
+    pub title: String,
+    pub sub: String,
+    pub color: Color32,
+    pub at: (f32, f32),
+    pub since: Instant,
+}
+
 /// The casino's screens' state.
 pub struct CasinoUi {
     /// The game open (none: the floor, in the lobby).
@@ -69,6 +80,12 @@ pub struct CasinoUi {
     pub chip: u64,
     pub fullscreen: bool,
     pub fullscreen_on: bool,
+    /// Streamer mode's stage put away (Esc) until the game or table is left.
+    pub stage_off: bool,
+    /// The stream layout's menu, open under this button.
+    pub stream_menu: Option<Rect>,
+    /// Streamer mode: my chips when it came on (the session's up or down from there).
+    pub session_start: Option<u64>,
     pub mute: bool,
     /// Rounds and big wins already shown, and answers already had.
     pub seen_round: u64,
@@ -77,6 +94,7 @@ pub struct CasinoUi {
     /// A request on its way, since when.
     pub pending: Option<Instant>,
     pub celebration: Option<Celebration>,
+    pub announcement: Option<Announcement>,
     /// Sounds to play later (animations land on them).
     pub sounds: Vec<(Instant, Cue, f32, f32)>,
     pub fairness_open: bool,
@@ -105,12 +123,16 @@ impl Default for CasinoUi {
             chip: 25,
             fullscreen: false,
             fullscreen_on: false,
+            stage_off: false,
+            stream_menu: None,
+            session_start: None,
             mute: false,
             seen_round: 0,
             seen_answers: 0,
             seen_big_win: 0,
             pending: None,
             celebration: None,
+            announcement: None,
             sounds: Vec::new(),
             fairness_open: false,
             hold: None,
@@ -148,6 +170,12 @@ impl CasinoUi {
 
     pub fn busy(&self) -> bool {
         self.pending.is_some_and(|t| t.elapsed() < Duration::from_secs(10))
+    }
+
+    /// Calls a round's result out big over the table, `delay` from now: `at` is where (a
+    /// fraction of the table's area, across and down).
+    pub fn announce(&mut self, title: impl Into<String>, sub: impl Into<String>, color: Color32, at: (f32, f32), delay: f32) {
+        self.announcement = Some(Announcement { title: title.into(), sub: sub.into(), color, at, since: Instant::now() + Duration::from_secs_f32(delay.max(0.0)) });
     }
 
     /// Shows a win big, if it's big enough.
@@ -418,6 +446,7 @@ impl PyrApp {
         }
         self.casino_top_bar(ui, s, game, bar);
         self.big_win_banner(ui, s, area);
+        self.announcement(ui, area);
         self.celebration(ui, area);
         self.fairness_window(ui.ctx(), s);
         self.casino_sounds();
@@ -480,10 +509,10 @@ impl PyrApp {
             self.poker.casino.fullscreen = !fs;
         }
         let streamer = self.streamer_mode();
-        let (resp, r) = button(ui, 38.0, streamer, if streamer { "Streamer mode is on: at poker your cards stay face down until you peek (hold Space), and invite links and codes are hidden" } else { "Streamer mode: for when you're live" });
+        let (resp, r) = button(ui, 38.0, streamer, if streamer { "Streamer mode is on: your cards at poker stay face down until you peek (hold Space), invite links are hidden, and the game is laid out for a stream. Click for its layout." } else { "Streamer mode, for when you're live: click to set it up" });
         crate::icons::eye(&p, r.shrink(10.0), if streamer { col::NIGHT } else { col::TEXT });
         if resp.clicked() {
-            self.set_streamer_mode(!streamer);
+            self.poker.casino.stream_menu = if self.poker.casino.stream_menu.is_some() { None } else { Some(r) };
         }
         // How many rounds this Pyr checked.
         let problems = !c.problems.is_empty();
@@ -519,13 +548,40 @@ impl PyrApp {
         };
         cu.shown_chips = Some(shown);
         let t = chips_text(shown.round() as u64);
-        let w = 52.0 + chips_text(target.max(real)).len() as f32 * 9.5;
-        let r = Rect::from_min_size(pos2(x - w, bar.top() + 9.0), vec2(w, 38.0));
+        // (Bigger in streamer mode: the bankroll is what a stream's viewers watch.)
+        let streaming = self.streamer_mode();
+        let (fs, ph) = if streaming { (22.0, 42.0) } else { (17.0, 38.0) };
+        let w = 52.0 + chips_text(target.max(real)).len() as f32 * fs * 0.56;
+        let r = Rect::from_min_size(pos2(x - w, bar.center().y - ph / 2.0), vec2(w, ph));
         let counting = (shown.round() as u64) < target;
         p.rect_filled(r, theme::r(19), Color32::from_black_alpha(140));
         p.rect_stroke(r, theme::r(19), Stroke::new(if counting { 1.5f32 } else { 1.0 }, if counting { col::GOLD } else { col::GOLD_DARK }), StrokeKind::Inside);
         flat_chip(&p, r.left_center() + vec2(19.0, 0.0), 12.0, 1_000, false);
-        p.text(r.left_center() + vec2(38.0, 0.0), Align2::LEFT_CENTER, t, theme::bold_font(17.0), if counting { col::WIN } else { col::GOLD2 });
+        p.text(r.left_center() + vec2(38.0, 0.0), Align2::LEFT_CENTER, t, theme::bold_font(fs), if counting { col::WIN } else { col::GOLD2 });
+        let bal = r;
+        // Streamer mode: how the session's going, since streamer mode came on (chips up or
+        // down), beside the balance.
+        let settled = target;
+        let cu = &mut self.poker.casino;
+        if !streaming {
+            cu.session_start = None;
+        } else if cu.session_start.is_none() && cu.hold.is_none() {
+            cu.session_start = Some(settled);
+        }
+        let r = match cu.session_start {
+            Some(start) if streaming => {
+                let d = settled as i64 - start as i64;
+                let text = format!("SESSION {}{}", if d > 0 { "+" } else if d < 0 { "−" } else { "" }, chips_text(d.unsigned_abs()));
+                let sw = 30.0 + text.chars().count() as f32 * 9.0;
+                let sr = Rect::from_min_size(pos2(r.left() - 10.0 - sw, bar.center().y - 17.0), vec2(sw, 34.0));
+                let color = if d > 0 { col::WIN } else if d < 0 { col::LOSE } else { col::MUTED };
+                p.rect_filled(sr, theme::r(17), Color32::from_black_alpha(140));
+                p.rect_stroke(sr, theme::r(17), Stroke::new(1.0f32, color.gamma_multiply(0.6)), StrokeKind::Inside);
+                p.text(sr.center(), Align2::CENTER_CENTER, text, theme::bold_font(15.0), color);
+                Rect::from_min_max(sr.min, r.max)
+            }
+            _ => r,
+        };
         // The game's name and what it is, in the room left of the balance (cut short in a
         // narrow window rather than running under it).
         let words = p.with_clip_rect(Rect::from_min_max(bar.min, pos2(r.left() - 14.0, bar.max.y)));
@@ -539,7 +595,7 @@ impl PyrApp {
             } else {
                 let a = (1.0 - k).powf(0.6) * (k / 0.08).min(1.0);
                 let text = format!("+{}", chips_text(g));
-                let at = pos2(r.center().x, r.bottom() + 18.0 + ease_out(k) * 22.0);
+                let at = pos2(bal.center().x, bal.bottom() + 18.0 + ease_out(k) * 22.0);
                 let pill = Rect::from_center_size(at, vec2(24.0 + text.len() as f32 * 9.0, 26.0));
                 p.rect_filled(pill, theme::r(13), Color32::from_rgba_unmultiplied(0x0c, 0x1a, 0x10, (230.0 * a) as u8));
                 p.rect_stroke(pill, theme::r(13), Stroke::new(1.0f32, col::WIN.gamma_multiply(0.7 * a)), StrokeKind::Inside);
@@ -548,12 +604,36 @@ impl PyrApp {
         }
         // Esc and F11.
         let (esc, f11) = ui.ctx().input(|i| (i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::F11)));
-        if esc && self.poker.casino.fullscreen {
+        if esc && self.poker.casino.fullscreen && self.poker.casino.stream_menu.is_none() {
             self.poker.casino.fullscreen = false;
         }
         if f11 {
             self.poker.casino.fullscreen = !self.poker.casino.fullscreen;
         }
+    }
+
+    /// A game's rack of chips and its bet in words, in the room its controls leave left of
+    /// their buttons (`right`: the leftmost button's edge, less its gap). In a narrow window
+    /// (streamer mode's room for a camera, say) the biggest chips make way first (the bet's for
+    /// a stream's viewers too), then the words: never one over the other. Returns where the
+    /// words went.
+    pub fn rack_and_bet(&mut self, ui: &mut egui::Ui, bar: Rect, right: f32, max_chip: u64, text: String, color: Color32) -> Option<Rect> {
+        let at = pos2(bar.left() + 16.0, bar.center().y - 26.0);
+        let room = right - 10.0 - at.x;
+        let all = CHIPS.iter().filter(|v| **v <= max_chip).count();
+        let galley = ui.painter().layout_no_wrap(text, theme::bold_font(16.0), color);
+        let words = galley.size().x;
+        let fits = |w: f32| (((w + 8.0) / 52.0).floor().max(0.0) as usize).min(all);
+        let beside_words = fits(room - 18.0 - words);
+        let (n, with_words) = if beside_words >= all.min(3) { (beside_words, true) } else { (fits(room).max(1), false) };
+        let biggest = CHIPS.iter().copied().filter(|v| *v <= max_chip).take(n).last().unwrap_or(1);
+        self.chip_rack(ui, at, biggest);
+        if !with_words {
+            return None;
+        }
+        let r = Rect::from_min_size(pos2(right - 10.0 - words, bar.center().y - galley.size().y / 2.0), galley.size());
+        ui.painter().galley(r.min, galley, color);
+        Some(r)
     }
 
     /// The rack of chips to bet with; returns the rack's height.
@@ -627,6 +707,44 @@ impl PyrApp {
         glow_text(&p, c + vec2(0.0, size * 0.95), Align2::CENTER_CENTER, &chips_text(shown), theme::bold_font(size * 0.75), Color32::WHITE.gamma_multiply(fade), col::GOLD_DARK.gamma_multiply(0.6 * fade));
         p.text(c + vec2(0.0, size * 1.65), Align2::CENTER_CENTER, format!("{} your bet", times(cel.multiple_x100)), theme::bold_font(18.0), col::GOLD.gamma_multiply(fade));
         p.text(c + vec2(0.0, size * 1.65 + 28.0), Align2::CENTER_CENTER, "click to carry on", theme::font(12.5), col::MUTED.gamma_multiply(fade));
+    }
+
+    /// A round's result, called out big (see `CasinoUi::announce`): it pops up, stays a
+    /// couple of seconds, and fades. A big win's celebration takes its place.
+    fn announcement(&mut self, ui: &mut egui::Ui, area: Rect) {
+        let Some(a) = &self.poker.casino.announcement else { return };
+        let now = Instant::now();
+        if now < a.since {
+            return;
+        }
+        let t = (now - a.since).as_secs_f32();
+        const LIFE: f32 = 2.9;
+        let celebrating = self.poker.casino.celebration.as_ref().is_some_and(|c| now >= c.since);
+        if t > LIFE || celebrating {
+            self.poker.casino.announcement = None;
+            return;
+        }
+        let p = ui.painter().clone();
+        let pop = ease_back((t / 0.32).min(1.0));
+        let fade = ((LIFE - t) / 0.45).clamp(0.0, 1.0);
+        let title_size = (area.width() / 26.0).clamp(30.0, 52.0);
+        let sub_size = title_size * 0.45;
+        let title = p.layout_no_wrap(a.title.clone(), theme::bold_font(title_size), a.color);
+        let sub = (!a.sub.is_empty()).then(|| p.layout_no_wrap(a.sub.clone(), theme::bold_font(sub_size), col::TEXT));
+        let w = title.size().x.max(sub.as_ref().map(|g| g.size().x).unwrap_or(0.0)) + title_size * 1.4;
+        let h = title.size().y + sub.as_ref().map(|g| g.size().y + 6.0).unwrap_or(0.0) + title_size * 0.6;
+        let c = pos2(area.left() + area.width() * a.at.0, area.top() + area.height() * a.at.1);
+        let scale = 0.6 + 0.4 * pop;
+        let r = Rect::from_center_size(c, vec2(w, h) * scale);
+        p.rect_filled(r.translate(vec2(0.0, 6.0)), theme::r(22), Color32::from_black_alpha((110.0 * fade) as u8));
+        p.rect_filled(r, theme::r(22), Color32::from_rgba_unmultiplied(0x0c, 0x0a, 0x12, (232.0 * fade) as u8));
+        p.rect_stroke(r, theme::r(22), Stroke::new(2.5f32, a.color.gamma_multiply(fade)), StrokeKind::Inside);
+        radial(&p, c, w * 0.6 * scale, a.color.gamma_multiply(0.18 * fade), Color32::TRANSPARENT);
+        let ty = if sub.is_some() { r.top() + h * scale * 0.42 } else { c.y };
+        glow_text(&p, pos2(c.x, ty), Align2::CENTER_CENTER, &a.title, theme::bold_font(title_size * scale), a.color.gamma_multiply(fade), Color32::from_black_alpha((160.0 * fade) as u8));
+        if sub.is_some() {
+            p.text(pos2(c.x, r.bottom() - h * scale * 0.24), Align2::CENTER_CENTER, &a.sub, theme::bold_font(sub_size * scale), col::TEXT.gamma_multiply(fade));
+        }
     }
 
     /// Someone's big win, just now: a banner sliding in at the top for a few seconds (my own
@@ -706,6 +824,12 @@ impl PyrApp {
         self.ui.streamer_mode || self.ui.streamer_auto_live
     }
 
+    /// Streamer mode is on only by itself, because I'm sharing my screen in a call (not by my
+    /// choice): every switch for it says so, or it looks off while my cards stay hidden.
+    pub fn streamer_auto(&self) -> bool {
+        self.ui.streamer_auto_live && !self.ui.streamer_mode
+    }
+
     pub fn set_streamer_mode(&mut self, on: bool) {
         self.ui.streamer_set = Some(on);
         self.ui.streamer_mode = on;
@@ -717,28 +841,122 @@ impl PyrApp {
     }
 
     /// Pyr Casino fullscreen: only the casino, on the whole screen (Esc or the button leaves).
+    /// Or streamer mode's stage: only the game, in Pyr's window (see `staged`).
     pub fn casino_fullscreen_ui(&mut self, ctx: &egui::Context, st: &pyr_engine::state::AppState, acts: &mut Vec<crate::app::Act>) -> bool {
+        if self.poker.casino.game.is_none() && self.poker.table.is_none() {
+            self.poker.casino.stage_off = false;
+        }
         let server = self.poker.open.clone().and_then(|k| st.server(&k).cloned());
-        let want = self.poker.casino.fullscreen && server.is_some();
-        if !want {
-            if self.poker.casino.fullscreen_on {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
-                self.poker.casino.fullscreen_on = false;
-            }
-            if self.poker.casino.fullscreen && server.is_none() {
-                self.poker.casino.fullscreen = false;
-            }
-            return false;
-        }
-        if !self.poker.casino.fullscreen_on {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
-            self.poker.casino.fullscreen_on = true;
-        }
-        let server = server.expect("checked");
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(col::NIGHT)).show(ctx, |ui| self.poker_page(ui, st, &server, acts));
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if self.poker.casino.fullscreen && server.is_none() {
             self.poker.casino.fullscreen = false;
         }
+        let fullscreen = self.poker.casino.fullscreen;
+        if fullscreen != self.poker.casino.fullscreen_on {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(fullscreen));
+            self.poker.casino.fullscreen_on = fullscreen;
+        }
+        let staged = self.staged();
+        if !(fullscreen || staged) || server.is_none() {
+            return false;
+        }
+        let server = server.expect("checked");
+        let menu_open = self.poker.casino.stream_menu.is_some();
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(col::NIGHT)).show(ctx, |ui| self.poker_page(ui, st, &server, acts));
+        // (Esc closes the streaming menu first.)
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !menu_open {
+            if self.poker.casino.fullscreen {
+                self.poker.casino.fullscreen = false;
+            } else if staged {
+                self.poker.casino.stage_off = true;
+            }
+        }
         true
+    }
+
+    /// Streamer mode's stage: while a casino game or a poker table is open, it fills Pyr's
+    /// window, Pyr's server and channel lists put away (a window capture shows the game, and
+    /// nothing of which servers and channels are mine). Esc brings them back until the game's
+    /// left.
+    pub fn staged(&self) -> bool {
+        self.streamer_mode() && self.ui.stream_stage && !self.poker.casino.stage_off && self.poker.open.is_some() && (self.poker.casino.game.is_some() || self.poker.table.is_some())
+    }
+
+    /// At a casino game or a poker table in streamer mode: room kept clear down one side for a
+    /// camera and overlays (a full-height column, the stream's own background), and the rest for
+    /// the game, which lays itself out in it.
+    pub fn stream_split(&self, full: Rect) -> (Rect, Option<Rect>) {
+        if !self.streamer_mode() {
+            return (full, None);
+        }
+        let w = (full.width() * 0.25).clamp(260.0, 520.0);
+        if full.width() - w < 700.0 {
+            return (full, None);
+        }
+        match self.ui.stream_room.as_str() {
+            "left" => (Rect::from_min_max(pos2(full.left() + w, full.top()), full.max), Some(Rect::from_min_max(full.min, pos2(full.left() + w, full.bottom())))),
+            "right" => (Rect::from_min_max(full.min, pos2(full.right() - w, full.bottom())), Some(Rect::from_min_max(pos2(full.right() - w, full.top()), full.max))),
+            _ => (full, None),
+        }
+    }
+
+    /// The room kept clear: plain (it's under the stream's overlays), saying what it is only
+    /// while the streaming menu's open (never on the stream by itself).
+    pub fn stream_room_ui(&mut self, ui: &mut egui::Ui, room: Rect) {
+        let p = ui.painter();
+        p.rect_filled(room, 0, Color32::from_rgb(0x08, 0x07, 0x0b));
+        let edge = if room.left() <= ui.max_rect().left() + 1.0 { room.right() } else { room.left() };
+        p.line_segment([pos2(edge, room.top()), pos2(edge, room.bottom())], Stroke::new(1.0f32, col::GOLD_DARK.gamma_multiply(0.5)));
+        if self.poker.casino.stream_menu.is_some() {
+            p.text(room.center(), Align2::CENTER_CENTER, "Kept clear for your camera\nand overlays (streamer mode)", theme::font(13.0), col::MUTED);
+        }
+    }
+
+    /// The stream layout's menu, under the button that opened it.
+    pub fn stream_menu_ui(&mut self, ctx: &egui::Context, acts: &mut Vec<crate::app::Act>) {
+        let Some(anchor) = self.poker.casino.stream_menu else { return };
+        let streamer = self.streamer_mode();
+        let (room, stage) = (self.ui.stream_room.clone(), self.ui.stream_stage);
+        let area = egui::Area::new(egui::Id::new("stream-menu"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos2(anchor.right() - 340.0, anchor.bottom() + 8.0))
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).fill(Color32::from_rgb(0x16, 0x12, 0x1e)).stroke(Stroke::new(1.0f32, col::GOLD_DARK)).inner_margin(14.0).show(ui, |ui| {
+                    ui.set_width(312.0);
+                    ui.label(RichText::new("Streaming").font(theme::bold_font(16.0)).color(col::GOLD2));
+                    ui.add_space(6.0);
+                    let mut on = streamer;
+                    let auto = self.streamer_auto();
+                    if ui.checkbox(&mut on, RichText::new("Streamer mode").strong()).changed() {
+                        self.set_streamer_mode(on);
+                    }
+                    if auto {
+                        ui.label(RichText::new("On by itself: you're sharing your screen in a call. Turn it off here and it stays off until your next share.").size(12.0).color(col::GOLD2));
+                    }
+                    ui.label(RichText::new("Your cards at poker stay face down until you peek (hold Space), invite links are hidden, and games are laid out for a stream. It turns on by itself while you share your screen.").size(12.0).color(col::MUTED));
+                    ui.add_space(8.0);
+                    ui.add_enabled_ui(on, |ui| {
+                        let mut st = stage;
+                        if ui.checkbox(&mut st, "Just the game in Pyr's window").changed() {
+                            acts.push(crate::app::Act::StreamLayout { room: None, stage: Some(st) });
+                        }
+                        ui.label(RichText::new("While you play, Pyr's server and channel lists are put away: a window capture shows the game, and nothing of your servers. Esc brings them back.").size(12.0).color(col::MUTED));
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("Room for your camera and overlays").strong());
+                        ui.horizontal(|ui| {
+                            for (key, name) in [("", "None"), ("left", "Left side"), ("right", "Right side")] {
+                                if ui.selectable_label(room == key, name).clicked() && room != key {
+                                    acts.push(crate::app::Act::StreamLayout { room: Some(key.to_string()), stage: None });
+                                }
+                            }
+                        });
+                        ui.label(RichText::new("A quarter of the window, top to bottom, kept clear: the game fits itself into the rest.").size(12.0).color(col::MUTED));
+                    });
+                });
+            });
+        // Closed by a click anywhere else.
+        let clicked_away = ctx.input(|i| i.pointer.any_pressed()) && ctx.pointer_interact_pos().is_some_and(|p| !area.response.rect.contains(p) && !anchor.contains(p));
+        if clicked_away || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.poker.casino.stream_menu = None;
+        }
     }
 }

@@ -218,11 +218,29 @@ fn play_soundboard_on(shared: &Arc<Shared>, sound: SoundRef) {
     let s2 = shared.clone();
     shared.rt.spawn(async move {
         if let Err(e) = play_sound_in_call(&s2, &key, &sound).await {
-            s2.state.write().toast(format!("{e:#}"), true);
+            // The server saying no (too many sounds too fast, say) isn't a bug to report:
+            // bug reports 28 and 29 were "Easy on the sounds".
+            if let Some(Refused(why)) = e.downcast_ref::<Refused>() {
+                s2.state.write().refused(why.clone());
+            } else {
+                s2.state.write().toast(format!("{e:#}"), true);
+            }
             (s2.repaint)();
         }
     });
 }
+
+/// The server said no to a request (a limit, a permission): shown, not reported as a bug.
+#[derive(Debug)]
+pub(crate) struct Refused(pub String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Refused {}
 
 /// Plays samples to us only: through the call when we're in one (in step with everything
 /// else), otherwise on the notification sounds' own stream.
@@ -263,7 +281,7 @@ async fn play_sound_in_call(shared: &Arc<Shared>, key: &str, sound: &SoundRef) -
             Event::Error { code: ErrorCode::NotFound, .. } if attempt == 0 && !sound.is_builtin() && sound.server != key => {
                 shared.sounds_on.lock().remove(&(key.to_string(), wire));
             }
-            Event::Error { message, .. } => anyhow::bail!(message),
+            Event::Error { message, .. } => return Err(Refused(message).into()),
             _ => return Ok(()),
         }
     }

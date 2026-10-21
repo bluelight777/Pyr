@@ -100,8 +100,37 @@ fn device_id(d: &cpal::Device) -> Option<String> {
     d.id().ok().map(|i| i.to_string())
 }
 
+/// Windows: sound devices are looked up and opened from COM's multithreaded apartment. cpal
+/// makes any thread it's first used on single-threaded (STA) otherwise, and Windows' default
+/// speakers or microphone, "activated" from such a thread, failed with "Cannot change thread
+/// mode after it is set": bug reports 22 to 26, where once the speakers had gone away nothing
+/// could open them again, or the microphone, until Pyr was restarted.
+#[cfg(windows)]
+fn com_mta() {
+    /// Joined the MTA on this thread: left again as the thread ends (as cpal does with its own
+    /// apartment), since a thread asks which device is the default every few seconds.
+    struct Mta(bool);
+    impl Drop for Mta {
+        fn drop(&mut self) {
+            if self.0 {
+                unsafe { windows::Win32::System::Com::CoUninitialize() };
+            }
+        }
+    }
+    thread_local!(static MTA: Mta = unsafe {
+        use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
+        // (Already in an apartment: it stays what it is, and isn't left; cpal copes with either.)
+        Mta(CoInitializeEx(None, COINIT_MULTITHREADED).is_ok())
+    });
+    MTA.with(|_| {});
+}
+
+#[cfg(not(windows))]
+fn com_mta() {}
+
 /// (id, human name) for every input and output device.
 pub fn list_devices() -> (Vec<(String, String)>, Vec<(String, String)>) {
+    com_mta();
     let host = cpal::default_host();
     let collect = |it: Option<Vec<cpal::Device>>| -> Vec<(String, String)> {
         it.unwrap_or_default().iter().filter_map(|d| Some((device_id(d)?, device_label(d)))).collect()
@@ -111,15 +140,35 @@ pub fn list_devices() -> (Vec<(String, String)>, Vec<(String, String)>) {
     (inputs, outputs)
 }
 
-/// The device with this id (only that one), or the default device.
-fn find_device(input: bool, id: Option<&str>) -> Result<cpal::Device> {
+/// The device with this id (only that one), or the default device; and, for the default one,
+/// its id (to notice when another becomes the default, see `default_id`).
+fn find_device(input: bool, id: Option<&str>) -> Result<(cpal::Device, Option<String>)> {
+    com_mta();
     let host = cpal::default_host();
     if let Some(id) = id {
         let found = id.parse::<cpal::DeviceId>().ok().and_then(|parsed| host.device_by_id(&parsed));
-        return found.ok_or_else(|| anyhow!(if input { "the microphone chosen isn't there" } else { "the speakers chosen aren't there" }));
+        return found.map(|d| (d, None)).ok_or_else(|| anyhow!(if input { "the microphone chosen isn't there" } else { "the speakers chosen aren't there" }));
     }
     let d = if input { host.default_input_device() } else { host.default_output_device() };
-    d.ok_or_else(|| anyhow!(if input { "no microphone found" } else { "no speakers or headphones found" }))
+    let d = d.ok_or_else(|| anyhow!(if input { "no microphone found" } else { "no speakers or headphones found" }))?;
+    // The default device as itself, not cpal's "whatever the default is" (opened through
+    // Windows' asynchronous activation, which is what failed in bug reports 22 to 26). When
+    // the default changes, the audio thread opens the new one (see `Link`).
+    match d.id() {
+        Ok(real) => match host.device_by_id(&real) {
+            Some(dev) => Ok((dev, Some(real.to_string()))),
+            None => Ok((d, Some(real.to_string()))),
+        },
+        Err(_) => Ok((d, None)),
+    }
+}
+
+/// The id of the default microphone or speakers right now.
+pub fn default_id(input: bool) -> Option<String> {
+    com_mta();
+    let host = cpal::default_host();
+    let d = if input { host.default_input_device() } else { host.default_output_device() }?;
+    d.id().ok().map(|i| i.to_string())
 }
 
 /// Open the device asked for; if that doesn't work and `fall_back` allows, the default device
@@ -146,6 +195,8 @@ pub struct InputDevice {
     pub name: String,
     /// The default device, playing the part of one that wasn't there.
     pub stand_in: bool,
+    /// Opened as the default device (none was chosen): its id.
+    pub default_id: Option<String>,
 }
 
 fn build_input<T>(device: &cpal::Device, config: cpal::StreamConfig, mut prod: rtrb::Producer<f32>, health: Arc<Health>) -> Result<cpal::Stream>
@@ -188,7 +239,7 @@ impl InputDevice {
     }
 
     fn open_exact(id: Option<&str>) -> Result<InputDevice> {
-        let device = find_device(true, id)?;
+        let (device, default_id) = find_device(true, id)?;
         let name = device_label(&device);
         let supported = device.default_input_config().context("microphone has no usable format")?;
         let format = supported.sample_format();
@@ -206,7 +257,9 @@ impl InputDevice {
             other => return Err(anyhow!("unsupported microphone sample format {other:?}")),
         };
         stream.play()?;
-        Ok(InputDevice::new(Box::new(stream), cons, rate, health, name))
+        let mut d = InputDevice::new(Box::new(stream), cons, rate, health, name);
+        d.default_id = default_id;
+        Ok(d)
     }
 
     fn new(stream: Box<dyn Send>, cons: rtrb::Consumer<f32>, rate: u32, health: Arc<Health>, name: String) -> InputDevice {
@@ -219,6 +272,7 @@ impl InputDevice {
             watch: Watch::new(health),
             name,
             stand_in: false,
+            default_id: None,
         }
     }
 
@@ -274,6 +328,8 @@ pub struct OutputDevice {
     pub name: String,
     /// The default device, playing the part of one that wasn't there.
     pub stand_in: bool,
+    /// Opened as the default device (none was chosen): its id.
+    pub default_id: Option<String>,
 }
 
 fn build_output<T>(device: &cpal::Device, config: cpal::StreamConfig, mut cons: rtrb::Consumer<f32>, health: Arc<Health>) -> Result<cpal::Stream>
@@ -318,7 +374,7 @@ impl OutputDevice {
     }
 
     fn open_exact(id: Option<&str>) -> Result<OutputDevice> {
-        let device = find_device(false, id)?;
+        let (device, default_id) = find_device(false, id)?;
         let name = device_label(&device);
         let supported = device.default_output_config().context("speakers have no usable format")?;
         let format = supported.sample_format();
@@ -338,7 +394,9 @@ impl OutputDevice {
             other => return Err(anyhow!("unsupported speaker sample format {other:?}")),
         };
         stream.play()?;
-        Ok(OutputDevice::new(Box::new(stream), prod, capacity, rate, channels, health, name))
+        let mut d = OutputDevice::new(Box::new(stream), prod, capacity, rate, channels, health, name);
+        d.default_id = default_id;
+        Ok(d)
     }
 
     fn new(
@@ -365,6 +423,7 @@ impl OutputDevice {
             watch: Watch::new(health),
             name,
             stand_in: false,
+            default_id: None,
         }
     }
 

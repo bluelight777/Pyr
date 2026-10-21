@@ -220,7 +220,7 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   the round is over the server shows its seed and your Pyr plays the whole round again to
   check every reel, card, ball and die. Poker shuffles are checked the same way. The count
   of rounds checked is on every table.
-- **Time Bombs**: a three-player sit & go. A wheel picks the prize when the table fills (2
+- **Time Bombs**: a five-player sit & go. A wheel picks the prize when the table fills (3
   to 1,000 times the buy-in) and the winner takes it all; after a three-minute fuse the bomb
   goes off and every hand is all in. Bots take any seat nobody sits in.
 - **Pyr Friday Night**: a free tournament every Friday at 10 PM US Eastern, its prize money
@@ -230,11 +230,15 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   Ambassadors** who give chips, looks and prize boxes (within an allowance set by the rake,
   logged for the owner).
 - **Fullscreen** (F11) and **Streamer mode**: hole cards stay face down until you hold Space,
-  and invite links are hidden; it turns on by itself while you share your screen.
+  and invite links are hidden; it turns on by itself while you share your screen. While you
+  play, the game fills Pyr's window (a window capture shows nothing of your servers), a
+  quarter of it down one side can stay clear for a camera and overlays, the balance is bigger
+  with the session's winnings beside it, and results are called out big enough to read on a
+  stream.
 
 ![Pyr Casino's floor: the Phoenix Jackpot, Pyr Friday Night, big wins as they happen, and a tile for every game](docs/screenshots/casino.png)
 
-![A Time Bomb table: the prize wheel lands on 10×, so the winner takes 1,000 chips](docs/screenshots/time-bomb.png)
+![A Time Bomb table with five players: the prize wheel lands on 5×, so the winner takes 500 chips](docs/screenshots/time-bomb.png)
 
 **The app**
 

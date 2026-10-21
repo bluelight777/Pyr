@@ -90,7 +90,7 @@ impl PyrApp {
         if let Some(true) = won
             && let Some((r, _, _)) = &show
         {
-            p.text(big + vec2(0.0, 58.0), Align2::CENTER_CENTER, format!("You won {}", chips_text(r.outcome.paid())), theme::bold_font(20.0), col::WIN);
+            p.text(big + vec2(0.0, 62.0), Align2::CENTER_CENTER, format!("You won {}", chips_text(r.outcome.paid())), theme::bold_font(26.0), col::WIN);
         }
         // Settle once the roll's shown.
         if k >= ROLL_SECS
@@ -193,7 +193,6 @@ impl PyrApp {
         // The controls.
         let cb = Rect::from_min_max(pos2(area.left() + 20.0, area.bottom() - 84.0), pos2(area.right() - 20.0, area.bottom() - 14.0));
         p.rect_filled(cb, theme::r(18), Color32::from_black_alpha(170));
-        self.chip_rack(ui, pos2(cb.left() + 16.0, cb.center().y - 26.0), 25_000);
         // (A chip on the rack adds to the bet.)
         let picked = self.poker.casino.chip;
         let busy = self.poker.casino.busy() || k < ROLL_SECS;
@@ -230,6 +229,7 @@ impl PyrApp {
         if button(ui, &format!("+{}", chips_text(picked)), 90.0, false, !busy) {
             self.poker.casino.dice.chips = (bet + picked).min(100_000);
         }
-        p.text(pos2(x - 10.0, cb.center().y), Align2::RIGHT_CENTER, format!("Bet {}", chips_text(bet)), theme::bold_font(16.0), if bet > super::chips_now(s) { col::LOSE } else { col::GOLD2 });
+        let color = if bet > super::chips_now(s) { col::LOSE } else { col::GOLD2 };
+        self.rack_and_bet(ui, cb, x, 25_000, format!("Bet {}", chips_text(bet)), color);
     }
 }

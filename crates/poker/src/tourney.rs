@@ -701,20 +701,20 @@ pub fn friday_rules(start_ms: u64, added: u64) -> TourneyRules {
     }
 }
 
-/// Time Bombs: three seats, 500 chips each, the blinds up every minute, and a three-minute
+/// Time Bombs: five seats, 500 chips each, the blinds up every minute, and a three-minute
 /// fuse; after it, every hand is all in. Buy-ins (play chips), and the prize wheel's
-/// multipliers with their weights (out of 10,000): about 2.91 buy-ins come back for the three
-/// paid in, so the house keeps about 3%.
+/// multipliers with their weights (out of 10,000): about 4.85 buy-ins come back for the five
+/// paid in, so the house keeps about 3%. (Three seats until 0.10.0, with 2x the least.)
 pub const BOMB_HOST: &str = "pyr:bomb";
 pub const BOMB_BUY_INS: [u64; 3] = [100, 1_000, 10_000];
-pub const BOMB_SEATS: usize = 3;
+pub const BOMB_SEATS: usize = 5;
 pub const BOMB_STACK: u64 = 500;
 pub const BOMB_FUSE_MS: u64 = 180_000;
 /// How long a Time Bomb waits for people before bots take the empty seats.
 pub const BOMB_WAIT_MS: u64 = 30_000;
 /// The wheel's spin, before the first hand.
 pub const WHEEL_MS: u64 = 5_000;
-pub const MULTIPLIERS: [(u32, u32); 7] = [(2, 7504), (3, 1400), (5, 760), (10, 270), (25, 55), (100, 10), (1000, 1)];
+pub const MULTIPLIERS: [(u32, u32); 7] = [(3, 6783), (5, 2120), (8, 700), (15, 300), (40, 80), (150, 15), (1000, 2)];
 
 /// The prize wheel: a multiplier, by its weight.
 pub fn spin(rng: &mut dyn Random) -> u32 {

@@ -76,6 +76,8 @@ windows = { version = "0.62", features = [
     # How long since the last key or mouse move, for idle (idle.rs).
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_SystemInformation",
+    # Sound devices opened from COM's multithreaded apartment (audio/device.rs).
+    "Win32_System_Com",
 ] }
 windows-capture = "2.0.1"
 nokhwa = { version = "0.10.11", features = ["input-msmf"] }

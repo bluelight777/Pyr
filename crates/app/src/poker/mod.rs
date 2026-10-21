@@ -86,6 +86,9 @@ pub struct PokerUi {
     pub raise: u64,
     pub raise_for: Option<(u64, usize, u64)>,
     pub raise_text: String,
+    /// Fold clicked once while a check was free: (hand, cards on the board). A second click
+    /// folds; the turn passing forgets it.
+    pub fold_armed: Option<(u64, usize)>,
     pub four_color: bool,
     /// The hand strength meter turned off (it's on unless turned off).
     pub hide_odds: bool,
@@ -218,12 +221,21 @@ impl PyrApp {
             self.poker.awaiting_new = false;
             self.poker.table = Some(*id);
         }
+        self.stream_menu_ui(ui.ctx(), acts);
         if let Some(id) = self.poker.table {
             match s.poker.table(id) {
                 Some(t) => {
                     let t = t.clone();
                     self.poker.table_tourney = t.view.tourney;
-                    self.poker_table(ui, st, s, &t);
+                    // (Streamer mode: room kept for a camera, the table in the rest.)
+                    let (rect, room) = self.stream_split(ui.max_rect());
+                    if let Some(r) = room {
+                        self.stream_room_ui(ui, r);
+                    }
+                    let mut tui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                    // (Nothing of the table spills into the room.)
+                    tui.set_clip_rect(rect.intersect(ui.clip_rect()));
+                    self.poker_table(&mut tui, st, s, &t);
                 }
                 None => {
                     // It closed (or the connection dropped): back to the room (or, for a
@@ -247,7 +259,14 @@ impl PyrApp {
             return;
         }
         if let Some(game) = self.poker.casino.game {
-            self.casino_game(ui, s, game);
+            let (rect, room) = self.stream_split(ui.max_rect());
+            if let Some(r) = room {
+                self.stream_room_ui(ui, r);
+            }
+            let mut gui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+            // (A game's felt runs off its edges: never into the room.)
+            gui.set_clip_rect(rect.intersect(ui.clip_rect()));
+            self.casino_game(&mut gui, s, game);
             return;
         }
         if self.poker.tourneys_asked.is_none_or(|t| t.elapsed().as_secs() >= 5) {

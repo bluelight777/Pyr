@@ -13,7 +13,7 @@ use crate::theme;
 /// The floor's tiles: poker, then the games against the house.
 const TILES: [(&str, &str, &str); 9] = [
     ("poker", "Poker", "Hold'em and Omaha against friends and bots, tables and tournaments."),
-    ("timebomb", "Time Bomb", "Three seats, one fuse, up to 1,000× the buy-in. When it blows, everyone's all in."),
+    ("timebomb", "Time Bomb", "Five seats, one fuse, up to 1,000× the buy-in. When it blows, everyone's all in."),
     ("slots", "Pyr Sevens", "Five reels, twenty lines, wild flames, free spins and the Phoenix Jackpot."),
     ("blackjack", "Blackjack", "Beat the dealer to 21. Blackjack pays 3 to 2."),
     ("roulette", "Roulette", "Single zero. Red or black, or straight up at 35 to 1."),

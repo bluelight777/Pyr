@@ -267,7 +267,7 @@ impl PyrApp {
                 self.open_tourney(&s.key, tid);
             }
         }
-        let name_r = p.text(pos2(back.right() + 16.0, r.center().y - 8.0), Align2::LEFT_CENTER, &v.name, theme::bold_font(15.5), theme::TEXT());
+        let name_g = p.layout_no_wrap(v.name.clone(), theme::bold_font(15.5), theme::TEXT());
         let hand = v.hand.map(|h| format!(" · hand #{h}")).unwrap_or_default();
         let sub = match v.tourney.and_then(|tid| s.poker.tourney.get(&tid)) {
             Some(tv) => {
@@ -278,56 +278,136 @@ impl PyrApp {
             }
             None => format!("{}{hand}", v.rules.name()),
         };
-        let sub_r = p.text(pos2(back.right() + 16.0, r.center().y + 10.0), Align2::LEFT_CENTER, sub, theme::font(12.0), theme::MUTED());
-        let words_end = name_r.right().max(sub_r.right()) + 16.0;
-        // On the right: log, history, sit out, add chips, leave.
-        let mut x = r.right() - 12.0;
-        let mut button = |ui: &mut egui::Ui, text: &str, w: f32| -> egui::Response {
-            let b = Rect::from_min_size(pos2(x - w, r.top() + 9.0), vec2(w, 32.0));
-            x -= w + 8.0;
-            ui.put(b, egui::Button::new(RichText::new(text).font(theme::font(13.0))).corner_radius(theme::r(8)))
-        };
+        let sub_g = p.layout_no_wrap(sub, theme::font(12.0), theme::MUTED());
+        // On the right: the buttons, as many as fit beside the table's name; in a narrow window
+        // (or beside streamer mode's room for a camera) the rest are under More, never over the
+        // name.
+        #[derive(Clone, Copy, PartialEq)]
+        enum B {
+            Full,
+            Stream,
+            Sound,
+            Prize,
+            Log,
+            Last,
+            Leave,
+            SitOut,
+            Chips,
+        }
         let fs = self.poker.casino.fullscreen;
-        if button(ui, if fs { "Exit full" } else { "Fullscreen" }, 92.0).on_hover_text(if fs { "Leave fullscreen (Esc)" } else { "Just the table, the whole screen (F11)" }).clicked() || ui.ctx().input(|i| i.key_pressed(egui::Key::F11)) {
-            self.poker.casino.fullscreen = !fs;
+        let streamer = self.streamer_mode();
+        let tourney = v.tourney.is_some();
+        let mine = v.my_seat.and_then(|seat| v.seats[seat].as_ref());
+        let out = mine.is_some_and(|x| x.sitting_out);
+        let in_hand = mine.is_some_and(|x| x.in_hand) && v.hand.is_some() && v.to_act.is_some();
+        // (Right to left, as they're shown.)
+        let mut all: Vec<(B, &str, f32, &str)> = vec![
+            (B::Full, if fs { "Exit full" } else { "Fullscreen" }, 92.0, if fs { "Leave fullscreen (Esc)" } else { "Just the table, the whole screen (F11)" }),
+            (
+                B::Stream,
+                if streamer { "Streaming" } else { "Stream" },
+                92.0,
+                if streamer { "Streamer mode is on: your cards stay face down until you peek (hold Space). Click for the table's layout on a stream." } else { "Streamer mode, for when you're live: click to set it up" },
+            ),
+            (B::Sound, if self.poker.mute { "Sound off" } else { "Sound on" }, 92.0, "The table's sounds: cards, chips, your turn"),
+        ];
+        if !tourney && s.poker.me.as_ref().is_some_and(|m| m.role.is_some()) && v.prize.is_none() {
+            all.push((B::Prize, "Prize box", 92.0, "Drop a prize box: whoever wins the next hand opens it"));
         }
-        if button(ui, if self.poker.mute { "Sound off" } else { "Sound on" }, 92.0).on_hover_text("The table's sounds: cards, chips, your turn").clicked() {
-            self.poker.mute = !self.poker.mute;
+        all.push((B::Log, if self.poker.log_open { "Hide log" } else { "Hand log" }, 92.0, ""));
+        if !v.recent.is_empty() {
+            all.push((B::Last, "Last hand", 92.0, ""));
         }
-        if v.tourney.is_none()
-            && s.poker.me.as_ref().is_some_and(|m| m.role.is_some())
-            && v.prize.is_none()
-            && button(ui, "Prize box", 92.0).on_hover_text("Drop a prize box: whoever wins the next hand opens it").clicked()
-        {
-            self.poker.prize_for = Some(v.id);
-            self.engine.poker(&s.key, ToServer::Staff);
-        }
-        if button(ui, if self.poker.log_open { "Hide log" } else { "Hand log" }, 92.0).clicked() {
-            self.poker.log_open = !self.poker.log_open;
-        }
-        if let Some(&last) = v.recent.last()
-            && button(ui, "Last hand", 92.0).clicked()
-        {
-            self.engine.poker(&s.key, ToServer::History { table: v.id, hand: last });
-        }
-        if let Some(seat) = v.my_seat {
-            let out = v.seats[seat].as_ref().is_some_and(|x| x.sitting_out);
-            let tourney = v.tourney.is_some();
-            if !tourney && button(ui, "Leave seat", 100.0).clicked() {
-                self.engine.poker(&s.key, ToServer::Stand { table: v.id });
+        if mine.is_some() {
+            if !tourney {
+                all.push((B::Leave, "Leave seat", 100.0, ""));
             }
             let away = if tourney { "Away" } else { "Sit out" };
-            if button(ui, if out { "I'm back" } else { away }, 86.0)
-                .on_hover_text(if tourney { "Folded for (and blinded) until you're back" } else { "Not dealt in until you're back" })
-                .clicked()
-            {
-                self.engine.poker(&s.key, ToServer::SitOut { table: v.id, out: !out });
-            }
-            let in_hand = v.seats[seat].as_ref().is_some_and(|x| x.in_hand) && v.hand.is_some() && v.to_act.is_some();
-            if !tourney && !in_hand && button(ui, "Add chips", 92.0).clicked() {
-                self.poker.top_up = Some((v.id, v.rules.big_blind * 50));
+            all.push((B::SitOut, if out { "I'm back" } else { away }, 86.0, if tourney { "Folded for (and blinded) until you're back" } else { "Not dealt in until you're back" }));
+            if !tourney && !in_hand {
+                all.push((B::Chips, "Add chips", 92.0, ""));
             }
         }
+        // What goes under More first.
+        const FIRST_UNDER_MORE: [B; 9] = [B::Full, B::Prize, B::Last, B::Chips, B::Sound, B::Log, B::Leave, B::Stream, B::SitOut];
+        const MORE_W: f32 = 78.0;
+        let title_w = name_g.size().x.max(sub_g.size().x).min(150.0);
+        let room = (r.right() - 12.0) - (back.right() + 16.0 + title_w + 12.0);
+        let width = |list: &[(B, &str, f32, &str)], more: bool| list.iter().map(|e| e.2 + 8.0).sum::<f32>() + if more { MORE_W + 8.0 } else { 0.0 };
+        let mut under_more: Vec<(B, &str, f32, &str)> = Vec::new();
+        for gone in FIRST_UNDER_MORE {
+            if width(&all, !under_more.is_empty()) <= room {
+                break;
+            }
+            if let Some(i) = all.iter().position(|e| e.0 == gone) {
+                under_more.push(all.remove(i));
+            }
+        }
+        let mut x = r.right() - 12.0;
+        let mut clicked: Option<B> = None;
+        let mut stream_at: Option<Rect> = None;
+        for (b, label, w, tip) in &all {
+            let at = Rect::from_min_size(pos2(x - w, r.top() + 9.0), vec2(*w, 32.0));
+            x -= w + 8.0;
+            let resp = ui.put(at, egui::Button::new(RichText::new(*label).font(theme::font(13.0))).corner_radius(theme::r(8)));
+            let resp = if tip.is_empty() { resp } else { resp.on_hover_text(*tip) };
+            if *b == B::Stream {
+                stream_at = Some(resp.rect);
+            }
+            if resp.clicked() {
+                clicked = Some(*b);
+            }
+        }
+        if !under_more.is_empty() {
+            // (In the order they'd be in on the bar, left to right.)
+            const BAR_ORDER: [B; 9] = [B::Chips, B::SitOut, B::Leave, B::Last, B::Log, B::Prize, B::Sound, B::Stream, B::Full];
+            under_more.sort_by_key(|e| BAR_ORDER.iter().position(|b| *b == e.0).unwrap_or(0));
+            let at = Rect::from_min_size(pos2(x - MORE_W, r.top() + 9.0), vec2(MORE_W, 32.0));
+            x -= MORE_W + 8.0;
+            let resp = ui.put(at, egui::Button::new(RichText::new("More…").font(theme::font(13.0))).corner_radius(theme::r(8)));
+            if stream_at.is_none() {
+                stream_at = Some(resp.rect);
+            }
+            egui::Popup::menu(&resp).align(egui::RectAlign::BOTTOM_END).width(170.0).show(|ui| {
+                crate::menu::style(ui);
+                for (b, label, _, tip) in &under_more {
+                    let item = ui.button(*label);
+                    let item = if tip.is_empty() { item } else { item.on_hover_text(*tip) };
+                    if item.clicked() {
+                        clicked = Some(*b);
+                        ui.close();
+                    }
+                }
+            });
+        }
+        if clicked == Some(B::Full) || ui.ctx().input(|i| i.key_pressed(egui::Key::F11)) {
+            self.poker.casino.fullscreen = !fs;
+        }
+        match clicked {
+            Some(B::Stream) => self.poker.casino.stream_menu = if self.poker.casino.stream_menu.is_some() { None } else { stream_at },
+            Some(B::Sound) => self.poker.mute = !self.poker.mute,
+            Some(B::Prize) => {
+                self.poker.prize_for = Some(v.id);
+                self.engine.poker(&s.key, ToServer::Staff);
+            }
+            Some(B::Log) => self.poker.log_open = !self.poker.log_open,
+            Some(B::Last) => {
+                if let Some(&last) = v.recent.last() {
+                    self.engine.poker(&s.key, ToServer::History { table: v.id, hand: last });
+                }
+            }
+            Some(B::Leave) => self.engine.poker(&s.key, ToServer::Stand { table: v.id }),
+            Some(B::SitOut) => self.engine.poker(&s.key, ToServer::SitOut { table: v.id, out: !out }),
+            Some(B::Chips) => self.poker.top_up = Some((v.id, v.rules.big_blind * 50)),
+            Some(B::Full) | None => {}
+        }
+        // The table's name and what it is, cut short where the buttons start.
+        let words = p.with_clip_rect(Rect::from_min_max(pos2(back.right() + 8.0, r.top()), pos2(x - 4.0, r.bottom())).intersect(p.clip_rect()));
+        let name_at = pos2(back.right() + 16.0, r.center().y - 8.0 - name_g.size().y / 2.0);
+        let sub_at = pos2(back.right() + 16.0, r.center().y + 10.0 - sub_g.size().y / 2.0);
+        let words_end = (back.right() + 16.0 + name_g.size().x.max(sub_g.size().x)).min(x - 4.0) + 16.0;
+        words.galley(name_at, name_g, theme::TEXT());
+        words.galley(sub_at, sub_g, theme::MUTED());
         // The shuffle checks.
         let (fair, problems) = checks_summary(t);
         let (label, col, tip) = if let Some((h, why)) = problems.last() {
@@ -659,7 +739,8 @@ impl PyrApp {
             let left = cards_left.max(lay.seat(me).x + 90.0);
             let r = Rect::from_min_size(pos2(left, base.y + ch * 0.5 + 10.0), vec2(250.0, 28.0));
             p.rect_filled(r, theme::r(14), Color32::from_rgba_unmultiplied(0x14, 0x10, 0x0a, 225));
-            p.text(r.center(), Align2::CENTER_CENTER, "Streamer mode · hold Space to peek", theme::bold_font(12.5), Color32::from_rgb(0xff, 0xe2, 0x9a));
+            let why = if self.streamer_auto() { "Sharing your screen · hold Space to peek" } else { "Streamer mode · hold Space to peek" };
+            p.text(r.center(), Align2::CENTER_CENTER, why, theme::bold_font(12.5), Color32::from_rgb(0xff, 0xe2, 0x9a));
             return;
         }
         // What I have now, and (if asked for) my chance of winning.
@@ -810,6 +891,12 @@ impl PyrApp {
         };
         // My turn: Fold, Check or Call, and Bet or Raise with its amount.
         let key = (hand, me, l.min_to);
+        // Fold while a check is free asks first (see below), for this turn only.
+        let fold_key = (hand, v.board.len());
+        if self.poker.fold_armed.is_some_and(|k| k != fold_key || !l.can_check) {
+            self.poker.fold_armed = None;
+        }
+        let armed = self.poker.fold_armed == Some(fold_key);
         if self.poker.raise_for != Some(key) {
             self.poker.raise_for = Some(key);
             self.poker.raise = l.min_to;
@@ -854,8 +941,21 @@ impl PyrApp {
         let left = right - span;
         // Fold, Check or Call, Bet or Raise: left to right.
         let r = Rect::from_min_size(pos2(left, y), vec2(fold_w, h));
-        if btn(ui, r, "Fold", "", Color32::from_rgb(0xb0, 0x2e, 0x38), "fold", "F") {
+        if btn(ui, r, if armed { "Fold anyway" } else { "Fold" }, "", Color32::from_rgb(0xb0, 0x2e, 0x38), "fold", "F") {
             act = Some(Action::Fold);
+        }
+        // Checking's free: Fold said so once (a click on it again folds).
+        if armed {
+            let above = if l.can_raise && l.max_to > l.min_to { y - 48.0 } else { y - 8.0 };
+            let text = "Checking is free. Click Fold again to fold anyway.";
+            let g = p.layout_no_wrap(text.to_string(), theme::bold_font(13.5), Color32::from_rgb(0xff, 0xe2, 0x9a));
+            let br = Rect::from_min_size(pos2(left - 8.0, above - 8.0 - g.size().y - 16.0), vec2(g.size().x + 28.0, g.size().y + 16.0));
+            p.rect_filled(br, theme::r(12), Color32::from_rgba_unmultiplied(0x2a, 0x12, 0x0c, 240));
+            p.rect_stroke(br, theme::r(12), Stroke::new(1.5f32, Color32::from_rgb(0xff, 0xb0, 0x5a)), StrokeKind::Inside);
+            // (Pointing down at Fold.)
+            let tip = pos2(left + fold_w / 2.0, br.bottom() + 7.0);
+            p.add(Shape::convex_polygon(vec![pos2(tip.x - 8.0, br.bottom() - 1.0), pos2(tip.x + 8.0, br.bottom() - 1.0), tip], Color32::from_rgba_unmultiplied(0x2a, 0x12, 0x0c, 240), Stroke::NONE));
+            p.galley(br.min + vec2(14.0, 8.0), g, Color32::WHITE);
         }
         let r = Rect::from_min_size(pos2(left + fold_w + gap, y), vec2(w, h));
         if l.can_check {
@@ -943,9 +1043,14 @@ impl PyrApp {
             }
         }
         if let Some(a) = act {
-            // A fold when I could check: checked instead (folding for nothing helps nobody).
-            let a = if a == Action::Fold && l.can_check { Action::Check } else { a };
-            self.engine.poker(&s.key, ToServer::Act { table: v.id, hand, action: a });
+            // Fold while a check is free: the first click says checking's free, the second folds.
+            // (Before 0.11 it quietly checked instead, and Fold looked as if it didn't work.)
+            if a == Action::Fold && l.can_check && !armed {
+                self.poker.fold_armed = Some(fold_key);
+            } else {
+                self.poker.fold_armed = None;
+                self.engine.poker(&s.key, ToServer::Act { table: v.id, hand, action: a });
+            }
         }
     }
 

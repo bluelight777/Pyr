@@ -187,6 +187,11 @@ pub struct Settings {
     /// strength meter with them, and pop-ups don't show what messages say. (It also turns on by
     /// itself while I'm sharing my screen; see the app.)
     pub streamer_mode: bool,
+    /// Streamer mode at a casino game or a poker table: room kept clear down one side of it for
+    /// a camera and overlays ("", "left" or "right"), and whether the game fills Pyr's window
+    /// (Pyr's server and channel lists put away while it's open).
+    pub stream_room: String,
+    pub stream_stage: bool,
     /// Send a report by itself when something goes wrong that Pyr can tell (screen sharing
     /// or the camera won't start or stops working, a crash or a freeze last time), so it gets
     /// fixed: what happened and Pyr's log, to the bug report server (see `bugs::auto_report`).
@@ -316,6 +321,8 @@ impl Default for Settings {
             library_sort: String::new(),
             poker_installed: false,
             streamer_mode: false,
+            stream_room: String::new(),
+            stream_stage: true,
             voice_meter: String::new(),
             dnd: false,
             ringtone: None,

@@ -126,6 +126,9 @@ pub enum Act {
     InstallPoker(bool),
     /// Streamer mode on or off (kept in the settings).
     StreamerMode(bool),
+    /// Streamer mode's layout at a game: the room kept for a camera ("", "left", "right"), and
+    /// whether the game fills Pyr's window.
+    StreamLayout { room: Option<String>, stage: Option<bool> },
     /// What I sent in to the Pyr Library, and where it stands.
     MySubmissions,
     AddFriend(String),
@@ -391,6 +394,9 @@ pub struct UiState {
     pub streamer_auto_live: bool,
     pub streamer_auto_off: bool,
     pub streamer_set: Option<bool>,
+    /// Streamer mode's layout at a game (as the settings have it, read each frame).
+    pub stream_room: String,
+    pub stream_stage: bool,
     /// A click on a video tile, acted on once it's clearly not a double-click.
     pub pending_click: Option<(VideoKey, Instant)>,
     /// The share picker's live preview: what it shows, and its picture (with when it came).
@@ -927,6 +933,16 @@ impl PyrApp {
             Act::StreamerMode(on) => {
                 let mut settings = e.state().settings.clone();
                 settings.streamer_mode = on;
+                e.update_settings(settings);
+            }
+            Act::StreamLayout { room, stage } => {
+                let mut settings = e.state().settings.clone();
+                if let Some(r) = room {
+                    settings.stream_room = r;
+                }
+                if let Some(s) = stage {
+                    settings.stream_stage = s;
+                }
                 e.update_settings(settings);
             }
             Act::InstallPoker(on) => {
@@ -1819,6 +1835,12 @@ impl PyrApp {
             }
             self.ui.streamer_mode = st.settings.streamer_mode;
         }
+        self.ui.stream_room = st.settings.stream_room.clone();
+        self.ui.stream_stage = st.settings.stream_stage;
+        if !self.streamer_mode() {
+            // (A stream's session at the casino starts again with the next one.)
+            self.poker.casino.session_start = None;
+        }
         let sharing = st.call.as_ref().is_some_and(|c| c.screen_on);
         if sharing && !self.ui.streamer_auto_off {
             self.ui.streamer_auto_live = true;
@@ -1826,6 +1848,15 @@ impl PyrApp {
         if !sharing {
             self.ui.streamer_auto_live = false;
             self.ui.streamer_auto_off = false;
+        }
+        // Minimized (or hidden in the tray): nothing to draw. The frames still run (and on
+        // Windows can't be shown), and drawing a casino game or a stream in them for nobody is
+        // how bug report 35's 10 to 17 GB piled up (see `surface_error` in main).
+        let minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+        #[cfg(windows)]
+        let minimized = minimized || crate::tray::window_hidden();
+        if minimized {
+            return;
         }
         if self.casino_fullscreen_ui(ctx, st, acts) {
             self.dialogs(ctx, st, acts);

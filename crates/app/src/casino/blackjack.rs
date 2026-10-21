@@ -89,6 +89,27 @@ impl PyrApp {
         }
         self.poker.casino.settle_at(results_at);
         self.poker.casino.celebrate(o.paid, o.wagered, false, back);
+        // Called out big in the middle of the table, as the results show.
+        let (title, color) = if o.hands.iter().any(|h| h.result == Some(bj::Result::Blackjack)) {
+            ("BLACKJACK!", col::GOLD2)
+        } else if o.paid > o.wagered {
+            ("YOU WIN", col::WIN)
+        } else if o.paid == o.wagered && o.paid > 0 {
+            ("PUSH", Color32::from_rgb(0xd8, 0xd8, 0xe0))
+        } else if o.hands.iter().all(|h| h.result == Some(bj::Result::Bust)) {
+            ("BUST", col::LOSE)
+        } else {
+            ("DEALER WINS", col::LOSE)
+        };
+        let dealer = bj::value(&o.dealer).0;
+        let sub = if o.paid > o.wagered {
+            format!("+{}", chips_text(o.paid - o.wagered))
+        } else if o.hands.len() == 1 {
+            format!("Dealer {}  ·  You {}", if dealer > 21 { "bust".to_string() } else { dealer.to_string() }, bj::value(&o.hands[0].cards).0)
+        } else {
+            String::new()
+        };
+        self.poker.casino.announce(title, sub, color, (0.5, 0.36), back);
     }
 
     pub(super) fn blackjack_page(&mut self, ui: &mut egui::Ui, s: &ServerView, area: Rect) {
@@ -296,7 +317,6 @@ impl PyrApp {
                 }
             }
             None => {
-                self.chip_rack(ui, pos2(bar.left() + 16.0, bar.center().y - 26.0), 25_000);
                 let bet = self.poker.casino.bj.bet;
                 let last = self.poker.casino.bj.last_bet;
                 let mut x = bar.right() - 16.0;
@@ -330,7 +350,8 @@ impl PyrApp {
                 if button(ui, if hint { "Hints on" } else { "Hints off" }, 110.0, false, true) {
                     self.poker.casino.bj.hint = !hint;
                 }
-                p.text(pos2(x - 10.0, bar.center().y), Align2::RIGHT_CENTER, format!("Bet {}", chips_text(bet)), theme::bold_font(16.0), if bet > super::chips_now(s) { col::LOSE } else { col::GOLD2 });
+                let color = if bet > super::chips_now(s) { col::LOSE } else { col::GOLD2 };
+                self.rack_and_bet(ui, bar, x, 25_000, format!("Bet {}", chips_text(bet)), color);
                 if bet > 0 && bet < 10 {
                     p.text(pos2(bar.center().x, bar.top() - 14.0), Align2::CENTER_CENTER, "The least bet is 10", theme::font(12.5), col::MUTED);
                 } else if bet == 0 {

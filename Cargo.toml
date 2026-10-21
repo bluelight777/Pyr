@@ -5,7 +5,7 @@ members = ["crates/poker", "crates/proto", "crates/server", "crates/engine", "cr
 exclude = ["plugins"]
 
 [workspace.package]
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 rust-version = "1.91"
 license = "MIT OR Apache-2.0"
@@ -35,6 +35,11 @@ lto = "thin"
 codegen-units = 4
 strip = true
 panic = "unwind"
+
+# The echo canceller (BSD-3-Clause), with one addition: Pyr can adjust AEC3's detailed
+# settings before it's built (vendor/sonora/PYR.md).
+[patch.crates-io]
+sonora = { path = "vendor/sonora" }
 
 # Smaller release builds (whole-program LTO): `--profile dist`.
 [profile.dist]
