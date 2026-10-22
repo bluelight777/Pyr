@@ -727,7 +727,12 @@ impl PyrApp {
     }
 
     /// My bets to the table (shown at once, the table's own once it has them).
-    fn bac_send(&mut self, s: &ServerView, v: &BacView, bets: Bets, ready: bool) {
+    fn bac_send(&mut self, s: &ServerView, v: &BacView, mut bets: Bets, ready: bool) {
+        // Each bet brought into what this table takes first (a small chip, or a rebet from
+        // another table, would otherwise be turned away).
+        if pyr_poker::bacroom::fit(&mut bets, v.min_bet, v.max_bet) {
+            self.toast(format!("Bets here are {} to {} (Tie and pairs up to {}): yours set to fit", chips_text(v.min_bet), chips_text(v.max_bet), chips_text(v.max_bet.min(pyr_poker::bacroom::SIDE_MAX))), false);
+        }
         self.poker.casino.bact.desired = Some((v.coup_no, bets.clone()));
         self.poker.casino.sound_in(0.0, Cue::Chips, 0.0, 0.45);
         self.engine.bac_bets(&s.key, v.id, v.coup_no, bets, ready);

@@ -1,7 +1,7 @@
 //! The casino floor: the house's games. The Phoenix Jackpot climbing, wins as they happen, then
 //! a card for every game, by kind: the slots (Pyr Sevens and Reel Row's twelve machines), the
-//! table games, and Pyr's own. (Poker, Flash Pots, Pyr Friday Night and tournaments are under
-//! Poker.) The art is Meshy's (`casino::pics`).
+//! table games, poker (its tables, Flash Pots, Pyr Friday Night and tournaments), and Pyr's own.
+//! The art is Meshy's (`casino::pics`).
 
 use eframe::egui::{self, Align2, Color32, Rect, RichText, Sense, Shape, Stroke, StrokeKind, pos2, vec2};
 use pyr_engine::state::ServerView;
@@ -76,14 +76,19 @@ impl PyrApp {
         ui.add_space(24.0);
         // The slots: Pyr Sevens, then Reel Row's machines (on a server that has them).
         let reel_row = s.has(pyr_proto::control::CASINO_012_FEATURE);
+        let v13 = s.has(pyr_proto::control::CASINO_013_FEATURE);
         let mut slots = vec![game_card(Game::Slots, "tile-sevens", 0.5, vec![("JACKPOT", col::EMBER)])];
         if reel_row {
-            slots.push(game_card(Game::Dragon, "tile-dragon", 0.5, vec![("JACKPOTS", col::EMBER), ("NEW", NEW)]));
+            slots.push(game_card(Game::Dragon, "tile-dragon", 0.5, if v13 { vec![("JACKPOTS", col::EMBER), ("BONUS BUY", NEW)] } else { vec![("JACKPOTS", col::EMBER), ("NEW", NEW)] }));
         }
         if reel_row {
             for (m, th) in THEMES.iter().enumerate() {
                 let mut badges = Vec::new();
-                if rr::bonus_kind(m as u8) == rr::BonusKind::Wheel {
+                if v13 {
+                    // Its reach: how far its top prize goes, or its progressive jackpot.
+                    badges.push(top_badge(m as u8));
+                    badges.push(("BONUS BUY", NEW));
+                } else if rr::bonus_kind(m as u8) == rr::BonusKind::Wheel {
                     badges.push(("WHEEL", WHEEL));
                 }
                 if th.humor.is_some() {
@@ -100,21 +105,30 @@ impl PyrApp {
                     focus: if th.id == "goldrush" { 0.3 } else { 0.5 },
                     badges,
                     foot: rtp_line(&key, Game::Reels),
-                    pitch: format!("{} 243 ways, {}.", th.tagline, if rr::bonus_kind(m as u8) == rr::BonusKind::Wheel { "and a prize wheel" } else { "and a pick-and-dodge bonus" }),
+                    pitch: if v13 {
+                        let (g, what) = pyr_poker::casino::reelrow::GAMES[m];
+                        format!("{} 243 ways, and its own mini game, the {g}: {what} {}", th.tagline, top_words(s, m as u8))
+                    } else {
+                        format!("{} 243 ways, {}.", th.tagline, if rr::bonus_kind(m as u8) == rr::BonusKind::Wheel { "and a prize wheel" } else { "and a pick-and-dodge bonus" })
+                    },
                 });
             }
         }
         let note = (!reel_row).then_some("Twelve more machines come when this server's Pyr is updated to 0.12.");
         self.floor_section(ui, s, w, "Slots", &format!("{} game{} · every one pays back about 99%", slots.len(), if slots.len() == 1 { "" } else { "s" }), &slots, note);
-        // (On a 0.12.0 server: tables with seats for people and bots.)
-        let seats = |n: &'static str| if reel_row { vec![(n, col::GOLD_DARK), ("NEW", NEW)] } else { vec![] };
+        // (On a 0.12.0 server: tables with seats for people and bots; roulette's on 0.13.0.)
+        let seats = |n: &'static str| if reel_row { vec![(n, col::GOLD_DARK)] } else { vec![] };
+        let roulette_seats = if s.has(pyr_proto::control::CASINO_013_FEATURE) { vec![("5 SEATS", col::GOLD_DARK), ("NEW", NEW)] } else { vec![] };
         let tables = vec![
-            game_card(Game::Blackjack, "tile-blackjack", 0.38, if reel_row { vec![("7 SEATS", col::GOLD_DARK)] } else { vec![] }),
-            game_card(Game::Roulette, "tile-roulette", 0.5, vec![]),
+            game_card(Game::Blackjack, "tile-blackjack", 0.38, seats("7 SEATS")),
+            game_card(Game::Roulette, "tile-roulette", 0.5, roulette_seats),
             game_card(Game::Baccarat, "tile-baccarat", 0.5, seats("5 SEATS")),
             game_card(Game::Craps, "tile-craps", 0.5, seats("5 SEATS")),
         ];
         self.floor_section(ui, s, w, "Table games", "Dealt and rolled by the house, checked by your Pyr", &tables, None);
+        // Poker, like every other game here: its tables, Flash Pots and tournaments.
+        self.poker_sections(ui, s);
+        ui.add_space(26.0);
         let originals = vec![game_card(Game::Dice, "tile-dice", 0.5, vec![]), game_card(Game::Keno, "tile-keno", 0.5, vec![])];
         self.floor_section(ui, s, w, "Pyr Originals", "Quick games: pick your odds", &originals, None);
         ui.horizontal(|ui| {
@@ -311,8 +325,46 @@ impl PyrApp {
         if resp.on_hover_text(&card.pitch).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
             match card.opens {
                 Opens::Game(g) => self.poker.casino.game = Some(g),
-                Opens::Machine(m) => self.reels_open(m),
+                Opens::Machine(m) => {
+                    self.reels_open(m);
+                    self.row_open(m);
+                }
             }
+        }
+    }
+}
+
+/// A Reel Row machine's reach, as a badge: its top prize's size, or its progressive jackpot.
+fn top_badge(machine: u8) -> (&'static str, Color32) {
+    use pyr_poker::casino::reelrow::{TOPS, Top};
+    let gold = Color32::from_rgb(0xb8, 0x7a, 0x10);
+    match TOPS[machine as usize].top {
+        Top::Progressive => ("PROGRESSIVE", col::EMBER),
+        Top::Fixed(500_000) => ("500,000×", Color32::from_rgb(0x8a, 0x2a, 0xd0)),
+        Top::Fixed(50_000) => ("50,000×", gold),
+        Top::Fixed(25_000) => ("25,000×", gold),
+        Top::Fixed(20_000) => ("20,000×", gold),
+        Top::Fixed(10_000) => ("10,000×", gold),
+        Top::Fixed(7_500) => ("7,500×", gold),
+        Top::Fixed(_) => ("5,000×", gold),
+    }
+}
+
+/// A Reel Row machine's top prize, in words (its progressive jackpot's pool as it stands).
+pub(super) fn top_words(s: &ServerView, machine: u8) -> String {
+    use pyr_poker::casino::reelrow::{TOPS, Top};
+    let t = &TOPS[machine as usize];
+    let odds = 1_000_000_000 / t.per_billion.max(1) as u64;
+    match t.top {
+        Top::Fixed(x) => format!("Its top prize, {}: {}× the bet, at the end of 1 bonus in {}.", t.name, crate::poker::cards::chips_text(x), crate::poker::cards::chips_text(odds)),
+        Top::Progressive => {
+            let pool = s.poker.casino.row_pools.get(&machine).copied().unwrap_or(pyr_poker::casino::reelrow::POOL_SEED);
+            format!(
+                "Its progressive jackpot, {}: {} chips now (all of it at the biggest bet, its share at smaller ones), at the end of 1 bonus in {}; every round here adds to it.",
+                t.name,
+                crate::poker::cards::chips_text(pool),
+                crate::poker::cards::chips_text(odds)
+            )
         }
     }
 }

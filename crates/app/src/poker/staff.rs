@@ -79,8 +79,12 @@ pub fn prize_limit(s: &ServerView) -> Option<u64> {
     v.me.map(|_| v.left)
 }
 
-/// I own this server, and it's one that lets its owner give without a limit.
+/// I give without a limit here: the Owner of the Game (on a 0.13.0 server, as it says); on an
+/// 0.12.0 server, its owner.
 fn owner(s: &ServerView) -> bool {
+    if s.has(pyr_proto::control::CASINO_013_FEATURE) {
+        return s.poker.staff.as_ref().is_some_and(|v| v.owner);
+    }
     let mine = s.poker.staff.as_ref().map(|v| v.owner).unwrap_or_else(|| s.me.as_ref().is_some_and(|m| m.role == pyr_proto::control::Role::Owner));
     mine && s.has(pyr_proto::control::CASINO_012_FEATURE)
 }
@@ -88,7 +92,7 @@ fn owner(s: &ServerView) -> bool {
 /// What to say about it: what's left today, or that there's no limit.
 pub fn limit_words(max: u64) -> String {
     if max >= NO_LIMIT {
-        "no limit: you own this server (every gift goes in the log)".to_string()
+        "no limit: you're the Owner of the Game (every gift goes in the log)".to_string()
     } else {
         format!("left to give today: {}", chips_text(max))
     }
@@ -128,7 +132,7 @@ impl PyrApp {
         if role != Some(Role::GameMaster) && !owner {
             return false;
         }
-        let tip = if owner { "A gift of chips, as many as you like (you own this server): it goes in the log" } else { "A gift of chips from what you have left to give today, as a Game Master" };
+        let tip = if owner { "A gift of chips, as many as you like (you're the Owner of the Game): it goes in the log" } else { "A gift of chips from what you have left to give today, as a Game Master" };
         if ui.button("Give chips…").on_hover_text(tip).clicked() {
             self.poker.giving = Giving { to: Some(uid.to_string()), ..Default::default() };
             self.poker.gift_box = Some(s.key.clone());
@@ -233,12 +237,12 @@ impl PyrApp {
             return;
         };
         ui.add_space(6.0);
-        ui.label(RichText::new("Game Masters run the game with you: they gift chips and looks, and drop prize boxes on tables. Ambassadors drop prize boxes (whoever wins the next hand opens it). Each gives at most a day's allowance, which follows the rake: a Game Master a day's rake (the week's average), an Ambassador a quarter of it.").color(theme::MUTED()).size(13.5));
+        ui.label(RichText::new("Game Masters run the game with the Owner of the Game, on every server: they gift chips and looks, and drop prize boxes on tables. Ambassadors drop prize boxes (whoever wins the next hand opens it). Each gives at most a day's allowance, which follows the rake: a Game Master a day's rake (the week's average), an Ambassador a quarter of it.").color(theme::MUTED()).size(13.5));
         ui.add_space(8.0);
         ui.label(RichText::new(format!("Raked this week: {} chips", chips_text(v.rake_week))).size(14.0));
         let limit = gift_limit(s);
         if limit.is_some_and(|m| m >= NO_LIMIT) {
-            ui.label(RichText::new("You own this server: you give as many chips as you like. Every gift goes in the log below.").strong().size(15.0));
+            ui.label(RichText::new("You're the Owner of the Game: you give as many chips as you like, on every server. Every gift goes in the log below.").strong().size(15.0));
         } else if let Some(r) = v.me {
             ui.label(RichText::new(format!("You're a {}. Left to give today: {} of {} chips.", r.name(), chips_text(v.left), chips_text(v.allowance))).strong().size(15.0));
         }
@@ -249,9 +253,15 @@ impl PyrApp {
             ui.label(RichText::new("Give a gift").strong().size(16.0));
             let mut g = self.poker.giving.clone();
             ui.horizontal(|ui| {
-                let who = g.to.as_ref().and_then(|u| s.members.get(u.as_str())).map(|m| m.name.clone()).unwrap_or_else(|| "Pick someone".into());
+                // (The owner can give to themselves too; nobody else can.)
+                let owner = owner(s);
+                let mine = |u: &str| s.me.as_ref().is_some_and(|m| m.user_id == u);
+                let who = g.to.as_ref().and_then(|u| s.members.get(u.as_str()).map(|m| if mine(u) { format!("{} (you)", m.name) } else { m.name.clone() })).unwrap_or_else(|| "Pick someone".into());
                 egui::ComboBox::from_id_salt("gift-to").selected_text(who).width(200.0).show_ui(ui, |ui| {
-                    let mut ms: Vec<_> = s.members.iter().filter(|(u, _)| s.me.as_ref().is_none_or(|m| m.user_id != **u)).collect();
+                    if owner && let Some(me) = s.me.as_ref() {
+                        ui.selectable_value(&mut g.to, Some(me.user_id.to_string()), format!("{} (you)", s.members.get(me.user_id.as_str()).map(|m| m.name.as_str()).unwrap_or("Me")));
+                    }
+                    let mut ms: Vec<_> = s.members.iter().filter(|(u, _)| !mine(u)).collect();
                     ms.sort_by_key(|(_, m)| m.name.to_lowercase());
                     for (u, m) in ms {
                         ui.selectable_value(&mut g.to, Some(u.to_string()), &m.name);
@@ -300,7 +310,10 @@ impl PyrApp {
                         ui.selectable_value(pick, Some(u.to_string()), &m.name);
                     }
                 });
-                for r in [Role::GameMaster, Role::Ambassador] {
+                // (Game Masters are named on the home server only, and count everywhere.)
+                let home = s.key == pyr_poker::net::HOME_SERVER;
+                let roles: &[Role] = if home { &[Role::GameMaster, Role::Ambassador] } else { &[] };
+                for &r in roles {
                     if ui.add_enabled(pick.is_some(), egui::Button::new(format!("Make {}", r.name()))).clicked()
                         && let Some(u) = pick.take()
                     {
@@ -308,6 +321,9 @@ impl PyrApp {
                     }
                 }
             });
+            if s.key != pyr_poker::net::HOME_SERVER {
+                ui.label(RichText::new("Game Masters and Ambassadors are named on Brethren of Blood, Pyr Casino's home, and are staff on every server.").color(theme::MUTED()).size(12.5));
+            }
             ui.add_space(14.0);
             ui.label(RichText::new("What they gave").strong().size(16.0));
             if v.log.is_empty() {
@@ -328,14 +344,14 @@ impl PyrApp {
     }
 
     /// A Game Master's or Ambassador's prize box (or the owner's), being made up for a table.
-    pub fn prize_dialog(&mut self, ctx: &egui::Context, s: &ServerView, table: TableId) {
+    pub fn prize_dialog(&mut self, ctx: &egui::Context, s: &ServerView, table: TableId, has_prize: bool) {
         let Some(g) = self.poker.prize_for.filter(|t| *t == table).map(|_| self.poker.giving.clone()) else { return };
         let left = prize_limit(s).unwrap_or(0);
         let mut g = g;
         let mut open = true;
         let mut send = false;
         egui::Window::new("Drop a prize box").collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
-            ui.label(RichText::new("Whoever wins the next hand opens it (a person: if a bot wins, it waits for the next).").color(theme::MUTED()));
+            ui.label(RichText::new("Whoever wins the hand it lands on opens it, a person or a bot (a bot's chips go on its stack).").color(theme::MUTED()));
             ui.add_space(6.0);
             ui.horizontal(|ui| chips_box(ui, &mut g.chips, left));
             let words = limit_words(left);
@@ -344,7 +360,12 @@ impl PyrApp {
             ui.label(RichText::new(words).size(12.5).color(theme::DIM()));
             look_picker(ui, "prize-look", &mut g.item);
             ui.add_space(8.0);
-            if ui.add_enabled(g.chips > 0 || g.item.is_some(), theme::primary_button("Drop it on the table")).clicked() {
+            // (One box to a table: one dropped by someone else while this was open, or this one
+            // sent twice, was turned away as an error, bug report 129.)
+            if has_prize {
+                ui.label(RichText::new("This table has a prize box on it now: it goes to the next hand's winner. Drop yours once it's been opened.").color(theme::MUTED()));
+            }
+            if ui.add_enabled(!has_prize && (g.chips > 0 || g.item.is_some()), theme::primary_button("Drop it on the table")).clicked() {
                 send = true;
             }
         });

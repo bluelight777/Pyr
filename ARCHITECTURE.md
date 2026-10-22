@@ -495,7 +495,8 @@ client's, `crates/app/src/poker` and `casino` the screens).
   round (`casino::verify`) and counts it as checked. Each game's return to player is a
   tested constant, worked out exactly: every slot about 99% (Pyr Sevens' reels 98% and the 1%
   put into the Phoenix Jackpot; Ember Dragon's reels and respins about 98.5% and the 0.5% put
-  into its four pools; Reel Row's twelve about 95% from the base game and 4% from the bonus),
+  into its four pools; Reel Row's twelve, from 0.13, about 65% from the base game and the rest
+  from a bonus worth about 59.4 times the bet, a tenth of it the machine's top prize),
   roulette 36/37, blackjack about 99.5% with basic strategy, and so on.
 - **The slots** (0.12): Pyr Sevens (`casino::slots`, twenty lines); Ember Dragon
   (`casino::dragon`, 243 ways, hold and spin): the dragon's growth is kept on the server for
@@ -505,6 +506,15 @@ client's, `crates/app/src/poker` and `casino` the screens).
   99%. A pick's contents come out of the round's random numbers in the order tiles are
   opened, so which tile is clicked doesn't change the odds. Each slot's Info panel shows its
   paytable, its return and how everyone on the server has done at it.
+- **Stake-style slots** (0.13): `casino::feature` (Play Feature: Chance, Wild, Bonus, Super,
+  Mystery, All or Nothing, each priced from the exact math) on all fourteen; per-slot seeds
+  (`casino::client_seed`, kept in the app's config) for Fairness. Reel Row from 0.13 is
+  `casino::reelrow`: a mini game of its own per machine, and a top prize per machine
+  (`reelrow::TOPS`: fixed multiples up to the Supernova's 500,000 times the bet, drawn once at
+  the end of a bonus at odds that make it worth a tenth of the bet, or a progressive jackpot,
+  its pool kept in the server's meta and fed by 0.5% of every round on its machine; the round
+  keeps the pool it began with so it replays). `casino::MAX_PAYOUT` is the Supernova at the
+  biggest bet.
 - **Tables for people and bots** (0.12): blackjack for seven (`bjroom`, `casino::bjtable`),
   craps and baccarat for five (`crapsroom`, `bacroom`), a round every few seconds. Each
   round's cards or dice come from the house's committed seed and every seated Pyr's own, and
@@ -512,7 +522,8 @@ client's, `crates/app/src/poker` and `casino` the screens).
   chips go to or from them.
 - **The Bonfire** (0.12, `casino::bonfire`): a cut of every chip bet (out of the house's take)
   feeds a pool; every round anyone plays throws embers (one, and one more per 100 chips bet).
-  When it's lit (a day after it was laid, or when the owner lights it), fourteen embers are
+  When it's lit (a day after it was laid, or early by the Owner of the Game or a Game Master,
+  never by a server's owner as such), fourteen embers are
   drawn with SHA-256 from a seed the house fixed before the first ember (its hash shown all
   along), nobody twice: half the pool to the Grand Ember, a tenth to each of three Blazes, a
   fiftieth to each of ten Sparks, the rest on the next fire. Everyone's Pyr draws it again
@@ -526,9 +537,18 @@ client's, `crates/app/src/poker` and `casino` the screens).
   takes within 30 seconds, a weighted wheel (`tourney::MULTIPLIERS`, about 4.85 buy-ins back
   for five paid in) sets the prize, and when the fuse runs out the tables' `bomb` flag makes
   every later hand all in (`Room::tick` pushes for everyone; people's own actions are refused).
-- **Staff**: only the server's owner names Game Masters and Ambassadors (`SetRole`), and they
-  can't make, change or hand out the server's own roles either (`Ctx::may_give_out_roles`).
-  The owner gives chips without the allowance's limit (0.12); every gift is in the staff log.
+- **Staff** (0.13): the whole game's. `pyr_poker::net::HOME_SERVER` is Brethren of Blood's
+  certificate fingerprint; only there, and only its owner (the Owner of the Game), names Game
+  Masters and Ambassadors (`SetRole`). It signs each of them, and its owner, a certificate
+  (`GmCert`, signed with its TLS key over `GM_CONTEXT`, 14 days, `server/poker/gm.rs`); their
+  Pyr fetches it there (`GmCertAsk`) and shows it to every other server (`GmProof`), which
+  checks the signature against the certificate whose SHA-256 is `HOME_SERVER`. Elsewhere a
+  server's own role list counts for nothing. Staff can't make, change or hand out a server's
+  own roles (`Ctx::may_give_out_roles`). The Owner of the Game gives chips without the
+  allowance's limit; every gift is in the staff log.
+- **Casino chat** (0.13, `server/poker/chat.rs`): one room per server, the last 150 lines
+  kept in the meta table, a line at most 300 characters and 8 in 10 seconds; anyone takes down
+  their own, staff and admins anyone's.
 - **Emotes** (0.12): eighteen pictures (`crates/app/assets/casino`, drawn with Meshy) sent from
   a seat to everyone at the table, one every 0.9 s at most from each person
   (`server/poker/emotes.rs`).

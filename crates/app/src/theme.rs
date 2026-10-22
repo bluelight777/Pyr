@@ -363,6 +363,34 @@ pub fn fonts_made() -> u64 {
     FONTS_MADE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Display lettering for Pyr Casino's slots: each machine's own (Google Fonts; their licences
+/// are in assets/fonts/display).
+const DISPLAY_FONTS: &[(&str, &[u8])] = &[
+    ("bangers", include_bytes!("../assets/fonts/display/Bangers-Regular.ttf")),
+    ("pirata", include_bytes!("../assets/fonts/display/PirataOne-Regular.ttf")),
+    ("orbitron", include_bytes!("../assets/fonts/display/Orbitron-Bold.ttf")),
+    ("chewy", include_bytes!("../assets/fonts/display/Chewy-Regular.ttf")),
+    ("rye", include_bytes!("../assets/fonts/display/Rye-Regular.ttf")),
+    ("monoton", include_bytes!("../assets/fonts/display/Monoton-Regular.ttf")),
+    ("cinzel", include_bytes!("../assets/fonts/display/Cinzel-Bold.ttf")),
+    ("iceberg", include_bytes!("../assets/fonts/display/Iceberg-Regular.ttf")),
+    ("creepster", include_bytes!("../assets/fonts/display/Creepster-Regular.ttf")),
+    ("uncial", include_bytes!("../assets/fonts/display/UncialAntiqua-Regular.ttf")),
+    ("pacifico", include_bytes!("../assets/fonts/display/Pacifico-Regular.ttf")),
+    ("limelight", include_bytes!("../assets/fonts/display/Limelight-Regular.ttf")),
+    ("bungee", include_bytes!("../assets/fonts/display/Bungee-Regular.ttf")),
+    ("cinzel-deco", include_bytes!("../assets/fonts/display/CinzelDecorative-Bold.ttf")),
+];
+
+/// A casino display font (`DISPLAY_FONTS`' names) at `size`.
+pub fn display_font(name: &str, size: f32) -> egui::FontId {
+    if DISPLAY_FONTS.iter().any(|(n, _)| *n == name) {
+        egui::FontId::new(size, FontFamily::Name(name.into()))
+    } else {
+        bold_font(size)
+    }
+}
+
 pub fn install_fonts(ctx: &egui::Context, skin: Option<SkinFonts>) {
     FONTS_MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut fonts = FontDefinitions::default();
@@ -398,6 +426,12 @@ pub fn install_fonts(ctx: &egui::Context, skin: Option<SkinFonts>) {
     b.extend(fallbacks);
     b.push("emoji-zero".into());
     fonts.families.insert(bold(), b);
+    // The casino's display lettering, each a family of its own (Inter after it for anything it
+    // hasn't).
+    for (name, data) in DISPLAY_FONTS {
+        fonts.font_data.insert(name.to_string(), Arc::new(FontData::from_static(data)));
+        fonts.families.insert(FontFamily::Name((*name).into()), vec![name.to_string(), "inter-semibold".into(), "emoji-zero".into()]);
+    }
     fonts.font_data.insert("emoji-blank".into(), Arc::new(FontData::from_static(crate::emoji::BLANK_TTF)));
     fonts.font_data.insert("emoji-zero".into(), Arc::new(FontData::from_static(crate::emoji::ZERO_TTF)));
     fonts.families.insert(crate::emoji::blank_family(), vec!["emoji-blank".into()]);

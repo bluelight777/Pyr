@@ -148,7 +148,7 @@ impl PyrApp {
         self.sit_dialogs(ui.ctx(), s, t);
         self.history_window(ui.ctx(), s);
         self.player_window(ui.ctx(), s, t);
-        self.prize_dialog(ui.ctx(), s, t.view.id);
+        self.prize_dialog(ui.ctx(), s, t.view.id, t.view.prize.is_some());
         if let Some((text, at)) = self.poker.banner.clone() {
             let k = ago(at);
             if k < 3.0 {
@@ -294,6 +294,7 @@ impl PyrApp {
             Leave,
             SitOut,
             Chips,
+            Muck,
         }
         let fs = self.poker.casino.fullscreen;
         let streamer = self.streamer_mode();
@@ -328,9 +329,18 @@ impl PyrApp {
             if !tourney && !in_hand {
                 all.push((B::Chips, "Add chips", 92.0, ""));
             }
+            if s.has(pyr_proto::control::CASINO_013_FEATURE) {
+                let auto = self.engine.auto_muck();
+                all.push((
+                    B::Muck,
+                    if auto { "Auto-muck: on" } else { "Auto-muck: off" },
+                    112.0,
+                    if auto { "A hand of yours that can't win goes in face down at a showdown (you can still show it after). Click to show every hand." } else { "Every hand you take to a showdown is shown. Click to muck the ones that can't win." },
+                ));
+            }
         }
         // What goes under More first.
-        const FIRST_UNDER_MORE: [B; 9] = [B::Full, B::Prize, B::Last, B::Chips, B::Sound, B::Log, B::Leave, B::Stream, B::SitOut];
+        const FIRST_UNDER_MORE: [B; 10] = [B::Full, B::Muck, B::Prize, B::Last, B::Chips, B::Sound, B::Log, B::Leave, B::Stream, B::SitOut];
         const MORE_W: f32 = 78.0;
         let title_w = name_g.size().x.max(sub_g.size().x).min(150.0);
         let room = (r.right() - 12.0) - (back.right() + 16.0 + title_w + 12.0);
@@ -361,7 +371,7 @@ impl PyrApp {
         }
         if !under_more.is_empty() {
             // (In the order they'd be in on the bar, left to right.)
-            const BAR_ORDER: [B; 9] = [B::Chips, B::SitOut, B::Leave, B::Last, B::Log, B::Prize, B::Sound, B::Stream, B::Full];
+            const BAR_ORDER: [B; 10] = [B::Muck, B::Chips, B::SitOut, B::Leave, B::Last, B::Log, B::Prize, B::Sound, B::Stream, B::Full];
             under_more.sort_by_key(|e| BAR_ORDER.iter().position(|b| *b == e.0).unwrap_or(0));
             let at = Rect::from_min_size(pos2(x - MORE_W, r.top() + 9.0), vec2(MORE_W, 32.0));
             x -= MORE_W + 8.0;
@@ -400,6 +410,7 @@ impl PyrApp {
             Some(B::Leave) => self.engine.poker(&s.key, ToServer::Stand { table: v.id }),
             Some(B::SitOut) => self.engine.poker(&s.key, ToServer::SitOut { table: v.id, out: !out }),
             Some(B::Chips) => self.poker.top_up = Some((v.id, v.rules.big_blind * 50)),
+            Some(B::Muck) => self.engine.set_auto_muck(!self.engine.auto_muck()),
             Some(B::Full) | None => {}
         }
         // The table's name and what it is, cut short where the buttons start.
@@ -827,6 +838,17 @@ impl PyrApp {
         m.add_triangle(0, 1, 2);
         m.add_triangle(0, 2, 3);
         p.add(Shape::mesh(m));
+        // The table hears my auto-muck once I sit, and whenever it changes.
+        let v13 = s.has(pyr_proto::control::CASINO_013_FEATURE);
+        if v.my_seat.is_none() {
+            self.poker.muck_sent.remove(&v.id);
+        } else if v13 {
+            let want = self.engine.auto_muck();
+            if self.poker.muck_sent.get(&v.id) != Some(&want) {
+                self.poker.muck_sent.insert(v.id, want);
+                self.engine.poker(&s.key, ToServer::Muck { table: v.id, on: want });
+            }
+        }
         let Some(me) = v.my_seat else {
             let msg = if v.tourney.is_some() { "Watching this tournament table." } else { "Watching. Click an empty seat to sit down." };
             p.text(bar.center(), Align2::CENTER_CENTER, msg, theme::font(14.0), theme::MUTED());
@@ -893,7 +915,21 @@ impl PyrApp {
             } else if seat.is_some_and(|s| s.sitting_out) {
                 p.text(pos2(right, bar.center().y), Align2::RIGHT_CENTER, "You're sitting out. Click I'm back to be dealt in.", theme::font(14.0), theme::MUTED());
             } else {
-                p.text(pos2(right, bar.center().y), Align2::RIGHT_CENTER, "Waiting for the next hand…", theme::font(14.0), theme::MUTED());
+                // The hand's over: my cards, mucked, folded or won without a showdown, can be
+                // turned over for everyone until the next one's dealt.
+                let over = t.events.iter().any(|(_, e)| matches!(e, Event::HandEnded { .. }));
+                let shown = t.events.iter().any(|(_, e)| matches!(e, Event::Shown { seat, .. } if *seat == me));
+                let mine_known = seat.is_some_and(|x| x.in_hand && !x.cards.is_empty());
+                if v13 && over && !shown && mine_known && v.hand.is_some() {
+                    let r = Rect::from_min_size(pos2(right - 160.0, bar.center().y - 22.0), vec2(160.0, 44.0));
+                    let b = egui::Button::new(RichText::new("Show cards").font(theme::bold_font(16.0)).color(Color32::WHITE)).fill(Color32::from_rgb(0x2e, 0x6a, 0xb0)).corner_radius(theme::r(12));
+                    if ui.put(r, b).on_hover_text("Turn your cards over for everyone (until the next hand's dealt)").clicked() {
+                        self.engine.poker(&s.key, ToServer::ShowCards { table: v.id, hand });
+                    }
+                    p.text(pos2(r.left() - 14.0, bar.center().y), Align2::RIGHT_CENTER, "Nobody saw your cards. Show them?", theme::font(13.5), theme::MUTED());
+                } else {
+                    p.text(pos2(right, bar.center().y), Align2::RIGHT_CENTER, "Waiting for the next hand…", theme::font(14.0), theme::MUTED());
+                }
             }
             return;
         };

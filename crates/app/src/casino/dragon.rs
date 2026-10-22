@@ -11,8 +11,11 @@ use eframe::egui::{self, Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind,
 use pyr_engine::poker_sfx::Cue;
 use pyr_engine::state::ServerView;
 use pyr_poker::casino::dragon::{self as dg, AGES, BETS, Fire, Jackpot, REELS, ROWS};
+use pyr_poker::casino::feature::Feature;
 use pyr_poker::casino::{Bet, Outcome};
 use pyr_poker::net::RoundView;
+
+use super::stake::{Pick, SlotKind, StakeUi};
 
 use super::spin::{Reel, SPEED};
 use super::{col, ease_back, ease_out, glow_text, pics, radial, vgrad, vgrad_round};
@@ -72,6 +75,9 @@ pub struct DragonUi {
     eggs: Vec<(Pos2, Instant)>,
     /// When the pools were last asked for.
     asked: Option<Instant>,
+    /// Play Feature and Fairness (0.13.0 servers); all or nothing being revealed.
+    pub stake: StakeUi,
+    all_in: Option<(RoundView, Instant, bool)>,
 }
 
 impl Default for DragonUi {
@@ -93,6 +99,8 @@ impl Default for DragonUi {
             grew: None,
             eggs: Vec::new(),
             asked: None,
+            stake: StakeUi::default(),
+            all_in: None,
         }
     }
 }
@@ -129,7 +137,7 @@ fn fire_label(f: Fire, bet: u64) -> (String, Color32) {
 impl DragonUi {
     /// Spinning, landing, counting, or in Ember Respins.
     fn running(&self, now: Instant) -> bool {
-        self.waiting.is_some() || self.stopped_at.is_some_and(|e| now < e) || self.respins.as_ref().is_some_and(|b| !b.collected)
+        self.waiting.is_some() || self.stopped_at.is_some_and(|e| now < e) || self.respins.as_ref().is_some_and(|b| !b.collected) || self.all_in.is_some()
     }
 }
 
@@ -147,6 +155,15 @@ impl PyrApp {
         ui.waiting = None;
         ui.win = 0;
         ui.counted = None;
+        if o.feature == Feature::AllIn {
+            ui.showing = None;
+            for r in &mut ui.reels {
+                *r = Reel::still(r.pos(now).round());
+            }
+            ui.all_in = Some((round.clone(), now, false));
+            self.poker.casino.sound_in(0.0, Cue::Fuse, 0.0, 0.7);
+            return;
+        }
         ui.showing = Some(round.clone());
         ui.shown_growth = Some((o.bet, o.growth));
         // Each strip: the round's three symbols at its top, filler after them.
@@ -171,10 +188,20 @@ impl PyrApp {
     }
 
     fn dragon_spin(&mut self, s: &ServerView) {
+        let f = self.poker.casino.dragon.stake.armed.unwrap_or(Feature::Spin);
+        self.dragon_spin_with(s, f);
+    }
+
+    /// A round: a spin (with Play Feature's choice, on a 0.13.0 server), from my seed for the
+    /// slot there.
+    fn dragon_spin_with(&mut self, s: &ServerView, feature: Feature) {
         let Some(commit) = s.poker.casino.commit else { return };
         let now = Instant::now();
+        let v13 = s.has(pyr_proto::control::CASINO_013_FEATURE);
+        let feature = if v13 { feature } else { Feature::Spin };
         let ui = &self.poker.casino.dragon;
-        if ui.bet > super::chips_now(s) {
+        let cost = pyr_poker::casino::feature::cost(ui.bet, dg::price(feature).unwrap_or(100));
+        if cost > super::chips_now(s) {
             self.poker.casino.dragon.auto.stop();
             return;
         }
@@ -195,9 +222,15 @@ impl PyrApp {
         ui.stopped_at = None;
         ui.win = 0;
         ui.eggs.clear();
+        ui.all_in = None;
         self.poker.casino.celebration = None;
         self.poker.casino.pending = Some(now);
-        self.engine.casino_play(&s.key, commit, Bet::Dragon { bet, growth });
+        if v13 {
+            let b = if feature == Feature::Spin { Bet::Dragon { bet, growth } } else { Bet::DragonPlus { bet, growth, feature } };
+            self.play_seeded(s, SlotKind::Dragon, b);
+        } else {
+            self.engine.casino_play(&s.key, commit, Bet::Dragon { bet, growth });
+        }
     }
 
     pub(super) fn dragon_page(&mut self, ui: &mut egui::Ui, s: &ServerView, area: Rect) {
@@ -261,9 +294,42 @@ impl PyrApp {
         }
         self.dragon_after_stop(s, &reel_rects, cell, den, now);
         self.dragon_eggs(&p, &ctx, den, cell, now);
+        // All or nothing, revealed over the reels.
+        if let Some((round, since, told)) = self.poker.casino.dragon.all_in.clone()
+            && let Outcome::Dragon(o) = &round.outcome
+        {
+            let t = (now - since).as_secs_f32();
+            let landed = super::stake::all_in_dial(&p, reels.expand(14.0), EMBER, "cinzel-deco", o.lucky, o.paid, &format!("1 in 51 for {}", chips_text(o.bet * dg::ALL_IN_X)), t);
+            if landed && !told {
+                self.poker.casino.dragon.all_in.as_mut().unwrap().2 = true;
+                self.poker.casino.dragon.win = o.paid;
+                self.poker.casino.sound_in(0.0, if o.lucky { Cue::Jackpot } else { Cue::Fold }, 0.0, 0.8);
+            }
+            if landed && t > 5.4 {
+                self.poker.casino.dragon.all_in = None;
+                self.dragon_finish(s, &round, now);
+            }
+        }
         // The controls.
         let bar = Rect::from_min_size(pos2(area.center().x - block_w.max(620.0) / 2.0, area.bottom() - controls_h + 4.0), vec2(block_w.max(620.0), controls_h - 18.0));
         self.dragon_controls(ui, s, bar, now);
+        // Play Feature and Fairness (0.13.0 servers), over the dragon's den.
+        if s.has(pyr_proto::control::CASINO_013_FEATURE) {
+            let kind = SlotKind::Dragon;
+            let pf = Rect::from_min_size(pos2(den.left(), (den.bottom() + 8.0).min(bar.top() - 52.0)), vec2(den.width().min(220.0), 44.0));
+            let busy = self.poker.casino.busy() || self.poker.casino.dragon.running(now);
+            self.play_feature_button(ui, kind, pf, EMBER, !busy && !self.poker.casino.dragon.auto.on());
+            let fr = Rect::from_min_size(pos2(bar.right() - 112.0, bar.top() - 40.0), vec2(108.0, 30.0));
+            self.fairness_button(ui, kind, fr);
+            let bet = self.poker.casino.dragon.bet;
+            if let Some(pick) = self.play_feature_menu(ui, kind, area, bet, bet, EMBER, super::chips_now(s)) {
+                match pick {
+                    Pick::Arm(f) => self.poker.casino.dragon.stake.armed = f,
+                    Pick::Buy(f) => self.dragon_spin_with(s, f),
+                }
+            }
+            self.fairness_panel(&ctx, s, kind);
+        }
         // Autoplay spins again.
         let r = &self.poker.casino.dragon;
         if r.auto.on() && r.next_at.is_some_and(|t| now >= t) && !self.poker.casino.busy() && !r.running(now) {
@@ -569,7 +635,7 @@ impl PyrApp {
                 pl.sounded = shown;
             }
         }
-        let board: u64 = held.iter().map(|(_, f, _)| f.x()).sum::<u64>() * o.bet;
+        let board: u64 = held.iter().map(|(_, f, _)| f.x()).sum::<u64>() * o.bet * if o.super_respins { dg::SUPER_X } else { 1 };
         // The board.
         let frame = reels.expand(10.0);
         p.rect_filled(frame.translate(vec2(0.0, 8.0)), theme::r(18), Color32::from_black_alpha(160));
@@ -591,7 +657,7 @@ impl PyrApp {
                         }
                         let fr = Rect::from_center_size(sr.center(), sr.size() * pop.max(0.05));
                         pics::cell(&p, &ctx, "dragon-symbols", CELL[dg::FIRE as usize], fr, px, Color32::WHITE);
-                        let (text, c) = fire_label(*f, o.bet);
+                        let (text, c) = fire_label(*f, if o.super_respins { o.bet * dg::SUPER_X } else { o.bet });
                         let pill = Rect::from_center_size(sr.center() + vec2(0.0, cell * 0.24), vec2(cell * 0.86, cell * 0.28));
                         p.rect_filled(pill, theme::r(8), Color32::from_black_alpha(200));
                         p.text(pill.center(), Align2::CENTER_CENTER, text, theme::bold_font((cell * 0.16).clamp(10.0, 22.0)), c);
@@ -613,7 +679,7 @@ impl PyrApp {
         let hdr = Rect::from_center_size(pos2(frame.center().x, top - 22.0), vec2(frame.width().min(560.0), 40.0));
         p.rect_filled(hdr, theme::r(20), Color32::from_black_alpha(220));
         p.rect_stroke(hdr, theme::r(20), Stroke::new(1.5f32, EMBER), StrokeKind::Inside);
-        p.text(hdr.left_center() + vec2(16.0, 0.0), Align2::LEFT_CENTER, "RESPINS", theme::bold_font(12.5), col::MUTED);
+        p.text(hdr.left_center() + vec2(16.0, 0.0), Align2::LEFT_CENTER, if o.super_respins { "SUPER ×3" } else { "RESPINS" }, theme::bold_font(12.5), if o.super_respins { col::GOLD2 } else { col::MUTED });
         for i in 0..dg::RESPINS {
             let c = hdr.left_center() + vec2(90.0 + i as f32 * 22.0, 0.0);
             let on = i < left;
@@ -673,8 +739,8 @@ impl PyrApp {
     fn dragon_finish(&mut self, _s: &ServerView, round: &RoundView, now: Instant) {
         let Outcome::Dragon(o) = &round.outcome else { return };
         self.poker.casino.settle_balance();
-        self.poker.casino.celebrate(o.paid, o.bet, !o.jackpots().is_empty(), 0.2);
-        let big = o.paid >= o.bet * 10;
+        self.poker.casino.celebrate(o.paid, o.wagered(), !o.jackpots().is_empty(), 0.2);
+        let big = o.paid >= o.wagered() * 10;
         let ui = &mut self.poker.casino.dragon;
         if ui.auto.spun(big) {
             let pause = if o.paid > 0 { 1.4 } else { 0.5 };
@@ -736,7 +802,11 @@ impl PyrApp {
         if auto.on() {
             p.text(spin_c + vec2(0.0, 15.0), Align2::CENTER_CENTER, format!("auto {}", auto.left_text()), theme::bold_font(10.5), Color32::from_rgb(0x1a, 0x06, 0x02));
         }
-        let space = ui.ctx().input(|i| i.key_pressed(egui::Key::Space)) && !ui.ctx().wants_keyboard_input() && self.poker.casino.info.is_none();
+        if let Some(f) = self.poker.casino.dragon.stake.armed {
+            let cost = pyr_poker::casino::feature::cost(bet, dg::price(f).unwrap_or(100));
+            p.text(spin_c + vec2(0.0, 50.0), Align2::CENTER_CENTER, format!("{} · {}", SlotKind::Dragon.describe(f).0, chips_text(cost)), theme::bold_font(11.0), col::GOLD2);
+        }
+        let space = ui.ctx().input(|i| i.key_pressed(egui::Key::Space)) && !ui.ctx().wants_keyboard_input() && self.poker.casino.info.is_none() && !self.poker.casino.dragon.stake.menu;
         if resp.on_hover_text("Spin (Space)").clicked() || space {
             if auto.on() {
                 self.poker.casino.dragon.auto.stop();

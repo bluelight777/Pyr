@@ -74,6 +74,56 @@ const PICS: &[(&str, &[u8])] = pics![
     "host-sugar",
     "host-grind",
     "host-frost",
+    "rr-scoville-back",
+    "rr-scoville-bonus",
+    "rr-scoville-pieces",
+    "rr-scoville-features",
+    "rr-deepsea-back",
+    "rr-deepsea-bonus",
+    "rr-deepsea-pieces",
+    "rr-deepsea-features",
+    "rr-cosmic-back",
+    "rr-cosmic-bonus",
+    "rr-cosmic-pieces",
+    "rr-cosmic-features",
+    "rr-sugar-back",
+    "rr-sugar-bonus",
+    "rr-sugar-pieces",
+    "rr-sugar-features",
+    "rr-goldrush-back",
+    "rr-goldrush-bonus",
+    "rr-goldrush-pieces",
+    "rr-goldrush-features",
+    "rr-neon-back",
+    "rr-neon-bonus",
+    "rr-neon-pieces",
+    "rr-neon-features",
+    "rr-tomb-back",
+    "rr-tomb-bonus",
+    "rr-tomb-pieces",
+    "rr-tomb-features",
+    "rr-frost-back",
+    "rr-frost-bonus",
+    "rr-frost-pieces",
+    "rr-frost-features",
+    "rr-cauldron-back",
+    "rr-cauldron-bonus",
+    "rr-cauldron-pieces",
+    "rr-cauldron-features",
+    "rr-hoard-back",
+    "rr-hoard-bonus",
+    "rr-hoard-pieces",
+    "rr-hoard-features",
+    "rr-grind-back",
+    "rr-grind-bonus",
+    "rr-grind-pieces",
+    "rr-grind-features",
+    "rr-cabaret-back",
+    "rr-cabaret-bonus",
+    "rr-cabaret-pieces",
+    "rr-cabaret-features",
+    "sevens-features",
+    "dragon-features",
 ];
 
 enum Slot {
@@ -198,6 +248,18 @@ pub fn cell(p: &egui::Painter, ctx: &egui::Context, sheet: &str, i: usize, r: Re
     let (cx, cy) = ((i % 3) as f32, (i / 3) as f32);
     let uv = Rect::from_min_max(pos2(cx / 3.0, cy / 3.0), pos2((cx + 1.0) / 3.0, (cy + 1.0) / 3.0));
     p.image(t.id(), r, uv, tint);
+    true
+}
+
+/// `cell`, cut `inset` (a fraction of the cell) in from its edges: some sheets came with lines
+/// between their cells.
+#[allow(clippy::too_many_arguments)]
+pub fn cell_inset(p: &egui::Painter, ctx: &egui::Context, sheet: &str, i: usize, r: Rect, max_px: u32, tint: Color32, inset: f32) -> bool {
+    let Some(t) = tex(ctx, sheet, max_px) else { return false };
+    let (cx, cy) = ((i % 3) as f32, (i / 3) as f32);
+    let d = inset / 3.0;
+    let uv = Rect::from_min_max(pos2(cx / 3.0 + d, cy / 3.0 + d), pos2((cx + 1.0) / 3.0 - d, (cy + 1.0) / 3.0 - d));
+    p.image(t.id(), r.shrink(r.width() * inset), uv, tint);
     true
 }
 

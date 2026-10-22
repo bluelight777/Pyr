@@ -369,6 +369,13 @@ pub const CASINO_012_FEATURE: &str = "casino_0_12";
 /// machines among them). Apps without it are never sent them: one they can't read would end
 /// their connection.
 pub const CASINO_012_CAP: &str = "casino_0_12";
+/// Pyr Casino from 0.13.0 on: roulette tables for five, a mini game of its own for each of Reel
+/// Row's machines, Play Feature on every slot (bonus buys and the like) and each slot's own seed
+/// (`Fairness`). An app asks a server for none of it without this.
+pub const CASINO_013_FEATURE: &str = "casino_0_13";
+/// In `Login::caps`: this app knows Pyr Casino's games and messages from 0.13.0. Apps without it
+/// are never sent them.
+pub const CASINO_013_CAP: &str = "casino_0_13";
 /// In `Login::caps`: this app knows group conversations ([`GROUPS_FEATURE`]).
 pub const GROUPS_CAP: &str = "groups";
 /// In `Login::caps`: this app adjusts its camera and screen share to its viewers'

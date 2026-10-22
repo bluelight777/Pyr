@@ -28,6 +28,9 @@ pub struct CapturePipeline {
     aec_share: f32,
     /// Whether the speakers' sound could account for much of this 10 ms the microphone heard.
     far: bool,
+    /// Something's been playing from the speakers in the last moment (voice isolation doesn't
+    /// learn your level then).
+    playing: bool,
     /// What Voice & Video was last told about the echo canceller (see `Controls::echo`).
     told_echo: Option<(u8, bool)>,
     denoise: Option<Box<nnnoiseless::DenoiseState<'static>>>,
@@ -284,6 +287,7 @@ impl CapturePipeline {
             plain_line: std::iter::repeat_n(0.0, AEC_LATENCY).collect(),
             aec_share: 1.0,
             far: false,
+            playing: false,
             told_echo: None,
             denoise,
             dfn,
@@ -415,7 +419,7 @@ impl CapturePipeline {
                     })
                     .unwrap_or_default();
                 if e.faint() {
-                    format!("the speakers' sound reaches the microphone {ms:.0} ms later{weaker}: too faint to hear (echo cancellation stands aside)")
+                    format!("the speakers' sound reaches the microphone {ms:.0} ms later{weaker}: faintly (echo cancellation on all the same)")
                 } else {
                     format!("the speakers' sound reaches the microphone {ms:.0} ms later{weaker} (echo cancellation on)")
                 }
@@ -532,7 +536,11 @@ impl CapturePipeline {
             } else if level > self.iso_ref_db - 8.0 {
                 self.iso_ref_db += (level - self.iso_ref_db) * 0.01;
             }
-        } else if self.voice_prob > 0.8 && level > -70.0 && speech {
+        } else if self.voice_prob > 0.8 && level > -70.0 && speech && !self.far && !self.playing {
+            // (Never from what the speakers could account for: someone else's voice coming
+            // back from them, quieter than yours, was taken for yours after half a minute of
+            // you listening, and went out at full strength, lifted by the automatic gain, till
+            // echo cancellation was switched off and on: Chimbita's echo, 0.13.0.)
             if self.iso_ref_db < -90.0 || level > self.iso_ref_db - ISO_START_DB {
                 self.iso_levels.add(level);
                 self.iso_below = 0;
@@ -617,6 +625,7 @@ impl CapturePipeline {
         self.scratch.copy_from_slice(&frame[..480]);
         let _ = self.apm.process_capture_f32(&[&self.scratch], &mut [&mut frame[..480]]);
         self.far = false;
+        self.playing = false;
         if let (Some(plain), Some(echo)) = (self.plain.as_mut(), self.echo.as_mut()) {
             use super::mic_echo::Echo;
             let _ = plain.process_capture_f32(&[&self.scratch], &mut [&mut self.plain_out]);
@@ -640,7 +649,11 @@ impl CapturePipeline {
             // Over to the echo canceller's sound at once (within these 10 ms); away from it
             // over 100 ms.
             let from = self.aec_share;
-            let to = if echo.needs_canceller() { 1.0 } else { (from - 0.1).max(0.0) };
+            // (Voice isolation: the echo canceller's sound always, as before 0.12.0. Without it,
+            // what came back from the speakers is a voice, and isolation and the automatic gain
+            // sent it on: in 0.12.0 everyone on voice isolation echoed.)
+            let iso = self.settings.noise_suppression == NoiseSuppression::Isolation;
+            let to = if iso || echo.needs_canceller() { 1.0 } else { (from - 0.1).max(0.0) };
             if from < 1.0 || to < 1.0 {
                 for (i, (v, p)) in frame[..480].iter_mut().zip(&self.plain_out).enumerate() {
                     let share = from + (to - from) * (i as f32 + 1.0) / 480.0;
@@ -650,19 +663,20 @@ impl CapturePipeline {
             self.aec_share = to;
             // (Echo the processing took out isn't my voice turned down.)
             self.far = could * 10.0 > heard;
+            self.playing = echo.playing();
             // Voice & Video says what's going on.
             let now_told = (match echo.state() {
                 Echo::Unknown => 0,
                 Echo::Found(_) => 1,
                 Echo::None => 2,
-            }, echo.needs_canceller());
+            }, iso || echo.needs_canceller());
             if self.told_echo != Some(now_told) {
                 self.told_echo = Some(now_told);
                 *ctl.echo.lock() = Some(
                     match now_told {
                         (0, _) => "Listening for your speakers in your microphone; until it's known, echo cancellation is on.",
-                        (1, true) => "Your speakers can be heard in your microphone, so echo cancellation is on.",
-                        (1, false) => "Your speakers reach your microphone only too faintly to hear, so echo cancellation stands aside.",
+                        (1, _) => "Your speakers can be heard in your microphone, so echo cancellation is on.",
+                        (2, true) => "Voice isolation keeps echo cancellation on, headphones or not.",
                         _ => "Your speakers can't be heard in your microphone (headphones), so echo cancellation stands aside: it would only get in your voice's way.",
                     }
                     .to_string(),
@@ -813,6 +827,63 @@ mod tests {
         ctl.ptt_down.store(true, Ordering::Relaxed);
         let (_, open) = feed(&mut cap, &ctl, &mut now, &mut seed, 100);
         assert!(open, "key held");
+    }
+
+    /// With headphones (nothing played comes back), echo cancellation stands aside, except
+    /// with voice isolation, which keeps it on: 0.12.0 let it stand aside there too, and
+    /// everyone on voice isolation echoed.
+    #[test]
+    fn voice_isolation_keeps_echo_cancellation_on() {
+        for (ns, stays_on) in [(NoiseSuppression::Isolation, true), (NoiseSuppression::Standard, false)] {
+            let settings = Settings { noise_suppression: ns, ..Settings::default() };
+            let mut cap = CapturePipeline::new(&settings).unwrap();
+            let ctl = Controls::default();
+            let mut now = Instant::now();
+            let (mut a, mut b) = (1u32, 99u32);
+            let mut noise = |x: &mut u32, amp: f32| {
+                *x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (*x >> 8) as f32 / (1u32 << 24) as f32 * 2.0 * amp - amp
+            };
+            for _ in 0..1_500 {
+                let played: Vec<f32> = (0..960).map(|_| noise(&mut a, 0.1)).collect();
+                cap.render(&played);
+                let mut frame: Vec<f32> = (0..480).map(|_| noise(&mut b, 0.05)).collect();
+                cap.process(&mut frame, &ctl, now, &mut |_, _, _: &[u8]| {});
+                now += Duration::from_millis(10);
+            }
+            assert_eq!(cap.echo_state(), Some(super::super::mic_echo::Echo::None), "{ns:?}: headphones");
+            assert_eq!(cap.aec_share == 1.0, stays_on, "{ns:?}: {}", cap.aec_share);
+        }
+    }
+
+    /// Voice isolation learns your level from your speech, never from what the speakers could
+    /// account for: half a minute of someone else's voice coming back from them, quieter than
+    /// yours, doesn't make it "you" (it did: their own voice went back to them as an echo).
+    /// A quieter voice with nothing playing still does (you moved away from the microphone).
+    #[test]
+    fn isolation_never_takes_the_speakers_for_you() {
+        let settings = Settings { noise_suppression: NoiseSuppression::Isolation, ..Settings::default() };
+        for (far, relearns) in [(true, false), (false, true)] {
+            let mut cap = CapturePipeline::new(&settings).unwrap();
+            let now = Instant::now();
+            cap.iso_ref_db = -25.0;
+            cap.iso_levels = Levels::default();
+            // Speech 20 dB under yours, for 40 s.
+            cap.raw_recent = [10f32.powf(-4.5); 5];
+            cap.voice_prob = 0.95;
+            cap.speech_until = now + Duration::from_secs(3600);
+            cap.far = far;
+            cap.playing = far;
+            let mut frame = vec![0.01f32; 480];
+            for _ in 0..4_000 {
+                cap.isolate(now, &mut frame);
+            }
+            if relearns {
+                assert!((cap.iso_ref_db + 45.0).abs() < 1.0, "a quieter voice, nothing playing: you, now ({})", cap.iso_ref_db);
+            } else {
+                assert_eq!(cap.iso_ref_db, -25.0, "what the speakers could account for isn't you");
+            }
+        }
     }
 
     /// Switching between the echo canceller's sound and the plain processing's mixes the two

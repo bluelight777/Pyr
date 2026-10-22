@@ -20,14 +20,15 @@ pub struct KenoUi {
     pub chips: u64,
     show: Option<(RoundView, Instant, bool)>,
     pub turbo: bool,
-    pub auto_left: u32,
+    /// Playing by itself: how many rounds, or until stopped (see `auto`).
+    pub auto: super::auto::Auto,
     next_at: Option<Instant>,
     seed: u64,
 }
 
 impl Default for KenoUi {
     fn default() -> Self {
-        KenoUi { picks: Vec::new(), chips: 10, show: None, turbo: false, auto_left: 0, next_at: None, seed: 0x9e37_79b9 }
+        KenoUi { picks: Vec::new(), chips: 10, show: None, turbo: false, auto: Default::default(), next_at: None, seed: 0x9e37_79b9 }
     }
 }
 
@@ -52,7 +53,7 @@ impl PyrApp {
         let c = &s.poker.casino;
         let ui = &self.poker.casino.keno;
         if ui.picks.is_empty() || ui.chips == 0 || ui.chips > super::chips_now(s) || self.poker.casino.busy() {
-            self.poker.casino.keno.auto_left = 0;
+            self.poker.casino.keno.auto.stop();
             return;
         }
         let Some(commit) = c.commit else { return };
@@ -177,11 +178,9 @@ impl PyrApp {
                 if let Some(sh) = ui_s.show.as_mut() {
                     sh.2 = true;
                 }
-                if ui_s.auto_left > 0 {
-                    ui_s.auto_left -= 1;
-                    if ui_s.auto_left > 0 {
-                        ui_s.next_at = Some(now + Duration::from_millis(if o.paid > 0 { 1500 } else { 700 }));
-                    }
+                // (A big win, 50 times the bet and more, stops it when that's set.)
+                if ui_s.auto.spun(o.paid >= o.chips * 50) {
+                    ui_s.next_at = Some(now + Duration::from_millis(if o.paid > 0 { 1500 } else { 700 }));
                 }
                 if o.paid > 0 {
                     self.poker.casino.sound_in(0.0, Cue::WinSmall, 0.0, 0.8);
@@ -190,7 +189,7 @@ impl PyrApp {
                 self.poker.casino.celebrate(o.paid, o.chips, false, 0.0);
             }
         }
-        if self.poker.casino.keno.auto_left > 0 && self.poker.casino.keno.next_at.is_some_and(|t| now >= t) {
+        if self.poker.casino.keno.auto.on() && self.poker.casino.keno.next_at.is_some_and(|t| now >= t) {
             self.poker.casino.keno.next_at = None;
             self.keno_play(s);
         }
@@ -199,35 +198,43 @@ impl PyrApp {
         p.rect_filled(cb, theme::r(18), Color32::from_black_alpha(170));
         let bet = self.poker.casino.keno.chips;
         let picked = self.poker.casino.chip;
-        let auto = self.poker.casino.keno.auto_left;
+        let auto = self.poker.casino.keno.auto;
         let mut x = cb.right() - 16.0;
-        let mut button = |ui: &mut egui::Ui, text: &str, w: f32, primary: bool, enabled: bool| -> bool {
+        let mut button_resp = |ui: &mut egui::Ui, text: &str, w: f32, primary: bool, enabled: bool| -> egui::Response {
             let r = Rect::from_min_size(pos2(x - w, cb.center().y - 22.0), vec2(w, 44.0));
             x -= w + 10.0;
             let resp = ui.interact(r, ui.id().with(("kn", text)), Sense::click());
             let fill = if !enabled { Color32::from_white_alpha(18) } else if primary { if resp.hovered() { col::GOLD2 } else { col::GOLD } } else if resp.hovered() { Color32::from_white_alpha(46) } else { Color32::from_white_alpha(24) };
             ui.painter().rect_filled(r, theme::r(12), fill);
             ui.painter().text(r.center(), Align2::CENTER_CENTER, text, theme::bold_font(15.0), if primary && enabled { Color32::from_rgb(0x2a, 0x10, 0x04) } else if enabled { Color32::WHITE } else { Color32::from_white_alpha(70) });
-            enabled && resp.clicked()
+            resp
         };
         let space = ui.ctx().input(|i| i.key_pressed(egui::Key::Space)) && !ui.ctx().wants_keyboard_input();
         let ok = !picks.is_empty() && bet > 0 && bet <= super::chips_now(s) && !busy;
-        if auto > 0 {
-            if button(ui, &format!("Stop ({auto})"), 130.0, true, true) {
-                self.poker.casino.keno.auto_left = 0;
+        macro_rules! button {
+            ($ui:expr, $t:expr, $w:expr, $p:expr, $e:expr) => {{
+                let en = $e;
+                button_resp($ui, $t, $w, $p, en).clicked() && en
+            }};
+        }
+        if auto.on() {
+            if button!(ui, &format!("Stop ({})", auto.left_text()), 130.0, true, true) {
+                self.poker.casino.keno.auto.stop();
             }
-        } else if button(ui, "Play", 130.0, true, ok) || (space && ok) {
+        } else if button!(ui, "Play", 130.0, true, ok) || (space && ok) {
             self.keno_play(s);
         }
-        if button(ui, "Auto 10", 96.0, false, auto == 0 && ok) {
-            self.poker.casino.keno.auto_left = 10;
+        // Playing by itself: 10 to 1,000 rounds, or until it's stopped (its menu).
+        let resp = button_resp(ui, "Auto ⌄", 96.0, false, !auto.on() && ok);
+        if !auto.on() && ok && let Some(n) = super::auto::menu(&resp, &mut self.poker.casino.keno.auto) {
+            self.poker.casino.keno.auto.left = n;
             self.poker.casino.keno.next_at = Some(now);
         }
         let turbo = self.poker.casino.keno.turbo;
-        if button(ui, if turbo { "Turbo on" } else { "Turbo" }, 96.0, false, true) {
+        if button!(ui, if turbo { "Turbo on" } else { "Turbo" }, 96.0, false, true) {
             self.poker.casino.keno.turbo = !turbo;
         }
-        if button(ui, "Quick pick", 110.0, false, !busy) {
+        if button!(ui, "Quick pick", 110.0, false, !busy) {
             // Ten numbers (or as many as are picked now) at random.
             let ui_s = &mut self.poker.casino.keno;
             let want = if ui_s.picks.is_empty() { 10 } else { ui_s.picks.len() };
@@ -245,11 +252,11 @@ impl PyrApp {
             ui_s.seed = x;
             ui_s.show = None;
         }
-        if button(ui, "Clear", 80.0, false, !busy && !picks.is_empty()) {
+        if button!(ui, "Clear", 80.0, false, !busy && !picks.is_empty()) {
             self.poker.casino.keno.picks.clear();
             self.poker.casino.keno.show = None;
         }
-        if button(ui, &format!("+{}", chips_text(picked.min(1_000))), 86.0, false, !busy) {
+        if button!(ui, &format!("+{}", chips_text(picked.min(1_000))), 86.0, false, !busy) {
             self.poker.casino.keno.chips = (bet + picked).min(1_000);
         }
         // The bet (right-click it for the least).

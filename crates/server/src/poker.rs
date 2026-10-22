@@ -17,9 +17,12 @@ use tracing::info;
 use crate::hub::Hub;
 
 mod bac_tables;
+mod rl_tables;
 mod bj;
 mod bonfire;
 mod casino;
+mod chat;
+mod gm;
 mod craps_tables;
 mod emotes;
 mod ratings;
@@ -82,8 +85,10 @@ pub struct State {
     pub bj: bj::BjState,
     pub craps: craps_tables::CrapsState,
     pub bac: bac_tables::BacState,
+    pub rl: rl_tables::RlState,
     pub bonfire: bonfire::BonfireState,
     pub emotes: emotes::EmoteState,
+    pub chat: chat::ChatState,
 }
 
 impl State {
@@ -102,7 +107,7 @@ impl State {
     /// Play chips a person has riding: at cash tables, buy-ins in tournaments not over, and on
     /// blackjack tables.
     fn held(&self, uid: &str) -> u64 {
-        self.rooms.values().map(|r| r.chips_of(uid)).sum::<u64>() + self.tourneys.values().map(|t| t.at_stake(uid)).sum::<u64>() + self.bj.at_stake(uid) + self.craps.at_stake(uid) + self.bac.at_stake(uid)
+        self.rooms.values().map(|r| r.chips_of(uid)).sum::<u64>() + self.tourneys.values().map(|t| t.at_stake(uid)).sum::<u64>() + self.bj.at_stake(uid) + self.craps.at_stake(uid) + self.bac.at_stake(uid) + self.rl.at_stake(uid)
     }
 }
 
@@ -113,11 +118,16 @@ pub struct Poker {
     start: Instant,
     /// When each table last had a person sitting at it.
     last_people: Mutex<HashMap<TableId, u64>>,
+    /// Game Masters (and the game's owner) by their home server's certificates, shown here:
+    /// whether they're its owner, until when (wall ms).
+    gm_proofs: Mutex<HashMap<String, (bool, Option<Role>, u64)>>,
+    /// (Tests: the home server's fingerprint in place of `HOME_SERVER`.)
+    pub(crate) home_for_tests: std::sync::OnceLock<[u8; 32]>,
 }
 
 impl Default for Poker {
     fn default() -> Self {
-        Poker { state: Mutex::new(State::default()), next_tourney: AtomicU64::new(1), next_id: AtomicU64::new(1), start: Instant::now(), last_people: Mutex::new(HashMap::new()) }
+        Poker { state: Mutex::new(State::default()), next_tourney: AtomicU64::new(1), next_id: AtomicU64::new(1), start: Instant::now(), last_people: Mutex::new(HashMap::new()), gm_proofs: Mutex::new(HashMap::new()), home_for_tests: std::sync::OnceLock::new() }
     }
 }
 
@@ -200,8 +210,42 @@ impl Poker {
         hub.db.get_meta(ROLES).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
     }
 
+    /// Someone's role here. Game Masters are the home server's (see `gm`): named there, and
+    /// anywhere else only by its certificate; Ambassadors are each server's own.
     pub fn role(hub: &Hub, uid: &str) -> Option<Role> {
-        Self::roles(hub).get(uid).copied()
+        if Self::is_home(hub) {
+            return Self::roles(hub).get(uid).copied();
+        }
+        // (Elsewhere, only by the home's certificate: the game's owner counts as a Game Master.)
+        Self::proof(hub, uid).map(|(_, role)| role.unwrap_or(Role::GameMaster))
+    }
+
+    /// The home server's fingerprint (Brethren of Blood's, or a test's).
+    fn home(hub: &Hub) -> Option<[u8; 32]> {
+        hub.poker.home_for_tests.get().copied().or_else(gm::home)
+    }
+
+    /// Whether this is the Game Masters' home server.
+    pub fn is_home(hub: &Hub) -> bool {
+        Self::home(hub) == Some(hub.fingerprint)
+    }
+
+    /// Someone's home certificate shown here and still good: whether they're the home's owner.
+    /// What it says: whether they're the home's owner, and their role (none for the owner).
+    fn proof(hub: &Hub, uid: &str) -> Option<(bool, Option<Role>)> {
+        let now = pyr_proto::now_ms().max(0) as u64;
+        hub.poker.gm_proofs.lock().get(uid).filter(|p| p.2 > now).map(|p| (p.0, p.1))
+    }
+
+    /// The Owner of the Game: the home server's owner (there, or here by their certificate).
+    pub fn is_game_owner(hub: &Hub, uid: &str) -> bool {
+        if Self::is_home(hub) { Self::is_owner(hub, uid) } else { Self::proof(hub, uid).is_some_and(|p| p.0) }
+    }
+
+    /// Who may light the Bonfire early: the game's owner and Game Masters (never just a
+    /// server's owner).
+    pub fn can_light(hub: &Hub, uid: &str) -> bool {
+        Self::is_game_owner(hub, uid) || Self::role(hub, uid) == Some(Role::GameMaster)
     }
 
     /// The server's owner: the only one who names Game Masters and Ambassadors (not admins,
@@ -253,14 +297,15 @@ impl Poker {
     fn staff_view(hub: &Hub, uid: &str, _can_manage: bool) -> StaffView {
         let me = Self::role(hub, uid);
         let allowance = me.map(|r| Self::allowance(hub, r)).unwrap_or(0);
-        let owner = Self::is_owner(hub, uid);
+        // ("owner": the Owner of the Game, not a server's owner.)
+        let owner = Self::is_game_owner(hub, uid);
         StaffView {
             me,
             owner,
             allowance,
             left: allowance.saturating_sub(Self::spent_today(hub, uid)),
             rake_week: Self::rake_week(hub),
-            staff: Self::roles(hub).into_iter().map(|(u, role)| StaffMember { name: Self::name_of(hub, &u), uid: u, role }).collect(),
+            staff: if Self::is_home(hub) { Self::roles(hub).into_iter().map(|(u, role)| StaffMember { name: Self::name_of(hub, &u), uid: u, role }).collect() } else { Vec::new() },
             // (The newest few hundred: all of it's kept, and in the server's own log.)
             log: if owner { hub.db.get_meta(STAFF_LOG).and_then(|v| serde_json::from_str::<Vec<StaffLog>>(&v).ok()).unwrap_or_default().into_iter().take(STAFF_LOG_SHOWN).collect() } else { vec![] },
         }
@@ -385,7 +430,7 @@ impl Poker {
                     Self::rate(hub, st, &who, |r| pyr_poker::rating::rate_places(r, &places), true);
                 }
                 // (Counted as the tables' news goes out: see `flush_bj` and the others.)
-                Effect::BjRound { .. } | Effect::CrapsRoll { .. } | Effect::BacCoup { .. } => {}
+                Effect::BjRound { .. } | Effect::CrapsRoll { .. } | Effect::BacCoup { .. } | Effect::RlSpin { .. } => {}
                 Effect::Placed { uid, place, entrants, prize, tourney } => {
                     let (mut rec, _) = hub.db.poker_record(&uid);
                     let g = progress::apply_placed(&mut rec, place, entrants);
@@ -408,12 +453,14 @@ impl Poker {
     /// A request from someone (`can_manage`: they may manage the server, so may close any
     /// table). What comes back goes to them alone; news goes out to the tables.
     pub fn handle(&self, hub: &Hub, uid: &str, can_manage: bool, msg: ToServer) -> Result<Option<ToApp>, String> {
-        self.handle_from(hub, uid, can_manage, true, msg)
+        self.handle_from(hub, uid, can_manage, pyr_poker::net::CASINO_013, msg)
     }
 
-    /// `handle`, for an app that knows (`next`) Pyr Casino from 0.12.0 on, or one that doesn't
-    /// (it's told nothing it couldn't read: see `CASINO_012_CAP`).
-    pub fn handle_from(&self, hub: &Hub, uid: &str, can_manage: bool, next: bool, msg: ToServer) -> Result<Option<ToApp>, String> {
+    /// `handle`, for an app that knows Pyr Casino up to `casino` (`pyr_poker::net::CASINO_011`
+    /// to `CASINO_013`): it's asked for nothing it doesn't know, and told nothing it couldn't
+    /// read (see `CASINO_012_CAP` and `CASINO_013_CAP`).
+    pub fn handle_from(&self, hub: &Hub, uid: &str, can_manage: bool, casino: u8, msg: ToServer) -> Result<Option<ToApp>, String> {
+        let next = casino >= pyr_poker::net::CASINO_012;
         let now = self.now();
         let mut guard = self.state.lock();
         let st: &mut State = &mut guard;
@@ -473,6 +520,15 @@ impl Poker {
             ToServer::Stand { table } => {
                 let out = room!(table).stand(uid, now)?;
                 self.flush(hub, st, table, out);
+                Ok(None)
+            }
+            ToServer::Muck { table, on } => {
+                room!(table).set_muck(uid, on)?;
+                Ok(None)
+            }
+            ToServer::ShowCards { table, hand } => {
+                let o = room!(table).show_cards(uid, hand)?;
+                self.flush(hub, st, table, o);
                 Ok(None)
             }
             ToServer::SitOut { table, out } => {
@@ -603,7 +659,7 @@ impl Poker {
                 player.mmr = Some(Self::mmr_for(hub, &them, &player.name, player.bot));
                 Ok(Some(ToApp::Player { table, player }))
             }
-            ToServer::Casino { req } => self.casino(hub, st, uid, req, next),
+            ToServer::Casino { req } => self.casino(hub, st, uid, req, casino),
             msg @ (ToServer::BjTables
             | ToServer::BjWatch { .. }
             | ToServer::BjUnwatch { .. }
@@ -637,6 +693,57 @@ impl Poker {
                 }
                 Self::game_emote(hub, st, uid, game, table, &emote, now)
             }
+            ToServer::GmCertAsk => {
+                // At home: a certificate for its owner and its Game Masters (none for anyone
+                // else, so a Pyr no longer one forgets its own).
+                if !Self::is_home(hub) {
+                    return Err("this isn't the Game Masters' home server".into());
+                }
+                let owner = Self::is_owner(hub, uid);
+                let role = Self::roles(hub).get(uid).copied();
+                let signed = if owner || role.is_some() {
+                    let signing = hub.signing.get().ok_or("this server can't sign certificates")?;
+                    Some(gm::sign(signing, uid, owner, if owner { None } else { role }, self.wall())?)
+                } else {
+                    None
+                };
+                Ok(Some(ToApp::GmCert { signed }))
+            }
+            ToServer::GmProof { signed } => {
+                let Some(home) = Self::home(hub) else { return Ok(None) };
+                if Self::is_home(hub) {
+                    return Ok(None);
+                }
+                let gm = gm::verify(&signed, home, uid, self.wall())?;
+                hub.poker.gm_proofs.lock().insert(uid.to_string(), (gm.home_owner, if gm.home_owner { None } else { Some(gm.role) }, gm.expires_ms));
+                let (rec, _) = hub.db.poker_record(uid);
+                Ok(Some(ToApp::Record { me: Self::view(hub, uid, &rec, st.held(uid)), gains: None }))
+            }
+            ToServer::CasinoChat { .. } | ToServer::CasinoChatLog | ToServer::CasinoChatDelete { .. } => {
+                if casino < pyr_poker::net::CASINO_013 {
+                    return Err("the casino's chat needs a newer Pyr".into());
+                }
+                if !st.chat.loaded() {
+                    st.chat.load(hub.db.get_meta(chat::META_KEY));
+                }
+                match msg {
+                    ToServer::CasinoChatLog => Ok(Some(ToApp::CasinoChat { lines: st.chat.recent(), all: true })),
+                    ToServer::CasinoChat { text } => {
+                        let line = st.chat.say(uid, &Self::name_of(hub, uid), &text, self.wall())?;
+                        let _ = hub.db.set_meta(chat::META_KEY, &st.chat.saved());
+                        hub.broadcast_poker_from(pyr_poker::net::CASINO_013, ToApp::CasinoChat { lines: vec![line], all: false });
+                        Ok(None)
+                    }
+                    ToServer::CasinoChatDelete { id } => {
+                        let moderator = can_manage || Self::is_owner(hub, uid) || Self::role(hub, uid).is_some();
+                        st.chat.delete(uid, moderator, id)?;
+                        let _ = hub.db.set_meta(chat::META_KEY, &st.chat.saved());
+                        hub.broadcast_poker_from(pyr_poker::net::CASINO_013, ToApp::CasinoChatGone { id });
+                        Ok(None)
+                    }
+                    _ => Ok(None),
+                }
+            }
             ToServer::Bonfire | ToServer::BonfireLight => {
                 if !next {
                     return Err("the Bonfire needs a newer Pyr".into());
@@ -656,10 +763,27 @@ impl Poker {
                 }
                 self.bac_tables(hub, st, uid, msg, now, &mut rng)
             }
+            msg @ (ToServer::RlTables
+            | ToServer::RlWatch { .. }
+            | ToServer::RlUnwatch { .. }
+            | ToServer::RlSit { .. }
+            | ToServer::RlLeave { .. }
+            | ToServer::RlBets { .. }
+            | ToServer::RlBot { .. }) => {
+                if casino < pyr_poker::net::CASINO_013 {
+                    return Err("roulette tables need a newer Pyr".into());
+                }
+                self.rl_tables(hub, st, uid, msg, now, &mut rng)
+            }
             ToServer::Staff => Ok(Some(ToApp::Staff { view: Self::staff_view(hub, uid, can_manage) })),
             ToServer::SetRole { uid: them, role } => {
-                if !Self::is_owner(hub, uid) {
-                    return Err("only the server's owner names Game Masters and Ambassadors".into());
+                // (Staff are the whole game's: named by the Owner of the Game on the home server
+                // only, and staff on every server. A server's owner names nobody.)
+                if !Self::is_home(hub) {
+                    return Err("Game Masters and Ambassadors are named on Brethren of Blood by the Owner of the Game, and count on every server".into());
+                }
+                if !Self::is_game_owner(hub, uid) {
+                    return Err("only the Owner of the Game names Game Masters and Ambassadors".into());
                 }
                 if hub.db.get_user(&them).is_none() {
                     return Err("there's nobody by that id here".into());
@@ -681,12 +805,14 @@ impl Poker {
                 Ok(Some(ToApp::Staff { view: Self::staff_view(hub, uid, can_manage) }))
             }
             ToServer::Gift { uid: them, chips, item, note } => {
-                // (The server's owner gives as much as they like; it's all in the log.)
-                let owner = Self::is_owner(hub, uid);
+                // (The Owner of the Game gives as much as they like; it's all in the log. A
+                // server's owner, as such, gives nothing.)
+                let owner = Self::is_game_owner(hub, uid);
                 if !owner && Self::role(hub, uid) != Some(Role::GameMaster) {
-                    return Err("only Game Masters (and the server's owner) give gifts".into());
+                    return Err("only Game Masters and the Owner of the Game give gifts".into());
                 }
-                if them == uid {
+                // (The owner may give to themselves, as much as they like, in the log like any gift.)
+                if them == uid && !owner {
                     return Err("not to yourself".into());
                 }
                 if hub.db.get_user(&them).is_none() {
@@ -715,16 +841,16 @@ impl Poker {
                     if chips > 0 { format!("{} chips", progress_chips(chips)) } else { String::new() },
                     look.map(|l| format!("{}the {l} look", if chips > 0 { " and " } else { "" })).unwrap_or_default(),
                     if note.is_empty() { String::new() } else { format!(" (\u{201c}{note}\u{201d})") },
-                    if owner { " [the owner: no limit]" } else { "" }
+                    if owner { " [the Owner of the Game: no limit]" } else { "" }
                 );
                 self.log_staff(hub, uid, what);
                 Ok(Some(ToApp::Staff { view: Self::staff_view(hub, uid, can_manage) }))
             }
             ToServer::DropPrize { table, chips, item } => {
-                let owner = Self::is_owner(hub, uid);
+                let owner = Self::is_game_owner(hub, uid);
                 let role = Self::role(hub, uid);
                 if role.is_none() && !owner {
-                    return Err("only Game Masters and Ambassadors (and the server's owner) drop prize boxes".into());
+                    return Err("only Game Masters, Ambassadors and the Owner of the Game drop prize boxes".into());
                 }
                 let look = Self::item_name(&item)?;
                 if chips == 0 && look.is_none() {
@@ -749,7 +875,7 @@ impl Poker {
                         "dropped a prize box on {table_name}: {}{}{}",
                         if chips > 0 { format!("{} chips", progress_chips(chips)) } else { String::new() },
                         look.map(|l| format!("{}the {l} look", if chips > 0 { " and " } else { "" })).unwrap_or_default(),
-                        if owner { " [the owner: no limit]" } else { "" }
+                        if owner { " [the Owner of the Game: no limit]" } else { "" }
                     ),
                 );
                 Ok(None)
@@ -899,6 +1025,7 @@ impl Poker {
         self.bj_gone(hub, st, uid, now);
         self.craps_gone(hub, st, uid, now);
         self.bac_gone(hub, st, uid, now);
+        self.rl_gone(hub, st, uid, now);
     }
 
     /// The clock (a few times a second).
@@ -928,6 +1055,7 @@ impl Poker {
         self.bj_tick(hub, st, now, &mut rng);
         self.craps_tick(hub, st, now, &mut rng);
         self.bac_tick(hub, st, now, &mut rng);
+        self.rl_tick(hub, st, now, &mut rng);
         self.bonfire_tick(hub, st, &mut rng);
         let ids: Vec<TableId> = st.rooms.keys().copied().collect();
         let mut close = Vec::new();
@@ -1116,8 +1244,9 @@ mod tests {
         assert_eq!(hub.db.poker_record("dee").0.chips, progress::STARTING_CHIPS);
     }
 
-    /// The server's owner gives as many chips as they like (a Game Master only what's left of
-    /// today's allowance, and nobody else any), and every gift is in the log the owner reads.
+    /// The server's owner gives as many chips as they like, to themselves too (a Game Master only
+    /// what's left of today's allowance, never to themselves, and nobody else any), and every
+    /// gift is in the log the owner reads.
     #[test]
     fn the_owner_gives_without_a_limit_and_it_is_logged() {
         use pyr_proto::control::Role as UserRole;
@@ -1130,6 +1259,8 @@ mod tests {
         let gift = |from: &str, chips: u64| p.handle(&hub, from, false, ToServer::Gift { uid: "amy".into(), chips, item: None, note: "for the final".into() });
         let start = hub.db.poker_record("amy").0.chips;
         assert!(gift("gm", 10).is_err(), "nobody else gives anything");
+        // (Game Masters are named on the home server: this one, here.)
+        let _ = p.home_for_tests.set(hub.fingerprint);
         p.handle(&hub, owner, false, ToServer::SetRole { uid: "gm".into(), role: Some(Role::GameMaster) }).unwrap();
         assert!(gift("gm", GM_FLOOR + 1).is_err(), "a Game Master: today's allowance");
         gift("gm", 1_000).unwrap();
@@ -1137,10 +1268,15 @@ mod tests {
         gift(owner, 5_000_000).unwrap();
         gift(owner, 7_000_000).unwrap();
         assert_eq!(hub.db.poker_record("amy").0.chips, start + 1_000 + 12_000_000);
-        assert!(p.handle(&hub, owner, false, ToServer::Gift { uid: owner.into(), chips: 5, item: None, note: String::new() }).is_err(), "not to themselves");
+        // The owner to themselves too, without a limit (a Game Master never).
+        let mine = hub.db.poker_record(owner).0.chips;
+        p.handle(&hub, owner, false, ToServer::Gift { uid: owner.into(), chips: 9_000_000, item: None, note: String::new() }).unwrap();
+        assert_eq!(hub.db.poker_record(owner).0.chips, mine + 9_000_000);
+        assert!(p.handle(&hub, "gm", false, ToServer::Gift { uid: "gm".into(), chips: 5, item: None, note: String::new() }).is_err(), "not to themselves");
         let Some(ToApp::Staff { view }) = p.handle(&hub, owner, false, ToServer::Staff).unwrap() else { panic!() };
         assert!(view.owner);
-        let top = &view.log[0];
+        assert!(view.log[0].what.contains("Bluelight 9,000,000 chips") && view.log[0].what.contains("no limit"), "{}", view.log[0].what);
+        let top = &view.log[1];
         assert_eq!(top.by, "Bluelight");
         assert!(top.what.contains("Amy 7,000,000 chips") && top.what.contains("no limit"), "{}", top.what);
         assert!(view.log.iter().any(|l| l.by == "Bluelight" && l.what.contains("5,000,000 chips")));
@@ -1148,5 +1284,77 @@ mod tests {
         // Only the owner reads it.
         let Some(ToApp::Staff { view }) = p.handle(&hub, "gm", false, ToServer::Staff).unwrap() else { panic!() };
         assert!(view.log.is_empty() && !view.owner);
+    }
+
+    /// Game Masters are named on the home server only, and are Game Masters everywhere by its
+    /// certificate; the Bonfire's lit early by them and the game's owner, not a server's owner.
+    #[test]
+    fn game_masters_are_the_home_servers_everywhere() {
+        use pyr_proto::control::Role as UserRole;
+        let dir = std::env::temp_dir().join(format!("pyr-gm-hubs-{}", std::process::id()));
+        let tls_at = |name: &str| {
+            let d = dir.join(name);
+            std::fs::create_dir_all(&d).unwrap();
+            crate::tls::load_or_create(&d).unwrap()
+        };
+        let (home_tls, other_tls) = (tls_at("home"), tls_at("other"));
+        let hub_for = |tls: &crate::tls::TlsIdentity| {
+            let h = Hub::new(Db::open_in_memory().unwrap(), tls.fingerprint, "127.0.0.1".into(), 1, dir.join("files"));
+            let _ = h.signing.set(crate::directory::Signing::new(&tls.cert_der, &tls.key_der).unwrap());
+            let _ = h.poker.home_for_tests.set(home_tls.fingerprint);
+            h
+        };
+        let (home, other) = (hub_for(&home_tls), hub_for(&other_tls));
+        for h in [&home, &other] {
+            h.db.insert_user("gee", "Gee", UserRole::Member).unwrap();
+            h.db.insert_user("amy", "Amy", UserRole::Member).unwrap();
+        }
+        home.db.insert_user("blue", "Bluelight", UserRole::Owner).unwrap();
+        other.db.insert_user("bob", "Bob", UserRole::Owner).unwrap();
+        other.db.insert_user("blue", "Bluelight", UserRole::Member).unwrap();
+        // Another server's owner names nobody, gives no chips, drops no prize box, lights no
+        // Bonfire.
+        assert!(other.poker.handle(&other, "bob", false, ToServer::SetRole { uid: "gee".into(), role: Some(Role::GameMaster) }).is_err());
+        assert!(other.poker.handle(&other, "bob", false, ToServer::SetRole { uid: "gee".into(), role: Some(Role::Ambassador) }).is_err());
+        assert!(other.poker.handle(&other, "bob", false, ToServer::Gift { uid: "amy".into(), chips: 10, item: None, note: String::new() }).is_err());
+        assert!(other.poker.handle(&other, "bob", false, ToServer::BonfireLight).is_err());
+        let Some(ToApp::Staff { view }) = other.poker.handle(&other, "bob", false, ToServer::Staff).unwrap() else { panic!() };
+        assert!(!view.owner && view.me.is_none());
+        // Nor does a Game Master at home name anyone.
+        home.db.insert_user("mo", "Mo", UserRole::Member).unwrap();
+        // Named at home: a certificate, which counts on the other server.
+        home.poker.handle(&home, "blue", false, ToServer::SetRole { uid: "gee".into(), role: Some(Role::GameMaster) }).unwrap();
+        let cert = |h: &Hub, uid: &str| match h.poker.handle(h, uid, false, ToServer::GmCertAsk).unwrap() {
+            Some(ToApp::GmCert { signed }) => signed,
+            other => panic!("{other:?}"),
+        };
+        assert!(cert(&home, "amy").is_none(), "not staff: no certificate");
+        assert!(other.poker.handle(&other, "gee", false, ToServer::GmCertAsk).is_err(), "only the home signs");
+        let gee = cert(&home, "gee").unwrap();
+        assert_eq!(Poker::role(&other, "gee"), None);
+        assert!(other.poker.handle(&other, "amy", false, ToServer::GmProof { signed: gee.clone() }).is_err(), "someone else's");
+        other.poker.handle(&other, "gee", false, ToServer::GmProof { signed: gee }).unwrap();
+        assert_eq!(Poker::role(&other, "gee"), Some(Role::GameMaster));
+        assert!(Poker::can_light(&other, "gee") && !Poker::is_game_owner(&other, "gee"));
+        assert!(home.poker.handle(&home, "gee", false, ToServer::SetRole { uid: "mo".into(), role: Some(Role::Ambassador) }).is_err());
+        // An Ambassador named at home is one everywhere too.
+        home.poker.handle(&home, "blue", false, ToServer::SetRole { uid: "amy".into(), role: Some(Role::Ambassador) }).unwrap();
+        let amy = cert(&home, "amy").unwrap();
+        other.poker.handle(&other, "amy", false, ToServer::GmProof { signed: amy }).unwrap();
+        assert_eq!(Poker::role(&other, "amy"), Some(Role::Ambassador));
+        assert!(!Poker::can_light(&other, "amy"));
+        // The game's owner: lights it anywhere.
+        let blue = cert(&home, "blue").unwrap();
+        other.poker.handle(&other, "blue", false, ToServer::GmProof { signed: blue }).unwrap();
+        assert!(Poker::is_game_owner(&other, "blue") && Poker::can_light(&other, "blue"));
+        // The Owner of the Game gives as much as they like there too.
+        other.poker.handle(&other, "blue", false, ToServer::Gift { uid: "amy".into(), chips: 3_000_000, item: None, note: String::new() }).unwrap();
+        let Some(ToApp::Staff { view }) = other.poker.handle(&other, "blue", false, ToServer::Staff).unwrap() else { panic!() };
+        assert!(view.owner);
+        assert!(!Poker::can_light(&other, "bob"));
+        // Taken away at home: no certificate next time (and the old one runs out).
+        home.poker.handle(&home, "blue", false, ToServer::SetRole { uid: "gee".into(), role: None }).unwrap();
+        assert!(cert(&home, "gee").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

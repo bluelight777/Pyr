@@ -11,13 +11,13 @@ pub enum Humor {
     /// Scoville Slots: a heat meter that climbs with every spin that doesn't pay, and a chili
     /// who sweats it out (and breathes fire when it boils over).
     Heat,
-    /// Sugar Rush: the dentist's report, adding up the sugar the reels land, and a tooth that
-    /// cracks under it.
+    /// Sugar Rush: a sugar count, adding up the sugar the reels land, and a tooth that cracks
+    /// under it.
     Dentist,
-    /// The Daily Grind: a caffeine level that runs down, sleepy reels when it's empty, a mug who
-    /// nods off, and office email.
+    /// The Daily Grind: a caffeine level that runs down, sleepy reels when it's empty, and a mug
+    /// who nods off.
     Office,
-    /// Frostbite Fortune: every win a fish story, each taller than the last.
+    /// Frostbite Fortune: the biggest catches on a board, and a host who slips on the ice.
     FishTales,
 }
 

@@ -1381,14 +1381,20 @@ impl eframe::App for PyrApp {
                 // the form.
                 crate::images::FolderFor::PluginSource | crate::images::FolderFor::PluginZip => self.plugin_chosen(&dir),
                 // A skin someone's making: worn until they stop (and again whenever it changes).
-                crate::images::FolderFor::TrySkin => match pyr_engine::skins::check_folder(&dir) {
+                // (Bug report 133: a folder with no skin in it is a wrong pick, not a bug; a skin
+                // a level or two inside it is the one meant.)
+                crate::images::FolderFor::TrySkin => match pyr_engine::skins::find_folder(&dir).ok_or(()).map(|d| (pyr_engine::skins::check_folder(&d), d)) {
+                    Err(()) => self.engine.shared.state.write().refused(format!("There's no skin in {}: pick the folder with its skin.json in it (Make a skin starts one).", dir.display())),
+                    Ok((checked, dir)) => match checked {
                     Ok((files, report)) if report.ok() => {
                         let name = report.manifest.name.clone();
                         self.looks.try_on(crate::looks::Trial::Folder { path: dir }, name.clone(), files);
                         self.toast(&format!("Trying {name}. Save a change to its files and Pyr wears it again."), false);
                     }
-                    Ok((_, report)) => self.toast(&format!("That skin can't be worn yet: {}", report.problems.join(" ")), true),
+                    // (Its own problems, shown to fix: no bug of Pyr's to report.)
+                    Ok((_, report)) => self.engine.shared.state.write().refused(format!("That skin can't be worn yet: {}", report.problems.join(" "))),
                     Err(e) => self.toast(&format!("{e:#}"), true),
+                    },
                 },
             }
         }

@@ -44,6 +44,7 @@ pub(super) fn game_emote_to(st: &mut State, uid: &str, game: TableGame, table: u
         TableGame::Blackjack => st.bj.tables.get(&table).map(|t| (t.seat_of(uid), t.audience())),
         TableGame::Craps => st.craps.tables.get(&table).map(|t| (t.seat_of(uid), t.audience())),
         TableGame::Baccarat => st.bac.tables.get(&table).map(|t| (t.seat_of(uid), t.audience())),
+        TableGame::Roulette => st.rl.tables.get(&table).map(|t| (t.seat_of(uid), t.audience())),
     }
     .ok_or("that table has closed")?;
     let seat = seat.ok_or("sit down to send those")?;
@@ -106,6 +107,6 @@ mod tests {
         // Through the server, and only from a Pyr that knows it.
         std::mem::swap(&mut st.craps, &mut hub.poker.state.lock().craps);
         assert_eq!(ask("ann", ToServer::GameEmote { game: TableGame::Craps, table: id, emote: "e:nice".into() }), Ok(None));
-        assert!(hub.poker.handle_from(&hub, "ann", false, false, ToServer::GameEmote { game: TableGame::Craps, table: id, emote: "e:nice".into() }).is_err());
+        assert!(hub.poker.handle_from(&hub, "ann", false, pyr_poker::net::CASINO_011, ToServer::GameEmote { game: TableGame::Craps, table: id, emote: "e:nice".into() }).is_err());
     }
 }

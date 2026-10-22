@@ -68,6 +68,10 @@ pub enum ToServer {
     /// Leave my seat (folding first if I'm in a hand); my chips go back to my record.
     Stand { table: TableId },
     SitOut { table: TableId, out: bool },
+    /// At a showdown, my hands that can't win go in face down (0.13.0 servers).
+    Muck { table: TableId, on: bool },
+    /// My cards from the hand just over, for everyone to see (0.13.0 servers).
+    ShowCards { table: TableId, hand: u64 },
     /// More chips from my record, between hands (up to the table's most).
     TopUp { table: TableId, chips: u64 },
     Act { table: TableId, hand: u64, action: Action },
@@ -180,12 +184,85 @@ pub enum ToServer {
         ready: bool,
     },
     BacBot { table: u64, seat: u8, add: bool },
+    /// Roulette tables (0.13.0 servers): as baccarat's, the chips anywhere on the layout.
+    RlTables,
+    RlWatch { table: u64 },
+    RlUnwatch { table: u64 },
+    RlSit { table: u64, seat: u8 },
+    RlLeave { table: u64 },
+    RlBets {
+        table: u64,
+        /// The spin they're for (refused if it's gone since).
+        spin: u64,
+        chips: Vec<crate::casino::roulette::Chip>,
+        #[serde(with = "hex32")]
+        seed: [u8; 32],
+        ready: bool,
+    },
+    RlBot { table: u64, seat: u8, add: bool },
     /// The Bonfire (0.12.0 servers): how it stands; light it now (the server's owner).
     Bonfire,
     BonfireLight,
     /// An emote to everyone at a blackjack, craps or baccarat table I'm sitting at (0.12.0
     /// servers; at poker it's `Emote`).
     GameEmote { game: TableGame, table: u64, emote: String },
+    /// The casino's chat (0.13.0 servers): say something to everyone in the casino; the last
+    /// lines said; take a line down (mine, or anyone's for staff and the server's managers).
+    CasinoChat { text: String },
+    CasinoChatLog,
+    CasinoChatDelete { id: u64 },
+    /// Game Masters (0.13.0): on the home server, my certificate (if I'm a Game Master or its
+    /// owner); anywhere else, here's mine.
+    GmCertAsk,
+    GmProof { signed: SignedGm },
+}
+
+/// The home of Pyr Casino's Game Masters: Brethren of Blood, by its server's fingerprint
+/// (base64url, as invite links carry it). Its owner is the game's owner, and the Game Masters
+/// it names are Game Masters on every server: it signs each a certificate ([`GmCert`]) with its
+/// TLS key, which their Pyr shows to the other servers. No other server names Game Masters.
+/// (Its invite links pin the first 12 characters: pyr.gg/brethren.) Blue confirmed it.
+pub const HOME_SERVER: &str = "zbcw0f5-a_4t1PJkuKJiIS2bnKHObr_5GGGdvPV_5dQ";
+/// What a Game Master certificate's signature covers starts with this.
+pub const GM_CONTEXT: &[u8] = b"pyr game master v1\n";
+/// How long a certificate counts for (renewed while they use the home server).
+pub const GM_DAYS: u64 = 14;
+
+/// What the home server vouches for: who, whether they're its owner (the game's owner) or a
+/// Game Master, until when.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GmCert {
+    pub uid: String,
+    pub home_owner: bool,
+    /// Their role on every server (a Game Master, or an Ambassador).
+    #[serde(default = "game_master")]
+    pub role: Role,
+    pub issued_ms: u64,
+    pub expires_ms: u64,
+}
+
+fn game_master() -> Role {
+    Role::GameMaster
+}
+
+/// A certificate as the home server signed it: its TLS certificate (whose SHA-256 is
+/// [`HOME_SERVER`]), the scheme, the [`GmCert`] JSON exactly as signed, and the signature.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SignedGm {
+    pub cert: String,
+    pub scheme: String,
+    pub payload: String,
+    pub sig: String,
+}
+
+/// A line in the casino's chat.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatLine {
+    pub id: u64,
+    pub uid: String,
+    pub name: String,
+    pub text: String,
+    pub at_ms: u64,
 }
 
 /// The casino's tables with seats besides poker's (for what's sent to everyone at one).
@@ -195,6 +272,8 @@ pub enum TableGame {
     Blackjack,
     Craps,
     Baccarat,
+    /// (0.13.0)
+    Roulette,
 }
 
 /// The emoji an older Pyr shows for one of 0.12.0's emote stickers (`e:<name>`): it'd show
@@ -229,7 +308,7 @@ impl ToServer {
     pub fn table(&self) -> Option<TableId> {
         use ToServer::*;
         match self {
-            Watch { table } | Unwatch { table } | Sit { table, .. } | Stand { table } | SitOut { table, .. } | TopUp { table, .. } | Act { table, .. }
+            Watch { table } | Unwatch { table } | Sit { table, .. } | Stand { table } | SitOut { table, .. } | Muck { table, .. } | ShowCards { table, .. } | TopUp { table, .. } | Act { table, .. }
             | Seed { table, .. } | TimeBank { table } | AddBot { table, .. } | RemoveBot { table, .. } | Emote { table, .. } | History { table, .. }
             | Player { table, .. } | DropPrize { table, .. } | Close { table } => Some(*table),
             _ => None,
@@ -428,9 +507,19 @@ pub enum ToApp {
     /// Baccarat tables (0.12.0): the list, and one I follow as it is now.
     BacTables { tables: Vec<BacSummary> },
     Bac { view: BacView },
+    /// Roulette tables (0.13.0): the list, and one I follow as it is now.
+    RlTables { tables: Vec<RlSummary> },
+    Rl { view: RlView },
     /// The Bonfire (0.12.0): how it stands for me; and, to everyone, the moment it's lit.
     Bonfire { view: BonfireView },
     BonfireLit { draw: BonfireDraw },
+    /// The casino's chat (0.13.0): new lines (`all`: the whole of what's kept, in place of what
+    /// I had), and a line taken down.
+    CasinoChat { lines: Vec<ChatLine>, all: bool },
+    CasinoChatGone { id: u64 },
+    /// The home server's answer to `GmCertAsk`: my certificate, or none (I'm not, or no longer,
+    /// a Game Master: forget any I have).
+    GmCert { signed: Option<SignedGm> },
     /// Someone at a blackjack, craps or baccarat table sent an emote (0.12.0).
     GameEmote { game: TableGame, table: u64, seat: u8, emote: String },
     /// My record changed (after a hand, the daily chips, a look chosen).
@@ -451,14 +540,40 @@ pub enum ToApp {
     Tourney { view: TourneyView },
 }
 
+/// How much of Pyr Casino an app knows: what it says when it logs in (`CASINO_012_CAP`,
+/// `CASINO_013_CAP`).
+pub const CASINO_011: u8 = 11;
+pub const CASINO_012: u8 = 12;
+pub const CASINO_013: u8 = 13;
+
 impl ToApp {
+    /// This message as an app that knows Pyr Casino up to `casino` can read it (`None`: one it
+    /// can't, left unsent).
+    pub fn for_app(self, casino: u8) -> Option<ToApp> {
+        match casino {
+            c if c >= CASINO_013 => Some(self),
+            CASINO_012 => self.for_012_app(),
+            _ => self.for_older_app(),
+        }
+    }
+
+    /// This message as a 0.12 app can read it: roulette tables, and what's new about the slots,
+    /// are 0.13.0's.
+    pub fn for_012_app(self) -> Option<ToApp> {
+        match self {
+            ToApp::RlTables { .. } | ToApp::Rl { .. } | ToApp::GameEmote { game: TableGame::Roulette, .. } | ToApp::CasinoChat { .. } | ToApp::CasinoChatGone { .. } | ToApp::GmCert { .. } => None,
+            ToApp::Casino { res } => res.for_012_app().map(|res| ToApp::Casino { res }),
+            m => Some(m),
+        }
+    }
+
     /// This message as a 0.11 app can read it (`None`: one it can't, left unsent). A 0.11 app
     /// drops its connection at anything it doesn't know, so what's new since is left out or
     /// put the old way: a Genius bot is a Shark to it.
     pub fn for_older_app(self) -> Option<ToApp> {
         let older = |b: &mut Option<Level>| *b = b.map(Level::for_older_app);
         Some(match self {
-            ToApp::Say { .. } | ToApp::Ratings { .. } | ToApp::BjTables { .. } | ToApp::Bj { .. } | ToApp::CrapsTables { .. } | ToApp::Craps { .. } | ToApp::BacTables { .. } | ToApp::Bac { .. } | ToApp::Bonfire { .. } | ToApp::BonfireLit { .. } | ToApp::GameEmote { .. } => return None,
+            ToApp::Say { .. } | ToApp::Ratings { .. } | ToApp::BjTables { .. } | ToApp::Bj { .. } | ToApp::CrapsTables { .. } | ToApp::Craps { .. } | ToApp::BacTables { .. } | ToApp::Bac { .. } | ToApp::RlTables { .. } | ToApp::Rl { .. } | ToApp::Bonfire { .. } | ToApp::BonfireLit { .. } | ToApp::GameEmote { .. } | ToApp::CasinoChat { .. } | ToApp::CasinoChatGone { .. } | ToApp::GmCert { .. } => return None,
             ToApp::Emote { table, seat, emote } => ToApp::Emote { table, seat, emote: emote_for_older_app(&emote) },
             ToApp::Snapshot { mut table } => {
                 table.seats.iter_mut().flatten().for_each(|s| older(&mut s.bot));
@@ -598,6 +713,13 @@ pub enum CasinoRes {
     Stats { view: GameStats },
 }
 
+impl CasinoRes {
+    /// As a 0.12 app can read it.
+    pub fn for_012_app(self) -> Option<CasinoRes> {
+        Some(self)
+    }
+}
+
 /// What a game (a slot, a Reel Row machine) paid back over time, for everyone on this server,
 /// its biggest wins and its luckiest (by how many times the bet), and how many are playing it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -639,6 +761,10 @@ pub struct CasinoView {
     /// Ember Dragon (0.12.0 apps): my dragon's growth at each bet, and the jackpots' pools.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dragon: Option<DragonView>,
+    /// Reel Row's progressive jackpots (0.13.0): each machine's pool (all of it at the biggest
+    /// bet).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub row_pools: Vec<(u8, u64)>,
 }
 
 /// Ember Dragon as it stands for me: how grown my dragon is at each bet, and the jackpots'
@@ -1058,6 +1184,83 @@ pub struct BacView {
     pub my_seat: Option<u8>,
 }
 
+/// A roulette table, in the list.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RlSummary {
+    pub id: u64,
+    pub name: String,
+    pub min_bet: u64,
+    pub max_bet: u64,
+    pub people: usize,
+    pub bots: usize,
+}
+
+/// Where a roulette table's spin has got to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RlStage {
+    /// Nobody (no person) sitting.
+    Waiting,
+    /// Chips going down on the coming spin.
+    Betting,
+    /// The ball's going round (where it lands is decided), then its number's on the table.
+    Shown,
+}
+
+/// Someone at a roulette table.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RlSeatView {
+    pub player: String,
+    pub name: String,
+    pub bot: bool,
+    pub level: u32,
+    pub frame: String,
+    /// Their chips on the coming spin, and whether they're ready for the ball.
+    pub chips: Vec<crate::casino::roulette::Chip>,
+    pub ready: bool,
+    /// The last spin: what they had on it, and what came back.
+    pub last_chips: Vec<crate::casino::roulette::Chip>,
+    pub paid: u64,
+    /// A bot's way of betting, in a few words.
+    pub style: String,
+}
+
+/// A spin's seeds and where the ball landed, for everyone's Pyr to spin it again.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RlReveal {
+    pub spin: u64,
+    #[serde(with = "hex32")]
+    pub commit: [u8; 32],
+    #[serde(with = "hex32")]
+    pub house: [u8; 32],
+    /// The players' seeds by seat (hex).
+    pub seeds: Vec<(u8, String)>,
+    pub number: u8,
+    /// Its place round the wheel.
+    pub pocket: u8,
+}
+
+/// A roulette table as someone there sees it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RlView {
+    pub id: u64,
+    pub name: String,
+    pub min_bet: u64,
+    pub max_bet: u64,
+    pub seats: Vec<Option<RlSeatView>>,
+    pub stage: RlStage,
+    /// Time left to bet before the ball goes, or till the next spin's betting.
+    pub ms_left: u64,
+    /// The coming spin's number and the house's fingerprint for it.
+    pub spin_no: u64,
+    #[serde(with = "hex32")]
+    pub commit: [u8; 32],
+    pub last: Option<RlReveal>,
+    /// The numbers so far (oldest first).
+    pub history: Vec<u8>,
+    pub my_seat: Option<u8>,
+}
+
 /// The Bonfire as someone sees it: the pool, when it's lit, my embers and everyone's, the most
 /// embers this time, and the last time it was lit.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1248,6 +1451,7 @@ mod tests {
             craps: craps::Table::default(),
             stats: [("slots".to_string(), CasinoStats::default())].into_iter().collect(),
             dragon: Some(DragonView { growth: [(100, 3), (2_000, 41)].into_iter().collect(), pools: [1, 2, 3, 4] }),
+            row_pools: vec![(4, 123_456_789), (9, 100_000_000)],
         };
         let m = ToApp::Casino { res: CasinoRes::State { view } };
         let j = serde_json::to_string(&m).unwrap();

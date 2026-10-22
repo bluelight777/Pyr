@@ -10,6 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::feature::{self, Feature};
 use crate::fair::Stream;
 
 pub const REELS: usize = 5;
@@ -131,12 +132,35 @@ pub struct Spin {
     pub free: bool,
     /// Everything this spin paid.
     pub pay: u64,
+    /// A Wild spin (0.13.0): the middle reel all flames.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub wild_reel: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+fn is_spin(f: &Feature) -> bool {
+    f.is_spin()
+}
+
+fn three() -> u64 {
+    FREE_SPIN_MULTIPLIER
+}
+
+fn is_three(x: &u64) -> bool {
+    *x == FREE_SPIN_MULTIPLIER
 }
 
 impl Spin {
     /// The symbols showing: `grid[reel][row]`.
     pub fn grid(&self) -> [[u8; ROWS]; REELS] {
-        grid(&self.stops)
+        let mut g = grid(&self.stops);
+        if self.wild_reel {
+            g[WILD_REEL] = [WILD; ROWS];
+        }
+        g
     }
 }
 
@@ -149,6 +173,58 @@ pub struct Outcome {
     pub jackpot_pool: u64,
     pub jackpot_won: u64,
     pub paid: u64,
+    /// Play Feature (0.13.0): what was bought, and what it cost; what the free spins multiply
+    /// by (3, or 10 in the Super Free Spins); Mystery: whether it was the Super; All or nothing:
+    /// whether it won.
+    #[serde(default, skip_serializing_if = "is_spin")]
+    pub feature: Feature,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<u64>,
+    #[serde(default = "three", skip_serializing_if = "is_three")]
+    pub free_x: u64,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub lucky: bool,
+}
+
+impl Outcome {
+    /// Chips staked: the spin's bet, or what the feature cost.
+    pub fn wagered(&self) -> u64 {
+        self.cost.unwrap_or(self.line_bet * LINES as u64)
+    }
+}
+
+// Play Feature's prices (hundredths of the spin's bet) and Chance's odds: worked out exactly
+// (see the tests).
+const CHANCE_PPM_V: u32 = 41_100;
+const PRICE_CHANCE: u64 = 200;
+const PRICE_WILD: u64 = 395;
+const PRICE_BONUS: u64 = 3_067;
+const PRICE_SUPER: u64 = 9_358;
+const PRICE_MYSTERY: u64 = 4_955;
+
+/// The middle reel, all flames on a Wild spin.
+pub const WILD_REEL: usize = 2;
+/// The Super Free Spins' multiplier.
+pub const SUPER_FREE_X: u64 = 10;
+/// A Chance spin starts free spins this often (per million).
+pub const CHANCE_PPM: u32 = CHANCE_PPM_V;
+/// Mystery: the Super Free Spins this many times in 10.
+pub const MYSTERY_SUPER_IN_10: u32 = 3;
+/// All or nothing: 196 in 10,000 (1 in 51) win 2,500 times the spin's bet.
+pub const ALL_IN_X: u64 = 2_500;
+pub const ALL_IN_PER_10K: u32 = 196;
+
+/// What each Play Feature costs, in hundredths of the spin's bet (twenty lines).
+pub fn price(f: Feature) -> u64 {
+    match f {
+        Feature::Spin => 100,
+        Feature::Chance => PRICE_CHANCE,
+        Feature::Wild => PRICE_WILD,
+        Feature::Bonus => PRICE_BONUS,
+        Feature::Super => PRICE_SUPER,
+        Feature::Mystery => PRICE_MYSTERY,
+        Feature::AllIn => 5_000,
+    }
 }
 
 pub fn grid(stops: &[u8; REELS]) -> [[u8; ROWS]; REELS] {
@@ -183,8 +259,17 @@ pub fn line_win(syms: [u8; REELS]) -> Option<(u8, u8, u64)> {
 /// One spin from the stops. `jackpot`: what five wilds on a line win instead of their line
 /// pay (if more), once a round; set to 0 once it's won.
 fn evaluate(stops: [u8; REELS], line_bet: u64, free: bool, jackpot: &mut u64, jackpot_won: &mut u64) -> Spin {
-    let g = grid(&stops);
-    let mult = if free { FREE_SPIN_MULTIPLIER } else { 1 };
+    evaluate_x(stops, line_bet, if free { Some(FREE_SPIN_MULTIPLIER) } else { None }, false, jackpot, jackpot_won)
+}
+
+/// `evaluate`, a free spin's wins multiplied by `free` (none: not a free spin), and the middle
+/// reel all flames if `wild_reel`.
+fn evaluate_x(stops: [u8; REELS], line_bet: u64, free: Option<u64>, wild_reel: bool, jackpot: &mut u64, jackpot_won: &mut u64) -> Spin {
+    let mut g = grid(&stops);
+    if wild_reel {
+        g[WILD_REEL] = [WILD; ROWS];
+    }
+    let mult = free.unwrap_or(1);
     let mut wins = Vec::new();
     let mut pay = 0u64;
     for (i, line) in PAYLINES.iter().enumerate() {
@@ -213,7 +298,7 @@ fn evaluate(stops: [u8; REELS], line_bet: u64, free: bool, jackpot: &mut u64, ja
         (0, 0)
     };
     pay += star_pay;
-    Spin { stops, wins, stars: stars as u8, star_pay, free_spins, free, pay }
+    Spin { stops, wins, stars: stars as u8, star_pay, free_spins, free: free.is_some(), pay, wild_reel }
 }
 
 fn stops(s: &mut Stream) -> [u8; REELS] {
@@ -236,7 +321,68 @@ pub fn play(line_bet: u64, s: &mut Stream, jackpot_pool: u64) -> Outcome {
         spins.push(spin);
     }
     let paid = spins.iter().map(|x| x.pay).sum::<u64>().min(super::MAX_PAYOUT);
-    Outcome { line_bet, spins, jackpot_pool, jackpot_won, paid }
+    Outcome { line_bet, spins, jackpot_pool, jackpot_won, paid, feature: Feature::Spin, cost: None, free_x: FREE_SPIN_MULTIPLIER, lucky: false }
+}
+
+/// Stars showing at these stops.
+fn stars_at(stops: &[u8; REELS]) -> usize {
+    grid(stops).iter().flatten().filter(|&&s| s == STAR).count()
+}
+
+/// A round with a Play Feature (0.13.0). Chance: free spins about five times as often (the
+/// stops drawn till they start them, or till they don't, each as likely as any other of its
+/// kind). Wild: the middle reel all flames (no jackpot on it). Bonus: a spin that starts free
+/// spins. Super: the same, its free spins at 10× instead of 3×. Mystery: a Bonus, or 3 times in
+/// 10 the Super. All or nothing: 1 in 51 wins 2,500 times the spin's bet.
+pub fn play_feature(line_bet: u64, f: Feature, s: &mut Stream, jackpot_pool: u64) -> Outcome {
+    if f == Feature::Spin {
+        return play(line_bet, s, jackpot_pool);
+    }
+    let cost = feature::cost(line_bet * LINES as u64, price(f));
+    let mut o = Outcome { line_bet, spins: Vec::new(), jackpot_pool, jackpot_won: 0, paid: 0, feature: f, cost: Some(cost), free_x: FREE_SPIN_MULTIPLIER, lucky: false };
+    if f == Feature::AllIn {
+        o.lucky = s.below(10_000) < ALL_IN_PER_10K;
+        o.paid = if o.lucky { line_bet * LINES as u64 * ALL_IN_X } else { 0 };
+        return o;
+    }
+    let trigger = match f {
+        Feature::Chance => Some(s.below(1_000_000) < CHANCE_PPM),
+        Feature::Bonus | Feature::Super | Feature::Mystery => Some(true),
+        _ => None,
+    };
+    if f == Feature::Mystery {
+        o.lucky = s.below(10) < MYSTERY_SUPER_IN_10;
+    }
+    if f == Feature::Super || o.lucky {
+        o.free_x = SUPER_FREE_X;
+    }
+    let first_stops = match trigger {
+        Some(t) => loop {
+            let st = stops(s);
+            if (stars_at(&st) >= 3) == t {
+                break st;
+            }
+        },
+        None => stops(s),
+    };
+    let wild = f == Feature::Wild;
+    let mut jackpot = if wild { 0 } else { jackpot_pool };
+    let mut won = 0;
+    let first = evaluate_x(first_stops, line_bet, None, wild, &mut jackpot, &mut won);
+    let mut left = first.free_spins as usize;
+    let mut spins = vec![first];
+    let mut played = 0;
+    while left > 0 && played < MAX_FREE_SPINS {
+        left -= 1;
+        played += 1;
+        let spin = evaluate_x(stops(s), line_bet, Some(o.free_x), false, &mut jackpot, &mut won);
+        left += spin.free_spins as usize;
+        spins.push(spin);
+    }
+    o.paid = spins.iter().map(|x| x.pay).sum::<u64>().min(super::MAX_PAYOUT);
+    o.jackpot_won = won;
+    o.spins = spins;
+    o
 }
 
 /// The jackpot's share of a spin's bet.
@@ -248,3 +394,57 @@ pub fn jackpot_share(line_bet: u64) -> u64 {
 pub fn tests_evaluate(stops: [u8; REELS], line_bet: u64, jackpot: &mut u64, jackpot_won: &mut u64) -> Spin {
     evaluate(stops, line_bet, false, jackpot, jackpot_won)
 }
+
+/// Pyr Sevens worked out exactly, for Play Feature: every stop of every reel (each equally
+/// likely), with the middle reel as it is and all flames. In line bets.
+#[cfg(test)]
+pub(crate) struct Exact {
+    /// The chance of 0 to 5 stars; the lines' pay with fewer than 3 stars and with 3, 4, 5.
+    pub stars: [f64; 6],
+    pub lines_by_stars: [f64; 6],
+    /// A Wild spin: what it pays (lines and stars), and its chance of 3, 4, 5 stars.
+    pub wild_pay: f64,
+    pub wild_stars: [f64; 6],
+}
+
+#[cfg(test)]
+pub(crate) fn exact() -> Exact {
+    let n: Vec<usize> = STRIPS.iter().map(|s| s.len()).collect();
+    let total = n.iter().product::<usize>() as f64;
+    let mut stars = [0.0; 6];
+    let mut lines = [0.0; 6];
+    let mut wild_pay = 0.0;
+    let mut wild_stars = [0.0; 6];
+    let line_pay = |g: &[[u8; ROWS]; REELS]| -> u64 {
+        PAYLINES.iter().map(|line| line_win(std::array::from_fn(|r| g[r][line[r] as usize])).map(|w| w.2).unwrap_or(0)).sum()
+    };
+    for a in 0..n[0] {
+        for b in 0..n[1] {
+            for d in 0..n[3] {
+                for e in 0..n[4] {
+                    // The Wild spin, its middle reel whatever it was.
+                    let mut g = grid(&[a as u8, b as u8, 0, d as u8, e as u8]);
+                    g[WILD_REEL] = [WILD; ROWS];
+                    let k = g.iter().flatten().filter(|&&x| x == STAR).count();
+                    let sp = if k >= 3 { STAR_PAYS[k.min(5) - 3] * LINES as u64 } else { 0 };
+                    let p = 1.0 / (n[0] * n[1] * n[3] * n[4]) as f64;
+                    wild_pay += p * (line_pay(&g) + sp) as f64;
+                    wild_stars[k] += p;
+                    for c in 0..n[2] {
+                        let g = grid(&[a as u8, b as u8, c as u8, d as u8, e as u8]);
+                        let k = g.iter().flatten().filter(|&&x| x == STAR).count();
+                        stars[k] += 1.0;
+                        lines[k] += line_pay(&g) as f64;
+                    }
+                }
+            }
+        }
+    }
+    let mut lines_by_stars = [0.0; 6];
+    for k in 0..6 {
+        lines_by_stars[k] = if stars[k] > 0.0 { lines[k] / stars[k] } else { 0.0 };
+        stars[k] /= total;
+    }
+    Exact { stars, lines_by_stars, wild_pay, wild_stars }
+}
+

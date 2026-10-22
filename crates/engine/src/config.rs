@@ -359,6 +359,13 @@ pub struct Config {
     pub backup_dir: Option<PathBuf>,
     /// People I made sure are who they say, by id (see `verify`).
     pub verified: std::collections::BTreeMap<UserId, Verified>,
+    /// My own seed for each slot on each server (Fairness): "<server key> <slot key>" -> seed.
+    pub casino_seeds: std::collections::BTreeMap<String, String>,
+    /// Poker: at a showdown my hands that can't win go in face down (auto-muck).
+    pub poker_auto_muck: bool,
+    /// My Game Master certificate from the home server (see `pyr_poker::net::HOME_SERVER`),
+    /// shown to every other server's casino; renewed at home, gone when I'm no longer one.
+    pub gm_cert: Option<pyr_poker::net::SignedGm>,
 }
 
 /// Someone I made sure is who they say (see `verify`).

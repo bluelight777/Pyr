@@ -46,6 +46,8 @@ pub struct CasinoLive {
     pub game_stats: BTreeMap<String, GameStats>,
     /// Ember Dragon: my dragon's growth at each bet, and the jackpots' pools (0.12.0 servers).
     pub dragon: Option<pyr_poker::net::DragonView>,
+    /// Reel Row's progressive jackpots (0.13.0 servers): each machine's pool, as last seen.
+    pub row_pools: BTreeMap<u8, u64>,
 }
 
 impl CasinoLive {
@@ -78,6 +80,7 @@ impl CasinoLive {
                 if view.dragon.is_some() {
                     self.dragon = view.dragon;
                 }
+                self.row_pools = view.row_pools.into_iter().collect();
                 self.busy = false;
             }
             CasinoRes::Round { round } => {
@@ -92,6 +95,13 @@ impl CasinoLive {
                 }
                 self.chips = round.chips;
                 self.jackpot = round.jackpot;
+                // A progressive machine's pool, as its round left it (back to its seed if won).
+                if let casino::Outcome::Row(o) = &round.outcome
+                    && o.pool > 0
+                {
+                    let won = o.bonus.as_ref().map(|b| b.top).unwrap_or(0);
+                    self.row_pools.insert(o.machine, o.pool.saturating_sub(won).max(casino::reelrow::POOL_SEED));
+                }
                 self.remember(round.next_nonce, round.next_commit);
                 // Ember Dragon: the dragon's new growth, and the pools as the spin left them.
                 if let casino::Outcome::Dragon(o) = &round.outcome {

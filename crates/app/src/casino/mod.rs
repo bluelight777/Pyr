@@ -10,9 +10,15 @@ pub mod art;
 pub mod auto;
 pub mod baccarat;
 pub mod bactable;
+pub mod rltable;
+pub mod minis;
+pub mod row;
+pub mod row_styles;
+pub mod stake;
 pub mod bjtable;
 pub mod blackjack;
 pub mod bonfire;
+pub mod chat;
 pub mod craps;
 pub mod crapstable;
 pub mod dice;
@@ -128,6 +134,8 @@ pub struct CasinoUi {
     /// Craps and baccarat at tables of five (0.12.0 servers).
     pub crt: crapstable::CrapsTableUi,
     pub bact: bactable::BacTableUi,
+    /// Roulette at a table of five (0.13.0 servers).
+    pub rlt: rltable::RlTableUi,
     /// The Bonfire: its card, my embers, and the show when it's lit.
     pub bonfire: bonfire::BonfireUi,
     pub roulette: roulette::RouletteUi,
@@ -135,8 +143,10 @@ pub struct CasinoUi {
     pub craps: craps::CrapsUi,
     pub dice: dice::DiceUi,
     pub keno: keno::KenoUi,
-    /// Reel Row's machines (the one open, and its reels).
+    /// Reel Row's machines (the one open, and its reels); from 0.13.0, with their mini games and
+    /// Play Feature.
     pub reels: reels::ReelsUi,
+    pub row: row::RowUi,
     /// Ember Dragon.
     pub dragon: dragon::DragonUi,
     /// A slot's Info panel, open on this tab; Game Statistics' own tab; and the statistics last
@@ -176,6 +186,7 @@ impl Default for CasinoUi {
             bjt: Default::default(),
             crt: Default::default(),
             bact: Default::default(),
+            rlt: Default::default(),
             bonfire: Default::default(),
             roulette: Default::default(),
             baccarat: Default::default(),
@@ -183,6 +194,7 @@ impl Default for CasinoUi {
             dice: Default::default(),
             keno: Default::default(),
             reels: Default::default(),
+            row: Default::default(),
             dragon: Default::default(),
             info: None,
             info_stats: Default::default(),
@@ -473,6 +485,7 @@ impl PyrApp {
         self.bj_table_leave();
         self.craps_table_leave();
         self.bac_table_leave();
+        self.rl_table_leave();
         if let Some(old) = self.poker.casino.opened.take() {
             self.engine.casino_open(&old, false);
         }
@@ -528,6 +541,7 @@ impl PyrApp {
             // (A table of seven where the server has them; blackjack alone where it doesn't.)
             Game::Blackjack if s.has(pyr_proto::control::CASINO_012_FEATURE) => self.bj_table_page(&mut child, s, area),
             Game::Blackjack => self.blackjack_page(&mut child, s, area),
+            Game::Roulette if s.has(pyr_proto::control::CASINO_013_FEATURE) => self.rl_table_page(&mut child, s, area),
             Game::Roulette => self.roulette_page(&mut child, s, area),
             // (Tables of five where the server has them; alone where it doesn't.)
             Game::Baccarat if s.has(pyr_proto::control::CASINO_012_FEATURE) => self.bac_table_page(&mut child, s, area),
@@ -536,6 +550,7 @@ impl PyrApp {
             Game::Craps => self.craps_page(&mut child, s, area),
             Game::Dice => self.dice_page(&mut child, s, area),
             Game::Keno => self.keno_page(&mut child, s, area),
+            Game::Reels if s.has(pyr_proto::control::CASINO_013_FEATURE) => self.row_page(&mut child, s, area),
             Game::Reels => self.reels_page(&mut child, s, area),
             Game::Dragon => self.dragon_page(&mut child, s, area),
         }
@@ -565,6 +580,7 @@ impl PyrApp {
             Game::Craps => self.craps_round(r),
             Game::Dice => self.dice_round(r),
             Game::Keno => self.keno_round(r),
+            Game::Reels if matches!(r.outcome, pyr_poker::casino::Outcome::Row(_)) => self.row_round(r),
             Game::Reels => self.reels_round(r),
             Game::Dragon => self.dragon_round(r),
         }
@@ -582,6 +598,7 @@ impl PyrApp {
             self.bj_table_leave();
             self.craps_table_leave();
             self.bac_table_leave();
+            self.rl_table_leave();
         }
         let c = &s.poker.casino;
         let mut x = bar.right() - 12.0;
@@ -693,6 +710,11 @@ impl PyrApp {
         // narrow window rather than running under it).
         // (A Reel Row machine is its own name and line.)
         let (name, pitch) = match game {
+            Game::Reels if s.has(pyr_proto::control::CASINO_013_FEATURE) => {
+                let m = self.poker.casino.reels.machine;
+                let th = reel_themes::theme(m);
+                (th.name.to_string(), format!("{} 243 ways, and the {}. Reel Row by Chimbita.", th.tagline, pyr_poker::casino::reelrow::GAMES[(m as usize).min(11)].0))
+            }
             Game::Reels => {
                 let th = reel_themes::theme(self.poker.casino.reels.machine);
                 (th.name.to_string(), format!("{} 243 ways, and {}. Reel Row by Chimbita.", th.tagline, th.bonus))

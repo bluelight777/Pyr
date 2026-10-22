@@ -194,6 +194,12 @@ pub async fn start_with(cfg: ServerConfig, invite_directory: Option<String>) -> 
         if local_addr.ip().is_loopback() { local_addr.ip().to_string() } else { detect_lan_ip().unwrap_or_else(|| "127.0.0.1".into()) }
     });
     let hub = Hub::new(db, tls_id.fingerprint, public_host, local_addr.port(), cfg.data_dir.join("files"));
+    match directory::Signing::new(&tls_id.cert_der, &tls_id.key_der) {
+        Ok(s) => {
+            let _ = hub.signing.set(s);
+        }
+        Err(e) => warn!("this server can't sign with its key: {e:#}"),
+    }
     // Short links: invites listed at pyr.gg, when the server's address works beyond this PC.
     match invite_directory {
         Some(base) if directory::reachable_host(&hub.public_host) => match directory::Signing::new(&tls_id.cert_der, &tls_id.key_der) {

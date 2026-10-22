@@ -60,7 +60,7 @@ impl RouletteUi {
 /// The wheel's turning `t` seconds after it was last pushed (radians): a push at each spin
 /// sets it going at 2.4 rad/s (about 23 turns a minute), and it slows toward the 1.2 rad/s it
 /// keeps between spins, as a real wheel's rotor does; it never stops dead.
-fn wheel_turn(t: f32) -> f32 {
+pub(super) fn wheel_turn(t: f32) -> f32 {
     1.2 * t + 36.0 * (1.0 - (-t / 30.0).exp())
 }
 
@@ -72,14 +72,19 @@ fn pocket_angle(pocket: i32) -> f32 {
 /// wheel's turning), picked by the round so spins don't all look alike. The last lands in its
 /// pocket.
 fn hops(r: &RoundView) -> [i32; 4] {
+    hops_by(r.server_seed[1])
+}
+
+/// The ball's hops picked by a byte of the spin's seed.
+pub(super) fn hops_by(b: u8) -> [i32; 4] {
     const WAYS: [[i32; 4]; 6] = [[-5, -3, -1, 1], [-6, -2, 1, -1], [-4, -3, -2, 0], [-7, -3, -1, 0], [-3, -4, 1, -1], [-5, -2, -2, 1]];
-    WAYS[r.server_seed[1] as usize % WAYS.len()]
+    WAYS[b as usize % WAYS.len()]
 }
 
 /// The ball at `t` seconds into a spin (the wheel at `a0` when it was pushed): its angle, and
 /// how far out it is (1 on the track, 0 down in a pocket, above 0 in the air between pockets).
 /// See `roulette` in the sounds for the timing it keeps.
-fn ball(a0: f32, pocket: usize, hops: [i32; 4], t: f32) -> (f32, f32) {
+pub(super) fn ball(a0: f32, pocket: usize, hops: [i32; 4], t: f32) -> (f32, f32) {
     let wheel = |t: f32| a0 + wheel_turn(t);
     // The pockets it lands in: the first, then after each hop; the last is its own.
     let mut at = [0i32; 5];
@@ -302,193 +307,19 @@ impl PyrApp {
 
     fn roulette_layout(&mut self, ui: &mut egui::Ui, lay: Rect, hit: Option<u8>, done: bool) {
         let p = ui.painter().clone();
-        // 1 zero column, 12 number columns, 1 "2 to 1" column; 3 rows, then dozens and the
-        // outside bets.
-        let cw = (lay.width() / 14.0).min(lay.height() / 3.68);
-        let chh = cw * 0.8;
-        let grid = Rect::from_min_size(pos2(lay.left() + cw, lay.top()), vec2(cw * 12.0, chh * 3.0));
-        let zero = Rect::from_min_size(lay.left_top(), vec2(cw, chh * 3.0));
-        let cols = Rect::from_min_size(pos2(grid.right(), grid.top()), vec2(cw, chh * 3.0));
-        let dozens = Rect::from_min_size(pos2(grid.left(), grid.bottom()), vec2(cw * 12.0, chh * 0.8));
-        let outside = Rect::from_min_size(pos2(grid.left(), dozens.bottom()), vec2(cw * 12.0, chh * 0.8));
-        let felt = Rect::from_min_max(zero.min - vec2(6.0, 6.0), pos2(cols.right() + 6.0, outside.bottom() + 6.0));
-        p.rect_filled(felt, theme::r(10), Color32::from_rgb(0x0e, 0x5e, 0x38));
-        p.rect_stroke(felt, theme::r(10), Stroke::new(2.0f32, col::GOLD_DARK), StrokeKind::Inside);
-        let line = Stroke::new(1.5f32, Color32::from_white_alpha(170));
-        let num_at = |i: usize, j: usize| -> u8 { (3 * i + (3 - j)) as u8 };
-        // Numbers.
-        for i in 0..12 {
-            for j in 0..3 {
-                let n = num_at(i, j);
-                let r = Rect::from_min_size(pos2(grid.left() + i as f32 * cw, grid.top() + j as f32 * chh), vec2(cw, chh));
-                p.rect_stroke(r, 0, line, StrokeKind::Inside);
-                let color = if rl::is_red(n) { col::RED } else { Color32::from_rgb(0x16, 0x16, 0x1a) };
-                p.add(egui::epaint::EllipseShape::filled(r.center(), vec2(cw * 0.32, chh * 0.34), color));
-                p.text(r.center(), Align2::CENTER_CENTER, n.to_string(), theme::bold_font(cw * 0.3), Color32::WHITE);
-                if hit == Some(n) {
-                    p.rect_stroke(r.shrink(2.0), 0, Stroke::new(3.0f32, col::GOLD2), StrokeKind::Inside);
-                }
-            }
-        }
-        p.rect_stroke(zero, 0, line, StrokeKind::Inside);
-        p.add(egui::epaint::EllipseShape::filled(zero.center(), vec2(cw * 0.32, chh * 0.5), col::GREEN));
-        p.text(zero.center(), Align2::CENTER_CENTER, "0", theme::bold_font(cw * 0.34), Color32::WHITE);
-        if hit == Some(0) {
-            p.rect_stroke(zero.shrink(2.0), 0, Stroke::new(3.0f32, col::GOLD2), StrokeKind::Inside);
-        }
-        for j in 0..3 {
-            let r = Rect::from_min_size(pos2(cols.left(), cols.top() + j as f32 * chh), vec2(cw, chh));
-            p.rect_stroke(r, 0, line, StrokeKind::Inside);
-            p.text(r.center(), Align2::CENTER_CENTER, "2 to 1", theme::bold_font(cw * 0.2), Color32::WHITE);
-        }
-        for d in 0..3 {
-            let r = Rect::from_min_size(pos2(dozens.left() + d as f32 * cw * 4.0, dozens.top()), vec2(cw * 4.0, dozens.height()));
-            p.rect_stroke(r, 0, line, StrokeKind::Inside);
-            p.text(r.center(), Align2::CENTER_CENTER, ["1st 12", "2nd 12", "3rd 12"][d], theme::bold_font(cw * 0.26), Color32::WHITE);
-        }
-        let outs = [("1-18", Spot::Low), ("EVEN", Spot::Even), ("", Spot::Red), ("", Spot::Black), ("ODD", Spot::Odd), ("19-36", Spot::High)];
-        for (k, (label, spot)) in outs.iter().enumerate() {
-            let r = Rect::from_min_size(pos2(outside.left() + k as f32 * cw * 2.0, outside.top()), vec2(cw * 2.0, outside.height()));
-            p.rect_stroke(r, 0, line, StrokeKind::Inside);
-            match spot {
-                Spot::Red | Spot::Black => {
-                    let c = r.center();
-                    let (w, h) = (cw * 0.5, outside.height() * 0.32);
-                    p.add(Shape::convex_polygon(vec![c + vec2(0.0, -h), c + vec2(w, 0.0), c + vec2(0.0, h), c + vec2(-w, 0.0)], if *spot == Spot::Red { col::RED } else { Color32::from_rgb(0x16, 0x16, 0x1a) }, Stroke::new(1.0f32, Color32::WHITE)));
-                }
-                _ => {
-                    p.text(r.center(), Align2::CENTER_CENTER, *label, theme::bold_font(cw * 0.26), Color32::WHITE);
-                }
-            }
-        }
+        let board = Board::new(lay);
+        board.draw(&p, hit);
         // Where the pointer is: which bet, its numbers lit.
         let pointer = ui.ctx().pointer_hover_pos();
-        let spot_at = |q: Pos2| -> Option<(Spot, Pos2)> {
-            let edge = 0.2;
-            if grid.expand2(vec2(cw * 0.1, chh * 0.25)).contains(q) && !zero.contains(q) && !cols.contains(q) {
-                let fx = ((q.x - grid.left()) / cw).clamp(0.0, 11.999);
-                let fy = (q.y - grid.top()) / chh;
-                let i = fx.floor() as usize;
-                let j = (fy.floor().max(0.0) as usize).min(2);
-                let near_v = fx.fract() < edge && i > 0;
-                let near_v2 = fx.fract() > 1.0 - edge && i < 11;
-                let near_h = fy.fract() < edge && fy > 0.5 && fy < 3.0;
-                let near_h2 = fy.fract() > 1.0 - edge && fy < 2.5;
-                let bottom = fy > 3.0 - edge;
-                let at = |x: f32, y: f32| pos2(grid.left() + x * cw, grid.top() + y * chh);
-                // A street or a six line, at the bottom edge.
-                if bottom {
-                    if near_v {
-                        return Some((Spot::Line { row: (i - 1) as u8 }, at(i as f32, 3.0)));
-                    }
-                    if near_v2 {
-                        return Some((Spot::Line { row: i as u8 }, at(i as f32 + 1.0, 3.0)));
-                    }
-                    return Some((Spot::Street { row: i as u8 }, at(i as f32 + 0.5, 3.0)));
-                }
-                let (vi, vx) = if near_v { (Some(i - 1), i as f32) } else if near_v2 { (Some(i), i as f32 + 1.0) } else { (None, 0.0) };
-                let (hj, hy) = if near_h { (Some(j - 1), j as f32) } else if near_h2 { (Some(j), j as f32 + 1.0) } else { (None, 0.0) };
-                match (vi, hj) {
-                    (Some(a), Some(b)) => {
-                        let ns = [num_at(a, b), num_at(a, b + 1), num_at(a + 1, b), num_at(a + 1, b + 1)];
-                        let min = *ns.iter().min().unwrap();
-                        return Some((Spot::Corner { a: min }, at(vx, hy)));
-                    }
-                    (Some(a), None) => {
-                        let (x, y) = (num_at(a, j), num_at(a + 1, j));
-                        return Some((Spot::Split { a: x.min(y), b: x.max(y) }, at(vx, j as f32 + 0.5)));
-                    }
-                    (None, Some(b)) => {
-                        let (x, y) = (num_at(i, b), num_at(i, b + 1));
-                        return Some((Spot::Split { a: x.min(y), b: x.max(y) }, at(i as f32 + 0.5, hy)));
-                    }
-                    _ => {}
-                }
-                if fx.fract() < edge && i == 0 {
-                    let n = num_at(0, j);
-                    return Some((Spot::Split { a: 0, b: n }, pos2(grid.left(), grid.top() + (j as f32 + 0.5) * chh)));
-                }
-                return Some((Spot::Straight { n: num_at(i, j) }, at(i as f32 + 0.5, j as f32 + 0.5)));
-            }
-            if zero.contains(q) {
-                return Some((Spot::Straight { n: 0 }, zero.center()));
-            }
-            if cols.contains(q) {
-                let j = (((q.y - cols.top()) / chh).floor() as usize).min(2);
-                return Some((Spot::Column { c: (2 - j) as u8 }, pos2(cols.center().x, cols.top() + (j as f32 + 0.5) * chh)));
-            }
-            if dozens.contains(q) {
-                let d = (((q.x - dozens.left()) / (cw * 4.0)).floor() as usize).min(2);
-                return Some((Spot::Dozen { d: d as u8 }, pos2(dozens.left() + (d as f32 + 0.5) * cw * 4.0, dozens.center().y)));
-            }
-            if outside.contains(q) {
-                let k = (((q.x - outside.left()) / (cw * 2.0)).floor() as usize).min(5);
-                return Some((outs[k].1, pos2(outside.left() + (k as f32 + 0.5) * cw * 2.0, outside.center().y)));
-            }
-            None
-        };
-        let spot_pos = |spot: &Spot| -> Pos2 {
-            // Where a bet's chips sit.
-            let at = |x: f32, y: f32| pos2(grid.left() + x * cw, grid.top() + y * chh);
-            let cell = |n: u8| -> (f32, f32) {
-                let i = ((n - 1) / 3) as f32;
-                let j = (2 - (n - 1) % 3) as f32;
-                (i, j)
-            };
-            match *spot {
-                Spot::Straight { n: 0 } => zero.center(),
-                Spot::Straight { n } => {
-                    let (i, j) = cell(n);
-                    at(i + 0.5, j + 0.5)
-                }
-                Spot::Split { a: 0, b } => {
-                    let (_, j) = cell(b);
-                    at(0.0, j + 0.5)
-                }
-                Spot::Split { a, b } => {
-                    let (i1, j1) = cell(a);
-                    let (i2, j2) = cell(b);
-                    at((i1 + i2) / 2.0 + 0.5, (j1 + j2) / 2.0 + 0.5)
-                }
-                Spot::Street { row } => at(row as f32 + 0.5, 3.0),
-                Spot::Line { row } => at(row as f32 + 1.0, 3.0),
-                Spot::Corner { a } => {
-                    let (i, j) = cell(a);
-                    at(i + 1.0, j)
-                }
-                Spot::Column { c } => pos2(cols.center().x, cols.top() + ((2 - c) as f32 + 0.5) * chh),
-                Spot::Dozen { d } => pos2(dozens.left() + (d as f32 + 0.5) * cw * 4.0, dozens.center().y),
-                other => {
-                    let k = outs.iter().position(|(_, s)| *s == other).unwrap_or(0);
-                    pos2(outside.left() + (k as f32 + 0.5) * cw * 2.0, outside.center().y)
-                }
-            }
-        };
-        let hovered = pointer.and_then(|q| if felt.contains(q) { spot_at(q) } else { None });
-        if let Some((spot, _)) = &hovered {
-            for n in 0..=36u8 {
-                if spot.covers(n) {
-                    let r = if n == 0 {
-                        zero
-                    } else {
-                        let i = ((n - 1) / 3) as f32;
-                        let j = (2 - (n - 1) % 3) as f32;
-                        Rect::from_min_size(pos2(grid.left() + i * cw, grid.top() + j * chh), vec2(cw, chh))
-                    };
-                    p.rect_filled(r, 0, Color32::from_white_alpha(46));
-                }
-            }
+        let hovered = pointer.and_then(|q| board.spot_at(q));
+        if let Some(spot) = &hovered {
+            board.light(&p, spot);
             let on = self.poker.casino.roulette.on(spot);
-            let tip = if on > 0 { format!("{}  ·  pays {} to 1  ·  on it {}", spot.name(), spot.pays(), chips_text(on)) } else { format!("{}  ·  pays {} to 1", spot.name(), spot.pays()) };
-            let galley = p.layout_no_wrap(tip, theme::bold_font(13.0), col::GOLD2);
-            let size = galley.size() + vec2(20.0, 8.0);
-            let tr = Rect::from_min_size(pos2(felt.right() - size.x, felt.top() - size.y - 10.0), size);
-            p.rect_filled(tr, theme::r(8), Color32::from_black_alpha(190));
-            p.galley(tr.min + vec2(10.0, 4.0), galley, col::GOLD2);
+            board.tip(&p, spot, on);
         }
         // Clicks: put a chip down; right-click takes that bet off.
-        let resp = ui.interact(felt, ui.id().with("roulette-layout"), Sense::click());
-        if done && let Some((spot, _)) = hovered {
+        let resp = ui.interact(board.felt, ui.id().with("roulette-layout"), Sense::click());
+        if done && let Some(spot) = hovered {
             if resp.clicked() {
                 let max = rl::max_on(&spot);
                 let have = self.poker.casino.roulette.on(&spot);
@@ -505,11 +336,11 @@ impl PyrApp {
         // The chips on the layout.
         let won: Vec<Spot> = hit.map(|n| self.poker.casino.roulette.merged().into_iter().filter(|c| c.spot.covers(n)).map(|c| c.spot).collect()).unwrap_or_default();
         for c in self.poker.casino.roulette.merged() {
-            let at = spot_pos(&c.spot);
+            let at = board.spot_pos(&c.spot);
             if won.contains(&c.spot) {
-                p.circle_filled(at, cw * 0.36, col::GOLD.gamma_multiply(0.45));
+                p.circle_filled(at, board.cw * 0.36, col::GOLD.gamma_multiply(0.45));
             }
-            chip_stack(&p, at, (cw * 0.24).clamp(9.0, 16.0), c.chips);
+            chip_stack(&p, at, (board.cw * 0.24).clamp(9.0, 16.0), c.chips);
         }
     }
 
@@ -568,8 +399,229 @@ impl PyrApp {
     }
 }
 
+/// The outside bets along the bottom of the layout, left to right.
+const OUTS: [(&str, Spot); 6] = [("1-18", Spot::Low), ("EVEN", Spot::Even), ("", Spot::Red), ("", Spot::Black), ("ODD", Spot::Odd), ("19-36", Spot::High)];
+
+/// The layout's shape on the screen: the zero, twelve columns of three numbers, the "2 to 1"
+/// column, then the dozens and the outside bets under them. Shared by the single-player wheel
+/// and the tables.
+#[derive(Clone, Copy)]
+pub(super) struct Board {
+    pub felt: Rect,
+    grid: Rect,
+    zero: Rect,
+    cols: Rect,
+    dozens: Rect,
+    outside: Rect,
+    pub cw: f32,
+    chh: f32,
+}
+
+impl Board {
+    pub fn new(lay: Rect) -> Board {
+        let cw = (lay.width() / 14.0).min(lay.height() / 3.68);
+        let chh = cw * 0.8;
+        let grid = Rect::from_min_size(pos2(lay.left() + cw, lay.top()), vec2(cw * 12.0, chh * 3.0));
+        let zero = Rect::from_min_size(lay.left_top(), vec2(cw, chh * 3.0));
+        let cols = Rect::from_min_size(pos2(grid.right(), grid.top()), vec2(cw, chh * 3.0));
+        let dozens = Rect::from_min_size(pos2(grid.left(), grid.bottom()), vec2(cw * 12.0, chh * 0.8));
+        let outside = Rect::from_min_size(pos2(grid.left(), dozens.bottom()), vec2(cw * 12.0, chh * 0.8));
+        let felt = Rect::from_min_max(zero.min - vec2(6.0, 6.0), pos2(cols.right() + 6.0, outside.bottom() + 6.0));
+        Board { felt, grid, zero, cols, dozens, outside, cw, chh }
+    }
+
+    /// The number in column `i` (0 to 11), row `j` (0 at the top: 3, 6, 9…).
+    fn num_at(i: usize, j: usize) -> u8 {
+        (3 * i + (3 - j)) as u8
+    }
+
+    /// A number's box.
+    fn cell(&self, n: u8) -> Rect {
+        if n == 0 {
+            return self.zero;
+        }
+        let i = ((n - 1) / 3) as f32;
+        let j = (2 - (n - 1) % 3) as f32;
+        Rect::from_min_size(pos2(self.grid.left() + i * self.cw, self.grid.top() + j * self.chh), vec2(self.cw, self.chh))
+    }
+
+    /// The felt, the numbers and the outside bets; `hit` outlined.
+    pub fn draw(&self, p: &egui::Painter, hit: Option<u8>) {
+        let (cw, chh) = (self.cw, self.chh);
+        p.rect_filled(self.felt, theme::r(10), Color32::from_rgb(0x0e, 0x5e, 0x38));
+        p.rect_stroke(self.felt, theme::r(10), Stroke::new(2.0f32, col::GOLD_DARK), StrokeKind::Inside);
+        let line = Stroke::new(1.5f32, Color32::from_white_alpha(170));
+        for i in 0..12 {
+            for j in 0..3 {
+                let n = Self::num_at(i, j);
+                let r = self.cell(n);
+                p.rect_stroke(r, 0, line, StrokeKind::Inside);
+                let color = if rl::is_red(n) { col::RED } else { Color32::from_rgb(0x16, 0x16, 0x1a) };
+                p.add(egui::epaint::EllipseShape::filled(r.center(), vec2(cw * 0.32, chh * 0.34), color));
+                p.text(r.center(), Align2::CENTER_CENTER, n.to_string(), theme::bold_font(cw * 0.3), Color32::WHITE);
+                if hit == Some(n) {
+                    p.rect_stroke(r.shrink(2.0), 0, Stroke::new(3.0f32, col::GOLD2), StrokeKind::Inside);
+                }
+            }
+        }
+        p.rect_stroke(self.zero, 0, line, StrokeKind::Inside);
+        p.add(egui::epaint::EllipseShape::filled(self.zero.center(), vec2(cw * 0.32, chh * 0.5), col::GREEN));
+        p.text(self.zero.center(), Align2::CENTER_CENTER, "0", theme::bold_font(cw * 0.34), Color32::WHITE);
+        if hit == Some(0) {
+            p.rect_stroke(self.zero.shrink(2.0), 0, Stroke::new(3.0f32, col::GOLD2), StrokeKind::Inside);
+        }
+        for j in 0..3 {
+            let r = Rect::from_min_size(pos2(self.cols.left(), self.cols.top() + j as f32 * chh), vec2(cw, chh));
+            p.rect_stroke(r, 0, line, StrokeKind::Inside);
+            p.text(r.center(), Align2::CENTER_CENTER, "2 to 1", theme::bold_font(cw * 0.2), Color32::WHITE);
+        }
+        for d in 0..3 {
+            let r = Rect::from_min_size(pos2(self.dozens.left() + d as f32 * cw * 4.0, self.dozens.top()), vec2(cw * 4.0, self.dozens.height()));
+            p.rect_stroke(r, 0, line, StrokeKind::Inside);
+            p.text(r.center(), Align2::CENTER_CENTER, ["1st 12", "2nd 12", "3rd 12"][d], theme::bold_font(cw * 0.26), Color32::WHITE);
+        }
+        for (k, (label, spot)) in OUTS.iter().enumerate() {
+            let r = Rect::from_min_size(pos2(self.outside.left() + k as f32 * cw * 2.0, self.outside.top()), vec2(cw * 2.0, self.outside.height()));
+            p.rect_stroke(r, 0, line, StrokeKind::Inside);
+            match spot {
+                Spot::Red | Spot::Black => {
+                    let c = r.center();
+                    let (w, h) = (cw * 0.5, self.outside.height() * 0.32);
+                    p.add(Shape::convex_polygon(vec![c + vec2(0.0, -h), c + vec2(w, 0.0), c + vec2(0.0, h), c + vec2(-w, 0.0)], if *spot == Spot::Red { col::RED } else { Color32::from_rgb(0x16, 0x16, 0x1a) }, Stroke::new(1.0f32, Color32::WHITE)));
+                }
+                _ => {
+                    p.text(r.center(), Align2::CENTER_CENTER, *label, theme::bold_font(cw * 0.26), Color32::WHITE);
+                }
+            }
+        }
+    }
+
+    /// The bet under a point on the felt: a number, the line between two (a split), a corner,
+    /// the bottom edge of a column (a street) or between two (a six line), or an outside bet.
+    pub fn spot_at(&self, q: Pos2) -> Option<Spot> {
+        if !self.felt.contains(q) {
+            return None;
+        }
+        let (grid, cw, chh) = (self.grid, self.cw, self.chh);
+        let num_at = Self::num_at;
+        let edge = 0.2;
+        if grid.expand2(vec2(cw * 0.1, chh * 0.25)).contains(q) && !self.zero.contains(q) && !self.cols.contains(q) {
+            let fx = ((q.x - grid.left()) / cw).clamp(0.0, 11.999);
+            let fy = (q.y - grid.top()) / chh;
+            let i = fx.floor() as usize;
+            let j = (fy.floor().max(0.0) as usize).min(2);
+            let near_v = fx.fract() < edge && i > 0;
+            let near_v2 = fx.fract() > 1.0 - edge && i < 11;
+            let near_h = fy.fract() < edge && fy > 0.5 && fy < 3.0;
+            let near_h2 = fy.fract() > 1.0 - edge && fy < 2.5;
+            let bottom = fy > 3.0 - edge;
+            // A street or a six line, at the bottom edge.
+            if bottom {
+                if near_v {
+                    return Some(Spot::Line { row: (i - 1) as u8 });
+                }
+                if near_v2 {
+                    return Some(Spot::Line { row: i as u8 });
+                }
+                return Some(Spot::Street { row: i as u8 });
+            }
+            let vi = if near_v { Some(i - 1) } else if near_v2 { Some(i) } else { None };
+            let hj = if near_h { Some(j - 1) } else if near_h2 { Some(j) } else { None };
+            match (vi, hj) {
+                (Some(a), Some(b)) => {
+                    let ns = [num_at(a, b), num_at(a, b + 1), num_at(a + 1, b), num_at(a + 1, b + 1)];
+                    return Some(Spot::Corner { a: *ns.iter().min().unwrap() });
+                }
+                (Some(a), None) => {
+                    let (x, y) = (num_at(a, j), num_at(a + 1, j));
+                    return Some(Spot::Split { a: x.min(y), b: x.max(y) });
+                }
+                (None, Some(b)) => {
+                    let (x, y) = (num_at(i, b), num_at(i, b + 1));
+                    return Some(Spot::Split { a: x.min(y), b: x.max(y) });
+                }
+                _ => {}
+            }
+            if fx.fract() < edge && i == 0 {
+                return Some(Spot::Split { a: 0, b: num_at(0, j) });
+            }
+            return Some(Spot::Straight { n: num_at(i, j) });
+        }
+        if self.zero.contains(q) {
+            return Some(Spot::Straight { n: 0 });
+        }
+        if self.cols.contains(q) {
+            let j = (((q.y - self.cols.top()) / chh).floor() as usize).min(2);
+            return Some(Spot::Column { c: (2 - j) as u8 });
+        }
+        if self.dozens.contains(q) {
+            let d = (((q.x - self.dozens.left()) / (cw * 4.0)).floor() as usize).min(2);
+            return Some(Spot::Dozen { d: d as u8 });
+        }
+        if self.outside.contains(q) {
+            let k = (((q.x - self.outside.left()) / (cw * 2.0)).floor() as usize).min(5);
+            return Some(OUTS[k].1);
+        }
+        None
+    }
+
+    /// Where a bet's chips sit.
+    pub fn spot_pos(&self, spot: &Spot) -> Pos2 {
+        let (grid, cw, chh) = (self.grid, self.cw, self.chh);
+        let at = |x: f32, y: f32| pos2(grid.left() + x * cw, grid.top() + y * chh);
+        let cell = |n: u8| -> (f32, f32) { (((n - 1) / 3) as f32, (2 - (n - 1) % 3) as f32) };
+        match *spot {
+            Spot::Straight { n: 0 } => self.zero.center(),
+            Spot::Straight { n } => {
+                let (i, j) = cell(n);
+                at(i + 0.5, j + 0.5)
+            }
+            Spot::Split { a: 0, b } => {
+                let (_, j) = cell(b);
+                at(0.0, j + 0.5)
+            }
+            Spot::Split { a, b } => {
+                let (i1, j1) = cell(a);
+                let (i2, j2) = cell(b);
+                at((i1 + i2) / 2.0 + 0.5, (j1 + j2) / 2.0 + 0.5)
+            }
+            Spot::Street { row } => at(row as f32 + 0.5, 3.0),
+            Spot::Line { row } => at(row as f32 + 1.0, 3.0),
+            Spot::Corner { a } => {
+                let (i, j) = cell(a);
+                at(i + 1.0, j)
+            }
+            Spot::Column { c } => pos2(self.cols.center().x, self.cols.top() + ((2 - c) as f32 + 0.5) * chh),
+            Spot::Dozen { d } => pos2(self.dozens.left() + (d as f32 + 0.5) * cw * 4.0, self.dozens.center().y),
+            other => {
+                let k = OUTS.iter().position(|(_, s)| *s == other).unwrap_or(0);
+                pos2(self.outside.left() + (k as f32 + 0.5) * cw * 2.0, self.outside.center().y)
+            }
+        }
+    }
+
+    /// The numbers a bet covers, lit.
+    pub fn light(&self, p: &egui::Painter, spot: &Spot) {
+        for n in 0..=36u8 {
+            if spot.covers(n) {
+                p.rect_filled(self.cell(n), 0, Color32::from_white_alpha(46));
+            }
+        }
+    }
+
+    /// What a bet is and pays (and what's on it), over the layout's top right corner.
+    pub fn tip(&self, p: &egui::Painter, spot: &Spot, on: u64) {
+        let tip = if on > 0 { format!("{}  ·  pays {} to 1  ·  on it {}", spot.name(), spot.pays(), chips_text(on)) } else { format!("{}  ·  pays {} to 1", spot.name(), spot.pays()) };
+        let galley = p.layout_no_wrap(tip, theme::bold_font(13.0), col::GOLD2);
+        let size = galley.size() + vec2(20.0, 8.0);
+        let tr = Rect::from_min_size(pos2(self.felt.right() - size.x, self.felt.top() - size.y - 10.0), size);
+        p.rect_filled(tr, theme::r(8), Color32::from_black_alpha(190));
+        p.galley(tr.min + vec2(10.0, 4.0), galley, col::GOLD2);
+    }
+}
+
 /// A number's color on the wheel and the layout.
-fn number_color(n: u8) -> Color32 {
+pub(super) fn number_color(n: u8) -> Color32 {
     if n == 0 {
         col::GREEN
     } else if rl::is_red(n) {
@@ -580,7 +632,7 @@ fn number_color(n: u8) -> Color32 {
 }
 
 /// The wheel: its wooden bowl, the ball track, 37 pockets in order, and the turret.
-fn draw_wheel(p: &egui::Painter, c: Pos2, r: f32, angle: f32) {
+pub(super) fn draw_wheel(p: &egui::Painter, c: Pos2, r: f32, angle: f32) {
     p.circle_filled(c + vec2(0.0, 8.0), r * 1.02, Color32::from_black_alpha(120));
     radial(p, c, r, Color32::from_rgb(0x8a, 0x52, 0x26), Color32::from_rgb(0x3a, 0x1e, 0x0c));
     p.circle_stroke(c, r, Stroke::new(3.0f32, col::GOLD_DARK));

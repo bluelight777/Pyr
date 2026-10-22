@@ -171,9 +171,10 @@ impl MicEcho {
     /// Whether the echo canceller is needed: unless nothing played comes back into the
     /// microphone (headphones), or what does is too faint to hear.
     pub fn needs_canceller(&self) -> bool {
+        // (Found at all, however faintly: on. 0.12.0 stood aside for a leak 45 dB down, but
+        // the automatic gain lifts that back up, and it was heard as an echo.)
         match self.state {
-            Echo::Unknown => true,
-            Echo::Found(_) => !self.faint,
+            Echo::Unknown | Echo::Found(_) => true,
             Echo::None => false,
         }
     }
@@ -354,6 +355,15 @@ impl MicEcho {
         }
     }
 
+    /// Whether anything's been played loud enough to count (`PLENTY`) in the last 450 ms.
+    pub fn playing(&self) -> bool {
+        if self.played_total == 0 {
+            return false;
+        }
+        let newest = (self.played_total - 1).div_euclid(B as i64);
+        (0..45).map(|k| self.levels[ring(newest - k, LEVELS)]).any(|l| l >= PLENTY)
+    }
+
     /// For logs: how much weaker the speakers' sound comes back (dB), once known.
     pub fn coupling_db(&self) -> Option<f32> {
         (!self.couplings.is_empty()).then(|| 10.0 * self.couplings.iter().copied().fold(f32::MAX, f32::min).max(1e-12).log10())
@@ -457,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn a_faint_leak_needs_no_canceller_but_a_quiet_speaker_does() {
+    fn a_faint_leak_is_told_apart_and_cancelled_all_the_same() {
         let (far, you) = sounds(24);
         // (Others as loud as they usually play, about -20 dBFS.)
         let far: Vec<f32> = far.iter().map(|v| v * 2.5).collect();
@@ -473,7 +483,7 @@ mod tests {
             }
         };
         run(&mut me, &mut rng, 0.0032);
-        assert!(!me.needs_canceller(), "{:?}, coupling {:?}", me.state(), me.coupling_db());
+        assert!(me.faint() && me.needs_canceller(), "found faint, and on all the same: {:?}, coupling {:?}", me.state(), me.coupling_db());
         // 30 dB weaker (speakers turned low): needed.
         let mut me = MicEcho::new();
         run(&mut me, &mut rng, 0.032);
@@ -567,5 +577,39 @@ mod tests {
         for (could, was) in later {
             assert!(could >= was * 0.126 * 0.126 * 0.5, "{could} for an echo of {}", was * 0.016);
         }
+    }
+
+    #[test]
+    fn a_silent_microphone_is_no_sign_either_way() {
+        // Headphones, then the microphone muted at the headset (nothing but zeros) while others
+        // talk on: nothing about the speakers can be told from silence (the logs had "reaches
+        // the microphone 0 ms later, 120 dB weaker", flipping the canceller on and off).
+        let (far, you) = sounds(30);
+        let mut me = MicEcho::new();
+        let mut changes = Vec::new();
+        for k in 0..far.len() / B {
+            let mic: Vec<f32> = if k < 1500 { you[k * B..(k + 1) * B].to_vec() } else { vec![0.0; B] };
+            me.played(&far[k * B..(k + 1) * B]);
+            if let Some(now) = me.heard(&mic) {
+                changes.push((k, now));
+            }
+        }
+        assert!(changes.iter().all(|(k, s)| *k < 1500 || *s == Echo::None), "{changes:?}");
+        assert_eq!(me.state(), Echo::None);
+    }
+
+    #[test]
+    fn playing_is_what_was_played_in_the_last_moment() {
+        let (far, _) = sounds(2);
+        let mut me = MicEcho::new();
+        assert!(!me.playing());
+        for k in 0..20 {
+            me.played(&far[k * B..(k + 1) * B].iter().map(|v| v * 4.0 + 0.05).collect::<Vec<_>>());
+        }
+        assert!(me.playing());
+        for _ in 0..60 {
+            me.played(&[0.0; B]);
+        }
+        assert!(!me.playing(), "half a second of silence");
     }
 }

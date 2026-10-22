@@ -141,6 +141,9 @@ pub struct Seat {
     /// Sitting out: dealt no hands until they come back.
     #[serde(default)]
     pub sitting_out: bool,
+    /// At a showdown, a hand that can't win anything isn't shown (mucked).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub muck: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -335,7 +338,7 @@ impl Table {
         if self.seats.iter().flatten().any(|s| s.player == player) {
             return Err("you're already at this table".into());
         }
-        self.seats[seat] = Some(Seat { player: player.into(), name: name.into(), stack: chips, sitting_out: false });
+        self.seats[seat] = Some(Seat { player: player.into(), name: name.into(), stack: chips, sitting_out: false, muck: false });
         Ok(())
     }
 
@@ -748,13 +751,29 @@ impl Table {
         let hs = self.hand.as_ref().unwrap();
         // Everyone left shows, starting with the last to bet or raise on the river (or the
         // first left of the button). Hands shown when everyone was all-in aren't shown again.
+        // Someone set to muck shows only a hand that could still win something: one that beats
+        // or ties the best shown so far in a pot they're in; otherwise it goes in face down.
         if !out.iter().any(|(_, e)| matches!(e, Event::Shown { .. })) {
             let live: Vec<usize> = hs.live().map(|p| p.seat).collect();
             let first = hs.last_aggressor.filter(|s| live.contains(s)).unwrap_or_else(|| self.next_from(hs.button, &live));
+            let pots = Self::pots(hs);
+            let mut best: Vec<Option<Value>> = vec![None; pots.len()];
             let mut s = first;
             for _ in 0..live.len() {
                 let p = hs.player(s).unwrap();
-                out.push((To::Everyone, Event::Shown { seat: s, cards: p.hole.clone(), hand: self.describe(&p.hole, &hs.board) }));
+                let v = self.value(&p.hole, &hs.board).0;
+                let mucks = self.seats.get(s).and_then(|x| x.as_ref()).is_some_and(|x| x.muck);
+                let could_win = pots.iter().zip(&best).any(|(pot, b)| pot.eligible.contains(&s) && b.is_none_or(|b| v >= b));
+                if !mucks || could_win {
+                    out.push((To::Everyone, Event::Shown { seat: s, cards: p.hole.clone(), hand: self.describe(&p.hole, &hs.board) }));
+                    for (pot, b) in pots.iter().zip(best.iter_mut()) {
+                        if pot.eligible.contains(&s) && b.is_none_or(|x| v > x) {
+                            *b = Some(v);
+                        }
+                    }
+                } else {
+                    out.push((To::Everyone, Event::Mucked { seat: s }));
+                }
                 s = self.next_from(s, &live);
             }
         }

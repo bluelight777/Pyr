@@ -178,7 +178,7 @@ impl PyrApp {
     }
 
     /// The Bonfire's window: how it works, who's thrown the most embers, the last fire's
-    /// winners (checked by this Pyr), and for the owner, Light it now.
+    /// winners (checked by this Pyr), and for the game's owner and Game Masters, Light it now.
     fn bonfire_panel(&mut self, ctx: &egui::Context, s: &ServerView, v: &BonfireView, at: Instant) {
         if !self.poker.casino.bonfire.panel {
             return;
@@ -223,7 +223,7 @@ impl PyrApp {
                 }
                 if v.can_light {
                     ui.add_space(10.0);
-                    if ui.button("Light it now (you're the server's owner)").clicked() {
+                    if ui.button("Light it now").on_hover_text("For the game's owner and Game Masters: it lights itself when its time comes").clicked() {
                         light = true;
                     }
                 }

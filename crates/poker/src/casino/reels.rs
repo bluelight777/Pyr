@@ -33,7 +33,7 @@ pub const SCATTER: u8 = 7;
 pub const BLANK: u8 = 8;
 /// Cell weights out of 1,000 (pay symbols, wild, scatter, blank); reels 1 and 5 have no wild
 /// (its weight goes to blanks).
-const WEIGHTS: [u32; 9] = [200, 170, 140, 100, 60, 30, 25, 25, 250];
+pub(crate) const WEIGHTS: [u32; 9] = [200, 170, 140, 100, 60, 30, 25, 25, 250];
 /// Points per way for three, four and five of a kind.
 pub const PAY: [[u64; 3]; 6] = [[5, 10, 25], [6, 12, 30], [8, 16, 40], [10, 25, 60], [15, 40, 100], [25, 75, 250]];
 /// One point is this many ten-thousandths of the bet (0.0928×); pays round to the nearest chip.
@@ -48,9 +48,9 @@ pub const MAX_BET: u64 = 10_000;
 /// The pick-and-dodge board: tiles, hazards, the life and gold tiles in it, lives to start with.
 pub const TILES: usize = 15;
 pub const HAZARDS: u8 = 4;
-const LIVES_IN_BAG: u8 = 1;
-const GOLDS: u8 = 1;
-const START_LIVES: u8 = 1;
+pub(crate) const LIVES_IN_BAG: u8 = 1;
+pub(crate) const GOLDS: u8 = 1;
+pub(crate) const START_LIVES: u8 = 1;
 /// Chip prizes in hundredths of the bet, with their weights; gold prizes too; and the finale.
 const CHIPS: [(u64, u32); 5] = [(30, 30), (50, 30), (80, 22), (119, 12), (199, 6)];
 const GOLD: [(u64, u32); 3] = [(500, 50), (800, 35), (1_500, 15)];
@@ -199,12 +199,17 @@ pub fn spin_grid(s: &mut Stream) -> Grid {
 }
 
 /// `chips` times `x`/`per`, rounded to the nearest chip.
-fn share(chips: u64, x: u64, per: u64) -> u64 {
+pub fn share(chips: u64, x: u64, per: u64) -> u64 {
     (chips as u128 * x as u128 + per as u128 / 2).checked_div(per as u128).unwrap_or(0).min(u64::MAX as u128) as u64
 }
 
 /// The ways wins on a grid (left to right; wilds stand in for the pay symbols).
 pub fn score(g: &Grid, bet: u64) -> (Vec<WayWin>, u8) {
+    score_at(g, bet, POINT_TENTHOUSANDTHS)
+}
+
+/// `score`, a point being `point` ten-thousandths of the bet.
+pub fn score_at(g: &Grid, bet: u64, point: u64) -> (Vec<WayWin>, u8) {
     let mut wins = Vec::new();
     for sym in 0..PAY_SYMBOLS {
         let mut ways = 1u32;
@@ -220,7 +225,7 @@ pub fn score(g: &Grid, bet: u64) -> (Vec<WayWin>, u8) {
         if n >= 3 {
             // (No wild on reel 1: every run starts with the symbol itself.)
             let points = PAY[sym as usize][n - 3] * ways as u64;
-            let pay = share(bet, points * POINT_TENTHOUSANDTHS, 10_000);
+            let pay = share(bet, points * point, 10_000);
             if pay > 0 {
                 wins.push(WayWin { symbol: sym, count: n as u8, ways, pay });
             }
@@ -230,7 +235,7 @@ pub fn score(g: &Grid, bet: u64) -> (Vec<WayWin>, u8) {
     (wins, scatters)
 }
 
-fn weighted(s: &mut Stream, t: &[(u64, u32)]) -> u64 {
+pub(crate) fn weighted(s: &mut Stream, t: &[(u64, u32)]) -> u64 {
     let total: u32 = t.iter().map(|x| x.1).sum();
     let mut r = s.below(total);
     for &(v, w) in t {
@@ -244,6 +249,13 @@ fn weighted(s: &mut Stream, t: &[(u64, u32)]) -> u64 {
 
 /// Pick-and-dodge, played out: each pick draws from what's left under the tiles.
 pub fn play_pick(bet: u64, s: &mut Stream) -> Bonus {
+    let (picks, finale, won) = play_pick_with(bet, s, &CHIPS, &GOLD, FINALE_X * 100);
+    Bonus::Pick { picks, finale, won }
+}
+
+/// Pick-and-dodge with these chip and gold prizes and this finale (hundredths of the bet): the
+/// picks, whether every safe tile was found, and what it all won.
+pub(crate) fn play_pick_with(bet: u64, s: &mut Stream, chips_t: &[(u64, u32)], gold_t: &[(u64, u32)], finale_h: u64) -> (Vec<Pick>, bool, u64) {
     let (mut hazards, mut lives_bag, mut golds, mut chips) = (HAZARDS, LIVES_IN_BAG, GOLDS, TILES as u8 - HAZARDS - LIVES_IN_BAG - GOLDS);
     let mut lives = START_LIVES;
     let mut picks = Vec::new();
@@ -268,7 +280,7 @@ pub fn play_pick(bet: u64, s: &mut Stream) -> Bonus {
                     picks.push(Pick::Saved);
                 } else {
                     picks.push(Pick::Busted);
-                    return Bonus::Pick { picks, finale: false, won };
+                    return (picks, false, won);
                 }
             }
             1 => {
@@ -278,20 +290,20 @@ pub fn play_pick(bet: u64, s: &mut Stream) -> Bonus {
             }
             2 => {
                 golds -= 1;
-                let v = share(bet, weighted(s, &GOLD), 100);
+                let v = share(bet, weighted(s, gold_t), 100);
                 won += v;
                 picks.push(Pick::Gold { chips: v });
             }
             _ => {
                 chips -= 1;
-                let v = share(bet, weighted(s, &CHIPS), 100);
+                let v = share(bet, weighted(s, chips_t), 100);
                 won += v;
                 picks.push(Pick::Chips { chips: v });
             }
         }
         if lives_bag + golds + chips == 0 {
-            won += bet * FINALE_X;
-            return Bonus::Pick { picks, finale: true, won };
+            won += share(bet, finale_h, 100);
+            return (picks, true, won);
         }
     }
 }

@@ -421,6 +421,22 @@ pub fn apply_casino(rec: &mut Record, o: &crate::casino::Outcome) -> Gains {
             Some(crate::casino::reels::Bonus::Wheel { inner: Some(_), .. }) => earn("upgrade", rec, &mut g),
             _ => {}
         },
+        Outcome::Row(r) => {
+            use crate::casino::reelrow::{Mini, Tier};
+            // (A mini game played to its very end: the Pepper X, the chest, the mask, the
+            // finale, a tower standing complete.)
+            let top = r.bonus.as_ref().is_some_and(|b| match &b.game {
+                Mini::Ladder { top, .. } => *top,
+                Mini::Dive { chest, .. } => *chest,
+                Mini::Tomb { mask, .. } => *mask,
+                Mini::Mine { finale, .. } | Mini::Cups { finale, .. } => *finale,
+                Mini::Tower { tiers, .. } => tiers.len() == 6 && tiers.iter().all(|t| matches!(t, Tier::Poured { .. })),
+                _ => false,
+            });
+            if top {
+                earn("clean_sweep", rec, &mut g);
+            }
+        }
         Outcome::Dragon(d) => {
             use crate::casino::dragon;
             if dragon::age(d.growth_after) == dragon::AGES.len() - 1 || dragon::age(d.growth) == dragon::AGES.len() - 1 {

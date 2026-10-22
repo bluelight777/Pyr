@@ -425,3 +425,67 @@ fn rounds_check_out_and_a_changed_one_doesnt() {
     let (_, c) = craps::play(&t, &mut stream(&server, &client, Game::Craps, 9));
     verify(&shown, &server, &client, 9, &Outcome::Craps(c)).unwrap();
 }
+
+/// Pyr Sevens' Play Feature, worked out exactly (in spin bets): `cargo test --release -p
+/// pyr-poker sevens_feature_math -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn sevens_feature_math() {
+    let e = slots::exact();
+    let lines = slots::LINES as f64;
+    let spin: f64 = (0..6).map(|k| e.stars[k] * (e.lines_by_stars[k] + if k >= 3 { slots::STAR_PAYS[k - 3] as f64 * lines } else { 0.0 })).sum::<f64>() / lines;
+    let p_t: f64 = e.stars[3..].iter().sum();
+    let added: f64 = (3..6).map(|k| e.stars[k] * slots::STAR_SPINS[k - 3] as f64).sum();
+    let fs = |n: f64, x: f64| n * x * spin / (1.0 - added);
+    let given_t = |x: f64| (3..6).map(|k| e.stars[k] / p_t * (e.lines_by_stars[k] / lines + slots::STAR_PAYS[k - 3] as f64 + fs(slots::STAR_SPINS[k - 3] as f64, x))).sum::<f64>();
+    let given_n: f64 = (0..3).map(|k| e.stars[k] * e.lines_by_stars[k]).sum::<f64>() / (1.0 - p_t) / lines;
+    let wild_t: f64 = e.wild_stars[3..].iter().sum();
+    let wild_fs: f64 = (3..6).map(|k| e.wild_stars[k] * fs(slots::STAR_SPINS[k - 3] as f64, 3.0)).sum();
+    println!("spin {spin:.5} (1 in {:.1} free spins), base round {:.5}", 1.0 / p_t, p_t * given_t(3.0) + (1.0 - p_t) * given_n);
+    println!("given free spins: x3 {:.4}, x10 {:.4}; without {given_n:.5}", given_t(3.0), given_t(10.0));
+    println!("wild: {:.4} (stars {wild_t:.5})", e.wild_pay / lines + wild_fs);
+}
+
+/// Pyr Sevens' Play Feature pays back what the reels do (98%, the jackpot's 1% on top), worked
+/// out exactly; played out, features cost what they say and start what they say.
+#[test]
+fn sevens_features_pay_back_about_98_percent() {
+    use crate::casino::feature::Feature;
+    let e = slots::exact();
+    let lines = slots::LINES as f64;
+    let spin: f64 = (0..6).map(|k| e.stars[k] * (e.lines_by_stars[k] + if k >= 3 { slots::STAR_PAYS[k - 3] as f64 * lines } else { 0.0 })).sum::<f64>() / lines;
+    let p_t: f64 = e.stars[3..].iter().sum();
+    let added: f64 = (3..6).map(|k| e.stars[k] * slots::STAR_SPINS[k - 3] as f64).sum();
+    let fs = |n: f64, x: f64| n * x * spin / (1.0 - added);
+    let given_t = |x: f64| (3..6).map(|k| e.stars[k] / p_t * (e.lines_by_stars[k] / lines + slots::STAR_PAYS[k - 3] as f64 + fs(slots::STAR_SPINS[k - 3] as f64, x))).sum::<f64>();
+    let given_n: f64 = (0..3).map(|k| e.stars[k] * e.lines_by_stars[k]).sum::<f64>() / (1.0 - p_t) / lines;
+    let wild = e.wild_pay / lines + (3..6).map(|k| e.wild_stars[k] * fs(slots::STAR_SPINS[k - 3] as f64, 3.0)).sum::<f64>();
+    let q = slots::CHANCE_PPM as f64 / 1e6;
+    let cost = |f: Feature| slots::price(f) as f64 / 100.0;
+    let (t3, t10) = (given_t(3.0), given_t(slots::SUPER_FREE_X as f64));
+    for (what, rtp) in [
+        ("Chance", (q * t3 + (1.0 - q) * given_n) / cost(Feature::Chance)),
+        ("Wild", wild / cost(Feature::Wild)),
+        ("Bonus", t3 / cost(Feature::Bonus)),
+        ("Super", t10 / cost(Feature::Super)),
+        ("Mystery", (0.7 * t3 + 0.3 * t10) / cost(Feature::Mystery)),
+        ("All or nothing", slots::ALL_IN_X as f64 * slots::ALL_IN_PER_10K as f64 / 10_000.0 / cost(Feature::AllIn)),
+    ] {
+        assert!((0.975..0.985).contains(&rtp), "{what}: {rtp}");
+    }
+    let mut st = s(5);
+    for f in [Feature::Bonus, Feature::Super, Feature::Mystery] {
+        let o = slots::play_feature(5, f, &mut st, 0);
+        assert!(o.spins[0].stars >= 3 && o.spins.len() > 1, "{f:?}");
+        assert_eq!(o.free_x, if f == Feature::Super || o.lucky { 10 } else { 3 });
+        assert_eq!(o.wagered(), 100 * slots::price(f) / 100);
+        assert_eq!(o.paid, o.spins.iter().map(|x| x.pay).sum::<u64>());
+    }
+    let o = slots::play_feature(5, Feature::Wild, &mut st, 1_000_000);
+    assert!(o.spins[0].wild_reel && o.spins[0].grid()[slots::WILD_REEL] == [slots::WILD; slots::ROWS]);
+    assert_eq!(o.jackpot_won, 0, "no jackpot on a Wild spin");
+    // A round with a feature checks out like any other.
+    let seed = [4u8; 32];
+    let out = slots::play_feature(2, Feature::Chance, &mut stream(&seed, &seed, Game::Slots, 9), 0);
+    verify(&commit(&seed), &seed, &seed, 9, &Outcome::Slots(out)).unwrap();
+}

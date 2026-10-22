@@ -58,8 +58,16 @@ pub struct TableLive {
     pub ended_at: Option<Instant>,
 }
 
+/// Casino chat lines kept here.
+const CHAT_KEPT: usize = 300;
+
 #[derive(Clone, Debug, Default)]
 pub struct PokerState {
+    /// The casino's chat (0.13.0 servers): the lines kept, whether they've been asked for, and
+    /// lines come in since I last looked.
+    pub chat: Vec<pyr_poker::net::ChatLine>,
+    pub chat_loaded: bool,
+    pub chat_unread: u32,
     pub lobby: Option<Vec<TableSummary>>,
     pub me: Option<RecordView>,
     pub tables: BTreeMap<TableId, TableLive>,
@@ -92,6 +100,9 @@ pub struct PokerState {
     pub craps: Option<SharedLive<pyr_poker::net::CrapsView>>,
     pub bac_tables: Option<Vec<pyr_poker::net::BacSummary>>,
     pub bac: Option<SharedLive<pyr_poker::net::BacView>>,
+    /// Roulette tables (0.13.0 servers): the list, and the one I'm at or watching.
+    pub rl_tables: Option<Vec<pyr_poker::net::RlSummary>>,
+    pub rl: Option<SharedLive<pyr_poker::net::RlView>>,
     /// The Bonfire (0.12.0 servers): how it stands and when that came; each fire's fingerprint
     /// as first seen here; and a fire just lit (to show), as it checked out here.
     pub bonfire: Option<(pyr_poker::net::BonfireView, Instant)>,
@@ -394,6 +405,8 @@ impl PokerState {
             ToApp::Craps { view } => self.craps_view(view, now),
             ToApp::BacTables { tables } => self.bac_tables = Some(tables),
             ToApp::Bac { view } => self.bac_view(view, now),
+            ToApp::RlTables { tables } => self.rl_tables = Some(tables),
+            ToApp::Rl { view } => self.rl_view(view, now),
             ToApp::Bonfire { view } => {
                 self.bonfire_commits.entry(view.round).or_insert(view.commit);
                 while self.bonfire_commits.len() > 20 {
@@ -406,6 +419,20 @@ impl PokerState {
                 self.game_emotes.retain(|e| now.duration_since(e.4) < Duration::from_secs(4));
                 self.game_emotes.push((game, table, seat, emote, now));
             }
+            ToApp::CasinoChat { lines, all } => {
+                if all {
+                    self.chat = lines;
+                    self.chat_loaded = true;
+                } else {
+                    self.chat_unread = self.chat_unread.saturating_add(lines.len() as u32);
+                    self.chat.extend(lines);
+                }
+                let over = self.chat.len().saturating_sub(CHAT_KEPT);
+                self.chat.drain(..over);
+            }
+            ToApp::CasinoChatGone { id } => self.chat.retain(|l| l.id != id),
+            // (Kept by the engine in its config, see `Engine::casino_open`.)
+            ToApp::GmCert { .. } => {}
             ToApp::BonfireLit { draw } => {
                 // Drawn again here: its seed against the fingerprint seen before it was lit.
                 let checked = pyr_poker::casino::bonfire::check(&draw, self.bonfire_commits.get(&draw.round).copied());
@@ -588,6 +615,42 @@ impl PokerState {
         b.my_seeds.retain(|(r, _)| *r + 50 > last.coup);
     }
 
+    /// A roulette table as it is now; a spin just decided is spun again here from its seeds.
+    fn rl_view(&mut self, view: pyr_poker::net::RlView, now: Instant) {
+        let b = match self.rl.as_mut() {
+            Some(b) if b.view.id == view.id => {
+                b.view = view;
+                b.at = now;
+                b
+            }
+            _ => self.rl.insert(SharedLive::new(view, now)),
+        };
+        b.commits.entry(b.view.spin_no).or_insert(b.view.commit);
+        let Some(last) = b.view.last.clone().filter(|l| l.spin != b.checked) else { return };
+        b.checked = last.spin;
+        let mine = b.my_seeds.iter().find(|(r, _)| *r == last.spin).map(|(_, s)| *s);
+        let result = pyr_poker::rlroom::check(&last).and_then(|()| {
+            if b.commits.get(&last.spin).is_some_and(|x| *x != last.commit) {
+                return Err(format!("spin {}: the house showed a different fingerprint before the ball went", last.spin));
+            }
+            if let Some(seed) = mine
+                && !last.seeds.iter().any(|(_, h)| *h == pyr_poker::rlroom::seed_hex(&seed))
+            {
+                return Err(format!("spin {}: my Pyr's seed wasn't used", last.spin));
+            }
+            Ok(())
+        });
+        match result {
+            Ok(()) => {
+                b.fair += 1;
+                self.casino.checked += 1;
+            }
+            Err(e) => self.casino.problems.push(format!("Roulette table: {e}")),
+        }
+        b.commits.retain(|r, _| *r + 50 > last.spin);
+        b.my_seeds.retain(|(r, _)| *r + 50 > last.spin);
+    }
+
     /// Forgets the tables (the connection dropped: the server stood us up).
     pub fn disconnected(&mut self) {
         self.tables.clear();
@@ -595,6 +658,7 @@ impl PokerState {
         self.bj = None;
         self.craps = None;
         self.bac = None;
+        self.rl = None;
     }
 }
 

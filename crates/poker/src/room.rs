@@ -106,6 +106,9 @@ pub enum Effect {
     /// A coup at a baccarat table played out for a person (for their records; the chips come as
     /// a `Credit`).
     BacCoup { uid: String, outcome: crate::casino::baccarat::Outcome },
+    /// A spin at a roulette table settled a person's chips (for their records; the chips come as
+    /// a `Credit`).
+    RlSpin { uid: String, outcome: crate::casino::roulette::Outcome },
 }
 
 #[derive(Default)]
@@ -684,6 +687,52 @@ impl Room {
         }
     }
 
+    /// Whether my hands that can't win go in face down at a showdown.
+    pub fn set_muck(&mut self, uid: &str, muck: bool) -> Result<(), String> {
+        let seat = self.table.seat_of(uid).ok_or("you aren't sitting here")?;
+        if let Some(s) = self.table.seats[seat].as_mut() {
+            s.muck = muck;
+        }
+        Ok(())
+    }
+
+    /// My cards from the hand just over, turned over for everyone (won without a showdown,
+    /// mucked, or folded): until the next hand's on its way.
+    pub fn show_cards(&mut self, uid: &str, hand: u64) -> Result<Output, String> {
+        if !matches!(self.phase, Phase::Idle { .. }) {
+            return Err("the next hand's started: too late to show that one".into());
+        }
+        let Some((hist, log)) = self.history.back_mut() else { return Err("there's no hand to show".into()) };
+        if hist.number != hand {
+            return Err("the next hand's started: too late to show that one".into());
+        }
+        let seat = hist.seats.iter().position(|s| s.as_ref().is_some_and(|(u, _)| u == uid)).ok_or("you weren't in that hand")?;
+        if log.iter().any(|(_, e)| matches!(e, Event::Shown { seat: s, .. } if *s == seat)) {
+            return Ok(Output::default());
+        }
+        let cards = log.iter().find_map(|(_, e)| if let Event::Dealt { seat: s, cards } = e { (*s == seat).then(|| cards.clone()) } else { None }).ok_or("you weren't dealt in")?;
+        let board: Vec<Card> = log.iter().filter_map(|(_, e)| if let Event::Street { cards, .. } = e { Some(cards.clone()) } else { None }).flatten().collect();
+        let described = if board.len() < 3 {
+            String::new()
+        } else {
+            match self.table.rules.variant {
+                Variant::Holdem => eval::best_five(&[cards.as_slice(), &board].concat()).0.describe(),
+                Variant::Omaha => eval::best_omaha(&cards, &board).0.describe(),
+            }
+        };
+        let e = Event::Shown { seat, cards: cards.clone(), hand: described };
+        log.push((To::Everyone, e.clone()));
+        if let Some(list) = self.hands_of.get_mut(uid)
+            && let Some(last) = list.front_mut()
+            && last.0.number == hand
+        {
+            last.2 = true;
+        }
+        let mut out = Output::default();
+        out.all(ToApp::Event { table: self.id, hand, event: e });
+        Ok(out)
+    }
+
     pub fn emote(&mut self, uid: &str, emote: &str) -> Result<Output, String> {
         let seat = self.table.seat_of(uid).ok_or("sit down to send those")?;
         if emote.chars().count() > 16 || emote.is_empty() {
@@ -899,16 +948,24 @@ impl Room {
         if rake > 0 {
             out.effects.push(Effect::Raked { chips: rake });
         }
-        // A prize box: to whoever won the hand (the main pot's first winner), a person; a bot's
-        // win leaves it for the next hand.
+        // A prize box: to whoever won the hand it was on (the main pot's first winner), a person
+        // or a bot. (A bot's win used to leave it for the next hand: at a table of bots it sat
+        // there hand after hand.) A bot's chips go on its stack; a look, to a bot, is just won.
         let winner = events.iter().find_map(|e| if let Event::Won { pot: 0, seats, .. } = e { seats.first().copied() } else { None });
         if let Some(seat) = winner
             && let Some(Some((uid, _))) = p.seats_at_start.get(seat)
-            && !uid.starts_with("bot:")
             && let Some(prize) = self.prize.take()
         {
             let name = self.table.seats.get(seat).cloned().flatten().map(|s| s.name).unwrap_or_default();
-            out.effects.push(Effect::Prize { uid: uid.clone(), chips: prize.chips, item: prize.item.clone() });
+            if uid.starts_with("bot:") {
+                if let Some(Some(s)) = self.table.seats.get_mut(seat)
+                    && s.player == *uid
+                {
+                    s.stack += prize.chips;
+                }
+            } else {
+                out.effects.push(Effect::Prize { uid: uid.clone(), chips: prize.chips, item: prize.item.clone() });
+            }
             out.all(ToApp::PrizeWon { table: self.id, seat, name, prize });
         }
         self.pots.push_back(pot);

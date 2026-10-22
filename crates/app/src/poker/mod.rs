@@ -26,11 +26,9 @@ use cards::{chips_short, chips_text};
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
-    /// The casino floor: the house's games.
+    /// The casino floor: every game, poker's tables, Flash Pots and tournaments among them.
     #[default]
     Floor,
-    /// Poker: cash tables, Flash Pots, Pyr Friday Night and tournaments.
-    Tables,
     Leaderboard,
     Me,
     Staff,
@@ -133,6 +131,12 @@ pub struct PokerUi {
     pub casino: crate::casino::CasinoUi,
     pub staff_pick: Option<String>,
     pub prize_for: Option<TableId>,
+    /// The casino's chat: open, what's being typed, and whether to put the cursor in it.
+    pub chat_open: bool,
+    pub chat_text: String,
+    pub chat_focus: bool,
+    /// Auto-muck as last told to each table I sit at (sent again when it differs).
+    pub muck_sent: std::collections::HashMap<TableId, bool>,
     pub mute: bool,
     /// The engine's celebrations already shown, and whether its error has been.
     pub gains_seen: usize,
@@ -179,6 +183,13 @@ impl PyrApp {
 
     /// The poker room page (the main area).
     pub fn poker_page(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, acts: &mut Vec<Act>) {
+        let whole = ui.max_rect();
+        self.poker_page_inner(ui, st, s, acts);
+        // The casino's chat, over whichever page it is.
+        self.casino_chat_ui(ui, st, s, whole);
+    }
+
+    fn poker_page_inner(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, acts: &mut Vec<Act>) {
         // Celebrations: experience, achievements, level-ups (taken from the engine's list).
         // (Forgetting them happens a moment later, so each is taken once by counting.)
         if s.poker.gains.len() < self.poker.gains_seen {
@@ -337,8 +348,15 @@ impl PyrApp {
             ui.add_space(14.0);
             ui.horizontal(|ui| {
                 ui.add_space(28.0);
-                let staff = self.my_poker_role(s).is_some() || s.can(pyr_proto::control::perm::MANAGE_SERVER);
-                let mut tabs = vec![(Tab::Floor, "Casino"), (Tab::Tables, "Poker"), (Tab::Leaderboard, "Leaderboard"), (Tab::Me, "Profile & Looks")];
+                // (From 0.13.0: staff, and the Owner of the Game; a server's managers as such
+                // run nothing in the casino.)
+                let v13 = s.has(pyr_proto::control::CASINO_013_FEATURE);
+                if v13 && s.poker.staff.is_none() && self.poker.staff_asked.get(&s.key).is_none_or(|t| t.elapsed().as_secs() >= 30) {
+                    self.poker.staff_asked.insert(s.key.clone(), Instant::now());
+                    self.engine.poker(&s.key, ToServer::Staff);
+                }
+                let staff = self.my_poker_role(s).is_some() || s.poker.staff.as_ref().is_some_and(|v| v.owner) || (!v13 && s.can(pyr_proto::control::perm::MANAGE_SERVER));
+                let mut tabs = vec![(Tab::Floor, "Casino"), (Tab::Leaderboard, "Leaderboard"), (Tab::Me, "Profile & Looks")];
                 if staff {
                     tabs.push((Tab::Staff, "Staff"));
                 }
@@ -362,7 +380,6 @@ impl PyrApp {
             ui.add_space(16.0);
             match self.poker.tab {
                 Tab::Floor => self.casino_floor(ui, s),
-                Tab::Tables => self.poker_tab(ui, s),
                 Tab::Leaderboard => self.leaderboard(ui, s),
                 Tab::Me => self.profile(ui, s),
                 Tab::Staff => self.staff_tab(ui, s),
@@ -429,7 +446,9 @@ impl PyrApp {
     }
 
     /// Poker: the cash tables, Flash Pots, Pyr Friday Night and the tournaments.
-    fn poker_tab(&mut self, ui: &mut egui::Ui, s: &ServerView) {
+    /// Poker on the casino floor, like every other game: cash tables, Flash Pots and
+    /// tournaments.
+    pub(crate) fn poker_sections(&mut self, ui: &mut egui::Ui, s: &ServerView) {
         let tables = s.poker.lobby.as_ref().map(|l| l.len()).unwrap_or(0);
         if section_head(ui, "Cash tables", &format!("Hold'em and Omaha with friends and bots · {tables} open"), Some("New table")) {
             let mut n = NewTable::default();
@@ -705,8 +724,15 @@ impl PyrApp {
             ui.checkbox(&mut show, "Hand strength meter (my chance of winning)");
             self.poker.hide_odds = !show;
             ui.add_space(20.0);
+            if s.has(pyr_proto::control::CASINO_013_FEATURE) {
+                let mut muck = self.engine.auto_muck();
+                if ui.checkbox(&mut muck, "Auto-muck").on_hover_text("At a showdown, a hand of yours that can't win goes in face down instead of being shown. You can still show it after the hand.").changed() {
+                    self.engine.set_auto_muck(muck);
+                }
+                ui.add_space(20.0);
+            }
             let mut talk = !self.poker.bots_quiet;
-            ui.checkbox(&mut talk, "Bots' table talk").on_hover_text("Bots say a word now and then: a little trash talk, reformed-troll style. Only ever about what everyone saw happen.");
+            ui.checkbox(&mut talk, "Bots' table talk").on_hover_text("Bots say a word now and then: trash talk, mostly friendly, sometimes with teeth. Only ever about what everyone saw happen.");
             self.poker.bots_quiet = !talk;
         });
     }
@@ -788,7 +814,7 @@ impl PyrApp {
     }
 }
 
-/// A heading on the Poker tab: its name, a line about it, and a button on the right (true when
+/// A heading for poker on the casino floor: its name, a line about it, and a button on the right (true when
 /// it's clicked).
 fn section_head(ui: &mut egui::Ui, title: &str, sub: &str, button: Option<&str>) -> bool {
     let mut clicked = false;

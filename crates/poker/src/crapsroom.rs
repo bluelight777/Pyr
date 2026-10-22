@@ -148,6 +148,22 @@ fn within(b: &Bets, lo: u64, hi: u64) -> Result<(), String> {
     Ok(())
 }
 
+/// Brings each layout bet into the table's least to its most (under goes up, over comes down),
+/// so what's sent always passes [`within`]. Says whether anything moved.
+pub fn fit(b: &mut Bets, lo: u64, hi: u64) -> bool {
+    let before = b.clone();
+    let hi = hi.max(lo);
+    let mut each: Vec<&mut u64> = vec![&mut b.pass, &mut b.dont_pass, &mut b.field, &mut b.any_seven, &mut b.any_craps];
+    each.extend(b.place.iter_mut());
+    each.extend(b.hard.iter_mut());
+    for x in each {
+        if *x > 0 {
+            *x = (*x).clamp(lo, hi);
+        }
+    }
+    *b != before
+}
+
 /// How long a bot takes to get its chips down, or to throw, the way a person would: at its own
 /// pace, never the same twice, with the odd long pause.
 fn bot_ms(base: f64, who: &Persona, rng: &mut Stream) -> u64 {
@@ -756,6 +772,17 @@ impl CrapsRoom {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bets_are_fitted_to_the_table_before_they_go() {
+        let mut b = Bets { pass: 5, field: 2_000, ..Default::default() };
+        b.place[0] = 1;
+        b.hard[1] = 1_001;
+        assert!(fit(&mut b, 10, 1_000));
+        assert_eq!((b.pass, b.field, b.place[0], b.hard[1], b.dont_pass), (10, 1_000, 10, 1_000, 0));
+        assert!(within(&b, 10, 1_000).is_ok());
+        assert!(!fit(&mut b, 10, 1_000));
+    }
     use crate::fair::seed_from;
 
     struct Rng(Stream);

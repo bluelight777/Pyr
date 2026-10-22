@@ -16,8 +16,10 @@ pub mod blackjack;
 pub mod craps;
 pub mod dragon;
 pub mod dice;
+pub mod feature;
 pub mod keno;
 pub mod reels;
+pub mod reelrow;
 pub mod roulette;
 pub mod slots;
 
@@ -137,8 +139,8 @@ pub fn limits(game: Game) -> (u64, u64) {
     }
 }
 
-/// The most one round may pay back (chips), so a lucky round can't flood the play-chip economy.
-pub const MAX_PAYOUT: u64 = 25_000_000;
+/// The most one round may pay back (chips): a Supernova (500,000 times the biggest Reel Row bet).
+pub const MAX_PAYOUT: u64 = 5_000_000_000;
 
 /// What the house shows before a round: the fingerprint of its secret seed.
 pub fn commit(server_seed: &[u8; 32]) -> [u8; 32] {
@@ -155,6 +157,21 @@ pub fn round_seed(server_seed: &[u8; 32], client_seed: &[u8; 32], game: Game, no
     h.update(server_seed);
     h.update(client_seed);
     h.update(game.id().as_bytes());
+    h.update(nonce.to_le_bytes());
+    h.finalize().into()
+}
+
+/// A slot round's seed from the player's side when they've set a seed of their own for the slot
+/// (Fairness, 0.13.0): their seed (any words), the slot's statistics key and the round's number,
+/// so the same seed plays differently every round, and anyone with the house's seed after it can
+/// play the round again from the three (as Stake's client seed and nonce work).
+pub fn client_seed(seed: &str, slot: &str, nonce: u64) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(b"pyr client seed v1");
+    h.update((seed.len() as u64).to_le_bytes());
+    h.update(seed.as_bytes());
+    h.update((slot.len() as u64).to_le_bytes());
+    h.update(slot.as_bytes());
     h.update(nonce.to_le_bytes());
     h.finalize().into()
 }
@@ -184,6 +201,13 @@ pub enum Bet {
     /// A spin of Ember Dragon, with the dragon grown to `growth` for this bet (as the house
     /// last said: the spin is played from it).
     Dragon { bet: u64, growth: u32 },
+    /// A round on one of Reel Row's machines from 0.13.0 (`reelrow`): a spin, or a Play
+    /// Feature.
+    Row { machine: u8, bet: u64, feature: feature::Feature },
+    /// A round of Pyr Sevens with a Play Feature (0.13.0).
+    SlotsPlus { line_bet: u64, feature: feature::Feature },
+    /// A round of Ember Dragon with a Play Feature (0.13.0).
+    DragonPlus { bet: u64, growth: u32, feature: feature::Feature },
 }
 
 impl Bet {
@@ -197,7 +221,15 @@ impl Bet {
             Bet::Blackjack { .. } => Game::Blackjack,
             Bet::Reels { .. } => Game::Reels,
             Bet::Dragon { .. } => Game::Dragon,
+            Bet::Row { .. } => Game::Reels,
+            Bet::SlotsPlus { .. } => Game::Slots,
+            Bet::DragonPlus { .. } => Game::Dragon,
         }
+    }
+
+    /// Whether it's a bet from 0.13.0 on (an older server doesn't know it).
+    pub fn is_013(&self) -> bool {
+        matches!(self, Bet::Row { .. } | Bet::SlotsPlus { .. } | Bet::DragonPlus { .. })
     }
 
     /// All the chips it puts down.
@@ -209,6 +241,9 @@ impl Bet {
             Bet::Dice { chips, .. } | Bet::Keno { chips, .. } | Bet::Blackjack { chips } => *chips,
             Bet::Reels { bet, buy, .. } => if *buy { bet.saturating_mul(reels::BUY_X) } else { *bet },
             Bet::Dragon { bet, .. } => *bet,
+            Bet::Row { bet, feature, .. } => feature::cost(*bet, reelrow::price(*feature)),
+            Bet::SlotsPlus { line_bet, feature } => feature::cost(line_bet.saturating_mul(slots::LINES as u64), slots::price(*feature)),
+            Bet::DragonPlus { bet, feature, .. } => feature::cost(*bet, dragon::price(*feature).unwrap_or(100)),
         }
     }
 
@@ -258,6 +293,14 @@ impl Bet {
             Bet::Blackjack { chips } => fits(*chips, "bet"),
             Bet::Reels { machine, bet, .. } => reels::check(*machine, *bet),
             Bet::Dragon { bet, growth } => dragon::check(*bet, *growth),
+            Bet::Row { machine, bet, .. } => reelrow::check(*machine, *bet),
+            Bet::SlotsPlus { line_bet, .. } => fits(*line_bet, "line bet"),
+            Bet::DragonPlus { bet, growth, feature } => {
+                if dragon::price(*feature).is_none() {
+                    return Err("Ember Dragon hasn't that feature".into());
+                }
+                dragon::check(*bet, *growth)
+            }
         }
     }
 }
@@ -275,6 +318,8 @@ pub enum Outcome {
     Keno(keno::Outcome),
     Reels(reels::Outcome),
     Dragon(dragon::Outcome),
+    /// Reel Row from 0.13.0.
+    Row(reelrow::Outcome),
 }
 
 impl Outcome {
@@ -283,6 +328,7 @@ impl Outcome {
     pub fn stats_key(&self) -> String {
         match self {
             Outcome::Reels(o) => reels_key(o.machine),
+            Outcome::Row(o) => reels_key(o.machine),
             _ => self.game().id().to_string(),
         }
     }
@@ -298,13 +344,14 @@ impl Outcome {
             Outcome::Keno(_) => Game::Keno,
             Outcome::Reels(_) => Game::Reels,
             Outcome::Dragon(_) => Game::Dragon,
+            Outcome::Row(_) => Game::Reels,
         }
     }
 
     /// Chips staked in the round (all of them: doubles, splits and insurance too).
     pub fn wagered(&self) -> u64 {
         match self {
-            Outcome::Slots(o) => o.line_bet * slots::LINES as u64,
+            Outcome::Slots(o) => o.wagered(),
             Outcome::Blackjack(o) => o.wagered,
             Outcome::Roulette(o) => o.chips.iter().map(|c| c.chips).sum(),
             Outcome::Baccarat(o) => o.bets.total(),
@@ -312,7 +359,8 @@ impl Outcome {
             Outcome::Dice(o) => o.chips,
             Outcome::Keno(o) => o.chips,
             Outcome::Reels(o) => o.wagered(),
-            Outcome::Dragon(o) => o.bet,
+            Outcome::Dragon(o) => o.wagered(),
+            Outcome::Row(o) => o.wagered(),
         }
     }
 
@@ -328,12 +376,15 @@ impl Outcome {
             Outcome::Keno(o) => o.paid,
             Outcome::Reels(o) => o.paid,
             Outcome::Dragon(o) => o.paid,
+            Outcome::Row(o) => o.paid,
         }
     }
 
     /// The round in a few words, for the history and the big-win feed.
     pub fn headline(&self) -> String {
         match self {
+            Outcome::Slots(o) if o.feature == feature::Feature::AllIn => if o.lucky { "all or nothing, and won it".into() } else { "all or nothing".into() },
+            Outcome::Slots(o) if o.free_x > slots::FREE_SPIN_MULTIPLIER => format!("{} Super Free Spins", o.spins.len().saturating_sub(1)),
             Outcome::Slots(o) => {
                 if o.jackpot_won > 0 {
                     "the Phoenix Jackpot".into()
@@ -359,6 +410,19 @@ impl Outcome {
                     None => format!("a spin on {on}"),
                 }
             }
+            Outcome::Row(o) => {
+                let on = reels::machine_name(o.machine);
+                let game = reelrow::GAMES.get(o.machine as usize).map(|g| g.0).unwrap_or("the bonus");
+                match (o.feature, &o.bonus) {
+                    (feature::Feature::AllIn, _) if o.lucky => format!("all or nothing on {on}, and won it"),
+                    (feature::Feature::AllIn, _) => format!("all or nothing on {on}"),
+                    (_, Some(b)) if b.times > 1 => format!("the Super {game} on {on}"),
+                    (_, Some(_)) => format!("the {game} on {on}"),
+                    (_, None) => format!("a spin on {on}"),
+                }
+            }
+            Outcome::Dragon(o) if o.feature == feature::Feature::AllIn => if o.lucky { "all or nothing on Ember Dragon, and won it".into() } else { "all or nothing on Ember Dragon".into() },
+            Outcome::Dragon(o) if o.super_respins && o.jackpots().is_empty() => "Super Ember Respins".into(),
             Outcome::Dragon(o) => {
                 let jackpots = o.jackpots();
                 match (jackpots.iter().max(), &o.respins) {
@@ -391,7 +455,8 @@ pub fn slot_rtp_bp(key: &str) -> Option<u32> {
 }
 
 /// Plays a one-go round (everything but blackjack and craps, which go a step at a time).
-/// `jackpot` is the Phoenix Jackpot's pool as the round starts (slots).
+/// `jackpot` is the Phoenix Jackpot's pool as the round starts (slots), or a progressive Reel
+/// Row machine's (`reelrow::progressive`).
 pub fn play(bet: &Bet, s: &mut Stream, jackpot: u64) -> Result<Outcome, String> {
     bet.check()?;
     Ok(match bet {
@@ -401,6 +466,9 @@ pub fn play(bet: &Bet, s: &mut Stream, jackpot: u64) -> Result<Outcome, String> 
         Bet::Dice { chips, chance, over } => Outcome::Dice(dice::play(*chips, *chance, *over, s)),
         Bet::Keno { chips, picks } => Outcome::Keno(keno::play(*chips, picks, s)),
         Bet::Reels { machine, bet, buy } => Outcome::Reels(reels::play(*machine, *bet, *buy, s)),
+        Bet::Row { machine, bet, feature } => Outcome::Row(reelrow::play_with(*machine, *bet, *feature, s, jackpot)),
+        Bet::SlotsPlus { line_bet, feature } => Outcome::Slots(slots::play_feature(*line_bet, *feature, s, jackpot)),
+        Bet::DragonPlus { .. } => return Err("Ember Dragon is played with its jackpots' pools (dragon::play_feature)".into()),
         Bet::Blackjack { .. } => return Err("blackjack is dealt a step at a time".into()),
         Bet::Dragon { .. } => return Err("Ember Dragon is played with its jackpots' pools (dragon::play)".into()),
     })
@@ -453,13 +521,14 @@ pub fn verify(commit_shown: &[u8; 32], server_seed: &[u8; 32], client_seed: &[u8
     }
     let mut s = stream(server_seed, client_seed, outcome.game(), nonce);
     let same = match outcome {
-        Outcome::Slots(o) => slots::play(o.line_bet, &mut s, o.jackpot_pool) == *o,
+        Outcome::Slots(o) => slots::play_feature(o.line_bet, o.feature, &mut s, o.jackpot_pool) == *o,
         Outcome::Roulette(o) => roulette::play(&o.chips, &mut s) == *o,
         Outcome::Baccarat(o) => baccarat::play(&o.bets, &mut s) == *o,
         Outcome::Dice(o) => dice::play(o.chips, o.chance, o.over, &mut s) == *o,
         Outcome::Keno(o) => keno::play(o.chips, &o.picks, &mut s) == *o,
         Outcome::Reels(o) => reels::check(o.machine, o.bet).is_ok() && reels::play(o.machine, o.bet, o.bought, &mut s) == *o,
-        Outcome::Dragon(o) => dragon::check(o.bet, o.growth).is_ok() && dragon::play(o.bet, o.growth, o.pools, &mut s) == *o,
+        Outcome::Dragon(o) => dragon::check(o.bet, o.growth).is_ok() && dragon::play_feature(o.bet, o.growth, o.pools, o.feature, &mut s) == *o,
+        Outcome::Row(o) => reelrow::check(o.machine, o.bet).is_ok() && reelrow::play_with(o.machine, o.bet, o.feature, &mut s, o.pool) == *o,
         Outcome::Blackjack(o) => blackjack::replay(o.base, s, &o.actions).is_ok_and(|again| again == *o),
         Outcome::Craps(o) => {
             let dice = craps::roll(&mut s);

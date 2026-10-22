@@ -223,6 +223,8 @@ pub struct Hub {
     /// Why short links can't work here (the server's address only works on its own PC, or it
     /// was started without them).
     pub short_links_off_why: std::sync::OnceLock<String>,
+    /// The server's TLS key, for what it signs (Game Master certificates, on the home server).
+    pub signing: std::sync::OnceLock<crate::directory::Signing>,
     /// One change of the community's own code at a time.
     vanity_change: tokio::sync::Mutex<()>,
     /// Poker tables (see [`crate::poker`]).
@@ -273,8 +275,8 @@ struct Client {
     feedback: bool,
     /// The app joins the voice channel it's moved to (`MOVE_CAP`).
     movable: bool,
-    /// The app knows Pyr Casino's games and messages from 0.12.0 (`CASINO_012_CAP`).
-    casino_next: bool,
+    /// How much of Pyr Casino the app knows (`pyr_poker::net::CASINO_011` to `CASINO_013`).
+    casino: u8,
     conn: quinn::Connection,
     tx: Outbox,
     session: Option<SessionId>,
@@ -543,6 +545,7 @@ impl Hub {
             uploads: Mutex::new(HashMap::new()),
             directory: std::sync::OnceLock::new(),
             short_links_off_why: std::sync::OnceLock::new(),
+            signing: std::sync::OnceLock::new(),
             vanity_change: tokio::sync::Mutex::new(()),
             poker: crate::poker::Poker::default(),
         })
@@ -1016,28 +1019,33 @@ impl Hub {
         }
     }
 
-    /// A poker message to someone's apps: as it is to 0.12 apps, and to 0.11 ones as they can
-    /// read it (or not at all: see `ToApp::for_older_app`).
+    /// A poker message to someone's apps, to each as it can read it (or not at all: see
+    /// `ToApp::for_app`).
     pub fn send_poker(&self, uid: &str, msg: pyr_poker::net::ToApp) {
-        let mut new = None;
-        let mut old = None;
+        let mut framed: std::collections::BTreeMap<u8, Option<Bytes>> = std::collections::BTreeMap::new();
         for c in self.inner.lock().clients.values() {
             if c.user_id != uid {
                 continue;
             }
-            if c.casino_next {
-                let b = new.get_or_insert_with(|| frame(0, Event::Poker { msg: msg.clone() }));
-                let _ = c.tx.send(b.clone());
-            } else if let Some(b) = old.get_or_insert_with(|| msg.clone().for_older_app().map(|m| frame(0, Event::Poker { msg: m }))) {
+            if let Some(b) = framed.entry(c.casino).or_insert_with(|| msg.clone().for_app(c.casino).map(|m| frame(0, Event::Poker { msg: m }))) {
                 let _ = c.tx.send(b.clone());
             }
+        }
+    }
+
+    /// A poker message to everyone online whose app knows Pyr Casino from `min` on (the casino's
+    /// chat, from 0.13.0).
+    pub fn broadcast_poker_from(&self, min: u8, msg: pyr_poker::net::ToApp) {
+        let b = frame(0, Event::Poker { msg });
+        for c in self.inner.lock().clients.values().filter(|c| c.casino >= min) {
+            let _ = c.tx.send(b.clone());
         }
     }
 
     /// To everyone online whose app knows Pyr Casino from 0.12.0 on (the Bonfire lit, say).
     pub fn broadcast_casino_next(&self, ev: Event) {
         let b = frame(0, ev);
-        for c in self.inner.lock().clients.values().filter(|c| c.casino_next) {
+        for c in self.inner.lock().clients.values().filter(|c| c.casino >= pyr_poker::net::CASINO_012) {
             let _ = c.tx.send(b.clone());
         }
     }
@@ -1047,7 +1055,7 @@ impl Hub {
     pub fn send_to_user_casino_next(&self, uid: &str, ev: Event) {
         let b = frame(0, ev);
         for c in self.inner.lock().clients.values() {
-            if c.user_id == uid && c.casino_next {
+            if c.user_id == uid && c.casino >= pyr_poker::net::CASINO_012 {
                 let _ = c.tx.send(b.clone());
             }
         }
@@ -1294,7 +1302,7 @@ impl Hub {
         groups: bool,
         feedback: bool,
         movable: bool,
-        casino_next: bool,
+        casino: u8,
     ) -> Result<(), (ErrorCode, String)> {
         let mut inner = self.inner.lock();
         // Checked again under the lock: a ban since the login was authorized wins.
@@ -1313,7 +1321,7 @@ impl Hub {
                 groups,
                 feedback,
                 movable,
-                casino_next,
+                casino,
                 conn,
                 tx: tx.clone(),
                 session: None,
@@ -1345,7 +1353,7 @@ impl Hub {
             // (Private conversations' calls only for their own people.)
             voice: inner.voice.values().filter(|v| v.audience.as_ref().is_none_or(|who| who.iter().any(|w| w == uid))).map(|v| v.p.clone()).collect(),
             roles: self.db.roles(),
-            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, DND_FEATURE, BIG_FILES_FEATURE, GIFS_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE, VOUCHES_FOR_ME_FEATURE, PRIVATE_CHANNELS_FEATURE, BOTS_FEATURE, INVITES_FEATURE, POKER_FEATURE, SEALED_FEATURE, CHANNEL_ORDER_FEATURE, MOVE_FEATURE, CASINO_012_FEATURE].iter().map(|s| s.to_string()).collect(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, DND_FEATURE, BIG_FILES_FEATURE, GIFS_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE, VOUCHES_FOR_ME_FEATURE, PRIVATE_CHANNELS_FEATURE, BOTS_FEATURE, INVITES_FEATURE, POKER_FEATURE, SEALED_FEATURE, CHANNEL_ORDER_FEATURE, MOVE_FEATURE, CASINO_012_FEATURE, CASINO_013_FEATURE].iter().map(|s| s.to_string()).collect(),
             dms: self.db.dms_of(uid),
             relations: self.db.relations_of(uid),
             groups: if groups { self.db.groups_of(uid) } else { Vec::new() },

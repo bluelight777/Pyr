@@ -316,3 +316,43 @@ fn the_rake_is_five_percent_capped_and_none_without_a_flop() {
     assert!(out.iter().any(|(_, e)| matches!(e, Event::HandEnded { rake: 0, .. })));
     assert_eq!(stacks(&t).iter().sum::<u64>(), 2999);
 }
+
+#[test]
+fn a_hand_that_cant_win_is_mucked_when_asked() {
+    let mut t = table(3, &[1000, 1000, 1000]);
+    for s in t.seats.iter_mut().flatten() {
+        s.muck = true;
+    }
+    // Dealt 1, 2, 0 (button 0): seat 1 kings, seat 2 seven high, seat 0 aces.
+    let d = deck(&["KcKd", "2c7d", "AhAd"], "As 9h 4c Tc 3s");
+    t.start_hand(1, d).unwrap();
+    t.act(0, Action::Call).unwrap();
+    t.act(1, Action::Call).unwrap();
+    t.act(2, Action::Check).unwrap();
+    let mut last = Vec::new();
+    for _ in 0..3 {
+        for s in [1, 2, 0] {
+            last = t.act(s, Action::Check).unwrap();
+        }
+    }
+    let shown: Vec<usize> = last.iter().filter_map(|(_, e)| if let Event::Shown { seat, .. } = e { Some(*seat) } else { None }).collect();
+    let mucked: Vec<usize> = last.iter().filter_map(|(_, e)| if let Event::Mucked { seat } = e { Some(*seat) } else { None }).collect();
+    // The first to show always shows; seven high can't beat the kings, so it's mucked; the
+    // aces can, so they're shown.
+    assert_eq!(shown, vec![1, 0]);
+    assert_eq!(mucked, vec![2]);
+    // The aces win all the same.
+    assert_eq!(stacks(&t), vec![1020, 990, 990]);
+    // Without auto-muck, everyone shows.
+    let mut t = table(3, &[1000, 1000, 1000]);
+    t.start_hand(1, deck(&["KcKd", "2c7d", "AhAd"], "As 9h 4c Tc 3s")).unwrap();
+    t.act(0, Action::Call).unwrap();
+    t.act(1, Action::Call).unwrap();
+    t.act(2, Action::Check).unwrap();
+    for _ in 0..3 {
+        for s in [1, 2, 0] {
+            last = t.act(s, Action::Check).unwrap();
+        }
+    }
+    assert_eq!(last.iter().filter(|(_, e)| matches!(e, Event::Shown { .. })).count(), 3);
+}

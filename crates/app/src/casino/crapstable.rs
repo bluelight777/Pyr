@@ -470,7 +470,11 @@ impl PyrApp {
     }
 
     /// My bets to the table (shown at once; the table's own once it has them).
-    fn crt_send(&mut self, s: &ServerView, v: &CrapsView, bets: Bets, ready: bool) {
+    fn crt_send(&mut self, s: &ServerView, v: &CrapsView, mut bets: Bets, ready: bool) {
+        // Each bet brought into what this table takes first.
+        if pyr_poker::crapsroom::fit(&mut bets, v.min_bet, v.max_bet) {
+            self.toast(format!("Bets here are {} to {}: yours set to fit", chips_text(v.min_bet), chips_text(v.max_bet)), false);
+        }
         self.poker.casino.crt.desired = Some((v.roll_no, bets.clone()));
         self.poker.casino.sound_in(0.0, Cue::Chips, 0.0, 0.45);
         self.engine.craps_bets(&s.key, v.id, v.roll_no, bets, ready);

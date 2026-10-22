@@ -321,3 +321,75 @@ fn an_all_in_board_is_given_time_to_be_shown() {
     assert_eq!(runout_ms(0), 0);
     assert!(runout_ms(1) < runout_ms(2) && runout_ms(2) < runout_ms(3));
 }
+
+#[test]
+fn a_prize_box_goes_to_whoever_wins_the_hand_a_bot_too() {
+    let mut r = room();
+    let mut rng = Stream::new(seed_from(7));
+    r.sit("alice", "Alice", 0, 1000, Look::default(), 0).unwrap();
+    r.add_bot(2, Level::Rookie, 0, &mut rng).unwrap();
+    r.add_bot(4, Level::Shark, 0, &mut rng).unwrap();
+    let chips = |r: &Room| r.table.seats.iter().flatten().map(|s| s.stack).sum::<u64>();
+    let before = chips(&r);
+    let mut out = Output::default();
+    r.drop_prize(PrizeView { chips: 500, item: Some("inferno".into()), from: "GM".into() }, &mut out).unwrap();
+    assert!(r.drop_prize(PrizeView { chips: 1, item: None, from: "GM".into() }, &mut out).is_err(), "one box at a time");
+    // Alice folds everything: a bot wins the first hand, and the box with it.
+    let mut fold = |r: &Room, uid: &str| {
+        let seat = r.seat_of(uid)?;
+        let l = r.table.legal(seat)?;
+        Some(if l.can_check { Action::Check } else { Action::Fold })
+    };
+    let (mut log, mut effects) = (Vec::new(), Vec::new());
+    let mut now = 0;
+    while r.prize.is_some() && now < 300_000 {
+        now = run(&mut r, &mut rng, now, now + 5_000, &mut fold, &mut log, &mut effects);
+    }
+    assert!(r.prize.is_none(), "the box was opened");
+    let won: Vec<usize> = log.iter().filter_map(|(_, m)| if let ToApp::PrizeWon { seat, .. } = m { Some(*seat) } else { None }).collect();
+    assert_eq!(won.len(), 1);
+    assert_ne!(won[0], 0, "a bot won it (alice folded)");
+    assert!(!effects.iter().any(|e| matches!(e, Effect::Prize { .. })), "no record for a bot");
+    // Its chips went onto the table: every chip kept, plus the box's.
+    // (A stack is only taken from at the hand's end: mid-hand the sum is the same.)
+    let raked: u64 = effects.iter().map(|e| if let Effect::Raked { chips } = e { *chips } else { 0 }).sum();
+    assert_eq!(chips(&r) + raked, before + 500);
+}
+
+#[test]
+fn cards_can_be_shown_after_the_hand_and_not_once_the_next_starts() {
+    let mut r = room();
+    let mut rng = Stream::new(seed_from(11));
+    r.sit("alice", "Alice", 0, 1000, Look::default(), 0).unwrap();
+    r.sit("bob", "Bob", 1, 1000, Look::default(), 0).unwrap();
+    r.set_muck("alice", true).unwrap();
+    assert!(r.set_muck("carol", true).is_err());
+    // Bob folds whatever: alice wins without a showdown.
+    let mut choose = |r: &Room, uid: &str| {
+        let seat = r.seat_of(uid)?;
+        let l = r.table.legal(seat)?;
+        Some(if uid == "bob" { if l.can_check { Action::Check } else { Action::Fold } } else if l.can_check { Action::Check } else { Action::Call })
+    };
+    let (mut log, mut effects) = (Vec::new(), Vec::new());
+    let mut now = 0;
+    // Until the first hand's over (and the next not yet started).
+    let mut first = None;
+    while first.is_none() && now < 120_000 {
+        now = run(&mut r, &mut rng, now, now + 250, &mut choose, &mut log, &mut effects);
+        if matches!(r.phase, Phase::Idle { .. }) {
+            first = r.history.back().map(|(h, _)| h.number);
+        }
+    }
+    let hand = first.expect("a hand finished");
+    let out = r.show_cards("alice", hand).unwrap();
+    let shown: Vec<(Rcpt, ToApp)> = out.msgs;
+    assert!(shown.iter().any(|(_, m)| matches!(m, ToApp::Event { event: Event::Shown { seat: 0, .. }, hand: h, .. } if *h == hand)), "{shown:?}");
+    // Twice is once.
+    assert!(r.show_cards("alice", hand).unwrap().msgs.is_empty());
+    assert!(r.show_cards("carol", hand).is_err());
+    // On to the next hand: too late.
+    while matches!(r.phase, Phase::Idle { .. }) && now < 240_000 {
+        now = run(&mut r, &mut rng, now, now + 250, &mut choose, &mut log, &mut effects);
+    }
+    assert!(r.show_cards("bob", hand).is_err());
+}

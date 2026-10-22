@@ -208,7 +208,7 @@ impl PyrApp {
                         self.engine.poker(&s.key, ToServer::TimeBomb { buy_in: v.rules.buy_in });
                         self.engine.poker(&s.key, ToServer::TourneyUnwatch { id });
                         self.poker.tourney = None;
-                        self.poker.tab = super::Tab::Tables;
+                        self.poker.tab = super::Tab::Floor;
                     }
                 });
             }

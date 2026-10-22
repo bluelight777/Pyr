@@ -23,6 +23,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::feature::{self, Feature};
 use crate::fair::Stream;
 
 pub const REELS: usize = 5;
@@ -233,9 +234,62 @@ pub struct Outcome {
     /// The jackpots' pools as the spin began (with this spin's shares in).
     pub pools: Pools,
     pub paid: u64,
+    /// Play Feature (0.13.0): what was bought and what it cost; whether its respins' prizes are
+    /// tripled (the Super); Mystery: whether it was the Super; All or nothing: whether it won.
+    #[serde(default, skip_serializing_if = "is_spin")]
+    pub feature: Feature,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub super_respins: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub lucky: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+fn is_spin(f: &Feature) -> bool {
+    f.is_spin()
+}
+
+/// Ember Respins' prizes in the Super Respins: this many times over.
+pub const SUPER_X: u64 = 3;
+/// A Chance spin starts Ember Respins this often (per million).
+pub const CHANCE_PPM: u32 = CHANCE_PPM_V;
+pub const MYSTERY_SUPER_IN_10: u32 = 3;
+pub const ALL_IN_X: u64 = 2_500;
+pub const ALL_IN_PER_10K: u32 = 197;
+
+// Play Feature's prices (hundredths of the bet) and Chance's odds: worked out exactly (see the
+// tests; the reels at the dragon's average age, the pools' half a percent on top).
+const CHANCE_PPM_V: u32 = 22_113;
+const PRICE_CHANCE: u64 = 200;
+const PRICE_BONUS: u64 = 6_155;
+const PRICE_SUPER: u64 = 18_447;
+const PRICE_MYSTERY: u64 = 9_843;
+
+/// What each Play Feature costs, in hundredths of the bet (none: Ember Dragon hasn't it: a wild
+/// reel would pay too well with an Elder dragon).
+pub fn price(f: Feature) -> Option<u64> {
+    match f {
+        Feature::Spin => Some(100),
+        Feature::Chance => Some(PRICE_CHANCE),
+        Feature::Wild => None,
+        Feature::Bonus => Some(PRICE_BONUS),
+        Feature::Super => Some(PRICE_SUPER),
+        Feature::Mystery => Some(PRICE_MYSTERY),
+        Feature::AllIn => Some(5_000),
+    }
 }
 
 impl Outcome {
+    /// Chips staked: the bet, or what the feature cost.
+    pub fn wagered(&self) -> u64 {
+        self.cost.unwrap_or(self.bet)
+    }
+
     /// The jackpots it won.
     pub fn jackpots(&self) -> Vec<Jackpot> {
         let Some(r) = &self.respins else { return vec![] };
@@ -314,8 +368,9 @@ pub fn ways(grid: &Grid) -> Vec<WayWin> {
     out
 }
 
-/// Plays Ember Respins from the fireballs the reels landed.
-fn respins(bet: u64, fires: &[(u8, Fire)], pools: &Pools, s: &mut Stream) -> Respins {
+/// Plays Ember Respins from the fireballs the reels landed, their prizes and jackpots' fixed
+/// parts `times` over.
+fn respins_x(bet: u64, fires: &[(u8, Fire)], pools: &Pools, times: u64, s: &mut Stream) -> Respins {
     let mut board: Vec<(u8, Fire)> = fires.to_vec();
     let mut left = RESPINS;
     let mut spins = Vec::new();
@@ -356,18 +411,39 @@ fn respins(bet: u64, fires: &[(u8, Fire)], pools: &Pools, s: &mut Stream) -> Res
         x += Jackpot::Grand.base_x();
         won(Jackpot::Grand, &mut pooled);
     }
+    let x = x * times;
     let paid = x.saturating_mul(bet).saturating_add(pooled.iter().sum::<u64>());
     Respins { spins, board, full, x, pooled, paid }
 }
 
 /// A spin at `bet`, the dragon grown to `growth` for it and the jackpots' pools at `pools`.
 pub fn play(bet: u64, growth: u32, pools: Pools, s: &mut Stream) -> Outcome {
+    play_with(bet, growth, pools, None, 1, s)
+}
+
+fn draw_grid(s: &mut Stream) -> Grid {
     let mut grid: Grid = [[0; ROWS]; REELS];
     for (r, reel) in grid.iter_mut().enumerate() {
         for cell in reel.iter_mut() {
             *cell = draw_cell(r, s);
         }
     }
+    grid
+}
+
+/// A spin; `respins`: the grid drawn till it starts Ember Respins (or till it doesn't), each as
+/// likely as any other of its kind; `times`: the respins' prizes that many times over.
+fn play_with(bet: u64, growth: u32, pools: Pools, respins_wanted: Option<bool>, times: u64, s: &mut Stream) -> Outcome {
+    let grid = match respins_wanted {
+        Some(want) => loop {
+            let g = draw_grid(s);
+            let fires = g.iter().flatten().filter(|&&c| c == FIRE).count();
+            if (fires >= TRIGGER) == want {
+                break g;
+            }
+        },
+        None => draw_grid(s),
+    };
     let mut fires = Vec::new();
     let mut eggs = 0;
     for (r, reel) in grid.iter().enumerate() {
@@ -382,11 +458,98 @@ pub fn play(bet: u64, growth: u32, pools: Pools, s: &mut Stream) -> Outcome {
     let wins = ways(&grid);
     let points: u64 = wins.iter().map(|w| w.points).sum();
     let reels_paid = (points * POINT_TENTHOUSANDTHS * bet * age_mult(growth) + 5_000) / 10_000;
-    let respins = (fires.len() >= TRIGGER).then(|| respins(bet, &fires, &pools, s));
+    let respins = (fires.len() >= TRIGGER).then(|| respins_x(bet, &fires, &pools, times, s));
     // Fed by its eggs; its fire spent by the respins.
     let growth_after = if respins.is_some() { 0 } else { (growth + eggs).min(GROWTH_CAP) };
     let paid = reels_paid.saturating_add(respins.as_ref().map(|r| r.paid).unwrap_or(0)).min(super::MAX_PAYOUT);
-    Outcome { bet, growth, growth_after, grid, fires, eggs, wins, reels_paid, respins, pools, paid }
+    Outcome { bet, growth, growth_after, grid, fires, eggs, wins, reels_paid, respins, pools, paid, feature: Feature::Spin, cost: None, super_respins: times > 1, lucky: false }
+}
+
+/// A spin with a Play Feature (0.13.0). Chance: Ember Respins about four times as often.
+/// Bonus: a spin that starts them. Super: the same, every prize and jackpot's fixed part tripled.
+/// Mystery: a Bonus, or 3 times in 10 the Super. All or nothing: 1 in 50.8 wins 2,500 times the
+/// bet (the dragon as it was). The respins spend the dragon's fire as ever.
+pub fn play_feature(bet: u64, growth: u32, pools: Pools, f: Feature, s: &mut Stream) -> Outcome {
+    let Some(price_h) = price(f) else { return play(bet, growth, pools, s) };
+    if f == Feature::Spin {
+        return play(bet, growth, pools, s);
+    }
+    let cost = feature::cost(bet, price_h);
+    if f == Feature::AllIn {
+        let lucky = s.below(10_000) < ALL_IN_PER_10K;
+        let paid = if lucky { bet * ALL_IN_X } else { 0 };
+        return Outcome { bet, growth, growth_after: growth, grid: [[0; ROWS]; REELS], fires: Vec::new(), eggs: 0, wins: Vec::new(), reels_paid: 0, respins: None, pools, paid, feature: f, cost: Some(cost), super_respins: false, lucky };
+    }
+    let (want, lucky) = match f {
+        Feature::Chance => (s.below(1_000_000) < CHANCE_PPM, false),
+        Feature::Mystery => (true, s.below(10) < MYSTERY_SUPER_IN_10),
+        _ => (true, false),
+    };
+    let times = if f == Feature::Super || lucky { SUPER_X } else { 1 };
+    let mut o = play_with(bet, growth, pools, Some(want), times, s);
+    o.feature = f;
+    o.cost = Some(cost);
+    o.lucky = lucky;
+    o
+}
+
+/// Ember Dragon worked out exactly, for Play Feature: the reel wins' points a spin with fewer
+/// than six fireballs and with six or more, and the chance of six or more.
+#[cfg(test)]
+pub(crate) fn points_by_trigger() -> (f64, f64, f64) {
+    let fact = |n: usize| (1..=n).map(|x| x as f64).product::<f64>();
+    let (mut p_trig, mut with, mut without) = (0.0, 0.0, 0.0);
+    for sym in 0..PAY_SYMBOLS as usize {
+        // Each reel: the chance of (cells that are the symbol or wild, fireballs).
+        let dists: Vec<Vec<((usize, usize), f64)>> = (0..REELS)
+            .map(|r| {
+                let w = weights(r);
+                let t = w.iter().sum::<u32>() as f64;
+                let pm = (w[sym] + w[WILD as usize]) as f64 / t;
+                let pf = w[FIRE as usize] as f64 / t;
+                let po = 1.0 - pm - pf;
+                let mut d = Vec::new();
+                for m in 0..=ROWS {
+                    for f in 0..=ROWS - m {
+                        let o = ROWS - m - f;
+                        d.push(((m, f), fact(ROWS) / (fact(m) * fact(f) * fact(o)) * pm.powi(m as i32) * pf.powi(f as i32) * po.powi(o as i32)));
+                    }
+                }
+                d
+            })
+            .collect();
+        let mut stack = vec![(0usize, [0usize; REELS], 0usize, 1.0f64)];
+        while let Some((r, ms, fires, pr)) = stack.pop() {
+            if r == REELS {
+                let (mut count, mut ways) = (0, 1u64);
+                for &m in &ms {
+                    if m == 0 {
+                        break;
+                    }
+                    ways *= m as u64;
+                    count += 1;
+                }
+                if sym == 0 && fires >= TRIGGER {
+                    p_trig += pr;
+                }
+                if count >= 3 {
+                    let pts = (PAY[sym][count - 3] * ways) as f64;
+                    if fires >= TRIGGER {
+                        with += pr * pts;
+                    } else {
+                        without += pr * pts;
+                    }
+                }
+                continue;
+            }
+            for &((m, f), p) in &dists[r] {
+                let mut ms = ms;
+                ms[r] = m;
+                stack.push((r + 1, ms, (fires + f).min(TRIGGER), pr * p));
+            }
+        }
+    }
+    (p_trig, with, without)
 }
 
 #[cfg(test)]
@@ -621,6 +784,55 @@ mod tests {
         );
         assert!((reels as f64 / w - r.reels).abs() < 0.01);
         assert!((fixed as f64 / w - r.respins).abs() < 0.03);
+    }
+
+    /// Ember Dragon's Play Feature, worked out (in bets): `cargo test --release -p pyr-poker
+    /// dragon_feature_math -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn dragon_feature_math() {
+        let r = rtp();
+        let (p, with, without) = points_by_trigger();
+        let pt = POINT_TENTHOUSANDTHS as f64 / 10_000.0 * r.mult;
+        // (Respins from the grids that start them: `respins_x` is worth that on average.)
+        println!("trigger {p:.6} (rtp's {:.6}); reels given respins {:.4}, without {:.4}; respins worth {:.3}; mult {:.3}", r.trigger, with / p * pt, without / (1.0 - p) * pt, r.respins_x, r.mult);
+        let given = with / p * pt + r.respins_x;
+        let given_super = with / p * pt + r.respins_x * SUPER_X as f64;
+        println!("bonus {given:.4}, super {given_super:.4}, without {:.4}", without / (1.0 - p) * pt);
+    }
+
+    /// Every Play Feature pays back what the game does (98.5%, the pools' half a percent on top),
+    /// the reels taken at the dragon's average age.
+    #[test]
+    fn every_feature_pays_back_about_98_and_a_half_percent() {
+        let r = rtp();
+        let (p, with, without) = points_by_trigger();
+        let pt = POINT_TENTHOUSANDTHS as f64 / 10_000.0 * r.mult;
+        let (given, not) = (with / p * pt + r.respins_x, without / (1.0 - p) * pt);
+        let sup = with / p * pt + r.respins_x * SUPER_X as f64;
+        let q = CHANCE_PPM as f64 / 1e6;
+        let cost = |f: Feature| price(f).unwrap() as f64 / 100.0;
+        for (what, rtp) in [
+            ("Chance", (q * given + (1.0 - q) * not) / cost(Feature::Chance)),
+            ("Bonus", given / cost(Feature::Bonus)),
+            ("Super", sup / cost(Feature::Super)),
+            ("Mystery", (0.7 * given + 0.3 * sup) / cost(Feature::Mystery)),
+            ("All or nothing", ALL_IN_X as f64 * ALL_IN_PER_10K as f64 / 10_000.0 / cost(Feature::AllIn)),
+        ] {
+            assert!((0.98..0.99).contains(&rtp), "{what}: {rtp}");
+        }
+        assert!(price(Feature::Wild).is_none());
+        // Played out: a bought bonus starts the respins, a Super's are tripled, costs are right.
+        let mut s = Stream::new(seed_from(3));
+        for f in [Feature::Bonus, Feature::Super, Feature::Mystery] {
+            let o = play_feature(200, 30, seed_pools(), f, &mut s);
+            assert!(o.respins.is_some() && o.growth_after == 0);
+            assert_eq!(o.wagered(), 200 * price(f).unwrap() / 100);
+            assert_eq!(o.super_respins, f == Feature::Super || o.lucky);
+            assert_eq!(play_feature(200, 30, seed_pools(), f, &mut Stream::new(seed_from(77))), play_feature(200, 30, seed_pools(), f, &mut Stream::new(seed_from(77))));
+        }
+        let o = play_feature(100, 0, seed_pools(), Feature::AllIn, &mut s);
+        assert!(o.paid == 0 || o.paid == 250_000);
     }
 
     #[test]

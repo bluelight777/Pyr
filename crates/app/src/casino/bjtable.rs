@@ -642,13 +642,17 @@ impl PyrApp {
         let n = sp.hands.len().max(1) as f32;
         let scale = if n > 2.0 { 0.72 } else if n > 1.0 { 0.86 } else { 1.0 };
         let hs = size * scale;
-        let spread = hs.x * 1.22;
+        // Each card steps far enough right that the one under it shows its rank and suit (a
+        // "10" too), closing up a little past four cards.
+        let fan = |m: usize| if m > 1 { (1.6 / (m - 1) as f32).min(0.5) } else { 0.5 };
+        let widest = sp.hands.iter().map(|h| 1.0 + fan(h.cards.len()) * h.cards.len().saturating_sub(1) as f32).fold(1.0f32, f32::max);
+        let spread = hs.x * (widest + 0.22);
         let playing_hand = turn && v.stage == BjStage::Playing;
         for (h, hand) in sp.hands.iter().enumerate() {
             let base = c + vec2((h as f32 - (n - 1.0) / 2.0) * spread, -(r + hs.y * 0.55 + 4.0 * k));
-            let step = vec2(hs.x * 0.26, -hs.y * 0.12);
+            let step = vec2(hs.x * fan(hand.cards.len()), -hs.y * 0.07);
             let m = hand.cards.len() as f32;
-            let first = base - step * ((m - 1.0) / 2.0).max(0.0) * 0.5;
+            let first = base - step * ((m - 1.0) / 2.0).max(0.0);
             if playing_hand && h == sp.active {
                 p.add(egui::epaint::EllipseShape::filled(base + vec2(0.0, hs.y * 0.55), vec2(hs.x * 0.9, 6.0 * k), col::GOLD.gamma_multiply(0.45)));
             }

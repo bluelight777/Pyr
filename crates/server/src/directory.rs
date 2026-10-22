@@ -76,6 +76,13 @@ impl Signing {
         Ok(Signing { cert: pyr_proto::b64::encode(cert_der), signer, scheme })
     }
 
+    /// Signs `msg` (context and all): the certificate (base64url DER), the scheme, and the
+    /// signature (base64url). For what isn't for the directory (Game Master certificates).
+    pub fn sign_raw(&self, msg: &[u8]) -> Result<(String, String, String)> {
+        let sig = self.signer.sign(msg).map_err(|e| anyhow!("signing: {e}"))?;
+        Ok((self.cert.clone(), self.scheme.to_string(), pyr_proto::b64::encode(&sig)))
+    }
+
     pub fn sign(&self, a: &Announce) -> Result<SignedAnnounce> {
         let payload = serde_json::to_string(a)?;
         let mut msg = ANNOUNCE_CONTEXT.to_vec();

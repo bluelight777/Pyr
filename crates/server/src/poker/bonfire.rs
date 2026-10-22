@@ -1,5 +1,6 @@
 //! The Bonfire on this server (see `pyr_poker::casino::bonfire`): the pool and everyone's
-//! embers, kept in the database; lit when its time comes (or when the server's owner lights it),
+//! embers, kept in the database; lit when its time comes (or early by the game's owner or a Game Master: never just a
+//! server's owner),
 //! the winners paid, everyone online shown it, and a new fire laid.
 
 use std::collections::BTreeMap;
@@ -86,7 +87,7 @@ impl Poker {
 
     /// The Bonfire as someone sees it.
     pub(super) fn bonfire_view(hub: &Hub, st: &mut State, uid: &str, rng: &mut dyn Random) -> BonfireView {
-        let can_light = Self::is_owner(hub, uid);
+        let can_light = Self::can_light(hub, uid);
         let f = Self::bonfire_fire(hub, st, rng).clone();
         let mut top: Vec<(String, u64)> = f.embers.iter().map(|(u, e)| (f.names.get(u).cloned().unwrap_or_else(|| "Someone".into()), *e)).collect();
         top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
@@ -108,8 +109,8 @@ impl Poker {
     /// The Bonfire's own requests: how it stands, or (the owner) light it now.
     pub(super) fn bonfire_req(&self, hub: &Hub, st: &mut State, uid: &str, light: bool, rng: &mut dyn Random) -> Result<Option<ToApp>, String> {
         if light {
-            if !Self::is_owner(hub, uid) {
-                return Err("only the server's owner can light the Bonfire early".into());
+            if !Self::can_light(hub, uid) {
+                return Err("only the game's owner and Game Masters light the Bonfire early: it lights itself when its time comes".into());
             }
             self.bonfire_light(hub, st, rng);
         }
@@ -217,11 +218,14 @@ mod tests {
         assert_eq!(v.my_embers, 5 * 3, "a round's ember and two for its 200 chips, five times");
         assert_eq!(v.pool, pyr_poker::casino::bonfire::SEED_POOL + 5 * 2);
         assert_eq!(v.top.len(), 1);
-        // Only the owner lights it early.
+        // Not lit early by anyone, nor by a server's owner as such...
         assert!(hub.poker.handle(&hub, "ann", false, ToServer::BonfireLight).is_err());
         let before = hub.db.poker_record("ann").0.chips;
         let owner = "owner-of-it";
         hub.db.insert_user(owner, "Owner", pyr_proto::control::Role::Owner).unwrap();
+        assert!(hub.poker.handle(&hub, owner, false, ToServer::BonfireLight).is_err(), "a server's owner doesn't light it");
+        // ...only by the game's owner (the home server's) and Game Masters.
+        let _ = hub.poker.home_for_tests.set(hub.fingerprint);
         let v2 = match hub.poker.handle(&hub, owner, false, ToServer::BonfireLight).unwrap() {
             Some(ToApp::Bonfire { view }) => view,
             other => panic!("{other:?}"),

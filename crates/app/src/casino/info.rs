@@ -97,7 +97,7 @@ fn focus(id: &str) -> f32 {
     }
 }
 
-fn about(game: Game, machine: u8) -> Option<About> {
+fn about(game: Game, machine: u8, v13: bool) -> Option<About> {
     match game {
         Game::Slots => {
             let key = Game::Slots.id().to_string();
@@ -139,7 +139,10 @@ fn about(game: Game, machine: u8) -> Option<About> {
                         sv::STAR_SPINS[2]
                     ),
                     "Over a long run the reels pay back 98% of what's bet, and the jackpot the 1% it takes from each spin: 99% in all.".into(),
-                ],
+                ]
+                .into_iter()
+                .chain(v13.then(|| features_line(super::stake::SlotKind::Sevens)))
+                .collect(),
                 pays_head: "A line pays, times the line bet (the bet is 20 line bets)".into(),
                 pays: order.iter().map(|s| row(*s)).collect(),
                 specials: vec![(
@@ -148,6 +151,61 @@ fn about(game: Game, machine: u8) -> Option<About> {
                 )],
                 challenges: vec!["casino_first", "free_spins", "jackpot", "big_win", "whale"],
                 accent: col::EMBER,
+            })
+        }
+        Game::Reels if v13 => {
+            use pyr_poker::casino::reelrow as rw;
+            let th = theme(machine);
+            let key = pyr_poker::casino::reels_key(machine);
+            let sheet = format!("reels-{}-symbols", th.id);
+            let row = |s: usize| PayRow {
+                sheet: sheet.clone(),
+                cell: Some(s),
+                drawn: None,
+                name: plain(th.symbols[s]).to_string(),
+                pays: [0, 1, 2].map(|k| times_tt(rr::PAY[s][k] * rw::POINT_TENTHOUSANDTHS)),
+            };
+            let blank = |s: usize| PayRow { sheet: sheet.clone(), cell: Some(s), drawn: None, name: plain(th.symbols[s]).to_string(), pays: Default::default() };
+            let (game_name, game_what) = rw::GAMES[(machine as usize).min(11)];
+            let mut tags = vec![rtp_tag(&key).unwrap_or_default(), "Slots".into(), "243 ways".into(), game_name.to_string(), "Play Feature".into()];
+            if th.humor.is_some() {
+                tags.push("Funny".into());
+            }
+            tags.extend(["Provably fair".to_string(), "Only on Pyr".to_string()]);
+            let wild = plain(th.symbols[rr::WILD as usize]);
+            let mut paragraphs = vec![format!(
+                "{} Five reels, three rows and 243 ways to win: three or more of a symbol on reels side by side from the left, in any row, pays for every way it's made. The {} stands in for every pay symbol, on reels 2, 3 and 4.",
+                th.tagline,
+                wild.to_lowercase()
+            )];
+            paragraphs.push(format!("Three or more {} anywhere (about 1 spin in 176) start its own mini game, the {game_name}: {game_what} It's worth about 59 times the bet on average, and up to 800 times.", th.scatters));
+            paragraphs.push("No choice in it changes the odds: what's under what comes out of the round's random numbers in the order things are opened, so every pick has the same chances.".into());
+            paragraphs.push(features_line(super::stake::SlotKind::Row(machine)));
+            match th.humor {
+                Some(Humor::Heat) => paragraphs.push("It's a funny one: every spin that doesn't pay turns up the heat, from MILD all the way to SCOVILLED, and the chili sweats it out. Wins cool it down. (All for laughs: the heat never changes where the reels stop.)".into()),
+                Some(Humor::Dentist) => paragraphs.push("It's a funny one: a sugar count beside the cabinet adds up every gram the reels land, and its host gets queasier the higher it goes. (For show: it never changes where the reels stop.)".into()),
+                Some(Humor::Office) => paragraphs.push("It's a funny one: it runs on caffeine. The mug drains with every spin, wins top it up and a big one's an espresso shot; run dry and the reels slow down and doze off. (For show: where the reels stop is the house's either way.)".into()),
+                Some(Humor::FishTales) => paragraphs.push("It's a funny one: your three biggest catches go up on the board beside the cabinet, and its host slips on the ice when you miss.".into()),
+                None => {}
+            }
+            paragraphs.push("Over a long run it pays back 99% of what's bet: about 65% from the reels, the rest from the mini game. Every Play Feature pays back the same.".into());
+            let specials = vec![
+                (blank(rr::WILD as usize), "Wild, on reels 2, 3 and 4: it stands in for every pay symbol.".to_string()),
+                (blank(rr::SCATTER as usize), format!("Scatter: three or more anywhere start the {game_name}.")),
+            ];
+            Some(About {
+                key,
+                name: th.name,
+                cover: format!("rr-{}-bonus", th.id),
+                focus: 0.5,
+                by: "Reel Row · by Chimbita",
+                tags,
+                paragraphs,
+                pays_head: "A way pays, times the bet (each way it's made pays)".into(),
+                pays: (0..rr::PAY_SYMBOLS as usize).rev().map(row).collect(),
+                specials,
+                challenges: vec!["casino_first", "clean_sweep", "big_win", "whale"],
+                accent: th.accent,
             })
         }
         Game::Reels => {
@@ -205,9 +263,9 @@ fn about(game: Game, machine: u8) -> Option<About> {
             paragraphs.push(format!("Or buy the bonus straight away, for {} times the bet.", rr::BUY_X));
             match th.humor {
                 Some(Humor::Heat) => paragraphs.push("It's a funny one: every spin that doesn't pay turns up the heat, from MILD all the way to SCOVILLED, and the chili sweats it out. Wins cool it down. (All for laughs: the heat never changes where the reels stop.)".into()),
-                Some(Humor::Dentist) => paragraphs.push("It's a funny one: the dentist keeps count. Every gram of sugar the reels land goes on your dental report, and every 750 g is another cavity. (All for laughs: it never changes where the reels stop.)".into()),
-                Some(Humor::Office) => paragraphs.push("It's a funny one: it runs on caffeine. It runs down with every spin, wins top it up and a big one's an espresso shot. Run dry and the reels drag into Monday mode, and the office never stops emailing. (All for laughs: where the reels stop is the house's either way.)".into()),
-                Some(Humor::FishTales) => paragraphs.push("It's a funny one: every win is a fish story, and the bigger the win, the taller the tale. The three best go up on the trophy wall.".into()),
+                Some(Humor::Dentist) => paragraphs.push("It's a funny one: a sugar count beside the cabinet adds up every gram the reels land, and its host gets queasier the higher it goes. (For show: it never changes where the reels stop.)".into()),
+                Some(Humor::Office) => paragraphs.push("It's a funny one: it runs on caffeine. The mug drains with every spin, wins top it up and a big one's an espresso shot; run dry and the reels slow down and doze off. (For show: where the reels stop is the house's either way.)".into()),
+                Some(Humor::FishTales) => paragraphs.push("It's a funny one: your three biggest catches go up on the board beside the cabinet, and its host slips on the ice when you miss.".into()),
                 None => {}
             }
             paragraphs.push("Over a long run it pays back 99% of what's bet, bonus and all, and a bought bonus the same.".into());
@@ -260,7 +318,10 @@ fn about(game: Game, machine: u8) -> Option<About> {
                     format!("Six or more fireballs anywhere start Ember Respins: the fireballs are held and the rest of the board spins again, {} times; every new fireball sticks and gives {} more. Each holds a prize of 1 to 25 times the bet, or a jackpot. Fill all fifteen spots for the Grand. When they're over the dragon has spent its fire, and hatches again from an egg.", dg::RESPINS, dg::RESPINS),
                     "Four jackpots: Mini 10, Minor 25, Major 100 and Grand 1,000 times the bet, each with a pool on top that grows with every spin on this server and pays its share for your bet (all of it at the most bet).".into(),
                     "Over a long run it pays back 99% of what's bet: about 98.5% from the reels and Ember Respins, and the half a percent that goes into the pools back out of them.".into(),
-                ],
+                ]
+                .into_iter()
+                .chain(v13.then(|| features_line(super::stake::SlotKind::Dragon)))
+                .collect(),
                 pays_head: "A way pays, times the bet (each way it's made pays; the dragon multiplies it)".into(),
                 pays: (0..dg::PAY_SYMBOLS as usize).rev().map(row).collect(),
                 specials: vec![
@@ -328,10 +389,15 @@ impl PyrApp {
     pub(super) fn info_panel(&mut self, ctx: &egui::Context, s: &ServerView, area: Rect) {
         let Some(tab) = self.poker.casino.info else { return };
         let Some(game) = self.poker.casino.game else { return };
-        let Some(ab) = about(game, self.poker.casino.reels.machine) else {
+        let v13 = s.has(pyr_proto::control::CASINO_013_FEATURE);
+        let Some(mut ab) = about(game, self.poker.casino.reels.machine, v13) else {
             self.poker.casino.info = None;
             return;
         };
+        // A Reel Row machine's top prize (its progressive jackpot's pool as it stands).
+        if v13 && game == Game::Reels {
+            ab.paragraphs.insert(1.min(ab.paragraphs.len()), super::floor::top_words(s, self.poker.casino.reels.machine));
+        }
         // The game's statistics: asked for as it opens, and every 15 seconds while they show.
         let supported = s.has(pyr_proto::control::CASINO_012_FEATURE);
         let stale = match &self.poker.casino.info_asked {
@@ -748,3 +814,18 @@ fn symbol(p: &egui::Painter, ctx: &egui::Context, pr: &PayRow, r: Rect) {
         _ => {}
     }
 }
+
+/// A slot's Play Feature, in a few words with what each costs.
+fn features_line(kind: super::stake::SlotKind) -> String {
+    use pyr_poker::casino::feature::Feature;
+    let parts: Vec<String> = [Feature::Chance, Feature::Wild, Feature::Bonus, Feature::Super, Feature::Mystery, Feature::AllIn]
+        .into_iter()
+        .filter_map(|f| {
+            let h = kind.price(f)?;
+            let x = if h % 100 == 0 { format!("{}×", h / 100) } else { format!("{:.2}×", h as f64 / 100.0) };
+            Some(format!("{} ({x})", kind.describe(f).0))
+        })
+        .collect();
+    format!("Play Feature, beside the spin button, plays it other ways, each priced to pay back the same: {}. Fairness shows your own seed for it (change it any time), the house's next seed's fingerprint, and any round played again from the two.", parts.join(", "))
+}
+

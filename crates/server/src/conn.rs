@@ -276,8 +276,14 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
     let groups = caps.iter().any(|c| c == GROUPS_CAP);
     let feedback = caps.iter().any(|c| c == VIDEO_FEEDBACK_CAP);
     let movable = caps.iter().any(|c| c == MOVE_CAP);
-    let casino_next = caps.iter().any(|c| c == CASINO_012_CAP);
-    if let Err((code, msg)) = hub.register(conn_id, &user_id, conn.clone(), tx.clone(), session_cell.clone(), login.id, groups, feedback, movable, casino_next) {
+    let casino = if caps.iter().any(|c| c == CASINO_013_CAP) {
+        pyr_poker::net::CASINO_013
+    } else if caps.iter().any(|c| c == CASINO_012_CAP) {
+        pyr_poker::net::CASINO_012
+    } else {
+        pyr_poker::net::CASINO_011
+    };
+    if let Err((code, msg)) = hub.register(conn_id, &user_id, conn.clone(), tx.clone(), session_cell.clone(), login.id, groups, feedback, movable, casino) {
         tx.send(frame(login.id, Event::error(code, msg.clone())));
         drop(tx);
         let _ = timeout(Duration::from_secs(1), writer).await;
@@ -293,7 +299,7 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
         conn_id,
         uid: user_id.clone(),
         groups,
-        casino_next,
+        casino,
         msg_tokens: Bucket::new(1.5, 10.0),
         react_tokens: Bucket::new(3.0, 15.0),
         req_tokens: Bucket::new(REQ_RATE, REQ_BURST),
@@ -677,8 +683,9 @@ struct Ctx<'a> {
     uid: String,
     /// The app knows group conversations (`GROUPS_CAP`).
     groups: bool,
-    /// The app knows Pyr Casino from 0.12.0 on (`CASINO_012_CAP`).
-    casino_next: bool,
+    /// How much of Pyr Casino the app knows (`pyr_poker::net::CASINO_011` to `CASINO_013`: see
+    /// `CASINO_012_CAP` and `CASINO_013_CAP`).
+    casino: u8,
     /// Messages and edits.
     msg_tokens: Bucket,
     react_tokens: Bucket,
@@ -1908,9 +1915,9 @@ impl Ctx<'_> {
             }
             Request::Poker { msg } => {
                 let can_manage = self.can(perm::MANAGE_SERVER);
-                match hub.poker.handle_from(hub, &self.uid, can_manage, self.casino_next, msg) {
-                    // (A 0.11 app gets it as it can read it, or just an Ok.)
-                    Ok(Some(msg)) => match if self.casino_next { Some(msg) } else { msg.for_older_app() } {
+                match hub.poker.handle_from(hub, &self.uid, can_manage, self.casino, msg) {
+                    // (An older app gets it as it can read it, or just an Ok.)
+                    Ok(Some(msg)) => match msg.for_app(self.casino) {
                         Some(msg) => Ok(Event::Poker { msg }),
                         None => Ok(Event::Ok),
                     },
@@ -2176,7 +2183,7 @@ mod tests {
             conn_id: 1,
             uid: uid.to_string(),
             groups: true,
-            casino_next: true,
+            casino: pyr_poker::net::CASINO_013,
             msg_tokens: Bucket::new(1.5, 10.0),
             react_tokens: Bucket::new(3.0, 15.0),
             req_tokens: Bucket::new(REQ_RATE, REQ_BURST),
@@ -2204,11 +2211,13 @@ mod tests {
         let managers = hub.db.create_role("Role managers", 0, perm::MANAGE_ROLES, false).unwrap();
         hub.db.set_member_roles(&amb, &[managers.id]).unwrap();
         let set = |who: &str, them: &str, role: Option<Staff>| hub.poker.handle(&hub, who, true, ToServer::SetRole { uid: them.into(), role });
+        // (This is the home server: the Owner of the Game's, where staff are named.)
+        let _ = hub.poker.home_for_tests.set(hub.fingerprint);
         // The owner names Game Masters and Ambassadors; an admin can't, nor can a Game Master.
         assert!(set(&owner, &gm, Some(Staff::GameMaster)).is_ok());
         assert!(set(&owner, &amb, Some(Staff::Ambassador)).is_ok());
-        assert!(set(&admin, &bob, Some(Staff::GameMaster)).unwrap_err().contains("owner"));
-        assert!(set(&gm, &bob, Some(Staff::GameMaster)).unwrap_err().contains("owner"));
+        assert!(set(&admin, &bob, Some(Staff::GameMaster)).unwrap_err().contains("Owner"));
+        assert!(set(&gm, &bob, Some(Staff::GameMaster)).unwrap_err().contains("Owner"));
         assert!(set(&gm, &bob, Some(Staff::Ambassador)).is_err());
         assert!(set(&gm, &amb, None).is_err(), "nor take a role away");
         assert_eq!(crate::poker::Poker::role(&hub, &bob), None);

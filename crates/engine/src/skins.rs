@@ -78,6 +78,39 @@ pub fn check(files: &[(String, Vec<u8>)]) -> Report {
     r
 }
 
+/// The skin in a folder someone picked: the folder itself, or the one skin a little way inside
+/// it (a skin's folder from a .zip sits one level down). None if there's no skin.json there.
+pub fn find_folder(folder: &Path) -> Option<PathBuf> {
+    if folder.join(skin::MANIFEST).is_file() {
+        return Some(folder.to_path_buf());
+    }
+    let mut found = Vec::new();
+    let mut level = vec![folder.to_path_buf()];
+    for _ in 0..2 {
+        let mut next = Vec::new();
+        for dir in &level {
+            let Ok(rd) = std::fs::read_dir(dir) else { continue };
+            for e in rd.flatten().take(200) {
+                let name = e.file_name().to_string_lossy().to_string();
+                let is_dir = std::fs::symlink_metadata(e.path()).is_ok_and(|m| m.is_dir());
+                if !is_dir || name.starts_with('.') || SKIP_DIRS.contains(&name.as_str()) {
+                    continue;
+                }
+                if e.path().join(skin::MANIFEST).is_file() {
+                    found.push(e.path());
+                } else {
+                    next.push(e.path());
+                }
+            }
+        }
+        if !found.is_empty() {
+            break;
+        }
+        level = next;
+    }
+    (found.len() == 1).then(|| found.remove(0))
+}
+
 /// A folder's skin, checked.
 pub fn check_folder(folder: &Path) -> Result<(Vec<(String, Vec<u8>)>, Report)> {
     let files = gather(folder)?;
@@ -188,6 +221,23 @@ mod tests {
         assert!(submission(&files, &report, "", 0).is_err());
         assert!(check_folder(&base).is_err(), "no skin.json");
         let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn the_skin_a_little_way_inside_a_folder_is_found() {
+        let top = std::env::temp_dir().join(format!("pyr-find-skin-{}", pyr_proto::now_ms()));
+        let inner = top.join("download").join("my-skin");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::create_dir_all(top.join("other")).unwrap();
+        assert_eq!(find_folder(&top), None);
+        std::fs::write(inner.join(skin::MANIFEST), "{}").unwrap();
+        assert_eq!(find_folder(&top), Some(inner.clone()));
+        assert_eq!(find_folder(&inner), Some(inner.clone()));
+        let second = top.join("other").join("skin-two");
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(second.join(skin::MANIFEST), "{}").unwrap();
+        assert_eq!(find_folder(&top), None, "two skins: which one isn't guessed");
+        let _ = std::fs::remove_dir_all(&top);
     }
 
     #[test]

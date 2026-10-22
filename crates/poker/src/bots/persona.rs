@@ -191,6 +191,17 @@ impl Persona {
         }
     }
 
+    /// How it bets at a roulette table, in a few words (its blackjack ways, at the wheel).
+    pub fn rl_style(&self) -> &'static str {
+        match self.bj {
+            Book => "even money on red or black, pressing after a win",
+            Careful => "the least on a dozen and a column",
+            Dealer => "straight up on its lucky number and its neighbours on the wheel",
+            Daredevil => "sprays corners and splits, and its lucky number",
+            Superstitious => "the last number again, and the colour that's due",
+        }
+    }
+
     /// How it bets at a craps table, in a few words (its blackjack ways, at the dice).
     pub fn craps_style(&self) -> &'static str {
         match self.bj {
@@ -213,16 +224,16 @@ impl Persona {
     }
 
     /// What it says at `m`, in its own voice (most bots have something for most moments; the
-    /// rest of the time they say what any reformed troll would).
+    /// rest of the time they say the table's usual, or now and then something with teeth).
     pub fn lines(&self, m: Moment) -> &'static [&'static str] {
         match (self.name, m) {
-            ("Ace", Moment::WonShowdown) => &["Textbook. I'd autograph the textbook, but I'm practicing humility.", "That's the hand I'd teach in a class. A kind, encouraging class."],
+            ("Ace", Moment::WonShowdown) => &["Textbook. I'd sign your copy, but you clearly haven't read it.", "That's the hand I'd teach in a class. A kind, encouraging class."],
             ("Ace", Moment::WonUncontested) => &["Folding was right. I'd know. Sorry, that came out smug. Nice fold."],
             ("Ace", Moment::LostShowdown) => &["Well played. I'll replay that one in my head. Calmly. Several times."],
             ("Ace", Moment::AllIn) => &["All in. I've done the math. It's lovely math."],
-            ("Ace", Moment::Welcome) => &["Welcome! I'm Ace. People say I'm a lot. I'm toning it down."],
+            ("Ace", Moment::Welcome) => &["Welcome! I'm Ace. Yes, like the card. No, you won't see me coming."],
             ("Blaze", Moment::AllIn) => &["ALL IN! Sorry, caps lock. It's an emotional time for me.", "All in! Again! It's a lifestyle, really."],
-            ("Blaze", Moment::WonUncontested) => &["Nobody wants to dance? Your loss! Respectfully!", "Raise, everyone folds, repeat. I love this game. Thank you all!"],
+            ("Blaze", Moment::WonUncontested) => &["Nobody wants to dance? Your loss!", "Raise, everyone folds, repeat. I love this game. Thank you all!"],
             ("Blaze", Moment::LostShowdown) => &["Worth it. Every chip. I regret nothing. Okay, a couple of things."],
             ("Blaze", Moment::WonBig) => &["BIG POT! I'm being normal about it. This is me being normal."],
             ("Blaze", Moment::Welcome) => &["New friend! Quick warning: I raise. A lot. Nothing personal."],
@@ -251,12 +262,12 @@ impl Persona {
             ("Gale", Moment::AllIn) => &["Feeling lucky. That's the whole plan. Wish me well."],
             ("Gale", Moment::BadBeat) => &["I'm usually the one hitting the river. Now I get it. Sorry, everyone."],
             ("Gale", Moment::Welcome) => &["Welcome! Do you love suited connectors too? We'll get along."],
-            ("Hex", Moment::WonShowdown) => &["The cards told me. They whisper sometimes. Respectfully."],
+            ("Hex", Moment::WonShowdown) => &["The cards told me. They whisper sometimes. Not to you, apparently."],
             ("Hex", Moment::WonUncontested) => &["You sensed it. Smart. Or lucky. Or cursed. Kidding!"],
             ("Hex", Moment::LostShowdown) => &["The stars weren't aligned. Nice hand. The stars are fickle."],
             ("Hex", Moment::AllIn) => &["All in. Don't ask me why. I never know why."],
             ("Hex", Moment::Welcome) => &["Welcome. I've read your aura already. It's nice. Mostly."],
-            ("Ivy", Moment::WonShowdown) => &["Pot odds were 3.2 to 1. I'd explain more, but nobody asked. Growth!"],
+            ("Ivy", Moment::WonShowdown) => &["Pot odds were 3.2 to 1. I'd explain, but you'd need a calculator."],
             ("Ivy", Moment::WonUncontested) => &["A fold with positive expectation for both of us. You're welcome."],
             ("Ivy", Moment::LostShowdown) => &["Right call, wrong result. Variance and I are on speaking terms. Barely."],
             ("Ivy", Moment::BadBeat) => &["I was 82% to win. The other 18% sends its regards."],
@@ -266,7 +277,7 @@ impl Persona {
             ("Jinx", Moment::CalledAllIn) => &["I call! I have to know. It's a condition. A fun one."],
             ("Jinx", Moment::OtherWonBig) => &["Big pot! What did you have? Show me. Please. I have to know."],
             ("Jinx", Moment::Welcome) => &["Hi! I call a lot. Like, a lot. Bluff me at your own risk."],
-            ("Koda", Moment::WonUncontested) => &["Folded again? Old me would've taunted you. New me says: good discipline."],
+            ("Koda", Moment::WonUncontested) => &["Folded again? Bold strategy. Let's see if it pays off. It won't."],
             ("Koda", Moment::WonBig) => &["Pressure works. Sorry, everyone. A normal amount of sorry."],
             ("Koda", Moment::AllIn) => &["All in. I'm not trying to scare you. Okay, a little."],
             ("Koda", Moment::LostShowdown) => &["You stood up to me. Respect. Real respect."],
@@ -293,8 +304,8 @@ impl Persona {
             ("Pike", Moment::WonShowdown) => &["Something smelled fishy. Turned out it was me. Nice try, though."],
             ("Pike", Moment::WonUncontested) => &["I could smell weakness. I mean: good fold, friend."],
             ("Pike", Moment::LostShowdown) => &["The one that got away. Well played."],
-            ("Pike", Moment::AllIn) => &["All in. Hook, line and sinker. Respectfully."],
-            ("Pike", Moment::Welcome) => &["Welcome to the pond. I'm one of the friendly fish now."],
+            ("Pike", Moment::AllIn) => &["All in. Hook, line and sinker. Bite."],
+            ("Pike", Moment::Welcome) => &["Welcome to the pond. I'm the one with teeth."],
             ("Quill", Moment::WonShowdown) => &["And so our hero takes the pot. A modest chapter. Well played, all."],
             ("Quill", Moment::LostShowdown) => &["A plot twist. I hate plot twists. Beautifully played."],
             ("Quill", Moment::BadBeat) => &["The river wrote a cruel ending. I'd have edited that."],
@@ -305,7 +316,7 @@ impl Persona {
             ("Rook", Moment::LostShowdown) => &["Didn't see that coming. You were three moves ahead. Well played."],
             ("Rook", Moment::Welcome) => &["Welcome. I play slowly. Think of it as chess, with chips."],
             ("Sage", Moment::WonShowdown) => &["The cards favor the patient. Today, anyway. Good hand."],
-            ("Sage", Moment::LostShowdown) => &["Lose with grace, win with grace. I'm practicing the first one now."],
+            ("Sage", Moment::LostShowdown) => &["Lose with grace, win with grace. Today, grace. Tomorrow, your chips."],
             ("Sage", Moment::OtherWonBig) => &["Well earned. Enjoy it, and don't give it straight back to me."],
             ("Sage", Moment::Welcome) => &["Welcome. Every seat teaches something. This one teaches folding, mostly."],
             ("Tarn", Moment::WonShowdown) => &["Oh hey, I won. Nice. Good vibes, everyone."],

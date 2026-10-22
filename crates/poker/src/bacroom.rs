@@ -137,6 +137,19 @@ fn within(b: &Bets, lo: u64, hi: u64) -> Result<(), String> {
     Ok(())
 }
 
+/// Brings each bet into what the table takes (a bet under its least goes up to it, one over its
+/// most comes down to it), so what's sent always passes [`within`]. Says whether anything moved.
+pub fn fit(b: &mut Bets, lo: u64, hi: u64) -> bool {
+    let side = hi.min(SIDE_MAX).max(lo);
+    let before = b.clone();
+    for (x, top) in [(&mut b.player, hi), (&mut b.banker, hi), (&mut b.tie, side), (&mut b.player_pair, side), (&mut b.banker_pair, side)] {
+        if *x > 0 {
+            *x = (*x).clamp(lo, top.max(lo));
+        }
+    }
+    *b != before
+}
+
 /// How long a bot takes to get its chips down, the way a person would: at its own pace, never
 /// the same twice, with the odd long pause.
 fn bot_ms(base: f64, who: &Persona, rng: &mut Stream) -> u64 {
@@ -599,6 +612,19 @@ impl BacRoom {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bets_are_fitted_to_the_table_before_they_go() {
+        let mut b = Bets { player: 5, banker: 40_000, tie: 9_000, ..Default::default() };
+        assert!(fit(&mut b, 10, 1_000));
+        assert_eq!((b.player, b.banker, b.tie, b.player_pair), (10, 1_000, 1_000, 0));
+        assert!(within(&b, 10, 1_000).is_ok());
+        let mut b = Bets { player: 25, tie: 6_000, ..Default::default() };
+        assert!(fit(&mut b, 500, 25_000));
+        assert_eq!((b.player, b.tie), (500, SIDE_MAX));
+        assert!(within(&b, 500, 25_000).is_ok());
+        assert!(!fit(&mut b, 500, 25_000));
+    }
     use crate::fair::seed_from;
 
     struct Rng(Stream);

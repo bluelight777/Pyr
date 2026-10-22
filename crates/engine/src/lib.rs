@@ -980,6 +980,38 @@ impl Engine {
     }
 
     /// The poker news shown (gifts, prize boxes won): forgotten.
+    /// The casino's chat: say something; the lines kept (asked once); a line taken down; and
+    /// what's come in looked at.
+    pub fn casino_chat(&self, key: &str, text: &str) {
+        self.chat_request(key, pyr_poker::net::ToServer::CasinoChat { text: text.to_string() });
+    }
+
+    pub fn casino_chat_log(&self, key: &str) {
+        self.poker_later(key, |p| p.chat_loaded = true);
+        self.chat_request(key, pyr_poker::net::ToServer::CasinoChatLog);
+    }
+
+    pub fn casino_chat_delete(&self, key: &str, id: u64) {
+        self.chat_request(key, pyr_poker::net::ToServer::CasinoChatDelete { id });
+    }
+
+    /// (A no from the chat, too fast or a line gone, is a refusal: never reported as a bug.)
+    fn chat_request(&self, key: &str, msg: pyr_poker::net::ToServer) {
+        let k = key.to_string();
+        self.request_then(key, Request::Poker { msg }, move |shared, ev| {
+            if let Event::Poker { msg } = ev {
+                if let Some(s) = shared.state.write().server_mut(&k) {
+                    s.poker.apply(msg, std::time::Instant::now());
+                }
+                (shared.repaint)();
+            }
+        });
+    }
+
+    pub fn casino_chat_seen(&self, key: &str) {
+        self.poker_later(key, |p| p.chat_unread = 0);
+    }
+
     pub fn take_poker_notices(&self, key: &str) {
         self.poker_later(key, |p| p.notices.clear());
     }
@@ -993,6 +1025,41 @@ impl Engine {
     pub fn casino_open(&self, key: &str, open: bool) {
         use pyr_poker::net::{CasinoReq, ToServer};
         self.poker(key, ToServer::Casino { req: if open { CasinoReq::Open } else { CasinoReq::Close } });
+        if open {
+            self.game_master_cert(key);
+        }
+    }
+
+    /// Game Masters (0.13.0 servers): at home, my certificate fetched (or forgotten, when I'm
+    /// not one any more); anywhere else, the one I have shown.
+    fn game_master_cert(&self, key: &str) {
+        use pyr_poker::net::{HOME_SERVER, ToApp, ToServer};
+        let v13 = self.shared.state.read_recursive().server(key).is_some_and(|s| s.has(pyr_proto::control::CASINO_013_FEATURE));
+        if !v13 || HOME_SERVER.is_empty() {
+            return;
+        }
+        if key == HOME_SERVER {
+            self.request_then_or(key, Request::Poker { msg: ToServer::GmCertAsk }, |shared, r| {
+                if let Ok(Event::Poker { msg: ToApp::GmCert { signed } }) = r {
+                    let mut cfg = shared.config.lock();
+                    if cfg.gm_cert != signed {
+                        cfg.gm_cert = signed;
+                        shared.save_config_locked(&cfg);
+                    }
+                }
+            });
+        } else if let Some(signed) = self.shared.config.lock().gm_cert.clone() {
+            // (One run out, or not taken: nothing to say about it here.)
+            let k = key.to_string();
+            self.request_then_or(key, Request::Poker { msg: ToServer::GmProof { signed } }, move |shared, r| {
+                if let Ok(Event::Poker { msg }) = r {
+                    if let Some(s) = shared.state.write().server_mut(&k) {
+                        s.poker.apply(msg, std::time::Instant::now());
+                    }
+                    (shared.repaint)();
+                }
+            });
+        }
     }
 
     /// A game's statistics (by its statistics key), for its Info panel.
@@ -1009,6 +1076,51 @@ impl Engine {
         let _ = getrandom::getrandom(&mut seed);
         self.poker_later(key, |p| p.casino.busy = true);
         self.poker(key, ToServer::Casino { req: CasinoReq::Play { commit, seed, bet } });
+    }
+
+    /// A slot round played from my own seed for the slot (`casino_seed`): the seed sent is made
+    /// from it, the slot and the round's number (`casino::client_seed`), so the round can be
+    /// played again from my seed, the house's and the number alone.
+    pub fn casino_play_seeded(&self, key: &str, commit: [u8; 32], nonce: u64, slot: &str, bet: pyr_poker::casino::Bet) {
+        use pyr_poker::net::{CasinoReq, ToServer};
+        let seed = pyr_poker::casino::client_seed(&self.casino_seed(key, slot), slot, nonce);
+        self.poker_later(key, |p| p.casino.busy = true);
+        self.poker(key, ToServer::Casino { req: CasinoReq::Play { commit, seed, bet } });
+    }
+
+    /// My seed for a slot on a server: one made up at random the first time (sixteen letters
+    /// and digits), kept till I change it.
+    pub fn casino_seed(&self, key: &str, slot: &str) -> String {
+        let id = format!("{key} {slot}");
+        let mut cfg = self.shared.config.lock();
+        if let Some(s) = cfg.casino_seeds.get(&id) {
+            return s.clone();
+        }
+        let s = random_seed_text();
+        cfg.casino_seeds.insert(id, s.clone());
+        self.shared.save_config_locked(&cfg);
+        s
+    }
+
+    /// Poker: whether my hands that can't win are mucked at a showdown (kept across restarts).
+    pub fn auto_muck(&self) -> bool {
+        self.shared.config.lock().poker_auto_muck
+    }
+
+    pub fn set_auto_muck(&self, on: bool) {
+        let mut cfg = self.shared.config.lock();
+        cfg.poker_auto_muck = on;
+        self.shared.save_config_locked(&cfg);
+    }
+
+    /// Changes my seed for a slot (empty: a new one at random).
+    pub fn set_casino_seed(&self, key: &str, slot: &str, seed: &str) -> String {
+        let seed: String = seed.trim().chars().take(64).collect();
+        let seed = if seed.is_empty() { random_seed_text() } else { seed };
+        let mut cfg = self.shared.config.lock();
+        cfg.casino_seeds.insert(format!("{key} {slot}"), seed.clone());
+        self.shared.save_config_locked(&cfg);
+        seed
     }
 
     pub fn casino_blackjack(&self, key: &str, action: pyr_poker::casino::blackjack::Action) {
@@ -1077,6 +1189,18 @@ impl Engine {
         });
     }
 
+    /// My chips at a roulette table for spin `spin` (as `craps_bets`).
+    pub fn rl_bets(&self, key: &str, table: u64, spin: u64, chips: Vec<pyr_poker::casino::roulette::Chip>, ready: bool) {
+        let mut seed = [0u8; 32];
+        let _ = getrandom::getrandom(&mut seed);
+        self.table_bets(key, pyr_poker::net::ToServer::RlBets { table, spin, chips, seed, ready }, move |p| {
+            if let Some(b) = p.rl.as_mut().filter(|b| b.view.id == table) {
+                b.my_seeds.retain(|(r, _)| *r != spin);
+                b.my_seeds.push((spin, seed));
+            }
+        });
+    }
+
     /// Sends bets to a table; once they're taken, `taken` notes the seed sent with them.
     fn table_bets(&self, key: &str, msg: pyr_poker::net::ToServer, taken: impl FnOnce(&mut poker::PokerState) + Send + 'static) {
         let k = key.to_string();
@@ -1107,6 +1231,10 @@ impl Engine {
 
     pub fn bac_close(&self, key: &str) {
         self.poker_later(key, |p| p.bac = None);
+    }
+
+    pub fn rl_close(&self, key: &str) {
+        self.poker_later(key, |p| p.rl = None);
     }
 
     pub fn clear_poker_player(&self, key: &str) {
@@ -3890,4 +4018,12 @@ fn store_invites(shared: &Arc<Shared>, key: &str, r: Result<Event, String>) {
         }
     }
     (shared.repaint)();
+}
+
+/// A seed for a slot, made up at random: sixteen letters and digits.
+pub fn random_seed_text() -> String {
+    const ABC: &[u8] = b"abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let mut b = [0u8; 16];
+    let _ = getrandom::getrandom(&mut b);
+    b.iter().map(|x| ABC[*x as usize % ABC.len()] as char).collect()
 }

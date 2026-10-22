@@ -212,23 +212,32 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
 
 ![The Pyr Library: Chimbrowser, Dice, Dominó Cubano and Pyr Casino, with Dice's panel open](docs/screenshots/plugins.jpg)
 
-**Pyr Casino** (0.10; all new art in 0.12)
+**Pyr Casino** (0.10; all new art in 0.12; Stake-style slots in 0.13)
 
-- Every server has a casino for **play chips** (they can't be bought or cashed out). Under
-  **Casino**, the house's games: fourteen slot machines (**Pyr Sevens** and its Phoenix
+- Every server has a casino for **play chips** (they can't be bought or cashed out), every
+  game on one floor: fourteen slot machines (**Pyr Sevens** and its Phoenix
   Jackpot; **Ember Dragon**, hold and spin, with a dragon that grows as it's fed and four
   jackpots; and the twelve from Chimbita's Reel Row, four of them funny on purpose:
   Scoville Slots, Sugar Rush, The Daily Grind and Frostbite Fortune), **blackjack** for
   seven, **craps** and **baccarat** for five (people and bots at the same table),
-  single-zero **roulette**, **dice** and **keno**. Under **Poker**: the tables, Flash Pots,
-  Pyr Friday Night and tournaments.
+  single-zero **roulette** for five, **dice** and **keno**, and **poker**: the tables, Flash
+  Pots, Pyr Friday Night and tournaments. **Casino chat**: one room for everyone in the casino,
+  open from the floor, any game or any table.
 - Every slot pays back about 99% over a long run (the tests work it out exactly), and its
   Info panel says so, with what it pays, how everyone on the server has done at it (the last
   day, week, four weeks and all time; its biggest and luckiest wins), how you have, and its
-  challenges. Some machines' bonus is a prize wheel. **Auto** spins 10 to 1,000 times or
-  until you stop it, and a big win stops it so you can enjoy it.
+  challenges. **Auto** spins 10 to 1,000 times or until you stop it (keno too), and a big win
+  stops it so you can enjoy it.
+- **Like Stake's slots** (0.13): **Play Feature** on every slot (a Chance spin, a Wild spin,
+  the bonus bought, a Super Bonus, a Mystery Bonus, All or Nothing, each priced to pay back
+  what the game does), and **Fairness** on every slot: your own seed for it, the house's next
+  seed's fingerprint, and any round played again. Reel Row's twelve machines each have their
+  own room, cabinet and mini game, and their own reach: the Cosmic Jackpot's Supernova pays
+  500,000 times the bet, Deep Sea Treasure and Tomb of Ra 50,000, the rest 5,000 to 25,000;
+  Gold Rush and Dragon's Hoard have progressive jackpots.
 - **The Bonfire**: a giant prize pool, fed by a cut of the house's take on every bet. Every
-  round anyone plays throws embers on the fire, and once a day it's lit: fourteen embers are
+  round anyone plays throws embers on the fire, and once a day it's lit (only the Owner of the
+  Game and Game Masters can light it early): fourteen embers are
   drawn, and the Grand Ember takes half the pool. The house fixes the draw's seed before
   the first ember, and anyone's Pyr can draw it again to check.
 - **Nobody can rig it, the house included.** Before each round the server commits to a secret
@@ -244,14 +253,17 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   the week's rake (5% of a cash-table pot, 3 big blinds at most, nothing without a flop).
 - **Bots** take any seat nobody sits in, at four levels up to **Genius**, which plays the
   way good players do from what anyone at the table could see. Each one is somebody: by its
-  name it has a way of playing, a pace, and a voice at the table (reformed trolls, mostly,
-  and only ever about what everyone saw). **MMR**: one rating for everyone who plays poker on
+  name it has a way of playing, a pace, and a voice at the table (friendly trash talk, with
+  the odd painful zinger, only ever about what everyone saw). **MMR**: one rating for everyone who plays poker on
   a server, bots included, moving the way chess ratings do, with a ladder.
 - Poker extras: a hand strength meter, right-click anyone for their hands and stats, a time
-  bank with a countdown, tournaments with climbing blinds, and **Game Masters and
-  Ambassadors** who give chips (from anyone's right-click menu too), looks and prize boxes
-  (within an allowance set by the rake, logged for the owner; the owner gives without a
-  limit, and that's in the log too).
+  bank with a countdown, show or muck (with **Auto-muck**), tournaments with climbing blinds,
+  and **Game Masters and Ambassadors** who give chips (from anyone's right-click menu too),
+  looks and prize boxes (within an allowance set by the rake, logged for the Owner of the
+  Game, who gives without a limit, in the log too). From 0.13 they're the whole game's: named
+  only on Brethren of Blood, Pyr Casino's home, by the Owner of the Game, and staff on every
+  server by a certificate it signs with its server key; a server's owner, as such, names
+  nobody and gives nothing.
 - **Emotes**: eighteen big stickers at every table (poker, blackjack, craps and baccarat),
   popping up over whoever sent them.
 - **Fullscreen** (F11) and **Streamer mode**: hole cards stay face down until you hold Space,

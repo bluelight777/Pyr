@@ -6,8 +6,11 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Align2, Color32, Pos2, Rect, RichText, Sense, Shape, Stroke, StrokeKind, pos2, vec2};
 use pyr_engine::poker_sfx::Cue;
 use pyr_engine::state::ServerView;
+use pyr_poker::casino::feature::Feature;
 use pyr_poker::casino::slots::{self as sl, LINES, PAYLINES, REELS, ROWS, STRIPS};
 use pyr_poker::casino::Bet;
+
+use super::stake::{Pick, SlotKind, StakeUi};
 use pyr_poker::net::RoundView;
 
 use super::{art, col, glow_text, radial, vgrad, vgrad_round};
@@ -42,6 +45,9 @@ pub struct SlotsUi {
     /// Free spins: the banner shown since.
     banner: Option<(Instant, String)>,
     next_at: Option<Instant>,
+    /// Play Feature and Fairness (0.13.0 servers); all or nothing being revealed.
+    pub stake: StakeUi,
+    all_in: Option<(RoundView, Instant, bool)>,
 }
 
 impl Default for SlotsUi {
@@ -63,6 +69,8 @@ impl Default for SlotsUi {
             jackpot: 0.0,
             banner: None,
             next_at: None,
+            stake: StakeUi::default(),
+            all_in: None,
         }
     }
 }
@@ -70,7 +78,7 @@ impl Default for SlotsUi {
 impl SlotsUi {
     /// Spinning, landing, or still counting a round's spins.
     fn running(&self, now: Instant) -> bool {
-        if self.waiting.is_some() || self.stopped_at.is_some_and(|e| now < e) {
+        if self.waiting.is_some() || self.stopped_at.is_some_and(|e| now < e) || self.all_in.is_some() {
             return true;
         }
         match &self.showing {
@@ -111,6 +119,17 @@ impl PyrApp {
         let pyr_poker::casino::Outcome::Slots(o) = &round.outcome else { return };
         let now = Instant::now();
         let ui = &mut self.poker.casino.slots;
+        if o.feature == Feature::AllIn {
+            ui.waiting = None;
+            ui.showing = None;
+            ui.round_win = 0;
+            for r in &mut ui.reels {
+                *r = Reel::still(r.pos(now).round());
+            }
+            ui.all_in = Some((round.clone(), now, false));
+            self.poker.casino.sound_in(0.0, Cue::Fuse, 0.0, 0.7);
+            return;
+        }
         // Spin at least a moment before stopping.
         let min = if ui.turbo { 0.25 } else { 0.7 };
         let from = ui.waiting.map(|t| (t + Duration::from_secs_f32(min)).max(now)).unwrap_or(now);
@@ -197,11 +216,18 @@ impl PyrApp {
             let len = STRIPS[i].len() as i32;
             let base = pos.floor() as i32;
             let frac = pos - pos.floor();
+            // A Wild spin's middle reel: flames all the way down.
+            let wild = i == sl::WILD_REEL && showing.as_ref().is_some_and(|r| matches!(&r.outcome, pyr_poker::casino::Outcome::Slots(o) if o.spins.get(self.poker.casino.slots.spin).is_some_and(|sp| sp.wild_reel)));
+            if wild {
+                radial(&clip, rr.center(), cell * 1.6, Color32::from_rgba_unmultiplied(0xff, 0x8a, 0x2a, 90), Color32::TRANSPARENT);
+            }
             for row in -1..=3 {
                 let idx = (base + row).rem_euclid(len) as usize;
                 let y = rr.top() + (row as f32 - frac) * cell;
                 let sr = Rect::from_min_size(pos2(rr.left(), y), vec2(cell, cell)).shrink(cell * 0.08);
-                if reel.blurred(now) {
+                if wild {
+                    art::paint_symbol(&clip, sr, sl::WILD, Color32::WHITE);
+                } else if reel.blurred(now) {
                     // A blur while it spins fast.
                     art::paint_symbol(&clip, sr.translate(vec2(0.0, -cell * 0.12)), STRIPS[i][idx], Color32::from_white_alpha(70));
                     art::paint_symbol(&clip, sr, STRIPS[i][idx], Color32::from_white_alpha(170));
@@ -312,15 +338,55 @@ impl PyrApp {
                 p.rect_filled(br, theme::r(20), Color32::from_rgba_unmultiplied(0x30, 0x0a, 0x50, (225.0 * a) as u8));
                 p.rect_stroke(br, theme::r(20), Stroke::new(2.0f32, col::GOLD.gamma_multiply(a)), StrokeKind::Inside);
                 glow_text(&p, br.center() - vec2(0.0, 12.0), Align2::CENTER_CENTER, &text, theme::bold_font(40.0), col::GOLD2.gamma_multiply(a), Color32::from_rgba_unmultiplied(0xc0, 0x60, 0xff, (120.0 * a) as u8));
-                p.text(br.center() + vec2(0.0, 30.0), Align2::CENTER_CENTER, "every win in them pays triple", theme::bold_font(15.0), Color32::WHITE.gamma_multiply(a));
+                let x = showing.as_ref().and_then(|r| if let pyr_poker::casino::Outcome::Slots(o) = &r.outcome { Some(o.free_x) } else { None }).unwrap_or(sl::FREE_SPIN_MULTIPLIER);
+                let say = if x == sl::FREE_SPIN_MULTIPLIER { "every win in them pays triple".to_string() } else { format!("SUPER: every win in them pays {x}×") };
+                p.text(br.center() + vec2(0.0, 30.0), Align2::CENTER_CENTER, say, theme::bold_font(15.0), Color32::WHITE.gamma_multiply(a));
             } else {
                 self.poker.casino.slots.banner = None;
             }
         }
 
+        // All or nothing, revealed over the reels.
+        if let Some((round, since, told)) = self.poker.casino.slots.all_in.clone()
+            && let pyr_poker::casino::Outcome::Slots(o) = &round.outcome
+        {
+            let t = (now - since).as_secs_f32();
+            let landed = super::stake::all_in_dial(&p, reels.expand(14.0), col::EMBER, "bungee", o.lucky, o.paid, &format!("1 in 51 for {}", chips_text(o.line_bet * LINES as u64 * sl::ALL_IN_X)), t);
+            if landed && !told {
+                self.poker.casino.slots.all_in.as_mut().unwrap().2 = true;
+                self.poker.casino.slots.round_win = o.paid;
+                self.poker.casino.sound_in(0.0, if o.lucky { Cue::Jackpot } else { Cue::Fold }, 0.0, 0.8);
+            }
+            if landed && t > 5.4 {
+                self.poker.casino.slots.all_in = None;
+                self.poker.casino.settle_balance();
+                self.poker.casino.celebrate(o.paid, o.wagered(), false, 0.1);
+                if self.poker.casino.slots.auto.spun(o.paid > 0) {
+                    self.poker.casino.slots.next_at = Some(now + Duration::from_millis(800));
+                }
+            }
+        }
         // The controls.
         let bar = Rect::from_min_size(pos2(cab.left(), cab.bottom() + 16.0), vec2(cab.width(), controls_h - 16.0));
         self.slots_controls(ui, s, bar);
+        // Play Feature (beside the cabinet, or over the controls where there's no room) and
+        // Fairness (0.13.0 servers).
+        if s.has(pyr_proto::control::CASINO_013_FEATURE) {
+            let kind = SlotKind::Sevens;
+            let pf = if cab.left() - area.left() >= 230.0 { Rect::from_min_size(pos2(cab.left() - 218.0, cab.center().y - 26.0), vec2(204.0, 52.0)) } else { Rect::from_min_size(pos2(bar.left() + 10.0, bar.top() - 58.0), vec2(204.0, 48.0)) };
+            let busy = self.poker.casino.busy() || self.poker.casino.slots.running(now);
+            self.play_feature_button(ui, kind, pf, col::EMBER, !busy && !self.poker.casino.slots.auto.on());
+            let fr = Rect::from_min_size(pos2(pf.left(), pf.bottom() + 10.0), vec2(110.0, 30.0));
+            self.fairness_button(ui, kind, fr);
+            let lb = self.poker.casino.slots.line_bet;
+            if let Some(pick) = self.play_feature_menu(ui, kind, area, lb, lb * LINES as u64, col::EMBER, super::chips_now(s)) {
+                match pick {
+                    Pick::Arm(f) => self.poker.casino.slots.stake.armed = f,
+                    Pick::Buy(f) => self.slots_spin_with(s, f),
+                }
+            }
+            self.fairness_panel(ui.ctx(), s, kind);
+        }
         self.slots_paytable(ui.ctx());
     }
 
@@ -376,7 +442,7 @@ impl PyrApp {
         self.poker.casino.settle_balance();
         let total = o.paid;
         let jackpot = o.jackpot_won > 0;
-        self.poker.casino.celebrate(total, o.line_bet * LINES as u64, jackpot, 0.2);
+        self.poker.casino.celebrate(total, o.wagered(), jackpot, 0.2);
         if total > 0 {
             let lines = o.spins.iter().map(|s| s.wins.len()).sum::<usize>();
             self.poker.casino.announce(format!("WIN {}", chips_text(total)), if lines > 1 { format!("{lines} winning lines") } else { String::new() }, col::GOLD2, (0.5, 0.16), 0.15);
@@ -390,10 +456,19 @@ impl PyrApp {
     }
 
     fn slots_spin(&mut self, s: &ServerView) {
+        let f = self.poker.casino.slots.stake.armed.unwrap_or(Feature::Spin);
+        self.slots_spin_with(s, f);
+    }
+
+    /// A round: a spin (with Play Feature's choice, on a 0.13.0 server), from my seed for the
+    /// slot there.
+    fn slots_spin_with(&mut self, s: &ServerView, feature: Feature) {
         let c = &s.poker.casino;
         let Some(commit) = c.commit else { return };
+        let v13 = s.has(pyr_proto::control::CASINO_013_FEATURE);
+        let feature = if v13 { feature } else { Feature::Spin };
         let ui = &self.poker.casino.slots;
-        let total = ui.line_bet * LINES as u64;
+        let total = pyr_poker::casino::feature::cost(ui.line_bet * LINES as u64, sl::price(feature));
         if total > super::chips_now(s) {
             self.poker.casino.slots.auto.stop();
             return;
@@ -403,7 +478,10 @@ impl PyrApp {
         }
         let now = Instant::now();
         let ui = &mut self.poker.casino.slots;
-        ui.start_spinning(now);
+        if feature.spins() {
+            ui.start_spinning(now);
+        }
+        ui.all_in = None;
         ui.waiting = Some(now);
         ui.showing = None;
         ui.spin = 0;
@@ -415,7 +493,13 @@ impl PyrApp {
         self.poker.casino.celebration = None;
         self.poker.casino.pending = Some(now);
         self.poker.casino.sound_in(0.0, Cue::ReelSpin, 0.0, 0.6);
-        self.engine.casino_play(&s.key, commit, Bet::Slots { line_bet: self.poker.casino.slots.line_bet });
+        let line_bet = self.poker.casino.slots.line_bet;
+        if v13 {
+            let bet = if feature == Feature::Spin { Bet::Slots { line_bet } } else { Bet::SlotsPlus { line_bet, feature } };
+            self.play_seeded(s, SlotKind::Sevens, bet);
+        } else {
+            self.engine.casino_play(&s.key, commit, Bet::Slots { line_bet });
+        }
     }
 
     fn slots_controls(&mut self, ui: &mut egui::Ui, s: &ServerView, bar: Rect) {
@@ -455,7 +539,11 @@ impl PyrApp {
         if auto.on() {
             p.text(spin_c + vec2(0.0, 16.0), Align2::CENTER_CENTER, format!("auto {}", auto.left_text()), theme::bold_font(11.0), Color32::from_rgb(0x3a, 0x10, 0x04));
         }
-        let space = ui.ctx().input(|i| i.key_pressed(egui::Key::Space)) && !ui.ctx().wants_keyboard_input() && self.poker.casino.info.is_none();
+        if let Some(f) = self.poker.casino.slots.stake.armed {
+            let cost = pyr_poker::casino::feature::cost(lb * LINES as u64, sl::price(f));
+            p.text(spin_c + vec2(0.0, 56.0), Align2::CENTER_CENTER, format!("{} · {}", SlotKind::Sevens.describe(f).0, chips_text(cost)), theme::bold_font(11.0), col::GOLD2);
+        }
+        let space = ui.ctx().input(|i| i.key_pressed(egui::Key::Space)) && !ui.ctx().wants_keyboard_input() && self.poker.casino.info.is_none() && !self.poker.casino.slots.stake.menu;
         if resp.on_hover_text("Spin (Space)").clicked() || space {
             if auto.on() {
                 self.poker.casino.slots.auto.stop();

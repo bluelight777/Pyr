@@ -280,7 +280,7 @@ pub async fn connect_and_login(
             invite: invite.map(|s| s.to_string()),
             client: format!("{} {}", pyr_proto::APP_NAME, env!("CARGO_PKG_VERSION")),
             // (This app knows group conversations, and adjusts its shares to its viewers.)
-            caps: vec![pyr_proto::control::GROUPS_CAP.to_string(), pyr_proto::control::VIDEO_FEEDBACK_CAP.to_string(), pyr_proto::control::MOVE_CAP.to_string(), pyr_proto::control::CASINO_012_CAP.to_string()],
+            caps: vec![pyr_proto::control::GROUPS_CAP.to_string(), pyr_proto::control::VIDEO_FEEDBACK_CAP.to_string(), pyr_proto::control::MOVE_CAP.to_string(), pyr_proto::control::CASINO_012_CAP.to_string(), pyr_proto::control::CASINO_013_CAP.to_string()],
         },
     };
     send.write_all(&framing::encode(&login)).await?;

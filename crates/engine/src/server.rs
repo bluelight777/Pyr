@@ -16,6 +16,9 @@ use crate::config::ServerEntry;
 use crate::net::{self, Fatal};
 use crate::state::{AppState, ConnStatus, IncomingCall, RingState, ServerView};
 
+/// How long a request asked while reconnecting waits for the connection to come back.
+const HOLD: Duration = Duration::from_secs(8);
+
 enum Outgoing {
     Req { req: Request, reply: Option<oneshot::Sender<Event>> },
     Close,
@@ -57,6 +60,7 @@ impl ServerHandle {
 /// Connects to a server (and keeps connecting), its handle in `shared.servers`.
 pub fn spawn(shared: Arc<Shared>, entry: ServerEntry) {
     let (tx, rx) = mpsc::unbounded_channel();
+    let again = tx.downgrade();
     let conn = Arc::new(Mutex::new(None));
     let handle = ServerHandle { key: entry.key.clone(), out: tx, conn: conn.clone() };
     // In place before the connection starts: what runs as it logs in (this Pyr's message key
@@ -64,7 +68,7 @@ pub fn spawn(shared: Arc<Shared>, entry: ServerEntry) {
     // and the key went unpublished until the next connection (so messages couldn't be sent,
     // "publish your message key first", or opened).
     shared.servers.lock().insert(entry.key.clone(), handle);
-    shared.rt.spawn(run(shared.clone(), entry, rx, conn));
+    shared.rt.spawn(run(shared.clone(), entry, rx, conn, again));
 }
 
 fn set_status(shared: &Shared, key: &str, status: ConnStatus) {
@@ -79,8 +83,13 @@ async fn run(
     entry: ServerEntry,
     mut out_rx: mpsc::UnboundedReceiver<Outgoing>,
     conn_slot: Arc<Mutex<Option<quinn::Connection>>>,
+    again: mpsc::WeakUnboundedSender<Outgoing>,
 ) {
     let key = entry.key.clone();
+    // Requests asked while reconnecting, kept for the next connection (a server restarting for
+    // an update is back within a second or two: bug report 138, "not connected right now" for
+    // something sent just then). Those that wait longer than `HOLD` get that answer after all.
+    let mut held: Vec<(tokio::time::Instant, Outgoing)> = Vec::new();
     let Some(fp) = pyr_proto::b64::decode_array::<32>(&key) else {
         set_status(&shared, &key, ConnStatus::Failed("invalid server fingerprint".into()));
         return;
@@ -104,6 +113,11 @@ async fn run(
                 attempt = 0;
                 info!(server = %entry.host, "connected");
                 *conn_slot.lock() = Some(li.conn.clone());
+                if let Some(tx) = again.upgrade() {
+                    for (_, o) in held.drain(..) {
+                        let _ = tx.send(o);
+                    }
+                }
                 let end = session(&shared, &key, li, &mut out_rx).await;
                 *conn_slot.lock() = None;
                 shared.server_disconnected(&key);
@@ -122,6 +136,11 @@ async fn run(
             Err(e) => {
                 if let Some(f) = e.downcast_ref::<Fatal>() {
                     set_status(&shared, &key, ConnStatus::Failed(f.0.clone()));
+                    for (_, o) in held.drain(..) {
+                        if let Outgoing::Req { reply: Some(r), .. } = o {
+                            let _ = r.send(Event::error(ErrorCode::Internal, f.0.clone()));
+                        }
+                    }
                     // Wait for a retry/close request, failing anything sent meanwhile.
                     while let Some(o) = out_rx.recv().await {
                         match o {
@@ -149,15 +168,20 @@ async fn run(
         };
         let wake = tokio::time::Instant::now() + delay;
         loop {
+            let now = tokio::time::Instant::now();
+            for (_, o) in held.extract_if(.., |(at, _)| now.duration_since(*at) >= HOLD) {
+                if let Outgoing::Req { reply: Some(r), .. } = o {
+                    let _ = r.send(Event::error(ErrorCode::Internal, "not connected right now"));
+                }
+            }
+            let next = held.first().map(|(at, _)| *at + HOLD).unwrap_or(wake).min(wake);
             tokio::select! {
-                _ = tokio::time::sleep_until(wake) => break,
+                _ = tokio::time::sleep_until(next) => if next >= wake { break },
                 o = out_rx.recv() => match o {
                     None | Some(Outgoing::Close) => return,
-                    Some(Outgoing::Req { reply, .. }) => {
-                        if let Some(r) = reply {
-                            let _ = r.send(Event::error(ErrorCode::Internal, "not connected right now"));
-                        }
-                    }
+                    // (Waiting for an answer: kept. Sent and forgotten: as before, let go.)
+                    Some(o @ Outgoing::Req { reply: Some(_), .. }) => held.push((tokio::time::Instant::now(), o)),
+                    Some(Outgoing::Req { reply: None, .. }) => {}
                 },
             }
         }

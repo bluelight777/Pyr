@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use pyr_poker::casino::{self, Bet, Game, Outcome, blackjack, craps, dragon, slots};
+use pyr_poker::casino::{self, Bet, Game, Outcome, blackjack, craps, dragon, reelrow, slots};
 use pyr_poker::net::{BigWin, CasinoReq, CasinoRes, CasinoView, DragonView, GameStats, PeriodStats, RoundView, ToApp};
 use pyr_poker::progress::{self, Record};
 use pyr_poker::room::Random;
@@ -89,6 +89,19 @@ impl Poker {
 
     fn set_jackpot(hub: &Hub, pool: u64) {
         let _ = hub.db.set_meta(JACKPOT, &pool.to_string());
+    }
+
+    /// A progressive Reel Row machine's jackpot pool (its seed until it's grown).
+    fn row_pool(hub: &Hub, machine: u8) -> u64 {
+        hub.db.get_meta(&format!("row_pool:{machine}")).and_then(|v| v.parse().ok()).unwrap_or(reelrow::POOL_SEED)
+    }
+
+    fn set_row_pool(hub: &Hub, machine: u8, pool: u64) {
+        let _ = hub.db.set_meta(&format!("row_pool:{machine}"), &pool.to_string());
+    }
+
+    fn row_pools(hub: &Hub) -> Vec<(u8, u64)> {
+        (0..reelrow::TOPS.len() as u8).filter(|m| reelrow::progressive(*m)).map(|m| (m, Self::row_pool(hub, m))).collect()
     }
 
     fn big_wins(hub: &Hub) -> Vec<BigWin> {
@@ -244,6 +257,7 @@ impl Poker {
             craps: craps_table,
             stats: rec.casino.clone(),
             dragon: next.then(|| DragonView { growth: Self::dragon_growth(hub, uid), pools: Self::dragon_pools(hub) }),
+            row_pools: Self::row_pools(hub),
         }
     }
 
@@ -259,8 +273,9 @@ impl Poker {
     /// the jackpots' pools with this spin's shares in; then the dragon's new growth kept, and a
     /// pool won started again from its seed (the house puts that in).
     #[allow(clippy::too_many_arguments)]
-    fn casino_dragon(&self, hub: &Hub, st: &mut State, uid: &str, commit: [u8; 32], seed: [u8; 32], bet: u64, growth: u32) -> Result<CasinoRes, String> {
+    fn casino_dragon(&self, hub: &Hub, st: &mut State, uid: &str, commit: [u8; 32], seed: [u8; 32], bet: u64, growth: u32, feature: pyr_poker::casino::feature::Feature) -> Result<CasinoRes, String> {
         dragon::check(bet, growth)?;
+        let cost = Bet::DragonPlus { bet, growth, feature }.total();
         let (mut rec, _) = hub.db.poker_record(uid);
         let mut grown = Self::dragon_growth(hub, uid);
         if grown.get(&bet).copied().unwrap_or(0) != growth {
@@ -270,20 +285,20 @@ impl Poker {
         if casino::commit(&p.seed) != commit {
             return Err("out of step with the house: the casino is catching up, try again".into());
         }
-        if bet > rec.chips {
-            return Err(format!("that's {} chips, and you have {}", super::progress_chips(bet), super::progress_chips(rec.chips)));
+        if cost > rec.chips {
+            return Err(format!("that's {} chips, and you have {}", super::progress_chips(cost), super::progress_chips(rec.chips)));
         }
-        rec.chips -= bet;
+        rec.chips -= cost;
         let (server, nonce) = (p.seed, p.nonce);
         p.seed = SysRandom.seed();
         p.nonce += 1;
         let mut s = casino::stream(&server, &seed, Game::Dragon, nonce);
-        Self::add_rake(hub, friday_share(Game::Dragon, bet));
+        Self::add_rake(hub, friday_share(Game::Dragon, cost));
         let mut pools = Self::dragon_pools(hub);
-        for (pool, add) in pools.iter_mut().zip(dragon::pool_shares(bet)) {
+        for (pool, add) in pools.iter_mut().zip(dragon::pool_shares(cost)) {
             *pool += add;
         }
-        let o = dragon::play(bet, growth, pools, &mut s);
+        let o = dragon::play_feature(bet, growth, pools, feature, &mut s);
         if let Some(r) = &o.respins {
             for j in dragon::Jackpot::ALL {
                 let won = r.pooled[j.index()];
@@ -302,7 +317,8 @@ impl Poker {
         Ok(CasinoRes::Round { round: Box::new(r) })
     }
 
-    pub(super) fn casino(&self, hub: &Hub, st: &mut State, uid: &str, req: CasinoReq, next: bool) -> Result<Option<ToApp>, String> {
+    pub(super) fn casino(&self, hub: &Hub, st: &mut State, uid: &str, req: CasinoReq, casino: u8) -> Result<Option<ToApp>, String> {
+        let next = casino >= pyr_poker::net::CASINO_012;
         let res = match req {
             CasinoReq::Open => {
                 st.casino.watchers.insert(uid.to_string());
@@ -320,11 +336,15 @@ impl Poker {
                 CasinoRes::Stats { view: Self::game_stats(hub, st, &key, wall()) }
             }
             CasinoReq::Play { commit, seed, bet } => {
-                if bet.game().is_new() && !next {
+                if (bet.game().is_new() && !next) || (bet.is_013() && casino < pyr_poker::net::CASINO_013) {
                     return Err("this game needs a newer Pyr".into());
                 }
                 match bet {
-                    Bet::Dragon { bet, growth } => self.casino_dragon(hub, st, uid, commit, seed, bet, growth)?,
+                    Bet::Dragon { bet, growth } => self.casino_dragon(hub, st, uid, commit, seed, bet, growth, pyr_poker::casino::feature::Feature::Spin)?,
+                    Bet::DragonPlus { bet, growth, feature } => {
+                        Bet::DragonPlus { bet, growth, feature }.check()?;
+                        self.casino_dragon(hub, st, uid, commit, seed, bet, growth, feature)?
+                    }
                     bet => self.casino_play(hub, st, uid, commit, seed, bet)?,
                 }
             }
@@ -415,10 +435,27 @@ impl Poker {
         }
         // The jackpot grows by its share of every spin (before the spin, so it's in this one).
         let mut pool = Self::jackpot(hub);
-        if let Bet::Slots { line_bet } = bet {
-            pool += slots::jackpot_share(line_bet);
+        // (A feature that spins the reels feeds it as a spin does; a bought bonus doesn't.)
+        match bet {
+            Bet::Slots { line_bet } => pool += slots::jackpot_share(line_bet),
+            Bet::SlotsPlus { line_bet, feature } if feature.spins() => pool += slots::jackpot_share(line_bet),
+            _ => {}
         }
-        let o = casino::play(&bet, &mut s, pool)?;
+        // A progressive Reel Row machine's pool grows by its share of every round there (in
+        // this one already), and is what the round plays with.
+        let row = match &bet {
+            Bet::Row { machine, .. } if reelrow::progressive(*machine) => Some((*machine, Self::row_pool(hub, *machine) + reelrow::pool_share(*machine, bet.total()))),
+            _ => None,
+        };
+        let o = casino::play(&bet, &mut s, row.map(|r| r.1).unwrap_or(pool))?;
+        if let (Some((machine, mut rp)), Outcome::Row(ro)) = (row, &o) {
+            let won = ro.bonus.as_ref().map(|b| b.top).unwrap_or(0);
+            rp = rp.saturating_sub(won).max(reelrow::POOL_SEED);
+            Self::set_row_pool(hub, machine, rp);
+            if won > 0 {
+                info!(chips = won, machine, "casino: a Reel Row progressive jackpot was won");
+            }
+        }
         if let Outcome::Slots(so) = &o {
             pool = pool.saturating_sub(so.jackpot_won);
             if pool < slots::JACKPOT_SEED {
