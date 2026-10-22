@@ -218,6 +218,8 @@ impl PyrApp {
 
     pub fn dialogs(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
         self.bug_outcomes(st, acts);
+        // A Game Master's "Give chips…" from someone's name.
+        self.gift_box(ctx, st, acts);
         self.dialog_ui(ctx, st, acts);
         // One dialog opening another (Server Settings' "Add a sound", say, and back).
         if let Some(d) = self.ui.next_dialog.take() {

@@ -183,16 +183,16 @@ pub fn list() -> Value {
         {
             "name": "check_plugin",
             "title": "Check a plugin",
-            "description": "Checks a plugin's folder the way the Pyr Library will before it's sent: Rust only (a Cargo.toml and .rs files; no built files, C code or scripts), 600 KB at most. Says what would be sent and what to fix.",
-            "inputSchema": { "type": "object", "properties": { "folder": folder("The whole path of the plugin's folder (the one with Cargo.toml).") }, "required": ["folder"] },
+            "description": "Checks a plugin the way the Pyr Library will before it's sent, from its folder or a .zip of it (its Cargo.toml at the top, or in the one folder inside that has it): Rust only (a Cargo.toml and .rs files; no built files, C code or scripts), 600 KB at most. Says what would be sent and what to fix.",
+            "inputSchema": { "type": "object", "properties": { "folder": folder("The whole path of the plugin's folder (the one with Cargo.toml, or the folder it's in), or of a .zip of it.") }, "required": ["folder"] },
             "annotations": read_only,
         },
         {
             "name": "send_plugin",
             "title": "Send a plugin to the Pyr Library",
-            "description": "Sends the plugin in a folder (its Rust source, never a built file) to the Pyr Library for review, signed with the person's Pyr identity: Firelit Games reads and builds a first version before anyone can install it. A new version of one that's listed (update_of: its number, from my_submissions; only this Pyr can send one) is checked, built in a sandbox and reviewed by the Pyr Library Keeper, and listed within minutes when it passes (an add-on that asks for new permissions, or uses crates beyond the plugin kit, serde and serde_json, waits for a person). Only when the person asks you to send it. Returns its number.",
+            "description": "Sends the plugin in a folder or a .zip (its Rust source, never a built file) to the Pyr Library for review, signed with the person's Pyr identity: Firelit Games reads and builds a first version before anyone can install it. A new version of one that's listed (update_of: its number, from my_submissions; only this Pyr can send one) is checked, built in a sandbox and reviewed by the Pyr Library Keeper, and listed within minutes when it passes (an add-on that asks for new permissions, or uses crates beyond the plugin kit, serde and serde_json, waits for a person). Only when the person asks you to send it. Returns its number.",
             "inputSchema": { "type": "object", "properties": {
-                "folder": folder("The whole path of the plugin's folder (the one with Cargo.toml)."),
+                "folder": folder("The whole path of the plugin's folder (the one with Cargo.toml, or the folder it's in), or of a .zip of it."),
                 "author": { "type": "string", "description": "Who made it, shown under it in the Library. The person's Pyr name if left out." },
                 "contact": { "type": "string", "description": "How the reviewer can reach them with questions (optional)." },
                 "kind": { "type": "string", "enum": ["addon", "program"], "description": "What it is, if its Cargo.toml doesn't say." },

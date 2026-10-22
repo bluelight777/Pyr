@@ -187,16 +187,29 @@ pub mod perm {
     /// Server deafen people in voice (`ServerDeafen`): they hear nobody until someone who can
     /// do this undeafens them (they can still talk: that's `MUTE_MEMBERS`).
     pub const DEAFEN_MEMBERS: u64 = 1 << 9;
-    pub const ALL: u64 =
-        MANAGE_CHANNELS | KICK | BAN | MANAGE_MESSAGES | MANAGE_ROLES | MANAGE_SERVER | MENTION_EVERYONE | MANAGE_EMOJI | MUTE_MEMBERS | DEAFEN_MEMBERS;
+    /// Move people in voice from one voice channel to another (`MoveMember`, dragging them,
+    /// like Discord's; servers since 0.12.0, [`super::MOVE_FEATURE`]).
+    pub const MOVE_MEMBERS: u64 = 1 << 10;
+    pub const ALL: u64 = MANAGE_CHANNELS
+        | KICK
+        | BAN
+        | MANAGE_MESSAGES
+        | MANAGE_ROLES
+        | MANAGE_SERVER
+        | MENTION_EVERYONE
+        | MANAGE_EMOJI
+        | MUTE_MEMBERS
+        | DEAFEN_MEMBERS
+        | MOVE_MEMBERS;
     /// (bit, short name, what it means) for settings screens.
-    pub const LIST: [(u64, &str, &str); 10] = [
+    pub const LIST: [(u64, &str, &str); 11] = [
         (MANAGE_CHANNELS, "Manage channels", "Create, rename and delete channels."),
         (MANAGE_MESSAGES, "Manage messages", "Delete other people's messages."),
         (KICK, "Kick members", "Remove people (they can come back with an invite)."),
         (BAN, "Ban members", "Remove people for good."),
         (MUTE_MEMBERS, "Mute members", "Server mute people in voice: nobody hears them until someone who can do this unmutes them."),
         (DEAFEN_MEMBERS, "Deafen members", "Server deafen people in voice: they can't hear anyone until someone who can do this undeafens them (they can still talk)."),
+        (MOVE_MEMBERS, "Move members", "Drag people in voice from one voice channel to another."),
         (MANAGE_ROLES, "Manage roles", "Create and edit roles, and give people roles below their own highest role."),
         (MANAGE_SERVER, "Manage server", "Rename the server and change its description."),
         (MENTION_EVERYONE, "Mention @everyone", "Ping the whole server with @everyone or @here."),
@@ -343,6 +356,19 @@ pub const CHANNEL_ORDER_FEATURE: &str = "channel_order";
 /// (`ChannelReaders`), and keeps and passes on the conversation keys people give each other
 /// (`ShareKeys`, `GetKeys`, `KeyShares`, `KeysWanted`). It takes no unencrypted messages.
 pub const SEALED_FEATURE: &str = "sealed_messages";
+/// People in the server's voice channels can be moved to another voice channel by anyone with
+/// Move members ([`perm::MOVE_MEMBERS`], [`Request::MoveMember`]): the server tells their Pyr
+/// to join it ([`Event::MoveTo`]), if it says it can ([`MOVE_CAP`]). Servers since 0.12.0.
+pub const MOVE_FEATURE: &str = "move_members";
+/// In `Login::caps`: this app joins the voice channel it's moved to ([`Event::MoveTo`], 0.12.0).
+pub const MOVE_CAP: &str = "move";
+/// Pyr Casino from 0.12.0 on: Reel Row's machines, every game's statistics (`CasinoReq::Stats`)
+/// and the slots' new math. An app asks a server for none of it without this.
+pub const CASINO_012_FEATURE: &str = "casino_0_12";
+/// In `Login::caps`: this app knows Pyr Casino's games and messages from 0.12.0 (Reel Row's
+/// machines among them). Apps without it are never sent them: one they can't read would end
+/// their connection.
+pub const CASINO_012_CAP: &str = "casino_0_12";
 /// In `Login::caps`: this app knows group conversations ([`GROUPS_FEATURE`]).
 pub const GROUPS_CAP: &str = "groups";
 /// In `Login::caps`: this app adjusts its camera and screen share to its viewers'
@@ -1682,6 +1708,12 @@ pub enum Request {
         user_id: UserId,
         deafened: bool,
     },
+    /// Move someone in one of the server's voice channels to another ([`MOVE_FEATURE`], with
+    /// [`perm::MOVE_MEMBERS`]): their Pyr is told to join it ([`Event::MoveTo`]).
+    MoveMember {
+        user_id: UserId,
+        channel_id: ChannelId,
+    },
     /// Ring the other person in a direct message whose call you're in ([`DM_CALLS_FEATURE`]),
     /// or everyone else in a group's: they get `Ringing`, on every device they're on.
     Ring {
@@ -2012,6 +2044,12 @@ pub enum Event {
     },
     /// `by` declined the call in a direct message or group (sent to everyone in it).
     CallDeclined {
+        channel_id: ChannelId,
+        by: UserId,
+    },
+    /// `by` moved me to another voice channel ([`MOVE_FEATURE`]): join it (sent only to the
+    /// connection in voice, and only to apps with [`MOVE_CAP`]).
+    MoveTo {
         channel_id: ChannelId,
         by: UserId,
     },

@@ -150,8 +150,19 @@ impl<'a> Keeper<'a> {
         }
     }
 
+    /// What's been done from outside since (something taken off the list, a list taken in, a
+    /// held one released: the commands do it while the Keeper runs).
+    fn reload(&mut self) {
+        if let Ok(text) = std::fs::read_to_string(self.cfg.state_dir.join("state.json"))
+            && let Ok(st) = serde_json::from_str(&text)
+        {
+            self.state = st;
+        }
+    }
+
     /// One pass: everything waiting. How many it decided.
     pub fn pass(&mut self) -> Result<usize> {
+        self.reload();
         let mut done = 0;
         for id in self.store.pending()? {
             if self.state.held.contains_key(&id) {
@@ -420,6 +431,41 @@ impl<'a> Keeper<'a> {
         // tool's `endorse` re-signs the live list, and `sign --base` adds to it.)
         self.state.library = lib;
         self.publish()
+    }
+
+    /// Takes a plugin or a skin off the list (by its id, or by its name when only one has it),
+    /// and puts the list up again; returns its name. A new version sent in for it after is left
+    /// for a person (its listing's gone).
+    pub fn unlist(&mut self, which: &str) -> Result<String> {
+        self.reload();
+        let which = which.trim();
+        let name = which.to_lowercase();
+        let skin_id = which.strip_prefix("skin:").unwrap_or(which);
+        let lib = &self.state.library;
+        let by_id: Vec<String> = lib.plugins.iter().filter(|p| p.id == which).map(|p| p.id.clone()).chain(lib.skins.iter().filter(|s| s.id == skin_id).map(|s| format!("skin:{}", s.id))).collect();
+        let found = if by_id.is_empty() {
+            lib.plugins.iter().filter(|p| p.name.trim().to_lowercase() == name).map(|p| p.id.clone()).chain(lib.skins.iter().filter(|s| s.name.trim().to_lowercase() == name).map(|s| format!("skin:{}", s.id))).collect()
+        } else {
+            by_id
+        };
+        anyhow::ensure!(!found.is_empty(), "nothing in the list is called {which}");
+        anyhow::ensure!(found.len() == 1, "more than one is called {which}: say which by its id ({})", found.join(", "));
+        let link = found[0].clone();
+        let lib = &mut self.state.library;
+        let gone = match link.strip_prefix("skin:") {
+            Some(id) => {
+                let i = lib.skins.iter().position(|s| s.id == id).context("the skin")?;
+                lib.skins.remove(i).name
+            }
+            None => {
+                let i = lib.plugins.iter().position(|p| p.id == link).context("the plugin")?;
+                lib.plugins.remove(i).name
+            }
+        };
+        self.state.links.retain(|_, l| *l != link);
+        self.publish()?;
+        info!(id = %link, "taken off the list: {gone}");
+        Ok(gone)
     }
 
     /// Signs the list and puts it up (`index3.json`, replaced in one step).

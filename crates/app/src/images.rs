@@ -949,7 +949,10 @@ pub fn pick_async(what: PickFor, multiple: bool, ctx: &egui::Context) {
 /// Opens a chooser asked for with `pick_async` or `pick_folder_async`. Call between frames only.
 pub fn run_wanted_dialog() {
     if let Some((what, title)) = wanted_folder().lock().unwrap().take() {
-        let dir = rfd::FileDialog::new().set_title(title).pick_folder();
+        let dir = match what {
+            FolderFor::PluginZip => rfd::FileDialog::new().set_title(title).add_filter("Zip files", &["zip"]).pick_file(),
+            _ => rfd::FileDialog::new().set_title(title).pick_folder(),
+        };
         DIALOG_CLOSED.store(true, std::sync::atomic::Ordering::SeqCst);
         if let Some(d) = dir {
             folders().lock().unwrap().push((what, d));
@@ -1010,6 +1013,8 @@ pub enum FolderFor {
     NewAddon,
     /// A plugin's folder, to send in for the Pyr Library.
     PluginSource,
+    /// A .zip of a plugin's folder, to send in (a file, not a folder: chosen as one).
+    PluginZip,
     /// A skin's folder, to try on (Settings → Appearance).
     TrySkin,
 }

@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use pyr_poker::casino::{self, blackjack, craps};
-use pyr_poker::net::{BigWin, CasinoRes, RoundView};
+use pyr_poker::net::{BigWin, CasinoRes, GameStats, RoundView};
 use pyr_poker::progress::CasinoStats;
 
 /// Rounds kept for the history panes.
@@ -42,6 +42,10 @@ pub struct CasinoLive {
     pub busy: bool,
     /// Answers to my requests (or refusals) so far: the app's wait is over when it changes.
     pub answers: u64,
+    /// Games' statistics, as last asked for (by statistics key).
+    pub game_stats: BTreeMap<String, GameStats>,
+    /// Ember Dragon: my dragon's growth at each bet, and the jackpots' pools (0.12.0 servers).
+    pub dragon: Option<pyr_poker::net::DragonView>,
 }
 
 impl CasinoLive {
@@ -56,7 +60,7 @@ impl CasinoLive {
     }
 
     pub fn apply(&mut self, res: CasinoRes) {
-        if !matches!(res, CasinoRes::BigWin { .. } | CasinoRes::Jackpot { .. }) {
+        if !matches!(res, CasinoRes::BigWin { .. } | CasinoRes::Jackpot { .. } | CasinoRes::Stats { .. }) {
             self.answers += 1;
         }
         match res {
@@ -71,6 +75,9 @@ impl CasinoLive {
                 self.blackjack = view.blackjack;
                 self.craps = view.craps;
                 self.stats = view.stats;
+                if view.dragon.is_some() {
+                    self.dragon = view.dragon;
+                }
                 self.busy = false;
             }
             CasinoRes::Round { round } => {
@@ -86,6 +93,19 @@ impl CasinoLive {
                 self.chips = round.chips;
                 self.jackpot = round.jackpot;
                 self.remember(round.next_nonce, round.next_commit);
+                // Ember Dragon: the dragon's new growth, and the pools as the spin left them.
+                if let casino::Outcome::Dragon(o) = &round.outcome {
+                    let d = self.dragon.get_or_insert_with(|| pyr_poker::net::DragonView { growth: Default::default(), pools: casino::dragon::seed_pools() });
+                    d.growth.insert(o.bet, o.growth_after);
+                    d.pools = o.pools;
+                    if let Some(r) = &o.respins {
+                        for j in casino::dragon::Jackpot::ALL {
+                            if r.pooled[j.index()] > 0 {
+                                d.pools[j.index()] = d.pools[j.index()].saturating_sub(r.pooled[j.index()]).max(j.seed());
+                            }
+                        }
+                    }
+                }
                 match round.outcome.game() {
                     casino::Game::Blackjack => self.blackjack = None,
                     casino::Game::Craps => {
@@ -95,10 +115,7 @@ impl CasinoLive {
                     }
                     _ => {}
                 }
-                let st = self.stats.entry(round.outcome.game().id().to_string()).or_default();
-                st.rounds += 1;
-                st.wagered += round.outcome.wagered();
-                st.paid += round.outcome.paid();
+                pyr_poker::progress::count_casino(self.stats.entry(round.outcome.stats_key()).or_default(), &round.outcome);
                 self.rounds.push_back(round);
                 while self.rounds.len() > ROUNDS_KEPT {
                     self.rounds.pop_front();
@@ -123,6 +140,9 @@ impl CasinoLive {
                 self.big_win_seq += 1;
             }
             CasinoRes::Jackpot { pool } => self.jackpot = pool,
+            CasinoRes::Stats { view } => {
+                self.game_stats.insert(view.key.clone(), view);
+            }
         }
     }
 

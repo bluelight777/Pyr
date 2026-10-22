@@ -103,9 +103,6 @@ fn state_line(t: &TourneySummary) -> (String, Color32) {
 
 impl PyrApp {
     pub fn tourneys_list(&mut self, ui: &mut egui::Ui, s: &ServerView) {
-        // Time Bombs first (they're a sit-and-go each: the card finds you a seat).
-        self.time_bomb_card(ui, s);
-        ui.add_space(16.0);
         let Some(list) = s.poker.tourneys.clone().map(|l| l.into_iter().filter(|t| t.rules.bomb.is_none()).collect::<Vec<_>>()) else {
             ui.horizontal(|ui| {
                 ui.add_space(28.0);
@@ -201,17 +198,17 @@ impl PyrApp {
                     ui.label(RichText::new(format!("{} · {} · starting stack {} · set up by {}", game_name(&v.rules), fee, chips_text(v.rules.stack), v.host)).color(theme::MUTED()));
                 });
             });
-            // A Time Bomb that's over: another, at the same buy-in.
+            // A Flash Pot that's over: another, at the same buy-in.
             if v.bomb.is_some() && matches!(v.phase, TourneyPhase::Finished | TourneyPhase::Cancelled) {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.add_space(28.0);
-                    let label = format!("Play another Time Bomb · {}", chips_text(v.rules.buy_in));
+                    let label = format!("Play another Flash Pot · {}", chips_text(v.rules.buy_in));
                     if ui.add(theme::primary_button(&label)).clicked() {
                         self.engine.poker(&s.key, ToServer::TimeBomb { buy_in: v.rules.buy_in });
                         self.engine.poker(&s.key, ToServer::TourneyUnwatch { id });
                         self.poker.tourney = None;
-                        self.poker.tab = super::Tab::Tourneys;
+                        self.poker.tab = super::Tab::Tables;
                     }
                 });
             }
@@ -341,8 +338,8 @@ impl PyrApp {
         }
         let note = match v.bomb {
             Some(b) => match b.multiplier {
-                Some(m) => format!("A Time Bomb: the wheel picked {m}× the buy-in, and the winner takes it all."),
-                None => "A Time Bomb: the wheel picks the prize (2 to 1,000 times the buy-in) when the table's full, and the winner takes it all.".to_string(),
+                Some(m) => format!("A Flash Pot: the wheel picked {m}× the buy-in, and the winner takes it all."),
+                None => "A Flash Pot: the wheel picks the prize (2 to 1,000 times the buy-in) when the table's full, and the winner takes it all.".to_string(),
             },
             None => "The prize pool is the buy-ins; it grows as people register.".to_string(),
         };
@@ -471,6 +468,9 @@ impl PyrApp {
                     ui.selectable_value(&mut n.bot_level, Level::Rookie, "Rookie");
                     ui.selectable_value(&mut n.bot_level, Level::Regular, "Regular");
                     ui.selectable_value(&mut n.bot_level, Level::Shark, "Shark");
+                    if s.has(pyr_proto::control::CASINO_012_FEATURE) {
+                        ui.selectable_value(&mut n.bot_level, Level::Genius, "Genius");
+                    }
                 });
                 ui.end_row();
             });

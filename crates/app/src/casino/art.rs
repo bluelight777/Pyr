@@ -288,8 +288,30 @@ pub fn symbol(ctx: &egui::Context, sym: u8) -> Option<TextureHandle> {
     Some(t)
 }
 
-/// A symbol in `r`, with the words the picture doesn't carry (BAR, WILD).
+/// A symbol in `r`, with the words the picture doesn't carry (BAR, WILD). Meshy's pictures
+/// (`casino::pics`) for all but the BAR; drawn ones while they're read, and for the BAR.
 pub fn paint_symbol(p: &egui::Painter, r: Rect, sym: u8, tint: Color32) {
+    // (The sheet: cherry, lemon, plum, grapes, bell, diamond, seven, flame, star.)
+    let cell = match sym {
+        slots::CHERRY | slots::LEMON | slots::PLUM | slots::GRAPES | slots::BELL => Some(sym as usize),
+        slots::DIAMOND => Some(5),
+        slots::SEVEN => Some(6),
+        slots::WILD => Some(7),
+        slots::STAR => Some(8),
+        _ => None,
+    };
+    if let Some(c) = cell
+        && super::pics::cell(p, p.ctx(), "sevens-symbols", c, r.expand(r.width() * 0.06), (r.width() * 3.3) as u32, tint)
+    {
+        if sym == slots::WILD {
+            let s = r.width();
+            let band = Rect::from_center_size(r.center() + vec2(0.0, s * 0.36), vec2(s * 0.62, s * 0.19));
+            p.rect_filled(band, egui::CornerRadius::same((s * 0.06) as u8), tint_mul(Color32::from_rgb(0x6a, 0x0a, 0x10), tint));
+            p.rect_stroke(band, egui::CornerRadius::same((s * 0.06) as u8), egui::Stroke::new(1.0f32, tint_mul(col::GOLD, tint)), egui::StrokeKind::Inside);
+            p.text(band.center(), Align2::CENTER_CENTER, "WILD", theme::bold_font(s * 0.14), tint_mul(col::GOLD2, tint));
+        }
+        return;
+    }
     if let Some(t) = symbol(p.ctx(), sym) {
         p.image(t.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
     }
@@ -375,80 +397,3 @@ pub fn ball(p: &egui::Painter, c: Pos2, r: f32, n: u8, hit: bool) {
     p.text(c, Align2::CENTER_CENTER, n.to_string(), theme::bold_font(r * 0.66), Color32::from_rgb(0x1a, 0x16, 0x14));
 }
 
-/// The small picture on a floor tile, for each game (and poker).
-pub fn tile(p: &egui::Painter, r: Rect, which: &str, t: f32) {
-    let c = r.center();
-    let s = r.height();
-    match which {
-        "slots" => {
-            for (i, sym) in [slots::SEVEN, slots::WILD, slots::SEVEN].iter().enumerate() {
-                let cell = Rect::from_center_size(c + vec2((i as f32 - 1.0) * s * 0.36, 0.0), vec2(s * 0.34, s * 0.5));
-                p.rect_filled(cell, egui::CornerRadius::same(6), Color32::from_rgb(0xfb, 0xf6, 0xea));
-                let bob = if i == 1 { (t * 3.0).sin() * 2.0 } else { 0.0 };
-                paint_symbol(p, Rect::from_center_size(cell.center() + vec2(0.0, bob), vec2(s * 0.3, s * 0.3)), *sym, Color32::WHITE);
-            }
-        }
-        "blackjack" => {
-            let ace = pyr_poker::cards::Card::new(12, 3);
-            let king = pyr_poker::cards::Card::new(11, 2);
-            let cw = s * 0.42;
-            crate::poker::cards::face(p, Rect::from_center_size(c + vec2(-cw * 0.32, 4.0), vec2(cw, cw * 1.4)), king, false, false);
-            crate::poker::cards::face(p, Rect::from_center_size(c + vec2(cw * 0.32, -4.0), vec2(cw, cw * 1.4)), ace, false, false);
-        }
-        "roulette" => {
-            let rad = s * 0.36;
-            p.circle_filled(c, rad + 6.0, Color32::from_rgb(0x5a, 0x34, 0x1a));
-            let n = 37;
-            let spin = t * 0.6;
-            for i in 0..n {
-                let a0 = spin + i as f32 / n as f32 * std::f32::consts::TAU;
-                let a1 = spin + (i + 1) as f32 / n as f32 * std::f32::consts::TAU;
-                let num = pyr_poker::casino::roulette::WHEEL[i];
-                let fill = if num == 0 { col::GREEN } else if pyr_poker::casino::roulette::is_red(num) { col::RED } else { Color32::from_rgb(0x16, 0x16, 0x1a) };
-                p.add(Shape::convex_polygon(vec![c + vec2(a0.cos(), a0.sin()) * rad * 0.55, c + vec2(a0.cos(), a0.sin()) * rad, c + vec2(a1.cos(), a1.sin()) * rad, c + vec2(a1.cos(), a1.sin()) * rad * 0.55], fill, Stroke::NONE));
-            }
-            p.circle_filled(c, rad * 0.55, Color32::from_rgb(0x7a, 0x4a, 0x22));
-            p.circle_filled(c, rad * 0.18, col::GOLD);
-            let ba = -t * 1.4;
-            p.circle_filled(c + vec2(ba.cos(), ba.sin()) * rad * 0.78, s * 0.035, Color32::WHITE);
-        }
-        "baccarat" => {
-            let nine = pyr_poker::cards::Card::new(7, 1);
-            let cw = s * 0.36;
-            crate::poker::cards::face(p, Rect::from_center_size(c + vec2(-cw * 0.62, 0.0), vec2(cw, cw * 1.4)), nine, false, false);
-            crate::poker::cards::back(p, Rect::from_center_size(c + vec2(cw * 0.62, 0.0), vec2(cw, cw * 1.4)), "");
-            p.text(c + vec2(0.0, s * 0.38), Align2::CENTER_CENTER, "PLAYER  ·  BANKER", theme::bold_font(10.0), col::GOLD2);
-        }
-        "craps" => {
-            die(p, c + vec2(-s * 0.18, 2.0), s * 0.36, 5, -0.3 + (t * 0.7).sin() * 0.05, Color32::from_rgb(0xd8, 0x1f, 0x2e));
-            die(p, c + vec2(s * 0.2, -4.0), s * 0.36, 2, 0.4, Color32::from_rgb(0xd8, 0x1f, 0x2e));
-        }
-        "dice" => {
-            let bar = Rect::from_center_size(c + vec2(0.0, s * 0.12), vec2(r.width() * 0.62, 10.0));
-            p.rect_filled(Rect::from_min_max(bar.min, pos2(bar.left() + bar.width() * 0.495, bar.bottom())), egui::CornerRadius::same(5), col::GREEN);
-            p.rect_filled(Rect::from_min_max(pos2(bar.left() + bar.width() * 0.495, bar.top()), bar.max), egui::CornerRadius::same(5), col::RED);
-            let x = bar.left() + bar.width() * (0.5 + 0.35 * (t * 0.8).sin());
-            p.circle_filled(pos2(x, bar.center().y), 9.0, Color32::WHITE);
-            p.text(c - vec2(0.0, s * 0.16), Align2::CENTER_CENTER, format!("{:.2}", 50.0 + 35.0 * (t * 0.8).sin()), theme::bold_font(s * 0.22), Color32::WHITE);
-        }
-        "timebomb" => {
-            crate::poker::bomb::bomb_icon(p, c + vec2(-s * 0.06, s * 0.06), s * 0.3, t, true, 0.5 + 0.5 * (t * 0.3).sin().abs());
-            p.text(c + vec2(s * 0.56, s * 0.22), Align2::CENTER_CENTER, "1000×", theme::bold_font(s * 0.16), col::GOLD2);
-        }
-        "keno" => {
-            for (i, n) in [7u8, 21, 42, 63, 80].iter().enumerate() {
-                let bob = ((t * 2.0 + i as f32).sin()) * 2.0;
-                ball(p, c + vec2((i as f32 - 2.0) * s * 0.2, bob + if i % 2 == 0 { -6.0 } else { 6.0 }), s * 0.11, *n, i == 2);
-            }
-        }
-        _ => {
-            // Poker: two cards and a stack of chips.
-            let a = pyr_poker::cards::Card::new(12, 2);
-            let k = pyr_poker::cards::Card::new(12, 1);
-            let cw = s * 0.36;
-            crate::poker::cards::face(p, Rect::from_center_size(c + vec2(-cw * 0.5, -2.0), vec2(cw, cw * 1.4)), a, false, false);
-            crate::poker::cards::face(p, Rect::from_center_size(c + vec2(cw * 0.1, 4.0), vec2(cw, cw * 1.4)), k, false, false);
-            super::chip_stack(p, c + vec2(cw * 0.95, s * 0.22), s * 0.1, 1_500);
-        }
-    }
-}

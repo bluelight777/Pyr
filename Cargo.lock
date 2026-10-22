@@ -5043,7 +5043,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
 name = "pyr"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -5078,7 +5078,7 @@ dependencies = [
 
 [[package]]
 name = "pyr-directory"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -5104,7 +5104,7 @@ dependencies = [
 
 [[package]]
 name = "pyr-engine"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -5151,11 +5151,12 @@ dependencies = [
  "windows-capture",
  "x11rb",
  "yuv",
+ "zip",
 ]
 
 [[package]]
 name = "pyr-host"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "getrandom 0.2.17",
@@ -5174,7 +5175,7 @@ dependencies = [
 
 [[package]]
 name = "pyr-keeper"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5193,7 +5194,7 @@ dependencies = [
 
 [[package]]
 name = "pyr-mcp"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5207,7 +5208,7 @@ dependencies = [
 
 [[package]]
 name = "pyr-poker"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -5216,7 +5217,7 @@ dependencies = [
 
 [[package]]
 name = "pyr-proto"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5240,7 +5241,7 @@ dependencies = [
 
 [[package]]
 name = "pyr-server"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -7317,6 +7318,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "typed-path"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54ec2755506471f54baf5e4bb5499d8e510cc1caf271270e778a736bd2d7336c"
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9066,6 +9073,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.7",
+]
+
+[[package]]
+name = "zip"
+version = "9.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e04976da629d3b04204ba8105b396a193af8ad2583b2c79bfb3ab8af580a11e"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "indexmap",
+ "memchr",
+ "nix",
+ "typed-path",
 ]
 
 [[package]]

@@ -6,6 +6,7 @@ pub mod bomb;
 pub mod cards;
 pub mod felt;
 pub mod mark;
+pub mod rank;
 pub mod staff;
 pub mod table;
 pub mod tourneys;
@@ -25,11 +26,11 @@ use cards::{chips_short, chips_text};
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
-    /// The casino floor: every game.
+    /// The casino floor: the house's games.
     #[default]
     Floor,
+    /// Poker: cash tables, Flash Pots, Pyr Friday Night and tournaments.
     Tables,
-    Tourneys,
     Leaderboard,
     Me,
     Staff,
@@ -90,8 +91,15 @@ pub struct PokerUi {
     /// folds; the turn passing forgets it.
     pub fold_armed: Option<(u64, usize)>,
     pub four_color: bool,
+    /// Bots' table talk hidden.
+    pub bots_quiet: bool,
+    /// The leaderboard by chips (not MMR); and when the MMR ladder was last asked for.
+    pub board_chips: bool,
+    pub ratings_asked: Option<Instant>,
     /// The hand strength meter turned off (it's on unless turned off).
     pub hide_odds: bool,
+    /// When I last sent an emote (a few seconds apart, so nobody floods the table).
+    pub emote_last: Option<Instant>,
     pub log_open: bool,
     /// The last time the lobby was asked for.
     pub lobby_asked: Option<Instant>,
@@ -115,6 +123,12 @@ pub struct PokerUi {
     /// Staff: a gift or prize box being made up; who's picked to be named staff; the table
     /// a prize box is being made for.
     pub giving: staff::Giving,
+    /// "Give chips…" from someone's name: the server it's on (`giving.to` is who), and the
+    /// gift sent from it (what was left to give before, how many, when) until it's through.
+    pub gift_box: Option<String>,
+    pub gift_sent: Option<(u64, u64, Instant, Option<u64>)>,
+    /// When each server was last asked whether I'm staff there (for the menu on names).
+    pub staff_asked: std::collections::HashMap<String, Instant>,
     /// Pyr Casino's games against the house.
     pub casino: crate::casino::CasinoUi,
     pub staff_pick: Option<String>,
@@ -130,7 +144,7 @@ pub struct PokerUi {
     pub new_tourney: Option<tourneys::NewTourney>,
     pub tourneys_asked: Option<Instant>,
     pub my_tables: std::collections::HashMap<pyr_poker::net::TourneyId, Option<TableId>>,
-    /// Time Bombs: the sounds already played for each (the wheel, the fuse, the bang).
+    /// Flash Pots: the sounds already played for each (the wheel, the fuse, the bang).
     pub bomb_fx: bomb::BombSounds,
     /// The tournament of the table on screen (its lobby opens when the table closes).
     pub table_tourney: Option<pyr_poker::net::TourneyId>,
@@ -214,6 +228,9 @@ impl PyrApp {
             None => self.poker.error_shown = false,
         }
         self.follow_tourneys(s);
+        // A Flash Pot I played, just over: the winner's moment, over everything.
+        let whole = ui.max_rect();
+        self.bomb_finale(ui.ctx(), s, whole);
         if self.poker.awaiting_new
             && let Some(mine) = s.me.as_ref()
             && let Some((id, _)) = s.poker.tables.iter().rev().find(|(_, t)| t.view.owner == mine.user_id)
@@ -289,13 +306,15 @@ impl PyrApp {
 
     fn lobby(&mut self, ui: &mut egui::Ui, s: &ServerView) {
         let full = ui.max_rect();
-        // A warm glow behind the header.
+        // The casino floor (Meshy's render: the tables, the fire) behind it all, darkening down
+        // the page so what's on it reads.
         let p = ui.painter().clone();
-        let head = Rect::from_min_size(full.min, vec2(full.width(), 190.0));
-        for i in 0..14 {
-            let t = i as f32 / 14.0;
-            let r = Rect::from_min_max(head.min, pos2(head.max.x, head.min.y + head.height() * (1.0 - t)));
-            p.rect_filled(r, 0, theme::EMBER().gamma_multiply(0.012));
+        let ctx = ui.ctx().clone();
+        p.rect_filled(full, 0, crate::casino::col::NIGHT);
+        let back = Rect::from_min_size(full.min, vec2(full.width(), (full.width() * 0.5625).max(full.height() * 0.7)));
+        if crate::casino::pics::cover(&p, &ctx, "floor", back, 2048, Color32::from_gray(150)) {
+            // (Down to the night's own color at its foot, so nothing marks where it ends.)
+            crate::casino::vgrad(&p, back, Color32::from_black_alpha(70), crate::casino::col::NIGHT);
         }
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.add_space(22.0);
@@ -307,8 +326,8 @@ impl PyrApp {
                 mark::icon(ui.painter(), c, 30.0, theme::TEXT());
                 ui.add_space(10.0);
                 ui.vertical(|ui| {
-                    ui.label(RichText::new("Pyr Casino").font(theme::bold_font(26.0)).color(theme::TEXT()));
-                    ui.label(RichText::new(format!("{}: poker with friends and bots, and seven games against the house, for play chips. Every shuffle, spin and roll is checked by your own Pyr.", s.name)).color(theme::MUTED()));
+                    ui.label(RichText::new("Pyr Casino").font(theme::bold_font(28.0)).color(crate::casino::col::GOLD2));
+                    ui.label(RichText::new(format!("{}: slots and table games against the house, and poker with friends and bots, for play chips. Every shuffle, spin and roll is checked by your own Pyr.", s.name)).color(crate::casino::col::MUTED));
                 });
             });
             ui.add_space(16.0);
@@ -319,7 +338,7 @@ impl PyrApp {
             ui.horizontal(|ui| {
                 ui.add_space(28.0);
                 let staff = self.my_poker_role(s).is_some() || s.can(pyr_proto::control::perm::MANAGE_SERVER);
-                let mut tabs = vec![(Tab::Floor, "Casino"), (Tab::Tables, "Poker"), (Tab::Tourneys, "Tournaments"), (Tab::Leaderboard, "Leaderboard"), (Tab::Me, "Profile & Looks")];
+                let mut tabs = vec![(Tab::Floor, "Casino"), (Tab::Tables, "Poker"), (Tab::Leaderboard, "Leaderboard"), (Tab::Me, "Profile & Looks")];
                 if staff {
                     tabs.push((Tab::Staff, "Staff"));
                 }
@@ -339,30 +358,11 @@ impl PyrApp {
                         }
                     }
                 }
-                if self.poker.tab == Tab::Tourneys && s.can(pyr_proto::control::perm::MANAGE_SERVER) {
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.add_space(28.0);
-                        if ui.add(theme::primary_button("New tournament").min_size(vec2(150.0, 34.0))).clicked() {
-                            self.poker.new_tourney = Some(tourneys::NewTourney { name: format!("{} Championship", s.name.chars().take(24).collect::<String>()), ..Default::default() });
-                        }
-                    });
-                }
-                if self.poker.tab == Tab::Tables {
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.add_space(28.0);
-                        if ui.add(theme::primary_button("New table").min_size(vec2(130.0, 34.0))).clicked() {
-                            let mut n = NewTable::default();
-                            n.name = format!("{}'s table", s.me.as_ref().map(|m| m.name.as_str()).unwrap_or("My"));
-                            self.poker.new_table = Some(n);
-                        }
-                    });
-                }
             });
-            ui.add_space(12.0);
+            ui.add_space(16.0);
             match self.poker.tab {
                 Tab::Floor => self.casino_floor(ui, s),
-                Tab::Tables => self.tables_list(ui, s),
-                Tab::Tourneys => self.tourneys_list(ui, s),
+                Tab::Tables => self.poker_tab(ui, s),
                 Tab::Leaderboard => self.leaderboard(ui, s),
                 Tab::Me => self.profile(ui, s),
                 Tab::Staff => self.staff_tab(ui, s),
@@ -390,22 +390,32 @@ impl PyrApp {
             p.text(lc + vec2(0.0, -4.0), egui::Align2::CENTER_CENTER, me.level.to_string(), theme::bold_font(22.0), theme::TEXT());
             p.text(lc + vec2(0.0, 15.0), egui::Align2::CENTER_CENTER, "LEVEL", theme::bold_font(8.5), theme::MUTED());
             let x = r.left() + 96.0;
-            p.text(pos2(x, r.top() + 22.0), egui::Align2::LEFT_CENTER, &me.name, theme::bold_font(17.0), theme::TEXT());
+            let name = p.layout_no_wrap(me.name.clone(), theme::bold_font(17.0), theme::TEXT());
+            let nw = name.size().x;
+            p.galley(pos2(x, r.top() + 22.0 - name.size().y / 2.0), name, theme::TEXT());
+            if s.has(pyr_proto::control::CASINO_012_FEATURE) {
+                let tier = pyr_poker::rating::Tier::of(me.mmr as f64);
+                rank::emblem(p, pos2(x + nw + 20.0, r.top() + 22.0), 9.0, tier);
+                p.text(pos2(x + nw + 34.0, r.top() + 22.0), egui::Align2::LEFT_CENTER, rank::label(me.mmr, me.mmr_placing), theme::bold_font(12.5), rank::color(tier));
+            }
             p.text(pos2(x, r.top() + 46.0), egui::Align2::LEFT_CENTER, format!("{} XP to level {}", chips_text(me.level_to.saturating_sub(me.xp)), me.level + 1), theme::font(12.5), theme::MUTED());
             let stats = format!(
-                "{} hands · won {} · showdowns won {}%",
-                chips_text(me.hands),
+                "{} · won {} · showdowns won {}%",
+                crate::poker::cards::count(me.hands, "hand", "hands"),
                 chips_text(me.hands_won),
                 if me.showdowns > 0 { me.showdowns_won * 100 / me.showdowns } else { 0 }
             );
             p.text(pos2(x, r.top() + 68.0), egui::Align2::LEFT_CENTER, stats, theme::font(12.5), theme::DIM());
-            // Chips, and the daily chips.
-            let cx = r.right() - 330.0;
-            cards::pile(p, pos2(cx, r.center().y + 22.0), me.chips.max(1), 10.0, &me.chip_set);
-            p.text(pos2(cx + 58.0, r.top() + 30.0), egui::Align2::LEFT_CENTER, chips_text(me.chips), theme::bold_font(22.0), theme::OWNER());
-            let at = if me.at_tables > 0 { format!("chips · {} at tables", chips_text(me.at_tables)) } else { "chips".to_string() };
-            p.text(pos2(cx + 58.0, r.top() + 56.0), egui::Align2::LEFT_CENTER, at, theme::font(12.5), theme::MUTED());
+            // Chips, and the daily chips (the words measured, so they end before the button).
             let b = Rect::from_min_size(pos2(r.right() - 150.0, r.center().y - 20.0), vec2(132.0, 40.0));
+            let chips_g = p.layout_no_wrap(chips_text(me.chips), theme::bold_font(22.0), theme::OWNER());
+            let at = if me.at_tables > 0 { format!("chips · {} at tables", chips_text(me.at_tables)) } else { "chips".to_string() };
+            let at_g = p.layout_no_wrap(at, theme::font(12.5), theme::MUTED());
+            let words_w = chips_g.size().x.max(at_g.size().x);
+            let cx = b.left() - 22.0 - words_w - 58.0;
+            cards::pile(p, pos2(cx, r.center().y + 22.0), me.chips.max(1), 10.0, &me.chip_set);
+            p.galley(pos2(cx + 58.0, r.top() + 30.0 - chips_g.size().y / 2.0), chips_g, theme::OWNER());
+            p.galley(pos2(cx + 58.0, r.top() + 56.0 - at_g.size().y / 2.0), at_g, theme::MUTED());
             let label = if me.daily_ready { "Daily chips".to_string() } else { format!("Back tomorrow · {}🔥", me.daily_streak) };
             let resp = ui.put(b, egui::Button::new(RichText::new(label).font(theme::bold_font(13.5)).color(if me.daily_ready { theme::on_ember() } else { theme::MUTED() })).fill(if me.daily_ready { theme::EMBER() } else { theme::ELEV2() }).corner_radius(theme::r(10)));
             if resp
@@ -414,6 +424,59 @@ impl PyrApp {
                 && me.daily_ready
             {
                 self.engine.poker(&s.key, ToServer::Daily);
+            }
+        });
+    }
+
+    /// Poker: the cash tables, Flash Pots, Pyr Friday Night and the tournaments.
+    fn poker_tab(&mut self, ui: &mut egui::Ui, s: &ServerView) {
+        let tables = s.poker.lobby.as_ref().map(|l| l.len()).unwrap_or(0);
+        if section_head(ui, "Cash tables", &format!("Hold'em and Omaha with friends and bots · {tables} open"), Some("New table")) {
+            let mut n = NewTable::default();
+            n.name = format!("{}'s table", s.me.as_ref().map(|m| m.name.as_str()).unwrap_or("My"));
+            self.poker.new_table = Some(n);
+        }
+        self.tables_list(ui, s);
+        ui.add_space(26.0);
+        section_head(ui, "Sit & go", "Five seats, one fuse", None);
+        self.time_bomb_card(ui, s);
+        ui.add_space(26.0);
+        let manage = s.can(pyr_proto::control::perm::MANAGE_SERVER);
+        if section_head(ui, "Tournaments", "Pyr Friday Night every week, and this server's own", manage.then_some("New tournament")) {
+            self.poker.new_tourney = Some(tourneys::NewTourney { name: format!("{} Championship", s.name.chars().take(24).collect::<String>()), ..Default::default() });
+        }
+        self.friday_card(ui, s);
+        ui.add_space(14.0);
+        self.tourneys_list(ui, s);
+    }
+
+    /// Pyr Friday Night: the free tournament every Friday, its prize the week's rake.
+    fn friday_card(&mut self, ui: &mut egui::Ui, s: &ServerView) {
+        let c = &s.poker.casino;
+        let ctx = ui.ctx().clone();
+        ui.horizontal(|ui| {
+            ui.add_space(28.0);
+            let w = (ui.available_width() - 28.0).max(320.0);
+            let (r, resp) = ui.allocate_exact_size(vec2(w, 150.0), Sense::click());
+            let p = ui.painter().clone();
+            let base = Color32::from_rgb(0x0a, 0x0e, 0x22);
+            p.rect_filled(r.translate(vec2(0.0, 8.0)), theme::r(18), Color32::from_black_alpha(110));
+            p.rect_filled(r, theme::r(16), base);
+            let art = Rect::from_min_max(pos2(r.right() - r.width() * 0.5, r.top()), r.max);
+            crate::casino::pics::cover_rounded(&p, &ctx, "tile-friday", art, 16.0, (0.5, 0.5), 1024, Color32::WHITE);
+            crate::casino::hgrad(&p, Rect::from_min_max(art.min, pos2(art.left() + art.width() * 0.5, art.bottom())), base, base.gamma_multiply(0.0));
+            let x = r.left() + 24.0;
+            p.text(pos2(x, r.top() + 28.0), egui::Align2::LEFT_CENTER, "PYR FRIDAY NIGHT", theme::bold_font(15.0), Color32::from_rgb(0x9f, 0xc0, 0xff));
+            crate::casino::glow_text(&p, pos2(x, r.top() + 62.0), egui::Align2::LEFT_CENTER, &format!("{} chips to win", chips_text(c.friday_prize)), theme::bold_font(28.0), Color32::WHITE, Color32::from_rgba_unmultiplied(0x40, 0x60, 0xff, 70));
+            let when = if c.friday_ms > 0 { format!("Free to enter · Fridays 10 PM Eastern · starts in {}", crate::casino::floor::until(c.friday_ms)) } else { "Free to enter · Fridays 10 PM Eastern".into() };
+            p.text(pos2(x, r.top() + 96.0), egui::Align2::LEFT_CENTER, when, theme::font(13.0), crate::casino::col::MUTED);
+            p.text(pos2(x, r.top() + 120.0), egui::Align2::LEFT_CENTER, "The prize is the week's rake from the cash tables and the casino.", theme::font(12.0), theme::DIM());
+            p.rect_stroke(r, theme::r(16), Stroke::new(if resp.hovered() { 2.0 } else { 1.0f32 }, Color32::from_rgb(0x4a, 0x6a, 0xc8)), StrokeKind::Inside);
+            // (Its registration is the tournament's own, in the list below.)
+            if resp.on_hover_text("A free tournament every Friday night: register in its row below when it opens.").clicked()
+                && let Some(t) = s.poker.tourneys.as_ref().and_then(|l| l.iter().find(|t| t.rules.name.contains("Friday")).cloned())
+            {
+                self.open_tourney(&s.key, t.id);
             }
         });
     }
@@ -463,7 +526,7 @@ impl PyrApp {
             p.text(pos2(x, r.top() + 46.0), egui::Align2::LEFT_CENTER, t.rules.name(), theme::font(13.0), theme::MUTED());
             let who = if t.names.is_empty() { "Nobody sitting yet".to_string() } else { t.names.join(", ") };
             let mid = r.left() + w * 0.45;
-            p.text(pos2(mid, r.top() + 22.0), egui::Align2::LEFT_CENTER, format!("{} / {} seats · {} people, {} bots", taken, t.seats, t.players, t.bots), theme::font(13.0), theme::BODY());
+            p.text(pos2(mid, r.top() + 22.0), egui::Align2::LEFT_CENTER, format!("{} / {} seats · {}, {}", taken, t.seats, crate::poker::cards::count(t.players as u64, "person", "people"), crate::poker::cards::count(t.bots as u64, "bot", "bots")), theme::font(13.0), theme::BODY());
             let who: String = who.chars().take(60).collect();
             p.text(pos2(mid, r.top() + 46.0), egui::Align2::LEFT_CENTER, who, theme::font(12.5), theme::DIM());
             let right = r.right() - 140.0;
@@ -478,6 +541,28 @@ impl PyrApp {
     }
 
     fn leaderboard(&mut self, ui: &mut egui::Ui, s: &ServerView) {
+        // MMR (everyone rated, bots too) or chips.
+        ui.horizontal(|ui| {
+            ui.add_space(28.0);
+            for (chips, name) in [(false, "MMR ranking"), (true, "Most chips")] {
+                let on = self.poker.board_chips == chips;
+                let b = egui::Button::new(RichText::new(name).font(theme::bold_font(13.0)).color(if on { Color32::from_rgb(0x22, 0x10, 0x04) } else { theme::TEXT() }))
+                    .fill(if on { crate::casino::col::GOLD } else { theme::ELEV() })
+                    .corner_radius(theme::r(16))
+                    .min_size(vec2(0.0, 30.0));
+                if ui.add(b).clicked() {
+                    self.poker.board_chips = chips;
+                    if chips {
+                        self.engine.poker(&s.key, ToServer::Leaderboard);
+                    }
+                }
+            }
+        });
+        ui.add_space(12.0);
+        if !self.poker.board_chips {
+            self.ladder(ui, s);
+            return;
+        }
         let Some(rows) = s.poker.leaderboard.clone() else {
             ui.horizontal(|ui| {
                 ui.add_space(28.0);
@@ -511,7 +596,7 @@ impl PyrApp {
                 }
                 p.text(r.left_center() + vec2(48.0, 0.0), egui::Align2::LEFT_CENTER, &row.name, theme::bold_font(14.5), theme::TEXT());
                 p.text(pos2(r.left() + w * 0.36, r.center().y), egui::Align2::LEFT_CENTER, format!("Level {}", row.level), theme::font(13.0), theme::MUTED());
-                p.text(pos2(r.left() + w * 0.5, r.center().y), egui::Align2::LEFT_CENTER, format!("{} hands", chips_text(row.hands)), theme::font(13.0), theme::DIM());
+                p.text(pos2(r.left() + w * 0.5, r.center().y), egui::Align2::LEFT_CENTER, crate::poker::cards::count(row.hands, "hand", "hands"), theme::font(13.0), theme::DIM());
                 p.text(pos2(r.left() + w * 0.66, r.center().y), egui::Align2::LEFT_CENTER, if row.best_hand.is_empty() { "—".into() } else { row.best_hand.clone() }, theme::font(13.0), theme::DIM());
                 p.text(r.right_center() - vec2(16.0, 0.0), egui::Align2::RIGHT_CENTER, chips_text(row.chips), theme::bold_font(15.0), theme::OWNER());
             });
@@ -520,6 +605,10 @@ impl PyrApp {
 
     fn profile(&mut self, ui: &mut egui::Ui, s: &ServerView) {
         let Some(me) = s.poker.me.clone() else { return };
+        if s.has(pyr_proto::control::CASINO_012_FEATURE) {
+            self.rank_card(ui, &me);
+            ui.add_space(14.0);
+        }
         let pct = |a: u64, b: u64| if b > 0 { format!("{}%", a * 100 / b) } else { "—".into() };
         let stats = [
             ("Hands played", chips_text(me.hands)),
@@ -615,6 +704,10 @@ impl PyrApp {
             let mut show = !self.poker.hide_odds;
             ui.checkbox(&mut show, "Hand strength meter (my chance of winning)");
             self.poker.hide_odds = !show;
+            ui.add_space(20.0);
+            let mut talk = !self.poker.bots_quiet;
+            ui.checkbox(&mut talk, "Bots' table talk").on_hover_text("Bots say a word now and then: a little trash talk, reformed-troll style. Only ever about what everyone saw happen.");
+            self.poker.bots_quiet = !talk;
         });
     }
 
@@ -657,6 +750,9 @@ impl PyrApp {
                 ui.selectable_value(&mut n.level, Level::Rookie, "Rookie");
                 ui.selectable_value(&mut n.level, Level::Regular, "Regular");
                 ui.selectable_value(&mut n.level, Level::Shark, "Shark");
+                if s.has(pyr_proto::control::CASINO_012_FEATURE) {
+                    ui.selectable_value(&mut n.level, Level::Genius, "Genius");
+                }
             });
             let (sb, bb) = STAKES[n.stakes];
             let b = BuyIn::default();
@@ -690,6 +786,29 @@ impl PyrApp {
         }
         self.poker.new_table = if open { Some(n) } else { None };
     }
+}
+
+/// A heading on the Poker tab: its name, a line about it, and a button on the right (true when
+/// it's clicked).
+fn section_head(ui: &mut egui::Ui, title: &str, sub: &str, button: Option<&str>) -> bool {
+    let mut clicked = false;
+    ui.horizontal(|ui| {
+        ui.add_space(28.0);
+        let w = (ui.available_width() - 28.0).max(300.0);
+        let (r, _) = ui.allocate_exact_size(vec2(w, 38.0), Sense::hover());
+        let p = ui.painter();
+        let g = p.layout_no_wrap(title.to_string(), theme::bold_font(21.0), crate::casino::col::GOLD2);
+        let tw = g.size().x;
+        p.galley(pos2(r.left(), r.center().y - g.size().y / 2.0), g, crate::casino::col::GOLD2);
+        p.text(pos2(r.left() + tw + 14.0, r.center().y + 2.0), egui::Align2::LEFT_CENTER, sub, theme::font(13.0), crate::casino::col::MUTED);
+        if let Some(b) = button {
+            let bw = 26.0 + b.len() as f32 * 8.0;
+            let br = Rect::from_min_size(pos2(r.right() - bw, r.top() + 2.0), vec2(bw, 34.0));
+            clicked = ui.put(br, theme::primary_button(b)).clicked();
+        }
+    });
+    ui.add_space(10.0);
+    clicked
 }
 
 fn section(ui: &mut egui::Ui, title: &str) {

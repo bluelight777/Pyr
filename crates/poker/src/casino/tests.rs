@@ -96,10 +96,10 @@ fn slots_exact() -> (f64, f64, f64) {
 }
 
 #[test]
-fn slots_pay_back_about_94_and_a_half_percent() {
+fn slots_pay_back_about_98_percent_and_the_jackpot_1_more() {
     let (rtp, base, trigger) = slots_exact();
     println!("slots: {:.3}% (base game {:.3}%, free spins 1 in {:.0} spins)", rtp * 100.0, base * 100.0, 1.0 / trigger);
-    assert!((0.940..0.950).contains(&rtp), "{rtp}");
+    assert!((0.975..0.985).contains(&rtp), "{rtp}");
     // The jackpot's 1% comes back on top.
     assert_eq!(slots::jackpot_share(5), 1);
     assert_eq!(slots::jackpot_share(500), 100);

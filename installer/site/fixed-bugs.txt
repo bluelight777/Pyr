@@ -1,35 +1,18 @@
-7 Sharing a screen gave up while Windows was still getting the capture ready. Fixed in 0.8.0: Pyr keeps trying for 30 seconds.
-8 Pyr crashed when the graphics card reset ("parent device is lost"). Fixed in 0.8.0: Pyr starts its window again.
-9 A friend's notice showed as an error. Fixed in 0.8.0.
-10 A friend's notice showed as an error. Fixed in 0.8.0.
-11 A friend's notice showed as an error. Fixed in 0.8.0.
-12 A friend's notice showed as an error. Fixed in 0.8.0.
-13 Pyr crashed when the graphics card went away ("Failed to create staging buffer"). Fixed in 0.8.1: Pyr starts its window again.
-14 Pyr crashed when the graphics card went away ("Failed to create staging buffer"). Fixed in 0.8.1: Pyr starts its window again.
-15 "Your skin isn't installed" after the update to Pyr. Fixed in 0.8.1: skins left in the folder from before the rename come over, and a missing skin quietly goes back to Campfire.
-16 "Your skin isn't installed" after the update to Pyr. Fixed in 0.8.1.
-17 "Your skin isn't installed" after the update to Pyr. Fixed in 0.8.1.
-18 "Your skin isn't installed" after the update to Pyr. Fixed in 0.8.1.
-19 "Your skin isn't installed" after the update to Pyr. Fixed in 0.8.1.
-20 Quitting to install an update was reported as Pyr freezing. Fixed in 0.8.1.
-21 Pyr froze for 6 seconds just after Windows started (Pyr itself was idle; Windows was still starting everything else). From 0.11.0 a short freeze in the first minutes after Pyr starts with Windows is noted in the log, not reported.
-22 Your speakers stopped and couldn't be opened again ("Cannot change thread mode after it is set"). Fixed in 0.11.0: Pyr opens sound devices the way Windows needs, and follows the default ones itself.
-23 The microphone couldn't be opened after the speakers went away ("Cannot change thread mode after it is set"). Fixed in 0.11.0.
-24 Your speakers stopped and couldn't be opened again ("Cannot change thread mode after it is set"). Fixed in 0.11.0.
-25 The microphone couldn't be opened ("Cannot change thread mode after it is set"). Fixed in 0.11.0.
-26 The microphone couldn't be opened ("Cannot change thread mode after it is set"). Fixed in 0.11.0.
-27 My voice went up and down for the others. Fixed in 0.11.0: the echo canceller no longer turns your voice down while others talk or music plays.
-28 "Easy on the sounds" was reported as an error. Fixed in 0.11.0: it's the server's limit on sounds, shown as a notice and not reported.
-29 "Easy on the sounds" was reported as an error. Fixed in 0.11.0.
-30 "Your skin couldn't be put on: it isn't installed" (Pyr 0.8.0). Fixed in 0.8.1: a missing skin quietly goes back to Campfire.
-31 "Your skin couldn't be put on: it isn't installed" (Pyr 0.8.0). Fixed in 0.8.1.
-32 My voice went up and down for the others. Fixed in 0.11.0: the echo canceller no longer turns your voice down while others talk or music plays.
-33 My voice went up and down for the others. Fixed in 0.11.0.
-34 My voice went up and down for the others. Fixed in 0.11.0.
-35 Pyr crashed after taking 10 to 17 GB of memory while it was minimized at a casino game. Fixed in 0.11.0: frames that can't be shown no longer pile up, and nothing is drawn while Pyr is minimized.
-36 My voice went up and down for the others. Fixed in 0.11.0.
-37 My voice went up and down for the others. Fixed in 0.11.0.
-38 My voice went up and down for the others. Fixed in 0.11.0.
-39 My voice went up and down for the others. Fixed in 0.11.0.
-40 My voice went up and down for the others. Fixed in 0.11.0.
-41 My voice went up and down for the others. Fixed in 0.11.0.
+102 My voice went up and down for the others (headphones). Fixed in 0.12.0: Pyr now checks whether what it plays reaches your microphone at all; with headphones it doesn't, and the echo canceller, which was turning your voice down, stands aside.
+103 My voice went up and down for the others (headphones). Fixed in 0.12.0.
+104 My voice went up and down for the others (speakers). Fixed in 0.12.0: with speakers the echo canceller only takes out what's left of the echo where it's as loud as your voice, and echo it took out no longer counts as your voice turned down. Reports now say whether your speakers reach your microphone.
+105 Pyr's window crashed when the graphics card ran out of memory ("Failed to create staging buffer"). Fixed in 0.12.0: Pyr starts its window again without a crash report, and says so if the PC's memory was nearly full.
+106 My voice went up and down for the others (speakers). Fixed in 0.12.0.
+107 My voice went up and down for the others (speakers). Fixed in 0.12.0.
+108 Pyr crashed when the graphics card couldn't make a picture (the PC's memory was 99% in use). Fixed in 0.12.0: Pyr starts its window again.
+109 My voice went up and down for the others (speakers). Fixed in 0.12.0.
+110 "Inferno isn't yours yet" for a card back given by a Game Master or won in a prize box. Fixed in 0.12.0: looks you were given can be worn.
+111 My voice went up and down for the others (headphones). Fixed in 0.12.0.
+112 My voice went up and down for the others (speakers). Fixed in 0.12.0.
+113 My voice went up and down for the others (headphones). Fixed in 0.12.0.
+114 My voice went up and down for the others (speakers). Fixed in 0.12.0.
+115 My voice went up and down for the others (speakers). Fixed in 0.12.0.
+116 My voice went up and down for the others (headphones). Fixed in 0.12.0.
+117 My voice went up and down for the others (speakers). Fixed in 0.12.0.
+118 My voice went up and down for the others. Fixed in 0.12.0.
+119 My voice went up and down for the others (speakers). Fixed in 0.12.0.

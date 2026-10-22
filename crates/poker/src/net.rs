@@ -122,8 +122,106 @@ pub enum ToServer {
     TourneyUnwatch { id: TourneyId },
     /// Call one off before it starts (whoever made it, or Manage server): buy-ins go back.
     TourneyCancel { id: TourneyId },
-    /// Play a Time Bomb for this buy-in: a seat in one that's filling up, or a new one.
+    /// Play a Flash Pot for this buy-in: a seat in one that's filling up, or a new one.
     TimeBomb { buy_in: u64 },
+    /// Poker's MMR ladder: everyone rated here, people and bots (0.12.0 servers).
+    Ratings,
+    /// Blackjack tables (0.12.0 servers): the list; follow one (or stop); sit in a seat or
+    /// leave it; bet for the next round (0 sits it out; `seed` is my Pyr's part of the shuffle);
+    /// a move; a bot in or out of an empty seat; a new table.
+    BjTables,
+    BjWatch { table: u64 },
+    BjUnwatch { table: u64 },
+    BjSit { table: u64, seat: u8 },
+    BjLeave { table: u64 },
+    BjBet {
+        table: u64,
+        chips: u64,
+        #[serde(with = "hex32")]
+        seed: [u8; 32],
+    },
+    BjAct { table: u64, action: crate::casino::blackjack::Action },
+    BjBot { table: u64, seat: u8, add: bool },
+    BjNew,
+    /// Craps tables (0.12.0 servers): the list; follow one (or stop); sit in a seat or leave
+    /// it; my bets on the layout for the coming roll (`seed`: my Pyr's part of the dice; `ready`:
+    /// roll when you like); throw the dice (the shooter); a bot in or out of an empty seat.
+    CrapsTables,
+    CrapsWatch { table: u64 },
+    CrapsUnwatch { table: u64 },
+    CrapsSit { table: u64, seat: u8 },
+    CrapsLeave { table: u64 },
+    CrapsBets {
+        table: u64,
+        /// The roll they're for (refused if the dice have rolled since).
+        roll: u64,
+        bets: crate::casino::craps::Bets,
+        #[serde(with = "hex32")]
+        seed: [u8; 32],
+        ready: bool,
+    },
+    CrapsThrow { table: u64 },
+    CrapsBot { table: u64, seat: u8, add: bool },
+    /// Baccarat tables (0.12.0 servers): the list; follow one (or stop); sit in a seat or leave
+    /// it; my bets on the coming coup (`seed`: my Pyr's part of the shuffle; `ready`: deal when
+    /// you like); a bot in or out of an empty seat.
+    BacTables,
+    BacWatch { table: u64 },
+    BacUnwatch { table: u64 },
+    BacSit { table: u64, seat: u8 },
+    BacLeave { table: u64 },
+    BacBets {
+        table: u64,
+        /// The coup they're for (refused if it's been dealt since).
+        coup: u64,
+        bets: crate::casino::baccarat::Bets,
+        #[serde(with = "hex32")]
+        seed: [u8; 32],
+        ready: bool,
+    },
+    BacBot { table: u64, seat: u8, add: bool },
+    /// The Bonfire (0.12.0 servers): how it stands; light it now (the server's owner).
+    Bonfire,
+    BonfireLight,
+    /// An emote to everyone at a blackjack, craps or baccarat table I'm sitting at (0.12.0
+    /// servers; at poker it's `Emote`).
+    GameEmote { game: TableGame, table: u64, emote: String },
+}
+
+/// The casino's tables with seats besides poker's (for what's sent to everyone at one).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TableGame {
+    Blackjack,
+    Craps,
+    Baccarat,
+}
+
+/// The emoji an older Pyr shows for one of 0.12.0's emote stickers (`e:<name>`): it'd show
+/// the words otherwise.
+pub fn emote_for_older_app(emote: &str) -> String {
+    let Some(name) = emote.strip_prefix("e:") else { return emote.to_string() };
+    match name {
+        "laugh" => "😂",
+        "cry" => "😢",
+        "cool" | "boss" => "😎",
+        "wow" => "😮",
+        "angry" => "😤",
+        "think" => "🤔",
+        "nice" => "👍",
+        "love" => "😍",
+        "rich" => "🤑",
+        "gg" => "GG",
+        "allin" => "🔥",
+        "aces" => "AA",
+        "sob" => "😭",
+        "lol" => "🎲",
+        "badbeat" => "💔",
+        "bag" => "💰",
+        "king" => "👑",
+        _ => "🔥",
+    }
+    .to_string()
 }
 
 impl ToServer {
@@ -173,20 +271,20 @@ pub struct TourneyRules {
     /// Prize money the house puts in on top of the buy-ins (Pyr Friday Night: the week's rake).
     #[serde(default)]
     pub added: u64,
-    /// A Time Bomb: a fast sit-and-go for a prize the wheel picks, where after the fuse burns
+    /// A Flash Pot: a fast sit-and-go for a prize the wheel picks, where after the fuse burns
     /// down every hand is all in.
     #[serde(default)]
     pub bomb: Option<Bomb>,
 }
 
-/// A Time Bomb's fuse.
+/// A Flash Pot's fuse.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Bomb {
     /// From the first hand until it goes off.
     pub fuse_ms: u64,
 }
 
-/// A Time Bomb as it stands.
+/// A Flash Pot as it stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BombView {
     pub fuse_ms: u64,
@@ -224,7 +322,7 @@ pub struct TourneySummary {
     pub registered: bool,
     /// Who made it.
     pub host: String,
-    /// A Time Bomb's prize multiplier, once the wheel has spun.
+    /// A Flash Pot's prize multiplier, once the wheel has spun.
     #[serde(default)]
     pub multiplier: Option<u32>,
 }
@@ -260,7 +358,7 @@ pub struct TourneyView {
     /// The table I'm at, when I'm still in it.
     pub my_table: Option<TableId>,
     pub tables: Vec<TableId>,
-    /// A Time Bomb's wheel and fuse.
+    /// A Flash Pot's wheel and fuse.
     #[serde(default)]
     pub bomb: Option<BombView>,
 }
@@ -317,6 +415,24 @@ pub enum ToApp {
     /// Whose turn, and when their time runs out (ms from now), and their time bank.
     Clock { table: TableId, seat: usize, ms: u64, bank_ms: u64 },
     Emote { table: TableId, seat: usize, emote: String },
+    /// A bot's word at the table (0.12.0: older apps aren't sent it).
+    Say { table: TableId, seat: usize, text: String },
+    /// The MMR ladder (0.12.0).
+    Ratings { rows: Vec<RatingRow> },
+    /// Blackjack tables (0.12.0): the list, and one I follow as it is now.
+    BjTables { tables: Vec<BjSummary> },
+    Bj { view: BjView },
+    /// Craps tables (0.12.0): the list, and one I follow as it is now.
+    CrapsTables { tables: Vec<CrapsSummary> },
+    Craps { view: CrapsView },
+    /// Baccarat tables (0.12.0): the list, and one I follow as it is now.
+    BacTables { tables: Vec<BacSummary> },
+    Bac { view: BacView },
+    /// The Bonfire (0.12.0): how it stands for me; and, to everyone, the moment it's lit.
+    Bonfire { view: BonfireView },
+    BonfireLit { draw: BonfireDraw },
+    /// Someone at a blackjack, craps or baccarat table sent an emote (0.12.0).
+    GameEmote { game: TableGame, table: u64, seat: u8, emote: String },
     /// My record changed (after a hand, the daily chips, a look chosen).
     Record { me: RecordView, gains: Option<GainsView> },
     Leaderboard { rows: Vec<LeaderRow> },
@@ -333,6 +449,32 @@ pub enum ToApp {
     Daily { chips: Option<u64>, streak: u32 },
     Tourneys { list: Vec<TourneySummary> },
     Tourney { view: TourneyView },
+}
+
+impl ToApp {
+    /// This message as a 0.11 app can read it (`None`: one it can't, left unsent). A 0.11 app
+    /// drops its connection at anything it doesn't know, so what's new since is left out or
+    /// put the old way: a Genius bot is a Shark to it.
+    pub fn for_older_app(self) -> Option<ToApp> {
+        let older = |b: &mut Option<Level>| *b = b.map(Level::for_older_app);
+        Some(match self {
+            ToApp::Say { .. } | ToApp::Ratings { .. } | ToApp::BjTables { .. } | ToApp::Bj { .. } | ToApp::CrapsTables { .. } | ToApp::Craps { .. } | ToApp::BacTables { .. } | ToApp::Bac { .. } | ToApp::Bonfire { .. } | ToApp::BonfireLit { .. } | ToApp::GameEmote { .. } => return None,
+            ToApp::Emote { table, seat, emote } => ToApp::Emote { table, seat, emote: emote_for_older_app(&emote) },
+            ToApp::Snapshot { mut table } => {
+                table.seats.iter_mut().flatten().for_each(|s| older(&mut s.bot));
+                ToApp::Snapshot { table }
+            }
+            ToApp::Player { table, mut player } => {
+                older(&mut player.bot);
+                ToApp::Player { table, player }
+            }
+            ToApp::Tourney { mut view } => {
+                view.entrants.iter_mut().for_each(|e| older(&mut e.bot));
+                ToApp::Tourney { view }
+            }
+            m => m,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -368,6 +510,9 @@ pub struct SeatView {
     pub folded: bool,
     pub all_in: bool,
     pub cards: Vec<Card>,
+    /// Their MMR (filled in by the server as it's sent; 0.12.0).
+    #[serde(default)]
+    pub mmr: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -395,7 +540,7 @@ pub struct TableView {
     /// A prize box on the table, for whoever wins the next hand.
     #[serde(default)]
     pub prize: Option<PrizeView>,
-    /// A Time Bomb gone off: everyone's all in, every hand (nobody chooses anything).
+    /// A Flash Pot gone off: everyone's all in, every hand (nobody chooses anything).
     #[serde(default)]
     pub bomb: bool,
 }
@@ -406,6 +551,8 @@ pub struct TableView {
 pub enum CasinoReq {
     /// The casino as it is for me (and tell me of big wins and the jackpot while I'm in).
     Open,
+    /// A game's statistics (0.12.0): by its statistics key (`Outcome::stats_key`).
+    Stats { key: String },
     Close,
     /// A round: the fingerprint of the house's seed I was shown, a seed of my own, my bet.
     Play {
@@ -447,6 +594,30 @@ pub enum CasinoRes {
     Craps { table: craps::Table, chips: u64 },
     BigWin { win: BigWin },
     Jackpot { pool: u64 },
+    /// A game's statistics (0.12.0, asked for with `Stats`).
+    Stats { view: GameStats },
+}
+
+/// What a game (a slot, a Reel Row machine) paid back over time, for everyone on this server,
+/// its biggest wins and its luckiest (by how many times the bet), and how many are playing it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GameStats {
+    pub key: String,
+    /// The last 24 hours, 7 days, 28 days and all time, in that order.
+    pub periods: Vec<PeriodStats>,
+    /// People who played it in the last few minutes.
+    pub playing: u32,
+    pub big: Vec<BigWin>,
+    pub lucky: Vec<BigWin>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PeriodStats {
+    pub rounds: u64,
+    pub wagered: u64,
+    pub paid: u64,
 }
 
 /// The casino as it is for me.
@@ -465,6 +636,36 @@ pub struct CasinoView {
     pub blackjack: Option<blackjack::View>,
     pub craps: craps::Table,
     pub stats: BTreeMap<String, CasinoStats>,
+    /// Ember Dragon (0.12.0 apps): my dragon's growth at each bet, and the jackpots' pools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dragon: Option<DragonView>,
+}
+
+/// Ember Dragon as it stands for me: how grown my dragon is at each bet, and the jackpots'
+/// pools (Mini to Grand).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DragonView {
+    /// (As pairs on the wire, [bet, growth]: a map's number keys are text in JSON, and inside a
+    /// tagged message serde can't read them back as numbers. The whole casino's state was
+    /// passed over, and nothing could be played, once anyone's dragon had grown.)
+    #[serde(with = "pairs")]
+    pub growth: BTreeMap<u64, u32>,
+    pub pools: [u64; 4],
+}
+
+/// A map with number keys, as a list of pairs (see `DragonView::growth`).
+mod pairs {
+    use std::collections::BTreeMap;
+
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(m: &BTreeMap<u64, u32>, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(m.iter())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<u64, u32>, D::Error> {
+        Ok(Vec::<(u64, u32)>::deserialize(d)?.into_iter().collect())
+    }
 }
 
 /// A round that's over, and everything to check it.
@@ -498,6 +699,9 @@ pub struct BigWin {
     pub paid: u64,
     pub what: String,
     pub at_ms: u64,
+    /// Its game's statistics key (a Reel Row machine's own; 0.12.0).
+    #[serde(default)]
+    pub key: String,
 }
 
 /// Pyr Poker's staff: Game Masters (the owner's admins for the game: they gift chips and looks
@@ -576,6 +780,13 @@ pub struct RecordView {
     pub biggest_pot: u64,
     pub best_hand: String,
     pub achievements: Vec<String>,
+    /// Poker's MMR, its best yet, and whether it's still placing (0.12.0).
+    #[serde(default)]
+    pub mmr: u32,
+    #[serde(default)]
+    pub mmr_peak: u32,
+    #[serde(default)]
+    pub mmr_placing: bool,
     pub daily_ready: bool,
     pub daily_streak: u32,
     pub card_back: String,
@@ -595,6 +806,326 @@ pub struct GainsView {
     pub level_up: Option<u32>,
     /// Chips won or lost in the hand.
     pub net: i64,
+}
+
+/// A blackjack table, in the list.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BjSummary {
+    pub id: u64,
+    pub name: String,
+    pub min_bet: u64,
+    pub max_bet: u64,
+    pub people: usize,
+    pub bots: usize,
+}
+
+/// Where a blackjack table's round has got to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BjStage {
+    /// Nobody (no person) sitting.
+    Waiting,
+    Betting,
+    Playing,
+    /// The round's over: its results on the table for a moment.
+    Settled,
+}
+
+/// Someone at a blackjack table.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BjSeatView {
+    pub player: String,
+    pub name: String,
+    pub bot: bool,
+    pub level: u32,
+    pub card_back: String,
+    pub frame: String,
+    /// Their bet for the round (while betting), and whether they've bet or sat it out.
+    pub bet: u64,
+    pub decided: bool,
+}
+
+/// A finished round's seeds, bets and moves, for everyone's Pyr to play it again.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BjReveal {
+    pub round: u64,
+    #[serde(with = "hex32")]
+    pub commit: [u8; 32],
+    #[serde(with = "hex32")]
+    pub house: [u8; 32],
+    /// The players' seeds by seat (hex), the bets and the moves.
+    pub seeds: Vec<(u8, String)>,
+    pub bets: Vec<(u8, u64)>,
+    pub actions: Vec<(u8, crate::casino::blackjack::Action)>,
+    /// The round as the table showed it (to compare with the replay).
+    pub dealer: Vec<Card>,
+    pub seats: Vec<crate::casino::bjtable::SeatPlay>,
+}
+
+/// A blackjack table as someone there sees it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BjView {
+    pub id: u64,
+    pub name: String,
+    pub min_bet: u64,
+    pub max_bet: u64,
+    pub seats: Vec<Option<BjSeatView>>,
+    pub stage: BjStage,
+    /// Time left to bet, or for the player to act.
+    pub ms_left: u64,
+    pub round_no: u64,
+    /// The house's fingerprint for the next round (or this one).
+    #[serde(with = "hex32")]
+    pub commit: [u8; 32],
+    pub round: Option<crate::casino::bjtable::RoundView>,
+    pub last: Option<BjReveal>,
+    pub my_seat: Option<u8>,
+}
+
+/// A craps table, in the list.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CrapsSummary {
+    pub id: u64,
+    pub name: String,
+    pub min_bet: u64,
+    pub max_bet: u64,
+    pub people: usize,
+    pub bots: usize,
+    /// The point, if there is one.
+    pub point: Option<u8>,
+}
+
+/// Where a craps table's roll has got to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CrapsStage {
+    /// Nobody (no person) sitting.
+    Waiting,
+    /// Bets going down for the coming roll.
+    Betting,
+    /// The dice have landed: the roll's results on the table for a moment.
+    Shown,
+}
+
+/// Someone at a craps table.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CrapsSeatView {
+    pub player: String,
+    pub name: String,
+    pub bot: bool,
+    pub level: u32,
+    pub frame: String,
+    /// What's on the layout for them, and whether they're ready for the dice.
+    pub bets: crate::casino::craps::Bets,
+    pub ready: bool,
+    /// What the last roll did for them: the bets it decided, and the chips back.
+    pub decided: Vec<crate::casino::craps::Decided>,
+    pub paid: u64,
+    /// A bot's way of betting, in a few words.
+    pub style: String,
+}
+
+/// A roll's seeds and dice, for everyone's Pyr to roll it again.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CrapsReveal {
+    pub roll: u64,
+    #[serde(with = "hex32")]
+    pub commit: [u8; 32],
+    #[serde(with = "hex32")]
+    pub house: [u8; 32],
+    /// The players' seeds by seat (hex).
+    pub seeds: Vec<(u8, String)>,
+    pub dice: (u8, u8),
+    pub point_before: Option<u8>,
+    pub point_after: Option<u8>,
+    /// Who threw them (a seat).
+    pub shooter: Option<u8>,
+}
+
+/// A craps table as someone there sees it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CrapsView {
+    pub id: u64,
+    pub name: String,
+    pub min_bet: u64,
+    pub max_bet: u64,
+    pub seats: Vec<Option<CrapsSeatView>>,
+    pub stage: CrapsStage,
+    /// Time left to bet before the dice fly, or till the next roll's betting.
+    pub ms_left: u64,
+    /// The coming roll's number and the house's fingerprint for it.
+    pub roll_no: u64,
+    #[serde(with = "hex32")]
+    pub commit: [u8; 32],
+    pub point: Option<u8>,
+    /// The shooter's points made in a row.
+    pub streak: u32,
+    /// Whose dice they are (a seat).
+    pub shooter: Option<u8>,
+    pub last: Option<CrapsReveal>,
+    pub my_seat: Option<u8>,
+    /// My pass line (and its odds) still working from when I stood up.
+    pub left: crate::casino::craps::Bets,
+}
+
+/// A baccarat table, in the list.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BacSummary {
+    pub id: u64,
+    pub name: String,
+    pub min_bet: u64,
+    pub max_bet: u64,
+    pub people: usize,
+    pub bots: usize,
+}
+
+/// Where a baccarat table's coup has got to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BacStage {
+    /// Nobody (no person) sitting.
+    Waiting,
+    /// Bets going down on the coming coup.
+    Betting,
+    /// The coup's dealt: turned over card by card, its result on the table for a moment.
+    Shown,
+}
+
+/// Someone at a baccarat table.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BacSeatView {
+    pub player: String,
+    pub name: String,
+    pub bot: bool,
+    pub level: u32,
+    pub frame: String,
+    /// Their bets on the coming coup, and whether they're ready for the cards.
+    pub bets: crate::casino::baccarat::Bets,
+    pub ready: bool,
+    /// The last coup: what they had on it, and what came back.
+    pub last_bets: crate::casino::baccarat::Bets,
+    pub paid: u64,
+    /// A bot's way of betting, in a few words.
+    pub style: String,
+}
+
+/// A coup on the scoreboard: who won, the pairs, a natural, and the winning total.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BacMark {
+    pub winner: crate::casino::baccarat::Side,
+    pub player_pair: bool,
+    pub banker_pair: bool,
+    pub natural: bool,
+    pub total: u8,
+}
+
+/// A coup's seeds and cards, for everyone's Pyr to deal it again.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BacReveal {
+    pub coup: u64,
+    #[serde(with = "hex32")]
+    pub commit: [u8; 32],
+    #[serde(with = "hex32")]
+    pub house: [u8; 32],
+    /// The players' seeds by seat (hex).
+    pub seeds: Vec<(u8, String)>,
+    /// The cards as dealt to each side.
+    pub player: Vec<Card>,
+    pub banker: Vec<Card>,
+    pub winner: crate::casino::baccarat::Side,
+    pub player_pair: bool,
+    pub banker_pair: bool,
+}
+
+/// A baccarat table as someone there sees it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BacView {
+    pub id: u64,
+    pub name: String,
+    pub min_bet: u64,
+    pub max_bet: u64,
+    pub seats: Vec<Option<BacSeatView>>,
+    pub stage: BacStage,
+    /// Time left to bet before the cards come, or till the next coup's betting.
+    pub ms_left: u64,
+    /// The coming coup's number and the house's fingerprint for it.
+    pub coup_no: u64,
+    #[serde(with = "hex32")]
+    pub commit: [u8; 32],
+    pub last: Option<BacReveal>,
+    /// The shoe so far, for the scoreboard (oldest first).
+    pub history: Vec<BacMark>,
+    pub my_seat: Option<u8>,
+}
+
+/// The Bonfire as someone sees it: the pool, when it's lit, my embers and everyone's, the most
+/// embers this time, and the last time it was lit.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BonfireView {
+    /// This fire's number, its pool, and how long till it's lit.
+    pub round: u64,
+    pub pool: u64,
+    pub ms_left: u64,
+    /// The house's fingerprint for this fire's draw (its seed's shown when it's lit).
+    #[serde(with = "hex32")]
+    pub commit: [u8; 32],
+    pub my_embers: u64,
+    pub total_embers: u64,
+    pub entrants: usize,
+    /// The most embers on this fire: (name, embers).
+    pub top: Vec<(String, u64)>,
+    pub last: Option<BonfireDraw>,
+    /// Whether I can light it now (the server's owner).
+    pub can_light: bool,
+}
+
+/// Someone's embers on a fire, as it's lit.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BonfireEntry {
+    pub uid: String,
+    pub name: String,
+    pub embers: u64,
+}
+
+/// A prize won.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BonfireWinner {
+    pub tier: crate::casino::bonfire::Tier,
+    pub uid: String,
+    pub name: String,
+    pub chips: u64,
+    pub embers: u64,
+}
+
+/// A fire lit: its seed (against the fingerprint shown all along), everyone's embers (by id),
+/// the winners in the order drawn, and what goes on the next fire.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BonfireDraw {
+    pub round: u64,
+    pub at_ms: u64,
+    pub pool: u64,
+    #[serde(with = "hex32")]
+    pub commit: [u8; 32],
+    #[serde(with = "hex32")]
+    pub seed: [u8; 32],
+    pub entries: Vec<BonfireEntry>,
+    pub winners: Vec<BonfireWinner>,
+    pub rollover: u64,
+}
+
+/// Someone on the MMR ladder.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RatingRow {
+    /// Their rating id (a person's Pyr id; `bot:<level>:<name>` for a bot).
+    pub id: String,
+    pub name: String,
+    pub bot: Option<Level>,
+    pub mmr: u32,
+    pub peak: u32,
+    pub tourneys: u32,
+    pub hands: u32,
+    /// Still finding their level (their first few games).
+    pub placing: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -649,6 +1180,9 @@ pub struct PlayerView {
     pub seat: usize,
     pub name: String,
     pub bot: Option<Level>,
+    /// Their MMR (0.12.0).
+    #[serde(default)]
+    pub mmr: Option<u32>,
     /// At this table.
     pub here: Tally,
     /// Everywhere on this server (people; a bot's whole life is at its table).
@@ -691,5 +1225,45 @@ mod tests {
         assert_eq!(serde_json::from_str::<ToApp>(&j).unwrap(), m);
         let m = ToServer::Act { table: 1, hand: 4, action: Action::Raise { to: 40 } };
         assert_eq!(serde_json::from_str::<ToServer>(&serde_json::to_string(&m).unwrap()).unwrap(), m);
+        let m = ToServer::GameEmote { game: TableGame::Baccarat, table: 2, emote: "e:gg".into() };
+        let j = serde_json::to_string(&m).unwrap();
+        assert!(j.contains("\"game\":\"baccarat\""), "{j}");
+        assert_eq!(serde_json::from_str::<ToServer>(&j).unwrap(), m);
+    }
+
+    /// Every kind of message the casino sends, with everything in it filled in, reads back as
+    /// it was: the casino's state with a grown dragon in it once couldn't be (its bets were a
+    /// map's keys), and the app passed it over.
+    #[test]
+    fn the_casinos_state_reads_back_with_everything_in_it() {
+        let view = CasinoView {
+            chips: 56_309,
+            commit: [5; 32],
+            nonce: 12,
+            jackpot: 900,
+            friday_ms: 1_700_000_000_000,
+            friday_prize: 4_000,
+            big_wins: Vec::new(),
+            blackjack: None,
+            craps: craps::Table::default(),
+            stats: [("slots".to_string(), CasinoStats::default())].into_iter().collect(),
+            dragon: Some(DragonView { growth: [(100, 3), (2_000, 41)].into_iter().collect(), pools: [1, 2, 3, 4] }),
+        };
+        let m = ToApp::Casino { res: CasinoRes::State { view } };
+        let j = serde_json::to_string(&m).unwrap();
+        assert_eq!(serde_json::from_str::<ToApp>(&j).unwrap(), m, "{j}");
+    }
+
+    /// An older Pyr isn't sent an emote from a casino table, and sees a sticker at poker as the
+    /// emoji nearest it (an emoji sent by one is left as it is).
+    #[test]
+    fn older_apps_see_stickers_as_emoji() {
+        assert_eq!(ToApp::GameEmote { game: TableGame::Craps, table: 1, seat: 2, emote: "e:gg".into() }.for_older_app(), None);
+        let sticker = ToApp::Emote { table: 4, seat: 1, emote: "e:laugh".into() };
+        assert_eq!(sticker.for_older_app(), Some(ToApp::Emote { table: 4, seat: 1, emote: "😂".into() }));
+        let emoji = ToApp::Emote { table: 4, seat: 1, emote: "🔥".into() };
+        assert_eq!(emoji.clone().for_older_app(), Some(emoji));
+        assert_eq!(emote_for_older_app("e:gg"), "GG");
+        assert_eq!(emote_for_older_app("e:king"), "👑");
     }
 }

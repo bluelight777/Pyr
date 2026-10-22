@@ -211,6 +211,25 @@ fn new_versions_of_listed_things_are_listed_rejected_or_left_for_a_person() {
     let claude2 = FakeClaude { answer: RefCell::new(vec![]), seen: RefCell::new(vec![]) };
     let mut k2 = Keeper::new(cfg.clone(), &claude2, &FakeBuild).unwrap();
     assert_eq!(k2.pass().unwrap(), 0);
+
+    // Taken off the list (by its name, from outside, as `pyr-keeper unlist` does while the
+    // Keeper runs): gone from the website's list, and the running Keeper doesn't put it back.
+    let mut outside = Keeper::new(cfg.clone(), &claude2, &FakeBuild).unwrap();
+    assert!(outside.unlist("Nothing Like It").is_err());
+    assert_eq!(outside.unlist("dice").unwrap(), "Dice");
+    let text = std::fs::read_to_string(cfg.web_library.join("index3.json")).unwrap();
+    let lib = library::open(&text, &release.user_id()).unwrap();
+    assert!(lib.find("dice").is_none());
+    assert!(lib.find("chimbrowser").is_some() && lib.find_skin("sunset").is_some(), "the rest stay");
+    // A new version of it, sent in after: left for a person, not listed again.
+    let dice3 = submit(&db, &mara, "Dice", "addon", "1.4.0", dice2, src(&[("Cargo.toml", CARGO_V1.replace("1.0.0", "1.4.0").as_bytes()), ("src/lib.rs", b"// v1\n// rolls faster\n// and louder\n")]));
+    assert_eq!(k2.pass().unwrap(), 1);
+    let (s, note) = status(&db, dice3);
+    assert_eq!(s, SubmissionStatus::New, "{note}");
+    let text = std::fs::read_to_string(cfg.web_library.join("index3.json")).unwrap();
+    assert!(library::open(&text, &release.user_id()).unwrap().find("dice").is_none());
+    // A skin by its id, too.
+    assert_eq!(outside.unlist("skin:sunset").unwrap(), "Sunset");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

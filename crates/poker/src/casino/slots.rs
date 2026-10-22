@@ -5,8 +5,8 @@
 //! Jackpot (a pool that grows by 1% of every spin's bet). Three or more stars anywhere pay and
 //! start free spins, every win in them tripled, and more stars in them add more.
 //!
-//! Over a long run the reels pay back 94.5% of what's bet, and the jackpot pays back the 1% it
-//! takes: about 95.5% in all (see the tests, which work it out exactly).
+//! Over a long run the reels pay back 98% of what's bet, and the jackpot pays back the 1% it
+//! takes: about 99% in all (see the tests, which work it out exactly).
 
 use serde::{Deserialize, Serialize};
 
@@ -44,8 +44,8 @@ pub fn symbol_name(s: u8) -> &'static str {
 
 /// What three, four and five of a kind pay, times the line bet (the wild's own too).
 pub const PAYS: [[u64; 3]; 9] = [
-    [4, 12, 40],
-    [4, 12, 40],
+    [5, 12, 40],
+    [5, 12, 40],
     [5, 15, 60],
     [6, 15, 60],
     [10, 30, 120],
@@ -57,8 +57,8 @@ pub const PAYS: [[u64; 3]; 9] = [
 
 /// Stars anywhere: what 3, 4 and 5 pay (times the whole spin's bet) and the free spins they
 /// start.
-pub const STAR_PAYS: [u64; 3] = [2, 10, 50];
-pub const STAR_SPINS: [usize; 3] = [10, 15, 25];
+pub const STAR_PAYS: [u64; 3] = [3, 10, 50];
+pub const STAR_SPINS: [usize; 3] = [10, 18, 25];
 
 const CH: u8 = CHERRY;
 const LE: u8 = LEMON;

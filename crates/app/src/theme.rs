@@ -318,6 +318,9 @@ pub fn install(ctx: &egui::Context) {
     ctx.options_mut(|o| {
         o.input_options.max_click_dist = 10.0;
         o.input_options.max_click_duration = 5.0;
+        // A notch of the mouse wheel goes as far as it does in Discord (and Chrome and Edge),
+        // gliding there (egui eases each notch in over a few frames).
+        o.input_options.line_scroll_speed = wheel_step();
     });
     install_fonts(ctx, None);
     crate::emoji::preload();
@@ -335,7 +338,33 @@ pub struct SkinFonts {
 }
 
 /// Pyr's fonts, with a skin's first (Inter stays behind them for anything they don't have).
+/// How far a notch of the mouse wheel scrolls, in points: like Chromium's (Discord's), 100/3
+/// of a point for each line Windows is set to scroll a notch (3 unless it's been changed).
+fn wheel_step() -> f32 {
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::WindowsAndMessaging::{SPI_GETWHEELSCROLLLINES, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW};
+        let mut lines: u32 = 3;
+        // SAFETY: SPI_GETWHEELSCROLLLINES writes one u32 to the pointer given.
+        let read = unsafe { SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, Some(&mut lines as *mut u32 as *mut core::ffi::c_void), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0)) };
+        // (Set to a screen at a time it's u32::MAX: a notch is then three lines' worth here.)
+        if read.is_ok() && (1..=100).contains(&lines) {
+            return lines as f32 * 100.0 / 3.0;
+        }
+    }
+    100.0
+}
+
+/// How many times the fonts have been made (a skin's fonts, or Pyr's own): text laid out
+/// before is a different size now.
+static FONTS_MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn fonts_made() -> u64 {
+    FONTS_MADE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn install_fonts(ctx: &egui::Context, skin: Option<SkinFonts>) {
+    FONTS_MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut fonts = FontDefinitions::default();
     fonts
         .font_data

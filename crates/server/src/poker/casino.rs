@@ -7,8 +7,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use pyr_poker::casino::{self, Bet, Game, Outcome, blackjack, craps, slots};
-use pyr_poker::net::{BigWin, CasinoReq, CasinoRes, CasinoView, RoundView, ToApp};
+use pyr_poker::casino::{self, Bet, Game, Outcome, blackjack, craps, dragon, slots};
+use pyr_poker::net::{BigWin, CasinoReq, CasinoRes, CasinoView, DragonView, GameStats, PeriodStats, RoundView, ToApp};
 use pyr_poker::progress::{self, Record};
 use pyr_poker::room::Random;
 use pyr_poker::tourney;
@@ -24,6 +24,19 @@ const JACKPOT: &str = "casino_jackpot";
 const WINS: &str = "casino_wins";
 const AT_RISK: &str = "casino_at_risk";
 const WINS_KEEP: usize = 30;
+/// Each game's statistics (by its statistics key): its rounds by the hour (the last 24) and by
+/// the day (the last 28), all time, and its biggest and luckiest wins.
+const HOURS: &str = "casino_hours:";
+const DAYS: &str = "casino_days:";
+const ALL_TIME: &str = "casino_all:";
+const BIG: &str = "casino_big:";
+const LUCKY: &str = "casino_lucky:";
+const LIST_KEEP: usize = 10;
+/// Ember Dragon: each person's dragons (growth by bet), and the jackpots' pools.
+const DRAGON: &str = "casino_dragon:";
+const DRAGON_POOLS: &str = "casino_dragon_pools";
+/// Someone "is playing" a game for this long after their last round of it.
+const PLAYING_MS: u64 = 5 * 60_000;
 /// The jackpot's pool is told to everyone in the casino at most this often.
 const JACKPOT_TELL_MS: u64 = 3_000;
 
@@ -34,6 +47,8 @@ pub struct CasinoState {
     pub watchers: BTreeSet<String>,
     refunded: bool,
     jackpot_told: u64,
+    /// Who played each game (by statistics key) and when they last did.
+    playing: HashMap<String, HashMap<String, u64>>,
 }
 
 struct Player {
@@ -58,7 +73,7 @@ fn new_player() -> Player {
 
 /// A share of every bet goes to the Friday Night pool: half the house's edge, 1% at most (so
 /// the house still keeps something of every game).
-fn friday_share(game: Game, wagered: u64) -> u64 {
+pub(super) fn friday_share(game: Game, wagered: u64) -> u64 {
     let bp = (game.house_edge_bp() as u64 / 2).min(100);
     (wagered * bp).div_ceil(10_000)
 }
@@ -78,6 +93,88 @@ impl Poker {
 
     fn big_wins(hub: &Hub) -> Vec<BigWin> {
         hub.db.get_meta(WINS).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+    }
+
+    fn meta_json<T: serde::de::DeserializeOwned + Default>(hub: &Hub, key: &str) -> T {
+        hub.db.get_meta(key).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+    }
+
+    fn set_meta_json<T: serde::Serialize>(hub: &Hub, key: &str, v: &T) {
+        if let Ok(j) = serde_json::to_string(v) {
+            let _ = hub.db.set_meta(key, &j);
+        }
+    }
+
+    /// A round, counted in its game's statistics; and its win on the game's lists of biggest and
+    /// luckiest, if it's one of them.
+    fn count_round(hub: &Hub, st: &mut State, uid: &str, key: &str, win: &BigWin, now: u64) {
+        let add = |p: &mut PeriodStats| {
+            p.rounds += 1;
+            p.wagered += win.wagered;
+            p.paid += win.paid;
+        };
+        let (hour, day) = (now / 3_600_000, now / 86_400_000);
+        let mut hours: BTreeMap<u64, PeriodStats> = Self::meta_json(hub, &format!("{HOURS}{key}"));
+        add(hours.entry(hour).or_default());
+        hours.retain(|h, _| h + 24 > hour);
+        Self::set_meta_json(hub, &format!("{HOURS}{key}"), &hours);
+        let mut days: BTreeMap<u64, PeriodStats> = Self::meta_json(hub, &format!("{DAYS}{key}"));
+        add(days.entry(day).or_default());
+        days.retain(|d, _| d + 28 > day);
+        Self::set_meta_json(hub, &format!("{DAYS}{key}"), &days);
+        let mut all: PeriodStats = Self::meta_json(hub, &format!("{ALL_TIME}{key}"));
+        add(&mut all);
+        Self::set_meta_json(hub, &format!("{ALL_TIME}{key}"), &all);
+        st.casino.playing.entry(key.to_string()).or_default().insert(uid.to_string(), now);
+        if win.paid == 0 {
+            return;
+        }
+        // The biggest (chips back) and the luckiest (times the bet, winners only).
+        let mult = |w: &BigWin| casino::multiple_x100(w.paid, w.wagered);
+        for (list, better) in [(BIG, &(|a: &BigWin, b: &BigWin| a.paid > b.paid) as &dyn Fn(&BigWin, &BigWin) -> bool), (LUCKY, &|a: &BigWin, b: &BigWin| mult(a) > mult(b))] {
+            if list == LUCKY && win.paid <= win.wagered {
+                continue;
+            }
+            let k = format!("{list}{key}");
+            let mut wins: Vec<BigWin> = Self::meta_json(hub, &k);
+            if wins.len() >= LIST_KEEP && !wins.iter().any(|w| better(win, w)) {
+                continue;
+            }
+            let at = wins.iter().position(|w| better(win, w)).unwrap_or(wins.len());
+            wins.insert(at, win.clone());
+            wins.truncate(LIST_KEEP);
+            Self::set_meta_json(hub, &k, &wins);
+        }
+    }
+
+    /// A game's statistics, for its Info panel.
+    fn game_stats(hub: &Hub, st: &mut State, key: &str, now: u64) -> GameStats {
+        let (hour, day) = (now / 3_600_000, now / 86_400_000);
+        let sum = |m: &BTreeMap<u64, PeriodStats>, keep: &dyn Fn(u64) -> bool| {
+            m.iter().filter(|(k, _)| keep(**k)).fold(PeriodStats::default(), |mut a, (_, p)| {
+                a.rounds += p.rounds;
+                a.wagered += p.wagered;
+                a.paid += p.paid;
+                a
+            })
+        };
+        let hours: BTreeMap<u64, PeriodStats> = Self::meta_json(hub, &format!("{HOURS}{key}"));
+        let days: BTreeMap<u64, PeriodStats> = Self::meta_json(hub, &format!("{DAYS}{key}"));
+        let periods = vec![
+            sum(&hours, &|h| h + 24 > hour),
+            sum(&days, &|d| d + 7 > day),
+            sum(&days, &|d| d + 28 > day),
+            Self::meta_json(hub, &format!("{ALL_TIME}{key}")),
+        ];
+        let who = st.casino.playing.entry(key.to_string()).or_default();
+        who.retain(|_, at| now.saturating_sub(*at) < PLAYING_MS);
+        GameStats {
+            key: key.to_string(),
+            periods,
+            playing: who.len() as u32,
+            big: Self::meta_json(hub, &format!("{BIG}{key}")),
+            lucky: Self::meta_json(hub, &format!("{LUCKY}{key}")),
+        }
     }
 
     fn at_risk(hub: &Hub) -> BTreeMap<String, u64> {
@@ -117,12 +214,15 @@ impl Poker {
     }
 
     fn tell_casino(hub: &Hub, st: &State, res: CasinoRes) {
+        // (A big win at a game apps before 0.12.0 don't know: only to the apps that do.)
+        let new = matches!(&res, CasinoRes::BigWin { win } if win.game.is_new());
         for uid in &st.casino.watchers {
-            hub.send_to_user(uid, Event::Poker { msg: ToApp::Casino { res: res.clone() } });
+            let ev = Event::Poker { msg: ToApp::Casino { res: res.clone() } };
+            if new { hub.send_to_user_casino_next(uid, ev) } else { hub.send_to_user(uid, ev) }
         }
     }
 
-    fn casino_view(hub: &Hub, st: &mut State, uid: &str) -> CasinoView {
+    fn casino_view(hub: &Hub, st: &mut State, uid: &str, next: bool) -> CasinoView {
         let (rec, _) = hub.db.poker_record(uid);
         let p = st.casino.players.entry(uid.to_string()).or_insert_with(new_player);
         let commit = casino::commit(&p.seed);
@@ -139,24 +239,95 @@ impl Poker {
             jackpot: Self::jackpot(hub),
             friday_ms,
             friday_prize,
-            big_wins: Self::big_wins(hub),
+            big_wins: Self::big_wins(hub).into_iter().filter(|w| next || !w.game.is_new()).collect(),
             blackjack,
             craps: craps_table,
             stats: rec.casino.clone(),
+            dragon: next.then(|| DragonView { growth: Self::dragon_growth(hub, uid), pools: Self::dragon_pools(hub) }),
         }
     }
 
-    pub(super) fn casino(&self, hub: &Hub, st: &mut State, uid: &str, req: CasinoReq) -> Result<Option<ToApp>, String> {
+    fn dragon_growth(hub: &Hub, uid: &str) -> BTreeMap<u64, u32> {
+        Self::meta_json(hub, &format!("{DRAGON}{uid}"))
+    }
+
+    fn dragon_pools(hub: &Hub) -> dragon::Pools {
+        hub.db.get_meta(DRAGON_POOLS).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_else(dragon::seed_pools)
+    }
+
+    /// A spin of Ember Dragon: from the dragon's growth at its bet (as the app was last told),
+    /// the jackpots' pools with this spin's shares in; then the dragon's new growth kept, and a
+    /// pool won started again from its seed (the house puts that in).
+    #[allow(clippy::too_many_arguments)]
+    fn casino_dragon(&self, hub: &Hub, st: &mut State, uid: &str, commit: [u8; 32], seed: [u8; 32], bet: u64, growth: u32) -> Result<CasinoRes, String> {
+        dragon::check(bet, growth)?;
+        let (mut rec, _) = hub.db.poker_record(uid);
+        let mut grown = Self::dragon_growth(hub, uid);
+        if grown.get(&bet).copied().unwrap_or(0) != growth {
+            return Err("out of step with the house: your dragon's grown since; try again".into());
+        }
+        let p = st.casino.players.entry(uid.to_string()).or_insert_with(new_player);
+        if casino::commit(&p.seed) != commit {
+            return Err("out of step with the house: the casino is catching up, try again".into());
+        }
+        if bet > rec.chips {
+            return Err(format!("that's {} chips, and you have {}", super::progress_chips(bet), super::progress_chips(rec.chips)));
+        }
+        rec.chips -= bet;
+        let (server, nonce) = (p.seed, p.nonce);
+        p.seed = SysRandom.seed();
+        p.nonce += 1;
+        let mut s = casino::stream(&server, &seed, Game::Dragon, nonce);
+        Self::add_rake(hub, friday_share(Game::Dragon, bet));
+        let mut pools = Self::dragon_pools(hub);
+        for (pool, add) in pools.iter_mut().zip(dragon::pool_shares(bet)) {
+            *pool += add;
+        }
+        let o = dragon::play(bet, growth, pools, &mut s);
+        if let Some(r) = &o.respins {
+            for j in dragon::Jackpot::ALL {
+                let won = r.pooled[j.index()];
+                if won > 0 {
+                    pools[j.index()] = pools[j.index()].saturating_sub(won).max(j.seed());
+                    info!(chips = won, jackpot = j.name(), "casino: an Ember Dragon jackpot was won");
+                }
+            }
+        }
+        if let Ok(j) = serde_json::to_string(&pools) {
+            let _ = hub.db.set_meta(DRAGON_POOLS, &j);
+        }
+        grown.insert(bet, o.growth_after);
+        Self::set_meta_json(hub, &format!("{DRAGON}{uid}"), &grown);
+        let r = self.finish_round(hub, st, uid, rec, Outcome::Dragon(o), server, seed, nonce, None)?;
+        Ok(CasinoRes::Round { round: Box::new(r) })
+    }
+
+    pub(super) fn casino(&self, hub: &Hub, st: &mut State, uid: &str, req: CasinoReq, next: bool) -> Result<Option<ToApp>, String> {
         let res = match req {
             CasinoReq::Open => {
                 st.casino.watchers.insert(uid.to_string());
-                CasinoRes::State { view: Self::casino_view(hub, st, uid) }
+                CasinoRes::State { view: Self::casino_view(hub, st, uid, next) }
             }
             CasinoReq::Close => {
                 st.casino.watchers.remove(uid);
                 return Ok(None);
             }
-            CasinoReq::Play { commit, seed, bet } => self.casino_play(hub, st, uid, commit, seed, bet)?,
+            CasinoReq::Stats { key } => {
+                let known = key.len() <= 40 && (Game::from_id(&key).is_some() || casino::slot_rtp_bp(&key).is_some());
+                if !known {
+                    return Err("there's no such game".into());
+                }
+                CasinoRes::Stats { view: Self::game_stats(hub, st, &key, wall()) }
+            }
+            CasinoReq::Play { commit, seed, bet } => {
+                if bet.game().is_new() && !next {
+                    return Err("this game needs a newer Pyr".into());
+                }
+                match bet {
+                    Bet::Dragon { bet, growth } => self.casino_dragon(hub, st, uid, commit, seed, bet, growth)?,
+                    bet => self.casino_play(hub, st, uid, commit, seed, bet)?,
+                }
+            }
             CasinoReq::Blackjack { action } => self.casino_blackjack(hub, st, uid, action)?,
             CasinoReq::CrapsBets { bets } => {
                 let (mut rec, _) = hub.db.poker_record(uid);
@@ -290,6 +461,30 @@ impl Poker {
         Ok(CasinoRes::Blackjack { view, chips: rec.chips, next_commit, next_nonce })
     }
 
+    /// A round, counted in its game's statistics; a big win goes on the floor's ticker, for
+    /// everyone in the casino.
+    pub(super) fn round_counted(hub: &Hub, st: &mut State, uid: &str, o: &Outcome) {
+        let (wagered, paid) = (o.wagered(), match o {
+            Outcome::Craps(c) => c.paid + c.kept,
+            _ => o.paid(),
+        });
+        let jackpot = matches!(o, Outcome::Slots(s) if s.jackpot_won > 0) || matches!(o, Outcome::Dragon(d) if !d.jackpots().is_empty());
+        let key = o.stats_key();
+        // Embers on the Bonfire, and its cut of the bet.
+        Self::bonfire_add(hub, st, uid, wagered, &mut SysRandom);
+        let win = BigWin { name: Self::name_of(hub, uid), game: o.game(), wagered, paid, what: o.headline(), at_ms: wall(), key: key.clone() };
+        Self::count_round(hub, st, uid, &key, &win, wall());
+        if jackpot || (paid >= 1_000 && paid >= wagered.saturating_mul(20)) || paid.saturating_sub(wagered) >= 100_000 {
+            let mut wins = Self::big_wins(hub);
+            wins.insert(0, win.clone());
+            wins.truncate(WINS_KEEP);
+            if let Ok(j) = serde_json::to_string(&wins) {
+                let _ = hub.db.set_meta(WINS, &j);
+            }
+            Self::tell_casino(hub, st, CasinoRes::BigWin { win });
+        }
+    }
+
     /// Pays a round out, keeps the record, tells the casino of a big win, and shows the house's
     /// seed.
     #[allow(clippy::too_many_arguments)]
@@ -300,24 +495,9 @@ impl Poker {
         hub.db.set_poker_record(uid, &rec, held).map_err(|e| e.to_string())?;
         if !g.new_achievements.is_empty() || g.level_up.is_some() {
             let gains = pyr_poker::net::GainsView { xp: g.xp, achievements: g.new_achievements.iter().map(|s| s.to_string()).collect(), level_up: g.level_up, net: o.paid() as i64 - o.wagered() as i64 };
-            hub.send_to_user(uid, Event::Poker { msg: ToApp::Record { me: Self::view(hub, uid, &rec, held), gains: Some(gains) } });
+            hub.send_poker(uid, ToApp::Record { me: Self::view(hub, uid, &rec, held), gains: Some(gains) });
         }
-        // A big win: on the floor's ticker, for everyone in the casino.
-        let (wagered, paid) = (o.wagered(), match &o {
-            Outcome::Craps(c) => c.paid + c.kept,
-            _ => o.paid(),
-        });
-        let jackpot = matches!(&o, Outcome::Slots(s) if s.jackpot_won > 0);
-        if jackpot || (paid >= 1_000 && paid >= wagered.saturating_mul(20)) || paid.saturating_sub(wagered) >= 100_000 {
-            let win = BigWin { name: Self::name_of(hub, uid), game: o.game(), wagered, paid, what: o.headline(), at_ms: wall() };
-            let mut wins = Self::big_wins(hub);
-            wins.insert(0, win.clone());
-            wins.truncate(WINS_KEEP);
-            if let Ok(j) = serde_json::to_string(&wins) {
-                let _ = hub.db.set_meta(WINS, &j);
-            }
-            Self::tell_casino(hub, st, CasinoRes::BigWin { win });
-        }
+        Self::round_counted(hub, st, uid, &o);
         let jackpot_pool = Self::jackpot(hub);
         if o.game() == Game::Slots && wall().saturating_sub(st.casino.jackpot_told) >= JACKPOT_TELL_MS {
             st.casino.jackpot_told = wall();

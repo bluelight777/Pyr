@@ -23,13 +23,14 @@ pub struct DiceUi {
     pub over: bool,
     show: Option<(RoundView, Instant, bool)>,
     pub history: Vec<(u16, bool)>,
-    pub auto_left: u32,
+    /// Rolling by itself: rolls left (or until stopped), and whether a big win stops it.
+    pub auto: super::auto::Auto,
     next_at: Option<Instant>,
 }
 
 impl Default for DiceUi {
     fn default() -> Self {
-        DiceUi { chips: 10, chance: 5_000, over: false, show: None, history: Vec::new(), auto_left: 0, next_at: None }
+        DiceUi { chips: 10, chance: 5_000, over: false, show: None, history: Vec::new(), auto: Default::default(), next_at: None }
     }
 }
 
@@ -44,7 +45,7 @@ impl PyrApp {
         let c = &s.poker.casino;
         let ui = &self.poker.casino.dice;
         if ui.chips == 0 || ui.chips > super::chips_now(s) || self.poker.casino.busy() {
-            self.poker.casino.dice.auto_left = 0;
+            self.poker.casino.dice.auto.stop();
             return;
         }
         let Some(commit) = c.commit else { return };
@@ -104,11 +105,9 @@ impl PyrApp {
             if let Some(sh) = ui_s.show.as_mut() {
                 sh.2 = true;
             }
-            if ui_s.auto_left > 0 {
-                ui_s.auto_left -= 1;
-                if ui_s.auto_left > 0 {
-                    ui_s.next_at = Some(now + Duration::from_millis(350));
-                }
+            // (A big win: ten times the bet or more.)
+            if ui_s.auto.spun(o.paid >= o.chips * 10) {
+                ui_s.next_at = Some(now + Duration::from_millis(350));
             }
             if o.won {
                 self.poker.casino.sound_in(0.0, Cue::WinSmall, 0.0, 0.7);
@@ -116,7 +115,7 @@ impl PyrApp {
             self.poker.casino.settle_balance();
             self.poker.casino.celebrate(o.paid, o.chips, false, 0.0);
         }
-        if self.poker.casino.dice.auto_left > 0 && self.poker.casino.dice.next_at.is_some_and(|t| now >= t) {
+        if self.poker.casino.dice.auto.on() && self.poker.casino.dice.next_at.is_some_and(|t| now >= t) {
             self.poker.casino.dice.next_at = None;
             self.dice_roll(s);
         }
@@ -197,29 +196,32 @@ impl PyrApp {
         let picked = self.poker.casino.chip;
         let busy = self.poker.casino.busy() || k < ROLL_SECS;
         let mut x = cb.right() - 16.0;
-        let mut button = |ui: &mut egui::Ui, text: &str, w: f32, primary: bool, enabled: bool| -> bool {
+        let mut button_resp = |ui: &mut egui::Ui, id: &str, text: &str, w: f32, primary: bool, enabled: bool| -> egui::Response {
             let r = Rect::from_min_size(pos2(x - w, cb.center().y - 22.0), vec2(w, 44.0));
             x -= w + 10.0;
-            let resp = ui.interact(r, ui.id().with(("dc", text)), Sense::click());
+            let resp = ui.interact(r, ui.id().with(("dc", id)), if enabled { Sense::click() } else { Sense::hover() });
             let fill = if !enabled { Color32::from_white_alpha(18) } else if primary { if resp.hovered() { col::GOLD2 } else { col::GOLD } } else if resp.hovered() { Color32::from_white_alpha(46) } else { Color32::from_white_alpha(24) };
             ui.painter().rect_filled(r, theme::r(12), fill);
             ui.painter().text(r.center(), Align2::CENTER_CENTER, text, theme::bold_font(15.0), if primary && enabled { Color32::from_rgb(0x2a, 0x10, 0x04) } else if enabled { Color32::WHITE } else { Color32::from_white_alpha(70) });
-            enabled && resp.clicked()
+            resp
         };
         let space = ui.ctx().input(|i| i.key_pressed(egui::Key::Space)) && !ui.ctx().wants_keyboard_input();
-        let auto = self.poker.casino.dice.auto_left;
+        let auto = self.poker.casino.dice.auto;
         let ok = bet > 0 && bet <= super::chips_now(s) && !busy;
-        if auto > 0 {
-            if button(ui, &format!("Stop ({auto})"), 130.0, true, true) {
-                self.poker.casino.dice.auto_left = 0;
+        if auto.on() {
+            if button_resp(ui, "roll", &format!("Stop ({})", auto.left_text()), 130.0, true, true).clicked() {
+                self.poker.casino.dice.auto.stop();
             }
-        } else if button(ui, "Roll", 130.0, true, ok) || (space && ok) {
+        } else if button_resp(ui, "roll", "Roll", 130.0, true, ok).clicked() || (space && ok) {
             self.dice_roll(s);
         }
-        if button(ui, "Auto 10", 96.0, false, auto == 0 && ok) {
-            self.poker.casino.dice.auto_left = 10;
+        // Rolling by itself: how many times, or until stopped (its menu).
+        let resp = button_resp(ui, "auto", "Auto ⌄", 96.0, false, !auto.on() && ok);
+        if let Some(n) = super::auto::menu(&resp, &mut self.poker.casino.dice.auto) {
+            self.poker.casino.dice.auto.left = n;
             self.poker.casino.dice.next_at = Some(now);
         }
+        let mut button = |ui: &mut egui::Ui, text: &str, w: f32, primary: bool, enabled: bool| -> bool { button_resp(ui, text, text, w, primary, enabled).clicked() };
         if button(ui, "2×", 56.0, false, !busy) {
             self.poker.casino.dice.chips = (bet * 2).clamp(1, 100_000);
         }

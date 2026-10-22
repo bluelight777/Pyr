@@ -52,6 +52,19 @@ pub use win::start;
 #[cfg(not(windows))]
 pub fn start(_engine: std::sync::Arc<pyr_engine::Engine>) {}
 
+/// How full the PC's memory is (percent in use), where Pyr can tell (Windows).
+#[cfg(windows)]
+pub fn pc_memory_in_use() -> Option<u32> {
+    use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    let mut ms = MEMORYSTATUSEX { dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32, ..Default::default() };
+    unsafe { GlobalMemoryStatusEx(&mut ms).is_ok().then_some(ms.dwMemoryLoad) }
+}
+
+#[cfg(not(windows))]
+pub fn pc_memory_in_use() -> Option<u32> {
+    None
+}
+
 #[cfg(windows)]
 mod win {
     use std::collections::HashMap;

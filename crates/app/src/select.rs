@@ -113,6 +113,12 @@ impl Selection {
         ctx.memory_mut(|m| m.open_popup_at(id, at));
     }
 
+    /// Whether the selection (in `chat`) takes in message `msg`: its text has to be drawn to be
+    /// copied, on the screen or not.
+    pub fn spans(&self, chat: &Chat, msg: MessageId) -> bool {
+        self.chat.as_ref() == Some(chat) && self.sorted().is_some_and(|(a, b)| a.part.msg <= msg && msg <= b.part.msg)
+    }
+
     pub fn clear(&mut self) {
         self.anchor = None;
         self.focus = None;

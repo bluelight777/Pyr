@@ -5,7 +5,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
-use crate::bots::{self, Level};
+use crate::bots::talk::{self, Moment};
+use crate::bots::{self, Level, Reads};
 use crate::cards::Card;
 use crate::eval;
 use crate::fair::{self, Stream};
@@ -28,8 +29,26 @@ pub const MISSES_TO_SIT_OUT: u32 = 2;
 pub const AWAY_MS: u64 = 1_200;
 /// Hands kept for the history.
 pub const HISTORY: usize = 30;
-/// A Time Bomb gone off: each push, a moment apart.
-pub const BOMB_PUSH_MS: u64 = 700;
+/// A Flash Pot gone off: each push, a moment apart.
+/// After a Flash Pot's gone off, each push all in comes this long after the last (and up to
+/// `BOMB_PUSH_SPREAD_MS` more, a little different each time, as people push their chips in).
+/// An all-in's board comes a street at a time (apps show it so, and the next hand waits for
+/// it): the hands turn over, the first street comes, then each next, then the pot's pushed.
+pub const RUNOUT_SHOW_MS: u64 = 300;
+pub const RUNOUT_FIRST_MS: u64 = 1_200;
+pub const RUNOUT_STREET_MS: u64 = 1_400;
+pub const RUNOUT_WIN_MS: u64 = 1_000;
+
+/// How long an all-in's board takes to show, `streets` of it still to come.
+pub fn runout_ms(streets: usize) -> u64 {
+    match streets {
+        0 => 0,
+        n => RUNOUT_FIRST_MS + RUNOUT_STREET_MS * (n as u64 - 1) + RUNOUT_WIN_MS,
+    }
+}
+
+pub const BOMB_PUSH_MS: u64 = 1_500;
+pub const BOMB_PUSH_SPREAD_MS: u64 = 1_100;
 
 /// Where the server gets random numbers (its system's generator; tests use a seeded stream).
 pub trait Random {
@@ -73,6 +92,20 @@ pub enum Effect {
     Raked { chips: u64 },
     /// A prize box opened by whoever won the hand.
     Prize { uid: String, chips: u64, item: Option<String> },
+    /// A cash hand, for MMR: everyone dealt in (their rating id, name and a bot's level) and
+    /// what they won or lost, in big blinds.
+    RateHand { players: Vec<(String, String, Option<Level>, f64)> },
+    /// A tournament (or Flash Pot) over, for MMR: everyone in it and where they finished.
+    RatePlaces { players: Vec<(String, String, Option<Level>, usize)> },
+    /// A round at a blackjack table played out for a person (their bets, their hands and what
+    /// came back, for their records; the chips themselves come as a `Credit`).
+    BjRound { uid: String, outcome: crate::casino::blackjack::Outcome },
+    /// A roll at a craps table decided some of a person's bets (for their records; the chips
+    /// themselves come as a `Credit`).
+    CrapsRoll { uid: String, outcome: crate::casino::craps::Outcome },
+    /// A coup at a baccarat table played out for a person (for their records; the chips come as
+    /// a `Credit`).
+    BacCoup { uid: String, outcome: crate::casino::baccarat::Outcome },
 }
 
 #[derive(Default)]
@@ -129,7 +162,21 @@ struct SeatMeta {
     misses: u32,
     /// Asked to leave: they go when the hand is over.
     leaving: bool,
+    /// Who a bot is (its way of playing, its pace and its voice: see `bots::persona`), and
+    /// when it last said something.
+    who: &'static bots::Persona,
+    said_ms: u64,
 }
+
+impl SeatMeta {
+    fn new(bot: Option<Level>, look: Look, bank_ms: u64, name: &str) -> SeatMeta {
+        SeatMeta { bot, look, bank_ms, misses: 0, leaving: false, who: bots::persona::of(name), said_ms: 0 }
+    }
+}
+
+/// Bots' table talk: never two lines closer than this at a table, nor from one bot.
+const TALK_GAP_MS: u64 = 9_000;
+const BOT_TALK_GAP_MS: u64 = 40_000;
 
 enum Phase {
     /// Waiting for players, or for the next hand at `next`.
@@ -151,6 +198,33 @@ struct Playing {
     /// When the player to act runs out of time (and into their bank), or a bot acts.
     deadline: u64,
     using_bank: bool,
+    /// Bots' choices, think times and table talk this hand (from the dealer's secret seed: as
+    /// unpredictable as the cards, and telling nothing about them).
+    whim: Stream,
+    /// A bot's move, chosen as its turn came, made when its think time is up.
+    plan: Option<Plan>,
+}
+
+/// What a bot's going to do when its think time's up, and whether it's worth a word.
+#[derive(Clone, Copy, Debug)]
+struct Plan {
+    seat: usize,
+    action: Action,
+    moment: Option<Moment>,
+}
+
+/// Whether a bot's move is worth a word: shoving, or calling someone's shove.
+fn moment_of(v: &bots::Seen, action: Action) -> Option<Moment> {
+    let me = v.spot.me();
+    let shove = matches!(action, Action::AllIn) || matches!(action, Action::Raise { to } if to >= v.spot.legal.max_to && v.spot.limit == crate::game::Limit::NoLimit);
+    let calls_shove = action == Action::Call && v.spot.opponents().any(|o| o.all_in && o.street_bet > me.street_bet);
+    if shove && v.spot.legal.can_raise {
+        Some(Moment::AllIn)
+    } else if calls_shove || shove {
+        Some(Moment::CalledAllIn)
+    } else {
+        None
+    }
 }
 
 pub struct Room {
@@ -177,13 +251,130 @@ pub struct Room {
     pub tourney: Option<u64>,
     /// No new hand until let go (a tournament moving players).
     pub hold: bool,
-    /// A Time Bomb gone off: everyone is all in, every hand (a moment for each to see it).
+    /// A Flash Pot gone off: everyone is all in, every hand (a moment for each to see it); and
+    /// gone off in the middle of a hand, from the very next one.
     pub bomb: bool,
+    bomb_next: bool,
     /// Blinds for the next hand (a tournament's level went up mid-hand).
     next_rules: Option<Rules>,
+    /// What everyone's actions here have shown of how they play (by player): what bots read
+    /// their opponents by.
+    reads: HashMap<String, Reads>,
+    /// When a bot last spoke here, and its lines lately (none said twice in a row).
+    talk_ms: u64,
+    said: VecDeque<&'static str>,
+    /// Tournaments: who's gone out of chips, for the tournament to place (at the next tick).
+    busted: Vec<(String, u64)>,
+}
+
+/// A hand's actions as everyone saw them, from its events.
+fn public_actions(log: &[(To, Event)]) -> Vec<crate::game::Played> {
+    let mut street = Street::Preflop;
+    let mut out = Vec::new();
+    for (_, e) in log {
+        match e {
+            Event::Street { street: s, .. } => street = *s,
+            Event::Acted { seat, action, amount, .. } => out.push(crate::game::Played { street, seat: *seat, action: *action, put: *amount }),
+            _ => {}
+        }
+    }
+    out
 }
 
 impl Room {
+    /// What the bots here have read of everyone dealt in now, by seat.
+    fn reads_here(&self) -> Vec<(usize, Reads)> {
+        self.table.seats.iter().enumerate().filter_map(|(i, s)| s.as_ref().map(|s| (i, self.reads.get(&s.player).copied().unwrap_or_default()))).collect()
+    }
+
+    /// A bot says something at `m`, now and then: one line at a time at the table, each bot
+    /// not too often, none repeated soon. (0.12 apps show it; older ones never see it.)
+    fn talk(&mut self, seat: usize, m: Moment, now: u64, whim: &mut Stream, out: &mut Output) {
+        if now < self.talk_ms + TALK_GAP_MS {
+            return;
+        }
+        let Some(meta) = self.meta.get(&seat) else { return };
+        let Some(level) = meta.bot else { return };
+        if meta.said_ms > 0 && now < meta.said_ms + BOT_TALK_GAP_MS {
+            return;
+        }
+        let who = meta.who;
+        let recent: Vec<&str> = self.said.iter().copied().collect();
+        let Some(text) = talk::line(m, level, who, &recent, whim) else { return };
+        self.talk_ms = now;
+        if let Some(meta) = self.meta.get_mut(&seat) {
+            meta.said_ms = now;
+        }
+        self.said.push_back(text);
+        while self.said.len() > 12 {
+            self.said.pop_front();
+        }
+        out.all(ToApp::Say { table: self.id, seat, text: text.to_string() });
+    }
+
+    /// A word from a bot as a hand ends, about the most notable thing everyone saw: a bot gone
+    /// broke, a bad beat, a big pot, someone gone broke, a showdown, a pot nobody contested.
+    #[allow(clippy::too_many_arguments)]
+    fn talk_at_hand_end(&mut self, start: &[Option<(String, u64)>], events: &[Event], board: &[Card], pot: u64, now: u64, whim: &mut Stream, out: &mut Output) {
+        let bb = self.table.rules.big_blind.max(1);
+        let big = pot >= bb * 40;
+        let stacks: HashMap<usize, u64> = events.iter().find_map(|e| if let Event::HandEnded { stacks, .. } = e { Some(stacks.iter().copied().collect()) } else { None }).unwrap_or_default();
+        let net = |seat: usize| -> i64 { stacks.get(&seat).copied().unwrap_or(0) as i64 - start.get(seat).cloned().flatten().map(|(_, c)| c as i64).unwrap_or(0) };
+        let winners: BTreeSet<usize> = events.iter().filter_map(|e| if let Event::Won { seats, amounts, .. } = e { Some(seats.iter().zip(amounts).filter(|(_, a)| **a > 0).map(|(s, _)| *s).collect::<Vec<_>>()) } else { None }).flatten().collect();
+        let shown: HashMap<usize, Vec<Card>> = events.iter().filter_map(|e| if let Event::Shown { seat, cards, .. } = e { Some((*seat, cards.clone())) } else { None }).collect();
+        let showdown = !shown.is_empty();
+        let is_bot = |seat: usize| self.meta.get(&seat).is_some_and(|m| m.bot.is_some());
+        let dealt: Vec<usize> = (0..start.len()).filter(|s| start[*s].is_some() && stacks.contains_key(s)).collect();
+        let bots_here: Vec<usize> = self.meta.iter().filter(|(_, m)| m.bot.is_some()).map(|(s, _)| *s).collect();
+        let mut tries: Vec<(usize, Moment)> = Vec::new();
+        for &seat in &dealt {
+            if is_bot(seat) && stacks.get(&seat) == Some(&0) {
+                tries.push((seat, Moment::Busted));
+            }
+        }
+        for &seat in &dealt {
+            if is_bot(seat)
+                && net(seat) < 0
+                && let Some(cards) = shown.get(&seat)
+                && board.len() == 5
+                && bots::hand_value(self.table.rules.variant, cards, board).category() >= eval::Category::TwoPair
+            {
+                tries.push((seat, Moment::BadBeat));
+            }
+        }
+        for &seat in &winners {
+            if is_bot(seat) && big {
+                tries.push((seat, Moment::WonBig));
+            }
+        }
+        // A person's big moments: a bot (not one who just lost to them, mind) says so.
+        let person_moment = dealt.iter().find_map(|&s| (!is_bot(s) && stacks.get(&s) == Some(&0)).then_some(Moment::OtherBusted)).or_else(|| winners.iter().find(|&&s| !is_bot(s) && big).map(|_| Moment::OtherWonBig));
+        if let Some(m) = person_moment {
+            let quiet: Vec<usize> = bots_here.iter().copied().filter(|b| net(*b) >= 0).collect();
+            let pool = if quiet.is_empty() { &bots_here } else { &quiet };
+            if !pool.is_empty() {
+                tries.push((pool[whim.below(pool.len() as u32) as usize], m));
+            }
+        }
+        for &seat in &winners {
+            if is_bot(seat) {
+                tries.push((seat, if showdown { Moment::WonShowdown } else { Moment::WonUncontested }));
+            }
+        }
+        for &seat in &dealt {
+            if is_bot(seat) && shown.contains_key(&seat) && net(seat) < 0 {
+                tries.push((seat, Moment::LostShowdown));
+            }
+        }
+        for (seat, m) in tries {
+            let before = self.talk_ms;
+            self.talk(seat, m, now, whim, out);
+            if self.talk_ms != before {
+                break;
+            }
+        }
+    }
+
     pub fn new(id: TableId, name: &str, owner: &str, rules: Rules, buy_in: BuyIn) -> Result<Room, String> {
         rules.check()?;
         if buy_in.min_bb == 0 || buy_in.min_bb > buy_in.max_bb {
@@ -212,7 +403,12 @@ impl Room {
             tourney: None,
             hold: false,
             bomb: false,
+            bomb_next: false,
             next_rules: None,
+            reads: HashMap::new(),
+            talk_ms: 0,
+            said: VecDeque::new(),
+            busted: Vec::new(),
         })
     }
 
@@ -320,6 +516,7 @@ impl Room {
                     folded: p.is_some_and(|p| p.folded),
                     all_in: p.is_some_and(|p| p.all_in),
                     cards,
+                    mmr: None,
                 })
             })
             .collect();
@@ -336,7 +533,7 @@ impl Room {
             board: hs.map(|h| h.board.clone()).unwrap_or_default(),
             pot: hs.map(|h| h.pot()).unwrap_or(0),
             to_act: hs.and_then(|h| h.to_act),
-            // (A Time Bomb gone off leaves nothing to choose.)
+            // (A Flash Pot gone off leaves nothing to choose.)
             legal: my_seat.filter(|_| !self.bomb).and_then(|s| self.table.legal(s)),
             my_seat,
             recent: self.history.iter().map(|(h, _)| h.number).collect(),
@@ -356,10 +553,17 @@ impl Room {
             return Err(format!("sit down with {} to {} chips", self.min_buy_in(), self.max_buy_in()));
         }
         self.table.sit(seat, uid, name, chips)?;
-        self.meta.insert(seat, SeatMeta { bot: None, look, bank_ms: BANK_START_MS, misses: 0, leaving: false });
+        self.meta.insert(seat, SeatMeta::new(None, look, BANK_START_MS, name));
         self.watchers.insert(uid.into());
         let mut out = Output::default();
         self.changed(&mut out);
+        // A bot says hello, now and then.
+        let mut whim = Stream::new(fair::seed_from(now ^ (seat as u64) << 48));
+        let bots: Vec<usize> = self.meta.iter().filter(|(_, m)| m.bot.is_some()).map(|(s, _)| *s).collect();
+        if !bots.is_empty() {
+            let who = bots[whim.below(bots.len() as u32) as usize];
+            self.talk(who, Moment::Welcome, now, &mut whim, &mut out);
+        }
         self.maybe_start(now, &mut out);
         Ok(out)
     }
@@ -377,12 +581,8 @@ impl Room {
         // Bots sit with the most chips the table allows.
         let chips = self.max_buy_in();
         self.table.sit(seat, &id, &name, chips)?;
-        let lvl = match level {
-            Level::Rookie => 3,
-            Level::Regular => 12,
-            Level::Shark => 30,
-        };
-        self.meta.insert(seat, SeatMeta { bot: Some(level), look: Look { level: lvl, card_back: String::new(), frame: String::new() }, bank_ms: 0, misses: 0, leaving: false });
+        let lvl = level.look_level();
+        self.meta.insert(seat, SeatMeta::new(Some(level), Look { level: lvl, card_back: String::new(), frame: String::new() }, 0, &name));
         let mut out = Output::default();
         self.changed(&mut out);
         self.maybe_start(now, &mut out);
@@ -517,7 +717,7 @@ impl Room {
             return Err("that hand is over".into());
         }
         if self.bomb {
-            return Err("the bomb's gone off: everyone's all in, every hand".into());
+            return Err("the Flash Pot's gone off: everyone's all in, every hand".into());
         }
         let mut out = Output::default();
         if let Some(m) = self.meta.get_mut(&seat) {
@@ -548,11 +748,13 @@ impl Room {
         let mut ended = false;
         let mut showdown = false;
         let mut turn = None;
+        let mut streets = 0;
         for (to, e) in events {
             match &e {
                 Event::Turn { seat, .. } => turn = Some(*seat),
                 Event::HandEnded { .. } => ended = true,
                 Event::Shown { .. } => showdown = true,
+                Event::Street { .. } => streets += 1,
                 _ => {}
             }
             p.log.push((to, e.clone()));
@@ -569,18 +771,44 @@ impl Room {
         }
         if ended {
             self.end_hand(showdown, now, out);
+            // Streets dealt with nobody left to bet (everyone all in): the board's shown a
+            // street at a time, and the next hand waits for it.
+            if streets > 0
+                && let Phase::Idle { next: Some(t) } = &mut self.phase
+            {
+                *t += runout_ms(streets);
+            }
             return;
         }
         if let Some(seat) = turn {
-            let bot = self.is_bot(seat);
+            let bot = self.meta.get(&seat).and_then(|m| m.bot.map(|l| (l, m.who)));
+            let seen = if bot.is_some() && !self.bomb {
+                self.table.seen(seat).map(|mut v| {
+                    v.reads = self.reads_here();
+                    v
+                })
+            } else {
+                None
+            };
+            let first = self.table.hand.as_ref().is_some_and(|h| h.actions.is_empty());
+            let bomb = self.bomb;
             let Phase::Playing(p) = &mut self.phase else { return };
             p.using_bank = false;
-            if self.bomb {
-                // (All in, for everyone: a moment to see each push.)
-                p.deadline = now + BOMB_PUSH_MS;
-            } else if bot {
-                // Bots think for a moment (longer on bigger decisions), like people.
-                p.deadline = now + 900 + (seat as u64 * 377 + hand * 131) % 1600;
+            p.plan = None;
+            if bomb {
+                // (All in, for everyone, one push after another, a moment to see each: a
+                // little longer for the hand's first, with everyone's cards just dealt.)
+                p.deadline = now + BOMB_PUSH_MS + p.whim.below(BOMB_PUSH_SPREAD_MS as u32) as u64 + if first { 1_000 } else { 0 };
+            } else if let Some((level, who)) = bot {
+                // A bot chooses as its turn comes (from what it sees: its own cards and the
+                // table), then takes as long over it as a person would over that choice, at its
+                // own pace: a quick fold, a think before a big call, the odd snap and the odd
+                // long tank. It makes its move when the time's up.
+                let action = seen.as_ref().map(|v| bots::decide_as(v, level, who, &mut p.whim)).unwrap_or(Action::Fold);
+                let moment = seen.as_ref().and_then(|v| moment_of(v, action));
+                let ms = seen.as_ref().map(|v| bots::think_ms(&v.spot, level, who, action, &mut p.whim)).unwrap_or(1_200);
+                p.plan = Some(Plan { seat, action, moment });
+                p.deadline = now + ms;
             } else if self.tourney.is_some() && self.meta.get(&seat).is_some_and(|m| m.misses >= MISSES_TO_SIT_OUT) {
                 // Away in a tournament: folded for (or checked) after a moment.
                 p.deadline = now + AWAY_MS;
@@ -593,7 +821,13 @@ impl Room {
     }
 
     fn end_hand(&mut self, showdown: bool, now: u64, out: &mut Output) {
-        let Phase::Playing(p) = std::mem::replace(&mut self.phase, Phase::Idle { next: Some(now + if showdown { AFTER_SHOWDOWN_MS } else { BETWEEN_MS }) }) else { return };
+        let Phase::Playing(mut p) = std::mem::replace(&mut self.phase, Phase::Idle { next: Some(now + if showdown { AFTER_SHOWDOWN_MS } else { BETWEEN_MS }) }) else { return };
+        // The bomb went off during the hand: the next one's all in.
+        if self.bomb_next {
+            self.bomb_next = false;
+            self.bomb = true;
+            self.changed(out);
+        }
         // The shuffle, for anyone to check: every card everyone saw come off the deck.
         let mut seen: Vec<Option<Card>> = vec![None; p.deck.len()];
         let shown: Vec<Card> = p.log.iter().filter_map(|(_, e)| if let Event::Shown { cards, .. } = e { Some(cards.clone()) } else { None }).flatten().collect();
@@ -628,7 +862,27 @@ impl Room {
             };
             Some((v.0, v.category(), v.describe()))
         };
-        let shark_in_showdown = shown.iter().any(|s| self.meta.get(s).is_some_and(|m| m.bot == Some(Level::Shark)));
+        let shark_in_showdown = shown.iter().any(|s| self.meta.get(s).is_some_and(|m| matches!(m.bot, Some(Level::Shark | Level::Genius))));
+        // MMR: a cash hand, chips won against chips lost (tournaments are rated by place).
+        if self.tourney.is_none() {
+            let end: HashMap<usize, u64> = events.iter().find_map(|e| if let Event::HandEnded { stacks, .. } = e { Some(stacks.iter().copied().collect()) } else { None }).unwrap_or_default();
+            let bb = rules.big_blind.max(1) as f64;
+            let players: Vec<(String, String, Option<Level>, f64)> = p
+                .seats_at_start
+                .iter()
+                .enumerate()
+                .filter_map(|(seat, s)| {
+                    let (uid, start) = s.as_ref()?;
+                    let now_has = *end.get(&seat)?;
+                    let name = self.table.seats.get(seat).cloned().flatten().map(|x| x.name).unwrap_or_default();
+                    let bot = self.meta.get(&seat).and_then(|m| m.bot);
+                    Some((crate::rating::id_of(uid, &name, bot), name, bot, (now_has as f64 - *start as f64) / bb))
+                })
+                .collect();
+            if players.len() >= 2 {
+                out.effects.push(Effect::RateHand { players });
+            }
+        }
         for (seat, s) in p.seats_at_start.iter().enumerate() {
             let Some((uid, _)) = s else { continue };
             let result = progress::read_hand(&events, seat, &values);
@@ -665,6 +919,16 @@ impl Room {
         if self.hand_times.len() > 50 {
             self.hand_times.pop_front();
         }
+        // What everyone's actions showed (for the bots' reads), and a word from a bot.
+        let actions = public_actions(&p.log);
+        let dealt: Vec<usize> = events.iter().find_map(|e| if let Event::HandStarted { seats, .. } = e { Some(seats.clone()) } else { None }).unwrap_or_default();
+        for seat in dealt {
+            if let Some(Some((uid, _))) = p.seats_at_start.get(seat) {
+                self.reads.entry(uid.clone()).or_default().count(seat, &actions);
+            }
+        }
+        let mut whim = std::mem::replace(&mut p.whim, Stream::new([0; 32]));
+        self.talk_at_hand_end(&p.seats_at_start, &events, &board_final, pot, now, &mut whim, out);
         let p_start = p.seats_at_start.clone();
         let hist = HandHistory {
             number: p.hand,
@@ -703,7 +967,9 @@ impl Room {
                     && let Some(s) = self.table.stand(seat)
                 {
                     let started = p_start.get(seat).cloned().flatten().map(|(_, c)| c).unwrap_or(0);
-                    out.busted.push((s.player, started));
+                    // (Told to the tournament at the table's next tick, however the hand ended:
+                    // a person's action ends hands too, and its output goes elsewhere.)
+                    self.busted.push((s.player, started));
                     self.meta.remove(&seat);
                 }
                 continue;
@@ -799,6 +1065,7 @@ impl Room {
             seat,
             name: s.name.clone(),
             bot,
+            mmr: None,
             here: self.tallies.get(&s.player).cloned().unwrap_or_default(),
             overall: if bot.is_some() { None } else { overall },
             hands,
@@ -857,6 +1124,7 @@ impl Room {
     /// The clock: deals the next hand, takes bots' turns, and acts for people whose time ran out.
     pub fn tick(&mut self, now: u64, rng: &mut dyn Random) -> Output {
         let mut out = Output::default();
+        out.busted.append(&mut self.busted);
         match &mut self.phase {
             Phase::Idle { next } => {
                 if self.hold || self.table.ready().len() < 2 {
@@ -898,13 +1166,25 @@ impl Room {
                     }
                     return out;
                 }
-                let bot = self.meta.get(&seat).and_then(|m| m.bot);
-                if let Some(level) = bot {
-                    let view = self.table.bot_view(seat);
+                let bot = self.meta.get(&seat).and_then(|m| m.bot.map(|l| (l, m.who)));
+                if let Some((level, who)) = bot {
                     let mut s = Stream::new(rng.seed());
-                    let action = view.map(|v| bots::decide(&v, level, &mut s)).unwrap_or(Action::Fold);
+                    // Its move, chosen as its turn came (or, without one, chosen now).
+                    let (action, moment) = match p.plan.take().filter(|pl| pl.seat == seat) {
+                        Some(pl) => (pl.action, pl.moment),
+                        None => {
+                            let seen = self.table.seen(seat).map(|mut v| {
+                                v.reads = self.reads_here();
+                                v
+                            });
+                            let action = seen.as_ref().map(|v| bots::decide_as(v, level, who, &mut s)).unwrap_or(Action::Fold);
+                            (action, seen.as_ref().and_then(|v| moment_of(v, action)))
+                        }
+                    };
                     if self.apply(seat, action, now, &mut out).is_err() {
                         let _ = self.apply(seat, Action::Fold, now, &mut out);
+                    } else if let Some(m) = moment {
+                        self.talk(seat, m, now, &mut s, &mut out);
                     }
                     return out;
                 }
@@ -970,7 +1250,8 @@ impl Room {
             Err(_) => return,
         };
         let button = self.table.button.unwrap_or(0);
-        self.phase = Phase::Playing(Box::new(Playing { hand, dealer, commit, seeds, deck, log: Vec::new(), seats_at_start, button, deadline: now, using_bank: false }));
+        let whim = Stream::new(fair::derive(&dealer, "bots"));
+        self.phase = Phase::Playing(Box::new(Playing { hand, dealer, commit, seeds, deck, log: Vec::new(), seats_at_start, button, deadline: now, using_bank: false, whim, plan: None }));
         for (uid, table) in views {
             out.to(&uid, ToApp::Snapshot { table });
         }
@@ -1001,7 +1282,7 @@ impl Room {
     pub fn place(&mut self, uid: &str, name: &str, seat: usize, chips: u64, look: Look, bot: Option<Level>, out: &mut Output) -> Result<(), String> {
         self.table.sit(seat, uid, name, chips)?;
         let bank = if bot.is_some() { 0 } else { BANK_START_MS };
-        self.meta.insert(seat, SeatMeta { bot, look, bank_ms: bank, misses: 0, leaving: false });
+        self.meta.insert(seat, SeatMeta::new(bot, look, bank, name));
         if bot.is_none() {
             self.watchers.insert(uid.into());
         }
@@ -1028,6 +1309,20 @@ impl Room {
     pub fn set_misses(&mut self, seat: usize, misses: u32) {
         if let Some(m) = self.meta.get_mut(&seat) {
             m.misses = misses;
+        }
+    }
+
+    /// The bomb's gone off (a Flash Pot): from the very next hand everyone's all in, every hand
+    /// till one is left. A hand being played when it goes off plays out as it was.
+    pub fn bomb_goes_off(&mut self, out: &mut Output) {
+        if self.bomb || self.bomb_next {
+            return;
+        }
+        if matches!(self.phase, Phase::Playing(_)) {
+            self.bomb_next = true;
+        } else {
+            self.bomb = true;
+            self.changed(out);
         }
     }
 

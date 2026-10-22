@@ -3,6 +3,9 @@
 //! and the progress a player makes. No networking and no randomness of its own: the Pyr server
 //! runs tables with it, and the app uses it to show hands and to check the dealer.
 
+pub mod bacroom;
+pub mod bjroom;
+pub mod crapsroom;
 pub mod bots;
 pub mod cards;
 pub mod casino;
@@ -11,6 +14,7 @@ pub mod fair;
 pub mod game;
 pub mod net;
 pub mod progress;
+pub mod rating;
 pub mod room;
 pub mod tourney;
 

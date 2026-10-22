@@ -483,7 +483,8 @@ impl PyrApp {
         let unread = s.mentions.get(&g.id).copied().unwrap_or(0);
         let col = if selected || unread > 0 { theme::TEXT() } else { theme::MUTED() };
         let room = r.width() - 48.0 - 34.0;
-        let sub = if show_server { format!("{} members · {}", g.members.len(), s.name) } else { format!("{} members", g.members.len()) };
+        let members = if g.members.len() == 1 { "1 member".to_string() } else { format!("{} members", g.members.len()) };
+        let sub = if show_server { format!("{members} · {}", s.name) } else { members };
         crate::emoji::paint_text(&p, pos2(r.left() + 48.0, r.center().y - 7.0), Align2::LEFT_CENTER, &name, theme::bold_font(14.0), col, Some(room));
         p.text(pos2(r.left() + 48.0, r.center().y + 9.0), Align2::LEFT_CENTER, sub, theme::font(11.5), theme::DIM());
         if unread > 0 {

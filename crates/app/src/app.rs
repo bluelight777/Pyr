@@ -155,6 +155,8 @@ pub enum Act {
     StreamMuted(bool),
     /// A channel dragged just above `before` (or last).
     MoveChannel { key: String, channel: ChannelId, before: Option<ChannelId> },
+    /// Someone in voice dragged (or sent with Move to) into another voice channel.
+    MoveMember { key: String, uid: String, channel: ChannelId },
     /// An invite for the Invite dialog (one of mine with these settings, if it still works;
     /// `fresh`: a new one regardless, as Generate a new link makes).
     CreateInvite { key: String, max_uses: Option<u32>, expires_secs: Option<u64>, fresh: bool },
@@ -359,6 +361,8 @@ pub struct UiState {
     pub channel: HashMap<String, ChannelId>,
     /// A channel being dragged into another place in the list: (server, channel).
     pub channel_drag: Option<(String, ChannelId)>,
+    /// Someone in voice being dragged to another voice channel: (server, who, from where).
+    pub member_drag: Option<(String, String, ChannelId)>,
     pub call_view: bool,
     pub drafts: HashMap<(String, ChannelId), String>,
     pub reply: Option<(MessageId, String)>,
@@ -443,6 +447,8 @@ pub struct UiState {
     pub viewer_play: crate::chat::ViewerPlay,
     /// Where each conversation is scrolled to, kept steady while things load (see `chat.rs`).
     pub chat_scroll: HashMap<(String, ChannelId), crate::chat::ChatScroll>,
+    /// Each conversation's messages' heights as last laid out (see `chat::MsgHeight`).
+    pub msg_heights: HashMap<(String, ChannelId), HashMap<pyr_proto::control::MessageId, crate::chat::MsgHeight>>,
     /// While drawing a conversation: pictures load only inside this (near the screen); `None`
     /// elsewhere, where they always load.
     pub load_rect: Option<Rect>,
@@ -689,6 +695,7 @@ impl PyrApp {
             Act::UpdateChannel { key, channel, name, topic } => e.update_channel(&key, channel, name, topic),
             Act::DeleteChannel { key, channel } => e.delete_channel(&key, channel),
             Act::MoveChannel { key, channel, before } => e.move_channel(&key, channel, before),
+            Act::MoveMember { key, uid, channel } => e.move_member(&key, &uid, channel),
             Act::StreamMuted(m) => e.set_stream_muted(m),
             Act::SuggestIdea { title, body } => e.suggest_idea(&title, &body),
             Act::CreateInvite { key, max_uses, expires_secs, fresh } => e.make_invite(&key, max_uses, expires_secs, !fresh),
@@ -1029,7 +1036,7 @@ impl PyrApp {
         }
     }
 
-    fn toast(&self, text: impl Into<String>, error: bool) {
+    pub(crate) fn toast(&self, text: impl Into<String>, error: bool) {
         self.engine.shared.state.write().toast(text, error);
     }
 
@@ -1199,6 +1206,22 @@ impl eframe::App for PyrApp {
         for e in pyr_engine::errors::take() {
             engine.shared.state.write().toast(e, true);
         }
+        // Poker: what's held back to be shown in its turn (an all-in's board, a street at a
+        // time), shown when it's due, wherever I am in Pyr.
+        {
+            let now = std::time::Instant::now();
+            let (due, next): (Vec<String>, Option<std::time::Instant>) = {
+                let st = engine.state();
+                let due = st.servers.iter().filter(|s| s.poker.next_due().is_some_and(|d| d <= now)).map(|s| s.key.clone()).collect();
+                (due, st.servers.iter().filter_map(|s| s.poker.next_due()).min())
+            };
+            for k in due {
+                engine.poker_pump(&k);
+            }
+            if let Some(n) = next {
+                ctx.request_repaint_after(n.saturating_duration_since(now));
+            }
+        }
         // A key or the mouse in the window: I'm here (see `pyr_engine::idle`).
         let active = ctx.input(|i| {
             i.pointer.delta() != egui::Vec2::ZERO
@@ -1354,13 +1377,9 @@ impl eframe::App for PyrApp {
                     }
                     Err(e) => self.toast(&format!("Couldn't start the add-on: {e}"), true),
                 },
-                // A plugin's folder to send in: gathered and checked, shown in the form.
-                crate::images::FolderFor::PluginSource => {
-                    let gathered = crate::plugins::source::gather(&dir);
-                    let sends_before = engine.state().plugin_sends_done;
-                    let author = engine.state().my_name.clone();
-                    self.plugins.form = Some(crate::plugins::ui::SubmitForm { gathered, author, contact: String::new(), agree: false, sends_before, scroll: true });
-                }
+                // A plugin's folder (or a .zip of it) to send in: gathered and checked, shown in
+                // the form.
+                crate::images::FolderFor::PluginSource | crate::images::FolderFor::PluginZip => self.plugin_chosen(&dir),
                 // A skin someone's making: worn until they stop (and again whenever it changes).
                 crate::images::FolderFor::TrySkin => match pyr_engine::skins::check_folder(&dir) {
                     Ok((files, report)) if report.ok() => {
@@ -1934,6 +1953,8 @@ impl PyrApp {
                 if self.poker.open.is_some() && self.poker.open.as_deref() != Some(server.key.as_str()) {
                     self.close_poker();
                 }
+                // The Bonfire lit on this server: the show, over everything.
+                self.bonfire_show(ctx, &server);
                 if self.poker.open.is_some() && !(self.ui.call_view && in_call_here) {
                     if self.ui.active_view.is_some() {
                         acts.push(Act::ClearActive);
@@ -2183,6 +2204,8 @@ impl PyrApp {
         }
         chose |= crate::calls::call_item(ui, st, uid, Some(&s.key), acts);
         chose |= self.make_sure_menu(ui, st, s, uid, acts);
+        // A Game Master's gift of chips.
+        chose |= self.give_chips_item(ui, s, uid);
         if !me {
             ui.separator();
             volume_items(ui, st, s, uid, acts);
@@ -2209,6 +2232,25 @@ impl PyrApp {
             }
             server_voice_items(ui, st, s, uid, acts);
             ui.separator();
+        }
+        // Move members: to another of the server's voice channels (Discord's Move To; dragging
+        // them in the channel list does the same).
+        let now_in = s.voice.values().find(|p| p.user_id == uid && !s.is_private(p.channel_id)).map(|p| p.channel_id);
+        if let Some(now) = now_in.filter(|_| !me && s.can(perm::MOVE_MEMBERS) && s.has(pyr_proto::control::MOVE_FEATURE)) {
+            let others: Vec<(ChannelId, String)> = s.channels.iter().filter(|c| c.kind == ChannelKind::Voice && c.id != now).map(|c| (c.id, c.name.clone())).collect();
+            if !others.is_empty() {
+                ui.menu_button("Move to", |ui| {
+                    crate::menu::style(ui);
+                    for (id, name) in others {
+                        if ui.button(name).clicked() {
+                            acts.push(Act::MoveMember { key: s.key.clone(), uid: uid.to_string(), channel: id });
+                            chose = true;
+                            ui.close();
+                        }
+                    }
+                });
+                ui.separator();
+            }
         }
         if ui.button("Copy safety code").clicked() {
             acts.push(Act::Copy(pyr_proto::crypto::safety_code(uid)));
@@ -2493,6 +2535,9 @@ impl PyrApp {
 
     fn channel_sidebar(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, acts: &mut Vec<Act>) {
         // (A drag from another server's list, left behind when it was switched away from.)
+        if self.ui.member_drag.as_ref().is_some_and(|(k, _, _)| *k != s.key) {
+            self.ui.member_drag = None;
+        }
         if self.ui.channel_drag.as_ref().is_some_and(|(k, _)| *k != s.key) {
             self.ui.channel_drag = None;
         }
@@ -2651,6 +2696,12 @@ impl PyrApp {
                 let dragging = self.ui.channel_drag.as_ref().filter(|(k, _)| *k == s.key).map(|(_, c)| *c).filter(|d| s.channels.iter().any(|c| c.id == *d && c.kind == kind));
                 let mut rows: Vec<(ChannelId, Rect)> = Vec::new();
                 let mut dropped = false;
+                // Each voice channel's part of the list (its row and the people under it), for
+                // where someone being dragged would go.
+                let mut blocks: Vec<(ChannelId, Rect)> = Vec::new();
+                // Moving people (Move members, on servers that can) by dragging them, like
+                // Discord's; anyone can drag themselves (that's joining).
+                let can_move = s.can(perm::MOVE_MEMBERS) && s.has(pyr_proto::control::MOVE_FEATURE);
                 for c in s.channels.iter().filter(|c| c.kind == kind) {
                     let is_current = current == Some(c.id) && self.poker.open.is_none()
                         && (kind == ChannelKind::Text || !self.ui.call_view || st.call.as_ref().map(|x| x.channel_id != c.id).unwrap_or(true));
@@ -2846,7 +2897,11 @@ impl PyrApp {
                             // Only that part lights up and takes clicks, like Discord.
                             let row = Rect::from_min_max(pos2(indent - 6.0, r.top()), r.max);
                             let uid = p.user_id.clone();
-                            let presp = ui.interact(row, ui.id().with(("voice-member", c.id, p.session)), Sense::click());
+                            let draggable = uid == st.my_uid || can_move;
+                            let presp = ui.interact(row, ui.id().with(("voice-member", c.id, p.session)), if draggable { Sense::click_and_drag() } else { Sense::click() });
+                            if draggable && presp.drag_started() {
+                                self.ui.member_drag = Some((s.key.clone(), uid.clone(), c.id));
+                            }
                             let pointer_in = presp.contains_pointer();
                             let card_open = self.ui.profile_card.as_ref().is_some_and(|(k, u, _)| *k == s.key && *u == uid);
                             if pointer_in || card_open {
@@ -2950,6 +3005,38 @@ impl PyrApp {
                                 }
                             });
                         }
+                        blocks.push((c.id, Rect::from_min_max(rect.min, pos2(rect.max.x, ui.cursor().top().max(rect.bottom())))));
+                    }
+                }
+                // Someone being dragged to another voice channel: the channel the pointer's over
+                // lights up, their picture and name follow the pointer; let go there, and
+                // they're moved (or I join it, when it's me).
+                if let Some((_, who, from)) = self.ui.member_drag.clone().filter(|(k, _, _)| *k == s.key && kind == ChannelKind::Voice) {
+                    let pointer = ui.ctx().pointer_latest_pos();
+                    let target = pointer.and_then(|p| blocks.iter().find(|(_, r)| r.contains(p))).map(|(id, _)| *id).filter(|t| *t != from);
+                    let p = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("member-drag")));
+                    if let Some((_, r)) = target.and_then(|t| rows.iter().find(|(id, _)| *id == t)) {
+                        p.rect_stroke(*r, crate::theme::r(6), Stroke::new(2.0f32, theme::EMBER()), egui::StrokeKind::Inside);
+                    }
+                    if let Some(pt) = pointer {
+                        let name = s.member_name(&who);
+                        let g = p.layout_no_wrap(name.clone(), theme::font(14.0), theme::TEXT());
+                        let r = Rect::from_min_size(pt + vec2(14.0, -16.0), vec2(g.size().x + 44.0, 32.0));
+                        p.rect_filled(r, crate::theme::r(8), theme::ELEV2().gamma_multiply(0.96));
+                        let face = self.face(ui.ctx(), s, &who);
+                        avatar(&p, pos2(r.left() + 17.0, r.center().y), 11.0, &who, &name, false, theme::ELEV2(), face);
+                        p.galley(pos2(r.left() + 34.0, r.center().y - g.size().y / 2.0), g, theme::TEXT());
+                    }
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    if !ui.ctx().input(|i| i.pointer.any_down()) {
+                        if let Some(t) = target {
+                            if who == st.my_uid {
+                                acts.push(Act::Join { key: s.key.clone(), channel: t });
+                            } else {
+                                acts.push(Act::MoveMember { key: s.key.clone(), uid: who, channel: t });
+                            }
+                        }
+                        self.ui.member_drag = None;
                     }
                 }
                 // Where a dragged channel would go: just above the row the pointer is above the
@@ -3349,6 +3436,9 @@ impl PyrApp {
                         }
                         crate::calls::call_item(ui, st, &uid, Some(&key), acts);
                         self.make_sure_menu(ui, st, s, &uid, acts);
+                        if self.give_chips_item(ui, s, &uid) {
+                            ui.close();
+                        }
                         if !me && !s.is_bot(&uid) {
                             ui.separator();
                             volume_items(ui, st, s, &uid, acts);

@@ -54,6 +54,16 @@ pub fn seeds_fingerprint(player_seeds: &[[u8; 32]]) -> [u8; 32] {
     h.finalize().into()
 }
 
+/// A seed of its own for `what`, from a secret one: as unpredictable, and neither tells
+/// anything about the other.
+pub fn derive(seed: &[u8; 32], what: &str) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(b"pyr derive v1");
+    h.update(seed);
+    h.update(what.as_bytes());
+    h.finalize().into()
+}
+
 /// Random numbers from a seed (SHA-256 in counter mode).
 pub struct Stream {
     seed: [u8; 32],

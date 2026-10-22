@@ -1010,8 +1010,15 @@ impl PyrApp {
             ui,
             &mut draft.echo_cancellation,
             "Echo cancellation",
-            "Needed if you use speakers instead of headphones: it keeps what they play from going back out through your microphone.",
+            "Needed if you use speakers instead of headphones: it keeps what they play from going back out through your microphone. \
+             With headphones it stands aside by itself.",
         );
+        // What it's doing right now (in a call, or while Let's check runs).
+        if draft.echo_cancellation
+            && let Some(now) = self.engine.mic_echo()
+        {
+            fine(ui, &format!("Right now: {now}"));
+        }
         toggle_row(ui, &mut draft.auto_gain, "Automatic gain control", "Keeps how loud you come across even, whether you're close to your microphone or further away.");
         toggle_row(
             ui,

@@ -397,6 +397,11 @@ pub(crate) async fn send(
     progress: &(dyn Fn(Option<String>) + Send + Sync),
 ) -> Result<(), String> {
     let on = on_for(shared, server);
+    // Pictures only. (The server can't look inside an encrypted one, so it's checked here, the
+    // way the server checks one that isn't; the app checks before it gets this far.)
+    if files.iter().any(|(_, bytes)| pyr_proto::control::sniff_image(bytes).is_none()) {
+        return Err("Only PNG, JPEG, GIF and WebP images can be sent.".into());
+    }
     let conn = if files.is_empty() { None } else { Some(h.connection().ok_or("not connected")?) };
     let key = if on { Some(outbound(shared, server, h, channel).await?) } else { None };
     let mut ids = Vec::new();

@@ -133,6 +133,13 @@ pub fn imports_nothing(wasm: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// Files sent in that the sandbox's build never sees: the lock file (the vendored crates
+/// decide), and settings for cargo or rustup in the plugin's own folder (`.cargo/config.toml`
+/// could change how it's linked, `rust-toolchain.toml` which compiler builds it).
+pub fn left_out_of_build(path: &str) -> bool {
+    path == "Cargo.lock" || path.starts_with(".cargo/") || path == ".cargo" || path == "rust-toolchain" || path == "rust-toolchain.toml"
+}
+
 /// The real thing: bubblewrap round cargo.
 pub struct Sandbox {
     /// Where rustup put the toolchain (RUSTUP_HOME, CARGO_HOME): read-only inside.
@@ -157,7 +164,7 @@ impl Builder for Sandbox {
         let result = (|| -> Result<Vec<u8>> {
             for (path, bytes) in files {
                 let Some(rel) = safe_rel(path) else { bail!("{path}: not a plain path") };
-                if path == "Cargo.lock" {
+                if left_out_of_build(path) {
                     continue;
                 }
                 let to = src.join(rel);
@@ -221,6 +228,16 @@ pub fn safe_rel(path: &str) -> Option<&Path> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cargo_settings_sent_in_are_not_built_with() {
+        for p in [".cargo/config.toml", ".cargo/config", "rust-toolchain.toml", "rust-toolchain", "Cargo.lock"] {
+            assert!(left_out_of_build(p), "{p}");
+        }
+        for p in ["Cargo.toml", "src/lib.rs", "pyr-plugin/src/lib.rs", "docs/.cargo-notes.md"] {
+            assert!(!left_out_of_build(p), "{p}");
+        }
+    }
 
     fn cargo(text: &str) -> Vec<(String, Vec<u8>)> {
         vec![("Cargo.toml".into(), text.as_bytes().to_vec()), ("src/lib.rs".into(), b"".to_vec())]

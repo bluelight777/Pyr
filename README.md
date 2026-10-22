@@ -79,6 +79,8 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
 - Opus with error correction and loss concealment, echo cancellation and automatic gain
   (WebRTC AEC3/AGC2), noise suppression (RNNoise or WebRTC) or **voice isolation**
   (DeepFilterNet3: only your voice gets through, no keyboard, mouse, fans or machines).
+  Pyr listens for your speakers in your microphone: with headphones the echo canceller stands
+  aside by itself, so it never turns your voice down while others talk.
 - Voice activity or **push-to-talk** with a global key that still works in your game (mouse
   buttons 4/5 too), per-person volume, mute and deafen, and a mic test. Right-click your
   name for Mute and Deafen, as in Discord (deafening mutes you too).
@@ -90,7 +92,8 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
 - **Server Mute and Server Deafen** for moderators: a server muted person isn't heard (nor
   is their stream's sound), a server deafened one hears nobody and isn't heard either (like
   deafening yourself), until a moderator above them undoes it, in any voice channel of the
-  server. A moderator can't undo their own (only the owner can).
+  server. A moderator can't undo their own (only the owner can). With **Move members**,
+  drag someone in voice from one voice channel to another (or right-click them: Move to).
 - Calls stay connected while the server restarts or updates, and a microphone or speakers
   that drop out mid-call (a USB hiccup, a virtual device restarting) come back by themselves.
   A camera or screen share that was on stays off until you turn it back on (Pyr offers to):
@@ -195,7 +198,8 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   and sort by favorites, name, author or newest.
 - **Make your own with Claude**: Plugins → Make your own starts an add-on in a folder with the
   plugin kit and a `CLAUDE.md` that explains Pyr add-ons to Claude. Say what it should do,
-  try the `.wasm` it builds right there in Pyr, then **send it for review**: Pyr sends its
+  try the `.wasm` it builds right there in Pyr, then **send it for review**: choose its folder
+  or a `.zip` of it, or drop either on Make your own, or ask Claude to send it. Pyr sends its
   Rust source (never a built file), and nothing is built or listed until it's been looked at.
   The kit, a template and Dice are in [`plugins/`](plugins).
 - **The Claude connector** (`pyr-mcp`, installed with Pyr; Settings → Claude adds it to
@@ -206,29 +210,50 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   Make your own (on the Plugins or Skins page) shows whether yours were approved, with the
   reviewer's note. How to make a skin: [`skins/`](skins).
 
-![The Pyr Library: Chimbrowser, Dice and Firelit Poker, with Dice's panel open](docs/screenshots/plugins.png)
+![The Pyr Library: Chimbrowser, Dice, Dominó Cubano and Pyr Casino, with Dice's panel open](docs/screenshots/plugins.jpg)
 
-**Pyr Casino** (0.10)
+**Pyr Casino** (0.10; all new art in 0.12)
 
-- Every server has a casino for **play chips** (they can't be bought or cashed out): poker
-  with the people there and with bots, and seven games against the house: **Pyr Sevens**
-  (five reels, twenty lines, wild flames, free spins and the Phoenix Jackpot, which grows
-  with every spin anyone makes there), **blackjack**, single-zero **roulette**, **baccarat**,
-  **craps**, **dice** and **keno**.
+- Every server has a casino for **play chips** (they can't be bought or cashed out). Under
+  **Casino**, the house's games: fourteen slot machines (**Pyr Sevens** and its Phoenix
+  Jackpot; **Ember Dragon**, hold and spin, with a dragon that grows as it's fed and four
+  jackpots; and the twelve from Chimbita's Reel Row, four of them funny on purpose:
+  Scoville Slots, Sugar Rush, The Daily Grind and Frostbite Fortune), **blackjack** for
+  seven, **craps** and **baccarat** for five (people and bots at the same table),
+  single-zero **roulette**, **dice** and **keno**. Under **Poker**: the tables, Flash Pots,
+  Pyr Friday Night and tournaments.
+- Every slot pays back about 99% over a long run (the tests work it out exactly), and its
+  Info panel says so, with what it pays, how everyone on the server has done at it (the last
+  day, week, four weeks and all time; its biggest and luckiest wins), how you have, and its
+  challenges. Some machines' bonus is a prize wheel. **Auto** spins 10 to 1,000 times or
+  until you stop it, and a big win stops it so you can enjoy it.
+- **The Bonfire**: a giant prize pool, fed by a cut of the house's take on every bet. Every
+  round anyone plays throws embers on the fire, and once a day it's lit: fourteen embers are
+  drawn, and the Grand Ember takes half the pool. The house fixes the draw's seed before
+  the first ember, and anyone's Pyr can draw it again to check.
 - **Nobody can rig it, the house included.** Before each round the server commits to a secret
   seed (it shows only its SHA-256), your Pyr adds a seed of its own with the bet, and when
   the round is over the server shows its seed and your Pyr plays the whole round again to
   check every reel, card, ball and die. Poker shuffles are checked the same way. The count
   of rounds checked is on every table.
-- **Time Bombs**: a five-player sit & go. A wheel picks the prize when the table fills (3
-  to 1,000 times the buy-in) and the winner takes it all; after a three-minute fuse the bomb
-  goes off and every hand is all in. Bots take any seat nobody sits in.
+- **Flash Pots**: a five-player sit & go. A wheel picks the prize when the table fills (3
+  to 1,000 times the buy-in) and the winner takes it all; after a three-minute fuse the Flash
+  Pot goes off and every hand is all in. Bots take any seat nobody sits in. (A flash pot is
+  the stage pyrotechnic that goes off with a bang: a flashpoint, and a pot.)
 - **Pyr Friday Night**: a free tournament every Friday at 10 PM US Eastern, its prize money
   the week's rake (5% of a cash-table pot, 3 big blinds at most, nothing without a flop).
+- **Bots** take any seat nobody sits in, at four levels up to **Genius**, which plays the
+  way good players do from what anyone at the table could see. Each one is somebody: by its
+  name it has a way of playing, a pace, and a voice at the table (reformed trolls, mostly,
+  and only ever about what everyone saw). **MMR**: one rating for everyone who plays poker on
+  a server, bots included, moving the way chess ratings do, with a ladder.
 - Poker extras: a hand strength meter, right-click anyone for their hands and stats, a time
   bank with a countdown, tournaments with climbing blinds, and **Game Masters and
-  Ambassadors** who give chips, looks and prize boxes (within an allowance set by the rake,
-  logged for the owner).
+  Ambassadors** who give chips (from anyone's right-click menu too), looks and prize boxes
+  (within an allowance set by the rake, logged for the owner; the owner gives without a
+  limit, and that's in the log too).
+- **Emotes**: eighteen big stickers at every table (poker, blackjack, craps and baccarat),
+  popping up over whoever sent them.
 - **Fullscreen** (F11) and **Streamer mode**: hole cards stay face down until you hold Space,
   and invite links are hidden; it turns on by itself while you share your screen. While you
   play, the game fills Pyr's window (a window capture shows nothing of your servers), a
@@ -236,9 +261,18 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   with the session's winnings beside it, and results are called out big enough to read on a
   stream.
 
-![Pyr Casino's floor: the Phoenix Jackpot, Pyr Friday Night, big wins as they happen, and a tile for every game](docs/screenshots/casino.png)
+![Pyr Casino's Casino tab: The Bonfire with its pool and the clock to when it's lit, then the Phoenix Jackpot](docs/screenshots/casino.jpg)
 
-![A Time Bomb table with five players: the prize wheel lands on 5×, so the winner takes 500 chips](docs/screenshots/time-bomb.png)
+![All fourteen slot machines, each paying back 99%: Pyr Sevens, Ember Dragon, Scoville Slots, Deep Sea Treasure, Cosmic Jackpot, Sugar Rush, Gold Rush, Neon Nights, Tomb of Ra, Frostbite Fortune, Moonlit Cauldron, Dragon's Hoard, The Daily Grind and Starlight Cabaret](docs/screenshots/slots.jpg)
+
+<p>
+<img src="docs/screenshots/ember-dragon.jpg" width="49%" alt="Ember Dragon: the four jackpots over the reels, and an Adult dragon multiplying reel wins by three">
+<img src="docs/screenshots/blackjack.jpg" width="49%" alt="Blackjack for seven, people and bots at one table, with the eighteen emotes open">
+</p>
+<p>
+<img src="docs/screenshots/flash-pot.jpg" width="49%" alt="A Flash Pot's table is full, and the prize wheel spins for 3 to 1,000 times the buy-in">
+<img src="docs/screenshots/flash-pot-win.jpg" width="49%" alt="A Flash Pot's end: Dusk wins the 300 chips, three times the buy-in">
+</p>
 
 **The app**
 
@@ -699,23 +733,24 @@ for the research behind it.
 ## How it's tested
 
 Pyr is used on real Windows 10 and 11 PCs, and every release is also tested in a Linux
-sandbox before it ships: about 200 automated tests, including end-to-end runs with a real
+sandbox before it ships: nearly 500 automated tests, including end-to-end runs with a real
 server and several clients over QUIC (chat, invites, end-to-end encrypted voice in both
 directions, webcam pixels, 1080p screen sharing, stream sound reaching only viewers, late
 joiners, voice through server restarts, roles, pictures, custom emoji, direct messages,
 calls between friends and group calls (ringing, declining, privacy, moving a call into a
 group), friends and blocking, unread marks, backups restored on another server, bug
 reports, the soundboard heard by everyone in the call, server mute and deafen enforced by
-the server, backups whose server key only their owner can open, release files that
-expire; and for
-plugins, the library's signed list, installs checked file by file, add-ons that reach
-outside or run away being stopped, plugins and skins sent in kept for the library's owner,
-signed so only their sender can send new versions, a skin's big files sent in parts and
-fetched one by one; the Claude connector's tools over both kinds of MCP; and for Pyr Casino,
-each game's return to player worked out exactly and over many played rounds, every round
-replayed from its seeds and checked, tournaments played down to one winner, and Time Bombs
-filled with bots, spun and set off). The
-app is driven through its real UI on a virtual display (visual fixes are checked with
+the server, backups whose server key only their owner can open, release files that expire);
+for voice, the echo canceller standing aside when your speakers can't be heard in your
+microphone (headphones) and stepping in when they can; for plugins, the library's signed
+list, installs checked file by file, add-ons that reach outside or run away being stopped,
+plugins and skins sent in kept for the library's owner, signed so only their sender can
+send new versions, a skin's big files sent in parts and fetched one by one; the Claude
+connector's tools over both kinds of MCP; and for Pyr Casino, each game's return to player
+worked out exactly and over many played rounds, every round replayed from its seeds and
+checked, tournaments played down to one winner, Flash Pots filled with bots, spun and set
+off, bots that never see what a player couldn't, and the Bonfire drawn again and checked.
+The app is driven through its real UI on a virtual display (visual fixes are checked with
 before-and-after captures), and the Windows builds are run under Wine (the app, the server,
 the bot and the setup).
 

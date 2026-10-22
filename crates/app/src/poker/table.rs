@@ -136,8 +136,9 @@ impl PyrApp {
         if self.poker.log_open {
             self.hand_log(ui, t, Rect::from_min_max(pos2(full.right() - log_w, top.bottom()), full.max));
         }
-        self.emotes(&p, &lay, t);
-        // A Time Bomb: its wheel, fuse and bang over the felt.
+        self.emotes(&p, ui.ctx(), &lay, t);
+        self.says(&p, &lay, t);
+        // A Flash Pot: its wheel, fuse and bang over the felt.
         if let Some(tid) = v.tourney
             && s.poker.tourney.get(&tid).is_some_and(|tv| tv.bomb.is_some())
         {
@@ -311,7 +312,7 @@ impl PyrApp {
             ),
             (B::Sound, if self.poker.mute { "Sound off" } else { "Sound on" }, 92.0, "The table's sounds: cards, chips, your turn"),
         ];
-        if !tourney && s.poker.me.as_ref().is_some_and(|m| m.role.is_some()) && v.prize.is_none() {
+        if !tourney && (s.poker.me.as_ref().is_some_and(|m| m.role.is_some()) || super::staff::prize_limit(s).is_some()) && v.prize.is_none() {
             all.push((B::Prize, "Prize box", 92.0, "Drop a prize box: whoever wins the next hand opens it"));
         }
         all.push((B::Log, if self.poker.log_open { "Hide log" } else { "Hand log" }, 92.0, ""));
@@ -516,7 +517,11 @@ impl PyrApp {
                         self.engine.poker(&s.key, ToServer::AddBot { table: v.id, seat: i, level: Level::Regular });
                     }
                     resp.context_menu(|ui| {
-                        for l in [Level::Rookie, Level::Regular, Level::Shark] {
+                        for l in Level::ALL {
+                            // (Genius only where the server knows it.)
+                            if l == Level::Genius && !s.has(pyr_proto::control::CASINO_012_FEATURE) {
+                                continue;
+                            }
                             if ui.button(format!("Add a {} bot", l.name())).clicked() {
                                 self.engine.poker(&s.key, ToServer::AddBot { table: v.id, seat: i, level: l });
                                 ui.close();
@@ -622,6 +627,13 @@ impl PyrApp {
         p.circle_filled(lv, 11.5, Color32::from_rgb(0x16, 0x14, 0x1a));
         p.circle_stroke(lv, 11.5, Stroke::new(1.5f32, Color32::from_rgb(0xff, 0xc4, 0x4a).gamma_multiply(fade.max(0.6))));
         p.text(lv, Align2::CENTER_CENTER, seat.level.to_string(), theme::bold_font(10.5), Color32::WHITE.gamma_multiply(fade.max(0.6)));
+        if let Some(mmr) = seat.mmr {
+            let tier = pyr_poker::rating::Tier::of(mmr as f64);
+            let at_r = at + vec2(r0 * 0.8, -r0 * 0.6);
+            super::rank::emblem(&p, at_r, 11.0, tier);
+            let tip = ui.interact(Rect::from_center_size(at_r, vec2(24.0, 24.0)), ui.id().with(("mmr", i)), Sense::hover());
+            tip.on_hover_text(format!("{} · {} MMR", tier.name(), chips_text(mmr as u64)));
+        }
         if let Some(level) = seat.bot {
             let (label, col) = level_tag(level);
             let tag = Rect::from_center_size(plate.center_top() + vec2(0.0, -1.0), vec2(8.0 + 6.6 * label.len() as f32, 15.0));
@@ -647,8 +659,12 @@ impl PyrApp {
             p.rect_filled(r, theme::r(12), col.gamma_multiply(alpha));
             p.text(r.center(), Align2::CENTER_CENTER, text, theme::bold_font(12.5), Color32::WHITE.gamma_multiply(alpha));
         }
-        // The hand they showed.
-        if let Some(name) = t.events.iter().rev().find_map(|(_, e)| if let Event::Shown { seat: si, hand, .. } = e { (*si == i && !hand.is_empty()).then(|| hand.clone()) } else { None }) {
+        // The hand they showed, as it stands with the board so far (an all-in's board comes a
+        // street at a time: "Pair of Aces", then "Two Pair", then "Flush, Ace high").
+        let shown_name = t.events.iter().rev().find_map(|(_, e)| if let Event::Shown { seat: si, hand, .. } = e { (*si == i).then(|| hand.clone()) } else { None }).map(|said| {
+            if seat.cards.len() >= 2 { describe_mine(v.rules.variant, &seat.cards, &v.board) } else { said }
+        });
+        if let Some(name) = shown_name.filter(|n| !n.is_empty()) {
             let r = Rect::from_center_size(plate.center_bottom() + vec2(0.0, 12.0), vec2(14.0 + 6.6 * name.len() as f32, 20.0));
             p.rect_filled(r, theme::r(10), Color32::from_rgba_unmultiplied(0x2a, 0x1e, 0x08, 235));
             p.rect_stroke(r, theme::r(10), Stroke::new(1.0f32, Color32::from_rgb(0xc8, 0x9a, 0x3a)), StrokeKind::Inside);
@@ -821,24 +837,16 @@ impl PyrApp {
             self.poker.pre = PreAction::None;
             self.poker.pre_hand = Some(hand);
         }
-        // Emotes, bottom left (when there's room).
-        let mut ex = bar.left() + 16.0;
-        if bar.width() > 980.0 {
-            for e in ["👍", "😂", "😮", "😎", "🔥", "GG"] {
-                let r = Rect::from_min_size(pos2(ex, bar.bottom() - 52.0), vec2(38.0, 36.0));
-                ex += 42.0;
-                let resp = ui.interact(r, ui.id().with(("emote", e)), Sense::click());
-                p.rect_filled(r, theme::r(18), if resp.hovered() { Color32::from_white_alpha(30) } else { Color32::from_white_alpha(12) });
-                crate::emoji::paint_text(&p, r.center(), Align2::CENTER_CENTER, e, theme::bold_font(15.0), theme::TEXT(), None);
-                if resp.on_hover_text("Send to the table").clicked() {
-                    self.engine.poker(&s.key, ToServer::Emote { table: v.id, emote: e.into() });
-                }
-            }
+        // Emotes, bottom left (when there's room): the quick ones, and all eighteen behind +.
+        if bar.width() > 980.0
+            && let Some(e) = crate::casino::emotes::bar(ui, pos2(bar.left() + 16.0, bar.bottom() - 62.0), 46.0, "poker-emotes", &mut self.poker.emote_last)
+        {
+            self.engine.poker(&s.key, ToServer::Emote { table: v.id, emote: e });
         }
         let seat = v.seats[me].as_ref();
         if v.bomb {
-            // (A Time Bomb gone off: nothing to choose.)
-            p.text(pos2(bar.right() - 16.0, bar.center().y), Align2::RIGHT_CENTER, "The bomb's gone off: everyone's all in, every hand", theme::bold_font(15.0), Color32::from_rgb(0xff, 0x8a, 0x6a));
+            // (A Flash Pot gone off: nothing to choose.)
+            p.text(pos2(bar.right() - 16.0, bar.center().y), Align2::RIGHT_CENTER, "The Flash Pot's gone off: everyone's all in, every hand", theme::bold_font(15.0), Color32::from_rgb(0xff, 0x8a, 0x6a));
             return;
         }
         let legal = v.legal;
@@ -1071,16 +1079,42 @@ impl PyrApp {
         });
     }
 
-    fn emotes(&self, p: &egui::Painter, lay: &Layout, t: &TableLive) {
-        for (seat, e, at) in &t.emotes {
+    /// Bots' table talk: a speech bubble by the seat for a few seconds (over the felt side of
+    /// it, its tail to the seat). Off when bots' chatter is turned off.
+    fn says(&self, p: &egui::Painter, lay: &Layout, t: &TableLive) {
+        if self.poker.bots_quiet {
+            return;
+        }
+        for (seat, text, at) in &t.says {
             let k = ago(*at);
-            if k > 3.0 {
+            let life = 4.5 + text.chars().count() as f32 * 0.035;
+            if k > life {
                 continue;
             }
-            let pos = lay.seat(*seat) + vec2(36.0, -40.0 - 30.0 * ease(k / 3.0));
-            let alpha = (1.0 - (k - 2.2).max(0.0) / 0.8).clamp(0.0, 1.0);
-            p.circle_filled(pos, 20.0, Color32::from_black_alpha((150.0 * alpha) as u8));
-            crate::emoji::paint_text(p, pos, Align2::CENTER_CENTER, e, theme::bold_font(18.0), Color32::WHITE.gamma_multiply(alpha), None);
+            let a = (k / 0.18).min(1.0) * ((life - k) / 0.5).clamp(0.0, 1.0);
+            let pop = 0.85 + 0.15 * ease((k / 0.22).min(1.0));
+            let ink = Color32::from_rgb(0x22, 0x1c, 0x28);
+            let g = p.layout(text.clone(), theme::font(13.0), ink, 230.0);
+            let size = (g.size() + vec2(26.0, 16.0)) * pop;
+            let at_seat = lay.seat(*seat);
+            // (Lower seats talk upwards, upper seats downwards: always over the felt.)
+            let up = at_seat.y > lay.c.y;
+            let gap = 58.0 + size.y / 2.0;
+            let r = Rect::from_center_size(at_seat + vec2(0.0, if up { -gap } else { gap }), size);
+            let fill = Color32::from_rgba_unmultiplied(0xfb, 0xf6, 0xec, (242.0 * a) as u8);
+            p.rect_filled(r.translate(vec2(0.0, 4.0)), theme::r(14), Color32::from_black_alpha((90.0 * a) as u8));
+            p.rect_filled(r, theme::r(14), fill);
+            let (edge, tip) = if up { (r.bottom() - 1.0, r.bottom() + 11.0) } else { (r.top() + 1.0, r.top() - 11.0) };
+            let x = r.center().x.clamp(r.left() + 18.0, r.right() - 18.0);
+            p.add(egui::Shape::convex_polygon(vec![pos2(x - 9.0, edge), pos2(x + 9.0, edge), pos2(at_seat.x.clamp(x - 14.0, x + 14.0), tip)], fill, Stroke::NONE));
+            p.galley(r.center() - g.size() / 2.0, g, ink.gamma_multiply(a));
+        }
+    }
+
+    /// Emotes, big over the face of whoever sent them (a sticker, or an older Pyr's emoji).
+    fn emotes(&self, p: &egui::Painter, ctx: &egui::Context, lay: &Layout, t: &TableLive) {
+        for (seat, e, at) in &t.emotes {
+            crate::casino::emotes::pop(p, ctx, e, lay.seat(*seat) + vec2(0.0, -34.0), ago(*at), 120.0);
         }
     }
 
@@ -1157,13 +1191,15 @@ impl PyrApp {
         let pct = |a: u64, b: u64| if b == 0 { "–".to_string() } else { format!("{:.0}%", a as f64 * 100.0 / b as f64) };
         let mut open_hand = None;
         let mut remove = false;
-        let gm = s.poker.me.as_ref().is_some_and(|m| m.role == Some(pyr_poker::net::Role::GameMaster));
         let them = t.view.seats.get(pv.seat).cloned().flatten().map(|x| x.player).unwrap_or_default();
         let me_uid = s.me.as_ref().map(|m| m.user_id.clone());
-        let left = s.poker.staff.as_ref().map(|v| v.left).unwrap_or(0);
-        if gm && s.poker.staff.is_none() {
+        // (A Game Master's allowance, or the owner's no limit, as the server last said.)
+        if s.poker.staff.is_none() && s.me.as_ref().is_some_and(|m| m.role == pyr_proto::control::Role::Owner || s.poker.me.as_ref().is_some_and(|r| r.role == Some(pyr_poker::net::Role::GameMaster))) {
             self.engine.poker(&s.key, ToServer::Staff);
         }
+        let limit = super::staff::gift_limit(s);
+        let gm = limit.is_some();
+        let left = limit.unwrap_or(0);
         let mut gift = self.poker.giving.clone();
         let mut give = false;
         egui::Window::new(title).id(egui::Id::new("poker-player")).collapsible(false).default_width(460.0).open(&mut open).show(ctx, |ui| {
@@ -1193,6 +1229,21 @@ impl PyrApp {
                     ui.end_row();
                 });
             };
+            if let Some(mmr) = pv.mmr {
+                let tier = pyr_poker::rating::Tier::of(mmr as f64);
+                ui.horizontal(|ui| {
+                    let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
+                    super::rank::emblem(ui.painter(), r.center(), 11.0, tier);
+                    ui.label(RichText::new(format!("{} · {} MMR", tier.name(), chips_text(mmr as u64))).strong().size(15.0).color(super::rank::color(tier)));
+                });
+                ui.add_space(6.0);
+            }
+            // A bot is someone: how it plays.
+            if pv.bot.is_some() {
+                let who = pyr_poker::bots::persona::of(&pv.name);
+                ui.label(RichText::new(who.style).italics().size(14.5).color(theme::TEXT()));
+                ui.add_space(6.0);
+            }
             tally(ui, "At this table", &pv.here, true);
             if let Some(o) = &pv.overall {
                 ui.add_space(8.0);
@@ -1241,17 +1292,12 @@ impl PyrApp {
                     remove = true;
                 }
             }
-            // A Game Master: a gift, right here.
+            // A Game Master (or the owner): a gift, right here.
             if gm && pv.bot.is_none() && Some(&them) != me_uid.as_ref() {
                 ui.add_space(10.0);
-                ui.label(RichText::new(format!("Gift {} (left to give today: {})", pv.name, chips_text(left))).strong().size(14.0));
+                ui.label(RichText::new(format!("Gift {} ({})", pv.name, super::staff::limit_words(left))).strong().size(14.0));
                 ui.horizontal(|ui| {
-                    ui.add(egui::DragValue::new(&mut gift.chips).range(0..=left).speed(100.0).suffix(" chips"));
-                    for n in [1_000u64, 5_000, 25_000] {
-                        if n <= left && ui.small_button(format!("+{}", chips_text(n))).clicked() {
-                            gift.chips = (gift.chips + n).min(left);
-                        }
-                    }
+                    super::staff::chips_box(ui, &mut gift.chips, left);
                     if ui.add_enabled(gift.chips > 0, theme::primary_button("Give")).clicked() {
                         give = true;
                     }
@@ -1298,6 +1344,7 @@ impl PyrApp {
                     folded: false,
                     all_in: false,
                     cards: vec![],
+                    mmr: None,
                 })
             })
             .collect();
@@ -1329,7 +1376,7 @@ impl PyrApp {
 }
 
 /// A bot's picture: a disc in its own colors with a suit on it (never a person's face).
-fn bot_face(p: &egui::Painter, at: Pos2, r: f32, name: &str, level: Level) {
+pub(crate) fn bot_face(p: &egui::Painter, at: Pos2, r: f32, name: &str, level: Level) {
     let h = name.bytes().fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
     let palette = [
         (0x3b, 0x2a, 0x6e, 0x8b, 0x6c, 0xf0),
@@ -1354,6 +1401,11 @@ fn bot_face(p: &egui::Painter, at: Pos2, r: f32, name: &str, level: Level) {
         let tip = at + vec2(r * 0.15, -r * 1.02);
         p.add(Shape::convex_polygon(vec![at + vec2(-r * 0.32, -r * 0.78), tip, at + vec2(r * 0.34, -r * 0.8)], Color32::from_rgb(0x9c, 0xb8, 0xc8), Stroke::NONE));
     }
+    if level == Level::Genius {
+        // A gold ring, and a little crown.
+        p.circle_stroke(at, r * 1.02, Stroke::new((r * 0.09).max(1.5), Color32::from_rgb(0xf5, 0xc4, 0x51)));
+        crate::icons::crown(p, Rect::from_center_size(at + vec2(0.0, -r * 1.05), vec2(r * 0.9, r * 0.6)), Color32::from_rgb(0xff, 0xd7, 0x6a));
+    }
 }
 
 fn level_tag(level: Level) -> (&'static str, Color32) {
@@ -1361,6 +1413,7 @@ fn level_tag(level: Level) -> (&'static str, Color32) {
         Level::Rookie => ("ROOKIE BOT", Color32::from_rgb(0x2f, 0x8a, 0x52)),
         Level::Regular => ("BOT", Color32::from_rgb(0x3d, 0x5f, 0xc4)),
         Level::Shark => ("SHARK BOT", Color32::from_rgb(0xc4, 0x34, 0x3e)),
+        Level::Genius => ("GENIUS BOT", Color32::from_rgb(0x7a, 0x4a, 0xe0)),
     }
 }
 

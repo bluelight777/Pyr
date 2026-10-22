@@ -861,8 +861,7 @@ impl Engine {
             });
         }
         for e in entries {
-            let h = server::spawn(shared.clone(), e.clone());
-            shared.servers.lock().insert(e.key.clone(), h);
+            server::spawn(shared.clone(), e.clone());
         }
         let ptt = if opts.push_to_talk {
             Some(hotkey::PttWatcher::start(ptt_key, ptt_down, opts.repaint.clone()))
@@ -970,6 +969,11 @@ impl Engine {
         });
     }
 
+    /// Shows what's held back at poker tables and now due (an all-in's next street, say).
+    pub fn poker_pump(&self, key: &str) {
+        self.poker_later(key, |p| p.pump(std::time::Instant::now()));
+    }
+
     /// The poker celebrations shown (experience, achievements, level-ups): forgotten.
     pub fn take_poker_gains(&self, key: &str) {
         self.poker_later(key, |p| p.gains.clear());
@@ -989,6 +993,12 @@ impl Engine {
     pub fn casino_open(&self, key: &str, open: bool) {
         use pyr_poker::net::{CasinoReq, ToServer};
         self.poker(key, ToServer::Casino { req: if open { CasinoReq::Open } else { CasinoReq::Close } });
+    }
+
+    /// A game's statistics (by its statistics key), for its Info panel.
+    pub fn casino_stats(&self, key: &str, game: &str) {
+        use pyr_poker::net::{CasinoReq, ToServer};
+        self.poker(key, ToServer::Casino { req: CasinoReq::Stats { key: game.to_string() } });
     }
 
     /// A casino round: `commit` is the house's fingerprint I was shown; this Pyr adds a seed of
@@ -1019,6 +1029,84 @@ impl Engine {
         let _ = getrandom::getrandom(&mut seed);
         self.poker_later(key, |p| p.casino.busy = true);
         self.poker(key, ToServer::Casino { req: CasinoReq::CrapsRoll { commit, seed } });
+    }
+
+    /// A bet at a blackjack table for its next round (0 sits it out): this Pyr adds a seed of
+    /// its own (fresh from the system) to the round's shuffle, and remembers it to check the
+    /// round when it's over.
+    pub fn bj_bet(&self, key: &str, table: u64, chips: u64) {
+        let mut seed = [0u8; 32];
+        let _ = getrandom::getrandom(&mut seed);
+        self.poker_later(key, move |p| {
+            if let Some(b) = p.bj.as_mut().filter(|b| b.view.id == table) {
+                let round = b.view.round_no;
+                b.my_seeds.retain(|(r, _)| *r != round);
+                b.my_seeds.push((round, seed));
+            }
+        });
+        self.poker(key, pyr_poker::net::ToServer::BjBet { table, chips, seed });
+    }
+
+    /// Leaves the blackjack table I'm watching (standing up first if I'm sitting).
+    pub fn bj_close(&self, key: &str) {
+        self.poker_later(key, |p| p.bj = None);
+    }
+
+    /// My bets at a craps table for roll `roll`, with this Pyr's own seed (fresh from the system)
+    /// for the dice; the seed's remembered, to check the roll by, once the server's taken them.
+    pub fn craps_bets(&self, key: &str, table: u64, roll: u64, bets: pyr_poker::casino::craps::Bets, ready: bool) {
+        let mut seed = [0u8; 32];
+        let _ = getrandom::getrandom(&mut seed);
+        self.table_bets(key, pyr_poker::net::ToServer::CrapsBets { table, roll, bets, seed, ready }, move |p| {
+            if let Some(c) = p.craps.as_mut().filter(|c| c.view.id == table) {
+                c.my_seeds.retain(|(r, _)| *r != roll);
+                c.my_seeds.push((roll, seed));
+            }
+        });
+    }
+
+    /// My bets at a baccarat table for coup `coup` (as `craps_bets`).
+    pub fn bac_bets(&self, key: &str, table: u64, coup: u64, bets: pyr_poker::casino::baccarat::Bets, ready: bool) {
+        let mut seed = [0u8; 32];
+        let _ = getrandom::getrandom(&mut seed);
+        self.table_bets(key, pyr_poker::net::ToServer::BacBets { table, coup, bets, seed, ready }, move |p| {
+            if let Some(b) = p.bac.as_mut().filter(|b| b.view.id == table) {
+                b.my_seeds.retain(|(r, _)| *r != coup);
+                b.my_seeds.push((coup, seed));
+            }
+        });
+    }
+
+    /// Sends bets to a table; once they're taken, `taken` notes the seed sent with them.
+    fn table_bets(&self, key: &str, msg: pyr_poker::net::ToServer, taken: impl FnOnce(&mut poker::PokerState) + Send + 'static) {
+        let k = key.to_string();
+        self.request_then_or(key, Request::Poker { msg }, move |shared, r| {
+            {
+                let mut st = shared.state.write();
+                if let Some(s) = st.server_mut(&k) {
+                    match r {
+                        Ok(ev) => {
+                            s.poker.error = None;
+                            if let Event::Poker { msg } = ev {
+                                let _ = s.poker.apply(msg, std::time::Instant::now());
+                            }
+                            taken(&mut s.poker);
+                        }
+                        Err(e) => s.poker.error = Some(e),
+                    }
+                }
+            }
+            (shared.repaint)();
+        });
+    }
+
+    /// Leaves the craps or baccarat table I'm watching.
+    pub fn craps_close(&self, key: &str) {
+        self.poker_later(key, |p| p.craps = None);
+    }
+
+    pub fn bac_close(&self, key: &str) {
+        self.poker_later(key, |p| p.bac = None);
     }
 
     pub fn clear_poker_player(&self, key: &str) {
@@ -1056,7 +1144,7 @@ impl Engine {
                         // back to the lobby, saying why.
                         Err(e) if e.contains("that table has closed") => {
                             if let Some(t) = about {
-                                s.poker.apply(pyr_poker::net::ToApp::Closed { table: t }, std::time::Instant::now());
+                                s.poker.forget_table(t);
                             }
                             s.poker.error = Some("That table has closed: nobody had played at it or watched it for half an hour. Pick another, or make one.".into());
                         }
@@ -1221,8 +1309,7 @@ impl Engine {
                 s.status = ConnStatus::Connecting;
             }
         }
-        let h = server::spawn(self.shared.clone(), entry);
-        self.shared.servers.lock().insert(key.clone(), h);
+        server::spawn(self.shared.clone(), entry);
         Ok(key)
     }
 
@@ -1235,8 +1322,7 @@ impl Engine {
         if let Some(s) = self.shared.state.write().server_mut(key) {
             s.status = ConnStatus::Connecting;
         }
-        let h = server::spawn(self.shared.clone(), entry);
-        self.shared.servers.lock().insert(key.to_string(), h);
+        server::spawn(self.shared.clone(), entry);
     }
 
     pub fn remove_server(&self, key: &str) {
@@ -2397,6 +2483,11 @@ impl Engine {
         self.request(key, Request::ServerDeafen { user_id: user_id.into(), deafened });
     }
 
+    /// Move someone in voice to another voice channel (`perm::MOVE_MEMBERS`, `MOVE_FEATURE`).
+    pub fn move_member(&self, key: &str, user_id: &str, channel_id: ChannelId) {
+        self.request(key, Request::MoveMember { user_id: user_id.into(), channel_id });
+    }
+
     pub fn kick(&self, key: &str, user_id: &str, ban: bool) {
         let req = if ban { Request::Ban { user_id: user_id.into() } } else { Request::Kick { user_id: user_id.into() } };
         self.request(key, req);
@@ -3120,6 +3211,15 @@ impl Engine {
         guard.as_ref().and_then(|c| c.audio.as_ref()).map(|a| a.status.lock().loudness.clone()).unwrap_or_default()
     }
 
+    /// Whether what's played reaches my microphone, and so whether echo cancellation is on,
+    /// in words, while the sound runs (in a call or the mic test).
+    pub fn mic_echo(&self) -> Option<String> {
+        if let Some(a) = self.shared.call.lock().as_ref().and_then(|c| c.audio.as_ref()) {
+            return a.controls.echo.lock().clone();
+        }
+        self.shared.mic_test.lock().as_ref().and_then(|a| a.controls.echo.lock().clone())
+    }
+
     /// My microphone right now in the call: its level (dBFS, after my input volume) and
     /// whether it's going out.
     pub fn my_mic_level(&self) -> Option<(f32, bool)> {
@@ -3678,7 +3778,7 @@ pub(crate) fn rewatch_poker(shared: Arc<Shared>, key: String) {
                         let _ = s.poker.apply(msg, std::time::Instant::now());
                     }
                     Ok(Event::Error { .. }) => {
-                        let _ = s.poker.apply(pyr_poker::net::ToApp::Closed { table }, std::time::Instant::now());
+                        s.poker.forget_table(table);
                     }
                     _ => {}
                 }

@@ -46,6 +46,9 @@ pub struct Record {
     /// Pyr Casino, by game (its id).
     #[serde(default)]
     pub casino: BTreeMap<String, CasinoStats>,
+    /// Poker's MMR.
+    #[serde(default)]
+    pub rating: crate::rating::Rating,
 }
 
 /// How someone's done at one of the casino's games.
@@ -143,6 +146,11 @@ pub const ACHIEVEMENTS: &[Achievement] = &[
     Achievement { id: "hot_shooter", name: "Hot Shooter", about: "Make four points in a row at craps.", xp: 400 },
     Achievement { id: "long_shot", name: "Long Shot", about: "Win a dice roll at a 5% chance or less.", xp: 300 },
     Achievement { id: "seer", name: "Seer", about: "Catch 7 or more numbers in one keno draw.", xp: 800 },
+    Achievement { id: "clean_sweep", name: "Clean Sweep", about: "Find every safe tile in a Reel Row pick-and-dodge.", xp: 400 },
+    Achievement { id: "upgrade", name: "Upgraded", about: "Spin the Upgrade on a Reel Row prize wheel.", xp: 300 },
+    Achievement { id: "elder", name: "Dragon Tamer", about: "Raise an Ember Dragon to an Elder.", xp: 300 },
+    Achievement { id: "full_board", name: "Wall of Fire", about: "Fill all fifteen spots in Ember Respins.", xp: 1_000 },
+    Achievement { id: "dragon_jackpot", name: "Dragon's Gold", about: "Win a jackpot on Ember Dragon.", xp: 400 },
     Achievement { id: "big_win", name: "Big Win", about: "Win 50 times your bet or more in one round.", xp: 300 },
     Achievement { id: "whale", name: "Whale", about: "Bet 25,000 or more on one round.", xp: 200 },
 ];
@@ -323,24 +331,35 @@ pub fn apply_placed(rec: &mut Record, place: usize, entrants: usize) -> Gains {
 
 /// Adds a casino round to a record: its game's numbers, a little experience (a point for every
 /// 500 chips bet, ten at most) and any achievement it earned.
-pub fn apply_casino(rec: &mut Record, o: &crate::casino::Outcome) -> Gains {
-    use crate::casino::{Outcome, blackjack};
-    let before = rec.level();
-    let mut g = Gains::default();
-    let wagered = o.wagered();
-    let back = match o {
-        Outcome::Craps(c) => c.paid + c.kept,
-        _ => o.paid(),
-    };
-    let st = rec.casino.entry(o.game().id().to_string()).or_default();
+/// Counts a casino round in its game's numbers (the house's record, and the app's copy of it,
+/// the same way).
+pub fn count_casino(st: &mut CasinoStats, o: &crate::casino::Outcome) {
+    let (wagered, back) = casino_back(o);
     st.rounds += 1;
     st.wagered += wagered;
     st.paid += back;
     st.best_win = st.best_win.max(back.saturating_sub(wagered));
-    let mult = crate::casino::multiple_x100(back, wagered);
     if back > wagered {
-        st.best_multiple_x100 = st.best_multiple_x100.max(mult);
+        st.best_multiple_x100 = st.best_multiple_x100.max(crate::casino::multiple_x100(back, wagered));
     }
+}
+
+/// A round's stake and the chips back from it (at craps, bets left riding count as back).
+fn casino_back(o: &crate::casino::Outcome) -> (u64, u64) {
+    let back = match o {
+        crate::casino::Outcome::Craps(c) => c.paid + c.kept,
+        _ => o.paid(),
+    };
+    (o.wagered(), back)
+}
+
+pub fn apply_casino(rec: &mut Record, o: &crate::casino::Outcome) -> Gains {
+    use crate::casino::{Outcome, blackjack};
+    let before = rec.level();
+    let mut g = Gains::default();
+    let (wagered, back) = casino_back(o);
+    count_casino(rec.casino.entry(o.stats_key()).or_default(), o);
+    let mult = crate::casino::multiple_x100(back, wagered);
     g.xp += (wagered / 500).min(10);
     let earn = |id: &'static str, rec: &mut Record, g: &mut Gains| {
         if rec.achievements.insert(id.to_string()) {
@@ -395,6 +414,23 @@ pub fn apply_casino(rec: &mut Record, o: &crate::casino::Outcome) -> Gains {
         Outcome::Keno(k) => {
             if k.hits.len() >= 7 {
                 earn("seer", rec, &mut g);
+            }
+        }
+        Outcome::Reels(r) => match &r.bonus {
+            Some(crate::casino::reels::Bonus::Pick { finale: true, .. }) => earn("clean_sweep", rec, &mut g),
+            Some(crate::casino::reels::Bonus::Wheel { inner: Some(_), .. }) => earn("upgrade", rec, &mut g),
+            _ => {}
+        },
+        Outcome::Dragon(d) => {
+            use crate::casino::dragon;
+            if dragon::age(d.growth_after) == dragon::AGES.len() - 1 || dragon::age(d.growth) == dragon::AGES.len() - 1 {
+                earn("elder", rec, &mut g);
+            }
+            if d.respins.as_ref().is_some_and(|r| r.full) {
+                earn("full_board", rec, &mut g);
+            }
+            if !d.jackpots().is_empty() {
+                earn("dragon_jackpot", rec, &mut g);
             }
         }
     }

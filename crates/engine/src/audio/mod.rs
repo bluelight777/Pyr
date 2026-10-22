@@ -5,6 +5,7 @@ pub mod capture;
 pub mod dfn;
 pub mod device;
 pub mod jitter;
+pub mod mic_echo;
 pub mod mixer;
 pub mod resample;
 pub mod spectrum;
@@ -59,6 +60,9 @@ pub struct Controls {
     pub retune: Mutex<Option<Settings>>,
     /// My voice went up and down for the others just now, and why (see `swells`).
     pub swelled: Mutex<Option<String>>,
+    /// Whether what's played reaches my microphone, and so whether echo cancellation is on,
+    /// in words for Voice & Video (see `mic_echo`); `None` with echo cancellation off.
+    pub echo: Mutex<Option<String>>,
 }
 
 /// A volume that can change while sound flows (an f32's bits); 1.0 to start with.
@@ -717,6 +721,7 @@ fn worker(
                 if change == Change::Back {
                     if let Some(c) = cap.as_mut() {
                         c.stream_delay_ms = echo_delay_ms;
+                        c.speakers_changed();
                     }
                 }
                 if change != Change::None {

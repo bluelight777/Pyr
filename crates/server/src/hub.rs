@@ -271,6 +271,10 @@ struct Client {
     groups: bool,
     /// The app adjusts its shares to its viewers (`VIDEO_FEEDBACK_CAP`).
     feedback: bool,
+    /// The app joins the voice channel it's moved to (`MOVE_CAP`).
+    movable: bool,
+    /// The app knows Pyr Casino's games and messages from 0.12.0 (`CASINO_012_CAP`).
+    casino_next: bool,
     conn: quinn::Connection,
     tx: Outbox,
     session: Option<SessionId>,
@@ -1012,6 +1016,43 @@ impl Hub {
         }
     }
 
+    /// A poker message to someone's apps: as it is to 0.12 apps, and to 0.11 ones as they can
+    /// read it (or not at all: see `ToApp::for_older_app`).
+    pub fn send_poker(&self, uid: &str, msg: pyr_poker::net::ToApp) {
+        let mut new = None;
+        let mut old = None;
+        for c in self.inner.lock().clients.values() {
+            if c.user_id != uid {
+                continue;
+            }
+            if c.casino_next {
+                let b = new.get_or_insert_with(|| frame(0, Event::Poker { msg: msg.clone() }));
+                let _ = c.tx.send(b.clone());
+            } else if let Some(b) = old.get_or_insert_with(|| msg.clone().for_older_app().map(|m| frame(0, Event::Poker { msg: m }))) {
+                let _ = c.tx.send(b.clone());
+            }
+        }
+    }
+
+    /// To everyone online whose app knows Pyr Casino from 0.12.0 on (the Bonfire lit, say).
+    pub fn broadcast_casino_next(&self, ev: Event) {
+        let b = frame(0, ev);
+        for c in self.inner.lock().clients.values().filter(|c| c.casino_next) {
+            let _ = c.tx.send(b.clone());
+        }
+    }
+
+    /// `send_to_user`, to their apps that know Pyr Casino from 0.12.0 on (`CASINO_012_CAP`):
+    /// what older ones couldn't read.
+    pub fn send_to_user_casino_next(&self, uid: &str, ev: Event) {
+        let b = frame(0, ev);
+        for c in self.inner.lock().clients.values() {
+            if c.user_id == uid && c.casino_next {
+                let _ = c.tx.send(b.clone());
+            }
+        }
+    }
+
     /// Whether someone's an admin (or the owner), and their roles: what decides which channels
     /// they see and post in.
     pub fn access_of(&self, uid: &str) -> (bool, Vec<RoleId>) {
@@ -1252,6 +1293,8 @@ impl Hub {
         re: u64,
         groups: bool,
         feedback: bool,
+        movable: bool,
+        casino_next: bool,
     ) -> Result<(), (ErrorCode, String)> {
         let mut inner = self.inner.lock();
         // Checked again under the lock: a ban since the login was authorized wins.
@@ -1269,6 +1312,8 @@ impl Hub {
                 user_id: uid.to_string(),
                 groups,
                 feedback,
+                movable,
+                casino_next,
                 conn,
                 tx: tx.clone(),
                 session: None,
@@ -1300,7 +1345,7 @@ impl Hub {
             // (Private conversations' calls only for their own people.)
             voice: inner.voice.values().filter(|v| v.audience.as_ref().is_none_or(|who| who.iter().any(|w| w == uid))).map(|v| v.p.clone()).collect(),
             roles: self.db.roles(),
-            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, DND_FEATURE, BIG_FILES_FEATURE, GIFS_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE, VOUCHES_FOR_ME_FEATURE, PRIVATE_CHANNELS_FEATURE, BOTS_FEATURE, INVITES_FEATURE, POKER_FEATURE, SEALED_FEATURE, CHANNEL_ORDER_FEATURE].iter().map(|s| s.to_string()).collect(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, DND_FEATURE, BIG_FILES_FEATURE, GIFS_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE, VOUCHES_FOR_ME_FEATURE, PRIVATE_CHANNELS_FEATURE, BOTS_FEATURE, INVITES_FEATURE, POKER_FEATURE, SEALED_FEATURE, CHANNEL_ORDER_FEATURE, MOVE_FEATURE, CASINO_012_FEATURE].iter().map(|s| s.to_string()).collect(),
             dms: self.db.dms_of(uid),
             relations: self.db.relations_of(uid),
             groups: if groups { self.db.groups_of(uid) } else { Vec::new() },
@@ -1577,6 +1622,38 @@ impl Hub {
         for (p, audience) in now {
             Self::voice_news_locked(&inner, audience.as_ref(), Event::VoiceUpserted { participant: p });
         }
+        Ok(Event::Ok)
+    }
+
+    /// Moves someone in one of the server's voice channels to another (who may is checked by
+    /// the caller): their Pyr is told to join it (`MoveTo`), as if they'd clicked it, since
+    /// joining takes their own call key. Only to a voice channel both of them can see, and only
+    /// when their Pyr knows how to follow (`MOVE_CAP`).
+    pub fn move_member(&self, by: &str, user_id: &str, channel_id: ChannelId) -> Reply {
+        let Some(c) = self.db.channel(channel_id).filter(|c| c.kind == ChannelKind::Voice) else {
+            return err(ErrorCode::NotFound, "No such voice channel.");
+        };
+        if c.private {
+            let who = self.db.viewers(&c);
+            if !who.iter().any(|u| u == by) {
+                return err(ErrorCode::NotFound, "No such voice channel.");
+            }
+            if !who.iter().any(|u| u == user_id) {
+                return err(ErrorCode::Forbidden, "They can't see that channel, so they can't be moved into it.");
+            }
+        }
+        let inner = self.inner.lock();
+        let Some(v) = inner.voice.values().find(|v| v.p.user_id == user_id && !v.conversation) else {
+            return err(ErrorCode::BadRequest, "They're not in a voice channel here.");
+        };
+        if v.p.channel_id == channel_id {
+            return Ok(Event::Ok);
+        }
+        if !inner.clients.get(&v.conn_id).is_some_and(|c| c.movable) {
+            return err(ErrorCode::BadRequest, "Their Pyr is too old to be moved: once they update it, you can.");
+        }
+        let _ = v.tx.send(frame(0, Event::MoveTo { channel_id, by: by.to_string() }));
+        debug!(channel_id, "moved someone in voice");
         Ok(Event::Ok)
     }
 

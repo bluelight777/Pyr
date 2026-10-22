@@ -260,6 +260,21 @@ fn main() -> eframe::Result<()> {
                                 )
                             });
                         }
+                        // Started again after the graphics card went away: why, when the PC was
+                        // nearly out of memory (bug reports 105 and 108: 98% in use).
+                        static REOPENED_TOLD: std::sync::Once = std::sync::Once::new();
+                        if REOPENED.load(std::sync::atomic::Ordering::Relaxed) > 0
+                            && let Some(load) = watchdog::pc_memory_in_use().filter(|m| *m >= 90)
+                        {
+                            REOPENED_TOLD.call_once(|| {
+                                engine.shared.state.write().toast(
+                                    format!(
+                                        "Pyr's window was started again: the graphics card ran out of memory while your PC's memory was {load}% full. Closing programs you aren't using helps."
+                                    ),
+                                    false,
+                                )
+                            });
+                        }
                         #[cfg(not(windows))]
                         let tray: Option<tray::Tray> = None;
                         let plugins = plugins::Plugins::new(&engine.shared.config_dir, repaint_now.clone());
@@ -445,14 +460,17 @@ fn install_crash_report(log_path: Option<std::path::PathBuf>) {
         // (The graphics card going away under the window: Pyr starts again, see `main`.)
         let recovered = main && gpu_lost(&what) && REOPENED.load(std::sync::atomic::Ordering::Relaxed) < 3;
         if recovered {
-            tracing::error!("the window crashed (the graphics card went away), starting Pyr again: {info}");
+            let memory = watchdog::pc_memory_in_use().map(|m| format!(" (the PC's memory {m}% in use)")).unwrap_or_default();
+            tracing::error!("the window crashed (the graphics card went away{memory}), starting Pyr again: {info}");
         } else {
             tracing::error!("crash in thread {thread}: {info}");
         }
         default(info);
         // Pyr carries on: reported by itself, now. (A crash that ends Pyr is reported the
-        // next time it starts, from the log.)
-        if !main || recovered {
+        // next time it starts, from the log.) The graphics card going away isn't reported:
+        // Pyr starts again by itself, and it's the card or the PC (bug report 105: the PC's
+        // memory 98% in use), not something Pyr can fix.
+        if !main {
             pyr_engine::bugs::report_crash(&thread, &what);
         }
         // Only the UI thread's crash ends the app; others are logged and the app carries on.
@@ -472,10 +490,16 @@ static REOPENED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::ne
 /// Whether a crash is the graphics card going away under the window (its driver restarted, or
 /// Windows took it back): drawing or showing a frame failed for that.
 fn gpu_lost(what: &str) -> bool {
-    const SIGNS: [&str; 11] = [
+    const SIGNS: [&str; 15] = [
         // egui's renderer, when the graphics card can't give it memory any more (after "Acquiring
         // a texture failed": the card was out of memory, or resetting).
         "Failed to create staging buffer",
+        // A picture's texture the card couldn't make (it was out of memory: the PC's memory 99%
+        // in use), used anyway (bug report 108).
+        "Texture::create_view",
+        "Out of Memory",
+        "out of memory",
+        "OutOfMemory",
         "Surface::present",
         "Surface::get_current_texture",
         "Surface::configure",
@@ -538,6 +562,10 @@ mod tests {
             "panicked at egui-wgpu-0.33.3/src/renderer.rs:958:17:\nFailed to create staging buffer for index data. Index count: 44526. Required index buffer size: 178104. Actual size 570912 and capacity: 570912 (bytes)"
         ));
         assert!(gpu_lost("panicked at wgpu-27.0.1/src/backend/wgpu_core.rs:3858:38:\nError in Surface::present: Validation Error\n\nCaused by:\n  Parent device is lost"));
+        // Bug report 108: a picture's texture the card had no memory for.
+        assert!(gpu_lost(
+            "panicked at wgpu-27.0.1/src/backend/wgpu_core.rs:2218:18:\nwgpu error: Validation Error\n\nCaused by:\n  In Texture::create_view\n    Texture with 'egui_texid_Managed(9)' label is invalid"
+        ));
         assert!(!gpu_lost("panicked at crates/app/src/chat.rs:10:5:\nindex out of bounds: the len is 3 but the index is 7"));
     }
 }

@@ -54,12 +54,17 @@ impl ServerHandle {
     }
 }
 
-pub fn spawn(shared: Arc<Shared>, entry: ServerEntry) -> ServerHandle {
+/// Connects to a server (and keeps connecting), its handle in `shared.servers`.
+pub fn spawn(shared: Arc<Shared>, entry: ServerEntry) {
     let (tx, rx) = mpsc::unbounded_channel();
     let conn = Arc::new(Mutex::new(None));
     let handle = ServerHandle { key: entry.key.clone(), out: tx, conn: conn.clone() };
+    // In place before the connection starts: what runs as it logs in (this Pyr's message key
+    // published, say) finds the handle there. Put there after, a quick login could beat it,
+    // and the key went unpublished until the next connection (so messages couldn't be sent,
+    // "publish your message key first", or opened).
+    shared.servers.lock().insert(entry.key.clone(), handle);
     shared.rt.spawn(run(shared.clone(), entry, rx, conn));
-    handle
 }
 
 fn set_status(shared: &Shared, key: &str, status: ConnStatus) {
@@ -200,12 +205,17 @@ async fn session(
     let (frames_tx, mut frames_rx) = mpsc::unbounded_channel::<ServerFrame>();
     let reader = tokio::spawn(async move {
         loop {
-            match net::read_frame::<ServerFrame>(&mut recv).await {
-                Ok(Some(f)) => {
-                    if frames_tx.send(f).is_err() {
-                        break;
+            match net::read_body(&mut recv).await {
+                Ok(Some(body)) => match pyr_proto::framing::decode::<ServerFrame>(&body) {
+                    Ok(f) => {
+                        if frames_tx.send(f).is_err() {
+                            break;
+                        }
                     }
-                }
+                    // Something from a newer server this Pyr can't read: passed over (the
+                    // frames around it are whole), not the end of the connection.
+                    Err(e) => tracing::warn!("passed over a message from the server this Pyr can't read: {e}"),
+                },
                 _ => break,
             }
         }
@@ -454,6 +464,8 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
     // call here (and so leave it).
     let mut gone_group: Option<ChannelId> = None;
     let mut leave_call = false;
+    // Someone moved me to another voice channel: (where, who did).
+    let mut moved: Option<(ChannelId, UserId)> = None;
     // This Pyr's part of a poker shuffle, to send.
     let mut poker_seed: Option<crate::poker::SendSeed> = None;
     {
@@ -681,6 +693,7 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
                 gone_group = Some(channel_id);
             }
             Event::CallDeclined { channel_id, by } => declined = Some((channel_id, by)),
+            Event::MoveTo { channel_id, by } => moved = Some((channel_id, by)),
             Event::KeyframeRequested { track } => forward = Some(CallEvent::KeyframeRequested(track)),
             Event::VideoFeedback { track, viewers } => forward = Some(CallEvent::VideoFeedback(track, viewers)),
             Event::E2eeKey { from, epoch, nonce, ct } => forward = Some(CallEvent::Key { from, epoch, nonce, ct }),
@@ -713,6 +726,18 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
                 st.outgoing_call = None;
             }
             leave_call = here(&st, cid);
+        }
+        // Moved to another voice channel by someone with Move members: off we go there, as
+        // if it had been clicked (only from a call in this server's voice channels).
+        if let Some((cid, by)) = moved {
+            let in_voice_here = st.call.as_ref().is_some_and(|c| c.server_key == key && st.server(key).is_some_and(|s| !s.is_private(c.channel_id)));
+            if in_voice_here && !here(&st, cid) {
+                if let Some(s) = st.server(key) {
+                    let (who, place) = (s.member_name(&by), s.channels.iter().find(|c| c.id == cid).map(|c| c.name.clone()).unwrap_or_default());
+                    st.toast(format!("{who} moved you to {place}."), false);
+                }
+                follow = Some(cid);
+            }
         }
         if let Some((cid, from, video, moved_from)) = ringing {
             match moved_from.filter(|m| here(&st, *m)) {

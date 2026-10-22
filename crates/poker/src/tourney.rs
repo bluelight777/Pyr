@@ -16,8 +16,9 @@ use crate::room::{Effect, Look, Output, Random, Rcpt, Room};
 
 /// The most people in one tournament.
 pub const MAX_ENTRANTS: usize = 180;
-/// How long the final table stays up after the last hand (to see how it ended).
-pub const FINAL_MS: u64 = 7_000;
+/// How long the final table stays up after the last hand (to see how it ended: an all-in's
+/// board comes a street at a time first).
+pub const FINAL_MS: u64 = 12_000;
 /// The shortest and longest levels.
 pub const MIN_LEVEL_MS: u64 = 60_000;
 pub const MAX_LEVEL_MS: u64 = 60 * 60_000;
@@ -49,7 +50,7 @@ pub struct Tourney {
     /// When it finished (the server forgets it a while after).
     pub ended: Option<u64>,
     bot_names: usize,
-    /// A Time Bomb: the wheel's multiplier and when it was spun, and whether it's gone off.
+    /// A Flash Pot: the wheel's multiplier and when it was spun, and whether it's gone off.
     multiplier: Option<u32>,
     spun: Option<u64>,
     exploded: bool,
@@ -91,19 +92,19 @@ impl Tourney {
 
     pub fn prize_pool(&self) -> u64 {
         if self.rules.bomb.is_some() {
-            // A Time Bomb's prize is the buy-in times what the wheel picks (the house stakes
+            // A Flash Pot's prize is the buy-in times what the wheel picks (the house stakes
             // the bots' seats); before the spin, the least it can be.
             return self.rules.buy_in * self.multiplier.unwrap_or(MULTIPLIERS[0].0) as u64;
         }
         self.entrants.iter().map(|e| e.paid).sum::<u64>() + self.rules.added
     }
 
-    /// What each place wins, first first (a Time Bomb: the winner takes it all).
+    /// What each place wins, first first (a Flash Pot: the winner takes it all).
     fn pay_table(&self) -> Vec<u64> {
         if self.rules.bomb.is_some() { vec![self.prize_pool()] } else { payouts(self.prize_pool(), self.entrants.len()) }
     }
 
-    /// A Time Bomb's wheel and fuse, as they stand.
+    /// A Flash Pot's wheel and fuse, as they stand.
     pub fn bomb_view(&self) -> Option<BombView> {
         let b = self.rules.bomb?;
         Some(BombView {
@@ -160,11 +161,7 @@ impl Tourney {
         let k = self.bot_names;
         self.bot_names += 1;
         let name = if k < names.len() { names[k].to_string() } else { format!("{} {}", names[k % names.len()], k / names.len() + 1) };
-        let lvl = match level {
-            Level::Rookie => 3,
-            Level::Regular => 12,
-            Level::Shark => 30,
-        };
+        let lvl = level.look_level();
         self.entrants.push(Entrant { uid: format!("bot:t{}:{k}", self.id), name, look: Look { level: lvl, ..Look::default() }, bot: Some(level), paid: 0, place: None, prize: 0 });
         self.changed(out);
         Ok(())
@@ -385,7 +382,7 @@ impl Tourney {
         let mut out = Output::default();
         match self.phase {
             TourneyPhase::Registering if self.rules.bomb.is_some() => {
-                // A Time Bomb starts the moment it's full; when the wait is over, bots take the
+                // A Flash Pot starts the moment it's full; when the wait is over, bots take the
                 // empty seats (nobody waits long), unless nobody's left in it.
                 if self.entrants.len() < self.rules.max_players && now >= self.rules.start_ms {
                     if self.entrants.iter().all(|e| e.bot.is_some()) {
@@ -438,14 +435,6 @@ impl Tourney {
                 self.exploded = true;
                 news = true;
             }
-            // From the hand after it goes off, every hand is all in.
-            if self.exploded {
-                for r in self.tables.values_mut() {
-                    if !r.bomb && r.between_hands() {
-                        r.bomb = true;
-                    }
-                }
-            }
         }
         // The blinds.
         let started = self.started.unwrap_or(now);
@@ -463,7 +452,12 @@ impl Tourney {
         let ids: Vec<TableId> = self.tables.keys().copied().collect();
         for id in ids {
             let r = self.tables.get_mut(&id).unwrap();
-            let mut o = r.tick(now, rng);
+            // The bomb's gone off: everyone's all in from the very next hand.
+            let mut o = Output::default();
+            if self.exploded {
+                r.bomb_goes_off(&mut o);
+            }
+            o.extend(r.tick(now, rng));
             // "Everyone at the table", spelled out (the tables are many; the server sees one
             // tournament).
             let aud = r.audience();
@@ -481,7 +475,7 @@ impl Tourney {
             self.knock_out(busted, now, &mut out);
             news = true;
         }
-        // (A Time Bomb is one table.)
+        // (A Flash Pot is one table.)
         if self.phase == TourneyPhase::Running && self.rules.bomb.is_none() && self.balance(now, &mut out) {
             news = true;
         }
@@ -521,6 +515,11 @@ impl Tourney {
                         out.effects.push(Effect::Credit { uid: e.uid.clone(), chips: e.prize });
                     }
                 }
+            }
+            // MMR: everyone in it, by where they finished.
+            let players = self.entrants.iter().filter_map(|e| Some((crate::rating::id_of(&e.uid, &e.name, e.bot), e.name.clone(), e.bot, e.place?))).collect::<Vec<_>>();
+            if players.len() >= 2 {
+                out.effects.push(Effect::RatePlaces { players });
             }
             self.phase = TourneyPhase::Finished;
             self.ended = Some(now);
@@ -701,8 +700,8 @@ pub fn friday_rules(start_ms: u64, added: u64) -> TourneyRules {
     }
 }
 
-/// Time Bombs: five seats, 500 chips each, the blinds up every minute, and a three-minute
-/// fuse; after it, every hand is all in. Buy-ins (play chips), and the prize wheel's
+/// Flash Pots: five seats, 500 chips each, the blinds up every minute, and a three-minute
+/// fuse; from the hand after it goes off, everyone's all in, every hand. Buy-ins (play chips), and the prize wheel's
 /// multipliers with their weights (out of 10,000): about 4.85 buy-ins come back for the five
 /// paid in, so the house keeps about 3%. (Three seats until 0.10.0, with 2x the least.)
 pub const BOMB_HOST: &str = "pyr:bomb";
@@ -710,10 +709,10 @@ pub const BOMB_BUY_INS: [u64; 3] = [100, 1_000, 10_000];
 pub const BOMB_SEATS: usize = 5;
 pub const BOMB_STACK: u64 = 500;
 pub const BOMB_FUSE_MS: u64 = 180_000;
-/// How long a Time Bomb waits for people before bots take the empty seats.
+/// How long a Flash Pot waits for people before bots take the empty seats.
 pub const BOMB_WAIT_MS: u64 = 30_000;
-/// The wheel's spin, before the first hand.
-pub const WHEEL_MS: u64 = 5_000;
+/// The wheel's spin, and the prize it lands on shown off, before the first hand.
+pub const WHEEL_MS: u64 = 9_000;
 pub const MULTIPLIERS: [(u32, u32); 7] = [(3, 6783), (5, 2120), (8, 700), (15, 300), (40, 80), (150, 15), (1000, 2)];
 
 /// The prize wheel: a multiplier, by its weight.
@@ -729,14 +728,14 @@ pub fn spin(rng: &mut dyn Random) -> u32 {
     MULTIPLIERS[0].0
 }
 
-/// A Time Bomb's rules, open from `now` (it waits `BOMB_WAIT_MS` for people).
+/// A Flash Pot's rules, open from `now` (it waits `BOMB_WAIT_MS` for people).
 pub fn bomb_rules(buy_in: u64, now: u64) -> TourneyRules {
     let levels = [(10, 20), (15, 30), (20, 40), (30, 60), (50, 100), (75, 150), (100, 200), (150, 300), (200, 400), (300, 600), (500, 1000), (750, 1500)]
         .into_iter()
         .map(|(small, big)| BlindLevel { small, big, ante: 0 })
         .collect();
     TourneyRules {
-        name: format!("Time Bomb · {}", group(buy_in)),
+        name: format!("Flash Pot · {}", group(buy_in)),
         variant: crate::game::Variant::Holdem,
         limit: crate::game::Limit::NoLimit,
         seats: BOMB_SEATS,

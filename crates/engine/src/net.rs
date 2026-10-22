@@ -173,6 +173,14 @@ impl std::fmt::Display for Fatal {
 impl std::error::Error for Fatal {}
 
 pub async fn read_frame<T: serde::de::DeserializeOwned>(recv: &mut quinn::RecvStream) -> Result<Option<T>> {
+    match read_body(recv).await? {
+        Some(body) => Ok(Some(framing::decode(&body)?)),
+        None => Ok(None),
+    }
+}
+
+/// One frame's bytes, not yet read as anything (None: the stream ended).
+pub async fn read_body(recv: &mut quinn::RecvStream) -> Result<Option<Vec<u8>>> {
     let mut len = [0u8; 4];
     match recv.read_exact(&mut len).await {
         Ok(()) => {}
@@ -182,7 +190,7 @@ pub async fn read_frame<T: serde::de::DeserializeOwned>(recv: &mut quinn::RecvSt
     let n = framing::body_len(len)?;
     let mut body = vec![0u8; n];
     recv.read_exact(&mut body).await?;
-    Ok(Some(framing::decode(&body)?))
+    Ok(Some(body))
 }
 
 /// For a short invite link: connects to the server, checks its certificate starts with the
@@ -272,7 +280,7 @@ pub async fn connect_and_login(
             invite: invite.map(|s| s.to_string()),
             client: format!("{} {}", pyr_proto::APP_NAME, env!("CARGO_PKG_VERSION")),
             // (This app knows group conversations, and adjusts its shares to its viewers.)
-            caps: vec![pyr_proto::control::GROUPS_CAP.to_string(), pyr_proto::control::VIDEO_FEEDBACK_CAP.to_string()],
+            caps: vec![pyr_proto::control::GROUPS_CAP.to_string(), pyr_proto::control::VIDEO_FEEDBACK_CAP.to_string(), pyr_proto::control::MOVE_CAP.to_string(), pyr_proto::control::CASINO_012_CAP.to_string()],
         },
     };
     send.write_all(&framing::encode(&login)).await?;

@@ -31,6 +31,8 @@ pub struct Swells {
     sums: [f64; 4],
     frames: usize,
     open: usize,
+    /// Frames the speakers' sound could account for much of what came in.
+    far: usize,
     /// Recent stretches: the gain of each stage (dB) and the level coming in, when it was
     /// talking (and the one before).
     recent: VecDeque<Option<[f32; 4]>>,
@@ -46,24 +48,28 @@ fn db(e: f64) -> f32 {
 
 impl Swells {
     /// One 10 ms frame's levels (dBFS): coming in, after echo cancellation and automatic gain,
-    /// after noise suppression, and going out; and whether it was sent. Says what happened
-    /// when my voice has been going up and down.
-    pub fn feed(&mut self, levels: [f32; 4], sent: bool) -> Option<String> {
+    /// after noise suppression, and going out; whether it was sent; and whether the speakers'
+    /// sound could account for much of what came in (then the echo canceller taking it out
+    /// isn't my voice turned down: a stretch with much of that isn't counted). Says what
+    /// happened when my voice has been going up and down.
+    pub fn feed(&mut self, levels: [f32; 4], sent: bool, far: bool) -> Option<String> {
         for (s, l) in self.sums.iter_mut().zip(levels) {
             *s += 10f64.powf(l as f64 / 10.0);
         }
         self.frames += 1;
         self.open += sent as usize;
+        self.far += far as usize;
         if self.frames < STRETCH {
             return None;
         }
         let e: Vec<f32> = self.sums.iter().map(|s| db(s / STRETCH as f64)).collect();
-        let talking = self.open == STRETCH && e[0] > TALKING_DB;
+        let talking = self.open == STRETCH && e[0] > TALKING_DB && self.far <= STRETCH / 4;
         let gains = (talking && self.last_talking).then(|| [e[1] - e[0], e[2] - e[1], e[3] - e[2], e[0]]);
         self.last_talking = talking;
         self.sums = [0.0; 4];
         self.frames = 0;
         self.open = 0;
+        self.far = 0;
         self.recent.push_back(gains);
         if self.recent.len() > RECENT {
             self.recent.pop_front();
@@ -137,7 +143,7 @@ mod tests {
             // Talking that itself gets louder and softer (a syllable every 150 ms).
             let level = -30.0 + 8.0 * ((f as f32) * 0.42).sin();
             let iso = iso_db(f);
-            if let Some(s) = sw.feed([level, level + 5.0, level + 4.0, level + 4.0 + iso], true) {
+            if let Some(s) = sw.feed([level, level + 5.0, level + 4.0, level + 4.0 + iso], true, false) {
                 said.push(s);
             }
         }
@@ -148,6 +154,23 @@ mod tests {
     fn steady_processing_of_lively_talking_isnt_a_swell() {
         let mut sw = Swells::default();
         assert!(talk(&mut sw, 60, |_| 0.0).is_empty());
+    }
+
+    #[test]
+    fn echo_taken_out_while_the_speakers_play_isnt_a_swell() {
+        let mut sw = Swells::default();
+        // Every 1.6 s, 0.6 s of the speakers' sound coming in as loud as my talking, taken out
+        // by the echo canceller (30 dB under what came in).
+        let mut said = Vec::new();
+        for f in 0..3000 {
+            let level = -30.0 + 8.0 * ((f as f32) * 0.42).sin();
+            let far = f % 160 < 60;
+            let apm = if far { level - 30.0 } else { level + 5.0 };
+            if let Some(s) = sw.feed([level, apm, apm - 1.0, apm - 1.0], true, far) {
+                said.push(s);
+            }
+        }
+        assert!(said.is_empty(), "{said:?}");
     }
 
     #[test]

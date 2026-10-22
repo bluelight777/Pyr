@@ -244,7 +244,32 @@ settings can be changed (`capture::tune_aec3`). With WebRTC's defaults the cance
 takes the echo path to be as loud as the speakers, and with headphones (no echo at all) it
 took every loud moment from them as echo and your voice out with it, 15 to 90 dB for 200 ms at
 a time (0.11.0: `default_gain` 0.1, `default_len` 0.5, the HMM transparent mode;
-`examples/aec_eval.rs` measures it, `PYR_AB=aectune` for the defaults).
+`examples/aec_eval.rs` measures it, `PYR_AB=aectune` for the defaults). 0.12.0 takes out what's
+left of the echo only where it's about as loud as your voice (WebRTC's own setting for while
+you talk, used all along: `PYR_AB=aecmask` for the stricter one), and doesn't take a clipping
+microphone to be all echo (`PYR_AB=aecsat`).
+
+**Headphones or speakers** (0.12.0, `mic_echo`). Even tuned, AEC3 still turned your voice
+down now and then with headphones, where there's nothing to cancel (bug reports 102 to 119).
+So the processing runs twice, side by side: with AEC3 and without. Whether anything played
+comes back into the microphone is measured the way `stream_echo` finds the call in a screen
+share's sound: GCC-PHAT between what's played and the microphone, at 16 kHz, every 256 ms,
+over the last 770 ms of what was played. The two are lined up by how far what's played usually
+runs ahead of what the microphone hands over (followed over a couple of seconds: devices hand
+their sound over in bursts, and speakers can take a moment to start), and lined up again when
+the two devices' clocks have run 50 ms apart. Until 6 s of sound has been played with no sign of it
+in the microphone, AEC3's sound goes out; then (headphones) the other's, until one look finds
+it (the canceller's back within 10 ms) or the speakers change (`speakers_changed`). Sound
+that comes back 45 dB weaker or more (open headphones turned up) counts as none. AEC3 holds
+its sound back 8 ms, so the other is held as long, and the switch is a 100 ms crossfade.
+Voice & Video says which it is. With the canceller on, a stretch the speakers' sound could
+account for isn't counted as your voice going up and down (`swells`), and a report of it says
+whether the speakers reach the microphone, how late and how much weaker. Measured on 308
+stretches of your talking (`examples/aec_eval.rs`, 0.11.0 → 0.12.0, Pyr's own settings,
+standard noise suppression, voice isolation): headphones with loud music and voices 11, 11, 12
+→ 0, 0, 0; with others talking or music 1–2 → 0; speakers with others talking 2 → 0, turned
+low 5 → 1–2, music 6–7 → 4–6; the echo let through within 3 dB of before. `PYR_AB=aecpath` for
+AEC3's sound always.
 
 Devices are looked up and opened from COM's multithreaded apartment (`device::com_mta`): cpal
 makes a thread single-threaded otherwise, and Windows' default devices opened from such a
@@ -445,7 +470,7 @@ and can't reach the person's servers or messages. Settings → Claude adds it to
 app's `claude_desktop_config.json` (keeping everything else there, with a copy of the file
 as it was) or gives the `claude mcp add` line for Claude Code.
 
-## Pyr Casino (0.9 to 0.11)
+## Pyr Casino (0.9 to 0.12)
 
 Poker and the casino games run on the server, for play chips kept in each member's record in
 the server's database (`crates/poker` has the rules, `crates/server/src/poker.rs` and
@@ -456,24 +481,57 @@ client's, `crates/app/src/poker` and `casino` the screens).
   to its seed (SHA-256), each Pyr sends one, the deck is SHA-256 in counter mode over all of
   them and the hand's number (Fisher-Yates), and after the hand the server shows its seed so
   each Pyr checks the cards it saw. Bots see only their own cards (`bots::decide` is given a
-  view without the others').
+  view without the others'). Every bot is someone (`bots::persona`): by its name, a way of
+  playing, a pace and a voice at the table (`bots::talk`, only ever about what everyone saw).
+  A persona changes how a bot weighs what it sees, never what it sees. Genius bots
+  (`bots::genius`, 0.12) play the hand out many times against the ranges the others' actions
+  and habits suggest. **MMR** (`rating`, 0.12): one Elo-style rating for everyone who plays
+  poker on a server, bots included (each by its name and level), moved by tournaments' places
+  and by cash hands, weighted by the big blinds won and lost.
 - **House games** (`poker::casino`): before a round the server shows the SHA-256 of a fresh
   secret seed; the bet carries the Pyr's seed; the round's random numbers come from
   SHA-256("pyr-casino round v1" ‖ both seeds ‖ game ‖ round number), drawn by rejection
   sampling; the outcome, the seed and the next commitment come back, and the Pyr replays the
   round (`casino::verify`) and counts it as checked. Each game's return to player is a
-  tested constant (slots 94.5% plus 1% to the progressive jackpot, roulette 36/37, and so on).
+  tested constant, worked out exactly: every slot about 99% (Pyr Sevens' reels 98% and the 1%
+  put into the Phoenix Jackpot; Ember Dragon's reels and respins about 98.5% and the 0.5% put
+  into its four pools; Reel Row's twelve about 95% from the base game and 4% from the bonus),
+  roulette 36/37, blackjack about 99.5% with basic strategy, and so on.
+- **The slots** (0.12): Pyr Sevens (`casino::slots`, twenty lines); Ember Dragon
+  (`casino::dragon`, 243 ways, hold and spin): the dragon's growth is kept on the server for
+  each bet size, and a round is played from it and the pools as they began, so it replays
+  from its seeds like the rest; and the twelve machines of Chimbita's Reel Row (MIT;
+  `casino::reels`, 243 ways, a pick-and-dodge bonus or a prize wheel), their math reset to
+  99%. A pick's contents come out of the round's random numbers in the order tiles are
+  opened, so which tile is clicked doesn't change the odds. Each slot's Info panel shows its
+  paytable, its return and how everyone on the server has done at it.
+- **Tables for people and bots** (0.12): blackjack for seven (`bjroom`, `casino::bjtable`),
+  craps and baccarat for five (`crapsroom`, `bacroom`), a round every few seconds. Each
+  round's cards or dice come from the house's committed seed and every seated Pyr's own, and
+  everyone's Pyr plays the round again afterwards. Bots bet with the house's chips: nobody's
+  chips go to or from them.
+- **The Bonfire** (0.12, `casino::bonfire`): a cut of every chip bet (out of the house's take)
+  feeds a pool; every round anyone plays throws embers (one, and one more per 100 chips bet).
+  When it's lit (a day after it was laid, or when the owner lights it), fourteen embers are
+  drawn with SHA-256 from a seed the house fixed before the first ember (its hash shown all
+  along), nobody twice: half the pool to the Grand Ember, a tenth to each of three Blazes, a
+  fiftieth to each of ten Sparks, the rest on the next fire. Everyone's Pyr draws it again
+  (`bonfire::check`).
 - **The rake** (5% of a cash-table pot, at most 3 big blinds, none without a flop or with fewer
   than two people dealt in) and half the casino's edge (at most 1%) go to the Pyr Friday Night
   prize pool; the same week's total sets Game Masters' and Ambassadors' daily allowances.
 - **Tournaments** (`poker::tourney`) seat people across tables, raise the blinds, balance and
   break tables, and pay the top places; the final table stays up 7 seconds after the end.
-  **Time Bombs** are five-seat tournaments the house starts on demand: bots take seats nobody
+  **Flash Pots** (`bomb` in the code: they were Time Bombs) are five-seat tournaments the house starts on demand: bots take seats nobody
   takes within 30 seconds, a weighted wheel (`tourney::MULTIPLIERS`, about 4.85 buy-ins back
   for five paid in) sets the prize, and when the fuse runs out the tables' `bomb` flag makes
   every later hand all in (`Room::tick` pushes for everyone; people's own actions are refused).
 - **Staff**: only the server's owner names Game Masters and Ambassadors (`SetRole`), and they
   can't make, change or hand out the server's own roles either (`Ctx::may_give_out_roles`).
+  The owner gives chips without the allowance's limit (0.12); every gift is in the staff log.
+- **Emotes** (0.12): eighteen pictures (`crates/app/assets/casino`, drawn with Meshy) sent from
+  a seat to everyone at the table, one every 0.9 s at most from each person
+  (`server/poker/emotes.rs`).
 - **Streamer mode** at a game or a table (0.11): `staged` puts Pyr's own lists away while it's
   open (the casino's fullscreen path, without going fullscreen), `stream_split` keeps a
   full-height column clear for a camera and overlays (`Settings::stream_room`; the game's

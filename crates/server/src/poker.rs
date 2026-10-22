@@ -12,12 +12,17 @@ use pyr_poker::progress::{self, COSMETICS, Kind, Record};
 use pyr_poker::room::{Effect, Look, Output, Random, Rcpt, Room};
 use pyr_poker::net::TourneyPhase;
 use pyr_poker::tourney::{self as tourney, Tourney};
-use pyr_proto::control::Event;
 use tracing::info;
 
 use crate::hub::Hub;
 
+mod bac_tables;
+mod bj;
+mod bonfire;
 mod casino;
+mod craps_tables;
+mod emotes;
+mod ratings;
 
 /// The most tables a server keeps, and that one person can have made at once.
 pub const MAX_TABLES: usize = 40;
@@ -56,13 +61,15 @@ const FRIDAY_STARTED: &str = "poker_friday_started";
 /// Staff: everyone's role, what each gave away today, the week's rake by day, and the log.
 const ROLES: &str = "poker_roles";
 const STAFF_LOG: &str = "poker_staff_log";
-const STAFF_LOG_KEEP: usize = 300;
+const STAFF_LOG_KEEP: usize = 2_000;
+/// How much of it the owner's sent at once.
+const STAFF_LOG_SHOWN: usize = 300;
 /// The least a Game Master / Ambassador may give a day, however little has been raked.
 const GM_FLOOR: u64 = 25_000;
 const AMBASSADOR_FLOOR: u64 = 5_000;
 /// A finished tournament's results are kept this long.
 pub const TOURNEY_KEEP_MS: u64 = 2 * 60 * 60 * 1000;
-/// Time Bombs: how many at once (they don't count toward `MAX_TOURNEYS`), and how long a
+/// Flash Pots: how many at once (they don't count toward `MAX_TOURNEYS`), and how long a
 /// finished one stays to be seen.
 pub const MAX_BOMBS: usize = 40;
 pub const BOMB_KEEP_MS: u64 = 10 * 60 * 1000;
@@ -72,6 +79,11 @@ pub struct State {
     pub rooms: BTreeMap<TableId, Room>,
     pub tourneys: BTreeMap<TourneyId, Tourney>,
     pub casino: casino::CasinoState,
+    pub bj: bj::BjState,
+    pub craps: craps_tables::CrapsState,
+    pub bac: bac_tables::BacState,
+    pub bonfire: bonfire::BonfireState,
+    pub emotes: emotes::EmoteState,
 }
 
 impl State {
@@ -87,9 +99,10 @@ impl State {
         self.rooms.get(&id).or_else(|| self.tourneys.values().find_map(|t| t.tables.get(&id)))
     }
 
-    /// Play chips a person has riding: at cash tables, and buy-ins in tournaments not over.
+    /// Play chips a person has riding: at cash tables, buy-ins in tournaments not over, and on
+    /// blackjack tables.
     fn held(&self, uid: &str) -> u64 {
-        self.rooms.values().map(|r| r.chips_of(uid)).sum::<u64>() + self.tourneys.values().map(|t| t.at_stake(uid)).sum::<u64>()
+        self.rooms.values().map(|r| r.chips_of(uid)).sum::<u64>() + self.tourneys.values().map(|t| t.at_stake(uid)).sum::<u64>() + self.bj.at_stake(uid) + self.craps.at_stake(uid) + self.bac.at_stake(uid)
     }
 }
 
@@ -167,6 +180,9 @@ impl Poker {
             frame: rec.frame.clone(),
             unlocked: rec.unlocked().iter().map(|c| c.id.to_string()).collect(),
             role: Self::role(hub, uid),
+            mmr: rec.rating.mmr.round() as u32,
+            mmr_peak: rec.rating.peak.round() as u32,
+            mmr_placing: rec.rating.placing(),
         }
     }
 
@@ -245,7 +261,8 @@ impl Poker {
             left: allowance.saturating_sub(Self::spent_today(hub, uid)),
             rake_week: Self::rake_week(hub),
             staff: Self::roles(hub).into_iter().map(|(u, role)| StaffMember { name: Self::name_of(hub, &u), uid: u, role }).collect(),
-            log: if owner { hub.db.get_meta(STAFF_LOG).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default() } else { vec![] },
+            // (The newest few hundred: all of it's kept, and in the server's own log.)
+            log: if owner { hub.db.get_meta(STAFF_LOG).and_then(|v| serde_json::from_str::<Vec<StaffLog>>(&v).ok()).unwrap_or_default().into_iter().take(STAFF_LOG_SHOWN).collect() } else { vec![] },
         }
     }
 
@@ -314,13 +331,14 @@ impl Poker {
     fn flush(&self, hub: &Hub, st: &State, table: TableId, out: Output) {
         let audience: Vec<String> = st.room(table).map(|r| r.audience().into_iter().collect()).unwrap_or_default();
         for (to, msg) in out.msgs {
+            let msg = Self::dress(hub, msg);
             match to {
                 Rcpt::All => {
                     for uid in &audience {
-                        hub.send_to_user(uid, Event::Poker { msg: msg.clone() });
+                        hub.send_poker(uid, msg.clone());
                     }
                 }
-                Rcpt::User(uid) => hub.send_to_user(&uid, Event::Poker { msg }),
+                Rcpt::User(uid) => hub.send_poker(&uid, msg),
             }
         }
         for e in out.effects {
@@ -330,7 +348,7 @@ impl Poker {
                     rec.chips += chips;
                     let held = st.held(&uid);
                     let _ = hub.db.set_poker_record(&uid, &rec, held);
-                    hub.send_to_user(&uid, Event::Poker { msg: ToApp::Record { me: Self::view(hub, &uid, &rec, held), gains: None } });
+                    hub.send_poker(&uid, ToApp::Record { me: Self::view(hub, &uid, &rec, held), gains: None });
                 }
                 Effect::Hand { uid, result, big_blind, beat_shark } => {
                     let (mut rec, _) = hub.db.poker_record(&uid);
@@ -343,7 +361,7 @@ impl Poker {
                         level_up: g.level_up,
                         net: result.won as i64 - result.put_in as i64,
                     };
-                    hub.send_to_user(&uid, Event::Poker { msg: ToApp::Record { me: Self::view(hub, &uid, &rec, held), gains: Some(gains) } });
+                    hub.send_poker(&uid, ToApp::Record { me: Self::view(hub, &uid, &rec, held), gains: Some(gains) });
                 }
                 Effect::Raked { chips } => Self::add_rake(hub, chips),
                 Effect::Prize { uid, chips, item } => {
@@ -354,8 +372,20 @@ impl Poker {
                     }
                     let held = st.held(&uid);
                     let _ = hub.db.set_poker_record(&uid, &rec, held);
-                    hub.send_to_user(&uid, Event::Poker { msg: ToApp::Record { me: Self::view(hub, &uid, &rec, held), gains: None } });
+                    hub.send_poker(&uid, ToApp::Record { me: Self::view(hub, &uid, &rec, held), gains: None });
                 }
+                Effect::RateHand { players } => {
+                    let nets: Vec<f64> = players.iter().map(|p| p.3).collect();
+                    let who: Vec<ratings::Rated> = players.into_iter().map(|(id, name, bot, _)| (id, name, bot)).collect();
+                    Self::rate(hub, st, &who, |r| pyr_poker::rating::rate_hand(r, &nets), false);
+                }
+                Effect::RatePlaces { players } => {
+                    let places: Vec<usize> = players.iter().map(|p| p.3).collect();
+                    let who: Vec<ratings::Rated> = players.into_iter().map(|(id, name, bot, _)| (id, name, bot)).collect();
+                    Self::rate(hub, st, &who, |r| pyr_poker::rating::rate_places(r, &places), true);
+                }
+                // (Counted as the tables' news goes out: see `flush_bj` and the others.)
+                Effect::BjRound { .. } | Effect::CrapsRoll { .. } | Effect::BacCoup { .. } => {}
                 Effect::Placed { uid, place, entrants, prize, tourney } => {
                     let (mut rec, _) = hub.db.poker_record(&uid);
                     let g = progress::apply_placed(&mut rec, place, entrants);
@@ -363,7 +393,7 @@ impl Poker {
                     let _ = hub.db.set_poker_record(&uid, &rec, held);
                     info!(tourney, place, entrants, prize, "poker tournament: a player finished");
                     let gains = GainsView { xp: g.xp, achievements: vec![], level_up: g.level_up, net: prize as i64 };
-                    hub.send_to_user(&uid, Event::Poker { msg: ToApp::Record { me: Self::view(hub, &uid, &rec, held), gains: Some(gains) } });
+                    hub.send_poker(&uid, ToApp::Record { me: Self::view(hub, &uid, &rec, held), gains: Some(gains) });
                 }
             }
         }
@@ -378,6 +408,12 @@ impl Poker {
     /// A request from someone (`can_manage`: they may manage the server, so may close any
     /// table). What comes back goes to them alone; news goes out to the tables.
     pub fn handle(&self, hub: &Hub, uid: &str, can_manage: bool, msg: ToServer) -> Result<Option<ToApp>, String> {
+        self.handle_from(hub, uid, can_manage, true, msg)
+    }
+
+    /// `handle`, for an app that knows (`next`) Pyr Casino from 0.12.0 on, or one that doesn't
+    /// (it's told nothing it couldn't read: see `CASINO_012_CAP`).
+    pub fn handle_from(&self, hub: &Hub, uid: &str, can_manage: bool, next: bool, msg: ToServer) -> Result<Option<ToApp>, String> {
         let now = self.now();
         let mut guard = self.state.lock();
         let st: &mut State = &mut guard;
@@ -410,7 +446,8 @@ impl Poker {
                 self.last_people.lock().insert(id, now);
                 Ok(Some(snap))
             }
-            ToServer::Watch { table } => Ok(Some(room!(table).watch(uid))),
+            ToServer::Watch { table } => Ok(Some(Self::dress(hub, room!(table).watch(uid)))),
+            ToServer::Ratings => Ok(Some(ToApp::Ratings { rows: Self::ladder(hub) })),
             ToServer::Unwatch { table } => {
                 if let Some(r) = st.room_mut(table) {
                     r.unwatch(uid);
@@ -491,7 +528,10 @@ impl Poker {
             }
             ToServer::Emote { table, emote } => {
                 let out = room!(table).emote(uid, &emote)?;
-                self.flush(hub, st, table, out);
+                // (One too soon after the last is dropped.)
+                if st.emotes.allow(uid, now) {
+                    self.flush(hub, st, table, out);
+                }
                 Ok(None)
             }
             ToServer::Daily => {
@@ -501,13 +541,15 @@ impl Poker {
                 let held = st.held(uid);
                 hub.db.set_poker_record(uid, &rec, held).map_err(|e| e.to_string())?;
                 let gains = (!g.new_achievements.is_empty()).then(|| GainsView { xp: g.xp, achievements: g.new_achievements.iter().map(|s| s.to_string()).collect(), level_up: g.level_up, net: 0 });
-                hub.send_to_user(uid, Event::Poker { msg: ToApp::Record { me: Self::view(hub, uid, &rec, held), gains } });
+                hub.send_poker(uid, ToApp::Record { me: Self::view(hub, uid, &rec, held), gains });
                 Ok(Some(ToApp::Daily { chips: got, streak: rec.daily_streak }))
             }
             ToServer::Equip { id } => {
                 let (mut rec, held) = hub.db.poker_record(uid);
                 let c = COSMETICS.iter().find(|c| c.id == id).ok_or("there's no such look")?;
-                if !c.unlock.met(&rec) {
+                // (A prize box's or a Game Master's look is theirs once given: bug report 110,
+                // "Inferno isn't yours yet" for someone who'd won it.)
+                if !c.unlock.met(&rec) && !rec.gifts.contains(c.id) {
                     return Err(format!("{} isn't yours yet: {}", c.name, c.unlock.describe()));
                 }
                 match c.kind {
@@ -557,10 +599,63 @@ impl Poker {
                     best_hand: rec.best_hand_name.clone(),
                     best_value: rec.best_hand,
                 });
-                let player = room.player(seat, uid, overall).ok_or("nobody sits there now")?;
+                let mut player = room.player(seat, uid, overall).ok_or("nobody sits there now")?;
+                player.mmr = Some(Self::mmr_for(hub, &them, &player.name, player.bot));
                 Ok(Some(ToApp::Player { table, player }))
             }
-            ToServer::Casino { req } => self.casino(hub, st, uid, req),
+            ToServer::Casino { req } => self.casino(hub, st, uid, req, next),
+            msg @ (ToServer::BjTables
+            | ToServer::BjWatch { .. }
+            | ToServer::BjUnwatch { .. }
+            | ToServer::BjSit { .. }
+            | ToServer::BjLeave { .. }
+            | ToServer::BjBet { .. }
+            | ToServer::BjAct { .. }
+            | ToServer::BjBot { .. }
+            | ToServer::BjNew) => {
+                if !next {
+                    return Err("blackjack tables need a newer Pyr".into());
+                }
+                self.bj(hub, st, uid, msg, now, &mut rng)
+            }
+            msg @ (ToServer::CrapsTables
+            | ToServer::CrapsWatch { .. }
+            | ToServer::CrapsUnwatch { .. }
+            | ToServer::CrapsSit { .. }
+            | ToServer::CrapsLeave { .. }
+            | ToServer::CrapsBets { .. }
+            | ToServer::CrapsThrow { .. }
+            | ToServer::CrapsBot { .. }) => {
+                if !next {
+                    return Err("craps tables need a newer Pyr".into());
+                }
+                self.craps_tables(hub, st, uid, msg, now, &mut rng)
+            }
+            ToServer::GameEmote { game, table, emote } => {
+                if !next {
+                    return Err("emotes at the casino's tables need a newer Pyr".into());
+                }
+                Self::game_emote(hub, st, uid, game, table, &emote, now)
+            }
+            ToServer::Bonfire | ToServer::BonfireLight => {
+                if !next {
+                    return Err("the Bonfire needs a newer Pyr".into());
+                }
+                let light = matches!(msg, ToServer::BonfireLight);
+                self.bonfire_req(hub, st, uid, light, &mut rng)
+            }
+            msg @ (ToServer::BacTables
+            | ToServer::BacWatch { .. }
+            | ToServer::BacUnwatch { .. }
+            | ToServer::BacSit { .. }
+            | ToServer::BacLeave { .. }
+            | ToServer::BacBets { .. }
+            | ToServer::BacBot { .. }) => {
+                if !next {
+                    return Err("baccarat tables need a newer Pyr".into());
+                }
+                self.bac_tables(hub, st, uid, msg, now, &mut rng)
+            }
             ToServer::Staff => Ok(Some(ToApp::Staff { view: Self::staff_view(hub, uid, can_manage) })),
             ToServer::SetRole { uid: them, role } => {
                 if !Self::is_owner(hub, uid) {
@@ -582,12 +677,14 @@ impl Poker {
                 self.log_staff(hub, uid, what);
                 // (Their own Pyr learns it with their record.)
                 let (rec, _) = hub.db.poker_record(&them);
-                hub.send_to_user(&them, Event::Poker { msg: ToApp::Record { me: Self::view(hub, &them, &rec, st.held(&them)), gains: None } });
+                hub.send_poker(&them, ToApp::Record { me: Self::view(hub, &them, &rec, st.held(&them)), gains: None });
                 Ok(Some(ToApp::Staff { view: Self::staff_view(hub, uid, can_manage) }))
             }
             ToServer::Gift { uid: them, chips, item, note } => {
-                if Self::role(hub, uid) != Some(Role::GameMaster) {
-                    return Err("only Game Masters give gifts".into());
+                // (The server's owner gives as much as they like; it's all in the log.)
+                let owner = Self::is_owner(hub, uid);
+                if !owner && Self::role(hub, uid) != Some(Role::GameMaster) {
+                    return Err("only Game Masters (and the server's owner) give gifts".into());
                 }
                 if them == uid {
                     return Err("not to yourself".into());
@@ -600,30 +697,35 @@ impl Poker {
                     return Err("give some chips, a look, or both".into());
                 }
                 let note: String = note.trim().chars().take(140).collect();
-                Self::spend(hub, uid, Role::GameMaster, chips)?;
+                if !owner {
+                    Self::spend(hub, uid, Role::GameMaster, chips)?;
+                }
                 let (mut rec, _) = hub.db.poker_record(&them);
-                rec.chips += chips;
+                rec.chips = rec.chips.saturating_add(chips);
                 if let Some(i) = &item {
                     rec.gifts.insert(i.clone());
                 }
                 let held = st.held(&them);
                 hub.db.set_poker_record(&them, &rec, held).map_err(|e| e.to_string())?;
-                hub.send_to_user(&them, Event::Poker { msg: ToApp::Record { me: Self::view(hub, &them, &rec, held), gains: None } });
-                hub.send_to_user(&them, Event::Poker { msg: ToApp::Gifted { from: Self::name_of(hub, uid), chips, item: item.clone(), note: note.clone() } });
+                hub.send_poker(&them, ToApp::Record { me: Self::view(hub, &them, &rec, held), gains: None });
+                hub.send_poker(&them, ToApp::Gifted { from: Self::name_of(hub, uid), chips, item: item.clone(), note: note.clone() });
                 let what = format!(
-                    "gave {} {}{}{}",
+                    "gave {} {}{}{}{}",
                     Self::name_of(hub, &them),
                     if chips > 0 { format!("{} chips", progress_chips(chips)) } else { String::new() },
                     look.map(|l| format!("{}the {l} look", if chips > 0 { " and " } else { "" })).unwrap_or_default(),
-                    if note.is_empty() { String::new() } else { format!(" (\u{201c}{note}\u{201d})") }
+                    if note.is_empty() { String::new() } else { format!(" (\u{201c}{note}\u{201d})") },
+                    if owner { " [the owner: no limit]" } else { "" }
                 );
                 self.log_staff(hub, uid, what);
                 Ok(Some(ToApp::Staff { view: Self::staff_view(hub, uid, can_manage) }))
             }
             ToServer::DropPrize { table, chips, item } => {
-                let Some(role) = Self::role(hub, uid) else {
-                    return Err("only Game Masters and Ambassadors drop prize boxes".into());
-                };
+                let owner = Self::is_owner(hub, uid);
+                let role = Self::role(hub, uid);
+                if role.is_none() && !owner {
+                    return Err("only Game Masters and Ambassadors (and the server's owner) drop prize boxes".into());
+                }
                 let look = Self::item_name(&item)?;
                 if chips == 0 && look.is_none() {
                     return Err("put some chips, a look, or both in it".into());
@@ -634,7 +736,9 @@ impl Poker {
                 if room.prize.is_some() {
                     return Err("there's a prize box on this table already: it goes to the next hand's winner".into());
                 }
-                Self::spend(hub, uid, role, chips)?;
+                if let (false, Some(role)) = (owner, role) {
+                    Self::spend(hub, uid, role, chips)?;
+                }
                 let mut out = Output::default();
                 room.drop_prize(PrizeView { chips, item, from: name }, &mut out)?;
                 self.flush(hub, st, table, out);
@@ -642,9 +746,10 @@ impl Poker {
                     hub,
                     uid,
                     format!(
-                        "dropped a prize box on {table_name}: {}{}",
+                        "dropped a prize box on {table_name}: {}{}{}",
                         if chips > 0 { format!("{} chips", progress_chips(chips)) } else { String::new() },
-                        look.map(|l| format!("{}the {l} look", if chips > 0 { " and " } else { "" })).unwrap_or_default()
+                        look.map(|l| format!("{}the {l} look", if chips > 0 { " and " } else { "" })).unwrap_or_default(),
+                        if owner { " [the owner: no limit]" } else { "" }
                     ),
                 );
                 Ok(None)
@@ -667,7 +772,7 @@ impl Poker {
                 if !can_manage {
                     return Err("tournaments here are set up by people who can manage the server".into());
                 }
-                // (Time Bombs are only started by `TimeBomb`, by the house.)
+                // (Flash Pots are only started by `TimeBomb`, by the house.)
                 rules.bomb = None;
                 if st.tourneys.values().filter(|t| t.rules.bomb.is_none()).count() >= MAX_TOURNEYS {
                     return Err(format!("this server keeps {MAX_TOURNEYS} tournaments at most"));
@@ -719,14 +824,14 @@ impl Poker {
             ToServer::TimeBomb { buy_in } => {
                 let wall = self.wall();
                 if !tourney::BOMB_BUY_INS.contains(&buy_in) {
-                    return Err("Time Bombs are 100, 1,000 or 10,000 chips to play".into());
+                    return Err("Flash Pots are 100, 1,000 or 10,000 chips to play".into());
                 }
                 let (mut rec, _) = hub.db.poker_record(uid);
                 if rec.chips < buy_in {
-                    return Err(format!("this Time Bomb is {buy_in} chips to play and you have {}", rec.chips));
+                    return Err(format!("this Flash Pot is {buy_in} chips to play and you have {}", rec.chips));
                 }
                 if st.tourneys.values().any(|t| t.rules.bomb.is_some() && t.phase == TourneyPhase::Registering && t.is_entrant(uid)) {
-                    return Err("you're waiting for a Time Bomb already".into());
+                    return Err("you're waiting for a Flash Pot already".into());
                 }
                 // A seat in one that's filling up at this buy-in, or a new one.
                 let open = st.tourneys.iter().find(|(_, t)| t.rules.bomb.is_some() && t.rules.buy_in == buy_in && t.can_register() && !t.is_entrant(uid)).map(|(id, _)| *id);
@@ -734,7 +839,7 @@ impl Poker {
                     Some(id) => id,
                     None => {
                         if st.tourneys.values().filter(|t| t.rules.bomb.is_some() && t.ended.is_none()).count() >= MAX_BOMBS {
-                            return Err("every Time Bomb table is busy: try again in a minute".into());
+                            return Err("every Flash Pot table is busy: try again in a minute".into());
                         }
                         let id = self.next_tourney.fetch_add(1, Ordering::Relaxed);
                         let t = Tourney::new(id, tourney::bomb_rules(buy_in, wall), tourney::BOMB_HOST, "Pyr Casino")?;
@@ -760,7 +865,7 @@ impl Poker {
                     return Err("Pyr Friday Night happens every week; it can't be called off".into());
                 }
                 if t.host == tourney::BOMB_HOST {
-                    return Err("a Time Bomb starts by itself (leave it with Unregister before it does)".into());
+                    return Err("a Flash Pot starts by itself (leave it with Unregister before it does)".into());
                 }
                 if t.host != uid && !can_manage {
                     return Err("only whoever set it up can call it off".into());
@@ -791,6 +896,9 @@ impl Poker {
         }
         // (In a tournament they stay in: folded for until they're back, or out.)
         st.casino.watchers.remove(uid);
+        self.bj_gone(hub, st, uid, now);
+        self.craps_gone(hub, st, uid, now);
+        self.bac_gone(hub, st, uid, now);
     }
 
     /// The clock (a few times a second).
@@ -817,6 +925,10 @@ impl Poker {
                 self.flush_tourney(hub, st, out);
             }
         }
+        self.bj_tick(hub, st, now, &mut rng);
+        self.craps_tick(hub, st, now, &mut rng);
+        self.bac_tick(hub, st, now, &mut rng);
+        self.bonfire_tick(hub, st, &mut rng);
         let ids: Vec<TableId> = st.rooms.keys().copied().collect();
         let mut close = Vec::new();
         for id in ids {
@@ -914,6 +1026,13 @@ mod tests {
         assert!(p.handle(&hub, "dee", false, ToServer::Equip { id: "felt_crimson".into() }).unwrap_err().contains("level 12"));
         let Some(ToApp::Record { me, .. }) = p.handle(&hub, "dee", false, ToServer::Equip { id: "felt_classic".into() }).unwrap() else { panic!() };
         assert_eq!(me.felt, "felt_classic");
+        // A prize look: not theirs till it's given, then theirs to wear (bug report 110).
+        assert!(p.handle(&hub, "dee", false, ToServer::Equip { id: "back_inferno".into() }).unwrap_err().contains("prize box"));
+        let (mut rec, held) = hub.db.poker_record("dee");
+        rec.gifts.insert("back_inferno".into());
+        hub.db.set_poker_record("dee", &rec, held).unwrap();
+        let Some(ToApp::Record { me, .. }) = p.handle(&hub, "dee", false, ToServer::Equip { id: "back_inferno".into() }).unwrap() else { panic!() };
+        assert_eq!(me.card_back, "back_inferno");
     }
 
     #[test]
@@ -995,5 +1114,39 @@ mod tests {
         assert!(p.handle(&hub, "dee", true, ToServer::TourneyCancel { id: d.id }).is_err());
         p.handle(&hub, "dee", false, ToServer::TourneyUnregister { id: d.id }).unwrap();
         assert_eq!(hub.db.poker_record("dee").0.chips, progress::STARTING_CHIPS);
+    }
+
+    /// The server's owner gives as many chips as they like (a Game Master only what's left of
+    /// today's allowance, and nobody else any), and every gift is in the log the owner reads.
+    #[test]
+    fn the_owner_gives_without_a_limit_and_it_is_logged() {
+        use pyr_proto::control::Role as UserRole;
+        let hub = hub();
+        let p = &hub.poker;
+        let owner = "blue";
+        hub.db.insert_user(owner, "Bluelight", UserRole::Owner).unwrap();
+        hub.db.insert_user("gm", "Gee", UserRole::Member).unwrap();
+        hub.db.insert_user("amy", "Amy", UserRole::Member).unwrap();
+        let gift = |from: &str, chips: u64| p.handle(&hub, from, false, ToServer::Gift { uid: "amy".into(), chips, item: None, note: "for the final".into() });
+        let start = hub.db.poker_record("amy").0.chips;
+        assert!(gift("gm", 10).is_err(), "nobody else gives anything");
+        p.handle(&hub, owner, false, ToServer::SetRole { uid: "gm".into(), role: Some(Role::GameMaster) }).unwrap();
+        assert!(gift("gm", GM_FLOOR + 1).is_err(), "a Game Master: today's allowance");
+        gift("gm", 1_000).unwrap();
+        // The owner: as many as they like, again and again, well past any allowance.
+        gift(owner, 5_000_000).unwrap();
+        gift(owner, 7_000_000).unwrap();
+        assert_eq!(hub.db.poker_record("amy").0.chips, start + 1_000 + 12_000_000);
+        assert!(p.handle(&hub, owner, false, ToServer::Gift { uid: owner.into(), chips: 5, item: None, note: String::new() }).is_err(), "not to themselves");
+        let Some(ToApp::Staff { view }) = p.handle(&hub, owner, false, ToServer::Staff).unwrap() else { panic!() };
+        assert!(view.owner);
+        let top = &view.log[0];
+        assert_eq!(top.by, "Bluelight");
+        assert!(top.what.contains("Amy 7,000,000 chips") && top.what.contains("no limit"), "{}", top.what);
+        assert!(view.log.iter().any(|l| l.by == "Bluelight" && l.what.contains("5,000,000 chips")));
+        assert!(view.log.iter().any(|l| l.by == "Gee" && l.what.contains("1,000 chips") && !l.what.contains("no limit")));
+        // Only the owner reads it.
+        let Some(ToApp::Staff { view }) = p.handle(&hub, "gm", false, ToServer::Staff).unwrap() else { panic!() };
+        assert!(view.log.is_empty() && !view.owner);
     }
 }

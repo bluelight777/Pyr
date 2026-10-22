@@ -275,7 +275,9 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
     let session_cell = Arc::new(AtomicU32::new(0));
     let groups = caps.iter().any(|c| c == GROUPS_CAP);
     let feedback = caps.iter().any(|c| c == VIDEO_FEEDBACK_CAP);
-    if let Err((code, msg)) = hub.register(conn_id, &user_id, conn.clone(), tx.clone(), session_cell.clone(), login.id, groups, feedback) {
+    let movable = caps.iter().any(|c| c == MOVE_CAP);
+    let casino_next = caps.iter().any(|c| c == CASINO_012_CAP);
+    if let Err((code, msg)) = hub.register(conn_id, &user_id, conn.clone(), tx.clone(), session_cell.clone(), login.id, groups, feedback, movable, casino_next) {
         tx.send(frame(login.id, Event::error(code, msg.clone())));
         drop(tx);
         let _ = timeout(Duration::from_secs(1), writer).await;
@@ -291,6 +293,7 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
         conn_id,
         uid: user_id.clone(),
         groups,
+        casino_next,
         msg_tokens: Bucket::new(1.5, 10.0),
         react_tokens: Bucket::new(3.0, 15.0),
         req_tokens: Bucket::new(REQ_RATE, REQ_BURST),
@@ -674,6 +677,8 @@ struct Ctx<'a> {
     uid: String,
     /// The app knows group conversations (`GROUPS_CAP`).
     groups: bool,
+    /// The app knows Pyr Casino from 0.12.0 on (`CASINO_012_CAP`).
+    casino_next: bool,
     /// Messages and edits.
     msg_tokens: Bucket,
     react_tokens: Bucket,
@@ -1903,8 +1908,12 @@ impl Ctx<'_> {
             }
             Request::Poker { msg } => {
                 let can_manage = self.can(perm::MANAGE_SERVER);
-                match hub.poker.handle(hub, &self.uid, can_manage, msg) {
-                    Ok(Some(msg)) => Ok(Event::Poker { msg }),
+                match hub.poker.handle_from(hub, &self.uid, can_manage, self.casino_next, msg) {
+                    // (A 0.11 app gets it as it can read it, or just an Ok.)
+                    Ok(Some(msg)) => match if self.casino_next { Some(msg) } else { msg.for_older_app() } {
+                        Some(msg) => Ok(Event::Poker { msg }),
+                        None => Ok(Event::Ok),
+                    },
                     Ok(None) => Ok(Event::Ok),
                     Err(e) => Err((ErrorCode::BadRequest, e)),
                 }
@@ -2081,6 +2090,14 @@ impl Ctx<'_> {
                 self.may_moderate(&user_id, if deafened { "server deafen" } else { "undo the server deafen of" }, deafened)?;
                 hub.set_moderated(ModeratedVoice::Deafened, &user_id, deafened)
             }
+            // (Like Discord's: Move members is all it takes, whoever they are.)
+            Request::MoveMember { user_id, channel_id } => {
+                self.require(perm::MOVE_MEMBERS, "move people between voice channels")?;
+                if user_id.len() > 200 {
+                    return bad("bad user id");
+                }
+                hub.move_member(&self.uid, &user_id, channel_id)
+            }
             Request::Unknown => Err((ErrorCode::BadRequest, "This server is older than your app and can't do that yet.".into())),
         }
     }
@@ -2159,6 +2176,7 @@ mod tests {
             conn_id: 1,
             uid: uid.to_string(),
             groups: true,
+            casino_next: true,
             msg_tokens: Bucket::new(1.5, 10.0),
             react_tokens: Bucket::new(3.0, 15.0),
             req_tokens: Bucket::new(REQ_RATE, REQ_BURST),

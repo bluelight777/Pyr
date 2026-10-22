@@ -135,6 +135,8 @@ fn a_full_field_plays_down_to_one_winner() {
     let mut rng = Stream::new(seed_from(1));
     t.tick(end + FINAL_MS - 1, &mut ids, &mut rng);
     assert_eq!(t.tables.len(), 1);
+    // (Someone's watching it, whoever's still there: they're told it's closed.)
+    t.tables.values_mut().next().unwrap().watch("alice");
     let out = t.tick(end + FINAL_MS, &mut ids, &mut rng);
     assert!(t.tables.is_empty());
     assert!(out.msgs.iter().any(|(_, m)| matches!(m, ToApp::Closed { .. })));

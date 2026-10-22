@@ -35,22 +35,23 @@ pub const FRAME: usize = 960;
 const B: usize = FRAME / 2;
 const RATE: usize = 48_000;
 
-// Finding the call in the stream (mono, decimated to 16 kHz).
-const DEC: usize = 3;
+// Finding the call in the stream (mono, decimated to 16 kHz). (`mic_echo` finds the speakers'
+// sound in the microphone the same way.)
+pub(super) const DEC: usize = 3;
 /// Stream sound compared each time (256 ms).
-const NY: usize = 4096;
+pub(super) const NY: usize = 4096;
 /// How far back in what was played to look (512 ms).
-const MAX_LAG: usize = 8192;
-const NFFT_DET: usize = 16_384;
+pub(super) const MAX_LAG: usize = 8192;
+pub(super) const NFFT_DET: usize = 16_384;
 /// Delays searched: up to 450 ms (the far edge of the window makes false peaks).
 const SEARCH_LAG: usize = 7200;
 /// How much of the last look's cross-spectrum is kept each time (about 1.5 s of memory).
 const DET_KEEP: f32 = 0.85;
 /// How far the peak must stand above the rest to count as the call (measured: a leak 20 dB
 /// under the game scores 50 to 110 and louder ones 150 to 300; no leak stays under 35).
-const PROMINENT: f32 = 50.0;
+pub(super) const PROMINENT: f32 = 50.0;
 /// The low-pass for decimating to 16 kHz (31 taps, cut-off 7 kHz).
-const DEC_TAPS: usize = 31;
+pub(super) const DEC_TAPS: usize = 31;
 
 // Learning how the call comes back (per channel, 48 kHz).
 const F: usize = 2048;
@@ -182,7 +183,7 @@ impl StreamEcho {
             && now <= self.played_total
         {
             self.next_look = self.captured_total + (NY * DEC) as i64;
-            if let Some(lag) = self.det.look(&self.fft, &self.played, now, &self.captured, self.captured_total) {
+            if let Some(lag) = self.det.look(&self.fft.det_fwd, &self.fft.det_inv, &self.played, now, &self.captured, self.captured_total) {
                 // A different delay (by over 1 ms) means a different way back: learn it anew.
                 if self.lag.is_none_or(|l| l.abs_diff(lag) > DEC * 16) {
                     tracing::info!(delay_ms = lag as f32 / 48.0, "screen share sound has the call in it: taking it out");
@@ -312,7 +313,7 @@ impl Fft {
 }
 
 /// Index `i` of a ring of `len` (a power of two).
-fn ring(i: i64, len: usize) -> usize {
+pub(super) fn ring(i: i64, len: usize) -> usize {
     (i & (len as i64 - 1)) as usize
 }
 
@@ -325,7 +326,7 @@ fn inverse(plan: &Arc<dyn ComplexToReal<f32>>, spec: &mut [Complex<f32>], out: &
 }
 
 /// Finds a delayed copy of what was played in the stream: GCC-PHAT on 16 kHz mono.
-struct Detector {
+pub(super) struct Detector {
     lowpass: [f32; DEC_TAPS],
     acc: Vec<Complex<f32>>,
     y: Vec<f32>,
@@ -336,10 +337,19 @@ struct Detector {
     mags: Vec<f32>,
     /// The last look's best delay, if it stood out.
     candidate: Option<usize>,
+    /// How far the last look's best match stood out (see `PROMINENT`), and its delay in played
+    /// (48 kHz) samples; `None` if nothing was being played then.
+    pub(super) last: Option<(f32, usize)>,
+}
+
+/// The plans `Detector::look` needs.
+pub(super) fn detector_plans() -> (Arc<dyn RealToComplex<f32>>, Arc<dyn ComplexToReal<f32>>) {
+    let mut p = RealFftPlanner::<f32>::new();
+    (p.plan_fft_forward(NFFT_DET), p.plan_fft_inverse(NFFT_DET))
 }
 
 impl Detector {
-    fn new() -> Detector {
+    pub(super) fn new() -> Detector {
         // Windowed-sinc low-pass at 7 kHz (Hamming).
         let mut lowpass = [0f32; DEC_TAPS];
         let fc = 7_000.0 / RATE as f32;
@@ -363,27 +373,38 @@ impl Detector {
             cc: vec![0.0; NFFT_DET],
             mags: Vec::with_capacity(SEARCH_LAG + 1),
             candidate: None,
+            last: None,
         }
     }
 
-    /// 16 kHz mono of `n` samples ending (exclusive) at 48 kHz index `end`, from a ring.
-    fn decimate(&self, src: &[Vec<f32>; 2], end: i64, n: usize, out: &mut [f32]) {
+    /// 16 kHz mono of `n` samples ending (exclusive) at 48 kHz index `end`, from a ring of
+    /// each channel.
+    fn decimate(&self, src: &[Vec<f32>], end: i64, n: usize, out: &mut [f32]) {
         let len = src[0].len();
         let first = end - (n * DEC) as i64;
+        let scale = 1.0 / src.len() as f32;
         for (i, o) in out[..n].iter_mut().enumerate() {
             let at = first + (i * DEC) as i64;
             let mut acc = 0.0;
             for (t, h) in self.lowpass.iter().enumerate() {
                 let j = ring(at - t as i64, len);
-                acc += h * (src[0][j] + src[1][j]);
+                acc += h * src.iter().map(|c| c[j]).sum::<f32>();
             }
-            *o = 0.5 * acc;
+            *o = scale * acc;
         }
     }
 
     /// Looks again (`played_end` is the played index lined up with `captured_end`). Returns the
     /// delay in played (48 kHz) samples once the same one has stood out twice in a row.
-    fn look(&mut self, fft: &Fft, played: &[Vec<f32>; 2], played_end: i64, captured: &[Vec<f32>; 2], captured_end: i64) -> Option<usize> {
+    pub(super) fn look(
+        &mut self,
+        fwd: &Arc<dyn RealToComplex<f32>>,
+        inv: &Arc<dyn ComplexToReal<f32>>,
+        played: &[Vec<f32>],
+        played_end: i64,
+        captured: &[Vec<f32>],
+        captured_end: i64,
+    ) -> Option<usize> {
         let mut y = std::mem::take(&mut self.y);
         let mut r = std::mem::take(&mut self.r);
         self.decimate(captured, captured_end, NY, &mut y);
@@ -392,9 +413,10 @@ impl Detector {
         r[NY + MAX_LAG..].fill(0.0);
         let playing = r[MAX_LAG..NY + MAX_LAG].iter().map(|v| v * v).sum::<f32>() / NY as f32 > PLAYING;
         let mut found = None;
+        self.last = None;
         if playing {
-            let _ = fft.det_fwd.process(&mut y, &mut self.ys);
-            let _ = fft.det_fwd.process(&mut r, &mut self.rs);
+            let _ = fwd.process(&mut y, &mut self.ys);
+            let _ = fwd.process(&mut r, &mut self.rs);
             for ((a, ys), rs) in self.acc.iter_mut().zip(&self.ys).zip(&self.rs) {
                 let c = ys * rs.conj();
                 let m = c.norm();
@@ -402,7 +424,7 @@ impl Detector {
                 *a = *a * DET_KEEP + c * (1.0 - DET_KEEP);
             }
             self.ys.copy_from_slice(&self.acc);
-            inverse(&fft.det_inv, &mut self.ys, &mut self.cc);
+            inverse(inv, &mut self.ys, &mut self.cc);
             // Stream sample k lines up with played sample k - lag at index (lag - MAX_LAG) mod N.
             self.mags.clear();
             let (mut best, mut best_v) = (0, f32::MIN);
@@ -417,6 +439,7 @@ impl Detector {
             let mid = self.mags.len() / 2;
             let median = *self.mags.select_nth_unstable_by(mid, |a, b| a.total_cmp(b)).1;
             let prominence = best_v / median.max(1e-30);
+            self.last = Some((prominence, best * DEC));
             if prominence > PROMINENT {
                 if self.candidate.is_some_and(|c| c.abs_diff(best) <= 16) {
                     found = Some(best * DEC);

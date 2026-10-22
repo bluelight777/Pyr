@@ -14,6 +14,22 @@ pub type PacketSink<'a> = &'a mut dyn FnMut(u8, u8, &[u8]);
 
 pub struct CapturePipeline {
     apm: sonora::AudioProcessing,
+    /// The same processing without echo cancellation, and whether what's played comes back
+    /// into the microphone (see `mic_echo`): when nothing does (headphones), the echo
+    /// canceller only gets in the way, and this goes out instead.
+    plain: Option<sonora::AudioProcessing>,
+    echo: Option<super::mic_echo::MicEcho>,
+    plain_out: Vec<f32>,
+    /// The plain processing's sound, held back as long as the echo canceller holds its own
+    /// (`AEC_LATENCY`), so the two line up while one takes over from the other.
+    plain_line: std::collections::VecDeque<f32>,
+    /// How much of what goes out is the echo canceller's (1) rather than the plain
+    /// processing's (0): it moves over in 100 ms, so the switch can't be heard.
+    aec_share: f32,
+    /// Whether the speakers' sound could account for much of this 10 ms the microphone heard.
+    far: bool,
+    /// What Voice & Video was last told about the echo canceller (see `Controls::echo`).
+    told_echo: Option<(u8, bool)>,
     denoise: Option<Box<nnnoiseless::DenoiseState<'static>>>,
     /// Voice isolation's noise remover (DeepFilterNet3). RNNoise then only tells when there's
     /// speech; its own cleaned audio isn't used.
@@ -78,6 +94,9 @@ pub struct CapturePipeline {
     swells: super::swells::Swells,
     /// This frame's level after echo cancellation and automatic gain.
     apm_db: f32,
+    /// The last frame's levels: coming in, after echo cancellation and automatic gain, after
+    /// noise suppression, going out (for measuring tools).
+    stages: [f32; 4],
 }
 
 /// How long speech counts as going on after RNNoise last heard it (bridges the quiet parts of
@@ -98,6 +117,10 @@ const ISO_RELEARN_FRAMES: u32 = 3000;
 const ISO_DEFAULT_TUNING: (bool, usize) = (false, 0);
 /// See `iso_start_lsnr`.
 const ISO_START_LSNR: f32 = 3.0;
+/// The echo canceller's sound comes out this much later (samples, 8 ms) than the same
+/// processing's without it: the plain sound is held back as long (measured, see
+/// `the_plain_and_echo_cancelled_sound_line_up`).
+const AEC_LATENCY: usize = 384;
 /// Voice isolation: how much is let through of other people's voices, and of other sounds.
 const ISO_OTHER_VOICE: f32 = 0.05;
 const ISO_FLOOR: f32 = 0.03;
@@ -150,56 +173,87 @@ impl Levels {
 /// AEC3's own settings, changed from WebRTC's defaults (see vendor/sonora/PYR.md). With the
 /// defaults, while others talked or music played, your voice was turned down 15 to 90 dB for
 /// a moment, three to six times a minute, headphones or not (bug reports 27 and 32 to 41).
-/// Measured with `examples/aec_eval.rs` (your talking, 200 ms at a time, turned down 10 dB or
-/// more, of 308; and the echo that got through):
-///
-/// |                                     | defaults (0.10.0) | these      |
-/// |-------------------------------------|-------------------|------------|
-/// | headphones, others talking          | 23, -87 dB        | 2, -88 dB  |
-/// | headphones, music playing           | 39, -85 dB        | 6, -87 dB  |
-/// | headphones, loud music and voices   | 28, -96 dB        | 15, -96 dB |
-/// | speakers, others talking            | 8, -88 dB         | 4, -87 dB  |
-/// | speakers, music playing             | 17, -80 dB        | 12, -77 dB |
-/// | speakers turned low, music playing  | 18, -79 dB        | 6, -74 dB  |
 ///
 /// The echo path is first taken to be 20 dB weaker than the speakers (`default_gain`, 1.0
 /// before): with headphones there's none, and until the canceller had learned that it took
 /// every loud moment from the speakers to be coming back into the microphone, and took your
 /// voice out with it. Its tail is taken to die away sooner (`default_len`, 0.83 before): the
 /// canceller's own filter learns the room as it is. Telling whether there's any echo at all
-/// uses the newer of the two ways (transparent mode, `Hmm`). `PYR_AB=aectune` for the defaults.
+/// uses the newer of the two ways (transparent mode, `Hmm`). `PYR_AB=aectune` for the defaults
+/// (0.11.0).
+///
+/// 0.12.0 (bug reports 102 to 119): a microphone that clips isn't taken to be all echo
+/// (`echo_can_saturate`, `PYR_AB=aecsat`); what's left of the echo after the canceller's filter
+/// is only taken out where it's about as loud as your voice (`PYR_AB=aecmask`); and with
+/// headphones the canceller stands aside altogether (see `mic_echo`, `PYR_AB=aecpath`).
+/// Measured with `examples/aec_eval.rs` (your talking, 200 ms at a time, turned down 10 dB or
+/// more, of 308, with Pyr's own settings, standard noise suppression and voice isolation; and
+/// the echo that got through), 0.11.0 against 0.12.0:
+///
+/// |                                     | 0.11.0                | 0.12.0                |
+/// |-------------------------------------|-----------------------|-----------------------|
+/// | headphones, others talking          | 1, 1, 2 (-87 dB)      | 0, 0, 0 (-86 dB)      |
+/// | headphones, music playing           | 1, 2, 1 (-87 dB)      | 0, 0, 0 (-85 dB)      |
+/// | headphones, loud music and voices   | 11, 11, 12 (-97 dB)   | 0, 0, 0 (-95 dB)      |
+/// | speakers, others talking            | 2, 2, 2 (-87 dB)      | 0, 0, 0 (-86 dB)      |
+/// | speakers, music playing             | 6, 6, 7 (-77 dB)      | 4, 5, 6 (-77 dB)      |
+/// | speakers turned low, music playing  | 5, 5, 5 (-77 dB)      | 1, 2, 1 (-75 dB)      |
+/// | speakers, clocks 100 ppm apart      | 4, 5, 6 (-53 dB)      | 3, 2, 3 (-48 dB)      |
+///
+/// With the microphone open all along (push to talk held), what's left of the echo went from
+/// -65 to -77 dB to at most 3 dB more.
 fn tune_aec3(c: &mut sonora::config::EchoCanceller3Config) {
+    if !pyr_proto::ab::old("aecsat") {
+        c.ep_strength.echo_can_saturate = false;
+    }
     if pyr_proto::ab::old("aectune") {
         return;
     }
     c.ep_strength.default_gain = 0.1;
     c.ep_strength.default_len = 0.5;
     c.ep_strength.nearend_len = 0.5;
+    // (0.12.0) What's left of the echo is only taken out where it's as loud as your voice
+    // (WebRTC's own setting for while you're talking, used all the time: its stricter one cut
+    // your voice at the start of what you said while the speakers played). `PYR_AB=aecmask`
+    // for the stricter one.
+    if !pyr_proto::ab::old("aecmask") {
+        c.suppressor.normal_tuning = c.suppressor.nearend_tuning.clone();
+    }
+}
+
+/// The microphone's processing: high-pass filter, echo cancellation (if `echo`), noise
+/// suppression (Standard), automatic gain.
+fn processing(settings: &Settings, echo: bool) -> sonora::AudioProcessing {
+    let config = sonora::Config {
+        echo_canceller: echo.then(|| EchoCanceller {
+            transparent_mode: if pyr_proto::ab::old("aectune") { Default::default() } else { sonora::config::TransparentModeType::Hmm },
+            tune: Some(sonora::config::Aec3Tuning(tune_aec3)),
+            ..Default::default()
+        }),
+        noise_suppression: (settings.noise_suppression == NoiseSuppression::Standard).then(|| {
+            sonora::config::NoiseSuppression { level: NoiseSuppressionLevel::High, ..Default::default() }
+        }),
+        gain_controller2: settings.auto_gain.then(|| GainController2 {
+            adaptive_digital: Some(AdaptiveDigital::default()),
+            ..Default::default()
+        }),
+        high_pass_filter: Some(HighPassFilter::default()),
+        ..Default::default()
+    };
+    sonora::AudioProcessing::builder()
+        .config(config)
+        .capture_config(sonora::StreamConfig::new(48_000, 1))
+        .render_config(sonora::StreamConfig::new(48_000, 1))
+        .build()
 }
 
 impl CapturePipeline {
     pub fn new(settings: &Settings) -> anyhow::Result<CapturePipeline> {
-        let config = sonora::Config {
-            echo_canceller: settings.echo_cancellation.then(|| EchoCanceller {
-                transparent_mode: if pyr_proto::ab::old("aectune") { Default::default() } else { sonora::config::TransparentModeType::Hmm },
-                tune: Some(sonora::config::Aec3Tuning(tune_aec3)),
-                ..Default::default()
-            }),
-            noise_suppression: (settings.noise_suppression == NoiseSuppression::Standard).then(|| {
-                sonora::config::NoiseSuppression { level: NoiseSuppressionLevel::High, ..Default::default() }
-            }),
-            gain_controller2: settings.auto_gain.then(|| GainController2 {
-                adaptive_digital: Some(AdaptiveDigital::default()),
-                ..Default::default()
-            }),
-            high_pass_filter: Some(HighPassFilter::default()),
-            ..Default::default()
-        };
-        let apm = sonora::AudioProcessing::builder()
-            .config(config)
-            .capture_config(sonora::StreamConfig::new(48_000, 1))
-            .render_config(sonora::StreamConfig::new(48_000, 1))
-            .build();
+        let apm = processing(settings, settings.echo_cancellation);
+        // (`PYR_AB=aecpath`: the echo canceller's sound always, as before 0.12.0.)
+        let both = settings.echo_cancellation && !pyr_proto::ab::old("aecpath");
+        let plain = both.then(|| processing(settings, false));
+        let echo = both.then(super::mic_echo::MicEcho::new);
         let mut encoder = opus::Encoder::new(48_000, opus::Channels::Mono, opus::Application::Voip)?;
         encoder.set_bitrate(opus::Bitrate::Bits((settings.voice_bitrate_kbps.clamp(16, 256) * 1000) as i32))?;
         encoder.set_vbr(true)?;
@@ -224,6 +278,13 @@ impl CapturePipeline {
         let now = Instant::now();
         Ok(CapturePipeline {
             apm,
+            plain,
+            echo,
+            plain_out: vec![0.0; 480],
+            plain_line: std::iter::repeat_n(0.0, AEC_LATENCY).collect(),
+            aec_share: 1.0,
+            far: false,
+            told_echo: None,
             denoise,
             dfn,
             pre: vec![0.0; 480],
@@ -261,6 +322,7 @@ impl CapturePipeline {
             went_out: None,
             swells: Default::default(),
             apm_db: -100.0,
+            stages: [-100.0; 4],
         })
     }
 
@@ -291,6 +353,20 @@ impl CapturePipeline {
         (self.voice_prob, self.raw_env_db, self.iso_ref_db, self.iso_gain)
     }
 
+    /// For measuring tools: the last 10 ms's levels (dBFS) coming in, after echo cancellation
+    /// and automatic gain, after noise suppression, and going out.
+    #[doc(hidden)]
+    pub fn stage_levels(&self) -> [f32; 4] {
+        self.stages
+    }
+
+    /// For measuring tools: the last 10 ms as it went into voice isolation's noise remover
+    /// (after echo cancellation and automatic gain).
+    #[doc(hidden)]
+    pub fn before_dfn(&self) -> &[f32] {
+        &self.pre
+    }
+
     /// For measuring tools: DeepFilterNet's speech-to-noise estimate (dB).
     #[doc(hidden)]
     pub fn debug_lsnr(&self) -> f32 {
@@ -307,12 +383,66 @@ impl CapturePipeline {
     pub fn echo_stats(&self) -> String {
         let s = self.apm.statistics();
         format!(
-            "erl {:?} erle {:?} delay {:?} divergent {:?}",
+            "erl {:?} erle {:?} delay {:?} divergent {:?}; {}",
             s.echo_return_loss.map(|v| v.round()),
             s.echo_return_loss_enhancement.map(|v| v.round()),
             s.delay_ms,
-            s.divergent_filter_fraction.map(|v| (v * 100.0).round())
+            s.divergent_filter_fraction.map(|v| (v * 100.0).round()),
+            self.echo_words()
         )
+    }
+
+    /// What's known about the speakers' sound coming back into the microphone, in words.
+    pub fn echo_words(&self) -> String {
+        match (&self.echo, self.settings.echo_cancellation) {
+            (_, false) => "echo cancellation off".into(),
+            (None, true) => "echo cancellation always on".into(),
+            (Some(e), true) => Self::echo_words_of(e),
+        }
+    }
+
+    fn echo_words_of(e: &super::mic_echo::MicEcho) -> String {
+        use super::mic_echo::Echo;
+        match e.state() {
+            Echo::Unknown => "not yet known whether the speakers' sound reaches the microphone (echo cancellation on)".into(),
+            Echo::Found(ms) => {
+                let weaker = e
+                    .coupling_db()
+                    .map(|db| match db {
+                        db if db < -1.0 => format!(", {:.0} dB weaker", -db),
+                        db if db > 1.0 => format!(", {db:.0} dB louder"),
+                        _ => ", about as loud".to_string(),
+                    })
+                    .unwrap_or_default();
+                if e.faint() {
+                    format!("the speakers' sound reaches the microphone {ms:.0} ms later{weaker}: too faint to hear (echo cancellation stands aside)")
+                } else {
+                    format!("the speakers' sound reaches the microphone {ms:.0} ms later{weaker} (echo cancellation on)")
+                }
+            }
+            Echo::None => "the speakers' sound doesn't reach the microphone (headphones: echo cancellation stands aside)".into(),
+        }
+    }
+
+    /// For measuring tools: the speakers-in-the-microphone detector's insides.
+    #[doc(hidden)]
+    pub fn echo_debug(&self) -> String {
+        self.echo.as_ref().map(|e| e.debug()).unwrap_or_else(|| "no detector".into())
+    }
+
+    /// For measuring tools: whether the speakers' sound has been found in the microphone.
+    pub fn echo_state(&self) -> Option<super::mic_echo::Echo> {
+        self.echo.as_ref().map(|e| e.state())
+    }
+
+    /// The speakers changed (or came back): whatever came back into the microphone before
+    /// may not now, and what does may come back differently.
+    pub fn speakers_changed(&mut self) {
+        if let Some(e) = self.echo.as_mut()
+            && e.restart()
+        {
+            tracing::info!("speakers changed: echo cancellation on until it's known whether their sound reaches the microphone");
+        }
     }
 
     pub fn render(&mut self, stereo: &[f32]) {
@@ -323,6 +453,9 @@ impl CapturePipeline {
             self.mono_render[i] = 0.5 * (stereo[2 * i] + stereo[2 * i + 1]);
         }
         let src = self.mono_render.clone();
+        if let Some(e) = self.echo.as_mut() {
+            e.played(&src);
+        }
         let _ = self.apm.process_render_f32(&[&src], &mut [&mut self.mono_render]);
     }
 
@@ -483,6 +616,59 @@ impl CapturePipeline {
         let raw_db = rms_db(&frame[..480]);
         self.scratch.copy_from_slice(&frame[..480]);
         let _ = self.apm.process_capture_f32(&[&self.scratch], &mut [&mut frame[..480]]);
+        self.far = false;
+        if let (Some(plain), Some(echo)) = (self.plain.as_mut(), self.echo.as_mut()) {
+            use super::mic_echo::Echo;
+            let _ = plain.process_capture_f32(&[&self.scratch], &mut [&mut self.plain_out]);
+            self.plain_line.extend(self.plain_out.iter().copied());
+            for v in self.plain_out.iter_mut() {
+                *v = self.plain_line.pop_front().unwrap_or(0.0);
+            }
+            let needed = echo.needs_canceller();
+            if let Some(now) = echo.heard(&self.scratch) {
+                match now {
+                    Echo::None => tracing::info!("the speakers' sound doesn't reach the microphone (headphones): echo cancellation stands aside"),
+                    Echo::Found(ms) => tracing::info!(delay_ms = ms, "the speakers' sound reaches the microphone"),
+                    Echo::Unknown => tracing::info!("the speakers' sound may reach the microphone: echo cancellation on until it's known"),
+                }
+            }
+            if echo.needs_canceller() != needed && matches!(echo.state(), Echo::Found(_)) {
+                tracing::info!("{}", Self::echo_words_of(echo));
+            }
+            let heard = 10f32.powf(raw_db / 10.0);
+            let could = echo.could_be_echo();
+            // Over to the echo canceller's sound at once (within these 10 ms); away from it
+            // over 100 ms.
+            let from = self.aec_share;
+            let to = if echo.needs_canceller() { 1.0 } else { (from - 0.1).max(0.0) };
+            if from < 1.0 || to < 1.0 {
+                for (i, (v, p)) in frame[..480].iter_mut().zip(&self.plain_out).enumerate() {
+                    let share = from + (to - from) * (i as f32 + 1.0) / 480.0;
+                    *v = *v * share + p * (1.0 - share);
+                }
+            }
+            self.aec_share = to;
+            // (Echo the processing took out isn't my voice turned down.)
+            self.far = could * 10.0 > heard;
+            // Voice & Video says what's going on.
+            let now_told = (match echo.state() {
+                Echo::Unknown => 0,
+                Echo::Found(_) => 1,
+                Echo::None => 2,
+            }, echo.needs_canceller());
+            if self.told_echo != Some(now_told) {
+                self.told_echo = Some(now_told);
+                *ctl.echo.lock() = Some(
+                    match now_told {
+                        (0, _) => "Listening for your speakers in your microphone; until it's known, echo cancellation is on.",
+                        (1, true) => "Your speakers can be heard in your microphone, so echo cancellation is on.",
+                        (1, false) => "Your speakers reach your microphone only too faintly to hear, so echo cancellation stands aside.",
+                        _ => "Your speakers can't be heard in your microphone (headphones), so echo cancellation stands aside: it would only get in your voice's way.",
+                    }
+                    .to_string(),
+                );
+            }
+        }
         self.apm_db = rms_db(&frame[..480]);
 
         if let Some(d) = self.dfn.as_mut() {
@@ -517,7 +703,9 @@ impl CapturePipeline {
         ctl.mic_level.store(self.level_db.to_bits(), Ordering::Relaxed);
 
         let open = self.gate(now, ctl);
-        if let Some(what) = self.swells.feed([raw_db, self.apm_db, db, rms_db(&frame[..480])], open) {
+        self.stages = [raw_db, self.apm_db, db, rms_db(&frame[..480])];
+        if let Some(what) = self.swells.feed(self.stages, open, self.far) {
+            let what = format!("{what} ({})", self.echo_words());
             tracing::warn!("{what}");
             *ctl.swelled.lock() = Some(what);
         }
@@ -625,5 +813,59 @@ mod tests {
         ctl.ptt_down.store(true, Ordering::Relaxed);
         let (_, open) = feed(&mut cap, &ctl, &mut now, &mut seed, 100);
         assert!(open, "key held");
+    }
+
+    /// Switching between the echo canceller's sound and the plain processing's mixes the two
+    /// for 100 ms: they must line up, or the voice would sound hollow while it does.
+    #[test]
+    fn the_plain_and_echo_cancelled_sound_line_up() {
+        for settings in [
+            Settings::default(),
+            Settings { noise_suppression: NoiseSuppression::Standard, ..Settings::default() },
+            Settings { auto_gain: false, ..Settings::default() },
+            Settings { noise_suppression: NoiseSuppression::Standard, auto_gain: false, ..Settings::default() },
+            Settings { noise_suppression: NoiseSuppression::Off, auto_gain: false, ..Settings::default() },
+        ] {
+            let mut aec = processing(&settings, true);
+            let mut plain = processing(&settings, false);
+            let mut seed = 11u32;
+            let (mut a_out, mut p_out) = (Vec::new(), Vec::new());
+            let silence = vec![0f32; 480];
+            let mut lp = 0f32;
+            for k in 0..300 {
+                // Talking-like bursts of colored noise.
+                let frame: Vec<f32> = (0..480)
+                    .map(|i| {
+                        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                        lp += 0.3 * ((seed >> 8) as f32 / (1u32 << 24) as f32 * 2.0 - 1.0 - lp);
+                        let t = (k * 480 + i) as f32 / 48_000.0;
+                        if (t * 1.3).fract() < 0.6 { 0.2 * lp } else { 0.0 }
+                    })
+                    .collect();
+                let mut out = vec![0f32; 480];
+                let _ = aec.process_render_f32(&[&silence], &mut [&mut vec![0f32; 480]]);
+                let _ = aec.process_capture_f32(&[&frame], &mut [&mut out]);
+                a_out.extend_from_slice(&out);
+                let _ = plain.process_capture_f32(&[&frame], &mut [&mut out]);
+                p_out.extend_from_slice(&out);
+            }
+            // (Held back as `process` holds it.)
+            let p_out: Vec<f32> = std::iter::repeat_n(0.0, AEC_LATENCY).chain(p_out).take(a_out.len()).collect();
+            // From 1 s on: how alike they are, a few samples either way.
+            let alike = |lag: i64| -> f64 {
+                let (mut ab, mut aa, mut bb) = (0f64, 0f64, 0f64);
+                for i in 48_000..a_out.len() - 500 {
+                    let a = a_out[i] as f64;
+                    let b = p_out[(i as i64 + lag) as usize] as f64;
+                    ab += a * b;
+                    aa += a * a;
+                    bb += b * b;
+                }
+                ab / (aa * bb).sqrt().max(1e-20)
+            };
+            let best = (-480..=480).max_by(|a, b| alike(*a).total_cmp(&alike(*b))).unwrap();
+            assert_eq!(best, 0, "{:?}: the plain sound is {best} samples off", settings.noise_suppression);
+            assert!(alike(0) > 0.99, "not alike: {:.3}", alike(0));
+        }
     }
 }

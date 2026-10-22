@@ -93,38 +93,70 @@ pub fn gear(p: &Painter, r: Rect, c: Color32) {
     p.circle_stroke(ctr, s * 0.25, Stroke::new(s * 0.12, c));
 }
 
-pub fn hangup(p: &Painter, r: Rect, c: Color32) {
-    let s = r.width();
-    let ctr = r.center() + vec2(0.0, s * 0.08);
-    let pts = arc(ctr + vec2(0.0, s * 0.18), s * 0.42, PI * 1.18, PI * 1.82, 16);
-    p.add(Shape::line(pts, Stroke::new(s * 0.16, c)));
-    for dx in [-1.0f32, 1.0] {
-        let e = Rect::from_center_size(ctr + vec2(dx * s * 0.33, s * 0.06), vec2(s * 0.18, s * 0.14));
-        p.rect_filled(e, CornerRadius::same((s * 0.05) as u8), c);
+/// A phone handset laid down, earpiece and mouthpiece at the bottom, on a 100-wide grid (its
+/// middle at 50,28): a start point, then (control, control, end) per cubic curve, the right
+/// half and then the left (the right one reflected).
+const HANDSET: (Pos2, [[f32; 6]; 14]) = (
+    pos2(50.0, 8.0),
+    [
+        [70.0, 8.0, 88.0, 14.0, 96.0, 27.0],
+        [98.0, 32.0, 98.0, 38.5, 95.5, 43.0],
+        [94.5, 47.0, 91.5, 48.5, 88.0, 48.5],
+        [84.5, 48.5, 80.0, 48.4, 77.5, 48.0],
+        [75.2, 47.6, 74.0, 46.0, 74.0, 43.5],
+        [74.0, 40.5, 73.6, 37.5, 73.0, 35.0],
+        [66.0, 30.0, 58.0, 27.0, 50.0, 27.0],
+        [42.0, 27.0, 34.0, 30.0, 27.0, 35.0],
+        [26.4, 37.5, 26.0, 40.5, 26.0, 43.5],
+        [26.0, 46.0, 24.8, 47.6, 22.5, 48.0],
+        [20.0, 48.4, 15.5, 48.5, 12.0, 48.5],
+        [8.5, 48.5, 5.5, 47.0, 4.5, 43.0],
+        [2.0, 38.5, 2.0, 32.0, 4.0, 27.0],
+        [12.0, 14.0, 30.0, 8.0, 50.0, 8.0],
+    ],
+);
+
+/// The handset's outline and its triangles, worked out once.
+fn handset_shape() -> &'static (Vec<Pos2>, Vec<[u32; 3]>) {
+    static SHAPE: OnceLock<(Vec<Pos2>, Vec<[u32; 3]>)> = OnceLock::new();
+    SHAPE.get_or_init(|| {
+        let pts = outline(HANDSET.0, &HANDSET.1);
+        let tris = triangulate(&pts);
+        (pts, tris)
+    })
+}
+
+/// The handset, `scale` of `r` across, turned by `turn` about its middle: filled as triangles
+/// and traced with a one-pixel line of the same color for a smooth edge (it isn't convex).
+fn handset(p: &Painter, r: Rect, c: Color32, turn: f32, scale: f32) {
+    let (pts, tris) = handset_shape();
+    let u = r.width().min(r.height()) * scale / 94.0;
+    let (sn, cs) = turn.sin_cos();
+    let place = |q: Pos2| {
+        let v = (q - pos2(50.0, 28.0)) * u;
+        r.center() + vec2(v.x * cs - v.y * sn, v.x * sn + v.y * cs)
+    };
+    let placed: Vec<Pos2> = pts.iter().map(|&q| place(q)).collect();
+    let mut mesh = Mesh::default();
+    for &q in &placed {
+        mesh.colored_vertex(q, c);
     }
+    for t in tris {
+        mesh.add_triangle(t[0], t[1], t[2]);
+    }
+    p.add(Shape::mesh(mesh));
+    p.add(Shape::closed_line(placed, Stroke::new(1.0 / p.ctx().pixels_per_point(), c)));
+}
+
+/// Hang up: the handset laid down, like Discord's.
+pub fn hangup(p: &Painter, r: Rect, c: Color32) {
+    handset(p, r, c, 0.0, 0.96);
 }
 
 /// A phone handset tilted like a call button's, earpiece up and to the left (calling someone):
-/// `hangup`'s handset, turned.
+/// `hangup`'s handset, turned three eighths of a turn back.
 pub fn phone(p: &Painter, r: Rect, c: Color32) {
-    let s = r.width().min(r.height());
-    let ctr = r.center();
-    // Turned three eighths of a turn back, about the middle (a little below it, where the
-    // handset's weight is).
-    let (sn, cs) = (-0.75 * PI).sin_cos();
-    let mid = vec2(0.0, s * 0.03);
-    let turn = |v: Vec2| -> Pos2 {
-        let v = v - mid;
-        ctr + vec2(v.x * cs - v.y * sn, v.x * sn + v.y * cs)
-    };
-    let pts: Vec<Pos2> = arc(pos2(0.0, s * 0.26), s * 0.42, PI * 1.18, PI * 1.82, 16).into_iter().map(|q| turn(q.to_vec2())).collect();
-    p.add(Shape::line(pts, Stroke::new(s * 0.16, c)));
-    for dx in [-1.0f32, 1.0] {
-        let e = vec2(dx * s * 0.33, s * 0.14);
-        let (hw, hh) = (s * 0.09, s * 0.07);
-        let corners = [e + vec2(-hw, -hh), e + vec2(hw, -hh), e + vec2(hw, hh), e + vec2(-hw, hh)].map(turn);
-        p.add(Shape::convex_polygon(corners.to_vec(), c, Stroke::NONE));
-    }
+    handset(p, r, c, -0.75 * PI, 0.84);
 }
 
 pub fn speaker(p: &Painter, r: Rect, c: Color32) {

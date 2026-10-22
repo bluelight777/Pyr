@@ -72,6 +72,54 @@ pub struct ChatScroll {
     pub h: f32,
 }
 
+/// A message's height as it was last laid out, and what it was laid out for (its width, whether
+/// it was grouped under the one before, its contents and the fonts): a message far off the
+/// screen takes that much room without being laid out again, so a long conversation scrolls
+/// as smoothly as a short one (like Discord's, which only draws what's near the screen).
+#[derive(Clone, Copy, Debug)]
+pub struct MsgHeight {
+    h: f32,
+    w: f32,
+    grouped: bool,
+    sig: u64,
+    fonts: u64,
+}
+
+/// What in a message decides its height (besides the width and the fonts).
+fn msg_sig(m: &Message) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    m.content.hash(&mut h);
+    m.edited_at.hash(&mut h);
+    m.reply_to.hash(&mut h);
+    for r in &m.reactions {
+        r.emoji.hash(&mut h);
+        r.users.len().hash(&mut h);
+    }
+    for a in &m.attachments {
+        a.id.hash(&mut h);
+    }
+    std::mem::discriminant(&m.lock).hash(&mut h);
+    h.finish()
+}
+
+/// Measuring (an A/B): `PYR_CHAT_TIMING=1` logs how long the messages take to lay out each
+/// frame; `PYR_CHAT_ALL=1` lays every message out every frame, as before.
+fn chat_diag() -> (bool, bool) {
+    static D: std::sync::OnceLock<(bool, bool)> = std::sync::OnceLock::new();
+    *D.get_or_init(|| (std::env::var("PYR_CHAT_TIMING").is_ok_and(|v| v == "1"), std::env::var("PYR_CHAT_ALL").is_ok_and(|v| v == "1")))
+}
+
+/// Frames timed (see `chat_diag`): how many, their total and longest time (ms), and messages
+/// laid out and passed over.
+static TIMED: std::sync::Mutex<(u32, f64, f64, u64, u64)> = std::sync::Mutex::new((0, 0.0, 0.0, 0, 0));
+
+/// Messages this far (a screen's height) above or below the screen are laid out anyway, so
+/// what scrolls into view has always been measured just before.
+fn near_screen(clip: Rect) -> Rect {
+    clip.expand2(vec2(0.0, clip.height().max(400.0)))
+}
+
 /// The longest a conversation just opened is kept from showing while GIFs on screen whose
 /// size isn't known yet load (only those: everything else has its size before it loads).
 const REVEAL_WAIT: Duration = Duration::from_millis(1500);
@@ -157,7 +205,7 @@ impl PyrApp {
                         crate::calls::group_picture(self, &p, ui.ctx(), s, g, &st.my_uid, r.center(), 13.0, theme::MAIN());
                         let w = (ui.available_width() - 200.0).max(80.0);
                         crate::emoji::label_line(ui, &ch.name, theme::bold_font(15.5), theme::TEXT(), w, &mut |_| None);
-                        ui.label(RichText::new(format!("{} members", g.members.len())).size(12.5).color(theme::DIM()));
+                        ui.label(RichText::new(if g.members.len() == 1 { "1 member".to_string() } else { format!("{} members", g.members.len()) }).size(12.5).color(theme::DIM()));
                     } else if let Some(w) = &dm_with {
                         // Their picture and name: click for their profile, like Discord's.
                         let (r, pic) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
@@ -304,6 +352,7 @@ impl PyrApp {
             // The messages' background, under everything in them: pressing and dragging on it
             // selects text (see `select.rs`); right-click opens the message menu.
             let mut select_bg: Option<egui::Response> = None;
+            let timer = Instant::now();
             let out = egui::ScrollArea::vertical()
                 .id_salt(("msgs", &key, channel))
                 .auto_shrink([false, false])
@@ -375,7 +424,7 @@ impl PyrApp {
                             if open {
                                 for mm in &msgs[i..j] {
                                     let top = ui.cursor().top() - origin;
-                                    self.message(ui, st, s, log, mm, false, &names, acts);
+                                    self.message_or_room(ui, st, s, log, mm, false, &names, acts, &memo_key);
                                     placed.push((mm.id, top, ui.cursor().top() - origin));
                                 }
                             }
@@ -399,7 +448,7 @@ impl PyrApp {
                             && m.reply_to.is_none()
                             && prev.map(|p| p.author == m.author && m.created_at - p.created_at < GROUP_WINDOW_MS).unwrap_or(false);
                         let top = ui.cursor().top() - origin;
-                        self.message(ui, st, s, log, m, grouped, &names, acts);
+                        self.message_or_room(ui, st, s, log, m, grouped, &names, acts, &memo_key);
                         placed.push((m.id, top, ui.cursor().top() - origin));
                         prev = Some(m);
                     }
@@ -409,6 +458,18 @@ impl PyrApp {
                     ui.add_space(6.0);
                 });
             self.ui.load_rect = None;
+            if chat_diag().0
+                && let Ok(mut t) = TIMED.lock()
+            {
+                let ms = timer.elapsed().as_secs_f64() * 1000.0;
+                t.0 += 1;
+                t.1 += ms;
+                t.2 = t.2.max(ms);
+                if t.0 >= 120 {
+                    tracing::info!("chat timing: {} frames, {:.2} ms a frame on average, {:.2} ms at most, {:.1} messages laid out and {:.1} passed over a frame", t.0, t.1 / t.0 as f64, t.2, t.3 as f64 / t.0 as f64, t.4 as f64 / t.0 as f64);
+                    *t = (0, 0.0, 0.0, 0, 0);
+                }
+            }
             // Right-click on the messages: Copy (what's selected), Copy link, and the message's own.
             if let Some(bg) = select_bg.filter(|_| self.ui.sel.menu.is_some()) {
                 let open = bg.context_menu(|ui| {
@@ -455,6 +516,37 @@ impl PyrApp {
                 acts.push(Act::LoadHistory { key: key.clone(), channel, older: true });
             }
         });
+    }
+
+    /// A message; or, far off the screen with its height known, just the room it takes (see
+    /// `MsgHeight`). The one being edited, and any the text selection takes in, are always
+    /// laid out (their text is copied from what's drawn).
+    #[allow(clippy::too_many_arguments)]
+    fn message_or_room(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, log: &ChannelLog, m: &Message, grouped: bool, names: &[String], acts: &mut Vec<Act>, chat: &(String, ChannelId)) {
+        let y = ui.cursor().top();
+        let w = ui.available_width();
+        let fonts = theme::fonts_made();
+        let sig = msg_sig(m);
+        let known = self.ui.msg_heights.get(chat).and_then(|hs| hs.get(&m.id)).copied().filter(|k| k.grouped == grouped && k.sig == sig && k.fonts == fonts && (k.w - w).abs() < 0.5);
+        let near = near_screen(ui.clip_rect());
+        if let Some(k) = known
+            && (y + k.h < near.top() || y > near.bottom())
+            && self.ui.editing.as_ref().is_none_or(|(id, _)| *id != m.id)
+            && !self.ui.sel.spans(chat, m.id)
+            && !chat_diag().1
+        {
+            ui.add_space(k.h);
+            if chat_diag().0 && let Ok(mut t) = TIMED.lock() {
+                t.4 += 1;
+            }
+            return;
+        }
+        if chat_diag().0 && let Ok(mut t) = TIMED.lock() {
+            t.3 += 1;
+        }
+        self.message(ui, st, s, log, m, grouped, names, acts);
+        let h = ui.cursor().top() - y;
+        self.ui.msg_heights.entry(chat.clone()).or_default().insert(m.id, MsgHeight { h, w, grouped, sig, fonts });
     }
 
     /// The right-click menu over the messages (what it was opened on is `UiState::sel.menu`):

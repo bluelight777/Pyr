@@ -181,6 +181,18 @@ pub struct HandState {
     pub next_card: usize,
     /// Who bet or raised last on the last round (they show first at the showdown).
     pub last_aggressor: Option<usize>,
+    /// Every action so far this hand, in order (everyone at the table saw them all).
+    #[serde(default)]
+    pub actions: Vec<Played>,
+}
+
+/// An action as everyone saw it: on which street, by whom, and the chips it put in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct Played {
+    pub street: Street,
+    pub seat: usize,
+    pub action: Action,
+    pub put: u64,
 }
 
 impl HandState {
@@ -400,6 +412,7 @@ impl Table {
             deck,
             next_card: 0,
             last_aggressor: None,
+            actions: Vec::new(),
         };
         out.push((To::Everyone, Event::HandStarted { number, button, seats: order.clone() }));
         // Antes, then the blinds (all-in for less when that's all they have).
@@ -588,6 +601,9 @@ impl Table {
             let stack = self.seats[seat].as_ref().unwrap().stack;
             stack - self.hand.as_ref().unwrap().player(seat).unwrap().total
         };
+        let hs = self.hand.as_mut().unwrap();
+        let street = hs.street;
+        hs.actions.push(Played { street, seat, action, put });
         out.push((To::Everyone, Event::Acted { seat, action, amount: put, stack: stack_left }));
         // Next player, or the end of the round.
         let hs = self.hand.as_ref().unwrap();

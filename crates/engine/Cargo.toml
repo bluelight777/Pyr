@@ -50,6 +50,8 @@ symphonia = { version = "0.5.5", default-features = false, features = ["mp3", "a
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util"] }
 # Reading a plugin's Cargo.toml (what it says about itself) before it's sent in.
 toml = "1.1"
+# A plugin sent in as a .zip of its folder (read only: stored and deflated files).
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 tracing = "0.1.44"
 yuv = "0.8.19"
 

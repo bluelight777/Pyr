@@ -5,6 +5,7 @@
 //!   pyr-keeper once --config keeper.json        one pass, then stop
 //!   pyr-keeper release <submission> --config …  let a held one be looked at again
 //!   pyr-keeper import <list> --config …       take in a list the release key signed
+//!   pyr-keeper unlist <id or name> --config … take a plugin or skin off the list
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -55,6 +56,26 @@ enum Cmd {
         #[arg(long)]
         config: PathBuf,
     },
+    /// Take a plugin or skin off the list (by its id, or its name), and put the list up again.
+    Unlist {
+        which: String,
+        #[arg(long)]
+        config: PathBuf,
+    },
+}
+
+/// For the commands that only sign and put up lists: nothing's reviewed or built.
+struct NoReview;
+impl pyr_keeper::review::Reviewer for NoReview {
+    fn review(&self, _: &pyr_keeper::review::Request) -> Result<pyr_keeper::review::Verdict> {
+        anyhow::bail!("not reviewing")
+    }
+}
+struct NoBuild;
+impl pyr_keeper::build::Builder for NoBuild {
+    fn build_addon(&self, _: &[(String, Vec<u8>)]) -> Result<Vec<u8>> {
+        anyhow::bail!("not building")
+    }
 }
 
 fn load(config: &PathBuf) -> Result<Config> {
@@ -90,21 +111,15 @@ fn main() -> Result<()> {
         }
         Cmd::Import { list, config } => {
             let cfg = load(&config)?;
-            struct NoReview;
-            impl pyr_keeper::review::Reviewer for NoReview {
-                fn review(&self, _: &pyr_keeper::review::Request) -> Result<pyr_keeper::review::Verdict> {
-                    anyhow::bail!("not reviewing")
-                }
-            }
-            struct NoBuild;
-            impl pyr_keeper::build::Builder for NoBuild {
-                fn build_addon(&self, _: &[(String, Vec<u8>)]) -> Result<Vec<u8>> {
-                    anyhow::bail!("not building")
-                }
-            }
             let mut k = Keeper::new(cfg, &NoReview, &NoBuild)?;
             k.import(&std::fs::read_to_string(&list)?)?;
             println!("taken in and put up: {} plugins, {} skins", k.state.library.plugins.len(), k.state.library.skins.len());
+        }
+        Cmd::Unlist { which, config } => {
+            let cfg = load(&config)?;
+            let mut k = Keeper::new(cfg, &NoReview, &NoBuild)?;
+            let name = k.unlist(&which)?;
+            println!("took {name} off the list and put it up again: {} plugins, {} skins", k.state.library.plugins.len(), k.state.library.skins.len());
         }
         Cmd::Selftest { folder, config } => {
             let cfg = load(&config)?;

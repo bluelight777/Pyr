@@ -193,3 +193,131 @@ fn the_history_shows_only_what_each_person_saw() {
     assert_eq!(dealt(&for_bob), vec![1]);
     assert_eq!(dealt(&for_alice), vec![0]);
 }
+
+/// A Flash Pot's bomb going off in the middle of a hand: that hand plays out as it was (people
+/// still choose), and from the very next hand everyone's all in: nobody can choose, every move
+/// is an all-in (or a call of one), each push a moment after the last.
+#[test]
+fn the_bomb_makes_the_very_next_hand_all_in() {
+    let mut r = room();
+    let mut rng = Stream::new(seed_from(5));
+    let look = Look::default();
+    r.sit("alice", "Alice", 0, 1000, look.clone(), 0).unwrap();
+    r.sit("bob", "Bob", 1, 1000, look.clone(), 0).unwrap();
+    r.add_bot(2, Level::Rookie, 0, &mut rng).unwrap();
+    r.add_bot(3, Level::Regular, 0, &mut rng).unwrap();
+    // On till a hand's being played and it's a person's turn.
+    let mut now = 0;
+    loop {
+        let _ = r.tick(now, &mut rng);
+        if let Some(seat) = r.table.hand.as_ref().and_then(|h| h.to_act)
+            && !r.is_bot(seat)
+        {
+            break;
+        }
+        now += 100;
+        assert!(now < 120_000, "a hand was dealt");
+    }
+    let hand = r.table.hand.as_ref().unwrap().number;
+    let mut out = Output::default();
+    r.bomb_goes_off(&mut out);
+    assert!(!r.bomb, "the hand being played isn't all in");
+    // That hand plays on as it was: people still choose (here, check or fold).
+    let mut acted: Vec<(u64, u64, Action)> = Vec::new();
+    let mut next = None;
+    while now < 300_000 {
+        let o = r.tick(now, &mut rng);
+        for (_, m) in o.msgs {
+            if let ToApp::Event { hand: h, event: Event::Acted { action, .. }, .. } = m {
+                acted.push((h, now, action));
+            }
+        }
+        if let Some(h) = r.table.hand.as_ref() {
+            if h.number == hand
+                && let Some(seat) = h.to_act
+                && let Some(uid) = r.uid_at(seat).map(|u| u.to_string())
+                && !uid.starts_with("bot:")
+            {
+                let l = r.table.legal(seat).unwrap();
+                let a = if l.can_check { Action::Check } else { Action::Fold };
+                let o = r.act(&uid, hand, a, now).expect("people choose in the hand the bomb went off in");
+                for (_, m) in o.msgs {
+                    if let ToApp::Event { hand: h, event: Event::Acted { action, .. }, .. } = m {
+                        acted.push((h, now, action));
+                    }
+                }
+            } else if h.number > hand {
+                next.get_or_insert(h.number);
+                // The very next hand: all in, and nobody can choose.
+                assert!(r.bomb, "the very next hand is all in");
+                if let Some(seat) = h.to_act
+                    && let Some(uid) = r.uid_at(seat).map(|u| u.to_string())
+                    && !uid.starts_with("bot:")
+                {
+                    assert!(r.act(&uid, h.number, Action::Fold, now).is_err());
+                }
+            }
+        }
+        if next.is_some_and(|n| r.table.hand.as_ref().is_none_or(|h| h.number != n)) {
+            break;
+        }
+        now += 100;
+    }
+    let next = next.expect("another hand was dealt");
+    assert_eq!(next, hand + 1, "the very next hand");
+    let pushes: Vec<&(u64, u64, Action)> = acted.iter().filter(|(h, ..)| *h == next).collect();
+    assert!(pushes.len() >= 2, "{acted:?}");
+    // (An all-in shows as a raise to everything, or a call of one.)
+    assert!(pushes.iter().all(|(_, _, a)| matches!(a, Action::AllIn | Action::Raise { .. } | Action::Call)), "only all-ins: {pushes:?}");
+    // A moment between pushes, and not always the same moment.
+    let gaps: Vec<u64> = pushes.windows(2).map(|w| w[1].1 - w[0].1).collect();
+    assert!(gaps.iter().all(|g| *g >= BOMB_PUSH_MS - 100), "{gaps:?}");
+    assert!(gaps.windows(2).any(|w| w[0] != w[1]) || gaps.len() < 2, "{gaps:?}");
+}
+
+/// Everyone all in before the flop: the whole board comes at once from the table, and the next
+/// hand waits while apps show it a street at a time, then as long as after any showdown.
+#[test]
+fn an_all_in_board_is_given_time_to_be_shown() {
+    let mut r = room();
+    let mut rng = Stream::new(seed_from(9));
+    let look = Look::default();
+    r.sit("alice", "Alice", 0, 1000, look.clone(), 0).unwrap();
+    r.sit("bob", "Bob", 1, 1000, look.clone(), 0).unwrap();
+    r.sit("carol", "Carol", 2, 2000, look, 0).unwrap();
+    let mut now = 0;
+    while r.table.hand.as_ref().and_then(|h| h.to_act).is_none() {
+        let _ = r.tick(now, &mut rng);
+        now += 100;
+        assert!(now < 60_000, "a hand was dealt");
+    }
+    let hand = r.table.hand.as_ref().unwrap().number;
+    // The first to act shoves, the next calls, the last folds.
+    let mut moves = [Action::AllIn, Action::Call, Action::Fold].into_iter();
+    let last = loop {
+        let seat = r.table.hand.as_ref().and_then(|h| h.to_act).expect("someone to act");
+        let uid = r.uid_at(seat).unwrap().to_string();
+        let o = r.act(&uid, hand, moves.next().unwrap(), now).unwrap();
+        if o.msgs.iter().any(|(_, m)| matches!(m, ToApp::Event { event: Event::HandEnded { .. }, .. })) {
+            break o;
+        }
+    };
+    let streets = last.msgs.iter().filter(|(_, m)| matches!(m, ToApp::Event { event: Event::Street { .. }, .. })).count();
+    assert_eq!(streets, 3, "the flop, turn and river, all at once");
+    let ended = now;
+    let mut shuffled = None;
+    while now < ended + 30_000 {
+        let o = r.tick(now, &mut rng);
+        if o.msgs.iter().any(|(_, m)| matches!(m, ToApp::Shuffle { .. })) {
+            shuffled = Some(now);
+            break;
+        }
+        now += 100;
+    }
+    let wait = shuffled.expect("the next hand came") - ended;
+    let want = AFTER_SHOWDOWN_MS + runout_ms(3);
+    assert!((want..want + 200).contains(&wait), "{wait} ms (want {want})");
+    // A board that came with betting along the way waits only as long as any showdown.
+    assert_eq!(runout_ms(0), 0);
+    assert!(runout_ms(1) < runout_ms(2) && runout_ms(2) < runout_ms(3));
+}

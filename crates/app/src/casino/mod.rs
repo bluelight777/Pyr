@@ -7,14 +7,27 @@
 //! is on every table's top bar.
 
 pub mod art;
+pub mod auto;
 pub mod baccarat;
+pub mod bactable;
+pub mod bjtable;
 pub mod blackjack;
+pub mod bonfire;
 pub mod craps;
+pub mod crapstable;
 pub mod dice;
+pub mod dragon;
+pub mod emotes;
 pub mod floor;
+pub mod humor;
+pub mod info;
 pub mod keno;
+pub mod pics;
+pub mod reel_themes;
+pub mod reels;
 pub mod roulette;
 pub mod slots;
+pub mod spin;
 
 use std::time::{Duration, Instant};
 
@@ -78,6 +91,8 @@ pub struct CasinoUi {
     pub opened: Option<String>,
     /// The chip picked on the rack.
     pub chip: u64,
+    /// When I last sent an emote at a table (they're a moment apart at least).
+    pub emote_last: Option<std::time::Instant>,
     pub fullscreen: bool,
     pub fullscreen_on: bool,
     /// Streamer mode's stage put away (Esc) until the game or table is left.
@@ -108,11 +123,27 @@ pub struct CasinoUi {
     pub gain: Option<(u64, Instant)>,
     pub slots: slots::SlotsUi,
     pub bj: blackjack::BjUi,
+    /// Blackjack at a table of seven (0.12.0 servers).
+    pub bjt: bjtable::BjTableUi,
+    /// Craps and baccarat at tables of five (0.12.0 servers).
+    pub crt: crapstable::CrapsTableUi,
+    pub bact: bactable::BacTableUi,
+    /// The Bonfire: its card, my embers, and the show when it's lit.
+    pub bonfire: bonfire::BonfireUi,
     pub roulette: roulette::RouletteUi,
     pub baccarat: baccarat::BacUi,
     pub craps: craps::CrapsUi,
     pub dice: dice::DiceUi,
     pub keno: keno::KenoUi,
+    /// Reel Row's machines (the one open, and its reels).
+    pub reels: reels::ReelsUi,
+    /// Ember Dragon.
+    pub dragon: dragon::DragonUi,
+    /// A slot's Info panel, open on this tab; Game Statistics' own tab; and the statistics last
+    /// asked for (whose, when).
+    pub info: Option<info::InfoTab>,
+    pub info_stats: info::StatsTab,
+    pub info_asked: Option<(String, Instant)>,
 }
 
 impl Default for CasinoUi {
@@ -121,6 +152,7 @@ impl Default for CasinoUi {
             game: None,
             opened: None,
             chip: 25,
+            emote_last: None,
             fullscreen: false,
             fullscreen_on: false,
             stage_off: false,
@@ -141,11 +173,20 @@ impl Default for CasinoUi {
             gain: None,
             slots: Default::default(),
             bj: Default::default(),
+            bjt: Default::default(),
+            crt: Default::default(),
+            bact: Default::default(),
+            bonfire: Default::default(),
             roulette: Default::default(),
             baccarat: Default::default(),
             craps: Default::default(),
             dice: Default::default(),
             keno: Default::default(),
+            reels: Default::default(),
+            dragon: Default::default(),
+            info: None,
+            info_stats: Default::default(),
+            info_asked: None,
         }
     }
 }
@@ -239,10 +280,28 @@ pub fn mix(a: Color32, b: Color32, k: f32) -> Color32 {
     Color32::from_rgba_premultiplied(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()), l(a.a(), b.a()))
 }
 
+/// A horizontal gradient filling `r`.
+pub fn hgrad(p: &egui::Painter, r: Rect, left: Color32, right: Color32) {
+    let mut m = egui::Mesh::default();
+    m.colored_vertex(r.left_top(), left);
+    m.colored_vertex(r.right_top(), right);
+    m.colored_vertex(r.right_bottom(), right);
+    m.colored_vertex(r.left_bottom(), left);
+    m.add_triangle(0, 1, 2);
+    m.add_triangle(0, 2, 3);
+    p.add(Shape::mesh(m));
+}
+
 /// A vertical gradient filling `r`, its corners rounded by `radius`.
 pub fn vgrad_round(p: &egui::Painter, r: Rect, radius: f32, top: Color32, bottom: Color32) {
+    vgrad_round_fn(p, r, radius, |k| mix(top, bottom, k));
+}
+
+/// `r` with its corners rounded by `radius`, shaded down it by `color` (from 0 at the top to 1
+/// at the bottom). (A fan from the middle: the shading is exact along the edges.)
+pub fn vgrad_round_fn(p: &egui::Painter, r: Rect, radius: f32, color: impl Fn(f32) -> Color32) {
     let rad = radius.min(r.width() / 2.0).min(r.height() / 2.0).max(0.0);
-    let at = |y: f32| mix(top, bottom, (y - r.top()) / r.height().max(1.0));
+    let at = |y: f32| color(((y - r.top()) / r.height().max(1.0)).clamp(0.0, 1.0));
     let mut m = egui::Mesh::default();
     let c = r.center();
     m.colored_vertex(c, at(c.y));
@@ -259,6 +318,32 @@ pub fn vgrad_round(p: &egui::Painter, r: Rect, radius: f32, top: Color32, bottom
     let n = 4 * (seg + 1) as u32;
     for i in 1..=n {
         m.add_triangle(0, i, if i == n { 1 } else { i + 1 });
+    }
+    p.add(Shape::mesh(m));
+}
+
+/// Text at exactly `pos`, a fraction of a pixel included. Text painted the usual way is put on
+/// the nearest pixel (for crispness), so text that moves steps a whole pixel at a time, some
+/// frames not at all: a scrolling line jitters. This moves it smoothly (its rows as laid out,
+/// in the colour given).
+pub fn text_exact(p: &egui::Painter, pos: Pos2, galley: &std::sync::Arc<egui::Galley>, color: Color32) {
+    let [w, h] = p.ctx().fonts(|f| f.font_image_size());
+    let norm = vec2(1.0 / w.max(1) as f32, 1.0 / h.max(1) as f32);
+    // (The font's texture: the mesh's own by default.)
+    let mut m = egui::Mesh::default();
+    for row in &galley.rows {
+        let rm = &row.visuals.mesh;
+        if rm.is_empty() {
+            continue;
+        }
+        let base = m.vertices.len() as u32;
+        m.indices.extend(rm.indices.iter().map(|i| i + base));
+        let at = pos + row.pos.to_vec2();
+        m.vertices.extend(rm.vertices.iter().enumerate().map(|(i, v)| egui::epaint::Vertex {
+            pos: at + v.pos.to_vec2(),
+            uv: (v.uv.to_vec2() * norm).to_pos2(),
+            color: if row.visuals.glyph_vertex_range.contains(&i) || v.color == Color32::PLACEHOLDER { color } else { v.color },
+        }));
     }
     p.add(Shape::mesh(m));
 }
@@ -385,6 +470,9 @@ impl PyrApp {
     }
 
     pub fn casino_close(&mut self) {
+        self.bj_table_leave();
+        self.craps_table_leave();
+        self.bac_table_leave();
         if let Some(old) = self.poker.casino.opened.take() {
             self.engine.casino_open(&old, false);
         }
@@ -437,17 +525,26 @@ impl PyrApp {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area));
         match game {
             Game::Slots => self.slots_page(&mut child, s, area),
+            // (A table of seven where the server has them; blackjack alone where it doesn't.)
+            Game::Blackjack if s.has(pyr_proto::control::CASINO_012_FEATURE) => self.bj_table_page(&mut child, s, area),
             Game::Blackjack => self.blackjack_page(&mut child, s, area),
             Game::Roulette => self.roulette_page(&mut child, s, area),
+            // (Tables of five where the server has them; alone where it doesn't.)
+            Game::Baccarat if s.has(pyr_proto::control::CASINO_012_FEATURE) => self.bac_table_page(&mut child, s, area),
             Game::Baccarat => self.baccarat_page(&mut child, s, area),
+            Game::Craps if s.has(pyr_proto::control::CASINO_012_FEATURE) => self.craps_table_page(&mut child, s, area),
             Game::Craps => self.craps_page(&mut child, s, area),
             Game::Dice => self.dice_page(&mut child, s, area),
             Game::Keno => self.keno_page(&mut child, s, area),
+            Game::Reels => self.reels_page(&mut child, s, area),
+            Game::Dragon => self.dragon_page(&mut child, s, area),
         }
+        self.bonfire_keep(s);
         self.casino_top_bar(ui, s, game, bar);
         self.big_win_banner(ui, s, area);
         self.announcement(ui, area);
         self.celebration(ui, area);
+        self.info_panel(&ui.ctx().clone(), s, area);
         self.fairness_window(ui.ctx(), s);
         self.casino_sounds();
         ui.ctx().request_repaint_after(Duration::from_millis(16));
@@ -468,6 +565,8 @@ impl PyrApp {
             Game::Craps => self.craps_round(r),
             Game::Dice => self.dice_round(r),
             Game::Keno => self.keno_round(r),
+            Game::Reels => self.reels_round(r),
+            Game::Dragon => self.dragon_round(r),
         }
     }
 
@@ -480,6 +579,9 @@ impl PyrApp {
             self.poker.casino.game = None;
             self.poker.casino.hold = None;
             self.poker.tab = crate::poker::Tab::Floor;
+            self.bj_table_leave();
+            self.craps_table_leave();
+            self.bac_table_leave();
         }
         let c = &s.poker.casino;
         let mut x = bar.right() - 12.0;
@@ -582,11 +684,24 @@ impl PyrApp {
             }
             _ => r,
         };
+        // My embers on the Bonfire, beside the balance.
+        let r = {
+            let left = self.bonfire_pill(&p, s, r.left() - 8.0, bar.center().y);
+            Rect::from_min_max(pos2(left, r.top()), r.max)
+        };
         // The game's name and what it is, in the room left of the balance (cut short in a
         // narrow window rather than running under it).
+        // (A Reel Row machine is its own name and line.)
+        let (name, pitch) = match game {
+            Game::Reels => {
+                let th = reel_themes::theme(self.poker.casino.reels.machine);
+                (th.name.to_string(), format!("{} 243 ways, and {}. Reel Row by Chimbita.", th.tagline, th.bonus))
+            }
+            _ => (game.name().to_string(), game.pitch().to_string()),
+        };
         let words = p.with_clip_rect(Rect::from_min_max(bar.min, pos2(r.left() - 14.0, bar.max.y)));
-        words.text(pos2(back.right() + 16.0, bar.center().y - 8.0), Align2::LEFT_CENTER, game.name(), theme::bold_font(17.0), col::GOLD2);
-        words.text(pos2(back.right() + 16.0, bar.center().y + 11.0), Align2::LEFT_CENTER, game.pitch(), theme::font(12.0), col::MUTED);
+        words.text(pos2(back.right() + 16.0, bar.center().y - 8.0), Align2::LEFT_CENTER, name, theme::bold_font(17.0), col::GOLD2);
+        words.text(pos2(back.right() + 16.0, bar.center().y + 11.0), Align2::LEFT_CENTER, pitch, theme::font(12.0), col::MUTED);
         // The gain, floating up off the balance.
         if let Some((g, since)) = self.poker.casino.gain {
             let k = since.elapsed().as_secs_f32() / 1.8;

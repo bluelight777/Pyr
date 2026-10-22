@@ -199,6 +199,11 @@ pub fn chips_text(n: u64) -> String {
     out
 }
 
+/// "1 hand", "1,204 hands": a count and its word, singular for one.
+pub fn count(n: u64, one: &str, many: &str) -> String {
+    if n == 1 { format!("1 {one}") } else { format!("{} {many}", chips_text(n)) }
+}
+
 /// "12.5K", "1.2M": short, for tight spots.
 pub fn chips_short(n: u64) -> String {
     match n {

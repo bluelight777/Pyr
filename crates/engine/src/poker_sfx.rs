@@ -104,7 +104,7 @@ pub enum Cue {
     KenoBall,
     /// One coin (a win counting up).
     Coin,
-    // Time Bombs.
+    // Flash Pots.
     /// The prize wheel: a ratchet slowing to a stop, and a ding.
     Wheel,
     /// The fuse burning down: a sizzle.

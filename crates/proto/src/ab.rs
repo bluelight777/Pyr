@@ -9,7 +9,11 @@
 //! `scenecut` (video: a keyframe at every big change), `fair` (QUIC: frames sent side by side),
 //! `dgram` (QUIC: seconds of sound queued), `feedback` (server: no reports on viewers),
 //! `shed` (server: a viewer counted as stuck after 350 ms plus a round trip), `isoref` (voice
-//! isolation: your usual level followed louder moments quickly, before 0.9.1).
+//! isolation: your usual level followed louder moments quickly, before 0.9.1), `aectune` (echo
+//! cancellation: WebRTC's own settings, before 0.11.0), `aecsat` (it took a microphone that
+//! clipped to be all echo, before 0.12.0), `aecpath` (its sound went out even with headphones,
+//! before 0.12.0), `aecmask` (it took out what was left of the echo wherever it was a third as
+//! loud as your voice, before 0.12.0).
 //!
 //! `PYR_CC=cubic` puts back QUIC's CUBIC congestion control instead of BBR (see [`bbr`]).
 

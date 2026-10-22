@@ -10,45 +10,13 @@ use pyr_poker::casino::slots::{self as sl, LINES, PAYLINES, REELS, ROWS, STRIPS}
 use pyr_poker::casino::Bet;
 use pyr_poker::net::RoundView;
 
-use super::{art, col, ease_back, glow_text, radial, vgrad, vgrad_round};
+use super::{art, col, glow_text, radial, vgrad, vgrad_round};
 use crate::app::PyrApp;
 use crate::poker::cards::chips_text;
 use crate::theme;
 
 const LINE_BETS: [u64; 10] = [1, 2, 5, 10, 25, 50, 100, 200, 250, 500];
-/// Reels spin this many symbols a second.
-const SPEED: f32 = 26.0;
-
-#[derive(Clone, Copy)]
-struct Reel {
-    /// The strip position of the top row at `t0`, and how fast it's moving (symbols a second,
-    /// downwards).
-    pos0: f32,
-    t0: Instant,
-    speed: f32,
-    /// Landing: from when, from where, to where, how long.
-    land: Option<(Instant, f32, f32, f32)>,
-}
-
-impl Reel {
-    fn still(pos: f32) -> Reel {
-        Reel { pos0: pos, t0: Instant::now(), speed: 0.0, land: None }
-    }
-
-    fn pos(&self, now: Instant) -> f32 {
-        if let Some((start, from, to, dur)) = self.land
-            && now >= start
-        {
-            let k = ((now - start).as_secs_f32() / dur).min(1.0);
-            return from + (to - from) * ease_back(k);
-        }
-        self.pos0 - self.speed * now.saturating_duration_since(self.t0).as_secs_f32()
-    }
-
-    fn landed(&self, now: Instant) -> bool {
-        self.land.is_some_and(|(start, _, _, dur)| now >= start + Duration::from_secs_f32(dur))
-    }
-}
+use super::spin::{Reel, SPEED};
 
 pub struct SlotsUi {
     pub line_bet: u64,
@@ -66,7 +34,8 @@ pub struct SlotsUi {
     waiting: Option<Instant>,
     /// Wins counted so far in the round (free spins add up).
     round_win: u64,
-    pub auto_left: u32,
+    /// Autoplay: spins left (or until stopped), and whether a big win stops it.
+    pub auto: super::auto::Auto,
     pub turbo: bool,
     pub paytable: bool,
     jackpot: f64,
@@ -88,7 +57,7 @@ impl Default for SlotsUi {
             next_start: None,
             waiting: None,
             round_win: 0,
-            auto_left: 0,
+            auto: Default::default(),
             turbo: false,
             paytable: false,
             jackpot: 0.0,
@@ -124,33 +93,16 @@ impl SlotsUi {
 
     fn start_spinning(&mut self, now: Instant) {
         for r in &mut self.reels {
-            let pos = r.pos(now);
-            *r = Reel { pos0: pos, t0: now, speed: SPEED, land: None };
+            r.start(now, SPEED);
         }
     }
 
     /// Lands each reel on `stops`, one after another from `from`: when each comes to rest.
     fn land(&mut self, stops: [u8; REELS], from: Instant) -> [Instant; REELS] {
-        let gap = if self.turbo { 0.08 } else { 0.24 };
-        let dur = if self.turbo { 0.32 } else { 0.5 };
-        let mut ends = [from; REELS];
-        let mut last = from;
-        for (i, r) in self.reels.iter_mut().enumerate() {
-            let len = STRIPS[i].len() as f32;
-            // (Never before the reel to its left.)
-            let want = (from + Duration::from_secs_f32(i as f32 * gap)).max(last - Duration::from_secs_f32(dur * 0.6));
-            // Land when the reel is a few symbols above its stop, so it slows down into it.
-            let lead = 4.0;
-            let p_want = r.pos(want);
-            let ahead = (p_want - stops[i] as f32 - lead).rem_euclid(len);
-            let start = want + Duration::from_secs_f32(ahead / r.speed.max(1.0));
-            let p_start = r.pos(start);
-            let to = p_start - lead;
-            r.land = Some((start, p_start, to, dur));
-            ends[i] = start + Duration::from_secs_f32(dur * 0.55);
-            last = last.max(start + Duration::from_secs_f32(dur));
-        }
-        ends
+        let lens: Vec<usize> = STRIPS.iter().map(|s| s.len()).collect();
+        let stops: Vec<usize> = stops.iter().map(|s| *s as usize).collect();
+        let ends = super::spin::land(&mut self.reels, &lens, &stops, from, self.turbo);
+        std::array::from_fn(|i| ends[i])
     }
 }
 
@@ -193,8 +145,11 @@ impl PyrApp {
         let t = ui.ctx().input(|i| i.time) as f32;
         let c = s.poker.casino.clone();
         let free_round = self.poker.casino.slots.showing.as_ref().is_some_and(|r| self.poker.casino.slots.spin > 0 && matches!(&r.outcome, pyr_poker::casino::Outcome::Slots(o) if o.spins.len() > 1));
-        // The room: dark, with a warm (or, in free spins, violet) glow.
-        vgrad(&p, area, Color32::from_rgb(0x16, 0x0a, 0x10), Color32::from_rgb(0x08, 0x06, 0x0c));
+        // The room: its picture (the sevens in flames, Meshy's), dimmed, with a warm (or, in
+        // free spins, violet) glow.
+        p.rect_filled(area, 0, Color32::from_rgb(0x0c, 0x06, 0x08));
+        super::pics::cover(&p, ui.ctx(), "tile-sevens", area, 1024, Color32::from_gray(80));
+        vgrad(&p, area, Color32::from_black_alpha(110), Color32::from_black_alpha(210));
         radial(&p, area.center() - vec2(0.0, 60.0), area.width() * 0.6, if free_round { Color32::from_rgba_unmultiplied(0x9a, 0x4a, 0xff, 50) } else { Color32::from_rgba_unmultiplied(0xff, 0x6a, 0x1a, 36) }, Color32::TRANSPARENT);
 
         // The cabinet's size: the reels as big as fit.
@@ -235,11 +190,10 @@ impl PyrApp {
         let showing = ui_s.showing.clone();
         let reel_rects: Vec<Rect> = (0..REELS).map(|i| Rect::from_min_size(pos2(reels.left() + i as f32 * (cell + 10.0), reels.top()), vec2(cell, cell * 3.0))).collect();
         for (i, rr) in reel_rects.iter().enumerate() {
-            vgrad(&p, *rr, Color32::from_rgb(0xd8, 0xd2, 0xc4), Color32::from_rgb(0xff, 0xfc, 0xf4));
+            vgrad(&p, *rr, Color32::from_rgb(0x1c, 0x0c, 0x0c), Color32::from_rgb(0x34, 0x16, 0x10));
             let clip = p.with_clip_rect(*rr);
             let reel = self.poker.casino.slots.reels[i];
             let pos = reel.pos(now);
-            let moving = reel.speed > 0.0 && !reel.landed(now);
             let len = STRIPS[i].len() as i32;
             let base = pos.floor() as i32;
             let frac = pos - pos.floor();
@@ -247,7 +201,7 @@ impl PyrApp {
                 let idx = (base + row).rem_euclid(len) as usize;
                 let y = rr.top() + (row as f32 - frac) * cell;
                 let sr = Rect::from_min_size(pos2(rr.left(), y), vec2(cell, cell)).shrink(cell * 0.08);
-                if moving && reel.land.is_none_or(|(st, ..)| now < st) {
+                if reel.blurred(now) {
                     // A blur while it spins fast.
                     art::paint_symbol(&clip, sr.translate(vec2(0.0, -cell * 0.12)), STRIPS[i][idx], Color32::from_white_alpha(70));
                     art::paint_symbol(&clip, sr, STRIPS[i][idx], Color32::from_white_alpha(170));
@@ -346,7 +300,7 @@ impl PyrApp {
                 let pos = r.pos(now).round();
                 *r = Reel::still(pos);
             }
-            ui_s.auto_left = 0;
+            ui_s.auto.stop();
         }
 
         // Free spins' banner.
@@ -372,7 +326,7 @@ impl PyrApp {
 
     fn slots_after_stop(&mut self, now: Instant, s: &ServerView) {
         // Autoplay spins again.
-        if self.poker.casino.slots.auto_left > 0 && self.poker.casino.slots.next_at.is_some_and(|t| now >= t) && !self.poker.casino.busy() {
+        if self.poker.casino.slots.auto.on() && self.poker.casino.slots.next_at.is_some_and(|t| now >= t) && !self.poker.casino.busy() {
             self.poker.casino.slots.next_at = None;
             self.slots_spin(s);
             return;
@@ -409,8 +363,7 @@ impl PyrApp {
             let start = now + Duration::from_secs_f32(if ui.turbo { pause * 0.5 } else { pause });
             ui.next_start = Some(start);
             for r in &mut ui.reels {
-                let pos = r.pos(start);
-                *r = Reel { pos0: pos, t0: start, speed: SPEED, land: None };
+                r.start(start, SPEED);
             }
             let spin_for = if ui.turbo { 0.3 } else { 0.7 };
             let stops = fs.stops;
@@ -430,15 +383,9 @@ impl PyrApp {
         }
         let big = total >= o.line_bet * LINES as u64 * 10 || jackpot;
         let ui = &mut self.poker.casino.slots;
-        if big && ui.auto_left > 0 {
-            // (A big win stops autoplay, to enjoy it.)
-            ui.auto_left = 0;
-        }
-        if ui.auto_left > 0 {
-            ui.auto_left -= 1;
-            if ui.auto_left > 0 {
-                ui.next_at = Some(now + Duration::from_secs_f32(if total > 0 { 1.2 } else { 0.45 } * if ui.turbo { 0.5 } else { 1.0 }));
-            }
+        // Autoplay: one spin fewer to go (a big win stops it, unless that's switched off).
+        if ui.auto.spun(big) {
+            ui.next_at = Some(now + Duration::from_secs_f32(if total > 0 { 1.2 } else { 0.45 } * if ui.turbo { 0.5 } else { 1.0 }));
         }
     }
 
@@ -448,7 +395,7 @@ impl PyrApp {
         let ui = &self.poker.casino.slots;
         let total = ui.line_bet * LINES as u64;
         if total > super::chips_now(s) {
-            self.poker.casino.slots.auto_left = 0;
+            self.poker.casino.slots.auto.stop();
             return;
         }
         if self.poker.casino.busy() || ui.running(Instant::now()) {
@@ -499,19 +446,19 @@ impl PyrApp {
         let spin_r = Rect::from_center_size(spin_c, vec2(92.0, 92.0));
         let resp = ui.interact(spin_r, ui.id().with("spin"), Sense::click());
         let busy = self.poker.casino.busy() || self.poker.casino.slots.running(Instant::now());
-        let auto = self.poker.casino.slots.auto_left;
+        let auto = self.poker.casino.slots.auto;
         p.circle_filled(spin_c + vec2(0.0, 5.0), 46.0, Color32::from_black_alpha(140));
         radial(&p, spin_c, 46.0, if resp.hovered() && !busy { Color32::from_rgb(0xff, 0xd0, 0x60) } else { Color32::from_rgb(0xff, 0xb0, 0x30) }, Color32::from_rgb(0xc0, 0x40, 0x10));
         p.circle_stroke(spin_c, 46.0, Stroke::new(3.0f32, col::GOLD2));
-        let label = if auto > 0 { "STOP" } else { "SPIN" };
-        p.text(spin_c - vec2(0.0, if auto > 0 { 6.0 } else { 0.0 }), Align2::CENTER_CENTER, label, theme::bold_font(22.0), Color32::from_rgb(0x3a, 0x10, 0x04));
-        if auto > 0 {
-            p.text(spin_c + vec2(0.0, 16.0), Align2::CENTER_CENTER, format!("auto {auto}"), theme::bold_font(11.0), Color32::from_rgb(0x3a, 0x10, 0x04));
+        let label = if auto.on() { "STOP" } else { "SPIN" };
+        p.text(spin_c - vec2(0.0, if auto.on() { 6.0 } else { 0.0 }), Align2::CENTER_CENTER, label, theme::bold_font(22.0), Color32::from_rgb(0x3a, 0x10, 0x04));
+        if auto.on() {
+            p.text(spin_c + vec2(0.0, 16.0), Align2::CENTER_CENTER, format!("auto {}", auto.left_text()), theme::bold_font(11.0), Color32::from_rgb(0x3a, 0x10, 0x04));
         }
-        let space = ui.ctx().input(|i| i.key_pressed(egui::Key::Space)) && !ui.ctx().wants_keyboard_input();
+        let space = ui.ctx().input(|i| i.key_pressed(egui::Key::Space)) && !ui.ctx().wants_keyboard_input() && self.poker.casino.info.is_none();
         if resp.on_hover_text("Spin (Space)").clicked() || space {
-            if auto > 0 {
-                self.poker.casino.slots.auto_left = 0;
+            if auto.on() {
+                self.poker.casino.slots.auto.stop();
             } else if !busy {
                 self.slots_spin(s);
             }
@@ -522,32 +469,35 @@ impl PyrApp {
         p.text(pos2(wx, bar.top() + 22.0), Align2::LEFT_CENTER, "WIN", theme::bold_font(11.5), col::MUTED);
         p.text(pos2(wx, cy + 12.0), Align2::LEFT_CENTER, if win > 0 { chips_text(win) } else { "–".into() }, theme::bold_font(24.0), if win > 0 { col::WIN } else { col::MUTED });
         let mut bx = bar.right() - 20.0;
-        let mut small = |ui: &mut egui::Ui, text: &str, on: bool, tip: &str| -> bool {
-            let w = 18.0 + text.len() as f32 * 8.0;
+        let mut small = |ui: &mut egui::Ui, id: &str, text: &str, on: bool, tip: &str| -> egui::Response {
+            let w = 18.0 + text.chars().count() as f32 * 8.0;
             let r = Rect::from_min_size(pos2(bx - w, cy - 15.0), vec2(w, 30.0));
             bx -= w + 8.0;
-            let resp = ui.interact(r, ui.id().with(("slot-btn", text)), Sense::click());
+            let resp = ui.interact(r, ui.id().with(("slot-btn", id)), Sense::click());
             ui.painter().rect_filled(r, theme::r(15), if on { col::GOLD } else if resp.hovered() { Color32::from_white_alpha(40) } else { Color32::from_white_alpha(18) });
             ui.painter().text(r.center(), Align2::CENTER_CENTER, text, theme::bold_font(12.5), if on { Color32::BLACK } else { col::TEXT });
-            resp.on_hover_text(tip).clicked()
+            resp.on_hover_text(tip)
         };
-        if small(ui, "Paytable", self.poker.casino.slots.paytable, "What each symbol pays, and the lines") {
+        if small(ui, "info", "Info", self.poker.casino.info.is_some(), "What it pays back, its statistics, and how it plays").clicked() {
+            self.info_toggle();
+        }
+        if small(ui, "paytable", "Paytable", self.poker.casino.slots.paytable, "What each symbol pays, and the lines").clicked() {
             self.poker.casino.slots.paytable = !self.poker.casino.slots.paytable;
         }
-        if small(ui, "Turbo", self.poker.casino.slots.turbo, "Faster spins") {
+        if small(ui, "turbo", "Turbo", self.poker.casino.slots.turbo, "Faster spins").clicked() {
             self.poker.casino.slots.turbo = !self.poker.casino.slots.turbo;
         }
-        let auto_label = if auto > 0 { format!("Auto {auto}") } else { "Auto".into() };
-        if small(ui, &auto_label, auto > 0, "Spin by itself: 10, 25, 50 or 100 times (a big win stops it)") {
-            let next = match auto {
-                0 => 10,
-                10 => 25,
-                25 => 50,
-                50 => 100,
-                _ => 0,
-            };
-            self.poker.casino.slots.auto_left = next;
-            if next > 0 && !busy {
+        // Autoplay: its menu (how many spins, or until stopped); running, a click stops it.
+        let auto_label = if auto.on() { format!("Auto {}", auto.left_text()) } else { "Auto ⌄".into() };
+        let tip = if auto.on() { "Stop spinning by itself" } else { "Spin by itself: 10 to 1,000 times, or until you stop it" };
+        let resp = small(ui, "auto", &auto_label, auto.on(), tip);
+        if auto.on() {
+            if resp.clicked() {
+                self.poker.casino.slots.auto.stop();
+            }
+        } else if let Some(n) = super::auto::menu(&resp, &mut self.poker.casino.slots.auto) {
+            self.poker.casino.slots.auto.left = n;
+            if !busy {
                 self.poker.casino.slots.next_at = Some(Instant::now());
             }
         }
@@ -587,10 +537,13 @@ impl PyrApp {
             let (r, _) = ui.allocate_exact_size(vec2(46.0, 46.0), Sense::hover());
             art::paint_symbol(ui.painter(), r, sl::STAR, Color32::WHITE);
             ui.label(RichText::new(format!(
-                "Stars pay anywhere: 3 pay {} and start 10 free spins, 4 pay {} and start 15, 5 pay {} and start 25. In free spins every win pays triple, and stars add more.",
+                "Stars pay anywhere: 3 pay {} and start {} free spins, 4 pay {} and start {}, 5 pay {} and start {}. In free spins every win pays triple, and stars add more.",
                 chips_text(sl::STAR_PAYS[0] * lb * LINES as u64),
+                sl::STAR_SPINS[0],
                 chips_text(sl::STAR_PAYS[1] * lb * LINES as u64),
-                chips_text(sl::STAR_PAYS[2] * lb * LINES as u64)
+                sl::STAR_SPINS[1],
+                chips_text(sl::STAR_PAYS[2] * lb * LINES as u64),
+                sl::STAR_SPINS[2]
             )));
             ui.label(RichText::new("The flame is wild: it stands in for any symbol but the star. Five flames on a line win the Phoenix Jackpot: all of it at the top line bet (500), a share at less."));
             ui.add_space(6.0);

@@ -281,10 +281,46 @@ impl PyrApp {
         });
     }
 
+    /// A plugin's folder or .zip, chosen (or dropped) to send in: gathered and checked, and shown
+    /// in the form on Make your own.
+    pub(crate) fn plugin_chosen(&mut self, path: &std::path::Path) {
+        let gathered = source::gather(path);
+        let (author, sends_before) = {
+            let st = self.engine.state();
+            (st.my_name.clone(), st.plugin_sends_done)
+        };
+        self.plugins.form = Some(SubmitForm { gathered, author, contact: String::new(), agree: false, sends_before, scroll: true });
+        self.plugins.tab = Tab::Make;
+    }
+
+    /// A folder or .zip dragged onto Make your own: what it's for while it's held over the
+    /// window, and checked for sending when it's let go.
+    fn plugin_drops(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
+            let screen = ctx.content_rect();
+            egui::Area::new(egui::Id::new("plugin-drop")).order(egui::Order::Foreground).fixed_pos(screen.min).interactable(false).show(ctx, |ui| {
+                let (r, _) = ui.allocate_exact_size(screen.size(), Sense::hover());
+                ui.painter().rect_filled(r, CornerRadius::ZERO, Color32::from_black_alpha(160));
+                let b = Rect::from_center_size(r.center(), vec2(460.0, 120.0));
+                ui.painter().rect_filled(b, crate::theme::r(14), theme::EMBER());
+                let ink = Color32::from_rgb(0x1b, 0x14, 0x11);
+                ui.painter().text(b.center() - vec2(0.0, 12.0), egui::Align2::CENTER_CENTER, "Drop it to check it for sending", theme::bold_font(20.0), ink);
+                ui.painter().text(b.center() + vec2(0.0, 18.0), egui::Align2::CENTER_CENTER, "a plugin's folder, or a .zip of it", theme::font(14.0), Color32::from_rgb(0x3a, 0x22, 0x14));
+            });
+        }
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        if let Some(path) = dropped.iter().find_map(|f| f.path.clone()) {
+            self.plugin_chosen(&path);
+        }
+    }
+
     /// The Plugins page, or the Skins page.
     pub(crate) fn plugins_page(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
         if self.plugins.page == Page::Skins {
             return self.skins_page(ctx, st, acts);
+        }
+        if self.plugins.tab == Tab::Make {
+            self.plugin_drops(ctx);
         }
         egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::panel(theme::MAIN(), true)).inner_margin(egui::Margin::symmetric(28, 20))).show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -667,15 +703,6 @@ impl PyrApp {
     }
 
     fn library_grid(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>) {
-        // Pyr's own (there whether or not the Library's list came).
-        let q = self.plugins.search.trim().to_lowercase();
-        if matches!(self.plugins.show, Show::All | Show::Programs)
-            && self.plugins.author.is_none()
-            && (q.is_empty() || format!("pyr casino poker {POKER_SUMMARY} hold'em omaha cards slots").to_lowercase().contains(&q))
-        {
-            poker_card(ui, st, acts);
-            ui.add_space(12.0);
-        }
         if !self.library_state(ui) {
             return;
         }
@@ -700,6 +727,8 @@ impl PyrApp {
         ui.add_space(10.0);
         let q = self.plugins.search.trim().to_lowercase();
         let mut shown: Vec<Entry> = lib.plugins.clone();
+        // (Retired: Pyr Casino deals poker itself now.)
+        shown.retain(|e| !RETIRED.contains(&e.id.as_str()) && !e.name.eq_ignore_ascii_case("Firelit Poker"));
         shown.retain(|e| {
             let kind_ok = match self.plugins.show {
                 Show::All => true,
@@ -711,14 +740,25 @@ impl PyrApp {
             let text_ok = q.is_empty() || format!("{} {} {} {}", e.name, e.summary, e.author, e.description).to_lowercase().contains(&q);
             kind_ok && author_ok && text_ok
         });
-        let by_name = |a: &Entry, b: &Entry| a.name.to_lowercase().cmp(&b.name.to_lowercase());
-        match sort {
-            "name" => shown.sort_by(by_name),
-            "author" => shown.sort_by(|a, b| (a.author.is_empty(), a.author.to_lowercase()).cmp(&(b.author.is_empty(), b.author.to_lowercase())).then(by_name(a, b))),
-            "newest" => shown.sort_by(|a, b| b.updated.cmp(&a.updated).then(by_name(a, b))),
-            _ => shown.sort_by(|a, b| (!favorites.contains(&a.id)).cmp(&!favorites.contains(&b.id)).then(by_name(a, b))),
+        // Pyr Casino, Pyr's own, a card among the rest.
+        let casino = match self.plugins.show {
+            Show::All | Show::Programs => true,
+            Show::Addons => false,
+            Show::Favorites => favorites.iter().any(|f| f == CASINO_ID),
+        } && self.plugins.author.as_ref().is_none_or(|a| a.eq_ignore_ascii_case(CASINO_AUTHOR))
+            && (q.is_empty() || format!("pyr casino poker {CASINO_SUMMARY} hold'em omaha cards slots blackjack craps baccarat bonfire").to_lowercase().contains(&q));
+        let mut items: Vec<Item> = shown.into_iter().map(Item::Plugin).collect();
+        if casino {
+            items.push(Item::Casino);
         }
-        if shown.is_empty() {
+        let by_name = |a: &Item, b: &Item| a.name().to_lowercase().cmp(&b.name().to_lowercase());
+        match sort {
+            "name" => items.sort_by(by_name),
+            "author" => items.sort_by(|a, b| (a.author().is_empty(), a.author().to_lowercase()).cmp(&(b.author().is_empty(), b.author().to_lowercase())).then(by_name(a, b))),
+            "newest" => items.sort_by(|a, b| b.updated().cmp(&a.updated()).then(by_name(a, b))),
+            _ => items.sort_by(|a, b| (!favorites.iter().any(|f| f == a.id())).cmp(&!favorites.iter().any(|f| f == b.id())).then(by_name(a, b))),
+        }
+        if items.is_empty() {
             let why = match (self.plugins.show, q.is_empty()) {
                 (_, false) => "Nothing matches that.",
                 (Show::Favorites, _) => "No favorites yet: star a plugin to keep it here.",
@@ -732,10 +772,17 @@ impl PyrApp {
         let card_w = (width - 12.0 * (cols as f32 - 1.0)) / cols as f32;
         // Card content height: the summary gets up to three lines, and the buttons sit at the bottom.
         const CARD_H: f32 = 172.0;
-        for row in shown.chunks(cols) {
+        for row in items.chunks(cols) {
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 12.0;
-                for e in row {
+                for item in row {
+                    let e = match item {
+                        Item::Casino => {
+                            self.casino_card(ui, st, acts, card_w, CARD_H, favorites.iter().any(|f| f == CASINO_ID));
+                            continue;
+                        }
+                        Item::Plugin(e) => e,
+                    };
                     let mut open = false;
                     // A Ui that senses clicks behind the card's own buttons (it's registered before them),
                     // laid out top to bottom (a Frame takes its parent's layout, and this row's is sideways).
@@ -797,6 +844,59 @@ impl PyrApp {
             });
             ui.add_space(12.0);
         }
+    }
+
+    /// Pyr Casino's card in the Library grid, like any other: its mark, its name, BUILT IN, what
+    /// it is, and Install or Remove (it's part of Pyr: installing it puts it in the channel list
+    /// of each server that has it).
+    fn casino_card(&mut self, ui: &mut egui::Ui, st: &AppState, acts: &mut Vec<Act>, card_w: f32, card_h: f32, starred: bool) {
+        let installed = st.settings.poker_installed;
+        ui.scope_builder(egui::UiBuilder::new().id_salt("plugin-card-casino").layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
+            egui::Frame::new().fill(theme::ELEV()).stroke(Stroke::new(1.0f32, theme::LINE())).corner_radius(12).inner_margin(16).show(ui, |ui| {
+                card_visuals(ui);
+                ui.set_width(card_w - 34.0);
+                let top = ui.min_rect().top();
+                ui.horizontal(|ui| {
+                    let (r, _) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::hover());
+                    ui.painter().rect_filled(r, CornerRadius::same(11), theme::ELEV2());
+                    crate::poker::mark::icon(ui.painter(), r.center(), r.shrink(10.0).width(), theme::EMBER2());
+                    ui.add_space(4.0);
+                    ui.vertical(|ui| {
+                        ui.set_max_width(ui.available_width() - 30.0);
+                        ui.add(egui::Label::new(RichText::new("Pyr Casino").font(theme::bold_font(17.0)).color(theme::TEXT())).truncate());
+                        ui.horizontal(|ui| {
+                            pill(ui, "BUILT IN", Color32::from_rgb(0x3a, 0x22, 0x12), theme::EMBER2());
+                            ui.label(RichText::new(format!("by {CASINO_AUTHOR}")).size(12.5).color(theme::DIM()));
+                        });
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                        if star_button(ui, starred).clicked() {
+                            acts.push(Act::ToggleFavorite(CASINO_ID.to_string()));
+                        }
+                    });
+                });
+                ui.add_space(10.0);
+                let mut job = egui::text::LayoutJob::simple(CASINO_SUMMARY.to_string(), egui::TextStyle::Body.resolve(ui.style()), theme::BODY(), ui.available_width());
+                job.wrap.max_rows = 3;
+                ui.label(job);
+                let used = ui.min_rect().bottom() - top;
+                ui.add_space((card_h - 30.0 - used).max(10.0));
+                ui.horizontal(|ui| {
+                    ui.set_min_height(30.0);
+                    ui.label(RichText::new("Part of Pyr").size(12.5).color(theme::DIM()));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if installed {
+                            if ui.button("Remove").on_hover_text("Takes it out of your channel lists (your chips stay)").clicked() {
+                                acts.push(Act::InstallPoker(false));
+                            }
+                            ui.label(RichText::new("Installed").color(theme::ONLINE()));
+                        } else if ui.add(theme::primary_button("Install").min_size(vec2(92.0, 30.0))).on_hover_text("Puts it in the channel list of each of your servers that has it").clicked() {
+                            acts.push(Act::InstallPoker(true));
+                        }
+                    });
+                });
+            });
+        });
     }
 
     /// "by <author>" under a plugin or skin: click it for everything they made (of that kind).
@@ -1343,16 +1443,54 @@ impl PyrApp {
         section(
             ui,
             "Send a plugin for review",
-            "Pick the plugin's folder (the one with its Cargo.toml). Pyr sends its source, not a built file: every plugin in the library is built \
-             from its source, after someone has looked at it. Rust only, up to 600 KB.",
+            "Choose the plugin's folder or a .zip of it (its Cargo.toml at the top, or in the one folder inside that has it), or drop either \
+             here. Pyr sends its source, not a built file: every plugin in the library is built from its source, after someone has looked at \
+             it. Rust only, up to 600 KB.",
         );
         if !pyr_engine::plugins::can_submit() {
             note(ui, "This copy of Pyr has nowhere to send plugins.", true);
             return;
         }
-        if ui.add(theme::primary_button("Choose the plugin's folder…")).clicked() {
-            crate::images::pick_folder_async(crate::images::FolderFor::PluginSource, "Choose the plugin's folder (with its Cargo.toml)", ui.ctx());
-        }
+        ui.horizontal(|ui| {
+            if ui.add(theme::primary_button("Choose its folder…")).clicked() {
+                crate::images::pick_folder_async(crate::images::FolderFor::PluginSource, "Choose the plugin's folder (with its Cargo.toml)", ui.ctx());
+            }
+            if ui.button("Choose a .zip…").clicked() {
+                crate::images::pick_folder_async(crate::images::FolderFor::PluginZip, "Choose a .zip of the plugin", ui.ctx());
+            }
+        });
+        // Or with Claude: the connector checks it the same way and sends it signed as them.
+        ui.add_space(10.0);
+        egui::Frame::new().fill(theme::ELEV()).stroke(Stroke::new(1.0f32, theme::LINE())).corner_radius(10).inner_margin(14).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new("Or send it with Claude").font(theme::bold_font(15.0)).color(theme::TEXT()));
+            ui.add_space(2.0);
+            ui.add(
+                egui::Label::new(
+                    RichText::new(
+                        "With Pyr's Claude connector set up (in Claude, or Claude Code), Claude checks your plugin the way the Pyr Library will and \
+                         sends it for review, signed as you, and can send new versions of it later. Tell Claude where it is, like this:",
+                    )
+                    .color(theme::MUTED()),
+                )
+                .wrap(),
+            );
+            let at = self.plugins.form.as_ref().map(|f| f.gathered.folder.display().to_string()).unwrap_or_else(|| {
+                if cfg!(windows) { "C:\\Users\\you\\my-plugin".to_string() } else { "~/my-plugin".to_string() }
+            });
+            let say = format!("Send my Pyr plugin in {at} to the Pyr Library for review.");
+            ui.add_space(4.0);
+            ui.add(egui::Label::new(RichText::new(&say).font(theme::mono(12.5)).color(theme::BODY())).wrap().selectable(true));
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button("Copy that").clicked() {
+                    acts.push(Act::Copy(say.clone()));
+                }
+                if ui.button("Set up the Claude connector…").clicked() {
+                    self.ui.dialog = Some(Dialog::Settings { tab: 6 });
+                }
+            });
+        });
         let Some(form) = self.plugins.form.as_mut() else { return };
         ui.add_space(12.0);
         let mut send = false;
@@ -1803,6 +1941,49 @@ fn draw_widgets(ui: &mut egui::Ui, id: &str, widgets: &[Widget], inputs: &mut st
 pub(crate) fn open_submissions(app: &mut PyrApp, key: &str, acts: &mut Vec<Act>, skins: bool) {
     acts.push(Act::ListSubmissions(key.to_string()));
     app.ui.dialog = Some(Dialog::PluginSubmissions { key: key.to_string(), skins, filter: 0, open_file: None });
+}
+
+/// Pyr Casino in the Library: its id (for favorites), who made it, and what it is.
+const CASINO_ID: &str = "pyr-casino";
+const CASINO_AUTHOR: &str = "Firelit Games";
+const CASINO_SUMMARY: &str = "Poker with friends and bots, Flash Pots and tournaments; slots, blackjack, baccarat, craps, roulette, dice and keno; and the Bonfire. Play chips only, every round checked by your own Pyr.";
+/// Library entries no longer shown (Pyr does what they did now).
+const RETIRED: [&str; 2] = ["firelit-poker", "poker"];
+
+/// A card in the Library: Pyr Casino, or a plugin from the list.
+enum Item {
+    Casino,
+    Plugin(Entry),
+}
+
+impl Item {
+    fn id(&self) -> &str {
+        match self {
+            Item::Casino => CASINO_ID,
+            Item::Plugin(e) => &e.id,
+        }
+    }
+
+    fn name(&self) -> &str {
+        match self {
+            Item::Casino => "Pyr Casino",
+            Item::Plugin(e) => &e.name,
+        }
+    }
+
+    fn author(&self) -> &str {
+        match self {
+            Item::Casino => CASINO_AUTHOR,
+            Item::Plugin(e) => &e.author,
+        }
+    }
+
+    fn updated(&self) -> i64 {
+        match self {
+            Item::Casino => 0,
+            Item::Plugin(e) => e.updated,
+        }
+    }
 }
 
 const POKER_SUMMARY: &str = "Poker with people on your servers and with bots, at tables or in tournaments, and Pyr Sevens slots, blackjack, roulette, baccarat, craps, dice and keno against the house. Play chips only, every round checked by your own Pyr.";

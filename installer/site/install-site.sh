@@ -305,6 +305,28 @@ if [ -d "$HERE/keeper" ] && [ -f "$HERE/setup-keeper.sh" ]; then
     echo
   fi
 fi
+# Firelit Poker is part of Pyr now (Pyr Casino, 0.12.0): off the Library, once. The Keeper's
+# list (index3.json, what Pyr 0.9 and newer read) loses it here, the Keeper stopped meanwhile;
+# the release's own lists (index2.json and index.json, for older Pyrs) already have.
+KDONE=/var/lib/pyr-keeper/unlisted-firelit-poker
+if [ -x /usr/local/bin/pyr-keeper ] && [ -f /etc/pyr-keeper/keeper.json ] && [ -f /var/lib/pyr-keeper/state.json ] && [ ! -f "$KDONE" ]; then
+  KUSER=$(systemctl show -p User --value pyr-keeper 2>/dev/null || true)
+  KWAS=$(systemctl is-active pyr-keeper 2>/dev/null || true)
+  systemctl stop pyr-keeper >/dev/null 2>&1 || true
+  if [ -n "$KUSER" ] && [ "$KUSER" != "root" ]; then
+    KOUT=$(runuser -u "$KUSER" -- /usr/local/bin/pyr-keeper unlist firelit-poker --config /etc/pyr-keeper/keeper.json 2>&1) && KOK=1 || KOK=0
+  else
+    KOUT=$(/usr/local/bin/pyr-keeper unlist firelit-poker --config /etc/pyr-keeper/keeper.json 2>&1) && KOK=1 || KOK=0
+  fi
+  if [ "$KOK" = 1 ] || printf '%s' "$KOUT" | grep -q "nothing in the list is called"; then
+    echo "Firelit Poker is off the Pyr Library (it's Pyr Casino, part of Pyr now)."
+    touch "$KDONE"
+  else
+    echo "Couldn't take Firelit Poker off the Library (it'll be tried again with the next release):" >&2
+    printf '%s\n' "$KOUT" | tail -n 3 >&2
+  fi
+  [ "$KWAS" = "active" ] && systemctl start pyr-keeper >/dev/null 2>&1 || true
+fi
 # What was set aside when the guild server's service was renamed goes, now that it runs (and
 # the Keeper, set up again above, runs as the new user): the old service, program and user.
 if [ -n "$MOVED" ] && systemctl is-active --quiet pyr-server; then
