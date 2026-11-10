@@ -49,6 +49,27 @@ pub enum InviteError {
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS props (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id INTEGER NOT NULL,
+    author TEXT NOT NULL,
+    state TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    data TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS props_by_channel ON props(channel_id, state);
+CREATE TABLE IF NOT EXISTS prop_bets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    prop_id INTEGER NOT NULL,
+    uid TEXT NOT NULL,
+    outcome INTEGER NOT NULL,
+    chips INTEGER NOT NULL,
+    shares REAL NOT NULL,
+    kind TEXT NOT NULL,
+    at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS prop_bets_by_prop ON prop_bets(prop_id);
+CREATE INDEX IF NOT EXISTS prop_bets_by_uid ON prop_bets(uid);
 CREATE TABLE IF NOT EXISTS poker_records (
     uid TEXT PRIMARY KEY,
     record TEXT NOT NULL,
@@ -515,6 +536,68 @@ impl Db {
             params![uid, json, held as i64],
         )?;
         Ok(())
+    }
+
+    // ---- prop bets (see `poker::props`): each prop as a whole, and every bet, cash-out,
+    // payout and refund in a book of its own.
+
+    /// A new prop: its number.
+    pub fn prop_insert(&self, channel_id: i64, author: &str, state: &str, created_at: i64, data: &str) -> Result<u64> {
+        let c = self.conn.lock();
+        c.execute("INSERT INTO props(channel_id, author, state, created_at, data) VALUES (?1, ?2, ?3, ?4, ?5)", params![channel_id, author, state, created_at, data])?;
+        Ok(c.last_insert_rowid() as u64)
+    }
+
+    pub fn prop_save(&self, id: u64, state: &str, data: &str) -> Result<()> {
+        self.conn.lock().execute("UPDATE props SET state = ?2, data = ?3 WHERE id = ?1", params![id as i64, state, data])?;
+        Ok(())
+    }
+
+    pub fn prop(&self, id: u64) -> Option<String> {
+        self.conn.lock().query_row("SELECT data FROM props WHERE id = ?1", [id as i64], |r| r.get(0)).optional().ok().flatten()
+    }
+
+    /// Props in a channel in these states, newest first.
+    pub fn props_in(&self, channel_id: i64, states: &[&str], limit: usize) -> Vec<String> {
+        let c = self.conn.lock();
+        let marks = states.iter().map(|s| format!("'{s}'")).collect::<Vec<_>>().join(",");
+        let sql = format!("SELECT data FROM props WHERE channel_id = ?1 AND state IN ({marks}) ORDER BY id DESC LIMIT ?2");
+        let Ok(mut st) = c.prepare(&sql) else { return Vec::new() };
+        st.query_map(params![channel_id, limit as i64], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
+    }
+
+    /// Open props (to close the ones whose time came, and call off forgotten ones).
+    pub fn props_open(&self) -> Vec<String> {
+        let c = self.conn.lock();
+        let Ok(mut st) = c.prepare("SELECT data FROM props WHERE state IN ('open', 'closed')") else { return Vec::new() };
+        st.query_map([], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
+    }
+
+    /// How many props someone has open.
+    pub fn props_open_by(&self, author: &str) -> usize {
+        self.conn
+            .lock()
+            .query_row("SELECT COUNT(*) FROM props WHERE author = ?1 AND state IN ('open', 'closed')", [author], |r| r.get::<_, i64>(0))
+            .unwrap_or(0) as usize
+    }
+
+    /// One line in the book of bets.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prop_bet_record(&self, prop_id: u64, uid: &str, outcome: usize, chips: i64, shares: f64, kind: &str, at: i64) -> Result<()> {
+        self.conn.lock().execute(
+            "INSERT INTO prop_bets(prop_id, uid, outcome, chips, shares, kind, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![prop_id as i64, uid, outcome as i64, chips, shares, kind, at],
+        )?;
+        Ok(())
+    }
+
+    /// A prop's book: (uid, outcome, chips, shares, kind, at), oldest first.
+    pub fn prop_bets(&self, prop_id: u64) -> Vec<(String, usize, i64, f64, String, i64)> {
+        let c = self.conn.lock();
+        let Ok(mut st) = c.prepare("SELECT uid, outcome, chips, shares, kind, at FROM prop_bets WHERE prop_id = ?1 ORDER BY id") else { return Vec::new() };
+        st.query_map([prop_id as i64], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as usize, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
     }
 
     /// Every poker record (for the leaderboard).

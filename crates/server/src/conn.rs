@@ -276,7 +276,9 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
     let groups = caps.iter().any(|c| c == GROUPS_CAP);
     let feedback = caps.iter().any(|c| c == VIDEO_FEEDBACK_CAP);
     let movable = caps.iter().any(|c| c == MOVE_CAP);
-    let casino = if caps.iter().any(|c| c == CASINO_013_CAP) {
+    let casino = if caps.iter().any(|c| c == PROPS_CAP) {
+        pyr_poker::net::CASINO_PROPS
+    } else if caps.iter().any(|c| c == CASINO_013_CAP) {
         pyr_poker::net::CASINO_013
     } else if caps.iter().any(|c| c == CASINO_012_CAP) {
         pyr_poker::net::CASINO_012
@@ -302,6 +304,7 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
         casino,
         msg_tokens: Bucket::new(1.5, 10.0),
         react_tokens: Bucket::new(3.0, 15.0),
+        prop_tokens: Bucket::new(5.0, 10.0),
         req_tokens: Bucket::new(REQ_RATE, REQ_BURST),
         sound_tokens: Bucket::new(SOUND_RATE, SOUND_BURST),
         ring_tokens: Bucket::new(RING_RATE, RING_BURST),
@@ -731,6 +734,8 @@ struct Ctx<'a> {
     /// Messages and edits.
     msg_tokens: Bucket,
     react_tokens: Bucket,
+    /// Prop bets: opening, betting, settling (a few a second).
+    prop_tokens: Bucket,
     /// Every request (weighted by [`cost`]).
     req_tokens: Bucket,
     /// Soundboard sounds played.
@@ -1996,6 +2001,35 @@ impl Ctx<'_> {
                 }
                 Ok(Event::Ok)
             }
+            // Prop bets in chat: who may see and moderate where is the connection's to say.
+            Request::Poker {
+                msg:
+                    msg @ (pyr_poker::net::ToServer::PropOpen { .. }
+                    | pyr_poker::net::ToServer::PropBet { .. }
+                    | pyr_poker::net::ToServer::PropCashOut { .. }
+                    | pyr_poker::net::ToServer::PropSettle { .. }
+                    | pyr_poker::net::ToServer::PropVoid { .. }
+                    | pyr_poker::net::ToServer::PropGet { .. }
+                    | pyr_poker::net::ToServer::PropList { .. }),
+            } => {
+                if !self.prop_tokens.take(1.0) {
+                    return Err((ErrorCode::RateLimited, "Slow down a little.".into()));
+                }
+                if let pyr_poker::net::ToServer::PropOpen { channel_id, .. } = &msg {
+                    self.can_post(*channel_id)?;
+                }
+                let sees = |ch: i64| self.can_see(ch).is_ok();
+                let moderates = |ch: i64| hub.moderates(&self.uid, ch);
+                let who = crate::poker::props::Asker { uid: &self.uid, sees: &sees, moderates: &moderates };
+                match hub.poker.props(hub, &who, msg) {
+                    Ok(Some(msg)) => match msg.for_app(self.casino) {
+                        Some(msg) => Ok(Event::Poker { msg }),
+                        None => Ok(Event::Ok),
+                    },
+                    Ok(None) => Ok(Event::Ok),
+                    Err(e) => Err((ErrorCode::BadRequest, e)),
+                }
+            }
             Request::Poker { msg } => {
                 let can_manage = self.can(perm::MANAGE_SERVER);
                 match hub.poker.handle_from(hub, &self.uid, can_manage, self.casino, msg) {
@@ -2294,6 +2328,7 @@ mod tests {
             casino: pyr_poker::net::CASINO_013,
             msg_tokens: Bucket::new(1.5, 10.0),
             react_tokens: Bucket::new(3.0, 15.0),
+            prop_tokens: Bucket::new(5.0, 10.0),
             req_tokens: Bucket::new(REQ_RATE, REQ_BURST),
             sound_tokens: Bucket::new(SOUND_RATE, SOUND_BURST),
             ring_tokens: Bucket::new(RING_RATE, RING_BURST),

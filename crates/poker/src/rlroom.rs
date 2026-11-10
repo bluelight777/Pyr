@@ -315,6 +315,20 @@ impl RlRoom {
         self.watchers.remove(uid);
     }
 
+    /// Someone picked another look (a card back, a frame) while sitting here: their seat shows
+    /// it at once, not the one they sat down with.
+    pub fn relook(&mut self, uid: &str, look: &Look, now: u64) -> Option<Output> {
+        let seat = self.seat_of(uid)?;
+        let s = self.seats.get_mut(seat as usize)?.as_mut()?;
+        if s.bot || s.look == *look {
+            return None;
+        }
+        s.look = look.clone();
+        let mut out = Output::default();
+        self.changed(now, &mut out);
+        Some(out)
+    }
+
     pub fn sit(&mut self, uid: &str, name: &str, look: Look, seat: u8, now: u64) -> Result<Output, String> {
         if self.seat_of(uid).is_some() {
             return Err("you're sitting here already".into());

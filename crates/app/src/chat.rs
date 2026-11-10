@@ -880,15 +880,18 @@ impl PyrApp {
                         // of the text).
                         let (rest, server_gifs) = crate::server_gifs::split(&m.content);
                         let content = if server_gifs.is_empty() { m.content.clone() } else { rest };
+                        // A prop's message is its card: its lines aren't shown as text too.
+                        let props_here = s.has(pyr_proto::control::PROPS_FEATURE) && !crate::props::ids_in(&content).is_empty();
+                        let shown_text = if props_here { crate::props::without_links(&content) } else { content.clone() };
                         let gifs = crate::giphy::gif_links(&content);
                         let only_gif = self.only_gif(&content, &gifs);
-                        if !content.is_empty() && !only_gif {
+                        if !shown_text.is_empty() && !only_gif {
                             let ctx = ui.ctx().clone();
                             // (Out of `self` while drawn: the emoji lookup borrows it too.)
                             let mut sel = std::mem::take(&mut self.ui.sel);
                             let chat = (key.clone(), m.channel_id);
                             let at = markdown::Selectable { sel: &mut sel, chat: &chat, msg: m.id };
-                            markdown::show_selectable(ui, &content, theme::BODY(), names, &mut |id| self.custom_emoji_tex(&ctx, &key, id), at);
+                            markdown::show_selectable(ui, &shown_text, theme::BODY(), names, &mut |id| self.custom_emoji_tex(&ctx, &key, id), at);
                             self.ui.sel = sel;
                         }
                         for (name, id) in &server_gifs {
@@ -900,6 +903,16 @@ impl PyrApp {
                         // Invite links get a card with Join, like Discord's.
                         for link in crate::invites::links_in(&content) {
                             self.invite_embed(ui, st, &link, acts);
+                        }
+                        // And games' invites: the game's card with Join (0.13.18).
+                        for (game, room) in crate::play_invites::links_in(&content).into_iter().take(2) {
+                            self.play_invite_embed(ui, st, &game, &room, acts);
+                        }
+                        // And prop bets: the prop's card (the server keeps it).
+                        if s.has(pyr_proto::control::PROPS_FEATURE) {
+                            for id in crate::props::ids_in(&content).into_iter().take(2) {
+                                self.prop_card(ui, st, s, id, acts);
+                            }
                         }
                         if m.edited_at.is_some() {
                             ui.label(RichText::new("(edited)").size(10.5).color(theme::DIM()));
@@ -1200,7 +1213,10 @@ impl PyrApp {
             }
             // Typing "/": add-ons' commands (Tab fills in the first, a click any).
             if let Some(partial) = draft.strip_prefix('/').filter(|p| !p.contains(char::is_whitespace)) {
-                let cmds = self.plugins.commands_like(partial);
+                let mut cmds = self.plugins.commands_like(partial);
+                if s.has(pyr_proto::control::PROPS_FEATURE) && "prop".starts_with(&partial.to_lowercase()) {
+                    cmds.insert(0, ("prop".into(), "Open a prop bet for everyone here, with Pyr Casino chips: /prop Will it rain? | Yes | No".into()));
+                }
                 if !cmds.is_empty() {
                     let mut fill = None;
                     if ui.ctx().memory(|m| m.focused()) == Some(composer_id) && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Tab)) {
@@ -1208,7 +1224,7 @@ impl PyrApp {
                     }
                     egui::Frame::new().fill(theme::ELEV()).corner_radius(8).inner_margin(6).stroke(Stroke::new(1.0f32, theme::LINE())).show(ui, |ui| {
                         ui.set_width(ui.available_width());
-                        ui.label(RichText::new("ADD-ON COMMANDS").font(theme::bold_font(11.0)).color(theme::DIM()));
+                        ui.label(RichText::new("COMMANDS").font(theme::bold_font(11.0)).color(theme::DIM()));
                         for (name, help) in &cmds {
                             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::click());
                             if resp.hovered() {
@@ -1562,7 +1578,12 @@ impl PyrApp {
                 // "/roll 2d6": an add-on's command. It answers on its own thread, and the answer
                 // is sent here as my message.
                 let addon_command = self.plugins.command_in(draft.trim());
-                if send && let Some((addon, name, args)) = addon_command {
+                // "/prop Will it rain? | Yes | No": the New prop bet window, filled in.
+                let prop_command = s.has(pyr_proto::control::PROPS_FEATURE).then(|| prop_query(draft.trim())).flatten();
+                if send && let Some((question, outcomes)) = prop_command {
+                    acts.push(Act::NewProp { key: key.clone(), channel: ch.id, question, outcomes });
+                    draft.clear();
+                } else if send && let Some((addon, name, args)) = addon_command {
                     let reply_to = self.ui.reply.take().map(|(id, _)| id);
                     acts.push(Act::AddonCommand { addon, name, args, key: key.clone(), channel: ch.id, reply_to });
                     draft.clear();
@@ -2363,6 +2384,15 @@ pub fn giphy_query(draft: &str) -> Option<String> {
 
 /// A GIF search typed in the box: its words, and where to search ("/giphy" GIPHY, "/klipy"
 /// KLIPY, "/gif" wherever the picker was last).
+/// `/prop` (and what's typed after it: the question, then the outcomes after `|`).
+pub fn prop_query(draft: &str) -> Option<(String, Vec<String>)> {
+    let rest = draft.strip_prefix("/prop")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    Some(pyr_poker::props::parse_command(rest.trim()))
+}
+
 pub fn gif_query(draft: &str) -> Option<(String, Option<crate::giphy::Provider>)> {
     use crate::giphy::Provider;
     if let Some(rest) = draft.strip_prefix("/klipy") {
@@ -3132,6 +3162,10 @@ mod emoji_text_tests {
         assert_eq!(gif_query("/giphy dogs"), Some(("dogs".into(), Some(Provider::Giphy))));
         assert_eq!(gif_query("/gif dogs"), Some(("dogs".into(), None)));
         assert_eq!(gif_query("hello /klipy"), None);
+        assert_eq!(prop_query("/prop"), Some((String::new(), vec![])));
+        assert_eq!(prop_query("/prop Rain? | Yes | No"), Some(("Rain?".into(), vec!["Yes".into(), "No".into()])));
+        assert_eq!(prop_query("/props"), None);
+        assert_eq!(prop_query("hi /prop"), None);
     }
 }
 

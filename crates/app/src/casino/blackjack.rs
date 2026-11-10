@@ -377,7 +377,7 @@ fn draw_card(p: &egui::Painter, from: Pos2, at: Pos2, cw: f32, ch: f32, face: Op
     match face {
         Some(card) if !hidden && flip > 0.5 => {
             let w = cw * (flip - 0.5) * 2.0;
-            cards::face(p, Rect::from_center_size(c, vec2(w.max(2.0), ch)), card, false, false);
+            cards::face(p, Rect::from_center_size(c, vec2(w.max(2.0), ch)), card, cards::four(), false);
         }
         _ => {
             let w = if hidden { cw } else { cw * (1.0 - flip * 2.0).abs().max(0.04) };

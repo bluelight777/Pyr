@@ -133,7 +133,7 @@ impl Poker {
     }
 
     /// Sends a craps table's news on, pays what the rolls paid, and counts them.
-    fn flush_craps(&self, hub: &Hub, st: &mut State, mut out: Output) {
+    pub(crate) fn flush_craps(&self, hub: &Hub, st: &mut State, mut out: Output) {
         let effects = std::mem::take(&mut out.effects);
         self.flush(hub, st, 0, out);
         for e in effects {

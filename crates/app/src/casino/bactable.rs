@@ -207,7 +207,7 @@ fn card(p: &egui::Painter, shoe: Pos2, at: Pos2, size: Vec2, face: Card, appear:
     let turn = ((since - flip) / 0.32).clamp(0.0, 1.0);
     if turn > 0.5 {
         let w = size.x * (turn - 0.5) * 2.0;
-        cards::face(p, Rect::from_center_size(c, vec2(w.max(2.0), size.y)), face, false, false);
+        cards::face(p, Rect::from_center_size(c, vec2(w.max(2.0), size.y)), face, cards::four(), false);
     } else {
         let w = size.x * (1.0 - turn * 2.0).max(0.04);
         cards::back(p, Rect::from_center_size(c, vec2(w, size.y)), "");

@@ -26,6 +26,7 @@ mod gm;
 mod craps_tables;
 mod emotes;
 mod ratings;
+pub mod props;
 
 /// The most tables a server keeps, and that one person can have made at once.
 pub const MAX_TABLES: usize = 40;
@@ -123,11 +124,13 @@ pub struct Poker {
     gm_proofs: Mutex<HashMap<String, (bool, Option<Role>, u64)>>,
     /// (Tests: the home server's fingerprint in place of `HOME_SERVER`.)
     pub(crate) home_for_tests: std::sync::OnceLock<[u8; 32]>,
+    /// When the props were last looked over (see `props_sweep`).
+    props_swept: AtomicU64,
 }
 
 impl Default for Poker {
     fn default() -> Self {
-        Poker { state: Mutex::new(State::default()), next_tourney: AtomicU64::new(1), next_id: AtomicU64::new(1), start: Instant::now(), last_people: Mutex::new(HashMap::new()), gm_proofs: Mutex::new(HashMap::new()), home_for_tests: std::sync::OnceLock::new() }
+        Poker { state: Mutex::new(State::default()), next_tourney: AtomicU64::new(1), next_id: AtomicU64::new(1), start: Instant::now(), last_people: Mutex::new(HashMap::new()), gm_proofs: Mutex::new(HashMap::new()), home_for_tests: std::sync::OnceLock::new(), props_swept: AtomicU64::new(0) }
     }
 }
 
@@ -198,6 +201,34 @@ impl Poker {
 
     fn look(rec: &Record) -> Look {
         Look { level: rec.level(), card_back: rec.card_back.clone(), frame: rec.frame.clone() }
+    }
+
+    /// Someone's look changed: every table they sit at (poker, tournaments, blackjack,
+    /// baccarat, craps, roulette) shows it to everyone there.
+    fn relook(&self, hub: &Hub, st: &mut State, uid: &str, look: &Look, now: u64) {
+        let mut poker: Vec<(TableId, Output)> = st.rooms.iter_mut().filter_map(|(id, r)| r.relook(uid, look).map(|o| (*id, o))).collect();
+        for t in st.tourneys.values_mut() {
+            poker.extend(t.relook(uid, look));
+        }
+        for (id, out) in poker {
+            self.flush(hub, st, id, out);
+        }
+        let bj: Vec<Output> = st.bj.tables.values_mut().filter_map(|t| t.relook(uid, look, now)).collect();
+        for out in bj {
+            self.flush_bj(hub, st, out);
+        }
+        let bac: Vec<Output> = st.bac.tables.values_mut().filter_map(|t| t.relook(uid, look, now)).collect();
+        for out in bac {
+            self.flush_bac(hub, st, out);
+        }
+        let craps: Vec<Output> = st.craps.tables.values_mut().filter_map(|t| t.relook(uid, look, now)).collect();
+        for out in craps {
+            self.flush_craps(hub, st, out);
+        }
+        let rl: Vec<Output> = st.rl.tables.values_mut().filter_map(|t| t.relook(uid, look, now)).collect();
+        for out in rl {
+            self.flush_rl(hub, st, out);
+        }
     }
 
     fn me(&self, hub: &Hub, st: &State, uid: &str) -> RecordView {
@@ -615,6 +646,10 @@ impl Poker {
                     Kind::Frame => rec.frame = id,
                 }
                 hub.db.set_poker_record(uid, &rec, held).map_err(|e| e.to_string())?;
+                // Where they're sitting, their seat shows it now: a card back picked at a table
+                // came only with the next sit down, so their cards were dealt in the old one
+                // (Blue's green cards after picking red).
+                self.relook(hub, st, uid, &Self::look(&rec), now);
                 Ok(Some(ToApp::Record { me: Self::view(hub, uid, &rec, st.held(uid)), gains: None }))
             }
             ToServer::Leaderboard => {
@@ -1001,6 +1036,14 @@ impl Poker {
                 self.flush_tourney(hub, st, out);
                 Ok(None)
             }
+            // (Prop bets come by `props`, with who's asking and what they see.)
+            ToServer::PropOpen { .. }
+            | ToServer::PropBet { .. }
+            | ToServer::PropCashOut { .. }
+            | ToServer::PropSettle { .. }
+            | ToServer::PropVoid { .. }
+            | ToServer::PropGet { .. }
+            | ToServer::PropList { .. } => Err("prop bets come another way".into()),
         }
     }
 
@@ -1051,6 +1094,11 @@ impl Poker {
             if !out.msgs.is_empty() || !out.effects.is_empty() {
                 self.flush_tourney(hub, st, out);
             }
+        }
+        // Props: a look over them a minute (closing those whose time came).
+        if now.saturating_sub(self.props_swept.load(Ordering::Relaxed)) >= 60_000 {
+            self.props_swept.store(now.max(1), Ordering::Relaxed);
+            self.props_sweep(hub, st);
         }
         self.bj_tick(hub, st, now, &mut rng);
         self.craps_tick(hub, st, now, &mut rng);
@@ -1131,6 +1179,30 @@ mod tests {
         assert!(p.handle(&hub, "alice", false, ToServer::Close { table: table.id }).unwrap().is_none());
         let Some(ToApp::Lobby { tables, .. }) = p.handle(&hub, "alice", false, ToServer::Lobby).unwrap() else { panic!() };
         assert!(tables.is_empty());
+    }
+
+    /// A card back picked while sitting at a table: everyone there sees it on that seat at once
+    /// (Blue picked red at a table and was still dealt green cards).
+    #[test]
+    fn a_card_back_picked_at_a_table_shows_there_at_once() {
+        let hub = hub();
+        let p = &hub.poker;
+        let Some(ToApp::Snapshot { table }) = p
+            .handle(&hub, "erin", false, ToServer::Create { name: "Late".into(), rules: Rules::holdem(10, 20, 6), bots: vec![(1, Level::Rookie)], buy_in: BuyIn::default() })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let (mut rec, held) = hub.db.poker_record("erin");
+        rec.gifts.insert("back_jade".into());
+        hub.db.set_poker_record("erin", &rec, held).unwrap();
+        p.handle(&hub, "erin", false, ToServer::Equip { id: "back_jade".into() }).unwrap();
+        p.handle(&hub, "erin", false, ToServer::Sit { table: table.id, seat: 0, chips: 2000 }).unwrap();
+        let back_here = |who: &str| p.state.lock().rooms[&table.id].view(Some(who)).seats[0].as_ref().unwrap().card_back.clone();
+        assert_eq!(back_here("erin"), "back_jade");
+        p.handle(&hub, "erin", false, ToServer::Equip { id: "back_ember".into() }).unwrap();
+        assert_eq!(back_here("erin"), "back_ember");
+        assert_eq!(back_here("someone-watching"), "back_ember");
     }
 
     #[test]

@@ -43,16 +43,17 @@ rebuilt version by hand once (it carries a new release key), and nobody should l
 Version in brackets: where 0.13.x first had it.
 
 ### Server, protocol and chat
-- [ ] Pictures that arrive before their key keep them (0.13.4)
-- [ ] AFK channel: picked in Server settings, 5/15/30/60/120 min, a channel called AFK by
+- [x] Pictures that arrive before their key keep them (0.13.4)
+- [x] AFK channel: picked in Server settings, 5/15/30/60/120 min, a channel called AFK by
       default (0.13.4); never while sharing or watching a screen, an hour by default (0.13.25);
       away vs Idle by hand, from joining the channel, the app checks before going (0.13.28)
-- [ ] Invite someone to your voice channel (card with Join) (0.13.6)
-- [ ] Taskbar badge with mentions and DMs, 9+ (0.13.7)
-- [ ] Files in DMs and groups: up to 2 GB, E2EE, resumable, kept 7 days, 4 GB a week (0.13.13)
-- [ ] New DM said "isn't end-to-end encrypted yet" (0.13.13)
-- [ ] Plugins sent in with big files: parts (0.13.14)
-- [ ] Game invites to friends from programs (0.13.15/16), as links pyr.gg/<game>/<code> (0.13.18)
+- [x] Invite someone to your voice channel (card with Join) (0.13.6)
+- [x] Taskbar badge with mentions and DMs, 9+ (0.13.7)
+- [x] Files in DMs and groups: up to 2 GB, E2EE, resumable, kept 7 days, 4 GB a week (0.13.13)
+- [ ] New DM said "isn't end-to-end encrypted yet" (0.13.13): 0.13.0 already checks the
+      server's sealed feature; check a new DM's intro on screen
+- [x] Plugins sent in with big files: parts (0.13.14)
+- [x] Game invites to friends from programs (0.13.15/16), as links pyr.gg/<game>/<code> (0.13.18)
 
 ### Voice, video, sounds
 - [ ] Voice isolation takes the PC's own sound out of the microphone (0.13.2); headphones dips
@@ -72,10 +73,10 @@ Version in brackets: where 0.13.x first had it.
 - [ ] Plugins with art: up to 100 MB and 5,000 files, any Rust (0.13.6)
 - [ ] Programs open inside Pyr, stay in their page, Opening..., NVIDIA helper windows
       (0.13.7 to 0.13.10, 0.13.17, 0.13.18)
-- [ ] Programs know your Pyr name and friends; PYR_BRIDGE; invite friends (0.13.15)
+- [x] Programs know your Pyr name and friends; PYR_BRIDGE; invite friends (0.13.15)
 - [ ] Library shows plugins added since setup (0.13.7); Dominó program removed and never listed
       (0.13.12, 0.13.25)
-- [ ] One-click update of open programs, programs can ask, invites update first, list fetched
+- [x] One-click update of open programs, programs can ask, invites update first, list fetched
       again, every ten minutes (0.13.27)
 
 ### Pyr Casino
@@ -105,14 +106,19 @@ Version in brackets: where 0.13.x first had it.
       top bar (0.13.22), titles and badges (0.13.4/6), pre-action buttons (0.13.4), slower wins
       (0.13.4), scaling (0.13.6), table sounds (0.13.6)
 - [ ] Keys for every game (0.13.26)
-- [ ] Emotes that move (0.13.23); new cards and backs (0.13.22)
+- [ ] Emotes that move (0.13.23)
+- [x] New cards and backs (0.13.22): Meshy's court figures, ace of spades and six backs (carved
+      from 0.13.28); every face-down card in the back picked, and a back picked while sitting
+      shows at that seat at once (Blue: "dealt green after picking red")
 - [ ] Congrats / buy a drink on a big win (0.13.7)
 - [ ] Table invites (0.13.6); volume per game (0.13.4)
 - [ ] Mini-game backgrounds (0.13.4), bonus games clearer (0.13.6), Keno and Dice tweaks
 
 ### New in the rebuild
-- [ ] Prop bets in chat, shared: one market per prop for everyone in the channel, Pyr Casino
-      chips, odds from an LMSR market maker (credit: Maanix's PlayProps)
+- [x] Prop bets in chat, shared: one market per prop for everyone in the channel, Pyr Casino
+      chips, odds from an LMSR market maker (credit: Maanix's PlayProps); the server keeps every prop,
+      bet, cash-out, payout and refund; whoever opens one backs its odds (b ln n chips, back
+      when settled), so props never make chips out of nothing; Meshy art
 - [ ] Approved bug reports 657 to 675 (voice up and down; stopped responding), without
       touching the echo canceller
 - [ ] The key change (above)

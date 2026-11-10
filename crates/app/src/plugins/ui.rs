@@ -594,7 +594,7 @@ impl PyrApp {
         self.sent_in_list(ui, st, acts, true);
     }
 
-    fn plugin_icon(&mut self, ui: &mut egui::Ui, id: &str, kind: Kind, side: f32) {
+    pub(crate) fn plugin_icon(&mut self, ui: &mut egui::Ui, id: &str, kind: Kind, side: f32) {
         let (r, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
         let bytes = self.plugins.icons.get(id).cloned();
         let key = format!("plugin-icon:{id}");
@@ -635,9 +635,19 @@ impl PyrApp {
                 }
             }
             Some(p) => {
-                if self.plugins.update_for(&p).is_some() {
-                    if ui.add(theme::primary_button(&format!("Update to {}", e.version)).min_size(vec2(92.0, 30.0))).clicked() {
-                        self.plugins.install(e);
+                if self.ui.program_updates.iter().any(|u| u.id == e.id) {
+                    ui.label(RichText::new("Closing it to update").color(theme::DIM()));
+                } else if self.plugins.update_for(&p).is_some() {
+                    // A program that's open is closed, updated and opened again (0.13.27):
+                    // Windows won't replace a program while it runs.
+                    let open = p.kind == Kind::Program && self.plugins.programs.get(&e.id).is_some();
+                    let label = if open { format!("Close and update to {}", e.version) } else { format!("Update to {}", e.version) };
+                    if ui.add(theme::primary_button(&label).min_size(vec2(92.0, 30.0))).clicked() {
+                        if open {
+                            acts.push(Act::UpdateProgram(e.id.clone()));
+                        } else {
+                            self.plugins.install(e);
+                        }
                     }
                 }
                 match p.kind {

@@ -127,7 +127,7 @@ impl Poker {
     }
 
     /// Sends a baccarat table's news on, pays what the coups paid, and counts them.
-    fn flush_bac(&self, hub: &Hub, st: &mut State, mut out: Output) {
+    pub(crate) fn flush_bac(&self, hub: &Hub, st: &mut State, mut out: Output) {
         let effects = std::mem::take(&mut out.effects);
         self.flush(hub, st, 0, out);
         for e in effects {

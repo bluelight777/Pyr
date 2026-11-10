@@ -90,6 +90,15 @@ impl Tourney {
         }
     }
 
+    /// Someone picked another look: it's theirs at the tables they're at, and where they're
+    /// moved to next. What each of those tables is to be told.
+    pub fn relook(&mut self, uid: &str, look: &Look) -> Vec<(TableId, Output)> {
+        for e in self.entrants.iter_mut().filter(|e| e.uid == uid) {
+            e.look = look.clone();
+        }
+        self.tables.iter_mut().filter_map(|(id, room)| room.relook(uid, look).map(|out| (*id, out))).collect()
+    }
+
     pub fn prize_pool(&self) -> u64 {
         if self.rules.bomb.is_some() {
             // A Flash Pot's prize is the buy-in times what the wheel picks (the house stakes

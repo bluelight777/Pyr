@@ -236,10 +236,11 @@ mod tests {
             assert!(white > size * size / 30, "{label} at {size}: {white} white pixels");
             assert!(red > size * size / 4, "{label} at {size}: {red} red pixels");
             assert_eq!(at(0, 0).3, 0, "the corners are see-through");
-            // The number sits in the middle: as much of it left of centre as right.
-            let half = |left: bool| (0..size * size).filter(|i| (i % size < size / 2) == left && px[i * 4] > 200 && px[i * 4 + 2] > 200).count() as f32;
-            let (l, r) = (half(true), half(false));
-            assert!((l - r).abs() / (l + r) < 0.35, "{label} at {size}: {l} left, {r} right");
+            // The number sits in the middle: it reaches as far left of centre as right (by its
+            // ends: "9+" has more of itself in its 9).
+            let xs: Vec<f32> = (0..size * size).filter(|i| px[i * 4] > 200 && px[i * 4 + 2] > 200 && px[i * 4 + 3] > 200).map(|i| (i % size) as f32).collect();
+            let (lo, hi) = (xs.iter().cloned().fold(f32::MAX, f32::min), xs.iter().cloned().fold(0.0, f32::max));
+            assert!(((lo + hi) / 2.0 - (size as f32 - 1.0) / 2.0).abs() <= 1.5, "{label} at {size}: from {lo} to {hi}");
         }
     }
 

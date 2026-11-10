@@ -114,6 +114,13 @@ pub struct PokerState {
     /// board a street at a time (as on television), and everything after it (the pot, the next
     /// hand, a tournament's news) behind it.
     pub held: BTreeMap<TableId, VecDeque<(Instant, ToApp)>>,
+    /// Prop bets in chat (servers with `PROPS_FEATURE`): the props as last heard (by id), when
+    /// each was last asked for, ones I just opened (for their message in chat), and what
+    /// happened to me on them (to say: text, chips in or out).
+    pub props: BTreeMap<u64, pyr_poker::props::PropView>,
+    pub props_asked: BTreeMap<u64, Instant>,
+    pub props_opened: Vec<pyr_poker::props::PropView>,
+    pub prop_notes: Vec<(u64, String, i64)>,
 }
 
 /// The blackjack table I'm at or watching.
@@ -485,6 +492,16 @@ impl PokerState {
                 }
                 self.tourney.insert(view.id, view);
             }
+            ToApp::Props { props } => {
+                for p in props {
+                    self.props.insert(p.id, p);
+                }
+            }
+            ToApp::PropOpened { prop } => {
+                self.props.insert(prop.id, prop.clone());
+                self.props_opened.push(prop);
+            }
+            ToApp::PropNote { id, text, chips } => self.prop_notes.push((id, text, chips)),
         }
         None
     }

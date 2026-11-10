@@ -139,8 +139,53 @@ fn cache() -> &'static Mutex<HashMap<(&'static str, u32), Slot>> {
     C.get_or_init(Default::default)
 }
 
+/// Prop bets' pictures (Meshy's, cut by hand for the cards: see `props`).
+const PROP_PICS: &[(&str, &[u8])] = &[
+    ("props-banner", include_bytes!("../../assets/props/banner.webp")),
+    ("props-card-bg", include_bytes!("../../assets/props/card-bg.webp")),
+    ("props-emblem", include_bytes!("../../assets/props/emblem.webp")),
+    ("props-won", include_bytes!("../../assets/props/won.webp")),
+    ("props-lock", include_bytes!("../../assets/props/lock.webp")),
+    ("props-chip-emerald", include_bytes!("../../assets/props/chip-emerald.webp")),
+    ("props-chip-ruby", include_bytes!("../../assets/props/chip-ruby.webp")),
+    ("props-chip-sapphire", include_bytes!("../../assets/props/chip-sapphire.webp")),
+    ("props-chip-amber", include_bytes!("../../assets/props/chip-amber.webp")),
+    ("props-chip-amethyst", include_bytes!("../../assets/props/chip-amethyst.webp")),
+    ("props-chip-pearl", include_bytes!("../../assets/props/chip-pearl.webp")),
+];
+
+/// Playing cards' pictures (Meshy's, 0.13.22): the backs, the court figures (jacks, queens and
+/// kings of clubs, diamonds, hearts and spades) and the ace of spades. See `poker::cards`.
+const CARD_PICS: &[(&str, &[u8])] = &[
+    ("card-back-ember", include_bytes!("../../assets/cards/back-ember.webp")),
+    ("card-back-midnight", include_bytes!("../../assets/cards/back-midnight.webp")),
+    ("card-back-jade", include_bytes!("../../assets/cards/back-jade.webp")),
+    ("card-back-gold", include_bytes!("../../assets/cards/back-gold.webp")),
+    ("card-back-inferno", include_bytes!("../../assets/cards/back-inferno.webp")),
+    ("card-back-aurora", include_bytes!("../../assets/cards/back-aurora.webp")),
+    ("card-ace-spades", include_bytes!("../../assets/cards/ace-spades.webp")),
+    ("card-jc", include_bytes!("../../assets/cards/jc.webp")),
+    ("card-jd", include_bytes!("../../assets/cards/jd.webp")),
+    ("card-jh", include_bytes!("../../assets/cards/jh.webp")),
+    ("card-js", include_bytes!("../../assets/cards/js.webp")),
+    ("card-qc", include_bytes!("../../assets/cards/qc.webp")),
+    ("card-qd", include_bytes!("../../assets/cards/qd.webp")),
+    ("card-qh", include_bytes!("../../assets/cards/qh.webp")),
+    ("card-qs", include_bytes!("../../assets/cards/qs.webp")),
+    ("card-kc", include_bytes!("../../assets/cards/kc.webp")),
+    ("card-kd", include_bytes!("../../assets/cards/kd.webp")),
+    ("card-kh", include_bytes!("../../assets/cards/kh.webp")),
+    ("card-ks", include_bytes!("../../assets/cards/ks.webp")),
+];
+
 fn bytes(name: &str) -> Option<(&'static str, &'static [u8])> {
-    PICS.iter().find(|(n, _)| *n == name).map(|(n, b)| (*n, *b))
+    PICS.iter().chain(PROP_PICS.iter()).chain(CARD_PICS.iter()).find(|(n, _)| *n == name).map(|(n, b)| (*n, *b))
+}
+
+/// Whether there's a picture by this name.
+#[cfg(test)]
+pub fn has(name: &str) -> bool {
+    bytes(name).is_some()
 }
 
 /// The picture as a texture, at most `max_px` across or down (0: as it is); None while it's
@@ -216,8 +261,32 @@ pub fn cover(p: &egui::Painter, ctx: &egui::Context, name: &str, r: Rect, max_px
 /// picture across and down).
 #[allow(clippy::too_many_arguments)]
 pub fn cover_rounded(p: &egui::Painter, ctx: &egui::Context, name: &str, r: Rect, radius: f32, focus: (f32, f32), max_px: u32, tint: Color32) -> bool {
-    let Some(t) = tex(ctx, name, max_px) else { return false };
+    match cover_rounded_shape(ctx, name, r, radius, focus, max_px, tint) {
+        Some(shape) => {
+            p.add(shape);
+            true
+        }
+        None => false,
+    }
+}
+
+/// [`cover_rounded`]'s shape (to put in a place kept for it, behind what's drawn after).
+pub fn cover_rounded_shape(ctx: &egui::Context, name: &str, r: Rect, radius: f32, focus: (f32, f32), max_px: u32, tint: Color32) -> Option<egui::Shape> {
+    let t = tex(ctx, name, max_px)?;
     let uv = cover_uv(t.size(), r, focus);
+    Some(rounded(&t, r, radius, uv, tint))
+}
+
+/// A picture squeezed or stretched to fill `r` whole (a card's back as it turns over), its
+/// corners rounded by `radius`.
+pub fn stretch_rounded(p: &egui::Painter, ctx: &egui::Context, name: &str, r: Rect, radius: f32, max_px: u32, tint: Color32) -> bool {
+    let Some(t) = tex(ctx, name, max_px) else { return false };
+    p.add(rounded(&t, r, radius, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint));
+    true
+}
+
+/// The part `uv` of a texture in `r`, its corners rounded.
+fn rounded(t: &TextureHandle, r: Rect, radius: f32, uv: Rect, tint: Color32) -> egui::Shape {
     let rad = radius.min(r.width() / 2.0).min(r.height() / 2.0).max(0.0);
     let to_uv = |q: Pos2| pos2(uv.left() + (q.x - r.left()) / r.width().max(1.0) * uv.width(), uv.top() + (q.y - r.top()) / r.height().max(1.0) * uv.height());
     let mut m = egui::Mesh::with_texture(t.id());
@@ -237,8 +306,7 @@ pub fn cover_rounded(p: &egui::Painter, ctx: &egui::Context, name: &str, r: Rect
     for i in 1..=n {
         m.add_triangle(0, i, if i == n { 1 } else { i + 1 });
     }
-    p.add(egui::Shape::mesh(m));
-    true
+    egui::Shape::mesh(m)
 }
 
 /// One cell of a 3 x 3 sheet of symbols (0 to 8, left to right, top to bottom) drawn in `r`.
@@ -276,7 +344,7 @@ mod tests {
 
     #[test]
     fn every_picture_reads() {
-        for (name, data) in PICS {
+        for (name, data) in PICS.iter().chain(PROP_PICS).chain(CARD_PICS) {
             let im = image::load_from_memory_with_format(data, image::ImageFormat::WebP).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(im.width() >= 64 && im.height() >= 64, "{name}");
         }

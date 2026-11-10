@@ -8,12 +8,99 @@
 //! open, and makes room for toasts and calls ringing. Elsewhere (there are no programs for
 //! Linux yet) a program opens in a window of its own, as before.
 
+use std::collections::VecDeque;
+use std::io::{BufRead, Write};
 use std::process::Child;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Rect};
+use serde_json::{Value, json};
 
-use super::install::InstalledPlugin;
+use super::install::{InstalledPlugin, Launch};
+
+/// What a program asked Pyr for, on its standard output (a line `@pyr {json}`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Asked {
+    /// Invite a friend to its room (0.13.15): they get a direct message with Join.
+    Invite { uid: String, room: String },
+    /// Close it, update it from the Library and open it again, in `room` (0.13.27).
+    Update { room: Option<String> },
+}
+
+/// A line from a program, if it asks Pyr for something.
+pub fn asked(line: &str) -> Option<Asked> {
+    let v: Value = serde_json::from_str(line.trim_end().strip_prefix("@pyr ")?).ok()?;
+    let text = |k: &str| v[k].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s.len() <= 64);
+    match v["op"].as_str()? {
+        "invite" => Some(Asked::Invite { uid: text("uid")?, room: text("room")? }),
+        "update" => Some(Asked::Update { room: text("room") }),
+        _ => None,
+    }
+}
+
+/// Pyr's side of talking to a program (0.13.15): lines for its input, what it asked, and the
+/// last things it wrote to its errors (said if it closes by mistake).
+struct Bridge {
+    to: std::sync::mpsc::Sender<String>,
+    asked: Arc<Mutex<Vec<Asked>>>,
+    errors: Arc<Mutex<VecDeque<String>>>,
+}
+
+impl Bridge {
+    /// Threads for the program's input, output and errors (each ends when the program does).
+    fn start(child: &mut Child, id: &str, repaint: Arc<dyn Fn() + Send + Sync>) -> Bridge {
+        let (to, rx) = std::sync::mpsc::channel::<String>();
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let errors = Arc::new(Mutex::new(VecDeque::new()));
+        if let Some(mut input) = child.stdin.take() {
+            let _ = std::thread::Builder::new().name("program-bridge".into()).spawn(move || {
+                for line in rx {
+                    if writeln!(input, "{line}").and_then(|_| input.flush()).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        if let Some(out) = child.stdout.take() {
+            let (asked, id) = (asked.clone(), id.to_string());
+            let _ = std::thread::Builder::new().name("program-bridge-out".into()).spawn(move || {
+                for line in std::io::BufReader::new(out).lines() {
+                    let Ok(line) = line else { break };
+                    match asked_line(&line) {
+                        Some(Some(a)) => {
+                            tracing::info!(program = %id, ?a, "a program asked Pyr");
+                            asked.lock().unwrap_or_else(|e| e.into_inner()).push(a);
+                            repaint();
+                        }
+                        Some(None) => tracing::info!(program = %id, "a program asked Pyr for something it doesn't do: {line}"),
+                        None => {}
+                    }
+                }
+            });
+        }
+        if let Some(err) = child.stderr.take() {
+            let errors = errors.clone();
+            let _ = std::thread::Builder::new().name("program-errors".into()).spawn(move || {
+                for line in std::io::BufReader::new(err).lines() {
+                    let Ok(line) = line else { break };
+                    let mut e = errors.lock().unwrap_or_else(|e| e.into_inner());
+                    if e.len() >= 12 {
+                        e.pop_front();
+                    }
+                    e.push_back(line.chars().take(300).collect());
+                }
+            });
+        }
+        Bridge { to, asked, errors }
+    }
+}
+
+/// A line of a program's output: not for Pyr (`None`), or what it asks (`Some(None)`: Pyr
+/// doesn't do that).
+fn asked_line(line: &str) -> Option<Option<Asked>> {
+    line.starts_with("@pyr ").then(|| asked(line))
+}
 
 /// A program Pyr started.
 pub struct Program {
@@ -23,6 +110,13 @@ pub struct Program {
     pub started: Instant,
     /// Out on its own (Pop out): Pyr leaves its window alone.
     pub popped: bool,
+    bridge: Bridge,
+    /// What it was last told of my friends (so it's told again only when that changes), and
+    /// when it was last told of its newest version (`pyr`).
+    told_friends: Option<String>,
+    told_pyr: Option<(Instant, String)>,
+    /// Closing to be updated (0.13.27): opened again after, in this room.
+    pub updating: Option<Option<String>>,
     #[cfg(windows)]
     win: win::Embedded,
 }
@@ -67,19 +161,28 @@ impl Programs {
         self.open.iter().find(|p| p.id == id)
     }
 
-    /// Starts an installed program (after checking its files): inside Pyr on Windows.
-    pub fn start(&mut self, dir: &std::path::Path, p: &InstalledPlugin) -> Result<(), String> {
+    /// Starts an installed program (after checking its files): inside Pyr on Windows. One
+    /// that's open already is told to join `launch.join`, if that's given.
+    pub fn start(&mut self, dir: &std::path::Path, p: &InstalledPlugin, launch: &Launch, repaint: Arc<dyn Fn() + Send + Sync>) -> Result<(), String> {
         if self.get(&p.id).is_some() {
+            if let Some(room) = &launch.join {
+                self.tell(&p.id, json!({"op": "join", "room": room}));
+            }
             return Ok(());
         }
-        let child = super::install::spawn(dir, p)?;
+        let mut child = super::install::spawn(dir, p, launch)?;
         #[cfg(windows)]
         win::adopt(&child);
+        let bridge = Bridge::start(&mut child, &p.id, repaint);
         self.open.push(Program {
             id: p.id.clone(),
             name: p.name.clone(),
             started: Instant::now(),
             popped: !cfg!(windows),
+            bridge,
+            told_friends: None,
+            told_pyr: None,
+            updating: None,
             #[cfg(windows)]
             win: win::Embedded::new(child.id()),
             child,
@@ -87,17 +190,76 @@ impl Programs {
         Ok(())
     }
 
+    /// Tells a program something (a line to its input): see `pyr.rs` in Pyropoly for what it
+    /// understands (`friends`, `join`, `invited`, `pyr`).
+    pub fn tell(&self, id: &str, v: Value) {
+        if let Some(p) = self.get(id) {
+            let _ = p.bridge.to.send(v.to_string());
+        }
+    }
+
+    /// A way to tell a program something later, from another thread.
+    pub fn teller(&self, id: &str) -> Option<std::sync::mpsc::Sender<String>> {
+        self.get(id).map(|p| p.bridge.to.clone())
+    }
+
+    /// What open programs asked for since the last call: (program, what).
+    pub fn take_asked(&mut self) -> Vec<(String, Asked)> {
+        let mut out = Vec::new();
+        for p in &self.open {
+            for a in std::mem::take(&mut *p.bridge.asked.lock().unwrap_or_else(|e| e.into_inner())) {
+                out.push((p.id.clone(), a));
+            }
+        }
+        out
+    }
+
+    /// Tells every open program my name and friends (`friends` list: uid, name, online),
+    /// when that changed since it was last told.
+    pub fn tell_friends(&mut self, me: &str, friends: &[(String, String, bool)]) {
+        let list: Vec<Value> = friends.iter().map(|(uid, name, online)| json!({"uid": uid, "name": name, "online": online})).collect();
+        let line = json!({"op": "friends", "me": me, "list": list}).to_string();
+        for p in &mut self.open {
+            if p.told_friends.as_deref() != Some(line.as_str()) {
+                let _ = p.bridge.to.send(line.clone());
+                p.told_friends = Some(line.clone());
+            }
+        }
+    }
+
+    /// Tells a program what Pyr can do for it and the Library's newest version of it (0.13.27):
+    /// when it opens, when that version changes, and every ten minutes.
+    pub fn tell_newest(&mut self, newest: &dyn Fn(&str) -> Option<String>) {
+        for p in &mut self.open {
+            let Some(v) = newest(&p.id) else { continue };
+            let due = p.told_pyr.as_ref().is_none_or(|(at, was)| *was != v || at.elapsed() > Duration::from_secs(600));
+            if due {
+                let _ = p.bridge.to.send(json!({"op": "pyr", "can": ["update"], "version": v}).to_string());
+                p.told_pyr = Some((Instant::now(), v));
+            }
+        }
+    }
+
     /// Each frame: programs that quit are let go of (their names returned), new ones' windows
     /// are found and taken in, and each is put where it goes: `shown` over `area` (points, in
     /// Pyr's window), clear of `over`; the others hidden.
-    pub fn step(&mut self, ctx: &egui::Context, shown: Option<&str>, area: Option<Rect>, over: &Overlays) -> Vec<String> {
+    pub fn step(&mut self, ctx: &egui::Context, shown: Option<&str>, area: Option<Rect>, over: &Overlays) -> Vec<Closed> {
         let mut closed = Vec::new();
         self.open.retain_mut(|p| match p.child.try_wait() {
             Ok(None) => true,
-            _ => {
+            status => {
                 #[cfg(windows)]
                 p.win.forget();
-                closed.push(p.name.clone());
+                let exit = status.ok().flatten();
+                let ok = exit.is_some_and(|s| s.success());
+                let code = exit.and_then(|s| s.code());
+                let errors: Vec<String> = p.bridge.errors.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect();
+                if ok || p.updating.is_some() {
+                    tracing::info!(program = %p.id, "{} closed", p.name);
+                } else {
+                    tracing::warn!(program = %p.id, ?code, "{} closed by mistake after {} s; its last errors: {}", p.name, p.started.elapsed().as_secs(), errors.join(" | "));
+                }
+                closed.push(Closed { id: p.id.clone(), name: p.name.clone(), mistake: !ok && p.updating.is_none(), code, errors, updating: p.updating.clone() });
                 false
             }
         });
@@ -134,6 +296,21 @@ impl Programs {
             if cfg!(windows) {
                 p.popped = false;
             }
+        }
+    }
+
+    /// Closes a program to update it (0.13.27): it's opened again after, in `room`.
+    pub fn close_to_update(&mut self, id: &str, room: Option<String>) {
+        if let Some(p) = self.open.iter_mut().find(|p| p.id == id) {
+            p.updating = Some(room);
+        }
+        self.close(id);
+    }
+
+    /// Ends a program that wouldn't close when asked.
+    pub fn kill(&mut self, id: &str) {
+        if let Some(p) = self.open.iter_mut().find(|p| p.id == id) {
+            let _ = p.child.kill();
         }
     }
 
@@ -189,6 +366,20 @@ impl Programs {
         #[cfg(windows)]
         win::let_go();
     }
+}
+
+/// A program that closed (see `Programs::step`).
+#[derive(Clone, Debug)]
+pub struct Closed {
+    pub id: String,
+    pub name: String,
+    /// It ended with an error (not by itself, not for an update).
+    pub mistake: bool,
+    pub code: Option<i32>,
+    /// The last things it wrote to its errors.
+    pub errors: Vec<String>,
+    /// It closed to be updated: opened again after, in this room.
+    pub updating: Option<Option<String>>,
 }
 
 /// `area` less the strips `keep` covers at its top or bottom (whichever side each is nearer).
@@ -747,6 +938,16 @@ mod win {
 mod tests {
     use super::*;
     use eframe::egui::{pos2, vec2};
+
+    #[test]
+    fn programs_ask_pyr_on_their_output() {
+        assert_eq!(asked(r#"@pyr {"op":"invite","uid":"u1","room":"BDFPA"}"#), Some(Asked::Invite { uid: "u1".into(), room: "BDFPA".into() }));
+        assert_eq!(asked(r#"@pyr {"op":"update","room":"BDFPA"}"#), Some(Asked::Update { room: Some("BDFPA".into()) }));
+        assert_eq!(asked(r#"@pyr {"op":"update"}"#), Some(Asked::Update { room: None }));
+        assert_eq!(asked(r#"@pyr {"op":"invite","uid":"u1"}"#), None, "an invite needs a room");
+        assert_eq!(asked_line("loading models"), None, "not for Pyr");
+        assert_eq!(asked_line(r#"@pyr {"op":"dance"}"#), Some(None), "for Pyr, but not something it does");
+    }
 
     #[test]
     fn a_frame_left_on_a_window_is_covered() {

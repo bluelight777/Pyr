@@ -116,6 +116,8 @@ struct Pending {
 pub enum Outcome {
     Send { key: String, channel: ChannelId, text: String, reply_to: Option<MessageId> },
     Toast(String, bool),
+    /// A plugin finished installing (or updating).
+    Installed(String),
 }
 
 pub struct Plugins {
@@ -380,13 +382,32 @@ impl Plugins {
         self.installed.save(&self.dir)
     }
 
-    /// Opens a program (inside Pyr on Windows), or finds it open already.
-    pub fn open_program(&mut self, id: &str) -> Result<(), String> {
+    /// Opens a program (inside Pyr on Windows), or finds it open already (and tells it to join
+    /// `launch.join`, if that's given).
+    pub fn open_program(&mut self, id: &str, launch: &install::Launch) -> Result<(), String> {
         let p = self.installed.get(id).ok_or("it isn't installed")?.clone();
         if self.listed(id) == Some(false) {
             return Err(format!("{} was taken out of the Pyr Library, so Pyr won't open it. Remove it.", p.name));
         }
-        self.programs.start(&self.dir, &p)
+        self.programs.start(&self.dir, &p, launch, self.repaint.clone())
+    }
+
+    /// The Library's newest version of a plugin, when it's newer than the one installed.
+    pub fn newer_version(&self, id: &str) -> Option<String> {
+        let have = self.installed.get(id)?.clone();
+        self.update_for(&have).map(|e| e.version.clone())
+    }
+
+    /// The Library's newest version of a plugin (or the one installed, when the Library's
+    /// list isn't here).
+    pub fn newest_version(&self, id: &str) -> Option<String> {
+        let have = self.installed.get(id)?;
+        Some(self.library.as_ref().and_then(|l| l.find(id)).map(|e| e.version.clone()).unwrap_or_else(|| have.version.clone()))
+    }
+
+    /// Fetches the Library's list again now (an update asked for may need a newer list).
+    pub fn refetch(&mut self) {
+        self.refresh(true);
     }
 
     /// Switches an installed add-on on or off.
@@ -550,6 +571,7 @@ impl Plugins {
                         self.start_addon_bg(p);
                     }
                     out.push(Outcome::Toast(format!("{name} is installed."), false));
+                    out.push(Outcome::Installed(id.clone()));
                 }
                 Err(e) => out.push(Outcome::Toast(format!("Couldn't install it: {e}"), true)),
             }

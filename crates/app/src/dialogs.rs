@@ -218,6 +218,8 @@ impl PyrApp {
 
     pub fn dialogs(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
         self.bug_outcomes(st, acts);
+        // A New prop bet (from `/prop`).
+        self.new_prop_window(ctx, st, acts);
         // A Game Master's "Give chips…" from someone's name.
         self.gift_box(ctx, st, acts);
         self.dialog_ui(ctx, st, acts);

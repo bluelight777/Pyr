@@ -548,6 +548,20 @@ impl Room {
 
     /// Sits a person down with chips already taken from their record (the caller gives them
     /// back if this fails).
+    /// Someone picked another look (a card back, a frame) while sitting here: their seat shows
+    /// it at once, not the one they sat down with (their cards were dealt in the old back).
+    pub fn relook(&mut self, uid: &str, look: &Look) -> Option<Output> {
+        let seat = self.seat_of(uid)?;
+        let m = self.meta.get_mut(&seat)?;
+        if m.bot.is_some() || m.look == *look {
+            return None;
+        }
+        m.look = look.clone();
+        let mut out = Output::default();
+        self.changed(&mut out);
+        Some(out)
+    }
+
     pub fn sit(&mut self, uid: &str, name: &str, seat: usize, chips: u64, look: Look, now: u64) -> Result<Output, String> {
         if self.tourney.is_some() {
             return Err("this is a tournament table: register for the tournament to play".into());

@@ -1048,6 +1048,31 @@ impl Hub {
         }
     }
 
+    /// Prop bets (see `poker::props`): each person who can see `channel_id`, with an app that
+    /// reads prop bets, gets their own view (`view`: by their user id; none: nothing for them).
+    pub fn send_props_in(&self, channel_id: ChannelId, view: &dyn Fn(&str) -> Option<pyr_poker::net::ToApp>) {
+        let dm = self.db.dm_members(channel_id);
+        let group = if dm.is_none() { self.db.group(channel_id).map(|g| g.members) } else { None };
+        let viewers: Option<HashSet<UserId>> =
+            if dm.is_none() && group.is_none() { self.db.channel(channel_id).filter(|c| c.private).map(|c| self.db.viewers(&c).into_iter().collect()) } else { None };
+        // (Who, gathered first: their views are made with the clients let go of.)
+        let targets: Vec<(UserId, Outbox)> = self
+            .inner
+            .lock()
+            .clients
+            .values()
+            .filter(|c| c.casino >= pyr_poker::net::CASINO_PROPS && !viewers.as_ref().is_some_and(|v| !v.contains(&c.user_id)))
+            .filter(|c| !dm.as_ref().is_some_and(|(a, z)| c.user_id != *a && c.user_id != *z) && !group.as_ref().is_some_and(|m| !m.contains(&c.user_id)))
+            .map(|c| (c.user_id.clone(), c.tx.clone()))
+            .collect();
+        let mut made: HashMap<UserId, Option<Bytes>> = HashMap::new();
+        for (uid, tx) in targets {
+            if let Some(b) = made.entry(uid.clone()).or_insert_with(|| view(&uid).map(|msg| frame(0, Event::Poker { msg }))) {
+                let _ = tx.send(b.clone());
+            }
+        }
+    }
+
     /// Sends to one member's other connections that know group conversations.
     pub fn send_to_group_members_except(&self, uid: &str, except: ConnId, ev: Event) {
         let b = frame(0, ev);
@@ -1202,6 +1227,22 @@ impl Hub {
     pub fn access_of(&self, uid: &str) -> (bool, Vec<RoleId>) {
         let admin = self.db.get_user(uid).is_some_and(|u| u.role.is_admin());
         (admin, self.db.member_roles(uid))
+    }
+
+    /// What a member may do: everything for admins and the owner, otherwise what their roles
+    /// allow (as a connection's `perms`).
+    pub fn perms_of(&self, uid: &str) -> u64 {
+        let (admin, mine) = self.access_of(uid);
+        if admin {
+            return perm::ALL;
+        }
+        self.db.roles().iter().filter(|r| mine.contains(&r.id)).fold(0, |acc, r| acc | r.perms)
+    }
+
+    /// Whether someone moderates a channel's messages (Manage messages; nobody does in a
+    /// direct message or group).
+    pub fn moderates(&self, uid: &str, channel_id: ChannelId) -> bool {
+        self.db.channel(channel_id).is_some() && self.perms_of(uid) & perm::MANAGE_MESSAGES != 0
     }
 
     /// Whether someone can see a channel (a server channel: conversations are checked by who's
@@ -1491,7 +1532,7 @@ impl Hub {
             // (Private conversations' calls only for their own people.)
             voice: inner.voice.values().filter(|v| v.audience.as_ref().is_none_or(|who| who.iter().any(|w| w == uid))).map(|v| v.p.clone()).collect(),
             roles: self.db.roles(),
-            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, AWAY_FEATURE, DND_FEATURE, BIG_FILES_FEATURE, GIFS_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE, VOUCHES_FOR_ME_FEATURE, PRIVATE_CHANNELS_FEATURE, BOTS_FEATURE, INVITES_FEATURE, POKER_FEATURE, SEALED_FEATURE, CHANNEL_ORDER_FEATURE, MOVE_FEATURE, AFK_FEATURE, VOICE_INVITE_FEATURE, CASINO_012_FEATURE, CASINO_013_FEATURE, DM_FILES_FEATURE].iter().map(|s| s.to_string()).collect(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, AWAY_FEATURE, DND_FEATURE, BIG_FILES_FEATURE, GIFS_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE, VOUCHES_FOR_ME_FEATURE, PRIVATE_CHANNELS_FEATURE, BOTS_FEATURE, INVITES_FEATURE, POKER_FEATURE, SEALED_FEATURE, CHANNEL_ORDER_FEATURE, MOVE_FEATURE, AFK_FEATURE, VOICE_INVITE_FEATURE, CASINO_012_FEATURE, CASINO_013_FEATURE, DM_FILES_FEATURE, PROPS_FEATURE].iter().map(|s| s.to_string()).collect(),
             dms: self.db.dms_of(uid),
             relations: self.db.relations_of(uid),
             groups: if groups { self.db.groups_of(uid) } else { Vec::new() },

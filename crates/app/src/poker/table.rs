@@ -753,11 +753,12 @@ impl PyrApp {
                 continue;
             }
             let r = target.translate((lay.dealer() - target.center()) * (1.0 - ease(prog)));
-            // Turned over as it lands.
+            // Turned over as it lands. (In the back I picked, now: the seat's own could be the
+            // one I sat down with.)
             if peek {
-                flip(p, r, *card, ((prog - 0.6) / 0.4).clamp(0.0, 1.0), self.poker.four_color, seat.folded, &seat.card_back);
+                flip(p, r, *card, ((prog - 0.6) / 0.4).clamp(0.0, 1.0), self.poker.four_color, seat.folded, "");
             } else {
-                cards::back(p, r, &seat.card_back);
+                cards::back(p, r, "");
             }
         }
         if !peek {

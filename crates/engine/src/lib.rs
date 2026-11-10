@@ -1311,6 +1311,80 @@ impl Engine {
         });
     }
 
+    // ---------------------------------------------------------------- prop bets
+
+    /// A prop bets request (see `pyr_poker::props`): what comes back is kept (`PokerState`'s
+    /// props); a refusal is said, in the server's words.
+    fn prop_request(&self, key: &str, msg: pyr_poker::net::ToServer) {
+        let k = key.to_string();
+        self.request_then_or(key, Request::Poker { msg }, move |shared, r| {
+            let mut st = shared.state.write();
+            match r {
+                Ok(Event::Poker { msg }) => {
+                    if let Some(s) = st.server_mut(&k) {
+                        s.poker.apply(msg, std::time::Instant::now());
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => st.refused(e),
+            }
+            drop(st);
+            (shared.repaint)();
+        });
+    }
+
+    /// Opens a prop in a channel: a question, its outcomes (Yes and No when none), how deep
+    /// (`pyr_poker::props::DEPTHS`) and when betting closes (`CLOSES_IN`, seconds).
+    pub fn prop_open(&self, key: &str, channel_id: ChannelId, question: &str, outcomes: Vec<String>, depth: u64, closes_in: u64) {
+        self.prop_request(key, pyr_poker::net::ToServer::PropOpen { channel_id, question: question.to_string(), outcomes, depth, closes_in });
+    }
+
+    /// Bets `chips` on an outcome (`min_shares`: what it was shown to pay, less a little).
+    pub fn prop_bet(&self, key: &str, id: u64, outcome: usize, chips: u64, min_shares: f64) {
+        self.prop_request(key, pyr_poker::net::ToServer::PropBet { id, outcome, chips, min_shares });
+    }
+
+    pub fn prop_cash_out(&self, key: &str, id: u64, outcome: usize) {
+        self.prop_request(key, pyr_poker::net::ToServer::PropCashOut { id, outcome });
+    }
+
+    pub fn prop_settle(&self, key: &str, id: u64, outcome: usize) {
+        self.prop_request(key, pyr_poker::net::ToServer::PropSettle { id, outcome });
+    }
+
+    pub fn prop_void(&self, key: &str, id: u64) {
+        self.prop_request(key, pyr_poker::net::ToServer::PropVoid { id });
+    }
+
+    /// Looks props up (once every half a minute each at most: changes come by themselves).
+    pub fn prop_get(&self, key: &str, ids: &[u64]) {
+        let want: Vec<u64> = {
+            let mut st = self.shared.state.write();
+            let Some(s) = st.server_mut(key) else { return };
+            if !s.has(pyr_proto::control::PROPS_FEATURE) {
+                return;
+            }
+            let now = std::time::Instant::now();
+            let want: Vec<u64> = ids.iter().copied().filter(|id| s.poker.props_asked.get(id).is_none_or(|t| now.duration_since(*t) > std::time::Duration::from_secs(30))).collect();
+            for id in &want {
+                s.poker.props_asked.insert(*id, now);
+            }
+            want
+        };
+        if !want.is_empty() {
+            self.prop_request(key, pyr_poker::net::ToServer::PropGet { ids: want });
+        }
+    }
+
+    /// Props I just opened (for their message in chat), and what happened to me on props.
+    pub fn take_prop_news(&self, key: &str) -> (Vec<pyr_poker::props::PropView>, Vec<(u64, String, i64)>) {
+        let mut st = self.shared.state.write();
+        match st.server_mut(key) {
+            Some(s) => (std::mem::take(&mut s.poker.props_opened), std::mem::take(&mut s.poker.prop_notes)),
+            None => (Vec::new(), Vec::new()),
+        }
+    }
+
     /// Send a request; `then` gets the answer, or the refusal in the server's words.
     fn request_then_or(&self, key: &str, req: Request, then: impl FnOnce(&Arc<Shared>, Result<Event, String>) + Send + 'static) {
         let Some(h) = self.handle(key) else {

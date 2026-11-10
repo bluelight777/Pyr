@@ -266,6 +266,20 @@ impl BjRoom {
         self.watchers.remove(uid);
     }
 
+    /// Someone picked another look (a card back, a frame) while sitting here: their seat shows
+    /// it at once, not the one they sat down with.
+    pub fn relook(&mut self, uid: &str, look: &Look, now: u64) -> Option<Output> {
+        let seat = self.seat_of(uid)?;
+        let s = self.seats.get_mut(seat as usize)?.as_mut()?;
+        if s.bot || s.look == *look {
+            return None;
+        }
+        s.look = look.clone();
+        let mut out = Output::default();
+        self.changed(now, &mut out);
+        Some(out)
+    }
+
     pub fn sit(&mut self, uid: &str, name: &str, look: Look, seat: u8, now: u64) -> Result<Output, String> {
         if self.seat_of(uid).is_some() {
             return Err("you're sitting here already".into());
@@ -655,6 +669,20 @@ mod tests {
         fn below(&mut self, n: u32) -> u32 {
             self.0.below(n)
         }
+    }
+
+    /// A card back picked while sitting shows at the seat at once (it showed only after
+    /// sitting down again).
+    #[test]
+    fn a_look_picked_while_sitting_shows_at_once() {
+        let mut rng = Rng(Stream::new(seed_from(6)));
+        let mut t = BjRoom::new(1, "Test", 10, 500, 0, &mut rng);
+        t.sit("alice", "Alice", Look { card_back: "back_jade".into(), ..Look::default() }, 2, 0).unwrap();
+        let red = Look { card_back: "back_ember".into(), ..Look::default() };
+        assert!(t.relook("alice", &red, 1).is_some());
+        assert_eq!(t.view(Some("alice"), 1).seats[2].as_ref().unwrap().card_back, "back_ember");
+        assert!(t.relook("alice", &red, 2).is_none(), "nothing new to tell");
+        assert!(t.relook("bob", &red, 2).is_none(), "bob isn't sitting here");
     }
 
     /// People and bots play rounds; every round checks out from its seeds; chips taken for

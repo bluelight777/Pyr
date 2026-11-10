@@ -165,7 +165,7 @@ impl Poker {
     }
 
     /// Sends a blackjack table's news on, pays what came back, and counts the rounds.
-    fn flush_bj(&self, hub: &Hub, st: &mut State, mut out: Output) {
+    pub(crate) fn flush_bj(&self, hub: &Hub, st: &mut State, mut out: Output) {
         let effects = std::mem::take(&mut out.effects);
         self.flush(hub, st, 0, out);
         for e in effects {

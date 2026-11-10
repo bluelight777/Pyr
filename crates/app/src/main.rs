@@ -14,6 +14,8 @@ mod icons;
 mod avatar_edit;
 mod emoji;
 mod emoji_picker;
+mod gallery;
+mod game_bridge;
 mod giphy;
 mod klipy;
 mod home;
@@ -32,7 +34,9 @@ mod mixer;
 mod ringtone;
 mod server_card;
 mod server_gifs;
+mod play_invites;
 mod plugins;
+mod props;
 mod poker;
 mod select;
 mod settings;
@@ -71,6 +75,10 @@ use eframe::egui;
 use pyr_engine::{Engine, EngineOptions};
 
 fn main() -> eframe::Result<()> {
+    // (Development: a page of drawn pieces to check by eye, instead of Pyr.)
+    if let Some(which) = std::env::var_os("PYR_DEV_GALLERY") {
+        return gallery::run(which.to_string_lossy().into_owned());
+    }
     let mut profile: Option<String> = None;
     let mut join: Option<String> = None;
     let mut renderer: Option<String> = pyr_proto::env_var("RENDERER");

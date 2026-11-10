@@ -161,6 +161,21 @@ pub enum Act {
     MoveMember { key: String, uid: String, channel: ChannelId },
     /// Invite someone to the voice channel I'm in (Invite to the channel).
     InviteToVoice { key: String, uid: String },
+    /// Prop bets (see `props`): look props up, open one, bet, cash out, settle, call off, and
+    /// the New prop bet window (prefilled from `/prop`).
+    PropGet { key: String, ids: Vec<u64> },
+    PropOpen { key: String, channel: ChannelId, question: String, outcomes: Vec<String>, depth: u64, closes_in: u64 },
+    PropBet { key: String, id: u64, outcome: usize, chips: u64, min_shares: f64 },
+    PropCashOut { key: String, id: u64, outcome: usize },
+    PropSettle { key: String, id: u64, outcome: usize },
+    PropVoid { key: String, id: u64 },
+    NewProp { key: String, channel: ChannelId, question: String, outcomes: Vec<String> },
+    /// Join a game's room from its invite (`https://pyr.gg/<game>/<ROOM>`).
+    PlayInvite { game: String, room: String },
+    /// Open a program (in a room, from an invite or after an update).
+    OpenProgram { id: String, room: Option<String> },
+    /// Close an open program, update it and open it again (its card's Update while it runs).
+    UpdateProgram(String),
     /// Send a file of any kind in a direct message or group (0.13.13).
     SendDmFile { key: String, channel: ChannelId, path: std::path::PathBuf },
     /// Stop sending one (or dismiss one that stopped).
@@ -532,6 +547,13 @@ pub struct UiState {
     /// Where the program on show goes this frame (its page's area), if a program's page is
     /// showing.
     pub program_area: Option<Rect>,
+    /// Programs being updated (0.13.27): closed, updated and opened again.
+    pub program_updates: Vec<crate::game_bridge::ProgramUpdate>,
+    /// A game invited to and being installed: opened in that room once it is (game, room).
+    pub pending_play: Option<(String, String)>,
+    /// Prop bets: the bet being picked on a card, and the New prop bet window.
+    pub prop_betting: Option<crate::props::Betting>,
+    pub new_prop: Option<crate::props::NewProp>,
     /// What's drawn over everything this frame that a program open inside Pyr must keep
     /// clear of (toasts, a call ringing).
     pub overlay_rects: Vec<Rect>,
@@ -865,12 +887,42 @@ impl PyrApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             Act::CheckUpdates => self.updater.check_now(crate::update::Asker::Window, || {}),
-            Act::PluginOpen(id) => match self.plugins.open_program(&id) {
-                // Inside Pyr (Windows): its page.
-                Ok(()) if cfg!(windows) => self.show_program(&id),
-                Ok(()) => {}
-                Err(e) => self.toast(&e, true),
-            },
+            Act::PluginOpen(id) => {
+                let me = e.state().my_name.clone();
+                match self.open_program(&id, None, &me) {
+                    // Inside Pyr (Windows): its page.
+                    Ok(()) if cfg!(windows) => self.show_program(&id),
+                    Ok(()) => {}
+                    Err(e) => self.toast(&e, true),
+                }
+            }
+            Act::OpenProgram { id, room } => {
+                let me = e.state().my_name.clone();
+                match self.open_program(&id, room, &me) {
+                    Ok(()) if cfg!(windows) => self.show_program(&id),
+                    Ok(()) => {}
+                    Err(e) => self.toast(&e, true),
+                }
+            }
+            Act::PlayInvite { game, room } => {
+                let mut more = Vec::new();
+                self.play_invite(&game, &room, &mut more);
+                for a in more {
+                    self.apply(a, ctx);
+                }
+            }
+            Act::UpdateProgram(id) => self.update_program(&id, None),
+            Act::PropGet { key, ids } => e.prop_get(&key, &ids),
+            Act::PropOpen { key, channel, question, outcomes, depth, closes_in } => e.prop_open(&key, channel, &question, outcomes, depth, closes_in),
+            Act::PropBet { key, id, outcome, chips, min_shares } => e.prop_bet(&key, id, outcome, chips, min_shares),
+            Act::PropCashOut { key, id, outcome } => e.prop_cash_out(&key, id, outcome),
+            Act::PropSettle { key, id, outcome } => e.prop_settle(&key, id, outcome),
+            Act::PropVoid { key, id } => e.prop_void(&key, id),
+            Act::NewProp { key, channel, question, outcomes } => {
+                // (My chips, for the cards' All in: the casino's record.)
+                e.poker(&key, pyr_poker::net::ToServer::Lobby);
+                self.ui.new_prop = Some(crate::props::NewProp::new(key, channel, question, outcomes));
+            }
             Act::AddonPanel(id) => {
                 let (place, here) = {
                     let st = e.state();
@@ -1277,14 +1329,14 @@ impl eframe::App for PyrApp {
             engine.preview_screen(None);
         }
         if let Some(link) = self.initial_join.take() {
-            acts.push(Act::OfferJoin(link));
+            acts.push(link_act(link));
         }
         // Another launch handed us an invite link (or just wants the window): come to the front.
         if let Some(link) = self.handoff.poll() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             if !link.is_empty() {
-                acts.push(Act::OfferJoin(link));
+                acts.push(link_act(link));
             }
         }
         // The close button (and Alt+F4) never quits while there's an icon by the clock: Pyr
@@ -1322,6 +1374,19 @@ impl eframe::App for PyrApp {
             match o {
                 crate::plugins::Outcome::Send { key, channel, text, reply_to } => acts.push(Act::Send { key, channel, text, reply_to, files: Vec::new() }),
                 crate::plugins::Outcome::Toast(t, error) => acts.push(Act::Toast(t, error)),
+                crate::plugins::Outcome::Installed(id) => self.plugin_installed(&id, &mut acts),
+            }
+        }
+        // Prop bets: one I just opened goes in its channel as its message (the card); what
+        // happened to me on props is said.
+        let prop_news: Vec<String> = engine.state().servers.iter().filter(|s| !s.poker.props_opened.is_empty() || !s.poker.prop_notes.is_empty()).map(|s| s.key.clone()).collect();
+        for key in prop_news {
+            let (opened, notes) = engine.take_prop_news(&key);
+            for prop in opened {
+                acts.push(Act::Send { key: key.clone(), channel: prop.channel_id, text: crate::props::message_for(&prop), reply_to: None, files: Vec::new() });
+            }
+            for (_, text, _) in notes {
+                acts.push(Act::Toast(text, false));
             }
         }
         // A skin taken out of the Pyr Library comes off (back to Campfire), like a plugin.
@@ -1520,7 +1585,7 @@ impl eframe::App for PyrApp {
         let invites = ctx.output_mut(|o| {
             let mut found = Vec::new();
             o.commands.retain(|c| match c {
-                egui::OutputCommand::OpenUrl(u) if is_invite(&u.url) => {
+                egui::OutputCommand::OpenUrl(u) if is_invite(&u.url) || crate::play_invites::game_link(&u.url).is_some() => {
                     found.push(u.url.clone());
                     false
                 }
@@ -1528,7 +1593,7 @@ impl eframe::App for PyrApp {
             });
             found
         });
-        acts.extend(invites.into_iter().map(Act::OfferJoin));
+        acts.extend(invites.into_iter().map(link_act));
         for a in acts {
             self.apply(a, ctx);
         }
@@ -1560,6 +1625,18 @@ impl PyrApp {
     /// drawn over everything, and out of the way of menus and dialogs), the rest out of sight.
     fn place_programs(&mut self, ctx: &egui::Context) {
         if self.plugins.programs.open.is_empty() {
+            // (An update carries on while its program is closed.)
+            if !self.ui.program_updates.is_empty() {
+                let engine = self.engine.clone();
+                let st = engine.state();
+                let mut acts = Vec::new();
+                self.programs_talk(&st, Vec::new(), &mut acts);
+                drop(st);
+                for a in acts {
+                    self.apply(a, ctx);
+                }
+                ctx.request_repaint_after(Duration::from_millis(250));
+            }
             return;
         }
         let covering = self.ui.dialog.is_some()
@@ -1571,10 +1648,22 @@ impl PyrApp {
             || self.plugins.panels.iter().any(|p| p.open);
         let over = crate::plugins::programs::Overlays { covering, keep_clear: self.ui.overlay_rects.clone() };
         let shown = if self.ui.plugins_open { self.plugins.program_page.clone() } else { None };
-        self.plugins.programs.step(ctx, shown.as_deref(), self.ui.program_area, &over);
-        // (Their windows are moved between frames too; keep frames coming while one's opening.)
+        let closed = self.plugins.programs.step(ctx, shown.as_deref(), self.ui.program_area, &over);
+        let engine = self.engine.clone();
+        let st = engine.state();
+        let mut acts = Vec::new();
+        self.programs_talk(&st, closed, &mut acts);
+        drop(st);
+        for a in acts {
+            self.apply(a, ctx);
+        }
+        // (Their windows are moved between frames too; keep frames coming while one's opening,
+        // and a few a second while one's on show, so it's kept in place even while nothing else
+        // in Pyr moves.)
         if self.plugins.programs.open.iter().any(|p| !p.ready()) {
             ctx.request_repaint_after(Duration::from_millis(100));
+        } else if shown.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(250));
         }
     }
 
@@ -1690,6 +1779,15 @@ impl PyrApp {
 }
 
 // ------------------------------------------------------------------- helpers
+
+/// What a link Pyr was handed does: a game's invite opens the game in its room (0.13.18);
+/// anything else is a server's invite, offered to join.
+fn link_act(link: String) -> Act {
+    match crate::play_invites::game_link(&link) {
+        Some((game, room)) => Act::PlayInvite { game, room },
+        None => Act::OfferJoin(link),
+    }
+}
 
 /// An invite link Pyr can join from: a short one (`https://pyr.gg/<code>`), `pyr://…`, or
 /// the web form on pyr.gg (or the forms from before the rename, `legacy::SCHEME` and

@@ -184,6 +184,8 @@ impl PyrApp {
     /// The poker room page (the main area).
     pub fn poker_page(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, acts: &mut Vec<Act>) {
         let whole = ui.max_rect();
+        // My deck (the back I picked; four colors or two) for every card that's mine to see.
+        cards::set_mine(s.poker.me.as_ref().map(|m| m.card_back.as_str()).unwrap_or(""), self.poker.four_color);
         self.poker_page_inner(ui, st, s, acts);
         // The casino's chat, over whichever page it is.
         self.casino_chat_ui(ui, st, s, whole);

@@ -215,6 +215,19 @@ pub enum ToServer {
     /// owner); anywhere else, here's mine.
     GmCertAsk,
     GmProof { signed: SignedGm },
+    /// Prop bets in chat (servers with `PROPS_FEATURE`; see `props`): open one in a channel
+    /// (`depth`: one of `props::DEPTHS`; `closes_in`: seconds, 0 for when it's settled), bet on
+    /// an outcome (`min_shares`: what the app said it pays, less a little: the odds may move),
+    /// sell an outcome's shares back, settle it or call it off (its author or a moderator),
+    /// and look props up.
+    PropOpen { channel_id: i64, question: String, outcomes: Vec<String>, depth: u64, closes_in: u64 },
+    PropBet { id: u64, outcome: usize, chips: u64, min_shares: f64 },
+    PropCashOut { id: u64, outcome: usize },
+    PropSettle { id: u64, outcome: usize },
+    PropVoid { id: u64 },
+    PropGet { ids: Vec<u64> },
+    /// The props open in a channel (newest first).
+    PropList { channel_id: i64 },
 }
 
 /// The home of Pyr Casino's Game Masters: Brethren of Blood, by its server's fingerprint
@@ -538,6 +551,19 @@ pub enum ToApp {
     Daily { chips: Option<u64>, streak: u32 },
     Tourneys { list: Vec<TourneySummary> },
     Tourney { view: TourneyView },
+    /// Props, as I see them (looked up, or changed: everyone in their channel hears).
+    Props { props: Vec<crate::props::PropView> },
+    /// The prop I just opened (for its message in chat).
+    PropOpened { prop: crate::props::PropView },
+    /// What happened to me on a prop: a bet taken, a payout, chips back.
+    PropNote { id: u64, text: String, chips: i64 },
+}
+
+impl ToApp {
+    /// A prop bets message: only for apps that say they read them (`PROPS_CAP`).
+    pub fn is_props(&self) -> bool {
+        matches!(self, ToApp::Props { .. } | ToApp::PropOpened { .. } | ToApp::PropNote { .. })
+    }
 }
 
 /// How much of Pyr Casino an app knows: what it says when it logs in (`CASINO_012_CAP`,
@@ -545,11 +571,17 @@ pub enum ToApp {
 pub const CASINO_011: u8 = 11;
 pub const CASINO_012: u8 = 12;
 pub const CASINO_013: u8 = 13;
+/// An app that also reads prop bets (`PROPS_CAP`, the rebuild's): above every 0.13 level (an
+/// app that says it knows everything that came before).
+pub const CASINO_PROPS: u8 = 100;
 
 impl ToApp {
     /// This message as an app that knows Pyr Casino up to `casino` can read it (`None`: one it
     /// can't, left unsent).
     pub fn for_app(self, casino: u8) -> Option<ToApp> {
+        if self.is_props() && casino < CASINO_PROPS {
+            return None;
+        }
         match casino {
             c if c >= CASINO_013 => Some(self),
             CASINO_012 => self.for_012_app(),
@@ -562,6 +594,7 @@ impl ToApp {
     pub fn for_012_app(self) -> Option<ToApp> {
         match self {
             ToApp::RlTables { .. } | ToApp::Rl { .. } | ToApp::GameEmote { game: TableGame::Roulette, .. } | ToApp::CasinoChat { .. } | ToApp::CasinoChatGone { .. } | ToApp::GmCert { .. } => None,
+            m if m.is_props() => None,
             ToApp::Casino { res } => res.for_012_app().map(|res| ToApp::Casino { res }),
             m => Some(m),
         }
@@ -572,6 +605,9 @@ impl ToApp {
     /// put the old way: a Genius bot is a Shark to it.
     pub fn for_older_app(self) -> Option<ToApp> {
         let older = |b: &mut Option<Level>| *b = b.map(Level::for_older_app);
+        if self.is_props() {
+            return None;
+        }
         Some(match self {
             ToApp::Say { .. } | ToApp::Ratings { .. } | ToApp::BjTables { .. } | ToApp::Bj { .. } | ToApp::CrapsTables { .. } | ToApp::Craps { .. } | ToApp::BacTables { .. } | ToApp::Bac { .. } | ToApp::RlTables { .. } | ToApp::Rl { .. } | ToApp::Bonfire { .. } | ToApp::BonfireLit { .. } | ToApp::GameEmote { .. } | ToApp::CasinoChat { .. } | ToApp::CasinoChatGone { .. } | ToApp::GmCert { .. } => return None,
             ToApp::Emote { table, seat, emote } => ToApp::Emote { table, seat, emote: emote_for_older_app(&emote) },

@@ -94,7 +94,7 @@ impl PyrApp {
                     let q = shoe + (pos - shoe) * super::ease_out(k);
                     let flip = ((t - at - 0.2) / 0.2).clamp(0.0, 1.0);
                     if flip > 0.5 {
-                        cards::face(&p, Rect::from_center_size(q, vec2(cw * (flip - 0.5) * 2.0, ch)), *card, false, false);
+                        cards::face(&p, Rect::from_center_size(q, vec2(cw * (flip - 0.5) * 2.0, ch)), *card, cards::four(), false);
                     } else {
                         cards::back(&p, Rect::from_center_size(q, vec2(cw * (1.0 - flip * 2.0).max(0.05), ch)), "");
                     }

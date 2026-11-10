@@ -232,9 +232,19 @@ fn unreadable(p: &InstalledPlugin, file: &str, e: &std::io::Error) -> String {
     }
 }
 
+/// What a program is told as it starts (0.13.15): my Pyr name (`PYR_NAME`), and a room to
+/// join at once (`PYR_JOIN`, from an invite's Join).
+#[derive(Clone, Debug, Default)]
+pub struct Launch {
+    pub name: String,
+    pub join: Option<String>,
+}
+
 /// Starts a program (after checking its files). On Windows it's told it opens inside Pyr
-/// (`PYR_EMBED`), so it can start hidden for Pyr to show once it's in place.
-pub fn spawn(dir: &Path, p: &InstalledPlugin) -> Result<std::process::Child, String> {
+/// (`PYR_EMBED`), so it can start hidden for Pyr to show once it's in place. It's told my Pyr
+/// name and that Pyr listens (`PYR_BRIDGE`): Pyr writes to its input and reads what it asks on
+/// its output (see `programs`).
+pub fn spawn(dir: &Path, p: &InstalledPlugin, launch: &Launch) -> Result<std::process::Child, String> {
     if p.kind != Kind::Program {
         return Err("only programs are opened this way".into());
     }
@@ -245,6 +255,12 @@ pub fn spawn(dir: &Path, p: &InstalledPlugin) -> Result<std::process::Child, Str
     if cfg!(windows) {
         cmd.env("PYR_EMBED", "1");
     }
+    cmd.env("PYR_NAME", &launch.name);
+    if let Some(room) = &launch.join {
+        cmd.env("PYR_JOIN", room);
+    }
+    cmd.env("PYR_BRIDGE", "1");
+    cmd.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
     cmd.spawn().map_err(|e| match e.raw_os_error() {
         // ERROR_VIRUS_INFECTED, ERROR_VIRUS_DELETED: antivirus said no.
         Some(225) | Some(226) => unreadable(p, &p.run, &e),
@@ -255,7 +271,7 @@ pub fn spawn(dir: &Path, p: &InstalledPlugin) -> Result<std::process::Child, Str
 /// Starts a program on its own (its files checked first).
 #[cfg(test)]
 pub fn launch(dir: &Path, p: &InstalledPlugin) -> Result<(), String> {
-    spawn(dir, p).map(|_| ())
+    spawn(dir, p, &Launch::default()).map(|_| ())
 }
 
 /// Removes a plugin's files and data.

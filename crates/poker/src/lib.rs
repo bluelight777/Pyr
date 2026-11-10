@@ -15,6 +15,7 @@ pub mod fair;
 pub mod game;
 pub mod net;
 pub mod progress;
+pub mod props;
 pub mod rating;
 pub mod room;
 pub mod tourney;

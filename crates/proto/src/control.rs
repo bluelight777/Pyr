@@ -415,6 +415,10 @@ pub const CASINO_013_FEATURE: &str = "casino_0_13";
 /// In `Login::caps`: this app knows Pyr Casino's games and messages from 0.13.0. Apps without it
 /// are never sent them.
 pub const CASINO_013_CAP: &str = "casino_0_13";
+/// Prop bets in chat, with Pyr Casino chips (the rebuild's): the server keeps the props, the
+/// bets, the odds and the payouts. Apps say [`PROPS_CAP`] to be told about them.
+pub const PROPS_FEATURE: &str = "prop_bets";
+pub const PROPS_CAP: &str = "prop_bets";
 /// In `Login::caps`: this app knows group conversations ([`GROUPS_FEATURE`]).
 pub const GROUPS_CAP: &str = "groups";
 /// In `Login::caps`: this app adjusts its camera and screen share to its viewers'

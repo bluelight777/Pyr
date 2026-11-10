@@ -214,7 +214,7 @@ fn card(p: &egui::Painter, shoe: Pos2, at: Pos2, size: Vec2, face: Option<Card>,
     match face {
         Some(f) if flip > 0.5 => {
             let w = size.x * (flip - 0.5) * 2.0;
-            cards::face(p, Rect::from_center_size(c, vec2(w.max(2.0), size.y)), f, false, false);
+            cards::face(p, Rect::from_center_size(c, vec2(w.max(2.0), size.y)), f, cards::four(), false);
         }
         _ => {
             let w = if face.is_none() { size.x } else { size.x * (1.0 - flip * 2.0).abs().max(0.04) };
