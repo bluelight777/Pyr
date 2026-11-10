@@ -1,0 +1,451 @@
+######## 0.13.2 (pyr-upload-0.13.2)
+Pyr 0.13.2
+
+Reel Row Remastered:
+- Every one of Reel Row's twelve machines now has its own feature, the way the big slots on Stake have theirs:
+  - Tumbles and multiplier bombs (Cosmic Jackpot, Sugar Rush, Neon Nights, Moonlit Cauldron): a win's symbols burst and new ones fall in, again and again while there are wins. Bombs of 2× to 100× (Cosmic Jackpot's to 500×) add up when the tumbling's over and multiply the whole chain.
+  - Hold & Win (Deep Sea Treasure, Gold Rush, Tomb of Ra, Dragon's Hoard): coins land with their worth on them, and a collector on the last reel pays them all. Six coins or more hold for three respins, every new coin sending the count back to three, a collector gathering everything held. Mini, Minor and Major coins, and the Grand for filling all fifteen places (Gold Rush's Mother Lode and the Dragon's Hoard: their progressive jackpots).
+  - Wilds that grow, freeze, walk and stay: Scoville's Hot Wilds fill their reel with a ×2, ×3 or ×5; Frostbite's freeze while the rest spins again; Starlight Cabaret's step left across the stage; The Daily Grind's Espresso Shots fill their reel and stay a spin.
+- Ante, beside the bet: a quarter more a spin, and the bonus about 1.7 times as likely (1.5 on the tumbling machines).
+- Buy each machine's feature with Play Feature: Hold & Win straight away, a Bomb Spin, a Hot Spin, a Frozen Spin, an Encore Spin, a Double Shot.
+- The last reels slow down and light up when the bonus (or Hold & Win) is a symbol away.
+- Each machine's bonus and Hold & Win open with a full-screen splash of their own, and big wins land on new plaques: bronze, silver wings, crystal and lightning, fire, and the crown.
+- Every machine has its own band of sounds, made in Pyr: a cantina's guitar and trumpet, a marimba under the sea, synths in space, a music box, a banjo and a saloon piano, synthwave, an oud and a darbuka, a celesta and glass, a harp and an organ, a koto and a gong, a Rhodes and an upright bass, a big band. Pyr Sevens and Ember Dragon get new slot sounds too.
+- Every way to play every machine still pays back 99%, checked by playing each of them twenty million times. Every round is still checked by your own Pyr.
+
+Pyr Casino:
+- Blackjack, baccarat and keno take up to 100,000 a round, with a 100K chip on the rack.
+- The poker table grows with the window: bigger avatars, cards and buttons.
+- The casino floor is in chapters (Slots, Poker, Table games, Pyr Originals) with a bar to jump to each, so poker is easy to find.
+- Chat is at the table games only.
+- Playing craps no longer makes Pyr stop responding.
+- Big wins count up through Big, Mega, Epic and Legendary, each level landing with a hit and a burst of coins. A click jumps to the total.
+- Turbo on the slots is fast: the reels land almost at once.
+- The "funny" tags are gone from the slots.
+- "How?" on the floor opens how the casino's fairness works.
+
+Sounds:
+- Sound profiles (Settings → Notifications → Sound profile): Pyr's own sounds, or Classic, the simple chimes Pyr started with.
+- Ten new ringtones, made in Pyr: Sunrise, Kalimba, Music box, Island, Arcade, Night drive, Lo-fi, Lounge, Old phone and Daydream.
+- The built-in soundboard is redrawn, made in Pyr.
+
+Voice and streams:
+- Voice isolation takes your PC's own sound out of your microphone (Windows 10 build 20348 or newer, or 11): a match or a game playing from your speakers no longer comes through to everyone while you talk.
+- Streamer mode is only ever on when you turn it on.
+- A headset that drops out and comes back is no longer reported as an error.
+
+Apps before 0.13.2 keep playing Reel Row as it was; Reel Row Remastered and the 100,000 bets need a 0.13.2 server.
+
+######## 0.13.3 (pyr-upload-0.13.3)
+Pyr 0.13.3
+
+- Buying the bonus on Cosmic Jackpot, Sugar Rush, Neon Nights and Moonlit Cauldron no longer closes Pyr. (The rounds always played and paid; only the screen showing them crashed.)
+- Sound profiles: Classic, the simple chimes Pyr started with, is first and the one everyone starts with. Pyr's own sounds are now called Ember (Settings → Notifications → Sound profile).
+
+######## 0.13.4 (pyr-upload-0.13.4)
+Pyr 0.13.4
+
+Chat:
+- Pictures no longer go missing. A picture message that reached Pyr before its key (people far away, or everything after a restart) lost its picture; now it keeps it and shows it when the key comes. The pictures were never gone from the server: messages that showed "didn't come through" show them again.
+
+Poker:
+- Rabbit hunting: when a hand ends before the river, anyone at the table (or watching) can click Rabbit to see the cards that would have come. Everyone sees them, and who asked.
+- Straddle: at cash tables, turn on Straddle and, when you're under the gun with three or more at the table, you put in twice the big blind before the cards and act last before the flop.
+
+Pyr Casino:
+- Gifts: type how many chips to give straight into the box (the +10,000 / +100,000 / +1,000,000 buttons still add to it).
+- The floor's tiles are like Stake's: the studio under each name (CHIMBITA GAMES for Reel Row) and how many are playing each game right now.
+- Big wins hit harder: the count stops dead for a beat as it crosses into each new level, the levels take longer to climb, and a new top level, MYTHIC WIN at a thousand times the bet, sets off fireworks and lightning across the screen.
+- Dragon's Hoard's Treasure Match: the chests you open are big and in the middle, and the background no longer has chests of its own on the floor.
+- The floor's tiles name each game in the middle, the studio centered under it, like Stake's.
+- A bar down the left, like Stake's: Casino, Slots, Poker, Table games, Pyr Originals, Leaderboard, Profile & Looks, Staff and Fairness, each an icon; open it out to see their names.
+- Daily Grind's Cup Shuffle: the background no longer has cups of its own.
+- Flash Pot is now Bomb Pot, with new art.
+
+Poker tables:
+- New table: a picture of the table instead of a slider. Click a seat to put a bot there and pick which one: how good, and who (each of the 20 bots plays its own way). At a table, clicking an empty seat asks the same.
+- Close your own cash tables from the lobby (anyone sitting gets their chips back).
+- The buttons before your turn are bigger and say what they'll do: Check / Fold, Check and Call any before anyone bets; Fold, Call 40 and Call any once someone has (a raise takes the tick off Call 40).
+- Game Masters wear a winged gold shield over their picture at the table, the Owner of the Game a crowned one, Ambassadors a blue one.
+- A Bomb Pot win, new: the winner's picture bursts in, a gold laurel wreath turns in round it, and a real jewelled crown falls from above and lands with a flash (Meshy's art); its jewels glint, then YOU WIN slams down and the prize counts up. It takes its time.
+- Winning a hand is slower: the pot stays in the middle a moment so the winning hand can be seen, then slides over; the hand's name stays up longer; an all-in's board comes a street at a time more slowly, and there's longer after a showdown before the next hand.
+- Fixed: out of a tournament (or Bomb Pot) and watching, the table said "Shuffle check failed". Your Pyr sent its part for a shuffle it wasn't in any more (the all-in board before was still coming when you went out); nothing was wrong with the shuffle.
+- New backgrounds for seven mini games (Meshy's), the place only, with the pieces you play drawn on them: the Champagne Tower's stage has an empty podium in the spotlight, and the tower now stands in the middle of it; the Potion Brew, Treasure Match, the Tomb, the Mine Shaft, Deep Sea and Neon Drop lose the jars, chests, sarcophagi, rocks, clams and pegs painted in behind the real ones.
+- Blackjack, roulette, baccarat and craps: the tables along the top are big cards to pick from: each one's name, its bets, a dot for each seat (green when taken), and OPEN, FULL or YOU'RE HERE.
+- Keno: lower your bet: ½ and −(chip) beside +(chip) and 2× (Dice gets −(chip) too).
+- The AFK channel, like Discord's: someone in a voice channel whose Pyr has been idle a while (half an hour, until the owner picks 5, 15, 60 or 120 minutes in Server settings) is moved to it. A server with a voice channel called AFK uses it without being told.
+- Keno and Dice playing by themselves keep going through wins (a win's show stopped them, even with "A big win stops it" off).
+- Game Masters give as many chips as they like (themselves too, and in prize boxes), and they and the Owner of the Game can take chips away. Every gift and every chip taken goes in the staff log, with the balance before and after.
+- Reel Row and Ember Dragon: bets up to 100,000 a spin (20,000, 50,000 and 100,000 added). A progressive jackpot pays its whole pool from 10,000 up, as before.
+- The Owner of the Game can download the whole staff log (every gift, chip taken and prize box) as a spreadsheet file, saved in Downloads.
+- Volume for the games: the speaker button in every casino game, and Volume at poker tables, opens a slider (and Sound off).
+- Blackjack at a table: your chips sit in the middle of your circle (they sat low in it).
+
+######## 0.13.5 (pyr-upload-0.13.5)
+Pyr 0.13.5
+
+Levels, all new (studied from Stake, GGPoker, PokerStars, WSOP and the social casinos):
+- A hundred levels in ten tiers, each with its own crest: Spark, Ember, Flame, Blaze, Bonfire, Wildfire, Inferno, Sunfire, Starfire and Eternal Flame. Past level 100, an Ember Star for every 10,000 XP.
+- Everyone keeps their level: your experience moves onto the new curve where you were.
+- Experience comes from playing, not from how much you bet: every hand of poker and every round in the casino earns about the same per minute, a little more for bigger stakes. (A long day's play past the first few hours earns half.)
+- Every level pays chips, three times as much every fifth level, and every new tier opens a chest of 100,000 chips and gives you its frame (and at Blaze, Wildfire and Starfire, a felt).
+- Reaching a level: your crest bursts onto the screen with the chips it paid; a whole new tier, bigger still.
+- Today's missions: three a day (one at poker, one at the tables, one at the slots and Originals), each with XP and chips, and a chest for all three.
+
+The Pyr VIP Club:
+- Your tier is your VIP status. Ember Back pays you back a share of the house's edge on everything you play (and of the rake you pay at poker): 5% at Spark up to 30% at Eternal Flame. Claim it any time.
+- Daily chips grow with your tier (a quarter more for each).
+- The weekly VIP bonus, from Ember tier up: 20% on top of everything your Ember Back earned that week.
+- The VIP Club page (in the bar on the left): every tier, its crest and its perks, where you are and what's next.
+
+Plinko (new, a Pyr Original):
+- Drop a ball through 8 to 16 rows of pegs into the buckets. Four difficulties, Low to Expert (up to 10,000× on Expert with 16 rows). Every table pays back 99%, checked bucket by bucket.
+- Type your amount or halve and double it. Drop as many balls at once as you like.
+- Auto play: as many games as you like (0: until you stop it). Wins never stop it, unless you tick "Stop on a big win".
+- Meshy's temple behind a board of gold pegs that ring and glow as the balls strike them; the buckets bounce and pop their multiplier.
+
+The control room (for the Owner of the Game, and whoever they let in):
+- The casino at a glance: players, chips in play, what's been bet and paid back, the rake, the pools, the VIP Club's tiers, the big wins and the latest in the log.
+- Every player: look them up, give or take chips (always in the log, with the balance before and after).
+- The whole chips log, to filter or download as a spreadsheet.
+- Say something to the whole casino at once.
+- Let people in, or take them out.
+
+Fixed:
+- Pyr could freeze in the casino when a round's result came in at just the wrong moment (since the games volume button in 0.13.4).
+
+Also new (from 0.13.4, which this replaces):
+
+Chat:
+- Pictures no longer go missing. A picture message that reached Pyr before its key (people far away, or everything after a restart) lost its picture; now it keeps it and shows it when the key comes. The pictures were never gone from the server: messages that showed "didn't come through" show them again.
+
+Poker:
+- Rabbit hunting: when a hand ends before the river, anyone at the table (or watching) can click Rabbit to see the cards that would have come. Everyone sees them, and who asked.
+- Straddle: at cash tables, turn on Straddle and, when you're under the gun with three or more at the table, you put in twice the big blind before the cards and act last before the flop.
+
+Pyr Casino:
+- Gifts: type how many chips to give straight into the box (the +10,000 / +100,000 / +1,000,000 buttons still add to it).
+- The floor's tiles are like Stake's: the studio under each name (CHIMBITA GAMES for Reel Row) and how many are playing each game right now.
+- Big wins hit harder: the count stops dead for a beat as it crosses into each new level, the levels take longer to climb, and a new top level, MYTHIC WIN at a thousand times the bet, sets off fireworks and lightning across the screen.
+- Dragon's Hoard's Treasure Match: the chests you open are big and in the middle, and the background no longer has chests of its own on the floor.
+- The floor's tiles name each game in the middle, the studio centered under it, like Stake's.
+- A bar down the left, like Stake's: Casino, Slots, Poker, Table games, Pyr Originals, Leaderboard, Profile & Looks, Staff and Fairness, each an icon; open it out to see their names.
+- Daily Grind's Cup Shuffle: the background no longer has cups of its own.
+- Flash Pot is now Bomb Pot, with new art.
+
+Poker tables:
+- New table: a picture of the table instead of a slider. Click a seat to put a bot there and pick which one: how good, and who (each of the 20 bots plays its own way). At a table, clicking an empty seat asks the same.
+- Close your own cash tables from the lobby (anyone sitting gets their chips back).
+- The buttons before your turn are bigger and say what they'll do: Check / Fold, Check and Call any before anyone bets; Fold, Call 40 and Call any once someone has (a raise takes the tick off Call 40).
+- Game Masters wear a winged gold shield over their picture at the table, the Owner of the Game a crowned one, Ambassadors a blue one.
+- A Bomb Pot win, new: the winner's picture bursts in, a gold laurel wreath turns in round it, and a real jewelled crown falls from above and lands with a flash (Meshy's art); its jewels glint, then YOU WIN slams down and the prize counts up. It takes its time.
+- Winning a hand is slower: the pot stays in the middle a moment so the winning hand can be seen, then slides over; the hand's name stays up longer; an all-in's board comes a street at a time more slowly, and there's longer after a showdown before the next hand.
+- Fixed: out of a tournament (or Bomb Pot) and watching, the table said "Shuffle check failed". Your Pyr sent its part for a shuffle it wasn't in any more (the all-in board before was still coming when you went out); nothing was wrong with the shuffle.
+- New backgrounds for seven mini games (Meshy's), the place only, with the pieces you play drawn on them: the Champagne Tower's stage has an empty podium in the spotlight, and the tower now stands in the middle of it; the Potion Brew, Treasure Match, the Tomb, the Mine Shaft, Deep Sea and Neon Drop lose the jars, chests, sarcophagi, rocks, clams and pegs painted in behind the real ones.
+- Blackjack, roulette, baccarat and craps: the tables along the top are big cards to pick from: each one's name, its bets, a dot for each seat (green when taken), and OPEN, FULL or YOU'RE HERE.
+- Keno: lower your bet: ½ and −(chip) beside +(chip) and 2× (Dice gets −(chip) too).
+- The AFK channel, like Discord's: someone in a voice channel whose Pyr has been idle a while (half an hour, until the owner picks 5, 15, 60 or 120 minutes in Server settings) is moved to it. A server with a voice channel called AFK uses it without being told.
+- Keno and Dice playing by themselves keep going through wins (a win's show stopped them, even with "A big win stops it" off).
+- Game Masters give as many chips as they like (themselves too, and in prize boxes), and they and the Owner of the Game can take chips away. Every gift and every chip taken goes in the staff log, with the balance before and after.
+- Reel Row and Ember Dragon: bets up to 100,000 a spin (20,000, 50,000 and 100,000 added). A progressive jackpot pays its whole pool from 10,000 up, as before.
+- The Owner of the Game can download the whole staff log (every gift, chip taken and prize box) as a spreadsheet file, saved in Downloads.
+- Volume for the games: the speaker button in every casino game, and Volume at poker tables, opens a slider (and Sound off).
+- Blackjack at a table: your chips sit in the middle of your circle (they sat low in it).
+
+######## 0.13.6 (pyr-upload-0.13.6)
+Pyr 0.13.6
+
+Games and plugins with art:
+- Torch & Conquer is in the Pyr Library (Plugins): a war of territories on six painted worlds, where the wind fans your attacks and beacons guard your lands. Play bots, friends on one PC, or host a war and send the invite to a channel.
+- Plugins you make can bring all the art, sound, fonts and data they use with their Rust: up to 100 MB and 5,000 files (it was 600 KB of Rust only). Anything written in Rust can be sent in.
+
+Invite people along:
+- Invite someone to your voice channel: right-click their name (or open their card) while you're in one, and pick Invite to the channel. They get a card in the corner of their Pyr, wherever they are in it, with Join.
+- Invite someone to your table: the Invite button at the top of any poker, blackjack, roulette, baccarat or craps table. Join takes them straight there.
+
+Bonus rounds that build (from Play Feature):
+- Bomb Spins, on the tumbling machines (Cosmic Jackpot, Sugar Rush, Neon Nights, Moonlit Cauldron): ten free spins on richer reels with more bombs. Every bomb on a win adds to a multiplier that stays for the rest of the spins, so each win after is worth more. Three scatters give you five spins more.
+- Super Hold & Win, on the Hold & Win machines (Deep Sea Treasure, Gold Rush, Tomb of Ra, Dragon's Hoard): Payers add their worth to every coin on the reels, and Hoarders gather everything again on every respin that brings something new.
+- Each one is priced to pay back 99%, like everything else.
+
+New players start with 100,000 chips (20,000 before).
+
+Bounty Poker (new, under Sit & go): six players, 1,500 chips each, a turbo. Half of every buy-in is the price on that player's head, shown on their seat. Knock someone out and half their bounty is paid to you on the spot (BOUNTY +X), the other half goes onto your own head. The top two share the prize pool, and the last one standing collects their own bounty too. 1,000, 10,000, 50,000 or 100,000 to play; bots take the seats nobody came for.
+
+Bomb Pots for 50,000 and 100,000 chips, beside 100, 1,000 and 10,000 (win up to 100 million).
+
+The casino floor:
+- The slots' tiles look like Stake's: each name big and white in its own lettering, the studio tiny underneath. What a game pays back shows when you point at it, and your best win sits by how many are playing.
+- No more bar down the left: a menu bar across the top instead: the lobby, and Games, which drops down a menu of every game in the casino (the slots, poker, the table games and Pyr Originals, each with its picture and who's playing), then the VIP Club, the leaderboard, your profile, staff and the control room, and Fairness at the end.
+
+The bonus games, clearer:
+- Cargo Run: the rocket flies the route drawn in the sky, toward the black hole, with its marks along the way (10×, 50×, 100×, 250×, 720×): the further it gets before its fuel runs out, the more the cargo pays. It says so before you launch.
+- Candy Grab: one claw (the machine's own, bigger), riding the rail and reaching into the candy pile where it's going.
+- Ice Fishing: one place to fish, the pond the rod's line is in.
+- Neon Drop: the pegs sit centred over the bins, and the scene is symmetrical.
+- The Heat Ladder: one ladder.
+- Ember Respins: the respins left are big and plain, with "a new fireball puts it back to 3", and RESET TO 3! when one does.
+- Casts and goes left show big, as lamps.
+
+Slots:
+- Total bet up to 100,000 a spin on the slot machines.
+- Pyr Sevens' Phoenix Jackpot grows with every spin and pays in proportion to your bet: at the top bet you win all of it, at a tenth of that a tenth. It starts at 10,000,000, and again after it's won. When five flames on your line pay more than your share, you get that and the jackpot keeps growing.
+
+Poker:
+- New table sounds, made from scratch: chips with real ring, cards that slide and snap, the felt, the rail, and a better win.
+- Game Masters show GAME MASTER on their seat, the Owner too. Any of the staff can hide their title at the tables (Title: shown / hidden, at the top of the table).
+- The Genius bots wear a violet star instead of the crown.
+- Rabbit hunting: the cards come one at a time, slower, and the next hand waits so you can see them.
+- In a smaller window the whole table scales down together, the Fold, Call and Raise buttons too (they used to stay big over a small table).
+- Your hand and its chance of winning never sit on another player: they move under your cards' other end, under your seat or to your other side when someone's there.
+
+Higher than high stakes: a new table above every high-stakes one, 10,000 to 10,000,000 a bet:
+- Blackjack: the Crown Room. Baccarat: the Imperial Salon (Tie and the pairs up to the table's most too). Craps: the Sky Rollers (full odds behind, up to 500,000,000 on the layout). Roulette: the Grand Salle (500,000 on a number, 10,000,000 on red or black, and the rest in between).
+- New chips for them: 500K, 1M and 5M.
+
+High stakes at the tables:
+- Craps: the High Rollers table takes 500 to 100,000 a bet, with full odds behind the pass line and up to 2,500,000 on the layout at once. New: lay odds behind don't pass (up to 6 times it, paid at true odds on a seven), for the dark side.
+- Craps: someone waiting out a long point with nothing they could bet (a don't pass that lost, say) is no longer stood up for sitting idle; only come-outs count.
+- Roulette: the Riviera High Rollers take up to each spot's own most: 25,000 on a number, 500,000 on red or black, even or odd, high or low.
+- Baccarat: Tie and the pairs take up to 25,000 (5,000 before).
+- The single-player games: Blackjack, Baccarat and Dice have the 100K chip, Roulette the 25K, Keno the 25K; a roulette spin can hold up to 1,000,000.
+- Every table was played at its most, every way (full odds and every place bet, the dark side with lay odds, splitting and doubling every time, insurance every time, every number straight up, the outside at 500,000, every side bet), and every round checks out.
+
+Dice: rolling by itself, a win stays up a moment to be seen (a big one longer) before the next roll.
+
+Fixed:
+- Changing the games' volume froze Pyr.
+- Roulette: a High Rollers table takes up to 25,000 on a single number (it stopped at 2,000), and more on the bigger bets.
+- Craps: odds and more bets go down at the High Rollers table (the whole layout stopped at 50,000).
+- Voice channels: the space between people is even again, and each name sits level with its picture (a name with only the voice meter beside it was pushed up, leaving an empty line under it).
+- The tier crests' edges are clean: no more haze around them.
+
+Also:
+- The Owner's crown by their name is a new drawn gold crown, jewelled.
+- Blackjack: the ring round your betting circle (and the clock round whoever's turn it is) sits exactly on the table's own ring.
+- The Sit & go cards grow to fit their words in a narrow window (the words ran under the buttons).
+- Plinko's history keeps each landing's own colour when you change the rows or the difficulty.
+
+######## 0.13.7 (pyr-upload-0.13.7)
+Pyr 0.13.7
+
+- Pyr's taskbar button shows how many mentions and direct messages are waiting, in a red badge like Discord's (9+ past nine); other unread messages still get the small light dot.
+- Torch & Conquer 0.2.0 in the Pyr Library: six Houses that each bend one rule, your exact odds when you point at a target, its own sounds and music, and more. (Update it from Plugins.)
+- The bots' levels are now Easy, Medium, Hard, Expert and Shark: a new Hard level between Medium and Expert, and the old Genius is the Shark (Rookie is Easy, Regular is Medium, Shark is Expert).
+- Rabbit hunting: the board comes quicker, and if the next hand starts first it stays a few seconds more, small, above the table, so you always see it whole.
+- The cards' spades and hearts are drawn as proper curves (the spade had straight shoulders).
+- The casino floor's game names are lined up like Stake's: each as wide as its card, all at the same height above the studio, in calmer faces.
+- Waiting for a Bomb Pot or Bounty Poker, the seats show each person's own picture (bots keep their initial).
+- Keno: a win counts up to its total, and playing by itself (turbo too) waits a moment after a win before the next draw.
+
+Fixed:
+- A Game Master's time bank at a poker table showed its seconds left as a huge number across their seat.
+- The suit on a bot's picture showed its overlapping parts (three shapes over each other).
+
+######## 0.13.7 (pyr-upload-0.13.7b)
+Pyr 0.13.7
+
+- Pyr's taskbar button shows how many mentions and direct messages are waiting, in a red badge like Discord's (9+ past nine); other unread messages still get the small light dot.
+- Torch & Conquer 0.3.0 in the Pyr Library: twelve new painted maps (eighteen in all: Frostmarch, Sunscorch, Serpent Coast, Crescent Bay, Dragonspine, Emerald Delta, The Shards, Kingsreach, Coral Crown, Autumnwood, Ashen Triad and Stormbridge are new), a global Leaderboard of online wars against people, room codes that work (pyr.gg runs their relay), and hosting by direct address no longer stuck at "not open". It also opens hidden until it's in Pyr's window. (Update it from Plugins.)
+- Dominó Cubano 0.1.1 plays in English or Spanish: the English / Español button switches the whole table, the players' banter included.
+- Someone's big big win in the casino (a jackpot, 100 times the bet, or a million chips up): everyone else gets a moment to say Congrats! or buy them a drink (5,000 of your chips, to them).
+- The Library now shows plugins added since it was first set up (Dominó Cubano and Torch & Conquer were missing from it).
+- The bots' levels are now Easy, Medium, Hard, Expert and Shark: a new Hard level between Medium and Expert, and the old Genius is the Shark (Rookie is Easy, Regular is Medium, Shark is Expert).
+- Rabbit hunting: the board comes quicker, and if the next hand starts first it stays a few seconds more, small, above the table, so you always see it whole.
+- The cards' spades and hearts are drawn as proper curves (the spade had straight shoulders).
+- The casino floor's game names are lined up like Stake's: each as wide as its card, all at the same height above the studio, in calmer faces.
+- Waiting for a Bomb Pot or Bounty Poker, the seats show each person's own picture (bots keep their initial).
+- The casino's volume button sits left of streamer mode and fullscreen.
+- Keno: a win counts up to its total, and playing by itself (turbo too) waits a moment after a win before the next draw.
+
+Fixed:
+- A program open inside Pyr could look popped out (its own frame and taskbar button) and stay that way until Pyr next drew, or show as a window of its own for a moment as it opened; Pyr now keeps it in place a few times a second while it's on show.
+- A Game Master's time bank at a poker table showed its seconds left as a huge number across their seat.
+- The suit on a bot's picture showed its overlapping parts (three shapes over each other).
+
+######## 0.13.8 (pyr-upload-0.13.8)
+Pyr 0.13.8
+
+- Torch & Conquer 0.3.1 opens inside Pyr every time, and only goes out on its own when you click Pop out. Pointing at a land to attack now shows what helps or hurts the fight, beside the odds: your troops' bonus or penalty (tailwind, headwind, the Firebrands' first strike) and their defenders' (a beacon, a Warden wall). (Update it from Plugins.)
+- A program open inside Pyr stays in its page: if it puts its own frame back or moves itself, Pyr takes it back in at once, even while Pyr is idle.
+- Someone's big big win in the casino (a jackpot, 100 times the bet, or a million chips up): everyone else gets a moment to say Congrats! or buy them a drink (5,000 of your chips, to them).
+- The Leaderboard has a new podium icon, and the casino's volume button sits left of streamer mode and fullscreen.
+
+Fixed:
+- Torch & Conquer 0.3.0 could open as a window of its own beside Pyr, with its own frame and taskbar button.
+
+######## 0.13.9 (pyr-upload-0.13.9)
+Pyr 0.13.9
+
+- Programs from the Library open inside Pyr every time, and only go out on their own when you click Pop out. Pyr now checks the program's windows on every step: if a program shows its game in a different window from the one it made first (Torch & Conquer does this as it starts), Pyr takes that window in straight away.
+- Torch & Conquer 0.4.0: online play with no codes or addresses. Host online lists your war for everyone with Torch & Conquer; Join online shows every open war (who's hosting, the map, seats open) and you click Join. "Make it private" keeps a room code for friends only. (Update it from Plugins.)
+- Pyr notes in pyr.log which window of a program it took in, to help if a program ever opens outside Pyr again.
+
+Fixed:
+- Torch & Conquer could open as a window of its own beside Pyr, with its own frame and taskbar button, while Pyr's page for it showed Pop out.
+
+######## 0.13.10 (pyr-upload-0.13.10)
+Pyr 0.13.10
+
+- Programs open seamlessly inside Pyr: Pyr shows "Opening…" in the program's page until the program is ready, then the program appears right there, already in place. No black window or title bar flashing up first.
+- Torch & Conquer 0.4.1: bots never surrender any more. They fight to their last land, and you take it. Bots also go after a side that's nearly beaten, so wars still end. The game opens faster, too. (Update it from Plugins.)
+
+Fixed:
+- Torch & Conquer showed a black window with a white bar across its top for a moment as it opened.
+
+######## 0.13.11 (pyr-upload-0.13.11)
+Pyr 0.13.11
+
+- New in Pyr Casino: Dominó Cubano. Cuban double-nine dominoes for your casino chips, at tables of four in a Havana café. Play in pairs (partners facing, two against two) or each for yourself, with friends and bots. The house fills empty seats in Pairs.
+- Every table has an ante: from 100 at Café Habana up to 100,000 in the Crown Room, and you can open your own table at any ante from 10 to 100,000. Before each hand you choose how far you'll go with doubles (×1, ×2, ×4 or ×8 the ante). Anything the hand doesn't use comes back to you.
+- ¡Doblo!: in a hand between two sides you can double the stake on your turn, up to 8 times the ante. The other side accepts and takes the cube, or folds and loses the stake as it stood. In Pairs, either partner can answer.
+- Win big: a last tile that fits both ends (¡Capicúa!) pays half again, and winning while an opponent never laid a tile (¡Chiva!) pays double. When the game locks (tranque), the side with the fewest pips wins.
+- Every hand is dealt from the house's seed and every player's own, and your Pyr plays it again afterwards to check it, as with every other casino game.
+- Two new achievements: ¡Capicúa! and All the Way (win a hand doubled to ×8).
+
+Fixed:
+- Your voice could dip up and down for the others while you wore headphones with Voice Isolation on and something was playing on your PC (a game's music, say).
+
+######## 0.13.12 (pyr-upload-0.13.12)
+Pyr 0.13.12
+
+- Dominó Cubano in Pyr Casino goes to 10,000,000. A new table can be opened at any ante from 10 up to 10,000,000, and there's a new standing high-roller table, El Presidente (Pairs, 1,000,000 a hand). Doubles still go up to 8 times the ante.
+- Dominó Cubano lives in Pyr Casino now: play it at tables of four for your casino chips, in pairs or each for yourself, with friends and bots. The old Dominó Cubano program has left the Plugins library, and Pyr removes it from your PC as it starts.
+- From 0.13.11, in case you missed it: Dominó Cubano in Pyr Casino. Before each hand, choose how far you'll go with doubles (¡Doblo!, up to ×8). A Capicúa pays half again, a Chiva pays double, and every hand is checked by your own Pyr.
+
+Fixed:
+- Echo: with Voice Isolation on, others could hear themselves echo back through your speakers (from 0.13.11). Echo cancellation stays on with isolation again, as it was before 0.13.11.
+
+######## 0.13.13 (pyr-upload-0.13.13)
+Pyr 0.13.13
+
+- Send files in direct messages and groups: any kind of file, up to 2 GB. Click + in the conversation (or drop files onto it). Pictures that fit still go with your message as before. Anything else is sent on its own, with its progress and a Cancel button above where you type. If your connection drops, it carries on once you're back.
+- Files are end-to-end encrypted, like your messages: the server only ever holds scrambled pieces. The person you sent it to clicks Save and picks where it goes; it's written to their disk as it arrives.
+- The server keeps a sent file for 7 days. After that the message stays, and the file shows as expired. Each person can send up to 4 GB of files a week.
+- Your Pyr and the server both need 0.13.13.
+- Also in this update, if you're coming from 0.13.11 or earlier: Dominó Cubano in Pyr Casino goes up to 10,000,000 a hand (new table: El Presidente, 1,000,000). The old Dominó Cubano program is removed now that the game lives in the casino.
+
+Fixed:
+- A new direct message or group said it "isn't end-to-end encrypted yet", even on servers where it is.
+- Echo: with Voice Isolation on, others could hear themselves echo back through your speakers (from 0.13.11). Echo cancellation stays on with isolation again, as it was before 0.13.11.
+
+######## 0.13.14 (pyr-upload-0.13.14)
+Pyr 0.13.14
+
+- Share your screen is easier to read and use. Screens, Windows and Other are clear headings, each with how many there are. Your screens are tiles shaped like each monitor, with its number, name and size. Each window takes one line (point at it for its whole title), and what you picked is outlined so you can't miss it. Windows that Windows keeps hidden, like "Windows Input Experience" and apps that are asleep, are no longer listed.
+- Labels in dialogs are easier to read in every skin. When a skin's secondary text is too faint on its background, Pyr brightens it just enough.
+- Pyropoly by Firelit Games is in the Pyr Library. It's a 3D property-trading board game where the city grows as you play. Play against bots, pass and play on one PC, or play online with a room code. Its relay runs on pyr.gg's server.
+- Plugins sent in with big files can be opened and approved. Before, a plugin with a file over about half a megabyte (Pyropoly 0.1.0's 1.48 MB model) failed in Plugins sent in with "That reply was too big to send". Big files now come in parts. Your Pyr and the server both need 0.13.14 for this.
+
+######## 0.13.15 (pyr-upload-0.13.15)
+Pyr 0.13.15
+
+- Invite friends to games from the Pyr Library. A game opened from Pyr (Pyropoly first) now knows your Pyr name and your friends: pick a friend in the game's room and they get a message from you in Pyr with a Join button that opens the game straight into your room. If they don't have the game yet, the button takes them to it in the Library.
+- Games opened from Pyr use your Pyr name instead of your Windows user name.
+- Pyropoly 0.1.3: a new, simpler room screen with the room code big and easy to copy, a friends list to invite from, Paste for room codes, and renaming yourself with one click.
+
+######## 0.13.16 (pyr-upload-0.13.16)
+Pyr 0.13.16
+
+- Fixed: inviting a friend from a game (Pyropoly's Invite) made Pyr stop responding. The invite now goes out as it should: your friend gets a message with Join.
+- Everything from 0.13.15: games from the Pyr Library can invite your Pyr friends and use your Pyr name, and Pyropoly 0.1.3's simpler room screen.
+
+######## 0.13.17 (pyr-upload-0.13.17)
+Pyr 0.13.17
+
+- Fixed: Pyr stopped responding every time Pyropoly opened. Pyr took in a hidden helper window the game's graphics make instead of the game's own window, and waited on it forever. Pyropoly now opens inside Pyr's window, as it should.
+- Pyropoly 0.1.4: each seat in the room shows its game piece as a picture, and it changes as you click through the pieces.
+
+######## 0.13.18 (pyr-upload-0.13.18)
+Pyr 0.13.18
+
+- Game invites are links now, like https://pyr.gg/pyropoly/BDFPA. In Pyr they show the game's card with Join, and clicking the link opens the game in that room. Shared anywhere else, the link opens a page on pyr.gg that opens Pyr straight into the game (or gets Pyr first).
+- Invited to a game you don't have yet? Install it from its page in the Library and it opens in that room.
+- Games open inside Pyr more reliably on PCs with NVIDIA graphics: Pyr no longer takes in a hidden driver window instead of the game's own.
+- Pyropoly 0.1.13: Copy invite copies the new link. Friends who join your room see the room as you do and pick their own piece. The game never rolls or plays for you. Your piece stands out (a glow, a beam of light and a YOU tag), each square a piece steps on plays a soft note, the plaza has an Eternal Flame, and the picture is sharper. Countering an offer keeps it standing until you send a different deal, and Raise & pay automatically mortgages deeds outside your whole districts first and sells buildings only last.
+
+######## 0.13.19 (pyr-upload-0.13.19)
+Pyr 0.13.19
+
+- On speakers, the start of what you say comes through clear when you answer someone right as they finish, or talk over them: the echo canceller takes out only their echo there, instead of dulling everything high in your voice along with it.
+
+######## 0.13.20 (pyr-upload-0.13.20)
+Pyr 0.13.20
+
+- A mute shortcut: in Settings → Voice & Video → Mute shortcut, click Set a shortcut and press the keys you want (Ctrl, Alt or Shift with a key, or a function key). They mute and unmute you from anywhere, even with a game in front, and the game still gets them. A short sound tells you which: a step down for muted, up for unmuted.
+- Shortcuts that work anywhere (the mute shortcut and soundboard keys) can't be put on Copy, Paste or the like, and a shorter one inside a longer one (Ctrl + M inside Ctrl + Shift + M) no longer goes off with it.
+
+######## 0.13.21 (pyr-upload-0.13.21)
+Pyr 0.13.21
+
+- Screen shares stay sharp and smooth. When a shared screen sat still for a moment (a desktop, a menu, a pause) while the connection was a little busy, Pyr cut the share to a fraction of its quality and it stayed blurry and choppy for up to half a minute once things moved again: the bug reports showed shares sending 0.2 Mbit/s instead of 6. A still moment no longer lowers a share. On a test connection, a game shown after a still desktop went from 360p at 7 to 19 frames a second to 1080p at 60.
+- Sharper pictures for the same bitrate: shares are now encoded with H.264's High profile (CABAC), 1 to 3.5 dB better and with far fewer skipped frames on slower connections.
+- Text on a screen bigger than the share (1440p or 4K shared at 1080p) stays crisp.
+
+######## 0.13.22 (pyr-upload-0.13.22)
+Pyr 0.13.22
+
+- New playing cards in Pyr Casino. The jacks, queens and kings are illustrated court cards, painted with Meshy and double-ended like a real deck: every one has a figure of its own (the King of Hearts with his sword raised, the Queen of Hearts with a rose, the Jack of Diamonds with his axe...). The ace of spades is a spade inlaid with gold in a gold ring. The rank and suit sit in the top left corner and upside down in the bottom right, and the number cards' pips are laid out as on a real deck. Pips and corners are drawn by Pyr, sharp at any size, and the hearts' and spades' points no longer have spikes. With the four-color deck on, clubs are green and diamonds blue. Blackjack and Baccarat use the same cards.
+- New card backs: Ember, Midnight, Jade and Gilded, and the prize boxes' Inferno and Aurora, each a pattern of its own with the campfire in the middle.
+- Adding chips at a poker table is easy. "+ Add chips" on the table's top bar opens a window: top up to the table's most in one click, add 20, 50 or 100 big blinds, or any amount. Chips added during a hand you're in are kept for you and join your stack when the hand is over (until now they were refused during a hand), with a green "+" on your seat meanwhile. Auto top-up (in the table's menu) keeps you at the table's most between hands. Out of chips? "Out of chips" shows with Rebuy in one click.
+- The poker table's top bar is simpler: Sit out and Add chips, then icons for the hand log and the last hand, the sound and full screen, and a menu with the rest (Auto top-up, Straddle, Auto-muck, Show my title, Drop a prize box, Streamer mode, Leave seat).
+- The mute shortcut can be any key on its own, the backtick (`) or M included, as in Discord: until now a key you type with needed Ctrl, Alt or Shift held with it. In Pyr's own message boxes such a key still just types; anywhere else it mutes or unmutes you each time you press it, and Settings says so under it. The same goes for keys that play soundboard sounds.
+- High-roller tables in Pyr Poker: when you open a table, a new row of blinds, High roller, goes from 500/1K up to 25K/50K, where you sit down with up to 10,000,000 chips (200 big blinds; 2,000,000 at the least). The usual blinds are the row above it, as before.
+- A shared screen keeps its size. When the connection to someone watching can't carry the whole picture, its frame rate comes down for a while instead, and the picture stays at the size it was shared at: until now it went down to 720p or 360p and back up again (1080p, 720p, 360p, 540p...), and everyone watching saw it, not only the one with the slow connection. On a very slow connection the frame rate can drop a lot at first (in our test, a viewer on a 2.5 Mbit/s connection got 15 to 17 frames a second for the first half minute, then 30), but the picture's size never changes.
+- In the Pyr Library: Chimbrowser 0.1.11 (the shield button pauses blocking on a site that doesn't work with it, Force dark for bright sites, a new new-tab page, and video players that wait for Google's ad SDK play again, their ads still blocked) and Pyropoly 0.1.19.
+
+######## 0.13.23 (pyr-upload-0.13.23)
+Pyr 0.13.23
+
+- Fourteen emotes that move, at every table in Pyr Casino: rolling on the floor laughing, crying a river, mind blown, rage, deal with it (the shades drop onto its face), making it rain, on fire, a victory dance, a clown, a fish, popcorn, salty, asleep and a chicken. Each is drawn by Meshy in a few frames and moves in its own way, with tears, steam, cash, sparks, notes, Zs or feathers flying off it. They're in the emote picker under the stickers, and rolling on the floor laughing, rage and deal with it are on the quick bar.
+- Craps has buy and lay bets, at the tables and in the house game: buy a number to be paid true odds when it comes before a 7 (2 to 1 on the 4 and 10, 3 to 2 on the 5 and 9, 6 to 5 on the 6 and 8), less a 5% vig taken only when it wins; lay a number to be paid true odds when a 7 comes first (1 to 2, 2 to 3, 5 to 6), less 5% of the win. They're 20 at least (so the vig is at least 1), stay up when they win, and buys are off on the come-out unless you set them working. They're on strips along each number's box: BUY under it, LAY above it.
+- In the classic sounds, someone joining your voice channel stands out: the chime climbs one note higher, lands on a chord that rings for half a second, and is louder than the other chimes, so nobody comes in unheard. You joining sounds as before.
+- Craps: the OFF puck no longer covers the word FIELD, and a bet's words stay on the screen.
+
+######## 0.13.24 (pyr-upload-0.13.24)
+Pyr 0.13.24
+
+- Craps: chips stay on the layout where you put them, piled up chip by chip as you click (a stack of 25s stays a stack of 25s), with what they come to on a tag. Buy and lay chips are bigger. Until now a chip bigger than the chips you had left could be picked (the 5,000,000 one at the Sky Rollers table, say): every bet with it was refused, so the chips you clicked down vanished again, and Pyr sent a report about it each time. Now the rack only offers chips you can put down, and a bet that's more than you have says so and stays off the table (bug reports 527 to 538).
+- A table's "no" to something asked for (not enough chips, more than the table takes, the dice already rolling) is shown as before but no longer sent in as a bug report by itself.
+- Voice isolation with headphones: a fix for your voice being turned down for the others while they talk or a game plays (by 20 to 48 dB, three times a minute, bug reports 522 to 537). With voice isolation, echo cancellation stays on, headphones or not; now, where it takes your talking down by 10 dB or more and nothing the speakers play could be in your microphone, your voice goes out without it for that moment (300 ms). With speakers, where an echo could be, it works as before. (In Pyr's own echo test, with voice isolation and headphones: 7 dips came down to 4, and the automatic report never fired; echo through unchanged.)
+- Poker: whoever made a table can close it from the table itself now (Close this table... in the table's menu, after a "sure?"), not only from the lobby's list. Everyone at it is told, and the chips at it go back to whoever had them; a hand being played is called off, each player getting back what they started it with.
+
+######## 0.13.25 (pyr-upload-0.13.25)
+Pyr 0.13.25
+
+- Echo fixed: 0.13.24's change to voice isolation (sending your voice without echo cancellation for a moment where it seemed nothing from the speakers could be in your microphone) let the others' voices back through for people on speakers, so they heard themselves. It's taken out: voice works as it did in 0.13.23. (If you set PYR_AB to dipguard to stop the echo meanwhile, it does nothing now; you can leave it or remove it.)
+- Craps: a win with lay odds behind don't pass was called out with its stake counted in (YOU WIN, and the list under the dice, said +90 for a 60 lay that won 30); it says what was won now. (Since 0.13.23; the chips paid were always right.)
+
+######## 0.13.26 (pyr-upload-0.13.26)
+Pyr 0.13.26
+
+- Screen sharing, done the way Discord does it: the picture stays on the graphics card all the way out. Windows hands each frame over on the card, the card's video engine makes it the size it goes out at, and the card's own encoder (NVIDIA's NVENC, or AMD's or Intel's) encodes it; the processor only sends what comes out. Before, every frame came back from the card to the processor, which scaled, converted and encoded it (OpenH264), and a game taking the processor left a 1080p share a frame or two a second. In a test on a PC with a 4070 Ti and a 4K screen, the old way took 26.5 ms a frame and reached 32 frames a second with nothing else running; on the card it took 3.4 ms and kept a steady 60. A PC without a hardware encoder shares as before.
+- A share's work goes ahead of a game's: on the graphics card (Pyr asks Windows for an earlier place in the card's queue while it shares, and gives it back after) and on the processor.
+- 60 fps shares keep their 60: a frame that came a moment before its turn was passed over for the next one (now it's taken up to a quarter of a frame early), and from a fast screen Windows was asked for a frame no sooner than a 60th of a second after the last, which on a 144 Hz screen is every third refresh, 48 a second (now twice as often, and the share takes them in turn).
+- The call's stats say what's encoding your share (NVIDIA encoder, AMD encoder, Intel encoder, or processor encoder) and how many frames a second really go out.
+- Watching a share costs less: each frame goes to the screen as it comes (each of a 1080p frame's two million pixels was looked at one by one first).
+- Pyr Casino's keys, your way: a Keys button on every game's top bar (and Keys in the casino's menu bar, and Keys... in a poker table's menu) opens every game's moves with their keys, the game you're at first. Click a key and press the one you want (Ctrl, Alt or Shift with it if you like); a move can have two; a key another move had in the same game moves over, and it says so; × takes a key off, ↺ puts a move back, and one button puts every key back. Every game starts with keys of its own: Space to spin, roll, drop or play, Up and Down to bet more or less at the slots, Left and Right for a smaller or bigger chip from the rack, H S D P and Enter at blackjack, F C R and 1 to 5 (the amounts) at poker, Backspace to clear and R to rebet at the tables. The buttons show their keys, and keys never fire while you're typing.
+- Poker bots think like people: how long a bot takes now comes from how hard its choice was and what's riding on it, not from what it does, so a long think can end in a fold or a check, not only a bet (before, more than half of the long thinks ended in a raise and few in a fold; now it's about two in five folds, one in four raises). Rags are still thrown away at once; a close call over a big river bet takes a while whichever way it goes; trappers now and then act out a long think over a monster.
+- And they bluff the way people do: the one who raised before the flop bets the flop whatever it hit (more often the better the bot), draws are bet and raised as semi-bluffs, a draw that missed gets fired on the river heads up, and the stronger bots check-raise a bluff now and then; a maniac bluffs far more than a rock, a rookie hardly ever.
+- The AFK channel (Server settings → Overview, for those who run a server): someone in a voice channel who's been away that long (no keys, no mouse, not talking) is moved into it, now never while they're sharing a screen or watching one, and their time starts again once that's over. A server that hasn't picked a time now waits an hour (half an hour before). Your VPS gets this with the update.
+- Craps, buy and lay bets, gone over line by line against The Art of Craps' guide to buy bets: they're 5 or more now (20 before; as the guide has it, a buy of 20 or less pays the same 1 of vig), and a smaller chip on BUY or LAY isn't quietly made 20 any more (a chip under 5 says so instead). Hover over BUY or LAY for what that bet pays, worked out for what's on it (or the chip you've picked): a 25 buy on the 4 pays 50 at 2 to 1 less 1 vig (5% of the bet, rounded down, 1 at least, taken only when it wins), so 49 comes to you and the bet stays up; and what placing the same would win instead (45 there: buying pays 4 more; on the 6 and the 8, placing pays as much or more at most amounts, as the guide says). In the house game, the list of what a roll did says the vig too (Buy 4 wins +49 (50 at 2 to 1, less 1 vig)), and the tips show by the pointer, as at the tables, instead of running off the side.
+- Craps: the chips in a pile stand a little taller, so a pile reads as a pile.
+- Dominó Cubano is off the Library for good (Pyr Casino deals dominoes, at tables of four): the old program's card stayed in the Library after Pyr took it over, since the Library's Keeper held on to every program a release had once listed. It now never lists a program Pyr does itself, whatever's taken off the Library stays off when the next release comes in, and Pyr itself doesn't show the card whatever list it's given. (Pyr 0.13.12 already took the program off the PCs that had it.)
+
+######## 0.13.27 (pyr-upload-0.13.27)
+Pyr 0.13.27
+
+- Games and other programs from the Pyr Library update in one click, even while they're open: Update on a program's card says "Close and update to ..." while it runs, and closes it, updates it and opens it again. Before, updating a program that was open failed, because Windows won't replace a program while it runs.
+- A game can ask Pyr to update it. Pyropoly does when the room's host has a newer Pyropoly (its "Update now" button): Pyr closes it, updates it, and opens it again straight back in the same room.
+- If Pyr's list of the Library is older than the new version (it's fetched now and then), an update asked for fetches the list again first. If there's still nothing newer, the game opens again as it was, and Pyr says so.
+- Joining a game from an invite updates the game first when the Library has a newer version, then takes you into the room.
+- While a program is open, Pyr looks for a newer version of it every ten minutes and tells it, so Pyropoly can offer the update.
+
+######## 0.13.28 (pyr-upload-0.13.28)
+Pyr 0.13.28
+
+- Setting yourself to Idle no longer moves you to the AFK channel. Only being away does: no keys, no mouse and no talking for the server's AFK time (an hour unless the owner picked another). Before, a server counted Idle set by hand as being away, so someone who had set Idle and had Pyr open (or in the tray) for an hour was moved to AFK the moment they came into a voice channel, with "You were idle for 60 minutes", even while they were talking.
+- The AFK time counts from when you come into a voice channel at the earliest, never from before.
+- Pyr itself checks before going to the AFK channel: it only goes when it has seen you away that long. So even a server that hasn't updated yet can't move someone who's there.
+- When you are moved, Pyr says why in plain words: "You were away for an hour (no keys, mouse or talking), so you were moved to AFK."
+- Making, renaming or removing a voice channel called AFK tells everyone's Pyr about it right away (it's the AFK channel until the owner picks one).
