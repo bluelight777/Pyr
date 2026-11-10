@@ -89,10 +89,11 @@ struct State {
     taskbar_created: u32,
     /// What the icon shows now: the plain icon, or one with a dot, and the tooltip.
     shown: (HICON, String),
-    /// The icon with a light dot, and with a red one; and the taskbar's dots (made when
-    /// first needed).
+    /// The icon with a light dot, and with a red one; and the taskbar's light dot and red
+    /// badges, by what they say (1 to 9, 9+), made when first needed.
     dotted: [Option<HICON>; 2],
     taskbar_dots: [Option<HICON>; 2],
+    taskbar_badges: std::collections::HashMap<String, HICON>,
     /// The taskbar, for its button's dot (`None` if Windows wouldn't give it to us).
     taskbar: Option<Option<ITaskbarList3>>,
 }
@@ -223,6 +224,7 @@ impl Tray {
                 shown: (icon, tip.to_string()),
                 dotted: [None; 2],
                 taskbar_dots: [None; 2],
+                taskbar_badges: std::collections::HashMap::new(),
                 taskbar: None,
             })
         });
@@ -246,7 +248,7 @@ impl Drop for Tray {
         if let Some(s) = STATE.with(|s| s.borrow_mut().take()) {
             unsafe {
                 let _ = DestroyWindow(s.tray);
-                for icon in [Some(s.icon)].into_iter().chain(s.dotted).chain(s.taskbar_dots).flatten() {
+                for icon in [Some(s.icon)].into_iter().chain(s.dotted).chain(s.taskbar_dots).flatten().chain(s.taskbar_badges.values().copied()) {
                     if !icon.is_invalid() {
                         let _ = DestroyIcon(icon);
                     }
@@ -345,11 +347,15 @@ fn show_unread() {
         };
         s.shown = (icon, u.tooltip(&s.tip));
         let nid = icon_data(s);
+        // The taskbar button: a red badge with how many mentions and direct messages (9+ past
+        // nine), like Discord's; the light dot for other unread messages.
+        let (cx, cy) = unsafe { (GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON)) };
         let dot = match level {
             0 => None,
+            1 => Some(*s.taskbar_dots[0].get_or_insert_with(|| unsafe { dot_icon(cx, cy, false) }.unwrap_or_default())),
             _ => {
-                let (cx, cy) = unsafe { (GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON)) };
-                Some(*s.taskbar_dots[level - 1].get_or_insert_with(|| unsafe { dot_icon(cx, cy, level == 2) }.unwrap_or_default()))
+                let label = crate::unread::badge_label(u.pings);
+                Some(*s.taskbar_badges.entry(label.clone()).or_insert_with(|| unsafe { badge_icon(cx, cy, &label) }.unwrap_or_default()))
             }
         };
         let taskbar = s.taskbar.get_or_insert_with(taskbar_list).clone();
@@ -488,6 +494,13 @@ unsafe fn dot_icon(w: i32, h: i32, red: bool) -> Option<HICON> {
     let ring = 1.0 * unit;
     let r = w as f32 / 2.0 - ring - 0.5;
     crate::unread::paint_dot(&mut px, w, h, (w as f32 / 2.0, h as f32 / 2.0), r, ring, if red { crate::unread::RED } else { crate::unread::LIGHT });
+    unsafe { icon_from_pixels(&px, w, h) }
+}
+
+/// The taskbar button's red badge with a number on it.
+unsafe fn badge_icon(w: i32, h: i32, label: &str) -> Option<HICON> {
+    let (w, h) = (w.max(8) as usize, h.max(8) as usize);
+    let px = crate::unread::badge_pixels(w, h, label);
     unsafe { icon_from_pixels(&px, w, h) }
 }
 

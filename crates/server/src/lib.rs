@@ -224,6 +224,7 @@ pub async fn start_with(cfg: ServerConfig, invite_directory: Option<String>) -> 
 
     // How everyone's viewers are getting on with their camera or screen share.
     tokio::spawn(hub.clone().feedback_loop());
+    tokio::spawn(hub.clone().afk_loop());
 
     // Poker: chips left at tables when the server last stopped go back to their owners, and
     // the tables' clock (deals, bots' turns, people's time running out).
@@ -246,6 +247,11 @@ pub async fn start_with(cfg: ServerConfig, invite_directory: Option<String>) -> 
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(600)).await;
             let ids = h.db.take_unused_files(60 * 60 * 1000);
+            h.wipe_files(&ids);
+            // Files sent in direct messages: kept a week; parts never sent, a day (long enough
+            // to carry on after the connection drops).
+            let day = 24 * 60 * 60 * 1000;
+            let ids = h.db.take_expired_dm_files(pyr_proto::control::DM_FILE_DAYS * day, day);
             h.wipe_files(&ids);
         }
     });

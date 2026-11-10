@@ -946,8 +946,78 @@ pub fn pick_async(what: PickFor, multiple: bool, ctx: &egui::Context) {
     ctx.request_repaint();
 }
 
+/// Files of any kind chosen to send in a direct message or group (0.13.13): the server, the
+/// conversation and the files' paths (they're read a part at a time as they go).
+type PickedFiles = (String, pyr_proto::control::ChannelId, Vec<std::path::PathBuf>);
+
+fn wanted_files() -> &'static std::sync::Mutex<Option<(String, pyr_proto::control::ChannelId)>> {
+    static W: std::sync::OnceLock<std::sync::Mutex<Option<(String, pyr_proto::control::ChannelId)>>> = std::sync::OnceLock::new();
+    W.get_or_init(Default::default)
+}
+
+fn files_picked() -> &'static std::sync::Mutex<Vec<PickedFiles>> {
+    static F: std::sync::OnceLock<std::sync::Mutex<Vec<PickedFiles>>> = std::sync::OnceLock::new();
+    F.get_or_init(Default::default)
+}
+
+/// Asks for the system's file chooser for files of any kind to send in a direct message or
+/// group (opened between frames, like `pick_async`). Results come from `take_picked_files`.
+pub fn pick_files_async(key: String, channel: pyr_proto::control::ChannelId, ctx: &egui::Context) {
+    *wanted_files().lock().unwrap() = Some((key, channel));
+    ctx.request_repaint();
+}
+
+/// Files chosen to send since the last call.
+pub fn take_picked_files() -> Vec<PickedFiles> {
+    std::mem::take(&mut *files_picked().lock().unwrap())
+}
+
+/// Where to save a file from a direct message: (server, file id, its name).
+fn wanted_save() -> &'static std::sync::Mutex<Option<(String, String, String)>> {
+    static W: std::sync::OnceLock<std::sync::Mutex<Option<(String, String, String)>>> = std::sync::OnceLock::new();
+    W.get_or_init(Default::default)
+}
+
+fn saves_picked() -> &'static std::sync::Mutex<Vec<(String, String, std::path::PathBuf)>> {
+    static F: std::sync::OnceLock<std::sync::Mutex<Vec<(String, String, std::path::PathBuf)>>> = std::sync::OnceLock::new();
+    F.get_or_init(Default::default)
+}
+
+/// Asks where to save a file from a direct message (the system's Save dialog, opened between
+/// frames). The answer comes from `take_picked_saves`.
+pub fn save_file_async(key: String, file_id: String, name: String, ctx: &egui::Context) {
+    *wanted_save().lock().unwrap() = Some((key, file_id, name));
+    ctx.request_repaint();
+}
+
+/// Places picked to save files from direct messages: (server, file id, where).
+pub fn take_picked_saves() -> Vec<(String, String, std::path::PathBuf)> {
+    std::mem::take(&mut *saves_picked().lock().unwrap())
+}
+
+/// Whether a file (by its name and size) is a picture that goes with a message as one (the
+/// rest are sent as files, in direct messages and groups).
+pub fn goes_as_picture(name: &str, size: u64, limit: u64) -> bool {
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp") && size <= limit
+}
+
 /// Opens a chooser asked for with `pick_async` or `pick_folder_async`. Call between frames only.
 pub fn run_wanted_dialog() {
+    if let Some((key, channel)) = wanted_files().lock().unwrap().take() {
+        let paths = rfd::FileDialog::new().set_title("Choose files to send").pick_files();
+        DIALOG_CLOSED.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(paths) = paths.filter(|p| !p.is_empty()) {
+            files_picked().lock().unwrap().push((key, channel, paths));
+        }
+    }
+    if let Some((key, id, name)) = wanted_save().lock().unwrap().take() {
+        let path = rfd::FileDialog::new().set_title("Save file").set_file_name(&name).save_file();
+        DIALOG_CLOSED.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(path) = path {
+            saves_picked().lock().unwrap().push((key, id, path));
+        }
+    }
     if let Some((what, title)) = wanted_folder().lock().unwrap().take() {
         let dir = match what {
             FolderFor::PluginZip => rfd::FileDialog::new().set_title(title).add_filter("Zip files", &["zip"]).pick_file(),

@@ -244,6 +244,14 @@ pub struct Attachment {
     pub width: u32,
     #[serde(default)]
     pub height: u32,
+    /// A file sent in a direct message ([`DM_FILES_FEATURE`]), not a picture: how many parts
+    /// it came in (never sent: what the app made of its message).
+    #[serde(skip)]
+    pub parts: u32,
+    /// Such a file the server doesn't keep any more (files are kept [`DM_FILE_DAYS`] days)
+    /// (never sent).
+    #[serde(skip)]
+    pub expired: bool,
 }
 
 /// Server features newer than protocol v1, listed in `Ready::features`. A client only uses
@@ -315,6 +323,13 @@ pub const GROUPS_FEATURE: &str = "groups";
 /// the mouse (or its person said they're idle), and `Member::idle` shows who's idle on every
 /// Pyr they're connected from (sent again as `MemberUpserted` when it changes).
 pub const IDLE_FEATURE: &str = "idle";
+/// (0.13.28) `SetIdle::away` tells being away (no key, no mouse and nothing said for
+/// [`AWAY_AFTER_SECS`]) from Idle set by hand, which shows the same moon. Only away counts for
+/// the AFK channel, and only from when someone came into their voice channel.
+pub const AWAY_FEATURE: &str = "idle_away";
+/// How long without a key, the mouse or a word in a call before a Pyr says its person is away
+/// (and idle), like Discord's five minutes.
+pub const AWAY_AFTER_SECS: u64 = 5 * 60;
 /// Do Not Disturb, like Discord's: `SetDnd` says a connection's person doesn't want to be
 /// disturbed (or does again), and `Member::dnd` shows it while any of their Pyrs says so
 /// (sent again as `MemberUpserted` when it changes). (0.8.0)
@@ -362,6 +377,30 @@ pub const SEALED_FEATURE: &str = "sealed_messages";
 pub const MOVE_FEATURE: &str = "move_members";
 /// In `Login::caps`: this app joins the voice channel it's moved to ([`Event::MoveTo`], 0.12.0).
 pub const MOVE_CAP: &str = "move";
+/// The AFK channel (0.13.4 servers): `ServerInfo::afk_channel` and `afk_minutes`, set with
+/// `Request::SetAfk`; someone away that long in voice is moved there (`Event::MoveTo`, `by`
+/// empty; see [`AWAY_FEATURE`]).
+pub const AFK_FEATURE: &str = "afk_channel";
+/// How long away in voice before the move to the AFK channel, to pick from (minutes); the
+/// first is what a server has until its owner picks (0.13.25: an hour; half an hour before).
+pub const AFK_MINUTES: [u32; 5] = [60, 15, 30, 120, 5];
+/// Inviting someone to the voice channel I'm in (0.13.6): `InviteToVoice` (from inside it), and
+/// they get `VoiceInvite` on every Pyr they're on, with a Join.
+pub const VOICE_INVITE_FEATURE: &str = "voice_invite";
+/// Files of any kind in direct messages and groups, up to [`MAX_DM_FILE_BYTES`] (0.13.13):
+/// end-to-end encrypted in parts of [`crate::sealed::DM_FILE_PART_BYTES`], each a `sealed`
+/// [`FileRequest::Put`] named [`DM_FILE_NAME`], sent as the message's attachments (and the
+/// file itself, with its parts, in the message: [`crate::sealed::SealedFile::parts`]). The
+/// server keeps them [`DM_FILE_DAYS`] days.
+pub const DM_FILES_FEATURE: &str = "dm-files-2gb";
+/// The largest file sent in a direct message or group.
+pub const MAX_DM_FILE_BYTES: u64 = 2 << 30;
+/// The most parts one file can have (and so attachments a file's message can have).
+pub const MAX_DM_FILE_PARTS: usize = 256;
+/// What a part of a file in a direct message is called on the server.
+pub const DM_FILE_NAME: &str = "dmfile";
+/// How long the server keeps a file sent in a direct message.
+pub const DM_FILE_DAYS: i64 = 7;
 /// Pyr Casino from 0.12.0 on: Reel Row's machines, every game's statistics (`CasinoReq::Stats`)
 /// and the slots' new math. An app asks a server for none of it without this.
 pub const CASINO_012_FEATURE: &str = "casino_0_12";
@@ -587,6 +626,10 @@ fn is_zero_i64(n: &i64) -> bool {
     *n == 0
 }
 
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
+}
+
 fn is_zero_u32(n: &u32) -> bool {
     *n == 0
 }
@@ -642,6 +685,10 @@ pub fn my_submissions_digest() -> [u8; 32] {
     use sha2::{Digest, Sha256};
     Sha256::digest(b"ingle-my-submissions-v1").into()
 }
+
+/// The most of a plugin's file (its base64) one `SubmissionFile` reply carries (0.13.14):
+/// well inside a control frame.
+pub const SUBMISSION_PART: usize = 512 * 1024;
 
 /// One file of a plugin's source.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -1052,6 +1099,13 @@ pub struct ServerInfo {
     /// ([`KLIPY_FEATURE`]). Empty: KLIPY is off on this server.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub klipy_key: String,
+    /// The AFK channel, like Discord's ([`AFK_FEATURE`]): someone in voice who's been away
+    /// `afk_minutes` (no key, no mouse, nothing said; Idle set by hand doesn't count) is moved
+    /// into it. None: nobody's moved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub afk_channel: Option<ChannelId>,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub afk_minutes: u32,
 }
 
 /// An invite that still works ([`INVITES_FEATURE`], `Event::Invites`).
@@ -1198,6 +1252,13 @@ pub struct Message {
     /// What the app made of `sealed` (never sent).
     #[serde(skip)]
     pub lock: Lock,
+    /// The server's pictures for an encrypted message whose key hasn't come yet (never sent):
+    /// kept, so they show once it opens.
+    #[serde(skip)]
+    pub held: Vec<Attachment>,
+    /// Pictures it was sent with that the server doesn't have (never sent).
+    #[serde(skip)]
+    pub lost: u32,
 }
 
 /// Whether a message was encrypted, and whether it could be opened (the app's, never sent).
@@ -1374,6 +1435,11 @@ pub enum Request {
     /// This connection's Pyr is idle, or back ([`IDLE_FEATURE`]).
     SetIdle {
         idle: bool,
+        /// (0.13.28, to servers with [`AWAY_FEATURE`]) Whether its person is away: no key, no
+        /// mouse and nothing said for [`AWAY_AFTER_SECS`]. Idle set by hand isn't away, and
+        /// only away counts for the AFK channel. Left out (older Pyrs), idle is taken as away.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        away: Option<bool>,
     },
     /// Do Not Disturb on this connection's Pyr, or off again ([`DND_FEATURE`]).
     SetDnd {
@@ -1692,6 +1758,13 @@ pub enum Request {
     GetSubmissionFile {
         id: i64,
         path: String,
+        /// Where in the file's data (its base64) to start (0.13.14): a big file comes in
+        /// parts, each a reply of its own (one reply can't hold it all).
+        #[serde(default, skip_serializing_if = "is_zero_u64")]
+        offset: u64,
+        /// The most of it to send in this part (0: as much as fits a reply).
+        #[serde(default, skip_serializing_if = "is_zero_u64")]
+        len: u64,
     },
     /// Owner only: collect plugins here, or stop.
     SetPluginSubmissions {
@@ -1721,6 +1794,14 @@ pub enum Request {
         user_id: UserId,
         channel_id: ChannelId,
     },
+    /// The AFK channel and how long away before the move there ([`AFK_FEATURE`], with
+    /// [`perm::MANAGE_SERVER`]): a voice channel everyone can see, or None to turn it off.
+    SetAfk {
+        #[serde(default)]
+        channel_id: Option<ChannelId>,
+        #[serde(default)]
+        minutes: u32,
+    },
     /// Ring the other person in a direct message whose call you're in ([`DM_CALLS_FEATURE`]),
     /// or everyone else in a group's: they get `Ringing`, on every device they're on.
     Ring {
@@ -1732,6 +1813,11 @@ pub enum Request {
         /// still in that one comes along.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         moved_from: Option<ChannelId>,
+    },
+    /// Invite someone to the voice channel I'm in ([`VOICE_INVITE_FEATURE`]): they get
+    /// `VoiceInvite` on every Pyr they're on (if they can see the channel).
+    InviteToVoice {
+        user_id: UserId,
     },
     /// Don't answer a direct message's (or group's) call ([`DM_CALLS_FEATURE`]): everyone in
     /// it gets `CallDeclined` (the caller hears it was declined; your other devices stop
@@ -1896,7 +1982,13 @@ pub enum Event {
     SubmissionFile {
         id: i64,
         path: String,
+        /// This part of the file's data (its base64), from `offset`.
         data: String,
+        #[serde(default)]
+        offset: u64,
+        /// How long the file's data is in all (0 from servers before 0.13.14: it's all here).
+        #[serde(default)]
+        size: u64,
     },
     Error {
         code: ErrorCode,
@@ -2048,6 +2140,11 @@ pub enum Event {
         /// come along.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         moved_from: Option<ChannelId>,
+    },
+    /// `from` invites you to the voice channel they're in ([`VOICE_INVITE_FEATURE`]).
+    VoiceInvite {
+        channel_id: ChannelId,
+        from: UserId,
     },
     /// `by` declined the call in a direct message or group (sent to everyone in it).
     CallDeclined {
@@ -2424,8 +2521,20 @@ mod tests {
         assert!(!json.contains("idle"), "{json}");
         let idle = Member { idle: true, ..m };
         assert!(serde_json::to_string(&idle).unwrap().contains(r#""idle":true"#));
-        let r = serde_json::to_string(&Request::SetIdle { idle: true }).unwrap();
+        let r = serde_json::to_string(&Request::SetIdle { idle: true, away: None }).unwrap();
         assert_eq!(r, r#"{"op":"set_idle","idle":true}"#);
+    }
+
+    /// (0.13.28) Idle set by hand while here says so, away or not, to servers that know; older
+    /// servers never get it, and a newer server reading an older Pyr's has no `away`.
+    #[test]
+    fn away_goes_with_idle_and_is_left_out_for_older_servers() {
+        let r = serde_json::to_string(&Request::SetIdle { idle: true, away: Some(false) }).unwrap();
+        assert_eq!(r, r#"{"op":"set_idle","idle":true,"away":false}"#);
+        let old: Request = serde_json::from_str(r#"{"op":"set_idle","idle":true}"#).unwrap();
+        assert!(matches!(old, Request::SetIdle { idle: true, away: None }));
+        let new: Request = serde_json::from_str(&r).unwrap();
+        assert!(matches!(new, Request::SetIdle { idle: true, away: Some(false) }));
     }
 
     #[test]

@@ -46,6 +46,8 @@ pub enum Act {
     SetGiphyKey { key: String, giphy: String },
     /// The server's KLIPY app key (owner only; "" turns KLIPY off).
     SetKlipyKey { key: String, klipy: String },
+    /// The server's AFK channel and its minutes (None: off).
+    SetAfk { key: String, channel: Option<pyr_proto::control::ChannelId>, minutes: u32 },
     /// Quit for real (Settings → Quit Pyr).
     Quit,
     /// Look for a newer Pyr right away (Check for updates).
@@ -157,6 +159,18 @@ pub enum Act {
     MoveChannel { key: String, channel: ChannelId, before: Option<ChannelId> },
     /// Someone in voice dragged (or sent with Move to) into another voice channel.
     MoveMember { key: String, uid: String, channel: ChannelId },
+    /// Invite someone to the voice channel I'm in (Invite to the channel).
+    InviteToVoice { key: String, uid: String },
+    /// Send a file of any kind in a direct message or group (0.13.13).
+    SendDmFile { key: String, channel: ChannelId, path: std::path::PathBuf },
+    /// Stop sending one (or dismiss one that stopped).
+    CancelDmFile { key: String, id: u64 },
+    /// Save a file from a direct message there.
+    SaveDmFile { key: String, id: String, path: std::path::PathBuf },
+    /// Stop saving one, or forget one saved.
+    DismissDmSave { key: String, id: String },
+    /// An invite to a voice channel answered: Join (`join`) or Not now.
+    AnswerVoiceInvite { key: String, channel: ChannelId, from: String, join: bool },
     /// An invite for the Invite dialog (one of mine with these settings, if it still works;
     /// `fresh`: a new one regardless, as Generate a new link makes).
     CreateInvite { key: String, max_uses: Option<u32>, expires_secs: Option<u64>, fresh: bool },
@@ -696,6 +710,27 @@ impl PyrApp {
             Act::DeleteChannel { key, channel } => e.delete_channel(&key, channel),
             Act::MoveChannel { key, channel, before } => e.move_channel(&key, channel, before),
             Act::MoveMember { key, uid, channel } => e.move_member(&key, &uid, channel),
+            Act::InviteToVoice { key, uid } => e.invite_to_voice(&key, &uid),
+            Act::SendDmFile { key, channel, path } => {
+                if let Err(err) = e.send_dm_file(&key, channel, path) {
+                    // (A file that can't go: not a bug.)
+                    self.engine.shared.state.write().refused(err);
+                }
+            }
+            Act::CancelDmFile { key, id } => e.cancel_dm_file(&key, id),
+            Act::SaveDmFile { key, id, path } => {
+                if let Err(err) = e.save_dm_file(&key, &id, path) {
+                    self.engine.shared.state.write().refused(err);
+                }
+            }
+            Act::DismissDmSave { key, id } => e.dismiss_dm_save(&key, &id),
+            Act::AnswerVoiceInvite { key, channel, from, join } => {
+                e.dismiss_voice_invite(&key, channel, &from);
+                if join {
+                    e.join_voice(&key, channel);
+                }
+            }
+            Act::SetAfk { key, channel, minutes } => e.set_afk(&key, channel, minutes),
             Act::StreamMuted(m) => e.set_stream_muted(m),
             Act::SuggestIdea { title, body } => e.suggest_idea(&title, &body),
             Act::CreateInvite { key, max_uses, expires_secs, fresh } => e.make_invite(&key, max_uses, expires_secs, !fresh),
@@ -1301,6 +1336,17 @@ impl eframe::App for PyrApp {
         }
         if crate::images::dialog_closed() {
             ctx.input_mut(|i| i.keys_down.clear());
+        }
+        // Files chosen to send in a direct message or group: pictures that fit go with the
+        // message as pictures; anything else is sent as a file, on its own.
+        for (key, ch, paths) in crate::images::take_picked_files() {
+            let limit = engine.state().server(&key).map(crate::images::upload_limit).unwrap_or(pyr_proto::control::OLD_MAX_ATTACHMENT_BYTES);
+            for path in paths {
+                self.send_any_file(&key, ch, path, limit, ctx, &mut acts);
+            }
+        }
+        for (key, id, path) in crate::images::take_picked_saves() {
+            acts.push(Act::SaveDmFile { key, id, path });
         }
         // Pictures chosen in a file dialog (which runs on its own thread).
         for (what, files) in crate::images::take_picked() {
@@ -1929,6 +1975,7 @@ impl PyrApp {
             self.dialogs(ctx, st, acts);
             self.viewer(ctx, st, acts);
             self.incoming_call_card(ctx, st, acts);
+            self.voice_invite_cards(ctx, st, acts);
             self.handshake_cards(ctx, st, acts);
             self.toasts(ctx, st, acts);
             return;
@@ -1942,6 +1989,7 @@ impl PyrApp {
             self.avatar_editor(ctx, acts);
             self.drop_files(ctx, st, acts);
             self.incoming_call_card(ctx, st, acts);
+            self.voice_invite_cards(ctx, st, acts);
             self.handshake_cards(ctx, st, acts);
             self.toasts(ctx, st, acts);
             return;
@@ -2028,6 +2076,7 @@ impl PyrApp {
         self.avatar_editor(ctx, acts);
         self.drop_files(ctx, st, acts);
         self.incoming_call_card(ctx, st, acts);
+        self.voice_invite_cards(ctx, st, acts);
         self.handshake_cards(ctx, st, acts);
         self.toasts(ctx, st, acts);
     }
@@ -2239,6 +2288,17 @@ impl PyrApp {
             server_voice_items(ui, st, s, uid, acts);
             ui.separator();
         }
+        // Invite them to the voice channel I'm in (they get a card with Join).
+        if let Some((cid, cname)) = Self::my_voice_channel(st, s).filter(|_| !me && !s.is_bot(uid) && s.has(pyr_proto::control::VOICE_INVITE_FEATURE)) {
+            let there = s.voice_in(cid).iter().any(|p| p.user_id == uid);
+            if !there && s.status.is_connected() {
+                if ui.button(format!("Invite to {cname}")).on_hover_text(format!("{name} gets a card in the corner of their Pyr with Join")).clicked() {
+                    acts.push(Act::InviteToVoice { key: s.key.clone(), uid: uid.to_string() });
+                    chose = true;
+                }
+                ui.separator();
+            }
+        }
         // Move members: to another of the server's voice channels (Discord's Move To; dragging
         // them in the channel list does the same).
         let now_in = s.voice.values().find(|p| p.user_id == uid && !s.is_private(p.channel_id)).map(|p| p.channel_id);
@@ -2270,6 +2330,12 @@ impl PyrApp {
             }
         }
         chose
+    }
+
+    /// The voice channel of this server I'm in (not a direct message's call), with its name.
+    pub(crate) fn my_voice_channel(st: &AppState, s: &ServerView) -> Option<(ChannelId, String)> {
+        let c = st.call.as_ref().filter(|c| c.server_key == s.key)?;
+        s.channels.iter().find(|ch| ch.id == c.channel_id && ch.kind == ChannelKind::Voice).map(|ch| (ch.id, ch.name.clone()))
     }
 
     /// Whether a moderator muted or deafened me in my call (`VoiceParticipant::server_mute`,
@@ -2311,13 +2377,19 @@ impl PyrApp {
                     .unwrap_or_default();
                 let b = Rect::from_center_size(r.center(), vec2(420.0, 120.0));
                 ui.painter().rect_filled(b, crate::theme::r(14), theme::EMBER());
-                ui.painter().text(b.center() - vec2(0.0, 12.0), egui::Align2::CENTER_CENTER, "Drop images to send", theme::bold_font(20.0), Color32::from_rgb(0x1b, 0x14, 0x11));
+                let what = if crate::chat::files_go_here(&server, channel) { "Drop files to send" } else { "Drop images to send" };
+                ui.painter().text(b.center() - vec2(0.0, 12.0), egui::Align2::CENTER_CENTER, what, theme::bold_font(20.0), Color32::from_rgb(0x1b, 0x14, 0x11));
                 ui.painter().text(b.center() + vec2(0.0, 18.0), egui::Align2::CENTER_CENTER, format!("in {name}"), theme::font(14.0), Color32::from_rgb(0x3a, 0x22, 0x14));
             });
         }
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         let draft = (server.key.clone(), channel);
+        let any_file = crate::chat::files_go_here(&server, channel);
         for f in dropped {
+            if let (true, Some(path)) = (any_file, &f.path) {
+                self.send_any_file(&server.key, channel, path.clone(), crate::images::upload_limit(&server), ctx, acts);
+                continue;
+            }
             let item = match (&f.bytes, &f.path) {
                 (Some(b), _) => Some((f.name.clone(), b.to_vec())),
                 (None, Some(p)) => crate::images::read_files(std::slice::from_ref(p)).into_iter().next(),
@@ -2327,6 +2399,22 @@ impl PyrApp {
                 crate::chat::add_attachment(&mut self.ui.attach, &draft, name, bytes, crate::images::upload_limit(&server), ctx, acts);
             }
         }
+    }
+
+    /// A file to send in a direct message or group: a picture that fits goes with the message
+    /// (like one picked as a picture); anything else goes as a file, on its own.
+    pub(crate) fn send_any_file(&mut self, key: &str, channel: ChannelId, path: std::path::PathBuf, limit: u64, ctx: &egui::Context, acts: &mut Vec<Act>) {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        if crate::images::goes_as_picture(&name, size, limit) {
+            if let Ok(bytes) = std::fs::read(&path) {
+                if pyr_proto::control::sniff_image(&bytes).is_some() {
+                    crate::chat::add_attachment(&mut self.ui.attach, &(key.to_string(), channel), name, bytes, limit, ctx, acts);
+                    return;
+                }
+            }
+        }
+        acts.push(Act::SendDmFile { key: key.to_string(), channel, path });
     }
 
     fn current_channel(&mut self, server: &ServerView) -> Option<ChannelId> {
@@ -3296,7 +3384,8 @@ impl PyrApp {
             if mine.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
-            egui::Popup::menu(&mine).align(egui::RectAlign::TOP_START).width(300.0).show(|ui| {
+            // (Wide enough for Idle's note that it won't move you to AFK.)
+            egui::Popup::menu(&mine).align(egui::RectAlign::TOP_START).width(330.0).show(|ui| {
                 crate::menu::style(ui);
                 let (by_hand, dnd) = (st.settings.idle_by_hand, st.settings.dnd);
                 if status_choice(ui, Presence::Online, !by_hand && !dnd, "Idle by itself after 5 minutes away") {
@@ -3304,7 +3393,7 @@ impl PyrApp {
                     acts.push(Act::SetIdleByHand(false));
                     ui.close();
                 }
-                if status_choice(ui, Presence::Idle, by_hand && !dnd, "Until you set it back") {
+                if status_choice(ui, Presence::Idle, by_hand && !dnd, "Until you set it back (it won't move you to AFK)") {
                     acts.push(Act::SetDnd(false));
                     acts.push(Act::SetIdleByHand(true));
                     ui.close();

@@ -1070,15 +1070,17 @@ impl Db {
     }
 
     /// Total bytes stored (for the storage limit).
+    /// Bytes of images and such kept (files sent in direct messages have their own room).
     pub fn files_total(&self) -> u64 {
-        self.conn.lock().query_row("SELECT COALESCE(SUM(size), 0) FROM files", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as u64
+        self.conn.lock().query_row("SELECT COALESCE(SUM(size), 0) FROM files WHERE name != 'dmfile'", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as u64
     }
 
-    /// Bytes of files one member has uploaded that are still kept.
+    /// Bytes of files one member has uploaded that are still kept (not counting files sent in
+    /// direct messages).
     pub fn files_total_of(&self, uid: &str) -> u64 {
         self.conn
             .lock()
-            .query_row("SELECT COALESCE(SUM(size), 0) FROM files WHERE owner = ?1", [uid], |r| r.get::<_, i64>(0))
+            .query_row("SELECT COALESCE(SUM(size), 0) FROM files WHERE owner = ?1 AND name != 'dmfile'", [uid], |r| r.get::<_, i64>(0))
             .unwrap_or(0) as u64
     }
 
@@ -1086,10 +1088,51 @@ impl Db {
     pub fn unsent_files_of(&self, uid: &str) -> usize {
         self.conn
             .lock()
-            .query_row("SELECT COUNT(*) FROM files WHERE owner = ?1 AND kind IN (0, 3) AND message_id IS NULL AND id NOT IN (SELECT id FROM gifs)", [uid], |r| {
-                r.get::<_, i64>(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE owner = ?1 AND kind IN (0, 3) AND message_id IS NULL AND name != 'dmfile' AND id NOT IN (SELECT id FROM gifs)",
+                [uid],
+                |r| r.get::<_, i64>(0),
+            )
             .unwrap_or(0) as usize
+    }
+
+    /// Bytes of files sent in direct messages kept (they're kept a week).
+    pub fn dm_files_total(&self) -> u64 {
+        self.conn.lock().query_row("SELECT COALESCE(SUM(size), 0) FROM files WHERE name = 'dmfile'", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as u64
+    }
+
+    /// Bytes of files one member sent in direct messages that are still kept: what they sent
+    /// in the last week.
+    pub fn dm_files_of(&self, uid: &str) -> u64 {
+        self.conn
+            .lock()
+            .query_row("SELECT COALESCE(SUM(size), 0) FROM files WHERE owner = ?1 AND name = 'dmfile'", [uid], |r| r.get::<_, i64>(0))
+            .unwrap_or(0) as u64
+    }
+
+    /// Parts of files a member uploaded for direct messages and hasn't sent yet.
+    pub fn unsent_dm_parts_of(&self, uid: &str) -> usize {
+        self.conn
+            .lock()
+            .query_row("SELECT COUNT(*) FROM files WHERE owner = ?1 AND name = 'dmfile' AND message_id IS NULL", [uid], |r| r.get::<_, i64>(0))
+            .unwrap_or(0) as usize
+    }
+
+    /// Files sent in direct messages kept their week (`kept_ms`), and parts never sent within
+    /// `unsent_ms`: their rows are removed and their ids returned so the files can be wiped.
+    /// Their messages stay (their files show as expired).
+    pub fn take_expired_dm_files(&self, kept_ms: i64, unsent_ms: i64) -> Vec<String> {
+        let c = self.conn.lock();
+        let now = now_ms();
+        let sql = "SELECT id FROM files WHERE name = 'dmfile' AND kind = 3 AND (created_at < ?1 OR (message_id IS NULL AND created_at < ?2))";
+        let ids: Vec<String> = c
+            .prepare(sql)
+            .and_then(|mut st| st.query_map(params![now - kept_ms, now - unsent_ms], |r| r.get(0)).map(|rows| rows.flatten().collect()))
+            .unwrap_or_default();
+        for id in &ids {
+            let _ = c.execute("DELETE FROM files WHERE id = ?1", [id]);
+        }
+        ids
     }
 
     /// Attachments uploaded but not sent within `max_age_ms`, profile pictures nobody uses,
@@ -1100,7 +1143,7 @@ impl Db {
         let cutoff = now_ms() - max_age_ms;
         let sql = "SELECT id FROM files WHERE created_at < ?1 AND (
                        (kind = 0 AND message_id IS NULL AND id NOT IN (SELECT id FROM gifs))
-                    OR (kind = 3 AND message_id IS NULL)
+                    OR (kind = 3 AND message_id IS NULL AND name != 'dmfile')
                     OR (kind = 1 AND id NOT IN (SELECT avatar FROM users WHERE avatar IS NOT NULL)
                                  AND id NOT IN (SELECT value FROM meta WHERE key = 'icon')
                                  AND id NOT IN (SELECT id FROM emojis))
@@ -1359,6 +1402,8 @@ impl Db {
                     size: r.get::<_, i64>(4)? as u64,
                     width: r.get(5)?,
                     height: r.get(6)?,
+                    parts: 0,
+                    expired: false,
                 },
             ))
         });
@@ -1729,6 +1774,8 @@ impl Db {
             attachments,
             sealed: sealed.cloned(),
             lock: Default::default(),
+            held: Vec::new(),
+            lost: 0,
         })
     }
 
@@ -1770,6 +1817,8 @@ impl Db {
             attachments: Vec::new(),
             sealed,
             lock: Default::default(),
+            held: Vec::new(),
+            lost: 0,
         })
     }
 

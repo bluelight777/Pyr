@@ -41,8 +41,11 @@ pub struct Book {
     /// Conversation keys I was given or made: (server, conversation, key) → what it might be
     /// (more than one when someone gave a wrong one too; the one that opened a message first).
     keys: HashMap<(String, ChannelId, KeyRef), Vec<[u8; 32]>>,
-    /// Encrypted pictures' keys, by file id.
+    /// Encrypted pictures' keys, by file id (and files' in direct messages, by their first
+    /// part's).
     files: HashMap<String, [u8; 32]>,
+    /// Files sent in direct messages: their parts' ids, in order, by the first's.
+    docs: HashMap<String, Vec<String>>,
     outbound: HashMap<(String, ChannelId), Outbound>,
     /// Who can read each conversation, with their message keys (checked): forgotten whenever
     /// who's where might have changed.
@@ -58,6 +61,7 @@ impl Book {
             me: identity.user_id(),
             keys: HashMap::new(),
             files: HashMap::new(),
+            docs: HashMap::new(),
             outbound: HashMap::new(),
             readers: HashMap::new(),
             asked: HashMap::new(),
@@ -89,6 +93,19 @@ impl Book {
         self.files.get(id).copied()
     }
 
+    /// A file sent in a direct message: its key and its parts' ids, in order.
+    pub fn doc(&self, id: &str) -> Option<([u8; 32], Vec<String>)> {
+        Some((self.files.get(id).copied()?, self.docs.get(id)?.clone()))
+    }
+
+    /// One of mine, sent: so it can be saved here too without asking anyone.
+    pub(crate) fn add_doc(&mut self, key: [u8; 32], parts: Vec<String>) {
+        if let Some(first) = parts.first().cloned() {
+            self.files.insert(first.clone(), key);
+            self.docs.insert(first, parts);
+        }
+    }
+
     fn forget_readers(&mut self, server: &str) {
         self.readers.retain(|(s, _), _| s != server);
     }
@@ -105,7 +122,12 @@ fn open_message(book: &mut Book, server: &str, m: &mut Message) -> Option<KeyRef
     if candidates.is_empty() {
         m.lock = Lock::Waiting;
         m.content.clear();
-        m.attachments.clear();
+        // The server's pictures wait with it (they're still ciphertext): once the key comes,
+        // they're the ones it opens with. (Clearing them lost a message's pictures for good.)
+        let held = std::mem::take(&mut m.attachments);
+        if !held.is_empty() {
+            m.held = held;
+        }
         return Some(s.key);
     }
     let mut result = Err(OpenError::Forged);
@@ -121,15 +143,34 @@ fn open_message(book: &mut Book, server: &str, m: &mut Message) -> Option<KeyRef
             break;
         }
     }
-    let from_server = std::mem::take(&mut m.attachments);
+    let mut from_server = std::mem::take(&mut m.attachments);
+    if from_server.is_empty() {
+        from_server = std::mem::take(&mut m.held);
+    }
+    m.held.clear();
     match result {
         Ok(body) => {
             m.content = body.text;
+            let sent_with = body.files.len();
             m.attachments = body
                 .files
                 .into_iter()
                 // Only what was sent with it here (the server links pictures to messages).
                 .filter_map(|f| {
+                    if !f.parts.is_empty() {
+                        // A file (in a direct message): there while the server has all its
+                        // parts, and expired (it keeps them 7 days) once it doesn't.
+                        let key = b64::decode_array::<32>(&f.key)?;
+                        if f.parts.len() > pyr_proto::control::MAX_DM_FILE_PARTS || f.parts.len() as u64 != sealed::part_count(f.size) {
+                            return None;
+                        }
+                        let first = f.parts[0].clone();
+                        let expired = !f.parts.iter().all(|p| from_server.iter().any(|a| &a.id == p));
+                        book.files.insert(first.clone(), key);
+                        book.docs.insert(first.clone(), f.parts.clone());
+                        let parts = f.parts.len() as u32;
+                        return Some(Attachment { id: first, name: f.name, mime: f.mime, size: f.size, width: 0, height: 0, parts, expired });
+                    }
                     let on_server = from_server.iter().find(|a| a.id == f.id)?;
                     if f.key.is_empty() {
                         // A picture sent before messages were encrypted (kept by an edit).
@@ -138,13 +179,19 @@ fn open_message(book: &mut Book, server: &str, m: &mut Message) -> Option<KeyRef
                     let key = b64::decode_array::<32>(&f.key)?;
                     book.files.insert(f.id.clone(), key);
                     let side = |v: u32| if v <= pyr_proto::control::MAX_IMAGE_SIDE { v } else { 0 };
-                    Some(Attachment { id: f.id, name: f.name, mime: f.mime, size: f.size, width: side(f.width), height: side(f.height) })
+                    Some(Attachment { id: f.id, name: f.name, mime: f.mime, size: f.size, width: side(f.width), height: side(f.height), parts: 0, expired: false })
                 })
                 .collect();
+            m.lost = sent_with.saturating_sub(m.attachments.len()) as u32;
+            if m.lost > 0 {
+                tracing::warn!(message = m.id, sent_with, on_server = from_server.len(), shown = m.attachments.len(), "a message's pictures aren't all on the server");
+            }
             m.lock = Lock::Open;
         }
         Err(e) => {
             m.content.clear();
+            // (Kept for a key that does open it, as for one that's still to come.)
+            m.held = from_server;
             m.lock = if e == OpenError::Forged { Lock::Forged } else { Lock::Damaged };
         }
     }
@@ -415,7 +462,7 @@ pub(crate) async fn send(
             let id = net::file_put(conn, FileKind::Sealed, "", SEALED_MIME, &ct).await.map_err(|e| format!("Couldn't upload {name}: {e:#}"))?;
             shared.sealed.lock().files.insert(id.clone(), fkey);
             let (width, height) = pyr_proto::control::image_size(bytes).unwrap_or((0, 0));
-            body.files.push(SealedFile { id: id.clone(), name: name.clone(), mime: mime.to_string(), size: bytes.len() as u64, width, height, key: b64::encode(&fkey) });
+            body.files.push(SealedFile { id: id.clone(), name: name.clone(), mime: mime.to_string(), size: bytes.len() as u64, width, height, key: b64::encode(&fkey), parts: Vec::new() });
             id
         } else {
             net::file_put(conn, FileKind::Attachment, name, mime, bytes).await.map_err(|e| format!("Couldn't upload {name}: {e:#}"))?
@@ -433,6 +480,19 @@ pub(crate) async fn send(
         None => Request::SendMessage { channel_id: channel, content: text, reply_to, nonce, attachments: ids, sealed: None },
     };
     ask(h, req).await.map(|_| ())
+}
+
+/// Sends a file whose parts are on the server already (see `dmfiles`), in a direct message or
+/// group: the message says what it is and lists its parts, which go as its attachments.
+pub(crate) async fn send_file(shared: &Arc<Shared>, server: &str, h: &ServerHandle, channel: ChannelId, file: SealedFile, nonce: String) -> Result<(), String> {
+    if !on_for(shared, server) {
+        return Err("This server doesn't encrypt messages, so files can't be sent on it.".into());
+    }
+    let (key_ref, key) = outbound(shared, server, h, channel).await?;
+    let ids = file.parts.clone();
+    let body = Body { text: String::new(), files: vec![file] };
+    let s = sealed::seal(&shared.identity, channel, &key_ref, &key, &body);
+    ask(h, Request::SendMessage { channel_id: channel, content: String::new(), reply_to: None, nonce, attachments: ids, sealed: Some(s) }).await.map(|_| ())
 }
 
 /// Changes a message of mine, encrypted where the server encrypts (its pictures stay).
@@ -462,6 +522,7 @@ pub(crate) async fn edit(shared: &Arc<Shared>, server: &str, h: &ServerHandle, m
                 height: a.height,
                 // (Empty: a picture from before messages were encrypted.)
                 key: book.file_key(&a.id).map(|k| b64::encode(&k)).unwrap_or_default(),
+                parts: if a.parts > 0 { book.docs.get(&a.id).cloned().unwrap_or_default() } else { Vec::new() },
             })
             .collect()
     };
@@ -516,4 +577,83 @@ pub(crate) fn open_download(shared: &Shared, id: &str, bytes: Vec<u8>) -> Result
         return Err("That isn't a picture Pyr shows.".into());
     }
     Ok(plain)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A message that comes before its key keeps its pictures, and shows them once the key
+    /// comes (0.13.4: they were lost, and the message showed no picture for good).
+    #[test]
+    fn a_picture_that_comes_before_its_key_shows_when_it_comes() {
+        let alice = Identity::generate();
+        let me = Identity::generate();
+        let channel: ChannelId = 7;
+        let key_ref = KeyRef { owner: alice.user_id(), id: sealed::new_key_id() };
+        let secret = [9u8; 32];
+        let file = SealedFile { id: "f1".into(), name: "dot.png".into(), mime: "image/png".into(), size: 70, width: 1, height: 1, key: b64::encode(&[3u8; 32]), parts: Vec::new() };
+        let body = Body { text: "look".into(), files: vec![file] };
+        let on_server = Attachment { id: "f1".into(), name: String::new(), mime: SEALED_MIME.into(), size: 86, width: 0, height: 0, parts: 0, expired: false };
+        let mut m = Message {
+            id: 1,
+            channel_id: channel,
+            author: alice.user_id(),
+            content: String::new(),
+            created_at: 0,
+            edited_at: None,
+            reply_to: None,
+            reactions: Vec::new(),
+            attachments: vec![on_server],
+            sealed: Some(sealed::seal(&alice, channel, &key_ref, &secret, &body)),
+            lock: Lock::Plain,
+            held: Vec::new(),
+            lost: 0,
+        };
+        let mut book = Book::new(&me);
+        // No key yet: waiting, nothing shown.
+        assert_eq!(open_message(&mut book, "srv", &mut m), Some(key_ref.clone()));
+        assert_eq!((m.lock, m.attachments.len()), (Lock::Waiting, 0));
+        // Opened again before it comes (another frame, a reopen): still waiting, still kept.
+        open_message(&mut book, "srv", &mut m);
+        assert_eq!(m.lock, Lock::Waiting);
+        // The key comes: the text and the picture.
+        book.add_key("srv", channel, &key_ref, secret);
+        assert_eq!(open_message(&mut book, "srv", &mut m), None);
+        assert_eq!((m.lock, m.content.as_str(), m.attachments.len(), m.lost), (Lock::Open, "look", 1, 0));
+        assert_eq!((m.attachments[0].name.as_str(), m.attachments[0].mime.as_str()), ("dot.png", "image/png"));
+        assert!(book.file_key("f1").is_some(), "and the picture's key, to open it with");
+        assert!(m.held.is_empty());
+    }
+
+    /// A picture the server doesn't have (it was sent with the message, but isn't there) is
+    /// counted, so the message can say so.
+    #[test]
+    fn a_picture_the_server_lacks_is_counted() {
+        let alice = Identity::generate();
+        let channel: ChannelId = 7;
+        let key_ref = KeyRef { owner: alice.user_id(), id: sealed::new_key_id() };
+        let secret = [5u8; 32];
+        let file = SealedFile { id: "f2".into(), name: "a.png".into(), mime: "image/png".into(), size: 70, width: 1, height: 1, key: b64::encode(&[4u8; 32]), parts: Vec::new() };
+        let body = Body { text: String::new(), files: vec![file] };
+        let mut m = Message {
+            id: 2,
+            channel_id: channel,
+            author: alice.user_id(),
+            content: String::new(),
+            created_at: 0,
+            edited_at: None,
+            reply_to: None,
+            reactions: Vec::new(),
+            attachments: Vec::new(),
+            sealed: Some(sealed::seal(&alice, channel, &key_ref, &secret, &body)),
+            lock: Lock::Plain,
+            held: Vec::new(),
+            lost: 0,
+        };
+        let mut book = Book::new(&alice);
+        book.add_key("srv", channel, &key_ref, secret);
+        open_message(&mut book, "srv", &mut m);
+        assert_eq!((m.lock, m.attachments.len(), m.lost), (Lock::Open, 0, 1));
+    }
 }

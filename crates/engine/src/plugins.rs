@@ -176,14 +176,31 @@ pub async fn fetch(h: &crate::server::ServerHandle, id: i64) -> Result<(Submissi
         other => bail!("unexpected reply: {other:?}"),
     };
     for d in more {
-        let ev = tokio::time::timeout(Duration::from_secs(30), h.request(Request::GetSubmissionFile { id, path: d.path.clone() }))
-            .await
-            .map_err(|_| anyhow!("the server didn't answer"))??;
-        match ev {
-            Event::SubmissionFile { data, .. } => files.push(SourceFile { path: d.path, data }),
-            Event::Error { message, .. } => bail!("{}: {message}", d.path),
-            other => bail!("unexpected reply: {other:?}"),
+        // A big file comes in parts (0.13.14; before, it didn't come at all: "That reply was
+        // too big to send"). A server before 0.13.14 sends it whole, saying no size.
+        let mut data = String::new();
+        loop {
+            let req = Request::GetSubmissionFile { id, path: d.path.clone(), offset: data.len() as u64, len: 0 };
+            let ev = tokio::time::timeout(Duration::from_secs(30), h.request(req)).await.map_err(|_| anyhow!("the server didn't answer"))??;
+            match ev {
+                Event::SubmissionFile { data: part, offset, size, .. } => {
+                    if offset != data.len() as u64 {
+                        bail!("{}: the server sent the wrong part of it", d.path);
+                    }
+                    let empty = part.is_empty();
+                    data.push_str(&part);
+                    if size == 0 || data.len() as u64 >= size {
+                        break;
+                    }
+                    if empty {
+                        bail!("{}: it stopped coming", d.path);
+                    }
+                }
+                Event::Error { message, .. } => bail!("{}: {message}", d.path),
+                other => bail!("unexpected reply: {other:?}"),
+            }
         }
+        files.push(SourceFile { path: d.path, data });
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok((entry, files))

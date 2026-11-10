@@ -609,7 +609,7 @@ fn big_status(p: &egui::Painter, c: egui::Pos2, presence: Presence, bg: Color32)
 }
 
 /// Shows a file in its folder (selected, on Windows).
-fn show_in_folder(path: &std::path::Path) {
+pub(crate) fn show_in_folder(path: &std::path::Path) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

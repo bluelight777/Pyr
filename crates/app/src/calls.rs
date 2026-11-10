@@ -134,6 +134,82 @@ impl PyrApp {
         ctx.request_repaint_after(Duration::from_millis(33));
     }
 
+    /// Invites to someone's voice channel (Invite to the channel): a card in the top right
+    /// corner, wherever you are in Pyr, with Join and Not now, for a minute.
+    pub(crate) fn voice_invite_cards(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
+        const LASTS: f32 = 60.0;
+        let mut shown = Vec::new();
+        for s in &st.servers {
+            let here = st.call.as_ref().filter(|c| c.server_key == s.key).map(|c| c.channel_id);
+            for (channel, from, since) in &s.voice_invites {
+                let age = since.elapsed().as_secs_f32();
+                // Gone after a minute, and once I'm in that channel anyway.
+                if age > LASTS || here == Some(*channel) || s.channel(*channel).is_none() {
+                    acts.push(Act::AnswerVoiceInvite { key: s.key.clone(), channel: *channel, from: from.clone(), join: false });
+                    continue;
+                }
+                shown.push((s, *channel, from.clone(), age));
+            }
+        }
+        let screen = ctx.content_rect();
+        let w = 320.0;
+        let mut top = screen.top() + if crate::titlebar::enabled() { crate::titlebar::HEIGHT } else { 0.0 } + 12.0;
+        for (s, channel, from, age) in shown.into_iter().rev().take(3) {
+            let name = s.member_name(&from);
+            let face = self.face_moving(ctx, s, &from, false);
+            let cname = s.channel(channel).map(|c| c.name.clone()).unwrap_or_default();
+            // Slides in from the right.
+            let ease = 1.0 - (1.0 - (age / 0.28).clamp(0.0, 1.0)).powi(3);
+            let pos = pos2(screen.right() - w - 16.0 + (1.0 - ease) * 40.0, top);
+            let id = egui::Id::new(("voice-invite", &s.key, channel, &from));
+            let card = egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
+                ui.set_opacity(ease);
+                egui::Frame::new()
+                    .fill(theme::ELEV())
+                    .stroke(Stroke::new(1.0_f32, theme::LINE()))
+                    .corner_radius(14)
+                    .shadow(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(140) })
+                    .inner_margin(egui::Margin { left: 14, right: 14, top: 12, bottom: 12 })
+                    .show(ui, |ui| {
+                        ui.set_width(w - 28.0);
+                        let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 48.0), Sense::hover());
+                        let center = pos2(row.left() + 22.0, row.center().y);
+                        let p = ui.painter();
+                        avatar(p, center, 22.0, &from, &name, false, theme::ELEV(), face);
+                        let x = row.left() + 56.0;
+                        let room = row.right() - x;
+                        crate::emoji::paint_text(p, pos2(x, row.center().y - 10.0), Align2::LEFT_CENTER, &format!("{name} invites you to"), theme::font(13.5), theme::MUTED(), Some(room));
+                        let sr = Rect::from_min_size(pos2(x, row.center().y + 1.0), vec2(16.0, 16.0));
+                        icons::speaker(p, sr, theme::TEXT());
+                        let mut under = cname.clone();
+                        if st.servers.len() > 1 {
+                            under = format!("{under} · {}", s.name);
+                        }
+                        crate::emoji::paint_text(p, pos2(x + 20.0, row.center().y + 9.0), Align2::LEFT_CENTER, &under, theme::bold_font(15.0), theme::TEXT(), Some(room - 20.0));
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.add(theme::primary_button("Join").min_size(vec2(88.0, 30.0))).clicked() {
+                                    acts.push(Act::AnswerVoiceInvite { key: s.key.clone(), channel, from: from.clone(), join: true });
+                                }
+                                if ui.add(egui::Button::new(RichText::new("Not now").color(theme::TEXT())).min_size(vec2(88.0, 30.0))).clicked() {
+                                    acts.push(Act::AnswerVoiceInvite { key: s.key.clone(), channel, from: from.clone(), join: false });
+                                }
+                            });
+                        });
+                        // How long it stays.
+                        let left = (1.0 - age / LASTS).clamp(0.0, 1.0);
+                        let r = ui.max_rect();
+                        let bar = Rect::from_min_size(pos2(r.left(), r.bottom() + 8.0), vec2(r.width() * left, 2.0));
+                        ui.painter().rect_filled(bar, 1.0, theme::EMBER().gamma_multiply(0.7));
+                    });
+            });
+            self.ui.overlay_rects.push(card.response.rect);
+            top = card.response.rect.bottom() + 10.0;
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn incoming_call_body(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, c: &IncomingCall, name: &str, face: Option<egui::TextureId>, acts: &mut Vec<Act>) {
         let t = ui.input(|i| i.time) as f32;

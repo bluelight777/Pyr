@@ -116,3 +116,53 @@ Version in brackets: where 0.13.x first had it.
 - [ ] Approved bug reports 657 to 675 (voice up and down; stopped responding), without
       touching the echo canceller
 - [ ] The key change (above)
+
+## The 0.13.28 server's feature names, in its order
+
+From the 0.13.28 `pyr-server` binary (what `Ready::features` lists). Still to add in the
+rebuild (as of chunk 2): casino_100k, casino_0_13_2, poker_rabbit, poker_straddle,
+poker_pick_bot, poker_gm_unlimited, big_slot_bets, poker_levels_2, casino_cms, casino_plinko,
+casino_build, big_bomb_pots, slots_100k, hide_title, bounty_poker, high_tables, hard_bots,
+casino_domino, poker_top_up_anytime, craps_buy_lay, dm-files-2gb.
+
+    roles files avatars dms server_icon custom_emoji friends backup giphy channel_newest
+    soundboard klipy groups idle idle_away dnd files-25mb server_gifs handshake vouches
+    vouches-for-me invites poker sealed_messages channel_order move_members casino_0_12
+    casino_0_13 casino_100k casino_0_13_2 poker_rabbit poker_straddle poker_pick_bot
+    afk_channel poker_gm_unlimited big_slot_bets poker_levels_2 casino_cms casino_plinko
+    casino_build voice_invite big_bomb_pots slots_100k hide_title bounty_poker high_tables
+    hard_bots casino_domino poker_top_up_anytime craps_buy_lay dm-files-2gb
+
+DM files (0.13.13), from the 0.13.28 binaries: each part is a `FileRequest::Put` of kind
+`sealed` named `dmfile`, sent as the message's attachments; the server takes them only in
+direct messages and groups ("files can only be sent in direct messages"), keeps them 7 days
+(`name = 'dmfile' AND kind = 3 AND (created_at < ?1 OR (message_id IS NULL AND created_at <
+?2))`), counts them apart from images, and limits them with `PYR_DM_FILES_MB` and
+`PYR_USER_DM_FILES_MB` (4 GB a week): "Too many file parts waiting to be sent. Try again in a
+while.", "You've sent a lot in the last hour. Try again a bit later.", "You've sent {} GB of
+files this week, as much as this server takes from one person. Older files expire after 7
+days.", "This server's room for files is full right now. Try again in a few days, when older
+files expire." The engine's `dmfiles.rs`.
+
+## Programs and Pyr (0.13.15 to 0.13.18), from Pyropoly 0.2.0's source (`src/pyr.rs`)
+
+Pyr starts a program with `PYR_NAME` (my Pyr name), `PYR_BRIDGE=1` (Pyr listens), `PYR_JOIN`
+(a room to join at once, from an invite's Join) and, on Windows, `PYR_EMBED` (it starts
+hidden so Pyr can take its window in). Pyr writes one JSON object a line to the program's
+standard input: `{"op":"friends","me":…,"list":[{"uid","name","online"}…]}`,
+`{"op":"join","room":…}`, `{"op":"invited","uid":…,"ok":bool,"why":…}`. The program asks Pyr
+on its standard output with lines `@pyr {"op":"invite","uid":…,"room":…}`: Pyr sends that
+friend a direct message with Join. Invite links: `https://pyr.gg/<game>/<ROOM>` (0.13.18;
+`pyr://play/<game>/<ROOM>` before), shown in Pyr as the game's card with Join. 0.13.28's
+`plugins/programs.rs` has a `program-bridge-out` thread (it reads the program's output).
+Pyropoly's embedding notes (`src/embed.rs`): Pyr takes in a top-level window of the process
+that isn't a tool or helper window, the first it finds (one showing before a hidden one, then
+the bigger), and while it holds one only swaps to another that shows and is about as big or
+bigger; graphics drivers' hidden windows (NVIDIA's "NVOGLDC invisible", class
+NVOpenGLPbuffer) are never taken in.
+0.13.27's additions, from Pyropoly 0.2.4's program (its strings and code): Pyr also writes
+`{"op":"pyr","can":["update"],"version":"<the Library's newest version of the program>"}`
+(when it opens, and every ten minutes while it's open); Pyropoly offers "Update now" when
+`version` isn't its own, and only asks when `can` has "update". It asks with
+`@pyr {"op":"update","room":"<ROOM>"}`: Pyr closes it, updates it and opens it again with
+`PYR_JOIN` set to that room.

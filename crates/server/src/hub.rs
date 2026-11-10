@@ -282,8 +282,11 @@ struct Client {
     session: Option<SessionId>,
     session_cell: Arc<AtomicU32>,
     last_typing: HashMap<ChannelId, Instant>,
-    /// Its Pyr says it's idle (`SetIdle`).
+    /// Its Pyr says it's idle (`SetIdle`: the moon everyone sees, away or set by hand).
     idle: bool,
+    /// Since when its Pyr says its person is away (`SetIdle::away`; from an older Pyr, idle):
+    /// what the AFK channel goes by.
+    away_since: Option<Instant>,
     /// Its person said Do Not Disturb there (`SetDnd`).
     dnd: bool,
 }
@@ -303,6 +306,26 @@ struct Voice {
     last_keyframe_request: HashMap<u8, Instant>,
     /// Its app adjusts its shares to its viewers: it's told how they're getting on.
     feedback: bool,
+    /// When they came into this voice channel (the AFK channel's minutes count from then at
+    /// the earliest).
+    joined: Instant,
+}
+
+/// Whether someone in voice goes to the AFK channel after `mins` minutes away: their Pyr said
+/// they're away `away_for` ago (None: they aren't), which it says after five quiet minutes, so
+/// those count in; never counting from before they came into the channel (`in_voice_for`), and
+/// not while they're sharing a screen or watching one (`busy`).
+fn afk_due(away_for: Option<Duration>, in_voice_for: Duration, mins: u32, busy: bool) -> bool {
+    let Some(away) = away_for else { return false };
+    let quiet = (away + Duration::from_secs(pyr_proto::control::AWAY_AFTER_SECS)).min(in_voice_for);
+    !busy && quiet >= Duration::from_secs(u64::from(mins.max(1)) * 60)
+}
+
+/// Since when a connection's person is away, after its Pyr says `idle` and `away` (`SetIdle`),
+/// away since `was` until now. Idle set by hand isn't away; an older Pyr says only idle, which
+/// is taken as away (it can't say which).
+fn away_since(was: Option<Instant>, idle: bool, away: Option<bool>, now: Instant) -> Option<Instant> {
+    away.unwrap_or(idle).then(|| was.unwrap_or(now))
 }
 
 struct Subscriber {
@@ -764,7 +787,7 @@ impl Hub {
         }
         let hourly_cap = env_mb("PYR_USER_UPLOAD_MB_PER_HOUR", 400);
         let mut up = self.uploads.lock();
-        let in_flight_all: u64 = up.values().map(|v| v.0).sum();
+        let in_flight_all: u64 = up.iter().filter(|(k, _)| !k.starts_with("dm:")).map(|(_, v)| v.0).sum();
         let mine = up.entry(uid.to_string()).or_default();
         mine.1.retain(|(t, _)| t.elapsed() < Duration::from_secs(3600));
         let last_hour: u64 = mine.1.iter().map(|(_, n)| n).sum();
@@ -782,6 +805,41 @@ impl Hub {
         }
         mine.0 += size;
         Ok(UploadSlot { hub: self, uid: uid.to_string(), size, done: false })
+    }
+
+    /// Reserves room for one part of a file sent in a direct message (`DM_FILES_FEATURE`):
+    /// within the server's room for them (`PYR_DM_FILES_MB`), what one member may send in a
+    /// week (`PYR_USER_DM_FILES_MB`, 4 GB; files are kept a week) and in an hour, and how many
+    /// parts can wait to be sent.
+    pub fn reserve_dm_part(&self, uid: &str, size: u64) -> Result<UploadSlot<'_>, String> {
+        let total_cap = env_mb("PYR_DM_FILES_MB", 20 * 1024);
+        let user_cap = env_mb("PYR_USER_DM_FILES_MB", 4 * 1024);
+        // (Enough for the biggest file in an hour.)
+        let hourly_cap = user_cap.max(pyr_proto::control::MAX_DM_FILE_BYTES + (256 << 20)).min(user_cap + (1 << 30));
+        let key = format!("dm:{uid}");
+        if self.db.unsent_dm_parts_of(uid) >= 2 * pyr_proto::control::MAX_DM_FILE_PARTS + 64 {
+            return Err("Too many file parts waiting to be sent. Try again in a while.".into());
+        }
+        let mut up = self.uploads.lock();
+        let in_flight_all: u64 = up.iter().filter(|(k, _)| k.starts_with("dm:")).map(|(_, v)| v.0).sum();
+        let mine = up.entry(key.clone()).or_default();
+        mine.1.retain(|(t, _)| t.elapsed() < Duration::from_secs(3600));
+        let last_hour: u64 = mine.1.iter().map(|(_, n)| n).sum();
+        if last_hour + mine.0 + size > hourly_cap {
+            return Err("You've sent a lot in the last hour. Try again a bit later.".into());
+        }
+        let week = self.db.dm_files_of(uid) + mine.0;
+        if week + size > user_cap {
+            return Err(format!(
+                "You've sent {:.1} GB of files this week, as much as this server takes from one person. Older files expire after 7 days.",
+                week as f64 / (1u64 << 30) as f64
+            ));
+        }
+        if self.db.dm_files_total() + in_flight_all + size > total_cap {
+            return Err("This server's room for files is full right now. Try again in a few days, when older files expire.".into());
+        }
+        mine.0 += size;
+        Ok(UploadSlot { hub: self, uid: key, size, done: false })
     }
 
     pub fn alloc_conn_id(&self) -> ConnId {
@@ -804,7 +862,85 @@ impl Hub {
             plugin_submissions: self.db.get_meta("plugin_submissions").as_deref() == Some("1"),
             new_plugin_submissions: self.db.new_submission_count(false),
             new_skin_submissions: self.db.new_submission_count(true),
+            afk_channel: self.afk().map(|a| a.0),
+            afk_minutes: self.afk().map(|a| a.1).unwrap_or(0),
         }
+    }
+
+    /// The AFK channel and its minutes: as the owner set them (`afk` in meta: "id minutes",
+    /// or "off"), or, never set, a voice channel called AFK with an hour (half an hour before
+    /// 0.13.25).
+    pub fn afk(&self) -> Option<(ChannelId, u32)> {
+        let voice = |id: ChannelId| self.db.channel(id).filter(|c| c.kind == ChannelKind::Voice && !c.private).is_some();
+        match self.db.get_meta("afk") {
+            Some(v) if v == "off" => None,
+            Some(v) => {
+                let mut it = v.split_whitespace();
+                let id = it.next()?.parse::<ChannelId>().ok()?;
+                let mins = it.next().and_then(|m| m.parse::<u32>().ok()).unwrap_or(pyr_proto::control::AFK_MINUTES[0]);
+                voice(id).then_some((id, mins.max(1)))
+            }
+            None => self.db.channels().into_iter().find(|c| c.kind == ChannelKind::Voice && !c.private && c.name.trim().eq_ignore_ascii_case("afk")).map(|c| (c.id, pyr_proto::control::AFK_MINUTES[0])),
+        }
+    }
+
+    /// Every half minute, `afk_check`.
+    pub async fn afk_loop(self: Arc<Self>) {
+        let mut tick = tokio::time::interval(Duration::from_secs(30));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tick.tick().await;
+            self.afk_check(Instant::now());
+        }
+    }
+
+    /// Anyone in a voice channel here (not a direct message's call) who's been away long
+    /// enough is moved to the AFK channel, like Discord's: their Pyr says they're away after
+    /// five minutes without a key, the mouse or a word (so those count in), and the minutes
+    /// count from when they came into the channel at the earliest. Idle set by hand isn't away
+    /// (0.13.28; their Pyr says which). Never anyone sharing a screen or watching one (0.13.25):
+    /// an hour of a film isn't being away, and their hour starts again once it's over. (`now`:
+    /// when it is; tests look ahead.)
+    pub fn afk_check(&self, now: Instant) {
+        let Some((afk, mins)) = self.afk() else { return };
+        let mut inner = self.inner.lock();
+        let watching: HashSet<SessionId> = inner.voice.values().filter_map(|o| o.subs.get(&track::SCREEN)).flat_map(|m| m.keys().copied()).collect();
+        let mut busy = Vec::new();
+        for v in inner.voice.values().filter(|v| !v.conversation && v.p.channel_id != afk) {
+            let Some(c) = inner.clients.get(&v.conn_id) else { continue };
+            let sharing = v.p.tracks.iter().any(|t| t.id == track::SCREEN);
+            let looking = watching.contains(&v.p.session);
+            if sharing || looking {
+                busy.push(v.conn_id);
+            }
+            let away_for = c.away_since.map(|t| now.saturating_duration_since(t));
+            if c.movable && afk_due(away_for, now.saturating_duration_since(v.joined), mins, sharing || looking) {
+                let _ = v.tx.send(frame(0, Event::MoveTo { channel_id: afk, by: String::new() }));
+                info!(channel_id = v.p.channel_id, "moved someone away to the AFK channel");
+            }
+        }
+        for id in busy {
+            if let Some(c) = inner.clients.get_mut(&id).filter(|c| c.away_since.is_some()) {
+                c.away_since = Some(now);
+            }
+        }
+    }
+
+    /// Everyone's told the server's info again when a change to a channel changed the AFK
+    /// channel (one called AFK made, renamed, made private or removed, while the owner hasn't
+    /// picked one; `before` is what it was): Pyr goes by its minutes.
+    pub fn afk_changed_since(&self, before: Option<(ChannelId, u32)>) {
+        if self.afk() != before {
+            self.broadcast_info();
+        }
+    }
+
+    /// Away (their Pyr says no key, no mouse and nothing said for five minutes) on every
+    /// connection: what the AFK channel goes by. Idle set by hand isn't away.
+    pub fn is_away(&self, uid: &str) -> bool {
+        let inner = self.inner.lock();
+        let mut theirs = inner.clients.values().filter(|c| c.user_id == uid).peekable();
+        theirs.peek().is_some() && theirs.all(|c| c.away_since.is_some())
     }
 
     /// `info` as `user` is sent it: only the owner is told how many bug reports are waiting.
@@ -1197,13 +1333,14 @@ impl Hub {
         }
     }
 
-    /// A connection's Pyr is idle, or back (`SetIdle`): everyone's told when that changes
-    /// how its member shows.
-    pub fn set_idle(&self, conn_id: ConnId, idle: bool) {
+    /// A connection's Pyr is idle, or back, and its person away or not (`SetIdle`; `away`
+    /// from Pyrs since 0.13.28): everyone's told when that changes how its member shows.
+    pub fn set_idle(&self, conn_id: ConnId, idle: bool, away: Option<bool>) {
         let mut inner = self.inner.lock();
         let Some(uid) = inner.clients.get(&conn_id).map(|c| c.user_id.clone()) else { return };
         let was = Self::is_idle_locked(&inner, &uid);
         if let Some(c) = inner.clients.get_mut(&conn_id) {
+            c.away_since = away_since(c.away_since, idle, away, Instant::now());
             c.idle = idle;
         }
         if Self::is_idle_locked(&inner, &uid) != was {
@@ -1328,6 +1465,7 @@ impl Hub {
                 session_cell,
                 last_typing: HashMap::new(),
                 idle: false,
+                away_since: None,
                 dnd: false,
             },
         );
@@ -1353,7 +1491,7 @@ impl Hub {
             // (Private conversations' calls only for their own people.)
             voice: inner.voice.values().filter(|v| v.audience.as_ref().is_none_or(|who| who.iter().any(|w| w == uid))).map(|v| v.p.clone()).collect(),
             roles: self.db.roles(),
-            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, DND_FEATURE, BIG_FILES_FEATURE, GIFS_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE, VOUCHES_FOR_ME_FEATURE, PRIVATE_CHANNELS_FEATURE, BOTS_FEATURE, INVITES_FEATURE, POKER_FEATURE, SEALED_FEATURE, CHANNEL_ORDER_FEATURE, MOVE_FEATURE, CASINO_012_FEATURE, CASINO_013_FEATURE].iter().map(|s| s.to_string()).collect(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, AWAY_FEATURE, DND_FEATURE, BIG_FILES_FEATURE, GIFS_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE, VOUCHES_FOR_ME_FEATURE, PRIVATE_CHANNELS_FEATURE, BOTS_FEATURE, INVITES_FEATURE, POKER_FEATURE, SEALED_FEATURE, CHANNEL_ORDER_FEATURE, MOVE_FEATURE, AFK_FEATURE, VOICE_INVITE_FEATURE, CASINO_012_FEATURE, CASINO_013_FEATURE, DM_FILES_FEATURE].iter().map(|s| s.to_string()).collect(),
             dms: self.db.dms_of(uid),
             relations: self.db.relations_of(uid),
             groups: if groups { self.db.groups_of(uid) } else { Vec::new() },
@@ -1558,6 +1696,7 @@ impl Hub {
             subs: HashMap::new(),
             last_keyframe_request: HashMap::new(),
             feedback: client.feedback,
+            joined: Instant::now(),
         };
         inner.voice.insert(session, voice);
         Self::voice_news_locked(&inner, audience.as_ref(), Event::VoiceUpserted { participant: p });
@@ -2361,6 +2500,39 @@ pub fn plain_relative_path(p: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// (0.13.25) The AFK channel takes someone away long enough, never while they share a
+    /// screen or watch one; not away, never.
+    #[test]
+    fn nobody_sharing_or_watching_a_screen_is_moved_to_afk() {
+        let min = |m: u64| Duration::from_secs(m * 60);
+        // Their Pyr says away after five quiet minutes: 56 more is 61 quiet minutes.
+        assert!(afk_due(Some(min(56)), min(120), 60, false));
+        assert!(!afk_due(Some(min(56)), min(120), 60, true), "sharing or watching");
+        assert!(!afk_due(Some(min(10)), min(120), 60, false), "not long enough");
+        assert!(!afk_due(Some(min(54)), min(120), 60, false), "59 quiet minutes isn't an hour");
+        assert!(!afk_due(None, min(120), 60, false), "not away");
+        // Five minutes: as soon as their Pyr says they're away.
+        assert!(afk_due(Some(min(0)), min(120), 5, false));
+    }
+
+    /// (0.13.28) Maanix came into a voice channel with his status set to Idle, his Pyr connected
+    /// well over an hour, and was moved to AFK at once ("idle for 60 minutes"). Idle set by hand
+    /// isn't away, and the hour counts from coming into the channel at the earliest.
+    #[test]
+    fn idle_set_by_hand_and_time_before_the_channel_dont_count_for_afk() {
+        let min = |m: u64| Duration::from_secs(m * 60);
+        let t0 = Instant::now();
+        assert_eq!(away_since(None, true, Some(false), t0), None);
+        assert_eq!(away_since(Some(t0), true, Some(false), t0 + min(1)), None, "back");
+        assert_eq!(away_since(None, true, Some(true), t0), Some(t0));
+        assert_eq!(away_since(Some(t0), true, Some(true), t0 + min(9)), Some(t0));
+        assert_eq!(away_since(None, true, None, t0), Some(t0));
+        assert_eq!(away_since(Some(t0), false, None, t0 + min(9)), None);
+        assert!(!afk_due(Some(min(180)), min(2), 60, false));
+        assert!(!afk_due(Some(min(180)), min(59), 60, false));
+        assert!(afk_due(Some(min(180)), min(60), 60, false));
+    }
 
     /// A viewer whose oldest frame is long overdue is stuck: frames are skipped for them until
     /// a keyframe. With the media log on (which reads how late they are as it says so), this

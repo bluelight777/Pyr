@@ -131,12 +131,117 @@ pub fn paint_dot(px: &mut [u8], w: usize, h: usize, (cx, cy): (f32, f32), r: f32
     }
 }
 
+/// What the taskbar's red badge says: the number up to nine, then 9+.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn badge_label(pings: u32) -> String {
+    if pings > 9 { "9+".into() } else { pings.to_string() }
+}
+
+/// The taskbar's red badge, like Discord's: a red disc (with its ring) across the whole icon,
+/// and `label` on it in white, in Pyr's own font. BGRA with straight alpha, top row first.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn badge_pixels(w: usize, h: usize, label: &str) -> Vec<u8> {
+    use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
+    let mut px = vec![0u8; w * h * 4];
+    let unit = w as f32 / 16.0;
+    let ring = 1.0 * unit;
+    let r = w as f32 / 2.0 - ring - 0.5;
+    paint_dot(&mut px, w, h, (w as f32 / 2.0, h as f32 / 2.0), r, ring, RED);
+    let Ok(font) = FontRef::try_from_slice(include_bytes!("../assets/fonts/Inter-SemiBold.otf")) else { return px };
+    // The glyphs at `size`, from x = 0 on one baseline, and their bounds together.
+    let lay = |size: f32| {
+        let sf = font.as_scaled(PxScale::from(size));
+        let mut x = 0.0;
+        let mut glyphs = Vec::new();
+        for c in label.chars() {
+            let mut g = sf.scaled_glyph(c);
+            g.position = point(x, sf.ascent());
+            x += sf.h_advance(g.id);
+            glyphs.push(g);
+        }
+        let mut b: Option<ab_glyph::Rect> = None;
+        for g in &glyphs {
+            if let Some(o) = font.outline_glyph(g.clone()) {
+                let r = o.px_bounds();
+                b = Some(match b {
+                    None => r,
+                    Some(a) => ab_glyph::Rect { min: point(a.min.x.min(r.min.x), a.min.y.min(r.min.y)), max: point(a.max.x.max(r.max.x), a.max.y.max(r.max.y)) },
+                });
+            }
+        }
+        (glyphs, b)
+    };
+    // As tall as fits a digit nicely; smaller when wider than the disc allows (9+).
+    let mut size = h as f32 * 0.78;
+    let (mut glyphs, mut bounds) = lay(size);
+    for _ in 0..8 {
+        let Some(b) = bounds else { break };
+        if b.width() <= r * 1.65 {
+            break;
+        }
+        size *= 0.9;
+        (glyphs, bounds) = lay(size);
+    }
+    let Some(b) = bounds else { return px };
+    let (dx, dy) = (w as f32 / 2.0 - (b.min.x + b.max.x) / 2.0, h as f32 / 2.0 - (b.min.y + b.max.y) / 2.0);
+    for mut g in glyphs {
+        g.position = point(g.position.x + dx, g.position.y + dy);
+        let Some(o) = font.outline_glyph(g) else { continue };
+        let ob = o.px_bounds();
+        o.draw(|gx, gy, cov| {
+            let (x, y) = (ob.min.x as i32 + gx as i32, ob.min.y as i32 + gy as i32);
+            if x < 0 || y < 0 || x as usize >= w || y as usize >= h || cov <= 0.0 {
+                return;
+            }
+            let i = (y as usize * w + x as usize) * 4;
+            let c = cov.min(1.0);
+            for j in 0..3 {
+                px[i + j] = (px[i + j] as f32 * (1.0 - c) + 255.0 * c).round() as u8;
+            }
+            px[i + 3] = px[i + 3].max((c * 255.0).round() as u8);
+        });
+    }
+    px
+}
+
 #[cfg(test)]
 mod tests {
     use pyr_engine::state::{AppState, ServerView};
     use pyr_proto::control::{Channel, ChannelKind, Dm};
 
     use super::*;
+
+    #[test]
+    fn the_badge_counts_to_nine_then_says_nine_plus() {
+        assert_eq!((badge_label(1), badge_label(9), badge_label(10), badge_label(250)), ("1".into(), "9".into(), "9+".into(), "9+".into()));
+    }
+
+    /// The badge is a red disc with the number on it in white, in the middle.
+    #[test]
+    fn the_badge_is_red_with_a_white_number_in_the_middle() {
+        for (size, label) in [(16, "3"), (24, "9+"), (32, "7")] {
+            let px = badge_pixels(size, size, label);
+            let at = |x: usize, y: usize| {
+                let i = (y * size + x) * 4;
+                (px[i + 2], px[i + 1], px[i], px[i + 3])
+            };
+            if let Some(dir) = std::env::var_os("PYR_SAVE_BADGE") {
+                let rgba: Vec<u8> = px.chunks(4).flat_map(|p| [p[2], p[1], p[0], p[3]]).collect();
+                let img = image::RgbaImage::from_raw(size as u32, size as u32, rgba).unwrap();
+                let big = image::imageops::resize(&img, size as u32 * 8, size as u32 * 8, image::imageops::FilterType::Nearest);
+                big.save(std::path::Path::new(&dir).join(format!("badge-{size}-{}.png", label.replace('+', "plus")))).unwrap();
+            }
+            let white = (0..size * size).filter(|i| px[i * 4] > 200 && px[i * 4 + 1] > 200 && px[i * 4 + 2] > 200 && px[i * 4 + 3] > 200).count();
+            let red = (0..size * size).filter(|i| px[i * 4 + 2] > 200 && px[i * 4 + 1] < 110 && px[i * 4 + 3] > 200).count();
+            assert!(white > size * size / 30, "{label} at {size}: {white} white pixels");
+            assert!(red > size * size / 4, "{label} at {size}: {red} red pixels");
+            assert_eq!(at(0, 0).3, 0, "the corners are see-through");
+            // The number sits in the middle: as much of it left of centre as right.
+            let half = |left: bool| (0..size * size).filter(|i| (i % size < size / 2) == left && px[i * 4] > 200 && px[i * 4 + 2] > 200).count() as f32;
+            let (l, r) = (half(true), half(false));
+            assert!((l - r).abs() / (l + r) < 0.35, "{label} at {size}: {l} left, {r} right");
+        }
+    }
 
     fn channel(id: i64, name: &str) -> Channel {
         Channel { id, kind: ChannelKind::Text, name: name.into(), ..Default::default() }

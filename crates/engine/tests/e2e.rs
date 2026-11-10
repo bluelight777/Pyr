@@ -379,6 +379,9 @@ async fn messages_are_end_to_end_encrypted() {
     wait_for("carol connected", 10, || c.state().servers.first().is_some_and(|s| s.status == ConnStatus::Connected)).await;
     c.load_history(&key, general, false);
     wait_for("carol opens the history", 15, || opened(&c, "secret-giraffe-4410")).await;
+    // Its picture too, though the message came before its key (0.13.4: it lost its picture).
+    let carols = c.state().servers[0].logs[&general].messages.iter().find(|m| m.content == "secret-giraffe-4410").cloned().unwrap();
+    assert_eq!((carols.attachments.len(), carols.lost), (1, 0), "the picture waits with the message for its key");
     let (page, _) = tokio::task::block_in_place(|| c.history_wait(&key, general, None, 50, Duration::from_secs(10))).unwrap();
     assert!(page.iter().any(|m| m.content == "secret-giraffe-4410"), "and so does the connector's way of reading");
 

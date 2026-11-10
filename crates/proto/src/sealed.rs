@@ -54,6 +54,10 @@ const SHARE_LABEL: &[u8] = b"pyr-keyshare-v1\0";
 const SEALED_LABEL: &[u8] = b"pyr-sealed-v1\0";
 const COMMIT_LABEL: &[u8] = b"pyr-key-commit-v1\0";
 const FILE_LABEL: &[u8] = b"pyr-sealed-file-v1";
+const PART_LABEL: &[u8] = b"pyr-sealed-file-part-v1";
+
+/// How much of a file sent in a direct message goes in each part (the last one has the rest).
+pub const DM_FILE_PART_BYTES: u64 = 8 << 20;
 
 /// A sender's conversation key: whose it is (only they write with it) and its id.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -168,6 +172,11 @@ pub struct SealedFile {
     #[serde(default)]
     pub height: u32,
     pub key: String,
+    /// A file sent in a direct message (`DM_FILES_FEATURE`), not a picture: the ids of its
+    /// parts on the server, in order, each sealed with `key` (see [`seal_part`]). `id` is the
+    /// first one's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<String>,
 }
 
 /// Why a message couldn't be opened.
@@ -330,9 +339,64 @@ pub fn open_file(key: &[u8; 32], ct: &[u8]) -> Option<Vec<u8>> {
     ChaCha20Poly1305::new(Key::from_slice(key)).decrypt(Nonce::from_slice(&[0u8; 12]), Payload { msg: ct, aad: FILE_LABEL }).ok()
 }
 
+/// A part's nonce: its number, and whether it's the last (so a file can't be cut short, or
+/// its parts swapped, without it showing).
+fn part_nonce(index: u64, last: bool) -> [u8; 12] {
+    let mut n = [0u8; 12];
+    n[..8].copy_from_slice(&index.to_le_bytes());
+    n[8] = last as u8;
+    n
+}
+
+/// One part of a file sent in a direct message, encrypted with the file's key (one key for
+/// all its parts; each part's number and whether it's the last are in its nonce).
+pub fn seal_part(key: &[u8; 32], index: u64, last: bool, bytes: &[u8]) -> Vec<u8> {
+    ChaCha20Poly1305::new(Key::from_slice(key))
+        .encrypt(Nonce::from_slice(&part_nonce(index, last)), Payload { msg: bytes, aad: PART_LABEL })
+        .expect("sealing can't fail")
+}
+
+pub fn open_part(key: &[u8; 32], index: u64, last: bool, ct: &[u8]) -> Option<Vec<u8>> {
+    ChaCha20Poly1305::new(Key::from_slice(key)).decrypt(Nonce::from_slice(&part_nonce(index, last)), Payload { msg: ct, aad: PART_LABEL }).ok()
+}
+
+/// How many parts a file of `size` bytes is sent in.
+pub fn part_count(size: u64) -> u64 {
+    size.div_ceil(DM_FILE_PART_BYTES).max(1)
+}
+
+/// A new key for a file.
+pub fn new_file_key() -> [u8; 32] {
+    crypto::random_bytes::<32>()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file's parts open with its key, each only as itself: not as another part, not as the
+    /// last when it isn't (so a file can't be cut short), and not with another key.
+    #[test]
+    fn a_files_parts_open_only_as_themselves() {
+        let key = new_file_key();
+        let a = seal_part(&key, 0, false, b"first part");
+        let b = seal_part(&key, 1, true, b"last part");
+        assert_eq!(open_part(&key, 0, false, &a).as_deref(), Some(&b"first part"[..]));
+        assert_eq!(open_part(&key, 1, true, &b).as_deref(), Some(&b"last part"[..]));
+        assert!(open_part(&key, 1, false, &a).is_none(), "swapped");
+        assert!(open_part(&key, 0, true, &a).is_none(), "said to be the last");
+        assert!(open_part(&new_file_key(), 0, false, &a).is_none(), "another key");
+        assert_eq!((part_count(0), part_count(1), part_count(DM_FILE_PART_BYTES), part_count(DM_FILE_PART_BYTES + 1)), (1, 1, 1, 2));
+        assert_eq!(part_count(crate::control::MAX_DM_FILE_BYTES), crate::control::MAX_DM_FILE_PARTS as u64);
+    }
+
+    /// The nonce is the part's number (little-endian), then 1 for the last part: as 0.13.28
+    /// sealed them, so its files open here and the other way round.
+    #[test]
+    fn a_parts_nonce_is_its_number_then_whether_its_the_last() {
+        assert_eq!(part_nonce(0x0102, true), [0x02, 0x01, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0]);
+        assert_eq!(part_nonce(5, false), [5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    }
 
     fn key_of(id: &Identity) -> (MessageKeys, MessageKey) {
         let k = MessageKeys::derive(id);

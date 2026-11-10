@@ -395,6 +395,7 @@ fn apply_ready(shared: &Shared, key: &str, ready: Event) {
     s.roles = roles;
     s.features = features;
     s.idle_sent = false;
+    s.away_sent = false;
     s.dnd_sent = false;
     s.relations = relations.into_iter().map(|r| (r.user_id, r.kind)).collect();
     // Direct messages that came in while we were away show as unread, with the "NEW" line
@@ -451,6 +452,17 @@ fn apply_ready(shared: &Shared, key: &str, ready: Event) {
     (shared.repaint)();
 }
 
+/// What Pyr says when the server moved me to its AFK channel, `place`, after `mins` minutes away.
+fn afk_moved(mins: u32, place: &str) -> String {
+    let long = match mins {
+        0 => "a while".to_string(),
+        60 => "an hour".to_string(),
+        m if m % 60 == 0 => format!("{} hours", m / 60),
+        m => format!("{m} minutes"),
+    };
+    format!("You were away for {long} (no keys, mouse or talking), so you were moved to {place}.")
+}
+
 fn log_newest(s: &ServerView, cid: ChannelId) -> Option<MessageId> {
     s.logs.get(&cid).and_then(|l| l.messages.last().map(|m| m.id))
 }
@@ -492,6 +504,9 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
     let mut moved: Option<(ChannelId, UserId)> = None;
     // This Pyr's part of a poker shuffle, to send.
     let mut poker_seed: Option<crate::poker::SendSeed> = None;
+    // How long it's been quiet here, when the server moves me to its AFK channel (worked out
+    // before the state's lock, since it takes the call's).
+    let quiet = matches!(&ev, Event::MoveTo { by, .. } if by.is_empty()).then(|| crate::idle::quiet_now(shared));
     {
         let mut st = shared.state.write();
         let my_uid = st.my_uid.clone();
@@ -600,7 +615,11 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
                     if in_dm {
                         if let Some(m) = s.logs.get(&cid).and_then(|l| l.messages.last()) {
                             let who = s.member_name(&m.author);
-                            let text = if m.content.is_empty() { "sent a picture".to_string() } else { m.content.clone() };
+                            let text = match m.attachments.iter().find(|a| a.parts > 0) {
+                                Some(f) if m.content.is_empty() => format!("sent a file: {}", f.name),
+                                _ if m.content.is_empty() => "sent a picture".to_string(),
+                                _ => m.content.clone(),
+                            };
                             let text: String = text.chars().take(80).collect();
                             // (In a group: which one.)
                             dm_note = Some(match s.group(cid) {
@@ -717,6 +736,14 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
                 gone_group = Some(channel_id);
             }
             Event::CallDeclined { channel_id, by } => declined = Some((channel_id, by)),
+            // Invited to a voice channel here (not by someone I've blocked).
+            Event::VoiceInvite { channel_id, from } => {
+                if !blocked.contains(&from) && from != my_uid {
+                    s.voice_invites.retain(|i| !(i.0 == channel_id && i.1 == from));
+                    s.voice_invites.push((channel_id, from, Instant::now()));
+                    ding = true;
+                }
+            }
             Event::MoveTo { channel_id, by } => moved = Some((channel_id, by)),
             Event::KeyframeRequested { track } => forward = Some(CallEvent::KeyframeRequested(track)),
             Event::VideoFeedback { track, viewers } => forward = Some(CallEvent::VideoFeedback(track, viewers)),
@@ -758,9 +785,20 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
             if in_voice_here && !here(&st, cid) {
                 if let Some(s) = st.server(key) {
                     let (who, place) = (s.member_name(&by), s.channels.iter().find(|c| c.id == cid).map(|c| c.name.clone()).unwrap_or_default());
-                    st.toast(format!("{who} moved you to {place}."), false);
+                    let mins = s.info.afk_minutes;
+                    if !by.is_empty() {
+                        st.toast(format!("{who} moved you to {place}."), false);
+                        follow = Some(cid);
+                    } else if crate::idle::afk_move_ok(quiet.unwrap_or_default(), mins) {
+                        // (The server itself: away long enough in voice, to its AFK channel.)
+                        st.toast(afk_moved(mins, &place), false);
+                        follow = Some(cid);
+                    } else {
+                        // Not away that long here (a server from before 0.13.28 counts Idle
+                        // set by hand as away): staying put.
+                        tracing::info!(quiet_s = quiet.unwrap_or_default().as_secs(), mins, "not going to the AFK channel: not away that long here");
+                    }
                 }
-                follow = Some(cid);
             }
         }
         if let Some((cid, from, video, moved_from)) = ringing {
@@ -855,4 +893,17 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
         shared.forward_call_event(key, ev);
     }
     (shared.repaint)();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::afk_moved;
+
+    #[test]
+    fn the_afk_move_says_how_long_in_plain_words() {
+        assert_eq!(afk_moved(60, "AFK"), "You were away for an hour (no keys, mouse or talking), so you were moved to AFK.");
+        assert_eq!(afk_moved(120, "AFK"), "You were away for 2 hours (no keys, mouse or talking), so you were moved to AFK.");
+        assert_eq!(afk_moved(15, "Nap"), "You were away for 15 minutes (no keys, mouse or talking), so you were moved to Nap.");
+        assert_eq!(afk_moved(0, "AFK"), "You were away for a while (no keys, mouse or talking), so you were moved to AFK.");
+    }
 }

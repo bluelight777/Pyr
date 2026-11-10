@@ -98,7 +98,9 @@ fn msg_sig(m: &Message) -> u64 {
     }
     for a in &m.attachments {
         a.id.hash(&mut h);
+        (a.parts, a.expired).hash(&mut h);
     }
+    m.lost.hash(&mut h);
     std::mem::discriminant(&m.lock).hash(&mut h);
     h.finish()
 }
@@ -671,13 +673,16 @@ impl PyrApp {
                 crate::calls::group_picture(self, &p, ui.ctx(), s, g, &st.my_uid, r.center(), 40.0, theme::MAIN());
                 ui.add_space(8.0);
                 crate::emoji::label(ui, &name, theme::bold_font(26.0), theme::TEXT(), None, &mut |_| None);
-                ui.label(
-                    RichText::new(format!(
-                        "Welcome to the beginning of this group. Only the {} people in it can see it (and the server it's on: it isn't end-to-end encrypted yet).",
+                // (Said as it is: encrypted wherever the server encrypts messages.)
+                let text = if s.has(pyr_proto::control::SEALED_FEATURE) {
+                    format!("Welcome to the beginning of this group. Only the {} people in it can see it: it's end-to-end encrypted.", g.members.len())
+                } else {
+                    format!(
+                        "Welcome to the beginning of this group. Only the {} people in it can see it (and the server it's on: it runs an older Pyr, so it isn't end-to-end encrypted).",
                         g.members.len()
-                    ))
-                    .color(theme::MUTED()),
-                );
+                    )
+                };
+                ui.label(RichText::new(text).color(theme::MUTED()));
             });
         });
         ui.add_space(12.0);
@@ -694,10 +699,14 @@ impl PyrApp {
                 avatar(ui.painter(), r.center(), 40.0, with, &name, false, theme::MAIN(), face);
                 ui.add_space(8.0);
                 ui.label(RichText::new(&name).font(theme::bold_font(26.0)).color(theme::TEXT()));
-                ui.label(
-                    RichText::new(format!("This is the beginning of your direct message history with {name}. Other members can't see it (the server it's on can: it isn't end-to-end encrypted yet)."))
-                        .color(theme::MUTED()),
-                );
+                let text = if s.has(pyr_proto::control::SEALED_FEATURE) {
+                    format!("This is the beginning of your direct message history with {name}. It's end-to-end encrypted: only the two of you can read it.")
+                } else {
+                    format!(
+                        "This is the beginning of your direct message history with {name}. Other members can't see it (the server it's on can: it runs an older Pyr, so it isn't end-to-end encrypted)."
+                    )
+                };
+                ui.label(RichText::new(text).color(theme::MUTED()));
             });
         });
         ui.add_space(12.0);
@@ -905,6 +914,7 @@ impl PyrApp {
                         }
                     });
                 }
+                lost_note(ui, m);
                 if !m.reactions.is_empty() {
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
@@ -1117,6 +1127,8 @@ impl PyrApp {
             return;
         }
 
+        // Files going out from here, each with its progress and Cancel.
+        dm_sends_strip(ui, s, ch.id, acts);
         let draft_key = (key.clone(), ch.id);
         let mut draft = self.ui.drafts.get(&draft_key).cloned().unwrap_or_default();
         let before = draft.clone();
@@ -1310,7 +1322,17 @@ impl PyrApp {
                 } else {
                     format!("Message #{name}")
                 };
-                if files_ok
+                if files_go_here(s, ch.id) {
+                    // Direct messages and groups: files of any kind (pictures that fit still go
+                    // with the message).
+                    if icon_button(ui, 30.0, "Send files (or drop them here): pictures go with your message, anything else on its own, up to 2 GB", false, |p, r, c| {
+                        icons::plus(p, r, c, 2.0)
+                    })
+                    .clicked()
+                    {
+                        crate::images::pick_files_async(key.clone(), ch.id, ui.ctx());
+                    }
+                } else if files_ok
                     && icon_button(ui, 30.0, "Attach images (or paste or drop them here)", false, |p, r, c| icons::plus(p, r, c, 2.0)).clicked()
                 {
                     crate::images::pick_async(crate::images::PickFor::Attach(key.clone(), ch.id), true, ui.ctx());
@@ -1896,10 +1918,16 @@ impl PyrApp {
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
                         for a in &m.attachments {
-                            self.attachment_sized(ui, s, a, vec2(240.0, 160.0), false, &[]);
+                            if a.parts > 0 {
+                                // (Saved from the message itself.)
+                                ui.label(RichText::new(format!("{} ({})", a.name, size_text(a.size))).size(13.0).color(theme::MUTED()));
+                            } else {
+                                self.attachment_sized(ui, s, a, vec2(240.0, 160.0), false, &[]);
+                            }
                         }
                     });
                 }
+                lost_note(ui, m);
                 if !m.reactions.is_empty() {
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
@@ -1920,6 +1948,10 @@ impl PyrApp {
     /// favorite star in its corner, like a GIF from GIPHY or KLIPY: a favorite picture (a meme,
     /// say) is kept on this PC, in the GIF picker's Favorites, ready to send on any server.
     fn attachment(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, a: &Attachment, msg: MessageId, acts: &mut Vec<Act>) {
+        if a.parts > 0 {
+            dm_file_card(ui, s, a, acts);
+            return;
+        }
         let starred = self.attachment_sized(ui, s, a, vec2(400.0, 300.0), true, &st.settings.gif_favorites);
         // Right-clicked: its message's menu, about this picture.
         if self.ui.menu_picture.as_ref().is_some_and(|(id, fresh)| *fresh && *id == a.id) {
@@ -3022,11 +3054,13 @@ mod delete_tests {
             attachments: Vec::new(),
             sealed: None,
             lock: Default::default(),
+            held: Vec::new(),
+            lost: 0,
         }
     }
 
     fn picture() -> Attachment {
-        Attachment { id: "f".into(), name: "dog.png".into(), mime: "image/png".into(), size: 10, width: 4, height: 4 }
+        Attachment { id: "f".into(), name: "dog.png".into(), mime: "image/png".into(), size: 10, width: 4, height: 4, parts: 0, expired: false }
     }
 
     #[test]
@@ -3104,6 +3138,165 @@ mod emoji_text_tests {
 /// Whether a message can be edited here: not one that's encrypted and wasn't opened.
 fn editable(m: &Message) -> bool {
     matches!(m.lock, pyr_proto::control::Lock::Plain | pyr_proto::control::Lock::Open)
+}
+
+/// Whether files of any kind can be sent here: a direct message or group, on a server that
+/// takes them (0.13.13) and encrypts messages.
+pub fn files_go_here(s: &ServerView, channel: ChannelId) -> bool {
+    s.has(pyr_proto::control::DM_FILES_FEATURE) && s.has(pyr_proto::control::SEALED_FEATURE) && (s.dm(channel).is_some() || s.group(channel).is_some())
+}
+
+/// A size, as people say it: 820 KB, 12.3 MB, 1.4 GB.
+pub fn size_text(bytes: u64) -> String {
+    let b = bytes as f64;
+    if b >= 1e9 {
+        format!("{:.1} GB", b / 1e9)
+    } else if b >= 1e6 {
+        format!("{:.1} MB", b / 1e6)
+    } else if b >= 1e3 {
+        format!("{:.0} KB", b / 1e3)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
+/// A file's icon: a page with its corner folded, and what kind it is on it.
+fn file_icon(p: &egui::Painter, r: Rect, name: &str, c: Color32) {
+    let fold = r.width() * 0.32;
+    let pts = vec![
+        r.left_top(),
+        pos2(r.right() - fold, r.top()),
+        pos2(r.right(), r.top() + fold),
+        r.right_bottom(),
+        r.left_bottom(),
+    ];
+    p.add(egui::Shape::convex_polygon(pts, theme::ELEV2(), Stroke::new(1.5_f32, c)));
+    p.add(egui::Shape::line(vec![pos2(r.right() - fold, r.top()), pos2(r.right() - fold, r.top() + fold), pos2(r.right(), r.top() + fold)], Stroke::new(1.5_f32, c)));
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_uppercase()).filter(|e| e.len() <= 4).unwrap_or_default();
+    if !ext.is_empty() {
+        p.text(pos2(r.center().x, r.bottom() - r.height() * 0.3), egui::Align2::CENTER_CENTER, ext, theme::bold_font(r.width() * 0.26), c);
+    }
+}
+
+/// A thin progress bar across `r`, `done` of the way.
+fn progress_bar(p: &egui::Painter, r: Rect, done: f32, col: Color32) {
+    p.rect_filled(r, CornerRadius::same(2), theme::SIDE());
+    let w = r.width() * done.clamp(0.0, 1.0);
+    if w > 0.5 {
+        p.rect_filled(Rect::from_min_size(r.min, vec2(w, r.height())), CornerRadius::same(2), col);
+    }
+}
+
+/// Files I'm sending in this conversation (0.13.13): each with its name, how far it's got and
+/// Cancel; one that stopped says why, with Dismiss.
+fn dm_sends_strip(ui: &mut egui::Ui, s: &ServerView, channel: ChannelId, acts: &mut Vec<Act>) {
+    let sends: Vec<_> = s.dm_sends.iter().filter(|d| d.channel_id == channel).cloned().collect();
+    if sends.is_empty() {
+        return;
+    }
+    for d in sends {
+        egui::Frame::new().fill(theme::ELEV()).corner_radius(8).inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(vec2(26.0, 32.0), Sense::hover());
+                file_icon(ui.painter(), r.shrink2(vec2(2.0, 1.0)), &d.name, if d.failed.is_some() { theme::LIVE() } else { theme::MUTED() });
+                ui.add_space(6.0);
+                ui.vertical(|ui| {
+                    ui.set_width((ui.available_width() - 90.0).max(80.0));
+                    ui.add(egui::Label::new(RichText::new(&d.name).font(theme::bold_font(13.5)).color(theme::TEXT())).truncate());
+                    let (line, col) = match (&d.failed, &d.waiting) {
+                        (Some(e), _) => (format!("Didn't send: {e}"), theme::LIVE()),
+                        (None, Some(w)) => (format!("{} of {} · {w}", size_text(d.sent), size_text(d.size)), theme::MUTED()),
+                        (None, None) => (format!("Sending… {} of {}", size_text(d.sent), size_text(d.size)), theme::MUTED()),
+                    };
+                    ui.add(egui::Label::new(RichText::new(line).size(12.0).color(col)).wrap());
+                    if d.failed.is_none() {
+                        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 4.0), Sense::hover());
+                        progress_bar(ui.painter(), r, d.sent as f32 / d.size.max(1) as f32, theme::EMBER());
+                    }
+                });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let label = if d.failed.is_some() { "Dismiss" } else { "Cancel" };
+                    if ui.button(label).clicked() {
+                        acts.push(Act::CancelDmFile { key: s.key.clone(), id: d.id });
+                    }
+                });
+            });
+        });
+        ui.add_space(4.0);
+    }
+    if s.dm_sends.iter().any(|d| d.failed.is_none()) {
+        ui.ctx().request_repaint_after(Duration::from_millis(250));
+    }
+}
+
+/// A file sent in a direct message or group (0.13.13): its name, size, and Save (it's
+/// written where you pick as it comes, with its progress); expired after 7 days.
+fn dm_file_card(ui: &mut egui::Ui, s: &ServerView, a: &Attachment, acts: &mut Vec<Act>) {
+    let saving = s.dm_saves.get(&a.id).cloned();
+    egui::Frame::new().fill(theme::ELEV()).stroke(Stroke::new(1.0_f32, theme::LINE())).corner_radius(8).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+        ui.set_width(360.0_f32.min(ui.available_width()));
+        ui.horizontal(|ui| {
+            let (r, _) = ui.allocate_exact_size(vec2(30.0, 38.0), Sense::hover());
+            file_icon(ui.painter(), r.shrink2(vec2(2.0, 1.0)), &a.name, if a.expired { theme::DIM() } else { theme::EMBER() });
+            ui.add_space(6.0);
+            ui.vertical(|ui| {
+                ui.set_width((ui.available_width() - 80.0).max(80.0));
+                ui.add(egui::Label::new(RichText::new(&a.name).font(theme::bold_font(14.0)).color(if a.expired { theme::MUTED() } else { theme::TEXT() })).truncate())
+                    .on_hover_text(&a.name);
+                let line = if a.expired {
+                    format!("{} · expired (files are kept 7 days)", size_text(a.size))
+                } else {
+                    match &saving {
+                        Some(d) if d.finished => format!("{} · saved", size_text(a.size)),
+                        Some(d) if d.failed.is_some() => format!("Couldn't save it: {}", d.failed.clone().unwrap_or_default()),
+                        Some(d) => match &d.waiting {
+                            Some(w) => format!("{} of {} · {w}", size_text(d.done), size_text(a.size)),
+                            None => format!("Saving… {} of {}", size_text(d.done), size_text(a.size)),
+                        },
+                        None => format!("{} · end-to-end encrypted", size_text(a.size)),
+                    }
+                };
+                let bad = saving.as_ref().is_some_and(|d| d.failed.is_some());
+                ui.add(egui::Label::new(RichText::new(line).size(12.0).color(if bad { theme::LIVE() } else { theme::DIM() })).wrap());
+                if let Some(d) = saving.as_ref().filter(|d| !d.finished && d.failed.is_none()) {
+                    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 4.0), Sense::hover());
+                    progress_bar(ui.painter(), r, d.done as f32 / a.size.max(1) as f32, theme::EMBER());
+                    ui.ctx().request_repaint_after(Duration::from_millis(250));
+                }
+            });
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if a.expired {
+                    return;
+                }
+                match &saving {
+                    Some(d) if d.finished => {
+                        if ui.button("Show in folder").clicked() {
+                            crate::settings::show_in_folder(&d.path);
+                        }
+                    }
+                    Some(d) if d.failed.is_none() => {
+                        if ui.button("Cancel").clicked() {
+                            acts.push(Act::DismissDmSave { key: s.key.clone(), id: a.id.clone() });
+                        }
+                    }
+                    _ => {
+                        let label = if saving.is_some() { "Try again" } else { "Save" };
+                        if ui.add(theme::primary_button(label)).on_hover_text("Pick where it goes: it's written there as it comes").clicked() {
+                            crate::images::save_file_async(s.key.clone(), a.id.clone(), a.name.clone(), ui.ctx());
+                        }
+                    }
+                }
+            });
+        });
+    });
+}
+
+/// A picture the message was sent with that the server doesn't have.
+fn lost_note(ui: &mut egui::Ui, m: &Message) {
+    if m.lost > 0 {
+        ui.label(RichText::new("A picture was sent here, but it didn't come through.").italics().size(13.0).color(theme::DIM()));
+    }
 }
 
 /// What an encrypted message that wasn't opened shows instead, and whether it's a warning.

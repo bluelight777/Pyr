@@ -506,6 +506,48 @@ async fn file_stream(hub: &Hub, uid: &str, mut send: quinn::SendStream, mut recv
         FileRequest::Backup { item } => {
             backup_item(hub, uid, &item, &mut send).await?;
         }
+        FileRequest::Put { kind, name, mime: _, size } if kind == FileKind::Sealed && name == DM_FILE_NAME => {
+            // A part of a file for a direct message: ciphertext, kept as it is (only the Pyrs
+            // that open its message know what it is), a week.
+            if size == 0 || size > pyr_proto::sealed::DM_FILE_PART_BYTES + 16 {
+                send.write_all(&fail("A part of a file can't be that big.")).await?;
+                let _ = send.finish();
+                return Ok(());
+            }
+            let slot = match hub.reserve_dm_part(uid, size) {
+                Ok(s) => s,
+                Err(msg) => {
+                    send.write_all(&fail(&msg)).await?;
+                    let _ = send.finish();
+                    return Ok(());
+                }
+            };
+            let bytes = timeout(Duration::from_secs(300), recv.read_to_end(size as usize + 1)).await??;
+            if bytes.len() as u64 != size {
+                send.write_all(&fail("The upload was cut short.")).await?;
+                let _ = send.finish();
+                return Ok(());
+            }
+            let id: String = crypto::random_bytes::<16>().iter().map(|b| format!("{b:02x}")).collect();
+            let path = hub.file_path(&id).ok_or_else(|| anyhow!("bad id"))?;
+            let tmp = path.with_extension("part");
+            tokio::fs::write(&tmp, &bytes).await?;
+            tokio::fs::rename(&tmp, &path).await?;
+            hub.db.insert_file(&crate::db::FileRow {
+                id: id.clone(),
+                owner: uid.to_string(),
+                kind,
+                name: DM_FILE_NAME.to_string(),
+                mime: SEALED_MIME.to_string(),
+                size,
+                width: 0,
+                height: 0,
+                message_id: None,
+            })?;
+            slot.stored();
+            send.write_all(&reply(FileReply { ok: true, id, mime: SEALED_MIME.to_string(), size, error: String::new() })).await?;
+            let _ = send.finish();
+        }
         FileRequest::Put { kind, name, mime: _, size } => {
             let limit = match kind {
                 FileKind::Attachment => MAX_ATTACHMENT_BYTES,
@@ -748,6 +790,7 @@ fn cost(req: &Request) -> f64 {
         | Request::AddGif { .. }
         | Request::CreateChannel { .. }
         | Request::SetChannelAccess { .. }
+        | Request::SetAfk { .. }
         | Request::CreateRole { .. }
         | Request::SetAvatar { .. }
         | Request::SetServerIcon { .. }
@@ -1044,13 +1087,20 @@ impl Ctx<'_> {
                 if nonce.len() > MAX_NONCE_LEN {
                     return bad("bad message nonce");
                 }
-                if attachments.len() > MAX_ATTACHMENTS_PER_MESSAGE {
+                // (A file sent in a direct message comes in parts, each an attachment.)
+                let rows: Vec<Option<crate::db::FileRow>> = attachments.iter().map(|id| db.file(id)).collect();
+                let parts = rows.iter().flatten().filter(|f| f.name == DM_FILE_NAME).count();
+                let most = if parts > 0 { MAX_DM_FILE_PARTS + MAX_ATTACHMENTS_PER_MESSAGE } else { MAX_ATTACHMENTS_PER_MESSAGE };
+                if attachments.len() > most || attachments.len() - parts > MAX_ATTACHMENTS_PER_MESSAGE {
                     return bad("too many attachments");
+                }
+                if parts > 0 && db.private_members(channel_id).is_none() {
+                    return bad("files can only be sent in direct messages");
                 }
                 // Messages are end-to-end encrypted here: none are taken in the clear.
                 let sealed = check_sealed(sealed, &self.uid)?;
-                for id in &attachments {
-                    match db.file(id) {
+                for row in &rows {
+                    match row {
                         Some(f) if f.owner == self.uid && f.kind == FileKind::Sealed && f.message_id.is_none() => {}
                         _ => return bad("an attachment is missing; try sending it again"),
                     }
@@ -1220,11 +1270,11 @@ impl Ctx<'_> {
                 Ok(()) => hub.typing(self.conn_id, &self.uid, channel_id),
                 Err(_) => Ok(Event::Ok),
             },
-            Request::SetIdle { idle } => {
+            Request::SetIdle { idle, away } => {
                 if !self.idle_tokens.take(1.0) {
                     return Err((ErrorCode::RateLimited, "Slow down a little.".into()));
                 }
-                hub.set_idle(self.conn_id, idle);
+                hub.set_idle(self.conn_id, idle, away);
                 Ok(Event::Ok)
             }
             Request::SetDnd { dnd } => {
@@ -1298,8 +1348,10 @@ impl Ctx<'_> {
                 self.require(perm::MANAGE_CHANNELS, "manage channels")?;
                 let Some(name) = clean_channel_name(&name, kind) else { return bad("channel name is empty") };
                 let view_roles = self.real_roles(&view_roles);
+                let afk = hub.afk();
                 let channel = db.create_channel_with(&name, kind, private, &view_roles).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
                 hub.channel_changed(&channel);
+                hub.afk_changed_since(afk);
                 Ok(Event::Ok)
             }
             Request::MoveChannel { channel_id, before } => {
@@ -1320,11 +1372,13 @@ impl Ctx<'_> {
                     return Err((ErrorCode::NotFound, "No such channel.".into()));
                 }
                 let (view_roles, post_roles) = (self.real_roles(&view_roles), self.real_roles(&post_roles));
+                let afk = hub.afk();
                 match db.set_channel_access(channel_id, private, &view_roles, read_only, &post_roles) {
                     Ok(Some(channel)) => hub.channel_changed(&channel),
                     Ok(None) => {}
                     Err(e) => return Err((ErrorCode::Internal, e.to_string())),
                 }
+                hub.afk_changed_since(afk);
                 Ok(Event::Ok)
             }
             Request::UpdateChannel { channel_id, name, topic } => {
@@ -1335,9 +1389,11 @@ impl Ctx<'_> {
                     None => None,
                 };
                 let topic = topic.map(|t| t.chars().filter(|c| !c.is_control()).take(300).collect::<String>());
+                let afk = hub.afk();
                 if let Ok(Some(channel)) = db.update_channel(channel_id, name.as_deref(), topic.as_deref()) {
                     hub.channel_changed(&channel);
                 }
+                hub.afk_changed_since(afk);
                 Ok(Event::Ok)
             }
             Request::DeleteChannel { channel_id } => {
@@ -1347,11 +1403,13 @@ impl Ctx<'_> {
                     return Ok(Event::Ok);
                 }
                 hub.evict_channel(channel_id);
+                let afk = hub.afk();
                 let (existed, files) = db.delete_channel(channel_id).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
                 hub.wipe_files(&files);
                 if existed {
                     hub.broadcast(Event::ChannelDeleted { channel_id });
                 }
+                hub.afk_changed_since(afk);
                 Ok(Event::Ok)
             }
             Request::CreateInvite { max_uses, expires_secs, reuse } => {
@@ -1505,6 +1563,31 @@ impl Ctx<'_> {
                 for o in others.iter().filter(|o| !here.contains(*o)) {
                     let moved_from = was_in.as_ref().filter(|(_, who)| who.contains(o)).map(|(m, _)| *m);
                     hub.send_to_user(o, Event::Ringing { channel_id, from: self.uid.clone(), video, moved_from });
+                }
+                Ok(Event::Ok)
+            }
+            // Invite someone to the voice channel I'm in (0.13.6): only from inside one of the
+            // server's voice channels, to someone who can see it and isn't in it already.
+            Request::InviteToVoice { user_id } => {
+                let Some(channel_id) = hub.voice_channel_of(self.conn_id) else { return bad("Join a voice channel first.") };
+                let Some(ch) = db.channel(channel_id).filter(|c| c.kind == ChannelKind::Voice) else {
+                    return bad("Join a voice channel first.");
+                };
+                if user_id == self.uid || db.get_user(&user_id).is_none_or(|u| u.banned) {
+                    return Err((ErrorCode::NotFound, "They aren't a member here.".into()));
+                }
+                if ch.private && !db.viewers(&ch).contains(&user_id) {
+                    return Err((ErrorCode::Forbidden, "They can't see this channel.".into()));
+                }
+                if hub.in_call(channel_id).contains(&user_id) {
+                    return bad("They're in it already.");
+                }
+                if !self.ring_tokens.take(1.0) {
+                    return Err((ErrorCode::RateLimited, "That's a lot of invites. Give them a moment.".into()));
+                }
+                // (Nobody gets one from someone they've blocked, or who has blocked them.)
+                if !db.blocked_between(&self.uid, &user_id) {
+                    hub.send_to_user(&user_id, Event::VoiceInvite { channel_id, from: self.uid.clone() });
                 }
                 Ok(Event::Ok)
             }
@@ -2027,7 +2110,7 @@ impl Ctx<'_> {
                 }
                 Ok(Event::PluginSubmission { entry, files: inline, more })
             }
-            Request::GetSubmissionFile { id, path } => {
+            Request::GetSubmissionFile { id, path, offset, len } => {
                 if self.role() != Role::Owner {
                     return Err((ErrorCode::Forbidden, "Only the server's owner can see what's sent in.".into()));
                 }
@@ -2036,7 +2119,16 @@ impl Ctx<'_> {
                 };
                 let files: Vec<SourceFile> = serde_json::from_str(&files).unwrap_or_default();
                 match files.into_iter().find(|f| f.path == path) {
-                    Some(f) => Ok(Event::SubmissionFile { id, path, data: f.data }),
+                    // A part of it (a big one in many: one reply can't hold it all).
+                    Some(f) => {
+                        let size = f.data.len();
+                        let start = (offset as usize).min(size);
+                        let most = if len == 0 { SUBMISSION_PART } else { (len as usize).min(SUBMISSION_PART) };
+                        let end = (start + most).min(size);
+                        // (base64: one byte a character, so any cut is a whole character.)
+                        let data = f.data.get(start..end).unwrap_or_default().to_string();
+                        Ok(Event::SubmissionFile { id, path, data, offset: start as u64, size: size as u64 })
+                    }
                     None => Err((ErrorCode::NotFound, "There's no such file in it.".into())),
                 }
             }
@@ -2104,6 +2196,22 @@ impl Ctx<'_> {
                     return bad("bad user id");
                 }
                 hub.move_member(&self.uid, &user_id, channel_id)
+            }
+            Request::SetAfk { channel_id, minutes } => {
+                self.require(perm::MANAGE_SERVER, "set the AFK channel")?;
+                let v = match channel_id {
+                    None => "off".to_string(),
+                    Some(id) => {
+                        if !db.channel(id).is_some_and(|c| c.kind == ChannelKind::Voice && !c.private) {
+                            return Err((ErrorCode::BadRequest, "The AFK channel has to be a voice channel everyone can see.".into()));
+                        }
+                        let mins = if minutes == 0 { pyr_proto::control::AFK_MINUTES[0] } else { minutes.clamp(1, 24 * 60) };
+                        format!("{id} {mins}")
+                    }
+                };
+                db.set_meta("afk", &v).map_err(|e| (ErrorCode::Internal, e.to_string()))?;
+                hub.broadcast_info();
+                Ok(Event::Ok)
             }
             Request::Unknown => Err((ErrorCode::BadRequest, "This server is older than your app and can't do that yet.".into())),
         }
@@ -2196,6 +2304,31 @@ mod tests {
 
     fn forbidden(r: Reply) -> bool {
         matches!(r, Err((ErrorCode::Forbidden, _)))
+    }
+
+    /// The AFK channel, like Discord's: a voice channel called AFK is it until the owner says
+    /// otherwise (or turns it off); only those who run the server set it, to a voice channel.
+    #[test]
+    fn the_afk_channel_is_one_called_afk_until_set() {
+        let hub = hub();
+        let (owner, bob) = (uid(), uid());
+        hub.db.insert_user(&owner, "Owner", Role::Owner).unwrap();
+        hub.db.insert_user(&bob, "Bob", Role::Member).unwrap();
+        let lounge = hub.db.create_channel("Lounge", ChannelKind::Voice).unwrap();
+        let general = hub.db.create_channel("General", ChannelKind::Text).unwrap();
+        assert_eq!(hub.info().afk_channel, None);
+        let afk = hub.db.create_channel("AFK", ChannelKind::Voice).unwrap();
+        assert_eq!((hub.info().afk_channel, hub.info().afk_minutes), (Some(afk.id), 60));
+        assert!(forbidden(ctx(&hub, &bob).handle(Request::SetAfk { channel_id: Some(lounge.id), minutes: 60 })));
+        let mut o = ctx(&hub, &owner);
+        // Only a voice channel everyone can see.
+        assert!(o.handle(Request::SetAfk { channel_id: Some(general.id), minutes: 60 }).is_err());
+        assert!(o.handle(Request::SetAfk { channel_id: Some(lounge.id), minutes: 60 }).is_ok());
+        assert_eq!((hub.info().afk_channel, hub.info().afk_minutes), (Some(lounge.id), 60));
+        assert!(o.handle(Request::SetAfk { channel_id: Some(lounge.id), minutes: 15 }).is_ok());
+        assert_eq!(hub.info().afk_minutes, 15);
+        assert!(o.handle(Request::SetAfk { channel_id: None, minutes: 0 }).is_ok());
+        assert_eq!(hub.info().afk_channel, None, "off, even with a channel called AFK");
     }
 
     #[test]
@@ -2884,14 +3017,29 @@ mod tests {
                 assert_eq!(more.iter().map(|d| d.path.as_str()).collect::<Vec<_>>(), vec!["bg.png"]);
                 let total: usize = inline.iter().map(|f| pyr_proto::b64::decode(&f.data).unwrap().len()).sum();
                 assert!(total <= INLINE_SUBMISSION_BYTES);
-                match ctx(&hub, &owner).handle(Request::GetSubmissionFile { id, path: "bg.png".into() }) {
-                    Ok(Event::SubmissionFile { data, .. }) => assert_eq!(pyr_proto::b64::decode(&data).unwrap(), png),
-                    other => panic!("{other:?}"),
+                // It comes in parts (0.13.14: one reply couldn't hold it), put together again.
+                let mut data = String::new();
+                let mut replies = 0;
+                loop {
+                    match ctx(&hub, &owner).handle(Request::GetSubmissionFile { id, path: "bg.png".into(), offset: data.len() as u64, len: 0 }) {
+                        Ok(Event::SubmissionFile { data: part, offset, size, .. }) => {
+                            assert_eq!(offset, data.len() as u64);
+                            assert!(part.len() <= SUBMISSION_PART);
+                            data.push_str(&part);
+                            replies += 1;
+                            if data.len() as u64 >= size {
+                                break;
+                            }
+                        }
+                        other => panic!("{other:?}"),
+                    }
                 }
+                assert!(replies >= 2, "in parts");
+                assert_eq!(pyr_proto::b64::decode(&data).unwrap(), png);
             }
             other => panic!("{other:?}"),
         }
-        assert!(matches!(ctx(&hub, &owner).handle(Request::GetSubmissionFile { id, path: "nope.txt".into() }), Err((ErrorCode::NotFound, _))));
+        assert!(matches!(ctx(&hub, &owner).handle(Request::GetSubmissionFile { id, path: "nope.txt".into(), offset: 0, len: 0 }), Err((ErrorCode::NotFound, _))));
     }
 
     #[test]

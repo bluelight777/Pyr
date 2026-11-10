@@ -11,6 +11,7 @@ pub mod files;
 pub mod call;
 pub mod casino;
 pub mod config;
+pub mod dmfiles;
 pub mod e2ee;
 pub mod hotkey;
 pub mod idle;
@@ -185,6 +186,12 @@ pub struct Shared {
     pub auto_reports: Mutex<Vec<(String, std::time::Instant)>>,
     /// When Pyr's window last had a key or the mouse (ms since 1970; see `idle`).
     pub last_activity_ms: std::sync::atomic::AtomicI64,
+    /// When the PC last had a key or the mouse anywhere, as the system said at the idle
+    /// thread's last look (ms since 1970; 0: the system can't say; see `idle::quiet_now`).
+    pub last_input_ms: std::sync::atomic::AtomicI64,
+    /// (Tests: `Engine::as_if_away_for`.) The PC's last key or mouse taken to be then, instead
+    /// of asking the system (0: ask it).
+    pub pretend_input_ms: std::sync::atomic::AtomicI64,
     /// The thread that works out whether you're idle (woken to look again at once).
     pub idle_thread: Mutex<Option<std::thread::Thread>>,
     /// Making sure of people: handshakes under way (see `verify`).
@@ -748,6 +755,7 @@ impl Engine {
         let state = AppState {
             safety_code: crypto::safety_code(&my_uid),
             my_idle: false,
+            my_away: false,
             my_uid,
             voice_rejoin: None,
             resume_offer: None,
@@ -836,6 +844,8 @@ impl Engine {
             auto_reports: Mutex::new(Vec::new()),
             call_group: Mutex::new(None),
             last_activity_ms: std::sync::atomic::AtomicI64::new(pyr_proto::now_ms()),
+            last_input_ms: std::sync::atomic::AtomicI64::new(0),
+            pretend_input_ms: std::sync::atomic::AtomicI64::new(0),
             idle_thread: Mutex::new(None),
             verify: Mutex::new(verify::Book::default()),
             sealed: Mutex::new(sealed_book),
@@ -1532,6 +1542,30 @@ impl Engine {
 
     // ---------------------------------------------------------------- files
 
+    /// Sends the file at `path` in a direct message or group (0.13.13): its progress is in
+    /// `ServerView::dm_sends`. Says why not, when it can't go.
+    pub fn send_dm_file(&self, key: &str, channel_id: ChannelId, path: std::path::PathBuf) -> Result<u64, String> {
+        let h = self.handle(key).ok_or("Not connected to that server.")?;
+        dmfiles::send(&self.shared, key, h, channel_id, path)
+    }
+
+    /// Stops sending a file (or dismisses one that stopped).
+    pub fn cancel_dm_file(&self, key: &str, id: u64) {
+        dmfiles::cancel(&self.shared, key, id);
+    }
+
+    /// Saves a file from a direct message to `path`, as it comes: its progress is in
+    /// `ServerView::dm_saves`.
+    pub fn save_dm_file(&self, key: &str, file_id: &str, path: std::path::PathBuf) -> Result<(), String> {
+        let h = self.handle(key).ok_or("Not connected to that server.")?;
+        dmfiles::save(&self.shared, key, h, file_id, path)
+    }
+
+    /// Stops saving a file (what was written goes), or forgets one saved or that stopped.
+    pub fn dismiss_dm_save(&self, key: &str, file_id: &str) {
+        dmfiles::dismiss_save(&self.shared, key, file_id);
+    }
+
     /// An image from a server, if it's here yet; starts downloading it otherwise.
     pub fn file(&self, key: &str, id: &str) -> files::FileState {
         let state = self.shared.files.lock().get(id);
@@ -2197,6 +2231,50 @@ impl Engine {
         });
     }
 
+    /// Sends a friend `text` in our direct message (opened first if need be), on a server where
+    /// we're friends and that's connected (else any connected server we share): for a game's
+    /// invite (0.13.15). Never waits: `done` hears how it went, from the engine's own threads.
+    pub fn message_friend(&self, uid: &str, text: String, done: impl FnOnce(Result<(), String>) + Send + 'static) {
+        let pick = {
+            let st = self.shared.state.read_recursive();
+            let ok = |s: &&state::ServerView| s.status.is_connected() && s.has(pyr_proto::control::DMS_FEATURE) && s.members.contains_key(uid);
+            st.servers.iter().filter(ok).find(|s| s.relations.get(uid) == Some(&RelationKind::Friend)).or_else(|| st.servers.iter().find(ok)).map(|s| (s.key.clone(), s.dm_with(uid).map(|d| d.id)))
+        };
+        let Some((key, dm)) = pick else {
+            done(Err("they aren't on a server you're connected to".into()));
+            return;
+        };
+        let Some(h) = self.handle(&key) else {
+            done(Err("not connected".into()));
+            return;
+        };
+        let shared = self.shared.clone();
+        let uid = uid.to_string();
+        self.shared.rt.spawn(async move {
+            let r = async {
+                let dm = match dm {
+                    Some(id) => id,
+                    None => match h.request(Request::OpenDm { user_id: uid.clone() }).await {
+                        Ok(Event::DmOpened { dm }) => {
+                            let id = dm.id;
+                            if let Some(s) = shared.state.write().server_mut(&key) {
+                                s.upsert_dm(dm);
+                            }
+                            id
+                        }
+                        Ok(Event::Error { message, .. }) => return Err(message),
+                        _ => return Err("the server didn't open the conversation".to_string()),
+                    },
+                };
+                let nonce = pyr_proto::b64::encode(&crypto::random_bytes::<9>());
+                sealed::send(&shared, &key, &h, dm, text, None, nonce, Vec::new(), &|_| {}).await
+            }
+            .await;
+            done(r);
+            (shared.repaint)();
+        });
+    }
+
     pub fn take_opened_dm(&self) -> Option<(String, ChannelId)> {
         self.shared.opened_dm.lock().take()
     }
@@ -2251,14 +2329,25 @@ impl Engine {
     }
 
     /// A key or the mouse in Pyr's window (the app calls this as they come): you're here.
-    /// Idle until now, every server hears you're back right away.
+    /// Away until now, every server hears you're back right away (the moon goes, unless it's
+    /// set by hand, and the AFK channel's clock stops).
     pub fn note_activity(&self) {
         self.shared.last_activity_ms.store(pyr_proto::now_ms(), Ordering::Relaxed);
         let st = self.shared.state.read_recursive();
-        if st.my_idle && !st.settings.idle_by_hand {
+        if st.my_away {
             drop(st);
             idle::wake(&self.shared);
         }
+    }
+
+    /// For tests: as if nothing had touched the keyboard or mouse (in Pyr's window, and on the
+    /// PC where the system says) for `quiet`, and Pyr looks again now.
+    #[doc(hidden)]
+    pub fn as_if_away_for(&self, quiet: std::time::Duration) {
+        let then = pyr_proto::now_ms() - quiet.as_millis() as i64;
+        self.shared.last_activity_ms.store(then, Ordering::Relaxed);
+        self.shared.pretend_input_ms.store(then, Ordering::Relaxed);
+        idle::wake(&self.shared);
     }
 
     /// Make sure `uid` is who they say by comparing words with them (through server `key`).
@@ -2616,6 +2705,11 @@ impl Engine {
         self.request(key, Request::MoveMember { user_id: user_id.into(), channel_id });
     }
 
+    /// The AFK channel and how long away before the move there (None: off).
+    pub fn set_afk(&self, key: &str, channel: Option<ChannelId>, minutes: u32) {
+        self.request(key, Request::SetAfk { channel_id: channel, minutes });
+    }
+
     pub fn kick(&self, key: &str, user_id: &str, ban: bool) {
         let req = if ban { Request::Ban { user_id: user_id.into() } } else { Request::Kick { user_id: user_id.into() } };
         self.request(key, req);
@@ -2751,6 +2845,19 @@ impl Engine {
 
     /// Don't answer a call ringing here: it stops ringing (on your other devices too), and the
     /// caller sees you declined.
+    /// Invite someone to the voice channel I'm in here (0.13.6): they get a card with Join.
+    pub fn invite_to_voice(&self, key: &str, user_id: &str) {
+        self.request(key, Request::InviteToVoice { user_id: user_id.to_string() });
+    }
+
+    /// Done with an invite to a voice channel (joined, or Not now).
+    pub fn dismiss_voice_invite(&self, key: &str, channel_id: ChannelId, from: &str) {
+        if let Some(s) = self.shared.state.write().server_mut(key) {
+            s.voice_invites.retain(|i| !(i.0 == channel_id && i.1 == from));
+        }
+        (self.shared.repaint)();
+    }
+
     pub fn decline_call(&self, key: &str, channel_id: ChannelId) {
         self.shared.state.write().incoming_calls.retain(|c| !(c.server_key == key && c.channel_id == channel_id));
         self.request(key, Request::DeclineCall { channel_id });

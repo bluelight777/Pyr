@@ -165,10 +165,51 @@ pub struct ServerView {
     pub relations: HashMap<UserId, RelationKind>,
     /// Whether this server was told I'm idle (see `idle`; a new connection starts not idle).
     pub idle_sent: bool,
+    /// Whether this server was told I'm away (see `idle`; servers with `AWAY_FEATURE` only).
+    pub away_sent: bool,
     /// Whether this server was told Do Not Disturb (see `idle`; a new connection starts without).
     pub dnd_sent: bool,
     /// Poker here (see [`crate::poker`]).
     pub poker: crate::poker::PokerState,
+    /// Invites to this server's voice channels (0.13.6): where, who, when (shown a minute).
+    pub voice_invites: Vec<(ChannelId, UserId, Instant)>,
+    /// Files I'm sending in direct messages here (see `dmfiles`), in the order I sent them.
+    pub dm_sends: Vec<DmSend>,
+    /// Files sent in direct messages here that I'm saving (or saved), by their id.
+    pub dm_saves: HashMap<String, DmSave>,
+}
+
+/// A file I'm sending in a direct message or group (0.13.13): shown above where I type, with
+/// its progress and Cancel.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DmSend {
+    /// This Pyr's own number for it (to cancel it by).
+    pub id: u64,
+    pub channel_id: ChannelId,
+    pub name: String,
+    pub size: u64,
+    /// How much of it the server has.
+    pub sent: u64,
+    /// Waiting to carry on (the connection dropped, say): why.
+    pub waiting: Option<String>,
+    /// It stopped, and why (it can only be dismissed).
+    pub failed: Option<String>,
+}
+
+/// A file from a direct message being saved where I picked (or saved there).
+#[derive(Clone, Debug, PartialEq)]
+pub struct DmSave {
+    /// This Pyr's number for this saving of it (one started again isn't the one cancelled).
+    pub job: u64,
+    pub path: std::path::PathBuf,
+    pub size: u64,
+    /// How much of it is on the disk.
+    pub done: u64,
+    pub finished: bool,
+    /// Waiting to carry on (the connection dropped, say): why.
+    pub waiting: Option<String>,
+    /// It stopped, and why (the part written so far is removed).
+    pub failed: Option<String>,
 }
 
 /// An invite to hand out (`Engine::create_invite`).
@@ -242,7 +283,11 @@ impl ServerView {
             groups: Vec::new(),
             relations: HashMap::new(),
             idle_sent: false,
+            away_sent: false,
             dnd_sent: false,
+            voice_invites: Vec::new(),
+            dm_sends: Vec::new(),
+            dm_saves: HashMap::new(),
             poker: Default::default(),
         }
     }
@@ -632,6 +677,9 @@ pub struct AppState {
     pub my_name: String,
     /// I'm idle (shown as a moon on my picture; see `idle`).
     pub my_idle: bool,
+    /// I'm away: no key, no mouse and nothing said for five minutes (idle too, but Idle set by
+    /// hand isn't away; only away counts for the AFK channel; see `idle`).
+    pub my_away: bool,
     pub safety_code: String,
     pub servers: Vec<ServerView>,
     pub call: Option<CallView>,

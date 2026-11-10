@@ -771,6 +771,38 @@ impl PyrApp {
                             );
                             ui.add_space(12.0);
                         }
+                        // The AFK channel, like Discord's (servers since 0.13.4).
+                        if let Some(s) = server.as_ref().filter(|s| s.has(pyr_proto::control::AFK_FEATURE) && s.can(pyr_proto::control::perm::MANAGE_SERVER)) {
+                            field_label(ui, "AFK channel");
+                            let voice: Vec<(pyr_proto::control::ChannelId, String)> = s.channels.iter().filter(|c| c.kind == pyr_proto::control::ChannelKind::Voice && !c.private).map(|c| (c.id, c.name.clone())).collect();
+                            let mut ch = s.info.afk_channel;
+                            let mut mins = if s.info.afk_minutes > 0 { s.info.afk_minutes } else { pyr_proto::control::AFK_MINUTES[0] };
+                            let (ch0, mins0) = (ch, mins);
+                            ui.horizontal(|ui| {
+                                let shown = ch.and_then(|id| voice.iter().find(|(v, _)| *v == id)).map(|(_, n)| n.clone()).unwrap_or_else(|| "No AFK channel".into());
+                                egui::ComboBox::from_id_salt(("afk-ch", key.clone())).selected_text(shown).width(200.0).show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut ch, None, "No AFK channel");
+                                    for (id, n) in &voice {
+                                        ui.selectable_value(&mut ch, Some(*id), n);
+                                    }
+                                });
+                                ui.label(RichText::new("after").color(theme::MUTED()));
+                                let mut opts = pyr_proto::control::AFK_MINUTES.to_vec();
+                                opts.sort();
+                                let label = |m: u32| if m >= 60 { format!("{} hour{}", m / 60, if m >= 120 { "s" } else { "" }) } else { format!("{m} minutes") };
+                                egui::ComboBox::from_id_salt(("afk-min", key.clone())).selected_text(label(mins)).width(120.0).show_ui(ui, |ui| {
+                                    for m in opts {
+                                        ui.selectable_value(&mut mins, m, label(m));
+                                    }
+                                });
+                                ui.label(RichText::new("away").color(theme::MUTED()));
+                            });
+                            if (ch, mins) != (ch0, mins0) {
+                                acts.push(Act::SetAfk { key: key.clone(), channel: ch, minutes: mins });
+                            }
+                            ui.label(RichText::new("Like Discord's: someone in a voice channel who's been away that long (no keys, no mouse, not talking) is moved to the AFK channel. Setting yourself to Idle doesn't count, and nobody's moved while they're sharing a screen or watching one.").size(12.0).color(theme::DIM()));
+                            ui.add_space(12.0);
+                        }
                         field_label(ui, "Server name");
                         input(ui, &mut name, "");
                         ui.add_space(14.0);
