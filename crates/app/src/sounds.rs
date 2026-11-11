@@ -70,9 +70,10 @@ impl VoiceSounds {
         }
         let same_call = call.is_some() && call == self.call;
         if call != self.call {
+            // (Mine: the chime joining always had; someone else's stands out, 0.13.23.)
             match (&self.call, &call) {
-                (None, Some(_)) | (Some(_), Some(_)) => out.push(Sound::Join),
-                (Some(_), None) => out.push(Sound::Leave),
+                (None, Some(_)) | (Some(_), Some(_)) => out.push(Sound::YouJoin),
+                (Some(_), None) => out.push(Sound::YouLeave),
                 (None, None) => {}
             }
         } else if same_call {
@@ -111,9 +112,9 @@ impl VoiceSounds {
                 tuned_out |= before.iter().any(|v| !now.contains(v) && *v != me && people.contains_key(v));
             }
             if tuned_in {
-                out.push(Sound::WatchStart);
+                out.push(Sound::ViewerJoin);
             } else if tuned_out {
-                out.push(Sound::WatchStop);
+                out.push(Sound::ViewerLeave);
             }
         }
         self.call = call;

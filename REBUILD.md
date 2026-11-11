@@ -81,11 +81,15 @@ Version in brackets: where 0.13.x first had it.
 - [ ] Headset that drops out and comes back isn't an error (0.13.2)
 - [ ] Streamer mode only when turned on (0.13.2)
 - [ ] Sound profiles Classic / Ember; ten new ringtones; soundboard redrawn (0.13.2/3)
-- [ ] Join chime in Classic climbs and rings (0.13.23): someone else joining my channel; me
+- [x] Join chime in Classic climbs and rings (0.13.23): someone else joining my channel; me
       joining keeps the old chime. Its notes, read out of 0.13.28's program (the table just
       before Join's; Hz, start ms, length ms, loudness): (523.3, 0, 120, 0.60), (659.3, 70, 120,
       0.60), (784.0, 140, 120, 0.65), then the chord at 210 ms for 560 ms: (1046.5, 0.70),
-      (659.3, 0.25), (784.0, 0.25). Every other chime's table is the rebuild's, unchanged.
+      (659.3, 0.25), (784.0, 0.25). Every other chime's table is the rebuild's, unchanged (the
+      renderer can't be read out of the program; 0.13.0's is kept). Skins' sound names as
+      0.13.28's: `you_join`, `you_leave`, `viewer_join`, `viewer_leave`, `mute`, `unmute` (a
+      skin without one plays its `join`, `leave`, `watch_start`, `watch_stop`); someone else
+      tuning in to a stream in the call plays `viewer_join`.
 - [ ] Mute shortcut: any key combo, then any single key (0.13.20/22); soundboard keys the same.
       Its sounds (0.13.28's tables, after Ringback's): muted a step down (523.3, 0, 90, 0.45),
       (392.0, 60, 170, 0.45); unmuted a step up (392.0, 0, 90, 0.45), (523.3, 60, 170, 0.45)

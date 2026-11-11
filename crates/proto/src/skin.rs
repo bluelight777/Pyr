@@ -103,12 +103,18 @@ pub const SOUNDS: &[(&str, &str)] = &[
     ("message", "a new message"),
     ("join", "someone joins your voice channel"),
     ("leave", "someone leaves it"),
+    ("you_join", "you join a voice channel (the skin's join if it hasn't this)"),
+    ("you_leave", "you leave one (its leave if it hasn't this)"),
     ("stream_start", "someone starts sharing their screen"),
     ("stream_stop", "they stop"),
     ("watch_start", "you start watching a stream"),
     ("watch_stop", "you stop watching"),
+    ("viewer_join", "someone else starts watching a stream in your call (its watch_start if it hasn't this)"),
+    ("viewer_leave", "someone else stops watching (its watch_stop if it hasn't this)"),
     ("ring", "someone's calling you"),
     ("ringback", "you're calling someone and it's ringing"),
+    ("mute", "you mute yourself with your mute shortcut (Pyr 0.13.20 and newer)"),
+    ("unmute", "you unmute yourself with it"),
 ];
 
 /// What `skin.json` says. Unknown keys are left alone when a skin is used (a newer skin on an
