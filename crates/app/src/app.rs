@@ -303,6 +303,8 @@ pub enum Dialog {
     SoundEditor,
     /// "Delete this sound?" (`from_settings`: go back to Server Settings after).
     RemoveSound { key: String, id: String, name: String, from_settings: bool },
+    /// Pyr Casino's keys (0.13.26): every game's moves and their keys, to change.
+    CasinoKeys(crate::casino::keys::KeysWindow),
     /// Pick people: for a new group (`channel` none), to add to a group, or to make a group
     /// with the other person in a direct message (see `calls.rs`).
     AddPeople { key: String, channel: Option<ChannelId>, picked: Vec<String>, search: String },
@@ -1602,6 +1604,7 @@ impl eframe::App for PyrApp {
             let chimes = self.voice_sounds.step(&st);
             self.ui.program_area = None;
             self.ui.overlay_rects.clear();
+            crate::casino::keys::sync(&st.settings.casino_keys);
             self.frame_ui(ctx, &st, &mut acts);
             self.place_programs(ctx);
             // The title (on the taskbar button and in Alt+Tab) says when something's unread.

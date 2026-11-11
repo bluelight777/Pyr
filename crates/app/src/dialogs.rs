@@ -259,7 +259,7 @@ impl PyrApp {
         // Every dialog fits the window, however small: the screen picker and Settings fit
         // themselves (their buttons always show), and the others scroll when they must.
         let room = dialog_room(ctx, top);
-        let fits_itself = matches!(dialog, Dialog::ScreenPicker { .. } | Dialog::Settings { .. });
+        let fits_itself = matches!(dialog, Dialog::ScreenPicker { .. } | Dialog::Settings { .. } | Dialog::CasinoKeys(_));
         let resp = modal.show(ctx, |ui| {
             // The modal lays its contents out in last frame's size, which would let a dialog
             // shrink but never grow (a short dialog before it, or a wizard step getting
@@ -1011,6 +1011,18 @@ impl PyrApp {
                     });
                     if !close {
                         self.ui.dialog = Some(Dialog::ReportBug { title, body, include_log });
+                    }
+                }
+                Dialog::CasinoKeys(mut w) => {
+                    let mut changed = st.settings.casino_keys.clone();
+                    if crate::casino::keys::window_ui(ui, &mut w, &mut changed, room) {
+                        close = true;
+                    }
+                    if changed != st.settings.casino_keys {
+                        acts.push(Act::Settings(pyr_engine::config::Settings { casino_keys: changed, ..st.settings.clone() }));
+                    }
+                    if let Some(Dialog::CasinoKeys(x)) = self.ui.dialog.as_mut() {
+                        *x = w;
                     }
                 }
                 Dialog::SuggestIdea { mut title, mut body } => {

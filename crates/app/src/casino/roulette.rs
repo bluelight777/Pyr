@@ -360,7 +360,9 @@ impl PyrApp {
             ui.painter().text(r.center(), Align2::CENTER_CENTER, text, theme::bold_font(15.0), if primary && enabled { Color32::from_rgb(0x2a, 0x10, 0x04) } else if enabled { Color32::WHITE } else { Color32::from_white_alpha(70) });
             enabled && resp.clicked()
         };
-        let space = ui.ctx().input(|i| i.key_pressed(egui::Key::Space)) && !ui.ctx().wants_keyboard_input();
+        use super::keys::Move;
+        let key = |mv| super::keys::pressed(ui.ctx(), mv);
+        let (space, double_key, rebet_key, undo_key, clear_key) = (key(Move::RlSpin), key(Move::RlDouble), key(Move::RlRebet), key(Move::RlUndo), key(Move::RlClear));
         let can = total > 0 && total <= super::chips_now(s) && !busy;
         if (button(ui, "Spin", 130.0, true, can) || (space && can))
             && let Some(commit) = c.commit
@@ -371,7 +373,7 @@ impl PyrApp {
             self.poker.casino.celebration = None;
             self.engine.casino_play(&s.key, commit, Bet::Roulette { chips });
         }
-        if button(ui, "Double", 96.0, false, !busy && total > 0) {
+        if button(ui, "Double", 96.0, false, !busy && total > 0) || (double_key && !busy && total > 0) {
             // (Each bet up to its limit.)
             let more: Vec<Chip> = self
                 .poker
@@ -385,13 +387,13 @@ impl PyrApp {
             self.poker.casino.roulette.chips.extend(more);
         }
         let last = !self.poker.casino.roulette.last.is_empty();
-        if button(ui, "Rebet", 90.0, false, !busy && last && total == 0) {
+        if button(ui, "Rebet", 90.0, false, !busy && last && total == 0) || (rebet_key && !busy && last && total == 0) {
             self.poker.casino.roulette.chips = self.poker.casino.roulette.last.clone();
         }
-        if button(ui, "Undo", 80.0, false, !busy && total > 0) {
+        if button(ui, "Undo", 80.0, false, !busy && total > 0) || (undo_key && !busy && total > 0) {
             self.poker.casino.roulette.chips.pop();
         }
-        if button(ui, "Clear", 80.0, false, !busy && total > 0) {
+        if button(ui, "Clear", 80.0, false, !busy && total > 0) || (clear_key && !busy && total > 0) {
             self.poker.casino.roulette.chips.clear();
         }
         let color = if total > super::chips_now(s) { col::LOSE } else { col::GOLD2 };

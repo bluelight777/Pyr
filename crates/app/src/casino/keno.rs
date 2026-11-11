@@ -209,7 +209,7 @@ impl PyrApp {
             ui.painter().text(r.center(), Align2::CENTER_CENTER, text, theme::bold_font(15.0), if primary && enabled { Color32::from_rgb(0x2a, 0x10, 0x04) } else if enabled { Color32::WHITE } else { Color32::from_white_alpha(70) });
             resp
         };
-        let space = ui.ctx().input(|i| i.key_pressed(egui::Key::Space)) && !ui.ctx().wants_keyboard_input();
+        let space = super::keys::pressed(ui.ctx(), super::keys::Move::KenoPlay);
         let ok = !picks.is_empty() && bet > 0 && bet <= super::chips_now(s) && !busy;
         macro_rules! button {
             ($ui:expr, $t:expr, $w:expr, $p:expr, $e:expr) => {{
@@ -221,7 +221,7 @@ impl PyrApp {
             if button!(ui, &format!("Stop ({})", auto.left_text()), 130.0, true, true) {
                 self.poker.casino.keno.auto.stop();
             }
-        } else if button!(ui, "Play", 130.0, true, ok) || (space && ok) {
+        } else if button!(ui, &super::keys::with_key("Play", super::keys::Move::KenoPlay), 130.0, true, ok) || (space && ok) {
             self.keno_play(s);
         }
         // Playing by itself: 10 to 1,000 rounds, or until it's stopped (its menu).

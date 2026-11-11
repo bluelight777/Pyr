@@ -205,14 +205,14 @@ impl PyrApp {
             ui.painter().text(r.center(), Align2::CENTER_CENTER, text, theme::bold_font(15.0), if primary && enabled { Color32::from_rgb(0x2a, 0x10, 0x04) } else if enabled { Color32::WHITE } else { Color32::from_white_alpha(70) });
             resp
         };
-        let space = ui.ctx().input(|i| i.key_pressed(egui::Key::Space)) && !ui.ctx().wants_keyboard_input();
+        let space = super::keys::pressed(ui.ctx(), super::keys::Move::DiceRoll);
         let auto = self.poker.casino.dice.auto;
         let ok = bet > 0 && bet <= super::chips_now(s) && !busy;
         if auto.on() {
             if button_resp(ui, "roll", &format!("Stop ({})", auto.left_text()), 130.0, true, true).clicked() {
                 self.poker.casino.dice.auto.stop();
             }
-        } else if button_resp(ui, "roll", "Roll", 130.0, true, ok).clicked() || (space && ok) {
+        } else if button_resp(ui, "roll", &super::keys::with_key("Roll", super::keys::Move::DiceRoll), 130.0, true, ok).clicked() || (space && ok) {
             self.dice_roll(s);
         }
         // Rolling by itself: how many times, or until stopped (its menu).

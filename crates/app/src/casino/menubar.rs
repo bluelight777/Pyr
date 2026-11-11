@@ -46,8 +46,6 @@ pub enum Item {
     Profile,
     Staff,
     Cms,
-    /// (Its button comes with the keys for every game, 0.13.26.)
-    #[allow(dead_code)]
     Keys,
     Fairness,
 }
@@ -199,6 +197,11 @@ fn named_nudge(item: Item) -> f32 {
         Item::Fairness => -0.19,
         _ => 0.0,
     }
+}
+
+/// The Keys icon (a keyboard), about `c`: a game's top bar has it too.
+pub fn keyboard_icon(p: &egui::Painter, c: Pos2, ink: Color32) {
+    icon(p, Item::Keys, c, ink);
 }
 
 /// An item's icon, about `c` (its button's middle, on a whole pixel). Each as 0.13.28 draws it,

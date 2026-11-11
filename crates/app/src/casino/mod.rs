@@ -30,6 +30,7 @@ pub mod humor;
 pub mod info;
 pub mod keno;
 pub mod levels;
+pub mod keys;
 pub mod menubar;
 pub mod plinko;
 pub mod pics;
@@ -72,6 +73,18 @@ pub mod col {
 
 /// Chip values on the rack.
 pub const CHIPS: [u64; 8] = [1, 5, 25, 100, 500, 1_000, 5_000, 25_000];
+
+/// The rack's next chip down (`step` −1) or up (+1) from `chip`, among those up to `max_chip`
+/// (from a chip not on this rack: the nearest one that way).
+fn next_chip(chip: u64, max_chip: u64, step: i32) -> u64 {
+    let rack: Vec<u64> = CHIPS.iter().copied().filter(|v| *v <= max_chip).collect();
+    if rack.is_empty() {
+        return chip;
+    }
+    let below = rack.iter().filter(|v| **v < chip).count() as i32;
+    let at = if rack.contains(&chip) { below + step } else if step < 0 { below - 1 } else { below };
+    rack[at.clamp(0, rack.len() as i32 - 1) as usize]
+}
 
 /// A win shown big over the table.
 pub struct Celebration {
@@ -631,17 +644,7 @@ impl PyrApp {
             ui.painter().rect_filled(r, theme::r(8), fill);
             (resp.on_hover_text(tip), r)
         };
-        // Sound, fullscreen, streamer mode.
-        let mute = self.poker.casino.mute;
-        let (resp, r) = button(ui, 38.0, false, if mute { "Sound off: click for the casino's sounds" } else { "Sound on" });
-        if mute {
-            crate::icons::speaker_off(&p, r.shrink(9.0), col::MUTED);
-        } else {
-            crate::icons::speaker(&p, r.shrink(9.0), col::TEXT);
-        }
-        if resp.clicked() {
-            self.poker.casino.mute = !mute;
-        }
+        // Fullscreen, streamer mode, sound, keys (as 0.13.28 has them, from the right).
         let fs = self.poker.casino.fullscreen;
         let (resp, r) = button(ui, 38.0, fs, if fs { "Leave fullscreen (Esc)" } else { "Fullscreen: just the casino, the whole screen (F11)" });
         crate::icons::fullscreen(&p, r.shrink(10.0), if fs { col::NIGHT } else { col::TEXT }, fs);
@@ -653,6 +656,22 @@ impl PyrApp {
         crate::icons::eye(&p, r.shrink(10.0), if streamer { col::NIGHT } else { col::TEXT });
         if resp.clicked() {
             self.poker.casino.stream_menu = if self.poker.casino.stream_menu.is_some() { None } else { Some(r) };
+        }
+        let mute = self.poker.casino.mute;
+        let (resp, r) = button(ui, 38.0, false, if mute { "Sound off: click for the casino's sounds" } else { "Sound on" });
+        if mute {
+            crate::icons::speaker_off(&p, r.shrink(9.0), col::MUTED);
+        } else {
+            crate::icons::speaker(&p, r.shrink(9.0), col::TEXT);
+        }
+        if resp.clicked() {
+            self.poker.casino.mute = !mute;
+        }
+        let keys_open = matches!(self.ui.dialog, Some(crate::app::Dialog::CasinoKeys(_)));
+        let (resp, r) = button(ui, 38.0, keys_open, "Keys: every game's moves and their keys, yours to change");
+        menubar::keyboard_icon(&p, r.center(), if keys_open { col::NIGHT } else { col::TEXT });
+        if resp.clicked() {
+            self.ui.dialog = Some(crate::app::Dialog::CasinoKeys(keys::KeysWindow::new(Some(keys::Section::of(game)))));
         }
         // How many rounds this Pyr checked.
         let problems = !c.problems.is_empty();
@@ -796,6 +815,17 @@ impl PyrApp {
 
     /// The rack of chips to bet with; returns the rack's height.
     pub fn chip_rack(&mut self, ui: &mut egui::Ui, at: Pos2, max_chip: u64) -> f32 {
+        // A smaller or a bigger chip by its key (Left and Right unless changed).
+        let step = if keys::pressed(ui.ctx(), keys::Move::ChipSmaller) {
+            -1
+        } else if keys::pressed(ui.ctx(), keys::Move::ChipBigger) {
+            1
+        } else {
+            0
+        };
+        if step != 0 {
+            self.poker.casino.chip = next_chip(self.poker.casino.chip, max_chip, step);
+        }
         let r = 22.0;
         let mut x = at.x;
         for v in CHIPS {
@@ -1101,5 +1131,24 @@ impl PyrApp {
         if clicked_away || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.poker.casino.stream_menu = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod rack_tests {
+    use super::*;
+
+    #[test]
+    fn a_smaller_or_bigger_chip() {
+        assert_eq!(next_chip(25, 25_000, -1), 5);
+        assert_eq!(next_chip(25, 25_000, 1), 100);
+        assert_eq!(next_chip(1, 25_000, -1), 1);
+        assert_eq!(next_chip(25_000, 25_000, 1), 25_000);
+        // A chip bigger than this rack has: its biggest either way.
+        assert_eq!(next_chip(25_000, 5_000, -1), 5_000);
+        assert_eq!(next_chip(25_000, 5_000, 1), 5_000);
+        // One between the rack's: the nearest that way.
+        assert_eq!(next_chip(50, 25_000, -1), 25);
+        assert_eq!(next_chip(50, 25_000, 1), 100);
     }
 }

@@ -434,7 +434,10 @@ impl PyrApp {
         if cms {
             left.push(Item::Cms);
         }
+        // (The Keys window open: Keys lit, as 0.13.28.)
+        let keys_open = matches!(self.ui.dialog, Some(crate::app::Dialog::CasinoKeys(_)));
         let on = Some(match self.poker.tab {
+            _ if keys_open => Item::Keys,
             Tab::Floor => Item::Lobby,
             Tab::Vip => Item::Vip,
             Tab::Leaderboard => Item::Leaderboard,
@@ -443,7 +446,7 @@ impl PyrApp {
             Tab::Cms => Item::Cms,
         });
         let open = self.poker.casino.games_menu.then_some(Item::Games);
-        let out = menubar::bar(ui, bar, &left, &[Item::Fairness], on, open);
+        let out = menubar::bar(ui, bar, &left, &[Item::Keys, Item::Fairness], on, open);
         if let Some(item) = out.clicked {
             let tab = match item {
                 Item::Lobby => Some(Tab::Floor),
@@ -460,7 +463,10 @@ impl PyrApp {
                     self.poker.casino.fairness_open = true;
                     None
                 }
-                Item::Keys => None,
+                Item::Keys => {
+                    self.ui.dialog = Some(crate::app::Dialog::CasinoKeys(crate::casino::keys::KeysWindow::new(None)));
+                    None
+                }
             };
             if let Some(tab) = tab {
                 self.poker.casino.games_menu = false;

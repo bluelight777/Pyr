@@ -684,11 +684,14 @@ impl PyrApp {
             self.engine.poker(&s.key, ToServer::GameEmote { game: TableGame::Craps, table: v.id, emote: e });
         }
         let betting = v.stage == CrapsStage::Betting;
-        let space = ui.ctx().input(|i| i.key_pressed(egui::Key::Space)) && !ui.ctx().wants_keyboard_input();
+        let space = super::keys::pressed(ui.ctx(), super::keys::Move::CrapsRoll);
+        let clear_key = super::keys::pressed(ui.ctx(), super::keys::Move::CrapsClear);
+        // (" · Space": the roll's key, as it is now.)
+        let roll_key = super::keys::first_key(super::keys::Move::CrapsRoll).map(|k| format!(" · {k}")).unwrap_or_default();
         if shooter {
             // The shooter throws (once the bets are in), or the dice go by themselves at the end.
             let r = place(190.0);
-            let sub = if betting { Some(format!("or they go in {secs}s · Space")) } else { Some("the dice are coming back".into()) };
+            let sub = if betting { Some(format!("or they go in {secs}s{roll_key}")) } else { Some("the dice are coming back".into()) };
             if button(ui, r, "throw", "Throw the dice", sub, col::RED, betting) || (betting && space) {
                 if let Some((_, d)) = self.poker.casino.crt.desired.clone() {
                     self.crt_send(s, v, d, true);
@@ -697,13 +700,13 @@ impl PyrApp {
             }
         } else {
             let r = place(170.0);
-            let (label, sub) = if ready { ("Ready".to_string(), format!("dice in {secs}s")) } else { ("I'm ready".to_string(), if betting { format!("{secs}s to bet · Space") } else { "next roll".into() }) };
+            let (label, sub) = if ready { ("Ready".to_string(), format!("dice in {secs}s")) } else { ("I'm ready".to_string(), if betting { format!("{secs}s to bet{roll_key}") } else { "next roll".into() }) };
             if (button(ui, r, "ready", &label, Some(sub), col::GOLD, betting && !ready) || (betting && !ready && space)) && betting {
                 self.crt_send(s, v, on.clone(), true);
             }
         }
         let r = place(104.0);
-        if button(ui, r, "clear", "Clear", None, Color32::from_white_alpha(30), on.total() > 0) {
+        if button(ui, r, "clear", "Clear", None, Color32::from_white_alpha(30), on.total() > 0) || (clear_key && on.total() > 0) {
             // Down comes what may (the pass line stays once there's a point).
             let mut want = Bets::default();
             if v.point.is_some() {

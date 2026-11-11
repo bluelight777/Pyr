@@ -254,7 +254,8 @@ impl PyrApp {
             ui.painter().text(r.center(), Align2::CENTER_CENTER, text, theme::bold_font(15.0), if primary && enabled { Color32::from_rgb(0x2a, 0x10, 0x04) } else if enabled { Color32::WHITE } else { Color32::from_white_alpha(70) });
             enabled && resp.clicked()
         };
-        let enter = ui.ctx().input(|i| i.key_pressed(egui::Key::Enter)) && !ui.ctx().wants_keyboard_input();
+        let enter = super::keys::pressed(ui.ctx(), super::keys::Move::BacDeal);
+        let (rebet_key, clear_key) = (super::keys::pressed(ui.ctx(), super::keys::Move::BacRebet), super::keys::pressed(ui.ctx(), super::keys::Move::BacClear));
         let ok = total >= 10 && total <= super::chips_now(s) && bets.check().is_ok() && !busy;
         if (button(ui, "Deal", 130.0, true, ok) || (enter && ok))
             && let Some(commit) = c.commit
@@ -265,10 +266,11 @@ impl PyrApp {
             self.engine.casino_play(&s.key, commit, Bet::Baccarat(bets.clone()));
         }
         let last = self.poker.casino.baccarat.last.clone();
-        if button(ui, "Rebet", 90.0, false, !busy && last.total() > 0 && total == 0) {
+        let can_rebet = !busy && last.total() > 0 && total == 0;
+        if button(ui, "Rebet", 90.0, false, can_rebet) || (rebet_key && can_rebet) {
             self.poker.casino.baccarat.bets = last;
         }
-        if button(ui, "Clear", 80.0, false, !busy && total > 0) {
+        if button(ui, "Clear", 80.0, false, !busy && total > 0) || (clear_key && !busy && total > 0) {
             self.poker.casino.baccarat.bets = Bets::default();
         }
         let color = if total > super::chips_now(s) { col::LOSE } else { col::GOLD2 };

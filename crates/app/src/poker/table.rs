@@ -305,6 +305,7 @@ impl PyrApp {
             SitOut,
             Chips,
             Muck,
+            Keys,
         }
         let fs = self.poker.casino.fullscreen;
         let streamer = self.streamer_mode();
@@ -312,6 +313,10 @@ impl PyrApp {
         let mine = v.my_seat.and_then(|seat| v.seats[seat].as_ref());
         let out = mine.is_some_and(|x| x.sitting_out);
         let in_hand = mine.is_some_and(|x| x.in_hand) && v.hand.is_some() && v.to_act.is_some();
+        let stream_tip = match crate::casino::keys::first_key(crate::casino::keys::Move::PokerPeek) {
+            Some(k) => format!("Streamer mode is on: your cards stay face down until you peek (hold {k}). Click for the table's layout on a stream."),
+            None => "Streamer mode is on: your cards stay face down until you peek (point at them). Click for the table's layout on a stream.".to_string(),
+        };
         // (Right to left, as they're shown.)
         let mut all: Vec<(B, &str, f32, &str)> = vec![
             (B::Full, if fs { "Exit full" } else { "Fullscreen" }, 92.0, if fs { "Leave fullscreen (Esc)" } else { "Just the table, the whole screen (F11)" }),
@@ -319,7 +324,7 @@ impl PyrApp {
                 B::Stream,
                 if streamer { "Streaming" } else { "Stream" },
                 92.0,
-                if streamer { "Streamer mode is on: your cards stay face down until you peek (hold Space). Click for the table's layout on a stream." } else { "Streamer mode, for when you're live: click to set it up" },
+                if streamer { stream_tip.as_str() } else { "Streamer mode, for when you're live: click to set it up" },
             ),
             (B::Sound, if self.poker.mute { "Sound off" } else { "Sound on" }, 92.0, "The table's sounds: cards, chips, your turn"),
         ];
@@ -355,7 +360,8 @@ impl PyrApp {
         let title_w = name_g.size().x.max(sub_g.size().x).min(150.0);
         let room = (r.right() - 12.0) - (back.right() + 16.0 + title_w + 12.0);
         let width = |list: &[(B, &str, f32, &str)], more: bool| list.iter().map(|e| e.2 + 8.0).sum::<f32>() + if more { MORE_W + 8.0 } else { 0.0 };
-        let mut under_more: Vec<(B, &str, f32, &str)> = Vec::new();
+        // (Keys…: in the menu always, as 0.13.28 has it.)
+        let mut under_more: Vec<(B, &str, f32, &str)> = vec![(B::Keys, "Keys…", 0.0, "Every game's moves and their keys, yours to change")];
         for gone in FIRST_UNDER_MORE {
             if width(&all, !under_more.is_empty()) <= room {
                 break;
@@ -381,7 +387,7 @@ impl PyrApp {
         }
         if !under_more.is_empty() {
             // (In the order they'd be in on the bar, left to right.)
-            const BAR_ORDER: [B; 10] = [B::Muck, B::Chips, B::SitOut, B::Leave, B::Last, B::Log, B::Prize, B::Sound, B::Stream, B::Full];
+            const BAR_ORDER: [B; 11] = [B::Muck, B::Chips, B::SitOut, B::Leave, B::Last, B::Log, B::Prize, B::Sound, B::Stream, B::Full, B::Keys];
             under_more.sort_by_key(|e| BAR_ORDER.iter().position(|b| *b == e.0).unwrap_or(0));
             let at = Rect::from_min_size(pos2(x - MORE_W, r.top() + 9.0), vec2(MORE_W, 32.0));
             x -= MORE_W + 8.0;
@@ -421,6 +427,7 @@ impl PyrApp {
             Some(B::SitOut) => self.engine.poker(&s.key, ToServer::SitOut { table: v.id, out: !out }),
             Some(B::Chips) => self.poker.top_up = Some((v.id, v.rules.big_blind * 50)),
             Some(B::Muck) => self.engine.set_auto_muck(!self.engine.auto_muck()),
+            Some(B::Keys) => self.ui.dialog = Some(crate::app::Dialog::CasinoKeys(crate::casino::keys::KeysWindow::new(Some(crate::casino::keys::Section::Poker)))),
             Some(B::Full) | None => {}
         }
         // The table's name and what it is, cut short where the buttons start.
@@ -753,7 +760,7 @@ impl PyrApp {
         // never shows my cards.
         let span = Rect::from_center_size(base, vec2(cw * (1.0 + 0.72 * (k as f32 - 1.0)) + 12.0, ch + 12.0));
         let streamer = self.streamer_mode();
-        let peek = !streamer || ui.ctx().input(|i| i.key_down(egui::Key::Space)) && !ui.ctx().wants_keyboard_input() || ui.rect_contains_pointer(span);
+        let peek = !streamer || crate::casino::keys::held(ui.ctx(), crate::casino::keys::Move::PokerPeek) || ui.rect_contains_pointer(span);
         for (c, card) in seat.cards.iter().enumerate() {
             let off = (c as f32 - (k as f32 - 1.0) / 2.0) * cw * 0.72;
             let tilt = (c as f32 - (k as f32 - 1.0) / 2.0) * 4.0;
@@ -777,7 +784,11 @@ impl PyrApp {
             let left = cards_left.max(lay.seat(me).x + 90.0);
             let r = Rect::from_min_size(pos2(left, base.y + ch * 0.5 + 10.0), vec2(250.0, 28.0));
             p.rect_filled(r, theme::r(14), Color32::from_rgba_unmultiplied(0x14, 0x10, 0x0a, 225));
-            p.text(r.center(), Align2::CENTER_CENTER, "Streamer mode · hold Space to peek", theme::bold_font(12.5), Color32::from_rgb(0xff, 0xe2, 0x9a));
+            let how = match crate::casino::keys::first_key(crate::casino::keys::Move::PokerPeek) {
+                Some(k) => format!("Streamer mode · hold {k} to peek"),
+                None => "Streamer mode · point at them to peek".to_string(),
+            };
+            p.text(r.center(), Align2::CENTER_CENTER, how, theme::bold_font(12.5), Color32::from_rgb(0xff, 0xe2, 0x9a));
             return;
         }
         // What I have now, and (if asked for) my chance of winning.
@@ -990,12 +1001,15 @@ impl PyrApp {
             p.text(r.right_top() + vec2(-8.0, 6.0), Align2::RIGHT_TOP, key, theme::font(10.0), Color32::from_white_alpha(90));
             resp.clicked()
         };
+        // (Each button's key in its corner, as set in the Keys window.)
+        use crate::casino::keys::Move;
+        let key_of = |mv| crate::casino::keys::first_key(mv).unwrap_or_default();
         let (w, fold_w, gap) = (172.0, 132.0, 10.0);
         let span = 2.0 * w + fold_w + 2.0 * gap;
         let left = right - span;
         // Fold, Check or Call, Bet or Raise: left to right.
         let r = Rect::from_min_size(pos2(left, y), vec2(fold_w, h));
-        if btn(ui, r, if armed { "Fold anyway" } else { "Fold" }, "", Color32::from_rgb(0xb0, 0x2e, 0x38), "fold", "F") {
+        if btn(ui, r, if armed { "Fold anyway" } else { "Fold" }, "", Color32::from_rgb(0xb0, 0x2e, 0x38), "fold", &key_of(Move::PokerFold)) {
             act = Some(Action::Fold);
         }
         // Checking's free: Fold said so once (a click on it again folds).
@@ -1013,17 +1027,17 @@ impl PyrApp {
         }
         let r = Rect::from_min_size(pos2(left + fold_w + gap, y), vec2(w, h));
         if l.can_check {
-            if btn(ui, r, "Check", "", Color32::from_rgb(0x23, 0x8a, 0x58), "check", "C") {
+            if btn(ui, r, "Check", "", Color32::from_rgb(0x23, 0x8a, 0x58), "check", &key_of(Move::PokerCall)) {
                 act = Some(Action::Check);
             }
-        } else if btn(ui, r, "Call", &chips_text(l.call), Color32::from_rgb(0x2a, 0x6a, 0xc0), "call", "C") {
+        } else if btn(ui, r, "Call", &chips_text(l.call), Color32::from_rgb(0x2a, 0x6a, 0xc0), "call", &key_of(Move::PokerCall)) {
             act = Some(Action::Call);
         }
         if l.can_raise {
             let r = Rect::from_min_size(pos2(right - w, y), vec2(w, h));
             let all_in = self.poker.raise >= l.max_to;
             let top = if all_in { "All in" } else if l.is_bet { "Bet" } else { "Raise to" };
-            if btn(ui, r, top, &chips_text(self.poker.raise), if all_in { Color32::from_rgb(0xc8, 0x2c, 0x22) } else { Color32::from_rgb(0xdc, 0x6c, 0x1a) }, "raise", "R") {
+            if btn(ui, r, top, &chips_text(self.poker.raise), if all_in { Color32::from_rgb(0xc8, 0x2c, 0x22) } else { Color32::from_rgb(0xdc, 0x6c, 0x1a) }, "raise", &key_of(Move::PokerRaise)) {
                 act = Some(if all_in { Action::AllIn } else { Action::Raise { to: self.poker.raise } });
             }
         }
@@ -1037,7 +1051,9 @@ impl PyrApp {
             p.rect_filled(panel, theme::r(12), Color32::from_rgba_unmultiplied(0x10, 0x0e, 0x12, 210));
             let mut px = left;
             let mut lit = false;
-            for (label, amt) in presets {
+            // (1 to 5 set them too.)
+            let keyed = [Move::PokerMin, Move::PokerHalf, Move::PokerThree, Move::PokerPot, Move::PokerAllin].iter().position(|m| crate::casino::keys::pressed(ui.ctx(), *m));
+            for (n, (label, amt)) in presets.into_iter().enumerate() {
                 let to = if label == "Min" || label == "All in" { amt } else { (in_front + amt).clamp(l.min_to, l.max_to) };
                 let r = Rect::from_min_size(pos2(px, row_y), vec2(50.0, 24.0));
                 px += 54.0;
@@ -1046,7 +1062,7 @@ impl PyrApp {
                 let resp = ui.interact(r, ui.id().with(("preset", label)), Sense::click());
                 p.rect_filled(r, theme::r(12), if on { Color32::from_rgb(0xdc, 0x6c, 0x1a) } else if resp.hovered() { Color32::from_white_alpha(34) } else { Color32::from_white_alpha(14) });
                 p.text(r.center(), Align2::CENTER_CENTER, label, theme::bold_font(11.0), if on { Color32::WHITE } else { theme::TEXT() });
-                if resp.clicked() {
+                if resp.clicked() || keyed == Some(n) {
                     self.poker.raise = to;
                     self.poker.raise_text = to.to_string();
                 }
@@ -1070,17 +1086,14 @@ impl PyrApp {
                 self.poker.raise = n.clamp(l.min_to, l.max_to);
             }
         }
-        // Keys: F fold, C check or call, R bet or raise (unless typing).
-        if !ui.ctx().wants_keyboard_input() {
-            ui.input(|i| {
-                if i.key_pressed(egui::Key::F) {
-                    act = Some(Action::Fold);
-                } else if i.key_pressed(egui::Key::C) {
-                    act = Some(if l.can_check { Action::Check } else { Action::Call });
-                } else if i.key_pressed(egui::Key::R) && l.can_raise {
-                    act = Some(if self.poker.raise >= l.max_to { Action::AllIn } else { Action::Raise { to: self.poker.raise } });
-                }
-            });
+        // Keys: fold, check or call, bet or raise (F, C and R unless changed; never while typing).
+        let key = |mv| crate::casino::keys::pressed(ui.ctx(), mv);
+        if key(Move::PokerFold) {
+            act = Some(Action::Fold);
+        } else if key(Move::PokerCall) {
+            act = Some(if l.can_check { Action::Check } else { Action::Call });
+        } else if key(Move::PokerRaise) && l.can_raise {
+            act = Some(if self.poker.raise >= l.max_to { Action::AllIn } else { Action::Raise { to: self.poker.raise } });
         }
         if let Some((cs, deadline, _, bank)) = t.clock
             && cs == me

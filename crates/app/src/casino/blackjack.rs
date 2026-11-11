@@ -268,7 +268,9 @@ impl PyrApp {
         p.rect_filled(bar, theme::r(18), Color32::from_black_alpha(170));
         let busy = self.poker.casino.busy();
         let c = &s.poker.casino;
-        let keys = ui.ctx().input(|i| (i.key_pressed(egui::Key::H), i.key_pressed(egui::Key::S), i.key_pressed(egui::Key::D), i.key_pressed(egui::Key::P), i.key_pressed(egui::Key::Enter)));
+        use super::keys::{Move, with_key};
+        let key = |mv| super::keys::pressed(ui.ctx(), mv);
+        let keys = (key(Move::BjHit), key(Move::BjStand), key(Move::BjDouble), key(Move::BjSplit), key(Move::BjDeal), key(Move::BjRebet));
         let typing = ui.ctx().wants_keyboard_input();
         match live {
             Some(v) => {
@@ -278,10 +280,15 @@ impl PyrApp {
                 } else {
                     None
                 };
-                let moves: Vec<(Action, &str, bool)> = if v.phase == Phase::Insurance {
-                    vec![(Action::Insure, "Insurance", false), (Action::NoInsurance, "No insurance", false)]
+                let moves: Vec<(Action, String, bool)> = if v.phase == Phase::Insurance {
+                    vec![(Action::Insure, "Insurance".into(), false), (Action::NoInsurance, "No insurance".into(), false)]
                 } else {
-                    vec![(Action::Hit, "Hit  (H)", keys.0), (Action::Stand, "Stand  (S)", keys.1), (Action::Double, "Double  (D)", keys.2), (Action::Split, "Split  (P)", keys.3)]
+                    vec![
+                        (Action::Hit, with_key("Hit", Move::BjHit), keys.0),
+                        (Action::Stand, with_key("Stand", Move::BjStand), keys.1),
+                        (Action::Double, with_key("Double", Move::BjDouble), keys.2),
+                        (Action::Split, with_key("Split", Move::BjSplit), keys.3),
+                    ]
                 };
                 let w = 150.0;
                 let total = moves.len() as f32 * (w + 12.0) - 12.0;
@@ -290,7 +297,7 @@ impl PyrApp {
                     let r = Rect::from_min_size(pos2(x, bar.center().y - 24.0), vec2(w, 48.0));
                     x += w + 12.0;
                     let ok = v.allowed.contains(&a) && !busy;
-                    let resp = ui.interact(r, ui.id().with(("bj", label)), Sense::click());
+                    let resp = ui.interact(r, ui.id().with(("bj", label.as_str())), Sense::click());
                     let fill = match a {
                         Action::Hit => Color32::from_rgb(0x2a, 0x8a, 0x4a),
                         Action::Stand => Color32::from_rgb(0xb8, 0x2a, 0x30),
@@ -303,7 +310,7 @@ impl PyrApp {
                         p.rect_stroke(r.expand(3.0), theme::r(14), Stroke::new(2.5f32, col::GOLD2), StrokeKind::Outside);
                     }
                     let cost = if matches!(a, Action::Double | Action::Split) { v.hands.get(v.active).map(|h| h.bet).unwrap_or(0) } else if a == Action::Insure { v.base / 2 } else { 0 };
-                    p.text(r.center() - vec2(0.0, if cost > 0 { 7.0 } else { 0.0 }), Align2::CENTER_CENTER, label, theme::bold_font(15.0), if ok { Color32::WHITE } else { Color32::from_white_alpha(70) });
+                    p.text(r.center() - vec2(0.0, if cost > 0 { 7.0 } else { 0.0 }), Align2::CENTER_CENTER, &label, theme::bold_font(15.0), if ok { Color32::WHITE } else { Color32::from_white_alpha(70) });
                     if cost > 0 {
                         p.text(r.center() + vec2(0.0, 12.0), Align2::CENTER_CENTER, format!("+{}", chips_text(cost)), theme::font(11.5), if ok { Color32::from_white_alpha(200) } else { Color32::from_white_alpha(60) });
                     }
@@ -330,7 +337,7 @@ impl PyrApp {
                     enabled && resp.clicked()
                 };
                 let can = bet >= 10 && bet <= super::chips_now(s) && !busy;
-                if button(ui, "Deal  (Enter)", 170.0, true, can) || (can && keys.4 && !typing) {
+                if button(ui, with_key("Deal", Move::BjDeal).as_str(), 170.0, true, can) || (can && keys.4 && !typing) {
                     if let Some(commit) = c.commit {
                         self.poker.casino.bj.last_bet = bet;
                         self.poker.casino.bj.over = None;
@@ -341,7 +348,7 @@ impl PyrApp {
                     }
                 }
                 let rebet = bet == 0 && last > 0;
-                if button(ui, if rebet { "Rebet" } else { "Clear" }, 110.0, false, rebet || bet > 0) {
+                if button(ui, if rebet { "Rebet" } else { "Clear" }, 110.0, false, rebet || bet > 0) || ((rebet || bet > 0) && keys.5 && !typing) {
                     self.poker.casino.bj.bet = if rebet { last } else { 0 };
                     self.poker.casino.bj.over = None;
                     self.poker.casino.bj.appear.clear();

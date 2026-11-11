@@ -223,6 +223,10 @@ pub struct Settings {
     /// When moving pictures in chat (GIFs, animated WebP and PNG) play: "" always, "hover"
     /// while pointed at, "never" (they show still, marked GIF).
     pub play_gifs: String,
+    /// Pyr Casino's keys as changed from each move's own (0.13.26, 0.13.28's names): a move
+    /// ("slots.spin", "bj.hit"...) and its keys ("Space", "Ctrl+Shift+W"), two at most, none
+    /// for a move whose keys were taken off. A move left as it was isn't in it.
+    pub casino_keys: std::collections::BTreeMap<String, Vec<String>>,
     /// Settings this Pyr doesn't know (a newer one's, or 0.13.28's not rebuilt yet): kept as
     /// they are and written back, so going from one Pyr to another loses none.
     #[serde(flatten)]
@@ -345,6 +349,7 @@ impl Default for Settings {
             ringtone: None,
             ringtones: Default::default(),
             play_gifs: String::new(),
+            casino_keys: Default::default(),
             mute_key: String::new(),
             extra: Default::default(),
             auto_reports: true,

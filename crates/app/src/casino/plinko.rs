@@ -516,7 +516,7 @@ impl PyrApp {
             }
             y += 70.0;
         } else {
-            let space = ui.ctx().input(|i| i.key_pressed(egui::Key::Space)) && !ui.ctx().wants_keyboard_input();
+            let space = super::keys::pressed(ui.ctx(), super::keys::Move::PlinkoDrop);
             if big_button(ui, Rect::from_min_size(pos2(x, y), vec2(w, 48.0)), "Drop a ball", ok) || (space && ok) {
                 self.plinko_drop(s);
             }

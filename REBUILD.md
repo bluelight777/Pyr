@@ -306,7 +306,24 @@ How (decided while starting it):
       top bar (0.13.22), titles and badges (0.13.4/6: GAME MASTER / OWNER on staff's seats, Title
       shown or hidden: `hide_title`, the record's field and request are in already), pre-action buttons (0.13.4), slower wins
       (0.13.4), scaling (0.13.6), table sounds (0.13.6)
-- [ ] Keys for every game (0.13.26)
+- [x] Keys for every game (0.13.26): a Keys button on every game's top bar (lit while open, where
+      0.13.28 has it: left of the sound), Keys in the casino's menu bar, Keys… in a poker table's
+      menu: the Keys window as 0.13.28 has it, measured (its moves, words, keys, colors, the ×
+      drawn as two strokes, every place to the pixel, the list half the window and 141 more), the
+      game it was opened from first, "(this game)". Click a key and press another (Ctrl, Alt,
+      Shift with it), two a move; a key another move of the same game had moves over and it says
+      so; × takes one off, ↺ puts a move back, one button puts every key back; Esc stops
+      waiting. Kept as 0.13.28 keeps them (`casino_keys` in the settings, only what's changed,
+      0.13.28's names: tried, `{"chip.bigger":["Ctrl+Shift+W"]}` both), so a Pyr updated from
+      0.13.28 keeps its keys. Every game's keys go through it: the four slot machines (spin, bet
+      less and more), blackjack alone and at the tables (H S D P, Enter, R rebet or clear),
+      baccarat (Enter, Backspace, R), roulette (Space or Enter, D, Backspace, R, Ctrl+Z against the
+      house), craps (Space throws or says I'm ready, Backspace), Dice, Keno, Plinko, the chip rack
+      (Left and Right), poker (F C R, 1 to 5 the amounts, Space held to peek in streamer mode).
+      Buttons and hints show the key as it is now ("Roll  (Space)", "Hit  (H)", poker's corners,
+      "· Space" under a table's button). Never while typing, nor while the window's open. Tried:
+      rebinding, Up/Down, Left/Right, Space at Dice; tests. (Dominó's "Pass, or deal me in" is
+      in the list and waits for Dominó.)
 - [ ] Emotes that move (0.13.23)
 - [x] New cards and backs (0.13.22): Meshy's court figures, ace of spades and six backs (carved
       from 0.13.28); every face-down card in the back picked, and a back picked while sitting

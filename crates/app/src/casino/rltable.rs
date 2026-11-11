@@ -619,10 +619,14 @@ impl PyrApp {
         }
         let chips = chips_now(s);
         let open = !settling && !ready;
-        let enter = ui.ctx().input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space)) && !ui.ctx().wants_keyboard_input();
+        use super::keys::Move;
+        let key = |mv| super::keys::pressed(ui.ctx(), mv);
+        let (enter, double_key, rebet_key, clear_key) = (key(Move::RlSpin), key(Move::RlDouble), key(Move::RlRebet), key(Move::RlClear));
+        // (" · Space": the spin's key, as it is now.)
+        let spin_key = super::keys::first_key(Move::RlSpin).map(|k| format!(" · {k}")).unwrap_or_default();
         let (label, sub) = match v.stage {
             RlStage::Betting if ready => ("Ready".to_string(), Some(format!("ball in {secs}s"))),
-            RlStage::Betting => (format!("Spin  ({})", chips_text(total)), Some(format!("{secs}s to bet · Space"))),
+            RlStage::Betting => (format!("Spin  ({})", chips_text(total)), Some(format!("{secs}s to bet{spin_key}"))),
             RlStage::Shown => ("Spin".to_string(), Some(if settling { "the ball's going".to_string() } else { "next spin".to_string() })),
             RlStage::Waiting => ("Spin".to_string(), Some("starts the spin".to_string())),
         };
@@ -634,17 +638,18 @@ impl PyrApp {
         let r = place(96.0);
         let doubled: Vec<Chip> = on.iter().map(|c| Chip { spot: c.spot, chips: (c.chips * 2).min(v.max_bet.min(rl::max_on(&c.spot))) }).collect();
         let more = rlroom::total(&doubled).saturating_sub(total);
-        if button(ui, r, "double", "Double", None, Color32::from_white_alpha(30), open && total > 0 && more > 0 && more <= chips) {
+        let can_double = open && total > 0 && more > 0 && more <= chips;
+        if button(ui, r, "double", "Double", None, Color32::from_white_alpha(30), can_double) || (double_key && can_double) {
             self.rl_send(s, v, doubled, false);
         }
         let r = place(112.0);
         let rebet = self.poker.casino.rlt.rebet.clone();
         let can_rebet = total == 0 && rlroom::total(&rebet) > 0 && rlroom::total(&rebet) <= chips && open;
         if total > 0 {
-            if button(ui, r, "clear", "Clear", None, Color32::from_white_alpha(30), open) {
+            if button(ui, r, "clear", "Clear", None, Color32::from_white_alpha(30), open) || (clear_key && open) {
                 self.rl_send(s, v, Vec::new(), false);
             }
-        } else if button(ui, r, "rebet", "Rebet", Some(chips_text(rlroom::total(&rebet))), Color32::from_white_alpha(30), can_rebet) {
+        } else if button(ui, r, "rebet", "Rebet", Some(chips_text(rlroom::total(&rebet))), Color32::from_white_alpha(30), can_rebet) || (rebet_key && can_rebet) {
             self.rl_send(s, v, rebet, false);
         }
         let color = if total > chips + mine.as_ref().map(|x| rlroom::total(&x.chips)).unwrap_or(0) { col::LOSE } else { col::GOLD2 };

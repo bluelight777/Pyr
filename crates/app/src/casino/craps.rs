@@ -349,7 +349,8 @@ impl PyrApp {
             ui.painter().text(r.center(), Align2::CENTER_CENTER, text, theme::bold_font(15.0), if primary && enabled { Color32::from_rgb(0x2a, 0x10, 0x04) } else if enabled { Color32::WHITE } else { Color32::from_white_alpha(70) });
             enabled && resp.clicked()
         };
-        let space = ui.ctx().input(|i| i.key_pressed(egui::Key::Space)) && !ui.ctx().wants_keyboard_input();
+        let space = super::keys::pressed(ui.ctx(), super::keys::Move::CrapsRoll);
+        let clear_key = super::keys::pressed(ui.ctx(), super::keys::Move::CrapsClear);
         let ok = on_table > 0 && need <= super::chips_now(s) && !busy;
         if button(ui, "Roll", 130.0, true, ok) || (space && ok) {
             if desired != table.bets {
@@ -358,7 +359,7 @@ impl PyrApp {
             }
             self.poker.casino.craps.roll_after = true;
         }
-        if button(ui, "Clear", 80.0, false, !busy) {
+        if button(ui, "Clear", 80.0, false, !busy) || (clear_key && !busy) {
             // Take down what may come down (the pass line stays once there's a point).
             let mut want = Bets::default();
             if table.point.is_some() {

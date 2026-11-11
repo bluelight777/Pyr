@@ -512,11 +512,13 @@ impl PyrApp {
         p.text(pos2(bar.left() + 24.0, bar.top() + 22.0), Align2::LEFT_CENTER, "LINE BET", theme::bold_font(11.5), col::MUTED);
         let minus = Rect::from_center_size(pos2(bar.left() + 40.0, cy + 12.0), vec2(34.0, 34.0));
         let plus = Rect::from_center_size(pos2(bar.left() + 150.0, cy + 12.0), vec2(34.0, 34.0));
+        // (Bet less, bet more: their keys too.)
+        let key_dir = if self.poker.casino.info.is_none() && !self.poker.casino.slots.stake.menu { super::keys::bet_step(ui.ctx()) } else { 0 };
         for (r, label, dir) in [(minus, "−", -1i32), (plus, "+", 1)] {
             let resp = ui.interact(r, ui.id().with(("lb", label)), Sense::click());
             p.circle_filled(r.center(), 17.0, if resp.hovered() { col::GOLD } else { col::GOLD_DARK });
             p.text(r.center(), Align2::CENTER_CENTER, label, theme::bold_font(20.0), Color32::BLACK);
-            if resp.clicked() {
+            if resp.clicked() || key_dir == dir {
                 let i = LINE_BETS.iter().position(|x| *x == lb).unwrap_or(2) as i32;
                 let j = (i + dir).clamp(0, LINE_BETS.len() as i32 - 1) as usize;
                 self.poker.casino.slots.line_bet = LINE_BETS[j];
@@ -543,8 +545,8 @@ impl PyrApp {
             let cost = pyr_poker::casino::feature::cost(lb * LINES as u64, sl::price(f));
             p.text(spin_c + vec2(0.0, 56.0), Align2::CENTER_CENTER, format!("{} · {}", SlotKind::Sevens.describe(f).0, chips_text(cost)), theme::bold_font(11.0), col::GOLD2);
         }
-        let space = ui.ctx().input(|i| i.key_pressed(egui::Key::Space)) && !ui.ctx().wants_keyboard_input() && self.poker.casino.info.is_none() && !self.poker.casino.slots.stake.menu;
-        if resp.on_hover_text("Spin (Space)").clicked() || space {
+        let space = super::keys::pressed(ui.ctx(), super::keys::Move::SlotsSpin) && self.poker.casino.info.is_none() && !self.poker.casino.slots.stake.menu;
+        if resp.on_hover_text(super::keys::with_key("Spin", super::keys::Move::SlotsSpin)).clicked() || space {
             if auto.on() {
                 self.poker.casino.slots.auto.stop();
             } else if !busy {

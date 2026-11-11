@@ -792,10 +792,13 @@ impl PyrApp {
         let chips = chips_now(s);
         let seen = v.last.as_ref().zip(self.poker.casino.bact.dealt).is_some_and(|(r, (c, d))| r.coup == c && now.duration_since(d).as_secs_f32() >= times(r).result + 0.9);
         let open = matches!(v.stage, BacStage::Waiting | BacStage::Betting) || (v.stage == BacStage::Shown && seen);
-        let enter = ui.ctx().input(|i| i.key_pressed(egui::Key::Enter)) && !ui.ctx().wants_keyboard_input();
+        let enter = super::keys::pressed(ui.ctx(), super::keys::Move::BacDeal);
+        let (rebet_key, clear_key) = (super::keys::pressed(ui.ctx(), super::keys::Move::BacRebet), super::keys::pressed(ui.ctx(), super::keys::Move::BacClear));
+        // (" · Enter": the deal's key, as it is now.)
+        let deal_key = super::keys::first_key(super::keys::Move::BacDeal).map(|k| format!(" · {k}")).unwrap_or_default();
         let (label, sub) = match v.stage {
             BacStage::Betting if ready => ("Ready".to_string(), Some(format!("cards in {secs}s"))),
-            BacStage::Betting => (format!("Deal  ({})", chips_text(on.total())), Some(format!("{secs}s to bet · Enter"))),
+            BacStage::Betting => (format!("Deal  ({})", chips_text(on.total())), Some(format!("{secs}s to bet{deal_key}"))),
             BacStage::Shown => ("Deal".to_string(), Some("next coup".to_string())),
             BacStage::Waiting => ("Deal".to_string(), Some("starts the coup".to_string())),
         };
@@ -808,10 +811,10 @@ impl PyrApp {
         let rebet = self.poker.casino.bact.rebet.clone();
         let can_rebet = on.total() == 0 && rebet.total() > 0 && rebet.total() <= chips && open;
         if on.total() > 0 {
-            if button(ui, r, "clear", "Clear", None, Color32::from_white_alpha(30), open && !ready) {
+            if button(ui, r, "clear", "Clear", None, Color32::from_white_alpha(30), open && !ready) || (clear_key && open && !ready) {
                 self.bac_send(s, v, Bets::default(), false);
             }
-        } else if button(ui, r, "rebet", "Rebet", Some(chips_text(rebet.total())), Color32::from_white_alpha(30), can_rebet) {
+        } else if button(ui, r, "rebet", "Rebet", Some(chips_text(rebet.total())), Color32::from_white_alpha(30), can_rebet) || (rebet_key && can_rebet) {
             self.bac_send(s, v, rebet, false);
         }
         let color = if on.total() > chips + mine.as_ref().map(|x| x.bets.total()).unwrap_or(0) { col::LOSE } else { col::GOLD2 };
