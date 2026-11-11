@@ -18,6 +18,22 @@ pub enum Start {
     AlreadyRunning,
 }
 
+/// The lock while this copy holds it (from `hold` until `release`).
+static HELD: parking_lot::Mutex<Option<File>> = parking_lot::Mutex::new(None);
+
+/// Keeps the lock (`Start::First`'s) for as long as the app runs.
+pub fn hold(lock: Option<File>) {
+    *HELD.lock() = lock;
+}
+
+/// Lets go of the lock, so the next copy started (the updated Pyr, or this one again after the
+/// graphics card went away) starts as the only one, though this one's window is still up.
+pub fn release() {
+    if let Some(f) = HELD.lock().take() {
+        let _ = f.unlock();
+    }
+}
+
 /// Where the running copy picks up links from later launches.
 #[derive(Clone)]
 pub struct Handoff {

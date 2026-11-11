@@ -240,7 +240,7 @@ impl PyrApp {
         self.plinko_controls(ui, s, left, now);
         // The board.
         p.rect_filled(board_r, theme::r(18), Color32::from_rgba_unmultiplied(0x09, 0x07, 0x12, 118));
-        p.rect_stroke(board_r, theme::r(18), Stroke::new(1.2, Color32::from_rgb(0x9a, 0x76, 0x3c)), StrokeKind::Inside);
+        p.rect_stroke(board_r, theme::r(18), Stroke::new(1.2_f32, Color32::from_rgb(0x9a, 0x76, 0x3c)), StrokeKind::Inside);
         let pk_ui = &self.poker.casino.plinko;
         let (risk, rows) = (pk_ui.risk, pk_ui.rows);
         // (Balls still falling keep the board they were dropped on.)
@@ -253,7 +253,7 @@ impl PyrApp {
         let ring = b.ring();
         super::radial(&p, ring, b.dx * 1.1, Color32::from_rgba_unmultiplied(0xff, 0xac, 0x37, 80), Color32::TRANSPARENT);
         p.circle_filled(ring, b.ring_r, Color32::from_rgba_unmultiplied(0xff, 0xb0, 0x50, 18));
-        p.circle_stroke(ring, b.ring_r, Stroke::new(1.5, Color32::from_rgb(0xd0, 0xa2, 0x4a)));
+        p.circle_stroke(ring, b.ring_r, Stroke::new(1.5_f32, Color32::from_rgb(0xd0, 0xa2, 0x4a)));
         // Pegs: gold, lit pale with a soft disc around them for a moment when a ball strikes.
         let lit_peg = Color32::from_rgb(0xf2, 0xda, 0x91);
         for row in 0..n {
@@ -386,7 +386,7 @@ impl PyrApp {
     fn plinko_controls(&mut self, ui: &mut egui::Ui, s: &ServerView, r: Rect, _now: Instant) {
         let p = ui.painter().clone();
         p.rect_filled(r, theme::r(18), PANEL.gamma_multiply(0.94));
-        p.rect_stroke(r, theme::r(18), Stroke::new(1.0, Color32::from_rgb(0x3a, 0x2a, 0x4e)), StrokeKind::Inside);
+        p.rect_stroke(r, theme::r(18), Stroke::new(1.0_f32, Color32::from_rgb(0x3a, 0x2a, 0x4e)), StrokeKind::Inside);
         let x = r.left() + 18.0;
         let w = r.width() - 36.0;
         let mut y = r.top() + 18.0;
@@ -469,7 +469,7 @@ impl PyrApp {
         let handle = Rect::from_center_size(pos2(hx, track.center().y), vec2(18.0, 24.0));
         let resp = ui.interact(track.expand2(vec2(10.0, 12.0)), ui.id().with("pk-rows"), Sense::click_and_drag());
         p.rect_filled(handle, theme::r(5), KNOB);
-        p.rect_stroke(handle, theme::r(5), Stroke::new(1.2, Color32::from_rgb(0xee, 0xe6, 0xdf)), StrokeKind::Inside);
+        p.rect_stroke(handle, theme::r(5), Stroke::new(1.2_f32, Color32::from_rgb(0xee, 0xe6, 0xdf)), StrokeKind::Inside);
         if (resp.dragged() || resp.clicked())
             && let Some(q) = resp.interact_pointer_pos()
         {

@@ -94,6 +94,8 @@ Var FinishText
 Var QuitAsked
 ; Retries while an updating Pyr finishes quitting (only with /RELAUNCH).
 Var UpdateWait
+; 1 when the updating Pyr keeps its window up meanwhile (/STAYOPEN, Pyr 0.13.29 on).
+Var StayOpen
 ; Where Pyr was installed under its name before 0.8.0 (OLD), and where Pyr Server keeps its data.
 Var OldDir
 Var ServerData
@@ -159,6 +161,14 @@ Function .onInit
   ${GetOptions} $R0 "/RELAUNCH" $R1
   ${IfNot} ${Errors}
     StrCpy $UpdateWait 0
+  ${EndIf}
+  ; From 0.13.29 it adds /STAYOPEN: its window shows "Updating Pyr" until the new Pyr's is up,
+  ; so its program file is put aside instead of waited for (see the Pyr section).
+  StrCpy $StayOpen 0
+  ClearErrors
+  ${GetOptions} $R0 "/STAYOPEN" $R1
+  ${IfNot} ${Errors}
+    StrCpy $StayOpen 1
   ${EndIf}
 FunctionEnd
 
@@ -326,6 +336,13 @@ Section "Pyr" SecApp
   SectionIn RO
   Call QuitOld
   SetOutPath "$INSTDIR"
+  ; The Pyr that's updating itself is still open, showing "Updating Pyr" (/STAYOPEN): its
+  ; program file is renamed (Windows allows that while it runs) and the new one goes in its
+  ; place; the new Pyr takes the old file away once the old one has closed. (If it can't be put
+  ; aside, it's waited for as before.)
+  ${If} $StayOpen == 1
+    !insertmacro SetAsideFile "pyr.exe"
+  ${EndIf}
   !insertmacro ReplaceFile "pyr.exe" app "${HOWTO_APP}"
   File "${BINDIR}/pyr.exe"
   ; The Claude connector (Settings, Claude tab, sets it up in the Claude app).
@@ -434,6 +451,7 @@ FunctionEnd
 
 Section "Uninstall"
   !insertmacro ReplaceFile "pyr.exe" unapp "${HOWTO_APP}"
+  Delete "$INSTDIR\pyr.exe.old"
   !insertmacro ReplaceFile "pyr-server.exe" unserver "${HOWTO_SERVER}"
   Delete "$INSTDIR\pyr-bot.exe"
   Delete "$INSTDIR\pyr-mcp.exe"

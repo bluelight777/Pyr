@@ -26,6 +26,7 @@ mod images;
 mod titlebar;
 mod instance;
 mod invites;
+mod updating;
 mod looks;
 mod markdown;
 mod menu;
@@ -134,8 +135,11 @@ fn main() -> eframe::Result<()> {
     // The first start after the rename: the settings, identity and plugins from before come over.
     let migrated = pyr_engine::config::migrate_from_old_name();
     let came_over = migrated.iter().any(|m| m.starts_with(pyr_engine::config::COPIED_SETTINGS));
-    let (instance_lock, handoff) = match instance::start(&config_dir, join.as_deref()) {
-        instance::Start::First { lock, handoff } => (lock, handoff),
+    let handoff = match instance::start(&config_dir, join.as_deref()) {
+        instance::Start::First { lock, handoff } => {
+            instance::hold(lock);
+            handoff
+        }
         instance::Start::AlreadyRunning => {
             // Bring the running copy's window back, even from the tray. It picks up our
             // invite link (if any) from the handoff file once its window is showing.
@@ -312,7 +316,7 @@ fn main() -> eframe::Result<()> {
                         }
                     }
                     // (The new copy must find no Pyr already running.)
-                    drop(instance_lock);
+                    instance::release();
                     relaunch(profile.as_deref(), renderer.as_deref(), reopened + 1);
                     std::process::exit(0);
                 }

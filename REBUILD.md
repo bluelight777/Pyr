@@ -201,6 +201,13 @@ How (decided while starting it):
       chips, odds from an LMSR market maker (credit: Maanix's PlayProps); the server keeps every prop,
       bet, cash-out, payout and refund; whoever opens one backs its odds (b ln n chips, back
       when settled), so props never make chips out of nothing; Meshy art
+- [x] "Updating Pyr" (Blue: "sometimes Pyr just disappears for a moment ... I want some loading
+      screen, while it's updating"): Pyr's window shows it from Update until the new Pyr's
+      window is up, then closes; if the install fails or the new Pyr doesn't open, it says so
+      and offers Open Pyr. Windows: the setup's /STAYOPEN puts the running pyr.exe aside
+      (renamed) instead of waiting for it to quit; the new Pyr deletes pyr.exe.old. Linux: the
+      password's asked for while Pyr carries on (cancelled: nothing changes). `PYR_DEV_UPDATING`
+      shows the screen's stages without updating. Seen first on the update after the rebuild's.
 - [ ] Approved bug reports 657 to 675 (voice up and down; stopped responding), without
       touching the echo canceller
 - [ ] The key change (above)

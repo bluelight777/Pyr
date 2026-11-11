@@ -447,56 +447,199 @@ pub fn take_resume(config_dir: &Path) -> Option<Resume> {
     (now().saturating_sub(r.saved_at) < 600).then_some(r)
 }
 
-/// Starts installing the downloaded update. On Windows the silent setup replaces the files
-/// once we've quit and then reopens Pyr (/RELAUNCH); on Linux the package is installed
-/// with the system's password prompt (pkexec) and Pyr is reopened right after. The caller
-/// quits the app when this returns Ok.
-pub fn install(path: &Path, sha256: &str) -> Result<(), String> {
+/// Left in Pyr's settings folder while an update installs, by the Pyr that's updating (its window
+/// shows "Updating Pyr" meanwhile, see `updating`). The new Pyr takes it away once its window is
+/// up (`shown`), and the old one then closes.
+const UPDATING_FILE: &str = "updating";
+
+/// What the file says (for the log, and to tell a stale one).
+#[derive(Serialize, Deserialize)]
+struct Marker {
+    pid: u32,
+    version: String,
+    at: u64,
+}
+
+pub fn mark_updating(config_dir: &Path, version: &str) {
+    let m = Marker { pid: std::process::id(), version: version.to_string(), at: now() };
+    if let Ok(text) = serde_json::to_string(&m) {
+        let _ = std::fs::write(config_dir.join(UPDATING_FILE), text);
+    }
+}
+
+/// The new Pyr hasn't shown its window yet.
+pub fn still_updating(config_dir: &Path) -> bool {
+    config_dir.join(UPDATING_FILE).exists()
+}
+
+/// The update was called off before anything was let go of (Linux: the password prompt was
+/// cancelled).
+pub fn not_updating(config_dir: &Path) {
+    let _ = std::fs::remove_file(config_dir.join(UPDATING_FILE));
+}
+
+/// This Pyr's window is up: the one that updated it can close. (On Windows, the old program
+/// file the installer put aside goes too, once the old Pyr has closed.)
+pub fn shown(config_dir: &Path) {
+    if let Ok(text) = std::fs::read_to_string(config_dir.join(UPDATING_FILE)) {
+        let m: Option<Marker> = serde_json::from_str(&text).ok();
+        tracing::info!("opened after an update ({}): the Pyr that updated can close", m.map(|m| format!("to {}, from process {}", m.version, m.pid)).unwrap_or_default());
+        not_updating(config_dir);
+    }
+    #[cfg(windows)]
+    if let Ok(exe) = std::env::current_exe() {
+        let old = exe.with_extension("exe.old");
+        if old.exists() {
+            let _ = std::thread::Builder::new().name("pyr-update-tidy".into()).spawn(move || {
+                // (The old Pyr closes a moment after this one's up.)
+                for _ in 0..30 {
+                    std::thread::sleep(Duration::from_secs(2));
+                    if std::fs::remove_file(&old).is_ok() || !old.exists() {
+                        break;
+                    }
+                }
+            });
+        }
+    }
+}
+
+/// An update being installed (see `install`).
+#[derive(Debug)]
+pub struct Installing {
+    #[cfg(windows)]
+    child: std::process::Child,
+    #[cfg(not(windows))]
+    done: std::sync::mpsc::Receiver<Result<(), String>>,
+}
+
+impl Installing {
+    /// Development (`PYR_DEV_UPDATING=handoff`): nothing installed, "done" after `after`.
+    #[cfg(not(windows))]
+    pub fn pretend(after: Duration) -> Installing {
+        let (tx, done) = std::sync::mpsc::channel();
+        let _ = std::thread::Builder::new().name("pyr-update-pretend".into()).spawn(move || {
+            std::thread::sleep(after);
+            let _ = tx.send(Ok(()));
+        });
+        Installing { done }
+    }
+
+    /// Whether it's done: Ok once it's installed, or why it wasn't.
+    pub fn poll(&mut self) -> Option<Result<(), String>> {
+        #[cfg(windows)]
+        {
+            match self.child.try_wait() {
+                Ok(Some(status)) if status.success() => Some(Ok(())),
+                // (The setup's own codes: 1 cancelled, 2 stopped by an error.)
+                Ok(Some(status)) => Some(Err(format!("the installer stopped (code {})", status.code().unwrap_or(-1)))),
+                Ok(None) => None,
+                Err(e) => Some(Err(format!("lost track of the installer: {e}"))),
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            match self.done.try_recv() {
+                Ok(r) => Some(r),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err("the update stopped".into())),
+            }
+        }
+    }
+}
+
+/// Starts installing the downloaded update; Pyr's window shows "Updating Pyr" meanwhile and
+/// stays until the new Pyr's is up. On Windows the setup runs silently (/S), puts this Pyr's
+/// program file aside instead of waiting for it to close (/STAYOPEN: renamed, which Windows
+/// allows while it runs, and the new one put in its place) and opens the new Pyr when it's done
+/// (/RELAUNCH). On Linux the package is installed with the system's password prompt (pkexec),
+/// and Pyr then opens the new one itself (`reopen`).
+pub fn install(path: &Path, sha256: &str) -> Result<Installing, String> {
     // The very file about to run must still be the one that was checked.
     if file_sha256(path).as_deref() != Some(sha256) {
         return Err("the downloaded update changed on disk, so it wasn't installed".into());
     }
     #[cfg(windows)]
     {
-        std::process::Command::new(path)
-            .args(["/S", "/RELAUNCH"])
+        // (So the new Pyr's window can come to the front when the installer opens it: Windows
+        // only lets a program bring itself there when the one in front allows it.)
+        unsafe {
+            let _ = windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(u32::MAX);
+        }
+        let child = std::process::Command::new(path)
+            .args(["/S", "/RELAUNCH", "/STAYOPEN"])
             .spawn()
             .map_err(|e| format!("couldn't start the installer: {e}"))?;
+        Ok(Installing { child })
+    }
+    #[cfg(not(windows))]
+    {
+        let (tx, done) = std::sync::mpsc::channel();
+        let (path, sha256) = (path.to_path_buf(), sha256.to_string());
+        std::thread::Builder::new()
+            .name("pyr-update-install".into())
+            .spawn(move || {
+                let _ = tx.send(install_linux(&path, &sha256));
+            })
+            .map_err(|e| format!("couldn't start installing: {e}"))?;
+        Ok(Installing { done })
+    }
+}
+
+#[cfg(not(windows))]
+fn install_linux(path: &Path, sha256: &str) -> Result<(), String> {
+    // As root: copy the package somewhere only root can write, check it there, and install
+    // that copy. (Checking it here and then having apt read it from a folder we own would
+    // leave a moment for something running as us to swap it.) The package's own copy of the
+    // script has a password prompt that says what it's for.
+    let mut cmd = std::process::Command::new("pkexec");
+    if Path::new(LINUX_HELPER).is_file() {
+        cmd.arg(LINUX_HELPER);
+    } else {
+        cmd.args(["/bin/sh", "-c", LINUX_INSTALL, "pyr-update"]);
+    }
+    let status = cmd
+        .arg(path)
+        .arg(sha256)
+        .status()
+        .map_err(|e| format!("couldn't ask for permission to install (pkexec): {e}"))?;
+    if status.code() == Some(3) {
+        return Err("the downloaded update changed on disk, so it wasn't installed".into());
+    }
+    if !status.success() {
+        return Err("the update wasn't installed (cancelled, or the package manager is busy)".into());
+    }
+    Ok(())
+}
+
+/// Opens Pyr: the new one, once an update's installed (or, when it didn't install, this one as
+/// it was). This Pyr has let go of the one-copy lock by then (`instance::release`), so the one
+/// opened starts as the only copy.
+pub fn reopen() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let exe = std::env::current_exe().map_err(|e| format!("couldn't find Pyr's program: {e}"))?;
+        let dir = exe.parent().map(Path::to_path_buf).unwrap_or_default();
+        let new = dir.join("pyr.exe");
+        // (Put aside and nothing put in its place: the old one goes back.)
+        if !new.exists() {
+            let old = dir.join("pyr.exe.old");
+            if old.exists() {
+                let _ = std::fs::copy(&old, &new);
+            }
+        }
+        let run = if new.exists() { new } else { exe };
+        std::process::Command::new(&run).env_remove("PYR_DEV_UPDATING").spawn().map_err(|e| format!("couldn't open Pyr again: {e}"))?;
         Ok(())
     }
     #[cfg(not(windows))]
     {
-        // As root: copy the package somewhere only root can write, check it there, and install
-        // that copy. (Checking it here and then having apt read it from a folder we own would
-        // leave a moment for something running as us to swap it.) The package's own copy of the
-        // script has a password prompt that says what it's for.
-        let mut cmd = std::process::Command::new("pkexec");
-        if Path::new(LINUX_HELPER).is_file() {
-            cmd.arg(LINUX_HELPER);
-        } else {
-            cmd.args(["/bin/sh", "-c", LINUX_INSTALL, "pyr-update"]);
-        }
-        let status = cmd
-            .arg(path)
-            .arg(sha256)
-            .status()
-            .map_err(|e| format!("couldn't ask for permission to install (pkexec): {e}"))?;
-        if status.code() == Some(3) {
-            return Err("the downloaded update changed on disk, so it wasn't installed".into());
-        }
-        if !status.success() {
-            return Err("the update wasn't installed (cancelled, or the package manager is busy)".into());
-        }
         // The package replaced our program file, so /proc/self/exe now reads "... (deleted)".
         let exe = std::env::current_exe()
             .ok()
             .map(|p| PathBuf::from(p.to_string_lossy().trim_end_matches(" (deleted)").to_string()))
+            .filter(|p| p.exists())
             .unwrap_or_else(|| PathBuf::from("/usr/bin/pyr"));
-        // Reopen once this copy has quit (only one copy runs at a time).
-        std::process::Command::new("sh")
-            .args(["-c", "sleep 2; exec \"$0\"", &exe.to_string_lossy()])
-            .spawn()
-            .map_err(|e| format!("installed, but couldn't reopen Pyr: {e}"))?;
+        std::process::Command::new(&exe).env_remove("PYR_DEV_UPDATING").spawn().map_err(|e| format!("installed, but couldn't open Pyr again: {e}"))?;
         Ok(())
     }
 }

@@ -587,7 +587,11 @@ pub struct PyrApp {
     /// Plugins: the library, what's installed, running add-ons.
     pub plugins: crate::plugins::Plugins,
     /// The update we last told the person about (pinged once per version).
-    update_seen: Option<pyr_proto::release::Manifest>,
+    pub(crate) update_seen: Option<pyr_proto::release::Manifest>,
+    /// Updating: the window shows "Updating Pyr" until the new Pyr's is up (see `updating`).
+    pub(crate) updating: Option<crate::updating::Updating>,
+    /// Frames drawn, up to the one that tells a Pyr that updated us that we're up.
+    frames_shown: u8,
     /// The updater in the title strip (or the rail): what checks asked for there said.
     update_chip: crate::update_chip::Chip,
     /// After an update: where to put the person back, and since when we've been trying.
@@ -623,6 +627,7 @@ impl PyrApp {
         crate::giphy::set_favorites_dir(&engine.shared.config_dir);
         let ui = UiState { members_open: true, call_chat_open: false, gif_sizes, ..Default::default() };
         let looks = crate::looks::Looks::new(engine.shared.config_dir.clone());
+        let updating = crate::updating::Updating::preview(engine.shared.config_dir.clone());
         PyrApp {
             looks,
             engine,
@@ -637,6 +642,8 @@ impl PyrApp {
             updater,
             plugins,
             update_seen: None,
+            updating,
+            frames_shown: 0,
             update_chip: Default::default(),
             resume,
             voice_sounds: Default::default(),
@@ -1277,6 +1284,20 @@ impl eframe::App for PyrApp {
             }
         }
         crate::watchdog::step("starting a frame");
+        // Up after an update (a few frames in, so the window's on screen): the Pyr that updated
+        // us can close.
+        if self.frames_shown < 3 {
+            self.frames_shown += 1;
+            if self.frames_shown == 3 && self.updating.is_none() {
+                crate::update::shown(&self.engine.shared.config_dir);
+            }
+        }
+        // Updating: just the "Updating Pyr" screen.
+        if self.updating.is_some() {
+            crate::watchdog::frame("the update");
+            self.updating_frame(ctx);
+            return;
+        }
         // (Named in the log when Pyr is busy or stops responding.)
         crate::watchdog::frame(if self.poker.open.is_some() {
             "the casino"
@@ -1381,6 +1402,12 @@ impl eframe::App for PyrApp {
             }
         }
         self.update_step(&mut acts);
+        // (An update just started installing: from the next frame on, "Updating Pyr" is all
+        // that's drawn.)
+        if self.updating.is_some() {
+            ctx.request_repaint();
+            return;
+        }
         // What plugins handed back: add-ons' messages to send, notices.
         for o in self.plugins.step() {
             match o {
@@ -1741,19 +1768,29 @@ impl PyrApp {
                         }
                     }
                 }
+                // The window shows "Updating Pyr" from here until the new Pyr's is up (it used to
+                // close at once and leave nothing on screen meanwhile). The file left in the
+                // settings folder is how the new Pyr tells this one it's up.
+                let config_dir = self.engine.shared.config_dir.clone();
+                let version = self.update_seen.as_ref().map(|m| m.version.clone()).unwrap_or_default();
+                crate::update::mark_updating(&config_dir, &version);
                 // (Quitting from here on: the installer's checked and started first, which on a
                 // busy PC can take the window a few seconds.)
                 crate::watchdog::quitting();
                 match crate::update::install(&path, &sha256) {
-                    Ok(()) => {
-                        tracing::info!("quitting to install the update");
-                        self.ui.gif_sizes.save(true);
-                        crate::tray::prepare_exit();
-                        self.engine.shutdown();
-                        std::thread::sleep(Duration::from_millis(300));
-                        std::process::exit(0);
+                    Ok(installing) => {
+                        // Windows: the installer puts this Pyr's program aside and opens the new
+                        // one once it's in, so everything's let go of now. Linux: the password is
+                        // asked for first, and if that's cancelled Pyr carries on as it was.
+                        let holding_on = cfg!(not(windows));
+                        tracing::info!("installing the update{}", if holding_on { " (asking for the password)" } else { ": letting go for the new Pyr" });
+                        if !holding_on {
+                            self.leave_for_update();
+                        }
+                        self.updating = Some(crate::updating::Updating::new(version, installing, config_dir, holding_on));
                     }
                     Err(e) => {
+                        crate::update::not_updating(&config_dir);
                         crate::watchdog::not_quitting();
                         self.engine.shared.state.write().toast(format!("Update failed: {e}"), true);
                         self.updater.dismiss_error(self.update_seen.clone());
