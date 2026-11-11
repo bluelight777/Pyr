@@ -47,7 +47,7 @@ sha2 = "0.10"
 sonora = "0.2.0"
 # Reading audio files for the soundboard (MP3, AAC/M4A, Ogg Vorbis, FLAC, WAV); MPL-2.0.
 symphonia = { version = "0.5.5", default-features = false, features = ["mp3", "aac", "isomp4", "ogg", "vorbis", "flac", "wav", "pcm", "adpcm"] }
-tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util"] }
+tokio = { version = "1.53.2", features = ["fs", "rt-multi-thread", "macros", "net", "sync", "time", "io-util"] }
 # Reading a plugin's Cargo.toml (what it says about itself) before it's sent in.
 toml = "1.1"
 # A plugin sent in as a .zip of its folder (read only: stored and deflated files).

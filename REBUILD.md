@@ -41,6 +41,19 @@ rebuilt version by hand once (it carries a new release key), and nobody should l
 - The rebuilt server tells apps older than the rebuild, once, that a new Pyr is out and where
   to get it (pyr.gg), since their Update button can't offer it.
 
+## Moving the VPS's server to the rebuild (nothing lost)
+
+The rebuilt server opens the VPS's own database, written by 0.13.28. Whatever 0.13.28 kept
+that the rebuild doesn't know yet must come through untouched:
+- [ ] Every JSON the server keeps (a casino record, the casino's pools and state, tournaments,
+      bonfire draws, staff log...) carries what it doesn't know along (`#[serde(flatten)]
+      extra`), so writing it back loses nothing. 0.13.28's casino record has 34 fields (the
+      rebuild's 21): hide_title, curve, xp_tenths, xp_day, ember_x100, ember_claimed,
+      stars_paid, ember_week_x100, ember_week, weekly_ready, weekly_claimed, missions...
+- [ ] Tables 0.13.28 added are left as they are (and used once the rebuild has them).
+- [ ] Try it: a copy of a 0.13.28 server's database (made by running 0.13.28 here, playing,
+      leveling, claiming), opened by the rebuilt server, played, and opened by 0.13.28 again.
+
 ## Checklist
 
 Version in brackets: where 0.13.x first had it.

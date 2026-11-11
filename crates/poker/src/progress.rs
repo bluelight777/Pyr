@@ -49,6 +49,11 @@ pub struct Record {
     /// Poker's MMR.
     #[serde(default)]
     pub rating: crate::rating::Rating,
+    /// What a record holds that this Pyr doesn't know (0.13.28's levels and VIP Club, until the
+    /// rebuild has them; or a newer server's): kept as it is and written back with the rest,
+    /// so a server moved onto this Pyr loses none of it.
+    #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// How someone's done at one of the casino's games.
@@ -574,6 +579,23 @@ mod tests {
     use crate::cards::parse_cards;
     use crate::eval;
     use crate::game::{Rules, Table};
+
+    /// A 0.13.28 server's record (levels and VIP Club fields this Pyr doesn't know yet) comes
+    /// through being read and written back with nothing lost.
+    #[test]
+    fn what_a_record_holds_that_this_pyr_doesnt_know_is_kept() {
+        let kept = r#"{"chips":250000,"xp":1200,"curve":2,"xp_tenths":7,"ember_x100":15300,"weekly_ready":true,"missions":{"day":20402,"ids":[3,9,14],"progress":[1,25,40],"done":[false,true,false],"chest":false}}"#;
+        let mut rec: Record = serde_json::from_str(kept).unwrap();
+        assert_eq!((rec.chips, rec.xp), (250_000, 1200));
+        rec.chips += 1;
+        let back: serde_json::Value = serde_json::to_value(&rec).unwrap();
+        for k in ["curve", "xp_tenths", "ember_x100", "weekly_ready", "missions"] {
+            assert_eq!(back[k], serde_json::from_str::<serde_json::Value>(kept).unwrap()[k], "{k}");
+        }
+        assert_eq!(back["chips"], 250_001);
+        // A record of this Pyr's own has none of it.
+        assert!(!serde_json::to_string(&Record::new()).unwrap().contains("extra"));
+    }
 
     #[test]
     fn levels_rise_slower_and_slower() {
