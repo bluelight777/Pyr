@@ -527,13 +527,13 @@ impl Poker {
     #[allow(clippy::too_many_arguments)]
     fn finish_round(&self, hub: &Hub, st: &mut State, uid: &str, mut rec: Record, o: Outcome, server: [u8; 32], client: [u8; 32], nonce: u64, craps_after: Option<craps::Table>) -> Result<RoundView, String> {
         rec.chips += o.paid();
-        let g = progress::apply_casino(&mut rec, &o);
+        let g = progress::apply_casino(&mut rec, &o, super::today());
         let held = st.held(uid);
         hub.db.set_poker_record(uid, &rec, held).map_err(|e| e.to_string())?;
-        if !g.new_achievements.is_empty() || g.level_up.is_some() {
-            let gains = pyr_poker::net::GainsView { xp: g.xp, achievements: g.new_achievements.iter().map(|s| s.to_string()).collect(), level_up: g.level_up, net: o.paid() as i64 - o.wagered() as i64 };
-            hub.send_poker(uid, ToApp::Record { me: Self::view(hub, uid, &rec, held), gains: Some(gains) });
-        }
+        // (Every round: experience, Ember Back and the missions move with each, as 0.13.28 told
+        // them; what there is to celebrate comes with it.)
+        let gains = g.any().then(|| g.view(o.paid() as i64 - o.wagered() as i64));
+        hub.send_poker(uid, ToApp::Record { me: Self::view(hub, uid, &rec, held), gains });
         Self::round_counted(hub, st, uid, &o);
         let jackpot_pool = Self::jackpot(hub);
         if o.game() == Game::Slots && wall().saturating_sub(st.casino.jackpot_told) >= JACKPOT_TELL_MS {
@@ -584,9 +584,23 @@ mod tests {
         }
     }
 
+    /// Someone who's played before (well into level 50, today's missions done): a round pays
+    /// only what it pays, no level's chips or mission's on top, for the sums below.
+    fn seasoned(hub: &Hub, uid: &str) {
+        use pyr_poker::{levels, progress::Missions};
+        let mut rec = pyr_poker::progress::Record::new();
+        rec.xp = levels::xp_for(50) + 10;
+        rec.achievements.insert("casino_first".into());
+        let today = super::super::today();
+        let ids = levels::missions_for(today);
+        rec.missions = Missions { day: today, ids: ids.to_vec(), progress: ids.iter().map(|i| levels::MISSIONS[*i as usize].goal).collect(), done: vec![true; 3], all_paid: true, ..Default::default() };
+        hub.db.set_poker_record(uid, &rec, 0).unwrap();
+    }
+
     #[test]
     fn rounds_take_and_pay_chips_and_check_out() {
         let hub = hub();
+        seasoned(&hub, "alice");
         let v = open(&hub, "alice");
         assert_eq!(v.chips, STARTING_CHIPS);
         assert_eq!(v.jackpot, slots::JACKPOT_SEED);
@@ -628,6 +642,7 @@ mod tests {
     #[test]
     fn blackjack_and_craps_go_a_step_at_a_time() {
         let hub = hub();
+        seasoned(&hub, "carol");
         let v = open(&hub, "carol");
         let (mut chips, mut commit) = (v.chips, v.commit);
         // Blackjack: dealt (unless it's over at once), then stood on until it's over.

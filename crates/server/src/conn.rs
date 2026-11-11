@@ -89,6 +89,14 @@ pub async fn handle(hub: Arc<Hub>, incoming: quinn::Incoming, mut slot: ConnSlot
 const INLINE_SUBMISSION_BYTES: usize = 600_000;
 
 async fn read_frame<T: serde::de::DeserializeOwned>(recv: &mut quinn::RecvStream) -> Result<Option<T>> {
+    match read_body(recv).await? {
+        Some(body) => Ok(Some(framing::decode(&body)?)),
+        None => Ok(None),
+    }
+}
+
+/// One frame's bytes, not yet read as anything (None: the stream ended).
+async fn read_body(recv: &mut quinn::RecvStream) -> Result<Option<Vec<u8>>> {
     let mut len = [0u8; 4];
     match recv.read_exact(&mut len).await {
         Ok(()) => {}
@@ -98,7 +106,20 @@ async fn read_frame<T: serde::de::DeserializeOwned>(recv: &mut quinn::RecvStream
     let n = framing::body_len(len)?;
     let mut body = vec![0u8; n];
     recv.read_exact(&mut body).await?;
-    Ok(Some(framing::decode(&body)?))
+    Ok(Some(body))
+}
+
+/// (Development: `PYR_DEV_FRAME_LOG=<file>` writes every request the server gets there as it
+/// came, one a line, to see what a Pyr asks that this server doesn't know.)
+fn dev_frame_log(body: &[u8]) {
+    static LOG: std::sync::OnceLock<Option<parking_lot::Mutex<std::fs::File>>> = std::sync::OnceLock::new();
+    let log = LOG.get_or_init(|| std::env::var_os("PYR_DEV_FRAME_LOG").and_then(|p| std::fs::OpenOptions::new().create(true).append(true).open(p).ok()).map(parking_lot::Mutex::new));
+    if let Some(f) = log {
+        use std::io::Write;
+        let mut f = f.lock();
+        let _ = f.write_all(body);
+        let _ = f.write_all(b"\n");
+    }
 }
 
 /// Whether `sig` is `author_id`'s signature over a submission transcript for `digest` on this
@@ -313,7 +334,21 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
     };
     let result = async {
         loop {
-            let Some(f) = read_frame::<ClientFrame>(&mut recv).await? else { return Ok(()) };
+            let Some(body) = read_body(&mut recv).await? else { return Ok(()) };
+            dev_frame_log(&body);
+            let f: ClientFrame = match framing::decode(&body) {
+                Ok(f) => f,
+                // A request from a newer Pyr this server doesn't know (a game it doesn't have
+                // yet, say): answered as such, and the connection carries on.
+                Err(e) => {
+                    let id = serde_json::from_slice::<serde_json::Value>(&body).ok().and_then(|v| v.get("id")?.as_u64()).unwrap_or(0);
+                    tracing::debug!("a request this server can't read: {e}");
+                    if id != 0 {
+                        tx.send(frame(id, Event::Error { code: ErrorCode::BadRequest, message: "This server runs an older Pyr: it can't do that yet.".into() }));
+                    }
+                    continue;
+                }
+            };
             let id = f.id;
             let reply = if !ctx.req_tokens.take(cost(&f.req)) {
                 Err((ErrorCode::RateLimited, "Slow down a little.".into()))

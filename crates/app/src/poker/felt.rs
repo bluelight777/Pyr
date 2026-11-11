@@ -13,6 +13,10 @@ pub fn cloth(id: &str) -> (Color32, Color32) {
         "felt_royal" => (Color32::from_rgb(0x2c, 0x6a, 0xc8), Color32::from_rgb(0x0a, 0x1d, 0x48)),
         "felt_crimson" => (Color32::from_rgb(0xb0, 0x1e, 0x36), Color32::from_rgb(0x3a, 0x05, 0x10)),
         "felt_obsidian" => (Color32::from_rgb(0x3c, 0x3e, 0x48), Color32::from_rgb(0x0b, 0x0b, 0x10)),
+        // The tiers' own (0.13.5): Blaze, Wildfire and Starfire.
+        "felt_blaze" => (Color32::from_rgb(0xd8, 0x8a, 0x1a), Color32::from_rgb(0x4a, 0x22, 0x04)),
+        "felt_wildfire" => (Color32::from_rgb(0x1a, 0xa8, 0x5a), Color32::from_rgb(0x04, 0x3a, 0x1c)),
+        "felt_starfire" => (Color32::from_rgb(0x3a, 0x5a, 0xd8), Color32::from_rgb(0x0c, 0x14, 0x4c)),
         // Classic green (everyone starts with it).
         _ => (Color32::from_rgb(0x1f, 0x9a, 0x5c), Color32::from_rgb(0x06, 0x36, 0x20)),
     }

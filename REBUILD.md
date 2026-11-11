@@ -45,7 +45,10 @@ rebuilt version by hand once (it carries a new release key), and nobody should l
 
 The rebuilt server opens the VPS's own database, written by 0.13.28. Whatever 0.13.28 kept
 that the rebuild doesn't know yet must come through untouched:
-- [ ] Every JSON the server keeps (a casino record, the casino's pools and state, tournaments,
+- [x] A casino record: all 34 of 0.13.28's fields known now (and anything else kept in `extra`); one
+      this Pyr can't read is never written over (it plays with a new one meanwhile, said in the
+      log); one from before levels keeps its level on the new curve.
+- [ ] Every other JSON the server keeps (the casino's pools and state, tournaments,
       bonfire draws, staff log...) carries what it doesn't know along (`#[serde(flatten)]
       extra`), so writing it back loses nothing. 0.13.28's casino record has 34 fields (the
       rebuild's 21): hide_title, curve, xp_tenths, xp_day, ember_x100, ember_claimed,
@@ -152,9 +155,17 @@ How (decided while starting it):
       Jackpot in proportion (0.13.6); new players 100,000 (0.13.6)
 - [ ] Floor: chapters, Stake-like tiles, studio, players, best win, menu bar with Games menu
       (0.13.2/4/6/7)
-- [ ] Levels: 100 levels, ten tiers and crests, XP by time played, level chips, tier chests,
-      frames and felts, missions (0.13.5)
-- [ ] VIP Club: Ember Back, daily chips by tier, weekly bonus, VIP page (0.13.5)
+- [x] Levels: 100 levels, ten tiers and crests, XP by time played, level chips, tier chests,
+      frames and felts, missions (0.13.5). Every number measured on 0.13.28 (`measured/levels.md`):
+      the curve, what each level pays, a round's XP at each game and stake, the long day's half,
+      the house edges Ember Back is a share of, the missions and their rewards, the stars (one
+      star's pay however many a round crosses, as 0.13.28). Missions are the day's, the same for
+      everyone. The card's "almost there" in a level's last 15%; the burst as 0.13.28's ("LEVEL
+      13", "EMBER!", the chips counting up). Fixed on the way: past 100, the card says how far the
+      next star is (0.13.28 always said 0); "1 more level", not "levels"; the VIP tiers' perks fit
+      their cards.
+- [x] VIP Club: Ember Back, daily chips by tier, weekly bonus, VIP page (0.13.5) (a tab until the
+      menu bar comes with the floor)
 - [ ] Plinko (0.13.5)
 - [ ] The control room (0.13.5); GMs give/take chips, staff log and download (0.13.4)
 - [ ] Bomb Pot (was Flash Pot), new art, 50,000 and 100,000 (0.13.4/6); the crown win (0.13.4)
@@ -166,7 +177,8 @@ How (decided while starting it):
 - [ ] Poker: rabbit (0.13.4/6/7), straddle (0.13.4), new table with seat and bot picker, 20 bots
       (0.13.4), bot levels Easy to Shark (0.13.7), bots think and bluff like people (0.13.26),
       close tables (0.13.4/24), add chips and top-up (0.13.22), high-roller blinds (0.13.22),
-      top bar (0.13.22), titles and badges (0.13.4/6), pre-action buttons (0.13.4), slower wins
+      top bar (0.13.22), titles and badges (0.13.4/6: GAME MASTER / OWNER on staff's seats, Title
+      shown or hidden: `hide_title`, the record's field and request are in already), pre-action buttons (0.13.4), slower wins
       (0.13.4), scaling (0.13.6), table sounds (0.13.6)
 - [ ] Keys for every game (0.13.26)
 - [ ] Emotes that move (0.13.23)
@@ -186,11 +198,33 @@ How (decided while starting it):
       touching the echo canceller
 - [ ] The key change (above)
 
+## Talking to 0.13.28 (how its messages were found)
+
+- `rebuild/tools/fields.py <elf> <name>...`: the serde field and variant lists in the 0.13.28
+  binaries (`&[&str]` statics, through their relocations). The app's has every struct the app
+  reads (RecordView's 37 fields, ToApp's variants); the server's has ToServer's 94 variants.
+- `PYR_DEV_FRAME_LOG=<file>`: the rebuilt app writes every message a server sends it, and the
+  rebuilt server every request it gets, one a line. A rebuilt app on 0.13.28's server shows its
+  messages as they are (RecordView, GainsView, a round's record); a 0.13.28 app on the rebuilt
+  server shows what it asks. A request the rebuilt server can't read is answered with an error
+  and the connection carries on (it used to end it).
+- Levels as 0.13.28 sends them: `poker_levels_2` in the server's features (without it a 0.13.28
+  app shows the old card); `RecordView` adds `hide_title`, `tier`, `stars`, `ember_back`,
+  `ember_bp`, `next_reward`, `missions` (`{text, progress, target, done, xp, chips}`),
+  `weekly_ready`, `weekly_building`; `GainsView` adds `chips`, `tier_up` (the level the tier
+  starts at), `missions` (their texts), `all_missions`, `star` (left out when empty); a record
+  after every casino round (gains only when there's something to celebrate); `claim_ember` and
+  `claim_weekly` (no fields) answered with the record and gains `{chips}`.
+- ToServer variants only 0.13.28 has (still to do): straddle, rabbit, hide_title, take_chips,
+  staff_log_all, invite_to_table, cms, bounty, dom_tables, dom_watch, dom_unwatch, dom_sit,
+  dom_leave, dom_ready, dom_move, dom_bot, dom_new. ToApp: rabbit, dom_tables, dom,
+  staff_log_all, cms, announcement, table_invite. Its achievements: 39 (the rebuild has 32).
+
 ## The 0.13.28 server's feature names, in its order
 
 From the 0.13.28 `pyr-server` binary (what `Ready::features` lists). Still to add in the
-rebuild (as of chunk 2): casino_100k, casino_0_13_2, poker_rabbit, poker_straddle,
-poker_pick_bot, poker_gm_unlimited, big_slot_bets, poker_levels_2, casino_cms, casino_plinko,
+rebuild (as of chunk 2; poker_levels_2 since): casino_100k, casino_0_13_2, poker_rabbit, poker_straddle,
+poker_pick_bot, poker_gm_unlimited, big_slot_bets, casino_cms, casino_plinko,
 casino_build, big_bomb_pots, slots_100k, hide_title, bounty_poker, high_tables, hard_bots,
 casino_domino, poker_top_up_anytime, craps_buy_lay, dm-files-2gb.
 

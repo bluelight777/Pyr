@@ -227,9 +227,18 @@ async fn session(
     }
     // Reader task: never cancel a read mid-frame.
     let (frames_tx, mut frames_rx) = mpsc::unbounded_channel::<ServerFrame>();
+    // (Development: `PYR_DEV_FRAME_LOG=<file>` writes every message from the server there as it
+    // came, one a line, to see what a server says that this Pyr doesn't read.)
+    let mut frame_log = std::env::var_os("PYR_DEV_FRAME_LOG").and_then(|p| std::fs::OpenOptions::new().create(true).append(true).open(p).ok());
     let reader = tokio::spawn(async move {
         loop {
-            match net::read_body(&mut recv).await {
+            let body = net::read_body(&mut recv).await;
+            if let (Some(log), Ok(Some(b))) = (frame_log.as_mut(), &body) {
+                use std::io::Write;
+                let _ = log.write_all(b);
+                let _ = log.write_all(b"\n");
+            }
+            match body {
                 Ok(Some(body)) => match pyr_proto::framing::decode::<ServerFrame>(&body) {
                     Ok(f) => {
                         if frames_tx.send(f).is_err() {

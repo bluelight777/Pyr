@@ -7,7 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use parking_lot::Mutex;
-use pyr_poker::net::{GainsView, LeaderRow, PrizeView, RecordView, Role, StaffLog, StaffMember, StaffView, TableId, ToApp, ToServer, TourneyId};
+use pyr_poker::net::{LeaderRow, PrizeView, RecordView, Role, StaffLog, StaffMember, StaffView, TableId, ToApp, ToServer, TourneyId};
+use pyr_poker::levels;
 use pyr_poker::progress::{self, COSMETICS, Kind, Record};
 use pyr_poker::room::{Effect, Look, Output, Random, Rcpt, Room};
 use pyr_poker::net::TourneyPhase;
@@ -167,6 +168,10 @@ impl Poker {
 
     fn view(hub: &Hub, uid: &str, rec: &Record, at_tables: u64) -> RecordView {
         let level = rec.level();
+        let today = today();
+        // (Past level 100: the way to the next Ember Star. 0.13.28 sent level 100's start for
+        // both, and its card said "0 XP to the next star" all along.)
+        let (level_from, level_to) = levels::span(rec.xp);
         RecordView {
             uid: uid.into(),
             name: Self::name_of(hub, uid),
@@ -174,8 +179,8 @@ impl Poker {
             at_tables,
             xp: rec.xp,
             level,
-            level_from: progress::xp_for_level(level),
-            level_to: progress::xp_for_level(level + 1),
+            level_from,
+            level_to,
             hands: rec.hands,
             hands_won: rec.hands_won,
             showdowns: rec.showdowns,
@@ -185,7 +190,7 @@ impl Poker {
             biggest_pot: rec.biggest_pot,
             best_hand: rec.best_hand_name.clone(),
             achievements: rec.achievements.iter().cloned().collect(),
-            daily_ready: !(rec.daily_day == today() && rec.daily_streak > 0),
+            daily_ready: !(rec.daily_day == today && rec.daily_streak > 0),
             daily_streak: rec.daily_streak,
             card_back: rec.card_back.clone(),
             felt: rec.felt.clone(),
@@ -196,6 +201,15 @@ impl Poker {
             mmr: rec.rating.mmr.round() as u32,
             mmr_peak: rec.rating.peak.round() as u32,
             mmr_placing: rec.rating.placing(),
+            hide_title: rec.hide_title,
+            tier: rec.tier() as u32,
+            stars: levels::stars(rec.xp),
+            ember_back: rec.ember_x100 / 100,
+            ember_bp: levels::ember_bp(rec.tier()),
+            next_reward: if level < levels::MAX_LEVEL { levels::pays(level + 1) } else { levels::STAR_PAYS },
+            missions: rec.missions.of(today).view(),
+            weekly_ready: rec.weekly_waiting(today),
+            weekly_building: rec.weekly_building(today),
         }
     }
 
@@ -428,15 +442,10 @@ impl Poker {
                 }
                 Effect::Hand { uid, result, big_blind, beat_shark } => {
                     let (mut rec, _) = hub.db.poker_record(&uid);
-                    let g = progress::apply(&mut rec, &result, big_blind, beat_shark);
+                    let g = progress::apply(&mut rec, &result, big_blind, beat_shark, today());
                     let held = st.held(&uid);
                     let _ = hub.db.set_poker_record(&uid, &rec, held);
-                    let gains = GainsView {
-                        xp: g.xp,
-                        achievements: g.new_achievements.iter().map(|s| s.to_string()).collect(),
-                        level_up: g.level_up,
-                        net: result.won as i64 - result.put_in as i64,
-                    };
+                    let gains = g.view(result.won as i64 - result.put_in as i64);
                     hub.send_poker(&uid, ToApp::Record { me: Self::view(hub, &uid, &rec, held), gains: Some(gains) });
                 }
                 Effect::Raked { chips } => Self::add_rake(hub, chips),
@@ -468,7 +477,7 @@ impl Poker {
                     let held = st.held(&uid);
                     let _ = hub.db.set_poker_record(&uid, &rec, held);
                     info!(tourney, place, entrants, prize, "poker tournament: a player finished");
-                    let gains = GainsView { xp: g.xp, achievements: vec![], level_up: g.level_up, net: prize as i64 };
+                    let gains = g.view(prize as i64);
                     hub.send_poker(&uid, ToApp::Record { me: Self::view(hub, &uid, &rec, held), gains: Some(gains) });
                 }
             }
@@ -627,9 +636,38 @@ impl Poker {
                 let g = progress::after_daily(&mut rec);
                 let held = st.held(uid);
                 hub.db.set_poker_record(uid, &rec, held).map_err(|e| e.to_string())?;
-                let gains = (!g.new_achievements.is_empty()).then(|| GainsView { xp: g.xp, achievements: g.new_achievements.iter().map(|s| s.to_string()).collect(), level_up: g.level_up, net: 0 });
+                let gains = g.any().then(|| g.view(0));
                 hub.send_poker(uid, ToApp::Record { me: Self::view(hub, uid, &rec, held), gains });
                 Ok(Some(ToApp::Daily { chips: got, streak: rec.daily_streak }))
+            }
+            ToServer::HideTitle { hide } => {
+                let (mut rec, held) = hub.db.poker_record(uid);
+                rec.hide_title = hide;
+                hub.db.set_poker_record(uid, &rec, held).map_err(|e| e.to_string())?;
+                self.relook(hub, st, uid, &Self::look(&rec), now);
+                Ok(Some(ToApp::Record { me: Self::view(hub, uid, &rec, st.held(uid)), gains: None }))
+            }
+            ToServer::ClaimEmber => {
+                let (mut rec, held) = hub.db.poker_record(uid);
+                let chips = rec.claim_ember();
+                if chips == 0 {
+                    return Err("no Ember Back to claim yet: it comes from playing".into());
+                }
+                hub.db.set_poker_record(uid, &rec, held).map_err(|e| e.to_string())?;
+                info!(uid, chips, "casino: Ember Back claimed");
+                let gains = progress::Gains { chips, ..Default::default() }.view(0);
+                Ok(Some(ToApp::Record { me: Self::view(hub, uid, &rec, st.held(uid)), gains: Some(gains) }))
+            }
+            ToServer::ClaimWeekly => {
+                let (mut rec, held) = hub.db.poker_record(uid);
+                let chips = rec.claim_weekly(today());
+                if chips == 0 {
+                    return Err("no weekly bonus waiting: it comes from Ember tier up, the week after".into());
+                }
+                hub.db.set_poker_record(uid, &rec, held).map_err(|e| e.to_string())?;
+                info!(uid, chips, "casino: weekly VIP bonus claimed");
+                let gains = progress::Gains { chips, ..Default::default() }.view(0);
+                Ok(Some(ToApp::Record { me: Self::view(hub, uid, &rec, st.held(uid)), gains: Some(gains) }))
             }
             ToServer::Equip { id } => {
                 let (mut rec, held) = hub.db.poker_record(uid);

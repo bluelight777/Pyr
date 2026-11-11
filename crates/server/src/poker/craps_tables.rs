@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use pyr_poker::casino::{Game, Outcome, craps};
 use pyr_poker::crapsroom::CrapsRoom;
-use pyr_poker::net::{GainsView, ToApp, ToServer};
+use pyr_poker::net::{ToApp, ToServer};
 use pyr_poker::progress::{self, Record};
 use pyr_poker::room::{Effect, Output, Random};
 use tracing::info;
@@ -149,15 +149,10 @@ impl Poker {
     fn craps_counted(hub: &Hub, st: &mut State, uid: &str, outcome: craps::Outcome) {
         let o = Outcome::Craps(outcome);
         let (mut rec, _) = hub.db.poker_record(uid);
-        let g = progress::apply_casino(&mut rec, &o);
+        let g = progress::apply_casino(&mut rec, &o, super::today());
         let held = st.held(uid);
         let _ = hub.db.set_poker_record(uid, &rec, held);
-        let gains = (!g.new_achievements.is_empty() || g.level_up.is_some()).then(|| GainsView {
-            xp: g.xp,
-            achievements: g.new_achievements.iter().map(|s| s.to_string()).collect(),
-            level_up: g.level_up,
-            net: o.paid() as i64 - o.wagered() as i64,
-        });
+        let gains = g.any().then(|| g.view(o.paid() as i64 - o.wagered() as i64));
         hub.send_poker(uid, ToApp::Record { me: Self::view(hub, uid, &rec, held), gains });
         Self::round_counted(hub, st, uid, &o);
     }

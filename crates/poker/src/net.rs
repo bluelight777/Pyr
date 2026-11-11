@@ -89,6 +89,12 @@ pub enum ToServer {
     Emote { table: TableId, emote: String },
     Daily,
     Equip { id: String },
+    /// Keep my level's title off my name at tables, or show it again (0.13.6).
+    HideTitle { hide: bool },
+    /// Ember Back: the chips it's built up, claimed (0.13.5).
+    ClaimEmber,
+    /// The weekly VIP bonus, claimed (0.13.5).
+    ClaimWeekly,
     Leaderboard,
     /// A finished hand at a table, everything about it (to replay it).
     History { table: TableId, hand: u64 },
@@ -959,6 +965,44 @@ pub struct RecordView {
     /// Game Master or Ambassador.
     #[serde(default)]
     pub role: Option<Role>,
+    // Levels and the VIP Club (0.13.5), as 0.13.28 sends them.
+    /// My level's title kept off my name at tables.
+    #[serde(default)]
+    pub hide_title: bool,
+    /// My tier (0, Spark, to 9, Eternal Flame).
+    #[serde(default)]
+    pub tier: u32,
+    /// Ember Stars (past level 100).
+    #[serde(default)]
+    pub stars: u64,
+    /// Ember Back to claim (chips), and my tier's share of the house's edge (hundredths of a
+    /// percent: 500 is 5%).
+    #[serde(default)]
+    pub ember_back: u64,
+    #[serde(default)]
+    pub ember_bp: u64,
+    /// What the next level pays (or, past 100, the next star).
+    #[serde(default)]
+    pub next_reward: u64,
+    /// Today's missions.
+    #[serde(default)]
+    pub missions: Vec<MissionView>,
+    /// The weekly VIP bonus waiting, and what this week's Ember Back has built of next week's.
+    #[serde(default)]
+    pub weekly_ready: u64,
+    #[serde(default)]
+    pub weekly_building: u64,
+}
+
+/// One of today's missions.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MissionView {
+    pub text: String,
+    pub progress: u32,
+    pub target: u32,
+    pub done: bool,
+    pub xp: u64,
+    pub chips: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -968,6 +1012,31 @@ pub struct GainsView {
     pub level_up: Option<u32>,
     /// Chips won or lost in the hand.
     pub net: i64,
+    // What came with it (0.13.5), as 0.13.28 sends it.
+    /// Chips paid besides the round's own: levels reached, a new tier's chest, missions, the
+    /// day's chest, an Ember Star.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub chips: u64,
+    /// A new tier reached: the level it starts at (10, Ember, to 100, Eternal Flame).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier_up: Option<u32>,
+    /// Missions done, as they read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missions: Vec<String>,
+    /// All three of today's missions done: the day's chest.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub all_missions: bool,
+    /// A new Ember Star: how many now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub star: Option<u64>,
+}
+
+fn is_zero_u64(n: &u64) -> bool {
+    *n == 0
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// A blackjack table, in the list.

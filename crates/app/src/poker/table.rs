@@ -30,6 +30,16 @@ pub fn frame_color(id: &str) -> Option<Color32> {
         "frame_silver" => Some(Color32::from_rgb(0xd6, 0xdc, 0xe4)),
         "frame_gold" => Some(Color32::from_rgb(0xff, 0xcf, 0x4a)),
         "frame_shark" => Some(Color32::from_rgb(0x4f, 0xc8, 0xff)),
+        // Each tier's (0.13.5): a ring in its color.
+        "tier_ember" => Some(crate::casino::levels::tier_color(1)),
+        "tier_flame" => Some(crate::casino::levels::tier_color(2)),
+        "tier_blaze" => Some(crate::casino::levels::tier_color(3)),
+        "tier_bonfire" => Some(crate::casino::levels::tier_color(4)),
+        "tier_wildfire" => Some(crate::casino::levels::tier_color(5)),
+        "tier_inferno" => Some(crate::casino::levels::tier_color(6)),
+        "tier_sunfire" => Some(crate::casino::levels::tier_color(7)),
+        "tier_starfire" => Some(crate::casino::levels::tier_color(8)),
+        "tier_eternal" => Some(crate::casino::levels::tier_color(9)),
         _ => None,
     }
 }

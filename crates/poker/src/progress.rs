@@ -9,13 +9,18 @@ use serde::{Deserialize, Serialize};
 use crate::eval::Category;
 use crate::game::{Action, Event, Posting, Street};
 
-/// Chips a new player starts with, and the most the daily gift tops a broke player up to.
-pub const STARTING_CHIPS: u64 = 20_000;
-/// The daily gift: this much, plus this much more for each day in a row (up to a week).
-pub const DAILY_BASE: u64 = 2_000;
-pub const DAILY_STREAK_STEP: u64 = 500;
+use crate::levels::{self, Counts, Play};
 
+/// Chips a new player starts with (100,000 since 0.13.6).
+pub const STARTING_CHIPS: u64 = 100_000;
+/// The daily gift at Spark on the first day of a streak (see `levels::daily`).
+pub const DAILY_BASE: u64 = 2_000;
+
+/// A casino record: the fields are 0.13.28's, in its order, so that a server moved from 0.13.28
+/// onto this Pyr reads and writes everyone's as it was (and anything else it holds comes through
+/// in `extra`).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Record {
     pub chips: u64,
     pub xp: u64,
@@ -41,19 +46,83 @@ pub struct Record {
     pub chip_set: String,
     pub frame: String,
     /// Looks given to them (prize boxes, Game Masters' gifts).
-    #[serde(default)]
     pub gifts: BTreeSet<String>,
+    /// Their level's title kept off their name at tables (0.13.6).
+    pub hide_title: bool,
     /// Pyr Casino, by game (its id).
-    #[serde(default)]
     pub casino: BTreeMap<String, CasinoStats>,
     /// Poker's MMR.
-    #[serde(default)]
     pub rating: crate::rating::Rating,
-    /// What a record holds that this Pyr doesn't know (0.13.28's levels and VIP Club, until the
-    /// rebuild has them; or a newer server's): kept as it is and written back with the rest,
-    /// so a server moved onto this Pyr loses none of it.
-    #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
+    /// The level curve `xp` is on: 2 since 0.13.5 (`levels`); before, 0.13.0's (moved over
+    /// where it was when the record is read).
+    pub curve: u8,
+    /// Experience from play, in tenths, not yet a whole point.
+    pub xp_tenths: u64,
+    /// The day (days since 1970) `xp_today` counts, and the XP from play that day (half past
+    /// 4,000).
+    pub xp_day: u64,
+    pub xp_today: u64,
+    /// Ember Back waiting to be claimed, in hundredths of a chip; and all claimed so far.
+    pub ember_x100: u64,
+    pub ember_claimed: u64,
+    /// Today's missions.
+    pub missions: Missions,
+    /// Ember Stars paid for.
+    pub stars_paid: u64,
+    /// The week's Ember Back so far (hundredths), and which week (`levels::week`): the weekly
+    /// VIP bonus is a share of it.
+    pub ember_week_x100: u64,
+    pub ember_week: u64,
+    /// The weekly VIP bonus waiting (chips), and the week it was last claimed in.
+    pub weekly_ready: u64,
+    pub weekly_claimed: u64,
+    /// What a record holds that this Pyr doesn't know (a newer server's): kept as it is and
+    /// written back with the rest, so a server moved onto this Pyr loses none of it.
+    #[serde(flatten, skip_serializing_if = "serde_json::Map::is_empty")]
     pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Today's three missions, as 0.13.28's records keep them (ids into `levels::MISSIONS`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Missions {
+    pub day: u64,
+    pub ids: Vec<u8>,
+    pub progress: Vec<u32>,
+    pub done: Vec<bool>,
+    /// The day's chest (all three done) paid.
+    pub all_paid: bool,
+    #[serde(flatten, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+impl Missions {
+    /// Today's, as they stand (the day's three, new, when the day's changed).
+    pub fn of(&self, today: u64) -> Missions {
+        if self.day == today && self.ids.len() == 3 && self.progress.len() == 3 && self.done.len() == 3 {
+            return self.clone();
+        }
+        Missions { day: today, ids: levels::missions_for(today).to_vec(), progress: vec![0; 3], done: vec![false; 3], all_paid: false, extra: Default::default() }
+    }
+
+    /// As the app shows them.
+    pub fn view(&self) -> Vec<crate::net::MissionView> {
+        self.ids
+            .iter()
+            .enumerate()
+            .filter_map(|(i, id)| {
+                let m = levels::MISSIONS.get(*id as usize)?;
+                Some(crate::net::MissionView {
+                    text: m.what.to_string(),
+                    progress: self.progress.get(i).copied().unwrap_or(0),
+                    target: m.goal,
+                    done: self.done.get(i).copied().unwrap_or(false),
+                    xp: m.xp,
+                    chips: m.chips,
+                })
+            })
+            .collect()
+    }
 }
 
 /// How someone's done at one of the casino's games.
@@ -70,24 +139,39 @@ pub struct CasinoStats {
 
 impl Record {
     pub fn new() -> Record {
-        Record { chips: STARTING_CHIPS, ..Default::default() }
+        Record { chips: STARTING_CHIPS, curve: levels::CURVE, ..Default::default() }
+    }
+
+    /// A record as read: one from before levels (0.13.0's curve) has its experience moved onto
+    /// today's where it was (the same level, as far into it).
+    pub fn read(mut self) -> Record {
+        if self.curve < levels::CURVE {
+            self.xp = levels::moved_from_013(self.xp);
+            self.curve = levels::CURVE;
+        }
+        self
     }
 
     pub fn level(&self) -> u32 {
-        level_for(self.xp)
+        levels::level_for(self.xp)
     }
 
-    /// The daily gift, if it hasn't been taken today. Returns the chips given.
+    pub fn tier(&self) -> usize {
+        levels::tier(self.level())
+    }
+
+    /// The daily gift, if it hasn't been taken today: 2,000 at Spark, 500 more for each day in
+    /// a row (up to a week), a quarter more for each tier; a broke player gets at least enough
+    /// to have 5,000. Returns the chips given.
     pub fn claim_daily(&mut self, today: u64) -> Option<u64> {
         if self.daily_day == today && self.daily_streak > 0 {
             return None;
         }
         self.daily_streak = if self.daily_day + 1 == today { (self.daily_streak + 1).min(7) } else { 1 };
         self.daily_day = today;
-        let mut gift = DAILY_BASE + DAILY_STREAK_STEP * (self.daily_streak as u64 - 1);
-        // Broke: topped up to the starting chips at least.
-        if self.chips + gift < STARTING_CHIPS / 4 {
-            gift = STARTING_CHIPS / 4 - self.chips;
+        let mut gift = levels::daily(self.daily_streak, self.tier());
+        if self.chips + gift < levels::BROKE_FLOOR {
+            gift = levels::BROKE_FLOOR - self.chips;
         }
         self.chips += gift;
         Some(gift)
@@ -97,23 +181,146 @@ impl Record {
     pub fn unlocked(&self) -> Vec<&'static Cosmetic> {
         COSMETICS.iter().filter(|c| c.unlock.met(self) || self.gifts.contains(c.id)).collect()
     }
+
+    /// Experience from play (in tenths, before a long day halves it), counted on `today`.
+    /// Returns the whole points it made.
+    fn add_play(&mut self, tenths: u64, today: u64) -> u64 {
+        if self.xp_day != today {
+            self.xp_day = today;
+            self.xp_today = 0;
+        }
+        self.xp_tenths += levels::day_tenths(tenths, self.xp_today);
+        let whole = self.xp_tenths / 10;
+        self.xp_tenths %= 10;
+        self.xp_today += whole;
+        whole
+    }
+
+    /// A new week (as the VIP Club counts them): last week's bonus gets ready (20% of last
+    /// week's Ember Back, from Ember tier up; one not claimed by then is gone), and this week's
+    /// starts from nothing.
+    pub fn roll_week(&mut self, today: u64) {
+        let w = levels::week(today);
+        if self.ember_week != w {
+            self.weekly_ready = if self.tier() >= 1 { self.ember_week_x100 * levels::WEEKLY_PERCENT / 100 / 100 } else { 0 };
+            self.ember_week_x100 = 0;
+            self.ember_week = w;
+        }
+    }
+
+    /// Ember Back earned (hundredths of a chip).
+    fn add_ember(&mut self, x100: u64, today: u64) {
+        self.roll_week(today);
+        self.ember_x100 += x100;
+        self.ember_week_x100 += x100;
+    }
+
+    /// Ember Back claimed: the whole chips of it (hundredths stay). Returns the chips.
+    pub fn claim_ember(&mut self) -> u64 {
+        let c = self.ember_x100 / 100;
+        self.chips += c;
+        self.ember_claimed += c;
+        self.ember_x100 %= 100;
+        c
+    }
+
+    /// The weekly VIP bonus claimed. Returns the chips (0: none waiting).
+    pub fn claim_weekly(&mut self, today: u64) -> u64 {
+        self.roll_week(today);
+        let c = self.weekly_ready;
+        if c > 0 {
+            self.chips += c;
+            self.weekly_ready = 0;
+            self.weekly_claimed = levels::week(today);
+        }
+        c
+    }
+
+    /// What this week's Ember Back has built of next week's bonus so far (chips; nothing below
+    /// Ember tier).
+    pub fn weekly_building(&self, today: u64) -> u64 {
+        if self.tier() == 0 || self.ember_week != levels::week(today) {
+            return 0;
+        }
+        self.ember_week_x100 * levels::WEEKLY_PERCENT / 100 / 100
+    }
+
+    /// The bonus waiting as of `today` (one from last week, ready once the week's turned).
+    pub fn weekly_waiting(&self, today: u64) -> u64 {
+        let mut r = self.clone();
+        r.roll_week(today);
+        r.weekly_ready
+    }
+
+    /// Counts a round or hand toward today's missions (`n`: how much it counts for each kind):
+    /// each mission done pays its XP and chips, and all three the day's chest. Returns the XP.
+    fn count_missions(&mut self, today: u64, n: impl Fn(Counts) -> u32, g: &mut Gains) -> u64 {
+        self.missions = self.missions.of(today);
+        let mut xp = 0;
+        for i in 0..3 {
+            let Some(m) = levels::MISSIONS.get(self.missions.ids[i] as usize) else { continue };
+            if self.missions.done[i] {
+                continue;
+            }
+            let k = n(m.counts);
+            if k == 0 {
+                continue;
+            }
+            self.missions.progress[i] = (self.missions.progress[i] + k).min(m.goal);
+            if self.missions.progress[i] >= m.goal {
+                self.missions.done[i] = true;
+                xp += m.xp;
+                self.chips += m.chips;
+                g.chips += m.chips;
+                g.missions.push(self.missions.ids[i]);
+            }
+        }
+        if self.missions.done.iter().all(|d| *d) && !self.missions.all_paid {
+            self.missions.all_paid = true;
+            xp += levels::MISSIONS_CHEST_XP;
+            self.chips += levels::MISSIONS_CHEST_CHIPS;
+            g.chips += levels::MISSIONS_CHEST_CHIPS;
+            g.all_missions = true;
+        }
+        xp
+    }
+
+    /// Experience added (`whole` points): every level it reaches pays (a new tier's chest
+    /// too), and so does a new Ember Star past level 100.
+    fn gain(&mut self, whole: u64, g: &mut Gains) {
+        let before = self.xp;
+        self.xp += whole;
+        g.xp += whole;
+        let (l0, l1) = (levels::level_for(before), levels::level_for(self.xp));
+        for l in l0 + 1..=l1 {
+            let p = levels::pays(l);
+            self.chips += p;
+            g.chips += p;
+            if levels::starts_tier(l) {
+                g.tier_up = Some(l);
+            }
+        }
+        if l1 > l0 {
+            g.level_up = Some(l1);
+        }
+        let s = levels::stars(self.xp);
+        if s > self.stars_paid {
+            // (One star's pay, however many one round crosses: as 0.13.28.)
+            self.chips += levels::STAR_PAYS;
+            g.chips += levels::STAR_PAYS;
+            g.star = Some(s);
+            self.stars_paid = s;
+        }
+    }
 }
 
-/// Experience needed to reach each level: 250 for level 2, rising.
+/// Experience needed to reach each level (see `levels`).
 pub fn xp_for_level(level: u32) -> u64 {
-    if level <= 1 {
-        return 0;
-    }
-    let l = (level - 1) as f64;
-    (250.0 * l.powf(1.45)).round() as u64
+    levels::xp_for(level)
 }
 
 pub fn level_for(xp: u64) -> u32 {
-    let mut l = 1;
-    while xp_for_level(l + 1) <= xp && l < 200 {
-        l += 1;
-    }
-    l
+    levels::level_for(xp)
 }
 
 /// An achievement: its id, name and what it takes.
@@ -226,6 +433,19 @@ pub const COSMETICS: &[Cosmetic] = &[
     Cosmetic { id: "frame_silver", kind: Kind::Frame, name: "Silver", unlock: Unlock::Level(15) },
     Cosmetic { id: "frame_gold", kind: Kind::Frame, name: "Gold", unlock: Unlock::Level(30) },
     Cosmetic { id: "frame_shark", kind: Kind::Frame, name: "Shark Hunter", unlock: Unlock::Achievement("shark_hunter") },
+    // Each tier's frame (0.13.5), and a felt at Blaze, Wildfire and Starfire.
+    Cosmetic { id: "tier_ember", kind: Kind::Frame, name: "Ember tier", unlock: Unlock::Level(10) },
+    Cosmetic { id: "tier_flame", kind: Kind::Frame, name: "Flame tier", unlock: Unlock::Level(20) },
+    Cosmetic { id: "tier_blaze", kind: Kind::Frame, name: "Blaze tier", unlock: Unlock::Level(30) },
+    Cosmetic { id: "tier_bonfire", kind: Kind::Frame, name: "Bonfire tier", unlock: Unlock::Level(40) },
+    Cosmetic { id: "tier_wildfire", kind: Kind::Frame, name: "Wildfire tier", unlock: Unlock::Level(50) },
+    Cosmetic { id: "tier_inferno", kind: Kind::Frame, name: "Inferno tier", unlock: Unlock::Level(60) },
+    Cosmetic { id: "tier_sunfire", kind: Kind::Frame, name: "Sunfire tier", unlock: Unlock::Level(70) },
+    Cosmetic { id: "tier_starfire", kind: Kind::Frame, name: "Starfire tier", unlock: Unlock::Level(80) },
+    Cosmetic { id: "tier_eternal", kind: Kind::Frame, name: "Eternal Flame", unlock: Unlock::Level(100) },
+    Cosmetic { id: "felt_blaze", kind: Kind::Felt, name: "Blaze", unlock: Unlock::Level(30) },
+    Cosmetic { id: "felt_wildfire", kind: Kind::Felt, name: "Wildfire", unlock: Unlock::Level(50) },
+    Cosmetic { id: "felt_starfire", kind: Kind::Felt, name: "Starfire", unlock: Unlock::Level(80) },
     // Prize boxes' and Game Masters' own.
     Cosmetic { id: "back_inferno", kind: Kind::CardBack, name: "Inferno", unlock: Unlock::Prize },
     Cosmetic { id: "back_aurora", kind: Kind::CardBack, name: "Aurora", unlock: Unlock::Prize },
@@ -254,6 +474,9 @@ pub struct HandResult {
     pub went_all_in: bool,
     /// They bet or raised the river and won with nobody calling.
     pub river_bluff: bool,
+    /// Their share of the hand's rake (as much of it as of the chips won): Ember Back is a
+    /// share of the rake you pay.
+    pub rake_paid: u64,
 }
 
 /// Reads a hand's events for one seat. `values` gives the eval number and category of each
@@ -264,8 +487,10 @@ pub fn read_hand(events: &[Event], seat: usize, values: &dyn Fn(usize) -> Option
     let mut river_aggressor = None;
     let mut anyone_shown = false;
     let mut folded = false;
+    let (mut all_won, mut rake) = (0u64, 0u64);
     for e in events {
         match e {
+            Event::HandEnded { rake: r, .. } => rake += r,
             Event::HandStarted { seats, .. } => r.played = seats.contains(&seat),
             Event::Posted { seat: s, what, amount } if *s == seat => {
                 r.put_in += amount;
@@ -305,12 +530,16 @@ pub fn read_hand(events: &[Event], seat: usize, values: &dyn Fn(usize) -> Option
                 }
             }
             Event::Won { seats, amounts, .. } => {
+                all_won += amounts.iter().sum::<u64>();
                 if let Some(i) = seats.iter().position(|s| *s == seat) {
                     r.won += amounts[i];
                 }
             }
             _ => {}
         }
+    }
+    if all_won > 0 {
+        r.rake_paid = (rake as u128 * r.won as u128 / all_won as u128) as u64;
     }
     r.river_bluff = r.won > 0 && !anyone_shown && river_aggressor == Some(seat);
     // Held to the river without showing (everyone else folded): the hand they made still
@@ -324,18 +553,29 @@ pub fn read_hand(events: &[Event], seat: usize, values: &dyn Fn(usize) -> Option
 /// A tournament finished: experience for how far they got (more for bigger fields), and
 /// the wins counted.
 pub fn apply_placed(rec: &mut Record, place: usize, entrants: usize) -> Gains {
-    let before = rec.level();
     let entrants = entrants.max(2) as u64;
     let place = (place.max(1) as u64).min(entrants);
     let beaten = entrants - place;
     let xp = 50 + beaten * 400 / (entrants - 1) * (entrants.min(50)) / 10 + if place == 1 { 250 } else { 0 };
-    rec.xp += xp;
-    let after = rec.level();
-    Gains { xp, new_achievements: Vec::new(), level_up: (after > before).then_some(after) }
+    let mut g = Gains::default();
+    rec.gain(xp, &mut g);
+    g
 }
 
-/// Adds a casino round to a record: its game's numbers, a little experience (a point for every
-/// 500 chips bet, ten at most) and any achievement it earned.
+/// What kind of round a casino outcome is, for its experience and Ember Back.
+pub fn play_of(o: &crate::casino::Outcome) -> Play {
+    use crate::casino::Outcome;
+    match o {
+        Outcome::Slots(_) | Outcome::Reels(_) | Outcome::Row(_) | Outcome::Dragon(_) => Play::Slots,
+        Outcome::Blackjack(_) => Play::Blackjack,
+        Outcome::Roulette(_) => Play::Roulette,
+        Outcome::Baccarat(_) => Play::Baccarat,
+        Outcome::Craps(_) => Play::Craps,
+        Outcome::Dice(_) => Play::Dice,
+        Outcome::Keno(_) => Play::Keno,
+    }
+}
+
 /// Counts a casino round in its game's numbers (the house's record, and the app's copy of it,
 /// the same way).
 pub fn count_casino(st: &mut CasinoStats, o: &crate::casino::Outcome) {
@@ -358,14 +598,17 @@ fn casino_back(o: &crate::casino::Outcome) -> (u64, u64) {
     (o.wagered(), back)
 }
 
-pub fn apply_casino(rec: &mut Record, o: &crate::casino::Outcome) -> Gains {
+/// Adds a casino round to a record: its game's numbers; experience from play (the game's own
+/// for a round, a little more for a bigger bet, half after a long day) and from any
+/// achievement it earned; Ember Back (the tier's share of the house's edge on the bet); today's
+/// missions; and the chips the levels, a new tier, the missions or a star pay.
+pub fn apply_casino(rec: &mut Record, o: &crate::casino::Outcome, today: u64) -> Gains {
     use crate::casino::{Outcome, blackjack};
-    let before = rec.level();
     let mut g = Gains::default();
     let (wagered, back) = casino_back(o);
     count_casino(rec.casino.entry(o.stats_key()).or_default(), o);
     let mult = crate::casino::multiple_x100(back, wagered);
-    g.xp += (wagered / 500).min(10);
+    // (Achievements' experience gathers in `g.xp` first.)
     let earn = |id: &'static str, rec: &mut Record, g: &mut Gains| {
         if rec.achievements.insert(id.to_string()) {
             g.new_achievements.push(id);
@@ -455,30 +698,80 @@ pub fn apply_casino(rec: &mut Record, o: &crate::casino::Outcome) -> Gains {
             }
         }
     }
-    rec.xp += g.xp;
-    let after = rec.level();
-    g.level_up = (after > before).then_some(after);
+    let achieved = std::mem::take(&mut g.xp);
+    let (mut played, mut missions) = (0, 0);
+    if wagered > 0 {
+        let play = play_of(o);
+        played = rec.add_play(play.xp_tenths(wagered), today);
+        rec.add_ember(play.ember_x100(wagered, rec.tier()), today);
+        let won = back > wagered;
+        missions = rec.count_missions(
+            today,
+            |c| match c {
+                Counts::Plays(p) => (p == play) as u32,
+                Counts::SlotTenX => (play == Play::Slots && mult >= 1_000) as u32,
+                Counts::CasinoWins => won as u32,
+                _ => 0,
+            },
+            &mut g,
+        );
+    }
+    rec.gain(played + achieved + missions, &mut g);
     g
 }
 
-/// What a hand added: experience and newly earned achievements.
+/// What a hand or round added: experience, achievements newly earned, the level reached, and
+/// what came with them (0.13.5): the chips paid by levels, a new tier's chest, missions, the
+/// day's chest and Ember Stars.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Gains {
     pub xp: u64,
     pub new_achievements: Vec<&'static str>,
     pub level_up: Option<u32>,
+    /// Chips paid besides the round's own winnings.
+    pub chips: u64,
+    /// A new tier reached: the level it starts at (10, Ember, to 100, Eternal Flame).
+    pub tier_up: Option<u32>,
+    /// Missions done (their ids, `levels::MISSIONS`).
+    pub missions: Vec<u8>,
+    /// All three of today's missions done: the day's chest paid.
+    pub all_missions: bool,
+    /// A new Ember Star: how many now.
+    pub star: Option<u64>,
+}
+
+impl Gains {
+    /// As the app is told (0.13.28's way): `net`, the chips won or lost in the round itself.
+    pub fn view(&self, net: i64) -> crate::net::GainsView {
+        crate::net::GainsView {
+            xp: self.xp,
+            achievements: self.new_achievements.iter().map(|s| s.to_string()).collect(),
+            level_up: self.level_up,
+            net,
+            chips: self.chips,
+            tier_up: self.tier_up,
+            missions: self.missions.iter().filter_map(|id| levels::MISSIONS.get(*id as usize)).map(|m| m.what.to_string()).collect(),
+            all_missions: self.all_missions,
+            star: self.star,
+        }
+    }
+
+    /// Whether there's anything to celebrate.
+    pub fn any(&self) -> bool {
+        !self.new_achievements.is_empty() || self.level_up.is_some() || self.chips > 0 || !self.missions.is_empty() || self.all_missions || self.star.is_some()
+    }
 }
 
 /// Adds a hand to a record. `big_blind` sizes "big pot"; `beat_shark` is true when they won a
-/// showdown with a Shark bot in it.
-pub fn apply(rec: &mut Record, h: &HandResult, big_blind: u64, beat_shark: bool) -> Gains {
+/// showdown with a Shark bot in it. A hand earns 8 XP however it went (0.13.5: about what a
+/// minute at any game earns), Ember Back from the rake they paid, and counts toward today's
+/// missions.
+pub fn apply(rec: &mut Record, h: &HandResult, big_blind: u64, beat_shark: bool, today: u64) -> Gains {
     let mut g = Gains::default();
     if !h.played {
         return g;
     }
-    let before = rec.level();
     rec.hands += 1;
-    g.xp += 5;
     if h.vpip {
         rec.vpip += 1;
     }
@@ -488,14 +781,12 @@ pub fn apply(rec: &mut Record, h: &HandResult, big_blind: u64, beat_shark: bool)
     let net_won = h.won > h.put_in;
     if h.won > 0 {
         rec.hands_won += 1;
-        g.xp += 15;
         rec.biggest_pot = rec.biggest_pot.max(h.won);
     }
     if h.showdown {
         rec.showdowns += 1;
         if h.won > 0 {
             rec.showdowns_won += 1;
-            g.xp += 10;
         }
     }
     if let Some((v, _, name)) = &h.shown
@@ -550,11 +841,23 @@ pub fn apply(rec: &mut Record, h: &HandResult, big_blind: u64, beat_shark: bool)
     if beat_shark && h.showdown && h.won > 0 {
         earn("shark_hunter", rec, &mut g);
     }
-    rec.xp += g.xp;
-    let after = rec.level();
-    if after > before {
-        g.level_up = Some(after);
+    let achieved = std::mem::take(&mut g.xp);
+    let played = rec.add_play(Play::Poker.xp_tenths(big_blind), today);
+    if h.rake_paid > 0 {
+        rec.add_ember(h.rake_paid * levels::ember_bp(rec.tier()) / 100, today);
     }
+    let showdown_won = h.showdown && h.won > 0;
+    let missions = rec.count_missions(
+        today,
+        |c| match c {
+            Counts::PokerHands => 1,
+            Counts::PokerPots => (h.won > 0) as u32,
+            Counts::Showdowns => showdown_won as u32,
+            _ => 0,
+        },
+        &mut g,
+    );
+    rec.gain(played + achieved + missions, &mut g);
     g
 }
 
@@ -563,12 +866,7 @@ pub fn after_daily(rec: &mut Record) -> Gains {
     let mut g = Gains::default();
     if rec.daily_streak >= 7 && rec.achievements.insert("streak_7".into()) {
         g.new_achievements.push("streak_7");
-        g.xp += 300;
-        let before = rec.level();
-        rec.xp += g.xp;
-        if rec.level() > before {
-            g.level_up = Some(rec.level());
-        }
+        rec.gain(300, &mut g);
     }
     g
 }
@@ -580,36 +878,34 @@ mod tests {
     use crate::eval;
     use crate::game::{Rules, Table};
 
-    /// A 0.13.28 server's record (levels and VIP Club fields this Pyr doesn't know yet) comes
-    /// through being read and written back with nothing lost.
+    /// A record as a 0.13.28 server wrote it (a real one, from 0.13.28 run here) reads, and
+    /// writes back the same, with whatever a newer Pyr added kept as it was.
     #[test]
-    fn what_a_record_holds_that_this_pyr_doesnt_know_is_kept() {
-        let kept = r#"{"chips":250000,"xp":1200,"curve":2,"xp_tenths":7,"ember_x100":15300,"weekly_ready":true,"missions":{"day":20402,"ids":[3,9,14],"progress":[1,25,40],"done":[false,true,false],"chest":false}}"#;
-        let mut rec: Record = serde_json::from_str(kept).unwrap();
-        assert_eq!((rec.chips, rec.xp), (250_000, 1200));
-        rec.chips += 1;
+    fn a_0_13_28_record_reads_and_writes_back_as_it_was() {
+        let written = r#"{"chips":79890,"xp":738,"hands":4,"hands_won":0,"showdowns":0,"showdowns_won":0,"vpip":0,"pfr":0,"biggest_pot":0,"best_hand":0,"best_hand_name":"","achievements":["casino_first","streak_7"],"daily_day":20768,"daily_streak":1,"card_back":"","felt":"","chip_set":"","frame":"","gifts":[],"hide_title":false,"casino":{"dice":{"rounds":71,"wagered":542828,"paid":506937,"best_win":10035,"best_multiple_x100":197},"plinko":{"rounds":1,"wagered":100,"paid":400,"best_win":300,"best_multiple_x100":400}},"rating":{"mmr":999.6971507379536,"peak":1000.0,"tourneys":0,"hands":8},"curve":2,"xp_tenths":0,"xp_day":20768,"xp_today":42,"ember_x100":0,"ember_claimed":123,"missions":{"day":20768,"ids":[0,3,10],"progress":[20,25,40],"done":[true,true,true],"all_paid":true},"stars_paid":0,"ember_week_x100":2960,"ember_week":2967,"weekly_ready":200,"weekly_claimed":0,"from_later":{"a":1}}"#;
+        let rec: Record = serde_json::from_str(written).unwrap();
+        let rec = rec.read();
+        assert_eq!((rec.chips, rec.xp, rec.level(), rec.weekly_ready, rec.ember_claimed), (79_890, 738, 7, 200, 123));
+        assert_eq!(rec.missions.ids, [0, 3, 10]);
         let back: serde_json::Value = serde_json::to_value(&rec).unwrap();
-        for k in ["curve", "xp_tenths", "ember_x100", "weekly_ready", "missions"] {
-            assert_eq!(back[k], serde_json::from_str::<serde_json::Value>(kept).unwrap()[k], "{k}");
-        }
-        assert_eq!(back["chips"], 250_001);
-        // A record of this Pyr's own has none of it.
+        assert_eq!(back, serde_json::from_str::<serde_json::Value>(written).unwrap());
+        // A record of this Pyr's own has nothing extra.
         assert!(!serde_json::to_string(&Record::new()).unwrap().contains("extra"));
     }
 
+    /// A record from before levels (0.13.0's curve) keeps its level when it's read.
     #[test]
-    fn levels_rise_slower_and_slower() {
-        assert_eq!(level_for(0), 1);
-        assert_eq!(level_for(249), 1);
-        assert_eq!(level_for(250), 2);
-        assert!(xp_for_level(10) - xp_for_level(9) > xp_for_level(3) - xp_for_level(2));
-        for l in 1..60 {
-            assert_eq!(level_for(xp_for_level(l)), l);
-        }
+    fn a_record_from_before_levels_keeps_its_level() {
+        let old: Record = serde_json::from_str(r#"{"chips":5000,"xp":30000}"#).unwrap();
+        // (0.13.0's level 18: 250 × 17^1.45 = 15,155 to 250 × 18^1.45 = 16,497... 30,000 is 0.13.0's level 28.)
+        let lvl_013 = (1..200).take_while(|l| (250.0 * (*l as f64).powf(1.45)).round() as u64 <= 30_000).count() as u32 + 1;
+        let rec = old.read();
+        assert_eq!((rec.curve, rec.level()), (levels::CURVE, lvl_013));
+        assert_eq!(Record::new().curve, levels::CURVE);
     }
 
     #[test]
-    fn daily_chips_grow_with_a_streak_and_rescue_the_broke() {
+    fn daily_chips_grow_with_a_streak_and_a_tier_and_rescue_the_broke() {
         let mut r = Record::new();
         assert_eq!(r.claim_daily(100), Some(2000));
         assert_eq!(r.claim_daily(100), None, "once a day");
@@ -621,7 +917,72 @@ mod tests {
         assert_eq!(r.daily_streak, 7);
         assert_eq!(after_daily(&mut r).new_achievements, vec!["streak_7"]);
         let mut broke = Record { chips: 0, ..Record::new() };
-        assert_eq!(broke.claim_daily(5), Some(STARTING_CHIPS / 4));
+        assert_eq!(broke.claim_daily(5), Some(5_000));
+        let mut flame = Record { chips: 0, xp: levels::xp_for(20), daily_day: 5, daily_streak: 6, ..Record::new() };
+        assert_eq!(flame.claim_daily(6), Some(7_500));
+    }
+
+    /// 0.13.28's dice round by round: experience in tenths, Ember Back, the long day's half,
+    /// and what reaching levels, a tier, missions, the day's chest and a star pay.
+    #[test]
+    fn rounds_earn_and_pay_as_0_13_28s() {
+        use crate::casino::{Outcome, dice};
+        let roll = |chips: u64, won: bool| Outcome::Dice(dice::Outcome { chips, chance: 5_000, over: false, roll: if won { 100 } else { 9_000 }, won, paid: if won { chips * 2 - chips / 50 } else { 0 } });
+        let day = 20_768;
+        let mut rec = Record { xp: 730, ..Record::new() };
+        rec.achievements.insert("casino_first".into());
+        let g = apply_casino(&mut rec, &roll(10_240, false), day);
+        assert_eq!((rec.xp, rec.xp_tenths, rec.ember_x100, rec.ember_week_x100), (731, 4, 512, 512));
+        assert_eq!(g.xp, 1);
+        // A long day: half.
+        rec.xp_today = 4_000;
+        apply_casino(&mut rec, &roll(10_240, false), day);
+        assert_eq!((rec.xp, rec.xp_tenths), (732, 1));
+        // Ember Back claimed: the whole chips (hundredths stay).
+        let chips = rec.chips;
+        rec.ember_x100 = 12_345;
+        assert_eq!(rec.claim_ember(), 123);
+        assert_eq!((rec.chips - chips, rec.ember_x100, rec.ember_claimed), (123, 45, 123));
+        // Levels: one round from 79 XP through a mission and the day's chest pays every level
+        // reached (2 to 7: 22,800), the mission's 4,000 and the chest's 25,000.
+        let mut rec = Record { xp: 79, ..Record::new() };
+        rec.achievements.insert("casino_first".into());
+        rec.missions = Missions { day: 20_768, ids: vec![0, 3, 10], progress: vec![20, 25, 39], done: vec![true, true, false], all_paid: false, ..Default::default() };
+        let chips = rec.chips;
+        let g = apply_casino(&mut rec, &roll(1, false), day);
+        assert_eq!(rec.xp, 730);
+        assert_eq!(rec.chips - chips, 22_800 + 4_000 + 25_000);
+        assert_eq!((g.level_up, g.missions.clone(), g.all_missions, g.chips), (Some(7), vec![10u8], true, 51_800));
+        // A new tier: its chest.
+        let mut rec = Record { xp: levels::xp_for(10) - 1, ..Record::new() };
+        rec.achievements.insert("casino_first".into());
+        let g = apply_casino(&mut rec, &roll(1, false), day);
+        assert_eq!((g.level_up, g.tier_up, g.chips), (Some(10), Some(10), 115_000));
+        // Stars: one pays 25,000; two crossed at once still 25,000 (as 0.13.28).
+        let mut rec = Record { xp: 399_559, stars_paid: 3, ..Record::new() };
+        rec.achievements.insert("casino_first".into());
+        let g = apply_casino(&mut rec, &roll(1, false), day);
+        assert_eq!((g.star, g.chips, rec.stars_paid), (Some(4), 25_000, 4));
+        rec.xp = 419_559;
+        let g = apply_casino(&mut rec, &roll(1, false), day);
+        assert_eq!((g.star, g.chips, rec.stars_paid), (Some(6), 25_000, 6));
+    }
+
+    /// The weekly VIP bonus: 20% of last week's Ember Back once the week turns, from Ember tier
+    /// up; one not claimed is gone the next week.
+    #[test]
+    fn the_weekly_bonus_as_0_13_28s() {
+        let mut rec = Record { xp: levels::xp_for(10), ember_week: 2_966, ember_week_x100: 100_000, weekly_ready: 500, ..Record::new() };
+        assert_eq!(rec.weekly_waiting(20_768), 200);
+        rec.roll_week(20_768);
+        assert_eq!((rec.weekly_ready, rec.ember_week_x100, rec.ember_week), (200, 0, 2_967));
+        let chips = rec.chips;
+        assert_eq!(rec.claim_weekly(20_768), 200);
+        assert_eq!((rec.chips - chips, rec.weekly_ready, rec.weekly_claimed), (200, 0, 2_967));
+        assert_eq!(rec.claim_weekly(20_768), 0);
+        // Spark: none.
+        let mut spark = Record { ember_week: 2_966, ember_week_x100: 100_000, ..Record::new() };
+        assert_eq!(spark.claim_weekly(20_768), 0);
     }
 
     #[test]
@@ -659,7 +1020,7 @@ mod tests {
         assert!(h.played && h.vpip && h.pfr && h.showdown);
         assert_eq!((h.won, h.put_in), (60, 30));
         let mut rec = Record::new();
-        let g = apply(&mut rec, &h, 10, false);
+        let g = apply(&mut rec, &h, 10, false, 20_768);
         assert!(g.new_achievements.contains(&"first_win") && g.new_achievements.contains(&"flush"), "{g:?}");
         assert_eq!(rec.best_hand_name, "Flush, Ace high");
         let other = read_hand(&events, 1, &values);

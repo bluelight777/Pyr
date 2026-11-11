@@ -13,6 +13,7 @@ pub mod casino;
 pub mod eval;
 pub mod fair;
 pub mod game;
+pub mod levels;
 pub mod net;
 pub mod progress;
 pub mod props;

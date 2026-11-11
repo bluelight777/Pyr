@@ -29,6 +29,8 @@ pub enum Tab {
     /// The casino floor: every game, poker's tables, Flash Pots and tournaments among them.
     #[default]
     Floor,
+    /// The Pyr VIP Club (0.13.5).
+    Vip,
     Leaderboard,
     Me,
     Staff,
@@ -107,6 +109,8 @@ pub struct PokerUi {
     pub odds_job: Option<(String, std::sync::mpsc::Receiver<f64>)>,
     /// A celebration showing: (text, since).
     pub banner: Option<(String, Instant)>,
+    /// A level reached, bursting onto the screen.
+    pub burst: Option<crate::casino::levels::Burst>,
     /// A table was just asked for: open it when it comes.
     pub awaiting_new: bool,
     /// The cloth's picture, for the felt it's made for.
@@ -213,6 +217,27 @@ impl PyrApp {
                 if let Some(l) = g.level_up {
                     self.poker.banner = Some((format!("Level {l}!"), Instant::now()));
                     acts.push(Act::Toast(format!("You reached level {l}. New looks may be waiting in your profile."), false));
+                    // (0.13.5: the crest bursts onto the screen with the chips it paid.)
+                    if s.poker.me.as_ref().is_some_and(crate::casino::levels::has_levels) {
+                        let missions: u64 = g.missions.iter().filter_map(|t| s.poker.me.as_ref()?.missions.iter().find(|m| &m.text == t).map(|m| m.chips)).sum();
+                        let chest = if g.all_missions { pyr_poker::levels::MISSIONS_CHEST_CHIPS } else { 0 };
+                        let star = if g.star.is_some() { pyr_poker::levels::STAR_PAYS } else { 0 };
+                        let paid = g.chips.saturating_sub(missions + chest + star);
+                        self.poker.burst = Some(crate::casino::levels::Burst { level: l, tier_up: g.tier_up.is_some(), chips: paid, since: Instant::now() });
+                    }
+                }
+                for m in &g.missions {
+                    acts.push(Act::Toast(format!("Mission done: {m}"), false));
+                }
+                if g.all_missions {
+                    acts.push(Act::Toast("All three of today's missions done: the day's chest is yours.".into(), false));
+                }
+                if let Some(n) = g.star {
+                    acts.push(Act::Toast(format!("Ember Star {n}! +{}", chips_text(pyr_poker::levels::STAR_PAYS)), false));
+                }
+                // (Ember Back and the weekly bonus claimed: chips and nothing else.)
+                if g.chips > 0 && g.level_up.is_none() && g.missions.is_empty() && !g.all_missions && g.star.is_none() && g.achievements.is_empty() {
+                    acts.push(Act::Toast(format!("Ember Back: +{} chips", chips_text(g.chips)), false));
                 }
             }
         }
@@ -244,6 +269,8 @@ impl PyrApp {
         // A Flash Pot I played, just over: the winner's moment, over everything.
         let whole = ui.max_rect();
         self.bomb_finale(ui.ctx(), s, whole);
+        // A level reached: its crest, big.
+        self.level_burst(ui.ctx(), whole);
         if self.poker.awaiting_new
             && let Some(mine) = s.me.as_ref()
             && let Some((id, _)) = s.poker.tables.iter().rev().find(|(_, t)| t.view.owner == mine.user_id)
@@ -346,6 +373,10 @@ impl PyrApp {
             ui.add_space(16.0);
             if let Some(me) = &s.poker.me {
                 self.me_card(ui, s, me.clone());
+                if self.poker.tab == Tab::Floor {
+                    ui.add_space(10.0);
+                    self.levels_row(ui, s, &me.clone());
+                }
             }
             ui.add_space(14.0);
             ui.horizontal(|ui| {
@@ -358,7 +389,11 @@ impl PyrApp {
                     self.engine.poker(&s.key, ToServer::Staff);
                 }
                 let staff = self.my_poker_role(s).is_some() || s.poker.staff.as_ref().is_some_and(|v| v.owner) || (!v13 && s.can(pyr_proto::control::perm::MANAGE_SERVER));
-                let mut tabs = vec![(Tab::Floor, "Casino"), (Tab::Leaderboard, "Leaderboard"), (Tab::Me, "Profile & Looks")];
+                let mut tabs = vec![(Tab::Floor, "Casino")];
+                if s.poker.me.as_ref().is_some_and(crate::casino::levels::has_levels) {
+                    tabs.push((Tab::Vip, "VIP Club"));
+                }
+                tabs.extend([(Tab::Leaderboard, "Leaderboard"), (Tab::Me, "Profile & Looks")]);
                 if staff {
                     tabs.push((Tab::Staff, "Staff"));
                 }
@@ -382,6 +417,10 @@ impl PyrApp {
             ui.add_space(16.0);
             match self.poker.tab {
                 Tab::Floor => self.casino_floor(ui, s),
+                Tab::Vip => match s.poker.me.clone() {
+                    Some(me) => self.vip_page(ui, s, &me),
+                    None => self.casino_floor(ui, s),
+                },
                 Tab::Leaderboard => self.leaderboard(ui, s),
                 Tab::Me => self.profile(ui, s),
                 Tab::Staff => self.staff_tab(ui, s),
@@ -398,16 +437,22 @@ impl PyrApp {
             let p = ui.painter();
             p.rect_filled(r, theme::r(14), theme::ELEV());
             p.rect_stroke(r, theme::r(14), Stroke::new(1.0f32, theme::LINE()), StrokeKind::Inside);
-            // Level badge.
             let lc = r.left_center() + vec2(48.0, 0.0);
-            p.circle_filled(lc, 30.0, theme::ELEV2());
-            p.circle_stroke(lc, 30.0, Stroke::new(3.0f32, theme::EMBER()));
-            // Experience around the badge.
-            let span = (me.level_to - me.level_from).max(1) as f32;
-            let frac = ((me.xp - me.level_from) as f32 / span).clamp(0.0, 1.0);
-            arc(p, lc, 30.0, frac, Stroke::new(4.0f32, theme::GLOW()));
-            p.text(lc + vec2(0.0, -4.0), egui::Align2::CENTER_CENTER, me.level.to_string(), theme::bold_font(22.0), theme::TEXT());
-            p.text(lc + vec2(0.0, 15.0), egui::Align2::CENTER_CENTER, "LEVEL", theme::bold_font(8.5), theme::MUTED());
+            let levels = crate::casino::levels::has_levels(&me);
+            if levels {
+                // My tier's crest, the level's progress around it, the level under it (0.13.5).
+                crate::casino::levels::crest_badge(p, ui.ctx(), &me, lc, 33.0);
+            } else {
+                // Level badge.
+                p.circle_filled(lc, 30.0, theme::ELEV2());
+                p.circle_stroke(lc, 30.0, Stroke::new(3.0f32, theme::EMBER()));
+                // Experience around the badge.
+                let span = (me.level_to - me.level_from).max(1) as f32;
+                let frac = ((me.xp - me.level_from) as f32 / span).clamp(0.0, 1.0);
+                arc(p, lc, 30.0, frac, Stroke::new(4.0f32, theme::GLOW()));
+                p.text(lc + vec2(0.0, -4.0), egui::Align2::CENTER_CENTER, me.level.to_string(), theme::bold_font(22.0), theme::TEXT());
+                p.text(lc + vec2(0.0, 15.0), egui::Align2::CENTER_CENTER, "LEVEL", theme::bold_font(8.5), theme::MUTED());
+            }
             let x = r.left() + 96.0;
             let name = p.layout_no_wrap(me.name.clone(), theme::bold_font(17.0), theme::TEXT());
             let nw = name.size().x;
@@ -417,7 +462,16 @@ impl PyrApp {
                 rank::emblem(p, pos2(x + nw + 20.0, r.top() + 22.0), 9.0, tier);
                 p.text(pos2(x + nw + 34.0, r.top() + 22.0), egui::Align2::LEFT_CENTER, rank::label(me.mmr, me.mmr_placing), theme::bold_font(12.5), rank::color(tier));
             }
-            p.text(pos2(x, r.top() + 46.0), egui::Align2::LEFT_CENTER, format!("{} XP to level {}", chips_text(me.level_to.saturating_sub(me.xp)), me.level + 1), theme::font(12.5), theme::MUTED());
+            if levels {
+                // "Spark VII · 140 XP to level 8 (pays 4,200)", the title in the tier's color.
+                let (title, next) = crate::casino::levels::next_line(&me);
+                let tg = p.layout_no_wrap(title, theme::bold_font(13.5), crate::casino::levels::tier_color(me.tier as usize));
+                let tw = tg.size().x;
+                p.galley(pos2(x, r.top() + 46.0 - tg.size().y / 2.0), tg, Color32::WHITE);
+                p.text(pos2(x + tw + 6.0, r.top() + 46.0), egui::Align2::LEFT_CENTER, format!("·  {next}"), theme::font(12.5), theme::MUTED());
+            } else {
+                p.text(pos2(x, r.top() + 46.0), egui::Align2::LEFT_CENTER, format!("{} XP to level {}", chips_text(me.level_to.saturating_sub(me.xp)), me.level + 1), theme::font(12.5), theme::MUTED());
+            }
             let stats = format!(
                 "{} · won {} · showdowns won {}%",
                 crate::poker::cards::count(me.hands, "hand", "hands"),

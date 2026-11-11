@@ -39,6 +39,7 @@ const PICS: &[(&str, &[u8])] = pics![
     "tile-timebombs",
     "tile-tourney",
     "tile-friday",
+    "tier-crests",
     "sevens-symbols",
     "dragon-symbols",
     "dragon-age1",

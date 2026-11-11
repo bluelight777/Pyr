@@ -28,6 +28,7 @@ pub mod floor;
 pub mod humor;
 pub mod info;
 pub mod keno;
+pub mod levels;
 pub mod pics;
 pub mod reel_themes;
 pub mod reels;

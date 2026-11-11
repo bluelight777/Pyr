@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use pyr_proto::control::{CustomEmoji, Relation, RelationKind, ServerGif, ServerSound,
     Attachment, Channel, ChannelId, ChannelKind, Dm, FileKind, Group, Member, Message, MessageId, Reaction, Role, RoleDef, RoleId, UserId,
 };
@@ -521,17 +521,36 @@ impl Db {
     // ---------------------------------------------------------------- poker
 
     /// A player's poker record (a new one the first time), and the chips they have at tables.
+    /// (One from before levels comes with its experience moved onto today's curve.)
     pub fn poker_record(&self, uid: &str) -> (pyr_poker::progress::Record, u64) {
         let row: Option<(String, i64)> = self.conn.lock().query_row("SELECT record, held FROM poker_records WHERE uid = ?1", [uid], |r| Ok((r.get(0)?, r.get(1)?))).optional().ok().flatten();
         match row {
-            Some((json, held)) => (serde_json::from_str(&json).unwrap_or_else(|_| pyr_poker::progress::Record::new()), held.max(0) as u64),
+            Some((json, held)) => match serde_json::from_str::<pyr_poker::progress::Record>(&json) {
+                Ok(rec) => (rec.read(), held.max(0) as u64),
+                // A record this Pyr can't read (written by a newer one, say): it plays with a new
+                // one meanwhile, and `set_poker_record` never writes over the one kept.
+                Err(e) => {
+                    tracing::error!("can't read {uid}'s casino record ({e}): it's kept as it is, not written over");
+                    (pyr_poker::progress::Record::new(), held.max(0) as u64)
+                }
+            },
             None => (pyr_poker::progress::Record::new(), 0),
         }
     }
 
+    /// Writes a player's record, unless the one kept can't be read by this Pyr: that one is left
+    /// as it is (nothing a newer server kept is lost; the change is, and it's in the log).
     pub fn set_poker_record(&self, uid: &str, rec: &pyr_poker::progress::Record, held: u64) -> Result<()> {
         let json = serde_json::to_string(rec)?;
-        self.conn.lock().execute(
+        let c = self.conn.lock();
+        let kept: Option<String> = c.query_row("SELECT record FROM poker_records WHERE uid = ?1", [uid], |r| r.get(0)).optional()?;
+        if let Some(k) = kept
+            && serde_json::from_str::<pyr_poker::progress::Record>(&k).is_err()
+        {
+            tracing::error!("{uid}'s casino record can't be read by this Pyr: not written over");
+            bail!("that record can't be read by this server");
+        }
+        c.execute(
             "INSERT INTO poker_records(uid, record, held) VALUES (?1, ?2, ?3) ON CONFLICT(uid) DO UPDATE SET record = excluded.record, held = excluded.held",
             params![uid, json, held as i64],
         )?;
@@ -605,7 +624,7 @@ impl Db {
         let conn = self.conn.lock();
         let Ok(mut st) = conn.prepare("SELECT uid, record, held FROM poker_records") else { return Vec::new() };
         st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))
-            .map(|rows| rows.flatten().filter_map(|(u, j, h)| Some((u, serde_json::from_str(&j).ok()?, h.max(0) as u64))).collect())
+            .map(|rows| rows.flatten().filter_map(|(u, j, h)| Some((u, serde_json::from_str::<pyr_poker::progress::Record>(&j).ok()?.read(), h.max(0) as u64))).collect())
             .unwrap_or_default()
     }
 
