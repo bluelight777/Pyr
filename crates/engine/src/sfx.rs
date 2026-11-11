@@ -1,7 +1,9 @@
 //! Notification sounds: new messages, people joining and leaving voice, screen shares
-//! starting and stopping, tuning in to one, and calls ringing. The sounds are made here (short
-//! chimes), not loaded from files, unless a skin brings its own; they play on the chosen
-//! speakers on their own little stream, so they work in and out of calls.
+//! starting and stopping, tuning in to one, and calls ringing. Two sets to choose from (Settings
+//! → Notifications → Sound profile, 0.13.2): Classic, the short chimes made here (what everyone
+//! starts with), and Ember, Pyr's own (recorded off 0.13.28 as it plays them, sample for sample);
+//! a skin's own sounds play in place of either. They play on the chosen speakers on their own
+//! little stream, so they work in and out of calls.
 
 use std::collections::HashMap;
 use std::sync::{Arc, mpsc};
@@ -39,7 +41,8 @@ pub enum Sound {
 /// What to play: one of the chimes, 48 kHz stereo (a soundboard sound heard only here), or a
 /// ringtone's sound (48 kHz stereo that plays like a chime).
 enum Clip {
-    Chime(Sound),
+    /// A chime: Ember's (true) or Classic's.
+    Chime(Sound, bool),
     Stereo(Arc<Vec<f32>>),
     Ring(Arc<Vec<f32>>),
 }
@@ -123,8 +126,9 @@ impl Sfx {
         Sfx { tx }
     }
 
-    pub fn play(&self, sound: Sound, device: Option<String>, volume: f32) {
-        let _ = self.tx.send(Msg::Play { clip: Clip::Chime(sound), device, volume });
+    /// `ember`: the Ember sound (`Settings::ember_sounds`), or Classic's.
+    pub fn play(&self, sound: Sound, ember: bool, device: Option<String>, volume: f32) {
+        let _ = self.tx.send(Msg::Play { clip: Clip::Chime(sound, ember), device, volume });
     }
 
     /// 48 kHz stereo (a soundboard sound tried out away from a call).
@@ -152,12 +156,61 @@ impl Sfx {
 /// as one).
 fn stereo(clip: Clip, skin: &HashMap<Sound, Arc<Vec<f32>>>) -> (Arc<Vec<f32>>, bool) {
     match clip {
-        Clip::Chime(s) => match skin.get(&s).or_else(|| s.stands_in().and_then(|o| skin.get(&o))) {
+        Clip::Chime(s, ember_on) => match skin.get(&s).or_else(|| s.stands_in().and_then(|o| skin.get(&o))) {
             Some(pcm) => (pcm.clone(), true),
-            None => (Arc::new(render(s).into_iter().flat_map(|v| [v, v]).collect()), true),
+            None => match ember_on.then(|| ember(s)).flatten() {
+                Some(pcm) => (pcm, true),
+                None => (Arc::new(render(s).into_iter().flat_map(|v| [v, v]).collect()), true),
+            },
         },
         Clip::Stereo(pcm) => (pcm, false),
         Clip::Ring(pcm) => (pcm, true),
+    }
+}
+
+/// The Ember sounds (0.13.2): 0.13.28 makes them as it plays them; these are what it played,
+/// recorded off its sound card at full volume (48 kHz stereo, 24-bit FLAC, every sample).
+macro_rules! ember_file {
+    ($name:literal) => {
+        ($name, include_bytes!(concat!("../assets/ember/", $name, ".flac")) as &[u8])
+    };
+}
+const EMBER: [(&str, &[u8]); 15] = [
+    ember_file!("message"),
+    ember_file!("join"),
+    ember_file!("leave"),
+    ember_file!("you_join"),
+    ember_file!("you_leave"),
+    ember_file!("stream_start"),
+    ember_file!("stream_stop"),
+    ember_file!("watch_start"),
+    ember_file!("watch_stop"),
+    ember_file!("viewer_join"),
+    ember_file!("viewer_leave"),
+    ember_file!("ring"),
+    ember_file!("ringback"),
+    ember_file!("mute"),
+    ember_file!("unmute"),
+];
+
+/// An Ember sound, 48 kHz stereo (read the first time it's wanted).
+pub fn ember(s: Sound) -> Option<Arc<Vec<f32>>> {
+    static READ: std::sync::OnceLock<parking_lot::Mutex<HashMap<Sound, Arc<Vec<f32>>>>> = std::sync::OnceLock::new();
+    let read = READ.get_or_init(Default::default);
+    if let Some(p) = read.lock().get(&s) {
+        return Some(p.clone());
+    }
+    let (_, file) = EMBER.iter().find(|(n, _)| *n == s.name())?;
+    match crate::soundboard::import(file.to_vec(), Some("flac")) {
+        Ok(i) => {
+            let pcm = Arc::new(i.pcm);
+            read.lock().insert(s, pcm.clone());
+            Some(pcm)
+        }
+        Err(e) => {
+            tracing::warn!("couldn't read Ember's {} sound: {e:#}", s.name());
+            None
+        }
     }
 }
 
@@ -320,15 +373,57 @@ mod tests {
         assert_eq!(pyr_proto::skin::SOUNDS.len(), Sound::ALL.len());
         let mine = Arc::new(vec![0.25f32; 9600]);
         let skin: HashMap<Sound, Arc<Vec<f32>>> = [(Sound::Message, mine.clone())].into();
-        let (pcm, chime) = stereo(Clip::Chime(Sound::Message), &skin);
-        assert!(Arc::ptr_eq(&pcm, &mine) && chime, "still a chime: it isn't hushed with the soundboard");
-        let (pcm, _) = stereo(Clip::Chime(Sound::Join), &skin);
+        for ember_on in [false, true] {
+            let (pcm, chime) = stereo(Clip::Chime(Sound::Message, ember_on), &skin);
+            assert!(Arc::ptr_eq(&pcm, &mine) && chime, "still a chime: it isn't hushed with the soundboard");
+        }
+        let (pcm, _) = stereo(Clip::Chime(Sound::Join, false), &skin);
         assert_eq!(pcm.len(), render(Sound::Join).len() * 2, "the others stay Pyr's own");
+        let (pcm, _) = stereo(Clip::Chime(Sound::Join, true), &skin);
+        assert!(Arc::ptr_eq(&pcm, &ember(Sound::Join).unwrap()), "or Ember's");
         // (A skin with only `join`: it's mine joining too, as before `you_join`.)
         let joining = Arc::new(vec![0.5f32; 4800]);
         let skin: HashMap<Sound, Arc<Vec<f32>>> = [(Sound::Join, joining.clone())].into();
-        assert!(Arc::ptr_eq(&stereo(Clip::Chime(Sound::YouJoin), &skin).0, &joining));
-        assert!(!Arc::ptr_eq(&stereo(Clip::Chime(Sound::YouLeave), &skin).0, &joining));
+        assert!(Arc::ptr_eq(&stereo(Clip::Chime(Sound::YouJoin, false), &skin).0, &joining));
+        assert!(!Arc::ptr_eq(&stereo(Clip::Chime(Sound::YouLeave, false), &skin).0, &joining));
+    }
+
+    /// Ember's sounds, as 0.13.28 played them at full volume (recorded off it): every one there,
+    /// stereo, as long as it was, and the first samples as they came (a stand-in for "the same
+    /// file": they're 24-bit, so within 2^-23 of what was recorded).
+    #[test]
+    fn embers_sounds_are_0_13_28s() {
+        let lengths = [
+            (Sound::Message, 36_174),
+            (Sound::Join, 40_908),
+            (Sound::Leave, 37_724),
+            (Sound::YouJoin, 50_893),
+            (Sound::YouLeave, 50_189),
+            (Sound::StreamStart, 57_656),
+            (Sound::StreamStop, 33_529),
+            (Sound::WatchStart, 28_016),
+            (Sound::WatchStop, 28_255),
+            (Sound::ViewerJoin, 29_844),
+            (Sound::ViewerLeave, 22_964),
+            (Sound::Ring, 87_712),
+            (Sound::Ringback, 61_033),
+            (Sound::Mute, 19_395),
+            (Sound::Unmute, 24_141),
+        ];
+        for (s, frames) in lengths {
+            let pcm = ember(s).unwrap_or_else(|| panic!("{s:?}"));
+            assert_eq!(pcm.len(), frames * 2, "{s:?}");
+            let peak = pcm.iter().fold(0f32, |m, v| m.max(v.abs()));
+            assert!(peak > 0.15 && peak < 0.5, "{s:?} {peak}");
+            assert!(pcm.chunks(2).any(|f| f[0] != f[1]), "{s:?}: stereo");
+        }
+        // Message's first samples, left and right, as 0.13.28 played them (the right a moment
+        // behind the left).
+        let m = ember(Sound::Message).unwrap();
+        let want = [0.0, 0.0, 0.002_267_12, 0.0, 0.005_064_72, 0.0, 0.009_228_36, 0.0];
+        for (i, w) in want.iter().enumerate() {
+            assert!((m[i] - w).abs() < 2e-7, "sample {i}: {} vs {w}", m[i]);
+        }
     }
 
     /// Someone coming in is heard over the rest (0.13.23): longer, louder, and up to a high C;

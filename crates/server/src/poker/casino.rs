@@ -105,11 +105,11 @@ impl Poker {
     }
 
     pub(crate) fn big_wins(hub: &Hub) -> Vec<BigWin> {
-        hub.db.get_meta(WINS).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+        hub.db.meta_json(WINS).unwrap_or_default()
     }
 
     fn meta_json<T: serde::de::DeserializeOwned + Default>(hub: &Hub, key: &str) -> T {
-        hub.db.get_meta(key).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+        hub.db.meta_json(key).unwrap_or_default()
     }
 
     fn set_meta_json<T: serde::Serialize>(hub: &Hub, key: &str, v: &T) {
@@ -191,7 +191,7 @@ impl Poker {
     }
 
     fn at_risk(hub: &Hub) -> BTreeMap<String, u64> {
-        hub.db.get_meta(AT_RISK).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+        hub.db.meta_json(AT_RISK).unwrap_or_default()
     }
 
     /// Writes down what someone has riding in the casino (a blackjack hand, the craps table).
@@ -266,7 +266,7 @@ impl Poker {
     }
 
     fn dragon_pools(hub: &Hub) -> dragon::Pools {
-        hub.db.get_meta(DRAGON_POOLS).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_else(dragon::seed_pools)
+        hub.db.meta_json(DRAGON_POOLS).unwrap_or_else(dragon::seed_pools)
     }
 
     /// A spin of Ember Dragon: from the dragon's growth at its bet (as the app was last told),
@@ -509,7 +509,7 @@ impl Poker {
         let key = o.stats_key();
         // Embers on the Bonfire, and its cut of the bet.
         Self::bonfire_add(hub, st, uid, wagered, &mut SysRandom);
-        let win = BigWin { name: Self::name_of(hub, uid), game: o.game(), wagered, paid, what: o.headline(), at_ms: wall(), key: key.clone(), cheer: 0 };
+        let win = BigWin { name: Self::name_of(hub, uid), game: o.game(), wagered, paid, what: o.headline(), at_ms: wall(), key: key.clone(), cheer: 0, extra: Default::default() };
         Self::count_round(hub, st, uid, &key, &win, wall());
         if jackpot || (paid >= 1_000 && paid >= wagered.saturating_mul(20)) || paid.saturating_sub(wagered) >= 100_000 {
             let mut wins = Self::big_wins(hub);

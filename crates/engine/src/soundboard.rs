@@ -57,7 +57,8 @@ impl SoundRef {
     }
 }
 
-/// One of the sounds every app has (drawn by tools/make-sounds.py: no recordings).
+/// One of the sounds every app has: the soundboard's own (redrawn in 0.13.2, made in Pyr) and
+/// the ringtones (0.13.2), as 0.13.28 has them, file for file.
 pub struct Builtin {
     pub id: &'static str,
     pub name: &'static str,
@@ -94,12 +95,30 @@ pub const BUILTINS: &[Builtin] = &[
     builtin!("ta-da", "Ta-da", "🎉"),
 ];
 
+/// Ringtones every app has (0.13.2, made in Pyr), for calls to ring with (Settings →
+/// Notifications → Ringtone, or someone's own). A call ringing with one is saved as 0.13.28
+/// saves it: a sound with no server and its id (`ring-kalimba`).
+pub const RINGS: &[Builtin] = &[
+    builtin!("ring-sunrise", "Sunrise", "🌅"),
+    builtin!("ring-kalimba", "Kalimba", "🎶"),
+    builtin!("ring-music-box", "Music box", "🎁"),
+    builtin!("ring-island", "Island", "🏝"),
+    builtin!("ring-arcade", "Arcade", "👾"),
+    builtin!("ring-night-drive", "Night drive", "🌆"),
+    builtin!("ring-lofi", "Lo-fi", "🎧"),
+    builtin!("ring-lounge", "Lounge", "🍸"),
+    builtin!("ring-old-phone", "Old phone", "☎"),
+    builtin!("ring-daydream", "Daydream", "☁"),
+];
+
+/// A soundboard sound every app has.
 pub fn builtin(id: &str) -> Option<&'static Builtin> {
     BUILTINS.iter().find(|b| b.id == id)
 }
 
+/// The file of a sound every app has: the soundboard's or a ringtone.
 pub fn builtin_file(id: &str) -> Option<&'static [u8]> {
-    builtin(id).map(|b| b.file)
+    builtin(id).or_else(|| RINGS.iter().find(|b| b.id == id)).map(|b| b.file)
 }
 
 // ------------------------------------------------------------------ files

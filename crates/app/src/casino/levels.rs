@@ -89,7 +89,7 @@ pub fn crest_badge(p: &egui::Painter, ctx: &egui::Context, me: &RecordView, c: P
     let b = c + vec2(0.0, radius * 0.86);
     let br = (radius * 0.3).max(9.0);
     p.circle_filled(b, br, Color32::from_rgb(0x14, 0x10, 0x0e));
-    p.circle_stroke(b, br, Stroke::new(1.5, Color32::from_rgb(0xe8, 0xd8, 0xc0)));
+    p.circle_stroke(b, br, Stroke::new(1.5f32, Color32::from_rgb(0xe8, 0xd8, 0xc0)));
     p.text(b, Align2::CENTER_CENTER, me.level.to_string(), theme::bold_font(br * 1.15), Color32::WHITE);
 }
 
@@ -126,7 +126,7 @@ impl PyrApp {
             let c = Rect::from_min_size(pos2(r.left() + 3.0 * (cw + gap), r.top()), vec2(cw, r.height()));
             p.rect_filled(c, theme::r(10), Color32::from_rgba_unmultiplied(0x30, 0x1a, 0x12, 225));
             let tc = tier_color(me.tier as usize);
-            p.rect_stroke(c, theme::r(10), Stroke::new(1.5, tc.gamma_multiply(0.85)), StrokeKind::Inside);
+            p.rect_stroke(c, theme::r(10), Stroke::new(1.5f32, tc.gamma_multiply(0.85)), StrokeKind::Inside);
             let x = c.left() + 14.0;
             p.text(pos2(x, c.top() + 14.0), Align2::LEFT_CENTER, format!("EMBER BACK · {} AT {}", percent(me.ember_bp), levels::TIERS[(me.tier as usize).min(9)].0.to_uppercase()), theme::bold_font(10.0), tc);
             p.text(pos2(x, c.top() + 40.0), Align2::LEFT_CENTER, format!("{} chips", chips_text(me.ember_back)), theme::bold_font(20.0), Color32::WHITE);
@@ -162,7 +162,7 @@ impl PyrApp {
             let (r, _) = ui.allocate_exact_size(vec2(w, 168.0), Sense::hover());
             let p = ui.painter().clone();
             crate::casino::vgrad_round(&p, r, 16.0, Color32::from_rgb(0x34, 0x1a, 0x18), Color32::from_rgb(0x1c, 0x10, 0x10));
-            p.rect_stroke(r, theme::r(16), Stroke::new(1.5, ORANGE.gamma_multiply(0.7)), StrokeKind::Inside);
+            p.rect_stroke(r, theme::r(16), Stroke::new(1.5f32, ORANGE.gamma_multiply(0.7)), StrokeKind::Inside);
             crest_badge(&p, &ctx, me, pos2(r.left() + 110.0, r.center().y), 62.0);
             let x = r.left() + 210.0;
             p.text(pos2(x, r.top() + 30.0), Align2::LEFT_CENTER, "PYR VIP CLUB", theme::bold_font(12.0), ORANGE);
@@ -185,7 +185,7 @@ impl PyrApp {
             // The weekly VIP bonus.
             let wb = Rect::from_min_size(pos2(r.right() - 250.0, r.top() + 39.0), vec2(226.0, 90.0));
             p.rect_filled(wb, theme::r(10), Color32::from_rgb(0x1a, 0x10, 0x0e));
-            p.rect_stroke(wb, theme::r(10), Stroke::new(1.0, Color32::from_rgb(0x6a, 0x4a, 0x38)), StrokeKind::Inside);
+            p.rect_stroke(wb, theme::r(10), Stroke::new(1.0f32, Color32::from_rgb(0x6a, 0x4a, 0x38)), StrokeKind::Inside);
             p.text(pos2(wb.left() + 14.0, wb.top() + 16.0), Align2::LEFT_CENTER, "WEEKLY VIP BONUS", theme::bold_font(10.0), ORANGE);
             p.text(pos2(wb.left() + 14.0, wb.top() + 42.0), Align2::LEFT_CENTER, format!("{} chips", chips_text(me.weekly_ready)), theme::bold_font(20.0), Color32::WHITE);
             let under = if t == 0 { "from Ember tier up".to_string() } else { format!("this week's so far: {}", chips_text(me.weekly_building)) };
@@ -255,7 +255,7 @@ impl PyrApp {
         // A ring goes out from it as it lands.
         let ring_t = (t / 0.9).min(1.0);
         if ring_t < 1.0 {
-            p.circle_stroke(c, 60.0 + ring_t * 260.0, Stroke::new(2.0, col.gamma_multiply((1.0 - ring_t) * 0.8 * fade)));
+            p.circle_stroke(c, 60.0 + ring_t * 260.0, Stroke::new(2.0f32, col.gamma_multiply((1.0 - ring_t) * 0.8 * fade)));
         }
         // The crest pops in (over-shooting a little).
         let k = (t / 0.45).min(1.0);
@@ -312,11 +312,11 @@ fn mission_card(p: &egui::Painter, c: Rect, i: usize, m: Option<&MissionView>) {
     if done {
         // Done: the card in its color, edged in it, the bar full.
         p.rect_filled(c, theme::r(10), col.gamma_multiply(0.22));
-        p.rect_stroke(c, theme::r(10), Stroke::new(1.5, col.gamma_multiply(0.9)), StrokeKind::Inside);
+        p.rect_stroke(c, theme::r(10), Stroke::new(1.5f32, col.gamma_multiply(0.9)), StrokeKind::Inside);
     } else {
         // To do: dark, with its color down the left edge.
         p.rect_filled(c, theme::r(10), Color32::from_rgba_unmultiplied(0x2c, 0x26, 0x22, 230));
-        p.rect_stroke(c, theme::r(10), Stroke::new(1.0, Color32::from_rgb(0x3a, 0x32, 0x2c)), StrokeKind::Inside);
+        p.rect_stroke(c, theme::r(10), Stroke::new(1.0f32, Color32::from_rgb(0x3a, 0x32, 0x2c)), StrokeKind::Inside);
         let edge = Rect::from_min_max(pos2(c.left() + 1.0, c.top() + 8.0), pos2(c.left() + 4.0, c.bottom() - 8.0));
         p.rect_filled(edge, theme::r(2), col);
     }
@@ -345,11 +345,11 @@ fn tier_card(p: &egui::Painter, ctx: &egui::Context, r: Rect, i: usize, mine: us
     let open = reached || next;
     p.rect_filled(r, theme::r(12), if here { Color32::from_rgb(0x3a, 0x26, 0x1c) } else { Color32::from_rgb(0x2a, 0x22, 0x1e) });
     let stroke = if here {
-        Stroke::new(2.0, ORANGE)
+        Stroke::new(2.0f32, ORANGE)
     } else if next {
-        Stroke::new(1.5, Color32::from_rgb(0xe8, 0xe0, 0xd8))
+        Stroke::new(1.5f32, Color32::from_rgb(0xe8, 0xe0, 0xd8))
     } else {
-        Stroke::new(1.0, Color32::from_rgb(0x3a, 0x30, 0x2a))
+        Stroke::new(1.0f32, Color32::from_rgb(0x3a, 0x30, 0x2a))
     };
     p.rect_stroke(r, theme::r(12), stroke, StrokeKind::Inside);
     let tint = if open { Color32::WHITE } else { Color32::from_white_alpha(150) };

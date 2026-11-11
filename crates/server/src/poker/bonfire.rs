@@ -36,6 +36,10 @@ pub struct Fire {
     /// The pool's cut not yet a whole chip (in ten-thousandths): small bets add up too.
     #[serde(default)]
     pub frac: u64,
+    /// What this Pyr doesn't know (a newer one's, or 0.13.28's not rebuilt yet): kept and
+    /// written back as it was.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Default)]
@@ -53,7 +57,7 @@ impl Poker {
     /// The fire burning now: as saved, or a new one (the first, or after the last was lit).
     fn bonfire_fire<'a>(hub: &Hub, st: &'a mut State, rng: &mut dyn Random) -> &'a mut Fire {
         if st.bonfire.fire.is_none() {
-            let saved: Option<Fire> = hub.db.get_meta(FIRE).and_then(|v| serde_json::from_str(&v).ok());
+            let saved: Option<Fire> = hub.db.meta_json(FIRE);
             st.bonfire.fire = Some(match saved {
                 Some(f) => f,
                 None => {
@@ -82,7 +86,7 @@ impl Poker {
     }
 
     fn bonfire_draws(hub: &Hub) -> Vec<BonfireDraw> {
-        hub.db.get_meta(DRAWS).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+        hub.db.meta_json(DRAWS).unwrap_or_default()
     }
 
     /// The Bonfire as someone sees it.

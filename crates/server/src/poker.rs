@@ -253,7 +253,7 @@ impl Poker {
 
     /// Everyone with a role.
     fn roles(hub: &Hub) -> BTreeMap<String, Role> {
-        hub.db.get_meta(ROLES).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+        hub.db.meta_json(ROLES).unwrap_or_default()
     }
 
     /// Someone's role here. Game Masters are the home server's (see `gm`): named there, and
@@ -331,9 +331,9 @@ impl Poker {
     }
 
     fn log_staff(&self, hub: &Hub, by: &str, what: String) {
-        let mut log: Vec<StaffLog> = hub.db.get_meta(STAFF_LOG).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+        let mut log: Vec<StaffLog> = hub.db.meta_json(STAFF_LOG).unwrap_or_default();
         info!("poker staff: {by}: {what}");
-        log.insert(0, StaffLog { at_ms: self.wall(), by: Self::name_of(hub, by), what });
+        log.insert(0, StaffLog { at_ms: self.wall(), by: Self::name_of(hub, by), what, extra: Default::default() });
         log.truncate(STAFF_LOG_KEEP);
         if let Ok(j) = serde_json::to_string(&log) {
             let _ = hub.db.set_meta(STAFF_LOG, &j);
@@ -355,7 +355,7 @@ impl Poker {
             rake_week: Self::rake_week(hub),
             staff: if Self::is_home(hub) { Self::roles(hub).into_iter().map(|(u, role)| StaffMember { name: Self::name_of(hub, &u), uid: u, role }).collect() } else { Vec::new() },
             // (The newest few hundred: all of it's kept, and in the server's own log.)
-            log: if owner || cms { hub.db.get_meta(STAFF_LOG).and_then(|v| serde_json::from_str::<Vec<StaffLog>>(&v).ok()).unwrap_or_default().into_iter().take(STAFF_LOG_SHOWN).collect() } else { vec![] },
+            log: if owner || cms { hub.db.meta_json::<Vec<StaffLog>>(STAFF_LOG).unwrap_or_default().into_iter().take(STAFF_LOG_SHOWN).collect() } else { vec![] },
         }
     }
 
@@ -800,7 +800,7 @@ impl Poker {
                     return Err("the casino's chat needs a newer Pyr".into());
                 }
                 if !st.chat.loaded() {
-                    st.chat.load(hub.db.get_meta(chat::META_KEY));
+                    st.chat.load(hub.db.meta_json(chat::META_KEY));
                 }
                 match msg {
                     ToServer::CasinoChatLog => Ok(Some(ToApp::CasinoChat { lines: st.chat.recent(), all: true })),

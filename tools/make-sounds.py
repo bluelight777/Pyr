@@ -5,6 +5,10 @@ worry about): 48 kHz stereo WAV files, one per sound, written to the folder give
     python3 tools/make-sounds.py out/
 
 Everything is seeded, so the same script gives the same files. Needs numpy and scipy.
+
+These are 0.13.0's sounds. 0.13.2 redrew the soundboard (and added ten ringtones) with tools
+lost with the 0.13.1 to 0.13.28 source; the files in crates/engine/assets/sounds are 0.13.28's
+own, carved out of its program (REBUILD.md).
 """
 
 import os

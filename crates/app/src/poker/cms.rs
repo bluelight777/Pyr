@@ -611,8 +611,8 @@ mod tests {
     #[test]
     fn the_log_saves_as_0_13_28s() {
         let log = vec![
-            StaffLog { at_ms: 1_794_379_045_000, by: "Olive".into(), what: "took 1,000 chips from Sweep (control room) (\u{201c}test take\u{201d}) · 247,153 → 246,153".into() },
-            StaffLog { at_ms: 1_794_379_018_000, by: "Ol\"ive".into(), what: "gave 5,000 chips".into() },
+            StaffLog { at_ms: 1_794_379_045_000, by: "Olive".into(), what: "took 1,000 chips from Sweep (control room) (\u{201c}test take\u{201d}) · 247,153 → 246,153".into(), extra: Default::default() },
+            StaffLog { at_ms: 1_794_379_018_000, by: "Ol\"ive".into(), what: "gave 5,000 chips".into(), extra: Default::default() },
         ];
         let csv = log_csv(&log);
         assert_eq!(

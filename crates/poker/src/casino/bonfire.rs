@@ -134,7 +134,7 @@ pub fn lit(round: u64, at_ms: u64, seed: [u8; 32], pool: u64, entries: Vec<crate
         .iter()
         .map(|p| crate::net::BonfireWinner { tier: p.tier, uid: entries[p.entry].uid.clone(), name: entries[p.entry].name.clone(), chips: p.chips, embers: entries[p.entry].embers })
         .collect();
-    crate::net::BonfireDraw { round, at_ms, pool, commit: fair::commit(&seed), seed, rollover: rollover(pool, &picks), entries, winners }
+    crate::net::BonfireDraw { extra: Default::default(), round, at_ms, pool, commit: fair::commit(&seed), seed, rollover: rollover(pool, &picks), entries, winners }
 }
 
 /// Checks a fire that was lit: its seed is the one fingerprinted all along, and drawn again from

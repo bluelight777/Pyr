@@ -48,22 +48,40 @@ that the rebuild doesn't know yet must come through untouched:
 - [x] A casino record: all 34 of 0.13.28's fields known now (and anything else kept in `extra`); one
       this Pyr can't read is never written over (it plays with a new one meanwhile, said in the
       log); one from before levels keeps its level on the new curve.
-- [ ] Every other JSON the server keeps (the casino's pools and state, tournaments,
-      bonfire draws, staff log...) carries what it doesn't know along (`#[serde(flatten)]
-      extra`), so writing it back loses nothing. 0.13.28's casino record has 34 fields (the
-      rebuild's 21): hide_title, curve, xp_tenths, xp_day, ember_x100, ember_claimed,
-      stars_paid, ember_week_x100, ember_week, weekly_ready, weekly_claimed, missions...
-- [ ] Tables 0.13.28 added are left as they are (and used once the rebuild has them).
-- [ ] Try it: a copy of a 0.13.28 server's database (made by running 0.13.28 here, playing,
-      leveling, claiming), opened by the rebuilt server, played, and opened by 0.13.28 again.
-- [ ] Short links keep working through the swap: Brethren of Blood's own code
+- [x] Every other JSON the server keeps carries what it doesn't know along (`#[serde(flatten)]
+      extra`), so writing it back loses nothing: the casino chat's lines, each game's numbers by
+      the hour, day and all time, the big wins, the staff log, the Bonfire (the fire burning
+      and its draws), the bots' ratings (a bot rated again keeps what was kept with it). Stored
+      JSON this Pyr can't read at all is never written over: it's kept as it was under
+      `unread:<key>` in the meta table (said in the log, once), and that one starts afresh.
+- [ ] Before the swap, every name 0.13.28 stores is one the rebuild knows (from its server's
+      serde lists, `rebuild/tools/fields.py`): bot levels `rookie regular hard shark genius`
+      (`hard` comes with the bots' levels), games `slots blackjack roulette baccarat craps dice
+      keno reels dragon plinko domino` (`domino` comes with Dominó Cubano), Bonfire prizes
+      `grand blaze spark`, staff `game_master ambassador`. Until then a list holding one of
+      them (the bots' ratings, a big wins list) is kept whole under `unread:` and not shown.
+- [x] Tables 0.13.28 added: none. Its schema is 0.13.0's, every table and index (compared in
+      the test copy); the rebuild adds its props tables, which 0.13.28 leaves alone.
+- [x] Tried: a copy of the 0.13.28 test server's database (seven casino records with 0.13.28's
+      34 fields, 27 meta keys: the Bonfire, the staff log, who's let in the control room, the
+      Friday pool, Plinko's numbers...) run by the rebuilt server, 0.13.28's app on it: the card,
+      missions, Ember Back, Bonfire and jackpot as they were; daily chips claimed, dice and Plinko
+      played (every round checked by 0.13.28's app). Then 0.13.28's server on what the rebuilt
+      one wrote, 0.13.28's app on it: everything as left (103,676 chips, 2 XP to level 2, the
+      dice mission at 6 of 40, the Bonfire at 1,000,930 with Carol's 42 embers), and played
+      again. No meta key, record, field, table or index lost either way (`work/ui/swap.sh`,
+      `dbdump.py`, `dbdiff.py`).
+- [x] Short links keep working through the swap: Brethren of Blood's own code
       (`https://pyr.gg/brethren`, open on November 11, 2026) and its listed invites stay at
       pyr.gg. The rebuilt server announces with the same protocol as 0.13.28's (`pyr directory
       announce v1`, `api/v1/announce`, signed with the server's own TLS key, which the swap
       keeps; the release key plays no part) and keeps the community's code from 0.13.28's
-      database. Try it with a local directory and a copy of a 0.13.28 server listed there:
-      swap the server, and the code still opens it. pyr.gg itself (0.13.28's directory and
-      site) stays as it is.
+      database. pyr.gg itself (0.13.28's directory and site) stays as it is. Tried with a
+      local directory (`pyr-directory`) and a copy of the 0.13.28 test server listed there:
+      its owner gave it its own code (`campfire`) and Carol made an invite, both listed by
+      0.13.28's server; the rebuilt server swapped in on the same data announced the same
+      two codes (same certificate, host and port), and someone new joined it with
+      `campfire`.
 
 ## Checklist
 
@@ -77,8 +95,10 @@ Version in brackets: where 0.13.x first had it.
 - [x] Invite someone to your voice channel (card with Join) (0.13.6)
 - [x] Taskbar badge with mentions and DMs, 9+ (0.13.7)
 - [x] Files in DMs and groups: up to 2 GB, E2EE, resumable, kept 7 days, 4 GB a week (0.13.13)
-- [ ] New DM said "isn't end-to-end encrypted yet" (0.13.13): 0.13.0 already checks the
-      server's sealed feature; check a new DM's intro on screen
+- [x] New DM said "isn't end-to-end encrypted yet" (0.13.13): a bug of 0.13.1 to 0.13.12 the
+      rebuild never had (0.13.0 checks the server's sealed feature; its words are 0.13.28's, both
+      of them, and no "yet" anywhere). 0.13.28's intro on screen, for the record:
+      `rebuild/ref28/dm-call-intro-0.13.28.png`.
 - [x] Plugins sent in with big files: parts (0.13.14)
 - [x] Game invites to friends from programs (0.13.15/16), as links pyr.gg/<game>/<code> (0.13.18)
 
@@ -86,9 +106,32 @@ Version in brackets: where 0.13.x first had it.
 - [ ] Voice isolation takes the PC's own sound out of the microphone (0.13.2); headphones dips
       (0.13.11), its echo (0.13.12); double-talk on speakers (0.13.19); 0.13.24's try taken out
       (0.13.25)
-- [ ] Headset that drops out and comes back isn't an error (0.13.2)
-- [ ] Streamer mode only when turned on (0.13.2)
-- [ ] Sound profiles Classic / Ember; ten new ringtones; soundboard redrawn (0.13.2/3)
+- [x] Headset that drops out and comes back isn't an error (0.13.2): the call screen says what's
+      going on at once (as before), but "Sound problem in the call: …" (an error, so reported
+      by itself) only comes if the same trouble lasts 15 s; a device back before then says
+      nothing. (0.13.28's words for it are the same; how long it waits couldn't be read out of
+      its program: 15 s is the rebuild's.) 0.13.28's call bar has no "Audio problem:" line:
+      see what it shows with the call bar (screen share items).
+- [x] Streamer mode only when turned on (0.13.2): sharing the screen no longer turns it on by
+      itself; 0.13.28's words in Settings, the casino's Streaming menu and its button ("It's on
+      only when you turn it on.", no "(hold Space)" there). The poker table's peek line is
+      "Streamer mode · hold Space to peek" (0.13.28: "hold {key}", with the keys for every game).
+- [x] Sound profiles Classic / Ember; ten new ringtones; soundboard redrawn (0.13.2/3). Settings →
+      Notifications → Sound profile (Classic first, everyone starts with it; saved as 0.13.28
+      saves it: `sound_profile` "" or "ember"), its words and place on the page pixel for pixel.
+      Ember's fifteen sounds are what 0.13.28 played, recorded off it sample for sample
+      (`work/ui/alsashim.c`: a stand-in sound card that keeps time and writes down what's
+      played; each set off on 0.13.28 with a second Pyr: a message, joining and leaving, someone
+      joining and leaving, sharing, watching, someone watching mine, being called and calling,
+      the mute shortcut), kept as 24-bit FLAC (`crates/engine/assets/ember`, 1.5 MB). Recorded
+      the same way, 0.13.28's Classic message is the rebuild's chime to the sample, and the
+      rebuilt Pyr's Test plays Ember's and Classic's messages as 0.13.28 does (within 2^-23).
+      The ten ringtones (Sunrise, Kalimba, Music box, Island, Arcade, Night drive, Lo-fi,
+      Lounge, Old phone, Daydream) and the redrawn soundboard are 0.13.28's own files (carved
+      out of it, every frame checked); a ringtone is saved as 0.13.28 saves it (`ring-kalimba`,
+      its name and emoji), the menu is 0.13.28's (RINGTONES between Pyr ring and SOUNDS), and
+      Kalimba plays as 0.13.28 plays it, to the sample. A skin's own sounds play in place of
+      either profile's.
 - [x] Join chime in Classic climbs and rings (0.13.23): someone else joining my channel; me
       joining keeps the old chime. Its notes, read out of 0.13.28's program (the table just
       before Join's; Hz, start ms, length ms, loudness): (523.3, 0, 120, 0.60), (659.3, 70, 120,

@@ -635,7 +635,7 @@ impl PyrApp {
             self.poker.casino.fullscreen = !fs;
         }
         let streamer = self.streamer_mode();
-        let (resp, r) = button(ui, 38.0, streamer, if streamer { "Streamer mode is on: your cards at poker stay face down until you peek (hold Space), invite links are hidden, and the game is laid out for a stream. Click for its layout." } else { "Streamer mode, for when you're live: click to set it up" });
+        let (resp, r) = button(ui, 38.0, streamer, if streamer { "Streamer mode is on: your cards at poker stay face down until you peek, invite links are hidden, and the game is laid out for a stream. Click for its layout." } else { "Streamer mode, for when you're live: click to set it up" });
         crate::icons::eye(&p, r.shrink(10.0), if streamer { col::NIGHT } else { col::TEXT });
         if resp.clicked() {
             self.poker.casino.stream_menu = if self.poker.casino.stream_menu.is_some() { None } else { Some(r) };
@@ -963,25 +963,14 @@ impl PyrApp {
         }
     }
 
-    /// Streamer mode: on by choice, or by itself while I'm sharing my screen.
+    /// Streamer mode: on only when I turn it on.
     pub fn streamer_mode(&self) -> bool {
-        self.ui.streamer_mode || self.ui.streamer_auto_live
-    }
-
-    /// Streamer mode is on only by itself, because I'm sharing my screen in a call (not by my
-    /// choice): every switch for it says so, or it looks off while my cards stay hidden.
-    pub fn streamer_auto(&self) -> bool {
-        self.ui.streamer_auto_live && !self.ui.streamer_mode
+        self.ui.streamer_mode
     }
 
     pub fn set_streamer_mode(&mut self, on: bool) {
         self.ui.streamer_set = Some(on);
         self.ui.streamer_mode = on;
-        if !on && self.ui.streamer_auto_live {
-            // (Turned off while sharing: it stays off until the next share.)
-            self.ui.streamer_auto_live = false;
-            self.ui.streamer_auto_off = true;
-        }
     }
 
     /// Pyr Casino fullscreen: only the casino, on the whole screen (Esc or the button leaves).
@@ -1069,14 +1058,10 @@ impl PyrApp {
                     ui.label(RichText::new("Streaming").font(theme::bold_font(16.0)).color(col::GOLD2));
                     ui.add_space(6.0);
                     let mut on = streamer;
-                    let auto = self.streamer_auto();
                     if ui.checkbox(&mut on, RichText::new("Streamer mode").strong()).changed() {
                         self.set_streamer_mode(on);
                     }
-                    if auto {
-                        ui.label(RichText::new("On by itself: you're sharing your screen in a call. Turn it off here and it stays off until your next share.").size(12.0).color(col::GOLD2));
-                    }
-                    ui.label(RichText::new("Your cards at poker stay face down until you peek (hold Space), invite links are hidden, and games are laid out for a stream. It turns on by itself while you share your screen.").size(12.0).color(col::MUTED));
+                    ui.label(RichText::new("Your cards at poker stay face down until you peek, invite links are hidden, and games are laid out for a stream. It's on only when you turn it on.").size(12.0).color(col::MUTED));
                     ui.add_space(8.0);
                     ui.add_enabled_ui(on, |ui| {
                         let mut st = stage;

@@ -519,6 +519,24 @@ impl Db {
             .unwrap_or_default()
     }
 
+    /// A JSON value kept in `meta`, read as `T`. One this server can't read (written by a newer
+    /// Pyr, or by 0.13.28 with what this one doesn't know yet) is kept as it was under
+    /// `unread:<key>` the first time, so writing the key again loses nothing; the log says so.
+    pub fn meta_json<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
+        let v = self.get_meta(key)?;
+        match serde_json::from_str(&v) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                let keep = format!("unread:{key}");
+                if self.get_meta(&keep).is_none() {
+                    tracing::warn!("{key}: couldn't read what's kept there ({e}); kept as it was under {keep}");
+                    let _ = self.set_meta(&keep, &v);
+                }
+                None
+            }
+        }
+    }
+
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         self.conn.lock().execute(
             "INSERT INTO meta(key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -2428,6 +2446,31 @@ pub fn user_is_member(db: &Db, id: &UserId) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a server can't read in `meta` (a newer Pyr's, or 0.13.28's with what this one
+    /// doesn't know yet) is kept as it was, never lost to the next write.
+    #[test]
+    fn stored_json_it_cant_read_is_kept() {
+        let db = Db::open_in_memory().unwrap();
+        db.set_meta("poker_roles", r#"{"a":"game_master"}"#).unwrap();
+        let roles: Option<HashMap<String, String>> = db.meta_json("poker_roles");
+        assert_eq!(roles.unwrap()["a"], "game_master");
+        assert_eq!(db.get_meta("unread:poker_roles"), None);
+        // (A level this Pyr hasn't heard of: the whole map can't be read.)
+        let odd = r#"{"b1":{"name":"Ace","level":"from_the_future"}}"#;
+        db.set_meta("poker_bot_ratings", odd).unwrap();
+        let bots: Option<HashMap<String, pyr_poker::net::StaffLog>> = db.meta_json("poker_bot_ratings");
+        assert!(bots.is_none());
+        assert_eq!(db.get_meta("unread:poker_bot_ratings").as_deref(), Some(odd));
+        // Written over now: what it couldn't read is still there.
+        db.set_meta("poker_bot_ratings", "{}").unwrap();
+        let _: Option<HashMap<String, pyr_poker::net::StaffLog>> = db.meta_json("poker_bot_ratings");
+        assert_eq!(db.get_meta("unread:poker_bot_ratings").as_deref(), Some(odd));
+        // And a field it doesn't know, in what it can read, is written back.
+        let line = r#"{"at_ms":1,"by":"Olive","what":"gave","seen_by":["x"]}"#;
+        let l: pyr_poker::net::StaffLog = serde_json::from_str(line).unwrap();
+        assert_eq!(serde_json::to_value(&l).unwrap(), serde_json::from_str::<serde_json::Value>(line).unwrap());
+    }
 
     #[test]
     fn channels_are_dragged_into_any_order() {

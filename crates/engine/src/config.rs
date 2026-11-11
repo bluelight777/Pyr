@@ -142,6 +142,10 @@ pub struct Settings {
     /// Notification sounds (messages, people joining voice, streams).
     pub sounds: bool,
     pub sound_volume: f32,
+    /// Which sounds play for messages, voice, streams and ringing (0.13.2): "" for Classic, the
+    /// chimes Pyr started with (everyone starts with them, 0.13.3), or "ember", Pyr's own. As
+    /// 0.13.28 saves it.
+    pub sound_profile: String,
     /// Ring when someone calls you in a direct message (and the ringback when you call),
     /// even with the other sounds off.
     pub ring: bool,
@@ -241,6 +245,11 @@ pub struct Ringtone {
 }
 
 impl Settings {
+    /// The Ember sounds (`sound_profile`), not Classic.
+    pub fn ember_sounds(&self) -> bool {
+        self.sound_profile == "ember"
+    }
+
     /// Whether voice meters show (`voice_meter` is "off", or "off:" and the look they had).
     pub fn voice_meters_on(&self) -> bool {
         !(self.voice_meter == "off" || self.voice_meter.starts_with("off:"))
@@ -308,6 +317,7 @@ impl Default for Settings {
             tray_note_seen: false,
             sounds: true,
             sound_volume: 0.7,
+            sound_profile: String::new(),
             ring: true,
             recent_emoji: Vec::new(),
             emoji_tone: 0,
@@ -684,9 +694,9 @@ mod from_0_13_28 {
     use super::*;
 
     /// A 0.13.28 config.json (every key it writes, from a test profile of it): read whole, the
-    /// mute shortcut understood, and nothing lost when it's written back, settings this Pyr
-    /// doesn't have yet included (the casino's keys, the games' volume, the sound profile,
-    /// auto top-up).
+    /// mute shortcut and the sound profile understood, and nothing lost when it's written back,
+    /// settings this Pyr doesn't have yet included (the casino's keys, the games' volume, auto
+    /// top-up).
     #[test]
     fn a_0_13_28_config_loses_nothing() {
         let old = r#"{"backup_dir": null, "blocked": [], "casino_seeds": {}, "display_name": "Mia", "gm_cert": null, "last_read": {}, "muted_channels": {}, "muted_servers": [], "poker_auto_muck": false, "poker_auto_top_up": true, "self_voice": {"deafened": false, "muted": false}, "servers": [{"host": "127.0.0.1", "invite": "abc", "key": "k", "name": "Test Camp", "port": 17778}], "settings": {"auto_gain": true, "auto_report_told": false, "auto_reports": false, "camera_device": null, "camera_quality": "Standard", "casino_keys": {"blackjack": "LControl+B"}, "close_to_tray": true, "confirm_delete": true, "dnd": false, "echo_cancellation": true, "emoji_tone": 0, "games_volume": 0.6, "gif_favorites": [], "giphy_key": "", "idle_by_hand": false, "input_device": null, "input_gain": 1.0, "input_mode": "VoiceActivity", "join_sound": null, "library_favorites": [], "library_sort": "", "mute_key": "Q", "noise_suppression": "Strong", "output_device": null, "output_volume": 1.0, "play_gifs": "", "poker_installed": true, "ptt_key": "Grave", "ptt_release_ms": 200, "recent_emoji": [], "ring": true, "ringtone": null, "ringtones": {}, "screen_preset": "Smooth", "share_audio": true, "skin": "", "sound_favorites": [], "sound_keys": [], "sound_profile": "ember", "sound_recent": [], "sound_volume": 0.7, "soundboard_muted": [], "soundboard_volume": 0.7, "sounds": true, "spell_language": "en-US", "spell_words": [], "spellcheck": true, "start_hidden": true, "start_with_windows": true, "stream_room": "", "stream_stage": true, "streamer_mode": false, "tray_note_seen": false, "vad_auto": true, "vad_threshold_db": -50.0, "voice_bitrate_kbps": 64, "voice_meter": "", "voice_priority": true, "vouch": true}, "stream_volumes": {}, "user_volumes": {}, "verified": {}}"#;
@@ -695,6 +705,8 @@ mod from_0_13_28 {
         assert_eq!(cfg.servers.len(), 1);
         assert_eq!(cfg.settings.mute_key, "Q");
         assert_eq!(cfg.settings.ptt_key, "Grave");
+        assert!(cfg.settings.ember_sounds());
+        assert!(!Settings::default().ember_sounds(), "everyone starts with Classic (0.13.3)");
         // (As written to the file: an f32 as it was typed, 0.7 not 0.699999988.)
         let back: serde_json::Value = serde_json::from_slice(&serde_json::to_vec(&cfg).unwrap()).unwrap();
         let old: serde_json::Value = serde_json::from_str(old).unwrap();

@@ -24,16 +24,16 @@ pub fn style(ui: &mut egui::Ui) {
     }
     w.hovered.weak_bg_fill = accent;
     w.hovered.bg_fill = accent;
-    w.hovered.fg_stroke = Stroke::new(1.5, on_accent);
+    w.hovered.fg_stroke = Stroke::new(1.5f32, on_accent);
     w.active.weak_bg_fill = theme::mix(accent, Color32::BLACK, 0.15);
     w.active.bg_fill = w.active.weak_bg_fill;
-    w.active.fg_stroke = Stroke::new(1.5, on_accent);
+    w.active.fg_stroke = Stroke::new(1.5f32, on_accent);
     // (A submenu that's open stays lit, a little less.)
     w.open.weak_bg_fill = theme::mix(accent, theme::SIDE(), 0.45);
     w.open.bg_fill = w.open.weak_bg_fill;
-    w.open.fg_stroke = Stroke::new(1.5, theme::TEXT());
+    w.open.fg_stroke = Stroke::new(1.5f32, theme::TEXT());
     s.visuals.selection.bg_fill = theme::mix(accent, theme::SIDE(), 0.55);
-    s.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, theme::LINE());
+    s.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0f32, theme::LINE());
     ui.set_min_width(210.0);
 }
 
@@ -43,12 +43,12 @@ pub fn danger(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Response {
     let text = text.into();
     ui.scope(|ui| {
         let w = &mut ui.style_mut().visuals.widgets;
-        w.inactive.fg_stroke = Stroke::new(1.5, theme::LIVE());
+        w.inactive.fg_stroke = Stroke::new(1.5f32, theme::LIVE());
         w.hovered.weak_bg_fill = theme::LIVE();
         w.hovered.bg_fill = theme::LIVE();
-        w.hovered.fg_stroke = Stroke::new(1.5, Color32::WHITE);
+        w.hovered.fg_stroke = Stroke::new(1.5f32, Color32::WHITE);
         w.active.weak_bg_fill = theme::mix(theme::LIVE(), Color32::BLACK, 0.15);
-        w.active.fg_stroke = Stroke::new(1.5, Color32::WHITE);
+        w.active.fg_stroke = Stroke::new(1.5f32, Color32::WHITE);
         ui.add(egui::Button::new(text))
     })
     .inner
@@ -83,10 +83,10 @@ pub fn check(ui: &mut egui::Ui, on: bool, text: impl Into<String>, red: bool) ->
         let tick = if hovered { if red { theme::LIVE() } else { theme::EMBER() } } else { theme::on_ember() };
         p.add(egui::Shape::line(
             vec![pos2(b.left() + 4.0, b.center().y), pos2(b.left() + 7.5, b.bottom() - 4.5), pos2(b.right() - 3.5, b.top() + 4.5)],
-            Stroke::new(2.0, tick),
+            Stroke::new(2.0f32, tick),
         ));
     } else {
-        p.rect_stroke(b, crate::theme::r(4), Stroke::new(1.5, if hovered { fg } else { theme::DIM() }), StrokeKind::Inside);
+        p.rect_stroke(b, crate::theme::r(4), Stroke::new(1.5f32, if hovered { fg } else { theme::DIM() }), StrokeKind::Inside);
     }
     resp
 }

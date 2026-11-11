@@ -416,7 +416,7 @@ impl PyrApp {
             let plate = Rect::from_center_size(at, vec2(236.0, 44.0));
             let pulse = if urgent { 0.5 + 0.5 * (t * 10.0).sin().abs() } else if hot { 0.7 + 0.3 * (t * 4.0).sin().abs() } else { 1.0 };
             p.rect_filled(plate, theme::r(22), Color32::from_black_alpha(200));
-            p.rect_stroke(plate, theme::r(22), Stroke::new(if hot { 2.0 } else { 1.0 }, if hot { Color32::from_rgb(0xff, 0x5a, 0x3a).gamma_multiply(pulse) } else { col::GOLD_DARK }), StrokeKind::Inside);
+            p.rect_stroke(plate, theme::r(22), Stroke::new(if hot { 2.0f32 } else { 1.0 }, if hot { Color32::from_rgb(0xff, 0x5a, 0x3a).gamma_multiply(pulse) } else { col::GOLD_DARK }), StrokeKind::Inside);
             bomb_icon(&p, plate.left_center() + vec2(26.0, 4.0), 15.0, t, true, frac);
             let clock = format!("{}:{:02}", secs / 60, secs % 60);
             p.text(plate.left_center() + vec2(56.0, 0.0), Align2::LEFT_CENTER, clock, theme::bold_font(22.0), if hot { Color32::from_rgb(0xff, 0x7a, 0x5a) } else { Color32::WHITE });

@@ -22,6 +22,10 @@ struct BotRating {
     name: String,
     level: Level,
     rating: Rating,
+    /// What this Pyr doesn't know (a newer one's, or 0.13.28's not rebuilt yet): kept and
+    /// written back as it was.
+    #[serde(flatten)]
+    extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Who's being rated: their rating id, name, and a bot's level.
@@ -29,7 +33,7 @@ pub(super) type Rated = (String, String, Option<Level>);
 
 impl Poker {
     fn bot_ratings(hub: &Hub) -> BTreeMap<String, BotRating> {
-        hub.db.get_meta(BOTS).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+        hub.db.meta_json(BOTS).unwrap_or_default()
     }
 
     fn set_bot_ratings(hub: &Hub, m: &BTreeMap<String, BotRating>) {
@@ -54,7 +58,8 @@ impl Poker {
         for ((id, name, bot), r) in players.iter().zip(ratings) {
             match bot {
                 Some(level) => {
-                    bots.insert(id.clone(), BotRating { name: name.split_whitespace().next().unwrap_or(name).to_string(), level: *level, rating: r });
+                    let extra = bots.remove(id).map(|b| b.extra).unwrap_or_default();
+                    bots.insert(id.clone(), BotRating { extra, name: name.split_whitespace().next().unwrap_or(name).to_string(), level: *level, rating: r });
                     bots_changed = true;
                 }
                 None => {

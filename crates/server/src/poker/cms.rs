@@ -29,7 +29,7 @@ pub(super) fn quoted(note: &str) -> String {
 impl Poker {
     /// Who else may open the control room.
     pub(super) fn cms_people(hub: &Hub) -> Vec<String> {
-        hub.db.get_meta(ACCESS).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+        hub.db.meta_json(ACCESS).unwrap_or_default()
     }
 
     /// Whether `uid` may open the control room: the Owner of the Game, or someone they let in.
@@ -38,7 +38,7 @@ impl Poker {
     }
 
     fn the_log(hub: &Hub) -> Vec<StaffLog> {
-        hub.db.get_meta(STAFF_LOG).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+        hub.db.meta_json(STAFF_LOG).unwrap_or_default()
     }
 
     /// The whole log, newest first: the Owner of the Game's (and the control room's).

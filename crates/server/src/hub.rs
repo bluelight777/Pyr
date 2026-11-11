@@ -1778,7 +1778,7 @@ impl Hub {
     /// Who's server muted, or server deafened (`ModeratedVoice`): kept with the server's
     /// settings, so it lasts.
     pub fn moderated(&self, what: ModeratedVoice) -> HashSet<UserId> {
-        self.db.get_meta(what.key()).and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default()
+        self.db.meta_json(what.key()).unwrap_or_default()
     }
 
     /// Server mute or deafen someone, or take it off (who may is checked by the caller): it's

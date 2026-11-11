@@ -100,7 +100,7 @@ pub(crate) fn sheet_size(window: egui::Vec2) -> egui::Vec2 {
 
 /// Settings' sheet: no margin of its own (its list of pages and the page fill it).
 pub(crate) fn sheet_frame() -> egui::Frame {
-    egui::Frame::new().fill(theme::MAIN()).stroke(Stroke::new(1.0, theme::LINE())).corner_radius(ROUND).shadow(egui::epaint::Shadow {
+    egui::Frame::new().fill(theme::MAIN()).stroke(Stroke::new(1.0f32, theme::LINE())).corner_radius(ROUND).shadow(egui::epaint::Shadow {
         offset: [0, 18],
         blur: 60,
         spread: 0,
@@ -118,7 +118,7 @@ fn key_cap(ui: &mut egui::Ui, label: &str) {
     let p = ui.painter();
     p.rect_filled(cap.translate(vec2(0.0, 3.0)), theme::r(6), Color32::from_rgb(0x20, 0x1b, 0x18));
     p.rect_filled(cap, theme::r(6), theme::ELEV2());
-    p.rect_stroke(cap, theme::r(6), Stroke::new(1.0, theme::LINE()), StrokeKind::Inside);
+    p.rect_stroke(cap, theme::r(6), Stroke::new(1.0f32, theme::LINE()), StrokeKind::Inside);
     p.galley(cap.center() - g.size() / 2.0, g, theme::TEXT());
 }
 
@@ -139,7 +139,7 @@ pub(crate) fn heading(ui: &mut egui::Ui, text: &str) {
 pub(crate) fn divider(ui: &mut egui::Ui) {
     ui.add_space(18.0);
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-    ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0, theme::LINE()));
+    ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0f32, theme::LINE()));
     ui.add_space(4.0);
 }
 
@@ -171,11 +171,11 @@ fn paint_switch(ui: &egui::Ui, r: Rect, on: bool, hovered: bool, id: egui::Id) {
     p.circle_filled(c, rad, Color32::WHITE);
     let k = rad * 0.5;
     if t > 0.5 {
-        p.add(egui::Shape::line(vec![c + vec2(-k, 0.0), c + vec2(-k * 0.25, k * 0.75), c + vec2(k, -k * 0.7)], Stroke::new(2.0, track)));
+        p.add(egui::Shape::line(vec![c + vec2(-k, 0.0), c + vec2(-k * 0.25, k * 0.75), c + vec2(k, -k * 0.7)], Stroke::new(2.0f32, track)));
     } else {
         let k = k * 0.8;
-        p.line_segment([c + vec2(-k, -k), c + vec2(k, k)], Stroke::new(2.0, track));
-        p.line_segment([c + vec2(-k, k), c + vec2(k, -k)], Stroke::new(2.0, track));
+        p.line_segment([c + vec2(-k, -k), c + vec2(k, k)], Stroke::new(2.0f32, track));
+        p.line_segment([c + vec2(-k, k), c + vec2(k, -k)], Stroke::new(2.0f32, track));
     }
 }
 
@@ -228,14 +228,14 @@ pub(crate) fn choice_row(ui: &mut egui::Ui, chosen: bool, title: &str, about: &s
     };
     p.rect_filled(r, crate::theme::r(8), fill);
     if chosen {
-        p.rect_stroke(r, crate::theme::r(8), Stroke::new(1.0, theme::mix(theme::EMBER(), theme::ELEV(), 0.45)), StrokeKind::Inside);
+        p.rect_stroke(r, crate::theme::r(8), Stroke::new(1.0f32, theme::mix(theme::EMBER(), theme::ELEV(), 0.45)), StrokeKind::Inside);
     }
     let ring = pos2(r.left() + 22.0, r.center().y);
     if chosen {
-        p.circle_stroke(ring, 8.0, Stroke::new(2.0, theme::EMBER()));
+        p.circle_stroke(ring, 8.0, Stroke::new(2.0f32, theme::EMBER()));
         p.circle_filled(ring, 4.5, theme::EMBER());
     } else {
-        p.circle_stroke(ring, 8.0, Stroke::new(2.0, if hovered { theme::TEXT() } else { theme::MUTED() }));
+        p.circle_stroke(ring, 8.0, Stroke::new(2.0f32, if hovered { theme::TEXT() } else { theme::MUTED() }));
     }
     let top = r.center().y - inner / 2.0;
     let th = t.size().y;
@@ -385,7 +385,7 @@ pub(crate) fn slide(
         p.rect_filled(Rect::from_min_max(track.min, pos2(x, track.bottom())), crate::theme::r(3), theme::EMBER());
         if let Some(m) = mark {
             let mx = x_of(m);
-            p.line_segment([pos2(mx, track.top() - 5.0), pos2(mx, track.bottom() + 5.0)], Stroke::new(2.0, theme::DIM()));
+            p.line_segment([pos2(mx, track.top() - 5.0), pos2(mx, track.bottom() + 5.0)], Stroke::new(2.0f32, theme::DIM()));
         }
         let hot = enabled && (resp.hovered() || held.is_some() || resp.is_pointer_button_down_on());
         let knob = pos2(x, track.center().y);
@@ -393,7 +393,7 @@ pub(crate) fn slide(
         p.circle_filled(knob + vec2(0.0, 1.0), rad, Color32::from_black_alpha(60));
         p.circle_filled(knob, rad, Color32::WHITE);
         if hot {
-            p.circle_stroke(knob, rad + 3.0, Stroke::new(2.0, theme::EMBER().gamma_multiply(0.45)));
+            p.circle_stroke(knob, rad + 3.0, Stroke::new(2.0f32, theme::EMBER().gamma_multiply(0.45)));
         }
         if held.is_some() || matches!(out, Slid::Live(_)) {
             value_tag(ui, id, knob, &text(v));
@@ -566,7 +566,7 @@ fn close_button(ui: &mut egui::Ui, c: egui::Pos2) -> bool {
     if hot {
         p.circle_filled(c, 18.0, theme::ELEV());
     }
-    p.circle_stroke(c, 17.0, Stroke::new(2.0, if hot { theme::TEXT() } else { theme::DIM() }));
+    p.circle_stroke(c, 17.0, Stroke::new(2.0f32, if hot { theme::TEXT() } else { theme::DIM() }));
     icons::close(p, Rect::from_center_size(c, vec2(22.0, 22.0)), if hot { theme::TEXT() } else { theme::MUTED() });
     p.text(c + vec2(0.0, 30.0), Align2::CENTER_CENTER, "ESC", theme::bold_font(11.0), theme::DIM());
     resp.clicked()
@@ -618,10 +618,10 @@ fn big_status(p: &egui::Painter, c: egui::Pos2, presence: Presence, bg: Color32)
         Presence::Idle => crate::app::moon(p, c, 9.5, bg),
         Presence::Dnd => {
             p.circle_filled(c, 9.5, crate::app::DND);
-            p.line_segment([c - vec2(5.0, 0.0), c + vec2(5.0, 0.0)], Stroke::new(3.4, bg));
+            p.line_segment([c - vec2(5.0, 0.0), c + vec2(5.0, 0.0)], Stroke::new(3.4f32, bg));
         }
         Presence::Offline => {
-            p.circle_stroke(c, 6.5, Stroke::new(3.0, theme::DIM()));
+            p.circle_stroke(c, 6.5, Stroke::new(3.0f32, theme::DIM()));
         }
     }
 }
@@ -710,7 +710,7 @@ impl PyrApp {
         mesh.add_triangle(0, 2, 3);
         ui.painter().add(egui::Shape::mesh(mesh));
         // The sheet's edge, crisp over the list's color.
-        ui.painter().rect_stroke(sheet, CornerRadius::same(ROUND), Stroke::new(1.0, theme::LINE()), StrokeKind::Inside);
+        ui.painter().rect_stroke(sheet, CornerRadius::same(ROUND), Stroke::new(1.0f32, theme::LINE()), StrokeKind::Inside);
 
         if draft != before {
             acts.push(Act::Settings(draft));
@@ -982,7 +982,7 @@ impl PyrApp {
             ui.horizontal(|ui| {
                 let b = egui::Button::new(RichText::new("Press the keys\u{2026}").color(theme::EMBER2()).size(13.0))
                     .fill(Color32::from_rgb(0x44, 0x30, 0x26))
-                    .stroke(Stroke::new(1.5, Color32::from_rgb(0xb1, 0x5d, 0x36)))
+                    .stroke(Stroke::new(1.5f32, Color32::from_rgb(0xb1, 0x5d, 0x36)))
                     .min_size(vec2(220.0, 32.0));
                 ui.add(b);
                 if ui.add(egui::Button::new(RichText::new("Cancel").size(14.0)).min_size(vec2(0.0, 32.0))).clicked() {
@@ -1234,6 +1234,16 @@ impl PyrApp {
             "Calls in direct messages ring (and you hear it ringing when you call), even with the other sounds off.",
         );
         ui.add_enabled_ui(draft.ring, |ui| self.ringtone_setting(ui, st, acts));
+        heading(ui, "Sound profile");
+        ui.horizontal(|ui| {
+            let ember = draft.ember_sounds();
+            for (key, name, on) in [("", "Classic", !ember), ("ember", "Ember", ember)] {
+                if ui.selectable_label(on, name).clicked() && !on {
+                    draft.sound_profile = key.to_string();
+                }
+            }
+        });
+        fine(ui, "Which sounds Pyr plays for messages, voice, streams and ringing: Classic, the simple chimes Pyr started with, or Ember, Pyr's own.");
         heading(ui, "Volume");
         ui.add_enabled_ui(draft.sounds || draft.ring, |ui| {
             ui.horizontal(|ui| {
@@ -1256,23 +1266,14 @@ impl PyrApp {
         note(ui, "Right-click a channel, a server or a direct message conversation to mute it.");
         divider(ui);
         heading(ui, "Streamer mode");
-        // What's in effect: on by choice, or by itself while I share my screen (the saved choice
-        // alone showed "off" then, with my cards still face down).
-        let auto = self.streamer_auto();
         let mut on = self.streamer_mode();
         let was = on;
         toggle_row(
             ui,
             &mut on,
             "Streamer mode",
-            if auto {
-                "On by itself: you're sharing your screen in a call. Turn it off here and it stays off until your next share. At a poker table \
-                 your cards stay face down until you peek (hold Space, or point at them); invite links and codes are hidden."
-            } else {
-                "For when you're live: at a poker table your cards stay face down until you peek (hold Space, or point at them), and so does the \
-                 hand strength meter; invite links and codes are hidden (Copy still copies them). It turns on by itself while you share your \
-                 screen."
-            },
+            "For when you're live: at a poker table your cards stay face down until you peek (hold Space, or point at them), and so does the \
+             hand strength meter; invite links and codes are hidden (Copy still copies them). It's on only when you turn it on.",
         );
         if on != was {
             self.set_streamer_mode(on);

@@ -289,6 +289,10 @@ pub struct ChatLine {
     pub name: String,
     pub text: String,
     pub at_ms: u64,
+    /// What this Pyr doesn't know (a newer one's, or 0.13.28's not rebuilt yet): kept and
+    /// written back as it was.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// The casino's tables with seats besides poker's (for what's sent to everyone at one).
@@ -796,6 +800,10 @@ pub struct PeriodStats {
     pub rounds: u64,
     pub wagered: u64,
     pub paid: u64,
+    /// What this Pyr doesn't know (a newer one's, or 0.13.28's not rebuilt yet): kept and
+    /// written back as it was.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// The casino as it is for me.
@@ -887,6 +895,10 @@ pub struct BigWin {
     /// Drinks bought for it (0.13.7's congratulations; kept as 0.13.28 writes it).
     #[serde(default)]
     pub cheer: u64,
+    /// What this Pyr doesn't know (a newer one's, or 0.13.28's not rebuilt yet): kept and
+    /// written back as it was.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// What the control room asks (0.13.5), as 0.13.28 does.
@@ -1003,6 +1015,10 @@ pub struct StaffLog {
     pub at_ms: u64,
     pub by: String,
     pub what: String,
+    /// What this Pyr doesn't know (a newer one's, or 0.13.28's not rebuilt yet): kept and
+    /// written back as it was.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1515,6 +1531,10 @@ pub struct BonfireDraw {
     pub entries: Vec<BonfireEntry>,
     pub winners: Vec<BonfireWinner>,
     pub rollover: u64,
+    /// What this Pyr doesn't know (a newer one's, or 0.13.28's not rebuilt yet): kept and
+    /// written back as it was.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Someone on the MMR ladder.
@@ -1657,6 +1677,27 @@ mod tests {
         let m = ToApp::Casino { res: CasinoRes::State { view } };
         let j = serde_json::to_string(&m).unwrap();
         assert_eq!(serde_json::from_str::<ToApp>(&j).unwrap(), m, "{j}");
+    }
+
+    /// What a server keeps (in its database's meta table) and a later Pyr added to: read by this
+    /// one and written back, nothing of it is lost (0.13.28's server writes these, and the
+    /// rebuilt one, after the swap, writes them back).
+    #[test]
+    fn what_a_newer_pyr_kept_comes_back_as_it_was() {
+        fn same<T: serde::Serialize + serde::de::DeserializeOwned>(json: &str) {
+            let v: serde_json::Value = serde_json::from_str(json).unwrap();
+            let t: T = serde_json::from_value(v.clone()).unwrap_or_else(|e| panic!("{json}: {e}"));
+            assert_eq!(serde_json::to_value(&t).unwrap(), v, "{json}");
+        }
+        let newer = r#""from_later":{"a":[1,2],"b":"x"},"also":7"#;
+        same::<ChatLine>(&format!(r#"{{"id":4,"uid":"u","name":"Ann","text":"hi","at_ms":9,{newer}}}"#));
+        same::<PeriodStats>(&format!(r#"{{"rounds":3,"wagered":300,"paid":297,{newer}}}"#));
+        same::<BigWin>(&format!(r#"{{"name":"Mara","game":"dice","wagered":10,"paid":495,"what":"49.5x","at_ms":1,"key":"dice","cheer":2,{newer}}}"#));
+        same::<StaffLog>(&format!(r#"{{"at_ms":1,"by":"Olive","what":"gave Bo 5,000 chips","no":12,{newer}}}"#));
+        let draw = crate::casino::bonfire::lit(3, 77, [9; 32], 1_000_000, Vec::new());
+        let mut v = serde_json::to_value(&draw).unwrap();
+        v["from_later"] = serde_json::json!({"a": 1});
+        same::<BonfireDraw>(&v.to_string());
     }
 
     /// An older Pyr isn't sent an emote from a casino table, and sees a sticker at poker as the

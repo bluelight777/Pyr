@@ -421,11 +421,10 @@ pub struct UiState {
     /// A stream filling the whole screen, and whether the window is in full screen for it.
     pub fullscreen: Option<VideoKey>,
     pub fullscreen_on: bool,
-    /// Streamer mode, as the settings have it (read each frame); on by itself while I share my
-    /// screen (unless I turned it off meanwhile); and a change asked for, to save.
+    /// Streamer mode, as the settings have it (read each frame), and a change asked for, to
+    /// save. It's on only when I turn it on (0.13.2; it used to come on by itself while I shared
+    /// my screen).
     pub streamer_mode: bool,
-    pub streamer_auto_live: bool,
-    pub streamer_auto_off: bool,
     pub streamer_set: Option<bool>,
     /// Streamer mode's layout at a game (as the settings have it, read each frame).
     pub stream_room: String,
@@ -2049,16 +2048,11 @@ pub fn short_status(s: &ConnStatus) -> Option<(String, bool)> {
 impl PyrApp {
     fn frame_ui(&mut self, ctx: &egui::Context, st: &AppState, acts: &mut Vec<Act>) {
         self.watch_when_joined(st, acts);
-        // Streamer mode: the saved choice, a change to save, and on by itself while sharing.
+        // Streamer mode: the saved choice, or a change to save.
         if let Some(on) = self.ui.streamer_set.take() {
             acts.push(Act::StreamerMode(on));
             self.ui.streamer_mode = on;
         } else {
-            if self.ui.streamer_mode && !st.settings.streamer_mode && self.ui.streamer_auto_live {
-                // (Turned off in Settings while sharing: off until the next share.)
-                self.ui.streamer_auto_live = false;
-                self.ui.streamer_auto_off = true;
-            }
             self.ui.streamer_mode = st.settings.streamer_mode;
         }
         self.ui.stream_room = st.settings.stream_room.clone();
@@ -2066,14 +2060,6 @@ impl PyrApp {
         if !self.streamer_mode() {
             // (A stream's session at the casino starts again with the next one.)
             self.poker.casino.session_start = None;
-        }
-        let sharing = st.call.as_ref().is_some_and(|c| c.screen_on);
-        if sharing && !self.ui.streamer_auto_off {
-            self.ui.streamer_auto_live = true;
-        }
-        if !sharing {
-            self.ui.streamer_auto_live = false;
-            self.ui.streamer_auto_off = false;
         }
         // Minimized (or hidden in the tray): nothing to draw. The frames still run (and on
         // Windows can't be shown), and drawing a casino game or a stream in them for nobody is
@@ -3305,7 +3291,7 @@ impl PyrApp {
                         };
                         let x = rows.first().map(|(_, r)| r.x_range()).unwrap_or(egui::Rangef::new(0.0, 0.0));
                         let p = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("channel-drag")));
-                        p.line_segment([pos2(x.min, line_y), pos2(x.max, line_y)], egui::Stroke::new(2.5, theme::EMBER()));
+                        p.line_segment([pos2(x.min, line_y), pos2(x.max, line_y)], egui::Stroke::new(2.5f32, theme::EMBER()));
                         p.circle_filled(pos2(x.min, line_y), 4.0, theme::EMBER());
                     }
                     if let (Some(name), Some(pt)) = (s.channels.iter().find(|c| c.id == d).map(|c| c.name.clone()), ui.ctx().pointer_latest_pos()) {

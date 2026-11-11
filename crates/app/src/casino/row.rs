@@ -528,7 +528,7 @@ impl PyrApp {
             }
             Frame::Neon => {
                 let flick = if ((time * 7.3).sin() * 43.0).fract() > 0.93 { 0.4 } else { 1.0 };
-                for (k, c, w) in [(14.0, a, 6.0), (6.0, b, 3.0)] {
+                for (k, c, w) in [(14.0f32, a, 6.0f32), (6.0, b, 3.0)] {
                     let e = fr.expand(k);
                     p.rect_stroke(e, theme::r(14), Stroke::new(w + 8.0, c.gamma_multiply(0.15 * flick)), StrokeKind::Middle);
                     p.rect_stroke(e, theme::r(14), Stroke::new(w, c.gamma_multiply(flick)), StrokeKind::Middle);

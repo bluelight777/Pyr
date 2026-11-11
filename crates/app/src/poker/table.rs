@@ -777,8 +777,7 @@ impl PyrApp {
             let left = cards_left.max(lay.seat(me).x + 90.0);
             let r = Rect::from_min_size(pos2(left, base.y + ch * 0.5 + 10.0), vec2(250.0, 28.0));
             p.rect_filled(r, theme::r(14), Color32::from_rgba_unmultiplied(0x14, 0x10, 0x0a, 225));
-            let why = if self.streamer_auto() { "Sharing your screen · hold Space to peek" } else { "Streamer mode · hold Space to peek" };
-            p.text(r.center(), Align2::CENTER_CENTER, why, theme::bold_font(12.5), Color32::from_rgb(0xff, 0xe2, 0x9a));
+            p.text(r.center(), Align2::CENTER_CENTER, "Streamer mode · hold Space to peek", theme::bold_font(12.5), Color32::from_rgb(0xff, 0xe2, 0x9a));
             return;
         }
         // What I have now, and (if asked for) my chance of winning.

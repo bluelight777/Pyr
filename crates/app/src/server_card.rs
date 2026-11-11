@@ -60,7 +60,7 @@ impl PyrApp {
             .show(ctx, |ui| {
                 egui::Frame::new()
                     .fill(theme::ELEV())
-                    .stroke(Stroke::new(1.0, theme::LINE()))
+                    .stroke(Stroke::new(1.0f32, theme::LINE()))
                     .corner_radius(crate::theme::r(10))
                     .shadow(egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(110) })
                     .inner_margin(egui::Margin { left: 12, right: 14, top: 10, bottom: 10 })
@@ -133,7 +133,7 @@ impl PyrApp {
         let tip = pos2(card.left() - 6.0, y);
         let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new(("server-card-point", &s.key))));
         p.add(egui::Shape::convex_polygon(vec![tip, pos2(card.left() + 1.0, y - 7.0), pos2(card.left() + 1.0, y + 7.0)], theme::ELEV(), Stroke::NONE));
-        p.line_segment([tip, pos2(card.left(), y - 7.0)], Stroke::new(1.0, theme::LINE()));
-        p.line_segment([tip, pos2(card.left(), y + 7.0)], Stroke::new(1.0, theme::LINE()));
+        p.line_segment([tip, pos2(card.left(), y - 7.0)], Stroke::new(1.0f32, theme::LINE()));
+        p.line_segment([tip, pos2(card.left(), y + 7.0)], Stroke::new(1.0f32, theme::LINE()));
     }
 }

@@ -49,12 +49,12 @@ pub fn clean(text: &str) -> String {
 
 impl ChatState {
     /// What was kept, the first time it's needed.
-    pub fn load(&mut self, saved: Option<String>) {
+    pub fn load(&mut self, saved: Option<Vec<ChatLine>>) {
         if self.loaded {
             return;
         }
         self.loaded = true;
-        if let Some(lines) = saved.and_then(|s| serde_json::from_str::<Vec<ChatLine>>(&s).ok()) {
+        if let Some(lines) = saved {
             self.next = lines.iter().map(|l| l.id).max().unwrap_or(0);
             self.lines = lines.into_iter().rev().take(KEPT).rev().collect();
         }
@@ -91,7 +91,7 @@ impl ChatState {
         }
         times.push_back(now);
         self.next += 1;
-        let line = ChatLine { id: self.next, uid: uid.to_string(), name: name.chars().take(40).collect(), text, at_ms: now };
+        let line = ChatLine { extra: Default::default(), id: self.next, uid: uid.to_string(), name: name.chars().take(40).collect(), text, at_ms: now };
         self.lines.push_back(line.clone());
         while self.lines.len() > KEPT {
             self.lines.pop_front();
@@ -140,7 +140,7 @@ mod tests {
         }
         assert_eq!(c.recent().len(), KEPT);
         let mut again = ChatState::default();
-        again.load(Some(c.saved()));
+        again.load(serde_json::from_str(&c.saved()).ok());
         assert_eq!(again.recent(), c.recent());
         let next = again.say("z", "Z", "after", 1_000_000).unwrap();
         assert!(next.id > c.recent().last().unwrap().id);

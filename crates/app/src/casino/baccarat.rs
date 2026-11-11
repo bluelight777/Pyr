@@ -176,7 +176,7 @@ impl PyrApp {
                 p.rect_filled(r.expand(5.0), theme::r(18), color.gamma_multiply(0.35));
             }
             p.rect_filled(r, theme::r(14), color.gamma_multiply(if resp.hovered() && can_bet { 0.5 } else { 0.3 }));
-            p.rect_stroke(r, theme::r(14), Stroke::new(if won { 3.0 } else { 2.0 }, if won { col::GOLD2 } else { color }), StrokeKind::Inside);
+            p.rect_stroke(r, theme::r(14), Stroke::new(if won { 3.0f32 } else { 2.0 }, if won { col::GOLD2 } else { color }), StrokeKind::Inside);
             let big = size.1 > 60.0;
             p.text(r.left_center() + vec2(16.0, if big { -10.0 } else { -7.0 }), Align2::LEFT_CENTER, label, theme::bold_font(if big { 18.0 } else { 13.0 }), Color32::WHITE);
             p.text(r.left_center() + vec2(16.0, if big { 13.0 } else { 9.0 }), Align2::LEFT_CENTER, pays, theme::font(if big { 12.5 } else { 11.0 }), Color32::from_white_alpha(190));

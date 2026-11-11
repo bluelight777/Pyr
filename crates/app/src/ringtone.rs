@@ -1,7 +1,7 @@
 //! Ringtones: what calls ring with (Settings → Notifications), and someone's own (right-click
-//! them → Ringtone): Pyr's own ring, any soundboard sound (built in, or one of your servers'),
-//! or a sound file from this PC, picked and cut like a soundboard sound. The engine plays them
-//! (`pyr_engine::ring`).
+//! them → Ringtone): Pyr's own ring, one of the ten ringtones (0.13.2), any soundboard sound
+//! (built in, or one of your servers'), or a sound file from this PC, picked and cut like a
+//! soundboard sound. The engine plays them (`pyr_engine::ring`).
 
 use eframe::egui::{self, Align, Layout, Rect, RichText, Sense, vec2};
 use pyr_engine::config::Ringtone;
@@ -41,9 +41,16 @@ impl PyrApp {
             Some(_) => pick(ui, &format!("Same as everyone ({})", name_of(st.settings.ringtone.as_ref())), None, current.is_none(), acts),
             None => pick(ui, "Pyr ring", None, current.is_none(), acts),
         }
+        let is = |r: &SoundRef| current.and_then(|c| c.sound.as_ref()).is_some_and(|s| s.same(r));
+        ui.separator();
+        ui.label(RichText::new("RINGTONES").font(theme::bold_font(11.0)).color(theme::DIM()));
+        for b in sb::RINGS {
+            let r = b.sound_ref();
+            let on = is(&r);
+            pick(ui, b.name, Some(Ringtone { name: b.name.to_string(), sound: Some(r), file: String::new() }), on, acts);
+        }
         ui.separator();
         ui.label(RichText::new("SOUNDS").font(theme::bold_font(11.0)).color(theme::DIM()));
-        let is = |r: &SoundRef| current.and_then(|c| c.sound.as_ref()).is_some_and(|s| s.same(r));
         for b in sb::BUILTINS {
             let r = b.sound_ref();
             let on = is(&r);

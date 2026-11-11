@@ -187,6 +187,9 @@ pub struct Shared {
     pub(crate) ring_clips: Mutex<HashMap<String, Arc<Vec<f32>>>>,
     /// Reports sent by themselves this run: (what, when) (see `bugs::auto_report`).
     pub auto_reports: Mutex<Vec<(String, std::time::Instant)>>,
+    /// The call's microphone or speaker trouble: what it is, since when, and whether it's been
+    /// said (see `audio_trouble_to_say`).
+    audio_trouble: Mutex<Option<(String, std::time::Instant, bool)>>,
     /// When Pyr's window last had a key or the mouse (ms since 1970; see `idle`).
     pub last_activity_ms: std::sync::atomic::AtomicI64,
     /// When the PC last had a key or the mouse anywhere, as the system said at the idle
@@ -339,6 +342,34 @@ pub(crate) fn drop_later<T: Send + 'static>(x: T) {
     let _ = std::thread::Builder::new().name("pyr-teardown".into()).spawn(move || drop(x));
 }
 
+/// How long a microphone or speaker problem lasts before it's said in a message (and so
+/// reported by itself): a headset that drops out and comes back isn't an error (0.13.2). A
+/// Bluetooth headset finding the PC again takes a few seconds; the call screen says what's
+/// going on meanwhile.
+const AUDIO_TROUBLE_SAY_AFTER: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The call's sound trouble now (`err`), with what was kept of it: the trouble to say, once
+/// it's been the same for `AUDIO_TROUBLE_SAY_AFTER` (and only once).
+fn audio_trouble_to_say(kept: &mut Option<(String, std::time::Instant, bool)>, now: std::time::Instant, err: Option<&str>) -> Option<String> {
+    let Some(err) = err else {
+        *kept = None;
+        return None;
+    };
+    match kept {
+        Some((was, since, said)) if was == err => {
+            if *said || now.duration_since(*since) < AUDIO_TROUBLE_SAY_AFTER {
+                return None;
+            }
+            *said = true;
+            Some(err.to_string())
+        }
+        _ => {
+            *kept = Some((err.to_string(), now, false));
+            None
+        }
+    }
+}
+
 impl Shared {
     /// Whether you can see Pyr right now: its window is in front, not hidden or minimized.
     pub fn window_in_front(&self) -> bool {
@@ -472,14 +503,14 @@ impl Shared {
     /// Plays the ringtone or the ringback, if ringing is on (whatever the other sounds are).
     pub fn play_ring(&self, sound: sfx::Sound) {
         let Some(sfx) = &self.sfx else { return };
-        let (on, device, volume) = {
+        let (on, ember, device, volume) = {
             let st = self.state.read_recursive();
             // (Do Not Disturb: calls coming in don't ring; my own call's ringback still plays.)
             let quiet = st.settings.dnd && sound == sfx::Sound::Ring;
-            (st.settings.ring && !quiet, st.settings.output_device.clone(), st.settings.sound_volume)
+            (st.settings.ring && !quiet, st.settings.ember_sounds(), st.settings.output_device.clone(), st.settings.sound_volume)
         };
         if on {
-            sfx.play(sound, device, volume);
+            sfx.play(sound, ember, device, volume);
         }
     }
 
@@ -522,13 +553,13 @@ impl Shared {
     /// Plays a notification sound, if they're on (not a message's, in Do Not Disturb).
     pub fn play(&self, sound: sfx::Sound) {
         let Some(sfx) = &self.sfx else { return };
-        let (on, device, volume) = {
+        let (on, ember, device, volume) = {
             let st = self.state.read_recursive();
             let quiet = st.settings.dnd && sound == sfx::Sound::Message;
-            (st.settings.sounds && !quiet, st.settings.output_device.clone(), st.settings.sound_volume)
+            (st.settings.sounds && !quiet, st.settings.ember_sounds(), st.settings.output_device.clone(), st.settings.sound_volume)
         };
         if on {
-            sfx.play(sound, device, volume);
+            sfx.play(sound, ember, device, volume);
         }
     }
 
@@ -687,8 +718,10 @@ impl Shared {
             qos::set_video(cam || scr);
             cv.stream_audio_on = scr_audio;
             cv.stream_muted = scr_muted;
-            // A microphone or speaker problem: say so (once), not only on the call screen.
-            if let Some(e) = audio_err.as_ref().filter(|e| cv.audio_error.as_ref() != Some(*e) && e.as_str() != "audio not running") {
+            // A microphone or speaker problem: on the call screen at once, and said (once) if
+            // it lasts.
+            let trouble = audio_err.as_deref().filter(|e| *e != "audio not running");
+            if let Some(e) = audio_trouble_to_say(&mut self.audio_trouble.lock(), now, trouble) {
                 errors::report(format!("Sound problem in the call: {e}"));
             }
             cv.audio_error = audio_err;
@@ -878,6 +911,7 @@ impl Engine {
             ringer: AtomicBool::new(false),
             ring_clips: Mutex::new(HashMap::new()),
             auto_reports: Mutex::new(Vec::new()),
+            audio_trouble: Mutex::new(None),
             call_group: Mutex::new(None),
             last_activity_ms: std::sync::atomic::AtomicI64::new(pyr_proto::now_ms()),
             last_input_ms: std::sync::atomic::AtomicI64::new(0),
@@ -2289,7 +2323,7 @@ impl Engine {
     /// Plays a sound with these settings (the settings screen's Test button).
     pub fn play_sound_with(&self, sound: sfx::Sound, settings: &Settings) {
         if let Some(sfx) = &self.shared.sfx {
-            sfx.play(sound, settings.output_device.clone(), settings.sound_volume);
+            sfx.play(sound, settings.ember_sounds(), settings.output_device.clone(), settings.sound_volume);
         }
     }
 
@@ -2580,12 +2614,12 @@ impl Engine {
     /// Hear a ringtone once (none: Pyr's own ring), whatever Do Not Disturb says.
     pub fn preview_ringtone(&self, tone: Option<config::Ringtone>) {
         let Some(sfx) = self.shared.sfx.as_ref() else { return };
-        let (device, volume) = {
+        let (ember, device, volume) = {
             let st = self.shared.state.read_recursive();
-            (st.settings.output_device.clone(), st.settings.sound_volume)
+            (st.settings.ember_sounds(), st.settings.output_device.clone(), st.settings.sound_volume)
         };
         let Some(t) = tone else {
-            sfx.play(sfx::Sound::Ring, device, volume);
+            sfx.play(sfx::Sound::Ring, ember, device, volume);
             return;
         };
         let shared = self.shared.clone();
@@ -4272,4 +4306,35 @@ pub fn random_seed_text() -> String {
     let mut b = [0u8; 16];
     let _ = getrandom::getrandom(&mut b);
     b.iter().map(|x| ABC[*x as usize % ABC.len()] as char).collect()
+}
+
+#[cfg(test)]
+mod audio_trouble_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    /// A headset that drops out and comes back isn't said (or reported, 0.13.2); one that
+    /// stays gone is, once.
+    #[test]
+    fn a_headset_that_comes_back_isnt_an_error() {
+        let mut kept = None;
+        let t0 = Instant::now();
+        let down = "your microphone “Headset” stopped; reconnecting it…";
+        assert_eq!(audio_trouble_to_say(&mut kept, t0, Some(down)), None);
+        assert_eq!(audio_trouble_to_say(&mut kept, t0 + Duration::from_secs(9), Some(down)), None);
+        // Back: nothing said.
+        assert_eq!(audio_trouble_to_say(&mut kept, t0 + Duration::from_secs(10), None), None);
+        assert_eq!(kept, None);
+        // Gone again, and this time it stays gone.
+        let t1 = t0 + Duration::from_secs(60);
+        assert_eq!(audio_trouble_to_say(&mut kept, t1, Some(down)), None);
+        assert_eq!(audio_trouble_to_say(&mut kept, t1 + AUDIO_TROUBLE_SAY_AFTER - Duration::from_millis(1), Some(down)), None);
+        assert_eq!(audio_trouble_to_say(&mut kept, t1 + AUDIO_TROUBLE_SAY_AFTER, Some(down)).as_deref(), Some(down));
+        assert_eq!(audio_trouble_to_say(&mut kept, t1 + AUDIO_TROUBLE_SAY_AFTER * 3, Some(down)), None, "said once");
+        // Something else wrong: its own time.
+        let other = "your speakers “Headset” stopped playing sound; reconnecting them…";
+        let t2 = t1 + AUDIO_TROUBLE_SAY_AFTER * 4;
+        assert_eq!(audio_trouble_to_say(&mut kept, t2, Some(other)), None);
+        assert_eq!(audio_trouble_to_say(&mut kept, t2 + AUDIO_TROUBLE_SAY_AFTER, Some(other)).as_deref(), Some(other));
+    }
 }
