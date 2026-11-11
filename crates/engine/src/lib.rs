@@ -154,6 +154,9 @@ pub struct Shared {
     /// The app's window is in front (messages in the open channel then make no sound and
     /// count as read). Set from the app's frames; see `focus_probe` for when there are none.
     pub window_focused: AtomicBool,
+    /// One of Pyr's own boxes to type in has the keys (a key on its own that's a shortcut then
+    /// just types; see `hotkey::going_off`). Set from the app's frames.
+    pub typing: AtomicBool,
     /// Asks the system directly whether the window is in front (`None`: it can't tell). The app
     /// only runs frames while its window is showing, so after it's hidden to the tray or
     /// minimized `window_focused` still says what the last frame saw.
@@ -202,6 +205,38 @@ pub struct Shared {
 
 /// What sound files are, to the file streams.
 const SOUND_MIME: &str = "audio/x-pyr-sound";
+
+/// The shortcuts that work anywhere, as the key watcher has them: the soundboard's keys, in
+/// order, then the mute shortcut (an empty combination where there's none).
+fn anywhere_combos(settings: &Settings) -> Vec<String> {
+    settings.sound_keys.iter().map(|(c, _)| c.clone()).chain(std::iter::once(settings.mute_key.clone())).collect()
+}
+
+/// The mute shortcut went off: mute, or unmute, as the microphone button does (unmuting
+/// undeafens; a moderator's mute stays, and says so), with a step down or up to tell which.
+fn mute_shortcut(shared: &Arc<Shared>) {
+    let server_muted = {
+        let st = shared.state.read_recursive();
+        st.call.as_ref().and_then(|c| st.server(&c.server_key).and_then(|s| s.voice.get(&c.session))).is_some_and(|p| p.server_mute)
+    };
+    if server_muted {
+        shared.state.write().toast("A moderator server muted you here. Only a moderator can unmute you.", false);
+        (shared.repaint)();
+        return;
+    }
+    let muted = {
+        let mut p = shared.voice_prefs.lock();
+        let muted = !(p.0 || p.1);
+        p.0 = muted;
+        if !muted {
+            p.1 = false;
+        }
+        muted
+    };
+    tracing::info!(muted, "the mute shortcut");
+    shared.apply_voice_prefs();
+    shared.play(if muted { sfx::Sound::Mute } else { sfx::Sound::Unmute });
+}
 
 /// Play `sound` in the call on server `key` (see `Engine::play_sound`).
 /// Plays `sound` for everyone in our voice channel (and notes it in the recent sounds).
@@ -833,6 +868,7 @@ impl Engine {
             files: Mutex::new(files::FileCache::default()),
             sfx,
             window_focused: AtomicBool::new(true),
+            typing: AtomicBool::new(false),
             focus_probe: Mutex::new(None),
             video_gen: [AtomicU64::new(0), AtomicU64::new(0)],
             video_rates: Arc::default(),
@@ -879,18 +915,26 @@ impl Engine {
             None
         };
         let keys = if opts.push_to_talk {
-            let combos: Vec<String> = shared.state.read_recursive().settings.sound_keys.iter().map(|(c, _)| c.clone()).collect();
-            let s2 = shared.clone();
+            let combos = anywhere_combos(&shared.state.read_recursive().settings);
+            let (s2, s3) = (shared.clone(), shared.clone());
             Some(hotkey::ComboWatcher::start(
                 &combos,
                 Arc::new(move |i| {
-                    let sound = s2.state.read_recursive().settings.sound_keys.get(i).map(|(_, s)| s.clone());
+                    let (sound, mute) = {
+                        let st = s2.state.read_recursive();
+                        let sound = st.settings.sound_keys.get(i).map(|(_, s)| s.clone());
+                        (sound, i == st.settings.sound_keys.len())
+                    };
+                    if mute {
+                        mute_shortcut(&s2);
                     // Only in a call: elsewhere the key is just a key.
-                    if let Some(sound) = sound.filter(|_| s2.call.lock().is_some()) {
+                    } else if let Some(sound) = sound.filter(|_| s2.call.lock().is_some()) {
                         play_soundboard_on(&s2, sound);
                     }
                 }),
                 opts.repaint.clone(),
+                // (Pyr's own box has the keys only while its window's in front.)
+                Arc::new(move || s3.typing.load(Ordering::Relaxed) && s3.window_in_front()),
             ))
         } else {
             None
@@ -1864,7 +1908,8 @@ impl Engine {
         self._keys.as_ref()?.take_recorded()
     }
 
-    /// Whether soundboard keys work here (they need the keyboard's state, like push-to-talk).
+    /// Whether soundboard keys and the mute shortcut work here (they need the keyboard's
+    /// state, like push-to-talk).
     pub fn sound_keys_available(&self) -> bool {
         self._keys.is_some()
     }
@@ -2246,6 +2291,11 @@ impl Engine {
         if let Some(sfx) = &self.shared.sfx {
             sfx.play(sound, settings.output_device.clone(), settings.sound_volume);
         }
+    }
+
+    /// Whether one of Pyr's own boxes to type in has the keys (see `Shared::typing`).
+    pub fn set_typing(&self, typing: bool) {
+        self.shared.typing.store(typing, Ordering::Relaxed);
     }
 
     /// Whether the window is in front (see `Shared::window_focused`).
@@ -3588,9 +3638,9 @@ impl Engine {
         if let Some(p) = self._ptt.as_ref() {
             p.set_key(&settings.ptt_key);
         }
-        if old.sound_keys != settings.sound_keys {
+        if old.sound_keys != settings.sound_keys || old.mute_key != settings.mute_key {
             if let Some(k) = &self._keys {
-                k.set_combos(&settings.sound_keys.iter().map(|(c, _)| c.clone()).collect::<Vec<_>>());
+                k.set_combos(&anywhere_combos(&settings));
             }
         }
         // Someone's soundboard just muted: their sounds playing now stop too.

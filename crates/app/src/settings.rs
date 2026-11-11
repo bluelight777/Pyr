@@ -110,6 +110,24 @@ pub(crate) fn sheet_frame() -> egui::Frame {
 
 // ------------------------------------------------------------------ the parts of a page
 
+/// A key as a key: a cap with a shadow under it (0.13.28's, measured: 29 high, 3 of shadow).
+fn key_cap(ui: &mut egui::Ui, label: &str) {
+    let g = ui.painter().layout_no_wrap(label.to_string(), theme::bold_font(13.0), theme::TEXT());
+    let (r, _) = ui.allocate_exact_size(vec2(g.size().x + 22.0, 32.0), Sense::hover());
+    let cap = Rect::from_min_size(r.min, vec2(r.width(), 29.0));
+    let p = ui.painter();
+    p.rect_filled(cap.translate(vec2(0.0, 3.0)), theme::r(6), Color32::from_rgb(0x20, 0x1b, 0x18));
+    p.rect_filled(cap, theme::r(6), theme::ELEV2());
+    p.rect_stroke(cap, theme::r(6), Stroke::new(1.0, theme::LINE()), StrokeKind::Inside);
+    p.galley(cap.center() - g.size() / 2.0, g, theme::TEXT());
+}
+
+/// The mute shortcut being set: why the keys pressed can't be it, when they can't.
+#[derive(Default)]
+pub struct MuteRec {
+    pub error: Option<String>,
+}
+
 /// A heading over a group of settings: small capitals, with room above.
 pub(crate) fn heading(ui: &mut egui::Ui, text: &str) {
     ui.add_space(16.0);
@@ -634,6 +652,10 @@ impl PyrApp {
         if !pages().any(|p| p.id == t) {
             t = 1;
         }
+        // (The mute shortcut was being set on Voice & Video: another page, it isn't.)
+        if t != 1 {
+            self.stop_mute_rec();
+        }
         // Report a bug (1) or Suggest a feature (2), clicked on the About page.
         let mut about_click = 0u8;
 
@@ -902,6 +924,129 @@ impl PyrApp {
         );
     }
 
+    /// The mute shortcut (0.13.20, a key on its own since 0.13.22), as 0.13.28 has it: set by
+    /// pressing it; never Copy, Paste and the like, nor the push-to-talk key; a soundboard key
+    /// it takes over is said.
+    fn mute_shortcut(&mut self, ui: &mut egui::Ui, draft: &mut Settings, acts: &mut Vec<Act>) {
+        heading(ui, "Mute shortcut");
+        if !self.engine.sound_keys_available() {
+            fine(ui, "Shortcuts that work anywhere need to read the keyboard, and Pyr can't here.");
+            return;
+        }
+        // The keys pressed while it's being set.
+        if self.ui.mute_rec.is_some() {
+            // (Esc stops it: the settings stay open.)
+            let esc = ui.input_mut(|i| {
+                let m = i.modifiers;
+                !m.ctrl && i.consume_key(m, egui::Key::Escape)
+            });
+            match self.engine.take_recorded_sound_key() {
+                _ if esc => self.stop_mute_rec(),
+                Some(combo) if hotkey::is_cancel(&combo) => self.stop_mute_rec(),
+                Some(combo) => {
+                    let label = hotkey::combo_label(&combo);
+                    let refused = if let Some(what) = hotkey::taken_by_apps(&combo) {
+                        Some(format!("{label} is {what} in most apps, so it would mute you every time. Pick another."))
+                    } else if draft.input_mode == InputMode::PushToTalk && combo == draft.ptt_key {
+                        Some(format!("{label} is your push-to-talk key. Pick another."))
+                    } else {
+                        None
+                    };
+                    match refused {
+                        Some(why) => {
+                            self.ui.mute_rec = Some(MuteRec { error: Some(why) });
+                            self.engine.record_sound_key(true);
+                        }
+                        None => {
+                            self.ui.mute_rec = None;
+                            // A soundboard key it was: it mutes now.
+                            if let Some((_, sound)) = draft.sound_keys.iter().find(|(c, _)| *c == combo).cloned() {
+                                draft.sound_keys.retain(|(c, _)| *c != combo);
+                                acts.push(Act::Toast(format!("{label} mutes you now, so it no longer plays {}.", sound.name), false));
+                            }
+                            draft.mute_key = combo;
+                        }
+                    }
+                }
+                None => {}
+            }
+        }
+        let start = |app: &mut PyrApp| {
+            app.ui.mute_rec = Some(MuteRec::default());
+            app.engine.record_sound_key(true);
+        };
+        ui.add_space(2.0);
+        if let Some(rec) = &self.ui.mute_rec {
+            let error = rec.error.clone();
+            let mut cancel = false;
+            ui.horizontal(|ui| {
+                let b = egui::Button::new(RichText::new("Press the keys\u{2026}").color(theme::EMBER2()).size(13.0))
+                    .fill(Color32::from_rgb(0x44, 0x30, 0x26))
+                    .stroke(Stroke::new(1.5, Color32::from_rgb(0xb1, 0x5d, 0x36)))
+                    .min_size(vec2(220.0, 32.0));
+                ui.add(b);
+                if ui.add(egui::Button::new(RichText::new("Cancel").size(14.0)).min_size(vec2(0.0, 32.0))).clicked() {
+                    cancel = true;
+                }
+            });
+            match error {
+                Some(e) => {
+                    ui.add(egui::Label::new(RichText::new(e).size(12.0).color(theme::LIVE())).wrap());
+                }
+                None => fine(ui, "Press the key you want, or keys together (Ctrl, Alt or Shift with a key). Esc cancels."),
+            }
+            if cancel {
+                self.stop_mute_rec();
+            }
+            return;
+        }
+        if draft.mute_key.is_empty() {
+            if ui.add(theme::primary_button("Set a shortcut").min_size(vec2(0.0, 32.0))).clicked() {
+                start(self);
+            }
+            fine(ui, "Mutes or unmutes you from anywhere, even with a game in front (the game still gets the keys). A short sound tells you which.");
+            return;
+        }
+        let mut change = false;
+        ui.horizontal(|ui| {
+            for (i, part) in draft.mute_key.split('+').enumerate() {
+                if i > 0 {
+                    ui.label(RichText::new("+").size(13.0).color(theme::DIM()));
+                }
+                key_cap(ui, &hotkey::combo_label(part));
+            }
+            ui.add_space(6.0);
+            if ui.add(egui::Button::new(RichText::new("Change").size(14.0)).min_size(vec2(0.0, 32.0))).clicked() {
+                change = true;
+            }
+            if ui.add(egui::Button::new(RichText::new("Remove").size(14.0)).min_size(vec2(0.0, 32.0))).clicked() {
+                draft.mute_key.clear();
+            }
+        });
+        if change {
+            start(self);
+        }
+        fine(ui, "Mutes or unmutes you from anywhere, even with a game in front (the game still gets the keys). A short sound tells you which.");
+        if hotkey::needs_modifier(&draft.mute_key) {
+            let label = hotkey::combo_label(&draft.mute_key);
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!("{label} on its own: in Pyr's message boxes it types as usual, but anywhere else it mutes or unmutes you each time you press it, even while you type there."))
+                        .size(12.5)
+                        .color(theme::EMBER2()),
+                )
+                .wrap(),
+            );
+        }
+    }
+
+    /// The mute shortcut's setting stopped (cancelled, or Settings left).
+    pub(crate) fn stop_mute_rec(&mut self) {
+        if self.ui.mute_rec.take().is_some() {
+            self.engine.record_sound_key(false);
+        }
+    }
+
     /// Voice & Video: devices and volumes, the mic test, input mode and sensitivity, voice
     /// processing, voice meters, the soundboard, the camera and screen sharing.
     fn voice_page(&mut self, ui: &mut egui::Ui, st: &AppState, draft: &mut Settings, acts: &mut Vec<Act>) {
@@ -985,6 +1130,7 @@ impl PyrApp {
                 fine(ui, "Keeps your microphone open a moment after you let go of the key, so the end of your last word isn't cut off.");
             }
         }
+        self.mute_shortcut(ui, draft, acts);
 
         divider(ui);
         heading(ui, "Noise suppression");

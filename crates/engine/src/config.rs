@@ -171,6 +171,9 @@ pub struct Settings {
     pub soundboard_muted: Vec<UserId>,
     /// Keys that play a sound while you're in voice: ("LControl+Key1", sound).
     pub sound_keys: Vec<(String, SoundRef)>,
+    /// The mute shortcut (0.13.20): keys ("LControl+LShift+M", or since 0.13.22 a key on its
+    /// own, "M") that mute and unmute me from anywhere, a game in front or not (empty: none).
+    pub mute_key: String,
     /// GIFs kept in the GIF picker's Favorites (the star on a GIF, like Discord's), newest first.
     pub gif_favorites: Vec<GifFavorite>,
     /// The skin in use: one installed from the Pyr Library, by its id (empty: Campfire,
@@ -216,6 +219,10 @@ pub struct Settings {
     /// When moving pictures in chat (GIFs, animated WebP and PNG) play: "" always, "hover"
     /// while pointed at, "never" (they show still, marked GIF).
     pub play_gifs: String,
+    /// Settings this Pyr doesn't know (a newer one's, or 0.13.28's not rebuilt yet): kept as
+    /// they are and written back, so going from one Pyr to another loses none.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// A ringtone: a soundboard sound (built in, or one of a server's), or a sound file from this
@@ -328,6 +335,8 @@ impl Default for Settings {
             ringtone: None,
             ringtones: Default::default(),
             play_gifs: String::new(),
+            mute_key: String::new(),
+            extra: Default::default(),
             auto_reports: true,
             auto_report_told: false,
             idle_by_hand: false,
@@ -366,6 +375,10 @@ pub struct Config {
     /// My Game Master certificate from the home server (see `pyr_poker::net::HOME_SERVER`),
     /// shown to every other server's casino; renewed at home, gone when I'm no longer one.
     pub gm_cert: Option<pyr_poker::net::SignedGm>,
+    /// What this Pyr doesn't know (a newer one's, or 0.13.28's not rebuilt yet): kept and
+    /// written back as it was.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Someone I made sure is who they say (see `verify`).
@@ -663,5 +676,36 @@ mod tests {
         let base = config_dir(None);
         assert_eq!(config_dir(Some("/etc")), base, "a path is ignored, not used");
         assert_eq!(config_dir(Some("p1")), base.join("profiles").join("p1"));
+    }
+}
+
+#[cfg(test)]
+mod from_0_13_28 {
+    use super::*;
+
+    /// A 0.13.28 config.json (every key it writes, from a test profile of it): read whole, the
+    /// mute shortcut understood, and nothing lost when it's written back, settings this Pyr
+    /// doesn't have yet included (the casino's keys, the games' volume, the sound profile,
+    /// auto top-up).
+    #[test]
+    fn a_0_13_28_config_loses_nothing() {
+        let old = r#"{"backup_dir": null, "blocked": [], "casino_seeds": {}, "display_name": "Mia", "gm_cert": null, "last_read": {}, "muted_channels": {}, "muted_servers": [], "poker_auto_muck": false, "poker_auto_top_up": true, "self_voice": {"deafened": false, "muted": false}, "servers": [{"host": "127.0.0.1", "invite": "abc", "key": "k", "name": "Test Camp", "port": 17778}], "settings": {"auto_gain": true, "auto_report_told": false, "auto_reports": false, "camera_device": null, "camera_quality": "Standard", "casino_keys": {"blackjack": "LControl+B"}, "close_to_tray": true, "confirm_delete": true, "dnd": false, "echo_cancellation": true, "emoji_tone": 0, "games_volume": 0.6, "gif_favorites": [], "giphy_key": "", "idle_by_hand": false, "input_device": null, "input_gain": 1.0, "input_mode": "VoiceActivity", "join_sound": null, "library_favorites": [], "library_sort": "", "mute_key": "Q", "noise_suppression": "Strong", "output_device": null, "output_volume": 1.0, "play_gifs": "", "poker_installed": true, "ptt_key": "Grave", "ptt_release_ms": 200, "recent_emoji": [], "ring": true, "ringtone": null, "ringtones": {}, "screen_preset": "Smooth", "share_audio": true, "skin": "", "sound_favorites": [], "sound_keys": [], "sound_profile": "ember", "sound_recent": [], "sound_volume": 0.7, "soundboard_muted": [], "soundboard_volume": 0.7, "sounds": true, "spell_language": "en-US", "spell_words": [], "spellcheck": true, "start_hidden": true, "start_with_windows": true, "stream_room": "", "stream_stage": true, "streamer_mode": false, "tray_note_seen": false, "vad_auto": true, "vad_threshold_db": -50.0, "voice_bitrate_kbps": 64, "voice_meter": "", "voice_priority": true, "vouch": true}, "stream_volumes": {}, "user_volumes": {}, "verified": {}}"#;
+        let cfg: Config = serde_json::from_str(old).expect("0.13.28's config reads");
+        assert_eq!(cfg.display_name, "Mia");
+        assert_eq!(cfg.servers.len(), 1);
+        assert_eq!(cfg.settings.mute_key, "Q");
+        assert_eq!(cfg.settings.ptt_key, "Grave");
+        // (As written to the file: an f32 as it was typed, 0.7 not 0.699999988.)
+        let back: serde_json::Value = serde_json::from_slice(&serde_json::to_vec(&cfg).unwrap()).unwrap();
+        let old: serde_json::Value = serde_json::from_str(old).unwrap();
+        for (k, v) in old.as_object().unwrap() {
+            if k == "settings" {
+                for (sk, sv) in v.as_object().unwrap() {
+                    assert_eq!(back["settings"].get(sk), Some(sv), "settings.{sk}");
+                }
+            } else {
+                assert_eq!(back.get(k), Some(v), "{k}");
+            }
+        }
     }
 }

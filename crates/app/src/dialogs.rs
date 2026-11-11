@@ -1306,6 +1306,9 @@ impl PyrApp {
             if matches!(self.ui.dialog, Some(Dialog::Settings { .. })) && st.mic_test {
                 acts.push(Act::MicTest(false));
             }
+            if matches!(self.ui.dialog, Some(Dialog::Settings { .. })) {
+                self.stop_mute_rec();
+            }
             // The wizard's state goes with its dialog (opening another dialog from it keeps it
             // only until then).
             if matches!(self.ui.dialog, Some(Dialog::Create)) || was_create {

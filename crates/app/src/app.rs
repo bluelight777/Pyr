@@ -561,6 +561,8 @@ pub struct UiState {
     pub sel: crate::select::Selection,
     /// Settings opens this tab next frame (one tab sending you to another).
     pub settings_tab_next: Option<u8>,
+    /// The mute shortcut being set (Settings → Voice & Video): what's said under it.
+    pub mute_rec: Option<crate::settings::MuteRec>,
     /// Settings → Claude: what's set up where.
     pub claude_setup: Option<crate::appearance::ClaudeSetup>,
     /// The library owner's notes to senders, by submission, being written.
@@ -1618,6 +1620,8 @@ impl eframe::App for PyrApp {
         }
         let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true) && !i.viewport().minimized.unwrap_or(false));
         engine.set_window_focused(focused);
+        // (A shortcut that's a key on its own just types in Pyr's own boxes, 0.13.22.)
+        engine.set_typing(ctx.wants_keyboard_input());
         crate::watchdog::step("doing what was clicked");
         // Invite links clicked in a message (pyr:// ones, and web invites from
         // firelitgames.com): ask to join right here, not by way of the browser or Windows.

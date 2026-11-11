@@ -56,6 +56,14 @@ that the rebuild doesn't know yet must come through untouched:
 - [ ] Tables 0.13.28 added are left as they are (and used once the rebuild has them).
 - [ ] Try it: a copy of a 0.13.28 server's database (made by running 0.13.28 here, playing,
       leveling, claiming), opened by the rebuilt server, played, and opened by 0.13.28 again.
+- [ ] Short links keep working through the swap: Brethren of Blood's own code
+      (`https://pyr.gg/brethren`, open on November 11, 2026) and its listed invites stay at
+      pyr.gg. The rebuilt server announces with the same protocol as 0.13.28's (`pyr directory
+      announce v1`, `api/v1/announce`, signed with the server's own TLS key, which the swap
+      keeps; the release key plays no part) and keeps the community's code from 0.13.28's
+      database. Try it with a local directory and a copy of a 0.13.28 server listed there:
+      swap the server, and the code still opens it. pyr.gg itself (0.13.28's directory and
+      site) stays as it is.
 
 ## Checklist
 
@@ -90,9 +98,23 @@ Version in brackets: where 0.13.x first had it.
       0.13.28's: `you_join`, `you_leave`, `viewer_join`, `viewer_leave`, `mute`, `unmute` (a
       skin without one plays its `join`, `leave`, `watch_start`, `watch_stop`); someone else
       tuning in to a stream in the call plays `viewer_join`.
-- [ ] Mute shortcut: any key combo, then any single key (0.13.20/22); soundboard keys the same.
-      Its sounds (0.13.28's tables, after Ringback's): muted a step down (523.3, 0, 90, 0.45),
-      (392.0, 60, 170, 0.45); unmuted a step up (392.0, 0, 90, 0.45), (523.3, 60, 170, 0.45)
+- [x] Mute shortcut: any key combo, then any single key (0.13.20/22); soundboard keys the same.
+      As 0.13.28 has it, tried key by key on it: Settings → Voice & Video → Mute shortcut (Set a
+      shortcut, "Press the keys…", the keys as caps with Change and Remove), refused on Copy,
+      Cut, Paste, Select all, Undo, Redo, Save, Find (Ctrl with the key alone), Switch windows
+      and Close the window (Alt + Tab, Alt + F4), and on the push-to-talk key in Push to Talk;
+      Esc stops it (not with Ctrl: Ctrl + Esc is a shortcut). A key on its own is said under it
+      and just types in Pyr's own boxes (anywhere else it goes off). It mutes from anywhere,
+      as the microphone button does (a moderator's mute stays, and says so), with 0.13.28's
+      step down or up (its tables, after Ringback's: muted (523.3, 0, 90, 0.45), (392.0, 60,
+      170, 0.45); unmuted (392.0, 0, 90, 0.45), (523.3, 60, 170, 0.45)), and the log line
+      "the mute shortcut muted=…". A longer combination holds a shorter one inside it (Ctrl +
+      M doesn't go off with Ctrl + Shift + M); held keys otherwise don't matter (Shift + M sets
+      off M, as on 0.13.28). Soundboard keys: the same refusals, "is your mute shortcut", a key
+      on its own allowed with 0.13.28's words; a mute shortcut taking a soundboard key says
+      so. Saved as 0.13.28 saves it (`mute_key`), and settings this Pyr doesn't know yet are
+      kept as they are (0.13.28's `casino_keys`, `games_volume`, `sound_profile`,
+      `poker_auto_top_up`): a 0.13.28 config.json read and written back loses nothing.
 - [ ] Share picker redesign (0.13.14); still screens keep quality, High profile, crisp text
       (0.13.21); keep the size, lower the frame rate instead (0.13.22); on the graphics card
       end to end with NVENC/AMF/QSV, priority, 60 fps pacing, encoder in stats (0.13.26)

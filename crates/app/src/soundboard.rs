@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use eframe::egui::{self, Align2, Color32, Id, Rect, RichText, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use pyr_engine::config::SoundRef;
-use pyr_engine::hotkey::{combo_label, needs_modifier};
+use pyr_engine::hotkey::{combo_label, is_cancel, needs_modifier, taken_by_apps};
 use pyr_engine::soundboard as sb;
 use pyr_engine::state::{AppState, ServerView};
 use pyr_proto::control::{MAX_SERVER_SOUNDS, MAX_SOUND_NAME, SOUNDBOARD_FEATURE, ServerSound, perm};
@@ -333,15 +333,16 @@ impl PyrApp {
         // A key being set: wait for it here.
         if let Some(sound) = sbui.recording.clone() {
             if let Some(combo) = self.engine.take_recorded_sound_key() {
-                if combo == "Escape" {
+                let label = combo_label(&combo);
+                if is_cancel(&combo) {
                     sbui.recording = None;
                     sbui.key_hint = None;
-                } else if needs_modifier(&combo) {
-                    // Keep waiting: that key would go off while typing.
-                    sbui.key_hint = Some(format!(
-                        "{} on its own would play it whenever you type it. Hold Ctrl, Alt or Shift with it, or use a function key or the number pad.",
-                        combo_label(&combo)
-                    ));
+                } else if let Some(what) = taken_by_apps(&combo) {
+                    // Keep waiting: Copy, Paste and the like would play it every time.
+                    sbui.key_hint = Some(format!("{label} is {what} in most apps, so it would play it every time. Pick another."));
+                    self.engine.record_sound_key(true);
+                } else if combo == st.settings.mute_key {
+                    sbui.key_hint = Some(format!("{label} is your mute shortcut (Settings \u{2192} Voice & Video). Pick another."));
                     self.engine.record_sound_key(true);
                 } else {
                     sbui.recording = None;
@@ -351,7 +352,9 @@ impl PyrApp {
                     s.sound_keys.retain(|(c, x)| *c != combo && !x.same(&sound));
                     s.sound_keys.push((combo.clone(), sound.clone()));
                     acts.push(Act::Settings(s));
-                    acts.push(Act::Toast(format!("{} now plays {}.", combo_label(&combo), sound.name), false));
+                    // (A key on its own, since 0.13.22: it still types in Pyr's own boxes.)
+                    let typing = if needs_modifier(&combo) { " In Pyr's message boxes it still types; in other apps it plays it whenever you press it in a call." } else { "" };
+                    acts.push(Act::Toast(format!("{label} now plays {}.{typing}", sound.name), false));
                 }
             } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 sbui.recording = None;
