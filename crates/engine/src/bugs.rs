@@ -257,7 +257,13 @@ pub fn last_run_trouble(previous_log: &str) -> Option<(&'static str, String)> {
     }
     let lines: Vec<&str> = previous_log.lines().collect();
     let hung = lines.iter().rposition(|l| l.contains("Pyr's window stopped responding"));
-    let back = lines.iter().rposition(|l| l.contains("Pyr's window responds again"));
+    // The window came back: it said so, or it went on to quit to install an update itself
+    // (it had been busy checking and starting the installer: bug report 668), or it was being
+    // opened again after the graphics card went away under it (bug report 670; that isn't
+    // reported, see the app's crash report).
+    let back = lines
+        .iter()
+        .rposition(|l| l.contains("Pyr's window responds again") || l.contains("INFO pyr::app: quitting to install the update") || l.contains("starting Pyr again"));
     // (Once Pyr was quitting, its window going quiet was the goodbye: 0.8.0 and before still
     // logged it as not responding when quitting to install an update. Bug report 20.)
     let quit = lines.iter().rposition(|l| l.contains("INFO pyr::app: quitting") || l.contains("INFO pyr::tray: quitting"));
@@ -396,6 +402,16 @@ mod tests {
         }
         // A freeze before quitting still counts (the person quit because it froze).
         assert!(last_run_trouble(&format!("{froze}2026-10-16T06:02:00Z  INFO pyr::tray: quitting (tray icon)\n")).is_some());
+        // Bug report 668: busy checking and starting an update's installer, then quitting to
+        // install it: the window had come back to say so.
+        let installing = format!("{froze}2026-11-10T08:06:34.965266Z  INFO pyr::app: quitting to install the update\n");
+        assert_eq!(last_run_trouble(&installing), None);
+        // Bug report 670: the graphics card went away; the window going quiet while it was
+        // opened again isn't a freeze.
+        let reopened = format!(
+            "{fine}2026-11-10T09:59:57.690840Z ERROR pyr: the window crashed (the graphics card went away (the PC's memory 89% in use)), starting Pyr again: panicked\n2026-11-10T10:00:06.314143Z  WARN pyr::watchdog::win: Pyr's window stopped responding (it was painting or idle; shared state free, call free). busy\n2026-11-10T10:00:07.027789Z  WARN pyr: the graphics card went away under the window (Failed to create staging buffer); starting Pyr again\n"
+        );
+        assert_eq!(last_run_trouble(&reopened), None);
     }
 
     #[test]

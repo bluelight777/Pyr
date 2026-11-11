@@ -226,6 +226,8 @@ fn main() -> eframe::Result<()> {
                     options,
                     Box::new(move |cc| {
                         theme::install(&cc.egui_ctx);
+                        // (The window's up: watched again, if it was being opened again.)
+                        watchdog::reopening(false);
                         // (For `surface_error`: the graphics card's queue.)
                         if let Some(rs) = &cc.wgpu_render_state {
                             *GPU_QUEUE.lock().unwrap_or_else(|e| e.into_inner()) = Some(rs.queue.clone());
@@ -468,6 +470,7 @@ fn install_crash_report(log_path: Option<std::path::PathBuf>) {
         // (The graphics card going away under the window: Pyr starts again, see `main`.)
         let recovered = main && gpu_lost(&what) && REOPENED.load(std::sync::atomic::Ordering::Relaxed) < 3;
         if recovered {
+            watchdog::reopening(true);
             let memory = watchdog::pc_memory_in_use().map(|m| format!(" (the PC's memory {m}% in use)")).unwrap_or_default();
             tracing::error!("the window crashed (the graphics card went away{memory}), starting Pyr again: {info}");
         } else {

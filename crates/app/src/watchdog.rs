@@ -16,10 +16,51 @@ static STEP: Mutex<&'static str> = Mutex::new("starting");
 #[cfg_attr(not(windows), allow(dead_code))]
 static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Call when Pyr starts quitting.
+/// Call when Pyr starts quitting (before an update's installer is checked and started: on a
+/// busy PC that alone took the window past the 4 seconds it has to answer, and the next start
+/// reported "Pyr stopped responding and was closed", bug report 668).
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn quitting() {
     QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Pyr isn't quitting after all (the update's installer couldn't be started): watched again.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn not_quitting() {
+    QUITTING.store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// The window is being opened again (the graphics card went away under it, see `main`): the
+/// old one going quiet meanwhile isn't a freeze (bug report 670). Until the new one is up.
+#[cfg_attr(not(windows), allow(dead_code))]
+static REOPENING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn reopening(yes: bool) {
+    REOPENING.store(yes, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// What the window shows (named with what Pyr was doing, when it's busy or stops responding:
+/// bug report 669 had the window's thread at 60 to 100% for ten minutes, and nothing to say
+/// what it was drawing). Never waits.
+static SHOWING: Mutex<&'static str> = Mutex::new("");
+static FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Each frame: what's on screen.
+pub fn frame(showing: &'static str) {
+    FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if let Ok(mut g) = SHOWING.try_lock() {
+        *g = showing;
+    }
+}
+
+/// "showing the casino, 58 frames a second" (frames since `since`, counted at `count`).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn showing(count: u64, since: std::time::Instant) -> (String, u64) {
+    let now = FRAMES.load(std::sync::atomic::Ordering::Relaxed);
+    let what = SHOWING.try_lock().map(|g| *g).unwrap_or("");
+    let fps = now.saturating_sub(count) as f64 / since.elapsed().as_secs_f64().max(0.001);
+    let what = if what.is_empty() { String::new() } else { format!("showing {what}, ") };
+    (format!("{what}{fps:.0} frames a second"), now)
 }
 
 /// When Pyr was started by Windows at sign-in (see `started_with_windows`).
@@ -215,10 +256,13 @@ mod win {
         let mut hung_since: Option<Instant> = None;
         let mut last_report = Instant::now();
         let mut last_health = Instant::now();
+        let mut frames = (0u64, Instant::now());
         loop {
             std::thread::sleep(Duration::from_secs(2));
-            if super::QUITTING.load(std::sync::atomic::Ordering::SeqCst) {
-                return;
+            // (Quitting, or the window being opened again: not watched meanwhile.)
+            if super::QUITTING.load(std::sync::atomic::Ordering::SeqCst) || super::REOPENING.load(std::sync::atomic::Ordering::SeqCst) {
+                hung_since = None;
+                continue;
             }
             // (The window there is now: after it's opened again, the new one.)
             let main = crate::tray::main_window().unwrap_or(main);
@@ -228,10 +272,11 @@ mod win {
                 let mut r = 0usize;
                 SendMessageTimeoutW(main, WM_NULL, WPARAM(0), LPARAM(0), SMTO_ABORTIFHUNG | SMTO_BLOCK, ANSWER_WITHIN_MS, Some(&mut r)).0 != 0
             };
-            if super::QUITTING.load(std::sync::atomic::Ordering::SeqCst) {
-                return;
+            if super::QUITTING.load(std::sync::atomic::Ordering::SeqCst) || super::REOPENING.load(std::sync::atomic::Ordering::SeqCst) {
+                continue;
             }
             let now = sample();
+            let (drawing, count) = super::showing(frames.0, frames.1);
             match (answered, hung_since) {
                 (false, None) => {
                     hung_since = Some(Instant::now());
@@ -239,7 +284,7 @@ mod win {
                     let step = *super::STEP.lock().unwrap_or_else(|e| e.into_inner());
                     let sh = &engine.shared;
                     tracing::warn!(
-                        "Pyr's window stopped responding (it was {step}; shared state {}, call {}). {}",
+                        "Pyr's window stopped responding (it was {step}; shared state {}, call {}; {drawing}). {}",
                         if sh.state.is_locked_exclusive() { "being written" } else if sh.state.is_locked() { "being read" } else { "free" },
                         if sh.call.is_locked() { "busy" } else { "free" },
                         describe(&prev, &now, ui_thread, true)
@@ -271,10 +316,11 @@ mod win {
                 let (_, private, load, _) = memory();
                 let pyr = 100.0 * now.process.saturating_sub(prev.process) as f64 / (now.at.duration_since(prev.at).as_secs_f64().max(0.001) * 1e7);
                 if pyr > 60.0 || load > 90 || private > 1500 {
-                    tracing::info!("busy: {}", describe(&prev, &now, ui_thread, true));
+                    tracing::info!("busy ({drawing}): {}", describe(&prev, &now, ui_thread, true));
                 }
                 last_health = Instant::now();
             }
+            frames = (count, Instant::now());
             prev = now;
         }
     }

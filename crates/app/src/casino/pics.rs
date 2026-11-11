@@ -129,9 +129,16 @@ const PICS: &[(&str, &[u8])] = pics![
 enum Slot {
     Reading,
     Read(ColorImage),
-    Ready(TextureHandle),
+    /// The texture, and when it was last drawn.
+    Ready(TextureHandle, std::time::Instant),
     Failed,
 }
+
+/// A picture not drawn for this long is let go (the graphics card's memory and Pyr's): the
+/// casino's pictures are big, kept at every size they were drawn at, and were kept for as long
+/// as Pyr was open. Bug reports 669 and 670: the PC's memory 87 to 94% in use, Pyr's own 450 to
+/// 730 MB, and the graphics card out of room for a frame. It's read again if it's wanted.
+const UNUSED_FOR: std::time::Duration = std::time::Duration::from_secs(90);
 
 /// (name, the size it was made for: 0 as it is) → where it's got to.
 fn cache() -> &'static Mutex<HashMap<(&'static str, u32), Slot>> {
@@ -198,13 +205,27 @@ pub fn tex(ctx: &egui::Context, name: &str, max_px: u32) -> Option<TextureHandle
     let size = if max_px == 0 { 0 } else { max_px.next_power_of_two().max(32) };
     let key = (name, size);
     let mut c = cache().lock().ok()?;
+    let now = std::time::Instant::now();
+    // Now and then, what hasn't been drawn for a while goes.
+    {
+        static SWEPT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+        if let Ok(mut swept) = SWEPT.try_lock()
+            && swept.is_none_or(|t| now.duration_since(t) > std::time::Duration::from_secs(15))
+        {
+            *swept = Some(now);
+            c.retain(|_, slot| !matches!(slot, Slot::Ready(_, used) if now.duration_since(*used) > UNUSED_FOR));
+        }
+    }
     match c.get_mut(&key) {
-        Some(Slot::Ready(t)) => return Some(t.clone()),
+        Some(Slot::Ready(t, used)) => {
+            *used = now;
+            return Some(t.clone());
+        }
         Some(Slot::Reading) | Some(Slot::Failed) => return None,
         Some(slot @ Slot::Read(_)) => {
             let Slot::Read(img) = std::mem::replace(slot, Slot::Failed) else { return None };
             let t = ctx.load_texture(format!("casino-{name}-{size}"), img, TextureOptions::LINEAR);
-            *slot = Slot::Ready(t.clone());
+            *slot = Slot::Ready(t.clone(), now);
             return Some(t);
         }
         None => {}

@@ -1277,6 +1277,18 @@ impl eframe::App for PyrApp {
             }
         }
         crate::watchdog::step("starting a frame");
+        // (Named in the log when Pyr is busy or stops responding.)
+        crate::watchdog::frame(if self.poker.open.is_some() {
+            "the casino"
+        } else if self.ui.call_view {
+            "a call"
+        } else if self.ui.plugins_open {
+            "the Pyr Library"
+        } else if self.ui.home {
+            "home"
+        } else {
+            "chat"
+        });
         let engine = self.engine.clone();
         let mut acts: Vec<Act> = Vec::new();
         // The moving pictures' clock: it runs only while the window's in front.
@@ -1729,6 +1741,9 @@ impl PyrApp {
                         }
                     }
                 }
+                // (Quitting from here on: the installer's checked and started first, which on a
+                // busy PC can take the window a few seconds.)
+                crate::watchdog::quitting();
                 match crate::update::install(&path, &sha256) {
                     Ok(()) => {
                         tracing::info!("quitting to install the update");
@@ -1739,6 +1754,7 @@ impl PyrApp {
                         std::process::exit(0);
                     }
                     Err(e) => {
+                        crate::watchdog::not_quitting();
                         self.engine.shared.state.write().toast(format!("Update failed: {e}"), true);
                         self.updater.dismiss_error(self.update_seen.clone());
                     }

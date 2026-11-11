@@ -67,7 +67,32 @@ Version in brackets: where 0.13.x first had it.
 - [ ] Share picker redesign (0.13.14); still screens keep quality, High profile, crisp text
       (0.13.21); keep the size, lower the frame rate instead (0.13.22); on the graphics card
       end to end with NVENC/AMF/QSV, priority, 60 fps pacing, encoder in stats (0.13.26)
-- [ ] Automatic reports (voice went up and down, stopped responding, sound problems)
+- [ ] Automatic reports (voice went up and down, stopped responding, sound problems): 0.13.0
+      has the swells (dips) detector and the watchdog; check what 0.13.x added
+
+### The approved bug reports (657 to 675)
+- [x] 668, 670 (stopped responding): false. 668 was the update's installer being checked on the
+      window's thread just before quitting (now: quitting is marked first; a freeze the window
+      came out of by quitting isn't reported); 670 was the window being opened again after the
+      graphics card went away (not watched meanwhile, not reported).
+- [ ] 669 (stopped responding): the window's thread at 60 to 100% for ten minutes, the PC's
+      memory 92 to 94% in use. Now: the log says what the window was showing and at how many
+      frames a second; casino pictures not drawn for 90 s are let go. Look again when it comes
+      back with that.
+- [ ] 657 to 667, 671 to 675 (voice down and back up, voice isolation, headphones): all with
+      isolation, echo cancellation on, automatic gain on; 0.13.11's note says it's while
+      something plays on the PC (a game's music) with headphones. Plan, keeping what the echo
+      canceller does with others' voices as it is:
+      1. pc_sound (0.13.2, WASAPI process loopback, thread `pyr-pc-sound`, `PYR_AB=pcsound`):
+         the PC's own sound goes to the echo canceller only while the speakers can be heard in
+         the microphone (`mic_echo`: found, or not known yet). With headphones it can't come
+         back, so it isn't there to turn the voice down by.
+      2. 0.13.19's `aechfcap` (double-talk on speakers): get its numbers from the 0.13.28
+         binary (`tune_aec3`'s stores; field offsets from `offset_of!` on sonora's config built
+         with the same compiler) rather than guess.
+      3. `examples/aec_eval.rs` before and after (headphones and speakers, others talking and
+         music, with the PC's sound), then Pyr's own echo test on Blue's PC: speakers into
+         the microphone, A/B against 0.13.28, before anything ships.
 
 ### Library and programs
 - [ ] Plugins with art: up to 100 MB and 5,000 files, any Rust (0.13.6)
