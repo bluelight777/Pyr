@@ -39,9 +39,47 @@ fn bets_outside_the_limits_are_refused() {
     assert!(Bet::Keno { chips: 10, picks: vec![1, 1] }.check().is_err());
     assert!(Bet::Keno { chips: 10, picks: (1..=11).collect() }.check().is_err());
     assert!(Bet::Roulette { chips: vec![roulette::Chip { spot: roulette::Spot::Split { a: 3, b: 4 }, chips: 5 }] }.check().is_err(), "3 and 4 aren't side by side");
-    assert!(Bet::Roulette { chips: vec![roulette::Chip { spot: roulette::Spot::Straight { n: 17 }, chips: 2_001 }] }.check().is_err());
+    assert!(Bet::Roulette { chips: vec![roulette::Chip { spot: roulette::Spot::Straight { n: 17 }, chips: 25_001 }] }.check().is_err());
     assert!(Bet::Roulette { chips: vec![roulette::Chip { spot: roulette::Spot::Corner { a: 2 }, chips: 5 }] }.check().is_ok());
     assert!(Bet::Baccarat(baccarat::Bets::default()).check().is_err());
+}
+
+/// The most a round takes, and the words for it, as 0.13.28's server says them (asked of it).
+#[test]
+fn the_most_a_round_takes_is_0_13_28s() {
+    use roulette::{Chip, Spot};
+    let no = |b: Bet| b.check().unwrap_err();
+    let yes = |b: Bet| b.check().unwrap();
+    assert_eq!(no(Bet::Slots { line_bet: 5_001 }), "the most line bet is 5000");
+    yes(Bet::Slots { line_bet: 5_000 });
+    assert_eq!(no(Bet::Keno { chips: 100_001, picks: vec![1, 2, 3] }), "the most bet is 100000");
+    yes(Bet::Keno { chips: 100_000, picks: vec![1, 2, 3] });
+    assert_eq!(no(Bet::Blackjack { chips: 100_001 }), "the most bet is 100000");
+    assert_eq!(no(Bet::Dice { chips: 100_001, chance: 5_000, over: false }), "the most bet is 100000");
+    assert_eq!(no(Bet::Baccarat(baccarat::Bets { tie: 25_001, ..Default::default() })), "the most on Tie or a pair is 25,000");
+    yes(Bet::Baccarat(baccarat::Bets { tie: 25_000, ..Default::default() }));
+    let rl = |spot: Spot, chips: u64| Bet::Roulette { chips: vec![Chip { spot, chips }] };
+    for (spot, words) in [
+        (Spot::Straight { n: 7 }, "the most on 7 straight up is 25000"),
+        (Spot::Split { a: 1, b: 2 }, "the most on the 1/2 split is 50000"),
+        (Spot::Street { row: 0 }, "the most on the 1-3 street is 75000"),
+        (Spot::Corner { a: 1 }, "the most on the 1/2/4/5 corner is 100000"),
+        (Spot::Line { row: 0 }, "the most on the 1-6 line is 150000"),
+        (Spot::Column { c: 0 }, "the most on column 1 is 300000"),
+        (Spot::Dozen { d: 0 }, "the most on 1-12 is 300000"),
+        (Spot::Odd, "the most on odd is 500000"),
+        (Spot::Low, "the most on 1-18 is 500000"),
+        (Spot::Black, "the most on black is 500000"),
+    ] {
+        assert_eq!(no(rl(spot, 90_000_000)), words);
+    }
+    let spin = Bet::Roulette { chips: vec![Chip { spot: Spot::Red, chips: 500_000 }, Chip { spot: Spot::Black, chips: 500_000 }, Chip { spot: Spot::Odd, chips: 1 }] };
+    assert_eq!(no(spin), "the most for one spin is 1000000");
+    assert_eq!(no(Bet::Dragon { bet: 30_000, growth: 0 }), "Ember Dragon's bets are 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000");
+    yes(Bet::Dragon { bet: 100_000, growth: 0 });
+    assert_eq!(no(Bet::Row { machine: 0, bet: 30_000, feature: feature::Feature::Spin }), "a spin is 20 to 100000 chips");
+    yes(Bet::Row { machine: 0, bet: 100_000, feature: feature::Feature::Spin });
+    yes(Bet::Reels { machine: 0, bet: 100_000, buy: false });
 }
 
 // ---- Slots ----
@@ -144,11 +182,20 @@ fn five_flames_win_the_jackpot_once() {
     }
     let g = slots::grid(&stops);
     assert!(g.iter().all(|reel| reel[1] == slots::WILD));
-    let (mut pool, mut won) = (1_000_000, 0);
-    let spin = super::slots::tests_evaluate(stops, 250, &mut pool, &mut won);
-    assert_eq!(won, 500_000, "half the biggest line bet: half the pool");
+    let (mut pool, mut won) = (10_000_000, 0);
+    let spin = super::slots::tests_evaluate(stops, 2_500, &mut pool, &mut won);
+    assert_eq!(won, 5_000_000, "half the biggest line bet: half the pool");
     assert_eq!(pool, 0);
-    assert!(spin.pay >= 500_000);
+    assert!(spin.pay >= 5_000_000);
+    // Where five flames pay more than the share, that's paid and the pool isn't touched (the
+    // house takes nothing from it).
+    let (mut pool, mut won) = (1_000_000, 0);
+    let spin = super::slots::tests_evaluate(stops, 2_500, &mut pool, &mut won);
+    assert_eq!(won, 0);
+    assert!(spin.pay >= 1_500 * 2_500);
+    // What the machine shows: the share at the bet.
+    assert_eq!(slots::jackpot_part(10_010_000, 5), 10_010);
+    assert_eq!(slots::jackpot_part(10_010_000, 5_000), 10_010_000);
 }
 
 // ---- Roulette ----

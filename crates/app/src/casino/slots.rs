@@ -18,7 +18,14 @@ use crate::app::PyrApp;
 use crate::poker::cards::chips_text;
 use crate::theme;
 
-const LINE_BETS: [u64; 10] = [1, 2, 5, 10, 25, 50, 100, 200, 250, 500];
+/// The line bets, as 0.13.28's: to 5,000 (100,000 a spin) where the house takes it (0.13.6),
+/// else to 500.
+const LINE_BETS: [u64; 14] = [1, 2, 5, 10, 25, 50, 100, 200, 250, 500, 1_000, 2_000, 2_500, 5_000];
+
+/// The line bets this house takes.
+fn line_bets(s: &ServerView) -> &'static [u64] {
+    if s.has(pyr_proto::control::SLOTS_100K_FEATURE) { &LINE_BETS } else { &LINE_BETS[..10] }
+}
 use super::spin::{Reel, SPEED};
 
 pub struct SlotsUi {
@@ -195,7 +202,8 @@ impl PyrApp {
         // The marquee and the jackpot.
         let title = if free_round { "FREE SPINS".to_string() } else { "PYR SEVENS".to_string() };
         glow_text(&p, pos2(cab.center().x, cab.top() + 42.0), Align2::CENTER_CENTER, &title, theme::bold_font(30.0), col::GOLD2, col::EMBER.gamma_multiply(0.5));
-        let jp = self.poker.casino.slots.shown_jackpot(c.jackpot);
+        // (What five flames would win at this bet: the pool in proportion, 0.13.6.)
+        let jp = sl::jackpot_part(self.poker.casino.slots.shown_jackpot(c.jackpot), self.poker.casino.slots.line_bet);
         let jr = Rect::from_center_size(pos2(cab.center().x, cab.top() + 76.0), vec2(360.0, 30.0));
         p.rect_filled(jr, theme::r(15), Color32::from_black_alpha(170));
         p.rect_stroke(jr, theme::r(15), Stroke::new(1.0f32, col::GOLD_DARK), StrokeKind::Inside);
@@ -519,9 +527,10 @@ impl PyrApp {
             p.circle_filled(r.center(), 17.0, if resp.hovered() { col::GOLD } else { col::GOLD_DARK });
             p.text(r.center(), Align2::CENTER_CENTER, label, theme::bold_font(20.0), Color32::BLACK);
             if resp.clicked() || key_dir == dir {
-                let i = LINE_BETS.iter().position(|x| *x == lb).unwrap_or(2) as i32;
-                let j = (i + dir).clamp(0, LINE_BETS.len() as i32 - 1) as usize;
-                self.poker.casino.slots.line_bet = LINE_BETS[j];
+                let bets = line_bets(s);
+                let i = bets.iter().position(|x| *x == lb).unwrap_or(2) as i32;
+                let j = (i + dir).clamp(0, bets.len() as i32 - 1) as usize;
+                self.poker.casino.slots.line_bet = bets[j];
             }
         }
         p.text(pos2(bar.left() + 95.0, cy + 12.0), Align2::CENTER_CENTER, chips_text(lb), theme::bold_font(22.0), col::GOLD2);

@@ -118,16 +118,18 @@ impl Spot {
     }
 }
 
-/// The most one spot may hold (so a straight-up win can pay at most 36 times this).
+/// The most one spot may hold (so a straight-up win can pay at most 36 times this): 0.13.28's,
+/// from 0.13.6 (25,000 on a number up to 500,000 on red or black; a table takes less if its own
+/// most is less).
 pub fn max_on(spot: &Spot) -> u64 {
     match spot {
-        Spot::Straight { .. } => 2_000,
-        Spot::Split { .. } => 4_000,
-        Spot::Street { .. } => 6_000,
-        Spot::Corner { .. } => 8_000,
-        Spot::Line { .. } => 12_000,
-        Spot::Column { .. } | Spot::Dozen { .. } => 25_000,
-        _ => 50_000,
+        Spot::Straight { .. } => 25_000,
+        Spot::Split { .. } => 50_000,
+        Spot::Street { .. } => 75_000,
+        Spot::Corner { .. } => 100_000,
+        Spot::Line { .. } => 150_000,
+        Spot::Column { .. } | Spot::Dozen { .. } => 300_000,
+        _ => 500_000,
     }
 }
 

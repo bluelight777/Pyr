@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use pyr_engine::poker_sfx::Cue;
 use pyr_engine::state::ServerView;
-use pyr_poker::casino::dragon::{self as dg, AGES, BETS, Fire, Jackpot, REELS, ROWS};
+use pyr_poker::casino::dragon::{self as dg, AGES, Fire, Jackpot, REELS, ROWS};
 use pyr_poker::casino::feature::Feature;
 use pyr_poker::casino::{Bet, Outcome};
 use pyr_poker::net::RoundView;
@@ -765,8 +765,9 @@ impl PyrApp {
             p.circle_filled(r.center(), 16.0, if resp.hovered() && !busy { col::GOLD } else { col::GOLD_DARK });
             p.text(r.center(), Align2::CENTER_CENTER, label, theme::bold_font(19.0), Color32::BLACK);
             if (resp.clicked() || key_dir == dir) && !busy {
-                let i = BETS.iter().position(|x| *x == bet).unwrap_or(2) as i32;
-                self.poker.casino.dragon.bet = BETS[(i + dir).clamp(0, BETS.len() as i32 - 1) as usize];
+                let bets = super::slot_bets(s);
+                let i = bets.iter().position(|x| *x == bet).unwrap_or(2) as i32;
+                self.poker.casino.dragon.bet = bets[(i + dir).clamp(0, bets.len() as i32 - 1) as usize];
                 self.poker.casino.dragon.shown_growth = None;
             }
         }
@@ -776,7 +777,7 @@ impl PyrApp {
         if !busy {
             egui::Popup::menu(&aresp).align(egui::RectAlign::TOP_START).show(|ui| {
                 crate::menu::style(ui);
-                for b in BETS {
+                for &b in super::slot_bets(s) {
                     let g = Self::dragon_growth(s, b);
                     if ui.button(format!("{} chips  ·  {} dragon", chips_text(b), AGES[dg::age(g)].1)).clicked() {
                         self.poker.casino.dragon.bet = b;

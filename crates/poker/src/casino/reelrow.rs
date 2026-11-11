@@ -114,7 +114,7 @@ pub fn pool_share(machine: u8, cost: u64) -> u64 {
 pub fn top_win(machine: u8, bet: u64, pool: u64) -> u64 {
     match TOPS[machine as usize].top {
         Top::Fixed(x) => bet.saturating_mul(x),
-        Top::Progressive => (pool as u128 * bet as u128 / reels::MAX_BET as u128) as u64,
+        Top::Progressive => (pool as u128 * bet.min(reels::POOL_FULL_BET) as u128 / reels::POOL_FULL_BET as u128) as u64,
     }
 }
 
@@ -1106,9 +1106,12 @@ mod tests {
         let n = 2_000_000;
         let hits = (0..n).filter(|_| roll_top(3, 100, 0, &mut s) > 0).count();
         assert!((25..60).contains(&hits), "{hits} in {n}");
-        // A progressive jackpot pays its pool's share by the bet; with no pool, nothing.
+        // A progressive jackpot pays its pool's share by the bet, all of it from 10,000 up (as
+        // before the bets went to 100,000); with no pool, nothing.
         assert_eq!(top_win(4, reels::MAX_BET, 123_456_789), 123_456_789);
-        assert_eq!(top_win(9, reels::MAX_BET / 10, 1_000_000), 100_000);
+        assert_eq!(top_win(4, reels::POOL_FULL_BET, 123_456_789), 123_456_789);
+        assert_eq!(top_win(9, reels::POOL_FULL_BET / 10, 1_000_000), 100_000);
+        assert_eq!(top_win(9, 50_000, 1_000_000), 1_000_000);
         assert_eq!(pool_share(4, 10_000), 50);
         assert_eq!(pool_share(0, 10_000), 0);
         // Paid in place of the rest (a Super Bonus's three times included).

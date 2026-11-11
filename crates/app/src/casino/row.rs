@@ -10,7 +10,7 @@ use eframe::egui::{self, Align2, Color32, Pos2, Rect, Sense, Shape, Stroke, Stro
 use pyr_engine::poker_sfx::Cue;
 use pyr_engine::state::ServerView;
 use pyr_poker::casino::feature::Feature;
-use pyr_poker::casino::reels::{self as rr, BETS, REELS, ROWS};
+use pyr_poker::casino::reels::{self as rr, REELS, ROWS};
 use pyr_poker::casino::reelrow;
 use pyr_poker::casino::Outcome;
 use pyr_poker::net::RoundView;
@@ -914,8 +914,9 @@ impl PyrApp {
             p.circle_filled(r.center(), 16.0, if resp.hovered() && !busy { th.accent } else { mix(th.accent, Color32::BLACK, 0.5) });
             p.text(r.center(), Align2::CENTER_CENTER, label, theme::bold_font(19.0), Color32::BLACK);
             if (resp.clicked() || key_dir == dir) && !busy {
-                let i = BETS.iter().position(|x| *x == bet).unwrap_or(2) as i32;
-                self.poker.casino.row.bet = BETS[(i + dir).clamp(0, BETS.len() as i32 - 1) as usize];
+                let bets = super::slot_bets(s);
+                let i = bets.iter().position(|x| *x == bet).unwrap_or(2) as i32;
+                self.poker.casino.row.bet = bets[(i + dir).clamp(0, bets.len() as i32 - 1) as usize];
             }
         }
         let amount = Rect::from_center_size(pos2(bar.left() + 93.0, cy + 10.0), vec2(76.0, 30.0));
@@ -924,7 +925,7 @@ impl PyrApp {
         if !busy {
             egui::Popup::menu(&aresp).align(egui::RectAlign::TOP_START).show(|ui| {
                 crate::menu::style(ui);
-                for b in BETS {
+                for &b in super::slot_bets(s) {
                     if ui.button(format!("{} chips", chips_text(b))).clicked() {
                         self.poker.casino.row.bet = b;
                         ui.close();

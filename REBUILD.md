@@ -231,8 +231,22 @@ How (decided while starting it):
       a sound band per machine, 99% checked by simulation (0.13.2)
 - [ ] Bonus rounds that build: Bomb Spins, Super Hold & Win (0.13.6)
 - [ ] Big wins: Big, Mega, Epic, Legendary, Mythic with fireworks (0.13.2/4)
-- [ ] Bets to 100,000 on blackjack, baccarat, keno, slots (0.13.2/4/6); Pyr Sevens' Phoenix
-      Jackpot in proportion (0.13.6); new players 100,000 (0.13.6)
+- [x] Bets to 100,000 on blackjack, baccarat, keno, slots (0.13.2/4/6); Pyr Sevens' Phoenix
+      Jackpot in proportion (0.13.6); new players 100,000 (0.13.6). Every limit asked of
+      0.13.28's server and answered the same, word for word, by the rebuilt one: blackjack,
+      dice and keno to 100,000 a round, baccarat's Tie and pairs to 25,000, roulette 25,000 on a
+      number to 500,000 on red or black and 1,000,000 a spin, Pyr Sevens' line bets to 5,000
+      (0.13.28's list: 1 to 2,500 and 5,000), Reel Row and Ember Dragon's bets 20,000, 50,000 and
+      100,000 added (a progressive jackpot's whole pool from 10,000 up, as before), what a round
+      can pay 50,000,000,000. The Phoenix Jackpot starts at 10,000,000 and pays its pool in
+      proportion to the bet; the machine shows your share (10,010 at a line bet of 5). Under
+      0.13.28's names (`casino_100k`, `big_slot_bets`, `slots_100k`): 0.13.28's rounds at the top
+      bets replayed by the rebuild's code (60 of them, every game), and 0.13.28's app on the
+      rebuilt server bets 5,000 a line and checks its rounds. The rack as 0.13.28 lays it out
+      (the 100K chip, 1K/5K/25K/100K on the chips, chips narrower to fit, the bet's words beside
+      them while there's room: measured at eleven widths), except that where 0.13.28's chips ran
+      under the buttons (Keno at 1,280 wide, anything narrower) they sit on a tray over the
+      controls instead. Keno's ½, −chip and 2× and Dice's −chip (0.13.4) with it.
 - [x] The casino's menu bar (0.13.6): the mark and name, Lobby, Games, VIP Club, Leaderboard,
       Profile (Staff and the control room for those who have them), Fairness at the right; each
       button's name by it on a bar over 1150 wide, the icon alone (its name on hovering) under

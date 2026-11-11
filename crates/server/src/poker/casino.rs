@@ -621,7 +621,7 @@ mod tests {
         assert!(ask(&hub, "alice", CasinoReq::Play { commit: [0; 32], seed: [1; 32], bet: Bet::Slots { line_bet: 1 } }).is_err());
         // More than I have, or outside the limits: refused.
         assert!(ask(&hub, "alice", CasinoReq::Play { commit: v.commit, seed: [1; 32], bet: Bet::Dice { chips: STARTING_CHIPS + 1, chance: 5_000, over: false } }).is_err());
-        assert!(ask(&hub, "alice", CasinoReq::Play { commit: v.commit, seed: [1; 32], bet: Bet::Slots { line_bet: 501 } }).is_err());
+        assert!(ask(&hub, "alice", CasinoReq::Play { commit: v.commit, seed: [1; 32], bet: Bet::Slots { line_bet: slots::MAX_LINE_BET + 1 } }).is_err());
         let (mut chips, mut commit, mut nonce) = (v.chips, v.commit, v.nonce);
         let bets = [
             Bet::Slots { line_bet: 5 },

@@ -2,7 +2,8 @@
 //!
 //! Wins pay left to right on a line, three of a kind or more. The flame is wild (it stands in
 //! for anything but the star) and pays on its own; five flames on a line win the Phoenix
-//! Jackpot (a pool that grows by 1% of every spin's bet). Three or more stars anywhere pay and
+//! Jackpot (a pool that grows by 1% of every spin's bet), in proportion to the bet (0.13.6): all
+//! of it at the top bet, a tenth of it at a tenth of that. Three or more stars anywhere pay and
 //! start free spins, every win in them tripled, and more stars in them add more.
 //!
 //! Over a long run the reels pay back 98% of what's bet, and the jackpot pays back the 1% it
@@ -16,15 +17,16 @@ use crate::fair::Stream;
 pub const REELS: usize = 5;
 pub const ROWS: usize = 3;
 pub const LINES: usize = 20;
-/// The most a line may bet (20 lines: 10,000 a spin).
-pub const MAX_LINE_BET: u64 = 500;
+/// The most a line may bet (20 lines: 100,000 a spin, since 0.13.6; 500 before).
+pub const MAX_LINE_BET: u64 = 5_000;
 /// Free spins in one round, at most (stars keep adding them; the round has to end).
 pub const MAX_FREE_SPINS: usize = 100;
 /// Wins in free spins are multiplied by this.
 pub const FREE_SPIN_MULTIPLIER: u64 = 3;
-/// The jackpot's share of every spin's bet, in hundredths of a percent; and what it starts at.
+/// The jackpot's share of every spin's bet, in hundredths of a percent; and what it starts at
+/// (10,000,000 since 0.13.6), and again once it's won.
 pub const JACKPOT_SHARE_BP: u64 = 100;
-pub const JACKPOT_SEED: u64 = 50_000;
+pub const JACKPOT_SEED: u64 = 10_000_000;
 
 /// The symbols.
 pub const CHERRY: u8 = 0;
@@ -279,7 +281,7 @@ fn evaluate_x(stops: [u8; REELS], line_bet: u64, free: Option<u64>, wild_reel: b
             if symbol == WILD && count == 5 && *jackpot > 0 {
                 // The Phoenix Jackpot: the pool, shared by how much of the biggest line bet this
                 // one is (the fixed pay if that's more).
-                let share = (*jackpot as u128 * line_bet as u128 / MAX_LINE_BET as u128) as u64;
+                let share = jackpot_part(*jackpot, line_bet);
                 if share > p {
                     *jackpot_won = share;
                     p = share;
@@ -383,6 +385,12 @@ pub fn play_feature(line_bet: u64, f: Feature, s: &mut Stream, jackpot_pool: u64
     o.jackpot_won = won;
     o.spins = spins;
     o
+}
+
+/// What five flames on a line win of the jackpot's pool at `line_bet`: all of it at the top bet,
+/// in proportion below it (what the machine shows as its Phoenix Jackpot).
+pub fn jackpot_part(pool: u64, line_bet: u64) -> u64 {
+    (pool as u128 * line_bet.min(MAX_LINE_BET) as u128 / MAX_LINE_BET as u128) as u64
 }
 
 /// The jackpot's share of a spin's bet.

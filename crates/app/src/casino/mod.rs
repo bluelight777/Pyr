@@ -72,7 +72,18 @@ pub mod col {
 }
 
 /// Chip values on the rack.
-pub const CHIPS: [u64; 8] = [1, 5, 25, 100, 500, 1_000, 5_000, 25_000];
+pub const CHIPS: [u64; 9] = [1, 5, 25, 100, 500, 1_000, 5_000, 25_000, 100_000];
+/// A chip's cell on the rack at full size (22 a side and 8 between), and the least it may be
+/// (10 a side), as 0.13.28's.
+const CELL: f32 = 52.0;
+const MIN_CELL: f32 = 10.0 * CELL / 22.0;
+
+/// The bets Reel Row's and Ember Dragon's spins can be at this house: to 100,000 where it takes
+/// them (`big_slot_bets`, 0.13.4), else to 10,000.
+pub fn slot_bets(s: &ServerView) -> &'static [u64] {
+    let all = &pyr_poker::casino::reels::BETS;
+    if s.has(pyr_proto::control::BIG_SLOT_BETS_FEATURE) { all } else { &all[..9] }
+}
 
 /// The rack's next chip down (`step` −1) or up (+1) from `chip`, among those up to `max_chip`
 /// (from a chip not on this rack: the nearest one that way).
@@ -454,9 +465,26 @@ pub fn flat_chip(p: &egui::Painter, c: Pos2, r: f32, value: u64, lift: bool) {
     }
     p.circle_filled(c, r * 0.62, base);
     p.circle_stroke(c, r * 0.62, Stroke::new(1.0f32, edge.gamma_multiply(0.8)));
-    let label = crate::poker::cards::chips_short(value);
+    let label = chip_label(value);
     let text = if base.r() as u32 + base.g() as u32 + base.b() as u32 > 500 { Color32::from_rgb(0x20, 0x1a, 0x14) } else { Color32::WHITE };
-    p.text(c, Align2::CENTER_CENTER, label, theme::bold_font((r * 0.62).max(8.0)), text);
+    // (A long one smaller, to fit across the chip, but never under 7: 0.13.28's.)
+    let mut size = (r * 0.62).max(8.0);
+    let w = p.layout_no_wrap(label.clone(), theme::bold_font(size), text).size().x;
+    if w > r * 1.1 {
+        size = (size * r * 1.1 / w).max(7.0);
+    }
+    p.text(c, Align2::CENTER_CENTER, label, theme::bold_font(size), text);
+}
+
+/// What a chip says on it: 1, 5, 25, 100, 500, then 1K, 5K, 25K, 100K (as 0.13.28's).
+pub fn chip_label(value: u64) -> String {
+    if value >= 1_000_000 && value % 1_000_000 == 0 {
+        format!("{}M", value / 1_000_000)
+    } else if value >= 1_000 && value % 1_000 == 0 {
+        format!("{}K", value / 1_000)
+    } else {
+        chips_text(value)
+    }
 }
 
 pub fn chip_colors(value: u64) -> (Color32, Color32) {
@@ -468,7 +496,8 @@ pub fn chip_colors(value: u64) -> (Color32, Color32) {
         500..=999 => (Color32::from_rgb(0x7b, 0x3f, 0xc6), Color32::from_rgb(0xf5, 0xf2, 0xea)),
         1000..=4999 => (Color32::from_rgb(0xf0, 0xc0, 0x2e), Color32::from_rgb(0x8a, 0x24, 0x1c)),
         5000..=24_999 => (Color32::from_rgb(0xf0, 0x7a, 0x1e), Color32::from_rgb(0xf5, 0xf2, 0xea)),
-        _ => (Color32::from_rgb(0x2a, 0x6c, 0xe0), Color32::from_rgb(0xff, 0xd7, 0x6a)),
+        25_000..=99_999 => (Color32::from_rgb(0x2a, 0x6c, 0xe0), Color32::from_rgb(0xff, 0xd7, 0x6a)),
+        _ => (Color32::from_rgb(0xd8, 0x3a, 0x9a), Color32::from_rgb(0xff, 0xd7, 0x6a)),
     }
 }
 
@@ -790,31 +819,44 @@ impl PyrApp {
     }
 
     /// A game's rack of chips and its bet in words, in the room its controls leave left of
-    /// their buttons (`right`: the leftmost button's edge, less its gap). In a narrow window
-    /// (streamer mode's room for a camera, say) the biggest chips make way first (the bet's for
-    /// a stream's viewers too), then the words: never one over the other. Returns where the
-    /// words went.
+    /// their buttons (`right`: the leftmost button's edge, less its gap). As 0.13.28 lays it out:
+    /// each chip has a cell 52 wide at most (22 a side and 8 between), narrower to fit the room;
+    /// the words go beside the chips while the cells can still be 33 wide, else the chips have
+    /// the room to themselves; and a chip is never under 10 a side. Where even that doesn't fit
+    /// (0.13.28's chips ran under the buttons then), the rack and the words sit on a tray of
+    /// their own over the controls' left end: never one over the other. Returns where the words
+    /// went.
     pub fn rack_and_bet(&mut self, ui: &mut egui::Ui, bar: Rect, right: f32, max_chip: u64, text: String, color: Color32) -> Option<Rect> {
         let at = pos2(bar.left() + 16.0, bar.center().y - 26.0);
         let room = right - 10.0 - at.x;
-        let all = CHIPS.iter().filter(|v| **v <= max_chip).count();
+        let n = CHIPS.iter().filter(|v| **v <= max_chip).count().max(1) as f32;
         let galley = ui.painter().layout_no_wrap(text, theme::bold_font(16.0), color);
         let words = galley.size().x;
-        let fits = |w: f32| (((w + 8.0) / 52.0).floor().max(0.0) as usize).min(all);
-        let beside_words = fits(room - 18.0 - words);
-        let (n, with_words) = if beside_words >= all.min(3) { (beside_words, true) } else { (fits(room).max(1), false) };
-        let biggest = CHIPS.iter().copied().filter(|v| *v <= max_chip).take(n).last().unwrap_or(1);
-        self.chip_rack(ui, at, biggest);
-        if !with_words {
+        let beside = ((room - 18.0 - words) / n).min(CELL);
+        let alone = (room / n).min(CELL);
+        if beside >= 33.0 {
+            self.chip_rack(ui, at, max_chip, beside);
+            let r = Rect::from_min_size(pos2(right - 10.0 - words, bar.center().y - galley.size().y / 2.0), galley.size());
+            ui.painter().galley(r.min, galley, color);
+            return Some(r);
+        }
+        if alone >= MIN_CELL {
+            self.chip_rack(ui, at, max_chip, alone);
             return None;
         }
-        let r = Rect::from_min_size(pos2(right - 10.0 - words, bar.center().y - galley.size().y / 2.0), galley.size());
+        // The tray: the chips full size, the words beside them.
+        let tray = Rect::from_min_size(pos2(bar.left(), bar.top() - 8.0 - 60.0), vec2(16.0 + n * CELL - 8.0 + 18.0 + words + 16.0, 60.0));
+        ui.painter().rect_filled(tray, theme::r(18), Color32::from_black_alpha(170));
+        let at = pos2(tray.left() + 16.0, tray.center().y - 22.0);
+        self.chip_rack(ui, at, max_chip, CELL);
+        let r = Rect::from_min_size(pos2(tray.right() - 16.0 - words, tray.center().y - galley.size().y / 2.0), galley.size());
         ui.painter().galley(r.min, galley, color);
         Some(r)
     }
 
-    /// The rack of chips to bet with; returns the rack's height.
-    pub fn chip_rack(&mut self, ui: &mut egui::Ui, at: Pos2, max_chip: u64) -> f32 {
+    /// The rack of chips to bet with, from `at` (its top left), each chip in a cell `cell` wide
+    /// (a chip 22/52 of it a side, centered 22 below `at`).
+    pub fn chip_rack(&mut self, ui: &mut egui::Ui, at: Pos2, max_chip: u64, cell: f32) {
         // A smaller or a bigger chip by its key (Left and Right unless changed).
         let step = if keys::pressed(ui.ctx(), keys::Move::ChipSmaller) {
             -1
@@ -826,13 +868,13 @@ impl PyrApp {
         if step != 0 {
             self.poker.casino.chip = next_chip(self.poker.casino.chip, max_chip, step);
         }
-        let r = 22.0;
+        let r = cell * 22.0 / CELL;
         let mut x = at.x;
         for v in CHIPS {
             if v > max_chip {
                 break;
             }
-            let c = pos2(x + r, at.y + r);
+            let c = pos2(x + r, at.y + 22.0);
             let hit = Rect::from_center_size(c, vec2(r * 2.0, r * 2.0));
             let resp = ui.interact(hit, ui.id().with(("chip", v)), Sense::click());
             let on = self.poker.casino.chip == v;
@@ -844,9 +886,8 @@ impl PyrApp {
             if resp.on_hover_text(format!("Bet {} at a click (right-click a bet to take chips off)", chips_text(v))).clicked() {
                 self.poker.casino.chip = v;
             }
-            x += r * 2.0 + 8.0;
+            x += cell;
         }
-        r * 2.0 + 8.0
     }
 
     /// A big win over the table: its name, the chips counting up, coins falling.
@@ -1150,5 +1191,14 @@ mod rack_tests {
         // One between the rack's: the nearest that way.
         assert_eq!(next_chip(50, 25_000, -1), 25);
         assert_eq!(next_chip(50, 25_000, 1), 100);
+        assert_eq!(next_chip(25_000, 100_000, 1), 100_000);
+    }
+
+    /// The chips say what 0.13.28's say.
+    #[test]
+    fn chips_say_1k_and_100k() {
+        let labels: Vec<String> = CHIPS.iter().map(|v| chip_label(*v)).collect();
+        assert_eq!(labels, ["1", "5", "25", "100", "500", "1K", "5K", "25K", "100K"]);
+        assert_eq!((chip_label(500_000), chip_label(1_000_000), chip_label(5_000_000)), ("500K".into(), "1M".into(), "5M".into()));
     }
 }

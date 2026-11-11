@@ -424,6 +424,16 @@ pub const LEVELS_FEATURE: &str = "poker_levels_2";
 pub const PLINKO_FEATURE: &str = "casino_plinko";
 /// Pyr Casino's control room (0.13.5): the Owner of the Game's, and whoever they let in.
 pub const CMS_FEATURE: &str = "casino_cms";
+/// Blackjack, baccarat and keno take up to 100,000 a round, and the 100K chip is on the rack
+/// (0.13.2); a roulette spin holds up to 1,000,000 (25,000 on a number to 500,000 on red or
+/// black), Tie and the pairs 25,000 (0.13.6). 0.13.28's name: its apps bet as high here.
+pub const CASINO_100K_FEATURE: &str = "casino_100k";
+/// Reel Row and Ember Dragon bets up to 100,000 a spin: 20,000, 50,000 and 100,000 (0.13.4); a
+/// progressive jackpot pays its whole pool from 10,000 up, as before. 0.13.28's name.
+pub const BIG_SLOT_BETS_FEATURE: &str = "big_slot_bets";
+/// Pyr Sevens up to 100,000 a spin (line bets to 5,000), its Phoenix Jackpot paid in proportion
+/// to the bet and started at 10,000,000 (0.13.6). 0.13.28's name.
+pub const SLOTS_100K_FEATURE: &str = "slots_100k";
 /// Game Masters give without a limit, and they and the Owner of the Game take chips away, all
 /// in the staff log with the balance before and after (0.13.4).
 pub const GM_UNLIMITED_FEATURE: &str = "poker_gm_unlimited";

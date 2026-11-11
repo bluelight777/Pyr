@@ -41,9 +41,12 @@ pub const POINT_TENTHOUSANDTHS: u64 = 928;
 /// Buying the bonus costs this many times the bet.
 pub const BUY_X: u64 = 7;
 /// The bets a spin can be.
-pub const BETS: [u64; 9] = [20, 50, 100, 200, 500, 1_000, 2_000, 5_000, 10_000];
+pub const BETS: [u64; 12] = [20, 50, 100, 200, 500, 1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000];
 pub const MIN_BET: u64 = 20;
-pub const MAX_BET: u64 = 10_000;
+pub const MAX_BET: u64 = 100_000;
+/// The bet from which a progressive jackpot pays its whole pool (in proportion below it): 10,000,
+/// as before the bets went to 100,000 (0.13.4).
+pub const POOL_FULL_BET: u64 = 10_000;
 
 /// The pick-and-dodge board: tiles, hazards, the life and gold tiles in it, lives to start with.
 pub const TILES: usize = 15;

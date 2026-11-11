@@ -44,9 +44,9 @@ pub const PAY: [[u64; 3]; 6] = [[5, 10, 25], [6, 12, 30], [8, 16, 40], [10, 25, 
 /// nearest chip.
 pub const POINT_TENTHOUSANDTHS: u64 = 85;
 /// The bets a spin can be.
-pub const BETS: [u64; 9] = [20, 50, 100, 200, 500, 1_000, 2_000, 5_000, 10_000];
+pub const BETS: [u64; 12] = [20, 50, 100, 200, 500, 1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000];
 pub const MIN_BET: u64 = 20;
-pub const MAX_BET: u64 = 10_000;
+pub const MAX_BET: u64 = 100_000;
 
 /// The dragon's ages: the growth each takes, its name, and what it multiplies reel wins by.
 pub const AGES: [(u32, &str, u64); 5] = [(0, "Hatchling", 1), (20, "Young", 2), (45, "Adult", 3), (80, "Ancient", 4), (125, "Elder", 5)];
@@ -129,9 +129,11 @@ pub fn pool_shares(bet: u64) -> Pools {
     Jackpot::ALL.map(|j| (bet * j.share_bp()).div_ceil(10_000))
 }
 
-/// What a pool pays at `bet`: its share for the bet (all of it at the most bet).
+/// What a pool pays at `bet`: its share for the bet (all of it from 10,000 up, as before the
+/// bets went to 100,000).
 pub fn pool_part(pool: u64, bet: u64) -> u64 {
-    (pool as u128 * bet.min(MAX_BET) as u128 / MAX_BET as u128) as u64
+    let full = super::reels::POOL_FULL_BET;
+    (pool as u128 * bet.min(full) as u128 / full as u128) as u64
 }
 
 /// A jackpot's value at `bet` with its pool at `pool`: its fixed part and its pool's share.

@@ -256,12 +256,25 @@ impl PyrApp {
             self.poker.casino.keno.picks.clear();
             self.poker.casino.keno.show = None;
         }
-        if button!(ui, &format!("+{}", chips_text(picked.min(1_000))), 86.0, false, !busy) {
-            self.poker.casino.keno.chips = (bet + picked).min(1_000);
+        // Twice the bet, a chip more, a chip less, half (0.13.4), to the most a draw takes: 100,000
+        // where the house takes it (0.13.2), the 25K chip the biggest on the rack (0.13.6).
+        let big = s.has(pyr_proto::control::CASINO_100K_FEATURE);
+        let (most, top_chip) = if big { (100_000, 25_000) } else { (1_000, 500) };
+        if button!(ui, "2×", 56.0, false, !busy) {
+            self.poker.casino.keno.chips = (bet * 2).clamp(1, most);
+        }
+        if button!(ui, &format!("+{}", chips_text(picked.min(most))), 86.0, false, !busy) {
+            self.poker.casino.keno.chips = (bet + picked).min(most);
+        }
+        if button!(ui, &format!("−{}", chips_text(picked.min(most))), 86.0, false, !busy) {
+            self.poker.casino.keno.chips = bet.saturating_sub(picked).max(1);
+        }
+        if button!(ui, "½", 52.0, false, !busy) {
+            self.poker.casino.keno.chips = (bet / 2).max(1);
         }
         // The bet (right-click it for the least).
         let color = if bet > super::chips_now(s) { col::LOSE } else { col::GOLD2 };
-        if let Some(br) = self.rack_and_bet(ui, cb, x, 500, format!("Bet {}", chips_text(bet)), color) {
+        if let Some(br) = self.rack_and_bet(ui, cb, x, top_chip, format!("Bet {}", chips_text(bet)), color) {
             let bresp = ui.interact(br.expand2(vec2(6.0, 8.0)), ui.id().with("kn-bet"), Sense::click());
             if bresp.on_hover_text("Right-click: back to 1").secondary_clicked() && !busy {
                 self.poker.casino.keno.chips = 1;

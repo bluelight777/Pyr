@@ -28,6 +28,9 @@ impl Side {
     }
 }
 
+/// The most on Tie or on a pair (0.13.6).
+pub const SIDE_MAX: u64 = 25_000;
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Bets {
     #[serde(default)]
@@ -51,8 +54,9 @@ impl Bets {
         if self.total() == 0 {
             return Err("put chips on Player, Banker, Tie or a pair".into());
         }
-        if self.tie > 5_000 || self.player_pair > 5_000 || self.banker_pair > 5_000 {
-            return Err("the most on Tie or a pair is 5,000".into());
+        // (25,000 since 0.13.6.)
+        if self.tie > SIDE_MAX || self.player_pair > SIDE_MAX || self.banker_pair > SIDE_MAX {
+            return Err("the most on Tie or a pair is 25,000".into());
         }
         Ok(())
     }

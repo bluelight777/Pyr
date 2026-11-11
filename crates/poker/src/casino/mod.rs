@@ -131,24 +131,27 @@ impl Game {
 }
 
 /// The least and most a round may stake, by game (chips; for slots, the line bet; for keno, the
-/// bet per draw).
+/// bet per draw). As 0.13.28 has them: blackjack, baccarat and keno to 100,000 a round (0.13.2),
+/// a roulette spin to 1,000,000 (0.13.6), Pyr Sevens to 100,000 a spin (0.13.6), Reel Row and
+/// Ember Dragon to 100,000 (0.13.4).
 pub fn limits(game: Game) -> (u64, u64) {
     match game {
         Game::Slots => (1, slots::MAX_LINE_BET),
-        Game::Blackjack => (10, 50_000),
-        Game::Roulette => (1, 50_000),
-        Game::Baccarat => (10, 50_000),
+        Game::Blackjack => (10, 100_000),
+        Game::Roulette => (1, 1_000_000),
+        Game::Baccarat => (10, 100_000),
         Game::Craps => (5, 50_000),
         Game::Dice => (1, 100_000),
-        Game::Keno => (1, 1_000),
+        Game::Keno => (1, 100_000),
         Game::Reels => (reels::MIN_BET, reels::MAX_BET),
         Game::Dragon => (dragon::MIN_BET, dragon::MAX_BET),
         Game::Plinko => (plinko::MIN_BET, plinko::MAX_BET),
     }
 }
 
-/// The most one round may pay back (chips): a Supernova (500,000 times the biggest Reel Row bet).
-pub const MAX_PAYOUT: u64 = 5_000_000_000;
+/// The most one round may pay back (chips): a Supernova (500,000 times the biggest Reel Row bet,
+/// 100,000 since 0.13.4).
+pub const MAX_PAYOUT: u64 = 50_000_000_000;
 
 /// What the house shows before a round: the fingerprint of its secret seed.
 pub fn commit(server_seed: &[u8; 32]) -> [u8; 32] {

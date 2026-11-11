@@ -231,7 +231,13 @@ impl PyrApp {
         if button(ui, &format!("+{}", chips_text(picked)), 90.0, false, !busy) {
             self.poker.casino.dice.chips = (bet + picked).min(100_000);
         }
+        // (A chip less, 0.13.4.)
+        if button(ui, &format!("−{}", chips_text(picked)), 90.0, false, !busy) {
+            self.poker.casino.dice.chips = bet.saturating_sub(picked).max(1);
+        }
         let color = if bet > super::chips_now(s) { col::LOSE } else { col::GOLD2 };
-        self.rack_and_bet(ui, cb, x, 25_000, format!("Bet {}", chips_text(bet)), color);
+        // (The 100K chip where the house takes 100,000 a round, 0.13.6.)
+        let top_chip = if s.has(pyr_proto::control::CASINO_100K_FEATURE) { 100_000 } else { 25_000 };
+        self.rack_and_bet(ui, cb, x, top_chip, format!("Bet {}", chips_text(bet)), color);
     }
 }

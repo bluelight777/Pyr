@@ -82,5 +82,9 @@ fn main() -> anyhow::Result<()> {
         std::thread::sleep(Duration::from_millis(700));
     }
     std::thread::sleep(Duration::from_millis(1500));
+    // How the rounds checked out (this Pyr played each again from the seeds).
+    if let Some(s) = engine.state().server(&key) {
+        println!("checked {} problems {:?}", s.poker.casino.checked, s.poker.casino.problems);
+    }
     Ok(())
 }
