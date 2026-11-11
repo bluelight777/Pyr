@@ -545,6 +545,14 @@ fn apply_event(shared: &Arc<Shared>, key: &str, ev: Event) {
         let blocked = st.blocked.clone();
         let Some(s) = st.server_mut(key) else { return };
         match ev {
+            // Invited to a table (not by someone I've blocked): again from them to the same
+            // table, it starts over.
+            Event::Poker { msg: pyr_poker::net::ToApp::TableInvite { from, table, name } } => {
+                if !blocked.contains(&from) && from != my_uid {
+                    s.poker.table_invites.retain(|i| !(i.0 == table && i.1 == from));
+                    s.poker.table_invites.push((table, from, name, Instant::now()));
+                }
+            }
             Event::Poker { msg } => {
                 poker_seed = s.poker.apply(msg, Instant::now());
             }

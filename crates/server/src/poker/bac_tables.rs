@@ -18,7 +18,8 @@ use super::{Poker, State, progress_chips};
 use crate::hub::Hub;
 
 /// The tables every server has (name, least and most bet). They never close.
-pub const STANDING: [(&str, u64, u64); 2] = [("Salon Privé", 10, 1_000), ("Black Pearl", 500, 25_000)];
+/// The tables always open (0.13.28's).
+pub const STANDING: [(&str, u64, u64); 3] = [("Salon Privé", 10, 1_000), ("Black Pearl", 500, 100_000), ("Imperial Salon", 10_000, 10_000_000)];
 const CLOSED: &str = "that table has closed";
 
 #[derive(Default)]

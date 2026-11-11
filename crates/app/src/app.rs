@@ -161,6 +161,8 @@ pub enum Act {
     MoveMember { key: String, uid: String, channel: ChannelId },
     /// Invite someone to the voice channel I'm in (Invite to the channel).
     InviteToVoice { key: String, uid: String },
+    /// An invite to a table answered (Join or Not now), or gone (see `corner_invites`).
+    AnswerTableInvite { key: String, table: pyr_poker::net::TableRef, from: String, join: bool },
     /// Prop bets (see `props`): look props up, open one, bet, cash out, settle, call off, and
     /// the New prop bet window (prefilled from `/prop`).
     PropGet { key: String, ids: Vec<u64> },
@@ -449,6 +451,8 @@ pub struct UiState {
     pub gif_focus: bool,
     /// Error notices closed with Dismiss, and the one just copied (for "Copied").
     pub toasts_dismissed: HashSet<u64>,
+    /// Notices to show once the frame has let go of the state (see `PyrApp::toast`).
+    pub toasts_waiting: Vec<(String, bool)>,
     /// A bug report's text from when Send was clicked until it has gone (a report that
     /// doesn't go is never lost), and the last finished send acted on.
     pub bug_draft: Option<(String, String, bool)>,
@@ -762,6 +766,12 @@ impl PyrApp {
                     e.join_voice(&key, channel);
                 }
             }
+            Act::AnswerTableInvite { key, table, from, join } => {
+                self.engine.dismiss_table_invite(&key, table, &from);
+                if join {
+                    self.go_to_table(&key, table);
+                }
+            }
             Act::SetAfk { key, channel, minutes } => e.set_afk(&key, channel, minutes),
             Act::StreamMuted(m) => e.set_stream_muted(m),
             Act::SuggestIdea { title, body } => e.suggest_idea(&title, &body),
@@ -979,8 +989,8 @@ impl PyrApp {
                 let limit = e.state().server(&key).map(crate::images::upload_limit).unwrap_or(pyr_proto::control::OLD_MAX_ATTACHMENT_BYTES);
                 if crate::images::can_shrink(&bytes, limit) {
                     // Too big: made smaller to fit first, off the window's thread.
-                    self.toast(format!("{name} is over {} MB: making it smaller to fit…", limit >> 20), false);
                     let e = e.clone();
+                    self.toast(format!("{name} is over {} MB: making it smaller to fit…", limit >> 20), false);
                     std::thread::spawn(move || match crate::images::shrink_to_fit(&bytes, limit) {
                         Ok((small, _)) => e.add_server_gif(&key, &name, small),
                         Err(err) => e.shared.state.write().toast(format!("{name}: {err}"), true),
@@ -1133,8 +1143,23 @@ impl PyrApp {
         }
     }
 
-    pub(crate) fn toast(&self, text: impl Into<String>, error: bool) {
-        self.engine.shared.state.write().toast(text, error);
+    /// A notice: shown once the frame has let go of the state (`toasts_waiting`). Taking the
+    /// state to write while the frame still reads it would wait on itself for ever: what froze
+    /// Pyr at roulette, baccarat and craps when bets were set to fit a table (0.13.0's; "Playing
+    /// craps no longer makes Pyr stop responding", 0.13.2).
+    pub(crate) fn toast(&mut self, text: impl Into<String>, error: bool) {
+        self.ui.toasts_waiting.push((text.into(), error));
+    }
+
+    /// The notices waiting (see `toast`), shown now: never while the frame reads the state.
+    fn show_waiting_toasts(&mut self) {
+        if self.ui.toasts_waiting.is_empty() {
+            return;
+        }
+        let mut st = self.engine.shared.state.write();
+        for (text, error) in self.ui.toasts_waiting.drain(..) {
+            st.toast(text, error);
+        }
     }
 
     /// Someone's profile picture as a texture, if they have one and it's loaded (still: a
@@ -1642,6 +1667,10 @@ impl eframe::App for PyrApp {
         for a in acts {
             self.apply(a, ctx);
         }
+        self.show_waiting_toasts();
+        if let Some((v, keep)) = self.poker.casino.games_volume_set.take() {
+            self.engine.set_games_volume(v, keep);
+        }
         crate::watchdog::step("in a file dialog");
         crate::images::run_wanted_dialog();
         // Drop textures for tiles that are gone.
@@ -2119,7 +2148,7 @@ impl PyrApp {
             self.dialogs(ctx, st, acts);
             self.viewer(ctx, st, acts);
             self.incoming_call_card(ctx, st, acts);
-            self.voice_invite_cards(ctx, st, acts);
+            self.invite_cards(ctx, st, acts);
             self.handshake_cards(ctx, st, acts);
             self.toasts(ctx, st, acts);
             return;
@@ -2133,7 +2162,7 @@ impl PyrApp {
             self.avatar_editor(ctx, acts);
             self.drop_files(ctx, st, acts);
             self.incoming_call_card(ctx, st, acts);
-            self.voice_invite_cards(ctx, st, acts);
+            self.invite_cards(ctx, st, acts);
             self.handshake_cards(ctx, st, acts);
             self.toasts(ctx, st, acts);
             return;
@@ -2220,7 +2249,7 @@ impl PyrApp {
         self.avatar_editor(ctx, acts);
         self.drop_files(ctx, st, acts);
         self.incoming_call_card(ctx, st, acts);
-        self.voice_invite_cards(ctx, st, acts);
+        self.invite_cards(ctx, st, acts);
         self.handshake_cards(ctx, st, acts);
         self.toasts(ctx, st, acts);
     }
@@ -2402,6 +2431,15 @@ impl PyrApp {
             chose = true;
         }
         chose |= crate::calls::call_item(ui, st, uid, Some(&s.key), acts);
+        // Invite them to the voice channel I'm in (they get a card with Join), under Call, as
+        // 0.13.28 has it.
+        if let Some((cid, cname)) = Self::my_voice_channel(st, s).filter(|_| !me && !s.is_bot(uid) && s.has(pyr_proto::control::VOICE_INVITE_FEATURE)) {
+            let there = s.voice_in(cid).iter().any(|p| p.user_id == uid);
+            if !there && s.status.is_connected() && ui.button(format!("Invite to 🔊 {cname}")).on_hover_text(format!("{name} gets a card in the corner of their Pyr with Join")).clicked() {
+                acts.push(Act::InviteToVoice { key: s.key.clone(), uid: uid.to_string() });
+                chose = true;
+            }
+        }
         chose |= self.make_sure_menu(ui, st, s, uid, acts);
         // A Game Master's gift of chips.
         chose |= self.give_chips_item(ui, s, uid);
@@ -2431,17 +2469,6 @@ impl PyrApp {
             }
             server_voice_items(ui, st, s, uid, acts);
             ui.separator();
-        }
-        // Invite them to the voice channel I'm in (they get a card with Join).
-        if let Some((cid, cname)) = Self::my_voice_channel(st, s).filter(|_| !me && !s.is_bot(uid) && s.has(pyr_proto::control::VOICE_INVITE_FEATURE)) {
-            let there = s.voice_in(cid).iter().any(|p| p.user_id == uid);
-            if !there && s.status.is_connected() {
-                if ui.button(format!("Invite to {cname}")).on_hover_text(format!("{name} gets a card in the corner of their Pyr with Join")).clicked() {
-                    acts.push(Act::InviteToVoice { key: s.key.clone(), uid: uid.to_string() });
-                    chose = true;
-                }
-                ui.separator();
-            }
         }
         // Move members: to another of the server's voice channels (Discord's Move To; dragging
         // them in the channel list does the same).

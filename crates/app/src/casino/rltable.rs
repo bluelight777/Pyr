@@ -22,7 +22,7 @@ use crate::poker::cards::chips_text;
 use crate::theme;
 
 const BAR_H: f32 = 96.0;
-const STRIP_H: f32 = 44.0;
+use super::picker::STRIP_H;
 /// Each seat's colour: its ring round its chips on the layout, its mark in the list.
 const SEAT_COLORS: [Color32; SEATS] = [
     Color32::from_rgb(0xff, 0x8a, 0x3d),
@@ -383,7 +383,7 @@ impl PyrApp {
             if resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
-            let top = v.max_bet.min(rl::max_on(&spot));
+            let top = pyr_poker::rlroom::spot_most(v.max_bet, &spot);
             let mut want = next.clone();
             if resp.clicked() {
                 let have = want.iter().find(|c| c.spot == spot).map(|c| c.chips).unwrap_or(0);
@@ -439,32 +439,17 @@ impl PyrApp {
         self.poker.casino.celebrate(paid, wagered, false, back + 0.2);
     }
 
-    /// The tables, along the top: each one's name, its bets and who's at it.
+    /// The tables, along the top: a card each (as 0.13.28's, see `picker`); click one to go to it
+    /// (standing up from this one).
     fn rl_tables_strip(&mut self, ui: &mut egui::Ui, s: &ServerView, strip: Rect, tables: &[pyr_poker::net::RlSummary], at: Option<u64>) {
         let p = ui.painter().clone();
         vgrad(&p, strip, Color32::from_rgb(0x0a, 0x1c, 0x12), Color32::from_rgb(0x04, 0x0c, 0x08));
-        let mut x = strip.left() + 14.0;
-        for t in tables {
-            let on = Some(t.id) == at;
-            let text = format!("{}  ·  {}–{}", t.name, chips_text(t.min_bet), chips_text(t.max_bet));
-            let who = format!("{} / {SEATS}", t.people + t.bots);
-            let w = 34.0 + (text.chars().count() + who.len()) as f32 * 7.2;
-            let r = Rect::from_min_size(pos2(x, strip.top() + 7.0), vec2(w, strip.height() - 14.0));
-            x += w + 8.0;
-            if r.right() > strip.right() - 12.0 {
-                break;
-            }
-            let resp = ui.interact(r, ui.id().with(("rl-table", t.id)), Sense::click());
-            p.rect_filled(r, theme::r(15), if on { col::GOLD.gamma_multiply(0.22) } else if resp.hovered() { Color32::from_white_alpha(22) } else { Color32::from_white_alpha(10) });
-            p.rect_stroke(r, theme::r(15), Stroke::new(1.0f32, if on { col::GOLD } else { Color32::from_white_alpha(30) }), StrokeKind::Inside);
-            p.text(r.left_center() + vec2(14.0, 0.0), Align2::LEFT_CENTER, text, theme::bold_font(13.0), if on { col::GOLD2 } else { col::TEXT });
-            p.text(r.right_center() - vec2(12.0, 0.0), Align2::RIGHT_CENTER, who, theme::font(12.0), col::MUTED);
-            if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() && !on {
-                self.rl_table_leave();
-                self.poker.casino.rlt.at = Some((s.key.clone(), t.id));
-                self.engine.poker(&s.key, ToServer::RlWatch { table: t.id });
-                self.poker.casino.rlt.watch_asked = Some(Instant::now());
-            }
+        let picks: Vec<super::picker::Pick> = tables.iter().map(|t| super::picker::Pick { id: t.id, name: t.name.clone(), min: t.min_bet, max: t.max_bet, seated: t.people + t.bots }).collect();
+        if let Some(id) = super::picker::cards(ui, strip, &picks, SEATS, at, "rl-table", 12.0) {
+            self.rl_table_leave();
+            self.poker.casino.rlt.at = Some((s.key.clone(), id));
+            self.engine.poker(&s.key, ToServer::RlWatch { table: id });
+            self.poker.casino.rlt.watch_asked = Some(Instant::now());
         }
     }
 
@@ -636,7 +621,7 @@ impl PyrApp {
             self.rl_send(s, v, on.clone(), true);
         }
         let r = place(96.0);
-        let doubled: Vec<Chip> = on.iter().map(|c| Chip { spot: c.spot, chips: (c.chips * 2).min(v.max_bet.min(rl::max_on(&c.spot))) }).collect();
+        let doubled: Vec<Chip> = on.iter().map(|c| Chip { spot: c.spot, chips: (c.chips * 2).min(pyr_poker::rlroom::spot_most(v.max_bet, &c.spot)) }).collect();
         let more = rlroom::total(&doubled).saturating_sub(total);
         let can_double = open && total > 0 && more > 0 && more <= chips;
         if button(ui, r, "double", "Double", None, Color32::from_white_alpha(30), can_double) || (double_key && can_double) {
@@ -653,8 +638,8 @@ impl PyrApp {
             self.rl_send(s, v, rebet, false);
         }
         let color = if total > chips + mine.as_ref().map(|x| rlroom::total(&x.chips)).unwrap_or(0) { col::LOSE } else { col::GOLD2 };
-        let max_chip = super::CHIPS.iter().copied().filter(|c| *c <= v.max_bet).last().unwrap_or(1);
-        self.rack_and_bet(ui, bar, x, max_chip, format!("Bets {}", chips_text(total)), color);
+        let chips_from_to = super::table_chips(v.min_bet, v.max_bet);
+        self.rack_and_bet_from(ui, bar, x, chips_from_to, format!("Bets {}", chips_text(total)), color);
         let hint = if settling {
             "The ball's going round".to_string()
         } else if total == 0 {

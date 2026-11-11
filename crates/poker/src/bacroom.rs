@@ -27,8 +27,14 @@ pub const QUICK_MS: u64 = 1_500;
 pub const SHOW_MS: u64 = 9_000;
 /// Coups a person can sit through without a bet before they're stood up.
 pub const IDLE_COUPS: u32 = 12;
-/// The most on Tie or a pair (as at the single-player table).
-pub const SIDE_MAX: u64 = 5_000;
+/// The most on Tie or a pair (as at the single-player table: 25,000 since 0.13.6).
+pub const SIDE_MAX: u64 = crate::casino::baccarat::SIDE_MAX;
+
+/// The most on Tie or a pair at a table whose most is `hi`: 25,000, or the table's own most at
+/// the Imperial Salon (higher than high stakes: "Tie and the pairs up to the table's most too").
+pub fn side_most(hi: u64) -> u64 {
+    if hi > 1_000_000 { hi } else { hi.min(SIDE_MAX) }
+}
 /// Coups kept for the scoreboard.
 pub const HISTORY: usize = 72;
 
@@ -129,7 +135,7 @@ pub fn check(r: &BacReveal) -> Result<(), String> {
 /// Each bet on its own: Player and Banker the table's least to its most, Tie and the pairs the
 /// least to 5,000 (or the table's most, if that's less).
 fn within(b: &Bets, lo: u64, hi: u64) -> Result<(), String> {
-    for (name, x, top) in [("Player", b.player, hi), ("Banker", b.banker, hi), ("Tie", b.tie, hi.min(SIDE_MAX)), ("Player pair", b.player_pair, hi.min(SIDE_MAX)), ("Banker pair", b.banker_pair, hi.min(SIDE_MAX))] {
+    for (name, x, top) in [("Player", b.player, hi), ("Banker", b.banker, hi), ("Tie", b.tie, side_most(hi)), ("Player pair", b.player_pair, side_most(hi)), ("Banker pair", b.banker_pair, side_most(hi))] {
         if x > 0 && (x < lo || x > top) {
             return Err(format!("{name} here is {lo} to {top}"));
         }
@@ -140,7 +146,7 @@ fn within(b: &Bets, lo: u64, hi: u64) -> Result<(), String> {
 /// Brings each bet into what the table takes (a bet under its least goes up to it, one over its
 /// most comes down to it), so what's sent always passes [`within`]. Says whether anything moved.
 pub fn fit(b: &mut Bets, lo: u64, hi: u64) -> bool {
-    let side = hi.min(SIDE_MAX).max(lo);
+    let side = side_most(hi).max(lo);
     let before = b.clone();
     for (x, top) in [(&mut b.player, hi), (&mut b.banker, hi), (&mut b.tie, side), (&mut b.player_pair, side), (&mut b.banker_pair, side)] {
         if *x > 0 {
@@ -454,7 +460,7 @@ impl BacRoom {
             BjBets::Big => [5u64, 10, 10, 20, 25][r.below(5) as usize],
         };
         let chips = |n: u64| (lo * n).clamp(lo, hi);
-        let side = |n: u64| (lo * n).clamp(lo, hi.min(SIDE_MAX));
+        let side = |n: u64| (lo * n).clamp(lo, side_most(hi));
         let mut b = Bets::default();
         match who.bj {
             BjPlay::Book => b.banker = chips(unit),
@@ -633,11 +639,17 @@ mod tests {
         assert!(fit(&mut b, 10, 1_000));
         assert_eq!((b.player, b.banker, b.tie, b.player_pair), (10, 1_000, 1_000, 0));
         assert!(within(&b, 10, 1_000).is_ok());
-        let mut b = Bets { player: 25, tie: 6_000, ..Default::default() };
-        assert!(fit(&mut b, 500, 25_000));
+        // The Black Pearl: Tie and the pairs to 25,000.
+        let mut b = Bets { player: 25, tie: 26_000, ..Default::default() };
+        assert!(fit(&mut b, 500, 100_000));
         assert_eq!((b.player, b.tie), (500, SIDE_MAX));
-        assert!(within(&b, 500, 25_000).is_ok());
-        assert!(!fit(&mut b, 500, 25_000));
+        assert!(within(&b, 500, 100_000).is_ok());
+        assert!(!fit(&mut b, 500, 100_000));
+        // The Imperial Salon: to the table's most.
+        let mut b = Bets { banker: 10_000, tie: 2_000_000, banker_pair: 20_000_000, ..Default::default() };
+        assert!(fit(&mut b, 10_000, 10_000_000));
+        assert_eq!((b.tie, b.banker_pair), (2_000_000, 10_000_000));
+        assert_eq!(side_most(1_000), 1_000);
     }
     use crate::fair::seed_from;
 

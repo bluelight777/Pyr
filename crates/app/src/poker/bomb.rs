@@ -441,7 +441,7 @@ impl PyrApp {
     }
 
     fn play_bomb(&mut self, cues: Vec<Cue>) {
-        if self.poker.mute {
+        if self.poker.casino.mute {
             return;
         }
         for c in cues {

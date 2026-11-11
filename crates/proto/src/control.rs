@@ -434,6 +434,10 @@ pub const BIG_SLOT_BETS_FEATURE: &str = "big_slot_bets";
 /// Pyr Sevens up to 100,000 a spin (line bets to 5,000), its Phoenix Jackpot paid in proportion
 /// to the bet and started at 10,000,000 (0.13.6). 0.13.28's name.
 pub const SLOTS_100K_FEATURE: &str = "slots_100k";
+/// Three tables of each table game (0.13.6): high stakes to 100,000 and higher than high to
+/// 10,000,000 (the Crown Room, the Grand Salle, the Imperial Salon, the Sky Rollers), the 500K,
+/// 1000K and 5000K chips. 0.13.28's name.
+pub const HIGH_TABLES_FEATURE: &str = "high_tables";
 /// Game Masters give without a limit, and they and the Owner of the Game take chips away, all
 /// in the staff log with the balance before and after (0.13.4).
 pub const GM_UNLIMITED_FEATURE: &str = "poker_gm_unlimited";

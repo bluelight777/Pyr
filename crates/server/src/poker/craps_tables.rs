@@ -18,7 +18,9 @@ use super::{Poker, State, progress_chips};
 use crate::hub::Hub;
 
 /// The tables every server has (name, least and most bet). They never close.
-pub const STANDING: [(&str, u64, u64); 2] = [("Lucky Sevens", 10, 1_000), ("High Rollers", 500, 25_000)];
+/// The tables always open (0.13.28's): odds behind the pass line in full, and as much on the
+/// layout at once as `crapsroom::layout_most` lets.
+pub const STANDING: [(&str, u64, u64); 3] = [("Lucky Sevens", 10, 1_000), ("High Rollers", 500, 100_000), ("Sky Rollers", 10_000, 10_000_000)];
 const CLOSED: &str = "that table has closed";
 
 #[derive(Default)]

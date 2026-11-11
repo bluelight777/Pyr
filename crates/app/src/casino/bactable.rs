@@ -38,7 +38,7 @@ const CARD: Vec2 = vec2(66.0, 92.0);
 /// A card's slide out of the shoe.
 const SLIDE: f32 = 0.34;
 const BAR_H: f32 = 96.0;
-const STRIP_H: f32 = 44.0;
+use super::picker::STRIP_H;
 const PLAYER_BLUE: Color32 = Color32::from_rgb(0x3d, 0x8b, 0xff);
 const BANKER_RED: Color32 = Color32::from_rgb(0xff, 0x4a, 0x4a);
 const TIE_GREEN: Color32 = Color32::from_rgb(0x3a, 0xd0, 0x7a);
@@ -533,32 +533,17 @@ impl PyrApp {
         self.poker.casino.celebrate(paid, wagered, false, back + 0.25);
     }
 
-    /// The tables, along the top: each one's name, its bets and who's at it.
+    /// The tables, along the top: a card each (as 0.13.28's, see `picker`); click one to go to it
+    /// (standing up from this one).
     fn bac_tables_strip(&mut self, ui: &mut egui::Ui, s: &ServerView, strip: Rect, tables: &[pyr_poker::net::BacSummary], at: Option<u64>) {
         let p = ui.painter().clone();
         vgrad(&p, strip, Color32::from_rgb(0x16, 0x0c, 0x10), Color32::from_rgb(0x08, 0x05, 0x07));
-        let mut x = strip.left() + 14.0;
-        for t in tables {
-            let on = Some(t.id) == at;
-            let text = format!("{}  ·  {}–{}", t.name, chips_text(t.min_bet), chips_text(t.max_bet));
-            let who = format!("{} / {SEATS}", t.people + t.bots);
-            let w = 34.0 + (text.chars().count() + who.len()) as f32 * 7.2;
-            let r = Rect::from_min_size(pos2(x, strip.top() + 7.0), vec2(w, strip.height() - 14.0));
-            x += w + 8.0;
-            if r.right() > strip.right() - 12.0 {
-                break;
-            }
-            let resp = ui.interact(r, ui.id().with(("bac-table", t.id)), Sense::click());
-            p.rect_filled(r, theme::r(15), if on { col::GOLD.gamma_multiply(0.22) } else if resp.hovered() { Color32::from_white_alpha(22) } else { Color32::from_white_alpha(10) });
-            p.rect_stroke(r, theme::r(15), Stroke::new(1.0f32, if on { col::GOLD } else { Color32::from_white_alpha(30) }), StrokeKind::Inside);
-            p.text(r.left_center() + vec2(14.0, 0.0), Align2::LEFT_CENTER, text, theme::bold_font(13.0), if on { col::GOLD2 } else { col::TEXT });
-            p.text(r.right_center() - vec2(12.0, 0.0), Align2::RIGHT_CENTER, who, theme::font(12.0), col::MUTED);
-            if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() && !on {
-                self.bac_table_leave();
-                self.poker.casino.bact.at = Some((s.key.clone(), t.id));
-                self.engine.poker(&s.key, ToServer::BacWatch { table: t.id });
-                self.poker.casino.bact.watch_asked = Some(Instant::now());
-            }
+        let picks: Vec<super::picker::Pick> = tables.iter().map(|t| super::picker::Pick { id: t.id, name: t.name.clone(), min: t.min_bet, max: t.max_bet, seated: t.people + t.bots }).collect();
+        if let Some(id) = super::picker::cards(ui, strip, &picks, SEATS, at, "bac-table", 12.0) {
+            self.bac_table_leave();
+            self.poker.casino.bact.at = Some((s.key.clone(), id));
+            self.engine.poker(&s.key, ToServer::BacWatch { table: id });
+            self.poker.casino.bact.watch_asked = Some(Instant::now());
         }
     }
 
@@ -731,7 +716,7 @@ impl PyrApp {
         // Each bet brought into what this table takes first (a small chip, or a rebet from
         // another table, would otherwise be turned away).
         if pyr_poker::bacroom::fit(&mut bets, v.min_bet, v.max_bet) {
-            self.toast(format!("Bets here are {} to {} (Tie and pairs up to {}): yours set to fit", chips_text(v.min_bet), chips_text(v.max_bet), chips_text(v.max_bet.min(pyr_poker::bacroom::SIDE_MAX))), false);
+            self.toast(format!("Bets here are {} to {} (Tie and pairs up to {}): yours set to fit", chips_text(v.min_bet), chips_text(v.max_bet), chips_text(pyr_poker::bacroom::side_most(v.max_bet))), false);
         }
         self.poker.casino.bact.desired = Some((v.coup_no, bets.clone()));
         self.poker.casino.sound_in(0.0, Cue::Chips, 0.0, 0.45);
@@ -818,8 +803,8 @@ impl PyrApp {
             self.bac_send(s, v, rebet, false);
         }
         let color = if on.total() > chips + mine.as_ref().map(|x| x.bets.total()).unwrap_or(0) { col::LOSE } else { col::GOLD2 };
-        let max_chip = super::CHIPS.iter().copied().filter(|c| *c <= v.max_bet).last().unwrap_or(1);
-        self.rack_and_bet(ui, bar, x, max_chip, format!("Bets {}", chips_text(on.total())), color);
+        let chips_from_to = super::table_chips(v.min_bet, v.max_bet);
+        self.rack_and_bet_from(ui, bar, x, chips_from_to, format!("Bets {}", chips_text(on.total())), color);
         let hint = if v.stage == BacStage::Shown && !open {
             "The cards are being turned over".to_string()
         } else if on.total() == 0 {

@@ -112,6 +112,9 @@ pub enum ToServer {
     TakeChips { uid: String, chips: u64, note: String },
     /// The whole staff log (0.13.4), for the Owner of the Game (and the control room).
     StaffLogAll,
+    /// Invite someone to a table (0.13.6): they get `TableInvite` on every Pyr they're on, with
+    /// a Join. Once every 20 seconds for the same person.
+    InviteToTable { uid: String, table: TableRef },
     /// The control room (0.13.5): the Owner of the Game's, and whoever they let in.
     Cms { req: CmsReq },
     /// A Game Master or Ambassador puts a prize box on a table: whoever wins the next hand
@@ -293,6 +296,34 @@ pub struct ChatLine {
     /// written back as it was.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// A table of any of the casino's games, as an invite names it (0.13.6), written as 0.13.28
+/// writes it: `{"game":"roulette","id":3}`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "game", content = "id", rename_all = "snake_case")]
+pub enum TableRef {
+    Poker(TableId),
+    Blackjack(u64),
+    Craps(u64),
+    Baccarat(u64),
+    Roulette(u64),
+    /// Dominó Cubano's (0.13.11).
+    Domino(u64),
+}
+
+impl TableRef {
+    /// The game, as an invite says it ("invites you to roulette: Grand Salle").
+    pub fn game_name(&self) -> &'static str {
+        match self {
+            TableRef::Poker(_) => "poker",
+            TableRef::Blackjack(_) => "blackjack",
+            TableRef::Craps(_) => "craps",
+            TableRef::Baccarat(_) => "baccarat",
+            TableRef::Roulette(_) => "roulette",
+            TableRef::Domino(_) => "dominó",
+        }
+    }
 }
 
 /// The casino's tables with seats besides poker's (for what's sent to everyone at one).
@@ -560,6 +591,8 @@ pub enum ToApp {
     Staff { view: StaffView },
     /// The whole staff log, newest first (0.13.4).
     StaffLogAll { log: Vec<StaffLog> },
+    /// `from` invites me to a table (0.13.6), called `name`.
+    TableInvite { from: String, table: TableRef, name: String },
     /// The control room's answers (0.13.5).
     Cms { res: CmsRes },
     /// Said by the Owner of the Game (or the control room) to everyone in Pyr Casino (0.13.5).
@@ -617,7 +650,7 @@ impl ToApp {
     pub fn for_012_app(self) -> Option<ToApp> {
         match self {
             ToApp::RlTables { .. } | ToApp::Rl { .. } | ToApp::GameEmote { game: TableGame::Roulette, .. } | ToApp::CasinoChat { .. } | ToApp::CasinoChatGone { .. } | ToApp::GmCert { .. } => None,
-            ToApp::StaffLogAll { .. } | ToApp::Cms { .. } | ToApp::Announcement { .. } => None,
+            ToApp::StaffLogAll { .. } | ToApp::Cms { .. } | ToApp::Announcement { .. } | ToApp::TableInvite { .. } => None,
             m if m.is_props() => None,
             ToApp::Casino { res } => res.for_012_app().map(|res| ToApp::Casino { res }),
             m => Some(m),
@@ -633,7 +666,7 @@ impl ToApp {
             return None;
         }
         Some(match self {
-            ToApp::Say { .. } | ToApp::Ratings { .. } | ToApp::BjTables { .. } | ToApp::Bj { .. } | ToApp::CrapsTables { .. } | ToApp::Craps { .. } | ToApp::BacTables { .. } | ToApp::Bac { .. } | ToApp::RlTables { .. } | ToApp::Rl { .. } | ToApp::Bonfire { .. } | ToApp::BonfireLit { .. } | ToApp::GameEmote { .. } | ToApp::CasinoChat { .. } | ToApp::CasinoChatGone { .. } | ToApp::GmCert { .. } | ToApp::StaffLogAll { .. } | ToApp::Cms { .. } | ToApp::Announcement { .. } => return None,
+            ToApp::Say { .. } | ToApp::Ratings { .. } | ToApp::BjTables { .. } | ToApp::Bj { .. } | ToApp::CrapsTables { .. } | ToApp::Craps { .. } | ToApp::BacTables { .. } | ToApp::Bac { .. } | ToApp::RlTables { .. } | ToApp::Rl { .. } | ToApp::Bonfire { .. } | ToApp::BonfireLit { .. } | ToApp::GameEmote { .. } | ToApp::CasinoChat { .. } | ToApp::CasinoChatGone { .. } | ToApp::GmCert { .. } | ToApp::StaffLogAll { .. } | ToApp::Cms { .. } | ToApp::Announcement { .. } | ToApp::TableInvite { .. } => return None,
             ToApp::Emote { table, seat, emote } => ToApp::Emote { table, seat, emote: emote_for_older_app(&emote) },
             ToApp::Snapshot { mut table } => {
                 table.seats.iter_mut().flatten().for_each(|s| older(&mut s.bot));
@@ -1658,6 +1691,28 @@ mod tests {
         let j = serde_json::to_string(&m).unwrap();
         assert!(j.contains("\"game\":\"baccarat\""), "{j}");
         assert_eq!(serde_json::from_str::<ToServer>(&j).unwrap(), m);
+    }
+
+    /// A table invite, as 0.13.28's app asks for it and its server sends it (both taken from
+    /// them: its app on the rebuilt server, the rebuilt app on its server).
+    #[test]
+    fn table_invites_as_0_13_28_writes_them() {
+        let ask = r#"{"op":"invite_to_table","uid":"n2w7iGY1qtleS1OKEuMvgKJk0bY5jsa1ATbtp9V9-uQ","table":{"game":"roulette","id":1}}"#;
+        let m: ToServer = serde_json::from_str(ask).unwrap();
+        assert_eq!(m, ToServer::InviteToTable { uid: "n2w7iGY1qtleS1OKEuMvgKJk0bY5jsa1ATbtp9V9-uQ".into(), table: TableRef::Roulette(1) });
+        assert_eq!(serde_json::to_string(&m).unwrap(), ask);
+        let poker = r#"{"op":"invite_to_table","uid":"x","table":{"game":"poker","id":1}}"#;
+        assert_eq!(serde_json::from_str::<ToServer>(poker).unwrap(), ToServer::InviteToTable { uid: "x".into(), table: TableRef::Poker(1) });
+        let told = r#"{"op":"table_invite","from":"v0KoUewTmf80VoYBVvUjUij1A_getcz8Jx9B1YR_KQs","table":{"game":"roulette","id":3},"name":"Grand Salle"}"#;
+        let m: ToApp = serde_json::from_str(told).unwrap();
+        assert_eq!(m, ToApp::TableInvite { from: "v0KoUewTmf80VoYBVvUjUij1A_getcz8Jx9B1YR_KQs".into(), table: TableRef::Roulette(3), name: "Grand Salle".into() });
+        assert_eq!(serde_json::to_string(&m).unwrap(), told);
+        // (Dominó's too, though there's no Dominó here yet.)
+        assert_eq!(serde_json::from_str::<TableRef>(r#"{"game":"domino","id":2}"#).unwrap(), TableRef::Domino(2));
+        // Never to an app from before 0.13.0.
+        assert_eq!(m.clone().for_app(CASINO_012), None);
+        assert_eq!(m.clone().for_app(CASINO_011), None);
+        assert!(m.for_app(CASINO_013).is_some());
     }
 
     /// Every kind of message the casino sends, with everything in it filled in, reads back as

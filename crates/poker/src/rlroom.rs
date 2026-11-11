@@ -22,6 +22,14 @@ pub const SEATS: usize = 5;
 /// How long bets stay open before each spin, and how soon the ball goes once every person at the
 /// table has said they're ready.
 pub const BET_MS: u64 = 18_000;
+
+/// The most on a place at a table whose most is `hi`: the spot's own most (25,000 on a number
+/// to 500,000 on red or black, see `roulette::max_on`), times as many as the table's most is
+/// 500,000s at the tables above that (the Grand Salle: 500,000 on a number, 10,000,000 on red
+/// or black), never more than the table's most.
+pub fn spot_most(hi: u64, spot: &crate::casino::roulette::Spot) -> u64 {
+    hi.min(roulette::max_on(spot).saturating_mul((hi / 500_000).max(1)))
+}
 pub const QUICK_MS: u64 = 1_500;
 /// The ball round the wheel and into its pocket (the app's spin takes about 8 seconds), then the
 /// number on the table for a moment.
@@ -152,7 +160,7 @@ pub fn within(chips: &[Chip], lo: u64, hi: u64) -> Result<(), String> {
         if chips[..i].iter().any(|o| o.spot == c.spot) {
             return Err("the same place twice".into());
         }
-        let top = hi.min(roulette::max_on(&c.spot));
+        let top = spot_most(hi, &c.spot);
         if c.chips < lo || c.chips > top {
             return Err(format!("{} here is {lo} to {top}", c.spot.name()));
         }
@@ -173,7 +181,7 @@ pub fn fit(chips: &mut Vec<Chip>, lo: u64, hi: u64) -> bool {
     }
     out.retain(|c| c.chips > 0);
     for c in out.iter_mut() {
-        let top = hi.min(roulette::max_on(&c.spot)).max(lo);
+        let top = spot_most(hi, &c.spot).max(lo);
         c.chips = c.chips.clamp(lo, top);
     }
     *chips = out;
@@ -487,7 +495,7 @@ impl RlRoom {
             BjBets::Press => units,
             BjBets::Big => [5u64, 10, 10, 20, 25][r.below(5) as usize],
         };
-        let on = |spot: Spot, n: u64| Chip { spot, chips: (lo * n).clamp(lo, hi.min(roulette::max_on(&spot))) };
+        let on = |spot: Spot, n: u64| Chip { spot, chips: (lo * n).clamp(lo, spot_most(hi, &spot)) };
         let mut c = Vec::new();
         match who.bj {
             BjPlay::Book => c.push(on(if r.below(2) == 0 { Spot::Red } else { Spot::Black }, unit)),
@@ -658,6 +666,19 @@ impl RlRoom {
 
 #[cfg(test)]
 mod tests {
+    /// A place's most at each table: its own (25,000 on a number to 500,000 on red), the table's
+    /// at Monte Carlo, twenty times its own at the Grand Salle (0.13.6's words).
+    #[test]
+    fn a_place_holds_its_own_most() {
+        use crate::casino::roulette::Spot;
+        assert_eq!(super::spot_most(1_000, &Spot::Straight { n: 7 }), 1_000);
+        assert_eq!(super::spot_most(500_000, &Spot::Straight { n: 7 }), 25_000);
+        assert_eq!(super::spot_most(500_000, &Spot::Red), 500_000);
+        assert_eq!(super::spot_most(10_000_000, &Spot::Straight { n: 7 }), 500_000);
+        assert_eq!(super::spot_most(10_000_000, &Spot::Black), 10_000_000);
+        assert_eq!(super::spot_most(10_000_000, &Spot::Dozen { d: 1 }), 6_000_000);
+    }
+
     use super::*;
 
     #[test]

@@ -23,7 +23,7 @@ use crate::theme;
 /// The dice in the air.
 const ROLL_SECS: f32 = 1.15;
 const BAR_H: f32 = 96.0;
-const STRIP_H: f32 = 44.0;
+use super::picker::STRIP_H;
 /// The seats along the rail, and their colors (each player's chips are ringed in theirs).
 const PLATES_H: f32 = 74.0;
 const SEAT_COLORS: [Color32; SEATS] = [
@@ -601,33 +601,17 @@ impl PyrApp {
         self.poker.casino.celebrate(me.paid, wagered.max(1), false, back);
     }
 
-    /// The tables, along the top: each one's name, its bets, its point and who's at it.
+    /// The tables, along the top: a card each (as 0.13.28's, see `picker`); click one to go to it
+    /// (standing up from this one).
     fn crt_tables_strip(&mut self, ui: &mut egui::Ui, s: &ServerView, strip: Rect, tables: &[pyr_poker::net::CrapsSummary], at: Option<u64>) {
         let p = ui.painter().clone();
         vgrad(&p, strip, Color32::from_rgb(0x0c, 0x14, 0x10), Color32::from_rgb(0x05, 0x08, 0x06));
-        let mut x = strip.left() + 14.0;
-        for t in tables {
-            let on = Some(t.id) == at;
-            let point = t.point.map(|p| format!("  ·  point {p}")).unwrap_or_default();
-            let text = format!("{}  ·  {}–{}{point}", t.name, chips_text(t.min_bet), chips_text(t.max_bet));
-            let who = format!("{} / {SEATS}", t.people + t.bots);
-            let w = 34.0 + (text.chars().count() + who.len()) as f32 * 7.2;
-            let r = Rect::from_min_size(pos2(x, strip.top() + 7.0), vec2(w, strip.height() - 14.0));
-            x += w + 8.0;
-            if r.right() > strip.right() - 12.0 {
-                break;
-            }
-            let resp = ui.interact(r, ui.id().with(("crt-table", t.id)), Sense::click());
-            p.rect_filled(r, theme::r(15), if on { col::GOLD.gamma_multiply(0.22) } else if resp.hovered() { Color32::from_white_alpha(22) } else { Color32::from_white_alpha(10) });
-            p.rect_stroke(r, theme::r(15), Stroke::new(1.0f32, if on { col::GOLD } else { Color32::from_white_alpha(30) }), StrokeKind::Inside);
-            p.text(r.left_center() + vec2(14.0, 0.0), Align2::LEFT_CENTER, text, theme::bold_font(13.0), if on { col::GOLD2 } else { col::TEXT });
-            p.text(r.right_center() - vec2(12.0, 0.0), Align2::RIGHT_CENTER, who, theme::font(12.0), col::MUTED);
-            if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() && !on {
-                self.craps_table_leave();
-                self.poker.casino.crt.at = Some((s.key.clone(), t.id));
-                self.engine.poker(&s.key, ToServer::CrapsWatch { table: t.id });
-                self.poker.casino.crt.watch_asked = Some(Instant::now());
-            }
+        let picks: Vec<super::picker::Pick> = tables.iter().map(|t| super::picker::Pick { id: t.id, name: t.name.clone(), min: t.min_bet, max: t.max_bet, seated: t.people + t.bots }).collect();
+        if let Some(id) = super::picker::cards(ui, strip, &picks, SEATS, at, "crt-table", 12.0) {
+            self.craps_table_leave();
+            self.poker.casino.crt.at = Some((s.key.clone(), id));
+            self.engine.poker(&s.key, ToServer::CrapsWatch { table: id });
+            self.poker.casino.crt.watch_asked = Some(Instant::now());
         }
     }
 
@@ -716,8 +700,8 @@ impl PyrApp {
         }
         let chips = chips_now(s);
         let color = if on.total() > chips + mine.as_ref().map(|x| x.bets.total()).unwrap_or(0) { col::LOSE } else { col::GOLD2 };
-        let max_chip = super::CHIPS.iter().copied().filter(|c| *c <= v.max_bet).last().unwrap_or(1);
-        self.rack_and_bet(ui, bar, x, max_chip, format!("On the layout {}", chips_text(on.total())), color);
+        let chips_from_to = super::table_chips(v.min_bet, v.max_bet);
+        self.rack_and_bet_from(ui, bar, x, chips_from_to, format!("On the layout {}", chips_text(on.total())), color);
         let shooter_name = v.shooter.and_then(|i| v.seats.get(i as usize).cloned().flatten()).map(|x| x.name);
         let hint = if on.total() == 0 {
             format!("Pick a chip, then click a bet on the layout ({} to {} each)", chips_text(v.min_bet), chips_text(v.max_bet))

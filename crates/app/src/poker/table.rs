@@ -250,7 +250,7 @@ impl PyrApp {
                 }
             }
         }
-        if self.poker.mute {
+        if self.poker.casino.mute {
             return;
         }
         // A burst (catching up) plays only its last few.
@@ -277,6 +277,17 @@ impl PyrApp {
             if let Some(tid) = v.tourney {
                 self.open_tourney(&s.key, tid);
             }
+        }
+        // Invite someone here (0.13.6), beside the way back, as 0.13.28 has it.
+        let mut left_end = back.right();
+        if s.has(pyr_proto::control::VOICE_INVITE_FEATURE) {
+            let at = Rect::from_min_size(pos2(back.right() + 8.0, back.top()), vec2(82.0, 32.0));
+            let resp = ui.interact(at, ui.id().with("poker-invite"), Sense::click());
+            p.rect_filled(at, theme::r(8), Color32::from_white_alpha(if resp.hovered() { 30 } else { 14 }));
+            p.text(at.center(), Align2::CENTER_CENTER, "+ Invite", theme::bold_font(13.0), theme::TEXT());
+            let resp = resp.on_hover_text("Invite someone here to this table");
+            self.invite_list(&resp, s, pyr_poker::net::TableRef::Poker(v.id));
+            left_end = at.right();
         }
         let name_g = p.layout_no_wrap(v.name.clone(), theme::bold_font(15.5), theme::TEXT());
         let hand = v.hand.map(|h| format!(" · hand #{h}")).unwrap_or_default();
@@ -326,7 +337,7 @@ impl PyrApp {
                 92.0,
                 if streamer { stream_tip.as_str() } else { "Streamer mode, for when you're live: click to set it up" },
             ),
-            (B::Sound, if self.poker.mute { "Sound off" } else { "Sound on" }, 92.0, "The table's sounds: cards, chips, your turn"),
+            (B::Sound, "Volume", 92.0, ""),
         ];
         if !tourney && (s.poker.me.as_ref().is_some_and(|m| m.role.is_some()) || super::staff::prize_limit(s).is_some()) && v.prize.is_none() {
             all.push((B::Prize, "Prize box", 92.0, "Drop a prize box: whoever wins the next hand opens it"));
@@ -358,7 +369,7 @@ impl PyrApp {
         const FIRST_UNDER_MORE: [B; 10] = [B::Full, B::Muck, B::Prize, B::Last, B::Chips, B::Sound, B::Log, B::Leave, B::Stream, B::SitOut];
         const MORE_W: f32 = 78.0;
         let title_w = name_g.size().x.max(sub_g.size().x).min(150.0);
-        let room = (r.right() - 12.0) - (back.right() + 16.0 + title_w + 12.0);
+        let room = (r.right() - 12.0) - (left_end + 16.0 + title_w + 12.0);
         let width = |list: &[(B, &str, f32, &str)], more: bool| list.iter().map(|e| e.2 + 8.0).sum::<f32>() + if more { MORE_W + 8.0 } else { 0.0 };
         // (Keys…: in the menu always, as 0.13.28 has it.)
         let mut under_more: Vec<(B, &str, f32, &str)> = vec![(B::Keys, "Keys…", 0.0, "Every game's moves and their keys, yours to change")];
@@ -373,6 +384,7 @@ impl PyrApp {
         let mut x = r.right() - 12.0;
         let mut clicked: Option<B> = None;
         let mut stream_at: Option<Rect> = None;
+        let mut volume_at: Option<egui::Response> = None;
         for (b, label, w, tip) in &all {
             let at = Rect::from_min_size(pos2(x - w, r.top() + 9.0), vec2(*w, 32.0));
             x -= w + 8.0;
@@ -380,6 +392,10 @@ impl PyrApp {
             let resp = if tip.is_empty() { resp } else { resp.on_hover_text(*tip) };
             if *b == B::Stream {
                 stream_at = Some(resp.rect);
+            }
+            // (The games' volume, under it: 0.13.4's Volume at poker tables.)
+            if *b == B::Sound {
+                volume_at = Some(resp.clone());
             }
             if resp.clicked() {
                 clicked = Some(*b);
@@ -395,10 +411,12 @@ impl PyrApp {
             if stream_at.is_none() {
                 stream_at = Some(resp.rect);
             }
+            let sound = if self.poker.casino.mute { "Sound on" } else { "Sound off" };
             egui::Popup::menu(&resp).align(egui::RectAlign::BOTTOM_END).width(170.0).show(|ui| {
                 crate::menu::style(ui);
                 for (b, label, _, tip) in &under_more {
-                    let item = ui.button(*label);
+                    // (Volume's slider can't open from here: Sound off, or on, for every game.)
+                    let item = ui.button(if *b == B::Sound { sound } else { *label });
                     let item = if tip.is_empty() { item } else { item.on_hover_text(*tip) };
                     if item.clicked() {
                         clicked = Some(*b);
@@ -407,12 +425,17 @@ impl PyrApp {
                 }
             });
         }
+        if let Some(resp) = &volume_at {
+            self.games_volume_menu(resp);
+        }
         if clicked == Some(B::Full) || ui.ctx().input(|i| i.key_pressed(egui::Key::F11)) {
             self.poker.casino.fullscreen = !fs;
         }
         match clicked {
             Some(B::Stream) => self.poker.casino.stream_menu = if self.poker.casino.stream_menu.is_some() { None } else { stream_at },
-            Some(B::Sound) => self.poker.mute = !self.poker.mute,
+            // (Under More: Sound off or on, for every game.)
+            Some(B::Sound) if volume_at.is_none() => self.poker.casino.mute = !self.poker.casino.mute,
+            Some(B::Sound) => {}
             Some(B::Prize) => {
                 self.poker.prize_for = Some(v.id);
                 self.engine.poker(&s.key, ToServer::Staff);
@@ -431,10 +454,10 @@ impl PyrApp {
             Some(B::Full) | None => {}
         }
         // The table's name and what it is, cut short where the buttons start.
-        let words = p.with_clip_rect(Rect::from_min_max(pos2(back.right() + 8.0, r.top()), pos2(x - 4.0, r.bottom())).intersect(p.clip_rect()));
-        let name_at = pos2(back.right() + 16.0, r.center().y - 8.0 - name_g.size().y / 2.0);
-        let sub_at = pos2(back.right() + 16.0, r.center().y + 10.0 - sub_g.size().y / 2.0);
-        let words_end = (back.right() + 16.0 + name_g.size().x.max(sub_g.size().x)).min(x - 4.0) + 16.0;
+        let words = p.with_clip_rect(Rect::from_min_max(pos2(left_end + 8.0, r.top()), pos2(x - 4.0, r.bottom())).intersect(p.clip_rect()));
+        let name_at = pos2(left_end + 16.0, r.center().y - 8.0 - name_g.size().y / 2.0);
+        let sub_at = pos2(left_end + 16.0, r.center().y + 10.0 - sub_g.size().y / 2.0);
+        let words_end = (left_end + 16.0 + name_g.size().x.max(sub_g.size().x)).min(x - 4.0) + 16.0;
         words.galley(name_at, name_g, theme::TEXT());
         words.galley(sub_at, sub_g, theme::MUTED());
         // The shuffle checks.

@@ -2306,7 +2306,8 @@ impl Engine {
         let pcm: soundboard::Pcm = std::sync::Arc::new(poker_sfx::render(cue, pan));
         let (volume, device) = {
             let st = self.shared.state.read_recursive();
-            ((st.settings.sound_volume * volume).clamp(0.0, 1.0), st.settings.output_device.clone())
+            // (The games' volume on top of Pyr's sounds', as 0.13.28 has it.)
+            ((st.settings.sound_volume * st.settings.games_volume.clamp(0.0, 1.0) * volume).clamp(0.0, 1.0), st.settings.output_device.clone())
         };
         let call = self.shared.call.lock().as_ref().and_then(|c| c.audio.as_ref().map(|a| (a.mixer.clone(), c.session)));
         match (call, &self.shared.sfx) {
@@ -3031,6 +3032,13 @@ impl Engine {
         (self.shared.repaint)();
     }
 
+    /// An invite to a table answered (or gone): forgotten.
+    pub fn dismiss_table_invite(&self, key: &str, table: pyr_poker::net::TableRef, from: &str) {
+        if let Some(s) = self.shared.state.write().server_mut(key) {
+            s.poker.table_invites.retain(|i| !(i.0 == table && i.1 == from));
+        }
+    }
+
     pub fn decline_call(&self, key: &str, channel_id: ChannelId) {
         self.shared.state.write().incoming_calls.retain(|c| !(c.server_key == key && c.channel_id == channel_id));
         self.request(key, Request::DeclineCall { channel_id });
@@ -3637,6 +3645,18 @@ impl Engine {
     }
 
     // ------------------------------------------------------------ settings
+
+    /// The games' volume (0.13.4) as it's moved: heard at once; kept (in the settings file)
+    /// when `keep` (let go).
+    pub fn set_games_volume(&self, volume: f32, keep: bool) {
+        let v = volume.clamp(0.0, 1.0);
+        self.shared.state.write().settings.games_volume = v;
+        if keep {
+            let mut cfg = self.shared.config.lock();
+            cfg.settings.games_volume = v;
+            self.shared.save_config_locked(&cfg);
+        }
+    }
 
     pub fn update_settings(&self, settings: Settings) {
         let old = self.shared.state.read_recursive().settings.clone();

@@ -226,7 +226,12 @@ pub struct Settings {
     /// Pyr Casino's keys as changed from each move's own (0.13.26, 0.13.28's names): a move
     /// ("slots.spin", "bj.hit"...) and its keys ("Space", "Ctrl+Shift+W"), two at most, none
     /// for a move whose keys were taken off. A move left as it was isn't in it.
+    #[serde(deserialize_with = "keys_leniently")]
     pub casino_keys: std::collections::BTreeMap<String, Vec<String>>,
+    /// The games' volume (0.13.4, 0.13.28's `games_volume`): Pyr Casino's sounds, poker's too,
+    /// as a share of `sound_volume` (tried on 0.13.28: Pyr's sounds at half and the games' at
+    /// half, a game's sound plays at a quarter).
+    pub games_volume: f32,
     /// Settings this Pyr doesn't know (a newer one's, or 0.13.28's not rebuilt yet): kept as
     /// they are and written back, so going from one Pyr to another loses none.
     #[serde(flatten)]
@@ -321,6 +326,7 @@ impl Default for Settings {
             tray_note_seen: false,
             sounds: true,
             sound_volume: 0.7,
+            games_volume: 1.0,
             sound_profile: String::new(),
             ring: true,
             recent_emoji: Vec::new(),
@@ -454,6 +460,26 @@ pub fn load_or_create_identity(dir: &Path) -> Result<Identity> {
     let id = Identity::generate();
     write_atomic(&path, b64::encode(&id.seed()).as_bytes())?;
     Ok(id)
+}
+
+/// `casino_keys` as written, whatever's in it: a key on its own is a list of one, anything else
+/// is passed over. (A settings file that can't be read is lost whole: never over this.)
+fn keys_leniently<'de, D: serde::Deserializer<'de>>(d: D) -> Result<std::collections::BTreeMap<String, Vec<String>>, D::Error> {
+    let mut out = std::collections::BTreeMap::new();
+    if let serde_json::Value::Object(m) = serde_json::Value::deserialize(d)? {
+        for (k, v) in m {
+            match v {
+                serde_json::Value::String(s) => {
+                    out.insert(k, vec![s]);
+                }
+                serde_json::Value::Array(a) => {
+                    out.insert(k, a.into_iter().filter_map(|x| x.as_str().map(str::to_string)).collect());
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(out)
 }
 
 pub fn load_config(dir: &Path) -> Config {
@@ -704,7 +730,7 @@ mod from_0_13_28 {
     /// top-up).
     #[test]
     fn a_0_13_28_config_loses_nothing() {
-        let old = r#"{"backup_dir": null, "blocked": [], "casino_seeds": {}, "display_name": "Mia", "gm_cert": null, "last_read": {}, "muted_channels": {}, "muted_servers": [], "poker_auto_muck": false, "poker_auto_top_up": true, "self_voice": {"deafened": false, "muted": false}, "servers": [{"host": "127.0.0.1", "invite": "abc", "key": "k", "name": "Test Camp", "port": 17778}], "settings": {"auto_gain": true, "auto_report_told": false, "auto_reports": false, "camera_device": null, "camera_quality": "Standard", "casino_keys": {"blackjack": "LControl+B"}, "close_to_tray": true, "confirm_delete": true, "dnd": false, "echo_cancellation": true, "emoji_tone": 0, "games_volume": 0.6, "gif_favorites": [], "giphy_key": "", "idle_by_hand": false, "input_device": null, "input_gain": 1.0, "input_mode": "VoiceActivity", "join_sound": null, "library_favorites": [], "library_sort": "", "mute_key": "Q", "noise_suppression": "Strong", "output_device": null, "output_volume": 1.0, "play_gifs": "", "poker_installed": true, "ptt_key": "Grave", "ptt_release_ms": 200, "recent_emoji": [], "ring": true, "ringtone": null, "ringtones": {}, "screen_preset": "Smooth", "share_audio": true, "skin": "", "sound_favorites": [], "sound_keys": [], "sound_profile": "ember", "sound_recent": [], "sound_volume": 0.7, "soundboard_muted": [], "soundboard_volume": 0.7, "sounds": true, "spell_language": "en-US", "spell_words": [], "spellcheck": true, "start_hidden": true, "start_with_windows": true, "stream_room": "", "stream_stage": true, "streamer_mode": false, "tray_note_seen": false, "vad_auto": true, "vad_threshold_db": -50.0, "voice_bitrate_kbps": 64, "voice_meter": "", "voice_priority": true, "vouch": true}, "stream_volumes": {}, "user_volumes": {}, "verified": {}}"#;
+        let old = r#"{"backup_dir": null, "blocked": [], "casino_seeds": {}, "display_name": "Mia", "gm_cert": null, "last_read": {}, "muted_channels": {}, "muted_servers": [], "poker_auto_muck": false, "poker_auto_top_up": true, "self_voice": {"deafened": false, "muted": false}, "servers": [{"host": "127.0.0.1", "invite": "abc", "key": "k", "name": "Test Camp", "port": 17778}], "settings": {"auto_gain": true, "auto_report_told": false, "auto_reports": false, "camera_device": null, "camera_quality": "Standard", "casino_keys": {"chip.bigger": ["Ctrl+Shift+W"]}, "close_to_tray": true, "confirm_delete": true, "dnd": false, "echo_cancellation": true, "emoji_tone": 0, "games_volume": 0.6, "gif_favorites": [], "giphy_key": "", "idle_by_hand": false, "input_device": null, "input_gain": 1.0, "input_mode": "VoiceActivity", "join_sound": null, "library_favorites": [], "library_sort": "", "mute_key": "Q", "noise_suppression": "Strong", "output_device": null, "output_volume": 1.0, "play_gifs": "", "poker_installed": true, "ptt_key": "Grave", "ptt_release_ms": 200, "recent_emoji": [], "ring": true, "ringtone": null, "ringtones": {}, "screen_preset": "Smooth", "share_audio": true, "skin": "", "sound_favorites": [], "sound_keys": [], "sound_profile": "ember", "sound_recent": [], "sound_volume": 0.7, "soundboard_muted": [], "soundboard_volume": 0.7, "sounds": true, "spell_language": "en-US", "spell_words": [], "spellcheck": true, "start_hidden": true, "start_with_windows": true, "stream_room": "", "stream_stage": true, "streamer_mode": false, "tray_note_seen": false, "vad_auto": true, "vad_threshold_db": -50.0, "voice_bitrate_kbps": 64, "voice_meter": "", "voice_priority": true, "vouch": true}, "stream_volumes": {}, "user_volumes": {}, "verified": {}}"#;
         let cfg: Config = serde_json::from_str(old).expect("0.13.28's config reads");
         assert_eq!(cfg.display_name, "Mia");
         assert_eq!(cfg.servers.len(), 1);
@@ -712,6 +738,15 @@ mod from_0_13_28 {
         assert_eq!(cfg.settings.ptt_key, "Grave");
         assert!(cfg.settings.ember_sounds());
         assert!(!Settings::default().ember_sounds(), "everyone starts with Classic (0.13.3)");
+        assert_eq!(cfg.settings.games_volume, 0.6);
+        assert_eq!(cfg.settings.casino_keys["chip.bigger"], ["Ctrl+Shift+W"]);
+        // (Keys written some other way don't cost the whole file: a test profile of the rebuild's
+        // once had one on its own.)
+        let odd = old.replace(r#"{"chip.bigger": ["Ctrl+Shift+W"]}"#, r#"{"blackjack": "LControl+B", "x": 3}"#);
+        let cfg2: Config = serde_json::from_str(&odd).expect("still reads");
+        assert_eq!(cfg2.settings.casino_keys.len(), 1);
+        assert_eq!(cfg2.servers.len(), 1);
+        assert_eq!(Settings::default().games_volume, 1.0);
         // (As written to the file: an f32 as it was typed, 0.7 not 0.699999988.)
         let back: serde_json::Value = serde_json::from_slice(&serde_json::to_vec(&cfg).unwrap()).unwrap();
         let old: serde_json::Value = serde_json::from_str(old).unwrap();

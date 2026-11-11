@@ -489,14 +489,18 @@ impl PyrApp {
             let mask = 1u64 << bit;
             if self.poker.casino.bonfire.sounded & mask == 0 && k >= at(bit) {
                 self.poker.casino.bonfire.sounded |= mask;
-                self.engine.play_poker(cue, 0.0, vol);
+                if !self.poker.casino.mute {
+                    self.engine.play_poker(cue, 0.0, vol);
+                }
             }
         }
         // Mine: the celebration, once.
         let mask = 1u64 << 50;
         if self.poker.casino.bonfire.sounded & mask == 0 && k >= END_AT - 1.0 {
             self.poker.casino.bonfire.sounded |= mask;
-            if let Some(w) = d.winners.iter().find(|w| w.uid == me) {
+            if let Some(w) = d.winners.iter().find(|w| w.uid == me)
+                && !self.poker.casino.mute
+            {
                 self.engine.play_poker(Cue::WinBig, 0.0, 0.9);
                 let _ = w;
             }

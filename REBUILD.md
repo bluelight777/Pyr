@@ -310,7 +310,20 @@ How (decided while starting it):
       edge instead of running off it.
 - [ ] Bomb Pot (was Flash Pot), new art, 50,000 and 100,000 (0.13.4/6); the crown win (0.13.4)
 - [ ] Bounty Poker (0.13.6)
-- [ ] High stakes and higher-than-high tables, 500K/1M/5M chips (0.13.6)
+- [x] High stakes and higher-than-high tables, 500K/1M/5M chips (0.13.6): three tables of each,
+      0.13.28's names and bets (Hearth 10–1,000, High Limit 500–100,000, Crown Room 10,000 to
+      10,000,000; Monte Carlo, Riviera High Rollers to 500,000, Grand Salle; Salon Privé, Black
+      Pearl, Imperial Salon; Lucky Sevens, High Rollers, Sky Rollers). A roulette place's most is
+      its own (25,000 on a number to 500,000 on red), twenty times that at the Grand Salle (500,000
+      on a number, 10,000,000 on red: tried in 0.13.28's app on both servers, the same); Tie and
+      the pairs to 25,000, to the table's most at the Imperial Salon; craps to 50,000, 2,500,000
+      and 500,000,000 on the layout at once. The 500K, 1000K and 5000K chips (0.13.28's colors
+      and words), a table's rack from the biggest chip not over its least bet (the Crown Room's
+      5K to 5000K). The tables to pick from as 0.13.28's cards (0.13.4), measured: TABLES pick
+      one, a card a table with YOU'RE HERE or how many seats are open, its bets and a dot a seat;
+      better than 0.13.28 where its Crown Room's bets ran over the dots (said shorter there). The
+      tables below as 0.13.28 lays them out (checked side by side, all four). Under 0.13.28's
+      name (`high_tables`): its app plays the rebuilt server's Grand Salle and checks the spin.
 - [ ] Craps: lay odds (0.13.6), buy and lay (0.13.23, 0.13.26), chips stay as piled (0.13.24),
       lay win callout (0.13.25)
 - [ ] Dominó Cubano tables in the casino, to 10,000,000, El Presidente (0.13.11/12)
@@ -343,7 +356,31 @@ How (decided while starting it):
       from 0.13.28); every face-down card in the back picked, and a back picked while sitting
       shows at that seat at once (Blue: "dealt green after picking red")
 - [ ] Congrats / buy a drink on a big win (0.13.7)
-- [ ] Table invites (0.13.6); volume per game (0.13.4)
+- [x] Table invites (0.13.6): "+ Invite" on the top bar of every blackjack, roulette, baccarat and
+      craps table (left of the rounds checked) and beside a poker table's Lobby, "Invite someone
+      here to this table"; its list as 0.13.28's (Invite to this table, Look for someone, everyone
+      here online first, "(offline)", 600 wide, scrolls past eight; never me, bots or anyone I've
+      blocked); "Invited Olive to the table". 0.13.28's words both ways, taken from its app and its
+      server (`invite_to_table {uid, table: {game, id}}`, `table_invite {from, table, name}`): its
+      app invites on the rebuilt server, its server's invites reach the rebuilt app, and Join goes
+      there. The server as 0.13.28's answers (tried on it): not to me, a bot, someone blocked
+      either way, or the same person again within 20 seconds; anyone else, online or not; "that
+      table's closed". Shown where the server has `voice_invite` (0.13.28 names no feature for
+      it). The card in the corner (0.13.28's, measured: 332 by 126 at the bottom right, its bar
+      running down the minute, Not now and Join), the same card for an invite to a voice channel
+      ("invites you to 🔊 Lounge", which the rebuild had at the top right, drawn its own way), and
+      Invite to 🔊 Lounge under Call in someone's menu, as 0.13.28 has it. Better than 0.13.28: two
+      cards no longer overlap. Volume for the games (0.13.4): the speaker on every game's top bar
+      ("Volume") and Volume at a poker table open GAME VOLUME's slider, Sound off and "Every game
+      here, poker too. Pyr's other sounds follow Settings → Sounds."; kept as 0.13.28 keeps it
+      (`games_volume`), on top of Pyr's sounds (tried on 0.13.28 by its sound: half and half, a
+      quarter); Sound off for every game, poker and the Bonfire too. The keyboard on a game's Keys
+      button drawn as 0.13.28's (smaller than the menu bar's, in the middle).
+- [x] No freezes from reading or writing Pyr's state in the middle of drawing it (0.13.2: "Playing
+      craps no longer makes Pyr stop responding"; 0.13.5: the games' volume froze it): a notice
+      raised while a page draws (roulette, baccarat and craps setting bets to fit a table, 0.13.0's
+      code) waits for the frame to finish, and so does the games' volume moved; the invite list
+      and the volume take what they need from the frame. (Found here: inviting froze a test Pyr.)
 - [ ] Mini-game backgrounds (0.13.4), bonus games clearer (0.13.6), Keno and Dice tweaks
 
 ### New in the rebuild
@@ -380,10 +417,10 @@ How (decided while starting it):
   after every casino round (gains only when there's something to celebrate); `claim_ember` and
   `claim_weekly` (no fields) answered with the record and gains `{chips}`.
 - ToServer variants only 0.13.28 has (still to do): straddle, rabbit, hide_title,
-  invite_to_table, bounty, dom_tables, dom_watch, dom_unwatch, dom_sit, dom_leave, dom_ready,
-  dom_move, dom_bot, dom_new. ToApp: rabbit, dom_tables, dom, table_invite. Its achievements: 39
+  bounty, dom_tables, dom_watch, dom_unwatch, dom_sit, dom_leave, dom_ready,
+  dom_move, dom_bot, dom_new. ToApp: rabbit, dom_tables, dom. Its achievements: 39
   (the rebuild has 32). (take_chips, staff_log_all, cms and announcement are in: see the control
-  room.)
+  room; invite_to_table and table_invite too: see the table invites.)
 - The control room as 0.13.28 talks it (found by sending it requests exactly as written,
   `crates/engine/examples/raw_probe.rs`, and reading its debug log): `{"op":"cms","req":{"op":
   "overview"}}` and the like (`CmsReq`: overview, players `{query}`, adjust `{uid, delta,

@@ -8,6 +8,7 @@ mod calls;
 mod casino;
 mod chat;
 mod connector;
+mod corner_invites;
 mod create;
 mod dialogs;
 mod icons;

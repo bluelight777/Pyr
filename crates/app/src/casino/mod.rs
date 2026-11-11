@@ -28,9 +28,11 @@ pub mod floor;
 pub mod games_menu;
 pub mod humor;
 pub mod info;
+pub mod invite;
 pub mod keno;
 pub mod levels;
 pub mod keys;
+pub mod picker;
 pub mod menubar;
 pub mod plinko;
 pub mod pics;
@@ -72,7 +74,14 @@ pub mod col {
 }
 
 /// Chip values on the rack.
-pub const CHIPS: [u64; 9] = [1, 5, 25, 100, 500, 1_000, 5_000, 25_000, 100_000];
+pub const CHIPS: [u64; 12] = [1, 5, 25, 100, 500, 1_000, 5_000, 25_000, 100_000, 500_000, 1_000_000, 5_000_000];
+
+/// A table's rack (0.13.28's): from the biggest chip not over its least bet to the biggest not
+/// over its most (the Crown Room's 5K to 5,000K, Hearth's 5 to 1K).
+pub fn table_chips(min_bet: u64, max_bet: u64) -> (u64, u64) {
+    let below = |n: u64| CHIPS.iter().copied().filter(|c| *c <= n).last().unwrap_or(1);
+    (below(min_bet), below(max_bet))
+}
 /// A chip's cell on the rack at full size (22 a side and 8 between), and the least it may be
 /// (10 a side), as 0.13.28's.
 const CELL: f32 = 52.0;
@@ -85,10 +94,10 @@ pub fn slot_bets(s: &ServerView) -> &'static [u64] {
     if s.has(pyr_proto::control::BIG_SLOT_BETS_FEATURE) { all } else { &all[..9] }
 }
 
-/// The rack's next chip down (`step` −1) or up (+1) from `chip`, among those up to `max_chip`
-/// (from a chip not on this rack: the nearest one that way).
-fn next_chip(chip: u64, max_chip: u64, step: i32) -> u64 {
-    let rack: Vec<u64> = CHIPS.iter().copied().filter(|v| *v <= max_chip).collect();
+/// The rack's next chip down (`step` −1) or up (+1) from `chip`, among those from `range.0` to
+/// `range.1` (from a chip not on this rack: the nearest one that way).
+fn next_chip(chip: u64, range: (u64, u64), step: i32) -> u64 {
+    let rack: Vec<u64> = CHIPS.iter().copied().filter(|v| (range.0..=range.1).contains(v)).collect();
     if rack.is_empty() {
         return chip;
     }
@@ -135,7 +144,14 @@ pub struct CasinoUi {
     pub stream_menu: Option<Rect>,
     /// Streamer mode: my chips when it came on (the session's up or down from there).
     pub session_start: Option<u64>,
+    /// Every game's sounds off, poker's too (the games' volume's Sound off; not kept).
     pub mute: bool,
+    /// What's typed in "+ Invite"'s Look for someone.
+    pub invite_query: String,
+    /// The games' volume as the settings have it, this frame, and as it's just been moved (and
+    /// whether to keep it), to be set after the frame (see `games_volume_menu`).
+    pub games_volume: f32,
+    pub games_volume_set: Option<(f32, bool)>,
     /// Rounds and big wins already shown, and answers already had.
     pub seen_round: u64,
     pub seen_answers: u64,
@@ -207,6 +223,9 @@ impl Default for CasinoUi {
             stream_menu: None,
             session_start: None,
             mute: false,
+            invite_query: String::new(),
+            games_volume: 1.0,
+            games_volume_set: None,
             seen_round: 0,
             seen_answers: 0,
             seen_big_win: 0,
@@ -476,11 +495,10 @@ pub fn flat_chip(p: &egui::Painter, c: Pos2, r: f32, value: u64, lift: bool) {
     p.text(c, Align2::CENTER_CENTER, label, theme::bold_font(size), text);
 }
 
-/// What a chip says on it: 1, 5, 25, 100, 500, then 1K, 5K, 25K, 100K (as 0.13.28's).
+/// What a chip says on it: 1, 5, 25, 100, 500, then 1K, 5K, 25K, 100K, 500K, 1000K, 5000K (as
+/// 0.13.28's).
 pub fn chip_label(value: u64) -> String {
-    if value >= 1_000_000 && value % 1_000_000 == 0 {
-        format!("{}M", value / 1_000_000)
-    } else if value >= 1_000 && value % 1_000 == 0 {
+    if value >= 1_000 && value % 1_000 == 0 {
         format!("{}K", value / 1_000)
     } else {
         chips_text(value)
@@ -497,7 +515,10 @@ pub fn chip_colors(value: u64) -> (Color32, Color32) {
         1000..=4999 => (Color32::from_rgb(0xf0, 0xc0, 0x2e), Color32::from_rgb(0x8a, 0x24, 0x1c)),
         5000..=24_999 => (Color32::from_rgb(0xf0, 0x7a, 0x1e), Color32::from_rgb(0xf5, 0xf2, 0xea)),
         25_000..=99_999 => (Color32::from_rgb(0x2a, 0x6c, 0xe0), Color32::from_rgb(0xff, 0xd7, 0x6a)),
-        _ => (Color32::from_rgb(0xd8, 0x3a, 0x9a), Color32::from_rgb(0xff, 0xd7, 0x6a)),
+        100_000..=499_999 => (Color32::from_rgb(0xd8, 0x3a, 0x9a), Color32::from_rgb(0xff, 0xd7, 0x6a)),
+        500_000..=999_999 => (Color32::from_rgb(0x12, 0x9a, 0x9a), Color32::from_rgb(0xff, 0xd7, 0x6a)),
+        1_000_000..=4_999_999 => (Color32::from_rgb(0x16, 0x14, 0x18), Color32::from_rgb(0xf0, 0xc0, 0x2e)),
+        _ => (Color32::from_rgb(0xa8, 0x10, 0x1c), Color32::from_rgb(0xf0, 0xc0, 0x2e)),
     }
 }
 
@@ -568,6 +589,43 @@ impl PyrApp {
         }
         for (_, cue, pan, vol) in due.into_iter().take(4) {
             self.engine.play_poker(cue, pan, vol);
+        }
+    }
+
+    /// The games' volume (0.13.4), under a game's speaker or a poker table's Volume: its slider,
+    /// Sound off, and what it covers, as 0.13.28 has them. (The slider's heard at once and kept
+    /// when let go.)
+    pub(crate) fn games_volume_menu(&mut self, resp: &egui::Response) {
+        let mute = self.poker.casino.mute;
+        let volume = self.poker.casino.games_volume;
+        let mut toggled = false;
+        let mut set: Option<(f32, bool)> = None;
+        egui::Popup::menu(resp).gap(0.0).align_alternatives(&[egui::RectAlign::BOTTOM_END]).show(|ui| {
+            // (Laid out as 0.13.28's, measured: its heading a label of its own, not a menu's.)
+            crate::menu::style(ui);
+            ui.label(RichText::new("GAME VOLUME").font(theme::bold_font(11.0)).color(theme::DIM()));
+            let mut v = volume * 100.0;
+            let r = ui.add(egui::Slider::new(&mut v, 0.0..=100.0).suffix("%"));
+            if r.changed() {
+                set = Some((v / 100.0, !r.dragged()));
+            }
+            if r.drag_stopped() {
+                set = Some((v / 100.0, true));
+            }
+            ui.add_space(4.0);
+            if crate::menu::check(ui, mute, "Sound off", false).clicked() {
+                toggled = true;
+                ui.close();
+            }
+            ui.label(RichText::new("Every game here, poker too. Pyr's other sounds follow Settings → Sounds.").font(theme::font(11.5)).color(theme::DIM()));
+        });
+        if toggled {
+            self.poker.casino.mute = !mute;
+        }
+        // (Set once the frame has let go of the state: setting it now would wait on itself, what
+        // froze 0.13.4 when its slider moved.)
+        if let Some(set) = set {
+            self.poker.casino.games_volume_set = Some(set);
         }
     }
 
@@ -686,19 +744,18 @@ impl PyrApp {
         if resp.clicked() {
             self.poker.casino.stream_menu = if self.poker.casino.stream_menu.is_some() { None } else { Some(r) };
         }
+        // The games' volume (0.13.4): its slider and Sound off, under the speaker.
         let mute = self.poker.casino.mute;
-        let (resp, r) = button(ui, 38.0, false, if mute { "Sound off: click for the casino's sounds" } else { "Sound on" });
+        let (resp, r) = button(ui, 38.0, false, if mute { "Sound off: click for the volume" } else { "Volume" });
         if mute {
             crate::icons::speaker_off(&p, r.shrink(9.0), col::MUTED);
         } else {
             crate::icons::speaker(&p, r.shrink(9.0), col::TEXT);
         }
-        if resp.clicked() {
-            self.poker.casino.mute = !mute;
-        }
+        self.games_volume_menu(&resp);
         let keys_open = matches!(self.ui.dialog, Some(crate::app::Dialog::CasinoKeys(_)));
         let (resp, r) = button(ui, 38.0, keys_open, "Keys: every game's moves and their keys, yours to change");
-        menubar::keyboard_icon(&p, r.center(), if keys_open { col::NIGHT } else { col::TEXT });
+        menubar::top_bar_keyboard_icon(&p, r.center(), if keys_open { col::NIGHT } else { col::TEXT });
         if resp.clicked() {
             self.ui.dialog = Some(crate::app::Dialog::CasinoKeys(keys::KeysWindow::new(Some(keys::Section::of(game)))));
         }
@@ -710,6 +767,12 @@ impl PyrApp {
         p.text(r.center(), Align2::CENTER_CENTER, text, theme::bold_font(12.5), if problems { col::LOSE } else { col::WIN });
         if resp.clicked() {
             self.poker.casino.fairness_open = true;
+        }
+        // At a table: invite someone to it (0.13.6).
+        if let Some(table) = self.casino_invite_table(s, game) {
+            let (resp, r) = button(ui, 92.0, false, "Invite someone here to this table");
+            p.text(r.center(), Align2::CENTER_CENTER, "+ Invite", theme::bold_font(13.0), col::TEXT);
+            self.invite_list(&resp, s, table);
         }
         // My chips: a bet comes off at once; a win goes on as the round settles, counting up.
         let real = chips_now(s);
@@ -827,36 +890,43 @@ impl PyrApp {
     /// their own over the controls' left end: never one over the other. Returns where the words
     /// went.
     pub fn rack_and_bet(&mut self, ui: &mut egui::Ui, bar: Rect, right: f32, max_chip: u64, text: String, color: Color32) -> Option<Rect> {
+        self.rack_and_bet_from(ui, bar, right, (1, max_chip), text, color)
+    }
+
+    /// The same with the rack's chips from `range.0` to `range.1` (a table's, see `table_chips`).
+    pub fn rack_and_bet_from(&mut self, ui: &mut egui::Ui, bar: Rect, right: f32, range: (u64, u64), text: String, color: Color32) -> Option<Rect> {
         let at = pos2(bar.left() + 16.0, bar.center().y - 26.0);
         let room = right - 10.0 - at.x;
-        let n = CHIPS.iter().filter(|v| **v <= max_chip).count().max(1) as f32;
+        let n = CHIPS.iter().filter(|v| (range.0..=range.1).contains(*v)).count().max(1) as f32;
         let galley = ui.painter().layout_no_wrap(text, theme::bold_font(16.0), color);
         let words = galley.size().x;
         let beside = ((room - 18.0 - words) / n).min(CELL);
         let alone = (room / n).min(CELL);
         if beside >= 33.0 {
-            self.chip_rack(ui, at, max_chip, beside);
+            self.chip_rack(ui, at, range, beside);
             let r = Rect::from_min_size(pos2(right - 10.0 - words, bar.center().y - galley.size().y / 2.0), galley.size());
             ui.painter().galley(r.min, galley, color);
             return Some(r);
         }
         if alone >= MIN_CELL {
-            self.chip_rack(ui, at, max_chip, alone);
+            self.chip_rack(ui, at, range, alone);
             return None;
         }
         // The tray: the chips full size, the words beside them.
         let tray = Rect::from_min_size(pos2(bar.left(), bar.top() - 8.0 - 60.0), vec2(16.0 + n * CELL - 8.0 + 18.0 + words + 16.0, 60.0));
         ui.painter().rect_filled(tray, theme::r(18), Color32::from_black_alpha(170));
         let at = pos2(tray.left() + 16.0, tray.center().y - 22.0);
-        self.chip_rack(ui, at, max_chip, CELL);
+        self.chip_rack(ui, at, range, CELL);
         let r = Rect::from_min_size(pos2(tray.right() - 16.0 - words, tray.center().y - galley.size().y / 2.0), galley.size());
         ui.painter().galley(r.min, galley, color);
         Some(r)
     }
 
-    /// The rack of chips to bet with, from `at` (its top left), each chip in a cell `cell` wide
-    /// (a chip 22/52 of it a side, centered 22 below `at`).
-    pub fn chip_rack(&mut self, ui: &mut egui::Ui, at: Pos2, max_chip: u64, cell: f32) {
+    /// The rack of chips to bet with (those from `range.0` to `range.1`), from `at` (its top
+    /// left), each chip in a cell `cell` wide (a chip 22/52 of it a side, centered 22 below
+    /// `at`). The chip picked is one of them (the nearest).
+    pub fn chip_rack(&mut self, ui: &mut egui::Ui, at: Pos2, range: (u64, u64), cell: f32) {
+        self.poker.casino.chip = self.poker.casino.chip.clamp(range.0, range.1);
         // A smaller or a bigger chip by its key (Left and Right unless changed).
         let step = if keys::pressed(ui.ctx(), keys::Move::ChipSmaller) {
             -1
@@ -866,12 +936,15 @@ impl PyrApp {
             0
         };
         if step != 0 {
-            self.poker.casino.chip = next_chip(self.poker.casino.chip, max_chip, step);
+            self.poker.casino.chip = next_chip(self.poker.casino.chip, range, step);
         }
         let r = cell * 22.0 / CELL;
         let mut x = at.x;
         for v in CHIPS {
-            if v > max_chip {
+            if v < range.0 {
+                continue;
+            }
+            if v > range.1 {
                 break;
             }
             let c = pos2(x + r, at.y + 22.0);
@@ -1181,24 +1254,28 @@ mod rack_tests {
 
     #[test]
     fn a_smaller_or_bigger_chip() {
-        assert_eq!(next_chip(25, 25_000, -1), 5);
-        assert_eq!(next_chip(25, 25_000, 1), 100);
-        assert_eq!(next_chip(1, 25_000, -1), 1);
-        assert_eq!(next_chip(25_000, 25_000, 1), 25_000);
+        assert_eq!(next_chip(25, (1, 25_000), -1), 5);
+        assert_eq!(next_chip(25, (1, 25_000), 1), 100);
+        assert_eq!(next_chip(1, (1, 25_000), -1), 1);
+        assert_eq!(next_chip(25_000, (1, 25_000), 1), 25_000);
         // A chip bigger than this rack has: its biggest either way.
-        assert_eq!(next_chip(25_000, 5_000, -1), 5_000);
-        assert_eq!(next_chip(25_000, 5_000, 1), 5_000);
+        assert_eq!(next_chip(25_000, (1, 5_000), -1), 5_000);
+        assert_eq!(next_chip(25_000, (1, 5_000), 1), 5_000);
         // One between the rack's: the nearest that way.
-        assert_eq!(next_chip(50, 25_000, -1), 25);
-        assert_eq!(next_chip(50, 25_000, 1), 100);
-        assert_eq!(next_chip(25_000, 100_000, 1), 100_000);
+        assert_eq!(next_chip(50, (1, 25_000), -1), 25);
+        assert_eq!(next_chip(50, (1, 25_000), 1), 100);
+        assert_eq!(next_chip(25_000, (1, 100_000), 1), 100_000);
+        // A table's: from the biggest chip not over its least.
+        assert_eq!(table_chips(10_000, 10_000_000), (5_000, 5_000_000));
+        assert_eq!(table_chips(10, 1_000), (5, 1_000));
+        assert_eq!(table_chips(500, 100_000), (500, 100_000));
+        assert_eq!(next_chip(5_000, (5_000, 5_000_000), -1), 5_000);
     }
 
     /// The chips say what 0.13.28's say.
     #[test]
     fn chips_say_1k_and_100k() {
         let labels: Vec<String> = CHIPS.iter().map(|v| chip_label(*v)).collect();
-        assert_eq!(labels, ["1", "5", "25", "100", "500", "1K", "5K", "25K", "100K"]);
-        assert_eq!((chip_label(500_000), chip_label(1_000_000), chip_label(5_000_000)), ("500K".into(), "1M".into(), "5M".into()));
+        assert_eq!(labels, ["1", "5", "25", "100", "500", "1K", "5K", "25K", "100K", "500K", "1000K", "5000K"]);
     }
 }

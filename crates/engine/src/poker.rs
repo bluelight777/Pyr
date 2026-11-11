@@ -138,6 +138,9 @@ pub struct PokerState {
     pub props_asked: BTreeMap<u64, Instant>,
     pub props_opened: Vec<pyr_poker::props::PropView>,
     pub prop_notes: Vec<(u64, String, i64)>,
+    /// Invites to a table (0.13.6): the table, who from, its name, when it came. (Not from
+    /// someone I've blocked; the newest last.)
+    pub table_invites: Vec<(pyr_poker::net::TableRef, String, String, Instant)>,
 }
 
 /// The blackjack table I'm at or watching.
@@ -481,6 +484,8 @@ impl PokerState {
             },
             // (Big, and in a toast: as gifts are.)
             ToApp::Announcement { from, text } => self.notices.push(format!("{from}, to the whole casino: {text}")),
+            // (Taken where who's blocked is known: see the connection's `TableInvite`.)
+            ToApp::TableInvite { from, table, name } => self.table_invites.push((table, from, name, now)),
             ToApp::Casino { res } => {
                 self.casino.apply(res);
                 if let Some(me) = self.me.as_mut()

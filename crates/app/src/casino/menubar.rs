@@ -199,9 +199,17 @@ fn named_nudge(item: Item) -> f32 {
     }
 }
 
-/// The Keys icon (a keyboard), about `c`: a game's top bar has it too.
-pub fn keyboard_icon(p: &egui::Painter, c: Pos2, ink: Color32) {
-    icon(p, Item::Keys, c, ink);
+/// The keyboard on a game's top bar (its Keys button), about `c` (the button's middle): smaller
+/// than the menu bar's and in its middle, as 0.13.28 draws it, read off its screen pixel by pixel.
+pub fn top_bar_keyboard_icon(p: &egui::Painter, c: Pos2, ink: Color32) {
+    let at = |x: f32, y: f32| pos2(c.x + x, c.y + y);
+    p.rect_stroke(Rect::from_min_max(at(-8.2, -5.2), at(8.2, 5.2)), CornerRadius::same(3), Stroke::new(1.6f32, ink), egui::StrokeKind::Middle);
+    for (row, y) in [-4.0, -1.0].into_iter().enumerate() {
+        for (i, x) in [-6.0, -3.0, 1.0, 5.0].into_iter().enumerate() {
+            p.rect_filled(Rect::from_min_size(at(x, y), vec2(2.0, 2.0)), CornerRadius::ZERO, if row == 0 && i == 0 { col::GOLD2 } else { ink });
+        }
+    }
+    p.rect_filled(Rect::from_min_max(at(-5.0, 3.17), at(5.0, 4.83)), CornerRadius::ZERO, ink);
 }
 
 /// An item's icon, about `c` (its button's middle, on a whole pixel). Each as 0.13.28 draws it,

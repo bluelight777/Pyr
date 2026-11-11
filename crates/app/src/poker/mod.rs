@@ -150,7 +150,6 @@ pub struct PokerUi {
     pub chat_focus: bool,
     /// Auto-muck as last told to each table I sit at (sent again when it differs).
     pub muck_sent: std::collections::HashMap<TableId, bool>,
-    pub mute: bool,
     /// The engine's celebrations already shown, and whether its error has been.
     pub gains_seen: usize,
     pub notices_seen: usize,
@@ -197,6 +196,7 @@ impl PyrApp {
     /// The poker room page (the main area).
     pub fn poker_page(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, acts: &mut Vec<Act>) {
         let whole = ui.max_rect();
+        self.poker.casino.games_volume = st.settings.games_volume;
         // My deck (the back I picked; four colors or two) for every card that's mine to see.
         cards::set_mine(s.poker.me.as_ref().map(|m| m.card_back.as_str()).unwrap_or(""), self.poker.four_color);
         self.poker_page_inner(ui, st, s, acts);

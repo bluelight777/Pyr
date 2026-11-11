@@ -134,6 +134,17 @@ pub fn check(r: &CrapsReveal) -> Result<(), String> {
     Ok(())
 }
 
+/// The most a person may have on the layout at once at a table whose most bet is `hi`: 50,000 at
+/// the tables to 1,000, 2,500,000 at the high rollers' (0.13.6: it stopped at 50,000 there, so
+/// odds and more bets wouldn't go down), 500,000,000 higher than that (the Sky Rollers).
+pub fn layout_most(hi: u64) -> u64 {
+    match hi {
+        0..=1_000 => craps::MAX_ON_TABLE,
+        1_001..=100_000 => 2_500_000,
+        _ => 500_000_000,
+    }
+}
+
 /// The bets that may go on the layout: each on its own at least the table's least and at most
 /// its most (the odds go up to their multiple of the pass line instead).
 fn within(b: &Bets, lo: u64, hi: u64) -> Result<(), String> {
@@ -465,7 +476,7 @@ impl CrapsRoom {
     pub fn cost(&self, uid: &str, new: &Bets) -> Result<i64, String> {
         let seat = self.seat_of(uid).ok_or("sit down first")?;
         let s = self.seats[seat as usize].as_ref().unwrap();
-        craps::check_change(&Table { point: self.point, bets: s.bets.clone(), streak: self.streak }, new)?;
+        craps::check_change_most(&Table { point: self.point, bets: s.bets.clone(), streak: self.streak }, new, layout_most(self.max_bet))?;
         within(new, self.min_bet, self.max_bet)?;
         Ok(new.total() as i64 - s.bets.total() as i64)
     }
@@ -613,7 +624,7 @@ impl CrapsRoom {
         }
         // (Whatever it can't do here, it leaves as it was.)
         let t = Table { point, bets: old.clone(), streak: self.streak };
-        if craps::check_change(&t, &b).is_ok() && within(&b, lo, hi).is_ok() { b } else { old }
+        if craps::check_change_most(&t, &b, layout_most(hi)).is_ok() && within(&b, lo, hi).is_ok() { b } else { old }
     }
 
     /// Bots whose moment has come put their chips down.
@@ -785,6 +796,12 @@ impl CrapsRoom {
 
 #[cfg(test)]
 mod tests {
+    /// As much on the layout at once as 0.13.28's tables let: 50,000, 2,500,000, 500,000,000.
+    #[test]
+    fn the_layout_holds_the_tables_most() {
+        assert_eq!([1_000, 100_000, 10_000_000].map(super::layout_most), [50_000, 2_500_000, 500_000_000]);
+    }
+
     use super::*;
 
     #[test]

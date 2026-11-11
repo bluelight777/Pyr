@@ -103,10 +103,17 @@ pub fn hard_name(i: usize) -> String {
     format!("Hard {}", HARD_NUMBERS[i])
 }
 
-/// Whether the table may go from its bets to `new` before the next roll.
+/// Whether the table may go from its bets to `new` before the next roll (the single-player
+/// table: at most `MAX_ON_TABLE` on it at once).
 pub fn check_change(t: &Table, new: &Bets) -> Result<(), String> {
-    if new.total() > MAX_ON_TABLE {
-        return Err(format!("the most on the table at once is {MAX_ON_TABLE}"));
+    check_change_most(t, new, MAX_ON_TABLE)
+}
+
+/// The same with at most `most` on the layout at once (a table's own, see
+/// `crapsroom::layout_most`).
+pub fn check_change_most(t: &Table, new: &Bets, most: u64) -> Result<(), String> {
+    if new.total() > most {
+        return Err(format!("the most on the table at once is {most}"));
     }
     match t.point {
         None => {

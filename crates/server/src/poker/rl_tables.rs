@@ -18,7 +18,8 @@ use super::{Poker, State, progress_chips};
 use crate::hub::Hub;
 
 /// The tables every server has (name, least and most bet). They never close.
-pub const STANDING: [(&str, u64, u64); 2] = [("Monte Carlo", 10, 1_000), ("Riviera High Rollers", 100, 25_000)];
+/// The tables always open (0.13.28's): a place's most is its spot's own (`rlroom::spot_most`).
+pub const STANDING: [(&str, u64, u64); 3] = [("Monte Carlo", 10, 1_000), ("Riviera High Rollers", 100, 500_000), ("Grand Salle", 10_000, 10_000_000)];
 const CLOSED: &str = "that table has closed";
 
 #[derive(Default)]

@@ -18,7 +18,8 @@ use super::{Poker, State, progress_chips};
 use crate::hub::Hub;
 
 /// The tables every server has (name, least and most bet). They never close.
-pub const STANDING: [(&str, u64, u64); 2] = [("Hearth", 10, 1_000), ("High Limit", 500, 25_000)];
+/// The tables always open (0.13.28's): high stakes to 100,000 (0.13.6) and higher than high.
+pub const STANDING: [(&str, u64, u64); 3] = [("Hearth", 10, 1_000), ("High Limit", 500, 100_000), ("Crown Room", 10_000, 10_000_000)];
 /// The most tables at once.
 pub const MAX_BJ_TABLES: usize = 10;
 /// A table someone opened closes when nobody's sat at it or watched it for this long.

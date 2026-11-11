@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use parking_lot::Mutex;
-use pyr_poker::net::{LeaderRow, PrizeView, RecordView, Role, StaffLog, StaffMember, StaffView, TableId, ToApp, ToServer, TourneyId};
+use pyr_poker::net::{LeaderRow, PrizeView, RecordView, Role, StaffLog, StaffMember, StaffView, TableId, TableRef, ToApp, ToServer, TourneyId};
 use pyr_poker::levels;
 use pyr_poker::progress::{self, COSMETICS, Kind, Record};
 use pyr_poker::room::{Effect, Look, Output, Random, Rcpt, Room};
@@ -79,6 +79,9 @@ pub const TOURNEY_KEEP_MS: u64 = 2 * 60 * 60 * 1000;
 /// finished one stays to be seen.
 pub const MAX_BOMBS: usize = 40;
 pub const BOMB_KEEP_MS: u64 = 10 * 60 * 1000;
+/// How long before someone can invite the same person to a table again: 20 seconds, as
+/// 0.13.28's server has it (tried: refused at 19, sent at 20; refusals don't count).
+pub const INVITE_GAP_MS: u64 = 20_000;
 
 #[derive(Default)]
 pub struct State {
@@ -92,6 +95,9 @@ pub struct State {
     pub bonfire: bonfire::BonfireState,
     pub emotes: emotes::EmoteState,
     pub chat: chat::ChatState,
+    /// Table invites lately (0.13.6): (who, whom) and when, so the same person isn't invited
+    /// again within `INVITE_GAP_MS`.
+    pub invited: BTreeMap<(String, String), u64>,
 }
 
 impl State {
@@ -853,6 +859,37 @@ impl Poker {
             }
             ToServer::Staff => Ok(Some(ToApp::Staff { view: Self::staff_view(hub, uid, can_manage) })),
             ToServer::StaffLogAll => Ok(Some(ToApp::StaffLogAll { log: Self::staff_log_all(hub, uid)? })),
+            ToServer::InviteToTable { uid: them, table } => {
+                // (0.13.6, answered as 0.13.28's server answers, in its words: tried on it.
+                // Watching the table isn't needed; someone offline is invited all the same, for
+                // when they're back; inviting myself, I'm "not a member".)
+                let user = hub.db.get_user(&them).filter(|u| !u.banned && them != uid).ok_or("they aren't a member here")?;
+                if user.bot {
+                    return Err(format!("{} is a bot: add bots from a seat instead", user.name));
+                }
+                if hub.db.blocked_between(uid, &them) {
+                    return Err("you can't invite someone you've blocked (or who blocked you)".into());
+                }
+                st.invited.retain(|_, at| now.saturating_sub(*at) < INVITE_GAP_MS);
+                let pair = (uid.to_string(), them.clone());
+                if st.invited.contains_key(&pair) {
+                    return Err("you've just invited them: give them a moment".into());
+                }
+                let name = match table {
+                    TableRef::Poker(id) => st.room(id).map(|r| r.name.clone()),
+                    TableRef::Blackjack(id) => st.bj.tables.get(&id).map(|t| t.name.clone()),
+                    TableRef::Craps(id) => st.craps.tables.get(&id).map(|t| t.name.clone()),
+                    TableRef::Baccarat(id) => st.bac.tables.get(&id).map(|t| t.name.clone()),
+                    TableRef::Roulette(id) => st.rl.tables.get(&id).map(|t| t.name.clone()),
+                    TableRef::Domino(_) => None,
+                }
+                .ok_or("that table's closed")?;
+                st.invited.insert(pair, now);
+                // (Logged as 0.13.28's server logs it: the game, never who.)
+                info!(game = ?table.game_name(), "poker: invited someone to a table");
+                hub.send_poker(&them, ToApp::TableInvite { from: uid.to_string(), table, name });
+                Ok(None)
+            }
             ToServer::Cms { req } => Ok(Some(ToApp::Cms { res: self.cms(hub, st, uid, req)? })),
             ToServer::TakeChips { uid: them, chips, note } => {
                 // (0.13.4: Game Masters and the Owner of the Game take chips away, as many as
@@ -1385,6 +1422,41 @@ mod tests {
         assert!(p.handle(&hub, "dee", true, ToServer::TourneyCancel { id: d.id }).is_err());
         p.handle(&hub, "dee", false, ToServer::TourneyUnregister { id: d.id }).unwrap();
         assert_eq!(hub.db.poker_record("dee").0.chips, progress::STARTING_CHIPS);
+    }
+
+    /// Table invites (0.13.6) go as 0.13.28's server lets them, refused in its words: someone
+    /// not a member (or me), a bot, someone blocked either way, the same person again within 20
+    /// seconds (someone else may), a table that isn't there.
+    #[test]
+    fn table_invites_as_0_13_28_lets_them() {
+        use pyr_poker::net::TableRef;
+        use pyr_proto::control::Role as UserRole;
+        let hub = hub();
+        let p = &hub.poker;
+        hub.db.insert_user("carol", "Carol", UserRole::Member).unwrap();
+        hub.db.insert_user("olive", "Olive", UserRole::Member).unwrap();
+        hub.db.insert_user("mia", "Mia", UserRole::Member).unwrap();
+        hub.db.insert_member("claude", "Claude", UserRole::Member, true).unwrap();
+        let invite = |from: &str, to: &str, table: TableRef| p.handle(&hub, from, false, ToServer::InviteToTable { uid: to.into(), table });
+        // (The standing tables are set out when someone first comes to the game.)
+        assert_eq!(invite("carol", "olive", TableRef::Roulette(3)).unwrap_err(), "that table's closed");
+        p.handle(&hub, "carol", false, ToServer::RlTables).unwrap();
+        p.handle(&hub, "carol", false, ToServer::BjTables).unwrap();
+        let grand = p.state.lock().rl.tables.values().find(|t| t.name == "Grand Salle").map(|t| t.id).unwrap();
+        assert_eq!(invite("carol", "olive", TableRef::Roulette(grand)).unwrap(), None);
+        assert_eq!(invite("carol", "olive", TableRef::Roulette(grand)).unwrap_err(), "you've just invited them: give them a moment");
+        assert_eq!(invite("carol", "olive", TableRef::Blackjack(1)).unwrap_err(), "you've just invited them: give them a moment", "any table");
+        assert_eq!(invite("mia", "olive", TableRef::Roulette(grand)).unwrap(), None, "someone else may");
+        // (Twenty seconds on.)
+        p.state.lock().invited.clear();
+        assert_eq!(invite("carol", "olive", TableRef::Blackjack(1)).unwrap(), None);
+        assert_eq!(invite("carol", "carol", TableRef::Roulette(grand)).unwrap_err(), "they aren't a member here");
+        assert_eq!(invite("carol", "nobody", TableRef::Roulette(grand)).unwrap_err(), "they aren't a member here");
+        assert_eq!(invite("carol", "claude", TableRef::Roulette(grand)).unwrap_err(), "Claude is a bot: add bots from a seat instead");
+        hub.db.set_relation("mia", "carol", 2).unwrap();
+        assert_eq!(invite("carol", "mia", TableRef::Roulette(grand)).unwrap_err(), "you can't invite someone you've blocked (or who blocked you)");
+        assert_eq!(invite("olive", "mia", TableRef::Poker(99)).unwrap_err(), "that table's closed");
+        assert_eq!(invite("olive", "mia", TableRef::Domino(1)).unwrap_err(), "that table's closed");
     }
 
     /// The Owner of the Game and (from 0.13.4) Game Masters give as many chips as they like, to
