@@ -21,6 +21,9 @@ const HOLD: Duration = Duration::from_secs(8);
 
 enum Outgoing {
     Req { req: Request, reply: Option<oneshot::Sender<Event>> },
+    /// Development (see `Engine::dev_send_raw`): a request's JSON as given, unchecked (its
+    /// keys in the order written).
+    Raw(String),
     Close,
 }
 
@@ -46,6 +49,12 @@ impl ServerHandle {
     /// Fire-and-forget request.
     pub fn notify(&self, req: Request) {
         let _ = self.out.send(Outgoing::Req { req, reply: None });
+    }
+
+    /// Development: a request written exactly as given (to see what a server answers to
+    /// messages this Pyr doesn't know yet).
+    pub fn send_raw(&self, req: String) {
+        let _ = self.out.send(Outgoing::Raw(req));
     }
 
     pub fn connection(&self) -> Option<quinn::Connection> {
@@ -145,6 +154,7 @@ async fn run(
                     while let Some(o) = out_rx.recv().await {
                         match o {
                             Outgoing::Close => return,
+                            Outgoing::Raw(_) => {}
                             Outgoing::Req { reply, .. } => {
                                 if let Some(r) = reply {
                                     let _ = r.send(Event::error(ErrorCode::Internal, f.0.clone()));
@@ -181,7 +191,7 @@ async fn run(
                     None | Some(Outgoing::Close) => return,
                     // (Waiting for an answer: kept. Sent and forgotten: as before, let go.)
                     Some(o @ Outgoing::Req { reply: Some(_), .. }) => held.push((tokio::time::Instant::now(), o)),
-                    Some(Outgoing::Req { reply: None, .. }) => {}
+                    Some(Outgoing::Req { reply: None, .. } | Outgoing::Raw(_)) => {}
                 },
             }
         }
@@ -293,6 +303,16 @@ async fn session(
                 None | Some(Outgoing::Close) => {
                     conn.close(quinn::VarInt::from_u32(0), b"bye");
                     break SessionEnd::Closed;
+                }
+                Some(Outgoing::Raw(req)) => {
+                    // (An id of its own, so its answer comes back as one, which nothing waits for.)
+                    next_id += 1;
+                    let json = format!("{{\"id\":{next_id},\"req\":{req}}}");
+                    let mut bytes = (json.len() as u32).to_be_bytes().to_vec();
+                    bytes.extend_from_slice(json.as_bytes());
+                    if let Err(e) = send.write_all(&bytes).await {
+                        break SessionEnd::Lost(e.to_string());
+                    }
                 }
                 Some(Outgoing::Req { req, reply }) => {
                     let id = if reply.is_some() { next_id += 1; next_id } else { 0 };

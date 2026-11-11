@@ -23,6 +23,7 @@ mod bj;
 mod bonfire;
 mod casino;
 mod chat;
+mod cms;
 mod gm;
 mod craps_tables;
 mod emotes;
@@ -66,7 +67,7 @@ const FRIDAY_STARTED: &str = "poker_friday_started";
 /// Staff: everyone's role, what each gave away today, the week's rake by day, and the log.
 const ROLES: &str = "poker_roles";
 const STAFF_LOG: &str = "poker_staff_log";
-const STAFF_LOG_KEEP: usize = 2_000;
+const STAFF_LOG_KEEP: usize = 10_000;
 /// How much of it the owner's sent at once.
 const STAFF_LOG_SHOWN: usize = 300;
 /// The least a Game Master / Ambassador may give a day, however little has been raked.
@@ -344,7 +345,9 @@ impl Poker {
         let allowance = me.map(|r| Self::allowance(hub, r)).unwrap_or(0);
         // ("owner": the Owner of the Game, not a server's owner.)
         let owner = Self::is_game_owner(hub, uid);
+        let cms = Self::can_cms(hub, uid);
         StaffView {
+            cms,
             me,
             owner,
             allowance,
@@ -352,7 +355,7 @@ impl Poker {
             rake_week: Self::rake_week(hub),
             staff: if Self::is_home(hub) { Self::roles(hub).into_iter().map(|(u, role)| StaffMember { name: Self::name_of(hub, &u), uid: u, role }).collect() } else { Vec::new() },
             // (The newest few hundred: all of it's kept, and in the server's own log.)
-            log: if owner { hub.db.get_meta(STAFF_LOG).and_then(|v| serde_json::from_str::<Vec<StaffLog>>(&v).ok()).unwrap_or_default().into_iter().take(STAFF_LOG_SHOWN).collect() } else { vec![] },
+            log: if owner || cms { hub.db.get_meta(STAFF_LOG).and_then(|v| serde_json::from_str::<Vec<StaffLog>>(&v).ok()).unwrap_or_default().into_iter().take(STAFF_LOG_SHOWN).collect() } else { vec![] },
         }
     }
 
@@ -849,6 +852,32 @@ impl Poker {
                 self.rl_tables(hub, st, uid, msg, now, &mut rng)
             }
             ToServer::Staff => Ok(Some(ToApp::Staff { view: Self::staff_view(hub, uid, can_manage) })),
+            ToServer::StaffLogAll => Ok(Some(ToApp::StaffLogAll { log: Self::staff_log_all(hub, uid)? })),
+            ToServer::Cms { req } => Ok(Some(ToApp::Cms { res: self.cms(hub, st, uid, req)? })),
+            ToServer::TakeChips { uid: them, chips, note } => {
+                // (0.13.4: Game Masters and the Owner of the Game take chips away, as many as
+                // someone has at most, all in the log with their balance before and after.)
+                if !Self::is_game_owner(hub, uid) && Self::role(hub, uid) != Some(Role::GameMaster) {
+                    return Err("only Game Masters and the Owner of the Game take chips away".into());
+                }
+                if chips == 0 {
+                    return Err("take some chips".into());
+                }
+                if hub.db.get_user(&them).is_none() {
+                    return Err("there's nobody by that id here".into());
+                }
+                let note: String = note.trim().chars().take(140).collect();
+                let (mut rec, _) = hub.db.poker_record(&them);
+                let before = rec.chips;
+                let n = chips.min(rec.chips);
+                rec.chips -= n;
+                let held = st.held(&them);
+                hub.db.set_poker_record(&them, &rec, held).map_err(|e| e.to_string())?;
+                hub.send_poker(&them, ToApp::Record { me: Self::view(hub, &them, &rec, held), gains: None });
+                let what = format!("took {} chips from {}{} · {} → {}", progress_chips(n), Self::name_of(hub, &them), cms::quoted(&note), progress_chips(before), progress_chips(rec.chips));
+                self.log_staff(hub, uid, what);
+                Ok(Some(ToApp::Staff { view: Self::staff_view(hub, uid, can_manage) }))
+            }
             ToServer::SetRole { uid: them, role } => {
                 // (Staff are the whole game's: named by the Owner of the Game on the home server
                 // only, and staff on every server. A server's owner names nobody.)
@@ -878,15 +907,12 @@ impl Poker {
                 Ok(Some(ToApp::Staff { view: Self::staff_view(hub, uid, can_manage) }))
             }
             ToServer::Gift { uid: them, chips, item, note } => {
-                // (The Owner of the Game gives as much as they like; it's all in the log. A
+                // (The Owner of the Game and, from 0.13.4, Game Masters give as much as they like,
+                // themselves too; it's all in the log, with the balance before and after. A
                 // server's owner, as such, gives nothing.)
                 let owner = Self::is_game_owner(hub, uid);
                 if !owner && Self::role(hub, uid) != Some(Role::GameMaster) {
                     return Err("only Game Masters and the Owner of the Game give gifts".into());
-                }
-                // (The owner may give to themselves, as much as they like, in the log like any gift.)
-                if them == uid && !owner {
-                    return Err("not to yourself".into());
                 }
                 if hub.db.get_user(&them).is_none() {
                     return Err("there's nobody by that id here".into());
@@ -896,10 +922,8 @@ impl Poker {
                     return Err("give some chips, a look, or both".into());
                 }
                 let note: String = note.trim().chars().take(140).collect();
-                if !owner {
-                    Self::spend(hub, uid, Role::GameMaster, chips)?;
-                }
                 let (mut rec, _) = hub.db.poker_record(&them);
+                let before = rec.chips;
                 rec.chips = rec.chips.saturating_add(chips);
                 if let Some(i) = &item {
                     rec.gifts.insert(i.clone());
@@ -909,12 +933,14 @@ impl Poker {
                 hub.send_poker(&them, ToApp::Record { me: Self::view(hub, &them, &rec, held), gains: None });
                 hub.send_poker(&them, ToApp::Gifted { from: Self::name_of(hub, uid), chips, item: item.clone(), note: note.clone() });
                 let what = format!(
-                    "gave {} {}{}{}{}",
+                    "gave {} {}{}{}{} · {} → {}",
                     Self::name_of(hub, &them),
                     if chips > 0 { format!("{} chips", progress_chips(chips)) } else { String::new() },
                     look.map(|l| format!("{}the {l} look", if chips > 0 { " and " } else { "" })).unwrap_or_default(),
-                    if note.is_empty() { String::new() } else { format!(" (\u{201c}{note}\u{201d})") },
-                    if owner { " [the Owner of the Game: no limit]" } else { "" }
+                    cms::quoted(&note),
+                    if owner { " [the Owner of the Game: no limit]" } else { " [Game Master: no limit]" },
+                    progress_chips(before),
+                    progress_chips(rec.chips)
                 );
                 self.log_staff(hub, uid, what);
                 Ok(Some(ToApp::Staff { view: Self::staff_view(hub, uid, can_manage) }))
@@ -935,8 +961,9 @@ impl Poker {
                 if room.prize.is_some() {
                     return Err("there's a prize box on this table already: it goes to the next hand's winner".into());
                 }
-                if let (false, Some(role)) = (owner, role) {
-                    Self::spend(hub, uid, role, chips)?;
+                // (Ambassadors from their allowance; Game Masters, from 0.13.4, as much as they like.)
+                if let (false, Some(Role::Ambassador)) = (owner, role) {
+                    Self::spend(hub, uid, Role::Ambassador, chips)?;
                 }
                 let mut out = Output::default();
                 room.drop_prize(PrizeView { chips, item, from: name }, &mut out)?;
@@ -948,7 +975,13 @@ impl Poker {
                         "dropped a prize box on {table_name}: {}{}{}",
                         if chips > 0 { format!("{} chips", progress_chips(chips)) } else { String::new() },
                         look.map(|l| format!("{}the {l} look", if chips > 0 { " and " } else { "" })).unwrap_or_default(),
-                        if owner { " [the Owner of the Game: no limit]" } else { "" }
+                        if owner {
+                            " [the Owner of the Game: no limit]"
+                        } else if role == Some(Role::GameMaster) {
+                            " [Game Master: no limit]"
+                        } else {
+                            ""
+                        }
                     ),
                 );
                 Ok(None)
@@ -1354,11 +1387,11 @@ mod tests {
         assert_eq!(hub.db.poker_record("dee").0.chips, progress::STARTING_CHIPS);
     }
 
-    /// The server's owner gives as many chips as they like, to themselves too (a Game Master only
-    /// what's left of today's allowance, never to themselves, and nobody else any), and every
-    /// gift is in the log the owner reads.
+    /// The Owner of the Game and (from 0.13.4) Game Masters give as many chips as they like, to
+    /// themselves too (nobody else any), and take chips away; every gift and every chip taken is
+    /// in the log, with the balance before and after, as 0.13.28 writes it.
     #[test]
-    fn the_owner_gives_without_a_limit_and_it_is_logged() {
+    fn the_owner_and_game_masters_give_and_take_and_it_is_logged() {
         use pyr_proto::control::Role as UserRole;
         let hub = hub();
         let p = &hub.poker;
@@ -1372,28 +1405,94 @@ mod tests {
         // (Game Masters are named on the home server: this one, here.)
         let _ = p.home_for_tests.set(hub.fingerprint);
         p.handle(&hub, owner, false, ToServer::SetRole { uid: "gm".into(), role: Some(Role::GameMaster) }).unwrap();
-        assert!(gift("gm", GM_FLOOR + 1).is_err(), "a Game Master: today's allowance");
-        gift("gm", 1_000).unwrap();
-        // The owner: as many as they like, again and again, well past any allowance.
+        // A Game Master: well past any day's allowance now.
+        gift("gm", GM_FLOOR * 10).unwrap();
+        // The owner: as many as they like, again and again.
         gift(owner, 5_000_000).unwrap();
         gift(owner, 7_000_000).unwrap();
-        assert_eq!(hub.db.poker_record("amy").0.chips, start + 1_000 + 12_000_000);
-        // The owner to themselves too, without a limit (a Game Master never).
+        assert_eq!(hub.db.poker_record("amy").0.chips, start + GM_FLOOR * 10 + 12_000_000);
+        // To themselves too, the owner and a Game Master.
         let mine = hub.db.poker_record(owner).0.chips;
         p.handle(&hub, owner, false, ToServer::Gift { uid: owner.into(), chips: 9_000_000, item: None, note: String::new() }).unwrap();
         assert_eq!(hub.db.poker_record(owner).0.chips, mine + 9_000_000);
-        assert!(p.handle(&hub, "gm", false, ToServer::Gift { uid: "gm".into(), chips: 5, item: None, note: String::new() }).is_err(), "not to themselves");
+        p.handle(&hub, "gm", false, ToServer::Gift { uid: "gm".into(), chips: 5, item: None, note: String::new() }).unwrap();
+        // Taking away: as many as they have at most; nobody else takes any.
+        assert!(p.handle(&hub, "amy", false, ToServer::TakeChips { uid: "gm".into(), chips: 5, note: String::new() }).is_err());
+        assert!(p.handle(&hub, owner, false, ToServer::TakeChips { uid: "amy".into(), chips: 0, note: String::new() }).is_err());
+        let amy = hub.db.poker_record("amy").0.chips;
+        p.handle(&hub, "gm", false, ToServer::TakeChips { uid: "amy".into(), chips: 1_000, note: "t".into() }).unwrap();
+        p.handle(&hub, owner, false, ToServer::TakeChips { uid: "amy".into(), chips: u64::MAX, note: String::new() }).unwrap();
+        assert_eq!(hub.db.poker_record("amy").0.chips, 0);
         let Some(ToApp::Staff { view }) = p.handle(&hub, owner, false, ToServer::Staff).unwrap() else { panic!() };
-        assert!(view.owner);
-        assert!(view.log[0].what.contains("Bluelight 9,000,000 chips") && view.log[0].what.contains("no limit"), "{}", view.log[0].what);
-        let top = &view.log[1];
-        assert_eq!(top.by, "Bluelight");
-        assert!(top.what.contains("Amy 7,000,000 chips") && top.what.contains("no limit"), "{}", top.what);
-        assert!(view.log.iter().any(|l| l.by == "Bluelight" && l.what.contains("5,000,000 chips")));
-        assert!(view.log.iter().any(|l| l.by == "Gee" && l.what.contains("1,000 chips") && !l.what.contains("no limit")));
-        // Only the owner reads it.
+        assert!(view.owner && view.cms);
+        let log: Vec<&str> = view.log.iter().map(|l| l.what.as_str()).collect();
+        let amy_after = amy - 1_000;
+        assert_eq!(log[0], format!("took {} chips from Amy · {} → 0", progress_chips(amy_after), progress_chips(amy_after)));
+        assert_eq!(log[1], format!("took 1,000 chips from Amy (\u{201c}t\u{201d}) · {} → {}", progress_chips(amy), progress_chips(amy_after)));
+        assert!(log[2].starts_with("gave Gee 5 chips [Game Master: no limit] · "), "{}", log[2]);
+        assert_eq!(log[3], format!("gave Bluelight 9,000,000 chips [the Owner of the Game: no limit] · {} → {}", progress_chips(mine), progress_chips(mine + 9_000_000)));
+        assert!(log[4].starts_with("gave Amy 7,000,000 chips (\u{201c}for the final\u{201d}) [the Owner of the Game: no limit] · "), "{}", log[4]);
+        assert!(view.log.iter().any(|l| l.by == "Gee" && l.what.contains("250,000 chips") && l.what.contains("[Game Master: no limit]")));
+        // Only the owner (and the control room) reads it.
         let Some(ToApp::Staff { view }) = p.handle(&hub, "gm", false, ToServer::Staff).unwrap() else { panic!() };
-        assert!(view.log.is_empty() && !view.owner);
+        assert!(view.log.is_empty() && !view.owner && !view.cms);
+        assert!(p.handle(&hub, "gm", false, ToServer::StaffLogAll).is_err());
+        let Some(ToApp::StaffLogAll { log }) = p.handle(&hub, owner, false, ToServer::StaffLogAll).unwrap() else { panic!() };
+        assert_eq!(log.len(), view.log.len().max(log.len()));
+        assert!(log.len() >= 7);
+    }
+
+    /// The control room, as 0.13.28 answers it: the overview's numbers, a look-up by name, chips
+    /// given and taken (as many as they have at most) with the balance in the log, a word to
+    /// everyone, and who's let in (by the Owner of the Game only).
+    #[test]
+    fn the_control_room_as_0_13_28s() {
+        use pyr_poker::net::{CmsReq, CmsRes};
+        use pyr_proto::control::Role as UserRole;
+        let hub = hub();
+        let p = &hub.poker;
+        let _ = p.home_for_tests.set(hub.fingerprint);
+        hub.db.insert_user("blue", "Olive", UserRole::Owner).unwrap();
+        hub.db.insert_user("pro", "Probe", UserRole::Member).unwrap();
+        hub.db.insert_user("car", "Carol", UserRole::Member).unwrap();
+        for u in ["pro", "car"] {
+            let (rec, held) = hub.db.poker_record(u);
+            hub.db.set_poker_record(u, &rec, held).unwrap();
+        }
+        let cms = |uid: &str, req: CmsReq| p.handle(&hub, uid, false, ToServer::Cms { req });
+        assert_eq!(cms("pro", CmsReq::Overview).unwrap_err(), "the control room is the Owner of the Game's (and whoever they let in)");
+        let Some(ToApp::Cms { res: CmsRes::Done { what } }) = cms("blue", CmsReq::Adjust { uid: "pro".into(), delta: 100, note: " probe give ".into() }).unwrap() else { panic!() };
+        assert_eq!(what, "gave 100 chips to Probe (control room) (\u{201c}probe give\u{201d}) · 100,000 → 100,100");
+        let Some(ToApp::Cms { res: CmsRes::Done { what } }) = cms("blue", CmsReq::Adjust { uid: "pro".into(), delta: -1_000_000_000, note: String::new() }).unwrap() else { panic!() };
+        assert_eq!(what, "took 100,100 chips from Probe (control room) · 100,100 → 0");
+        assert_eq!(cms("blue", CmsReq::Adjust { uid: "pro".into(), delta: 0, note: String::new() }).unwrap_err(), "give or take some chips");
+        assert_eq!(cms("blue", CmsReq::Adjust { uid: "nobody".into(), delta: 5, note: String::new() }).unwrap_err(), "there's nobody by that id here");
+        // A look-up: most chips first; a name's part, whatever its case.
+        let Some(ToApp::Cms { res: CmsRes::Players { rows } }) = cms("blue", CmsReq::Players { query: String::new() }).unwrap() else { panic!() };
+        assert_eq!(rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["Carol", "Probe"]);
+        let Some(ToApp::Cms { res: CmsRes::Players { rows } }) = cms("blue", CmsReq::Players { query: "PRO".into() }).unwrap() else { panic!() };
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0].chips, rows[0].level), (0, 1));
+        // A word to everyone.
+        assert_eq!(cms("blue", CmsReq::Announce { text: "  ".into() }).unwrap_err(), "say something");
+        let Some(ToApp::Cms { res: CmsRes::Done { what } }) = cms("blue", CmsReq::Announce { text: "x".repeat(600) }).unwrap() else { panic!() };
+        assert_eq!(what, "Said to everyone in the casino");
+        // Let in, by the Owner of the Game only; then they're in (and see the log).
+        let Some(ToApp::Cms { res: CmsRes::Access { owner: true, people } }) = cms("blue", CmsReq::SetAccess { uid: "car".into(), on: true }).unwrap() else { panic!() };
+        assert_eq!(people, [("Carol".to_string(), "car".to_string())]);
+        assert_eq!(cms("car", CmsReq::SetAccess { uid: "pro".into(), on: true }).unwrap_err(), "only the Owner of the Game lets people into the control room");
+        let Some(ToApp::Cms { res: CmsRes::Access { owner: false, .. } }) = cms("car", CmsReq::Access).unwrap() else { panic!() };
+        let Some(ToApp::Staff { view }) = p.handle(&hub, "car", false, ToServer::Staff).unwrap() else { panic!() };
+        assert!(view.cms && !view.owner && !view.log.is_empty());
+        let Some(ToApp::Cms { res: CmsRes::Overview(o) }) = cms("car", CmsReq::Overview).unwrap() else { panic!() };
+        assert_eq!((o.players, o.chips, o.tier_players[0], o.by_tier[0]), (2, 100_000, 2, 100_000));
+        assert_eq!(o.recent[0].what, "let Carol into the control room");
+        assert_eq!(o.recent[1].what, format!("announced: \u{201c}{}\u{201d}", "x".repeat(280)));
+        assert_eq!(o.log, 3 + 1);
+        cms("blue", CmsReq::SetAccess { uid: "car".into(), on: false }).unwrap();
+        assert!(cms("car", CmsReq::Overview).is_err());
+        let Some(ToApp::StaffLogAll { log }) = p.handle(&hub, "blue", false, ToServer::StaffLogAll).unwrap() else { panic!() };
+        assert_eq!(log[0].what, "took Carol out of the control room");
     }
 
     /// Game Masters are named on the home server only, and are Game Masters everywhere by its

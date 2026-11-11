@@ -61,6 +61,17 @@ pub struct TableLive {
 /// Casino chat lines kept here.
 const CHAT_KEPT: usize = 300;
 
+/// What the control room last said (0.13.5).
+#[derive(Clone, Debug, Default)]
+pub struct CmsLive {
+    pub overview: Option<pyr_poker::net::CmsOverview>,
+    pub players: Option<Vec<pyr_poker::net::CmsPlayer>>,
+    /// Whether I'm the Owner of the Game (who lets people in), and who's in: (name, id).
+    pub access: Option<(bool, Vec<(String, String)>)>,
+    /// What was just done, to say (the app takes them).
+    pub done: Vec<String>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PokerState {
     /// The casino's chat (0.13.0 servers): the lines kept, whether they've been asked for, and
@@ -83,6 +94,12 @@ pub struct PokerState {
     pub notices: Vec<String>,
     /// Pyr Poker's staff, when asked for.
     pub staff: Option<StaffView>,
+    /// The whole staff log, when asked for (0.13.4), and how many times it's come (so a
+    /// download waits for the one it asked for).
+    pub staff_log_all: Option<Vec<pyr_poker::net::StaffLog>>,
+    pub staff_log_seq: u64,
+    /// The control room (0.13.5), as it last answered.
+    pub cms: CmsLive,
     /// The daily chips just taken (how many; none: already taken today).
     pub daily: Option<Option<u64>>,
     /// The last refusal, in the server's words.
@@ -452,6 +469,18 @@ impl PokerState {
             ToApp::History { table, hand } => self.history = Some((table, hand)),
             ToApp::Player { table, player } => self.player = Some((table, player)),
             ToApp::Staff { view } => self.staff = Some(view),
+            ToApp::StaffLogAll { log } => {
+                self.staff_log_all = Some(log);
+                self.staff_log_seq += 1;
+            }
+            ToApp::Cms { res } => match res {
+                pyr_poker::net::CmsRes::Overview(o) => self.cms.overview = Some(o),
+                pyr_poker::net::CmsRes::Players { rows } => self.cms.players = Some(rows),
+                pyr_poker::net::CmsRes::Access { owner, people } => self.cms.access = Some((owner, people)),
+                pyr_poker::net::CmsRes::Done { what } => self.cms.done.push(what),
+            },
+            // (Big, and in a toast: as gifts are.)
+            ToApp::Announcement { from, text } => self.notices.push(format!("{from}, to the whole casino: {text}")),
             ToApp::Casino { res } => {
                 self.casino.apply(res);
                 if let Some(me) = self.me.as_mut()

@@ -510,6 +510,15 @@ impl Db {
             .flatten()
     }
 
+    /// Every note whose key starts with `prefix` (keys and values).
+    pub fn meta_with_prefix(&self, prefix: &str) -> Vec<(String, String)> {
+        let conn = self.conn.lock();
+        let Ok(mut st) = conn.prepare("SELECT key, value FROM meta WHERE substr(key, 1, ?2) = ?1") else { return Vec::new() };
+        st.query_map(params![prefix, prefix.chars().count() as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         self.conn.lock().execute(
             "INSERT INTO meta(key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",

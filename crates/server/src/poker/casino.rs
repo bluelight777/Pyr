@@ -28,7 +28,7 @@ const WINS_KEEP: usize = 30;
 /// the day (the last 28), all time, and its biggest and luckiest wins.
 const HOURS: &str = "casino_hours:";
 const DAYS: &str = "casino_days:";
-const ALL_TIME: &str = "casino_all:";
+pub(crate) const ALL_TIME: &str = "casino_all:";
 const BIG: &str = "casino_big:";
 const LUCKY: &str = "casino_lucky:";
 const LIST_KEEP: usize = 10;
@@ -83,7 +83,7 @@ fn wall() -> u64 {
 }
 
 impl Poker {
-    fn jackpot(hub: &Hub) -> u64 {
+    pub(crate) fn jackpot(hub: &Hub) -> u64 {
         hub.db.get_meta(JACKPOT).and_then(|v| v.parse().ok()).unwrap_or(slots::JACKPOT_SEED)
     }
 
@@ -104,7 +104,7 @@ impl Poker {
         (0..reelrow::TOPS.len() as u8).filter(|m| reelrow::progressive(*m)).map(|m| (m, Self::row_pool(hub, m))).collect()
     }
 
-    fn big_wins(hub: &Hub) -> Vec<BigWin> {
+    pub(crate) fn big_wins(hub: &Hub) -> Vec<BigWin> {
         hub.db.get_meta(WINS).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
     }
 
@@ -509,7 +509,7 @@ impl Poker {
         let key = o.stats_key();
         // Embers on the Bonfire, and its cut of the bet.
         Self::bonfire_add(hub, st, uid, wagered, &mut SysRandom);
-        let win = BigWin { name: Self::name_of(hub, uid), game: o.game(), wagered, paid, what: o.headline(), at_ms: wall(), key: key.clone() };
+        let win = BigWin { name: Self::name_of(hub, uid), game: o.game(), wagered, paid, what: o.headline(), at_ms: wall(), key: key.clone(), cheer: 0 };
         Self::count_round(hub, st, uid, &key, &win, wall());
         if jackpot || (paid >= 1_000 && paid >= wagered.saturating_mul(20)) || paid.saturating_sub(wagered) >= 100_000 {
             let mut wins = Self::big_wins(hub);

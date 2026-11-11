@@ -4,6 +4,7 @@
 
 pub mod bomb;
 pub mod cards;
+pub mod cms;
 pub mod felt;
 pub mod mark;
 pub mod rank;
@@ -34,6 +35,8 @@ pub enum Tab {
     Leaderboard,
     Me,
     Staff,
+    /// The control room (0.13.5): the Owner of the Game's, and whoever they let in.
+    Cms,
 }
 
 /// What a new table will be.
@@ -135,6 +138,11 @@ pub struct PokerUi {
     pub casino: crate::casino::CasinoUi,
     pub staff_pick: Option<String>,
     pub prize_for: Option<TableId>,
+    /// The control room on screen (0.13.5).
+    pub cms: cms::CmsUi,
+    /// "Download the whole log" clicked: (the server, the log's arrivals then, when, which page
+    /// asked), until the log comes and is saved.
+    pub log_download: Option<(String, u64, Instant, cms::LogFile)>,
     /// The casino's chat: open, what's being typed, and whether to put the cursor in it.
     pub chat_open: bool,
     pub chat_text: String,
@@ -241,6 +249,10 @@ impl PyrApp {
                 }
             }
         }
+        // The control room's "done" (the server's words; before the notices, as 0.13.28 shows
+        // them), and a log asked for to download.
+        self.cms_done(s, acts);
+        self.staff_log_saved(s, acts);
         // Gifts and prize boxes: big, and in a toast.
         if !s.poker.notices.is_empty() {
             self.engine.take_poker_notices(&s.key);
@@ -373,10 +385,9 @@ impl PyrApp {
             ui.add_space(16.0);
             if let Some(me) = &s.poker.me {
                 self.me_card(ui, s, me.clone());
-                if self.poker.tab == Tab::Floor {
-                    ui.add_space(10.0);
-                    self.levels_row(ui, s, &me.clone());
-                }
+                // (Today's missions and Ember Back on every page, as 0.13.28 has them.)
+                ui.add_space(10.0);
+                self.levels_row(ui, s, &me.clone());
             }
             ui.add_space(14.0);
             ui.horizontal(|ui| {
@@ -397,6 +408,13 @@ impl PyrApp {
                 if staff {
                     tabs.push((Tab::Staff, "Staff"));
                 }
+                let cms = s.has(pyr_proto::control::CMS_FEATURE) && s.poker.staff.as_ref().is_some_and(|v| v.cms);
+                if cms {
+                    tabs.push((Tab::Cms, "Control room"));
+                } else if self.poker.tab == Tab::Cms {
+                    // (Taken out of it: back to the casino.)
+                    self.poker.tab = Tab::Floor;
+                }
                 for (tab, name) in tabs {
                     let on = self.poker.tab == tab;
                     let b = egui::Button::new(RichText::new(name).font(theme::bold_font(14.0)).color(if on { theme::on_ember() } else { theme::TEXT() }))
@@ -411,6 +429,9 @@ impl PyrApp {
                         if tab == Tab::Staff {
                             self.engine.poker(&s.key, ToServer::Staff);
                         }
+                        if tab == Tab::Cms {
+                            self.cms_opened();
+                        }
                     }
                 }
             });
@@ -424,6 +445,7 @@ impl PyrApp {
                 Tab::Leaderboard => self.leaderboard(ui, s),
                 Tab::Me => self.profile(ui, s),
                 Tab::Staff => self.staff_tab(ui, s),
+                Tab::Cms => self.cms_page(ui, s),
             }
             ui.add_space(30.0);
         });

@@ -81,8 +81,14 @@ Version in brackets: where 0.13.x first had it.
 - [ ] Headset that drops out and comes back isn't an error (0.13.2)
 - [ ] Streamer mode only when turned on (0.13.2)
 - [ ] Sound profiles Classic / Ember; ten new ringtones; soundboard redrawn (0.13.2/3)
-- [ ] Join chime in Classic climbs and rings (0.13.23)
-- [ ] Mute shortcut: any key combo, then any single key (0.13.20/22); soundboard keys the same
+- [ ] Join chime in Classic climbs and rings (0.13.23): someone else joining my channel; me
+      joining keeps the old chime. Its notes, read out of 0.13.28's program (the table just
+      before Join's; Hz, start ms, length ms, loudness): (523.3, 0, 120, 0.60), (659.3, 70, 120,
+      0.60), (784.0, 140, 120, 0.65), then the chord at 210 ms for 560 ms: (1046.5, 0.70),
+      (659.3, 0.25), (784.0, 0.25). Every other chime's table is the rebuild's, unchanged.
+- [ ] Mute shortcut: any key combo, then any single key (0.13.20/22); soundboard keys the same.
+      Its sounds (0.13.28's tables, after Ringback's): muted a step down (523.3, 0, 90, 0.45),
+      (392.0, 60, 170, 0.45); unmuted a step up (392.0, 0, 90, 0.45), (523.3, 60, 170, 0.45)
 - [ ] Share picker redesign (0.13.14); still screens keep quality, High profile, crisp text
       (0.13.21); keep the size, lower the frame rate instead (0.13.22); on the graphics card
       end to end with NVENC/AMF/QSV, priority, 60 fps pacing, encoder in stats (0.13.26)
@@ -174,7 +180,21 @@ How (decided while starting it):
       colors, a tenth of a second a row, the bucket pressed and lit as a ball lands and its
       multiple floating up, the last ten buckets down the right. The peg and bucket sounds are
       made here.
-- [ ] The control room (0.13.5); GMs give/take chips, staff log and download (0.13.4)
+- [x] The control room (0.13.5); GMs give/take chips, staff log and download (0.13.4). As 0.13.28
+      has it, measured off its screen page by page: Overview (eight numbers, the VIP Club's
+      players at each tier, the big wins, the latest in the log), Players (look one up, give or
+      take chips: taking is clicked twice, "Take N away now"), the Chips log (filter, the first
+      500, green/red/blue as given/taken/other, "Download the whole log": 0.13.28's CSV to the
+      byte), Announce (a toast for everyone in the casino, big at a table), Access (the Owner of
+      the Game lets people in and out). Game Masters give without a limit on a 0.13.4 server
+      (prize boxes too; Ambassadors from their allowance), they and the owner take chips away
+      (never more than they have), every gift and chip taken in the log with the balance before
+      and after; the staff page's typed chips box, Take away and Download the whole log. Checked
+      both ways: the rebuilt app on 0.13.28's server and 0.13.28's app on the rebuilt server
+      (the server's home fingerprint changed in a test copy so its owner is the Owner of the
+      Game), every page and every action. Today's missions and Ember Back now show on every
+      casino page, as 0.13.28's do. Better than 0.13.28: a long log line stops at its card's
+      edge instead of running off it.
 - [ ] Bomb Pot (was Flash Pot), new art, 50,000 and 100,000 (0.13.4/6); the crown win (0.13.4)
 - [ ] Bounty Poker (0.13.6)
 - [ ] High stakes and higher-than-high tables, 500K/1M/5M chips (0.13.6)
@@ -229,16 +249,25 @@ How (decided while starting it):
   starts at), `missions` (their texts), `all_missions`, `star` (left out when empty); a record
   after every casino round (gains only when there's something to celebrate); `claim_ember` and
   `claim_weekly` (no fields) answered with the record and gains `{chips}`.
-- ToServer variants only 0.13.28 has (still to do): straddle, rabbit, hide_title, take_chips,
-  staff_log_all, invite_to_table, cms, bounty, dom_tables, dom_watch, dom_unwatch, dom_sit,
-  dom_leave, dom_ready, dom_move, dom_bot, dom_new. ToApp: rabbit, dom_tables, dom,
-  staff_log_all, cms, announcement, table_invite. Its achievements: 39 (the rebuild has 32).
+- ToServer variants only 0.13.28 has (still to do): straddle, rabbit, hide_title,
+  invite_to_table, bounty, dom_tables, dom_watch, dom_unwatch, dom_sit, dom_leave, dom_ready,
+  dom_move, dom_bot, dom_new. ToApp: rabbit, dom_tables, dom, table_invite. Its achievements: 39
+  (the rebuild has 32). (take_chips, staff_log_all, cms and announcement are in: see the control
+  room.)
+- The control room as 0.13.28 talks it (found by sending it requests exactly as written,
+  `crates/engine/examples/raw_probe.rs`, and reading its debug log): `{"op":"cms","req":{"op":
+  "overview"}}` and the like (`CmsReq`: overview, players `{query}`, adjust `{uid, delta,
+  note}`, announce `{text}`, access, set_access `{uid, on}`), answered `{"op":"cms","res":...}`
+  (`CmsRes`: overview, players `{rows}`, access `{owner, people: [[name, id]]}`, done
+  `{what}`); `staff_log_all` answered with the whole log; `take_chips {uid, chips, note}`;
+  `announcement {from, text}` to everyone in the casino; `StaffView.cms`; who's let in kept in
+  the `cms_access` meta as 0.13.28 keeps it (a server moved from 0.13.28 keeps them).
 
 ## The 0.13.28 server's feature names, in its order
 
 From the 0.13.28 `pyr-server` binary (what `Ready::features` lists). Still to add in the
-rebuild (as of chunk 2; poker_levels_2 since): casino_100k, casino_0_13_2, poker_rabbit, poker_straddle,
-poker_pick_bot, poker_gm_unlimited, big_slot_bets, casino_cms, casino_plinko,
+rebuild (as of chunk 2; poker_levels_2, casino_plinko, casino_cms, poker_gm_unlimited since):
+casino_100k, casino_0_13_2, poker_rabbit, poker_straddle, poker_pick_bot, big_slot_bets,
 casino_build, big_bomb_pots, slots_100k, hide_title, bounty_poker, high_tables, hard_bots,
 casino_domino, poker_top_up_anytime, craps_buy_lay, dm-files-2gb.
 

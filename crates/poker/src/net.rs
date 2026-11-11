@@ -107,6 +107,13 @@ pub enum ToServer {
     SetRole { uid: String, role: Option<Role> },
     /// A Game Master gives someone chips and/or a look.
     Gift { uid: String, chips: u64, item: Option<String>, note: String },
+    /// A Game Master or the Owner of the Game takes chips away (0.13.4): as many as they have
+    /// at most, in the log with their balance before and after.
+    TakeChips { uid: String, chips: u64, note: String },
+    /// The whole staff log (0.13.4), for the Owner of the Game (and the control room).
+    StaffLogAll,
+    /// The control room (0.13.5): the Owner of the Game's, and whoever they let in.
+    Cms { req: CmsReq },
     /// A Game Master or Ambassador puts a prize box on a table: whoever wins the next hand
     /// (a person, not a bot) opens it.
     DropPrize { table: TableId, chips: u64, item: Option<String> },
@@ -547,6 +554,12 @@ pub enum ToApp {
     History { table: TableId, hand: HandHistory },
     Player { table: TableId, player: PlayerView },
     Staff { view: StaffView },
+    /// The whole staff log, newest first (0.13.4).
+    StaffLogAll { log: Vec<StaffLog> },
+    /// The control room's answers (0.13.5).
+    Cms { res: CmsRes },
+    /// Said by the Owner of the Game (or the control room) to everyone in Pyr Casino (0.13.5).
+    Announcement { from: String, text: String },
     /// A Game Master gave me something.
     Gifted { from: String, chips: u64, item: Option<String>, note: String },
     /// Someone won a table's prize box.
@@ -600,6 +613,7 @@ impl ToApp {
     pub fn for_012_app(self) -> Option<ToApp> {
         match self {
             ToApp::RlTables { .. } | ToApp::Rl { .. } | ToApp::GameEmote { game: TableGame::Roulette, .. } | ToApp::CasinoChat { .. } | ToApp::CasinoChatGone { .. } | ToApp::GmCert { .. } => None,
+            ToApp::StaffLogAll { .. } | ToApp::Cms { .. } | ToApp::Announcement { .. } => None,
             m if m.is_props() => None,
             ToApp::Casino { res } => res.for_012_app().map(|res| ToApp::Casino { res }),
             m => Some(m),
@@ -615,7 +629,7 @@ impl ToApp {
             return None;
         }
         Some(match self {
-            ToApp::Say { .. } | ToApp::Ratings { .. } | ToApp::BjTables { .. } | ToApp::Bj { .. } | ToApp::CrapsTables { .. } | ToApp::Craps { .. } | ToApp::BacTables { .. } | ToApp::Bac { .. } | ToApp::RlTables { .. } | ToApp::Rl { .. } | ToApp::Bonfire { .. } | ToApp::BonfireLit { .. } | ToApp::GameEmote { .. } | ToApp::CasinoChat { .. } | ToApp::CasinoChatGone { .. } | ToApp::GmCert { .. } => return None,
+            ToApp::Say { .. } | ToApp::Ratings { .. } | ToApp::BjTables { .. } | ToApp::Bj { .. } | ToApp::CrapsTables { .. } | ToApp::Craps { .. } | ToApp::BacTables { .. } | ToApp::Bac { .. } | ToApp::RlTables { .. } | ToApp::Rl { .. } | ToApp::Bonfire { .. } | ToApp::BonfireLit { .. } | ToApp::GameEmote { .. } | ToApp::CasinoChat { .. } | ToApp::CasinoChatGone { .. } | ToApp::GmCert { .. } | ToApp::StaffLogAll { .. } | ToApp::Cms { .. } | ToApp::Announcement { .. } => return None,
             ToApp::Emote { table, seat, emote } => ToApp::Emote { table, seat, emote: emote_for_older_app(&emote) },
             ToApp::Snapshot { mut table } => {
                 table.seats.iter_mut().flatten().for_each(|s| older(&mut s.bot));
@@ -870,6 +884,85 @@ pub struct BigWin {
     /// Its game's statistics key (a Reel Row machine's own; 0.12.0).
     #[serde(default)]
     pub key: String,
+    /// Drinks bought for it (0.13.7's congratulations; kept as 0.13.28 writes it).
+    #[serde(default)]
+    pub cheer: u64,
+}
+
+/// What the control room asks (0.13.5), as 0.13.28 does.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum CmsReq {
+    /// The casino at a glance.
+    Overview,
+    /// The players with the most chips, or those whose names have `query` in them.
+    Players { query: String },
+    /// Chips given (`delta` above 0) or taken away (below: as many as they have at most), with
+    /// a note for the log.
+    Adjust { uid: String, delta: i64, note: String },
+    /// Something said to everyone in the casino.
+    Announce { text: String },
+    /// Who can open the control room.
+    Access,
+    /// Let someone into the control room, or take them out (the Owner of the Game only).
+    SetAccess { uid: String, on: bool },
+}
+
+/// The control room's answers (0.13.5), as 0.13.28 sends them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum CmsRes {
+    Overview(CmsOverview),
+    Players { rows: Vec<CmsPlayer> },
+    /// Whether I'm the Owner of the Game (who lets people in), and who's in: (name, id).
+    Access { owner: bool, people: Vec<(String, String)> },
+    /// Done: what happened, as the log says it.
+    Done { what: String },
+}
+
+/// The casino at a glance.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CmsOverview {
+    /// Players with a record, and their chips (and those sitting at poker tables).
+    pub players: u64,
+    pub chips: u64,
+    pub at_tables: u64,
+    /// The casino's games, all time: bet, paid back, rounds.
+    pub wagered: u64,
+    pub paid: u64,
+    pub rounds: u64,
+    pub rake_week: u64,
+    pub friday_pool: u64,
+    /// The Phoenix Jackpot.
+    pub jackpot: u64,
+    /// Poker tables open, tournaments listed, staff, entries in the log.
+    pub tables: u64,
+    pub tourneys: u64,
+    pub staff: u64,
+    pub log: u64,
+    /// Chips, and players, at each VIP tier (Spark to Eternal Flame).
+    pub by_tier: Vec<u64>,
+    pub tier_players: Vec<u64>,
+    pub big_wins: Vec<BigWin>,
+    /// The newest in the log.
+    pub recent: Vec<StaffLog>,
+}
+
+/// A player, for the control room.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CmsPlayer {
+    pub uid: String,
+    pub name: String,
+    pub chips: u64,
+    pub at_tables: u64,
+    pub level: u32,
+    pub hands: u64,
+    /// Rounds in the casino, and what they bet and were paid there.
+    pub rounds: u64,
+    pub wagered: u64,
+    pub paid: u64,
+    pub ember_claimed: u64,
+    pub role: Option<Role>,
 }
 
 /// Pyr Poker's staff: Game Masters (the owner's admins for the game: they gift chips and looks
@@ -914,6 +1007,9 @@ pub struct StaffLog {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StaffView {
+    /// I can open the control room (0.13.5): the Owner of the Game, or let in.
+    #[serde(default)]
+    pub cms: bool,
     pub me: Option<Role>,
     /// The server's owner: may name staff and read the log.
     pub owner: bool,

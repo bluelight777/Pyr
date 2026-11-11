@@ -422,6 +422,11 @@ pub const LEVELS_FEATURE: &str = "poker_levels_2";
 /// Plinko (0.13.5), played as 0.13.28 plays it (its rounds check the same either way), so its
 /// name.
 pub const PLINKO_FEATURE: &str = "casino_plinko";
+/// Pyr Casino's control room (0.13.5): the Owner of the Game's, and whoever they let in.
+pub const CMS_FEATURE: &str = "casino_cms";
+/// Game Masters give without a limit, and they and the Owner of the Game take chips away, all
+/// in the staff log with the balance before and after (0.13.4).
+pub const GM_UNLIMITED_FEATURE: &str = "poker_gm_unlimited";
 /// Prop bets in chat, with Pyr Casino chips (the rebuild's): the server keeps the props, the
 /// bets, the odds and the payouts. Apps say [`PROPS_CAP`] to be told about them.
 pub const PROPS_FEATURE: &str = "prop_bets";

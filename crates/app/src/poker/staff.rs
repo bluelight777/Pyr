@@ -9,6 +9,7 @@ use pyr_poker::net::{PrizeView, Role, TableId, ToServer};
 use pyr_poker::progress::{COSMETICS, Kind};
 
 use super::cards::chips_text;
+use super::cms::LogFile;
 use crate::app::PyrApp;
 use crate::theme;
 
@@ -60,23 +61,39 @@ fn look_picker(ui: &mut egui::Ui, id: &str, item: &mut Option<String>) {
 /// No limit: the most one gift box takes (a quadrillion chips: still exact as the box counts).
 pub const NO_LIMIT: u64 = 1_000_000_000_000_000;
 
-/// What I can give away here, if anything: the server's owner as much as they like (on a 0.12.0
-/// server; every gift's in the log), a Game Master what's left of today's allowance.
+/// Game Masters give without a limit here, and they and the Owner of the Game can take chips
+/// away (0.13.4 servers).
+fn gm_unlimited(s: &ServerView) -> bool {
+    s.has(pyr_proto::control::GM_UNLIMITED_FEATURE)
+}
+
+/// What I can give away here, if anything: the Owner of the Game as much as they like (every
+/// gift's in the log), a Game Master too on a 0.13.4 server (before, what's left of today's
+/// allowance).
 pub fn gift_limit(s: &ServerView) -> Option<u64> {
     if owner(s) {
         return Some(NO_LIMIT);
     }
     let v = s.poker.staff.as_ref()?;
-    (v.me == Some(Role::GameMaster)).then_some(v.left)
+    (v.me == Some(Role::GameMaster)).then_some(if gm_unlimited(s) { NO_LIMIT } else { v.left })
 }
 
-/// What I can put in a prize box: the same, but Ambassadors too.
+/// What I can put in a prize box: the same, but Ambassadors too (always from their allowance).
 pub fn prize_limit(s: &ServerView) -> Option<u64> {
     if owner(s) {
         return Some(NO_LIMIT);
     }
     let v = s.poker.staff.as_ref()?;
-    v.me.map(|_| v.left)
+    match v.me? {
+        Role::GameMaster if gm_unlimited(s) => Some(NO_LIMIT),
+        _ => Some(v.left),
+    }
+}
+
+/// I can take chips from someone here: the Owner of the Game and Game Masters, on a 0.13.4
+/// server (never more than they have; it's in the log).
+pub fn can_take(s: &ServerView) -> bool {
+    gm_unlimited(s) && gift_limit(s).is_some_and(|m| m >= NO_LIMIT)
 }
 
 /// I give without a limit here: the Owner of the Game (on a 0.13.0 server, as it says); on an
@@ -92,21 +109,38 @@ fn owner(s: &ServerView) -> bool {
 /// What to say about it: what's left today, or that there's no limit.
 pub fn limit_words(max: u64) -> String {
     if max >= NO_LIMIT {
-        "no limit: you're the Owner of the Game (every gift goes in the log)".to_string()
+        "left to give today: no limit (every gift goes in the log)".to_string()
     } else {
         format!("left to give today: {}", chips_text(max))
     }
 }
 
+/// A number of chips as typed: its digits ("50,000", "50000", "50 000"), none: 0.
+pub fn typed_chips(text: &str) -> u64 {
+    text.chars().filter(|c| c.is_ascii_digit()).fold(0u64, |n, d| n.saturating_mul(10).saturating_add(d as u64 - '0' as u64))
+}
+
+/// How many chips: typed (as 0.13.28 has it, a dragged number being no way to reach a million),
+/// with a few to add at a click. What's typed is kept as typed while it says `chips`.
 pub fn chips_box(ui: &mut egui::Ui, chips: &mut u64, max: u64) {
-    let speed = if max >= NO_LIMIT { 1_000.0 } else { 100.0 };
-    ui.add(egui::DragValue::new(chips).range(0..=max).speed(speed).suffix(" chips"));
+    let id = ui.make_persistent_id("chips-typed");
+    let mut text = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_default();
+    // (Changed from outside, a gift sent and the box emptied say: shown as it is now.)
+    if typed_chips(&text) != *chips {
+        text = if *chips == 0 { String::new() } else { chips_text(*chips) };
+    }
+    if ui.add(egui::TextEdit::singleline(&mut text).hint_text("Type chips").desired_width(130.0)).changed() {
+        *chips = typed_chips(&text).min(max);
+    }
+    ui.label("chips");
     let steps: [u64; 3] = if max >= NO_LIMIT { [10_000, 100_000, 1_000_000] } else { [1_000, 5_000, 25_000] };
     for n in steps {
         if n <= max && ui.small_button(format!("+{}", chips_text(n))).clicked() {
-            *chips = (*chips + n).min(max);
+            *chips = chips.saturating_add(n).min(max);
+            text = chips_text(*chips);
         }
     }
+    ui.data_mut(|d| d.insert_temp(id, text));
 }
 
 impl PyrApp {
@@ -241,10 +275,17 @@ impl PyrApp {
         ui.add_space(8.0);
         ui.label(RichText::new(format!("Raked this week: {} chips", chips_text(v.rake_week))).size(14.0));
         let limit = gift_limit(s);
+        let take = can_take(s);
         if limit.is_some_and(|m| m >= NO_LIMIT) {
-            ui.label(RichText::new("You're the Owner of the Game: you give as many chips as you like, on every server. Every gift goes in the log below.").strong().size(15.0));
+            let who = if owner(s) { "the Owner of the Game" } else { "a Game Master" };
+            let words = if take {
+                format!("You're {who}: you give as many chips as you like, on every server, and can take chips away. Every gift and every chip taken goes in the log.")
+            } else {
+                format!("You're {who}: you give as many chips as you like, on every server. Every gift goes in the log.")
+            };
+            ui.label(RichText::new(words).strong().size(15.0));
         } else if let Some(r) = v.me {
-            ui.label(RichText::new(format!("You're a {}. Left to give today: {} of {} chips.", r.name(), chips_text(v.left), chips_text(v.allowance))).strong().size(15.0));
+            ui.label(RichText::new(format!("You're a {}. Left to give today: {} chips.", r.name(), chips_text(v.left))).strong().size(15.0));
         }
         ui.add_space(12.0);
 
@@ -253,12 +294,12 @@ impl PyrApp {
             ui.label(RichText::new("Give a gift").strong().size(16.0));
             let mut g = self.poker.giving.clone();
             ui.horizontal(|ui| {
-                // (The owner can give to themselves too; nobody else can.)
-                let owner = owner(s);
+                // (Whoever gives without a limit can give to themselves too; nobody else can.)
+                let unlimited = limit >= NO_LIMIT;
                 let mine = |u: &str| s.me.as_ref().is_some_and(|m| m.user_id == u);
                 let who = g.to.as_ref().and_then(|u| s.members.get(u.as_str()).map(|m| if mine(u) { format!("{} (you)", m.name) } else { m.name.clone() })).unwrap_or_else(|| "Pick someone".into());
                 egui::ComboBox::from_id_salt("gift-to").selected_text(who).width(200.0).show_ui(ui, |ui| {
-                    if owner && let Some(me) = s.me.as_ref() {
+                    if unlimited && let Some(me) = s.me.as_ref() {
                         ui.selectable_value(&mut g.to, Some(me.user_id.to_string()), format!("{} (you)", s.members.get(me.user_id.as_str()).map(|m| m.name.as_str()).unwrap_or("Me")));
                     }
                     let mut ms: Vec<_> = s.members.iter().filter(|(u, _)| !mine(u)).collect();
@@ -277,6 +318,17 @@ impl PyrApp {
                     && let Some(to) = g.to.clone()
                 {
                     self.engine.poker(&s.key, ToServer::Gift { uid: to, chips: g.chips, item: g.item.clone(), note: g.note.clone() });
+                    g = Default::default();
+                }
+                // (0.13.4: chips taken back, a gift by mistake, say.)
+                if take
+                    && ui
+                        .add_enabled(g.to.is_some() && g.chips > 0, egui::Button::new("Take away"))
+                        .on_hover_text("Take that many chips from them (never more than they have); it goes in the log")
+                        .clicked()
+                    && let Some(to) = g.to.clone()
+                {
+                    self.engine.poker(&s.key, ToServer::TakeChips { uid: to, chips: g.chips, note: g.note.clone() });
                     g = Default::default();
                 }
             });
@@ -325,7 +377,15 @@ impl PyrApp {
                 ui.label(RichText::new("Game Masters and Ambassadors are named on Brethren of Blood, Pyr Casino's home, and are staff on every server.").color(theme::MUTED()).size(12.5));
             }
             ui.add_space(14.0);
-            ui.label(RichText::new("What they gave").strong().size(16.0));
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("What they gave").strong().size(16.0));
+                // (0.13.4: the whole log, not just what's shown, as a spreadsheet.)
+                if s.has(pyr_proto::control::GM_UNLIMITED_FEATURE)
+                    && ui.button("Download the whole log").on_hover_text("Every gift, chip taken and prize box, as a spreadsheet file (CSV) in your Downloads").clicked()
+                {
+                    self.download_staff_log(s, LogFile::Staff);
+                }
+            });
             if v.log.is_empty() {
                 ui.label(RichText::new("Nothing yet.").color(theme::MUTED()));
             }

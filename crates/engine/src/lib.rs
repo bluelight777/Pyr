@@ -1026,6 +1026,11 @@ impl Engine {
         self.poker_later(key, |p| p.notices.clear());
     }
 
+    /// The control room's "done" lines said (shown as toasts): forgotten.
+    pub fn take_cms_done(&self, key: &str) {
+        self.poker_later(key, |p| p.cms.done.clear());
+    }
+
     /// The hand history window closed: its hand forgotten.
     pub fn clear_poker_history(&self, key: &str) {
         self.poker_later(key, |p| p.history = None);
@@ -1253,6 +1258,16 @@ impl Engine {
 
     pub fn clear_poker_error(&self, key: &str) {
         self.poker_later(key, |p| p.error = None);
+    }
+
+    /// Development only: sends `req` (a request's JSON, `{"op": …}`) to a server exactly as
+    /// given, to see what it answers (with `PYR_DEV_FRAME_LOG` set, every answer is written
+    /// down as it came). Nothing in Pyr itself uses it.
+    #[doc(hidden)]
+    pub fn dev_send_raw(&self, key: &str, req: String) {
+        if let Some(h) = self.handle(key) {
+            h.send_raw(req);
+        }
     }
 
     /// Poker on a server: what the server answers goes into `ServerView::poker` (and a refusal
