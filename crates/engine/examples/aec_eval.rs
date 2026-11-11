@@ -81,7 +81,9 @@ struct Run {
     stages: Vec<[f32; 4]>,
 }
 
-fn run(settings: &Settings, you: &[f32], far: &[f32], room: Option<Room>, mic_gain: f32) -> Run {
+/// `pc`: the PC's own sound (a game, say: played by the PC, not Pyr; empty for none), which
+/// voice isolation hears too (see `pc_sound`) and the room carries like the call's.
+fn run(settings: &Settings, you: &[f32], far: &[f32], pc: &[f32], room: Option<Room>, mic_gain: f32) -> Run {
     let mut cap = CapturePipeline::new(settings).unwrap();
     cap.stream_delay_ms = 60;
     let mut dec = opus::Decoder::new(48_000, opus::Channels::Mono).unwrap();
@@ -104,8 +106,8 @@ fn run(settings: &Settings, you: &[f32], far: &[f32], room: Option<Room>, mic_ga
                 if at >= 0.0 {
                     let j = at.floor() as usize;
                     let frac = (at - j as f64) as f32;
-                    let a = far.get(j).copied().unwrap_or(0.0);
-                    let b = far.get(j + 1).copied().unwrap_or(0.0);
+                    let played = |j: usize| far.get(j).copied().unwrap_or(0.0) + pc.get(j).copied().unwrap_or(0.0);
+                    let (a, b) = (played(j), played(j + 1));
                     *m += (a + (b - a) * frac) * g * amp;
                 }
             }
@@ -140,6 +142,9 @@ fn run(settings: &Settings, you: &[f32], far: &[f32], room: Option<Room>, mic_ga
             let v = far.get(k * 480 + i).copied().unwrap_or(0.0);
             stereo[2 * i] = v;
             stereo[2 * i + 1] = v;
+        }
+        if let Some(p) = pc.get(k * 480..k * 480 + 480) {
+            cap.pc_sound(p);
         }
         cap.render(&stereo);
         frame.copy_from_slice(&mic[k * 480..k * 480 + 480]);
@@ -359,18 +364,27 @@ fn main() {
     // loudest moments cut off at full scale (bug reports 102 to 119: the voice isolation said
     // the sound was clipping, thousands of times).
     let hot = std::env::var("HOT").map(|v| v.parse::<f32>().unwrap_or(20.0)).unwrap_or(20.0);
-    let scenes: Vec<(&str, &Vec<f32>, Option<Room>, f32)> = vec![
-        ("headphones, others talking", &voices, headphones, 0.0),
-        ("headphones, music playing", &music, headphones, 0.0),
-        ("headphones, loud music and voices", &loud, headphones, 0.0),
-        ("speakers, others talking", &voices, speakers, 0.0),
-        ("speakers, music playing", &music, speakers, 0.0),
-        ("speakers turned low, music playing", &music, quiet_room, 0.0),
-        ("hot mic, headphones, others talking", &voices, headphones, hot),
-        ("hot mic, headphones, music playing", &music, headphones, hot),
-        ("hot mic, speakers, others talking", &voices, speakers, hot),
-        ("leaky headphones, music playing", &music, leaky, 0.0),
-        ("speakers, music, clocks apart", &music, drifting, 0.0),
+    // A game playing on the PC (not through Pyr): its music all along, as loud as the call's
+    // (`GAME_DB`: louder or quieter; `VOICE_DB`: your talking that much louder or quieter in the
+    // game scenes, a quiet headset microphone say).
+    let game = tunes(std::env::var("GAME_DB").ok().and_then(|v| v.parse().ok()).unwrap_or(-20.0));
+    let voice_db: f32 = std::env::var("VOICE_DB").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let none: Vec<f32> = Vec::new();
+    let scenes: Vec<(&str, &Vec<f32>, &Vec<f32>, Option<Room>, f32)> = vec![
+        ("headphones, others talking", &voices, &none, headphones, 0.0),
+        ("headphones, music playing", &music, &none, headphones, 0.0),
+        ("headphones, loud music and voices", &loud, &none, headphones, 0.0),
+        ("speakers, others talking", &voices, &none, speakers, 0.0),
+        ("speakers, music playing", &music, &none, speakers, 0.0),
+        ("speakers turned low, music playing", &music, &none, quiet_room, 0.0),
+        ("hot mic, headphones, others talking", &voices, &none, headphones, hot),
+        ("hot mic, headphones, music playing", &music, &none, headphones, hot),
+        ("hot mic, speakers, others talking", &voices, &none, speakers, hot),
+        ("leaky headphones, music playing", &music, &none, leaky, 0.0),
+        ("speakers, music, clocks apart", &music, &none, drifting, 0.0),
+        // (Bug reports 657 to 675: voice isolation, headphones, a game playing.)
+        ("headphones, others talking, a game on", &voices, &game, headphones, 0.0),
+        ("speakers, others talking, a game on", &voices, &game, speakers, 0.0),
     ];
     let only = std::env::var("ONLY").ok();
     let setups: Vec<(&str, Settings)> = setups
@@ -393,7 +407,7 @@ fn main() {
         .collect();
     for (sname, s) in &setups {
         println!("== {sname}");
-        for (name, far, room, hot_db) in &scenes {
+        for (name, far, pc, room, hot_db) in &scenes {
             // (`ONLY=part` of the scene's name, or `ONLY==name` exactly.)
             if only.as_deref().is_some_and(|o| match o.strip_prefix('=') {
                 Some(exact) => *name != exact,
@@ -405,10 +419,13 @@ fn main() {
             let you: Vec<f32> = if *hot_db > 0.0 {
                 let g = 10f32.powf(hot_db / 20.0);
                 you_talk.iter().map(|v| (v * g).clamp(-1.0, 1.0)).collect()
+            } else if !pc.is_empty() && voice_db != 0.0 {
+                let g = 10f32.powf(voice_db / 20.0);
+                you_talk.iter().map(|v| v * g).collect()
             } else {
                 you_talk.clone()
             };
-            let mut r = run(s, &you, far, *room, 1.0);
+            let mut r = run(s, &you, far, pc, *room, 1.0);
             // What went out comes out a little later than it went in (voice isolation's noise
             // remover alone takes 30 ms): line it up with your talking first, so a word's start
             // arriving late isn't taken for it being turned down (`ALIGN=0`: as it comes).
@@ -421,7 +438,9 @@ fn main() {
                 r.stages.drain(..(d / 480).min(r.stages.len()));
             }
             let (out, said, found) = (&r.out, &r.said, &r.echo_states);
-            let (down, of, echo, clear) = score(&you, far, out, &r.stages, &r.echo);
+            // (What the speakers played: the call's, and the PC's own.)
+            let played: Vec<f32> = (0..far.len()).map(|i| far[i] + pc.get(i).copied().unwrap_or(0.0)).collect();
+            let (down, of, echo, clear) = score(&you, &played, out, &r.stages, &r.echo);
             let echo = echo.map(|e| format!("  echo through: {e:+.0} dB")).unwrap_or_default();
             let under = room.and_then(|_| echo_under_talking(&you, &r.echo, out)).map(|e| format!(", under talking {e:+.0} dB")).unwrap_or_default();
             let clear = room.map(|_| format!(" ({clear} clearly over the echo)")).unwrap_or_default();

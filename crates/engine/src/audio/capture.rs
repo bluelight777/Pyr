@@ -33,6 +33,11 @@ pub struct CapturePipeline {
     playing: bool,
     /// What Voice & Video was last told about the echo canceller (see `Controls::echo`).
     told_echo: Option<(u8, bool)>,
+    /// The PC's own sound for the frame `render` hands the echo canceller next (see `pc_sound`),
+    /// whether there is one, and whether it was last handed over (for the log).
+    pc_frame: Vec<f32>,
+    pc_waiting: bool,
+    pc_handed: Option<bool>,
     denoise: Option<Box<nnnoiseless::DenoiseState<'static>>>,
     /// Voice isolation's noise remover (DeepFilterNet3). RNNoise then only tells when there's
     /// speech; its own cleaned audio isn't used.
@@ -205,6 +210,13 @@ impl Levels {
 ///
 /// With the microphone open all along (push to talk held), what's left of the echo went from
 /// -65 to -77 dB to at most 3 dB more.
+///
+/// 0.13.19: while both ends talk (on speakers, answering someone as they finish, or talking
+/// over them), the high bands' gain isn't capped at the lower bands' any more
+/// (`high_frequency_suppression.bands_in_limiting_gain`, 0): the canceller takes out only their
+/// echo there, instead of dulling everything high in your voice along with it. `PYR_AB=aechfcap`
+/// for the cap. (The rebuild's: read off 0.13.28's own `tune_aec3`, the same five changes in
+/// the same order, the field by its place in the config, `offset_of!` 0x1c4.)
 fn tune_aec3(c: &mut sonora::config::EchoCanceller3Config) {
     if !pyr_proto::ab::old("aecsat") {
         c.ep_strength.echo_can_saturate = false;
@@ -221,6 +233,9 @@ fn tune_aec3(c: &mut sonora::config::EchoCanceller3Config) {
     // for the stricter one.
     if !pyr_proto::ab::old("aecmask") {
         c.suppressor.normal_tuning = c.suppressor.nearend_tuning.clone();
+    }
+    if !pyr_proto::ab::old("aechfcap") {
+        c.suppressor.high_frequency_suppression.bands_in_limiting_gain = 0;
     }
 }
 
@@ -286,6 +301,9 @@ impl CapturePipeline {
             plain_out: vec![0.0; 480],
             plain_line: std::iter::repeat_n(0.0, AEC_LATENCY).collect(),
             aec_share: 1.0,
+            pc_frame: vec![0.0; 480],
+            pc_waiting: false,
+            pc_handed: None,
             far: false,
             playing: false,
             told_echo: None,
@@ -456,11 +474,43 @@ impl CapturePipeline {
         for i in 0..480 {
             self.mono_render[i] = 0.5 * (stereo[2 * i] + stereo[2 * i + 1]);
         }
-        let src = self.mono_render.clone();
+        let mut src = self.mono_render.clone();
         if let Some(e) = self.echo.as_mut() {
             e.played(&src);
         }
+        // The PC's own sound, with the call's, while it can come back into the microphone.
+        if std::mem::take(&mut self.pc_waiting) {
+            let hand = self.pc_sound_can_come_back();
+            if self.pc_handed != Some(hand) {
+                self.pc_handed = Some(hand);
+                if hand {
+                    tracing::info!("the PC's own sound goes to the echo canceller with the call's");
+                } else {
+                    tracing::info!("the PC's own sound can't reach the microphone (headphones): the echo canceller isn't handed it");
+                }
+            }
+            if hand {
+                for (r, p) in src.iter_mut().zip(&self.pc_frame) {
+                    *r += p;
+                }
+            }
+        }
         let _ = self.apm.process_render_f32(&[&src], &mut [&mut self.mono_render]);
+    }
+
+    /// The PC's own sound (everything it plays but Pyr: see `pc_sound`) for the frame `render`
+    /// is about to hand the echo canceller: 10 ms, mono.
+    pub fn pc_sound(&mut self, mono: &[f32]) {
+        self.pc_frame.copy_from_slice(&mono[..480]);
+        self.pc_waiting = true;
+    }
+
+    /// Whether the PC's own sound can come back into the microphone: the speakers can be heard
+    /// there, or that isn't known yet (`mic_echo`). With headphones it can't, and the echo
+    /// canceller isn't handed it (bug reports 657 to 675: it turned the voice down instead).
+    /// `PYR_AB=pcgate`: handed over always, as 0.13.2 to 0.13.28 did.
+    fn pc_sound_can_come_back(&self) -> bool {
+        pyr_proto::ab::old("pcgate") || self.echo.as_ref().is_none_or(|e| !matches!(e.state(), super::mic_echo::Echo::None))
     }
 
     fn gate(&mut self, now: Instant, ctl: &Controls) -> bool {
@@ -768,6 +818,25 @@ impl CapturePipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The echo canceller is tuned as 0.13.28 tuned it (read off its own `tune_aec3`): nothing
+    /// more, nothing less, so the echo stays as it was.
+    #[test]
+    fn the_echo_canceller_is_tuned_as_0_13_28_tuned_it() {
+        let mut c = sonora::config::EchoCanceller3Config::default();
+        let d = c.clone();
+        tune_aec3(&mut c);
+        assert!(!c.ep_strength.echo_can_saturate);
+        assert_eq!((c.ep_strength.default_gain, c.ep_strength.default_len, c.ep_strength.nearend_len), (0.1, 0.5, 0.5));
+        assert_eq!(format!("{:?}", c.suppressor.normal_tuning), format!("{:?}", d.suppressor.nearend_tuning));
+        assert_eq!(c.suppressor.high_frequency_suppression.bands_in_limiting_gain, 0);
+        // And nothing else.
+        let mut back = c.clone();
+        back.ep_strength = d.ep_strength.clone();
+        back.suppressor.normal_tuning = d.suppressor.normal_tuning.clone();
+        back.suppressor.high_frequency_suppression.bands_in_limiting_gain = d.suppressor.high_frequency_suppression.bands_in_limiting_gain;
+        assert_eq!(format!("{back:?}"), format!("{d:?}"));
+    }
 
     /// Feeds `ms` of steady noise at about -25 dBFS: the sizes of the packets sent, and whether
     /// the microphone is open at the end.

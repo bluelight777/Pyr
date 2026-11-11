@@ -7,6 +7,7 @@ pub mod device;
 pub mod jitter;
 pub mod mic_echo;
 pub mod mixer;
+pub mod pc_sound;
 pub mod resample;
 pub mod spectrum;
 pub mod stream;
@@ -670,6 +671,14 @@ fn worker(
         AudioOutput::Synthetic(f) => Out::Synth(f),
         AudioOutput::None => Out::Clock,
     };
+    // Voice isolation takes the PC's own sound out of the microphone too (0.13.2: see
+    // `pc_sound`; only real speakers and a real microphone).
+    let pc = (settings.noise_suppression == crate::config::NoiseSuppression::Isolation
+        && settings.echo_cancellation
+        && matches!(inp, In::Dev(_))
+        && matches!(out, Out::Dev(_)))
+    .then(pc_sound::PcSound::start)
+    .flatten();
     // speaker queue + device buffers + mic buffering, roughly
     let echo_delay_ms = (OUTPUT_TARGET_MS as i32) + 30;
     if let (Some(c), Out::Dev(Link { dev: Some(_), .. })) = (cap.as_mut(), &out) {
@@ -708,6 +717,12 @@ fn worker(
             }
             if played {
                 if let Some(c) = cap.as_mut() {
+                    let mut heard = [0f32; 480];
+                    if let Some(pc) = pc.as_ref()
+                        && pc.take(&mut heard)
+                    {
+                        c.pc_sound(&heard);
+                    }
                     c.render(mix);
                 }
                 if let Some(t) = ctl.played.lock().as_ref() {

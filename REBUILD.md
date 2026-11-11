@@ -14,6 +14,9 @@ rebuilt version by hand once (it carries a new release key), and nobody should l
   the protocol's names (`rebuild/strings-*.txt`).
 - The art: embedded in the 0.13.28 app (carved out into `rebuild/assets-0.13.28/`), and Blue's
   `meshy-mcp\pyr-casino` folder.
+- The sounds: all 213 of 0.13.28's (INGS files: the soundboard redrawn, the ten ringtones, the
+  casino's `c_*`, and each slot machine's band `s_<machine>_*`), carved out of the app into
+  `rebuild/sounds-0.13.28/` and named from the app's own tables (the pointer next to each).
 - The plugin kit and Library as 0.13.28 published them (`pyr-upload-0.13.28`).
 - This session's transcript for 0.13.27 (programs update in one click) and 0.13.28 (AFK).
 
@@ -93,6 +96,16 @@ Version in brackets: where 0.13.x first had it.
       3. `examples/aec_eval.rs` before and after (headphones and speakers, others talking and
          music, with the PC's sound), then Pyr's own echo test on Blue's PC: speakers into
          the microphone, A/B against 0.13.28, before anything ships.
+      Done (1 and 2; 3 in the container). `aechfcap` is `bands_in_limiting_gain = 0` (0.13.28's
+      `tune_aec3` at 0x1510860: aecsat, aectune, gains, aecmask, then the store to 0x1c4).
+      `aec_eval`, voice isolation, others talking, a game on the PC at -10 dBFS, your voice at
+      -40 dBFS (a quiet headset microphone): headphones, as 0.13.28 (`PYR_AB=pcgate`): 7 of
+      133 stretches of your talking turned down, and "my voice went down and back up for the
+      others 3 times within 60 s of talking (by up to 31 dB), turned down by the echo
+      cancellation and automatic gain (... headphones ...)", the reports' own words; the
+      rebuild: 3 of 133, all in the first 2 s (the canceller starting; both have them), none
+      said. Speakers: the same either way (the PC's sound goes to the canceller; echo
+      through -99 dB). Still to do: Pyr's own echo test on Blue's PC, A/B against 0.13.28.
 
 ### Library and programs
 - [ ] Plugins with art: up to 100 MB and 5,000 files, any Rust (0.13.6)
