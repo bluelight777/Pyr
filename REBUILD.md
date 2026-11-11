@@ -118,6 +118,18 @@ Version in brackets: where 0.13.x first had it.
       again, every ten minutes (0.13.27)
 
 ### Pyr Casino
+
+How (decided while starting it):
+- The real 0.13.28 runs in the workspace (`work/ui/up28.sh`: its own server and app on a
+  screen of their own): every screen is matched against it, side by side. Its art and sounds
+  are carved out under their own names (`rebuild/assets-0.13.28`, `rebuild/sounds-0.13.28`).
+- A casino game's round is checked by everyone's own Pyr, replaying it from the seeds with the
+  same code. A rebuilt game can't replay 0.13.28's rounds bit for bit without its source, so a
+  rebuilt game doesn't take a 0.13.28 feature name it can't honor exactly: it gets the rebuild's
+  own (and a 0.13.28 app on a rebuilt server plays the games from before it, which 0.13.x apps
+  already do on older servers). Same look, same rules, same 99% (checked by simulation, as
+  0.13.x did); new seeds and code.
+
 - [ ] Reel Row Remastered: twelve machines with features (tumbles and bombs, Hold & Win,
       wilds that grow/freeze/walk/stay), ante, Play Feature, slowing reels, splashes, plaques,
       a sound band per machine, 99% checked by simulation (0.13.2)
