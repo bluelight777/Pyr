@@ -1,13 +1,16 @@
-//! The casino floor: the house's games. The Phoenix Jackpot climbing, wins as they happen, then
-//! a card for every game, by kind: the slots (Pyr Sevens and Reel Row's twelve machines), the
-//! table games, poker (its tables, Flash Pots, Pyr Friday Night and tournaments), and Pyr's own.
-//! The art is Meshy's (`casino::pics`).
+//! The casino floor: the house's games, in chapters (0.13.2). The Bonfire and the Phoenix
+//! Jackpot climbing, wins as they happen, a bar to jump to each chapter, then the chapters:
+//! Slots (Pyr Sevens, Ember Dragon and Reel Row's twelve), Poker (its tables, Flash Pots, Pyr
+//! Friday Night and tournaments), Table games and Pyr Originals. Each game is a tile like
+//! Stake's (0.13.4): its name big in its own lettering, the studio under it, how many are
+//! playing it right now and my best win under the tile, what it pays back on pointing at it.
+//! All of it as 0.13.28 draws it, measured off its screen. The art is Meshy's (`casino::pics`).
 
-use eframe::egui::{self, Align2, Color32, Rect, RichText, Sense, Shape, Stroke, StrokeKind, pos2, vec2};
+use eframe::egui::{self, Align2, Color32, CornerRadius, Rect, RichText, Sense, Shape, Stroke, StrokeKind, pos2, vec2};
 use pyr_engine::state::ServerView;
 use pyr_poker::casino::{Game, reels as rr};
 
-use super::games_menu::Chapter;
+use super::games_menu::{Chapter, Jump};
 use super::reel_themes::THEMES;
 use super::{col, glow_text, hgrad, pics, radial, vgrad_round_fn};
 use crate::app::PyrApp;
@@ -28,28 +31,32 @@ pub fn until(ms: u64) -> String {
     }
 }
 
-/// What a card on the floor opens.
+/// What a tile on the floor opens.
 #[derive(Clone, Copy)]
 enum Opens {
     Game(Game),
     Machine(u8),
 }
 
-/// A game's card: its picture (cut to a portrait about `focus`, a fraction across), its name,
-/// its badges, what it pays back, and what it is (on hovering).
+/// A game's tile: its picture (cut to a portrait about `focus`, a fraction across), its name as
+/// lettered on the tile, the studio, its badges, what it pays back, and what it is (on
+/// hovering).
 struct Card {
     opens: Opens,
-    name: &'static str,
+    /// Its statistics key (who's playing it, my best win).
+    key: String,
     art: String,
     focus: f32,
     badges: Vec<(&'static str, Color32)>,
-    foot: String,
+    rtp: String,
     pitch: String,
 }
 
 const WHEEL: Color32 = Color32::from_rgb(0x8a, 0x5a, 0xff);
-const FUNNY: Color32 = Color32::from_rgb(0xff, 0x6a, 0xa8);
 const NEW: Color32 = Color32::from_rgb(0x3a, 0xd0, 0x8a);
+/// The players line's dot: gray while nobody's playing, green while someone is.
+const NOBODY: Color32 = Color32::from_rgb(0x5a, 0x5a, 0x5a);
+const SOMEONE: Color32 = Color32::from_rgb(0x3a, 0xe0, 0x7a);
 
 /// "RTP 99.00%": what a game pays back (a slot's by design; the others' with the best bets).
 fn rtp_line(key: &str, g: Game) -> String {
@@ -58,12 +65,54 @@ fn rtp_line(key: &str, g: Game) -> String {
 }
 
 fn game_card(g: Game, art: &str, focus: f32, badges: Vec<(&'static str, Color32)>) -> Card {
-    Card { opens: Opens::Game(g), name: g.name(), art: art.into(), focus, badges, foot: rtp_line(g.id(), g), pitch: g.pitch().into() }
+    Card { opens: Opens::Game(g), key: g.id().to_string(), art: art.into(), focus, badges, rtp: rtp_line(g.id(), g), pitch: g.pitch().into() }
+}
+
+/// A game's name on its tile, as 0.13.28 letters it: its lines, its display font (by its
+/// picture's name), and the studio under it.
+fn lettering(art: &str) -> (&'static [&'static str], &'static str, &'static str) {
+    const PYR: &str = "PYR ORIGINALS";
+    const CHIMBITA: &str = "CHIMBITA GAMES";
+    match art {
+        "tile-sevens" => (&["PYR", "SEVENS"], "barlow-black", PYR),
+        "tile-dragon" => (&["EMBER", "DRAGON"], "anton", PYR),
+        "reels-scoville-tile" => (&["SCOVILLE", "SLOTS"], "anton", CHIMBITA),
+        "reels-deepsea-tile" => (&["DEEP SEA", "TREASURE"], "bebas", CHIMBITA),
+        "reels-cosmic-tile" => (&["COSMIC", "JACKPOT"], "barlow-black", CHIMBITA),
+        "reels-sugar-tile" => (&["SUGAR", "RUSH"], "squada", CHIMBITA),
+        "reels-goldrush-tile" => (&["GOLD RUSH"], "fjalla", CHIMBITA),
+        "reels-neon-tile" => (&["NEON", "NIGHTS"], "archivo-black", CHIMBITA),
+        "reels-tomb-tile" => (&["TOMB", "OF RA"], "anton", CHIMBITA),
+        "reels-frost-tile" => (&["FROSTBITE", "FORTUNE"], "bebas", CHIMBITA),
+        "reels-cauldron-tile" => (&["MOONLIT", "CAULDRON"], "barlow-black", CHIMBITA),
+        "reels-hoard-tile" => (&["DRAGON'S", "HOARD"], "squada", CHIMBITA),
+        "reels-grind-tile" => (&["THE DAILY", "GRIND"], "fjalla", CHIMBITA),
+        "reels-cabaret-tile" => (&["STARLIGHT", "CABARET"], "archivo-black", CHIMBITA),
+        "tile-blackjack" => (&["BLACKJACK"], "bebas", PYR),
+        "tile-roulette" => (&["ROULETTE"], "squada", PYR),
+        "tile-baccarat" => (&["BACCARAT"], "barlow-black", PYR),
+        "tile-craps" => (&["CRAPS"], "fjalla", PYR),
+        "tile-plinko" => (&["PLINKO"], "anton", PYR),
+        "tile-dice" => (&["DICE"], "fjalla", PYR),
+        "tile-keno" => (&["KENO"], "fjalla", PYR),
+        _ => (&[], "anton", PYR),
+    }
 }
 
 impl PyrApp {
     pub fn casino_floor(&mut self, ui: &mut egui::Ui, s: &ServerView) {
         self.casino_open(s);
+        // The casino's state again on coming back to the floor, and every 45 seconds on it
+        // (who's playing what), as 0.13.28 asks.
+        let now = ui.input(|i| i.time);
+        let c = &mut self.poker.casino;
+        if c.floor_drawn > 0.0 && (now - c.floor_drawn > 1.0 || now - c.floor_asked > 45.0) {
+            self.engine.casino_open(&s.key, true);
+            self.poker.casino.floor_asked = now;
+        } else if c.floor_drawn == 0.0 {
+            c.floor_asked = now;
+        }
+        self.poker.casino.floor_drawn = now;
         let w = (ui.available_width() - 56.0).max(320.0);
         // The Bonfire, biggest of all (on a server that has it).
         self.bonfire_keep(s);
@@ -74,15 +123,16 @@ impl PyrApp {
         self.jackpot_hero(ui, s, w);
         ui.add_space(12.0);
         self.live_wins(ui, s, w);
-        ui.add_space(24.0);
-        // The slots: Pyr Sevens, then Reel Row's machines (on a server that has them).
+        ui.add_space(14.0);
+        self.chapter_bar(ui);
+        ui.add_space(22.0);
+        // The slots: Pyr Sevens, then Ember Dragon and Reel Row's machines (on a server that has
+        // them).
         let reel_row = s.has(pyr_proto::control::CASINO_012_FEATURE);
         let v13 = s.has(pyr_proto::control::CASINO_013_FEATURE);
         let mut slots = vec![game_card(Game::Slots, "tile-sevens", 0.5, vec![("JACKPOT", col::EMBER)])];
         if reel_row {
             slots.push(game_card(Game::Dragon, "tile-dragon", 0.5, if v13 { vec![("JACKPOTS", col::EMBER), ("BONUS BUY", NEW)] } else { vec![("JACKPOTS", col::EMBER), ("NEW", NEW)] }));
-        }
-        if reel_row {
             for (m, th) in THEMES.iter().enumerate() {
                 let mut badges = Vec::new();
                 if v13 {
@@ -92,20 +142,17 @@ impl PyrApp {
                 } else if rr::bonus_kind(m as u8) == rr::BonusKind::Wheel {
                     badges.push(("WHEEL", WHEEL));
                 }
-                if th.humor.is_some() {
-                    badges.push(("FUNNY", FUNNY));
-                }
                 if badges.is_empty() {
                     badges.push(("NEW", NEW));
                 }
                 let key = pyr_poker::casino::reels_key(m as u8);
                 slots.push(Card {
                     opens: Opens::Machine(m as u8),
-                    name: th.name,
                     art: format!("reels-{}-tile", th.id),
                     focus: if th.id == "goldrush" { 0.3 } else { 0.5 },
                     badges,
-                    foot: rtp_line(&key, Game::Reels),
+                    rtp: rtp_line(&key, Game::Reels),
+                    key,
                     pitch: if v13 {
                         let (g, what) = pyr_poker::casino::reelrow::GAMES[m];
                         format!("{} 243 ways, and its own mini game, the {g}: {what} {}", th.tagline, top_words(s, m as u8))
@@ -116,30 +163,33 @@ impl PyrApp {
             }
         }
         let note = (!reel_row).then_some("Twelve more machines come when this server's Pyr is updated to 0.12.");
-        self.floor_anchor(ui, Chapter::Slots);
-        self.floor_section(ui, s, w, "Slots", &format!("{} game{} · every one pays back about 99%", slots.len(), if slots.len() == 1 { "" } else { "s" }), &slots, note);
+        self.chapter(ui, s, w, Chapter::Slots, &format!("{} game{} · every one pays back about 99%", slots.len(), if slots.len() == 1 { "" } else { "s" }), &slots, note);
+        ui.add_space(14.0);
+        // Poker, like every other game here: its tables, Flash Pots and tournaments.
+        self.chapter_head(ui, w, Chapter::Poker, "Cash tables, Flash Pot sit & go and tournaments, with friends and bots");
+        ui.add_space(16.0);
+        self.poker_sections(ui, s);
+        ui.add_space(30.0);
         // (On a 0.12.0 server: tables with seats for people and bots; roulette's on 0.13.0.)
         let seats = |n: &'static str| if reel_row { vec![(n, col::GOLD_DARK)] } else { vec![] };
-        let roulette_seats = if s.has(pyr_proto::control::CASINO_013_FEATURE) { vec![("5 SEATS", col::GOLD_DARK), ("NEW", NEW)] } else { vec![] };
+        let roulette_seats = if v13 { vec![("5 SEATS", col::GOLD_DARK), ("NEW", NEW)] } else { vec![] };
         let tables = vec![
             game_card(Game::Blackjack, "tile-blackjack", 0.38, seats("7 SEATS")),
             game_card(Game::Roulette, "tile-roulette", 0.5, roulette_seats),
             game_card(Game::Baccarat, "tile-baccarat", 0.5, seats("5 SEATS")),
             game_card(Game::Craps, "tile-craps", 0.5, seats("5 SEATS")),
         ];
-        self.floor_anchor(ui, Chapter::Tables);
-        self.floor_section(ui, s, w, "Table games", "Dealt and rolled by the house, checked by your Pyr", &tables, None);
-        // Poker, like every other game here: its tables, Flash Pots and tournaments.
-        self.poker_sections(ui, s);
-        ui.add_space(26.0);
+        self.chapter(ui, s, w, Chapter::Tables, "Dealt and rolled by the house, checked by your Pyr", &tables, None);
+        ui.add_space(14.0);
         let mut originals = Vec::new();
         // (Plinko, 0.13.5: where the server has it, first.)
         if s.has(pyr_proto::control::PLINKO_FEATURE) {
             originals.push(game_card(Game::Plinko, "tile-plinko", 0.5, vec![("NEW", NEW), ("10,000×", col::EMBER)]));
         }
         originals.extend([game_card(Game::Dice, "tile-dice", 0.5, vec![]), game_card(Game::Keno, "tile-keno", 0.5, vec![])]);
-        self.floor_anchor(ui, Chapter::Originals);
-        self.floor_section(ui, s, w, "Pyr Originals", "Quick games: pick your odds", &originals, None);
+        self.chapter(ui, s, w, Chapter::Originals, "Quick games: pick your odds", &originals, None);
+        // (Its words 64 under the tiles: the row's a button's height, the words in its middle.)
+        ui.add_space(14.0);
         ui.horizontal(|ui| {
             ui.add_space(28.0);
             ui.label(RichText::new("Play chips only: they can't be bought or cashed out. Every round is checked by your own Pyr.").color(theme::DIM()).size(12.5));
@@ -147,6 +197,46 @@ impl PyrApp {
                 self.poker.casino.fairness_open = true;
             }
         });
+    }
+
+    /// The bar over the chapters (0.13.2): a button for each, in its color, that jumps there.
+    /// (As wide as the page less 92 allows, four of them 20 apart, 260 at the most: 0.13.28's
+    /// run on 4 past the chapters' own right edge.)
+    fn chapter_bar(&mut self, ui: &mut egui::Ui) {
+        let page = ui.available_width();
+        let (row, _) = ui.allocate_exact_size(vec2(page, 48.0), Sense::hover());
+        let bw = ((page - 92.0) / 4.0).min(260.0);
+        for (i, c) in Chapter::ALL.into_iter().enumerate() {
+            let r = Rect::from_min_size(pos2(row.left() + 28.0 + i as f32 * (bw + 20.0), row.top()), vec2(bw, 48.0));
+            let resp = ui.interact(r, ui.id().with(("chapter-bar", i)), Sense::click());
+            let p = ui.painter();
+            let color = c.color();
+            p.rect_filled(r, theme::r(12), color.gamma_multiply(if resp.hovered() { 0.4 } else { 0.22 }));
+            p.rect_filled(Rect::from_min_max(pos2(r.left(), r.top() + 8.0), pos2(r.left() + 5.0, r.bottom() - 8.0)), theme::r(2), color);
+            p.rect_stroke(r, theme::r(12), Stroke::new(1.5f32, color), StrokeKind::Inside);
+            p.text(r.center(), Align2::CENTER_CENTER, c.name(), theme::bold_font(17.0), Color32::WHITE);
+            if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                self.poker.casino.jump = Some(Jump::Chapter(c));
+            }
+        }
+    }
+
+    /// A chapter's heading: its name on a band of its color fading out to the right, a bar of
+    /// it at the left, a line of it under. (The bar over the chapters and the Games menu jump
+    /// here.)
+    fn chapter_head(&mut self, ui: &mut egui::Ui, w: f32, c: Chapter, sub: &str) {
+        self.floor_anchor(ui, c);
+        let (row, _) = ui.allocate_exact_size(vec2(w + 56.0, 62.0), Sense::hover());
+        let band = Rect::from_min_size(pos2(row.left() + 28.0, row.top()), vec2(w, 56.0));
+        let p = ui.painter();
+        let color = c.color();
+        hgrad(p, band, color.gamma_multiply(0.3), Color32::TRANSPARENT);
+        p.rect_filled(Rect::from_min_size(band.min, vec2(6.0, band.height())), theme::r(3), color);
+        let g = p.layout_no_wrap(c.name().to_string(), theme::bold_font(30.0), Color32::WHITE);
+        let tw = g.size().x;
+        p.galley(pos2(band.left() + 20.0, band.center().y - g.size().y / 2.0), g, Color32::WHITE);
+        p.text(pos2(band.left() + 20.0 + tw + 16.0, band.center().y + 3.25), Align2::LEFT_CENTER, sub, theme::font(14.0), col::MUTED);
+        p.rect_filled(Rect::from_min_size(pos2(band.left(), band.bottom() + 4.0), vec2(w, 2.0)), CornerRadius::ZERO, color.gamma_multiply(0.7));
     }
 
     /// The Phoenix Jackpot: the phoenix rising on the right, the pool climbing on the left.
@@ -242,19 +332,12 @@ impl PyrApp {
         });
     }
 
-    /// A row of the floor: its heading, then its games' cards (as many across as fit).
+    /// A chapter of games: its heading, then their tiles, as many across as fit (each 178 wide
+    /// at the least, 14 apart, a portrait), 42 between the rows (the line under each in it).
     #[allow(clippy::too_many_arguments)]
-    fn floor_section(&mut self, ui: &mut egui::Ui, s: &ServerView, w: f32, title: &str, sub: &str, cards: &[Card], note: Option<&str>) {
-        ui.horizontal(|ui| {
-            ui.add_space(28.0);
-            let (r, _) = ui.allocate_exact_size(vec2(w, 34.0), Sense::hover());
-            let p = ui.painter();
-            let g = p.layout_no_wrap(title.to_string(), theme::bold_font(21.0), col::GOLD2);
-            let tw = g.size().x;
-            p.galley(pos2(r.left(), r.center().y - g.size().y / 2.0), g, col::GOLD2);
-            p.text(pos2(r.left() + tw + 14.0, r.center().y + 2.0), Align2::LEFT_CENTER, sub, theme::font(13.0), col::MUTED);
-        });
-        ui.add_space(10.0);
+    fn chapter(&mut self, ui: &mut egui::Ui, s: &ServerView, w: f32, c: Chapter, sub: &str, cards: &[Card], note: Option<&str>) {
+        self.chapter_head(ui, w, c, sub);
+        ui.add_space(16.0);
         let gap = 14.0;
         let cols = (((w + gap) / (178.0 + gap)).floor() as usize).clamp(2, 8);
         let cw = (w - gap * (cols - 1) as f32) / cols as f32;
@@ -270,7 +353,7 @@ impl PyrApp {
                     self.floor_card(ui, s, card, vec2(cw, ch));
                 }
             });
-            ui.add_space(gap);
+            ui.add_space(14.0);
         }
         if let Some(n) = note {
             ui.horizontal(|ui| {
@@ -279,39 +362,31 @@ impl PyrApp {
             });
             ui.add_space(8.0);
         }
-        ui.add_space(14.0);
     }
 
     fn floor_card(&mut self, ui: &mut egui::Ui, s: &ServerView, card: &Card, size: egui::Vec2) {
         let ctx = ui.ctx().clone();
-        let (r, resp) = ui.allocate_exact_size(size, Sense::click());
+        // (The line under it is the tile's too, as 0.13.28's: pointing at it lifts the tile, and
+        // the tile's words show under it.)
+        let (whole, resp) = ui.allocate_exact_size(size + vec2(0.0, 22.0), Sense::click());
+        let r = Rect::from_min_size(whole.min, size);
         let hover = resp.hovered();
-        // (It lifts as it's hovered.)
+        // (It lifts as it's hovered; the line under it stays.)
         let lift = ctx.animate_bool_with_time(resp.id.with("lift"), hover, 0.14);
+        let foot = r.bottom();
         let r = r.translate(vec2(0.0, -5.0 * lift));
         let p = ui.painter().clone();
+        let round = theme::rf(16.0);
         p.rect_filled(r.translate(vec2(0.0, 8.0 + 4.0 * lift)), theme::r(18), Color32::from_black_alpha((110.0 + 50.0 * lift) as u8));
         if lift > 0.01 {
             radial(&p, r.center(), r.width() * 0.9, col::GOLD.gamma_multiply(0.10 * lift), Color32::TRANSPARENT);
         }
         let tint = Color32::from_gray((215.0 + 40.0 * lift) as u8);
-        if !pics::cover_rounded(&p, &ctx, &card.art, r, 16.0, (card.focus, 0.5), (r.width() * 2.0) as u32, tint) {
+        if !pics::cover_rounded(&p, &ctx, &card.art, r, round, (card.focus, 0.5), (r.width() * 2.0) as u32, tint) {
             p.rect_filled(r, theme::r(16), Color32::from_rgb(0x1e, 0x1a, 0x28));
         }
-        // Dark at the foot, for its name.
-        vgrad_round_fn(&p, r, 16.0, |k| Color32::from_black_alpha((((k - 0.45) / 0.55).clamp(0.0, 1.0).powf(1.2) * 235.0) as u8));
-        let name = p.layout(card.name.to_string(), theme::bold_font((r.width() * 0.095).clamp(14.0, 18.0)), Color32::WHITE, r.width() - 24.0);
-        let ny = r.bottom() - 34.0 - name.size().y;
-        p.galley(pos2(r.left() + 12.0, ny), name, Color32::WHITE);
-        p.text(pos2(r.left() + 12.0, r.bottom() - 20.0), Align2::LEFT_CENTER, &card.foot, theme::bold_font(11.5), col::GOLD.gamma_multiply(0.95));
-        // Its best for me, if it's been played.
-        let key = match card.opens {
-            Opens::Game(g) => g.id().to_string(),
-            Opens::Machine(m) => pyr_poker::casino::reels_key(m),
-        };
-        if let Some(st) = s.poker.casino.stats.get(&key).filter(|st| st.best_win > 0) {
-            p.text(pos2(r.right() - 12.0, r.bottom() - 20.0), Align2::RIGHT_CENTER, format!("best +{}", crate::poker::cards::chips_short(st.best_win)), theme::font(11.0), col::WIN);
-        }
+        // Dark toward the foot, for its name.
+        foot_shade(&p, r, round);
         // Badges.
         let mut bx = r.left() + 10.0;
         for (b, color) in &card.badges {
@@ -321,7 +396,28 @@ impl PyrApp {
             p.galley(br.center() - g.size() / 2.0, g, Color32::WHITE);
             bx = br.right() + 6.0;
         }
-        // Hovered: play.
+        // Its name, big in its own lettering: a fifth of the tile's height on one line, 13% on
+        // two (smaller, to fit, where a line would run past 85% of its width), the last line's
+        // middle 22 and a bit off the foot, 0.9 of the size between the lines.
+        let (lines, family, studio) = lettering(&card.art);
+        if !lines.is_empty() {
+            let base = r.height() * if lines.len() > 1 { 0.13 } else { 0.2 };
+            let widest = lines.iter().map(|l| p.layout_no_wrap(l.to_string(), theme::display_font(family, base), Color32::PLACEHOLDER).size().x).fold(0.0f32, f32::max);
+            let size = if widest > r.width() * 0.85 { base * r.width() * 0.85 / widest } else { base };
+            let font = theme::display_font(family, size);
+            let last = r.bottom() - 22.25 - 0.47 * size;
+            for (i, line) in lines.iter().enumerate() {
+                let y = last - 0.9 * size * (lines.len() - 1 - i) as f32;
+                p.text(pos2(r.center().x, y), Align2::CENTER_CENTER, *line, font.clone(), Color32::WHITE);
+            }
+        }
+        // The studio, tiny and spaced out under it.
+        let ss = r.height() * 0.026;
+        let mut job = egui::text::LayoutJob::default();
+        job.append(studio, 0.0, egui::TextFormat { font_id: theme::display_font("barlow", ss), color: Color32::from_gray(200), extra_letter_spacing: ss * 0.16, ..Default::default() });
+        let g = p.layout_job(job);
+        p.galley(pos2(r.center().x - g.size().x / 2.0, r.bottom() - 14.5 - g.size().y / 2.0), g, Color32::from_gray(200));
+        // Hovered: play, and what it pays back.
         if lift > 0.01 {
             let c = r.center() - vec2(0.0, r.height() * 0.08);
             let rad = 26.0 * (0.7 + 0.3 * lift);
@@ -329,8 +425,17 @@ impl PyrApp {
             p.circle_filled(c, rad, col::GOLD.gamma_multiply(lift));
             let k = rad * 0.42;
             p.add(Shape::convex_polygon(vec![c + vec2(-k * 0.7, -k), c + vec2(k * 1.1, 0.0), c + vec2(-k * 0.7, k)], Color32::from_rgb(0x2a, 0x10, 0x04).gamma_multiply(lift), Stroke::NONE));
+            p.text(c + vec2(0.0, 44.0), Align2::CENTER_CENTER, &card.rtp, theme::bold_font(11.5), col::GOLD.gamma_multiply(lift));
         }
         p.rect_stroke(r, theme::r(16), Stroke::new(1.0 + lift, super::mix(Color32::from_white_alpha(28), col::GOLD, lift)), StrokeKind::Inside);
+        // Under it: how many are playing it now (from the server), and my best win at it.
+        let n = s.poker.casino.playing.get(&card.key).copied().unwrap_or(0);
+        let y = foot + 13.5;
+        p.circle_filled(pos2(r.left() + 6.0, y), 3.5, if n > 0 { SOMEONE } else { NOBODY });
+        p.text(pos2(r.left() + 15.0, y), Align2::LEFT_CENTER, format!("{n} playing"), theme::bold_font(12.0), if n > 0 { Color32::WHITE } else { col::MUTED });
+        if let Some(st) = s.poker.casino.stats.get(&card.key).filter(|st| st.best_win > 0) {
+            p.text(pos2(r.right() - 4.0, y), Align2::RIGHT_CENTER, format!("best +{}", crate::poker::cards::chips_short(st.best_win)), theme::font(11.0), col::WIN);
+        }
         if resp.on_hover_text(&card.pitch).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
             match card.opens {
                 Opens::Game(g) => self.poker.casino.game = Some(g),
@@ -341,6 +446,39 @@ impl PyrApp {
             }
         }
     }
+}
+
+/// A tile darkened toward its foot, for its name: black from nothing 11% of the way down to
+/// 80% at the foot, and over the last 13% another, to 52% (0.13.28's two, read off its tiles
+/// against their pictures), in bands that follow the rounded corners.
+fn foot_shade(p: &egui::Painter, r: Rect, radius: f32) {
+    let rad = radius.min(r.width() / 2.0).min(r.height() / 2.0).max(0.0);
+    let alpha = |y: f32| {
+        let t = ((y - r.top()) / r.height()).clamp(0.0, 1.0);
+        let a = 0.9 * (t - 0.11).max(0.0);
+        let b = 4.0 * (t - 0.87).max(0.0);
+        1.0 - (1.0 - a) * (1.0 - b)
+    };
+    let inset = |y: f32| {
+        let d = y - (r.bottom() - rad);
+        if d <= 0.0 { 0.0 } else { rad - (rad * rad - d * d).max(0.0).sqrt() }
+    };
+    let mut ys: Vec<f32> = [0.11, 0.87, 0.89, 0.91, 0.93].into_iter().map(|t| r.top() + r.height() * t).filter(|&y| y < r.bottom() - rad).collect();
+    let n = (rad.ceil() as usize * 2).max(1);
+    ys.extend((0..=n).map(|i| r.bottom() - rad + rad * i as f32 / n as f32));
+    let mut m = egui::Mesh::default();
+    for (k, &y) in ys.iter().enumerate() {
+        let c = Color32::from_black_alpha((alpha(y) * 255.0).round() as u8);
+        let i = inset(y);
+        m.colored_vertex(pos2(r.left() + i, y), c);
+        m.colored_vertex(pos2(r.right() - i, y), c);
+        if k > 0 {
+            let b = (2 * k) as u32;
+            m.add_triangle(b - 2, b - 1, b);
+            m.add_triangle(b - 1, b + 1, b);
+        }
+    }
+    p.add(Shape::mesh(m));
 }
 
 /// A Reel Row machine's reach, as a badge: its top prize's size, or its progressive jackpot.

@@ -829,6 +829,11 @@ pub struct CasinoView {
     /// bet).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub row_pools: Vec<(u8, u64)>,
+    /// How many are playing each game (0.13.4): who's played a round of it in the last five
+    /// minutes, by its statistics key (games nobody is playing left out), as 0.13.28's server
+    /// says it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub playing: Vec<(String, u32)>,
 }
 
 /// Ember Dragon as it stands for me: how grown my dragon is at each bet, and the jackpots'
@@ -1673,10 +1678,21 @@ mod tests {
             stats: [("slots".to_string(), CasinoStats::default())].into_iter().collect(),
             dragon: Some(DragonView { growth: [(100, 3), (2_000, 41)].into_iter().collect(), pools: [1, 2, 3, 4] }),
             row_pools: vec![(4, 123_456_789), (9, 100_000_000)],
+            playing: vec![("plinko".to_string(), 1), ("reels:3".to_string(), 2)],
         };
         let m = ToApp::Casino { res: CasinoRes::State { view } };
         let j = serde_json::to_string(&m).unwrap();
         assert_eq!(serde_json::from_str::<ToApp>(&j).unwrap(), m, "{j}");
+    }
+
+    /// The casino's state as 0.13.28's server sends it (taken off the wire, trimmed): its
+    /// "playing" list, by game, reads.
+    #[test]
+    fn the_casinos_state_from_0_13_28_reads_with_who_is_playing() {
+        let j = r#"{"op":"casino","res":{"is":"state","view":{"chips":100000,"commit":"967ff0c0494d02dce19d73e1db88f068e45b0ccbe95a87e4fdead0fc1c36fa11","nonce":1,"jackpot":10009000,"friday_ms":1794625200000,"friday_prize":100938,"big_wins":[],"blackjack":null,"craps":{"point":null,"bets":{"pass":0,"pass_odds":0,"dont_pass":0,"dont_odds":0,"field":0,"any_seven":0,"any_craps":0,"place":[0,0,0,0,0,0],"hard":[0,0,0,0]},"streak":0},"stats":{},"dragon":{"growth":[],"pools":[2000,10000,50000,250000]},"row_pools":[[4,100000000],[9,100000000]],"playing":[["plinko",1]]}}}"#;
+        let m: ToApp = serde_json::from_str(j).unwrap();
+        let ToApp::Casino { res: CasinoRes::State { view } } = m else { panic!("not the casino's state") };
+        assert_eq!(view.playing, vec![("plinko".to_string(), 1)]);
     }
 
     /// What a server keeps (in its database's meta table) and a later Pyr added to: read by this

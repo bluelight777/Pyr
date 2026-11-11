@@ -258,7 +258,20 @@ impl Poker {
             stats: rec.casino.clone(),
             dragon: next.then(|| DragonView { growth: Self::dragon_growth(hub, uid), pools: Self::dragon_pools(hub) }),
             row_pools: Self::row_pools(hub),
+            playing: Self::playing(st, wall()),
         }
+    }
+
+    /// How many have played a round of each game in the last five minutes (the games someone
+    /// has), for the floor's tiles.
+    fn playing(st: &mut State, now: u64) -> Vec<(String, u32)> {
+        st.casino.playing.retain(|_, who| {
+            who.retain(|_, at| now.saturating_sub(*at) < PLAYING_MS);
+            !who.is_empty()
+        });
+        let mut all: Vec<(String, u32)> = st.casino.playing.iter().map(|(key, who)| (key.clone(), who.len() as u32)).collect();
+        all.sort();
+        all
     }
 
     fn dragon_growth(hub: &Hub, uid: &str) -> BTreeMap<u64, u32> {

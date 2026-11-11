@@ -244,8 +244,22 @@ How (decided while starting it):
       violet glows (over the bar too), its shadow, the caret, the columns narrowing with the
       window, names cut with "…" where they don't fit, every hover. (Keys comes with keys for
       every game; Bounty Poker and Dominó Cubano join the menu when they're in.)
-- [ ] Floor: chapters with the bar to jump to each, Stake-like tiles, studio, players, best win
-      (0.13.2/4/6/7); the casino's chat at the table games only (0.13.2)
+- [x] Floor (0.13.2/4/6/7): in chapters (Slots, Poker, Table games, Pyr Originals), a bar of
+      four buttons in their colors to jump to each (as wide as the page less 92 allows, 260 at
+      most), each chapter's heading on a band of its color. Tiles like Stake's: each game's name
+      big in its own lettering (0.13.28's fonts, game by game: Barlow Condensed, Anton, Bebas,
+      Squada, Fjalla, Archivo Black), sized by the tile and cut down to fit 85% of its width,
+      the studio tiny and spaced under it (PYR ORIGINALS, CHIMBITA GAMES), the tile darkened
+      toward its foot as 0.13.28's; under each tile how many are playing it right now (a green
+      dot when anyone is) and my best win; what it pays back shows when you point at it. The
+      server says who's playing (everyone who played a round of it in the last five minutes, as
+      0.13.28's server does, read off the wire) and the floor asks again every 45 seconds and on
+      coming back to it. The casino's chat is at the table games only, the "funny" tags gone.
+      Measured off 0.13.28's screen at 900, 1100, 1280, 1500 and 1600 wide: every text's font,
+      size and place (`work/textlab` draws text exactly as egui does, `work/ui/textfit.py` finds
+      it on the screen), the bar, the bands, the tiles' shade, corners and spacing. (The
+      machines' feature badges come with Reel Row Remastered; Bomb Pot, Bounty Poker and Dominó
+      Cubano with theirs.)
 - [x] Levels: 100 levels, ten tiers and crests, XP by time played, level chips, tier chests,
       frames and felts, missions (0.13.5). Every number measured on 0.13.28 (`measured/levels.md`):
       the curve, what each level pays, a round's XP at each game and stake, the long day's half,

@@ -35,6 +35,19 @@ impl Chapter {
         }
     }
 
+    /// The four, in the lobby's order.
+    pub const ALL: [Chapter; 4] = [Chapter::Slots, Chapter::Poker, Chapter::Tables, Chapter::Originals];
+
+    /// Its name on the lobby (its heading, its button on the bar over the chapters).
+    pub fn name(self) -> &'static str {
+        match self {
+            Chapter::Slots => "Slots",
+            Chapter::Poker => "Poker",
+            Chapter::Tables => "Table games",
+            Chapter::Originals => "Pyr Originals",
+        }
+    }
+
     fn title(self) -> &'static str {
         match self {
             Chapter::Slots => "SLOTS",

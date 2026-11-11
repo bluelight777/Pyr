@@ -200,8 +200,10 @@ impl PyrApp {
         // My deck (the back I picked; four colors or two) for every card that's mine to see.
         cards::set_mine(s.poker.me.as_ref().map(|m| m.card_back.as_str()).unwrap_or(""), self.poker.four_color);
         self.poker_page_inner(ui, st, s, acts);
-        // The casino's chat, over whichever page it is.
-        self.casino_chat_ui(ui, st, s, whole);
+        // The casino's chat, at the table games only (0.13.2).
+        if matches!(self.poker.casino.game, Some(pyr_poker::casino::Game::Blackjack | pyr_poker::casino::Game::Roulette | pyr_poker::casino::Game::Baccarat | pyr_poker::casino::Game::Craps)) {
+            self.casino_chat_ui(ui, st, s, whole);
+        }
     }
 
     fn poker_page_inner(&mut self, ui: &mut egui::Ui, st: &AppState, s: &ServerView, acts: &mut Vec<Act>) {
@@ -395,6 +397,9 @@ impl PyrApp {
             scroll = scroll.vertical_scroll_offset(0.0);
         }
         scroll.show(&mut pui, |ui| {
+            // (The page's own width, kept for what's under today's missions: on a narrow window
+            // they run past its edge, as 0.13.28's do, and mustn't widen the page with them.)
+            let page_w = ui.available_width();
             ui.add_space(30.0);
             if let Some(me) = &s.poker.me {
                 self.me_card(ui, s, me.clone());
@@ -403,7 +408,8 @@ impl PyrApp {
                 self.levels_row(ui, s, &me.clone());
             }
             ui.add_space(18.0);
-            match self.poker.tab {
+            let page = Rect::from_min_size(ui.cursor().min, vec2(page_w, f32::INFINITY));
+            ui.scope_builder(egui::UiBuilder::new().max_rect(page).layout(*ui.layout()), |ui| match self.poker.tab {
                 Tab::Floor => self.casino_floor(ui, s),
                 Tab::Vip => match s.poker.me.clone() {
                     Some(me) => self.vip_page(ui, s, &me),
@@ -413,7 +419,7 @@ impl PyrApp {
                 Tab::Me => self.profile(ui, s),
                 Tab::Staff => self.staff_tab(ui, s),
                 Tab::Cms => self.cms_page(ui, s),
-            }
+            });
             ui.add_space(30.0);
         });
         // The bar, over the page's top.
@@ -553,7 +559,6 @@ impl PyrApp {
     /// Poker on the casino floor, like every other game: cash tables, Flash Pots and
     /// tournaments.
     pub(crate) fn poker_sections(&mut self, ui: &mut egui::Ui, s: &ServerView) {
-        self.floor_anchor(ui, crate::casino::games_menu::Chapter::Poker);
         let tables = s.poker.lobby.as_ref().map(|l| l.len()).unwrap_or(0);
         if section_head(ui, "Cash tables", &format!("Hold'em and Omaha with friends and bots · {tables} open"), Some("New table")) {
             let mut n = NewTable::default();

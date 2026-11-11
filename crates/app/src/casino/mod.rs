@@ -127,6 +127,10 @@ pub struct CasinoUi {
     pub games_menu: bool,
     /// Where the lobby's to go when it's next drawn (the Games menu's "See all", its way back).
     pub jump: Option<games_menu::Jump>,
+    /// When the floor was last drawn, and last asked the casino's state again (who's playing
+    /// what): on coming back to it, and every 45 seconds on it, as 0.13.28.
+    pub floor_drawn: f64,
+    pub floor_asked: f64,
     /// The balance while a round plays out on screen: the chips with the bet taken but not yet
     /// the win, until the round settles there (or the time given, at the latest).
     pub hold: Option<(u64, Instant)>,
@@ -189,6 +193,8 @@ impl Default for CasinoUi {
             fairness_open: false,
             games_menu: false,
             jump: None,
+            floor_drawn: 0.0,
+            floor_asked: 0.0,
             hold: None,
             shown_chips: None,
             last_target: 0,

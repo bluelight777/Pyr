@@ -48,6 +48,9 @@ pub struct CasinoLive {
     pub dragon: Option<pyr_poker::net::DragonView>,
     /// Reel Row's progressive jackpots (0.13.0 servers): each machine's pool, as last seen.
     pub row_pools: BTreeMap<u8, u64>,
+    /// How many are playing each game now, by statistics key (0.13.4 servers; none for the games
+    /// nobody is).
+    pub playing: BTreeMap<String, u32>,
 }
 
 impl CasinoLive {
@@ -81,6 +84,7 @@ impl CasinoLive {
                     self.dragon = view.dragon;
                 }
                 self.row_pools = view.row_pools.into_iter().collect();
+                self.playing = view.playing.into_iter().collect();
                 self.busy = false;
             }
             CasinoRes::Round { round } => {

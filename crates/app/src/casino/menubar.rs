@@ -26,6 +26,8 @@ const ORANGE: Color32 = Color32::from_rgb(255, 122, 26);
 const DOOR: Color32 = Color32::from_rgb(21, 12, 13);
 /// Wider than this, the buttons have their names by them (0.13.28: from a bar 1151 wide).
 const WIDE: f32 = 1150.0;
+/// The bar's name shows on a bar wider than this.
+const TITLED: f32 = 760.0;
 /// A named button: the first one's left edge (from the bar's), its icon's middle and its name
 /// (from its own), and how much wider it is than its name; Games' arrow takes a little more.
 const NAMED_FROM: f32 = 165.0;
@@ -84,7 +86,11 @@ pub fn bar(ui: &mut egui::Ui, bar: Rect, left: &[Item], right: &[Item], on: Opti
     let (l, t) = (bar.left(), bar.top());
     p.circle_filled(pos2(l + 30.5, t + 28.5), 16.5, Color32::from_rgb(34, 25, 26));
     crate::poker::mark::icon(&p, pos2(l + 30.0, t + 29.0), 22.0, col::GOLD2);
-    p.text(pos2(l + 54.0, t + 28.5), Align2::LEFT_CENTER, "PYR CASINO", theme::display_font("anton", 21.0), col::GOLD2);
+    // (Under 761 wide the name gives way, and the buttons move up into its place.)
+    let titled = bar.width() > TITLED;
+    if titled {
+        p.text(pos2(l + 54.0, t + 28.5), Align2::LEFT_CENTER, "PYR CASINO", theme::display_font("anton", 21.0), col::GOLD2);
+    }
     let wide = bar.width() > WIDE;
     let name_font = theme::bold_font(13.5);
     // (Laid out uncolored: each is drawn in its state's color.)
@@ -163,13 +169,15 @@ pub fn bar(ui: &mut egui::Ui, bar: Rect, left: &[Item], right: &[Item], on: Opti
             x = r.left() - 4.0;
         }
     } else {
-        // From the left: Lobby's middle 187 in, Games, a line, then the rest.
-        let mut x = l + 187.0;
+        // From the left: Lobby's middle 187 in (76 without the name), Games, a line, then the
+        // rest.
+        let shift = if titled { 0.0 } else { 111.0 };
+        let mut x = l + 187.0 - shift;
         for (i, &item) in left.iter().enumerate() {
             button(ui, item, Rect::from_center_size(pos2(x, t + 29.0), BUTTON));
             x += STEP;
             if i == 1 {
-                p.line_segment([pos2(l + 269.5, t + 16.0), pos2(l + 269.5, t + 42.0)], Stroke::new(1.0f32, Color32::from_rgb(48, 40, 40)));
+                p.line_segment([pos2(l + 269.5 - shift, t + 16.0), pos2(l + 269.5 - shift, t + 42.0)], Stroke::new(1.0f32, Color32::from_rgb(48, 40, 40)));
                 x += 20.0;
             }
         }
