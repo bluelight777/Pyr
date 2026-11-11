@@ -278,9 +278,9 @@ pub async fn connect_and_login(
             sig: sig.to_vec(),
             name: name.to_string(),
             invite: invite.map(|s| s.to_string()),
-            client: format!("{} {}", pyr_proto::APP_NAME, env!("CARGO_PKG_VERSION")),
+            client: dev_client(),
             // (This app knows group conversations, and adjusts its shares to its viewers.)
-            caps: vec![pyr_proto::control::GROUPS_CAP.to_string(), pyr_proto::control::VIDEO_FEEDBACK_CAP.to_string(), pyr_proto::control::MOVE_CAP.to_string(), pyr_proto::control::CASINO_012_CAP.to_string(), pyr_proto::control::CASINO_013_CAP.to_string(), pyr_proto::control::PROPS_CAP.to_string()],
+            caps: dev_caps(vec![pyr_proto::control::GROUPS_CAP.to_string(), pyr_proto::control::VIDEO_FEEDBACK_CAP.to_string(), pyr_proto::control::MOVE_CAP.to_string(), pyr_proto::control::CASINO_012_CAP.to_string(), pyr_proto::control::CASINO_013_CAP.to_string(), pyr_proto::control::PROPS_CAP.to_string()]),
         },
     };
     send.write_all(&framing::encode(&login)).await?;
@@ -353,4 +353,20 @@ pub async fn file_put(
         bail!("{}", reply.error);
     }
     Ok(reply.id)
+}
+
+/// Who this app says it is when logging in: Pyr and its version, or (development, to see what a
+/// server sends a newer Pyr) `PYR_DEV_CLIENT`.
+fn dev_client() -> String {
+    std::env::var("PYR_DEV_CLIENT").ok().filter(|c| !c.trim().is_empty()).unwrap_or_else(|| format!("{} {}", pyr_proto::APP_NAME, env!("CARGO_PKG_VERSION")))
+}
+
+/// What this app says it can do, and (development, to see what a server sends a newer Pyr)
+/// whatever `PYR_DEV_CAPS` adds, comma separated: 0.13.28 says `casino_0_13_7` and
+/// `casino_0_13_11` too.
+fn dev_caps(mut caps: Vec<String>) -> Vec<String> {
+    if let Ok(more) = std::env::var("PYR_DEV_CAPS") {
+        caps.extend(more.split(',').map(str::trim).filter(|c| !c.is_empty()).map(String::from));
+    }
+    caps
 }

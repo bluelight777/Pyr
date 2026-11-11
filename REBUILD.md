@@ -214,6 +214,11 @@ How (decided while starting it):
 - The real 0.13.28 runs in the workspace (`work/ui/up28.sh`: its own server and app on a
   screen of their own): every screen is matched against it, side by side. Its art and sounds
   are carved out under their own names (`rebuild/assets-0.13.28`, `rebuild/sounds-0.13.28`).
+- Measuring text off 0.13.28's screen: egui sizes a font by its em (epaint's `px_scale_factor` is
+  size / units per em), so a font's cap height on screen is size × capHeight / unitsPerEm (Inter
+  0.7275, Anton 0.8594, Bebas 0.7). `rebuild/tools/fitsize.py` finds the size from an ink width,
+  `eguitext.py` lays text out as egui does (glyphs on whole pixels with 4 sub-pixel bins, its
+  "…" cutting), `tilefont.py` tells a display font by its shapes.
 - A casino game's round is checked by everyone's own Pyr, replaying it from the seeds with the
   same code. A rebuilt game can't replay 0.13.28's rounds bit for bit without its source, so a
   rebuilt game doesn't take a 0.13.28 feature name it can't honor exactly: it gets the rebuild's
@@ -228,8 +233,19 @@ How (decided while starting it):
 - [ ] Big wins: Big, Mega, Epic, Legendary, Mythic with fireworks (0.13.2/4)
 - [ ] Bets to 100,000 on blackjack, baccarat, keno, slots (0.13.2/4/6); Pyr Sevens' Phoenix
       Jackpot in proportion (0.13.6); new players 100,000 (0.13.6)
-- [ ] Floor: chapters, Stake-like tiles, studio, players, best win, menu bar with Games menu
-      (0.13.2/4/6/7)
+- [x] The casino's menu bar (0.13.6): the mark and name, Lobby, Games, VIP Club, Leaderboard,
+      Profile (Staff and the control room for those who have them), Fairness at the right; each
+      button's name by it on a bar over 1150 wide, the icon alone (its name on hovering) under
+      that. The Games menu (0.13.6): every game this server has in four columns (the slots two
+      wide), its picture, a word, its badge; "See all" goes to that chapter of the lobby, poker's
+      lines too, "The whole lobby" to its top; a click anywhere else closes it (and does what it
+      does there), as 0.13.28's. Measured off 0.13.28's screen at 1100, 1280 and 1500 wide: the
+      panel (1198 wide at most, 16 in from the bar's right and the window's left), its ember and
+      violet glows (over the bar too), its shadow, the caret, the columns narrowing with the
+      window, names cut with "…" where they don't fit, every hover. (Keys comes with keys for
+      every game; Bounty Poker and Dominó Cubano join the menu when they're in.)
+- [ ] Floor: chapters with the bar to jump to each, Stake-like tiles, studio, players, best win
+      (0.13.2/4/6/7); the casino's chat at the table games only (0.13.2)
 - [x] Levels: 100 levels, ten tiers and crests, XP by time played, level chips, tier chests,
       frames and felts, missions (0.13.5). Every number measured on 0.13.28 (`measured/levels.md`):
       the curve, what each level pays, a round's XP at each game and stake, the long day's half,

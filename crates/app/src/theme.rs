@@ -363,8 +363,8 @@ pub fn fonts_made() -> u64 {
     FONTS_MADE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Display lettering for Pyr Casino's slots: each machine's own (Google Fonts; their licences
-/// are in assets/fonts/display).
+/// Display lettering for Pyr Casino: each slot machine's own, and the casino's names (Google
+/// Fonts, the ones 0.13.28 has, file for file; their licences are in assets/fonts/display).
 const DISPLAY_FONTS: &[(&str, &[u8])] = &[
     ("bangers", include_bytes!("../assets/fonts/display/Bangers-Regular.ttf")),
     ("pirata", include_bytes!("../assets/fonts/display/PirataOne-Regular.ttf")),
@@ -380,6 +380,16 @@ const DISPLAY_FONTS: &[(&str, &[u8])] = &[
     ("limelight", include_bytes!("../assets/fonts/display/Limelight-Regular.ttf")),
     ("bungee", include_bytes!("../assets/fonts/display/Bungee-Regular.ttf")),
     ("cinzel-deco", include_bytes!("../assets/fonts/display/CinzelDecorative-Bold.ttf")),
+    // (0.13.6/7: the menu bar's name and the floor's game names, "in calmer faces".)
+    ("anton", include_bytes!("../assets/fonts/display/Anton-Regular.ttf")),
+    ("bebas", include_bytes!("../assets/fonts/display/BebasNeue-Regular.ttf")),
+    ("barlow-black", include_bytes!("../assets/fonts/display/BarlowCondensed-Black.ttf")),
+    ("barlow", include_bytes!("../assets/fonts/display/BarlowCondensed-Medium.ttf")),
+    ("squada", include_bytes!("../assets/fonts/display/SquadaOne-Regular.ttf")),
+    ("fjalla", include_bytes!("../assets/fonts/display/FjallaOne-Regular.ttf")),
+    ("archivo-black", include_bytes!("../assets/fonts/display/ArchivoBlack-Regular.ttf")),
+    ("passion", include_bytes!("../assets/fonts/display/PassionOne-Bold.ttf")),
+    ("russo", include_bytes!("../assets/fonts/display/RussoOne-Regular.ttf")),
 ];
 
 /// A casino display font (`DISPLAY_FONTS`' names) at `size`.

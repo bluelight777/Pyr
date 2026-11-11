@@ -7,6 +7,7 @@ use eframe::egui::{self, Align2, Color32, Rect, RichText, Sense, Shape, Stroke, 
 use pyr_engine::state::ServerView;
 use pyr_poker::casino::{Game, reels as rr};
 
+use super::games_menu::Chapter;
 use super::reel_themes::THEMES;
 use super::{col, glow_text, hgrad, pics, radial, vgrad_round_fn};
 use crate::app::PyrApp;
@@ -115,6 +116,7 @@ impl PyrApp {
             }
         }
         let note = (!reel_row).then_some("Twelve more machines come when this server's Pyr is updated to 0.12.");
+        self.floor_anchor(ui, Chapter::Slots);
         self.floor_section(ui, s, w, "Slots", &format!("{} game{} · every one pays back about 99%", slots.len(), if slots.len() == 1 { "" } else { "s" }), &slots, note);
         // (On a 0.12.0 server: tables with seats for people and bots; roulette's on 0.13.0.)
         let seats = |n: &'static str| if reel_row { vec![(n, col::GOLD_DARK)] } else { vec![] };
@@ -125,6 +127,7 @@ impl PyrApp {
             game_card(Game::Baccarat, "tile-baccarat", 0.5, seats("5 SEATS")),
             game_card(Game::Craps, "tile-craps", 0.5, seats("5 SEATS")),
         ];
+        self.floor_anchor(ui, Chapter::Tables);
         self.floor_section(ui, s, w, "Table games", "Dealt and rolled by the house, checked by your Pyr", &tables, None);
         // Poker, like every other game here: its tables, Flash Pots and tournaments.
         self.poker_sections(ui, s);
@@ -135,6 +138,7 @@ impl PyrApp {
             originals.push(game_card(Game::Plinko, "tile-plinko", 0.5, vec![("NEW", NEW), ("10,000×", col::EMBER)]));
         }
         originals.extend([game_card(Game::Dice, "tile-dice", 0.5, vec![]), game_card(Game::Keno, "tile-keno", 0.5, vec![])]);
+        self.floor_anchor(ui, Chapter::Originals);
         self.floor_section(ui, s, w, "Pyr Originals", "Quick games: pick your odds", &originals, None);
         ui.horizontal(|ui| {
             ui.add_space(28.0);

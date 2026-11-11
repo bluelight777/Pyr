@@ -25,10 +25,12 @@ pub mod dice;
 pub mod dragon;
 pub mod emotes;
 pub mod floor;
+pub mod games_menu;
 pub mod humor;
 pub mod info;
 pub mod keno;
 pub mod levels;
+pub mod menubar;
 pub mod plinko;
 pub mod pics;
 pub mod reel_themes;
@@ -121,6 +123,10 @@ pub struct CasinoUi {
     /// Sounds to play later (animations land on them).
     pub sounds: Vec<(Instant, Cue, f32, f32)>,
     pub fairness_open: bool,
+    /// The Games menu (0.13.6), open under the casino bar's Games button.
+    pub games_menu: bool,
+    /// Where the lobby's to go when it's next drawn (the Games menu's "See all", its way back).
+    pub jump: Option<games_menu::Jump>,
     /// The balance while a round plays out on screen: the chips with the bet taken but not yet
     /// the win, until the round settles there (or the time given, at the latest).
     pub hold: Option<(u64, Instant)>,
@@ -181,6 +187,8 @@ impl Default for CasinoUi {
             announcement: None,
             sounds: Vec::new(),
             fairness_open: false,
+            games_menu: false,
+            jump: None,
             hold: None,
             shown_chips: None,
             last_target: 0,

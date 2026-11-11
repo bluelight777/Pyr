@@ -26,6 +26,7 @@ use crate::theme;
 use cards::{chips_short, chips_text};
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
 pub enum Tab {
     /// The casino floor: every game, poker's tables, Flash Pots and tournaments among them.
     #[default]
@@ -357,85 +358,51 @@ impl PyrApp {
     }
 
     fn lobby(&mut self, ui: &mut egui::Ui, s: &ServerView) {
+        use crate::casino::menubar::{self, Item};
         let full = ui.max_rect();
-        // The casino floor (Meshy's render: the tables, the fire) behind it all, darkening down
-        // the page so what's on it reads.
+        // The menu bar across the top (0.13.6), the page under it.
+        let bar = Rect::from_min_size(full.min, vec2(full.width(), menubar::BAR_H));
+        let page = Rect::from_min_max(pos2(full.left(), bar.bottom()), full.max);
+        // The casino floor (Meshy's render: the tables, the fire) behind the page, darkening down
+        // it so what's on it reads.
         let p = ui.painter().clone();
         let ctx = ui.ctx().clone();
-        p.rect_filled(full, 0, crate::casino::col::NIGHT);
-        let back = Rect::from_min_size(full.min, vec2(full.width(), (full.width() * 0.5625).max(full.height() * 0.7)));
+        p.rect_filled(page, 0, crate::casino::col::NIGHT);
+        let back = Rect::from_min_size(page.min, vec2(page.width(), (page.width() * 0.5625).max(page.height() * 0.7)));
         if crate::casino::pics::cover(&p, &ctx, "floor", back, 2048, Color32::from_gray(150)) {
             // (Down to the night's own color at its foot, so nothing marks where it ends.)
             crate::casino::vgrad(&p, back, Color32::from_black_alpha(70), crate::casino::col::NIGHT);
         }
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.add_space(22.0);
-            ui.horizontal(|ui| {
-                ui.add_space(28.0);
-                let (r, _) = ui.allocate_exact_size(vec2(46.0, 46.0), Sense::hover());
-                let c = r.center();
-                ui.painter().circle_filled(c, 23.0, theme::ELEV());
-                mark::icon(ui.painter(), c, 30.0, theme::TEXT());
-                ui.add_space(10.0);
-                ui.vertical(|ui| {
-                    ui.label(RichText::new("Pyr Casino").font(theme::bold_font(28.0)).color(crate::casino::col::GOLD2));
-                    ui.label(RichText::new(format!("{}: slots and table games against the house, and poker with friends and bots, for play chips. Every shuffle, spin and roll is checked by your own Pyr.", s.name)).color(crate::casino::col::MUTED));
-                });
-            });
-            ui.add_space(16.0);
+        // (From 0.13.0: staff, and the Owner of the Game; a server's managers as such run
+        // nothing in the casino.)
+        let v13 = s.has(pyr_proto::control::CASINO_013_FEATURE);
+        if v13 && s.poker.staff.is_none() && self.poker.staff_asked.get(&s.key).is_none_or(|t| t.elapsed().as_secs() >= 30) {
+            self.poker.staff_asked.insert(s.key.clone(), Instant::now());
+            self.engine.poker(&s.key, ToServer::Staff);
+        }
+        let staff = self.my_poker_role(s).is_some() || s.poker.staff.as_ref().is_some_and(|v| v.owner) || (!v13 && s.can(pyr_proto::control::perm::MANAGE_SERVER));
+        let levels = s.poker.me.as_ref().is_some_and(crate::casino::levels::has_levels);
+        let cms = s.has(pyr_proto::control::CMS_FEATURE) && s.poker.staff.as_ref().is_some_and(|v| v.cms);
+        if (self.poker.tab == Tab::Cms && !cms) || (self.poker.tab == Tab::Vip && !levels) || (self.poker.tab == Tab::Staff && !staff) {
+            // (Taken out of it: back to the lobby.)
+            self.poker.tab = Tab::Floor;
+        }
+        let mut pui = ui.new_child(egui::UiBuilder::new().max_rect(page));
+        let mut scroll = egui::ScrollArea::vertical().id_salt(("casino-page", self.poker.tab as u8)).auto_shrink([false, false]);
+        if self.poker.casino.jump == Some(crate::casino::games_menu::Jump::Top) {
+            // (The Games menu's way back: the lobby from its top.)
+            self.poker.casino.jump = None;
+            scroll = scroll.vertical_scroll_offset(0.0);
+        }
+        scroll.show(&mut pui, |ui| {
+            ui.add_space(30.0);
             if let Some(me) = &s.poker.me {
                 self.me_card(ui, s, me.clone());
                 // (Today's missions and Ember Back on every page, as 0.13.28 has them.)
                 ui.add_space(10.0);
                 self.levels_row(ui, s, &me.clone());
             }
-            ui.add_space(14.0);
-            ui.horizontal(|ui| {
-                ui.add_space(28.0);
-                // (From 0.13.0: staff, and the Owner of the Game; a server's managers as such
-                // run nothing in the casino.)
-                let v13 = s.has(pyr_proto::control::CASINO_013_FEATURE);
-                if v13 && s.poker.staff.is_none() && self.poker.staff_asked.get(&s.key).is_none_or(|t| t.elapsed().as_secs() >= 30) {
-                    self.poker.staff_asked.insert(s.key.clone(), Instant::now());
-                    self.engine.poker(&s.key, ToServer::Staff);
-                }
-                let staff = self.my_poker_role(s).is_some() || s.poker.staff.as_ref().is_some_and(|v| v.owner) || (!v13 && s.can(pyr_proto::control::perm::MANAGE_SERVER));
-                let mut tabs = vec![(Tab::Floor, "Casino")];
-                if s.poker.me.as_ref().is_some_and(crate::casino::levels::has_levels) {
-                    tabs.push((Tab::Vip, "VIP Club"));
-                }
-                tabs.extend([(Tab::Leaderboard, "Leaderboard"), (Tab::Me, "Profile & Looks")]);
-                if staff {
-                    tabs.push((Tab::Staff, "Staff"));
-                }
-                let cms = s.has(pyr_proto::control::CMS_FEATURE) && s.poker.staff.as_ref().is_some_and(|v| v.cms);
-                if cms {
-                    tabs.push((Tab::Cms, "Control room"));
-                } else if self.poker.tab == Tab::Cms {
-                    // (Taken out of it: back to the casino.)
-                    self.poker.tab = Tab::Floor;
-                }
-                for (tab, name) in tabs {
-                    let on = self.poker.tab == tab;
-                    let b = egui::Button::new(RichText::new(name).font(theme::bold_font(14.0)).color(if on { theme::on_ember() } else { theme::TEXT() }))
-                        .fill(if on { theme::EMBER() } else { theme::ELEV() })
-                        .corner_radius(theme::r(8))
-                        .min_size(vec2(0.0, 34.0));
-                    if ui.add(b).clicked() {
-                        self.poker.tab = tab;
-                        if tab == Tab::Leaderboard {
-                            self.engine.poker(&s.key, ToServer::Leaderboard);
-                        }
-                        if tab == Tab::Staff {
-                            self.engine.poker(&s.key, ToServer::Staff);
-                        }
-                        if tab == Tab::Cms {
-                            self.cms_opened();
-                        }
-                    }
-                }
-            });
-            ui.add_space(16.0);
+            ui.add_space(18.0);
             match self.poker.tab {
                 Tab::Floor => self.casino_floor(ui, s),
                 Tab::Vip => match s.poker.me.clone() {
@@ -449,6 +416,65 @@ impl PyrApp {
             }
             ui.add_space(30.0);
         });
+        // The bar, over the page's top.
+        let mut left = vec![Item::Lobby, Item::Games];
+        if levels {
+            left.push(Item::Vip);
+        }
+        left.extend([Item::Leaderboard, Item::Profile]);
+        if staff {
+            left.push(Item::Staff);
+        }
+        if cms {
+            left.push(Item::Cms);
+        }
+        let on = Some(match self.poker.tab {
+            Tab::Floor => Item::Lobby,
+            Tab::Vip => Item::Vip,
+            Tab::Leaderboard => Item::Leaderboard,
+            Tab::Me => Item::Profile,
+            Tab::Staff => Item::Staff,
+            Tab::Cms => Item::Cms,
+        });
+        let open = self.poker.casino.games_menu.then_some(Item::Games);
+        let out = menubar::bar(ui, bar, &left, &[Item::Fairness], on, open);
+        if let Some(item) = out.clicked {
+            let tab = match item {
+                Item::Lobby => Some(Tab::Floor),
+                Item::Vip => Some(Tab::Vip),
+                Item::Leaderboard => Some(Tab::Leaderboard),
+                Item::Profile => Some(Tab::Me),
+                Item::Staff => Some(Tab::Staff),
+                Item::Cms => Some(Tab::Cms),
+                Item::Games => {
+                    self.poker.casino.games_menu = !self.poker.casino.games_menu;
+                    None
+                }
+                Item::Fairness => {
+                    self.poker.casino.fairness_open = true;
+                    None
+                }
+                Item::Keys => None,
+            };
+            if let Some(tab) = tab {
+                self.poker.casino.games_menu = false;
+                self.poker.tab = tab;
+                if tab == Tab::Leaderboard {
+                    self.engine.poker(&s.key, ToServer::Leaderboard);
+                }
+                if tab == Tab::Staff {
+                    self.engine.poker(&s.key, ToServer::Staff);
+                }
+                if tab == Tab::Cms {
+                    self.cms_opened();
+                }
+            }
+        }
+        if self.poker.casino.games_menu
+            && let Some(button) = out.games
+        {
+            self.games_menu(ui, s, bar, button);
+        }
     }
 
     fn me_card(&mut self, ui: &mut egui::Ui, s: &ServerView, me: pyr_poker::net::RecordView) {
@@ -527,6 +553,7 @@ impl PyrApp {
     /// Poker on the casino floor, like every other game: cash tables, Flash Pots and
     /// tournaments.
     pub(crate) fn poker_sections(&mut self, ui: &mut egui::Ui, s: &ServerView) {
+        self.floor_anchor(ui, crate::casino::games_menu::Chapter::Poker);
         let tables = s.poker.lobby.as_ref().map(|l| l.len()).unwrap_or(0);
         if section_head(ui, "Cash tables", &format!("Hold'em and Omaha with friends and bots · {tables} open"), Some("New table")) {
             let mut n = NewTable::default();

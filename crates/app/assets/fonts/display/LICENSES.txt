@@ -1242,3 +1242,49 @@ DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
 
+
+=== anton (Anton-Regular.ttf, as Pyr 0.13.28 has it)
+Copyright 2020 The Anton Project Authors (https://github.com/googlefonts/AntonFont.git)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1 (its text above).
+
+=== bebas (BebasNeue-Regular.ttf, as Pyr 0.13.28 has it)
+Copyright 2019 The Bebas Neue Project Authors (https://github.com/dharmatype/Bebas-Neue)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1 (its text above).
+
+=== barlow-black (BarlowCondensed-Black.ttf, as Pyr 0.13.28 has it)
+Copyright 2017 The Barlow Project Authors (https://github.com/jpt/barlow)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1 (its text above).
+
+=== barlow (BarlowCondensed-Medium.ttf, as Pyr 0.13.28 has it)
+Copyright 2017 The Barlow Project Authors (https://github.com/jpt/barlow)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1 (its text above).
+
+=== squada (SquadaOne-Regular.ttf, as Pyr 0.13.28 has it)
+Copyright (c) 2011, Admix Designs (http://www.admixdesigns.com/) with Reserved Font Name Squada.
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1 (its text above).
+
+=== fjalla (FjallaOne-Regular.ttf, as Pyr 0.13.28 has it)
+Copyright 2012 The Fjalla Project Authors (https://github.com/SorkinType/FjallaOne)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1 (its text above).
+
+=== archivo-black (ArchivoBlack-Regular.ttf, as Pyr 0.13.28 has it)
+Copyright 2017 The Archivo Black Project Authors (https://github.com/Omnibus-Type/ArchivoBlack)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1 (its text above).
+
+=== passion (PassionOne-Bold.ttf, as Pyr 0.13.28 has it)
+Copyright (c) 2011 Fontstage (info@fontstage.com), with Reserved Font Name "Passion"
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1 (its text above).
+
+=== russo (RussoOne-Regular.ttf, as Pyr 0.13.28 has it)
+Copyright (c) 2011-2012, Jovanny Lemonad (jovanny.ru), with Reserved Font Name "Russo"
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1 (its text above).
+
