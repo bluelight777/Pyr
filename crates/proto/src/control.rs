@@ -419,6 +419,9 @@ pub const CASINO_013_CAP: &str = "casino_0_13";
 /// the weekly bonus): `RecordView`'s `tier`, `missions`, `ember_back` and the rest, and
 /// `ClaimEmber`/`ClaimWeekly`. 0.13.28's name for it, so its apps show them here too.
 pub const LEVELS_FEATURE: &str = "poker_levels_2";
+/// Plinko (0.13.5), played as 0.13.28 plays it (its rounds check the same either way), so its
+/// name.
+pub const PLINKO_FEATURE: &str = "casino_plinko";
 /// Prop bets in chat, with Pyr Casino chips (the rebuild's): the server keeps the props, the
 /// bets, the odds and the payouts. Apps say [`PROPS_CAP`] to be told about them.
 pub const PROPS_FEATURE: &str = "prop_bets";

@@ -111,6 +111,11 @@ pub enum Cue {
     Fuse,
     /// The bomb going off.
     Boom,
+    // Plinko (0.13.5).
+    /// A ball striking a gold peg: a small bright ring.
+    Peg,
+    /// A ball dropping into a bucket: a soft pop and a ding.
+    Bucket,
 }
 
 /// A small, fast noise (the same every time, so a sound is the same every time).
@@ -211,6 +216,8 @@ pub fn render_mono(c: Cue) -> Vec<f32> {
         Cue::Wheel => ms(4600.0),
         Cue::Fuse => ms(900.0),
         Cue::Boom => ms(2600.0),
+        Cue::Peg => ms(150.0),
+        Cue::Bucket => ms(360.0),
         Cue::Fold | Cue::Chips | Cue::Turn => ms(420.0),
         Cue::AllIn | Cue::Pot => ms(900.0),
         Cue::Win => ms(1300.0),
@@ -376,6 +383,21 @@ pub fn render_mono(c: Cue) -> Vec<f32> {
             bell(&mut o, 0, 2793.8, 120.0, 0.08);
             click(&mut o, 0, 0.1, 3400.0, 241);
         }
+        // A gold peg struck: a tiny bell with a tap.
+        Cue::Peg => {
+            bell(&mut o, 0, 2093.0, 110.0, 0.07);
+            bell(&mut o, 0, 3136.0, 70.0, 0.025);
+            click(&mut o, 0, 0.06, 4200.0, 251);
+        }
+        // Into a bucket: a soft pop, then a ding.
+        Cue::Bucket => {
+            for (i, x) in o.iter_mut().enumerate().take(ms(90.0)) {
+                let t = i as f32 / RATE;
+                let f = 300.0 + 260.0 * (-t * 40.0).exp();
+                *x += (TAU * f * t).sin() * (-t * 34.0).exp() * 0.32;
+            }
+            bell(&mut o, ms(30.0), 1318.5, 300.0, 0.1);
+        }
         // The wheel's pegs clicking past the pointer, slower and slower, then a ding.
         Cue::Wheel => {
             let mut t = 0.0f32;
@@ -456,7 +478,7 @@ mod tests {
 
     #[test]
     fn every_sound_is_there_and_never_clips() {
-        for c in [Cue::Deal, Cue::Flip, Cue::Chips, Cue::Check, Cue::Fold, Cue::AllIn, Cue::Pot, Cue::Turn, Cue::Win, Cue::Hurry, Cue::Tick, Cue::TimeBank, Cue::TimeOut, Cue::ReelSpin, Cue::ReelStop, Cue::WinSmall, Cue::WinBig, Cue::Jackpot, Cue::BallRoll, Cue::BallDrop, Cue::DiceRoll, Cue::KenoBall, Cue::Coin, Cue::Wheel, Cue::Fuse, Cue::Boom] {
+        for c in [Cue::Deal, Cue::Flip, Cue::Chips, Cue::Check, Cue::Fold, Cue::AllIn, Cue::Pot, Cue::Turn, Cue::Win, Cue::Hurry, Cue::Tick, Cue::TimeBank, Cue::TimeOut, Cue::ReelSpin, Cue::ReelStop, Cue::WinSmall, Cue::WinBig, Cue::Jackpot, Cue::BallRoll, Cue::BallDrop, Cue::DiceRoll, Cue::KenoBall, Cue::Coin, Cue::Wheel, Cue::Fuse, Cue::Boom, Cue::Peg, Cue::Bucket] {
             let s = render(c, 0.3);
             assert!(s.len() > 2000, "{c:?}");
             let peak = s.iter().fold(0.0f32, |m, x| m.max(x.abs()));

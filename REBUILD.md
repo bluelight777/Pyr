@@ -166,7 +166,14 @@ How (decided while starting it):
       their cards.
 - [x] VIP Club: Ember Back, daily chips by tier, weekly bonus, VIP page (0.13.5) (a tab until the
       menu bar comes with the floor)
-- [ ] Plinko (0.13.5)
+- [x] Plinko (0.13.5): the four difficulties' tables for 8 to 16 rows as 0.13.28 has them (every
+      one pays back 99%), its round (a ball's path from the round's seed, bit for bit: 900 of
+      0.13.28's own rounds replayed), its limits and words, the Edge of the Board achievement
+      and the play's XP. The page as 0.13.28 draws it, measured off its screen and filmed: the
+      board's size and place at three sizes, the temple as bright, pegs, ball, buckets and their
+      colors, a tenth of a second a row, the bucket pressed and lit as a ball lands and its
+      multiple floating up, the last ten buckets down the right. The peg and bucket sounds are
+      made here.
 - [ ] The control room (0.13.5); GMs give/take chips, staff log and download (0.13.4)
 - [ ] Bomb Pot (was Flash Pot), new art, 50,000 and 100,000 (0.13.4/6); the crown win (0.13.4)
 - [ ] Bounty Poker (0.13.6)

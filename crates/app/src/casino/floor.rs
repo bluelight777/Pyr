@@ -129,7 +129,12 @@ impl PyrApp {
         // Poker, like every other game here: its tables, Flash Pots and tournaments.
         self.poker_sections(ui, s);
         ui.add_space(26.0);
-        let originals = vec![game_card(Game::Dice, "tile-dice", 0.5, vec![]), game_card(Game::Keno, "tile-keno", 0.5, vec![])];
+        let mut originals = Vec::new();
+        // (Plinko, 0.13.5: where the server has it, first.)
+        if s.has(pyr_proto::control::PLINKO_FEATURE) {
+            originals.push(game_card(Game::Plinko, "tile-plinko", 0.5, vec![("NEW", NEW), ("10,000×", col::EMBER)]));
+        }
+        originals.extend([game_card(Game::Dice, "tile-dice", 0.5, vec![]), game_card(Game::Keno, "tile-keno", 0.5, vec![])]);
         self.floor_section(ui, s, w, "Pyr Originals", "Quick games: pick your odds", &originals, None);
         ui.horizontal(|ui| {
             ui.add_space(28.0);

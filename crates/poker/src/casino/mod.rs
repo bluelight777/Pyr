@@ -18,6 +18,7 @@ pub mod dragon;
 pub mod dice;
 pub mod feature;
 pub mod keno;
+pub mod plinko;
 pub mod reels;
 pub mod reelrow;
 pub mod roulette;
@@ -47,10 +48,12 @@ pub enum Game {
     Reels,
     /// Ember Dragon (0.12.0).
     Dragon,
+    /// Plinko (0.13.5), one of Pyr's Originals.
+    Plinko,
 }
 
 impl Game {
-    pub const ALL: [Game; 9] = [Game::Slots, Game::Blackjack, Game::Roulette, Game::Baccarat, Game::Craps, Game::Dice, Game::Keno, Game::Reels, Game::Dragon];
+    pub const ALL: [Game; 10] = [Game::Slots, Game::Blackjack, Game::Roulette, Game::Baccarat, Game::Craps, Game::Dice, Game::Keno, Game::Reels, Game::Dragon, Game::Plinko];
 
     /// Games apps before 0.12.0 don't know (they're never told of them: see `CASINO_012_CAP`).
     pub fn is_new(self) -> bool {
@@ -69,6 +72,7 @@ impl Game {
             Game::Keno => "Keno",
             Game::Reels => "Reel Row",
             Game::Dragon => "Ember Dragon",
+            Game::Plinko => "Plinko",
         }
     }
 
@@ -84,6 +88,7 @@ impl Game {
             Game::Keno => "keno",
             Game::Reels => "reel_row",
             Game::Dragon => "ember_dragon",
+            Game::Plinko => "plinko",
         }
     }
 
@@ -103,6 +108,7 @@ impl Game {
             Game::Keno => "Pick up to ten numbers; twenty balls come out. Ten for ten pays 100,000 to 1.",
             Game::Reels => "Twelve machines, 243 ways, wilds, a pick-and-dodge bonus or a prize wheel.",
             Game::Dragon => "243 ways. Feed the dragon eggs to grow its wins to 5×; six fireballs for Ember Respins and four jackpots.",
+            Game::Plinko => "Drop a ball through the pegs. Pick the difficulty and the rows: up to 10,000 times the bet on Expert.",
         }
     }
 
@@ -119,6 +125,7 @@ impl Game {
             Game::Keno => 500,
             Game::Reels => 100,
             Game::Dragon => 100,
+            Game::Plinko => 100,
         }
     }
 }
@@ -136,6 +143,7 @@ pub fn limits(game: Game) -> (u64, u64) {
         Game::Keno => (1, 1_000),
         Game::Reels => (reels::MIN_BET, reels::MAX_BET),
         Game::Dragon => (dragon::MIN_BET, dragon::MAX_BET),
+        Game::Plinko => (plinko::MIN_BET, plinko::MAX_BET),
     }
 }
 
@@ -208,6 +216,8 @@ pub enum Bet {
     SlotsPlus { line_bet: u64, feature: feature::Feature },
     /// A round of Ember Dragon with a Play Feature (0.13.0).
     DragonPlus { bet: u64, growth: u32, feature: feature::Feature },
+    /// A ball dropped at Plinko (0.13.5): `rows` from 8 to 16.
+    Plinko { chips: u64, risk: plinko::Risk, rows: u8 },
 }
 
 impl Bet {
@@ -224,12 +234,13 @@ impl Bet {
             Bet::Row { .. } => Game::Reels,
             Bet::SlotsPlus { .. } => Game::Slots,
             Bet::DragonPlus { .. } => Game::Dragon,
+            Bet::Plinko { .. } => Game::Plinko,
         }
     }
 
     /// Whether it's a bet from 0.13.0 on (an older server doesn't know it).
     pub fn is_013(&self) -> bool {
-        matches!(self, Bet::Row { .. } | Bet::SlotsPlus { .. } | Bet::DragonPlus { .. })
+        matches!(self, Bet::Row { .. } | Bet::SlotsPlus { .. } | Bet::DragonPlus { .. } | Bet::Plinko { .. })
     }
 
     /// All the chips it puts down.
@@ -244,6 +255,7 @@ impl Bet {
             Bet::Row { bet, feature, .. } => feature::cost(*bet, reelrow::price(*feature)),
             Bet::SlotsPlus { line_bet, feature } => feature::cost(line_bet.saturating_mul(slots::LINES as u64), slots::price(*feature)),
             Bet::DragonPlus { bet, feature, .. } => feature::cost(*bet, dragon::price(*feature).unwrap_or(100)),
+            Bet::Plinko { chips, .. } => *chips,
         }
     }
 
@@ -301,6 +313,16 @@ impl Bet {
                 }
                 dragon::check(*bet, *growth)
             }
+            // (0.13.28's words.)
+            Bet::Plinko { chips, rows, .. } => {
+                if !(plinko::MIN_ROWS..=plinko::MAX_ROWS).contains(rows) {
+                    return Err("Plinko has 8 to 16 rows".into());
+                }
+                if *chips == 0 {
+                    return Err("a bet of nothing".into());
+                }
+                fits(*chips, "bet")
+            }
         }
     }
 }
@@ -320,6 +342,8 @@ pub enum Outcome {
     Dragon(dragon::Outcome),
     /// Reel Row from 0.13.0.
     Row(reelrow::Outcome),
+    /// Plinko (0.13.5).
+    Plinko(plinko::Outcome),
 }
 
 impl Outcome {
@@ -344,6 +368,7 @@ impl Outcome {
             Outcome::Keno(_) => Game::Keno,
             Outcome::Reels(_) => Game::Reels,
             Outcome::Dragon(_) => Game::Dragon,
+            Outcome::Plinko(_) => Game::Plinko,
             Outcome::Row(_) => Game::Reels,
         }
     }
@@ -360,6 +385,7 @@ impl Outcome {
             Outcome::Keno(o) => o.chips,
             Outcome::Reels(o) => o.wagered(),
             Outcome::Dragon(o) => o.wagered(),
+            Outcome::Plinko(o) => o.chips,
             Outcome::Row(o) => o.wagered(),
         }
     }
@@ -376,6 +402,7 @@ impl Outcome {
             Outcome::Keno(o) => o.paid,
             Outcome::Reels(o) => o.paid,
             Outcome::Dragon(o) => o.paid,
+            Outcome::Plinko(o) => o.paid,
             Outcome::Row(o) => o.paid,
         }
     }
@@ -431,6 +458,7 @@ impl Outcome {
                     (None, None) => format!("a spin with a{} {} dragon", if dragon::age(o.growth) == 2 || dragon::age(o.growth) == 4 { "n" } else { "" }, dragon::AGES[dragon::age(o.growth)].1),
                 }
             }
+            Outcome::Plinko(o) => format!("a ball through {} rows", o.rows),
         }
     }
 }
@@ -471,6 +499,7 @@ pub fn play(bet: &Bet, s: &mut Stream, jackpot: u64) -> Result<Outcome, String> 
         Bet::DragonPlus { .. } => return Err("Ember Dragon is played with its jackpots' pools (dragon::play_feature)".into()),
         Bet::Blackjack { .. } => return Err("blackjack is dealt a step at a time".into()),
         Bet::Dragon { .. } => return Err("Ember Dragon is played with its jackpots' pools (dragon::play)".into()),
+        Bet::Plinko { chips, risk, rows } => Outcome::Plinko(plinko::play(*chips, *risk, *rows, s)),
     })
 }
 
@@ -528,6 +557,7 @@ pub fn verify(commit_shown: &[u8; 32], server_seed: &[u8; 32], client_seed: &[u8
         Outcome::Keno(o) => keno::play(o.chips, &o.picks, &mut s) == *o,
         Outcome::Reels(o) => reels::check(o.machine, o.bet).is_ok() && reels::play(o.machine, o.bet, o.bought, &mut s) == *o,
         Outcome::Dragon(o) => dragon::check(o.bet, o.growth).is_ok() && dragon::play_feature(o.bet, o.growth, o.pools, o.feature, &mut s) == *o,
+        Outcome::Plinko(o) => (plinko::MIN_ROWS..=plinko::MAX_ROWS).contains(&o.rows) && plinko::play(o.chips, o.risk, o.rows, &mut s) == *o,
         Outcome::Row(o) => reelrow::check(o.machine, o.bet).is_ok() && reelrow::play_with(o.machine, o.bet, o.feature, &mut s, o.pool) == *o,
         Outcome::Blackjack(o) => blackjack::replay(o.base, s, &o.actions).is_ok_and(|again| again == *o),
         Outcome::Craps(o) => {

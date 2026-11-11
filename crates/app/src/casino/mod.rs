@@ -29,6 +29,7 @@ pub mod humor;
 pub mod info;
 pub mod keno;
 pub mod levels;
+pub mod plinko;
 pub mod pics;
 pub mod reel_themes;
 pub mod reels;
@@ -144,6 +145,8 @@ pub struct CasinoUi {
     pub craps: craps::CrapsUi,
     pub dice: dice::DiceUi,
     pub keno: keno::KenoUi,
+    /// Plinko (0.13.5).
+    pub plinko: plinko::PlinkoUi,
     /// Reel Row's machines (the one open, and its reels); from 0.13.0, with their mini games and
     /// Play Feature.
     pub reels: reels::ReelsUi,
@@ -194,6 +197,7 @@ impl Default for CasinoUi {
             craps: Default::default(),
             dice: Default::default(),
             keno: Default::default(),
+            plinko: Default::default(),
             reels: Default::default(),
             row: Default::default(),
             dragon: Default::default(),
@@ -554,6 +558,7 @@ impl PyrApp {
             Game::Reels if s.has(pyr_proto::control::CASINO_013_FEATURE) => self.row_page(&mut child, s, area),
             Game::Reels => self.reels_page(&mut child, s, area),
             Game::Dragon => self.dragon_page(&mut child, s, area),
+            Game::Plinko => self.plinko_page(&mut child, s, area),
         }
         self.bonfire_keep(s);
         self.casino_top_bar(ui, s, game, bar);
@@ -584,6 +589,7 @@ impl PyrApp {
             Game::Reels if matches!(r.outcome, pyr_poker::casino::Outcome::Row(_)) => self.row_round(r),
             Game::Reels => self.reels_round(r),
             Game::Dragon => self.dragon_round(r),
+            Game::Plinko => self.plinko_round(r),
         }
     }
 

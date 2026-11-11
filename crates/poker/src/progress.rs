@@ -358,6 +358,10 @@ pub const ACHIEVEMENTS: &[Achievement] = &[
     Achievement { id: "hot_shooter", name: "Hot Shooter", about: "Make four points in a row at craps.", xp: 400 },
     Achievement { id: "long_shot", name: "Long Shot", about: "Win a dice roll at a 5% chance or less.", xp: 300 },
     Achievement { id: "seer", name: "Seer", about: "Catch 7 or more numbers in one keno draw.", xp: 800 },
+    // (0.13.5 to 0.13.12: Plinko, and Dominó's; 0.13.28's words.)
+    Achievement { id: "edge_of_the_board", name: "Edge of the Board", about: "Land a Plinko ball in an edge bucket.", xp: 600 },
+    Achievement { id: "capicua", name: "¡Capicúa!", about: "Win a Dominó hand with a tile that fits both ends.", xp: 500 },
+    Achievement { id: "all_the_way", name: "All the Way", about: "Win a Dominó hand doubled to 8 times the ante.", xp: 800 },
     Achievement { id: "clean_sweep", name: "Clean Sweep", about: "Find every safe tile in a Reel Row pick-and-dodge.", xp: 400 },
     Achievement { id: "upgrade", name: "Upgraded", about: "Spin the Upgrade on a Reel Row prize wheel.", xp: 300 },
     Achievement { id: "elder", name: "Dragon Tamer", about: "Raise an Ember Dragon to an Elder.", xp: 300 },
@@ -365,6 +369,11 @@ pub const ACHIEVEMENTS: &[Achievement] = &[
     Achievement { id: "dragon_jackpot", name: "Dragon's Gold", about: "Win a jackpot on Ember Dragon.", xp: 400 },
     Achievement { id: "big_win", name: "Big Win", about: "Win 50 times your bet or more in one round.", xp: 300 },
     Achievement { id: "whale", name: "Whale", about: "Bet 25,000 or more on one round.", xp: 200 },
+    // (Reel Row Remastered's, 0.13.2.)
+    Achievement { id: "chain_reaction", name: "Chain Reaction", about: "Tumble ten times in one spin.", xp: 300 },
+    Achievement { id: "kaboom", name: "Kaboom", about: "Bombs adding up to ×100 or more on a win.", xp: 500 },
+    Achievement { id: "grand", name: "Grand", about: "Fill every place in Hold & Win for the Grand.", xp: 2000 },
+    Achievement { id: "wild_ride", name: "Wild Ride", about: "Ten respins of wilds in one spin.", xp: 400 },
 ];
 
 pub fn achievement(id: &str) -> Option<&'static Achievement> {
@@ -573,6 +582,7 @@ pub fn play_of(o: &crate::casino::Outcome) -> Play {
         Outcome::Craps(_) => Play::Craps,
         Outcome::Dice(_) => Play::Dice,
         Outcome::Keno(_) => Play::Keno,
+        Outcome::Plinko(_) => Play::Plinko,
     }
 }
 
@@ -662,6 +672,11 @@ pub fn apply_casino(rec: &mut Record, o: &crate::casino::Outcome, today: u64) ->
         Outcome::Keno(k) => {
             if k.hits.len() >= 7 {
                 earn("seer", rec, &mut g);
+            }
+        }
+        Outcome::Plinko(p) => {
+            if p.bucket == 0 || p.bucket == p.rows {
+                earn("edge_of_the_board", rec, &mut g);
             }
         }
         Outcome::Reels(r) => match &r.bonus {
@@ -966,6 +981,23 @@ mod tests {
         rec.xp = 419_559;
         let g = apply_casino(&mut rec, &roll(1, false), day);
         assert_eq!((g.star, g.chips, rec.stars_paid), (Some(6), 25_000, 6));
+    }
+
+    /// Plinko counts like every other round, and a ball in an edge bucket is Edge of the Board.
+    #[test]
+    fn a_plinko_ball_counts_and_the_edge_is_an_achievement() {
+        use crate::casino::{Outcome, plinko};
+        let ball = |bucket: u8| {
+            let m = plinko::table(plinko::Risk::Low, 8)[bucket as usize];
+            Outcome::Plinko(plinko::Outcome { chips: 100, risk: plinko::Risk::Low, rows: 8, path: (0..8).map(|i| i < bucket).collect(), bucket, multiplier_x100: m, paid: m })
+        };
+        let mut rec = Record::new();
+        let g = apply_casino(&mut rec, &ball(4), 20_768);
+        assert!(!g.new_achievements.contains(&"edge_of_the_board"));
+        assert_eq!((rec.xp_tenths + rec.xp * 10) as i64, 500 + 12, "Bright Lights, and a ball at 100 (1.2 XP)");
+        let g = apply_casino(&mut rec, &ball(8), 20_768);
+        assert!(g.new_achievements.contains(&"edge_of_the_board"));
+        assert_eq!(rec.casino.get("plinko").map(|c| c.rounds), Some(2));
     }
 
     /// The weekly VIP bonus: 20% of last week's Ember Back once the week turns, from Ember tier
