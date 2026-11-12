@@ -349,7 +349,10 @@ impl PyrApp {
             }
             // (Auto play: the next ball after this one, unless a big win stops it when ticked.)
             let big = m >= 1000;
-            self.poker.casino.celebrate(paid, chips, false, 0.0);
+            // A big win's shown once the bucket's lit and the win's floated up: 1.25 s after the
+            // ball lands, as 0.13.28's (filmed: 1.15 and 1.35 s, at 11 times); balls keep
+            // dropping under it.
+            self.poker.casino.celebrate(paid, chips, false, 1.25);
             if self.poker.casino.plinko.auto.on() && !self.poker.casino.plinko.auto.spun(big) {
                 self.poker.casino.plinko.next_at = None;
             }

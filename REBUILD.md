@@ -342,7 +342,15 @@ How (decided while starting it):
       win's hits were turned away under its ticks); in a call a tick waits while the call's
       mixer has four sounds going (the mixer itself unchanged). Unverified: the ticks' loudness
       at a real PC's frame rate (this machine draws the debug build at about twelve frames a
-      second, and a late frame plays its latest tick only).
+      second, and a late frame plays its latest tick only). Plinko's comes 1.25 s after the
+      ball lands, once its bucket's lit (0.13.28's, filmed in autoplay: 1.15 and 1.35 s at 11
+      times; the balls keep dropping under it); the rebuild showed it as the ball landed
+      (not filmed on the rebuild yet).
+- [x] Pyr Sevens' Turbo as 0.13.28's: the reels land at once on their stops (they waited for
+      each stop to come round on the strip, up to a second a reel, so a Turbo round of free
+      spins took three times as long). The same round (same seed and number) on both apps:
+      its big win 17.1 s after the click on 0.13.28, 17.4 on the rebuild (56 before), each spin
+      in step; without Turbo they were in step already (68.7 and 68.5 s).
 - [x] Bets to 100,000 on blackjack, baccarat, keno, slots (0.13.2/4/6); Pyr Sevens' Phoenix
       Jackpot in proportion (0.13.6); new players 100,000 (0.13.6). Every limit asked of
       0.13.28's server and answered the same, word for word, by the rebuilt one: blackjack,

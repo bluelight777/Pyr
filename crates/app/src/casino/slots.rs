@@ -116,7 +116,9 @@ impl SlotsUi {
     fn land(&mut self, stops: [u8; REELS], from: Instant) -> [Instant; REELS] {
         let lens: Vec<usize> = STRIPS.iter().map(|s| s.len()).collect();
         let stops: Vec<usize> = stops.iter().map(|s| *s as usize).collect();
-        let ends = super::spin::land(&mut self.reels, &lens, &stops, from, self.turbo);
+        // (Turbo: at once, as 0.13.28's, which lands a Turbo round's free spins in 1.2 to 1.7
+        // seconds each, filmed.)
+        let ends = if self.turbo { super::spin::land_now(&mut self.reels, &lens, &stops, from) } else { super::spin::land(&mut self.reels, &lens, &stops, from, false) };
         std::array::from_fn(|i| ends[i])
     }
 }

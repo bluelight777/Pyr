@@ -77,6 +77,26 @@ pub fn land(reels: &mut [Reel], lens: &[usize], stops: &[usize], from: Instant, 
     ends
 }
 
+/// Lands each reel on its stop at once, one after another from `from` (Turbo, 0.13.2's "the
+/// reels land almost at once"): a reel doesn't wait for its stop to come round on the strip; it's
+/// put the right few symbols above it as it starts slowing (under the blur, so it isn't seen).
+/// When each comes to rest. (Pyr Sevens' strips are 30 symbols and more: waiting for each stop
+/// took up to a second a reel, and a Turbo round of free spins three times 0.13.28's.)
+pub fn land_now(reels: &mut [Reel], lens: &[usize], stops: &[usize], from: Instant) -> Vec<Instant> {
+    let (gap, dur, lead) = (0.08, land_secs(true), 4.0);
+    let mut ends = Vec::with_capacity(reels.len());
+    for (i, r) in reels.iter_mut().enumerate() {
+        let len = lens[i].max(1) as f32;
+        let start = from + Duration::from_secs_f32(i as f32 * gap);
+        // (The place `lead` above the stop nearest where the strip's got to.)
+        let target = stops[i] as f32 + lead;
+        let p_start = target + ((r.pos(start) - target) / len).round() * len;
+        r.land = Some((start, p_start, p_start - lead, dur));
+        ends.push(start + Duration::from_secs_f32(dur * 0.55));
+    }
+    ends
+}
+
 /// Lands each reel as soon as it can, one after another from `from` (Turbo's pace), wherever its
 /// strip has got to: when each comes to rest, and where on its strip (the caller puts the screen
 /// there). Bomb Spins' free spins land this way, quickly, as 0.13.28's do.
@@ -100,4 +120,25 @@ pub fn land_soon(reels: &mut [Reel], lens: &[usize], from: Instant) -> (Vec<Inst
 /// How long landing takes once it starts (for when the last reel is still).
 pub fn land_secs(turbo: bool) -> f32 {
     if turbo { 0.32 } else { 0.5 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Turbo lands on the stops at once, wherever the strips have got to.
+    #[test]
+    fn turbo_lands_at_once_on_the_stops() {
+        let t0 = Instant::now();
+        let mut reels: Vec<Reel> = (0..5).map(|i| Reel { pos0: i as f32 * 7.3, t0, speed: SPEED, land: None }).collect();
+        let lens = [30, 32, 32, 32, 30];
+        let stops = [3, 31, 0, 17, 29];
+        let from = t0 + Duration::from_millis(250);
+        let ends = land_now(&mut reels, &lens, &stops, from);
+        let done = from + Duration::from_secs(2);
+        for i in 0..5 {
+            assert!(ends[i] <= from + Duration::from_secs_f32(0.5), "reel {i}");
+            assert_eq!((reels[i].pos(done).round() as i64).rem_euclid(lens[i] as i64) as usize, stops[i], "reel {i}");
+        }
+    }
 }
