@@ -825,7 +825,7 @@ fn apply_event(t: &mut TableLive, hand: u64, e: &Event) {
         }
         Event::Turn { seat, legal } => {
             v.to_act = Some(*seat);
-            // (Nothing to choose once a Flash Pot's gone off: everyone's all in.)
+            // (Nothing to choose once a Bomb Pot's gone off: everyone's all in.)
             v.legal = (v.my_seat == Some(*seat) && !v.bomb).then_some(*legal);
         }
         Event::Shown { seat, cards, .. } => {

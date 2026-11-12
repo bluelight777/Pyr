@@ -198,12 +198,12 @@ impl PyrApp {
                     ui.label(RichText::new(format!("{} · {} · starting stack {} · set up by {}", game_name(&v.rules), fee, chips_text(v.rules.stack), v.host)).color(theme::MUTED()));
                 });
             });
-            // A Flash Pot that's over: another, at the same buy-in.
+            // A Bomb Pot that's over: another, at the same buy-in.
             if v.bomb.is_some() && matches!(v.phase, TourneyPhase::Finished | TourneyPhase::Cancelled) {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.add_space(28.0);
-                    let label = format!("Play another Flash Pot · {}", chips_text(v.rules.buy_in));
+                    let label = format!("Play another Bomb Pot · {}", chips_text(v.rules.buy_in));
                     if ui.add(theme::primary_button(&label)).clicked() {
                         self.engine.poker(&s.key, ToServer::TimeBomb { buy_in: v.rules.buy_in });
                         self.engine.poker(&s.key, ToServer::TourneyUnwatch { id });
@@ -338,8 +338,8 @@ impl PyrApp {
         }
         let note = match v.bomb {
             Some(b) => match b.multiplier {
-                Some(m) => format!("A Flash Pot: the wheel picked {m}× the buy-in, and the winner takes it all."),
-                None => "A Flash Pot: the wheel picks the prize (2 to 1,000 times the buy-in) when the table's full, and the winner takes it all.".to_string(),
+                Some(m) => format!("A Bomb Pot: the wheel picked {m}× the buy-in, and the winner takes it all."),
+                None => "A Bomb Pot: the wheel picks the prize (2 to 1,000 times the buy-in) when the table's full, and the winner takes it all.".to_string(),
             },
             None => "The prize pool is the buy-ins; it grows as people register.".to_string(),
         };

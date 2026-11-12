@@ -194,7 +194,7 @@ fn the_history_shows_only_what_each_person_saw() {
     assert_eq!(dealt(&for_alice), vec![0]);
 }
 
-/// A Flash Pot's bomb going off in the middle of a hand: that hand plays out as it was (people
+/// A Bomb Pot's bomb going off in the middle of a hand: that hand plays out as it was (people
 /// still choose), and from the very next hand everyone's all in: nobody can choose, every move
 /// is an all-in (or a call of one), each push a moment after the last.
 #[test]

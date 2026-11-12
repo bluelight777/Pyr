@@ -127,12 +127,13 @@ fn columns(s: &ServerView) -> [(Chapter, Vec<Entry>); 4] {
 
 impl PyrApp {
     /// Where a chapter of the lobby starts: if the Games menu asked to go there, the page goes
-    /// so it's at the top, 18 under the bar (as 0.13.28's does).
+    /// so it's at the top, 18 under the bar (as 0.13.28's does: its heading's band at 76 in a
+    /// window 800 tall; egui keeps what it scrolls to 6 under the page's top, so 12 over it).
     pub fn floor_anchor(&mut self, ui: &mut egui::Ui, c: Chapter) {
         if self.poker.casino.jump == Some(Jump::Chapter(c)) {
             self.poker.casino.jump = None;
             let at = ui.cursor().min;
-            ui.scroll_to_rect(Rect::from_min_size(pos2(at.x, at.y - 18.0), vec2(1.0, 1.0)), Some(egui::Align::TOP));
+            ui.scroll_to_rect(Rect::from_min_size(pos2(at.x, at.y - 12.0), vec2(1.0, 1.0)), Some(egui::Align::TOP));
         }
     }
 

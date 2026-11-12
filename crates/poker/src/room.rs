@@ -29,8 +29,8 @@ pub const MISSES_TO_SIT_OUT: u32 = 2;
 pub const AWAY_MS: u64 = 1_200;
 /// Hands kept for the history.
 pub const HISTORY: usize = 30;
-/// A Flash Pot gone off: each push, a moment apart.
-/// After a Flash Pot's gone off, each push all in comes this long after the last (and up to
+/// A Bomb Pot gone off: each push, a moment apart.
+/// After a Bomb Pot's gone off, each push all in comes this long after the last (and up to
 /// `BOMB_PUSH_SPREAD_MS` more, a little different each time, as people push their chips in).
 /// An all-in's board comes a street at a time (apps show it so, and the next hand waits for
 /// it): the hands turn over, the first street comes, then each next, then the pot's pushed.
@@ -95,7 +95,7 @@ pub enum Effect {
     /// A cash hand, for MMR: everyone dealt in (their rating id, name and a bot's level) and
     /// what they won or lost, in big blinds.
     RateHand { players: Vec<(String, String, Option<Level>, f64)> },
-    /// A tournament (or Flash Pot) over, for MMR: everyone in it and where they finished.
+    /// A tournament (or Bomb Pot) over, for MMR: everyone in it and where they finished.
     RatePlaces { players: Vec<(String, String, Option<Level>, usize)> },
     /// A round at a blackjack table played out for a person (their bets, their hands and what
     /// came back, for their records; the chips themselves come as a `Credit`).
@@ -254,7 +254,7 @@ pub struct Room {
     pub tourney: Option<u64>,
     /// No new hand until let go (a tournament moving players).
     pub hold: bool,
-    /// A Flash Pot gone off: everyone is all in, every hand (a moment for each to see it); and
+    /// A Bomb Pot gone off: everyone is all in, every hand (a moment for each to see it); and
     /// gone off in the middle of a hand, from the very next one.
     pub bomb: bool,
     bomb_next: bool,
@@ -424,7 +424,8 @@ impl Room {
     }
 
     pub fn max_buy_in(&self) -> u64 {
-        self.buy_in.max_bb * self.table.rules.big_blind
+        // (A tournament's table takes any stack: its most is a quarter of u64's.)
+        self.buy_in.max_bb.saturating_mul(self.table.rules.big_blind)
     }
 
     pub fn uid_at(&self, seat: usize) -> Option<&str> {
@@ -536,7 +537,7 @@ impl Room {
             board: hs.map(|h| h.board.clone()).unwrap_or_default(),
             pot: hs.map(|h| h.pot()).unwrap_or(0),
             to_act: hs.and_then(|h| h.to_act),
-            // (A Flash Pot gone off leaves nothing to choose.)
+            // (A Bomb Pot gone off leaves nothing to choose.)
             legal: my_seat.filter(|_| !self.bomb).and_then(|s| self.table.legal(s)),
             my_seat,
             recent: self.history.iter().map(|(h, _)| h.number).collect(),
@@ -780,7 +781,7 @@ impl Room {
             return Err("that hand is over".into());
         }
         if self.bomb {
-            return Err("the Flash Pot's gone off: everyone's all in, every hand".into());
+            return Err("the Bomb Pot's gone off: everyone's all in, every hand".into());
         }
         let mut out = Output::default();
         if let Some(m) = self.meta.get_mut(&seat) {
@@ -1048,7 +1049,7 @@ impl Room {
             if let Some(s) = self.table.seats[seat].as_mut() {
                 if bot && s.stack == 0 {
                     // A bot that's out of chips buys in again.
-                    s.stack = self.buy_in.max_bb * self.table.rules.big_blind;
+                    s.stack = self.buy_in.max_bb.saturating_mul(self.table.rules.big_blind);
                 }
                 if misses >= MISSES_TO_SIT_OUT {
                     s.sitting_out = true;
@@ -1383,7 +1384,7 @@ impl Room {
         }
     }
 
-    /// The bomb's gone off (a Flash Pot): from the very next hand everyone's all in, every hand
+    /// The bomb's gone off (a Bomb Pot): from the very next hand everyone's all in, every hand
     /// till one is left. A hand being played when it goes off plays out as it was.
     pub fn bomb_goes_off(&mut self, out: &mut Output) {
         if self.bomb || self.bomb_next {

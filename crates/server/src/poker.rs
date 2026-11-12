@@ -75,7 +75,7 @@ const GM_FLOOR: u64 = 25_000;
 const AMBASSADOR_FLOOR: u64 = 5_000;
 /// A finished tournament's results are kept this long.
 pub const TOURNEY_KEEP_MS: u64 = 2 * 60 * 60 * 1000;
-/// Flash Pots: how many at once (they don't count toward `MAX_TOURNEYS`), and how long a
+/// Bomb Pots: how many at once (they don't count toward `MAX_TOURNEYS`), and how long a
 /// finished one stays to be seen.
 pub const MAX_BOMBS: usize = 40;
 pub const BOMB_KEEP_MS: u64 = 10 * 60 * 1000;
@@ -1041,7 +1041,7 @@ impl Poker {
                 if !can_manage {
                     return Err("tournaments here are set up by people who can manage the server".into());
                 }
-                // (Flash Pots are only started by `TimeBomb`, by the house.)
+                // (Bomb Pots are only started by `TimeBomb`, by the house.)
                 rules.bomb = None;
                 if st.tourneys.values().filter(|t| t.rules.bomb.is_none()).count() >= MAX_TOURNEYS {
                     return Err(format!("this server keeps {MAX_TOURNEYS} tournaments at most"));
@@ -1093,14 +1093,16 @@ impl Poker {
             ToServer::TimeBomb { buy_in } => {
                 let wall = self.wall();
                 if !tourney::BOMB_BUY_INS.contains(&buy_in) {
-                    return Err("Flash Pots are 100, 1,000 or 10,000 chips to play".into());
+                    // (0.13.28 says "100, 1,000 or 10,000" here, though it takes 50,000 and
+                    // 100,000 too: all five, as they are.)
+                    return Err("Bomb Pots are 100, 1,000, 10,000, 50,000 or 100,000 chips to play".into());
                 }
                 let (mut rec, _) = hub.db.poker_record(uid);
                 if rec.chips < buy_in {
-                    return Err(format!("this Flash Pot is {buy_in} chips to play and you have {}", rec.chips));
+                    return Err(format!("this Bomb Pot is {buy_in} chips to play and you have {}", rec.chips));
                 }
                 if st.tourneys.values().any(|t| t.rules.bomb.is_some() && t.phase == TourneyPhase::Registering && t.is_entrant(uid)) {
-                    return Err("you're waiting for a Flash Pot already".into());
+                    return Err("you're waiting for a Bomb Pot already".into());
                 }
                 // A seat in one that's filling up at this buy-in, or a new one.
                 let open = st.tourneys.iter().find(|(_, t)| t.rules.bomb.is_some() && t.rules.buy_in == buy_in && t.can_register() && !t.is_entrant(uid)).map(|(id, _)| *id);
@@ -1108,7 +1110,7 @@ impl Poker {
                     Some(id) => id,
                     None => {
                         if st.tourneys.values().filter(|t| t.rules.bomb.is_some() && t.ended.is_none()).count() >= MAX_BOMBS {
-                            return Err("every Flash Pot table is busy: try again in a minute".into());
+                            return Err("every Bomb Pot table is busy: try again in a minute".into());
                         }
                         let id = self.next_tourney.fetch_add(1, Ordering::Relaxed);
                         let t = Tourney::new(id, tourney::bomb_rules(buy_in, wall), tourney::BOMB_HOST, "Pyr Casino")?;
@@ -1134,7 +1136,7 @@ impl Poker {
                     return Err("Pyr Friday Night happens every week; it can't be called off".into());
                 }
                 if t.host == tourney::BOMB_HOST {
-                    return Err("a Flash Pot starts by itself (leave it with Unregister before it does)".into());
+                    return Err("a Bomb Pot starts by itself (leave it with Unregister before it does)".into());
                 }
                 if t.host != uid && !can_manage {
                     return Err("only whoever set it up can call it off".into());

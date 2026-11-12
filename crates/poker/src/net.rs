@@ -142,7 +142,7 @@ pub enum ToServer {
     TourneyUnwatch { id: TourneyId },
     /// Call one off before it starts (whoever made it, or Manage server): buy-ins go back.
     TourneyCancel { id: TourneyId },
-    /// Play a Flash Pot for this buy-in: a seat in one that's filling up, or a new one.
+    /// Play a Bomb Pot for this buy-in: a seat in one that's filling up, or a new one.
     TimeBomb { buy_in: u64 },
     /// Poker's MMR ladder: everyone rated here, people and bots (0.12.0 servers).
     Ratings,
@@ -411,20 +411,20 @@ pub struct TourneyRules {
     /// Prize money the house puts in on top of the buy-ins (Pyr Friday Night: the week's rake).
     #[serde(default)]
     pub added: u64,
-    /// A Flash Pot: a fast sit-and-go for a prize the wheel picks, where after the fuse burns
+    /// A Bomb Pot: a fast sit-and-go for a prize the wheel picks, where after the fuse burns
     /// down every hand is all in.
     #[serde(default)]
     pub bomb: Option<Bomb>,
 }
 
-/// A Flash Pot's fuse.
+/// A Bomb Pot's fuse.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Bomb {
     /// From the first hand until it goes off.
     pub fuse_ms: u64,
 }
 
-/// A Flash Pot as it stands.
+/// A Bomb Pot as it stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BombView {
     pub fuse_ms: u64,
@@ -462,7 +462,7 @@ pub struct TourneySummary {
     pub registered: bool,
     /// Who made it.
     pub host: String,
-    /// A Flash Pot's prize multiplier, once the wheel has spun.
+    /// A Bomb Pot's prize multiplier, once the wheel has spun.
     #[serde(default)]
     pub multiplier: Option<u32>,
 }
@@ -498,7 +498,7 @@ pub struct TourneyView {
     /// The table I'm at, when I'm still in it.
     pub my_table: Option<TableId>,
     pub tables: Vec<TableId>,
-    /// A Flash Pot's wheel and fuse.
+    /// A Bomb Pot's wheel and fuse.
     #[serde(default)]
     pub bomb: Option<BombView>,
 }
@@ -748,7 +748,7 @@ pub struct TableView {
     /// A prize box on the table, for whoever wins the next hand.
     #[serde(default)]
     pub prize: Option<PrizeView>,
-    /// A Flash Pot gone off: everyone's all in, every hand (nobody chooses anything).
+    /// A Bomb Pot gone off: everyone's all in, every hand (nobody chooses anything).
     #[serde(default)]
     pub bomb: bool,
 }

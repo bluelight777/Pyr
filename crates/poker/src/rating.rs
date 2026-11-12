@@ -4,7 +4,7 @@
 //! It moves the way chess ratings do (Elo), result against expectation: beating someone rated
 //! higher moves it more than beating someone rated lower, and losing to them costs less.
 //!
-//! - Tournaments and Flash Pots: by finishing place, every pair of entrants a game between
+//! - Tournaments and Bomb Pots: by finishing place, every pair of entrants a game between
 //!   them (the better placed won it).
 //! - Cash hands: chips won against chips lost, each winner against each loser, weighted by the
 //!   big blinds between them (a pot fought over moves ratings; a walk barely does).
@@ -23,7 +23,7 @@ pub const START: f64 = 1_000.0;
 pub struct Rating {
     pub mmr: f64,
     pub peak: f64,
-    /// Tournaments (and Flash Pots) finished, and cash hands played, rated.
+    /// Tournaments (and Bomb Pots) finished, and cash hands played, rated.
     pub tourneys: u32,
     pub hands: u32,
 }

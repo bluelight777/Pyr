@@ -1,5 +1,5 @@
-//! Flash Pots at the app: the card in the tournaments (play one for 100, 1,000 or 10,000 chips),
-//! the prize wheel spinning at the table, the fuse burning down, and the bang.
+//! Bomb Pots (Flash Pots until 0.13.4) at the app: the card in the sit & gos (play one for 100 to
+//! 100,000 chips), the prize wheel spinning at the table, the fuse burning down, and the bang.
 //!
 //! The server keeps the time (Unix ms): when the wheel was spun and when the bomb goes off. The
 //! app draws from those, so everyone at the table sees the same wheel and the same fuse.
@@ -11,11 +11,11 @@ use eframe::egui::{self, Align2, Color32, Pos2, Rect, Sense, Shape, Stroke, Stro
 use pyr_engine::poker_sfx::Cue;
 use pyr_engine::state::ServerView;
 use pyr_poker::net::{ToServer, TourneyId, TourneyPhase, TourneyView};
-use pyr_poker::tourney::{BOMB_BUY_INS, BOMB_FUSE_MS, BOMB_SEATS, BOMB_WAIT_MS, WHEEL_MS};
+use pyr_poker::tourney::{BOMB_BUY_INS, BOMB_FUSE_MS, BOMB_SEATS, BOMB_WAIT_MS, SMALL_BOMB_BUY_INS, WHEEL_MS};
 
 use super::cards::chips_text;
 use crate::app::PyrApp;
-use crate::casino::{col, ease_out, glow_text, radial, vgrad_round};
+use crate::casino::{col, ease_out, glow_text, hgrad, mix, pics, radial, round_fill_with};
 use crate::theme;
 
 const TAU: f32 = std::f32::consts::TAU;
@@ -26,6 +26,13 @@ const WHEEL: [u32; 16] = [3, 5, 3, 8, 3, 15, 3, 5, 3, 40, 3, 8, 3, 150, 5, 1000]
 /// it comes in for this long first.
 const SPIN_S: f32 = 3.2;
 const INTRO_S: f32 = 0.55;
+/// The Bomb Pot card's colors (0.13.28's): the card, the glow at its left, its edge, the line
+/// over its name, and the words on a gold button.
+const CARD_BASE: Color32 = Color32::from_rgb(0x10, 0x05, 0x07);
+const CARD_GLOW: Color32 = Color32::from_rgb(0x34, 0x12, 0x08);
+const CARD_EDGE: Color32 = Color32::from_rgb(0xb8, 0x4a, 0x24);
+const KICKER: Color32 = Color32::from_rgb(0xff, 0xa8, 0x6a);
+const ON_GOLD: Color32 = Color32::from_rgb(0x2a, 0x10, 0x04);
 /// The bang, then the warning stays.
 const BOOM_S: f32 = 2.6;
 /// The winner's moment, after the last hand.
@@ -33,7 +40,7 @@ const FINALE_S: f32 = 10.0;
 /// A moment before it, to see the last hand's board and who took it.
 const FINALE_BEAT_S: f32 = 2.4;
 
-/// What's been played for each Flash Pot: the wheel (its start, the peg under the pointer and
+/// What's been played for each Bomb Pot: the wheel (its start, the peg under the pointer and
 /// when a click was last heard, the landing), the fuse's hiss, the last second ticked, the bang
 /// (and when it was first seen), and the winner's moment (seen it being played; when it began;
 /// dismissed).
@@ -269,11 +276,12 @@ fn under_pointer(angle: f32) -> (usize, f32) {
 }
 
 impl PyrApp {
-    /// The Flash Pot card at the top of the tournaments: what it is, a Play button for each
-    /// buy-in, and the one I'm waiting in.
+    /// The Bomb Pot card in the sit & gos (0.13.4; 50,000 and 100,000 where the server has
+    /// them, 0.13.6; the seats' pictures, 0.13.7), as 0.13.28 draws it, measured off its screen
+    /// at 1100, 1280 and 1600 wide: what it is, a Play button for each buy-in, the one I'm
+    /// waiting in (Leave, its five seats, the bots' countdown), or the one I'm playing.
     pub fn time_bomb_card(&mut self, ui: &mut egui::Ui, s: &ServerView) {
         let me = s.me.as_ref().map(|m| m.user_id.clone()).unwrap_or_default();
-        let t = ui.ctx().input(|i| i.time) as f32;
         // Mine: waiting or playing (the views the server sends me as I'm in it).
         let mine: Option<TourneyView> = s
             .poker
@@ -282,98 +290,117 @@ impl PyrApp {
             .filter(|v| v.bomb.is_some() && v.entrants.iter().any(|e| e.uid == me && e.place.is_none()) && matches!(v.phase, TourneyPhase::Registering | TourneyPhase::Running))
             .max_by_key(|v| v.id)
             .cloned();
+        let buy_ins = if s.has(pyr_proto::control::BIG_BOMB_POTS_FEATURE) { &BOMB_BUY_INS[..] } else { &BOMB_BUY_INS[..SMALL_BOMB_BUY_INS] };
         let playing_now = s.poker.tourneys.as_ref().map(|l| l.iter().filter(|x| x.rules.bomb.is_some() && x.phase == TourneyPhase::Running).count()).unwrap_or(0);
+        let ctx = ui.ctx().clone();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             ui.add_space(28.0);
             let w = (ui.available_width() - 28.0).max(320.0);
-            let (r, _) = ui.allocate_exact_size(vec2(w, 150.0), Sense::hover());
-            let p = ui.painter().clone();
-            vgrad_round(&p, r, 16.0, Color32::from_rgb(0x2a, 0x10, 0x14), Color32::from_rgb(0x12, 0x08, 0x0c));
-            radial(&p, r.left_center() + vec2(90.0, 0.0), 160.0, Color32::from_rgba_unmultiplied(0xff, 0x6a, 0x1a, 60), Color32::TRANSPARENT);
-            p.rect_stroke(r, theme::r(16), Stroke::new(1.5f32, Color32::from_rgb(0x9a, 0x3a, 0x2a)), StrokeKind::Inside);
-            bomb_icon(&p, r.left_center() + vec2(68.0, 18.0), 40.0, t, true, 0.55 + 0.45 * (t * 0.25).sin().abs());
-            let x = r.left() + 170.0;
-            glow_text(&p, pos2(x, r.top() + 30.0), Align2::LEFT_CENTER, "FLASH POT", theme::bold_font(24.0), col::GOLD2, Color32::from_rgba_unmultiplied(0xff, 0x50, 0x10, 90));
-            p.text(pos2(x + 168.0, r.top() + 31.0), Align2::LEFT_CENTER, if playing_now > 0 { format!("{playing_now} going off now") } else { format!("Sit & go · {BOMB_SEATS} players") }, theme::bold_font(12.0), col::MUTED);
-            // (What it says ends before the right side's buttons and words.)
-            let hint = mine.is_none().then(|| p.layout_no_wrap("Starts with five in; bots fill empty seats after 30 s".to_string(), theme::font(12.5), col::MUTED));
-            let right_w = hint.as_ref().map(|g| g.size().x).unwrap_or(0.0).max(356.0) + 24.0;
-            let text_w = (r.right() - 20.0 - right_w - x).max(240.0);
-            let galley = p.layout(
+            // What it is, wrapped at 46% of the card (0.13.28's lines at 1100, 1280 and 1600
+            // wide): its lines set how tall the card is (the buttons 16 under them and 146 down
+            // at the least, the card's foot 6 under those).
+            let desc = ui.painter().layout(
                 format!(
-                    "Five players, 500 chips each, the blinds up every minute. The wheel picks the prize, up to 1,000 times the buy-in, and the winner takes it all. Get the chip lead before the fuse burns down: after {} minutes the Flash Pot goes off and every hand is all in.",
+                    "Five players, 500 chips each, the blinds up every minute. The wheel picks the prize, up to 1,000 times the buy-in, and the winner takes it all. Get the chip lead before the fuse burns down: after {} minutes the Bomb Pot goes off and every hand is all in.",
                     BOMB_FUSE_MS / 60_000
                 ),
                 theme::font(13.0),
                 col::TEXT,
-                text_w,
+                w * 0.46,
             );
-            p.galley(pos2(x, r.top() + 50.0), galley, col::TEXT);
-            // What I can do.
-            let right = r.right() - 20.0;
+            let by = (76.0 + desc.size().y + 16.0).max(146.0);
+            let (r, _) = ui.allocate_exact_size(vec2(w, by + 50.0), Sense::hover());
+            let p = ui.painter().clone();
+            // Its shadow; the card, an ember glow at its left; the bomb on the right 60% of it,
+            // melting into the dark over its first 45%; its edge.
+            p.rect_filled(r.translate(vec2(0.0, 8.0)), theme::r(16), Color32::from_black_alpha(115));
+            let glow = pos2(r.left() + 60.5, r.center().y - 29.5);
+            round_fill_with(&p, r, 16.0, |q| mix(CARD_GLOW, CARD_BASE, q.distance(glow) / 220.0));
+            let art = Rect::from_min_max(pos2(r.right() - w * 0.6, r.top()), r.max);
+            // (From the picture as it is, 1376 across: 0.13.28 draws it from no smaller.)
+            pics::cover_rounded(&p, &ctx, "tile-bombpot", art, 16.0, (0.5, 0.42), 2048, Color32::WHITE);
+            hgrad(&p, Rect::from_min_max(art.min, pos2(art.left() + art.width() * 0.45, art.bottom())), CARD_BASE, Color32::TRANSPARENT);
+            p.rect_stroke(r, theme::r(16), Stroke::new(1.5f32, CARD_EDGE), StrokeKind::Inside);
+            let x = r.left() + 26.0;
+            let kicker = if playing_now > 0 { format!("SIT & GO · {playing_now} GOING OFF NOW") } else { format!("SIT & GO · {BOMB_SEATS} PLAYERS") };
+            p.text(pos2(x, r.top() + 17.0), Align2::LEFT_TOP, kicker, theme::bold_font(12.5), KICKER);
+            // (Its middle 54 down, so its glow's copies fall on the pixels 0.13.28's do.)
+            glow_text(&p, pos2(x, r.top() + 54.0), Align2::LEFT_CENTER, "BOMB POT", theme::bold_font(32.0), col::GOLD2, Color32::from_rgba_unmultiplied(0xff, 0x50, 0x10, 110));
+            p.galley(pos2(x, r.top() + 76.0), desc, col::TEXT);
+            // What I can do, on a row of buttons 44 tall.
+            let row = Rect::from_min_size(pos2(x, r.top() + by), vec2(r.right() - 26.0 - x, 44.0));
+            let c = row.center().y;
             match &mine {
                 Some(v) if v.phase == TourneyPhase::Registering => {
-                    let n = v.entrants.len();
-                    let bots_in = (v.rules.start_ms.saturating_sub(wall()) / 1000).min(BOMB_WAIT_MS / 1000);
-                    p.text(pos2(right, r.top() + 40.0), Align2::RIGHT_CENTER, format!("Waiting for players · {n} of {}", v.rules.max_players), theme::bold_font(16.0), col::GOLD2);
-                    p.text(pos2(right, r.top() + 64.0), Align2::RIGHT_CENTER, format!("Bots take any empty seats in 0:{bots_in:02}"), theme::font(13.0), col::MUTED);
-                    // The seats: who's in (left of the Leave button).
-                    let seats = v.rules.max_players;
-                    for k in 0..seats {
-                        let c = pos2(right - 112.0 - (seats - 1 - k) as f32 * 38.0, r.top() + 98.0);
-                        let filled = k < n;
-                        p.circle_filled(c, 15.0, if filled { col::EMBER } else { Color32::from_white_alpha(14) });
-                        p.circle_stroke(c, 15.0, Stroke::new(1.5f32, if filled { col::GOLD2 } else { Color32::from_white_alpha(50) }));
-                        if let Some(e) = v.entrants.get(k) {
-                            let initial: String = e.name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
-                            p.text(c, Align2::CENTER_CENTER, initial, theme::bold_font(13.0), Color32::BLACK);
-                        }
-                    }
-                    let b = Rect::from_min_size(pos2(right - 80.0, r.top() + 82.0), vec2(80.0, 32.0));
+                    let b = Rect::from_min_size(pos2(x, c - 18.0), vec2(90.0, 36.0));
                     if ui.put(b, egui::Button::new("Leave").corner_radius(theme::r(10))).on_hover_text("Your buy-in back").clicked() {
                         self.engine.poker(&s.key, ToServer::TourneyUnregister { id: v.id });
                     }
+                    // The seats: who's in (their pictures in an ember ring), and the empty ones.
+                    for k in 0..v.rules.max_players {
+                        let at = pos2(x + 120.0 + 38.0 * k as f32, c);
+                        let e = v.entrants.get(k);
+                        p.circle_filled(at, 15.0, if e.is_some() { col::EMBER } else { Color32::from_white_alpha(14) });
+                        p.circle_stroke(at, 15.0, Stroke::new(1.5f32, if e.is_some() { col::GOLD2 } else { Color32::from_white_alpha(50) }));
+                        if let Some(e) = e {
+                            match e.bot {
+                                Some(level) => super::table::bot_face(&p, at, 14.0, &e.name, level),
+                                None => {
+                                    let face = self.face(&ctx, s, &e.uid);
+                                    crate::app::avatar(&p, at, 14.0, &e.uid, &e.name, false, theme::SIDE(), face);
+                                }
+                            }
+                        }
+                    }
+                    let n = v.entrants.len();
+                    let bots_in = (v.rules.start_ms.saturating_sub(wall()) / 1000).min(BOMB_WAIT_MS / 1000);
+                    let tx = x + 310.0;
+                    p.text(pos2(tx, c - 9.0), Align2::LEFT_CENTER, format!("Waiting for players · {n} of {}", v.rules.max_players), theme::bold_font(15.0), col::GOLD2);
+                    p.text(pos2(tx, c + 11.0), Align2::LEFT_CENTER, format!("Bots take any empty seats in 0:{bots_in:02}"), theme::font(12.5), col::MUTED);
                     ui.ctx().request_repaint_after(Duration::from_millis(250));
                 }
                 Some(v) => {
-                    let prize = v.bomb.and_then(|b| b.multiplier).map(|m| format!("{m}× · prize {}", chips_text(v.prize_pool))).unwrap_or_default();
-                    p.text(pos2(right, r.top() + 44.0), Align2::RIGHT_CENTER, "You're in a Flash Pot", theme::bold_font(16.0), col::GOLD2);
-                    p.text(pos2(right, r.top() + 68.0), Align2::RIGHT_CENTER, prize, theme::font(13.0), col::MUTED);
-                    let b = Rect::from_min_size(pos2(right - 160.0, r.top() + 88.0), vec2(160.0, 38.0));
+                    let b = Rect::from_min_size(pos2(x, row.top() + 4.0), vec2(170.0, 38.0));
                     if let Some(t) = v.my_table
                         && ui.put(b, theme::primary_button("Go to my table")).clicked()
                     {
                         self.open_table(&s.key, t);
                     }
+                    let prize = v.bomb.and_then(|b| b.multiplier).map(|m| format!("{m}× · prize {}", chips_text(v.prize_pool))).unwrap_or_default();
+                    p.text(pos2(b.right() + 16.0, c - 8.0), Align2::LEFT_CENTER, "You're in a Bomb Pot", theme::bold_font(15.0), col::GOLD2);
+                    p.text(pos2(b.right() + 16.0, c + 12.0), Align2::LEFT_CENTER, prize, theme::font(12.5), col::MUTED);
                 }
                 None => {
                     let chips = s.poker.me.as_ref().map(|m| m.chips).unwrap_or(0);
-                    let mut bx = right;
-                    for buy_in in BOMB_BUY_INS.iter().rev() {
-                        let bw = 112.0;
-                        let b = Rect::from_min_size(pos2(bx - bw, r.top() + 84.0), vec2(bw, 44.0));
-                        bx -= bw + 10.0;
+                    for (k, buy_in) in buy_ins.iter().enumerate() {
+                        let b = Rect::from_min_size(pos2(x + 128.0 * k as f32, row.top()), vec2(118.0, 44.0));
                         let can = chips >= *buy_in;
                         let resp = ui.interact(b, ui.id().with(("bomb", *buy_in)), Sense::click());
+                        p.rect_filled(b.translate(vec2(0.0, 3.0)), theme::r(12), Color32::from_black_alpha(128));
                         let fill = if !can { Color32::from_white_alpha(14) } else if resp.hovered() { col::GOLD2 } else { col::GOLD };
                         p.rect_filled(b, theme::r(12), fill);
-                        p.text(b.center() - vec2(0.0, 7.0), Align2::CENTER_CENTER, "PLAY", theme::bold_font(11.0), if can { Color32::from_rgb(0x4a, 0x1a, 0x06) } else { col::MUTED });
-                        p.text(b.center() + vec2(0.0, 9.0), Align2::CENTER_CENTER, chips_text(*buy_in), theme::bold_font(17.0), if can { Color32::from_rgb(0x2a, 0x10, 0x04) } else { col::MUTED });
+                        let ink = if can { ON_GOLD } else { col::MUTED };
+                        p.text(b.center() - vec2(0.0, 8.0), Align2::CENTER_CENTER, "PLAY", theme::bold_font(10.5), ink);
+                        p.text(b.center() + vec2(0.0, 8.0), Align2::CENTER_CENTER, chips_text(*buy_in), theme::bold_font(17.0), ink);
                         let tip = if can { format!("{} chips to play; win up to {}", chips_text(*buy_in), chips_text(*buy_in * 1000)) } else { format!("You need {} chips", chips_text(*buy_in)) };
                         if resp.on_hover_text(tip).clicked() && can {
                             self.engine.poker(&s.key, ToServer::TimeBomb { buy_in: *buy_in });
                         }
                     }
-                    if let Some(g) = hint {
-                        p.galley(pos2(right - g.size().x, r.top() + 64.0 - g.size().y / 2.0), g, col::MUTED);
+                    // How it starts, 16 right of them where it fits 12 inside the card (0.13.28
+                    // shows it at 1330 wide, not 1328).
+                    let hint = p.layout_no_wrap(format!("Starts with five in; bots fill empty seats after {} s", BOMB_WAIT_MS / 1000), theme::font(12.0), col::MUTED);
+                    let hx = x + 128.0 * buy_ins.len() as f32 + 6.0;
+                    if hx + hint.size().x <= r.right() - 12.0 {
+                        p.galley(pos2(hx, c - hint.size().y / 2.0), hint, col::MUTED);
                     }
                 }
             }
         });
     }
 
-    /// At a Flash Pot's table: the wheel while it spins, then the fuse and the prize over the
+    /// At a Bomb Pot's table: the wheel while it spins, then the fuse and the prize over the
     /// felt; the bang when it goes off; and their sounds.
     pub fn bomb_overlay(&mut self, ui: &mut egui::Ui, s: &ServerView, tid: TourneyId, felt_c: Pos2, felt_a: f32, felt_b: f32) {
         let Some(v) = s.poker.tourney.get(&tid) else { return };
@@ -564,12 +591,12 @@ impl PyrApp {
         true
     }
 
-    /// The end of a Flash Pot I played: the winner's moment, big over everything for a few
+    /// The end of a Bomb Pot I played: the winner's moment, big over everything for a few
     /// seconds (click to go on). Their picture crowned in a burst of light, WINNER, the prize
     /// counting up, coins pouring down and fireworks going off; and if it's me, YOU WIN.
     pub(super) fn bomb_finale(&mut self, ctx: &egui::Context, s: &ServerView, area: Rect) {
         let me = s.me.as_ref().map(|m| m.user_id.clone()).unwrap_or_default();
-        // A Flash Pot I'm in, seen being played, now over.
+        // A Bomb Pot I'm in, seen being played, now over.
         let mut show: Option<TourneyView> = None;
         for (id, v) in &s.poker.tourney {
             if v.bomb.is_none() || !v.entrants.iter().any(|e| e.uid == me) {
@@ -684,7 +711,7 @@ impl PyrApp {
             let swell = if k >= 1.0 { 1.0 + 0.06 * ((since - 3.0) * 6.0).sin().max(0.0) } else { 1.0 };
             glow_text(&p, pos2(c.x, cy), Align2::CENTER_CENTER, &count, theme::bold_font(unit * 0.62 * swell), Color32::WHITE.gamma_multiply(fade), col::GOLD.gamma_multiply(0.7 * fade));
             let m = v.bomb.and_then(|b| b.multiplier).unwrap_or(0);
-            let sub = format!("Flash Pot · {} buy-in · {}× the buy-in", chips_text(v.rules.buy_in), m);
+            let sub = format!("Bomb Pot · {} buy-in · {}× the buy-in", chips_text(v.rules.buy_in), m);
             p.text(pos2(c.x, cy + unit * 0.6), Align2::CENTER_CENTER, sub, theme::bold_font(15.0), col::GOLD2.gamma_multiply(0.85 * fade));
             if !mine && let Some(place) = my_place {
                 p.text(pos2(c.x, cy + unit * 0.6 + 26.0), Align2::CENTER_CENTER, format!("You finished {}", super::tourneys::ordinal(place)), theme::bold_font(14.0), Color32::WHITE.gamma_multiply(0.75 * fade));

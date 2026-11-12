@@ -50,7 +50,7 @@ pub struct Tourney {
     /// When it finished (the server forgets it a while after).
     pub ended: Option<u64>,
     bot_names: usize,
-    /// A Flash Pot: the wheel's multiplier and when it was spun, and whether it's gone off.
+    /// A Bomb Pot: the wheel's multiplier and when it was spun, and whether it's gone off.
     multiplier: Option<u32>,
     spun: Option<u64>,
     exploded: bool,
@@ -101,19 +101,19 @@ impl Tourney {
 
     pub fn prize_pool(&self) -> u64 {
         if self.rules.bomb.is_some() {
-            // A Flash Pot's prize is the buy-in times what the wheel picks (the house stakes
+            // A Bomb Pot's prize is the buy-in times what the wheel picks (the house stakes
             // the bots' seats); before the spin, the least it can be.
             return self.rules.buy_in * self.multiplier.unwrap_or(MULTIPLIERS[0].0) as u64;
         }
         self.entrants.iter().map(|e| e.paid).sum::<u64>() + self.rules.added
     }
 
-    /// What each place wins, first first (a Flash Pot: the winner takes it all).
+    /// What each place wins, first first (a Bomb Pot: the winner takes it all).
     fn pay_table(&self) -> Vec<u64> {
         if self.rules.bomb.is_some() { vec![self.prize_pool()] } else { payouts(self.prize_pool(), self.entrants.len()) }
     }
 
-    /// A Flash Pot's wheel and fuse, as they stand.
+    /// A Bomb Pot's wheel and fuse, as they stand.
     pub fn bomb_view(&self) -> Option<BombView> {
         let b = self.rules.bomb?;
         Some(BombView {
@@ -391,7 +391,7 @@ impl Tourney {
         let mut out = Output::default();
         match self.phase {
             TourneyPhase::Registering if self.rules.bomb.is_some() => {
-                // A Flash Pot starts the moment it's full; when the wait is over, bots take the
+                // A Bomb Pot starts the moment it's full; when the wait is over, bots take the
                 // empty seats (nobody waits long), unless nobody's left in it.
                 if self.entrants.len() < self.rules.max_players && now >= self.rules.start_ms {
                     if self.entrants.iter().all(|e| e.bot.is_some()) {
@@ -484,7 +484,7 @@ impl Tourney {
             self.knock_out(busted, now, &mut out);
             news = true;
         }
-        // (A Flash Pot is one table.)
+        // (A Bomb Pot is one table.)
         if self.phase == TourneyPhase::Running && self.rules.bomb.is_none() && self.balance(now, &mut out) {
             news = true;
         }
@@ -709,16 +709,20 @@ pub fn friday_rules(start_ms: u64, added: u64) -> TourneyRules {
     }
 }
 
-/// Flash Pots: five seats, 500 chips each, the blinds up every minute, and a three-minute
-/// fuse; from the hand after it goes off, everyone's all in, every hand. Buy-ins (play chips), and the prize wheel's
-/// multipliers with their weights (out of 10,000): about 4.85 buy-ins come back for the five
-/// paid in, so the house keeps about 3%. (Three seats until 0.10.0, with 2x the least.)
+/// Bomb Pots (Flash Pots until 0.13.4): five seats, 500 chips each, the blinds up every minute,
+/// and a three-minute fuse; from the hand after it goes off, everyone's all in, every hand.
+/// Buy-ins (play chips: 50,000 and 100,000 from 0.13.6, where the server has
+/// `BIG_BOMB_POTS_FEATURE`), and the prize wheel's multipliers with their weights (out of
+/// 10,000): about 4.85 buy-ins come back for the five paid in, so the house keeps about 3%.
+/// (Three seats until 0.10.0, with 2x the least.)
 pub const BOMB_HOST: &str = "pyr:bomb";
-pub const BOMB_BUY_INS: [u64; 3] = [100, 1_000, 10_000];
+pub const BOMB_BUY_INS: [u64; 5] = [100, 1_000, 10_000, 50_000, 100_000];
+/// The buy-ins a server without `BIG_BOMB_POTS_FEATURE` takes (the first three).
+pub const SMALL_BOMB_BUY_INS: usize = 3;
 pub const BOMB_SEATS: usize = 5;
 pub const BOMB_STACK: u64 = 500;
 pub const BOMB_FUSE_MS: u64 = 180_000;
-/// How long a Flash Pot waits for people before bots take the empty seats.
+/// How long a Bomb Pot waits for people before bots take the empty seats.
 pub const BOMB_WAIT_MS: u64 = 30_000;
 /// The wheel's spin, and the prize it lands on shown off, before the first hand.
 pub const WHEEL_MS: u64 = 9_000;
@@ -737,14 +741,14 @@ pub fn spin(rng: &mut dyn Random) -> u32 {
     MULTIPLIERS[0].0
 }
 
-/// A Flash Pot's rules, open from `now` (it waits `BOMB_WAIT_MS` for people).
+/// A Bomb Pot's rules, open from `now` (it waits `BOMB_WAIT_MS` for people).
 pub fn bomb_rules(buy_in: u64, now: u64) -> TourneyRules {
     let levels = [(10, 20), (15, 30), (20, 40), (30, 60), (50, 100), (75, 150), (100, 200), (150, 300), (200, 400), (300, 600), (500, 1000), (750, 1500)]
         .into_iter()
         .map(|(small, big)| BlindLevel { small, big, ante: 0 })
         .collect();
     TourneyRules {
-        name: format!("Flash Pot · {}", group(buy_in)),
+        name: format!("Bomb Pot · {}", group(buy_in)),
         variant: crate::game::Variant::Holdem,
         limit: crate::game::Limit::NoLimit,
         seats: BOMB_SEATS,

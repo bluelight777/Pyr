@@ -1956,7 +1956,7 @@ pub(crate) fn open_submissions(app: &mut PyrApp, key: &str, acts: &mut Vec<Act>,
 /// Pyr Casino in the Library: its id (for favorites), who made it, and what it is.
 const CASINO_ID: &str = "pyr-casino";
 const CASINO_AUTHOR: &str = "Firelit Games";
-const CASINO_SUMMARY: &str = "Poker with friends and bots, Flash Pots and tournaments; slots, blackjack, baccarat, craps, roulette, dice and keno; and the Bonfire. Play chips only, every round checked by your own Pyr.";
+const CASINO_SUMMARY: &str = "Poker with friends and bots, Bomb Pots and tournaments; slots, blackjack, baccarat, craps, roulette, dice and keno; and the Bonfire. Play chips only, every round checked by your own Pyr.";
 /// Library entries no longer shown (Pyr does what they did now).
 const RETIRED: [&str; 2] = ["firelit-poker", "poker"];
 

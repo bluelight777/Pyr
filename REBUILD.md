@@ -439,6 +439,17 @@ How (decided while starting it):
       casino page, as 0.13.28's do. Better than 0.13.28: a long log line stops at its card's
       edge instead of running off it.
 - [ ] Bomb Pot (was Flash Pot), new art, 50,000 and 100,000 (0.13.4/6); the crown win (0.13.4)
+      In progress. Done: Bomb Pot everywhere (the server's words as 0.13.28's, probed on it; its
+      refusal lists all five buy-ins, 0.13.28's says three), `big_bomb_pots` with 50,000 and
+      100,000; the card as 0.13.28's, measured at 1100, 1280 and 1600 wide and checked side by
+      side on 0.13.28's server (glow, art and its fade, wrap at 46%, title glow, buttons and
+      their shadows, the hint beside them from 1330 wide, waiting with Leave and the seats'
+      pictures, running with Go to my table, "N GOING OFF NOW"); the Games menu's jumps land
+      where 0.13.28's do (6 higher); a debug build no longer panics at a tournament's table
+      (buy-in sums saturate). Left: a filled seat's gold ring is 0.25 px thinner outside than
+      0.13.28's; the table's wheel, fuse and bang against 0.13.28's (filmed side by side,
+      `bombfilm3`); the crown win as 0.13.28's (win-laurel, win-crown; its words as 0.13.0's
+      sizes, 31 lower: measured from a film), and a YOU WIN filmed on 0.13.28.
 - [ ] Bounty Poker (0.13.6)
 - [x] High stakes and higher-than-high tables, 500K/1M/5M chips (0.13.6): three tables of each,
       0.13.28's names and bets (Hearth 10–1,000, High Limit 500–100,000, Crown Room 10,000 to

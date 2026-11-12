@@ -464,6 +464,43 @@ pub fn radial(p: &egui::Painter, c: Pos2, r: f32, inner: Color32, outer: Color32
     p.add(Shape::mesh(m));
 }
 
+/// `r` with its corners rounded by `radius`, each point of it colored by `color`: a grid of
+/// cells about 8 across, its rows a pixel apart round the corners (so a glow off its middle
+/// stays inside the rounded shape).
+pub fn round_fill_with(p: &egui::Painter, r: Rect, radius: f32, color: impl Fn(Pos2) -> Color32) {
+    let rad = radius.min(r.width() / 2.0).min(r.height() / 2.0).max(0.0);
+    let inset = |y: f32| {
+        let dy = (r.top() + rad - y).max(y - (r.bottom() - rad)).max(0.0);
+        rad - (rad * rad - dy * dy).max(0.0).sqrt()
+    };
+    let steps = rad.ceil().max(1.0) as usize;
+    let mid = (r.bottom() - rad) - (r.top() + rad);
+    let n = (mid / 8.0).ceil().max(1.0) as usize;
+    let ys: Vec<f32> = (0..steps)
+        .map(|k| r.top() + rad * k as f32 / steps as f32)
+        .chain((0..n).map(|k| r.top() + rad + mid * k as f32 / n as f32))
+        .chain((0..=steps).map(|k| r.bottom() - rad + rad * k as f32 / steps as f32))
+        .collect();
+    let cols = (r.width() / 8.0).ceil().max(1.0) as usize;
+    let mut m = egui::Mesh::default();
+    for &y in &ys {
+        let (l, rr) = (r.left() + inset(y), r.right() - inset(y));
+        for i in 0..=cols {
+            let q = pos2(l + (rr - l) * i as f32 / cols as f32, y);
+            m.colored_vertex(q, color(q));
+        }
+    }
+    let row = (cols + 1) as u32;
+    for j in 0..ys.len() as u32 - 1 {
+        for i in 0..cols as u32 {
+            let a = j * row + i;
+            m.add_triangle(a, a + 1, a + row + 1);
+            m.add_triangle(a, a + row + 1, a + row);
+        }
+    }
+    p.add(Shape::mesh(m));
+}
+
 /// An oval shading from `inner` to `outer` (a felt).
 pub fn oval(p: &egui::Painter, r: Rect, inner: Color32, outer: Color32) {
     let mut m = egui::Mesh::default();

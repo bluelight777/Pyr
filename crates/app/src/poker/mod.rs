@@ -28,7 +28,7 @@ use cards::{chips_short, chips_text};
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum Tab {
-    /// The casino floor: every game, poker's tables, Flash Pots and tournaments among them.
+    /// The casino floor: every game, poker's tables, Bomb Pots and tournaments among them.
     #[default]
     Floor,
     /// The Pyr VIP Club (0.13.5).
@@ -160,7 +160,7 @@ pub struct PokerUi {
     pub new_tourney: Option<tourneys::NewTourney>,
     pub tourneys_asked: Option<Instant>,
     pub my_tables: std::collections::HashMap<pyr_poker::net::TourneyId, Option<TableId>>,
-    /// Flash Pots: the sounds already played for each (the wheel, the fuse, the bang).
+    /// Bomb Pots: the sounds already played for each (the wheel, the fuse, the bang).
     pub bomb_fx: bomb::BombSounds,
     /// The tournament of the table on screen (its lobby opens when the table closes).
     pub table_tourney: Option<pyr_poker::net::TourneyId>,
@@ -281,7 +281,7 @@ impl PyrApp {
             None => self.poker.error_shown = false,
         }
         self.follow_tourneys(s);
-        // A Flash Pot I played, just over: the winner's moment, over everything.
+        // A Bomb Pot I played, just over: the winner's moment, over everything.
         let whole = ui.max_rect();
         self.bomb_finale(ui.ctx(), s, whole);
         // A level reached: its crest, big.
@@ -561,8 +561,8 @@ impl PyrApp {
         });
     }
 
-    /// Poker: the cash tables, Flash Pots, Pyr Friday Night and the tournaments.
-    /// Poker on the casino floor, like every other game: cash tables, Flash Pots and
+    /// Poker: the cash tables, Bomb Pots, Pyr Friday Night and the tournaments.
+    /// Poker on the casino floor, like every other game: cash tables, Bomb Pots and
     /// tournaments.
     pub(crate) fn poker_sections(&mut self, ui: &mut egui::Ui, s: &ServerView) {
         let tables = s.poker.lobby.as_ref().map(|l| l.len()).unwrap_or(0);

@@ -148,7 +148,7 @@ impl PyrApp {
         }
         self.emotes(&p, ui.ctx(), &lay, t);
         self.says(&p, &lay, t);
-        // A Flash Pot: its wheel, fuse and bang over the felt.
+        // A Bomb Pot: its wheel, fuse and bang over the felt.
         if let Some(tid) = v.tourney
             && s.poker.tourney.get(&tid).is_some_and(|tv| tv.bomb.is_some())
         {
@@ -556,7 +556,7 @@ impl PyrApp {
             if v.my_seat.is_none() {
                 p.text(at, Align2::CENTER_CENTER, "Sit", theme::bold_font(14.0), col);
                 if resp.on_hover_text("Sit here").clicked() {
-                    let chips = (v.rules.big_blind * 100).clamp(v.rules.big_blind * v.buy_in.min_bb, v.rules.big_blind * v.buy_in.max_bb);
+                    let chips = (v.rules.big_blind * 100).clamp(v.rules.big_blind.saturating_mul(v.buy_in.min_bb), v.rules.big_blind.saturating_mul(v.buy_in.max_bb));
                     self.poker.buy_in = Some((v.id, i, chips));
                 }
             } else {
@@ -911,8 +911,8 @@ impl PyrApp {
         }
         let seat = v.seats[me].as_ref();
         if v.bomb {
-            // (A Flash Pot gone off: nothing to choose.)
-            p.text(pos2(bar.right() - 16.0, bar.center().y), Align2::RIGHT_CENTER, "The Flash Pot's gone off: everyone's all in, every hand", theme::bold_font(15.0), Color32::from_rgb(0xff, 0x8a, 0x6a));
+            // (A Bomb Pot gone off: nothing to choose.)
+            p.text(pos2(bar.right() - 16.0, bar.center().y), Align2::RIGHT_CENTER, "The Bomb Pot's gone off: everyone's all in, every hand", theme::bold_font(15.0), Color32::from_rgb(0xff, 0x8a, 0x6a));
             return;
         }
         let legal = v.legal;
@@ -1203,7 +1203,8 @@ impl PyrApp {
     fn sit_dialogs(&mut self, ctx: &egui::Context, s: &ServerView, t: &TableLive) {
         let v = &t.view;
         let bank = s.poker.me.as_ref().map(|m| m.chips).unwrap_or(0);
-        let (lo, hi) = (v.rules.big_blind * v.buy_in.min_bb, v.rules.big_blind * v.buy_in.max_bb);
+        // (A tournament's table takes any stack: its most is a quarter of u64's, so this saturates.)
+        let (lo, hi) = (v.rules.big_blind.saturating_mul(v.buy_in.min_bb), v.rules.big_blind.saturating_mul(v.buy_in.max_bb));
         if let Some((table, seat, mut chips)) = self.poker.buy_in {
             let mut open = true;
             let mut sit = false;

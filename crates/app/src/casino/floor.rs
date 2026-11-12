@@ -1,6 +1,6 @@
 //! The casino floor: the house's games, in chapters (0.13.2). The Bonfire and the Phoenix
 //! Jackpot climbing, wins as they happen, a bar to jump to each chapter, then the chapters:
-//! Slots (Pyr Sevens, Ember Dragon and Reel Row's twelve), Poker (its tables, Flash Pots, Pyr
+//! Slots (Pyr Sevens, Ember Dragon and Reel Row's twelve), Poker (its tables, Bomb Pots, Pyr
 //! Friday Night and tournaments), Table games and Pyr Originals. Each game is a tile like
 //! Stake's (0.13.4): its name big in its own lettering, the studio under it, how many are
 //! playing it right now and my best win under the tile, what it pays back on pointing at it.
@@ -173,8 +173,8 @@ impl PyrApp {
         let note = (!reel_row).then_some("Twelve more machines come when this server's Pyr is updated to 0.12.");
         self.chapter(ui, s, w, Chapter::Slots, &format!("{} game{} · every one pays back about 99%", slots.len(), if slots.len() == 1 { "" } else { "s" }), &slots, note);
         ui.add_space(14.0);
-        // Poker, like every other game here: its tables, Flash Pots and tournaments.
-        self.chapter_head(ui, w, Chapter::Poker, "Cash tables, Flash Pot sit & go and tournaments, with friends and bots");
+        // Poker, like every other game here: its tables, Bomb Pots and tournaments.
+        self.chapter_head(ui, w, Chapter::Poker, "Cash tables, Bomb Pot sit & go and tournaments, with friends and bots");
         ui.add_space(16.0);
         self.poker_sections(ui, s);
         ui.add_space(30.0);
