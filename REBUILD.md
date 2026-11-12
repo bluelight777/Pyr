@@ -318,8 +318,9 @@ How (decided while starting it):
       The rebuild's own numbers for 99% (`Feature::Builds`): Bomb Spins on richer reels (pay
       symbols 1.15 times as likely, a bomb in about one cell in fifteen: about one a screen, as
       0.13.28's showed), its bombs about as the machine's own; Super Hold & Win's Payers (0.5×
-      to 5×, adding to every coin as they land) and Hoarders (gathering the coins' worth as they
-      land and on every respin bringing something new) tuned on forty-million-round samples. A
+      to 5×, adding to every coin as they land) and Hoarders (worth everything else on the
+      reels, gathered again whenever something new lands: 0.13.28's, seen in two rounds of ten)
+      tuned on forty-million-round samples. A
       free spin lands at Turbo's pace (as 0.13.28's do), and its tumbles show at the player's.
 - [ ] Big wins: Big, Mega, Epic, Legendary, Mythic with fireworks (0.13.2/4)
 - [x] Bets to 100,000 on blackjack, baccarat, keno, slots (0.13.2/4/6); Pyr Sevens' Phoenix

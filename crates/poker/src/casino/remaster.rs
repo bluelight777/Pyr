@@ -48,8 +48,9 @@ pub const BOMB: u8 = 9;
 pub const COIN: u8 = 10;
 pub const COLLECTOR: u8 = 11;
 /// Super Hold & Win's (0.13.6): a Payer adds its worth to every coin on the reels as it lands; a
-/// Hoarder gathers the coins' worth as it lands, and again on every respin that brings something
-/// new.
+/// Hoarder gathers everything else on the reels (coins, Payers, collectors) as it lands, and
+/// gathers it all again on every respin that brings something new (as 0.13.28's do: worth
+/// what all the rest is worth).
 pub const PAYER: u8 = 12;
 pub const HOARDER: u8 = 13;
 const KINDS: usize = 12;
@@ -221,15 +222,15 @@ use Family::*;
 /// The twelve, in Reel Row's order. The points and prices are 0.13.28's.
 pub const MACHINES: [Machine; 12] = [
     machine(Hot, "Hot Wilds", "Hot Spin", 267, 200, 753, 10_000).wilds(1_217, 1_217).scatters(2_500, 3_069).chance(22_268),
-    machine(Hold, "Pearl Hold & Win", "Buy Hold & Win", 300, 200, 3_650, 50_000).coins(12_110, 600, 4_077, 1_200).scatters(2_500, 3_053).super_hold(6_670, 1_574, 295, 240),
+    machine(Hold, "Pearl Hold & Win", "Buy Hold & Win", 300, 200, 3_650, 50_000).coins(12_110, 600, 4_077, 1_200).scatters(2_500, 3_053).super_hold(6_670, 1_949, 365, 240),
     machine(Tumble, "Cosmic Tumbles", "Bomb Spin", 209, 189, 175, 500_000).bombs(1_430, &COSMIC_BOMBS, &COSMIC_START).scatters(2_473, 2_904).bomb_spins(10_280, 1_150, 6_700, &COSMIC_FREE),
     machine(Tumble, "Candy Tumbles", "Bomb Spin", 222, 189, 169, 5_000).bombs(1_430, &SUGAR_BOMBS, &SUGAR_START).scatters(2_471, 2_903).bomb_spins(9_780, 1_150, 6_700, &SUGAR_FREE),
-    machine(Hold, "Nugget Hold & Win", "Buy Hold & Win", 304, 200, 3_585, 0).coins(12_113, 600, 4_077, 1_200).scatters(2_500, 3_054).super_hold(6_270, 1_650, 309, 240),
+    machine(Hold, "Nugget Hold & Win", "Buy Hold & Win", 304, 200, 3_585, 0).coins(12_113, 600, 4_077, 1_200).scatters(2_500, 3_054).super_hold(6_270, 2_246, 421, 240),
     machine(Tumble, "Neon Tumbles", "Bomb Spin", 223, 189, 169, 20_000).bombs(1_430, &NEON_BOMBS, &NEON_START).scatters(2_470, 2_902).bomb_spins(9_860, 1_150, 6_700, &NEON_FREE),
-    machine(Hold, "Scarab Hold & Win", "Buy Hold & Win", 300, 200, 3_650, 50_000).coins(12_111, 600, 4_077, 1_200).scatters(2_500, 3_053).super_hold(6_680, 1_575, 296, 240),
+    machine(Hold, "Scarab Hold & Win", "Buy Hold & Win", 300, 200, 3_650, 50_000).coins(12_111, 600, 4_077, 1_200).scatters(2_500, 3_053).super_hold(6_680, 1_952, 366, 240),
     machine(Frozen, "Frozen Wilds", "Frozen Spin", 387, 200, 563, 7_500).wilds(2_027, 2_584).scatters(2_500, 3_054).chance(22_392),
     machine(Tumble, "Bubbling Tumbles", "Bomb Spin", 223, 189, 170, 10_000).bombs(1_430, &MOONLIT_BOMBS, &MOONLIT_START).scatters(2_474, 2_906).bomb_spins(9_820, 1_150, 6_700, &MOONLIT_FREE),
-    machine(Hold, "Hoard Hold & Win", "Buy Hold & Win", 308, 200, 3_587, 0).coins(12_072, 600, 4_077, 1_200).scatters(2_500, 3_054).super_hold(6_300, 1_666, 312, 240),
+    machine(Hold, "Hoard Hold & Win", "Buy Hold & Win", 308, 200, 3_587, 0).coins(12_072, 600, 4_077, 1_200).scatters(2_500, 3_054).super_hold(6_300, 2_270, 425, 240),
     machine(Espresso, "Espresso Shots", "Double Shot", 234, 200, 1_597, 5_000).wilds(1_804, 1_948).scatters(2_500, 3_077).chance(22_156),
     machine(Spotlight, "Spotlight Wilds", "Encore Spin", 227, 200, 511, 25_000).wilds(2_234, 2_431).scatters(2_500, 3_053).chance(22_352),
 ];
@@ -961,17 +962,19 @@ fn hold<D: Draw>(m: &Machine, ante: bool, play: Play, bet: u64, d: &mut D) -> Re
                 }
             }
         }
-        // A collector landing gathers the coins' worth (Payers' too); Hoarders, on every respin
-        // that brings something new (the one they land on first).
-        let coins: u32 = (0..REELS).flat_map(|r| (0..ROWS).map(move |row| (r, row))).filter(|&(r, row)| matches!(board[r][row], COIN | PAYER)).map(|(r, row)| values[r][row]).fold(0u32, |a, b| a.saturating_add(b));
+        // A collector landing gathers the coins' worth (Payers' too); then Hoarders, on every
+        // respin that brings something new (the one they land on first), everything else.
+        let sum = |board: &Grid, values: &Values, of: &[u8]| (0..REELS).flat_map(|r| (0..ROWS).map(move |row| (r, row))).filter(|&(r, row)| of.contains(&board[r][row])).map(|(r, row)| values[r][row]).fold(0u32, |a, b| a.saturating_add(b));
+        let coins = sum(&board, &values, &[COIN, PAYER]);
         for (r, row) in collectors {
             values[r][row] = coins;
         }
         if new {
+            let all = sum(&board, &values, &[COIN, PAYER, COLLECTOR]);
             for r in 0..REELS {
                 for row in 0..ROWS {
                     if board[r][row] == HOARDER {
-                        values[r][row] = values[r][row].saturating_add(coins);
+                        values[r][row] = all;
                     }
                 }
             }

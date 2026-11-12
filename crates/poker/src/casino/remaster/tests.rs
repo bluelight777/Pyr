@@ -1196,6 +1196,7 @@ fn the_rounds_that_build_play_by_the_rules() {
                 let any_new = (0..REELS).any(|r| (0..ROWS).any(|row| new(r, row)));
                 let paid: u32 = (0..REELS).flat_map(|r| (0..ROWS).map(move |row| (r, row))).filter(|&(r, row)| new(r, row) && b.grid[r][row] == PAYER).map(|(r, row)| b.values[r][row]).sum();
                 let coins: u32 = (0..REELS).flat_map(|r| (0..ROWS).map(move |row| (r, row))).filter(|&(r, row)| matches!(b.grid[r][row], COIN | PAYER)).map(|(r, row)| b.values[r][row]).sum();
+                let all: u32 = (0..REELS).flat_map(|r| (0..ROWS).map(move |row| (r, row))).filter(|&(r, row)| matches!(b.grid[r][row], COIN | PAYER | COLLECTOR)).map(|(r, row)| b.values[r][row]).sum();
                 for r in 0..REELS {
                     for row in 0..ROWS {
                         match b.grid[r][row] {
@@ -1203,9 +1204,10 @@ fn the_rounds_that_build_play_by_the_rules() {
                             COIN if !new(r, row) => assert_eq!(b.values[r][row], a.values[r][row] + paid),
                             COLLECTOR if new(r, row) => assert_eq!(b.values[r][row], coins),
                             COLLECTOR => assert_eq!(b.values[r][row], a.values[r][row]),
+                            // A Hoarder: everything else, as of the last respin that brought
+                            // something new.
                             HOARDER => {
-                                let before = if new(r, row) { 0 } else { a.values[r][row] };
-                                assert_eq!(b.values[r][row], before + if any_new { coins } else { 0 });
+                                assert_eq!(b.values[r][row], if any_new { all } else { a.values[r][row] });
                                 hoarders += new(r, row) as u32;
                             }
                             PAYER => payers += new(r, row) as u32,

@@ -468,8 +468,12 @@ pub fn draw_cell(p: &egui::Painter, ctx: &egui::Context, machine: u8, sym: u8, v
             }
         }
         COLLECTOR => {
-            if sheet(p, ctx, "rr-coins", 4, 2, coin_cells(machine).1, r.shrink(r.width() * 0.02), tint) && value > 0 {
-                label(p, pos2(r.center().x, r.bottom() - r.height() * 0.16), &coin_text(value, bet), theme::bold_font(num * 0.8), faded(col::GOLD2, a));
+            if !sheet(p, ctx, "rr-coins", 4, 2, coin_cells(machine).1, r.shrink(r.width() * 0.02), tint) {
+                return;
+            }
+            // (Its worth on a dark pill, as a coin's: 0.13.28's.)
+            if value > 0 {
+                worth_pill(p, pos2(r.center().x, r.bottom() - r.height() * 0.17), &coin_text(value, bet), num * 0.8, Color32::WHITE, a);
             }
         }
         // Super Hold & Win's: a Payer, the coin glowing purple with its ribbon; a Hoarder, the
@@ -485,14 +489,18 @@ pub fn draw_cell(p: &egui::Painter, ctx: &egui::Context, machine: u8, sym: u8, v
                 worth_pill(p, pos2(r.center().x, r.bottom() - r.height() * 0.17), &coin_text(value, bet), num * 0.8, Color32::WHITE, a);
             }
         }
+        // (0.13.28's: the collector in an emerald ring, "HOARDER" on an emerald ribbon, its worth
+        // on a dark pill.)
         HOARDER => {
-            radial(p, r.center(), r.width() * 0.62, Color32::from_rgba_unmultiplied(0xff, 0xc0, 0x40, (140.0 * a) as u8), Color32::TRANSPARENT);
+            let green = Color32::from_rgb(0x2e, 0xd8, 0x96);
+            radial(p, r.center(), r.width() * 0.62, Color32::from_rgba_unmultiplied(0x2e, 0xd8, 0x96, (90.0 * a) as u8), Color32::TRANSPARENT);
             if !sheet(p, ctx, "rr-coins", 4, 2, coin_cells(machine).1, r.shrink(r.width() * 0.02), tint) {
                 return;
             }
-            ribbon(p, pos2(r.center().x, r.top() + r.height() * 0.1), "HOARDER", num * 0.46, Color32::from_rgb(0xc0, 0x80, 0x10), a);
+            p.circle_stroke(r.center(), r.width() * 0.47, Stroke::new(2.5f32, faded(green, a)));
+            ribbon(p, pos2(r.center().x, r.top() + r.height() * 0.1), "HOARDER", num * 0.46, Color32::from_rgb(0x1c, 0xb0, 0x78), a);
             if value > 0 {
-                label(p, pos2(r.center().x, r.bottom() - r.height() * 0.16), &coin_text(value, bet), theme::bold_font(num * 0.8), faded(col::GOLD2, a));
+                worth_pill(p, pos2(r.center().x, r.bottom() - r.height() * 0.17), &coin_text(value, bet), num * 0.8, Color32::WHITE, a);
             }
         }
         WILD if wild_cell(machine).is_some() => {
@@ -1026,17 +1034,14 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
             draw_cells(&clip, ctx, b, m, o.bet, s0, 0, 0, &ys, accent, time);
             // Every coin's worth flying to the collector(s).
             let coins: Vec<(usize, usize, u32)> = (0..REELS * ROWS).map(|c| (c / ROWS, c % ROWS)).filter(|&(r, row)| s0.grid[r][row] == COIN).map(|(r, row)| (r, row, s0.values[r][row])).collect();
+            // (0.13.28's: thin lines of light from every coin to the collector, fading.)
+            let a = (u * 5.0).min(1.0) * (1.0 - ((u - 0.7) * 4.0).clamp(0.0, 1.0));
             for row in (0..ROWS).filter(|&row| s0.grid[REELS - 1][row] == COLLECTOR) {
                 let to = b.cell_at((REELS - 1) as f32, row as f32).center();
                 radial(p, to, b.cell * 0.7, faded(col::GOLD, 0.4 + 0.2 * (time * 6.0).sin()), Color32::TRANSPARENT);
-                for (j, (r, rr, v)) in coins.iter().enumerate() {
-                    let t0 = 0.1 + j as f32 * 0.12;
-                    let q = ((u * 1.4 - t0) / 0.5).clamp(0.0, 1.0);
-                    if q <= 0.0 || q >= 1.0 {
-                        continue;
-                    }
+                for (r, rr, _) in &coins {
                     let from = b.cell_at(*r as f32, *rr as f32).center();
-                    label(p, from + (to - from) * ease_out(q), &coin_text(*v, o.bet), theme::bold_font((b.cell * 0.14).clamp(11.0, 20.0)), col::GOLD2);
+                    p.line_segment([from, to], Stroke::new(1.4f32, Color32::from_rgba_unmultiplied(0xe8, 0xf0, 0xb0, (170.0 * a) as u8)));
                 }
             }
             if u > 0.7 {
@@ -1253,16 +1258,19 @@ fn draw_hold(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: 
             }
         }
     }
+    // (0.13.28's: thin lines of light from every piece gathered to what gathers it, fading.)
     if gat_q > 0.0 && gat_q < 1.0 {
+        let a = (gat_q * 4.0).min(1.0) * (1.0 - ((gat_q - 0.75) * 4.0).clamp(0.0, 1.0));
         for &(gr, grow) in &gatherers {
             let to = b.cell_at(gr as f32, grow as f32).center();
+            let of: &[u8] = if board.grid[gr][grow] == HOARDER { &[COIN, PAYER, COLLECTOR] } else { &[COIN, PAYER] };
             for c2 in 0..REELS * ROWS {
                 let (r2, row2) = (c2 / ROWS, c2 % ROWS);
-                if !matches!(board.grid[r2][row2], COIN | PAYER) {
+                if !of.contains(&board.grid[r2][row2]) || (r2, row2) == (gr, grow) {
                     continue;
                 }
                 let from = b.cell_at(r2 as f32, row2 as f32).center();
-                label(p, from + (to - from) * ease_out(gat_q), &coin_text(board.values[r2][row2], o.bet), fly.clone(), col::GOLD2);
+                p.line_segment([from, to], Stroke::new(1.4f32, Color32::from_rgba_unmultiplied(0xe8, 0xf0, 0xb0, (170.0 * a) as u8)));
             }
         }
     }
