@@ -1,0 +1,3 @@
+#!/bin/bash
+# After every commit: the repository goes out of the workspace at once (see backup).
+"$(dirname "$0")/backup" &

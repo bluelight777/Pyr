@@ -1,0 +1,13 @@
+#!/bin/bash
+# Refuses a commit with anything in it that could be a key (Pyr's keys live outside the
+# repository, in Downloads\pyr-keys on Blue's PC: used by path, never printed, never committed).
+bad=$(git diff --cached --name-only --diff-filter=ACMR | grep -Ei '(^|/)(release-env[^/]*|[^/]*\.key|[^/]*release-key[^/]*|[^/]*keeper-key[^/]*|[^/]*giphy[^/]*key[^/]*|identity\.key)$')
+if [ -n "$bad" ]; then
+	echo "pre-commit: not committed, these could be keys:" >&2
+	echo "$bad" >&2
+	exit 1
+fi
+if git diff --cached -U0 | grep -E '^\+' | grep -Eq 'BEGIN [A-Z ]*PRIVATE KEY'; then
+	echo "pre-commit: not committed, a private key is in what's being added" >&2
+	exit 1
+fi

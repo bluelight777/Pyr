@@ -1,0 +1,60 @@
+#!/bin/bash
+# Copies Pyr out of the cloud workspace. The workspace can be wiped at any moment: on November 10,
+# 2026 it was, and it took the source of 0.13.1 to 0.13.28 with it, because after 0.13.0 nothing
+# had been copied out. The session's outputs folder came through that wipe (files in it go back to
+# October 11), so everything goes there first, and from there to Blue's PC (Downloads\pyr-source)
+# and GitHub (his PC pushes it every hour: push-pyr.ps1).
+#
+#   .githooks/backup            the repository as a bundle (every commit on main): run by the
+#                               post-commit hook after every commit
+#   .githooks/backup --wip      what isn't committed yet (a patch of the changes, and the new
+#                               files), beside the bundle as pyr-wip.tar.gz
+#   .githooks/backup --loop     --wip every 20 minutes, for as long as the workspace is up
+#                               (started by `.githooks/install`)
+#
+# Never takes a key: see `looks_like_a_key`.
+set -u
+O=/mnt/user-data/outputs/pyr-source
+repo=$(cd "$(dirname "$0")/.." && pwd)
+log=/tmp/pyr-backup.log
+
+looks_like_a_key() {
+	grep -Eiq '(^|/)(release-env[^/]*|[^/]*\.key|[^/]*release-key[^/]*|[^/]*keeper-key[^/]*|[^/]*giphy[^/]*key[^/]*|identity[^/]*|config\.json)$'
+}
+
+bundle() {
+	[ -d /mnt/user-data/outputs ] || return 0
+	mkdir -p "$O"
+	git -C "$repo" bundle create "$O/pyr-rebuild.bundle.new" main > /dev/null 2>&1 || { echo "$(date -u +%FT%TZ) bundle: couldn't write it" >> "$log"; return 1; }
+	if ! git -C "$repo" bundle verify "$O/pyr-rebuild.bundle.new" > /dev/null 2>&1; then
+		echo "$(date -u +%FT%TZ) bundle: didn't verify; the one before is kept" >> "$log"
+		rm -f "$O/pyr-rebuild.bundle.new"
+		return 1
+	fi
+	mv -f "$O/pyr-rebuild.bundle.new" "$O/pyr-rebuild.bundle"
+	echo "$(date -u +%FT%TZ) bundle: $(git -C "$repo" log --oneline -1 main | cut -c1-80)" >> "$log"
+}
+
+wip() {
+	[ -d /mnt/user-data/outputs ] || return 0
+	mkdir -p "$O"
+	local t
+	t=$(mktemp -d)
+	git -C "$repo" rev-parse HEAD > "$t/base-commit.txt"
+	git -C "$repo" diff HEAD --binary > "$t/uncommitted.patch"
+	# (New files not ignored, none bigger than 50 MB, nothing that could be a key.)
+	(cd "$repo" && git ls-files -o --exclude-standard) | while IFS= read -r f; do
+		if printf '%s\n' "$f" | looks_like_a_key; then continue; fi
+		[ "$(stat -c %s "$repo/$f" 2>/dev/null || echo 0)" -le 52428800 ] && printf '%s\0' "$f"
+	done > "$t/new-files.lst"
+	tar -czf "$O/pyr-wip.tar.gz.new" -C "$t" base-commit.txt uncommitted.patch -C "$repo" --null -T "$t/new-files.lst" 2>> "$log" \
+		&& mv -f "$O/pyr-wip.tar.gz.new" "$O/pyr-wip.tar.gz" \
+		&& echo "$(date -u +%FT%TZ) wip: $(wc -l < "$t/uncommitted.patch") lines changed, $(tr -cd '\0' < "$t/new-files.lst" | wc -c) new files" >> "$log"
+	rm -rf "$t"
+}
+
+case "${1:-}" in
+	--wip) wip ;;
+	--loop) while true; do wip; sleep 1200; done ;;
+	*) bundle ;;
+esac

@@ -1,0 +1,11 @@
+#!/bin/bash
+# Run once in every new copy of the repository (a restored workspace too): turns the hooks on and
+# starts the 20-minute backups of what isn't committed yet.
+cd "$(dirname "$0")/.." || exit 1
+git config core.hooksPath .githooks
+chmod +x .githooks/backup .githooks/post-commit .githooks/pre-commit .githooks/install
+if ! pgrep -f '.githooks/backup --loop' > /dev/null; then
+	(setsid nohup .githooks/backup --loop > /dev/null 2>&1 &)
+fi
+.githooks/backup
+echo "hooks on; backups: $(tail -1 /tmp/pyr-backup.log 2>/dev/null)"
