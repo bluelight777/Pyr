@@ -1,6 +1,7 @@
 //! Synthetic screens for trying screen shares over slow, far-away or lossy networks:
-//! `test:motion` (a busy moving picture, like a game) and `test:text` (a page of text that
-//! scrolls now and then). They aren't in the share picker.
+//! `test:motion` (a busy moving picture, like a game), `test:text` (a page of text that
+//! scrolls now and then) and `test:desk` (0.13.21: a desktop that sits still for 40 s, then a
+//! game). In the share picker under Other with `PYR_TEST_SOURCES` set.
 //!
 //! Each frame carries the moment it was made in a strip of squares along its top (see
 //! [`write_stamp`] and [`read_stamp`]), so whoever watches can tell how late each picture
@@ -15,6 +16,10 @@ use super::codec::{PixelFormat, RawFrame};
 
 pub const MOTION_ID: &str = "test:motion";
 pub const TEXT_ID: &str = "test:text";
+pub const DESK_ID: &str = "test:desk";
+
+/// How long `test:desk` sits still before the game starts (as 0.13.28's does).
+const DESK_STILL_S: f32 = 40.0;
 
 /// The stamp's squares are the picture's width divided by this.
 const BLOCKS_ACROSS: u32 = 60;
@@ -131,12 +136,15 @@ pub struct Scene {
     th: u32,
     sine: Vec<f32>,
     dots: Vec<(f32, f32, f32, f32)>,
+    /// `test:desk`'s game, once the desktop has sat still long enough.
+    game: Option<Box<Scene>>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
     Motion,
     Text,
+    Desk,
 }
 
 impl Scene {
@@ -144,6 +152,7 @@ impl Scene {
         let kind = match id {
             MOTION_ID => Kind::Motion,
             TEXT_ID => Kind::Text,
+            DESK_ID => Kind::Desk,
             _ => return None,
         };
         let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
@@ -152,11 +161,12 @@ impl Scene {
                 let (tw, th) = (w + w / 2, h + h / 2);
                 (tw, th, landscape(tw, th, &mut rng))
             }
-            Kind::Text => {
+            Kind::Text | Kind::Desk => {
                 let th = h * 4;
                 (w, th, page(w, th, &mut rng))
             }
         };
+        let game = if kind == Kind::Desk { Some(Box::new(Scene::for_id(MOTION_ID, w, h)?)) } else { None };
         let sine = (0..1024).map(|i| (i as f32 / 1024.0 * std::f32::consts::TAU).sin()).collect();
         let dots = (0..160)
             .map(|_| {
@@ -165,14 +175,20 @@ impl Scene {
                 (rng.below(w) as f32, rng.below(h) as f32, a.cos() * s, a.sin() * s)
             })
             .collect();
-        Some(Scene { kind, w, h, tex, tw, th, sine, dots })
+        Some(Scene { kind, w, h, tex, tw, th, sine, dots, game })
     }
 
     /// Frame number `i` (at `fps`), stamped with `stamp_ms`.
     pub fn frame(&mut self, i: u64, fps: u32, stamp_ms: u32) -> RawFrame {
         let (w, h) = (self.w, self.h);
-        let mut data = vec![0u8; (w * h * 4) as usize];
         let t = i as f32 / fps.max(1) as f32;
+        if self.kind == Kind::Desk && t >= DESK_STILL_S {
+            let still = (DESK_STILL_S * fps.max(1) as f32) as u64;
+            if let Some(g) = self.game.as_mut() {
+                return g.frame(i.saturating_sub(still), fps, stamp_ms);
+            }
+        }
+        let mut data = vec![0u8; (w * h * 4) as usize];
         match self.kind {
             Kind::Motion => {
                 // The landscape pans (like a game's camera), with a patch of shimmering
@@ -183,13 +199,14 @@ impl Scene {
                 self.water(&mut data, t);
                 self.sparks(&mut data, i);
             }
-            Kind::Text => {
-                // Reading a document: every 3 s it scrolls down a few lines (over 0.4 s).
+            Kind::Text | Kind::Desk => {
+                // Reading a document: every 3 s it scrolls down a few lines (over 0.4 s). (The
+                // desktop doesn't scroll: it sits still at the top.)
                 let step = 3.0;
                 let n = (t / step).floor();
                 let frac = ((t - n * step) / 0.4).min(1.0);
                 let ease = frac * frac * (3.0 - 2.0 * frac);
-                let y = ((n + ease) * 96.0) as u32 % (self.th - h);
+                let y = if self.kind == Kind::Desk { 0 } else { ((n + ease) * 96.0) as u32 % (self.th - h) };
                 self.copy_window(&mut data, 0, y);
                 // A toolbar across the top (where the stamp goes), and a blinking caret.
                 for row in 0..(h / 20).max(24).min(h) {
@@ -198,7 +215,7 @@ impl Scene {
                         px.copy_from_slice(&[214, 218, 224, 255]);
                     }
                 }
-                if (t * 2.0) as u64 % 2 == 0 {
+                if self.kind == Kind::Text && (t * 2.0) as u64 % 2 == 0 {
                     let (cx, cy) = (w / 3, h / 2);
                     for yy in cy..(cy + 18).min(h) {
                         let o = ((yy * w + cx) * 4) as usize;

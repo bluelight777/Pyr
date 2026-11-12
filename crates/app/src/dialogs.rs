@@ -1,9 +1,7 @@
 //! Modal dialogs: join server, invites, channels, the screen picker (Settings is in settings.rs).
 
 use eframe::egui::{self, Align, Color32, Layout, RichText, Sense, pos2, vec2};
-use pyr_engine::config::ScreenPreset;
 use pyr_engine::state::{AppState, BugSend, ConnStatus};
-use pyr_engine::video::SourceKind;
 use pyr_proto::control::{ChannelKind, ROLES_FEATURE, perm};
 
 use crate::app::{Act, Dialog, PyrApp, RoleEdit, rgb};
@@ -78,9 +76,12 @@ pub(crate) fn title(ui: &mut egui::Ui, text: &str) {
     ui.add_space(4.0);
 }
 
+/// A field's name over it, in capitals (0.13.14: 12 high, spaced out, and brightened where a
+/// skin's secondary text is too faint on its background, see `theme::readable`).
 pub(crate) fn field_label(ui: &mut egui::Ui, text: &str) {
     ui.add_space(8.0);
-    ui.label(RichText::new(text.to_uppercase()).font(theme::bold_font(11.5)).color(theme::MUTED()));
+    let color = theme::readable(theme::MUTED(), theme::SIDE(), 6.0);
+    ui.label(RichText::new(text.to_uppercase()).font(theme::bold_font(12.0)).color(color).extra_letter_spacing(0.6));
 }
 
 /// The most a dialog's contents can take up: the window's height, less the dialog's margins
@@ -1180,105 +1181,7 @@ impl PyrApp {
                     }
                 }
                 Dialog::ScreenPicker { selected } => {
-                    ui.set_width(560.0);
-                    title(ui, "Share your screen");
-                    // The title and the buttons always show (Go Live never goes off the
-                    // window); what's between fits what's left: the lists and the preview get
-                    // smaller in a short window, and the rest scrolls if it must.
-                    let body_h = (room - 44.0 - 56.0).max(120.0);
-                    // Quality, sound and the note under the preview, and the preview's label.
-                    let fixed = 205.0;
-                    // The preview as big as fits (leaving the screens and windows room), and the
-                    // list of them in what's left: it scrolls when there are more than fit.
-                    let preview_h = ((body_h - fixed - 180.0) * 0.6).clamp(64.0, 220.0);
-                    let sources_h = (body_h - fixed - preview_h).max(100.0);
-                    let preset = st.settings.screen_preset;
-                    let mut chosen = selected.clone();
-                    let screens = &st.devices.screens;
-                    egui::ScrollArea::vertical().id_salt("share-body").max_height(body_h).auto_shrink([false, true]).show(ui, |ui| {
-                        if screens.is_empty() {
-                            ui.horizontal(|ui| {
-                                ui.spinner();
-                                ui.label(RichText::new("Looking for screens and windows…").color(theme::MUTED()));
-                            });
-                        }
-                        egui::ScrollArea::vertical().id_salt("share-sources").max_height(sources_h).auto_shrink([false, true]).show(ui, |ui| {
-                            for (label, kind) in [("SCREENS", SourceKind::Monitor), ("WINDOWS", SourceKind::Window), ("OTHER", SourceKind::Test)] {
-                                let items: Vec<_> = screens.iter().filter(|s| s.kind == kind).collect();
-                                if items.is_empty() {
-                                    continue;
-                                }
-                                field_label(ui, label);
-                                for s in items {
-                                    let sel = chosen.as_deref() == Some(s.id.as_str());
-                                    let text = if s.width > 0 { format!("{}   ({}×{})", s.name, s.width, s.height) } else { s.name.clone() };
-                                    if ui.add(egui::Button::selectable(sel, text).min_size(vec2(ui.available_width(), 30.0))).clicked() {
-                                        chosen = Some(s.id.clone());
-                                    }
-                                }
-                            }
-                        });
-                        if chosen.is_none() {
-                            chosen = screens.iter().find(|s| s.kind == SourceKind::Monitor).map(|s| s.id.clone());
-                        }
-                        self.share_preview(ui, chosen.as_deref(), preview_h);
-                        field_label(ui, "Quality");
-                        let mut p = preset;
-                        egui::ComboBox::from_id_salt("screen-preset").selected_text(p.label()).width(260.0).show_ui(ui, |ui| {
-                            for q in ScreenPreset::ALL {
-                                ui.selectable_value(&mut p, q, q.label());
-                            }
-                        });
-                        if p != preset {
-                            let mut s = st.settings.clone();
-                            s.screen_preset = p;
-                            acts.push(Act::Settings(s));
-                        }
-                        ui.add_space(8.0);
-                        let sound_ok = chosen.as_deref().map(pyr_engine::can_share_sound).unwrap_or(false);
-                        let what = match chosen.as_deref() {
-                            Some(id) if id.starts_with("win:") => "Share this app's sound",
-                            Some(id) if id.starts_with("test:") => "Share sound (a test tone)",
-                            _ => "Share sound (everything you hear, except this call)",
-                        };
-                        // Shown unticked when this source can't carry sound, so it never looks like it will.
-                        let mut share = st.settings.share_audio && sound_ok;
-                        let cb = ui.add_enabled(sound_ok, egui::Checkbox::new(&mut share, if sound_ok { what } else { "Share sound" }));
-                        if !sound_ok {
-                            cb.on_disabled_hover_text("Sharing sound needs Windows 10 (build 20348+) or Windows 11 for now.");
-                        } else if share != st.settings.share_audio {
-                            let mut s = st.settings.clone();
-                            s.share_audio = share;
-                            acts.push(Act::Settings(s));
-                        }
-                        ui.add_space(6.0);
-                        ui.label(
-                            RichText::new("Free, no subscription. Viewers choose to watch, so it only uses bandwidth for people who are watching.")
-                                .size(12.0)
-                                .color(theme::DIM()),
-                        );
-                    });
-                    ui.add_space(12.0);
-                    ui.horizontal(|ui| {
-                        let ok = chosen.is_some();
-                        if ui.add_enabled(ok, theme::primary_button("Go Live").min_size(vec2(110.0, 34.0))).clicked() {
-                            if let Some(id) = chosen.clone() {
-                                acts.push(Act::StartScreen(id));
-                                close = true;
-                            }
-                        }
-                        if ui.button("Cancel").clicked() {
-                            close = true;
-                        }
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.small_button("Refresh").clicked() {
-                                acts.push(Act::RefreshDevices);
-                            }
-                        });
-                    });
-                    if !close {
-                        self.ui.dialog = Some(Dialog::ScreenPicker { selected: chosen });
-                    }
+                    self.share_picker(ui, st, selected, room, acts, &mut close);
                 }
                 Dialog::Settings { tab } => {
                     self.settings_dialog(ui, st, tab, acts, &mut close);
@@ -1693,48 +1596,5 @@ impl PyrApp {
                 .size(12.0)
                 .color(theme::DIM()),
         );
-    }
-}
-
-impl PyrApp {
-    /// What's about to be shared, live (a few frames a second), in the share picker.
-    fn share_preview(&mut self, ui: &mut egui::Ui, source: Option<&str>, height: f32) {
-        if self.ui.preview_source.as_deref() != source {
-            self.ui.preview_source = source.map(String::from);
-            self.ui.preview_tex = None;
-            self.engine.preview_screen(source);
-        }
-        if let Some((w, h, rgba)) = self.engine.preview_frame(640) {
-            let img = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
-            match self.ui.preview_tex.as_mut() {
-                Some((t, at)) => {
-                    t.set(img, egui::TextureOptions::LINEAR);
-                    *at = std::time::Instant::now();
-                }
-                None => {
-                    let t = ui.ctx().load_texture("share-preview", img, egui::TextureOptions::LINEAR);
-                    self.ui.preview_tex = Some((t, std::time::Instant::now()));
-                }
-            }
-        }
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
-        field_label(ui, "PREVIEW");
-        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
-        ui.painter().rect_filled(r, crate::theme::r(8), Color32::BLACK);
-        match &self.ui.preview_tex {
-            Some((t, _)) => {
-                let size = t.size_vec2();
-                let scale = (r.width() / size.x).min(r.height() / size.y);
-                let pr = egui::Rect::from_center_size(r.center(), size * scale);
-                let mut mesh = egui::Mesh::with_texture(t.id());
-                mesh.add_rect_with_uv(pr, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
-                ui.painter().add(egui::Shape::mesh(mesh));
-            }
-            None => {
-                let text = if source.is_some() { "Getting a preview…" } else { "Pick a screen or window" };
-                ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, text, theme::font(13.0), theme::DIM());
-            }
-        }
-        ui.add_space(4.0);
     }
 }

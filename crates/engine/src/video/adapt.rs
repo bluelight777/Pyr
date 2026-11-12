@@ -140,6 +140,12 @@ pub struct RateControl {
     created: Instant,
     /// Why it last changed course (for the media log).
     pub why: &'static str,
+    /// The most that's got through lately while all was fine, bit/s (forgotten over a minute or
+    /// so: it halves in about 40 s).
+    peak: f64,
+    /// Sending far less than the network has carried (a screen sitting still): what the
+    /// connection says then isn't about this share (0.13.21, see `tick`). For the media log too.
+    pub app_limited: bool,
 }
 
 impl RateControl {
@@ -168,6 +174,8 @@ impl RateControl {
             last_tick: None,
             created: now,
             why: "start",
+            peak: 0.0,
+            app_limited: false,
         }
     }
 
@@ -260,12 +268,16 @@ impl RateControl {
                 worst = Reading { signal, why, react, level, room };
             }
         };
-        let queue = self.srtt.saturating_sub(self.base_rtt());
-        let q = queue.as_secs_f64() * 1000.0;
-        if queue > QUEUE_SEVERE {
-            see(Signal::Severe, "queue", ours, q, None);
-        } else if queue > QUEUE_OVER {
-            see(Signal::Over, "queue", ours, q, None);
+        // (Sending little, a round trip that grew is someone else's traffic: not ours to make room
+        // for, 0.13.21.)
+        if !self.app_limited {
+            let queue = self.srtt.saturating_sub(self.base_rtt());
+            let q = queue.as_secs_f64() * 1000.0;
+            if queue > QUEUE_SEVERE {
+                see(Signal::Severe, "queue", ours, q, None);
+            } else if queue > QUEUE_OVER {
+                see(Signal::Over, "queue", ours, q, None);
+            }
         }
         let late = self.oldest_late(now);
         let (over, severe) = late_limits(self.srtt);
@@ -289,6 +301,19 @@ impl RateControl {
             let (over, severe) = late_limits(Duration::from_millis(r.rtt_ms as u64));
             let (late, queue) = (Duration::from_millis(r.late_ms as u64), Duration::from_millis(r.queue_ms as u64));
             let level = r.late_ms.max(r.queue_ms) as f64;
+            if self.app_limited {
+                // (Sending little (a screen sitting still), what reaches them says nothing about
+                // their road, and a wait there isn't this share's: only frames skipped for them,
+                // or a lot lost, count, 0.13.21. Before, a still moment on a busy road cut the
+                // share to what a still screen sends, and it stayed blurry for half a minute.)
+                if r.shed > 0 {
+                    see(Signal::Severe, "viewer", theirs, level.max(severe.as_secs_f64() * 1000.0), None);
+                }
+                if r.loss_pm > 120 {
+                    see(Signal::Severe, "viewer_loss", theirs, r.loss_pm as f64, None);
+                }
+                continue;
+            }
             let room = self.reached_bps(r.session);
             if r.shed > 0 || late > severe || queue > QUEUE_SEVERE {
                 see(Signal::Severe, "viewer", theirs, level.max(severe.as_secs_f64() * 1000.0), room);
@@ -335,8 +360,21 @@ impl RateControl {
             self.sent.pop_front();
         }
 
+        // Sending far less than could go (0.13.21): under a quarter of the target (or of the most
+        // that's got through lately, a megabit at least) over the last round trip and a quarter
+        // second (0.4 s at least), and in what's on its way. Then a still screen's little isn't
+        // proof the road is full, nor a slower round trip that the share is too much.
+        let over = (self.srtt + Duration::from_millis(250)).max(Duration::from_millis(400));
+        let lately = self.rate(&self.sent, now, over);
+        self.peak *= (-dt / 60.0).exp();
+        let quarter = 0.25 * self.target.min(self.peak.max(1_000_000.0));
+        let on_way: usize = self.unacked.iter().map(|u| u.bytes).sum();
+        self.app_limited = quarter > lately && over.as_secs_f64() * quarter > on_way as f64 * 8.0;
         let reading = self.signal(now);
         let acked = self.acked_bps(now);
+        if reading.signal == Signal::Fine {
+            self.peak = self.peak.max(acked);
+        }
         let sent = self.rate(&self.sent, now, Duration::from_secs(1));
         let since_cut = self.last_cut.map(|t| now.duration_since(t)).unwrap_or(Duration::MAX);
         // Once a cut has had time to show (`react`), another only if it's getting worse there
@@ -357,13 +395,20 @@ impl RateControl {
         let room = reading.room.unwrap_or(acked);
         match reading.signal {
             Signal::Severe if again => {
-                let to = if reading.room.is_some() { 0.7 * through(0.3) } else { 0.5 * through(0.3) };
+                // (Sending little: from where it was, not from the little that got through.)
+                let (to, room) = if self.app_limited {
+                    (0.7 * self.target, 0.0)
+                } else if reading.room.is_some() {
+                    (0.7 * through(0.3), room)
+                } else {
+                    (0.5 * through(0.3), room)
+                };
                 self.cut(to, room, now, reading.react * 2, &reading);
             }
             Signal::Over => {
                 self.over_ticks += 1;
                 if self.over_ticks >= 2 && again {
-                    let to = 0.85 * through(0.5);
+                    let (to, room) = if self.app_limited { (0.85 * self.target, 0.0) } else { (0.85 * through(0.5), room) };
                     self.cut(to, room, now, reading.react, &reading);
                 }
             }
@@ -559,6 +604,8 @@ pub struct Ladder {
     /// The kind of content it last chose for, and whether it has chosen yet.
     content: Option<Content>,
     placed: bool,
+    /// Going down in size too, as before 0.13.22 (`PYR_AB=ladder`; see `rungs`).
+    sizes: bool,
 }
 
 /// Heights the ladder steps through (below the preset's own).
@@ -580,6 +627,7 @@ impl Ladder {
             last_down: None,
             content: None,
             placed: false,
+            sizes: pyr_proto::ab::old("ladder"),
         }
     }
 
@@ -607,7 +655,23 @@ impl Ladder {
     }
 
     /// The rungs, best first, for this kind of content.
+    ///
+    /// A share keeps the size it's sent at (0.13.22): when the road can't carry it all, the frame
+    /// rate comes down instead, five sixths, two thirds, then half of it at the least (60: 50,
+    /// 40, 30), whatever's shared. Until then a smaller picture was sent (720p, 540p, 360p and
+    /// back), and everyone watching saw it, not just the one with the slow road
+    /// (`PYR_AB=ladder`: so again).
     pub fn rungs(&self, content: Content) -> Vec<Rung> {
+        if !self.sizes {
+            let mut v: Vec<Rung> = Vec::new();
+            for k in [6, 5, 4, 3] {
+                let fps = ((self.max_fps * k + 3) / 6).max(1);
+                if !v.iter().any(|r| r.fps == fps) {
+                    v.push(Rung { height: self.max_h, fps });
+                }
+            }
+            return v;
+        }
         let heights: Vec<u32> = std::iter::once(self.max_h).chain(HEIGHTS.iter().copied().filter(|h| *h < self.max_h)).collect();
         let lowest = *heights.last().expect("one at least");
         let mut v = Vec::new();
@@ -818,9 +882,18 @@ mod tests {
     fn a_struggling_viewer_backs_off() {
         let t0 = Instant::now();
         let mut rc = RateControl::new(4_000_000, 4_000_000, t0);
-        rc.tick(t0, path(200, 0, 0));
-        rc.on_viewers(&[ViewerReport { session: 7, rtt_ms: 210, queue_ms: 300, late_ms: 0, kbps: 1000, loss_pm: 0, shed: 0 }], t0);
-        let t = rc.tick(t0 + Duration::from_millis(100), path(200, 0, 0));
+        // (A busy share, sending what it may: one sending little doesn't go by a viewer's
+        // queue, see `a_still_moment_on_a_busy_road_isnt_a_reason_to_cut`.)
+        let mut t = t0;
+        for i in 0..10u32 {
+            t = t0 + Duration::from_millis(i as u64 * 100);
+            rc.on_sent(i, 50_000, t);
+            rc.on_acked(i, true, t);
+            rc.tick(t, path(200, 0, i as u64 * 100));
+        }
+        assert!(!rc.app_limited);
+        rc.on_viewers(&[ViewerReport { session: 7, rtt_ms: 210, queue_ms: 300, late_ms: 0, kbps: 1000, loss_pm: 0, shed: 0 }], t);
+        let t = rc.tick(t + Duration::from_millis(100), path(200, 0, 1000));
         assert!(t <= 2_000_000, "{t}");
         assert_eq!(rc.why, "viewer");
     }
@@ -895,6 +968,50 @@ mod tests {
 
     /// A still screen sends little: that doesn't lower the rate, and the rate doesn't climb
     /// far past what's sent either.
+    /// 0.13.21: a screen sitting still on a busy road. A viewer's report says their road is a
+    /// little backed up and only a still screen's trickle reached them; that's someone else's
+    /// traffic, not this share's, and it isn't cut to the trickle (before, it was: 0.2 Mbit/s for
+    /// half a minute once things moved again, in the bug reports).
+    #[test]
+    fn a_still_moment_on_a_busy_road_isnt_a_reason_to_cut() {
+        let t0 = Instant::now();
+        let mut rc = RateControl::new(6_000_000, 6_000_000, t0);
+        let mut seq = 0;
+        let mut t = t0;
+        // Ten seconds of a game at the full 6 Mbit/s: got through.
+        for i in 0..100u64 {
+            t = t0 + Duration::from_millis(i * 100);
+            rc.on_sent(seq, 75_000, t);
+            rc.on_acked(seq, true, t);
+            seq += 1;
+            rc.tick(t, path(50, 0, i * 100));
+        }
+        let before = rc.target();
+        // Then the desktop sits still: a few hundred bytes a frame, and the viewer's reports say
+        // 60 ms of queueing and 30 kbit/s reaching them.
+        for i in 100..200u64 {
+            t = t0 + Duration::from_millis(i * 100);
+            rc.on_sent(seq, 400, t);
+            rc.on_acked(seq, true, t);
+            seq += 1;
+            // (Their reports from the still moment on: the first ones still count the game's
+            // last frames.)
+            if i >= 110 && i % 5 == 0 {
+                rc.on_viewers(&[ViewerReport { session: 1, rtt_ms: 60, queue_ms: 60, late_ms: 0, kbps: 30, loss_pm: 0, shed: 0 }], t);
+            }
+            rc.tick(t, path(50, 0, i * 100));
+            // (Once the game's last frames are past the last 0.4 s.)
+            if i >= 105 {
+                assert!(rc.app_limited, "at {i}");
+            }
+        }
+        assert!(rc.target() >= before * 9 / 10, "{} from {before}", rc.target());
+        // Frames skipped for them still count, sending little or not.
+        rc.on_viewers(&[ViewerReport { session: 1, rtt_ms: 60, queue_ms: 60, late_ms: 0, kbps: 30, loss_pm: 0, shed: 3 }], t);
+        let cut = rc.tick(t + Duration::from_millis(100), path(50, 0, 20_100));
+        assert!(cut <= before * 7 / 10 + 1, "{cut}");
+    }
+
     #[test]
     fn a_still_screen_neither_lowers_nor_inflates_the_rate() {
         let t0 = Instant::now();
@@ -908,17 +1025,44 @@ mod tests {
         assert_eq!(rc.target(), 2_000_000);
     }
 
+    /// The ladder as it was before 0.13.22 (`PYR_AB=ladder`): smaller pictures too.
+    fn sized(mut l: Ladder) -> Ladder {
+        l.sizes = true;
+        l
+    }
+
+    /// 0.13.22: a share keeps its size and comes down in frame rate instead, to half at the least
+    /// (as 0.13.28's rungs, read off its program: 6, 5, 4 and 3 sixths, rounded).
+    #[test]
+    fn a_share_keeps_its_size_and_lowers_the_frame_rate() {
+        let t0 = Instant::now();
+        let l = Ladder::new(1080, 60, 6_000_000, t0);
+        let fps: Vec<u32> = l.rungs(Content::Motion).iter().map(|r| r.fps).collect();
+        assert_eq!(fps, [60, 50, 40, 30]);
+        assert!(l.rungs(Content::Text).iter().chain(l.rungs(Content::Motion).iter()).all(|r| r.height == 1080));
+        let fps: Vec<u32> = Ladder::new(1440, 30, 8_000_000, t0).rungs(Content::Text).iter().map(|r| r.fps).collect();
+        assert_eq!(fps, [30, 25, 20, 15]);
+        let fps: Vec<u32> = Ladder::new(720, 15, 1_500_000, t0).rungs(Content::Motion).iter().map(|r| r.fps).collect();
+        assert_eq!(fps, [15, 13, 10, 8]);
+        // Far short: the frame rate comes down at once, the size never.
+        let mut l = Ladder::new(1080, 60, 6_000_000, t0);
+        let r = l.decide(1_000_000, Content::Motion, false, t0 + Duration::from_secs(10));
+        assert_eq!(r, Rung { height: 1080, fps: 30 });
+        let r = l.decide(2_800_000, Content::Motion, false, t0 + Duration::from_secs(20));
+        assert_eq!(r.height, 1080);
+    }
+
     #[test]
     fn motion_keeps_its_frame_rate_and_text_its_size() {
         let t0 = Instant::now();
         // Standard: 1080p30 at 4 Mbit/s.
-        let mut l = Ladder::new(1080, 30, 4_000_000, t0);
+        let mut l = sized(Ladder::new(1080, 30, 4_000_000, t0));
         assert_eq!(l.decide(4_000_000, Content::Motion, false, t0), Rung { height: 1080, fps: 30 });
         // A third of that: a smaller picture at the same frame rate (straight away: far short).
         let r = l.decide(1_300_000, Content::Motion, false, t0 + Duration::from_secs(10));
         assert_eq!(r, Rung { height: 540, fps: 30 }, "{:?}", l.rungs(Content::Motion));
         // Text at the same bitrate: full size, fewer frames (after a moment).
-        let mut l = Ladder::new(1080, 30, 4_000_000, t0);
+        let mut l = sized(Ladder::new(1080, 30, 4_000_000, t0));
         assert_eq!(l.decide(1_300_000, Content::Text, false, t0 + Duration::from_secs(10)).fps, 30);
         let r = l.decide(1_300_000, Content::Text, false, t0 + Duration::from_millis(10_500));
         assert_eq!(r.height, 1080);
@@ -932,7 +1076,7 @@ mod tests {
     fn sixty_fps_is_kept_at_720p_before_halving_it() {
         let t0 = Instant::now();
         // Smooth: 1080p60 at 6 Mbit/s.
-        let mut l = Ladder::new(1080, 60, 6_000_000, t0);
+        let mut l = sized(Ladder::new(1080, 60, 6_000_000, t0));
         let r = l.decide(2_800_000, Content::Motion, false, t0 + Duration::from_secs(10));
         assert_eq!(r, Rung { height: 720, fps: 60 });
         let r = l.decide(1_500_000, Content::Motion, false, t0 + Duration::from_secs(20));
@@ -943,7 +1087,7 @@ mod tests {
     #[test]
     fn going_up_waits_for_room_and_takes_one_step() {
         let t0 = Instant::now();
-        let mut l = Ladder::new(1080, 30, 4_000_000, t0);
+        let mut l = sized(Ladder::new(1080, 30, 4_000_000, t0));
         assert_eq!(l.decide(700_000, Content::Motion, false, t0 + Duration::from_secs(5)).height, 360);
         // Room for 1080p again, but not for long enough yet.
         let mut t = t0 + Duration::from_secs(6);
@@ -963,7 +1107,7 @@ mod tests {
     #[test]
     fn the_preset_itself_comes_back_at_its_own_bitrate() {
         let t0 = Instant::now();
-        let mut l = Ladder::new(1080, 30, 4_000_000, t0);
+        let mut l = sized(Ladder::new(1080, 30, 4_000_000, t0));
         assert_eq!(l.place(2_400_000, Content::Motion, t0).height, 720);
         let mut t = t0;
         for _ in 0..200 {
@@ -977,7 +1121,7 @@ mod tests {
     #[test]
     fn a_short_dip_keeps_the_size() {
         let t0 = Instant::now();
-        let mut l = Ladder::new(1080, 30, 4_000_000, t0);
+        let mut l = sized(Ladder::new(1080, 30, 4_000_000, t0));
         l.decide(4_000_000, Content::Motion, false, t0);
         let t = t0 + Duration::from_secs(10);
         assert_eq!(l.decide(3_300_000, Content::Motion, false, t).height, 1080);

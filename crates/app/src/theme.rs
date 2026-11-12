@@ -224,6 +224,29 @@ pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
 }
 
+/// `fg`, or brighter if it's too faint on `bg` (0.13.14: "when a skin's secondary text is too
+/// faint on its background, Pyr brightens it just enough"): moved towards `TEXT` a tenth at a
+/// time until the two contrast at least `ratio` to 1 (WCAG's contrast), `TEXT` itself at most.
+pub fn readable(fg: Color32, bg: Color32, ratio: f32) -> Color32 {
+    fn lin(c: u8) -> f32 {
+        let c = c as f32 / 255.0;
+        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    }
+    fn luminance(c: Color32) -> f32 {
+        0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+    }
+    let lb = luminance(bg);
+    let mut out = fg;
+    for i in 1..=10 {
+        let lf = luminance(out);
+        if (lf.max(lb) + 0.05) / (lf.min(lb) + 0.05) >= ratio {
+            return out;
+        }
+        out = mix(fg, TEXT(), i as f32 / 10.0);
+    }
+    out
+}
+
 /// A color's hue (0 to 1), saturation and lightness.
 pub fn hsl(c: Color32) -> (f32, f32, f32) {
     let (r, g, b) = (c.r() as f32 / 255.0, c.g() as f32 / 255.0, c.b() as f32 / 255.0);

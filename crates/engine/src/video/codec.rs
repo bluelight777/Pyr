@@ -10,7 +10,8 @@ use openh264::encoder::{
 };
 use openh264::formats::{YUVSlices, YUVSource};
 use openh264_sys2::{
-    ENCODER_OPTION_BITRATE, ENCODER_OPTION_FRAME_RATE, ENCODER_OPTION_MAX_BITRATE, SBitrateInfo, SPATIAL_LAYER_0, SPATIAL_LAYER_ALL,
+    ENCODER_OPTION_BITRATE, ENCODER_OPTION_FRAME_RATE, ENCODER_OPTION_MAX_BITRATE, ENCODER_OPTION_SVC_ENCODE_PARAM_EXT, PRO_HIGH, SBitrateInfo,
+    SEncParamExt, SPATIAL_LAYER_0, SPATIAL_LAYER_ALL,
 };
 use std::ptr::addr_of_mut;
 use yuv::{YuvChromaSubsampling, YuvConversionMode, YuvPlanarImage, YuvPlanarImageMut, YuvRange, YuvStandardMatrix};
@@ -50,11 +51,14 @@ pub fn fit_size(w: u32, h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
 
 pub struct Scaler {
     resizer: Resizer,
+    /// Text made smaller (a 1440p or 4K screen shared at 1080p) is kept crisp: Catmull-Rom
+    /// instead of bilinear (0.13.21; `PYR_AB=sharp`: bilinear always).
+    pub sharp: bool,
 }
 
 impl Default for Scaler {
     fn default() -> Self {
-        Scaler { resizer: Resizer::new() }
+        Scaler { resizer: Resizer::new(), sharp: false }
     }
 }
 
@@ -68,9 +72,8 @@ impl Scaler {
         let (fw, fh, fmt) = (frame.width, frame.height, frame.format);
         let src = Image::from_slice_u8(fw, fh, &mut frame.data, pt).map_err(|e| anyhow!("bad frame buffer: {e:?}"))?;
         let mut dst = Image::new(w, h, pt);
-        let opts = ResizeOptions::new()
-            .resize_alg(ResizeAlg::Convolution(fast_image_resize::FilterType::Bilinear))
-            .use_alpha(false);
+        let filter = if self.sharp { fast_image_resize::FilterType::CatmullRom } else { fast_image_resize::FilterType::Bilinear };
+        let opts = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(filter)).use_alpha(false);
         self.resizer.resize(&src, &mut dst, &opts).map_err(|e| anyhow!("resize failed: {e:?}"))?;
         Ok(Some(RawFrame { width: w, height: h, format: fmt, data: dst.into_vec() }))
     }
@@ -164,6 +167,9 @@ pub struct H264Encoder {
     pub height: u32,
     /// Frames OpenH264 skipped to keep to its bitrate (what it's asked for is too much for it).
     pub skipped: u64,
+    /// H.264's High profile with CABAC (0.13.21: 1 to 3.5 dB better for the same bitrate, far
+    /// fewer frames skipped on slow roads; `PYR_AB=cabac`: Baseline's CAVLC, as before).
+    cabac: bool,
 }
 
 impl H264Encoder {
@@ -185,6 +191,7 @@ impl H264Encoder {
             width: 0,
             height: 0,
             skipped: 0,
+            cabac: !pyr_proto::ab::old("cabac"),
         };
         // (Checked now, so a broken encoder shows when the share starts.)
         e.enc = Some(e.make()?);
@@ -256,6 +263,38 @@ impl H264Encoder {
         self.applied = (self.bitrate, self.fps);
     }
 
+    /// Turns a new encoder over to the High profile with CABAC. OpenH264 sets itself up on its
+    /// first frame (with the crate's settings: Baseline, CAVLC), so it's given a black one at
+    /// the size wanted first (what comes out of it is thrown away), then its settings changed
+    /// (which sets it up again), and the next frame is made a keyframe.
+    fn to_cabac(&mut self) {
+        let Some(enc) = self.enc.as_mut() else { return };
+        let (w, h) = (self.width as usize, self.height as usize);
+        let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
+        let (y, u, v) = (vec![16u8; w * h], vec![128u8; cw * ch], vec![128u8; cw * ch]);
+        let black = YUVSlices::new((&y, &u, &v), (w, h), (w, cw, cw));
+        if let Err(e) = enc.encode(&black) {
+            tracing::warn!("video: couldn't set the encoder up for CABAC ({e}); carrying on without it");
+            return;
+        }
+        // SAFETY: OpenH264's own option and its parameter struct (codec_app_def.h); the encoder
+        // is set up (it has encoded a frame).
+        let took = unsafe {
+            let api = enc.raw_api();
+            let mut p: SEncParamExt = std::mem::zeroed();
+            api.get_option(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT, addr_of_mut!(p).cast()) == 0 && {
+                p.iEntropyCodingModeFlag = 1;
+                p.sSpatialLayers[0].uiProfileIdc = PRO_HIGH;
+                api.set_option(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT, addr_of_mut!(p).cast()) == 0
+            }
+        };
+        if !took {
+            tracing::warn!("video: OpenH264 wouldn't take CABAC; carrying on without");
+        }
+        self.fresh = false;
+        self.force_key = true;
+    }
+
     pub fn encode(&mut self, img: &I420) -> Result<Option<EncodedFrame>> {
         if self.width != img.width || self.height != img.height || self.enc.is_none() || self.remake {
             // A new size: a new encoder, made for the bitrate and frame rate wanted now (set up
@@ -270,6 +309,9 @@ impl H264Encoder {
             self.applied = (self.bitrate, self.fps);
             self.fresh = true;
             self.force_key = false;
+            if self.cabac {
+                self.to_cabac();
+            }
         }
         if !self.fresh && (self.bitrate, self.fps) != self.applied {
             self.apply_rates();

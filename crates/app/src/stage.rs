@@ -2,6 +2,7 @@
 
 use eframe::egui::{self, Align, Color32, CornerRadius, Layout, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
 use pyr_engine::state::{AppState, RingState, ServerView, Trust, VideoKey};
+use pyr_engine::video;
 use pyr_proto::media::track;
 
 use crate::app::{Act, Dialog, PyrApp, avatar, icon_button};
@@ -764,7 +765,17 @@ impl PyrApp {
                 match stt.sending {
                     // (Lowered: to suit the connection, ours or a viewer's, see `video::adapt`.)
                     Some(s) => {
-                        lines.push(format!("sending {}p {} fps · {:.1} Mbps", s.height, s.fps, s.kbps as f32 / 1000.0));
+                        // (The frames that went out, and from which encoder: 0.13.26.)
+                        let encoder = match s.encoder {
+                            video::ENCODER_NVIDIA => " · NVIDIA encoder",
+                            video::ENCODER_AMD => " · AMD encoder",
+                            video::ENCODER_INTEL => " · Intel encoder",
+                            video::ENCODER_CARD => " · card's encoder",
+                            _ if call.screen_on => " · processor encoder",
+                            _ => "",
+                        };
+                        let still = if s.still { " (screen still)" } else { "" };
+                        lines.push(format!("sending {}p {} fps{still} · {:.1} Mbps{encoder}", s.height, s.sent_fps, s.kbps as f32 / 1000.0));
                         if s.lowered {
                             lowered_line = Some(lines.len());
                             lines.push("lowered to fit the connection".into());

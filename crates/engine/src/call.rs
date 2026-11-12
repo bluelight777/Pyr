@@ -895,7 +895,15 @@ impl Call {
         }
         // (Only what the network asked for counts as lowered: see `PublisherStats::lowered`.)
         let lowered = s.lowered.load(Ordering::Relaxed);
-        Some(crate::state::Sending { height, fps: if fps > 0 { fps } else { v.cfg.fps }, kbps: if kbps > 0 { kbps } else { v.cfg.bitrate / 1000 }, lowered })
+        Some(crate::state::Sending {
+            height,
+            fps: if fps > 0 { fps } else { v.cfg.fps },
+            kbps: if kbps > 0 { kbps } else { v.cfg.bitrate / 1000 },
+            sent_fps: s.sent_fps.load(Ordering::Relaxed),
+            encoder: s.encoder.load(Ordering::Relaxed),
+            lowered,
+            still: s.still.load(Ordering::Relaxed),
+        })
     }
 
     pub fn publisher_stats(&self, track_id: u8) -> Option<(u64, u64, u64)> {

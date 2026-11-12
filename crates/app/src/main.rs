@@ -42,6 +42,7 @@ mod props;
 mod poker;
 mod select;
 mod settings;
+mod share_picker;
 mod stage;
 mod textbox;
 mod theme;

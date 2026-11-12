@@ -522,8 +522,14 @@ pub struct Sending {
     pub height: u32,
     pub fps: u32,
     pub kbps: u32,
+    /// Frames a second that actually went out lately (what the stats show), and the encoder
+    /// making them (`video::ENCODER_*`).
+    pub sent_fps: u32,
+    pub encoder: u32,
     /// Less than its preset, to suit the connection (ours or a viewer's).
     pub lowered: bool,
+    /// Nothing on the screen changed lately: only the last picture went out again.
+    pub still: bool,
 }
 
 #[derive(Clone, Debug)]

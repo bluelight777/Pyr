@@ -1267,13 +1267,16 @@ impl PyrApp {
     }
 
     /// Upload new video frames to textures; returns the texture for a tile.
+    ///
+    /// (A decoded frame is opaque, so its pixels go up as they are: 0.13.26. Taking them as
+    /// unmultiplied looked at each of a 1080p frame's two million pixels first.)
     pub fn texture(&mut self, ctx: &egui::Context, key: VideoKey) -> Option<(egui::TextureId, egui::Vec2)> {
         let frame = self.engine.video_frame(key)?;
         let size = [frame.width as usize, frame.height as usize];
         match self.textures.get_mut(&key) {
             Some((tex, generation)) => {
                 if *generation != frame.generation {
-                    tex.set(egui::ColorImage::from_rgba_unmultiplied(size, &frame.rgba), egui::TextureOptions::LINEAR);
+                    tex.set(egui::ColorImage::from_rgba_premultiplied(size, &frame.rgba), egui::TextureOptions::LINEAR);
                     *generation = frame.generation;
                     let e = self.fps.entry(key).or_insert((Instant::now(), 0, 0.0));
                     e.1 += 1;
@@ -1287,7 +1290,7 @@ impl PyrApp {
             None => {
                 let tex = ctx.load_texture(
                     format!("video-{}-{}", key.session, key.track),
-                    egui::ColorImage::from_rgba_unmultiplied(size, &frame.rgba),
+                    egui::ColorImage::from_rgba_premultiplied(size, &frame.rgba),
                     egui::TextureOptions::LINEAR,
                 );
                 self.textures.insert(key, (tex, frame.generation));

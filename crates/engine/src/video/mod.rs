@@ -105,10 +105,25 @@ pub struct PublisherStats {
     /// for text (kept sharp) rather than motion (kept smooth).
     pub fps: AtomicU32,
     pub target_kbps: AtomicU32,
+    /// Frames that went out in the last second or so (for the call's stats: 0.13.26), and the
+    /// encoder making them (`ENCODER_*`).
+    pub sent_fps: AtomicU32,
+    pub encoder: AtomicU32,
     pub text: AtomicBool,
     /// Sent smaller or at fewer frames a second than the preset, for want of bitrate.
     pub lowered: AtomicBool,
+    /// What went out in that second was only the last picture again: nothing on the screen
+    /// changed (so few frames a second is nothing wrong).
+    pub still: AtomicBool,
 }
+
+/// Which encoder a share's frames come from (`PublisherStats::encoder`, said in the call's
+/// stats): the processor's (OpenH264), or the graphics card's (Windows, see `hw`).
+pub const ENCODER_PROCESSOR: u32 = 0;
+pub const ENCODER_NVIDIA: u32 = 1;
+pub const ENCODER_AMD: u32 = 2;
+pub const ENCODER_INTEL: u32 = 3;
+pub const ENCODER_CARD: u32 = 4;
 
 /// What the network side tells a publisher about how its frames are getting on (see
 /// `call::VideoCtx::start` and `adapt::RateControl`).
@@ -164,6 +179,8 @@ impl Publisher {
                 // `PYR_AB=adapt` keeps the preset's, `PYR_AB=pace` the old limit on frames
                 // in flight (~120 ms of them, whatever the round trip).
                 let (adapting, old_pace) = (!pyr_proto::ab::old("adapt"), pyr_proto::ab::old("pace"));
+                // (Text made smaller kept crisp, 0.13.21: `PYR_AB=sharp` for bilinear always.)
+                let sharp = !pyr_proto::ab::old("sharp");
                 let mut period = Duration::from_secs_f64(1.0 / cfg.fps.max(1) as f64);
                 let max_inflight = ((cfg.fps as usize * 12) / 100).max(2);
                 let mut ladder = adapt::Ladder::new(cfg.max_height, cfg.fps, cfg.bitrate, Instant::now());
@@ -187,6 +204,10 @@ impl Publisher {
                 // Starting it again failed: why it broke, the last failure, until when it's tried
                 // again, and when next.
                 let mut retrying: Option<(String, String, Instant, Instant)> = None;
+                // Frames sent since `window` began, and how many of them were new pictures (the
+                // rest the last one again): the frame rate the stats show, once a second.
+                let mut window = Instant::now();
+                let (mut sent, mut fresh_sent) = (0u32, 0u32);
                 while !st.load(Ordering::Relaxed) {
                     // The capture, looked at once a second.
                     if !over && checked.elapsed() >= Duration::from_secs(1).min(RETRY_EVERY) {
@@ -249,8 +270,20 @@ impl Publisher {
                         }
                         }
                     }
-                    let fresh = slot.take_wait(Duration::from_millis(40));
+                    // (Waiting for a new frame no longer than until the next is due, a quarter
+                    // of a frame early: 0.13.26.)
+                    let wait = if last.is_none() {
+                        Duration::from_millis(40)
+                    } else {
+                        next_due.saturating_duration_since(Instant::now()).saturating_sub(period / 4).clamp(Duration::from_millis(1), Duration::from_millis(40))
+                    };
+                    let fresh = slot.take_wait(wait);
                     let now = Instant::now();
+                    if let Some(dt) = now.checked_duration_since(window).filter(|d| d.as_secs() >= 1) {
+                        sts.sent_fps.store((sent as f64 / dt.as_secs_f64()).round() as u32, Ordering::Relaxed);
+                        sts.still.store(fresh_sent == 0 && sent != 0, Ordering::Relaxed);
+                        (sent, fresh_sent, window) = (0, 0, now);
+                    }
                     let have_new = fresh.is_some();
                     if let Some(f) = fresh {
                         if adapting && cfg.screen {
@@ -272,6 +305,7 @@ impl Publisher {
                         let next = if placed { ladder.decide(target, kind, struggling, now) } else { ladder.place(target, kind, now) };
                         placed = true;
                         enc.set_motion(kind == adapt::Content::Motion);
+                        scaler.sharp = cfg.screen && kind == adapt::Content::Text && sharp;
                         if next != rung {
                             debug!(target: "pyr_media", ev = "rung", h = next.height, fps = next.fps, kbps = target / 1000, text = (kind == adapt::Content::Text), struggling);
                             rung = next;
@@ -295,7 +329,10 @@ impl Publisher {
                     if !have_new && !repeat {
                         continue;
                     }
-                    if now < next_due && !want_key {
+                    // A frame that comes a moment before its turn is taken (up to a quarter of a
+                    // frame early, 0.13.26): passed over, a 60 fps share lost frames to the
+                    // capture's timing and went out at 40 to 50.
+                    if now + period / 4 < next_due && !want_key {
                         continue;
                     }
                     // Not while the network is behind with what it has already (skipping
@@ -311,6 +348,7 @@ impl Publisher {
                         sts.skipped.fetch_add(1, Ordering::Relaxed);
                         continue;
                     }
+                    fresh_sent += have_new as u32;
                     if want_key {
                         kf.store(false, Ordering::Relaxed);
                         enc.request_keyframe();
@@ -343,6 +381,7 @@ impl Publisher {
                                 last_key = Some(now);
                             }
                             sink(e, tw, th);
+                            sent += 1;
                         }
                         Ok(None) => {}
                         Err(e) => warn!("encode failed: {e:#}"),
@@ -664,6 +703,46 @@ mod tests {
         let got = events.lock().clone();
         assert!(matches!(got.as_slice(), [CaptureEvent::Restarted(why)] if why.contains("came back")), "{got:?}");
         assert_eq!(tries.load(Ordering::SeqCst), 3);
+    }
+
+    /// The call's stats (0.13.26): the frames that really went out a second, and, once the
+    /// screen sits still (nothing new captured, only the last picture again), "screen still".
+    #[test]
+    fn the_stats_say_how_many_frames_went_out_and_when_the_screen_sat_still() {
+        let cfg = PublisherConfig { screen: true, max_width: 320, max_height: 180, fps: 10, bitrate: 200_000 };
+        let slot = Arc::new(FrameSlot::default());
+        let sent = Arc::new(AtomicUsize::new(0));
+        let n = sent.clone();
+        let publisher = Publisher::start(
+            cfg,
+            working(),
+            slot.clone(),
+            Box::new(move |_, _, _| {
+                n.fetch_add(1, Ordering::SeqCst);
+            }),
+            None,
+            Arc::new(SendLink::default()),
+            None,
+            Box::new(|_| {}),
+        )
+        .unwrap();
+        let frame = |shade: u8| codec::RawFrame { width: 320, height: 180, format: codec::PixelFormat::Rgba, data: vec![shade; 320 * 180 * 4] };
+        // Three seconds of a picture that changes ten times a second...
+        let t0 = Instant::now();
+        let mut i = 0u8;
+        while t0.elapsed() < Duration::from_secs(3) {
+            slot.put(frame(i));
+            i = i.wrapping_add(7);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let (moving_fps, moving_still) = (publisher.stats.sent_fps.load(Ordering::Relaxed), publisher.stats.still.load(Ordering::Relaxed));
+        // ...then three of nothing new: the last picture goes out again twice a second.
+        std::thread::sleep(Duration::from_secs(3));
+        let (still_fps, still) = (publisher.stats.sent_fps.load(Ordering::Relaxed), publisher.stats.still.load(Ordering::Relaxed));
+        drop(publisher);
+        assert!(sent.load(Ordering::SeqCst) > 20);
+        assert!((7..=11).contains(&moving_fps) && !moving_still, "{moving_fps} {moving_still}");
+        assert!((1..=3).contains(&still_fps) && still, "{still_fps} {still}");
     }
 
     #[test]

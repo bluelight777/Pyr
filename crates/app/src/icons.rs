@@ -853,3 +853,55 @@ pub fn eye(p: &Painter, r: Rect, c: Color32) {
     p.add(Shape::line(bottom, s));
     p.circle_filled(r.center(), h * 0.45, c);
 }
+
+/// A monitor on its stand (the share picker's, 0.13.14), in proportion to `r`.
+pub fn monitor(p: &Painter, r: Rect, c: Color32) {
+    let s = r.width();
+    let stroke = Stroke::new((s * 0.09).max(1.4), c);
+    let min = r.min + vec2(s * 0.06, s * 0.12);
+    let screen = Rect::from_min_max(min, min + vec2(s * 0.88, s * 0.56));
+    p.rect_stroke(screen, CornerRadius::same((s * 0.08) as u8), stroke, StrokeKind::Inside);
+    let cx = (r.max.x + r.min.x) * 0.5;
+    p.line_segment([pos2(cx, screen.max.y), pos2(cx, r.min.y + s * 0.82)], stroke);
+    let y = r.min.y + s * 0.84;
+    p.line_segment([pos2(cx - s * 0.22, y), pos2(cx + s * 0.22, y)], stroke);
+}
+
+/// A window: its frame, its title bar and the three dots on it (the share picker's, 0.13.14).
+pub fn window(p: &Painter, r: Rect, c: Color32) {
+    let s = r.width();
+    let stroke = Stroke::new((s * 0.09).max(1.4), c);
+    let min = r.min + vec2(s * 0.05, s * 0.14);
+    let frame = Rect::from_min_max(min, min + vec2(s * 0.9, s * 0.72));
+    p.rect_stroke(frame, CornerRadius::same((s * 0.1) as u8), stroke, StrokeKind::Inside);
+    let y = s * 0.25 + min.y;
+    p.line_segment([pos2(min.x, y), pos2(frame.max.x, y)], stroke);
+    let dot = (s * 0.045).max(1.0);
+    let first = min + vec2(s * 0.17, s * 0.13);
+    p.circle_filled(first, dot, c);
+    p.circle_filled(pos2(s * 0.3 + min.x, first.y), dot, c);
+    p.circle_filled(pos2(s * 0.43 + min.x, first.y), dot, c);
+}
+
+/// A test picture's seven colour bars (the share picker's, 0.13.14), each overlapping the next by
+/// half a pixel so no seam shows between them.
+pub fn test_pattern(p: &Painter, r: Rect) {
+    const BARS: [Color32; 7] = [
+        Color32::from_rgb(0xe8, 0xe8, 0xe8),
+        Color32::from_rgb(0xe8, 0xd0, 0x30),
+        Color32::from_rgb(0x30, 0xc8, 0xd0),
+        Color32::from_rgb(0x40, 0xc0, 0x40),
+        Color32::from_rgb(0xd0, 0x40, 0xc8),
+        Color32::from_rgb(0xd8, 0x40, 0x40),
+        Color32::from_rgb(0x40, 0x50, 0xd8),
+    ];
+    let s = r.width();
+    let x0 = s * 0.05 + r.min.x;
+    let bar = ((s * 0.9 + x0) - x0) / 7.0;
+    let y0 = s * 0.16 + r.min.y;
+    let y1 = ((s * 0.68 + y0) - y0) + y0;
+    for (i, c) in BARS.into_iter().enumerate() {
+        let x = i as f32 * bar + x0;
+        p.rect_filled(Rect::from_min_max(pos2(x, y0), pos2((0.5 + bar) + x, y1)), 0, c);
+    }
+}

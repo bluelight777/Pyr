@@ -13,7 +13,10 @@
 //! cancellation: WebRTC's own settings, before 0.11.0), `aecsat` (it took a microphone that
 //! clipped to be all echo, before 0.12.0), `aecpath` (its sound went out even with headphones,
 //! before 0.12.0), `aecmask` (it took out what was left of the echo wherever it was a third as
-//! loud as your voice, before 0.12.0).
+//! loud as your voice, before 0.12.0), `cabac` (screen shares in H.264's Baseline profile with
+//! CAVLC, before 0.13.21), `sharp` (text made smaller with a bilinear filter, before 0.13.21),
+//! `ladder` (a share sent smaller when the road can't carry it, before 0.13.22: since, it keeps
+//! its size and lowers its frame rate).
 //!
 //! `PYR_CC=cubic` puts back QUIC's CUBIC congestion control instead of BBR (see [`bbr`]).
 //!

@@ -197,21 +197,39 @@ fn start_test_pattern(slot: Arc<FrameSlot>, w: u32, h: u32, fps: u32) -> Capture
 
 // ------------------------------------------------------------------ screens
 
+/// Made-up screens, for trying the share picker (0.13.14, any build): `PYR_FAKE_SCREENS=N`
+/// lists the first N of these after the real ones (four at most). Modelled on Blue's own.
+const FAKE_SCREENS: [(&str, u32, u32); 4] = [("XB273K GP", 3840, 2160), ("M420SL", 1920, 1080), ("Studio Display", 5120, 2880), ("Portable 16", 2560, 1600)];
+
+/// Made-up windows (`PYR_FAKE_WINDOWS=N`: N of them, these ten over and over, forty at most).
+const FAKE_WINDOWS: [(&str, u32, u32); 10] = [
+    ("#general - Firelit Friends", 3862, 2110),
+    ("Steam", 3840, 2088),
+    ("hot-property - File Explorer", 1613, 961),
+    ("Watching a long film with a very long name, season 6 episode 20 - a streaming site \u{2014} Mozilla Firefox", 3862, 2110),
+    ("Friends List", 548, 990),
+    ("(Unsaved) - Blender 5.2", 3862, 2110),
+    ("Settings", 1800, 1398),
+    ("Untitled - Notepad", 1280, 720),
+    ("Spotify Premium", 1600, 1000),
+    ("Calculator", 400, 640),
+];
+
+/// What can be shared, as 0.13.28 lists it: the screens, the windows, then the test pictures
+/// (the share picker shows them under Screens, Windows and Other).
 pub fn list_screens() -> Vec<ScreenSource> {
     let mut v = platform_screens();
-    // Development builds: `PYR_FAKE_WINDOWS=N` lists N made-up windows, for trying the share
-    // picker with a busy desktop.
-    #[cfg(debug_assertions)]
-    if let Some(n) = pyr_proto::env_var("FAKE_WINDOWS").and_then(|n| n.parse::<usize>().ok()) {
-        for i in 0..n.min(40) {
-            v.push(ScreenSource {
-                id: format!("fake:{i}"),
-                name: format!("A window with a long title, number {} — Some Browser", i + 1),
-                kind: SourceKind::Window,
-                width: 1920,
-                height: 1080,
-            });
-        }
+    let count = |name: &str| pyr_proto::env_var(name).and_then(|n| n.trim().parse::<usize>().ok()).unwrap_or(0);
+    // (Named as the real ones were once, "Screen 2 — XB273K GP", numbered after them; the picker
+    // shows the number on the tile and the rest under it.)
+    let real = v.iter().filter(|s| s.kind == SourceKind::Monitor).count();
+    for (i, (name, w, h)) in FAKE_SCREENS.iter().take(count("FAKE_SCREENS")).enumerate() {
+        let name = format!("Screen {} \u{2014} {name}", i + real + 1);
+        v.push(ScreenSource { id: format!("fake-screen:{i}"), name, kind: SourceKind::Monitor, width: *w, height: *h });
+    }
+    for i in 0..count("FAKE_WINDOWS").min(40) {
+        let (name, w, h) = FAKE_WINDOWS[i % FAKE_WINDOWS.len()];
+        v.push(ScreenSource { id: format!("fake:{i}"), name: name.into(), kind: SourceKind::Window, width: w, height: h });
     }
     v.push(ScreenSource {
         id: TEST_PATTERN_ID.into(),
@@ -221,9 +239,14 @@ pub fn list_screens() -> Vec<ScreenSource> {
         height: 1080,
     });
     // For trying a share over a slow or far-away connection with any build:
-    // `PYR_TEST_SOURCES=1` lists the moving and the scrolling test pictures too (testsrc.rs).
+    // `PYR_TEST_SOURCES=1` lists the moving and the scrolling test pictures too, and the desktop
+    // that sits still and then turns into a game (testsrc.rs).
     if pyr_proto::env_set("TEST_SOURCES") {
-        for (id, name) in [(super::testsrc::MOTION_ID, "Test: moving picture"), (super::testsrc::TEXT_ID, "Test: scrolling text")] {
+        for (id, name) in [
+            (super::testsrc::MOTION_ID, "Test: moving picture"),
+            (super::testsrc::TEXT_ID, "Test: scrolling text"),
+            (super::testsrc::DESK_ID, "Test: still desktop, then a game"),
+        ] {
             v.push(ScreenSource { id: id.into(), name: name.into(), kind: SourceKind::Test, width: 1920, height: 1080 });
         }
     }
@@ -339,14 +362,16 @@ fn platform_screens() -> Vec<ScreenSource> {
     if let Ok(mons) = Monitor::enumerate() {
         for (i, m) in mons.iter().enumerate() {
             let (w, h) = (m.width().unwrap_or(0), m.height().unwrap_or(0));
-            let name = m.name().unwrap_or_else(|_| format!("Display {}", i + 1));
+            // (Windows' own name for the monitor, as it shows in Display settings; "Display 2" when
+            // it has none.)
+            let name = m.name().ok().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| format!("Display {}", i + 1));
             // Known by Windows' own name for it too (\\.\DISPLAY2), so starting it again after
             // the graphics driver restarts (when screens can be numbered anew) finds this one,
             // never another.
             let device = m.device_name().unwrap_or_default();
             v.push(ScreenSource {
                 id: if device.is_empty() { format!("mon:{}", i + 1) } else { format!("mon:{}:{device}", i + 1) },
-                name: format!("Screen {} — {}", i + 1, name),
+                name,
                 kind: SourceKind::Monitor,
                 width: w,
                 height: h,
@@ -357,7 +382,7 @@ fn platform_screens() -> Vec<ScreenSource> {
         let me = std::process::id();
         for w in wins {
             let Ok(title) = w.title() else { continue };
-            if title.trim().is_empty() || w.process_id().ok() == Some(me) {
+            if title.trim().is_empty() || w.process_id().ok() == Some(me) || cloaked(w.as_raw_hwnd()) {
                 continue;
             }
             let (ww, wh) = (w.width().unwrap_or(0).max(0) as u32, w.height().unwrap_or(0).max(0) as u32);
@@ -374,6 +399,19 @@ fn platform_screens() -> Vec<ScreenSource> {
         }
     }
     v
+}
+
+/// Whether Windows keeps a window hidden though it's "visible" (cloaked: "Windows Input
+/// Experience", an app that's asleep, a window on another virtual desktop): not in the share
+/// picker (0.13.14).
+#[cfg(windows)]
+fn cloaked(hwnd: *mut std::ffi::c_void) -> bool {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
+    let mut cloaked = 0u32;
+    // SAFETY: a window handle Windows just listed, and a u32 for the answer.
+    let got = unsafe { DwmGetWindowAttribute(HWND(hwnd), DWMWA_CLOAKED, (&raw mut cloaked).cast(), std::mem::size_of::<u32>() as u32) };
+    got.is_ok() && cloaked != 0
 }
 
 /// The process that owns a shared window (for capturing just that app's sound).
@@ -417,7 +455,9 @@ fn start_wgc_source(id: &str, fps: u32, slot: Arc<FrameSlot>) -> Result<CaptureH
     use super::border::Target;
     use windows_capture::window::Window;
     use windows_capture::graphics_capture_api::GraphicsCaptureApi;
-    let gap = Duration::from_micros(1_000_000 / fps.max(1) as u64);
+    // (Twice as often as the frame rate, 0.13.26: from a 144 Hz screen Windows gave a 60 fps
+    // share every third refresh, 48 a second; the share takes them in turn.)
+    let gap = Duration::from_micros(1_000_000 / fps.max(1) as u64 / 2);
     // Older Windows 10 can't be given a frame rate or told to hide the cursor setting;
     // leave those at Windows' defaults there (the handler skips extra frames itself).
     let interval = if GraphicsCaptureApi::is_minimum_update_interval_supported().unwrap_or(false) {
