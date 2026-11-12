@@ -166,9 +166,48 @@ Version in brackets: where 0.13.x first had it.
       so. Saved as 0.13.28 saves it (`mute_key`), and settings this Pyr doesn't know yet are
       kept as they are (0.13.28's `casino_keys`, `games_volume`, `sound_profile`,
       `poker_auto_top_up`): a 0.13.28 config.json read and written back loses nothing.
-- [ ] Share picker redesign (0.13.14); still screens keep quality, High profile, crisp text
-      (0.13.21); keep the size, lower the frame rate instead (0.13.22); on the graphics card
-      end to end with NVENC/AMF/QSV, priority, 60 fps pacing, encoder in stats (0.13.26)
+- [x] Share picker redesign (0.13.14), written from 0.13.28's own code (its heading, tile, line,
+      preview and Refresh functions read out of its program) and checked against its screen
+      pixel for pixel: 1600 wide at 700, 800, 900 and 1000 tall; one, two and five screens
+      (one screen alone takes half the width, 270 at most; as many across as fit 160 each, three
+      at most); a window picked; a tile, a line and Refresh (with its box and hint) pointed at.
+      Only the preview's picture differs (the screens behind differ). Its icons (monitor,
+      window, test bars) are 0.13.28's, in proportion to their square. Made-up screens and
+      windows in any build (PYR_FAKE_SCREENS / PYR_FAKE_WINDOWS; screens named "Screen 2 —
+      XB273K GP" as 0.13.28 names them, the tile showing the number from the name); Windows
+      lists screens by their own names ("Display 2" when none) and leaves out windows it keeps
+      hidden (cloaked).
+- [x] Labels in dialogs easier to read (0.13.14): `theme::readable` (WCAG contrast; towards TEXT a
+      tenth at a time) at the seven places 0.13.28 has it: field labels (6:1 on SIDE; and 12
+      high, spaced 0.6, as 0.13.28), the picker's subtitle and Refresh (5:1), a line's size and
+      icon and a tile's monitor and size (4.5:1), and the picker's note (DIM on SIDE, 4.5:1: in
+      Campfire the only one that changes, to 148,136,127). Checked against 0.13.28's Invite
+      dialog (EXPIRE AFTER, MAX NUMBER OF USES) pixel for pixel.
+- [x] Still screens keep their quality (0.13.21): RateControl's app-limited test (under a quarter
+      of the target or of the most that got through lately, a megabit at least, over the round
+      trip and a quarter second, and in what's on its way), then no queue cut and a viewer's
+      only for frames skipped or a lot lost; cuts while app-limited from where it was. High
+      profile (CABAC) after the encoder starts, and Catmull-Rom scaling for text, as 0.13.28
+      (PYR_AB=cabac / sharp for the old). Tests: a still moment on a busy road isn't a reason to
+      cut; a struggling viewer of a busy share still backs off.
+- [x] A share keeps its size and lowers its frame rate instead (0.13.22): the ladder is the
+      preset's size at 6/6, 5/6, 4/6 and 3/6 of its frame rate (PYR_AB=ladder for the old one).
+- [x] 60 fps shares keep their 60 (0.13.26): a frame up to a quarter of a frame early is taken,
+      the wait for the next is up to then (1 to 40 ms), and Windows is asked for frames twice as
+      often as the frame rate.
+- [x] The call's stats say what really goes out (0.13.26): "sending 1080p 57 fps · 6.0 Mbps ·
+      processor encoder", the frames sent in the last second or so, " (screen still)" when only
+      the last picture went out again, and the encoder (NVIDIA, AMD, Intel, the card's, or the
+      processor's for a screen share). Same line as 0.13.28's, side by side with a test picture
+      shared (both 49 to 59 fps here); the "screen still" case by a test (no source here stops
+      sending).
+- [x] Watching a share costs less (0.13.26): each decoded frame goes up as it is
+      (from_rgba_premultiplied: a decoded frame is opaque), not looked at pixel by pixel.
+- [ ] On the graphics card end to end (0.13.26, Windows): Media Foundation's hardware encoder
+      (NVENC, AMF, QSV) fed by the card's video engine (scaled and made NV12 on the card), the
+      card's priority for Pyr while sharing (D3DKMTSetProcessSchedulingPriorityClass), and the
+      processor's way when the card's doesn't work. 0.13.28's hw.rs is about 1,000 lines; its
+      messages are in its program. A/B on Blue's PC before it ships.
 - [ ] Automatic reports (voice went up and down, stopped responding, sound problems): 0.13.0
       has the swells (dips) detector and the watchdog; check what 0.13.x added
 
