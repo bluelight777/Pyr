@@ -106,7 +106,7 @@ fn level(i: usize) -> &'static Level {
 /// count goes on; fading out.
 const FADE_IN: f32 = 0.2;
 const BEAT: f32 = 0.12;
-const FADE: f32 = 0.45;
+pub const FADE: f32 = 0.45;
 /// The longest count (five levels': 11.0 and 11.1 seconds), and every jackpot's (a Mini at 20
 /// times took as long as a Grand at a thousand).
 const LONGEST: f32 = 11.0;
@@ -303,7 +303,12 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, area: Rect, cel: &Celebratio
     let skipped = cel.skipped.map(|k| (k - cel.since).as_secs_f32());
     let plan = &cel.plan;
     let (end, life) = plan.times(skipped);
-    let a = (t / FADE_IN).clamp(0.0, 1.0) * ((life - t) / FADE).clamp(0.0, 1.0);
+    // (Fading in; fading out at its end, or as the next round begins.)
+    let closing = match cel.closing {
+        Some(k) => 1.0 - (t - k.saturating_duration_since(cel.since).as_secs_f32()) / FADE,
+        None => 1.0,
+    };
+    let a = (t / FADE_IN).clamp(0.0, 1.0) * ((life - t) / FADE).clamp(0.0, 1.0) * closing.clamp(0.0, 1.0);
     let li = plan.level_at(t, skipped);
     let lv = level(li);
     let came = t - plan.level_came(t, skipped);

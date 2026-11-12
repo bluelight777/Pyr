@@ -49,9 +49,10 @@ impl PyrApp {
             return;
         }
         let Some(commit) = c.commit else { return };
+        let bet = Bet::Dice { chips: ui.chips, chance: ui.chance, over: ui.over };
         self.poker.casino.pending = Some(Instant::now());
-        self.poker.casino.celebration = None;
-        self.engine.casino_play(&s.key, commit, Bet::Dice { chips: ui.chips, chance: ui.chance, over: ui.over });
+        self.poker.casino.end_celebration();
+        self.engine.casino_play(&s.key, commit, bet);
     }
 
     pub(super) fn dice_page(&mut self, ui: &mut egui::Ui, s: &ServerView, area: Rect) {

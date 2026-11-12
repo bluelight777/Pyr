@@ -342,7 +342,7 @@ impl PyrApp {
                         self.poker.casino.bj.last_bet = bet;
                         self.poker.casino.bj.over = None;
                         self.poker.casino.bj.appear.clear();
-                        self.poker.casino.celebration = None;
+                        self.poker.casino.end_celebration();
                         self.poker.casino.pending = Some(Instant::now());
                         self.engine.casino_play(&s.key, commit, Bet::Blackjack { chips: bet });
                     }

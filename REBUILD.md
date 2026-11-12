@@ -344,8 +344,12 @@ How (decided while starting it):
       at a real PC's frame rate (this machine draws the debug build at about twelve frames a
       second, and a late frame plays its latest tick only). Plinko's comes 1.25 s after the
       ball lands, once its bucket's lit (0.13.28's, filmed in autoplay: 1.15 and 1.35 s at 11
-      times; the balls keep dropping under it); the rebuild showed it as the ball landed
-      (not filmed on the rebuild yet).
+      times; the balls keep dropping under it); the rebuild showed it as the ball landed.
+      A big win booked while another shows waits behind it and takes its place when its moment
+      comes (0.13.28's, filmed in Plinko's autoplay; the rebuild's blanked the one showing for
+      the 1.25 s); a new round (Dice and Keno playing by themselves, a spin, a deal) fades the
+      one showing out over half a second (0.13.28's Dice autoplay, filmed; the rebuild cut it).
+      Both filmed on the rebuild after, the same.
 - [x] Pyr Sevens' Turbo as 0.13.28's: the reels land at once on their stops (they waited for
       each stop to come round on the strip, up to a second a reel, so a Turbo round of free
       spins took three times as long). The same round (same seed and number) on both apps:

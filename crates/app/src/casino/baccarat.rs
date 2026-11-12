@@ -262,7 +262,7 @@ impl PyrApp {
         {
             self.poker.casino.baccarat.last = bets.clone();
             self.poker.casino.pending = Some(Instant::now());
-            self.poker.casino.celebration = None;
+            self.poker.casino.end_celebration();
             self.engine.casino_play(&s.key, commit, Bet::Baccarat(bets.clone()));
         }
         let last = self.poker.casino.baccarat.last.clone();

@@ -195,7 +195,7 @@ impl PyrApp {
         ui.counted = None;
         ui.stopped_at = None;
         ui.win = 0;
-        self.poker.casino.celebration = None;
+        self.poker.casino.end_celebration();
         self.poker.casino.pending = Some(now);
         self.engine.casino_play(&s.key, commit, Bet::Reels { machine, bet, buy });
     }

@@ -57,9 +57,10 @@ impl PyrApp {
             return;
         }
         let Some(commit) = c.commit else { return };
+        let bet = Bet::Keno { chips: ui.chips, picks: ui.picks.clone() };
         self.poker.casino.pending = Some(Instant::now());
-        self.poker.casino.celebration = None;
-        self.engine.casino_play(&s.key, commit, Bet::Keno { chips: ui.chips, picks: ui.picks.clone() });
+        self.poker.casino.end_celebration();
+        self.engine.casino_play(&s.key, commit, bet);
     }
 
     pub(super) fn keno_page(&mut self, ui: &mut egui::Ui, s: &ServerView, area: Rect) {

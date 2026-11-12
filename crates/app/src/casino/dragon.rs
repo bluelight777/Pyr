@@ -223,7 +223,7 @@ impl PyrApp {
         ui.win = 0;
         ui.eggs.clear();
         ui.all_in = None;
-        self.poker.casino.celebration = None;
+        self.poker.casino.end_celebration();
         self.poker.casino.pending = Some(now);
         if v13 {
             let b = if feature == Feature::Spin { Bet::Dragon { bet, growth } } else { Bet::DragonPlus { bet, growth, feature } };

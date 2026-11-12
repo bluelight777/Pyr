@@ -500,7 +500,7 @@ impl PyrApp {
         ui.display = None;
         ui.next_start = None;
         ui.stopped_at = None;
-        self.poker.casino.celebration = None;
+        self.poker.casino.end_celebration();
         self.poker.casino.pending = Some(now);
         self.poker.casino.sound_in(0.0, Cue::ReelSpin, 0.0, 0.6);
         let line_bet = self.poker.casino.slots.line_bet;

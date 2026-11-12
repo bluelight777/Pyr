@@ -654,7 +654,7 @@ impl PyrApp {
         ui.stopped_at = None;
         ui.win = 0;
         ui.rm = None;
-        self.poker.casino.celebration = None;
+        self.poker.casino.end_celebration();
         self.poker.casino.pending = Some(now);
         if remastered {
             self.play_seeded(s, SlotKind::Rm(machine), pyr_poker::casino::Bet::Remaster { machine, bet, feature, ante });

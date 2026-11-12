@@ -122,7 +122,7 @@ impl PyrApp {
             self.poker.casino.craps.roll_after = false;
             if let Some(commit) = c.commit {
                 self.poker.casino.pending = Some(now);
-                self.poker.casino.celebration = None;
+                self.poker.casino.end_celebration();
                 self.engine.casino_craps_roll(&s.key, commit);
             }
         }

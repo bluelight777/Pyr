@@ -370,7 +370,7 @@ impl PyrApp {
             let chips = self.poker.casino.roulette.merged();
             self.poker.casino.roulette.last = self.poker.casino.roulette.chips.clone();
             self.poker.casino.pending = Some(Instant::now());
-            self.poker.casino.celebration = None;
+            self.poker.casino.end_celebration();
             self.engine.casino_play(&s.key, commit, Bet::Roulette { chips });
         }
         if button(ui, "Double", 96.0, false, !busy && total > 0) || (double_key && !busy && total > 0) {

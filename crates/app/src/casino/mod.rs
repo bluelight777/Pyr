@@ -121,6 +121,8 @@ pub struct Celebration {
     /// At a slot (its sounds are the slots'), and how far into it its sounds have played.
     pub slot: bool,
     pub heard: f32,
+    /// Fading out since (the next round's begun: 0.13.28's goes the same way).
+    pub closing: Option<Instant>,
 }
 
 /// A round's result called out big over its table (the size a stream's viewers can read):
@@ -167,6 +169,9 @@ pub struct CasinoUi {
     /// A request on its way, since when.
     pub pending: Option<Instant>,
     pub celebration: Option<Celebration>,
+    /// A big win waiting for its moment while another shows (it takes its place then: Plinko's
+    /// balls keep landing under one, as 0.13.28's).
+    pub celebration_next: Option<Celebration>,
     pub announcement: Option<Announcement>,
     /// Sounds to play later (animations land on them).
     pub sounds: Vec<(Instant, Cue, f32, f32)>,
@@ -239,6 +244,7 @@ impl Default for CasinoUi {
             seen_big_win: 0,
             pending: None,
             celebration: None,
+            celebration_next: None,
             announcement: None,
             sounds: Vec::new(),
             fairness_open: false,
@@ -309,7 +315,27 @@ impl CasinoUi {
         }
         let plan = bigwin::Plan::new(m, jackpot);
         let slot = matches!(self.game, Some(Game::Slots | Game::Dragon | Game::Reels));
-        self.celebration = Some(Celebration { amount: paid, since: Instant::now() + Duration::from_secs_f32(delay), plan, skipped: None, slot, heard: -1.0 });
+        let cel = Celebration { amount: paid, since: Instant::now() + Duration::from_secs_f32(delay), plan, skipped: None, slot, heard: -1.0, closing: None };
+        // (One showing stays till this one's moment comes, then gives way to it.)
+        if delay > 0.0 && self.celebration.as_ref().is_some_and(|c| c.closing.is_none()) {
+            self.celebration_next = Some(cel);
+        } else {
+            self.celebration = Some(cel);
+            self.celebration_next = None;
+        }
+    }
+
+    /// A new round's begun: a big win showing fades out (as 0.13.28's), one not shown yet goes.
+    pub fn end_celebration(&mut self) {
+        self.celebration_next = None;
+        let now = Instant::now();
+        match &mut self.celebration {
+            Some(c) if now < c.since => self.celebration = None,
+            Some(c) => {
+                c.closing.get_or_insert(now);
+            }
+            None => {}
+        }
     }
 }
 
@@ -1006,9 +1032,17 @@ impl PyrApp {
     /// A big win over the table: its name, the chips counting up, coins falling.
     fn celebration(&mut self, ui: &mut egui::Ui, area: Rect) {
         bigwin::warm(ui.ctx(), area);
-        let Some(cel) = &self.poker.casino.celebration else { return };
         let now = Instant::now();
+        // The next one's moment: it takes the place of the one showing.
+        if self.poker.casino.celebration_next.as_ref().is_some_and(|n| now >= n.since) {
+            self.poker.casino.celebration = self.poker.casino.celebration_next.take();
+        }
+        let Some(cel) = &self.poker.casino.celebration else { return };
         if now < cel.since {
+            return;
+        }
+        if cel.closing.is_some_and(|k| (now - k).as_secs_f32() >= bigwin::FADE) {
+            self.poker.casino.celebration = None;
             return;
         }
         let t = (now - cel.since).as_secs_f32();
@@ -1037,9 +1071,10 @@ impl PyrApp {
         }
         let p = ui.painter().clone();
         let time = ui.ctx().input(|i| i.time) as f32;
+        let closing = cel.closing.is_some();
         bigwin::draw(&p, ui.ctx(), area, cel, t, time);
         self.poker.casino.celebration.as_mut().unwrap().heard = t;
-        if !self.poker.casino.mute {
+        if !self.poker.casino.mute && !closing {
             for (_, cue, vol, tick) in due {
                 if tick {
                     self.engine.play_poker_tick(cue, 0.0, vol);
