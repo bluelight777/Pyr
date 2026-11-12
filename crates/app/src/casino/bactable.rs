@@ -538,7 +538,7 @@ impl PyrApp {
     fn bac_tables_strip(&mut self, ui: &mut egui::Ui, s: &ServerView, strip: Rect, tables: &[pyr_poker::net::BacSummary], at: Option<u64>) {
         let p = ui.painter().clone();
         vgrad(&p, strip, Color32::from_rgb(0x16, 0x0c, 0x10), Color32::from_rgb(0x08, 0x05, 0x07));
-        let picks: Vec<super::picker::Pick> = tables.iter().map(|t| super::picker::Pick { id: t.id, name: t.name.clone(), min: t.min_bet, max: t.max_bet, seated: t.people + t.bots }).collect();
+        let picks: Vec<super::picker::Pick> = tables.iter().map(|t| super::picker::Pick { id: t.id, name: t.name.clone(), min: t.min_bet, max: t.max_bet, seated: t.people + t.bots, note: None }).collect();
         if let Some(id) = super::picker::cards(ui, strip, &picks, SEATS, at, "bac-table", 12.0) {
             self.bac_table_leave();
             self.poker.casino.bact.at = Some((s.key.clone(), id));

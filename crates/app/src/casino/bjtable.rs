@@ -453,7 +453,7 @@ impl PyrApp {
     fn bj_tables_strip(&mut self, ui: &mut egui::Ui, s: &ServerView, strip: Rect, tables: &[pyr_poker::net::BjSummary], at: Option<u64>) {
         let p = ui.painter().clone();
         vgrad(&p, strip, Color32::from_rgb(0x12, 0x10, 0x18), Color32::from_rgb(0x08, 0x07, 0x0c));
-        let picks: Vec<super::picker::Pick> = tables.iter().map(|t| super::picker::Pick { id: t.id, name: t.name.clone(), min: t.min_bet, max: t.max_bet, seated: t.people + t.bots }).collect();
+        let picks: Vec<super::picker::Pick> = tables.iter().map(|t| super::picker::Pick { id: t.id, name: t.name.clone(), min: t.min_bet, max: t.max_bet, seated: t.people + t.bots, note: None }).collect();
         if let Some(id) = super::picker::cards(ui, strip, &picks, SEATS, at, "bj-table", super::picker::ANOTHER_W + 24.0) {
             self.bj_table_leave();
             self.poker.casino.bjt.at = Some((s.key.clone(), id));

@@ -134,23 +134,14 @@ pub fn check(r: &CrapsReveal) -> Result<(), String> {
     Ok(())
 }
 
-/// The most a person may have on the layout at once at a table whose most bet is `hi`: 50,000 at
-/// the tables to 1,000, 2,500,000 at the high rollers' (0.13.6: it stopped at 50,000 there, so
-/// odds and more bets wouldn't go down), 500,000,000 higher than that (the Sky Rollers).
-pub fn layout_most(hi: u64) -> u64 {
-    match hi {
-        0..=1_000 => craps::MAX_ON_TABLE,
-        1_001..=100_000 => 2_500_000,
-        _ => 500_000_000,
-    }
-}
-
 /// The bets that may go on the layout: each on its own at least the table's least and at most
 /// its most (the odds go up to their multiple of the pass line instead).
 fn within(b: &Bets, lo: u64, hi: u64) -> Result<(), String> {
     let mut each: Vec<(String, u64)> = vec![("The pass line".into(), b.pass), ("Don't pass".into(), b.dont_pass), ("The field".into(), b.field), ("Any seven".into(), b.any_seven), ("Any craps".into(), b.any_craps)];
     each.extend(b.place.iter().enumerate().map(|(i, x)| (craps::place_name(i), *x)));
     each.extend(b.hard.iter().enumerate().map(|(i, x)| (craps::hard_name(i), *x)));
+    each.extend(b.buy.iter().enumerate().map(|(i, x)| (craps::buy_name(i), *x)));
+    each.extend(b.lay.iter().enumerate().map(|(i, x)| (craps::lay_name(i), *x)));
     for (name, x) in each {
         if x > 0 && (x < lo || x > hi) {
             return Err(format!("{name} here is {lo} to {hi}"));
@@ -167,6 +158,8 @@ pub fn fit(b: &mut Bets, lo: u64, hi: u64) -> bool {
     let mut each: Vec<&mut u64> = vec![&mut b.pass, &mut b.dont_pass, &mut b.field, &mut b.any_seven, &mut b.any_craps];
     each.extend(b.place.iter_mut());
     each.extend(b.hard.iter_mut());
+    each.extend(b.buy.iter_mut());
+    each.extend(b.lay.iter_mut());
     for x in each {
         if *x > 0 {
             *x = (*x).clamp(lo, hi);
@@ -476,7 +469,7 @@ impl CrapsRoom {
     pub fn cost(&self, uid: &str, new: &Bets) -> Result<i64, String> {
         let seat = self.seat_of(uid).ok_or("sit down first")?;
         let s = self.seats[seat as usize].as_ref().unwrap();
-        craps::check_change_most(&Table { point: self.point, bets: s.bets.clone(), streak: self.streak }, new, layout_most(self.max_bet))?;
+        craps::check_change(&Table { point: self.point, bets: s.bets.clone(), streak: self.streak }, new)?;
         within(new, self.min_bet, self.max_bet)?;
         Ok(new.total() as i64 - s.bets.total() as i64)
     }
@@ -555,8 +548,11 @@ impl CrapsRoom {
     }
 
     /// A bot's bets for the coming roll, its own way, from the table as it is (its bets riding):
-    /// the pass line and full odds; the pass line, then the 6 and 8 placed; flat on the pass line;
-    /// the field, the hardways and the long shots; or the dark side, don't pass.
+    /// the pass line and full odds (and now and then a buy on the 4 and the 10, 0.13.23); the
+    /// pass line, then the 6 and 8 placed; flat on the pass line; the field, the hardways and the
+    /// long shots; or the dark side, don't pass (with full lay odds half the time, 0.13.6, and
+    /// now and then a lay against the 4, 0.13.23). As 0.13.28's server plays them: read out of
+    /// its program, and its bots watched at its tables.
     fn bot_bets(&mut self, seat: usize) -> Bets {
         let (lo, hi, point) = (self.min_bet, self.max_bet, self.point);
         let s = self.seats[seat].as_ref().unwrap();
@@ -582,11 +578,25 @@ impl CrapsRoom {
                 b.hard[i] = x;
             }
         };
+        // (A buy or a lay in twenties, so its 5% vig is whole chips; 5 at least, as they must be.)
+        let least = craps::BUY_LAY_MIN;
+        let twenties = |n: u64| ((lo * n).max(least).div_ceil(20) * 20).clamp(lo.max(least), hi.max(least));
         match (who.bj, point) {
             (BjPlay::Book, None) => b.pass = chips(unit),
             (BjPlay::Book, Some(p)) => {
                 if b.pass > 0 {
                     b.pass_odds = b.pass * craps::max_odds(p);
+                }
+                // (One time in three it buys the 4 and the 10, where buying beats placing: not
+                // the point itself, and not over a buy it has up.)
+                if r.below(3) == 0 {
+                    let x = twenties(unit);
+                    if p != 4 && b.buy[0] == 0 {
+                        b.buy[0] = x;
+                    }
+                    if p != 10 && b.buy[5] == 0 {
+                        b.buy[5] = x;
+                    }
                 }
             }
             (BjPlay::Careful, None) => b.pass = chips(1),
@@ -620,11 +630,24 @@ impl CrapsRoom {
                     hard(&mut b, [4u8, 6, 8, 10][who.name.len() % 4], chips(1));
                 }
             }
-            (BjPlay::Superstitious, Some(_)) => {}
+            (BjPlay::Superstitious, Some(p)) => {
+                // (Full lay odds behind its don't pass, half the time, while it has none.)
+                if b.dont_pass > 0 && b.dont_odds == 0 && r.below(2) == 0 {
+                    b.dont_odds = b.dont_pass * craps::LAY_ODDS;
+                }
+                // (One time in four it lays the 4, or the 10 when the 4's the point: twice its
+                // unit, if it has no lay there.)
+                if r.below(4) == 0 {
+                    let i = if p == 4 { 5 } else { 0 };
+                    if b.lay[i] == 0 {
+                        b.lay[i] = twenties(unit * 2);
+                    }
+                }
+            }
         }
         // (Whatever it can't do here, it leaves as it was.)
         let t = Table { point, bets: old.clone(), streak: self.streak };
-        if craps::check_change_most(&t, &b, layout_most(hi)).is_ok() && within(&b, lo, hi).is_ok() { b } else { old }
+        if craps::check_change(&t, &b).is_ok() && within(&b, lo, hi).is_ok() { b } else { old }
     }
 
     /// Bots whose moment has come put their chips down.
@@ -648,9 +671,12 @@ impl CrapsRoom {
     fn roll(&mut self, now: u64, rng: &mut dyn Random, out: &mut Output) {
         // (A bot still thinking it over gets its chips down now: bots play every roll.)
         self.bots_bet(now, true);
-        // People with nothing on the layout count a roll idle; too many, and they're stood up.
+        // People with nothing on the layout count a come-out roll idle; too many, and they're
+        // stood up. (Only come-outs, 0.13.6: someone waiting out a long point with nothing they
+        // could bet, a don't pass that lost say, isn't idle.)
+        let come_out = self.point.is_none();
         for s in self.seats.iter_mut().flatten().filter(|s| !s.bot) {
-            if s.bets.is_empty() {
+            if s.bets.is_empty() && come_out {
                 s.idle += 1;
             }
         }
@@ -796,12 +822,6 @@ impl CrapsRoom {
 
 #[cfg(test)]
 mod tests {
-    /// As much on the layout at once as 0.13.28's tables let: 50,000, 2,500,000, 500,000,000.
-    #[test]
-    fn the_layout_holds_the_tables_most() {
-        assert_eq!([1_000, 100_000, 10_000_000].map(super::layout_most), [50_000, 2_500_000, 500_000_000]);
-    }
-
     use super::*;
 
     #[test]
@@ -901,6 +921,66 @@ mod tests {
         assert!((0.75..1.25).contains(&rtp), "{rtp} over {rolls} rolls");
         // The bots bet every roll, each its own way.
         assert!(t.seats.iter().flatten().filter(|s| s.bot).all(|s| s.last.is_some() || !s.bets.is_empty()));
+    }
+
+    /// The bots bet as 0.13.28's do (read out of its server's program, and watched at its
+    /// tables): the one on the pass line with full odds buys the 4 and the 10 now and then, in
+    /// twenties; the dark side lays full odds behind its don't pass, six times it, and now and
+    /// then lays the 4 or the 10; nobody else buys or lays.
+    #[test]
+    fn bots_buy_and_lay_as_0_13_28s_do() {
+        let mut rng = Rng(Stream::new(seed_from(23)));
+        let mut t = CrapsRoom::new(1, "Test", 10, 1_000, 0, &mut rng);
+        t.sit("alice", "Alice", Look::default(), 0, 0).unwrap();
+        let (mut buys, mut lay_odds, mut lays, mut kinds) = (0, 0, 0, BTreeSet::new());
+        let mut now = 0u64;
+        let mut seen = 0;
+        let mut rolls = 0;
+        while now < 12_000_000 {
+            // (New bots every so often, to see every kind.)
+            if now % 400_000 == 0 {
+                for seat in 1..SEATS as u8 {
+                    let _ = t.remove_bot(seat, now);
+                    t.add_bot(seat, now, &mut rng).unwrap();
+                }
+            }
+            t.tick(now, &mut rng);
+            if matches!(t.stage, Stage::Betting { .. }) && !t.seats[0].as_ref().unwrap().ready {
+                let mut b = t.seats[0].as_ref().unwrap().bets.clone();
+                if t.point.is_none() {
+                    b.pass = 10;
+                }
+                t.place("alice", b, rng.seed(), true, now).unwrap();
+                if t.shooter == Some(0) {
+                    t.throw("alice", now, &mut rng).unwrap();
+                }
+            }
+            if let Some(r) = &t.last
+                && r.roll != seen
+            {
+                seen = r.roll;
+                rolls += 1;
+            }
+            for x in t.seats.iter().flatten().filter(|x| x.bot) {
+                let (style, b) = (x.who.craps_style(), &x.bets);
+                kinds.insert(style);
+                let book = style == "the pass line, with full odds";
+                let dark = style.starts_with("the dark side");
+                assert!(book || b.buy.iter().all(|v| *v == 0), "{style} bought: {b:?}");
+                assert!(dark || (b.dont_odds == 0 && b.lay.iter().all(|v| *v == 0)), "{style} laid: {b:?}");
+                for (i, v) in b.buy.iter().chain(b.lay.iter()).enumerate() {
+                    assert!(*v == 0 || ((i % 6 == 0 || i % 6 == 5) && *v % 20 == 0 && (10..=1_000).contains(v)), "{style}: {b:?}");
+                }
+                assert!(b.dont_odds == 0 || b.dont_odds == b.dont_pass * 6, "{b:?}");
+                buys += b.buy.iter().filter(|v| **v > 0).count();
+                lays += b.lay.iter().filter(|v| **v > 0).count();
+                lay_odds += (b.dont_odds > 0) as usize;
+            }
+            now += 250;
+        }
+        assert!(rolls > 300, "{rolls} rolls");
+        assert_eq!(kinds.len(), 5, "{kinds:?}");
+        assert!(buys > 0 && lays > 0 && lay_odds > 0, "buys {buys}, lays {lays}, lay odds {lay_odds}");
     }
 
     /// The pass line can't come off once there's a point; standing up then leaves it working,

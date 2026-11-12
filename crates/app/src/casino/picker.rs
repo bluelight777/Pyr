@@ -26,6 +26,8 @@ pub struct Pick {
     pub max: u64,
     /// People and bots sitting.
     pub seated: usize,
+    /// Something to say after its bets (a craps table's point: "point 4").
+    pub note: Option<String>,
 }
 
 /// Draws the strip's words and cards (`seats` a table), leaving `keep` at the strip's right for
@@ -78,16 +80,19 @@ pub fn cards(ui: &mut egui::Ui, strip: Rect, tables: &[Pick], seats: usize, at: 
         // Its bets, as short as they must be to stay clear of the dots.
         let room = dot(0).x - 4.5 - 6.0 - (r.left() + 14.0);
         let color = if on { Color32::from_rgb(0xff, 0xe6, 0xa8) } else { Color32::from_rgb(0xdf, 0xb2, 0x4c) };
+        // (A craps table's point after them, as 0.13.28 says it: "Bets 10–1,000  ·  point 4".)
+        let note = t.note.as_ref().map(|n| format!("  ·  {n}")).unwrap_or_default();
         let bets = [
-            format!("Bets {}–{}", chips_text(t.min), chips_text(t.max)),
-            format!("{}–{}", chips_text(t.min), chips_text(t.max)),
+            format!("Bets {}–{}{note}", chips_text(t.min), chips_text(t.max)),
+            format!("{}–{}{note}", chips_text(t.min), chips_text(t.max)),
+            format!("{}–{}{note}", chips_short(t.min), chips_short(t.max)),
             format!("{}–{}", chips_short(t.min), chips_short(t.max)),
         ];
         let g = bets
             .iter()
             .map(|b| p.layout_no_wrap(b.clone(), theme::bold_font(12.5), color))
             .find(|g| g.size().x <= room)
-            .unwrap_or_else(|| p.layout_no_wrap(bets[2].clone(), theme::bold_font(12.5), color));
+            .unwrap_or_else(|| p.layout_no_wrap(bets[3].clone(), theme::bold_font(12.5), color));
         p.galley(r.left_top() + vec2(14.0, 33.0), g, color);
         if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() && !on {
             clicked = Some(t.id);

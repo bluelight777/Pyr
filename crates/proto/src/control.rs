@@ -438,6 +438,10 @@ pub const SLOTS_100K_FEATURE: &str = "slots_100k";
 /// 10,000,000 (the Crown Room, the Grand Salle, the Imperial Salon, the Sky Rollers), the 500K,
 /// 1000K and 5000K chips. 0.13.28's name.
 pub const HIGH_TABLES_FEATURE: &str = "high_tables";
+/// Craps's buy and lay bets (0.13.23, and from 0.13.26 five at least), at the tables and in the
+/// house game; lay odds behind don't pass (0.13.6) too. 0.13.28's name: its app shows BUY and
+/// LAY on every number where the server has it.
+pub const CRAPS_BUY_LAY_FEATURE: &str = "craps_buy_lay";
 /// Game Masters give without a limit, and they and the Owner of the Game take chips away, all
 /// in the staff log with the balance before and after (0.13.4).
 pub const GM_UNLIMITED_FEATURE: &str = "poker_gm_unlimited";

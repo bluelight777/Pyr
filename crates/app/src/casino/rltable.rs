@@ -444,7 +444,7 @@ impl PyrApp {
     fn rl_tables_strip(&mut self, ui: &mut egui::Ui, s: &ServerView, strip: Rect, tables: &[pyr_poker::net::RlSummary], at: Option<u64>) {
         let p = ui.painter().clone();
         vgrad(&p, strip, Color32::from_rgb(0x0a, 0x1c, 0x12), Color32::from_rgb(0x04, 0x0c, 0x08));
-        let picks: Vec<super::picker::Pick> = tables.iter().map(|t| super::picker::Pick { id: t.id, name: t.name.clone(), min: t.min_bet, max: t.max_bet, seated: t.people + t.bots }).collect();
+        let picks: Vec<super::picker::Pick> = tables.iter().map(|t| super::picker::Pick { id: t.id, name: t.name.clone(), min: t.min_bet, max: t.max_bet, seated: t.people + t.bots, note: None }).collect();
         if let Some(id) = super::picker::cards(ui, strip, &picks, SEATS, at, "rl-table", 12.0) {
             self.rl_table_leave();
             self.poker.casino.rlt.at = Some((s.key.clone(), id));

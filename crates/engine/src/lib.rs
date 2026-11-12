@@ -4214,6 +4214,42 @@ pub(crate) fn rewatch_poker(shared: Arc<Shared>, key: String) {
             (shared.repaint)();
         });
     }
+    // The casino's tables the same (blackjack, craps, baccarat, roulette): until now the one I
+    // was at stayed on the screen as it was when the connection went, 0.13.28's too (a server
+    // updated under a game left its table standing still till I went out and came back).
+    use pyr_poker::net::ToServer;
+    let (bj, craps, bac, rl) = {
+        let st = shared.state.read_recursive();
+        let p = st.servers.iter().find(|s| s.key == key).map(|s| &s.poker);
+        (p.and_then(|p| p.bj.as_ref().map(|b| b.view.id)), p.and_then(|p| p.craps.as_ref().map(|b| b.view.id)), p.and_then(|p| p.bac.as_ref().map(|b| b.view.id)), p.and_then(|p| p.rl.as_ref().map(|b| b.view.id)))
+    };
+    let asks: [(Option<u64>, fn(u64) -> ToServer, fn(&mut poker::PokerState)); 4] = [
+        (bj, |table| ToServer::BjWatch { table }, |p| p.bj = None),
+        (craps, |table| ToServer::CrapsWatch { table }, |p| p.craps = None),
+        (bac, |table| ToServer::BacWatch { table }, |p| p.bac = None),
+        (rl, |table| ToServer::RlWatch { table }, |p| p.rl = None),
+    ];
+    for (table, watch, forget) in asks {
+        let Some(table) = table else { continue };
+        let reply = h.request(Request::Poker { msg: watch(table) });
+        let (shared, key) = (shared.clone(), key.clone());
+        shared.rt.clone().spawn(async move {
+            let r = reply.await;
+            {
+                let mut st = shared.state.write();
+                let Some(s) = st.server_mut(&key) else { return };
+                match r {
+                    Ok(Event::Poker { msg }) => {
+                        let _ = s.poker.apply(msg, std::time::Instant::now());
+                    }
+                    // (Closed meanwhile: off my screen, and the page finds another.)
+                    Ok(Event::Error { .. }) => forget(&mut s.poker),
+                    _ => {}
+                }
+            }
+            (shared.repaint)();
+        });
+    }
 }
 
 /// Back on a server after the connection dropped mid-call: rejoin that call. A camera or

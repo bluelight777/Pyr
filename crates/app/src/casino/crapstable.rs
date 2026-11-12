@@ -1,10 +1,16 @@
 //! Craps at a table of five (0.12.0 servers): people and bots round one layout, the dice going
 //! from shooter to shooter. The layout's the single-player table's (pass line and odds, don't
-//! pass, the field, the place numbers, the hardways and the one-roll props) with everyone's chips
-//! on it, each player's in their own place on each bet and ringed in their seat's color; the
-//! seats along the rail; the dice thrown from the shooter's seat, the stickman's call, and what
-//! the roll did for each. Every roll is rolled again by this Pyr from its seeds (see
-//! `pyr_engine::poker::SharedLive`).
+//! pass and its lay odds, the field, the place numbers, the hardways and the one-roll props) with
+//! everyone's chips on it, each player's in their own place on each bet and ringed in their
+//! seat's color; the seats along the rail; the dice thrown from the shooter's seat, the
+//! stickman's call, and what the roll did for each. Every roll is rolled again by this Pyr from
+//! its seeds (see `pyr_engine::poker::SharedLive`).
+//!
+//! As 0.13.28 has it, measured off its screen: a LAY strip over each number's box and a BUY
+//! strip under it (0.13.23), LAY ODDS beside don't pass once there's a point (0.13.6), the OFF
+//! puck at the field's far end (it covered the word FIELD), my chips piled as I put them down
+//! with what they come to on a tag (0.13.24), what a buy or a lay pays worked out in its words
+//! (0.13.26), and the rack offering only the chips I have left to put down.
 
 use std::time::{Duration, Instant};
 
@@ -15,7 +21,7 @@ use pyr_poker::casino::craps::{self as cr, Bets, Decided, HARD_NUMBERS, PLACE_NU
 use pyr_poker::crapsroom::{BET_MS, SEATS, SHOW_MS};
 use pyr_poker::net::{CrapsReveal, CrapsSeatView, CrapsStage, CrapsView, TableGame, ToServer};
 
-use super::{art, chip_stack, chips_now, col, ease_out, glow_text, radial, vgrad};
+use super::{art, chip_pile, chip_stack, chips_for, chips_now, col, ease_out, glow_text, radial, vgrad};
 use crate::app::PyrApp;
 use crate::poker::cards::chips_text;
 use crate::theme;
@@ -34,13 +40,16 @@ const SEAT_COLORS: [Color32; SEATS] = [
     Color32::from_rgb(0xb0, 0x8a, 0xff),
 ];
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum Spot {
     Pass,
     Odds,
     DontPass,
+    DontOdds,
     Field,
     Place(usize),
+    Buy(usize),
+    Lay(usize),
     Hard(usize),
     AnySeven,
     AnyCraps,
@@ -51,8 +60,11 @@ fn slot(b: &mut Bets, s: Spot) -> &mut u64 {
         Spot::Pass => &mut b.pass,
         Spot::Odds => &mut b.pass_odds,
         Spot::DontPass => &mut b.dont_pass,
+        Spot::DontOdds => &mut b.dont_odds,
         Spot::Field => &mut b.field,
         Spot::Place(i) => &mut b.place[i],
+        Spot::Buy(i) => &mut b.buy[i],
+        Spot::Lay(i) => &mut b.lay[i],
         Spot::Hard(i) => &mut b.hard[i],
         Spot::AnySeven => &mut b.any_seven,
         Spot::AnyCraps => &mut b.any_craps,
@@ -60,8 +72,19 @@ fn slot(b: &mut Bets, s: Spot) -> &mut u64 {
 }
 
 fn amount(b: &Bets, s: Spot) -> u64 {
-    let mut b = b.clone();
-    *slot(&mut b, s)
+    match s {
+        Spot::Pass => b.pass,
+        Spot::Odds => b.pass_odds,
+        Spot::DontPass => b.dont_pass,
+        Spot::DontOdds => b.dont_odds,
+        Spot::Field => b.field,
+        Spot::Place(i) => b.place[i],
+        Spot::Buy(i) => b.buy[i],
+        Spot::Lay(i) => b.lay[i],
+        Spot::Hard(i) => b.hard[i],
+        Spot::AnySeven => b.any_seven,
+        Spot::AnyCraps => b.any_craps,
+    }
 }
 
 /// Whether a bet's spot is wide (chips along it) or a box (chips in a little cluster).
@@ -69,16 +92,97 @@ fn wide(s: Spot) -> bool {
     matches!(s, Spot::Pass | Spot::DontPass | Spot::Field | Spot::AnySeven | Spot::AnyCraps)
 }
 
+/// A chip's size on a spot: 12 along the wide ones, 10 in a box, 9 on a BUY or LAY strip.
+fn chip_r(s: Spot) -> f32 {
+    match s {
+        Spot::Buy(_) | Spot::Lay(_) => 9.0,
+        _ if wide(s) => 12.0,
+        _ => 10.0,
+    }
+}
+
 /// Where seat `i`'s chips go on a spot (seat 0's on the right, as its seat is).
 fn chip_at(r: Rect, s: Spot, i: usize) -> Pos2 {
     let i = SEATS - 1 - i.min(SEATS - 1);
-    if wide(s) {
-        let x0 = if matches!(s, Spot::Field) { 0.30 } else { 0.10 };
-        let span = if matches!(s, Spot::Field) { 0.66 } else { 0.80 };
-        pos2(r.left() + r.width() * (x0 + span * (i as f32 + 0.5) / SEATS as f32), r.top() + r.height() * 0.66)
-    } else {
-        let (x, y) = [(0.22, 0.58), (0.5, 0.58), (0.78, 0.58), (0.36, 0.86), (0.64, 0.86)][i % SEATS];
-        pos2(r.left() + r.width() * x, r.top() + r.height() * y)
+    match s {
+        // (Along the strip, right of its word, 1 under its middle: 0.13.28's, its chips fitted
+        // on its screen at three sizes.)
+        Spot::Buy(_) | Spot::Lay(_) => pos2(r.left() + r.width() * (0.12 + 0.76 * (i as f32 + 0.5) / SEATS as f32), r.center().y + 1.0),
+        _ if wide(s) => {
+            let x0 = if matches!(s, Spot::Field) { 0.30 } else { 0.10 };
+            let span = if matches!(s, Spot::Field) { 0.66 } else { 0.80 };
+            pos2(r.left() + r.width() * (x0 + span * (i as f32 + 0.5) / SEATS as f32), r.top() + r.height() * 0.66)
+        }
+        _ => {
+            let (x, y) = [(0.22, 0.58), (0.5, 0.58), (0.78, 0.58), (0.36, 0.86), (0.64, 0.86)][i % SEATS];
+            pos2(r.left() + r.width() * x, r.top() + r.height() * y)
+        }
+    }
+}
+
+/// The server feature that says its craps tables take lay odds behind don't pass (0.13.6).
+const LAY_ODDS_FEATURE: &str = pyr_proto::control::HIGH_TABLES_FEATURE;
+
+/// What a place bet pays, a buy's true odds, and a lay's, by number (4, 5, 6, 8, 9, 10).
+const PLACE_PAYS: [&str; 6] = ["9 to 5", "7 to 5", "7 to 6", "7 to 6", "7 to 5", "9 to 5"];
+const BUY_ODDS: [&str; 6] = ["2 to 1", "3 to 2", "6 to 5", "6 to 5", "3 to 2", "2 to 1"];
+const LAY_ODDS: [&str; 6] = ["1 to 2", "2 to 3", "5 to 6", "5 to 6", "2 to 3", "1 to 2"];
+
+/// A buy's words (0.13.26's), worked out for `a` on it: what it pays less the vig, and what
+/// placing the same would win instead.
+fn buy_words(i: usize, a: u64) -> String {
+    let n = PLACE_NUMBERS[i];
+    let (win, vig, comes) = (cr::odds_win(n, a), cr::vig(a), cr::buy_pays(n, a));
+    let placed = cr::place_win(n, a);
+    let beside = match comes.cmp(&placed) {
+        std::cmp::Ordering::Greater => format!("buying pays {} more", chips_text(comes - placed)),
+        std::cmp::Ordering::Less => format!("placing pays {} more", chips_text(placed - comes)),
+        std::cmp::Ordering::Equal => "the same".into(),
+    };
+    format!(
+        "Buy {n}: the {n} before a 7 pays true odds ({}), less a vig of 5% of the bet (rounded down, 1 at least), taken only when it wins. {a} on it: the {n} pays {} less {} vig, so {} comes to you and the bet stays up; a 7 takes the bet. Off on the come-out unless your buys are working. Placed ({}), {a} on the {n} would win {}: {beside}.",
+        BUY_ODDS[i],
+        chips_text(win),
+        chips_text(vig),
+        chips_text(comes),
+        PLACE_PAYS[i],
+        chips_text(placed),
+        a = chips_text(a),
+    )
+}
+
+/// A lay's words, worked out for `a` on it.
+fn lay_words(i: usize, a: u64) -> String {
+    let n = PLACE_NUMBERS[i];
+    let win = cr::lay_win(n, a);
+    format!(
+        "Lay {n}: a 7 before the {n} pays true odds ({}), less a 5% vig on the win (rounded down, 1 at least), taken only when it wins. {} on it: a 7 pays {} less {} vig, so {} comes to you and the bet stays up; the {n} takes the bet. Working on every roll, the come-out too.",
+        LAY_ODDS[i],
+        chips_text(a),
+        chips_text(win),
+        chips_text(cr::vig(win)),
+        chips_text(cr::lay_pays(n, a)),
+    )
+}
+
+/// A spot's words for a hover: a buy's and a lay's for what's on it (`on`), or the chip picked.
+fn words(spot: Spot, point: Option<u8>, on: u64, chip: u64) -> String {
+    let a = if on > 0 { on } else { chip };
+    match spot {
+        Spot::Pass => "Pass line: wins on 7 or 11 at the come-out, then on the point before a 7".into(),
+        Spot::Odds => format!("Odds behind the pass line: up to {}× it, paid at true odds (no edge)", point.map(cr::max_odds).unwrap_or(3)),
+        Spot::DontPass => "Don't pass: wins on 2 or 3 at the come-out, then on a 7 before the point".into(),
+        Spot::DontOdds => format!("Lay odds behind don't pass: up to {}× it, paid at true odds on a 7 (no edge)", cr::LAY_ODDS),
+        Spot::Field => "Field: one roll; 2, 3, 4, 9, 10, 11 or 12 wins".into(),
+        Spot::Place(i) => format!("Place {}: pays {}", PLACE_NUMBERS[i], PLACE_PAYS[i]),
+        Spot::Buy(i) => buy_words(i, a),
+        Spot::Lay(i) => lay_words(i, a),
+        Spot::Hard(i) => {
+            let n = HARD_NUMBERS[i];
+            format!("Hard {n}: {h} and {h} before a 7 or an easy {n}", h = n / 2)
+        }
+        Spot::AnySeven => "Any seven: one roll, pays 4 to 1".into(),
+        Spot::AnyCraps => "Any craps (2, 3 or 12): one roll, pays 7 to 1".into(),
     }
 }
 
@@ -115,14 +219,20 @@ fn call(r: &CrapsReveal) -> String {
     }
 }
 
+/// Whether a bet stays up when it wins (what comes back is its win alone): place bets,
+/// hardways, buys and lays. (Lay odds come down with don't pass: 0.13.25, "a win with lay odds
+/// was called out with its stake counted in".)
+fn stays_up(bet: &str) -> bool {
+    bet.starts_with("Place") || bet.starts_with("Hard") || bet.starts_with("Buy") || (bet.starts_with("Lay") && bet != "Lay odds")
+}
+
 /// What a roll's decided bets came to: chips won (a winner that stays up wins only its win; one
 /// that comes down, its win past its stake) less stakes lost.
 fn net(d: &[Decided]) -> i64 {
     d.iter()
         .map(|d| {
-            let stays = d.bet.starts_with("Place") || d.bet.starts_with("Hard");
             if d.won {
-                if stays { d.returned as i64 } else { d.returned as i64 - d.stake as i64 }
+                if stays_up(&d.bet) { d.returned as i64 } else { d.returned as i64 - d.stake as i64 }
             } else {
                 -(d.stake as i64)
             }
@@ -146,6 +256,25 @@ pub struct CrapsTableUi {
     /// whose result was called for me.
     playing_chips: Option<u64>,
     told: Option<u64>,
+    /// My chips on each bet as I put them down, chip by chip (drawn so while they still come to
+    /// what's on it).
+    piles: Vec<(Spot, Vec<u64>)>,
+}
+
+impl CrapsTableUi {
+    /// My pile on a bet, if its chips come to what's on it.
+    fn pile(&self, spot: Spot, amount: u64) -> Option<&Vec<u64>> {
+        self.piles.iter().find(|(s, _)| *s == spot).map(|(_, c)| c).filter(|c| amount > 0 && c.iter().sum::<u64>() == amount)
+    }
+
+    /// A chip onto my pile on a bet that had `before` on it (the chips that come to, when the
+    /// pile isn't as I put it down any more: set to fit the table, say).
+    fn pile_add(&mut self, spot: Spot, before: u64, chip: u64) {
+        let mut chips = self.pile(spot, before).cloned().unwrap_or_else(|| chips_for(before));
+        chips.push(chip);
+        self.piles.retain(|(s, _)| *s != spot);
+        self.piles.push((spot, chips));
+    }
 }
 
 /// A button on the controls; true when it's clicked.
@@ -184,6 +313,7 @@ impl PyrApp {
         t.desired = None;
         t.rolled = None;
         t.playing_chips = None;
+        t.piles.clear();
     }
 
     /// The craps tables' page: the tables along the top, the table, the seats, the controls.
@@ -231,7 +361,11 @@ impl PyrApp {
             return;
         };
         let v = live.view.clone();
-        let spots = self.crt_layout(&p, felt, &v);
+        // (What this server's tables take: buys and lays since 0.13.23, lay odds since 0.13.6.
+        // An older server's table keeps the layout it knows, as 0.13.28 shows it there.)
+        let strips = s.has(pyr_proto::control::CRAPS_BUY_LAY_FEATURE);
+        let lay_odds = s.has(LAY_ODDS_FEATURE);
+        let spots = self.crt_layout(&p, felt, &v, strips, lay_odds);
         // The roll on the table, on its own clock (joined late: part way through already).
         let shown = (v.stage == CrapsStage::Shown).then(|| v.last.clone()).flatten();
         if let Some(r) = &shown
@@ -269,21 +403,23 @@ impl PyrApp {
                 bets = was.get(i).cloned().flatten().unwrap_or_default();
             }
             let ghost = me && before.is_none() && desired.as_ref().is_some_and(|d| *d != x.bets);
-            for (spot, r, _) in &spots {
+            for (spot, r) in &spots {
                 let a = amount(&bets, *spot);
                 if a == 0 {
                     continue;
                 }
                 let c = chip_at(*r, *spot, i);
-                let cr_ = if wide(*spot) { 12.0 } else { 10.0 };
+                let cr_ = chip_r(*spot);
                 let ring = SEAT_COLORS[i];
                 p.circle_stroke(c + vec2(0.0, 1.0), cr_ + 2.5, Stroke::new(if me { 2.5f32 } else { 1.6 }, ring.gamma_multiply(if me { 1.0 } else { 0.75 })));
+                let mut g = p.clone();
                 if ghost {
-                    let mut g = p.clone();
                     g.set_opacity(0.6);
-                    chip_stack(&g, c, cr_, a);
-                } else {
-                    chip_stack(&p, c, cr_, a);
+                }
+                // (Mine as I piled them, while they still come to what's on the bet.)
+                match self.poker.casino.crt.pile(*spot, a).filter(|_| me) {
+                    Some(chips) => chip_pile(&g, c, cr_, chips),
+                    None => chip_stack(&g, c, cr_, a),
                 }
             }
         }
@@ -342,35 +478,54 @@ impl PyrApp {
         super::emotes::pops(&p, ui.ctx(), &s.poker.game_emotes, TableGame::Craps, v.id, 112.0, |seat| self.crt_plate_at(plates, (seat as usize).min(SEATS - 1)) - vec2(0.0, 58.0));
     }
 
-    /// The layout, with the puck on the point: each bet's spot, and its words for a hover.
-    fn crt_layout(&self, p: &egui::Painter, felt: Rect, v: &CrapsView) -> Vec<(Spot, Rect, String)> {
+    /// The layout, with the puck on the point: each bet's spot. `strips`: with LAY and BUY
+    /// along each number's box; `lay_odds`: with LAY ODDS beside don't pass on a point.
+    fn crt_layout(&self, p: &egui::Painter, felt: Rect, v: &CrapsView, strips: bool, lay_odds: bool) -> Vec<(Spot, Rect)> {
         let w = felt.width();
         let line = Stroke::new(2.0f32, Color32::from_white_alpha(200));
-        let mut spots: Vec<(Spot, Rect, String)> = Vec::new();
+        let thin = Stroke::new(1.0f32, Color32::from_white_alpha(110));
+        let mut spots: Vec<(Spot, Rect)> = Vec::new();
         let main = Rect::from_min_max(felt.min + vec2(18.0, 16.0), pos2(felt.left() + w * 0.68, felt.bottom() - 16.0));
         let bw = main.width() / 6.0;
-        let place_h = main.height() * 0.34;
+        let place_h = main.height() * if strips { 0.42 } else { 0.34 };
         for (i, n) in PLACE_NUMBERS.iter().enumerate() {
+            // A number's box: LAY along its top, the number (its place bet), BUY along its bottom.
             let r = Rect::from_min_size(pos2(main.left() + i as f32 * bw, main.top()), vec2(bw, place_h));
-            spots.push((Spot::Place(i), r, format!("Place {n}: pays {}", ["9 to 5", "7 to 5", "7 to 6", "7 to 6", "7 to 5", "9 to 5"][i])));
             p.rect_stroke(r, 0, line, StrokeKind::Inside);
             let label = if *n == 6 { "SIX".to_string() } else if *n == 9 { "NINE".to_string() } else { n.to_string() };
             let size = (place_h * 0.24).min(bw * 0.22);
-            p.text(r.center_top() + vec2(0.0, place_h * 0.2), Align2::CENTER_CENTER, label, theme::bold_font(size), if *n == 6 || *n == 8 { col::RED } else { col::GOLD2 });
-            p.text(r.center_top() + vec2(0.0, place_h * 0.38), Align2::CENTER_CENTER, ["9:5", "7:5", "7:6", "7:6", "7:5", "9:5"][i], theme::bold_font((bw * 0.1).clamp(9.0, 12.0)), Color32::from_white_alpha(140));
+            let ink = if *n == 6 || *n == 8 { col::RED } else { col::GOLD2 };
+            let pays = ["9:5", "7:5", "7:6", "7:6", "7:5", "9:5"][i];
+            let pays_font = theme::bold_font((bw * 0.1).clamp(9.0, 12.0));
+            let num = if strips {
+                let lay = Rect::from_min_max(r.min, pos2(r.right(), r.top() + place_h * 0.2));
+                let buy = Rect::from_min_max(pos2(r.left(), r.top() + place_h * 0.78), r.max);
+                let num = Rect::from_min_max(lay.left_bottom(), buy.right_top());
+                // (The strips before the number: 0.13.28 puts a seat's place chips down over
+                // its buy's tag.)
+                spots.push((Spot::Lay(i), lay));
+                spots.push((Spot::Buy(i), buy));
+                p.hline(r.x_range(), lay.bottom(), thin);
+                p.hline(r.x_range(), buy.top(), thin);
+                p.text(lay.left_center() + vec2(6.0, 0.0), Align2::LEFT_CENTER, "LAY", theme::bold_font(11.0), Color32::from_white_alpha(150));
+                p.text(buy.left_center() + vec2(6.0, 0.0), Align2::LEFT_CENTER, "BUY", theme::bold_font(11.0), col::GOLD2);
+                p.text(num.center_top() + vec2(0.0, num.height() * 0.24), Align2::CENTER_CENTER, label, theme::bold_font(size), ink);
+                p.text(num.center_top() + vec2(0.0, num.height() * 0.44), Align2::CENTER_CENTER, pays, pays_font, Color32::from_white_alpha(140));
+                num
+            } else {
+                // (A table without buys and lays: the box is all the number's, as 0.13.0's.)
+                p.text(r.center_top() + vec2(0.0, place_h * 0.2), Align2::CENTER_CENTER, label, theme::bold_font(size), ink);
+                p.text(r.center_top() + vec2(0.0, place_h * 0.38), Align2::CENTER_CENTER, pays, pays_font, Color32::from_white_alpha(140));
+                r
+            };
+            spots.push((Spot::Place(i), num));
             if v.point == Some(*n) {
-                let pc = r.right_top() + vec2(-18.0, 18.0);
+                let pc = num.right_top() + vec2(-18.0, 18.0);
                 p.circle_filled(pc + vec2(1.0, 2.0), 15.0, Color32::from_black_alpha(120));
                 p.circle_filled(pc, 15.0, Color32::WHITE);
                 p.circle_stroke(pc, 15.0, Stroke::new(2.0f32, Color32::BLACK));
                 p.text(pc, Align2::CENTER_CENTER, "ON", theme::bold_font(10.5), Color32::BLACK);
             }
-        }
-        if v.point.is_none() {
-            let pc = pos2(main.left() + 22.0, main.top() + place_h + 22.0);
-            p.circle_filled(pc, 15.0, Color32::from_rgb(0x18, 0x18, 0x1c));
-            p.circle_stroke(pc, 15.0, Stroke::new(2.0f32, Color32::WHITE));
-            p.text(pc, Align2::CENTER_CENTER, "OFF", theme::bold_font(9.5), Color32::WHITE);
         }
         let rest = Rect::from_min_max(pos2(main.left(), main.top() + place_h), main.max);
         let band = rest.height() / 3.0;
@@ -381,57 +536,76 @@ impl PyrApp {
         p.text(field.left_top() + vec2(16.0, band * 0.3), Align2::LEFT_CENTER, "FIELD", theme::bold_font(20.0), col::GOLD2);
         p.text(field.left_top() + vec2(16.0, band * 0.62), Align2::LEFT_CENTER, "2 double · 12 triple", theme::font(11.0), Color32::from_white_alpha(190));
         p.text(field.center_top() + vec2(field.width() * 0.12, band * 0.26), Align2::CENTER_CENTER, "2 · 3 · 4 · 9 · 10 · 11 · 12", theme::bold_font(15.0), Color32::from_white_alpha(230));
-        spots.push((Spot::Field, field, "Field: one roll; 2, 3, 4, 9, 10, 11 or 12 wins".into()));
+        spots.push((Spot::Field, field));
+        if v.point.is_none() {
+            // (At the field's far end since 0.13.23: it covered the word FIELD.)
+            let pc = field.right_top() + vec2(-24.0, 24.0);
+            p.circle_filled(pc, 15.0, Color32::from_rgb(0x18, 0x18, 0x1c));
+            p.circle_stroke(pc, 15.0, Stroke::new(2.0f32, Color32::WHITE));
+            p.text(pc, Align2::CENTER_CENTER, "OFF", theme::bold_font(9.5), Color32::WHITE);
+        }
+        // Don't pass, and its lay odds beside it once there's a point.
         p.rect_stroke(dont, 0, line, StrokeKind::Inside);
-        p.text(dont.center_top() + vec2(0.0, dont.height() * 0.26), Align2::CENTER_CENTER, "DON'T PASS BAR", theme::bold_font(15.0), Color32::from_white_alpha(230));
-        spots.push((Spot::DontPass, dont, "Don't pass: wins on 2 or 3 at the come-out, then on a 7 before the point".into()));
+        let lay_odds = lay_odds && v.point.is_some();
+        let dont_label = if lay_odds { Rect::from_min_size(dont.min, vec2(dont.width() * 0.74, dont.height())) } else { dont };
+        p.text(dont_label.center_top() + vec2(0.0, dont.height() * 0.26), Align2::CENTER_CENTER, "DON'T PASS BAR", theme::bold_font(15.0), Color32::from_white_alpha(230));
+        spots.push((Spot::DontPass, dont_label));
+        if lay_odds {
+            let behind = Rect::from_min_max(pos2(dont_label.right(), dont.top()), dont.max);
+            p.rect_stroke(behind.shrink(5.0), theme::r(10), Stroke::new(1.5f32, col::GOLD), StrokeKind::Inside);
+            p.text(behind.center_top() + vec2(0.0, dont.height() * 0.26), Align2::CENTER_CENTER, "LAY ODDS", theme::bold_font(13.0), col::GOLD2);
+            spots.push((Spot::DontOdds, behind));
+        }
         p.rect_stroke(pass, 0, line, StrokeKind::Inside);
         let pass_label = Rect::from_min_size(pass.min, vec2(pass.width() * 0.74, pass.height()));
         p.text(pass_label.center_top() + vec2(0.0, pass.height() * 0.26), Align2::CENTER_CENTER, "PASS LINE", theme::bold_font(20.0), Color32::WHITE);
-        spots.push((Spot::Pass, pass_label, "Pass line: wins on 7 or 11 at the come-out, then on the point before a 7".into()));
+        spots.push((Spot::Pass, pass_label));
         let odds = Rect::from_min_max(pos2(pass_label.right(), pass.top()), pass.max);
         if v.point.is_some() {
             p.rect_stroke(odds.shrink(5.0), theme::r(10), Stroke::new(1.5f32, col::GOLD), StrokeKind::Inside);
             p.text(odds.center_top() + vec2(0.0, odds.height() * 0.24), Align2::CENTER_CENTER, "ODDS", theme::bold_font(13.0), col::GOLD2);
-            spots.push((Spot::Odds, odds, format!("Odds behind the pass line: up to {}× it, paid at true odds (no edge)", v.point.map(cr::max_odds).unwrap_or(3))));
+            spots.push((Spot::Odds, odds));
         }
         let props = Rect::from_min_max(pos2(main.right() + 18.0, main.top()), pos2(felt.right() - 18.0, felt.bottom() - 16.0));
         p.rect_stroke(props, theme::r(10), line, StrokeKind::Inside);
         let ph = props.height() / 4.0;
         let seven = Rect::from_min_size(props.min, vec2(props.width(), ph * 0.9));
         p.text(seven.center_top() + vec2(0.0, ph * 0.26), Align2::CENTER_CENTER, "ANY SEVEN  ·  4 to 1", theme::bold_font(14.0), col::RED);
-        spots.push((Spot::AnySeven, seven, "Any seven: one roll, pays 4 to 1".into()));
+        spots.push((Spot::AnySeven, seven));
         for (i, n) in HARD_NUMBERS.iter().enumerate() {
             let (cx, cy) = (i % 2, i / 2);
             let r = Rect::from_min_size(pos2(props.left() + cx as f32 * props.width() / 2.0, props.top() + ph * 0.9 + cy as f32 * ph * 1.05), vec2(props.width() / 2.0, ph * 1.05));
             p.rect_stroke(r, 0, Stroke::new(1.0f32, Color32::from_white_alpha(120)), StrokeKind::Inside);
             let half = n / 2;
             let d = (r.height() * 0.24).min(r.width() * 0.2);
-            art::die(&p, r.center_top() + vec2(-d * 0.62, d * 0.9), d, half, 0.0, Color32::from_rgb(0xf4, 0xf0, 0xe8));
-            art::die(&p, r.center_top() + vec2(d * 0.62, d * 0.9), d, half, 0.0, Color32::from_rgb(0xf4, 0xf0, 0xe8));
+            art::die(p, r.center_top() + vec2(-d * 0.62, d * 0.9), d, half, 0.0, Color32::from_rgb(0xf4, 0xf0, 0xe8));
+            art::die(p, r.center_top() + vec2(d * 0.62, d * 0.9), d, half, 0.0, Color32::from_rgb(0xf4, 0xf0, 0xe8));
             p.text(r.center_top() + vec2(0.0, d * 1.9), Align2::CENTER_CENTER, format!("{} to 1", if *n == 4 || *n == 10 { 7 } else { 9 }), theme::bold_font(11.0), col::GOLD2);
-            spots.push((Spot::Hard(i), r, format!("Hard {n}: {half} and {half} before a 7 or an easy {n}")));
+            spots.push((Spot::Hard(i), r));
         }
         let crapsr = Rect::from_min_max(pos2(props.left(), props.top() + ph * 3.0), props.max);
         p.text(crapsr.center_top() + vec2(0.0, crapsr.height() * 0.26), Align2::CENTER_CENTER, "ANY CRAPS  ·  7 to 1", theme::bold_font(14.0), col::RED);
-        spots.push((Spot::AnyCraps, crapsr, "Any craps (2, 3 or 12): one roll, pays 7 to 1".into()));
+        spots.push((Spot::AnyCraps, crapsr));
         spots
     }
 
     /// Clicks on the layout: the chip picked onto a bet (right-click takes it down), where the
-    /// game allows it now.
-    fn crt_clicks(&mut self, ui: &mut egui::Ui, s: &ServerView, v: &CrapsView, spots: &[(Spot, Rect, String)], desired: Option<Bets>, open: bool) {
+    /// game allows it now; a bet's words by the pointer.
+    fn crt_clicks(&mut self, ui: &mut egui::Ui, s: &ServerView, v: &CrapsView, spots: &[(Spot, Rect)], desired: Option<Bets>, open: bool) {
         let Some(me) = v.my_seat else { return };
         let Some(seat) = v.seats.get(me as usize).cloned().flatten() else { return };
         let p = ui.painter().clone();
         let have = desired.unwrap_or_else(|| seat.bets.clone());
         let table = Table { point: v.point, bets: seat.bets.clone(), streak: v.streak };
+        let chip = self.poker.casino.chip;
+        // The chips I have left to put down (what's on the table is taken already).
+        let left = (chips_now(s) + seat.bets.total()).saturating_sub(have.total());
         let mut tip = None;
-        for (spot, r, words) in spots {
-            let resp = ui.interact(*r, ui.id().with(("crt-spot", words.as_str())), Sense::click());
+        for (spot, r) in spots {
+            let resp = ui.interact(*r, ui.id().with(("crt-spot", format!("{spot:?}"))), Sense::click());
             if resp.hovered() {
                 p.rect_filled(*r, 0, Color32::from_white_alpha(16));
-                tip = Some(words.clone());
+                tip = Some(words(*spot, v.point, amount(&have, *spot), chip));
                 if open {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
@@ -439,42 +613,66 @@ impl PyrApp {
             if !open {
                 continue;
             }
-            let mut want = have.clone();
             if resp.clicked() {
-                *slot(&mut want, *spot) += self.poker.casino.chip;
+                let before = amount(&have, *spot);
+                let mut want = have.clone();
+                *slot(&mut want, *spot) += chip;
                 if *spot == Spot::Odds
                     && let Some(pt) = v.point
                 {
                     want.pass_odds = want.pass_odds.min(want.pass * cr::max_odds(pt));
                 }
-            }
-            if resp.secondary_clicked() {
-                *slot(&mut want, *spot) = 0;
-            }
-            if want != have {
-                match cr::check_change(&table, &want) {
-                    Ok(()) => {
-                        self.crt_send(s, v, want, false);
+                // Each bet brought into what this table takes first.
+                let fitted = pyr_poker::crapsroom::fit(&mut want, v.min_bet, v.max_bet);
+                let fit_words = format!("Bets here are {} to {}: yours set to fit", chips_text(v.min_bet), chips_text(v.max_bet));
+                let more = want.total().saturating_sub(have.total());
+                if want == have {
+                    // (At the table's most already.)
+                    if fitted {
+                        self.toast(fit_words, false);
                     }
-                    Err(e) => tip = Some(e),
+                    continue;
+                }
+                if let Err(e) = cr::check_change(&table, &want) {
+                    self.toast(format!("Can't: {e}"), false);
+                } else if more > left {
+                    // (0.13.24: a bet that's more than I have says so and stays off the table.
+                    // Better than 0.13.28: it said to pick a smaller chip when the rack had none.)
+                    let smaller = super::table_chips(v.min_bet, v.max_bet).0 < chip;
+                    self.toast(format!("You have {} chips left to put down{}", chips_text(left), if chip > left && smaller { ": pick a smaller chip" } else { "" }), false);
+                } else {
+                    if fitted {
+                        self.toast(fit_words, false);
+                    }
+                    self.poker.casino.crt.pile_add(*spot, before, chip);
+                    self.crt_send(s, v, want, false);
+                }
+            } else if resp.secondary_clicked() && amount(&have, *spot) > 0 {
+                let mut want = have.clone();
+                *slot(&mut want, *spot) = 0;
+                match cr::check_change(&table, &want) {
+                    Ok(()) => self.crt_send(s, v, want, false),
+                    Err(e) => self.toast(format!("Can't: {e}"), false),
                 }
             }
         }
         if let Some(t) = tip {
-            let g = p.layout_no_wrap(t, theme::bold_font(13.0), col::GOLD2);
+            // By the pointer, wrapped, and kept on the screen (0.13.23).
+            let g = p.layout(t, theme::bold_font(13.0), col::GOLD2, 420.0);
+            let size = g.size() + vec2(16.0, 10.0);
+            let screen = ui.ctx().content_rect().shrink(6.0);
             let at = ui.ctx().pointer_hover_pos().unwrap_or_default() + vec2(14.0, 18.0);
-            let r = Rect::from_min_size(at, g.size() + vec2(16.0, 10.0));
+            let at = pos2(at.x.min(screen.right() - size.x).max(screen.left()), at.y.min(screen.bottom() - size.y).max(screen.top()));
+            let r = Rect::from_min_size(at, size);
+            // (Over the chat button and whatever else is on the page.)
+            let p = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, ui.id().with("crt-tip")));
             p.rect_filled(r, theme::r(8), Color32::from_black_alpha(220));
             p.galley(r.min + vec2(8.0, 5.0), g, col::GOLD2);
         }
     }
 
     /// My bets to the table (shown at once; the table's own once it has them).
-    fn crt_send(&mut self, s: &ServerView, v: &CrapsView, mut bets: Bets, ready: bool) {
-        // Each bet brought into what this table takes first.
-        if pyr_poker::crapsroom::fit(&mut bets, v.min_bet, v.max_bet) {
-            self.toast(format!("Bets here are {} to {}: yours set to fit", chips_text(v.min_bet), chips_text(v.max_bet)), false);
-        }
+    fn crt_send(&mut self, s: &ServerView, v: &CrapsView, bets: Bets, ready: bool) {
         self.poker.casino.crt.desired = Some((v.roll_no, bets.clone()));
         self.poker.casino.sound_in(0.0, Cue::Chips, 0.0, 0.45);
         self.engine.craps_bets(&s.key, v.id, v.roll_no, bets, ready);
@@ -606,7 +804,7 @@ impl PyrApp {
     fn crt_tables_strip(&mut self, ui: &mut egui::Ui, s: &ServerView, strip: Rect, tables: &[pyr_poker::net::CrapsSummary], at: Option<u64>) {
         let p = ui.painter().clone();
         vgrad(&p, strip, Color32::from_rgb(0x0c, 0x14, 0x10), Color32::from_rgb(0x05, 0x08, 0x06));
-        let picks: Vec<super::picker::Pick> = tables.iter().map(|t| super::picker::Pick { id: t.id, name: t.name.clone(), min: t.min_bet, max: t.max_bet, seated: t.people + t.bots }).collect();
+        let picks: Vec<super::picker::Pick> = tables.iter().map(|t| super::picker::Pick { id: t.id, name: t.name.clone(), min: t.min_bet, max: t.max_bet, seated: t.people + t.bots, note: t.point.map(|n| format!("point {n}")) }).collect();
         if let Some(id) = super::picker::cards(ui, strip, &picks, SEATS, at, "crt-table", 12.0) {
             self.craps_table_leave();
             self.poker.casino.crt.at = Some((s.key.clone(), id));
@@ -689,6 +887,17 @@ impl PyrApp {
                 self.crt_send(s, v, on.clone(), true);
             }
         }
+        // Buys are off on the come-out roll unless they're set working (0.13.23): the button
+        // for it, while there's no point and I've a buy up.
+        if v.point.is_none() && on.buy.iter().any(|b| *b > 0) {
+            let r = place(150.0);
+            let (label, sub) = if on.buys_working { ("Buys working", "on the come-out too") } else { ("Buys off", "on the come-out") };
+            if button(ui, r, "buys-working", label, Some(sub.into()), Color32::from_white_alpha(30), betting) {
+                let mut want = on.clone();
+                want.buys_working = !want.buys_working;
+                self.crt_send(s, v, want, false);
+            }
+        }
         let r = place(104.0);
         if button(ui, r, "clear", "Clear", None, Color32::from_white_alpha(30), on.total() > 0) || (clear_key && on.total() > 0) {
             // Down comes what may (the pass line stays once there's a point).
@@ -700,8 +909,12 @@ impl PyrApp {
         }
         let chips = chips_now(s);
         let color = if on.total() > chips + mine.as_ref().map(|x| x.bets.total()).unwrap_or(0) { col::LOSE } else { col::GOLD2 };
-        let chips_from_to = super::table_chips(v.min_bet, v.max_bet);
-        self.rack_and_bet_from(ui, bar, x, chips_from_to, format!("On the layout {}", chips_text(on.total())), color);
+        // The rack: the table's chips I can put down (0.13.24: a chip bigger than the chips I
+        // had left could be picked, and every bet with it was refused), its smallest always.
+        let (lo, hi) = super::table_chips(v.min_bet, v.max_bet);
+        let chips_left = (chips + mine.as_ref().map(|x| x.bets.total()).unwrap_or(0)).saturating_sub(on.total());
+        let hi = super::CHIPS.iter().copied().filter(|c| *c >= lo && *c <= chips_left).last().unwrap_or(lo).min(hi);
+        self.rack_and_bet_from(ui, bar, x, (lo, hi), format!("On the layout {}", chips_text(on.total())), color);
         let shooter_name = v.shooter.and_then(|i| v.seats.get(i as usize).cloned().flatten()).map(|x| x.name);
         let hint = if on.total() == 0 {
             format!("Pick a chip, then click a bet on the layout ({} to {} each)", chips_text(v.min_bet), chips_text(v.max_bet))

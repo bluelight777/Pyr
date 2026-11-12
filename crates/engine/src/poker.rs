@@ -557,6 +557,12 @@ impl PokerState {
         if matches!(b.view.stage, BjStage::Waiting | BjStage::Betting) {
             b.commits.entry(b.view.round_no).or_insert(b.view.commit);
         }
+        // (Not sitting: my seed for the coming round went with my seat. Until now a bet put
+        // down, then standing up before the deal, said "my Pyr's seed wasn't used": 0.13.28 too.)
+        if b.view.my_seat.is_none() && matches!(b.view.stage, BjStage::Waiting | BjStage::Betting) {
+            let coming = b.view.round_no;
+            b.my_seeds.retain(|(r, _)| *r < coming);
+        }
         let Some(last) = b.view.last.clone().filter(|l| l.round != b.checked_round) else { return };
         b.checked_round = last.round;
         let mine = b.my_seeds.iter().find(|(r, _)| *r == last.round).map(|(_, s)| *s);
@@ -603,6 +609,11 @@ impl PokerState {
             _ => self.craps.insert(SharedLive::new(view, now)),
         };
         c.commits.entry(c.view.roll_no).or_insert(c.view.commit);
+        // (Not sitting: my seed for the coming roll went with my seat; see the blackjack tables.)
+        if c.view.my_seat.is_none() {
+            let coming = c.view.roll_no;
+            c.my_seeds.retain(|(r, _)| *r < coming);
+        }
         let Some(last) = c.view.last.clone().filter(|l| l.roll != c.checked) else { return };
         c.checked = last.roll;
         c.rolls.insert(0, last.dice);
@@ -641,6 +652,10 @@ impl PokerState {
             _ => self.bac.insert(SharedLive::new(view, now)),
         };
         b.commits.entry(b.view.coup_no).or_insert(b.view.commit);
+        if b.view.my_seat.is_none() {
+            let coming = b.view.coup_no;
+            b.my_seeds.retain(|(r, _)| *r < coming);
+        }
         let Some(last) = b.view.last.clone().filter(|l| l.coup != b.checked) else { return };
         b.checked = last.coup;
         let mine = b.my_seeds.iter().find(|(r, _)| *r == last.coup).map(|(_, s)| *s);
@@ -677,6 +692,10 @@ impl PokerState {
             _ => self.rl.insert(SharedLive::new(view, now)),
         };
         b.commits.entry(b.view.spin_no).or_insert(b.view.commit);
+        if b.view.my_seat.is_none() {
+            let coming = b.view.spin_no;
+            b.my_seeds.retain(|(r, _)| *r < coming);
+        }
         let Some(last) = b.view.last.clone().filter(|l| l.spin != b.checked) else { return };
         b.checked = last.spin;
         let mine = b.my_seeds.iter().find(|(r, _)| *r == last.spin).map(|(_, s)| *s);
@@ -945,6 +964,80 @@ mod tests {
         // The table's view kept up: chips at the table add up.
         let total: u64 = t.view.seats.iter().flatten().map(|s| s.stack).sum::<u64>() + t.view.pot;
         assert_eq!(total, 1000 + 2000, "{:?}", t.view);
+    }
+
+    /// A bet put down at a craps table, then standing up before the dice fly: the roll goes
+    /// without my seed (it went with my seat), and that isn't a round that didn't check out
+    /// (0.13.28 said "my Pyr's seed wasn't used"). Sitting through the roll, my seed has to be
+    /// in it.
+    #[test]
+    fn a_seed_that_left_with_my_seat_is_no_problem() {
+        use pyr_poker::casino::craps::Bets;
+        use pyr_poker::crapsroom::CrapsRoom;
+        struct Rng(pyr_poker::fair::Stream);
+        impl pyr_poker::room::Random for Rng {
+            fn seed(&mut self) -> [u8; 32] {
+                let mut s = [0u8; 32];
+                for b in &mut s {
+                    *b = self.0.below(256) as u8;
+                }
+                s
+            }
+            fn below(&mut self, n: u32) -> u32 {
+                self.0.below(n)
+            }
+        }
+        let mut rng = Rng(pyr_poker::fair::Stream::new(pyr_poker::fair::seed_from(3)));
+        let mut t = CrapsRoom::new(1, "Test", 10, 1_000, 0, &mut rng);
+        let mut ps = PokerState::default();
+        let t0 = Instant::now();
+        t.sit("alice", "Alice", Default::default(), 0, 0).unwrap();
+        t.sit("bob", "Bob", Default::default(), 1, 0).unwrap();
+        let mut now = 0u64;
+        // Roll 1: Alice bets (her seed's noted, as when the table takes her bets), then stands
+        // up; Bob bets and the dice go.
+        let roll = t.roll_no();
+        ps.craps_view(t.view(Some("alice"), now), t0);
+        t.place("alice", Bets { field: 10, ..Default::default() }, [7; 32], false, now).unwrap();
+        ps.craps.as_mut().unwrap().my_seeds.push((roll, [7; 32]));
+        ps.craps_view(t.view(Some("alice"), now), t0);
+        t.leave("alice", now);
+        ps.craps_view(t.view(Some("alice"), now), t0);
+        t.place("bob", Bets { field: 10, ..Default::default() }, [8; 32], true, now).unwrap();
+        while t.roll_no() == roll {
+            now += 250;
+            t.tick(now, &mut rng);
+        }
+        ps.craps_view(t.view(Some("alice"), now), t0);
+        assert_eq!(ps.casino.problems, Vec::<String>::new());
+        assert_eq!(ps.casino.checked, 1);
+        // Roll 2: she sits again and bets; a roll shown without her seed is a problem.
+        t.sit("alice", "Alice", Default::default(), 0, now).unwrap();
+        let roll = t.roll_no();
+        while !matches!(t.view(None, now).stage, pyr_poker::net::CrapsStage::Betting | pyr_poker::net::CrapsStage::Waiting) {
+            now += 250;
+            t.tick(now, &mut rng);
+        }
+        t.place("alice", Bets { field: 10, ..Default::default() }, [9; 32], true, now).unwrap();
+        ps.craps.as_mut().unwrap().my_seeds.push((roll, [9; 32]));
+        ps.craps_view(t.view(Some("alice"), now), t0);
+        t.place("bob", Bets { field: 10, ..Default::default() }, [8; 32], true, now).unwrap();
+        while t.roll_no() == roll {
+            now += 250;
+            t.tick(now, &mut rng);
+        }
+        let shown = t.view(Some("alice"), now);
+        ps.craps_view(shown.clone(), t0);
+        assert_eq!(ps.casino.problems, Vec::<String>::new(), "her seed was in it");
+        assert_eq!(ps.casino.checked, 2);
+        // (The same roll, to a Pyr whose seed for it was another: it wasn't used.)
+        let mut other = PokerState::default();
+        other.craps_view(shown.clone(), t0);
+        other.craps.as_mut().unwrap().checked = 0;
+        other.craps.as_mut().unwrap().my_seeds.push((roll, [5; 32]));
+        other.craps_view(shown, t0);
+        assert_eq!(other.casino.problems.len(), 1, "{:?}", other.casino.problems);
+        assert!(other.casino.problems[0].ends_with("my Pyr's seed wasn't used"), "{:?}", other.casino.problems);
     }
 
     /// Everyone all in before the flop: their cards turn over, then the flop, the turn and the

@@ -1,9 +1,12 @@
-//! Craps: the pass line and its odds, don't pass, place bets, hardways, and the one-roll field,
-//! any seven and any craps.
+//! Craps: the pass line and its odds, don't pass and its lay odds, place bets, hardways, buy and
+//! lay bets, and the one-roll field, any seven and any craps.
 //!
 //! A shooter's first roll (the come-out) wins the pass line on 7 or 11 and loses it on 2, 3 or
 //! 12; anything else becomes the point. Then the pass line wins if the point comes again before
-//! a 7. Place bets and hardways stay up until they lose (they're off on the come-out roll).
+//! a 7. Place bets and hardways stay up until they lose (they're off on the come-out roll); so do
+//! buys and lays, which win at true odds less a 5% vig (buys are off on the come-out unless set
+//! working; lays always work). Settled as 0.13.28 settles them: its server's answers, roll by
+//! roll, are the tests.
 //!
 //! Each roll is its own fair round: the dice come from that roll's seeds.
 
@@ -13,9 +16,16 @@ use crate::fair::Stream;
 
 pub const PLACE_NUMBERS: [u8; 6] = [4, 5, 6, 8, 9, 10];
 pub const HARD_NUMBERS: [u8; 4] = [4, 6, 8, 10];
-/// The most on the table at once.
-pub const MAX_ON_TABLE: u64 = 50_000;
+/// The most on the layout at once: 0.13.28's, the same at every table and in the house game
+/// (50,000 before the high rollers' tables came; no table's bets can add up to this).
+pub const MAX_ON_TABLE: u64 = 500_000_000;
+/// Lay odds go up to this many times don't pass (0.13.6).
+pub const LAY_ODDS: u64 = 6;
+/// The least a buy or a lay is (0.13.26: the vig is 1 at least).
+pub const BUY_LAY_MIN: u64 = 5;
 
+/// What's on the layout, written as 0.13.28 writes it (`dont_odds` always; `buy`, `lay` and
+/// `buys_working` only when there's something to say).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Bets {
     #[serde(default)]
@@ -24,6 +34,10 @@ pub struct Bets {
     pub pass_odds: u64,
     #[serde(default)]
     pub dont_pass: u64,
+    /// Lay odds behind don't pass (0.13.6): up to `LAY_ODDS` times it, paid at true odds on a
+    /// seven.
+    #[serde(default)]
+    pub dont_odds: u64,
     #[serde(default)]
     pub field: u64,
     #[serde(default)]
@@ -36,12 +50,25 @@ pub struct Bets {
     /// Hard 4, 6, 8 and 10.
     #[serde(default)]
     pub hard: [u64; 4],
+    /// Buy and lay bets on 4, 5, 6, 8, 9 and 10 (0.13.23): true odds less a 5% vig (of the bet
+    /// for a buy, of the win for a lay), taken only when it wins; they stay up when they win.
+    #[serde(default, skip_serializing_if = "none")]
+    pub buy: [u64; 6],
+    #[serde(default, skip_serializing_if = "none")]
+    pub lay: [u64; 6],
+    /// Buys work on the come-out roll too (they're off on it otherwise; lays always work).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub buys_working: bool,
+}
+
+fn none(v: &[u64; 6]) -> bool {
+    v.iter().all(|x| *x == 0)
 }
 
 impl Bets {
     pub fn total(&self) -> u64 {
-        let mut t = self.pass.saturating_add(self.pass_odds).saturating_add(self.dont_pass).saturating_add(self.field).saturating_add(self.any_seven).saturating_add(self.any_craps);
-        for p in self.place.iter().chain(self.hard.iter()) {
+        let mut t = self.pass.saturating_add(self.pass_odds).saturating_add(self.dont_pass).saturating_add(self.dont_odds).saturating_add(self.field).saturating_add(self.any_seven).saturating_add(self.any_craps);
+        for p in self.place.iter().chain(self.hard.iter()).chain(self.buy.iter()).chain(self.lay.iter()) {
             t = t.saturating_add(*p);
         }
         t
@@ -72,7 +99,7 @@ pub fn max_odds(point: u8) -> u64 {
 }
 
 /// What a winning bet of `stake` wins (not counting the stake), true odds for the pass odds.
-fn odds_win(point: u8, stake: u64) -> u64 {
+pub fn odds_win(point: u8, stake: u64) -> u64 {
     match point {
         4 | 10 => stake * 2,
         5 | 9 => stake * 3 / 2,
@@ -80,7 +107,36 @@ fn odds_win(point: u8, stake: u64) -> u64 {
     }
 }
 
-fn place_win(n: u8, stake: u64) -> u64 {
+/// What a winning lay (or lay odds) of `stake` against `n` wins: true odds, 1 to 2 against the 4
+/// and 10, 2 to 3 against the 5 and 9, 5 to 6 against the 6 and 8 (rounded down).
+pub fn lay_win(n: u8, stake: u64) -> u64 {
+    match n {
+        4 | 10 => stake / 2,
+        5 | 9 => stake * 2 / 3,
+        _ => stake * 5 / 6,
+    }
+}
+
+/// The vig on a buy (of its bet) or a lay (of its win): 5%, rounded down, 1 at least.
+pub fn vig(of: u64) -> u64 {
+    (of * 5 / 100).max(1)
+}
+
+/// What a buy of `stake` on `n` brings when it wins (it stays up): true odds less the vig.
+pub fn buy_pays(n: u8, stake: u64) -> u64 {
+    odds_win(n, stake).saturating_sub(vig(stake))
+}
+
+/// What a lay of `stake` against `n` brings when a 7 comes first (it stays up): true odds less
+/// the vig on the win.
+pub fn lay_pays(n: u8, stake: u64) -> u64 {
+    let w = lay_win(n, stake);
+    w.saturating_sub(vig(w))
+}
+
+/// What a winning place bet of `stake` on `n` wins: 9 to 5 on the 4 and 10, 7 to 5 on the 5 and
+/// 9, 7 to 6 on the 6 and 8 (rounded down).
+pub fn place_win(n: u8, stake: u64) -> u64 {
     match n {
         4 | 10 => stake * 9 / 5,
         5 | 9 => stake * 7 / 5,
@@ -103,20 +159,37 @@ pub fn hard_name(i: usize) -> String {
     format!("Hard {}", HARD_NUMBERS[i])
 }
 
-/// Whether the table may go from its bets to `new` before the next roll (the single-player
-/// table: at most `MAX_ON_TABLE` on it at once).
-pub fn check_change(t: &Table, new: &Bets) -> Result<(), String> {
-    check_change_most(t, new, MAX_ON_TABLE)
+pub fn buy_name(i: usize) -> String {
+    format!("Buy {}", PLACE_NUMBERS[i])
 }
 
-/// The same with at most `most` on the layout at once (a table's own, see
-/// `crapsroom::layout_most`).
-pub fn check_change_most(t: &Table, new: &Bets, most: u64) -> Result<(), String> {
-    if new.total() > most {
-        return Err(format!("the most on the table at once is {most}"));
+pub fn lay_name(i: usize) -> String {
+    format!("Lay {}", PLACE_NUMBERS[i])
+}
+
+/// Whether the table may go from its bets to `new` before the next roll. As 0.13.28's server
+/// checks it (its program, and its answers to bets tried on it), in its order: the most on the
+/// layout at once, buys and lays big enough for their vig, then what the point allows. (What a
+/// table takes on each bet is its own to check, after this: `crapsroom`.)
+pub fn check_change(t: &Table, new: &Bets) -> Result<(), String> {
+    if new.total() > MAX_ON_TABLE {
+        return Err(format!("the most on the table at once is {MAX_ON_TABLE}"));
+    }
+    for i in 0..6 {
+        if new.buy[i] > 0 && new.buy[i] < BUY_LAY_MIN {
+            return Err(format!("{} is {BUY_LAY_MIN} or more (the vig's 5%, at least 1)", buy_name(i)));
+        }
+    }
+    for i in 0..6 {
+        if new.lay[i] > 0 && new.lay[i] < BUY_LAY_MIN {
+            return Err(format!("{} is {BUY_LAY_MIN} or more (the vig's 5% of the win, at least 1)", lay_name(i)));
+        }
     }
     match t.point {
         None => {
+            if new.dont_odds > 0 {
+                return Err("lay odds go behind don't pass once there's a point".into());
+            }
             if new.pass_odds > 0 {
                 return Err("odds go behind the pass line once there's a point".into());
             }
@@ -130,6 +203,9 @@ pub fn check_change_most(t: &Table, new: &Bets, most: u64) -> Result<(), String>
             }
             if new.dont_pass > t.bets.dont_pass {
                 return Err("don't pass goes down before the come-out roll".into());
+            }
+            if new.dont_odds > new.dont_pass * LAY_ODDS {
+                return Err(format!("lay odds go up to {LAY_ODDS} times don't pass"));
             }
         }
     }
@@ -167,7 +243,9 @@ pub struct Outcome {
     pub streak: u32,
 }
 
-/// Settles a roll.
+/// Settles a roll. The bets it decides are said in 0.13.28's order (its server's, roll by roll):
+/// the line bets and their odds, then place bets, hardways, buys and lays (each by number), then
+/// the one-roll bets.
 pub fn settle(t: &Table, dice: (u8, u8)) -> (Table, Outcome) {
     let sum = dice.0 + dice.1;
     let hard = dice.0 == dice.1;
@@ -182,45 +260,48 @@ pub fn settle(t: &Table, dice: (u8, u8)) -> (Table, Outcome) {
         }
     };
     match t.point {
-        None => {
-            match sum {
-                7 | 11 => {
-                    decide("Pass line".into(), b.pass, true, b.pass * 2, &mut decided);
-                    decide("Don't pass".into(), b.dont_pass, false, 0, &mut decided);
-                    b.pass = 0;
+        None => match sum {
+            7 | 11 => {
+                decide("Pass line".into(), b.pass, true, b.pass * 2, &mut decided);
+                decide("Don't pass".into(), b.dont_pass, false, 0, &mut decided);
+                b.pass = 0;
+                b.dont_pass = 0;
+            }
+            2 | 3 | 12 => {
+                decide("Pass line".into(), b.pass, false, 0, &mut decided);
+                b.pass = 0;
+                if sum == 12 {
+                    // (Don't pass pushes on 12.)
+                } else {
+                    decide("Don't pass".into(), b.dont_pass, true, b.dont_pass * 2, &mut decided);
                     b.dont_pass = 0;
                 }
-                2 | 3 | 12 => {
-                    decide("Pass line".into(), b.pass, false, 0, &mut decided);
-                    b.pass = 0;
-                    if sum == 12 {
-                        // (Don't pass pushes on 12.)
-                    } else {
-                        decide("Don't pass".into(), b.dont_pass, true, b.dont_pass * 2, &mut decided);
-                        b.dont_pass = 0;
-                    }
-                }
-                n => point = Some(n),
             }
-        }
+            n => point = Some(n),
+        },
         Some(p) => {
             if sum == p {
                 let odds = b.pass_odds;
                 decide("Pass line".into(), b.pass, true, b.pass * 2, &mut decided);
                 decide("Odds".into(), odds, true, odds + odds_win(p, odds), &mut decided);
                 decide("Don't pass".into(), b.dont_pass, false, 0, &mut decided);
+                decide("Lay odds".into(), b.dont_odds, false, 0, &mut decided);
                 b.pass = 0;
                 b.pass_odds = 0;
                 b.dont_pass = 0;
+                b.dont_odds = 0;
                 point = None;
                 streak += 1;
             } else if sum == 7 {
+                let lay = b.dont_odds;
                 decide("Pass line".into(), b.pass, false, 0, &mut decided);
                 decide("Odds".into(), b.pass_odds, false, 0, &mut decided);
                 decide("Don't pass".into(), b.dont_pass, true, b.dont_pass * 2, &mut decided);
+                decide("Lay odds".into(), lay, true, lay + lay_win(p, lay), &mut decided);
                 b.pass = 0;
                 b.pass_odds = 0;
                 b.dont_pass = 0;
+                b.dont_odds = 0;
                 point = None;
                 streak = 0;
             }
@@ -254,6 +335,39 @@ pub fn settle(t: &Table, dice: (u8, u8)) -> (Table, Outcome) {
             }
         }
     }
+    // Buys (off on the come-out unless set working) and lays (always working): both stay up when
+    // they win.
+    let buys_on = t.point.is_some() || b.buys_working;
+    for (i, n) in PLACE_NUMBERS.iter().enumerate() {
+        let stake = b.buy[i];
+        if stake == 0 || !buys_on {
+            continue;
+        }
+        if sum == *n {
+            kept += stake;
+            decide(buy_name(i), stake, true, buy_pays(*n, stake), &mut decided);
+        } else if sum == 7 {
+            decide(buy_name(i), stake, false, 0, &mut decided);
+            b.buy[i] = 0;
+        }
+    }
+    // (A 7 takes the buys down, and with them their being set working, as 0.13.28 does.)
+    if sum == 7 {
+        b.buys_working = false;
+    }
+    for (i, n) in PLACE_NUMBERS.iter().enumerate() {
+        let stake = b.lay[i];
+        if stake == 0 {
+            continue;
+        }
+        if sum == 7 {
+            kept += stake;
+            decide(lay_name(i), stake, true, lay_pays(*n, stake), &mut decided);
+        } else if sum == *n {
+            decide(lay_name(i), stake, false, 0, &mut decided);
+            b.lay[i] = 0;
+        }
+    }
     // One-roll bets, every roll.
     let field_win = match sum {
         2 => Some(2),
@@ -277,4 +391,81 @@ pub fn settle(t: &Table, dice: (u8, u8)) -> (Table, Outcome) {
 
 pub fn play(t: &Table, s: &mut Stream) -> (Table, Outcome) {
     settle(t, roll(s))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Rolls 0.13.28's server settled at its tables (`craps_probe` at Lucky Sevens: every kind of
+    /// bet at once, buys working every other come-out): the point, what was on the layout, the
+    /// dice; what it decided, what stayed up, the point after, and what it paid.
+    #[derive(serde::Deserialize)]
+    struct Case {
+        point: Option<u8>,
+        bets: Bets,
+        dice: (u8, u8),
+        decided: Vec<Decided>,
+        after: Bets,
+        point_after: Option<u8>,
+        paid: u64,
+    }
+
+    #[test]
+    fn rolls_settle_as_0_13_28_settles_them() {
+        let cases: Vec<Case> = serde_json::from_str(include_str!("craps_0_13_28.json")).unwrap();
+        assert!(cases.len() >= 125);
+        for (n, c) in cases.iter().enumerate() {
+            let (after, o) = settle(&Table { point: c.point, bets: c.bets.clone(), streak: 0 }, c.dice);
+            assert_eq!(o.decided, c.decided, "roll {n}: point {:?}, dice {:?}", c.point, c.dice);
+            assert_eq!(after.bets, c.after, "roll {n}: what stays up");
+            assert_eq!(after.point, c.point_after, "roll {n}: the point after");
+            assert_eq!(o.paid, c.paid, "roll {n}: paid");
+        }
+    }
+
+    /// What buys and lays pay, as 0.13.28's tips work them out: a 25 buy on the 4 pays 50 at 2 to
+    /// 1 less 1 vig; a 60 lay against the 10 wins 30, less 1.
+    #[test]
+    fn buys_and_lays_pay_true_odds_less_the_vig() {
+        assert_eq!(buy_pays(4, 25), 49);
+        assert_eq!(buy_pays(6, 100), 115);
+        assert_eq!(lay_pays(10, 60), 29);
+        assert_eq!(lay_pays(9, 10), 5);
+        assert_eq!(vig(19), 1);
+        assert_eq!(vig(100), 5);
+    }
+
+    /// The words 0.13.28's server says when a bet can't go down (asked of it).
+    #[test]
+    fn refusals_in_0_13_28s_words() {
+        let t = Table::default();
+        let b = |f: fn(&mut Bets)| {
+            let mut b = Bets::default();
+            f(&mut b);
+            b
+        };
+        assert_eq!(check_change(&t, &b(|b| b.buy[0] = 3)).unwrap_err(), "Buy 4 is 5 or more (the vig's 5%, at least 1)");
+        assert_eq!(check_change(&t, &b(|b| b.lay[5] = 4)).unwrap_err(), "Lay 10 is 5 or more (the vig's 5% of the win, at least 1)");
+        assert_eq!(check_change(&t, &b(|b| b.dont_odds = 10)).unwrap_err(), "lay odds go behind don't pass once there's a point");
+        assert_eq!(check_change(&t, &b(|b| b.pass_odds = 10)).unwrap_err(), "odds go behind the pass line once there's a point");
+        let on6 = Table { point: Some(6), bets: Bets { pass: 30, dont_pass: 30, ..Default::default() }, streak: 0 };
+        assert_eq!(check_change(&on6, &Bets { pass: 30, pass_odds: 270, dont_pass: 30, dont_odds: 210, ..Default::default() }).unwrap_err(), "odds on 6 go up to 5 times the pass line");
+        assert_eq!(check_change(&on6, &Bets { pass: 30, pass_odds: 30, dont_pass: 30, dont_odds: 210, ..Default::default() }).unwrap_err(), "lay odds go up to 6 times don't pass");
+        assert!(check_change(&on6, &Bets { pass: 30, pass_odds: 150, dont_pass: 30, dont_odds: 180, ..Default::default() }).is_ok());
+        // (Its order, tried on its High Rollers table: a buy too small is said before odds on
+        // the come-out; and 2,700,000 on the layout at once went down there, every bet of
+        // 100,000: only 500,000,000 is too much, as its program has it.)
+        assert_eq!(check_change(&t, &Bets { pass: 100_000, pass_odds: 500, buy: [3, 0, 0, 0, 0, 0], ..Default::default() }).unwrap_err(), "Buy 4 is 5 or more (the vig's 5%, at least 1)");
+        let h = 100_000;
+        let all = Bets { pass: h, dont_pass: h, field: h, any_seven: h, any_craps: h, place: [h; 6], hard: [h; 4], buy: [h; 6], lay: [h; 6], ..Default::default() };
+        assert_eq!(all.total(), 2_700_000);
+        assert!(check_change(&t, &all).is_ok());
+        assert_eq!(check_change(&t, &Bets { pass: 500_000_001, ..Default::default() }).unwrap_err(), "the most on the table at once is 500000000");
+        // (Written as 0.13.28 writes them: buys and lays only when there are some.)
+        let j = serde_json::to_string(&Bets { pass: 5, ..Default::default() }).unwrap();
+        assert_eq!(j, r#"{"pass":5,"pass_odds":0,"dont_pass":0,"dont_odds":0,"field":0,"any_seven":0,"any_craps":0,"place":[0,0,0,0,0,0],"hard":[0,0,0,0]}"#);
+        let j = serde_json::to_string(&Bets { buy: [10, 0, 0, 0, 0, 0], buys_working: true, ..Default::default() }).unwrap();
+        assert!(j.ends_with(r#""hard":[0,0,0,0],"buy":[10,0,0,0,0,0],"buys_working":true}"#), "{j}");
+    }
 }

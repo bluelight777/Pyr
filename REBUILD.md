@@ -29,6 +29,14 @@ rebuilt version by hand once (it carries a new release key), and nobody should l
   down" (0.13.11, 0.13.24) let the others' voices back through for people on speakers. Nothing
   ships that changes what the echo canceller does without Pyr's own echo test, speakers into the
   microphone, A/B against 0.13.28.
+- **Voice and screen sharing: identical to 0.13.28** (Blue, while the rebuild was under way:
+  "please make it identical to what it is now"). What the released rebuild does by itself in a
+  call and in a share is what 0.13.28 does: its numbers and settings read out of its program,
+  calls tried both ways (rebuilt with 0.13.28). A fix that changes the voice path (the
+  headphones one for reports 657 to 675, say) stays in behind a switch and off, until Blue asks
+  for it after the echo test. What can't be shown in the container (real speakers into a real
+  microphone, a graphics card's encoder) is tried on Blue's PC, A/B against 0.13.28, before
+  release; whatever can't be shown to match is said, not shipped.
 - **Back up every session:** a git bundle to `Downloads\pyr-source` on Blue's PC and to the
   outputs folder. Keys live in `Downloads\pyr-keys` (never in the repository).
 
@@ -324,8 +332,28 @@ How (decided while starting it):
       better than 0.13.28 where its Crown Room's bets ran over the dots (said shorter there). The
       tables below as 0.13.28 lays them out (checked side by side, all four). Under 0.13.28's
       name (`high_tables`): its app plays the rebuilt server's Grand Salle and checks the spin.
-- [ ] Craps: lay odds (0.13.6), buy and lay (0.13.23, 0.13.26), chips stay as piled (0.13.24),
-      lay win callout (0.13.25)
+- [x] Craps: lay odds (0.13.6), buy and lay (0.13.23, 0.13.26), chips stay as piled (0.13.24),
+      lay win callout (0.13.25). The rules settle as 0.13.28's server does: 125 of its rolls
+      replayed (`craps_0_13_28.json`), its refusals in its words and its order (read out of its
+      program and tried on it: the most on the layout is 500,000,000 everywhere, its High
+      Rollers took 2,700,000; buys and lays too small are said before what the point allows,
+      then what the table takes). Its bots, read out of its program (`bots_bet` at 0x24b2d0)
+      and watched: the pass-line-with-odds one buys the 4 and 10 one time in three, the dark
+      side lays full odds half the time and the 4 (or 10) one time in four, in twenties. The
+      table, side by side with 0.13.28 on its own server, same pixels watching (five players
+      with every bet) and sitting (my piles, tags, the rack, Buys off / Buys working): LAY and
+      BUY strips (`craps_buy_lay`), LAY ODDS on a point (`high_tables`), the OFF puck at the
+      field's end, piles as put down (the last twelve chips drawn, 0.3 of a chip apart), the
+      words by the pointer (wrapped at 420, kept 6 from the edge), "Can't: ..." and "You have
+      N chips left to put down" as notices, the rack only chips I have left, a table's point
+      on its card. A server without those features shows the layout it knows, as 0.13.28
+      does there (tried with each name hidden). Better than 0.13.28: the words show over the
+      chat button (it covered them); no "pick a smaller chip" when the rack has none; a bet
+      put down and then standing up no longer says "my Pyr's seed wasn't used" (0.13.28 does,
+      at all four table games); after a reconnect the casino table I'm at is watched again
+      (0.13.28's stands still till I leave and come back). Not done: the house game's page
+      (only shown by servers older than 0.12, which have neither) keeps 0.13.0's layout; the
+      server takes buys and lays there as 0.13.28's does.
 - [ ] Dominó Cubano tables in the casino, to 10,000,000, El Presidente (0.13.11/12)
 - [ ] Poker: rabbit (0.13.4/6/7), straddle (0.13.4), new table with seat and bot picker, 20 bots
       (0.13.4), bot levels Easy to Shark (0.13.7), bots think and bluff like people (0.13.26),

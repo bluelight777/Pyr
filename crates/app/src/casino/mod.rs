@@ -542,13 +542,51 @@ pub fn chip_stack(p: &egui::Painter, c: Pos2, r: f32, amount: u64) {
         flat_chip(p, c + vec2(0.0, -(i as f32) * r * 0.22), r, *v, i == 0);
     }
     if chips.len() > 1 || amount != chips[0] {
-        let top = c + vec2(0.0, -(chips.len() as f32) * r * 0.22 - r - 9.0);
-        let t = chips_text(amount);
-        let w = 12.0 + t.len() as f32 * 7.0;
-        let tag = Rect::from_center_size(top, vec2(w, 18.0));
-        p.rect_filled(tag, CornerRadius::same(9), Color32::from_black_alpha(190));
-        p.text(tag.center(), Align2::CENTER_CENTER, t, theme::bold_font(11.5), col::GOLD2);
+        chips_tag(p, c + vec2(0.0, -(chips.len() as f32) * r * 0.22 - r - 9.0), amount);
     }
+}
+
+/// What a stack or a pile comes to, on a tag over it.
+fn chips_tag(p: &egui::Painter, at: Pos2, amount: u64) {
+    let t = chips_text(amount);
+    let w = 12.0 + t.len() as f32 * 7.0;
+    let tag = Rect::from_center_size(at, vec2(w, 18.0));
+    p.rect_filled(tag, CornerRadius::same(9), Color32::from_black_alpha(190));
+    p.text(tag.center(), Align2::CENTER_CENTER, t, theme::bold_font(11.5), col::GOLD2);
+}
+
+/// The most chips of a pile that are drawn (the last put down; the tag says all of them).
+pub const PILE_SHOWN: usize = 12;
+
+/// How much higher each chip of a pile sits than the one under it, in chip radii (0.13.26: "the
+/// chips in a pile stand a little taller, so a pile reads as a pile"; a stack worked out from an
+/// amount keeps 0.22).
+const PILE_STEP: f32 = 0.3;
+
+/// A pile of chips as they were put down (0.13.24's, measured off 0.13.28's screen): the first
+/// at the bottom, each chip its own (a stack of 25s stays a stack of 25s), the last twelve drawn
+/// when there are more, and what they all come to on a tag once there's more than one.
+pub fn chip_pile(p: &egui::Painter, c: Pos2, r: f32, chips: &[u64]) {
+    let shown = &chips[chips.len().saturating_sub(PILE_SHOWN)..];
+    for (i, v) in shown.iter().enumerate() {
+        flat_chip(p, c + vec2(0.0, -(i as f32) * r * PILE_STEP), r, *v, i == 0);
+    }
+    if chips.len() > 1 {
+        chips_tag(p, c + vec2(0.0, -(shown.len() as f32) * r * PILE_STEP - r - 9.0), chips.iter().sum());
+    }
+}
+
+/// The chips an amount is stacked from when nobody piled them: the biggest first.
+pub fn chips_for(amount: u64) -> Vec<u64> {
+    let mut left = amount;
+    let mut chips = Vec::new();
+    for d in CHIPS.iter().rev() {
+        while left >= *d && chips.len() < 64 {
+            chips.push(*d);
+            left -= d;
+        }
+    }
+    chips
 }
 
 impl PyrApp {
