@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use tracing::{debug, warn};
 
-pub use capture::{CaptureHandle, FrameSlot, ScreenSource, SourceKind, Trouble, list_cameras, list_screens};
+pub use capture::{CaptureHandle, Captured, FrameSlot, ScreenSource, SourceKind, Trouble, list_cameras, list_screens};
 use codec::{EncodedFrame, H264Decoder, H264Encoder, Scaler, fit_size, preview_rgba, to_i420};
 
 use crate::state::{SharedFrame, VideoFrame, VideoKey};
@@ -178,6 +178,12 @@ impl Publisher {
         let thread = std::thread::Builder::new()
             .name(if cfg.screen { "pyr-screen-enc" } else { "pyr-camera-enc" }.into())
             .spawn(move || {
+                // (The encoder's thread a little ahead of the others, 0.13.26.)
+                #[cfg(windows)]
+                unsafe {
+                    use windows::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL};
+                    let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+                }
                 // Size, frame rate and bitrate follow what the network can take (see `adapt`);
                 // `PYR_AB=adapt` keeps the preset's, `PYR_AB=pace` the old limit on frames
                 // in flight (~120 ms of them, whatever the round trip).
@@ -195,7 +201,18 @@ impl Publisher {
                 let mut tries: std::collections::VecDeque<bool> = std::collections::VecDeque::new();
                 let mut last_key: Option<Instant> = None;
                 let mut next_due = Instant::now();
-                let mut last: Option<codec::RawFrame> = None;
+                let mut last: Option<Captured> = None;
+                // The bitrate the share's going at (see `adapt`), for the card's encoder.
+                #[cfg(windows)]
+                let mut target_now = cfg.bitrate;
+                // A screen share on the graphics card (Windows, 0.13.26, see `hw`): what the card
+                // does for it, the capture's graphics device, and when the last small copy was.
+                #[cfg(windows)]
+                let mut card = hw::Card::default();
+                #[cfg(windows)]
+                let mut card_device: Option<windows::Win32::Graphics::Direct3D11::ID3D11Device> = None;
+                #[cfg(windows)]
+                let mut last_small: Option<Instant> = None;
                 let mut last_encode = Instant::now();
                 let mut scaler = Scaler::default();
                 let mut preview_scaler = Scaler::default();
@@ -280,7 +297,7 @@ impl Publisher {
                     } else {
                         next_due.saturating_duration_since(Instant::now()).saturating_sub(period / 4).clamp(Duration::from_millis(1), Duration::from_millis(40))
                     };
-                    let fresh = slot.take_wait(wait);
+                    let fresh = slot.take_captured_wait(wait);
                     let now = Instant::now();
                     if let Some(dt) = now.checked_duration_since(window).filter(|d| d.as_secs() >= 1) {
                         sts.sent_fps.store((sent as f64 / dt.as_secs_f64()).round() as u32, Ordering::Relaxed);
@@ -289,8 +306,11 @@ impl Publisher {
                     }
                     let have_new = fresh.is_some();
                     if let Some(f) = fresh {
-                        if adapting && cfg.screen {
-                            content.feed(&f, now);
+                        // (A frame on the card is looked at in its small copies.)
+                        if let Some(r) = f.raw() {
+                            if adapting && cfg.screen {
+                                content.feed(r, now);
+                            }
                         }
                         last = Some(f);
                     }
@@ -301,6 +321,10 @@ impl Publisher {
                             0 => cfg.bitrate,
                             t => t.min(cfg.bitrate),
                         };
+                        #[cfg(windows)]
+                        {
+                            target_now = target;
+                        }
                         let kind = if cfg.screen { content.kind() } else { adapt::Content::Motion };
                         // (OpenH264 skips a few frames after a keyframe to pay for it: only a
                         // lasting habit counts.)
@@ -357,7 +381,100 @@ impl Publisher {
                         enc.request_keyframe();
                     }
                     let (max_w, max_h) = if adapting { (rung.height * 16 / 9 + 8, rung.height) } else { (cfg.max_width, cfg.max_height) };
-                    let (tw, th) = fit_size(frame.width, frame.height, max_w, max_h);
+                    let (tw, th) = {
+                        let (w, h) = frame.size();
+                        fit_size(w, h, max_w, max_h)
+                    };
+                    // The graphics card's way (Windows, 0.13.26): the frame's on the card, and
+                    // the card scales and encodes it. When that doesn't work, it's read back
+                    // and goes the processor's way, from then on.
+                    #[cfg(windows)]
+                    let mut read_back: Option<codec::RawFrame> = None;
+                    #[cfg(windows)]
+                    if let Captured::Card(cf) = &*frame {
+                        use windows::core::Interface;
+                        // A new graphics device for the capture (a driver restart): the card's
+                        // tried again.
+                        if let Ok(d) = cf.device() {
+                            if card_device.as_ref().map(|c| c.as_raw()) != Some(d.as_raw()) {
+                                if card_device.is_some() {
+                                    debug!("video: a new graphics device for the capture; trying its encoder");
+                                }
+                                card = hw::Card::default();
+                                card_device = Some(d);
+                            }
+                        }
+                        if card.failed.is_none() {
+                            // (Its frame rate stays the preset's, so its bitrate's raised for the
+                            // frames that don't go out: what does go out comes to the target.)
+                            let bps = (cfg.fps.max(1) as u64 * target_now as u64 / rung.fps.max(1) as u64).min(2 * cfg.bitrate as u64) as u32;
+                            match card.frame(cf, tw, th, cfg.fps, bps, want_key) {
+                                Ok(packets) => {
+                                    for p in packets {
+                                        sts.frames.fetch_add(1, Ordering::Relaxed);
+                                        sts.bytes.fetch_add(p.data.len() as u64, Ordering::Relaxed);
+                                        sts.width.store(tw as u64, Ordering::Relaxed);
+                                        sts.height.store(th as u64, Ordering::Relaxed);
+                                        if p.key {
+                                            last_key = Some(now);
+                                        }
+                                        sink(EncodedFrame { data: p.data, keyframe: p.key }, tw, th);
+                                        sent += 1;
+                                    }
+                                    sts.encoder.store(card.vendor().map_or(ENCODER_PROCESSOR, |v| v as u32 + 1), Ordering::Relaxed);
+                                    last_encode = now;
+                                    next_due = (next_due + period).max(now);
+                                    n += 1;
+                                    // Small copies made on the card, for the preview and for
+                                    // telling text from motion.
+                                    let small_wanted = preview.is_some() || (adapting && cfg.screen);
+                                    if small_wanted && last_small.is_none_or(|t| now.duration_since(t) >= Duration::from_millis(62)) {
+                                        last_small = Some(now);
+                                        match card.small_copy(cf, 960, 540) {
+                                            Ok(Some(mut small)) => {
+                                                if adapting && cfg.screen {
+                                                    content.feed(&small, now);
+                                                }
+                                                if let Some(p) = preview.as_mut() {
+                                                    if let Some((w, h, px)) = preview_rgba(&mut preview_scaler, &mut small, 960, 540) {
+                                                        p(w, h, px);
+                                                    }
+                                                }
+                                            }
+                                            Ok(None) => {}
+                                            Err(e) => debug!("video: no small copy of the frame: {e:#}"),
+                                        }
+                                    }
+                                    continue;
+                                }
+                                Err(e) => {
+                                    warn!("video: the graphics card's encoder isn't working ({e:#}); encoding on the processor from now on");
+                                    sts.encoder.store(ENCODER_PROCESSOR, Ordering::Relaxed);
+                                    kf.store(true, Ordering::Relaxed);
+                                }
+                            }
+                        }
+                        match card.read_back(cf) {
+                            Ok(f) => {
+                                if adapting && cfg.screen {
+                                    content.feed(&f, now);
+                                }
+                                read_back = Some(f);
+                            }
+                            Err(e) => {
+                                warn!("{e:#}");
+                                continue;
+                            }
+                        }
+                    }
+                    let frame: &mut codec::RawFrame = match frame {
+                        Captured::Raw(f) => f,
+                        #[cfg(windows)]
+                        Captured::Card(_) => match read_back.as_mut() {
+                            Some(f) => f,
+                            None => continue,
+                        },
+                    };
                     let scaled = match scaler.scale(frame, tw, th) {
                         Ok(s) => s,
                         Err(e) => {

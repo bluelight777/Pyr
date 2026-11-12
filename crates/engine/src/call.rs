@@ -79,6 +79,10 @@ impl VideoCtx {
     pub fn start(&self, shared: &Arc<Shared>, track_id: u8, source: &str, cfg: PublisherConfig, generation: u64) -> Result<(VideoOut, TrackInfo)> {
         let slot = Arc::new(FrameSlot::default());
         let screen = track_id == track::SCREEN;
+        // A screen share is encoded on the graphics card where it can be (0.13.26, Windows;
+        // `PYR_AB=hwenc`: on the processor always).
+        #[cfg(windows)]
+        slot.keep_on_card(screen && !pyr_proto::ab::old("hwenc"));
         let mut open: crate::video::Restart = {
             let (source, slot) = (source.to_string(), slot.clone());
             if screen {

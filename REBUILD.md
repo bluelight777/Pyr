@@ -203,11 +203,19 @@ Version in brackets: where 0.13.x first had it.
       sending).
 - [x] Watching a share costs less (0.13.26): each decoded frame goes up as it is
       (from_rgba_premultiplied: a decoded frame is opaque), not looked at pixel by pixel.
-- [ ] On the graphics card end to end (0.13.26, Windows): Media Foundation's hardware encoder
-      (NVENC, AMF, QSV) fed by the card's video engine (scaled and made NV12 on the card), the
-      card's priority for Pyr while sharing (D3DKMTSetProcessSchedulingPriorityClass), and the
-      processor's way when the card's doesn't work. 0.13.28's hw.rs is about 1,000 lines; its
-      messages are in its program. A/B on Blue's PC before it ships.
+- [~] On the graphics card end to end (0.13.26, Windows): rebuilt (video/hw.rs, wired into the
+      capture and the publisher; what 0.13.28 does is in rebuild/notes-hw.md). The capture keeps
+      copies on the card (three textures, frames taken twice as often), the card's video engine
+      scales them and makes them NV12 (eight textures in turn), Media Foundation's hardware
+      H.264 encoder of the capture's card encodes them (asynchronous ones by their events; a
+      keyframe asked for, or the encoder made anew for each where it won't); the card's priority
+      raised while sharing; small copies read back without waiting for the preview and the
+      content watch; the processor's way (read back, OpenH264) from the first failure, and the
+      card again with a new graphics device. PYR_AB=hwenc for the processor's way always. Builds
+      for Windows; can't run here. To do on Blue's PC, A/B against 0.13.28: a share's stats
+      line names the card's encoder (NVIDIA, AMD or Intel), the picture and colours look the
+      same, keyframes come when a viewer joins, the log has "encoding on the graphics card",
+      and PYR_AB=hwenc gives "processor encoder".
 - [ ] Automatic reports (voice went up and down, stopped responding, sound problems): 0.13.0
       has the swells (dips) detector and the watchdog; check what 0.13.x added
 

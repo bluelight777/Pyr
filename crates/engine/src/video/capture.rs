@@ -13,25 +13,78 @@ use parking_lot::{Condvar, Mutex};
 
 use super::codec::{PixelFormat, RawFrame};
 
+/// What a capture gives the encoder: a frame in memory, or (Windows' screen capture, for the
+/// graphics card's encoder, 0.13.26) one kept on the graphics card.
+pub enum Captured {
+    Raw(RawFrame),
+    #[cfg(windows)]
+    Card(super::hw::CardFrame),
+}
+
+impl Captured {
+    pub fn size(&self) -> (u32, u32) {
+        match self {
+            Captured::Raw(f) => (f.width, f.height),
+            #[cfg(windows)]
+            Captured::Card(c) => (c.width, c.height),
+        }
+    }
+
+    /// The frame, if it's in memory.
+    pub fn raw(&self) -> Option<&RawFrame> {
+        match self {
+            Captured::Raw(f) => Some(f),
+            #[cfg(windows)]
+            Captured::Card(_) => None,
+        }
+    }
+}
+
 /// Holds only the newest frame; the encoder takes it when ready (older frames are dropped).
 #[derive(Default)]
 pub struct FrameSlot {
-    frame: Mutex<Option<RawFrame>>,
+    frame: Mutex<Option<Captured>>,
     cv: Condvar,
+    /// The capture may keep its frames on the graphics card (set before it starts).
+    on_card: AtomicBool,
 }
 
 impl FrameSlot {
     pub fn put(&self, f: RawFrame) {
+        self.put_captured(Captured::Raw(f));
+    }
+
+    pub fn put_captured(&self, f: Captured) {
         *self.frame.lock() = Some(f);
         self.cv.notify_one();
     }
 
+    /// The newest frame in memory. (Frames kept on the card only go to a slot that asked for
+    /// them, whose encoder takes them with `take_captured_wait`.)
     pub fn take_wait(&self, timeout: Duration) -> Option<RawFrame> {
+        match self.take_captured_wait(timeout)? {
+            Captured::Raw(f) => Some(f),
+            #[cfg(windows)]
+            Captured::Card(_) => None,
+        }
+    }
+
+    pub fn take_captured_wait(&self, timeout: Duration) -> Option<Captured> {
         let mut g = self.frame.lock();
         if g.is_none() {
             self.cv.wait_for(&mut g, timeout);
         }
         g.take()
+    }
+
+    /// Lets the capture keep its frames on the graphics card for the card's encoder (Windows'
+    /// screen capture; others always give frames in memory).
+    pub fn keep_on_card(&self, yes: bool) {
+        self.on_card.store(yes, Ordering::Relaxed);
+    }
+
+    pub fn on_card(&self) -> bool {
+        self.on_card.load(Ordering::Relaxed)
     }
 }
 
@@ -313,6 +366,9 @@ mod win {
         gap: Duration,
         last: Option<std::time::Instant>,
         watch: Arc<WgcWatch>,
+        /// Frames kept on the graphics card for its encoder (0.13.26), when the slot wants them:
+        /// copies of Windows' frames in textures of the capture's own.
+        copies: Option<crate::video::hw::Copies>,
     }
 
     impl GraphicsCaptureApiHandler for WgcHandler {
@@ -322,7 +378,18 @@ mod win {
         fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
             let (slot, gap, watch) = ctx.flags;
             *watch.device.lock() = Some(SendDirectX::new(ctx.device.clone()));
-            Ok(WgcHandler { slot, buf: Vec::new(), gap, last: None, watch })
+            let copies = if slot.on_card() {
+                match crate::video::hw::Copies::new(&ctx.device, &ctx.device_context) {
+                    Ok(c) => Some(c),
+                    Err(e) => {
+                        tracing::warn!("video: the capture's frames can't stay on the graphics card ({e:#}); reading them back");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            Ok(WgcHandler { slot, buf: Vec::new(), gap, last: None, watch, copies })
         }
 
         fn on_closed(&mut self) -> Result<(), Self::Error> {
@@ -332,13 +399,28 @@ mod win {
 
         fn on_frame_arrived(&mut self, frame: &mut Frame, _control: InternalCaptureControl) -> Result<(), Self::Error> {
             let now = std::time::Instant::now();
+            // (Frames kept on the card are taken twice as often: a copy there costs little, and
+            // the encoder takes the newest.)
+            let gap = if self.copies.is_some() { self.gap / 2 } else { self.gap };
             if let Some(t) = self.last {
                 // A little slack so 60 fps from a 60 Hz screen isn't halved.
-                if now.duration_since(t) + Duration::from_millis(2) < self.gap {
+                if now.duration_since(t) + Duration::from_millis(2) < gap {
                     return Ok(());
                 }
             }
             self.last = Some(now);
+            if let Some(copies) = self.copies.as_mut() {
+                match copies.copy(frame.as_raw_texture(), frame.width(), frame.height()) {
+                    Ok(f) => {
+                        self.slot.put_captured(Captured::Card(f));
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        tracing::warn!("video: couldn't keep the frame on the graphics card ({e:#}); reading frames back from now on");
+                        self.copies = None;
+                    }
+                }
+            }
             let fb = match frame.buffer() {
                 Ok(fb) => fb,
                 Err(e) => {
