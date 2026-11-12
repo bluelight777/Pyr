@@ -111,9 +111,13 @@ Version in brackets: where 0.13.x first had it.
 - [x] Game invites to friends from programs (0.13.15/16), as links pyr.gg/<game>/<code> (0.13.18)
 
 ### Voice, video, sounds
-- [ ] Voice isolation takes the PC's own sound out of the microphone (0.13.2); headphones dips
+- [~] Voice isolation takes the PC's own sound out of the microphone (0.13.2); headphones dips
       (0.13.11), its echo (0.13.12); double-talk on speakers (0.13.19); 0.13.24's try taken out
-      (0.13.25)
+      (0.13.25). 0.13.28's voice is 0.13.23's: the PC's own sound to the echo canceller (0.13.2),
+      the canceller on with isolation, headphones or not (0.13.12 took 0.13.11's change back
+      out), 0.13.19's double-talk tuning; 0.13.24's "dipguard" taken out again (PYR_AB=dipguard
+      does nothing, as in 0.13.28). Rebuilt (5b62cc1, 92bf1df; the details under reports 657 to
+      675). Left: Pyr's own echo test on Blue's PC, A/B against 0.13.28.
 - [x] Headset that drops out and comes back isn't an error (0.13.2): the call screen says what's
       going on at once (as before), but "Sound problem in the call: …" (an error, so reported
       by itself) only comes if the same trouble lasts 15 s; a device back before then says
