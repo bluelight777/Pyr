@@ -21,6 +21,7 @@ pub mod keno;
 pub mod plinko;
 pub mod reels;
 pub mod reelrow;
+pub mod remaster;
 pub mod roulette;
 pub mod slots;
 
@@ -221,6 +222,15 @@ pub enum Bet {
     DragonPlus { bet: u64, growth: u32, feature: feature::Feature },
     /// A ball dropped at Plinko (0.13.5): `rows` from 8 to 16.
     Plinko { chips: u64, risk: plinko::Risk, rows: u8 },
+    /// A round on one of Reel Row Remastered's machines (`remaster`, 0.13.2): a spin, with Ante
+    /// or without, or a Play Feature.
+    Remaster {
+        machine: u8,
+        bet: u64,
+        feature: feature::Feature,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        ante: bool,
+    },
 }
 
 impl Bet {
@@ -238,12 +248,13 @@ impl Bet {
             Bet::SlotsPlus { .. } => Game::Slots,
             Bet::DragonPlus { .. } => Game::Dragon,
             Bet::Plinko { .. } => Game::Plinko,
+            Bet::Remaster { .. } => Game::Reels,
         }
     }
 
     /// Whether it's a bet from 0.13.0 on (an older server doesn't know it).
     pub fn is_013(&self) -> bool {
-        matches!(self, Bet::Row { .. } | Bet::SlotsPlus { .. } | Bet::DragonPlus { .. } | Bet::Plinko { .. })
+        matches!(self, Bet::Row { .. } | Bet::SlotsPlus { .. } | Bet::DragonPlus { .. } | Bet::Plinko { .. } | Bet::Remaster { .. })
     }
 
     /// All the chips it puts down.
@@ -259,6 +270,7 @@ impl Bet {
             Bet::SlotsPlus { line_bet, feature } => feature::cost(line_bet.saturating_mul(slots::LINES as u64), slots::price(*feature)),
             Bet::DragonPlus { bet, feature, .. } => feature::cost(*bet, dragon::price(*feature).unwrap_or(100)),
             Bet::Plinko { chips, .. } => *chips,
+            Bet::Remaster { machine, bet, feature, ante } => feature::cost(*bet, remaster::price(*machine, *feature, *ante)),
         }
     }
 
@@ -326,6 +338,7 @@ impl Bet {
                 }
                 fits(*chips, "bet")
             }
+            Bet::Remaster { machine, bet, feature, ante } => remaster::check(*machine, *bet, *feature, *ante),
         }
     }
 }
@@ -347,6 +360,8 @@ pub enum Outcome {
     Row(reelrow::Outcome),
     /// Plinko (0.13.5).
     Plinko(plinko::Outcome),
+    /// Reel Row Remastered (0.13.2).
+    Remaster(remaster::Outcome),
 }
 
 impl Outcome {
@@ -356,6 +371,7 @@ impl Outcome {
         match self {
             Outcome::Reels(o) => reels_key(o.machine),
             Outcome::Row(o) => reels_key(o.machine),
+            Outcome::Remaster(o) => reels_key(o.machine),
             _ => self.game().id().to_string(),
         }
     }
@@ -373,6 +389,7 @@ impl Outcome {
             Outcome::Dragon(_) => Game::Dragon,
             Outcome::Plinko(_) => Game::Plinko,
             Outcome::Row(_) => Game::Reels,
+            Outcome::Remaster(_) => Game::Reels,
         }
     }
 
@@ -390,6 +407,7 @@ impl Outcome {
             Outcome::Dragon(o) => o.wagered(),
             Outcome::Plinko(o) => o.chips,
             Outcome::Row(o) => o.wagered(),
+            Outcome::Remaster(o) => o.wagered(),
         }
     }
 
@@ -407,6 +425,7 @@ impl Outcome {
             Outcome::Dragon(o) => o.paid,
             Outcome::Plinko(o) => o.paid,
             Outcome::Row(o) => o.paid,
+            Outcome::Remaster(o) => o.paid,
         }
     }
 
@@ -462,6 +481,7 @@ impl Outcome {
                 }
             }
             Outcome::Plinko(o) => format!("a ball through {} rows", o.rows),
+            Outcome::Remaster(o) => o.headline(),
         }
     }
 }
@@ -487,7 +507,7 @@ pub fn slot_rtp_bp(key: &str) -> Option<u32> {
 
 /// Plays a one-go round (everything but blackjack and craps, which go a step at a time).
 /// `jackpot` is the Phoenix Jackpot's pool as the round starts (slots), or a progressive Reel
-/// Row machine's (`reelrow::progressive`).
+/// Row machine's (`reelrow::progressive`, Remastered too).
 pub fn play(bet: &Bet, s: &mut Stream, jackpot: u64) -> Result<Outcome, String> {
     bet.check()?;
     Ok(match bet {
@@ -498,6 +518,7 @@ pub fn play(bet: &Bet, s: &mut Stream, jackpot: u64) -> Result<Outcome, String> 
         Bet::Keno { chips, picks } => Outcome::Keno(keno::play(*chips, picks, s)),
         Bet::Reels { machine, bet, buy } => Outcome::Reels(reels::play(*machine, *bet, *buy, s)),
         Bet::Row { machine, bet, feature } => Outcome::Row(reelrow::play_with(*machine, *bet, *feature, s, jackpot)),
+        Bet::Remaster { machine, bet, feature, ante } => Outcome::Remaster(remaster::play_with(*machine, *bet, *feature, *ante, s, jackpot)),
         Bet::SlotsPlus { line_bet, feature } => Outcome::Slots(slots::play_feature(*line_bet, *feature, s, jackpot)),
         Bet::DragonPlus { .. } => return Err("Ember Dragon is played with its jackpots' pools (dragon::play_feature)".into()),
         Bet::Blackjack { .. } => return Err("blackjack is dealt a step at a time".into()),
@@ -562,6 +583,7 @@ pub fn verify(commit_shown: &[u8; 32], server_seed: &[u8; 32], client_seed: &[u8
         Outcome::Dragon(o) => dragon::check(o.bet, o.growth).is_ok() && dragon::play_feature(o.bet, o.growth, o.pools, o.feature, &mut s) == *o,
         Outcome::Plinko(o) => (plinko::MIN_ROWS..=plinko::MAX_ROWS).contains(&o.rows) && plinko::play(o.chips, o.risk, o.rows, &mut s) == *o,
         Outcome::Row(o) => reelrow::check(o.machine, o.bet).is_ok() && reelrow::play_with(o.machine, o.bet, o.feature, &mut s, o.pool) == *o,
+        Outcome::Remaster(o) => remaster::check(o.machine, o.bet, o.feature, o.ante).is_ok() && remaster::play_with(o.machine, o.bet, o.feature, o.ante, &mut s, o.pool) == *o,
         Outcome::Blackjack(o) => blackjack::replay(o.base, s, &o.actions).is_ok_and(|again| again == *o),
         Outcome::Craps(o) => {
             let dice = craps::roll(&mut s);

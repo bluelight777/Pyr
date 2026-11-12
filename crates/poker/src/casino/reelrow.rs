@@ -119,7 +119,7 @@ pub fn top_win(machine: u8, bet: u64, pool: u64) -> u64 {
 }
 
 /// The top prize at the end of a bonus: drawn once, after the mini game.
-fn roll_top(machine: u8, bet: u64, pool: u64, s: &mut Stream) -> u64 {
+pub(crate) fn roll_top(machine: u8, bet: u64, pool: u64, s: &mut Stream) -> u64 {
     if s.below(1_000_000_000) < TOPS[machine as usize].per_billion { top_win(machine, bet, pool) } else { 0 }
 }
 
@@ -307,6 +307,21 @@ pub enum Mini {
     Match { opened: Vec<u8>, treasure: u8, egg: bool },
     Cups { rounds: Vec<Cup>, finale: bool },
     Tower { tiers: Vec<Tier>, tower: u64 },
+}
+
+impl Mini {
+    /// Whether it was played to its very end: the Pepper X, the chest, the mask, the finale, a
+    /// tower standing complete.
+    pub fn to_the_end(&self) -> bool {
+        match self {
+            Mini::Ladder { top, .. } => *top,
+            Mini::Dive { chest, .. } => *chest,
+            Mini::Tomb { mask, .. } => *mask,
+            Mini::Mine { finale, .. } | Mini::Cups { finale, .. } => *finale,
+            Mini::Tower { tiers, .. } => tiers.len() == 6 && tiers.iter().all(|t| matches!(t, Tier::Poured { .. })),
+            _ => false,
+        }
+    }
 }
 
 /// The bonus: the game, what it won, and the multiple it's paid at (3 for a Super Bonus).
@@ -714,7 +729,7 @@ pub fn is_blank(sym: u8) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::HashMap;
 
     use super::*;
@@ -727,7 +742,7 @@ mod tests {
 
     /// Each mini game's exact worth, in hundredths of the bet (every way it can go, weighed by
     /// how likely it is).
-    fn worth(machine: u8) -> f64 {
+    pub(crate) fn worth(machine: u8) -> f64 {
         match machine {
             0 => {
                 fn f(r: usize, lives: u32, memo: &mut HashMap<(usize, u32), f64>) -> f64 {
@@ -1076,7 +1091,7 @@ mod tests {
     }
 
     /// A fixed top prize's worth a bonus, in times the bet (a progressive one's is fed apart).
-    fn top_worth(m: u8) -> f64 {
+    pub(crate) fn top_worth(m: u8) -> f64 {
         match TOPS[m as usize].top {
             Top::Fixed(x) => x as f64 * TOPS[m as usize].per_billion as f64 / 1e9,
             Top::Progressive => 0.0,

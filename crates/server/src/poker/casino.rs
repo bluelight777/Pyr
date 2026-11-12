@@ -457,12 +457,16 @@ impl Poker {
         // A progressive Reel Row machine's pool grows by its share of every round there (in
         // this one already), and is what the round plays with.
         let row = match &bet {
-            Bet::Row { machine, .. } if reelrow::progressive(*machine) => Some((*machine, Self::row_pool(hub, *machine) + reelrow::pool_share(*machine, bet.total()))),
+            Bet::Row { machine, .. } | Bet::Remaster { machine, .. } if reelrow::progressive(*machine) => Some((*machine, Self::row_pool(hub, *machine) + reelrow::pool_share(*machine, bet.total()))),
             _ => None,
         };
         let o = casino::play(&bet, &mut s, row.map(|r| r.1).unwrap_or(pool))?;
-        if let (Some((machine, mut rp)), Outcome::Row(ro)) = (row, &o) {
-            let won = ro.bonus.as_ref().map(|b| b.top).unwrap_or(0);
+        let pool_won = match &o {
+            Outcome::Row(ro) => Some(ro.bonus.as_ref().map(|b| b.top).unwrap_or(0)),
+            Outcome::Remaster(ro) => Some(ro.pool_won()),
+            _ => None,
+        };
+        if let (Some((machine, mut rp)), Some(won)) = (row, pool_won) {
             rp = rp.saturating_sub(won).max(reelrow::POOL_SEED);
             Self::set_row_pool(hub, machine, rp);
             if won > 0 {

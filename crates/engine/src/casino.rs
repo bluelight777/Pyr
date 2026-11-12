@@ -106,6 +106,11 @@ impl CasinoLive {
                     let won = o.bonus.as_ref().map(|b| b.top).unwrap_or(0);
                     self.row_pools.insert(o.machine, o.pool.saturating_sub(won).max(casino::reelrow::POOL_SEED));
                 }
+                if let casino::Outcome::Remaster(o) = &round.outcome
+                    && o.pool > 0
+                {
+                    self.row_pools.insert(o.machine, o.pool.saturating_sub(o.pool_won()).max(casino::reelrow::POOL_SEED));
+                }
                 self.remember(round.next_nonce, round.next_commit);
                 // Ember Dragon: the dragon's new growth, and the pools as the spin left them.
                 if let casino::Outcome::Dragon(o) = &round.outcome {

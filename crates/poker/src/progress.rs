@@ -575,7 +575,7 @@ pub fn apply_placed(rec: &mut Record, place: usize, entrants: usize) -> Gains {
 pub fn play_of(o: &crate::casino::Outcome) -> Play {
     use crate::casino::Outcome;
     match o {
-        Outcome::Slots(_) | Outcome::Reels(_) | Outcome::Row(_) | Outcome::Dragon(_) => Play::Slots,
+        Outcome::Slots(_) | Outcome::Reels(_) | Outcome::Row(_) | Outcome::Remaster(_) | Outcome::Dragon(_) => Play::Slots,
         Outcome::Blackjack(_) => Play::Blackjack,
         Outcome::Roulette(_) => Play::Roulette,
         Outcome::Baccarat(_) => Play::Baccarat,
@@ -685,18 +685,12 @@ pub fn apply_casino(rec: &mut Record, o: &crate::casino::Outcome, today: u64) ->
             _ => {}
         },
         Outcome::Row(r) => {
-            use crate::casino::reelrow::{Mini, Tier};
-            // (A mini game played to its very end: the Pepper X, the chest, the mask, the
-            // finale, a tower standing complete.)
-            let top = r.bonus.as_ref().is_some_and(|b| match &b.game {
-                Mini::Ladder { top, .. } => *top,
-                Mini::Dive { chest, .. } => *chest,
-                Mini::Tomb { mask, .. } => *mask,
-                Mini::Mine { finale, .. } | Mini::Cups { finale, .. } => *finale,
-                Mini::Tower { tiers, .. } => tiers.len() == 6 && tiers.iter().all(|t| matches!(t, Tier::Poured { .. })),
-                _ => false,
-            });
-            if top {
+            if r.bonus.as_ref().is_some_and(|b| b.game.to_the_end()) {
+                earn("clean_sweep", rec, &mut g);
+            }
+        }
+        Outcome::Remaster(r) => {
+            if r.bonus.as_ref().is_some_and(|b| b.game.to_the_end()) {
                 earn("clean_sweep", rec, &mut g);
             }
         }

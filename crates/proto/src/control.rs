@@ -431,6 +431,12 @@ pub const CASINO_100K_FEATURE: &str = "casino_100k";
 /// Reel Row and Ember Dragon bets up to 100,000 a spin: 20,000, 50,000 and 100,000 (0.13.4); a
 /// progressive jackpot pays its whole pool from 10,000 up, as before. 0.13.28's name.
 pub const BIG_SLOT_BETS_FEATURE: &str = "big_slot_bets";
+/// Reel Row Remastered (0.13.2): each machine's feature on the reels (tumbles and bombs, Hold &
+/// Win, Hot, Frozen, Spotlight and Espresso wilds), Ante, and Play Feature's Bonus Chance and
+/// feature spins (`Bet::Remaster`). The rebuild's own name: its rounds can't be 0.13.28's
+/// (`casino_0_13_2`) bit for bit, so a 0.13.28 app plays Reel Row as 0.13.0's here, and a rebuilt
+/// app does on a 0.13.28 server.
+pub const REMASTER_FEATURE: &str = "reel_row_remastered";
 /// Pyr Sevens up to 100,000 a spin (line bets to 5,000), its Phoenix Jackpot paid in proportion
 /// to the bet and started at 10,000,000 (0.13.6). 0.13.28's name.
 pub const SLOTS_100K_FEATURE: &str = "slots_100k";
