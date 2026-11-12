@@ -1,6 +1,8 @@
 use super::*;
 use crate::casino::reelrow::tests::{top_worth, worth};
 
+mod exact;
+
 /// A quick generator, to play millions of rounds (xoshiro256**, seeded by SplitMix64).
 pub(crate) struct Quick([u64; 4]);
 
@@ -114,6 +116,12 @@ pub(crate) fn figures(machine: u8, feature: Feature, ante: bool, n: u64, seed: u
         all.add(p);
     }
     all
+}
+
+/// Another sample (`PYR_RR_SEED`, added to the seeds): to check a tuning on rounds it wasn't
+/// tuned on.
+fn seed_from_env() -> u64 {
+    std::env::var("PYR_RR_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(0) * 1_000
 }
 
 fn rounds() -> u64 {
@@ -299,7 +307,7 @@ fn binom(n: usize, k: usize, p: f64) -> f64 {
 /// Spin's bombs, a Frozen Spin's wilds and an Encore's cover cells.
 pub(crate) fn first_bonus_p(m: &Machine, feature: Feature, ante: bool) -> f64 {
     match feature {
-        Feature::Chance => return CHANCE_PPM as f64 / 1e6,
+        Feature::Chance => return m.chance_ppm as f64 / 1e6,
         Feature::Wild if m.family == Hold => return 0.0,
         _ => {}
     }
@@ -374,7 +382,7 @@ fn remaster_parts() {
         }
         let m = &MACHINES[machine as usize];
         for (what, feature, ante) in [("spin", Feature::Spin, false), ("ante", Feature::Spin, true), ("chance", Feature::Chance, false), (m.special_name, Feature::Wild, false)] {
-            let p = parts(m, feature, ante, n, 11 + machine as u64);
+            let p = parts(m, feature, ante, n, 11 + machine as u64 + seed_from_env());
             let rtp = rtp_of(machine, m, &p, feature, ante);
             let nn = p.n as f64;
             println!(
@@ -392,7 +400,7 @@ fn remaster_parts() {
                 p.start / nn,
                 p.coins / nn,
                 1.0 / p.bonus_rate(),
-                nn / p.bonuses.max(1) as f64,
+                1.0 / p.bonus_rate_played().max(1e-12),
                 nn / p.holds.max(1) as f64,
                 nn / p.grands.max(1) as f64,
             );
@@ -638,18 +646,36 @@ fn remaster_ante() {
 }
 
 /// Every machine, every way to play it on the reels (a spin, with Ante or without, Bonus Chance,
-/// its feature spin) pays back 99%, worked out by playing it (bombs, coins and Hot Wilds at
-/// what they're worth on average: see [`Parts`]); and the rest of Play Feature is Reel Row's,
-/// at Reel Row's prices.
+/// its feature spin) pays back 99%; and the rest of Play Feature is Reel Row's, at Reel Row's
+/// prices. The wild machines are worked out exactly (to a hundredth of a percent), and played to
+/// check the reels play as worked out. The tumbling and Hold & Win machines are played, values
+/// averaged (see [`Parts`]): a million and a half rounds pin them only to about ±0.3%, so here
+/// they're held to 98-100%; how close to 99% they are is what `remaster_parts` says at twenty
+/// million rounds a way (as 0.13.x worked it out), which is how they were tuned: within ±0.1%
+/// (rebuild/notes-reelrow.md).
 #[test]
 fn every_way_to_play_pays_back_99_percent() {
     let n = std::env::var("PYR_RR_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(1_500_000);
     for machine in 0..12u8 {
         let m = &MACHINES[machine as usize];
         for (what, feature, ante) in [("a spin", Feature::Spin, false), ("Ante", Feature::Spin, true), ("Bonus Chance", Feature::Chance, false), (m.special_name, Feature::Wild, false)] {
+            let name = reels::machine_name(machine);
+            // The wild machines' spins worked out exactly (and played, to check the reels play
+            // as worked out: within five standard errors); the rest played, values averaged.
+            if let Some((rtp, _)) = exact::chance_rtp(machine, 40_000, 3_000 + machine as u64).filter(|_| feature == Feature::Chance) {
+                assert!((0.989..0.991).contains(&rtp), "{name} ({machine}), {what}: {:.3}%", rtp * 100.0);
+                continue;
+            }
+            if let Some(rtp) = exact::rtp(machine, feature, ante) {
+                assert!((0.989..0.991).contains(&rtp), "{name} ({machine}), {what}: {:.3}% exactly", rtp * 100.0);
+                let f = figures(machine, feature, ante, n / 3, 2_000 + machine as u64 * 10 + ante as u64);
+                let (played, se) = f.rtp(machine, feature, ante);
+                assert!((played - rtp).abs() < 5.0 * se, "{name} ({machine}), {what}: played {:.3}% ±{:.3}, worked out {:.3}%", played * 100.0, se * 100.0, rtp * 100.0);
+                continue;
+            }
             let p = parts(m, feature, ante, n, 1_000 + machine as u64 * 10 + ante as u64);
             let rtp = rtp_of(machine, m, &p, feature, ante);
-            assert!((0.985..0.995).contains(&rtp), "{} ({machine}), {what}: {:.3}%", reels::machine_name(machine), rtp * 100.0);
+            assert!((0.98..1.0).contains(&rtp), "{name} ({machine}), {what}: {:.3}%", rtp * 100.0);
         }
         for f in [Feature::Bonus, Feature::Super, Feature::Mystery, Feature::AllIn] {
             assert_eq!(price(machine, f, false), reelrow::price(f));
@@ -959,4 +985,40 @@ fn remaster_hold() {
         }
         println!("{machine} {}: coin weight {c} ({:.3}%; now {}); Buy Hold & Win {:.3}%, the Grand 1 in {:.0}", reels::machine_name(machine), (fc + 1.0) * 99.0, base.special, buy * 100.0, 1.0 / b.grand_rate());
     }
+}
+
+/// The wild machines worked out exactly (`cargo test -p pyr-poker remaster_exact -- --ignored
+/// --nocapture`).
+#[test]
+#[ignore]
+fn remaster_exact() {
+    for machine in 0..12u8 {
+        let m = &MACHINES[machine as usize];
+        for (what, feature, ante) in [("spin", Feature::Spin, false), ("ante", Feature::Spin, true), (m.special_name, Feature::Wild, false)] {
+            if let Some(rtp) = exact::rtp(machine, feature, ante) {
+                println!("{machine:>2} {:<18} {what:<15} {:.4}%", reels::machine_name(machine), rtp * 100.0);
+            }
+            if feature == Feature::Spin
+                && !ante
+                && let Some((rtp, ppm)) = exact::chance_rtp(machine, 400_000, 77)
+            {
+                println!("{machine:>2} {:<18} {:<15} {:.4}% (its screens with the bonus played): 99% at {ppm:.0} per million, 1 in {:.2}", reels::machine_name(machine), "Bonus Chance", rtp * 100.0, 1e6 / ppm);
+            }
+        }
+    }
+}
+
+/// Bonus Chance's bonuses, counted three ways (a check).
+#[test]
+#[ignore]
+fn remaster_chance_count() {
+    let m = &MACHINES[2];
+    let mut d = Quick::new(5);
+    let (mut first, mut last, n) = (0u64, 0u64, 2_000_000u64);
+    for _ in 0..n {
+        let r = spin_on(m, false, Feature::Chance, 100, &mut d);
+        first += (count(&r.steps[0].grid, SCATTER) >= 3) as u64;
+        last += (r.scatters >= 3) as u64;
+    }
+    println!("decided 1 in {:.2}; first screen 1 in {:.2}, after the tumbles 1 in {:.2}", 1e6 / m.chance_ppm as f64, n as f64 / first as f64, n as f64 / last as f64);
 }

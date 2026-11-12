@@ -130,6 +130,10 @@ pub struct Machine {
     /// last reel's (out of 100,000).
     hold_coin: u32,
     hold_collector: u32,
+    /// Bonus Chance: how often the bonus comes (per million). Reel Row's 1 in 44.5 on the
+    /// tumbling and Hold & Win machines (tuned round it); on the wild machines, whatever makes
+    /// its 2× pay back 99% (each still about 1 spin in 45).
+    chance_ppm: u32,
     /// What a bomb landing by itself is worth and how often, and a Bomb Spin's three; what a
     /// coin is worth (hundredths of the bet) and how often; Hot Wilds' multipliers.
     bombs: &'static [(u32, u32)],
@@ -139,7 +143,7 @@ pub struct Machine {
 }
 
 const fn machine(family: Family, feature: &'static str, special_name: &'static str, point: u64, chance_price: u64, special_price: u64, cap_x: u64) -> Machine {
-    Machine { family, feature, special_name, point, chance_price, special_price, cap_x, wild: 2_500, later_wild: 2_500, scatter: 2_500, ante_scatter: 3_000, special: 0, collector: 0, hold_coin: 0, hold_collector: 0, bombs: &[], start_bombs: &[], coins: &[], hot: &HOT_X }
+    Machine { family, feature, special_name, point, chance_price, special_price, cap_x, wild: 2_500, later_wild: 2_500, scatter: 2_500, ante_scatter: 3_000, special: 0, collector: 0, hold_coin: 0, hold_collector: 0, chance_ppm: CHANCE_PPM, bombs: &[], start_bombs: &[], coins: &[], hot: &HOT_X }
 }
 
 impl Machine {
@@ -159,6 +163,10 @@ impl Machine {
         self.start_bombs = start_bombs;
         self
     }
+    const fn chance(mut self, ppm: u32) -> Machine {
+        self.chance_ppm = ppm;
+        self
+    }
     const fn coins(mut self, special: u32, collector: u32, hold_coin: u32, hold_collector: u32) -> Machine {
         self.special = special;
         self.collector = collector;
@@ -173,18 +181,18 @@ use Family::*;
 
 /// The twelve, in Reel Row's order. The points and prices are 0.13.28's.
 pub const MACHINES: [Machine; 12] = [
-    machine(Hot, "Hot Wilds", "Hot Spin", 267, 200, 753, 10_000).wilds(1_217, 1_217).scatters(2_500, 3_069),
+    machine(Hot, "Hot Wilds", "Hot Spin", 267, 200, 753, 10_000).wilds(1_217, 1_217).scatters(2_500, 3_069).chance(22_268),
     machine(Hold, "Pearl Hold & Win", "Buy Hold & Win", 300, 200, 3_650, 50_000).coins(12_085, 600, 4_077, 1_200).scatters(2_500, 3_053),
-    machine(Tumble, "Cosmic Tumbles", "Bomb Spin", 209, 189, 175, 500_000).bombs(1_430, &COSMIC_BOMBS, &COSMIC_START).scatters(2_466, 2_897),
-    machine(Tumble, "Candy Tumbles", "Bomb Spin", 222, 189, 169, 5_000).bombs(1_430, &SUGAR_BOMBS, &SUGAR_START).scatters(2_471, 2_907),
+    machine(Tumble, "Cosmic Tumbles", "Bomb Spin", 209, 189, 175, 500_000).bombs(1_430, &COSMIC_BOMBS, &COSMIC_START).scatters(2_473, 2_904),
+    machine(Tumble, "Candy Tumbles", "Bomb Spin", 222, 189, 169, 5_000).bombs(1_430, &SUGAR_BOMBS, &SUGAR_START).scatters(2_471, 2_903),
     machine(Hold, "Nugget Hold & Win", "Buy Hold & Win", 304, 200, 3_585, 0).coins(12_123, 600, 4_077, 1_200).scatters(2_500, 3_054),
-    machine(Tumble, "Neon Tumbles", "Bomb Spin", 223, 189, 169, 20_000).bombs(1_430, &NEON_BOMBS, &NEON_START).scatters(2_467, 2_907),
+    machine(Tumble, "Neon Tumbles", "Bomb Spin", 223, 189, 169, 20_000).bombs(1_430, &NEON_BOMBS, &NEON_START).scatters(2_470, 2_902),
     machine(Hold, "Scarab Hold & Win", "Buy Hold & Win", 300, 200, 3_650, 50_000).coins(12_106, 600, 4_077, 1_200).scatters(2_500, 3_053),
-    machine(Frozen, "Frozen Wilds", "Frozen Spin", 387, 200, 563, 7_500).wilds(2_027, 2_584).scatters(2_500, 3_054),
-    machine(Tumble, "Bubbling Tumbles", "Bomb Spin", 223, 189, 170, 10_000).bombs(1_430, &MOONLIT_BOMBS, &MOONLIT_START).scatters(2_472, 2_904),
+    machine(Frozen, "Frozen Wilds", "Frozen Spin", 387, 200, 563, 7_500).wilds(2_027, 2_584).scatters(2_500, 3_054).chance(22_392),
+    machine(Tumble, "Bubbling Tumbles", "Bomb Spin", 223, 189, 170, 10_000).bombs(1_430, &MOONLIT_BOMBS, &MOONLIT_START).scatters(2_474, 2_906),
     machine(Hold, "Hoard Hold & Win", "Buy Hold & Win", 308, 200, 3_587, 0).coins(12_085, 600, 4_077, 1_200).scatters(2_500, 3_054),
-    machine(Espresso, "Espresso Shots", "Double Shot", 234, 200, 1_597, 5_000).wilds(1_804, 1_948).scatters(2_500, 3_077),
-    machine(Spotlight, "Spotlight Wilds", "Encore Spin", 227, 200, 511, 25_000).wilds(2_234, 2_431).scatters(2_500, 3_053),
+    machine(Espresso, "Espresso Shots", "Double Shot", 234, 200, 1_597, 5_000).wilds(1_804, 1_948).scatters(2_500, 3_077).chance(22_156),
+    machine(Spotlight, "Spotlight Wilds", "Encore Spin", 227, 200, 511, 25_000).wilds(2_234, 2_431).scatters(2_500, 3_053).chance(22_352),
 ];
 
 /// Hot Wilds' multipliers and how often each comes (out of 10,000): ×2 six times in ten.
@@ -192,14 +200,14 @@ pub const HOT_X: [(u32, u32); 3] = [(2, 6_000), (3, 2_975), (5, 1_025)];
 
 /// What a bomb landing by itself can be worth, and how often (out of 100,000): Cosmic Jackpot's
 /// star orbs to 500×, the others' to 100×; and what a Bomb Spin's three are worth.
-pub const COSMIC_BOMBS: [(u32, u32); 13] = [(2, 37_901), (3, 21_618), (4, 14_507), (5, 10_648), (8, 5_552), (10, 4_075), (15, 2_323), (20, 1_560), (25, 1_145), (50, 438), (100, 168), (250, 47), (500, 18)];
-pub const COSMIC_START: [(u32, u32); 10] = [(2, 32_823), (3, 20_607), (4, 14_848), (5, 11_504), (8, 6_722), (10, 5_208), (15, 3_276), (20, 2_358), (25, 1_827), (50, 827)];
-pub const SUGAR_BOMBS: [(u32, u32); 11] = [(2, 39_674), (3, 21_825), (4, 14_344), (5, 10_342), (8, 5_192), (10, 3_743), (15, 2_066), (20, 1_355), (25, 977), (50, 354), (100, 128)];
-pub const SUGAR_START: [(u32, u32); 10] = [(2, 35_996), (3, 21_291), (4, 14_706), (5, 11_026), (8, 6_012), (10, 4_508), (15, 2_671), (20, 1_843), (25, 1_382), (50, 565)];
-pub const NEON_BOMBS: [(u32, u32); 11] = [(2, 40_031), (3, 21_930), (4, 14_297), (5, 10_263), (8, 5_105), (10, 3_665), (15, 2_006), (20, 1_309), (25, 939), (50, 335), (100, 120)];
-pub const NEON_START: [(u32, u32); 10] = [(2, 36_042), (3, 21_318), (4, 14_702), (5, 11_016), (8, 5_998), (10, 4_495), (15, 2_660), (20, 1_834), (25, 1_374), (50, 561)];
-pub const MOONLIT_BOMBS: [(u32, u32); 11] = [(2, 39_884), (3, 21_887), (4, 14_317), (5, 10_295), (8, 5_141), (10, 3_697), (15, 2_031), (20, 1_327), (25, 955), (50, 343), (100, 123)];
-pub const MOONLIT_START: [(u32, u32); 10] = [(2, 35_960), (3, 21_296), (4, 14_707), (5, 11_031), (8, 6_018), (10, 4_513), (15, 2_676), (20, 1_847), (25, 1_385), (50, 567)];
+pub const COSMIC_BOMBS: [(u32, u32); 13] = [(2, 37_997), (3, 21_627), (4, 14_499), (5, 10_633), (8, 5_533), (10, 4_057), (15, 2_309), (20, 1_548), (25, 1_135), (50, 433), (100, 165), (250, 46), (500, 18)];
+pub const COSMIC_START: [(u32, u32); 10] = [(2, 32_818), (3, 20_636), (4, 14_848), (5, 11_502), (8, 6_717), (10, 5_204), (15, 3_272), (20, 2_354), (25, 1_824), (50, 825)];
+pub const SUGAR_BOMBS: [(u32, u32); 11] = [(2, 39_682), (3, 21_877), (4, 14_338), (5, 10_332), (8, 5_181), (10, 3_733), (15, 2_058), (20, 1_349), (25, 972), (50, 351), (100, 127)];
+pub const SUGAR_START: [(u32, u32); 10] = [(2, 35_990), (3, 21_320), (4, 14_704), (5, 11_023), (8, 6_008), (10, 4_504), (15, 2_668), (20, 1_840), (25, 1_379), (50, 564)];
+pub const NEON_BOMBS: [(u32, u32); 11] = [(2, 39_886), (3, 21_903), (4, 14_315), (5, 10_292), (8, 5_138), (10, 3_694), (15, 2_028), (20, 1_326), (25, 953), (50, 342), (100, 123)];
+pub const NEON_START: [(u32, u32); 10] = [(2, 36_138), (3, 21_347), (4, 14_694), (5, 10_999), (8, 5_975), (10, 4_472), (15, 2_642), (20, 1_819), (25, 1_361), (50, 553)];
+pub const MOONLIT_BOMBS: [(u32, u32); 11] = [(2, 39_921), (3, 21_907), (4, 14_311), (5, 10_286), (8, 5_130), (10, 3_687), (15, 2_023), (20, 1_322), (25, 950), (50, 341), (100, 122)];
+pub const MOONLIT_START: [(u32, u32); 10] = [(2, 35_911), (3, 21_305), (4, 14_710), (5, 11_036), (8, 6_025), (10, 4_521), (15, 2_682), (20, 1_852), (25, 1_389), (50, 569)];
 
 /// What a coin can be worth (hundredths of the bet; the last three the Mini, the Minor and the
 /// Major), and how often (out of 100,000).
@@ -246,6 +254,10 @@ pub struct Step {
     /// What the ways paid on it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wins: Vec<Win>,
+    /// Hot Wilds and Espresso Shots: the screen as it landed, before a wild filled its reel
+    /// (only when one did). For the show: the reels land on it, then the reels fill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landed: Option<Grid>,
 }
 
 fn no_values(v: &Values) -> bool {
@@ -567,9 +579,10 @@ enum Play {
 
 /// The spin's screen (Hot Wilds and Espresso Shots already filling their reels, covering what
 /// was under them), for Bonus Chance drawn again till it has the bonus or not, as decided.
-fn first<D: Draw>(m: &Machine, ante: bool, play: Play, d: &mut D) -> (Grid, Values) {
+fn first<D: Draw>(m: &Machine, ante: bool, play: Play, d: &mut D) -> (Grid, Values, Grid) {
     loop {
         let (mut g, v) = spin_cells(m, ante, d);
+        let landed = g;
         if m.family == Hot || m.family == Espresso {
             for r in 1..REELS - 1 {
                 if g[r].contains(&WILD) {
@@ -579,9 +592,14 @@ fn first<D: Draw>(m: &Machine, ante: bool, play: Play, d: &mut D) -> (Grid, Valu
         }
         match play {
             Play::Chance(bonus) if (count(&g, SCATTER) >= 3) != bonus => continue,
-            _ => return (g, v),
+            _ => return (g, v, landed),
         }
     }
+}
+
+/// A screen as it landed, kept on its step when a reel filled since (`Step::landed`).
+fn landed_if(landed: Grid, g: &Grid) -> Option<Grid> {
+    (landed != *g).then_some(landed)
 }
 
 /// The reels of a round (a spin, Bonus Chance or the machine's feature spin), before the bonus.
@@ -592,7 +610,7 @@ pub fn spin<D: Draw>(machine: u8, ante: bool, feature: Feature, bet: u64, d: &mu
 /// `spin`, on a machine as given (the tests try others).
 fn spin_on<D: Draw>(m: &Machine, ante: bool, feature: Feature, bet: u64, d: &mut D) -> Reels {
     let play = match feature {
-        Feature::Chance => Play::Chance(d.below(1_000_000) < CHANCE_PPM),
+        Feature::Chance => Play::Chance(d.below(1_000_000) < m.chance_ppm),
         Feature::Wild => Play::Special,
         _ => Play::Spin,
     };
@@ -609,9 +627,13 @@ fn spin_on<D: Draw>(m: &Machine, ante: bool, feature: Feature, bet: u64, d: &mut
 }
 
 fn hot<D: Draw>(m: &Machine, ante: bool, play: Play, bet: u64, d: &mut D) -> Reels {
-    let (mut g, _) = first(m, ante, play, d);
+    let (mut g, _, mut landed) = first(m, ante, play, d);
     if play == Play::Special {
         g[REELS / 2] = [WILD; ROWS];
+        // (Landing with its Hot Wild: in the middle, if no wild landed there.)
+        if !landed[REELS / 2].contains(&WILD) {
+            landed[REELS / 2][1] = WILD;
+        }
     }
     let mut x = [0u8; REELS];
     for r in 1..REELS - 1 {
@@ -621,11 +643,11 @@ fn hot<D: Draw>(m: &Machine, ante: bool, play: Play, bet: u64, d: &mut D) -> Ree
     }
     let wins = ways(&g, &x, bet, m.point);
     let scatters = count(&g, SCATTER);
-    Reels { points: points(&wins), steps: vec![Step { grid: g, x, wins, ..Step::default() }], mult: 1, scatters, ..Reels::default() }
+    Reels { points: points(&wins), steps: vec![Step { grid: g, x, wins, landed: landed_if(landed, &g), ..Step::default() }], mult: 1, scatters, ..Reels::default() }
 }
 
 fn frozen<D: Draw>(m: &Machine, ante: bool, play: Play, bet: u64, d: &mut D) -> Reels {
-    let (mut g, _) = first(m, ante, play, d);
+    let (mut g, _, _) = first(m, ante, play, d);
     if play == Play::Special {
         let middle: Vec<_> = (1..REELS - 1).flat_map(|r| (0..ROWS).map(move |row| (r, row))).collect();
         for (r, row) in places(&middle, FROZEN_SPIN_WILDS, d) {
@@ -657,7 +679,7 @@ fn frozen<D: Draw>(m: &Machine, ante: bool, play: Play, bet: u64, d: &mut D) -> 
 }
 
 fn spotlight<D: Draw>(m: &Machine, ante: bool, play: Play, bet: u64, d: &mut D) -> Reels {
-    let (mut g, _) = first(m, ante, play, d);
+    let (mut g, _, _) = first(m, ante, play, d);
     if play == Play::Special {
         g[REELS - 1][d.below(ROWS as u32) as usize] = WILD;
     }
@@ -686,32 +708,39 @@ fn spotlight<D: Draw>(m: &Machine, ante: bool, play: Play, bet: u64, d: &mut D) 
 }
 
 fn espresso<D: Draw>(m: &Machine, ante: bool, play: Play, bet: u64, d: &mut D) -> Reels {
-    let (mut g, _) = first(m, ante, play, d);
+    let (mut g, _, mut landed) = first(m, ante, play, d);
     let mut shots = [false; REELS];
     for r in 1..REELS - 1 {
         shots[r] = g[r][0] == WILD || (play == Play::Special && (r == 1 || r == REELS - 2));
         if shots[r] {
             g[r] = [WILD; ROWS];
+            // (A Double Shot's: landing with its wild in the middle, if none landed there.)
+            if !landed[r].contains(&WILD) {
+                landed[r][1] = WILD;
+            }
         }
     }
     let scatters = count(&g, SCATTER);
     let wins = ways(&g, &[0; REELS], bet, m.point);
     let mut out = Reels { points: points(&wins), mult: 1, scatters, ..Reels::default() };
-    out.steps.push(Step { grid: g, wins, ..Step::default() });
+    out.steps.push(Step { grid: g, wins, landed: landed_if(landed, &g), ..Step::default() });
     // Each shot stays for one more spin; the shots that land on it keep it going.
     let mut staying = shots;
     while staying.iter().any(|&s| s) && out.steps.len() < MAX_STEPS {
         let mut held = 0;
         let mut new = [false; REELS];
+        let mut landed = g;
         for r in 0..REELS {
             if staying[r] {
                 g[r] = [WILD; ROWS];
+                landed[r] = g[r];
                 held |= 0b111 << (r * ROWS);
                 continue;
             }
             for row in 0..ROWS {
                 g[r][row] = cell(m, r, ante, When::Later { scatters: false }, d).0;
             }
+            landed[r] = g[r];
             if g[r].contains(&WILD) {
                 new[r] = true;
                 g[r] = [WILD; ROWS];
@@ -719,14 +748,14 @@ fn espresso<D: Draw>(m: &Machine, ante: bool, play: Play, bet: u64, d: &mut D) -
         }
         let wins = ways(&g, &[0; REELS], bet, m.point);
         out.points += points(&wins);
-        out.steps.push(Step { grid: g, held, wins, ..Step::default() });
+        out.steps.push(Step { grid: g, held, wins, landed: landed_if(landed, &g), ..Step::default() });
         staying = new;
     }
     out
 }
 
 fn tumble<D: Draw>(m: &Machine, ante: bool, play: Play, later: When, bet: u64, d: &mut D) -> Reels {
-    let (mut g, mut v) = first(m, ante, play, d);
+    let (mut g, mut v, _) = first(m, ante, play, d);
     if play == Play::Special {
         for (r, row) in places(&all_places(), BOMB_SPIN_BOMBS, d) {
             g[r][row] = BOMB;
@@ -771,7 +800,7 @@ fn hold<D: Draw>(m: &Machine, ante: bool, play: Play, bet: u64, d: &mut D) -> Re
         }
         true
     } else {
-        let (g, mut v) = first(m, ante, play, d);
+        let (g, mut v, _) = first(m, ante, play, d);
         out.scatters = count(&g, SCATTER);
         let wins = ways(&g, &[0; REELS], bet, m.point);
         out.points = points(&wins);

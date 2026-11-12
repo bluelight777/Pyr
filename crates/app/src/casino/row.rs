@@ -69,6 +69,8 @@ pub struct RowUi {
     pub ante: bool,
     pub rm: Option<RmShow>,
     strip_vals: [[u32; STRIP]; REELS],
+    /// A feature spin's banner: since when (the spin's start) and for which feature.
+    banner: Option<(Instant, Feature)>,
 }
 
 impl Default for RowUi {
@@ -95,6 +97,7 @@ impl Default for RowUi {
             ante: false,
             rm: None,
             strip_vals: [[0; STRIP]; REELS],
+            banner: None,
         }
     }
 }
@@ -355,16 +358,15 @@ impl PyrApp {
             ui.rm = Some(show);
             return;
         }
-        // The spin lands on the first screen (a Hot Wild or an Espresso Shot landing as one wild,
-        // to fill its reel once it's there).
+        // The spin lands on the first screen as it landed (a Hot Wild's or an Espresso Shot's
+        // reel fills once it's there).
         let first = o.steps[0].clone();
-        let fam = remaster::family(machine);
+        let as_landed = first.landed.unwrap_or(first.grid);
         for r in 0..REELS {
             let (mut st, mut sv) = rm_filler(machine, round.nonce.wrapping_mul(31).wrapping_add(r as u64));
-            let full = first.grid[r].iter().all(|&c| c == rr::WILD) && matches!(fam, remaster::Family::Hot | remaster::Family::Espresso);
             for row in 0..ROWS {
-                st[row] = if full { if row == 1 { rr::WILD } else { st[row + 3] } } else { first.grid[r][row] };
-                sv[row] = if full { sv[row + 3] } else { first.values[r][row] };
+                st[row] = as_landed[r][row];
+                sv[row] = first.values[r][row];
             }
             ui.strips[r] = st;
             ui.strip_vals[r] = sv;
@@ -376,7 +378,7 @@ impl PyrApp {
             }
         }
         // Two scatters down: the last reels take their time.
-        let scatters_by = |upto: usize| first.grid.iter().take(upto).flatten().filter(|&&c| c == rr::SCATTER).count();
+        let scatters_by = |upto: usize| as_landed.iter().take(upto).flatten().filter(|&&c| c == rr::SCATTER).count();
         let slow = scatters_by(3) >= 2 && !ui.turbo;
         let min = if ui.turbo { 0.25 } else { 0.7 };
         let mut ends = super::spin::land(&mut ui.reels, &[STRIP; REELS], &[0; REELS], now + Duration::from_secs_f32(min), ui.turbo);
@@ -398,7 +400,7 @@ impl PyrApp {
         for (i, e) in ends.iter().enumerate() {
             let at = e.saturating_duration_since(now).as_secs_f32();
             self.poker.casino.sound_in(at, stop, (i as f32 - 2.0) * 0.3, 0.7);
-            let here = first.grid[i].iter().filter(|&&c| c == rr::SCATTER).count();
+            let here = as_landed[i].iter().filter(|&&c| c == rr::SCATTER).count();
             if here > 0
                 && let Some(c) = scatter
             {
@@ -503,6 +505,8 @@ impl PyrApp {
             }
         }
         ui.waiting = Some(now);
+        // (A Remastered machine's feature spin: its banner, from the spin's start.)
+        ui.banner = (remastered && spins && feature == Feature::Wild).then_some((now, feature));
         ui.showing = None;
         ui.mini = None;
         ui.all_in = None;
@@ -557,8 +561,10 @@ impl PyrApp {
             }
             r.auto.stop();
         }
-        // The cabinet (or the room's own trim), the marquee, the reels.
-        self.row_cabinet(&p, th, st, &lay, time);
+        // The cabinet (or the room's own trim), the marquee, the reels. (While Hold & Win's board
+        // shows, its jackpots and respins have the marquee's place, and the top prize's.)
+        let holding = self.poker.casino.row.rm.as_ref().is_some_and(|r| r.holding(now));
+        self.row_cabinet(&p, th, st, &lay, time, !holding);
         let in_mini = self.poker.casino.row.mini.as_ref().is_some_and(|b| now >= b.started);
         let in_all_in = self.poker.casino.row.all_in.is_some();
         if !in_mini && !in_all_in {
@@ -576,17 +582,16 @@ impl PyrApp {
             } else {
                 self.row_reels(&p, &ctx, th, st, &lay, now, time);
             }
-            // A feature spin's banner while it's played.
-            if self.poker.casino.row.remastered {
-                let f = match (&self.poker.casino.row.rm, self.poker.casino.row.waiting) {
-                    (Some(r), _) => Some((r.o.feature, r.landed)),
-                    (None, Some(_)) => self.poker.casino.row.stake.armed.map(|f| (f, now + Duration::from_secs(5))),
-                    _ => None,
-                };
-                if let Some((f @ Feature::Wild, landed)) = f
-                    && remaster::family(m) != remaster::Family::Hold
-                {
-                    let a = 1.0 - (now.saturating_duration_since(landed).as_secs_f32() / 0.6).min(1.0);
+            // A feature spin's banner as it starts (0.13.28's: for about two and a half seconds).
+            if self.poker.casino.row.remastered
+                && let Some((since, f)) = self.poker.casino.row.banner
+                && remaster::family(m) != remaster::Family::Hold
+            {
+                let t = now.saturating_duration_since(since).as_secs_f32();
+                let a = (t / 0.15).min(1.0) * (1.0 - ((t - 2.3) / 0.5).clamp(0.0, 1.0));
+                if a <= 0.0 {
+                    self.poker.casino.row.banner = None;
+                } else {
                     let (name, what) = SlotKind::Rm(m).describe(f);
                     let board = rmshow::Board { reels: lay.reels, cell: lay.cell, gap: lay.gap, area };
                     rmshow::banner(&p, &board, &name, &what, th.accent, a);
@@ -613,8 +618,12 @@ impl PyrApp {
             self.poker.casino.row.fun.draw(&p, &ctx, th, side, lay.reels, now, time);
         }
         self.row_controls(ui, s, th, st, lay.bar, now, time);
+        // Hold & Win's splash, over everything.
+        if let Some(show) = self.poker.casino.row.rm.as_ref() {
+            rmshow::splash(&p, &ctx, th, st, area, show, now, time);
+        }
         // Its top prize, top middle: a progressive jackpot's pool, counting, or how far it goes.
-        if !in_mini && !in_all_in {
+        if !in_mini && !in_all_in && !holding {
             use pyr_poker::casino::reelrow::{POOL_SEED, TOPS, Top};
             let t = &TOPS[m as usize];
             let bet = self.poker.casino.row.bet;
@@ -658,7 +667,7 @@ impl PyrApp {
     }
 
     /// The cabinet round the reels, in the machine's own make, and its name over them.
-    fn row_cabinet(&self, p: &egui::Painter, th: &Theme, st: &Style, lay: &Layout, time: f32) {
+    fn row_cabinet(&self, p: &egui::Painter, th: &Theme, st: &Style, lay: &Layout, time: f32, named: bool) {
         let cab = lay.cabinet;
         let fr = lay.reels.expand(lay.cell * 0.09);
         let a = th.accent;
@@ -857,6 +866,9 @@ impl PyrApp {
             }
         }
         // The machine's name, in its own lettering.
+        if !named {
+            return;
+        }
         let size = (lay.cell * 0.3).clamp(24.0, 46.0) * if st.font == "monoton" { 0.82 } else { 1.0 };
         let font = theme::display_font(st.font, size);
         let at = lay.marquee;
@@ -943,8 +955,9 @@ impl PyrApp {
             p.rect_stroke(mr, theme::r(17), Stroke::new(1.0f32, th.accent.gamma_multiply(0.7)), StrokeKind::Inside);
             p.galley(mr.center() - g.size() / 2.0, g, col::GOLD2);
         }
-        // A Chance spin's mark, while it's armed.
-        if let Some(f) = self.poker.casino.row.stake.armed {
+        // A Chance spin's mark, while it's armed (Reel Row's; Remastered's machines show it on
+        // the feature's button only, as 0.13.28's do).
+        if let Some(f) = self.poker.casino.row.stake.armed.filter(|_| !self.poker.casino.row.remastered) {
             let (name, _) = self.poker.casino.row.kind().describe(f);
             let t = format!("{} ON", name.to_uppercase());
             let g = p.layout_no_wrap(t, theme::bold_font(12.0), Color32::BLACK);

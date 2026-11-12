@@ -17,7 +17,7 @@ use pyr_poker::net::RoundView;
 
 use super::reel_themes::{Theme, theme};
 use super::row_styles::Style;
-use super::{col, ease_back, ease_out, glow_text, mix, pics, radial, vgrad};
+use super::{col, ease_back, ease_out, glow_text, pics, radial};
 use crate::poker::cards::chips_text;
 use crate::theme;
 
@@ -84,6 +84,12 @@ impl RmShow {
         Some((i, ev, t - at, (next - at).max(0.01)))
     }
 
+    /// Hold & Win's own board showing (its splash, its respins, what it comes to, the Grand):
+    /// the page shows its jackpots in place of the top prize and the machine's name.
+    pub fn holding(&self, now: Instant) -> bool {
+        matches!(self.at(now), Some((_, Ev::HoldSplash | Ev::Hold(_) | Ev::HoldEnd | Ev::Grand, ..)))
+    }
+
     /// When the reels' part is over (from the landing).
     pub fn done_at(&self) -> Instant {
         self.landed + Duration::from_secs_f32(self.events.last().map(|e| e.0).unwrap_or(0.0))
@@ -117,6 +123,9 @@ impl RmShow {
 }
 
 /// The reels a screen's Hot Wilds or Espresso Shots newly fill.
+/// How long a Hot Wild's or an Espresso Shot's reel takes to fill, its words settling.
+const FILL_SECS: f32 = 0.95;
+
 fn filled(fam: Family, s: &rm::Step) -> Vec<usize> {
     match fam {
         Family::Hot => (0..REELS).filter(|&r| s.x[r] > 0).collect(),
@@ -158,7 +167,7 @@ pub fn timeline(o: &rm::Outcome, turbo: bool) -> Vec<(f32, Ev)> {
                 }
             }
             if !filled(fam, s).is_empty() {
-                push(Ev::Fill(i), 0.65);
+                push(Ev::Fill(i), FILL_SECS);
             }
             let tumbles = fam == Family::Tumble && i + 1 < o.steps.len();
             if !s.wins.is_empty() {
@@ -319,6 +328,14 @@ fn label(p: &egui::Painter, at: Pos2, text: &str, font: egui::FontId, color: Col
 }
 
 /// What a coin says: the jackpot's name, or its worth in chips.
+/// A coin's worth on its dark pill.
+fn worth_pill(p: &egui::Painter, at: Pos2, text: &str, size: f32, color: Color32, a: f32) {
+    let g = p.layout_no_wrap(text.to_string(), theme::bold_font(size), faded(color, a));
+    let r = Rect::from_center_size(at, g.size() + vec2(size * 0.7, size * 0.1));
+    p.rect_filled(r, theme::r((r.height() / 2.0) as u8), Color32::from_black_alpha((215.0 * a) as u8));
+    p.galley(r.center() - g.size() / 2.0, g, faded(color, a));
+}
+
 fn coin_text(value: u32, bet: u64) -> String {
     match value {
         MINI => "MINI".into(),
@@ -349,13 +366,13 @@ pub fn draw_cell(p: &egui::Painter, ctx: &egui::Context, machine: u8, sym: u8, v
             }
         }
         COIN => {
-            if !sheet(p, ctx, "rr-coins", 4, 2, coin_cells(machine).0, r.shrink(r.width() * 0.04), tint) {
+            if !sheet(p, ctx, "rr-coins", 4, 2, coin_cells(machine).0, r.expand(r.width() * 0.02), tint) {
                 return;
             }
             let jackpot = value >= MINI;
             let t = coin_text(value, bet);
-            let size = if jackpot { num * 0.62 } else { num * if t.len() > 5 { 0.7 } else { 0.85 } };
-            label(p, pos2(r.center().x, r.bottom() - r.height() * 0.2), &t, theme::bold_font(size), faded(if jackpot { col::GOLD2 } else { Color32::WHITE }, a));
+            let size = if jackpot { num * 0.62 } else { num * if t.len() > 5 { 0.66 } else { 0.8 } };
+            worth_pill(p, pos2(r.center().x, r.bottom() - r.height() * 0.17), &t, size, if jackpot { col::GOLD2 } else { Color32::WHITE }, a);
         }
         COLLECTOR => {
             if sheet(p, ctx, "rr-coins", 4, 2, coin_cells(machine).1, r.shrink(r.width() * 0.02), tint) && value > 0 {
@@ -396,45 +413,58 @@ impl Board {
 }
 
 /// A Hot Wild's reel (Scoville's pepper in flames, 0.13.28's), `grow` of the way filled from
-/// row `from`; its multiplier on top and "HOT WILD" at its foot.
+/// A Hot Wild's reel (Scoville's pepper in flames, 0.13.28's): the picture rising from the
+/// reel's foot over what landed (`t` seconds into its filling; infinite once filled), "HOT
+/// WILDS ×N" at its foot while it fills, then its multiplier on top and "HOT WILD" at its foot.
 #[allow(clippy::too_many_arguments)]
-fn hot_reel(p: &egui::Painter, ctx: &egui::Context, b: &Board, r: usize, from: usize, x: u8, grow: f32, font: &str, time: f32) {
+fn hot_reel(p: &egui::Painter, ctx: &egui::Context, b: &Board, r: usize, x: u8, t: f32, font: &str, time: f32) {
     let full = b.reel(r);
-    let c = b.cell_at(r as f32, from as f32).center().y;
-    let g = ease_out(grow.clamp(0.0, 1.0));
-    let shown = Rect::from_min_max(pos2(full.left(), c - (c - full.top()) * g - b.cell * 0.4 * (1.0 - g)), pos2(full.right(), c + (full.bottom() - c) * g + b.cell * 0.4 * (1.0 - g)));
+    let rise = ease_out((t / 0.2).clamp(0.0, 1.0));
+    let shown = Rect::from_min_max(pos2(full.left(), full.bottom() - full.height() * rise), full.max);
     let clip = p.with_clip_rect(shown);
     pics::cover(&clip, ctx, "rr-reel-hot", full, 640, Color32::WHITE);
     radial(&clip, full.center(), full.width() * (0.9 + 0.08 * (time * 5.0).sin()), Color32::from_rgba_unmultiplied(0xff, 0x80, 0x20, 40), Color32::TRANSPARENT);
-    p.rect_stroke(shown, theme::r(6), Stroke::new(2.5f32, faded(col::GOLD, g)), StrokeKind::Inside);
-    if g >= 1.0 {
-        glow_text(p, pos2(full.center().x, full.top() + b.cell * 0.32), Align2::CENTER_CENTER, &format!("×{x}"), theme::display_font(font, (b.cell * 0.3).clamp(16.0, 44.0)), col::GOLD2, Color32::from_rgba_unmultiplied(0xff, 0x60, 0x10, 160));
-        label(p, pos2(full.center().x, full.bottom() - b.cell * 0.16), "HOT WILD", theme::bold_font((b.cell * 0.13).clamp(10.0, 18.0)), Color32::WHITE);
+    p.rect_stroke(shown, theme::r(6), Stroke::new(2.5f32, col::GOLD), StrokeKind::Inside);
+    if t >= 0.5 {
+        let pop = ease_back(((t - 0.5) / 0.15).clamp(0.0, 1.0));
+        glow_text(p, pos2(full.center().x, full.top() + b.cell * 0.32), Align2::CENTER_CENTER, &format!("×{x}"), theme::display_font(font, (b.cell * 0.3).clamp(16.0, 44.0) * (0.6 + 0.4 * pop)), col::GOLD2, Color32::from_rgba_unmultiplied(0xff, 0x60, 0x10, 160));
+    }
+    let foot = pos2(full.center().x, full.bottom() - b.cell * 0.16);
+    if t < 0.85 {
+        let fs = (b.cell * 0.13).clamp(10.0, 18.0);
+        let g = p.layout_no_wrap(format!("HOT WILDS ×{x}"), theme::display_font(font, fs), col::GOLD2);
+        let pill = Rect::from_center_size(foot, g.size() + vec2(fs * 1.2, fs * 0.45));
+        p.rect_filled(pill, theme::r((pill.height() / 2.0) as u8), Color32::from_black_alpha(220));
+        p.rect_stroke(pill, theme::r((pill.height() / 2.0) as u8), Stroke::new(1.5f32, col::GOLD), StrokeKind::Inside);
+        p.galley(pill.center() - g.size() / 2.0, g, col::GOLD2);
+    } else {
+        label(p, foot, "HOT WILD", theme::bold_font((b.cell * 0.13).clamp(10.0, 18.0)), Color32::WHITE);
     }
 }
 
-/// An Espresso Shot's reel (the Daily Grind's pour, 0.13.28's): "ESPRESSO" at its foot, and
-/// "+1 SPIN" on top while it stays.
-fn shot_reel(p: &egui::Painter, ctx: &egui::Context, b: &Board, r: usize, from: usize, grow: f32, staying: bool) {
+/// An Espresso Shot's reel (the Daily Grind's pour, 0.13.28's): the picture rising from the
+/// reel's foot over what landed (`t` as `hot_reel`'s), "ESPRESSO" at its foot once filled, and
+/// "+1 SPIN" on top on the spin it stays for.
+fn shot_reel(p: &egui::Painter, ctx: &egui::Context, b: &Board, r: usize, t: f32, held: bool) {
     let full = b.reel(r);
-    let c = b.cell_at(r as f32, from as f32).center().y;
-    let g = ease_out(grow.clamp(0.0, 1.0));
-    let shown = Rect::from_min_max(pos2(full.left(), c - (c - full.top()) * g - b.cell * 0.4 * (1.0 - g)), pos2(full.right(), c + (full.bottom() - c) * g + b.cell * 0.4 * (1.0 - g)));
+    let rise = ease_out((t / 0.2).clamp(0.0, 1.0));
+    let shown = Rect::from_min_max(pos2(full.left(), full.bottom() - full.height() * rise), full.max);
     let clip = p.with_clip_rect(shown);
     pics::cover(&clip, ctx, "rr-reel-shot", full, 640, Color32::WHITE);
-    p.rect_stroke(shown, theme::r(6), Stroke::new(2.0f32, faded(col::GOLD, g)), StrokeKind::Inside);
-    if g >= 1.0 {
-        let fs = (b.cell * 0.12).clamp(10.0, 17.0);
-        let tag = |at: Pos2, t: &str| {
-            let gal = p.layout_no_wrap(t.to_string(), theme::bold_font(fs), Color32::BLACK);
-            let pill = Rect::from_center_size(at, gal.size() + vec2(14.0, 6.0));
-            p.rect_filled(pill, theme::r(10), Color32::from_rgb(0xf0, 0xd8, 0xa0));
-            p.galley(pill.center() - gal.size() / 2.0, gal, Color32::BLACK);
-        };
+    p.rect_stroke(shown, theme::r(6), Stroke::new(2.0f32, col::GOLD), StrokeKind::Inside);
+    let fs = (b.cell * 0.12).clamp(10.0, 17.0);
+    let tag = |at: Pos2, t: &str| {
+        let gal = p.layout_no_wrap(t.to_string(), theme::bold_font(fs), Color32::BLACK);
+        let pill = Rect::from_center_size(at, gal.size() + vec2(14.0, 6.0));
+        p.rect_filled(pill, theme::r(10), Color32::from_rgb(0xf0, 0xd8, 0xa0));
+        p.galley(pill.center() - gal.size() / 2.0, gal, Color32::BLACK);
+    };
+    // (While it fills, the note across the reels' foot says it all.)
+    if t >= FILL_SECS {
         tag(pos2(full.center().x, full.bottom() - b.cell * 0.14), "ESPRESSO");
-        if staying {
-            tag(pos2(full.center().x, full.top() + b.cell * 0.14), "+1 SPIN");
-        }
+    }
+    if held {
+        tag(pos2(full.center().x, full.top() + b.cell * 0.14), "+1 SPIN");
     }
 }
 
@@ -497,15 +527,17 @@ pub fn banner(p: &egui::Painter, b: &Board, title: &str, line: &str, accent: Col
     if a <= 0.0 {
         return;
     }
-    let tg = p.layout_no_wrap(title.to_uppercase(), theme::bold_font((b.cell * 0.17).clamp(16.0, 26.0)), faded(col::GOLD2, a));
-    let lg = p.layout_no_wrap(line.to_string(), theme::font((b.cell * 0.085).clamp(11.0, 14.0)), faded(Color32::WHITE, a));
-    let w = tg.size().x.max(lg.size().x) + 36.0;
-    let h = tg.size().y + lg.size().y + 18.0;
-    let r = Rect::from_center_size(pos2(b.reels.center().x - b.cell * 0.9, b.reels.top() - b.cell * 0.02), vec2(w, h));
-    p.rect_filled(r, theme::r(12), Color32::from_rgba_unmultiplied(0x16, 0x10, 0x14, (235.0 * a) as u8));
-    p.rect_stroke(r, theme::r(12), Stroke::new(2.0f32, faded(mix(accent, col::GOLD, 0.5), a)), StrokeKind::Inside);
-    p.galley(pos2(r.center().x - tg.size().x / 2.0, r.top() + 7.0), tg, col::GOLD2);
-    p.galley(pos2(r.center().x - lg.size().x / 2.0, r.bottom() - lg.size().y - 7.0), lg, Color32::WHITE);
+    // (0.13.28's, measured: the feature's name in its colour, its line under it, on a dark box
+    // edged in its colour, over the top of the reels, in the middle of the page.)
+    let c = b.cell;
+    let tg = p.layout_no_wrap(title.to_uppercase(), theme::bold_font((c * 0.303).clamp(18.0, 44.0)), faded(accent, a));
+    let lg = p.layout_no_wrap(line.to_string(), theme::bold_font((c * 0.136).clamp(11.0, 19.0)), faded(Color32::WHITE, a));
+    let w = tg.size().x.max(lg.size().x) + c * 0.45;
+    let r = Rect::from_center_size(pos2(b.area.center().x, b.reels.top() - c * 0.143), vec2(w, c * 0.76));
+    p.rect_filled(r, theme::r(14), Color32::from_rgba_unmultiplied(0x18, 0x11, 0x12, (235.0 * a) as u8));
+    p.rect_stroke(r, theme::r(14), Stroke::new(2.5f32, faded(accent, a)), StrokeKind::Inside);
+    p.galley(pos2(r.center().x - tg.size().x / 2.0, r.top() + c * 0.139), tg.clone(), accent);
+    p.galley(pos2(r.center().x - lg.size().x / 2.0, r.top() + c * 0.5), lg, Color32::WHITE);
 }
 
 /// How a cell drops in a tumble: (from row, to row) for each cell of reel `r` going from screen
@@ -621,33 +653,43 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
         return;
     }
     let s = &o.steps[k];
-    // Full reels of Hot Wilds and Espresso Shots, under the cells.
+    // Full reels of Hot Wilds and Espresso Shots, under the cells: a reel newly filled shows
+    // what landed (spinning in with the rest on a respin), then fills from its foot.
     let filling = if let Ev::Fill(f) = ev { f == k } else { false };
     let new_full = filled(fam, s);
+    let landed = s.landed.unwrap_or(s.grid);
     for r in 0..REELS {
         let full = s.grid[r].iter().all(|&c| c == WILD) && matches!(fam, Family::Hot | Family::Espresso);
         if !full {
             continue;
         }
-        // (A reel newly filling: spinning in with the rest on a respin, then its one wild till it
-        // fills.)
-        if ev == Ev::Respin(k) && new_full.contains(&r) {
+        let fresh = new_full.contains(&r);
+        if fresh && ev == Ev::Respin(k) {
             continue;
         }
-        let grow = if filling && new_full.contains(&r) { u } else if matches!(ev, Ev::Respin(_) | Ev::Screen(_)) && new_full.contains(&r) { 0.0 } else { 1.0 };
-        // (Where the wild landed: the reel fills from it.)
-        let from = 1;
-        match fam {
-            Family::Hot if grow > 0.0 => hot_reel(&clip, ctx, b, r, from, s.x[r], grow, st.font, time),
-            Family::Espresso if grow > 0.0 => {
-                let staying = k + 1 < o.steps.len() && o.steps[k + 1].held & (0b111 << (r * ROWS)) != 0;
-                shot_reel(&clip, ctx, b, r, from, grow, staying)
-            }
-            _ => {
-                // (Not filled yet: the wild where it landed.)
-                draw_cell(&clip, ctx, m, WILD, 0, o.bet, b.cell_at(r as f32, from as f32), 1.0, accent);
+        let t = if fresh && filling {
+            since
+        } else if fresh && matches!(ev, Ev::Screen(_)) {
+            -1.0
+        } else {
+            f32::INFINITY
+        };
+        if t < 0.2 {
+            for row in 0..ROWS {
+                draw_cell(&clip, ctx, m, landed[r][row], 0, o.bet, b.cell_at(r as f32, row as f32), 1.0, accent);
             }
         }
+        if t < 0.0 {
+            continue;
+        }
+        match fam {
+            Family::Hot => hot_reel(&clip, ctx, b, r, s.x[r], t, st.font, time),
+            _ => shot_reel(&clip, ctx, b, r, t, s.held & (0b111 << (r * ROWS)) != 0),
+        }
+    }
+    // (New shots: their note across the foot while they fill, 0.13.28's.)
+    if filling && fam == Family::Espresso {
+        reel_note(p, b, "ESPRESSO SHOT! IT STAYS A SPIN", st.font, accent, (since * 6.0).min(1.0));
     }
     match ev {
         Ev::Lit(_) => {
@@ -730,12 +772,11 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
                     }
                     skip |= bit;
                     let rect = b.cell_at(r as f32, row as f32);
-                    // (A new shot: its one wild lands in the middle, to fill the reel after.)
+                    // (A new shot: landing as it landed, to fill the reel after.)
                     if full && u >= stop(r) {
-                        if row == 1 {
-                            let k2 = ((u - stop(r)) / 0.12).min(1.0);
-                            draw_cell(&clip, ctx, m, WILD, 0, o.bet, rect.translate(vec2(0.0, -(1.0 - ease_back(k2)) * b.cell * 0.12)), 1.0, accent);
-                        }
+                        let k2 = ((u - stop(r)) / 0.12).min(1.0);
+                        let sym = s.landed.map(|l| l[r][row]).unwrap_or(WILD);
+                        draw_cell(&clip, ctx, m, sym, 0, o.bet, rect.translate(vec2(0.0, -(1.0 - ease_back(k2)) * b.cell * 0.12)), 1.0, accent);
                         continue;
                     }
                     if u < stop(r) {
@@ -844,21 +885,30 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
     }
 }
 
-/// The jackpots' plaques over Hold & Win's board: the Mini, the Minor, the Major and the Grand,
-/// each with what it pays at this bet (a progressive machine's Grand: its pool's share).
-fn plaques(p: &egui::Painter, ctx: &egui::Context, b: &Board, o: &rm::Outcome, pool_grand: u64, st: &Style) {
-    let w = (b.reels.width() / 4.0 - b.gap).min(b.cell * 1.35);
-    let h = w * 0.46;
-    let y = b.reels.top() - h * 0.5 - b.cell * 0.42;
+/// The jackpots' plaques across the top of the page while Hold & Win's board shows (0.13.28's
+/// place for the top prize and the machine's name): the Mini, the Minor, the Major and the
+/// Grand, each with what it pays at this bet (a progressive machine's Grand: its pool's share).
+fn plaques(p: &egui::Painter, ctx: &egui::Context, b: &Board, o: &rm::Outcome, pool_grand: u64) {
+    let w = (b.cell * 1.58).min(b.area.width() / 4.4);
+    let h = w * 0.458;
+    let y = b.area.top() + 6.0 + h / 2.0;
     let names = ["MINI", "MINOR", "MAJOR", "GRAND"];
+    // (Each plaque's word in its metal's colour.)
+    let inks = [Color32::from_rgb(0xe8, 0xa8, 0x70), Color32::from_rgb(0xdd, 0xe4, 0xee), col::GOLD2, Color32::WHITE];
     let worth = [share(o.bet, MINI as u64, 100), share(o.bet, MINOR as u64, 100), share(o.bet, MAJOR as u64, 100), pool_grand];
     for i in 0..4 {
-        let c = pos2(b.reels.center().x + (i as f32 - 1.5) * (w + b.gap * 2.0), y);
+        let c = pos2(b.reels.center().x + (i as f32 - 1.5) * (w + 11.0), y);
         let r = Rect::from_center_size(c, vec2(w, h));
         sheet(p, ctx, "rr-jackpots", 2, 2, i, r, Color32::WHITE);
-        p.text(pos2(c.x, r.top() + h * 0.33), Align2::CENTER_CENTER, names[i], theme::bold_font((h * 0.2).clamp(8.0, 14.0)), col::GOLD2);
-        p.text(pos2(c.x, r.top() + h * 0.62), Align2::CENTER_CENTER, chips_text(worth[i]), theme::display_font(st.font, (h * 0.27).clamp(10.0, 20.0)), Color32::WHITE);
+        p.text(pos2(c.x, r.top() + h * 0.43), Align2::CENTER_CENTER, names[i], theme::bold_font((h * 0.16).clamp(8.0, 13.0)), inks[i]);
+        p.text(pos2(c.x, r.top() + h * 0.66), Align2::CENTER_CENTER, chips_text(worth[i]), theme::bold_font((h * 0.2).clamp(9.0, 16.0)), Color32::WHITE);
     }
+}
+
+/// A pill over or under Hold & Win's board: the machine's lettering in gold, its colour round it.
+fn board_pill(p: &egui::Painter, r: Rect, accent: Color32) {
+    p.rect_filled(r, theme::r((r.height() / 2.0) as u8), Color32::from_black_alpha(225));
+    p.rect_stroke(r, theme::r((r.height() / 2.0) as u8), Stroke::new(1.8f32, accent), StrokeKind::Inside);
 }
 
 /// Respins left after board `k` (three, back to three whenever anything new lands).
@@ -879,21 +929,11 @@ fn draw_hold(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: 
     let m = o.machine;
     let u = (since / dur).clamp(0.0, 1.0);
     let accent = th.accent;
-    let mm = &rm::MACHINES[(m as usize).min(11)];
     if ev == Ev::HoldSplash {
-        let r = b.area;
-        let a = (since / 0.3).min(1.0) * (1.0 - ((since - dur + 0.3) / 0.3).clamp(0.0, 1.0));
-        p.rect_filled(r, 0, Color32::from_black_alpha((230.0 * a) as u8));
-        let clip = p.with_clip_rect(r);
-        pics::cover(&clip, ctx, &format!("rr-{}-splash", th.id), r, 1376, Color32::from_gray((255.0 * a) as u8));
-        vgrad(&clip, Rect::from_min_max(r.min, pos2(r.right(), r.top() + r.height() * 0.4)), Color32::from_black_alpha((170.0 * a) as u8), Color32::TRANSPARENT);
-        glow_text(p, pos2(r.center().x, r.top() + r.height() * 0.17), Align2::CENTER_CENTER, "HOLD & WIN", theme::display_font(st.font, (r.height() * 0.1).clamp(28.0, 72.0)), faded(col::GOLD2, a), faded(accent, 0.6 * a));
-        let line = format!("{}: six coins or more hold for three respins. The collector on the last reel gathers them all. Fill the reels for the Grand.", mm.feature);
-        let g = p.layout(line, theme::bold_font((r.height() * 0.022).clamp(12.0, 17.0)), faded(Color32::WHITE, a), (r.width() * 0.7).min(760.0));
-        let at = pos2(r.center().x - g.size().x / 2.0, r.top() + r.height() * 0.26);
-        p.rect_filled(Rect::from_min_size(at, g.size()).expand(10.0), theme::r(10), Color32::from_black_alpha((150.0 * a) as u8));
-        p.galley(at, g, Color32::WHITE);
-        p.text(pos2(r.center().x, r.bottom() - 28.0), Align2::CENTER_CENTER, "click to start", theme::font(13.0), faded(col::MUTED, a));
+        // (The splash itself goes over the whole page: `splash`. Behind it, the board waiting.)
+        if since < 0.5 {
+            plaques(p, ctx, b, o, grand_pays(o));
+        }
         return;
     }
     let k = match ev {
@@ -904,26 +944,36 @@ fn draw_hold(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: 
     let prev = if k > 0 { Some(&o.hold[k - 1]) } else { None };
     let land_at = 0.45 * if show.turbo { 0.5 } else { 1.0 } / dur.max(0.01);
     let landed = !matches!(ev, Ev::Hold(_)) || k == 0 || u >= land_at;
-    // The jackpots, and the respins left.
-    let grand_pays = if reelrow::progressive(m) { reelrow::top_win(m, o.bet, o.pool) } else { o.bet * rm::GRAND_X };
-    plaques(p, ctx, b, o, grand_pays, st);
-    let left = if landed { respins_left(o, k) } else { respins_left(o, k.saturating_sub(1)).saturating_sub(1) };
-    let ry = b.reels.top() - b.cell * 0.13;
-    p.text(pos2(b.reels.center().x - 26.0, ry), Align2::RIGHT_CENTER, "RESPINS", theme::bold_font((b.cell * 0.1).clamp(10.0, 15.0)), col::GOLD2);
-    for i in 0..rm::RESPINS {
-        let c = pos2(b.reels.center().x - 6.0 + i as f32 * 16.0, ry);
-        if i < left {
-            p.circle_filled(c, 5.5, col::GOLD);
-        } else {
-            p.circle_stroke(c, 5.5, Stroke::new(1.5f32, col::GOLD_DARK));
+    // The jackpots, and the respins left (on the machine's name's place), while it plays; once
+    // it's over, the page as it was, with what Hold & Win left on the reels.
+    let over = ev == Ev::Done;
+    let fs = (b.cell * 0.175).clamp(12.0, 22.0);
+    if !over {
+        plaques(p, ctx, b, o, grand_pays(o));
+        let left = if landed { respins_left(o, k) } else { respins_left(o, k.saturating_sub(1)).saturating_sub(1) };
+        let g = p.layout_no_wrap("RESPINS".into(), theme::display_font(st.font, fs), col::GOLD2);
+        let d = fs * 0.9;
+        let w = g.size().x + 12.0 + 3.0 * d + 2.0 * d * 0.53 + fs * 1.9;
+        let pr = Rect::from_center_size(pos2(b.reels.center().x, b.reels.top() - b.cell * 0.31), vec2(w, g.size().y + fs * 0.5));
+        board_pill(p, pr, accent);
+        let tx = pr.left() + fs * 0.85;
+        p.galley(pos2(tx, pr.center().y - g.size().y / 2.0), g.clone(), col::GOLD2);
+        for i in 0..rm::RESPINS {
+            let c = pos2(tx + g.size().x + 12.0 + d / 2.0 + i as f32 * d * 1.53, pr.center().y);
+            if i < left {
+                radial(p, c, d * 0.85, faded(col::GOLD, 0.55), Color32::TRANSPARENT);
+                p.circle_filled(c, d / 2.0, col::GOLD2);
+            } else {
+                p.circle_stroke(c, d / 2.0 - 1.0, Stroke::new(1.5f32, faded(col::GOLD2, 0.45)));
+            }
         }
     }
     // The board.
     for r in 0..REELS {
         for row in 0..ROWS {
-            let cell = b.cell_at(r as f32, row as f32).expand(b.cell * 0.05);
-            p.rect_filled(cell, theme::r(8), Color32::from_rgba_unmultiplied(0x06, 0x08, 0x10, 210));
-            p.rect_stroke(cell, theme::r(8), Stroke::new(1.0f32, faded(accent, 0.25)), StrokeKind::Inside);
+            let cell = b.cell_at(r as f32, row as f32).expand(b.cell * 0.025);
+            p.rect_filled(cell, theme::r(8), Color32::from_rgba_unmultiplied(0x02, 0x06, 0x0c, 235));
+            p.rect_stroke(cell, theme::r(8), Stroke::new(1.2f32, faded(accent, 0.42)), StrokeKind::Inside);
         }
     }
     for c in 0..REELS * ROWS {
@@ -931,12 +981,11 @@ fn draw_hold(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: 
         let rect = b.cell_at(r as f32, row as f32);
         let was_empty = prev.is_some_and(|pv| pv.grid[r][row] == BLANK);
         if !landed && was_empty {
-            // Spinning: coins flickering past.
-            let cc = p.with_clip_rect(rect.expand(b.cell * 0.05));
-            let pos = since * 12.0 + (c as f32) * 0.37;
-            let n = pos.floor() as u64;
-            if n % 3 == 0 {
-                draw_cell(&cc, ctx, m, COIN, [50, 100, 200, 500][(n as usize / 3) % 4], o.bet, rect.translate(vec2(0.0, (pos.fract() - 0.5) * b.cell)), 0.4, accent);
+            // Spinning: lines rushing down through the place.
+            let cc = p.with_clip_rect(rect.expand(b.cell * 0.02));
+            for j in 0..3 {
+                let y = rect.top() + ((since * 5.0 + j as f32 / 3.0 + c as f32 * 0.11).fract()) * rect.height();
+                cc.line_segment([pos2(rect.left() + 4.0, y), pos2(rect.right() - 4.0, y)], Stroke::new(1.2f32, faded(accent, 0.38)));
             }
             continue;
         }
@@ -969,12 +1018,10 @@ fn draw_hold(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: 
     // What it's come to so far.
     let total: u64 = board.values.iter().flatten().map(|&v| v as u64).sum();
     let shown = if landed { total } else { prev.map(|pv| pv.values.iter().flatten().map(|&v| v as u64).sum()).unwrap_or(0) };
-    let fs = (b.cell * 0.13).clamp(12.0, 20.0);
     let text = format!("HOLD & WIN {}", chips_text(share(o.bet, shown, 100)));
     let g = p.layout_no_wrap(text, theme::display_font(st.font, fs), col::GOLD2);
-    let pr = Rect::from_center_size(pos2(b.reels.center().x, b.reels.bottom() + b.cell * 0.17), g.size() + vec2(24.0, 8.0));
-    p.rect_filled(pr, theme::r((pr.height() / 2.0) as u8), Color32::from_black_alpha(220));
-    p.rect_stroke(pr, theme::r((pr.height() / 2.0) as u8), Stroke::new(1.2f32, faded(col::GOLD, if ev == Ev::HoldEnd { 0.6 + 0.4 * (time * 6.0).sin().abs() } else { 0.7 })), StrokeKind::Inside);
+    let pr = Rect::from_center_size(pos2(b.reels.center().x, b.reels.bottom() + b.cell * 0.19), g.size() + vec2(fs * 1.75, fs * 0.5));
+    board_pill(p, pr, if ev == Ev::HoldEnd { faded(accent, 0.6 + 0.4 * (time * 6.0).sin().abs()) } else { accent });
     p.galley(pr.center() - g.size() / 2.0, g, col::GOLD2);
     if ev == Ev::Grand {
         let a = (since / 0.3).min(1.0);
@@ -985,6 +1032,48 @@ fn draw_hold(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: 
         glow_text(p, pos2(r.center().x, r.top() + r.height() * 0.36), Align2::CENTER_CENTER, &name, theme::display_font(st.font, (r.height() * 0.17).clamp(16.0, 40.0)), col::GOLD2, faded(accent, 0.7));
         glow_text(p, pos2(r.center().x, r.top() + r.height() * 0.62), Align2::CENTER_CENTER, &chips_text(o.grand), theme::display_font(st.font, (r.height() * 0.2).clamp(18.0, 48.0)), Color32::WHITE, faded(col::GOLD, 0.6));
     }
+}
+
+/// What Hold & Win's Grand pays at a round's bet (a progressive machine's: its pool's share).
+fn grand_pays(o: &rm::Outcome) -> u64 {
+    if reelrow::progressive(o.machine) { reelrow::top_win(o.machine, o.bet, o.pool) } else { o.bet * rm::GRAND_X }
+}
+
+/// Hold & Win's splash (0.13.28's), over the whole page, the bar too: the machine's splash
+/// picture under turning rays, "HOLD & WIN", the machine's line for it, "click to start".
+pub fn splash(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, area: Rect, show: &RmShow, now: Instant, time: f32) {
+    let Some((_, Ev::HoldSplash, since, dur)) = show.at(now) else { return };
+    let r = area;
+    let a = (since / 0.4).min(1.0) * (1.0 - ((since - dur + 0.4) / 0.4).clamp(0.0, 1.0));
+    if a <= 0.0 {
+        return;
+    }
+    let p = p.with_clip_rect(r);
+    p.rect_filled(r, 0, Color32::from_black_alpha((235.0 * a) as u8));
+    pics::cover(&p, ctx, &format!("rr-{}-splash", th.id), r, 1376, Color32::from_gray((255.0 * a) as u8));
+    // Rays, turning slowly, from behind the title.
+    let title_c = pos2(r.center().x, r.top() + r.height() * 0.217);
+    let reach = r.width().max(r.height()) * 1.2;
+    for i in 0..24 {
+        if i % 2 == 1 {
+            continue;
+        }
+        let a0 = (i as f32 / 24.0) * std::f32::consts::TAU + time * 0.08;
+        let a1 = a0 + std::f32::consts::TAU / 24.0;
+        let pts = vec![title_c, title_c + vec2(a0.cos(), a0.sin()) * reach, title_c + vec2(a1.cos(), a1.sin()) * reach];
+        p.add(Shape::convex_polygon(pts, Color32::from_white_alpha((16.0 * a) as u8), Stroke::NONE));
+    }
+    let size = (r.height() * 0.118).clamp(32.0, 96.0);
+    glow_text(&p, title_c + vec2(0.0, size * 0.04), Align2::CENTER_CENTER, "HOLD & WIN", theme::display_font(st.font, size), faded(Color32::BLACK, 0.7 * a), Color32::TRANSPARENT);
+    glow_text(&p, title_c, Align2::CENTER_CENTER, "HOLD & WIN", theme::display_font(st.font, size), faded(col::GOLD2, a), faded(th.accent, 0.6 * a));
+    let line = feature_words(show.o.machine).0;
+    let fs = (r.height() * 0.0242).clamp(12.0, 18.0);
+    let g = p.layout(line, theme::bold_font(fs), faded(Color32::WHITE, a), (r.width() - 120.0).min(fs * 45.0));
+    let box_c = pos2(r.center().x, r.top() + r.height() * 0.323);
+    let at = box_c - g.size() / 2.0;
+    p.rect_filled(Rect::from_min_size(at, g.size()).expand2(vec2(fs, fs * 0.6)), theme::r(10), Color32::from_black_alpha((175.0 * a) as u8));
+    p.galley(at, g, Color32::WHITE);
+    p.text(pos2(r.center().x, r.bottom() - 28.0), Align2::CENTER_CENTER, "click to start", theme::font(13.0), faded(col::MUTED, a));
 }
 
 /// What a filler cell spinning past shows for a machine (bombs and coins with a made-up worth).
