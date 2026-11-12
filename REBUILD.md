@@ -438,18 +438,22 @@ How (decided while starting it):
       Game), every page and every action. Today's missions and Ember Back now show on every
       casino page, as 0.13.28's do. Better than 0.13.28: a long log line stops at its card's
       edge instead of running off it.
-- [ ] Bomb Pot (was Flash Pot), new art, 50,000 and 100,000 (0.13.4/6); the crown win (0.13.4)
-      In progress. Done: Bomb Pot everywhere (the server's words as 0.13.28's, probed on it; its
-      refusal lists all five buy-ins, 0.13.28's says three), `big_bomb_pots` with 50,000 and
-      100,000; the card as 0.13.28's, measured at 1100, 1280 and 1600 wide and checked side by
-      side on 0.13.28's server (glow, art and its fade, wrap at 46%, title glow, buttons and
-      their shadows, the hint beside them from 1330 wide, waiting with Leave and the seats'
-      pictures, running with Go to my table, "N GOING OFF NOW"); the Games menu's jumps land
-      where 0.13.28's do (6 higher); a debug build no longer panics at a tournament's table
-      (buy-in sums saturate). Left: a filled seat's gold ring is 0.25 px thinner outside than
-      0.13.28's; the table's wheel, fuse and bang against 0.13.28's (filmed side by side,
-      `bombfilm3`); the crown win as 0.13.28's (win-laurel, win-crown; its words as 0.13.0's
-      sizes, 31 lower: measured from a film), and a YOU WIN filmed on 0.13.28.
+- [x] Bomb Pot (was Flash Pot), new art, 50,000 and 100,000 (0.13.4/6); the crown win (0.13.4).
+      Bomb Pot everywhere (the server's words as 0.13.28's, probed on it; its refusal lists all
+      five buy-ins, 0.13.28's says three), `big_bomb_pots` with 50,000 and 100,000. The card as
+      0.13.28's, measured at 1100, 1280 and 1600 wide and checked side by side on 0.13.28's
+      server (glow, art and its fade, wrap at 46%, title glow, buttons and their shadows, the
+      hint beside them from 1330 wide, waiting with Leave and the seats' pictures, running with
+      Go to my table, "N GOING OFF NOW"). The crown win as 0.13.28's, filmed in the same games
+      on both apps (a loser's and a winner's view of each): the picture pops up as a ring goes
+      out, the laurel, the crown dropping and swaying (2.25° and 3.5 px, 4.8 s and 3.9 s), the
+      words where 0.13.28 has them (held frames match to the pixel), the count over 3 s, 12.4 s
+      in all; its art read before it's wanted. The wheel, fuse, bang and "ALL IN EVERY HAND"
+      unchanged from 0.13.0 (side by side, by eye). The Games menu's jumps land where 0.13.28's
+      do (6 higher); a debug build no longer panics at a tournament's table (buy-in sums
+      saturate). Not matched: a filled seat's gold ring is 0.25 px thinner outside; 0.13.28's
+      finale starts 4.4 to 5.1 s after the last hand (the rebuild: 4.4); its sounds not
+      compared (0.13.0's). Measurements in `rebuild/measured/bombpot.md`.
 - [ ] Bounty Poker (0.13.6)
 - [x] High stakes and higher-than-high tables, 500K/1M/5M chips (0.13.6): three tables of each,
       0.13.28's names and bets (Hearth 10–1,000, High Limit 500–100,000, Crown Room 10,000 to

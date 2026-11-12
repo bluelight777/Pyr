@@ -35,10 +35,13 @@ const KICKER: Color32 = Color32::from_rgb(0xff, 0xa8, 0x6a);
 const ON_GOLD: Color32 = Color32::from_rgb(0x2a, 0x10, 0x04);
 /// The bang, then the warning stays.
 const BOOM_S: f32 = 2.6;
-/// The winner's moment, after the last hand.
-const FINALE_S: f32 = 10.0;
-/// A moment before it, to see the last hand's board and who took it.
-const FINALE_BEAT_S: f32 = 2.4;
+/// The winner's moment after the last hand: the crown win (0.13.4), timed off films of 0.13.28's
+/// (it fades out over its last 0.3 s).
+const FINALE_S: f32 = 12.4;
+const FINALE_OUT_S: f32 = 0.3;
+/// A moment before it, to see the last hand's board and who took it (0.13.28's starts 2 s after
+/// 0.13.0's, filmed side by side on the same game).
+const FINALE_BEAT_S: f32 = 4.4;
 
 /// What's been played for each Bomb Pot: the wheel (its start, the peg under the pointer and
 /// when a click was last heard, the landing), the fuse's hiss, the last second ticked, the bang
@@ -591,9 +594,10 @@ impl PyrApp {
         true
     }
 
-    /// The end of a Bomb Pot I played: the winner's moment, big over everything for a few
-    /// seconds (click to go on). Their picture crowned in a burst of light, WINNER, the prize
-    /// counting up, coins pouring down and fireworks going off; and if it's me, YOU WIN.
+    /// The end of a Bomb Pot I played: the crown win (0.13.4), big over everything for twelve
+    /// seconds (click to go on), as 0.13.28 shows it: their picture pops up as a ring of light
+    /// goes out from it, the laurel comes round it, the crown drops onto it and sways, then
+    /// WINS! (or YOU WIN!) and the prize counting up; coins pouring down, fireworks going off.
     pub(super) fn bomb_finale(&mut self, ctx: &egui::Context, s: &ServerView, area: Rect) {
         let me = s.me.as_ref().map(|m| m.user_id.clone()).unwrap_or_default();
         // A Bomb Pot I'm in, seen being played, now over.
@@ -618,6 +622,8 @@ impl PyrApp {
         let Some(v) = show else { return };
         let mut fx = self.poker.bomb_fx.get(&v.id).copied().unwrap_or_default();
         let since = fx.finale.map(|t| t.elapsed().as_secs_f32()).unwrap_or(0.0) - FINALE_BEAT_S;
+        // (Its laurel and crown read while the last hand shows, so they're there in time.)
+        let _ = (pics::tex(ctx, "win-laurel", 1024), pics::tex(ctx, "win-crown", 1024));
         if since < 0.0 {
             ctx.request_repaint_after(std::time::Duration::from_secs_f32(-since));
             return;
@@ -645,11 +651,12 @@ impl PyrApp {
                 dismiss = true;
             }
             let p = ui.painter_at(area);
-            let fade = (since / 0.35).clamp(0.0, 1.0) * ((FINALE_S - since) / 0.8).clamp(0.0, 1.0);
+            let fade = (since / 0.35).clamp(0.0, 1.0) * ((FINALE_S - since) / FINALE_OUT_S).clamp(0.0, 1.0);
             p.rect_filled(area, 0, Color32::from_black_alpha((215.0 * fade) as u8));
             let c = area.center() - vec2(0.0, area.height() * 0.08);
             let unit = (area.height() * 0.11).clamp(48.0, 96.0);
-            rays(&p, c, area.width().max(area.height()), t, Color32::from_rgba_unmultiplied(0xff, 0xc8, 0x50, (26.0 * fade) as u8), 24);
+            // (Its rays turn at 0.23 a second, 0.13.28's: 0.92 of the table's.)
+            rays(&p, c, area.width().max(area.height()), t * 0.92, Color32::from_rgba_unmultiplied(0xff, 0xc8, 0x50, (26.0 * fade) as u8), 24);
             radial(&p, c, unit * 4.2, Color32::from_rgba_unmultiplied(0xff, 0xb0, 0x40, (90.0 * fade) as u8), Color32::TRANSPARENT);
             // Fireworks going off round the edges, one after another.
             let colors = [col::GOLD2, col::EMBER, Color32::from_rgb(0x6a, 0xe8, 0x8a), Color32::from_rgb(0x6a, 0xa8, 0xff), Color32::from_rgb(0xff, 0x6a, 0xc8), Color32::WHITE];
@@ -663,9 +670,9 @@ impl PyrApp {
                     burst(&p, pos2(x, y), unit * (1.6 + h01(n, 9)), k, &set, 46, n * 31 + 1);
                 }
             }
-            // Coins pouring down.
+            // Coins pouring down, from a moment in.
             for n in 0..46u32 {
-                let delay = h01(n, 11) * 3.0;
+                let delay = 0.3 + h01(n, 11) * 3.0;
                 let k = since - delay;
                 if k < 0.0 {
                     continue;
@@ -679,44 +686,68 @@ impl PyrApp {
                 p.add(egui::epaint::EllipseShape::filled(coin.center(), coin.size() / 2.0, Color32::from_rgb(0xd8, 0x98, 0x20).gamma_multiply(fade)));
                 p.add(egui::epaint::EllipseShape::filled(coin.center(), coin.size() / 2.0 * 0.78, Color32::from_rgb(0xff, 0xd8, 0x5a).gamma_multiply(fade)));
             }
-            // The winner: crowned, in a ring of light.
-            let pop = crate::casino::ease_back(((since - 0.15) / 0.5).clamp(0.0, 1.0));
-            let fr = unit * 0.9 * pop.max(0.01);
+            // The winner: their picture pops up as a ring of light goes out from it, the laurel
+            // comes round it, then the crown drops onto it, swaying.
+            let fr_full = unit * 0.9;
+            let pop = crate::casino::ease_back((since / 0.5).clamp(0.0, 1.0));
+            let fr = fr_full * pop.max(0.01);
+            let wave = (since - 0.08) / 0.7;
+            if (0.0..1.0).contains(&wave) {
+                let rr = fr_full * (1.0 + 2.5 * ease_out((wave / 0.72).min(1.0)));
+                p.circle_stroke(c, rr, Stroke::new(2.5f32, col::GOLD2.gamma_multiply((1.0 - wave) * fade)));
+            }
             for g in 0..6 {
                 p.circle_filled(c, fr + 6.0 + g as f32 * 5.0, Color32::from_rgba_unmultiplied(0xff, 0xd0, 0x60, (22.0 * fade) as u8));
+            }
+            let laurel = ((since - 0.8) / 0.3).clamp(0.0, 1.0);
+            if laurel > 0.0 {
+                art(&p, ctx, "win-laurel", c + vec2(0.0, fr_full * 0.09), fr_full * 3.1 * (0.85 + 0.15 * ease_out(laurel)), 0.0, Color32::WHITE.gamma_multiply(laurel * fade));
             }
             p.circle_filled(c, fr + 5.0, col::GOLD.gamma_multiply(fade));
             match winner.bot {
                 Some(level) => super::table::bot_face(&p, c, fr, &winner.name, level),
                 None => crate::app::avatar(&p, c, fr, &winner.uid, &winner.name, false, Color32::BLACK, face),
             }
-            let drop = ease_out(((since - 0.55) / 0.4).clamp(0.0, 1.0));
+            let drop = (since - 1.6) / 0.45;
             if drop > 0.0 {
-                let cr = Rect::from_center_size(c - vec2(0.0, fr + unit * 0.35 + (1.0 - drop) * unit * 1.5), vec2(unit * 1.1, unit * 0.72));
-                crate::icons::crown(&p, cr, Color32::from_rgb(0xff, 0xd7, 0x6a).gamma_multiply(drop * fade));
+                let fall = (1.0 - ease_out(drop.min(1.0))) * unit * 3.4;
+                let at = pos2(c.x, c.y - fr_full - unit * 0.545 + 3.5 * (t * 1.6).sin() - fall);
+                let tilt = 0.039 * (t * 1.32).sin();
+                art(&p, ctx, "win-crown", at, unit * 2.3, tilt, Color32::WHITE.gamma_multiply(fade));
+                // A glint on its band as it lands.
+                let g = (since - 2.1) / 0.5;
+                if (0.0..1.0).contains(&g) {
+                    let (sn, cs) = tilt.sin_cos();
+                    let q = at + vec2(-37.0 * cs - 51.0 * sn, -37.0 * sn + 51.0 * cs) * (unit / 88.0);
+                    glint(&p, q, unit * 0.16 * (g * std::f32::consts::PI).sin(), fade);
+                }
             }
             // WINNER (or YOU WIN), the prize counting up, and what it was.
-            let tpop = crate::casino::ease_back(((since - 0.35) / 0.5).clamp(0.0, 1.0));
+            let tpop = crate::casino::ease_back(((since - 2.1) / 0.5).clamp(0.0, 1.0));
             let title = if mine { "YOU WIN!".to_string() } else { format!("{} WINS!", winner.name.to_uppercase()) };
-            let ty = c.y + fr + unit * 0.95;
-            glow_text(&p, pos2(c.x, ty), Align2::CENTER_CENTER, &title, theme::bold_font(unit * 0.82 * tpop.max(0.05)), col::GOLD2.gamma_multiply(fade), col::EMBER.gamma_multiply(0.8 * fade));
-            let k = ((since - 0.8) / 2.2).clamp(0.0, 1.0);
+            let ty = c.y + fr_full + unit * 1.3;
+            if since >= 2.1 {
+                glow_text(&p, pos2(c.x, ty), Align2::CENTER_CENTER, &title, theme::bold_font(unit * 0.82 * tpop.max(0.05)), col::GOLD2.gamma_multiply(fade), col::EMBER.gamma_multiply(0.8 * fade));
+            }
+            let k = ((since - 2.34) / 3.0).clamp(0.0, 1.0);
             let shown = (prize as f64 * ease_out(k) as f64).round() as u64;
             if k >= 1.0 && !fx.finale_counted {
                 fx.finale_counted = true;
                 cues.push(Cue::Chips);
             }
-            let count = format!("{} chips", chips_text(shown));
             let cy = ty + unit * 0.95;
-            let swell = if k >= 1.0 { 1.0 + 0.06 * ((since - 3.0) * 6.0).sin().max(0.0) } else { 1.0 };
-            glow_text(&p, pos2(c.x, cy), Align2::CENTER_CENTER, &count, theme::bold_font(unit * 0.62 * swell), Color32::WHITE.gamma_multiply(fade), col::GOLD.gamma_multiply(0.7 * fade));
+            if since >= 2.3 {
+                let count = format!("{} chips", chips_text(shown));
+                let swell = if k >= 1.0 { 1.0 + 0.06 * ((since - 5.34) * 6.0).sin().max(0.0) } else { 1.0 };
+                glow_text(&p, pos2(c.x, cy), Align2::CENTER_CENTER, &count, theme::bold_font(unit * 0.62 * swell), Color32::WHITE.gamma_multiply(fade), col::GOLD.gamma_multiply(0.7 * fade));
+            }
             let m = v.bomb.and_then(|b| b.multiplier).unwrap_or(0);
             let sub = format!("Bomb Pot · {} buy-in · {}× the buy-in", chips_text(v.rules.buy_in), m);
             p.text(pos2(c.x, cy + unit * 0.6), Align2::CENTER_CENTER, sub, theme::bold_font(15.0), col::GOLD2.gamma_multiply(0.85 * fade));
             if !mine && let Some(place) = my_place {
                 p.text(pos2(c.x, cy + unit * 0.6 + 26.0), Align2::CENTER_CENTER, format!("You finished {}", super::tourneys::ordinal(place)), theme::bold_font(14.0), Color32::WHITE.gamma_multiply(0.75 * fade));
             }
-            if since > 2.5 {
+            if since > 3.9 {
                 p.text(area.center_bottom() - vec2(0.0, 28.0), Align2::CENTER_CENTER, "Click to go on", theme::font(13.0), Color32::from_white_alpha((150.0 * fade) as u8));
             }
         });
@@ -726,6 +757,36 @@ impl PyrApp {
         self.poker.bomb_fx.insert(v.id, fx);
         self.play_bomb(cues);
         ctx.request_repaint();
+    }
+}
+
+/// A picture `w` across (in its own shape), its middle at `c`, turned `angle` (radians), tinted.
+fn art(p: &egui::Painter, ctx: &egui::Context, name: &str, c: Pos2, w: f32, angle: f32, tint: Color32) {
+    let Some(t) = pics::tex(ctx, name, 1024) else { return };
+    let [tw, th] = t.size();
+    let h = w * th as f32 / tw.max(1) as f32;
+    let (sn, cs) = angle.sin_cos();
+    let at = |dx: f32, dy: f32| c + vec2(dx * cs - dy * sn, dx * sn + dy * cs);
+    let mut m = egui::Mesh::with_texture(t.id());
+    for (q, uv) in [(at(-w / 2.0, -h / 2.0), pos2(0.0, 0.0)), (at(w / 2.0, -h / 2.0), pos2(1.0, 0.0)), (at(w / 2.0, h / 2.0), pos2(1.0, 1.0)), (at(-w / 2.0, h / 2.0), pos2(0.0, 1.0))] {
+        m.vertices.push(egui::epaint::Vertex { pos: q, uv, color: tint });
+    }
+    m.add_triangle(0, 1, 2);
+    m.add_triangle(0, 2, 3);
+    p.add(Shape::mesh(m));
+}
+
+/// A four-pointed glint `r` long, with a soft glow.
+fn glint(p: &egui::Painter, c: Pos2, r: f32, fade: f32) {
+    if r <= 0.5 {
+        return;
+    }
+    radial(p, c, r * 1.4, Color32::from_white_alpha((120.0 * fade) as u8), Color32::TRANSPARENT);
+    let w = r * 0.22;
+    for (dx, dy) in [(1.0, 0.0), (0.0, 1.0)] {
+        let d = vec2(dx, dy);
+        let n = vec2(-dy, dx);
+        p.add(Shape::convex_polygon(vec![c - d * r, c + n * w, c + d * r, c - n * w], Color32::WHITE.gamma_multiply(fade), Stroke::NONE));
     }
 }
 
