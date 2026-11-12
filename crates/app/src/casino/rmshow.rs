@@ -362,7 +362,7 @@ fn wild_cell(machine: u8) -> Option<usize> {
 }
 
 /// Cell `i` of a sheet `cols` by `rows`, drawn in `r`.
-fn sheet(p: &egui::Painter, ctx: &egui::Context, name: &str, cols: usize, rows: usize, i: usize, r: Rect, tint: Color32) -> bool {
+pub(super) fn sheet(p: &egui::Painter, ctx: &egui::Context, name: &str, cols: usize, rows: usize, i: usize, r: Rect, tint: Color32) -> bool {
     let (cx, cy) = ((i % cols) as f32, (i / cols) as f32);
     let uv = Rect::from_min_max(pos2(cx / cols as f32, cy / rows as f32), pos2((cx + 1.0) / cols as f32, (cy + 1.0) / rows as f32));
     pics::part(p, ctx, name, uv, r, (r.width() * cols as f32 * 1.4) as u32 + 1, tint)

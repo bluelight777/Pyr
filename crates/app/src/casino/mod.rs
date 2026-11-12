@@ -10,6 +10,7 @@ pub mod art;
 pub mod auto;
 pub mod baccarat;
 pub mod bactable;
+pub mod bigwin;
 pub mod rltable;
 pub mod minis;
 pub mod row;
@@ -107,13 +108,19 @@ fn next_chip(chip: u64, range: (u64, u64), step: i32) -> u64 {
     rack[at.clamp(0, rack.len() as i32 - 1) as usize]
 }
 
-/// A win shown big over the table.
+/// A win shown big over the table (0.13.28's big win): its amount counts up through the levels
+/// it reaches (Big, Mega, Epic, Legendary, Mythic), each landing on its plaque with a hit and a
+/// burst of coins; a click jumps to the total, another carries on.
 pub struct Celebration {
-    pub title: &'static str,
     pub amount: u64,
-    pub multiple_x100: u64,
     pub since: Instant,
-    pub tier: u8,
+    /// Pyr Sevens' Phoenix Jackpot: its own title over the levels.
+    pub jackpot: bool,
+    /// The count's moments (see `bigwin::Plan`), and when a click jumped to the total.
+    pub plan: bigwin::Plan,
+    pub skipped: Option<Instant>,
+    /// The levels whose sound has played.
+    pub sounded: u8,
 }
 
 /// A round's result called out big over its table (the size a stream's viewers can read):
@@ -294,22 +301,16 @@ impl CasinoUi {
         self.announcement = Some(Announcement { title: title.into(), sub: sub.into(), color, at, since: Instant::now() + Duration::from_secs_f32(delay.max(0.0)) });
     }
 
-    /// Shows a win big, if it's big enough.
+    /// Shows a win big, if it's big enough (ten times what was staked, or a jackpot).
     pub fn celebrate(&mut self, paid: u64, wagered: u64, jackpot: bool, delay: f32) {
         let m = pyr_poker::casino::multiple_x100(paid, wagered);
-        let (title, tier) = if jackpot {
-            ("PHOENIX JACKPOT", 4)
-        } else if m >= 5_000 {
-            ("EPIC WIN", 3)
-        } else if m >= 2_500 {
-            ("MEGA WIN", 2)
-        } else if m >= 1_000 {
-            ("BIG WIN", 1)
-        } else {
+        if !jackpot && m < bigwin::LEVELS[0].from_x100 {
             return;
-        };
-        self.celebration = Some(Celebration { title, amount: paid, multiple_x100: m, since: Instant::now() + Duration::from_secs_f32(delay), tier });
-        self.sound_in(delay, if tier >= 4 { Cue::Jackpot } else { Cue::WinBig }, 0.0, 0.9);
+        }
+        let plan = bigwin::Plan::new(m);
+        self.celebration = Some(Celebration { amount: paid, since: Instant::now() + Duration::from_secs_f32(delay), jackpot, plan, skipped: None, sounded: 0 });
+        let start = bigwin::sound("c_winbig").unwrap_or(Cue::WinBig);
+        self.sound_in(delay, if jackpot { Cue::Jackpot } else { start }, 0.0, 0.9);
     }
 }
 
@@ -1010,44 +1011,40 @@ impl PyrApp {
             return;
         }
         let t = (now - cel.since).as_secs_f32();
-        let life = if cel.tier >= 4 { 7.0 } else { 4.5 };
+        // A click while it counts jumps to the total; once it's there, carries on.
         let resp = ui.interact(area, ui.id().with("celebration"), Sense::click());
-        if t > life || resp.clicked() {
+        let (end, life) = cel.plan.times(cel.skipped.map(|k| (k - cel.since).as_secs_f32()));
+        if t > life || (resp.clicked() && t >= end) {
             self.poker.casino.celebration = None;
             return;
         }
-        let p = ui.painter().clone();
-        let fade = (t / 0.3).min(1.0) * ((life - t) / 0.6).clamp(0.0, 1.0);
-        p.rect_filled(area, 0, Color32::from_black_alpha((150.0 * fade) as u8));
-        // Coins.
-        let n = 40 + cel.tier as usize * 25;
-        for i in 0..n {
-            let seed = (i as f32 * 12.9898).sin() * 43758.547;
-            let fx = seed.fract().abs();
-            let start = ((i as f32 * 0.37).fract()) * 1.6;
-            let tt = t - start;
-            if tt < 0.0 {
-                continue;
-            }
-            let y = area.top() - 20.0 + tt * tt * 260.0 + tt * 120.0;
-            if y > area.bottom() + 20.0 {
-                continue;
-            }
-            let x = area.left() + fx * area.width() + (tt * 3.0 + i as f32).sin() * 18.0;
-            let spin = (tt * 8.0 + i as f32).cos().abs().max(0.15);
-            let c = pos2(x, y);
-            p.add(egui::epaint::EllipseShape::filled(c, vec2(9.0 * spin, 9.0), col::GOLD.gamma_multiply(fade)));
-            p.add(egui::epaint::EllipseShape::stroke(c, vec2(9.0 * spin, 9.0), Stroke::new(1.5f32, col::GOLD_DARK.gamma_multiply(fade))));
+        if resp.clicked() && cel.skipped.is_none() {
+            self.poker.casino.celebration.as_mut().unwrap().skipped = Some(now);
+            return;
         }
-        let c = area.center() - vec2(0.0, 40.0);
-        let pop = ease_back((t / 0.5).min(1.0));
-        let size = (if cel.tier >= 4 { 64.0 } else { 56.0 }) * pop.max(0.2);
-        radial(&p, c, 260.0 * pop.max(0.1), col::EMBER.gamma_multiply(0.35 * fade), Color32::TRANSPARENT);
-        glow_text(&p, c, Align2::CENTER_CENTER, cel.title, theme::bold_font(size), col::GOLD2.gamma_multiply(fade), col::EMBER.gamma_multiply(0.5 * fade));
-        let shown = (cel.amount as f64 * ease_out((t / 2.2).min(1.0)) as f64) as u64;
-        glow_text(&p, c + vec2(0.0, size * 0.95), Align2::CENTER_CENTER, &chips_text(shown), theme::bold_font(size * 0.75), Color32::WHITE.gamma_multiply(fade), col::GOLD_DARK.gamma_multiply(0.6 * fade));
-        p.text(c + vec2(0.0, size * 1.65), Align2::CENTER_CENTER, format!("{} your bet", times(cel.multiple_x100)), theme::bold_font(18.0), col::GOLD.gamma_multiply(fade));
-        p.text(c + vec2(0.0, size * 1.65 + 28.0), Align2::CENTER_CENTER, "click to carry on", theme::font(12.5), col::MUTED.gamma_multiply(fade));
+        let cel = self.poker.casino.celebration.as_ref().unwrap();
+        // Each level's hit as it lands (once).
+        let level = cel.plan.level_at(t, cel.skipped.map(|k| (k - cel.since).as_secs_f32()));
+        let mut sounds = Vec::new();
+        if level > 0 && cel.sounded & (1 << level) == 0 {
+            sounds.push(level);
+        }
+        let p = ui.painter().clone();
+        let time = ui.ctx().input(|i| i.time) as f32;
+        bigwin::draw(&p, ui.ctx(), area, cel, t, time);
+        for l in sounds {
+            self.poker.casino.celebration.as_mut().unwrap().sounded |= 1 << l;
+            let cue = bigwin::sound("c_tierup").unwrap_or(Cue::WinBig);
+            self.poker.casino.sound_in(0.0, cue, 0.0, 0.9);
+            if l as usize == bigwin::LEVELS.len() - 1
+                && let Some(boom) = bigwin::sound("c_boom")
+            {
+                for k in 0..5 {
+                    self.poker.casino.sound_in(0.35 + k as f32 * 0.55, boom, (k as f32 - 2.0) * 0.4, 0.6);
+                }
+            }
+        }
+        ui.ctx().request_repaint();
     }
 
     /// A round's result, called out big (see `CasinoUi::announce`): it pops up, stays a

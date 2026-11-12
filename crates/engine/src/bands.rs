@@ -18,8 +18,13 @@ macro_rules! band {
     };
 }
 
-/// Every sound, by name.
+/// Every sound, by name. (And the casino's own, 0.13.6's, `c_*`: those a big win plays.)
 pub const BANDS: &[(&str, &[u8])] = &[
+    band!("c_boom"),
+    band!("c_coin"),
+    band!("c_tierup"),
+    band!("c_winbig"),
+    band!("c_winslam"),
     band!("s_all_coin"),
     band!("s_all_count"),
     band!("s_all_jackpot"),
