@@ -73,8 +73,18 @@ windows = { version = "0.62", features = [
     "Win32_NetworkManagement_QoS",
     "Win32_Networking_WinSock",
     "Win32_System_IO",
-    # Asking whether Windows took the screen capture's graphics device away (video/capture.rs).
+    # Asking whether Windows took the screen capture's graphics device away (video/capture.rs),
+    # and encoding on the graphics card (video/hw.rs): the card's video engine (Direct3D11),
+    # the thread-safety flag (Direct3D10's ID3D10Multithread), Media Foundation's hardware
+    # H.264 encoder, and the pixel-format and rate types (Dxgi, Dxgi_Common).
     "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct3D10",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_System_Ole",
     # How long since the last key or mouse move, for idle (idle.rs).
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_SystemInformation",

@@ -5,6 +5,9 @@ pub mod border;
 pub mod adapt;
 pub mod capture;
 pub mod codec;
+// Encoding a screen share on the graphics card (Windows only; the processor's way otherwise).
+#[cfg(windows)]
+pub mod hw;
 pub mod testsrc;
 
 use std::collections::{BTreeMap, HashMap};
