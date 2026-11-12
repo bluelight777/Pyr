@@ -291,9 +291,25 @@ How (decided while starting it):
   already do on older servers). Same look, same rules, same 99% (checked by simulation, as
   0.13.x did); new seeds and code.
 
-- [ ] Reel Row Remastered: twelve machines with features (tumbles and bombs, Hold & Win,
+- [x] Reel Row Remastered: twelve machines with features (tumbles and bombs, Hold & Win,
       wilds that grow/freeze/walk/stay), ante, Play Feature, slowing reels, splashes, plaques,
-      a sound band per machine, 99% checked by simulation (0.13.2)
+      a sound band per machine, 99% checked by simulation (0.13.2). Under the rebuild's own
+      feature name (`reel_row_remastered`, `Bet::Remaster`): 0.13.28's rules, points, prices,
+      odds and words as its Info pages and Play Feature show them (rebuild/notes-reelrow.md),
+      new code and seeds. Every way to play pays 99%: the wild machines worked out exactly
+      (99.00 ±0.02%, Bonus Chance with each machine's own odds, still 1 in 45), the tumbling and
+      Hold & Win machines played twenty million times a way, tuned and then checked on other
+      rounds: each within 0.2% of 99%, most within 0.1% (what's left is the runs' own noise:
+      Hold & Win's Grand comes once in a quarter of a million spins). Each family filmed beside 0.13.28 and matched: the reels' timing
+      (each reel's stop to a tenth of a second), tumbles (the winners aglow, a ring of lights
+      flying off, the drop), bombs and the multiplier badge, Hold & Win (its splash over the
+      page, the jackpot plaques across the top, RESPINS and the total in the machine's
+      lettering, coins' worth on a dark pill), Hot Wilds and Espresso Shots landing where they
+      landed and filling from the reel's foot, Frozen respins, the Spotlight's walk, the feature
+      banner, no armed tag over the reels (0.13.28 has none), 0.13.28's symbol sheets. The
+      machine's bar fits its width (0.13.28's ran Info and Turbo into the spin button under
+      about 1,450 wide). The last reels slow and light up a scatter (or a coin) away. Bomb
+      Spins and Super Hold & Win come with the next item.
 - [ ] Bonus rounds that build: Bomb Spins, Super Hold & Win (0.13.6)
 - [ ] Big wins: Big, Mega, Epic, Legendary, Mythic with fireworks (0.13.2/4)
 - [x] Bets to 100,000 on blackjack, baccarat, keno, slots (0.13.2/4/6); Pyr Sevens' Phoenix

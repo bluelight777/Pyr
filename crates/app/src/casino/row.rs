@@ -71,6 +71,8 @@ pub struct RowUi {
     strip_vals: [[u32; STRIP]; REELS],
     /// A feature spin's banner: since when (the spin's start) and for which feature.
     banner: Option<(Instant, Feature)>,
+    /// The bonus or Hold & Win a symbol away: the reels from this one on take their time, lit.
+    tease: Option<usize>,
 }
 
 impl Default for RowUi {
@@ -98,6 +100,7 @@ impl Default for RowUi {
             rm: None,
             strip_vals: [[0; STRIP]; REELS],
             banner: None,
+            tease: None,
         }
     }
 }
@@ -377,26 +380,29 @@ impl PyrApp {
                 reel.start(now, speed);
             }
         }
-        // Two scatters down: the last reels take their time.
-        let scatters_by = |upto: usize| as_landed.iter().take(upto).flatten().filter(|&&c| c == rr::SCATTER).count();
-        let slow = scatters_by(3) >= 2 && !ui.turbo;
+        // The bonus a scatter away (two down), or Hold & Win a coin away (five): the reels still
+        // to land take their time, lit up.
+        let count_by = |upto: usize, sym: u8| as_landed.iter().take(upto).flatten().filter(|&&c| c == sym).count();
+        let hold = remaster::family(machine) == remaster::Family::Hold;
+        let tease = (1..REELS).find(|&i| count_by(i, rr::SCATTER) >= 2 || (hold && count_by(i, remaster::COIN) >= remaster::HOLD_START - 1)).filter(|_| !ui.turbo && o.feature != Feature::Wild);
         let min = if ui.turbo { 0.25 } else { 0.7 };
         let mut ends = super::spin::land(&mut ui.reels, &[STRIP; REELS], &[0; REELS], now + Duration::from_secs_f32(min), ui.turbo);
-        if slow {
-            for (i, reel) in ui.reels.iter_mut().enumerate().skip(3) {
-                if let Some((st, from, to, dur)) = reel.land {
-                    let extra = Duration::from_millis(500 * (i as u64 - 2));
-                    reel.land = Some((st + extra, from - speed * extra.as_secs_f32(), to - speed * extra.as_secs_f32(), dur));
+        if let Some(from) = tease {
+            for (i, reel) in ui.reels.iter_mut().enumerate().skip(from) {
+                if let Some((st, from_pos, to, dur)) = reel.land {
+                    let extra = Duration::from_millis(500 * (i - from + 1) as u64);
+                    reel.land = Some((st + extra, from_pos - speed * extra.as_secs_f32(), to - speed * extra.as_secs_f32(), dur));
                     ends[i] += extra;
                 }
             }
         }
+        ui.tease = tease;
+        let slow = tease.is_some();
         let landed = ends.iter().max().copied().unwrap_or(now) + Duration::from_secs_f32(super::spin::land_secs(ui.turbo) * 0.45);
         let show = RmShow::new(round.clone(), o, landed, turbo);
         ui.stopped_at = Some(landed);
         let stop = rmshow::band(machine, "stop").unwrap_or(Cue::ReelStop);
         let scatter = rmshow::band(machine, "scatter");
-        let mut seen = 0;
         for (i, e) in ends.iter().enumerate() {
             let at = e.saturating_duration_since(now).as_secs_f32();
             self.poker.casino.sound_in(at, stop, (i as f32 - 2.0) * 0.3, 0.7);
@@ -406,8 +412,8 @@ impl PyrApp {
             {
                 self.poker.casino.sound_in(at, c, (i as f32 - 2.0) * 0.3, 0.8);
             }
-            seen += here;
-            if seen >= 2 && i == 2 && slow
+            if slow
+                && Some(i + 1) == tease
                 && let Some(c) = rmshow::band(machine, "tease")
             {
                 self.poker.casino.sound_in(at + 0.1, c, 0.0, 0.7);
@@ -507,6 +513,7 @@ impl PyrApp {
         ui.waiting = Some(now);
         // (A Remastered machine's feature spin: its banner, from the spin's start.)
         ui.banner = (remastered && spins && feature == Feature::Wild).then_some((now, feature));
+        ui.tease = None;
         ui.showing = None;
         ui.mini = None;
         ui.all_in = None;
@@ -902,6 +909,12 @@ impl PyrApp {
             let base = pos.floor() as i32;
             let frac = pos - pos.floor();
             let blurred = reel.blurred(now);
+            // Teasing (Remastered): a reel still to land, lit while it takes its time.
+            if r.remastered && r.tease.is_some_and(|t| i >= t) && !reel.landed(now) {
+                let pulse = 0.5 + 0.5 * (time * 7.0).sin();
+                radial(&clip, rr_.center(), cell * 1.7, th.accent.gamma_multiply(0.3 + 0.2 * pulse), Color32::TRANSPARENT);
+                p.rect_stroke(rr_.expand(2.0), theme::r(8), Stroke::new(2.5f32, mix(th.accent, col::GOLD2, 0.4).gamma_multiply(0.6 + 0.4 * pulse)), StrokeKind::Outside);
+            }
             // A Wild spin's middle reel: alight while it spins.
             if wild_spin && i == reelrow::WILD_REEL {
                 radial(&clip, rr_.center(), cell * 1.6, th.accent.gamma_multiply(0.35 + 0.15 * (time * 5.0).sin()), Color32::TRANSPARENT);

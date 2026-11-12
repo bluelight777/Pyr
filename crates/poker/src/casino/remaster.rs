@@ -182,15 +182,15 @@ use Family::*;
 /// The twelve, in Reel Row's order. The points and prices are 0.13.28's.
 pub const MACHINES: [Machine; 12] = [
     machine(Hot, "Hot Wilds", "Hot Spin", 267, 200, 753, 10_000).wilds(1_217, 1_217).scatters(2_500, 3_069).chance(22_268),
-    machine(Hold, "Pearl Hold & Win", "Buy Hold & Win", 300, 200, 3_650, 50_000).coins(12_085, 600, 4_077, 1_200).scatters(2_500, 3_053),
+    machine(Hold, "Pearl Hold & Win", "Buy Hold & Win", 300, 200, 3_650, 50_000).coins(12_110, 600, 4_077, 1_200).scatters(2_500, 3_053),
     machine(Tumble, "Cosmic Tumbles", "Bomb Spin", 209, 189, 175, 500_000).bombs(1_430, &COSMIC_BOMBS, &COSMIC_START).scatters(2_473, 2_904),
     machine(Tumble, "Candy Tumbles", "Bomb Spin", 222, 189, 169, 5_000).bombs(1_430, &SUGAR_BOMBS, &SUGAR_START).scatters(2_471, 2_903),
-    machine(Hold, "Nugget Hold & Win", "Buy Hold & Win", 304, 200, 3_585, 0).coins(12_123, 600, 4_077, 1_200).scatters(2_500, 3_054),
+    machine(Hold, "Nugget Hold & Win", "Buy Hold & Win", 304, 200, 3_585, 0).coins(12_113, 600, 4_077, 1_200).scatters(2_500, 3_054),
     machine(Tumble, "Neon Tumbles", "Bomb Spin", 223, 189, 169, 20_000).bombs(1_430, &NEON_BOMBS, &NEON_START).scatters(2_470, 2_902),
-    machine(Hold, "Scarab Hold & Win", "Buy Hold & Win", 300, 200, 3_650, 50_000).coins(12_106, 600, 4_077, 1_200).scatters(2_500, 3_053),
+    machine(Hold, "Scarab Hold & Win", "Buy Hold & Win", 300, 200, 3_650, 50_000).coins(12_111, 600, 4_077, 1_200).scatters(2_500, 3_053),
     machine(Frozen, "Frozen Wilds", "Frozen Spin", 387, 200, 563, 7_500).wilds(2_027, 2_584).scatters(2_500, 3_054).chance(22_392),
     machine(Tumble, "Bubbling Tumbles", "Bomb Spin", 223, 189, 170, 10_000).bombs(1_430, &MOONLIT_BOMBS, &MOONLIT_START).scatters(2_474, 2_906),
-    machine(Hold, "Hoard Hold & Win", "Buy Hold & Win", 308, 200, 3_587, 0).coins(12_085, 600, 4_077, 1_200).scatters(2_500, 3_054),
+    machine(Hold, "Hoard Hold & Win", "Buy Hold & Win", 308, 200, 3_587, 0).coins(12_072, 600, 4_077, 1_200).scatters(2_500, 3_054),
     machine(Espresso, "Espresso Shots", "Double Shot", 234, 200, 1_597, 5_000).wilds(1_804, 1_948).scatters(2_500, 3_077).chance(22_156),
     machine(Spotlight, "Spotlight Wilds", "Encore Spin", 227, 200, 511, 25_000).wilds(2_234, 2_431).scatters(2_500, 3_053).chance(22_352),
 ];

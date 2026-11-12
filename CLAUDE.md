@@ -34,3 +34,12 @@ Starting again from nothing: clone `https://github.com/bluelight777/Pyr.git`, or
 `REBUILD.md`: what 0.13.1 to 0.13.28 did, what's rebuilt and checked against the real 0.13.28,
 and the ground rules (talk to 0.13.28 as it did; voice and screen sharing identical to 0.13.28;
 the echo test before anything that changes the echo canceller ships).
+
+## Building and testing here
+
+- Build the app and the server each by itself (`cargo build -p pyr`, `cargo build -p
+  pyr-server`), always the same way: built together, Cargo picks the dependencies' features
+  differently and rebuilds most of them (twenty minutes on this machine, and gigabytes).
+- Disk is tight: delete films and captures once they're looked at; never sweep /tmp.
+- A Pyr window on a casino game page draws all the time (most of a core, here): park test
+  apps on a text channel when they're not being filmed.
