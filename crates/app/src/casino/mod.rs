@@ -108,19 +108,19 @@ fn next_chip(chip: u64, range: (u64, u64), step: i32) -> u64 {
     rack[at.clamp(0, rack.len() as i32 - 1) as usize]
 }
 
-/// A win shown big over the table (0.13.28's big win): its amount counts up through the levels
-/// it reaches (Big, Mega, Epic, Legendary, Mythic), each landing on its plaque with a hit and a
-/// burst of coins; a click jumps to the total, another carries on.
+/// A win shown big over the table (0.13.28's big win, `bigwin`): its amount counts up through
+/// the levels it reaches (Big, Mega, Epic, Legendary, Mythic; a jackpot ends on the crown), each
+/// landing on its plaque with a hit and a fountain of coins; a click jumps to the total, another
+/// carries on.
 pub struct Celebration {
     pub amount: u64,
     pub since: Instant,
-    /// Pyr Sevens' Phoenix Jackpot: its own title over the levels.
-    pub jackpot: bool,
     /// The count's moments (see `bigwin::Plan`), and when a click jumped to the total.
     pub plan: bigwin::Plan,
     pub skipped: Option<Instant>,
-    /// The levels whose sound has played.
-    pub sounded: u8,
+    /// At a slot (its sounds are the slots'), and how far into it its sounds have played.
+    pub slot: bool,
+    pub heard: f32,
 }
 
 /// A round's result called out big over its table (the size a stream's viewers can read):
@@ -307,10 +307,9 @@ impl CasinoUi {
         if !jackpot && m < bigwin::LEVELS[0].from_x100 {
             return;
         }
-        let plan = bigwin::Plan::new(m);
-        self.celebration = Some(Celebration { amount: paid, since: Instant::now() + Duration::from_secs_f32(delay), jackpot, plan, skipped: None, sounded: 0 });
-        let start = bigwin::sound("c_winbig").unwrap_or(Cue::WinBig);
-        self.sound_in(delay, if jackpot { Cue::Jackpot } else { start }, 0.0, 0.9);
+        let plan = bigwin::Plan::new(m, jackpot);
+        let slot = matches!(self.game, Some(Game::Slots | Game::Dragon | Game::Reels));
+        self.celebration = Some(Celebration { amount: paid, since: Instant::now() + Duration::from_secs_f32(delay), plan, skipped: None, slot, heard: -1.0 });
     }
 }
 
@@ -619,7 +618,8 @@ impl PyrApp {
         }
     }
 
-    /// Plays any sounds whose time has come.
+    /// Plays any sounds whose time has come (no more than six at once: a frame that comes very
+    /// late doesn't pile everything it missed on top of each other; a jackpot's landing is four).
     pub fn casino_sounds(&mut self) {
         let now = Instant::now();
         let due: Vec<_> = self.poker.casino.sounds.iter().filter(|s| s.0 <= now).cloned().collect();
@@ -627,7 +627,7 @@ impl PyrApp {
         if self.poker.casino.mute {
             return;
         }
-        for (_, cue, pan, vol) in due.into_iter().take(4) {
+        for (_, cue, pan, vol) in due.into_iter().take(6) {
             self.engine.play_poker(cue, pan, vol);
         }
     }
@@ -1005,6 +1005,7 @@ impl PyrApp {
 
     /// A big win over the table: its name, the chips counting up, coins falling.
     fn celebration(&mut self, ui: &mut egui::Ui, area: Rect) {
+        bigwin::warm(ui.ctx(), area);
         let Some(cel) = &self.poker.casino.celebration else { return };
         let now = Instant::now();
         if now < cel.since {
@@ -1023,24 +1024,27 @@ impl PyrApp {
             return;
         }
         let cel = self.poker.casino.celebration.as_ref().unwrap();
-        // Each level's hit as it lands (once).
-        let level = cel.plan.level_at(t, cel.skipped.map(|k| (k - cel.since).as_secs_f32()));
-        let mut sounds = Vec::new();
-        if level > 0 && cel.sounded & (1 << level) == 0 {
-            sounds.push(level);
+        // Its sounds, each as its moment comes (a click that jumps to the total stops the ticks
+        // and brings the landing's). A frame that comes late plays the latest tick only, and
+        // every hit.
+        let mut due: Vec<(f32, Cue, f32, bool)> = cel.plan.sounds(cel.skipped.map(|k| (k - cel.since).as_secs_f32()), cel.slot).into_iter().filter(|s| s.0 > cel.heard && s.0 <= t).collect();
+        if let Some(last_tick) = due.iter().rposition(|s| s.3) {
+            let mut i = 0;
+            due.retain(|s| {
+                i += 1;
+                !s.3 || i - 1 == last_tick
+            });
         }
         let p = ui.painter().clone();
         let time = ui.ctx().input(|i| i.time) as f32;
         bigwin::draw(&p, ui.ctx(), area, cel, t, time);
-        for l in sounds {
-            self.poker.casino.celebration.as_mut().unwrap().sounded |= 1 << l;
-            let cue = bigwin::sound("c_tierup").unwrap_or(Cue::WinBig);
-            self.poker.casino.sound_in(0.0, cue, 0.0, 0.9);
-            if l as usize == bigwin::LEVELS.len() - 1
-                && let Some(boom) = bigwin::sound("c_boom")
-            {
-                for k in 0..5 {
-                    self.poker.casino.sound_in(0.35 + k as f32 * 0.55, boom, (k as f32 - 2.0) * 0.4, 0.6);
+        self.poker.casino.celebration.as_mut().unwrap().heard = t;
+        if !self.poker.casino.mute {
+            for (_, cue, vol, tick) in due {
+                if tick {
+                    self.engine.play_poker_tick(cue, 0.0, vol);
+                } else {
+                    self.engine.play_poker(cue, 0.0, vol);
                 }
             }
         }

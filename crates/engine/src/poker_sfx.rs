@@ -118,6 +118,9 @@ pub enum Cue {
     Bucket,
     /// One of the Reel Row machines' own sounds (`bands::BANDS`, 0.13.28's files).
     Band(u16),
+    /// One of those, played this many hundredths of a semitone higher (faster; lower when
+    /// negative), as 0.13.28's big wins play theirs.
+    BandUp(u16, i16),
 }
 
 /// A small, fast noise (the same every time, so a sound is the same every time).
@@ -204,6 +207,9 @@ pub fn render_mono(c: Cue) -> Vec<f32> {
     if let Cue::Band(i) = c {
         return crate::bands::render(i, 0.0).chunks(2).map(|x| (x[0] + x[1]) * 0.5).collect();
     }
+    if let Cue::BandUp(i, up) = c {
+        return crate::bands::render_up(i, up, 0.0).chunks(2).map(|x| (x[0] + x[1]) * 0.5).collect();
+    }
     let len = match c {
         Cue::Deal | Cue::Flip | Cue::Check | Cue::Hurry | Cue::Tick => ms(220.0),
         Cue::TimeBank => ms(700.0),
@@ -227,7 +233,7 @@ pub fn render_mono(c: Cue) -> Vec<f32> {
         Cue::AllIn | Cue::Pot => ms(900.0),
         Cue::Win => ms(1300.0),
         // (Played from its file, above.)
-        Cue::Band(_) => 0,
+        Cue::Band(_) | Cue::BandUp(..) => 0,
     };
     let mut o = vec![0.0f32; len];
     match c {
@@ -461,7 +467,7 @@ pub fn render_mono(c: Cue) -> Vec<f32> {
             bell(&mut o, ms(230.0), 659.25, 450.0, 0.15);
             bell(&mut o, ms(380.0), 440.0, 420.0, 0.15);
         }
-        Cue::Band(_) => {}
+        Cue::Band(_) | Cue::BandUp(..) => {}
     }
     // Never past full scale.
     let peak = o.iter().fold(0.0f32, |m, x| m.max(x.abs()));
@@ -477,6 +483,9 @@ pub fn render_mono(c: Cue) -> Vec<f32> {
 pub fn render(c: Cue, pan: f32) -> Vec<f32> {
     if let Cue::Band(i) = c {
         return crate::bands::render(i, pan);
+    }
+    if let Cue::BandUp(i, up) = c {
+        return crate::bands::render_up(i, up, pan);
     }
     let pan = pan.clamp(-1.0, 1.0);
     let (l, r) = (((1.0 - pan) * 0.5).sqrt(), ((1.0 + pan) * 0.5).sqrt());

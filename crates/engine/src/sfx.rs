@@ -298,9 +298,12 @@ fn run(rx: mpsc::Receiver<Msg>) {
                     if !same {
                         out = OutputDevice::open(device.as_deref()).ok().map(|d| (d, device.clone()));
                     }
-                    // The same sound twice at once just sounds louder; skip the copy.
-                    if playing.len() < 6 {
-                        let (pcm, chime) = stereo(clip, &skin);
+                    // The same chime twice at once just sounds louder; skip the copy. A game's
+                    // sounds overlap by the dozen (a big win's count ticks fifty times a second
+                    // under its tier-ups and slams: 0.13.28 played them all).
+                    let (pcm, chime) = stereo(clip, &skin);
+                    let chimes = playing.iter().filter(|p| p.3).count();
+                    if (chime && chimes < 6) || (!chime && playing.len() - chimes < 48) {
                         playing.push((pcm, 0, volume.clamp(0.0, 2.0), chime));
                     }
                 }

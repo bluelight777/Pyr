@@ -2318,6 +2318,16 @@ impl Engine {
         }
     }
 
+    /// A small sound that comes many times a second (a big win's count ticking): played as
+    /// `play_poker`, but in a call, whose mixer keeps six sounds at once and lets the oldest go,
+    /// left out while four are playing, so it never pushes out one that matters.
+    pub fn play_poker_tick(&self, cue: poker_sfx::Cue, pan: f32, volume: f32) {
+        let busy = self.shared.call.lock().as_ref().and_then(|c| c.audio.as_ref()).is_some_and(|a| a.mixer.lock().effects_count() >= 4);
+        if !busy {
+            self.play_poker(cue, pan, volume);
+        }
+    }
+
     pub fn play_sound(&self, sound: sfx::Sound) {
         self.shared.play(sound);
     }

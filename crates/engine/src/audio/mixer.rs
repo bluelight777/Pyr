@@ -209,6 +209,11 @@ impl Mixer {
         !self.effects.is_empty()
     }
 
+    /// How many soundboard sounds are playing.
+    pub fn effects_count(&self) -> usize {
+        self.effects.len()
+    }
+
     /// Mix 10 ms into `out` (480 stereo frames, interleaved L/R).
     pub fn mix(&mut self, out: &mut [f32], now: Instant) {
         out[..960].fill(0.0);

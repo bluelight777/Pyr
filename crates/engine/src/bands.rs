@@ -217,9 +217,45 @@ pub fn render(i: u16, pan: f32) -> Vec<f32> {
     pcm.chunks(2).flat_map(|x| [x[0] * l, x.get(1).copied().unwrap_or(x[0]) * r]).collect()
 }
 
+/// A sound `cents` hundredths of a semitone higher (played faster, so shorter; lower and
+/// longer when negative), 48 kHz stereo, placed `pan`.
+pub fn render_up(i: u16, cents: i16, pan: f32) -> Vec<f32> {
+    let s = render(i, pan);
+    if cents == 0 {
+        return s;
+    }
+    let speed = 2f64.powf(cents as f64 / 1200.0);
+    let frames = s.len() / 2;
+    let n = (frames as f64 / speed) as usize;
+    let mut out = Vec::with_capacity(n * 2);
+    for k in 0..n {
+        let x = k as f64 * speed;
+        let j = x as usize;
+        let f = (x - j as f64) as f32;
+        let j1 = (j + 1).min(frames - 1);
+        for ch in 0..2 {
+            out.push(s[j * 2 + ch] * (1.0 - f) + s[j1 * 2 + ch] * f);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A sound raised a whole tone is that much shorter, and as loud.
+    #[test]
+    fn a_sound_raised_is_shorter() {
+        let i = id("s_all_tierup").unwrap();
+        let (a, b) = (render(i, 0.0), render_up(i, 200, 0.0));
+        let ratio = a.len() as f64 / b.len() as f64;
+        assert!((ratio - 2f64.powf(2.0 / 12.0)).abs() < 0.001, "{ratio}");
+        let peak = |s: &[f32]| s.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        assert!((peak(&a) - peak(&b)).abs() < 0.05);
+        assert_eq!(render_up(i, 0, 0.0), a);
+        assert!(render_up(i, -200, 0.0).len() > a.len());
+    }
 
     /// Every band decodes, isn't silent and doesn't clip; each machine has its whole band.
     #[test]
