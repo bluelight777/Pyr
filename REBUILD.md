@@ -322,7 +322,27 @@ How (decided while starting it):
       reels, gathered again whenever something new lands: 0.13.28's, seen in two rounds of ten)
       tuned on forty-million-round samples. A
       free spin lands at Turbo's pace (as 0.13.28's do), and its tumbles show at the player's.
-- [ ] Big wins: Big, Mega, Epic, Legendary, Mythic with fireworks (0.13.2/4)
+- [x] Big wins: Big, Mega, Epic, Legendary, Mythic with fireworks (0.13.2/4). Measured on
+      0.13.28's own rounds, chosen: a test server with a fixed house seed (a scratch build, kept
+      out of the repository) let its app play rounds whose seeds were searched for in advance:
+      Pyr Sevens at 247.65, 250.10, 252.15 and 316.50 times, Ember Dragon's Grand at 1,078 and
+      1,079 and Minis at 20.20 and 21.20, Dice at 22 and 26.75, filmed and their sound recorded,
+      then the same rounds on the rebuild side by side. Big from 10 times, Mega 25, Epic 50,
+      Legendary 250 (0.13.28 went in between 248.55 and 250.10), Mythic 1,000. The count's
+      length (3.65 s for one level, 2.3 more each, 11 at most; every jackpot's 11), its curve,
+      the beat at each level, the plaques and their colours, the rays, the fountain of coins at
+      each hit, the ring, the flash; Mythic's crown with the rays and its words turning through
+      the colours, sparks, fireworks and lightning; a jackpot ends on the crown, "JACKPOT!",
+      whatever it reached; the total held 2.5 s (Big) to 4.5 s (the crown). Its sounds,
+      0.13.28's files at its pitches (found in its recordings by matching the waveforms): the
+      tier-up a whole tone higher at each level, a slam with it from Legendary on, ticks fifty a
+      second rising half a semitone at a time to an octave, the landing's slam two semitones
+      under the level's; the slots' sounds at a slot, the casino's elsewhere; as loud as 0.13.28's
+      at the same settings. Fixed on the way: a game's sounds were limited to six at once (a big
+      win's hits were turned away under its ticks); in a call a tick waits while the call's
+      mixer has four sounds going (the mixer itself unchanged). Unverified: the ticks' loudness
+      at a real PC's frame rate (this machine draws the debug build at about twelve frames a
+      second, and a late frame plays its latest tick only).
 - [x] Bets to 100,000 on blackjack, baccarat, keno, slots (0.13.2/4/6); Pyr Sevens' Phoenix
       Jackpot in proportion (0.13.6); new players 100,000 (0.13.6). Every limit asked of
       0.13.28's server and answered the same, word for word, by the rebuilt one: blackjack,
