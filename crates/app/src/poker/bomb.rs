@@ -33,6 +33,7 @@ const CARD_GLOW: Color32 = Color32::from_rgb(0x34, 0x12, 0x08);
 const CARD_EDGE: Color32 = Color32::from_rgb(0xb8, 0x4a, 0x24);
 const KICKER: Color32 = Color32::from_rgb(0xff, 0xa8, 0x6a);
 const ON_GOLD: Color32 = Color32::from_rgb(0x2a, 0x10, 0x04);
+const PLAY_INK: Color32 = Color32::from_rgb(0x4a, 0x1a, 0x06);
 /// The bang, then the warning stays.
 const BOOM_S: f32 = 2.6;
 /// The winner's moment after the last hand: the crown win (0.13.4), timed off films of 0.13.28's
@@ -345,7 +346,12 @@ impl PyrApp {
                         let at = pos2(x + 120.0 + 38.0 * k as f32, c);
                         let e = v.entrants.get(k);
                         p.circle_filled(at, 15.0, if e.is_some() { col::EMBER } else { Color32::from_white_alpha(14) });
-                        p.circle_stroke(at, 15.0, Stroke::new(1.5f32, if e.is_some() { col::GOLD2 } else { Color32::from_white_alpha(50) }));
+                        if e.is_some() {
+                            // (0.13.28's gold ring: 14.8 to 16.65 out, matched side by side.)
+                            p.circle_stroke(at, 14.8, Stroke::new(1.85f32, col::GOLD2));
+                        } else {
+                            p.circle_stroke(at, 15.0, Stroke::new(1.5f32, Color32::from_white_alpha(50)));
+                        }
                         if let Some(e) = e {
                             match e.bot {
                                 Some(level) => super::table::bot_face(&p, at, 14.0, &e.name, level),
@@ -384,7 +390,8 @@ impl PyrApp {
                         let fill = if !can { Color32::from_white_alpha(14) } else if resp.hovered() { col::GOLD2 } else { col::GOLD };
                         p.rect_filled(b, theme::r(12), fill);
                         let ink = if can { ON_GOLD } else { col::MUTED };
-                        p.text(b.center() - vec2(0.0, 8.0), Align2::CENTER_CENTER, "PLAY", theme::bold_font(10.5), ink);
+                        // ("PLAY" a lighter brown than the amount, as 0.13.28's.)
+                        p.text(b.center() - vec2(0.0, 8.0), Align2::CENTER_CENTER, "PLAY", theme::bold_font(10.5), if can { PLAY_INK } else { col::MUTED });
                         p.text(b.center() + vec2(0.0, 8.0), Align2::CENTER_CENTER, chips_text(*buy_in), theme::bold_font(17.0), ink);
                         let tip = if can { format!("{} chips to play; win up to {}", chips_text(*buy_in), chips_text(*buy_in * 1000)) } else { format!("You need {} chips", chips_text(*buy_in)) };
                         if resp.on_hover_text(tip).clicked() && can {

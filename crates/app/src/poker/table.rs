@@ -691,6 +691,12 @@ impl PyrApp {
             p.rect_filled(tag, theme::r(8), col.gamma_multiply(fade.max(0.6)));
             p.text(tag.center(), Align2::CENTER_CENTER, label, theme::bold_font(9.5), Color32::WHITE);
         }
+        // Bounty Poker: the price on their head, on a pill at the plate's foot (0.13.6).
+        if let Some(tv) = v.tourney.and_then(|tid| s.poker.tourney.get(&tid)).filter(|tv| tv.rules.bounty.is_some())
+            && let Some(e) = tv.entrants.iter().find(|e| e.uid == seat.player && e.place.is_none())
+        {
+            super::bounty::bounty_pill(&p, plate.center_bottom(), e.bounty, 1.0, 1.0);
+        }
         // Their bet in front of them.
         if seat.bet > 0 {
             let b = lay.toward(i, 0.36) + vec2(side * 0.0, 0.0);

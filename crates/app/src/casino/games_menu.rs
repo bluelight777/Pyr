@@ -84,6 +84,10 @@ struct Entry {
     opens: Opens,
 }
 
+/// The pictures' corners (0.13.28's: 8).
+const THUMB_R: u8 = 8;
+/// Bounty Poker's line has no picture: its crosshair is drawn.
+const BOUNTY_ART: &str = "drawn:bounty";
 const PANEL_W: f32 = 1198.0;
 const PAD: f32 = 26.0;
 /// A line's height, and from one to the next.
@@ -115,7 +119,12 @@ fn columns(s: &ServerView) -> [(Chapter, Vec<Entry>); 4] {
         }
     }
     let poker = |name: &'static str, art: &str| Entry { name, art: art.into(), focus: 0.5, sub: "With friends and bots", pill: None, opens: Opens::Chapter(Chapter::Poker) };
-    let poker = vec![poker("Cash tables", "table-poker"), poker("Bomb Pot", "tile-bombpot"), poker("Tournaments", "tile-tourney")];
+    let mut poker = vec![poker("Cash tables", "table-poker"), poker("Bomb Pot", "tile-bombpot")];
+    if s.has(pyr_proto::control::BOUNTY_POKER_FEATURE) {
+        // (Its picture is drawn: see `games_line`.)
+        poker.push(Entry { name: "Bounty Poker", art: BOUNTY_ART.into(), focus: 0.5, sub: "With friends and bots", pill: Some(("NEW", NEW)), opens: Opens::Chapter(Chapter::Poker) });
+    }
+    poker.push(Entry { name: "Tournaments", art: "tile-tourney".into(), focus: 0.5, sub: "With friends and bots", pill: None, opens: Opens::Chapter(Chapter::Poker) });
     let tables = vec![entry(Game::Blackjack, "tile-blackjack", None), entry(Game::Roulette, "tile-roulette", None), entry(Game::Baccarat, "tile-baccarat", None), entry(Game::Craps, "tile-craps", None)];
     let mut originals = Vec::new();
     if s.has(pyr_proto::control::PLINKO_FEATURE) {
@@ -277,10 +286,13 @@ impl PyrApp {
         }
         let thumb = Rect::from_min_size(pos2(r.left() + 6.0, r.top() + 4.0), vec2(56.0, LINE));
         // (A little dimmed, full bright when pointed at.)
-        if !pics::cover_rounded(p, ui.ctx(), &e.art, thumb, 7.0, (e.focus, 0.5), 112, Color32::from_gray(if hot { 255 } else { 215 })) {
-            p.rect_filled(thumb, CornerRadius::same(7), Color32::from_rgb(0x1e, 0x1a, 0x28));
+        if e.art == BOUNTY_ART {
+            crate::poker::bounty::thumb(p, thumb, THUMB_R, ui.ctx().input(|i| i.time) as f32);
+            ui.ctx().request_repaint();
+        } else if !pics::cover_rounded(p, ui.ctx(), &e.art, thumb, THUMB_R as f32, (e.focus, 0.5), 112, Color32::from_gray(if hot { 255 } else { 215 })) {
+            p.rect_filled(thumb, CornerRadius::same(THUMB_R), Color32::from_rgb(0x1e, 0x1a, 0x28));
         }
-        p.rect_stroke(thumb, CornerRadius::same(7), Stroke::new(1.0f32, if hot { color } else { Color32::from_white_alpha(30) }), StrokeKind::Inside);
+        p.rect_stroke(thumb, CornerRadius::same(THUMB_R), Stroke::new(1.0f32, if hot { color } else { Color32::from_white_alpha(30) }), StrokeKind::Inside);
         // Its badge at the right, 6 in; its name up to 4 before that (or 10 from the end), cut
         // short with "…" if it has to be.
         let x = r.left() + 72.0;

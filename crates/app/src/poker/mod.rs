@@ -3,6 +3,7 @@
 //! sends what the player does.
 
 pub mod bomb;
+pub mod bounty;
 pub mod cards;
 pub mod cms;
 pub mod felt;
@@ -573,8 +574,14 @@ impl PyrApp {
         }
         self.tables_list(ui, s);
         ui.add_space(26.0);
-        section_head(ui, "Sit & go", "Five seats, one fuse", None);
+        // (Bounty Poker where the server has it, 0.13.6.)
+        let bounty = s.has(pyr_proto::control::BOUNTY_POKER_FEATURE);
+        section_head(ui, "Sit & go", if bounty { "Five seats and one fuse, or six seats and a price on every head" } else { "Five seats, one fuse" }, None);
         self.time_bomb_card(ui, s);
+        if bounty {
+            ui.add_space(16.0);
+            self.bounty_card(ui, s);
+        }
         ui.add_space(26.0);
         let manage = s.can(pyr_proto::control::perm::MANAGE_SERVER);
         if section_head(ui, "Tournaments", "Pyr Friday Night every week, and this server's own", manage.then_some("New tournament")) {

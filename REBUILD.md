@@ -451,10 +451,27 @@ How (decided while starting it):
       in all; its art read before it's wanted. The wheel, fuse, bang and "ALL IN EVERY HAND"
       unchanged from 0.13.0 (side by side, by eye). The Games menu's jumps land where 0.13.28's
       do (6 higher); a debug build no longer panics at a tournament's table (buy-in sums
-      saturate). Not matched: a filled seat's gold ring is 0.25 px thinner outside; 0.13.28's
-      finale starts 4.4 to 5.1 s after the last hand (the rebuild: 4.4); its sounds not
-      compared (0.13.0's). Measurements in `rebuild/measured/bombpot.md`.
-- [ ] Bounty Poker (0.13.6)
+      saturate). A filled seat's gold ring and "PLAY" (a lighter brown than the amount) as
+      0.13.28's (found side by side with Bounty Poker's). Not matched: 0.13.28's finale starts
+      4.4 to 5.1 s after the last hand (the rebuild: 4.4); its sounds not compared (0.13.0's).
+      Measurements in `rebuild/measured/bombpot.md`.
+- [x] Bounty Poker (0.13.6). The server as 0.13.28's (`bounty`, `bounty_poker`): six seats,
+      1,500 chips, two-minute levels, 45 s for people then bots; half of each buy-in on that
+      head; a knockout pays half on the spot and puts half on the winner's head (who won the
+      last pot the busted player was in; split if it was split); the winner takes their own
+      with the prize; the pool the buy-ins less the bounties less 3% (2,910 for 1,000, the house
+      staking the bots), to the top two; 0.13.28's refusals word for word. Checked over three
+      watched games on 0.13.28's server (bounties, prizes, places) and a test of twelve games
+      (every bounty paid to someone). One change: calling one off names Bounty Poker (0.13.28
+      says a Bomb Pot). The card under the Bomb Pot card as 0.13.28's, side by side to the pixel
+      (the description at 50%, the turning crosshair drawn as 0.13.28 draws it, its wide glow
+      that darkens the Bomb card's corner, waiting with red seat rings, playing with the price
+      on my head), "Five seats and one fuse, or six seats and a price on every head", the Games
+      menu line with NEW and its drawn picture (the menu's pictures' corners now 8, as
+      0.13.28's). At the table, the price on each head on a pill at the plate's foot (0.13.28's
+      at its table's size, drawn at 0.84 it matches 0.13.28's at 1280 wide; the table's sizes
+      are the scaling item's). Not seen on 0.13.28: a person's knockout (paid on the spot, its
+      card says), a split pot's knockout. Measurements in `rebuild/measured/bounty.md`.
 - [x] High stakes and higher-than-high tables, 500K/1M/5M chips (0.13.6): three tables of each,
       0.13.28's names and bets (Hearth 10–1,000, High Limit 500–100,000, Crown Room 10,000 to
       10,000,000; Monte Carlo, Riviera High Rollers to 500,000, Grand Salle; Salon Privé, Black
