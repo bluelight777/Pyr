@@ -204,7 +204,13 @@ Version in brackets: where 0.13.x first had it.
       cancellation and automatic gain (... headphones ...)", the reports' own words; the
       rebuild: 3 of 133, all in the first 2 s (the canceller starting; both have them), none
       said. Speakers: the same either way (the PC's sound goes to the canceller; echo
-      through -99 dB). Still to do: Pyr's own echo test on Blue's PC, A/B against 0.13.28.
+      through -99 dB). Still to do: Pyr's own echo test on Blue's PC, A/B against 0.13.28. **The released rebuild
+      does as 0.13.28 does** (Blue's ground rule for voice): the PC's own sound always goes to the
+      echo canceller, and the fix is held back behind `PYR_FIX=pcgate` (`pyr_proto::ab::fix`, off
+      unless named) until the echo test on Blue's PC and he asks for it. Checked with `aec_eval`
+      (voice isolation, headphones, others talking, a game at -10 dBFS, your voice at -40 dBFS):
+      as it starts, 7 of 133 turned down and 0.13.28's report word for word, as 0.13.28; with
+      `PYR_FIX=pcgate`, 3 of 133 and no report.
 
 ### Library and programs
 - [ ] Plugins with art: up to 100 MB and 5,000 files, any Rust (0.13.6)

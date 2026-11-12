@@ -505,12 +505,15 @@ impl CapturePipeline {
         self.pc_waiting = true;
     }
 
-    /// Whether the PC's own sound can come back into the microphone: the speakers can be heard
-    /// there, or that isn't known yet (`mic_echo`). With headphones it can't, and the echo
-    /// canceller isn't handed it (bug reports 657 to 675: it turned the voice down instead).
-    /// `PYR_AB=pcgate`: handed over always, as 0.13.2 to 0.13.28 did.
+    /// Whether the echo canceller is handed the PC's own sound: always, as 0.13.2 to 0.13.28 did
+    /// (voice works as 0.13.28's does). The fix for bug reports 657 to 675 is held back
+    /// (`PYR_FIX=pcgate`, see `pyr_proto::ab::fix`): with it, only while the PC's own sound can
+    /// come back into the microphone, the speakers being heard there or that not known yet
+    /// (`mic_echo`). With headphones it can't, and handing it over anyway turned the voice down
+    /// for the others while a game played. It waits for Pyr's own echo test on a real PC, A/B
+    /// against 0.13.28. (`PYR_AB=pcgate`: always, whatever `PYR_FIX` says.)
     fn pc_sound_can_come_back(&self) -> bool {
-        pyr_proto::ab::old("pcgate") || self.echo.as_ref().is_none_or(|e| !matches!(e.state(), super::mic_echo::Echo::None))
+        !pyr_proto::ab::fix("pcgate") || pyr_proto::ab::old("pcgate") || self.echo.as_ref().is_none_or(|e| !matches!(e.state(), super::mic_echo::Echo::None))
     }
 
     fn gate(&mut self, now: Instant, ctl: &Controls) -> bool {

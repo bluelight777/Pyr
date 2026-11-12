@@ -16,6 +16,10 @@
 //! loud as your voice, before 0.12.0).
 //!
 //! `PYR_CC=cubic` puts back QUIC's CUBIC congestion control instead of BBR (see [`bbr`]).
+//!
+//! `PYR_FIX` (a comma list) is the other way round: fixes that are in the program but held back,
+//! off unless named there, until they've been tried on a real PC against the release before
+//! (see [`fix`]).
 
 use std::sync::OnceLock;
 
@@ -26,6 +30,20 @@ pub fn old(part: &str) -> bool {
         .get_or_init(|| crate::env_var("AB").map(|v| v.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect()).unwrap_or_default())
         .iter()
         .any(|p| p == part || p == "all")
+}
+
+/// Whether the held-back fix `part` is turned on (`PYR_FIX`, a comma list; unset, none is).
+///
+/// Voice and screen sharing work exactly as 0.13.28 did (Blue: "please make it identical to what
+/// it is now"); a fix that would change what they do is kept in behind this until it's been
+/// tried on a real PC, A/B against 0.13.28, and Blue asks for it. The fixes: `pcgate` (with
+/// headphones, the PC's own sound isn't handed to the echo canceller: bug reports 657 to 675).
+pub fn fix(part: &str) -> bool {
+    static PARTS: OnceLock<Vec<String>> = OnceLock::new();
+    PARTS
+        .get_or_init(|| crate::env_var("FIX").map(|v| v.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect()).unwrap_or_default())
+        .iter()
+        .any(|p| p == part)
 }
 
 /// QUIC connections use BBR congestion control (0.8.0), unless `PYR_CC=cubic`.
