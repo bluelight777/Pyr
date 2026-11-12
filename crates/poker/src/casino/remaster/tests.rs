@@ -1022,3 +1022,255 @@ fn remaster_chance_count() {
     }
     println!("decided 1 in {:.2}; first screen 1 in {:.2}, after the tumbles 1 in {:.2}", 1e6 / m.chance_ppm as f64, n as f64 / first as f64, n as f64 / last as f64);
 }
+
+/// Bomb Spins on the machine as given, `n` rounds, its bombs counted (each worth 1): what a
+/// round pays on average is `a + b × μ` times the bet, μ being what a Bomb Spins bomb's worth on
+/// average (a spin's win times 1 till a bomb's been on a win, then times the bombs' total).
+/// Returns (a, b, spins a round).
+pub(crate) fn bomb_spins_parts(m: &Machine, n: u64, seed: u64) -> (f64, f64, f64) {
+    let threads = std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2).min(8) as u64;
+    let c = Machine { free_bombs: &[(1, 1)], ..*m };
+    let point = m.point as f64 / 10_000.0;
+    let all: Vec<(f64, f64, u64)> = std::thread::scope(|sc| {
+        let hs: Vec<_> = (0..threads)
+            .map(|t| {
+                let c = &c;
+                sc.spawn(move || {
+                    let mut d = Quick::new(seed.wrapping_mul(1_000_003).wrapping_add(t));
+                    let (mut a, mut b, mut spins) = (0.0, 0.0, 0u64);
+                    let rounds = n / threads + if t < n % threads { 1 } else { 0 };
+                    for _ in 0..rounds {
+                        for f in bomb_spins(c, 100_000, &mut d) {
+                            let p: u64 = f.steps.iter().flat_map(|s| s.wins.iter()).map(|w| w.points).sum();
+                            spins += 1;
+                            if f.mult == 0 {
+                                a += p as f64 * point;
+                            } else {
+                                b += (p * f.mult as u64) as f64 * point;
+                            }
+                        }
+                    }
+                    (a, b, spins)
+                })
+            })
+            .collect();
+        hs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let (a, b, spins) = all.iter().fold((0.0, 0.0, 0u64), |x, y| (x.0 + y.0, x.1 + y.1, x.2 + y.2));
+    (a / n as f64, b / n as f64, spins as f64 / n as f64)
+}
+
+/// Super Hold & Win on the machine as given, `n` rounds: what a round pays on average, times
+/// the bet (the Grand at 1,000×; on a progressive machine, its pool apart), and how often the
+/// Grand comes.
+pub(crate) fn super_hold_x(m: &Machine, machine: u8, n: u64, seed: u64) -> (f64, f64) {
+    let threads = std::thread::available_parallelism().map(|x| x.get()).unwrap_or(2).min(8) as u64;
+    let grand = if reelrow::progressive(machine) { 0.0 } else { GRAND_X as f64 };
+    let all: Vec<(f64, u64)> = std::thread::scope(|sc| {
+        let hs: Vec<_> = (0..threads)
+            .map(|t| {
+                sc.spawn(move || {
+                    let mut d = Quick::new(seed.wrapping_mul(1_000_003).wrapping_add(t));
+                    let (mut x, mut grands) = (0.0, 0u64);
+                    let rounds = n / threads + if t < n % threads { 1 } else { 0 };
+                    for _ in 0..rounds {
+                        let r = hold(m, false, Play::Builds, 100, &mut d);
+                        x += r.held as f64 / 100.0;
+                        if r.grand {
+                            x += grand;
+                            grands += 1;
+                        }
+                    }
+                    (x, grands)
+                })
+            })
+            .collect();
+        hs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let (x, g) = all.iter().fold((0.0, 0u64), |a, b| (a.0 + b.0, a.1 + b.1));
+    (x / n as f64, g as f64 / n as f64)
+}
+
+/// The rounds that build: Bomb Spins' bombs' average worth for 99% (`a + b μ` at the price), and
+/// Super Hold & Win's Payers and Hoarders scaled for 99% (`PYR_RR_ROUNDS`, `PYR_RR_MACHINE`;
+/// `cargo test -p pyr-poker remaster_builds -- --ignored --nocapture`).
+#[test]
+#[ignore]
+fn remaster_builds() {
+    let n = rounds();
+    let only: Option<u8> = std::env::var("PYR_RR_MACHINE").ok().and_then(|v| v.parse().ok());
+    for machine in 0..12u8 {
+        if only.is_some_and(|o| o != machine) {
+            continue;
+        }
+        let mut m = MACHINES[machine as usize];
+        // (To try other reels: PYR_RR_FREE="pay per thousand,bomb weight".)
+        if let Some((pay, bomb)) = std::env::var("PYR_RR_FREE").ok().and_then(|v| v.split_once(',').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)))) {
+            m.free_pay = pay;
+            m.free_bomb = bomb;
+        }
+        let want = 0.99 * m.builds_price as f64 / 100.0;
+        match m.family {
+            Tumble => {
+                let (a, b, spins) = bomb_spins_parts(&m, n, 500 + machine as u64 + seed_from_env());
+                println!(
+                    "{machine} {}: Bomb Spins at pay {} and bomb weight {}: a {a:.4}, b {b:.4}, {spins:.2} spins a round; a bomb's worth {:.4} now ({:.3}%), {:.4} for 99%",
+                    reels::machine_name(machine),
+                    m.free_pay,
+                    m.free_bomb,
+                    mean(m.free_bombs),
+                    (a + b * mean(m.free_bombs)) / want * 99.0,
+                    (want - a) / b
+                );
+            }
+            Hold => {
+                let at = |k: f64| {
+                    let t = Machine { payer: (m.payer as f64 * k).round() as u32, hoarder: (m.hoarder as f64 * k).round() as u32, ..m };
+                    super_hold_x(&t, machine, n, 600 + machine as u64 + seed_from_env())
+                };
+                let (now, g) = at(1.0);
+                println!("{machine} {}: Super Hold & Win now {:.3}% (the Grand 1 in {:.0})", reels::machine_name(machine), now / want * 99.0, 1.0 / g.max(1e-12));
+                let (mut lo, mut hi) = (0.2f64, 4.0f64);
+                for _ in 0..14 {
+                    let mid = (lo * hi).sqrt();
+                    if at(mid).0 < want { lo = mid } else { hi = mid }
+                }
+                let k = (lo * hi).sqrt();
+                println!("   for 99%: Payers and Hoarders ×{k:.4}: payer {}, hoarder {} ({:.3}%)", (m.payer as f64 * k).round(), (m.hoarder as f64 * k).round(), at(k).0 / want * 99.0);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Bomb Spins and Super Hold & Win play by their rules, the same again from the seed and
+/// written and read back.
+#[test]
+fn the_rounds_that_build_play_by_the_rules() {
+    let mut s = Stream::new([9; 32]);
+    let (mut more_seen, mut payers, mut hoarders, mut built) = (0, 0, 0, 0);
+    for i in 0..1_600u32 {
+        let machine = [2u8, 3, 5, 8, 1, 4, 6, 9][(i % 8) as usize];
+        let m = &MACHINES[machine as usize];
+        let bet = [20, 100, 1_000][(i / 8 % 3) as usize];
+        let seed = s.next_u32();
+        let mut st = Stream::new(crate::fair::seed_from(seed as u64));
+        let o = play_with(machine, bet, Feature::Builds, false, &mut st, 123_456_789);
+        assert!(check(machine, bet, Feature::Builds, false).is_ok());
+        assert_eq!(o.cost, feature::cost(bet, m.builds_price));
+        let mut st = Stream::new(crate::fair::seed_from(seed as u64));
+        assert_eq!(play_with(machine, bet, Feature::Builds, false, &mut st, 123_456_789), o);
+        let json = serde_json::to_string(&o).unwrap();
+        assert_eq!(serde_json::from_str::<Outcome>(&json).unwrap(), o);
+        assert!(o.bonus.is_none() && o.steps.is_empty());
+        let cap = if m.cap_x > 0 { bet * m.cap_x } else { crate::casino::MAX_PAYOUT };
+        let parts = o.hold_paid + o.grand + o.free_paid();
+        assert_eq!(o.paid, parts.min(cap));
+        if m.family == Tumble {
+            // Ten spins, and five more for every three scatters.
+            let more = o.free.iter().filter(|f| f.more).count();
+            assert_eq!(o.free.len(), (FREE_SPINS + MORE_SPINS * more).min(MAX_FREE_SPINS));
+            more_seen += more;
+            let mut mult = 0u32;
+            for f in &o.free {
+                let last = f.steps.last().unwrap();
+                let points: u64 = f.steps.iter().flat_map(|s| s.wins.iter()).map(|w| w.points).sum();
+                // Bombs on a win add to the multiplier; it stays.
+                if points > 0 {
+                    mult += (0..REELS).flat_map(|r| (0..ROWS).map(move |row| (r, row))).filter(|&(r, row)| last.grid[r][row] == BOMB).map(|(r, row)| last.values[r][row]).sum::<u32>();
+                }
+                assert_eq!(f.mult, mult);
+                assert_eq!(f.paid, share(bet, points * m.point * mult.max(1) as u64, 10_000));
+                assert_eq!(f.more, count(&last.grid, SCATTER) >= 3);
+                for st in &f.steps {
+                    assert_eq!(st.wins, ways(&st.grid, &st.x, bet, m.point));
+                }
+            }
+            built += (mult > 0) as u32;
+        } else {
+            // Six coins to start; then as Hold & Win, with Payers and Hoarders.
+            assert_eq!(o.hold[0].grid.iter().flatten().filter(|&&c| c == COIN).count(), HOLD_START);
+            for w in o.hold.windows(2) {
+                let (a, b) = (&w[0], &w[1]);
+                let new = |r: usize, row: usize| a.grid[r][row] == BLANK && b.grid[r][row] != BLANK;
+                let any_new = (0..REELS).any(|r| (0..ROWS).any(|row| new(r, row)));
+                let paid: u32 = (0..REELS).flat_map(|r| (0..ROWS).map(move |row| (r, row))).filter(|&(r, row)| new(r, row) && b.grid[r][row] == PAYER).map(|(r, row)| b.values[r][row]).sum();
+                let coins: u32 = (0..REELS).flat_map(|r| (0..ROWS).map(move |row| (r, row))).filter(|&(r, row)| matches!(b.grid[r][row], COIN | PAYER)).map(|(r, row)| b.values[r][row]).sum();
+                for r in 0..REELS {
+                    for row in 0..ROWS {
+                        match b.grid[r][row] {
+                            // A coin held: what it was, and every new Payer's worth.
+                            COIN if !new(r, row) => assert_eq!(b.values[r][row], a.values[r][row] + paid),
+                            COLLECTOR if new(r, row) => assert_eq!(b.values[r][row], coins),
+                            COLLECTOR => assert_eq!(b.values[r][row], a.values[r][row]),
+                            HOARDER => {
+                                let before = if new(r, row) { 0 } else { a.values[r][row] };
+                                assert_eq!(b.values[r][row], before + if any_new { coins } else { 0 });
+                                hoarders += new(r, row) as u32;
+                            }
+                            PAYER => payers += new(r, row) as u32,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            let last = o.hold.last().unwrap();
+            assert_eq!(o.hold_paid, share(bet, last.values.iter().flatten().map(|&v| v as u64).sum(), 100));
+        }
+    }
+    // (Seen in these rounds: five spins more, multipliers built, Payers and Hoarders.)
+    assert!(more_seen > 0 && built > 0 && payers > 0 && hoarders > 0, "{more_seen} {built} {payers} {hoarders}");
+}
+
+/// The rounds that build pay back 99%: Bomb Spins worked out with its bombs counted (a round's
+/// worth is `a + b μ`, see [`bomb_spins_parts`]), Super Hold & Win played. (A sample of a few
+/// hundred thousand rounds pins Bomb Spins to about ±1.5%: `remaster_builds` at millions of rounds
+/// is how they were set, within ±0.2%.)
+#[test]
+fn the_rounds_that_build_pay_back_99_percent() {
+    for machine in [2u8, 3, 5, 8, 1, 4, 6, 9] {
+        let m = &MACHINES[machine as usize];
+        let price = m.builds_price as f64 / 100.0;
+        let rtp = if m.family == Tumble {
+            let (a, b, _) = bomb_spins_parts(m, 300_000, 40 + machine as u64);
+            (a + b * mean(m.free_bombs)) / price
+        } else {
+            super_hold_x(m, machine, 3_000_000, 50 + machine as u64).0 / price
+        };
+        // (A few hundred thousand rounds of Bomb Spins pin it to about ±1.5%; three million
+        // of Super Hold & Win to about ±0.2%.)
+        let band = if m.family == Tumble { 0.965..1.015 } else { 0.982..0.998 };
+        assert!(band.contains(&rtp), "{} ({machine}): {:.3}%", reels::machine_name(machine), rtp * 100.0);
+    }
+}
+
+/// Super Hold & Win's Payers and Hoarders scaled for 99%, from two long samples (a round's
+/// worth varies a lot: a million rounds pin it only to about ±0.35%). `PYR_RR_ROUNDS` a sample;
+/// `cargo test -p pyr-poker remaster_super_hold -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn remaster_super_hold() {
+    let n = rounds();
+    let only: Option<u8> = std::env::var("PYR_RR_MACHINE").ok().and_then(|v| v.parse().ok());
+    for machine in [1u8, 4, 6, 9] {
+        if only.is_some_and(|o| o != machine) {
+            continue;
+        }
+        let m = MACHINES[machine as usize];
+        let want = 0.99 * m.builds_price as f64 / 100.0;
+        let at = |k: f64| {
+            let t = Machine { payer: (m.payer as f64 * k).round() as u32, hoarder: (m.hoarder as f64 * k).round() as u32, ..m };
+            super_hold_x(&t, machine, n, 700 + machine as u64 + seed_from_env()).0 / want * 0.99
+        };
+        let (a, b) = (at(1.0), at(1.04));
+        let k = 1.0 + 0.04 * (0.99 - a) / (b - a);
+        println!(
+            "{machine} {}: now {:.3}%, at ×1.04 {:.3}%; for 99% ×{k:.4}: payer {}, hoarder {}",
+            reels::machine_name(machine),
+            a * 100.0,
+            b * 100.0,
+            (m.payer as f64 * k).round(),
+            (m.hoarder as f64 * k).round()
+        );
+    }
+}

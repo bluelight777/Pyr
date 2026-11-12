@@ -837,7 +837,7 @@ fn symbol(p: &egui::Painter, ctx: &egui::Context, pr: &PayRow, r: Rect) {
 /// A slot's Play Feature, in a few words with what each costs.
 fn features_line(kind: super::stake::SlotKind) -> String {
     use pyr_poker::casino::feature::Feature;
-    let parts: Vec<String> = [Feature::Chance, Feature::Wild, Feature::Bonus, Feature::Super, Feature::Mystery, Feature::AllIn]
+    let parts: Vec<String> = [Feature::Chance, Feature::Wild, Feature::Builds, Feature::Bonus, Feature::Super, Feature::Mystery, Feature::AllIn]
         .into_iter()
         .filter_map(|f| {
             let h = kind.price(f)?;

@@ -137,6 +137,8 @@ pub fn price(f: Feature) -> u64 {
         Feature::Super => 18_000,
         Feature::Mystery => 9_600,
         Feature::AllIn => 5_000,
+        // (Remastered's alone: refused before it gets here.)
+        Feature::Builds => 100,
     }
 }
 
@@ -718,6 +720,8 @@ pub fn play_with(machine: u8, bet: u64, feature: Feature, s: &mut Stream, pool: 
             o.paid = if o.lucky { bet * ALL_IN_X } else { 0 };
             return o;
         }
+        // (Remastered's alone: the house refuses it here.)
+        Feature::Builds => return o,
     }
     o.paid = (o.wins.iter().map(|w| w.pay).sum::<u64>() + o.bonus.as_ref().map(|b| b.paid()).unwrap_or(0)).min(super::MAX_PAYOUT);
     o

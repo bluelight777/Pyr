@@ -12,7 +12,7 @@ use pyr_engine::bands;
 use pyr_engine::poker_sfx::Cue;
 use pyr_poker::casino::reelrow;
 use pyr_poker::casino::reels::{BLANK, REELS, ROWS, SCATTER, WILD, share};
-use pyr_poker::casino::remaster::{self as rm, BOMB, COIN, COLLECTOR, Family, MAJOR, MINI, MINOR};
+use pyr_poker::casino::remaster::{self as rm, BOMB, COIN, COLLECTOR, Family, HOARDER, MAJOR, MINI, MINOR, PAYER};
 use pyr_poker::net::RoundView;
 
 use super::reel_themes::{Theme, theme};
@@ -49,14 +49,32 @@ pub enum Ev {
     Hold(usize),
     HoldEnd,
     Grand,
+    /// Bomb Spins (a free spin's show): its bombs on a win adding to the multiplier; its win
+    /// times the multiplier; three scatters, five spins more.
+    FreeAdd,
+    FreeWin,
+    FreeMore,
     /// The reels' part over (the bonus, or the round's end, next).
     Done,
+}
+
+/// Bomb Spins, a free spin's: the multiplier before it and after it, its chain's win before
+/// the multiplier and what it paid (chips), and whether it brought five spins more.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FreeCtx {
+    pub before: u32,
+    pub after: u32,
+    pub base: u64,
+    pub paid: u64,
+    pub more: bool,
 }
 
 /// A round being shown.
 pub struct RmShow {
     pub round: RoundView,
     pub o: rm::Outcome,
+    /// A free spin of Bomb Spins (its own show, one after another).
+    pub free: Option<FreeCtx>,
     /// When the spin's screen comes to rest; the moments after it (seconds from then).
     pub landed: Instant,
     pub events: Vec<(f32, Ev)>,
@@ -67,8 +85,14 @@ pub struct RmShow {
 
 impl RmShow {
     pub fn new(round: RoundView, o: rm::Outcome, landed: Instant, turbo: bool) -> RmShow {
-        let events = timeline(&o, turbo);
-        RmShow { round, o, landed, events, turbo, over: false }
+        let events = timeline(&o, turbo, None);
+        RmShow { round, o, free: None, landed, events, turbo, over: false }
+    }
+
+    /// A free spin of Bomb Spins (`o`: its screens and what it paid).
+    pub fn new_free(round: RoundView, o: rm::Outcome, landed: Instant, turbo: bool, free: FreeCtx) -> RmShow {
+        let events = timeline(&o, turbo, Some(&free));
+        RmShow { round, o, free: Some(free), landed, events, turbo, over: false }
     }
 
     /// The moment showing at `now` (its place in the list, how long it's been showing and how
@@ -101,6 +125,12 @@ impl RmShow {
         let o = &self.o;
         let Some((i, ..)) = self.at(now) else { return 0 };
         let past = &self.events[..=i];
+        if let Some(f) = &self.free {
+            if past.iter().any(|e| matches!(e.1, Ev::FreeWin | Ev::Done)) {
+                return f.paid;
+            }
+            return past.iter().filter_map(|e| if let Ev::Lit(k) = e.1 { Some(o.steps[k].wins.iter().map(|w| w.pay).sum::<u64>()) } else { None }).sum();
+        }
         if past.iter().any(|e| e.1 == Ev::Done) {
             return o.paid.saturating_sub(o.bonus.as_ref().map(|b| b.paid()).unwrap_or(0));
         }
@@ -135,15 +165,26 @@ fn filled(fam: Family, s: &rm::Step) -> Vec<usize> {
 }
 
 /// Collectors newly landed on Hold & Win's board `k`.
-fn gathering(o: &rm::Outcome, k: usize) -> Vec<usize> {
+fn gathering(o: &rm::Outcome, k: usize) -> Vec<(usize, usize)> {
     if k == 0 {
         return Vec::new();
     }
-    (0..ROWS).filter(|&row| o.hold[k].grid[REELS - 1][row] == COLLECTOR && o.hold[k - 1].grid[REELS - 1][row] != COLLECTOR).collect()
+    let (a, b) = (&o.hold[k - 1], &o.hold[k]);
+    let new = (0..REELS * ROWS).map(|c| (c / ROWS, c % ROWS)).any(|(r, row)| a.grid[r][row] == BLANK && b.grid[r][row] != BLANK);
+    (0..REELS * ROWS)
+        .map(|c| (c / ROWS, c % ROWS))
+        // (A collector, as it lands; a Hoarder, as it lands and on every respin bringing
+        // something new; a Payer paying the coins, as it lands.)
+        .filter(|&(r, row)| match b.grid[r][row] {
+            COLLECTOR | PAYER => a.grid[r][row] == BLANK,
+            HOARDER => new,
+            _ => false,
+        })
+        .collect()
 }
 
 /// The round's moments, from the landing (Turbo: twice as quick).
-pub fn timeline(o: &rm::Outcome, turbo: bool) -> Vec<(f32, Ev)> {
+pub fn timeline(o: &rm::Outcome, turbo: bool, free: Option<&FreeCtx>) -> Vec<(f32, Ev)> {
     let k = if turbo { 0.5 } else { 1.0 };
     let fam = rm::family(o.machine);
     let mut out = Vec::new();
@@ -178,7 +219,17 @@ pub fn timeline(o: &rm::Outcome, turbo: bool) -> Vec<(f32, Ev)> {
                 push(Ev::Drop(i), 0.32);
             }
         }
-        if fam == Family::Tumble && o.mult > 1 {
+        if let Some(f) = free {
+            if f.after > f.before {
+                push(Ev::FreeAdd, 1.3);
+            }
+            if f.paid > 0 && f.after >= 2 {
+                push(Ev::FreeWin, 1.3);
+            }
+            if f.more {
+                push(Ev::FreeMore, 1.4);
+            }
+        } else if fam == Family::Tumble && o.mult > 1 {
             let bombs = o.steps.last().map(|s| s.grid.iter().flatten().filter(|&&c| c == BOMB).count()).unwrap_or(0);
             push(Ev::Bombs, 0.5 + 0.28 * bombs as f32);
             push(Ev::Multiply, 1.1);
@@ -245,6 +296,14 @@ pub fn sounds(show: &RmShow) -> Vec<(f32, Cue, f32)> {
                 }
             }
             Ev::Multiply => add(t, "multiply", 0.9),
+            Ev::FreeAdd => {
+                let n = o.steps.last().map(|s| s.grid.iter().flatten().filter(|&&c| c == BOMB).count()).unwrap_or(0);
+                for j in 0..n {
+                    add(t + 0.25 + j as f32 * 0.28 * if show.turbo { 0.5 } else { 1.0 }, "bombadd", 0.7);
+                }
+            }
+            Ev::FreeWin => add(t, "multiply", 0.9),
+            Ev::FreeMore => add(t, "trigger", 0.8),
             Ev::Collect => add(t, "collect", 0.85),
             Ev::HoldSplash => add(t, "trigger", 0.9),
             Ev::Hold(k) if k > 0 => {
@@ -309,6 +368,27 @@ fn sheet(p: &egui::Painter, ctx: &egui::Context, name: &str, cols: usize, rows: 
     pics::part(p, ctx, name, uv, r, (r.width() * cols as f32 * 1.4) as u32 + 1, tint)
 }
 
+/// A machine's round that builds' picture (Play Feature): three of its bombs, or its coin
+/// glowing with a Payer's ring.
+pub fn builds_icon(p: &egui::Painter, ctx: &egui::Context, machine: u8, r: Rect, tint: Color32) {
+    let s = r.width() * 0.62;
+    match rm::family(machine) {
+        Family::Tumble => {
+            for (dx, dy) in [(-0.2f32, 0.12f32), (0.2, 0.12), (0.0, -0.1)] {
+                let c = r.center() + vec2(dx * r.width(), dy * r.height());
+                sheet(p, ctx, "rr-bombs", 2, 2, bomb_cell(machine), Rect::from_center_size(c, vec2(s, s)), tint);
+            }
+        }
+        _ => {
+            radial(p, r.center(), r.width() * 0.5, Color32::from_rgba_unmultiplied(0xb0, 0x60, 0xff, 90), Color32::TRANSPARENT);
+            for (dx, dy) in [(-0.18f32, 0.1f32), (0.18, 0.1), (0.0, -0.1)] {
+                let c = r.center() + vec2(dx * r.width(), dy * r.height());
+                sheet(p, ctx, "rr-coins", 4, 2, coin_cells(machine).0, Rect::from_center_size(c, vec2(s, s)), tint);
+            }
+        }
+    }
+}
+
 /// A machine's feature spin's picture (Play Feature): its bomb, its coin, its wild.
 pub fn feature_icon(p: &egui::Painter, ctx: &egui::Context, machine: u8, r: Rect, tint: Color32) {
     match rm::family(machine) {
@@ -328,6 +408,15 @@ fn label(p: &egui::Painter, at: Pos2, text: &str, font: egui::FontId, color: Col
 }
 
 /// What a coin says: the jackpot's name, or its worth in chips.
+/// A word on a ribbon of `color` (a jackpot coin's name, a Payer's, a Hoarder's).
+fn ribbon(p: &egui::Painter, at: Pos2, text: &str, size: f32, color: Color32, a: f32) {
+    let g = p.layout_no_wrap(text.to_string(), theme::bold_font(size), faded(Color32::WHITE, a));
+    let r = Rect::from_center_size(at, g.size() + vec2(size * 0.9, size * 0.12));
+    p.rect_filled(r, theme::r(3), faded(color, a));
+    p.rect_stroke(r, theme::r(3), Stroke::new(1.0f32, faded(Color32::from_white_alpha(120), a)), StrokeKind::Inside);
+    p.galley(r.center() - g.size() / 2.0, g, faded(Color32::WHITE, a));
+}
+
 /// A coin's worth on its dark pill.
 fn worth_pill(p: &egui::Painter, at: Pos2, text: &str, size: f32, color: Color32, a: f32) {
     let g = p.layout_no_wrap(text.to_string(), theme::bold_font(size), faded(color, a));
@@ -369,13 +458,40 @@ pub fn draw_cell(p: &egui::Painter, ctx: &egui::Context, machine: u8, sym: u8, v
             if !sheet(p, ctx, "rr-coins", 4, 2, coin_cells(machine).0, r.expand(r.width() * 0.02), tint) {
                 return;
             }
-            let jackpot = value >= MINI;
+            let jackpot = matches!(value, MINI | MINOR | MAJOR);
             let t = coin_text(value, bet);
-            let size = if jackpot { num * 0.62 } else { num * if t.len() > 5 { 0.66 } else { 0.8 } };
-            worth_pill(p, pos2(r.center().x, r.bottom() - r.height() * 0.17), &t, size, if jackpot { col::GOLD2 } else { Color32::WHITE }, a);
+            if jackpot {
+                ribbon(p, pos2(r.center().x, r.bottom() - r.height() * 0.17), &t, num * 0.6, Color32::from_rgb(0xa8, 0x14, 0x24), a);
+            } else {
+                let size = num * if t.len() > 5 { 0.66 } else { 0.8 };
+                worth_pill(p, pos2(r.center().x, r.bottom() - r.height() * 0.17), &t, size, Color32::WHITE, a);
+            }
         }
         COLLECTOR => {
             if sheet(p, ctx, "rr-coins", 4, 2, coin_cells(machine).1, r.shrink(r.width() * 0.02), tint) && value > 0 {
+                label(p, pos2(r.center().x, r.bottom() - r.height() * 0.16), &coin_text(value, bet), theme::bold_font(num * 0.8), faded(col::GOLD2, a));
+            }
+        }
+        // Super Hold & Win's: a Payer, the coin glowing purple with its ribbon; a Hoarder, the
+        // collector glowing gold with its.
+        PAYER => {
+            radial(p, r.center(), r.width() * 0.62, Color32::from_rgba_unmultiplied(0xb0, 0x5a, 0xff, (150.0 * a) as u8), Color32::TRANSPARENT);
+            if !sheet(p, ctx, "rr-coins", 4, 2, coin_cells(machine).0, r.expand(r.width() * 0.02), tint) {
+                return;
+            }
+            p.circle_stroke(r.center(), r.width() * 0.47, Stroke::new(2.5f32, faded(Color32::from_rgb(0xc0, 0x7a, 0xff), a)));
+            ribbon(p, pos2(r.center().x, r.top() + r.height() * 0.1), "PAYER", num * 0.5, Color32::from_rgb(0x8a, 0x3a, 0xe0), a);
+            if value > 0 {
+                worth_pill(p, pos2(r.center().x, r.bottom() - r.height() * 0.17), &coin_text(value, bet), num * 0.8, Color32::WHITE, a);
+            }
+        }
+        HOARDER => {
+            radial(p, r.center(), r.width() * 0.62, Color32::from_rgba_unmultiplied(0xff, 0xc0, 0x40, (140.0 * a) as u8), Color32::TRANSPARENT);
+            if !sheet(p, ctx, "rr-coins", 4, 2, coin_cells(machine).1, r.shrink(r.width() * 0.02), tint) {
+                return;
+            }
+            ribbon(p, pos2(r.center().x, r.top() + r.height() * 0.1), "HOARDER", num * 0.46, Color32::from_rgb(0xc0, 0x80, 0x10), a);
+            if value > 0 {
                 label(p, pos2(r.center().x, r.bottom() - r.height() * 0.16), &coin_text(value, bet), theme::bold_font(num * 0.8), faded(col::GOLD2, a));
             }
         }
@@ -819,6 +935,59 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
             reel_note(p, b, "ENCORE! A STEP TO THE LEFT", st.font, accent, (u * 4.0).min(1.0));
             return;
         }
+        Ev::FreeAdd | Ev::FreeWin | Ev::FreeMore if show.free.is_some() => {
+            let f = show.free.unwrap();
+            draw_cells(&clip, ctx, b, m, o.bet, s, 0, 0, &ys, accent, time);
+            let badge_at = pos2(b.reels.right() - b.cell * 0.15, b.reels.top() - b.cell * 0.28);
+            // (0.13.28's notes during Bomb Spins: a little higher and bigger than a win's tag.)
+            let fs = (b.cell * 0.147).clamp(12.0, 26.0);
+            let foot = pos2(b.reels.center().x, b.reels.bottom() - b.cell * 0.23);
+            let note = |text: &str, a: f32| {
+                let g = p.layout_no_wrap(text.to_string(), theme::display_font(st.font, (b.cell * 0.127).clamp(12.0, 26.0)), faded(col::GOLD2, a));
+                let r = Rect::from_center_size(foot, g.size() + vec2(32.0, 12.0));
+                p.rect_filled(r, theme::r((r.height() / 2.0) as u8), Color32::from_black_alpha((215.0 * a) as u8));
+                p.rect_stroke(r, theme::r((r.height() / 2.0) as u8), Stroke::new(1.0f32, faded(accent, 0.8 * a)), StrokeKind::Inside);
+                p.galley(r.center() - g.size() / 2.0, g, faded(col::GOLD2, a));
+            };
+            match ev {
+                Ev::FreeAdd => {
+                    // This spin's bombs flying up into the multiplier, which counts up.
+                    let per = 0.28 * if show.turbo { 0.5 } else { 1.0 };
+                    let mut sum = f.before;
+                    for (j, (r, row, v)) in bombs(s).iter().enumerate() {
+                        let t0 = 0.25 * if show.turbo { 0.5 } else { 1.0 } + j as f32 * per;
+                        let rect = b.cell_at(*r as f32, *row as f32);
+                        if since >= t0 + per {
+                            sum += v;
+                            continue;
+                        }
+                        if since >= t0 {
+                            let q = ((since - t0) / per).clamp(0.0, 1.0);
+                            let at = rect.center() + (badge_at - rect.center()) * ease_out(q);
+                            radial(p, rect.center(), b.cell * 0.6, faded(accent, 0.5 * (1.0 - q)), Color32::TRANSPARENT);
+                            label(p, at, &format!("{v}×"), theme::bold_font((b.cell * 0.2).clamp(12.0, 30.0)), Color32::WHITE);
+                        }
+                    }
+                    if sum >= 2 {
+                        mult_badge(p, ctx, b, m, sum.min(f.after), 1.0);
+                    }
+                    if since > 0.25 {
+                        note(&format!("MULTIPLIER ×{} AND BUILDING", f.after), ((since - 0.25) * 5.0).min(1.0));
+                    }
+                }
+                Ev::FreeWin => {
+                    mult_badge(p, ctx, b, m, f.after, (since / 0.35).min(1.0));
+                    win_tag(p, foot, &format!("{} × {} = {}", chips_text(f.base), f.after, chips_text(f.paid)), st.font, fs, accent);
+                }
+                _ => {
+                    if f.after >= 2 {
+                        mult_badge(p, ctx, b, m, f.after, 1.0);
+                    }
+                    note("3 SCATTERS: 5 MORE SPINS", (since * 5.0).min(1.0));
+                }
+            }
+            return;
+        }
         Ev::Bombs | Ev::Multiply => {
             draw_cells(&clip, ctx, b, m, o.bet, s, 0, 0, &ys, accent, time);
             let bs = bombs(s);
@@ -883,6 +1052,51 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
     if matches!(ev, Ev::Done) && o.mult > 1 {
         mult_badge(p, ctx, b, m, o.mult, 1.0);
     }
+    if let Some(f) = &show.free {
+        let x = if matches!(ev, Ev::Done) { f.after } else { f.before };
+        if x >= 2 {
+            mult_badge(p, ctx, b, m, x, 1.0);
+        }
+    }
+}
+
+/// Bomb Spins' multiplier up top while the reels spin between free spins.
+pub fn free_badge(p: &egui::Painter, ctx: &egui::Context, b: &Board, machine: u8, n: u32) {
+    if n >= 2 {
+        mult_badge(p, ctx, b, machine, n, 1.0);
+    }
+}
+
+/// Bomb Spins' count, over the reels' top left (0.13.28's: "SPIN 6 / 10").
+pub fn free_counter(p: &egui::Painter, b: &Board, index: usize, total: usize, font: &str, accent: Color32) {
+    let fs = (b.cell * 0.15).clamp(12.0, 24.0);
+    let g = p.layout_no_wrap(format!("SPIN {} / {}", index + 1, total), theme::display_font(font, fs), col::GOLD2);
+    let size = g.size() + vec2(fs * 1.4, fs * 0.5);
+    let r = Rect::from_min_size(pos2(b.reels.left(), b.reels.top() - b.cell * 0.36 - size.y / 2.0), size);
+    p.rect_filled(r, theme::r((r.height() / 2.0) as u8), Color32::from_black_alpha(225));
+    p.rect_stroke(r, theme::r((r.height() / 2.0) as u8), Stroke::new(1.8f32, accent), StrokeKind::Inside);
+    p.galley(r.center() - g.size() / 2.0, g, col::GOLD2);
+}
+
+/// Bomb Spins over: its tag in the middle of the reels (0.13.28's: "BOMB SPINS / 10 spins · ×6
+/// built · 142 chips").
+pub fn free_summary(p: &egui::Painter, b: &Board, spins: usize, built: u32, chips: u64, font: &str, accent: Color32, a: f32) {
+    if a <= 0.0 {
+        return;
+    }
+    // (Measured off 0.13.28's: the name in the machine's colour and lettering, the line in white
+    // under it, on a dark tag edged in the colour, between the first and second rows.)
+    let fs = (b.cell * 0.133).clamp(14.0, 30.0);
+    let tg = p.layout_no_wrap("BOMB SPINS".into(), theme::display_font(font, fs), faded(accent, a));
+    let line = format!("{spins} spins · ×{built} built · {} chips", chips_text(chips));
+    let lg = p.layout_no_wrap(line, theme::bold_font((b.cell * 0.062).clamp(9.5, 14.0)), faded(Color32::WHITE, a));
+    let w = tg.size().x.max(lg.size().x) + fs * 0.9;
+    let h = tg.size().y + lg.size().y + fs * 0.72;
+    let r = Rect::from_center_size(pos2(b.reels.center().x, b.reels.top() + b.cell), vec2(w, h));
+    p.rect_filled(r, theme::r((r.height() * 0.3) as u8), Color32::from_black_alpha((230.0 * a) as u8));
+    p.rect_stroke(r, theme::r((r.height() * 0.3) as u8), Stroke::new(2.0f32, faded(accent, a)), StrokeKind::Inside);
+    p.galley(pos2(r.center().x - tg.size().x / 2.0, r.top() + fs * 0.36), tg.clone(), accent);
+    p.galley(pos2(r.center().x - lg.size().x / 2.0, r.top() + fs * 0.36 + tg.size().y), lg, Color32::WHITE);
 }
 
 /// The jackpots' plaques across the top of the page while Hold & Win's board shows (0.13.28's
@@ -976,6 +1190,16 @@ fn draw_hold(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: 
             p.rect_stroke(cell, theme::r(8), Stroke::new(1.2f32, faded(accent, 0.42)), StrokeKind::Inside);
         }
     }
+    // A respin's moments once its places land: Payers paying every coin, then collectors and
+    // Hoarders gathering (Super Hold & Win; Hold & Win's collectors gather in the second part).
+    let is_hold_k = matches!(ev, Ev::Hold(_)) && k > 0;
+    let gatherers: Vec<(usize, usize)> = if is_hold_k { gathering(o, k).into_iter().filter(|&(r, row)| board.grid[r][row] != PAYER).collect() } else { Vec::new() };
+    let new_payers: Vec<(usize, usize)> = if is_hold_k { gathering(o, k).into_iter().filter(|&(r, row)| board.grid[r][row] == PAYER).collect() } else { Vec::new() };
+    let paid_now: u32 = new_payers.iter().map(|&(r, row)| board.values[r][row]).sum();
+    let phase = 0.35 * if show.turbo { 0.5 } else { 1.0 } / dur.max(0.01);
+    let pay_q = if new_payers.is_empty() { 1.0 } else { ((u - land_at) / phase).clamp(0.0, 1.0) };
+    let gat_from = if new_payers.is_empty() { land_at } else { land_at + phase };
+    let gat_q = if gatherers.is_empty() { 1.0 } else { ((u - gat_from) / phase).clamp(0.0, 1.0) };
     for c in 0..REELS * ROWS {
         let (r, row) = (c / ROWS, c % ROWS);
         let rect = b.cell_at(r as f32, row as f32);
@@ -996,29 +1220,57 @@ fn draw_hold(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: 
         let fresh = was_empty && landed;
         let pop = if fresh { ease_back(((u - land_at) / 0.15).clamp(0.0, 1.0)) } else { 1.0 };
         let rr = Rect::from_center_size(rect.center(), rect.size() * (0.6 + 0.4 * pop));
-        // A collector gathering: what it gathered shows once the coins have flown to it.
-        let gathering_now = matches!(ev, Ev::Hold(_)) && sym == COLLECTOR && fresh;
-        let val = if gathering_now && u < land_at + 0.35 { 0 } else { board.values[r][row] };
+        // What it shows: a coin, its worth before the Payers' till they've paid; a collector
+        // or a Hoarder gathering, what it had till the coins have flown to it.
+        let gathering_here = gatherers.contains(&(r, row));
+        let val = if sym == COIN && pay_q < 1.0 {
+            board.values[r][row].saturating_sub(paid_now)
+        } else if gathering_here && gat_q < 1.0 {
+            if was_empty { 0 } else { prev.map(|pv| pv.values[r][row]).unwrap_or(0) }
+        } else {
+            board.values[r][row]
+        };
         if fresh {
             radial(p, rect.center(), b.cell * 0.7, faded(col::GOLD, 0.45 * (1.0 - (u - land_at).max(0.0) * 2.0)), Color32::TRANSPARENT);
         }
+        if gathering_here && gat_q > 0.0 && gat_q < 1.0 {
+            radial(p, rect.center(), b.cell * 0.75, faded(col::GOLD, 0.5), Color32::TRANSPARENT);
+        }
         draw_cell(p, ctx, m, sym, val, o.bet, rr, 1.0, accent);
-        if gathering_now && u >= land_at {
-            let q = ((u - land_at) / 0.35).clamp(0.0, 1.0);
+    }
+    // The Payers' worth flying to every coin; the coins' worth flying to what gathers them.
+    let fly = theme::bold_font((b.cell * 0.12).clamp(10.0, 18.0));
+    if pay_q > 0.0 && pay_q < 1.0 {
+        for &(pr, prow) in &new_payers {
+            let from = b.cell_at(pr as f32, prow as f32).center();
             for c2 in 0..REELS * ROWS {
                 let (r2, row2) = (c2 / ROWS, c2 % ROWS);
-                if board.grid[r2][row2] != COIN || q >= 1.0 {
+                if board.grid[r2][row2] != COIN {
+                    continue;
+                }
+                let to = b.cell_at(r2 as f32, row2 as f32).center();
+                label(p, from + (to - from) * ease_out(pay_q), &format!("+{}", coin_text(board.values[pr][prow], o.bet)), fly.clone(), Color32::from_rgb(0xd8, 0xa8, 0xff));
+            }
+        }
+    }
+    if gat_q > 0.0 && gat_q < 1.0 {
+        for &(gr, grow) in &gatherers {
+            let to = b.cell_at(gr as f32, grow as f32).center();
+            for c2 in 0..REELS * ROWS {
+                let (r2, row2) = (c2 / ROWS, c2 % ROWS);
+                if !matches!(board.grid[r2][row2], COIN | PAYER) {
                     continue;
                 }
                 let from = b.cell_at(r2 as f32, row2 as f32).center();
-                label(p, from + (rect.center() - from) * ease_out(q), &coin_text(board.values[r2][row2], o.bet), theme::bold_font((b.cell * 0.12).clamp(10.0, 18.0)), col::GOLD2);
+                label(p, from + (to - from) * ease_out(gat_q), &coin_text(board.values[r2][row2], o.bet), fly.clone(), col::GOLD2);
             }
         }
     }
     // What it's come to so far.
     let total: u64 = board.values.iter().flatten().map(|&v| v as u64).sum();
     let shown = if landed { total } else { prev.map(|pv| pv.values.iter().flatten().map(|&v| v as u64).sum()).unwrap_or(0) };
-    let text = format!("HOLD & WIN {}", chips_text(share(o.bet, shown, 100)));
+    let name = if o.feature == pyr_poker::casino::feature::Feature::Builds { "SUPER HOLD & WIN" } else { "HOLD & WIN" };
+    let text = format!("{name} {}", chips_text(share(o.bet, shown, 100)));
     let g = p.layout_no_wrap(text, theme::display_font(st.font, fs), col::GOLD2);
     let pr = Rect::from_center_size(pos2(b.reels.center().x, b.reels.bottom() + b.cell * 0.19), g.size() + vec2(fs * 1.75, fs * 0.5));
     board_pill(p, pr, if ev == Ev::HoldEnd { faded(accent, 0.6 + 0.4 * (time * 6.0).sin().abs()) } else { accent });
@@ -1043,6 +1295,19 @@ fn grand_pays(o: &rm::Outcome) -> u64 {
 /// picture under turning rays, "HOLD & WIN", the machine's line for it, "click to start".
 pub fn splash(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, area: Rect, show: &RmShow, now: Instant, time: f32) {
     let Some((_, Ev::HoldSplash, since, dur)) = show.at(now) else { return };
+    let (title, line) = if show.o.feature == pyr_poker::casino::feature::Feature::Builds {
+        let (name, what) = super::stake::SlotKind::Rm(show.o.machine).describe(pyr_poker::casino::feature::Feature::Builds);
+        (name.to_uppercase(), what)
+    } else {
+        ("HOLD & WIN".to_string(), feature_words(show.o.machine).0)
+    };
+    splash_with(p, ctx, th, st, area, &title, &line, since, dur, time);
+}
+
+/// A feature's splash over the page: the machine's splash picture under turning rays, the
+/// feature's name in the machine's lettering, its line, "click to start".
+#[allow(clippy::too_many_arguments)]
+pub fn splash_with(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, area: Rect, title: &str, line: &str, since: f32, dur: f32, time: f32) {
     let r = area;
     let a = (since / 0.4).min(1.0) * (1.0 - ((since - dur + 0.4) / 0.4).clamp(0.0, 1.0));
     if a <= 0.0 {
@@ -1064,9 +1329,9 @@ pub fn splash(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, ar
         p.add(Shape::convex_polygon(pts, Color32::from_white_alpha((16.0 * a) as u8), Stroke::NONE));
     }
     let size = (r.height() * 0.118).clamp(32.0, 96.0);
-    glow_text(&p, title_c + vec2(0.0, size * 0.04), Align2::CENTER_CENTER, "HOLD & WIN", theme::display_font(st.font, size), faded(Color32::BLACK, 0.7 * a), Color32::TRANSPARENT);
-    glow_text(&p, title_c, Align2::CENTER_CENTER, "HOLD & WIN", theme::display_font(st.font, size), faded(col::GOLD2, a), faded(th.accent, 0.6 * a));
-    let line = feature_words(show.o.machine).0;
+    glow_text(&p, title_c + vec2(0.0, size * 0.04), Align2::CENTER_CENTER, title, theme::display_font(st.font, size), faded(Color32::BLACK, 0.7 * a), Color32::TRANSPARENT);
+    glow_text(&p, title_c, Align2::CENTER_CENTER, title, theme::display_font(st.font, size), faded(col::GOLD2, a), faded(th.accent, 0.6 * a));
+    let line = line.to_string();
     let fs = (r.height() * 0.0242).clamp(12.0, 18.0);
     let g = p.layout(line, theme::bold_font(fs), faded(Color32::WHITE, a), (r.width() - 120.0).min(fs * 45.0));
     let box_c = pos2(r.center().x, r.top() + r.height() * 0.323);
@@ -1162,6 +1427,10 @@ pub fn info_paragraphs(machine: u8) -> Vec<String> {
     out.push(format!("Ante, beside the bet: each spin a quarter more, and the bonus about {} times as likely.", if m.family == Family::Tumble { "1.5" } else { "1.7" }));
     let (_, what) = super::stake::SlotKind::Rm(machine).describe(pyr_poker::casino::feature::Feature::Wild);
     out.push(format!("Or buy the feature straight away with Play Feature: the {}, {}× the bet. {what}", m.special_name, times(m.special_price)));
+    if m.builds_price > 0 {
+        let (name, what) = super::stake::SlotKind::Rm(machine).describe(pyr_poker::casino::feature::Feature::Builds);
+        out.push(format!("{name}, from Play Feature at {}× the bet: {what}", times(m.builds_price)));
+    }
     if m.cap_x > 0 {
         out.push(format!("A round pays up to {}× the bet.", chips_text(m.cap_x)));
     }

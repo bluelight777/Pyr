@@ -47,6 +47,11 @@ use crate::fair::Stream;
 pub const BOMB: u8 = 9;
 pub const COIN: u8 = 10;
 pub const COLLECTOR: u8 = 11;
+/// Super Hold & Win's (0.13.6): a Payer adds its worth to every coin on the reels as it lands; a
+/// Hoarder gathers the coins' worth as it lands, and again on every respin that brings something
+/// new.
+pub const PAYER: u8 = 12;
+pub const HOARDER: u8 = 13;
 const KINDS: usize = 12;
 /// A cell's weights are out of this many.
 const OUT_OF: u32 = 100_000;
@@ -69,6 +74,10 @@ pub const ANTE_PRICE: u64 = 125;
 pub const CHANCE_PPM: u32 = reelrow::CHANCE_PPM;
 /// A Bomb Spin's bombs; a Frozen Spin's wilds.
 pub const BOMB_SPIN_BOMBS: usize = 3;
+/// Bomb Spins (0.13.6): ten free spins; three scatters, five more (to fifty in all).
+pub const FREE_SPINS: usize = 10;
+pub const MORE_SPINS: usize = 5;
+pub const MAX_FREE_SPINS: usize = 50;
 pub const FROZEN_SPIN_WILDS: usize = 2;
 /// The longest a round's tumbles or walks can go on (they end long before, all but never).
 const MAX_STEPS: usize = 100;
@@ -134,6 +143,21 @@ pub struct Machine {
     /// tumbling and Hold & Win machines (tuned round it); on the wild machines, whatever makes
     /// its 2× pay back 99% (each still about 1 spin in 45).
     chance_ppm: u32,
+    /// The round that builds (0.13.6): its price (hundredths of the bet, 0.13.28's); Bomb
+    /// Spins' reels' bomb weight and what their bombs are worth; Super Hold & Win's chances on
+    /// each empty place each respin of a Payer, a Hoarder and a collector (on any reel), and
+    /// what a Payer's worth (hundredths of the bet).
+    pub builds_price: u64,
+    free_pay: u32,
+    free_bomb: u32,
+    free_bombs: &'static [(u32, u32)],
+    payer: u32,
+    hoarder: u32,
+    any_collector: u32,
+    payers: &'static [(u32, u32)],
+    /// The pay symbols' weights, per thousand of Reel Row's (Bomb Spins' richer reels; 1,000
+    /// everywhere else).
+    pay_scale: u32,
     /// What a bomb landing by itself is worth and how often, and a Bomb Spin's three; what a
     /// coin is worth (hundredths of the bet) and how often; Hot Wilds' multipliers.
     bombs: &'static [(u32, u32)],
@@ -143,7 +167,7 @@ pub struct Machine {
 }
 
 const fn machine(family: Family, feature: &'static str, special_name: &'static str, point: u64, chance_price: u64, special_price: u64, cap_x: u64) -> Machine {
-    Machine { family, feature, special_name, point, chance_price, special_price, cap_x, wild: 2_500, later_wild: 2_500, scatter: 2_500, ante_scatter: 3_000, special: 0, collector: 0, hold_coin: 0, hold_collector: 0, chance_ppm: CHANCE_PPM, bombs: &[], start_bombs: &[], coins: &[], hot: &HOT_X }
+    Machine { family, feature, special_name, point, chance_price, special_price, cap_x, wild: 2_500, later_wild: 2_500, scatter: 2_500, ante_scatter: 3_000, special: 0, collector: 0, hold_coin: 0, hold_collector: 0, chance_ppm: CHANCE_PPM, builds_price: 0, free_pay: 1_000, free_bomb: 0, free_bombs: &[], payer: 0, hoarder: 0, any_collector: 0, payers: &[], pay_scale: 1_000, bombs: &[], start_bombs: &[], coins: &[], hot: &HOT_X }
 }
 
 impl Machine {
@@ -161,6 +185,21 @@ impl Machine {
         self.special = special;
         self.bombs = bombs;
         self.start_bombs = start_bombs;
+        self
+    }
+    const fn bomb_spins(mut self, price: u64, pay: u32, bomb: u32, bombs: &'static [(u32, u32)]) -> Machine {
+        self.builds_price = price;
+        self.free_pay = pay;
+        self.free_bomb = bomb;
+        self.free_bombs = bombs;
+        self
+    }
+    const fn super_hold(mut self, price: u64, payer: u32, hoarder: u32, collector: u32) -> Machine {
+        self.builds_price = price;
+        self.payer = payer;
+        self.hoarder = hoarder;
+        self.any_collector = collector;
+        self.payers = &PAYERS;
         self
     }
     const fn chance(mut self, ppm: u32) -> Machine {
@@ -182,15 +221,15 @@ use Family::*;
 /// The twelve, in Reel Row's order. The points and prices are 0.13.28's.
 pub const MACHINES: [Machine; 12] = [
     machine(Hot, "Hot Wilds", "Hot Spin", 267, 200, 753, 10_000).wilds(1_217, 1_217).scatters(2_500, 3_069).chance(22_268),
-    machine(Hold, "Pearl Hold & Win", "Buy Hold & Win", 300, 200, 3_650, 50_000).coins(12_110, 600, 4_077, 1_200).scatters(2_500, 3_053),
-    machine(Tumble, "Cosmic Tumbles", "Bomb Spin", 209, 189, 175, 500_000).bombs(1_430, &COSMIC_BOMBS, &COSMIC_START).scatters(2_473, 2_904),
-    machine(Tumble, "Candy Tumbles", "Bomb Spin", 222, 189, 169, 5_000).bombs(1_430, &SUGAR_BOMBS, &SUGAR_START).scatters(2_471, 2_903),
-    machine(Hold, "Nugget Hold & Win", "Buy Hold & Win", 304, 200, 3_585, 0).coins(12_113, 600, 4_077, 1_200).scatters(2_500, 3_054),
-    machine(Tumble, "Neon Tumbles", "Bomb Spin", 223, 189, 169, 20_000).bombs(1_430, &NEON_BOMBS, &NEON_START).scatters(2_470, 2_902),
-    machine(Hold, "Scarab Hold & Win", "Buy Hold & Win", 300, 200, 3_650, 50_000).coins(12_111, 600, 4_077, 1_200).scatters(2_500, 3_053),
+    machine(Hold, "Pearl Hold & Win", "Buy Hold & Win", 300, 200, 3_650, 50_000).coins(12_110, 600, 4_077, 1_200).scatters(2_500, 3_053).super_hold(6_670, 1_574, 295, 240),
+    machine(Tumble, "Cosmic Tumbles", "Bomb Spin", 209, 189, 175, 500_000).bombs(1_430, &COSMIC_BOMBS, &COSMIC_START).scatters(2_473, 2_904).bomb_spins(10_280, 1_150, 6_700, &COSMIC_FREE),
+    machine(Tumble, "Candy Tumbles", "Bomb Spin", 222, 189, 169, 5_000).bombs(1_430, &SUGAR_BOMBS, &SUGAR_START).scatters(2_471, 2_903).bomb_spins(9_780, 1_150, 6_700, &SUGAR_FREE),
+    machine(Hold, "Nugget Hold & Win", "Buy Hold & Win", 304, 200, 3_585, 0).coins(12_113, 600, 4_077, 1_200).scatters(2_500, 3_054).super_hold(6_270, 1_650, 309, 240),
+    machine(Tumble, "Neon Tumbles", "Bomb Spin", 223, 189, 169, 20_000).bombs(1_430, &NEON_BOMBS, &NEON_START).scatters(2_470, 2_902).bomb_spins(9_860, 1_150, 6_700, &NEON_FREE),
+    machine(Hold, "Scarab Hold & Win", "Buy Hold & Win", 300, 200, 3_650, 50_000).coins(12_111, 600, 4_077, 1_200).scatters(2_500, 3_053).super_hold(6_680, 1_575, 296, 240),
     machine(Frozen, "Frozen Wilds", "Frozen Spin", 387, 200, 563, 7_500).wilds(2_027, 2_584).scatters(2_500, 3_054).chance(22_392),
-    machine(Tumble, "Bubbling Tumbles", "Bomb Spin", 223, 189, 170, 10_000).bombs(1_430, &MOONLIT_BOMBS, &MOONLIT_START).scatters(2_474, 2_906),
-    machine(Hold, "Hoard Hold & Win", "Buy Hold & Win", 308, 200, 3_587, 0).coins(12_072, 600, 4_077, 1_200).scatters(2_500, 3_054),
+    machine(Tumble, "Bubbling Tumbles", "Bomb Spin", 223, 189, 170, 10_000).bombs(1_430, &MOONLIT_BOMBS, &MOONLIT_START).scatters(2_474, 2_906).bomb_spins(9_820, 1_150, 6_700, &MOONLIT_FREE),
+    machine(Hold, "Hoard Hold & Win", "Buy Hold & Win", 308, 200, 3_587, 0).coins(12_072, 600, 4_077, 1_200).scatters(2_500, 3_054).super_hold(6_300, 1_666, 312, 240),
     machine(Espresso, "Espresso Shots", "Double Shot", 234, 200, 1_597, 5_000).wilds(1_804, 1_948).scatters(2_500, 3_077).chance(22_156),
     machine(Spotlight, "Spotlight Wilds", "Encore Spin", 227, 200, 511, 25_000).wilds(2_234, 2_431).scatters(2_500, 3_053).chance(22_352),
 ];
@@ -211,6 +250,16 @@ pub const MOONLIT_START: [(u32, u32); 10] = [(2, 35_911), (3, 21_305), (4, 14_71
 
 /// What a coin can be worth (hundredths of the bet; the last three the Mini, the Minor and the
 /// Major), and how often (out of 100,000).
+/// Bomb Spins' bombs (what each is worth, how often): a power law over the machine's own bombs'
+/// values, its average set so the round pays back 99% on its richer reels (a pay symbol 1.15
+/// times as likely as on a spin, a bomb in about one cell in fifteen), from twelve million
+/// rounds counted (`remaster_builds`).
+pub const COSMIC_FREE: [(u32, u32); 13] = [(2, 38_027), (3, 21_632), (4, 14_496), (5, 10_627), (8, 5_526), (10, 4_051), (15, 2_305), (20, 1_544), (25, 1_132), (50, 432), (100, 165), (250, 45), (500, 18)];
+pub const SUGAR_FREE: [(u32, u32); 11] = [(2, 40_248), (3, 21_947), (4, 14_272), (5, 10_222), (8, 5_061), (10, 3_625), (15, 1_977), (20, 1_285), (25, 921), (50, 326), (100, 116)];
+pub const NEON_FREE: [(u32, u32); 11] = [(2, 40_117), (3, 21_931), (4, 14_288), (5, 10_248), (8, 5_089), (10, 3_650), (15, 1_995), (20, 1_300), (25, 932), (50, 332), (100, 118)];
+pub const MOONLIT_FREE: [(u32, u32); 11] = [(2, 40_253), (3, 21_947), (4, 14_272), (5, 10_221), (8, 5_060), (10, 3_624), (15, 1_976), (20, 1_285), (25, 920), (50, 326), (100, 116)];
+/// What a Payer's worth (hundredths of the bet) and how often.
+pub const PAYERS: [(u32, u32); 5] = [(50, 40_000), (100, 30_000), (200, 15_000), (300, 8_000), (500, 7_000)];
 pub const COINS: [(u32, u32); 9] = [(50, 36_735), (100, 22_556), (200, 13_849), (300, 10_411), (500, 7_267), (1_000, 4_462), (MINI, 2_740), (MINOR, 1_438), (MAJOR, 542)];
 
 pub fn family(machine: u8) -> Family {
@@ -223,6 +272,9 @@ pub fn check(machine: u8, bet: u64, feature: Feature, ante: bool) -> Result<(), 
     if ante && feature != Feature::Spin {
         return Err("Ante is for spins".into());
     }
+    if feature == Feature::Builds && MACHINES[(machine as usize).min(11)].builds_price == 0 {
+        return Err("this machine hasn't a round that builds".into());
+    }
     Ok(())
 }
 
@@ -233,6 +285,7 @@ pub fn price(machine: u8, feature: Feature, ante: bool) -> u64 {
         Feature::Spin => if ante { ANTE_PRICE } else { 100 },
         Feature::Chance => m.chance_price,
         Feature::Wild => m.special_price,
+        Feature::Builds => m.builds_price,
         _ => reelrow::price(feature),
     }
 }
@@ -338,6 +391,9 @@ pub struct Outcome {
     pub hold_paid: u64,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub grand: u64,
+    /// Bomb Spins: each free spin, as it played.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub free: Vec<FreeSpin>,
     pub scatters: u8,
     pub bonus: Option<Bonus>,
     /// Mystery: whether it turned out the Super Bonus. All or nothing: whether it won.
@@ -352,9 +408,29 @@ pub struct Outcome {
     pub pool: u64,
 }
 
+/// A free spin of Bomb Spins: its screens (the spin, then its tumbles), the multiplier as it
+/// stands after it (every bomb on a win added to it; 0 while none has been), what it paid
+/// (its chain's win times the multiplier, or times 1 before there's one), and whether three
+/// scatters brought five spins more.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FreeSpin {
+    pub steps: Vec<Step>,
+    #[serde(default, skip_serializing_if = "is_zero32")]
+    pub mult: u32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub paid: u64,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub more: bool,
+}
+
 impl Outcome {
     pub fn wagered(&self) -> u64 {
         self.cost
+    }
+
+    /// What Bomb Spins paid, all its spins together.
+    pub fn free_paid(&self) -> u64 {
+        self.free.iter().map(|f| f.paid).fold(0u64, |a, b| a.saturating_add(b))
     }
 
     /// What its machine's progressive jackpot paid (the bonus's top prize, Hold & Win's Grand).
@@ -379,6 +455,11 @@ impl Outcome {
             _ if self.grand > 0 => format!("the Grand on {on}"),
             (_, Some(b)) if b.times > 1 => format!("the Super {game} on {on}"),
             (_, Some(_)) => format!("the {game} on {on}"),
+            (Feature::Builds, _) if !self.free.is_empty() => match self.free.last().map(|f| f.mult).unwrap_or(0) {
+                x if x > 1 => format!("Bomb Spins on {on}, ×{x} built"),
+                _ => format!("Bomb Spins on {on}"),
+            },
+            (Feature::Builds, _) => format!("Super Hold & Win on {on}"),
             _ if !self.hold.is_empty() => format!("Hold & Win on {on}"),
             _ if self.mult > 1 => format!("a ×{} tumble on {on}", self.mult),
             _ => format!("a spin on {on}"),
@@ -451,7 +532,7 @@ enum When {
 fn weights(m: &Machine, reel: usize, ante: bool, when: When) -> [u32; KINDS] {
     let mut w = [0u32; KINDS];
     for (k, x) in reels::WEIGHTS.iter().take(PAY_SYMBOLS as usize).enumerate() {
-        w[k] = x * 100;
+        w[k] = x * 100 * m.pay_scale / 1_000;
     }
     if (1..REELS - 1).contains(&reel) {
         w[WILD as usize] = if when == When::Spin { m.wild } else { m.later_wild };
@@ -575,6 +656,9 @@ enum Play {
     Spin,
     Chance(bool),
     Special,
+    /// The round that builds (Super Hold & Win: Hold & Win with six coins to start, Payers and
+    /// Hoarders).
+    Builds,
 }
 
 /// The spin's screen (Hot Wilds and Espresso Shots already filling their reels, covering what
@@ -793,7 +877,8 @@ fn hold<D: Draw>(m: &Machine, ante: bool, play: Play, bet: u64, d: &mut D) -> Re
     // The board Hold & Win starts with: the spin's coins, or six to start when it's bought.
     let mut board = [[BLANK; ROWS]; REELS];
     let mut values = [[0u32; ROWS]; REELS];
-    let start = if play == Play::Special {
+    let sup = play == Play::Builds;
+    let start = if matches!(play, Play::Special | Play::Builds) {
         for (r, row) in places(&all_places(), HOLD_START, d) {
             board[r][row] = COIN;
             values[r][row] = value(m.coins, d);
@@ -832,33 +917,94 @@ fn hold<D: Draw>(m: &Machine, ante: bool, play: Play, bet: u64, d: &mut D) -> Re
     while left > 0 && !full(&board) {
         left -= 1;
         let held = !mask(&board, BLANK) & ((1 << PLACES) - 1);
-        let mut collectors = Vec::new();
+        let (mut collectors, mut payers) = (Vec::new(), Vec::new());
+        let mut new = false;
         for r in 0..REELS {
             for row in 0..ROWS {
                 if board[r][row] != BLANK {
                     continue;
                 }
                 let x = d.below(OUT_OF);
-                if x < m.hold_coin {
-                    board[r][row] = COIN;
+                let landed = if x < m.hold_coin {
                     values[r][row] = value(m.coins, d);
-                    left = RESPINS;
-                } else if r == REELS - 1 && x < m.hold_coin + m.hold_collector {
-                    board[r][row] = COLLECTOR;
-                    collectors.push(row);
-                    left = RESPINS;
+                    COIN
+                } else if !sup && r == REELS - 1 && x < m.hold_coin + m.hold_collector {
+                    collectors.push((r, row));
+                    COLLECTOR
+                } else if sup && x < m.hold_coin + m.payer {
+                    values[r][row] = value(m.payers, d);
+                    payers.push((r, row));
+                    PAYER
+                } else if sup && x < m.hold_coin + m.payer + m.hoarder {
+                    HOARDER
+                } else if sup && x < m.hold_coin + m.payer + m.hoarder + m.any_collector {
+                    collectors.push((r, row));
+                    COLLECTOR
+                } else {
+                    continue;
+                };
+                board[r][row] = landed;
+                new = true;
+            }
+        }
+        if new {
+            left = RESPINS;
+        }
+        // Payers landing add their worth to every coin on the reels.
+        for &(pr, prow) in &payers {
+            let add = values[pr][prow];
+            for r in 0..REELS {
+                for row in 0..ROWS {
+                    if board[r][row] == COIN {
+                        values[r][row] = values[r][row].saturating_add(add);
+                    }
                 }
             }
         }
-        // A collector landing gathers every coin held.
-        let coins: u32 = (0..REELS).flat_map(|r| (0..ROWS).map(move |row| (r, row))).filter(|&(r, row)| board[r][row] == COIN).map(|(r, row)| values[r][row]).sum();
-        for row in collectors {
-            values[REELS - 1][row] = coins;
+        // A collector landing gathers the coins' worth (Payers' too); Hoarders, on every respin
+        // that brings something new (the one they land on first).
+        let coins: u32 = (0..REELS).flat_map(|r| (0..ROWS).map(move |row| (r, row))).filter(|&(r, row)| matches!(board[r][row], COIN | PAYER)).map(|(r, row)| values[r][row]).fold(0u32, |a, b| a.saturating_add(b));
+        for (r, row) in collectors {
+            values[r][row] = coins;
+        }
+        if new {
+            for r in 0..REELS {
+                for row in 0..ROWS {
+                    if board[r][row] == HOARDER {
+                        values[r][row] = values[r][row].saturating_add(coins);
+                    }
+                }
+            }
         }
         out.hold.push(Step { grid: board, values, held, ..Step::default() });
     }
     out.held = values.iter().flatten().map(|&x| x as u64).sum();
     out.grand = full(&board);
+    out
+}
+
+/// Bomb Spins: ten free spins on the machine's richer reels (more bombs, worth their own), each
+/// a spin with its tumbles; every bomb on a win adds to a multiplier that stays, each spin's win
+/// times it; three scatters, five spins more.
+fn bomb_spins<D: Draw>(m: &Machine, bet: u64, d: &mut D) -> Vec<FreeSpin> {
+    let fm = Machine { special: m.free_bomb, bombs: m.free_bombs, pay_scale: m.free_pay, ..*m };
+    let mut out: Vec<FreeSpin> = Vec::new();
+    let (mut left, mut mult) = (FREE_SPINS, 0u32);
+    while left > 0 && out.len() < MAX_FREE_SPINS {
+        left -= 1;
+        let r = tumble(&fm, false, Play::Spin, When::Later { scatters: true }, bet, d);
+        let last = r.steps.last().expect("a spin has its screen");
+        if r.points > 0 {
+            let bombs: u32 = (0..REELS).flat_map(|reel| (0..ROWS).map(move |row| (reel, row))).filter(|&(reel, row)| last.grid[reel][row] == BOMB).map(|(reel, row)| last.values[reel][row]).sum();
+            mult = mult.saturating_add(bombs);
+        }
+        let paid = share(bet, r.points * m.point * mult.max(1) as u64, 10_000);
+        let more = r.scatters >= 3;
+        if more {
+            left += MORE_SPINS;
+        }
+        out.push(FreeSpin { steps: r.steps, mult, paid, more });
+    }
     out
 }
 
@@ -873,7 +1019,7 @@ pub fn play_with(machine: u8, bet: u64, feature: Feature, ante: bool, s: &mut St
     let ante = ante && feature == Feature::Spin;
     let cost = feature::cost(bet, price(machine, feature, ante));
     let pool = if reelrow::progressive(machine) { pool } else { 0 };
-    let mut o = Outcome { machine, bet, feature, ante, cost, steps: Vec::new(), mult: 0, ways_paid: 0, collected: 0, hold: Vec::new(), hold_paid: 0, grand: 0, scatters: 0, bonus: None, lucky: false, capped: false, paid: 0, pool };
+    let mut o = Outcome { machine, bet, feature, ante, cost, steps: Vec::new(), mult: 0, ways_paid: 0, collected: 0, hold: Vec::new(), hold_paid: 0, grand: 0, free: Vec::new(), scatters: 0, bonus: None, lucky: false, capped: false, paid: 0, pool };
     let bonus = |times: u64, s: &mut Stream| {
         let (game, won) = reelrow::play_mini(machine, bet, s);
         let top = reelrow::roll_top(machine, bet, pool, s);
@@ -896,6 +1042,15 @@ pub fn play_with(machine: u8, bet: u64, feature: Feature, ante: bool, s: &mut St
                 o.bonus = Some(bonus(1, s));
             }
         }
+        Feature::Builds if m.family == Tumble => o.free = bomb_spins(m, bet, s),
+        Feature::Builds => {
+            let r = hold(m, false, Play::Builds, bet, s);
+            o.hold_paid = share(bet, r.held, 100);
+            if r.grand {
+                o.grand = if reelrow::progressive(machine) { reelrow::top_win(machine, bet, pool) } else { bet.saturating_mul(GRAND_X) };
+            }
+            o.hold = r.hold;
+        }
         Feature::Bonus => o.bonus = Some(bonus(1, s)),
         Feature::Super => o.bonus = Some(bonus(reelrow::SUPER_X, s)),
         Feature::Mystery => {
@@ -908,7 +1063,7 @@ pub fn play_with(machine: u8, bet: u64, feature: Feature, ante: bool, s: &mut St
             return o;
         }
     }
-    let total = o.ways_paid.saturating_add(o.collected).saturating_add(o.hold_paid).saturating_add(o.grand).saturating_add(o.bonus.as_ref().map(|b| b.paid()).unwrap_or(0));
+    let total = o.ways_paid.saturating_add(o.collected).saturating_add(o.hold_paid).saturating_add(o.grand).saturating_add(o.free_paid()).saturating_add(o.bonus.as_ref().map(|b| b.paid()).unwrap_or(0));
     let cap = if m.cap_x > 0 { bet.saturating_mul(m.cap_x) } else { super::MAX_PAYOUT };
     o.capped = total > cap.min(super::MAX_PAYOUT);
     o.paid = total.min(cap).min(super::MAX_PAYOUT);

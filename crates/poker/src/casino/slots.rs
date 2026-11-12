@@ -226,6 +226,8 @@ pub fn price(f: Feature) -> u64 {
         Feature::Super => PRICE_SUPER,
         Feature::Mystery => PRICE_MYSTERY,
         Feature::AllIn => 5_000,
+        // (Remastered's alone: refused before it gets here.)
+        Feature::Builds => 100,
     }
 }
 

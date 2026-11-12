@@ -320,7 +320,9 @@ impl Bet {
             Bet::Blackjack { chips } => fits(*chips, "bet"),
             Bet::Reels { machine, bet, .. } => reels::check(*machine, *bet),
             Bet::Dragon { bet, growth } => dragon::check(*bet, *growth),
+            Bet::Row { feature: feature::Feature::Builds, .. } => Err("Reel Row hasn't that feature".into()),
             Bet::Row { machine, bet, .. } => reelrow::check(*machine, *bet),
+            Bet::SlotsPlus { feature: feature::Feature::Builds, .. } => Err("Pyr Sevens hasn't that feature".into()),
             Bet::SlotsPlus { line_bet, .. } => fits(*line_bet, "line bet"),
             Bet::DragonPlus { bet, growth, feature } => {
                 if dragon::price(*feature).is_none() {

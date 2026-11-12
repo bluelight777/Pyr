@@ -43,6 +43,9 @@ impl SlotKind {
     /// A feature's price, in hundredths of the spin's bet (none: the slot hasn't it).
     pub fn price(self, f: Feature) -> Option<u64> {
         match self {
+            // (The round that builds: Remastered's tumbling and Hold & Win machines alone.)
+            SlotKind::Row(_) | SlotKind::Sevens if f == Feature::Builds => None,
+            SlotKind::Rm(m) if f == Feature::Builds => Some(remaster::MACHINES[(m as usize).min(11)].builds_price).filter(|&p| p > 0),
             SlotKind::Row(_) => Some(reelrow::price(f)),
             SlotKind::Rm(m) => Some(remaster::price(m, f, false)),
             SlotKind::Sevens => Some(slots::price(f)),
@@ -91,6 +94,9 @@ impl SlotKind {
                 };
                 (mm.special_name.into(), what.into())
             }
+            // (0.13.6's rounds that build, 0.13.28's words.)
+            (SlotKind::Rm(m), Feature::Builds) if remaster::family(m) == remaster::Family::Tumble => ("Bomb Spins".into(), "10 free spins: bombs on a win add to a multiplier that stays. 3 scatters: 5 more.".into()),
+            (_, Feature::Builds) => ("Super Hold & Win".into(), "Payers add to every coin; Hoarders gather it all again every respin.".into()),
             (SlotKind::Row(_), Feature::Chance) => ("Bonus Chance".into(), format!("Every spin four times as likely to start the {bonus}.")),
             (SlotKind::Sevens, Feature::Chance) => ("Bonus Chance".into(), "Every spin five times as likely to land the stars for Free Spins.".into()),
             (SlotKind::Dragon, Feature::Chance) => ("Bonus Chance".into(), "Every spin four times as likely to light six fireballs.".into()),
@@ -136,6 +142,8 @@ pub fn badge_index(f: Feature) -> usize {
         Feature::Super => 3,
         Feature::Mystery => 4,
         Feature::AllIn => 5,
+        // (Drawn: see `badge`.)
+        Feature::Builds => 2,
     }
 }
 
@@ -144,6 +152,11 @@ pub fn badge(p: &egui::Painter, ctx: &egui::Context, kind: SlotKind, f: Feature,
     // A Remastered machine's feature spin: its bomb, coin or wild (0.13.28's).
     if let (SlotKind::Rm(m), Feature::Wild) = (kind, f) {
         super::rmshow::feature_icon(p, ctx, m, r, tint);
+        return;
+    }
+    // Its round that builds: its bombs or coins, three of them.
+    if let (SlotKind::Rm(m), Feature::Builds) = (kind, f) {
+        super::rmshow::builds_icon(p, ctx, m, r, tint);
         return;
     }
     let i = badge_index(f);
@@ -235,7 +248,7 @@ impl PyrApp {
             st.confirm = None;
             return None;
         }
-        let feats: Vec<Feature> = [Feature::Chance, Feature::Wild, Feature::Bonus, Feature::Super, Feature::Mystery, Feature::AllIn].into_iter().filter(|f| kind.price(*f).is_some()).collect();
+        let feats: Vec<Feature> = [Feature::Chance, Feature::Wild, Feature::Builds, Feature::Bonus, Feature::Super, Feature::Mystery, Feature::AllIn].into_iter().filter(|f| kind.price(*f).is_some()).collect();
         let cols = 3usize;
         let rows = feats.len().div_ceil(cols);
         let grid = Rect::from_min_max(pos2(panel.left() + 24.0, panel.top() + 86.0), pos2(panel.right() - 24.0, panel.bottom() - 22.0));
@@ -258,7 +271,8 @@ impl PyrApp {
             p.rect_stroke(r, theme::r(16), Stroke::new(if on { 2.5f32 } else { 1.0 }, if on { accent } else if hover { accent.gamma_multiply(0.7) } else { Color32::from_white_alpha(30) }), StrokeKind::Inside);
             // The badge, bobbing a little when it's hovered.
             let bob = if hover { (time * 4.0).sin() * 3.0 } else { 0.0 };
-            let bs = (ch * 0.44).min(cw * 0.5);
+            // (0.13.28's: smaller in a shorter card, so the words fit above the price.)
+            let bs = (ch * 0.44).min(cw * 0.5).min(ch - 110.0).max(24.0);
             let br = Rect::from_center_size(pos2(r.center().x, r.top() + 14.0 + bs / 2.0 + bob), vec2(bs, bs));
             if hover || on {
                 super::radial(&p, br.center(), bs * 0.75, accent.gamma_multiply(0.35), Color32::TRANSPARENT);
@@ -270,8 +284,9 @@ impl PyrApp {
             let g = p.layout(what, theme::font(12.0), col::MUTED, cw - 24.0);
             let gh = g.size().y;
             p.galley(pos2(r.center().x - g.size().x / 2.0, ty + 20.0), g, col::MUTED);
-            // Its price: chips, and times the bet.
-            let price_y = (ty + 26.0 + gh + 12.0).min(r.bottom() - 18.0);
+            // Its price: chips, and times the bet, at the card's foot (0.13.28's).
+            let _ = gh;
+            let price_y = r.bottom() - 18.0;
             let x = if price_h % 100 == 0 { format!("{}×", price_h / 100) } else { format!("{:.2}×", price_h as f64 / 100.0) };
             let tag = format!("{}  ·  {x}", chips_text(cost));
             let gg = p.layout_no_wrap(tag, theme::bold_font(14.0), col::GOLD2);

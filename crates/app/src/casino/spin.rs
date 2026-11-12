@@ -77,6 +77,26 @@ pub fn land(reels: &mut [Reel], lens: &[usize], stops: &[usize], from: Instant, 
     ends
 }
 
+/// Lands each reel as soon as it can, one after another from `from` (Turbo's pace), wherever its
+/// strip has got to: when each comes to rest, and where on its strip (the caller puts the screen
+/// there). Bomb Spins' free spins land this way, quickly, as 0.13.28's do.
+pub fn land_soon(reels: &mut [Reel], lens: &[usize], from: Instant) -> (Vec<Instant>, Vec<usize>) {
+    let (gap, dur, lead) = (0.08, 0.32, 4.0);
+    let mut ends = Vec::with_capacity(reels.len());
+    let mut stops = Vec::with_capacity(reels.len());
+    for (i, r) in reels.iter_mut().enumerate() {
+        let len = lens[i].max(1) as f32;
+        let start = from + Duration::from_secs_f32(i as f32 * gap);
+        let p_start = r.pos(start);
+        // (Onto the next whole place `lead` symbols on.)
+        let to = (p_start - lead).floor();
+        r.land = Some((start, p_start, to, dur));
+        ends.push(start + Duration::from_secs_f32(dur * 0.55));
+        stops.push(to.rem_euclid(len) as usize);
+    }
+    (ends, stops)
+}
+
 /// How long landing takes once it starts (for when the last reel is still).
 pub fn land_secs(turbo: bool) -> f32 {
     if turbo { 0.32 } else { 0.5 }

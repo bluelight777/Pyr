@@ -29,6 +29,9 @@ pub enum Feature {
     Mystery,
     /// One shot at the game's biggest prize, or nothing.
     AllIn,
+    /// A bonus round that builds (Reel Row Remastered, 0.13.6): Bomb Spins on the tumbling
+    /// machines, Super Hold & Win on the Hold & Win ones. No other game has it.
+    Builds,
 }
 
 impl Feature {
@@ -53,6 +56,7 @@ impl Feature {
             Feature::Super => "super",
             Feature::Mystery => "mystery",
             Feature::AllIn => "all_in",
+            Feature::Builds => "builds",
         }
     }
 }

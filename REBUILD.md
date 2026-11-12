@@ -310,7 +310,17 @@ How (decided while starting it):
       machine's bar fits its width (0.13.28's ran Info and Turbo into the spin button under
       about 1,450 wide). The last reels slow and light up a scatter (or a coin) away. Bomb
       Spins and Super Hold & Win come with the next item.
-- [ ] Bonus rounds that build: Bomb Spins, Super Hold & Win (0.13.6)
+- [x] Bonus rounds that build: Bomb Spins, Super Hold & Win (0.13.6). Play Feature's seventh
+      card at 0.13.28's prices (Bomb Spins 102.80× / 97.80× / 98.60× / 98.20×, Super Hold & Win
+      66.70× / 62.70× / 66.80× / 63.00×), words and order; 0.13.28's splash, "SPIN n / 10",
+      "MULTIPLIER ×N AND BUILDING", "W × M = T", the tag at the end, Payers on a purple ribbon,
+      jackpot coins' names on a red one, collectors landing anywhere (filmed beside 0.13.28).
+      The rebuild's own numbers for 99% (`Feature::Builds`): Bomb Spins on richer reels (pay
+      symbols 1.15 times as likely, a bomb in about one cell in fifteen: about one a screen, as
+      0.13.28's showed), its bombs about as the machine's own; Super Hold & Win's Payers (0.5×
+      to 5×, adding to every coin as they land) and Hoarders (gathering the coins' worth as they
+      land and on every respin bringing something new) tuned on forty-million-round samples. A
+      free spin lands at Turbo's pace (as 0.13.28's do), and its tumbles show at the player's.
 - [ ] Big wins: Big, Mega, Epic, Legendary, Mythic with fireworks (0.13.2/4)
 - [x] Bets to 100,000 on blackjack, baccarat, keno, slots (0.13.2/4/6); Pyr Sevens' Phoenix
       Jackpot in proportion (0.13.6); new players 100,000 (0.13.6). Every limit asked of

@@ -283,6 +283,7 @@ pub fn price(f: Feature) -> Option<u64> {
         Feature::Super => Some(PRICE_SUPER),
         Feature::Mystery => Some(PRICE_MYSTERY),
         Feature::AllIn => Some(5_000),
+        Feature::Builds => None,
     }
 }
 

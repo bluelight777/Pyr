@@ -73,7 +73,24 @@ pub struct RowUi {
     banner: Option<(Instant, Feature)>,
     /// The bonus or Hold & Win a symbol away: the reels from this one on take their time, lit.
     tease: Option<usize>,
+    /// Bomb Spins being played on screen, a free spin after another.
+    free: Option<FreePlay>,
 }
+
+/// Bomb Spins on screen: the round, its splash's start, the next free spin to land, what the
+/// spins shown so far paid, and when its tag at the end began.
+struct FreePlay {
+    round: RoundView,
+    o: remaster::Outcome,
+    splash: Instant,
+    next: usize,
+    paid: u64,
+    ended: Option<Instant>,
+}
+
+/// How long Bomb Spins' splash and its tag at the end show.
+const FREE_SPLASH: f32 = 3.2;
+const FREE_END: f32 = 3.0;
 
 impl Default for RowUi {
     fn default() -> Self {
@@ -101,6 +118,7 @@ impl Default for RowUi {
             strip_vals: [[0; STRIP]; REELS],
             banner: None,
             tease: None,
+            free: None,
         }
     }
 }
@@ -146,7 +164,7 @@ fn rm_filler(machine: u8, seed: u64) -> ([u8; STRIP], [u32; STRIP]) {
 
 impl RowUi {
     fn running(&self, now: Instant) -> bool {
-        self.waiting.is_some() || self.stopped_at.is_some_and(|e| now < e) || self.mini.as_ref().is_some_and(|b| !b.collected) || self.all_in.is_some() || self.rm.as_ref().is_some_and(|r| !r.over)
+        self.waiting.is_some() || self.stopped_at.is_some_and(|e| now < e) || self.mini.as_ref().is_some_and(|b| !b.collected) || self.all_in.is_some() || self.rm.as_ref().is_some_and(|r| !r.over) || self.free.is_some()
     }
 
     /// What a spin (with the armed feature, and Ante) costs.
@@ -350,6 +368,16 @@ impl PyrApp {
             }
             _ => {}
         }
+        // Bomb Spins: its splash, then its free spins one after another (`rm_free`).
+        if !o.free.is_empty() {
+            if let Some(c) = rmshow::band(machine, "trigger") {
+                self.poker.casino.sound_in(0.0, c, 0.0, 0.85);
+            }
+            let ui = &mut self.poker.casino.row;
+            ui.stopped_at = Some(now);
+            ui.free = Some(FreePlay { round: round.clone(), o, splash: now, next: 0, paid: 0, ended: None });
+            return;
+        }
         // Buy Hold & Win: no spin, its board straight away.
         if o.steps.is_empty() {
             let show = RmShow::new(round.clone(), o, now, turbo);
@@ -361,8 +389,19 @@ impl PyrApp {
             ui.rm = Some(show);
             return;
         }
-        // The spin lands on the first screen as it landed (a Hot Wild's or an Espresso Shot's
-        // reel fills once it's there).
+        self.rm_land(round, o, None, now);
+    }
+
+    /// The reels land on a round's first screen as it landed (a Hot Wild's or an Espresso
+    /// Shot's reel fills once it's there), and its show follows (`free`: a free spin of Bomb
+    /// Spins').
+    fn rm_land(&mut self, round: &RoundView, o: remaster::Outcome, free: Option<rmshow::FreeCtx>, now: Instant) {
+        // (Bomb Spins' free spins land quickly, as 0.13.28's do: at Turbo's pace; what follows,
+        // at the player's.)
+        let turbo = self.poker.casino.row.turbo;
+        let fast = turbo || free.is_some();
+        let machine = o.machine;
+        let ui = &mut self.poker.casino.row;
         let first = o.steps[0].clone();
         let as_landed = first.landed.unwrap_or(first.grid);
         for r in 0..REELS {
@@ -384,9 +423,24 @@ impl PyrApp {
         // to land take their time, lit up.
         let count_by = |upto: usize, sym: u8| as_landed.iter().take(upto).flatten().filter(|&&c| c == sym).count();
         let hold = remaster::family(machine) == remaster::Family::Hold;
-        let tease = (1..REELS).find(|&i| count_by(i, rr::SCATTER) >= 2 || (hold && count_by(i, remaster::COIN) >= remaster::HOLD_START - 1)).filter(|_| !ui.turbo && o.feature != Feature::Wild);
-        let min = if ui.turbo { 0.25 } else { 0.7 };
-        let mut ends = super::spin::land(&mut ui.reels, &[STRIP; REELS], &[0; REELS], now + Duration::from_secs_f32(min), ui.turbo);
+        let tease = (1..REELS).find(|&i| count_by(i, rr::SCATTER) >= 2 || (hold && count_by(i, remaster::COIN) >= remaster::HOLD_START - 1)).filter(|_| !fast && o.feature != Feature::Wild);
+        let min = if fast { 0.25 } else { 0.7 };
+        let mut ends = if free.is_some() {
+            // (A free spin lands as soon as it can: its screen goes where each strip has got to.)
+            let (ends, stops) = super::spin::land_soon(&mut ui.reels, &[STRIP; REELS], now + Duration::from_secs_f32(min));
+            for (r, &at) in stops.iter().enumerate() {
+                let (mut st, mut sv) = rm_filler(machine, round.nonce.wrapping_mul(31).wrapping_add(r as u64));
+                for row in 0..ROWS {
+                    st[(at + row) % STRIP] = as_landed[r][row];
+                    sv[(at + row) % STRIP] = first.values[r][row];
+                }
+                ui.strips[r] = st;
+                ui.strip_vals[r] = sv;
+            }
+            ends
+        } else {
+            super::spin::land(&mut ui.reels, &[STRIP; REELS], &[0; REELS], now + Duration::from_secs_f32(min), fast)
+        };
         if let Some(from) = tease {
             for (i, reel) in ui.reels.iter_mut().enumerate().skip(from) {
                 if let Some((st, from_pos, to, dur)) = reel.land {
@@ -398,8 +452,11 @@ impl PyrApp {
         }
         ui.tease = tease;
         let slow = tease.is_some();
-        let landed = ends.iter().max().copied().unwrap_or(now) + Duration::from_secs_f32(super::spin::land_secs(ui.turbo) * 0.45);
-        let show = RmShow::new(round.clone(), o, landed, turbo);
+        let landed = ends.iter().max().copied().unwrap_or(now) + Duration::from_secs_f32(super::spin::land_secs(fast) * 0.45);
+        let show = match free {
+            Some(f) => RmShow::new_free(round.clone(), o, landed, turbo, f),
+            None => RmShow::new(round.clone(), o, landed, turbo),
+        };
         ui.stopped_at = Some(landed);
         let stop = rmshow::band(machine, "stop").unwrap_or(Cue::ReelStop);
         let scatter = rmshow::band(machine, "scatter");
@@ -435,7 +492,7 @@ impl PyrApp {
         }
         let shown = show.shown(now);
         let ui = &mut self.poker.casino.row;
-        ui.win = shown;
+        ui.win = shown + ui.free.as_ref().map(|f| f.paid).unwrap_or(0);
         let show = ui.rm.as_ref().unwrap();
         if now < show.done_at() {
             return;
@@ -452,6 +509,11 @@ impl PyrApp {
                     ui.strip_vals[r][(base + row) % STRIP] = last.values[r][row];
                 }
             }
+        }
+        // A free spin of Bomb Spins: the next one's `rm_free`'s.
+        if let Some(fp) = self.poker.casino.row.free.as_mut() {
+            fp.paid += o.paid;
+            return;
         }
         self.poker.casino.row.counted = Some(now);
         let th = theme(o.machine);
@@ -476,6 +538,76 @@ impl PyrApp {
                 self.row_finish(s, &round, now);
             }
         }
+    }
+
+    /// Bomb Spins: after its splash, each free spin lands in turn (once the one before has
+    /// shown); then its tag; then the round's end.
+    fn rm_free(&mut self, s: &ServerView, now: Instant) {
+        let Some(fp) = self.poker.casino.row.free.as_ref() else { return };
+        if now < fp.splash + Duration::from_secs_f32(FREE_SPLASH) {
+            return;
+        }
+        if self.poker.casino.row.rm.as_ref().is_some_and(|show| !show.over) {
+            return;
+        }
+        if fp.next < fp.o.free.len() {
+            let i = fp.next;
+            let o = &fp.o;
+            let f = &o.free[i];
+            let before = if i == 0 { 0 } else { o.free[i - 1].mult };
+            let base: u64 = f.steps.iter().flat_map(|s| s.wins.iter()).map(|w| w.pay).sum();
+            let ctx = rmshow::FreeCtx { before, after: f.mult, base, paid: f.paid, more: f.more };
+            let spin = remaster::Outcome {
+                machine: o.machine,
+                bet: o.bet,
+                feature: Feature::Spin,
+                ante: false,
+                cost: 0,
+                steps: f.steps.clone(),
+                mult: 0,
+                ways_paid: f.paid,
+                collected: 0,
+                hold: Vec::new(),
+                hold_paid: 0,
+                grand: 0,
+                free: Vec::new(),
+                scatters: 0,
+                bonus: None,
+                lucky: false,
+                capped: false,
+                paid: f.paid,
+                pool: o.pool,
+            };
+            let (round, machine) = (fp.round.clone(), o.machine);
+            self.poker.casino.row.free.as_mut().unwrap().next += 1;
+            // The reels set off again.
+            let ui = &mut self.poker.casino.row;
+            let speed = SPEED * ui.fun.reel_speed(theme(machine).humor);
+            for reel in &mut ui.reels {
+                reel.start(now, speed);
+            }
+            let cue = rmshow::band(machine, "spin").unwrap_or(Cue::ReelSpin);
+            self.poker.casino.sound_in(0.0, cue, 0.0, 0.6);
+            self.rm_land(&round, spin, Some(ctx), now);
+            return;
+        }
+        // All shown: its tag, then the round's end.
+        let fp = self.poker.casino.row.free.as_mut().unwrap();
+        let ended = *fp.ended.get_or_insert(now);
+        if now < ended + Duration::from_secs_f32(FREE_END) {
+            return;
+        }
+        let fp = self.poker.casino.row.free.take().unwrap();
+        let o = fp.o;
+        self.poker.casino.row.counted = Some(now);
+        self.poker.casino.row.win = o.paid;
+        if o.paid > 0 {
+            self.row_burst(o.paid, o.bet, now);
+        }
+        let th = theme(o.machine);
+        self.poker.casino.row.fun.round(th.humor, &rm_to_v1(&o), fp.round.nonce);
+        let round = as_row(&fp.round);
+        self.row_finish(s, &round, now);
     }
 
     /// A round: a spin (with the armed feature), or a feature bought.
@@ -514,6 +646,7 @@ impl PyrApp {
         // (A Remastered machine's feature spin: its banner, from the spin's start.)
         ui.banner = (remastered && spins && feature == Feature::Wild).then_some((now, feature));
         ui.tease = None;
+        ui.free = None;
         ui.showing = None;
         ui.mini = None;
         ui.all_in = None;
@@ -607,6 +740,7 @@ impl PyrApp {
         }
         if self.poker.casino.row.remastered {
             self.rm_after(s, now);
+            self.rm_free(s, now);
         } else {
             self.row_after_stop(s, now);
         }
@@ -628,6 +762,29 @@ impl PyrApp {
         // Hold & Win's splash, over everything.
         if let Some(show) = self.poker.casino.row.rm.as_ref() {
             rmshow::splash(&p, &ctx, th, st, area, show, now, time);
+        }
+        // Bomb Spins: its count, its multiplier, its splash, its tag at the end.
+        if let Some(fp) = self.poker.casino.row.free.as_ref() {
+            let board = rmshow::Board { reels: lay.reels, cell: lay.cell, gap: lay.gap, area };
+            let since = now.saturating_duration_since(fp.splash).as_secs_f32();
+            if since < FREE_SPLASH {
+                let (name, line) = SlotKind::Rm(m).describe(Feature::Builds);
+                rmshow::splash_with(&p, &ctx, th, st, area, &name.to_uppercase(), &line, since, FREE_SPLASH, time);
+            } else {
+                let i = fp.next.saturating_sub(1);
+                let shown = fp.o.free.len().min(fp.next.max(1));
+                let total = remaster::FREE_SPINS + remaster::MORE_SPINS * fp.o.free[..shown].iter().filter(|f| f.more).count();
+                rmshow::free_counter(&p, &board, i, total.max(i + 1), st.font, th.accent);
+                let landed = self.poker.casino.row.rm.as_ref().is_some_and(|r| now >= r.landed);
+                if !landed && i > 0 {
+                    rmshow::free_badge(&p, &ctx, &board, m, fp.o.free[i - 1].mult);
+                }
+                if let Some(ended) = fp.ended {
+                    let a = (now.saturating_duration_since(ended).as_secs_f32() / 0.3).min(1.0);
+                    let built = fp.o.free.last().map(|f| f.mult).unwrap_or(0);
+                    rmshow::free_summary(&p, &board, fp.o.free.len(), built, fp.o.paid, st.font, th.accent, a);
+                }
+            }
         }
         // Its top prize, top middle: a progressive jackpot's pool, counting, or how far it goes.
         if !in_mini && !in_all_in && !holding {
