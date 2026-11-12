@@ -17,7 +17,7 @@ lives only in it, ever:
    build or test. Everything on main; never other branches.
 4. **After every piece of work, the bundle goes to Blue's PC**: SendUserFile the bundle, then
    device_commit_files it to `Downloads\pyr-source\pyr-rebuild.bundle` (force). His PC pushes it
-   to GitHub (`bluelight777/pyr`) every hour (`Downloads\pyr-source\push-pyr.ps1`, run by the
+   to GitHub (`bluelight777/Pyr`) every hour (`Downloads\pyr-source\push-pyr.ps1`, run by the
    scheduled task "Pyr backup to GitHub"; it only ever fast-forwards, and writes `push-pyr.log`).
    This session can't push to GitHub itself.
 5. **Keys never in the repository, and never only in the workspace.** They live in
@@ -26,7 +26,7 @@ lives only in it, ever:
 6. **Anything else worth keeping** (tools, measurements, notes): in the repository, or zipped
    beside the bundle (`/home/claude/work/backup.sh` does the rebuild's notes and tools).
 
-Starting again from nothing: clone `https://github.com/bluelight777/pyr.git`, or
+Starting again from nothing: clone `https://github.com/bluelight777/Pyr.git`, or
 `git clone <bundle>` from the outputs folder or from Blue's PC, then step 1.
 
 ## The rebuild
