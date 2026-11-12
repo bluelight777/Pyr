@@ -31,12 +31,15 @@ const RESULTS_W: f32 = 70.0;
 const RESULTS_SHOWN: usize = 10;
 
 const PANEL: Color32 = Color32::from_rgb(0x13, 0x0c, 0x1c);
-const PURPLE: Color32 = Color32::from_rgb(0x4c, 0x2c, 0x6e);
+const PURPLE: Color32 = Color32::from_rgb(0x4a, 0x2a, 0x5a);
 const DARK: Color32 = Color32::from_rgb(0x0f, 0x0a, 0x14);
 /// The amount's field, and the small buttons, the rows' box and slider (0.13.28's browns).
 const FIELD: Color32 = Color32::from_rgb(0x1a, 0x15, 0x12);
 const KNOB: Color32 = Color32::from_rgb(0x2f, 0x28, 0x23);
-const GOLD: Color32 = Color32::from_rgb(0xf4, 0xc4, 0x4c);
+const GOLD: Color32 = col::GOLD;
+/// Words on gold, and the running Auto play's button (0.13.28's).
+const ON_GOLD: Color32 = Color32::from_rgb(0x2a, 0x10, 0x04);
+const STOP_RED: Color32 = Color32::from_rgb(0xb0, 0x20, 0x2a);
 const PEG: Color32 = Color32::from_rgb(0xc8, 0x92, 0x2a);
 
 struct Ball {
@@ -385,41 +388,45 @@ impl PyrApp {
         }
     }
 
-    /// The panel on the left.
+    /// The panel on the left, as 0.13.28's (measured off its screen at 1280 by 800: every row's
+    /// place, the sizes of its words and its colours; the panel's always 300 wide).
     fn plinko_controls(&mut self, ui: &mut egui::Ui, s: &ServerView, r: Rect, _now: Instant) {
         let p = ui.painter().clone();
         p.rect_filled(r, theme::r(18), PANEL.gamma_multiply(0.94));
         p.rect_stroke(r, theme::r(18), Stroke::new(1.0_f32, Color32::from_rgb(0x3a, 0x2a, 0x4e)), StrokeKind::Inside);
         let x = r.left() + 18.0;
-        let w = r.width() - 36.0;
+        // (The rows run to three from the right edge: 0.13.28's.)
+        let w = r.width() - 21.0;
         let mut y = r.top() + 18.0;
+        // (Boxes a pixel lower than the words' rows would put them: 0.13.28's, measured.)
+        let at = |x: f32, y: f32| pos2(x, y + 1.0);
         let busy = self.poker.casino.busy();
-        let pill = |ui: &mut egui::Ui, id: &str, rect: Rect, text: &str, on: bool, on_fill: Color32, on_text: Color32| -> egui::Response {
+        let pill = |ui: &mut egui::Ui, id: &str, rect: Rect, text: &str, on: bool, font: egui::FontId, corner: u8, on_fill: Color32, on_text: Color32, off_text: Color32| -> egui::Response {
             let resp = ui.interact(rect, ui.id().with(("pk", id)), Sense::click());
             let fill = if on { on_fill } else if resp.hovered() { Color32::from_rgb(0x2a, 0x20, 0x36) } else { DARK };
-            ui.painter().rect_filled(rect, theme::r((rect.height() / 2.0) as u8), fill);
-            ui.painter().text(rect.center(), Align2::CENTER_CENTER, text, theme::bold_font(14.0), if on { on_text } else { Color32::WHITE });
+            ui.painter().rect_filled(rect, theme::r(corner), fill);
+            ui.painter().text(rect.center(), Align2::CENTER_CENTER, text, font, if on { on_text } else { off_text });
             resp
         };
         // Manual or Auto.
-        let half = (w - 8.0) / 2.0;
+        let tab = (w - 31.0) / 2.0;
         let auto_tab = self.poker.casino.plinko.auto_tab;
-        if pill(ui, "manual", Rect::from_min_size(pos2(x, y), vec2(half, 36.0)), "Manual", !auto_tab, PURPLE, Color32::WHITE).clicked() {
+        if pill(ui, "manual", Rect::from_min_size(pos2(x, y), vec2(tab, 36.0)), "Manual", !auto_tab, theme::bold_font(14.0), 18, PURPLE, Color32::WHITE, theme::MUTED()).clicked() {
             self.poker.casino.plinko.auto_tab = false;
         }
-        if pill(ui, "auto", Rect::from_min_size(pos2(x + half + 8.0, y), vec2(half, 36.0)), "Auto", auto_tab, PURPLE, Color32::WHITE).clicked() {
+        if pill(ui, "auto", Rect::from_min_size(pos2(x + tab + 8.0, y), vec2(tab, 36.0)), "Auto", auto_tab, theme::bold_font(14.0), 18, PURPLE, Color32::WHITE, theme::MUTED()).clicked() {
             self.poker.casino.plinko.auto_tab = true;
         }
         y += 58.0;
-        // The amount.
-        p.text(pos2(x, y), Align2::LEFT_CENTER, "Amount", theme::font(14.5), Color32::from_rgb(0xd8, 0xcc, 0xe0));
-        y += 14.0;
-        let field = Rect::from_min_size(pos2(x, y), vec2(w - 100.0, 30.0));
+        // The amount: its field, then halve and double.
+        p.text(pos2(x, y), Align2::LEFT_CENTER, "Amount", theme::font(14.5), theme::MUTED());
+        y += 17.0;
+        let field = Rect::from_min_size(at(x, y + 3.0), vec2(148.0, 24.0));
         p.rect_filled(field, theme::r(6), FIELD);
         let pu = &mut self.poker.casino.plinko;
         let resp = ui.put(
-            field.shrink2(vec2(6.0, 3.0)),
-            egui::TextEdit::singleline(&mut pu.amount).frame(false).font(theme::bold_font(15.5)).text_color(Color32::WHITE).vertical_align(egui::Align::Center),
+            field.translate(vec2(0.0, -1.0)),
+            egui::TextEdit::singleline(&mut pu.amount).frame(false).font(theme::bold_font(15.5)).text_color(theme::TEXT()).vertical_align(egui::Align::Center),
         );
         if resp.changed() {
             let digits: String = pu.amount.chars().filter(|c| c.is_ascii_digit()).collect();
@@ -433,42 +440,44 @@ impl PyrApp {
         let small = |ui: &mut egui::Ui, id: &str, rect: Rect, text: &str| -> bool {
             let resp = ui.interact(rect, ui.id().with(("pk", id)), Sense::click());
             ui.painter().rect_filled(rect, theme::r(6), if resp.hovered() { Color32::from_rgb(0x3a, 0x30, 0x2a) } else { KNOB });
-            ui.painter().text(rect.center(), Align2::CENTER_CENTER, text, theme::bold_font(14.5), Color32::WHITE);
+            // (Its word a pixel above the middle: 0.13.28's.)
+            ui.painter().text(rect.center() - vec2(0.0, 1.0), Align2::CENTER_CENTER, text, theme::bold_font(14.5), Color32::WHITE);
             resp.clicked()
         };
-        if small(ui, "half", Rect::from_min_size(pos2(field.right() + 8.0, y), vec2(40.0, 30.0)), "½") {
+        if small(ui, "half", Rect::from_min_size(at(x + 156.0, y), vec2(40.0, 30.0)), "½") {
             let pu = &mut self.poker.casino.plinko;
             pu.chips = (pu.chips / 2).max(pk::MIN_BET);
             pu.amount = pu.chips.to_string();
         }
-        if small(ui, "double", Rect::from_min_size(pos2(field.right() + 56.0, y), vec2(42.0, 30.0)), "2×") {
+        if small(ui, "double", Rect::from_min_size(at(x + 204.0, y), vec2(43.0, 30.0)), "2×") {
             let pu = &mut self.poker.casino.plinko;
             pu.chips = (pu.chips * 2).clamp(pk::MIN_BET, pk::MAX_BET);
             pu.amount = pu.chips.to_string();
         }
-        y += 52.0;
+        y += 53.0;
         // The difficulty.
-        p.text(pos2(x, y), Align2::LEFT_CENTER, "Difficulty", theme::font(14.5), Color32::from_rgb(0xd8, 0xcc, 0xe0));
-        y += 16.0;
-        let widths = [62.0, 76.0, 56.0, 66.0];
+        p.text(pos2(x, y), Align2::LEFT_CENTER, "Difficulty", theme::font(14.5), theme::MUTED());
+        y += 17.0;
+        let widths = [61.0, 75.0, 61.0, 64.0];
         let gap = (w - widths.iter().sum::<f32>()) / 3.0;
         let mut bx = x;
         for (risk, bw) in Risk::ALL.into_iter().zip(widths) {
             let on = self.poker.casino.plinko.risk == risk;
-            if pill(ui, risk.name(), Rect::from_min_size(pos2(bx, y), vec2(bw, 32.0)), risk.name(), on, GOLD, Color32::from_rgb(0x2a, 0x14, 0x06)).clicked() {
+            if pill(ui, risk.name(), Rect::from_min_size(at(bx, y), vec2(bw, 32.0)), risk.name(), on, theme::bold_font(12.75), 11, GOLD, ON_GOLD, Color32::WHITE).clicked() {
                 self.poker.casino.plinko.risk = risk;
             }
             bx += bw + gap;
         }
-        y += 56.0;
+        y += 55.0;
         // The rows.
-        p.text(pos2(x, y), Align2::LEFT_CENTER, "Rows", theme::font(14.5), Color32::from_rgb(0xd8, 0xcc, 0xe0));
-        y += 18.0;
-        let track = Rect::from_min_size(pos2(x, y + 10.0), vec2(w - 58.0, 8.0));
+        p.text(pos2(x, y), Align2::LEFT_CENTER, "Rows", theme::font(14.5), theme::MUTED());
+        y += 17.0;
+        let track = Rect::from_min_size(at(x, y + 11.0), vec2(w - 59.0, 8.0));
         let rows = self.poker.casino.plinko.rows;
         let f = (rows - pk::MIN_ROWS) as f32 / (pk::MAX_ROWS - pk::MIN_ROWS) as f32;
         p.rect_filled(track, theme::r(4), KNOB);
-        let hx = track.left() + track.width() * f;
+        // (The handle stays inside the track, end to end.)
+        let hx = track.left() + 9.0 + (track.width() - 18.0) * f;
         let handle = Rect::from_center_size(pos2(hx, track.center().y), vec2(18.0, 24.0));
         let resp = ui.interact(track.expand2(vec2(10.0, 12.0)), ui.id().with("pk-rows"), Sense::click_and_drag());
         p.rect_filled(handle, theme::r(5), KNOB);
@@ -479,36 +488,39 @@ impl PyrApp {
             let f = ((q.x - track.left()) / track.width()).clamp(0.0, 1.0);
             self.poker.casino.plinko.rows = pk::MIN_ROWS + (f * (pk::MAX_ROWS - pk::MIN_ROWS) as f32).round() as u8;
         }
-        let vb = Rect::from_min_size(pos2(track.right() + 12.0, y), vec2(40.0, 30.0));
+        let vb = Rect::from_min_size(at(track.right() + 8.0, y), vec2(40.0, 30.0));
         p.rect_filled(vb, theme::r(6), KNOB);
-        p.text(vb.center(), Align2::CENTER_CENTER, rows.to_string(), theme::bold_font(14.5), Color32::WHITE);
-        y += 48.0;
+        p.text(vb.center(), Align2::CENTER_CENTER, rows.to_string(), theme::font(14.5), theme::TEXT());
+        y += 46.0;
         let (risk, rows, chips) = (self.poker.casino.plinko.risk, self.poker.casino.plinko.rows, self.poker.casino.plinko.chips);
         let top = pk::top_x100(risk, rows);
-        p.text(pos2(x, y), Align2::LEFT_CENTER, format!("Up to {} · pays back 99%", label(top)), theme::font(12.5), col::MUTED);
-        y += 24.0;
+        p.text(pos2(x, y), Align2::LEFT_CENTER, format!("Up to {} · pays back 99%", label(top)), theme::font(12.0), theme::DIM());
         let have = super::chips_now(s);
         let ok = chips >= pk::MIN_BET && chips <= have && !busy;
         if self.poker.casino.plinko.auto_tab {
-            // Auto play: how many games (0: until stopped), and whether a big win stops it.
-            p.text(pos2(x, y), Align2::LEFT_CENTER, "Number of games", theme::font(14.0), Color32::from_rgb(0xd8, 0xcc, 0xe0));
-            y += 14.0;
-            let field = Rect::from_min_size(pos2(x, y), vec2(w, 30.0));
+            // Auto play: how many games (0: until stopped), and whether a big win stops it (both
+            // dimmed while it runs).
+            let running = self.poker.casino.plinko.auto.on();
+            y += 32.0;
+            p.text(pos2(x, y), Align2::LEFT_CENTER, "Number of games (0: until you stop it)", theme::font(14.5), theme::MUTED());
+            y += 17.0;
+            let field = Rect::from_min_size(at(x, y), vec2(w, 22.0));
             p.rect_filled(field, theme::r(6), FIELD);
             let pu = &mut self.poker.casino.plinko;
-            let resp = ui.put(field.shrink2(vec2(6.0, 3.0)), egui::TextEdit::singleline(&mut pu.games).frame(false).font(theme::bold_font(15.0)).text_color(Color32::WHITE).vertical_align(egui::Align::Center));
+            let resp = ui.put(field, |ui: &mut egui::Ui| ui.add_enabled(!running, egui::TextEdit::singleline(&mut pu.games).frame(false).font(theme::font(14.5)).text_color(theme::TEXT()).vertical_align(egui::Align::Center)));
             if resp.changed() {
                 pu.games = pu.games.chars().filter(|c| c.is_ascii_digit()).take(6).collect();
             }
-            y += 42.0;
+            y += 45.0;
             let mut stop = pu.auto.big_stops;
-            if ui.put(Rect::from_min_size(pos2(x, y), vec2(w, 22.0)), egui::Checkbox::new(&mut stop, egui::RichText::new("Stop on a big win").font(theme::font(13.5)).color(Color32::WHITE))).changed() {
+            let row = Rect::from_center_size(pos2(x + w / 2.0, y - 3.0), vec2(w, 22.0));
+            let changed = ui.scope_builder(egui::UiBuilder::new().max_rect(row).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| ui.add_enabled(!running, egui::Checkbox::new(&mut stop, egui::RichText::new("Stop on a big win (10× or more)").font(theme::font(14.5)).color(theme::TEXT()))).changed()).inner;
+            if changed {
                 self.poker.casino.plinko.auto.big_stops = stop;
             }
-            y += 34.0;
-            let running = self.poker.casino.plinko.auto.on();
-            let text = if running { format!("Stop auto play ({})", self.poker.casino.plinko.auto.left_text()) } else { "Start auto play".to_string() };
-            if big_button(ui, Rect::from_min_size(pos2(x, y), vec2(w, 48.0)), &text, running || ok) {
+            y += 23.0;
+            let text = if running { format!("Stop autoplay ({} left)", self.poker.casino.plinko.auto.left_text()) } else { "Start autoplay".to_string() };
+            if big_button(ui, Rect::from_min_size(at(x, y), vec2(w, 48.0)), &text, running || ok, running) {
                 if running {
                     self.poker.casino.plinko.auto.stop();
                 } else {
@@ -517,23 +529,33 @@ impl PyrApp {
                     self.poker.casino.plinko.next_at = None;
                 }
             }
-            y += 70.0;
+            y += 74.0;
         } else {
+            y += 23.0;
             let space = super::keys::pressed(ui.ctx(), super::keys::Move::PlinkoDrop);
-            if big_button(ui, Rect::from_min_size(pos2(x, y), vec2(w, 48.0)), "Drop a ball", ok) || (space && ok) {
+            if big_button(ui, Rect::from_min_size(at(x, y), vec2(w, 48.0)), "Drop a ball", ok, false) || (space && ok) {
                 self.plinko_drop(s);
             }
-            y += 70.0;
+            y += 74.0;
         }
-        p.text(pos2(x, y), Align2::LEFT_CENTER, format!("Ball {} · the most it can win: {}", chips_text(chips), chips_text(chips.saturating_mul(top) / 100)), theme::font(12.5), Color32::from_rgb(0xc8, 0xbc, 0xd0));
+        p.text(pos2(x, y), Align2::LEFT_CENTER, format!("Ball {} · the most it can win: {}", chips_text(chips), chips_text(chips.saturating_mul(top) / 100)), theme::font(12.0), theme::MUTED());
     }
 }
 
-fn big_button(ui: &mut egui::Ui, r: Rect, text: &str, enabled: bool) -> bool {
-    let resp = ui.interact(r, ui.id().with(("pk-big", text)), if enabled { Sense::click() } else { Sense::hover() });
-    let fill = if !enabled { Color32::from_rgb(0x5a, 0x4a, 0x2c) } else if resp.hovered() { Color32::from_rgb(0xff, 0xd6, 0x66) } else { GOLD };
+/// The panel's big button: gold (red with white words to stop Auto play, `stop`).
+fn big_button(ui: &mut egui::Ui, r: Rect, text: &str, enabled: bool, stop: bool) -> bool {
+    let resp = ui.interact(r, ui.id().with(("pk-big", stop)), if enabled { Sense::click() } else { Sense::hover() });
+    let fill = if stop {
+        if resp.hovered() { Color32::from_rgb(0xc4, 0x2a, 0x34) } else { STOP_RED }
+    } else if !enabled {
+        Color32::from_rgb(0x5a, 0x4a, 0x2c)
+    } else if resp.hovered() {
+        Color32::from_rgb(0xff, 0xd6, 0x66)
+    } else {
+        GOLD
+    };
     ui.painter().rect_filled(r, theme::r(12), fill);
-    ui.painter().text(r.left_center() + vec2(14.0, 0.0), Align2::LEFT_CENTER, text, theme::bold_font(17.0), Color32::from_rgb(0x2a, 0x12, 0x04));
+    ui.painter().text(r.left_center() + vec2(12.0, 0.0), Align2::LEFT_CENTER, text, theme::bold_font(17.0), if stop { Color32::WHITE } else { ON_GOLD });
     enabled && resp.clicked()
 }
 

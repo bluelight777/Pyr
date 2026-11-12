@@ -416,7 +416,13 @@ How (decided while starting it):
       board's size and place at three sizes, the temple as bright, pegs, ball, buckets and their
       colors, a tenth of a second a row, the bucket pressed and lit as a ball lands and its
       multiple floating up, the last ten buckets down the right. The peg and bucket sounds are
-      made here.
+      made here. Its panel as 0.13.28's to the pixel (both tabs, measured off its screen at 1280
+      by 800 and checked by a pixel difference): its rows' places, the Difficulty buttons' widths
+      (61, 75, 61, 64, six apart) and corners, the sizes of its words and the Campfire palette's
+      colours for them, the full-width rows to three from the right, the slider's handle inside
+      its track; Auto play's words ("Number of games (0: until you stop it)", "Stop on a big win
+      (10× or more)" by its switch on the left, "Start autoplay", a red "Stop autoplay (∞
+      left)"), the field and switch dimmed while it runs.
 - [x] The control room (0.13.5); GMs give/take chips, staff log and download (0.13.4). As 0.13.28
       has it, measured off its screen page by page: Overview (eight numbers, the VIP Club's
       players at each tier, the big wins, the latest in the log), Players (look one up, give or
