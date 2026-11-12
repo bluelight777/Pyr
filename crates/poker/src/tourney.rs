@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::bots::Level;
 use crate::game::Rules;
-use crate::net::{BlindLevel, Bomb, BombView, BuyIn, EntrantView, TableId, ToApp, TourneyId, TourneyPhase, TourneyRules, TourneySummary, TourneyView};
-use crate::room::{Effect, Look, Output, Random, Rcpt, Room};
+use crate::net::{BlindLevel, Bomb, BombView, Bounty, BuyIn, EntrantView, TableId, ToApp, TourneyId, TourneyPhase, TourneyRules, TourneySummary, TourneyView};
+use crate::room::{Bust, Effect, Look, Output, Random, Rcpt, Room};
 
 /// The most people in one tournament.
 pub const MAX_ENTRANTS: usize = 180;
@@ -33,6 +33,9 @@ struct Entrant {
     paid: u64,
     place: Option<usize>,
     prize: u64,
+    /// Bounty Poker: the price on their head, and what they've won from others' (0 elsewhere).
+    bounty: u64,
+    bounties_won: u64,
 }
 
 pub struct Tourney {
@@ -100,6 +103,11 @@ impl Tourney {
     }
 
     pub fn prize_pool(&self) -> u64 {
+        if let Some(b) = self.rules.bounty {
+            // Bounty Poker: every seat's buy-in less its bounty, less the house's 3% (the house
+            // stakes the bots' seats, so it's the same however many people play).
+            return self.rules.seats as u64 * self.rules.buy_in * (100 - b.pct.min(100) as u64) / 100 * (100 - BOUNTY_HOUSE_PCT) / 100;
+        }
         if self.rules.bomb.is_some() {
             // A Bomb Pot's prize is the buy-in times what the wheel picks (the house stakes
             // the bots' seats); before the spin, the least it can be.
@@ -123,6 +131,11 @@ impl Tourney {
             goes_off_ms: self.started.filter(|_| self.phase == TourneyPhase::Running).map(|t| t + b.fuse_ms),
             exploded: self.exploded,
         })
+    }
+
+    /// The price on each head as Bounty Poker starts.
+    fn first_bounty(&self) -> u64 {
+        self.rules.bounty.map_or(0, |b| self.rules.buy_in * b.pct.min(100) as u64 / 100)
     }
 
     /// Still playing.
@@ -150,7 +163,8 @@ impl Tourney {
         if !self.can_register() {
             return Err(if self.entrants.len() >= self.rules.max_players { "it's full".into() } else { "registration is closed".into() });
         }
-        self.entrants.push(Entrant { uid: uid.into(), name: name.into(), look, bot: None, paid, place: None, prize: 0 });
+        let bounty = self.first_bounty();
+        self.entrants.push(Entrant { uid: uid.into(), name: name.into(), look, bot: None, paid, place: None, prize: 0, bounty, bounties_won: 0 });
         self.watchers.insert(uid.into());
         if self.phase == TourneyPhase::Running {
             // Late: straight to the table with the fewest players.
@@ -171,7 +185,8 @@ impl Tourney {
         self.bot_names += 1;
         let name = if k < names.len() { names[k].to_string() } else { format!("{} {}", names[k % names.len()], k / names.len() + 1) };
         let lvl = level.look_level();
-        self.entrants.push(Entrant { uid: format!("bot:t{}:{k}", self.id), name, look: Look { level: lvl, ..Look::default() }, bot: Some(level), paid: 0, place: None, prize: 0 });
+        let bounty = self.first_bounty();
+        self.entrants.push(Entrant { uid: format!("bot:t{}:{k}", self.id), name, look: Look { level: lvl, ..Look::default() }, bot: Some(level), paid: 0, place: None, prize: 0, bounty, bounties_won: 0 });
         self.changed(out);
         Ok(())
     }
@@ -262,6 +277,8 @@ impl Tourney {
                 place: e.place,
                 prize: e.prize,
                 table: self.table_of(&e.uid),
+                bounty: e.bounty,
+                bounties_won: e.bounties_won,
             })
             .collect();
         // Standings: those still in by chips, then the rest by place.
@@ -390,9 +407,9 @@ impl Tourney {
     pub fn tick(&mut self, now: u64, next_table: &mut TableId, rng: &mut dyn Random) -> Output {
         let mut out = Output::default();
         match self.phase {
-            TourneyPhase::Registering if self.rules.bomb.is_some() => {
-                // A Bomb Pot starts the moment it's full; when the wait is over, bots take the
-                // empty seats (nobody waits long), unless nobody's left in it.
+            TourneyPhase::Registering if self.rules.house_game() => {
+                // A Bomb Pot or Bounty Poker starts the moment it's full; when the wait is over,
+                // bots take the empty seats (nobody waits long), unless nobody's left in it.
                 if self.entrants.len() < self.rules.max_players && now >= self.rules.start_ms {
                     if self.entrants.iter().all(|e| e.bot.is_some()) {
                         let _ = self.cancel(now, &mut out);
@@ -457,7 +474,7 @@ impl Tourney {
             news = true;
         }
         // The tables.
-        let mut busted: Vec<(String, u64)> = Vec::new();
+        let mut busted: Vec<Bust> = Vec::new();
         let ids: Vec<TableId> = self.tables.keys().copied().collect();
         for id in ids {
             let r = self.tables.get_mut(&id).unwrap();
@@ -484,8 +501,8 @@ impl Tourney {
             self.knock_out(busted, now, &mut out);
             news = true;
         }
-        // (A Bomb Pot is one table.)
-        if self.phase == TourneyPhase::Running && self.rules.bomb.is_none() && self.balance(now, &mut out) {
+        // (A Bomb Pot or Bounty Poker is one table.)
+        if self.phase == TourneyPhase::Running && !self.rules.house_game() && self.balance(now, &mut out) {
             news = true;
         }
         if news {
@@ -496,20 +513,24 @@ impl Tourney {
 
     /// People out of chips: their places (those who started the hand with more finish
     /// higher), and the end when one is left.
-    fn knock_out(&mut self, mut busted: Vec<(String, u64)>, now: u64, out: &mut Output) {
-        busted.sort_by_key(|(_, started)| *started);
+    fn knock_out(&mut self, mut busted: Vec<Bust>, now: u64, out: &mut Output) {
+        busted.sort_by_key(|b| b.started);
         let n = self.entrants.len();
         let pay = self.pay_table();
-        for (uid, _) in busted {
+        for b in busted {
             let left = self.alive().count();
-            let Some(e) = self.entrants.iter_mut().find(|e| e.uid == uid && e.place.is_none()) else { continue };
+            let Some(e) = self.entrants.iter_mut().find(|e| e.uid == b.uid && e.place.is_none()) else { continue };
             e.place = Some(left);
             e.prize = pay.get(left - 1).copied().unwrap_or(0);
+            let bounty = std::mem::take(&mut e.bounty);
             if e.bot.is_none() {
                 out.effects.push(Effect::Placed { uid: e.uid.clone(), place: left, entrants: n, prize: e.prize, tourney: self.id });
                 if e.prize > 0 {
                     out.effects.push(Effect::Credit { uid: e.uid.clone(), chips: e.prize });
                 }
+            }
+            if self.rules.bounty.is_some() {
+                self.claim(bounty, &b.by, out);
             }
         }
         let alive: Vec<String> = self.alive().map(|e| e.uid.clone()).collect();
@@ -517,7 +538,11 @@ impl Tourney {
             if let Some(w) = alive.first() {
                 let e = self.entrants.iter_mut().find(|e| e.uid == *w).unwrap();
                 e.place = Some(1);
-                e.prize = pay.first().copied().unwrap_or(0);
+                // (Bounty Poker: the winner's own bounty is theirs too, with the prize: 0.13.28
+                // shows it in both, so the prize says what they're paid at the end.)
+                let own = std::mem::take(&mut e.bounty);
+                e.bounties_won += own;
+                e.prize = pay.first().copied().unwrap_or(0) + own;
                 if e.bot.is_none() {
                     out.effects.push(Effect::Placed { uid: e.uid.clone(), place: 1, entrants: n, prize: e.prize, tourney: self.id });
                     if e.prize > 0 {
@@ -535,6 +560,29 @@ impl Tourney {
             // The tables go (in a moment: the last hand's cards stay up to be seen), and
             // everyone sees the results.
             self.close_at = Some(now + FINAL_MS);
+        }
+    }
+
+    /// Bounty Poker: the price on a head that's gone, to whoever took it (split if a pot was
+    /// split): half theirs to keep, paid now, and half onto the price on their own heads.
+    fn claim(&mut self, bounty: u64, by: &[String], out: &mut Output) {
+        let takers: Vec<usize> = by.iter().filter_map(|u| self.entrants.iter().position(|e| &e.uid == u && e.place.is_none())).collect();
+        if takers.is_empty() || bounty == 0 {
+            return;
+        }
+        let n = takers.len() as u64;
+        let won = bounty / 2;
+        let onto = bounty - won;
+        for (k, &i) in takers.iter().enumerate() {
+            let first = (k as u64) < won % n;
+            let w = won / n + first as u64;
+            let o = onto / n + ((k as u64) < onto % n) as u64;
+            let e = &mut self.entrants[i];
+            e.bounties_won += w;
+            e.bounty += o;
+            if e.bot.is_none() && w > 0 {
+                out.effects.push(Effect::Credit { uid: e.uid.clone(), chips: w });
+            }
         }
     }
 
@@ -706,6 +754,7 @@ pub fn friday_rules(start_ms: u64, added: u64) -> TourneyRules {
         late_levels: 6,
         added,
         bomb: None,
+        bounty: None,
     }
 }
 
@@ -762,6 +811,46 @@ pub fn bomb_rules(buy_in: u64, now: u64) -> TourneyRules {
         late_levels: 0,
         added: 0,
         bomb: Some(Bomb { fuse_ms: BOMB_FUSE_MS }),
+        bounty: None,
+    }
+}
+
+/// Bounty Poker (0.13.6): a six-seat sit & go with a price on every head. Half of each buy-in
+/// is the bounty on that seat; whoever knocks someone out wins half their bounty there and
+/// then, and the other half goes onto the price on their own head. The rest of the buy-ins,
+/// less 3% for the house, is the prize pool, paid to the top two. 1,500 chips each, the blinds
+/// up every two minutes; it waits 45 seconds for people, then bots take the empty seats.
+pub const BOUNTY_HOST: &str = "pyr:bounty";
+pub const BOUNTY_BUY_INS: [u64; 4] = [1_000, 10_000, 50_000, 100_000];
+pub const BOUNTY_SEATS: usize = 6;
+pub const BOUNTY_STACK: u64 = 1_500;
+pub const BOUNTY_PCT: u32 = 50;
+pub const BOUNTY_HOUSE_PCT: u64 = 3;
+pub const BOUNTY_WAIT_MS: u64 = 45_000;
+pub const BOUNTY_LEVEL_MS: u64 = 120_000;
+
+/// Bounty Poker's rules, open from `now`.
+pub fn bounty_rules(buy_in: u64, now: u64) -> TourneyRules {
+    let levels = [(10, 20), (15, 30), (25, 50), (40, 80), (60, 120), (100, 200), (150, 300), (200, 400), (300, 600), (400, 800), (600, 1200), (800, 1600), (1000, 2000), (1500, 3000)]
+        .into_iter()
+        .map(|(small, big)| BlindLevel { small, big, ante: 0 })
+        .collect();
+    TourneyRules {
+        name: format!("Bounty Poker · {}", group(buy_in)),
+        variant: crate::game::Variant::Holdem,
+        limit: crate::game::Limit::NoLimit,
+        seats: BOUNTY_SEATS,
+        stack: BOUNTY_STACK,
+        buy_in,
+        min_players: BOUNTY_SEATS,
+        max_players: BOUNTY_SEATS,
+        start_ms: now + BOUNTY_WAIT_MS,
+        level_ms: BOUNTY_LEVEL_MS,
+        levels,
+        late_levels: 0,
+        added: 0,
+        bomb: None,
+        bounty: Some(Bounty { pct: BOUNTY_PCT }),
     }
 }
 

@@ -144,6 +144,9 @@ pub enum ToServer {
     TourneyCancel { id: TourneyId },
     /// Play a Bomb Pot for this buy-in: a seat in one that's filling up, or a new one.
     TimeBomb { buy_in: u64 },
+    /// Play Bounty Poker for this buy-in: a seat at one that's filling up, or a new one
+    /// (0.13.6: 0.13.28's `bounty`).
+    Bounty { buy_in: u64 },
     /// Poker's MMR ladder: everyone rated here, people and bots (0.12.0 servers).
     Ratings,
     /// Blackjack tables (0.12.0 servers): the list; follow one (or stop); sit in a seat or
@@ -415,6 +418,24 @@ pub struct TourneyRules {
     /// down every hand is all in.
     #[serde(default)]
     pub bomb: Option<Bomb>,
+    /// Bounty Poker (0.13.6): a price on every head.
+    #[serde(default)]
+    pub bounty: Option<Bounty>,
+}
+
+impl TourneyRules {
+    /// A sit & go the house runs (a Bomb Pot or Bounty Poker): it starts once it's full, bots
+    /// filling the seats nobody took.
+    pub fn house_game(&self) -> bool {
+        self.bomb.is_some() || self.bounty.is_some()
+    }
+}
+
+/// Bounty Poker's bounties: this share of each buy-in (in percent) is the price on that
+/// player's head; the rest makes the prize pool.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Bounty {
+    pub pct: u32,
 }
 
 /// A Bomb Pot's fuse.
@@ -479,6 +500,12 @@ pub struct EntrantView {
     pub place: Option<usize>,
     pub prize: u64,
     pub table: Option<TableId>,
+    /// Bounty Poker: the price on their head now, and what they've won from others' so far
+    /// (0.13.28's fields; 0 elsewhere).
+    #[serde(default)]
+    pub bounty: u64,
+    #[serde(default)]
+    pub bounties_won: u64,
 }
 
 /// A tournament in full.

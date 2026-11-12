@@ -415,7 +415,7 @@ impl Poker {
                 _ => {}
             }
         }
-        if have || st.tourneys.values().filter(|t| t.rules.bomb.is_none()).count() >= MAX_TOURNEYS {
+        if have || st.tourneys.values().filter(|t| !t.rules.house_game()).count() >= MAX_TOURNEYS {
             return;
         }
         let start = tourney::next_friday_night(wall);
@@ -1041,9 +1041,11 @@ impl Poker {
                 if !can_manage {
                     return Err("tournaments here are set up by people who can manage the server".into());
                 }
-                // (Bomb Pots are only started by `TimeBomb`, by the house.)
+                // (Bomb Pots and Bounty Poker are only started by `TimeBomb` and `Bounty`, by the
+                // house.)
                 rules.bomb = None;
-                if st.tourneys.values().filter(|t| t.rules.bomb.is_none()).count() >= MAX_TOURNEYS {
+                rules.bounty = None;
+                if st.tourneys.values().filter(|t| !t.rules.house_game()).count() >= MAX_TOURNEYS {
                     return Err(format!("this server keeps {MAX_TOURNEYS} tournaments at most"));
                 }
                 if rules.start_ms > self.wall() + 30 * 86_400_000 {
@@ -1129,6 +1131,43 @@ impl Poker {
                 self.flush_tourney(hub, st, out);
                 Ok(Some(view))
             }
+            ToServer::Bounty { buy_in } => {
+                let wall = self.wall();
+                if !tourney::BOUNTY_BUY_INS.contains(&buy_in) {
+                    return Err("Bounty Poker is 1,000, 10,000, 50,000 or 100,000 chips to play".into());
+                }
+                let (mut rec, _) = hub.db.poker_record(uid);
+                if rec.chips < buy_in {
+                    return Err(format!("this Bounty Poker is {buy_in} chips to play and you have {}", rec.chips));
+                }
+                if st.tourneys.values().any(|t| t.rules.bounty.is_some() && t.phase == TourneyPhase::Registering && t.is_entrant(uid)) {
+                    return Err("you're waiting for a Bounty Poker table already".into());
+                }
+                // A seat at one that's filling up at this buy-in, or a new one.
+                let open = st.tourneys.iter().find(|(_, t)| t.rules.bounty.is_some() && t.rules.buy_in == buy_in && t.can_register() && !t.is_entrant(uid)).map(|(id, _)| *id);
+                let id = match open {
+                    Some(id) => id,
+                    None => {
+                        if st.tourneys.values().filter(|t| t.rules.bounty.is_some() && t.ended.is_none()).count() >= MAX_BOMBS {
+                            return Err("every Bounty Poker table is busy: try again in a minute".into());
+                        }
+                        let id = self.next_tourney.fetch_add(1, Ordering::Relaxed);
+                        let t = Tourney::new(id, tourney::bounty_rules(buy_in, wall), tourney::BOUNTY_HOST, "Pyr Casino")?;
+                        st.tourneys.insert(id, t);
+                        id
+                    }
+                };
+                let t = st.tourneys.get_mut(&id).expect("just found or made");
+                let mut out = Output::default();
+                t.register(uid, &Self::name_of(hub, uid), Self::look(&rec), buy_in, wall, &mut out)?;
+                rec.chips -= buy_in;
+                let held = st.held(uid);
+                hub.db.set_poker_record(uid, &rec, held).map_err(|e| e.to_string())?;
+                out.msgs.push((Rcpt::User(uid.to_string()), ToApp::Record { me: Self::view(hub, uid, &rec, held), gains: None }));
+                let view = st.tourneys.get_mut(&id).expect("there").watch(uid);
+                self.flush_tourney(hub, st, out);
+                Ok(Some(view))
+            }
             ToServer::TourneyCancel { id } => {
                 let wall = self.wall();
                 let t = st.tourneys.get_mut(&id).ok_or("that tournament is gone")?;
@@ -1137,6 +1176,10 @@ impl Poker {
                 }
                 if t.host == tourney::BOMB_HOST {
                     return Err("a Bomb Pot starts by itself (leave it with Unregister before it does)".into());
+                }
+                if t.host == tourney::BOUNTY_HOST {
+                    // (0.13.28 says "a Bomb Pot" here too.)
+                    return Err("Bounty Poker starts by itself (leave it with Unregister before it does)".into());
                 }
                 if t.host != uid && !can_manage {
                     return Err("only whoever set it up can call it off".into());
@@ -1197,7 +1240,7 @@ impl Poker {
             let t = st.tourneys.get_mut(&tid).unwrap();
             let out = t.tick(wall, &mut next, &mut rng);
             self.next_id.store(next, Ordering::Relaxed);
-            let keep = if t.rules.bomb.is_some() { BOMB_KEEP_MS } else { TOURNEY_KEEP_MS };
+            let keep = if t.rules.house_game() { BOMB_KEEP_MS } else { TOURNEY_KEEP_MS };
             if t.ended.is_some_and(|e| wall.saturating_sub(e) > keep) {
                 st.tourneys.remove(&tid);
             }
@@ -1366,6 +1409,7 @@ mod tests {
             late_levels: 3,
             added: 0,
             bomb: None,
+            bounty: None,
         };
         // Only managers set them up.
         assert!(p.handle(&hub, "alice", false, ToServer::TourneyCreate { rules: rules.clone(), bots: vec![] }).is_err());
@@ -1424,6 +1468,33 @@ mod tests {
         assert!(p.handle(&hub, "dee", true, ToServer::TourneyCancel { id: d.id }).is_err());
         p.handle(&hub, "dee", false, ToServer::TourneyUnregister { id: d.id }).unwrap();
         assert_eq!(hub.db.poker_record("dee").0.chips, progress::STARTING_CHIPS);
+    }
+
+    /// Bounty Poker (0.13.6) as 0.13.28's server takes it: its four buy-ins, one wait at a time,
+    /// people seated together at a buy-in, refused in 0.13.28's words.
+    #[test]
+    fn bounty_poker_seats_people_together() {
+        let hub = hub();
+        let p = &hub.poker;
+        assert_eq!(p.handle(&hub, "alice", false, ToServer::Bounty { buy_in: 100 }).unwrap_err(), "Bounty Poker is 1,000, 10,000, 50,000 or 100,000 chips to play");
+        let Some(ToApp::Tourney { view: a }) = p.handle(&hub, "alice", false, ToServer::Bounty { buy_in: 1_000 }).unwrap() else { panic!() };
+        assert!(a.rules.bounty.is_some() && a.bomb.is_none() && a.phase == TourneyPhase::Registering);
+        assert_eq!((a.rules.name.as_str(), a.host.as_str(), a.prize_pool), ("Bounty Poker · 1,000", "Pyr Casino", 2_910));
+        assert_eq!(hub.db.poker_record("alice").0.chips, progress::STARTING_CHIPS - 1_000);
+        assert_eq!(p.handle(&hub, "alice", false, ToServer::Bounty { buy_in: 10_000 }).unwrap_err(), "you're waiting for a Bounty Poker table already");
+        // Waiting for one doesn't stop a Bomb Pot (0.13.28 lets it).
+        p.handle(&hub, "alice", false, ToServer::TimeBomb { buy_in: 100 }).unwrap();
+        let Some(ToApp::Tourney { view: b }) = p.handle(&hub, "bob", false, ToServer::Bounty { buy_in: 1_000 }).unwrap() else { panic!() };
+        assert_eq!(b.id, a.id);
+        let Some(ToApp::Tourney { view: c }) = p.handle(&hub, "carol", false, ToServer::Bounty { buy_in: 50_000 }).unwrap() else { panic!() };
+        assert_ne!(c.id, a.id);
+        let mut poor = Record::new();
+        poor.chips = 700;
+        hub.db.set_poker_record("dan", &poor, 0).unwrap();
+        assert_eq!(p.handle(&hub, "dan", false, ToServer::Bounty { buy_in: 1_000 }).unwrap_err(), "this Bounty Poker is 1000 chips to play and you have 700");
+        assert!(p.handle(&hub, "carol", true, ToServer::TourneyCancel { id: c.id }).unwrap_err().contains("starts by itself"));
+        p.handle(&hub, "carol", false, ToServer::TourneyUnregister { id: c.id }).unwrap();
+        assert_eq!(hub.db.poker_record("carol").0.chips, progress::STARTING_CHIPS);
     }
 
     /// Table invites (0.13.6) go as 0.13.28's server lets them, refused in its words: someone

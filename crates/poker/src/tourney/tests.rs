@@ -18,6 +18,7 @@ fn rules(seats: usize, buy_in: u64, start_ms: u64) -> TourneyRules {
         late_levels: 2,
         added: 0,
         bomb: None,
+        bounty: None,
     }
 }
 
@@ -328,5 +329,61 @@ fn a_time_bomb_fills_with_bots_spins_and_goes_off() {
     if let Some(off) = went_off {
         assert!(bomb_hands >= 1 || t.ended.unwrap() <= off + 30_000, "{bomb_hands} all-in hands");
         assert!(t.ended.unwrap() <= off + 10 * 60_000, "all in every hand ends it quickly");
+    }
+}
+
+/// Bounty Poker as 0.13.28 plays it: six seats, bots in the empty ones after the wait, 2,910
+/// to the top two for 1,000 a seat, 500 on every head; a knockout pays half the bounty there
+/// and then and puts half on the winner's head; the winner takes their own with the prize.
+/// Every bounty ends up paid, to someone (seeds give knockouts by Alice and by bots, and split
+/// pots).
+#[test]
+fn bounty_poker_pays_every_bounty_to_whoever_takes_it() {
+    for seed in 0..12u64 {
+        let mut t = Tourney::new(6, bounty_rules(1_000, 0), BOUNTY_HOST, "Pyr Casino").unwrap();
+        let mut out = Output::default();
+        t.register("alice", "Alice", Look::default(), 1_000, 0, &mut out).unwrap();
+        let mut rng = Stream::new(seed_from(seed));
+        let mut ids: TableId = 700;
+        t.tick(BOUNTY_WAIT_MS - 1, &mut ids, &mut rng);
+        assert_eq!(t.phase, TourneyPhase::Registering);
+        let mut effects = t.tick(BOUNTY_WAIT_MS, &mut ids, &mut rng).effects;
+        assert_eq!(t.phase, TourneyPhase::Running);
+        assert_eq!((t.entrants_count(), t.tables.len()), (6, 1));
+        let v = t.view("alice");
+        assert_eq!((v.prize_pool, v.payouts.clone()), (2_910, vec![1_835, 1_075]), "0.13.28's");
+        assert!(v.entrants.iter().all(|e| (e.bounty, e.bounties_won) == (500, 0)));
+        let id = v.my_table.unwrap();
+        let mut now = BOUNTY_WAIT_MS;
+        while t.phase == TourneyPhase::Running && now < 4 * 60 * 60_000 {
+            effects.extend(t.tick(now, &mut ids, &mut rng).effects);
+            if let Some(r) = t.tables.get_mut(&id)
+                && let Some(seat) = r.table.hand.as_ref().and_then(|h| h.to_act)
+                && r.uid_at(seat) == Some("alice")
+                && let Some(l) = r.table.legal(seat)
+            {
+                let hand = r.table.hand.as_ref().unwrap().number;
+                let a = if l.can_check { Action::Check } else if l.call * 3 <= r.table.behind(seat) || hand % 4 == 0 { Action::Call } else { Action::Fold };
+                if let Ok(o) = r.act("alice", hand, a, now) {
+                    effects.extend(o.effects);
+                }
+            }
+            now += 250;
+        }
+        assert_eq!(t.phase, TourneyPhase::Finished, "seed {seed}");
+        let v = t.view("alice");
+        let won: u64 = v.entrants.iter().map(|e| e.bounties_won).sum();
+        assert_eq!(won, 6 * 500, "seed {seed}: every bounty paid to someone");
+        assert!(v.entrants.iter().all(|e| e.bounty == 0), "seed {seed}: none left on anyone's head");
+        let first = v.entrants.iter().find(|e| e.place == Some(1)).unwrap();
+        let own = first.prize - 1_835;
+        assert!(own >= 500 && own <= first.bounties_won, "seed {seed}: the winner's own bounty, {own}");
+        assert_eq!(v.entrants.iter().map(|e| e.prize).sum::<u64>() - own, 2_910, "seed {seed}");
+        // Alice is paid her bounties as she takes them, and her prize at the end.
+        let alice = v.entrants.iter().find(|e| e.uid == "alice").unwrap();
+        let alice_own = if alice.place == Some(1) { own } else { 0 };
+        let credited: u64 = effects.iter().filter_map(|e| if let Effect::Credit { uid, chips } = e { (uid == "alice").then_some(*chips) } else { None }).sum();
+        assert_eq!(credited, alice.prize + alice.bounties_won - alice_own, "seed {seed}");
+        eprintln!("seed {seed}: Alice {:?}, {} won in bounties; winner {} +{own}", alice.place, alice.bounties_won, first.name);
     }
 }

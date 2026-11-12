@@ -443,6 +443,8 @@ pub const SLOTS_100K_FEATURE: &str = "slots_100k";
 /// Bomb Pots (was Flash Pots, 0.13.4) for 50,000 and 100,000 chips too, as well as 100, 1,000 and
 /// 10,000 (0.13.6). 0.13.28's name: its apps show all five buy-ins where the server has it.
 pub const BIG_BOMB_POTS_FEATURE: &str = "big_bomb_pots";
+/// Bounty Poker (0.13.6): `bounty` sit & gos, six seats with a price on every head.
+pub const BOUNTY_POKER_FEATURE: &str = "bounty_poker";
 /// Three tables of each table game (0.13.6): high stakes to 100,000 and higher than high to
 /// 10,000,000 (the Crown Room, the Grand Salle, the Imperial Salon, the Sky Rollers), the 500K,
 /// 1000K and 5000K chips. 0.13.28's name.

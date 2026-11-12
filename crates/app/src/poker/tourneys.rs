@@ -501,6 +501,7 @@ impl PyrApp {
                 late_levels: n.late_levels,
                 added: 0,
                 bomb: None,
+                bounty: None,
             };
             let bots = vec![n.bot_level; n.bots];
             self.engine.poker(&s.key, ToServer::TourneyCreate { rules, bots });

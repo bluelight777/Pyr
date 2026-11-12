@@ -285,6 +285,10 @@ pub struct Table {
     /// Whether this hand is raked (the room decides as it deals).
     #[serde(default)]
     pub raked: bool,
+    /// The last hand's pots as paid: who could have won each, and who did (Bounty Poker's
+    /// knockouts come from it). Neither kept nor sent.
+    #[serde(skip)]
+    pub last_pots: Vec<(Vec<usize>, Vec<usize>)>,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -325,7 +329,7 @@ pub type Out = Vec<(To, Event)>;
 impl Table {
     pub fn new(rules: Rules) -> Table {
         let n = rules.seats;
-        Table { rules, seats: vec![None; n], button: None, hand: None, hands_played: 0, raked: false }
+        Table { rules, seats: vec![None; n], button: None, hand: None, hands_played: 0, raked: false, last_pots: Vec::new() }
     }
 
     pub fn sit(&mut self, seat: usize, player: &str, name: &str, chips: u64) -> Result<(), String> {
@@ -801,6 +805,7 @@ impl Table {
         // The rake, from the main pot first.
         let rake = if self.raked { rake_for(pots.iter().map(|p| p.amount).sum(), self.rules.big_blind, hs.board.len() >= 3) } else { 0 };
         let mut left = rake;
+        self.last_pots.clear();
         for pot in pots.iter_mut() {
             let take = left.min(pot.amount);
             pot.amount -= take;
@@ -815,6 +820,7 @@ impl Table {
                 // Everyone else in it folded.
                 let seat = contenders[0];
                 won[seat] += pot.amount;
+                self.last_pots.push((pot.eligible.clone(), vec![seat]));
                 out.push((To::Everyone, Event::Won { pot: i, seats: vec![seat], amounts: vec![pot.amount], hand: None, best: vec![] }));
                 continue;
             }
@@ -845,6 +851,7 @@ impl Table {
                 amounts.push(share + extra);
             }
             let five = vals.iter().find(|x| x.0 == winners[0]).map(|x| x.2.clone()).unwrap_or_default();
+            self.last_pots.push((pot.eligible.clone(), winners.clone()));
             out.push((To::Everyone, Event::Won { pot: i, seats: winners, amounts, hand: Some(best.describe()), best: five }));
         }
         // Stacks: less what they put in, plus what they won.

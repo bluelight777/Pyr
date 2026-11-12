@@ -115,9 +115,19 @@ pub enum Effect {
 pub struct Output {
     pub msgs: Vec<(Rcpt, ToApp)>,
     pub effects: Vec<Effect>,
-    /// A tournament table: who ran out of chips in the hand just over (taken off the table),
-    /// with what they started that hand with (bigger stacks finish higher).
-    pub busted: Vec<(String, u64)>,
+    /// A tournament table: who ran out of chips in the hand just over (taken off the table).
+    pub busted: Vec<Bust>,
+}
+
+/// Someone out of chips at a tournament table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Bust {
+    pub uid: String,
+    /// What they started the hand with (bigger stacks finish higher).
+    pub started: u64,
+    /// Who took their last chips: whoever won the last pot they were in (Bounty Poker's
+    /// bounties go to them).
+    pub by: Vec<String>,
 }
 
 impl Output {
@@ -267,7 +277,7 @@ pub struct Room {
     talk_ms: u64,
     said: VecDeque<&'static str>,
     /// Tournaments: who's gone out of chips, for the tournament to place (at the next tick).
-    busted: Vec<(String, u64)>,
+    busted: Vec<Bust>,
 }
 
 /// A hand's actions as everyone saw them, from its events.
@@ -1039,9 +1049,17 @@ impl Room {
                     && let Some(s) = self.table.stand(seat)
                 {
                     let started = p_start.get(seat).cloned().flatten().map(|(_, c)| c).unwrap_or(0);
+                    let by = self
+                        .table
+                        .last_pots
+                        .iter()
+                        .rev()
+                        .find(|(eligible, _)| eligible.contains(&seat))
+                        .map(|(_, winners)| winners.iter().filter(|&&w| w != seat).filter_map(|&w| p_start.get(w).cloned().flatten().map(|(u, _)| u)).collect())
+                        .unwrap_or_default();
                     // (Told to the tournament at the table's next tick, however the hand ended:
                     // a person's action ends hands too, and its output goes elsewhere.)
-                    self.busted.push((s.player, started));
+                    self.busted.push(Bust { uid: s.player, started, by });
                     self.meta.remove(&seat);
                 }
                 continue;
