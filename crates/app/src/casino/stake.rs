@@ -11,7 +11,7 @@
 use eframe::egui::{self, Align2, Color32, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
 use pyr_engine::state::ServerView;
 use pyr_poker::casino::feature::Feature;
-use pyr_poker::casino::{self, Bet, Game, Outcome, dragon, reelrow, slots};
+use pyr_poker::casino::{self, Bet, Game, Outcome, dragon, reelrow, remaster, slots};
 use pyr_poker::net::RoundView;
 
 use super::{col, glow_text, pics, vgrad_round};
@@ -24,6 +24,8 @@ use crate::theme;
 pub enum SlotKind {
     /// One of Reel Row's machines.
     Row(u8),
+    /// One of Reel Row's machines, remastered (on a server that has it: 0.13.2's).
+    Rm(u8),
     Sevens,
     Dragon,
 }
@@ -32,7 +34,7 @@ impl SlotKind {
     /// Its statistics key (and the seeds' key).
     pub fn key(self) -> String {
         match self {
-            SlotKind::Row(m) => casino::reels_key(m),
+            SlotKind::Row(m) | SlotKind::Rm(m) => casino::reels_key(m),
             SlotKind::Sevens => Game::Slots.id().to_string(),
             SlotKind::Dragon => Game::Dragon.id().to_string(),
         }
@@ -42,6 +44,7 @@ impl SlotKind {
     pub fn price(self, f: Feature) -> Option<u64> {
         match self {
             SlotKind::Row(_) => Some(reelrow::price(f)),
+            SlotKind::Rm(m) => Some(remaster::price(m, f, false)),
             SlotKind::Sevens => Some(slots::price(f)),
             SlotKind::Dragon => dragon::price(f),
         }
@@ -51,7 +54,7 @@ impl SlotKind {
     /// nothing).
     pub fn badges(self) -> String {
         match self {
-            SlotKind::Row(m) => format!("rr-{}-features", super::reel_themes::theme(m).id),
+            SlotKind::Row(m) | SlotKind::Rm(m) => format!("rr-{}-features", super::reel_themes::theme(m).id),
             SlotKind::Sevens => "sevens-features".into(),
             SlotKind::Dragon => "dragon-features".into(),
         }
@@ -60,7 +63,7 @@ impl SlotKind {
     /// What its bonus is called, and what its Super is.
     pub fn bonus_name(self) -> (String, String) {
         match self {
-            SlotKind::Row(m) => {
+            SlotKind::Row(m) | SlotKind::Rm(m) => {
                 let g = reelrow::GAMES[(m as usize).min(11)].0;
                 (g.to_string(), format!("Super {g}"))
             }
@@ -74,13 +77,27 @@ impl SlotKind {
         let (bonus, sup) = self.bonus_name();
         match (self, f) {
             (_, Feature::Spin) => ("Spin".into(), "A spin, as ever.".into()),
+            // (Remastered: 0.13.28's words.)
+            (SlotKind::Rm(_), Feature::Chance) => ("Bonus Chance".into(), format!("The {bonus} 1 spin in 45, every spin.")),
+            (SlotKind::Rm(m), Feature::Wild) => {
+                let mm = &remaster::MACHINES[(m as usize).min(11)];
+                let what = match mm.family {
+                    remaster::Family::Tumble => "A spin with three bombs on the reels from the start.",
+                    remaster::Family::Hold => "Hold & Win straight away, with six coins to start.",
+                    remaster::Family::Hot => "A spin with a Hot Wild on the middle reel.",
+                    remaster::Family::Frozen => "A spin with two frozen wilds from the start.",
+                    remaster::Family::Spotlight => "A spin with a spotlight wild on the last reel, walking the whole stage.",
+                    remaster::Family::Espresso => "A spin with Espresso Shots on the second and fourth reels.",
+                };
+                (mm.special_name.into(), what.into())
+            }
             (SlotKind::Row(_), Feature::Chance) => ("Bonus Chance".into(), format!("Every spin four times as likely to start the {bonus}.")),
             (SlotKind::Sevens, Feature::Chance) => ("Bonus Chance".into(), "Every spin five times as likely to land the stars for Free Spins.".into()),
             (SlotKind::Dragon, Feature::Chance) => ("Bonus Chance".into(), "Every spin four times as likely to light six fireballs.".into()),
             (SlotKind::Row(_), Feature::Wild) => ("Wild Spin".into(), "The middle reel lands all wild, every spin.".into()),
             (_, Feature::Wild) => ("Wild Spin".into(), "The middle reel lands all wild flames, every spin.".into()),
             (_, Feature::Bonus) => (format!("Buy {bonus}"), format!("Straight into the {bonus}.")),
-            (SlotKind::Row(_), Feature::Super) => (format!("Buy {sup}"), "Every prize in it tripled.".into()),
+            (SlotKind::Row(_) | SlotKind::Rm(_), Feature::Super) => (format!("Buy {sup}"), "Every prize in it tripled.".into()),
             (SlotKind::Sevens, Feature::Super) => (format!("Buy {sup}"), "Free spins at 10× instead of 3×.".into()),
             (SlotKind::Dragon, Feature::Super) => (format!("Buy {sup}"), "Every prize and jackpot tripled.".into()),
             (_, Feature::Mystery) => ("Mystery Bonus".into(), format!("The {bonus}, and 3 times in 10 the {sup}.")),
@@ -90,10 +107,20 @@ impl SlotKind {
         }
     }
 
+    /// Whether picking it arms it (every spin plays with it till it's turned off) rather than
+    /// buying it once: the spins with better odds or a feature of their own (Remastered's Buy
+    /// Hold & Win is bought).
+    pub fn arms(self, f: Feature) -> bool {
+        match (self, f) {
+            (SlotKind::Rm(m), Feature::Wild) => remaster::family(m) != remaster::Family::Hold,
+            _ => f.spins() && f != Feature::Spin,
+        }
+    }
+
     /// What it pays back, said (the slot's way).
     pub fn rtp(self) -> &'static str {
         match self {
-            SlotKind::Row(_) => "RTP 99%",
+            SlotKind::Row(_) | SlotKind::Rm(_) => "RTP 99%",
             SlotKind::Sevens => "RTP 98% + jackpot",
             SlotKind::Dragon => "RTP 98.5% + pools",
         }
@@ -114,6 +141,11 @@ pub fn badge_index(f: Feature) -> usize {
 
 /// A badge drawn in `r`.
 pub fn badge(p: &egui::Painter, ctx: &egui::Context, kind: SlotKind, f: Feature, r: Rect, tint: Color32) {
+    // A Remastered machine's feature spin: its bomb, coin or wild (0.13.28's).
+    if let (SlotKind::Rm(m), Feature::Wild) = (kind, f) {
+        super::rmshow::feature_icon(p, ctx, m, r, tint);
+        return;
+    }
     let i = badge_index(f);
     let (cx, cy) = ((i % 3) as f32, (i / 3) as f32);
     let uv = Rect::from_min_max(pos2(cx / 3.0, cy / 2.0), pos2((cx + 1.0) / 3.0, (cy + 1.0) / 2.0));
@@ -250,7 +282,7 @@ impl PyrApp {
                 p.text(pos2(r.right() - 12.0, r.top() + 14.0), Align2::RIGHT_CENTER, "ON", theme::bold_font(12.0), accent);
             }
             if confirm.is_none() && resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
-                if f.spins() {
+                if kind.arms(*f) {
                     out = Some(Pick::Arm(if on { None } else { Some(*f) }));
                     self.stake_ui_mut(kind).menu = false;
                 } else {
@@ -298,6 +330,11 @@ impl PyrApp {
     /// The Play Feature button on a slot's controls: the armed feature's badge, or the bonus
     /// buy's; true when it's clicked.
     pub(super) fn play_feature_button(&mut self, ui: &mut egui::Ui, kind: SlotKind, r: Rect, accent: Color32, enabled: bool) -> bool {
+        self.play_feature_button_k(ui, kind, r, accent, enabled, 1.0)
+    }
+
+    /// `play_feature_button`, its words `k` times as big (a bar drawn smaller where it's narrow).
+    pub(super) fn play_feature_button_k(&mut self, ui: &mut egui::Ui, kind: SlotKind, r: Rect, accent: Color32, enabled: bool, k: f32) -> bool {
         let ctx = ui.ctx().clone();
         let p = ui.painter().clone();
         let resp = ui.interact(r, ui.id().with(("pf-button", kind.key())), Sense::click());
@@ -315,8 +352,8 @@ impl PyrApp {
             None => ("PLAY FEATURE".to_string(), "buy the bonus & more".to_string()),
         };
         let tx = br.right() - bs * 0.05;
-        p.text(pos2(tx, r.center().y - 7.0), Align2::LEFT_CENTER, top, theme::bold_font(13.0), if enabled { Color32::WHITE } else { Color32::from_white_alpha(90) });
-        p.text(pos2(tx, r.center().y + 9.0), Align2::LEFT_CENTER, sub, theme::font(10.5), col::MUTED);
+        p.text(pos2(tx, r.center().y - 7.0 * k), Align2::LEFT_CENTER, top, theme::bold_font(13.0 * k), if enabled { Color32::WHITE } else { Color32::from_white_alpha(90) });
+        p.text(pos2(tx, r.center().y + 9.0 * k), Align2::LEFT_CENTER, sub, theme::font(10.5 * k), col::MUTED);
         let clicked = resp.on_hover_text("Play Feature: buy the bonus, or spin with better odds").on_hover_cursor(egui::CursorIcon::PointingHand).clicked();
         if clicked && enabled {
             let st = self.stake_ui_mut(kind);
@@ -328,6 +365,11 @@ impl PyrApp {
 
     /// The Fairness button (a shield with a tick).
     pub(super) fn fairness_button(&mut self, ui: &mut egui::Ui, kind: SlotKind, r: Rect) {
+        self.fairness_button_k(ui, kind, r, 1.0)
+    }
+
+    /// `fairness_button`, its word `k` times as big.
+    pub(super) fn fairness_button_k(&mut self, ui: &mut egui::Ui, kind: SlotKind, r: Rect, k: f32) {
         let p = ui.painter().clone();
         let resp = ui.interact(r, ui.id().with(("fair-button", kind.key())), Sense::click());
         let on = self.stake_ui(kind).fairness.is_some();
@@ -338,7 +380,7 @@ impl PyrApp {
         p.add(egui::Shape::convex_polygon(vec![c + vec2(-s, -s * 0.9), c + vec2(0.0, -s * 1.2), c + vec2(s, -s * 0.9), c + vec2(s * 0.85, s * 0.3), c + vec2(0.0, s * 1.2), c + vec2(-s * 0.85, s * 0.3)], Color32::TRANSPARENT, Stroke::new(1.6f32, ink)));
         p.line_segment([c + vec2(-s * 0.45, 0.0), c + vec2(-s * 0.1, s * 0.4)], Stroke::new(1.8f32, ink));
         p.line_segment([c + vec2(-s * 0.1, s * 0.4), c + vec2(s * 0.5, -s * 0.4)], Stroke::new(1.8f32, ink));
-        p.text(pos2(c.x + s * 1.6, r.center().y), Align2::LEFT_CENTER, "Fairness", theme::bold_font(12.0), if on { Color32::BLACK } else { col::TEXT });
+        p.text(pos2(c.x + s * 1.6, r.center().y), Align2::LEFT_CENTER, "Fairness", theme::bold_font(12.0 * k), if on { Color32::BLACK } else { col::TEXT });
         if resp.on_hover_text("Your seed for this slot, the house's, and every round played again").clicked() {
             let st = self.stake_ui_mut(kind);
             st.fairness = if st.fairness.is_some() { None } else { Some(FairTab::Seeds) };
@@ -482,7 +524,7 @@ impl PyrApp {
 
     pub(super) fn stake_ui(&self, kind: SlotKind) -> &StakeUi {
         match kind {
-            SlotKind::Row(_) => &self.poker.casino.row.stake,
+            SlotKind::Row(_) | SlotKind::Rm(_) => &self.poker.casino.row.stake,
             SlotKind::Sevens => &self.poker.casino.slots.stake,
             SlotKind::Dragon => &self.poker.casino.dragon.stake,
         }
@@ -490,7 +532,7 @@ impl PyrApp {
 
     pub(super) fn stake_ui_mut(&mut self, kind: SlotKind) -> &mut StakeUi {
         match kind {
-            SlotKind::Row(_) => &mut self.poker.casino.row.stake,
+            SlotKind::Row(_) | SlotKind::Rm(_) => &mut self.poker.casino.row.stake,
             SlotKind::Sevens => &mut self.poker.casino.slots.stake,
             SlotKind::Dragon => &mut self.poker.casino.dragon.stake,
         }
@@ -507,6 +549,7 @@ fn replay(v: &VerifyForm, key: &str) -> Result<String, String> {
     let mut st = casino::stream(&server, &client, r.outcome.game(), nonce);
     let again = match &r.outcome {
         Outcome::Row(o) => Outcome::Row(reelrow::play(o.machine, o.bet, o.feature, &mut st)),
+        Outcome::Remaster(o) => Outcome::Remaster(remaster::play_with(o.machine, o.bet, o.feature, o.ante, &mut st, o.pool)),
         Outcome::Slots(o) => Outcome::Slots(slots::play_feature(o.line_bet, o.feature, &mut st, o.jackpot_pool)),
         Outcome::Dragon(o) => Outcome::Dragon(dragon::play_feature(o.bet, o.growth, o.pools, o.feature, &mut st)),
         Outcome::Reels(o) => Outcome::Reels(casino::reels::play(o.machine, o.bet, o.bought, &mut st)),

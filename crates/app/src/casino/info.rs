@@ -97,7 +97,7 @@ fn focus(id: &str) -> f32 {
     }
 }
 
-fn about(game: Game, machine: u8, v13: bool) -> Option<About> {
+fn about(game: Game, machine: u8, v13: bool, remastered: bool) -> Option<About> {
     match game {
         Game::Slots => {
             let key = Game::Slots.id().to_string();
@@ -156,6 +156,8 @@ fn about(game: Game, machine: u8, v13: bool) -> Option<About> {
         Game::Reels if v13 => {
             use pyr_poker::casino::reelrow as rw;
             let th = theme(machine);
+            // (Remastered: each machine's own point of the bet.)
+            let point = if remastered { pyr_poker::casino::remaster::MACHINES[(machine as usize).min(11)].point } else { rw::POINT_TENTHOUSANDTHS };
             let key = pyr_poker::casino::reels_key(machine);
             let sheet = format!("reels-{}-symbols", th.id);
             let row = |s: usize| PayRow {
@@ -163,11 +165,18 @@ fn about(game: Game, machine: u8, v13: bool) -> Option<About> {
                 cell: Some(s),
                 drawn: None,
                 name: plain(th.symbols[s]).to_string(),
-                pays: [0, 1, 2].map(|k| times_tt(rr::PAY[s][k] * rw::POINT_TENTHOUSANDTHS)),
+                pays: [0, 1, 2].map(|k| times_tt(rr::PAY[s][k] * point)),
             };
             let blank = |s: usize| PayRow { sheet: sheet.clone(), cell: Some(s), drawn: None, name: plain(th.symbols[s]).to_string(), pays: Default::default() };
             let (game_name, game_what) = rw::GAMES[(machine as usize).min(11)];
-            let mut tags = vec![rtp_tag(&key).unwrap_or_default(), "Slots".into(), "243 ways".into(), game_name.to_string(), "Play Feature".into()];
+            let mut tags = vec![rtp_tag(&key).unwrap_or_default(), "Slots".into(), "243 ways".into()];
+            if remastered {
+                tags.push(pyr_poker::casino::remaster::MACHINES[(machine as usize).min(11)].feature.to_string());
+            }
+            tags.extend([game_name.to_string(), "Play Feature".into()]);
+            if remastered {
+                tags.push("Ante".into());
+            }
             if th.humor.is_some() {
                 tags.push("Funny".into());
             }
@@ -180,7 +189,12 @@ fn about(game: Game, machine: u8, v13: bool) -> Option<About> {
             )];
             paragraphs.push(format!("Three or more {} anywhere (about 1 spin in 176) start its own mini game, the {game_name}: {game_what} It's worth about 59 times the bet on average, and up to 800 times.", th.scatters));
             paragraphs.push("No choice in it changes the odds: what's under what comes out of the round's random numbers in the order things are opened, so every pick has the same chances.".into());
-            paragraphs.push(features_line(super::stake::SlotKind::Row(machine)));
+            if remastered {
+                paragraphs.extend(super::rmshow::info_paragraphs(machine));
+                paragraphs.push(features_line(super::stake::SlotKind::Rm(machine)));
+            } else {
+                paragraphs.push(features_line(super::stake::SlotKind::Row(machine)));
+            }
             match th.humor {
                 Some(Humor::Heat) => paragraphs.push("It's a funny one: every spin that doesn't pay turns up the heat, from MILD all the way to SCOVILLED, and the chili sweats it out. Wins cool it down. (All for laughs: the heat never changes where the reels stop.)".into()),
                 Some(Humor::Dentist) => paragraphs.push("It's a funny one: a sugar count beside the cabinet adds up every gram the reels land, and its host gets queasier the higher it goes. (For show: it never changes where the reels stop.)".into()),
@@ -188,7 +202,11 @@ fn about(game: Game, machine: u8, v13: bool) -> Option<About> {
                 Some(Humor::FishTales) => paragraphs.push("It's a funny one: your three biggest catches go up on the board beside the cabinet, and its host slips on the ice when you miss.".into()),
                 None => {}
             }
-            paragraphs.push("Over a long run it pays back 99% of what's bet: about 65% from the reels, the rest from the mini game. Every Play Feature pays back the same.".into());
+            paragraphs.push(if remastered {
+                "Over a long run it pays back 99% of what's bet, every way to play it: a spin, with Ante or without, and every Play Feature (worked out by playing each of them twenty million times).".into()
+            } else {
+                "Over a long run it pays back 99% of what's bet: about 65% from the reels, the rest from the mini game. Every Play Feature pays back the same.".into()
+            });
             let specials = vec![
                 (blank(rr::WILD as usize), "Wild, on reels 2, 3 and 4: it stands in for every pay symbol.".to_string()),
                 (blank(rr::SCATTER as usize), format!("Scatter: three or more anywhere start the {game_name}.")),
@@ -390,7 +408,8 @@ impl PyrApp {
         let Some(tab) = self.poker.casino.info else { return };
         let Some(game) = self.poker.casino.game else { return };
         let v13 = s.has(pyr_proto::control::CASINO_013_FEATURE);
-        let Some(mut ab) = about(game, self.poker.casino.reels.machine, v13) else {
+        let remastered = s.has(pyr_proto::control::REMASTER_FEATURE);
+        let Some(mut ab) = about(game, self.poker.casino.reels.machine, v13, remastered) else {
             self.poker.casino.info = None;
             return;
         };

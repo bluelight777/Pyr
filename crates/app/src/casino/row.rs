@@ -12,12 +12,14 @@ use pyr_engine::state::ServerView;
 use pyr_poker::casino::feature::Feature;
 use pyr_poker::casino::reels::{self as rr, REELS, ROWS};
 use pyr_poker::casino::reelrow;
+use pyr_poker::casino::remaster;
 use pyr_poker::casino::Outcome;
 use pyr_poker::net::RoundView;
 
 use super::humor::Fun;
 use super::minis::MiniPlay;
 use super::reel_themes::{Theme, theme};
+use super::rmshow::{self, RmShow};
 use super::row_styles::{Button, Frame, Fx, Style, style};
 use super::spin::{Reel, SPEED};
 use super::stake::{Pick, SlotKind, StakeUi};
@@ -61,6 +63,12 @@ pub struct RowUi {
     pub fun: Fun,
     pub stake: StakeUi,
     fx: Vec<Particle>,
+    /// Reel Row Remastered (the server has it, 0.13.2): Ante on; the round being shown; what
+    /// the strips' bombs and coins are worth.
+    pub remastered: bool,
+    pub ante: bool,
+    pub rm: Option<RmShow>,
+    strip_vals: [[u32; STRIP]; REELS],
 }
 
 impl Default for RowUi {
@@ -83,6 +91,10 @@ impl Default for RowUi {
             fun: Fun::default(),
             stake: StakeUi::default(),
             fx: Vec::new(),
+            remastered: false,
+            ante: false,
+            rm: None,
+            strip_vals: [[0; STRIP]; REELS],
         }
     }
 }
@@ -108,14 +120,41 @@ fn filler(seed: u64) -> [u8; STRIP] {
     })
 }
 
+/// A Remastered machine's filler: Reel Row's, with its bombs or coins now and then.
+fn rm_filler(machine: u8, seed: u64) -> ([u8; STRIP], [u32; STRIP]) {
+    let mut s = filler(seed);
+    let mut v = [0u32; STRIP];
+    let fam = remaster::family(machine);
+    for (i, c) in s.iter_mut().enumerate() {
+        let h = seed.wrapping_mul(0x2545_f491_4f6c_dd1d).wrapping_add(i as u64 * 0x9e37_79b9) >> 7;
+        match fam {
+            // (As often as they land: a bomb about one cell in seventy, a coin one in eight.)
+            remaster::Family::Tumble if h % 70 == 0 => *c = remaster::BOMB,
+            remaster::Family::Hold if h % 8 == 0 => *c = remaster::COIN,
+            _ => {}
+        }
+        v[i] = rmshow::filler_value(*c, h >> 5);
+    }
+    (s, v)
+}
+
 impl RowUi {
     fn running(&self, now: Instant) -> bool {
-        self.waiting.is_some() || self.stopped_at.is_some_and(|e| now < e) || self.mini.as_ref().is_some_and(|b| !b.collected) || self.all_in.is_some()
+        self.waiting.is_some() || self.stopped_at.is_some_and(|e| now < e) || self.mini.as_ref().is_some_and(|b| !b.collected) || self.all_in.is_some() || self.rm.as_ref().is_some_and(|r| !r.over)
     }
 
-    /// What a spin (with the armed feature) costs.
+    /// What a spin (with the armed feature, and Ante) costs.
     fn spin_cost(&self) -> u64 {
-        pyr_poker::casino::feature::cost(self.bet, reelrow::price(self.stake.armed.unwrap_or(Feature::Spin)))
+        let f = self.stake.armed.unwrap_or(Feature::Spin);
+        if self.remastered {
+            return pyr_poker::casino::feature::cost(self.bet, remaster::price(self.machine, f, self.ante && f == Feature::Spin));
+        }
+        pyr_poker::casino::feature::cost(self.bet, reelrow::price(f))
+    }
+
+    /// The kind of slot it is (Play Feature, Fairness).
+    pub fn kind(&self) -> SlotKind {
+        if self.remastered { SlotKind::Rm(self.machine) } else { SlotKind::Row(self.machine) }
     }
 }
 
@@ -192,6 +231,7 @@ impl PyrApp {
             ui.win = 0;
             ui.stake.armed = None;
             ui.stake.menu = false;
+            ui.rm = None;
         }
         // (The Info panel and the top bar go by the old machine's number too.)
         self.poker.casino.reels.machine = machine;
@@ -200,6 +240,10 @@ impl PyrApp {
 
     /// A round came back: the reels land on it, or a bought bonus (or all or nothing) starts.
     pub(super) fn row_round(&mut self, round: &RoundView) {
+        if let Outcome::Remaster(o) = &round.outcome {
+            self.rm_round(round, o.clone());
+            return;
+        }
         let Outcome::Row(o) = &round.outcome else { return };
         let now = Instant::now();
         let ui = &mut self.poker.casino.row;
@@ -263,11 +307,175 @@ impl PyrApp {
         }
     }
 
+    /// A Remastered round came back: the spin lands on its first screen (and its show follows),
+    /// or Buy Hold & Win starts, or a bought bonus (or all or nothing) does.
+    fn rm_round(&mut self, round: &RoundView, o: remaster::Outcome) {
+        let now = Instant::now();
+        let turbo = self.poker.casino.row.turbo;
+        let ui = &mut self.poker.casino.row;
+        ui.waiting = None;
+        ui.win = 0;
+        ui.counted = None;
+        ui.showing = Some(round.clone());
+        ui.rm = None;
+        let machine = o.machine;
+        match o.feature {
+            Feature::AllIn => {
+                ui.stopped_at = Some(now);
+                ui.all_in = Some((round.clone(), now, false));
+                self.poker.casino.sound_in(0.0, Cue::Fuse, 0.0, 0.7);
+                return;
+            }
+            Feature::Bonus | Feature::Super | Feature::Mystery => {
+                ui.stopped_at = Some(now);
+                ui.mini = Some(MiniPlay::new(as_row(round), now + Duration::from_millis(1_500)));
+                let th = theme(machine);
+                let (bonus, sup) = SlotKind::Rm(machine).bonus_name();
+                let title = if o.bonus.as_ref().is_some_and(|b| b.times > 1) { sup } else { bonus };
+                let sub = match o.feature {
+                    Feature::Mystery if o.lucky => "the Mystery Bonus turned out SUPER: every prize ×3".to_string(),
+                    Feature::Mystery => "the Mystery Bonus".to_string(),
+                    Feature::Super => "every prize ×3".to_string(),
+                    _ => th.tagline.to_string(),
+                };
+                self.poker.casino.announce(title.to_uppercase(), sub, th.accent, (0.5, 0.42), 0.0);
+                self.poker.casino.sound_in(0.0, Cue::Jackpot, 0.0, 0.6);
+                return;
+            }
+            _ => {}
+        }
+        // Buy Hold & Win: no spin, its board straight away.
+        if o.steps.is_empty() {
+            let show = RmShow::new(round.clone(), o, now, turbo);
+            for (t, cue, vol) in rmshow::sounds(&show) {
+                self.poker.casino.sound_in(t, cue, 0.0, vol);
+            }
+            let ui = &mut self.poker.casino.row;
+            ui.stopped_at = Some(now);
+            ui.rm = Some(show);
+            return;
+        }
+        // The spin lands on the first screen (a Hot Wild or an Espresso Shot landing as one wild,
+        // to fill its reel once it's there).
+        let first = o.steps[0].clone();
+        let fam = remaster::family(machine);
+        for r in 0..REELS {
+            let (mut st, mut sv) = rm_filler(machine, round.nonce.wrapping_mul(31).wrapping_add(r as u64));
+            let full = first.grid[r].iter().all(|&c| c == rr::WILD) && matches!(fam, remaster::Family::Hot | remaster::Family::Espresso);
+            for row in 0..ROWS {
+                st[row] = if full { if row == 1 { rr::WILD } else { st[row + 3] } } else { first.grid[r][row] };
+                sv[row] = if full { sv[row + 3] } else { first.values[r][row] };
+            }
+            ui.strips[r] = st;
+            ui.strip_vals[r] = sv;
+        }
+        let speed = SPEED * ui.fun.reel_speed(theme(machine).humor);
+        for reel in &mut ui.reels {
+            if reel.speed <= 0.0 || reel.landed(now) {
+                reel.start(now, speed);
+            }
+        }
+        // Two scatters down: the last reels take their time.
+        let scatters_by = |upto: usize| first.grid.iter().take(upto).flatten().filter(|&&c| c == rr::SCATTER).count();
+        let slow = scatters_by(3) >= 2 && !ui.turbo;
+        let min = if ui.turbo { 0.25 } else { 0.7 };
+        let mut ends = super::spin::land(&mut ui.reels, &[STRIP; REELS], &[0; REELS], now + Duration::from_secs_f32(min), ui.turbo);
+        if slow {
+            for (i, reel) in ui.reels.iter_mut().enumerate().skip(3) {
+                if let Some((st, from, to, dur)) = reel.land {
+                    let extra = Duration::from_millis(500 * (i as u64 - 2));
+                    reel.land = Some((st + extra, from - speed * extra.as_secs_f32(), to - speed * extra.as_secs_f32(), dur));
+                    ends[i] += extra;
+                }
+            }
+        }
+        let landed = ends.iter().max().copied().unwrap_or(now) + Duration::from_secs_f32(super::spin::land_secs(ui.turbo) * 0.45);
+        let show = RmShow::new(round.clone(), o, landed, turbo);
+        ui.stopped_at = Some(landed);
+        let stop = rmshow::band(machine, "stop").unwrap_or(Cue::ReelStop);
+        let scatter = rmshow::band(machine, "scatter");
+        let mut seen = 0;
+        for (i, e) in ends.iter().enumerate() {
+            let at = e.saturating_duration_since(now).as_secs_f32();
+            self.poker.casino.sound_in(at, stop, (i as f32 - 2.0) * 0.3, 0.7);
+            let here = first.grid[i].iter().filter(|&&c| c == rr::SCATTER).count();
+            if here > 0
+                && let Some(c) = scatter
+            {
+                self.poker.casino.sound_in(at, c, (i as f32 - 2.0) * 0.3, 0.8);
+            }
+            seen += here;
+            if seen >= 2 && i == 2 && slow
+                && let Some(c) = rmshow::band(machine, "tease")
+            {
+                self.poker.casino.sound_in(at + 0.1, c, 0.0, 0.7);
+            }
+        }
+        let after = landed.saturating_duration_since(now).as_secs_f32();
+        for (t, cue, vol) in rmshow::sounds(&show) {
+            self.poker.casino.sound_in(after + t, cue, 0.0, vol);
+        }
+        self.poker.casino.row.rm = Some(show);
+    }
+
+    /// A Remastered round's show: its win counted as its moments pass; once the reels' part is
+    /// over, the bonus (its splash, then the mini game) or the round's end.
+    fn rm_after(&mut self, s: &ServerView, now: Instant) {
+        let Some(show) = self.poker.casino.row.rm.as_ref() else { return };
+        if show.over || now < show.landed {
+            return;
+        }
+        let shown = show.shown(now);
+        let ui = &mut self.poker.casino.row;
+        ui.win = shown;
+        let show = ui.rm.as_ref().unwrap();
+        if now < show.done_at() {
+            return;
+        }
+        let round = show.round.clone();
+        let o = show.o.clone();
+        self.poker.casino.row.rm.as_mut().unwrap().over = true;
+        if let Some(last) = o.steps.last() {
+            let ui = &mut self.poker.casino.row;
+            for r in 0..REELS {
+                let base = ui.reels[r].pos(now).round().rem_euclid(STRIP as f32) as usize;
+                for row in 0..ROWS {
+                    ui.strips[r][(base + row) % STRIP] = last.grid[r][row];
+                    ui.strip_vals[r][(base + row) % STRIP] = last.values[r][row];
+                }
+            }
+        }
+        self.poker.casino.row.counted = Some(now);
+        let th = theme(o.machine);
+        let won = o.paid.saturating_sub(o.bonus.as_ref().map(|b| b.paid()).unwrap_or(0));
+        if won > 0 {
+            self.row_burst(won, o.bet, now);
+        }
+        if o.bonus.is_none() {
+            let v1 = rm_to_v1(&o);
+            self.poker.casino.row.fun.round(th.humor, &v1, round.nonce);
+        }
+        match &o.bonus {
+            Some(_) => {
+                let (bonus, _) = SlotKind::Rm(o.machine).bonus_name();
+                self.poker.casino.announce(format!("{}!", bonus.to_uppercase()), format!("{} {}", o.scatters, th.scatters), th.accent, (0.5, 0.42), 0.3);
+                let cue = rmshow::band(o.machine, "trigger").unwrap_or(Cue::Jackpot);
+                self.poker.casino.sound_in(0.3, cue, 0.0, 0.7);
+                self.poker.casino.row.mini = Some(MiniPlay::new(as_row(&round), now + Duration::from_millis(1_900)));
+            }
+            None => {
+                let round = as_row(&round);
+                self.row_finish(s, &round, now);
+            }
+        }
+    }
+
     /// A round: a spin (with the armed feature), or a feature bought.
     fn row_play(&mut self, s: &ServerView, feature: Feature) {
         let now = Instant::now();
         let ui = &self.poker.casino.row;
-        let cost = pyr_poker::casino::feature::cost(ui.bet, reelrow::price(feature));
+        let ante = ui.remastered && ui.ante && feature == Feature::Spin;
+        let cost = if ui.remastered { pyr_poker::casino::feature::cost(ui.bet, remaster::price(ui.machine, feature, ante)) } else { pyr_poker::casino::feature::cost(ui.bet, reelrow::price(feature)) };
         if cost > super::chips_now(s) {
             self.poker.casino.row.auto.stop();
             return;
@@ -275,10 +483,17 @@ impl PyrApp {
         if self.poker.casino.busy() || ui.running(now) {
             return;
         }
-        let (machine, bet) = (ui.machine, ui.bet);
-        let spins = feature.spins();
+        let (machine, bet, remastered) = (ui.machine, ui.bet, ui.remastered);
+        // (Remastered's Buy Hold & Win doesn't spin.)
+        let spins = feature.spins() && !(remastered && feature == Feature::Wild && remaster::family(machine) == remaster::Family::Hold);
         if spins {
-            self.poker.casino.sound_in(0.0, Cue::ReelSpin, 0.0, 0.6);
+            let cue = if remastered { rmshow::band(machine, "spin").unwrap_or(Cue::ReelSpin) } else { Cue::ReelSpin };
+            self.poker.casino.sound_in(0.0, cue, 0.0, 0.6);
+        }
+        if remastered && feature != Feature::Spin && !(feature == Feature::Chance) {
+            if let Some(c) = rmshow::band(machine, "buy") {
+                self.poker.casino.sound_in(0.0, c, 0.0, 0.7);
+            }
         }
         let ui = &mut self.poker.casino.row;
         if spins {
@@ -294,9 +509,14 @@ impl PyrApp {
         ui.counted = None;
         ui.stopped_at = None;
         ui.win = 0;
+        ui.rm = None;
         self.poker.casino.celebration = None;
         self.poker.casino.pending = Some(now);
-        self.play_seeded(s, SlotKind::Row(machine), pyr_poker::casino::Bet::Row { machine, bet, feature });
+        if remastered {
+            self.play_seeded(s, SlotKind::Rm(machine), pyr_poker::casino::Bet::Remaster { machine, bet, feature, ante });
+        } else {
+            self.play_seeded(s, SlotKind::Row(machine), pyr_poker::casino::Bet::Row { machine, bet, feature });
+        }
     }
 
     pub(super) fn row_page(&mut self, ui: &mut egui::Ui, s: &ServerView, area: Rect) {
@@ -307,7 +527,13 @@ impl PyrApp {
         let m = self.poker.casino.row.machine;
         let th = theme(m);
         let st = style(m);
-        let kind = SlotKind::Row(m);
+        let remastered = s.has(pyr_proto::control::REMASTER_FEATURE);
+        if self.poker.casino.row.remastered != remastered {
+            self.poker.casino.row.remastered = remastered;
+            self.poker.casino.row.stake.armed = None;
+            self.poker.casino.row.rm = None;
+        }
+        let kind = self.poker.casino.row.kind();
         let funny = th.humor.is_some();
         let lay = layout(area, st, funny);
         // The room: under the art (where it doesn't reach), the art dimmed; over it, the art
@@ -336,9 +562,42 @@ impl PyrApp {
         let in_mini = self.poker.casino.row.mini.as_ref().is_some_and(|b| now >= b.started);
         let in_all_in = self.poker.casino.row.all_in.is_some();
         if !in_mini && !in_all_in {
-            self.row_reels(&p, &ctx, th, st, &lay, now, time);
+            let landed = self.poker.casino.row.rm.as_ref().is_some_and(|r| now >= r.landed);
+            if landed {
+                let board = rmshow::Board { reels: lay.reels, cell: lay.cell, gap: lay.gap, area };
+                let frame = lay.reels.expand(lay.cell * 0.06);
+                p.rect_filled(frame, theme::r(12), Color32::from_black_alpha(225));
+                for i in 0..REELS {
+                    vgrad(&p, board.reel(i), st.reel_top, st.reel_bottom);
+                }
+                if let Some(show) = self.poker.casino.row.rm.as_ref() {
+                    rmshow::draw(&p, &ctx, th, st, &board, show, now, time);
+                }
+            } else {
+                self.row_reels(&p, &ctx, th, st, &lay, now, time);
+            }
+            // A feature spin's banner while it's played.
+            if self.poker.casino.row.remastered {
+                let f = match (&self.poker.casino.row.rm, self.poker.casino.row.waiting) {
+                    (Some(r), _) => Some((r.o.feature, r.landed)),
+                    (None, Some(_)) => self.poker.casino.row.stake.armed.map(|f| (f, now + Duration::from_secs(5))),
+                    _ => None,
+                };
+                if let Some((f @ Feature::Wild, landed)) = f
+                    && remaster::family(m) != remaster::Family::Hold
+                {
+                    let a = 1.0 - (now.saturating_duration_since(landed).as_secs_f32() / 0.6).min(1.0);
+                    let (name, what) = SlotKind::Rm(m).describe(f);
+                    let board = rmshow::Board { reels: lay.reels, cell: lay.cell, gap: lay.gap, area };
+                    rmshow::banner(&p, &board, &name, &what, th.accent, a);
+                }
+            }
         }
-        self.row_after_stop(s, now);
+        if self.poker.casino.row.remastered {
+            self.rm_after(s, now);
+        } else {
+            self.row_after_stop(s, now);
+        }
         // Wins flying up.
         self.row_fx(&p, st, th, now);
         if in_all_in {
@@ -645,6 +904,17 @@ impl PyrApp {
                     continue;
                 }
                 let on = lit.iter().any(|(rl, rw)| *rl == i && row == *rw as i32) && !blurred;
+                // A Remastered machine's: its own bombs, coins and wilds, with their numbers.
+                if r.remastered {
+                    let v = r.strip_vals[i][idx];
+                    if blurred {
+                        rmshow::draw_cell(&clip, ctx, r.machine, sym, v, r.bet, sr.translate(vec2(0.0, -cell * 0.14)), 0.27, th.accent);
+                        rmshow::draw_cell(&clip, ctx, r.machine, sym, v, r.bet, sr, 0.75, th.accent);
+                    } else {
+                        rmshow::draw_cell(&clip, ctx, r.machine, sym, v, r.bet, sr, 1.0, th.accent);
+                    }
+                    continue;
+                }
                 if on {
                     let pulse = 0.5 + 0.5 * (time * 6.0).sin();
                     radial(&clip, sr.center(), cell * 0.6, th.accent.gamma_multiply(0.4 + 0.2 * pulse), Color32::TRANSPARENT);
@@ -675,7 +945,7 @@ impl PyrApp {
         }
         // A Chance spin's mark, while it's armed.
         if let Some(f) = self.poker.casino.row.stake.armed {
-            let (name, _) = SlotKind::Row(self.poker.casino.row.machine).describe(f);
+            let (name, _) = self.poker.casino.row.kind().describe(f);
             let t = format!("{} ON", name.to_uppercase());
             let g = p.layout_no_wrap(t, theme::bold_font(12.0), Color32::BLACK);
             let tag = Rect::from_min_size(pos2(lay.reels.right() - g.size().x - 22.0, lay.reels.top() - g.size().y - 14.0), g.size() + vec2(16.0, 6.0));
@@ -869,25 +1139,30 @@ impl PyrApp {
     #[allow(clippy::too_many_arguments)]
     fn row_all_in(&mut self, ui: &mut egui::Ui, s: &ServerView, th: &Theme, st: &Style, r: Rect, now: Instant, time: f32) {
         let Some((round, since, done)) = self.poker.casino.row.all_in.clone() else { return };
-        let Outcome::Row(o) = &round.outcome else { return };
+        let (lucky, paid, bet) = match &round.outcome {
+            Outcome::Row(o) => (o.lucky, o.paid, o.bet),
+            Outcome::Remaster(o) => (o.lucky, o.paid, o.bet),
+            _ => return,
+        };
         let p = ui.painter().clone();
         let t = (now - since).as_secs_f32();
         let spin_t = 3.2;
         let _ = time;
-        let landed = super::stake::all_in_dial(&p, r, th.accent, st.font, o.lucky, o.paid, &format!("1 in 50.5 for {}", chips_text(o.bet * reelrow::ALL_IN_X)), t);
+        let landed = super::stake::all_in_dial(&p, r, th.accent, st.font, lucky, paid, &format!("1 in 50.5 for {}", chips_text(bet * reelrow::ALL_IN_X)), t);
         if landed {
             if !done {
                 self.poker.casino.row.all_in.as_mut().unwrap().2 = true;
-                if o.lucky {
+                if lucky {
                     self.poker.casino.sound_in(0.0, Cue::Jackpot, 0.0, 0.9);
-                    self.row_burst(o.paid, o.bet, now);
+                    self.row_burst(paid, bet, now);
                 } else {
                     self.poker.casino.sound_in(0.0, Cue::Fold, 0.0, 0.6);
                 }
-                self.poker.casino.row.win = o.paid;
+                self.poker.casino.row.win = paid;
             }
             if t > spin_t + 2.2 {
                 self.poker.casino.row.all_in = None;
+                let round = as_row(&round);
                 self.row_finish(s, &round, now);
             }
         }
@@ -896,32 +1171,35 @@ impl PyrApp {
     #[allow(clippy::too_many_arguments)]
     fn row_controls(&mut self, ui: &mut egui::Ui, s: &ServerView, th: &Theme, st: &Style, bar: Rect, now: Instant, time: f32) {
         let p = ui.painter().clone();
-        let m = self.poker.casino.row.machine;
-        let kind = SlotKind::Row(m);
+        let kind = self.poker.casino.row.kind();
         vgrad_round(&p, bar, 18.0, mix(th.deep, Color32::from_rgb(0x16, 0x10, 0x16), 0.5), Color32::from_rgb(0x08, 0x06, 0x0a));
         p.rect_stroke(bar, theme::r(18), Stroke::new(1.0f32, th.accent.gamma_multiply(0.45)), StrokeKind::Inside);
         let cy = bar.center().y;
         let busy = self.poker.casino.busy() || self.poker.casino.row.running(now);
         let bet = self.poker.casino.row.bet;
+        let remastered = self.poker.casino.row.remastered;
+        let fit = BarFit::new(bar.width(), remastered);
+        let k = fit.k;
+        let x = |d: f32| bar.left() + d * k;
         // The bet.
-        p.text(pos2(bar.left() + 22.0, bar.top() + 18.0), Align2::LEFT_CENTER, "BET", theme::bold_font(11.5), col::MUTED);
-        let minus = Rect::from_center_size(pos2(bar.left() + 36.0, cy + 10.0), vec2(32.0, 32.0));
-        let plus = Rect::from_center_size(pos2(bar.left() + 150.0, cy + 10.0), vec2(32.0, 32.0));
+        p.text(pos2(x(22.0), cy - 29.0 * k), Align2::LEFT_CENTER, "BET", theme::bold_font(11.5 * k), col::MUTED);
+        let minus = Rect::from_center_size(pos2(x(36.0), cy + 10.0 * k), vec2(32.0, 32.0) * k);
+        let plus = Rect::from_center_size(pos2(x(150.0), cy + 10.0 * k), vec2(32.0, 32.0) * k);
         // (Bet less, bet more: their keys too.)
         let key_dir = if self.poker.casino.info.is_none() && !self.poker.casino.row.stake.menu { super::keys::bet_step(ui.ctx()) } else { 0 };
         for (r, label, dir) in [(minus, "−", -1i32), (plus, "+", 1)] {
             let resp = ui.interact(r, ui.id().with(("rowbet", label)), Sense::click());
-            p.circle_filled(r.center(), 16.0, if resp.hovered() && !busy { th.accent } else { mix(th.accent, Color32::BLACK, 0.5) });
-            p.text(r.center(), Align2::CENTER_CENTER, label, theme::bold_font(19.0), Color32::BLACK);
+            p.circle_filled(r.center(), 16.0 * k, if resp.hovered() && !busy { th.accent } else { mix(th.accent, Color32::BLACK, 0.5) });
+            p.text(r.center(), Align2::CENTER_CENTER, label, theme::bold_font(19.0 * k), Color32::BLACK);
             if (resp.clicked() || key_dir == dir) && !busy {
                 let bets = super::slot_bets(s);
                 let i = bets.iter().position(|x| *x == bet).unwrap_or(2) as i32;
                 self.poker.casino.row.bet = bets[(i + dir).clamp(0, bets.len() as i32 - 1) as usize];
             }
         }
-        let amount = Rect::from_center_size(pos2(bar.left() + 93.0, cy + 10.0), vec2(76.0, 30.0));
+        let amount = Rect::from_center_size(pos2(x(93.0), cy + 10.0 * k), vec2(76.0, 30.0) * k);
         let aresp = ui.interact(amount, ui.id().with("rowbet-pick"), Sense::click()).on_hover_text("Choose the bet");
-        p.text(amount.center(), Align2::CENTER_CENTER, chips_text(bet), theme::bold_font(20.0), col::GOLD2);
+        p.text(amount.center(), Align2::CENTER_CENTER, chips_text(bet), theme::bold_font(20.0 * k), col::GOLD2);
         if !busy {
             egui::Popup::menu(&aresp).align(egui::RectAlign::TOP_START).show(|ui| {
                 crate::menu::style(ui);
@@ -935,25 +1213,31 @@ impl PyrApp {
         }
         // Win.
         let win = self.poker.casino.row.win;
-        p.text(pos2(bar.left() + 188.0, bar.top() + 18.0), Align2::LEFT_CENTER, "WIN", theme::bold_font(11.5), col::MUTED);
-        p.text(pos2(bar.left() + 188.0, cy + 10.0), Align2::LEFT_CENTER, if win > 0 { chips_text(win) } else { "–".into() }, theme::bold_font(22.0), if win > 0 { col::WIN } else { col::MUTED });
-        // Play Feature, beside the win.
-        let pf = Rect::from_min_size(pos2(bar.left() + 290.0, cy - 22.0), vec2(200.0, 44.0));
-        self.play_feature_button(ui, kind, pf, th.accent, !busy && !self.poker.casino.row.auto.on());
+        p.text(pos2(x(188.0), cy - 29.0 * k), Align2::LEFT_CENTER, "WIN", theme::bold_font(11.5 * k), col::MUTED);
+        p.text(pos2(x(188.0), cy + 10.0 * k), Align2::LEFT_CENTER, if win > 0 { chips_text(win) } else { "–".into() }, theme::bold_font(22.0 * k), if win > 0 { col::WIN } else { col::MUTED });
+        // Ante (Remastered), and Play Feature, beside the win.
+        let mut pf_left = x(290.0);
+        if remastered {
+            let ar = Rect::from_min_size(pos2(pf_left, cy - 22.0 * k), vec2(fit.ante_w, 44.0) * k);
+            self.ante_toggle(ui, ar, th, busy, k);
+            pf_left += (fit.ante_w + 10.0) * k;
+        }
+        let pf = Rect::from_min_size(pos2(pf_left, cy - 22.0 * k), vec2(fit.pf_w, 44.0) * k);
+        self.play_feature_button_k(ui, kind, pf, th.accent, !busy && !self.poker.casino.row.auto.on(), k);
         // Spin: the machine's own button, between Play Feature and the small buttons.
         let auto = self.poker.casino.row.auto;
-        let small_w = 4.0 * 8.0 + [100.0, 66.0, 80.0, 56.0].iter().sum::<f32>();
-        let spin_c = pos2(((pf.right() + bar.right() - 16.0 - small_w) / 2.0).max(pf.right() + 60.0), cy);
-        let rad = 42.0;
+        let right = bar.right() - fit.right_w * k;
+        let spin_c = pos2(((pf.right() + right) / 2.0).max(pf.right() + fit.spin_gap * k), cy);
+        let rad = 42.0 * k;
         let spin_r = Rect::from_center_size(spin_c, vec2(rad * 2.4, rad * 2.0));
         let resp = ui.interact(spin_r, ui.id().with("rowspin"), Sense::click());
         let cost = self.poker.casino.row.spin_cost();
         spin_button(&p, st.button, spin_c, rad, th, st, resp.hovered() && !busy, busy && !auto.on(), time);
         let label = if auto.on() { "STOP" } else { "SPIN" };
-        p.text(spin_c - vec2(0.0, 7.0), Align2::CENTER_CENTER, label, theme::display_font(st.font, 21.0), Color32::from_rgb(0x1a, 0x08, 0x04));
+        p.text(spin_c - vec2(0.0, 7.0 * k), Align2::CENTER_CENTER, label, theme::display_font(st.font, 21.0 * k), Color32::from_rgb(0x1a, 0x08, 0x04));
         let sub = if auto.on() { format!("auto {}", auto.left_text()) } else if cost != bet { chips_text(cost) } else { String::new() };
         if !sub.is_empty() {
-            p.text(spin_c + vec2(0.0, 14.0), Align2::CENTER_CENTER, sub, theme::bold_font(11.0), Color32::from_rgb(0x1a, 0x08, 0x04));
+            p.text(spin_c + vec2(0.0, 14.0 * k), Align2::CENTER_CENTER, sub, theme::bold_font(11.0 * k), Color32::from_rgb(0x1a, 0x08, 0x04));
         }
         let space = super::keys::pressed(ui.ctx(), super::keys::Move::SlotsSpin) && self.poker.casino.info.is_none() && !self.poker.casino.row.stake.menu;
         if resp.on_hover_text(super::keys::with_key("Spin", super::keys::Move::SlotsSpin)).clicked() || space {
@@ -964,22 +1248,16 @@ impl PyrApp {
                 self.row_play(s, f);
             }
         }
-        // Fairness, Auto, Turbo, Info (right to left).
-        let mut bx = bar.right() - 16.0;
-        let mut place = |w: f32| {
-            let r = Rect::from_min_size(pos2(bx - w, cy - 15.0), vec2(w, 30.0));
-            bx -= w + 8.0;
-            r
-        };
+        // Info, Turbo, Auto, Fairness: in a row at the right (0.13.28's), or where that would run
+        // into the spin button, two to a row (Info and Turbo over Auto and Fairness).
+        let [ir, tr, ar, fr] = fit.small(bar, k);
         let small = |ui: &mut egui::Ui, r: Rect, id: &str, text: &str, on: bool, tip: &str| -> egui::Response {
             let resp = ui.interact(r, ui.id().with(("rowbtn", id)), Sense::click());
-            ui.painter().rect_filled(r, theme::r(15), if on { th.accent } else if resp.hovered() { Color32::from_white_alpha(40) } else { Color32::from_white_alpha(18) });
-            ui.painter().text(r.center(), Align2::CENTER_CENTER, text, theme::bold_font(12.0), if on { Color32::BLACK } else { col::TEXT });
+            ui.painter().rect_filled(r, theme::r((r.height() / 2.0) as u8), if on { th.accent } else if resp.hovered() { Color32::from_white_alpha(40) } else { Color32::from_white_alpha(18) });
+            ui.painter().text(r.center(), Align2::CENTER_CENTER, text, theme::bold_font(12.0 * k), if on { Color32::BLACK } else { col::TEXT });
             resp.on_hover_text(tip)
         };
-        let fr = place(100.0);
-        self.fairness_button(ui, kind, fr);
-        let ar = place(80.0);
+        self.fairness_button_k(ui, kind, fr, k);
         let auto_label = if auto.on() { format!("Auto {}", auto.left_text()) } else { "Auto ⌄".into() };
         let resp = small(ui, ar, "auto", &auto_label, auto.on(), if auto.on() { "Stop spinning by itself" } else { "Spin by itself: 10 to 1,000 times, or until you stop it" });
         if auto.on() {
@@ -992,17 +1270,99 @@ impl PyrApp {
                 self.poker.casino.row.next_at = Some(Instant::now());
             }
         }
-        let tr = place(66.0);
         if small(ui, tr, "turbo", "Turbo", self.poker.casino.row.turbo, "Faster spins").clicked() {
             self.poker.casino.row.turbo = !self.poker.casino.row.turbo;
         }
-        let ir = place(56.0);
         if small(ui, ir, "info", "Info", self.poker.casino.info.is_some(), "What it pays, its statistics and its story").clicked() {
             self.info_toggle();
         }
         if super::chips_now(s) < cost {
-            p.text(pos2(bar.center().x, bar.bottom() - 8.0), Align2::CENTER_CENTER, "Not enough chips for this bet: lower it, or take the daily chips in the lobby.", theme::font(11.0), col::LOSE);
+            p.text(pos2(bar.center().x, bar.bottom() - 8.0), Align2::CENTER_CENTER, "Not enough chips for this bet: lower it, or take the daily chips in the lobby.", theme::font(11.0 * k), col::LOSE);
         }
+    }
+}
+
+impl PyrApp {
+    /// Ante's switch (Remastered, 0.13.2): each spin a quarter more, the bonus about 1.7 times as
+    /// likely (1.5 on the tumbling machines); for spins only (with a feature armed it waits).
+    /// (`k`: the bar's size, 1 as 0.13.28 drew it.)
+    fn ante_toggle(&mut self, ui: &mut egui::Ui, r: Rect, th: &Theme, busy: bool, k: f32) {
+        let p = ui.painter().clone();
+        let resp = ui.interact(r, ui.id().with("ante"), Sense::click());
+        let row = &self.poker.casino.row;
+        let on = row.ante;
+        let live = row.stake.armed.is_none();
+        let fill = if on && live { mix(th.accent, Color32::BLACK, 0.5) } else if resp.hovered() && !busy { Color32::from_rgb(0x3a, 0x2a, 0x40) } else { Color32::from_rgb(0x24, 0x1a, 0x2a) };
+        vgrad_round(&p, r, r.height() / 2.0, fill, mix(fill, Color32::BLACK, 0.5));
+        p.rect_stroke(r, theme::r((r.height() / 2.0) as u8), Stroke::new(1.5f32, th.accent.gamma_multiply(0.55)), StrokeKind::Inside);
+        let sw = Rect::from_center_size(pos2(r.left() + 25.0 * k, r.center().y), vec2(30.0, 16.0) * k);
+        p.rect_filled(sw, theme::r((8.0 * k) as u8), if on { th.accent } else { Color32::from_white_alpha(45) });
+        p.circle_filled(pos2(if on { sw.right() - 8.0 * k } else { sw.left() + 8.0 * k }, sw.center().y), 6.0 * k, if live { Color32::WHITE } else { Color32::from_gray(150) });
+        let x = if remaster::family(row.machine) == remaster::Family::Tumble { "1.5" } else { "1.7" };
+        p.text(pos2(r.left() + 50.0 * k, r.center().y - 7.0 * k), Align2::LEFT_CENTER, "ANTE", theme::bold_font(13.0 * k), if live { Color32::WHITE } else { Color32::from_white_alpha(110) });
+        p.text(pos2(r.left() + 50.0 * k, r.center().y + 9.0 * k), Align2::LEFT_CENTER, format!("bonus ×{x}"), theme::font(10.5 * k), col::MUTED);
+        let tip = format!("Ante: each spin a quarter more, and the bonus about {x} times as likely");
+        if resp.on_hover_text(tip).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() && !busy {
+            self.poker.casino.row.ante = !on;
+        }
+    }
+}
+
+/// How the machine's bar fits its width. 0.13.28 laid it out in one row whatever the width, and
+/// under about 1,450 wide (a 1,280 window, say) its small buttons ran under the spin button and
+/// into Play Feature. Here, as it narrows: 0.13.28's row while it fits; then the small buttons
+/// two to a row; then Ante and Play Feature a little narrower; then all of it smaller (`k`).
+struct BarFit {
+    k: f32,
+    grid: bool,
+    ante_w: f32,
+    pf_w: f32,
+    /// The spin button's centre at least this far past Play Feature.
+    spin_gap: f32,
+    /// The small buttons' room at the right (from the bar's edge).
+    right_w: f32,
+}
+
+impl BarFit {
+    fn new(width: f32, remastered: bool) -> BarFit {
+        let ante = if remastered { 132.0 } else { 0.0 };
+        // (The spin button reaches 54 either side of its centre; 6 clear of what's beside it.)
+        if width >= 290.0 + ante + 200.0 + 120.0 + 342.0 {
+            return BarFit { k: 1.0, grid: false, ante_w: 122.0, pf_w: 200.0, spin_gap: 60.0, right_w: 350.0 };
+        }
+        if width >= 290.0 + ante + 200.0 + 124.0 + 204.0 {
+            return BarFit { k: 1.0, grid: true, ante_w: 122.0, pf_w: 200.0, spin_gap: 64.0, right_w: 204.0 };
+        }
+        let ante = if remastered { 120.0 } else { 0.0 };
+        let need = 290.0 + ante + 172.0 + 118.0 + 204.0;
+        BarFit { k: (width / need).clamp(0.55, 1.0), grid: true, ante_w: 110.0, pf_w: 172.0, spin_gap: 58.0, right_w: 204.0 }
+    }
+
+    /// Info, Turbo, Auto and Fairness's places.
+    fn small(&self, bar: Rect, k: f32) -> [Rect; 4] {
+        let cy = bar.center().y;
+        let right = bar.right() - 16.0 * k;
+        if !self.grid {
+            let mut bx = right;
+            let mut place = |w: f32| {
+                let r = Rect::from_min_size(pos2(bx - w, cy - 15.0), vec2(w, 30.0));
+                bx -= w + 8.0;
+                r
+            };
+            let fr = place(100.0);
+            let ar = place(80.0);
+            let tr = place(66.0);
+            let ir = place(56.0);
+            return [ir, tr, ar, fr];
+        }
+        let h = 28.0 * k;
+        let (top, low) = (cy - 17.0 * k, cy + 17.0 * k);
+        let at = |x1: f32, w: f32, y: f32| Rect::from_min_max(pos2(x1 - w * k, y - h / 2.0), pos2(x1, y + h / 2.0));
+        let tr = at(right, 66.0, top);
+        let ir = at(tr.left() - 8.0 * k, 56.0, top);
+        let fr = at(right, 100.0, low);
+        let ar = at(fr.left() - 8.0 * k, 80.0, low);
+        [ir, tr, ar, fr]
     }
 }
 
@@ -1095,6 +1455,34 @@ fn spin_button(p: &egui::Painter, shape: Button, c: Pos2, r: f32, th: &Theme, st
         p.circle_stroke(c, r * 0.95, Stroke::new(1.0f32, Color32::from_white_alpha(40)));
         p.line_segment([c + vec2(a.cos(), a.sin()) * r * 0.7, c + vec2(a.cos(), a.sin()) * r * 0.95], Stroke::new(3.0f32, Color32::WHITE));
     }
+}
+
+/// A Remastered round as Reel Row's from 0.13.0, for what's shared with it: its bonus (the mini
+/// games), All or nothing and the round's end (what it paid, its top prize).
+fn as_row(round: &RoundView) -> RoundView {
+    let Outcome::Remaster(o) = &round.outcome else { return round.clone() };
+    let mut r = round.clone();
+    r.outcome = Outcome::Row(reelrow::Outcome {
+        machine: o.machine,
+        bet: o.bet,
+        feature: o.feature,
+        cost: o.cost,
+        grid: None,
+        wins: Vec::new(),
+        scatters: o.scatters,
+        bonus: o.bonus.clone(),
+        lucky: o.lucky,
+        paid: o.paid,
+        pool: o.pool,
+    });
+    r
+}
+
+/// A Remastered round as the funny machines' hosts take it in.
+fn rm_to_v1(o: &remaster::Outcome) -> rr::Outcome {
+    let first = o.steps.first();
+    let wins = first.map(|s| s.wins.iter().map(|w| rr::WayWin { symbol: w.symbol, count: w.count, ways: w.ways, pay: w.pay }).collect()).unwrap_or_default();
+    rr::Outcome { machine: o.machine, bet: o.bet, bought: false, grid: first.map(|s| s.grid), wins, scatters: o.scatters, bonus: None, paid: o.paid }
 }
 
 /// The round as the funny machines' hosts take it in (they were made for the reels' rounds of

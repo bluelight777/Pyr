@@ -175,13 +175,13 @@ use Family::*;
 pub const MACHINES: [Machine; 12] = [
     machine(Hot, "Hot Wilds", "Hot Spin", 267, 200, 753, 10_000).wilds(1_217, 1_217).scatters(2_500, 3_069),
     machine(Hold, "Pearl Hold & Win", "Buy Hold & Win", 300, 200, 3_650, 50_000).coins(12_085, 600, 4_077, 1_200).scatters(2_500, 3_053),
-    machine(Tumble, "Cosmic Tumbles", "Bomb Spin", 209, 189, 175, 500_000).bombs(1_430, &COSMIC_BOMBS, &COSMIC_START).scatters(2_478, 2_926),
-    machine(Tumble, "Candy Tumbles", "Bomb Spin", 222, 189, 169, 5_000).bombs(1_430, &SUGAR_BOMBS, &SUGAR_START).scatters(2_496, 2_926),
+    machine(Tumble, "Cosmic Tumbles", "Bomb Spin", 209, 189, 175, 500_000).bombs(1_430, &COSMIC_BOMBS, &COSMIC_START).scatters(2_466, 2_897),
+    machine(Tumble, "Candy Tumbles", "Bomb Spin", 222, 189, 169, 5_000).bombs(1_430, &SUGAR_BOMBS, &SUGAR_START).scatters(2_471, 2_907),
     machine(Hold, "Nugget Hold & Win", "Buy Hold & Win", 304, 200, 3_585, 0).coins(12_123, 600, 4_077, 1_200).scatters(2_500, 3_054),
-    machine(Tumble, "Neon Tumbles", "Bomb Spin", 223, 189, 169, 20_000).bombs(1_430, &NEON_BOMBS, &NEON_START).scatters(2_476, 2_924),
+    machine(Tumble, "Neon Tumbles", "Bomb Spin", 223, 189, 169, 20_000).bombs(1_430, &NEON_BOMBS, &NEON_START).scatters(2_467, 2_907),
     machine(Hold, "Scarab Hold & Win", "Buy Hold & Win", 300, 200, 3_650, 50_000).coins(12_106, 600, 4_077, 1_200).scatters(2_500, 3_053),
     machine(Frozen, "Frozen Wilds", "Frozen Spin", 387, 200, 563, 7_500).wilds(2_027, 2_584).scatters(2_500, 3_054),
-    machine(Tumble, "Bubbling Tumbles", "Bomb Spin", 223, 189, 170, 10_000).bombs(1_430, &MOONLIT_BOMBS, &MOONLIT_START).scatters(2_498, 2_930),
+    machine(Tumble, "Bubbling Tumbles", "Bomb Spin", 223, 189, 170, 10_000).bombs(1_430, &MOONLIT_BOMBS, &MOONLIT_START).scatters(2_472, 2_904),
     machine(Hold, "Hoard Hold & Win", "Buy Hold & Win", 308, 200, 3_587, 0).coins(12_085, 600, 4_077, 1_200).scatters(2_500, 3_054),
     machine(Espresso, "Espresso Shots", "Double Shot", 234, 200, 1_597, 5_000).wilds(1_804, 1_948).scatters(2_500, 3_077),
     machine(Spotlight, "Spotlight Wilds", "Encore Spin", 227, 200, 511, 25_000).wilds(2_234, 2_431).scatters(2_500, 3_053),
@@ -192,14 +192,14 @@ pub const HOT_X: [(u32, u32); 3] = [(2, 6_000), (3, 2_975), (5, 1_025)];
 
 /// What a bomb landing by itself can be worth, and how often (out of 100,000): Cosmic Jackpot's
 /// star orbs to 500×, the others' to 100×; and what a Bomb Spin's three are worth.
-pub const COSMIC_BOMBS: [(u32, u32); 13] = [(2, 37_971), (3, 22_015), (4, 14_470), (5, 10_577), (8, 5_466), (10, 3_995), (15, 2_261), (20, 1_509), (25, 1_103), (50, 417), (100, 157), (250, 43), (500, 16)];
-pub const COSMIC_START: [(u32, u32); 10] = [(2, 32_808), (3, 20_634), (4, 14_848), (5, 11_503), (8, 6_720), (10, 5_206), (15, 3_274), (20, 2_356), (25, 1_825), (50, 826)];
-pub const SUGAR_BOMBS: [(u32, u32); 11] = [(2, 40_176), (3, 21_938), (4, 14_281), (5, 10_236), (8, 5_076), (10, 3_639), (15, 1_987), (20, 1_293), (25, 927), (50, 330), (100, 117)];
-pub const SUGAR_START: [(u32, u32); 10] = [(2, 36_075), (3, 21_336), (4, 14_699), (5, 11_009), (8, 5_989), (10, 4_485), (15, 2_653), (20, 1_827), (25, 1_369), (50, 558)];
-pub const NEON_BOMBS: [(u32, u32); 11] = [(2, 40_543), (3, 21_980), (4, 14_237), (5, 10_165), (8, 4_999), (10, 3_569), (15, 1_935), (20, 1_253), (25, 895), (50, 314), (100, 110)];
-pub const NEON_START: [(u32, u32); 10] = [(2, 36_028), (3, 21_327), (4, 14_702), (5, 11_017), (8, 5_999), (10, 4_496), (15, 2_661), (20, 1_834), (25, 1_375), (50, 561)];
-pub const MOONLIT_BOMBS: [(u32, u32); 11] = [(2, 40_565), (3, 21_983), (4, 14_234), (5, 10_160), (8, 4_994), (10, 3_565), (15, 1_932), (20, 1_251), (25, 893), (50, 313), (100, 110)];
-pub const MOONLIT_START: [(u32, u32); 10] = [(2, 36_105), (3, 21_341), (4, 14_697), (5, 11_004), (8, 5_982), (10, 4_479), (15, 2_648), (20, 1_823), (25, 1_365), (50, 556)];
+pub const COSMIC_BOMBS: [(u32, u32); 13] = [(2, 37_901), (3, 21_618), (4, 14_507), (5, 10_648), (8, 5_552), (10, 4_075), (15, 2_323), (20, 1_560), (25, 1_145), (50, 438), (100, 168), (250, 47), (500, 18)];
+pub const COSMIC_START: [(u32, u32); 10] = [(2, 32_823), (3, 20_607), (4, 14_848), (5, 11_504), (8, 6_722), (10, 5_208), (15, 3_276), (20, 2_358), (25, 1_827), (50, 827)];
+pub const SUGAR_BOMBS: [(u32, u32); 11] = [(2, 39_674), (3, 21_825), (4, 14_344), (5, 10_342), (8, 5_192), (10, 3_743), (15, 2_066), (20, 1_355), (25, 977), (50, 354), (100, 128)];
+pub const SUGAR_START: [(u32, u32); 10] = [(2, 35_996), (3, 21_291), (4, 14_706), (5, 11_026), (8, 6_012), (10, 4_508), (15, 2_671), (20, 1_843), (25, 1_382), (50, 565)];
+pub const NEON_BOMBS: [(u32, u32); 11] = [(2, 40_031), (3, 21_930), (4, 14_297), (5, 10_263), (8, 5_105), (10, 3_665), (15, 2_006), (20, 1_309), (25, 939), (50, 335), (100, 120)];
+pub const NEON_START: [(u32, u32); 10] = [(2, 36_042), (3, 21_318), (4, 14_702), (5, 11_016), (8, 5_998), (10, 4_495), (15, 2_660), (20, 1_834), (25, 1_374), (50, 561)];
+pub const MOONLIT_BOMBS: [(u32, u32); 11] = [(2, 39_884), (3, 21_887), (4, 14_317), (5, 10_295), (8, 5_141), (10, 3_697), (15, 2_031), (20, 1_327), (25, 955), (50, 343), (100, 123)];
+pub const MOONLIT_START: [(u32, u32); 10] = [(2, 35_960), (3, 21_296), (4, 14_707), (5, 11_031), (8, 6_018), (10, 4_513), (15, 2_676), (20, 1_847), (25, 1_385), (50, 567)];
 
 /// What a coin can be worth (hundredths of the bet; the last three the Mini, the Minor and the
 /// Major), and how often (out of 100,000).

@@ -130,12 +130,17 @@ impl PyrApp {
         // them).
         let reel_row = s.has(pyr_proto::control::CASINO_012_FEATURE);
         let v13 = s.has(pyr_proto::control::CASINO_013_FEATURE);
+        let remastered = s.has(pyr_proto::control::REMASTER_FEATURE);
         let mut slots = vec![game_card(Game::Slots, "tile-sevens", 0.5, vec![("JACKPOT", col::EMBER)])];
         if reel_row {
             slots.push(game_card(Game::Dragon, "tile-dragon", 0.5, if v13 { vec![("JACKPOTS", col::EMBER), ("BONUS BUY", NEW)] } else { vec![("JACKPOTS", col::EMBER), ("NEW", NEW)] }));
             for (m, th) in THEMES.iter().enumerate() {
                 let mut badges = Vec::new();
-                if v13 {
+                if remastered {
+                    // Its feature and its reach (0.13.28's).
+                    badges.push(super::rmshow::feature_badge(m as u8));
+                    badges.push(top_badge(m as u8));
+                } else if v13 {
                     // Its reach: how far its top prize goes, or its progressive jackpot.
                     badges.push(top_badge(m as u8));
                     badges.push(("BONUS BUY", NEW));
@@ -153,7 +158,10 @@ impl PyrApp {
                     badges,
                     rtp: rtp_line(&key, Game::Reels),
                     key,
-                    pitch: if v13 {
+                    pitch: if remastered {
+                        let (g, _) = pyr_poker::casino::reelrow::GAMES[m];
+                        format!("{} {} Ante, a feature to buy, and its own mini game, the {g}. {}", th.tagline, super::rmshow::feature_words(m as u8).0, top_words(s, m as u8))
+                    } else if v13 {
                         let (g, what) = pyr_poker::casino::reelrow::GAMES[m];
                         format!("{} 243 ways, and its own mini game, the {g}: {what} {}", th.tagline, top_words(s, m as u8))
                     } else {

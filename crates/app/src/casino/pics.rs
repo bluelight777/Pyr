@@ -128,6 +128,30 @@ const PICS: &[(&str, &[u8])] = pics![
     "rr-cabaret-features",
     "sevens-features",
     "dragon-features",
+    // Reel Row Remastered (0.13.2), 0.13.28's: bombs, coins and collectors, the four wilds, the
+    // Hot Wild's and the Espresso Shot's reels, the jackpots' plaques, the big wins' plaques, and
+    // each machine's splash.
+    "rr-bombs",
+    "rr-coins",
+    "rr-wilds",
+    "rr-reel-hot",
+    "rr-reel-shot",
+    "rr-jackpots",
+    "rr-plaques",
+    "win-crown",
+    "win-laurel",
+    "rr-scoville-splash",
+    "rr-deepsea-splash",
+    "rr-cosmic-splash",
+    "rr-sugar-splash",
+    "rr-goldrush-splash",
+    "rr-neon-splash",
+    "rr-tomb-splash",
+    "rr-frost-splash",
+    "rr-cauldron-splash",
+    "rr-hoard-splash",
+    "rr-grind-splash",
+    "rr-cabaret-splash",
 ];
 
 enum Slot {

@@ -172,8 +172,13 @@ pub(crate) struct Parts {
     pub start: f64,
     pub coins: f64,
     pub bonuses: u64,
+    /// Bonuses the spin's own screen didn't start (tumbles brought the third scatter).
+    pub later: u64,
     pub grands: u64,
     pub holds: u64,
+    /// The way played (for the bonus's exact part).
+    pub way: Option<(Feature, bool)>,
+    pub first_p: f64,
 }
 
 impl Parts {
@@ -187,6 +192,7 @@ impl Parts {
         self.start += o.start;
         self.coins += o.coins;
         self.bonuses += o.bonuses;
+        self.later += o.later;
         self.grands += o.grands;
         self.holds += o.holds;
     }
@@ -198,7 +204,14 @@ impl Parts {
         (self.plain + (0..4).map(|k| self.hot[k] * hot_x.powi(k as i32)).sum::<f64>() + self.natural * natural + self.start * start + self.coins * coin) / n
     }
 
+    /// How often the bonus comes: the spin's own screen's chance worked out exactly, and what
+    /// the tumbles add, played.
     pub(crate) fn bonus_rate(&self) -> f64 {
+        self.first_p + self.later as f64 / self.n as f64
+    }
+
+    /// As played (to check the exact part by).
+    pub(crate) fn bonus_rate_played(&self) -> f64 {
         self.bonuses as f64 / self.n as f64
     }
 
@@ -228,6 +241,7 @@ pub(crate) fn parts(m: &Machine, feature: Feature, ante: bool, n: u64, seed: u64
                         let r = spin_on(c, ante, feature, 100_000, &mut d);
                         p.n += 1;
                         p.bonuses += (r.scatters >= 3) as u64;
+                        p.later += (r.scatters >= 3 && r.steps.first().is_some_and(|s| count(&s.grid, SCATTER) < 3)) as u64;
                         p.grands += r.grand as u64;
                         p.holds += !r.hold.is_empty() as u64;
                         p.coins += (r.collected + r.held) as f64 / 100.0;
@@ -270,7 +284,65 @@ pub(crate) fn parts(m: &Machine, feature: Feature, ante: bool, n: u64, seed: u64
     for x in &all {
         p.add(x);
     }
+    p.way = Some((feature, ante));
+    p.first_p = first_bonus_p(m, feature, ante);
     p
+}
+
+fn binom(n: usize, k: usize, p: f64) -> f64 {
+    let c = (0..k).fold(1.0, |a, i| a * (n - i) as f64 / (i + 1) as f64);
+    c * p.powi(k as i32) * (1.0 - p).powi((n - k) as i32)
+}
+
+/// The chance the spin's own screen shows three scatters or more (before any tumble), worked out
+/// exactly: Bonus Chance's is its own; a Hot Wild or an Espresso Shot covers its reel's; a Bomb
+/// Spin's bombs, a Frozen Spin's wilds and an Encore's cover cells.
+pub(crate) fn first_bonus_p(m: &Machine, feature: Feature, ante: bool) -> f64 {
+    match feature {
+        Feature::Chance => return CHANCE_PPM as f64 / 1e6,
+        Feature::Wild if m.family == Hold => return 0.0,
+        _ => {}
+    }
+    let sc = (if ante { m.ante_scatter } else { m.scatter }) as f64 / OUT_OF as f64;
+    let pw = m.wild as f64 / OUT_OF as f64;
+    let special = feature == Feature::Wild;
+    let mut dist = vec![1.0f64];
+    let covering = matches!(m.family, Hot | Espresso);
+    for r in 0..REELS {
+        let d: Vec<f64> = if covering && (1..REELS - 1).contains(&r) {
+            let forced = special && ((m.family == Hot && r == REELS / 2) || (m.family == Espresso && (r == 1 || r == REELS - 2)));
+            if forced {
+                vec![1.0]
+            } else {
+                let h = 1.0 - (1.0 - pw).powi(3);
+                let c = sc / (1.0 - pw);
+                let mut d: Vec<f64> = (0..=ROWS).map(|k| (1.0 - h) * binom(ROWS, k, c)).collect();
+                d[0] += h;
+                d
+            }
+        } else {
+            (0..=ROWS).map(|k| binom(ROWS, k, sc)).collect()
+        };
+        let mut new = vec![0.0; dist.len() + ROWS];
+        for (i, a) in dist.iter().enumerate() {
+            for (j, b) in d.iter().enumerate() {
+                new[i + j] += a * b;
+            }
+        }
+        dist = new;
+    }
+    // Cells covered after the spin's drawn (each drawn cell as likely a scatter as any other).
+    let covered = match (m.family, special) {
+        (Frozen, true) => FROZEN_SPIN_WILDS,
+        (Spotlight, true) => 1,
+        (Tumble, true) => BOMB_SPIN_BOMBS,
+        _ => 0,
+    };
+    if covered > 0 {
+        let cells = PLACES - covered;
+        return 1.0 - (0..3).map(|k| binom(cells, k, sc)).sum::<f64>();
+    }
+    1.0 - dist.iter().take(3).sum::<f64>()
 }
 
 pub(crate) fn mean(t: &[(u32, u32)]) -> f64 {
@@ -306,7 +378,7 @@ fn remaster_parts() {
             let rtp = rtp_of(machine, m, &p, feature, ante);
             let nn = p.n as f64;
             println!(
-                "{:>2} {:<18} {:<15} rtp {:>7.3}%  plain {:.4} hot {:.4},{:.4},{:.4},{:.4} natural {:.5} start {:.5} coins {:.4}  bonus 1 in {:>6.1}  holds 1 in {:>7.1}  grand 1 in {:.0}",
+                "{:>2} {:<18} {:<15} rtp {:>7.3}%  plain {:.4} hot {:.4},{:.4},{:.4},{:.4} natural {:.5} start {:.5} coins {:.4}  bonus 1 in {:>6.1} (played {:.1})  holds 1 in {:>7.1}  grand 1 in {:.0}",
                 machine,
                 reels::machine_name(machine),
                 what,
@@ -319,6 +391,7 @@ fn remaster_parts() {
                 p.natural / nn,
                 p.start / nn,
                 p.coins / nn,
+                1.0 / p.bonus_rate(),
                 nn / p.bonuses.max(1) as f64,
                 nn / p.holds.max(1) as f64,
                 nn / p.grands.max(1) as f64,
@@ -425,46 +498,59 @@ fn remaster_tune() {
                 println!("{machine} {}: wild {:.0}, later {:.0}", reels::machine_name(machine), x, y);
             }
             Tumble => {
-                // The scatter's weight so Bonus Chance pays 99% (the bonus as often as the
-                // tumbles bring it); then what a bomb by itself and a Bomb Spin's are worth on
-                // average, so a spin and a Bomb Spin pay 99%.
-                let solve_at = |scatter: u32| {
+                // A bomb's worth so Bonus Chance pays 99% (its bonus 1 in 44.5 exactly); then the
+                // scatter's weight so a spin does (the tumbles bringing some of its bonuses); then
+                // a Bomb Spin's bombs' worth; then Ante's scatter.
+                let c = parts(&base, Feature::Chance, false, n, seed + 2);
+                let nc = c.n as f64;
+                let en = (target(machine, Feature::Chance, false) - c.plain / nc - c.bonus_rate() * w) / (c.natural / nc);
+                let spin_at = |scatter: u32| {
                     let m = Machine { scatter, ..base };
                     let s = parts(&m, Feature::Spin, false, n, seed);
-                    let b = parts(&m, Feature::Wild, false, n, seed + 1);
-                    let c = parts(&m, Feature::Chance, false, n, seed + 2);
-                    let nn = s.n as f64;
-                    let en = (target(machine, Feature::Spin, false) - s.plain / nn - s.bonus_rate() * w) / (s.natural / nn);
-                    let nb = b.n as f64;
-                    let es = (target(machine, Feature::Wild, false) - b.plain / nb - b.natural / nb * en - b.bonus_rate() * w) / (b.start / nb);
-                    let chance = (c.reels(0.0, en, 0.0, 0.0) + c.bonus_rate() * w) / target(machine, Feature::Chance, false);
-                    println!("  scatter {scatter}: a bomb {en:.3}, a Bomb Spin's {es:.3}, Bonus Chance {:.3}%, bonus 1 in {:.1}", chance * 99.0, 1.0 / s.bonus_rate());
-                    (en, es, chance - 1.0, s, b)
+                    let r = (s.reels(0.0, en, 0.0, 0.0) + s.bonus_rate() * w) / target(machine, Feature::Spin, false);
+                    println!("  scatter {scatter}: spin {:.3}%, bonus 1 in {:.1} (the spin's own screen 1 in {:.1})", r * 99.0, 1.0 / s.bonus_rate(), 1.0 / s.first_p);
+                    (r - 1.0, s)
                 };
-                let (mut a, mut c) = (2_300u32, 2_500u32);
-                let (mut fa, mut fc) = (solve_at(a).2, solve_at(c).2);
+                let (mut a, mut cc) = (2_400u32, 2_550u32);
+                let (mut fa, mut fc) = (spin_at(a).0, spin_at(cc).0);
                 for _ in 0..5 {
                     if (fc - fa).abs() < 1e-9 {
                         break;
                     }
-                    let x = (c as f64 - fc * (c as f64 - a as f64) / (fc - fa)).round().clamp(1_500.0, 3_500.0) as u32;
-                    if x == a || x == c {
+                    let x = (cc as f64 - fc * (cc as f64 - a as f64) / (fc - fa)).round().clamp(1_500.0, 3_500.0) as u32;
+                    if x == a || x == cc {
                         break;
                     }
-                    let fx = solve_at(x).2;
-                    (a, fa, c, fc) = (c, fc, x, fx);
+                    let fx = spin_at(x).0;
+                    (a, fa, cc, fc) = (cc, fc, x, fx);
                 }
-                let (en, es, ch, s, b) = solve_at(c);
-                let (nn, nb) = (s.n as f64, b.n as f64);
+                let scatter = cc;
+                let (_, s) = spin_at(scatter);
+                let m = Machine { scatter, ..base };
+                let b = parts(&m, Feature::Wild, false, n, seed + 1);
+                let nb = b.n as f64;
+                let es = (target(machine, Feature::Wild, false) - b.plain / nb - b.natural / nb * en - b.bonus_rate() * w) / (b.start / nb);
+                let ante_at = |ante_scatter: u32| {
+                    let m = Machine { ante_scatter, ..m };
+                    let a = parts(&m, Feature::Spin, true, n, seed + 3);
+                    (a.reels(0.0, en, 0.0, 0.0) + a.bonus_rate() * w) / target(machine, Feature::Spin, true)
+                };
+                let (mut lo, mut hi) = (scatter, scatter + 1_000);
+                while hi - lo > 1 {
+                    let mid = (lo + hi) / 2;
+                    if ante_at(mid) < 1.0 { lo = mid } else { hi = mid }
+                }
+                let ns = s.n as f64;
                 println!(
-                    "{machine} {}: scatter {c}: a bomb {en:.3} on average (now {:.3}), a Bomb Spin's {es:.3} (now {:.3}); Bonus Chance {:.3}%; bonus 1 in {:.1}, chain {:.4} with no bomb, {:.4} per natural bomb, {:.4} per Bomb Spin bomb",
+                    "{machine} {}: scatter {scatter}, ante {lo}/{hi} ({:.3}%/{:.3}%); a bomb {en:.4} on average (now {:.4}), a Bomb Spin's {es:.4} (now {:.4}); bonus 1 in {:.1}; chain {:.4} with no bomb, {:.5} per natural bomb, {:.5} per Bomb Spin bomb",
                     reels::machine_name(machine),
+                    ante_at(lo) * 99.0,
+                    ante_at(hi) * 99.0,
                     mean(base.bombs),
                     mean(base.start_bombs),
-                    (ch + 1.0) * 99.0,
                     1.0 / s.bonus_rate(),
-                    s.plain / nn,
-                    s.natural / nn,
+                    s.plain / ns,
+                    s.natural / ns,
                     b.start / nb,
                 );
             }
@@ -837,4 +923,40 @@ fn bonus_chance_and_ante() {
     }
     assert!(check(0, 100, Feature::Chance, true).is_err());
     assert!(check(0, 100, Feature::Spin, true).is_ok());
+}
+
+/// The Hold & Win machines' coin weights, each so a spin pays 99% (the coins' worth and the
+/// respins as they are), and Buy Hold & Win as it comes out (`PYR_RR_ROUNDS`; `cargo test -p
+/// pyr-poker remaster_hold -- --ignored --nocapture`).
+#[test]
+#[ignore]
+fn remaster_hold() {
+    let n = rounds();
+    for machine in [1u8, 4, 6, 9] {
+        let base = MACHINES[machine as usize];
+        let w = mini(machine);
+        let coin = mean(base.coins);
+        let b = parts(&base, Feature::Wild, false, n, 500 + machine as u64);
+        let buy = rtp_of(machine, &base, &b, Feature::Wild, false);
+        let at = |special: u32| {
+            let m = Machine { special, ..base };
+            let s = parts(&m, Feature::Spin, false, n, 600 + machine as u64);
+            let grand = if reelrow::progressive(machine) { 0.0 } else { GRAND_X as f64 };
+            (s.reels(0.0, 0.0, 0.0, coin) + s.bonus_rate() * w + s.grand_rate() * grand) / target(machine, Feature::Spin, false)
+        };
+        let (mut a, mut c) = (base.special - 150, base.special + 150);
+        let (mut fa, mut fc) = (at(a) - 1.0, at(c) - 1.0);
+        for _ in 0..6 {
+            if (fc - fa).abs() < 1e-9 {
+                break;
+            }
+            let x = (c as f64 - fc * (c as f64 - a as f64) / (fc - fa)).round().clamp(1_000.0, 25_000.0) as u32;
+            if x == a || x == c {
+                break;
+            }
+            let fx = at(x) - 1.0;
+            (a, fa, c, fc) = (c, fc, x, fx);
+        }
+        println!("{machine} {}: coin weight {c} ({:.3}%; now {}); Buy Hold & Win {:.3}%, the Grand 1 in {:.0}", reels::machine_name(machine), (fc + 1.0) * 99.0, base.special, buy * 100.0, 1.0 / b.grand_rate());
+    }
 }

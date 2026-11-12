@@ -39,6 +39,7 @@ pub mod net;
 pub mod plugin_source;
 pub mod plugins;
 pub mod poker;
+pub mod bands;
 pub mod poker_sfx;
 pub mod sealed;
 pub mod server;

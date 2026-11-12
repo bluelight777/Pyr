@@ -116,6 +116,8 @@ pub enum Cue {
     Peg,
     /// A ball dropping into a bucket: a soft pop and a ding.
     Bucket,
+    /// One of the Reel Row machines' own sounds (`bands::BANDS`, 0.13.28's files).
+    Band(u16),
 }
 
 /// A small, fast noise (the same every time, so a sound is the same every time).
@@ -199,6 +201,9 @@ fn knock(out: &mut [f32], at: usize, amp: f32) {
 
 /// The sound, mono.
 pub fn render_mono(c: Cue) -> Vec<f32> {
+    if let Cue::Band(i) = c {
+        return crate::bands::render(i, 0.0).chunks(2).map(|x| (x[0] + x[1]) * 0.5).collect();
+    }
     let len = match c {
         Cue::Deal | Cue::Flip | Cue::Check | Cue::Hurry | Cue::Tick => ms(220.0),
         Cue::TimeBank => ms(700.0),
@@ -221,6 +226,8 @@ pub fn render_mono(c: Cue) -> Vec<f32> {
         Cue::Fold | Cue::Chips | Cue::Turn => ms(420.0),
         Cue::AllIn | Cue::Pot => ms(900.0),
         Cue::Win => ms(1300.0),
+        // (Played from its file, above.)
+        Cue::Band(_) => 0,
     };
     let mut o = vec![0.0f32; len];
     match c {
@@ -454,6 +461,7 @@ pub fn render_mono(c: Cue) -> Vec<f32> {
             bell(&mut o, ms(230.0), 659.25, 450.0, 0.15);
             bell(&mut o, ms(380.0), 440.0, 420.0, 0.15);
         }
+        Cue::Band(_) => {}
     }
     // Never past full scale.
     let peak = o.iter().fold(0.0f32, |m, x| m.max(x.abs()));
@@ -467,6 +475,9 @@ pub fn render_mono(c: Cue) -> Vec<f32> {
 
 /// The sound, 48 kHz stereo (interleaved), placed `pan` (-1 left to 1 right).
 pub fn render(c: Cue, pan: f32) -> Vec<f32> {
+    if let Cue::Band(i) = c {
+        return crate::bands::render(i, pan);
+    }
     let pan = pan.clamp(-1.0, 1.0);
     let (l, r) = (((1.0 - pan) * 0.5).sqrt(), ((1.0 + pan) * 0.5).sqrt());
     render_mono(c).into_iter().flat_map(|x| [x * l, x * r]).collect()

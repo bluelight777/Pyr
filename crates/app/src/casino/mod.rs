@@ -38,6 +38,7 @@ pub mod plinko;
 pub mod pics;
 pub mod reel_themes;
 pub mod reels;
+pub mod rmshow;
 pub mod roulette;
 pub mod slots;
 pub mod spin;
@@ -738,7 +739,7 @@ impl PyrApp {
             Game::Craps => self.craps_round(r),
             Game::Dice => self.dice_round(r),
             Game::Keno => self.keno_round(r),
-            Game::Reels if matches!(r.outcome, pyr_poker::casino::Outcome::Row(_)) => self.row_round(r),
+            Game::Reels if matches!(r.outcome, pyr_poker::casino::Outcome::Row(_) | pyr_poker::casino::Outcome::Remaster(_)) => self.row_round(r),
             Game::Reels => self.reels_round(r),
             Game::Dragon => self.dragon_round(r),
             Game::Plinko => self.plinko_round(r),
