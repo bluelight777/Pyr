@@ -230,7 +230,7 @@ pub fn which_bot(ctx: &egui::Context, picker: &mut Picker, taken: &[String], s: 
             for row in who.chunks(2) {
                 ui.horizontal(|ui| {
                     for p in row {
-                        if card(ui, w, *p, taken) {
+                        if card(ui, w, *p, taken, picker.level) {
                             picked = Some(Pick { level: picker.level, who: p.map(|p| p.name.to_string()) });
                         }
                     }
@@ -248,8 +248,9 @@ pub fn which_bot(ctx: &egui::Context, picker: &mut Picker, taken: &[String], s: 
     }
 }
 
-/// One bot's card in the Which bot? window (none: Anyone); true when it's picked.
-fn card(ui: &mut egui::Ui, w: f32, who: Option<&persona::Persona>, taken: &[String]) -> bool {
+/// One bot's card in the Which bot? window (none: Anyone), its face as the level picked shows it
+/// (a Shark's ring and star; 0.13.28's); true when it's picked.
+fn card(ui: &mut egui::Ui, w: f32, who: Option<&persona::Persona>, taken: &[String], level: Level) -> bool {
     let sitting = who.is_some_and(|p| taken.iter().any(|t| t.split_whitespace().next() == Some(p.name)));
     let (r, resp) = ui.allocate_exact_size(vec2(w, 56.0), if sitting { Sense::hover() } else { Sense::click() });
     let p = ui.painter();
@@ -259,7 +260,7 @@ fn card(ui: &mut egui::Ui, w: f32, who: Option<&persona::Persona>, taken: &[Stri
     let fade = if sitting { 0.35 } else { 1.0 };
     let (name, line) = match who {
         Some(b) => {
-            super::table::bot_face(p, at, 20.0, b.name, Level::Regular);
+            super::table::bot_face(p, at, 20.0, b.name, level);
             if sitting {
                 p.circle_filled(at, 20.0, Color32::from_black_alpha(150));
             }

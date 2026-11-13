@@ -47,53 +47,112 @@ pub fn suit(p: &Painter, r: Rect, suit: u8, color: Color32) {
     suit_at(p, r.center(), r.width().min(r.height()), suit, color, false);
 }
 
-/// A suit `s` across, centered on `c`, upside down if `flip` (the bottom half of a card).
-/// Hearts and spades are two lobes and a point whose sides touch the lobes (no corners
-/// sticking out past them).
+/// A suit `s` across, centered on `c`, upside down if `flip` (the bottom half of a card). Each is
+/// 0.13.28's own shape, traced off it at six times the size (a bot's face in Which bot?): one
+/// smooth outline (the club's stem a second, tucked into its leaves), filled whole so nothing
+/// overlaps.
 fn suit_at(p: &Painter, c: Pos2, s: f32, suit: u8, color: Color32, flip: bool) {
     let f = if flip { -1.0 } else { 1.0 };
-    let at = |x: f32, y: f32| c + vec2(x * s, y * s * f);
-    match suit {
-        // Hearts: lobes up, point down.
-        2 => lobes(p, &at, 0.0, -0.03, 1.0, color),
-        // Diamonds.
-        1 => {
-            p.add(Shape::convex_polygon(vec![at(0.0, -0.5), at(0.37, 0.0), at(0.0, 0.5), at(-0.37, 0.0)], color, Stroke::NONE));
+    let shapes = outlines();
+    let parts = &shapes[match suit {
+        2 => 0,
+        1 => 1,
+        3 => 2,
+        _ => 3,
+    }];
+    let feather = 1.0 / p.ctx().pixels_per_point();
+    for part in parts {
+        let mut mesh = egui::epaint::Mesh::default();
+        let n = part.points.len() as u32;
+        for (q, nrm) in part.points.iter().zip(&part.normals) {
+            let at = c + vec2(q[0] * s, q[1] * s * f);
+            let out = vec2(nrm[0], nrm[1] * f) * (feather * 0.5);
+            mesh.vertices.push(egui::epaint::Vertex { pos: at - out, uv: egui::epaint::WHITE_UV, color });
+            mesh.vertices.push(egui::epaint::Vertex { pos: at + out, uv: egui::epaint::WHITE_UV, color: Color32::TRANSPARENT });
         }
-        // Spades: a heart upside down on a stem.
-        3 => {
-            lobes(p, &|x, y| at(x, -y), 0.0, 0.06, 0.92, color);
-            p.add(Shape::convex_polygon(vec![at(-0.05, 0.12), at(0.05, 0.12), at(0.16, 0.49), at(-0.16, 0.49)], color, Stroke::NONE));
+        // The inside (each point's inner vertex), then the soft edge round it.
+        mesh.indices.extend(part.triangles.iter().map(|i| i * 2));
+        for i in 0..n {
+            let j = (i + 1) % n;
+            mesh.indices.extend([i * 2, i * 2 + 1, j * 2 + 1, i * 2, j * 2 + 1, j * 2]);
         }
-        // Clubs: three leaves, a knot between them and a stem.
-        _ => {
-            let rad = 0.205 * s;
-            p.circle_filled(at(0.0, -0.24), rad, color);
-            p.circle_filled(at(-0.23, 0.07), rad, color);
-            p.circle_filled(at(0.23, 0.07), rad, color);
-            p.circle_filled(at(0.0, 0.0), rad * 0.62, color);
-            p.add(Shape::convex_polygon(vec![at(-0.05, 0.08), at(0.05, 0.08), at(0.16, 0.49), at(-0.16, 0.49)], color, Stroke::NONE));
-        }
+        p.add(Shape::mesh(mesh));
     }
 }
 
-/// A heart's shape (lobes up) through `at` (its own coordinates, a fraction of the suit's size,
-/// y down), moved down by `dy` and scaled by `k`: two circles, and a point with the circles'
-/// tangents for its sides.
-fn lobes(p: &Painter, at: &dyn Fn(f32, f32) -> Pos2, dx: f32, dy: f32, k: f32, color: Color32) {
-    let (a, b, rad, tip) = (0.235 * k, 0.14 * k, 0.255 * k, 0.46 * k);
-    let pt = |x: f32, y: f32| at(dx + x, dy + y);
-    // Where the tangent from the point touches the right lobe.
-    let (cx, cy) = (a, -b);
-    let (vx, vy) = (cx, cy - tip);
-    let d = (vx * vx + vy * vy).sqrt();
-    let along = (d * d - rad * rad).sqrt();
-    let ang = vy.atan2(vx) + (rad / d).asin();
-    let (tx, ty) = (along * ang.cos(), tip + along * ang.sin());
-    let scale = (pt(1.0, 0.0) - pt(0.0, 0.0)).length();
-    p.circle_filled(pt(cx, cy), rad * scale, color);
-    p.circle_filled(pt(-cx, cy), rad * scale, color);
-    p.add(Shape::convex_polygon(vec![pt(0.0, tip), pt(-tx, ty), pt(-cx, cy), pt(cx, cy), pt(tx, ty)], color, Stroke::NONE));
+const HEART: &[&[[f32; 2]]] = &[
+    &[[0.0000, -0.3129], [0.0184, -0.3567], [0.0485, -0.3989], [0.0749, -0.4227], [0.1101, -0.4415], [0.1366, -0.4494], [0.1982, -0.4529], [0.2423, -0.4478], [0.2687, -0.4393], [0.3391, -0.4047], [0.3950, -0.3567], [0.4399, -0.2951], [0.4571, -0.2598], [0.4736, -0.2070], [0.4830, -0.1277], [0.4745, -0.0661], [0.4655, -0.0308], [0.4448, 0.0212], [0.4031, 0.0925], [0.3479, 0.1594], [0.2920, 0.2158], [0.0661, 0.4064], [0.0000, 0.4656], [-0.0661, 0.4064], [-0.2920, 0.2158], [-0.3479, 0.1594], [-0.4031, 0.0925], [-0.4448, 0.0212], [-0.4655, -0.0308], [-0.4745, -0.0661], [-0.4830, -0.1277], [-0.4736, -0.2070], [-0.4571, -0.2598], [-0.4399, -0.2951], [-0.3950, -0.3567], [-0.3391, -0.4047], [-0.2687, -0.4393], [-0.2423, -0.4478], [-0.1982, -0.4529], [-0.1366, -0.4494], [-0.1101, -0.4415], [-0.0749, -0.4227], [-0.0485, -0.3989], [-0.0184, -0.3567]],
+];
+const DIAMOND: &[&[[f32; 2]]] = &[
+    &[[0.0000, -0.4739], [0.0818, -0.3465], [0.1623, -0.2336], [0.2588, -0.1141], [0.3601, -0.0044], [0.3601, 0.0044], [0.2735, 0.0921], [0.1573, 0.2325], [0.0714, 0.3553], [0.0000, 0.4696], [-0.0714, 0.3553], [-0.1573, 0.2325], [-0.2735, 0.0921], [-0.3601, 0.0044], [-0.3601, -0.0044], [-0.2588, -0.1141], [-0.1623, -0.2336], [-0.0818, -0.3465]],
+];
+const SPADE: &[&[[f32; 2]]] = &[
+    &[[0.0000, -0.4772], [0.0659, -0.4170], [0.2564, -0.2592], [0.3384, -0.1801], [0.3765, -0.1362], [0.4132, -0.0834], [0.4468, -0.0132], [0.4557, 0.0220], [0.4621, 0.0747], [0.4578, 0.1186], [0.4454, 0.1713], [0.4349, 0.1965], [0.4173, 0.2280], [0.3927, 0.2592], [0.3625, 0.2855], [0.3295, 0.3060], [0.2855, 0.3236], [0.2416, 0.3322], [0.1801, 0.3322], [0.1450, 0.3249], [0.1098, 0.3123], [0.0659, 0.2855], [0.0395, 0.2590], [0.0220, 0.2329], [0.0162, 0.2416], [0.0185, 0.2768], [0.0277, 0.3119], [0.0435, 0.3470], [0.0734, 0.3910], [0.0970, 0.4173], [0.1577, 0.4613], [0.1538, 0.4704], [0.0000, 0.4702], [-0.1538, 0.4704], [-0.1577, 0.4613], [-0.0970, 0.4173], [-0.0734, 0.3910], [-0.0435, 0.3470], [-0.0277, 0.3119], [-0.0185, 0.2768], [-0.0162, 0.2416], [-0.0220, 0.2329], [-0.0395, 0.2590], [-0.0659, 0.2855], [-0.1098, 0.3123], [-0.1450, 0.3249], [-0.1801, 0.3322], [-0.2416, 0.3322], [-0.2855, 0.3236], [-0.3295, 0.3060], [-0.3625, 0.2855], [-0.3927, 0.2592], [-0.4173, 0.2280], [-0.4349, 0.1965], [-0.4454, 0.1713], [-0.4578, 0.1186], [-0.4621, 0.0747], [-0.4557, 0.0220], [-0.4468, -0.0132], [-0.4132, -0.0834], [-0.3765, -0.1362], [-0.3384, -0.1801], [-0.2564, -0.2592], [-0.0659, -0.4170]],
+];
+const CLUB: &[&[[f32; 2]]] = &[
+    &[[0.0000, -0.4494], [0.0131, -0.4501], [0.0394, -0.4483], [0.0745, -0.4386], [0.1166, -0.4166], [0.1447, -0.3942], [0.1717, -0.3640], [0.1970, -0.3202], [0.2061, -0.2905], [0.2116, -0.2324], [0.2012, -0.1886], [0.1838, -0.1447], [0.1886, -0.1379], [0.2412, -0.1460], [0.2938, -0.1377], [0.3201, -0.1293], [0.3640, -0.1038], [0.3903, -0.0796], [0.4212, -0.0395], [0.4354, -0.0131], [0.4473, 0.0307], [0.4468, 0.1009], [0.4342, 0.1436], [0.4087, 0.1886], [0.3652, 0.2325], [0.3201, 0.2589], [0.2850, 0.2697], [0.2412, 0.2734], [0.1973, 0.2702], [0.1622, 0.2600], [0.1268, 0.2412], [0.0921, 0.2135], [0.0658, 0.1821], [0.0482, 0.1503], [0.0415, 0.1272], [0.0307, 0.1115], [0.0293, 0.1009], [0.0219, 0.0940], [0.0000, 0.0940], [-0.0219, 0.0940], [-0.0293, 0.1009], [-0.0307, 0.1115], [-0.0415, 0.1272], [-0.0482, 0.1503], [-0.0658, 0.1821], [-0.0921, 0.2135], [-0.1268, 0.2412], [-0.1622, 0.2600], [-0.1973, 0.2702], [-0.2412, 0.2734], [-0.2850, 0.2697], [-0.3201, 0.2589], [-0.3652, 0.2325], [-0.4087, 0.1886], [-0.4342, 0.1436], [-0.4468, 0.1009], [-0.4473, 0.0307], [-0.4354, -0.0131], [-0.4212, -0.0395], [-0.3903, -0.0796], [-0.3640, -0.1038], [-0.3201, -0.1293], [-0.2938, -0.1377], [-0.2412, -0.1460], [-0.1886, -0.1379], [-0.1838, -0.1447], [-0.2012, -0.1886], [-0.2116, -0.2324], [-0.2061, -0.2905], [-0.1970, -0.3202], [-0.1717, -0.3640], [-0.1447, -0.3942], [-0.1166, -0.4166], [-0.0745, -0.4386], [-0.0394, -0.4483], [-0.0131, -0.4501]],
+    &[[0.0000, 0.0800], [0.0300, 0.0800], [0.0244, 0.1272], [0.0276, 0.1798], [0.0547, 0.3114], [0.0733, 0.3553], [0.0998, 0.3991], [0.1317, 0.4342], [0.1666, 0.4605], [0.1622, 0.4697], [0.0745, 0.4666], [0.0000, 0.4674], [-0.0745, 0.4666], [-0.1622, 0.4697], [-0.1666, 0.4605], [-0.1317, 0.4342], [-0.0998, 0.3991], [-0.0733, 0.3553], [-0.0547, 0.3114], [-0.0276, 0.1798], [-0.0244, 0.1272], [-0.0300, 0.0800]],
+];
+
+/// One part of a suit, ready to draw: its outline, the triangles inside it, and each point's
+/// outward normal (for the soft edge: as long as it needs to be at a corner, within reason).
+struct Outline {
+    points: Vec<[f32; 2]>,
+    triangles: Vec<u32>,
+    normals: Vec<[f32; 2]>,
+}
+
+/// The four suits' parts (hearts, diamonds, spades, clubs), worked out once.
+fn outlines() -> &'static [Vec<Outline>; 4] {
+    static ALL: std::sync::OnceLock<[Vec<Outline>; 4]> = std::sync::OnceLock::new();
+    ALL.get_or_init(|| [HEART, DIAMOND, SPADE, CLUB].map(|parts| parts.iter().map(|pts| outline(pts)).collect()))
+}
+
+fn outline(pts: &[[f32; 2]]) -> Outline {
+    let n = pts.len();
+    let area: f32 = (0..n).map(|i| pts[i][0] * pts[(i + 1) % n][1] - pts[(i + 1) % n][0] * pts[i][1]).sum::<f32>() / 2.0;
+    let sign = area.signum();
+    let cross = |o: [f32; 2], a: [f32; 2], b: [f32; 2]| (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    // Ear clipping: a corner that turns the shape's way, with nothing of the shape inside it.
+    let mut left: Vec<usize> = (0..n).collect();
+    let mut triangles = Vec::with_capacity(3 * n);
+    while left.len() > 3 {
+        let m = left.len();
+        let ear = (0..m).find(|&k| {
+            let (i0, i1, i2) = (left[(k + m - 1) % m], left[k], left[(k + 1) % m]);
+            let (a, b, c) = (pts[i0], pts[i1], pts[i2]);
+            if cross(a, b, c) * sign <= 1e-9 {
+                return false;
+            }
+            !left.iter().any(|&j| {
+                j != i0 && j != i1 && j != i2 && {
+                    let q = pts[j];
+                    cross(a, b, q) * sign >= 0.0 && cross(b, c, q) * sign >= 0.0 && cross(c, a, q) * sign >= 0.0
+                }
+            })
+        });
+        let Some(k) = ear else { break };
+        triangles.extend([left[(k + m - 1) % m] as u32, left[k] as u32, left[(k + 1) % m] as u32]);
+        left.remove(k);
+    }
+    if left.len() == 3 {
+        triangles.extend(left.iter().map(|&i| i as u32));
+    }
+    let normals = (0..n)
+        .map(|i| {
+            let (a, b, c) = (pts[(i + n - 1) % n], pts[i], pts[(i + 1) % n]);
+            let edge = |p: [f32; 2], q: [f32; 2]| {
+                let (dx, dy) = (q[0] - p[0], q[1] - p[1]);
+                let len = (dx * dx + dy * dy).sqrt().max(1e-6);
+                [sign * dy / len, -sign * dx / len]
+            };
+            let (n0, n1) = (edge(a, b), edge(b, c));
+            let mid = [(n0[0] + n1[0]) * 0.5, (n0[1] + n1[1]) * 0.5];
+            let len2 = (mid[0] * mid[0] + mid[1] * mid[1]).max(1.0 / 9.0);
+            [mid[0] / len2, mid[1] / len2]
+        })
+        .collect();
+    Outline { points: pts.to_vec(), triangles, normals }
 }
 
 fn rank_text(rank: u8) -> &'static str {

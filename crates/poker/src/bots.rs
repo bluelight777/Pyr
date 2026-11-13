@@ -542,10 +542,10 @@ fn decide_simply(view: &View, level: Level, who: &Persona, rng: &mut Stream) -> 
             // The one who raised before the flop bets the flop whatever it hit (the better the
             // bot, the more often; less into several players).
             let cbet = match level {
-                Level::Rookie => 0.35,
-                Level::Regular => 0.6,
-                Level::Hard => 0.68,
-                Level::Shark | Level::Genius => 0.75,
+                Level::Rookie => 0.3,
+                Level::Regular => 0.5,
+                Level::Hard => 0.58,
+                Level::Shark | Level::Genius => 0.65,
             } * who.aggression.sqrt()
                 * 0.8f64.powi(view.opponents.saturating_sub(1) as i32);
             if view.street == Street::Flop && view.aggressor && roll(rng) < cbet.min(0.95) {
@@ -645,7 +645,7 @@ pub fn think_ms(seen: &Seen, level: Level, who: &Persona, action: Action, rng: &
     };
     let opponents = spot.opponents().count().max(1);
     let crowd = opponents.saturating_sub(1) as f64 * 0.05;
-    let riding = (price * 0.4 + commit.max(put) * 0.8 + size * 0.25 + late + crowd).min(2.0) * if spot.street == Street::Preflop { 0.6 } else { 1.0 };
+    let riding = (price * 0.4 + commit.max(put) * 0.8 + size * 0.15 + late + crowd).min(2.0) * if spot.street == Street::Preflop { 0.6 } else { 1.0 };
     // How hard it was: how near its hand sits to the line between one move and the next (the
     // price of a call, or a hand worth a bet), and rags not at all.
     let fair = 1.0 / (opponents + 1) as f64;
@@ -688,7 +688,15 @@ pub fn think_ms(seen: &Seen, level: Level, who: &Persona, action: Action, rng: &
     let r = roll(rng);
     if r < who.snaps * (1.0 - hard) * 1.5 {
         ms = 450.0 + roll(rng) * 500.0;
-    } else if r > 1.0 - who.tanks * (0.08 + 2.0 * hard * (0.15 + riding)) * if action == Action::Fold { 2.1 } else { 1.0 } {
+    } else if r > 1.0
+        - who.tanks
+            * (0.08 + 2.0 * hard * (0.15 + riding))
+            * match action {
+                Action::Fold => 2.1,
+                Action::Check => 1.6,
+                _ => 1.0,
+            }
+    {
         ms += 2_500.0 + roll(rng) * 6_000.0 * (0.4 + riding.min(1.8));
     }
     (ms as u64).clamp(MIN_THINK_MS, MAX_THINK_MS)
@@ -969,10 +977,10 @@ mod tests {
     }
 
     /// As 0.13.26 made them: how long a bot thinks comes from how hard the choice was, so a long
-    /// think ends in a fold as often as in anything (0.13.28's Medium bots: two in five of their
-    /// thinks over four seconds were folds, three in ten raises); rags go at once; the preflop
-    /// raiser bets the flop most times it's checked to (0.13.28's: 75%); and bluffs go with who
-    /// a bot is: a maniac fires far more than a rock, a rookie hardly ever.
+    /// think ends in a fold as often as in anything (0.13.28's Medium bots at two tables: of their
+    /// thinks over four seconds, 40% and 34% were folds, 30% and 15% raises); rags go at once;
+    /// the preflop raiser bets the flop most times it's checked to (0.13.28's: 16 of 25); and
+    /// bluffs go with who a bot is: a maniac fires far more than a rock, a rookie hardly ever.
     #[test]
     fn bots_think_and_bluff_like_people() {
         let t = tally(&["Lux", "Gale", "Cinder", "Ace", "Flint"], Level::Regular, 1_500, 7);
@@ -980,7 +988,7 @@ mod tests {
         let share = |f: &dyn Fn(&Action) -> bool| long.iter().filter(|x| f(&x.0)).count() as f64 / long.len() as f64;
         let folds = share(&|a| *a == Action::Fold);
         let raises = share(&|a| matches!(a, Action::Raise { .. } | Action::AllIn));
-        assert!(long.len() > 100 && (0.3..0.55).contains(&folds) && (0.15..0.4).contains(&raises), "long thinks: {} folds {folds:.2} raises {raises:.2}", long.len());
+        assert!(long.len() > 100 && (0.2..0.55).contains(&folds) && (0.12..0.4).contains(&raises), "long thinks: {} folds {folds:.2} raises {raises:.2}", long.len());
         let fold_ms: Vec<u64> = t.times.iter().filter(|x| x.0 == Action::Fold).map(|x| x.1).collect();
         let instant = fold_ms.iter().filter(|&&ms| ms == MIN_THINK_MS).count() as f64 / fold_ms.len() as f64;
         assert!(instant > 0.5, "most folds are rags thrown away at once: {instant:.2}");

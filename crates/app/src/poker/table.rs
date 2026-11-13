@@ -1833,31 +1833,49 @@ pub(crate) fn bot_face(p: &egui::Painter, at: Pos2, r: f32, name: &str, level: L
         p.circle_filled(at + vec2(-r * 0.18 * f, -r * 0.22 * f), r * (1.0 - 0.55 * f), mix(dark, light, f * 0.8));
     }
     let suit = (h / 7 % 4) as u8;
+    // (As 0.13.28's: the suit one solid shape in near-white, its shadow 1.5 down and dark.)
     let mark = Rect::from_center_size(at + vec2(0.0, 1.0), vec2(r * 0.95, r * 0.95));
-    super::cards::suit(p, mark.translate(vec2(0.0, 1.5)), suit, Color32::from_black_alpha(90));
-    super::cards::suit(p, mark, suit, Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 225));
+    super::cards::suit(p, mark.translate(vec2(0.0, 1.5)), suit, Color32::from_black_alpha(170));
+    super::cards::suit(p, mark, suit, Color32::from_rgb(0xf4, 0xf2, 0xf8));
     if level == Level::Genius {
-        // A Shark (0.13.7; Genius before): a violet ring, a little crown, and a star shining on
-        // it. (An Expert, once the Shark, has no fin since.)
+        // A Shark (0.13.7; Genius before), as 0.13.28's (measured by drawing it again with egui's
+        // own tessellator against its picture, to the pixel): 0.13.0's fin (the Expert's, once
+        // the Shark: an Expert has none since), a violet ring, and over the top a star in a soft
+        // violet glow, with a small one on the ring either side.
         let violet = Color32::from_rgb(0xa8, 0x7a, 0xff);
+        let fin = vec![at + vec2(-r * 0.32, -r * 0.78), at + vec2(r * 0.15, -r * 1.02), at + vec2(r * 0.34, -r * 0.8)];
+        p.add(Shape::convex_polygon(fin, Color32::from_rgb(0x9c, 0xb8, 0xc8), Stroke::NONE));
         p.circle_stroke(at, r * 1.02, Stroke::new((r * 0.09).max(1.5), violet));
-        crate::icons::crown(p, Rect::from_center_size(at + vec2(0.0, -r * 1.05), vec2(r * 0.9, r * 0.6)), Color32::from_rgb(0xe8, 0xdc, 0xff));
-        sparkle(p, at + vec2(0.0, -r * 1.14), r * 0.45, violet);
+        let star = at + vec2(0.0, -r * 1.12);
+        glow(p, star, r * 0.75, violet.gamma_multiply(0.55));
+        sparkle(p, star, r * 0.42, r * 0.104, Color32::from_rgb(0xe8, 0xdc, 0xff));
+        for side in [-1.0, 1.0] {
+            sparkle(p, at + vec2(side * r * 0.5, -r * 0.94), r * 0.159, r * 0.04, violet);
+        }
     }
 }
 
-/// A four-pointed star, white in a violet glow (a Shark's).
-fn sparkle(p: &egui::Painter, c: Pos2, s: f32, glow: Color32) {
-    for k in 0..6 {
-        let f = 1.0 - k as f32 / 6.0;
-        p.circle_filled(c, s * 1.6 * f, glow.gamma_multiply(0.07));
+/// A soft glow: `color` in the middle fading evenly to nothing `radius` out.
+fn glow(p: &egui::Painter, c: Pos2, radius: f32, color: Color32) {
+    const N: u32 = 64;
+    let mut m = egui::Mesh::default();
+    m.colored_vertex(c, color);
+    for k in 0..=N {
+        let a = k as f32 / N as f32 * std::f32::consts::TAU;
+        m.colored_vertex(c + vec2(a.cos(), a.sin()) * radius, Color32::TRANSPARENT);
     }
-    let w = s * 0.16;
-    for (d, len) in [(vec2(0.0, 1.0), s), (vec2(1.0, 0.0), s * 1.1)] {
-        let n = vec2(d.y, d.x) * w;
-        p.add(Shape::convex_polygon(vec![c - d * len, c + n, c + d * len, c - n], Color32::WHITE, Stroke::NONE));
+    for k in 0..N {
+        m.add_triangle(0, k + 1, k + 2);
     }
-    p.circle_filled(c, w * 1.4, Color32::WHITE);
+    p.add(Shape::mesh(m));
+}
+
+/// A four-pointed star: two crossed diamonds, `len` from the middle to each point and `w` either
+/// side of it there, in `color`, and a white disc in the middle, 0.22 of `len` in radius.
+fn sparkle(p: &egui::Painter, c: Pos2, len: f32, w: f32, color: Color32) {
+    p.add(Shape::convex_polygon(vec![c + vec2(0.0, -len), c + vec2(w, 0.0), c + vec2(0.0, len), c + vec2(-w, 0.0)], color, Stroke::NONE));
+    p.add(Shape::convex_polygon(vec![c + vec2(-len, 0.0), c + vec2(0.0, -w), c + vec2(len, 0.0), c + vec2(0.0, w)], color, Stroke::NONE));
+    p.circle_filled(c, len * 0.22, Color32::WHITE);
 }
 
 fn level_tag(level: Level) -> (&'static str, Color32) {
