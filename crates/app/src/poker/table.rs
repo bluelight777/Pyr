@@ -791,11 +791,13 @@ impl PyrApp {
         } else if turn {
             p.circle_stroke(at, r0 + 3.0 * k, Stroke::new(2.5 * k, theme::GLOW()));
         }
-        // Their cards: face down beside the picture, or shown over it at the showdown.
-        if seat.in_hand && !seat.folded && Some(i) != v.my_seat {
+        // Their cards: face down beside the picture, or shown over it at the showdown (over the
+        // badges on the picture too, as 0.13.28's: those come after them).
+        let theirs = seat.in_hand && !seat.folded && Some(i) != v.my_seat;
+        let shown = !seat.cards.is_empty();
+        let their_cards = |p: &egui::Painter| {
             let n = v.rules.hole_cards();
             let dealt = deal_progress(t, i);
-            let shown = !seat.cards.is_empty();
             let cw = if shown { if n > 2 { 40.0 } else { 48.0 } } else { 32.0 } * k;
             let ch = cw * 1.4;
             let spread = if shown { cw * 0.78 } else { cw * 0.42 };
@@ -809,10 +811,13 @@ impl PyrApp {
                 }
                 let r = target.translate((lay.dealer() - target.center()) * (1.0 - ease(prog)));
                 match seat.cards.get(c) {
-                    Some(card) => flip(&p, r, *card, shown_progress(t, i), self.poker.four_color, false, &seat.card_back),
-                    None => cards::back(&p, r, &seat.card_back),
+                    Some(card) => flip(p, r, *card, shown_progress(t, i), self.poker.four_color, false, &seat.card_back),
+                    None => cards::back(p, r, &seat.card_back),
                 }
             }
+        };
+        if theirs && !shown {
+            their_cards(&p);
         }
         // Name and chips on a plate under the picture.
         let plate = Rect::from_center_size(at + vec2(0.0, r0 + 16.0 * k), vec2(164.0, 50.0) * k);
@@ -835,20 +840,27 @@ impl PyrApp {
         if seat.pending > 0 {
             p.text(pos2(plate.right() - 7.0 * k, plate.center().y + 12.0 * k), Align2::RIGHT_CENTER, format!("+{}", chips_text(seat.pending)), theme::bold_font(10.0 * k), Color32::from_rgb(0x5f, 0xd3, 0x7e));
         }
-        // Level, on the picture's edge; and for bots, how good they are.
+        // Level, on the picture's edge; and for bots, how good they are. (Not while their cards
+        // are shown over the picture, as 0.13.28.)
         let lv = at + vec2(-r0 * 0.8, -r0 * 0.6);
-        p.circle_filled(lv, 11.5 * k, Color32::from_rgb(0x16, 0x14, 0x1a));
-        // (Its ring in the colour of their tier, as 0.13.28's: bronze for Ember, silver for Flame,
-        // gold for Blaze...)
-        let ring = crate::casino::levels::tier_color(pyr_poker::levels::tier(seat.level));
-        p.circle_stroke(lv, 11.5 * k, Stroke::new(1.5 * k, ring.gamma_multiply(fade.max(0.6))));
-        p.text(lv, Align2::CENTER_CENTER, seat.level.to_string(), theme::bold_font(10.5 * k), Color32::WHITE.gamma_multiply(fade.max(0.6)));
-        if let Some(mmr) = seat.mmr {
+        let badges = !(theirs && shown);
+        if badges {
+            p.circle_filled(lv, 11.5 * k, Color32::from_rgb(0x16, 0x14, 0x1a));
+            // (Its ring in the colour of their tier, as 0.13.28's: bronze for Ember, silver for
+            // Flame, gold for Blaze...)
+            let ring = crate::casino::levels::tier_color(pyr_poker::levels::tier(seat.level));
+            p.circle_stroke(lv, 11.5 * k, Stroke::new(1.5 * k, ring.gamma_multiply(fade.max(0.6))));
+            p.text(lv, Align2::CENTER_CENTER, seat.level.to_string(), theme::bold_font(10.5 * k), Color32::WHITE.gamma_multiply(fade.max(0.6)));
+        }
+        if let Some(mmr) = seat.mmr.filter(|_| badges) {
             let tier = pyr_poker::rating::Tier::of(mmr as f64);
             let at_r = at + vec2(r0 * 0.8, -r0 * 0.6);
             super::rank::emblem(&p, at_r, 11.0 * k, tier);
             let tip = ui.interact(Rect::from_center_size(at_r, vec2(24.0, 24.0) * k), ui.id().with(("mmr", i)), Sense::hover());
             tip.on_hover_text(format!("{} · {} MMR", tier.name(), chips_text(mmr as u64)));
+        }
+        if theirs && shown {
+            their_cards(&p);
         }
         if let Some(b) = seat.badge {
             super::emblem::label(&p, plate.center_top() + vec2(0.0, -1.0 * k), k, b);
@@ -949,9 +961,11 @@ impl PyrApp {
                 && k < 6.0
             {
                 let alpha = ((k - 0.03) / 0.2).clamp(0.0, 1.0) * (1.0 - (k - 5.0) / 1.0).clamp(0.0, 1.0);
+                // (0.13.28's never shrinks with a small table, measured: its pill and its words.)
+                let z = z.max(1.0);
                 let r = Rect::from_center_size(lay.c + vec2(0.0, lay.b * 0.42), vec2(30.0 + 10.0 * h.len() as f32, 36.0) * z);
-                p.rect_filled(r, theme::r(18), Color32::from_rgba_unmultiplied(0x1a, 0x12, 0x0c, (220.0 * alpha) as u8));
-                p.rect_stroke(r, theme::r(18), Stroke::new(1.5 * z, Color32::from_rgb(0xff, 0xd2, 0x4a).gamma_multiply(alpha)), StrokeKind::Inside);
+                p.rect_filled(r, theme::r(21), Color32::from_rgba_unmultiplied(0x1a, 0x12, 0x0c, (220.0 * alpha) as u8));
+                p.rect_stroke(r, theme::r(21), Stroke::new(1.5 * z, Color32::from_rgb(0xff, 0xd2, 0x4a).gamma_multiply(alpha)), StrokeKind::Inside);
                 p.text(r.center(), Align2::CENTER_CENTER, h, theme::bold_font(17.0 * z), Color32::from_rgb(0xff, 0xe2, 0x9a).gamma_multiply(alpha));
             }
         }
@@ -1439,7 +1453,8 @@ impl PyrApp {
             let a = (k / 0.18).min(1.0) * ((life - k) / 0.5).clamp(0.0, 1.0);
             let pop = 0.85 + 0.15 * ease((k / 0.22).min(1.0));
             let ink = Color32::from_rgb(0x22, 0x1c, 0x28);
-            let z = lay.k;
+            // (Never smaller than at a full-size table, as 0.13.28's, measured.)
+            let z = lay.k.max(1.0);
             let g = p.layout(text.clone(), theme::font(13.0 * z), ink, 230.0 * z);
             let size = (g.size() + vec2(26.0, 16.0) * z) * pop;
             let at_seat = lay.seat(*seat);

@@ -4,7 +4,7 @@
 
 use std::sync::Mutex;
 
-use eframe::egui::{self, Color32, CornerRadius, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, pos2, vec2};
+use eframe::egui::{self, Color32, CornerRadius, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, Vec2, pos2, vec2};
 use pyr_poker::cards::Card;
 
 /// My deck: the back I picked and the four-color deck (set as the casino's drawn, from my
@@ -31,27 +31,86 @@ pub fn four() -> bool {
     MINE.lock().map(|m| m.1).unwrap_or(false)
 }
 
-/// Suit colors: the classic two (black and red), or four (clubs green, diamonds blue), which
-/// are easier to tell apart at a glance.
+/// Suit colors: the classic two (black and red, 0.13.28's), or four (clubs green, diamonds
+/// blue), which are easier to tell apart at a glance.
 pub fn suit_color(suit: u8, four: bool) -> Color32 {
     match (suit, four) {
         (0, true) => Color32::from_rgb(0x1f, 0x8a, 0x4c),
         (1, true) => Color32::from_rgb(0x1f, 0x6f, 0xd1),
-        (1, false) | (2, _) => Color32::from_rgb(0xd3, 0x26, 0x34),
-        _ => Color32::from_rgb(0x18, 0x1a, 0x1f),
+        (1, false) | (2, _) => Color32::from_rgb(0xcc, 0x1f, 0x2e),
+        _ => Color32::from_rgb(0x17, 0x19, 0x1f),
     }
 }
 
+/// A card's face (0.13.28's, measured): white at its top to a warm white at its foot, inside an
+/// edge of its own.
+const FACE_TOP: Color32 = Color32::from_rgb(0xff, 0xfe, 0xfa);
+const FACE_FOOT: Color32 = Color32::from_rgb(0xf2, 0xee, 0xe4);
+const EDGE: Color32 = Color32::from_rgb(0xc9, 0xc0, 0xae);
+
 /// A suit's shape, filling `r` (a square).
 pub fn suit(p: &Painter, r: Rect, suit: u8, color: Color32) {
-    suit_at(p, r.center(), r.width().min(r.height()), suit, color, false);
+    suit_at(p, r.center(), r.width().min(r.height()), suit, color, false, false);
+}
+
+/// `color` lighter or darker: each channel times `k`.
+fn times(color: Color32, k: f32) -> Color32 {
+    let m = |x: u8| (x as f32 * k).round().clamp(0.0, 255.0) as u8;
+    Color32::from_rgba_unmultiplied(m(color.r()), m(color.g()), m(color.b()), color.a())
+}
+
+/// Between two colors, `t` of the way (0 to 1).
+fn between(a: Color32, b: Color32, t: f32) -> Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color32::from_rgba_unmultiplied(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()), m(a.a(), b.a()))
+}
+
+/// `r` with its corners rounded by `rad`, filled with a soft edge a pixel wide, each point the
+/// color `at` its height gives.
+fn soft_round_rect(p: &Painter, r: Rect, rad: f32, at: impl Fn(f32) -> Color32) {
+    let rad = rad.min(r.width() / 2.0).min(r.height() / 2.0).max(0.0);
+    let seg = 8;
+    let mut pts = Vec::with_capacity(4 * (seg + 1));
+    for (c, a0) in [(pos2(r.right() - rad, r.bottom() - rad), 0.0f32), (pos2(r.left() + rad, r.bottom() - rad), 90.0), (pos2(r.left() + rad, r.top() + rad), 180.0), (pos2(r.right() - rad, r.top() + rad), 270.0)] {
+        for i in 0..=seg {
+            let a = (a0 + 90.0 * i as f32 / seg as f32).to_radians();
+            pts.push(c + vec2(a.cos(), a.sin()) * rad);
+        }
+    }
+    let n = pts.len();
+    let half = 0.5 / p.ctx().pixels_per_point();
+    let mut m = egui::epaint::Mesh::default();
+    for i in 0..n {
+        let (a, b, c) = (pts[(i + n - 1) % n], pts[i], pts[(i + 1) % n]);
+        // (Clockwise on the screen: the outside is to the left of each edge.)
+        let out = |p: Pos2, q: Pos2| {
+            let d = (q - p).normalized();
+            vec2(d.y, -d.x)
+        };
+        let mid = (out(a, b) + out(b, c)) * 0.5;
+        let nrm = if mid.length_sq() < 1e-6 { out(a, b) } else { mid / mid.length_sq().max(1.0 / 9.0) };
+        let inner = b - nrm * half;
+        m.colored_vertex(inner, at(inner.y));
+        m.colored_vertex(b + nrm * half, Color32::TRANSPARENT);
+    }
+    for i in 1..n as u32 - 1 {
+        m.add_triangle(0, 2 * i, 2 * (i + 1));
+    }
+    for i in 0..n as u32 {
+        let j = (i + 1) % n as u32;
+        m.add_triangle(2 * i, 2 * i + 1, 2 * j + 1);
+        m.add_triangle(2 * i, 2 * j + 1, 2 * j);
+    }
+    p.add(Shape::mesh(m));
 }
 
 /// A suit `s` across, centered on `c`, upside down if `flip` (the bottom half of a card). Each is
 /// 0.13.28's own shape, traced off it at six times the size (a bot's face in Which bot?): one
 /// smooth outline (the club's stem a second, tucked into its leaves), filled whole so nothing
-/// overlaps.
-fn suit_at(p: &Painter, c: Pos2, s: f32, suit: u8, color: Color32, flip: bool) {
+/// overlaps. `shade`: lit from above as a card's pips are (0.13.28's: 1.15 times the color at
+/// the top of its square to 0.875 at the foot, whichever way up it is).
+fn suit_at(p: &Painter, c: Pos2, s: f32, suit: u8, color: Color32, flip: bool, shade: bool) {
     let f = if flip { -1.0 } else { 1.0 };
     let shapes = outlines();
     let parts = &shapes[match suit {
@@ -67,6 +126,7 @@ fn suit_at(p: &Painter, c: Pos2, s: f32, suit: u8, color: Color32, flip: bool) {
         for (q, nrm) in part.points.iter().zip(&part.normals) {
             let at = c + vec2(q[0] * s, q[1] * s * f);
             let out = vec2(nrm[0], nrm[1] * f) * (feather * 0.5);
+            let color = if shade { times(color, 1.15 - 0.275 * ((at.y - out.y - (c.y - s / 2.0)) / s).clamp(0.0, 1.0)) } else { color };
             mesh.vertices.push(egui::epaint::Vertex { pos: at - out, uv: egui::epaint::WHITE_UV, color });
             mesh.vertices.push(egui::epaint::Vertex { pos: at + out, uv: egui::epaint::WHITE_UV, color: Color32::TRANSPARENT });
         }
@@ -159,56 +219,55 @@ fn rank_text(rank: u8) -> &'static str {
     ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"][rank as usize]
 }
 
-/// Where a number card's pips go, as on a real deck: (across, down), fractions of the card.
-/// Those below the middle are drawn upside down.
+/// Where a number card's pips go, as 0.13.28 lays them out (measured off its board): (across,
+/// down), fractions of the card. Two columns and the middle; the rows a fifth of the way in from
+/// top and foot, the middle, a 7's and an 8's halfway between, a 9's and a 10's four rows evenly
+/// apart. Those below the middle are drawn upside down.
 fn pip_spots(rank: u8) -> &'static [(f32, f32)] {
-    const L: f32 = 0.34;
+    const L: f32 = 0.345;
     const C: f32 = 0.5;
-    const R: f32 = 0.66;
-    const T: f32 = 0.2;
-    const B: f32 = 0.8;
+    const R: f32 = 0.655;
+    const T: f32 = 0.2155;
+    const B: f32 = 1.0 - T;
     const M: f32 = 0.5;
-    const U: f32 = 0.4;
-    const D: f32 = 0.6;
+    const U: f32 = T + (B - T) / 3.0;
+    const D: f32 = 1.0 - U;
+    const UP: f32 = (T + M) / 2.0;
+    const DOWN: f32 = 1.0 - UP;
+    const TEN_UP: f32 = (T + U) / 2.0;
+    const TEN_DOWN: f32 = 1.0 - TEN_UP;
     match rank + 2 {
         2 => &[(C, T), (C, B)],
         3 => &[(C, T), (C, M), (C, B)],
         4 => &[(L, T), (R, T), (L, B), (R, B)],
         5 => &[(L, T), (R, T), (C, M), (L, B), (R, B)],
         6 => &[(L, T), (R, T), (L, M), (R, M), (L, B), (R, B)],
-        7 => &[(L, T), (R, T), (C, 0.35), (L, M), (R, M), (L, B), (R, B)],
-        8 => &[(L, T), (R, T), (C, 0.35), (L, M), (R, M), (C, 0.65), (L, B), (R, B)],
+        7 => &[(L, T), (R, T), (C, UP), (L, M), (R, M), (L, B), (R, B)],
+        8 => &[(L, T), (R, T), (C, UP), (L, M), (R, M), (C, DOWN), (L, B), (R, B)],
         9 => &[(L, T), (R, T), (L, U), (R, U), (C, M), (L, D), (R, D), (L, B), (R, B)],
-        _ => &[(L, T), (R, T), (C, 0.3), (L, U), (R, U), (L, D), (R, D), (C, 0.7), (L, B), (R, B)],
+        _ => &[(L, T), (R, T), (C, TEN_UP), (L, U), (R, U), (L, D), (R, D), (C, TEN_DOWN), (L, B), (R, B)],
     }
 }
 
 /// A card face up in `r` (about 5:7). `dim`: not part of the winning hand, or folded.
 pub fn face(p: &Painter, r: Rect, card: Card, four: bool, dim: bool) {
-    let w = r.width();
+    let (w, h) = (r.width(), r.height());
     let round = CornerRadius::same((w * 0.09).round() as u8);
-    // A soft shadow, the card, a fine edge.
-    p.rect_filled(r.translate(vec2(0.0, r.height() * 0.03)), round, Color32::from_black_alpha(70));
-    p.rect_filled(r, round, Color32::from_rgb(0xfb, 0xfa, 0xf6));
-    p.rect_stroke(r, round, Stroke::new(1.0f32, Color32::from_rgb(0xd9, 0xd5, 0xcc)), StrokeKind::Inside);
+    // A soft shadow; the card itself.
+    p.rect_filled(r.translate(vec2(0.0, h * 0.03)), round, Color32::from_black_alpha(70));
+    body(p, r, round);
     // (Edge on, turning over: nothing to read.)
     if w >= 6.0 {
         let col = suit_color(card.suit(), four);
         let (rank, s) = (card.rank(), card.suit());
-        // Small cards (a hand's history, the board in a list) keep a big corner to read by.
-        let small = r.height() < 60.0;
-        corners(p, r, rank, s, col, small);
-        if small {
-            suit_at(p, r.center() + vec2(w * 0.12, r.height() * 0.16), w * 0.5, s, col, false);
-        } else {
-            match rank {
-                12 => ace(p, r, s, col),
-                9..=11 => court(p, r, rank, s, col),
-                _ => {
-                    let size = if rank >= 7 { w * 0.17 } else { w * 0.2 };
-                    for &(x, y) in pip_spots(rank) {
-                        suit_at(p, pos2(r.left() + x * w, r.top() + y * r.height()), size, s, col, y > 0.5);
-                    }
+        // (Whole at any size, as 0.13.28's: a seat's shown cards, a hand in someone's history.)
+        corners(p, r, rank, s, col);
+        match rank {
+            12 => ace(p, r, s, col),
+            9..=11 => court(p, r, rank, s, col),
+            _ => {
+                for &(x, y) in pip_spots(rank) {
+                    pip(p, pos2(r.left() + x * w, r.top() + y * h), w * 0.161, s, col, y > 0.5);
                 }
             }
         }
@@ -218,32 +277,42 @@ pub fn face(p: &Painter, r: Rect, card: Card, four: bool, dim: bool) {
     }
 }
 
-/// The rank with its suit under it, top left, and the same upside down bottom right (only the
-/// top left on a small card, bigger).
-fn corners(p: &Painter, r: Rect, rank: u8, suit: u8, col: Color32, small: bool) {
-    let w = r.width();
-    let size = match (small, rank) {
-        (true, 8) => w * 0.31,
-        (true, _) => w * 0.38,
-        (false, 8) => w * 0.21,
-        (false, _) => w * 0.25,
-    };
-    let g = p.layout_no_wrap(rank_text(rank).to_string(), egui::FontId::new(size, crate::theme::bold()), col);
-    let gs = g.size();
-    let cx = r.left() + if small { w * 0.2 } else { w * 0.135 };
-    let top = r.top() + w * 0.04;
-    // (A line of text is taller than its letters: the pip goes under the letters.)
-    let pip = if small { w * 0.24 } else { w * 0.15 };
-    let pip_y = top + gs.y * 0.86 + pip * 0.55;
-    p.galley(pos2(cx - gs.x / 2.0, top), g.clone(), col);
-    suit_at(p, pos2(cx, pip_y), pip, suit, col, false);
-    if !small {
-        let cx = r.right() - (cx - r.left());
-        let bottom = r.bottom() - w * 0.04;
-        p.add(egui::epaint::TextShape::new(pos2(cx + gs.x / 2.0, bottom), g, col).with_angle(std::f32::consts::PI));
-        suit_at(p, pos2(cx, r.bottom() - (pip_y - r.top())), pip, suit, col, true);
-    }
+/// A card's body (0.13.28's, measured): its edge, and its face inside it (the edge a 79th of the
+/// card across) shading from white at the top to a warm white at the foot.
+fn body(p: &Painter, r: Rect, round: CornerRadius) {
+    let edge = r.width() * 0.0127;
+    p.rect_filled(r, round, EDGE);
+    soft_round_rect(p, r.shrink(edge), (round.nw as f32 - edge).max(0.0), |y| between(FACE_TOP, FACE_FOOT, (y - r.top()) / r.height()));
 }
+
+/// The rank with its suit under it, top left, and the same turned round bottom right. 0.13.28's:
+/// the rank in Barlow Condensed Black, both an eighth of the way in.
+fn corners(p: &Painter, r: Rect, rank: u8, suit: u8, col: Color32) {
+    let (w, h) = (r.width(), r.height());
+    let g = p.layout_no_wrap(rank_text(rank).to_string(), crate::theme::display_font("barlow-black", h * RANK_SIZE), col);
+    let gs = g.size();
+    let (cx, top) = (r.left() + w * RANK_ACROSS, r.top() + h * RANK_TOP);
+    p.galley(pos2(cx - gs.x / 2.0, top), g.clone(), col);
+    let cx = r.right() - w * RANK_ACROSS;
+    p.add(egui::epaint::TextShape::new(pos2(cx + gs.x / 2.0, r.bottom() - h * RANK_TOP), g, col).with_angle(std::f32::consts::PI));
+    pip(p, pos2(r.left() + w * 0.125, r.top() + h * CORNER_PIP), w * 0.1454, suit, col, false);
+    pip(p, pos2(r.right() - w * 0.125, r.bottom() - h * CORNER_PIP), w * 0.1454, suit, col, true);
+}
+
+/// A pip on a card: its suit `s` across, lit from above. (0.13.28's diamonds come out a little
+/// bigger there than on a bot's face: measured on its board, 2% across.)
+fn pip(p: &Painter, c: Pos2, s: f32, suit: u8, col: Color32, flip: bool) {
+    let s = if suit == 1 { s * 1.019 } else { s };
+    suit_at(p, c, s, suit, col, flip, true);
+}
+
+/// A card's corner (0.13.28's, measured): the rank's lettering (its size, a fifth of the card's
+/// height), the middle of its line, where its line's top is (above the card's own: the letters'
+/// tops come 0.054 of the way down), and the suit under it (an eighth of the way in).
+const RANK_SIZE: f32 = 0.2;
+const RANK_ACROSS: f32 = 0.1265;
+const RANK_TOP: f32 = -0.0055;
+const CORNER_PIP: f32 = 0.2826;
 
 /// An ace: one big suit, and for the ace of spades, Meshy's spade inlaid with gold in a gold
 /// ring.
@@ -259,35 +328,126 @@ fn ace(p: &Painter, r: Rect, suit: u8, col: Color32) {
             return;
         }
     }
-    suit_at(p, c, w * 0.42, suit, col, false);
+    // (0.13.28's: three eighths of the card across, a hair below its middle.)
+    suit_at(p, c + vec2(0.0, r.height() * 0.001), w * 0.375, suit, col, false, true);
 }
 
-/// A jack, queen or king: its figure in a frame, double-ended like a real deck (the top half,
-/// and the same turned round below).
+/// A jack, queen or king, as 0.13.28's (measured off its board): the figure in a gold frame,
+/// double-ended like a real deck (its top above a gold line slanting up through the middle, the
+/// same turned round below it, a small gold diamond where they meet), the suit small in the
+/// frame's corners.
 fn court(p: &Painter, r: Rect, rank: u8, suit: u8, col: Color32) {
-    let w = r.width();
-    let frame = Rect::from_min_max(pos2(r.left() + w * 0.24, r.top() + w * 0.12), pos2(r.right() - w * 0.24, r.bottom() - w * 0.12));
-    let name = court_art(rank, suit);
-    let half = Rect::from_min_max(frame.min, pos2(frame.right(), frame.center().y));
-    let line = Stroke::new((w * 0.012).max(0.8), col.gamma_multiply(0.8));
-    match crate::casino::pics::tex(p.ctx(), name, texture_px(half)) {
+    let (w, h) = (r.width(), r.height());
+    let c = r.center();
+    let frame = Rect::from_min_max(pos2(r.left() + w * 0.2074, r.top() + h * 0.0246), pos2(r.right() - w * 0.2074, r.bottom() - h * 0.0246));
+    let band = w * 0.0156;
+    let inside = frame.shrink(band);
+    // (The gold: light at the top, deep in the middle, dark at the foot.)
+    let gold = |y: f32| {
+        let t = ((y - frame.top()) / frame.height()).clamp(0.0, 1.0);
+        if t < 0.5 { between(GOLD_TOP, GOLD_MID, t * 2.0) } else { between(GOLD_MID, GOLD_FOOT, t * 2.0 - 1.0) }
+    };
+    soft_round_rect(p, inside, 1.0, |_| CREAM);
+    // The slant: up to the right through the middle.
+    let rise = inside.width() * 0.0875;
+    let (a, b) = (pos2(inside.left(), c.y + rise), pos2(inside.right(), c.y - rise));
+    match crate::casino::pics::tex(p.ctx(), court_art(rank, suit), texture_px(inside)) {
         Some(t) => {
-            // The figure from the top down, cut to the half's shape; turned round below.
-            let [iw, ih] = t.size();
-            // (Its top part when the half is wider than the picture; its middle when narrower.)
-            let k = (half.height() / half.width()) * (iw as f32 / ih.max(1) as f32);
-            let uv = if k <= 1.0 { Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, k)) } else { Rect::from_min_max(pos2(0.5 - 0.5 / k, 0.0), pos2(0.5 + 0.5 / k, 1.0)) };
-            p.image(t.id(), half, uv, Color32::WHITE);
-            let below = Rect::from_min_max(pos2(frame.left(), frame.center().y), frame.max);
-            p.image(t.id(), below, Rect::from_min_max(uv.max, uv.min), Color32::WHITE);
+            // The picture a square 0.707 of the card across, its top just under the frame's;
+            // above the slant, and the same turned round the card's middle below it.
+            let pic = Rect::from_min_size(pos2(c.x - w * 0.3535, r.top() + h * 0.0323), vec2(w * 0.707, w * 0.707));
+            let uv = |q: Pos2| pos2((q.x - pic.left()) / pic.width(), (q.y - pic.top()) / pic.height());
+            let top = [inside.left_top(), inside.right_top(), b, a];
+            let mut m = egui::epaint::Mesh::with_texture(t.id());
+            for q in top {
+                m.vertices.push(egui::epaint::Vertex { pos: q, uv: uv(q), color: Color32::WHITE });
+            }
+            for q in top {
+                m.vertices.push(egui::epaint::Vertex { pos: c + (c - q), uv: uv(q), color: Color32::WHITE });
+            }
+            m.indices.extend([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]);
+            p.add(Shape::mesh(m));
         }
         None => {
-            p.rect_filled(frame, CornerRadius::ZERO, Color32::from_rgb(0xf0, 0xe3, 0xc3));
-            suit_at(p, frame.center(), w * 0.3, suit, col, false);
+            suit_at(p, c, w * 0.3, suit, col, false, true);
         }
     }
-    p.rect_stroke(frame, CornerRadius::ZERO, line, StrokeKind::Outside);
-    p.line_segment([pos2(frame.left(), frame.center().y), pos2(frame.right(), frame.center().y)], line);
+    soft_round_ring(p, frame, 3.0, band, gold);
+    // A fine line inside the gold, the slant, and the diamond on it.
+    let fine = frame.shrink(w * 0.0296);
+    let corner = |q: Pos2, d: Vec2| q + d;
+    let k = 0.7f32;
+    let line: Vec<Pos2> = [
+        corner(fine.left_top(), vec2(k, 0.0)),
+        corner(fine.right_top(), vec2(-k, 0.0)),
+        corner(fine.right_top(), vec2(0.0, k)),
+        corner(fine.right_bottom(), vec2(0.0, -k)),
+        corner(fine.right_bottom(), vec2(-k, 0.0)),
+        corner(fine.left_bottom(), vec2(k, 0.0)),
+        corner(fine.left_bottom(), vec2(0.0, -k)),
+        corner(fine.left_top(), vec2(0.0, k)),
+    ]
+    .to_vec();
+    p.add(Shape::closed_line(line, Stroke::new(w * 0.006, FINE)));
+    p.line_segment([a, b], Stroke::new(w * 0.0092, GOLD_MID));
+    let (dx, dy) = (w * 0.021, w * 0.027);
+    p.add(Shape::convex_polygon(vec![c + vec2(0.0, -dy), c + vec2(dx, 0.0), c + vec2(0.0, dy), c + vec2(-dx, 0.0)], GOLD_TOP, Stroke::new(w * 0.006, GOLD_FOOT)));
+    pip(p, pos2(r.left() + w * 0.3007, r.top() + h * 0.0915), w * 0.0866, suit, col, false);
+    pip(p, pos2(r.right() - w * 0.3007, r.bottom() - h * 0.0915), w * 0.0866, suit, col, true);
+}
+
+/// A court card's frame (0.13.28's): its gold top, middle and foot, the figure's ground, the fine
+/// line inside the gold.
+const GOLD_TOP: Color32 = Color32::from_rgb(0xfb, 0xe3, 0x93);
+const GOLD_MID: Color32 = Color32::from_rgb(0xd9, 0xa8, 0x3c);
+const GOLD_FOOT: Color32 = Color32::from_rgb(0xa8, 0x76, 0x1c);
+const CREAM: Color32 = Color32::from_rgb(0xf1, 0xe2, 0xc1);
+const FINE: Color32 = Color32::from_rgb(0xe0, 0xb8, 0x61);
+
+/// A ring `width` wide just inside `r` (its outer corners rounded by `rad`), with soft edges a
+/// pixel wide, each point the color `at` its height gives.
+fn soft_round_ring(p: &Painter, r: Rect, rad: f32, width: f32, at: impl Fn(f32) -> Color32) {
+    let (seg, side) = (8, 12);
+    // (The sides cut in pieces too, so the color follows the height all the way down.)
+    let outline = |r: Rect, rad: f32| {
+        let rad = rad.min(r.width() / 2.0).min(r.height() / 2.0).max(0.0);
+        let corners = [(pos2(r.right() - rad, r.bottom() - rad), 0.0f32), (pos2(r.left() + rad, r.bottom() - rad), 90.0), (pos2(r.left() + rad, r.top() + rad), 180.0), (pos2(r.right() - rad, r.top() + rad), 270.0)];
+        let mut pts = Vec::with_capacity(4 * (seg + 1 + side));
+        for (k, (c, a0)) in corners.iter().enumerate() {
+            for i in 0..=seg {
+                let a = (a0 + 90.0 * i as f32 / seg as f32).to_radians();
+                pts.push((*c + vec2(a.cos(), a.sin()) * rad, vec2(a.cos(), a.sin())));
+            }
+            let a = (a0 + 90.0).to_radians();
+            let nrm = vec2(a.cos(), a.sin());
+            let (from, to) = (*c + nrm * rad, corners[(k + 1) % 4].0 + nrm * rad);
+            for j in 1..=side {
+                pts.push((from + (to - from) * (j as f32 / (side + 1) as f32), nrm));
+            }
+        }
+        pts
+    };
+    let (outer, inner) = (outline(r, rad), outline(r.shrink(width), (rad - width).max(0.0)));
+    let half = 0.5 / p.ctx().pixels_per_point();
+    let mut m = egui::epaint::Mesh::default();
+    for ((o, no), (i, ni)) in outer.iter().zip(&inner) {
+        // (Each point's way out: along its corner's radius, a straight side's own normal.)
+        let no = if no.length_sq() > 0.0 { *no } else { *ni };
+        m.colored_vertex(*o + no * half, Color32::TRANSPARENT);
+        m.colored_vertex(*o - no * half, at(o.y));
+        m.colored_vertex(*i + *ni * half, at(i.y));
+        m.colored_vertex(*i - *ni * half, Color32::TRANSPARENT);
+    }
+    let n = outer.len() as u32;
+    for k in 0..n {
+        let j = (k + 1) % n;
+        for band in 0..3 {
+            let (a0, a1, b0, b1) = (4 * k + band, 4 * k + band + 1, 4 * j + band, 4 * j + band + 1);
+            m.add_triangle(a0, a1, b1);
+            m.add_triangle(a0, b1, b0);
+        }
+    }
+    p.add(Shape::mesh(m));
 }
 
 /// The court figures' pictures: jacks, queens and kings of clubs, diamonds, hearts, spades.
@@ -327,11 +487,13 @@ pub fn back(p: &Painter, r: Rect, design: &str) {
     let rad = r.width().min(r.height() * 0.7) * 0.09;
     let round = CornerRadius::same(rad.round() as u8);
     p.rect_filled(r.translate(vec2(0.0, r.height() * 0.03)), round, Color32::from_black_alpha(70));
-    // The painting, the whole of it (squeezed while it turns over).
-    if !crate::casino::pics::stretch_rounded(p, p.ctx(), back_art(design), r, rad, texture_px(r), Color32::WHITE) {
-        drawn_back(p, r, design);
+    // The card's body, and the painting in it a little in from its edge, the whole of it
+    // (squeezed while it turns over). (0.13.28's: a white margin round the painting.)
+    body(p, r, round);
+    let art = r.shrink2(vec2(r.width() * 0.036, r.height() * 0.038));
+    if !crate::casino::pics::stretch_rounded(p, p.ctx(), back_art(design), art, rad * 0.6, texture_px(art), Color32::WHITE) {
+        drawn_back(p, art, design);
     }
-    p.rect_stroke(r, round, Stroke::new(1.0f32, Color32::from_black_alpha(120)), StrokeKind::Inside);
 }
 
 /// A back drawn in its colors, while its painting's still being read.
