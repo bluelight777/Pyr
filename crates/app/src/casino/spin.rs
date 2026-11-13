@@ -142,3 +142,63 @@ mod tests {
         }
     }
 }
+
+/// Pyr Sevens' and Ember Dragon's sounds since 0.13.2 ("new slot sounds"): the slots' shared band
+/// (`s_all_*`, 0.13.28's own files), as 0.13.28 plays them, measured off its output (each sound's
+/// file, pitch and loudness, at Pyr's sounds 70% and the games' 100%: 50 paid spins and 40 free
+/// ones of each). (cue, volume) pairs, for `CasinoUi::sound_in`.
+pub mod band {
+    use pyr_engine::poker_sfx::Cue;
+
+    /// The band's `s_all_<what>`, `cents` hundredths of a semitone higher.
+    pub fn cue(what: &str, cents: i32) -> Cue {
+        super::super::bigwin::cue(&format!("s_all_{what}"), cents).unwrap_or(Cue::ReelStop)
+    }
+
+    /// The reels set going (a free spin's a little softer).
+    pub fn spin(free: bool) -> (Cue, f32) {
+        (cue("reelspin", 0), if free { 0.25 } else { 0.3 })
+    }
+
+    /// Reel `i` landing: up the pentatonic reel by reel (0, 2, 4, 7 and 9 semitones), placed under
+    /// its reel as before.
+    pub fn stop(i: usize) -> (Cue, f32) {
+        (cue("reelstop", [0, 200, 400, 700, 900][i.min(4)]), 0.294)
+    }
+
+    /// A spin's win: Pyr Sevens' big one (five times the bet and more) is the band's jackpot.
+    pub fn win(big: bool) -> (Cue, f32) {
+        if big { (cue("jackpot", 0), 0.595) } else { (cue("winsmall", 0), 0.385) }
+    }
+
+    /// Free spins won (with the spin's own win, if it paid).
+    pub fn free_spins() -> (Cue, f32) {
+        (cue("jackpot", 0), 0.475)
+    }
+
+    /// Ember Dragon growing up a stage.
+    pub fn grew() -> (Cue, f32) {
+        (cue("winbig", 0), 0.56)
+    }
+
+    /// Ember Respins starting.
+    pub fn respins() -> (Cue, f32) {
+        (cue("jackpot", 0), 0.664)
+    }
+
+    /// A respin that catches fireballs (one that catches none ticks, the table's high tick).
+    pub fn caught() -> (Cue, f32) {
+        (cue("coin", 0), 0.434)
+    }
+
+    /// The respins over: the band's big win, or its jackpot when one's won. (The big win heard,
+    /// 0.63; the jackpot's as loud as its other plays make it, not heard.) Ember Dragon's big
+    /// spin win, ten times the bet and more, is the big win at 0.49 (not heard either).
+    pub fn ended(jackpot: bool) -> (Cue, f32) {
+        if jackpot { (cue("jackpot", 0), 0.855) } else { (cue("winbig", 0), 0.63) }
+    }
+
+    pub fn dragon_big_win() -> (Cue, f32) {
+        (cue("winbig", 0), 0.49)
+    }
+}

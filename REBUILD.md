@@ -531,7 +531,20 @@ How (decided while starting it):
         same table, sound for sound (`work/ui/ab.py`): the same latency (57 and 60 ms) and within a
         few dB in every band over a sound's first 0.3 s; and both seated, running their clocks
         out (the bells' levels by the same measure on both). The Ember profile plays them the same.
-        Not checked: rabbit and Bomb Pot tables.
+        The ticks fitted again to their own shape (F#6 and A6, each partial at a chance phase, its
+        decays and level: 98.5% of each 0.13.28 tick explained so). Not checked: rabbit and Bomb
+        Pot tables.
+  - [x] The casino games' sounds as 0.13.28's (`measured/casinosounds.md`), heard off it game by
+        game and taken apart into its own files (`work/ui/decomp.py`): the casino's cues play its
+        `c_*` files (dice, Keno, roulette, craps and blackjack heard: which file, when, how loud,
+        where), turned down to 0.9 when louder, placed by turning the other side down 0.7 of the
+        pan; the table's own sounds (chips, cards) fresh as the poker table's. Pyr Sevens and Ember
+        Dragon play the slots' band (0.13.2's "new slot sounds"): the reels' stops climbing a
+        pentatonic, each sound's file and loudness as heard (the free spins, the big wins, Ember
+        Respins, the dragon growing, All or Nothing). Plinko's pegs and buckets are 0.13.0's own
+        helpers as 0.13.28 used them, sample for sample (a peg's pitch by its row, a bucket's by
+        its place). Not heard, so by the rule: the Bomb Pot's wheel, fuse and bang, the Bonfire's
+        draw, Ember Dragon's big spin win and jackpots, a slot's All or Nothing win.
   - [x] Staff titles on seats (0.13.4/0.13.6), as 0.13.28's (`measured/tablefeatures.md`): the
         seat's `badge` (`owner`, `game_master`, `ambassador`, none when hidden), the server
         sending it (with the MMRs) and `hide_title` (a change shows at once); "Show my title" in

@@ -418,22 +418,23 @@ pub fn time_bank() -> Vec<f32> {
     o
 }
 
-/// A second going by on a clock: a wood block's tick (1,475 Hz, and 4,017, gone in 40 ms), with a
-/// faint echo;
-/// `pitch` higher in a time bank (1.18: three semitones).
+/// A second going by on a clock: a wood block's tick (F#6, 1,480 Hz, and 4,031, gone in 40 ms), with a
+/// faint echo; `pitch` times higher (three semitones, A6, for the other of 0.13.28's two).
 pub fn tick(pitch: f32, rng: &mut Rng) -> Vec<f32> {
     let mut o = vec![0.0; ms(200.0)];
+    // (Fitted to 0.13.28's, tick by tick: each partial starts at its own chance phase, the low one
+    // dying in 6.8 ms and the high, 0.39 as loud, in 2.8; struck at once, with a snap of noise;
+    // 98.5% of each of its ticks explained so.)
     let block = |o: &mut [f32], at: usize, amp: f32, rng: &mut Rng| {
-        let ph = if rng.f() < 0.5 { 0.0 } else { std::f32::consts::PI };
+        let (p1, p2) = (rng.f() * TAU, rng.f() * TAU);
         for i in 0..ms(120.0) {
             let t = i as f32 / RATE;
-            let attack = (t / 0.0008).min(1.0);
-            let x = (TAU * 1475.0 * pitch * t + ph).sin() * (-t / 0.0064).exp() + (TAU * 4017.0 * pitch * t + ph).sin() * 0.3 * (-t / 0.003).exp();
+            let x = (TAU * 1479.98 * pitch * t + p1).sin() * (-t / 0.0068).exp() + (TAU * 4030.6 * pitch * t + p2).sin() * 0.39 * (-t / 0.0028).exp();
             let snap = if i < ms(0.7) { rng.noise() * 0.3 } else { 0.0 };
-            add(o, at + i, (x * attack + snap) * amp);
+            add(o, at + i, (x + snap) * amp);
         }
     };
-    block(&mut o, 0, 0.66, rng);
+    block(&mut o, 0, 0.523, rng);
     block(&mut o, ms(32.0), 0.008, rng);
     o
 }

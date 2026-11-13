@@ -18,13 +18,24 @@ macro_rules! band {
     };
 }
 
-/// Every sound, by name. (And the casino's own, 0.13.6's, `c_*`: those a big win plays.)
+/// Every sound, by name. (And the casino's own, `c_*`: what its games play, as 0.13.28 has them,
+/// and a big win.)
 pub const BANDS: &[(&str, &[u8])] = &[
     band!("c_boom"),
     band!("c_coin"),
     band!("c_tierup"),
     band!("c_winbig"),
     band!("c_winslam"),
+    band!("c_balldrop"),
+    band!("c_ballroll"),
+    band!("c_diceroll"),
+    band!("c_fuse"),
+    band!("c_jackpot"),
+    band!("c_kenoball"),
+    band!("c_reelspin"),
+    band!("c_reelstop"),
+    band!("c_wheel"),
+    band!("c_winsmall"),
     band!("s_all_coin"),
     band!("s_all_count"),
     band!("s_all_jackpot"),
@@ -198,7 +209,10 @@ fn cache() -> &'static Mutex<HashMap<u16, Pcm>> {
     CACHE.get_or_init(Default::default)
 }
 
-/// A sound, 48 kHz stereo (interleaved), placed `pan` (-1 left to 1 right).
+/// A sound, 48 kHz stereo (interleaved), placed `pan` (-1 left to 1 right). As 0.13.28 plays its
+/// games' sounds (measured off its output): a file louder than 0.9 turned down to 0.9 (c_diceroll,
+/// c_coin, c_ballroll), and placed by turning the other side down, 0.7 of the way (Pyr Sevens'
+/// reel stops at ±0.3 and ±0.6: 0.79 and 0.58 on the far side, 1 on the near; the middle 1 both).
 pub fn render(i: u16, pan: f32) -> Vec<f32> {
     let pcm = {
         let mut c = cache().lock();
@@ -206,14 +220,21 @@ pub fn render(i: u16, pan: f32) -> Vec<f32> {
             Some(p) => p.clone(),
             None => {
                 let Some((_, file)) = BANDS.get(i as usize) else { return Vec::new() };
-                let p: Pcm = Arc::new(soundboard::decode(file).unwrap_or_default());
+                let mut s = soundboard::decode(file).unwrap_or_default();
+                let peak = s.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+                if peak > 0.9 {
+                    for x in &mut s {
+                        *x *= 0.9 / peak;
+                    }
+                }
+                let p: Pcm = Arc::new(s);
                 c.insert(i, p.clone());
                 p
             }
         }
     };
     let pan = pan.clamp(-1.0, 1.0);
-    let (l, r) = ((1.0 - pan.max(0.0)), (1.0 + pan.min(0.0)));
+    let (l, r) = ((1.0 - 0.7 * pan.max(0.0)), (1.0 + 0.7 * pan.min(0.0)));
     pcm.chunks(2).flat_map(|x| [x[0] * l, x.get(1).copied().unwrap_or(x[0]) * r]).collect()
 }
 

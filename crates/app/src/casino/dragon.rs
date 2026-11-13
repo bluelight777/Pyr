@@ -183,7 +183,8 @@ impl PyrApp {
         ui.stopped_at = Some(last);
         // (Five fireballs landed: the last reel slows right down, teasing the sixth.)
         for (i, e) in ends.iter().enumerate() {
-            self.poker.casino.sound_in(e.saturating_duration_since(now).as_secs_f32(), Cue::ReelStop, (i as f32 - 2.0) * 0.3, 0.7);
+            let (cue, vol) = super::spin::band::stop(i);
+            self.poker.casino.sound_in(e.saturating_duration_since(now).as_secs_f32(), cue, (i as f32 - 2.0) * 0.3, vol);
         }
     }
 
@@ -210,7 +211,8 @@ impl PyrApp {
         }
         let bet = ui.bet;
         let growth = Self::dragon_growth(s, bet);
-        self.poker.casino.sound_in(0.0, Cue::ReelSpin, 0.0, 0.6);
+        let (cue, vol) = super::spin::band::spin(false);
+        self.poker.casino.sound_in(0.0, cue, 0.0, vol);
         let ui = &mut self.poker.casino.dragon;
         for r in &mut ui.reels {
             r.start(now, SPEED);
@@ -546,12 +548,14 @@ impl PyrApp {
         let _ = den;
         if o.reels_paid > 0 {
             let big = o.reels_paid >= o.bet * 10;
-            self.poker.casino.sound_in(0.0, if big { Cue::WinBig } else { Cue::WinSmall }, 0.0, 0.7);
+            let (cue, vol) = if big { super::spin::band::dragon_big_win() } else { super::spin::band::win(false) };
+            self.poker.casino.sound_in(0.0, cue, 0.0, vol);
         }
         match &o.respins {
             Some(rs) => {
                 self.poker.casino.announce("EMBER RESPINS!", format!("{} fireballs", o.fires.len()), EMBER, (0.5, 0.42), 0.3);
-                self.poker.casino.sound_in(0.3, Cue::Jackpot, 0.0, 0.7);
+                let (cue, vol) = super::spin::band::respins();
+                self.poker.casino.sound_in(0.3, cue, 0.0, vol);
                 let _ = rs;
                 self.poker.casino.dragon.respins = Some(RespinPlay { round: round.clone(), started: now + Duration::from_millis(2_000), over_at: None, collected: false, sounded: 0 });
             }
@@ -593,7 +597,8 @@ impl PyrApp {
                 let after = dg::age(o.growth_after);
                 if after > before {
                     ui.grew = Some((after, now));
-                    self.poker.casino.sound_in(0.0, Cue::WinBig, 0.0, 0.8);
+                    let (cue, vol) = super::spin::band::grew();
+                    self.poker.casino.sound_in(0.0, cue, 0.0, vol);
                 }
             }
         }
@@ -629,7 +634,8 @@ impl PyrApp {
         let sounded = play.sounded;
         if shown > sounded {
             for caught in &r.spins[sounded..shown] {
-                self.poker.casino.sound_in(0.0, if caught.is_empty() { Cue::Tick } else { Cue::Coin }, 0.0, 0.7);
+                let (cue, vol) = if caught.is_empty() { (Cue::TickUp, 0.7) } else { super::spin::band::caught() };
+                self.poker.casino.sound_in(0.0, cue, 0.0, vol);
             }
             if let Some(pl) = self.poker.casino.dragon.respins.as_mut() {
                 pl.sounded = shown;
@@ -710,7 +716,8 @@ impl PyrApp {
                 (false, None) => ("EMBER RESPINS".to_string(), EMBER),
             };
             self.poker.casino.announce(title, format!("{} fireballs · {}", r.board.len(), chips_text(r.paid)), color, (0.5, 0.42), 0.2);
-            self.poker.casino.sound_in(0.2, if best.is_some() || r.full { Cue::Jackpot } else { Cue::WinBig }, 0.0, 0.9);
+            let (cue, vol) = super::spin::band::ended(best.is_some() || r.full);
+            self.poker.casino.sound_in(0.2, cue, 0.0, vol);
         }
         let k = now.duration_since(over_at).as_secs_f32();
         let total = o.reels_paid + r.paid;

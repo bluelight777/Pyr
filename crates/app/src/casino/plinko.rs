@@ -331,6 +331,7 @@ impl PyrApp {
                 p.circle_filled(pos - vec2(b.ball_r * 0.36, b.ball_r * 0.4), b.ball_r * 0.36, Color32::from_rgb(0xff, 0xf6, 0xd8));
             }
         }
+        let rings: Vec<u8> = struck.iter().take(sounds.min(2)).map(|s| s.0).collect();
         let pu = &mut self.poker.casino.plinko;
         for k in struck {
             pu.lit.insert(k, now);
@@ -338,18 +339,18 @@ impl PyrApp {
         pu.lit.retain(|_, t| (now - *t).as_secs_f32() < 0.5);
         pu.bounced.retain(|_, t| (now - *t).as_secs_f32() < 1.4);
         pu.balls.retain(|b| !b.landed || (now - b.start).as_secs_f32() < fall_s(b.o.path.len()) + 0.2);
-        for _ in 0..sounds.min(2) {
-            self.poker.casino.sound_in(0.0, Cue::Peg, 0.0, 0.35);
+        // Each peg its row's note; a bucket its own, louder when it pays more than the ball cost
+        // (and no other win sound), as 0.13.28's.
+        for row in rings {
+            self.poker.casino.sound_in(0.0, Cue::Peg(row), 0.0, 0.5);
         }
         for (bucket, rows, m, paid, chips) in landed {
             let pu = &mut self.poker.casino.plinko;
             pu.bounced.insert(bucket, now);
             pu.results.insert(0, (bucket, rows, m, now));
             pu.results.truncate(RESULTS_SHOWN);
-            self.poker.casino.sound_in(0.0, Cue::Bucket, 0.0, 0.5);
-            if paid > chips {
-                self.poker.casino.sound_in(0.05, Cue::WinSmall, 0.0, 0.45);
-            }
+            let out = (bucket as i32 - rows as i32 / 2).unsigned_abs() as u8;
+            self.poker.casino.sound_in(0.0, Cue::Bucket(out), 0.0, if paid > chips { 0.8 } else { 0.5 });
             // (Auto play: the next ball after this one, unless a big win stops it when ticked.)
             let big = m >= 1000;
             // A big win's shown once the bucket's lit and the win's floated up: 1.25 s after the

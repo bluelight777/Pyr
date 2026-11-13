@@ -1,8 +1,8 @@
-//! The sounds of the poker table and the casino's games, made here rather than recorded. The
-//! table's own (cards, chips, the check's knock, the pot, the win, and the turn, clock and time
-//! bank bells) are 0.13.6's, made fresh each time in `table_sfx`; the rest are 0.13.0's, made the
-//! same every time below, or 0.13.28's own files (`bands`). 48 kHz stereo, a little to the side
-//! they happen on.
+//! The sounds of the poker table and the casino's games. The table's own (cards, chips, the
+//! check's knock, the pot, the win, and the turn, clock and time bank bells) are 0.13.6's, made
+//! fresh each time in `table_sfx`; the casino's games play 0.13.28's own files (`bands`: the
+//! casino's `c_*`, the slots' bands) as it does; Plinko's pegs and buckets are made below. 48 kHz
+//! stereo, a little to the side they happen on.
 
 use std::f32::consts::TAU;
 
@@ -80,8 +80,9 @@ pub enum Cue {
     Hurry,
     /// A second going by in someone's last five.
     Tick,
-    /// The tick three semitones higher: 0.13.28 ticks a turn's last seconds in one of the two,
-    /// and its time bank's in the other (see the table's sounds).
+    /// The tick three semitones higher (A6 to the tick's F#6): 0.13.28 ticks a turn's last seconds
+    /// in one of the two, and its time bank's in the other (see the table's sounds); Ember
+    /// Respins' empty respins tick this one.
     TickUp,
     /// Someone's time ran out and their time bank started.
     TimeBank,
@@ -116,10 +117,12 @@ pub enum Cue {
     /// The bomb going off.
     Boom,
     // Plinko (0.13.5).
-    /// A ball striking a gold peg: a small bright ring.
-    Peg,
-    /// A ball dropping into a bucket: a soft pop and a ding.
-    Bucket,
+    /// A ball striking a gold peg on this row (from the top): a small bright ring, half a
+    /// semitone higher each row down.
+    Peg(u8),
+    /// A ball dropping into a bucket this many from the middle: a thump and a ding, a step and a
+    /// half higher (and a little louder) each bucket out.
+    Bucket(u8),
     /// One of the Reel Row machines' own sounds (`bands::BANDS`, 0.13.28's files).
     Band(u16),
     /// One of those, played this many hundredths of a semitone higher (faster; lower when
@@ -141,24 +144,6 @@ impl Noise {
 
 fn ms(n: f32) -> usize {
     (n / 1000.0 * RATE) as usize
-}
-
-/// Filtered noise with an envelope: a card's swish or snap.
-fn swish(out: &mut [f32], at: usize, len: usize, amp: f32, bright: f32, seed: u32) {
-    let mut n = Noise(seed.max(1));
-    let (mut lp, mut prev) = (0.0f32, 0.0f32);
-    for i in 0..len {
-        let t = i as f32 / len as f32;
-        let env = (t / 0.08).min(1.0) * (1.0 - t).powf(2.5);
-        let x = n.next();
-        lp += (x - lp) * bright;
-        // A touch of high-pass so it's crisp, not a rumble.
-        let hp = lp - prev * 0.6;
-        prev = lp;
-        if let Some(o) = out.get_mut(at + i) {
-            *o += hp * env * amp;
-        }
-    }
 }
 
 /// A clay chip's click: a short burst of two inharmonic partials and a tick of noise.
@@ -228,7 +213,7 @@ fn table_sound(c: Cue) -> Option<Vec<f32>> {
         Cue::Win => t::win(&mut rng),
         Cue::Hurry => t::hurry(),
         Cue::Tick => t::tick(1.0, &mut rng),
-        Cue::TickUp => t::tick(1.18, &mut rng),
+        Cue::TickUp => t::tick(2f32.powf(3.0 / 12.0), &mut rng),
         Cue::TimeBank => t::time_bank(),
         Cue::TimeOut => t::time_out(&mut rng),
         _ => return None,
@@ -242,10 +227,36 @@ fn table_sound(c: Cue) -> Option<Vec<f32>> {
     Some(o)
 }
 
+/// What 0.13.28 plays from its own files (the casino's `c_<cue>`, carved out of it: `bands`) for the
+/// casino's cues: every game's but Plinko's pegs and buckets, made here, and the poker table's own
+/// (chips, cards, the felt), made fresh each time (`table_sfx`) wherever they're heard. Heard off
+/// 0.13.28 at dice, Keno, roulette and craps; the slots' own band replaces some at the slots.
+pub fn casino_file(c: Cue) -> Option<&'static str> {
+    Some(match c {
+        Cue::ReelSpin => "c_reelspin",
+        Cue::ReelStop => "c_reelstop",
+        Cue::WinSmall => "c_winsmall",
+        Cue::WinBig => "c_winbig",
+        Cue::Jackpot => "c_jackpot",
+        Cue::BallRoll => "c_ballroll",
+        Cue::BallDrop => "c_balldrop",
+        Cue::DiceRoll => "c_diceroll",
+        Cue::KenoBall => "c_kenoball",
+        Cue::Coin => "c_coin",
+        Cue::Wheel => "c_wheel",
+        Cue::Fuse => "c_fuse",
+        Cue::Boom => "c_boom",
+        _ => return None,
+    })
+}
+
 /// The sound, mono.
 pub fn render_mono(c: Cue) -> Vec<f32> {
     if let Some(o) = table_sound(c) {
         return o;
+    }
+    if let Some(i) = casino_file(c).and_then(crate::bands::id) {
+        return crate::bands::render(i, 0.0).chunks(2).map(|x| (x[0] + x[1]) * 0.5).collect();
     }
     if let Cue::Band(i) = c {
         return crate::bands::render(i, 0.0).chunks(2).map(|x| (x[0] + x[1]) * 0.5).collect();
@@ -254,200 +265,25 @@ pub fn render_mono(c: Cue) -> Vec<f32> {
         return crate::bands::render_up(i, up, 0.0).chunks(2).map(|x| (x[0] + x[1]) * 0.5).collect();
     }
     let len = match c {
-        Cue::ReelSpin => ms(650.0),
-        Cue::ReelStop => ms(160.0),
-        Cue::WinSmall => ms(520.0),
-        Cue::WinBig => ms(2200.0),
-        Cue::Jackpot => ms(3600.0),
-        Cue::BallRoll => ms((roulette::LEAVE_S + 0.5) * 1000.0),
-        Cue::BallDrop => ms((roulette::SETTLED_S - roulette::DIAMOND_S + 0.25) * 1000.0),
-        Cue::DiceRoll => ms(1100.0),
-        Cue::KenoBall => ms(180.0),
-        Cue::Coin => ms(140.0),
-        Cue::Wheel => ms(4600.0),
-        Cue::Fuse => ms(900.0),
-        Cue::Boom => ms(2600.0),
-        Cue::Peg => ms(150.0),
-        Cue::Bucket => ms(360.0),
-        // (Made in `table_sfx`, or played from its file, above.)
-        Cue::Deal | Cue::Flip | Cue::Chips | Cue::Check | Cue::Fold | Cue::AllIn | Cue::Pot | Cue::Turn | Cue::Win | Cue::Hurry | Cue::Tick | Cue::TickUp | Cue::TimeBank | Cue::TimeOut | Cue::Band(_) | Cue::BandUp(..) => 0,
+        Cue::Peg(_) => ms(90.0),
+        Cue::Bucket(_) => ms(390.0),
+        _ => 0,
     };
     let mut o = vec![0.0f32; len];
     match c {
-        // A ratchet: quick clicks, speeding up, over a low whirr.
-        Cue::ReelSpin => {
-            swish(&mut o, 0, ms(620.0), 0.18, 0.08, 81);
-            let mut t = 0.0f32;
-            let mut k = 0;
-            while t < 600.0 {
-                click(&mut o, ms(t), 0.16, 1400.0 + (k % 3) as f32 * 120.0, 83 + k);
-                t += (55.0 - k as f32 * 2.5).max(22.0);
-                k += 1;
-            }
+        // As 0.13.28 makes them, sample for sample (fitted to what it played, every row and
+        // bucket heard: a G6 bell with a click a fifth over it, up half a semitone a row; a knock
+        // and a C5 bell, up a step and a half a bucket from the middle).
+        Cue::Peg(row) => {
+            let f = 1567.98 * 2f32.powf(row as f32 / 24.0);
+            bell(&mut o, 0, f, 90.0, 0.05);
+            click(&mut o, 0, 0.09, f * 1.5, 91 + row as u32);
         }
-        // A reel stops: a damped thunk and a latch's click.
-        Cue::ReelStop => {
-            knock(&mut o, 0, 0.55);
-            click(&mut o, ms(8.0), 0.25, 2100.0, 91);
+        Cue::Bucket(k) => {
+            knock(&mut o, 0, 0.5);
+            bell(&mut o, ms(10.0), 523.25 * 2f32.powf(1.5 * k as f32 / 12.0), 380.0, 0.1 + 0.02 * k as f32);
         }
-        Cue::WinSmall => {
-            bell(&mut o, 0, 1046.5, 320.0, 0.16);
-            bell(&mut o, ms(110.0), 1567.98, 380.0, 0.15);
-        }
-        // Up a major arpeggio, then coins.
-        Cue::WinBig => {
-            for (k, f) in [523.25, 659.25, 783.99, 1046.5, 1318.5, 1567.98].iter().enumerate() {
-                bell(&mut o, ms(k as f32 * 85.0), *f, 700.0, 0.13);
-            }
-            for k in 0..22 {
-                let at = 520.0 + k as f32 * 62.0 + (k * 37 % 23) as f32;
-                click(&mut o, ms(at), 0.17, 3200.0 + (k * 211 % 900) as f32, 101 + k);
-            }
-        }
-        // A fanfare: two rising runs, a held chord, and a shower of coins.
-        Cue::Jackpot => {
-            for (k, f) in [392.0, 523.25, 659.25, 783.99].iter().enumerate() {
-                bell(&mut o, ms(k as f32 * 120.0), *f, 600.0, 0.12);
-            }
-            for (k, f) in [523.25, 659.25, 783.99, 1046.5].iter().enumerate() {
-                bell(&mut o, ms(560.0 + k as f32 * 120.0), *f, 700.0, 0.12);
-            }
-            for f in [523.25, 659.25, 783.99, 1046.5, 1318.5] {
-                bell(&mut o, ms(1100.0), f, 2200.0, 0.09);
-            }
-            for k in 0..40 {
-                let at = 1200.0 + k as f32 * 55.0 + (k * 29 % 31) as f32;
-                click(&mut o, ms(at), 0.12, 3000.0 + (k * 173 % 1100) as f32, 151 + k);
-            }
-        }
-        // The ball round the track: a rolling rumble that swells once a lap (the laps it really
-        // goes, see `roulette`), lower and softer as it slows, gone as it leaves the track.
-        Cue::BallRoll => {
-            let mut n = Noise(171);
-            let (mut lp, mut lp2) = (0.0f32, 0.0f32);
-            for (i, x) in o.iter_mut().enumerate() {
-                let t = i as f32 / RATE;
-                let laps = roulette::ball_run(t) / TAU;
-                let speed = (roulette::ball_speed(t) / 13.5).clamp(0.0, 1.0);
-                let wobble = 0.7 + 0.3 * (TAU * laps).sin();
-                let leave = ((roulette::LEAVE_S + 0.35 - t) / 0.45).clamp(0.0, 1.0);
-                let env = (t / 0.12).min(1.0) * (0.45 + 0.55 * speed) * leave;
-                // Brighter the faster it goes.
-                lp += (n.next() - lp) * (0.025 + 0.06 * speed);
-                lp2 += (lp - lp2) * 0.3;
-                *x += (lp2 * 0.9 + (TAU * (150.0 + 90.0 * speed) * t).sin() * 0.04) * wobble * env * 0.55;
-            }
-        }
-        // From the diamond on the way down: a clack, then a click as each hop lands in a pocket
-        // (when the wheel on screen shows it), and a last little rattle.
-        Cue::BallDrop => {
-            knock(&mut o, 0, 0.32);
-            click(&mut o, 0, 0.42, 3300.0, 190);
-            let start = roulette::DIAMOND_S;
-            let pockets = roulette::POCKETS_S - start;
-            click(&mut o, ms(pockets * 1000.0), 0.36, 2700.0, 191);
-            for (k, at) in roulette::landings().iter().enumerate() {
-                let amp = 0.34 - k as f32 * 0.07;
-                click(&mut o, ms((at - start) * 1000.0), amp, 2500.0 + (k * 137 % 600) as f32, 192 + k as u32);
-                // (Skittering over a fret in the air, now and then.)
-                if k < 2 {
-                    let mid = at - roulette::HOPS[k].0 * 0.45;
-                    click(&mut o, ms((mid - start) * 1000.0), amp * 0.3, 3600.0, 200 + k as u32);
-                }
-            }
-            let last = roulette::landings()[3] - start;
-            for (k, d) in [0.035f32, 0.075, 0.105].iter().enumerate() {
-                click(&mut o, ms((last + d) * 1000.0), 0.09 - k as f32 * 0.025, 2900.0, 210 + k as u32);
-            }
-        }
-        // A rattle in the hand, then two dice bouncing down the felt.
-        Cue::DiceRoll => {
-            for k in 0..9 {
-                click(&mut o, ms(k as f32 * 38.0 + (k * 13 % 11) as f32), 0.22, 1700.0 + (k * 97 % 400) as f32, 211 + k);
-            }
-            for (k, (at, a)) in [(420.0, 0.55), (560.0, 0.42), (690.0, 0.3), (790.0, 0.2), (860.0, 0.12)].iter().enumerate() {
-                knock(&mut o, ms(*at), *a);
-                click(&mut o, ms(*at + 6.0), *a * 0.5, 1900.0, 231 + k as u32);
-            }
-        }
-        // A soft pop.
-        Cue::KenoBall => {
-            let len = o.len();
-            for (i, x) in o.iter_mut().enumerate().take(len) {
-                let t = i as f32 / RATE;
-                let f = 520.0 + 380.0 * (-t * 30.0).exp();
-                *x += (TAU * f * t).sin() * (-t * 28.0).exp() * 0.3;
-            }
-        }
-        Cue::Coin => {
-            bell(&mut o, 0, 2793.8, 120.0, 0.08);
-            click(&mut o, 0, 0.1, 3400.0, 241);
-        }
-        // A gold peg struck: a tiny bell with a tap.
-        Cue::Peg => {
-            bell(&mut o, 0, 2093.0, 110.0, 0.07);
-            bell(&mut o, 0, 3136.0, 70.0, 0.025);
-            click(&mut o, 0, 0.06, 4200.0, 251);
-        }
-        // Into a bucket: a soft pop, then a ding.
-        Cue::Bucket => {
-            for (i, x) in o.iter_mut().enumerate().take(ms(90.0)) {
-                let t = i as f32 / RATE;
-                let f = 300.0 + 260.0 * (-t * 40.0).exp();
-                *x += (TAU * f * t).sin() * (-t * 34.0).exp() * 0.32;
-            }
-            bell(&mut o, ms(30.0), 1318.5, 300.0, 0.1);
-        }
-        // The wheel's pegs clicking past the pointer, slower and slower, then a ding.
-        Cue::Wheel => {
-            let mut t = 0.0f32;
-            let mut gap = 34.0f32;
-            let mut k = 0u32;
-            while t < 4000.0 {
-                click(&mut o, ms(t), 0.2, 2300.0 + (k * 53 % 300) as f32, 301 + k);
-                t += gap;
-                gap *= 1.045;
-                k += 1;
-            }
-            bell(&mut o, ms(4080.0), 1046.5, 500.0, 0.16);
-            bell(&mut o, ms(4080.0), 1568.0, 500.0, 0.1);
-        }
-        // A lit fuse: crackling, hissing noise that flickers.
-        Cue::Fuse => {
-            let mut n = Noise(313);
-            let (mut lp, mut prev) = (0.0f32, 0.0f32);
-            let len = o.len();
-            for (i, x) in o.iter_mut().enumerate().take(len) {
-                let t = i as f32 / len as f32;
-                let env = (t / 0.05).min(1.0) * (1.0 - t).powf(0.8);
-                let v = n.next();
-                lp += (v - lp) * 0.55;
-                let hp = lp - prev;
-                prev = lp;
-                let flicker = 0.6 + 0.4 * ((i as f32 / RATE * 37.0).sin() * (i as f32 / RATE * 11.0).sin()).abs();
-                let crackle = if n.next() > 0.985 { n.next() * 0.8 } else { 0.0 };
-                *x += (hp * 0.35 * flicker + crackle) * env * 0.6;
-            }
-        }
-        // The bomb: a deep thud falling away, a roar of noise, then crackles as it settles.
-        Cue::Boom => {
-            let mut n = Noise(331);
-            let mut lp = 0.0f32;
-            let mut lp2 = 0.0f32;
-            let len = o.len();
-            for (i, x) in o.iter_mut().enumerate().take(len) {
-                let t = i as f32 / RATE;
-                let f = 32.0 + 70.0 * (-t * 7.0).exp();
-                let thud = (TAU * f * t).sin() * (-t * 2.2).exp() * (t / 0.004).min(1.0);
-                let v = n.next();
-                lp += (v - lp) * (0.32 * (-t * 1.6).exp() + 0.02);
-                lp2 += (lp - lp2) * 0.25;
-                let roar = lp2 * (-t * 1.9).exp() * 1.6;
-                let crackle = if t > 0.25 && n.next() > 0.993 { n.next() * 0.4 * (-t * 1.2).exp() } else { 0.0 };
-                *x += thud * 0.85 + roar + crackle;
-            }
-        }
-        Cue::Deal | Cue::Flip | Cue::Chips | Cue::Check | Cue::Fold | Cue::AllIn | Cue::Pot | Cue::Turn | Cue::Win | Cue::Hurry | Cue::Tick | Cue::TickUp | Cue::TimeBank | Cue::TimeOut | Cue::Band(_) | Cue::BandUp(..) => {}
+        _ => {}
     }
     // Never past full scale.
     let peak = o.iter().fold(0.0f32, |m, x| m.max(x.abs()));
@@ -461,6 +297,9 @@ pub fn render_mono(c: Cue) -> Vec<f32> {
 
 /// The sound, 48 kHz stereo (interleaved), placed `pan` (-1 left to 1 right).
 pub fn render(c: Cue, pan: f32) -> Vec<f32> {
+    if let Some(i) = casino_file(c).and_then(crate::bands::id) {
+        return crate::bands::render(i, pan);
+    }
     if let Cue::Band(i) = c {
         return crate::bands::render(i, pan);
     }
@@ -478,7 +317,7 @@ mod tests {
 
     #[test]
     fn every_sound_is_there_and_never_clips() {
-        for c in [Cue::Deal, Cue::Flip, Cue::Chips, Cue::Check, Cue::Fold, Cue::AllIn, Cue::Pot, Cue::Turn, Cue::Win, Cue::Hurry, Cue::Tick, Cue::TickUp, Cue::TimeBank, Cue::TimeOut, Cue::ReelSpin, Cue::ReelStop, Cue::WinSmall, Cue::WinBig, Cue::Jackpot, Cue::BallRoll, Cue::BallDrop, Cue::DiceRoll, Cue::KenoBall, Cue::Coin, Cue::Wheel, Cue::Fuse, Cue::Boom, Cue::Peg, Cue::Bucket] {
+        for c in [Cue::Deal, Cue::Flip, Cue::Chips, Cue::Check, Cue::Fold, Cue::AllIn, Cue::Pot, Cue::Turn, Cue::Win, Cue::Hurry, Cue::Tick, Cue::TickUp, Cue::TimeBank, Cue::TimeOut, Cue::ReelSpin, Cue::ReelStop, Cue::WinSmall, Cue::WinBig, Cue::Jackpot, Cue::BallRoll, Cue::BallDrop, Cue::DiceRoll, Cue::KenoBall, Cue::Coin, Cue::Wheel, Cue::Fuse, Cue::Boom, Cue::Peg(0), Cue::Peg(15), Cue::Bucket(0), Cue::Bucket(8)] {
             let s = render(c, 0.3);
             assert!(s.len() > 2000, "{c:?}");
             let peak = s.iter().fold(0.0f32, |m, x| m.max(x.abs()));
@@ -504,5 +343,55 @@ mod tests {
         let s = render(Cue::Chips, -0.8);
         let (l, r): (f32, f32) = s.chunks(2).fold((0.0, 0.0), |(a, b), x| (a + x[0].abs(), b + x[1].abs()));
         assert!(l > r * 2.0);
+    }
+
+    /// The casino's games play 0.13.28's files, as it plays them: turned down to 0.9 when louder,
+    /// the middle full on both sides, and the other side turned down 0.7 of the pan (craps' dice
+    /// from the shooter's side, 0.3: 0.79).
+    #[test]
+    fn the_casinos_sounds_are_0_13_28s_files() {
+        for c in [Cue::ReelSpin, Cue::ReelStop, Cue::WinSmall, Cue::WinBig, Cue::Jackpot, Cue::BallRoll, Cue::BallDrop, Cue::DiceRoll, Cue::KenoBall, Cue::Coin, Cue::Wheel, Cue::Fuse, Cue::Boom] {
+            let i = crate::bands::id(casino_file(c).unwrap()).unwrap_or_else(|| panic!("{c:?}"));
+            assert_eq!(render(c, 0.0), crate::bands::render(i, 0.0), "{c:?}");
+        }
+        let peak = |s: &[f32]| s.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        assert!((peak(&render(Cue::DiceRoll, 0.0)) - 0.9).abs() < 1e-6);
+        let side = |s: &[f32]| s.chunks(2).fold((0.0f64, 0.0f64), |(a, b), x| (a + (x[0] as f64).powi(2), b + (x[1] as f64).powi(2)));
+        let (l0, r0) = side(&render(Cue::DiceRoll, 0.0));
+        let (l, r) = side(&render(Cue::DiceRoll, 0.3));
+        assert!(((l / l0).sqrt() - 0.79).abs() < 1e-4 && (r / r0 - 1.0).abs() < 1e-9);
+        assert!(casino_file(Cue::Chips).is_none() && casino_file(Cue::Peg(0)).is_none());
+    }
+
+    /// Plinko's pegs ring half a semitone higher a row down; its buckets a step and a half higher
+    /// and a little louder each bucket out from the middle.
+    #[test]
+    fn plinkos_pegs_climb_by_row_and_its_buckets_by_place() {
+        let pitch = |s: &[f32], lo: f32, hi: f32| {
+            // (The strongest frequency between lo and hi, by a plain search, 1 Hz steps.)
+            let n = s.len().min(4800);
+            let mut best = (0.0f32, lo);
+            let mut f = lo;
+            while f < hi {
+                let (mut re, mut im) = (0.0f32, 0.0f32);
+                for (i, x) in s[..n].iter().enumerate() {
+                    let a = TAU * f * i as f32 / RATE;
+                    re += x * a.cos();
+                    im += x * a.sin();
+                }
+                if re * re + im * im > best.0 {
+                    best = (re * re + im * im, f);
+                }
+                f += 1.0;
+            }
+            best.1
+        };
+        let p0 = pitch(&render_mono(Cue::Peg(0)), 1400.0, 1700.0);
+        let p8 = pitch(&render_mono(Cue::Peg(8)), 1800.0, 2100.0);
+        assert!((p0 - 1568.0).abs() < 3.0 && (p8 - 1975.5).abs() < 3.0, "{p0} {p8}");
+        let b0 = pitch(&render_mono(Cue::Bucket(0))[480..], 450.0, 750.0);
+        let b2 = pitch(&render_mono(Cue::Bucket(2))[480..], 450.0, 750.0);
+        assert!((b0 - 523.0).abs() < 3.0 && (b2 - 622.0).abs() < 3.0, "{b0} {b2}");
+        assert_eq!(render_mono(Cue::Peg(3)), render_mono(Cue::Peg(3)));
     }
 }

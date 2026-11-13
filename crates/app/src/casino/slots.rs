@@ -13,6 +13,7 @@ use pyr_poker::casino::Bet;
 use super::stake::{Pick, SlotKind, StakeUi};
 use pyr_poker::net::RoundView;
 
+use super::spin::band;
 use super::{art, col, glow_text, radial, vgrad, vgrad_round};
 use crate::app::PyrApp;
 use crate::poker::cards::chips_text;
@@ -163,7 +164,8 @@ impl PyrApp {
         let last = ends.iter().max().copied().unwrap_or(now) + Duration::from_secs_f32(dur * 0.45);
         self.poker.casino.slots.stopped_at = Some(last);
         for (i, e) in ends.iter().enumerate() {
-            self.poker.casino.sound_in(e.saturating_duration_since(now).as_secs_f32(), Cue::ReelStop, (i as f32 - 2.0) * 0.3, 0.7);
+            let (cue, vol) = band::stop(i);
+            self.poker.casino.sound_in(e.saturating_duration_since(now).as_secs_f32(), cue, (i as f32 - 2.0) * 0.3, vol);
         }
     }
 
@@ -421,8 +423,8 @@ impl PyrApp {
         self.poker.casino.slots.next_start = None;
         self.poker.casino.slots.round_win += sp.pay;
         if sp.pay > 0 {
-            let big = sp.pay >= o.line_bet * LINES as u64 * 5;
-            self.poker.casino.sound_in(0.0, if big { Cue::WinBig } else { Cue::WinSmall }, 0.0, 0.7);
+            let (cue, vol) = band::win(sp.pay >= o.line_bet * LINES as u64 * 5);
+            self.poker.casino.sound_in(0.0, cue, 0.0, vol);
         }
         let next = i + 1;
         if let Some(fs) = o.spins.get(next) {
@@ -432,7 +434,8 @@ impl PyrApp {
             if sp.free_spins > 0 {
                 let left = o.spins.len() - next;
                 self.poker.casino.slots.banner = Some((now, if i == 0 { format!("{left} FREE SPINS") } else { format!("+{} FREE SPINS", sp.free_spins) }));
-                self.poker.casino.sound_in(0.0, Cue::Jackpot, 0.0, 0.5);
+                let (cue, vol) = band::free_spins();
+                self.poker.casino.sound_in(0.0, cue, 0.0, vol);
             }
             let ui = &mut self.poker.casino.slots;
             ui.spin = next;
@@ -445,7 +448,8 @@ impl PyrApp {
             let stops = fs.stops;
             let ends = ui.land(stops, start + Duration::from_secs_f32(spin_for));
             self.slots_landing(ends, now);
-            self.poker.casino.sound_in(start.saturating_duration_since(now).as_secs_f32(), Cue::ReelSpin, 0.0, 0.5);
+            let (cue, vol) = band::spin(true);
+            self.poker.casino.sound_in(start.saturating_duration_since(now).as_secs_f32(), cue, 0.0, vol);
             return;
         }
         // The round's over: the win goes on the balance.
@@ -502,7 +506,8 @@ impl PyrApp {
         ui.stopped_at = None;
         self.poker.casino.end_celebration();
         self.poker.casino.pending = Some(now);
-        self.poker.casino.sound_in(0.0, Cue::ReelSpin, 0.0, 0.6);
+        let (cue, vol) = band::spin(false);
+        self.poker.casino.sound_in(0.0, cue, 0.0, vol);
         let line_bet = self.poker.casino.slots.line_bet;
         if v13 {
             let bet = if feature == Feature::Spin { Bet::Slots { line_bet } } else { Bet::SlotsPlus { line_bet, feature } };
