@@ -512,9 +512,24 @@ How (decided while starting it):
       (only shown by servers older than 0.12, which have neither) keeps 0.13.0's layout; the
       server takes buys and lays there as 0.13.28's does.
 - [ ] Dominó Cubano tables in the casino, to 10,000,000, El Presidente (0.13.11/12)
-- [ ] Poker: bots think and bluff like people (0.13.26), table sounds (0.13.6), the suits on
-      bot faces and card pips (0.13.28's are one smooth shape each; the rebuild's are 0.13.0's
-      circles and polygons), the Shark's crown and star (`measured/newtable.md`).
+- [ ] Poker: bots think and bluff like people (0.13.26), the suits on bot faces and card pips
+      (0.13.28's are one smooth shape each; the rebuild's are 0.13.0's circles and polygons), the
+      Shark's crown and star (`measured/newtable.md`).
+  - [~] Table sounds (0.13.6: chips that ring, cards that slide and snap, the felt, the rail, a
+        better win), recorded off 0.13.28 at a table of bots and measured
+        (`measured/tablesounds.md`), made again in `engine/src/table_sfx.rs`: fresh each time as
+        0.13.28's are, from what each is made of (the chips' clicks and their four partials, the
+        rail's 120 Hz knock, the slides, the snap, the felt; the bells' exact notes and timing),
+        each measured against 0.13.28's over many takes (partials, decays, click counts and
+        gaps, band levels over time) and as loud as 0.13.28's at the same settings (within 1 dB,
+        at 0.13.0's cue volumes, which 0.13.28 keeps). The table's cues change everywhere they're
+        used (roulette's chips are these chips on 0.13.28 too). As 0.13.28: the blinds' chips 0.1 s
+        after the deal, an action's sound 40 ms after the board's card it brings, a time bank's
+        ticks three semitones up (`Cue::BankTick`). Checked side by side: both apps watching the
+        same table, sound for sound (`work/ui/ab.py`): the same latency (57 and 60 ms) and within a
+        few dB in every band over a sound's first 0.3 s. The Ember profile plays them the same. Not checked: rabbit and Bomb Pot
+        tables, others' clocks; Time out keeps 0.13.0's sound (0.13.28 played none:
+        the fold comes with the deadline).
   - [x] Staff titles on seats (0.13.4/0.13.6), as 0.13.28's (`measured/tablefeatures.md`): the
         seat's `badge` (`owner`, `game_master`, `ambassador`, none when hidden), the server
         sending it (with the MMRs) and `hide_title` (a change shows at once); "Show my title" in

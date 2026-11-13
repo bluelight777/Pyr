@@ -205,25 +205,31 @@ impl PyrApp {
         self.poker.heard = Some((v.id, v.hand, n));
         let me = v.my_seat;
         let pan = |seat: usize| ((lay.seat(seat).x - lay.c.x) / lay.a * 0.7).clamp(-0.8, 0.8);
-        let mut cues: Vec<(Cue, f32, f32)> = Vec::new();
-        for (_, e) in &t.events[from..] {
+        // (Cue, where, how loud, how long after now: 0.13.28 sounds an action 40 ms after the board's
+        // card it brings, and the blinds' chips 0.1 s after the deal.)
+        let mut cues: Vec<(Cue, f32, f32, f32)> = Vec::new();
+        let batch = &t.events[from..];
+        let board = batch.iter().any(|(_, e)| matches!(e, Event::Street { .. } | Event::Shown { .. }));
+        let dealt = batch.iter().any(|(_, e)| matches!(e, Event::DealtFaceDown { .. }));
+        let after = if board { 0.04 } else { 0.0 };
+        for (_, e) in batch {
             match e {
-                Event::DealtFaceDown { .. } => cues.push((Cue::Deal, 0.0, 0.8)),
-                Event::Street { .. } => cues.push((Cue::Flip, 0.0, 0.9)),
-                Event::Posted { seat, .. } => cues.push((Cue::Chips, pan(*seat), 0.45)),
+                Event::DealtFaceDown { .. } => cues.push((Cue::Deal, 0.0, 0.8, 0.0)),
+                Event::Street { .. } => cues.push((Cue::Flip, 0.0, 0.9, 0.0)),
+                Event::Posted { seat, .. } => cues.push((Cue::Chips, pan(*seat), 0.45, if dealt { 0.1 } else { 0.0 })),
                 Event::Acted { seat, action, stack, .. } => cues.push(match action {
-                    Action::Fold => (Cue::Fold, pan(*seat), 0.7),
-                    Action::Check => (Cue::Check, pan(*seat), 0.8),
-                    _ if *stack == 0 => (Cue::AllIn, pan(*seat), 0.9),
-                    _ => (Cue::Chips, pan(*seat), 0.8),
+                    Action::Fold => (Cue::Fold, pan(*seat), 0.7, after),
+                    Action::Check => (Cue::Check, pan(*seat), 0.8, after),
+                    _ if *stack == 0 => (Cue::AllIn, pan(*seat), 0.9, after),
+                    _ => (Cue::Chips, pan(*seat), 0.8, after),
                 }),
-                Event::Shown { seat, .. } => cues.push((Cue::Flip, pan(*seat), 0.6)),
-                Event::Turn { seat, .. } if Some(*seat) == me => cues.push((Cue::Turn, 0.0, 0.8)),
+                Event::Shown { seat, .. } => cues.push((Cue::Flip, pan(*seat), 0.6, 0.0)),
+                Event::Turn { seat, .. } if Some(*seat) == me => cues.push((Cue::Turn, 0.0, 0.8, 0.0)),
                 Event::Won { seats, .. } => {
                     if me.is_some_and(|m| seats.contains(&m)) {
-                        cues.push((Cue::Win, 0.0, 0.9));
+                        cues.push((Cue::Win, 0.0, 0.9, 0.0));
                     } else {
-                        cues.push((Cue::Pot, seats.first().map(|s| pan(*s)).unwrap_or(0.0), 0.7));
+                        cues.push((Cue::Pot, seats.first().map(|s| pan(*s)).unwrap_or(0.0), 0.7, 0.0));
                     }
                 }
                 _ => {}
@@ -237,7 +243,7 @@ impl PyrApp {
             && self.poker.hurried != Some((h, t.events.len()))
         {
             self.poker.hurried = Some((h, t.events.len()));
-            cues.push((Cue::Hurry, 0.0, 0.8));
+            cues.push((Cue::Hurry, 0.0, 0.8, 0.0));
         }
         // Anyone's clock: a tick for each of their last five seconds, a call when their time
         // bank starts, and a knock when they're out of time altogether.
@@ -250,20 +256,21 @@ impl PyrApp {
             let left = deadline.saturating_duration_since(Instant::now()).as_secs_f32();
             let last = self.poker.clock_heard.filter(|c| c.0 == h && c.1 == n);
             if t.in_bank && !last.is_some_and(|c| c.3) {
-                cues.push((Cue::TimeBank, pan(cs), vol));
+                cues.push((Cue::TimeBank, pan(cs), vol, 0.0));
                 self.poker.clock_heard = Some((h, n, 99, true));
             } else if left <= 0.0 {
                 // (A bank still to come: the bank's call says so instead.)
                 let out = t.in_bank || bank == 0;
                 if out && !last.is_some_and(|c| c.2 == 0) && Instant::now().saturating_duration_since(deadline) < Duration::from_secs(2) {
-                    cues.push((Cue::TimeOut, pan(cs), vol.max(0.6)));
+                    cues.push((Cue::TimeOut, pan(cs), vol.max(0.6), 0.0));
                     self.poker.clock_heard = Some((h, n, 0, t.in_bank));
                 }
             } else if left < 5.0 {
                 let sec = left.ceil() as u64;
                 if !last.is_some_and(|c| c.2 <= sec) {
                     if !(mine && sec == 5) {
-                        cues.push((Cue::Tick, pan(cs), vol));
+                        // (Three semitones higher in a time bank, as 0.13.28's.)
+                        cues.push((if t.in_bank { Cue::BankTick } else { Cue::Tick }, pan(cs), vol, 0.0));
                     }
                     self.poker.clock_heard = Some((h, n, sec, t.in_bank));
                 }
@@ -274,8 +281,8 @@ impl PyrApp {
         }
         // A burst (catching up) plays only its last few.
         cues.dedup_by_key(|c| c.0);
-        for (c, pan, vol) in cues.into_iter().rev().take(3) {
-            self.engine.play_poker(c, pan, vol);
+        for (c, pan, vol, after) in cues.into_iter().rev().take(3) {
+            self.engine.play_poker_after(c, pan, vol, after);
         }
     }
 

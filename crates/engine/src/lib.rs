@@ -41,6 +41,7 @@ pub mod plugins;
 pub mod poker;
 pub mod bands;
 pub mod poker_sfx;
+pub mod table_sfx;
 pub mod sealed;
 pub mod server;
 pub mod sfx;
@@ -2315,7 +2316,18 @@ impl Engine {
 
     /// A poker table's sound (heard here only; through the call when in one), `pan` -1 to 1.
     pub fn play_poker(&self, cue: poker_sfx::Cue, pan: f32, volume: f32) {
-        let pcm: soundboard::Pcm = std::sync::Arc::new(poker_sfx::render(cue, pan));
+        self.play_poker_after(cue, pan, volume, 0.0);
+    }
+
+    /// `play_poker`, the sound starting `delay` seconds from now (0.13.28's table puts a hand's
+    /// sounds a little apart: the blinds' chips after the deal, an action's after the board's card).
+    pub fn play_poker_after(&self, cue: poker_sfx::Cue, pan: f32, volume: f32, delay: f32) {
+        let mut pcm = poker_sfx::render(cue, pan);
+        let lead = (delay.clamp(0.0, 2.0) * 48_000.0) as usize * 2;
+        if lead > 0 {
+            pcm.splice(0..0, std::iter::repeat_n(0.0, lead));
+        }
+        let pcm: soundboard::Pcm = std::sync::Arc::new(pcm);
         let (volume, device) = {
             let st = self.shared.state.read_recursive();
             // (The games' volume on top of Pyr's sounds', as 0.13.28 has it.)
