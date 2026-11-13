@@ -49,6 +49,7 @@ impl PyrApp {
             Game::Baccarat if tables => at(&c.bact.at).map(TableRef::Baccarat),
             Game::Craps if tables => at(&c.crt.at).map(TableRef::Craps),
             Game::Roulette if s.has(pyr_proto::control::CASINO_013_FEATURE) => at(&c.rlt.at).map(TableRef::Roulette),
+            Game::Domino if s.has(pyr_proto::control::DOMINO_FEATURE) => at(&c.domt.at).map(TableRef::Domino),
             _ => None,
         }
     }

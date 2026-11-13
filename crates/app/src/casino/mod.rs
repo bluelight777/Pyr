@@ -23,6 +23,7 @@ pub mod chat;
 pub mod craps;
 pub mod crapstable;
 pub mod dice;
+pub mod domtable;
 pub mod dragon;
 pub mod emotes;
 pub mod floor;
@@ -201,6 +202,8 @@ pub struct CasinoUi {
     pub bact: bactable::BacTableUi,
     /// Roulette at a table of five (0.13.0 servers).
     pub rlt: rltable::RlTableUi,
+    /// Dominó Cubano at tables of four (0.13.11 servers).
+    pub domt: domtable::DomTableUi,
     /// The Bonfire: its card, my embers, and the show when it's lit.
     pub bonfire: bonfire::BonfireUi,
     pub roulette: roulette::RouletteUi,
@@ -262,6 +265,7 @@ impl Default for CasinoUi {
             crt: Default::default(),
             bact: Default::default(),
             rlt: Default::default(),
+            domt: Default::default(),
             bonfire: Default::default(),
             roulette: Default::default(),
             baccarat: Default::default(),
@@ -670,6 +674,7 @@ impl PyrApp {
         self.craps_table_leave();
         self.bac_table_leave();
         self.rl_table_leave();
+        self.dom_table_leave();
         if let Some(old) = self.poker.casino.opened.take() {
             self.engine.casino_open(&old, false);
         }
@@ -776,6 +781,7 @@ impl PyrApp {
             Game::Reels => self.reels_page(&mut child, s, area),
             Game::Dragon => self.dragon_page(&mut child, s, area),
             Game::Plinko => self.plinko_page(&mut child, s, area),
+            Game::Domino => self.dom_table_page(&mut child, s, area),
         }
         self.bonfire_keep(s);
         self.casino_top_bar(ui, s, game, bar);
@@ -807,6 +813,8 @@ impl PyrApp {
             Game::Reels => self.reels_round(r),
             Game::Dragon => self.dragon_round(r),
             Game::Plinko => self.plinko_round(r),
+            // (Hands at the tables aren't rounds of their own.)
+            Game::Domino => {}
         }
     }
 
@@ -823,6 +831,7 @@ impl PyrApp {
             self.craps_table_leave();
             self.bac_table_leave();
             self.rl_table_leave();
+            self.dom_table_leave();
         }
         let c = &s.poker.casino;
         let mut x = bar.right() - 12.0;

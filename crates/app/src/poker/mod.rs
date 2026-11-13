@@ -219,10 +219,10 @@ impl PyrApp {
         // My deck (the back I picked; four colors or two) for every card that's mine to see.
         cards::set_mine(s.poker.me.as_ref().map(|m| m.card_back.as_str()).unwrap_or(""), self.poker.four_color);
         self.poker_page_inner(ui, st, s, acts);
-        // The casino's chat, at the table games (0.13.2) and at a poker table, seated or watching
-        // (0.13.28's; not on the floor or the poker room's lobby).
+        // The casino's chat, at the table games (0.13.2; dominó's too) and at a poker table, seated
+        // or watching (0.13.28's; not on the floor or the poker room's lobby).
         let at_table = self.poker.table.is_some_and(|id| s.poker.table(id).is_some());
-        if at_table || matches!(self.poker.casino.game, Some(pyr_poker::casino::Game::Blackjack | pyr_poker::casino::Game::Roulette | pyr_poker::casino::Game::Baccarat | pyr_poker::casino::Game::Craps)) {
+        if at_table || matches!(self.poker.casino.game, Some(pyr_poker::casino::Game::Blackjack | pyr_poker::casino::Game::Roulette | pyr_poker::casino::Game::Baccarat | pyr_poker::casino::Game::Craps | pyr_poker::casino::Game::Domino)) {
             self.casino_chat_ui(ui, st, s, whole);
         }
     }

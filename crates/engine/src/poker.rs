@@ -134,6 +134,9 @@ pub struct PokerState {
     /// Roulette tables (0.13.0 servers): the list, and the one I'm at or watching.
     pub rl_tables: Option<Vec<pyr_poker::net::RlSummary>>,
     pub rl: Option<SharedLive<pyr_poker::net::RlView>>,
+    /// Dominó tables (0.13.11 servers): the list, and the one I'm at or watching.
+    pub dom_tables: Option<Vec<pyr_poker::net::DomSummary>>,
+    pub dom: Option<SharedLive<pyr_poker::net::DomView>>,
     /// The Bonfire (0.12.0 servers): how it stands and when that came; each fire's fingerprint
     /// as first seen here; and a fire just lit (to show), as it checked out here.
     pub bonfire: Option<(pyr_poker::net::BonfireView, Instant)>,
@@ -446,6 +449,8 @@ impl PokerState {
             ToApp::Ratings { rows } => self.ratings = Some(rows),
             ToApp::BjTables { tables } => self.bj_tables = Some(tables),
             ToApp::Bj { view } => self.bj_view(view, now),
+            ToApp::DomTables { tables } => self.dom_tables = Some(tables),
+            ToApp::Dom { view } => self.dom_view(view, now),
             ToApp::CrapsTables { tables } => self.craps_tables = Some(tables),
             ToApp::Craps { view } => self.craps_view(view, now),
             ToApp::BacTables { tables } => self.bac_tables = Some(tables),
@@ -755,6 +760,78 @@ impl PokerState {
         self.craps = None;
         self.bac = None;
         self.rl = None;
+        self.dom = None;
+    }
+
+    /// A dominó table as it is now. A hand just over is played again here from its seeds (the
+    /// house's, shown only now, against the fingerprint it showed before the deal; and mine,
+    /// which has to be among them if I was in it), and my hand counted in my statistics.
+    fn dom_view(&mut self, view: pyr_poker::net::DomView, now: Instant) {
+        use pyr_poker::net::DomStage;
+        let d = match self.dom.as_mut() {
+            Some(d) if d.view.id == view.id => {
+                d.view = view;
+                d.at = now;
+                d
+            }
+            _ => self.dom.insert(SharedLive::new(view, now)),
+        };
+        // (Before the deal, the fingerprint shown is the coming hand's.)
+        if !matches!(d.view.stage, DomStage::Playing) {
+            d.commits.entry(d.view.round_no).or_insert(d.view.commit);
+        }
+        if d.view.my_seat.is_none() && !matches!(d.view.stage, DomStage::Playing) {
+            let coming = d.view.round_no;
+            d.my_seeds.retain(|(r, _)| *r < coming);
+        }
+        let Some(last) = d.view.last.clone().filter(|l| l.round != d.checked) else { return };
+        d.checked = last.round;
+        let mine = d.my_seeds.iter().find(|(r, _)| *r == last.round).map(|(_, s)| *s);
+        let ante = d.view.ante;
+        let result = pyr_poker::domroom::check(&last, ante).and_then(|pay| {
+            if d.commits.get(&last.round).is_some_and(|c| *c != last.commit) {
+                return Err(format!("hand {}: the house showed a different fingerprint before the deal", last.round));
+            }
+            if let Some(seed) = mine
+                && !last.seeds.iter().any(|(_, h)| *h == pyr_poker::net::hex32::to_hex(&seed))
+            {
+                return Err(format!("hand {}: my Pyr's seed wasn't used", last.round));
+            }
+            Ok(pay)
+        });
+        match result {
+            Ok(pay) => {
+                d.fair += 1;
+                self.casino.checked += 1;
+                // My hand, in my statistics as the server counts it.
+                if mine.is_some()
+                    && let Some(seat) = d.view.my_seat.or_else(|| last.seeds.iter().find(|(_, h)| Some(h.as_str()) == mine.map(|s| pyr_poker::net::hex32::to_hex(&s)).as_deref()).map(|(s, _)| *s))
+                    && last.seats.contains(&seat)
+                {
+                    let share = pay.paid.iter().find(|(s, _)| *s == seat).map(|(_, c)| *c).unwrap_or(0);
+                    let (capicua, chiva) = match &last.over {
+                        pyr_poker::casino::domino::Over::Domino { capicua, chiva, .. } => (*capicua, *chiva),
+                        _ => (false, false),
+                    };
+                    let o = pyr_poker::casino::Outcome::Domino(pyr_poker::casino::domino::Outcome {
+                        kind: last.kind,
+                        ante,
+                        mult: pay.mult,
+                        how: pyr_poker::domroom::how(&last.over).to_string(),
+                        won: share > 0,
+                        wagered: ante * pay.mult as u64,
+                        paid: share,
+                        capicua,
+                        chiva,
+                        bonus_pct: pay.bonus_pct,
+                    });
+                    pyr_poker::progress::count_casino(self.casino.stats.entry(o.stats_key()).or_default(), &o);
+                }
+            }
+            Err(e) => self.casino.problems.push(format!("Dominó table: {e}")),
+        }
+        d.commits.retain(|r, _| *r + 50 > last.round);
+        d.my_seeds.retain(|(r, _)| *r + 50 > last.round);
     }
 }
 

@@ -95,6 +95,7 @@ fn lettering(art: &str) -> (&'static [&'static str], &'static str, &'static str)
         "tile-plinko" => (&["PLINKO"], "anton", PYR),
         "tile-dice" => (&["DICE"], "fjalla", PYR),
         "tile-keno" => (&["KENO"], "fjalla", PYR),
+        "tile-domino" => (&["DOMINÓ", "CUBANO"], "bebas", PYR),
         _ => (&[], "anton", PYR),
     }
 }
@@ -181,12 +182,16 @@ impl PyrApp {
         // (On a 0.12.0 server: tables with seats for people and bots; roulette's on 0.13.0.)
         let seats = |n: &'static str| if reel_row { vec![(n, col::GOLD_DARK)] } else { vec![] };
         let roulette_seats = if v13 { vec![("5 SEATS", col::GOLD_DARK), ("NEW", NEW)] } else { vec![] };
-        let tables = vec![
+        let mut tables = vec![
             game_card(Game::Blackjack, "tile-blackjack", 0.38, seats("7 SEATS")),
             game_card(Game::Roulette, "tile-roulette", 0.5, roulette_seats),
             game_card(Game::Baccarat, "tile-baccarat", 0.5, seats("5 SEATS")),
             game_card(Game::Craps, "tile-craps", 0.5, seats("5 SEATS")),
         ];
+        // (Dominó Cubano, 0.13.11: where the server has its tables.)
+        if s.has(pyr_proto::control::DOMINO_FEATURE) {
+            tables.push(game_card(Game::Domino, "tile-domino", 0.5, vec![("4 SEATS", col::GOLD_DARK), ("NEW", NEW)]));
+        }
         self.chapter(ui, s, w, Chapter::Tables, "Dealt and rolled by the house, checked by your Pyr", &tables, None);
         ui.add_space(14.0);
         let mut originals = Vec::new();

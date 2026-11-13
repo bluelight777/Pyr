@@ -33,7 +33,7 @@ pub const IDLE_HANDS: u32 = 5;
 pub const ANTES: [u64; 19] = [10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000, 2_500_000, 5_000_000, 10_000_000];
 
 /// The house's players (0.13.28's).
-const BOT_NAMES: [&str; 7] = ["Papito", "Yoandri", "Tía Cuca", "Rigo", "Mayelín", "Yuneisy", "Yunior"];
+const BOT_NAMES: [&str; 11] = ["Papito", "Yoandri", "Tía Cuca", "Rigo", "Mayelín", "Yuneisy", "Yunior", "Osniel", "Chucho", "Lázaro", "Caridad"];
 
 struct Seat {
     uid: String,
@@ -454,6 +454,15 @@ impl DomRoom {
         }
         let Some(seat) = hand.to_act() else { return };
         *plan = None;
+        // A ¡Doblo! against a side with someone in it (not away): they answer it, in their own
+        // time, as 0.13.28's (its bots never answer for a person, and it's taken if they don't).
+        if let Some(by) = hand.offer {
+            let person = self.seats.iter().enumerate().any(|(i, s)| s.as_ref().is_some_and(|s| !s.bot && !s.away) && hand.place(i as u8).is_some_and(|p| hand.side(p) != by));
+            if person {
+                *deadline = now + TURN_MS;
+                return;
+            }
+        }
         let s = self.seats[seat as usize].as_ref();
         if s.is_some_and(|s| !s.bot && !s.away) {
             *deadline = now + TURN_MS;
@@ -614,15 +623,19 @@ impl DomRoom {
                 // A bot's move (chosen as its turn came), or a person's time running out (played
                 // for them, and quickly from now on this hand).
                 let planned = plan.take().filter(|(s, _)| *s == seat).map(|(_, m)| m);
+                let offer = hand.offer;
                 let m = planned.unwrap_or_else(|| bot_move(hand, seat, *cap, whim));
                 if hand.act(seat, m).is_err() {
                     let fallback = hand.allowed(seat).into_iter().find(|m| *m != Move::Double).unwrap_or(Move::Pass);
                     let _ = hand.act(seat, fallback);
                 }
-                if let Some(s) = self.seats[seat as usize].as_mut()
-                    && !s.bot
-                {
-                    s.away = true;
+                // (Whoever's time ran out is away now: the one to play, or a ¡Doblo!'s answerers.)
+                for (i, s) in self.seats.iter_mut().enumerate() {
+                    let Some(s) = s.as_mut().filter(|s| !s.bot) else { continue };
+                    let answering = offer.is_some_and(|by| hand.place(i as u8).is_some_and(|p| hand.side(p) != by));
+                    if i == seat as usize || answering {
+                        s.away = true;
+                    }
                 }
                 self.after_move(now, &mut out);
                 if !matches!(self.stage, Stage::Settled { .. }) {
@@ -654,8 +667,7 @@ impl DomRoom {
 
 /// A bot's move (and an away person's): leads its heaviest double (or tile); plays to keep
 /// what it holds most of open, heavy tiles first; draws or passes when it must. Doubles when
-/// its side's well ahead and the stake can go higher; folds a double only when the other side's
-/// about to go out with its own side far behind.
+/// its side's well ahead and the stake can go higher; takes every double.
 pub fn bot_move(h: &Hand, seat: u8, cap: u32, whim: &mut Stream) -> Move {
     let allowed = h.allowed(seat);
     let Some(place) = h.place(seat) else { return Move::Pass };
@@ -664,9 +676,9 @@ pub fn bot_move(h: &Hand, seat: u8, cap: u32, whim: &mut Stream) -> Move {
     let mine: Vec<usize> = (0..n).filter(|p| h.side(*p) == me).collect();
     let theirs: Vec<usize> = (0..n).filter(|p| h.side(*p) != me).collect();
     let least = |ps: &[usize]| ps.iter().map(|p| h.tiles(*p).len()).min().unwrap_or(0);
+    // (0.13.28's bots take every ¡Doblo!: 22 of 22 in its hands.)
     if allowed.contains(&Move::Accept) {
-        let behind = least(&theirs) <= 1 && least(&mine) >= 4;
-        return if behind && whim.below(3) > 0 { Move::Fold } else { Move::Accept };
+        return Move::Accept;
     }
     if allowed.contains(&Move::Double) && h.mult * 2 <= cap {
         let ahead = least(&mine) + 3 <= least(&theirs) && least(&mine) <= 4;

@@ -27,6 +27,10 @@ pub mod hex32 {
         parse(&s).ok_or_else(|| serde::de::Error::custom("not 32 bytes of hex"))
     }
 
+    pub fn to_hex(b: &[u8; 32]) -> String {
+        b.iter().map(|x| format!("{x:02x}")).collect()
+    }
+
     pub fn parse(s: &str) -> Option<[u8; 32]> {
         if s.len() != 64 {
             return None;

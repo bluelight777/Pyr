@@ -298,8 +298,9 @@ impl Hand {
                 self.laid[place] += 1;
                 self.passes = 0;
                 if self.hands[place].is_empty() {
-                    // (Its two numbers the two ends': 3-7 on 3 and 7. On 7 and 7 a 3-7 isn't.)
-                    let capicua = before.is_some_and(|(l, r)| (tile[0] == l && tile[1] == r) || (tile[0] == r && tile[1] == l));
+                    // (Its two numbers the two ends': 3-7 on 3 and 7. On 7 and 7 a 3-7 isn't, and
+                    // nor is the 7-7: a double never is, as 0.13.28 has it.)
+                    let capicua = before.is_some_and(|(l, r)| l != r && ((tile[0] == l && tile[1] == r) || (tile[0] == r && tile[1] == l)));
                     let me = self.side(place);
                     let chiva = (0..n).any(|p| self.side(p) != me && self.laid[p] == 0);
                     self.over = Some(Over::Domino { player: place as u8, capicua, chiva });

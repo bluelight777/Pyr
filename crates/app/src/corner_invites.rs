@@ -54,12 +54,11 @@ impl PyrApp {
             TableRef::Roulette(id) => self.poker.table.is_none() && c.game == Some(Game::Roulette) && here(&c.rlt.at, id),
             TableRef::Baccarat(id) => self.poker.table.is_none() && c.game == Some(Game::Baccarat) && here(&c.bact.at, id),
             TableRef::Craps(id) => self.poker.table.is_none() && c.game == Some(Game::Craps) && here(&c.crt.at, id),
-            TableRef::Domino(_) => false,
+            TableRef::Domino(id) => self.poker.table.is_none() && c.game == Some(Game::Domino) && here(&c.domt.at, id),
         }
     }
 
     /// Join from a table invite: that server's Pyr Casino, at that table (off any other first).
-    /// (Dominó's tables aren't in this Pyr yet: its casino, then.)
     pub(crate) fn go_to_table(&mut self, key: &str, table: TableRef) {
         self.ui.home = false;
         self.ui.plugins_open = false;
@@ -77,6 +76,7 @@ impl PyrApp {
         self.craps_table_leave();
         self.bac_table_leave();
         self.rl_table_leave();
+        self.dom_table_leave();
         let c = &mut self.poker.casino;
         c.hold = None;
         c.shown_chips = None;
@@ -103,7 +103,10 @@ impl PyrApp {
                 c.game = Some(Game::Craps);
                 c.crt.at = at(id);
             }
-            TableRef::Domino(_) => c.game = None,
+            TableRef::Domino(id) => {
+                c.game = Some(Game::Domino);
+                c.domt.at = at(id);
+            }
         }
     }
 

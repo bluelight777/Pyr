@@ -125,7 +125,11 @@ fn columns(s: &ServerView) -> [(Chapter, Vec<Entry>); 4] {
         poker.push(Entry { name: "Bounty Poker", art: BOUNTY_ART.into(), focus: 0.5, sub: "With friends and bots", pill: Some(("NEW", NEW)), opens: Opens::Chapter(Chapter::Poker) });
     }
     poker.push(Entry { name: "Tournaments", art: "tile-tourney".into(), focus: 0.5, sub: "With friends and bots", pill: None, opens: Opens::Chapter(Chapter::Poker) });
-    let tables = vec![entry(Game::Blackjack, "tile-blackjack", None), entry(Game::Roulette, "tile-roulette", None), entry(Game::Baccarat, "tile-baccarat", None), entry(Game::Craps, "tile-craps", None)];
+    let mut tables = vec![entry(Game::Blackjack, "tile-blackjack", None), entry(Game::Roulette, "tile-roulette", None), entry(Game::Baccarat, "tile-baccarat", None), entry(Game::Craps, "tile-craps", None)];
+    // (Dominó Cubano, 0.13.11, first where the server has it.)
+    if s.has(pyr_proto::control::DOMINO_FEATURE) {
+        tables.insert(0, entry(Game::Domino, "tile-domino", Some(("NEW", NEW))));
+    }
     let mut originals = Vec::new();
     if s.has(pyr_proto::control::PLINKO_FEATURE) {
         originals.push(entry(Game::Plinko, "tile-plinko", Some(("NEW", NEW))));

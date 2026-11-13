@@ -92,6 +92,7 @@ impl Section {
             Game::Dice => Section::Dice,
             Game::Keno => Section::Keno,
             Game::Plinko => Section::Plinko,
+            Game::Domino => Section::Domino,
         }
     }
 

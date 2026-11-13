@@ -1330,6 +1330,26 @@ impl Engine {
         });
     }
 
+    /// In for the next hand at a dominó table, putting up `chips` (the ante to eight times it):
+    /// this Pyr adds a seed of its own (fresh from the system) to the hand's shuffle, and
+    /// remembers it to check the hand when it's over.
+    pub fn dom_ready(&self, key: &str, table: u64, chips: u64) {
+        let mut seed = [0u8; 32];
+        let _ = getrandom::getrandom(&mut seed);
+        self.table_bets(key, pyr_poker::net::ToServer::DomReady { table, chips, seed }, move |p| {
+            if let Some(d) = p.dom.as_mut().filter(|d| d.view.id == table) {
+                let round = d.view.round_no;
+                d.my_seeds.retain(|(r, _)| *r != round);
+                d.my_seeds.push((round, seed));
+            }
+        });
+    }
+
+    /// Leaves the dominó table I'm watching.
+    pub fn dom_close(&self, key: &str) {
+        self.poker_later(key, |p| p.dom = None);
+    }
+
     /// Leaves the craps or baccarat table I'm watching.
     pub fn craps_close(&self, key: &str) {
         self.poker_later(key, |p| p.craps = None);
