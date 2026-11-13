@@ -112,13 +112,32 @@ impl Poker {
         r.mmr.round() as u32
     }
 
-    /// A table as it's sent: each seat with its MMR.
+    /// A table as it's sent: each seat with its MMR, and a person's staff title unless they've
+    /// hidden it (0.13.4/0.13.6, as 0.13.28's server sends them).
     pub(super) fn with_mmr(hub: &Hub, table: &mut TableView) {
         let bots = Self::bot_ratings(hub);
         for s in table.seats.iter_mut().flatten() {
-            let id = rating::id_of(&s.player, &s.name, s.bot);
-            s.mmr = Some(Self::mmr_of(hub, &bots, &id, s.bot));
+            if s.bot.is_some() {
+                let id = rating::id_of(&s.player, &s.name, s.bot);
+                s.mmr = Some(Self::mmr_of(hub, &bots, &id, s.bot));
+                continue;
+            }
+            let (rec, _) = hub.db.poker_record(&s.player);
+            s.mmr = Some(rec.rating.mmr.round() as u32);
+            s.badge = if rec.hide_title { None } else { Self::badge(hub, &s.player) };
         }
+    }
+
+    /// Someone's staff title: the Owner of the Game, a Game Master, an Ambassador.
+    pub(super) fn badge(hub: &Hub, uid: &str) -> Option<pyr_poker::net::Badge> {
+        use pyr_poker::net::{Badge, Role};
+        if Self::is_game_owner(hub, uid) {
+            return Some(Badge::Owner);
+        }
+        Self::role(hub, uid).map(|r| match r {
+            Role::GameMaster => Badge::GameMaster,
+            Role::Ambassador => Badge::Ambassador,
+        })
     }
 
     /// Someone's MMR, for the card about them at a table.

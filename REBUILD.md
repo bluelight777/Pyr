@@ -512,13 +512,22 @@ How (decided while starting it):
       (only shown by servers older than 0.12, which have neither) keeps 0.13.0's layout; the
       server takes buys and lays there as 0.13.28's does.
 - [ ] Dominó Cubano tables in the casino, to 10,000,000, El Presidente (0.13.11/12)
-- [ ] Poker: bots think and bluff like people (0.13.26), titles and badges (0.13.4/6: GAME
-      MASTER / OWNER on staff's seats, the winged gold shield over a Game Master's picture,
-      the crowned one for the Owner, Title shown or hidden: `hide_title`, the record's field
-      and request are in already; "Show my title" in the table's menu for staff), table
-      sounds (0.13.6), the level badges' rings (green 50, gold 30, bronze 12…), the suits on
+- [ ] Poker: bots think and bluff like people (0.13.26), table sounds (0.13.6), the suits on
       bot faces and card pips (0.13.28's are one smooth shape each; the rebuild's are 0.13.0's
       circles and polygons), the Shark's crown and star (`measured/newtable.md`).
+  - [x] Staff titles on seats (0.13.4/0.13.6), as 0.13.28's (`measured/tablefeatures.md`): the
+        seat's `badge` (`owner`, `game_master`, `ambassador`, none when hidden), the server
+        sending it (with the MMRs) and `hide_title` (a change shows at once); "Show my title" in
+        the table's menu for staff, its notices, the prize box after the separator as 0.13.28
+        has it. The pill (GAME MASTER for the Owner too, AMBASSADOR) to the pixel at 1× and 3×.
+        The emblems over the picture, traced off 0.13.28 drawn three times over with the title
+        and without (the winged shields with crown or gem, the Ambassador's silver shield, the
+        glows), and their moving parts filmed at 1× (a 3 s beat, nine rays turning 20° a second,
+        sparkles in turns): side by side at 3× they look the same; the shapes are drawn again,
+        not 0.13.28's to the pixel, and the sparkles' places are the rebuild's own. Not checked:
+        titles at the casino's table games (blackjack and the rest).
+  - [x] The level badge's ring in its tier's colour (Ember bronze, Flame silver, Blaze gold...),
+        read off 0.13.28's seats.
   - [x] Slower wins (0.13.4), as 0.13.28's (`measured/tablefeatures.md`): its server waits 7 s
         after a showdown (3 s after a fold) and 7 s plus the board's time after an all-in; an
         all-in's board shows the first street 1.8 s on, each next 2.15 s after, the win 1.75 s
@@ -697,7 +706,7 @@ How (decided while starting it):
 ## The 0.13.28 server's feature names, in its order
 
 From the 0.13.28 `pyr-server` binary (what `Ready::features` lists). Still to add in the
-rebuild (2026-11-13): casino_0_13_2, casino_build, hide_title, casino_domino (the rest are in;
+rebuild (2026-11-13): casino_0_13_2, casino_build, casino_domino (the rest are in;
 the rebuilt Reel Row and prop bets have their own names, `reel_row_remastered` and
 `prop_bets`, as they can't replay 0.13.28's rounds).
 

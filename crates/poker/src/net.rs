@@ -812,6 +812,20 @@ pub struct SeatView {
     /// Chips they've added in this hand, on their stack when it's over (0.13.22).
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub pending: u64,
+    /// Their staff title, shown on their seat unless they've hidden it (0.13.4/0.13.6; filled
+    /// in by the server as it's sent, as 0.13.28's server does).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub badge: Option<Badge>,
+}
+
+/// A staff title on a seat, as 0.13.28 sends it: the Owner of the Game, a Game Master, an
+/// Ambassador.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Badge {
+    Owner,
+    GameMaster,
+    Ambassador,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1207,7 +1221,7 @@ pub struct RecordView {
     #[serde(default)]
     pub role: Option<Role>,
     // Levels and the VIP Club (0.13.5), as 0.13.28 sends them.
-    /// My level's title kept off my name at tables.
+    /// My staff title (Game Master, Ambassador) kept off my seat at the tables (0.13.6).
     #[serde(default)]
     pub hide_title: bool,
     /// My tier (0, Spark, to 9, Eternal Flame).

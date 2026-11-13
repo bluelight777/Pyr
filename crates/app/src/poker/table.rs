@@ -427,6 +427,8 @@ impl PyrApp {
         let straddling = self.poker.straddle.contains(&(s.key.clone(), v.id));
         let auto_top_up = self.engine.auto_top_up();
         let can_straddle = s.has(pyr_proto::control::POKER_STRADDLE_FEATURE);
+        let hide_title_here = s.has(pyr_proto::control::HIDE_TITLE_FEATURE);
+        let title_hidden = s.poker.me.as_ref().is_some_and(|m| m.hide_title);
         egui::Popup::menu(&menu).gap(0.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
             crate::menu::style(ui);
             let mut any = false;
@@ -456,15 +458,20 @@ impl PyrApp {
                 }
                 any = true;
             }
-            if staff && !tourney && v.prize.is_none() {
-                if ui.button("Drop a prize box").on_hover_text("Whoever wins the next hand opens it").clicked() {
-                    clicked = Some("prize");
+            // (0.13.6: staff may keep their title off their seat.)
+            if staff && hide_title_here {
+                if crate::menu::check(ui, !title_hidden, "Show my title", false).clicked() {
+                    clicked = Some("title");
                     ui.close();
                 }
                 any = true;
             }
             if any {
                 ui.separator();
+            }
+            if staff && !tourney && v.prize.is_none() && ui.button("Drop a prize box").on_hover_text("Whoever wins the next hand opens it").clicked() {
+                clicked = Some("prize");
+                ui.close();
             }
             if ui.button("Streamer mode...").on_hover_text(if streamer { stream_tip.as_str() } else { "For when you're live: your cards stay face down until you peek" }).clicked() {
                 clicked = Some("stream");
@@ -512,6 +519,10 @@ impl PyrApp {
                 self.engine.poker(&s.key, ToServer::Straddle { table: v.id, on: !straddling });
             }
             Some("close") => self.poker.close_ask = Some(v.id),
+            Some("title") => {
+                self.engine.poker(&s.key, ToServer::HideTitle { hide: !title_hidden });
+                self.toast(if title_hidden { "Your title shows at the tables again" } else { "Your title's hidden at the tables" }, false);
+            }
             _ => {}
         }
         // The table's name and what it is, cut short where the buttons start.
@@ -741,6 +752,10 @@ impl PyrApp {
         if out {
             p.circle_filled(at, r0, Color32::from_black_alpha(140));
         }
+        // A staff title's emblem over the picture (0.13.4/0.13.6).
+        if let Some(b) = seat.badge {
+            super::emblem::paint(&p, at, k, b);
+        }
         if let Some((cs, deadline, total, _)) = t.clock
             && cs == i
             && turn
@@ -812,7 +827,10 @@ impl PyrApp {
         // Level, on the picture's edge; and for bots, how good they are.
         let lv = at + vec2(-r0 * 0.8, -r0 * 0.6);
         p.circle_filled(lv, 11.5 * k, Color32::from_rgb(0x16, 0x14, 0x1a));
-        p.circle_stroke(lv, 11.5 * k, Stroke::new(1.5 * k, Color32::from_rgb(0xff, 0xc4, 0x4a).gamma_multiply(fade.max(0.6))));
+        // (Its ring in the colour of their tier, as 0.13.28's: bronze for Ember, silver for Flame,
+        // gold for Blaze...)
+        let ring = crate::casino::levels::tier_color(pyr_poker::levels::tier(seat.level));
+        p.circle_stroke(lv, 11.5 * k, Stroke::new(1.5 * k, ring.gamma_multiply(fade.max(0.6))));
         p.text(lv, Align2::CENTER_CENTER, seat.level.to_string(), theme::bold_font(10.5 * k), Color32::WHITE.gamma_multiply(fade.max(0.6)));
         if let Some(mmr) = seat.mmr {
             let tier = pyr_poker::rating::Tier::of(mmr as f64);
@@ -820,6 +838,9 @@ impl PyrApp {
             super::rank::emblem(&p, at_r, 11.0 * k, tier);
             let tip = ui.interact(Rect::from_center_size(at_r, vec2(24.0, 24.0) * k), ui.id().with(("mmr", i)), Sense::hover());
             tip.on_hover_text(format!("{} · {} MMR", tier.name(), chips_text(mmr as u64)));
+        }
+        if let Some(b) = seat.badge {
+            super::emblem::label(&p, plate.center_top() + vec2(0.0, -1.0 * k), k, b);
         }
         if let Some(level) = seat.bot {
             let (label, col) = level_tag(level);
@@ -1752,6 +1773,7 @@ impl PyrApp {
                     cards: vec![],
                     mmr: None,
                     pending: 0,
+                    badge: None,
                 })
             })
             .collect();

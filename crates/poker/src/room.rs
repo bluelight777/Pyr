@@ -163,12 +163,14 @@ pub struct Taken {
     pub misses: u32,
 }
 
-/// A seated person's looks and level (from their record).
+/// A seated person's looks and level (from their record), and whether they keep their staff
+/// title off their seat (0.13.6: a change shows at once).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Look {
     pub level: u32,
     pub card_back: String,
     pub frame: String,
+    pub hide_title: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -576,6 +578,7 @@ impl Room {
                     cards,
                     mmr: None,
                     pending: m.map(|m| m.pending).unwrap_or(0),
+                    badge: None,
                 })
             })
             .collect();
@@ -663,7 +666,7 @@ impl Room {
         let chips = self.max_buy_in();
         self.table.sit(seat, &id, &name, chips)?;
         let lvl = level.look_level();
-        self.meta.insert(seat, SeatMeta::new(Some(level), Look { level: lvl, card_back: String::new(), frame: String::new() }, 0, &name));
+        self.meta.insert(seat, SeatMeta::new(Some(level), Look { level: lvl, ..Look::default() }, 0, &name));
         let mut out = Output::default();
         self.changed(&mut out);
         self.maybe_start(now, &mut out);
@@ -779,7 +782,7 @@ impl Room {
             return Err("no adding chips in a tournament".into());
         }
         let seat = self.table.seat_of(uid).ok_or("you aren't sitting here")?;
-        let most = self.buy_in.max_bb * self.table.rules.big_blind;
+        let most = self.buy_in.max_bb.saturating_mul(self.table.rules.big_blind);
         // In a hand (0.13.22): kept on the seat, on the stack when it's over. Counted against
         // the most with what's in front of them now, as the window offers it (0.13.28's server
         // counted what they started the hand with, so its own "Top up" was refused after a
@@ -1139,7 +1142,7 @@ impl Room {
         }
         // Time banks grow; leavers leave; the broke and the absent sit out.
         let seats: Vec<usize> = self.meta.keys().copied().collect();
-        let most = self.buy_in.max_bb * self.table.rules.big_blind;
+        let most = self.buy_in.max_bb.saturating_mul(self.table.rules.big_blind);
         for seat in seats {
             let m = self.meta.get_mut(&seat).unwrap();
             if m.bot.is_none() {

@@ -221,7 +221,7 @@ impl Poker {
     }
 
     fn look(rec: &Record) -> Look {
-        Look { level: rec.level(), card_back: rec.card_back.clone(), frame: rec.frame.clone() }
+        Look { level: rec.level(), card_back: rec.card_back.clone(), frame: rec.frame.clone(), hide_title: rec.hide_title }
     }
 
     /// Someone's look changed: every table they sit at (poker, tournaments, blackjack,
@@ -1543,6 +1543,49 @@ mod tests {
         assert_eq!(invite("carol", "mia", TableRef::Roulette(grand)).unwrap_err(), "you can't invite someone you've blocked (or who blocked you)");
         assert_eq!(invite("olive", "mia", TableRef::Poker(99)).unwrap_err(), "that table's closed");
         assert_eq!(invite("olive", "mia", TableRef::Domino(1)).unwrap_err(), "that table's closed");
+    }
+
+    /// Staff titles on their seats as 0.13.28 sends them (0.13.4/0.13.6): `owner` for the Owner
+    /// of the Game, `game_master`, `ambassador`, nothing for anyone else or for someone who's
+    /// hidden theirs (and hiding it shows at the table at once).
+    #[test]
+    fn staff_titles_show_on_their_seats_unless_hidden() {
+        use pyr_poker::net::Badge;
+        use pyr_proto::control::Role as UserRole;
+        let hub = hub();
+        let p = &hub.poker;
+        let _ = p.home_for_tests.set(hub.fingerprint);
+        hub.db.insert_user("blue", "Olive", UserRole::Owner).unwrap();
+        for (uid, name) in [("gm", "Gee"), ("amb", "Bea"), ("amy", "Amy")] {
+            hub.db.insert_user(uid, name, UserRole::Member).unwrap();
+        }
+        p.handle(&hub, "blue", false, ToServer::SetRole { uid: "gm".into(), role: Some(Role::GameMaster) }).unwrap();
+        p.handle(&hub, "blue", false, ToServer::SetRole { uid: "amb".into(), role: Some(Role::Ambassador) }).unwrap();
+        let Some(ToApp::Snapshot { table }) = p.handle(&hub, "blue", false, ToServer::Create { name: "Staff".into(), rules: Rules::holdem(10, 20, 6), bots: vec![], buy_in: BuyIn::default(), who: vec![] }).unwrap() else { panic!() };
+        for (i, uid) in ["blue", "gm", "amb", "amy"].iter().enumerate() {
+            p.handle(&hub, uid, false, ToServer::Sit { table: table.id, seat: i, chips: 2000 }).unwrap();
+        }
+        let badges = || {
+            let mut view = p.state.lock().rooms[&table.id].view(None);
+            Poker::with_mmr(&hub, &mut view);
+            view.seats.iter().flatten().map(|s| (s.name.clone(), s.badge)).collect::<Vec<_>>()
+        };
+        let want = |gm: Option<Badge>| vec![("Olive".to_string(), Some(Badge::Owner)), ("Gee".into(), gm), ("Bea".into(), Some(Badge::Ambassador)), ("Amy".into(), None)];
+        assert_eq!(badges(), want(Some(Badge::GameMaster)));
+        // On the wire, as 0.13.28's: snake_case, and nothing at all for no title.
+        let mut view = p.state.lock().rooms[&table.id].view(None);
+        Poker::with_mmr(&hub, &mut view);
+        let json = serde_json::to_string(&view).unwrap();
+        assert!(json.contains(r#""badge":"owner""#) && json.contains(r#""badge":"game_master""#) && json.contains(r#""badge":"ambassador""#));
+        assert_eq!(json.matches("\"badge\"").count(), 3);
+        // Hidden: gone from their seat (and their look at the table changed, so it's told at
+        // once).
+        p.handle(&hub, "gm", false, ToServer::HideTitle { hide: true }).unwrap();
+        assert_eq!(badges(), want(None));
+        let shown = pyr_poker::room::Look { hide_title: false, ..Poker::look(&hub.db.poker_record("gm").0) };
+        assert!(p.state.lock().rooms.get_mut(&table.id).unwrap().relook("gm", &shown).is_some());
+        p.handle(&hub, "gm", false, ToServer::HideTitle { hide: false }).unwrap();
+        assert_eq!(badges()[1].1, Some(Badge::GameMaster));
     }
 
     /// The Owner of the Game and (from 0.13.4) Game Masters give as many chips as they like, to

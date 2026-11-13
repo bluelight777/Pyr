@@ -6,6 +6,7 @@ pub mod bomb;
 pub mod bounty;
 pub mod cards;
 pub mod cms;
+pub mod emblem;
 pub mod felt;
 pub mod mark;
 pub mod newtable;
