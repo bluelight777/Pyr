@@ -305,8 +305,11 @@ fn a_time_bomb_fills_with_bots_spins_and_goes_off() {
             {
                 let hand = r.table.hand.as_ref().unwrap().number;
                 let a = if l.can_check { Action::Check } else if l.call * 4 <= r.table.behind(seat) { Action::Call } else { Action::Fold };
+                // (Whether it had gone off before she chose: her move can end the hand it went
+                // off in, which plays out as it was.)
+                let off = r.bomb;
                 let res = r.act("alice", hand, a, now);
-                if r.bomb {
+                if off {
                     assert!(res.is_err(), "no choices once it's gone off");
                 } else if let Ok(o) = res {
                     effects.extend(o.effects);

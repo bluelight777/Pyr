@@ -714,7 +714,10 @@ mod tests {
         let mut rng = Stream::new(seed_from(7));
         let levels = [Level::Genius, Level::Shark, Level::Regular, Level::Rookie, Level::Shark, Level::Regular];
         let mut won = [0i64; 6];
-        for d in 0..250u64 {
+        // (400 decks: since the Medium and Hard bots bluff as people do (0.13.26), 250 left a
+        // Medium bot's luck able to pass the Genius's; over 2,000 the Genius won 86,729 and the
+        // next best 20,291.)
+        for d in 0..400u64 {
             let deck = shuffle(seed_from(50_000 + d));
             for turn in 0..6usize {
                 let seated: Vec<Level> = (0..6).map(|i| levels[(i + turn) % 6]).collect();

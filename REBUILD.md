@@ -512,9 +512,21 @@ How (decided while starting it):
       (only shown by servers older than 0.12, which have neither) keeps 0.13.0's layout; the
       server takes buys and lays there as 0.13.28's does.
 - [ ] Dominó Cubano tables in the casino, to 10,000,000, El Presidente (0.13.11/12)
-- [ ] Poker: bots think and bluff like people (0.13.26), the suits on bot faces and card pips
-      (0.13.28's are one smooth shape each; the rebuild's are 0.13.0's circles and polygons), the
-      Shark's crown and star (`measured/newtable.md`).
+- [ ] Poker: the suits on bot faces and card pips (0.13.28's are one smooth shape each; the
+      rebuild's are 0.13.0's circles and polygons), the Shark's crown and star
+      (`measured/newtable.md`).
+  - [x] Bots think and bluff like people (0.13.26), measured off 0.13.28's Medium bots at two
+        tables (`measured/bots.md`: each turn's think by what it ended in, betting street by
+        street) and played again in a simulation of the same tables: a bot's time comes from how
+        hard its choice was (its hand against the price, or against a hand worth a bet) and
+        what's riding on it, not from what it does; rags go in the least time; a trapper acts
+        out a long think over a monster now and then. 0.13.28's medians (fold 0.60 s, check
+        1.00, call 1.20, raise 1.80-1.98) and long thinks (two in five ending in a fold) come
+        out within a few tenths and points. The preflop raiser bets the flop (0.13.28: 75%; the
+        simulation 73-85%), draws are bet and raised, a missed draw fired on the river heads up,
+        the Hard and Expert bots check-raise a bluff now and then, a maniac bluffs far more than
+        a rock and a rookie hardly ever. Before the flop they play as before (VPIP and PFR as
+        0.13.28's, bot by bot). Genius (Shark) keeps its own (it had all of these).
   - [~] Table sounds (0.13.6: chips that ring, cards that slide and snap, the felt, the rail, a
         better win), recorded off 0.13.28 at a table of bots and measured
         (`measured/tablesounds.md`), made again in `engine/src/table_sfx.rs`: fresh each time as

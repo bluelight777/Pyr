@@ -987,7 +987,7 @@ impl Room {
                 // long tank. It makes its move when the time's up.
                 let action = seen.as_ref().map(|v| bots::decide_as(v, level, who, &mut p.whim)).unwrap_or(Action::Fold);
                 let moment = seen.as_ref().and_then(|v| moment_of(v, action));
-                let ms = seen.as_ref().map(|v| bots::think_ms(&v.spot, level, who, action, &mut p.whim)).unwrap_or(1_200);
+                let ms = seen.as_ref().map(|v| bots::think_ms(v, level, who, action, &mut p.whim)).unwrap_or(1_200);
                 p.plan = Some(Plan { seat, action, moment });
                 p.deadline = now + ms;
             } else if self.tourney.is_some() && self.meta.get(&seat).is_some_and(|m| m.misses >= MISSES_TO_SIT_OUT) {

@@ -14,8 +14,11 @@
 //! Their chances come from dealing out the rest of the hand many times (Monte Carlo), so they
 //! play Omaha as well as Hold'em.
 //!
-//! How long a bot takes over a turn ([`think_ms`]) comes from the spot everyone can see and the
-//! bot's own pace, never from its cards: its timing gives nothing away.
+//! How long a bot takes over a turn ([`think_ms`]) comes, as a person's does (0.13.26), from how
+//! hard its choice was and what's riding on it, at its own pace: a long think can end in a fold
+//! as well as a bet, rags go at once. And it bluffs as people do: the preflop raiser bets the
+//! flop, draws are bet and raised, a missed draw is fired on the river heads up, the stronger
+//! bots check-raise a bluff now and then (`measured/bots.md` in the rebuild's notes).
 //!
 //! Each bot is someone, too ([`persona`]): by its name, a way of playing (a maniac, a rock, a
 //! trapper, a calling station...), a pace and a voice of its own. The level says how well it
@@ -295,6 +298,14 @@ struct View {
     in_position: bool,
     /// Whether someone's raised (others' hands are stronger then).
     raised: bool,
+    /// Whether it made the last raise before the flop (the one others expect to bet the flop).
+    aggressor: bool,
+    /// Whether it checked earlier this round (a raise now is a check-raise).
+    checked: bool,
+    /// A draw now (a flush draw or an open-ended straight draw, with cards to come), and, on the
+    /// river, whether it had one on the turn (one that missed).
+    draw: bool,
+    drew: bool,
 }
 
 impl Seen {
@@ -311,6 +322,10 @@ impl Seen {
             in_front: sp.me().street_bet,
             in_position: sp.in_position(),
             raised: sp.any_raise(),
+            aggressor: sp.preflop_raises().last().is_some_and(|a| a.seat == sp.seat),
+            checked: sp.actions.iter().any(|a| a.street == sp.street && a.seat == sp.seat && a.action == Action::Check),
+            draw: sp.street < Street::River && sp.street > Street::Preflop && drawing(sp.variant, &self.hole, &sp.board),
+            drew: sp.street == Street::River && sp.board.len() == 5 && drawing(sp.variant, &self.hole, &sp.board[..4]),
         }
     }
 
@@ -413,6 +428,38 @@ pub fn preflop_strength(hole: &[Card]) -> f64 {
     ((s + 1.0) / 21.0).clamp(0.0, 1.0)
 }
 
+/// A draw: four cards of a suit (one of them its own) or four in a row open at both ends (one of
+/// them its own), without a straight or better made already. In Omaha, two of its own with
+/// the board, as a hand there must be.
+fn drawing(variant: Variant, hole: &[Card], board: &[Card]) -> bool {
+    if board.len() < 3 {
+        return false;
+    }
+    let pairs: Vec<Vec<Card>> = match variant {
+        Variant::Holdem => vec![hole.to_vec()],
+        Variant::Omaha => {
+            let mut v = Vec::new();
+            for i in 0..hole.len() {
+                for j in i + 1..hole.len() {
+                    v.push(vec![hole[i], hole[j]]);
+                }
+            }
+            v
+        }
+    };
+    pairs.iter().any(|mine| {
+        let all: Vec<Card> = mine.iter().chain(board).copied().collect();
+        if eval::evaluate(&all).category() >= eval::Category::Straight {
+            return false;
+        }
+        let flush = (0..4u8).any(|s| all.iter().filter(|c| c.suit() == s).count() == 4 && mine.iter().any(|c| c.suit() == s));
+        // Ranks 0 (a deuce) to 12 (an ace), the ace low too (-1).
+        let has = |r: i32, cards: &[Card]| cards.iter().any(|c| c.rank() as i32 == r || (r == -1 && c.rank() == 12));
+        let open = (0..=8).any(|lo: i32| (lo..lo + 4).all(|r| has(r, &all)) && (lo..lo + 4).any(|r| has(r, mine)) && lo >= 0 && lo + 4 <= 12);
+        flush || open
+    })
+}
+
 /// What a bot of `level` does (one that's no one in particular: see [`decide_as`]).
 pub fn decide(seen: &Seen, level: Level, rng: &mut Stream) -> Action {
     decide_as(seen, level, &persona::PLAIN, rng)
@@ -481,13 +528,56 @@ fn decide_simply(view: &View, level: Level, who: &Persona, rng: &mut Stream) -> 
         }
         return Action::Raise { to };
     }
+    // How it bluffs, the way people do (0.13.26): a maniac far more than a rock, a rookie hardly
+    // ever, the better bots a little more.
+    let bluffing = who.bluff
+        * match level {
+            Level::Rookie => 0.05,
+            Level::Regular => 1.0,
+            Level::Hard => 1.15,
+            Level::Shark | Level::Genius => 1.3,
+        };
     if l.can_check {
-        // Nobody bet: bet good hands sometimes, bluff now and then (more in position).
-        if l.can_raise && (good && roll(rng) < st.aggression * 0.7 || roll(rng) < st.bluff + position_bonus) {
+        if l.can_raise {
+            // The one who raised before the flop bets the flop whatever it hit (the better the
+            // bot, the more often; less into several players).
+            let cbet = match level {
+                Level::Rookie => 0.35,
+                Level::Regular => 0.6,
+                Level::Hard => 0.68,
+                Level::Shark | Level::Genius => 0.75,
+            } * who.aggression.sqrt()
+                * 0.8f64.powi(view.opponents.saturating_sub(1) as i32);
+            if view.street == Street::Flop && view.aggressor && roll(rng) < cbet.min(0.95) {
+                return Action::Raise { to: raise_to(0.5 * who.sizing, rng) };
+            }
+            // A draw is bet as a semi-bluff.
+            if view.draw && roll(rng) < (st.aggression * 0.6 * bluffing.sqrt()).min(0.9) {
+                return Action::Raise { to: raise_to(0.6 * who.sizing, rng) };
+            }
+            // A draw that missed gets fired on the river, heads up.
+            if view.drew && view.street == Street::River && view.opponents == 1 && !good && roll(rng) < (0.35 * bluffing).min(0.9) {
+                return Action::Raise { to: raise_to(0.66 * who.sizing, rng) };
+            }
+        }
+        // Nobody bet: bet good hands sometimes, bluff now and then (more in position; a rookie
+        // hardly ever).
+        let light = (st.bluff + position_bonus) * if level == Level::Rookie { 0.4 } else { 1.0 };
+        if l.can_raise && (good && roll(rng) < st.aggression * 0.7 || roll(rng) < light) {
             let to = raise_to(0.5 * who.sizing, rng);
             return Action::Raise { to };
         }
         return Action::Check;
+    }
+    // Facing a bet: a draw raised as a semi-bluff now and then; the stronger bots check-raise a
+    // bluff now and then.
+    if l.can_raise && view.street >= Street::Flop {
+        if view.draw && eq + position_bonus > pot_odds * 0.8 && roll(rng) < (0.22 * bluffing).min(0.8) {
+            return Action::Raise { to: raise_to(0.75 * who.sizing, rng) };
+        }
+        if view.checked && matches!(level, Level::Hard | Level::Shark) && !good && roll(rng) < (st.bluff * 0.6 * who.bluff).min(0.5) {
+            return Action::Raise { to: raise_to(0.8 * who.sizing, rng) };
+        }
     }
     // Facing a bet: call when the chances beat the price (rookies call more, and so do the
     // loose and the sticky).
@@ -517,43 +607,55 @@ pub const MAX_THINK_MS: u64 = 13_000;
 /// And the quickest.
 pub const MIN_THINK_MS: u64 = 450;
 
-/// How long a bot takes to make `action` (its choice at `spot`), in milliseconds, the way a
-/// person would: a fold or a check before the flop often in a moment; a call that costs a lot,
-/// a raise (how much?) or an all in taking a while; a look at a new card first; later streets
-/// and crowded pots slower. Each bot at its own pace, snapping off some choices and going into
-/// the tank over others now and then as its personality goes, and never the same twice (spread
-/// like people's times). It shows nothing of its cards that the move itself, made a moment
-/// later, doesn't.
-pub fn think_ms(spot: &Spot, level: Level, who: &Persona, action: Action, rng: &mut Stream) -> u64 {
+/// How long a bot takes over `action` (its choice, from what it sees), in milliseconds, the way a
+/// person would (0.13.26): from how hard the choice was and what's riding on it, not from what it
+/// does, so a long think can end in a fold or a check as well as a bet. Rags are thrown away at
+/// once; a close call over a big river bet takes a while whichever way it goes; a trapper now and
+/// then acts out a long think over a monster; a new card on the table gets a look first. Each
+/// bot at its own pace, snapping off some choices and going into the tank over others as its
+/// personality goes, never the same twice (spread like people's times).
+pub fn think_ms(seen: &Seen, level: Level, who: &Persona, action: Action, rng: &mut Stream) -> u64 {
+    let spot = &seen.spot;
     let roll = |rng: &mut Stream| (rng.below(1_000_000) as f64 + 0.5) / 1_000_000.0;
     let me = spot.me();
     let pot = spot.pot().max(1) as f64;
     let call = spot.legal.call as f64;
     let stack = (me.behind + me.street_bet).max(1) as f64;
-    // What's riding on it: the price against the pot, and against what's left.
+    // What's riding on it: the price against the pot, how much of what's left goes in, the street,
+    // the crowd.
     let price = (call / pot).min(2.0);
     let commit = (call / me.behind.max(1) as f64).min(1.0);
+    let put = match action {
+        Action::Raise { to } => (to.saturating_sub(me.street_bet) as f64 / stack).min(1.0),
+        Action::AllIn => 1.0,
+        Action::Call => commit,
+        _ => 0.0,
+    };
+    // (A bet's size against the pot: how much to put out is a choice too.)
+    let size = match action {
+        Action::Raise { to } => (to.saturating_sub(me.street_bet) as f64 / pot).min(2.0),
+        Action::AllIn => 2.0,
+        _ => 0.0,
+    };
     let late = match spot.street {
         Street::Preflop => 0.0,
-        Street::Flop => 0.25,
-        Street::Turn => 0.4,
-        Street::River => 0.6,
+        Street::Flop => 0.2,
+        Street::Turn => 0.35,
+        Street::River => 0.5,
     };
-    let crowd = spot.opponents().count().saturating_sub(1) as f64 * 0.06;
-    // The choice: a fold or a check is quick, a call takes some thought, a bet or a raise more
-    // (how much?), all in the most. (Base time, and how heavy it is.)
-    let (base, weight, snappy, tanky) = match action {
-        Action::Fold if spot.street == Street::Preflop => (620.0, 0.12 + price * 0.25 + commit * 0.3, 2.2, 0.3),
-        Action::Fold => (950.0, 0.35 + price * 0.5 + commit * 0.6 + late, 1.3, 0.8),
-        Action::Check => (800.0, 0.25 + late * 0.6 + crowd, 1.8, 0.4),
-        Action::Call => (1_150.0, 0.5 + price * 0.55 + commit * 1.3 + late + crowd, 1.0, 1.3),
-        Action::Raise { to } => {
-            let size = (to.saturating_sub(me.street_bet) as f64 / pot).min(3.0);
-            (1_400.0, 0.55 + size * 0.3 + (to as f64 / stack).min(1.0) * 0.7 + late + crowd, 0.7, 1.1)
-        }
-        Action::AllIn => (1_650.0, 0.85 + commit * 0.6 + late + crowd, 0.6, 1.6),
-    };
-    // Each level its own way: rookies quick and impulsive, geniuses steadier.
+    let opponents = spot.opponents().count().max(1);
+    let crowd = opponents.saturating_sub(1) as f64 * 0.05;
+    let riding = (price * 0.4 + commit.max(put) * 0.8 + size * 0.25 + late + crowd).min(2.0) * if spot.street == Street::Preflop { 0.6 } else { 1.0 };
+    // How hard it was: how near its hand sits to the line between one move and the next (the
+    // price of a call, or a hand worth a bet), and rags not at all.
+    let fair = 1.0 / (opponents + 1) as f64;
+    let preflop = spot.street == Street::Preflop && spot.variant == Variant::Holdem;
+    let eq = if preflop { preflop_strength(&seen.hole) } else { equity(spot.variant, &seen.hole, &spot.board, opponents, 120, rng) };
+    let line = if call > 0.0 { call / (pot + call) } else { fair * 1.3 };
+    let hard = (-((eq - line) / 0.12).powi(2)).exp();
+    if action == Action::Fold && preflop && eq < 0.3 {
+        return MIN_THINK_MS;
+    }
     let level_k = match level {
         Level::Rookie => 0.82,
         Level::Regular => 0.95,
@@ -564,18 +666,30 @@ pub fn think_ms(spot: &Spot, level: Level, who: &Persona, action: Action, rng: &
     // Spread like people's (log-normal).
     let (u1, u2) = (roll(rng), roll(rng));
     let z = (-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos();
-    let mut ms = base * level_k * who.pace * (0.55 + weight) * (0.38 * z).exp();
+    // (Hands move at their own speed: a fold or a check a moment, a call a little more, a bet's
+    // size a choice of its own.)
+    let base = match action {
+        Action::Fold => 520.0,
+        Action::Check => 660.0,
+        Action::Call => 1_250.0,
+        Action::Raise { .. } | Action::AllIn => 1_500.0,
+    };
+    let mut ms = base * level_k * who.pace * (0.5 + 1.6 * hard * (0.4 + riding) + 0.35 * riding) * (0.38 * z).exp();
     // A new card on the table: a look at it first.
     if spot.street != Street::Preflop && !spot.actions.iter().any(|a| a.street == spot.street) {
         ms += 350.0 + roll(rng) * 750.0;
     }
-    // Now and then a snap, now and then a long think: how often depends on who it is, and on
-    // the choice (snapping off a fold, tanking over a big call).
+    // A trapper acting out a long think over a monster it means to slow-play.
+    if who.trap > 0.0 && eq > 0.85 && matches!(action, Action::Check | Action::Call) && roll(rng) < who.trap * 0.5 {
+        ms += 2_500.0 + roll(rng) * 4_000.0;
+    }
+    // Now and then a snap (the easier the choice, the likelier), now and then a long think (the
+    // harder, and the more riding on it, the likelier), as its personality goes.
     let r = roll(rng);
-    if r < who.snaps * snappy {
+    if r < who.snaps * (1.0 - hard) * 1.5 {
         ms = 450.0 + roll(rng) * 500.0;
-    } else if r > 1.0 - who.tanks * tanky {
-        ms += 2_500.0 + roll(rng) * 6_000.0 * (0.4 + weight.min(1.8));
+    } else if r > 1.0 - who.tanks * (0.08 + 2.0 * hard * (0.15 + riding)) * if action == Action::Fold { 2.1 } else { 1.0 } {
+        ms += 2_500.0 + roll(rng) * 6_000.0 * (0.4 + riding.min(1.8));
     }
     (ms as u64).clamp(MIN_THINK_MS, MAX_THINK_MS)
 }
@@ -765,8 +879,7 @@ mod tests {
     }
 
     /// Think times: inside the clock, spread out like people's, and longer for a big call on
-    /// the river than for a check before the flop. The spot and the choice decide them (the
-    /// choice is shown a moment later anyway): there's no way to pass anyone's cards in.
+    /// the river than for a check before the flop.
     #[test]
     fn bots_take_human_times() {
         let mut t = Table::new(Rules::holdem(5, 10, 3));
@@ -775,29 +888,112 @@ mod tests {
         }
         t.start_hand(1, shuffle(seed_from(3))).unwrap();
         let seat = t.hand.as_ref().unwrap().to_act.unwrap();
-        let easy = t.spot(seat).unwrap();
+        let easy = t.seen(seat).unwrap();
         let mut hard = easy.clone();
-        hard.street = Street::River;
-        hard.legal.can_check = false;
-        hard.legal.call = 800;
-        hard.players.iter_mut().for_each(|p| p.total = 400);
+        hard.spot.street = Street::River;
+        hard.spot.board = crate::cards::parse_cards("2c7d9hJsKc").unwrap();
+        hard.spot.legal.can_check = false;
+        hard.spot.legal.call = 800;
+        hard.spot.players.iter_mut().for_each(|p| p.total = 400);
         let mut rng = Stream::new(seed_from(5));
-        let times = |spot: &Spot, a: Action, rng: &mut Stream| -> Vec<u64> { (0..2_000).map(|_| think_ms(spot, Level::Genius, &persona::PLAIN, a, rng)).collect() };
+        let times = |seen: &Seen, a: Action, rng: &mut Stream| -> Vec<u64> { (0..2_000).map(|_| think_ms(seen, Level::Genius, &persona::PLAIN, a, rng)).collect() };
         let (e, h) = (times(&easy, Action::Check, &mut rng), times(&hard, Action::Call, &mut rng));
         let mean = |v: &[u64]| v.iter().sum::<u64>() as f64 / v.len() as f64;
         assert!(e.iter().chain(&h).all(|ms| (MIN_THINK_MS..=MAX_THINK_MS).contains(ms)));
         assert!(mean(&h) > mean(&e) * 1.6, "a big river call takes longer: {} vs {}", mean(&h), mean(&e));
         // Snaps and long thinks both happen.
         assert!(e.iter().any(|ms| *ms < 900) && h.iter().any(|ms| *ms > 7_000));
-        let distinct: std::collections::BTreeSet<u64> = e.iter().map(|ms| ms / 100).collect();
-        assert!(distinct.len() > 20, "times vary");
-        // A fold before the flop is mostly quick; a shove takes a while; and a fast bot is
-        // faster than a slow one at the same spot.
-        let fold = times(&easy, Action::Fold, &mut rng);
-        let shove = times(&hard, Action::AllIn, &mut rng);
-        assert!(mean(&fold) < 1_400.0 && mean(&shove) > 2.0 * mean(&fold), "fold {} shove {}", mean(&fold), mean(&shove));
+        // (A choice that's no choice at all goes in the least time a bot takes, as 0.13.28's do;
+        // a hard one never takes the same time twice.)
+        let distinct: std::collections::BTreeSet<u64> = h.iter().map(|ms| ms / 100).collect();
+        assert!(distinct.len() > 40, "times vary: {}", distinct.len());
+        // A big call over a big river bet takes a while whichever way it goes: folded too.
+        let fold = times(&hard, Action::Fold, &mut rng);
+        assert!(mean(&fold) > mean(&e) * 1.4, "a hard fold takes a while: {} vs {}", mean(&fold), mean(&e));
         let at = |name: &str, rng: &mut Stream| (0..2_000).map(|_| think_ms(&hard, Level::Regular, persona::of(name), Action::Call, rng)).sum::<u64>() as f64 / 2_000.0;
         let (quick, slow) = (at("Blaze", &mut rng), at("Moss", &mut rng));
         assert!(slow > quick * 1.8, "Moss takes his time, Blaze doesn't: {slow} vs {quick}");
+    }
+
+    /// What a table of bots does over many hands: (each move's think times, the preflop
+    /// raiser's flop bets when checked to and its chances, river bets with less than a pair when
+    /// checked to and the chances, by seat).
+    struct Tally {
+        times: Vec<(Action, u64)>,
+        cbets: (u32, u32),
+        river_bluffs: Vec<(u32, u32)>,
+    }
+
+    fn tally(names: &[&str], level: Level, hands: u64, seed: u64) -> Tally {
+        let n = names.len();
+        let mut rng = Stream::new(seed_from(seed));
+        let mut t = Table::new(Rules::holdem(10, 20, n));
+        for (i, _) in names.iter().enumerate() {
+            t.sit(i, &format!("bot{i}"), "x", 4_000).unwrap();
+        }
+        let mut out = Tally { times: Vec::new(), cbets: (0, 0), river_bluffs: vec![(0, 0); n] };
+        for hand in 0..hands {
+            for s in t.seats.iter_mut().flatten() {
+                if s.stack < 400 {
+                    s.stack = 4_000;
+                }
+            }
+            let mut ev = t.start_hand(hand, shuffle(seed_from(seed * 1_000_003 + hand))).unwrap();
+            loop {
+                let Some(Some(seat)) = ev.iter().rev().find_map(|(_, e)| match e {
+                    Event::Turn { seat, .. } => Some(Some(*seat)),
+                    Event::HandEnded { .. } => Some(None),
+                    _ => None,
+                }) else {
+                    break;
+                };
+                let seen = t.seen(seat).unwrap();
+                let who = persona::of(names[seat]);
+                let a = decide_as(&seen, level, who, &mut rng);
+                out.times.push((a, think_ms(&seen, level, who, a, &mut rng)));
+                let sp = &seen.spot;
+                let checked_to = sp.legal.can_check && sp.legal.can_raise && !sp.actions.iter().any(|x| x.street == sp.street && matches!(x.action, Action::Raise { .. } | Action::AllIn));
+                let bets = matches!(a, Action::Raise { .. } | Action::AllIn);
+                if checked_to && sp.street == Street::Flop && sp.preflop_raises().last().is_some_and(|r| r.seat == seat) {
+                    out.cbets.1 += 1;
+                    out.cbets.0 += bets as u32;
+                }
+                if checked_to && sp.street == Street::River && hand_value(sp.variant, &seen.hole, &sp.board).category() == eval::Category::HighCard {
+                    out.river_bluffs[seat].1 += 1;
+                    out.river_bluffs[seat].0 += bets as u32;
+                }
+                ev = t.act(seat, a).unwrap();
+            }
+        }
+        out
+    }
+
+    /// As 0.13.26 made them: how long a bot thinks comes from how hard the choice was, so a long
+    /// think ends in a fold as often as in anything (0.13.28's Medium bots: two in five of their
+    /// thinks over four seconds were folds, three in ten raises); rags go at once; the preflop
+    /// raiser bets the flop most times it's checked to (0.13.28's: 75%); and bluffs go with who
+    /// a bot is: a maniac fires far more than a rock, a rookie hardly ever.
+    #[test]
+    fn bots_think_and_bluff_like_people() {
+        let t = tally(&["Lux", "Gale", "Cinder", "Ace", "Flint"], Level::Regular, 1_500, 7);
+        let long: Vec<&(Action, u64)> = t.times.iter().filter(|x| x.1 > 4_000).collect();
+        let share = |f: &dyn Fn(&Action) -> bool| long.iter().filter(|x| f(&x.0)).count() as f64 / long.len() as f64;
+        let folds = share(&|a| *a == Action::Fold);
+        let raises = share(&|a| matches!(a, Action::Raise { .. } | Action::AllIn));
+        assert!(long.len() > 100 && (0.3..0.55).contains(&folds) && (0.15..0.4).contains(&raises), "long thinks: {} folds {folds:.2} raises {raises:.2}", long.len());
+        let fold_ms: Vec<u64> = t.times.iter().filter(|x| x.0 == Action::Fold).map(|x| x.1).collect();
+        let instant = fold_ms.iter().filter(|&&ms| ms == MIN_THINK_MS).count() as f64 / fold_ms.len() as f64;
+        assert!(instant > 0.5, "most folds are rags thrown away at once: {instant:.2}");
+        let cbet = t.cbets.0 as f64 / t.cbets.1.max(1) as f64;
+        assert!(t.cbets.1 > 40 && (0.6..0.9).contains(&cbet), "c-bets {:?}", t.cbets);
+        let rate = |names: &[&str], level: Level, who: usize| {
+            let t = tally(names, level, 1_500, 11);
+            let (b, n) = t.river_bluffs[who];
+            b as f64 / n.max(1) as f64
+        };
+        let maniac = rate(&["Blaze", "Ivy", "Sage"], Level::Regular, 0);
+        let rock = rate(&["Flint", "Ivy", "Sage"], Level::Regular, 0);
+        let rookie = rate(&["Blaze", "Ivy", "Sage"], Level::Rookie, 0);
+        assert!(maniac > rock * 2.5 && maniac > rookie * 2.0, "river bluffs: maniac {maniac:.3} rock {rock:.3} rookie maniac {rookie:.3}");
     }
 }
