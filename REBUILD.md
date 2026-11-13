@@ -689,7 +689,18 @@ How (decided while starting it):
       "· Space" under a table's button). Never while typing, nor while the window's open. Tried:
       rebinding, Up/Down, Left/Right, Space at Dice; tests. (Dominó's "Pass, or deal me in" is
       in the list and waits for Dominó.)
-- [ ] Emotes that move (0.13.23)
+- [x] Emotes that move (0.13.23): fourteen (rofl, river, mindblown, rage, shades, rain, fire,
+      dance, clown, fish, popcorn, salty, sleep, chicken), sent as 0.13.28 sends them (`e:<name>`,
+      read off the frame log) both ways (tried: 0.13.28's to the rebuild and the rebuild's to
+      0.13.28); their sheet carved from 0.13.28; the picker's "Moving" under the stickers with
+      0.13.28's words, each standing still on its picture and acting when hovered; the poker bar
+      as 0.13.28's (GG, Nice, rofl, rage, shades, ALL IN). Each act filmed in 0.13.28 at 60
+      frames a second and fitted picture by picture (`rebuild/measured/emotes.md`): pictures and
+      their pace, sway, turn, hops, shakes, the ring, the falling shades, fire's blaze, a tenth
+      bigger than a sticker; the Zs as 0.13.28's to the frame; the other little things as many,
+      as big, where and as fast (0.13.28's are the same every time, worked out from the time:
+      so are the rebuild's, from its own numbers). Better than 0.13.28: the first one at a table
+      shows its face at once (0.13.28's came without it for about a second).
 - [x] New cards and backs (0.13.22): Meshy's court figures, ace of spades and six backs (carved
       from 0.13.28); every face-down card in the back picked, and a back picked while sitting
       shows at that seat at once (Blue: "dealt green after picking red")

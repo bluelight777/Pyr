@@ -1474,6 +1474,7 @@ impl PyrApp {
 
     /// Emotes, big over the face of whoever sent them (a sticker, or an older Pyr's emoji).
     fn emotes(&self, p: &egui::Painter, ctx: &egui::Context, lay: &Layout, t: &TableLive) {
+        crate::casino::emotes::get_ready(ctx, 120.0 * lay.k);
         for (seat, e, at) in &t.emotes {
             crate::casino::emotes::pop(p, ctx, e, lay.seat(*seat) + vec2(0.0, -34.0 * lay.k), ago(*at), 120.0 * lay.k);
         }

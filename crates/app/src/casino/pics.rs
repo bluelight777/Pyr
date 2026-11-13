@@ -20,6 +20,7 @@ const PICS: &[(&str, &[u8])] = pics![
     "dragon-lair",
     "bonfire",
     "emotes",
+    "emotes-anim",
     "table-poker",
     "table-blackjack",
     "table-baccarat",
