@@ -113,6 +113,8 @@ pub enum Effect {
     /// A spin at a roulette table settled a person's chips (for their records; the chips come as
     /// a `Credit`).
     RlSpin { uid: String, outcome: crate::casino::roulette::Outcome },
+    /// A dominó hand played out for a person (for their records; the chips come as a `Credit`).
+    DomHand { uid: String, outcome: crate::casino::domino::Outcome },
 }
 
 #[derive(Default)]

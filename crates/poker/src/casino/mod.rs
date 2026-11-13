@@ -52,10 +52,12 @@ pub enum Game {
     Dragon,
     /// Plinko (0.13.5), one of Pyr's Originals.
     Plinko,
+    /// Dominó Cubano's tables (0.13.11): its hands counted as rounds (statistics, experience).
+    Domino,
 }
 
 impl Game {
-    pub const ALL: [Game; 10] = [Game::Slots, Game::Blackjack, Game::Roulette, Game::Baccarat, Game::Craps, Game::Dice, Game::Keno, Game::Reels, Game::Dragon, Game::Plinko];
+    pub const ALL: [Game; 11] = [Game::Slots, Game::Blackjack, Game::Roulette, Game::Baccarat, Game::Craps, Game::Dice, Game::Keno, Game::Reels, Game::Dragon, Game::Plinko, Game::Domino];
 
     /// Games apps before 0.12.0 don't know (they're never told of them: see `CASINO_012_CAP`).
     pub fn is_new(self) -> bool {
@@ -75,6 +77,7 @@ impl Game {
             Game::Reels => "Reel Row",
             Game::Dragon => "Ember Dragon",
             Game::Plinko => "Plinko",
+            Game::Domino => "Dominó Cubano",
         }
     }
 
@@ -91,6 +94,7 @@ impl Game {
             Game::Reels => "reel_row",
             Game::Dragon => "ember_dragon",
             Game::Plinko => "plinko",
+            Game::Domino => "domino",
         }
     }
 
@@ -111,6 +115,7 @@ impl Game {
             Game::Reels => "Twelve machines, 243 ways, wilds, a pick-and-dodge bonus or a prize wheel.",
             Game::Dragon => "243 ways. Feed the dragon eggs to grow its wins to 5×; six fireballs for Ember Respins and four jackpots.",
             Game::Plinko => "Drop a ball through the pegs. Pick the difficulty and the rows: up to 10,000 times the bet on Expert.",
+            Game::Domino => "Double-nine Cuban dominoes for chips, at tables of four: in pairs or each for yourself.",
         }
     }
 
@@ -128,6 +133,8 @@ impl Game {
             Game::Reels => 100,
             Game::Dragon => 100,
             Game::Plinko => 100,
+            // (The house's 3% of every pot.)
+            Game::Domino => 300,
         }
     }
 }
@@ -148,6 +155,7 @@ pub fn limits(game: Game) -> (u64, u64) {
         Game::Reels => (reels::MIN_BET, reels::MAX_BET),
         Game::Dragon => (dragon::MIN_BET, dragon::MAX_BET),
         Game::Plinko => (plinko::MIN_BET, plinko::MAX_BET),
+        Game::Domino => (10, 10_000_000),
     }
 }
 
@@ -365,6 +373,8 @@ pub enum Outcome {
     Plinko(plinko::Outcome),
     /// Reel Row Remastered (0.13.2).
     Remaster(remaster::Outcome),
+    /// A Dominó hand (0.13.11).
+    Domino(domino::Outcome),
 }
 
 impl Outcome {
@@ -393,6 +403,7 @@ impl Outcome {
             Outcome::Plinko(_) => Game::Plinko,
             Outcome::Row(_) => Game::Reels,
             Outcome::Remaster(_) => Game::Reels,
+            Outcome::Domino(_) => Game::Domino,
         }
     }
 
@@ -411,6 +422,7 @@ impl Outcome {
             Outcome::Plinko(o) => o.chips,
             Outcome::Row(o) => o.wagered(),
             Outcome::Remaster(o) => o.wagered(),
+            Outcome::Domino(o) => o.wagered,
         }
     }
 
@@ -429,6 +441,7 @@ impl Outcome {
             Outcome::Plinko(o) => o.paid,
             Outcome::Row(o) => o.paid,
             Outcome::Remaster(o) => o.paid,
+            Outcome::Domino(o) => o.paid,
         }
     }
 
@@ -485,6 +498,7 @@ impl Outcome {
             }
             Outcome::Plinko(o) => format!("a ball through {} rows", o.rows),
             Outcome::Remaster(o) => o.headline(),
+            Outcome::Domino(o) => o.headline(),
         }
     }
 }
@@ -588,6 +602,8 @@ pub fn verify(commit_shown: &[u8; 32], server_seed: &[u8; 32], client_seed: &[u8
         Outcome::Row(o) => reelrow::check(o.machine, o.bet).is_ok() && reelrow::play_with(o.machine, o.bet, o.feature, &mut s, o.pool) == *o,
         Outcome::Remaster(o) => remaster::check(o.machine, o.bet, o.feature, o.ante).is_ok() && remaster::play_with(o.machine, o.bet, o.feature, o.ante, &mut s, o.pool) == *o,
         Outcome::Blackjack(o) => blackjack::replay(o.base, s, &o.actions).is_ok_and(|again| again == *o),
+        // (A table's hand: checked from its record, `domroom::check`.)
+        Outcome::Domino(_) => false,
         Outcome::Craps(o) => {
             let dice = craps::roll(&mut s);
             let before = craps::Table { point: o.point_before, bets: o.before.clone(), streak: 0 };

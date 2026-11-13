@@ -6,6 +6,7 @@
 pub mod bacroom;
 pub mod bjroom;
 pub mod crapsroom;
+pub mod domroom;
 pub mod rlroom;
 pub mod bots;
 pub mod cards;

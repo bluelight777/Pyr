@@ -583,6 +583,7 @@ pub fn play_of(o: &crate::casino::Outcome) -> Play {
         Outcome::Dice(_) => Play::Dice,
         Outcome::Keno(_) => Play::Keno,
         Outcome::Plinko(_) => Play::Plinko,
+        Outcome::Domino(_) => Play::Domino,
     }
 }
 
@@ -677,6 +678,14 @@ pub fn apply_casino(rec: &mut Record, o: &crate::casino::Outcome, today: u64) ->
         Outcome::Plinko(p) => {
             if p.bucket == 0 || p.bucket == p.rows {
                 earn("edge_of_the_board", rec, &mut g);
+            }
+        }
+        Outcome::Domino(d) => {
+            if d.won && d.capicua {
+                earn("capicua", rec, &mut g);
+            }
+            if d.won && d.mult >= crate::casino::domino::MAX_MULT {
+                earn("all_the_way", rec, &mut g);
             }
         }
         Outcome::Reels(r) => match &r.bonus {

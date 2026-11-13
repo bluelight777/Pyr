@@ -301,6 +301,8 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
     let movable = caps.iter().any(|c| c == MOVE_CAP);
     let casino = if caps.iter().any(|c| c == PROPS_CAP) {
         pyr_poker::net::CASINO_PROPS
+    } else if caps.iter().any(|c| c == CASINO_01311_CAP) {
+        pyr_poker::net::CASINO_01311
     } else if caps.iter().any(|c| c == CASINO_0137_CAP) {
         pyr_poker::net::CASINO_0137
     } else if caps.iter().any(|c| c == CASINO_013_CAP) {

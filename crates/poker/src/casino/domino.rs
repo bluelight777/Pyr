@@ -401,6 +401,30 @@ impl Hand {
     }
 }
 
+/// A hand played out for a person, for their records (experience, achievements, the game's
+/// statistics): their stake (the ante times the stake's multiple) and their share.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Outcome {
+    pub kind: Kind,
+    pub ante: u64,
+    pub mult: u32,
+    /// How it ended (0.13.28's words: "¡Dominó!", "Tranque", "Folded to a double").
+    pub how: String,
+    pub won: bool,
+    pub wagered: u64,
+    pub paid: u64,
+    pub capicua: bool,
+    pub chiva: bool,
+    pub bonus_pct: u32,
+}
+
+impl Outcome {
+    /// The hand in a few words, for the big-win feed (0.13.28's: "¡Dominó! at ×2").
+    pub fn headline(&self) -> String {
+        if self.mult > 1 { format!("{} at ×{}", self.how, self.mult) } else { self.how.clone() }
+    }
+}
+
 /// What a hand pays: the pot (every player's ante times the stake), the house's part, and each
 /// winner's share (bots' shares stay with the house).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

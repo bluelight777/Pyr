@@ -418,9 +418,13 @@ pub const CASINO_013_CAP: &str = "casino_0_13";
 /// In `Login::caps`: this app knows 0.13.7's casino: Hard bots (an app without it is told a
 /// Hard bot is a Medium one, as 0.13.28's server tells it). 0.13.28's name (its apps send it).
 pub const CASINO_0137_CAP: &str = "casino_0_13_7";
-/// In `Login::caps`: this app knows 0.13.11's casino (Dominó Cubano). 0.13.28's apps send it;
-/// the rebuild doesn't yet.
+/// In `Login::caps`: this app knows 0.13.11's casino (Dominó Cubano). 0.13.28's name (its apps
+/// send it). Apps without it are never told of dominó tables, and asking about them gets
+/// "dominó tables need a newer Pyr".
 pub const CASINO_01311_CAP: &str = "casino_0_13_11";
+/// Dominó Cubano's tables (0.13.11), played as 0.13.28 plays them (its hands check the same
+/// either way), so its name.
+pub const DOMINO_FEATURE: &str = "casino_domino";
 /// Levels (0.13.5): a hundred in ten tiers, XP from playing, missions, the VIP Club (Ember Back,
 /// the weekly bonus): `RecordView`'s `tier`, `missions`, `ember_back` and the rest, and
 /// `ClaimEmber`/`ClaimWeekly`. 0.13.28's name for it, so its apps show them here too.

@@ -171,6 +171,8 @@ pub enum Play {
     Roulette,
     Baccarat,
     Craps,
+    /// A Dominó hand (0.13.11).
+    Domino,
     Poker,
 }
 
@@ -188,6 +190,8 @@ impl Play {
             Play::Roulette => (510, 40),
             Play::Baccarat => (370, 40),
             Play::Craps => (193, 15),
+            // (A hand of dominoes, at its stake: 6.8 XP at 500, as 0.13.28 gives.)
+            Play::Domino => (550, 50),
             Play::Poker => return 80,
         };
         let l = (bet.max(1) as f64).log10();
@@ -203,6 +207,8 @@ impl Play {
             Play::Roulette => 270,
             Play::Baccarat => 106,
             Play::Craps => 140,
+            // (The house's 3% of a pot.)
+            Play::Domino => 300,
             // (At poker, Ember Back is a share of the rake paid.)
             Play::Poker => 0,
         }

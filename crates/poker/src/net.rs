@@ -241,6 +241,24 @@ pub enum ToServer {
         ready: bool,
     },
     RlBot { table: u64, seat: u8, add: bool },
+    /// Dominó tables (0.13.11; apps send `CASINO_01311_CAP`): the list; follow one (or stop); sit
+    /// in a seat or leave it (in a hand: after it); in for the next hand, putting up `chips` (the
+    /// ante to eight times it: what covers doubles) with my Pyr's seed; a move; a bot in or out of
+    /// an empty seat; a new table (Pairs or Solo, at one of the antes). 0.13.28's words.
+    DomTables,
+    DomWatch { table: u64 },
+    DomUnwatch { table: u64 },
+    DomSit { table: u64, seat: u8 },
+    DomLeave { table: u64 },
+    DomReady {
+        table: u64,
+        chips: u64,
+        #[serde(with = "hex32")]
+        seed: [u8; 32],
+    },
+    DomMove { table: u64, mv: crate::casino::domino::Move },
+    DomBot { table: u64, seat: u8, add: bool },
+    DomNew { kind: crate::casino::domino::Kind, ante: u64 },
     /// The Bonfire (0.12.0 servers): how it stands; light it now (the server's owner).
     Bonfire,
     BonfireLight,
@@ -360,6 +378,8 @@ pub enum TableGame {
     Baccarat,
     /// (0.13.0)
     Roulette,
+    /// Dominó Cubano's (0.13.11).
+    Domino,
 }
 
 /// The emoji an older Pyr shows for one of 0.12.0's emote stickers (`e:<name>`): it'd show
@@ -611,6 +631,9 @@ pub enum ToApp {
     /// Blackjack tables (0.12.0): the list, and one I follow as it is now.
     BjTables { tables: Vec<BjSummary> },
     Bj { view: BjView },
+    /// Dominó tables (0.13.11): the list, and one I follow as it is now.
+    DomTables { tables: Vec<DomSummary> },
+    Dom { view: DomView },
     /// Craps tables (0.12.0): the list, and one I follow as it is now.
     CrapsTables { tables: Vec<CrapsSummary> },
     Craps { view: CrapsView },
@@ -681,6 +704,8 @@ pub const CASINO_012: u8 = 12;
 pub const CASINO_013: u8 = 13;
 /// An app that knows 0.13.7's casino (`CASINO_0137_CAP`): Hard bots.
 pub const CASINO_0137: u8 = 20;
+/// An app that knows 0.13.11's casino (`CASINO_01311_CAP`): Dominó Cubano.
+pub const CASINO_01311: u8 = 30;
 /// An app that also reads prop bets (`PROPS_CAP`, the rebuild's): above every 0.13 level (an
 /// app that says it knows everything that came before).
 pub const CASINO_PROPS: u8 = 100;
@@ -692,6 +717,10 @@ impl ToApp {
         if self.is_props() && casino < CASINO_PROPS {
             return None;
         }
+        // (Dominó's tables only to apps that know them.)
+        if casino < CASINO_01311 && self.is_domino() {
+            return None;
+        }
         // (Before 0.13.7 there were no Hard bots: a Medium one, as 0.13.28's server says.)
         let m = if casino < CASINO_0137 { self.without_hard_bots() } else { self };
         match casino {
@@ -699,6 +728,11 @@ impl ToApp {
             CASINO_012 => m.for_012_app(),
             _ => m.for_older_app(),
         }
+    }
+
+    /// About Dominó's tables (0.13.11): its lists and tables, an emote or an invite at one.
+    pub fn is_domino(&self) -> bool {
+        matches!(self, ToApp::DomTables { .. } | ToApp::Dom { .. } | ToApp::GameEmote { game: TableGame::Domino, .. } | ToApp::TableInvite { table: TableRef::Domino(_), .. })
     }
 
     /// Hard bots told as Medium ones (their looks' level as it is), for an app from before
@@ -1366,6 +1400,121 @@ pub struct BjView {
     pub round: Option<crate::casino::bjtable::RoundView>,
     pub last: Option<BjReveal>,
     pub my_seat: Option<u8>,
+}
+
+/// A dominó table, in the list.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DomSummary {
+    pub id: u64,
+    pub name: String,
+    pub kind: crate::casino::domino::Kind,
+    pub ante: u64,
+    pub people: usize,
+    pub bots: usize,
+    /// A hand being played.
+    pub playing: bool,
+}
+
+/// Where a dominó table's hand has got to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DomStage {
+    /// Nobody (no person) ready.
+    Waiting,
+    /// The next hand's coming: a moment once everyone's in, longer for those not in yet.
+    Gathering,
+    Playing,
+    /// The hand's over: its result on the table for a moment.
+    Settled,
+}
+
+/// Someone at a dominó table: in for the next hand (`ready`), and what they've put up.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DomSeatView {
+    pub player: String,
+    pub name: String,
+    pub bot: bool,
+    pub level: u32,
+    pub frame: String,
+    pub ready: bool,
+    pub escrow: u64,
+}
+
+/// A hand as someone at the table sees it: the line, how many each holds (by place in
+/// `seats`), my own tiles (`mine`) and what I may do; everyone's at the end (`shown`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DomHandView {
+    pub kind: crate::casino::domino::Kind,
+    pub seats: Vec<u8>,
+    pub counts: Vec<u8>,
+    /// What's left to draw from, and whether anyone draws (Solo).
+    pub pool: usize,
+    pub draws: bool,
+    pub chain: Vec<crate::casino::domino::Tile>,
+    pub to_act: Option<u8>,
+    pub mult: u32,
+    pub cube: Option<u8>,
+    pub offer: Option<u8>,
+    pub laid: Vec<u8>,
+    pub last: Option<(u8, crate::casino::domino::Move)>,
+    pub moves: usize,
+    pub mine: Vec<crate::casino::domino::Tile>,
+    pub shown: Vec<Vec<crate::casino::domino::Tile>>,
+    pub over: Option<crate::casino::domino::Over>,
+    pub allowed: Vec<crate::casino::domino::Move>,
+    /// Where the first tile laid is in the line.
+    pub lead: usize,
+}
+
+/// A finished hand's seeds and moves, for everyone's Pyr to play it again.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DomRecord {
+    pub round: u64,
+    #[serde(with = "hex32")]
+    pub commit: [u8; 32],
+    #[serde(with = "hex32")]
+    pub house: [u8; 32],
+    /// The people's seeds by seat (hex).
+    pub seeds: Vec<(u8, String)>,
+    pub kind: crate::casino::domino::Kind,
+    pub seats: Vec<u8>,
+    pub moves: Vec<(u8, crate::casino::domino::Move)>,
+    pub over: crate::casino::domino::Over,
+}
+
+/// What a finished hand paid: how it ended (0.13.28's words), who won (seats), the pot, the
+/// house's part, the bonus (a Capicúa, a Chiva), the stake, each seat's share.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DomResult {
+    pub how: String,
+    pub winners: Vec<u8>,
+    pub pot: u64,
+    pub rake: u64,
+    pub bonus_pct: u32,
+    pub mult: u32,
+    pub paid: Vec<(u8, u64)>,
+}
+
+/// A dominó table as someone there sees it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DomView {
+    pub id: u64,
+    pub name: String,
+    pub kind: crate::casino::domino::Kind,
+    pub ante: u64,
+    pub seats: Vec<Option<DomSeatView>>,
+    pub stage: DomStage,
+    pub ms_left: u64,
+    pub round_no: u64,
+    /// The house's fingerprint for the next hand (or this one).
+    #[serde(with = "hex32")]
+    pub commit: [u8; 32],
+    pub hand: Option<DomHandView>,
+    pub last: Option<DomRecord>,
+    pub result: Option<DomResult>,
+    pub my_seat: Option<u8>,
+    /// How far the stake can go this hand (the least anyone in it covered); 8 between hands.
+    pub cap: u32,
 }
 
 /// A craps table, in the list.
