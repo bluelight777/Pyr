@@ -543,8 +543,11 @@ How (decided while starting it):
         pentatonic, each sound's file and loudness as heard (the free spins, the big wins, Ember
         Respins, the dragon growing, All or Nothing). Plinko's pegs and buckets are 0.13.0's own
         helpers as 0.13.28 used them, sample for sample (a peg's pitch by its row, a bucket's by
-        its place). Not heard, so by the rule: the Bomb Pot's wheel, fuse and bang, the Bonfire's
-        draw, Ember Dragon's big spin win and jackpots, a slot's All or Nothing win.
+        its place). The rebuild taken apart the same way at dice, Keno, Pyr Sevens and Plinko: the
+        same files at the same gains, pitches and places. Not heard, so by the rule: the Bomb
+        Pot's wheel, fuse and bang, the Bonfire's draw, Ember Dragon's big spin win and
+        jackpots, a slot's All or Nothing win. Not checked: whether the Remastered machines'
+        reel stops climb too (0.13.28's machines wouldn't spin here today).
   - [x] Staff titles on seats (0.13.4/0.13.6), as 0.13.28's (`measured/tablefeatures.md`): the
         seat's `badge` (`owner`, `game_master`, `ambassador`, none when hidden), the server
         sending it (with the MMRs) and `hide_title` (a change shows at once); "Show my title" in
