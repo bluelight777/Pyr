@@ -269,8 +269,12 @@ impl PyrApp {
                 let sec = left.ceil() as u64;
                 if !last.is_some_and(|c| c.2 <= sec) {
                     if !(mine && sec == 5) {
-                        // (Three semitones higher in a time bank, as 0.13.28's.)
-                        cues.push((if t.in_bank { Cue::BankTick } else { Cue::Tick }, pan(cs), vol, 0.0));
+                        // 0.13.28 ticks a turn's last seconds at one of two pitches, three
+                        // semitones apart, and its time bank's at the other; which one a turn
+                        // starts on followed nothing watched (high in 8 of 11 turns,
+                        // `measured/tablesounds.md`), so here it's a toss, one per turn.
+                        let toss = (h ^ (t.clock_events as u64).wrapping_mul(0x9E37_79B9) ^ (cs as u64) << 7).wrapping_mul(0x2545_F491_4F6C_DD1D) >> 63 == 1;
+                        cues.push((if toss != t.in_bank { Cue::TickUp } else { Cue::Tick }, pan(cs), vol, 0.0));
                     }
                     self.poker.clock_heard = Some((h, n, sec, t.in_bank));
                 }

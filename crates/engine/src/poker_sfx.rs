@@ -80,9 +80,9 @@ pub enum Cue {
     Hurry,
     /// A second going by in someone's last five.
     Tick,
-    /// A second going by in someone's time bank's last five: the tick three semitones higher
-    /// (0.13.28's).
-    BankTick,
+    /// The tick three semitones higher: 0.13.28 ticks a turn's last seconds in one of the two,
+    /// and its time bank's in the other (see the table's sounds).
+    TickUp,
     /// Someone's time ran out and their time bank started.
     TimeBank,
     /// Someone's time (and bank) ran out: folded (or checked) for them.
@@ -228,8 +228,9 @@ fn table_sound(c: Cue) -> Option<Vec<f32>> {
         Cue::Win => t::win(&mut rng),
         Cue::Hurry => t::hurry(),
         Cue::Tick => t::tick(1.0, &mut rng),
-        Cue::BankTick => t::tick(1.18, &mut rng),
+        Cue::TickUp => t::tick(1.18, &mut rng),
         Cue::TimeBank => t::time_bank(),
+        Cue::TimeOut => t::time_out(&mut rng),
         _ => return None,
     };
     let peak = o.iter().fold(0.0f32, |m, x| m.max(x.abs()));
@@ -253,7 +254,6 @@ pub fn render_mono(c: Cue) -> Vec<f32> {
         return crate::bands::render_up(i, up, 0.0).chunks(2).map(|x| (x[0] + x[1]) * 0.5).collect();
     }
     let len = match c {
-        Cue::TimeOut => ms(800.0),
         Cue::ReelSpin => ms(650.0),
         Cue::ReelStop => ms(160.0),
         Cue::WinSmall => ms(520.0),
@@ -270,7 +270,7 @@ pub fn render_mono(c: Cue) -> Vec<f32> {
         Cue::Peg => ms(150.0),
         Cue::Bucket => ms(360.0),
         // (Made in `table_sfx`, or played from its file, above.)
-        Cue::Deal | Cue::Flip | Cue::Chips | Cue::Check | Cue::Fold | Cue::AllIn | Cue::Pot | Cue::Turn | Cue::Win | Cue::Hurry | Cue::Tick | Cue::BankTick | Cue::TimeBank | Cue::Band(_) | Cue::BandUp(..) => 0,
+        Cue::Deal | Cue::Flip | Cue::Chips | Cue::Check | Cue::Fold | Cue::AllIn | Cue::Pot | Cue::Turn | Cue::Win | Cue::Hurry | Cue::Tick | Cue::TickUp | Cue::TimeBank | Cue::TimeOut | Cue::Band(_) | Cue::BandUp(..) => 0,
     };
     let mut o = vec![0.0f32; len];
     match c {
@@ -447,14 +447,7 @@ pub fn render_mono(c: Cue) -> Vec<f32> {
                 *x += thud * 0.85 + roar + crackle;
             }
         }
-        // Out of time: two knocks and a falling tone.
-        Cue::TimeOut => {
-            knock(&mut o, 0, 0.75);
-            knock(&mut o, ms(120.0), 0.75);
-            bell(&mut o, ms(230.0), 659.25, 450.0, 0.15);
-            bell(&mut o, ms(380.0), 440.0, 420.0, 0.15);
-        }
-        Cue::Deal | Cue::Flip | Cue::Chips | Cue::Check | Cue::Fold | Cue::AllIn | Cue::Pot | Cue::Turn | Cue::Win | Cue::Hurry | Cue::Tick | Cue::BankTick | Cue::TimeBank | Cue::Band(_) | Cue::BandUp(..) => {}
+        Cue::Deal | Cue::Flip | Cue::Chips | Cue::Check | Cue::Fold | Cue::AllIn | Cue::Pot | Cue::Turn | Cue::Win | Cue::Hurry | Cue::Tick | Cue::TickUp | Cue::TimeBank | Cue::TimeOut | Cue::Band(_) | Cue::BandUp(..) => {}
     }
     // Never past full scale.
     let peak = o.iter().fold(0.0f32, |m, x| m.max(x.abs()));
@@ -485,7 +478,7 @@ mod tests {
 
     #[test]
     fn every_sound_is_there_and_never_clips() {
-        for c in [Cue::Deal, Cue::Flip, Cue::Chips, Cue::Check, Cue::Fold, Cue::AllIn, Cue::Pot, Cue::Turn, Cue::Win, Cue::Hurry, Cue::Tick, Cue::BankTick, Cue::TimeBank, Cue::TimeOut, Cue::ReelSpin, Cue::ReelStop, Cue::WinSmall, Cue::WinBig, Cue::Jackpot, Cue::BallRoll, Cue::BallDrop, Cue::DiceRoll, Cue::KenoBall, Cue::Coin, Cue::Wheel, Cue::Fuse, Cue::Boom, Cue::Peg, Cue::Bucket] {
+        for c in [Cue::Deal, Cue::Flip, Cue::Chips, Cue::Check, Cue::Fold, Cue::AllIn, Cue::Pot, Cue::Turn, Cue::Win, Cue::Hurry, Cue::Tick, Cue::TickUp, Cue::TimeBank, Cue::TimeOut, Cue::ReelSpin, Cue::ReelStop, Cue::WinSmall, Cue::WinBig, Cue::Jackpot, Cue::BallRoll, Cue::BallDrop, Cue::DiceRoll, Cue::KenoBall, Cue::Coin, Cue::Wheel, Cue::Fuse, Cue::Boom, Cue::Peg, Cue::Bucket] {
             let s = render(c, 0.3);
             assert!(s.len() > 2000, "{c:?}");
             let peak = s.iter().fold(0.0f32, |m, x| m.max(x.abs()));
@@ -496,7 +489,7 @@ mod tests {
 
     #[test]
     fn the_tables_sounds_are_new_each_time_and_its_bells_the_same() {
-        for c in [Cue::Chips, Cue::Check, Cue::Fold, Cue::Deal, Cue::Flip, Cue::Pot, Cue::AllIn, Cue::Win, Cue::Tick, Cue::BankTick] {
+        for c in [Cue::Chips, Cue::Check, Cue::Fold, Cue::Deal, Cue::Flip, Cue::Pot, Cue::AllIn, Cue::Win, Cue::Tick, Cue::TickUp] {
             let (a, b) = (render_mono(c), render_mono(c));
             assert!(a != b, "{c:?}");
             assert!(a.iter().all(|x| x.is_finite() && x.abs() <= 0.9), "{c:?}");

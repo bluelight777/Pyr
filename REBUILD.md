@@ -525,11 +525,13 @@ How (decided while starting it):
         at 0.13.0's cue volumes, which 0.13.28 keeps). The table's cues change everywhere they're
         used (roulette's chips are these chips on 0.13.28 too). As 0.13.28: the blinds' chips 0.1 s
         after the deal, an action's sound 40 ms after the board's card it brings, a time bank's
-        ticks three semitones up (`Cue::BankTick`). Checked side by side: both apps watching the
+        a turn's last seconds ticking at one of two pitches and its time bank's at the other
+        (`Cue::TickUp`; which one a turn starts on followed nothing watched, so it's a toss), and
+        Time out's new knocks and bells (E5, C#5). Checked side by side: both apps watching the
         same table, sound for sound (`work/ui/ab.py`): the same latency (57 and 60 ms) and within a
-        few dB in every band over a sound's first 0.3 s. The Ember profile plays them the same. Not checked: rabbit and Bomb Pot
-        tables, others' clocks; Time out keeps 0.13.0's sound (0.13.28 played none:
-        the fold comes with the deadline).
+        few dB in every band over a sound's first 0.3 s; and both seated, running their clocks
+        out (the bells' levels by the same measure on both). The Ember profile plays them the same.
+        Not checked: rabbit and Bomb Pot tables.
   - [x] Staff titles on seats (0.13.4/0.13.6), as 0.13.28's (`measured/tablefeatures.md`): the
         seat's `badge` (`owner`, `game_master`, `ambassador`, none when hidden), the server
         sending it (with the MMRs) and `hide_title` (a change shows at once); "Show my title" in

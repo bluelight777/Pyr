@@ -385,24 +385,36 @@ pub fn win(rng: &mut Rng) -> Vec<f32> {
 /// My turn: two bell notes, A5 and then E6.
 pub fn turn() -> Vec<f32> {
     let mut o = vec![0.0; ms(1000.0)];
-    bell(&mut o, 0, 880.0, 0.267, 0.091, ms(700.0));
-    bell(&mut o, ms(118.0), 1318.5, 0.24, 0.103, ms(880.0));
+    bell(&mut o, 0, 880.0, 0.355, 0.091, ms(700.0));
+    bell(&mut o, ms(118.0), 1318.5, 0.276, 0.103, ms(880.0));
+    o
+}
+
+/// Someone's time (and bank) out, folded or checked for them: two knocks on the rail, then bells E5
+/// and C#5, falling.
+pub fn time_out(rng: &mut Rng) -> Vec<f32> {
+    let mut o = vec![0.0; ms(1000.0)];
+    let pitch = rng.range(0.97, 1.03);
+    knock(&mut o, 0, 1.16, pitch, rng);
+    knock(&mut o, ms(130.0), 1.16 * rng.range(0.7, 1.0), pitch * rng.range(0.98, 1.02), rng);
+    bell(&mut o, ms(245.0), 659.25, 0.239, 0.098, ms(600.0));
+    bell(&mut o, ms(394.0), 554.37, 0.275, 0.087, ms(600.0));
     o
 }
 
 /// My clock's last five seconds: one short high bell, A6.
 pub fn hurry() -> Vec<f32> {
     let mut o = vec![0.0; ms(400.0)];
-    bell(&mut o, 0, 1760.0, 0.242, 0.038, ms(380.0));
+    bell(&mut o, 0, 1760.0, 0.352, 0.038, ms(380.0));
     o
 }
 
 /// A time bank starting: B5, D#6 and B6, rising.
 pub fn time_bank() -> Vec<f32> {
     let mut o = vec![0.0; ms(900.0)];
-    bell(&mut o, 0, 987.77, 0.257, 0.091, ms(700.0));
-    bell(&mut o, ms(98.0), 1244.51, 0.227, 0.084, ms(700.0));
-    bell(&mut o, ms(199.0), 1975.53, 0.196, 0.087, ms(700.0));
+    bell(&mut o, 0, 987.77, 0.346, 0.091, ms(700.0));
+    bell(&mut o, ms(98.0), 1244.51, 0.281, 0.084, ms(700.0));
+    bell(&mut o, ms(199.0), 1975.53, 0.217, 0.087, ms(700.0));
     o
 }
 
