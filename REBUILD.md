@@ -515,10 +515,20 @@ How (decided while starting it):
       close tables (0.13.4/24), add chips and top-up (0.13.22), top bar (0.13.22), titles and
       badges (0.13.4/6: GAME MASTER / OWNER on staff's seats, Title shown or hidden:
       `hide_title`, the record's field and request are in already), pre-action buttons (0.13.4),
-      slower wins (0.13.4), scaling (0.13.6), table sounds (0.13.6), the level badges' rings
+      slower wins (0.13.4), table sounds (0.13.6), the level badges' rings
       (green 50, gold 30, bronze 12…), the suits on bot faces and card pips (0.13.28's are one
       smooth shape each; the rebuild's are 0.13.0's circles and polygons), the Shark's crown
       and star (`measured/newtable.md`)
+  - [x] The table grows and shrinks with the window (0.13.2/0.13.6), as 0.13.28's, measured at 55
+        window sizes (`measured/scaling.md`): k = (width/1150).min((height − 180)/620), 0.72 to
+        1.6; the bar under the table 124k, the room for the seats 78k; pictures, plates, cards,
+        badges, pills, the pot, the meter, the buttons and their words all k times (corner
+        radii, shadows and the 16 to the window's edges not). 0.13.28's action bar: Fold 144,
+        Call and Raise 184, 58 high, 12 apart, the words 20 / 17.5 / 15.5; the amount row 28
+        high (presets 56 wide, 60 apart); my cards 104 wide (0.13.0's 96), the meter under them
+        kept 7 over the bar; the board's cards a·0.22 to 150. Diffed with 0.13.28's at 1100×700,
+        1280×800, 1600×800, 1600×1000 and 2560×1440: the felt, seats, plates, cards, meter and
+        buttons fall on 0.13.28's pixels (what differs is the hand: cards, names, faces).
   - [x] New table (0.13.4/0.13.22) as 0.13.28's, measured: the High roller blinds (500/1K to
         25K/50K), a picture of the table with each seat's bot (who and how good, × to take one
         away, Fill the seats, Clear), and Which bot? (How good, then Anyone or one of the 20 by

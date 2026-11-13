@@ -62,6 +62,16 @@ struct Layout {
     n: usize,
     /// The seat drawn at the bottom (mine, when I'm sitting).
     bottom: usize,
+    /// How big everything at the table is drawn (1 in a window of 1600 by 800; see `scale`).
+    k: f32,
+}
+
+/// How big the table's pictures, plates, cards and buttons are drawn for a table `w` wide (the
+/// hand log aside) in a page `h` high: the whole table grows with the window (0.13.2) and shrinks
+/// with it, the buttons too (0.13.6), from 0.72 to 1.6 times. 0.13.28's, measured at 55 window
+/// sizes (`measured/scaling.md`).
+fn scale(w: f32, h: f32) -> f32 {
+    (w / 1150.0).min((h - 180.0) / 620.0).clamp(0.72, 1.6)
 }
 
 impl Layout {
@@ -102,13 +112,14 @@ impl PyrApp {
         // The bar along the top: the table, what it plays, the checks, and leaving.
         let top = Rect::from_min_size(full.min, vec2(full.width(), 50.0));
         let log_w = if self.poker.log_open { 300.0 } else { 0.0 };
-        let bar_h = 124.0;
+        let k = scale(full.width() - log_w, full.height());
+        let bar_h = 124.0 * k;
         let area = Rect::from_min_max(pos2(full.left(), top.bottom()), pos2(full.right() - log_w, full.bottom() - bar_h));
         // As big as fits, leaving room for the seats round it.
-        let b = ((area.height() / 2.0 - 78.0) / 1.2).max(90.0);
+        let b = ((area.height() / 2.0 - 78.0 * k) / 1.2).max(90.0);
         let a = (area.width() * 0.37).min(b / 0.47).max(180.0);
         let b = b.min(a * 0.5);
-        let lay = Layout { c: area.center() + vec2(0.0, -4.0), a, b, n: v.seats.len(), bottom: v.my_seat.unwrap_or(0) };
+        let lay = Layout { c: area.center() + vec2(0.0, -4.0), a, b, n: v.seats.len(), bottom: v.my_seat.unwrap_or(0), k };
         let felt_id = me.as_ref().map(|m| m.felt.clone()).unwrap_or_default();
         let (lamp, _) = super::felt::cloth(&felt_id);
         super::felt::room(&p, full, lay.c, mix(Color32::from_rgb(0x0b, 0x0a, 0x0c), lamp, 0.22));
@@ -131,18 +142,18 @@ impl PyrApp {
             let s0 = lay.seat(bt);
             let dir = (lay.c - s0).normalized();
             let side = vec2(-dir.y, dir.x);
-            let at = s0 + dir * (lay.b * 0.42) + side * 46.0;
-            p.circle_filled(at + vec2(0.0, 2.0), 13.0, Color32::from_black_alpha(90));
-            p.circle_filled(at, 13.0, Color32::from_rgb(0xf6, 0xf3, 0xec));
-            p.circle_stroke(at, 10.0, Stroke::new(1.0f32, Color32::from_rgb(0xc8, 0xc0, 0xb0)));
-            p.text(at, Align2::CENTER_CENTER, "D", theme::bold_font(13.0), Color32::from_rgb(0x22, 0x1c, 0x18));
+            let at = s0 + dir * (lay.b * 0.42) + side * 46.0 * k;
+            p.circle_filled(at + vec2(0.0, 2.0 * k), 13.0 * k, Color32::from_black_alpha(90));
+            p.circle_filled(at, 13.0 * k, Color32::from_rgb(0xf6, 0xf3, 0xec));
+            p.circle_stroke(at, 10.0 * k, Stroke::new(1.0f32, Color32::from_rgb(0xc8, 0xc0, 0xb0)));
+            p.text(at, Align2::CENTER_CENTER, "D", theme::bold_font(13.0 * k), Color32::from_rgb(0x22, 0x1c, 0x18));
         }
         self.winners(&p, &lay, t);
         // My cards, big, and how my hand stands.
-        self.my_hand(ui, &p, &lay, t);
+        self.my_hand(ui, &p, &lay, t, full.bottom() - bar_h);
         // The bottom: my turn's buttons, or what to do when it comes.
         let bar = Rect::from_min_max(pos2(full.left(), full.bottom() - bar_h), pos2(full.right() - log_w, full.bottom()));
-        self.action_bar(ui, s, t, bar);
+        self.action_bar(ui, s, t, bar, k);
         if self.poker.log_open {
             self.hand_log(ui, t, Rect::from_min_max(pos2(full.right() - log_w, top.bottom()), full.max));
         }
@@ -159,7 +170,7 @@ impl PyrApp {
             && s.poker.tourney.get(&tid).is_some_and(|tv| tv.rules.bounty.is_some())
         {
             let top = super::felt::on_oval(lay.c, lay.a + 16.0, lay.b + 14.0, 1.5 * std::f32::consts::PI);
-            self.bounty_overlay(ui, s, tid, top, 1.0);
+            self.bounty_overlay(ui, s, tid, top, k);
         }
         self.table_sounds(&lay, t);
         self.sit_dialogs(ui.ctx(), s, t);
@@ -170,9 +181,9 @@ impl PyrApp {
             let k = ago(at);
             if k < 3.0 {
                 let alpha = (1.0 - ((k - 2.4) / 0.6).max(0.0)).clamp(0.0, 1.0);
-                let r = Rect::from_center_size(lay.c + vec2(0.0, -lay.b * 0.9 - 10.0 * ease(k * 2.0)), vec2(260.0, 52.0));
+                let r = Rect::from_center_size(lay.c + vec2(0.0, -lay.b * 0.9 - 10.0 * lay.k * ease(k * 2.0)), vec2(260.0, 52.0) * lay.k);
                 p.rect_filled(r, theme::r(26), theme::EMBER().gamma_multiply(alpha));
-                p.text(r.center(), Align2::CENTER_CENTER, text, theme::bold_font(22.0), theme::on_ember().gamma_multiply(alpha));
+                p.text(r.center(), Align2::CENTER_CENTER, text, theme::bold_font(22.0 * lay.k), theme::on_ember().gamma_multiply(alpha));
             } else {
                 self.poker.banner = None;
             }
@@ -501,8 +512,9 @@ impl PyrApp {
     fn board_and_pot(&self, p: &egui::Painter, lay: &Layout, t: &TableLive) {
         let v = &t.view;
         let four = self.poker.four_color;
-        // Big enough to read from across a room, or with tired eyes.
-        let cw = (lay.a * 0.21).clamp(60.0, 124.0);
+        // Big enough to read from across a room, or with tired eyes (0.13.28's: a bigger share of
+        // the table, and up to 150 across).
+        let cw = (lay.a * 0.22).clamp(60.0, 150.0);
         let ch = cw * 1.4;
         let gap = cw * 0.14;
         let total = 5.0 * cw + 4.0 * gap;
@@ -531,17 +543,17 @@ impl PyrApp {
         }
         // A prize box, for this hand's winner.
         if let Some(prize) = &v.prize {
-            super::staff::paint_prize(p, lay.pot() + vec2(-220.0, -14.0), prize, p.ctx().input(|i| i.time) as f32);
+            super::staff::paint_prize(p, lay.pot() + vec2(-220.0, -14.0) * lay.k, prize, p.ctx().input(|i| i.time) as f32);
         }
         // The pot: chips and how much (with side pots once there's more than one).
         let in_front: u64 = v.seats.iter().flatten().map(|s| s.bet).sum();
         let middle = v.pot.saturating_sub(in_front);
         if middle > 0 && t.ended_at.is_none() {
-            let at = lay.pot();
-            cards::pile(p, at + vec2(-40.0, 8.0), middle, 9.0, "");
-            let label = Rect::from_center_size(at + vec2(36.0, 0.0), vec2(150.0, 32.0));
+            let (at, k) = (lay.pot(), lay.k);
+            cards::pile(p, at + vec2(-40.0, 8.0) * k, middle, 9.0 * k, "");
+            let label = Rect::from_center_size(at + vec2(36.0, 0.0) * k, vec2(150.0, 32.0) * k);
             p.rect_filled(label, theme::r(16), Color32::from_black_alpha(140));
-            p.text(label.center(), Align2::CENTER_CENTER, format!("Pot {}", chips_text(v.pot)), theme::bold_font(17.0), Color32::from_rgb(0xff, 0xe2, 0x9a));
+            p.text(label.center(), Align2::CENTER_CENTER, format!("Pot {}", chips_text(v.pot)), theme::bold_font(17.0 * k), Color32::from_rgb(0xff, 0xe2, 0x9a));
         }
     }
 
@@ -549,25 +561,27 @@ impl PyrApp {
         let v = &t.view;
         let p = ui.painter().clone();
         let at = lay.seat(i);
+        // (Everything here at the table's size.)
+        let k = lay.k;
         let Some(seat) = &v.seats[i] else {
             // An empty seat: sit here, or (whoever made the table) a bot.
-            let r = Rect::from_center_size(at, vec2(64.0, 64.0));
+            let r = Rect::from_center_size(at, vec2(64.0, 64.0) * k);
             let resp = ui.interact(r, ui.id().with(("empty", i)), Sense::click());
             let col = if resp.hovered() && v.tourney.is_none() { theme::TEXT() } else { theme::DIM() };
-            p.circle_filled(at, 30.0, Color32::from_black_alpha(80));
-            dashed_circle(&p, at, 30.0, Stroke::new(1.5f32, col));
+            p.circle_filled(at, 30.0 * k, Color32::from_black_alpha(80));
+            dashed_circle(&p, at, 30.0 * k, Stroke::new(1.5f32, col));
             if v.tourney.is_some() {
                 // A tournament seats people itself.
                 return;
             }
             if v.my_seat.is_none() {
-                p.text(at, Align2::CENTER_CENTER, "Sit", theme::bold_font(14.0), col);
+                p.text(at, Align2::CENTER_CENTER, "Sit", theme::bold_font(14.0 * k), col);
                 if resp.on_hover_text("Sit here").clicked() {
                     let chips = (v.rules.big_blind * 100).clamp(v.rules.big_blind.saturating_mul(v.buy_in.min_bb), v.rules.big_blind.saturating_mul(v.buy_in.max_bb));
                     self.poker.buy_in = Some((v.id, i, chips));
                 }
             } else {
-                crate::icons::plus(&p, Rect::from_center_size(at, vec2(16.0, 16.0)), col, 1.6);
+                crate::icons::plus(&p, Rect::from_center_size(at, vec2(16.0, 16.0) * k), col, 1.6);
                 let mine = s.me.as_ref().is_some_and(|m| m.user_id == v.owner);
                 let resp = resp.on_hover_text(if mine { "Add a bot here" } else { "An empty seat" });
                 // Which bot (0.13.4): the Which bot? window, as at a new table.
@@ -580,20 +594,20 @@ impl PyrApp {
         let out = seat.folded || seat.sitting_out || (!seat.in_hand && v.hand.is_some());
         let fade: f32 = if out { 0.45 } else { 1.0 };
         // (Big enough to see who's who across the table.)
-        let r0 = 44.0;
+        let r0 = 44.0 * k;
         // Which way the middle is (cards and bets go that way).
         let side = if (lay.c.x - at.x).abs() < 40.0 { 1.0 } else { (lay.c.x - at.x).signum() };
         // The clock round whoever's turn it is, and a glow.
         let turn = v.to_act == Some(i);
         if turn {
-            for k in 0..6 {
-                p.circle_filled(at, r0 + 6.0 + k as f32 * 3.0, theme::GLOW().gamma_multiply(0.05));
+            for g in 0..6 {
+                p.circle_filled(at, r0 + (6.0 + g as f32 * 3.0) * k, theme::GLOW().gamma_multiply(0.05));
             }
         }
         // The picture: theirs (friends' real faces), or a bot's.
-        p.circle_filled(at + vec2(0.0, 3.0), r0 + 4.0, Color32::from_black_alpha(120));
+        p.circle_filled(at + vec2(0.0, 3.0 * k), r0 + 4.0 * k, Color32::from_black_alpha(120));
         let ring = frame_color(&seat.frame).unwrap_or(Color32::from_rgb(0x2a, 0x26, 0x2c));
-        p.circle_filled(at, r0 + 3.5, ring.gamma_multiply(fade.max(0.6)));
+        p.circle_filled(at, r0 + 3.5 * k, ring.gamma_multiply(fade.max(0.6)));
         match seat.bot {
             Some(level) => bot_face(&p, at, r0, &seat.name, level),
             None => {
@@ -611,35 +625,35 @@ impl PyrApp {
             let left = deadline.saturating_duration_since(Instant::now()).as_secs_f32();
             let frac = (left / total.as_secs_f32()).clamp(0.0, 1.0);
             let col = if frac > 0.5 { Color32::from_rgb(0x5f, 0xd8, 0x7d) } else if frac > 0.2 { Color32::from_rgb(0xf5, 0xc4, 0x51) } else { Color32::from_rgb(0xef, 0x4b, 0x4b) };
-            p.circle_stroke(at, r0 + 3.0, Stroke::new(5.0f32, Color32::from_black_alpha(160)));
-            arc(&p, at, r0 + 3.0, frac, Stroke::new(5.0f32, col));
+            p.circle_stroke(at, r0 + 3.0 * k, Stroke::new(5.0 * k, Color32::from_black_alpha(160)));
+            arc(&p, at, r0 + 3.0 * k, frac, Stroke::new(5.0 * k, col));
             // The last ten seconds, counted down big on their picture; and the time bank,
             // named above it.
             if left < 10.0 || t.in_bank {
                 let pulse = 0.85 + 0.15 * (left.fract() * std::f32::consts::TAU).cos();
-                p.circle_filled(at, r0 - 4.0, Color32::from_black_alpha(170));
-                p.text(at, Align2::CENTER_CENTER, format!("{}", left.ceil() as u64), theme::bold_font(34.0 * pulse.max(0.9)), col);
+                p.circle_filled(at, r0 - 4.0 * k, Color32::from_black_alpha(170));
+                p.text(at, Align2::CENTER_CENTER, format!("{}", left.ceil() as u64), theme::bold_font(34.0 * k * pulse.max(0.9)), col);
             }
             if t.in_bank {
-                let r = Rect::from_center_size(at + vec2(0.0, -r0 - 16.0), vec2(104.0, 24.0));
+                let r = Rect::from_center_size(at + vec2(0.0, -r0 - 16.0 * k), vec2(104.0, 24.0) * k);
                 p.rect_filled(r, theme::r(12), Color32::from_rgb(0x2a, 0x5a, 0xc8));
-                p.text(r.center(), Align2::CENTER_CENTER, "TIME BANK", theme::bold_font(12.5), Color32::WHITE);
+                p.text(r.center(), Align2::CENTER_CENTER, "TIME BANK", theme::bold_font(12.5 * k), Color32::WHITE);
             }
         } else if turn {
-            p.circle_stroke(at, r0 + 3.0, Stroke::new(2.5f32, theme::GLOW()));
+            p.circle_stroke(at, r0 + 3.0 * k, Stroke::new(2.5 * k, theme::GLOW()));
         }
         // Their cards: face down beside the picture, or shown over it at the showdown.
         if seat.in_hand && !seat.folded && Some(i) != v.my_seat {
-            let k = v.rules.hole_cards();
+            let n = v.rules.hole_cards();
             let dealt = deal_progress(t, i);
             let shown = !seat.cards.is_empty();
-            let cw = if shown { if k > 2 { 40.0 } else { 48.0 } } else { 32.0 };
+            let cw = if shown { if n > 2 { 40.0 } else { 48.0 } } else { 32.0 } * k;
             let ch = cw * 1.4;
             let spread = if shown { cw * 0.78 } else { cw * 0.42 };
-            let base = if shown { at + vec2(0.0, -14.0) } else { at + vec2(side * (r0 + 6.0), -10.0) };
-            for c in 0..k {
-                let off = (c as f32 - (k as f32 - 1.0) / 2.0) * spread;
-                let target = Rect::from_center_size(base + vec2(off, if shown { 0.0 } else { (c as f32 - (k as f32 - 1.0) / 2.0).abs() * 2.0 }), vec2(cw, ch));
+            let base = if shown { at + vec2(0.0, -14.0 * k) } else { at + vec2(side * (r0 + 6.0 * k), -10.0 * k) };
+            for c in 0..n {
+                let off = (c as f32 - (n as f32 - 1.0) / 2.0) * spread;
+                let target = Rect::from_center_size(base + vec2(off, if shown { 0.0 } else { (c as f32 - (n as f32 - 1.0) / 2.0).abs() * 2.0 * k }), vec2(cw, ch));
                 let prog = dealt.get(c).copied().unwrap_or(1.0);
                 if prog <= 0.0 {
                     continue;
@@ -652,13 +666,14 @@ impl PyrApp {
             }
         }
         // Name and chips on a plate under the picture.
-        let plate = Rect::from_center_size(at + vec2(0.0, r0 + 16.0), vec2(164.0, 50.0));
-        p.rect_filled(plate.translate(vec2(0.0, 3.0)), theme::r(25), Color32::from_black_alpha(110));
-        p.rect_filled(plate, theme::r(25), Color32::from_rgba_unmultiplied(0x12, 0x11, 0x16, 238));
-        p.rect_stroke(plate, theme::r(25), Stroke::new(1.0f32, if turn { theme::GLOW() } else { Color32::from_white_alpha(22) }), StrokeKind::Inside);
-        p.line_segment([plate.left_top() + vec2(18.0, 1.0), plate.right_top() + vec2(-18.0, 1.0)], Stroke::new(1.0f32, Color32::from_white_alpha(28)));
+        let plate = Rect::from_center_size(at + vec2(0.0, r0 + 16.0 * k), vec2(164.0, 50.0) * k);
+        let round = theme::r(25);
+        p.rect_filled(plate.translate(vec2(0.0, 3.0)), round, Color32::from_black_alpha(110));
+        p.rect_filled(plate, round, Color32::from_rgba_unmultiplied(0x12, 0x11, 0x16, 238));
+        p.rect_stroke(plate, round, Stroke::new(1.0f32, if turn { theme::GLOW() } else { Color32::from_white_alpha(22) }), StrokeKind::Inside);
+        p.line_segment([plate.left_top() + vec2(18.0 * k, 1.0), plate.right_top() + vec2(-18.0 * k, 1.0)], Stroke::new(1.0f32, Color32::from_white_alpha(28)));
         let name: String = seat.name.chars().take(15).collect();
-        p.text(plate.center() + vec2(0.0, -10.0), Align2::CENTER_CENTER, name, theme::bold_font(15.5), Color32::from_rgb(0xf2, 0xee, 0xe8).gamma_multiply(fade.max(0.7)));
+        p.text(plate.center() + vec2(0.0, -10.0 * k), Align2::CENTER_CENTER, name, theme::bold_font(15.5 * k), Color32::from_rgb(0xf2, 0xee, 0xe8).gamma_multiply(fade.max(0.7)));
         let (stack, stack_col) = if seat.sitting_out {
             ("Sitting out".to_string(), theme::MUTED())
         } else if seat.all_in && seat.stack == 0 {
@@ -666,38 +681,38 @@ impl PyrApp {
         } else {
             (chips_text(seat.stack), Color32::from_rgb(0xff, 0xd2, 0x5e))
         };
-        p.text(plate.center() + vec2(0.0, 11.0), Align2::CENTER_CENTER, stack, theme::bold_font(15.5), stack_col.gamma_multiply(fade.max(0.7)));
+        p.text(plate.center() + vec2(0.0, 11.0 * k), Align2::CENTER_CENTER, stack, theme::bold_font(15.5 * k), stack_col.gamma_multiply(fade.max(0.7)));
         // Level, on the picture's edge; and for bots, how good they are.
         let lv = at + vec2(-r0 * 0.8, -r0 * 0.6);
-        p.circle_filled(lv, 11.5, Color32::from_rgb(0x16, 0x14, 0x1a));
-        p.circle_stroke(lv, 11.5, Stroke::new(1.5f32, Color32::from_rgb(0xff, 0xc4, 0x4a).gamma_multiply(fade.max(0.6))));
-        p.text(lv, Align2::CENTER_CENTER, seat.level.to_string(), theme::bold_font(10.5), Color32::WHITE.gamma_multiply(fade.max(0.6)));
+        p.circle_filled(lv, 11.5 * k, Color32::from_rgb(0x16, 0x14, 0x1a));
+        p.circle_stroke(lv, 11.5 * k, Stroke::new(1.5 * k, Color32::from_rgb(0xff, 0xc4, 0x4a).gamma_multiply(fade.max(0.6))));
+        p.text(lv, Align2::CENTER_CENTER, seat.level.to_string(), theme::bold_font(10.5 * k), Color32::WHITE.gamma_multiply(fade.max(0.6)));
         if let Some(mmr) = seat.mmr {
             let tier = pyr_poker::rating::Tier::of(mmr as f64);
             let at_r = at + vec2(r0 * 0.8, -r0 * 0.6);
-            super::rank::emblem(&p, at_r, 11.0, tier);
-            let tip = ui.interact(Rect::from_center_size(at_r, vec2(24.0, 24.0)), ui.id().with(("mmr", i)), Sense::hover());
+            super::rank::emblem(&p, at_r, 11.0 * k, tier);
+            let tip = ui.interact(Rect::from_center_size(at_r, vec2(24.0, 24.0) * k), ui.id().with(("mmr", i)), Sense::hover());
             tip.on_hover_text(format!("{} · {} MMR", tier.name(), chips_text(mmr as u64)));
         }
         if let Some(level) = seat.bot {
             let (label, col) = level_tag(level);
-            let tag = Rect::from_center_size(plate.center_top() + vec2(0.0, -1.0), vec2(8.0 + 6.6 * label.len() as f32, 15.0));
+            let tag = Rect::from_center_size(plate.center_top() + vec2(0.0, -1.0 * k), vec2(8.0 + 6.6 * label.len() as f32, 15.0) * k);
             p.rect_filled(tag, theme::r(8), col.gamma_multiply(fade.max(0.6)));
-            p.text(tag.center(), Align2::CENTER_CENTER, label, theme::bold_font(9.5), Color32::WHITE);
+            p.text(tag.center(), Align2::CENTER_CENTER, label, theme::bold_font(9.5 * k), Color32::WHITE);
         }
         // Bounty Poker: the price on their head, on a pill at the plate's foot (0.13.6).
         if let Some(tv) = v.tourney.and_then(|tid| s.poker.tourney.get(&tid)).filter(|tv| tv.rules.bounty.is_some())
             && let Some(e) = tv.entrants.iter().find(|e| e.uid == seat.player && e.place.is_none())
         {
-            super::bounty::bounty_pill(&p, plate.center_bottom(), e.bounty, 1.0, 1.0);
+            super::bounty::bounty_pill(&p, plate.center_bottom(), e.bounty, k, 1.0);
         }
         // Their bet in front of them.
         if seat.bet > 0 {
             let b = lay.toward(i, 0.36) + vec2(side * 0.0, 0.0);
-            cards::pile(&p, b + vec2(-14.0, 6.0), seat.bet, 8.0, "");
-            let lr = Rect::from_min_size(b + vec2(4.0, -9.0), vec2(14.0 + 7.4 * chips_short(seat.bet).len() as f32, 18.0));
+            cards::pile(&p, b + vec2(-14.0, 6.0) * k, seat.bet, 8.0 * k, "");
+            let lr = Rect::from_min_size(b + vec2(4.0, -9.0) * k, vec2(14.0 + 7.4 * chips_short(seat.bet).len() as f32, 18.0) * k);
             p.rect_filled(lr, theme::r(9), Color32::from_black_alpha(120));
-            p.text(lr.center(), Align2::CENTER_CENTER, chips_short(seat.bet), theme::bold_font(12.0), Color32::from_rgb(0xff, 0xe9, 0xb0));
+            p.text(lr.center(), Align2::CENTER_CENTER, chips_short(seat.bet), theme::bold_font(12.0 * k), Color32::from_rgb(0xff, 0xe9, 0xb0));
         }
         // What they just did.
         if let Some((text, col, age)) = last_action(t, i)
@@ -705,10 +720,10 @@ impl PyrApp {
         {
             let alpha = (1.0 - (age - 1.6).max(0.0) / 0.6).clamp(0.0, 1.0);
             let pop = 0.85 + 0.15 * ease(age * 6.0);
-            let r = Rect::from_center_size(at + vec2(0.0, -r0 - 16.0 - 6.0 * ease(age * 4.0)), vec2((16.0 + 7.8 * text.len() as f32) * pop, 24.0 * pop));
+            let r = Rect::from_center_size(at + vec2(0.0, -r0 - (16.0 + 6.0 * ease(age * 4.0)) * k), vec2(16.0 + 7.8 * text.len() as f32, 24.0) * pop * k);
             p.rect_filled(r.translate(vec2(0.0, 2.0)), theme::r(12), Color32::from_black_alpha((100.0 * alpha) as u8));
             p.rect_filled(r, theme::r(12), col.gamma_multiply(alpha));
-            p.text(r.center(), Align2::CENTER_CENTER, text, theme::bold_font(12.5), Color32::WHITE.gamma_multiply(alpha));
+            p.text(r.center(), Align2::CENTER_CENTER, text, theme::bold_font(12.5 * k), Color32::WHITE.gamma_multiply(alpha));
         }
         // The hand they showed, as it stands with the board so far (an all-in's board comes a
         // street at a time: "Pair of Aces", then "Two Pair", then "Flush, Ace high").
@@ -716,10 +731,10 @@ impl PyrApp {
             if seat.cards.len() >= 2 { describe_mine(v.rules.variant, &seat.cards, &v.board) } else { said }
         });
         if let Some(name) = shown_name.filter(|n| !n.is_empty()) {
-            let r = Rect::from_center_size(plate.center_bottom() + vec2(0.0, 12.0), vec2(14.0 + 6.6 * name.len() as f32, 20.0));
+            let r = Rect::from_center_size(plate.center_bottom() + vec2(0.0, 12.0 * k), vec2(14.0 + 6.6 * name.len() as f32, 20.0) * k);
             p.rect_filled(r, theme::r(10), Color32::from_rgba_unmultiplied(0x2a, 0x1e, 0x08, 235));
             p.rect_stroke(r, theme::r(10), Stroke::new(1.0f32, Color32::from_rgb(0xc8, 0x9a, 0x3a)), StrokeKind::Inside);
-            p.text(r.center(), Align2::CENTER_CENTER, name, theme::bold_font(11.5), Color32::from_rgb(0xff, 0xe2, 0x9a));
+            p.text(r.center(), Align2::CENTER_CENTER, name, theme::bold_font(11.5 * k), Color32::from_rgb(0xff, 0xe2, 0x9a));
         }
         // Click a person: their profile card (as anywhere in Pyr).
         let hit = ui.interact(Rect::from_center_size(at, vec2(2.0 * r0, 2.0 * r0)), ui.id().with(("seat", i)), Sense::click());
@@ -736,6 +751,7 @@ impl PyrApp {
 
     /// Chips flying to the winners, their glow and what they won.
     fn winners(&self, p: &egui::Painter, lay: &Layout, t: &TableLive) {
+        let z = lay.k;
         for (at, e) in &t.events {
             let Event::Won { seats, amounts, hand, .. } = e else { continue };
             let k = ago(*at);
@@ -747,26 +763,26 @@ impl PyrApp {
                 let fly = ease(k / 0.7);
                 let pos = lay.pot() + (to - lay.pot()) * fly;
                 if k < 0.9 {
-                    cards::pile(p, pos, *amt, 8.0, "");
+                    cards::pile(p, pos, *amt, 8.0 * z, "");
                 }
                 let glow = (1.0 - (k - 3.0).max(0.0)).clamp(0.0, 1.0);
-                p.circle_stroke(to, 38.0, Stroke::new(3.0f32, Color32::from_rgb(0xff, 0xd2, 0x4a).gamma_multiply(glow)));
-                let rise = to + vec2(0.0, -58.0 - 22.0 * ease(k / 1.5));
-                p.text(rise, Align2::CENTER_CENTER, format!("+{}", chips_text(*amt)), theme::bold_font(18.0), Color32::from_rgb(0xff, 0xd2, 0x4a).gamma_multiply(glow));
+                p.circle_stroke(to, 38.0 * z, Stroke::new(3.0 * z, Color32::from_rgb(0xff, 0xd2, 0x4a).gamma_multiply(glow)));
+                let rise = to + vec2(0.0, -58.0 - 22.0 * ease(k / 1.5)) * z;
+                p.text(rise, Align2::CENTER_CENTER, format!("+{}", chips_text(*amt)), theme::bold_font(18.0 * z), Color32::from_rgb(0xff, 0xd2, 0x4a).gamma_multiply(glow));
             }
             if let Some(h) = hand
                 && k < 3.5
             {
                 let alpha = (1.0 - (k - 2.8).max(0.0) / 0.7).clamp(0.0, 1.0);
-                let r = Rect::from_center_size(lay.c + vec2(0.0, lay.b * 0.42), vec2(30.0 + 10.0 * h.len() as f32, 36.0));
+                let r = Rect::from_center_size(lay.c + vec2(0.0, lay.b * 0.42), vec2(30.0 + 10.0 * h.len() as f32, 36.0) * z);
                 p.rect_filled(r, theme::r(18), Color32::from_rgba_unmultiplied(0x1a, 0x12, 0x0c, (220.0 * alpha) as u8));
-                p.rect_stroke(r, theme::r(18), Stroke::new(1.5f32, Color32::from_rgb(0xff, 0xd2, 0x4a).gamma_multiply(alpha)), StrokeKind::Inside);
-                p.text(r.center(), Align2::CENTER_CENTER, h, theme::bold_font(17.0), Color32::from_rgb(0xff, 0xe2, 0x9a).gamma_multiply(alpha));
+                p.rect_stroke(r, theme::r(18), Stroke::new(1.5 * z, Color32::from_rgb(0xff, 0xd2, 0x4a).gamma_multiply(alpha)), StrokeKind::Inside);
+                p.text(r.center(), Align2::CENTER_CENTER, h, theme::bold_font(17.0 * z), Color32::from_rgb(0xff, 0xe2, 0x9a).gamma_multiply(alpha));
             }
         }
     }
 
-    fn my_hand(&mut self, ui: &mut egui::Ui, p: &egui::Painter, lay: &Layout, t: &TableLive) {
+    fn my_hand(&mut self, ui: &mut egui::Ui, p: &egui::Painter, lay: &Layout, t: &TableLive, bar_top: f32) {
         let v = &t.view;
         let Some(me) = v.my_seat else { return };
         let Some(seat) = &v.seats[me] else { return };
@@ -774,19 +790,21 @@ impl PyrApp {
             return;
         }
         let k = seat.cards.len();
-        let cw = if k > 2 { 80.0 } else { 96.0 };
+        let z = lay.k;
+        // (0.13.28's: a little bigger than 0.13.0's.)
+        let (cw, spread) = (if k > 2 { 80.0 } else { 104.0 } * z, 0.72);
         let ch = cw * 1.4;
         // Beside my picture, leaning on the rail, big enough to read at a glance.
-        let base = lay.seat(me) + vec2(54.0 + cw * 0.5 + cw * 0.72 * (k as f32 - 1.0) / 2.0, -44.0);
+        let base = lay.seat(me) + vec2(54.0 * z + cw * 0.5 + cw * spread * (k as f32 - 1.0) / 2.0, -44.0 * z);
         let dealt = deal_progress(t, me);
         // Streamer mode: face down until I peek (Space held, or the pointer on them), so a stream
         // never shows my cards.
-        let span = Rect::from_center_size(base, vec2(cw * (1.0 + 0.72 * (k as f32 - 1.0)) + 12.0, ch + 12.0));
+        let span = Rect::from_center_size(base, vec2(cw * (1.0 + spread * (k as f32 - 1.0)) + 12.0 * z, ch + 12.0 * z));
         let streamer = self.streamer_mode();
         let peek = !streamer || crate::casino::keys::held(ui.ctx(), crate::casino::keys::Move::PokerPeek) || ui.rect_contains_pointer(span);
         for (c, card) in seat.cards.iter().enumerate() {
-            let off = (c as f32 - (k as f32 - 1.0) / 2.0) * cw * 0.72;
-            let tilt = (c as f32 - (k as f32 - 1.0) / 2.0) * 4.0;
+            let off = (c as f32 - (k as f32 - 1.0) / 2.0) * cw * spread;
+            let tilt = (c as f32 - (k as f32 - 1.0) / 2.0) * 4.0 * z;
             let target = Rect::from_center_size(base + vec2(off, tilt.abs()), vec2(cw, ch));
             let prog = dealt.get(c).copied().unwrap_or(1.0);
             if prog <= 0.0 {
@@ -803,15 +821,15 @@ impl PyrApp {
         }
         if !peek {
             // (Under my cards, clear of my name plate, like the hand's words.)
-            let cards_left = base.x - cw * 0.5 - cw * 0.72 * (k as f32 - 1.0) / 2.0;
-            let left = cards_left.max(lay.seat(me).x + 90.0);
-            let r = Rect::from_min_size(pos2(left, base.y + ch * 0.5 + 10.0), vec2(250.0, 28.0));
+            let cards_left = base.x - cw * 0.5 - cw * spread * (k as f32 - 1.0) / 2.0;
+            let left = cards_left.max(lay.seat(me).x + 90.0 * z);
+            let r = Rect::from_min_size(pos2(left, base.y + ch * 0.5 + 10.0 * z), vec2(250.0, 28.0) * z);
             p.rect_filled(r, theme::r(14), Color32::from_rgba_unmultiplied(0x14, 0x10, 0x0a, 225));
             let how = match crate::casino::keys::first_key(crate::casino::keys::Move::PokerPeek) {
                 Some(k) => format!("Streamer mode · hold {k} to peek"),
                 None => "Streamer mode · point at them to peek".to_string(),
             };
-            p.text(r.center(), Align2::CENTER_CENTER, how, theme::bold_font(12.5), Color32::from_rgb(0xff, 0xe2, 0x9a));
+            p.text(r.center(), Align2::CENTER_CENTER, how, theme::bold_font(12.5 * z), Color32::from_rgb(0xff, 0xe2, 0x9a));
             return;
         }
         // What I have now, and (if asked for) my chance of winning.
@@ -823,18 +841,19 @@ impl PyrApp {
         let live = v.seats.iter().flatten().filter(|s| s.in_hand && !s.folded).count().saturating_sub(1);
         let eq = if self.poker.hide_odds { None } else { self.chance(v.rules.variant, &seat.cards, &v.board, live, ui.ctx()) };
         // Under my cards, clear of the board and of my name plate.
-        let cards_left = base.x - cw * 0.5 - cw * 0.72 * (k as f32 - 1.0) / 2.0;
-        let left = cards_left.max(lay.seat(me).x + 90.0);
-        let top = base.y + ch * 0.5 + 10.0;
+        let cards_left = base.x - cw * 0.5 - cw * spread * (k as f32 - 1.0) / 2.0;
+        let left = cards_left.max(lay.seat(me).x + 90.0 * z);
+        // (Kept clear of the bar under the table: 0.13.28 lifts it to sit 7 over it.)
+        let top = (base.y + ch * 0.5 + 10.0 * z).min(bar_top - 7.0 - 72.0 * z);
         let Some(eq) = eq else {
             // Just my hand in words.
-            let r = Rect::from_min_size(pos2(left, top), vec2(22.0 + 8.6 * what.chars().count() as f32, 30.0));
+            let r = Rect::from_min_size(pos2(left, top), vec2(22.0 + 8.6 * what.chars().count() as f32, 30.0) * z);
             p.rect_filled(r, theme::r(15), Color32::from_rgba_unmultiplied(0x14, 0x10, 0x0a, 225));
             p.rect_stroke(r, theme::r(15), Stroke::new(1.0f32, Color32::from_rgb(0x8a, 0x6a, 0x2a)), StrokeKind::Inside);
-            p.text(r.center(), Align2::CENTER_CENTER, what, theme::bold_font(15.5), Color32::from_rgb(0xff, 0xe2, 0x9a));
+            p.text(r.center(), Align2::CENTER_CENTER, what, theme::bold_font(15.5 * z), Color32::from_rgb(0xff, 0xe2, 0x9a));
             return;
         };
-        meter(p, Rect::from_min_size(pos2(left, top), vec2(280.0, 72.0)), &what, eq, live);
+        meter(p, Rect::from_min_size(pos2(left, top), vec2(280.0, 72.0) * z), &what, eq, live, z);
     }
 
     /// My chance of winning this hand against everyone still in it (dealt out thousands of
@@ -871,7 +890,9 @@ impl PyrApp {
         self.poker.odds.as_ref().filter(|(k, _)| k.starts_with(&format!("{hole:?}"))).map(|(_, e)| *e)
     }
 
-    fn action_bar(&mut self, ui: &mut egui::Ui, s: &ServerView, t: &TableLive, bar: Rect) {
+    /// The bar under the table, `z` times its size (0.13.28's: bigger buttons than 0.13.0's, and
+    /// the table's size, 0.13.6, but always 16 from the window's edges).
+    fn action_bar(&mut self, ui: &mut egui::Ui, s: &ServerView, t: &TableLive, bar: Rect, z: f32) {
         let v = &t.view;
         let p = ui.painter().clone();
         let mut m = egui::Mesh::default();
@@ -938,20 +959,20 @@ impl PyrApp {
             let in_hand = seat.is_some_and(|s| s.in_hand && !s.folded) && v.to_act.is_some();
             if in_hand {
                 let opts = [(PreAction::CheckFold, "Check / Fold"), (PreAction::Check, "Check"), (PreAction::CallAny, "Call any")];
-                let mut x = right - 3.0 * 132.0;
+                let mut x = right - 3.0 * 132.0 * z;
                 for (pa, label) in opts {
-                    let r = Rect::from_min_size(pos2(x, bar.center().y - 20.0), vec2(124.0, 40.0));
-                    x += 132.0;
+                    let r = Rect::from_min_size(pos2(x, bar.center().y - 20.0 * z), vec2(124.0, 40.0) * z);
+                    x += 132.0 * z;
                     let on = self.poker.pre == pa;
                     let resp = ui.interact(r, ui.id().with(("pre", label)), Sense::click());
                     p.rect_filled(r, theme::r(10), if on { theme::EMBER().gamma_multiply(0.85) } else { theme::ELEV() });
                     p.rect_stroke(r, theme::r(10), Stroke::new(1.0f32, theme::LINE()), StrokeKind::Inside);
-                    let box_r = Rect::from_center_size(r.left_center() + vec2(18.0, 0.0), vec2(14.0, 14.0));
-                    p.rect_stroke(box_r, theme::r(3), Stroke::new(1.5f32, if on { theme::on_ember() } else { theme::MUTED() }), StrokeKind::Inside);
+                    let box_r = Rect::from_center_size(r.left_center() + vec2(18.0 * z, 0.0), vec2(14.0, 14.0) * z);
+                    p.rect_stroke(box_r, theme::r(3), Stroke::new(1.5 * z, if on { theme::on_ember() } else { theme::MUTED() }), StrokeKind::Inside);
                     if on {
-                        crate::icons::tick(&p, box_r.shrink(2.0), theme::on_ember());
+                        crate::icons::tick(&p, box_r.shrink(2.0 * z), theme::on_ember());
                     }
-                    p.text(r.left_center() + vec2(32.0, 0.0), Align2::LEFT_CENTER, label, theme::bold_font(13.0), if on { theme::on_ember() } else { theme::TEXT() });
+                    p.text(r.left_center() + vec2(32.0 * z, 0.0), Align2::LEFT_CENTER, label, theme::bold_font(13.0 * z), if on { theme::on_ember() } else { theme::TEXT() });
                     if resp.clicked() {
                         self.poker.pre = if on { PreAction::None } else { pa };
                     }
@@ -965,8 +986,8 @@ impl PyrApp {
                 let shown = t.events.iter().any(|(_, e)| matches!(e, Event::Shown { seat, .. } if *seat == me));
                 let mine_known = seat.is_some_and(|x| x.in_hand && !x.cards.is_empty());
                 if v13 && over && !shown && mine_known && v.hand.is_some() {
-                    let r = Rect::from_min_size(pos2(right - 160.0, bar.center().y - 22.0), vec2(160.0, 44.0));
-                    let b = egui::Button::new(RichText::new("Show cards").font(theme::bold_font(16.0)).color(Color32::WHITE)).fill(Color32::from_rgb(0x2e, 0x6a, 0xb0)).corner_radius(theme::r(12));
+                    let r = Rect::from_min_size(pos2(right - 160.0 * z, bar.center().y - 22.0 * z), vec2(160.0, 44.0) * z);
+                    let b = egui::Button::new(RichText::new("Show cards").font(theme::bold_font(16.0 * z)).color(Color32::WHITE)).fill(Color32::from_rgb(0x2e, 0x6a, 0xb0)).corner_radius(theme::r(12));
                     if ui.put(r, b).on_hover_text("Turn your cards over for everyone (until the next hand's dealt)").clicked() {
                         self.engine.poker(&s.key, ToServer::ShowCards { table: v.id, hand });
                     }
@@ -991,20 +1012,21 @@ impl PyrApp {
             self.poker.raise_text = l.min_to.to_string();
         }
         let mut act: Option<Action> = None;
-        let h = 54.0;
+        let h = 58.0 * z;
         let y = bar.bottom() - h - 16.0;
         let btn = |ui: &mut egui::Ui, r: Rect, top: &str, bottom: &str, fill: Color32, id: &str, key: &str| -> bool {
             let resp = ui.interact(r, ui.id().with(("act", id)), Sense::click());
             let f = if resp.hovered() { mix(fill, Color32::WHITE, 0.12) } else { fill };
             let press = if resp.is_pointer_button_down_on() { 2.0 } else { 0.0 };
             let r = r.translate(vec2(0.0, press));
-            p.rect_filled(r.translate(vec2(0.0, 4.0 - press)), theme::r(14), mix(fill, Color32::BLACK, 0.5));
+            let round = theme::r(14);
+            p.rect_filled(r.translate(vec2(0.0, 4.0 - press)), round, mix(fill, Color32::BLACK, 0.5));
             // Lit from the top.
             let mut m = egui::Mesh::default();
             let top_c = mix(f, Color32::WHITE, 0.16);
             let bot_c = mix(f, Color32::BLACK, 0.12);
             let inner = r.shrink2(vec2(0.0, 0.0));
-            p.rect_filled(inner, theme::r(14), bot_c);
+            p.rect_filled(inner, round, bot_c);
             let hi = Rect::from_min_max(inner.min + vec2(3.0, 2.0), pos2(inner.max.x - 3.0, inner.center().y));
             m.colored_vertex(hi.left_top(), top_c.gamma_multiply(0.55));
             m.colored_vertex(hi.right_top(), top_c.gamma_multiply(0.55));
@@ -1012,22 +1034,23 @@ impl PyrApp {
             m.colored_vertex(hi.left_bottom(), Color32::TRANSPARENT);
             m.add_triangle(0, 1, 2);
             m.add_triangle(0, 2, 3);
-            p.rect_filled(Rect::from_min_max(inner.min, pos2(inner.max.x, inner.center().y + 6.0)), theme::r(14), f);
+            p.rect_filled(Rect::from_min_max(inner.min, pos2(inner.max.x, inner.center().y + 6.0)), round, f);
             p.add(Shape::mesh(m));
-            p.rect_stroke(r, theme::r(14), Stroke::new(1.0f32, mix(f, Color32::WHITE, 0.25)), StrokeKind::Inside);
+            p.rect_stroke(r, round, Stroke::new(1.0f32, mix(f, Color32::WHITE, 0.25)), StrokeKind::Inside);
+            // (0.13.28's words: bigger than 0.13.0's.)
             if bottom.is_empty() {
-                p.text(r.center(), Align2::CENTER_CENTER, top, theme::bold_font(18.0), Color32::WHITE);
+                p.text(r.center(), Align2::CENTER_CENTER, top, theme::bold_font(20.0 * z), Color32::WHITE);
             } else {
-                p.text(r.center() + vec2(0.0, -9.0), Align2::CENTER_CENTER, top, theme::bold_font(16.0), Color32::WHITE);
-                p.text(r.center() + vec2(0.0, 11.0), Align2::CENTER_CENTER, bottom, theme::bold_font(14.0), Color32::from_rgb(0xff, 0xec, 0xc0));
+                p.text(r.center() + vec2(0.0, -10.0 * z), Align2::CENTER_CENTER, top, theme::bold_font(17.5 * z), Color32::WHITE);
+                p.text(r.center() + vec2(0.0, 12.0 * z), Align2::CENTER_CENTER, bottom, theme::bold_font(15.5 * z), Color32::from_rgb(0xff, 0xec, 0xc0));
             }
-            p.text(r.right_top() + vec2(-8.0, 6.0), Align2::RIGHT_TOP, key, theme::font(10.0), Color32::from_white_alpha(90));
+            p.text(r.right_top() + vec2(-8.0, 6.0), Align2::RIGHT_TOP, key, theme::font(10.0 * z), Color32::from_white_alpha(90));
             resp.clicked()
         };
         // (Each button's key in its corner, as set in the Keys window.)
         use crate::casino::keys::Move;
         let key_of = |mv| crate::casino::keys::first_key(mv).unwrap_or_default();
-        let (w, fold_w, gap) = (172.0, 132.0, 10.0);
+        let (w, fold_w, gap) = (184.0 * z, 144.0 * z, 12.0 * z);
         let span = 2.0 * w + fold_w + 2.0 * gap;
         let left = right - span;
         // Fold, Check or Call, Bet or Raise: left to right.
@@ -1037,16 +1060,16 @@ impl PyrApp {
         }
         // Checking's free: Fold said so once (a click on it again folds).
         if armed {
-            let above = if l.can_raise && l.max_to > l.min_to { y - 48.0 } else { y - 8.0 };
+            let above = if l.can_raise && l.max_to > l.min_to { y - 54.0 * z } else { y - 8.0 * z };
             let text = "Checking is free. Click Fold again to fold anyway.";
-            let g = p.layout_no_wrap(text.to_string(), theme::bold_font(13.5), Color32::from_rgb(0xff, 0xe2, 0x9a));
-            let br = Rect::from_min_size(pos2(left - 8.0, above - 8.0 - g.size().y - 16.0), vec2(g.size().x + 28.0, g.size().y + 16.0));
+            let g = p.layout_no_wrap(text.to_string(), theme::bold_font(13.5 * z), Color32::from_rgb(0xff, 0xe2, 0x9a));
+            let br = Rect::from_min_size(pos2(left - 8.0, above - 8.0 * z - g.size().y - 16.0 * z), vec2(g.size().x + 28.0 * z, g.size().y + 16.0 * z));
             p.rect_filled(br, theme::r(12), Color32::from_rgba_unmultiplied(0x2a, 0x12, 0x0c, 240));
-            p.rect_stroke(br, theme::r(12), Stroke::new(1.5f32, Color32::from_rgb(0xff, 0xb0, 0x5a)), StrokeKind::Inside);
+            p.rect_stroke(br, theme::r(12), Stroke::new(1.5 * z, Color32::from_rgb(0xff, 0xb0, 0x5a)), StrokeKind::Inside);
             // (Pointing down at Fold.)
-            let tip = pos2(left + fold_w / 2.0, br.bottom() + 7.0);
-            p.add(Shape::convex_polygon(vec![pos2(tip.x - 8.0, br.bottom() - 1.0), pos2(tip.x + 8.0, br.bottom() - 1.0), tip], Color32::from_rgba_unmultiplied(0x2a, 0x12, 0x0c, 240), Stroke::NONE));
-            p.galley(br.min + vec2(14.0, 8.0), g, Color32::WHITE);
+            let tip = pos2(left + fold_w / 2.0, br.bottom() + 7.0 * z);
+            p.add(Shape::convex_polygon(vec![pos2(tip.x - 8.0 * z, br.bottom() - 1.0), pos2(tip.x + 8.0 * z, br.bottom() - 1.0), tip], Color32::from_rgba_unmultiplied(0x2a, 0x12, 0x0c, 240), Stroke::NONE));
+            p.galley(br.min + vec2(14.0, 8.0) * z, g, Color32::WHITE);
         }
         let r = Rect::from_min_size(pos2(left + fold_w + gap, y), vec2(w, h));
         if l.can_check {
@@ -1069,8 +1092,10 @@ impl PyrApp {
             let pot = v.pot;
             let presets: [(&str, u64); 5] = [("Min", l.min_to), ("½ Pot", l.call + pot / 2), ("¾ Pot", l.call + pot * 3 / 4), ("Pot", l.call + pot), ("All in", l.max_to)];
             let in_front = v.seats[me].as_ref().map(|s| s.bet).unwrap_or(0);
-            let row_y = y - 40.0;
-            let panel = Rect::from_min_max(pos2(left - 8.0, row_y - 8.0), pos2(right + 8.0, y - 8.0));
+            // (0.13.28's: taller than 0.13.0's, everything in it 28 high.)
+            let row_h = 28.0 * z;
+            let row_y = y - 44.0 * z;
+            let panel = Rect::from_min_max(pos2(left - 8.0, row_y - 8.0 * z), pos2(right + 8.0, y - 8.0 * z));
             p.rect_filled(panel, theme::r(12), Color32::from_rgba_unmultiplied(0x10, 0x0e, 0x12, 210));
             let mut px = left;
             let mut lit = false;
@@ -1078,20 +1103,20 @@ impl PyrApp {
             let keyed = [Move::PokerMin, Move::PokerHalf, Move::PokerThree, Move::PokerPot, Move::PokerAllin].iter().position(|m| crate::casino::keys::pressed(ui.ctx(), *m));
             for (n, (label, amt)) in presets.into_iter().enumerate() {
                 let to = if label == "Min" || label == "All in" { amt } else { (in_front + amt).clamp(l.min_to, l.max_to) };
-                let r = Rect::from_min_size(pos2(px, row_y), vec2(50.0, 24.0));
-                px += 54.0;
+                let r = Rect::from_min_size(pos2(px, row_y), vec2(56.0 * z, row_h));
+                px += 60.0 * z;
                 let on = !lit && self.poker.raise == to;
                 lit |= on;
                 let resp = ui.interact(r, ui.id().with(("preset", label)), Sense::click());
-                p.rect_filled(r, theme::r(12), if on { Color32::from_rgb(0xdc, 0x6c, 0x1a) } else if resp.hovered() { Color32::from_white_alpha(34) } else { Color32::from_white_alpha(14) });
-                p.text(r.center(), Align2::CENTER_CENTER, label, theme::bold_font(11.0), if on { Color32::WHITE } else { theme::TEXT() });
+                p.rect_filled(r, theme::r(14), if on { Color32::from_rgb(0xdc, 0x6c, 0x1a) } else if resp.hovered() { Color32::from_white_alpha(34) } else { Color32::from_white_alpha(14) });
+                p.text(r.center(), Align2::CENTER_CENTER, label, theme::bold_font(12.0 * z), if on { Color32::WHITE } else { theme::TEXT() });
                 if resp.clicked() || keyed == Some(n) {
                     self.poker.raise = to;
                     self.poker.raise_text = to.to_string();
                 }
             }
-            let box_w = 78.0;
-            let sr = Rect::from_min_max(pos2(px + 6.0, row_y), pos2(right - box_w - 10.0, row_y + 24.0));
+            let box_w = 78.0 * z;
+            let sr = Rect::from_min_max(pos2(px + 6.0 * z, row_y), pos2(right - box_w, row_y + row_h));
             let mut val = self.poker.raise as f64;
             let resp = ui.put(sr, egui::Slider::new(&mut val, l.min_to as f64..=l.max_to as f64).show_value(false).logarithmic(l.max_to > 20 * l.min_to.max(1)));
             if resp.changed() {
@@ -1101,7 +1126,7 @@ impl PyrApp {
                 self.poker.raise = if val as u64 >= l.max_to { l.max_to } else { rounded };
                 self.poker.raise_text = self.poker.raise.to_string();
             }
-            let tr = Rect::from_min_size(pos2(right - box_w, row_y - 1.0), vec2(box_w, 26.0));
+            let tr = Rect::from_min_size(pos2(right - box_w, row_y), vec2(box_w, row_h));
             let te = ui.put(tr, egui::TextEdit::singleline(&mut self.poker.raise_text).horizontal_align(egui::Align::Center).desired_width(box_w));
             if te.changed()
                 && let Ok(n) = self.poker.raise_text.trim().replace(',', "").parse::<u64>()
@@ -1124,10 +1149,10 @@ impl PyrApp {
             let left = deadline.saturating_duration_since(Instant::now()).as_secs();
             let txt = if bank > 0 { format!("{left}s · time bank {}s", bank / 1000) } else { format!("{left}s") };
             let lx = right - span - 24.0;
-            p.text(pos2(lx, y + h / 2.0), Align2::RIGHT_CENTER, txt, theme::bold_font(13.0), if left < 6 { Color32::from_rgb(0xff, 0x8a, 0x6a) } else { theme::MUTED() });
+            p.text(pos2(lx, y + h / 2.0), Align2::RIGHT_CENTER, txt, theme::bold_font(13.0 * z), if left < 6 { Color32::from_rgb(0xff, 0x8a, 0x6a) } else { theme::MUTED() });
             if bank > 0 && left < 6 {
-                let r = Rect::from_min_size(pos2(lx - 120.0, y + h / 2.0 - 40.0), vec2(120.0, 26.0));
-                if ui.put(r, egui::Button::new(RichText::new("Use time bank").size(12.0))).clicked() {
+                let r = Rect::from_min_size(pos2(lx - 120.0 * z, y + h / 2.0 - 40.0 * z), vec2(120.0, 26.0) * z);
+                if ui.put(r, egui::Button::new(RichText::new("Use time bank").size(12.0 * z))).clicked() {
                     self.engine.poker(&s.key, ToServer::TimeBank { table: v.id });
                 }
             }
@@ -1176,19 +1201,20 @@ impl PyrApp {
             let a = (k / 0.18).min(1.0) * ((life - k) / 0.5).clamp(0.0, 1.0);
             let pop = 0.85 + 0.15 * ease((k / 0.22).min(1.0));
             let ink = Color32::from_rgb(0x22, 0x1c, 0x28);
-            let g = p.layout(text.clone(), theme::font(13.0), ink, 230.0);
-            let size = (g.size() + vec2(26.0, 16.0)) * pop;
+            let z = lay.k;
+            let g = p.layout(text.clone(), theme::font(13.0 * z), ink, 230.0 * z);
+            let size = (g.size() + vec2(26.0, 16.0) * z) * pop;
             let at_seat = lay.seat(*seat);
             // (Lower seats talk upwards, upper seats downwards: always over the felt.)
             let up = at_seat.y > lay.c.y;
-            let gap = 58.0 + size.y / 2.0;
+            let gap = 58.0 * z + size.y / 2.0;
             let r = Rect::from_center_size(at_seat + vec2(0.0, if up { -gap } else { gap }), size);
             let fill = Color32::from_rgba_unmultiplied(0xfb, 0xf6, 0xec, (242.0 * a) as u8);
             p.rect_filled(r.translate(vec2(0.0, 4.0)), theme::r(14), Color32::from_black_alpha((90.0 * a) as u8));
             p.rect_filled(r, theme::r(14), fill);
-            let (edge, tip) = if up { (r.bottom() - 1.0, r.bottom() + 11.0) } else { (r.top() + 1.0, r.top() - 11.0) };
-            let x = r.center().x.clamp(r.left() + 18.0, r.right() - 18.0);
-            p.add(egui::Shape::convex_polygon(vec![pos2(x - 9.0, edge), pos2(x + 9.0, edge), pos2(at_seat.x.clamp(x - 14.0, x + 14.0), tip)], fill, Stroke::NONE));
+            let (edge, tip) = if up { (r.bottom() - 1.0, r.bottom() + 11.0 * z) } else { (r.top() + 1.0, r.top() - 11.0 * z) };
+            let x = r.center().x.clamp(r.left() + 18.0 * z, r.right() - 18.0 * z);
+            p.add(egui::Shape::convex_polygon(vec![pos2(x - 9.0 * z, edge), pos2(x + 9.0 * z, edge), pos2(at_seat.x.clamp(x - 14.0 * z, x + 14.0 * z), tip)], fill, Stroke::NONE));
             p.galley(r.center() - g.size() / 2.0, g, ink.gamma_multiply(a));
         }
     }
@@ -1196,7 +1222,7 @@ impl PyrApp {
     /// Emotes, big over the face of whoever sent them (a sticker, or an older Pyr's emoji).
     fn emotes(&self, p: &egui::Painter, ctx: &egui::Context, lay: &Layout, t: &TableLive) {
         for (seat, e, at) in &t.emotes {
-            crate::casino::emotes::pop(p, ctx, e, lay.seat(*seat) + vec2(0.0, -34.0), ago(*at), 120.0);
+            crate::casino::emotes::pop(p, ctx, e, lay.seat(*seat) + vec2(0.0, -34.0 * lay.k), ago(*at), 120.0 * lay.k);
         }
     }
 
@@ -1605,7 +1631,7 @@ fn last_action(t: &TableLive, seat: usize) -> Option<(String, Color32, f32)> {
 
 /// The hand strength meter over my cards: what I have, my chance of winning in big figures, and
 /// a bar that fills and colours with it (red when it's weak, gold in between, green when strong).
-fn meter(p: &egui::Painter, r: Rect, what: &str, eq: f64, live: usize) {
+fn meter(p: &egui::Painter, r: Rect, what: &str, eq: f64, live: usize, z: f32) {
     let eq = eq.clamp(0.0, 1.0) as f32;
     p.rect_filled(r, theme::r(14), Color32::from_rgba_unmultiplied(0x14, 0x10, 0x0a, 232));
     p.rect_stroke(r, theme::r(14), Stroke::new(1.0f32, Color32::from_rgb(0x8a, 0x6a, 0x2a)), StrokeKind::Inside);
@@ -1618,20 +1644,20 @@ fn meter(p: &egui::Painter, r: Rect, what: &str, eq: f64, live: usize) {
         (a[2] as f32 + (b[2] as f32 - a[2] as f32) * f) as u8,
     );
     let col = if t < 0.5 { mix([0xe0, 0x4a, 0x2e], [0xf2, 0xb8, 0x2e], t * 2.0) } else { mix([0xf2, 0xb8, 0x2e], [0x4c, 0xd0, 0x6a], (t - 0.5) * 2.0) };
-    let inner = r.shrink2(vec2(12.0, 8.0));
-    p.text(inner.left_top(), Align2::LEFT_TOP, what, theme::bold_font(15.5), Color32::from_rgb(0xff, 0xe2, 0x9a));
-    p.text(inner.right_top() + vec2(0.0, -3.0), Align2::RIGHT_TOP, format!("{:.0}%", eq * 100.0), theme::bold_font(26.0), col);
+    let inner = r.shrink2(vec2(12.0, 8.0) * z);
+    p.text(inner.left_top(), Align2::LEFT_TOP, what, theme::bold_font(15.5 * z), Color32::from_rgb(0xff, 0xe2, 0x9a));
+    p.text(inner.right_top() + vec2(0.0, -3.0 * z), Align2::RIGHT_TOP, format!("{:.0}%", eq * 100.0), theme::bold_font(26.0 * z), col);
     // The bar, with a tick at an even share.
-    let bar = Rect::from_min_max(pos2(inner.left(), inner.bottom() - 14.0), pos2(inner.right(), inner.bottom()));
+    let bar = Rect::from_min_max(pos2(inner.left(), inner.bottom() - 14.0 * z), pos2(inner.right(), inner.bottom()));
     p.rect_filled(bar, theme::r(7), Color32::from_white_alpha(22));
     if eq > 0.005 {
         let fill = Rect::from_min_max(bar.min, pos2(bar.left() + (bar.width() * eq).max(bar.height()), bar.bottom()));
         p.rect_filled(fill, theme::r(7), col);
     }
     let x = bar.left() + bar.width() * fair;
-    p.line_segment([pos2(x, bar.top() - 3.0), pos2(x, bar.bottom() + 3.0)], Stroke::new(2.0f32, Color32::from_white_alpha(150)));
+    p.line_segment([pos2(x, bar.top() - 3.0 * z), pos2(x, bar.bottom() + 3.0 * z)], Stroke::new(2.0 * z, Color32::from_white_alpha(150)));
     let vs = match live { 0 | 1 => "to win vs 1 player".to_string(), n => format!("to win vs {n} players") };
-    p.text(inner.left_top() + vec2(0.0, 21.0), Align2::LEFT_TOP, vs, theme::font(12.5), Color32::from_rgb(0xc8, 0xb8, 0x98));
+    p.text(inner.left_top() + vec2(0.0, 21.0 * z), Align2::LEFT_TOP, vs, theme::font(12.5 * z), Color32::from_rgb(0xc8, 0xb8, 0x98));
 }
 
 /// My hand in words: "Pair of Kings", or before the flop "Ace-King suited".
