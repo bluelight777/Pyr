@@ -1069,18 +1069,19 @@ impl PyrApp {
             let most = v.rules.big_blind.saturating_mul(v.buy_in.max_bb);
             let rebuy = most.min(bank);
             let r = Rect::from_min_max(pos2(bar.right() - 16.0 - 544.0, bar.top() + 14.0), pos2(bar.right() - 16.0, bar.bottom() - 14.0));
-            p.rect_filled(r, theme::r(16), Color32::from_rgb(19, 16, 10));
-            p.rect_stroke(r, theme::r(16), Stroke::new(1.0f32, Color32::from_rgb(138, 106, 42)), StrokeKind::Inside);
+            // (Corners 14, the buttons' 10: measured.)
+            p.rect_filled(r, theme::r(14), Color32::from_rgb(19, 16, 10));
+            p.rect_stroke(r, theme::r(14), Stroke::new(1.0f32, Color32::from_rgb(138, 106, 42)), StrokeKind::Inside);
             let mid = r.center().y;
             p.text(pos2(r.left() + 20.0, mid - 23.0), Align2::LEFT_TOP, "Out of chips", theme::bold_font(18.0), Color32::from_rgb(255, 226, 154));
             p.text(pos2(r.left() + 20.0, mid + 5.0), Align2::LEFT_TOP, format!("You have {} chips.", chips_text(bank)), theme::font(13.0), Color32::from_rgb(168, 153, 140));
             let leave = Rect::from_min_size(pos2(r.right() - 12.0 - 120.0, mid - 27.0), vec2(120.0, 54.0));
-            if ui.put(leave, egui::Button::new(RichText::new("Leave seat").font(theme::bold_font(15.0)).color(theme::TEXT())).fill(theme::ELEV()).corner_radius(theme::r(12))).clicked() {
+            if ui.put(leave, egui::Button::new(RichText::new("Leave seat").font(theme::bold_font(15.0)).color(theme::TEXT())).fill(theme::ELEV()).corner_radius(theme::r(10))).clicked() {
                 self.engine.poker(&s.key, ToServer::Stand { table: v.id });
             }
             if rebuy > 0 {
                 let at = Rect::from_min_size(pos2(leave.left() - 10.0 - 190.0, mid - 27.0), vec2(190.0, 54.0));
-                let b = egui::Button::new(RichText::new(format!("Rebuy {}", chips_text(rebuy))).font(theme::bold_font(16.0)).color(Color32::from_rgb(42, 28, 5))).fill(Color32::from_rgb(242, 194, 76)).corner_radius(theme::r(12));
+                let b = egui::Button::new(RichText::new(format!("Rebuy {}", chips_text(rebuy))).font(theme::bold_font(16.0)).color(Color32::from_rgb(42, 28, 5))).fill(Color32::from_rgb(242, 194, 76)).corner_radius(theme::r(10));
                 if ui.put(at, b).clicked() {
                     self.engine.poker(&s.key, ToServer::TopUp { table: v.id, chips: rebuy });
                 }
@@ -1158,7 +1159,7 @@ impl PyrApp {
                         p.rect_stroke(box_r, theme::r(5), Stroke::new(2.0f32, theme::MUTED()), StrokeKind::Inside);
                     }
                     let ink = if on { Color32::WHITE } else { Color32::from_rgb(235, 234, 233) };
-                    p.text(pos2(r.left() + 44.2 * z, r.center().y), Align2::LEFT_CENTER, &label, theme::bold_font(17.0 * z), ink);
+                    p.text(pos2(r.left() + 44.2 * z, r.center().y - 0.5), Align2::LEFT_CENTER, &label, theme::bold_font(17.0 * z), ink);
                     if resp.clicked() {
                         self.poker.pre = if on { PreAction::None } else { pa };
                     }
