@@ -31,12 +31,12 @@ pub fn four() -> bool {
     MINE.lock().map(|m| m.1).unwrap_or(false)
 }
 
-/// Suit colors: the classic two (black and red, 0.13.28's), or four (clubs green, diamonds
+/// Suit colors (0.13.28's): the classic two (black and red), or four (clubs green, diamonds
 /// blue), which are easier to tell apart at a glance.
 pub fn suit_color(suit: u8, four: bool) -> Color32 {
     match (suit, four) {
-        (0, true) => Color32::from_rgb(0x1f, 0x8a, 0x4c),
-        (1, true) => Color32::from_rgb(0x1f, 0x6f, 0xd1),
+        (0, true) => Color32::from_rgb(0x1b, 0x80, 0x45),
+        (1, true) => Color32::from_rgb(0x1c, 0x63, 0xc4),
         (1, false) | (2, _) => Color32::from_rgb(0xcc, 0x1f, 0x2e),
         _ => Color32::from_rgb(0x17, 0x19, 0x1f),
     }

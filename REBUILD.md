@@ -512,19 +512,29 @@ How (decided while starting it):
       (only shown by servers older than 0.12, which have neither) keeps 0.13.0's layout; the
       server takes buys and lays there as 0.13.28's does.
 - [ ] Dominó Cubano tables in the casino, to 10,000,000, El Presidente (0.13.11/12)
-- [ ] Poker: the suits on bot faces and card pips (0.13.28's are one smooth shape each; the
+- [x] Poker: the suits on bot faces and card pips (0.13.28's are one smooth shape each; the
       rebuild's are 0.13.0's circles and polygons), the Shark's crown and star
-      (`measured/newtable.md`).
+      (`measured/newtable.md`, `measured/cards.md`).
   - [x] Bot faces: the suits as 0.13.28's shapes (traced at 6x), one near-white shape with a dark
         shadow; a Shark (only a Shark) wears 0.13.0's fin, the violet ring and a star in a soft
         violet glow over the top, with a small one on the ring either side, drawn again with
         egui's own tessellator against 0.13.28's picture and checked in the app at 3x (Which bot?
         and a seat: the same to the pixel but for the discs' edges). Which bot? shows the faces
         as the level picked has them, as 0.13.28's does.
-  - [ ] The number cards as 0.13.28's (seen side by side on the same flop, both apps watching one
-        table): its ranks in a condensed heavy lettering, the face a warm gradient, the pips
-        smaller and shaded; the rebuild has 0.13.0's (only the court figures, the ace of spades
-        and the backs were carved from 0.13.28).
+  - [x] The cards as 0.13.28's (`measured/cards.md`), measured with both apps watching one table
+        at 3x, the same cards side by side: the body (its edge a 79th of the card, the face
+        shading white to warm white), the rank in Barlow Condensed Black a fifth of the card
+        high, its red (204,31,46) and black (23,25,31), pips lit from above (1.15 to 0.875 of
+        their color down each), laid out as its board (rows 0.2155 in, a 7's and 8's halfway,
+        a 9's and 10's four rows evenly), aces one pip 3/8 across; jacks, queens and kings in
+        its gold frame (three golds down it, a fine line inside), the figure cut by a gold line
+        slanting through the middle with a small gold diamond, the suit small in the corners;
+        backs with the painting in a white margin. No small kind of card (a seat's shown cards,
+        a history's hands: whole faces), a seat's badges give way to its shown cards. To the
+        pixel but for the edges' softness and the figures (0.13.28's softer: fewer texels).
+        The four-colour deck in its colours (clubs (27,128,69), diamonds (28,99,196)).
+  - [x] The hand's name on the board and the bots' speech bubbles stay full size on a small
+        table (0.13.28's: 1.19 times the rebuild's at 1280x800, the table's scale 0.84).
   - [x] Bots think and bluff like people (0.13.26), measured off 0.13.28's Medium bots at two
         tables (`measured/bots.md`: each turn's think by what it ended in, betting street by
         street) and played again in a simulation of the same tables: a bot's time comes from how
