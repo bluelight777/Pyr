@@ -20,8 +20,9 @@ pub const BANK_START_MS: u64 = 30_000;
 pub const BANK_PER_HAND_MS: u64 = 2_000;
 pub const BANK_MAX_MS: u64 = 60_000;
 /// Between hands (longer after a showdown, to see the cards), and for Pyrs to send seeds.
+/// (0.13.4's slower wins: 7 s after a showdown, as 0.13.28's server waits; 5 s before.)
 pub const BETWEEN_MS: u64 = 3_000;
-pub const AFTER_SHOWDOWN_MS: u64 = 5_000;
+pub const AFTER_SHOWDOWN_MS: u64 = 7_000;
 pub const SHUFFLE_MS: u64 = 1_200;
 /// Turns missed in a row before a player is sat out.
 pub const MISSES_TO_SIT_OUT: u32 = 2;
@@ -34,10 +35,13 @@ pub const HISTORY: usize = 30;
 /// `BOMB_PUSH_SPREAD_MS` more, a little different each time, as people push their chips in).
 /// An all-in's board comes a street at a time (apps show it so, and the next hand waits for
 /// it): the hands turn over, the first street comes, then each next, then the pot's pushed.
+/// (0.13.4 slowed it, measured off 0.13.28 and filmed beside it: its app shows the first street
+/// 1.8 s on, each next 2.15 s after, the win 1.75 s after the river; its server waits 7 s more
+/// for the next hand.)
 pub const RUNOUT_SHOW_MS: u64 = 300;
-pub const RUNOUT_FIRST_MS: u64 = 1_200;
-pub const RUNOUT_STREET_MS: u64 = 1_400;
-pub const RUNOUT_WIN_MS: u64 = 1_000;
+pub const RUNOUT_FIRST_MS: u64 = 1_800;
+pub const RUNOUT_STREET_MS: u64 = 2_150;
+pub const RUNOUT_WIN_MS: u64 = 1_750;
 
 /// How long an all-in's board takes to show, `streets` of it still to come.
 pub fn runout_ms(streets: usize) -> u64 {

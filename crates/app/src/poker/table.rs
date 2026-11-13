@@ -877,35 +877,54 @@ impl PyrApp {
     }
 
     /// Chips flying to the winners, their glow and what they won.
+    /// The win, as 0.13.28 shows it (0.13.4's slower wins, filmed off it with nothing else
+    /// drawing): the board's cards not in the winning five go grey at once and the hand's name
+    /// comes up under the board (in 0.2 s); the pot's chips stay in its middle 0.65 s, then slide
+    /// to the winner's picture in 1.2 s, wherever they sit; from 1.45 s a gold ring round the
+    /// picture and "+N" (18) over it come in, the "+N" rising 25 k over two seconds; the name
+    /// fades out from 5 s, the ring and the "+N" from 5.55 s, each over a second; the next
+    /// hand's at 7 s.
     fn winners(&self, p: &egui::Painter, lay: &Layout, t: &TableLive) {
         let z = lay.k;
+        let gold = Color32::from_rgb(0xff, 0xd3, 0x4a);
+        let mut busy = false;
         for (at, e) in &t.events {
             let Event::Won { seats, amounts, hand, .. } = e else { continue };
             let k = ago(*at);
-            if k > 4.0 {
+            if k > 6.6 {
                 continue;
             }
+            busy = true;
+            // (The pot's chips gather in its middle, where its words were.)
+            let from = lay.pot();
             for (s, amt) in seats.iter().zip(amounts) {
                 let to = lay.seat(*s);
-                let fly = ease(k / 0.7);
-                let pos = lay.pot() + (to - lay.pot()) * fly;
-                if k < 0.9 {
-                    cards::pile(p, pos, *amt, 8.0 * z, "");
+                if k < WIN_HOLD + WIN_FLY + 0.1 {
+                    let f = ease((k - WIN_HOLD) / WIN_FLY);
+                    cards::pile(p, from + (to - from) * f, *amt, 9.0 * z, "");
                 }
-                let glow = (1.0 - (k - 3.0).max(0.0)).clamp(0.0, 1.0);
-                p.circle_stroke(to, 38.0 * z, Stroke::new(3.0 * z, Color32::from_rgb(0xff, 0xd2, 0x4a).gamma_multiply(glow)));
-                let rise = to + vec2(0.0, -58.0 - 22.0 * ease(k / 1.5)) * z;
-                p.text(rise, Align2::CENTER_CENTER, format!("+{}", chips_text(*amt)), theme::bold_font(18.0 * z), Color32::from_rgb(0xff, 0xd2, 0x4a).gamma_multiply(glow));
+                // (The ring and "+N" come in as the chips near the picture, and the "+N" rises
+                // slowly for a couple of seconds; both fade out over a second.)
+                let shown = ((k - 1.45) / 0.5).clamp(0.0, 1.0) * (1.0 - (k - 5.55) / 1.0).clamp(0.0, 1.0);
+                if shown > 0.0 {
+                    let r0 = 44.0 * z;
+                    p.circle_stroke(to, r0 + 2.0, Stroke::new(3.0f32, gold.gamma_multiply(shown)));
+                    let rise = 25.0 * z * ease((k - 1.6) / 1.9);
+                    p.text(to - vec2(0.0, 69.0 * z + rise), Align2::CENTER_CENTER, format!("+{}", chips_text(*amt)), theme::bold_font(18.0), gold.gamma_multiply(shown));
+                }
             }
             if let Some(h) = hand
-                && k < 3.5
+                && k < 6.0
             {
-                let alpha = (1.0 - (k - 2.8).max(0.0) / 0.7).clamp(0.0, 1.0);
+                let alpha = ((k - 0.03) / 0.2).clamp(0.0, 1.0) * (1.0 - (k - 5.0) / 1.0).clamp(0.0, 1.0);
                 let r = Rect::from_center_size(lay.c + vec2(0.0, lay.b * 0.42), vec2(30.0 + 10.0 * h.len() as f32, 36.0) * z);
                 p.rect_filled(r, theme::r(18), Color32::from_rgba_unmultiplied(0x1a, 0x12, 0x0c, (220.0 * alpha) as u8));
                 p.rect_stroke(r, theme::r(18), Stroke::new(1.5 * z, Color32::from_rgb(0xff, 0xd2, 0x4a).gamma_multiply(alpha)), StrokeKind::Inside);
                 p.text(r.center(), Align2::CENTER_CENTER, h, theme::bold_font(17.0 * z), Color32::from_rgb(0xff, 0xe2, 0x9a).gamma_multiply(alpha));
             }
+        }
+        if busy {
+            p.ctx().request_repaint();
         }
     }
 
@@ -1818,9 +1837,13 @@ fn level_tag(level: Level) -> (&'static str, Color32) {
     }
 }
 
-/// A card turning over: `k` from 0 (its back) to 1 (its face).
 /// A rabbit (0.13.4) is gone this long after it came (its last second fading out).
 const RABBIT_GONE: f32 = 14.0;
+
+/// A win (0.13.4): how long the pot's chips stay in the middle before they slide over, and how
+/// long the slide takes, to a near seat or a far one alike (0.13.28's, filmed).
+const WIN_HOLD: f32 = 0.65;
+const WIN_FLY: f32 = 1.2;
 
 /// A card of a hunted rabbit's board, never dealt: turning over (`k` 0 to 1, as `flip`), then
 /// light blue with a blue rim (0.13.28's, measured).

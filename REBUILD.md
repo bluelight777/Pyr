@@ -392,7 +392,8 @@ How (decided while starting it):
       dot when anyone is) and my best win; what it pays back shows when you point at it. The
       server says who's playing (everyone who played a round of it in the last five minutes, as
       0.13.28's server does, read off the wire) and the floor asks again every 45 seconds and on
-      coming back to it. The casino's chat is at the table games only, the "funny" tags gone.
+      coming back to it. The casino's chat is at the table games and poker tables only (not on
+      the floor), the "funny" tags gone.
       Measured off 0.13.28's screen at 900, 1100, 1280, 1500 and 1600 wide: every text's font,
       size and place (`work/textlab` draws text exactly as egui does, `work/ui/textfit.py` finds
       it on the screen), the bar, the bands, the tiles' shade, corners and spacing. (The
@@ -512,12 +513,32 @@ How (decided while starting it):
       server takes buys and lays there as 0.13.28's does.
 - [ ] Dominó Cubano tables in the casino, to 10,000,000, El Presidente (0.13.11/12)
 - [ ] Poker: bots think and bluff like people (0.13.26), titles and badges (0.13.4/6: GAME
-      MASTER / OWNER on staff's seats, Title shown or hidden: `hide_title`, the record's field
-      and request are in already; "Show my title" in the table's menu for staff),
-      pre-action buttons (0.13.4), slower wins (0.13.4), table sounds (0.13.6), the level
-      badges' rings (green 50, gold 30, bronze 12…), the suits on bot faces and card pips
-      (0.13.28's are one smooth shape each; the rebuild's are 0.13.0's circles and polygons),
-      the Shark's crown and star (`measured/newtable.md`)
+      MASTER / OWNER on staff's seats, the winged gold shield over a Game Master's picture,
+      the crowned one for the Owner, Title shown or hidden: `hide_title`, the record's field
+      and request are in already; "Show my title" in the table's menu for staff), table
+      sounds (0.13.6), the level badges' rings (green 50, gold 30, bronze 12…), the suits on
+      bot faces and card pips (0.13.28's are one smooth shape each; the rebuild's are 0.13.0's
+      circles and polygons), the Shark's crown and star (`measured/newtable.md`).
+  - [x] Slower wins (0.13.4), as 0.13.28's (`measured/tablefeatures.md`): its server waits 7 s
+        after a showdown (3 s after a fold) and 7 s plus the board's time after an all-in; an
+        all-in's board shows the first street 1.8 s on, each next 2.15 s after, the win 1.75 s
+        after the river. The win: the pot's chips gather in its middle, stay 0.65 s, slide to
+        the winner in 1.2 s wherever they sit; the ring and "+N" come in from 1.45 s, the "+N"
+        rising 25 k; the name's pill fades from 5 s, the ring and "+N" from 5.55 s. Filmed
+        beside 0.13.28's with the other apps stopped so each drew at full speed (six all-in
+        hands each): the streets within a frame, the slide's fitted start and length (0.62 /
+        1.19 s against 0.63 / 1.21), the "+N"'s fade and rise to the pixel and frame, the
+        fades within 0.07 s. Not filmed again since: the Bomb Pot's crown win comes 4.4 s
+        after the last hand's win is shown, which the slower board makes later on the clock
+        (0.13.28's does too, as far as the reference measured goes).
+  - [x] The casino chat's round button at a poker table, seated or watching (as at the table
+        games; not on the floor or the poker room's lobby), to the pixel; its panel the same.
+  - [x] The buttons before my turn (0.13.4) and Out of chips with Rebuy (0.13.22), as 0.13.28's
+        (`measured/tablefeatures.md`): Check / Fold, Check, Call any; Fold, Call N, Call any
+        once someone's bet, a raise taking the tick off Call N (checked at a three-handed table
+        with two 0.13.28 apps); diffed with 0.13.28's at 1280×800 and 1600×1000, plain and
+        ticked, to the anti-aliasing. Out of chips: the panel, Rebuy, Leave seat and the gold
+        + Add chips, diffed at 1280×800 (Rebuy under the pointer too).
   - [x] The table's top bar (0.13.22) as 0.13.28's: Sit out / I'm back / Away and + Add chips,
         then icons (the hand log and Last hand, the sound, fullscreen, ☰), and the ☰ menu in
         0.13.28's order: Auto top-up, Straddle, Auto-muck, Drop a prize box (staff), Streamer
