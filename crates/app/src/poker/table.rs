@@ -154,6 +154,13 @@ impl PyrApp {
         {
             self.bomb_overlay(ui, s, tid, lay.c, lay.a, lay.b);
         }
+        // Bounty Poker: my knockouts, over the top seat.
+        if let Some(tid) = v.tourney
+            && s.poker.tourney.get(&tid).is_some_and(|tv| tv.rules.bounty.is_some())
+        {
+            let top = super::felt::on_oval(lay.c, lay.a + 16.0, lay.b + 14.0, 1.5 * std::f32::consts::PI);
+            self.bounty_overlay(ui, s, tid, top, 1.0);
+        }
         self.table_sounds(&lay, t);
         self.sit_dialogs(ui.ctx(), s, t);
         self.history_window(ui.ctx(), s);
@@ -562,23 +569,10 @@ impl PyrApp {
             } else {
                 crate::icons::plus(&p, Rect::from_center_size(at, vec2(16.0, 16.0)), col, 1.6);
                 let mine = s.me.as_ref().is_some_and(|m| m.user_id == v.owner);
-                let resp = resp.on_hover_text(if mine { "Add a bot here (right-click to pick how good)" } else { "An empty seat" });
-                if mine {
-                    if resp.clicked() {
-                        self.engine.poker(&s.key, ToServer::AddBot { table: v.id, seat: i, level: Level::Regular });
-                    }
-                    resp.context_menu(|ui| {
-                        for l in Level::ALL {
-                            // (Genius only where the server knows it.)
-                            if l == Level::Genius && !s.has(pyr_proto::control::CASINO_012_FEATURE) {
-                                continue;
-                            }
-                            if ui.button(format!("Add a {} bot", l.name())).clicked() {
-                                self.engine.poker(&s.key, ToServer::AddBot { table: v.id, seat: i, level: l });
-                                ui.close();
-                            }
-                        }
-                    });
+                let resp = resp.on_hover_text(if mine { "Add a bot here" } else { "An empty seat" });
+                // Which bot (0.13.4): the Which bot? window, as at a new table.
+                if mine && resp.clicked() {
+                    self.poker.seat_picker = Some((v.id, super::newtable::Picker { seat: i, level: Level::Regular }));
                 }
             }
             return;
@@ -1208,6 +1202,22 @@ impl PyrApp {
 
     fn sit_dialogs(&mut self, ctx: &egui::Context, s: &ServerView, t: &TableLive) {
         let v = &t.view;
+        // Which bot, for an empty seat (whoever's sitting already can't be picked twice).
+        if let Some((table, mut pk)) = self.poker.seat_picker.clone() {
+            if table != v.id || v.seats.get(pk.seat).is_none_or(|x| x.is_some()) {
+                self.poker.seat_picker = None;
+            } else {
+                let taken: Vec<String> = v.seats.iter().flatten().filter(|x| x.bot.is_some()).map(|x| x.name.clone()).collect();
+                match super::newtable::which_bot(ctx, &mut pk, &taken, s) {
+                    Some(Some(pick)) => {
+                        self.engine.poker(&s.key, ToServer::AddBot { table, seat: pk.seat, level: pick.level, who: pick.who });
+                        self.poker.seat_picker = None;
+                    }
+                    Some(None) => self.poker.seat_picker = None,
+                    None => self.poker.seat_picker = Some((table, pk)),
+                }
+            }
+        }
         let bank = s.poker.me.as_ref().map(|m| m.chips).unwrap_or(0);
         // (A tournament's table takes any stack: its most is a quarter of u64's, so this saturates.)
         let (lo, hi) = (v.rules.big_blind.saturating_mul(v.buy_in.min_bb), v.rules.big_blind.saturating_mul(v.buy_in.max_bb));
@@ -1485,24 +1495,37 @@ pub(crate) fn bot_face(p: &egui::Painter, at: Pos2, r: f32, name: &str, level: L
     let mark = Rect::from_center_size(at + vec2(0.0, 1.0), vec2(r * 0.95, r * 0.95));
     super::cards::suit(p, mark.translate(vec2(0.0, 1.5)), suit, Color32::from_black_alpha(90));
     super::cards::suit(p, mark, suit, Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 225));
-    if level == Level::Shark {
-        // A fin on top.
-        let tip = at + vec2(r * 0.15, -r * 1.02);
-        p.add(Shape::convex_polygon(vec![at + vec2(-r * 0.32, -r * 0.78), tip, at + vec2(r * 0.34, -r * 0.8)], Color32::from_rgb(0x9c, 0xb8, 0xc8), Stroke::NONE));
-    }
     if level == Level::Genius {
-        // A gold ring, and a little crown.
-        p.circle_stroke(at, r * 1.02, Stroke::new((r * 0.09).max(1.5), Color32::from_rgb(0xf5, 0xc4, 0x51)));
-        crate::icons::crown(p, Rect::from_center_size(at + vec2(0.0, -r * 1.05), vec2(r * 0.9, r * 0.6)), Color32::from_rgb(0xff, 0xd7, 0x6a));
+        // A Shark (0.13.7; Genius before): a violet ring, a little crown, and a star shining on
+        // it. (An Expert, once the Shark, has no fin since.)
+        let violet = Color32::from_rgb(0xa8, 0x7a, 0xff);
+        p.circle_stroke(at, r * 1.02, Stroke::new((r * 0.09).max(1.5), violet));
+        crate::icons::crown(p, Rect::from_center_size(at + vec2(0.0, -r * 1.05), vec2(r * 0.9, r * 0.6)), Color32::from_rgb(0xe8, 0xdc, 0xff));
+        sparkle(p, at + vec2(0.0, -r * 1.14), r * 0.45, violet);
     }
+}
+
+/// A four-pointed star, white in a violet glow (a Shark's).
+fn sparkle(p: &egui::Painter, c: Pos2, s: f32, glow: Color32) {
+    for k in 0..6 {
+        let f = 1.0 - k as f32 / 6.0;
+        p.circle_filled(c, s * 1.6 * f, glow.gamma_multiply(0.07));
+    }
+    let w = s * 0.16;
+    for (d, len) in [(vec2(0.0, 1.0), s), (vec2(1.0, 0.0), s * 1.1)] {
+        let n = vec2(d.y, d.x) * w;
+        p.add(Shape::convex_polygon(vec![c - d * len, c + n, c + d * len, c - n], Color32::WHITE, Stroke::NONE));
+    }
+    p.circle_filled(c, w * 1.4, Color32::WHITE);
 }
 
 fn level_tag(level: Level) -> (&'static str, Color32) {
     match level {
-        Level::Rookie => ("ROOKIE BOT", Color32::from_rgb(0x2f, 0x8a, 0x52)),
-        Level::Regular => ("BOT", Color32::from_rgb(0x3d, 0x5f, 0xc4)),
-        Level::Shark => ("SHARK BOT", Color32::from_rgb(0xc4, 0x34, 0x3e)),
-        Level::Genius => ("GENIUS BOT", Color32::from_rgb(0x7a, 0x4a, 0xe0)),
+        Level::Rookie => ("EASY BOT", Color32::from_rgb(0x2f, 0x8a, 0x52)),
+        Level::Regular => ("MEDIUM BOT", Color32::from_rgb(0x3d, 0x5f, 0xc4)),
+        Level::Hard => ("HARD BOT", Color32::from_rgb(0xc8, 0x6a, 0x1a)),
+        Level::Shark => ("EXPERT BOT", Color32::from_rgb(0xc4, 0x34, 0x3e)),
+        Level::Genius => ("SHARK BOT", Color32::from_rgb(0x7a, 0x4a, 0xe0)),
     }
 }
 
@@ -1686,7 +1709,7 @@ fn describe_event(e: &Event, seats: &[Option<SeatView>], streamer: bool) -> Opti
     })
 }
 
-fn dashed_circle(p: &egui::Painter, c: Pos2, r: f32, stroke: Stroke) {
+pub(crate) fn dashed_circle(p: &egui::Painter, c: Pos2, r: f32, stroke: Stroke) {
     let n = 24;
     for i in 0..n {
         if i % 2 == 1 {

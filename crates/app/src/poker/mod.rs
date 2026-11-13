@@ -8,6 +8,7 @@ pub mod cards;
 pub mod cms;
 pub mod felt;
 pub mod mark;
+pub mod newtable;
 pub mod rank;
 pub mod staff;
 pub mod table;
@@ -47,20 +48,18 @@ pub struct NewTable {
     pub name: String,
     pub variant: Variant,
     pub limit: Limit,
-    /// Index into [`STAKES`].
+    /// Index into [`newtable::STAKES`] (the high rollers' from [`newtable::HIGH`]).
     pub stakes: usize,
     pub seats: usize,
-    /// Bots: how many, and how good.
-    pub bots: usize,
-    pub level: Level,
+    /// Each seat's bot (seat 0 is whoever makes the table).
+    pub bots: Vec<Option<newtable::Pick>>,
+    /// The Which bot? window, open for a seat.
+    pub picker: Option<newtable::Picker>,
 }
-
-/// Blinds to pick from.
-pub const STAKES: [(u64, u64); 6] = [(5, 10), (10, 20), (25, 50), (50, 100), (100, 200), (250, 500)];
 
 impl Default for NewTable {
     fn default() -> NewTable {
-        NewTable { name: String::new(), variant: Variant::Holdem, limit: Limit::NoLimit, stakes: 1, seats: 6, bots: 3, level: Level::Regular }
+        NewTable { name: String::new(), variant: Variant::Holdem, limit: Limit::NoLimit, stakes: 1, seats: 6, bots: newtable::first_bots(6), picker: None }
     }
 }
 
@@ -81,6 +80,8 @@ pub struct PokerUi {
     pub table: Option<TableId>,
     pub tab: Tab,
     pub new_table: Option<NewTable>,
+    /// Which bot, for an empty seat at a table (0.13.4).
+    pub seat_picker: Option<(TableId, newtable::Picker)>,
     /// Sitting down: (table, seat, chips chosen).
     pub buy_in: Option<(TableId, usize, u64)>,
     /// Adding chips: (table, chips).
@@ -163,6 +164,8 @@ pub struct PokerUi {
     pub my_tables: std::collections::HashMap<pyr_poker::net::TourneyId, Option<TableId>>,
     /// Bomb Pots: the sounds already played for each (the wheel, the fuse, the bang).
     pub bomb_fx: bomb::BombSounds,
+    /// Bounty Poker: my knockouts (each shown once, as it comes).
+    pub knockouts: bounty::Knockouts,
     /// The tournament of the table on screen (its lobby opens when the table closes).
     pub table_tourney: Option<pyr_poker::net::TourneyId>,
     /// Where I'd finished in each tournament when last seen (to know the moment I'm out, or
@@ -864,8 +867,9 @@ impl PyrApp {
         let Some(mut n) = self.poker.new_table.clone() else { return };
         let mut open = true;
         let mut create = false;
+        // (Measured off 0.13.28: `newtable.rs`.)
         egui::Window::new("New table").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).open(&mut open).show(ctx, |ui| {
-            ui.set_width(420.0);
+            ui.set_width(520.0);
             ui.label(RichText::new("Name").color(theme::MUTED()));
             ui.add(egui::TextEdit::singleline(&mut n.name).char_limit(40).desired_width(f32::INFINITY));
             ui.add_space(8.0);
@@ -882,31 +886,49 @@ impl PyrApp {
             });
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Blinds").color(theme::MUTED()));
-                for (i, (sb, bb)) in STAKES.iter().enumerate() {
-                    ui.selectable_value(&mut n.stakes, i, format!("{sb}/{bb}"));
+                for (i, (sb, bb)) in newtable::STAKES[..newtable::HIGH].iter().enumerate() {
+                    ui.selectable_value(&mut n.stakes, i, newtable::blinds_text(*sb, *bb));
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("High roller").color(Color32::from_rgb(0xf0, 0xc0, 0x4a)));
+                for (i, (sb, bb)) in newtable::STAKES.iter().enumerate().skip(newtable::HIGH) {
+                    ui.selectable_value(&mut n.stakes, i, newtable::blinds_text(*sb, *bb));
                 }
             });
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Seats").color(theme::MUTED()));
                 for k in [2, 4, 6, 9] {
-                    ui.selectable_value(&mut n.seats, k, k.to_string());
+                    // (Other seats, other bots: they start again.)
+                    if ui.selectable_value(&mut n.seats, k, k.to_string()).changed() {
+                        n.bots = vec![None; k];
+                    }
                 }
             });
-            n.bots = n.bots.min(n.seats - 1);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Bots").color(theme::MUTED()));
-                ui.add(egui::Slider::new(&mut n.bots, 0..=n.seats - 1));
-                ui.selectable_value(&mut n.level, Level::Rookie, "Rookie");
-                ui.selectable_value(&mut n.level, Level::Regular, "Regular");
-                ui.selectable_value(&mut n.level, Level::Shark, "Shark");
-                if s.has(pyr_proto::control::CASINO_012_FEATURE) {
-                    ui.selectable_value(&mut n.level, Level::Genius, "Genius");
+            // The bots, seat by seat, on a picture of the table.
+            let (area, _) = ui.allocate_exact_size(vec2(ui.available_width(), 292.0), Sense::hover());
+            let (fill, clear) = newtable::bots_line(ui, area, n.bots.iter().flatten().count());
+            if fill {
+                for b in n.bots.iter_mut().skip(1) {
+                    if b.is_none() {
+                        *b = Some(newtable::Pick::any(Level::Regular));
+                    }
                 }
-            });
-            let (sb, bb) = STAKES[n.stakes];
+            }
+            if clear {
+                n.bots.iter_mut().for_each(|b| *b = None);
+            }
+            let (sb, bb) = newtable::STAKES[n.stakes];
+            match newtable::picture(ui, area, &n.bots, &format!("{} · {}", n.name.trim(), newtable::blinds_text(sb, bb))) {
+                Some(newtable::Click::Seat(i)) => {
+                    let level = n.bots[i].as_ref().map(|b| b.level).unwrap_or(Level::Regular);
+                    n.picker = Some(newtable::Picker { seat: i, level });
+                }
+                Some(newtable::Click::Remove(i)) => n.bots[i] = None,
+                None => {}
+            }
             let b = BuyIn::default();
             ui.label(RichText::new(format!("Sit down with {} to {} chips ({} to {} big blinds). Bots leave their seats to people who join; you can add or take them away at the table.", chips_text(b.min_bb * bb), chips_text(b.max_bb * bb), b.min_bb, b.max_bb)).size(12.5).color(theme::DIM()));
-            let _ = sb;
             ui.add_space(10.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui.add(theme::primary_button("Create table")).clicked() {
@@ -914,21 +936,24 @@ impl PyrApp {
                 }
             });
         });
-        if create {
-            let (sb, bb) = STAKES[n.stakes];
-            let rules = Rules { variant: n.variant, limit: n.limit, small_blind: sb, big_blind: bb, ante: 0, seats: n.seats };
-            // Bots in the seats after the first (seat 0 is kept for whoever made it).
-            let bots = (1..=n.bots).map(|i| (i * n.seats / (n.bots + 1).max(1) % n.seats).max(1)).collect::<std::collections::BTreeSet<_>>();
-            let mut seats: Vec<usize> = bots.into_iter().collect();
-            let mut k = 1;
-            while seats.len() < n.bots && k < n.seats {
-                if !seats.contains(&k) {
-                    seats.push(k);
+        // Which bot, for the seat clicked (the others' bots can't sit twice).
+        if let Some(mut pk) = n.picker.clone() {
+            let taken: Vec<String> = n.bots.iter().enumerate().filter(|(i, _)| *i != pk.seat).filter_map(|(_, b)| b.as_ref()?.who.clone()).collect();
+            match newtable::which_bot(ctx, &mut pk, &taken, s) {
+                Some(Some(pick)) => {
+                    n.bots[pk.seat] = Some(pick);
+                    n.picker = None;
                 }
-                k += 1;
+                Some(None) => n.picker = None,
+                None => n.picker = Some(pk),
             }
-            let bots = seats.into_iter().map(|s| (s, n.level)).collect();
-            self.engine.poker(&s.key, ToServer::Create { name: n.name.clone(), rules, bots, buy_in: BuyIn::default() });
+        }
+        if create {
+            let (sb, bb) = newtable::STAKES[n.stakes];
+            let rules = Rules { variant: n.variant, limit: n.limit, small_blind: sb, big_blind: bb, ante: 0, seats: n.seats };
+            let bots = n.bots.iter().enumerate().filter_map(|(i, b)| Some((i, b.as_ref()?.level))).collect();
+            let who = n.bots.iter().enumerate().filter_map(|(i, b)| Some((i, b.as_ref()?.who.clone()?))).collect();
+            self.engine.poker(&s.key, ToServer::Create { name: n.name.clone(), rules, bots, buy_in: BuyIn::default(), who });
             self.poker.new_table = None;
             self.poker.awaiting_new = true;
             return;

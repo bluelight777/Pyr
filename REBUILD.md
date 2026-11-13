@@ -471,7 +471,9 @@ How (decided while starting it):
       0.13.28's). At the table, the price on each head on a pill at the plate's foot (0.13.28's
       at its table's size, drawn at 0.84 it matches 0.13.28's at 1280 wide; the table's sizes
       are the scaling item's). Not seen on 0.13.28: a person's knockout (paid on the spot, its
-      card says), a split pot's knockout. Measurements in `rebuild/measured/bounty.md`.
+      card says), a split pot's knockout. Measurements in `rebuild/measured/bounty.md`. A
+      knockout of mine shows "BOUNTY +n" under a crosshair at the table's top for three seconds:
+      in, but not yet seen side by side with 0.13.28's (it needs a knockout by me there).
 - [x] High stakes and higher-than-high tables, 500K/1M/5M chips (0.13.6): three tables of each,
       0.13.28's names and bets (Hearth 10–1,000, High Limit 500–100,000, Crown Room 10,000 to
       10,000,000; Monte Carlo, Riviera High Rollers to 500,000, Grand Salle; Salon Privé, Black
@@ -509,12 +511,28 @@ How (decided while starting it):
       (only shown by servers older than 0.12, which have neither) keeps 0.13.0's layout; the
       server takes buys and lays there as 0.13.28's does.
 - [ ] Dominó Cubano tables in the casino, to 10,000,000, El Presidente (0.13.11/12)
-- [ ] Poker: rabbit (0.13.4/6/7), straddle (0.13.4), new table with seat and bot picker, 20 bots
-      (0.13.4), bot levels Easy to Shark (0.13.7), bots think and bluff like people (0.13.26),
-      close tables (0.13.4/24), add chips and top-up (0.13.22), high-roller blinds (0.13.22),
-      top bar (0.13.22), titles and badges (0.13.4/6: GAME MASTER / OWNER on staff's seats, Title
-      shown or hidden: `hide_title`, the record's field and request are in already), pre-action buttons (0.13.4), slower wins
-      (0.13.4), scaling (0.13.6), table sounds (0.13.6)
+- [ ] Poker: rabbit (0.13.4/6/7), straddle (0.13.4), bots think and bluff like people (0.13.26),
+      close tables (0.13.4/24), add chips and top-up (0.13.22), top bar (0.13.22), titles and
+      badges (0.13.4/6: GAME MASTER / OWNER on staff's seats, Title shown or hidden:
+      `hide_title`, the record's field and request are in already), pre-action buttons (0.13.4),
+      slower wins (0.13.4), scaling (0.13.6), table sounds (0.13.6), the level badges' rings
+      (green 50, gold 30, bronze 12…), the suits on bot faces and card pips (0.13.28's are one
+      smooth shape each; the rebuild's are 0.13.0's circles and polygons), the Shark's crown
+      and star (`measured/newtable.md`)
+  - [x] New table (0.13.4/0.13.22) as 0.13.28's, measured: the High roller blinds (500/1K to
+        25K/50K), a picture of the table with each seat's bot (who and how good, × to take one
+        away, Fill the seats, Clear), and Which bot? (How good, then Anyone or one of the 20 by
+        name, the ones sitting greyed "Ace's at this table already"); the same at a table's
+        empty seat; a server without `poker_pick_bot` gets "Add a Medium bot", one without
+        `hard_bots` no Hard. Compared with 0.13.28 to the pixel but for the suits on the faces.
+        `create`/`add_bot` with `who` as 0.13.28 sends them (taken off it; Anyone sends none).
+  - [x] Bot levels (0.13.7): Easy, Medium, Hard (new: between Medium and Expert, look level 20,
+        first MMR 1,075), Expert, Shark; their wire names stay rookie, regular, hard, shark,
+        genius, and so do the ratings' ids (`bot:shark:…` is an Expert, as 0.13.28 keeps them).
+        Tags EASY/MEDIUM/HARD/EXPERT/SHARK BOT; an Expert has no fin, a Shark a violet ring
+        (168,122,255) (its crown and star still to match). Apps without `casino_0_13_7` (0.13.28's
+        cap) are told a Hard bot is a Medium one, as 0.13.28's server tells them; the rebuilt app
+        sends it. New tournament: the five levels (Hard where the server has it).
 - [x] Keys for every game (0.13.26): a Keys button on every game's top bar (lit while open, where
       0.13.28 has it: left of the sound), Keys in the casino's menu bar, Keys… in a poker table's
       menu: the Keys window as 0.13.28 has it, measured (its moves, words, keys, colors, the ×

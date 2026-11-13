@@ -4,17 +4,18 @@
 //!
 //! The server keeps the bounties (in the tournament's view, by player); the table shows them.
 
-use std::time::Duration;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Align2, Color32, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, pos2, vec2};
 use eframe::emath::GuiRounding;
 use pyr_engine::state::ServerView;
-use pyr_poker::net::{ToServer, TourneyPhase, TourneyView};
+use pyr_poker::net::{ToServer, TourneyId, TourneyPhase, TourneyView};
 use pyr_poker::tourney::{BOUNTY_BUY_INS, BOUNTY_STACK, BOUNTY_WAIT_MS};
 
 use super::cards::chips_text;
 use crate::app::PyrApp;
-use crate::casino::{col, glow_text, radial};
+use crate::casino::{col, ease_out, glow_text, radial};
 use crate::theme;
 
 const TAU: f32 = std::f32::consts::TAU;
@@ -37,6 +38,20 @@ const PILL_EDGE: Color32 = Color32::from_rgb(0xff, 0x9a, 0x7a);
 /// and the Games menu picture's dark red.
 const WIDE_GLOW: Color32 = Color32::from_rgba_premultiplied(50, 8, 6, 117);
 const THUMB: Color32 = Color32::from_rgb(0x2a, 0x08, 0x08);
+
+/// My knockouts at Bounty Poker: what I'd won from bounties when each tournament was last seen,
+/// and the one being shown ("BOUNTY +250" over the table, 0.13.28's: only to whoever took it).
+#[derive(Default)]
+pub struct Knockouts {
+    seen: HashMap<TourneyId, u64>,
+    shown: Option<(TourneyId, Instant, u64)>,
+}
+
+/// How long a knockout shows: the crosshair pops in over its first half second, and it all
+/// goes over its last (filmed on 0.13.28: three seconds).
+const KO_S: f32 = 3.0;
+const KO_IN_S: f32 = 0.5;
+const KO_OUT_S: f32 = 0.5;
 
 fn wall() -> u64 {
     pyr_proto::now_ms().max(0) as u64
@@ -122,6 +137,44 @@ pub fn bounty_pill(p: &egui::Painter, plate_foot: Pos2, bounty: u64, k: f32, fad
 }
 
 impl PyrApp {
+    /// At a Bounty Poker table: a knockout of mine, as 0.13.28 shows it to whoever took the
+    /// head: the crosshair pops up over the top seat and "BOUNTY +250" under it, for three
+    /// seconds (`top`: the top seat's middle; `k`: the table's size).
+    pub fn bounty_overlay(&mut self, ui: &mut egui::Ui, s: &ServerView, tid: TourneyId, top: Pos2, k: f32) {
+        let me = s.me.as_ref().map(|m| m.user_id.as_str()).unwrap_or_default();
+        if let Some(v) = s.poker.tourney.get(&tid)
+            && let Some(e) = v.entrants.iter().find(|e| e.uid == me)
+        {
+            let before = self.poker.knockouts.seen.insert(tid, e.bounties_won);
+            // (Not the winner's own bounty at the end: that comes with the prize.)
+            if let Some(before) = before
+                && e.bounties_won > before
+                && v.phase == TourneyPhase::Running
+                && e.place.is_none()
+            {
+                self.poker.knockouts.shown = Some((tid, Instant::now(), e.bounties_won - before));
+            }
+        }
+        let Some((shown_tid, at, amount)) = self.poker.knockouts.shown else { return };
+        let age = at.elapsed().as_secs_f32();
+        if shown_tid != tid || age >= KO_S {
+            self.poker.knockouts.shown = None;
+            return;
+        }
+        ui.ctx().request_repaint();
+        let p = ui.painter();
+        let t = ui.ctx().input(|i| i.time) as f32;
+        let pop = crate::casino::ease_back((age / KO_IN_S).min(1.0));
+        let out = ((age - (KO_S - KO_OUT_S)) / KO_OUT_S).clamp(0.0, 1.0);
+        let size = pop * (1.0 - ease_out(out));
+        if size > 0.01 {
+            crosshair(p, top, 0.57 * k * size, t);
+        }
+        let alpha = (age / 0.1).min(1.0) * (1.0 - out);
+        let glow = Color32::from_rgba_unmultiplied(0xe8, 0x20, 0x10, 110).gamma_multiply(alpha);
+        glow_text(p, top + vec2(0.0, 70.0 * k), Align2::CENTER_CENTER, &format!("BOUNTY +{}", chips_text(amount)), theme::bold_font(45.0 * k), col::GOLD2.gamma_multiply(alpha), glow);
+    }
+
     /// The Bounty Poker card in the sit & gos (0.13.6), as 0.13.28 draws it: what it is, a Play
     /// button for each buy-in, the one I'm waiting in (Leave, its six seats, the bots'
     /// countdown), or the one I'm playing; the crosshair turning on the right.

@@ -596,15 +596,23 @@ impl Room {
         Ok(out)
     }
 
-    pub fn add_bot(&mut self, seat: usize, level: Level, now: u64, rng: &mut dyn Random) -> Result<Output, String> {
+    /// A bot sits down at `seat`: `who` (one of the twenty, by name), or whichever of them isn't
+    /// sitting here yet.
+    pub fn add_bot(&mut self, seat: usize, level: Level, who: Option<&str>, now: u64, rng: &mut dyn Random) -> Result<Output, String> {
         if self.tourney.is_some() {
             return Err("this is a tournament table".into());
         }
         let names = ["Ace", "Blaze", "Cinder", "Dusk", "Ember", "Flint", "Gale", "Hex", "Ivy", "Jinx", "Koda", "Lux", "Moss", "Nova", "Onyx", "Pike", "Quill", "Rook", "Sage", "Tarn"];
         let taken: Vec<String> = self.table.seats.iter().flatten().map(|s| s.name.clone()).collect();
-        let free: Vec<&&str> = names.iter().filter(|n| !taken.iter().any(|t| t.starts_with(**n))).collect();
-        let base = free.get(rng.below(free.len().max(1) as u32) as usize).map(|n| n.to_string()).unwrap_or_else(|| "Bot".into());
-        let name = base;
+        let sitting = |n: &str| taken.iter().any(|t| t.split_whitespace().next() == Some(n));
+        let name = match who.and_then(|w| names.iter().find(|n| n.eq_ignore_ascii_case(w.trim()))) {
+            Some(n) if sitting(n) => return Err(format!("{n}'s at this table already")),
+            Some(n) => n.to_string(),
+            None => {
+                let free: Vec<&&str> = names.iter().filter(|n| !sitting(n)).collect();
+                free.get(rng.below(free.len().max(1) as u32) as usize).map(|n| n.to_string()).unwrap_or_else(|| "Bot".into())
+            }
+        };
         let id = format!("bot:{}:{seat}:{}", self.id, rng.below(1_000_000));
         // Bots sit with the most chips the table allows.
         let chips = self.max_buy_in();

@@ -37,21 +37,41 @@ use crate::game::{Action, Legal, Limit, Played, Street, Table, Variant};
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Level {
+    /// Easy (Rookie until 0.13.7).
     Rookie,
+    /// Medium (Regular).
     Regular,
+    /// Hard (0.13.7), between Medium and Expert.
+    Hard,
+    /// Expert (Shark).
     Shark,
+    /// Shark (Genius).
     Genius,
 }
 
 impl Level {
-    pub const ALL: [Level; 4] = [Level::Rookie, Level::Regular, Level::Shark, Level::Genius];
+    pub const ALL: [Level; 5] = [Level::Rookie, Level::Regular, Level::Hard, Level::Shark, Level::Genius];
 
+    /// Its wire name (the old names, kept: `rookie` is Easy, and so on), also what its rating's
+    /// called (`bot:shark:Blaze` is an Expert Blaze, as 0.13.28 keeps them).
+    pub fn wire(self) -> &'static str {
+        match self {
+            Level::Rookie => "rookie",
+            Level::Regular => "regular",
+            Level::Hard => "hard",
+            Level::Shark => "shark",
+            Level::Genius => "genius",
+        }
+    }
+
+    /// Its name since 0.13.7.
     pub fn name(self) -> &'static str {
         match self {
-            Level::Rookie => "Rookie",
-            Level::Regular => "Regular",
-            Level::Shark => "Shark",
-            Level::Genius => "Genius",
+            Level::Rookie => "Easy",
+            Level::Regular => "Medium",
+            Level::Hard => "Hard",
+            Level::Shark => "Expert",
+            Level::Genius => "Shark",
         }
     }
 
@@ -60,15 +80,18 @@ impl Level {
         match self {
             Level::Rookie => 3,
             Level::Regular => 12,
+            Level::Hard => 20,
             Level::Shark => 30,
             Level::Genius => 50,
         }
     }
 
-    /// What a 0.11 app can be told (it doesn't know Genius: a Shark, to it).
+    /// What a 0.11 app can be told (it doesn't know Genius: a Shark, to it; nor Hard: a
+    /// Regular).
     pub fn for_older_app(self) -> Level {
         match self {
             Level::Genius => Level::Shark,
+            Level::Hard => Level::Regular,
             l => l,
         }
     }
@@ -80,6 +103,7 @@ impl Level {
             // noise: how far off its sense of its chances is.
             Level::Rookie => Style { tight: 0.75, aggression: 0.25, bluff: 0.03, noise: 0.15, sims: 150 },
             Level::Regular => Style { tight: 1.0, aggression: 0.6, bluff: 0.08, noise: 0.07, sims: 300 },
+            Level::Hard => Style { tight: 1.03, aggression: 0.68, bluff: 0.12, noise: 0.05, sims: 450 },
             Level::Shark | Level::Genius => Style { tight: 1.05, aggression: 0.75, bluff: 0.16, noise: 0.03, sims: 600 },
         }
     }
@@ -470,6 +494,7 @@ fn decide_simply(view: &View, level: Level, who: &Persona, rng: &mut Stream) -> 
     let margin = match level {
         Level::Rookie => -0.08,
         Level::Regular => 0.02,
+        Level::Hard => 0.01,
         Level::Shark | Level::Genius => 0.0,
     } - (who.loose - 1.0) * 0.05
         - who.sticky;
@@ -532,6 +557,7 @@ pub fn think_ms(spot: &Spot, level: Level, who: &Persona, action: Action, rng: &
     let level_k = match level {
         Level::Rookie => 0.82,
         Level::Regular => 0.95,
+        Level::Hard => 1.0,
         Level::Shark => 1.05,
         Level::Genius => 1.12,
     };

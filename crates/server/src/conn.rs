@@ -250,6 +250,8 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
         send.write_all(&reject(ErrorCode::BadRequest, "expected login")).await?;
         bail!("first request was not a login");
     };
+    // (Development: who logged in with what, beside the requests.)
+    dev_frame_log(format!("{{\"login\":{{\"client\":{client:?},\"caps\":{caps:?}}}}}").as_bytes());
     if proto != PROTOCOL_VERSION {
         let msg = format!("This server speaks protocol v{PROTOCOL_VERSION}; your app speaks v{proto}. Please update.");
         send.write_all(&reject(ErrorCode::VersionMismatch, &msg)).await?;
@@ -299,6 +301,8 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
     let movable = caps.iter().any(|c| c == MOVE_CAP);
     let casino = if caps.iter().any(|c| c == PROPS_CAP) {
         pyr_poker::net::CASINO_PROPS
+    } else if caps.iter().any(|c| c == CASINO_0137_CAP) {
+        pyr_poker::net::CASINO_0137
     } else if caps.iter().any(|c| c == CASINO_013_CAP) {
         pyr_poker::net::CASINO_013
     } else if caps.iter().any(|c| c == CASINO_012_CAP) {

@@ -465,11 +465,12 @@ impl PyrApp {
                 ui.label(RichText::new("Bots").color(theme::MUTED()));
                 ui.horizontal(|ui| {
                     ui.add(egui::Slider::new(&mut n.bots, 0..=n.max_players.min(60)));
-                    ui.selectable_value(&mut n.bot_level, Level::Rookie, "Rookie");
-                    ui.selectable_value(&mut n.bot_level, Level::Regular, "Regular");
-                    ui.selectable_value(&mut n.bot_level, Level::Shark, "Shark");
-                    if s.has(pyr_proto::control::CASINO_012_FEATURE) {
-                        ui.selectable_value(&mut n.bot_level, Level::Genius, "Genius");
+                    // (0.13.7's names; Hard and Shark where the server has them.)
+                    for l in Level::ALL {
+                        if (l == Level::Hard && !s.has(pyr_proto::control::HARD_BOTS_FEATURE)) || (l == Level::Genius && !s.has(pyr_proto::control::CASINO_012_FEATURE)) {
+                            continue;
+                        }
+                        ui.selectable_value(&mut n.bot_level, l, l.name());
                     }
                 });
                 ui.end_row();

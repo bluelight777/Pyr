@@ -524,7 +524,7 @@ impl Poker {
                 let tables = st.rooms.values().map(|r| r.summary()).collect();
                 Ok(Some(ToApp::Lobby { tables, me: self.me(hub, st, uid) }))
             }
-            ToServer::Create { name, rules, bots, buy_in } => {
+            ToServer::Create { name, rules, bots, buy_in, who } => {
                 if st.rooms.len() >= MAX_TABLES {
                     return Err("this server has as many tables as it can keep; join one".into());
                 }
@@ -533,8 +533,11 @@ impl Poker {
                 }
                 let id = self.next_id.fetch_add(1, Ordering::Relaxed);
                 let mut room = Room::new(id, &name, uid, rules, buy_in)?;
-                for (seat, level) in bots {
-                    room.add_bot(seat, level, now, &mut rng)?;
+                // The ones picked by name first, so that none of them is taken by an "anyone".
+                let named = |seat: usize| who.iter().find(|(s, _)| *s == seat).map(|(_, n)| n.as_str());
+                let (picked, anyone): (Vec<_>, Vec<_>) = bots.into_iter().partition(|(seat, _)| named(*seat).is_some());
+                for (seat, level) in picked.into_iter().chain(anyone) {
+                    room.add_bot(seat, level, named(seat), now, &mut rng)?;
                 }
                 let snap = room.watch(uid);
                 info!(table = id, "poker table made: {}", room.name);
@@ -613,12 +616,12 @@ impl Poker {
                 self.flush(hub, st, table, out);
                 Ok(None)
             }
-            ToServer::AddBot { table, seat, level } => {
+            ToServer::AddBot { table, seat, level, who } => {
                 let room = room!(table);
                 if room.owner != uid && !can_manage {
                     return Err("only whoever made the table can add bots".into());
                 }
-                let out = room.add_bot(seat, level, now, &mut rng)?;
+                let out = room.add_bot(seat, level, who.as_deref(), now, &mut rng)?;
                 self.flush(hub, st, table, out);
                 Ok(None)
             }
@@ -1309,7 +1312,7 @@ mod tests {
         assert!(tables.is_empty());
         assert_eq!(me.chips, progress::STARTING_CHIPS);
         let Some(ToApp::Snapshot { table }) = p
-            .handle(&hub, "alice", false, ToServer::Create { name: "Friday".into(), rules: Rules::holdem(10, 20, 6), bots: vec![(1, Level::Shark), (2, Level::Rookie)], buy_in: BuyIn::default() })
+            .handle(&hub, "alice", false, ToServer::Create { name: "Friday".into(), rules: Rules::holdem(10, 20, 6), bots: vec![(1, Level::Shark), (2, Level::Rookie)], buy_in: BuyIn::default(), who: vec![] })
             .unwrap()
         else {
             panic!()
@@ -1341,7 +1344,7 @@ mod tests {
         let hub = hub();
         let p = &hub.poker;
         let Some(ToApp::Snapshot { table }) = p
-            .handle(&hub, "erin", false, ToServer::Create { name: "Late".into(), rules: Rules::holdem(10, 20, 6), bots: vec![(1, Level::Rookie)], buy_in: BuyIn::default() })
+            .handle(&hub, "erin", false, ToServer::Create { name: "Late".into(), rules: Rules::holdem(10, 20, 6), bots: vec![(1, Level::Rookie)], buy_in: BuyIn::default(), who: vec![] })
             .unwrap()
         else {
             panic!()

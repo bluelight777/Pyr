@@ -926,7 +926,7 @@ mod tests {
         };
         let out = room.sit("alice", "Alice", 0, 1000, Look::default(), 0).unwrap();
         deliver(out, &mut ps, &mut room, 0);
-        let out = room.add_bot(1, pyr_poker::bots::Level::Regular, 0, &mut rng).unwrap();
+        let out = room.add_bot(1, pyr_poker::bots::Level::Regular, None, 0, &mut rng).unwrap();
         deliver(out, &mut ps, &mut room, 0);
         let mut now = 0;
         let mut runouts = 0;

@@ -415,6 +415,12 @@ pub const CASINO_013_FEATURE: &str = "casino_0_13";
 /// In `Login::caps`: this app knows Pyr Casino's games and messages from 0.13.0. Apps without it
 /// are never sent them.
 pub const CASINO_013_CAP: &str = "casino_0_13";
+/// In `Login::caps`: this app knows 0.13.7's casino: Hard bots (an app without it is told a
+/// Hard bot is a Medium one, as 0.13.28's server tells it). 0.13.28's name (its apps send it).
+pub const CASINO_0137_CAP: &str = "casino_0_13_7";
+/// In `Login::caps`: this app knows 0.13.11's casino (Dominó Cubano). 0.13.28's apps send it;
+/// the rebuild doesn't yet.
+pub const CASINO_01311_CAP: &str = "casino_0_13_11";
 /// Levels (0.13.5): a hundred in ten tiers, XP from playing, missions, the VIP Club (Ember Back,
 /// the weekly bonus): `RecordView`'s `tier`, `missions`, `ember_back` and the rest, and
 /// `ClaimEmber`/`ClaimWeekly`. 0.13.28's name for it, so its apps show them here too.
@@ -445,6 +451,18 @@ pub const SLOTS_100K_FEATURE: &str = "slots_100k";
 pub const BIG_BOMB_POTS_FEATURE: &str = "big_bomb_pots";
 /// Bounty Poker (0.13.6): `bounty` sit & gos, six seats with a price on every head.
 pub const BOUNTY_POKER_FEATURE: &str = "bounty_poker";
+/// Rabbit hunting at the poker tables (0.13.4): `rabbit` shows the cards a hand ended before.
+pub const POKER_RABBIT_FEATURE: &str = "poker_rabbit";
+/// Straddles at the cash tables (0.13.4): `straddle`.
+pub const POKER_STRADDLE_FEATURE: &str = "poker_straddle";
+/// A new table's bots picked by who and how good, seat by seat (0.13.4).
+pub const POKER_PICK_BOT_FEATURE: &str = "poker_pick_bot";
+/// Staff's titles hidden at the tables if they like (0.13.6): `hide_title`.
+pub const HIDE_TITLE_FEATURE: &str = "hide_title";
+/// The Hard bots, between Medium and Expert (0.13.7).
+pub const HARD_BOTS_FEATURE: &str = "hard_bots";
+/// Chips added at a poker table at any time, kept till the hand's over (0.13.22).
+pub const POKER_TOP_UP_ANYTIME_FEATURE: &str = "poker_top_up_anytime";
 /// Three tables of each table game (0.13.6): high stakes to 100,000 and higher than high to
 /// 10,000,000 (the Crown Room, the Grand Salle, the Imperial Salon, the Sky Rollers), the 500K,
 /// 1000K and 5000K chips. 0.13.28's name.

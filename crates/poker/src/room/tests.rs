@@ -36,8 +36,8 @@ fn people_and_bots_play_and_every_chip_is_kept() {
     let look = Look::default();
     r.sit("alice", "Alice", 0, 1000, look.clone(), 0).unwrap();
     r.sit("bob", "Bob", 2, 1500, look.clone(), 0).unwrap();
-    r.add_bot(3, Level::Shark, 0, &mut rng).unwrap();
-    r.add_bot(5, Level::Rookie, 0, &mut rng).unwrap();
+    r.add_bot(3, Level::Shark, None, 0, &mut rng).unwrap();
+    r.add_bot(5, Level::Rookie, None, 0, &mut rng).unwrap();
     let mut log = Vec::new();
     let mut effects = Vec::new();
     let mut choose = |r: &Room, uid: &str| {
@@ -130,7 +130,7 @@ fn standing_up_in_a_hand_folds_and_gives_the_chips_back_after() {
     let mut rng = Stream::new(seed_from(4));
     r.sit("alice", "Alice", 0, 1000, Look::default(), 0).unwrap();
     r.sit("bob", "Bob", 1, 1000, Look::default(), 0).unwrap();
-    r.add_bot(2, Level::Regular, 0, &mut rng).unwrap();
+    r.add_bot(2, Level::Regular, None, 0, &mut rng).unwrap();
     let mut now = 0;
     while r.table.hand.is_none() {
         r.tick(now, &mut rng);
@@ -204,8 +204,8 @@ fn the_bomb_makes_the_very_next_hand_all_in() {
     let look = Look::default();
     r.sit("alice", "Alice", 0, 1000, look.clone(), 0).unwrap();
     r.sit("bob", "Bob", 1, 1000, look.clone(), 0).unwrap();
-    r.add_bot(2, Level::Rookie, 0, &mut rng).unwrap();
-    r.add_bot(3, Level::Regular, 0, &mut rng).unwrap();
+    r.add_bot(2, Level::Rookie, None, 0, &mut rng).unwrap();
+    r.add_bot(3, Level::Regular, None, 0, &mut rng).unwrap();
     // On till a hand's being played and it's a person's turn.
     let mut now = 0;
     loop {
@@ -327,8 +327,8 @@ fn a_prize_box_goes_to_whoever_wins_the_hand_a_bot_too() {
     let mut r = room();
     let mut rng = Stream::new(seed_from(7));
     r.sit("alice", "Alice", 0, 1000, Look::default(), 0).unwrap();
-    r.add_bot(2, Level::Rookie, 0, &mut rng).unwrap();
-    r.add_bot(4, Level::Shark, 0, &mut rng).unwrap();
+    r.add_bot(2, Level::Rookie, None, 0, &mut rng).unwrap();
+    r.add_bot(4, Level::Shark, None, 0, &mut rng).unwrap();
     let chips = |r: &Room| r.table.seats.iter().flatten().map(|s| s.stack).sum::<u64>();
     let before = chips(&r);
     let mut out = Output::default();
@@ -392,4 +392,20 @@ fn cards_can_be_shown_after_the_hand_and_not_once_the_next_starts() {
         now = run(&mut r, &mut rng, now, now + 250, &mut choose, &mut log, &mut effects);
     }
     assert!(r.show_cards("bob", hand).is_err());
+}
+
+/// Bots picked by name (0.13.4): that one sits, and it can't sit twice; anyone else is whoever
+/// isn't sitting yet.
+#[test]
+fn a_bot_picked_by_name_sits_once() {
+    let mut r = room();
+    let mut rng = Stream::new(seed_from(7));
+    r.add_bot(1, Level::Hard, Some("Ace"), 0, &mut rng).unwrap();
+    assert_eq!(r.table.seats[1].as_ref().map(|s| s.name.as_str()), Some("Ace"));
+    assert_eq!(r.add_bot(2, Level::Regular, Some("ace"), 0, &mut rng).err().as_deref(), Some("Ace's at this table already"));
+    for seat in 2..6 {
+        r.add_bot(seat, Level::Genius, None, 0, &mut rng).unwrap();
+    }
+    let names: Vec<&str> = r.table.seats.iter().flatten().map(|s| s.name.as_str()).collect();
+    assert_eq!(names.iter().filter(|n| **n == "Ace").count(), 1, "{names:?}");
 }

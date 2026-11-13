@@ -59,8 +59,16 @@ pub mod hex32 {
 pub enum ToServer {
     /// The tables here, and my record.
     Lobby,
-    /// A new table. Bots sit in the seats given.
-    Create { name: String, rules: Rules, bots: Vec<(usize, Level)>, buy_in: BuyIn },
+    /// A new table. Bots sit in the seats given, the ones in `who` by name (0.13.4: picked by
+    /// who, the others whichever isn't sitting yet).
+    Create {
+        name: String,
+        rules: Rules,
+        bots: Vec<(usize, Level)>,
+        buy_in: BuyIn,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        who: Vec<(usize, String)>,
+    },
     /// Follow a table (its snapshot, then everything that happens there).
     Watch { table: TableId },
     Unwatch { table: TableId },
@@ -84,7 +92,14 @@ pub enum ToServer {
     },
     /// Use my time bank now (it's also used by itself when my time runs out).
     TimeBank { table: TableId },
-    AddBot { table: TableId, seat: usize, level: Level },
+    /// A bot in an empty seat, whichever isn't sitting yet or the one named (0.13.4).
+    AddBot {
+        table: TableId,
+        seat: usize,
+        level: Level,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        who: Option<String>,
+    },
     RemoveBot { table: TableId, seat: usize },
     Emote { table: TableId, emote: String },
     Daily,
@@ -654,6 +669,8 @@ impl ToApp {
 pub const CASINO_011: u8 = 11;
 pub const CASINO_012: u8 = 12;
 pub const CASINO_013: u8 = 13;
+/// An app that knows 0.13.7's casino (`CASINO_0137_CAP`): Hard bots.
+pub const CASINO_0137: u8 = 20;
 /// An app that also reads prop bets (`PROPS_CAP`, the rebuild's): above every 0.13 level (an
 /// app that says it knows everything that came before).
 pub const CASINO_PROPS: u8 = 100;
@@ -665,10 +682,41 @@ impl ToApp {
         if self.is_props() && casino < CASINO_PROPS {
             return None;
         }
+        // (Before 0.13.7 there were no Hard bots: a Medium one, as 0.13.28's server says.)
+        let m = if casino < CASINO_0137 { self.without_hard_bots() } else { self };
         match casino {
-            c if c >= CASINO_013 => Some(self),
-            CASINO_012 => self.for_012_app(),
-            _ => self.for_older_app(),
+            c if c >= CASINO_013 => Some(m),
+            CASINO_012 => m.for_012_app(),
+            _ => m.for_older_app(),
+        }
+    }
+
+    /// Hard bots told as Medium ones (their looks' level as it is), for an app from before
+    /// 0.13.7.
+    fn without_hard_bots(self) -> ToApp {
+        let medium = |b: &mut Option<Level>| {
+            if *b == Some(Level::Hard) {
+                *b = Some(Level::Regular);
+            }
+        };
+        match self {
+            ToApp::Snapshot { mut table } => {
+                table.seats.iter_mut().flatten().for_each(|s| medium(&mut s.bot));
+                ToApp::Snapshot { table }
+            }
+            ToApp::Player { table, mut player } => {
+                medium(&mut player.bot);
+                ToApp::Player { table, player }
+            }
+            ToApp::Tourney { mut view } => {
+                view.entrants.iter_mut().for_each(|e| medium(&mut e.bot));
+                ToApp::Tourney { view }
+            }
+            ToApp::Ratings { mut rows } => {
+                rows.iter_mut().for_each(|r| medium(&mut r.bot));
+                ToApp::Ratings { rows }
+            }
+            m => m,
         }
     }
 
@@ -1718,6 +1766,44 @@ mod tests {
         let j = serde_json::to_string(&m).unwrap();
         assert!(j.contains("\"game\":\"baccarat\""), "{j}");
         assert_eq!(serde_json::from_str::<ToServer>(&j).unwrap(), m);
+    }
+
+    /// A new table's bots and a bot at an empty seat picked by who and how good, as 0.13.28's
+    /// app sends them (taken from it, on the rebuilt server): wire names are the old ones
+    /// (genius is Shark, shark Expert), `who` only for the ones picked by name.
+    #[test]
+    fn bots_picked_as_0_13_28_asks() {
+        let create = r#"{"op":"create","name":"Friend's table","rules":{"variant":"holdem","limit":"no_limit","small_blind":10,"big_blind":20,"ante":0,"seats":6},"bots":[[2,"genius"],[3,"shark"],[4,"regular"]],"buy_in":{"min_bb":40,"max_bb":200},"who":[[2,"Sage"],[3,"Moss"]]}"#;
+        let m: ToServer = serde_json::from_str(create).unwrap();
+        let ToServer::Create { bots, who, .. } = &m else { panic!() };
+        assert_eq!(bots, &vec![(2, Level::Genius), (3, Level::Shark), (4, Level::Regular)]);
+        assert_eq!(who, &vec![(2, "Sage".to_string()), (3, "Moss".to_string())]);
+        assert_eq!(serde_json::to_string(&m).unwrap(), create);
+        let named = r#"{"op":"add_bot","table":1,"seat":1,"level":"hard","who":"Nova"}"#;
+        let m: ToServer = serde_json::from_str(named).unwrap();
+        assert_eq!(m, ToServer::AddBot { table: 1, seat: 1, level: Level::Hard, who: Some("Nova".into()) });
+        assert_eq!(serde_json::to_string(&m).unwrap(), named);
+        let anyone = r#"{"op":"add_bot","table":1,"seat":5,"level":"regular"}"#;
+        let m: ToServer = serde_json::from_str(anyone).unwrap();
+        assert_eq!(m, ToServer::AddBot { table: 1, seat: 5, level: Level::Regular, who: None });
+        assert_eq!(serde_json::to_string(&m).unwrap(), anyone);
+        // A new table from an older app: no `who`.
+        let old = create.replace(r#","who":[[2,"Sage"],[3,"Moss"]]"#, "");
+        let ToServer::Create { who, .. } = serde_json::from_str(&old).unwrap() else { panic!() };
+        assert!(who.is_empty());
+    }
+
+    /// An app from before 0.13.7 (without `casino_0_13_7`) is told a Hard bot is a Medium one,
+    /// as 0.13.28's server tells it (the rebuilt app watching its table, a Hard Quill: MEDIUM
+    /// BOT); one that knows them, as it is.
+    #[test]
+    fn hard_bots_are_medium_to_apps_from_before_0_13_7() {
+        let row = |bot| RatingRow { id: "bot:hard:Quill".into(), name: "Quill".into(), bot, mmr: 1075, peak: 1075, tourneys: 0, hands: 0, placing: true };
+        let m = ToApp::Ratings { rows: vec![row(Some(Level::Hard)), row(Some(Level::Genius))] };
+        assert_eq!(m.clone().for_app(CASINO_0137), Some(m.clone()));
+        assert_eq!(m.clone().for_app(CASINO_PROPS), Some(m.clone()));
+        assert_eq!(m.clone().for_app(CASINO_013), Some(ToApp::Ratings { rows: vec![row(Some(Level::Regular)), row(Some(Level::Genius))] }));
+        assert_eq!(m.for_app(CASINO_012), Some(ToApp::Ratings { rows: vec![row(Some(Level::Regular)), row(Some(Level::Genius))] }));
     }
 
     /// A table invite, as 0.13.28's app asks for it and its server sends it (both taken from

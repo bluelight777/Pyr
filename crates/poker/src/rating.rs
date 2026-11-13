@@ -40,6 +40,7 @@ impl Rating {
         let mmr = match level {
             Level::Rookie => 800.0,
             Level::Regular => 1_000.0,
+            Level::Hard => 1_075.0,
             Level::Shark => 1_150.0,
             Level::Genius => 1_450.0,
         };
@@ -194,7 +195,7 @@ pub fn rate_hand(ratings: &mut [Rating], net_bb: &[f64]) {
 /// sits, its rating its own).
 pub fn id_of(uid: &str, name: &str, bot: Option<Level>) -> String {
     match bot {
-        Some(l) => format!("bot:{}:{}", l.name().to_lowercase(), name.split_whitespace().next().unwrap_or(name)),
+        Some(l) => format!("bot:{}:{}", l.wire(), name.split_whitespace().next().unwrap_or(name)),
         None => uid.to_string(),
     }
 }

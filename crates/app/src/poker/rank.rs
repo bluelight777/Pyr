@@ -133,10 +133,11 @@ impl PyrApp {
                 p.galley(pos2(r.left() + 88.0, r.center().y - 10.0 - name.size().y / 2.0), name, theme::TEXT());
                 if let Some(level) = row.bot {
                     let (text, col) = match level {
-                        pyr_poker::bots::Level::Genius => ("GENIUS BOT", Color32::from_rgb(0x7a, 0x4a, 0xe0)),
-                        pyr_poker::bots::Level::Shark => ("SHARK BOT", Color32::from_rgb(0xc4, 0x34, 0x3e)),
-                        pyr_poker::bots::Level::Regular => ("BOT", Color32::from_rgb(0x3d, 0x5f, 0xc4)),
-                        pyr_poker::bots::Level::Rookie => ("ROOKIE BOT", Color32::from_rgb(0x2f, 0x8a, 0x52)),
+                        pyr_poker::bots::Level::Genius => ("SHARK BOT", Color32::from_rgb(0x7a, 0x4a, 0xe0)),
+                        pyr_poker::bots::Level::Shark => ("EXPERT BOT", Color32::from_rgb(0xc4, 0x34, 0x3e)),
+                        pyr_poker::bots::Level::Hard => ("HARD BOT", Color32::from_rgb(0xc8, 0x6a, 0x1a)),
+                        pyr_poker::bots::Level::Regular => ("MEDIUM BOT", Color32::from_rgb(0x3d, 0x5f, 0xc4)),
+                        pyr_poker::bots::Level::Rookie => ("EASY BOT", Color32::from_rgb(0x2f, 0x8a, 0x52)),
                     };
                     let tag = Rect::from_min_size(pos2(r.left() + 96.0 + nw, r.center().y - 18.0), vec2(10.0 + 6.4 * text.len() as f32, 16.0));
                     p.rect_filled(tag, theme::r(8), col);
