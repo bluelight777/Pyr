@@ -16,6 +16,7 @@ pub mod blackjack;
 pub mod craps;
 pub mod dragon;
 pub mod dice;
+pub mod domino;
 pub mod feature;
 pub mod keno;
 pub mod plinko;

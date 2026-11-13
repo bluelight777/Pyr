@@ -8,6 +8,10 @@
 //!
 //! `--dir` is a Pyr profile (its identity is who asks; a test profile, never anyone's own).
 //! Without `--join` it uses the first server already in that profile.
+//!
+//! `--stdin`: after the `--send`s, each line read is sent as a request the same way (another
+//! program drives it, reading the answers in the frame log); `wait <seconds>` pauses; the end
+//! of the input ends it.
 
 use std::time::{Duration, Instant};
 
@@ -19,12 +23,14 @@ fn main() -> anyhow::Result<()> {
     let mut join = None;
     let mut sends: Vec<String> = Vec::new();
     let mut wait = 2.0f64;
+    let mut stdin = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--dir" => dir = args.next(),
             "--join" => join = args.next(),
             "--wait" => wait = args.next().and_then(|n| n.parse().ok()).unwrap_or(wait),
+            "--stdin" => stdin = true,
             // (Checked to be JSON, but sent exactly as written: the keys' order kept.)
             "--send" => {
                 let req = args.next().unwrap_or_default();
@@ -70,6 +76,25 @@ fn main() -> anyhow::Result<()> {
         eprintln!("sending {req}");
         engine.dev_send_raw(&key, req);
         std::thread::sleep(Duration::from_secs_f64(wait));
+    }
+    if stdin {
+        for line in std::io::stdin().lines() {
+            let line = line?;
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Some(s) = line.strip_prefix("wait ") {
+                std::thread::sleep(Duration::from_secs_f64(s.trim().parse().unwrap_or(1.0)));
+                continue;
+            }
+            if serde_json::from_str::<serde_json::Value>(line).is_err() {
+                eprintln!("not JSON, not sent: {line}");
+                continue;
+            }
+            eprintln!("sending {line}");
+            engine.dev_send_raw(&key, line.to_string());
+        }
     }
     Ok(())
 }
