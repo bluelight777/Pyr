@@ -131,6 +131,7 @@ impl PyrApp {
             super::felt::table(&p, lay.c, lay.a, lay.b, tex, "PYR CASINO", &format!("{} · {}", s.name, v.rules.name()));
         }
         self.board_and_pot(&p, &lay, t);
+        self.rabbit(ui, s, t, &lay);
         // The seats.
         for i in 0..v.seats.len() {
             self.seat(ui, s, t, &lay, i);
@@ -299,7 +300,7 @@ impl PyrApp {
         // Invite someone here (0.13.6), beside the way back, as 0.13.28 has it.
         let mut left_end = back.right();
         if s.has(pyr_proto::control::VOICE_INVITE_FEATURE) {
-            let at = Rect::from_min_size(pos2(back.right() + 8.0, back.top()), vec2(82.0, 32.0));
+            let at = Rect::from_min_size(pos2(back.right() + 8.0, back.top()), vec2(84.0, 32.0));
             let resp = ui.interact(at, ui.id().with("poker-invite"), Sense::click());
             p.rect_filled(at, theme::r(8), Color32::from_white_alpha(if resp.hovered() { 30 } else { 14 }));
             p.text(at.center(), Align2::CENTER_CENTER, "+ Invite", theme::bold_font(13.0), theme::TEXT());
@@ -319,157 +320,190 @@ impl PyrApp {
             None => format!("{}{hand}", v.rules.name()),
         };
         let sub_g = p.layout_no_wrap(sub, theme::font(12.0), theme::MUTED());
-        // On the right: the buttons, as many as fit beside the table's name; in a narrow window
-        // (or beside streamer mode's room for a camera) the rest are under More, never over the
-        // name.
-        #[derive(Clone, Copy, PartialEq)]
-        enum B {
-            Full,
-            Stream,
-            Sound,
-            Prize,
-            Log,
-            Last,
-            Leave,
-            SitOut,
-            Chips,
-            Muck,
-            Keys,
-        }
+        // On the right, as 0.13.22 has it: Sit out and + Add chips while I'm sitting, then icons for
+        // the hand log and the last hand, the sound and fullscreen, and a menu with the rest
+        // (measured off 0.13.28: 32 high, the icons 38 wide and 6 apart, the words' buttons 8
+        // apart). They stay; the table's name gives way.
         let fs = self.poker.casino.fullscreen;
         let streamer = self.streamer_mode();
         let tourney = v.tourney.is_some();
         let mine = v.my_seat.and_then(|seat| v.seats[seat].as_ref());
         let out = mine.is_some_and(|x| x.sitting_out);
-        let in_hand = mine.is_some_and(|x| x.in_hand) && v.hand.is_some() && v.to_act.is_some();
+        let owner = s.me.as_ref().is_some_and(|m| m.user_id == v.owner);
+        let mut x = r.right() - 12.0;
+        let icon = |ui: &mut egui::Ui, x: &mut f32, id: &str, tip: &str| -> (egui::Response, Rect) {
+            let at = Rect::from_min_size(pos2(*x - 38.0, r.top() + 9.0), vec2(38.0, 32.0));
+            *x -= 38.0 + 6.0;
+            let resp = ui.interact(at, ui.id().with(("table-bar", id)), Sense::click());
+            let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+            let fill = if open || resp.hovered() { theme::ELEV2() } else { theme::ELEV() };
+            ui.painter().rect_filled(at, theme::r(8), fill);
+            let resp = if tip.is_empty() || open { resp } else { resp.on_hover_text(tip) };
+            (resp, Rect::from_center_size(at.center(), vec2(18.0, 18.0)))
+        };
+        let ink = |resp: &egui::Response| if resp.hovered() { theme::TEXT() } else { theme::MUTED() };
+        // The menu: what's mine to set here, then the rest.
+        let (menu, ir) = icon(ui, &mut x, "menu", "");
+        for dy in [-6.0, 0.0, 6.0] {
+            p.line_segment([ir.center() + vec2(-8.0, dy), ir.center() + vec2(8.0, dy)], Stroke::new(2.0f32, ink(&menu)));
+        }
+        let (full, ir) = icon(ui, &mut x, "full", if fs { "Leave fullscreen (Esc)" } else { "Just the table, the whole screen (F11)" });
+        crate::icons::fullscreen(&p, ir, ink(&full), fs);
+        if full.clicked() || ui.ctx().input(|i| i.key_pressed(egui::Key::F11)) {
+            self.poker.casino.fullscreen = !fs;
+        }
+        // (The games' volume, under it: 0.13.4's Volume at poker tables.)
+        let (sound, ir) = icon(ui, &mut x, "sound", "");
+        if self.poker.casino.mute {
+            crate::icons::speaker_off(&p, ir, ink(&sound));
+        } else {
+            crate::icons::speaker(&p, ir, ink(&sound));
+        }
+        self.games_volume_menu(&sound);
+        // The hand log and the last hand.
+        let (log, ir) = icon(ui, &mut x, "log", "");
+        crate::icons::clock(&p, ir, ink(&log));
+        let mut log_toggled = false;
+        let mut last = false;
+        egui::Popup::menu(&log).gap(0.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
+            crate::menu::style(ui);
+            if crate::menu::check(ui, self.poker.log_open, "Hand log", false).clicked() {
+                log_toggled = true;
+                ui.close();
+            }
+            if ui.add_enabled(!v.recent.is_empty(), egui::Button::new("Last hand")).clicked() {
+                last = true;
+                ui.close();
+            }
+        });
+        if log_toggled {
+            self.poker.log_open = !self.poker.log_open;
+        }
+        if last && let Some(&h) = v.recent.last() {
+            self.engine.poker(&s.key, ToServer::History { table: v.id, hand: h });
+        }
+        // Sitting: + Add chips (not at a tournament's table), and Sit out.
+        x += 6.0;
+        let mut text_button = |ui: &mut egui::Ui, w: f32, label: &str, tip: &str| -> egui::Response {
+            let at = Rect::from_min_size(pos2(x - 6.0 - w, r.top() + 9.0), vec2(w, 32.0));
+            x -= w + 8.0;
+            let resp = ui.put(at, egui::Button::new(RichText::new(label).font(theme::font(13.0))).corner_radius(theme::r(8)));
+            if tip.is_empty() { resp } else { resp.on_hover_text(tip) }
+        };
+        // (In a hand only where the server keeps chips added then: `poker_top_up_anytime`.)
+        let anytime = s.has(pyr_proto::control::POKER_TOP_UP_ANYTIME_FEATURE);
+        let in_hand = v.hand.is_some() && mine.is_some_and(|x| x.in_hand);
+        if mine.is_some() {
+            if !tourney && (anytime || !in_hand) && text_button(ui, 104.0, "+ Add chips", "").clicked() {
+                self.poker.top_up = Some((v.id, 0));
+            }
+            let (label, tip) = match (tourney, out) {
+                (_, true) => ("I'm back", "Deal me in again"),
+                (true, false) => ("Away", "Folded for (and blinded) until you're back"),
+                (false, false) => ("Sit out", "Not dealt in until you're back"),
+            };
+            if text_button(ui, 86.0, label, tip).clicked() {
+                self.engine.poker(&s.key, ToServer::SitOut { table: v.id, out: !out });
+            }
+        }
+        x -= 6.0;
+        // What's in the menu (0.13.28's, in its order).
+        let v13 = s.has(pyr_proto::control::CASINO_013_FEATURE);
+        let staff = s.poker.me.as_ref().is_some_and(|m| m.role.is_some()) || super::staff::prize_limit(s).is_some();
         let stream_tip = match crate::casino::keys::first_key(crate::casino::keys::Move::PokerPeek) {
             Some(k) => format!("Streamer mode is on: your cards stay face down until you peek (hold {k}). Click for the table's layout on a stream."),
             None => "Streamer mode is on: your cards stay face down until you peek (point at them). Click for the table's layout on a stream.".to_string(),
         };
-        // (Right to left, as they're shown.)
-        let mut all: Vec<(B, &str, f32, &str)> = vec![
-            (B::Full, if fs { "Exit full" } else { "Fullscreen" }, 92.0, if fs { "Leave fullscreen (Esc)" } else { "Just the table, the whole screen (F11)" }),
-            (
-                B::Stream,
-                if streamer { "Streaming" } else { "Stream" },
-                92.0,
-                if streamer { stream_tip.as_str() } else { "Streamer mode, for when you're live: click to set it up" },
-            ),
-            (B::Sound, "Volume", 92.0, ""),
-        ];
-        if !tourney && (s.poker.me.as_ref().is_some_and(|m| m.role.is_some()) || super::staff::prize_limit(s).is_some()) && v.prize.is_none() {
-            all.push((B::Prize, "Prize box", 92.0, "Drop a prize box: whoever wins the next hand opens it"));
-        }
-        all.push((B::Log, if self.poker.log_open { "Hide log" } else { "Hand log" }, 92.0, ""));
-        if !v.recent.is_empty() {
-            all.push((B::Last, "Last hand", 92.0, ""));
-        }
-        if mine.is_some() {
-            if !tourney {
-                all.push((B::Leave, "Leave seat", 100.0, ""));
-            }
-            let away = if tourney { "Away" } else { "Sit out" };
-            all.push((B::SitOut, if out { "I'm back" } else { away }, 86.0, if tourney { "Folded for (and blinded) until you're back" } else { "Not dealt in until you're back" }));
-            if !tourney && !in_hand {
-                all.push((B::Chips, "Add chips", 92.0, ""));
-            }
-            if s.has(pyr_proto::control::CASINO_013_FEATURE) {
-                let auto = self.engine.auto_muck();
-                all.push((
-                    B::Muck,
-                    if auto { "Auto-muck: on" } else { "Auto-muck: off" },
-                    112.0,
-                    if auto { "A hand of yours that can't win goes in face down at a showdown (you can still show it after). Click to show every hand." } else { "Every hand you take to a showdown is shown. Click to muck the ones that can't win." },
-                ));
-            }
-        }
-        // What goes under More first.
-        const FIRST_UNDER_MORE: [B; 10] = [B::Full, B::Muck, B::Prize, B::Last, B::Chips, B::Sound, B::Log, B::Leave, B::Stream, B::SitOut];
-        const MORE_W: f32 = 78.0;
-        let title_w = name_g.size().x.max(sub_g.size().x).min(150.0);
-        let room = (r.right() - 12.0) - (left_end + 16.0 + title_w + 12.0);
-        let width = |list: &[(B, &str, f32, &str)], more: bool| list.iter().map(|e| e.2 + 8.0).sum::<f32>() + if more { MORE_W + 8.0 } else { 0.0 };
-        // (Keys…: in the menu always, as 0.13.28 has it.)
-        let mut under_more: Vec<(B, &str, f32, &str)> = vec![(B::Keys, "Keys…", 0.0, "Every game's moves and their keys, yours to change")];
-        for gone in FIRST_UNDER_MORE {
-            if width(&all, !under_more.is_empty()) <= room {
-                break;
-            }
-            if let Some(i) = all.iter().position(|e| e.0 == gone) {
-                under_more.push(all.remove(i));
-            }
-        }
-        let mut x = r.right() - 12.0;
-        let mut clicked: Option<B> = None;
-        let mut stream_at: Option<Rect> = None;
-        let mut volume_at: Option<egui::Response> = None;
-        for (b, label, w, tip) in &all {
-            let at = Rect::from_min_size(pos2(x - w, r.top() + 9.0), vec2(*w, 32.0));
-            x -= w + 8.0;
-            let resp = ui.put(at, egui::Button::new(RichText::new(*label).font(theme::font(13.0))).corner_radius(theme::r(8)));
-            let resp = if tip.is_empty() { resp } else { resp.on_hover_text(*tip) };
-            if *b == B::Stream {
-                stream_at = Some(resp.rect);
-            }
-            // (The games' volume, under it: 0.13.4's Volume at poker tables.)
-            if *b == B::Sound {
-                volume_at = Some(resp.clone());
-            }
-            if resp.clicked() {
-                clicked = Some(*b);
-            }
-        }
-        if !under_more.is_empty() {
-            // (In the order they'd be in on the bar, left to right.)
-            const BAR_ORDER: [B; 11] = [B::Muck, B::Chips, B::SitOut, B::Leave, B::Last, B::Log, B::Prize, B::Sound, B::Stream, B::Full, B::Keys];
-            under_more.sort_by_key(|e| BAR_ORDER.iter().position(|b| *b == e.0).unwrap_or(0));
-            let at = Rect::from_min_size(pos2(x - MORE_W, r.top() + 9.0), vec2(MORE_W, 32.0));
-            x -= MORE_W + 8.0;
-            let resp = ui.put(at, egui::Button::new(RichText::new("More…").font(theme::font(13.0))).corner_radius(theme::r(8)));
-            if stream_at.is_none() {
-                stream_at = Some(resp.rect);
-            }
-            let sound = if self.poker.casino.mute { "Sound on" } else { "Sound off" };
-            egui::Popup::menu(&resp).align(egui::RectAlign::BOTTOM_END).width(170.0).show(|ui| {
-                crate::menu::style(ui);
-                for (b, label, _, tip) in &under_more {
-                    // (Volume's slider can't open from here: Sound off, or on, for every game.)
-                    let item = ui.button(if *b == B::Sound { sound } else { *label });
-                    let item = if tip.is_empty() { item } else { item.on_hover_text(*tip) };
-                    if item.clicked() {
-                        clicked = Some(*b);
-                        ui.close();
-                    }
+        let mut clicked: Option<&str> = None;
+        let straddling = self.poker.straddle.contains(&(s.key.clone(), v.id));
+        let auto_top_up = self.engine.auto_top_up();
+        let can_straddle = s.has(pyr_proto::control::POKER_STRADDLE_FEATURE);
+        egui::Popup::menu(&menu).gap(0.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
+            crate::menu::style(ui);
+            let mut any = false;
+            // Auto top-up and Straddle (0.13.22, 0.13.4), where the server has them.
+            if mine.is_some() && !tourney && anytime {
+                if crate::menu::check(ui, auto_top_up, "Auto top-up", false).clicked() {
+                    clicked = Some("auto top-up");
+                    ui.close();
                 }
-            });
-        }
-        if let Some(resp) = &volume_at {
-            self.games_volume_menu(resp);
-        }
-        if clicked == Some(B::Full) || ui.ctx().input(|i| i.key_pressed(egui::Key::F11)) {
-            self.poker.casino.fullscreen = !fs;
-        }
+                any = true;
+            }
+            if mine.is_some() && !tourney && can_straddle {
+                if crate::menu::check(ui, straddling, "Straddle", false).clicked() {
+                    clicked = Some("straddle");
+                    ui.close();
+                }
+                any = true;
+            }
+            if mine.is_some() && v13 {
+                let auto = self.engine.auto_muck();
+                if crate::menu::check(ui, auto, "Auto-muck", false)
+                    .on_hover_text(if auto { "A hand of yours that can't win goes in face down at a showdown (you can still show it after). Click to show every hand." } else { "Every hand you take to a showdown is shown. Click to muck the ones that can't win." })
+                    .clicked()
+                {
+                    clicked = Some("muck");
+                    ui.close();
+                }
+                any = true;
+            }
+            if staff && !tourney && v.prize.is_none() {
+                if ui.button("Drop a prize box").on_hover_text("Whoever wins the next hand opens it").clicked() {
+                    clicked = Some("prize");
+                    ui.close();
+                }
+                any = true;
+            }
+            if any {
+                ui.separator();
+            }
+            if ui.button("Streamer mode...").on_hover_text(if streamer { stream_tip.as_str() } else { "For when you're live: your cards stay face down until you peek" }).clicked() {
+                clicked = Some("stream");
+                ui.close();
+            }
+            if ui.button("Keys...").on_hover_text("Every game's moves and their keys, yours to change").clicked() {
+                clicked = Some("keys");
+                ui.close();
+            }
+            let leave = mine.is_some() && !tourney;
+            if leave || (owner && !tourney) {
+                ui.separator();
+            }
+            if leave && crate::menu::danger(ui, "Leave seat").clicked() {
+                clicked = Some("leave");
+                ui.close();
+            }
+            // (0.13.24: for everyone at once, a hand being played called off.)
+            if owner && !tourney && crate::menu::danger(ui, "Close this table...").clicked() {
+                clicked = Some("close");
+                ui.close();
+            }
+        });
         match clicked {
-            Some(B::Stream) => self.poker.casino.stream_menu = if self.poker.casino.stream_menu.is_some() { None } else { stream_at },
-            // (Under More: Sound off or on, for every game.)
-            Some(B::Sound) if volume_at.is_none() => self.poker.casino.mute = !self.poker.casino.mute,
-            Some(B::Sound) => {}
-            Some(B::Prize) => {
+            Some("muck") => self.engine.set_auto_muck(!self.engine.auto_muck()),
+            Some("prize") => {
                 self.poker.prize_for = Some(v.id);
                 self.engine.poker(&s.key, ToServer::Staff);
             }
-            Some(B::Log) => self.poker.log_open = !self.poker.log_open,
-            Some(B::Last) => {
-                if let Some(&last) = v.recent.last() {
-                    self.engine.poker(&s.key, ToServer::History { table: v.id, hand: last });
-                }
+            Some("stream") => self.poker.casino.stream_menu = if self.poker.casino.stream_menu.is_some() { None } else { Some(menu.rect) },
+            Some("keys") => self.ui.dialog = Some(crate::app::Dialog::CasinoKeys(crate::casino::keys::KeysWindow::new(Some(crate::casino::keys::Section::Poker)))),
+            Some("leave") => self.engine.poker(&s.key, ToServer::Stand { table: v.id }),
+            Some("auto top-up") => {
+                self.engine.set_auto_top_up(!auto_top_up);
+                self.poker.auto_topped = None;
+                self.toast(if auto_top_up { "Auto top-up is off" } else { "Auto top-up: your stack's kept at the table's most" }, false);
             }
-            Some(B::Leave) => self.engine.poker(&s.key, ToServer::Stand { table: v.id }),
-            Some(B::SitOut) => self.engine.poker(&s.key, ToServer::SitOut { table: v.id, out: !out }),
-            Some(B::Chips) => self.poker.top_up = Some((v.id, v.rules.big_blind * 50)),
-            Some(B::Muck) => self.engine.set_auto_muck(!self.engine.auto_muck()),
-            Some(B::Keys) => self.ui.dialog = Some(crate::app::Dialog::CasinoKeys(crate::casino::keys::KeysWindow::new(Some(crate::casino::keys::Section::Poker)))),
-            Some(B::Full) | None => {}
+            Some("straddle") => {
+                let key = (s.key.clone(), v.id);
+                if straddling {
+                    self.poker.straddle.remove(&key);
+                } else {
+                    self.poker.straddle.insert(key);
+                }
+                self.engine.poker(&s.key, ToServer::Straddle { table: v.id, on: !straddling });
+            }
+            Some("close") => self.poker.close_ask = Some(v.id),
+            _ => {}
         }
         // The table's name and what it is, cut short where the buttons start.
         let words = p.with_clip_rect(Rect::from_min_max(pos2(left_end + 8.0, r.top()), pos2(x - 4.0, r.bottom())).intersect(p.clip_rect()));
@@ -554,6 +588,86 @@ impl PyrApp {
             let label = Rect::from_center_size(at + vec2(36.0, 0.0) * k, vec2(150.0, 32.0) * k);
             p.rect_filled(label, theme::r(16), Color32::from_black_alpha(140));
             p.text(label.center(), Align2::CENTER_CENTER, format!("Pot {}", chips_text(v.pot)), theme::bold_font(17.0 * k), Color32::from_rgb(0xff, 0xe2, 0x9a));
+        }
+    }
+
+    /// The rabbit (0.13.4), as 0.13.28 has it: after a hand over before the river, "Rabbit" in
+    /// the middle for everyone at the table; once someone asks, the board the hand would have
+    /// had turns over card by card (light blue: never dealt), "Rabbit hunted by {who}" over it,
+    /// and when the next hand starts it waits small in a panel, gone 13 s after it came.
+    fn rabbit(&mut self, ui: &mut egui::Ui, s: &ServerView, t: &TableLive, lay: &Layout) {
+        let v = &t.view;
+        let p = ui.painter().clone();
+        let k = lay.k;
+        let four = self.poker.four_color;
+        // (The board's places, as `board_and_pot` has them.)
+        let cw = (lay.a * 0.22).clamp(60.0, 150.0);
+        let ch = cw * 1.4;
+        let gap = cw * 0.14;
+        let left = lay.c.x - (5.0 * cw + 4.0 * gap) / 2.0;
+        let y = lay.c.y - ch * 0.42;
+        let slot = |i: usize| Rect::from_min_size(pos2(left + i as f32 * (cw + gap), y), vec2(cw, ch));
+        let blue = Color32::from_rgb(0x8f, 0xcd, 0xff);
+        if let Some(rb) = &t.rabbit {
+            let age = rb.at.elapsed().as_secs_f32();
+            if age < RABBIT_GONE {
+                ui.ctx().request_repaint();
+                let next = t.events.iter().any(|(_, e)| matches!(e, Event::HandStarted { number, .. } if *number > rb.hand));
+                if !next {
+                    // Over the board: each card turned over in its turn (0.45 s apart, 0.36 s each).
+                    p.text(pos2(lay.c.x, y - 19.0 * k), Align2::CENTER_CENTER, format!("Rabbit hunted by {}", rb.by), theme::bold_font(15.0 * k), blue);
+                    for (i, c) in rb.board.iter().enumerate().take(5) {
+                        if i < rb.had {
+                            cards::face(&p, slot(i), *c, four, false);
+                        } else {
+                            let m = (i - rb.had) as f32;
+                            rabbit_card(&p, slot(i), *c, (age - 0.18 - 0.45 * m) / 0.36, four);
+                        }
+                    }
+                } else {
+                    // Small, in a panel in the middle, a moment into the next hand; fading out
+                    // over its last second (0.13.28's, measured at 1280×800 and 1600×1000: the
+                    // board's cards 0.7 the size, plain, 6 apart, 12 in, 26 for the words over
+                    // them, 14 under, those not scaled; the words 12.5 at any size).
+                    let a = (RABBIT_GONE - age).clamp(0.0, 1.0);
+                    let p = {
+                        let mut p = p.clone();
+                        p.set_opacity(a);
+                        p
+                    };
+                    let (sw, sg, pad) = (cw * 0.7, 6.0, 12.0);
+                    let (head, foot) = (26.0, 14.0);
+                    let size = vec2(5.0 * sw + 4.0 * sg + 2.0 * pad, head + sw * 1.4 + foot);
+                    let panel = Rect::from_center_size(pos2(lay.c.x, y + ch / 2.0), size);
+                    p.rect_filled(panel, theme::r(10), Color32::from_rgba_unmultiplied(9, 26, 38, 242));
+                    p.rect_stroke(panel, theme::r(10), Stroke::new(1.5f32, Color32::from_rgb(0x8c, 0xcc, 0xff)), StrokeKind::Middle);
+                    p.text(pos2(lay.c.x, panel.top() + 12.0), Align2::CENTER_CENTER, format!("Rabbit hunted by {}", rb.by), theme::bold_font(12.5), blue);
+                    for (i, c) in rb.board.iter().enumerate().take(5) {
+                        let r = Rect::from_min_size(pos2(panel.left() + pad + i as f32 * (sw + sg), panel.top() + head), vec2(sw, sw * 1.4));
+                        cards::face(&p, r, *c, four, false);
+                    }
+                }
+                return;
+            }
+        }
+        // "Rabbit": the hand just over ended before the river (and nobody's asked yet).
+        let hand = t.events.iter().find_map(|(_, e)| if let Event::HandStarted { number, .. } = e { Some(*number) } else { None });
+        let over = t.events.iter().any(|(_, e)| matches!(e, Event::HandEnded { .. }));
+        let dealt: usize = t.events.iter().map(|(_, e)| if let Event::Street { cards, .. } = e { cards.len() } else { 0 }).sum();
+        let Some(hand) = hand.filter(|_| over && dealt < 5 && s.has(pyr_proto::control::POKER_RABBIT_FEATURE)) else { return };
+        if t.rabbit.as_ref().is_some_and(|rb| rb.hand == hand) || self.poker.rabbit_asked == Some((v.id, hand)) {
+            return;
+        }
+        // (0.13.28's, measured at two sizes: 150 by 38, round ended, 8 under the board, its word
+        // 15; all k times.)
+        let r = Rect::from_min_size(pos2(lay.c.x - 75.0 * k, y + ch + 8.3 * k), vec2(150.0, 38.0) * k);
+        let resp = ui.interact(r, ui.id().with(("rabbit", hand)), Sense::click());
+        let round = egui::CornerRadius::same((19.0 * k).round() as u8);
+        p.rect_filled(r, round, if resp.hovered() { Color32::from_rgb(0x34, 0x6c, 0xbc) } else { Color32::from_rgb(0x2b, 0x5e, 0xa8) });
+        p.text(r.center(), Align2::CENTER_CENTER, "Rabbit", theme::bold_font(15.0 * k), Color32::WHITE);
+        if resp.on_hover_text("See the cards that would have come").clicked() {
+            self.poker.rabbit_asked = Some((v.id, hand));
+            self.engine.poker(&s.key, ToServer::Rabbit { table: v.id, hand });
         }
     }
 
@@ -682,6 +796,10 @@ impl PyrApp {
             (chips_text(seat.stack), Color32::from_rgb(0xff, 0xd2, 0x5e))
         };
         p.text(plate.center() + vec2(0.0, 11.0 * k), Align2::CENTER_CENTER, stack, theme::bold_font(15.5 * k), stack_col.gamma_multiply(fade.max(0.7)));
+        // Chips added in this hand, waiting (0.13.22): small and green at the plate's right.
+        if seat.pending > 0 {
+            p.text(pos2(plate.right() - 7.0 * k, plate.center().y + 12.0 * k), Align2::RIGHT_CENTER, format!("+{}", chips_text(seat.pending)), theme::bold_font(10.0 * k), Color32::from_rgb(0x5f, 0xd3, 0x7e));
+        }
         // Level, on the picture's edge; and for bots, how good they are.
         let lv = at + vec2(-r0 * 0.8, -r0 * 0.6);
         p.circle_filled(lv, 11.5 * k, Color32::from_rgb(0x16, 0x14, 0x1a));
@@ -1273,29 +1391,104 @@ impl PyrApp {
                 self.poker.buy_in = open.then_some((table, seat, chips));
             }
         }
-        if let Some((table, mut chips)) = self.poker.top_up {
-            let have = v.my_seat.and_then(|m| v.seats[m].as_ref()).map(|s| s.stack).unwrap_or(0);
-            let room = hi.saturating_sub(have).min(bank);
+        // Add chips (0.13.22), as 0.13.28's: the most this table allows less my stack (and what's
+        // waiting), in one click, by 20, 50 or 100 big blinds, or as many as I like; in a hand
+        // they wait on my seat till it's over; and Auto top-up.
+        if let Some((table, chips)) = self.poker.top_up {
+            let Some(mine) = v.my_seat.and_then(|m| v.seats[m].as_ref()).filter(|_| table == v.id && v.tourney.is_none()) else {
+                self.poker.top_up = None;
+                return;
+            };
+            let have = mine.stack + mine.pending;
+            let can = hi.saturating_sub(have).min(bank);
+            let in_hand = v.hand.is_some() && mine.in_hand;
+            let bb = v.rules.big_blind.max(1);
+            let mut chips = if chips == 0 { can } else { chips.min(can) };
             let mut open = true;
-            let mut add = false;
+            let mut add = None;
+            let auto_was = self.engine.auto_top_up();
+            let mut auto = auto_was;
             egui::Window::new("Add chips").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).open(&mut open).show(ctx, |ui| {
-                ui.set_width(320.0);
-                if room == 0 {
+                ui.set_width(360.0);
+                ui.label(RichText::new(format!("Your stack {} · this table's most {} · your chips {}", chips_text(have), chips_text(hi), chips_text(bank))).color(theme::MUTED()));
+                ui.add_space(8.0);
+                if can > 0 {
+                    let words = format!("Top up to {} (+{})", chips_text(have + can), chips_text(can));
+                    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::click());
+                    ui.painter().rect_filled(r, theme::r(6), theme::EMBER());
+                    ui.painter().text(r.left_center() + vec2(12.0, 0.0), Align2::LEFT_CENTER, words, theme::bold_font(14.5), theme::on_ember());
+                    if resp.clicked() {
+                        add = Some(can);
+                    }
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        for n in [20, 50, 100] {
+                            if n * bb <= can && ui.add(egui::Button::new(format!("+{n} big blinds")).min_size(vec2(0.0, 30.0))).clicked() {
+                                add = Some(n * bb);
+                            }
+                        }
+                    });
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        ui.add(egui::Slider::new(&mut chips, 1..=can).show_value(false));
+                        if ui.add(egui::Button::new(format!("Add {}", chips_text(chips))).min_size(vec2(0.0, 30.0))).clicked() {
+                            add = Some(chips);
+                        }
+                    });
+                } else if have >= hi {
                     ui.label(RichText::new("You have as many chips here as the table allows.").color(theme::MUTED()));
-                    return;
+                } else {
+                    ui.label(RichText::new("You have no chips left to add. Take the daily chips in the lobby.").color(theme::MUTED()));
                 }
-                chips = chips.clamp(1, room);
-                ui.add(egui::Slider::new(&mut chips, 1..=room));
-                if ui.add(theme::primary_button(&format!("Add {}", chips_text(chips)))).clicked() {
-                    add = true;
+                if in_hand {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new("You're in a hand: they go on your stack when it's over.").size(12.5).color(theme::DIM()));
                 }
+                // (Spaced as 0.13.28's, measured.)
+                ui.add_space(10.0);
+                ui.separator();
+                ui.checkbox(&mut auto, "Auto top-up: keep me at the table's most");
             });
-            if add {
+            if auto != auto_was {
+                self.engine.set_auto_top_up(auto);
+                self.poker.auto_topped = None;
+                self.toast(if auto { "Auto top-up: your stack's kept at the table's most" } else { "Auto top-up is off" }, false);
+            }
+            if let Some(chips) = add.filter(|&c| c > 0) {
                 self.engine.poker(&s.key, ToServer::TopUp { table, chips });
                 self.poker.top_up = None;
             } else {
                 self.poker.top_up = open.then_some((table, chips));
             }
+        }
+        // Auto top-up (0.13.22): kept at the table's most, topped up as soon as I'm not in a hand
+        // (0.13.28 sends it then: after the hand, or on coming to the table).
+        if self.engine.auto_top_up()
+            && s.has(pyr_proto::control::POKER_TOP_UP_ANYTIME_FEATURE)
+            && v.tourney.is_none()
+            && let Some(mine) = v.my_seat.and_then(|m| v.seats[m].as_ref())
+            && !(v.hand.is_some() && mine.in_hand)
+        {
+            let have = mine.stack + mine.pending;
+            let want = hi.saturating_sub(have).min(bank);
+            let state = (v.id, v.hand, have);
+            if want > 0 && self.poker.auto_topped != Some(state) {
+                self.poker.auto_topped = Some(state);
+                self.engine.poker(&s.key, ToServer::TopUp { table: v.id, chips: want });
+            }
+        }
+        // "Close {table}?" (0.13.24), over everything.
+        if self.poker.close_ask == Some(v.id) {
+            match close_table_modal(ctx, &v.name, v.seats.iter().flatten().filter(|x| x.bot.is_none()).count()) {
+                Some(true) => {
+                    self.engine.poker(&s.key, ToServer::Close { table: v.id });
+                    self.poker.close_ask = None;
+                }
+                Some(false) => self.poker.close_ask = None,
+                None => {}
+            }
+        } else if self.poker.close_ask.is_some() {
+            self.poker.close_ask = None;
         }
     }
 
@@ -1470,6 +1663,7 @@ impl PyrApp {
                     all_in: false,
                     cards: vec![],
                     mmr: None,
+                    pending: 0,
                 })
             })
             .collect();
@@ -1556,6 +1750,25 @@ fn level_tag(level: Level) -> (&'static str, Color32) {
 }
 
 /// A card turning over: `k` from 0 (its back) to 1 (its face).
+/// A rabbit (0.13.4) is gone this long after it came (its last second fading out).
+const RABBIT_GONE: f32 = 14.0;
+
+/// A card of a hunted rabbit's board, never dealt: turning over (`k` 0 to 1, as `flip`), then
+/// light blue with a blue rim (0.13.28's, measured).
+fn rabbit_card(p: &egui::Painter, r: Rect, card: Card, k: f32, four: bool) {
+    let k = k.clamp(0.0, 1.0);
+    let w = (1.0 - 2.0 * k).abs();
+    let rr = Rect::from_center_size(r.center(), vec2(r.width() * w.max(0.04), r.height()));
+    if k < 0.5 {
+        cards::back(p, rr, "");
+        return;
+    }
+    cards::face(p, rr, card, four, false);
+    let round = egui::CornerRadius::same((r.width() * 0.09).round() as u8);
+    p.rect_filled(rr, round, Color32::from_rgba_unmultiplied(111, 155, 251, 51));
+    p.rect_stroke(rr, round, Stroke::new(2.0f32, Color32::from_rgb(0x8c, 0xcc, 0xff)), StrokeKind::Inside);
+}
+
 fn flip(p: &egui::Painter, r: Rect, card: Card, k: f32, four: bool, dim: bool, back: &str) {
     let k = k.clamp(0.0, 1.0);
     if k >= 1.0 {
@@ -1622,6 +1835,7 @@ fn last_action(t: &TableLive, seat: usize) -> Option<(String, Color32, f32)> {
                 pyr_poker::game::Posting::SmallBlind => "Small blind",
                 pyr_poker::game::Posting::BigBlind => "Big blind",
                 pyr_poker::game::Posting::Ante => "Ante",
+                pyr_poker::game::Posting::Straddle => "Straddle",
             };
             Some((format!("{name} {}", chips_short(*amount)), Color32::from_rgb(0x55, 0x48, 0x40), ago(*at)))
         }
@@ -1710,6 +1924,7 @@ fn describe_event(e: &Event, seats: &[Option<SeatView>], streamer: bool) -> Opti
             pyr_poker::game::Posting::SmallBlind => "small blind",
             pyr_poker::game::Posting::BigBlind => "big blind",
             pyr_poker::game::Posting::Ante => "ante",
+            pyr_poker::game::Posting::Straddle => "straddle",
         }, chips_text(*amount)),
         Event::Dealt { cards: cs, .. } if streamer => format!("You're dealt {} cards (hidden: streamer mode)", cs.len()),
         Event::Dealt { cards: cs, .. } => format!("You're dealt {}", cards(cs)),
@@ -1762,4 +1977,43 @@ mod tests {
         assert_eq!(describe_mine(Variant::Omaha, &h("2d4dJcJh"), &[]), "Pair of Jacks suited");
         assert_eq!(describe_mine(Variant::Omaha, &h("Ac9d5h2s"), &[]), "Ace high");
     }
+}
+
+/// "Close {name}?" (0.13.24), as 0.13.28 asks it: who's sitting, what closing does, and the two
+/// buttons; over the window darkened (measured off 0.13.28 at 1280×800 and 1600×1000: 476 wide,
+/// 22 in, the title 20, the words 14.5 in BODY, the buttons 34 high and 16 apart, at 33 and
+/// 128 under the title's top). `Some(true)`: close it; `Some(false)`: keep it open.
+pub(crate) fn close_table_modal(ctx: &egui::Context, name: &str, people: usize) -> Option<bool> {
+    let who = match people {
+        0 => "Nobody's sitting at it but bots.".to_string(),
+        1 => "One person is sitting at it.".to_string(),
+        n => format!("{n} people are sitting at it."),
+    };
+    let mut answer = None;
+    let modal = egui::Modal::new(egui::Id::new("poker-close-table"))
+        .backdrop_color(Color32::from_black_alpha(170))
+        .frame(egui::Frame::window(&ctx.style()).inner_margin(egui::Margin::same(22)))
+        .show(ctx, |ui| {
+            let w = 430.0;
+            ui.set_width(w);
+            ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+            let (r, _) = ui.allocate_exact_size(vec2(w, 33.0), Sense::hover());
+            ui.painter().text(r.left_top(), Align2::LEFT_TOP, format!("Close {name}?"), theme::bold_font(20.0), theme::TEXT());
+            let words = ui.painter().layout(format!("{who} It closes for everyone at once: the chips at it go back to whoever had them, and a hand being played is called off, each player getting back what they started it with."), theme::font(14.5), theme::BODY(), w);
+            let (r, _) = ui.allocate_exact_size(vec2(w, 95.0), Sense::hover());
+            ui.painter().galley(r.left_top(), words, theme::BODY());
+            let (row, _) = ui.allocate_exact_size(vec2(w, 34.0), Sense::hover());
+            let close = Rect::from_min_size(row.left_top(), vec2(124.0, 34.0));
+            if ui.put(close, theme::danger_button("Close the table")).clicked() {
+                answer = Some(true);
+            }
+            let keep = Rect::from_min_size(pos2(close.right() + 16.0, row.top()), vec2(109.0, 34.0));
+            if ui.put(keep, egui::Button::new(RichText::new("Keep it open").font(theme::bold_font(14.0)).color(theme::TEXT())).fill(theme::ELEV()).corner_radius(theme::r(6))).clicked() {
+                answer = Some(false);
+            }
+        });
+    if modal.should_close() && answer.is_none() {
+        answer = Some(false);
+    }
+    answer
 }

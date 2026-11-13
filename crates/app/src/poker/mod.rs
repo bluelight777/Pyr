@@ -171,6 +171,17 @@ pub struct PokerUi {
     /// Where I'd finished in each tournament when last seen (to know the moment I'm out, or
     /// it's won).
     pub my_place: std::collections::HashMap<pyr_poker::net::TourneyId, Option<usize>>,
+    /// Straddle ticked at these tables (server, table): 0.13.28 keeps it in memory and tells
+    /// the server only when it's clicked (0.13.4).
+    pub straddle: std::collections::HashSet<(String, TableId)>,
+    /// "Close {table}?" asked (0.13.24).
+    pub close_ask: Option<TableId>,
+    /// A lobby row's Close clicked: "Close it now" (0.13.24).
+    pub lobby_close: Option<TableId>,
+    /// The last auto top-up sent: (table, the hand then, my stack then), so it goes once.
+    pub auto_topped: Option<(TableId, Option<u64>, u64)>,
+    /// The rabbit asked for: (table, hand).
+    pub rabbit_asked: Option<(TableId, u64)>,
 }
 
 impl PyrApp {
@@ -681,6 +692,27 @@ impl PyrApp {
             let open = ui.put(b, theme::primary_button(if taken < t.seats { "Join" } else { "Watch" }));
             if open.clicked() || resp.double_clicked() {
                 self.open_table(&s.key, t.id);
+            }
+            // Whoever made it can close it from here (0.13.24): Close, then Close it now.
+            if s.me.as_ref().is_some_and(|m| !t.owner.is_empty() && m.user_id == t.owner) {
+                // (0.13.28's, measured: 76 or 123 wide, as tall as Join, 10 before it; over the
+                // Avg pot words, as there.)
+                let sure = self.poker.lobby_close == Some(t.id);
+                let w = if sure { 123.0 } else { 76.0 };
+                let c = Rect::from_min_size(pos2(b.left() - 10.0 - w, b.top()), vec2(w, b.height()));
+                let button = if sure {
+                    theme::danger_button("Close it now")
+                } else {
+                    egui::Button::new(RichText::new("Close").font(theme::bold_font(13.0)).color(theme::TEXT())).fill(theme::ELEV2()).corner_radius(theme::r(6))
+                };
+                if ui.put(c, button).on_hover_text("Close this table for everyone: the chips at it go back to whoever had them").clicked() {
+                    if sure {
+                        self.engine.poker(&s.key, ToServer::Close { table: t.id });
+                        self.poker.lobby_close = None;
+                    } else {
+                        self.poker.lobby_close = Some(t.id);
+                    }
+                }
             }
         });
     }

@@ -409,3 +409,147 @@ fn a_bot_picked_by_name_sits_once() {
     let names: Vec<&str> = r.table.seats.iter().flatten().map(|s| s.name.as_str()).collect();
     assert_eq!(names.iter().filter(|n| **n == "Ace").count(), 1, "{names:?}");
 }
+
+fn unhex(s: &str) -> [u8; 32] {
+    let mut b = [0u8; 32];
+    for (i, x) in b.iter_mut().enumerate() {
+        *x = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap();
+    }
+    b
+}
+
+/// The rabbit's board is the one 0.13.28's server turned over: two of its heads-up hands that
+/// ended before the flop, their shuffles (the dealer's seed it revealed, the Pyr's seed) and the
+/// boards it sent (`rabbit`), taken off it 2026-11-13.
+#[test]
+fn the_rabbit_is_the_board_0_13_28_turned_over() {
+    let cases = [
+        (2, "f79c2623dccc7bfc9ca6c9fba7b626c5e2a76a0ac76a5d9e04911e7132237585", "90787612841411dd5703e7c2c8e5866d20cab1038884cbd538f7b4a1a54a3b8a", "7d Ad 5s 2d 3d"),
+        (3, "4ce549a97c76668160cebd15ddf568ac02f22d80dac55ebb7a637ad1cfb9fff6", "88361dea2bea798321c5ebf5a2eb54d43b23d59e538a68d1017a16288fa85b6d", "7h 7c Jh 7s Js"),
+    ];
+    for (hand, dealer, seed, board) in cases {
+        let deck = fair::shuffle(fair::deck_seed(&unhex(dealer), &[unhex(seed)], hand));
+        let want = crate::cards::parse_cards(board).unwrap();
+        assert_eq!(rabbit_board(&deck, 4, &[]), Some(want.clone()), "hand {hand}");
+        // Over on the flop or the turn: the same cards after those.
+        assert_eq!(rabbit_board(&deck, 4, &want[..3]), Some(want.clone()));
+        assert_eq!(rabbit_board(&deck, 4, &want[..4]), Some(want.clone()));
+        assert_eq!(rabbit_board(&deck, 4, &want), None, "the whole board came: no rabbit");
+    }
+}
+
+/// Hunting the rabbit: once, by someone at the table, between the hand it's from and the next,
+/// which waits 7 s for it.
+#[test]
+fn a_rabbit_is_hunted_once_and_the_next_hand_waits_for_it() {
+    let mut r = room();
+    let mut rng = Stream::new(seed_from(21));
+    r.sit("alice", "Alice", 0, 1000, Look::default(), 0).unwrap();
+    r.sit("bob", "Bob", 1, 1000, Look::default(), 0).unwrap();
+    r.watch("carol");
+    let mut now = 0;
+    while r.table.hand.is_none() {
+        r.tick(now, &mut rng);
+        now += 250;
+    }
+    let hand = r.table.hand.as_ref().unwrap().number;
+    assert!(r.hunt_rabbit("carol", "Carol", hand, now).is_err(), "not till it's over");
+    let first = r.table.hand.as_ref().unwrap().to_act.unwrap();
+    let uid = r.uid_at(first).unwrap().to_string();
+    r.act(&uid, hand, Action::Fold, now).unwrap();
+    assert!(r.table.hand.is_none());
+    assert!(r.hunt_rabbit("dave", "Dave", hand, now).is_err(), "not at the table");
+    assert!(r.hunt_rabbit("carol", "Carol", hand + 1, now).is_err(), "no such hand");
+    let out = r.hunt_rabbit("carol", "Carol", hand, now + 500).unwrap();
+    let Some(ToApp::Rabbit { by, board, had, .. }) = out.msgs.iter().map(|(_, m)| m.clone()).find(|m| matches!(m, ToApp::Rabbit { .. })) else { panic!() };
+    assert_eq!((by.as_str(), board.len(), had), ("Carol", 5, 0));
+    assert!(out.msgs.iter().all(|(to, _)| *to == Rcpt::All), "everyone sees it");
+    assert!(r.hunt_rabbit("alice", "Alice", hand, now + 600).unwrap().msgs.is_empty(), "already hunted");
+    // The next shuffle: 7 s after the rabbit (not the usual 3 after the hand).
+    let mut t = now;
+    while !matches!(r.phase, Phase::Shuffle { .. }) {
+        r.tick(t, &mut rng);
+        t += 50;
+    }
+    assert!(t - 50 >= now + 500 + RABBIT_MS, "{} after the rabbit", t - 50 - now - 500);
+    assert!(r.hunt_rabbit("carol", "Carol", hand, t).is_err(), "too late");
+}
+
+/// Chips added during a hand (0.13.22): kept on the seat (everyone sees them waiting), on the
+/// stack when it's over, as much as fits under the table's most (the rest back); held at the
+/// table meanwhile.
+#[test]
+fn chips_added_in_a_hand_go_on_after_it() {
+    let mut r = room();
+    let mut rng = Stream::new(seed_from(22));
+    // The most: 200 big blinds, 2,000.
+    r.sit("alice", "Alice", 0, 1000, Look::default(), 0).unwrap();
+    r.sit("bob", "Bob", 1, 1000, Look::default(), 0).unwrap();
+    let mut now = 0;
+    while r.table.hand.is_none() {
+        r.tick(now, &mut rng);
+        now += 250;
+    }
+    let hand = r.table.hand.as_ref().unwrap().number;
+    let put = r.table.hand.as_ref().unwrap().player(0).unwrap().total;
+    assert!(r.top_up("alice", 1001 + put).is_err(), "over the most with what's in front of her");
+    r.top_up("alice", 600).unwrap();
+    r.top_up("alice", 400 + put).unwrap();
+    assert_eq!(r.view(Some("bob")).seats[0].as_ref().unwrap().pending, 1000 + put);
+    assert_eq!(r.chips_of("alice"), 2000 + put, "held here");
+    // Alice folds (or Bob does): the hand's over.
+    let first = r.table.hand.as_ref().unwrap().to_act.unwrap();
+    let uid = r.uid_at(first).unwrap().to_string();
+    let out = r.act(&uid, hand, Action::Fold, now).unwrap();
+    let stack = r.table.seats[0].as_ref().unwrap().stack;
+    let back: u64 = out.effects.iter().filter_map(|e| if let Effect::Credit { uid, chips } = e { (uid == "alice").then_some(*chips) } else { None }).sum();
+    assert_eq!(stack, 2000, "as much as fits");
+    // (Her stack after the hand was 1,000 − what she put in + what she won; with the 1,000 +
+    // that waiting: 2,000 + what she won, of which 2,000 stays.)
+    assert_eq!(stack + back, 2000 + won_by(&out, 0), "nothing lost");
+    assert_eq!(r.view(Some("bob")).seats[0].as_ref().unwrap().pending, 0);
+}
+
+fn won_by(out: &Output, seat: usize) -> u64 {
+    out.msgs
+        .iter()
+        .filter_map(|(_, m)| if let ToApp::Event { event: Event::Won { seats, amounts, .. }, .. } = m { seats.iter().position(|&s| s == seat).map(|i| amounts[i]) } else { None })
+        .max()
+        .unwrap_or(0)
+}
+
+/// Folded and gone in the middle of a hand: what they put in stays in the pot (their chips
+/// back were what they started the hand with: chips out of nowhere).
+#[test]
+fn leaving_after_folding_takes_what_is_left() {
+    let mut r = room();
+    let mut rng = Stream::new(seed_from(23));
+    r.sit("alice", "Alice", 0, 1000, Look::default(), 0).unwrap();
+    r.sit("bob", "Bob", 1, 1000, Look::default(), 0).unwrap();
+    r.add_bot(2, Level::Regular, None, 0, &mut rng).unwrap();
+    let mut now = 0;
+    // A hand where Alice has put chips in (a blind) and folds when her turn comes.
+    loop {
+        r.tick(now, &mut rng);
+        now += 250;
+        let Some(h) = r.table.hand.as_ref() else { continue };
+        let (hand, to_act) = (h.number, h.to_act);
+        let put = h.player(0).map(|p| p.total).unwrap_or(0);
+        let Some(seat) = to_act else { continue };
+        let Some(uid) = r.uid_at(seat).map(|u| u.to_string()) else { continue };
+        if uid.starts_with("bot:") {
+            continue;
+        }
+        if uid == "alice" && put > 0 {
+            r.act("alice", hand, Action::Fold, now).unwrap();
+            let start = r.table.seats[0].as_ref().unwrap().stack;
+            let out = r.stand("alice", now).unwrap();
+            let back: u64 = out.effects.iter().filter_map(|e| if let Effect::Credit { uid, chips } = e { (uid == "alice").then_some(*chips) } else { None }).sum();
+            assert_eq!(back, start - put);
+            return;
+        }
+        let a = if r.table.legal(seat).unwrap().can_check { Action::Check } else { Action::Call };
+        r.act(&uid, hand, a, now).unwrap();
+        assert!(now < 600_000);
+    }
+}

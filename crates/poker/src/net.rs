@@ -80,8 +80,15 @@ pub enum ToServer {
     Muck { table: TableId, on: bool },
     /// My cards from the hand just over, for everyone to see (0.13.0 servers).
     ShowCards { table: TableId, hand: u64 },
-    /// More chips from my record, between hands (up to the table's most).
+    /// More chips from my record (up to the table's most): between hands on my stack at once;
+    /// in a hand (`poker_top_up_anytime`, 0.13.22) kept on my seat till it's over.
     TopUp { table: TableId, chips: u64 },
+    /// Straddle (twice the big blind, as the first after it) from the next hand on, or stop
+    /// (`poker_straddle`, 0.13.4).
+    Straddle { table: TableId, on: bool },
+    /// The board the hand just over would have had, turned over for everyone (`poker_rabbit`,
+    /// 0.13.4).
+    Rabbit { table: TableId, hand: u64 },
     Act { table: TableId, hand: u64, action: Action },
     /// My Pyr's part of the shuffle for the next hand.
     Seed {
@@ -389,7 +396,7 @@ impl ToServer {
         match self {
             Watch { table } | Unwatch { table } | Sit { table, .. } | Stand { table } | SitOut { table, .. } | Muck { table, .. } | ShowCards { table, .. } | TopUp { table, .. } | Act { table, .. }
             | Seed { table, .. } | TimeBank { table } | AddBot { table, .. } | RemoveBot { table, .. } | Emote { table, .. } | History { table, .. }
-            | Player { table, .. } | DropPrize { table, .. } | Close { table } => Some(*table),
+            | Player { table, .. } | DropPrize { table, .. } | Close { table } | Straddle { table, .. } | Rabbit { table, .. } => Some(*table),
             _ => None,
         }
     }
@@ -645,6 +652,9 @@ pub enum ToApp {
     PrizeWon { table: TableId, seat: usize, name: String, prize: PrizeView },
     Casino { res: CasinoRes },
     Closed { table: TableId },
+    /// A rabbit hunted (0.13.4): the whole board as it would have come (`had` of them really
+    /// dealt), by whom; the next hand waits for it.
+    Rabbit { table: TableId, hand: u64, by: String, board: Vec<Card>, had: usize },
     /// The daily chips: how many (none: already taken today), and when the next can be taken.
     Daily { chips: Option<u64>, streak: u32 },
     Tourneys { list: Vec<TourneySummary> },
@@ -724,7 +734,7 @@ impl ToApp {
     /// are 0.13.0's.
     pub fn for_012_app(self) -> Option<ToApp> {
         match self {
-            ToApp::RlTables { .. } | ToApp::Rl { .. } | ToApp::GameEmote { game: TableGame::Roulette, .. } | ToApp::CasinoChat { .. } | ToApp::CasinoChatGone { .. } | ToApp::GmCert { .. } => None,
+            ToApp::RlTables { .. } | ToApp::Rl { .. } | ToApp::GameEmote { game: TableGame::Roulette, .. } | ToApp::CasinoChat { .. } | ToApp::CasinoChatGone { .. } | ToApp::GmCert { .. } | ToApp::Rabbit { .. } => None,
             ToApp::StaffLogAll { .. } | ToApp::Cms { .. } | ToApp::Announcement { .. } | ToApp::TableInvite { .. } => None,
             m if m.is_props() => None,
             ToApp::Casino { res } => res.for_012_app().map(|res| ToApp::Casino { res }),
@@ -741,7 +751,7 @@ impl ToApp {
             return None;
         }
         Some(match self {
-            ToApp::Say { .. } | ToApp::Ratings { .. } | ToApp::BjTables { .. } | ToApp::Bj { .. } | ToApp::CrapsTables { .. } | ToApp::Craps { .. } | ToApp::BacTables { .. } | ToApp::Bac { .. } | ToApp::RlTables { .. } | ToApp::Rl { .. } | ToApp::Bonfire { .. } | ToApp::BonfireLit { .. } | ToApp::GameEmote { .. } | ToApp::CasinoChat { .. } | ToApp::CasinoChatGone { .. } | ToApp::GmCert { .. } | ToApp::StaffLogAll { .. } | ToApp::Cms { .. } | ToApp::Announcement { .. } | ToApp::TableInvite { .. } => return None,
+            ToApp::Say { .. } | ToApp::Ratings { .. } | ToApp::BjTables { .. } | ToApp::Bj { .. } | ToApp::CrapsTables { .. } | ToApp::Craps { .. } | ToApp::BacTables { .. } | ToApp::Bac { .. } | ToApp::RlTables { .. } | ToApp::Rl { .. } | ToApp::Bonfire { .. } | ToApp::BonfireLit { .. } | ToApp::GameEmote { .. } | ToApp::CasinoChat { .. } | ToApp::CasinoChatGone { .. } | ToApp::GmCert { .. } | ToApp::StaffLogAll { .. } | ToApp::Cms { .. } | ToApp::Announcement { .. } | ToApp::TableInvite { .. } | ToApp::Rabbit { .. } => return None,
             ToApp::Emote { table, seat, emote } => ToApp::Emote { table, seat, emote: emote_for_older_app(&emote) },
             ToApp::Snapshot { mut table } => {
                 table.seats.iter_mut().flatten().for_each(|s| older(&mut s.bot));
@@ -773,6 +783,9 @@ pub struct TableSummary {
     pub hands_per_hour: u32,
     /// Names of who's sitting (to find friends).
     pub names: Vec<String>,
+    /// Who made it (0.13.24: they can close it from the lobby).
+    #[serde(default)]
+    pub owner: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -796,6 +809,9 @@ pub struct SeatView {
     /// Their MMR (filled in by the server as it's sent; 0.12.0).
     #[serde(default)]
     pub mmr: Option<u32>,
+    /// Chips they've added in this hand, on their stack when it's over (0.13.22).
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub pending: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -356,3 +356,43 @@ fn a_hand_that_cant_win_is_mucked_when_asked() {
     }
     assert_eq!(last.iter().filter(|(_, e)| matches!(e, Event::Shown { .. })).count(), 3);
 }
+
+/// A straddle (0.13.4), as 0.13.28 plays it four-handed: the first after the big blind puts in
+/// twice it, the first after them acts first (to call it, or raise to twice it), the blinds
+/// next, the straddler last with the option; heads-up nobody straddles.
+#[test]
+fn a_straddle_as_0_13_28_plays_it() {
+    let mut t = table(4, &[1000, 1000, 1000, 1000]);
+    // The button's 0 (the first hand's): small blind 1, big blind 2, the straddle 3.
+    t.seats[3].as_mut().unwrap().straddle = true;
+    let out = t.start_hand(1, shuffle(seed_from(7))).unwrap();
+    assert_eq!(t.button, Some(0));
+    assert!(out.iter().any(|(_, e)| *e == Event::Posted { seat: 3, what: Posting::Straddle, amount: 20 }));
+    assert_eq!(turn(&out), Some(0), "after the straddler");
+    let l = t.legal(0).unwrap();
+    assert_eq!((l.call, l.min_to, l.can_check), (20, 40, false));
+    t.act(0, Action::Call).unwrap();
+    let l = t.legal(1).unwrap();
+    assert_eq!((l.call, l.min_to), (15, 40), "the small blind");
+    t.act(1, Action::Fold).unwrap();
+    let l = t.legal(2).unwrap();
+    assert_eq!((l.call, l.min_to), (10, 40), "the big blind");
+    let out = t.act(2, Action::Call).unwrap();
+    assert_eq!(turn(&out), Some(3), "the straddler last");
+    let l = t.legal(3).unwrap();
+    assert!(l.can_check && l.can_raise && l.min_to == 40, "with the option: {l:?}");
+    let out = t.act(3, Action::Check).unwrap();
+    assert!(out.iter().any(|(_, e)| matches!(e, Event::Street { street: Street::Flop, .. })));
+    assert_eq!(t.hand.as_ref().unwrap().pot(), 65);
+    // Not asked for: no straddle.
+    let mut t = table(4, &[1000, 1000, 1000, 1000]);
+    let out = t.start_hand(1, shuffle(seed_from(7))).unwrap();
+    assert!(!out.iter().any(|(_, e)| matches!(e, Event::Posted { what: Posting::Straddle, .. })));
+    assert_eq!(turn(&out), Some(3));
+    // Heads-up: never.
+    let mut t = table(2, &[1000, 1000]);
+    t.seats[0].as_mut().unwrap().straddle = true;
+    t.seats[1].as_mut().unwrap().straddle = true;
+    let out = t.start_hand(1, shuffle(seed_from(7))).unwrap();
+    assert!(!out.iter().any(|(_, e)| matches!(e, Event::Posted { what: Posting::Straddle, .. })));
+}

@@ -578,6 +578,16 @@ impl Poker {
                 room!(table).set_muck(uid, on)?;
                 Ok(None)
             }
+            ToServer::Straddle { table, on } => {
+                room!(table).set_straddle(uid, on)?;
+                Ok(None)
+            }
+            ToServer::Rabbit { table, hand } => {
+                let name = Self::name_of(hub, uid);
+                let o = room!(table).hunt_rabbit(uid, &name, hand, now)?;
+                self.flush(hub, st, table, o);
+                Ok(None)
+            }
             ToServer::ShowCards { table, hand } => {
                 let o = room!(table).show_cards(uid, hand)?;
                 self.flush(hub, st, table, o);

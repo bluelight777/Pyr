@@ -1207,6 +1207,17 @@ impl Engine {
         self.shared.save_config_locked(&cfg);
     }
 
+    /// Poker: whether my stack is topped up to the table's most after every hand (0.13.22).
+    pub fn auto_top_up(&self) -> bool {
+        self.shared.config.lock().poker_auto_top_up
+    }
+
+    pub fn set_auto_top_up(&self, on: bool) {
+        let mut cfg = self.shared.config.lock();
+        cfg.poker_auto_top_up = on;
+        self.shared.save_config_locked(&cfg);
+    }
+
     /// Changes my seed for a slot (empty: a new one at random).
     pub fn set_casino_seed(&self, key: &str, slot: &str, seed: &str) -> String {
         let seed: String = seed.trim().chars().take(64).collect();

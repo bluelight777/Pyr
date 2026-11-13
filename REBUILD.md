@@ -511,14 +511,47 @@ How (decided while starting it):
       (only shown by servers older than 0.12, which have neither) keeps 0.13.0's layout; the
       server takes buys and lays there as 0.13.28's does.
 - [ ] Dominó Cubano tables in the casino, to 10,000,000, El Presidente (0.13.11/12)
-- [ ] Poker: rabbit (0.13.4/6/7), straddle (0.13.4), bots think and bluff like people (0.13.26),
-      close tables (0.13.4/24), add chips and top-up (0.13.22), top bar (0.13.22), titles and
-      badges (0.13.4/6: GAME MASTER / OWNER on staff's seats, Title shown or hidden:
-      `hide_title`, the record's field and request are in already), pre-action buttons (0.13.4),
-      slower wins (0.13.4), table sounds (0.13.6), the level badges' rings
-      (green 50, gold 30, bronze 12…), the suits on bot faces and card pips (0.13.28's are one
-      smooth shape each; the rebuild's are 0.13.0's circles and polygons), the Shark's crown
-      and star (`measured/newtable.md`)
+- [ ] Poker: bots think and bluff like people (0.13.26), titles and badges (0.13.4/6: GAME
+      MASTER / OWNER on staff's seats, Title shown or hidden: `hide_title`, the record's field
+      and request are in already; "Show my title" in the table's menu for staff),
+      pre-action buttons (0.13.4), slower wins (0.13.4), table sounds (0.13.6), the level
+      badges' rings (green 50, gold 30, bronze 12…), the suits on bot faces and card pips
+      (0.13.28's are one smooth shape each; the rebuild's are 0.13.0's circles and polygons),
+      the Shark's crown and star (`measured/newtable.md`)
+  - [x] The table's top bar (0.13.22) as 0.13.28's: Sit out / I'm back / Away and + Add chips,
+        then icons (the hand log and Last hand, the sound, fullscreen, ☰), and the ☰ menu in
+        0.13.28's order: Auto top-up, Straddle, Auto-muck, Drop a prize box (staff), Streamer
+        mode..., Keys..., Leave seat, Close this table... (the owner). Diffed with 0.13.28's.
+  - [x] Straddle (0.13.4, `poker_straddle`), Rabbit (0.13.4, `poker_rabbit`), Add chips any
+        time and Auto top-up (0.13.22, `poker_top_up_anytime`), closing a table (0.13.4/24), as
+        0.13.28 has them (`measured/tablefeatures.md`: its requests captured from its app, what
+        its server sends from the rebuilt app's frame log, the timings from both):
+        `straddle {table, on}` (the app keeps the box per table in memory, as 0.13.28's);
+        the first after the big blind posts 2 big blinds (`posted … "what":"straddle"`), acts
+        last with the option, a raise to 2 straddles at least; never heads-up. `rabbit {table,
+        hand}` → `rabbit {table, hand, by, board, had}` to everyone, once; the next hand 7 s
+        after it; the board is the deck's next cards with a burn before each street (the
+        test checks two of 0.13.28's own shuffles give its boards). "Rabbit" in the middle
+        for everyone at the table after a hand over before the river; the cards turn over
+        one by one (0.45 s apart, 0.36 s each) light blue with a blue rim under "Rabbit
+        hunted by …", then small in a panel when the next hand's dealt, gone 14 s after (its
+        last second fading): filmed beside 0.13.28's at 30 fps, the same frames to one or
+        two. `top_up` in a hand: kept on the seat (`pending`, "+400" green at the plate's
+        right, for everyone), on the stack when the hand's over; the window as 0.13.28's
+        (stack · most · chips, Top up to …, +20/+50/+100 big blinds that fit, the slider and
+        Add, the in-a-hand line, Auto top-up). Auto top-up (`poker_auto_top_up`, 0.13.28's
+        setting) tops up to the most whenever I'm not in a hand. `close` → `closed` to
+        everyone ("… was closed: the chips at it went back to whoever had them."), a hand
+        called off with each getting back what they started it with; the menu's "Close
+        {table}?" (who's sitting, Close the table / Keep it open) and the lobby's Close →
+        Close it now for the owner (`TableSummary.owner`, as 0.13.28 sends it). The 0.13.28
+        app on the rebuilt server: its straddle posted and read ("Friend posts the straddle
+        (40)"), its rabbit turned over, its chips added in a hand shown waiting and then on
+        the stack, its Close closing. Better than 0.13.28: its server refused its own "Top up
+        to the most" after a bet in the hand (it counted the stack the hand started with);
+        the rebuild takes it and gives back at the hand's end whatever wouldn't fit. Found
+        on the way (0.13.0's, fixed): standing up after folding in a hand gave back the
+        chips already put in the pot.
   - [x] The table grows and shrinks with the window (0.13.2/0.13.6), as 0.13.28's, measured at 55
         window sizes (`measured/scaling.md`): k = (width/1150).min((height − 180)/620), 0.72 to
         1.6; the bar under the table 124k, the room for the seats 78k; pictures, plates, cards,
@@ -626,9 +659,9 @@ How (decided while starting it):
   starts at), `missions` (their texts), `all_missions`, `star` (left out when empty); a record
   after every casino round (gains only when there's something to celebrate); `claim_ember` and
   `claim_weekly` (no fields) answered with the record and gains `{chips}`.
-- ToServer variants only 0.13.28 has (still to do): straddle, rabbit, hide_title,
-  bounty, dom_tables, dom_watch, dom_unwatch, dom_sit, dom_leave, dom_ready,
-  dom_move, dom_bot, dom_new. ToApp: rabbit, dom_tables, dom. Its achievements: 39
+- ToServer variants only 0.13.28 has (still to do): dom_tables, dom_watch, dom_unwatch,
+  dom_sit, dom_leave, dom_ready, dom_move, dom_bot, dom_new (straddle, rabbit, hide_title and
+  bounty are in). ToApp: dom_tables, dom (rabbit is in). Its achievements: 39
   (the rebuild has 32). (take_chips, staff_log_all, cms and announcement are in: see the control
   room; invite_to_table and table_invite too: see the table invites.)
 - The control room as 0.13.28 talks it (found by sending it requests exactly as written,
@@ -643,10 +676,9 @@ How (decided while starting it):
 ## The 0.13.28 server's feature names, in its order
 
 From the 0.13.28 `pyr-server` binary (what `Ready::features` lists). Still to add in the
-rebuild (as of chunk 2; poker_levels_2, casino_plinko, casino_cms, poker_gm_unlimited since):
-casino_100k, casino_0_13_2, poker_rabbit, poker_straddle, poker_pick_bot, big_slot_bets,
-casino_build, big_bomb_pots, slots_100k, hide_title, bounty_poker, high_tables, hard_bots,
-casino_domino, poker_top_up_anytime, craps_buy_lay, dm-files-2gb.
+rebuild (2026-11-13): casino_0_13_2, casino_build, hide_title, casino_domino (the rest are in;
+the rebuilt Reel Row and prop bets have their own names, `reel_row_remastered` and
+`prop_bets`, as they can't replay 0.13.28's rounds).
 
     roles files avatars dms server_icon custom_emoji friends backup giphy channel_newest
     soundboard klipy groups idle idle_away dnd files-25mb server_gifs handshake vouches

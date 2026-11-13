@@ -175,6 +175,8 @@ struct SeatMeta {
     misses: u32,
     /// Asked to leave: they go when the hand is over.
     leaving: bool,
+    /// Chips added during a hand (0.13.22's top-up anytime): on the stack when it's over.
+    pending: u64,
     /// Who a bot is (its way of playing, its pace and its voice: see `bots::persona`), and
     /// when it last said something.
     who: &'static bots::Persona,
@@ -183,13 +185,47 @@ struct SeatMeta {
 
 impl SeatMeta {
     fn new(bot: Option<Level>, look: Look, bank_ms: u64, name: &str) -> SeatMeta {
-        SeatMeta { bot, look, bank_ms, misses: 0, leaving: false, who: bots::persona::of(name), said_ms: 0 }
+        SeatMeta { bot, look, bank_ms, misses: 0, leaving: false, pending: 0, who: bots::persona::of(name), said_ms: 0 }
     }
 }
 
 /// Bots' table talk: never two lines closer than this at a table, nor from one bot.
 const TALK_GAP_MS: u64 = 9_000;
 const BOT_TALK_GAP_MS: u64 = 40_000;
+
+/// After a rabbit's hunted, the next hand waits this long for its cards to turn over (0.13.28's
+/// next shuffle came 7.0 s after it, however soon after the hand it was asked for).
+pub const RABBIT_MS: u64 = 7_000;
+
+/// A hand over before the river: the board as it would have come (a rabbit to hunt, 0.13.4).
+struct Rabbit {
+    hand: u64,
+    board: Vec<Card>,
+    /// How many of them were really dealt.
+    had: usize,
+    hunted: bool,
+}
+
+/// The board as it would have come: the deck's next cards after those dealt, a burn before each
+/// street, as the hand deals them.
+pub fn rabbit_board(deck: &[Card], hole_cards_dealt: usize, board: &[Card]) -> Option<Vec<Card>> {
+    let mut pos = hole_cards_dealt
+        + match board.len() {
+            0 => 0,
+            3 => 4,
+            4 => 6,
+            _ => return None,
+        };
+    let mut out = board.to_vec();
+    while out.len() < 5 {
+        let n = if out.is_empty() { 3 } else { 1 };
+        // (The burn.)
+        pos += 1;
+        out.extend_from_slice(deck.get(pos..pos + n)?);
+        pos += n;
+    }
+    Some(out)
+}
 
 enum Phase {
     /// Waiting for players, or for the next hand at `next`.
@@ -278,6 +314,8 @@ pub struct Room {
     said: VecDeque<&'static str>,
     /// Tournaments: who's gone out of chips, for the tournament to place (at the next tick).
     busted: Vec<Bust>,
+    /// The last hand's rabbit, till the next hand.
+    rabbit: Option<Rabbit>,
 }
 
 /// A hand's actions as everyone saw them, from its events.
@@ -422,6 +460,7 @@ impl Room {
             talk_ms: 0,
             said: VecDeque::new(),
             busted: Vec::new(),
+            rabbit: None,
         })
     }
 
@@ -495,6 +534,7 @@ impl Room {
             average_pot: avg,
             hands_per_hour: hph,
             names: seated.iter().map(|s| s.name.clone()).collect(),
+            owner: self.owner.clone(),
         }
     }
 
@@ -531,6 +571,7 @@ impl Room {
                     all_in: p.is_some_and(|p| p.all_in),
                     cards,
                     mmr: None,
+                    pending: m.map(|m| m.pending).unwrap_or(0),
                 })
             })
             .collect();
@@ -665,13 +706,50 @@ impl Room {
     }
 
     fn leave(&mut self, seat: usize, out: &mut Output) {
+        // (Folded and gone in the middle of a hand: what they put in stays in the pot. Their
+        // stack is still what they started the hand with, so it was given back whole.)
+        let behind = self.table.behind(seat);
         if let Some(s) = self.table.stand(seat) {
             if !self.is_bot(seat) {
-                out.effects.push(Effect::Credit { uid: s.player.clone(), chips: s.stack });
+                let pending = self.meta.get(&seat).map(|m| m.pending).unwrap_or(0);
+                out.effects.push(Effect::Credit { uid: s.player.clone(), chips: behind + pending });
             }
             self.meta.remove(&seat);
             self.changed(out);
         }
+    }
+
+    /// Straddles from the next hand on, or not (0.13.4).
+    pub fn set_straddle(&mut self, uid: &str, on: bool) -> Result<(), String> {
+        if self.tourney.is_some() {
+            return Err("no straddles in a tournament".into());
+        }
+        let seat = self.table.seat_of(uid).ok_or("you aren't sitting here")?;
+        if let Some(s) = self.table.seats[seat].as_mut() {
+            s.straddle = on;
+        }
+        Ok(())
+    }
+
+    /// The board the hand just over would have had (0.13.4): turned over for everyone, by
+    /// whoever's at the table (sitting or watching); the next hand waits for it.
+    pub fn hunt_rabbit(&mut self, uid: &str, name: &str, hand: u64, now: u64) -> Result<Output, String> {
+        if !self.audience().contains(uid) {
+            return Err("you aren't at that table".into());
+        }
+        let Phase::Idle { next } = &mut self.phase else { return Err("the next hand's on its way".into()) };
+        let Some(r) = self.rabbit.as_mut().filter(|r| r.hand == hand) else { return Err("there's no rabbit to hunt from that hand".into()) };
+        let mut out = Output::default();
+        // (Someone else got there first: it's already showing.)
+        if r.hunted {
+            return Ok(out);
+        }
+        r.hunted = true;
+        if let Some(t) = next {
+            *t = (*t).max(now + RABBIT_MS);
+        }
+        out.all(ToApp::Rabbit { table: self.id, hand, by: name.to_string(), board: r.board.clone(), had: r.had });
+        Ok(out)
     }
 
     pub fn sit_out(&mut self, uid: &str, sitting_out: bool) -> Result<Output, String> {
@@ -697,11 +775,25 @@ impl Room {
             return Err("no adding chips in a tournament".into());
         }
         let seat = self.table.seat_of(uid).ok_or("you aren't sitting here")?;
+        let most = self.buy_in.max_bb * self.table.rules.big_blind;
+        // In a hand (0.13.22): kept on the seat, on the stack when it's over. Counted against
+        // the most with what's in front of them now, as the window offers it (0.13.28's server
+        // counted what they started the hand with, so its own "Top up" was refused after a
+        // bet); what doesn't fit when the hand's over goes back to them then.
         if self.table.hand.as_ref().is_some_and(|h| h.player(seat).is_some()) {
-            return Err("you can add chips between hands".into());
+            let pending = self.meta.get(&seat).map(|m| m.pending).unwrap_or(0);
+            if self.table.behind(seat) + pending + chips > most {
+                return Err(format!("you can have {} chips at this table at most", self.max_buy_in()));
+            }
+            if let Some(m) = self.meta.get_mut(&seat) {
+                m.pending += chips;
+            }
+            let mut out = Output::default();
+            self.changed(&mut out);
+            return Ok(out);
         }
         let s = self.table.seats[seat].as_mut().unwrap();
-        if s.stack + chips > self.buy_in.max_bb * self.table.rules.big_blind {
+        if s.stack + chips > most {
             return Err(format!("you can have {} chips at this table at most", self.max_buy_in()));
         }
         s.stack += chips;
@@ -922,6 +1014,9 @@ impl Room {
         let last = seen.iter().rposition(|c| c.is_some()).map(|i| i + 1).unwrap_or(0);
         seen.truncate(last);
         out.all(ToApp::Reveal { table: self.id, hand: p.hand, dealer: p.dealer, dealt: seen });
+        // Over before the river: a rabbit to hunt (the deck's next cards, as they'd have come).
+        let dealt_in = p.log.iter().find_map(|(_, e)| if let Event::HandStarted { seats, .. } = e { Some(seats.len()) } else { None }).unwrap_or(0);
+        self.rabbit = rabbit_board(&p.deck, dealt_in * self.table.rules.hole_cards(), &board).map(|full| Rabbit { hand: p.hand, board: full, had: board.len(), hunted: false });
         // Records: what the hand meant for each person in it.
         let rules = self.table.rules.clone();
         let events: Vec<Event> = p.log.iter().map(|(_, e)| e.clone()).collect();
@@ -1040,10 +1135,23 @@ impl Room {
         }
         // Time banks grow; leavers leave; the broke and the absent sit out.
         let seats: Vec<usize> = self.meta.keys().copied().collect();
+        let most = self.buy_in.max_bb * self.table.rules.big_blind;
         for seat in seats {
             let m = self.meta.get_mut(&seat).unwrap();
             if m.bot.is_none() {
                 m.bank_ms = (m.bank_ms + BANK_PER_HAND_MS).min(BANK_MAX_MS);
+            }
+            // Chips added during the hand: on the stack now, as much as fits under the most
+            // (leaving, all of it goes back with the stack).
+            let pending = std::mem::take(&mut m.pending);
+            if pending > 0
+                && let Some(s) = self.table.seats[seat].as_mut()
+            {
+                let fits = if m.leaving { pending } else { pending.min(most.saturating_sub(s.stack)) };
+                s.stack += fits;
+                if fits < pending {
+                    out.effects.push(Effect::Credit { uid: s.player.clone(), chips: pending - fits });
+                }
             }
             if m.leaving {
                 self.leave(seat, out);
@@ -1238,6 +1346,7 @@ impl Room {
                         let commit = fair::commit(&dealer);
                         out.all(ToApp::Shuffle { table: self.id, hand, commit, ms: SHUFFLE_MS });
                         self.phase = Phase::Shuffle { hand, dealer, commit, seeds: BTreeMap::new(), deadline: now + SHUFFLE_MS };
+                        self.rabbit = None;
                     }
                     _ => {}
                 }
@@ -1370,7 +1479,8 @@ impl Room {
                 continue;
             }
             let chips = start_stacks.as_ref().and_then(|st| st.get(i).cloned().flatten()).filter(|(u, _)| *u == s.player).map(|(_, c)| c).unwrap_or(s.stack);
-            out.effects.push(Effect::Credit { uid: s.player.clone(), chips });
+            let pending = self.meta.get(&i).map(|m| m.pending).unwrap_or(0);
+            out.effects.push(Effect::Credit { uid: s.player.clone(), chips: chips + pending });
         }
         out.all(ToApp::Closed { table: self.id });
         out
@@ -1456,10 +1566,13 @@ impl Room {
     /// Chips each person has at this table now (what they'd get back if it closed).
     pub fn chips_of(&self, uid: &str) -> u64 {
         let Some(seat) = self.table.seat_of(uid) else { return 0 };
-        match &self.phase {
+        // (Chips added during a hand are held here too, till it's over.)
+        let pending = self.meta.get(&seat).map(|m| m.pending).unwrap_or(0);
+        let stack = match &self.phase {
             Phase::Playing(p) => p.seats_at_start.get(seat).cloned().flatten().filter(|(u, _)| u == uid).map(|(_, c)| c).unwrap_or(0),
             _ => self.table.seats[seat].as_ref().map(|s| s.stack).unwrap_or(0),
-        }
+        };
+        stack + pending
     }
 }
 

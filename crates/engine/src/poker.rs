@@ -56,6 +56,20 @@ pub struct TableLive {
     pub clock_events: usize,
     /// When the last hand ended (to leave the result on the table for a moment).
     pub ended_at: Option<Instant>,
+    /// A rabbit hunted (0.13.4): turned over on the table, then kept small a moment into the
+    /// next hand.
+    pub rabbit: Option<RabbitLive>,
+}
+
+/// A hunted rabbit: the board a hand would have had, and when it came.
+#[derive(Clone, Debug)]
+pub struct RabbitLive {
+    pub hand: u64,
+    pub by: String,
+    pub board: Vec<Card>,
+    /// How many of the board were really dealt.
+    pub had: usize,
+    pub at: Instant,
 }
 
 /// Casino chat lines kept here.
@@ -227,7 +241,11 @@ impl PokerState {
     /// A table gone at once (whatever was still to be shown at it with it).
     pub fn forget_table(&mut self, table: TableId) {
         self.held.remove(&table);
-        let _ = self.apply_now(ToApp::Closed { table }, Instant::now());
+        // (As if closed, without the words about the chips: the caller says why.)
+        self.tables.remove(&table);
+        if let Some(l) = &mut self.lobby {
+            l.retain(|t| t.id != table);
+        }
     }
 
     /// Holds a message back when it has to wait its turn: the board of a hand everyone's all in
@@ -321,7 +339,7 @@ impl PokerState {
                         t.view = table;
                     }
                     None => {
-                        self.tables.insert(id, TableLive { view: table, events: Vec::new(), clock: None, emotes: Vec::new(), says: Vec::new(), checks: BTreeMap::new(), fair_total: 0, in_bank: false, clock_events: 0, ended_at: None });
+                        self.tables.insert(id, TableLive { view: table, events: Vec::new(), clock: None, emotes: Vec::new(), says: Vec::new(), checks: BTreeMap::new(), fair_total: 0, in_bank: false, clock_events: 0, ended_at: None, rabbit: None });
                     }
                 }
             }
@@ -499,6 +517,11 @@ impl PokerState {
                 let note = if note.is_empty() { String::new() } else { format!(": \u{201c}{note}\u{201d}") };
                 self.notices.push(format!("{from} gave you {what}{note}"));
             }
+            ToApp::Rabbit { table, hand, by, board, had } => {
+                if let Some(t) = self.tables.get_mut(&table) {
+                    t.rabbit = Some(RabbitLive { hand, by, board, had, at: now });
+                }
+            }
             ToApp::PrizeWon { table, name, prize, .. } => {
                 if let Some(t) = self.tables.get_mut(&table) {
                     t.view.prize = None;
@@ -506,7 +529,10 @@ impl PokerState {
                 }
             }
             ToApp::Closed { table } => {
-                self.tables.remove(&table);
+                // (Said to whoever had it open, as 0.13.28 says it.)
+                if let Some(t) = self.tables.remove(&table) {
+                    self.notices.push(format!("{} was closed: the chips at it went back to whoever had them.", t.view.name));
+                }
                 if let Some(l) = &mut self.lobby {
                     l.retain(|t| t.id != table);
                 }

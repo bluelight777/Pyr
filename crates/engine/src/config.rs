@@ -393,6 +393,9 @@ pub struct Config {
     pub casino_seeds: std::collections::BTreeMap<String, String>,
     /// Poker: at a showdown my hands that can't win go in face down (auto-muck).
     pub poker_auto_muck: bool,
+    /// Poker: my stack kept at the table's most, topped up after every hand (0.13.22's Auto
+    /// top-up, kept as 0.13.28 keeps it).
+    pub poker_auto_top_up: bool,
     /// My Game Master certificate from the home server (see `pyr_poker::net::HOME_SERVER`),
     /// shown to every other server's casino; renewed at home, gone when I'm no longer one.
     pub gm_cert: Option<pyr_poker::net::SignedGm>,

@@ -144,6 +144,9 @@ pub struct Seat {
     /// At a showdown, a hand that can't win anything isn't shown (mucked).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub muck: bool,
+    /// Straddles: posts twice the big blind when they're the first after it (0.13.4).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub straddle: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -266,6 +269,8 @@ pub enum Posting {
     Ante,
     SmallBlind,
     BigBlind,
+    /// Twice the big blind, by the first after it, before the cards (0.13.4).
+    Straddle,
 }
 
 /// A pot: its chips and who can win it.
@@ -342,7 +347,7 @@ impl Table {
         if self.seats.iter().flatten().any(|s| s.player == player) {
             return Err("you're already at this table".into());
         }
-        self.seats[seat] = Some(Seat { player: player.into(), name: name.into(), stack: chips, sitting_out: false, muck: false });
+        self.seats[seat] = Some(Seat { player: player.into(), name: name.into(), stack: chips, sitting_out: false, muck: false, straddle: false });
         Ok(())
     }
 
@@ -433,6 +438,22 @@ impl Table {
         out.push((To::Everyone, Event::Posted { seat: sb, what: Posting::SmallBlind, amount: a }));
         let a = self.post(&mut hs, bb, self.rules.big_blind, true);
         out.push((To::Everyone, Event::Posted { seat: bb, what: Posting::BigBlind, amount: a }));
+        // A straddle (0.13.4): the first after the big blind, when they've asked to, puts in
+        // twice it, and the betting starts after them; they act last, with the option, as the
+        // big blind does. A raise is to twice the straddle at least, as 0.13.28's is. Never
+        // heads-up (0.13.28's button didn't), nor by someone with no more than the big blind.
+        let mut after = bb;
+        if ready.len() >= 3 {
+            let utg = self.next_from(bb, &ready);
+            let straddle = 2 * self.rules.big_blind;
+            if self.seats[utg].as_ref().is_some_and(|s| s.straddle && s.stack > self.rules.big_blind) {
+                let a = self.post(&mut hs, utg, straddle, true);
+                out.push((To::Everyone, Event::Posted { seat: utg, what: Posting::Straddle, amount: a }));
+                hs.last_raise = straddle;
+                hs.raises = 2;
+                after = utg;
+            }
+        }
         hs.current_bet = self.rules.big_blind.max(hs.players.iter().map(|p| p.street_bet).max().unwrap_or(0));
         // The cards: one at a time round the table.
         let k = self.rules.hole_cards();
@@ -446,8 +467,8 @@ impl Table {
             out.push((To::Seat(p.seat), Event::Dealt { seat: p.seat, cards: p.hole.clone() }));
         }
         out.push((To::Everyone, Event::DealtFaceDown { seats: order.clone(), count: k }));
-        // First to act: after the big blind.
-        let first = self.next_actor(&hs, bb);
+        // First to act: after the big blind (or the straddle).
+        let first = self.next_actor(&hs, after);
         hs.to_act = first;
         self.hand = Some(hs);
         self.hands_played += 1;
