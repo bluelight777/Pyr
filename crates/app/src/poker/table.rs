@@ -329,7 +329,8 @@ impl PyrApp {
         let tourney = v.tourney.is_some();
         let mine = v.my_seat.and_then(|seat| v.seats[seat].as_ref());
         let out = mine.is_some_and(|x| x.sitting_out);
-        let owner = s.me.as_ref().is_some_and(|m| m.user_id == v.owner);
+        // (Whoever made the table, or manages the server: they can close it.)
+        let owner = s.me.as_ref().is_some_and(|m| m.user_id == v.owner) || s.can(pyr_proto::control::perm::MANAGE_SERVER);
         let mut x = r.right() - 12.0;
         let icon = |ui: &mut egui::Ui, x: &mut f32, id: &str, tip: &str| -> (egui::Response, Rect) {
             let at = Rect::from_min_size(pos2(*x - 38.0, r.top() + 9.0), vec2(38.0, 32.0));
@@ -384,17 +385,25 @@ impl PyrApp {
         }
         // Sitting: + Add chips (not at a tournament's table), and Sit out.
         x += 6.0;
-        let mut text_button = |ui: &mut egui::Ui, w: f32, label: &str, tip: &str| -> egui::Response {
+        // (`gold`: + Add chips when I'm out of chips, as 0.13.28 has it.)
+        let mut text_button = |ui: &mut egui::Ui, w: f32, label: &str, tip: &str, gold: bool| -> egui::Response {
             let at = Rect::from_min_size(pos2(x - 6.0 - w, r.top() + 9.0), vec2(w, 32.0));
             x -= w + 8.0;
-            let resp = ui.put(at, egui::Button::new(RichText::new(label).font(theme::font(13.0))).corner_radius(theme::r(8)));
+            let b = if gold {
+                egui::Button::new(RichText::new(label).font(theme::font(13.0)).color(Color32::from_rgb(42, 28, 5))).fill(Color32::from_rgb(242, 194, 76))
+            } else {
+                egui::Button::new(RichText::new(label).font(theme::font(13.0)))
+            };
+            let resp = ui.put(at, b.corner_radius(theme::r(8)));
             if tip.is_empty() { resp } else { resp.on_hover_text(tip) }
         };
         // (In a hand only where the server keeps chips added then: `poker_top_up_anytime`.)
         let anytime = s.has(pyr_proto::control::POKER_TOP_UP_ANYTIME_FEATURE);
         let in_hand = v.hand.is_some() && mine.is_some_and(|x| x.in_hand);
         if mine.is_some() {
-            if !tourney && (anytime || !in_hand) && text_button(ui, 104.0, "+ Add chips", "").clicked() {
+            // (Gold when I'm out of chips, as 0.13.28's.)
+            let broke = mine.is_some_and(|x| x.stack == 0 && x.pending == 0 && !x.in_hand);
+            if !tourney && (anytime || !in_hand) && text_button(ui, 104.0, "+ Add chips", "", broke).clicked() {
                 self.poker.top_up = Some((v.id, 0));
             }
             let (label, tip) = match (tourney, out) {
@@ -402,7 +411,7 @@ impl PyrApp {
                 (true, false) => ("Away", "Folded for (and blinded) until you're back"),
                 (false, false) => ("Sit out", "Not dealt in until you're back"),
             };
-            if text_button(ui, 86.0, label, tip).clicked() {
+            if text_button(ui, 86.0, label, tip, false).clicked() {
                 self.engine.poker(&s.key, ToServer::SitOut { table: v.id, out: !out });
             }
         }
@@ -1049,6 +1058,35 @@ impl PyrApp {
             self.engine.poker(&s.key, ToServer::Emote { table: v.id, emote: e });
         }
         let seat = v.seats[me].as_ref();
+        // Out of chips at a cash table (0.13.22): Rebuy to the table's most in one click, or
+        // leave (0.13.28's panel, measured at 1280×800 and 1600×1000: not scaled, 544 wide, in
+        // the bar's corner).
+        if v.tourney.is_none()
+            && let Some(mine) = seat.filter(|x| x.stack == 0 && x.pending == 0 && !x.in_hand)
+        {
+            let _ = mine;
+            let bank = s.poker.me.as_ref().map(|m| m.chips).unwrap_or(0);
+            let most = v.rules.big_blind.saturating_mul(v.buy_in.max_bb);
+            let rebuy = most.min(bank);
+            let r = Rect::from_min_max(pos2(bar.right() - 16.0 - 544.0, bar.top() + 14.0), pos2(bar.right() - 16.0, bar.bottom() - 14.0));
+            p.rect_filled(r, theme::r(16), Color32::from_rgb(19, 16, 10));
+            p.rect_stroke(r, theme::r(16), Stroke::new(1.0f32, Color32::from_rgb(138, 106, 42)), StrokeKind::Inside);
+            let mid = r.center().y;
+            p.text(pos2(r.left() + 20.0, mid - 23.0), Align2::LEFT_TOP, "Out of chips", theme::bold_font(18.0), Color32::from_rgb(255, 226, 154));
+            p.text(pos2(r.left() + 20.0, mid + 5.0), Align2::LEFT_TOP, format!("You have {} chips.", chips_text(bank)), theme::font(13.0), Color32::from_rgb(168, 153, 140));
+            let leave = Rect::from_min_size(pos2(r.right() - 12.0 - 120.0, mid - 27.0), vec2(120.0, 54.0));
+            if ui.put(leave, egui::Button::new(RichText::new("Leave seat").font(theme::bold_font(15.0)).color(theme::TEXT())).fill(theme::ELEV()).corner_radius(theme::r(12))).clicked() {
+                self.engine.poker(&s.key, ToServer::Stand { table: v.id });
+            }
+            if rebuy > 0 {
+                let at = Rect::from_min_size(pos2(leave.left() - 10.0 - 190.0, mid - 27.0), vec2(190.0, 54.0));
+                let b = egui::Button::new(RichText::new(format!("Rebuy {}", chips_text(rebuy))).font(theme::bold_font(16.0)).color(Color32::from_rgb(42, 28, 5))).fill(Color32::from_rgb(242, 194, 76)).corner_radius(theme::r(12));
+                if ui.put(at, b).clicked() {
+                    self.engine.poker(&s.key, ToServer::TopUp { table: v.id, chips: rebuy });
+                }
+            }
+            return;
+        }
         if v.bomb {
             // (A Bomb Pot gone off: nothing to choose.)
             p.text(pos2(bar.right() - 16.0, bar.center().y), Align2::RIGHT_CENTER, "The Bomb Pot's gone off: everyone's all in, every hand", theme::bold_font(15.0), Color32::from_rgb(0xff, 0x8a, 0x6a));
@@ -1062,6 +1100,7 @@ impl PyrApp {
             let a = match self.poker.pre {
                 PreAction::CheckFold => Some(if l.can_check { Action::Check } else { Action::Fold }),
                 PreAction::Check => l.can_check.then_some(Action::Check),
+                PreAction::Call(n) => (!l.can_check && l.call == n).then_some(Action::Call),
                 PreAction::CallAny => Some(Action::Call),
                 PreAction::None => None,
             };
@@ -1076,21 +1115,50 @@ impl PyrApp {
             // Not my turn: tick what to do when it comes.
             let in_hand = seat.is_some_and(|s| s.in_hand && !s.folded) && v.to_act.is_some();
             if in_hand {
-                let opts = [(PreAction::CheckFold, "Check / Fold"), (PreAction::Check, "Check"), (PreAction::CallAny, "Call any")];
-                let mut x = right - 3.0 * 132.0 * z;
+                // 0.13.4's, as 0.13.28 has them (measured at 1280×800 and 1600×1000): they say what
+                // they'll do: Check / Fold, Check and Call any before anyone bets; Fold, Call N and
+                // Call any once someone has (a bet or raise takes the tick off Check and Call N).
+                let top = v.seats.iter().flatten().map(|x| x.bet).max().unwrap_or(0);
+                let to_call = seat.map(|x| top.saturating_sub(x.bet).min(x.stack)).unwrap_or(0);
+                match self.poker.pre {
+                    PreAction::Check if to_call > 0 => self.poker.pre = PreAction::None,
+                    PreAction::Call(n) if n != to_call => self.poker.pre = PreAction::None,
+                    _ => {}
+                }
+                let opts: [(PreAction, String); 3] = if to_call == 0 {
+                    [(PreAction::CheckFold, "Check / Fold".into()), (PreAction::Check, "Check".into()), (PreAction::CallAny, "Call any".into())]
+                } else {
+                    [(PreAction::CheckFold, "Fold".into()), (PreAction::Call(to_call), format!("Call {}", chips_text(to_call))), (PreAction::CallAny, "Call any".into())]
+                };
+                // 176 by 54.5 (k), 10 apart, the bar's 16 from the right; 41 under its top; the
+                // words over them 12 (MUTED), right-aligned.
+                let (bw, bh, gap) = (176.0 * z, 54.5 * z, 10.0 * z);
+                let top_y = bar.top() + 41.0 * z;
+                p.text(pos2(right, bar.top() + 22.0 * z), Align2::RIGHT_CENTER, "Before your turn: tick one and it plays itself", theme::font(12.0 * z), theme::MUTED());
+                let mut x = right - 3.0 * bw - 2.0 * gap;
                 for (pa, label) in opts {
-                    let r = Rect::from_min_size(pos2(x, bar.center().y - 20.0 * z), vec2(124.0, 40.0) * z);
-                    x += 132.0 * z;
+                    let r = Rect::from_min_size(pos2(x, top_y), vec2(bw, bh));
+                    x += bw + gap;
                     let on = self.poker.pre == pa;
-                    let resp = ui.interact(r, ui.id().with(("pre", label)), Sense::click());
-                    p.rect_filled(r, theme::r(10), if on { theme::EMBER().gamma_multiply(0.85) } else { theme::ELEV() });
-                    p.rect_stroke(r, theme::r(10), Stroke::new(1.0f32, theme::LINE()), StrokeKind::Inside);
-                    let box_r = Rect::from_center_size(r.left_center() + vec2(18.0 * z, 0.0), vec2(14.0, 14.0) * z);
-                    p.rect_stroke(box_r, theme::r(3), Stroke::new(1.5 * z, if on { theme::on_ember() } else { theme::MUTED() }), StrokeKind::Inside);
+                    let resp = ui.interact(r, ui.id().with(("pre", label.as_str())), Sense::click());
                     if on {
-                        crate::icons::tick(&p, box_r.shrink(2.0 * z), theme::on_ember());
+                        p.rect_filled(r, theme::r(12), Color32::from_rgb(42, 138, 74));
+                        p.rect_stroke(r, theme::r(12), Stroke::new(2.0f32, Color32::from_rgb(159, 202, 173)), StrokeKind::Inside);
+                    } else {
+                        p.rect_filled(r, theme::r(12), if resp.hovered() { theme::ELEV2() } else { theme::ELEV() });
+                        p.rect_stroke(r, theme::r(12), Stroke::new(1.0f32, theme::LINE()), StrokeKind::Inside);
                     }
-                    p.text(r.left_center() + vec2(32.0 * z, 0.0), Align2::LEFT_CENTER, label, theme::bold_font(13.0 * z), if on { theme::on_ember() } else { theme::TEXT() });
+                    // (Half a pixel over the middle, as 0.13.28's falls.)
+                    let box_r = Rect::from_center_size(pos2(r.left() + 23.9 * z, r.center().y - 0.5), Vec2::splat(19.6 * z));
+                    if on {
+                        p.rect_filled(box_r, theme::r(5), Color32::WHITE);
+                        let at = |fx: f32, fy: f32| box_r.left_top() + box_r.size() * vec2(fx, fy);
+                        p.add(Shape::line(vec![at(0.32, 0.525), at(0.44, 0.66), at(0.71, 0.345)], Stroke::new(box_r.width() * 0.105, Color32::from_rgb(42, 138, 74))));
+                    } else {
+                        p.rect_stroke(box_r, theme::r(5), Stroke::new(2.0f32, theme::MUTED()), StrokeKind::Inside);
+                    }
+                    let ink = if on { Color32::WHITE } else { Color32::from_rgb(235, 234, 233) };
+                    p.text(pos2(r.left() + 44.2 * z, r.center().y), Align2::LEFT_CENTER, &label, theme::bold_font(17.0 * z), ink);
                     if resp.clicked() {
                         self.poker.pre = if on { PreAction::None } else { pa };
                     }
@@ -1423,7 +1491,7 @@ impl PyrApp {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         for n in [20, 50, 100] {
-                            if n * bb <= can && ui.add(egui::Button::new(format!("+{n} big blinds")).min_size(vec2(0.0, 30.0))).clicked() {
+                            if n * bb < can && ui.add(egui::Button::new(format!("+{n} big blinds")).min_size(vec2(0.0, 30.0))).clicked() {
                                 add = Some(n * bb);
                             }
                         }
@@ -1992,7 +2060,7 @@ pub(crate) fn close_table_modal(ctx: &egui::Context, name: &str, people: usize) 
     let mut answer = None;
     let modal = egui::Modal::new(egui::Id::new("poker-close-table"))
         .backdrop_color(Color32::from_black_alpha(170))
-        .frame(egui::Frame::window(&ctx.style()).inner_margin(egui::Margin::same(22)))
+        .frame(egui::Frame::window(&ctx.style()).inner_margin(egui::Margin::same(22)).corner_radius(theme::r(12)))
         .show(ctx, |ui| {
             let w = 430.0;
             ui.set_width(w);

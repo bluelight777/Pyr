@@ -68,8 +68,11 @@ impl Default for NewTable {
 pub enum PreAction {
     #[default]
     None,
+    /// Check if I can, else fold ("Check / Fold", and "Fold" once someone's bet).
     CheckFold,
     Check,
+    /// Call exactly this (0.13.4: a raise takes the tick off).
+    Call(u64),
     CallAny,
 }
 
@@ -693,8 +696,9 @@ impl PyrApp {
             if open.clicked() || resp.double_clicked() {
                 self.open_table(&s.key, t.id);
             }
-            // Whoever made it can close it from here (0.13.24): Close, then Close it now.
-            if s.me.as_ref().is_some_and(|m| !t.owner.is_empty() && m.user_id == t.owner) {
+            // Whoever made it can close it from here (0.13.24), and so can whoever manages the
+            // server (any table, as 0.13.28 shows them): Close, then Close it now.
+            if s.me.as_ref().is_some_and(|m| !t.owner.is_empty() && m.user_id == t.owner) || s.can(pyr_proto::control::perm::MANAGE_SERVER) {
                 // (0.13.28's, measured: 76 or 123 wide, as tall as Join, 10 before it; over the
                 // Avg pot words, as there.)
                 let sure = self.poker.lobby_close == Some(t.id);
