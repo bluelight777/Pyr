@@ -515,6 +515,16 @@ How (decided while starting it):
 - [ ] Poker: the suits on bot faces and card pips (0.13.28's are one smooth shape each; the
       rebuild's are 0.13.0's circles and polygons), the Shark's crown and star
       (`measured/newtable.md`).
+  - [x] Bot faces: the suits as 0.13.28's shapes (traced at 6x), one near-white shape with a dark
+        shadow; a Shark (only a Shark) wears 0.13.0's fin, the violet ring and a star in a soft
+        violet glow over the top, with a small one on the ring either side, drawn again with
+        egui's own tessellator against 0.13.28's picture and checked in the app at 3x (Which bot?
+        and a seat: the same to the pixel but for the discs' edges). Which bot? shows the faces
+        as the level picked has them, as 0.13.28's does.
+  - [ ] The number cards as 0.13.28's (seen side by side on the same flop, both apps watching one
+        table): its ranks in a condensed heavy lettering, the face a warm gradient, the pips
+        smaller and shaded; the rebuild has 0.13.0's (only the court figures, the ace of spades
+        and the backs were carved from 0.13.28).
   - [x] Bots think and bluff like people (0.13.26), measured off 0.13.28's Medium bots at two
         tables (`measured/bots.md`: each turn's think by what it ended in, betting street by
         street) and played again in a simulation of the same tables: a bot's time comes from how
