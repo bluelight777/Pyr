@@ -20,6 +20,7 @@ use crate::hub::Hub;
 mod bac_tables;
 mod rl_tables;
 mod bj;
+mod dom;
 mod bonfire;
 mod casino;
 mod chat;
@@ -89,6 +90,7 @@ pub struct State {
     pub tourneys: BTreeMap<TourneyId, Tourney>,
     pub casino: casino::CasinoState,
     pub bj: bj::BjState,
+    pub dom: dom::DomState,
     pub craps: craps_tables::CrapsState,
     pub bac: bac_tables::BacState,
     pub rl: rl_tables::RlState,
@@ -116,7 +118,7 @@ impl State {
     /// Play chips a person has riding: at cash tables, buy-ins in tournaments not over, and on
     /// blackjack tables.
     fn held(&self, uid: &str) -> u64 {
-        self.rooms.values().map(|r| r.chips_of(uid)).sum::<u64>() + self.tourneys.values().map(|t| t.at_stake(uid)).sum::<u64>() + self.bj.at_stake(uid) + self.craps.at_stake(uid) + self.bac.at_stake(uid) + self.rl.at_stake(uid)
+        self.rooms.values().map(|r| r.chips_of(uid)).sum::<u64>() + self.tourneys.values().map(|t| t.at_stake(uid)).sum::<u64>() + self.bj.at_stake(uid) + self.craps.at_stake(uid) + self.bac.at_stake(uid) + self.rl.at_stake(uid) + self.dom.at_stake(uid)
     }
 }
 
@@ -237,6 +239,10 @@ impl Poker {
         let bj: Vec<Output> = st.bj.tables.values_mut().filter_map(|t| t.relook(uid, look, now)).collect();
         for out in bj {
             self.flush_bj(hub, st, out);
+        }
+        let dom: Vec<Output> = st.dom.tables.values_mut().filter_map(|t| t.relook(uid, look, now)).collect();
+        for out in dom {
+            self.flush_dom(hub, st, out);
         }
         let bac: Vec<Output> = st.bac.tables.values_mut().filter_map(|t| t.relook(uid, look, now)).collect();
         for out in bac {
@@ -479,7 +485,7 @@ impl Poker {
                     Self::rate(hub, st, &who, |r| pyr_poker::rating::rate_places(r, &places), true);
                 }
                 // (Counted as the tables' news goes out: see `flush_bj` and the others.)
-                Effect::BjRound { .. } | Effect::CrapsRoll { .. } | Effect::BacCoup { .. } | Effect::RlSpin { .. } => {}
+                Effect::BjRound { .. } | Effect::CrapsRoll { .. } | Effect::BacCoup { .. } | Effect::RlSpin { .. } | Effect::DomHand { .. } => {}
                 Effect::Placed { uid, place, entrants, prize, tourney } => {
                     let (mut rec, _) = hub.db.poker_record(&uid);
                     let g = progress::apply_placed(&mut rec, place, entrants);
@@ -769,6 +775,20 @@ impl Poker {
                 }
                 self.bj(hub, st, uid, msg, now, &mut rng)
             }
+            msg @ (ToServer::DomTables
+            | ToServer::DomWatch { .. }
+            | ToServer::DomUnwatch { .. }
+            | ToServer::DomSit { .. }
+            | ToServer::DomLeave { .. }
+            | ToServer::DomReady { .. }
+            | ToServer::DomMove { .. }
+            | ToServer::DomBot { .. }
+            | ToServer::DomNew { .. }) => {
+                if casino < pyr_poker::net::CASINO_01311 {
+                    return Err("dominó tables need a newer Pyr".into());
+                }
+                self.dom(hub, st, uid, msg, now, &mut rng)
+            }
             msg @ (ToServer::CrapsTables
             | ToServer::CrapsWatch { .. }
             | ToServer::CrapsUnwatch { .. }
@@ -894,7 +914,7 @@ impl Poker {
                     TableRef::Craps(id) => st.craps.tables.get(&id).map(|t| t.name.clone()),
                     TableRef::Baccarat(id) => st.bac.tables.get(&id).map(|t| t.name.clone()),
                     TableRef::Roulette(id) => st.rl.tables.get(&id).map(|t| t.name.clone()),
-                    TableRef::Domino(_) => None,
+                    TableRef::Domino(id) => st.dom.tables.get(&id).map(|t| t.name.clone()),
                 }
                 .ok_or("that table's closed")?;
                 st.invited.insert(pair, now);
@@ -1232,6 +1252,7 @@ impl Poker {
         // (In a tournament they stay in: folded for until they're back, or out.)
         st.casino.watchers.remove(uid);
         self.bj_gone(hub, st, uid, now);
+        self.dom_gone(hub, st, uid, now);
         self.craps_gone(hub, st, uid, now);
         self.bac_gone(hub, st, uid, now);
         self.rl_gone(hub, st, uid, now);
@@ -1267,6 +1288,7 @@ impl Poker {
             self.props_sweep(hub, st);
         }
         self.bj_tick(hub, st, now, &mut rng);
+        self.dom_tick(hub, st, now, &mut rng);
         self.craps_tick(hub, st, now, &mut rng);
         self.bac_tick(hub, st, now, &mut rng);
         self.rl_tick(hub, st, now, &mut rng);

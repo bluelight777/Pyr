@@ -45,6 +45,7 @@ pub(super) fn game_emote_to(st: &mut State, uid: &str, game: TableGame, table: u
         TableGame::Craps => st.craps.tables.get(&table).map(|t| (t.seat_of(uid), t.audience())),
         TableGame::Baccarat => st.bac.tables.get(&table).map(|t| (t.seat_of(uid), t.audience())),
         TableGame::Roulette => st.rl.tables.get(&table).map(|t| (t.seat_of(uid), t.audience())),
+        TableGame::Domino => st.dom.tables.get(&table).map(|t| (t.seat_of(uid), t.audience())),
     }
     .ok_or("that table has closed")?;
     let seat = seat.ok_or("sit down to send those")?;
