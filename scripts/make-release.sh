@@ -85,7 +85,7 @@ else
 fi
 # The Pyr Library Keeper (dist/keeper, from scripts/make-keeper.sh): install-site.sh keeps it on
 # the VPS, and sets it up again there once its Claude API key is in (setup-keeper.sh).
-if [ -f dist/keeper/keeper-cert.json ]; then
+if [ -f dist/keeper/keeper-cert-2.json ]; then
   mkdir -p "$OUT/upload/keeper" && cp -r dist/keeper/. "$OUT/upload/keeper/"
   cp installer/site/setup-keeper.sh "$OUT/upload/"
 else

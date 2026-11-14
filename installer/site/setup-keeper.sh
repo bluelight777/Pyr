@@ -121,10 +121,28 @@ case "$(uname -m)" in
 esac
 ETC=/etc/pyr-keeper
 mkdir -p "$ETC"
-[ -f "$ETC/keeper-key.txt" ] || install -m 600 "$HERE/keeper/keeper-key.txt" "$ETC/keeper-key.txt"
+if [ ! -f "$ETC/keeper-key.txt" ]; then
+  [ -f "$HERE/keeper/keeper-key.txt" ] || { echo "This Keeper has no key yet, and none came with the release." >&2; exit 1; }
+  install -m 600 "$HERE/keeper/keeper-key.txt" "$ETC/keeper-key.txt"
+fi
 # (Kept only there from now on.)
 rm -f "$HERE/keeper/keeper-key.txt"
-install -m 644 "$HERE/keeper/keeper-cert.json" "$ETC/keeper-cert.json"
+# Two release keys since the rebuild (the one before was lost): the one before's certificate and
+# key stay as they are, for the list 0.13.28 and older read (index3.json); the new one's
+# certificate comes with each release, for the list rebuilt Pyrs read (index4.json). A Keeper set
+# up from nothing has only the new key, for both.
+OLD_CERT="$ETC/keeper-cert.json"
+OLD_KEY=""
+if [ -f "$ETC/keeper.json" ] && [ -f "$OLD_CERT" ]; then
+  OLD_KEY=$(sed -n 's/.*"release_key": *"\([^"]*\)".*/\1/p' "$ETC/keeper.json" | head -n 1)
+fi
+NEW_KEY=$(cat "$HERE/keeper/release-key.pub")
+install -m 644 "$HERE/keeper/keeper-cert-2.json" "$ETC/keeper-cert-2.json"
+if [ -z "$OLD_KEY" ] || [ "$OLD_KEY" = "$NEW_KEY" ]; then
+  OLD_KEY=$NEW_KEY
+  OLD_CERT="$ETC/keeper-cert-2.json"
+fi
+note "lists: index3.json certified by $OLD_KEY, index4.json by $NEW_KEY"
 if [ ! -s "$ETC/api-key" ]; then
   echo
   echo "The Keeper asks Claude (through the Claude API) to review each new version."
@@ -145,8 +163,10 @@ cat > "$ETC/keeper.json" <<EOF
   "web_library": "$LIB",
   "state_dir": "$STATE",
   "key_file": "$ETC/keeper-key.txt",
-  "cert_file": "$ETC/keeper-cert.json",
-  "release_key": "$(cat "$HERE/keeper/release-key.pub")",
+  "cert_file": "$OLD_CERT",
+  "release_key": "$OLD_KEY",
+  "release_key2": "$NEW_KEY",
+  "cert2_file": "$ETC/keeper-cert-2.json",
   "api_key_file": "$ETC/api-key",
   "rustup_home": "$OPT/rustup",
   "cargo_home": "$OPT/cargo",
@@ -180,9 +200,10 @@ rm -rf "$STATE/selftest" && cp -r "$HERE/keeper/dice" "$STATE/selftest" && chown
 runuser -u "$RUN_AS" -- /usr/local/bin/pyr-keeper selftest "$STATE/selftest" --config "$ETC/keeper.json"
 rm -rf "$STATE/selftest"
 
-say "The Library's list as the Keeper keeps it (index3.json, for Pyr 0.9 and newer)"
-if [ ! -f "$STATE/state.json" ] || [ "${1:-}" = "--import" ]; then
-  install -m 644 -o "$RUN_AS" "$HERE/keeper/index3-signed.json" "$STATE/import.json"
+say "The Library's lists as the Keeper keeps them (index3.json for Pyr 0.9 to 0.13.28, index4.json for the rebuild)"
+# (Taken in the first time, and the first time with the new key: its programs endorsed by it.)
+if [ ! -f "$STATE/state.json" ] || [ ! -f "$LIB/index4.json" ] || [ "${1:-}" = "--import" ]; then
+  install -m 644 -o "$RUN_AS" "$HERE/keeper/index4-signed.json" "$STATE/import.json"
   runuser -u "$RUN_AS" -- /usr/local/bin/pyr-keeper import "$STATE/import.json" --config "$ETC/keeper.json"
   rm -f "$STATE/import.json"
 fi

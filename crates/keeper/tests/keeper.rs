@@ -368,5 +368,12 @@ fn with_the_new_release_key_both_lists_go_up() {
     // 0.13.28's Keeper's state reads as it was (the new list beside it).
     let state: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(cfg.state_dir.join("state.json")).unwrap()).unwrap();
     assert!(state["library"]["plugins"].is_array() && state["library2"]["plugins"].is_array() && state["unlisted"] == serde_json::json!(["dice"]));
+    // The key before's certificate run out (it can't be renewed): its list stays as it last
+    // went up, and the new key's goes on.
+    let three = std::fs::read_to_string(cfg.web_library.join("index3.json")).unwrap();
+    k.cert.not_after = 1;
+    k.unlist("torch-conquer").unwrap();
+    assert_eq!(std::fs::read_to_string(cfg.web_library.join("index3.json")).unwrap(), three);
+    assert_eq!(list("index4.json", &release2.user_id()), ["chimbrowser@0.1.3", "skin:sunset"]);
     let _ = std::fs::remove_dir_all(&dir);
 }

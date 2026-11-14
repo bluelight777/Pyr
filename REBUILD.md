@@ -64,16 +64,16 @@ The notice seen on a 0.13.28 app (Olive, on the rebuilt server): its error card,
 went wrong" over the words, with Copy and Dismiss, until dismissed; again at its next login.
 Still to do: the swap itself.
 
-On the day (keys by path, never printed):
-1. `library endorse --key pyr-release-key-2.txt --trust J0EGQDSoDplSzp3aFrK7EA8C5Of4w4D40kaO-g7iJcE
-   --in index3.json --out index-key2.json` (the live list, its programs endorsed again with the
-   new key);
-2. `library certify --key pyr-release-key-2.txt --keeper <the Keeper's key, the "key" in its
-   cert.json on the VPS> --out keeper-cert-2.json`, onto the VPS beside the Keeper's cert;
-3. the Keeper's config gains `"release_key2": "O_eZ7ZYewM395zMS-dFgHOFypniuEnfr02SCJAqtwJY"`
-   and `"cert2_file"`; the rebuilt `pyr-keeper` in place of 0.13.28's; `pyr-keeper import
-   index-key2.json` puts up `index4.json`;
-4. `KEY=pyr-release-key-2.txt scripts/make-library.sh` and `scripts/make-release.sh` as ever.
+On the day (keys by path, never printed): `KEY=pyr-release-key-2.txt KEEPER_PUB=<the "key" in
+the VPS's /etc/pyr-keeper/keeper-cert.json> LIVE=<https://pyr.gg/library/index3.json, saved>
+scripts/make-keeper.sh` makes the new key's certificate for the same Keeper key
+(`keeper-cert-2.json`) and the live list with its programs endorsed again by the new key
+(`index4-signed.json`); the release carries them, and `setup-keeper.sh` on the VPS keeps the
+key before's certificate and key for `index3.json`, adds the new ones (`release_key2`,
+`cert2_file`) and takes the list in once (`index4.json` goes up). The Keeper's key never leaves
+the VPS. Once the key before's certificate runs out (it can't be renewed), `index3.json` stays
+as it last went up and `index4.json` goes on. `installer/site/library/plugins.json` loses
+Dominó Cubano's program.
 
 ## Moving the VPS's server to the rebuild (nothing lost)
 

@@ -234,7 +234,8 @@ impl<'a> Keeper<'a> {
                 && let Ok(lib) = library::open(&text, &self.cfg.release_key2)
             {
                 info!("the list for the new release key starts from {} ({} plugins, {} skins) and what's up", p.display(), lib.plugins.len(), lib.skins.len());
-                merge_into(&mut lib2, &self.state.unlisted, lib);
+                // (Its programs only as the new key endorsed them: a release's own list isn't.)
+                merge_into(&mut lib2, &self.state.unlisted, endorsed_by(&lib, &self.cfg.release_key2));
                 break;
             }
         }
@@ -571,33 +572,37 @@ impl<'a> Keeper<'a> {
         let which = which.trim();
         let name = which.to_lowercase();
         let skin_id = which.strip_prefix("skin:").unwrap_or(which);
-        let lib = &self.state.library;
-        let by_id: Vec<String> = lib.plugins.iter().filter(|p| p.id == which).map(|p| p.id.clone()).chain(lib.skins.iter().filter(|s| s.id == skin_id).map(|s| format!("skin:{}", s.id))).collect();
-        let found = if by_id.is_empty() {
-            lib.plugins.iter().filter(|p| p.name.trim().to_lowercase() == name).map(|p| p.id.clone()).chain(lib.skins.iter().filter(|s| s.name.trim().to_lowercase() == name).map(|s| format!("skin:{}", s.id))).collect()
-        } else {
-            by_id
-        };
+        // (In either list: a program the new release key endorsed is only in the second.)
+        let lists: Vec<&Library> = std::iter::once(&self.state.library).chain(self.state.library2.as_ref()).collect();
+        let mut by_id: Vec<String> = Vec::new();
+        let mut by_name: Vec<String> = Vec::new();
+        for lib in &lists {
+            by_id.extend(lib.plugins.iter().filter(|p| p.id == which).map(|p| p.id.clone()).chain(lib.skins.iter().filter(|s| s.id == skin_id).map(|s| format!("skin:{}", s.id))));
+            by_name.extend(lib.plugins.iter().filter(|p| p.name.trim().to_lowercase() == name).map(|p| p.id.clone()).chain(lib.skins.iter().filter(|s| s.name.trim().to_lowercase() == name).map(|s| format!("skin:{}", s.id))));
+        }
+        let mut found = if by_id.is_empty() { by_name } else { by_id };
+        found.dedup();
+        found.sort();
+        found.dedup();
         anyhow::ensure!(!found.is_empty(), "nothing in the list is called {which}");
         anyhow::ensure!(found.len() == 1, "more than one is called {which}: say which by its id ({})", found.join(", "));
         let link = found[0].clone();
-        let lib = &mut self.state.library;
-        let gone = match link.strip_prefix("skin:") {
-            Some(id) => {
-                let i = lib.skins.iter().position(|s| s.id == id).context("the skin")?;
-                lib.skins.remove(i).name
-            }
-            None => {
-                let i = lib.plugins.iter().position(|p| p.id == link).context("the plugin")?;
-                lib.plugins.remove(i).name
-            }
-        };
-        if let Some(l2) = &mut self.state.library2 {
+        let mut gone = None;
+        for lib in std::iter::once(&mut self.state.library).chain(self.state.library2.as_mut()) {
             match link.strip_prefix("skin:") {
-                Some(id) => l2.skins.retain(|s| s.id != id),
-                None => l2.plugins.retain(|p| p.id != link),
+                Some(id) => {
+                    if let Some(i) = lib.skins.iter().position(|s| s.id == id) {
+                        gone = Some(lib.skins.remove(i).name);
+                    }
+                }
+                None => {
+                    if let Some(i) = lib.plugins.iter().position(|p| p.id == link) {
+                        gone = Some(lib.plugins.remove(i).name);
+                    }
+                }
             }
         }
+        let gone = gone.context("it's gone already")?;
         self.state.links.retain(|_, l| *l != link);
         if !self.state.unlisted.contains(&link) {
             self.state.unlisted.push(link.clone());
@@ -618,7 +623,13 @@ impl<'a> Keeper<'a> {
         let lib = &mut self.state.library;
         lib.issued = issued;
         lib.expires = (issued + self.cfg.valid_days * 86_400).min(self.cert.not_after);
-        put_up(&self.cfg.web_library.join("index3.json"), &self.key, &self.cert, lib, &self.cfg.release_key)?;
+        // (Once the release key before the new one can't certify it again, its list stays as it
+        // last went up, till its date: the new key's goes on.)
+        if self.cert2.is_some() && self.cert.not_after < issued + 86_400 {
+            warn!("the certificate from the release key before has run out: index3.json is no longer put up");
+        } else {
+            put_up(&self.cfg.web_library.join("index3.json"), &self.key, &self.cert, lib, &self.cfg.release_key)?;
+        }
         if let (Some(l2), Some(cert2)) = (&mut self.state.library2, &self.cert2) {
             without_pyrs_own(l2);
             l2.issued = issued;
