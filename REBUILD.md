@@ -511,7 +511,9 @@ How (decided while starting it):
       (0.13.28's stands still till I leave and come back). Not done: the house game's page
       (only shown by servers older than 0.12, which have neither) keeps 0.13.0's layout; the
       server takes buys and lays there as 0.13.28's does.
-- [ ] Dominó Cubano tables in the casino, to 10,000,000, El Presidente (0.13.11/12)
+- [x] Dominó Cubano tables in the casino, to 10,000,000, El Presidente (0.13.11/12). The five
+      standing tables (El Presidente the fifth: at 1280 wide neither app's strip shows it, nor
+      scrolls), every page and sound checked side by side with 0.13.28 (`measured/domino.md`).
   - [x] The game and the server as 0.13.28's (`casino_domino`): Pairs and Solo, double-nine,
         ten tiles each (Solo two to four, drawing from what's left), capicúa half again (never
         on a double), chiva double, ¡Doblo! to ×8 within what everyone covers (answered by the
