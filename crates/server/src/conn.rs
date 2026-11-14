@@ -84,14 +84,21 @@ pub async fn handle(hub: Arc<Hub>, incoming: quinn::Incoming, mut slot: ConnSlot
     drop(slot);
 }
 
-/// Most of a submission's files sent with `PluginSubmission` (bytes, before base64): what fits
-/// one reply with room to spare.
-const INLINE_SUBMISSION_BYTES: usize = 600_000;
+/// Most of a submission's files sent with `PluginSubmission` (their base64, paths and the list
+/// of the rest): what fits one reply with room to spare.
+const INLINE_SUBMISSION_JSON: usize = 800_000;
 
 async fn read_frame<T: serde::de::DeserializeOwned>(recv: &mut quinn::RecvStream) -> Result<Option<T>> {
-    match read_body(recv).await? {
-        Some(body) => Ok(Some(framing::decode(&body)?)),
-        None => Ok(None),
+    match read_body(recv).await {
+        Ok(Some(body)) => {
+            dev_frame_log_short(&body);
+            Ok(Some(framing::decode(&body)?))
+        }
+        Ok(None) => Ok(None),
+        Err(e) => {
+            dev_frame_log(format!("{{\"unreadable\":{:?}}}", e.to_string()).as_bytes());
+            Err(e)
+        }
     }
 }
 
@@ -122,6 +129,19 @@ fn dev_frame_log(body: &[u8]) {
     }
 }
 
+/// (Development: a frame read before logging in, a plugin sent in say, as `dev_frame_log` has
+/// it, its middle left out when it's long: its files' data.)
+fn dev_frame_log_short(body: &[u8]) {
+    if body.len() <= 4000 {
+        dev_frame_log(body);
+    } else {
+        let mut b = body[..2000].to_vec();
+        b.extend_from_slice(format!(" …({} bytes)… ", body.len()).as_bytes());
+        b.extend_from_slice(&body[body.len() - 600..]);
+        dev_frame_log(&b);
+    }
+}
+
 /// Whether `sig` is `author_id`'s signature over a submission transcript for `digest` on this
 /// connection (the server's nonce, the TLS keying material).
 fn signed_by(conn: &quinn::Connection, nonce: &[u8], author_id: &str, digest: &[u8], sig: &str) -> bool {
@@ -131,6 +151,36 @@ fn signed_by(conn: &quinn::Connection, nonce: &[u8], author_id: &str, digest: &[
     }
     let Ok(sig) = pyr_proto::b64::decode(sig) else { return false };
     crypto::is_valid_user_id(author_id) && crypto::verify(author_id, &crypto::submission_transcript(nonce, &exporter, author_id, digest), &sig)
+}
+
+/// A submission's files as they come (as bytes): a big file's pieces, one after another under
+/// its path, put back together (0.13.6).
+#[derive(Default)]
+struct Assembled {
+    files: Vec<(String, Vec<u8>)>,
+    size: usize,
+}
+
+impl Assembled {
+    fn add(&mut self, files: Vec<SourceFile>) -> std::result::Result<(), String> {
+        for f in files {
+            let bytes = pyr_proto::b64::decode(&f.data).map_err(|_| format!("{} isn't readable.", f.path))?;
+            self.size += bytes.len();
+            if self.size > SUBMISSION_MAX {
+                return Err(format!("It's bigger than {} MB.", SUBMISSION_MAX / 1_000_000));
+            }
+            match self.files.last_mut() {
+                Some((path, data)) if *path == f.path => data.extend_from_slice(&bytes),
+                _ => {
+                    if self.files.len() >= SUBMISSION_FILES_MAX {
+                        return Err("Too many files.".into());
+                    }
+                    self.files.push((f.path, bytes));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// A submission: the rest of its files (`parts`, read only if it would be taken), its
@@ -147,24 +197,25 @@ async fn take_submission(
     if sub.parts > MAX_SUBMISSION_PARTS {
         return Err(format!("It comes in {} parts: {MAX_SUBMISSION_PARTS} at most.", sub.parts));
     }
+    let mut came = Assembled::default();
+    came.add(std::mem::take(&mut sub.files))?;
     if sub.parts > 0 {
-        let until = tokio::time::Instant::now() + Duration::from_secs(120);
+        // Each part within a minute of the one before, and all of it within half an hour (a
+        // hundred megabytes on a slow line).
+        let all_by = tokio::time::Instant::now() + Duration::from_secs(30 * 60);
         for _ in 0..sub.parts {
-            let part: Option<ClientFrame> = tokio::time::timeout_at(until, read_frame(recv))
+            let by = all_by.min(tokio::time::Instant::now() + Duration::from_secs(60));
+            let part: Option<ClientFrame> = tokio::time::timeout_at(by, read_frame(recv))
                 .await
                 .map_err(|_| "The rest of it didn't arrive in time.".to_string())?
                 .map_err(|e| format!("The rest of it didn't arrive: {e}"))?;
             match part.map(|f| f.req) {
-                Some(Request::SubmissionPart { files }) => {
-                    if sub.files.len() + files.len() > SUBMISSION_FILES_MAX {
-                        return Err("Too many files.".into());
-                    }
-                    sub.files.extend(files);
-                }
+                Some(Request::SubmissionPart { files }) => came.add(files)?,
                 _ => return Err("Expected the rest of its files.".into()),
             }
         }
     }
+    sub.files = came.files.into_iter().map(|(path, bytes)| SourceFile { path, data: pyr_proto::b64::encode(&bytes) }).collect();
     // The files that came are the ones it lists (and so the ones its signature covers).
     if !sub.manifest.is_empty() {
         let mut said = sub.manifest.clone();
@@ -337,6 +388,7 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
         ring_tokens: Bucket::new(RING_RATE, RING_BURST),
         idle_tokens: Bucket::new(IDLE_RATE, IDLE_BURST),
         handshake_tokens: Bucket::new(HANDSHAKE_RATE, HANDSHAKE_BURST),
+        submission_files: None,
     };
     let result = async {
         loop {
@@ -787,6 +839,9 @@ struct Ctx<'a> {
     idle_tokens: Bucket,
     /// Messages for other members' Pyrs (`Handshake`).
     handshake_tokens: Bucket,
+    /// The plugin sent in that was looked at last, and its files: the big ones are asked for
+    /// a part at a time (`GetSubmissionFile`), a hundred megabytes in a couple of hundred parts.
+    submission_files: Option<(i64, Instant, Arc<Vec<SourceFile>>)>,
 }
 
 /// A token bucket: `rate` per second, holding at most `burst`.
@@ -2169,31 +2224,44 @@ impl Ctx<'_> {
                 let Some((entry, files)) = db.submission(id) else {
                     return Err((ErrorCode::NotFound, "That plugin is gone.".into()));
                 };
-                let files: Vec<SourceFile> = serde_json::from_str(&files).unwrap_or_default();
-                // As much as fits one reply comes along; the rest (a skin's bigger files) is
-                // fetched one by one.
-                let (mut inline, mut more, mut room) = (Vec::new(), Vec::new(), INLINE_SUBMISSION_BYTES);
-                let manifest = manifest_of(&files);
-                for f in files {
-                    let d = manifest.iter().find(|m| m.path == f.path).cloned().unwrap_or_default();
-                    if (d.size as usize) <= room {
-                        room -= d.size as usize;
-                        inline.push(f);
+                let files: Arc<Vec<SourceFile>> = Arc::new(serde_json::from_str(&files).unwrap_or_default());
+                // As much as fits one reply comes along; the rest (bigger files) is fetched one
+                // by one, the list of it in this reply too (a plugin's art can be thousands of
+                // files: room is kept for all of them on the list).
+                let manifest: HashMap<String, FileDigest> = manifest_of(&files).into_iter().map(|d| (d.path.clone(), d)).collect();
+                let listed: usize = manifest.values().map(|d| d.path.len() + 120).sum();
+                let (mut inline, mut more, mut room) = (Vec::new(), Vec::new(), INLINE_SUBMISSION_JSON.saturating_sub(listed));
+                for f in files.iter() {
+                    let d = manifest.get(&f.path).cloned().unwrap_or_default();
+                    // (What it takes along with the reply, beyond its line on the list.)
+                    let cost = (f.data.len() + 24).saturating_sub(120);
+                    if cost <= room {
+                        room -= cost;
+                        inline.push(f.clone());
                     } else {
                         more.push(d);
                     }
                 }
+                self.submission_files = Some((id, Instant::now(), files));
                 Ok(Event::PluginSubmission { entry, files: inline, more })
             }
             Request::GetSubmissionFile { id, path, offset, len } => {
                 if self.role() != Role::Owner {
                     return Err((ErrorCode::Forbidden, "Only the server's owner can see what's sent in.".into()));
                 }
-                let Some((_, files)) = db.submission(id) else {
-                    return Err((ErrorCode::NotFound, "That's gone.".into()));
+                let kept = self.submission_files.as_ref().filter(|(was, at, _)| *was == id && at.elapsed() < Duration::from_secs(600)).map(|k| k.2.clone());
+                let files = match kept {
+                    Some(files) => files,
+                    None => {
+                        let Some((_, files)) = db.submission(id) else {
+                            return Err((ErrorCode::NotFound, "That's gone.".into()));
+                        };
+                        let files: Arc<Vec<SourceFile>> = Arc::new(serde_json::from_str(&files).unwrap_or_default());
+                        self.submission_files = Some((id, Instant::now(), files.clone()));
+                        files
+                    }
                 };
-                let files: Vec<SourceFile> = serde_json::from_str(&files).unwrap_or_default();
-                match files.into_iter().find(|f| f.path == path) {
+                match files.iter().find(|f| f.path == path) {
                     // A part of it (a big one in many: one reply can't hold it all).
                     Some(f) => {
                         let size = f.data.len();
@@ -2375,6 +2443,7 @@ mod tests {
             ring_tokens: Bucket::new(RING_RATE, RING_BURST),
             idle_tokens: Bucket::new(IDLE_RATE, IDLE_BURST),
             handshake_tokens: Bucket::new(HANDSHAKE_RATE, HANDSHAKE_BURST),
+            submission_files: None,
         }
     }
 
@@ -3091,8 +3160,8 @@ mod tests {
             Ok(Event::PluginSubmission { files: inline, more, .. }) => {
                 assert_eq!(inline.len() + more.len(), files.len());
                 assert_eq!(more.iter().map(|d| d.path.as_str()).collect::<Vec<_>>(), vec!["bg.png"]);
-                let total: usize = inline.iter().map(|f| pyr_proto::b64::decode(&f.data).unwrap().len()).sum();
-                assert!(total <= INLINE_SUBMISSION_BYTES);
+                let total: usize = inline.iter().map(|f| f.data.len() + f.path.len() + 24).sum::<usize>() + more.iter().map(|d| d.path.len() + 120).sum::<usize>();
+                assert!(total <= INLINE_SUBMISSION_JSON);
                 // It comes in parts (0.13.14: one reply couldn't hold it), put together again.
                 let mut data = String::new();
                 let mut replies = 0;
@@ -3116,6 +3185,71 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert!(matches!(ctx(&hub, &owner).handle(Request::GetSubmissionFile { id, path: "nope.txt".into(), offset: 0, len: 0 }), Err((ErrorCode::NotFound, _))));
+    }
+
+    /// A plugin with its art (0.13.6): a big file comes in pieces one after another under its
+    /// path, as 0.13.28 sends it, and is put back together; thousands of files are looked at
+    /// in replies that fit a frame.
+    #[test]
+    fn a_plugins_art_comes_in_pieces_and_is_looked_at_whole() {
+        let hub = hub();
+        let owner = uid();
+        hub.db.insert_user(&owner, "Owner", Role::Owner).unwrap();
+        ctx(&hub, &owner).handle(Request::SetPluginSubmissions { on: true }).unwrap();
+        let file = |path: &str, data: &[u8]| SourceFile { path: path.into(), data: pyr_proto::b64::encode(data) };
+        let music: Vec<u8> = (0..3_000_000u32).map(|i| (i * 7 + i / 977) as u8).collect();
+        let pieces: Vec<SourceFile> = music.chunks(SUBMISSION_PIECE).map(|p| file("assets/music/theme.ogg", p)).collect();
+        assert_eq!(pieces.len(), 5);
+        let mut came = Assembled::default();
+        came.add(vec![file("Cargo.toml", b"[package]\nname = \"art\"\n"), file("assets/a.png", b"png")]).unwrap();
+        came.add(pieces[..2].to_vec()).unwrap();
+        came.add(pieces[2..].to_vec()).unwrap();
+        came.add(vec![file("src/main.rs", b"fn main() {}")]).unwrap();
+        let paths: Vec<&str> = came.files.iter().map(|f| f.0.as_str()).collect();
+        assert_eq!(paths, ["Cargo.toml", "assets/a.png", "assets/music/theme.ogg", "src/main.rs"]);
+        assert_eq!(came.files[2].1, music);
+        // Up to 5,000 files and 100 MB.
+        let mut many = Assembled::default();
+        let lots: Vec<SourceFile> = (0..SUBMISSION_FILES_MAX).map(|i| file(&format!("assets/s/{i:05}.png"), &[1, 2, 3])).collect();
+        many.add(lots).unwrap();
+        assert_eq!(many.add(vec![file("one/more.png", b"x")]).unwrap_err(), "Too many files.");
+        let mut big = Assembled::default();
+        let chunk = vec![9u8; SUBMISSION_PIECE];
+        let mut said = String::new();
+        for _ in 0..SUBMISSION_MAX / SUBMISSION_PIECE + 1 {
+            if let Err(e) = big.add(vec![file("assets/huge.bin", &chunk)]) {
+                said = e;
+                break;
+            }
+        }
+        assert_eq!(said, "It's bigger than 100 MB.");
+        // 4,900 sprites: everything's there, and each reply fits a frame.
+        let sprites: Vec<SourceFile> = std::iter::once(file("Cargo.toml", b"[package]"))
+            .chain((0..4_900).map(|i| file(&format!("assets/sprites/sprite_{i:05}.png"), &vec![(i % 251) as u8; 1000])))
+            .collect();
+        let sub = PluginSubmission { name: "Sprites".into(), kind: "program".into(), version: "1".into(), files: sprites.clone(), ..Default::default() };
+        let id = hub.take_plugin_submission("198.51.100.2".parse().unwrap(), sub, false).unwrap();
+        let mut c = ctx(&hub, &owner);
+        match c.handle(Request::GetPluginSubmission { id }) {
+            Ok(ev) => {
+                let bytes = frame(5, ev.clone());
+                assert!(bytes.len() <= pyr_proto::MAX_CONTROL_FRAME, "{} bytes", bytes.len());
+                let Event::PluginSubmission { files: inline, more, .. } = ev else { panic!() };
+                assert_eq!(inline.len() + more.len(), sprites.len());
+                assert!(!more.is_empty() && !inline.is_empty());
+                // The rest one by one, from the submission kept.
+                for d in more.iter().take(3) {
+                    match c.handle(Request::GetSubmissionFile { id, path: d.path.clone(), offset: 0, len: 0 }) {
+                        Ok(Event::SubmissionFile { data, size, .. }) => {
+                            assert_eq!(data.len() as u64, size);
+                            assert_eq!(pyr_proto::b64::decode(&data).unwrap().len() as u64, d.size);
+                        }
+                        other => panic!("{other:?}"),
+                    }
+                }
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

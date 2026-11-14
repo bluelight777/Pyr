@@ -1,6 +1,7 @@
 //! A plugin's source, gathered to send in for the Pyr Library from its folder or from a .zip
 //! of it (its Cargo.toml at the top, or in a folder inside), with the checks Pyr makes first
-//! (Rust only: a Cargo.toml and .rs files, no programs or C code inside); and the plugin kit,
+//! (written in Rust: a Cargo.toml and .rs files, no programs or C code inside, with the art,
+//! sound, fonts and data it uses, 0.13.6); and the plugin kit,
 //! written into a new folder to start an add-on from. Used by Pyr's Plugins page and by the
 //! Claude connector.
 
@@ -264,7 +265,11 @@ fn take(mut found: Vec<Found>, g: &mut Gathered, mut read: impl FnMut(&Found) ->
         g.problems.push(format!("{} files: a plugin can have up to {SUBMISSION_FILES_MAX}", g.files.len()));
     }
     if g.size > SUBMISSION_MAX {
-        g.problems.push(format!("{} KB: a plugin's source can be up to {} KB (leave out pictures you don't need)", g.size / 1000, SUBMISSION_MAX / 1000));
+        g.problems.push(format!(
+            "{} MB: a plugin (its source and everything with it) can be up to {} MB (leave out files it doesn't use)",
+            g.size / 1_000_000,
+            SUBMISSION_MAX / 1_000_000
+        ));
     }
     if !seen_rs {
         g.problems.push("no Rust (.rs) files: plugins are written in Rust".into());

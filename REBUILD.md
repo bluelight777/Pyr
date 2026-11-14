@@ -264,12 +264,37 @@ Version in brackets: where 0.13.x first had it.
       `PYR_FIX=pcgate`, 3 of 133 and no report.
 
 ### Library and programs
-- [ ] Plugins with art: up to 100 MB and 5,000 files, any Rust (0.13.6)
+- [x] Plugins with art: up to 100 MB and 5,000 files, any Rust (0.13.6). 0.13.28's checks run
+      side by side (its pyr-mcp's check_plugin on the same folders): 101 MB, 5,000 files, built
+      files and other languages refused in its words, "(100 MB at most)", its tool and guide
+      texts and the Make your own page word for word. Its client sends a big file in pieces of
+      640,000 bytes one after another under its path (seen in the rebuilt server's frame log);
+      the rebuilt server puts them together and stores exactly what 0.13.28's stores (every
+      column, the same plugin from 0.13.28's pyr-mcp to each server). Fixed (0.13.28's bug): with
+      a couple of thousand files its first frame went over 1 MiB with the list of files in it,
+      and the plugin never arrived (4,900 sprites: refused by both servers); the rebuild keeps
+      room for the list, and 0.13.28's server takes it. Owners looking at thousands of files:
+      each reply fits a frame (room kept for the list of the rest), and the parts of big files
+      come from the submission kept, not read again for each.
 - [ ] Programs open inside Pyr, stay in their page, Opening..., NVIDIA helper windows
-      (0.13.7 to 0.13.10, 0.13.17, 0.13.18)
+      (0.13.7 to 0.13.10, 0.13.17, 0.13.18). In: a few frames a second while one's on show
+      (0.13.7) and "Opening {name}…" (as 0.13.0 and 0.13.28 say it); a program's windows
+      watched (shown, hidden, moved: Pyr steps at once, and puts one that moved itself back);
+      its windows looked at every step: one showing outside Pyr is taken in as it starts after
+      a hidden first one, or once the one in its page was hidden (a browser's second window
+      stays its own); taken in out of sight and shown only in its place; helper windows skipped
+      by 0.13.28's list of their classes (wgpu, GLFW, SDL_app_hidden, OLE, IME, MSCTFIME,
+      NVOpenGLPbuffer, GDI+, Cicero, DDEML); pyr.log says which window, in 0.13.28's words
+      ("taking a program's window in", "a program shows a window of its own outside Pyr: taking
+      that one in", "a program's window closed: looking for its next one"). Windows only:
+      **to A/B on Blue's PC** (Torch & Conquer, Pyropoly, Chimbrowser against 0.13.28).
 - [x] Programs know your Pyr name and friends; PYR_BRIDGE; invite friends (0.13.15)
 - [ ] Library shows plugins added since setup (0.13.7); Dominó program removed and never listed
-      (0.13.12, 0.13.25)
+      (0.13.12, 0.13.25). Pyr's side done: `domino-cubano` taken off the PC as Pyr starts (its
+      files, data and line, "plugins: a program Pyr took over was removed", as 0.13.28 does it,
+      run side by side) and never shown whatever list it's given. Still to do: the Keeper's side
+      (lists taken in keep what's added since, never list a program Pyr does itself, what's
+      taken off stays off), checked against 0.13.28's Keeper.
 - [x] One-click update of open programs, programs can ask, invites update first, list fetched
       again, every ten minutes (0.13.27)
 

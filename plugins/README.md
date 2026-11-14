@@ -39,7 +39,8 @@ This folder has:
    `target/wasm32-unknown-unknown/release/<name>.wasm`. Its commands work in chat and its panel
    opens, until Pyr closes. It runs in the same sandbox as any add-on.
 5. Happy with it? **Send a plugin for review** and pick its folder. Pyr sends the source
-   (Rust only, up to 600 KB, no built files), never the `.wasm`. Nothing is built or listed
+   (written in Rust, with any art, sound, fonts and data it uses; up to 100 MB; no built
+   files), never the `.wasm` or `.exe`. Nothing is built or listed
    until it has been looked at. With the Claude connector set up (Settings → Claude), Claude
    can send it for you (`send_plugin`), and later a new version of it (`update_of`): what's
    sent is signed with your Pyr identity, so only you can send a new version of yours.

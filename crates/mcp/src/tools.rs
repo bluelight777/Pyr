@@ -183,7 +183,7 @@ pub fn list() -> Value {
         {
             "name": "check_plugin",
             "title": "Check a plugin",
-            "description": "Checks a plugin the way the Pyr Library will before it's sent, from its folder or a .zip of it (its Cargo.toml at the top, or in the one folder inside that has it): Rust only (a Cargo.toml and .rs files; no built files, C code or scripts), 600 KB at most. Says what would be sent and what to fix.",
+            "description": "Checks a plugin the way the Pyr Library will before it's sent, from its folder or a .zip of it (its Cargo.toml at the top, or in the one folder inside that has it): written in Rust (a Cargo.toml and .rs files; no built files, C code or scripts), with any art, sound, fonts or data it needs alongside, 100 MB at most. Says what would be sent and what to fix.",
             "inputSchema": { "type": "object", "properties": { "folder": folder("The whole path of the plugin's folder (the one with Cargo.toml, or the folder it's in), or of a .zip of it.") }, "required": ["folder"] },
             "annotations": read_only,
         },
@@ -427,7 +427,7 @@ fn gathered(folder: &Path) -> (plugin_source::Gathered, String) {
     for n in &g.notes {
         out.push_str(&format!("\n• {n}"));
     }
-    out.push_str(&format!("\n{} file{}, {} (600 KB at most).", g.files.len(), if g.files.len() == 1 { "" } else { "s" }, kb(g.size)));
+    out.push_str(&format!("\n{} file{}, {} (100 MB at most).", g.files.len(), if g.files.len() == 1 { "" } else { "s" }, kb(g.size)));
     (g, out)
 }
 

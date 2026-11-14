@@ -1455,7 +1455,7 @@ impl PyrApp {
             "Send a plugin for review",
             "Choose the plugin's folder or a .zip of it (its Cargo.toml at the top, or in the one folder inside that has it), or drop either \
              here. Pyr sends its source, not a built file: every plugin in the library is built from its source, after someone has looked at \
-             it. Rust only, up to 600 KB.",
+             it. Written in Rust, with all the art, sound, fonts and data it needs: up to 100 MB.",
         );
         if !pyr_engine::plugins::can_submit() {
             note(ui, "This copy of Pyr has nowhere to send plugins.", true);

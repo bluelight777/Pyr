@@ -2331,7 +2331,7 @@ impl Hub {
             let bytes = b64::decode(&f.data).map_err(|_| format!("{} isn't readable.", f.path))?;
             size += bytes.len();
             if size > max_size {
-                return Err(format!("It's bigger than {} KB.", max_size / 1000));
+                return Err(if max_size >= 10_000_000 { format!("It's bigger than {} MB.", max_size / 1_000_000) } else { format!("It's bigger than {} KB.", max_size / 1000) });
             }
             decoded.push((f.path.clone(), bytes));
         }

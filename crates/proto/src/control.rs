@@ -686,8 +686,12 @@ pub struct PluginSubmission {
 
 /// The kind of a skin sent in.
 pub const SKIN_KIND: &str = "skin";
-/// Most `SubmissionPart`s after a submission.
-pub const MAX_SUBMISSION_PARTS: u32 = 8;
+/// Most `SubmissionPart`s after a submission: a plugin of `SUBMISSION_MAX` in frames at least
+/// half full (each frame that's closed is, with the file that didn't fit after it), and some.
+pub const MAX_SUBMISSION_PARTS: u32 = 400;
+/// A file bigger than this comes in pieces of this much (bytes, before base64), one after
+/// another under its path, in the frames of a submission (0.13.6, as 0.13.28's do).
+pub const SUBMISSION_PIECE: usize = 640_000;
 
 fn is_zero_i64(n: &i64) -> bool {
     *n == 0
@@ -834,9 +838,10 @@ pub struct SubmissionEntry {
 /// Longest note from the owner to a sender.
 pub const SUBMISSION_NOTE_MAX: usize = 1000;
 
-/// A submission's files in all (bytes, before base64), and how many there can be.
-pub const SUBMISSION_MAX: usize = 600_000;
-pub const SUBMISSION_FILES_MAX: usize = 400;
+/// A submission's files in all (bytes, before base64), and how many there can be: a plugin's
+/// art, sounds, fonts and data with its Rust (0.13.6; 600 KB and 400 files before).
+pub const SUBMISSION_MAX: usize = 100_000_000;
+pub const SUBMISSION_FILES_MAX: usize = 5_000;
 
 /// Longest parts of a bug report (bytes).
 pub const BUG_TITLE_MAX: usize = 150;
@@ -1809,7 +1814,8 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         note: String,
     },
-    /// After `SubmitPlugin` with `parts`: more of its files, in order.
+    /// After `SubmitPlugin` with `parts`: more of its files, in order (a big file in pieces,
+    /// one after another under its path: see `SUBMISSION_PIECE`).
     SubmissionPart {
         files: Vec<SourceFile>,
     },

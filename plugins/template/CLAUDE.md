@@ -77,8 +77,8 @@ strip = true
 
 In Pyr: **Plugins → Make your own → Send a plugin for review**, and pick this folder. Pyr
 sends the source (not the `.wasm`: the library builds every plugin from its source), after
-checking it's Rust only: no built files, no C or other languages, under 600 KB (leave out
-`target/`; Pyr skips it anyway). Someone looks at every plugin before it's built and listed,
+checking it's written in Rust: no built files, no C or other languages. Art, sound, fonts and
+data files come along with it (up to 100 MB in all; leave out `target/`, Pyr skips it anyway). Someone looks at every plugin before it's built and listed,
 so write clear code with a `README.md` saying what it does.
 
 ## Rules for the library

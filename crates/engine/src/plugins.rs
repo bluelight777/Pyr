@@ -60,36 +60,71 @@ pub async fn send(shared: Arc<Shared>, submission: PluginSubmission) -> Result<i
     send_signed(&shared.endpoints, server, &shared.identity, submission).await
 }
 
-/// Raw bytes of files in one frame, at most (a frame is 1 MiB; base64 makes them a third
-/// bigger). One file bigger than this still goes alone (a skin's files fit a frame each).
-const FRAME_FILE_BYTES: usize = 640_000;
+/// What a frame's files may come to (their base64, paths and the writing around them): a
+/// frame is 1 MiB, and the rest of it is room for the submission's other words.
+const FRAME_FILES_JSON: usize = 900_000;
+
+/// What a file (or a piece of one) takes of a frame: its base64, its path, and `{"path":"",
+/// "data":""},` around them.
+fn frame_cost(path: &str, len: usize) -> usize {
+    len.div_ceil(3) * 4 + path.len() + 24
+}
+
+/// Splits a submission's files into frames: the ones that go with it, and the
+/// `SubmissionPart`s after it (it then lists every file, whole, so the server knows what's
+/// coming and the signature covers it). A file bigger than a frame comes in pieces of
+/// `SUBMISSION_PIECE` (the last one smaller), one after another under its path, as 0.13.28
+/// sends them; the server puts them back together (0.13.6). The first frame keeps room for the
+/// list (0.13.28's went over a frame with a couple of thousand files, and didn't arrive).
+fn pack(sub: &mut PluginSubmission) -> Result<Vec<Vec<SourceFile>>> {
+    let piece = pyr_proto::control::SUBMISSION_PIECE;
+    let sizes: Vec<usize> = sub.files.iter().map(|f| f.data.len() * 3 / 4).collect();
+    let whole: usize = sub.files.iter().zip(&sizes).map(|(f, n)| frame_cost(&f.path, *n)).sum();
+    if whole <= FRAME_FILES_JSON && sizes.iter().all(|n| *n <= piece) {
+        return Ok(Vec::new());
+    }
+    let manifest = manifest_of(&sub.files);
+    let listed = serde_json::to_string(&manifest)?.len();
+    if listed > FRAME_FILES_JSON - 100_000 {
+        bail!("Its list of files is too long to send: fewer files, or shorter names.");
+    }
+    let mut frames: Vec<Vec<SourceFile>> = vec![Vec::new()];
+    let mut room = FRAME_FILES_JSON - listed;
+    let put = |frames: &mut Vec<Vec<SourceFile>>, room: &mut usize, path: &str, bytes: &[u8]| {
+        let cost = frame_cost(path, bytes.len());
+        // (The first frame has the list in it too: what doesn't fit goes after it.)
+        if cost > *room && (frames.len() == 1 || !frames.last().is_some_and(|l| l.is_empty())) {
+            frames.push(Vec::new());
+            *room = FRAME_FILES_JSON;
+        }
+        *room = room.saturating_sub(cost);
+        frames.last_mut().expect("a frame").push(SourceFile { path: path.to_string(), data: pyr_proto::b64::encode(bytes) });
+    };
+    for f in std::mem::take(&mut sub.files) {
+        let bytes = pyr_proto::b64::decode(&f.data).map_err(|_| anyhow!("{} isn't readable", f.path))?;
+        if bytes.len() <= piece {
+            put(&mut frames, &mut room, &f.path, &bytes);
+        } else {
+            for p in bytes.chunks(piece) {
+                put(&mut frames, &mut room, &f.path, p);
+            }
+        }
+    }
+    let parts: Vec<Vec<SourceFile>> = frames.split_off(1);
+    sub.files = frames.pop().unwrap_or_default();
+    sub.manifest = manifest;
+    sub.parts = parts.len() as u32;
+    Ok(parts)
+}
 
 /// Sends `sub` (a plugin or a skin) to `server`, signed by `me` for this connection; files that
-/// don't fit the first frame follow in `SubmissionPart`s. Returns its number there.
+/// don't fit the first frame follow in `SubmissionPart`s (see `pack`). Returns its number there.
 pub async fn send_signed(endpoints: &std::sync::Mutex<crate::net::Endpoints>, server: (String, u16, [u8; 32]), me: &Identity, mut sub: PluginSubmission) -> Result<i64> {
     if sub.app_version.is_empty() {
         sub.app_version = env!("CARGO_PKG_VERSION").to_string();
     }
     sub.author_id = me.user_id();
-    // Split the files into frames.
-    let manifest = manifest_of(&sub.files);
-    let mut frames: Vec<Vec<SourceFile>> = vec![Vec::new()];
-    let mut room = FRAME_FILE_BYTES;
-    for f in std::mem::take(&mut sub.files) {
-        let size = manifest.iter().find(|d| d.path == f.path).map(|d| d.size as usize).unwrap_or(0);
-        if size > room && !frames.last().is_some_and(|l| l.is_empty()) {
-            frames.push(Vec::new());
-            room = FRAME_FILE_BYTES;
-        }
-        room = room.saturating_sub(size);
-        frames.last_mut().expect("a frame").push(f);
-    }
-    let mut parts: Vec<Vec<SourceFile>> = frames.split_off(1);
-    sub.files = frames.pop().unwrap_or_default();
-    if !parts.is_empty() {
-        sub.manifest = manifest;
-        sub.parts = parts.len() as u32;
-    }
+    let mut parts = pack(&mut sub)?;
     let who = if sub.kind == SKIN_KIND { "the Pyr Library (skins)" } else { "the Pyr Library" };
     let reply = pre_login(endpoints, server, who, |nonce, exporter| {
         sub.sig = pyr_proto::b64::encode(&me.sign(&crypto::submission_transcript(nonce, exporter, &sub.author_id, &submission_digest(&sub))));
@@ -293,6 +328,70 @@ pub fn save_approved(config_dir: &Path, key: &str, entry: &SubmissionEntry, file
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A plugin with its art (0.13.6) goes in frames that each fit (a big file in pieces, as
+    /// 0.13.28 sends it), and comes back together the same.
+    #[test]
+    fn a_plugins_art_goes_in_frames_that_fit() {
+        let file = |path: &str, data: &[u8]| SourceFile { path: path.into(), data: pyr_proto::b64::encode(data) };
+        let fits = |req: Request| {
+            let n = framing::encode(&ClientFrame { id: 1, req }).len();
+            assert!(n <= pyr_proto::MAX_CONTROL_FRAME, "a frame of {n} bytes");
+        };
+        let sent = |sub: &PluginSubmission, parts: &[Vec<SourceFile>]| -> Vec<(String, Vec<u8>)> {
+            let mut out: Vec<(String, Vec<u8>)> = Vec::new();
+            for f in sub.files.iter().chain(parts.iter().flatten()) {
+                let bytes = pyr_proto::b64::decode(&f.data).unwrap();
+                match out.last_mut() {
+                    Some((p, d)) if *p == f.path => d.extend(bytes),
+                    _ => out.push((f.path.clone(), bytes)),
+                }
+            }
+            out
+        };
+        // Small: one frame, as before.
+        let mut small = PluginSubmission { files: vec![file("Cargo.toml", b"[package]"), file("src/main.rs", b"fn main() {}")], ..Default::default() };
+        assert!(pack(&mut small).unwrap().is_empty());
+        assert_eq!((small.parts, small.files.len(), small.manifest.len()), (0, 2, 0));
+        // 450 tiles and a 3 MB tune: the tune in pieces, one after another.
+        let tune: Vec<u8> = (0..3_000_000u32).map(|i| (i % 253) as u8).collect();
+        let mut files = vec![file("Cargo.toml", b"[package]")];
+        files.extend((0..450).map(|i| file(&format!("assets/art/tile_{i:04}.png"), &[(i % 7) as u8; 2000])));
+        files.push(file("assets/music/theme.ogg", &tune));
+        files.push(file("src/main.rs", b"fn main() {}"));
+        let mut sub = PluginSubmission { name: "Big Art".into(), kind: "program".into(), files: files.clone(), ..Default::default() };
+        let parts = pack(&mut sub).unwrap();
+        assert_eq!(sub.parts as usize, parts.len());
+        assert_eq!(sub.manifest, manifest_of(&files));
+        let pieces: Vec<usize> = parts.iter().flatten().filter(|f| f.path == "assets/music/theme.ogg").map(|f| f.data.len() * 3 / 4).collect();
+        assert_eq!(pieces, [640_000, 640_000, 640_000, 640_000, 440_000]);
+        let back = sent(&sub, &parts);
+        assert_eq!(back.len(), files.len());
+        assert_eq!(back.iter().find(|f| f.0 == "assets/music/theme.ogg").unwrap().1, tune);
+        fits(Request::SubmitPlugin { submission: sub.clone() });
+        for p in &parts {
+            fits(Request::SubmissionPart { files: p.clone() });
+        }
+        // 4,900 sprites: the first frame keeps room for the list of them all (0.13.28's didn't,
+        // and never arrived).
+        let mut files = vec![file("Cargo.toml", b"[package]")];
+        files.extend((0..4_900).map(|i| file(&format!("assets/sprites/sprite_{i:05}.png"), &[(i % 13) as u8; 1000])));
+        let mut sub = PluginSubmission { name: "Sprites".into(), kind: "program".into(), files: files.clone(), ..Default::default() };
+        let parts = pack(&mut sub).unwrap();
+        fits(Request::SubmitPlugin { submission: sub.clone() });
+        for p in &parts {
+            fits(Request::SubmissionPart { files: p.clone() });
+        }
+        assert_eq!(sent(&sub, &parts).len(), files.len());
+        // Files a little over half a frame each: frames at least half full, so a hundred
+        // megabytes is well inside the parts a server takes.
+        let files: Vec<SourceFile> = (0..20).map(|i| file(&format!("assets/{i:02}.ogg"), &vec![i as u8; 340_000])).collect();
+        let mut sub = PluginSubmission { files, ..Default::default() };
+        let parts = pack(&mut sub).unwrap();
+        assert!(parts.len() + 1 <= 20, "{} frames", parts.len() + 1);
+        let per_100mb = (parts.len() + 1) as f64 * 100_000_000.0 / (20.0 * 340_000.0);
+        assert!(per_100mb < pyr_proto::control::MAX_SUBMISSION_PARTS as f64, "{per_100mb}");
+    }
 
     #[test]
     fn approved_source_stays_in_its_folder() {

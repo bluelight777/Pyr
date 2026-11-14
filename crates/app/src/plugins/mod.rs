@@ -169,13 +169,41 @@ pub struct Plugins {
     pub skins_dir: PathBuf,
 }
 
+/// Programs Pyr does itself now: never shown from the Library, whatever list it gives, and
+/// taken off this PC as Pyr starts (Dominó Cubano is dealt in Pyr Casino: 0.13.12, 0.13.25).
+const PYR_DOES_ITSELF: &[&str] = &["domino-cubano"];
+
+/// The Library's list without the programs Pyr does itself.
+fn without_pyrs_own(mut lib: Library) -> Library {
+    lib.plugins.retain(|e| !PYR_DOES_ITSELF.contains(&e.id.as_str()));
+    lib
+}
+
+/// Takes the programs Pyr does itself off this PC: their files, their data, and the list.
+fn remove_pyrs_own(dir: &std::path::Path, installed: &mut Installed) {
+    for id in PYR_DOES_ITSELF {
+        if installed.get(id).is_none() && !dir.join(id).exists() {
+            continue;
+        }
+        match install::uninstall(dir, id) {
+            Ok(()) => tracing::info!(id, "plugins: a program Pyr took over was removed"),
+            Err(e) => tracing::warn!(id, "plugins: a program Pyr took over couldn't be removed: {e}"),
+        }
+        installed.plugins.retain(|p| p.id != *id);
+        if let Err(e) = installed.save(dir) {
+            tracing::warn!("plugins: couldn't save the list of installed plugins: {e}");
+        }
+    }
+}
+
 impl Plugins {
     pub fn new(config_dir: &std::path::Path, repaint: Arc<dyn Fn() + Send + Sync>) -> Plugins {
         let dir = install::plugins_dir(config_dir);
-        let installed = Installed::load(&dir);
+        let mut installed = Installed::load(&dir);
+        remove_pyrs_own(&dir, &mut installed);
         let skins_dir = skins::skins_dir(config_dir);
         let skins = skins::InstalledSkins::load(&skins_dir);
-        let library = library::cached(&dir);
+        let library = library::cached(&dir).map(without_pyrs_own);
         let p = Plugins {
             index_url: library::index_url(),
             library,
@@ -540,7 +568,7 @@ impl Plugins {
         if let Some(r) = fetched {
             match r {
                 Ok(lib) => {
-                    self.library = Some(lib);
+                    self.library = Some(without_pyrs_own(lib));
                     self.library_error = None;
                     self.fetch_icons();
                     // Anything taken out of the library stops.
@@ -701,5 +729,48 @@ impl Plugins {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Dominó Cubano is dealt in Pyr Casino: its old program is taken off this PC as Pyr
+    /// starts (its files, its data and its line in the list, as 0.13.28 does), and never shown
+    /// from the Library, whatever list it gives (0.13.12, 0.13.25).
+    #[test]
+    fn a_program_pyr_does_itself_goes() {
+        let dir = library::temp_dir("pyrs-own");
+        let program = |id: &str| InstalledPlugin {
+            id: id.into(),
+            name: id.into(),
+            kind: Kind::Program,
+            version: "1".into(),
+            run: "x.exe".into(),
+            files: vec![],
+            permissions: vec![],
+            installed_at: 0,
+            enabled: true,
+        };
+        Installed { plugins: vec![program("domino-cubano"), program("torch-conquer")] }.save(&dir).unwrap();
+        for id in ["domino-cubano", "torch-conquer"] {
+            std::fs::create_dir_all(dir.join(id)).unwrap();
+            std::fs::write(dir.join(id).join("x.exe"), b"x").unwrap();
+            std::fs::create_dir_all(dir.join("data")).unwrap();
+            std::fs::write(install::data_path(&dir, id), b"{}").unwrap();
+        }
+        let mut installed = Installed::load(&dir);
+        remove_pyrs_own(&dir, &mut installed);
+        assert_eq!(installed.plugins.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["torch-conquer"]);
+        assert_eq!(Installed::load(&dir).plugins.len(), 1);
+        assert!(!dir.join("domino-cubano").exists() && !install::data_path(&dir, "domino-cubano").exists());
+        assert!(dir.join("torch-conquer").join("x.exe").exists() && install::data_path(&dir, "torch-conquer").exists());
+        let entry = |id: &str| -> Entry {
+            serde_json::from_value(serde_json::json!({ "id": id, "name": id, "kind": "program", "version": "1", "summary": "" })).unwrap()
+        };
+        let lib = without_pyrs_own(Library { plugins: vec![entry("torch-conquer"), entry("domino-cubano")], ..Default::default() });
+        assert_eq!(lib.plugins.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["torch-conquer"]);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
