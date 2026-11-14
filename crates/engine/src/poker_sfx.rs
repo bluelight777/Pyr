@@ -553,17 +553,25 @@ mod tests {
         assert!(held >= 30, "{held}");
     }
 
-    /// The pot as 0.13.28 pushes and stacks it: the push over before the stacks come (10 to 17 ms
-    /// after its end; a few more after its last sound over 1e-4), the push halfway toward the winner (R/L 2.3 dB from a side seat's 0.44) and the
-    /// stacks further out (5.1 dB), none of it in the room.
+    /// The pot as 0.13.28 pushes and stacks it, the same every time: the push faded out by 493 ms
+    /// over a quiet tail, the stacks 520, 660 and 790 ms on; the push halfway toward the winner
+    /// (R/L 2.3 dB from a side seat's 0.44) and the stacks further out (5.1 dB), none of it in the
+    /// room.
     #[test]
     fn the_pot_is_pushed_halfway_and_stacked_further_out() {
-        for _ in 0..20 {
+        let rms = |x: &[f32]| (x.iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / x.len() as f64).sqrt();
+        for _ in 0..10 {
             let (push, stacks) = crate::table_sfx::pot_parts(&mut fresh());
-            let end = push.iter().rposition(|x| x.abs() > 1e-4).unwrap();
+            let (body, tail) = (rms(&push[ms(100.0)..ms(400.0)]), rms(&push[ms(495.0)..ms(520.0)]));
+            assert!(tail < body * 0.1 && tail > body * 0.003, "{body} {tail}");
             let first = stacks.iter().position(|x| x.abs() > 1e-4).unwrap();
-            assert!((ms(470.0)..ms(555.0)).contains(&end), "{end}");
-            assert!(first > end + ms(8.0) && first < end + ms(24.0), "{end} {first}");
+            assert!((ms(520.0)..ms(520.0) + 4).contains(&first), "{first}");
+            for at in [660.0, 790.0] {
+                // (Each stack's tick: a sample far over the ring before it.)
+                let before = stacks[ms(at) - 48..ms(at)].iter().fold(0.0f32, |m, x| m.max(x.abs()));
+                let tick = stacks[ms(at)..ms(at) + 48].iter().fold(0.0f32, |m, x| m.max(x.abs()));
+                assert!(tick > before * 3.0, "{at}: {before} {tick}");
+            }
         }
         let rl = |s: &[f32], a: f32, b: f32| {
             let (l, r) = s[ms(a) * 2..(ms(b) * 2).min(s.len())].chunks(2).fold((0.0f64, 0.0f64), |(l, r), x| (l + (x[0] as f64).powi(2), r + (x[1] as f64).powi(2)));
@@ -571,7 +579,7 @@ mod tests {
         };
         for _ in 0..5 {
             let s = render(Cue::Pot, 0.44);
-            let (push, stacks) = (rl(&s, 100.0, 400.0), rl(&s, 600.0, 1400.0));
+            let (push, stacks) = (rl(&s, 100.0, 400.0), rl(&s, 610.0, 1400.0));
             assert!((push - 2.31).abs() < 0.02 && (stacks - 5.10).abs() < 0.02, "{push} {stacks}");
             let side: Vec<f32> = render(Cue::Pot, 0.0).chunks(2).map(|x| x[0] - x[1]).collect();
             assert!(side.iter().all(|x| x.abs() < 1e-6));

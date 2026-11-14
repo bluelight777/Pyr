@@ -214,10 +214,13 @@ impl PyrApp {
         let pan_check = |seat: usize| place(seat, 0.450);
         let pan_fold = |seat: usize| place(seat, 0.501);
         // (Cue, where, how loud, how long after now: 0.13.28 sounds an action 40 ms after the board's
-        // card it brings, and the blinds' chips 0.1 s after the deal.)
+        // card it brings, but with the hands shown at a showdown; the pot pushed to whoever was
+        // folded to 38 ms after the fold, at a showdown with the cards shown; the blinds' chips
+        // 0.1 s after the deal.)
         let mut cues: Vec<(Cue, f32, f32, f32)> = Vec::new();
         let batch = &t.events[from..];
-        let board = batch.iter().any(|(_, e)| matches!(e, Event::Street { .. } | Event::Shown { .. }));
+        let board = batch.iter().any(|(_, e)| matches!(e, Event::Street { .. }));
+        let shown = batch.iter().any(|(_, e)| matches!(e, Event::Shown { .. }));
         let dealt = batch.iter().any(|(_, e)| matches!(e, Event::DealtFaceDown { .. }));
         let after = if board { 0.04 } else { 0.0 };
         for (_, e) in batch {
@@ -237,7 +240,7 @@ impl PyrApp {
                     if me.is_some_and(|m| seats.contains(&m)) {
                         cues.push((Cue::Win, 0.0, 0.9, 0.0));
                     } else {
-                        cues.push((Cue::Pot, seats.first().map(|s| pan(*s)).unwrap_or(0.0), 0.7, 0.0));
+                        cues.push((Cue::Pot, seats.first().map(|s| pan(*s)).unwrap_or(0.0), 0.7, if shown { 0.0 } else { 0.038 }));
                     }
                 }
                 _ => {}

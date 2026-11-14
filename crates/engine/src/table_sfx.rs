@@ -503,20 +503,35 @@ pub fn pot(rng: &mut Rng) -> Vec<f32> {
 }
 
 /// The pot in its two parts, as 0.13.28 places them apart (`poker_sfx`: the push halfway toward
-/// the winner, the stacks in front of them), as 0.13.28 makes them: the chips pushed over the felt
-/// (475 to 555 ms, each pot its own; through the slide's resonance, 1.29 kHz rising to 2.03, dying
-/// from the start), then three stacks of four chips, the first 10 to 17 ms after the push ends and
-/// the others 140 and 270 ms after it, every time; in each, the clicks about 28, 22 and 18 ms apart,
-/// the last three 2.5, 4.6 and 6.5 dB softer than the first; no felt under them
+/// the winner, the stacks in front of them), as 0.13.28 makes them, the same length every time:
+/// the chips pushed over the felt (through the slides' resonance, 1.04 kHz rising to 2.13 by its
+/// end, dying from the start, faded out from 403 to 493 ms over a quieter tail that dies on), then
+/// three stacks of four chips, 520, 660 and 790 ms on; in each, the clicks about 28, 22 and 18 ms
+/// apart, the last three 2.5, 4.6 and 6.5 dB softer than the first; no felt under them
 /// (`measured/cardsounds.md`).
 pub fn pot_parts(rng: &mut Rng) -> (Vec<f32>, Vec<f32>) {
-    let len = rng.range(475.0, 555.0);
-    let mut push = vec![0.0; ms(len + 20.0)];
-    card_slide(&mut push, 0, ms(len), (3.0, 1.0, 286.0, 0.293), POT.0, (1293.0, 2025.0, 0.788), rng);
-    let first = len + rng.range(10.0, 17.0);
-    let mut o = vec![0.0; ms(first + 270.0 + 420.0)];
-    for start in [0.0, 140.0, 270.0] {
-        let mut c = first + start;
+    let mut push = vec![0.0; ms(600.0)];
+    let mut res = Reso::new(PUSH.0, PUSH.2);
+    let n = push.len();
+    for (i, x) in push.iter_mut().enumerate() {
+        let t = i as f32 / RATE * 1000.0;
+        if i % 16 == 0 {
+            res.tune(PUSH.0 * (PUSH.1 / PUSH.0).powf((t / 493.0).min(1.0)), PUSH.2);
+        }
+        let fade = if t < 403.0 {
+            1.0
+        } else if t < 493.0 {
+            0.5 + 0.5 * (std::f32::consts::PI * (t - 403.0) / 90.0).cos()
+        } else {
+            0.0
+        };
+        let tail = if t < 403.0 { 0.0 } else { PUSH.3 * (-(t - 403.0) / 57.0).exp() };
+        let end = ((n - i) as f32 / ms(20.0) as f32).min(1.0);
+        *x = res.run(rng.noise()) * (t / 2.0).min(1.0) * (-t / PUSH.4).exp() * fade.max(tail) * end * POT.0;
+    }
+    let mut o = vec![0.0; ms(790.0 + 420.0)];
+    for start in [520.0, 660.0, 790.0] {
+        let mut c = start;
         for (a, gap) in [(1.0, rng.range(22.5, 33.0)), (0.747, rng.range(17.5, 27.0)), (0.591, rng.range(14.5, 21.0)), (0.473, 0.0)] {
             chip_with(&mut o, ms(c), rng.range(2050.0, 2310.0), POT.1 * a * rng.range(0.65, 1.15), 0.0, POT_RING, rng);
             c += gap;
@@ -526,7 +541,12 @@ pub fn pot_parts(rng: &mut Rng) -> (Vec<f32>, Vec<f32>) {
 }
 
 /// How loud the pot's push is, and its stacks' first clicks.
-const POT: (f32, f32) = (0.849, 0.778);
+const POT: (f32, f32) = (0.953, 0.778);
+
+/// The push's resonance (Hz at the start and the end, Q), its tail under the fade (0.2: 14 dB
+/// under, dying 57 ms) and how fast it dies from the start (ms): fitted to 0.13.28's showdowns
+/// where the push came first (20 pots), and to its end lined up at the stacks (50).
+const PUSH: (f32, f32, f32, f32, f32) = (1043.0, 2132.0, 0.746, 0.2, 250.0);
 
 /// How much longer the pot's chips ring on, partial by partial (as 0.13.28's, 12 to 40 ms after a
 /// stack's last click).

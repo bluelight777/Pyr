@@ -773,10 +773,18 @@ How (decided while starting it):
         side); now a check peaks at 0.387 a side as 0.13.28's, in the middle and at the side seats
         alike, far/near 0.6316 against its 0.6318. And a hand's sounds play as one clip: one by one,
         the second waited behind the 40 ms the speakers already held (an action's sound came 44 ms
-        after the board's card it brought, where 0.13.28 lands it with the card's click). Not
-        matched: a check's first 10 ms (brighter on 0.13.28), the pot's and the all-in's slides (the
-        old recipe), where the all-in, the pot, shown hands and the clock's sounds are placed (as
-        the chips: not heard).
+        after the board's card it brought, where 0.13.28 lands it with the card's click). The pot
+        heard too (105 pots): the push the same every time, through the slides' resonance rising
+        1.04 to 2.13 kHz, faded out by 493 ms over a quiet tail; three stacks of four chips 520,
+        660 and 790 ms on, every time, each click softer, no rattle or knock under them (the
+        rebuild's: one darker 560 ms slide, stacks of two to four as loud, 115-170 ms apart); the
+        push placed halfway toward the winner and the stacks further out than the bets (R/L 2.3 and
+        5.1 dB from a side seat; the rebuild's 4.1 throughout); folded to, the pot 38 ms after the
+        fold, and at a showdown the push, the shown cards and the action together (the rebuild had
+        the fold and the pot together, and a showdown's action 40 ms late, as at a street, where
+        0.13.28 does delay it). Not matched: a check's first 10 ms
+        (brighter on 0.13.28), the all-in's slide (the old recipe), where the all-in, shown hands
+        and the clock's sounds are placed (as the chips: not heard).
   - [x] The casino games' sounds as 0.13.28's (`measured/casinosounds.md`), heard off it game by
         game and taken apart into its own files (`work/ui/decomp.py`): the casino's cues play its
         `c_*` files (dice, Keno, roulette, craps and blackjack heard: which file, when, how loud,
