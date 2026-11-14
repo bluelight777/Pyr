@@ -568,6 +568,18 @@ How (decided while starting it):
       better than 0.13.28 where its Crown Room's bets ran over the dots (said shorter there). The
       tables below as 0.13.28 lays them out (checked side by side, all four). Under 0.13.28's
       name (`high_tables`): its app plays the rebuilt server's Grand Salle and checks the spin.
+- [x] The blackjack table to 0.13.28's pixels (both apps at Hearth on 0.13.28's server, its bots
+      and Olive and Reba playing, at 1280x800 and 1600x1000): the seats' circles where 0.13.28
+      has them, to a tenth of the art's pixel (fitted off the open seats' hover disc, its centre
+      to a hundredth of a pixel), so SIT, + BOT and the plates land on its pixels; a bet's chips
+      stand centred on the circle (one to four chips measured; a split hand's own chips as
+      before); whose turn and my circle ringed on the painted circle, 30 of the art's pixels out
+      for anyone, mine a little inside (the time on it, its dark track outside; my gold ring 2.5
+      wide in GOLD2). Baccarat side by side the same way: the same but for what's below. Left
+      as they are: the shoe's and face-down cards' backs and the court figures softer in
+      0.13.28 (fewer texels, as at poker: no texture size and filter tried comes within ten
+      levels of it), the bots' suits a pixel apart here and there at 1x, the cards' edges
+      within a fifth of a pixel.
 - [x] Craps: lay odds (0.13.6), buy and lay (0.13.23, 0.13.26), chips stay as piled (0.13.24),
       lay win callout (0.13.25). The rules settle as 0.13.28's server does: 125 of its rolls
       replayed (`craps_0_13_28.json`), its refusals in its words and its order (read out of its
