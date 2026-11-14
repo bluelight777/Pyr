@@ -458,22 +458,30 @@ impl PyrApp {
             None => RmShow::new(round.clone(), o, landed, turbo),
         };
         ui.stopped_at = Some(landed);
-        let stop = rmshow::band(machine, "stop").unwrap_or(Cue::ReelStop);
         let scatter = rmshow::band(machine, "scatter");
+        let bomb = rmshow::band(machine, "bomb");
         for (i, e) in ends.iter().enumerate() {
             let at = e.saturating_duration_since(now).as_secs_f32();
-            self.poker.casino.sound_in(at, stop, (i as f32 - 2.0) * 0.3, 0.7);
-            let here = as_landed[i].iter().filter(|&&c| c == rr::SCATTER).count();
-            if here > 0
+            let pan = (i as f32 - 2.0) * 0.3;
+            // (As loud as the slots' band's stops, as 0.13.28 has them: measured side by side.)
+            self.poker.casino.sound_in(at, rmshow::stop(machine, i), pan, super::spin::band::stop(i).1);
+            let here = |sym: u8| as_landed[i].iter().any(|&c| c == sym);
+            if here(rr::SCATTER)
                 && let Some(c) = scatter
             {
-                self.poker.casino.sound_in(at, c, (i as f32 - 2.0) * 0.3, 0.8);
+                self.poker.casino.sound_in(at, c, pan, rmshow::vol::SCATTER);
+            }
+            // A bomb landing: its own sound under its reel (0.13.28's).
+            if here(remaster::BOMB)
+                && let Some(c) = bomb
+            {
+                self.poker.casino.sound_in(at, c, pan, rmshow::vol::BOMB);
             }
             if slow
                 && Some(i + 1) == tease
                 && let Some(c) = rmshow::band(machine, "tease")
             {
-                self.poker.casino.sound_in(at + 0.1, c, 0.0, 0.7);
+                self.poker.casino.sound_in(at + 0.1, c, 0.0, rmshow::vol::TEASE);
             }
         }
         let after = landed.saturating_duration_since(now).as_secs_f32();
@@ -530,7 +538,7 @@ impl PyrApp {
                 let (bonus, _) = SlotKind::Rm(o.machine).bonus_name();
                 self.poker.casino.announce(format!("{}!", bonus.to_uppercase()), format!("{} {}", o.scatters, th.scatters), th.accent, (0.5, 0.42), 0.3);
                 let cue = rmshow::band(o.machine, "trigger").unwrap_or(Cue::Jackpot);
-                self.poker.casino.sound_in(0.3, cue, 0.0, 0.7);
+                self.poker.casino.sound_in(0.3, cue, 0.0, rmshow::vol::TRIGGER);
                 self.poker.casino.row.mini = Some(MiniPlay::new(as_row(&round), now + Duration::from_millis(1_900)));
             }
             None => {
@@ -587,7 +595,7 @@ impl PyrApp {
                 reel.start(now, speed);
             }
             let cue = rmshow::band(machine, "spin").unwrap_or(Cue::ReelSpin);
-            self.poker.casino.sound_in(0.0, cue, 0.0, 0.6);
+            self.poker.casino.sound_in(0.0, cue, 0.0, rmshow::vol::SPIN);
             self.rm_land(&round, spin, Some(ctx), now);
             return;
         }
@@ -627,12 +635,12 @@ impl PyrApp {
         // (Remastered's Buy Hold & Win doesn't spin.)
         let spins = feature.spins() && !(remastered && feature == Feature::Wild && remaster::family(machine) == remaster::Family::Hold);
         if spins {
-            let cue = if remastered { rmshow::band(machine, "spin").unwrap_or(Cue::ReelSpin) } else { Cue::ReelSpin };
-            self.poker.casino.sound_in(0.0, cue, 0.0, 0.6);
+            let (cue, vol) = if remastered { (rmshow::band(machine, "spin").unwrap_or(Cue::ReelSpin), rmshow::vol::SPIN) } else { (Cue::ReelSpin, 0.6) };
+            self.poker.casino.sound_in(0.0, cue, 0.0, vol);
         }
         if remastered && feature != Feature::Spin && !(feature == Feature::Chance) {
             if let Some(c) = rmshow::band(machine, "buy") {
-                self.poker.casino.sound_in(0.0, c, 0.0, 0.7);
+                self.poker.casino.sound_in(0.0, c, 0.0, rmshow::vol::BUY);
             }
         }
         let ui = &mut self.poker.casino.row;

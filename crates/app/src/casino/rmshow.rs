@@ -258,6 +258,71 @@ pub fn band(machine: u8, what: &str) -> Option<Cue> {
     bands::id(&format!("s_{}_{what}", theme(machine).id)).or_else(|| bands::id(&format!("s_all_{what}"))).map(Cue::Band)
 }
 
+/// How loud each of the machines' sounds plays (`CasinoUi::sound_in`'s volume), as 0.13.28 plays
+/// them: heard off it (72 spins, every machine, and a bought Hold & Win; each sound's gain taken
+/// off its own file at Pyr's sounds 70%, the games' 100%, and given here as Pyr Sevens' are, the
+/// gain over 0.7). Not heard there yet, so as before: the tease, Bomb Spins' and Hold & Win's own.
+pub mod vol {
+    /// The reels set going; a respin (the cells that didn't stay).
+    pub const SPIN: f32 = 0.30;
+    pub const RESPIN: f32 = 0.25;
+    /// A scatter landing; a bomb landing (both under their reel); the reels slowing for a third.
+    pub const SCATTER: f32 = 0.63;
+    pub const BOMB: f32 = 0.454;
+    pub const TEASE: f32 = 0.7;
+    /// A screen's wins lit: under the bet, to five times it, five times and more.
+    pub const WIN: [f32; 3] = [0.44, 0.56, 0.68];
+    /// Tumbles: the wins bursting, the rest dropping; the bombs adding up, the win multiplied.
+    pub const POP: f32 = 0.40;
+    pub const DROP: f32 = 0.28;
+    pub const BOMBADD: f32 = 0.45;
+    pub const MULTIPLY: f32 = 0.95;
+    /// Hot Wilds and Espresso Shots filling; Frozen Wilds freezing; the Spotlight's step.
+    pub const GROW: f32 = 0.64;
+    pub const FREEZE: f32 = 0.56;
+    pub const STEP: f32 = 0.41;
+    /// The bonus won; a round bought with Play Feature; a coin landing in Hold & Win.
+    pub const TRIGGER: f32 = 1.0;
+    pub const BUY: f32 = 0.6;
+    pub const COIN: f32 = 0.31;
+}
+
+/// How far up its first each of a machine's reels lands, in semitones: each machine's stops
+/// climb a scale of its own (0.13.28's, heard: every machine spun two to four times, each
+/// reel's stop its file played that much higher, the same every time).
+pub fn stop_steps(machine: u8) -> [i32; REELS] {
+    match theme(machine).id {
+        "scoville" | "tomb" => [0, 1, 4, 5, 7],
+        "cosmic" | "neon" | "cauldron" | "grind" => [0, 2, 3, 5, 7],
+        "sugar" | "cabaret" => [0, 2, 4, 5, 7],
+        "frost" => [0, 2, 4, 6, 7],
+        "hoard" => [0, 3, 5, 7, 10],
+        _ => [0, 2, 4, 7, 9],
+    }
+}
+
+/// Reel `i` landing on `machine`: its stop, up its scale.
+pub fn stop(machine: u8, i: usize) -> Cue {
+    let up = stop_steps(machine)[i.min(REELS - 1)] * 100;
+    match bands::id(&format!("s_{}_stop", theme(machine).id)).or_else(|| bands::id("s_all_reelstop")) {
+        Some(id) if up == 0 => Cue::Band(id),
+        Some(id) => Cue::BandUp(id, up as i16),
+        None => Cue::ReelStop,
+    }
+}
+
+/// Which of a machine's three win sounds a win `x` times the bet plays: under the bet, to five
+/// times it, five times and more.
+fn win_tier(x: f64) -> usize {
+    if x >= 5.0 {
+        2
+    } else if x >= 1.0 {
+        1
+    } else {
+        0
+    }
+}
+
 /// The sounds of a round's moments, with when each plays (seconds from the landing).
 pub fn sounds(show: &RmShow) -> Vec<(f32, Cue, f32)> {
     let o = &show.o;
@@ -271,38 +336,45 @@ pub fn sounds(show: &RmShow) -> Vec<(f32, Cue, f32)> {
     for (i, &(t, ev)) in show.events.iter().enumerate() {
         let next = show.events.get(i + 1).map(|e| e.0).unwrap_or(t);
         match ev {
-            Ev::Fill(_) => add(t, if rm::family(m) == Family::Frozen { "freeze" } else { "grow" }, 0.8),
+            Ev::Fill(_) => {
+                if rm::family(m) == Family::Frozen {
+                    add(t, "freeze", vol::FREEZE)
+                } else {
+                    add(t, "grow", vol::GROW)
+                }
+            }
             Ev::Lit(k) => {
                 let won: u64 = o.steps[k].wins.iter().map(|w| w.pay).sum();
                 let x = won as f64 / o.bet.max(1) as f64;
-                add(t, if x >= 5.0 { "win2" } else if x >= 1.0 { "win1" } else { "win0" }, 0.75);
+                let tier = win_tier(x);
+                add(t, ["win0", "win1", "win2"][tier], vol::WIN[tier]);
             }
-            Ev::Burst(_) => add(t, "pop", 0.8),
-            Ev::Drop(_) => add(t, "drop", 0.7),
+            Ev::Burst(_) => add(t, "pop", vol::POP),
+            Ev::Drop(_) => add(t, "drop", vol::DROP),
             Ev::Respin(k) => {
-                add(t, "spin", 0.5);
+                add(t, "spin", vol::RESPIN);
                 // Frozen wilds landing; a walking wild's step.
                 let s = &o.steps[k];
                 let new_wilds = (0..REELS * ROWS).any(|c| s.grid[c / ROWS][c % ROWS] == WILD && s.held & (1 << c) == 0);
                 if new_wilds && rm::family(m) == Family::Frozen {
-                    add(next - 0.05, "freeze", 0.8);
+                    add(next - 0.05, "freeze", vol::FREEZE);
                 }
             }
-            Ev::Walk(_) => add(t, "step", 0.8),
+            Ev::Walk(_) => add(t, "step", vol::STEP),
             Ev::Bombs => {
                 let n = o.steps.last().map(|s| s.grid.iter().flatten().filter(|&&c| c == BOMB).count()).unwrap_or(0);
                 for j in 0..n {
-                    add(t + 0.25 + j as f32 * 0.28 * if show.turbo { 0.5 } else { 1.0 }, "bombadd", 0.7);
+                    add(t + 0.25 + j as f32 * 0.28 * if show.turbo { 0.5 } else { 1.0 }, "bombadd", vol::BOMBADD);
                 }
             }
-            Ev::Multiply => add(t, "multiply", 0.9),
+            Ev::Multiply => add(t, "multiply", vol::MULTIPLY),
             Ev::FreeAdd => {
                 let n = o.steps.last().map(|s| s.grid.iter().flatten().filter(|&&c| c == BOMB).count()).unwrap_or(0);
                 for j in 0..n {
-                    add(t + 0.25 + j as f32 * 0.28 * if show.turbo { 0.5 } else { 1.0 }, "bombadd", 0.7);
+                    add(t + 0.25 + j as f32 * 0.28 * if show.turbo { 0.5 } else { 1.0 }, "bombadd", vol::BOMBADD);
                 }
             }
-            Ev::FreeWin => add(t, "multiply", 0.9),
+            Ev::FreeWin => add(t, "multiply", vol::MULTIPLY),
             Ev::FreeMore => add(t, "trigger", 0.8),
             Ev::Collect => add(t, "collect", 0.85),
             Ev::HoldSplash => add(t, "trigger", 0.9),
@@ -311,7 +383,7 @@ pub fn sounds(show: &RmShow) -> Vec<(f32, Cue, f32)> {
                 let new: Vec<(usize, usize)> = (0..REELS * ROWS).map(|c| (c / ROWS, c % ROWS)).filter(|&(r, row)| a.grid[r][row] == BLANK && b.grid[r][row] != BLANK).collect();
                 let land = t + 0.45 * if show.turbo { 0.5 } else { 1.0 };
                 if !new.is_empty() {
-                    add(land, "coin", 0.8);
+                    add(land, "coin", vol::COIN);
                     add(land + 0.15, "reset", 0.6);
                     if new.iter().any(|&(r, row)| b.grid[r][row] == COIN && b.values[r][row] >= MINI) {
                         add(land + 0.1, "jackpot", 0.8);
@@ -321,7 +393,11 @@ pub fn sounds(show: &RmShow) -> Vec<(f32, Cue, f32)> {
                     add(land + 0.3, "collect", 0.85);
                 }
             }
-            Ev::HoldEnd => add(t, "win1", 0.8),
+            Ev::HoldEnd => {
+                // (Its win sound by how big the Hold & Win came to, as a screen's: 0.13.28's.)
+                let tier = win_tier(o.hold_paid as f64 / o.bet.max(1) as f64);
+                add(t, ["win0", "win1", "win2"][tier], vol::WIN[tier]);
+            }
             Ev::Grand => add(t, "grand", 1.0),
             _ => {}
         }
@@ -1443,4 +1519,35 @@ pub fn info_paragraphs(machine: u8) -> Vec<String> {
         out.push(format!("A round pays up to {}× the bet.", chips_text(m.cap_x)));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each machine's stops climb its own scale, as heard off 0.13.28 (Reel Row's order).
+    #[test]
+    fn the_stops_climb_each_machine_s_scale() {
+        let heard = [
+            [0, 1, 4, 5, 7],  // Scoville Slots
+            [0, 2, 4, 7, 9],  // Deep Sea Treasure
+            [0, 2, 3, 5, 7],  // Cosmic Jackpot
+            [0, 2, 4, 5, 7],  // Sugar Rush
+            [0, 2, 4, 7, 9],  // Gold Rush
+            [0, 2, 3, 5, 7],  // Neon Nights
+            [0, 1, 4, 5, 7],  // Tomb of Ra
+            [0, 2, 4, 6, 7],  // Frostbite Fortune
+            [0, 2, 3, 5, 7],  // Moonlit Cauldron
+            [0, 3, 5, 7, 10], // Dragon's Hoard
+            [0, 2, 3, 5, 7],  // The Daily Grind
+            [0, 2, 4, 5, 7],  // Starlight Cabaret
+        ];
+        for (m, steps) in heard.iter().enumerate() {
+            assert_eq!(stop_steps(m as u8), *steps, "machine {m}");
+            let name = format!("s_{}_stop", theme(m as u8).id);
+            let id = bands::id(&name).unwrap_or_else(|| panic!("{name}"));
+            assert_eq!(stop(m as u8, 0), Cue::Band(id));
+            assert_eq!(stop(m as u8, 4), Cue::BandUp(id, (steps[4] * 100) as i16));
+        }
+    }
 }
