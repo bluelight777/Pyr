@@ -999,7 +999,9 @@ impl PyrApp {
             return;
         };
         p.text(rack.left_top() + vec2(16.0, 9.0), Align2::LEFT_TOP, format!("YOUR TILES · {} pips", pip_count(&mine)), theme::bold_font(12.0), col::GOLD2);
-        let my_turn = h.to_act == v.my_seat && h.over.is_none();
+        // (Asked to answer a ¡Doblo! isn't playing a tile: my tiles stay as they are, as
+        // 0.13.28's do, side by side.)
+        let my_turn = h.to_act == v.my_seat && h.over.is_none() && h.offer.is_none();
         let plays: Vec<Move> = h.allowed.iter().copied().filter(|m| matches!(m, Move::Play { .. })).collect();
         if my_turn && h.offer.is_none() {
             let words = if plays.is_empty() {
@@ -1158,9 +1160,16 @@ impl PyrApp {
         }
         let right = em.left() - 10.0;
         if in_hand && let Some(h) = h {
-            // A ¡Doblo! on the table (answered on the felt, by whoever's on its side).
+            // A ¡Doblo! on the table (answered on the felt, by whoever's on its side). Asked to
+            // answer it myself, my time runs along the top as on my turn (0.13.28's).
             if h.offer.is_some() {
                 say("A double is on the table".to_string(), col::MUTED);
+                if h.to_act == Some(me) {
+                    let frac = (clock as f32 / TURN_MS as f32).clamp(0.0, 1.0);
+                    let line = Rect::from_min_size(bar.left_top() + vec2(18.0, -1.0), vec2((bar.width() - 36.0) * frac, 3.0));
+                    p.rect_filled(line, theme::r(2), if frac > 0.3 { col::GOLD } else { col::LOSE });
+                    ui.ctx().request_repaint_after(Duration::from_millis(200));
+                }
                 return;
             }
             let my_turn = h.to_act == Some(me);
