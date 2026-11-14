@@ -1,6 +1,6 @@
 //! Dominó Cubano (0.13.11): Cuban double-nine dominoes for casino chips, at tables of four. In
 //! Pairs (partners facing, two against two) or each for themselves (Solo, two to four), ten
-//! tiles each; in Solo whoever can't play draws from what's left. Whoever holds the highest
+//! tiles each; in Solo of three or fewer whoever can't play draws from what's left (the pozo). Whoever holds the highest
 //! double leads, with any tile; then each in turn plays a tile that fits an end of the line, or
 //! (can't) draws or passes. The hand's over when someone plays their last tile (¡Dominó!: a
 //! last tile that fits both ends is a Capicúa, and winning while an opponent never laid a tile a
@@ -188,8 +188,10 @@ impl Hand {
         self.seats.len()
     }
 
+    /// Whether whoever can't play draws: in Solo of three or fewer (0.13.28: "three or fewer
+    /// draw from the pozo"; four in Solo pass, as Pairs do, seen at El Malecón).
     pub fn draws(&self) -> bool {
-        self.kind == Kind::Solo
+        self.kind == Kind::Solo && self.n() <= 3
     }
 
     /// Two sides (Pairs, or Solo between two): only then can the stake be doubled.
@@ -479,6 +481,29 @@ mod tests {
                 Move::Play { tile, end: End::Right } => assert!(fits(tile, r) && l != r),
                 Move::Pass | Move::Double => {}
                 other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    /// Solo: three or fewer draw from the pozo when nothing fits; four pass (0.13.28's, at El
+    /// Malecón with four: `draws` false, fifteen left, only plays and passes).
+    #[test]
+    fn four_in_solo_pass_and_three_draw() {
+        for (seats, draws) in [(vec![0u8, 1, 2, 3], false), (vec![0, 1, 2], true), (vec![0, 2], true)] {
+            for k in 0..40u64 {
+                let mut h = Hand::deal(Kind::Solo, &seats, crate::fair::seed_from(k));
+                assert_eq!(h.draws(), draws);
+                assert_eq!(h.pool.len(), TILES - IN_HAND * seats.len());
+                // Played out by the first move each time: never a draw with four.
+                for _ in 0..400 {
+                    let Some(p) = h.to_act() else { break };
+                    let m = h.allowed(p).into_iter().find(|m| *m != Move::Double).unwrap();
+                    if !draws {
+                        assert_ne!(m, Move::Draw);
+                    }
+                    h.act(p, m).unwrap();
+                }
+                assert!(h.over.is_some());
             }
         }
     }

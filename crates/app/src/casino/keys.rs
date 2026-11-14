@@ -379,6 +379,14 @@ pub fn with_key(words: &str, mv: Move) -> String {
     }
 }
 
+/// The same, as dominó's buttons say it (0.13.28's: "nothing fits · Enter").
+pub fn with_key_dot(words: &str, mv: Move) -> String {
+    match keys_of(mv).first() {
+        Some(k) => format!("{words} · {k}"),
+        None => words.to_string(),
+    }
+}
+
 /// The Keys window's state: the chapter first (the game it was opened from), a move's key
 /// waiting to be pressed (its place, 0 or 1), and what the last change was.
 #[derive(Clone, Debug, PartialEq)]

@@ -111,6 +111,7 @@ const V_DOUBLE: f32 = 0.8;
 const V_ACCEPT: f32 = 0.7;
 const V_TURN: f32 = 0.5;
 const V_DEAL_IN: f32 = 0.6;
+const V_DRAW: f32 = 0.62;
 
 /// Where a tile of the line lies: its rectangle (in short sides, the first tile's middle the
 /// origin), and which way it's read: across (the first number on the left) or down (the first
@@ -324,6 +325,21 @@ fn button(ui: &mut egui::Ui, r: Rect, id: &str, text: &str, sub: Option<String>,
     enabled && resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
 }
 
+/// Solo's pozo, what's left to draw from (0.13.28's, measured): five tiles face down, fanned up
+/// to the right from the felt's lower left corner, and "POZO 31" under them.
+fn dom_pozo(p: &egui::Painter, pool: usize, table: Rect, k: f32) {
+    if pool == 0 {
+        return;
+    }
+    let felt = Rect::from_min_max(table.min + FELT.min.to_vec2() * table.width(), table.min + FELT.max.to_vec2() * table.height());
+    let corner = pos2(felt.left(), felt.bottom());
+    for i in 0..pool.min(5) {
+        let min = corner + vec2(14.0 + 3.25 * i as f32, -22.0 - 2.0 * i as f32) * k;
+        back(p, Rect::from_min_size(min, vec2(18.0, 9.0) * k));
+    }
+    p.text(corner + vec2(36.0, -5.5) * k, Align2::LEFT_CENTER, format!("POZO {pool}"), theme::bold_font(11.0 * k), col::GOLD2);
+}
+
 /// ¡Doblo!'s words: bold 18 gold, lit round their edges 1.5 px (0.13.28's, measured: thinner
 /// than the felt's outlined words).
 fn lit_text(p: &egui::Painter, at: Pos2, text: &str, glow: Color32) {
@@ -463,6 +479,10 @@ impl PyrApp {
         if let Some(h) = &hand {
             let faded = v.stage != DomStage::Playing && v.stage != DomStage::Settled;
             self.dom_line(ui, s, &v, h, table, k, now, faded);
+            // (Between hands too, the last hand's: 0.13.28 leaves it there, bright.)
+            if h.draws {
+                dom_pozo(&p, h.pool, table, k);
+            }
         }
         // The seats, and the tiles in their hands.
         for seat in 0..SEATS {
@@ -834,6 +854,10 @@ impl PyrApp {
                 if h.last.is_some_and(|(s, m)| s == seat && m == Move::Pass) {
                     words += " · passed";
                 }
+                // (Solo: a tile taken from the pozo, as 0.13.28 says it.)
+                if h.last.is_some_and(|(s, m)| s == seat && m == Move::Draw) {
+                    words += " · drew";
+                }
                 // (Whoever's ¡Doblo! is on the table.)
                 if h.offer.is_some() && h.last.is_some_and(|(s, m)| s == seat && m == Move::Double) {
                     words += " · ¡DOBLO!";
@@ -853,6 +877,8 @@ impl PyrApp {
                     (format!("{left} pips left"), col::MUTED)
                 }
             }
+            // (Sitting while a hand goes on without them: 0.13.28's words.)
+            (DomStage::Playing, Some(_), None) => ("sitting this one out".to_string(), col::MUTED),
             _ if x.ready && !x.bot && x.escrow > 0 => (format!("in · {} up", chips_text(x.escrow)), col::WIN),
             _ if x.ready => ("ready".to_string(), col::MUTED),
             _ => ("not in yet".to_string(), col::MUTED),
@@ -907,7 +933,7 @@ impl PyrApp {
         // (A hand's coming: 0.13.28 says so while it gathers.)
         let title = if v.stage == DomStage::Gathering { "Next hand: put up your chips" } else { "Sit down and put up the ante to play" };
         super::glow_text(p, c - vec2(0.0, 21.0), Align2::CENTER_CENTER, title, theme::bold_font(20.0), col::GOLD2, Color32::from_black_alpha(200));
-        let rules = if v.kind == Kind::Pairs { "Two against two, partners facing. Double-nine, ten tiles each." } else { "Each for themselves; draw when you can't play. Double-nine, ten tiles each." };
+        let rules = if v.kind == Kind::Pairs { "Two against two, partners facing. Double-nine, ten tiles each." } else { "Each for themselves. Double-nine, ten tiles each; three or fewer draw from the pozo." };
         p.text(c + vec2(0.0, 9.0), Align2::CENTER_CENTER, rules, theme::font(13.0), col::MUTED);
         p.text(c + vec2(0.0, 29.0), Align2::CENTER_CENTER, "Capicúa pays half again · Chiva pays double · ¡Doblo! up to ×8", theme::font(12.5), Color32::from_rgb(0xe8, 0xb7, 0x52));
     }
@@ -1060,7 +1086,10 @@ impl PyrApp {
             Move::Pass => casino.sound_in(0.0, Cue::Check, PAN_TABLE[place], V_PASS),
             Move::Double => casino.sound_in(0.0, Cue::AllIn, PAN_TABLE[place], V_DOUBLE),
             Move::Accept => casino.sound_in(0.0, Cue::Chips, PAN_TABLE[place], V_ACCEPT),
-            Move::Draw | Move::Fold => {}
+            // (Solo's draw from the pozo: a quick bright slide, heard off 0.13.28 at once, made
+            // fresh each time; as loud as its, 25 draws side by side, a touch darker.)
+            Move::Draw => casino.sound_in(0.0, Cue::Deal, PAN_TABLE[place], V_DRAW),
+            Move::Fold => {}
         }
         // My turn come round (not as a hand starts, nor while a double's being answered).
         if h.over.is_none() && h.offer.is_none() && v.my_seat.is_some_and(|m| h.to_act == Some(m) && h.seats.contains(&m)) {
@@ -1156,7 +1185,8 @@ impl PyrApp {
             };
             // Nothing fits: pass (or draw, in Solo), gold beside ¡Doblo!.
             for (m, words) in [(Move::Draw, "Draw"), (Move::Pass, "Pass")] {
-                if h.allowed.contains(&m) && (button(ui, place(200.0), words, words, Some(super::keys::with_key("nothing fits", super::keys::Move::DomGo)), col::GOLD, true) || go) {
+                let sub = if m == Move::Draw { format!("from the pozo ({})", h.pool) } else { "nothing fits".to_string() };
+                if h.allowed.contains(&m) && (button(ui, place(200.0), words, words, Some(super::keys::with_key_dot(&sub, super::keys::Move::DomGo)), col::GOLD, true) || go) {
                     self.dom_send(s, v, m);
                 }
             }
@@ -1209,7 +1239,7 @@ impl PyrApp {
             p.rect_filled(Rect::from_min_size(bar.left_top() + vec2(18.0, -1.0), vec2((bar.width() - 36.0) * frac, 3.0)), theme::r(2), col::GOLD);
             ui.ctx().request_repaint_after(Duration::from_millis(250));
         }
-        if button(ui, deal, "deal", "Deal me in", Some(super::keys::with_key(&sub, super::keys::Move::DomGo)), col::GOLD, ok) || (ok && go) {
+        if button(ui, deal, "deal", "Deal me in", Some(super::keys::with_key_dot(&sub, super::keys::Move::DomGo)), col::GOLD, ok) || (ok && go) {
             self.engine.dom_ready(&s.key, v.id, put);
             self.poker.casino.sound_in(0.0, Cue::Chips, 0.0, V_DEAL_IN);
         }
