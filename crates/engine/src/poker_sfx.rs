@@ -402,13 +402,12 @@ pub fn render(c: Cue, pan: f32) -> Vec<f32> {
         return crate::bands::render_up(i, up, pan);
     }
     // The pot in its two parts, placed apart as 0.13.28 places them (`pan` is the winner's, as the
-    // chips' are): the push halfway toward the winner, the stacks a little further out than the
-    // bets' chips (R/L 2.3 dB over the push and 5.2 over the stacks, at a side seat, where its
-    // bets give 4.6).
+    // chips' are): the push halfway toward the winner, the stacks where the chips go (R/L 2.3 dB
+    // over the push and 5.1 over the stacks, at a side seat).
     if c == Cue::Pot {
         let (push, stacks) = crate::table_sfx::pot_parts(&mut fresh());
-        let mut st = crate::table_sfx::place(&stacks, (pan * 1.2).clamp(-1.0, 1.0), false);
-        for (o, x) in st.iter_mut().zip(crate::table_sfx::place(&push, pan * 0.59, false)) {
+        let mut st = crate::table_sfx::place(&stacks, pan, false);
+        for (o, x) in st.iter_mut().zip(crate::table_sfx::place(&push, pan * 0.49, false)) {
             *o += x;
         }
         return held(st);
@@ -424,21 +423,26 @@ pub fn render(c: Cue, pan: f32) -> Vec<f32> {
     crate::table_sfx::place(&render_mono(c), pan, false)
 }
 
-/// A table sound held under 0.691 on either side, as 0.13.28 holds them: its loudest side, wherever
-/// the sound is placed (a check's knock peaks 0.387 a side in the middle and 0.387 on the near side
-/// at a side seat, at 0.8 and the sounds at 70%; a turned card 0.435 at 0.9, 0.339 at 0.7).
+/// A table sound finished as 0.13.28 finishes them: turned down if either side goes over 0.85, then
+/// each side softly clipped (tanh), sample by sample, before the cue's and the sounds' volume. So
+/// its loudest comes to 0.691 at most (a check's knock peaks 0.387 a side in the middle and 0.387 on
+/// the near side at a side seat, at 0.8 and the sounds at 70%; a turned card 0.435 at 0.9, 0.339 at
+/// 0.7), and its loud moments are rounded: from a side seat 0.13.28's far side is 0.553 of the near
+/// where both are quiet, 0.634 at the loudest, as tanh bends them (heard at checks, chips and folds,
+/// within 0.005 from 0.3 to 0.7).
 fn held(mut st: Vec<f32>) -> Vec<f32> {
     let peak = st.iter().fold(0.0f32, |m, x| m.max(x.abs()));
-    if peak > TABLE_PEAK {
-        for x in &mut st {
-            *x *= TABLE_PEAK / peak;
-        }
+    let k = if peak > TABLE_HOLD { TABLE_HOLD / peak } else { 1.0 };
+    for x in &mut st {
+        *x = (*x * k).tanh();
     }
     st
 }
 
-/// How loud a table sound's louder side gets at most (before the cue's and the sounds' volume).
-const TABLE_PEAK: f32 = 0.691;
+/// Where 0.13.28 turns a table sound down before its soft clipping (and so how loud its louder side
+/// gets at most, `TABLE_PEAK`: tanh 0.85).
+const TABLE_HOLD: f32 = 0.85;
+const TABLE_PEAK: f32 = 0.69107;
 
 #[cfg(test)]
 mod tests {
@@ -552,14 +556,14 @@ mod tests {
             }
         }
         // (A turned card's click is nearly always over it: held there, as 0.13.28's are, 27 of 27
-        // at baccarat.)
+        // at baccarat, 9 of 10 on the board.)
         let held = (0..40).filter(|_| (render(Cue::Flip, 0.0).iter().fold(0.0f32, |m, x| m.max(x.abs())) - TABLE_PEAK).abs() < 1e-4).count();
-        assert!(held >= 30, "{held}");
+        assert!(held >= 26, "{held}");
     }
 
-    /// The all-in as 0.13.28 places it: from a side seat (0.44) the shove 1.2 times as far out
-    /// (R/L 5.1 dB, give or take the room's), the swell in the middle (0.13.28's: 5.0-5.2 and -0.6
-    /// dB); in the room (the two sides differ only from 16 ms on, in the middle).
+    /// The all-in as 0.13.28 places it: from a side seat (0.533) the shove there (R/L 5.2 dB, give
+    /// or take the room's), the swell in the middle (0.13.28's: 5.0-5.2 and -0.6 dB); in the room
+    /// (the two sides differ only from 16 ms on, in the middle).
     #[test]
     fn the_all_in_is_shoved_from_the_seat_over_a_swell_in_the_middle() {
         let rl = |s: &[f32], a: f32, b: f32| {
@@ -567,9 +571,9 @@ mod tests {
             10.0 * (r / l).log10()
         };
         for _ in 0..5 {
-            let s = render(Cue::AllIn, 0.44);
+            let s = render(Cue::AllIn, 0.533);
             let (shove, swell) = (rl(&s, 20.0, 300.0), rl(&s, 800.0, 1300.0));
-            assert!((shove - 5.1).abs() < 0.4 && swell.abs() < 1.0, "{shove} {swell}");
+            assert!((shove - 5.15).abs() < 0.4 && swell.abs() < 1.0, "{shove} {swell}");
             let side: Vec<f32> = render(Cue::AllIn, 0.0).chunks(2).map(|x| x[0] - x[1]).collect();
             assert!(side[..ms(15.0)].iter().all(|x| x.abs() < 1e-6) && side[ms(16.0)..ms(300.0)].iter().any(|x| x.abs() > 1e-4));
         }
@@ -577,8 +581,8 @@ mod tests {
 
     /// The pot as 0.13.28 pushes and stacks it, the same every time: the push faded out by 493 ms
     /// over a quiet tail, the stacks 520, 660 and 790 ms on; the push halfway toward the winner
-    /// (R/L 2.3 dB from a side seat's 0.44) and the stacks further out (5.1 dB), none of it in the
-    /// room.
+    /// (R/L 2.3 dB from a side seat's 0.533) and the stacks where the chips go (5.1 dB), none of it
+    /// in the room.
     #[test]
     fn the_pot_is_pushed_halfway_and_stacked_further_out() {
         let rms = |x: &[f32]| (x.iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / x.len() as f64).sqrt();
@@ -600,9 +604,9 @@ mod tests {
             10.0 * (r / l).log10()
         };
         for _ in 0..5 {
-            let s = render(Cue::Pot, 0.44);
+            let s = render(Cue::Pot, 0.533);
             let (push, stacks) = (rl(&s, 100.0, 400.0), rl(&s, 610.0, 1400.0));
-            assert!((push - 2.31).abs() < 0.02 && (stacks - 5.10).abs() < 0.02, "{push} {stacks}");
+            assert!((push - 2.28).abs() < 0.05 && (stacks - 5.1).abs() < 0.15, "{push} {stacks}");
             let side: Vec<f32> = render(Cue::Pot, 0.0).chunks(2).map(|x| x[0] - x[1]).collect();
             assert!(side.iter().all(|x| x.abs() < 1e-6));
         }

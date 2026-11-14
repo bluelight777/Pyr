@@ -324,23 +324,24 @@ pub fn place(mono: &[f32], pan: f32, with_room: bool) -> Vec<f32> {
 /// A knuckle on the rail: a dull tap and the wood's low ring (120 Hz most, 155 and 245 with it),
 /// with the padding's rustle under it.
 fn knock(o: &mut [f32], at: usize, amp: f32, pitch: f32, rng: &mut Rng) {
-    const MODES: [(f32, f32, f32); 6] = [
+    const MODES: [(f32, f32, f32); 7] = [
         // (Hz, amplitude, decay s)
-        (120.0, 1.0, 0.018),
-        (155.0, 0.28, 0.013),
-        (245.0, 0.62, 0.016),
-        (300.0, 0.08, 0.025),
-        (380.0, 0.08, 0.02),
-        (540.0, 0.16, 0.0045),
+        (120.0, 1.0, 0.0155),
+        (155.0, 0.28, 0.009),
+        (245.0, 0.62, 0.010),
+        (300.0, 0.08, 0.015),
+        (380.0, 0.08, 0.012),
+        (540.0, 0.18, 0.009),
+        (690.0, 0.10, 0.008),
     ];
     for (k, (f, a, d)) in MODES.into_iter().enumerate() {
         let f = f * pitch * rng.range(0.985, 1.015);
         // (The rail's lowest ring dies away slower at the end.)
-        let tail = if k == 0 { 0.06 } else { 0.0 };
+        let tail = if k == 0 { 0.03 } else { 0.0 };
         for i in 0..ms(500.0) {
             let t = i as f32 / RATE;
             let attack = (t / 0.0015).min(1.0);
-            add(o, at + i, (TAU * f * t).sin() * a * ((-t / d).exp() + tail * (-t / 0.06).exp()) * attack * amp * 0.5);
+            add(o, at + i, (TAU * f * t).sin() * a * ((-t / d).exp() + tail * (-t / 0.06).exp()) * attack * amp * 0.56);
         }
     }
     // The tap, dull (little above 2 kHz), and the rustle after it.
@@ -351,9 +352,9 @@ fn knock(o: &mut [f32], at: usize, amp: f32, pitch: f32, rng: &mut Rng) {
     let mut hp2 = Biquad::highpass(3000.0, 0.7);
     for i in 0..ms(400.0) {
         let t = i as f32 / RATE;
-        let tap = lp2.run(lp.run(rng.noise())) * (-t / 0.0015).exp() * 1.6;
-        let rustle = lp3.run(hp.run(rng.noise())) * ((-t / 0.022).exp() * 0.08 + (-t / 0.065).exp() * 0.012);
-        let crack = if i < ms(0.6) { hp2.run(rng.noise()) * 0.25 } else { 0.0 };
+        let tap = lp2.run(lp.run(rng.noise())) * (-t / 0.0015).exp() * 1.4;
+        let rustle = lp3.run(hp.run(rng.noise())) * ((-t / 0.022).exp() * 0.16 + (-t / 0.065).exp() * 0.03);
+        let crack = if i < ms(1.5) { hp2.run(rng.noise()) * 0.5 * (1.0 - i as f32 / ms(1.5) as f32) } else { 0.0 };
         add(o, at + i, (tap + rustle + crack) * amp);
     }
 }
@@ -407,13 +408,15 @@ fn stack(o: &mut [f32], at: usize, amp: f32, on_felt: bool, rng: &mut Rng) {
 
 /// How hard the check knocks: as 0.13.28's, mostly over what's held (its checks peak at the
 /// table's most, 0.691 a side, three in four times in the middle).
-const KNOCK: f32 = 1.28;
+const KNOCK: f32 = 1.29;
 
 /// A check: two knocks on the rail.
 pub fn check(rng: &mut Rng) -> Vec<f32> {
     let mut o = vec![0.0; ms(450.0)];
     let pitch = rng.range(0.97, 1.03);
-    knock(&mut o, 0, KNOCK, pitch, rng);
+    // (Each knock its own strength: 0.13.28's peaks spread 2 dB either way.)
+    let hard = 10f32.powf(rng.range(-3.2, 3.2) / 20.0);
+    knock(&mut o, 0, KNOCK * hard, pitch, rng);
     knock(&mut o, ms(rng.range(105.0, 135.0)), KNOCK * rng.range(0.7, 1.0), pitch * rng.range(0.98, 1.02), rng);
     o
 }
@@ -427,7 +430,7 @@ pub fn fold(rng: &mut Rng) -> Vec<f32> {
 }
 
 /// The fold's slide and felt, how loud.
-const FOLD: (f32, f32) = (0.886, 0.14);
+const FOLD: (f32, f32) = (0.939, 0.148);
 
 /// A card dealt off the shoe (the casino's tables): a quick slide rising in pitch as it goes, and
 /// the card landing on the felt as it ends, 88 to 119 ms on (each card its own: 0.13.28's land
@@ -462,7 +465,7 @@ pub fn street(rng: &mut Rng) -> Vec<f32> {
 }
 
 /// The turned card's slide, click and felt, how loud.
-const STREET: (f32, f32, f32) = (0.12, 3.35, 0.165);
+const STREET: (f32, f32, f32) = (0.098, 3.65, 0.135);
 
 /// The pot pushed over to someone else, and stacked in front of them in three goes (its two parts
 /// as one sound: `pot_parts`).
@@ -554,7 +557,7 @@ pub fn all_in_parts(rng: &mut Rng) -> (Vec<f32>, Vec<(usize, Vec<f32>)>, Vec<f32
     let mut a = ALLIN.2;
     for k in 0..30 {
         let mut c = vec![0.0; ms(340.0)];
-        chip(&mut c, 0, rng.range(2050.0, 2310.0), a * rng.range(0.8, 1.1) * if k == 0 { 0.84 } else { 1.0 }, rng);
+        chip(&mut c, 0, rng.range(2050.0, 2310.0), a * rng.range(0.8, 1.1), rng);
         chips.push((ms(t), c));
         t += if k == 0 { rng.range(26.0, 36.0) } else { (18.0 * (-(k as f32) / 25.0).exp() * rng.range(0.35, 1.65)).max(1.5) };
         a *= 0.973;
@@ -572,15 +575,14 @@ pub fn all_in_parts(rng: &mut Rng) -> (Vec<f32>, Vec<(usize, Vec<f32>)>, Vec<f32
 }
 
 /// The all-in placed as 0.13.28 places it (48 kHz stereo, interleaved), `pan` being the seat's, as
-/// the chips' are: the shove and its thump further out (1.2 times: R/L 5.1 dB from a side seat),
-/// each chip poured somewhere about there (0.39 either way: 0.13.28's pour is 17-18 dB wider than
-/// its shove), the swell in the middle; all of it in the room (`place`'s), fed 4 dB hotter than
-/// the cards.
+/// the chips' are: the shove and its thump there (R/L 5.1 dB from a side seat), each chip poured
+/// somewhere about there (0.39 either way: 0.13.28's pour is 17-18 dB wider than its shove), the
+/// swell in the middle; all of it in the room (`place`'s), fed 4 dB hotter than the cards.
 pub fn all_in_stereo(pan: f32, rng: &mut Rng) -> Vec<f32> {
     let (shove, chips, swell) = all_in_parts(rng);
     let n = shove.len();
     let (mut l, mut r, mut feed) = (vec![0.0f32; n], vec![0.0f32; n], vec![0.0f32; n]);
-    let p0 = (pan * 1.2).clamp(-1.0, 1.0);
+    let p0 = pan.clamp(-1.0, 1.0);
     let mut put = |x: &[f32], at: usize, p: f32| {
         let (gl, gr) = (((1.0 - p) / 2.0).sqrt(), ((1.0 + p) / 2.0).sqrt());
         for (i, v) in x.iter().enumerate() {

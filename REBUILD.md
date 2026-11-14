@@ -767,11 +767,14 @@ How (decided while starting it):
         cloth's body (150-600 Hz, 14-21 dB short before); a stack's first click comes 4-5 ms after
         it meets the felt, its rattle bright to 20 kHz. Each against 0.13.28's mean spectrogram,
         band by band in 5 ms steps, within 1-2 dB where it carries. It places the seats' sounds less
-        far out than 0.13.0's 0.7 (from each sound's loudest sample: checks 0.429 at the side seats,
-        chips 0.44, folds 0.478), and holds a table sound's louder side at 0.691 (the rebuild held
-        the sound at 0.9 before placing it: 0.7 dB soft in the middle, 1.2 dB loud on the near
-        side); now a check peaks at 0.387 a side as 0.13.28's, in the middle and at the side seats
-        alike, far/near 0.6316 against its 0.6318. And a hand's sounds play as one clip: one by one,
+        far out than 0.13.0's 0.7: checks, chips and folds alike 0.533 out from the side seats,
+        and it finishes each table sound by turning it down to 0.85 if louder, then softly
+        clipping each side (tanh), so its loudest is 0.691 and loud moments are bent (from a side
+        seat the far side is 0.553 of the near where quiet, 0.634 at the loudest: first taken for
+        where it was placed, then found sample by sample, within 0.005 of tanh). Now the same in
+        the rebuild (it had scaled sounds down to 0.691, 1.8 dB quieter in the body, and placed
+        them where the loudest samples said, 0.9 dB short of 0.13.28's 5.15 dB), the check's
+        knock, the turned card and the fold refitted to it. And a hand's sounds play as one clip: one by one,
         the second waited behind the 40 ms the speakers already held (an action's sound came 44 ms
         after the board's card it brought, where 0.13.28 lands it with the card's click). The pot
         heard too (105 pots): the push the same every time, through the slides' resonance rising
@@ -782,9 +785,15 @@ How (decided while starting it):
         5.1 dB from a side seat; the rebuild's 4.1 throughout); folded to, the pot 38 ms after the
         fold, and at a showdown the push, the shown cards and the action together (the rebuild had
         the fold and the pot together, and a showdown's action 40 ms late, as at a street, where
-        0.13.28 does delay it). Not matched: a check's first 10 ms
-        (brighter on 0.13.28), the all-in's slide (the old recipe), where the all-in, shown hands
-        and the clock's sounds are placed (as the chips: not heard).
+        0.13.28 does delay it). The all-in heard too (66, the
+        probe going all in): a bright 360 ms shove rising 505 Hz to 1.14 kHz, a thump and about
+        thirty chips from 360 ms, softer and softer, now and then two together, over A1 and E2
+        from 320 ms, cut off at 1.397 s; all in the room, fed 4 dB hotter than the cards; the
+        shove 1.2 times the seat's pan out, each chip within 0.39 of there, the swell in the middle
+        (the rebuild's: a dark shove, twenty chips from 355-420 ms as loud, a quieter E2 to 1.5 s,
+        no room, one place). Not matched: a check's first 10 ms (brighter on 0.13.28), the
+        all-in's swell's 0.6 dB lean left and its tail after the pour (all room on 0.13.28), where
+        shown hands and the clock's sounds are placed (as the chips: not heard).
   - [x] The casino games' sounds as 0.13.28's (`measured/casinosounds.md`), heard off it game by
         game and taken apart into its own files (`work/ui/decomp.py`): the casino's cues play its
         `c_*` files (dice, Keno, roulette, craps and blackjack heard: which file, when, how loud,
