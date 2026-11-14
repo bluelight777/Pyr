@@ -523,7 +523,8 @@ How (decided while starting it):
         tables strip and New table, the room, the table, the line laid as it lays it (turning at
         9.5 tiles' halves, doubles across), the seats, plates and turn rings, the cube, the
         rack, the controls and covers, the ¡Doblo! offer, the hand's end; the Games menu line
-        (NEW). The floor's card: its lettering not yet checked against 0.13.28's.
+        (NEW); the floor's card first among the table games (NEW, PAIRS OR SOLO, its name in
+        Archivo Black), side by side.
   - [x] Its sounds (`measured/domino.md`): the tiles, the opening tile, the slam and the
         shuffle made sample for sample as 0.13.28 makes them, each tile placed toward who laid
         it and sounding as it lands; the table's knock, all-in and chips for a pass, a ¡Doblo!
@@ -537,8 +538,11 @@ How (decided while starting it):
   - [x] A ¡Doblo! from both sides, side by side with 0.13.28 (Olive and Reba doubling against
         each other): the doubling side's banner on the felt, the answering side's panel, their
         words lit orange; the cube's ring gold only when it's my side's (watching, teal).
-  - [ ] Not yet seen on 0.13.28: Solo's Draw and the pile (and their sounds), a Chiva, what
-        watchers see while a double's answered, my tiles while I'm the one asked to answer.
+  - [x] Solo side by side (El Malecón): four in Solo pass and don't draw (the rebuild let them:
+        fixed, with a test), the pozo on the felt, Draw's words, "· drew", "sitting this one
+        out", the draw's sound as loud as 0.13.28's, the felt's Solo words.
+  - [ ] Not yet seen on 0.13.28: a Chiva, what watchers see while a double's answered, my
+        tiles while I'm the one asked to answer.
 - [x] Poker: the suits on bot faces and card pips (0.13.28's are one smooth shape each; the
       rebuild's are 0.13.0's circles and polygons), the Shark's crown and star
       (`measured/newtable.md`, `measured/cards.md`).
