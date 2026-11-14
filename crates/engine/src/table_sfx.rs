@@ -557,9 +557,9 @@ pub fn all_in_parts(rng: &mut Rng) -> (Vec<f32>, Vec<(usize, Vec<f32>)>, Vec<f32
     let mut a = ALLIN.2;
     for k in 0..30 {
         let mut c = vec![0.0; ms(340.0)];
-        chip(&mut c, 0, rng.range(2050.0, 2310.0), a * rng.range(0.8, 1.1), rng);
+        chip(&mut c, 0, rng.range(2050.0, 2310.0), a * rng.range(0.8, 1.1) * if k == 0 { 0.9 } else { 1.0 }, rng);
         chips.push((ms(t), c));
-        t += if k == 0 { rng.range(26.0, 36.0) } else { (18.0 * (-(k as f32) / 25.0).exp() * rng.range(0.35, 1.65)).max(1.5) };
+        t += if k == 0 { rng.range(26.0, 36.0) } else { (19.0 * (-(k as f32) / 25.0).exp() * rng.range(0.35, 1.65)).max(1.5) };
         a *= 0.973;
     }
     // The swell: A1 and E2 (6.4 dB under it) rising together from 320 ms for 0.485 s, dying
@@ -609,7 +609,7 @@ pub fn all_in_stereo(pan: f32, rng: &mut Rng) -> Vec<f32> {
 }
 
 /// The all-in's shove, its thump and its first chip, how loud.
-const ALLIN: (f32, f32, f32) = (0.9, 0.34, 0.815);
+const ALLIN: (f32, f32, f32) = (0.9, 0.30, 0.815);
 
 /// How loud the all-in's swell is (its A1).
 const SWELL: f32 = 0.118;
