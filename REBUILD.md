@@ -289,12 +289,17 @@ Version in brackets: where 0.13.x first had it.
       that one in", "a program's window closed: looking for its next one"). Windows only:
       **to A/B on Blue's PC** (Torch & Conquer, Pyropoly, Chimbrowser against 0.13.28).
 - [x] Programs know your Pyr name and friends; PYR_BRIDGE; invite friends (0.13.15)
-- [ ] Library shows plugins added since setup (0.13.7); Dominó program removed and never listed
-      (0.13.12, 0.13.25). Pyr's side done: `domino-cubano` taken off the PC as Pyr starts (its
-      files, data and line, "plugins: a program Pyr took over was removed", as 0.13.28 does it,
-      run side by side) and never shown whatever list it's given. Still to do: the Keeper's side
-      (lists taken in keep what's added since, never list a program Pyr does itself, what's
-      taken off stays off), checked against 0.13.28's Keeper.
+- [x] Library shows plugins added since setup (0.13.7); Dominó program removed and never listed
+      (0.13.12, 0.13.25). Pyr: `domino-cubano` taken off the PC as Pyr starts (its files, data
+      and line, "plugins: a program Pyr took over was removed", as 0.13.28 does it, run side by
+      side) and never shown whatever list it's given. The Keeper, run side by side with
+      0.13.28's (`pyr-keeper-0.13.28` and the rebuilt one on the same test lists, keys and
+      server database, nine steps: first run, `once`, `unlist`, `import`s): a list taken in is
+      merged with what's up (what it adds, newer versions in place, never an older one; what's
+      up stays), what's taken off is kept in `state.json`'s `unlisted` (`"skin:<id>"` for
+      skins, written even when empty) and stays off, and a program Pyr does itself goes when
+      the list is next put up ("programs Pyr does itself now taken off the list"): the same
+      lists, the same log lines, the same state.
 - [x] One-click update of open programs, programs can ask, invites update first, list fetched
       again, every ten minutes (0.13.27)
 

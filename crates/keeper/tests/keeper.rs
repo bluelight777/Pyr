@@ -271,3 +271,50 @@ fn running_out_of_credits_is_said_once_in_the_bug_reports() {
     assert_eq!(db.new_bug_count(), 2);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Lists Firelit Games signs are taken in with what's up, as 0.13.28's Keeper does (run side
+/// by side): what they add and newer versions (0.13.7: plugins added since the Keeper was set
+/// up, Dominó Cubano and Torch & Conquer, were missing), never what was taken off, nor a
+/// program Pyr does itself (0.13.25: Dominó Cubano's stayed after Pyr dealt it).
+#[test]
+fn lists_taken_in_keep_what_is_up_and_leave_out_what_was_taken_off() {
+    let dir = std::env::temp_dir().join(format!("pyr-keeper-merge-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let release = Identity::generate();
+    let (_db, cfg) = setup(&dir, &release);
+    let claude = FakeClaude { answer: RefCell::new(vec![]), seen: RefCell::new(vec![]) };
+    let program = |id: &str, version: &str| {
+        let mut e: Entry = serde_json::from_value(serde_json::json!({
+            "id": id, "name": id, "kind": "program", "version": version, "summary": "a game", "run": format!("{id}.exe"),
+            "windows": [{"path": format!("{id}.exe"), "url": format!("files/{id}/{version}/{id}.exe"), "sha256": pyr_proto::release::sha256_hex(b"MZ"), "size": 2}],
+        }))
+        .unwrap();
+        e.endorsement = library::endorse(&release, &e);
+        e
+    };
+    let signed = |plugins: Vec<Entry>| serde_json::to_string(&library::sign(&release, &Library { issued: 200, expires: i64::MAX / 2, plugins, skins: vec![] })).unwrap();
+    let listed = || -> Vec<String> {
+        let text = std::fs::read_to_string(cfg.web_library.join("index3.json")).unwrap();
+        library::open(&text, &release.user_id()).unwrap().plugins.iter().map(|p| format!("{}@{}", p.id, p.version)).collect()
+    };
+    let mut k = Keeper::new(cfg.clone(), &claude, &FakeBuild).unwrap();
+    k.import(&signed(vec![program("torch-conquer", "0.4.1"), program("domino-cubano", "0.1.1"), program("pyropoly", "0.1.0")])).unwrap();
+    assert_eq!(listed(), ["chimbrowser@0.1.3", "dice@1.0.0", "torch-conquer@0.4.1", "pyropoly@0.1.0"], "added to what's up; never Dominó");
+    assert_eq!(k.unlist("pyropoly").unwrap(), "pyropoly");
+    k.import(&signed(vec![program("torch-conquer", "0.4.2"), program("pyropoly", "0.1.1"), program("domino-cubano", "0.1.2")])).unwrap();
+    assert_eq!(listed(), ["chimbrowser@0.1.3", "dice@1.0.0", "torch-conquer@0.4.2"], "a newer version in its place; what was taken off stays off");
+    k.import(&signed(vec![program("torch-conquer", "0.4.1")])).unwrap();
+    assert_eq!(listed(), ["chimbrowser@0.1.3", "dice@1.0.0", "torch-conquer@0.4.2"], "never an older one");
+    // Kept as 0.13.28 keeps it; a list kept with Dominó in it (from before) loses it when it's
+    // next put up.
+    let state: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(cfg.state_dir.join("state.json")).unwrap()).unwrap();
+    assert_eq!(state["unlisted"], serde_json::json!(["pyropoly"]));
+    let mut st: pyr_keeper::State = serde_json::from_value(state).unwrap();
+    st.library.plugins.push(program("domino-cubano", "0.1.1"));
+    std::fs::write(cfg.state_dir.join("state.json"), serde_json::to_string(&st).unwrap()).unwrap();
+    let mut k = Keeper::new(cfg.clone(), &claude, &FakeBuild).unwrap();
+    k.publish().unwrap();
+    assert!(k.state.library.find("domino-cubano").is_none() && !listed().iter().any(|p| p.starts_with("domino")));
+    let _ = std::fs::remove_dir_all(&dir);
+}

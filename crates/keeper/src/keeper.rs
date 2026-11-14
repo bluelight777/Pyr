@@ -67,6 +67,53 @@ pub struct State {
     pub links: BTreeMap<i64, String>,
     /// Submissions left for a person (not looked at again).
     pub held: BTreeMap<i64, String>,
+    /// What's been taken off the list (plugin ids, skins as "skin:<id>"): a list taken in
+    /// after doesn't put it back (0.13.25).
+    #[serde(default)]
+    pub unlisted: Vec<String>,
+}
+
+/// Programs Pyr does itself now: never listed, whatever list is taken in (Dominó Cubano is
+/// dealt in Pyr Casino: 0.13.25).
+pub const PYR_DOES_ITSELF: &[&str] = &["domino-cubano"];
+
+/// Takes the programs Pyr does itself off a list; whether there were any.
+fn without_pyrs_own(lib: &mut Library) -> bool {
+    let before = lib.plugins.len();
+    lib.plugins.retain(|p| !PYR_DOES_ITSELF.contains(&p.id.as_str()));
+    lib.plugins.len() != before
+}
+
+/// A list Firelit Games signed, taken in with what's up (0.13.7: the Keeper's own listings,
+/// and the plugins added since it was set up, stay): what it adds, and newer versions of
+/// what's there; never what was taken off, nor a program Pyr does itself (0.13.25).
+pub fn merge(st: &mut State, lib: Library) {
+    for e in lib.plugins {
+        if st.unlisted.contains(&e.id) || PYR_DOES_ITSELF.contains(&e.id.as_str()) {
+            continue;
+        }
+        match st.library.plugins.iter_mut().find(|p| p.id == e.id) {
+            Some(p) => {
+                if pyr_proto::release::newer(&e.version, &p.version) {
+                    *p = e;
+                }
+            }
+            None => st.library.plugins.push(e),
+        }
+    }
+    for e in lib.skins {
+        if st.unlisted.contains(&format!("skin:{}", e.id)) {
+            continue;
+        }
+        match st.library.skins.iter_mut().find(|s| s.id == e.id) {
+            Some(s) => {
+                if pyr_proto::release::newer(&e.version, &s.version) {
+                    *s = e;
+                }
+            }
+            None => st.library.skins.push(e),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -421,15 +468,14 @@ impl<'a> Keeper<'a> {
         Ok(File { path: rel.to_string(), url: format!("files/{dir}/{rel}"), sha256: pyr_proto::release::sha256_hex(bytes), size: bytes.len() as u64 })
     }
 
-    /// Takes a list Firelit Games signed (with the release key itself: a new listing, a
-    /// program's new version endorsed) as the one to keep, and puts it up signed by the Keeper.
+    /// Takes in a list Firelit Games signed (with the release key itself: a new listing, a
+    /// program's new version endorsed: see `merge`), and puts it up signed by the Keeper.
     pub fn import(&mut self, signed_text: &str) -> Result<()> {
         let signed: library::Signed = serde_json::from_str(signed_text)?;
         anyhow::ensure!(signed.cert.is_none(), "only a list signed with the release key itself can be taken in");
         let lib = library::open(signed_text, &self.cfg.release_key).map_err(anyhow::Error::msg)?;
-        // (Made from the one that's up, so the Keeper's own listings since stay: the library
-        // tool's `endorse` re-signs the live list, and `sign --base` adds to it.)
-        self.state.library = lib;
+        self.reload();
+        merge(&mut self.state, lib);
         self.publish()
     }
 
@@ -463,14 +509,21 @@ impl<'a> Keeper<'a> {
             }
         };
         self.state.links.retain(|_, l| *l != link);
+        if !self.state.unlisted.contains(&link) {
+            self.state.unlisted.push(link.clone());
+        }
         self.publish()?;
         info!(id = %link, "taken off the list: {gone}");
         Ok(gone)
     }
 
-    /// Signs the list and puts it up (`index3.json`, replaced in one step).
+    /// Signs the list and puts it up (`index3.json`, replaced in one step), never with a
+    /// program Pyr does itself in it (one kept from before goes now).
     pub fn publish(&mut self) -> Result<()> {
         let lib = &mut self.state.library;
+        if without_pyrs_own(lib) {
+            info!("programs Pyr does itself now taken off the list");
+        }
         lib.issued = now();
         lib.expires = (now() + self.cfg.valid_days * 86_400).min(self.cert.not_after);
         let signed = library::sign_as_keeper(&self.key, &self.cert, lib);
