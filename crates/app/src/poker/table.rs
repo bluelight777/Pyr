@@ -209,9 +209,10 @@ impl PyrApp {
         // Toward the seat, as far as 0.13.28 places its table's sounds (heard at a six-seat table,
         // its side seats 0.954 of the way out: checks and chips 0.533 out under a constant-power
         // law, the far side 0.553 of the near where its soft clipping leaves them be, `poker_sfx`;
-        // folds a little further, 0.563).
+        // folds 0.523 out, all of them 0.033 to the left: R/L -5.44 dB from the left seats, 4.65
+        // from the right, -0.28 from the top, twice the same).
         let pan = |seat: usize| ((lay.seat(seat).x - lay.c.x) / lay.a * 0.5586).clamp(-0.8, 0.8);
-        let pan_fold = |seat: usize| ((lay.seat(seat).x - lay.c.x) / lay.a * 0.590).clamp(-0.8, 0.8);
+        let pan_fold = |seat: usize| ((lay.seat(seat).x - lay.c.x) / lay.a * 0.548 - 0.033).clamp(-0.8, 0.8);
         // (Cue, where, how loud, how long after now: 0.13.28 sounds an action 40 ms after the board's
         // card it brings, but with the hands shown at a showdown; the pot pushed to whoever was
         // folded to 38 ms after the fold, at a showdown with the cards shown; the blinds' chips

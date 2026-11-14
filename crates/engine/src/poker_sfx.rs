@@ -405,12 +405,22 @@ pub fn render(c: Cue, pan: f32) -> Vec<f32> {
     // chips' are): the push halfway toward the winner, the stacks where the chips go (R/L 2.3 dB
     // over the push and 5.1 over the stacks, at a side seat).
     if c == Cue::Pot {
-        let (push, stacks) = crate::table_sfx::pot_parts(&mut fresh());
-        let mut st = crate::table_sfx::place(&stacks, pan, false);
-        for (o, x) in st.iter_mut().zip(crate::table_sfx::place(&push, pan * 0.49, false)) {
-            *o += x;
+        let mut rng = fresh();
+        let (push, stacks) = crate::table_sfx::pot_parts(&mut rng);
+        let mut st = crate::table_sfx::place(&push, pan * 0.49, false);
+        st.resize(stacks[0].len() * 2, 0.0);
+        for stack in &stacks {
+            for (o, x) in st.iter_mut().zip(crate::table_sfx::place(stack, (pan + rng.range(-JITTER, JITTER)).clamp(-1.0, 1.0), false)) {
+                *o += x;
+            }
         }
         return held(st);
+    }
+    // A bet's chips, each a little to one side or the other of where they're put (0.13.28's
+    // spread half a dB either way from a side seat, its casino's 4%).
+    if c == Cue::Chips {
+        let mut rng = fresh();
+        return held(crate::table_sfx::place(&crate::table_sfx::chips(&mut rng), (pan + rng.range(-JITTER, JITTER)).clamp(-1.0, 1.0), false));
     }
     // The all-in in its parts, placed as 0.13.28 places them (`table_sfx::all_in_stereo`).
     if c == Cue::AllIn {
@@ -439,6 +449,11 @@ fn held(mut st: Vec<f32>) -> Vec<f32> {
     st
 }
 
+/// How far either way 0.13.28 puts each bet's chips, and each of the pot's stacks, from where
+/// they're placed (its bets from a side seat 4.70-5.21 dB, the middle half, where the rebuild's
+/// were all 5.02; the pot's stacks 0.4 dB apart from one to the next).
+const JITTER: f32 = 0.04;
+
 /// Where 0.13.28 turns a table sound down before its soft clipping (and so how loud its louder side
 /// gets at most, `TABLE_PEAK`: tanh 0.85).
 const TABLE_HOLD: f32 = 0.85;
@@ -464,7 +479,7 @@ mod tests {
         for c in [Cue::Chips, Cue::Check, Cue::Fold, Cue::Deal, Cue::Card, Cue::Flip, Cue::Pot, Cue::AllIn, Cue::Win, Cue::Tick, Cue::TickUp] {
             let (a, b) = (render_mono(c), render_mono(c));
             assert!(a != b, "{c:?}");
-            assert!(a.iter().all(|x| x.is_finite() && x.abs() <= 0.9), "{c:?}");
+            assert!(a.iter().all(|x| x.is_finite() && x.abs() <= 0.9 + 1e-6), "{c:?}");
         }
         for c in [Cue::Turn, Cue::Hurry, Cue::TimeBank] {
             assert_eq!(render_mono(c), render_mono(c), "{c:?}");
@@ -546,9 +561,16 @@ mod tests {
             assert!(d[..764].iter().all(|x| x.abs() < 1e-6), "{c:?}: the same on both sides first");
             assert!(d[764..2000].iter().any(|x| x.abs() > 1e-5), "{c:?}: then the room");
         }
+        // (The chips each a little to one side or the other, the check in the middle: neither with
+        // a room's difference between the sides, 20-27 dB under the cards.)
+        let wide = |s: &[f32]| {
+            let (side, mid) = s.chunks(2).fold((0.0f64, 0.0f64), |(a, b), x| (a + ((x[0] - x[1]) as f64).powi(2), b + ((x[0] + x[1]) as f64).powi(2)));
+            10.0 * (side / mid).log10()
+        };
         for c in [Cue::Chips, Cue::Check] {
-            assert!(side(&render(c, 0.0)).iter().all(|x| x.abs() < 1e-6), "{c:?}: no room");
+            assert!(wide(&render(c, 0.0)) < -30.0, "{c:?}: no room");
         }
+        assert!(wide(&render(Cue::Fold, 0.0)) > -30.0);
         for _ in 0..20 {
             for (c, pan) in [(Cue::Check, 0.0), (Cue::Check, -0.43), (Cue::Flip, 0.0), (Cue::Chips, 0.44)] {
                 let peak = render(c, pan).iter().fold(0.0f32, |m, x| m.max(x.abs()));
@@ -587,9 +609,10 @@ mod tests {
     fn the_pot_is_pushed_halfway_and_stacked_further_out() {
         let rms = |x: &[f32]| (x.iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / x.len() as f64).sqrt();
         for _ in 0..10 {
-            let (push, stacks) = crate::table_sfx::pot_parts(&mut fresh());
+            let (push, parts) = crate::table_sfx::pot_parts(&mut fresh());
             let (body, tail) = (rms(&push[ms(100.0)..ms(400.0)]), rms(&push[ms(495.0)..ms(520.0)]));
             assert!(tail < body * 0.1 && tail > body * 0.003, "{body} {tail}");
+            let stacks: Vec<f32> = (0..parts[0].len()).map(|i| parts.iter().map(|p| p[i]).sum()).collect();
             let first = stacks.iter().position(|x| x.abs() > 1e-4).unwrap();
             assert!((ms(520.0)..ms(520.0) + 4).contains(&first), "{first}");
             for at in [660.0, 790.0] {
@@ -606,9 +629,10 @@ mod tests {
         for _ in 0..5 {
             let s = render(Cue::Pot, 0.533);
             let (push, stacks) = (rl(&s, 100.0, 400.0), rl(&s, 610.0, 1400.0));
-            assert!((push - 2.28).abs() < 0.05 && (stacks - 5.1).abs() < 0.15, "{push} {stacks}");
-            let side: Vec<f32> = render(Cue::Pot, 0.0).chunks(2).map(|x| x[0] - x[1]).collect();
-            assert!(side.iter().all(|x| x.abs() < 1e-6));
+            assert!((push - 2.28).abs() < 0.05 && (stacks - 5.1).abs() < 0.6, "{push} {stacks}");
+            // (No room: its stacks only each a little to one side or the other.)
+            let (side, mid) = render(Cue::Pot, 0.0).chunks(2).fold((0.0f64, 0.0f64), |(a, b), x| (a + ((x[0] - x[1]) as f64).powi(2), b + ((x[0] + x[1]) as f64).powi(2)));
+            assert!(10.0 * (side / mid).log10() < -30.0);
         }
     }
 }

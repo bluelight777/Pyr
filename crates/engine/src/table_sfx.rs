@@ -470,9 +470,12 @@ const STREET: (f32, f32, f32) = (0.098, 3.65, 0.135);
 /// The pot pushed over to someone else, and stacked in front of them in three goes (its two parts
 /// as one sound: `pot_parts`).
 pub fn pot(rng: &mut Rng) -> Vec<f32> {
-    let (push, mut o) = pot_parts(rng);
-    for (a, b) in o.iter_mut().zip(push) {
-        *a += b;
+    let (push, stacks) = pot_parts(rng);
+    let mut o = vec![0.0; stacks[0].len()];
+    for part in stacks.iter().chain([&push]) {
+        for (a, b) in o.iter_mut().zip(part) {
+            *a += b;
+        }
     }
     o
 }
@@ -484,7 +487,7 @@ pub fn pot(rng: &mut Rng) -> Vec<f32> {
 /// three stacks of four chips, 520, 660 and 790 ms on; in each, the clicks about 28, 22 and 18 ms
 /// apart, the last three 2.5, 4.6 and 6.5 dB softer than the first; no felt under them
 /// (`measured/cardsounds.md`).
-pub fn pot_parts(rng: &mut Rng) -> (Vec<f32>, Vec<f32>) {
+pub fn pot_parts(rng: &mut Rng) -> (Vec<f32>, [Vec<f32>; 3]) {
     let mut push = vec![0.0; ms(600.0)];
     let mut res = Reso::new(PUSH.0, PUSH.2);
     let n = push.len();
@@ -504,15 +507,16 @@ pub fn pot_parts(rng: &mut Rng) -> (Vec<f32>, Vec<f32>) {
         let end = ((n - i) as f32 / ms(20.0) as f32).min(1.0);
         *x = res.run(rng.noise()) * (t / 2.0).min(1.0) * (-t / PUSH.4).exp() * fade.max(tail) * end * POT.0;
     }
-    let mut o = vec![0.0; ms(790.0 + 420.0)];
-    for start in [520.0, 660.0, 790.0] {
+    let stacks = [520.0, 660.0, 790.0].map(|start| {
+        let mut o = vec![0.0; ms(790.0 + 420.0)];
         let mut c = start;
         for (a, gap) in [(1.0, rng.range(22.5, 33.0)), (0.747, rng.range(17.5, 27.0)), (0.591, rng.range(14.5, 21.0)), (0.473, 0.0)] {
             chip_with(&mut o, ms(c), rng.range(2050.0, 2310.0), POT.1 * a * rng.range(0.65, 1.15), 0.0, POT_RING, rng);
             c += gap;
         }
-    }
-    (push, o)
+        o
+    });
+    (push, stacks)
 }
 
 /// How loud the pot's push is, and its stacks' first clicks.
