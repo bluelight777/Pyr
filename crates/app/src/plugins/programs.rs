@@ -172,7 +172,10 @@ impl Programs {
         }
         let mut child = super::install::spawn(dir, p, launch)?;
         #[cfg(windows)]
-        win::adopt(&child);
+        {
+            win::adopt(&child);
+            win::set_repaint(repaint.clone());
+        }
         let bridge = Bridge::start(&mut child, &p.id, repaint);
         self.open.push(Program {
             id: p.id.clone(),
@@ -461,8 +464,8 @@ pub fn is_embedded(hwnd: isize) -> bool {
 mod win {
     //! The Windows side: finding a program's window, taking it in, and keeping it in place.
 
-    use std::sync::Mutex;
     use std::sync::atomic::{AtomicIsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     use eframe::egui::Rect;
     use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, POINT, RECT, WPARAM};
@@ -475,14 +478,16 @@ mod win {
         JobObjectExtendedLimitInformation, SetInformationJobObject,
     };
     use windows::Win32::System::Threading::{GetCurrentProcessId, OpenProcess, PROCESS_TERMINATE, TerminateProcess};
-    use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
+    use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
     use windows::Win32::UI::WindowsAndMessaging::{
-        CHILDID_SELF, EVENT_OBJECT_LOCATIONCHANGE, EnumWindows, GW_OWNER, GWL_EXSTYLE, GWL_STYLE, GWLP_HWNDPARENT, GetClientRect, GetMenu, GetWindow,
-        GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowThreadProcessId, IsHungAppWindow, IsWindow, IsWindowVisible, IsZoomed,
-        OBJID_WINDOW, PostMessageW, SW_HIDE, SW_RESTORE, SW_SHOWNA, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+        CHILDID_SELF, EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_SHOW, EnumWindows, GA_ROOT, GW_OWNER, GWL_EXSTYLE, GWL_STYLE, GWLP_HWNDPARENT,
+        GetAncestor, GetClassNameW, GetClientRect, GetMenu, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
+        GetWindowThreadProcessId, IsHungAppWindow, IsWindow, IsWindowVisible, IsZoomed, OBJID_WINDOW, PostMessageW, SW_HIDE, SW_SHOWNA,
+        SW_SHOWNOACTIVATE, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
         SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync, WINEVENT_OUTOFCONTEXT, WM_CLOSE,
         WS_CAPTION, WS_EX_APPWINDOW, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
-        WS_EX_WINDOWEDGE, WS_HSCROLL, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME, WS_VSCROLL,
+        WS_EX_WINDOWEDGE, WS_HSCROLL, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE,
+        WS_VSCROLL,
     };
     use windows::core::{BOOL, PCWSTR};
 
@@ -508,24 +513,56 @@ mod win {
         /// to, if any (that much frame, and its page's size).
         inset: Insets,
         clipped: Option<(Insets, i32, i32)>,
+        /// Told when its windows show, hide or move (see `program_changed`).
+        hook: isize,
+        /// Its window has been shown in its page since it was taken in; it was hidden when
+        /// it was (opening hidden), and when that was.
+        shown_once: bool,
+        taken_hidden: bool,
+        taken_at: Option<std::time::Instant>,
+        /// The window it had before it showed another, and when (see `let_go_of_old`).
+        let_go: Option<(isize, std::time::Instant)>,
+    }
+
+    impl Drop for Embedded {
+        fn drop(&mut self) {
+            self.unwatch();
+        }
     }
 
     impl Embedded {
         pub fn new(pid: u32) -> Embedded {
-            Embedded { pid, hwnd: None, styles: None, placed: None, showing: false, inset: Insets::default(), clipped: None }
+            Embedded { pid, hwnd: None, styles: None, placed: None, showing: false, inset: Insets::default(), clipped: None, hook: 0, shown_once: false, taken_hidden: false, taken_at: None, let_go: None }
         }
 
         /// `place`: where it goes (physical pixels in Pyr's window), or hidden.
         pub fn step(&mut self, place: Option<Rect>) {
             let Some(main) = crate::tray::main_window() else { return };
             if self.hwnd.is_some_and(|h| unsafe { !IsWindow(Some(hwnd(h))).as_bool() }) {
+                tracing::info!(pid = self.pid, "a program's window closed: looking for its next one");
                 self.forget();
             }
-            if self.hwnd.is_none() {
-                match find_window(self.pid) {
-                    Some(h) => self.take_in(h, main),
-                    None => return,
+            self.watch();
+            // Its windows are looked at every step: the one to take in when there's none yet,
+            // and a window of its own showing outside Pyr when the program shows its game there
+            // (0.13.9): as it starts, after a hidden first one (Torch & Conquer does), or once
+            // it hid the one in its page. A window it opens beside the one in its page later (a
+            // browser's, say) stays its own.
+            let let_go = self.let_go.filter(|(_, at)| at.elapsed() < std::time::Duration::from_secs(2)).map(|(h, _)| h);
+            let found = find_window(self.pid).filter(|(h, _)| Some(*h) != let_go);
+            let starting = self.taken_hidden && self.taken_at.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(15));
+            match (self.hwnd, found) {
+                (None, Some((h, _))) => {
+                    tracing::info!(pid = self.pid, window = %describe(hwnd(h)), "taking a program's window in");
+                    self.take_in(h, main);
                 }
+                (None, None) => return,
+                (Some(a), Some((h, true))) if starting || (unsafe { !IsWindowVisible(hwnd(a)).as_bool() } && (self.showing || !self.shown_once)) => {
+                    tracing::info!(pid = self.pid, window = %describe(hwnd(h)), "a program shows a window of its own outside Pyr: taking that one in");
+                    self.let_go_of_old();
+                    self.take_in(h, main);
+                }
+                (Some(_), _) => {}
             }
             let Some(h) = self.hwnd else { return };
             let w = hwnd(h);
@@ -545,7 +582,7 @@ mod win {
                 // off again.
                 let style = GetWindowLongPtrW(w, GWL_STYLE) as u32;
                 let ex = GetWindowLongPtrW(w, GWL_EXSTYLE) as u32;
-                if style & FRAME != 0 || ex & WS_EX_TOOLWINDOW.0 == 0 {
+                if style & FRAME != 0 || ex & WS_EX_TOOLWINDOW.0 == 0 || ex & WS_EX_APPWINDOW.0 != 0 {
                     strip(w);
                 }
                 match place {
@@ -556,7 +593,8 @@ mod win {
                         // What's left of its frame, looked at while it's where it was put (not
                         // moving): the window goes that much bigger, and is cut down to its page.
                         let now = window_rect(w);
-                        if self.placed.is_none() || self.placed.map(|p| (p.0, p.1, p.0 + p.2, p.1 + p.3)) == now {
+                        let was = self.placed.map(|p| (p.0, p.1, p.0 + p.2, p.1 + p.3));
+                        if self.placed.is_none() || was == now {
                             let found = insets(w);
                             if found != self.inset {
                                 tracing::info!(pid = self.pid, ?found, "a program's window keeps part of its frame: Pyr covers it");
@@ -565,15 +603,18 @@ mod win {
                         }
                         let at = self.inset.around(target);
                         follow(Some((main, w, (r.min.x.round() as i32, r.min.y.round() as i32, target.2, target.3), self.inset)));
-                        if self.placed != Some(at) {
+                        // (Put again when it moved itself, too: 0.13.8.)
+                        if self.placed != Some(at) || now != Some((at.0, at.1, at.0 + at.2, at.1 + at.3)) {
                             let _ = SetWindowPos(w, None, at.0, at.1, at.2, at.3, SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS);
                             self.placed = Some(at);
                         }
                         self.clip(w, (!self.inset.is_none()).then_some((self.inset, target.2, target.3)));
-                        // (Hidden meanwhile with Pyr, to the tray say: shown again.)
+                        // (Hidden meanwhile with Pyr, to the tray say: shown again. And a window
+                        // just taken in shows only now, already in its place: 0.13.10.)
                         if !self.showing || !IsWindowVisible(w).as_bool() {
                             let _ = ShowWindowAsync(w, SW_SHOWNA);
                             self.showing = true;
+                            self.shown_once = true;
                         }
                     }
                     None => {
@@ -586,14 +627,63 @@ mod win {
             }
         }
 
+        /// Hears when its windows show, hide or move (so one that moves itself or shows up
+        /// outside Pyr is put right at once, even while nothing in Pyr moves: 0.13.8).
+        fn watch(&mut self) {
+            if self.hook != 0 {
+                return;
+            }
+            let h = unsafe { SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_LOCATIONCHANGE, None, Some(program_changed), self.pid, 0, WINEVENT_OUTOFCONTEXT) };
+            self.hook = h.0 as isize;
+        }
+
+        fn unwatch(&mut self) {
+            if self.hook != 0 {
+                unsafe {
+                    let _ = UnhookWinEvent(HWINEVENTHOOK(self.hook as *mut core::ffi::c_void));
+                }
+                self.hook = 0;
+            }
+        }
+
+        /// The window it had before it showed another: out of sight and its own again (it's
+        /// the program's to close or show again; shown again outside Pyr, it's taken back in).
+        fn let_go_of_old(&mut self) {
+            if let Some(h) = self.hwnd {
+                let w = hwnd(h);
+                self.clip(w, None);
+                self.let_go = Some((h, std::time::Instant::now()));
+                unsafe {
+                    let _ = ShowWindowAsync(w, SW_HIDE);
+                    SetWindowLongPtrW(w, GWLP_HWNDPARENT, 0);
+                    if let Some((style, ex)) = self.styles {
+                        // (Its look as it was, not whether it showed then.)
+                        let style = (style as u32 & !(WS_VISIBLE.0 | WS_MINIMIZE.0 | WS_MAXIMIZE.0)) as isize;
+                        SetWindowLongPtrW(w, GWL_STYLE, style);
+                        SetWindowLongPtrW(w, GWL_EXSTYLE, ex);
+                        let _ = SetWindowPos(w, None, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+                    }
+                }
+            }
+            self.forget();
+            self.styles = None;
+        }
+
         /// Takes its window in: owned by Pyr's (above it, minimized and closed with it), no
         /// frame, no taskbar button, square corners.
         fn take_in(&mut self, h: isize, main: HWND) {
             let w = hwnd(h);
             unsafe {
                 self.styles = Some((GetWindowLongPtrW(w, GWL_STYLE), GetWindowLongPtrW(w, GWL_EXSTYLE)));
-                if IsZoomed(w).as_bool() {
-                    let _ = ShowWindow(w, SW_RESTORE);
+                // Out of sight until it's in its place (no window of its own, black or with its
+                // title bar, flashing up first: 0.13.10); maximized, its own size again first.
+                let (visible, zoomed) = (IsWindowVisible(w).as_bool(), IsZoomed(w).as_bool());
+                self.taken_hidden = !visible;
+                if zoomed {
+                    let _ = ShowWindowAsync(w, SW_SHOWNOACTIVATE);
+                }
+                if visible || zoomed {
+                    let _ = ShowWindowAsync(w, SW_HIDE);
                 }
                 SetWindowLongPtrW(w, GWLP_HWNDPARENT, main.0 as isize);
                 strip(w);
@@ -602,7 +692,9 @@ mod win {
             }
             self.forget_placement();
             self.hwnd = Some(h);
-            self.showing = unsafe { IsWindowVisible(w).as_bool() };
+            self.showing = false;
+            self.shown_once = false;
+            self.taken_at = Some(std::time::Instant::now());
             ensure_hook();
         }
 
@@ -628,6 +720,7 @@ mod win {
         /// Pop out: a window of its own again, whole, with a frame and a taskbar button (one
         /// that started without a frame gets one too).
         pub fn release(&mut self) {
+            self.unwatch();
             let Some(h) = self.hwnd else { return };
             self.clip(hwnd(h), None);
             unsafe { give_back(hwnd(h), self.styles) };
@@ -744,12 +837,54 @@ mod win {
         }
     }
 
+    /// Windows that libraries and drivers make for themselves in a program, never its own (by
+    /// the start of their class's name): wgpu's, GLFW's and SDL's hidden ones, COM's, the input
+    /// methods', NVIDIA's OpenGL driver's, GDI+'s and DDE's (0.13.17: Pyr took one in and waited
+    /// on it forever; 0.13.18: NVIDIA's instead of the game's).
+    const HELPER_CLASSES: &[&str] = &[
+        "wgpu",
+        "GLFW",
+        "SDL_app_hidden",
+        "OleMainThreadWndClass",
+        "IME",
+        "MSCTFIME",
+        "NVOpenGLPbuffer",
+        "GDI+ Hook Window Class",
+        "CicMarshalWndClass",
+        "DDEMLMom",
+        "DDEMLEvent",
+    ];
+
+    fn class_name(w: HWND) -> String {
+        let mut buf = [0u16; 256];
+        let n = unsafe { GetClassNameW(w, &mut buf) }.max(0) as usize;
+        String::from_utf16_lossy(&buf[..n.min(buf.len())])
+    }
+
+    fn helper(class: &str) -> bool {
+        HELPER_CLASSES.iter().any(|c| class.starts_with(c))
+    }
+
+    /// A window as pyr.log has it: whether it's showing, its title, class and size.
+    fn describe(w: HWND) -> String {
+        let visible = unsafe { IsWindowVisible(w).as_bool() };
+        let mut buf = [0u16; 256];
+        let n = unsafe { GetWindowTextW(w, &mut buf) }.max(0) as usize;
+        let title = String::from_utf16_lossy(&buf[..n.min(buf.len())]);
+        let area = window_rect(w).map(|r| (r.2 - r.0) as i64 * (r.3 - r.1) as i64).unwrap_or(0);
+        format!("{} \"{title}\" class {} area {area}", if visible { "visible" } else { "hidden" }, class_name(w))
+    }
+
     /// The program's main window: one of its top-level windows with a title, not a tool or
-    /// helper window, nobody's (no owner), and the biggest such.
-    fn find_window(pid: u32) -> Option<isize> {
+    /// helper window (by its styles or its class), nobody's (no owner: so not one Pyr took in),
+    /// answering, and the biggest showing; none showing yet (it opens hidden until it's in
+    /// Pyr's window), the biggest. Whether it's showing too.
+    fn find_window(pid: u32) -> Option<(isize, bool)> {
         struct Search {
             pid: u32,
-            best: Option<(isize, i64)>,
+            /// The biggest showing, and the biggest hidden (window, area).
+            showing: Option<(isize, i64)>,
+            hidden: Option<(isize, i64)>,
         }
         unsafe extern "system" fn each(w: HWND, lp: LPARAM) -> BOOL {
             let s = unsafe { &mut *(lp.0 as *mut Search) };
@@ -759,25 +894,54 @@ mod win {
                 return BOOL(1);
             }
             let ex = unsafe { GetWindowLongPtrW(w, GWL_EXSTYLE) } as u32;
-            let helper = ex & (WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0) != 0 || ex & (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0) == (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0);
+            let tool = ex & (WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0) != 0 || ex & (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0) == (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0);
             let owned = unsafe { GetWindow(w, GW_OWNER) }.is_ok_and(|o| !o.is_invalid());
             let titled = unsafe { GetWindowTextLengthW(w) } > 0;
-            if helper || owned || !titled {
+            if tool || owned || !titled || helper(&class_name(w)) || hung(w) {
                 return BOOL(1);
             }
             let mut r = RECT::default();
             let _ = unsafe { GetWindowRect(w, &mut r) };
             let area = (r.right - r.left) as i64 * (r.bottom - r.top) as i64;
-            if area > 100 * 100 && s.best.is_none_or(|b| area > b.1) {
-                s.best = Some((w.0 as isize, area));
+            if area <= 100 * 100 {
+                return BOOL(1);
+            }
+            let best = if unsafe { IsWindowVisible(w).as_bool() } { &mut s.showing } else { &mut s.hidden };
+            if best.is_none_or(|b| area > b.1) {
+                *best = Some((w.0 as isize, area));
             }
             BOOL(1)
         }
-        let mut s = Search { pid, best: None };
+        let mut s = Search { pid, showing: None, hidden: None };
         unsafe {
             let _ = EnumWindows(Some(each), LPARAM(&mut s as *mut Search as isize));
         }
-        s.best.map(|b| b.0)
+        s.showing.map(|b| (b.0, true)).or(s.hidden.map(|b| (b.0, false)))
+    }
+
+    // ---- a program's windows showing, hiding or moving by themselves
+
+    /// How to ask for Pyr's next frame (set when the first program starts).
+    static REPAINT: Mutex<Option<Arc<dyn Fn() + Send + Sync>>> = Mutex::new(None);
+
+    pub fn set_repaint(f: Arc<dyn Fn() + Send + Sync>) {
+        *REPAINT.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
+    }
+
+    /// One of a program's own windows showed, hid or moved: Pyr steps its programs at once
+    /// (puts it back in its place, or takes in a window it showed outside Pyr), even while
+    /// nothing in Pyr moves.
+    unsafe extern "system" fn program_changed(_: HWINEVENTHOOK, _event: u32, w: HWND, object: i32, child: i32, _: u32, _: u32) {
+        if object != OBJID_WINDOW.0 || child != CHILDID_SELF as i32 || w.is_invalid() {
+            return;
+        }
+        if unsafe { GetAncestor(w, GA_ROOT) } != w {
+            return;
+        }
+        let f = REPAINT.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(f) = f {
+            f();
+        }
     }
 
     // ---- following Pyr's window as it's dragged (no frames run while it is)
