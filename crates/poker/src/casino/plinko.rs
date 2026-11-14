@@ -143,19 +143,13 @@ pub struct Outcome {
     pub paid: u64,
 }
 
-/// A multiple as 0.13.28 writes it, on the buckets and in a big win's words: "1,500×", "114×",
-/// "7.5×", "4.0×", "2.79×", "0.29×".
+/// A multiple as 0.13.28 writes it, on the buckets and in a big win's words: "10K×", "1.5K×",
+/// "1K×", "114×", "7.5×", "4.0×", "2.79×", "0.29×".
 pub fn label(x100: u64) -> String {
-    if x100 >= 1000 {
-        let n = (x100 / 100).to_string();
-        let mut out = String::new();
-        for (i, c) in n.chars().enumerate() {
-            if i > 0 && (n.len() - i) % 3 == 0 {
-                out.push(',');
-            }
-            out.push(c);
-        }
-        format!("{out}×")
+    if x100 >= 100_000 {
+        format!("{:.1}K×", x100 as f64 / 100_000.0).replace(".0K", "K")
+    } else if x100 >= 1000 {
+        format!("{}×", x100 / 100)
     } else if x100 % 100 == 0 {
         format!("{}.0×", x100 / 100)
     } else if x100 % 10 == 0 {
@@ -258,7 +252,9 @@ mod tests {
         assert_eq!(words(100, Risk::Expert, 8, 8), "60× on Expert with 8 rows");
         assert_eq!(words(47, Risk::Expert, 10, 0), "216× on Expert with 10 rows");
         assert_eq!(words(100_000, Risk::Low, 9, 1), "3.7× on Low with 9 rows");
-        assert_eq!(label(150_000), "1,500×");
+        assert_eq!(words(1, Risk::Expert, 13, 13), "1.5K× on Expert with 13 rows");
+        assert_eq!((label(150_000), label(100_000), label(1_000_000)), ("1.5K×".to_string(), "1K×".to_string(), "10K×".to_string()));
+        assert_eq!((label(80_500), label(29_500)), ("805×".to_string(), "295×".to_string()));
         assert_eq!((label(400), label(279), label(29)), ("4.0×".to_string(), "2.79×".to_string(), "0.29×".to_string()));
     }
 

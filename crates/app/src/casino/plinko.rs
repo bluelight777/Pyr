@@ -88,8 +88,8 @@ impl Default for PlinkoUi {
     }
 }
 
-/// A multiple as the buckets show it: "110×", "7.5×", "4.0×", "2.79×", "0.29×" (as a big win's
-/// words have it too).
+/// A multiple as the buckets show it: "10K×", "1.5K×", "110×", "7.5×", "4.0×", "2.79×", "0.29×"
+/// (as a big win's words have it too).
 pub fn label(x100: u64) -> String {
     pyr_poker::casino::plinko::label(x100)
 }
@@ -561,6 +561,8 @@ mod tests {
     #[test]
     fn multiples_read_as_on_0_13_28s_buckets() {
         let labels: Vec<String> = [11000, 5700, 2600, 1300, 400, 120, 40, 30, 29, 750, 279, 54, 1_000_000, 50].iter().map(|m| label(*m)).collect();
-        assert_eq!(labels, ["110×", "57×", "26×", "13×", "4.0×", "1.2×", "0.4×", "0.3×", "0.29×", "7.5×", "2.79×", "0.54×", "10,000×", "0.5×"]);
+        assert_eq!(labels, ["110×", "57×", "26×", "13×", "4.0×", "1.2×", "0.4×", "0.3×", "0.29×", "7.5×", "2.79×", "0.54×", "10K×", "0.5×"]);
+        // A thousand times or more, as 0.13.28's buckets and "Up to" have them.
+        assert_eq!([100_000, 150_000, 280_000, 530_000].map(label), ["1K×", "1.5K×", "2.8K×", "5.3K×"]);
     }
 }
