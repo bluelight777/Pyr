@@ -70,11 +70,12 @@ pub fn cards(ui: &mut egui::Ui, strip: Rect, tables: &[Pick], seats: usize, at: 
         // A dot a seat, the taken ones green.
         let dot = |i: usize| pos2(r.right() - 14.0 - (seats - 1 - i) as f32 * 13.0, r.top() + 40.0);
         for i in 0..seats {
-            // (A circle's stroke goes round its outside: 4 here rings at 4.5, as 0.13.28's.)
+            // (A circle's stroke goes round its outside: 4 here rings from 4 to 5.2, as 0.13.28's:
+            // fitted on both apps' dots, its ring a fifth of a pixel wider than a 1-wide one.)
             if i < t.seated {
                 p.circle_filled(dot(i), 4.5, Color32::from_rgb(0x3a, 0xe0, 0x7a));
             } else {
-                p.circle_stroke(dot(i), 4.0, Stroke::new(1.0f32, Color32::from_white_alpha(110)));
+                p.circle_stroke(dot(i), 4.0, Stroke::new(1.2f32, Color32::from_white_alpha(110)));
             }
         }
         // Its bets, as short as they must be to stay clear of the dots.
