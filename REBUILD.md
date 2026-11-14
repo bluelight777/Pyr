@@ -398,8 +398,17 @@ How (decided while starting it):
       pops, drops, the bombs adding up, the multiplier, filling, the step, a bought round and
       the bonus won as loud as 0.13.28's (they were 3 to 10 dB louder): now the same gains to the
       thousandth, the stops 0.93 s apart on both. Left: a screen's wins light 0.1 s later than
-      0.13.28's sound for them, and its bursts and drops come within 0.2 s of its; Hold & Win
-      (below) not yet.
+      0.13.28's sound for them, and its bursts and drops come within 0.2 s of its. Hold & Win
+      filmed at 30 frames a second with its sound (ten rounds bought on Dragon's Hoard, the
+      rebuild's the same way, `work/snd/hwfilm.sh`, `hwan.py`, `hwev.py`): the board 2.55 s
+      after the splash starts, its starting pieces small in their places and aglow, landing
+      whole one after another reel by reel with the coin's sound twice (the second a minor third
+      up); a respin every 0.9 s with its own sound, its places landing 0.6 s in, its dot going
+      out as they land, the reset's sound as a coin lands; then the count, each piece lit in turn
+      in the order it landed, 0.18 s apart, the count's tick a step and a half higher each time;
+      then the win sound (the middle one to 14 times the bet, the big one from 21) and the board
+      gives way. Each step within a few hundredths of a second of 0.13.28's. Better than 0.13.28:
+      at 1280 wide its jackpot plaques cover RESPINS (only "NS" shows); the rebuild's shows.
 - [x] Bonus rounds that build: Bomb Spins, Super Hold & Win (0.13.6). Play Feature's seventh
       card at 0.13.28's prices (Bomb Spins 102.80× / 97.80× / 98.60× / 98.20×, Super Hold & Win
       66.70× / 62.70× / 66.80× / 63.00×), words and order; 0.13.28's splash, "SPIN n / 10",
