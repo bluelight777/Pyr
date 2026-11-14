@@ -32,6 +32,9 @@ impl Default for KenoUi {
     }
 }
 
+/// A win's count up to its total (0.13.7).
+const WIN_COUNT_S: f32 = 1.05;
+
 impl KenoUi {
     fn gap(&self) -> f32 {
         if self.turbo { 0.05 } else { 0.14 }
@@ -170,18 +173,26 @@ impl PyrApp {
         {
             let line = format!("Caught {} of {}", o.hits.len(), o.picks.len());
             glow_text(&p, pos2(side.center().x, side.bottom() - 62.0), Align2::CENTER_CENTER, &line, theme::bold_font(30.0), Color32::WHITE, Color32::from_black_alpha(140));
-            p.text(pos2(side.center().x, side.bottom() - 26.0), Align2::CENTER_CENTER, if o.paid > 0 { format!("You won {}", chips_text(o.paid)) } else { "No win this time".into() }, theme::bold_font(21.0), if o.paid > 0 { col::WIN } else { col::MUTED });
+            // (A win counts up to its total, 0.13.7: about a second, slowing to it, as 0.13.28's.)
+            let since = k - (o.drawn.len() as f32 * gap + 0.2);
+            let counted = (o.paid as f64 * super::ease_out((since / WIN_COUNT_S).clamp(0.0, 1.0)) as f64).round() as u64;
+            // (A win's words bigger than a loss's, as 0.13.28's: 26 to 21.)
+            p.text(pos2(side.center().x, side.bottom() - 26.0), Align2::CENTER_CENTER, if o.paid > 0 { format!("You won {}", chips_text(counted)) } else { "No win this time".into() }, theme::bold_font(if o.paid > 0 { 26.0 } else { 21.0 }), if o.paid > 0 { col::WIN } else { col::MUTED });
             if !*settled {
-                // Called out over the board too, the size a stream's viewers can read.
-                let (title, color) = if o.paid > 0 { (format!("{} OF {} · WIN {}", o.hits.len(), o.picks.len(), chips_text(o.paid)), col::GOLD2) } else { (format!("{} OF {}", o.hits.len(), o.picks.len()), col::TEXT) };
+                // Called out over the board too, the size a stream's viewers can read (the amount
+                // counts up beside it, so: a win, as 0.13.28 says it).
+                let (title, color) = if o.paid > 0 { (format!("{} OF {} · A WIN", o.hits.len(), o.picks.len()), col::GOLD2) } else { (format!("{} OF {}", o.hits.len(), o.picks.len()), col::TEXT) };
                 self.poker.casino.announce(title, if o.paid > 0 { String::new() } else { "No win this time".to_string() }, color, (0.32, 0.42), 0.1);
                 let ui_s = &mut self.poker.casino.keno;
                 if let Some(sh) = ui_s.show.as_mut() {
                     sh.2 = true;
                 }
-                // (A big win, 50 times the bet and more, stops it when that's set.)
+                // (A big win, 50 times the bet and more, stops it when that's set. Playing by
+                // itself, a win stays up a moment before the next draw, 0.13.7: 0.13.28's waits,
+                // filmed, turbo or not, from the result.)
                 if ui_s.auto.spun(o.paid >= o.chips * 50) {
-                    ui_s.next_at = Some(now + Duration::from_millis(if o.paid > 0 { 1500 } else { 700 }));
+                    let wait = if o.paid > 0 { 2650 } else if ui_s.turbo { 400 } else { 750 };
+                    ui_s.next_at = Some(now + Duration::from_millis(wait));
                 }
                 if o.paid > 0 {
                     self.poker.casino.sound_in(0.0, Cue::WinSmall, 0.0, 0.8);

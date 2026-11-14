@@ -620,6 +620,8 @@ impl PyrApp {
         let done = shown >= r.spins.len();
         let mut held: Vec<(u8, Fire, Option<f32>)> = o.fires.iter().map(|(sp, f)| (*sp, *f, None)).collect();
         let mut left = dg::RESPINS;
+        // (How long ago the last fireball landed: RESET TO 3! shows a moment after each.)
+        let mut reset_ago: Option<f32> = None;
         for (n, caught) in r.spins.iter().enumerate().take(shown) {
             if caught.is_empty() {
                 left = left.saturating_sub(1);
@@ -628,6 +630,7 @@ impl PyrApp {
                 // (How long ago it landed, for its burst.)
                 let ago = k - (n as f32 + 1.0) * RESPIN_S;
                 held.extend(caught.iter().map(|(sp, f)| (*sp, *f, Some(ago))));
+                reset_ago = Some(ago);
             }
         }
         // Sounds: a thump for each fireball that lands, a tick for a respin gone.
@@ -680,19 +683,44 @@ impl PyrApp {
                 }
             }
         }
-        // Over the board: the respins left, the board's total, the spots filled.
-        let top = frame.top() - 4.0;
-        let hdr = Rect::from_center_size(pos2(frame.center().x, top - 22.0), vec2(frame.width().min(560.0), 40.0));
-        p.rect_filled(hdr, theme::r(20), Color32::from_black_alpha(220));
-        p.rect_stroke(hdr, theme::r(20), Stroke::new(1.5f32, EMBER), StrokeKind::Inside);
-        p.text(hdr.left_center() + vec2(16.0, 0.0), Align2::LEFT_CENTER, if o.super_respins { "SUPER ×3" } else { "RESPINS" }, theme::bold_font(12.5), if o.super_respins { col::GOLD2 } else { col::MUTED });
-        for i in 0..dg::RESPINS {
-            let c = hdr.left_center() + vec2(90.0 + i as f32 * 22.0, 0.0);
-            let on = i < left;
-            p.circle_filled(c, 7.5, if on { EMBER } else { Color32::from_white_alpha(25) });
+        // Over the board (0.13.6's, as 0.13.28 has it): the respins left big and plain, as lamps,
+        // the board's total, the spots filled; RESET TO 3! when a fireball puts them back.
+        let hdr = Rect::from_min_max(pos2(frame.center().x - frame.width().min(620.0) / 2.0, frame.top() - 54.0), pos2(frame.center().x + frame.width().min(620.0) / 2.0, frame.top() - 6.0));
+        p.rect_filled(hdr, theme::r(24), Color32::from_black_alpha(220));
+        p.rect_stroke(hdr, theme::r(24), Stroke::new(1.5f32, EMBER), StrokeKind::Inside);
+        p.text(pos2(hdr.left() + 17.0, hdr.top() + 15.0), Align2::LEFT_CENTER, "RESPINS LEFT", theme::bold_font(11.0), col::MUTED);
+        if o.super_respins {
+            p.text(pos2(hdr.left() + 17.0, hdr.top() + 32.0), Align2::LEFT_CENTER, "SUPER ×3", theme::bold_font(11.0), col::GOLD2);
         }
-        glow_text(&p, hdr.center() + vec2(30.0, 0.0), Align2::CENTER_CENTER, &format!("BOARD {}", chips_text(board)), theme::bold_font(18.0), col::GOLD2, EMBER.gamma_multiply(0.5));
-        p.text(hdr.right_center() - vec2(16.0, 0.0), Align2::RIGHT_CENTER, format!("SPOTS {}/15", held.len()), theme::bold_font(14.0), Color32::WHITE);
+        let lamp = |i: u32| pos2(hdr.left() + 117.0 + i as f32 * 26.0, hdr.center().y);
+        for i in 0..dg::RESPINS {
+            let c = lamp(i as u32);
+            if (i as usize) < left as usize {
+                radial(&p, c, 17.0, EMBER.gamma_multiply(0.35), Color32::TRANSPARENT);
+                p.circle_filled(c, 10.0, EMBER);
+                p.circle_stroke(c, 10.0, Stroke::new(1.5f32, col::GOLD2));
+            } else {
+                p.circle_filled(c, 10.0, Color32::from_white_alpha(25));
+                p.circle_stroke(c, 10.0, Stroke::new(1.0f32, Color32::from_white_alpha(40)));
+            }
+        }
+        glow_text(&p, hdr.center() + vec2(30.0, 2.0), Align2::CENTER_CENTER, &format!("BOARD {}", chips_text(board)), theme::bold_font(18.0), col::GOLD2, EMBER.gamma_multiply(0.5));
+        p.text(hdr.right_center() + vec2(-17.0, 0.5), Align2::RIGHT_CENTER, format!("SPOTS {}/15", held.len()), theme::bold_font(14.0), Color32::WHITE);
+        if let Some(ago) = reset_ago
+            && (0.0..1.1).contains(&ago)
+        {
+            let fade = 1.0 - ago / 1.1;
+            glow_text(&p, pos2(lamp(1).x, frame.top() + 18.0 - 11.0 * ago), Align2::CENTER_CENTER, "RESET TO 3!", theme::bold_font(18.0), col::GOLD2.gamma_multiply(fade), EMBER.gamma_multiply(fade));
+        }
+        // Under the board: what the lamps mean.
+        if !done && left > 0 {
+            let words = format!("{left} respin{} left · a new fireball puts it back to {}", if left == 1 { "" } else { "s" }, dg::RESPINS);
+            let g = p.layout_no_wrap(words, theme::bold_font(13.0), Color32::WHITE);
+            let pill = Rect::from_center_size(pos2(frame.center().x, frame.bottom() + 23.5), vec2(g.size().x + 26.0, 26.0));
+            p.rect_filled(pill, theme::r(13), Color32::from_black_alpha(225));
+            p.rect_stroke(pill, theme::r(13), Stroke::new(1.0f32, EMBER.gamma_multiply(0.7)), StrokeKind::Inside);
+            p.galley(pill.center() - g.size() / 2.0, g, Color32::WHITE);
+        }
         if done {
             self.dragon_collect(ui, s, &o, &r, reels, now);
         }

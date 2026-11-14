@@ -774,7 +774,7 @@ How (decided while starting it):
       raised while a page draws (roulette, baccarat and craps setting bets to fit a table, 0.13.0's
       code) waits for the frame to finish, and so does the games' volume moved; the invite list
       and the volume take what they need from the frame. (Found here: inviting froze a test Pyr.)
-- [ ] Mini-game backgrounds (0.13.4), bonus games clearer (0.13.6), Keno and Dice tweaks
+- [x] Mini-game backgrounds (0.13.4), bonus games clearer (0.13.6), Keno and Dice tweaks
   - [x] Reel Row's twelve mini games side by side with 0.13.28's (each bought on both, played
         through): 0.13.28's scenes (the places only, nothing of the pieces painted in); the
         Champagne Tower in the middle of its stage; the Treasure Match's chests in the middle
@@ -792,6 +792,22 @@ How (decided while starting it):
         over the claw's carriage (0.13.28's carriage hid it). Not seen: the Cargo Run's route
         past 281× (taken as straight from the 250× mark to the black hole: the marks' places
         agree with it).
+  - [x] Ember Respins (0.13.6), side by side with 0.13.28's: over the board a plate as wide as
+        the board (620 at most), RESPINS LEFT and three big lamps (lit, or grey once used),
+        the board's total, the spots; SUPER ×3 under RESPINS LEFT in the Super ones; RESET TO 3!
+        over the lamps' middle whenever a fireball lands (rising and fading over a second); under
+        the board "3 respins left · a new fireball puts it back to 3" (1 respin left, singular),
+        gone once they're over. Measured at 1100, 1280 and 1600 wide.
+  - [x] Keno (0.13.7): a win counts up to its total (about a second, slowing to it) in bigger
+        words than a loss's (26 to 21), and is called out "1 OF 1 · A WIN"; playing by itself it
+        waits 2.65 s after a win before the next draw (turbo too), 0.75 s after a loss (0.4 in
+        turbo), from the result, as 0.13.28's (filmed: draws, waits and count to the frame). No
+        sound for the count (0.13.28's recorded: none). Dice (0.13.6): rolling by itself, 0.35 s
+        after a loss, 1.55 s after a win, 2.6 s after a big one (its show faded out by the next
+        roll), as 0.13.28's filmed. Keno and Dice keep going through wins unless "A big win stops
+        it" and it's a big one (0.13.4). Unverified: the waits at a real PC's frame rate (here a
+        frame is about 80 ms, so the rebuild's came 0.05 to 0.1 s late, as anything timed by
+        frames does here).
 
 ### New in the rebuild
 - [x] Prop bets in chat, shared: one market per prop for everyone in the channel, Pyr Casino

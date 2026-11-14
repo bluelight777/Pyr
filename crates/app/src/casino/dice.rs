@@ -106,9 +106,12 @@ impl PyrApp {
             if let Some(sh) = ui_s.show.as_mut() {
                 sh.2 = true;
             }
-            // (A big win: ten times the bet or more.)
-            if ui_s.auto.spun(o.paid >= o.chips * 10) {
-                ui_s.next_at = Some(now + Duration::from_millis(350));
+            // (A big win: ten times the bet or more. Rolling by itself, a win stays up a moment
+            // to be seen, a big one longer, 0.13.6: 0.13.28's waits, filmed, from the result.)
+            let big = o.paid >= o.chips * 10;
+            if ui_s.auto.spun(big) {
+                let wait = if big { 2600 } else if o.won { 1550 } else { 350 };
+                ui_s.next_at = Some(now + Duration::from_millis(wait));
             }
             if o.won {
                 self.poker.casino.sound_in(0.0, Cue::WinSmall, 0.0, 0.7);
