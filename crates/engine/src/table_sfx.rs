@@ -516,7 +516,7 @@ pub fn pot_parts(rng: &mut Rng) -> (Vec<f32>, Vec<f32>) {
 }
 
 /// How loud the pot's push is, and its stacks' first clicks.
-const POT: (f32, f32) = (0.953, 0.778);
+const POT: (f32, f32) = (0.90, 0.778);
 
 /// The push's resonance (Hz at the start and the end, Q), its tail under the fade (0.2: 14 dB
 /// under, dying 57 ms) and how fast it dies from the start (ms): fitted to 0.13.28's showdowns

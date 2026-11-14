@@ -207,10 +207,11 @@ impl PyrApp {
         self.poker.heard = Some((v.id, v.hand, n));
         let me = v.my_seat;
         // Toward the seat, as far as 0.13.28 places its table's sounds (heard at a six-seat table,
-        // its side seats 0.954 of the way out: checks, chips and folds alike 0.533 out under a
-        // constant-power law, the far side 0.553 of the near where its soft clipping leaves them
-        // be; `poker_sfx`).
+        // its side seats 0.954 of the way out: checks and chips 0.533 out under a constant-power
+        // law, the far side 0.553 of the near where its soft clipping leaves them be, `poker_sfx`;
+        // folds a little further, 0.563).
         let pan = |seat: usize| ((lay.seat(seat).x - lay.c.x) / lay.a * 0.5586).clamp(-0.8, 0.8);
+        let pan_fold = |seat: usize| ((lay.seat(seat).x - lay.c.x) / lay.a * 0.590).clamp(-0.8, 0.8);
         // (Cue, where, how loud, how long after now: 0.13.28 sounds an action 40 ms after the board's
         // card it brings, but with the hands shown at a showdown; the pot pushed to whoever was
         // folded to 38 ms after the fold, at a showdown with the cards shown; the blinds' chips
@@ -227,7 +228,7 @@ impl PyrApp {
                 Event::Street { .. } => cues.push((Cue::Flip, 0.0, 0.9, 0.0)),
                 Event::Posted { seat, .. } => cues.push((Cue::Chips, pan(*seat), 0.45, if dealt { 0.1 } else { 0.0 })),
                 Event::Acted { seat, action, stack, .. } => cues.push(match action {
-                    Action::Fold => (Cue::Fold, pan(*seat), 0.7, after),
+                    Action::Fold => (Cue::Fold, pan_fold(*seat), 0.7, after),
                     Action::Check => (Cue::Check, pan(*seat), 0.8, after),
                     _ if *stack == 0 => (Cue::AllIn, pan(*seat), 0.9, after),
                     _ => (Cue::Chips, pan(*seat), 0.8, after),
