@@ -533,7 +533,8 @@ How (decided while starting it):
       do (6 higher); a debug build no longer panics at a tournament's table (buy-in sums
       saturate). A filled seat's gold ring and "PLAY" (a lighter brown than the amount) as
       0.13.28's (found side by side with Bounty Poker's). Not matched: 0.13.28's finale starts
-      4.4 to 5.1 s after the last hand (the rebuild: 4.4); its sounds not compared (0.13.0's).
+      4.4 to 5.1 s after the last hand (the rebuild: 4.4). Its sounds heard beside 0.13.28's
+      (Nov 14, in the table sounds below): the same.
       Measurements in `rebuild/measured/bombpot.md`.
 - [x] Bounty Poker (0.13.6). The server as 0.13.28's (`bounty`, `bounty_poker`): six seats,
       1,500 chips, two-minute levels, 45 s for people then bots; half of each buy-in on that
@@ -552,8 +553,12 @@ How (decided while starting it):
       at its table's size, drawn at 0.84 it matches 0.13.28's at 1280 wide; the table's sizes
       are the scaling item's). Not seen on 0.13.28: a person's knockout (paid on the spot, its
       card says), a split pot's knockout. Measurements in `rebuild/measured/bounty.md`. A
-      knockout of mine shows "BOUNTY +n" under a crosshair at the table's top for three seconds:
-      in, but not yet seen side by side with 0.13.28's (it needs a knockout by me there).
+      knockout of mine shows "BOUNTY +n" under a crosshair at the table's top for three seconds,
+      as 0.13.28's: filmed beside one of Olive's knockouts there (Nov 14, lossless, a burst
+      through it) with the rebuild's shown at will (debug builds: `PYR_DEV_KO=500`), the
+      crosshair's centre 16.5 over the top seat's middle (it was on it) to a tenth of a pixel, the
+      words 69 under it (rows to the pixel, the glyphs' edges within one), the same size, colour
+      and glow, there about three seconds.
 - [x] High stakes and higher-than-high tables, 500K/1M/5M chips (0.13.6): three tables of each,
       0.13.28's names and bets (Hearth 10–1,000, High Limit 500–100,000, Crown Room 10,000 to
       10,000,000; Monte Carlo, Riviera High Rollers to 500,000, Grand Salle; Salon Privé, Black

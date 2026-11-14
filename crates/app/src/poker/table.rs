@@ -166,11 +166,13 @@ impl PyrApp {
         {
             self.bomb_overlay(ui, s, tid, lay.c, lay.a, lay.b);
         }
-        // Bounty Poker: my knockouts, over the top seat.
+        // Bounty Poker: my knockouts, over the top seat (0.13.28's a little above its middle:
+        // measured beside the rebuild's at 1280x800, the crosshair's centre 16.5 higher, to a
+        // tenth of a pixel).
         if let Some(tid) = v.tourney
             && s.poker.tourney.get(&tid).is_some_and(|tv| tv.rules.bounty.is_some())
         {
-            let top = super::felt::on_oval(lay.c, lay.a + 16.0, lay.b + 14.0, 1.5 * std::f32::consts::PI);
+            let top = super::felt::on_oval(lay.c, lay.a + 16.0, lay.b + 14.0, 1.5 * std::f32::consts::PI) - vec2(0.0, 16.5 * k);
             self.bounty_overlay(ui, s, tid, top, k);
         }
         self.table_sounds(&lay, t);

@@ -155,6 +155,19 @@ impl PyrApp {
                 self.poker.knockouts.shown = Some((tid, Instant::now(), e.bounties_won - before));
             }
         }
+        // (Debug builds only: PYR_DEV_KO=250 shows a knockout of that much every eight seconds at
+        // any Bounty table, to film it beside 0.13.28's.)
+        #[cfg(debug_assertions)]
+        if let Some(amount) = std::env::var("PYR_DEV_KO").ok().and_then(|a| a.parse::<u64>().ok()) {
+            static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+            if let Ok(mut last) = LAST.lock()
+                && last.is_none_or(|t| t.elapsed().as_secs_f32() >= 8.0)
+            {
+                *last = Some(Instant::now());
+                self.poker.knockouts.shown = Some((tid, Instant::now(), amount));
+            }
+            ui.ctx().request_repaint_after(Duration::from_millis(500));
+        }
         let Some((shown_tid, at, amount)) = self.poker.knockouts.shown else { return };
         let age = at.elapsed().as_secs_f32();
         if shown_tid != tid || age >= KO_S {
@@ -172,7 +185,7 @@ impl PyrApp {
         }
         let alpha = (age / 0.1).min(1.0) * (1.0 - out);
         let glow = Color32::from_rgba_unmultiplied(0xe8, 0x20, 0x10, 110).gamma_multiply(alpha);
-        glow_text(p, top + vec2(0.0, 70.0 * k), Align2::CENTER_CENTER, &format!("BOUNTY +{}", chips_text(amount)), theme::bold_font(45.0 * k), col::GOLD2.gamma_multiply(alpha), glow);
+        glow_text(p, top + vec2(0.0, 69.0 * k), Align2::CENTER_CENTER, &format!("BOUNTY +{}", chips_text(amount)), theme::bold_font(45.0 * k), col::GOLD2.gamma_multiply(alpha), glow);
     }
 
     /// The Bounty Poker card in the sit & gos (0.13.6), as 0.13.28 draws it: what it is, a Play
