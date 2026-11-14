@@ -77,8 +77,10 @@ pub struct DomTableUi {
     cover: Option<u32>,
     /// A tile picked that goes on either end: the end's to be picked.
     picked: Option<Tile>,
-    /// The move last sent (the hand's number and how far it had got), not to send it twice.
-    sent: Option<(u64, usize, bool)>,
+    /// The move last sent, and where the hand had got to (its number, its moves, a double on
+    /// the table), not to send it twice. (Another move there goes: one the table refused, a
+    /// ¡Doblo! past what everyone covers, mustn't keep me from playing.)
+    sent: Option<(u64, usize, bool, Move)>,
     /// When each tile in the line came (by hand and tile), for its slide in; the hand they're of.
     came: HashMap<Tile, Instant>,
     hand_of: Option<u64>,
@@ -1038,14 +1040,15 @@ impl PyrApp {
         }
         // My turn come round (not as a hand starts, nor while a double's being answered).
         if h.over.is_none() && h.offer.is_none() && v.my_seat.is_some_and(|m| h.to_act == Some(m) && h.seats.contains(&m)) {
-            casino.sound_in(0.6, Cue::Turn, 0.0, V_TURN);
+            // (0.13.28's: 0.51-0.63 s after the move's view, side by side.)
+            casino.sound_in(0.5, Cue::Turn, 0.0, V_TURN);
         }
     }
 
     /// Sends a move (once for where the hand's got to).
     fn dom_send(&mut self, s: &ServerView, v: &DomView, m: Move) {
         let Some(h) = &v.hand else { return };
-        let at = (v.round_no, h.moves, h.offer.is_some());
+        let at = (v.round_no, h.moves, h.offer.is_some(), m);
         if self.poker.casino.domt.sent == Some(at) {
             return;
         }
@@ -1133,7 +1136,9 @@ impl PyrApp {
                     self.dom_send(s, v, m);
                 }
             }
-            if h.allowed.contains(&Move::Double) {
+            // (The table lists a ¡Doblo! past what everyone in the hand covers, and refuses it:
+            // 0.13.28 shows it only as far as they cover.)
+            if h.allowed.contains(&Move::Double) && h.mult * 2 <= v.cap {
                 let stake = v.ante * h.mult as u64 * 2;
                 if button(ui, place(170.0), "double", &format!("¡Doblo! ×{}", h.mult * 2), Some(format!("stake to {}", chips_text(stake))), DOBLO, true) {
                     self.dom_send(s, v, Move::Double);

@@ -512,6 +512,30 @@ How (decided while starting it):
       (only shown by servers older than 0.12, which have neither) keeps 0.13.0's layout; the
       server takes buys and lays there as 0.13.28's does.
 - [ ] Dominó Cubano tables in the casino, to 10,000,000, El Presidente (0.13.11/12)
+  - [x] The game and the server as 0.13.28's (`casino_domino`): Pairs and Solo, double-nine,
+        ten tiles each (Solo two to four, drawing from what's left), capicúa half again (never
+        on a double), chiva double, ¡Doblo! to ×8 within what everyone covers (answered by the
+        people on the answering side, 25 s, taken if unanswered; bots take every one), 25 s a
+        turn and 3 s a turn after a person's time runs out; 86 of 0.13.28's hands played again
+        move for move (`crates/poker/tests/domino`), its words, its views key for key, its
+        fourteen bots.
+  - [x] The page as 0.13.28's, side by side to the pixel (`rebuild/measured/domino.md`): the
+        tables strip and New table, the room, the table, the line laid as it lays it (turning at
+        9.5 tiles' halves, doubles across), the seats, plates and turn rings, the cube, the
+        rack, the controls and covers, the ¡Doblo! offer, the hand's end; the Games menu line
+        (NEW). The floor's card: its lettering not yet checked against 0.13.28's.
+  - [x] Its sounds (`measured/domino.md`): the tiles, the opening tile, the slam and the
+        shuffle made sample for sample as 0.13.28 makes them, each tile placed toward who laid
+        it and sounding as it lands; the table's knock, all-in and chips for a pass, a ¡Doblo!
+        and an accept, my turn's bells, a win's; heard side by side with 0.13.28 at one table,
+        watching and both sitting (`measured/domino.md`). Fixed on the way: ¡Doblo! showed past
+        what everyone covered (0.13.28 shows it only up to the cap), and a refused move stopped
+        any other from going (the turn ran out).
+        Not the same: the table's own sounds' tails (0.13.28's differ between the two sides
+        after the first 25 ms), and its all-in's shove is brighter than the rebuild's (the
+        poker table's sounds: to look at).
+  - [ ] Not yet seen on 0.13.28: what the side that doubled sees while it's answered, Solo's
+        Draw and the pile (and their sounds), a Chiva, a double offered to me.
 - [x] Poker: the suits on bot faces and card pips (0.13.28's are one smooth shape each; the
       rebuild's are 0.13.0's circles and polygons), the Shark's crown and star
       (`measured/newtable.md`, `measured/cards.md`).
