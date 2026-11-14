@@ -624,12 +624,23 @@ How (decided while starting it):
         out", the draw's sound as loud as 0.13.28's, the felt's Solo words.
   - [x] A ¡Doblo! watched (the banner, as the doubling side's) and put to me as the next in
         turn (my tiles bright, my time on the bar), side by side.
-  - [ ] Not yet seen on 0.13.28: a Chiva (the game plays it as 0.13.28's rules, unseen on its
-        screen: none in its 86 hands played here, and one needs an opponent who never laid a
-        tile). Its words read off 0.13.28's server: "¡Chiva!", and "¡Capicúa y Chiva!" for a hand
-        that's both (the rebuild said "¡Capicúa!": fixed, with a test). 0.13.28's app also has a
-        line of its own with "Chiva & " and "· +N% bonus · ×M" beside the hand's end box (format
-        pieces in its binary, never on screen here): the rebuild doesn't draw it.
+  - [x] A Chiva, a Capicúa and both, on 0.13.28's screen: a development server (the rebuilt one,
+        `PYR_DEV_DOM_OVER=capicua`, `chiva` or both, debug builds only) makes every hand won by
+        a dominó one, and 0.13.28 watched and played them (Pairs and Solo, ×1 and ×2) beside the
+        rebuild. Its hand-end box, measured on lossless captures, settled frames, side by side:
+        black 200 (not 217); the how 12.5 above the middle (its edge's centre of mass on
+        0.13.28's to 0.1 px), bold 24 gold2 edged dark (glow_text, black 120; not plain bold
+        22); a Capicúa or Chiva's box edged ember, its how bold 28 gold2 lit ember round (2 px);
+        the line 18 below: "Olive & Chucho · pot 400 · +150% bonus · ×2" (the bonus was
+        missing); a tranque's line 14 under the box, and in Solo
+        "(P1: 52  ·  P2: 15)" (the rebuild named them). All fixed (`result_line`, with a test):
+        the box now the same to the pixel but for the tiles under it. Mine called out as before
+        ("¡CAPICÚA Y CHIVA!", +385 or −100); the ¡Capicúa! achievement's toast; the words
+        "Chiva & " in 0.13.28's binary never came on its screen in any of this.
+  - [ ] The line up and down: 0.13.28's sits 0.5 to 1 px higher than the rebuild's in most
+        hands, and 2.7 px in one (a line going up three rows from the first tile), measured by
+        matching the two pictures over 7 hands. Not explained yet (the middle of the tiles'
+        middles fits the rest; their extents and their average don't).
 - [x] Poker: the suits on bot faces and card pips (0.13.28's are one smooth shape each; the
       rebuild's are 0.13.0's circles and polygons), the Shark's crown and star
       (`measured/newtable.md`, `measured/cards.md`).

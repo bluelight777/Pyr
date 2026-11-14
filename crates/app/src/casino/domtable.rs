@@ -366,6 +366,14 @@ fn side_names(v: &DomView, seats: &[u8]) -> String {
     names.join(" & ")
 }
 
+/// The line under how a hand ended: who won, the pot, a Capicúa's or Chiva's bonus, a ¡Doblo!'s
+/// stake ("Olive & Chucho · pot 800 · +150% bonus · ×2", 0.13.28's words).
+fn result_line(names: &str, pot: u64, bonus_pct: u32, mult: u32) -> String {
+    let bonus = if bonus_pct > 0 { format!(" · +{bonus_pct}% bonus") } else { String::new() };
+    let times = if mult > 1 { format!(" · ×{mult}") } else { String::new() };
+    format!("{names} · pot {}{bonus}{times}", chips_text(pot))
+}
+
 /// The pips on some tiles.
 fn pip_count(tiles: &[Tile]) -> u32 {
     tiles.iter().map(|t| (t[0] + t[1]) as u32).sum()
@@ -945,19 +953,20 @@ impl PyrApp {
         let side: Vec<u8> = r.winners.clone();
         let names = side_names(v, &side);
         let r_box = Rect::from_center_size(pos2(table.center().x, table.top() + 139.0 * k), vec2(240.0, 74.0));
-        p.rect_filled(r_box, theme::r(14), Color32::from_black_alpha(217));
-        p.rect_stroke(r_box, theme::r(14), Stroke::new(2.0f32, col::GOLD), StrokeKind::Inside);
-        p.text(r_box.center() - vec2(0.0, 14.0), Align2::CENTER_CENTER, &r.how, theme::bold_font(22.0), col::GOLD2);
-        let times = if r.mult > 1 { format!(" · ×{}", r.mult) } else { String::new() };
-        p.text(r_box.center() + vec2(0.0, 17.0), Align2::CENTER_CENTER, format!("{names} · pot {}{times}", chips_text(r.pot)), theme::font(13.0), col::TEXT);
+        // (How it ended, 12.5 above the middle: bold 24 gold2 edged dark; a Capicúa or a Chiva bold
+        // 28 lit ember round in a box edged ember, the bonus on the line under it. 0.13.28's,
+        // measured side by side to the pixel.)
+        let bonus = r.bonus_pct > 0;
+        p.rect_filled(r_box, theme::r(14), Color32::from_black_alpha(200));
+        p.rect_stroke(r_box, theme::r(14), Stroke::new(2.0f32, if bonus { col::EMBER } else { col::GOLD }), StrokeKind::Inside);
+        let (size, edge) = if bonus { (28.0, col::EMBER) } else { (24.0, Color32::from_black_alpha(120)) };
+        super::glow_text(&p, r_box.center() - vec2(0.0, 12.5), Align2::CENTER_CENTER, &r.how, theme::bold_font(size), col::GOLD2, edge);
+        p.text(r_box.center() + vec2(0.0, 18.0), Align2::CENTER_CENTER, result_line(&names, r.pot, r.bonus_pct, r.mult), theme::font(13.0), col::TEXT);
         // A tranque: who had the fewest pips.
         if let Some(Over::Blocked { pips, .. }) = &h.over {
-            let each: Vec<String> = if h.kind == Kind::Pairs {
-                pips.iter().enumerate().map(|(i, n)| format!("Side {}: {n}", i + 1)).collect()
-            } else {
-                pips.iter().zip(&h.seats).map(|(n, seat)| format!("{}: {n}", v.seats.get(*seat as usize).cloned().flatten().map(|x| x.name).unwrap_or_default())).collect()
-            };
-            p.text(pos2(r_box.center().x, r_box.bottom() + 13.0), Align2::CENTER_CENTER, format!("Tranque: fewest pips wins  ({})", each.join("  ·  ")), theme::font(12.0), col::MUTED);
+            // (Each side, or in Solo each player by their place: "P1: 52  ·  P2: 15", 0.13.28's.)
+            let each: Vec<String> = pips.iter().enumerate().map(|(i, n)| format!("{}{}: {n}", if h.kind == Kind::Pairs { "Side " } else { "P" }, i + 1)).collect();
+            p.text(pos2(r_box.center().x, r_box.bottom() + 14.0), Align2::CENTER_CENTER, format!("Tranque: fewest pips wins  ({})", each.join("  ·  ")), theme::font(12.0), col::MUTED);
         }
         // Mine, once.
         if self.poker.casino.domt.told == Some(v.round_no) {
@@ -1285,6 +1294,17 @@ fn arc(p: &egui::Painter, c: Pos2, r: f32, frac: f32, stroke: Stroke) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The line under a hand's end, as 0.13.28's read on its screen (a Capicúa, a Chiva, both
+    /// at ×2, and plain ones).
+    #[test]
+    fn a_hands_end_line_is_0_13_28s() {
+        assert_eq!(result_line("Yuneisy & Caridad", 400, 0, 1), "Yuneisy & Caridad · pot 400");
+        assert_eq!(result_line("Tía Cuca & Rigo", 400, 50, 1), "Tía Cuca & Rigo · pot 400 · +50% bonus");
+        assert_eq!(result_line("Friend & Tata", 400, 100, 1), "Friend & Tata · pot 400 · +100% bonus");
+        assert_eq!(result_line("Yoandri & Marlenis", 800, 150, 2), "Yoandri & Marlenis · pot 800 · +150% bonus · ×2");
+        assert_eq!(result_line("Olive & Chucho", 1600, 0, 4), "Olive & Chucho · pot 1,600 · ×4");
+    }
 
     /// Dominó's sounds are 0.13.28's, sample for sample: fitted to what it played (every tile, the
     /// opening one, a hand won by a tile, a hand's shuffle), the model's values here.

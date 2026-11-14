@@ -537,6 +537,19 @@ impl DomRoom {
     /// share if they won), their records told, the house's seed shown, the next fingerprint.
     fn settle(&mut self, now: u64, out: &mut Output) {
         let Stage::Playing { hand, seeds, uids, .. } = std::mem::replace(&mut self.stage, Stage::Settled { until: now + SETTLE_MS }) else { return };
+        // (Development builds only: `PYR_DEV_DOM_OVER=capicua`, `chiva` or both makes every hand
+        // won by a dominó that, to see how an app shows one: a Chiva hardly ever comes.)
+        #[cfg(debug_assertions)]
+        let hand = {
+            let mut hand = hand;
+            if let Ok(v) = std::env::var("PYR_DEV_DOM_OVER")
+                && let Some(Over::Domino { capicua, chiva, .. }) = &mut hand.over
+            {
+                *capicua = v.contains("capicua");
+                *chiva = v.contains("chiva");
+            }
+            hand
+        };
         let pay = domino::payout(&hand, self.ante);
         let over = hand.over.clone().unwrap_or(Over::Fold { winner: 0 });
         let how = how(&over).to_string();
