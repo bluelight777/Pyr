@@ -413,6 +413,10 @@ pub fn render(c: Cue, pan: f32) -> Vec<f32> {
         }
         return held(st);
     }
+    // The all-in in its parts, placed as 0.13.28 places them (`table_sfx::all_in_stereo`).
+    if c == Cue::AllIn {
+        return held(crate::table_sfx::all_in_stereo(pan, &mut fresh()));
+    }
     if let Some(mono) = table_sound(c) {
         // Placed (the cards, dealt, turned and folded, in 0.13.28's room).
         return held(crate::table_sfx::place(&mono, pan, matches!(c, Cue::Deal | Cue::Card | Cue::Flip | Cue::Fold)));
@@ -551,6 +555,24 @@ mod tests {
         // at baccarat.)
         let held = (0..40).filter(|_| (render(Cue::Flip, 0.0).iter().fold(0.0f32, |m, x| m.max(x.abs())) - TABLE_PEAK).abs() < 1e-4).count();
         assert!(held >= 30, "{held}");
+    }
+
+    /// The all-in as 0.13.28 places it: from a side seat (0.44) the shove 1.2 times as far out
+    /// (R/L 5.1 dB, give or take the room's), the swell in the middle (0.13.28's: 5.0-5.2 and -0.6
+    /// dB); in the room (the two sides differ only from 16 ms on, in the middle).
+    #[test]
+    fn the_all_in_is_shoved_from_the_seat_over_a_swell_in_the_middle() {
+        let rl = |s: &[f32], a: f32, b: f32| {
+            let (l, r) = s[ms(a) * 2..ms(b) * 2].chunks(2).fold((0.0f64, 0.0f64), |(l, r), x| (l + (x[0] as f64).powi(2), r + (x[1] as f64).powi(2)));
+            10.0 * (r / l).log10()
+        };
+        for _ in 0..5 {
+            let s = render(Cue::AllIn, 0.44);
+            let (shove, swell) = (rl(&s, 20.0, 300.0), rl(&s, 800.0, 1300.0));
+            assert!((shove - 5.1).abs() < 0.4 && swell.abs() < 1.0, "{shove} {swell}");
+            let side: Vec<f32> = render(Cue::AllIn, 0.0).chunks(2).map(|x| x[0] - x[1]).collect();
+            assert!(side[..ms(15.0)].iter().all(|x| x.abs() < 1e-6) && side[ms(16.0)..ms(300.0)].iter().any(|x| x.abs() > 1e-4));
+        }
     }
 
     /// The pot as 0.13.28 pushes and stacks it, the same every time: the push faded out by 493 ms

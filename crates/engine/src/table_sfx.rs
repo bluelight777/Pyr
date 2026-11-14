@@ -85,12 +85,6 @@ impl Biquad {
         Biquad::new([(1.0 + c) / 2.0, -(1.0 + c), (1.0 + c) / 2.0], [1.0 + al, -2.0 * c, 1.0 - al])
     }
 
-    /// Retunes a low-pass in place (keeping its state), for a sweep.
-    fn set_lowpass(&mut self, f: f32, q: f32) {
-        let n = Biquad::lowpass(f, q);
-        (self.b0, self.b1, self.b2, self.a1, self.a2) = (n.b0, n.b1, n.b2, n.a1, n.a2);
-    }
-
     fn run(&mut self, x: f32) -> f32 {
         let y = self.b0 * x + self.b1 * self.x1 + self.b2 * self.x2 - self.a1 * self.y1 - self.a2 * self.y2;
         self.x2 = self.x1;
@@ -180,28 +174,6 @@ fn felt(o: &mut [f32], at: usize, amp: f32, rng: &mut Rng) {
 /// The felt: the thump's and the body's time constants (s), the body's low-pass (Hz, Q) and how
 /// loud it is against the thump.
 const FELT: (f32, f32, f32, f32, f32) = (0.017, 0.015, 350.0, 0.5, 10.0);
-
-/// Something sliding over the cloth (a card, or chips pushed): noise between `low` Hz and a top
-/// falling from `top0` to `top1` Hz as it slows, rising over `attack`, holding a moment and fading
-/// faster and faster.
-#[allow(clippy::too_many_arguments)]
-fn slide(o: &mut [f32], at: usize, len: usize, attack: f32, amp: f32, low: f32, top0: f32, top1: f32, rng: &mut Rng) {
-    let mut hp = Biquad::highpass(low, 0.5);
-    let mut lp = Biquad::lowpass(top0, 0.6);
-    let a = ms(attack).max(1);
-    let hold = a + ms(20.0);
-    let tail = (len / 4).max(1);
-    for i in 0..len {
-        let k = i as f32 / len as f32;
-        if i % 32 == 0 {
-            lp.set_lowpass(top0 + (top1 - top0) * k, 0.6);
-        }
-        let rise = (i as f32 / a as f32).min(1.0);
-        let fall = if i < hold { 1.0 } else { (-((i - hold) as f32 / RATE) / (0.43 * len as f32 / RATE)).exp() };
-        let end = if len - i < tail { (0.5 - 0.5 * (std::f32::consts::PI * (len - i) as f32 / tail as f32).cos()).max(0.0) } else { 1.0 };
-        add(o, at + i, lp.run(hp.run(rng.noise())) * rise * fall * end * amp);
-    }
-}
 
 /// A resonance as 0.13.28's cards sound through: two poles at `f0` (`f0 / q` wide) and a zero at
 /// DC only, so -6 dB an octave either side of the peak with the top end kept (no zero at
@@ -552,32 +524,96 @@ const PUSH: (f32, f32, f32, f32, f32) = (1043.0, 2132.0, 0.746, 0.2, 250.0);
 /// stack's last click).
 const POT_RING: [f32; 4] = [1.0, 1.5, 3.9, 11.0];
 
-/// Everything in: the stacks shoved over the felt, then pouring into the pot (about twenty chips,
-/// quicker and quicker) over a low A and E swelling under them.
+/// Everything in, as 0.13.28's: the stacks shoved over the felt (360 ms, through the slides'
+/// resonance, 505 Hz rising to 1.14 kHz), landing with a thump and the chips pouring from 2.5 ms
+/// after it (about thirty, 360 to 700 ms on, quicker and quicker, now and then two together,
+/// softer and softer), over a low A and E swelling from 320 ms and cut off 1.4 s on
+/// (`measured/cardsounds.md`). As one sound (placed: `all_in_stereo`).
 pub fn all_in(rng: &mut Rng) -> Vec<f32> {
-    let mut o = vec![0.0; ms(1700.0)];
-    // The shove lasts till the chips start pouring.
-    let start = rng.range(355.0, 420.0);
-    slide(&mut o, 0, ms(start), 40.0, 1.64, 250.0, 1400.0, 900.0, rng);
-    felt(&mut o, ms(start), 0.14, rng);
-    let mut t = start;
-    let mut gap = rng.range(20.0, 30.0);
-    for _ in 0..(18 + (rng.f() * 5.0) as usize) {
-        chip(&mut o, ms(t), rng.range(2050.0, 2310.0), 0.88 * rng.range(0.7, 1.0), rng);
-        t += gap * rng.range(0.6, 1.4);
-        gap = (gap * 0.93).max(8.0);
+    let (mut o, chips, swell) = all_in_parts(rng);
+    for (at, c) in chips {
+        for (i, x) in c.into_iter().enumerate() {
+            add(&mut o, at + i, x);
+        }
     }
-    // The swell: A1 rising over half a second, E2 with it, both cut off 1.15 s on (a click, as
-    // 0.13.28's are).
-    let at = ms(start);
-    for i in 0..ms(1150.0) {
-        let t = i as f32 / RATE;
-        let a = (t / 0.5).min(1.0) * (-(t - 0.5).max(0.0) / 0.29).exp();
-        let e = (t / 0.1).min(1.0) * (-(t - 0.2).max(0.0) / 0.29).exp();
-        add(&mut o, at + i, (TAU * 55.0 * t).sin() * a * 0.112 + (TAU * 82.41 * t).sin() * e * 0.049);
+    for (a, b) in o.iter_mut().zip(swell) {
+        *a += b;
     }
     o
 }
+
+/// The all-in's parts: the shove and its thump, each chip poured (where it starts, and it), and
+/// the swell.
+#[allow(clippy::type_complexity)]
+pub fn all_in_parts(rng: &mut Rng) -> (Vec<f32>, Vec<(usize, Vec<f32>)>, Vec<f32>) {
+    let mut o = vec![0.0; ms(1700.0)];
+    card_slide(&mut o, 0, ms(360.0), (34.6, 81.2, 154.6, 0.055), ALLIN.0, (505.0, 1143.0, 0.827), rng);
+    felt(&mut o, ms(357.5), ALLIN.1, rng);
+    let mut chips = Vec::new();
+    let mut t = 360.0;
+    let mut a = ALLIN.2;
+    for k in 0..30 {
+        let mut c = vec![0.0; ms(340.0)];
+        chip(&mut c, 0, rng.range(2050.0, 2310.0), a * rng.range(0.8, 1.1) * if k == 0 { 0.84 } else { 1.0 }, rng);
+        chips.push((ms(t), c));
+        t += if k == 0 { rng.range(26.0, 36.0) } else { (18.0 * (-(k as f32) / 25.0).exp() * rng.range(0.35, 1.65)).max(1.5) };
+        a *= 0.973;
+    }
+    // The swell: A1 and E2 (6.4 dB under it) rising together from 320 ms for 0.485 s, dying
+    // 0.335 s, cut off at 1.397 s (a click, as 0.13.28's are).
+    let mut swell = vec![0.0; ms(1700.0)];
+    let at = ms(320.0);
+    for i in 0..ms(1077.0) {
+        let t = i as f32 / RATE;
+        let env = (t / 0.485).min(1.0) * (-(t - 0.485).max(0.0) / 0.335).exp();
+        swell[at + i] = ((TAU * 55.0 * t).sin() + (TAU * 82.41 * t).sin() * 0.479) * env * SWELL;
+    }
+    (o, chips, swell)
+}
+
+/// The all-in placed as 0.13.28 places it (48 kHz stereo, interleaved), `pan` being the seat's, as
+/// the chips' are: the shove and its thump further out (1.2 times: R/L 5.1 dB from a side seat),
+/// each chip poured somewhere about there (0.39 either way: 0.13.28's pour is 17-18 dB wider than
+/// its shove), the swell in the middle; all of it in the room (`place`'s), fed 4 dB hotter than
+/// the cards.
+pub fn all_in_stereo(pan: f32, rng: &mut Rng) -> Vec<f32> {
+    let (shove, chips, swell) = all_in_parts(rng);
+    let n = shove.len();
+    let (mut l, mut r, mut feed) = (vec![0.0f32; n], vec![0.0f32; n], vec![0.0f32; n]);
+    let p0 = (pan * 1.2).clamp(-1.0, 1.0);
+    let mut put = |x: &[f32], at: usize, p: f32| {
+        let (gl, gr) = (((1.0 - p) / 2.0).sqrt(), ((1.0 + p) / 2.0).sqrt());
+        for (i, v) in x.iter().enumerate() {
+            if let Some(j) = (at + i < n).then_some(at + i) {
+                l[j] += v * gl;
+                r[j] += v * gr;
+                feed[j] += v * (gl + gr) / 2.0 * ALLIN_ROOM;
+            }
+        }
+    };
+    put(&shove, 0, p0);
+    for (at, c) in &chips {
+        put(c, *at, (p0 + rng.range(-0.39, 0.39)).clamp(-1.0, 1.0));
+    }
+    put(&swell, 0, 0.0);
+    let [wl, wr] = room(&feed);
+    let (kl, kr) = (1.0 + 0.34 * p0, 1.0 - 0.34 * p0);
+    let mut out = vec![0.0f32; wl.len() * 2];
+    for i in 0..wl.len() {
+        out[2 * i] = l.get(i).copied().unwrap_or(0.0) + wl[i] * kl;
+        out[2 * i + 1] = r.get(i).copied().unwrap_or(0.0) + wr[i] * kr;
+    }
+    out
+}
+
+/// The all-in's shove, its thump and its first chip, how loud.
+const ALLIN: (f32, f32, f32) = (0.9, 0.34, 0.815);
+
+/// How loud the all-in's swell is (its A1).
+const SWELL: f32 = 0.118;
+
+/// How much hotter the all-in is fed to the room than the cards (4 dB).
+const ALLIN_ROOM: f32 = 1.585;
 
 /// I won: a bell run up C, E, G, B, D, G (77 ms apart), and the pot pouring in (sixteen chips or
 /// so) from 0.38 s.
