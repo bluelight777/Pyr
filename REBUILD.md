@@ -388,7 +388,18 @@ How (decided while starting it):
       banner, no armed tag over the reels (0.13.28 has none), 0.13.28's symbol sheets. The
       machine's bar fits its width (0.13.28's ran Info and Turbo into the spin button under
       about 1,450 wide). The last reels slow and light up a scatter (or a coin) away. Bomb
-      Spins and Super Hold & Win come with the next item.
+      Spins and Super Hold & Win come with the next item. The sounds (Nov 14), heard off
+      0.13.28 on its server and the rebuild on its own (the swap, the same data and settings),
+      72 spins each, every machine, taken apart into the machines' own files
+      (`work/snd/rmgains.py`, `rmcmp.py`): a reel's stop climbs the machine's own scale (Scoville
+      and Tomb 0 1 4 5 7 semitones, Deep Sea and Gold Rush 0 2 4 7 9, Cosmic, Neon, Cauldron and
+      the Grind 0 2 3 5 7, Sugar and Cabaret 0 2 4 5 7, Frostbite 0 2 4 6 7, the Hoard 0 3 5 7
+      10); a bomb landing has its sound under its reel; the spin, stops, scatter, wins by size,
+      pops, drops, the bombs adding up, the multiplier, filling, the step, a bought round and
+      the bonus won as loud as 0.13.28's (they were 3 to 10 dB louder): now the same gains to the
+      thousandth, the stops 0.93 s apart on both. Left: a screen's wins light 0.1 s later than
+      0.13.28's sound for them, and its bursts and drops come within 0.2 s of its; Hold & Win
+      (below) not yet.
 - [x] Bonus rounds that build: Bomb Spins, Super Hold & Win (0.13.6). Play Feature's seventh
       card at 0.13.28's prices (Bomb Spins 102.80× / 97.80× / 98.60× / 98.20×, Super Hold & Win
       66.70× / 62.70× / 66.80× / 63.00×), words and order; 0.13.28's splash, "SPIN n / 10",
