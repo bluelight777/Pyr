@@ -696,7 +696,7 @@ impl PyrApp {
         let resp = ui.interact(r, ui.id().with(("rabbit", hand)), Sense::click());
         let round = egui::CornerRadius::same((19.0 * k).round() as u8);
         p.rect_filled(r, round, if resp.hovered() { Color32::from_rgb(0x34, 0x6c, 0xbc) } else { Color32::from_rgb(0x2b, 0x5e, 0xa8) });
-        p.text(r.center(), Align2::CENTER_CENTER, "Rabbit", theme::bold_font(15.0 * k), Color32::WHITE);
+        p.text(r.center() + vec2(0.0, 0.5 * k), Align2::CENTER_CENTER, "Rabbit", theme::bold_font(15.0 * k), Color32::WHITE);
         if resp.on_hover_text("See the cards that would have come").clicked() {
             self.poker.rabbit_asked = Some((v.id, hand));
             self.engine.poker(&s.key, ToServer::Rabbit { table: v.id, hand });
