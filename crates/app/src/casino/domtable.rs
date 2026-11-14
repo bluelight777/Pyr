@@ -324,6 +324,15 @@ fn button(ui: &mut egui::Ui, r: Rect, id: &str, text: &str, sub: Option<String>,
     enabled && resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
 }
 
+/// ¡Doblo!'s words: bold 18 gold, lit round their edges 1.5 px (0.13.28's, measured: thinner
+/// than the felt's outlined words).
+fn lit_text(p: &egui::Painter, at: Pos2, text: &str, glow: Color32) {
+    for (dx, dy) in [(-1.5, 0.0), (1.5, 0.0), (0.0, -1.5), (0.0, 1.5), (-1.06, -1.06), (1.06, 1.06), (1.06, -1.06), (-1.06, 1.06)] {
+        p.text(at + vec2(dx, dy), Align2::CENTER_CENTER, text, theme::bold_font(18.0), glow);
+    }
+    p.text(at, Align2::CENTER_CENTER, text, theme::bold_font(18.0), col::GOLD2);
+}
+
 /// Where each place at the table is on the screen (the bottom mine, or seat 0's when I'm
 /// watching; then round the way play goes: right, top, left).
 fn plate_at(table: Rect, k: f32, place: usize) -> Pos2 {
@@ -460,8 +469,9 @@ impl PyrApp {
             let c = plate_at(table, k, place_of(seat));
             self.dom_seat(ui, s, &v, seat as u8, place_of(seat), c, table, k, clock);
         }
-        // A ¡Doblo! against my side: take it, or fold.
-        if let Some(h) = hand.as_ref().filter(|h| v.stage == DomStage::Playing && h.offer.is_some() && h.allowed.contains(&Move::Accept)) {
+        // A ¡Doblo! against my side: take it, or fold. (Anyone else sees who doubled, on the
+        // felt where the answer's asked.)
+        if let Some(h) = hand.as_ref().filter(|h| v.stage == DomStage::Playing && h.offer.is_some()) {
             self.dom_offer(ui, s, &v, h, table, k);
         }
         // Between hands: what to do.
@@ -616,18 +626,17 @@ impl PyrApp {
         let cube = Rect::from_center_size(c, vec2(34.0, 34.0));
         let can = h.mult < MAX_MULT;
         p.rect_filled(cube, theme::r(6), if can { Color32::from_rgb(0xf6, 0xf0, 0xe2) } else { Color32::from_rgb(0xc8, 0xb8, 0x98) });
-        // (Taken: ringed in its side's colour, the bottom place's side gold.)
+        // (Taken: ringed gold when it's my side's, teal when it's theirs: watching, always teal,
+        // as 0.13.28 has it whichever side took it.)
+        let mine = v.my_seat.and_then(|m| h.seats.iter().position(|s| *s == m)).map(|p| (p % 2) as u8);
         if let Some(side) = h.cube {
-            let base = v.my_seat.unwrap_or(0);
-            let bottom_side = h.seats.iter().position(|s| *s == base).map(|p| (p % 2) as u8).unwrap_or(0);
-            p.rect_stroke(cube, theme::r(6), Stroke::new(3.0f32, if side == bottom_side { col::GOLD } else { TEAL }), StrokeKind::Inside);
+            p.rect_stroke(cube, theme::r(6), Stroke::new(3.0f32, if mine == Some(side) { col::GOLD } else { TEAL }), StrokeKind::Inside);
         }
         let shown = if h.mult == 1 { 2 } else { h.mult };
         p.text(c, Align2::CENTER_CENTER, shown.to_string(), theme::bold_font(17.0), Color32::from_rgb(0x1a, 0x14, 0x10));
         let who = match h.cube {
             None => "¡DOBLO! open".to_string(),
             Some(side) => {
-                let mine = v.my_seat.and_then(|m| h.seats.iter().position(|s| *s == m)).map(|p| (p % 2) as u8);
                 if mine == Some(side) { format!("×{} · yours to double", h.mult) } else { format!("×{} · theirs", h.mult) }
             }
         };
@@ -829,7 +838,9 @@ impl PyrApp {
                 if h.offer.is_some() && h.last.is_some_and(|(s, m)| s == seat && m == Move::Double) {
                     words += " · ¡DOBLO!";
                 }
-                (words, if n <= 2 || h.offer.is_some() && h.last.is_some_and(|(s, _)| s == seat) { col::EMBER } else { col::MUTED })
+                // (Orange only for two tiles or fewer: the doubler's "· ¡DOBLO!" stays muted, as
+                // 0.13.28's does, side by side.)
+                (words, if n <= 2 { col::EMBER } else { col::MUTED })
             }
             (DomStage::Settled, Some(h), Some(i)) => {
                 let r = v.result.as_ref();
@@ -852,11 +863,24 @@ impl PyrApp {
     /// folding come to, and the two buttons.
     fn dom_offer(&mut self, ui: &mut egui::Ui, s: &ServerView, v: &DomView, h: &DomHandView, table: Rect, k: f32) {
         let p = ui.painter().clone();
-        let r = Rect::from_center_size(pos2(table.center().x, table.center().y + 79.0 * k), vec2(278.0, 118.0));
+        let answering = h.allowed.contains(&Move::Accept);
+        let who = h.last.filter(|(_, m)| *m == Move::Double).and_then(|(seat, _)| v.seats.get(seat as usize).cloned().flatten()).map(|x| x.name).unwrap_or_default();
+        let title = format!("¡DOBLO!  {who} doubles to ×{}", h.mult * 2);
+        // (The words lit orange round their edges, as 0.13.28's are.)
+        let glow = col::EMBER.gamma_multiply(0.9);
+        let c = pos2(table.center().x, table.center().y + 79.0 * k);
+        if !answering {
+            // The doubling side's (0.13.28's, measured: 278 by 54, on the answer's middle).
+            let r = Rect::from_center_size(c, vec2(278.0, 54.0));
+            p.rect_filled(r, theme::r(14), Color32::from_black_alpha(242));
+            p.rect_stroke(r, theme::r(14), Stroke::new(2.0f32, col::EMBER), StrokeKind::Inside);
+            lit_text(&p, r.center() - vec2(0.0, 3.0), &title, glow);
+            return;
+        }
+        let r = Rect::from_center_size(c, vec2(278.0, 118.0));
         p.rect_filled(r, theme::r(14), Color32::from_black_alpha(242));
         p.rect_stroke(r, theme::r(14), Stroke::new(2.0f32, col::EMBER), StrokeKind::Inside);
-        let who = h.last.filter(|(_, m)| *m == Move::Double).and_then(|(seat, _)| v.seats.get(seat as usize).cloned().flatten()).map(|x| x.name).unwrap_or_default();
-        p.text(pos2(r.center().x, r.top() + 24.0), Align2::CENTER_CENTER, format!("¡DOBLO!  {who} doubles to ×{}", h.mult * 2), theme::bold_font(18.0), col::GOLD2);
+        lit_text(&p, pos2(r.center().x, r.top() + 24.0), &title, glow);
         let stake = v.ante * h.mult as u64;
         p.text(
             pos2(r.center().x, r.top() + 49.0),
