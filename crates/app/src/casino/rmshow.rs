@@ -47,6 +47,8 @@ pub enum Ev {
     /// Grand.
     HoldSplash,
     Hold(usize),
+    /// Hold & Win counted: each piece lit in turn, in the order it landed (0.13.28's).
+    HoldCount,
     HoldEnd,
     Grand,
     /// Bomb Spins (a free spin's show): its bombs on a win adding to the multiplier; its win
@@ -111,7 +113,7 @@ impl RmShow {
     /// Hold & Win's own board showing (its splash, its respins, what it comes to, the Grand):
     /// the page shows its jackpots in place of the top prize and the machine's name.
     pub fn holding(&self, now: Instant) -> bool {
-        matches!(self.at(now), Some((_, Ev::HoldSplash | Ev::Hold(_) | Ev::HoldEnd | Ev::Grand, ..)))
+        matches!(self.at(now), Some((_, Ev::HoldSplash | Ev::Hold(_) | Ev::HoldCount | Ev::HoldEnd | Ev::Grand, ..)))
     }
 
     /// When the reels' part is over (from the landing).
@@ -183,6 +185,44 @@ fn gathering(o: &rm::Outcome, k: usize) -> Vec<(usize, usize)> {
         .collect()
 }
 
+/// Hold & Win's pacing, as 0.13.28's (filmed at 30 frames a second with its sound, four
+/// rounds bought on Dragon's Hoard; seconds, Turbo twice as quick): its splash; the board with
+/// the starting pieces small in their places, then each one landing whole, reel by reel; a
+/// respin and when its places land; the count, a piece at a time; the win, and the board
+/// gives way.
+pub mod hold {
+    pub const SPLASH: f32 = 2.55;
+    pub const FIRST: f32 = 0.75;
+    pub const RESPIN: f32 = 0.9;
+    pub const LAND: f32 = 0.6;
+    /// The starting pieces: how small they wait, when the first lands, a piece after another.
+    pub const START_SCALE: f32 = 0.3;
+    pub const START_FROM: f32 = 0.44;
+    pub const START_STEP: f32 = 0.05;
+    pub const POP: f32 = 0.1;
+    pub const COUNT_STEP: f32 = 0.18;
+    pub const COUNT_TAIL: f32 = 0.05;
+    pub const GLOW: f32 = 0.2;
+    pub const END: f32 = 0.15;
+}
+
+/// Hold & Win's pieces in the order they landed: the starting ones reel by reel, top to bottom,
+/// then each respin's (the order 0.13.28 counts them in at the end).
+fn landing_order(o: &rm::Outcome) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    for (k, b) in o.hold.iter().enumerate() {
+        for r in 0..REELS {
+            for row in 0..ROWS {
+                let before = k > 0 && o.hold[k - 1].grid[r][row] != BLANK;
+                if b.grid[r][row] != BLANK && !before && !out.contains(&(r, row)) {
+                    out.push((r, row));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The round's moments, from the landing (Turbo: twice as quick).
 pub fn timeline(o: &rm::Outcome, turbo: bool, free: Option<&FreeCtx>) -> Vec<(f32, Ev)> {
     let k = if turbo { 0.5 } else { 1.0 };
@@ -239,12 +279,13 @@ pub fn timeline(o: &rm::Outcome, turbo: bool, free: Option<&FreeCtx>) -> Vec<(f3
         }
     }
     if !o.hold.is_empty() {
-        push(Ev::HoldSplash, 2.4);
-        push(Ev::Hold(0), 0.8);
+        push(Ev::HoldSplash, hold::SPLASH);
+        push(Ev::Hold(0), hold::FIRST);
         for i in 1..o.hold.len() {
-            push(Ev::Hold(i), if gathering(o, i).is_empty() { 0.95 } else { 1.8 });
+            push(Ev::Hold(i), if gathering(o, i).is_empty() { hold::RESPIN } else { 1.8 });
         }
-        push(Ev::HoldEnd, 1.5);
+        push(Ev::HoldCount, hold::COUNT_STEP * landing_order(o).len() as f32 + hold::COUNT_TAIL);
+        push(Ev::HoldEnd, hold::END);
         if o.grand > 0 {
             push(Ev::Grand, 3.0);
         }
@@ -285,6 +326,10 @@ pub mod vol {
     pub const TRIGGER: f32 = 1.0;
     pub const BUY: f32 = 0.6;
     pub const COIN: f32 = 0.31;
+    /// Hold & Win: a respin; the respins set back to three; the count's tick, a piece at a time.
+    pub const HOLD_RESPIN: f32 = 0.2;
+    pub const RESET: f32 = 0.3;
+    pub const COUNT: f32 = 0.226;
 }
 
 /// How far up its first each of a machine's reels lands, in semitones: each machine's stops
@@ -323,18 +368,35 @@ fn win_tier(x: f64) -> usize {
     }
 }
 
+/// Which win sound Hold & Win's end plays for a total `x` times the bet (0.13.28's, heard over
+/// ten rounds: the middle one at 6, 8.5, 10.5, 12.5 and 14 times, the big one at 21, 24, 32, 34
+/// and 34.5; where between 14 and 21 it changes wasn't seen: taken as 20).
+fn hold_tier(x: f64) -> usize {
+    if x >= 20.0 { 2 } else { 1 }
+}
+
 /// The sounds of a round's moments, with when each plays (seconds from the landing).
 pub fn sounds(show: &RmShow) -> Vec<(f32, Cue, f32)> {
-    let o = &show.o;
+    sounds_of(&show.o, &show.events, show.turbo)
+}
+
+fn sounds_of(o: &rm::Outcome, events: &[(f32, Ev)], turbo: bool) -> Vec<(f32, Cue, f32)> {
     let m = o.machine;
+    let k = if turbo { 0.5 } else { 1.0 };
     let mut out = Vec::new();
+    // (Sounds played higher than their files: Hold & Win's.)
+    let mut higher: Vec<(f32, Cue, f32)> = Vec::new();
+    let up = |what: &str, cents: i32| -> Option<Cue> {
+        let id = bands::id(&format!("s_{}_{what}", theme(m).id)).or_else(|| bands::id(&format!("s_all_{what}")))?;
+        Some(if cents == 0 { Cue::Band(id) } else { Cue::BandUp(id, cents as i16) })
+    };
     let mut add = |t: f32, what: &str, vol: f32| {
         if let Some(c) = band(m, what) {
             out.push((t, c, vol));
         }
     };
-    for (i, &(t, ev)) in show.events.iter().enumerate() {
-        let next = show.events.get(i + 1).map(|e| e.0).unwrap_or(t);
+    for (i, &(t, ev)) in events.iter().enumerate() {
+        let next = events.get(i + 1).map(|e| e.0).unwrap_or(t);
         match ev {
             Ev::Fill(_) => {
                 if rm::family(m) == Family::Frozen {
@@ -364,44 +426,61 @@ pub fn sounds(show: &RmShow) -> Vec<(f32, Cue, f32)> {
             Ev::Bombs => {
                 let n = o.steps.last().map(|s| s.grid.iter().flatten().filter(|&&c| c == BOMB).count()).unwrap_or(0);
                 for j in 0..n {
-                    add(t + 0.25 + j as f32 * 0.28 * if show.turbo { 0.5 } else { 1.0 }, "bombadd", vol::BOMBADD);
+                    add(t + 0.25 + j as f32 * 0.28 * k, "bombadd", vol::BOMBADD);
                 }
             }
             Ev::Multiply => add(t, "multiply", vol::MULTIPLY),
             Ev::FreeAdd => {
                 let n = o.steps.last().map(|s| s.grid.iter().flatten().filter(|&&c| c == BOMB).count()).unwrap_or(0);
                 for j in 0..n {
-                    add(t + 0.25 + j as f32 * 0.28 * if show.turbo { 0.5 } else { 1.0 }, "bombadd", vol::BOMBADD);
+                    add(t + 0.25 + j as f32 * 0.28 * k, "bombadd", vol::BOMBADD);
                 }
             }
             Ev::FreeWin => add(t, "multiply", vol::MULTIPLY),
             Ev::FreeMore => add(t, "trigger", 0.8),
             Ev::Collect => add(t, "collect", 0.85),
             Ev::HoldSplash => add(t, "trigger", 0.9),
-            Ev::Hold(k) if k > 0 => {
-                let (a, b) = (&o.hold[k - 1], &o.hold[k]);
+            // The board: the starting coins' sound, twice, the second a minor third higher.
+            Ev::Hold(0) => {
+                add(t, "coin", vol::COIN);
+                if let Some(c) = up("coin", 300) {
+                    higher.push((t + 0.09 * k, c, vol::COIN));
+                }
+            }
+            Ev::Hold(i) => {
+                // A respin: its sound as it goes, then what lands.
+                add(t, "spin", vol::HOLD_RESPIN);
+                let (a, b) = (&o.hold[i - 1], &o.hold[i]);
                 let new: Vec<(usize, usize)> = (0..REELS * ROWS).map(|c| (c / ROWS, c % ROWS)).filter(|&(r, row)| a.grid[r][row] == BLANK && b.grid[r][row] != BLANK).collect();
-                let land = t + 0.45 * if show.turbo { 0.5 } else { 1.0 };
+                let land = t + hold::LAND * k;
                 if !new.is_empty() {
                     add(land, "coin", vol::COIN);
-                    add(land + 0.15, "reset", 0.6);
+                    add(land + 0.1 * k, "reset", vol::RESET);
                     if new.iter().any(|&(r, row)| b.grid[r][row] == COIN && b.values[r][row] >= MINI) {
                         add(land + 0.1, "jackpot", 0.8);
                     }
                 }
-                if !gathering(o, k).is_empty() {
+                if !gathering(o, i).is_empty() {
                     add(land + 0.3, "collect", 0.85);
                 }
             }
+            // The count: the count's tick as each piece lights, a step and a half higher each.
+            Ev::HoldCount => {
+                for j in 0..landing_order(o).len() {
+                    if let Some(c) = up("count", 150 * j as i32) {
+                        higher.push((t + hold::COUNT_STEP * j as f32 * k, c, vol::COUNT));
+                    }
+                }
+            }
             Ev::HoldEnd => {
-                // (Its win sound by how big the Hold & Win came to, as a screen's: 0.13.28's.)
-                let tier = win_tier(o.hold_paid as f64 / o.bet.max(1) as f64);
+                let tier = hold_tier(o.hold_paid as f64 / o.bet.max(1) as f64);
                 add(t, ["win0", "win1", "win2"][tier], vol::WIN[tier]);
             }
             Ev::Grand => add(t, "grand", 1.0),
             _ => {}
         }
     }
+    out.extend(higher);
     out
 }
 
@@ -833,7 +912,7 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
     let clip = p.with_clip_rect(b.reels.expand(b.cell * 0.04));
     let accent = th.accent;
     // Hold & Win's own board.
-    if matches!(ev, Ev::HoldSplash | Ev::Hold(_) | Ev::HoldEnd | Ev::Grand) || (ev == Ev::Done && !o.hold.is_empty()) {
+    if matches!(ev, Ev::HoldSplash | Ev::Hold(_) | Ev::HoldCount | Ev::HoldEnd | Ev::Grand) || (ev == Ev::Done && !o.hold.is_empty()) {
         draw_hold(p, ctx, th, st, b, show, ev, since, dur, time);
         return;
     }
@@ -1237,7 +1316,10 @@ fn draw_hold(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: 
     };
     let board = &o.hold[k];
     let prev = if k > 0 { Some(&o.hold[k - 1]) } else { None };
-    let land_at = 0.45 * if show.turbo { 0.5 } else { 1.0 } / dur.max(0.01);
+    let tk = if show.turbo { 0.5 } else { 1.0 };
+    let land_at = hold::LAND * tk / dur.max(0.01);
+    // (The starting pieces landing, and the count: in the order they landed.)
+    let order = landing_order(o);
     let landed = !matches!(ev, Ev::Hold(_)) || k == 0 || u >= land_at;
     // The jackpots, and the respins left (on the machine's name's place), while it plays; once
     // it's over, the page as it was, with what Hold & Win left on the reels.
@@ -1245,7 +1327,8 @@ fn draw_hold(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: 
     let fs = (b.cell * 0.175).clamp(12.0, 22.0);
     if !over {
         plaques(p, ctx, b, o, grand_pays(o));
-        let left = if landed { respins_left(o, k) } else { respins_left(o, k.saturating_sub(1)).saturating_sub(1) };
+        // (A respin's dot goes out as its places land, not as it starts: 0.13.28's.)
+        let left = if landed { respins_left(o, k) } else { respins_left(o, k.saturating_sub(1)) };
         let g = p.layout_no_wrap("RESPINS".into(), theme::display_font(st.font, fs), col::GOLD2);
         let d = fs * 0.9;
         let w = g.size().x + 12.0 + 3.0 * d + 2.0 * d * 0.53 + fs * 1.9;
@@ -1300,7 +1383,23 @@ fn draw_hold(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: 
         }
         let fresh = was_empty && landed;
         let pop = if fresh { ease_back(((u - land_at) / 0.15).clamp(0.0, 1.0)) } else { 1.0 };
-        let rr = Rect::from_center_size(rect.center(), rect.size() * (0.6 + 0.4 * pop));
+        let j = order.iter().position(|&q| q == (r, row)).unwrap_or(0);
+        // The board's first moments: the starting pieces wait small in their places, aglow,
+        // then land whole one after another, reel by reel (0.13.28's).
+        let start = if ev == Ev::Hold(0) { ((since - (hold::START_FROM + hold::START_STEP * j as f32) * tk) / (hold::POP * tk)).clamp(0.0, 1.0) } else { 1.0 };
+        let scale = if start < 1.0 { hold::START_SCALE + (1.0 - hold::START_SCALE) * ease_back(start) } else { 0.6 + 0.4 * pop };
+        let rr = Rect::from_center_size(rect.center(), rect.size() * scale);
+        if start <= 0.0 {
+            radial(p, rect.center(), b.cell * 0.36, faded(col::GOLD, 0.28), Color32::TRANSPARENT);
+        }
+        // The count: each piece lit in turn, a light round it (0.13.28's, measured off its board).
+        if ev == Ev::HoldCount {
+            let on = since - hold::COUNT_STEP * j as f32 * tk;
+            if on >= 0.0 && on < hold::GLOW * tk {
+                let a = (on / (0.04 * tk)).min(1.0) * ((hold::GLOW * tk - on) / (0.06 * tk)).min(1.0);
+                radial(p, rect.center(), b.cell * 0.73, Color32::from_rgba_unmultiplied(0xf0, 0xff, 0x87, (128.0 * a) as u8), Color32::TRANSPARENT);
+            }
+        }
         // What it shows: a coin, its worth before the Payers' till they've paid; a collector
         // or a Hoarder gathering, what it had till the coins have flown to it.
         let gathering_here = gatherers.contains(&(r, row));
@@ -1524,6 +1623,38 @@ pub fn info_paragraphs(machine: u8) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Hold & Win as 0.13.28 paces it: the splash, the board, respins 0.9 s apart, then the count
+    /// a piece at a time in the order they landed (reel by reel), its tick a step and a half
+    /// higher each time, then the win and the board gives way.
+    #[test]
+    fn hold_and_win_counts_its_pieces_in_the_order_they_landed() {
+        use pyr_poker::casino::feature::Feature;
+        use pyr_poker::fair::{Stream, seed_from};
+        let hoard = 9;
+        for seed in 0..20u64 {
+            let o = rm::play(hoard, 100, Feature::Wild, false, &mut Stream::new(seed_from(seed)));
+            assert!(!o.hold.is_empty(), "Buy Hold & Win holds");
+            let order = landing_order(&o);
+            // The starting pieces first, reel by reel, top to bottom.
+            let first: Vec<(usize, usize)> = (0..REELS).flat_map(|r| (0..ROWS).map(move |row| (r, row))).filter(|&(r, row)| o.hold[0].grid[r][row] != BLANK).collect();
+            assert_eq!(&order[..first.len()], &first[..]);
+            let last = o.hold.last().unwrap();
+            assert_eq!(order.len(), last.grid.iter().flatten().filter(|&&c| c != BLANK).count());
+            let tl = timeline(&o, false, None);
+            let at = |e: Ev| tl.iter().find(|x| x.1 == e).map(|x| x.0).unwrap();
+            assert!((at(Ev::Hold(0)) - at(Ev::HoldSplash) - hold::SPLASH).abs() < 1e-4);
+            assert!((at(Ev::HoldEnd) - at(Ev::HoldCount) - (hold::COUNT_STEP * order.len() as f32 + hold::COUNT_TAIL)).abs() < 1e-4);
+            // The count's ticks: as many as pieces, each higher.
+            let count = bands::id("s_all_count").unwrap();
+            let ticks: Vec<i16> = sounds_of(&o, &tl, false).iter().filter_map(|(_, c, _)| match c {
+                Cue::Band(i) if *i == count => Some(0),
+                Cue::BandUp(i, up) if *i == count => Some(*up),
+                _ => None,
+            }).collect();
+            assert_eq!(ticks, (0..order.len() as i16).map(|j| 150 * j).collect::<Vec<_>>());
+        }
+    }
 
     /// Each machine's stops climb its own scale, as heard off 0.13.28 (Reel Row's order).
     #[test]
