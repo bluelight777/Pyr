@@ -128,7 +128,7 @@ fn chip(o: &mut [f32], at: usize, f1: f32, amp: f32, rng: &mut Rng) {
     // tenth of a second).
     let mut hp = Biquad::highpass(5000.0, 0.7);
     let mut hp2 = Biquad::highpass(1000.0, 0.7);
-    let mut lp2 = Biquad::lowpass(9000.0, 0.5);
+    let mut lp2 = Biquad::lowpass(RATTLE.1, 0.5);
     let mut body = Biquad::lowpass(1200.0, 0.6);
     for i in 0..ms(300.0) {
         let t = i as f32 / RATE;
@@ -138,31 +138,39 @@ fn chip(o: &mut [f32], at: usize, f1: f32, amp: f32, rng: &mut Rng) {
         } else {
             0.0
         };
-        let rattle = lp2.run(hp2.run(rng.noise())) * ((-t / 0.028).exp() + 0.3 * (-t / 0.07).exp()) * RATTLE;
+        let rattle = lp2.run(hp2.run(rng.noise())) * ((-t / 0.028).exp() + 0.3 * (-t / 0.07).exp()) * RATTLE.0;
         // (And the knock of it, low down, through the table.)
         let thud = body.run(rng.noise()) * (-t / 0.012).exp() * 0.05;
         add(o, at + i, (tick + rattle + thud) * amp);
     }
 }
 
-/// How loud the rattle under a chip's ring is.
-const RATTLE: f32 = 0.006;
+/// How loud the rattle under a chip's ring is, and how high it goes (Hz): bright, as 0.13.28's
+/// (its top third-octaves, 16 and 20 kHz, only 8 dB under its 4 kHz one a few ms on).
+const RATTLE: (f32, f32) = (0.015, 20_000.0);
 
-/// Something set down on the felt: a soft, low thump (about 100 Hz, mostly gone in a tenth of a
-/// second, the table and the cloth ringing on a little longer under it).
+/// How loud the felt under a stack of chips is, against its clicks.
+const CHIP_FELT: f32 = 0.16;
+
+/// Something set down on the felt (a card, a stack of chips), as 0.13.28's land: the low thump
+/// (about 100 Hz) dying in 17 ms, and the cloth's body under it, broad from 150 to 600 Hz and
+/// dying a little faster (measured in sixth-octaves over each 10 ms of 0.13.28's, under its turned
+/// cards and its chips alike).
 fn felt(o: &mut [f32], at: usize, amp: f32, rng: &mut Rng) {
     let f = rng.range(92.0, 104.0);
-    let mut lp = Biquad::lowpass(1100.0, 0.6);
-    let mut hp2 = Biquad::highpass(300.0, 0.6);
-    let mut lp2 = Biquad::lowpass(2400.0, 0.6);
-    for i in 0..ms(450.0) {
+    let mut body = Biquad::lowpass(FELT.2, FELT.3);
+    for i in 0..ms(300.0) {
         let t = i as f32 / RATE;
         let attack = (t / 0.002).min(1.0);
-        let tone = (TAU * f * t).sin() * ((-t / 0.02).exp() + 0.08 * (-t / 0.045).exp());
-        let rustle = lp.run(rng.noise()) * (-t / 0.016).exp() * 0.6 + lp2.run(hp2.run(rng.noise())) * (-t / 0.05).exp() * 0.06;
-        add(o, at + i, (tone + rustle) * attack * amp);
+        let tone = (TAU * f * t).sin() * (-t / FELT.0).exp();
+        let cloth = body.run(rng.noise()) * (-t / FELT.1).exp() * FELT.4;
+        add(o, at + i, (tone + cloth) * attack * amp);
     }
 }
+
+/// The felt: the thump's and the body's time constants (s), the body's low-pass (Hz, Q) and how
+/// loud it is against the thump.
+const FELT: (f32, f32, f32, f32, f32) = (0.017, 0.015, 350.0, 0.5, 10.0);
 
 /// Something sliding over the cloth (a card, or chips pushed): noise between `low` Hz and a top
 /// falling from `top0` to `top1` Hz as it slows, rising over `attack`, holding a moment and fading
@@ -184,6 +192,152 @@ fn slide(o: &mut [f32], at: usize, len: usize, attack: f32, amp: f32, low: f32, 
         let end = if len - i < tail { (0.5 - 0.5 * (std::f32::consts::PI * (len - i) as f32 / tail as f32).cos()).max(0.0) } else { 1.0 };
         add(o, at + i, lp.run(hp.run(rng.noise())) * rise * fall * end * amp);
     }
+}
+
+/// A resonance as 0.13.28's cards sound through: two poles at `f0` (`f0 / q` wide) and a zero at
+/// DC only, so -6 dB an octave either side of the peak with the top end kept (no zero at
+/// Nyquist, as a band-pass biquad has: 0.13.28's slides hold up to 24 kHz). 0 dB at the peak.
+#[derive(Clone, Copy, Default)]
+struct Reso {
+    a1: f32,
+    a2: f32,
+    g: f32,
+    x1: f32,
+    y1: f32,
+    y2: f32,
+}
+
+impl Reso {
+    fn new(f0: f32, q: f32) -> Reso {
+        let mut r = Reso::default();
+        r.tune(f0, q);
+        r
+    }
+
+    /// Retuned in place (its state kept), for a sweep.
+    fn tune(&mut self, f0: f32, q: f32) {
+        let w = TAU * f0 / RATE;
+        let r = (-std::f32::consts::PI * (f0 / q) / RATE).exp();
+        self.a1 = 2.0 * r * w.cos();
+        self.a2 = -r * r;
+        // |1 - e^-jw| over |1 - a1 e^-jw - a2 e^-2jw| at the peak, divided out.
+        let num = ((1.0 - w.cos()).powi(2) + w.sin().powi(2)).sqrt();
+        let (re, im) = (1.0 - self.a1 * w.cos() - self.a2 * (2.0 * w).cos(), self.a1 * w.sin() + self.a2 * (2.0 * w).sin());
+        self.g = (re * re + im * im).sqrt() / num;
+    }
+
+    fn run(&mut self, x: f32) -> f32 {
+        let y = (x - self.x1) + self.a1 * self.y1 + self.a2 * self.y2;
+        self.x1 = x;
+        self.y2 = self.y1;
+        self.y1 = y;
+        y * self.g
+    }
+}
+
+/// A card (or the cards) sliding over the cloth as 0.13.28 makes it: noise through a resonance
+/// whose peak moves from `f1` to `f2` Hz over the slide (a geometric sweep: up as a dealt card
+/// speeds off the shoe, down as folded cards slow), `q` wide; rising over `attack` ms, holding
+/// `hold` ms, then dying away (`tau` ms), the last `fade` of it faded out. (Fitted to 0.13.28's
+/// mean spectrogram of each, band by band in 5 ms steps: `measured/cardsounds.md`.)
+#[allow(clippy::too_many_arguments)]
+fn card_slide(o: &mut [f32], at: usize, len: usize, (attack, hold, tau, fade): (f32, f32, f32, f32), amp: f32, (f1, f2, q): (f32, f32, f32), rng: &mut Rng) {
+    let mut res = Reso::new(f1, q);
+    let len_ms = len as f32 / RATE * 1000.0;
+    let fl = (fade * len_ms).max(0.05);
+    for i in 0..len {
+        let t = i as f32 / RATE * 1000.0;
+        if i % 16 == 0 {
+            res.tune(f1 * (f2 / f1).powf(i as f32 / len as f32), q);
+        }
+        let env = (t / attack.max(0.1)).min(1.0) * (-(t - attack - hold).max(0.0) / tau.max(1.0)).exp();
+        let end = if t > len_ms - fl { 0.5 - 0.5 * (std::f32::consts::PI * ((len_ms - t) / fl).clamp(0.0, 1.0)).cos() } else { 1.0 };
+        add(o, at + i, res.run(rng.noise()) * env * end * amp);
+    }
+}
+
+/// A card turned over, its edge snapping down on the cloth as 0.13.28 makes it: a burst of noise
+/// dying in about a millisecond and a half, rung through the card's three resonances (1.73, 3.18
+/// and 5.04 kHz, a seventh to a ninth as wide as each: where 0.13.28's click peaks) over a bright
+/// floor; within 2 dB of 0.13.28's in every sixth-octave from 600 Hz up, its first 5 ms.
+fn card_click(o: &mut [f32], at: usize, amp: f32, rng: &mut Rng) {
+    let mut modes = [Reso::new(1730.0, 7.0), Reso::new(3175.0, 9.0), Reso::new(5040.0, 9.0)];
+    const GAINS: [f32; 3] = [CLICK.0, CLICK.1, CLICK.2];
+    // (All of it thinning out under 1.2 kHz, as 0.13.28's: a one-pole high-pass.)
+    let k = (-TAU * 1200.0 / RATE).exp();
+    let mut low = 0.0f32;
+    for i in 0..ms(30.0) {
+        let t = i as f32 / RATE;
+        let n = rng.noise();
+        let kick = n * (-t / CLICK.4).exp();
+        let mut x = n * (-t / CLICK.5).exp() * CLICK.3;
+        for (m, g) in modes.iter_mut().zip(GAINS) {
+            x += m.run(kick) * g;
+        }
+        low = x + k * (low - x);
+        add(o, at + i, (x - low) * amp);
+    }
+}
+
+/// The card's click: its resonances' gains (1.78, 3.18, 5.04 kHz), the bright floor's, and the
+/// two bursts' times (s): what rings the resonances, and the floor.
+const CLICK: (f32, f32, f32, f32, f32, f32) = (3.3, 1.7, 0.95, 0.25, 0.00035, 0.00136);
+
+/// The room 0.13.28 puts its cards in (its deals, turned cards and folds; not the chips or the
+/// rail): measured off its stereo, where a card in the middle comes out the same on both sides
+/// but for this, 99.8% of the difference explained. Four combs a side (764, 813, 874 and 928
+/// samples on the left, each 16 later on the right) feeding back 0.651 through a one-pole
+/// low-pass (0.646), each at 0.025, into two all-passes (441 and 556 samples on the left, 458
+/// and 579 on the right; 0.5). For a mono sound, each side's room; it starts 16 ms on.
+pub fn room(x: &[f32]) -> [Vec<f32>; 2] {
+    const COMBS: [usize; 4] = [764, 813, 874, 928];
+    const SPREAD: usize = 16;
+    const PASSES: [[usize; 2]; 2] = [[441, 556], [458, 579]];
+    let (feed, damp, gain, ap) = (0.6509f32, 0.6462f32, 0.02502f32, 0.4994f32);
+    let n = x.len() + ms(400.0);
+    let mut out = [vec![0.0f32; n], vec![0.0f32; n]];
+    for (side, o) in out.iter_mut().enumerate() {
+        for d in COMBS {
+            let d = d + if side == 1 { SPREAD } else { 0 };
+            // y[i] = x[i-d] + feed f[i-d]; f = (1 - damp) y + damp f[-1]
+            let mut f = vec![0.0f32; n];
+            let mut last = 0.0f32;
+            for i in 0..n {
+                let y = if i >= d { x.get(i - d).copied().unwrap_or(0.0) + feed * f[i - d] } else { 0.0 };
+                last = (1.0 - damp) * y + damp * last;
+                f[i] = last;
+                o[i] += y * gain;
+            }
+        }
+        for d in PASSES[side] {
+            // y[i] = -ap x[i] + x[i-d] + ap y[i-d]
+            let src = o.clone();
+            for i in 0..n {
+                let back = if i >= d { src[i - d] + ap * o[i - d] } else { 0.0 };
+                o[i] = -ap * src[i] + back;
+            }
+        }
+    }
+    out
+}
+
+/// A table sound placed `pan` (-1 left to 1 right; the middle 0.707 a side), 48 kHz stereo
+/// interleaved; the cards with 0.13.28's room. The room isn't placed with the card: for a card
+/// at a side, 0.13.28's is louder on the far side (heard on its folds: 0.34 of the pan, the
+/// whole room fed what both sides get on average).
+pub fn place(mono: &[f32], pan: f32, with_room: bool) -> Vec<f32> {
+    let pan = pan.clamp(-1.0, 1.0);
+    let (l, r) = (((1.0 - pan) * 0.5).sqrt(), ((1.0 + pan) * 0.5).sqrt());
+    if !with_room {
+        return mono.iter().flat_map(|x| [x * l, x * r]).collect();
+    }
+    let feed: Vec<f32> = mono.iter().map(|x| x * (l + r) * 0.5).collect();
+    let [wl, wr] = room(&feed);
+    let (kl, kr) = (1.0 + 0.34 * pan, 1.0 - 0.34 * pan);
+    (0..wl.len()).flat_map(|i| {
+        let x = mono.get(i).copied().unwrap_or(0.0);
+        [x * l + wl[i] * kl, x * r + wr[i] * kr]
+    }).collect()
 }
 
 /// A knuckle on the rail: a dull tap and the wood's low ring (120 Hz most, 155 and 245 with it),
@@ -241,11 +395,14 @@ pub fn chips(rng: &mut Rng) -> Vec<f32> {
     o
 }
 
-/// One stack of chips coming down: (on the felt) and its clicks, two to seven (four or five most
-/// often), each gap about 0.7 of the last, each click a little softer.
+/// One stack of chips coming down: (on the felt, the first click 4 to 5 ms after the stack meets
+/// it, as 0.13.28's) and its clicks, two to seven (four or five most often), each gap about 0.7 of
+/// the last, each click a little softer.
 fn stack(o: &mut [f32], at: usize, amp: f32, on_felt: bool, rng: &mut Rng) {
+    let mut t = 0.0f32;
     if on_felt {
-        felt(o, at, amp * 0.16, rng);
+        felt(o, at, amp * CHIP_FELT, rng);
+        t = rng.range(3.8, 5.0);
     }
     const HOW_MANY: [(usize, f32); 6] = [(2, 0.07), (3, 0.19), (4, 0.29), (5, 0.33), (6, 0.07), (7, 0.05)];
     let mut pick = rng.f();
@@ -257,7 +414,6 @@ fn stack(o: &mut [f32], at: usize, amp: f32, on_felt: bool, rng: &mut Rng) {
         }
         pick -= p;
     }
-    let mut t = 0.0f32;
     let mut gap = rng.range(30.0, 58.0);
     let mut a = 1.0f32;
     for _ in 0..n {
@@ -268,55 +424,64 @@ fn stack(o: &mut [f32], at: usize, amp: f32, on_felt: bool, rng: &mut Rng) {
     }
 }
 
+/// How hard the check knocks: as 0.13.28's, mostly over what's held (its checks peak at the
+/// table's most, 0.691 a side, three in four times in the middle).
+const KNOCK: f32 = 1.28;
+
 /// A check: two knocks on the rail.
 pub fn check(rng: &mut Rng) -> Vec<f32> {
     let mut o = vec![0.0; ms(450.0)];
     let pitch = rng.range(0.97, 1.03);
-    knock(&mut o, 0, 1.16, pitch, rng);
-    knock(&mut o, ms(rng.range(105.0, 135.0)), 1.16 * rng.range(0.7, 1.0), pitch * rng.range(0.98, 1.02), rng);
+    knock(&mut o, 0, KNOCK, pitch, rng);
+    knock(&mut o, ms(rng.range(105.0, 135.0)), KNOCK * rng.range(0.7, 1.0), pitch * rng.range(0.98, 1.02), rng);
     o
 }
 
-/// A fold: the cards slid away and landing on the felt 0.27 s later.
+/// A fold: the cards slid away, slowing (duller and duller), and landing on the felt 0.27 s later.
 pub fn fold(rng: &mut Rng) -> Vec<f32> {
     let mut o = vec![0.0; ms(750.0)];
-    slide(&mut o, 0, ms(270.0), 40.0, 0.79, 650.0, 9000.0, 3500.0, rng);
-    felt(&mut o, ms(270.0), 0.175, rng);
+    card_slide(&mut o, 0, ms(350.0), (43.75, 42.4, 119.2, 0.549), FOLD.0, (2934.0, 908.0, 1.154), rng);
+    felt(&mut o, ms(270.0), FOLD.1, rng);
     o
 }
 
-/// A card's edge snapping down on the felt: a click of a fraction of a millisecond, most of it
-/// around 2 kHz, and the cloth's rustle after it.
-fn snap(o: &mut [f32], at: usize, amp: f32, rng: &mut Rng) {
-    let ph = rng.range(0.0, TAU);
-    let mut hp = Biquad::highpass(300.0, 0.6);
-    let mut lp = Biquad::lowpass(6000.0, 0.6);
-    for i in 0..ms(200.0) {
-        let t = i as f32 / RATE;
-        let click = ((TAU * 1900.0 * t + ph).sin() * 0.8 + rng.noise() * 0.5) * (-t / 0.0005).exp();
-        let rustle = lp.run(hp.run(rng.noise())) * (-t / 0.03).exp() * 0.05;
-        add(o, at + i, (click + rustle) * amp);
-    }
+/// The fold's slide and felt, how loud.
+const FOLD: (f32, f32) = (0.886, 0.14);
+
+/// A card dealt off the shoe (the casino's tables): a quick slide rising in pitch as it goes, and
+/// the card landing on the felt as it ends, 88 to 119 ms on (each card its own: 0.13.28's land
+/// anywhere in there, following the slide's end).
+pub fn card(rng: &mut Rng) -> Vec<f32> {
+    let mut o = vec![0.0; ms(560.0)];
+    let len = ms(rng.range(88.0, 119.0));
+    card_slide(&mut o, 0, len, (13.3, 10.9, 44.3, 0.02), DEAL.0, (2251.0, 3093.0, 1.171), rng);
+    felt(&mut o, len, DEAL.1, rng);
+    o
 }
 
-/// The hand dealt: the cards' quick slide, and one landing (a light snap) 44 ms in.
+/// The hand dealt at the poker table: the cards' slide as one off the shoe, and the deck's thump on
+/// the felt 42 ms in (0.13.28's, every hand: 43-44 ms; its casino's cards have no such thump).
 pub fn deal(rng: &mut Rng) -> Vec<f32> {
-    let mut o = vec![0.0; ms(520.0)];
-    slide(&mut o, 0, ms(110.0), 8.0, 0.47, 650.0, 10_000.0, 6000.0, rng);
-    snap(&mut o, ms(44.0), 0.2, rng);
-    felt(&mut o, ms(44.0), 0.1, rng);
+    let mut o = card(rng);
+    felt(&mut o, ms(42.0), DEAL.2, rng);
     o
 }
 
-/// A card turned up on the board (or a hand shown): a light slide, and the card snapping down on
-/// the felt 40 ms in.
+/// The dealt card's slide and felt, and the hand's thump, how loud.
+const DEAL: (f32, f32, f32) = (0.766, 0.1, 0.069);
+
+/// A card turned up (on the board, a hand shown, the casino's tables): a light slide rising in
+/// pitch, the card's click 37 ms in, and the felt under it 6 ms after the click.
 pub fn street(rng: &mut Rng) -> Vec<f32> {
     let mut o = vec![0.0; ms(520.0)];
-    slide(&mut o, 0, ms(46.0), 10.0, 0.06, 400.0, 5500.0, 5000.0, rng);
-    snap(&mut o, ms(40.0), 0.9, rng);
-    felt(&mut o, ms(42.0), 0.11, rng);
+    card_slide(&mut o, 0, ms(37.0), (10.8, 14.9, 32.1, 0.273), STREET.0, (864.0, 2060.0, 0.731), rng);
+    card_click(&mut o, ms(37.0), STREET.1, rng);
+    felt(&mut o, ms(42.8), STREET.2, rng);
     o
 }
+
+/// The turned card's slide, click and felt, how loud.
+const STREET: (f32, f32, f32) = (0.12, 3.35, 0.165);
 
 /// The pot pushed over to someone else, and stacked in front of them in three goes.
 pub fn pot(rng: &mut Rng) -> Vec<f32> {

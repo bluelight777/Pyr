@@ -379,7 +379,7 @@ impl PyrApp {
         if let Some(rv) = &rv {
             let n = self.poker.casino.bjt.note(v, rv, now);
             for at in n.dealt {
-                self.poker.casino.sound_in(at.saturating_duration_since(now).as_secs_f32(), Cue::Deal, 0.0, 0.6);
+                self.poker.casino.sound_in(at.saturating_duration_since(now).as_secs_f32(), Cue::Card, 0.0, 0.6);
             }
             if let Some(h) = n.hole {
                 self.poker.casino.sound_in(h.saturating_duration_since(now).as_secs_f32(), Cue::Flip, 0.0, 0.7);

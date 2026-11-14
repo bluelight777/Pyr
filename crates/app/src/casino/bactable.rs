@@ -482,7 +482,7 @@ impl PyrApp {
             }
         };
         for (appear, _) in t.player.iter().chain(t.banker.iter()) {
-            at(*appear, Cue::Deal, 0.55);
+            at(*appear, Cue::Card, 0.55);
         }
         at(2.2, Cue::Flip, 0.7);
         at(3.0, Cue::Flip, 0.7);

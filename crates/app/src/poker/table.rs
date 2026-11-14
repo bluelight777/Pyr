@@ -206,7 +206,13 @@ impl PyrApp {
         };
         self.poker.heard = Some((v.id, v.hand, n));
         let me = v.my_seat;
-        let pan = |seat: usize| ((lay.seat(seat).x - lay.c.x) / lay.a * 0.7).clamp(-0.8, 0.8);
+        // Toward the seat, as far as 0.13.28 places each (heard at a six-seat table, its side seats
+        // 0.954 of the way out, from each sound's loudest sample: its checks 0.429 out, its chips
+        // 0.44, its folds 0.478, under a constant-power law); the rest as the chips.
+        let place = |seat: usize, k: f32| ((lay.seat(seat).x - lay.c.x) / lay.a * k).clamp(-0.8, 0.8);
+        let pan = |seat: usize| place(seat, 0.461);
+        let pan_check = |seat: usize| place(seat, 0.450);
+        let pan_fold = |seat: usize| place(seat, 0.501);
         // (Cue, where, how loud, how long after now: 0.13.28 sounds an action 40 ms after the board's
         // card it brings, and the blinds' chips 0.1 s after the deal.)
         let mut cues: Vec<(Cue, f32, f32, f32)> = Vec::new();
@@ -220,8 +226,8 @@ impl PyrApp {
                 Event::Street { .. } => cues.push((Cue::Flip, 0.0, 0.9, 0.0)),
                 Event::Posted { seat, .. } => cues.push((Cue::Chips, pan(*seat), 0.45, if dealt { 0.1 } else { 0.0 })),
                 Event::Acted { seat, action, stack, .. } => cues.push(match action {
-                    Action::Fold => (Cue::Fold, pan(*seat), 0.7, after),
-                    Action::Check => (Cue::Check, pan(*seat), 0.8, after),
+                    Action::Fold => (Cue::Fold, pan_fold(*seat), 0.7, after),
+                    Action::Check => (Cue::Check, pan_check(*seat), 0.8, after),
                     _ if *stack == 0 => (Cue::AllIn, pan(*seat), 0.9, after),
                     _ => (Cue::Chips, pan(*seat), 0.8, after),
                 }),
@@ -285,11 +291,11 @@ impl PyrApp {
         if self.poker.casino.mute {
             return;
         }
-        // A burst (catching up) plays only its last few.
+        // A burst (catching up) plays only its last few, together (in one clip: each keeps its
+        // place, the action landing with the board's card's click).
         cues.dedup_by_key(|c| c.0);
-        for (c, pan, vol, after) in cues.into_iter().rev().take(3) {
-            self.engine.play_poker_after(c, pan, vol, after);
-        }
+        let last: Vec<_> = cues.into_iter().rev().take(3).collect();
+        self.engine.play_poker_set(&last);
     }
 
     fn table_top_bar(&mut self, ui: &mut egui::Ui, s: &ServerView, t: &TableLive, r: Rect) {

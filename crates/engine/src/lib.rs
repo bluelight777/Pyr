@@ -2347,16 +2347,48 @@ impl Engine {
         if lead > 0 {
             pcm.splice(0..0, std::iter::repeat_n(0.0, lead));
         }
+        let (games, device) = self.games_volume();
+        self.play_poker_pcm(pcm, (games * volume).clamp(0.0, 1.0), device);
+    }
+
+    /// Several of a table's sounds at once, each `(cue, pan, volume, delay s)`, mixed into one
+    /// clip so they keep their spacing to the sample: played one by one, the second waits behind
+    /// the ~40 ms the speakers already hold of the first (an action's knock then came 44 ms after
+    /// the board's card it brought, where 0.13.28 lands it with the card's click).
+    pub fn play_poker_set(&self, cues: &[(poker_sfx::Cue, f32, f32, f32)]) {
+        let (games, device) = self.games_volume();
+        let mut mix: Vec<f32> = Vec::new();
+        for &(cue, pan, volume, delay) in cues {
+            let pcm = poker_sfx::render(cue, pan);
+            let lead = (delay.clamp(0.0, 2.0) * 48_000.0) as usize * 2;
+            if mix.len() < lead + pcm.len() {
+                mix.resize(lead + pcm.len(), 0.0);
+            }
+            let gain = (games * volume).clamp(0.0, 1.0);
+            for (o, x) in mix[lead..].iter_mut().zip(pcm) {
+                *o += x * gain;
+            }
+        }
+        if !mix.is_empty() {
+            self.play_poker_pcm(mix, 1.0, device);
+        }
+    }
+
+    /// How loud the games are (Pyr's sounds' volume and the games' on top, as 0.13.28 has it),
+    /// and where they play.
+    fn games_volume(&self) -> (f32, Option<String>) {
+        let st = self.shared.state.read_recursive();
+        (st.settings.sound_volume * st.settings.games_volume.clamp(0.0, 1.0), st.settings.output_device.clone())
+    }
+
+    /// A rendered table sound (48 kHz stereo) at `gain`, heard here only, or through the call
+    /// when in one.
+    fn play_poker_pcm(&self, pcm: Vec<f32>, gain: f32, device: Option<String>) {
         let pcm: soundboard::Pcm = std::sync::Arc::new(pcm);
-        let (volume, device) = {
-            let st = self.shared.state.read_recursive();
-            // (The games' volume on top of Pyr's sounds', as 0.13.28 has it.)
-            ((st.settings.sound_volume * st.settings.games_volume.clamp(0.0, 1.0) * volume).clamp(0.0, 1.0), st.settings.output_device.clone())
-        };
         let call = self.shared.call.lock().as_ref().and_then(|c| c.audio.as_ref().map(|a| (a.mixer.clone(), c.session)));
         match (call, &self.shared.sfx) {
-            (Some((mixer, me)), _) => mixer.lock().play_effect(pcm, volume, me),
-            (None, Some(sfx)) => sfx.play_stereo(pcm, device, volume),
+            (Some((mixer, me)), _) => mixer.lock().play_effect(pcm, gain, me),
+            (None, Some(sfx)) => sfx.play_stereo(pcm, device, gain),
             (None, None) => {}
         }
     }

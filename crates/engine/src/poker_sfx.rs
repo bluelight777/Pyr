@@ -58,8 +58,10 @@ pub mod roulette {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Cue {
-    /// A card dealt (slid off the deck).
+    /// The hand dealt (the poker table): the cards' slide, the deck's thump 42 ms in.
     Deal,
+    /// A card dealt off the shoe (the casino's tables): its slide, landing as it ends.
+    Card,
     /// A card turned face up.
     Flip,
     /// Chips put in (a bet, a call, a blind).
@@ -237,7 +239,8 @@ fn knock(out: &mut [f32], at: usize, amp: f32) {
 
 /// The table's own sounds as 0.13.6 made them new (chips that ring, cards that slide and snap, the
 /// felt, the rail, a better win; the turn, hurry, tick and time bank bells with them): a fresh one
-/// each time, as 0.13.28 makes them (`table_sfx`). Kept under 0.9 as every sound here is.
+/// each time, as 0.13.28 makes them (`table_sfx`). As made, before they're placed (and held under
+/// full scale: `render`).
 fn table_sound(c: Cue) -> Option<Vec<f32>> {
     use crate::table_sfx as t;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -245,8 +248,9 @@ fn table_sound(c: Cue) -> Option<Vec<f32>> {
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
     let mut rng = t::Rng::new(now ^ n.wrapping_mul(0x9E37_79B9_7F4A_7C15));
-    let mut o = match c {
+    let o = match c {
         Cue::Deal => t::deal(&mut rng),
+        Cue::Card => t::card(&mut rng),
         Cue::Flip => t::street(&mut rng),
         Cue::Chips => t::chips(&mut rng),
         Cue::Check => t::check(&mut rng),
@@ -262,12 +266,6 @@ fn table_sound(c: Cue) -> Option<Vec<f32>> {
         Cue::TimeOut => t::time_out(&mut rng),
         _ => return None,
     };
-    let peak = o.iter().fold(0.0f32, |m, x| m.max(x.abs()));
-    if peak > 0.9 {
-        for x in &mut o {
-            *x *= 0.9 / peak;
-        }
-    }
     Some(o)
 }
 
@@ -306,7 +304,13 @@ fn file_cut(c: Cue) -> Option<usize> {
 
 /// The sound, mono.
 pub fn render_mono(c: Cue) -> Vec<f32> {
-    if let Some(o) = table_sound(c) {
+    if let Some(mut o) = table_sound(c) {
+        let peak = o.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        if peak > 0.9 {
+            for x in &mut o {
+                *x *= 0.9 / peak;
+            }
+        }
         return o;
     }
     if let Some(i) = casino_file(c).and_then(crate::bands::id) {
@@ -392,10 +396,25 @@ pub fn render(c: Cue, pan: f32) -> Vec<f32> {
     if let Cue::BandUp(i, up) = c {
         return crate::bands::render_up(i, up, pan);
     }
-    let pan = pan.clamp(-1.0, 1.0);
-    let (l, r) = (((1.0 - pan) * 0.5).sqrt(), ((1.0 + pan) * 0.5).sqrt());
-    render_mono(c).into_iter().flat_map(|x| [x * l, x * r]).collect()
+    if let Some(mono) = table_sound(c) {
+        // Placed (the cards, dealt, turned and folded, in 0.13.28's room), then held under 0.691 on
+        // either side, as 0.13.28 holds its table's sounds: its loudest side, wherever the sound is
+        // placed (a check's knock peaks 0.387 a side in the middle and 0.387 on the near side at a
+        // side seat, at 0.8 and the sounds at 70%; a turned card 0.435 at 0.9, 0.339 at 0.7).
+        let mut st = crate::table_sfx::place(&mono, pan, matches!(c, Cue::Deal | Cue::Card | Cue::Flip | Cue::Fold));
+        let peak = st.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        if peak > TABLE_PEAK {
+            for x in &mut st {
+                *x *= TABLE_PEAK / peak;
+            }
+        }
+        return st;
+    }
+    crate::table_sfx::place(&render_mono(c), pan, false)
 }
+
+/// How loud a table sound's louder side gets at most (before the cue's and the sounds' volume).
+const TABLE_PEAK: f32 = 0.691;
 
 #[cfg(test)]
 mod tests {
@@ -403,7 +422,7 @@ mod tests {
 
     #[test]
     fn every_sound_is_there_and_never_clips() {
-        for c in [Cue::Deal, Cue::Flip, Cue::Chips, Cue::Check, Cue::Fold, Cue::AllIn, Cue::Pot, Cue::Turn, Cue::Win, Cue::Hurry, Cue::Tick, Cue::TickUp, Cue::TimeBank, Cue::TimeOut, Cue::ReelSpin, Cue::ReelStop, Cue::WinSmall, Cue::WinBig, Cue::Jackpot, Cue::BallRoll, Cue::BallDrop, Cue::DiceRoll, Cue::KenoBall, Cue::Coin, Cue::Wheel, Cue::Fuse, Cue::Boom, Cue::Peg(0), Cue::Peg(15), Cue::Bucket(0), Cue::Bucket(8), Cue::DomTile, Cue::DomOpen, Cue::DomSlam, Cue::DomShuffle] {
+        for c in [Cue::Deal, Cue::Card, Cue::Flip, Cue::Chips, Cue::Check, Cue::Fold, Cue::AllIn, Cue::Pot, Cue::Turn, Cue::Win, Cue::Hurry, Cue::Tick, Cue::TickUp, Cue::TimeBank, Cue::TimeOut, Cue::ReelSpin, Cue::ReelStop, Cue::WinSmall, Cue::WinBig, Cue::Jackpot, Cue::BallRoll, Cue::BallDrop, Cue::DiceRoll, Cue::KenoBall, Cue::Coin, Cue::Wheel, Cue::Fuse, Cue::Boom, Cue::Peg(0), Cue::Peg(15), Cue::Bucket(0), Cue::Bucket(8), Cue::DomTile, Cue::DomOpen, Cue::DomSlam, Cue::DomShuffle] {
             let s = render(c, 0.3);
             assert!(s.len() > 2000, "{c:?}");
             let peak = s.iter().fold(0.0f32, |m, x| m.max(x.abs()));
@@ -414,7 +433,7 @@ mod tests {
 
     #[test]
     fn the_tables_sounds_are_new_each_time_and_its_bells_the_same() {
-        for c in [Cue::Chips, Cue::Check, Cue::Fold, Cue::Deal, Cue::Flip, Cue::Pot, Cue::AllIn, Cue::Win, Cue::Tick, Cue::TickUp] {
+        for c in [Cue::Chips, Cue::Check, Cue::Fold, Cue::Deal, Cue::Card, Cue::Flip, Cue::Pot, Cue::AllIn, Cue::Win, Cue::Tick, Cue::TickUp] {
             let (a, b) = (render_mono(c), render_mono(c));
             assert!(a != b, "{c:?}");
             assert!(a.iter().all(|x| x.is_finite() && x.abs() <= 0.9), "{c:?}");
@@ -486,5 +505,31 @@ mod tests {
         let b2 = pitch(&render_mono(Cue::Bucket(2))[480..], 450.0, 750.0);
         assert!((b0 - 523.0).abs() < 3.0 && (b2 - 622.0).abs() < 3.0, "{b0} {b2}");
         assert_eq!(render_mono(Cue::Peg(3)), render_mono(Cue::Peg(3)));
+    }
+
+    /// The cards in 0.13.28's room (a card in the middle the same on both sides for its first
+    /// 16 ms, then the room's first reflections, the left's 764 samples on and the right's 16
+    /// later); the chips and the rail not in it; every table sound's louder side held at 0.691.
+    #[test]
+    fn the_cards_are_in_the_room_and_the_table_held_as_0_13_28_holds_it() {
+        let side = |s: &[f32]| s.chunks(2).map(|x| x[0] - x[1]).collect::<Vec<f32>>();
+        for c in [Cue::Deal, Cue::Card, Cue::Flip, Cue::Fold] {
+            let d = side(&render(c, 0.0));
+            assert!(d[..764].iter().all(|x| x.abs() < 1e-6), "{c:?}: the same on both sides first");
+            assert!(d[764..2000].iter().any(|x| x.abs() > 1e-5), "{c:?}: then the room");
+        }
+        for c in [Cue::Chips, Cue::Check] {
+            assert!(side(&render(c, 0.0)).iter().all(|x| x.abs() < 1e-6), "{c:?}: no room");
+        }
+        for _ in 0..20 {
+            for (c, pan) in [(Cue::Check, 0.0), (Cue::Check, -0.43), (Cue::Flip, 0.0), (Cue::Chips, 0.44)] {
+                let peak = render(c, pan).iter().fold(0.0f32, |m, x| m.max(x.abs()));
+                assert!(peak <= TABLE_PEAK + 1e-6, "{c:?} {peak}");
+            }
+        }
+        // (A turned card's click is nearly always over it: held there, as 0.13.28's are, 27 of 27
+        // at baccarat.)
+        let held = (0..40).filter(|_| (render(Cue::Flip, 0.0).iter().fold(0.0f32, |m, x| m.max(x.abs())) - TABLE_PEAK).abs() < 1e-4).count();
+        assert!(held >= 30, "{held}");
     }
 }

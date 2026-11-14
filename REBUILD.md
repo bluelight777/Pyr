@@ -753,6 +753,30 @@ How (decided while starting it):
         decays and level: 98.5% of each 0.13.28 tick explained so). A rabbit hunted at a table
         both apps watched: no sound for its cards on 0.13.28 either, the pot's chips before it
         and the next deal 7 s after the same on both (Nov 14). A Bomb Pot played by both: below.
+        Heard again closer (Nov 14, `measured/cardsounds.md`), once baccarat side by side showed its
+        cards weren't 0.13.28's, then at a bot table both apps watched with every event timed: what
+        that check (four windows, pan-free) missed, now made as 0.13.28's. Its cards (dealt, turned,
+        folded) are in a quiet stereo room, measured off its stereo (four combs and two all-passes a
+        side, 99.8% of the difference explained; fed the card unplaced, louder on the far side); its
+        chips and knocks aren't. Its slides are noise through a resonance that moves over the slide
+        (a dealt card's rising, folded cards' falling; the top end held to 24 kHz, where the
+        rebuild's stopped at 12); a card off the casino's shoe lands as its slide ends (88-119 ms,
+        each its own) where the hand dealt at poker has a thump 42 ms in (two cues on 0.13.28:
+        `Cue::Card` now beside `Cue::Deal`); a turned card's click is a 1.4 ms burst through 1.73,
+        3.18 and 5.04 kHz over a bright floor; the felt under the cards and the chips has the
+        cloth's body (150-600 Hz, 14-21 dB short before); a stack's first click comes 4-5 ms after
+        it meets the felt, its rattle bright to 20 kHz. Each against 0.13.28's mean spectrogram,
+        band by band in 5 ms steps, within 1-2 dB where it carries. It places the seats' sounds less
+        far out than 0.13.0's 0.7 (from each sound's loudest sample: checks 0.429 at the side seats,
+        chips 0.44, folds 0.478), and holds a table sound's louder side at 0.691 (the rebuild held
+        the sound at 0.9 before placing it: 0.7 dB soft in the middle, 1.2 dB loud on the near
+        side); now a check peaks at 0.387 a side as 0.13.28's, in the middle and at the side seats
+        alike, far/near 0.6316 against its 0.6318. And a hand's sounds play as one clip: one by one,
+        the second waited behind the 40 ms the speakers already held (an action's sound came 44 ms
+        after the board's card it brought, where 0.13.28 lands it with the card's click). Not
+        matched: a check's first 10 ms (brighter on 0.13.28), the pot's and the all-in's slides (the
+        old recipe), where the all-in, the pot, shown hands and the clock's sounds are placed (as
+        the chips: not heard).
   - [x] The casino games' sounds as 0.13.28's (`measured/casinosounds.md`), heard off it game by
         game and taken apart into its own files (`work/ui/decomp.py`): the casino's cues play its
         `c_*` files (dice, Keno, roulette, craps and blackjack heard: which file, when, how loud,
@@ -772,7 +796,10 @@ How (decided while starting it):
         win stops it"): an Ember Respins' 72 times on 0.13.28 (EPIC WIN), 15 times on the rebuild
         (BIG WIN): the respins' jackpot, coins and ticks, their winbig, then the big win's tier-up,
         count and slam at the level's pitch, each file at the same gain on both (0.465, 0.304,
-        0.441, 0.598 and 0.595) and the same spacing within a tenth of a second. The Remastered machines' stops: they climb each
+        0.441, 0.598 and 0.595) and the same spacing within a tenth of a second. Baccarat heard on
+        both (Nov 14, Salon Privé, ten coups): its cards at the same times within 50 ms, dealt at
+        0.55 and turned at 0.7 as 0.13.28's; the cards themselves now 0.13.28's (the table's sounds,
+        above). The Remastered machines' stops: they climb each
         machine's own scale (above, Reel Row Remastered). All or Nothing that misses, heard at
         Dragon's Hoard on both (Nov 14): the fuse as the dial starts, cut at 0.900 s to the sample
         on 0.13.28 (0.13.0's fuse's length; the rebuild played the whole 1.02 s file, now cut

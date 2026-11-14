@@ -53,7 +53,7 @@ impl PyrApp {
         self.poker.casino.baccarat.show = Some((r.clone(), Instant::now(), false));
         let (pt, bt) = card_times(o);
         for t in pt.iter().chain(bt.iter()) {
-            self.poker.casino.sound_in(*t, Cue::Deal, 0.0, 0.7);
+            self.poker.casino.sound_in(*t, Cue::Card, 0.0, 0.7);
             self.poker.casino.sound_in(*t + 0.25, Cue::Flip, 0.0, 0.5);
         }
     }

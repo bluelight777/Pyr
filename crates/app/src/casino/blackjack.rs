@@ -80,7 +80,7 @@ impl PyrApp {
         let n = o.dealer.len().saturating_sub(2);
         self.poker.casino.sound_in(hole_at.saturating_duration_since(now).as_secs_f32(), Cue::Flip, 0.0, 0.7);
         for k in 0..n {
-            self.poker.casino.sound_in(hole_at.saturating_duration_since(now).as_secs_f32() + 0.5 + k as f32 * 0.6, Cue::Deal, 0.0, 0.7);
+            self.poker.casino.sound_in(hole_at.saturating_duration_since(now).as_secs_f32() + 0.5 + k as f32 * 0.6, Cue::Card, 0.0, 0.7);
         }
         let back = results_at.saturating_duration_since(now).as_secs_f32();
         if o.paid > o.wagered {
@@ -154,7 +154,7 @@ impl PyrApp {
             let _ = ui_s.note(&v.dealer, &v.hands, now, gap);
             let added = ui_s.appear.len() - before;
             for k in 0..added {
-                self.poker.casino.sound_in(k as f32 * gap, Cue::Deal, 0.3, 0.7);
+                self.poker.casino.sound_in(k as f32 * gap, Cue::Card, 0.3, 0.7);
             }
         }
         let shoe_at = shoe.center();
