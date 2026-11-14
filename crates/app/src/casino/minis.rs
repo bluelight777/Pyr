@@ -185,7 +185,14 @@ impl PyrApp {
         p.galley(pos2(r.center().x - g.size().x / 2.0, r.top() + 56.0), g, Color32::WHITE);
         let so_far = won_after(&bonus.game, o.bet, step, bonus.won);
         let shown = if step_at.is_some() && k < 1.0 { won_after(&bonus.game, o.bet, step.saturating_sub(1), bonus.won) } else { so_far };
-        let won_text = if sup { format!("WON {}  ×3 = {}", chips_text(shown), chips_text(shown * bonus.times)) } else { format!("WON {}", chips_text(shown)) };
+        // (Before the first step, with nothing won: good luck, as 0.13.28 wishes it.)
+        let won_text = if shown == 0 && step == 0 {
+            "GOOD LUCK".to_string()
+        } else if sup {
+            format!("WON {}  ×3 = {}", chips_text(shown), chips_text(shown * bonus.times))
+        } else {
+            format!("WON {}", chips_text(shown))
+        };
         tag(&p, pos2(r.center().x, r.top() + 98.0), &won_text, 17.0, col::GOLD2);
         let board = Rect::from_min_max(pos2(r.left() + 30.0, r.top() + 120.0), pos2(r.right() - 30.0, r.bottom() - 74.0));
         let button = Rect::from_center_size(pos2(r.center().x, r.bottom() - 38.0), vec2(280.0, 50.0));
@@ -194,7 +201,8 @@ impl PyrApp {
         let auto_go = auto && ready && step_at.is_none_or(|t| now.duration_since(t).as_secs_f32() > secs + 0.45) && now.duration_since(self.poker.casino.row.mini.as_ref().unwrap().started) > Duration::from_millis(900);
         // The game: what it draws, and the step a click takes (the thing clicked).
         let mut take: Option<usize> = None;
-        let ctxs = Ctx { p: &p, ctx: &ctx, th, st, board, step, k, picked: &picked, time, bet: o.bet };
+        let scene = Rect::from_center_size(r.center(), vec2(1376.0, 774.0) * (r.width() / 1376.0).max(r.height() / 774.0));
+        let ctxs = Ctx { p: &p, ctx: &ctx, th, st, board, scene, step, k, secs, picked: &picked, time, bet: o.bet };
         match &bonus.game {
             Mini::Ladder { rungs, top } => {
                 ladder(&ctxs, rungs, *top);
@@ -251,6 +259,11 @@ impl PyrApp {
                 }
             }
         }
+        // (The claw's carriage rides the rail through where what's won is shown: 0.13.28 let it
+        // hide it; here what's won stays over it.)
+        if matches!(bonus.game, Mini::Claw { .. }) {
+            tag(&p, pos2(r.center().x, r.top() + 98.0), &won_text, 17.0, col::GOLD2);
+        }
         // Spinning by itself: the steps take themselves.
         if take.is_none() && auto_go {
             take = Some(auto_pick(&bonus.game, step, &picked));
@@ -277,7 +290,9 @@ impl PyrApp {
                 self.poker.casino.row.win = o.paid;
             }
             let a = (now.duration_since(over).as_secs_f32() / 0.4).min(1.0);
-            let pr = Rect::from_center_size(pos2(r.center().x, r.bottom() - 100.0), vec2(360.0, 56.0) * (0.7 + 0.3 * ease_back(a)));
+            // (0.13.28's: the game dimmed under it, and the total in the middle of it.)
+            p.rect_filled(board, 0, Color32::from_black_alpha((120.0 * a) as u8));
+            let pr = Rect::from_center_size(board.center(), vec2(420.0, 64.0) * (0.7 + 0.3 * ease_back(a)));
             p.rect_filled(pr, theme::r(20), Color32::from_black_alpha(220));
             p.rect_stroke(pr, theme::r(20), Stroke::new(2.0f32, th.accent), StrokeKind::Inside);
             glow_text(&p, pr.center(), Align2::CENTER_CENTER, &format!("{} {}", if sup { "SUPER TOTAL" } else { "TOTAL" }, chips_text(paid)), theme::display_font(st.font, 26.0), col::GOLD2, th.accent.gamma_multiply(0.5));
@@ -325,9 +340,14 @@ struct Ctx<'a> {
     th: &'a Theme,
     st: &'a Style,
     board: Rect,
-    /// Steps taken, and how far the last one's show has got (0 to 1).
+    /// Where the scene's picture lies (cut to the frame about its middle): for what's painted
+    /// in it (Ice Fishing's pond).
+    scene: Rect,
+    /// Steps taken, how far the last one's show has got (0 to 1), and how long a step's show
+    /// is (seconds).
     step: usize,
     k: f32,
+    secs: f32,
     picked: &'a [usize],
     time: f32,
     bet: u64,
@@ -543,66 +563,145 @@ fn sarcophagus(p: &egui::Painter, r: Rect, gold: Color32) {
     p.line_segment([c + vec2(-w * 0.35, h * 0.25), c + vec2(w * 0.35, h * 0.25)], Stroke::new(2.0f32, Color32::from_rgb(0x2a, 0x6a, 0xa0)));
 }
 
-/// Cargo Run: the rocket climbs, its cargo's multiple counting up, till it blows.
+/// Cargo Run's route (0.13.6, as 0.13.28 flies it): the picture's dotted path from the launch
+/// pad round to the black hole, in fractions of the picture across and down.
+const ROUTE: [(f32, f32); 11] = [
+    (0.4602, 0.9904),
+    (0.3336, 0.9019),
+    (0.2278, 0.7942),
+    (0.1713, 0.6624),
+    (0.1681, 0.5289),
+    (0.2133, 0.4164),
+    (0.3001, 0.3593),
+    (0.4159, 0.3392),
+    (0.5262, 0.3392),
+    (0.6121, 0.3640),
+    (0.7796, 0.4494),
+];
+/// Its marks (times the bet): the last is the black hole, the most the cargo can be worth.
+const ROUTE_MARKS: [u64; 5] = [10, 50, 100, 250, 720];
+
+/// The route from the pad to where a multiple of the bet is on it: as far along it as the
+/// multiple's log is to the black hole's (so 10× is a third of the way). The points, the last
+/// that place.
+fn route_to(scene: Rect, m: f32) -> Vec<Pos2> {
+    let pts: Vec<Pos2> = ROUTE.iter().map(|(x, y)| scene.min + vec2(*x, *y) * scene.size()).collect();
+    let total: f32 = pts.windows(2).map(|w| w[0].distance(w[1])).sum();
+    let top = (rw::CARGO_CAP as f32 / 100.0).ln();
+    let mut left = (m.max(1.0).ln() / top).clamp(0.0, 1.0) * total;
+    let mut out = vec![pts[0]];
+    for w in pts.windows(2) {
+        let l = w[0].distance(w[1]);
+        if left <= l {
+            if left > 0.0 {
+                out.push(w[0] + (w[1] - w[0]) * (left / l.max(0.001)));
+            }
+            return out;
+        }
+        left -= l;
+        out.push(w[1]);
+    }
+    out
+}
+
+/// Cargo Run (0.13.6, as 0.13.28's): the rocket flies the route drawn in the sky toward the
+/// black hole, its marks along the way, the way it's flown in gold behind it; the further it
+/// gets before its fuel runs out, the more the cargo's worth, and it's delivered where it got
+/// to. The panel says so before the launch, then what the cargo's worth.
 fn cargo(c: &Ctx, x100: u64, since: Option<f32>) {
     let b = c.board;
-    let dial = Rect::from_center_size(pos2(b.center().x, b.top() + b.height() * 0.3), vec2(320.0, 110.0));
     let t = since.unwrap_or(0.0);
     let secs = cargo_secs(x100);
     let flying = since.is_some() && t < secs;
-    let blown = since.is_some() && t >= secs;
-    let m = if since.is_some() { cargo_at(x100, t) } else { 1.0 };
-    // The flight path: a curve up and across, the rocket along it.
-    let k = (t / secs).clamp(0.0, 1.0);
-    let path = |u: f32| pos2(b.left() + 60.0 + u * (b.width() - 140.0), b.bottom() - 30.0 - (u.powf(1.6)) * (b.height() - 80.0));
-    let pts: Vec<Pos2> = (0..=40).map(|i| path(i as f32 / 40.0 * k)).collect();
-    if pts.len() > 1 {
-        c.p.add(Shape::line(pts, Stroke::new(3.0f32, c.st.second.gamma_multiply(0.6))));
+    let delivered = since.is_some() && t >= secs;
+    let m = if delivered { x100 as f32 / 100.0 } else if flying { cargo_at(x100, t) } else { 1.0 };
+    let way = route_to(c.scene, m);
+    let at = *way.last().unwrap();
+    if way.len() > 1 {
+        c.p.add(Shape::line(way, Stroke::new(5.0f32, Color32::from_rgba_unmultiplied(0xff, 0xe2, 0x9a, 204))));
     }
-    let at = path(k);
-    if !blown {
-        let ang = {
-            let a = path((k + 0.01).min(1.0));
-            (a - at).angle()
-        };
-        let rr = Rect::from_center_size(at, vec2(96.0, 96.0));
-        // (The rocket's art points up and right: turned along its path.)
-        let _ = ang;
-        radial(c.p, at - vec2(30.0, -24.0), 40.0, Color32::from_rgb(0xff, 0xa0, 0x40).gamma_multiply(if flying { 0.6 } else { 0.0 }), Color32::TRANSPARENT);
-        piece(c.p, c.ctx, c.th, 0, rr, Color32::WHITE);
-        piece(c.p, c.ctx, c.th, 2, Rect::from_center_size(at + vec2(-46.0, 26.0), vec2(48.0, 48.0)), Color32::WHITE);
+    // The marks: lit once the rocket's past them.
+    for mark in ROUTE_MARKS {
+        let q = *route_to(c.scene, mark as f32).last().unwrap();
+        let passed = m >= mark as f32;
+        c.p.circle_filled(q, 8.0, if passed { col::GOLD2 } else { Color32::from_black_alpha(140) });
+        c.p.circle_stroke(q, 8.0, Stroke::new(2.0f32, c.st.second));
+        let words = if mark * 100 == rw::CARGO_CAP { format!("{mark}×  BLACK HOLE") } else { format!("{mark}×") };
+        tag(c.p, q - vec2(0.0, 22.0), &words, 12.0, if passed { col::GOLD2 } else { Color32::WHITE });
+    }
+    // The rocket with its cargo; delivered, the cargo where it got to.
+    // (0.13.28's, measured: the rocket's glow round it, the cargo hanging off its tail; once
+    // delivered, the glow round the cargo opening out over half a second.)
+    if !delivered {
+        if flying {
+            radial(c.p, at, 68.0, Color32::from_rgb(0xff, 0xa0, 0x40).gamma_multiply(0.5), Color32::TRANSPARENT);
+        }
+        piece(c.p, c.ctx, c.th, 0, Rect::from_center_size(at, vec2(96.0, 96.0)), Color32::WHITE);
+        piece(c.p, c.ctx, c.th, 2, Rect::from_center_size(at + vec2(-42.0, 27.0), vec2(48.0, 48.0)), Color32::WHITE);
     } else {
-        let u = ((t - secs) / 0.6).min(1.0);
-        radial(c.p, at, 40.0 + 140.0 * u, Color32::from_rgb(0xff, 0xc0, 0x40).gamma_multiply(1.0 - u * 0.7), Color32::TRANSPARENT);
-        radial(c.p, at, 20.0 + 60.0 * u, Color32::WHITE.gamma_multiply(1.0 - u), Color32::TRANSPARENT);
-        piece(c.p, c.ctx, c.th, 1, Rect::from_center_size(at + vec2(0.0, 30.0 * u), vec2(70.0, 70.0)), Color32::WHITE);
+        let u = ((t - secs) / 0.45).clamp(0.0, 1.0);
+        radial(c.p, at, 105.0 * u.sqrt(), col::GOLD.gamma_multiply(0.4 + 0.5 * (1.0 - u)), Color32::TRANSPARENT);
+        piece(c.p, c.ctx, c.th, 2, Rect::from_center_size(at, vec2(70.0, 70.0)), Color32::WHITE);
     }
-    // The multiple, big.
-    c.p.rect_filled(dial, theme::r(18), Color32::from_black_alpha(190));
-    c.p.rect_stroke(dial, theme::r(18), Stroke::new(2.0f32, c.st.second), StrokeKind::Inside);
-    let color = if blown { col::GOLD2 } else { Color32::WHITE };
-    glow_text(c.p, dial.center() - vec2(0.0, 10.0), Align2::CENTER_CENTER, &format!("{m:.2}×"), theme::display_font(c.st.font, 46.0), color, c.st.second.gamma_multiply(0.6));
-    let sub = if blown { format!("CARGO DELIVERED: {}", chips_text(share(c.bet, x100, 100))) } else if flying { format!("{} and climbing", chips_text((m * c.bet as f32) as u64)) } else { format!("{:.2}× to {}×", rw::CARGO_A as f32 / 100.0, rw::CARGO_CAP / 100) };
-    c.p.text(dial.center() + vec2(0.0, 34.0), Align2::CENTER_CENTER, sub, theme::bold_font(13.0), col::MUTED);
+    // The panel: what the cargo's worth.
+    let panel = Rect::from_center_size(b.min + b.size() * 0.62, vec2(380.0, 120.0));
+    c.p.rect_filled(panel, theme::r(14), Color32::from_black_alpha(225));
+    c.p.rect_stroke(panel, theme::r(14), Stroke::new(2.0f32, c.st.second), StrokeKind::Inside);
+    let label = if delivered { "CARGO DELIVERED" } else if flying { "CARGO WORTH" } else { "PRESS LAUNCH" };
+    c.p.text(pos2(panel.center().x, panel.top() + 18.0), Align2::CENTER_CENTER, label, theme::bold_font(12.0), col::MUTED);
+    glow_text(c.p, panel.center() + vec2(0.0, 2.0), Align2::CENTER_CENTER, &format!("{m:.2}×"), theme::display_font(c.st.font, 44.0), if delivered { col::GOLD2 } else { Color32::WHITE }, c.st.second.gamma_multiply(0.6));
+    if flying || delivered {
+        let worth = if delivered { format!("{m:.2}×  =  {}", chips_text(share(c.bet, x100, 100))) } else { format!("{}  ·  still climbing", chips_text((m * c.bet as f32) as u64)) };
+        c.p.text(pos2(panel.center().x, panel.top() + 101.0), Align2::CENTER_CENTER, worth, theme::bold_font(12.5), col::TEXT);
+    } else {
+        let g = c.p.layout(format!("The further it flies, the more the cargo's worth: {:.2}× to {}×", rw::CARGO_A as f32 / 100.0, rw::CARGO_CAP / 100), theme::bold_font(12.5), col::TEXT, panel.width() - 24.0);
+        c.p.galley(pos2(panel.left() + 19.0, panel.top() + 80.0), g, col::TEXT);
+    }
 }
 
-/// Candy Grab: the claw drops, closes, and comes up with what it caught.
+/// Where the claw goes on its `step`th go (from 1): five places along the candy pile, a go to
+/// every third one (0.13.28's, measured at two sizes: they're the picture's).
+fn claw_spot(scene: Rect, step: usize) -> f32 {
+    scene.left() + scene.width() * (0.4844 + 0.1128 * (std::f32::consts::TAU * 0.3 * (step + 2) as f32).sin())
+}
+
+/// Candy Grab (0.13.6, as 0.13.28's): one claw, the machine's own and bigger, hanging off a
+/// carriage on the rail across the top of the machine. A go takes it across to where it's
+/// going (a light in the candy there), down on its cable, closed on what it caught, up and back
+/// to the middle; at rest it sways a little. Its places: five along the pile, a go to every
+/// third one. All in the picture's own measure, as the picture's drawn.
 fn claw(c: &Ctx, grabs: &[Find]) {
     let b = c.board;
+    let sc = c.scene;
+    let s = sc.height() / 774.0;
     let left = rw::GRABS as i32 + grabs.iter().take(c.step).filter(|g| matches!(g, Find::Extra)).count() as i32 - grabs.iter().take(c.step).filter(|g| matches!(g, Find::Prize { .. })).count() as i32;
-    let col_x = b.center().x;
-    // The claw: across, down, closed, up again (the last step's show).
+    let sway = |t: f32| sc.center().x + 23.4 * s * (t * 0.688).sin();
+    let rail = sc.top() + 0.1544 * sc.height();
     let anim = c.step > 0 && c.k < 1.0;
     let k = if anim { c.k } else { 0.0 };
-    let drop = if k < 0.45 { ease_out(k / 0.45) } else { 1.0 - ease_out(((k - 0.45) / 0.55).min(1.0)) };
-    let sway = if anim { ((c.picked.len() as f32 * 1.7).sin()) * b.width() * 0.18 * (k * 3.0).min(1.0) } else { (c.time * 0.8).sin() * 30.0 };
-    let top = b.top() + 10.0;
-    let y = top + drop * (b.height() * 0.62);
-    let x = col_x + sway;
-    c.p.line_segment([pos2(x, top - 20.0), pos2(x, y)], Stroke::new(3.0f32, Color32::from_rgb(0xc0, 0xc0, 0xc8)));
-    piece(c.p, c.ctx, c.th, 0, Rect::from_center_size(pos2(x, y + 40.0), vec2(110.0, 110.0)), Color32::WHITE);
-    // What it's holding on the way up.
-    if anim && k > 0.45
+    let spot = claw_spot(sc, c.step);
+    let (x, down) = if anim {
+        let from = sway(c.time - c.k * c.secs);
+        let x = if k < 0.86 { from + (spot - from) * ease_out(k / 0.24) } else { spot + (sc.center().x - spot) * ease_out((k - 0.86) / 0.17) };
+        let down = if k < 0.6 { ease_out((k - 0.2) / 0.35) } else { 1.0 - ease_out((k - 0.6) / 0.2) };
+        (x, down)
+    } else {
+        (sway(c.time), 0.0)
+    };
+    let cell = 192.0 * s;
+    let top = rail + (10.0 + 179.0 * down) * s;
+    // Where it's going: a light in the candy, from just after the go starts till it comes up.
+    if anim && (0.05..0.65).contains(&k) {
+        radial(c.p, pos2(spot, rail + 354.8 * s), 96.0 * s, Color32::from_white_alpha(80), Color32::TRANSPARENT);
+    }
+    c.p.line_segment([pos2(x, rail), pos2(x, top)], Stroke::new(5.0 * s, Color32::from_rgb(200, 201, 210)));
+    let carriage = Rect::from_center_size(pos2(x, rail), vec2(77.0, 26.0) * s);
+    c.p.rect_filled(carriage, theme::r(3), Color32::from_rgb(153, 154, 165));
+    c.p.rect_stroke(carriage, theme::r(3), Stroke::new(1.0f32, Color32::from_rgb(80, 81, 90)), StrokeKind::Inside);
+    c.p.line_segment([pos2(x, rail), pos2(x, carriage.bottom())], Stroke::new(5.0 * s, Color32::from_rgb(200, 201, 210)));
+    piece(c.p, c.ctx, c.th, 0, Rect::from_min_size(pos2(x - cell / 2.0, top), vec2(cell, cell)), Color32::WHITE);
+    // What it caught, in its grip from when it closes.
+    if anim && k >= 0.55
         && let Some(g) = grabs.get(c.step - 1)
     {
         let idx = match g {
@@ -611,7 +710,7 @@ fn claw(c: &Ctx, grabs: &[Find]) {
             _ => None,
         };
         if let Some(i) = idx {
-            piece(c.p, c.ctx, c.th, i, Rect::from_center_size(pos2(x, y + 92.0), vec2(70.0, 70.0)), Color32::WHITE);
+            piece(c.p, c.ctx, c.th, i, Rect::from_center_size(pos2(x, top + 164.0 * s), vec2(90.0, 90.0) * s), Color32::WHITE);
         }
     }
     // The haul so far, along the bottom.
@@ -635,7 +734,7 @@ fn claw(c: &Ctx, grabs: &[Find]) {
         }
         tag(c.p, cc + vec2(0.0, 26.0), &text, 11.5, if matches!(g, Find::Extra) { c.st.second } else { col::GOLD2 });
     }
-    tag(c.p, pos2(b.right() - 70.0, b.top() + 20.0), &format!("GOES LEFT: {}", left.max(0)), 14.0, Color32::WHITE);
+    lamps(c, "GOES LEFT", left.max(0) as usize, true);
 }
 
 /// Candy Grab's kinds on the sheet (0: nothing).
@@ -755,13 +854,13 @@ fn drop_board(c: &Ctx, balls: &[rw::Ball]) {
     tag(c.p, pos2(b.right() - 70.0, b.top() + 10.0), &format!("BALLS LEFT {}", rw::BALLS - c.step.min(rw::BALLS)), 13.0, Color32::WHITE);
 }
 
-/// Ice Fishing: the hole in the ice, each cast's catch out of it, the catches on the board.
+/// Ice Fishing: one place to fish, the pond the rod's line is in (0.13.6: where the picture has
+/// it), each cast's ripples and then its catch up out of it; the catches on the board; the
+/// casts left big, as lamps.
 fn fishing(c: &Ctx, casts: &[Find]) {
     let b = c.board;
-    let hole = pos2(b.center().x - b.width() * 0.12, b.center().y + 20.0);
-    c.p.add(egui::epaint::EllipseShape::filled(hole, vec2(110.0, 40.0), Color32::from_rgb(0x06, 0x22, 0x40)));
-    c.p.add(egui::epaint::EllipseShape::stroke(hole, vec2(110.0, 40.0), Stroke::new(4.0f32, Color32::from_rgb(0xd8, 0xf0, 0xff))));
-    // The cast: the line down, the catch up.
+    let hole = c.scene.min + vec2(0.4566, 0.7042) * c.scene.size();
+    // The cast: ripples, then the catch up.
     if c.step > 0
         && let Some(f) = casts.get(c.step - 1)
     {
@@ -769,8 +868,11 @@ fn fishing(c: &Ctx, casts: &[Find]) {
         let up = if k < 0.5 { 0.0 } else { ease_back(((k - 0.5) / 0.5).min(1.0)) };
         let at = hole - vec2(0.0, up * 120.0);
         if k < 0.5 {
-            let bob = (c.time * 10.0).sin() * 4.0;
-            c.p.line_segment([pos2(hole.x, b.top()), hole + vec2(0.0, bob)], Stroke::new(1.5f32, Color32::from_white_alpha(200)));
+            for ring in 0..3 {
+                let ph = (c.time / 0.6 + ring as f32 / 3.0).fract();
+                let w = 8.0 + 45.0 * ph;
+                c.p.add(egui::epaint::EllipseShape::stroke(hole, vec2(w, w * 0.4), Stroke::new(2.0f32, Color32::from_white_alpha((230.0 * (1.0 - ph)) as u8))));
+            }
         } else {
             let idx = fish_piece(f);
             piece(c.p, c.ctx, c.th, idx, Rect::from_center_size(at, vec2(120.0, 120.0)), Color32::WHITE);
@@ -805,13 +907,31 @@ fn fishing(c: &Ctx, casts: &[Find]) {
         };
         c.p.text(pos2(board.left() + 64.0, y), Align2::LEFT_CENTER, t, theme::bold_font(13.0), col::TEXT);
     }
-    tag(c.p, pos2(hole.x, b.top() + 12.0), &format!("CASTS LEFT {}", (rw::CASTS as usize).saturating_sub(c.step)), 13.0, Color32::WHITE);
     let cocoa = casts.iter().take(shown).fold(rw::START_EXTRA as i32, |n, f| match f {
         Find::Extra => n + 1,
         Find::Danger { saved: true } => n - 1,
         _ => n,
     });
-    tag(c.p, pos2(hole.x, b.top() + 34.0), &format!("COCOA IN HAND {}", cocoa.max(0)), 13.0, col::GOLD2);
+    let lamp = lamps(c, "CASTS LEFT", (rw::CASTS as usize).saturating_sub(c.step), false);
+    tag(c.p, pos2(lamp.center().x, lamp.bottom() + 17.0), &format!("COCOA IN HAND {}", cocoa.max(0)), 13.0, col::GOLD2);
+}
+
+/// What's left (casts, goes) big, as lamps (0.13.6): a dark plate at the board's top left (or
+/// right), its rim the machine's colour, the count big in gold and a lamp for each one left.
+/// Where it lies.
+fn lamps(c: &Ctx, what: &str, left: usize, right: bool) -> Rect {
+    let size = vec2(150.0, 74.0);
+    let at = if right { pos2(c.board.right() - 15.0 - size.x, c.board.top() + 3.0) } else { c.board.min + vec2(15.0, 3.0) };
+    let r = Rect::from_min_size(at, size);
+    c.p.rect_filled(r, theme::r(12), Color32::from_black_alpha(230));
+    c.p.rect_stroke(r, theme::r(12), Stroke::new(2.0f32, c.th.accent), StrokeKind::Inside);
+    c.p.text(pos2(r.center().x, r.top() + 14.5), Align2::CENTER_CENTER, what, theme::bold_font(11.0), col::MUTED);
+    glow_text(c.p, pos2(r.center().x, r.top() + 39.0), Align2::CENTER_CENTER, &left.to_string(), theme::display_font(c.st.font, 32.0), col::GOLD2, c.th.accent);
+    for i in 0..left {
+        let x = r.center().x + (i as f32 - (left as f32 - 1.0) / 2.0) * 13.0;
+        c.p.circle_filled(pos2(x, r.top() + 64.0), 3.5, col::GOLD2);
+    }
+    r
 }
 
 fn fish_piece(f: &Find) -> usize {
@@ -881,18 +1001,20 @@ fn potion(ui: &mut egui::Ui, c: &Ctx, jars: &[rw::Jar], ready: bool) -> Option<u
 }
 
 /// Treasure Match: thirteen chests (four treasures three times over, and the egg); open till
-/// three match.
+/// three match. The chests in the middle of the scene, as 0.13.4 put them (0.13.28's: as wide
+/// as the board leaves room for the tally either side, 90 at least; the middle row at the
+/// scene's middle).
 fn treasure_match(ui: &mut egui::Ui, c: &Ctx, opened: &[u8], treasure: u8, egg: bool, ready: bool) -> Option<usize> {
     let b = c.board;
     let mut take = None;
     let rows = [5usize, 4, 4];
-    let cw = ((b.width() - 300.0) / 5.0).min((b.height() - 20.0) / 3.0 * 1.1).min(130.0);
+    let cw = ((b.width() - 590.0) / 5.0).max(90.0).min((b.height() - 20.0) / 3.0 * 1.1).min(130.0);
     let ch = cw / 1.1;
     let mut i = 0;
     for (ri, n) in rows.iter().enumerate() {
         for k in 0..*n {
-            let x = b.center().x - 120.0 + (k as f32 - (*n as f32 - 1.0) / 2.0) * (cw + 10.0);
-            let r = Rect::from_center_size(pos2(x, b.top() + (ri as f32 + 0.5) * (ch + 10.0)), vec2(cw, ch));
+            let x = b.center().x + (k as f32 - (*n as f32 - 1.0) / 2.0) * (cw + 10.0);
+            let r = Rect::from_center_size(pos2(x, b.center().y - 23.0 + (ri as f32 - 1.0) * (ch + 10.0)), vec2(cw, ch));
             let at = c.picked.iter().position(|t| *t == i);
             match at {
                 Some(s) if c.shows(s, 0.4) => {
@@ -940,7 +1062,7 @@ fn treasure_match(ui: &mut egui::Ui, c: &Ctx, opened: &[u8], treasure: u8, egg: 
     c.p.text(pos2(tally.left() + 64.0, y), Align2::LEFT_CENTER, if egg_seen { "THE EGG: ×2!" } else { "the egg doubles it" }, theme::bold_font(13.0), if egg_seen { col::GOLD2 } else { col::MUTED });
     if c.step >= opened.len() && c.k >= 1.0 {
         let names = ["JADE", "RUBIES", "GOLD", "PEARLS"];
-        glow_text(c.p, pos2(b.center().x - 120.0, b.bottom() - 16.0), Align2::CENTER_CENTER, &format!("THREE {}{}", names[treasure as usize], if egg { "  ×2" } else { "" }), theme::display_font(c.st.font, 28.0), col::GOLD2, Color32::from_black_alpha(200));
+        glow_text(c.p, pos2(b.center().x, b.bottom() - 16.0), Align2::CENTER_CENTER, &format!("THREE {}{}", names[treasure as usize], if egg { "  ×2" } else { "" }), theme::display_font(c.st.font, 28.0), col::GOLD2, Color32::from_black_alpha(200));
     }
     take
 }
@@ -1020,7 +1142,8 @@ fn cups(ui: &mut egui::Ui, c: &Ctx, rounds: &[Cup], finale: bool, ready: bool) -
     take
 }
 
-/// Champagne Tower: six tiers of glasses, each poured one multiplying the tower.
+/// Champagne Tower: six tiers of glasses, each poured one multiplying the tower: standing in the
+/// middle of the stage, on its podium (0.13.4's).
 fn champagne(c: &Ctx, tiers: &[Tier], tower: u64) {
     let b = c.board;
     let n = rw::GROW_TENTHS.len();
@@ -1044,7 +1167,7 @@ fn champagne(c: &Ctx, tiers: &[Tier], tower: u64) {
         }
         let full = step_of.is_some_and(|s| c.shows(s, 0.6));
         for g in 0..count {
-            let x = b.center().x - gw * 1.6 + (g as f32 - (count as f32 - 1.0) / 2.0) * gw * 0.9;
+            let x = b.center().x + (g as f32 - (count as f32 - 1.0) / 2.0) * gw * 0.9;
             let r = Rect::from_center_size(pos2(x, y), vec2(gw, gw));
             if full {
                 radial(c.p, r.center(), gw * 0.6, Color32::from_rgb(0xff, 0xe0, 0x8a).gamma_multiply(0.25), Color32::TRANSPARENT);
@@ -1058,10 +1181,10 @@ fn champagne(c: &Ctx, tiers: &[Tier], tower: u64) {
     {
         let y = base_y - poured_to.saturating_sub(1) as f32 * gw * 0.88 - gw;
         match t {
-            Tier::Poured { .. } => piece(c.p, c.ctx, c.th, 1, Rect::from_center_size(pos2(b.center().x - gw * 1.6 + gw * 0.6, y - gw * 0.4), vec2(gw * 1.2, gw * 1.2)), Color32::WHITE),
+            Tier::Poured { .. } => piece(c.p, c.ctx, c.th, 1, Rect::from_center_size(pos2(b.center().x + gw * 0.6, y - gw * 0.4), vec2(gw * 1.2, gw * 1.2)), Color32::WHITE),
             Tier::Toppled { .. } => {
                 let shake = (c.time * 40.0).sin() * 6.0 * (1.0 - c.k);
-                piece(c.p, c.ctx, c.th, 2, Rect::from_center_size(pos2(b.center().x - gw * 1.6 + shake, y + gw * 0.4), vec2(gw * 1.4, gw * 1.4)), Color32::WHITE);
+                piece(c.p, c.ctx, c.th, 2, Rect::from_center_size(pos2(b.center().x + shake, y + gw * 0.4), vec2(gw * 1.4, gw * 1.4)), Color32::WHITE);
             }
         }
     }
@@ -1086,6 +1209,38 @@ fn champagne(c: &Ctx, tiers: &[Tier], tower: u64) {
     if c.step >= tiers.len() && c.k >= 1.0 {
         let standing = tiers.len() == n && tiers.iter().all(|t| matches!(t, Tier::Poured { .. }));
         let t = if standing { "THE TOWER STANDS!".to_string() } else { format!("CURTAIN: {:.2}×", tower as f32 / 100.0) };
-        glow_text(c.p, pos2(b.center().x - gw * 1.6, b.top() + 10.0), Align2::CENTER_CENTER, &t, theme::display_font(c.st.font, 28.0), col::GOLD2, Color32::from_black_alpha(200));
+        glow_text(c.p, pos2(b.center().x, b.top() + 10.0), Align2::CENTER_CENTER, &t, theme::display_font(c.st.font, 28.0), col::GOLD2, Color32::from_black_alpha(200));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Cargo Run's marks fall where 0.13.28 draws them (to a pixel, at 1280 by 800), and a
+    /// multiple's place is as far along the route as its log is to 720's.
+    #[test]
+    fn the_cargo_runs_marks_are_where_0_13_28_has_them() {
+        let scene = Rect::from_min_size(pos2(243.1, 64.0), vec2(1105.8, 622.0));
+        for (m, x, y) in [(10.0, 430.5, 445.0), (50.0, 628.0, 282.0), (100.0, 754.0, 275.0), (250.0, 920.0, 291.0), (720.0, 1105.0, 343.5)] {
+            let at = *route_to(scene, m).last().unwrap();
+            assert!(at.distance(pos2(x, y)) < 1.0, "{m}×: {at:?}");
+        }
+        assert_eq!(route_to(scene, 1.0), vec![scene.min + vec2(ROUTE[0].0, ROUTE[0].1) * scene.size()]);
+        assert_eq!(route_to(scene, 1e9).len(), ROUTE.len());
+    }
+
+    /// The claw's places, go by go, as 0.13.28's went (its carriage's middle, at 1280 by 800 and
+    /// at 1600 by 1000).
+    #[test]
+    fn the_claw_goes_where_0_13_28s_did() {
+        let small = Rect::from_min_size(pos2(243.1, 64.0), vec2(1105.8, 622.0));
+        for (step, x) in [(1, 705.5), (2, 897.5), (3, 778.5), (4, 660.5), (5, 851.5)] {
+            assert!((claw_spot(small, step) - x).abs() < 1.5, "go {step}: {}", claw_spot(small, step));
+        }
+        let big = Rect::from_min_size(pos2(225.3, 64.0), vec2(1461.3, 822.0));
+        for (step, x) in [(1, 837.0), (2, 1090.0), (3, 933.5)] {
+            assert!((claw_spot(big, step) - x).abs() < 1.5, "go {step}: {}", claw_spot(big, step));
+        }
     }
 }

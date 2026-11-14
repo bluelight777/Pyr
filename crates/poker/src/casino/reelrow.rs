@@ -12,7 +12,7 @@
 //!   Pepper X.
 //! - Deep Sea Treasure, **Abyss Dive**: five depths of three clams: pearls, an air tank (a second
 //!   chance) or a shark. The chest is at the bottom.
-//! - Cosmic Jackpot, **Cargo Run**: the rocket climbs, its cargo multiplying, till it blows.
+//! - Cosmic Jackpot, **Cargo Run**: the rocket flies toward the black hole, its cargo worth more the further it gets before its fuel runs out.
 //! - Sugar Rush, **Candy Grab**: three goes with the claw; a golden ticket is another go.
 //! - Gold Rush, **Mine Shaft**: the original pick-and-dodge: nine nuggets, a lantern (a life),
 //!   the mother lode and four cave-ins.
@@ -151,7 +151,7 @@ pub fn check(machine: u8, bet: u64) -> Result<(), String> {
 pub const GAMES: [(&str, &str); 12] = [
     ("Heat Ladder", "Climb the Scoville scale, pepper by pepper. Too hot ends it, unless you've milk. Top it for the Pepper X."),
     ("Abyss Dive", "Five depths, three clams each: pearls, an air tank, or a shark. The chest waits at the bottom."),
-    ("Cargo Run", "The rocket climbs and the cargo multiplies, till it blows."),
+    ("Cargo Run", "Launch the rocket toward the black hole: the further it flies before its fuel runs out, the more your cargo pays."),
     ("Candy Grab", "Three goes with the claw. A golden ticket is another go."),
     ("Mine Shaft", "Fifteen tiles: nuggets, a lantern, the mother lode, and four cave-ins. Clear the shaft for the finale."),
     ("Neon Drop", "Five balls down ten rows of pegs. The edges pay the most."),

@@ -775,6 +775,23 @@ How (decided while starting it):
       code) waits for the frame to finish, and so does the games' volume moved; the invite list
       and the volume take what they need from the frame. (Found here: inviting froze a test Pyr.)
 - [ ] Mini-game backgrounds (0.13.4), bonus games clearer (0.13.6), Keno and Dice tweaks
+  - [x] Reel Row's twelve mini games side by side with 0.13.28's (each bought on both, played
+        through): 0.13.28's scenes (the places only, nothing of the pieces painted in); the
+        Champagne Tower in the middle of its stage; the Treasure Match's chests in the middle
+        (90 wide at least, the tally beside them); "GOOD LUCK" before the first step; at the end
+        the game dimmed and the total in its middle. Cargo Run: the rocket flies the route drawn
+        in the picture, its marks along it (10×, 50×, 100×, 250×, 720× BLACK HOLE), a multiple
+        as far along it as its log is to 720's (the marks fall where 0.13.28's do, to a pixel),
+        the way flown in gold, the cargo delivered where it got to, the panel's words ("PRESS
+        LAUNCH", "CARGO WORTH", "CARGO DELIVERED") and the new description. Candy Grab: one
+        claw, the machine's own and bigger, on a carriage riding the rail; across to its place
+        (five along the pile, a go to every third: 0.13.28's to the pixel at two sizes), a light
+        in the candy there, down, closed on what it caught, up, back; its idle sway as
+        0.13.28's. Ice Fishing: one place to fish, the picture's pond, ripples while the line's
+        in. Casts and goes left big, as lamps. Better than 0.13.28: what's won stays readable
+        over the claw's carriage (0.13.28's carriage hid it). Not seen: the Cargo Run's route
+        past 281× (taken as straight from the 250× mark to the black hole: the marks' places
+        agree with it).
 
 ### New in the rebuild
 - [x] Prop bets in chat, shared: one market per prop for everyone in the channel, Pyr Casino
