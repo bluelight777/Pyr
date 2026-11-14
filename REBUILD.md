@@ -768,8 +768,12 @@ How (decided while starting it):
         prize's chips, the fuse's hiss at ten seconds, the last five ticks and the bang, each
         within 0.3 dB of 0.13.28's (the bang's top octave 3.7 dB under, cards dealt over it).
         Not heard, so by the rule: the Bonfire's draw, Ember Dragon's big spin win and
-        jackpots, a slot's All or Nothing win. Not checked: whether the Remastered machines'
-        reel stops climb too (0.13.28's machines wouldn't spin here today).
+        jackpots, a slot's All or Nothing win. The Remastered machines' stops: they climb each
+        machine's own scale (above, Reel Row Remastered). All or Nothing that misses, heard at
+        Dragon's Hoard on both (Nov 14): the fuse as the dial starts, cut at 0.900 s to the sample
+        on 0.13.28 (0.13.0's fuse's length; the rebuild played the whole 1.02 s file, now cut
+        there too, the Bomb Pot's with it), the table's fold as it lands 3.24 s on, as loud on
+        both (the "bright short sound a second in" noted at Ember Dragon's was the fuse's cut).
   - [x] Staff titles on seats (0.13.4/0.13.6), as 0.13.28's (`measured/tablefeatures.md`): the
         seat's `badge` (`owner`, `game_master`, `ambassador`, none when hidden), the server
         sending it (with the MMRs) and `hide_title` (a change shows at once); "Show my title" in
