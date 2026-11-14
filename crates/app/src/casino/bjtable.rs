@@ -510,7 +510,12 @@ impl PyrApp {
         let hit = Rect::from_center_size(c, vec2(r * 2.4, r * 2.4));
         let resp = ui.interact(hit, ui.id().with(("bj-seat", i)), Sense::click());
         let betting = matches!(v.stage, BjStage::Waiting | BjStage::Betting | BjStage::Settled);
-        // Whose turn: a glow round the circle, and their time running out.
+        // Whose turn: a glow round the circle, and their time running out; my circle ringed in
+        // gold. (0.13.28's rings sit on the circle painted on the felt, 30 of the art's pixels out,
+        // mine a little inside that: the time centred on it, its dark track just outside (a
+        // circle's stroke goes round its outside). Measured in it at 1280x800 and 1600x1000, to a
+        // few hundredths of a pixel.)
+        let ring_r = if me { r * 0.9444 } else { r - k };
         if turn {
             for g in 0..5 {
                 p.circle_filled(c, r + 4.0 + g as f32 * 3.0 * k, col::GOLD.gamma_multiply(0.06));
@@ -518,10 +523,10 @@ impl PyrApp {
             let total = if seat.is_some_and(|x| x.bot) { 2_000.0 } else { pyr_poker::bjroom::TURN_MS as f32 };
             let frac = (clock_ms as f32 / total).clamp(0.0, 1.0);
             let ring = if frac > 0.5 { col::WIN } else if frac > 0.2 { col::GOLD } else { col::RED };
-            p.circle_stroke(c, r + 3.0, Stroke::new(4.0f32, Color32::from_black_alpha(150)));
-            arc(&p, c, r + 3.0, frac, Stroke::new(4.0f32, ring));
+            p.circle_stroke(c, ring_r, Stroke::new(4.0f32, Color32::from_black_alpha(150)));
+            arc(&p, c, ring_r, frac, Stroke::new(4.0f32, ring));
         } else if me {
-            p.circle_stroke(c, r + 2.0, Stroke::new(2.0f32, col::GOLD.gamma_multiply(0.8)));
+            p.circle_stroke(c, ring_r, Stroke::new(2.5f32, col::GOLD2));
         }
         // The chips in the circle: the round's bets, or the next round's (the stack stands in
         // the middle of the circle, as 0.13.28's: measured with one to four chips).
