@@ -906,10 +906,10 @@ How (decided while starting it):
   starts at), `missions` (their texts), `all_missions`, `star` (left out when empty); a record
   after every casino round (gains only when there's something to celebrate); `claim_ember` and
   `claim_weekly` (no fields) answered with the record and gains `{chips}`.
-- ToServer variants only 0.13.28 has (still to do): dom_tables, dom_watch, dom_unwatch,
-  dom_sit, dom_leave, dom_ready, dom_move, dom_bot, dom_new (straddle, rabbit, hide_title and
-  bounty are in). ToApp: dom_tables, dom (rabbit is in). Its achievements: 39
-  (the rebuild has 32). (take_chips, staff_log_all, cms and announcement are in: see the control
+- ToServer variants only 0.13.28 had: dom_tables, dom_watch, dom_unwatch, dom_sit, dom_leave,
+  dom_ready, dom_move, dom_bot, dom_new, and ToApp dom_tables and dom: all in with Dominó Cubano
+  (straddle, rabbit, hide_title and bounty were in before). Its achievements: 39, the rebuild's
+  39 now (`progress.rs`, Capicúa the last to come in). (take_chips, staff_log_all, cms and announcement are in: see the control
   room; invite_to_table and table_invite too: see the table invites.)
 - The control room as 0.13.28 talks it (found by sending it requests exactly as written,
   `crates/engine/examples/raw_probe.rs`, and reading its debug log): `{"op":"cms","req":{"op":
