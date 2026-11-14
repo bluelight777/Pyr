@@ -541,8 +541,10 @@ How (decided while starting it):
   - [x] Solo side by side (El Malecón): four in Solo pass and don't draw (the rebuild let them:
         fixed, with a test), the pozo on the felt, Draw's words, "· drew", "sitting this one
         out", the draw's sound as loud as 0.13.28's, the felt's Solo words.
-  - [ ] Not yet seen on 0.13.28: a Chiva, what watchers see while a double's answered, my
-        tiles while I'm the one asked to answer.
+  - [x] A ¡Doblo! watched (the banner, as the doubling side's) and put to me as the next in
+        turn (my tiles bright, my time on the bar), side by side.
+  - [ ] Not yet seen on 0.13.28: a Chiva (the game plays it as 0.13.28's rules, unseen on its
+        screen).
 - [x] Poker: the suits on bot faces and card pips (0.13.28's are one smooth shape each; the
       rebuild's are 0.13.0's circles and polygons), the Shark's crown and star
       (`measured/newtable.md`, `measured/cards.md`).
