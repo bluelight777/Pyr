@@ -767,8 +767,12 @@ How (decided while starting it):
         the wheel's launch, its peg clicks (the same 50, each within 5 ms), the landing and the
         prize's chips, the fuse's hiss at ten seconds, the last five ticks and the bang, each
         within 0.3 dB of 0.13.28's (the bang's top octave 3.7 dB under, cards dealt over it).
-        Not heard, so by the rule: the Bonfire's draw, Ember Dragon's big spin win and
-        jackpots, a slot's All or Nothing win. The Remastered machines' stops: they climb each
+        Not heard, so by the rule: the Bonfire's draw, Ember Dragon's jackpots, a slot's All or
+        Nothing win. Ember Dragon's big win, heard on both (Nov 14, 200 spins each with "a big
+        win stops it"): an Ember Respins' 72 times on 0.13.28 (EPIC WIN), 15 times on the rebuild
+        (BIG WIN): the respins' jackpot, coins and ticks, their winbig, then the big win's tier-up,
+        count and slam at the level's pitch, each file at the same gain on both (0.465, 0.304,
+        0.441, 0.598 and 0.595) and the same spacing within a tenth of a second. The Remastered machines' stops: they climb each
         machine's own scale (above, Reel Row Remastered). All or Nothing that misses, heard at
         Dragon's Hoard on both (Nov 14): the fuse as the dial starts, cut at 0.900 s to the sample
         on 0.13.28 (0.13.0's fuse's length; the rebuild played the whole 1.02 s file, now cut
