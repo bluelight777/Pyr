@@ -704,7 +704,9 @@ impl PyrApp {
             } else {
                 r
             };
-            let newest = Some(tile_here) == last_tile && !faded && v.stage == DomStage::Playing;
+            // (The newest one glows on after the hand's over, as 0.13.28's: the dominó that won it,
+            // under the result.)
+            let newest = Some(tile_here) == last_tile && !faded;
             if newest {
                 super::radial(&painter, r.center(), TILE_L * k * 1.15, col::GOLD.gamma_multiply(0.32), Color32::TRANSPARENT);
             }

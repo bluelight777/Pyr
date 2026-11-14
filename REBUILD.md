@@ -637,6 +637,8 @@ How (decided while starting it):
         the box now the same to the pixel but for the tiles under it. Mine called out as before
         ("¡CAPICÚA Y CHIVA!", +385 or −100); the ¡Capicúa! achievement's toast; the words
         "Chiva & " in 0.13.28's binary never came on its screen in any of this.
+  - [x] The newest tile glows on after the hand's over (the dominó that won it, under the
+        result), as 0.13.28's: the rebuild's stopped at the hand's end (Nov 14, side by side).
   - [ ] The line up and down: 0.13.28's sits 0.5 to 1 px higher than the rebuild's in most
         hands, and 2.7 px in one (a line going up three rows from the first tile), measured by
         matching the two pictures over 7 hands. Not explained yet (the middle of the tiles'
