@@ -693,8 +693,9 @@ How (decided while starting it):
         few dB in every band over a sound's first 0.3 s; and both seated, running their clocks
         out (the bells' levels by the same measure on both). The Ember profile plays them the same.
         The ticks fitted again to their own shape (F#6 and A6, each partial at a chance phase, its
-        decays and level: 98.5% of each 0.13.28 tick explained so). Not checked: rabbit and Bomb
-        Pot tables.
+        decays and level: 98.5% of each 0.13.28 tick explained so). A rabbit hunted at a table
+        both apps watched: no sound for its cards on 0.13.28 either, the pot's chips before it
+        and the next deal 7 s after the same on both (Nov 14). A Bomb Pot played by both: below.
   - [x] The casino games' sounds as 0.13.28's (`measured/casinosounds.md`), heard off it game by
         game and taken apart into its own files (`work/ui/decomp.py`): the casino's cues play its
         `c_*` files (dice, Keno, roulette, craps and blackjack heard: which file, when, how loud,
@@ -705,8 +706,11 @@ How (decided while starting it):
         Respins, the dragon growing, All or Nothing). Plinko's pegs and buckets are 0.13.0's own
         helpers as 0.13.28 used them, sample for sample (a peg's pitch by its row, a bucket's by
         its place). The rebuild taken apart the same way at dice, Keno, Pyr Sevens and Plinko: the
-        same files at the same gains, pitches and places. Not heard, so by the rule: the Bomb
-        Pot's wheel, fuse and bang, the Bonfire's draw, Ember Dragon's big spin win and
+        same files at the same gains, pitches and places. A Bomb Pot both apps sat in (Nov 14):
+        the wheel's launch, its peg clicks (the same 50, each within 5 ms), the landing and the
+        prize's chips, the fuse's hiss at ten seconds, the last five ticks and the bang, each
+        within 0.3 dB of 0.13.28's (the bang's top octave 3.7 dB under, cards dealt over it).
+        Not heard, so by the rule: the Bonfire's draw, Ember Dragon's big spin win and
         jackpots, a slot's All or Nothing win. Not checked: whether the Remastered machines'
         reel stops climb too (0.13.28's machines wouldn't spin here today).
   - [x] Staff titles on seats (0.13.4/0.13.6), as 0.13.28's (`measured/tablefeatures.md`): the
@@ -718,8 +722,9 @@ How (decided while starting it):
         and without (the winged shields with crown or gem, the Ambassador's silver shield, the
         glows), and their moving parts filmed at 1× (a 3 s beat, nine rays turning 20° a second,
         sparkles in turns): side by side at 3× they look the same; the shapes are drawn again,
-        not 0.13.28's to the pixel, and the sparkles' places are the rebuild's own. Not checked:
-        titles at the casino's table games (blackjack and the rest).
+        not 0.13.28's to the pixel, and the sparkles' places are the rebuild's own. At the
+        casino's table games 0.13.28 shows no title: the Owner seated at blackjack and at
+        baccarat has only her name's pill, on its screen and the rebuild's (Nov 14).
   - [x] The level badge's ring in its tier's colour (Ember bronze, Flame silver, Blaze gold...),
         read off 0.13.28's seats.
   - [x] Slower wins (0.13.4), as 0.13.28's (`measured/tablefeatures.md`): its server waits 7 s
@@ -845,7 +850,8 @@ How (decided while starting it):
       (`PYR_DEMO_CHEER=1`) is the rebuild's too.
 - [x] Table invites (0.13.6): "+ Invite" on the top bar of every blackjack, roulette, baccarat and
       craps table (left of the rounds checked) and beside a poker table's Lobby, "Invite someone
-      here to this table"; its list as 0.13.28's (Invite to this table, Look for someone, everyone
+      here to this table" (not at a tournament's table: 0.13.28's Bomb Pot table has none, and
+      the rebuild had one there; fixed, Nov 14); its list as 0.13.28's (Invite to this table, Look for someone, everyone
       here online first, "(offline)", 600 wide, scrolls past eight; never me, bots or anyone I've
       blocked); "Invited Olive to the table". 0.13.28's words both ways, taken from its app and its
       server (`invite_to_table {uid, table: {game, id}}`, `table_invite {from, table, name}`): its

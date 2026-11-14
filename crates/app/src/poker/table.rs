@@ -308,9 +308,10 @@ impl PyrApp {
                 self.open_tourney(&s.key, tid);
             }
         }
-        // Invite someone here (0.13.6), beside the way back, as 0.13.28 has it.
+        // Invite someone here (0.13.6), beside the way back, as 0.13.28 has it: not at a
+        // tournament's table (a Bomb Pot's has none on its screen: its seats are the entrants').
         let mut left_end = back.right();
-        if s.has(pyr_proto::control::VOICE_INVITE_FEATURE) {
+        if s.has(pyr_proto::control::VOICE_INVITE_FEATURE) && v.tourney.is_none() {
             let at = Rect::from_min_size(pos2(back.right() + 8.0, back.top()), vec2(84.0, 32.0));
             let resp = ui.interact(at, ui.id().with("poker-invite"), Sense::click());
             p.rect_filled(at, theme::r(8), Color32::from_white_alpha(if resp.hovered() { 30 } else { 14 }));
