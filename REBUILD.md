@@ -639,10 +639,19 @@ How (decided while starting it):
         "Chiva & " in 0.13.28's binary never came on its screen in any of this.
   - [x] The newest tile glows on after the hand's over (the dominó that won it, under the
         result), as 0.13.28's: the rebuild's stopped at the hand's end (Nov 14, side by side).
-  - [ ] The line up and down: 0.13.28's sits 0.5 to 1 px higher than the rebuild's in most
-        hands, and 2.7 px in one (a line going up three rows from the first tile), measured by
-        matching the two pictures over 7 hands. Not explained yet (the middle of the tiles'
-        middles fits the rest; their extents and their average don't).
+  - [x] The tiles' shadows (Nov 14, lossless captures of both apps watching the same hands, 43
+        hands): 0.13.28's tiles have a shadow down and to the right (3 across and 4 down under
+        one in my hand, its depth 2; on the line about 0.9 and 1.3, its depth 0.6, so the depth
+        and the shadow show under a tile by turns as the line falls on the pixels), and a line
+        tile's edge is a single lighter one (201, 188, 157). The rebuild had no shadow and a
+        whole pixel of depth under every tile: now 0.13.28's, the light or dark row under each
+        row of tiles the same as 0.13.28's in every hand since. The line sits 0.6 above the
+        felt's middle and 0.2 left of it, as 0.13.28's (to a tenth of a pixel).
+  - [ ] Left over on the line: 0.13.28's tiles bleed a faint line (8%) of their edge out on
+        their top and left, and its pips fall a little differently on the pixels (within a
+        pixel). And once in 30 hands its line sat 2.1 px higher than the middle of its tiles'
+        middles puts it (both times a line that had only gone up from the first tile): not
+        explained.
 - [x] Poker: the suits on bot faces and card pips (0.13.28's are one smooth shape each; the
       rebuild's are 0.13.0's circles and polygons), the Shark's crown and star
       (`measured/newtable.md`, `measured/cards.md`).

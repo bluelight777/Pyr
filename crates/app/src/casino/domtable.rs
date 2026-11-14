@@ -246,14 +246,19 @@ fn pips(n: u8) -> &'static [(f32, f32)] {
 pub fn tile(p: &egui::Painter, r: Rect, across: bool, first: u8, second: u8, dim: f32) {
     let short = r.width().min(r.height());
     let round = short * 0.11;
-    let depth = (short * 0.045).max(1.0);
-    p.rect_filled(r.translate(vec2(0.0, depth)), round, Color32::from_rgb(217, 205, 176));
-    p.rect_filled(r, round, Color32::from_rgb(185, 169, 134));
-    // (A big one's edge is two-toned; a small one's, on the line, a single line.)
+    // (Under it a shadow down and to the right, then its depth: 3 across and 4 down, and 2, under
+    // one in my hand; about a pixel and less on the line, where they show by turns as the line
+    // falls on the pixels. 0.13.28's, side by side: its rack, and its line over 40 hands.)
+    let depth = short * 0.045;
+    p.rect_filled(r.translate(vec2(short * 0.065, short * 0.093)), round, Color32::from_black_alpha(97));
+    p.rect_filled(r.translate(vec2(0.0, depth)), round, Color32::from_rgb(215, 202, 173));
+    // (A big one's edge is two-toned; a small one's, on the line, a single lighter line.)
     let face = if short >= 24.0 {
+        p.rect_filled(r, round, Color32::from_rgb(185, 169, 134));
         p.rect_filled(r.shrink(1.0), (round - 1.0).max(0.0), Color32::from_rgb(223, 213, 187));
         r.shrink(2.0)
     } else {
+        p.rect_filled(r, round, Color32::from_rgb(201, 188, 157));
         r.shrink(1.0)
     };
     super::vgrad_round(p, face, (round - 2.0).max(0.0), Color32::from_rgb(248, 242, 226), Color32::from_rgb(246, 239, 220));
@@ -685,9 +690,13 @@ impl PyrApp {
         let fit = (felt.height() / tall.max(1.0)).min(1.0);
         let unit = unit * fit;
         let mid = line_middle(&l);
-        let origin = pos2(felt.center().x, felt.center().y - mid * unit);
+        // (0.13.28's sits 0.6 above the felt's middle and 0.2 left of it: matched to it over 40
+        // hands, side by side, by where its tiles' edges and shadows fall on the pixels.)
+        let origin = pos2(felt.center().x - 0.2 * k, felt.center().y - 0.6 * k - mid * unit);
         let to_screen = |r: Rect| Rect::from_min_max(origin + r.min.to_vec2() * unit, origin + r.max.to_vec2() * unit);
         let painter = p.clone();
+        // (The tile as it was played, either way round: the line has it turned to fit.)
+        let same = |a: Tile, b: Tile| a == b || a == [b[1], b[0]];
         let last_tile = h.last.and_then(|(_, m)| if let Move::Play { tile, .. } = m { Some(tile) } else { None });
         let laid_by = h.last.map(|(seat, _)| seat);
         let base = v.my_seat.unwrap_or(0) as usize;
@@ -705,8 +714,8 @@ impl PyrApp {
                 r
             };
             // (The newest one glows on after the hand's over, as 0.13.28's: the dominó that won it,
-            // under the result.)
-            let newest = Some(tile_here) == last_tile && !faded;
+            // under the result, and under the felt darkened till the next hand's dealt.)
+            let newest = last_tile.is_some_and(|t| same(t, tile_here));
             if newest {
                 super::radial(&painter, r.center(), TILE_L * k * 1.15, col::GOLD.gamma_multiply(0.32), Color32::TRANSPARENT);
             }
