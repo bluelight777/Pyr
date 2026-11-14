@@ -15,7 +15,7 @@ use pyr_poker::casino::bjtable::{RoundView, SEATS, SeatPlay};
 use pyr_poker::casino::blackjack::{self as bj, Action, Phase};
 use pyr_poker::net::{BjSeatView, BjStage, BjView, TableGame, ToServer};
 
-use super::{chip_stack, chips_now, col, ease_out, hgrad, vgrad};
+use super::{chip_stack, chip_stack_centred, chips_now, col, ease_out, hgrad, vgrad};
 use crate::app::PyrApp;
 use crate::poker::cards::{self as cards, chips_text};
 use crate::theme;
@@ -24,7 +24,9 @@ use crate::theme;
 const ART: Vec2 = vec2(1376.0, 774.0);
 const SHOW: Rect = Rect { min: pos2(166.0, 64.0), max: pos2(1214.0, 702.0) };
 /// Each seat's betting circle on the art: first base (seat 0, on the dealer's left) first.
-const CIRCLES: [(f32, f32); SEATS] = [(1052.0, 340.0), (970.0, 452.0), (842.0, 530.0), (688.0, 556.0), (535.0, 530.0), (407.0, 452.0), (324.0, 340.0)];
+/// (0.13.28's, to a tenth: measured off the open seats' hover in it, the circle's centre to a
+/// hundredth of a pixel.)
+const CIRCLES: [(f32, f32); SEATS] = [(1052.5, 338.7), (969.8, 451.8), (842.1, 528.8), (687.9, 556.2), (534.2, 528.8), (406.2, 451.8), (324.0, 339.0)];
 const CIRCLE_R: f32 = 31.0;
 /// The dealer's cards (under the chip tray), and the shoe they come out of.
 const DEALER_AT: (f32, f32) = (688.0, 292.0);
@@ -521,18 +523,19 @@ impl PyrApp {
         } else if me {
             p.circle_stroke(c, r + 2.0, Stroke::new(2.0f32, col::GOLD.gamma_multiply(0.8)));
         }
-        // The chips in the circle: the round's bets, or the next round's.
+        // The chips in the circle: the round's bets, or the next round's (the stack stands in
+        // the middle of the circle, as 0.13.28's: measured with one to four chips).
         let chip_r = (r * 0.5).max(8.0);
         match (sp, seat) {
             (Some(sp), _) if v.stage == BjStage::Playing || (v.stage == BjStage::Settled && !seat.is_some_and(|x| x.decided)) => {
-                chip_stack(&p, c + vec2(0.0, r * 0.25), chip_r, sp.base);
+                chip_stack_centred(&p, c, chip_r, sp.base);
             }
-            (_, Some(x)) if x.decided && x.bet > 0 => chip_stack(&p, c + vec2(0.0, r * 0.25), chip_r, x.bet),
+            (_, Some(x)) if x.decided && x.bet > 0 => chip_stack_centred(&p, c, chip_r, x.bet),
             (_, Some(x)) if me && !x.decided && self.poker.casino.bjt.bet > 0 && betting => {
                 // (Mine, still being put together: see-through till it's placed.)
                 let mut ghost = p.clone();
                 ghost.set_opacity(0.6);
-                chip_stack(&ghost, c + vec2(0.0, r * 0.25), chip_r, self.poker.casino.bjt.bet);
+                chip_stack_centred(&ghost, c, chip_r, self.poker.casino.bjt.bet);
             }
             (_, Some(x)) if x.decided && x.bet == 0 && betting => {
                 p.text(c, Align2::CENTER_CENTER, "OUT", theme::bold_font((11.0 * k).max(9.0)), Color32::from_white_alpha(110));

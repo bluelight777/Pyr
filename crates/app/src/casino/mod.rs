@@ -599,11 +599,8 @@ pub fn chip_colors(value: u64) -> (Color32, Color32) {
     }
 }
 
-/// Chips for an amount, stacked (biggest at the bottom), drawn from above at `c`.
-pub fn chip_stack(p: &egui::Painter, c: Pos2, r: f32, amount: u64) {
-    if amount == 0 {
-        return;
-    }
+/// The chips a stack of `amount` shows, biggest first (six at most).
+fn stack_of(amount: u64) -> Vec<u64> {
     let mut left = amount;
     let mut chips = Vec::new();
     for d in CHIPS.iter().rev() {
@@ -615,6 +612,25 @@ pub fn chip_stack(p: &egui::Painter, c: Pos2, r: f32, amount: u64) {
     if chips.is_empty() {
         chips.push(1);
     }
+    chips
+}
+
+/// `chip_stack` standing in the middle of `c` (a blackjack circle's, as 0.13.28 has them: its
+/// chips halfway up the stack at the circle's centre).
+pub fn chip_stack_centred(p: &egui::Painter, c: Pos2, r: f32, amount: u64) {
+    if amount == 0 {
+        return;
+    }
+    let n = stack_of(amount).len() as f32;
+    chip_stack(p, c + vec2(0.0, (n - 1.0) * r * 0.22 / 2.0), r, amount);
+}
+
+/// Chips for an amount, stacked (biggest at the bottom), drawn from above at `c`.
+pub fn chip_stack(p: &egui::Painter, c: Pos2, r: f32, amount: u64) {
+    if amount == 0 {
+        return;
+    }
+    let chips = stack_of(amount);
     for (i, v) in chips.iter().enumerate() {
         flat_chip(p, c + vec2(0.0, -(i as f32) * r * 0.22), r, *v, i == 0);
     }
@@ -1377,5 +1393,17 @@ mod rack_tests {
     fn chips_say_1k_and_100k() {
         let labels: Vec<String> = CHIPS.iter().map(|v| chip_label(*v)).collect();
         assert_eq!(labels, ["1", "5", "25", "100", "500", "1K", "5K", "25K", "100K", "500K", "1000K", "5000K"]);
+    }
+
+    /// A stack's chips, as the ones measured in 0.13.28's blackjack circles: 100 one chip, 10 two,
+    /// 35 three, 250 four; never more than six.
+    #[test]
+    fn a_stack_s_chips() {
+        assert_eq!(stack_of(100), [100]);
+        assert_eq!(stack_of(10), [5, 5]);
+        assert_eq!(stack_of(35), [25, 5, 5]);
+        assert_eq!(stack_of(250), [100, 100, 25, 25]);
+        assert_eq!(stack_of(999).len(), 6);
+        assert_eq!(stack_of(0), [1]);
     }
 }
