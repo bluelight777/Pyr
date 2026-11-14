@@ -647,6 +647,15 @@ How (decided while starting it):
         whole pixel of depth under every tile: now 0.13.28's, the light or dark row under each
         row of tiles the same as 0.13.28's in every hand since. The line sits 0.6 above the
         felt's middle and 0.2 left of it, as 0.13.28's (to a tenth of a pixel).
+  - [x] The rest of the felt, side by side on lossless captures (Nov 14): the newest tile's gold
+        edge is just outside it (round its depth and shadow), its glow 26 round (the rebuild's
+        was inside the tile and 31 round); the plates' boxes 176 wide and black 185 (175 and
+        200), the side plates half a pixel out (96 off the table, their names where 0.13.28's
+        are to the pixel); "N pips left" in a grey of its own (white 150, not the warm muted);
+        "Pot 400" a pixel lower; the cube ringed white (2.5) while it's open, its "2" brown
+        (42, 16, 4) a pixel higher, and a tile's shadow under it. All fixed. Left: the side
+        plates' faces half a pixel left of 0.13.28's, the felt under the table a shade darker
+        and the content area's top corners darker (single-digit levels).
   - [ ] Left over on the line: 0.13.28's tiles bleed a faint line (8%) of their edge out on
         their top and left, and its pips fall a little differently on the pixels (within a
         pixel). And once in 30 hands its line sat 2.1 px higher than the middle of its tiles'

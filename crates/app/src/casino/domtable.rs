@@ -359,9 +359,9 @@ fn lit_text(p: &egui::Painter, at: Pos2, text: &str, glow: Color32) {
 fn plate_at(table: Rect, k: f32, place: usize) -> Pos2 {
     match place {
         0 => pos2(table.center().x, table.bottom() - 31.5 * k),
-        1 => pos2(table.right() + 95.5 * k, table.center().y),
+        1 => pos2(table.right() + 96.0 * k, table.center().y),
         2 => pos2(table.center().x, table.top() + 31.0 * k),
-        _ => pos2(table.left() - 96.5 * k, table.center().y),
+        _ => pos2(table.left() - 96.0 * k, table.center().y),
     }
 }
 
@@ -649,7 +649,7 @@ impl PyrApp {
             (Some(h), true) => format!("Pot {}", chips_text(v.ante * h.seats.len() as u64 * h.mult as u64)),
             _ => format!("Ante {}", chips_text(v.ante)),
         };
-        p.text(r.left_top() + vec2(10.0, 24.0), Align2::LEFT_TOP, big, theme::bold_font(17.0), col::GOLD2);
+        p.text(r.left_top() + vec2(10.0, 25.0), Align2::LEFT_TOP, big, theme::bold_font(17.0), col::GOLD2);
         // The cube: what a ¡Doblo! would take the stake to, and whose it is to turn.
         let Some(h) = &v.hand else { return };
         if h.kind == Kind::Solo && h.seats.len() > 2 {
@@ -658,15 +658,19 @@ impl PyrApp {
         let c = pos2(r.center().x, table.top() + 141.0 * k);
         let cube = Rect::from_center_size(c, vec2(34.0, 34.0));
         let can = h.mult < MAX_MULT;
-        p.rect_filled(cube, theme::r(6), if can { Color32::from_rgb(0xf6, 0xf0, 0xe2) } else { Color32::from_rgb(0xc8, 0xb8, 0x98) });
-        // (Taken: ringed gold when it's my side's, teal when it's theirs: watching, always teal,
-        // as 0.13.28 has it whichever side took it.)
+        // (Its shadow as a tile's, down and to the right.)
+        p.rect_filled(cube.translate(vec2(34.0 * 0.065, 34.0 * 0.093)), theme::r(6), Color32::from_black_alpha(97));
+        p.rect_filled(cube, theme::r(6), if can { Color32::from_rgb(246, 239, 220) } else { Color32::from_rgb(0xc8, 0xb8, 0x98) });
+        // (Open: ringed white, 2. Taken: ringed gold when it's my side's, teal when it's theirs:
+        // watching, always teal, as 0.13.28 has it whichever side took it.)
         let mine = v.my_seat.and_then(|m| h.seats.iter().position(|s| *s == m)).map(|p| (p % 2) as u8);
-        if let Some(side) = h.cube {
-            p.rect_stroke(cube, theme::r(6), Stroke::new(3.0f32, if mine == Some(side) { col::GOLD } else { TEAL }), StrokeKind::Inside);
-        }
+        let ring = match h.cube {
+            Some(side) => Stroke::new(3.0f32, if mine == Some(side) { col::GOLD } else { TEAL }),
+            None => Stroke::new(2.5f32, Color32::WHITE),
+        };
+        p.rect_stroke(cube, theme::r(6), ring, StrokeKind::Inside);
         let shown = if h.mult == 1 { 2 } else { h.mult };
-        p.text(c, Align2::CENTER_CENTER, shown.to_string(), theme::bold_font(17.0), Color32::from_rgb(0x1a, 0x14, 0x10));
+        p.text(c - vec2(0.0, 1.0), Align2::CENTER_CENTER, shown.to_string(), theme::bold_font(17.0), Color32::from_rgb(42, 16, 4));
         let who = match h.cube {
             None => "¡DOBLO! open".to_string(),
             Some(side) => {
@@ -716,12 +720,15 @@ impl PyrApp {
             // (The newest one glows on after the hand's over, as 0.13.28's: the dominó that won it,
             // under the result, and under the felt darkened till the next hand's dealt.)
             let newest = last_tile.is_some_and(|t| same(t, tile_here));
+            // (Its glow 26 round its middle, and its gold edge just outside it, round its depth and
+            // shadow: 0.13.28's, side by side.)
             if newest {
-                super::radial(&painter, r.center(), TILE_L * k * 1.15, col::GOLD.gamma_multiply(0.32), Color32::TRANSPARENT);
+                super::radial(&painter, r.center(), 26.0 * k, col::GOLD.gamma_multiply(0.32), Color32::TRANSPARENT);
             }
             tile(&painter, r, t.across, t.first, t.second, 0.0);
             if newest {
-                painter.rect_stroke(r, 1.5, Stroke::new(1.5f32, col::GOLD.gamma_multiply(0.9)), StrokeKind::Inside);
+                let round_it = Rect::from_min_max(r.min, r.max + vec2(0.9, 0.6) * k);
+                painter.rect_stroke(round_it, 2.5, Stroke::new(1.5f32, col::GOLD.gamma_multiply(0.9)), StrokeKind::Outside);
             }
         }
         if faded {
@@ -763,7 +770,9 @@ impl PyrApp {
     #[allow(clippy::too_many_arguments)]
     fn dom_seat(&mut self, ui: &mut egui::Ui, s: &ServerView, v: &DomView, seat: u8, place: usize, c: Pos2, table: Rect, k: f32, clock: u64) {
         let p = ui.painter().clone();
+        // (Its box 176 wide, what's in it laid out on 175, as 0.13.28's: side by side to the pixel.)
         let plate = Rect::from_center_size(c, PLATE);
+        let boxed = Rect::from_center_size(c, PLATE + vec2(1.0, 0.0));
         let x = v.seats.get(seat as usize).cloned().flatten();
         let hand = v.hand.as_ref();
         let pos = hand.and_then(|h| h.seats.iter().position(|s| *s == seat));
@@ -776,9 +785,9 @@ impl PyrApp {
             (Some(h), Some(_)) if h.kind == Kind::Pairs => if place % 2 == 0 { col::GOLD } else { TEAL },
             _ => SEAT_COLORS[seat as usize],
         };
-        p.rect_filled(plate, theme::r(10), Color32::from_black_alpha(200));
+        p.rect_filled(boxed, theme::r(10), Color32::from_black_alpha(185));
         let border = if turn { Stroke::new(2.5f32, col::GOLD2) } else { Stroke::new(1.0f32, Color32::from_white_alpha(28)) };
-        p.rect_stroke(plate, theme::r(10), border, StrokeKind::Inside);
+        p.rect_stroke(boxed, theme::r(10), border, StrokeKind::Inside);
         p.rect_filled(Rect::from_min_size(pos2(plate.left() + 6.5, c.y - 20.0), vec2(4.0, 40.0)), theme::r(2), color);
         let face_c = plate.left_center() + vec2(39.0, 0.0);
         let fr = 20.0;
@@ -893,7 +902,8 @@ impl PyrApp {
                     if !x.bot && paid > 0 { (format!("won {}", chips_text(paid)), col::WIN) } else { ("won".to_string(), col::WIN) }
                 } else {
                     let left = pip_count(h.shown.get(i).map(|t| t.as_slice()).unwrap_or(&[]));
-                    (format!("{left} pips left"), col::MUTED)
+                    // (A grey of its own, as 0.13.28's: not the warm muted of the rest.)
+                    (format!("{left} pips left"), Color32::from_white_alpha(150))
                 }
             }
             // (Sitting while a hand goes on without them: 0.13.28's words.)
