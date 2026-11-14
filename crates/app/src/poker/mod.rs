@@ -294,9 +294,11 @@ impl PyrApp {
         } else {
             self.poker.notices_seen = 0;
         }
+        // A table's "no" (not enough chips, more than it takes, the dice already rolling) is
+        // shown as an error but never sent in as a bug report by itself (0.13.24).
         match &s.poker.error {
             Some(e) if !self.poker.error_shown => {
-                acts.push(Act::Toast(e.clone(), true));
+                acts.push(Act::Refused(e.clone()));
                 self.poker.error_shown = true;
                 self.engine.clear_poker_error(&s.key);
             }

@@ -220,8 +220,12 @@ Version in brackets: where 0.13.x first had it.
       line names the card's encoder (NVIDIA, AMD or Intel), the picture and colours look the
       same, keyframes come when a viewer joins, the log has "encoding on the graphics card",
       and PYR_AB=hwenc gives "processor encoder".
-- [ ] Automatic reports (voice went up and down, stopped responding, sound problems): 0.13.0
-      has the swells (dips) detector and the watchdog; check what 0.13.x added
+- [x] Automatic reports (voice went up and down, stopped responding, sound problems): 0.13.0
+      has the swells (dips) detector and the watchdog; what 0.13.x added, by its notes: a
+      headset dropping out and back isn't an error (0.13.2, above); the voice report in 0.13.28's
+      words (657 to 675, below); stopped responding (668 to 670, below); and a table's "no" (not
+      enough chips, more than it takes, the dice already rolling) shown as before but no longer
+      sent in by itself (0.13.24: it was a reported error toast, now a refusal).
 
 ### The approved bug reports (657 to 675)
 - [x] 668, 670 (stopped responding): false. 668 was the update's installer being checked on the
@@ -888,10 +892,12 @@ How (decided while starting it):
 
 ## The 0.13.28 server's feature names, in its order
 
-From the 0.13.28 `pyr-server` binary (what `Ready::features` lists). Still to add in the
-rebuild (2026-11-14): casino_0_13_2, casino_build (the rest are in, casino_domino with Dominó;
-the rebuilt Reel Row and prop bets have their own names, `reel_row_remastered` and
-`prop_bets`, as they can't replay 0.13.28's rounds).
+From the 0.13.28 `pyr-server` binary (what `Ready::features` lists). All in the rebuild
+(2026-11-14; casino_domino with Dominó) but two, left out on purpose by the ground rule for
+games that can't replay 0.13.28's rounds bit for bit: `casino_0_13_2` (Reel Row Remastered) and
+`casino_build` (its bonus rounds that build, Bomb Spins and Super Hold & Win). The rebuild plays
+them under its own name, `reel_row_remastered` (and prop bets, `prop_bets`), so a 0.13.28 app
+plays Reel Row as 0.13.0's on the rebuilt server, and a rebuilt app does on 0.13.28's.
 
     roles files avatars dms server_icon custom_emoji friends backup giphy channel_newest
     soundboard klipy groups idle idle_away dnd files-25mb server_gifs handshake vouches
