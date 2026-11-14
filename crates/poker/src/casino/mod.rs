@@ -496,7 +496,8 @@ impl Outcome {
                     (None, None) => format!("a spin with a{} {} dragon", if dragon::age(o.growth) == 2 || dragon::age(o.growth) == 4 { "n" } else { "" }, dragon::AGES[dragon::age(o.growth)].1),
                 }
             }
-            Outcome::Plinko(o) => format!("a ball through {} rows", o.rows),
+            // (0.13.28's words: "114× on Expert with 9 rows", "3.7× on Low with 9 rows".)
+            Outcome::Plinko(o) => format!("{} on {} with {} rows", plinko::label(o.multiplier_x100), o.risk.name(), o.rows),
             Outcome::Remaster(o) => o.headline(),
             Outcome::Domino(o) => o.headline(),
         }

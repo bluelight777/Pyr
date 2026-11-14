@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use pyr_poker::casino::{self, Bet, Game, Outcome, blackjack, craps, dragon, reelrow, slots};
-use pyr_poker::net::{BigWin, CasinoReq, CasinoRes, CasinoView, DragonView, GameStats, PeriodStats, RoundView, ToApp};
+use pyr_poker::net::{BigWin, CHEER_DRINK_CHIPS, CasinoReq, CasinoRes, CasinoView, DragonView, GameStats, PeriodStats, RoundView, ToApp};
 use pyr_poker::progress::{self, Record};
 use pyr_poker::room::Random;
 use pyr_poker::tourney;
@@ -39,6 +39,10 @@ const DRAGON_POOLS: &str = "casino_dragon_pools";
 const PLAYING_MS: u64 = 5 * 60_000;
 /// The jackpot's pool is told to everyone in the casino at most this often.
 const JACKPOT_TELL_MS: u64 = 3_000;
+/// A big big win's moment (0.13.7): everyone else may say Congrats! to the winner, or buy them a
+/// drink, for three minutes after it (0.13.28's: a congrats at 175 s went, at 180 s the moment
+/// had passed, however many came after it).
+const MOMENT_MS: u64 = 180_000;
 
 #[derive(Default)]
 pub struct CasinoState {
@@ -49,6 +53,25 @@ pub struct CasinoState {
     jackpot_told: u64,
     /// Who played each game (by statistics key) and when they last did.
     playing: HashMap<String, HashMap<String, u64>>,
+    /// Big big wins' moments (0.13.7), by their cheer, while they last; and the last cheer given.
+    moments: BTreeMap<u64, Moment>,
+    last_cheer: u64,
+}
+
+/// A big win's moment: whose it is, when, and who has said Congrats! or bought a drink for it.
+struct Moment {
+    winner: String,
+    at_ms: u64,
+    congrats: BTreeSet<String>,
+    drinks: BTreeSet<String>,
+}
+
+/// A big win has a moment (0.13.7) if it's a jackpot, 100 times the bet or more for 10,000 chips
+/// or more, or a million chips up. (0.13.28's: 114 times for 9,918 had none, 100 times for
+/// 10,000 and 110 times for 10,010 had one; 216 times for 10,152 on a bet of 47 had one, for
+/// 9,936 none; 110 times for 1,100 or 5,500 none, 90 times for 18,000 none.)
+fn has_moment(jackpot: bool, wagered: u64, paid: u64) -> bool {
+    jackpot || (paid >= 10_000 && paid >= wagered.saturating_mul(100)) || paid.saturating_sub(wagered) >= 1_000_000
 }
 
 struct Player {
@@ -383,6 +406,7 @@ impl Poker {
                 hub.db.set_poker_record(uid, &rec, held).map_err(|e| e.to_string())?;
                 CasinoRes::Craps { table, chips: rec.chips }
             }
+            CasinoReq::Cheer { cheer, drink } => Self::cheer(hub, st, uid, cheer, drink)?,
             CasinoReq::CrapsRoll { commit, seed } => {
                 let p = st.casino.players.entry(uid.to_string()).or_insert_with(new_player);
                 if casino::commit(&p.seed) != commit {
@@ -515,6 +539,56 @@ impl Poker {
         Ok(CasinoRes::Blackjack { view, chips: rec.chips, next_commit, next_nonce })
     }
 
+    /// A big win's moment begins (its cheer: the time, or just after the last one given).
+    fn new_moment(st: &mut State, uid: &str, now: u64) -> u64 {
+        st.casino.moments.retain(|_, m| now.saturating_sub(m.at_ms) < MOMENT_MS);
+        let cheer = now.max(st.casino.last_cheer + 1);
+        st.casino.last_cheer = cheer;
+        st.casino.moments.insert(cheer, Moment { winner: uid.to_string(), at_ms: now, congrats: BTreeSet::new(), drinks: BTreeSet::new() });
+        cheer
+    }
+
+    /// Congrats! for someone's big win, or a drink (my chips to them), while its moment lasts:
+    /// each once, and never for my own.
+    fn cheer(hub: &Hub, st: &mut State, uid: &str, cheer: u64, drink: bool) -> Result<CasinoRes, String> {
+        let now = wall();
+        st.casino.moments.retain(|_, m| now.saturating_sub(m.at_ms) < MOMENT_MS);
+        let Some(m) = st.casino.moments.get_mut(&cheer) else {
+            return Err("That win's moment has passed.".into());
+        };
+        if m.winner == uid {
+            return Err("That's your own win.".into());
+        }
+        let winner = m.winner.clone();
+        if !drink {
+            if !m.congrats.insert(uid.to_string()) {
+                return Err("You congratulated them already.".into());
+            }
+        } else {
+            if m.drinks.contains(uid) {
+                return Err("You bought them a drink already.".into());
+            }
+            let (mut mine, _) = hub.db.poker_record(uid);
+            if mine.chips < CHEER_DRINK_CHIPS {
+                return Err("You don't have the chips for a drink.".into());
+            }
+            m.drinks.insert(uid.to_string());
+            mine.chips -= CHEER_DRINK_CHIPS;
+            let held = st.held(uid);
+            hub.db.set_poker_record(uid, &mine, held).map_err(|e| e.to_string())?;
+            let (mut theirs, _) = hub.db.poker_record(&winner);
+            theirs.chips += CHEER_DRINK_CHIPS;
+            let their_held = st.held(&winner);
+            hub.db.set_poker_record(&winner, &theirs, their_held).map_err(|e| e.to_string())?;
+            // (Each sees their chips as they are now, as 0.13.28 tells them: before the words.)
+            hub.send_poker(&winner, ToApp::Record { me: Self::view(hub, &winner, &theirs, their_held), gains: None });
+            hub.send_poker(uid, ToApp::Record { me: Self::view(hub, uid, &mine, held), gains: None });
+        }
+        let chips = if drink { CHEER_DRINK_CHIPS } else { 0 };
+        hub.send_poker(&winner, ToApp::Casino { res: CasinoRes::Cheered { from: Self::name_of(hub, uid), drink, chips, cheer } });
+        Ok(CasinoRes::CheerSent { cheer, drink })
+    }
+
     /// A round, counted in its game's statistics; a big win goes on the floor's ticker, for
     /// everyone in the casino.
     pub(super) fn round_counted(hub: &Hub, st: &mut State, uid: &str, o: &Outcome) {
@@ -526,9 +600,13 @@ impl Poker {
         let key = o.stats_key();
         // Embers on the Bonfire, and its cut of the bet.
         Self::bonfire_add(hub, st, uid, wagered, &mut SysRandom);
-        let win = BigWin { name: Self::name_of(hub, uid), game: o.game(), wagered, paid, what: o.headline(), at_ms: wall(), key: key.clone(), cheer: 0, extra: Default::default() };
+        let mut win = BigWin { name: Self::name_of(hub, uid), game: o.game(), wagered, paid, what: o.headline(), at_ms: wall(), key: key.clone(), cheer: 0, extra: Default::default() };
+        let big = jackpot || (paid >= 1_000 && paid >= wagered.saturating_mul(20)) || paid.saturating_sub(wagered) >= 100_000;
+        if big && has_moment(jackpot, wagered, paid) {
+            win.cheer = Self::new_moment(st, uid, win.at_ms);
+        }
         Self::count_round(hub, st, uid, &key, &win, wall());
-        if jackpot || (paid >= 1_000 && paid >= wagered.saturating_mul(20)) || paid.saturating_sub(wagered) >= 100_000 {
+        if big {
             let mut wins = Self::big_wins(hub);
             wins.insert(0, win.clone());
             wins.truncate(WINS_KEEP);
@@ -612,6 +690,63 @@ mod tests {
         let ids = levels::missions_for(today);
         rec.missions = Missions { day: today, ids: ids.to_vec(), progress: ids.iter().map(|i| levels::MISSIONS[*i as usize].goal).collect(), done: vec![true; 3], all_paid: true, ..Default::default() };
         hub.db.set_poker_record(uid, &rec, 0).unwrap();
+    }
+
+    /// Which big wins have a moment, as 0.13.28's had them (and a million up, and jackpots).
+    #[test]
+    fn which_big_wins_have_a_moment() {
+        assert!(!has_moment(false, 87, 9_918));
+        assert!(has_moment(false, 47, 10_152));
+        assert!(!has_moment(false, 46, 9_936));
+        assert!(has_moment(false, 100, 10_000));
+        assert!(has_moment(false, 91, 10_010));
+        assert!(has_moment(false, 100, 11_400));
+        assert!(!has_moment(false, 10, 1_100));
+        assert!(!has_moment(false, 50, 5_500));
+        assert!(!has_moment(false, 200, 18_000));
+        assert!(has_moment(false, 500_000, 1_500_000));
+        assert!(!has_moment(false, 500_000, 1_499_999));
+        assert!(has_moment(true, 100, 3_000));
+    }
+
+    /// A big big win's moment: its cheer on the floor's big win; Congrats! and a drink once each
+    /// from everyone else (the drink's chips go from one to the other), never for my own win,
+    /// and nothing once three minutes have passed; as 0.13.28 answers.
+    #[test]
+    fn a_big_wins_moment_takes_congrats_and_a_drink_once_each() {
+        use pyr_poker::casino::keno;
+        let hub = hub();
+        for u in ["alice", "bob", "carol"] {
+            open(&hub, u);
+        }
+        let caught = Outcome::Keno(keno::Outcome { chips: 100, picks: vec![1, 2, 3, 4], drawn: (1..=20).collect(), hits: vec![1, 2, 3, 4], paid: 11_000 });
+        Poker::round_counted(&hub, &mut hub.poker.state.lock(), "alice", &caught);
+        let win = Poker::big_wins(&hub).remove(0);
+        assert_eq!((win.paid, win.wagered), (11_000, 100));
+        let cheer = win.cheer;
+        assert!(cheer > 0, "a moment: {win:?}");
+        // (Not every big win has one: 90 times for 18,000.)
+        let ninety = Outcome::Keno(keno::Outcome { chips: 200, picks: vec![1, 2, 3, 4, 5, 6], drawn: (1..=20).collect(), hits: vec![1, 2, 3, 4, 5], paid: 18_000 });
+        Poker::round_counted(&hub, &mut hub.poker.state.lock(), "alice", &ninety);
+        assert_eq!(Poker::big_wins(&hub)[0].cheer, 0);
+        let chips = |u: &str| hub.db.poker_record(u).0.chips;
+        let cheer_req = |drink| CasinoReq::Cheer { cheer, drink };
+        assert_eq!(ask(&hub, "bob", cheer_req(false)), Ok(CasinoRes::CheerSent { cheer, drink: false }));
+        assert_eq!(ask(&hub, "bob", cheer_req(false)), Err("You congratulated them already.".into()));
+        let (a, b) = (chips("alice"), chips("bob"));
+        assert_eq!(ask(&hub, "bob", cheer_req(true)), Ok(CasinoRes::CheerSent { cheer, drink: true }));
+        assert_eq!((chips("alice"), chips("bob")), (a + CHEER_DRINK_CHIPS, b - CHEER_DRINK_CHIPS));
+        assert_eq!(ask(&hub, "bob", cheer_req(true)), Err("You bought them a drink already.".into()));
+        assert_eq!(ask(&hub, "alice", cheer_req(false)), Err("That's your own win.".into()));
+        assert_eq!(ask(&hub, "carol", CasinoReq::Cheer { cheer: cheer + 7, drink: false }), Err("That win's moment has passed.".into()));
+        let mut poor = hub.db.poker_record("carol").0;
+        poor.chips = CHEER_DRINK_CHIPS - 1;
+        hub.db.set_poker_record("carol", &poor, 0).unwrap();
+        assert_eq!(ask(&hub, "carol", cheer_req(true)), Err("You don't have the chips for a drink.".into()));
+        assert_eq!(chips("carol"), CHEER_DRINK_CHIPS - 1);
+        // (Three minutes on, it's passed.)
+        hub.poker.state.lock().casino.moments.get_mut(&cheer).unwrap().at_ms -= MOMENT_MS;
+        assert_eq!(ask(&hub, "carol", cheer_req(false)), Err("That win's moment has passed.".into()));
     }
 
     #[test]

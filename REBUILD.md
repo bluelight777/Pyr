@@ -739,7 +739,16 @@ How (decided while starting it):
 - [x] New cards and backs (0.13.22): Meshy's court figures, ace of spades and six backs (carved
       from 0.13.28); every face-down card in the back picked, and a back picked while sitting
       shows at that seat at once (Blue: "dealt green after picking red")
-- [ ] Congrats / buy a drink on a big win (0.13.7)
+- [x] Congrats / buy a drink on a big win (0.13.7), as 0.13.28's (`rebuild/measured/cheers.md`):
+      a big win of 100 times the bet for 10,000 chips or more (a jackpot, a million up) has a
+      moment for three minutes (its `cheer` on the big win); everyone else in the casino gets
+      the banner for 12 seconds with Congrats! and Buy a drink · 5,000 (Congrats sent, Drink
+      bought once clicked; the banner as wide, its rim 2), the winner a toast for each (in the
+      casino; one away gets them on coming back, as 0.13.28's); 0.13.0's banner, 5 seconds, for
+      the other big wins. 0.13.28's refusals word for word; apps before 0.13.7 are told none of
+      it. Checked side by side with 0.13.28 (same server, same banners: pixel for pixel, each
+      state; the tooltips; a big win without a moment; the winner's toasts), and 0.13.28's demo
+      (`PYR_DEMO_CHEER=1`) is the rebuild's too.
 - [x] Table invites (0.13.6): "+ Invite" on the top bar of every blackjack, roulette, baccarat and
       craps table (left of the rounds checked) and beside a poker table's Lobby, "Invite someone
       here to this table"; its list as 0.13.28's (Invite to this table, Look for someone, everyone
@@ -817,7 +826,7 @@ How (decided while starting it):
 ## The 0.13.28 server's feature names, in its order
 
 From the 0.13.28 `pyr-server` binary (what `Ready::features` lists). Still to add in the
-rebuild (2026-11-13): casino_0_13_2, casino_build, casino_domino (the rest are in;
+rebuild (2026-11-14): casino_0_13_2, casino_build (the rest are in, casino_domino with Dominó;
 the rebuilt Reel Row and prop bets have their own names, `reel_row_remastered` and
 `prop_bets`, as they can't replay 0.13.28's rounds).
 

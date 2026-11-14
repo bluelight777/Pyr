@@ -277,6 +277,8 @@ impl PyrApp {
         // them), and a log asked for to download.
         self.cms_done(s, acts);
         self.staff_log_saved(s, acts);
+        // Congrats! and drinks for my big wins (0.13.7): a toast each.
+        self.cheers_heard(s, acts);
         // Gifts and prize boxes: big, and in a toast.
         if !s.poker.notices.is_empty() {
             self.engine.take_poker_notices(&s.key);
@@ -503,6 +505,9 @@ impl PyrApp {
                 }
             }
         }
+        // Someone's big win, at the bar's foot (3 points higher than on a game's page under its
+        // own bar, as 0.13.28's: y 61 to 97 at the top of a window).
+        self.big_win_banner(ui, s, Rect::from_min_max(pos2(page.left(), page.top() - 3.0), page.max));
         if self.poker.casino.games_menu
             && let Some(button) = out.games
         {

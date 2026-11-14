@@ -88,17 +88,10 @@ impl Default for PlinkoUi {
     }
 }
 
-/// A multiple as the buckets show it: "110×", "7.5×", "4.0×", "2.79×", "0.29×".
+/// A multiple as the buckets show it: "110×", "7.5×", "4.0×", "2.79×", "0.29×" (as a big win's
+/// words have it too).
 pub fn label(x100: u64) -> String {
-    if x100 >= 1000 {
-        format!("{}×", chips_text(x100 / 100))
-    } else if x100 % 100 == 0 {
-        format!("{}.0×", x100 / 100)
-    } else if x100 % 10 == 0 {
-        format!("{}.{}×", x100 / 100, (x100 % 100) / 10)
-    } else {
-        format!("{}.{:02}×", x100 / 100, x100 % 100)
-    }
+    pyr_poker::casino::plinko::label(x100)
 }
 
 /// A bucket's color: yellow in the middle to red at the edges (0.13.28's five, in between

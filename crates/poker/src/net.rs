@@ -725,6 +725,10 @@ impl ToApp {
         if casino < CASINO_01311 && self.is_domino() {
             return None;
         }
+        // (Before 0.13.7 there were no big wins' moments: nothing of them.)
+        if casino < CASINO_0137 && matches!(&self, ToApp::Casino { res: CasinoRes::Cheered { .. } | CasinoRes::CheerSent { .. } }) {
+            return None;
+        }
         // (Before 0.13.7 there were no Hard bots: a Medium one, as 0.13.28's server says.)
         let m = if casino < CASINO_0137 { self.without_hard_bots() } else { self };
         match casino {
@@ -924,7 +928,14 @@ pub enum CasinoReq {
         #[serde(with = "hex32")]
         seed: [u8; 32],
     },
+    /// Someone's big win, while its moment lasts (0.13.7, `BigWin::cheer`): Congrats! to the
+    /// winner, or a drink (`CHEER_DRINK_CHIPS` of mine, to them).
+    Cheer { cheer: u64, drink: bool },
 }
+
+/// A drink bought for someone's big win: this many of the buyer's chips, to the winner
+/// (0.13.7).
+pub const CHEER_DRINK_CHIPS: u64 = 5_000;
 
 /// What Pyr Casino answers (or tells everyone in it).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -947,6 +958,10 @@ pub enum CasinoRes {
     Jackpot { pool: u64 },
     /// A game's statistics (0.12.0, asked for with `Stats`).
     Stats { view: GameStats },
+    /// Someone said Congrats! for my big win, or bought me a drink (`chips` with it): 0.13.7.
+    Cheered { from: String, drink: bool, chips: u64, cheer: u64 },
+    /// My Congrats! (or drink) went to the winner.
+    CheerSent { cheer: u64, drink: bool },
 }
 
 impl CasinoRes {
@@ -1073,7 +1088,8 @@ pub struct BigWin {
     /// Its game's statistics key (a Reel Row machine's own; 0.12.0).
     #[serde(default)]
     pub key: String,
-    /// Drinks bought for it (0.13.7's congratulations; kept as 0.13.28 writes it).
+    /// Its moment (0.13.7): while it lasts, everyone else in the casino can say Congrats! or
+    /// buy the winner a drink (`CasinoReq::Cheer` with this). 0 for a big win without one.
     #[serde(default)]
     pub cheer: u64,
     /// What this Pyr doesn't know (a newer one's, or 0.13.28's not rebuilt yet): kept and
@@ -2044,6 +2060,27 @@ mod tests {
         let m: ToApp = serde_json::from_str(j).unwrap();
         let ToApp::Casino { res: CasinoRes::State { view } } = m else { panic!("not the casino's state") };
         assert_eq!(view.playing, vec![("plinko".to_string(), 1)]);
+    }
+
+    /// A big win's moment (0.13.7), as 0.13.28's apps and server say it (taken off the wire):
+    /// read and written back the same; and an app from before 0.13.7 is told none of it.
+    #[test]
+    fn a_big_wins_moment_reads_as_0_13_28s() {
+        let same = |j: &str, to_app: bool| {
+            let v: serde_json::Value = serde_json::from_str(j).unwrap();
+            let back = if to_app { serde_json::to_value(serde_json::from_value::<ToApp>(v.clone()).unwrap()) } else { serde_json::to_value(serde_json::from_value::<ToServer>(v.clone()).unwrap()) };
+            assert_eq!(back.unwrap(), v, "{j}");
+        };
+        same(r#"{"op":"casino","req":{"do":"cheer","cheer":1794622405386,"drink":true}}"#, false);
+        same(r#"{"op":"casino","res":{"is":"cheered","from":"Bea","drink":true,"chips":5000,"cheer":1794622405386}}"#, true);
+        same(r#"{"op":"casino","res":{"is":"cheered","from":"Bea","drink":false,"chips":0,"cheer":1794622405386}}"#, true);
+        same(r#"{"op":"casino","res":{"is":"cheer_sent","cheer":1794622405386,"drink":true}}"#, true);
+        let w: BigWin = serde_json::from_str(r#"{"name":"Friend","game":"plinko","wagered":100,"paid":11400,"what":"114\u00d7 on Expert with 9 rows","at_ms":1794622405385,"key":"plinko","cheer":1794622405386}"#).unwrap();
+        assert_eq!(w.cheer, 1794622405386);
+        let cheered = ToApp::Casino { res: CasinoRes::Cheered { from: "Bea".into(), drink: true, chips: CHEER_DRINK_CHIPS, cheer: 1 } };
+        assert_eq!(cheered.clone().for_app(CASINO_013), None);
+        assert_eq!(ToApp::Casino { res: CasinoRes::CheerSent { cheer: 1, drink: false } }.for_app(CASINO_013), None);
+        assert_eq!(cheered.clone().for_app(CASINO_0137), Some(cheered));
     }
 
     /// What a server keeps (in its database's meta table) and a later Pyr added to: read by this

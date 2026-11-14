@@ -20,6 +20,7 @@ pub mod bjtable;
 pub mod blackjack;
 pub mod bonfire;
 pub mod chat;
+pub mod cheer;
 pub mod craps;
 pub mod crapstable;
 pub mod dice;
@@ -167,6 +168,11 @@ pub struct CasinoUi {
     pub seen_round: u64,
     pub seen_answers: u64,
     pub seen_big_win: u64,
+    /// The big win on the banner at the top (someone else's), Congrats! and drinks for mine
+    /// already told, and whether 0.13.28's demo banner has shown (`PYR_DEMO_CHEER`).
+    pub win_banner: Option<cheer::WinBanner>,
+    pub seen_cheered: u64,
+    pub demo_cheer_shown: bool,
     /// A request on its way, since when.
     pub pending: Option<Instant>,
     pub celebration: Option<Celebration>,
@@ -245,6 +251,9 @@ impl Default for CasinoUi {
             seen_round: 0,
             seen_answers: 0,
             seen_big_win: 0,
+            win_banner: None,
+            seen_cheered: 0,
+            demo_cheer_shown: false,
             pending: None,
             celebration: None,
             celebration_next: None,
@@ -1168,36 +1177,6 @@ impl PyrApp {
         if sub.is_some() {
             p.text(pos2(c.x, r.bottom() - h * scale * 0.24), Align2::CENTER_CENTER, &a.sub, theme::bold_font(sub_size * scale), col::TEXT.gamma_multiply(fade));
         }
-    }
-
-    /// Someone's big win, just now: a banner sliding in at the top for a few seconds (my own
-    /// wins have the celebration instead).
-    fn big_win_banner(&mut self, ui: &mut egui::Ui, s: &ServerView, area: Rect) {
-        let c = &s.poker.casino;
-        let id = egui::Id::new("casino-big-win-shown");
-        if c.big_win_seq != self.poker.casino.seen_big_win {
-            self.poker.casino.seen_big_win = c.big_win_seq;
-            let mine = s.me.as_ref().map(|m| m.name.clone());
-            if let Some(w) = c.big_wins.first()
-                && Some(&w.name) != mine.as_ref()
-            {
-                ui.ctx().data_mut(|d| d.insert_temp(id, (Instant::now(), format!("{} just won {} on {} ({})", w.name, chips_text(w.paid), w.game.name(), w.what))));
-            }
-        }
-        let Some((since, text)) = ui.ctx().data(|d| d.get_temp::<(Instant, String)>(id)) else { return };
-        let t = since.elapsed().as_secs_f32();
-        if t > 5.0 {
-            ui.ctx().data_mut(|d| d.remove::<(Instant, String)>(id));
-            return;
-        }
-        let slide = ease_out((t / 0.35).min(1.0)) * ((5.0 - t) / 0.35).clamp(0.0, 1.0);
-        let w = 56.0 + text.chars().count() as f32 * 7.8;
-        let r = Rect::from_center_size(pos2(area.center().x, area.top() - 24.0 + 48.0 * slide), vec2(w, 36.0));
-        let p = ui.painter();
-        p.rect_filled(r, theme::r(18), Color32::from_rgba_unmultiplied(0x2a, 0x10, 0x04, 235));
-        p.rect_stroke(r, theme::r(18), Stroke::new(1.5f32, col::GOLD), StrokeKind::Inside);
-        crate::icons::flame(p, Rect::from_center_size(r.left_center() + vec2(20.0, 0.0), vec2(18.0, 18.0)));
-        p.text(r.center() + vec2(10.0, 0.0), Align2::CENTER_CENTER, text, theme::bold_font(13.5), col::GOLD2);
     }
 
     /// How the rounds are checked, and any that didn't check out.

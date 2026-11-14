@@ -143,6 +143,28 @@ pub struct Outcome {
     pub paid: u64,
 }
 
+/// A multiple as 0.13.28 writes it, on the buckets and in a big win's words: "1,500×", "114×",
+/// "7.5×", "4.0×", "2.79×", "0.29×".
+pub fn label(x100: u64) -> String {
+    if x100 >= 1000 {
+        let n = (x100 / 100).to_string();
+        let mut out = String::new();
+        for (i, c) in n.chars().enumerate() {
+            if i > 0 && (n.len() - i) % 3 == 0 {
+                out.push(',');
+            }
+            out.push(c);
+        }
+        format!("{out}×")
+    } else if x100 % 100 == 0 {
+        format!("{}.0×", x100 / 100)
+    } else if x100 % 10 == 0 {
+        format!("{}.{}×", x100 / 100, (x100 % 100) / 10)
+    } else {
+        format!("{}.{:02}×", x100 / 100, x100 % 100)
+    }
+}
+
 /// A ball dropped.
 pub fn play(chips: u64, risk: Risk, rows: u8, s: &mut Stream) -> Outcome {
     let rows = rows.clamp(MIN_ROWS, MAX_ROWS);
@@ -224,6 +246,21 @@ fn worked_out(risk: Risk, rows: u8) -> Vec<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A big win's words, as 0.13.28's server sent them.
+    #[test]
+    fn a_big_wins_words_are_0_13_28s() {
+        let words = |chips: u64, risk: Risk, rows: u8, bucket: u8| {
+            let m = table(risk, rows)[bucket as usize];
+            super::super::Outcome::Plinko(Outcome { chips, risk, rows, path: Vec::new(), bucket, multiplier_x100: m, paid: chips * m / 100 }).headline()
+        };
+        assert_eq!(words(100, Risk::Expert, 9, 0), "114× on Expert with 9 rows");
+        assert_eq!(words(100, Risk::Expert, 8, 8), "60× on Expert with 8 rows");
+        assert_eq!(words(47, Risk::Expert, 10, 0), "216× on Expert with 10 rows");
+        assert_eq!(words(100_000, Risk::Low, 9, 1), "3.7× on Low with 9 rows");
+        assert_eq!(label(150_000), "1,500×");
+        assert_eq!((label(400), label(279), label(29)), ("4.0×".to_string(), "2.79×".to_string(), "0.29×".to_string()));
+    }
 
     /// The tables written down are the ones 0.13.28 works out.
     #[test]

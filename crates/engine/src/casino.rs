@@ -51,6 +51,12 @@ pub struct CasinoLive {
     /// How many are playing each game now, by statistics key (0.13.4 servers; none for the games
     /// nobody is).
     pub playing: BTreeMap<String, u32>,
+    /// Congrats! and drinks for my big wins (0.13.7): who, a drink or not, its chips; and how
+    /// many have come altogether (the app tells me of each once).
+    pub cheered: Vec<(String, bool, u64)>,
+    pub cheered_seq: u64,
+    /// My own Congrats! and drinks the house passed on: by the win's cheer, (congrats, drink).
+    pub cheers_sent: BTreeMap<u64, (bool, bool)>,
 }
 
 impl CasinoLive {
@@ -65,7 +71,7 @@ impl CasinoLive {
     }
 
     pub fn apply(&mut self, res: CasinoRes) {
-        if !matches!(res, CasinoRes::BigWin { .. } | CasinoRes::Jackpot { .. } | CasinoRes::Stats { .. }) {
+        if !matches!(res, CasinoRes::BigWin { .. } | CasinoRes::Jackpot { .. } | CasinoRes::Stats { .. } | CasinoRes::Cheered { .. }) {
             self.answers += 1;
         }
         match res {
@@ -161,6 +167,19 @@ impl CasinoLive {
             CasinoRes::Jackpot { pool } => self.jackpot = pool,
             CasinoRes::Stats { view } => {
                 self.game_stats.insert(view.key.clone(), view);
+            }
+            CasinoRes::Cheered { from, drink, chips, .. } => {
+                self.cheered.push((from, drink, chips));
+                let over = self.cheered.len().saturating_sub(20);
+                self.cheered.drain(..over);
+                self.cheered_seq += 1;
+            }
+            CasinoRes::CheerSent { cheer, drink } => {
+                let e = self.cheers_sent.entry(cheer).or_default();
+                if drink { e.1 = true } else { e.0 = true }
+                while self.cheers_sent.len() > 50 {
+                    self.cheers_sent.pop_first();
+                }
             }
         }
     }
