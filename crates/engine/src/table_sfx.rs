@@ -102,8 +102,16 @@ impl Biquad {
 }
 
 /// A clay chip striking another: a sharp tick and its ring, four partials (1, 2.234, 3.468 and
-/// 5.07 times the lowest, which is 2,050 to 2,310 Hz) dying fast and then ringing on softly.
+/// 5.07 times the lowest, which is 2,050 to 2,310 Hz) dying fast and then ringing on softly, the
+/// clay's rattle and knock under them.
 fn chip(o: &mut [f32], at: usize, f1: f32, amp: f32, rng: &mut Rng) {
+    chip_with(o, at, f1, amp, 1.0, [1.0; 4], rng);
+}
+
+/// A chip with `under` of the rattle and the knock under its ring, and its partials ringing on
+/// `tail` times as loud (the pot's stacks, as 0.13.28's: nothing between their partials, 30 to 45
+/// dB under them, from 1 ms after the tick, and the upper partials ringing on longer).
+fn chip_with(o: &mut [f32], at: usize, f1: f32, amp: f32, under: f32, tail: [f32; 4], rng: &mut Rng) {
     const PARTS: [(f32, f32, f32, f32, f32); 4] = [
         // (ratio, amplitude, fast decay s, tail amplitude, tail decay s)
         (1.0, 1.0, 0.0092, 0.035, 0.045),
@@ -112,7 +120,8 @@ fn chip(o: &mut [f32], at: usize, f1: f32, amp: f32, rng: &mut Rng) {
         (5.07, 0.55, 0.0021, 0.005, 0.020),
     ];
     let len = ms(330.0);
-    for (r, a, d1, a2, d2) in PARTS {
+    for ((r, a, d1, a2, d2), k) in PARTS.into_iter().zip(tail) {
+        let a2 = a2 * k;
         let f = f1 * r;
         let ph = rng.range(0.0, TAU);
         for i in 0..len {
@@ -141,7 +150,7 @@ fn chip(o: &mut [f32], at: usize, f1: f32, amp: f32, rng: &mut Rng) {
         let rattle = lp2.run(hp2.run(rng.noise())) * ((-t / 0.028).exp() + 0.3 * (-t / 0.07).exp()) * RATTLE.0;
         // (And the knock of it, low down, through the table.)
         let thud = body.run(rng.noise()) * (-t / 0.012).exp() * 0.05;
-        add(o, at + i, (tick + rattle + thud) * amp);
+        add(o, at + i, (tick + (rattle + thud) * under) * amp);
     }
 }
 
@@ -483,25 +492,45 @@ pub fn street(rng: &mut Rng) -> Vec<f32> {
 /// The turned card's slide, click and felt, how loud.
 const STREET: (f32, f32, f32) = (0.12, 3.35, 0.165);
 
-/// The pot pushed over to someone else, and stacked in front of them in three goes.
+/// The pot pushed over to someone else, and stacked in front of them in three goes (its two parts
+/// as one sound: `pot_parts`).
 pub fn pot(rng: &mut Rng) -> Vec<f32> {
-    let mut o = vec![0.0; ms(1400.0)];
-    slide(&mut o, 0, ms(560.0), 50.0, 0.88, 450.0, 3200.0, 2000.0, rng);
-    let mut t = 560.0 + rng.range(30.0, 75.0);
-    for _ in 0..3 {
-        // Three or four chips each (two now and then), close together; no felt under them.
-        let n = if rng.f() < 0.1 { 2 } else if rng.f() < 0.5 { 3 } else { 4 };
-        let mut c = t;
-        let mut gap = rng.range(20.0, 34.0);
-        for _ in 0..n {
-            chip(&mut o, ms(c), rng.range(2050.0, 2310.0), 0.59 * rng.range(0.85, 1.05), rng);
-            c += gap;
-            gap = (gap * rng.range(0.7, 0.95)).max(9.0);
-        }
-        t += rng.range(115.0, 170.0);
+    let (push, mut o) = pot_parts(rng);
+    for (a, b) in o.iter_mut().zip(push) {
+        *a += b;
     }
     o
 }
+
+/// The pot in its two parts, as 0.13.28 places them apart (`poker_sfx`: the push halfway toward
+/// the winner, the stacks in front of them), as 0.13.28 makes them: the chips pushed over the felt
+/// (475 to 555 ms, each pot its own; through the slide's resonance, 1.29 kHz rising to 2.03, dying
+/// from the start), then three stacks of four chips, the first 10 to 17 ms after the push ends and
+/// the others 140 and 270 ms after it, every time; in each, the clicks about 28, 22 and 18 ms apart,
+/// the last three 2.5, 4.6 and 6.5 dB softer than the first; no felt under them
+/// (`measured/cardsounds.md`).
+pub fn pot_parts(rng: &mut Rng) -> (Vec<f32>, Vec<f32>) {
+    let len = rng.range(475.0, 555.0);
+    let mut push = vec![0.0; ms(len + 20.0)];
+    card_slide(&mut push, 0, ms(len), (3.0, 1.0, 286.0, 0.293), POT.0, (1293.0, 2025.0, 0.788), rng);
+    let first = len + rng.range(10.0, 17.0);
+    let mut o = vec![0.0; ms(first + 270.0 + 420.0)];
+    for start in [0.0, 140.0, 270.0] {
+        let mut c = first + start;
+        for (a, gap) in [(1.0, rng.range(22.5, 33.0)), (0.747, rng.range(17.5, 27.0)), (0.591, rng.range(14.5, 21.0)), (0.473, 0.0)] {
+            chip_with(&mut o, ms(c), rng.range(2050.0, 2310.0), POT.1 * a * rng.range(0.65, 1.15), 0.0, POT_RING, rng);
+            c += gap;
+        }
+    }
+    (push, o)
+}
+
+/// How loud the pot's push is, and its stacks' first clicks.
+const POT: (f32, f32) = (0.849, 0.778);
+
+/// How much longer the pot's chips ring on, partial by partial (as 0.13.28's, 12 to 40 ms after a
+/// stack's last click).
+const POT_RING: [f32; 4] = [1.0, 1.5, 3.9, 11.0];
 
 /// Everything in: the stacks shoved over the felt, then pouring into the pot (about twenty chips,
 /// quicker and quicker) over a low A and E swelling under them.

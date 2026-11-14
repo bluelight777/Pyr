@@ -243,11 +243,7 @@ fn knock(out: &mut [f32], at: usize, amp: f32) {
 /// full scale: `render`).
 fn table_sound(c: Cue) -> Option<Vec<f32>> {
     use crate::table_sfx as t;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    let n = NEXT.fetch_add(1, Ordering::Relaxed);
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
-    let mut rng = t::Rng::new(now ^ n.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    let mut rng = fresh();
     let o = match c {
         Cue::Deal => t::deal(&mut rng),
         Cue::Card => t::card(&mut rng),
@@ -267,6 +263,15 @@ fn table_sound(c: Cue) -> Option<Vec<f32>> {
         _ => return None,
     };
     Some(o)
+}
+
+/// Randomness for a table sound, fresh each time (the clock and a count).
+fn fresh() -> crate::table_sfx::Rng {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
+    crate::table_sfx::Rng::new(now ^ n.wrapping_mul(0x9E37_79B9_7F4A_7C15))
 }
 
 /// What 0.13.28 plays from its own files (the casino's `c_<cue>`, carved out of it: `bands`) for the
@@ -396,21 +401,36 @@ pub fn render(c: Cue, pan: f32) -> Vec<f32> {
     if let Cue::BandUp(i, up) = c {
         return crate::bands::render_up(i, up, pan);
     }
-    if let Some(mono) = table_sound(c) {
-        // Placed (the cards, dealt, turned and folded, in 0.13.28's room), then held under 0.691 on
-        // either side, as 0.13.28 holds its table's sounds: its loudest side, wherever the sound is
-        // placed (a check's knock peaks 0.387 a side in the middle and 0.387 on the near side at a
-        // side seat, at 0.8 and the sounds at 70%; a turned card 0.435 at 0.9, 0.339 at 0.7).
-        let mut st = crate::table_sfx::place(&mono, pan, matches!(c, Cue::Deal | Cue::Card | Cue::Flip | Cue::Fold));
-        let peak = st.iter().fold(0.0f32, |m, x| m.max(x.abs()));
-        if peak > TABLE_PEAK {
-            for x in &mut st {
-                *x *= TABLE_PEAK / peak;
-            }
+    // The pot in its two parts, placed apart as 0.13.28 places them (`pan` is the winner's, as the
+    // chips' are): the push halfway toward the winner, the stacks a little further out than the
+    // bets' chips (R/L 2.3 dB over the push and 5.2 over the stacks, at a side seat, where its
+    // bets give 4.6).
+    if c == Cue::Pot {
+        let (push, stacks) = crate::table_sfx::pot_parts(&mut fresh());
+        let mut st = crate::table_sfx::place(&stacks, (pan * 1.2).clamp(-1.0, 1.0), false);
+        for (o, x) in st.iter_mut().zip(crate::table_sfx::place(&push, pan * 0.59, false)) {
+            *o += x;
         }
-        return st;
+        return held(st);
+    }
+    if let Some(mono) = table_sound(c) {
+        // Placed (the cards, dealt, turned and folded, in 0.13.28's room).
+        return held(crate::table_sfx::place(&mono, pan, matches!(c, Cue::Deal | Cue::Card | Cue::Flip | Cue::Fold)));
     }
     crate::table_sfx::place(&render_mono(c), pan, false)
+}
+
+/// A table sound held under 0.691 on either side, as 0.13.28 holds them: its loudest side, wherever
+/// the sound is placed (a check's knock peaks 0.387 a side in the middle and 0.387 on the near side
+/// at a side seat, at 0.8 and the sounds at 70%; a turned card 0.435 at 0.9, 0.339 at 0.7).
+fn held(mut st: Vec<f32>) -> Vec<f32> {
+    let peak = st.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    if peak > TABLE_PEAK {
+        for x in &mut st {
+            *x *= TABLE_PEAK / peak;
+        }
+    }
+    st
 }
 
 /// How loud a table sound's louder side gets at most (before the cue's and the sounds' volume).
@@ -531,5 +551,30 @@ mod tests {
         // at baccarat.)
         let held = (0..40).filter(|_| (render(Cue::Flip, 0.0).iter().fold(0.0f32, |m, x| m.max(x.abs())) - TABLE_PEAK).abs() < 1e-4).count();
         assert!(held >= 30, "{held}");
+    }
+
+    /// The pot as 0.13.28 pushes and stacks it: the push over before the stacks come (10 to 17 ms
+    /// after its end; a few more after its last sound over 1e-4), the push halfway toward the winner (R/L 2.3 dB from a side seat's 0.44) and the
+    /// stacks further out (5.1 dB), none of it in the room.
+    #[test]
+    fn the_pot_is_pushed_halfway_and_stacked_further_out() {
+        for _ in 0..20 {
+            let (push, stacks) = crate::table_sfx::pot_parts(&mut fresh());
+            let end = push.iter().rposition(|x| x.abs() > 1e-4).unwrap();
+            let first = stacks.iter().position(|x| x.abs() > 1e-4).unwrap();
+            assert!((ms(470.0)..ms(555.0)).contains(&end), "{end}");
+            assert!(first > end + ms(8.0) && first < end + ms(24.0), "{end} {first}");
+        }
+        let rl = |s: &[f32], a: f32, b: f32| {
+            let (l, r) = s[ms(a) * 2..(ms(b) * 2).min(s.len())].chunks(2).fold((0.0f64, 0.0f64), |(l, r), x| (l + (x[0] as f64).powi(2), r + (x[1] as f64).powi(2)));
+            10.0 * (r / l).log10()
+        };
+        for _ in 0..5 {
+            let s = render(Cue::Pot, 0.44);
+            let (push, stacks) = (rl(&s, 100.0, 400.0), rl(&s, 600.0, 1400.0));
+            assert!((push - 2.31).abs() < 0.02 && (stacks - 5.10).abs() < 0.02, "{push} {stacks}");
+            let side: Vec<f32> = render(Cue::Pot, 0.0).chunks(2).map(|x| x[0] - x[1]).collect();
+            assert!(side.iter().all(|x| x.abs() < 1e-6));
+        }
     }
 }
