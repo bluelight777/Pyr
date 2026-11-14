@@ -534,8 +534,11 @@ How (decided while starting it):
         Not the same: the table's own sounds' tails (0.13.28's differ between the two sides
         after the first 25 ms), and its all-in's shove is brighter than the rebuild's (the
         poker table's sounds: to look at).
-  - [ ] Not yet seen on 0.13.28: what the side that doubled sees while it's answered, Solo's
-        Draw and the pile (and their sounds), a Chiva, a double offered to me.
+  - [x] A ¡Doblo! from both sides, side by side with 0.13.28 (Olive and Reba doubling against
+        each other): the doubling side's banner on the felt, the answering side's panel, their
+        words lit orange; the cube's ring gold only when it's my side's (watching, teal).
+  - [ ] Not yet seen on 0.13.28: Solo's Draw and the pile (and their sounds), a Chiva, what
+        watchers see while a double's answered, my tiles while I'm the one asked to answer.
 - [x] Poker: the suits on bot faces and card pips (0.13.28's are one smooth shape each; the
       rebuild's are 0.13.0's circles and polygons), the Shark's crown and star
       (`measured/newtable.md`, `measured/cards.md`).
