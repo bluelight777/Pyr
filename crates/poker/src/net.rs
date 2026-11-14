@@ -2062,6 +2062,28 @@ mod tests {
         assert_eq!(view.playing, vec![("plinko".to_string(), 1)]);
     }
 
+    /// Every name 0.13.28's server stores for bots' levels, games, the Bonfire's prizes and staff
+    /// (its serde lists, read off its binary with `rebuild/tools/fields.py`, in its order) is
+    /// one this Pyr reads, and writes back the same: nothing it kept is set aside at the swap.
+    #[test]
+    fn every_name_0_13_28_stores_is_one_this_pyr_knows() {
+        use crate::bots::Level;
+        use crate::casino::{Game, bonfire::Tier};
+        fn names<T: Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug>(all: &[T]) -> Vec<String> {
+            all.iter()
+                .map(|v| {
+                    let j = serde_json::to_value(v).unwrap();
+                    assert_eq!(&serde_json::from_value::<T>(j.clone()).unwrap(), v);
+                    j.as_str().unwrap().to_string()
+                })
+                .collect()
+        }
+        assert_eq!(names(&[Level::Rookie, Level::Regular, Level::Hard, Level::Shark, Level::Genius]), ["rookie", "regular", "hard", "shark", "genius"]);
+        assert_eq!(names(&Game::ALL), ["slots", "blackjack", "roulette", "baccarat", "craps", "dice", "keno", "reels", "dragon", "plinko", "domino"]);
+        assert_eq!(names(&[Tier::Grand, Tier::Blaze, Tier::Spark]), ["grand", "blaze", "spark"]);
+        assert_eq!(names(&[Role::GameMaster, Role::Ambassador]), ["game_master", "ambassador"]);
+    }
+
     /// A big win's moment (0.13.7), as 0.13.28's apps and server say it (taken off the wire):
     /// read and written back the same; and an app from before 0.13.7 is told none of it.
     #[test]

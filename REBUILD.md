@@ -62,12 +62,12 @@ that the rebuild doesn't know yet must come through untouched:
       and its draws), the bots' ratings (a bot rated again keeps what was kept with it). Stored
       JSON this Pyr can't read at all is never written over: it's kept as it was under
       `unread:<key>` in the meta table (said in the log, once), and that one starts afresh.
-- [ ] Before the swap, every name 0.13.28 stores is one the rebuild knows (from its server's
-      serde lists, `rebuild/tools/fields.py`): bot levels `rookie regular hard shark genius`
-      (`hard` comes with the bots' levels), games `slots blackjack roulette baccarat craps dice
-      keno reels dragon plinko domino` (`domino` comes with Dominó Cubano), Bonfire prizes
-      `grand blaze spark`, staff `game_master ambassador`. Until then a list holding one of
-      them (the bots' ratings, a big wins list) is kept whole under `unread:` and not shown.
+- [x] Before the swap, every name 0.13.28 stores is one the rebuild knows (from its server's
+      serde lists, `rebuild/tools/fields.py`, read again off its binary on 2026-11-14): bot
+      levels `rookie regular hard shark genius`, games `slots blackjack roulette baccarat craps
+      dice keno reels dragon plinko domino`, Bonfire prizes `grand blaze spark`, staff
+      `game_master ambassador`: each read and written back the same, in 0.13.28's order (a
+      test). A list holding a name this Pyr can't read is still kept whole under `unread:`.
 - [x] Tables 0.13.28 added: none. Its schema is 0.13.0's, every table and index (compared in
       the test copy); the rebuild adds its props tables, which 0.13.28 leaves alone.
 - [x] Tried: a copy of the 0.13.28 test server's database (seven casino records with 0.13.28's
