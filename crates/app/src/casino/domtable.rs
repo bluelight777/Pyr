@@ -44,8 +44,8 @@ const PLATE: Vec2 = vec2(175.0, 58.0);
 /// Each seat's own colour (before the first hand), and the two sides' in a hand.
 const SEAT_COLORS: [Color32; SEATS] = [col::GOLD, Color32::from_rgb(0x4d, 0xb8, 0xff), Color32::from_rgb(0xff, 0x6b, 0x9a), Color32::from_rgb(0x4d, 0xe0, 0x9a)];
 const TEAL: Color32 = Color32::from_rgb(0x3d, 0xd6, 0xc6);
-/// ¡Doblo!'s orange (its button, as 0.13.28's).
-const DOBLO: Color32 = Color32::from_rgb(255, 144, 31);
+/// ¡Doblo!'s orange (its button, as 0.13.28's: ember, (255,144,31) when hovered).
+const DOBLO: Color32 = col::EMBER;
 /// The covers I can put up: the ante times these.
 const COVERS: [u32; 4] = [1, 2, 4, 8];
 
@@ -86,7 +86,26 @@ pub struct DomTableUi {
     told: Option<u64>,
     /// My chips while I'm in a hand (the balance waits for its result).
     playing_chips: Option<u64>,
+    /// Where the table had got to when its sounds were last made (the table, hand and moves), so
+    /// each move sounds once, and nothing that happened before I came does.
+    heard: Option<(u64, u64, DomStage, usize)>,
 }
+
+/// Where a sound's placed, by the place it comes from (mine or seat 0's at the bottom, then
+/// right, top, left): dominó's own sounds half way to the side, the table's (its knock, chips and
+/// double) 0.4, as 0.13.28 places them (measured: 1/√3 and √3 between the two sides).
+const PAN_TILE: [f32; SEATS] = [0.0, 0.5, 0.0, -0.5];
+const PAN_TABLE: [f32; SEATS] = [0.0, 0.4, 0.0, -0.4];
+/// How long a tile takes to slide in (its sound comes as it lands).
+const SLIDE: f32 = 0.35;
+/// The table's sounds' volumes here, as loud as 0.13.28's at a dominó table (measured against
+/// what it played: `tests::table_sound_levels`; my turn's bells, the same every time, to the
+/// sample's peak; the others, made fresh each time, by their energy and peaks).
+const V_PASS: f32 = 0.55;
+const V_DOUBLE: f32 = 0.8;
+const V_ACCEPT: f32 = 0.7;
+const V_TURN: f32 = 0.5;
+const V_DEAL_IN: f32 = 0.6;
 
 /// Where a tile of the line lies: its rectangle (in short sides, the first tile's middle the
 /// origin), and which way it's read: across (the first number on the left) or down (the first
@@ -306,7 +325,7 @@ fn plate_at(table: Rect, k: f32, place: usize) -> Pos2 {
     match place {
         0 => pos2(table.center().x, table.bottom() - 31.5 * k),
         1 => pos2(table.right() + 95.5 * k, table.center().y),
-        2 => pos2(table.center().x, table.top() + 30.5 * k),
+        2 => pos2(table.center().x, table.top() + 31.0 * k),
         _ => pos2(table.left() - 96.5 * k, table.center().y),
     }
 }
@@ -338,6 +357,7 @@ impl PyrApp {
         t.hand_of = None;
         t.new_menu = false;
         t.playing_chips = None;
+        t.heard = None;
     }
 
     /// The dominó tables' page: the tables along the top, the room and the table, my tiles, the
@@ -411,17 +431,11 @@ impl PyrApp {
         if let Some(h) = &hand {
             let fresh = self.poker.casino.domt.came.is_empty();
             let past = now.checked_sub(Duration::from_secs(5)).unwrap_or(now);
-            let mut new = false;
             for t in &h.chain {
-                self.poker.casino.domt.came.entry(*t).or_insert_with(|| {
-                    new = true;
-                    if fresh && h.chain.len() > 1 { past } else { now }
-                });
-            }
-            if new && !fresh && v.stage == DomStage::Playing {
-                self.poker.casino.sound_in(0.15, Cue::Check, 0.0, 0.7);
+                self.poker.casino.domt.came.entry(*t).or_insert(if fresh && h.chain.len() > 1 { past } else { now });
             }
         }
+        self.dom_sounds(&v);
         // My chips while I'm in the hand: the balance waits for its result.
         let me = v.my_seat;
         let in_hand = me.is_some_and(|m| hand.as_ref().is_some_and(|h| h.seats.contains(&m)));
@@ -631,10 +645,7 @@ impl PyrApp {
         let mid = line_middle(&l);
         let origin = pos2(felt.center().x, felt.center().y - mid * unit);
         let to_screen = |r: Rect| Rect::from_min_max(origin + r.min.to_vec2() * unit, origin + r.max.to_vec2() * unit);
-        let mut painter = p.clone();
-        if faded {
-            painter.set_opacity(0.35);
-        }
+        let painter = p.clone();
         let last_tile = h.last.and_then(|(_, m)| if let Move::Play { tile, .. } = m { Some(tile) } else { None });
         let laid_by = h.last.map(|(seat, _)| seat);
         let base = v.my_seat.unwrap_or(0) as usize;
@@ -642,7 +653,7 @@ impl PyrApp {
             let tile_here = h.chain[i];
             let r = to_screen(t.rect);
             let came = self.poker.casino.domt.came.get(&tile_here).copied().unwrap_or(now);
-            let a = ((now.saturating_duration_since(came)).as_secs_f32() / 0.35).min(1.0);
+            let a = ((now.saturating_duration_since(came)).as_secs_f32() / SLIDE).min(1.0);
             let r = if a < 1.0 && !faded {
                 // Sliding in from whoever laid it.
                 let from = laid_by.map(|seat| plate_at(table, k, (seat as usize + SEATS - base) % SEATS)).unwrap_or(r.center());
@@ -659,6 +670,11 @@ impl PyrApp {
             if newest {
                 painter.rect_stroke(r, 1.5, Stroke::new(1.5f32, col::GOLD.gamma_multiply(0.9)), StrokeKind::Inside);
             }
+        }
+        if faded {
+            // (The last hand's line, under the felt darkened, between hands.)
+            let dim = Rect::from_min_max(table.min + vec2(74.0, 83.0) * k, table.min + vec2(372.0, 363.0) * k);
+            p.rect_filled(dim, theme::r(4), Color32::from_black_alpha(150));
         }
         if faded || h.over.is_some() || h.chain.is_empty() {
             return;
@@ -876,9 +892,9 @@ impl PyrApp {
         let r_box = Rect::from_center_size(pos2(table.center().x, table.top() + 139.0 * k), vec2(240.0, 74.0));
         p.rect_filled(r_box, theme::r(14), Color32::from_black_alpha(217));
         p.rect_stroke(r_box, theme::r(14), Stroke::new(2.0f32, col::GOLD), StrokeKind::Inside);
-        p.text(r_box.center() - vec2(0.0, 12.0), Align2::CENTER_CENTER, &r.how, theme::bold_font(22.0), col::GOLD2);
+        p.text(r_box.center() - vec2(0.0, 14.0), Align2::CENTER_CENTER, &r.how, theme::bold_font(22.0), col::GOLD2);
         let times = if r.mult > 1 { format!(" · ×{}", r.mult) } else { String::new() };
-        p.text(r_box.center() + vec2(0.0, 19.0), Align2::CENTER_CENTER, format!("{names} · pot {}{times}", chips_text(r.pot)), theme::font(13.0), col::TEXT);
+        p.text(r_box.center() + vec2(0.0, 17.0), Align2::CENTER_CENTER, format!("{names} · pot {}{times}", chips_text(r.pot)), theme::font(13.0), col::TEXT);
         // A tranque: who had the fewest pips.
         if let Some(Over::Blocked { pips, .. }) = &h.over {
             let each: Vec<String> = if h.kind == Kind::Pairs {
@@ -886,7 +902,7 @@ impl PyrApp {
             } else {
                 pips.iter().zip(&h.seats).map(|(n, seat)| format!("{}: {n}", v.seats.get(*seat as usize).cloned().flatten().map(|x| x.name).unwrap_or_default())).collect()
             };
-            p.text(pos2(r_box.center().x, r_box.bottom() + 13.0), Align2::CENTER_CENTER, format!("Tranque: fewest pips wins  ({})", each.join("  ·  ")), theme::font(12.5), col::MUTED);
+            p.text(pos2(r_box.center().x, r_box.bottom() + 13.0), Align2::CENTER_CENTER, format!("Tranque: fewest pips wins  ({})", each.join("  ·  ")), theme::font(12.0), col::MUTED);
         }
         // Mine, once.
         if self.poker.casino.domt.told == Some(v.round_no) {
@@ -903,8 +919,10 @@ impl PyrApp {
         let title = r.how.to_uppercase();
         if r.winners.contains(&m) {
             self.poker.casino.announce(title, format!("+{}", chips_text(paid.saturating_sub(staked))), col::WIN, (0.5, 0.42), 0.3);
-            self.poker.casino.sound_in(0.3, Cue::WinSmall, 0.0, 0.8);
-            self.poker.casino.sound_in(0.5, Cue::Chips, 0.0, 0.7);
+            // (0.13.28's: its small win 0.3 s after the last tile's slammed down, the chips coming
+            // in 0.35 s after that.)
+            self.poker.casino.sound_in(SLIDE + 0.3, Cue::WinSmall, 0.0, 0.8);
+            self.poker.casino.sound_in(SLIDE + 0.65, Cue::Chips, 0.0, V_ACCEPT);
             self.poker.casino.celebrate(paid, staked, false, 0.6);
         } else {
             self.poker.casino.announce(title, format!("−{}", chips_text(staked)), col::LOSE, (0.5, 0.42), 0.3);
@@ -972,6 +990,55 @@ impl PyrApp {
         let _ = now;
     }
 
+    /// The table's sounds, as 0.13.28 makes them (heard off it at Café Habana, watching and
+    /// sitting; dominó's own made sample for sample): the tiles shuffled as a hand starts; each
+    /// tile as it lands, placed toward whoever laid it (the first one harder, the one that ends
+    /// the hand slammed down); a pass the table's knock, a ¡Doblo! its chips shoved in, an accept
+    /// its chips; my turn come round, its bells. Nothing for a fold, or for anything that happened
+    /// before I came. (My own moves sound as they come back, as everyone's do.)
+    fn dom_sounds(&mut self, v: &DomView) {
+        let moves = v.hand.as_ref().map_or(0, |h| h.moves);
+        let Some((id, round, stage, seen)) = self.poker.casino.domt.heard.replace((v.id, v.round_no, v.stage, moves)) else { return };
+        if id != v.id {
+            return;
+        }
+        let casino = &mut self.poker.casino;
+        if v.stage == DomStage::Playing && (round != v.round_no || stage != DomStage::Playing) {
+            // A hand starting (one already under way when it's first seen: nothing).
+            if moves == 0 {
+                casino.sound_in(0.0, Cue::DomShuffle, 0.0, 0.4);
+            }
+            return;
+        }
+        let Some(h) = &v.hand else { return };
+        if round != v.round_no || stage != DomStage::Playing || moves <= seen {
+            return;
+        }
+        // (Moves missed between two looks: the last one sounds.)
+        let Some((seat, mv)) = h.last else { return };
+        let place = (seat as usize + SEATS - v.my_seat.unwrap_or(0) as usize) % SEATS;
+        match mv {
+            Move::Play { .. } => {
+                let (cue, vol) = if h.over.is_some() {
+                    (Cue::DomSlam, 1.0)
+                } else if h.chain.len() == 1 {
+                    (Cue::DomOpen, 0.75)
+                } else {
+                    (Cue::DomTile, 0.75)
+                };
+                casino.sound_in(SLIDE, cue, PAN_TILE[place], vol);
+            }
+            Move::Pass => casino.sound_in(0.0, Cue::Check, PAN_TABLE[place], V_PASS),
+            Move::Double => casino.sound_in(0.05, Cue::AllIn, PAN_TABLE[place], V_DOUBLE),
+            Move::Accept => casino.sound_in(0.0, Cue::Chips, PAN_TABLE[place], V_ACCEPT),
+            Move::Draw | Move::Fold => {}
+        }
+        // My turn come round (not as a hand starts, nor while a double's being answered).
+        if h.over.is_none() && h.offer.is_none() && v.my_seat.is_some_and(|m| h.to_act == Some(m) && h.seats.contains(&m)) {
+            casino.sound_in(0.6, Cue::Turn, 0.0, V_TURN);
+        }
+    }
+
     /// Sends a move (once for where the hand's got to).
     fn dom_send(&mut self, s: &ServerView, v: &DomView, m: Move) {
         let Some(h) = &v.hand else { return };
@@ -982,11 +1049,6 @@ impl PyrApp {
         self.poker.casino.domt.sent = Some(at);
         self.poker.casino.domt.picked = None;
         self.engine.poker(&s.key, ToServer::DomMove { table: v.id, mv: m });
-        match m {
-            Move::Play { .. } => self.poker.casino.sound_in(0.0, Cue::Check, 0.0, 0.6),
-            Move::Double | Move::Accept => self.poker.casino.sound_in(0.0, Cue::Chips, 0.0, 0.7),
-            _ => {}
-        }
     }
 
     /// The controls along the bottom: Sit down (watching); what I put up, and Deal me in
@@ -1117,7 +1179,7 @@ impl PyrApp {
         }
         if button(ui, deal, "deal", "Deal me in", Some(super::keys::with_key(&sub, super::keys::Move::DomGo)), col::GOLD, ok) || (ok && go) {
             self.engine.dom_ready(&s.key, v.id, put);
-            self.poker.casino.sound_in(0.0, Cue::Chips, 0.0, 0.6);
+            self.poker.casino.sound_in(0.0, Cue::Chips, 0.0, V_DEAL_IN);
         }
         let mut x = deal.left() - 10.0;
         for c in COVERS.iter().rev() {
@@ -1152,6 +1214,47 @@ fn arc(p: &egui::Painter, c: Pos2, r: f32, frac: f32, stroke: Stroke) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Dominó's sounds are 0.13.28's, sample for sample: fitted to what it played (every tile, the
+    /// opening one, a hand won by a tile, a hand's shuffle), the model's values here.
+    #[test]
+    fn dominos_sounds_are_0_13_28s() {
+        let peak = |s: &[f32]| s.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        let sum = |s: &[f32]| s.iter().map(|x| x.abs() as f64).sum::<f64>();
+        for (c, len, pk, at, total) in [
+            (Cue::DomTile, 4320, 0.60834, [0.14889, -0.09366, -0.00851], 176.19),
+            (Cue::DomOpen, 4320, 0.82473, [0.54977, -0.16938, -0.01265], 305.506),
+            (Cue::DomSlam, 10800, 0.9, [0.19889, -0.16344, -0.01384], 438.321),
+            (Cue::DomShuffle, 72000, 0.39587, [-0.02087, 0.00286, 0.01345], 1887.604),
+        ] {
+            let s = pyr_engine::poker_sfx::render_mono(c);
+            assert_eq!(s.len(), len, "{c:?}");
+            assert!((peak(&s) - pk).abs() < 2e-4, "{c:?} {}", peak(&s));
+            for (i, v) in [100, 1000, 3000].into_iter().zip(at) {
+                assert!((s[i] - v).abs() < 2e-4, "{c:?} at {i}: {} not {v}", s[i]);
+            }
+            assert!((sum(&s) - total).abs() < 0.05, "{c:?} {}", sum(&s));
+            assert_eq!(s, pyr_engine::poker_sfx::render_mono(c), "{c:?}: the same every time");
+        }
+    }
+
+    /// The table's sounds' loudness here against 0.13.28's at a dominó table (what it played,
+    /// recorded: a pass's knock, a ¡Doblo!'s shove of chips, an accept's chips, my turn's bells;
+    /// the energy over each one's first moments, both sides, sounds at 70%): the volume that
+    /// matches, by the median of 200 of ours. Run by hand to set the `V_` volumes.
+    #[test]
+    #[ignore]
+    fn table_sound_levels() {
+        use pyr_engine::poker_sfx::render_mono;
+        let energy = |s: &[f32], n: usize| s.iter().take(n).map(|x| (*x as f64).powi(2)).sum::<f64>();
+        for (c, secs, theirs) in [(Cue::Check, 0.3, 12.4), (Cue::AllIn, 0.85, 115.0), (Cue::Chips, 0.25, 11.0), (Cue::Turn, 0.3, 25.3)] {
+            let n = (secs * 48000.0) as usize;
+            let mut es: Vec<f64> = (0..200).map(|_| energy(&render_mono(c), n)).collect();
+            es.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let peak = render_mono(c).iter().fold(0.0f32, |m, x| m.max(x.abs()));
+            println!("{c:?}: energy median {:.3} (10% {:.3}, 90% {:.3}), a peak {peak:.3}; volume for 0.13.28's: {:.3}", es[100], es[20], es[180], (theirs / (0.49 * es[100])).sqrt());
+        }
+    }
 
     /// A hand 0.13.28 played (Café Habana, round 1), at its last tile but one: every tile where
     /// 0.13.28 had it, measured off its screen (in short sides from the first tile's middle).

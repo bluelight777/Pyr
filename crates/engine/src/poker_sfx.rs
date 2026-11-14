@@ -128,6 +128,16 @@ pub enum Cue {
     /// One of those, played this many hundredths of a semitone higher (faster; lower when
     /// negative), as 0.13.28's big wins play theirs.
     BandUp(u16, i16),
+    // Dominó (0.13.11).
+    /// A tile laid on the line: a knock and two clicks.
+    DomTile,
+    /// The hand's first tile (la salida): the same, harder and lower.
+    DomOpen,
+    /// The hand's last tile slammed down (¡Dominó!): a harder knock and click, and the line's
+    /// tiles rattling after it.
+    DomSlam,
+    /// The tiles shuffled face down for a hand (a second and a half).
+    DomShuffle,
 }
 
 /// A small, fast noise (the same every time, so a sound is the same every time).
@@ -172,6 +182,40 @@ fn bell(out: &mut [f32], at: usize, freq: f32, dur_ms: f32, amp: f32) {
         if let Some(o) = out.get_mut(at + i) {
             *o += w * env * amp;
         }
+    }
+}
+
+/// Filtered noise with an envelope: a card's swish or snap (0.13.0's).
+fn swish(out: &mut [f32], at: usize, len: usize, amp: f32, bright: f32, seed: u32) {
+    let mut n = Noise(seed.max(1));
+    let (mut lp, mut prev) = (0.0f32, 0.0f32);
+    for i in 0..len {
+        let t = i as f32 / len as f32;
+        let env = (t / 0.08).min(1.0) * (1.0 - t).powf(2.5);
+        let x = n.next();
+        lp += (x - lp) * bright;
+        // A touch of high-pass so it's crisp, not a rumble.
+        let hp = lp - prev * 0.6;
+        prev = lp;
+        if let Some(o) = out.get_mut(at + i) {
+            *o += hp * env * amp;
+        }
+    }
+}
+
+/// Where each tile's click comes in dominó's shuffle (samples from its start; as 0.13.28 has
+/// them, fitted to the sample).
+const SHUFFLE_AT: [usize; 32] = [
+    0, 2361, 4741, 7140, 8144, 10575, 13025, 15494, 16545, 19045, 21565, 22650, 25202, 27772, 30362, 31494, 34116, 36756, 39415, 40595, 43286, 45996, 47210, 49952, 52713, 55492, 56754, 59566,
+    62396, 63692, 66554, 69436,
+];
+
+/// Dominó's tiles shuffled face down: the tiles sliding over the felt, and their clicks against
+/// each other, thirty-two of them over a second and a half (0.13.28's, sample for sample).
+fn shuffle(o: &mut [f32]) {
+    swish(o, 0, ms(1400.0), 0.36, 0.18, 421);
+    for (k, at) in SHUFFLE_AT.into_iter().enumerate() {
+        click(o, at, 0.24 + 0.2 * ((4 * k) % 7) as f32 / 7.0, 1900.0 + (211.0 * k as f32) % 1300.0, 431 + k as u32);
     }
 }
 
@@ -267,6 +311,9 @@ pub fn render_mono(c: Cue) -> Vec<f32> {
     let len = match c {
         Cue::Peg(_) => ms(90.0),
         Cue::Bucket(_) => ms(390.0),
+        Cue::DomTile | Cue::DomOpen => ms(90.0),
+        Cue::DomSlam => ms(225.0),
+        Cue::DomShuffle => ms(1500.0),
         _ => 0,
     };
     let mut o = vec![0.0f32; len];
@@ -283,6 +330,27 @@ pub fn render_mono(c: Cue) -> Vec<f32> {
             knock(&mut o, 0, 0.5);
             bell(&mut o, ms(10.0), 523.25 * 2f32.powf(1.5 * k as f32 / 12.0), 380.0, 0.1 + 0.02 * k as f32);
         }
+        // Dominó's, as 0.13.28 makes them, sample for sample (fitted to what it played: every
+        // tile laid, every hand won by a tile, every hand's shuffle the same sound).
+        Cue::DomTile => {
+            knock(&mut o, 0, 0.35);
+            click(&mut o, 0, 0.42, 2350.0, 401);
+            click(&mut o, ms(9.0), 0.30, 3100.0, 403);
+        }
+        Cue::DomOpen => {
+            knock(&mut o, 0, 0.65);
+            click(&mut o, 0, 0.54, 2100.0, 401);
+            click(&mut o, ms(12.0), 0.4, 3100.0, 403);
+        }
+        Cue::DomSlam => {
+            knock(&mut o, 0, 0.95);
+            click(&mut o, 0, 0.66, 1850.0, 401);
+            click(&mut o, ms(15.0), 0.5, 3100.0, 403);
+            for (k, at) in [40.0, 65.0, 90.0, 110.0, 135.0, 155.0].into_iter().enumerate() {
+                click(&mut o, ms(at), 0.16 - 0.02 * k as f32, 2600.0 + (173.0 * k as f32) % 600.0, 411 + k as u32);
+            }
+        }
+        Cue::DomShuffle => shuffle(&mut o),
         _ => {}
     }
     // Never past full scale.
@@ -317,7 +385,7 @@ mod tests {
 
     #[test]
     fn every_sound_is_there_and_never_clips() {
-        for c in [Cue::Deal, Cue::Flip, Cue::Chips, Cue::Check, Cue::Fold, Cue::AllIn, Cue::Pot, Cue::Turn, Cue::Win, Cue::Hurry, Cue::Tick, Cue::TickUp, Cue::TimeBank, Cue::TimeOut, Cue::ReelSpin, Cue::ReelStop, Cue::WinSmall, Cue::WinBig, Cue::Jackpot, Cue::BallRoll, Cue::BallDrop, Cue::DiceRoll, Cue::KenoBall, Cue::Coin, Cue::Wheel, Cue::Fuse, Cue::Boom, Cue::Peg(0), Cue::Peg(15), Cue::Bucket(0), Cue::Bucket(8)] {
+        for c in [Cue::Deal, Cue::Flip, Cue::Chips, Cue::Check, Cue::Fold, Cue::AllIn, Cue::Pot, Cue::Turn, Cue::Win, Cue::Hurry, Cue::Tick, Cue::TickUp, Cue::TimeBank, Cue::TimeOut, Cue::ReelSpin, Cue::ReelStop, Cue::WinSmall, Cue::WinBig, Cue::Jackpot, Cue::BallRoll, Cue::BallDrop, Cue::DiceRoll, Cue::KenoBall, Cue::Coin, Cue::Wheel, Cue::Fuse, Cue::Boom, Cue::Peg(0), Cue::Peg(15), Cue::Bucket(0), Cue::Bucket(8), Cue::DomTile, Cue::DomOpen, Cue::DomSlam, Cue::DomShuffle] {
             let s = render(c, 0.3);
             assert!(s.len() > 2000, "{c:?}");
             let peak = s.iter().fold(0.0f32, |m, x| m.max(x.abs()));
