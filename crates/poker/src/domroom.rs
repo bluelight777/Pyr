@@ -85,6 +85,7 @@ pub struct DomRoom {
 /// What a finished hand's called (0.13.28's words).
 pub fn how(over: &Over) -> &'static str {
     match over {
+        Over::Domino { capicua: true, chiva: true, .. } => "¡Capicúa y Chiva!",
         Over::Domino { capicua: true, .. } => "¡Capicúa!",
         Over::Domino { chiva: true, .. } => "¡Chiva!",
         Over::Domino { .. } => "¡Dominó!",
@@ -725,6 +726,16 @@ fn bot_think_ms(h: &Hand, m: Move, whim: &mut Stream) -> u64 {
 mod tests {
     use super::*;
     use crate::fair::seed_from;
+
+    /// How a hand ended, in 0.13.28's server's words (read off its binary: a Chiva is too rare
+    /// to have come up in its hands played here).
+    #[test]
+    fn a_hands_end_is_worded_as_0_13_28s() {
+        let domino = |capicua, chiva| how(&Over::Domino { player: 0, capicua, chiva });
+        assert_eq!([domino(false, false), domino(true, false), domino(false, true), domino(true, true)], ["¡Dominó!", "¡Capicúa!", "¡Chiva!", "¡Capicúa y Chiva!"]);
+        assert_eq!(how(&Over::Blocked { winners: vec![0], pips: vec![3, 9] }), "Tranque");
+        assert_eq!(how(&Over::Fold { winner: 1 }), "Folded to a double");
+    }
 
     struct Rng(Stream);
     impl Random for Rng {

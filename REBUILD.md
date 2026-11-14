@@ -606,7 +606,11 @@ How (decided while starting it):
   - [x] A ¡Doblo! watched (the banner, as the doubling side's) and put to me as the next in
         turn (my tiles bright, my time on the bar), side by side.
   - [ ] Not yet seen on 0.13.28: a Chiva (the game plays it as 0.13.28's rules, unseen on its
-        screen).
+        screen: none in its 86 hands played here, and one needs an opponent who never laid a
+        tile). Its words read off 0.13.28's server: "¡Chiva!", and "¡Capicúa y Chiva!" for a hand
+        that's both (the rebuild said "¡Capicúa!": fixed, with a test). 0.13.28's app also has a
+        line of its own with "Chiva & " and "· +N% bonus · ×M" beside the hand's end box (format
+        pieces in its binary, never on screen here): the rebuild doesn't draw it.
 - [x] Poker: the suits on bot faces and card pips (0.13.28's are one smooth shape each; the
       rebuild's are 0.13.0's circles and polygons), the Shark's crown and star
       (`measured/newtable.md`, `measured/cards.md`).
