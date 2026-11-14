@@ -96,12 +96,15 @@ pub struct DomTableUi {
 /// double) 0.4, as 0.13.28 places them (measured: 1/√3 and √3 between the two sides).
 const PAN_TILE: [f32; SEATS] = [0.0, 0.5, 0.0, -0.5];
 const PAN_TABLE: [f32; SEATS] = [0.0, 0.4, 0.0, -0.4];
-/// How long a tile takes to slide in (its sound comes as it lands).
+/// How long a tile takes to slide in.
 const SLIDE: f32 = 0.35;
+/// When its sound is asked for: as it lands, less the 0.05 s a sound takes to be heard here
+/// (side by side with 0.13.28 at one table: each tile 0.32-0.40 s after its view came there).
+const LANDS: f32 = SLIDE - 0.05;
 /// The table's sounds' volumes here, as loud as 0.13.28's at a dominó table (measured against
 /// what it played: `tests::table_sound_levels`; my turn's bells, the same every time, to the
 /// sample's peak; the others, made fresh each time, by their energy and peaks).
-const V_PASS: f32 = 0.55;
+const V_PASS: f32 = 0.57;
 const V_DOUBLE: f32 = 0.8;
 const V_ACCEPT: f32 = 0.7;
 const V_TURN: f32 = 0.5;
@@ -921,8 +924,8 @@ impl PyrApp {
             self.poker.casino.announce(title, format!("+{}", chips_text(paid.saturating_sub(staked))), col::WIN, (0.5, 0.42), 0.3);
             // (0.13.28's: its small win 0.3 s after the last tile's slammed down, the chips coming
             // in 0.35 s after that.)
-            self.poker.casino.sound_in(SLIDE + 0.3, Cue::WinSmall, 0.0, 0.8);
-            self.poker.casino.sound_in(SLIDE + 0.65, Cue::Chips, 0.0, V_ACCEPT);
+            self.poker.casino.sound_in(LANDS + 0.3, Cue::WinSmall, 0.0, 0.8);
+            self.poker.casino.sound_in(LANDS + 0.65, Cue::Chips, 0.0, V_ACCEPT);
             self.poker.casino.celebrate(paid, staked, false, 0.6);
         } else {
             self.poker.casino.announce(title, format!("−{}", chips_text(staked)), col::LOSE, (0.5, 0.42), 0.3);
@@ -1026,10 +1029,10 @@ impl PyrApp {
                 } else {
                     (Cue::DomTile, 0.75)
                 };
-                casino.sound_in(SLIDE, cue, PAN_TILE[place], vol);
+                casino.sound_in(LANDS, cue, PAN_TILE[place], vol);
             }
             Move::Pass => casino.sound_in(0.0, Cue::Check, PAN_TABLE[place], V_PASS),
-            Move::Double => casino.sound_in(0.05, Cue::AllIn, PAN_TABLE[place], V_DOUBLE),
+            Move::Double => casino.sound_in(0.0, Cue::AllIn, PAN_TABLE[place], V_DOUBLE),
             Move::Accept => casino.sound_in(0.0, Cue::Chips, PAN_TABLE[place], V_ACCEPT),
             Move::Draw | Move::Fold => {}
         }

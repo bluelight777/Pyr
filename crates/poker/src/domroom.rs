@@ -32,8 +32,9 @@ pub const IDLE_HANDS: u32 = 5;
 /// What a new table may be opened at.
 pub const ANTES: [u64; 19] = [10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000, 2_500_000, 5_000_000, 10_000_000];
 
-/// The house's players (0.13.28's).
-const BOT_NAMES: [&str; 11] = ["Papito", "Yoandri", "Tía Cuca", "Rigo", "Mayelín", "Yuneisy", "Yunior", "Osniel", "Chucho", "Lázaro", "Caridad"];
+/// The house's players (0.13.28's: the fourteen it seated, a hundred bots sat down at an empty
+/// table and stood up again).
+const BOT_NAMES: [&str; 14] = ["Papito", "Yoandri", "Tía Cuca", "Rigo", "Mayelín", "Yuneisy", "Yunior", "Osniel", "Chucho", "Lázaro", "Caridad", "Marlenis", "El Profe", "Tata"];
 
 struct Seat {
     uid: String,
