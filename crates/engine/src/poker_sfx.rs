@@ -294,13 +294,27 @@ pub fn casino_file(c: Cue) -> Option<&'static str> {
     })
 }
 
+/// How long 0.13.28 lets a casino file play, where it cuts it short: the fuse at 900 ms, 0.13.0's
+/// own fuse's length (its file is 1.02 s; heard on 0.13.28 at All or Nothing, cut at 0.900 s to
+/// the sample, twice).
+fn file_cut(c: Cue) -> Option<usize> {
+    match c {
+        Cue::Fuse => Some(ms(900.0)),
+        _ => None,
+    }
+}
+
 /// The sound, mono.
 pub fn render_mono(c: Cue) -> Vec<f32> {
     if let Some(o) = table_sound(c) {
         return o;
     }
     if let Some(i) = casino_file(c).and_then(crate::bands::id) {
-        return crate::bands::render(i, 0.0).chunks(2).map(|x| (x[0] + x[1]) * 0.5).collect();
+        let mut o: Vec<f32> = crate::bands::render(i, 0.0).chunks(2).map(|x| (x[0] + x[1]) * 0.5).collect();
+        if let Some(n) = file_cut(c) {
+            o.truncate(n);
+        }
+        return o;
     }
     if let Cue::Band(i) = c {
         return crate::bands::render(i, 0.0).chunks(2).map(|x| (x[0] + x[1]) * 0.5).collect();
@@ -366,7 +380,11 @@ pub fn render_mono(c: Cue) -> Vec<f32> {
 /// The sound, 48 kHz stereo (interleaved), placed `pan` (-1 left to 1 right).
 pub fn render(c: Cue, pan: f32) -> Vec<f32> {
     if let Some(i) = casino_file(c).and_then(crate::bands::id) {
-        return crate::bands::render(i, pan);
+        let mut o = crate::bands::render(i, pan);
+        if let Some(n) = file_cut(c) {
+            o.truncate(n * 2);
+        }
+        return o;
     }
     if let Cue::Band(i) = c {
         return crate::bands::render(i, pan);
@@ -420,8 +438,15 @@ mod tests {
     fn the_casinos_sounds_are_0_13_28s_files() {
         for c in [Cue::ReelSpin, Cue::ReelStop, Cue::WinSmall, Cue::WinBig, Cue::Jackpot, Cue::BallRoll, Cue::BallDrop, Cue::DiceRoll, Cue::KenoBall, Cue::Coin, Cue::Wheel, Cue::Fuse, Cue::Boom] {
             let i = crate::bands::id(casino_file(c).unwrap()).unwrap_or_else(|| panic!("{c:?}"));
-            assert_eq!(render(c, 0.0), crate::bands::render(i, 0.0), "{c:?}");
+            let mut file = crate::bands::render(i, 0.0);
+            if c == Cue::Fuse {
+                // (Cut at 900 ms, as 0.13.28 cuts it: its file is longer.)
+                assert!(file.len() > ms(900.0) * 2);
+                file.truncate(ms(900.0) * 2);
+            }
+            assert_eq!(render(c, 0.0), file, "{c:?}");
         }
+        assert_eq!(render_mono(Cue::Fuse).len(), ms(900.0));
         let peak = |s: &[f32]| s.iter().fold(0.0f32, |m, x| m.max(x.abs()));
         assert!((peak(&render(Cue::DiceRoll, 0.0)) - 0.9).abs() < 1e-6);
         let side = |s: &[f32]| s.chunks(2).fold((0.0f64, 0.0f64), |(a, b), x| (a + (x[0] as f64).powi(2), b + (x[1] as f64).powi(2)));
