@@ -117,6 +117,25 @@ that the rebuild doesn't know yet must come through untouched:
       two codes (same certificate, host and port), and someone new joined it with
       `campfire`.
 
+## Releasing the rebuild (what's left, in order)
+
+1. On Blue's PC, side by side with 0.13.28 (`Downloads\pyr-test`, README.txt there): programs
+   inside Pyr (Torch & Conquer, Pyropoly on the NVIDIA card, Chimbrowser); the echo test with
+   speakers; a screen share's encoder. What differs gets fixed or said before going on.
+2. Blue's say: the version (0.14.0, say: past 0.13.28, a new key) and the release notes (what
+   to tell people: install this one by hand once from pyr.gg, everything comes with them; what's
+   new: prop bets in chat, the Updating screen, Reel Row Remastered on the rebuild's own
+   numbers, the fixes found on the way; whether the voice fix for headphones, `PYR_FIX=pcgate`,
+   goes in after the echo test).
+3. The builds (keys by path): Windows (`scripts/build-windows.sh`, then
+   `installer/windows/build.sh`: makensis is here), Linux (.deb), the VPS's server for x86-64
+   and ARM64 (`scripts/build-vps-server.sh`, with cargo-zigbuild and Zig installed here and the
+   Rust source in /home/claude/rustsrc for -Zbuild-std: both built and the x86-64 one run),
+   the Keeper (`make-keeper.sh` with KEEPER_PUB and LIVE, above), `make-release.sh`.
+4. The swap, Blue at the VPS: the rebuilt server onto 0.13.28's data (backed up first), the
+   Keeper's second certificate and list (`setup-keeper.sh`, run by the release), then
+   `publish.ps1` from Blue's PC. 0.13.28's apps are told to get the new Pyr as they log in.
+
 ## Checklist
 
 Version in brackets: where 0.13.x first had it.
