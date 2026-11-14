@@ -1131,9 +1131,9 @@ dialog[open] { animation: pop .35s var(--ease); }
     b.addEventListener("click", function () { var el = $(b.dataset.copy); if (el) copy(el.textContent.trim(), b); });
   });
 
-  // ---- the release (version, size, date, notes) from latest.json
+  // ---- the release (version, size, date, notes) from latest2.json
   var sizes = {};
-  fetch("latest.json", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (f) {
+  fetch("latest2.json", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (f) {
     var m = JSON.parse(f.manifest);
     $$("[data-version]").forEach(function (el) { el.textContent = m.version; });
     if (m.windows) sizes.win = m.windows;

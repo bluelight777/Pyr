@@ -482,6 +482,12 @@ pub const GM_UNLIMITED_FEATURE: &str = "poker_gm_unlimited";
 /// bets, the odds and the payouts. Apps say [`PROPS_CAP`] to be told about them.
 pub const PROPS_FEATURE: &str = "prop_bets";
 pub const PROPS_CAP: &str = "prop_bets";
+/// In `Login::caps`: this app updates with the new release key (the rebuild's: the one before
+/// was lost). A server tells an app without it, as it logs in, that a new Pyr is out and where
+/// to get it ([`NEW_PYR_NOTE`]): its Update button can't offer it.
+pub const NEW_RELEASE_KEY_CAP: &str = "release_key_2";
+/// What an app without [`NEW_RELEASE_KEY_CAP`] is told as it logs in.
+pub const NEW_PYR_NOTE: &str = "There's a new Pyr, and this one can't update to it by itself: get it from pyr.gg.";
 /// In `Login::caps`: this app knows group conversations ([`GROUPS_FEATURE`]).
 pub const GROUPS_CAP: &str = "groups";
 /// In `Login::caps`: this app adjusts its camera and screen share to its viewers'

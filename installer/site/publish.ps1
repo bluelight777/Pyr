@@ -28,7 +28,7 @@ foreach ($first in @(Get-ChildItem -Path (Join-Path $here "upload") -Recurse -Fi
     }
     Get-ChildItem -Path $first.DirectoryName -Filter "$(Split-Path -Leaf $whole).part*" | Remove-Item
 }
-$manifest = (Get-Content -Raw (Join-Path $site "latest.json") | ConvertFrom-Json).manifest | ConvertFrom-Json
+$manifest = (Get-Content -Raw (Join-Path $site "latest2.json") | ConvertFrom-Json).manifest | ConvertFrom-Json
 # (And under the names they had before Pyr's rename, for links to them out there.)
 $old = "ingle"
 $downloads = @(
@@ -42,7 +42,7 @@ foreach ($d in $downloads) {
     $file = Join-Path $site (($d.Item.url -split '/')[-1])
     if (-not (Test-Path $file)) { throw "$file is missing." }
     if ((Get-FileHash -Algorithm SHA256 $file).Hash.ToLower() -ne $d.Item.sha256) {
-        throw "$file isn't the file latest.json describes (a part missing or damaged?)."
+        throw "$file isn't the file latest2.json describes (a part missing or damaged?)."
     }
     Copy-Item $file (Join-Path $site $d.Stable) -Force
 }
@@ -50,10 +50,7 @@ scp -r "$here\upload" "${server}:$folder"
 if ($LASTEXITCODE -ne 0) { throw "The upload didn't work." }
 ssh $server "bash ~/$folder/install-site.sh"
 if ($LASTEXITCODE -ne 0) { throw "Putting the files on the website didn't work." }
-$f = Invoke-RestMethod -Uri "https://pyr.gg/latest.json" -Headers @{ "Cache-Control" = "no-cache" }
+$f = Invoke-RestMethod -Uri "https://pyr.gg/latest2.json" -Headers @{ "Cache-Control" = "no-cache" }
 $m = $f.manifest | ConvertFrom-Json
-# Copies from before the rename look under the old name (the same folder).
-$o = Invoke-RestMethod -Uri "https://firelitgames.com/$old/latest.json" -Headers @{ "Cache-Control" = "no-cache" }
-$om = $o.manifest | ConvertFrom-Json
 Write-Host ""
-Write-Host "Done: pyr.gg now offers Pyr $($m.version) (and $($om.version) to copies from before the rename, at their old address). Running copies will offer the update within a few hours (or right away when reopened)."
+Write-Host "Done: pyr.gg now offers Pyr $($m.version). Running copies will offer the update within a few hours (or right away when reopened); copies of 0.13.28 and older are told by the server to get it from pyr.gg."

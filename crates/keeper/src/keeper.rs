@@ -45,6 +45,14 @@ pub struct Config {
     /// How long a list it signs counts for (it signs again well before).
     #[serde(default = "default_valid")]
     pub valid_days: i64,
+    /// The new release key's public half and its certificate for the Keeper's key (the
+    /// rebuild's: the release key before it was lost). With them the Keeper also puts up
+    /// `index4.json`, the list rebuilt Pyrs read (see `State::library2`), and takes in lists the
+    /// new key signs.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub release_key2: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cert2_file: Option<PathBuf>,
 }
 
 fn default_bwrap() -> PathBuf {
@@ -71,6 +79,13 @@ pub struct State {
     /// after doesn't put it back (0.13.25).
     #[serde(default)]
     pub unlisted: Vec<String>,
+    /// The list rebuilt Pyrs read (`index4.json`), once the new release key is set up
+    /// (`Config::release_key2`): the same add-ons and skins as `library` (which 0.13.28 and
+    /// older read, `index3.json`), and programs as the new key endorses them (the old key's
+    /// endorsements can't be believed by Pyrs that have only the new key, nor the new key's by
+    /// those that have only the old one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library2: Option<Library>,
 }
 
 /// Programs Pyr does itself now: never listed, whatever list is taken in (Dominó Cubano is
@@ -88,32 +103,44 @@ fn without_pyrs_own(lib: &mut Library) -> bool {
 /// and the plugins added since it was set up, stay): what it adds, and newer versions of
 /// what's there; never what was taken off, nor a program Pyr does itself (0.13.25).
 pub fn merge(st: &mut State, lib: Library) {
+    merge_into(&mut st.library, &st.unlisted, lib);
+}
+
+/// `merge`, into one list.
+fn merge_into(into: &mut Library, unlisted: &[String], lib: Library) {
     for e in lib.plugins {
-        if st.unlisted.contains(&e.id) || PYR_DOES_ITSELF.contains(&e.id.as_str()) {
+        if unlisted.contains(&e.id) || PYR_DOES_ITSELF.contains(&e.id.as_str()) {
             continue;
         }
-        match st.library.plugins.iter_mut().find(|p| p.id == e.id) {
+        match into.plugins.iter_mut().find(|p| p.id == e.id) {
             Some(p) => {
                 if pyr_proto::release::newer(&e.version, &p.version) {
                     *p = e;
                 }
             }
-            None => st.library.plugins.push(e),
+            None => into.plugins.push(e),
         }
     }
     for e in lib.skins {
-        if st.unlisted.contains(&format!("skin:{}", e.id)) {
+        if unlisted.contains(&format!("skin:{}", e.id)) {
             continue;
         }
-        match st.library.skins.iter_mut().find(|s| s.id == e.id) {
+        match into.skins.iter_mut().find(|s| s.id == e.id) {
             Some(s) => {
                 if pyr_proto::release::newer(&e.version, &s.version) {
                     *s = e;
                 }
             }
-            None => st.library.skins.push(e),
+            None => into.skins.push(e),
         }
     }
+}
+
+/// A list without the programs `key` didn't endorse (the rest as it is).
+fn endorsed_by(lib: &Library, key: &str) -> Library {
+    let mut out = lib.clone();
+    out.plugins.retain(|p| p.kind != Kind::Program || library::endorsed(p, key));
+    out
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -134,6 +161,8 @@ pub struct Keeper<'a> {
     pub builder: &'a dyn Builder,
     pub key: Identity,
     pub cert: KeeperCert,
+    /// The new release key's certificate for the same key (see `Config::release_key2`).
+    pub cert2: Option<KeeperCert>,
     pub state: State,
 }
 
@@ -158,6 +187,14 @@ impl<'a> Keeper<'a> {
         let key = Self::load_key(&cfg.key_file)?;
         let cert: KeeperCert = serde_json::from_str(&std::fs::read_to_string(&cfg.cert_file)?)?;
         anyhow::ensure!(cert.key == key.user_id(), "the certificate is for another key");
+        let cert2 = match &cfg.cert2_file {
+            Some(path) if !cfg.release_key2.is_empty() => {
+                let c: KeeperCert = serde_json::from_str(&std::fs::read_to_string(path)?)?;
+                anyhow::ensure!(c.key == key.user_id(), "the new release key's certificate is for another key");
+                Some(c)
+            }
+            _ => None,
+        };
         let store = Store::open(&cfg.guild_db)?;
         std::fs::create_dir_all(&cfg.state_dir)?;
         let path = cfg.state_dir.join("state.json");
@@ -178,7 +215,30 @@ impl<'a> Keeper<'a> {
             }
             st
         };
-        Ok(Keeper { cfg, store, reviewer, builder, key, cert, state })
+        let mut k = Keeper { cfg, store, reviewer, builder, key, cert, cert2, state };
+        k.start_list2();
+        Ok(k)
+    }
+
+    /// The first run with the new release key (`Config::release_key2`): its list starts as
+    /// what's up, less the programs it hasn't endorsed, with what it signed (its own list for
+    /// the release, `index2.json`, if one's up).
+    fn start_list2(&mut self) {
+        if self.cert2.is_none() || self.state.library2.is_some() {
+            return;
+        }
+        let mut lib2 = endorsed_by(&self.state.library, &self.cfg.release_key2);
+        for name in ["index4.json", "index2.json"] {
+            let p = self.cfg.web_library.join(name);
+            if let Ok(text) = std::fs::read_to_string(&p)
+                && let Ok(lib) = library::open(&text, &self.cfg.release_key2)
+            {
+                info!("the list for the new release key starts from {} ({} plugins, {} skins) and what's up", p.display(), lib.plugins.len(), lib.skins.len());
+                merge_into(&mut lib2, &self.state.unlisted, lib);
+                break;
+            }
+        }
+        self.state.library2 = Some(lib2);
     }
 
     fn save(&self) -> Result<()> {
@@ -204,6 +264,7 @@ impl<'a> Keeper<'a> {
             && let Ok(st) = serde_json::from_str(&text)
         {
             self.state = st;
+            self.start_list2();
         }
     }
 
@@ -377,6 +438,11 @@ impl<'a> Keeper<'a> {
                 ..current
             };
             entry.check().map_err(anyhow::Error::msg)?;
+            if let Some(l2) = &mut self.state.library2
+                && let Some(s) = l2.skins.iter_mut().find(|s| s.id == id)
+            {
+                *s = entry.clone();
+            }
             if let Some(s) = self.state.library.skins.iter_mut().find(|s| s.id == id) {
                 *s = entry;
             }
@@ -437,6 +503,11 @@ impl<'a> Keeper<'a> {
             let file = self.put_file(&format!("{id}/{version}"), &format!("{}.wasm", m.package.replace('-', "_")), &wasm)?;
             let entry = Entry { version: version.clone(), wasm: Some(file), permissions: perms, review: whats_new(&v), updated: now(), ..current };
             entry.check().map_err(anyhow::Error::msg)?;
+            if let Some(l2) = &mut self.state.library2
+                && let Some(e) = l2.plugins.iter_mut().find(|e| e.id == id)
+            {
+                *e = entry.clone();
+            }
             if let Some(e) = self.state.library.plugins.iter_mut().find(|e| e.id == id) {
                 *e = entry;
             }
@@ -473,9 +544,22 @@ impl<'a> Keeper<'a> {
     pub fn import(&mut self, signed_text: &str) -> Result<()> {
         let signed: library::Signed = serde_json::from_str(signed_text)?;
         anyhow::ensure!(signed.cert.is_none(), "only a list signed with the release key itself can be taken in");
-        let lib = library::open(signed_text, &self.cfg.release_key).map_err(anyhow::Error::msg)?;
+        // Signed with the new release key (once it's set up), or the one before it.
+        let new_key = (!self.cfg.release_key2.is_empty()).then(|| library::open(signed_text, &self.cfg.release_key2).ok()).flatten();
+        let lib = match new_key {
+            Some(lib) => lib,
+            None => library::open(signed_text, &self.cfg.release_key).map_err(anyhow::Error::msg)?,
+        };
         self.reload();
-        merge(&mut self.state, lib);
+        match &mut self.state.library2 {
+            Some(l2) => {
+                // Each list with the programs its Pyrs can believe (the add-ons and skins in
+                // both).
+                merge_into(l2, &self.state.unlisted, endorsed_by(&lib, &self.cfg.release_key2));
+                merge_into(&mut self.state.library, &self.state.unlisted, endorsed_by(&lib, &self.cfg.release_key));
+            }
+            None => merge(&mut self.state, lib),
+        }
         self.publish()
     }
 
@@ -508,6 +592,12 @@ impl<'a> Keeper<'a> {
                 lib.plugins.remove(i).name
             }
         };
+        if let Some(l2) = &mut self.state.library2 {
+            match link.strip_prefix("skin:") {
+                Some(id) => l2.skins.retain(|s| s.id != id),
+                None => l2.plugins.retain(|p| p.id != link),
+            }
+        }
         self.state.links.retain(|_, l| *l != link);
         if !self.state.unlisted.contains(&link) {
             self.state.unlisted.push(link.clone());
@@ -517,26 +607,39 @@ impl<'a> Keeper<'a> {
         Ok(gone)
     }
 
-    /// Signs the list and puts it up (`index3.json`, replaced in one step), never with a
-    /// program Pyr does itself in it (one kept from before goes now).
+    /// Signs the list and puts it up (`index3.json`, replaced in one step), and the list for
+    /// the new release key (`index4.json`) once it's set up; never with a program Pyr does
+    /// itself in it (one kept from before goes now).
     pub fn publish(&mut self) -> Result<()> {
-        let lib = &mut self.state.library;
-        if without_pyrs_own(lib) {
+        if without_pyrs_own(&mut self.state.library) {
             info!("programs Pyr does itself now taken off the list");
         }
-        lib.issued = now();
-        lib.expires = (now() + self.cfg.valid_days * 86_400).min(self.cert.not_after);
-        let signed = library::sign_as_keeper(&self.key, &self.cert, lib);
-        let text = serde_json::to_string_pretty(&signed)?;
-        // It must open as Pyr opens it.
-        let check = library::open(&text, &self.cfg.release_key).map_err(anyhow::Error::msg)?;
-        anyhow::ensure!(check.plugins.len() == lib.plugins.len(), "a plugin in the list wouldn't be believed (a program without an endorsement?)");
-        let path = self.cfg.web_library.join("index3.json");
-        let tmp = path.with_extension("keeper-tmp");
-        std::fs::write(&tmp, text)?;
-        std::fs::rename(tmp, path)?;
+        let issued = now();
+        let lib = &mut self.state.library;
+        lib.issued = issued;
+        lib.expires = (issued + self.cfg.valid_days * 86_400).min(self.cert.not_after);
+        put_up(&self.cfg.web_library.join("index3.json"), &self.key, &self.cert, lib, &self.cfg.release_key)?;
+        if let (Some(l2), Some(cert2)) = (&mut self.state.library2, &self.cert2) {
+            without_pyrs_own(l2);
+            l2.issued = issued;
+            l2.expires = (issued + self.cfg.valid_days * 86_400).min(cert2.not_after);
+            put_up(&self.cfg.web_library.join("index4.json"), &self.key, cert2, l2, &self.cfg.release_key2)?;
+        }
         self.save()
     }
+}
+
+/// Signs a list as the Keeper (with the release key's certificate `cert`) and puts it up at
+/// `path`, replaced in one step, once it opens as Pyr opens it.
+fn put_up(path: &Path, key: &Identity, cert: &KeeperCert, lib: &Library, release_key: &str) -> Result<()> {
+    let signed = library::sign_as_keeper(key, cert, lib);
+    let text = serde_json::to_string_pretty(&signed)?;
+    let check = library::open(&text, release_key).map_err(anyhow::Error::msg)?;
+    anyhow::ensure!(check.plugins.len() == lib.plugins.len(), "a plugin in the list wouldn't be believed (a program without an endorsement?)");
+    let tmp = path.with_extension("keeper-tmp");
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(tmp, path)?;
+    Ok(())
 }
 
 fn whats_new(v: &Verdict) -> String {

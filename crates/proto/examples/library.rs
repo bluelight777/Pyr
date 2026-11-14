@@ -25,6 +25,12 @@
 //! The tool reads every file, puts its SHA-256 and size in the list, and signs the list with
 //! the release key (with the library's own context), good for `--valid-days` (180 unless told).
 //!
+//!   cargo run -p pyr-proto --example library -- endorse --key release-key-2.txt \
+//!       --trust <the key before's public half> --in index3.json --out for-key-2.json
+//!
+//! endorses every program in a list again with the release key (since the rebuild's new key:
+//! the live list, certified by the key before, for the Keeper to take in for `index4.json`).
+//!
 //!   cargo run -p pyr-proto --example library -- refresh --key release-key.txt --in index.json
 //!
 //! signs the same list again with new dates.
@@ -277,8 +283,12 @@ fn main() -> Result<()> {
             let key = load_key(&get("--key").context("--key")?)?;
             let input = get("--in").context("--in")?;
             let text = std::fs::read_to_string(&input)?;
-            // Signed by the release key, or by a Keeper it certified (the live list).
-            let mut lib = library::open(&text, &key.user_id()).map_err(anyhow::Error::msg)?;
+            // Signed by the release key, or by a Keeper it certified (the live list); or, with
+            // `--trust KEY` (a public half), by that key or a Keeper it certified: the live
+            // `index3.json` the release key before this one certified, its programs endorsed
+            // again with the new key for the Keeper's `index4.json` (the rebuild's key change).
+            let trusted = get("--trust").unwrap_or_else(|| key.user_id());
+            let mut lib = library::open(&text, &trusted).map_err(anyhow::Error::msg)?;
             for p in &mut lib.plugins {
                 if p.kind == library::Kind::Program {
                     p.endorsement = library::endorse(&key, p);

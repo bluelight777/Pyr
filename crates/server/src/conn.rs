@@ -370,6 +370,16 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
         bail!("not registered: {msg}");
     }
 
+    // An app from before the new release key (0.13.28 and older) can't update to the rebuilt
+    // Pyr by itself: it's told where to get it, a moment after it logs in (once it can show it).
+    if !caps.iter().any(|c| c == NEW_RELEASE_KEY_CAP) {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            tx.send(frame(0, Event::Error { code: ErrorCode::VersionMismatch, message: NEW_PYR_NOTE.into() }));
+        });
+    }
+
     let dg = tokio::spawn(datagram_loop(hub.clone(), conn.clone(), session_cell.clone()));
     let uni = tokio::spawn(uni_loop(hub.clone(), conn.clone(), session_cell.clone()));
     let files = tokio::spawn(file_loop(hub.clone(), conn.clone(), user_id.clone()));

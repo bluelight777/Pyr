@@ -8,10 +8,12 @@ use std::time::Duration;
 use pyr_proto::library::{self, Library};
 use serde::{Deserialize, Serialize};
 
-/// (`index3.json` since 0.9: the list the Library Keeper keeps, signed with its certified key;
-/// `index2.json` until the Keeper is running. `index2.json` since 0.8.1: it has skins with
-/// shapes of their own, which `index.json`, the list older Pyrs read, leaves out.)
-const DEFAULT_URL: &str = "https://pyr.gg/library/index3.json";
+/// (`index4.json` since the rebuild: the list the Library Keeper keeps, signed with its key as
+/// the new release key certifies it; `index3.json`, as the release key before it certified it,
+/// is what 0.13.28 and older read, and since 0.9. `index2.json` until the Keeper is running.
+/// `index2.json` since 0.8.1: it has skins with shapes of their own, which `index.json`, the
+/// list older Pyrs read, leaves out.)
+const DEFAULT_URL: &str = "https://pyr.gg/library/index4.json";
 const BEFORE_KEEPER_URL: &str = "https://pyr.gg/library/index2.json";
 /// The newest list seen (Unix seconds it was signed), so an older one is never believed again.
 const SEEN_FILE: &str = "library-seen.json";

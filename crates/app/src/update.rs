@@ -2,7 +2,7 @@
 //! Update button when there is one (see `update_chip`), and on a click downloads it, installs
 //! it silently, reopens and rejoins the voice channel you were in.
 //!
-//! The release file (`latest.json`) must be signed with the Firelit release key and the
+//! The release file (`latest2.json`) must be signed with the Firelit release key and the
 //! download must match its SHA-256 (see `pyr_proto::release`), so a hacked website can't
 //! push anything else. It must also be within its dates and no older than one this app has
 //! already seen (`update-seen.json`), so a hacked website can't hide a newer release by
@@ -19,9 +19,11 @@ use pyr_proto::release::{self, Asset, Manifest};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-/// Public half of the Firelit release key. The secret half signs `latest.json`.
-pub const RELEASE_KEY: &str = "J0EGQDSoDplSzp3aFrK7EA8C5Of4w4D40kaO-g7iJcE";
-const DEFAULT_URL: &str = "https://pyr.gg/latest.json";
+/// Public half of the Firelit release key. The secret half signs `latest2.json`. (A new one
+/// since the rebuild: the one before, which 0.13.28 and older Pyrs have and `latest.json` is
+/// signed with, was lost, so they can't update to this Pyr by themselves.)
+pub const RELEASE_KEY: &str = "O_eZ7ZYewM395zMS-dFgHOFypniuEnfr02SCJAqtwJY";
+const DEFAULT_URL: &str = "https://pyr.gg/latest2.json";
 const CHECK_EVERY: Duration = Duration::from_secs(3 * 60 * 60);
 const RESUME_FILE: &str = "resume.json";
 /// When the newest release file this app has seen was signed (see `check`).

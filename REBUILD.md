@@ -49,6 +49,32 @@ rebuilt version by hand once (it carries a new release key), and nobody should l
 - The rebuilt server tells apps older than the rebuild, once, that a new Pyr is out and where
   to get it (pyr.gg), since their Update button can't offer it.
 
+Done (2026-11-14): the app's `RELEASE_KEY` is the new key's public half and it reads
+`latest2.json` and `library/index4.json` (`index2.json` before the Keeper's is up); it says
+`release_key_2` in its login, and a server tells an app without it, three seconds after it logs
+in, "There's a new Pyr, and this one can't update to it by itself: get it from pyr.gg." (an
+error with no request: shown as a refusal, never reported). The Keeper, given `release_key2`
+and `cert2_file`, keeps a second list (`library2` in its state, beside 0.13.28's) and puts up
+`index4.json` with it: the same add-ons and skins, and programs as the new key endorses them;
+`index3.json` goes on as 0.13.28's apps believe it (programs as the key before endorsed them;
+the new key's are left out of it). Lists signed with either key are taken in. Run end to end
+with test keys (the Keeper binary, the library tool, a 0.13.28 Keeper's state). The release
+scripts write `latest2.json` (never `latest.json` again) and the page and `publish.ps1` read it.
+The notice seen on a 0.13.28 app (Olive, on the rebuilt server): its error card, "Something
+went wrong" over the words, with Copy and Dismiss, until dismissed; again at its next login.
+Still to do: the swap itself.
+
+On the day (keys by path, never printed):
+1. `library endorse --key pyr-release-key-2.txt --trust J0EGQDSoDplSzp3aFrK7EA8C5Of4w4D40kaO-g7iJcE
+   --in index3.json --out index-key2.json` (the live list, its programs endorsed again with the
+   new key);
+2. `library certify --key pyr-release-key-2.txt --keeper <the Keeper's key, the "key" in its
+   cert.json on the VPS> --out keeper-cert-2.json`, onto the VPS beside the Keeper's cert;
+3. the Keeper's config gains `"release_key2": "O_eZ7ZYewM395zMS-dFgHOFypniuEnfr02SCJAqtwJY"`
+   and `"cert2_file"`; the rebuilt `pyr-keeper` in place of 0.13.28's; `pyr-keeper import
+   index-key2.json` puts up `index4.json`;
+4. `KEY=pyr-release-key-2.txt scripts/make-library.sh` and `scripts/make-release.sh` as ever.
+
 ## Moving the VPS's server to the rebuild (nothing lost)
 
 The rebuilt server opens the VPS's own database, written by 0.13.28. Whatever 0.13.28 kept
@@ -857,7 +883,7 @@ How (decided while starting it):
       shows the screen's stages without updating. Seen first on the update after the rebuild's.
 - [ ] Approved bug reports 657 to 675 (voice up and down; stopped responding), without
       touching the echo canceller
-- [ ] The key change (above)
+- [ ] The key change (above): built and tried with test keys; the day's steps there
 
 ## Talking to 0.13.28 (how its messages were found)
 

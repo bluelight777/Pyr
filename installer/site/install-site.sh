@@ -42,8 +42,10 @@ fi
 WEB=$ROOT/pyr
 [ -d "$ROOT/$OLD" ] && [ ! -L "$ROOT/$OLD" ] && WEB=$ROOT/$OLD
 mkdir -p "$WEB"
-# Everything but latest.json first, so the app never sees a version whose files aren't there yet.
-find "$HERE/pyr" -maxdepth 1 -type f ! -name latest.json -exec cp -f {} "$WEB/" \;
+# Everything but the release file first, so the app never sees a version whose files aren't
+# there yet. (latest2.json since the rebuild, signed with the new release key; latest.json, which
+# 0.13.28 and older read, is never written again: the key that signed it was lost.)
+find "$HERE/pyr" -maxdepth 1 -type f ! -name latest.json ! -name latest2.json -exec cp -f {} "$WEB/" \;
 # The page's pictures and fonts (and any other folders), into folders of the same names.
 find "$HERE/pyr" -mindepth 1 -maxdepth 1 -type d -exec cp -rf {} "$WEB/" \;
 # The Pyr Library (library.tar, from make-release.sh): the plugins' files first, then the
@@ -56,7 +58,7 @@ if [ -f "$HERE/library.tar" ]; then
   # (Pyr 0.8.1 and newer read index2.json; index.json is older Pyrs' list.)
   if [ -f "$HERE/library-x/library/index2.json" ]; then cp -f "$HERE/library-x/library/index2.json" "$WEB/library/index2.json"; fi
 fi
-cp -f "$HERE/pyr/latest.json" "$WEB/latest.json"
+cp -f "$HERE/pyr/latest2.json" "$WEB/latest2.json"
 chmod -R a+rX "$WEB"
 echo "Published to $WEB"
 # An earlier version of this script could put the files in another site's folder: remove

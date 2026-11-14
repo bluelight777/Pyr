@@ -494,6 +494,9 @@ $TLS
     location = /latest.json {
         expires -1;
     }
+    location = /latest2.json {
+        expires -1;
+    }
     location = /library/index.json {
         expires -1;
     }

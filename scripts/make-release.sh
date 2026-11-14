@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Assemble a release for pyr.gg from the built installers:
 #   KEY=path/to/pyr-release-key.txt scripts/make-release.sh "What's new in this version"
-# Output: dist/release/ with upload/pyr/ (the website folder, with a signed latest.json),
+# Output: dist/release/ with upload/pyr/ (the website folder, with a signed latest2.json: the
+# release key since the rebuild signs it; latest.json stays as 0.13.28 left it, since the key
+# that signed it was lost, and Pyrs that read it are told of the new one by the server),
 # upload/install-site.sh and publish.cmd / publish.ps1 to put it on the VPS.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -35,7 +37,7 @@ if d:
 PY
 rm -rf "$OUT" && mkdir -p "$OUT/upload/pyr"
 SITE=$OUT/upload/pyr
-# The page, with this release filled in (the page also reads latest.json when it opens), and
+# The page, with this release filled in (the page also reads latest2.json when it opens), and
 # what it shows (pictures, fonts).
 WIN_MB=$(( ($(stat -c %s "dist/Pyr-Setup-$VERSION.exe") + 500000) / 1000000 ))
 TODAY=$(LC_ALL=C date +"%B %-d, %Y")
@@ -55,7 +57,7 @@ fi
 grep -qx "$VERSION" installer/site/releases.txt || echo "$VERSION" >> installer/site/releases.txt
 RELEASED=$(paste -sd, installer/site/releases.txt)
 cargo run -q -p pyr-proto --example release -- sign --key "$KEY" --version "$VERSION" --notes "$NOTES" --released "$RELEASED" \
-  --base-url "$BASE" --windows "$SITE/Pyr-Setup-$VERSION.exe" "${DEB[@]}" --out "$SITE/latest.json"
+  --base-url "$BASE" --windows "$SITE/Pyr-Setup-$VERSION.exe" "${DEB[@]}" --out "$SITE/latest2.json"
 # The Pyr Library (scripts/make-library.sh): its signed list and the plugins' files, in one
 # tar file (its folders are too deep to copy onto a PC one by one); install-site.sh puts them at
 # /library/ on the website.

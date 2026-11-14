@@ -135,6 +135,8 @@ fn setup(dir: &Path, release: &Identity) -> (Db, Config) {
         bwrap: PathBuf::new(),
         poll_secs: 60,
         valid_days: 30,
+        release_key2: String::new(),
+        cert2_file: None,
     };
     (db, cfg)
 }
@@ -316,5 +318,55 @@ fn lists_taken_in_keep_what_is_up_and_leave_out_what_was_taken_off() {
     let mut k = Keeper::new(cfg.clone(), &claude, &FakeBuild).unwrap();
     k.publish().unwrap();
     assert!(k.state.library.find("domino-cubano").is_none() && !listed().iter().any(|p| p.starts_with("domino")));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// With the new release key set up (the rebuild's: the one before was lost), the Keeper puts up
+/// two lists: `index3.json` as 0.13.28 and older Pyrs believe it (programs as the key before
+/// endorsed them), and `index4.json` for rebuilt Pyrs (programs as the new key endorses them);
+/// add-ons and skins in both, and what's taken off goes from both.
+#[test]
+fn with_the_new_release_key_both_lists_go_up() {
+    let dir = std::env::temp_dir().join(format!("pyr-keeper-key2-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let release = Identity::generate();
+    let (_db, mut cfg) = setup(&dir, &release);
+    let release2 = Identity::generate();
+    let keeper = Keeper::load_key(&cfg.key_file).unwrap().user_id();
+    std::fs::write(dir.join("cert2.json"), serde_json::to_string(&library::certify(&release2, &keeper, i64::MAX / 4)).unwrap()).unwrap();
+    cfg.release_key2 = release2.user_id();
+    cfg.cert2_file = Some(dir.join("cert2.json"));
+    let claude = FakeClaude { answer: RefCell::new(vec![]), seen: RefCell::new(vec![]) };
+    let program = |id: &str, version: &str, key: &Identity| {
+        let mut e: Entry = serde_json::from_value(serde_json::json!({
+            "id": id, "name": id, "kind": "program", "version": version, "summary": "a game", "run": format!("{id}.exe"),
+            "windows": [{"path": format!("{id}.exe"), "url": format!("files/{id}/{version}/{id}.exe"), "sha256": pyr_proto::release::sha256_hex(b"MZ"), "size": 2}],
+        }))
+        .unwrap();
+        e.endorsement = library::endorse(key, &e);
+        e
+    };
+    let list = |file: &str, key: &str| -> Vec<String> {
+        let text = std::fs::read_to_string(cfg.web_library.join(file)).unwrap();
+        let lib = library::open(&text, key).unwrap();
+        lib.plugins.iter().map(|p| format!("{}@{}", p.id, p.version)).chain(lib.skins.iter().map(|s| format!("skin:{}", s.id))).collect()
+    };
+    let mut k = Keeper::new(cfg.clone(), &claude, &FakeBuild).unwrap();
+    // The new key's list for the release: Chimbrowser endorsed again, and a new game.
+    let lib = Library { issued: 300, expires: i64::MAX / 2, plugins: vec![program("chimbrowser", "0.1.3", &release2), program("torch-conquer", "0.4.1", &release2)], skins: vec![] };
+    k.import(&serde_json::to_string(&library::sign(&release2, &lib)).unwrap()).unwrap();
+    assert_eq!(list("index3.json", &release.user_id()), ["chimbrowser@0.1.3", "dice@1.0.0", "skin:sunset"], "as 0.13.28 believes it");
+    assert_eq!(list("index4.json", &release2.user_id()), ["dice@1.0.0", "chimbrowser@0.1.3", "torch-conquer@0.4.1", "skin:sunset"]);
+    let four: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(cfg.web_library.join("index4.json")).unwrap()).unwrap();
+    let four = library::open(&four.to_string(), &release2.user_id()).unwrap();
+    assert!(library::endorsed(four.find("chimbrowser").unwrap(), &release2.user_id()), "endorsed with the new key");
+    // Taken off: from both.
+    assert_eq!(k.unlist("dice").unwrap(), "Dice");
+    assert_eq!(list("index3.json", &release.user_id()), ["chimbrowser@0.1.3", "skin:sunset"]);
+    assert_eq!(list("index4.json", &release2.user_id()), ["chimbrowser@0.1.3", "torch-conquer@0.4.1", "skin:sunset"]);
+    // 0.13.28's Keeper's state reads as it was (the new list beside it).
+    let state: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(cfg.state_dir.join("state.json")).unwrap()).unwrap();
+    assert!(state["library"]["plugins"].is_array() && state["library2"]["plugins"].is_array() && state["unlisted"] == serde_json::json!(["dice"]));
     let _ = std::fs::remove_dir_all(&dir);
 }
