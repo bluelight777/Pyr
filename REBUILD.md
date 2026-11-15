@@ -909,7 +909,8 @@ How (decided while starting it):
         all-in's board shows the first street 1.8 s on, each next 2.1 s after, the win 1.75 s
         after the river. (The street's 2.15 s had been read off the server, whose 0.2 s tick
         can't tell 2.1 from 2.15; heard on 0.13.28's app, 57 runouts, each next street's sound
-        2.09-2.12 s after the last, the rebuild's 2.14-2.17: now 2.1.) The win: the pot's chips gather in its middle, stay 0.65 s, slide to
+        2.09-2.12 s after the last, the rebuild's 2.14-2.17: now 2.1, and in the app after 2.09
+        and 2.11, 0.13.28's beside it 2.10 and 2.15.) The win: the pot's chips gather in its middle, stay 0.65 s, slide to
         the winner in 1.2 s wherever they sit; the ring and "+N" come in from 1.45 s, the "+N"
         rising 25 k; the name's pill fades from 5 s, the ring and "+N" from 5.55 s. Filmed
         beside 0.13.28's with the other apps stopped so each drew at full speed (six all-in
