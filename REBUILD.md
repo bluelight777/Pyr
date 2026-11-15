@@ -822,11 +822,15 @@ How (decided while starting it):
         fitted band by band over the first 40 ms (within 3.6 dB, most within 2) with the knock's
         strength, so it's at the table's most as often (two times in three from the sides); in the
         app after, side by side, from 5 to 40 ms within 4 dB a band but 700 Hz early (+5.4).
-        Not matched: the all-in's swell's 0.6 dB lean left and its
-        tail after the pour (all room on 0.13.28), and the clock's own room: on 0.13.28 a tick's tail goes wide 15 ms on (the rebuild's a faint
-        echo in the middle) and the bank's bells drift right after 50 ms, the same at every seat
-        (the last bell from 1.3 to 6 dB right), their sum as loud: not the cards' room, not an echo,
-        not found.
+        The all-in again (Nov 14, 40 of the probe's, both watching): 0.13.28's third poured chip
+        lands at 400 ms whenever the second did (35 of 42 at 396-401; the rebuild's 395-421), its
+        pour leaves only the room by 720 ms (the top bands dying 0.35 dB a ms, the side as loud as
+        the middle), where the rebuild's thirty chips' longer rattles rang on 15-30 dB over it, and
+        its swell leans left (0.55 and 0.68 dB) from the side seats as from the middle, so it's
+        not in the room: now all three so. Not matched: the clock's own room: on 0.13.28 a tick's
+        tail goes wide 15 ms on (the rebuild's a faint echo in the middle) and the bank's bells
+        drift right after 50 ms, the same at every seat (the last bell from 1.3 to 6 dB right),
+        their sum as loud: not the cards' room, not an echo, not found.
   - [x] The casino games' sounds as 0.13.28's (`measured/casinosounds.md`), heard off it game by
         game and taken apart into its own files (`work/ui/decomp.py`): the casino's cues play its
         `c_*` files (dice, Keno, roulette, craps and blackjack heard: which file, when, how loud,
