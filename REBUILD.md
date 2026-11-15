@@ -842,7 +842,9 @@ How (decided while starting it):
         left to right, 0.345 either way of the win, 0.138 a bell (R/L -3.1 to +3.1 dB; the
         rebuild's all in the middle); its sixteen chips from 380 ms every time (the rebuild's 14
         to 20 from 370-420), each 5% sooner after the last and 0.48 dB softer, each anywhere
-        within 0.39 of the win (the rebuild's all as loud, in the middle): now all so. (Its bells
+        within 0.39 of the win (the rebuild's all as loud, in the middle): now all so; in the app
+        after, 25 wins each, the bells struck within 0.1 ms of 0.13.28's, as loud within 0.1 dB,
+        placed within 0.13 dB, the chips within 1-8 ms, spread the same, within 1 dB. (Its bells
         die 1.5 dB faster over their first 100 ms, then flatter: not one decay; not changed.)
         Not matched: the clock's own room: on 0.13.28 a tick's
         tail goes wide 15 ms on (the rebuild's a faint echo in the middle) and the bank's bells
