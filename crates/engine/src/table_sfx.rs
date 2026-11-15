@@ -537,8 +537,8 @@ const POT_RING: [f32; 4] = [1.0, 1.5, 3.9, 11.0];
 
 /// Everything in, as 0.13.28's: the stacks shoved over the felt (360 ms, through the slides'
 /// resonance, 505 Hz rising to 1.14 kHz), landing with a thump and the chips pouring from 2.5 ms
-/// after it (about thirty, 360 to 700 ms on, quicker and quicker, now and then two together,
-/// softer and softer), over a low A and E swelling from 320 ms and cut off 1.4 s on
+/// after it (twenty-six, 360 to 700 ms on, quicker and quicker, now and then two together,
+/// softer and softer: `pour_times`), over a low A and E swelling from 320 ms and cut off 1.4 s on
 /// (`measured/cardsounds.md`). As one sound (placed: `all_in_stereo`).
 pub fn all_in(rng: &mut Rng) -> Vec<f32> {
     let (mut o, chips, swell) = all_in_parts(rng);
@@ -553,6 +553,28 @@ pub fn all_in(rng: &mut Rng) -> Vec<f32> {
     o
 }
 
+/// When the all-in's chips land (ms from the shove): 0.13.28's pour, 27 lone all-ins of its own
+/// measured chip by chip. The first at 360, the second 24-33 ms on, the third at 400 whenever the
+/// second came, the fourth 6-21 ms after it, the fifth at 431-446 whatever the fourth did, then
+/// one time in two another 6-11 ms after it, the next at 457-470; from there each 15.4 ms on
+/// (a little less each time) give or take 40%, twenty-six in all: the last about 700 ms on.
+fn pour_times(rng: &mut Rng) -> Vec<f32> {
+    let mut t = vec![360.0, 360.0 + rng.range(24.0, 33.0), rng.range(399.0, 401.0)];
+    t.push(t[2] + rng.range(6.0, 21.0));
+    t.push(rng.range(431.0, 446.0));
+    if rng.range(0.0, 1.0) < 0.45 {
+        t.push(t[4] + rng.range(6.0, 11.0));
+    }
+    t.push(rng.range(457.0, 470.0));
+    let mut k = 0;
+    while t.len() < 26 {
+        let last = t[t.len() - 1];
+        t.push(last + 15.4 * (-(k as f32) / 33.0).exp() * rng.range(0.6, 1.4));
+        k += 1;
+    }
+    t
+}
+
 /// The all-in's parts: the shove and its thump, each chip poured (where it starts, and it), and
 /// the swell.
 #[allow(clippy::type_complexity)]
@@ -561,19 +583,17 @@ pub fn all_in_parts(rng: &mut Rng) -> (Vec<f32>, Vec<(usize, Vec<f32>)>, Vec<f32
     card_slide(&mut o, 0, ms(360.0), (34.6, 81.2, 154.6, 0.055), ALLIN.0, (505.0, 1143.0, 0.827), rng);
     felt(&mut o, ms(357.5), ALLIN.1, rng);
     let mut chips = Vec::new();
-    let mut t = 360.0;
     let mut a = ALLIN.2;
-    for k in 0..30 {
+    for (k, t) in pour_times(rng).into_iter().enumerate() {
         let mut c = vec![0.0; ms(340.0)];
-        chip_with(&mut c, 0, rng.range(2050.0, 2310.0), a * rng.range(0.8, 1.1) * if k == 0 { 0.9 } else { 1.0 }, POUR_RATTLE.0, [1.0; 4], POUR_RATTLE.1, rng);
-        chips.push((ms(t), c));
-        t += match k {
-            0 => rng.range(26.0, 36.0),
-            // (The third lands at 400 ms whenever the second did: 0.13.28's, 35 pours of 42 at
-            // 396-401.)
-            1 => (rng.range(399.0, 401.0) - t).max(1.5),
-            _ => (19.0 * (-(k as f32) / 25.0).exp() * rng.range(0.35, 1.65)).max(1.5),
+        let soft = match k {
+            0 => 0.9,
+            // (0.13.28's third, at 400 ms, 2.6 dB softer than the chips either side of it.)
+            2 => 0.74,
+            _ => 1.0,
         };
+        chip_with(&mut c, 0, rng.range(2050.0, 2310.0), a * rng.range(0.8, 1.1) * soft, POUR_RATTLE.0, [1.0; 4], POUR_RATTLE.1, rng);
+        chips.push((ms(t), c));
         a *= 0.973;
     }
     // The swell: A1 and E2 (6.4 dB under it) rising together from 320 ms for 0.485 s, dying

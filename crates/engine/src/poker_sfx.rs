@@ -664,6 +664,28 @@ mod tests {
         }
     }
 
+    /// The all-in's chips land when 0.13.28's do: the third at 400 ms, the fourth 6-21 ms on, the
+    /// fifth at 431-446 whatever the fourth did, the next but one, or the next, at 457-470, and the
+    /// last of the twenty-six about 700 ms on.
+    #[test]
+    fn the_all_ins_chips_land_when_0_13_28s_do() {
+        let mut rng = fresh();
+        let mut last = Vec::new();
+        let mut doubles = 0;
+        for _ in 0..400 {
+            let (_, chips, _) = crate::table_sfx::all_in_parts(&mut rng);
+            let at: Vec<f32> = chips.iter().map(|(i, _)| *i as f32 / RATE as f32 * 1000.0).collect();
+            assert_eq!(at.len(), 26);
+            assert!((399.0..=401.1).contains(&at[2]) && (at[2] + 5.9..at[2] + 21.1).contains(&at[3]) && (430.9..446.1).contains(&at[4]), "{at:?}");
+            let six = if at[5] < 457.0 { doubles += 1; at[6] } else { at[5] };
+            assert!((456.9..470.1).contains(&six), "{at:?}");
+            last.push(at[25]);
+        }
+        last.sort_by(f32::total_cmp);
+        assert!((680.0..710.0).contains(&last[200]) && last[40] > 660.0 && last[360] < 730.0, "{} {} {}", last[40], last[200], last[360]);
+        assert!((140..220).contains(&doubles), "{doubles}");
+    }
+
     /// The pot as 0.13.28 pushes and stacks it, the same every time: the push faded out by 493 ms
     /// over a quiet tail, the stacks 520, 660 and 790 ms on; the push halfway toward the winner
     /// (R/L 2.3 dB from a side seat's 0.533) and the stacks where the chips go (5.1 dB), none of it
