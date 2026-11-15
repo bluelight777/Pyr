@@ -842,8 +842,9 @@ How (decided while starting it):
         sounds (the boom, the Spark's coin, each Blaze's reel spinning and stopping, the wheel,
         the jackpot and my win, each 0.13.28's own file at the same gain, within 40 ms of it);
         only 0.13.28's boom 136 ms later, as its window stood still for 0.27 s while the show
-        came up (its picture being loaded, no frames drawn), and the names rushing past on the
-        reels in another order (each reel landing on the same winner at the same moment).
+        came up (its picture being loaded, no frames drawn). The names rushing past on the reels
+        go round in the same order on both (each landing on the same winner at the same moment);
+        here both drew the show at 4 to 8 frames a second, so the films catch them at other names.
         Not heard, so by the rule: Ember Dragon's jackpots, a slot's All or
         Nothing win. Ember Dragon's big win, heard on both (Nov 14, 200 spins each with "a big
         win stops it"): an Ember Respins' 72 times on 0.13.28 (EPIC WIN), 15 times on the rebuild
