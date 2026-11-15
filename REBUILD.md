@@ -803,7 +803,8 @@ How (decided while starting it):
         two pitches, which first a toss on 0.13.28 too (low 8 turns, high 9); its time bank's bells
         struck 95 and 190 ms after the first (the rebuild's at 98 and 199), spread 0.15 either way
         of the seat and as loud at their loudest from any seat (the near side no louder from a side
-        seat than from the middle), now each bell on each side within 0.2 dB at all three seats;
+        seat than from the middle), now each bell on each side within 0.2 dB at all three seats
+        (and in the app, at the right seat: 0.16 dB, struck 95.5 and 190.4 ms on);
         the time-out when the clock's run out before the fold comes, on both, its bells 270 and
         430.5 ms after the first knock (the rebuild's at 245 and 394), now the same. Not matched: a
         check's first 10 ms (brighter on 0.13.28), the all-in's swell's 0.6 dB lean left and its
