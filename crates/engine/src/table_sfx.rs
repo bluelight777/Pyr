@@ -647,14 +647,15 @@ pub fn turn() -> Vec<f32> {
 }
 
 /// Someone's time (and bank) out, folded or checked for them: two knocks on the rail, then bells E5
-/// and C#5, falling.
+/// and C#5, falling (struck 270 and 430 ms after the first knock, as 0.13.28 strikes them: heard
+/// at 11 time-outs, 270.1 and 430.6 ms, where the rebuild had struck them at 245 and 394).
 pub fn time_out(rng: &mut Rng) -> Vec<f32> {
-    let mut o = vec![0.0; ms(1000.0)];
+    let mut o = vec![0.0; ms(1040.0)];
     let pitch = rng.range(0.97, 1.03);
     knock(&mut o, 0, 1.16, pitch, rng);
     knock(&mut o, ms(130.0), 1.16 * rng.range(0.7, 1.0), pitch * rng.range(0.98, 1.02), rng);
-    bell(&mut o, ms(245.0), 659.25, 0.239, 0.098, ms(600.0));
-    bell(&mut o, ms(394.0), 554.37, 0.275, 0.087, ms(600.0));
+    bell(&mut o, ms(270.0), 659.25, 0.239, 0.098, ms(600.0));
+    bell(&mut o, ms(430.5), 554.37, 0.275, 0.087, ms(600.0));
     o
 }
 
@@ -665,13 +666,45 @@ pub fn hurry() -> Vec<f32> {
     o
 }
 
-/// A time bank starting: B5, D#6 and B6, rising.
+/// A time bank starting: B5, D#6 and B6, rising, 95 ms apart (each struck when 0.13.28 strikes it:
+/// heard at 27 banks, the second 94.9 and the third 190.0 ms after the first).
 pub fn time_bank() -> Vec<f32> {
     let mut o = vec![0.0; ms(900.0)];
-    bell(&mut o, 0, 987.77, 0.346, 0.091, ms(700.0));
-    bell(&mut o, ms(98.0), 1244.51, 0.281, 0.084, ms(700.0));
-    bell(&mut o, ms(199.0), 1975.53, 0.217, 0.087, ms(700.0));
+    for (at, f, amp, decay, _) in BANK {
+        bell(&mut o, ms(at), f, amp, decay, ms(700.0));
+    }
     o
+}
+
+/// The time bank's bells: when (ms), the note, how loud, how long they ring, and how far each is put
+/// from where the bank is placed (0.13.28 spreads them: the first 0.15 to the left, the last 0.15
+/// to the right). Each as loud as 0.13.28's over its first 10 ms, within 0.3 dB at each seat heard.
+const BANK: [(f32, f32, f32, f32, f32); 3] = [(0.0, 987.77, 0.333, 0.091, -0.15), (95.0, 1244.51, 0.278, 0.084, 0.0), (190.0, 1975.53, 0.221, 0.087, 0.15)];
+
+/// A time bank starting, placed `pan` (48 kHz stereo, interleaved): each bell put where 0.13.28 puts
+/// it (spread 0.15 either way of `pan`), and the whole as loud at its loudest wherever it's placed,
+/// as 0.13.28's is (from a side seat its near side no louder than from the middle, by 0.0 to 0.5 dB
+/// a bell, its far side 4.3 to 5.9 dB quieter: heard at the middle seat and a side seat, each bell's
+/// first 10 ms, within 0.1 dB of this).
+pub fn time_bank_stereo(pan: f32) -> Vec<f32> {
+    let one = |pan: f32| {
+        let mut st = vec![0.0f32; ms(900.0) * 2];
+        for (at, f, amp, decay, off) in BANK {
+            let mut m = vec![0.0f32; ms(900.0)];
+            bell(&mut m, ms(at), f, amp, decay, ms(700.0));
+            for (o, x) in st.iter_mut().zip(place(&m, (pan + off).clamp(-1.0, 1.0), false)) {
+                *o += x;
+            }
+        }
+        st
+    };
+    let peak = |st: &[f32]| st.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    let mut st = one(pan);
+    let k = peak(&one(0.0)) / peak(&st).max(1e-9);
+    for x in &mut st {
+        *x *= k;
+    }
+    st
 }
 
 /// A second going by on a clock: a wood block's tick (F#6, 1,480 Hz, and 4,031, gone in 40 ms), with a

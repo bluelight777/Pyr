@@ -426,6 +426,10 @@ pub fn render(c: Cue, pan: f32) -> Vec<f32> {
     if c == Cue::AllIn {
         return held(crate::table_sfx::all_in_stereo(pan, &mut fresh()));
     }
+    // The time bank's bells spread across where it's placed (`table_sfx::time_bank_stereo`).
+    if c == Cue::TimeBank {
+        return held(crate::table_sfx::time_bank_stereo(pan));
+    }
     if let Some(mono) = table_sound(c) {
         // Placed (the cards, dealt, turned and folded, in 0.13.28's room).
         return held(crate::table_sfx::place(&mono, pan, matches!(c, Cue::Deal | Cue::Card | Cue::Flip | Cue::Fold)));
@@ -484,6 +488,38 @@ mod tests {
         for c in [Cue::Turn, Cue::Hurry, Cue::TimeBank] {
             assert_eq!(render_mono(c), render_mono(c), "{c:?}");
         }
+    }
+
+    /// The time bank's bells as 0.13.28 plays them: struck 95 ms apart, spread across where they're
+    /// placed (the first 0.15 to the left: R/L -1.31 dB from the middle), and as loud at their
+    /// loudest wherever they're placed.
+    #[test]
+    fn the_time_banks_bells_are_spread_and_as_loud_from_any_seat() {
+        let rl = |s: &[f32], a: f32, b: f32| {
+            let (l, r) = s[ms(a) * 2..ms(b) * 2].chunks(2).fold((0.0f64, 0.0f64), |(l, r), x| (l + (x[0] as f64).powi(2), r + (x[1] as f64).powi(2)));
+            10.0 * (r / l).log10()
+        };
+        let peak = |s: &[f32]| s.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        let mid = render(Cue::TimeBank, 0.0);
+        assert!((rl(&mid, 5.0, 90.0) + 1.31).abs() < 0.05, "{}", rl(&mid, 5.0, 90.0));
+        for pan in [-0.533, 0.533, -0.8, 1.0] {
+            let s = render(Cue::TimeBank, pan);
+            assert!((peak(&s) / peak(&mid) - 1.0).abs() < 0.005, "{pan}");
+        }
+        let m = crate::table_sfx::time_bank();
+        let e = |a: f32, b: f32| m[ms(a)..ms(b)].iter().map(|x| x * x).sum::<f32>() / (ms(b) - ms(a)) as f32;
+        // (The second bell's strike, over the first's ring: 95 ms on.)
+        assert!(e(96.0, 100.0) > e(90.0, 94.5) * 1.5);
+        assert!(e(191.0, 195.0) > e(185.0, 189.5) * 1.5);
+    }
+
+    /// A time-out's bells struck when 0.13.28's are, 270 and 430.5 ms after the first knock.
+    #[test]
+    fn a_time_outs_bells_come_when_0_13_28s_do() {
+        let m = render_mono(Cue::TimeOut);
+        let e = |a: f32, b: f32| m[ms(a)..ms(b)].iter().map(|x| x * x).sum::<f32>() / (ms(b) - ms(a)) as f32;
+        assert!(e(255.0, 269.5) * 50.0 < e(272.0, 285.0));
+        assert!(e(431.0, 440.0) > e(420.0, 430.0) * 1.3);
     }
 
     #[test]

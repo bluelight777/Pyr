@@ -796,9 +796,22 @@ How (decided while starting it):
         from 320 ms, cut off at 1.397 s; all in the room, fed 4 dB hotter than the cards; the
         shove 1.2 times the seat's pan out, each chip within 0.39 of there, the swell in the middle
         (the rebuild's: a dark shove, twenty chips from 355-420 ms as loud, a quieter E2 to 1.5 s,
-        no room, one place). Not matched: a check's first 10 ms (brighter on 0.13.28), the
-        all-in's swell's 0.6 dB lean left and its tail after the pour (all room on 0.13.28), where
-        shown hands and the clock's sounds are placed (as the chips: not heard).
+        no room, one place). Someone else's clock heard too (Nov 14: a player that never acts, at
+        the middle seat and at both side seats, both apps watching; 35 turns, 200 ticks, 39 banks,
+        12 time-outs): the ticks as loud (0.3 dB), as late and placed the same (from a side seat
+        the near side 1.70 dB up and the far 3.22 down on both), the turn's and its bank's at the
+        two pitches, which first a toss on 0.13.28 too (low 8 turns, high 9); its time bank's bells
+        struck 95 and 190 ms after the first (the rebuild's at 98 and 199), spread 0.15 either way
+        of the seat and as loud at their loudest from any seat (the near side no louder from a side
+        seat than from the middle), now each bell on each side within 0.2 dB at all three seats;
+        the time-out when the clock's run out before the fold comes, on both, its bells 270 and
+        430.5 ms after the first knock (the rebuild's at 245 and 394), now the same. Not matched: a
+        check's first 10 ms (brighter on 0.13.28), the all-in's swell's 0.6 dB lean left and its
+        tail after the pour (all room on 0.13.28), where shown hands are placed (not heard), and
+        the clock's own room: on 0.13.28 a tick's tail goes wide 15 ms on (the rebuild's a faint
+        echo in the middle) and the bank's bells drift right after 50 ms, the same at every seat
+        (the last bell from 1.3 to 6 dB right), their sum as loud: not the cards' room, not an echo,
+        not found; and from a side seat 0.13.28's time-out 0.3-2 dB quieter, time by time.
   - [x] The casino games' sounds as 0.13.28's (`measured/casinosounds.md`), heard off it game by
         game and taken apart into its own files (`work/ui/decomp.py`): the casino's cues play its
         `c_*` files (dice, Keno, roulette, craps and blackjack heard: which file, when, how loud,
