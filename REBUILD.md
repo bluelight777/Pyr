@@ -827,7 +827,17 @@ How (decided while starting it):
         pour leaves only the room by 720 ms (the top bands dying 0.35 dB a ms, the side as loud as
         the middle), where the rebuild's thirty chips' longer rattles rang on 15-30 dB over it, and
         its swell leans left (0.55 and 0.68 dB) from the side seats as from the middle, so it's
-        not in the room: now all three so. Not matched: the clock's own room: on 0.13.28 a tick's
+        not in the room: now all three so. And chip by chip (27 of 0.13.28's lone all-ins): its
+        pour isn't random after the third: the fourth 6-21 ms after it, the fifth at 431-446 ms
+        whatever the fourth did, one time in two another just after, the next at 457-470, then
+        about 15 ms apart and less, each chip's time spreading no more than 13-14 ms (the
+        rebuild's wandered, 22 by the end), twenty-five or so, the last at 700 (683-712); its
+        third chip 2.6 dB softer; and its swell rings on in the room after the cut (46 dB under
+        it). Now the same (in the app, 14 of the rebuild's: the fourth at 413.8 ms, the fifth
+        437.4, the 22nd 662.0, to 0.13.28's 414.9, 438.4, 661.4), the swell in a room of its own:
+        its ring after the cut 5 dB under 0.13.28's, in the middle where 0.13.28's leans right
+        (1.3 dB at 55 Hz; 46 dB under the swell, below hearing at any ordinary level).
+        Not matched: the clock's own room: on 0.13.28 a tick's
         tail goes wide 15 ms on (the rebuild's a faint echo in the middle) and the bank's bells
         drift right after 50 ms, the same at every seat (the last bell from 1.3 to 6 dB right),
         their sum as loud: not the cards' room, not an echo, not found.
