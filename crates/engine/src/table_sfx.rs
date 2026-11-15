@@ -99,13 +99,14 @@ impl Biquad {
 /// 5.07 times the lowest, which is 2,050 to 2,310 Hz) dying fast and then ringing on softly, the
 /// clay's rattle and knock under them.
 fn chip(o: &mut [f32], at: usize, f1: f32, amp: f32, rng: &mut Rng) {
-    chip_with(o, at, f1, amp, 1.0, [1.0; 4], rng);
+    chip_with(o, at, f1, amp, 1.0, [1.0; 4], 0.3, rng);
 }
 
 /// A chip with `under` of the rattle and the knock under its ring, and its partials ringing on
 /// `tail` times as loud (the pot's stacks, as 0.13.28's: nothing between their partials, 30 to 45
-/// dB under them, from 1 ms after the tick, and the upper partials ringing on longer).
-fn chip_with(o: &mut [f32], at: usize, f1: f32, amp: f32, under: f32, tail: [f32; 4], rng: &mut Rng) {
+/// dB under them, from 1 ms after the tick, and the upper partials ringing on longer); `long`: how
+/// much of the rattle's longer part (a bet's 0.3, the all-in's pour none).
+fn chip_with(o: &mut [f32], at: usize, f1: f32, amp: f32, under: f32, tail: [f32; 4], long: f32, rng: &mut Rng) {
     const PARTS: [(f32, f32, f32, f32, f32); 4] = [
         // (ratio, amplitude, fast decay s, tail amplitude, tail decay s)
         (1.0, 1.0, 0.0092, 0.035, 0.045),
@@ -141,7 +142,7 @@ fn chip_with(o: &mut [f32], at: usize, f1: f32, amp: f32, under: f32, tail: [f32
         } else {
             0.0
         };
-        let rattle = lp2.run(hp2.run(rng.noise())) * ((-t / 0.028).exp() + 0.3 * (-t / 0.07).exp()) * RATTLE.0;
+        let rattle = lp2.run(hp2.run(rng.noise())) * ((-t / 0.028).exp() + long * (-t / 0.07).exp()) * RATTLE.0;
         // (And the knock of it, low down, through the table.)
         let thud = body.run(rng.noise()) * (-t / 0.012).exp() * 0.05;
         add(o, at + i, (tick + (rattle + thud) * under) * amp);
@@ -514,7 +515,7 @@ pub fn pot_parts(rng: &mut Rng) -> (Vec<f32>, [Vec<f32>; 3]) {
         let mut o = vec![0.0; ms(790.0 + 420.0)];
         let mut c = start;
         for (a, gap) in [(1.0, rng.range(22.5, 33.0)), (0.747, rng.range(17.5, 27.0)), (0.591, rng.range(14.5, 21.0)), (0.473, 0.0)] {
-            chip_with(&mut o, ms(c), rng.range(2050.0, 2310.0), POT.1 * a * rng.range(0.65, 1.15), 0.0, POT_RING, rng);
+            chip_with(&mut o, ms(c), rng.range(2050.0, 2310.0), POT.1 * a * rng.range(0.65, 1.15), 0.0, POT_RING, 0.3, rng);
             c += gap;
         }
         o
@@ -564,9 +565,15 @@ pub fn all_in_parts(rng: &mut Rng) -> (Vec<f32>, Vec<(usize, Vec<f32>)>, Vec<f32
     let mut a = ALLIN.2;
     for k in 0..30 {
         let mut c = vec![0.0; ms(340.0)];
-        chip(&mut c, 0, rng.range(2050.0, 2310.0), a * rng.range(0.8, 1.1) * if k == 0 { 0.9 } else { 1.0 }, rng);
+        chip_with(&mut c, 0, rng.range(2050.0, 2310.0), a * rng.range(0.8, 1.1) * if k == 0 { 0.9 } else { 1.0 }, POUR_RATTLE.0, [1.0; 4], POUR_RATTLE.1, rng);
         chips.push((ms(t), c));
-        t += if k == 0 { rng.range(26.0, 36.0) } else { (19.0 * (-(k as f32) / 25.0).exp() * rng.range(0.35, 1.65)).max(1.5) };
+        t += match k {
+            0 => rng.range(26.0, 36.0),
+            // (The third lands at 400 ms whenever the second did: 0.13.28's, 35 pours of 42 at
+            // 396-401.)
+            1 => (rng.range(399.0, 401.0) - t).max(1.5),
+            _ => (19.0 * (-(k as f32) / 25.0).exp() * rng.range(0.35, 1.65)).max(1.5),
+        };
         a *= 0.973;
     }
     // The swell: A1 and E2 (6.4 dB under it) rising together from 320 ms for 0.485 s, dying
@@ -584,27 +591,33 @@ pub fn all_in_parts(rng: &mut Rng) -> (Vec<f32>, Vec<(usize, Vec<f32>)>, Vec<f32
 /// The all-in placed as 0.13.28 places it (48 kHz stereo, interleaved), `pan` being the seat's, as
 /// the chips' are: the shove and its thump there (R/L 5.1 dB from a side seat), each chip poured
 /// somewhere about there (0.39 either way: 0.13.28's pour is 17-18 dB wider than its shove), the
-/// swell in the middle; all of it in the room (`place`'s), fed 4 dB hotter than the cards.
+/// swell in the middle but for its lean left (0.13.28's two tones 0.55 and 0.68 dB stronger on the
+/// left, from the middle seat or a side one: `SWELL_PAN`); the rest in the room (`place`'s), fed
+/// 4 dB hotter than the cards.
 pub fn all_in_stereo(pan: f32, rng: &mut Rng) -> Vec<f32> {
     let (shove, chips, swell) = all_in_parts(rng);
     let n = shove.len();
     let (mut l, mut r, mut feed) = (vec![0.0f32; n], vec![0.0f32; n], vec![0.0f32; n]);
     let p0 = pan.clamp(-1.0, 1.0);
-    let mut put = |x: &[f32], at: usize, p: f32| {
+    let mut put = |x: &[f32], at: usize, p: f32, roomed: bool| {
         let (gl, gr) = (((1.0 - p) / 2.0).sqrt(), ((1.0 + p) / 2.0).sqrt());
         for (i, v) in x.iter().enumerate() {
             if let Some(j) = (at + i < n).then_some(at + i) {
                 l[j] += v * gl;
                 r[j] += v * gr;
-                feed[j] += v * (gl + gr) / 2.0 * ALLIN_ROOM;
+                if roomed {
+                    feed[j] += v * (gl + gr) / 2.0 * ALLIN_ROOM;
+                }
             }
         }
     };
-    put(&shove, 0, p0);
+    put(&shove, 0, p0, true);
     for (at, c) in &chips {
-        put(c, *at, (p0 + rng.range(-0.39, 0.39)).clamp(-1.0, 1.0));
+        put(c, *at, (p0 + rng.range(-0.39, 0.39)).clamp(-1.0, 1.0), true);
     }
-    put(&swell, 0, 0.0);
+    // (Not the swell: 0.13.28's leans the same from a side seat as from the middle, where the
+    // room, louder on the far side, would lean it more.)
+    put(&swell, 0, SWELL_PAN, false);
     let [wl, wr] = room(&feed);
     let (kl, kr) = (1.0 + 0.34 * p0, 1.0 - 0.34 * p0);
     let mut out = vec![0.0f32; wl.len() * 2];
@@ -620,6 +633,15 @@ const ALLIN: (f32, f32, f32) = (0.9, 0.30, 0.815);
 
 /// How loud the all-in's swell is (its A1).
 const SWELL: f32 = 0.118;
+
+/// The poured chips' rattle: how much (a bet's: 1) and how much of its longer part (a bet's: 0.3).
+/// 0.13.28's pour leaves only the room by 720 ms (its top bands dying 0.35 dB a ms after the last
+/// chip, the side as loud as the middle), where thirty chips' long rattles had rung on 15-30 dB
+/// over it (heard at 12 all-ins alone for 1.6 s, both apps watching).
+const POUR_RATTLE: (f32, f32) = (1.0, 0.0);
+
+/// Where the all-in's swell is put, wherever the all-in is: a little to the left (R/L -0.6 dB).
+const SWELL_PAN: f32 = -0.069;
 
 /// How much hotter the all-in is fed to the room than the cards (4 dB).
 const ALLIN_ROOM: f32 = 1.585;

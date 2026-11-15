@@ -637,18 +637,28 @@ mod tests {
     }
 
     /// The all-in as 0.13.28 places it: from a side seat (0.533) the shove there (R/L 5.2 dB, give
-    /// or take the room's), the swell in the middle (0.13.28's: 5.0-5.2 and -0.6 dB); in the room
-    /// (the two sides differ only from 16 ms on, in the middle).
+    /// or take the room's), the swell in the middle but for its lean left (0.13.28's: 5.0-5.2 and
+    /// -0.55 to -0.68 dB); in the room (the two sides differ only from 16 ms on, in the middle).
     #[test]
     fn the_all_in_is_shoved_from_the_seat_over_a_swell_in_the_middle() {
         let rl = |s: &[f32], a: f32, b: f32| {
             let (l, r) = s[ms(a) * 2..ms(b) * 2].chunks(2).fold((0.0f64, 0.0f64), |(l, r), x| (l + (x[0] as f64).powi(2), r + (x[1] as f64).powi(2)));
             10.0 * (r / l).log10()
         };
+        // (The swell's A1 on each side, by projecting each on the tone.)
+        let tone = |s: &[f32], ch: usize| {
+            let (mut c, mut q) = (0.0f64, 0.0f64);
+            for i in ms(800.0)..ms(1300.0) {
+                let w = std::f64::consts::TAU * 55.0 * i as f64 / RATE as f64;
+                c += s[2 * i + ch] as f64 * w.cos();
+                q += s[2 * i + ch] as f64 * w.sin();
+            }
+            (c * c + q * q).sqrt()
+        };
         for _ in 0..5 {
             let s = render(Cue::AllIn, 0.533);
-            let (shove, swell) = (rl(&s, 20.0, 300.0), rl(&s, 800.0, 1300.0));
-            assert!((shove - 5.15).abs() < 0.4 && swell.abs() < 1.0, "{shove} {swell}");
+            let (shove, swell) = (rl(&s, 20.0, 300.0), 20.0 * (tone(&s, 1) / tone(&s, 0)).log10());
+            assert!((shove - 5.15).abs() < 0.4 && (swell + 0.6).abs() < 0.3, "{shove} {swell}");
             let side: Vec<f32> = render(Cue::AllIn, 0.0).chunks(2).map(|x| x[0] - x[1]).collect();
             assert!(side[..ms(15.0)].iter().all(|x| x.abs() < 1e-6) && side[ms(16.0)..ms(300.0)].iter().any(|x| x.abs() > 1e-4));
         }
