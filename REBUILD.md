@@ -806,13 +806,16 @@ How (decided while starting it):
         seat than from the middle), now each bell on each side within 0.2 dB at all three seats
         (and in the app, at the right seat: 0.16 dB, struck 95.5 and 190.4 ms on);
         the time-out when the clock's run out before the fold comes, on both, its bells 270 and
-        430.5 ms after the first knock (the rebuild's at 245 and 394), now the same. Not matched: a
+        430.5 ms after the first knock (the rebuild's at 245 and 394), now the same, and its knocks
+        as loud as 0.13.28's in the middle (the second nearly as the first: the rebuild's had been
+        2.7 dB softer), so that from a side seat it's turned down when it'd go over, as 0.13.28's
+        is (0.3 to 2 dB, time by time; within 1.2 dB of it at both sides). Not matched: a
         check's first 10 ms (brighter on 0.13.28), the all-in's swell's 0.6 dB lean left and its
         tail after the pour (all room on 0.13.28), where shown hands are placed (not heard), and
         the clock's own room: on 0.13.28 a tick's tail goes wide 15 ms on (the rebuild's a faint
         echo in the middle) and the bank's bells drift right after 50 ms, the same at every seat
         (the last bell from 1.3 to 6 dB right), their sum as loud: not the cards' room, not an echo,
-        not found; and from a side seat 0.13.28's time-out 0.3-2 dB quieter, time by time.
+        not found.
   - [x] The casino games' sounds as 0.13.28's (`measured/casinosounds.md`), heard off it game by
         game and taken apart into its own files (`work/ui/decomp.py`): the casino's cues play its
         `c_*` files (dice, Keno, roulette, craps and blackjack heard: which file, when, how loud,

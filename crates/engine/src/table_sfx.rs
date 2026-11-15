@@ -652,9 +652,13 @@ pub fn turn() -> Vec<f32> {
 pub fn time_out(rng: &mut Rng) -> Vec<f32> {
     let mut o = vec![0.0; ms(1040.0)];
     let pitch = rng.range(0.97, 1.03);
-    knock(&mut o, 0, 1.16, pitch, rng);
-    knock(&mut o, ms(130.0), 1.16 * rng.range(0.7, 1.0), pitch * rng.range(0.98, 1.02), rng);
-    bell(&mut o, ms(270.0), 659.25, 0.239, 0.098, ms(600.0));
+    // (The knocks as loud as 0.13.28's in the middle (within 0.5 dB at four time-outs), the second
+    // nearly as strong as the first, and the bells: so that from a side seat the whole is turned
+    // down when it'd go over (`held`), time by time, as 0.13.28's is, its near side 0.3 to 2 dB
+    // quieter there than the pan alone would make it.)
+    knock(&mut o, 0, 1.34, pitch, rng);
+    knock(&mut o, ms(130.0), 1.34 * rng.range(0.9, 1.0), pitch * rng.range(0.98, 1.02), rng);
+    bell(&mut o, ms(270.0), 659.25, 0.258, 0.098, ms(600.0));
     bell(&mut o, ms(430.5), 554.37, 0.275, 0.087, ms(600.0));
     o
 }
