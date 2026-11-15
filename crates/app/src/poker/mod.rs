@@ -390,12 +390,13 @@ impl PyrApp {
         // The menu bar across the top (0.13.6), the page under it.
         let bar = Rect::from_min_size(full.min, vec2(full.width(), menubar::BAR_H));
         let page = Rect::from_min_max(pos2(full.left(), bar.bottom()), full.max);
-        // The casino floor (Meshy's render: the tables, the fire) behind the page, darkening down
-        // it so what's on it reads.
+        // The casino floor (Meshy's render: the tables, the fire) behind it all, darkening down
+        // the page so what's on it reads. (Laid out from the top of it all, the menu bar's
+        // place too, as 0.13.0 had it: 0.13.28's picture starts there, under the bar.)
         let p = ui.painter().clone();
         let ctx = ui.ctx().clone();
-        p.rect_filled(page, 0, crate::casino::col::NIGHT);
-        let back = Rect::from_min_size(page.min, vec2(page.width(), (page.width() * 0.5625).max(page.height() * 0.7)));
+        p.rect_filled(full, 0, crate::casino::col::NIGHT);
+        let back = Rect::from_min_size(full.min, vec2(full.width(), (full.width() * 0.5625).max(full.height() * 0.7)));
         if crate::casino::pics::cover(&p, &ctx, "floor", back, 2048, Color32::from_gray(150)) {
             // (Down to the night's own color at its foot, so nothing marks where it ends.)
             crate::casino::vgrad(&p, back, Color32::from_black_alpha(70), crate::casino::col::NIGHT);
