@@ -844,13 +844,17 @@ How (decided while starting it):
         to 20 from 370-420), each 5% sooner after the last and 0.48 dB softer, each anywhere
         within 0.39 of the win (the rebuild's all as loud, in the middle): now all so; in the app
         after, 25 wins each, the bells struck within 0.1 ms of 0.13.28's, as loud within 0.1 dB,
-        placed within 0.13 dB, the chips within 1-8 ms, spread the same, within 1 dB. (Its bells
-        die 1.5 dB faster over their first 100 ms, then flatter: not one decay; not changed.)
+        placed within 0.13 dB, the chips within 1-8 ms, spread the same, within 1 dB. (Its bells'
+        rings swing, about 180 ms a swing, 1-4 dB, deeper on one side: below.)
         Not matched: the clock's own room: on 0.13.28 a tick's
         tail goes wide 15 ms on (the rebuild's a faint echo in the middle) and the bank's bells
         drift right after 50 ms, the same at every seat (the last bell from 1.3 to 6 dB right),
-        their sum as loud: not the cards' room, not an echo, not found. My win's bells wander so
-        too after 50 ms. And the win's bells' first 100 ms (above).
+        their sum as loud: not the cards' room, not an echo, not found. My win's bells (26 wins,
+        each bell's envelope per side against the rebuild's): every one swings, about 180 ms
+        a swing at every note (up 0.5-1.2 dB by 30-60 ms, down 1-4.7 by 110-150, up 1.5-4 by
+        200-240), deeper on one side, which side by note; as if a second part 5-6 Hz off the
+        note, 0.05-0.22 as strong. A room with moving delays (weak to a click, building under
+        a held note, wobbling) fits all three; the rebuild's bells ring steady.
   - [x] The casino games' sounds as 0.13.28's (`measured/casinosounds.md`), heard off it game by
         game and taken apart into its own files (`work/ui/decomp.py`): the casino's cues play its
         `c_*` files (dice, Keno, roulette, craps and blackjack heard: which file, when, how loud,
