@@ -837,10 +837,18 @@ How (decided while starting it):
         437.4, the 22nd 662.0, to 0.13.28's 414.9, 438.4, 661.4), the swell in a room of its own:
         its ring after the cut 5 dB under 0.13.28's, in the middle where 0.13.28's leans right
         (1.3 dB at 55 Hz; 46 dB under the swell, below hearing at any ordinary level).
+        My win heard closer (Nov 14, heads-up, each folding at once: 64 of 0.13.28's own wins, 61
+        of the rebuild's): its bells 72 ms apart (the rebuild's 77), 0.28 dB softer, and spread
+        left to right, 0.345 either way of the win, 0.138 a bell (R/L -3.1 to +3.1 dB; the
+        rebuild's all in the middle); its sixteen chips from 380 ms every time (the rebuild's 14
+        to 20 from 370-420), each 5% sooner after the last and 0.48 dB softer, each anywhere
+        within 0.39 of the win (the rebuild's all as loud, in the middle): now all so. (Its bells
+        die 1.5 dB faster over their first 100 ms, then flatter: not one decay; not changed.)
         Not matched: the clock's own room: on 0.13.28 a tick's
         tail goes wide 15 ms on (the rebuild's a faint echo in the middle) and the bank's bells
         drift right after 50 ms, the same at every seat (the last bell from 1.3 to 6 dB right),
-        their sum as loud: not the cards' room, not an echo, not found.
+        their sum as loud: not the cards' room, not an echo, not found. My win's bells wander so
+        too after 50 ms. And the win's bells' first 100 ms (above).
   - [x] The casino games' sounds as 0.13.28's (`measured/casinosounds.md`), heard off it game by
         game and taken apart into its own files (`work/ui/decomp.py`): the casino's cues play its
         `c_*` files (dice, Keno, roulette, craps and blackjack heard: which file, when, how loud,
@@ -896,8 +904,10 @@ How (decided while starting it):
         read off 0.13.28's seats.
   - [x] Slower wins (0.13.4), as 0.13.28's (`measured/tablefeatures.md`): its server waits 7 s
         after a showdown (3 s after a fold) and 7 s plus the board's time after an all-in; an
-        all-in's board shows the first street 1.8 s on, each next 2.15 s after, the win 1.75 s
-        after the river. The win: the pot's chips gather in its middle, stay 0.65 s, slide to
+        all-in's board shows the first street 1.8 s on, each next 2.1 s after, the win 1.75 s
+        after the river. (The street's 2.15 s had been read off the server, whose 0.2 s tick
+        can't tell 2.1 from 2.15; heard on 0.13.28's app, 57 runouts, each next street's sound
+        2.09-2.12 s after the last, the rebuild's 2.14-2.17: now 2.1.) The win: the pot's chips gather in its middle, stay 0.65 s, slide to
         the winner in 1.2 s wherever they sit; the ring and "+N" come in from 1.45 s, the "+N"
         rising 25 k; the name's pill fades from 5 s, the ring and "+N" from 5.55 s. Filmed
         beside 0.13.28's with the other apps stopped so each drew at full speed (six all-in

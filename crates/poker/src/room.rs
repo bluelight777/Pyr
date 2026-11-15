@@ -36,11 +36,12 @@ pub const HISTORY: usize = 30;
 /// An all-in's board comes a street at a time (apps show it so, and the next hand waits for
 /// it): the hands turn over, the first street comes, then each next, then the pot's pushed.
 /// (0.13.4 slowed it, measured off 0.13.28 and filmed beside it: its app shows the first street
-/// 1.8 s on, each next 2.15 s after, the win 1.75 s after the river; its server waits 7 s more
-/// for the next hand.)
+/// 1.8 s on, each next 2.1 s after, the win 1.75 s after the river; its server waits 7 s more
+/// for the next hand. Each next street's sound 2.10 s after the last's on 0.13.28, 57 runouts
+/// heard: 2.15 had been read off its server, whose tick, 0.2 s, can't tell them apart.)
 pub const RUNOUT_SHOW_MS: u64 = 300;
 pub const RUNOUT_FIRST_MS: u64 = 1_800;
-pub const RUNOUT_STREET_MS: u64 = 2_150;
+pub const RUNOUT_STREET_MS: u64 = 2_100;
 pub const RUNOUT_WIN_MS: u64 = 1_750;
 
 /// How long an all-in's board takes to show, `streets` of it still to come.

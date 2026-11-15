@@ -668,21 +668,74 @@ const SWELL_PAN: f32 = -0.069;
 /// How much hotter the all-in is fed to the room than the cards (4 dB).
 const ALLIN_ROOM: f32 = 1.585;
 
-/// I won: a bell run up C, E, G, B, D, G (77 ms apart), and the pot pouring in (sixteen chips or
-/// so) from 0.38 s.
+/// I won: a bell run up C, E, G, B, D, G (72 ms apart), and the pot pouring in (sixteen chips)
+/// from 0.38 s. As one sound (placed: `win_stereo`).
 pub fn win(rng: &mut Rng) -> Vec<f32> {
     let mut o = vec![0.0; ms(2000.0)];
-    for (k, f) in [523.25, 659.25, 783.99, 987.77, 1174.66, 1567.98].iter().enumerate() {
-        bell(&mut o, ms(k as f32 * 77.0), *f, 0.184, 0.193, ms(1500.0));
-    }
-    let mut t = rng.range(370.0, 420.0);
-    let mut gap = rng.range(40.0, 50.0);
-    for _ in 0..(14 + (rng.f() * 4.0) as usize) {
-        chip(&mut o, ms(t), rng.range(2050.0, 2310.0), 0.47 * rng.range(0.85, 1.05), rng);
-        t += gap * rng.range(0.75, 1.25);
-        gap = (gap * 0.965).max(20.0);
+    for (at, m, _) in win_parts(rng) {
+        for (i, x) in m.into_iter().enumerate() {
+            add(&mut o, at + i, x);
+        }
     }
     o
+}
+
+/// My win's notes, C5 E5 G5 B5 D6 G6.
+const WIN_NOTES: [f32; 6] = [523.25, 659.25, 783.99, 987.77, 1174.66, 1567.98];
+
+/// My win's parts, as 0.13.28 plays them (heard seated, 61 of its own wins, each note taken out
+/// by itself): each bell and each chip by itself, where it starts and how far from where the win
+/// is placed it's put. The bells struck 72.0 ms apart (0.13.28's at 72.0, 144.1, 216.0, 287.9
+/// and 360.0 ms; the rebuild's had been 77 apart), each 0.28 dB softer than the rebuild's had
+/// been, and spread from 0.345 left of the win to 0.345 right, 0.138 a bell (R/L over each one's
+/// first 10 ms -3.14, -1.75, -0.52, +0.65, +1.87, +3.09 dB: the rebuild's had all been in the
+/// middle). The chips: sixteen, the first at 380 ms every time (20 ms after the last bell), the
+/// first gap 48.5 ms and each next 5.2% shorter, give or take a fifth (0.13.28's last at 899 ms,
+/// 880-943; the rebuild's had started at 370-420 and wandered, 14 to 17 of them, the last at
+/// 854-1024), each 0.48 dB softer than the last, the first 1.5 dB louder than the rebuild's had
+/// been (0.13.28's from -12.3 to -19.4 dB, the rebuild's all about -13.6), and each put anywhere
+/// within 0.39 of the win, as the all-in's poured chips are (0.13.28's spread evenly that far
+/// either way; the rebuild's had all been in the middle).
+fn win_parts(rng: &mut Rng) -> Vec<(usize, Vec<f32>, f32)> {
+    let mut parts = Vec::new();
+    for (k, f) in WIN_NOTES.into_iter().enumerate() {
+        let mut m = vec![0.0; ms(1500.0)];
+        bell(&mut m, 0, f, 0.178, 0.193, ms(1500.0));
+        parts.push((ms(72.0 * k as f32), m, -0.345 + 0.138 * k as f32));
+    }
+    let (mut t, mut gap, mut a) = (380.0f32, 48.5f32, 0.559f32);
+    for _ in 0..16 {
+        let mut m = vec![0.0; ms(340.0)];
+        chip(&mut m, 0, rng.range(2050.0, 2310.0), a * rng.range(0.85, 1.05), rng);
+        a *= 0.946;
+        parts.push((ms(t), m, rng.range(-0.39, 0.39)));
+        t += gap * rng.range(0.8, 1.2);
+        gap *= 0.948;
+    }
+    parts
+}
+
+/// I won, placed `pan` (48 kHz stereo, interleaved): each bell and chip put where 0.13.28 puts it
+/// (`win_parts`), and the whole as loud at its loudest wherever it's placed (as the time bank).
+pub fn win_stereo(pan: f32, rng: &mut Rng) -> Vec<f32> {
+    let parts = win_parts(rng);
+    let n = ms(2000.0);
+    let one = |pan: f32| {
+        let mut st = vec![0.0f32; n * 2];
+        for (at, m, off) in &parts {
+            for (i, x) in place(m, (pan + off).clamp(-1.0, 1.0), false).into_iter().enumerate() {
+                add(&mut st, 2 * at + i, x);
+            }
+        }
+        st
+    };
+    let peak = |st: &[f32]| st.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    let mut st = one(pan);
+    let k = peak(&one(0.0)) / peak(&st).max(1e-9);
+    for x in &mut st {
+        *x *= k;
+    }
+    st
 }
 
 /// My turn: two bell notes, A5 and then E6, 110.5 ms on (as 0.13.28 strikes it: heard seated, twice,

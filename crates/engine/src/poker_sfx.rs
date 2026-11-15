@@ -434,6 +434,10 @@ pub fn render(c: Cue, pan: f32) -> Vec<f32> {
     if c == Cue::Turn {
         return held(crate::table_sfx::turn_stereo(pan));
     }
+    // My win's bells spread wider, and its chips each somewhere about it (`table_sfx::win_parts`).
+    if c == Cue::Win {
+        return held(crate::table_sfx::win_stereo(pan, &mut fresh()));
+    }
     if let Some(mono) = table_sound(c) {
         // Placed (the cards, dealt, turned and folded, in 0.13.28's room).
         return held(crate::table_sfx::place(&mono, pan, matches!(c, Cue::Deal | Cue::Card | Cue::Flip | Cue::Fold)));
@@ -516,6 +520,37 @@ mod tests {
         // (The second bell's strike, over the first's ring: 95 ms on.)
         assert!(e(96.0, 100.0) > e(90.0, 94.5) * 1.5);
         assert!(e(191.0, 195.0) > e(185.0, 189.5) * 1.5);
+    }
+
+    /// My win as 0.13.28's: its bells 72 ms apart, left to right (each one's R/L as 0.13.28's over its
+    /// first 10 ms, within 0.15 dB), and its chips from 380 ms.
+    #[test]
+    fn my_wins_bells_run_left_to_right_72_ms_apart() {
+        let s = render(Cue::Win, 0.0);
+        // (Each bell's note over 2-40 ms after its strike, Hann-weighted: the others' notes out.)
+        let side = |k: usize, f: f64, ch: usize| {
+            let (a, b) = (ms(72.0 * k as f32 + 2.0), ms(72.0 * k as f32 + 40.0));
+            let (mut c, mut q) = (0.0f64, 0.0f64);
+            for i in a..b {
+                let h = 0.5 - 0.5 * (std::f64::consts::TAU * (i - a) as f64 / (b - a) as f64).cos();
+                let w = std::f64::consts::TAU * f * i as f64 / RATE as f64;
+                c += s[2 * i + ch] as f64 * h * w.cos();
+                q += s[2 * i + ch] as f64 * h * w.sin();
+            }
+            (c * c + q * q).sqrt()
+        };
+        let want = [-3.14, -1.75, -0.52, 0.65, 1.87, 3.09];
+        for (k, f) in [523.25, 659.25, 783.99, 987.77, 1174.66, 1567.98].into_iter().enumerate() {
+            let rl = 20.0 * (side(k, f, 1) / side(k, f, 0)).log10();
+            assert!((rl - want[k]).abs() < 0.15, "{f}: {rl}");
+        }
+        let m = crate::table_sfx::win(&mut fresh());
+        let e = |a: f32, b: f32| m[ms(a)..ms(b)].iter().map(|x| x * x).sum::<f32>() / (ms(b) - ms(a)) as f32;
+        // (The second bell's strike, over the first's ring; and the first chip's, by its brightness
+        // over the bells': the change sample to sample.)
+        assert!(e(72.5, 76.0) > e(66.0, 71.5) * 1.3);
+        let d = |a: f32, b: f32| m[ms(a)..ms(b)].windows(2).map(|w| (w[1] - w[0]).powi(2)).sum::<f32>() / (ms(b) - ms(a)) as f32;
+        assert!(d(380.0, 382.0) > d(374.0, 379.5) * 3.0, "{} {}", d(380.0, 382.0), d(374.0, 379.5));
     }
 
     /// My turn's bells spread as 0.13.28's (A5 0.09 to the left: R/L -0.78 dB, E6 0.09 to the right),
