@@ -430,6 +430,10 @@ pub fn render(c: Cue, pan: f32) -> Vec<f32> {
     if c == Cue::TimeBank {
         return held(crate::table_sfx::time_bank_stereo(pan));
     }
+    // My turn's bells spread the same way.
+    if c == Cue::Turn {
+        return held(crate::table_sfx::turn_stereo(pan));
+    }
     if let Some(mono) = table_sound(c) {
         // Placed (the cards, dealt, turned and folded, in 0.13.28's room).
         return held(crate::table_sfx::place(&mono, pan, matches!(c, Cue::Deal | Cue::Card | Cue::Flip | Cue::Fold)));
@@ -461,6 +465,7 @@ const JITTER: f32 = 0.04;
 /// Where 0.13.28 turns a table sound down before its soft clipping (and so how loud its louder side
 /// gets at most, `TABLE_PEAK`: tanh 0.85).
 const TABLE_HOLD: f32 = 0.85;
+#[cfg(test)]
 const TABLE_PEAK: f32 = 0.69107;
 
 #[cfg(test)]
@@ -511,6 +516,18 @@ mod tests {
         // (The second bell's strike, over the first's ring: 95 ms on.)
         assert!(e(96.0, 100.0) > e(90.0, 94.5) * 1.5);
         assert!(e(191.0, 195.0) > e(185.0, 189.5) * 1.5);
+    }
+
+    /// My turn's bells spread as 0.13.28's (A5 0.09 to the left: R/L -0.78 dB, E6 0.09 to the right),
+    /// and my hurry two bells, 120 ms apart.
+    #[test]
+    fn my_turns_bells_are_spread_and_my_hurry_rings_twice() {
+        let s = render(Cue::Turn, 0.0);
+        let (l, r) = s[ms(5.0) * 2..ms(100.0) * 2].chunks(2).fold((0.0f64, 0.0f64), |(l, r), x| (l + (x[0] as f64).powi(2), r + (x[1] as f64).powi(2)));
+        assert!((10.0 * (r / l).log10() + 0.78).abs() < 0.05);
+        let h = render_mono(Cue::Hurry);
+        let e = |a: f32, b: f32| h[ms(a)..ms(b)].iter().map(|x| x * x).sum::<f32>() / (ms(b) - ms(a)) as f32;
+        assert!(e(122.0, 130.0) > e(105.0, 118.0) * 10.0);
     }
 
     /// A time-out's bells struck when 0.13.28's are, 270 and 430.5 ms after the first knock.

@@ -638,12 +638,49 @@ pub fn win(rng: &mut Rng) -> Vec<f32> {
     o
 }
 
-/// My turn: two bell notes, A5 and then E6.
+/// My turn: two bell notes, A5 and then E6, 110.5 ms on (as 0.13.28 strikes it: heard seated, twice,
+/// 111.0 and 111.1 ms by half its peak; the rebuild's had been 118).
 pub fn turn() -> Vec<f32> {
     let mut o = vec![0.0; ms(1000.0)];
-    bell(&mut o, 0, 880.0, 0.355, 0.091, ms(700.0));
-    bell(&mut o, ms(118.0), 1318.5, 0.276, 0.103, ms(880.0));
+    for (at, f, amp, decay, len, _) in TURN {
+        bell(&mut o, ms(at), f, amp, decay, ms(len));
+    }
     o
+}
+
+/// My turn's bells: when (ms), the note, how loud, how long they ring (s), for how long (ms), and how
+/// far each is put from where it's placed (0.13.28 spreads them as it does the time bank's: A5 0.09
+/// to the left, E6 0.09 to the right; R/L -0.76 and +0.87 dB over their first 10 ms, seated).
+const TURN: [(f32, f32, f32, f32, f32, f32); 2] = [(0.0, 880.0, 0.355, 0.091, 700.0, -0.09), (110.5, 1318.5, 0.276, 0.103, 880.0, 0.09)];
+
+/// My turn, placed `pan` (48 kHz stereo, interleaved): each bell put where 0.13.28 puts it, and the
+/// whole as loud at its loudest wherever it's placed (as the time bank).
+pub fn turn_stereo(pan: f32) -> Vec<f32> {
+    spread(ms(1000.0), &TURN, pan)
+}
+
+/// Bells struck one after another and spread across where they're placed, as 0.13.28 plays its
+/// chords of bells: each placed `pan` + its own offset, then the whole turned to as loud at its
+/// loudest as in the middle.
+fn spread(n: usize, bells: &[(f32, f32, f32, f32, f32, f32)], pan: f32) -> Vec<f32> {
+    let one = |pan: f32| {
+        let mut st = vec![0.0f32; n * 2];
+        for &(at, f, amp, decay, len, off) in bells {
+            let mut m = vec![0.0f32; n];
+            bell(&mut m, ms(at), f, amp, decay, ms(len));
+            for (o, x) in st.iter_mut().zip(place(&m, (pan + off).clamp(-1.0, 1.0), false)) {
+                *o += x;
+            }
+        }
+        st
+    };
+    let peak = |st: &[f32]| st.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    let mut st = one(pan);
+    let k = peak(&one(0.0)) / peak(&st).max(1e-9);
+    for x in &mut st {
+        *x *= k;
+    }
+    st
 }
 
 /// Someone's time (and bank) out, folded or checked for them: two knocks on the rail, then bells E5
@@ -663,10 +700,13 @@ pub fn time_out(rng: &mut Rng) -> Vec<f32> {
     o
 }
 
-/// My clock's last five seconds: one short high bell, A6.
+/// My clock's last five seconds: two short high bells, A6, 120 ms apart, the second a little softer
+/// and longer (0.13.28's, heard seated twice: each fitted, 99.85% explained, the second 119.85 ms
+/// after the first by half its peak; the rebuild's had been one).
 pub fn hurry() -> Vec<f32> {
-    let mut o = vec![0.0; ms(400.0)];
-    bell(&mut o, 0, 1760.0, 0.352, 0.038, ms(380.0));
+    let mut o = vec![0.0; ms(520.0)];
+    bell(&mut o, 0, 1760.3, 0.404, 0.0326, ms(380.0));
+    bell(&mut o, ms(120.7), 1760.3, 0.346, 0.0371, ms(380.0));
     o
 }
 
@@ -691,24 +731,7 @@ const BANK: [(f32, f32, f32, f32, f32); 3] = [(0.0, 987.77, 0.333, 0.091, -0.15)
 /// a bell, its far side 4.3 to 5.9 dB quieter: heard at the middle seat and a side seat, each bell's
 /// first 10 ms, within 0.1 dB of this).
 pub fn time_bank_stereo(pan: f32) -> Vec<f32> {
-    let one = |pan: f32| {
-        let mut st = vec![0.0f32; ms(900.0) * 2];
-        for (at, f, amp, decay, off) in BANK {
-            let mut m = vec![0.0f32; ms(900.0)];
-            bell(&mut m, ms(at), f, amp, decay, ms(700.0));
-            for (o, x) in st.iter_mut().zip(place(&m, (pan + off).clamp(-1.0, 1.0), false)) {
-                *o += x;
-            }
-        }
-        st
-    };
-    let peak = |st: &[f32]| st.iter().fold(0.0f32, |m, x| m.max(x.abs()));
-    let mut st = one(pan);
-    let k = peak(&one(0.0)) / peak(&st).max(1e-9);
-    for x in &mut st {
-        *x *= k;
-    }
-    st
+    spread(ms(900.0), &BANK.map(|(at, f, amp, decay, off)| (at, f, amp, decay, 700.0, off)), pan)
 }
 
 /// A second going by on a clock: a wood block's tick (F#6, 1,480 Hz, and 4,031, gone in 40 ms), with a
