@@ -771,7 +771,7 @@ How (decided while starting it):
         it meets the felt, its rattle bright to 20 kHz. Each against 0.13.28's mean spectrogram,
         band by band in 5 ms steps, within 1-2 dB where it carries. It places the seats' sounds less
         far out than 0.13.0's 0.7: checks and chips 0.533 out from the side seats (each bet's chips
-        0.04 either way), folds 0.523 and all 0.033 to the left,
+        0.04 either way), folds as far and all 0.033 to the left,
         and it finishes each table sound by turning it down to 0.85 if louder, then softly
         clipping each side (tanh), so its loudest is 0.691 and loud moments are bent (from a side
         seat the far side is 0.553 of the near where quiet, 0.634 at the loudest: first taken for
