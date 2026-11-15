@@ -815,8 +815,13 @@ How (decided while starting it):
         dB a side; my hurry two A6 bells 120 ms apart, the second a little softer and longer (the
         rebuild's one), each fitted (99.85%), now within 0.4 dB. The shown hands heard too (16
         showdowns, both watching): on both one card turned a showdown, the first hand shown's, at
-        its seat, its snap 33-34 ms after the last action's first click. Not matched: a
-        check's first 10 ms (brighter on 0.13.28), the all-in's swell's 0.6 dB lean left and its
+        its seat, its snap 33-34 ms after the last action's first click. And the check again (25
+        checks with nothing else sounding, both watching): the rebuild's padding's rustle had been
+        9-14 dB too bright over 1 kHz from 5 ms on (what had looked like 0.13.28's first 10 ms
+        being brighter was a check with another sound under it), now its tap, rings and rustle
+        fitted band by band over the first 40 ms (within 3.6 dB, most within 2) with the knock's
+        strength, so it's at the table's most as often (two times in three from the sides).
+        Not matched: the all-in's swell's 0.6 dB lean left and its
         tail after the pour (all room on 0.13.28), and the clock's own room: on 0.13.28 a tick's tail goes wide 15 ms on (the rebuild's a faint
         echo in the middle) and the bank's bells drift right after 50 ms, the same at every seat
         (the last bell from 1.3 to 6 dB right), their sum as loud: not the cards' room, not an echo,

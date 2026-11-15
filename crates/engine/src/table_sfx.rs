@@ -331,8 +331,8 @@ fn knock(o: &mut [f32], at: usize, amp: f32, pitch: f32, rng: &mut Rng) {
         (245.0, 0.62, 0.010),
         (300.0, 0.08, 0.015),
         (380.0, 0.08, 0.012),
-        (540.0, 0.18, 0.009),
-        (690.0, 0.10, 0.008),
+        (540.0, 0.25, 0.0095),
+        (690.0, 0.421, 0.00365),
     ];
     for (k, (f, a, d)) in MODES.into_iter().enumerate() {
         let f = f * pitch * rng.range(0.985, 1.015);
@@ -344,17 +344,17 @@ fn knock(o: &mut [f32], at: usize, amp: f32, pitch: f32, rng: &mut Rng) {
             add(o, at + i, (TAU * f * t).sin() * a * ((-t / d).exp() + tail * (-t / 0.06).exp()) * attack * amp * 0.56);
         }
     }
-    // The tap, dull (little above 2 kHz), and the rustle after it.
-    let mut lp = Biquad::lowpass(1800.0, 0.7);
-    let mut lp2 = Biquad::lowpass(1800.0, 0.7);
+    // The tap, dull, and the padding's rustle after it, duller (little above 1 kHz).
+    let mut lp = Biquad::lowpass(1287.0, 0.7);
+    let mut lp2 = Biquad::lowpass(1287.0, 0.7);
     let mut hp = Biquad::highpass(300.0, 0.7);
-    let mut lp3 = Biquad::lowpass(2000.0, 0.6);
+    let mut lp3 = Biquad::lowpass(936.0, 0.6);
     let mut hp2 = Biquad::highpass(3000.0, 0.7);
     for i in 0..ms(400.0) {
         let t = i as f32 / RATE;
-        let tap = lp2.run(lp.run(rng.noise())) * (-t / 0.0015).exp() * 1.4;
+        let tap = lp2.run(lp.run(rng.noise())) * (-t / 0.0015).exp() * 2.0;
         let rustle = lp3.run(hp.run(rng.noise())) * ((-t / 0.022).exp() * 0.16 + (-t / 0.065).exp() * 0.03);
-        let crack = if i < ms(1.5) { hp2.run(rng.noise()) * 0.5 * (1.0 - i as f32 / ms(1.5) as f32) } else { 0.0 };
+        let crack = if i < ms(1.5) { hp2.run(rng.noise()) * 0.53 * (1.0 - i as f32 / ms(1.5) as f32) } else { 0.0 };
         add(o, at + i, (tap + rustle + crack) * amp);
     }
 }
@@ -406,9 +406,12 @@ fn stack(o: &mut [f32], at: usize, amp: f32, on_felt: bool, rng: &mut Rng) {
     }
 }
 
-/// How hard the check knocks: as 0.13.28's, mostly over what's held (its checks peak at the
-/// table's most, 0.691 a side, three in four times in the middle).
-const KNOCK: f32 = 1.29;
+/// How hard the check knocks: as 0.13.28's, at the table's most (0.691 a side) two times in three
+/// from a side seat and a third in the middle (heard: 17 of 25 from the sides, and 67% and 31%
+/// before), its tap, rings and rustle fitted with it band by band over its first 40 ms against 25
+/// checks with nothing else sounding (sixth octaves, 250 Hz to 6 kHz, within 3.6 dB, most within 2,
+/// but its 356 Hz at 5-15 ms: the rebuild's rustle had been 9-14 dB too bright over 1 kHz).
+const KNOCK: f32 = 1.235;
 
 /// A check: two knocks on the rail.
 pub fn check(rng: &mut Rng) -> Vec<f32> {
