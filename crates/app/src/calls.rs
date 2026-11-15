@@ -560,8 +560,7 @@ impl PyrApp {
             let named = crate::emoji::paint_text(ui.painter(), pos2(x, row.center().y), Align2::LEFT_CENTER, &name, theme::font(14.0), theme::MUTED(), Some(row.width() - 80.0));
             x = named.right() + 6.0;
             if *uid == g.owner {
-                icons::crown(ui.painter(), Rect::from_center_size(pos2(x + 7.0, row.center().y), vec2(14.0, 14.0)), theme::OWNER());
-                x += 18.0;
+                x += icons::crown_after(ui.painter(), named.right(), row.center().y, 1.0) - 6.0 + 4.0;
             }
             crate::trust::badge_at(ui, st, uid, &name, pos2(x, row.center().y), 13.0);
             if in_call.contains(uid) {

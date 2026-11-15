@@ -2316,8 +2316,10 @@ impl PyrApp {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(&name).font(theme::bold_font(19.0)).color(name_color(s, &uid, role)));
                     if role == Role::Owner {
-                        let (cr, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
-                        icons::crown(ui.painter(), cr, theme::OWNER());
+                        // (The member list's crown, as much bigger as 0.13.0's was here: 16 to 14.)
+                        let k = 16.0 / 14.0;
+                        let (cr, _) = ui.allocate_exact_size(vec2(19.5 * k, 16.0), Sense::hover());
+                        icons::crown_jewelled(ui.painter(), cr.left() + 9.75 * k, cr.center().y - 6.4 * k, k);
                     }
                     if s.is_bot(&uid) {
                         bot_tag(ui);
@@ -3669,8 +3671,7 @@ impl PyrApp {
                     let w = ui.fonts_mut(|f| f.layout_no_wrap(m.name.clone(), theme::bold_font(14.0), Color32::WHITE).size().x);
                     let mut after = r.left() + 52.0 + w;
                     if m.role == Role::Owner {
-                        icons::crown(ui.painter(), Rect::from_center_size(pos2(r.left() + 58.0 + w, r.center().y), vec2(14.0, 14.0)), theme::OWNER());
-                        after += 18.0;
+                        after += icons::crown_after(ui.painter(), r.left() + 48.0 + w, r.center().y, 1.0);
                     }
                     if m.bot {
                         paint_bot_tag(ui, pos2(after, r.center().y));

@@ -147,6 +147,16 @@ Version in brackets: where 0.13.x first had it.
       default (0.13.4); never while sharing or watching a screen, an hour by default (0.13.25);
       away vs Idle by hand, from joining the channel, the app checks before going (0.13.28)
 - [x] Invite someone to your voice channel (card with Join) (0.13.6)
+- [x] The Owner's crown by their name, "a new drawn gold crown, jewelled" (0.13.6): missed until a
+      side-by-side sweep of the screens found 0.13.0's flat crown by Olive's name (Nov 15). Traced
+      off 0.13.28 at six times the size (`icons::crown_jewelled`): three gold points with a ball on
+      each, a band light above and gold below with a red stone between two blue ones (each ringed,
+      a light at its top left), a glint down the middle point, the dark brown outline, a faint
+      gold glow; 18.9 by 12.8 in the member list, 14 after the name, the top 8 over the row's
+      middle. The body fitted pixel by pixel at 6x (1.25% off); at its own size against 0.13.28's
+      (both seen by someone else than the Owner): 9 pixels of 250 more than 24 levels off, at most
+      43. The same crown in the profile card (as much bigger as 0.13.0's was there) and by a
+      group call's owner.
 - [x] Taskbar badge with mentions and DMs, 9+ (0.13.7)
 - [x] Files in DMs and groups: up to 2 GB, E2EE, resumable, kept 7 days, 4 GB a week (0.13.13)
 - [x] New DM said "isn't end-to-end encrypted yet" (0.13.13): a bug of 0.13.1 to 0.13.12 the

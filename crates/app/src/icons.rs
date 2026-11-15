@@ -550,6 +550,100 @@ pub fn crown(p: &Painter, r: Rect, c: Color32) {
     }
 }
 
+/// The Owner's crown by their name, as 0.13.28 draws it (0.13.6: "a new drawn gold crown,
+/// jewelled"), traced off its member list at six times the size: three gold points with a ball
+/// on each, a band with a red stone between two blue ones, a glint down the middle point, all
+/// outlined in dark brown, in a faint gold glow. `cx`: its middle; `top`: the top of its middle
+/// ball's outline; `k`: its size (1: the member list's, 18.9 by 12.8 with its outline). Where
+/// to put it by a name: `crown_after`.
+pub fn crown_jewelled(p: &Painter, cx: f32, top: f32, k: f32) {
+    let at = |u: f32, v: f32| pos2(cx + (u - 9.47) * k, top + v * k);
+    let out = Color32::from_rgb(0x6a, 0x3c, 0x06);
+    let w = Stroke::new(0.83 * k, out);
+    // The glow: gold, faint, from the crown's middle out to 13.6 (its most 11.5% at the middle).
+    {
+        let c = at(9.47, 6.6);
+        let r = 13.6 * k;
+        let mut m = Mesh::default();
+        let col = |a: f32| Color32::from_rgba_unmultiplied(255, 198, 65, (a * 255.0).round() as u8);
+        let rings = [0.0f32, 0.17, 0.33, 0.5, 0.67, 0.83, 1.0];
+        let n = 48;
+        m.colored_vertex(c, col(0.115));
+        for (j, &f) in rings.iter().enumerate().skip(1) {
+            let a = 0.115 * (1.0 - f * f).max(0.0).powf(1.15);
+            for i in 0..n {
+                let t = std::f32::consts::TAU * i as f32 / n as f32;
+                m.colored_vertex(c + vec2(t.cos(), t.sin()) * r * f, col(a));
+            }
+            let base = 1 + (j as u32 - 1) * n;
+            for i in 0..n {
+                let (a0, a1) = (base + i, base + (i + 1) % n);
+                if j == 1 {
+                    m.add_triangle(0, a0, a1);
+                } else {
+                    let (b0, b1) = (a0 - n, a1 - n);
+                    m.add_triangle(b0, a0, a1);
+                    m.add_triangle(b0, a1, b1);
+                }
+            }
+        }
+        p.add(Shape::mesh(m));
+    }
+    // The body: three points (their tips under the balls) down to the band; gold, light at the top
+    // and darker toward the band (0.13.28's, row by row: 247,212,114 at 4.0 down to 227,165,52 at
+    // 8.67), outlined over its edge. (Fitted to 0.13.28's at six times the size, pixel by pixel:
+    // 1.25% of them off; and at its own size, the outline over the gold as 0.13.28's darkens it.)
+    let pts = [(2.631, 10.315), (1.875, 3.83), (6.047, 7.001), (9.44, 1.845), (12.833, 7.001), (17.005, 3.83), (16.249, 10.315)];
+    let grad = |v: f32| {
+        let f = (v - 4.0) / 4.67;
+        let ch = |a: f32, b: f32| (a + (b - a) * f).clamp(0.0, 255.0).round() as u8;
+        Color32::from_rgb(ch(247.0, 227.0), ch(212.0, 165.0), ch(114.0, 52.0))
+    };
+    {
+        let mut m = Mesh::default();
+        for (u, v) in pts {
+            m.colored_vertex(at(u, v), grad(v));
+        }
+        // (Four convex pieces: the left point, the middle point, the right point, and under them.)
+        for t in [[0u32, 1, 2], [2, 3, 4], [4, 5, 6], [0, 2, 4], [0, 4, 6]] {
+            m.add_triangle(t[0], t[1], t[2]);
+        }
+        p.add(Shape::mesh(m));
+    }
+    p.add(Shape::closed_line(pts.iter().map(|&(u, v)| at(u, v)).collect(), w));
+    // The glint down the middle point's left side.
+    p.line_segment([at(9.15, 3.67), at(7.45, 6.6)], Stroke::new(0.75 * k, Color32::from_rgba_unmultiplied(255, 255, 255, 140)));
+    // The band, its top lighter, outlined over its edge (on whole pixels, as egui puts a
+    // rectangle, and as 0.13.28's is: its edges crisp at its own size).
+    let band = Rect::from_min_max(at(2.415, 9.415), at(16.585, 12.415));
+    p.rect_filled(band, 0.0, Color32::from_rgb(0xf6, 0xc0, 0x3a));
+    p.rect_filled(Rect::from_min_max(band.min, at(16.585, 10.83)), 0.0, Color32::from_rgb(0xfb, 0xd6, 0x66));
+    p.rect_stroke(band, 0.0, w, StrokeKind::Middle);
+    // The stones: blue, red (bigger), blue, each ringed in the outline's brown (a thinner ring), with
+    // a light at its top left (white, two thirds through).
+    for (u, r, ring, c) in [
+        (5.6, 0.9, 0.72, Color32::from_rgb(0x3a, 0x7a, 0xff)),
+        (9.47, 1.17, 0.68, Color32::from_rgb(0xe8, 0x2a, 0x4a)),
+        (13.34, 0.9, 0.72, Color32::from_rgb(0x3a, 0x7a, 0xff)),
+    ] {
+        let o = at(u, 10.9);
+        p.circle(o, r * k, c, Stroke::new(ring * k, out));
+        p.circle_filled(o + vec2(-0.32, -0.45) * r * k, 0.45 * r * k, Color32::from_rgba_unmultiplied(255, 255, 255, 168));
+    }
+    // The balls on the points, ringed as the stones (egui rings a circle outside its edge).
+    for (u, v) in [(1.86, 3.36), (9.47, 1.80), (17.08, 3.36)] {
+        p.circle(at(u, v), 1.04 * k, Color32::from_rgb(0xff, 0xe6, 0x8a), Stroke::new(0.81 * k, out));
+    }
+}
+
+/// Where the Owner's crown goes after a name that ends at `x` on a row whose middle is `y`, and
+/// how much room it takes there (0.13.28's member list: its middle 14 after the name, the top of
+/// its middle ball 8 over the row's middle).
+pub fn crown_after(p: &Painter, x: f32, y: f32, k: f32) -> f32 {
+    crown_jewelled(p, x + 14.01 * k, y - 8.0 * k, k);
+    24.0 * k
+}
+
 /// A cloud (renting a server).
 pub fn cloud(p: &Painter, r: Rect, c: Color32) {
     let s = r.width();
