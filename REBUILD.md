@@ -119,7 +119,8 @@ that the rebuild doesn't know yet must come through untouched:
 
 ## Releasing the rebuild (what's left, in order)
 
-1. On Blue's PC, side by side with 0.13.28 (`Downloads\pyr-test`, README.txt there): programs
+1. On Blue's PC, side by side with 0.13.28 (`Downloads\pyr-test`, README.txt there; the test copy
+   built again on Nov 15 from a6f006e, with everything above): programs
    inside Pyr (Torch & Conquer, Pyropoly on the NVIDIA card, Chimbrowser); the echo test with
    speakers; a screen share's encoder. What differs gets fixed or said before going on.
 2. Blue's say: the version (0.14.0, say: past 0.13.28, a new key) and the release notes (what
