@@ -813,10 +813,11 @@ How (decided while starting it):
         Reba each running their own clock out): my turn's E6 111 ms after its A5 (the rebuild's 118)
         and the two spread as the bank's (A5 0.09 to the left, E6 0.09 to the right), now within 0.4
         dB a side; my hurry two A6 bells 120 ms apart, the second a little softer and longer (the
-        rebuild's one), each fitted (99.85%), now within 0.4 dB. Not matched: a
+        rebuild's one), each fitted (99.85%), now within 0.4 dB. The shown hands heard too (16
+        showdowns, both watching): on both one card turned a showdown, the first hand shown's, at
+        its seat, its snap 33-34 ms after the last action's first click. Not matched: a
         check's first 10 ms (brighter on 0.13.28), the all-in's swell's 0.6 dB lean left and its
-        tail after the pour (all room on 0.13.28), where shown hands are placed (not heard), and
-        the clock's own room: on 0.13.28 a tick's tail goes wide 15 ms on (the rebuild's a faint
+        tail after the pour (all room on 0.13.28), and the clock's own room: on 0.13.28 a tick's tail goes wide 15 ms on (the rebuild's a faint
         echo in the middle) and the bank's bells drift right after 50 ms, the same at every seat
         (the last bell from 1.3 to 6 dB right), their sum as loud: not the cards' room, not an echo,
         not found.
