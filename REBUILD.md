@@ -834,7 +834,17 @@ How (decided while starting it):
         the wheel's launch, its peg clicks (the same 50, each within 5 ms), the landing and the
         prize's chips, the fuse's hiss at ten seconds, the last five ticks and the bang, each
         within 0.3 dB of 0.13.28's (the bang's top octave 3.7 dB under, cards dealt over it).
-        Not heard, so by the rule: the Bonfire's draw, Ember Dragon's jackpots, a slot's All or
+        The Bonfire's draw seen and heard on both (Nov 14, 21:08, filmed side by side: 5 people,
+        a Spark, three Blazes and the Grand Ember): the same show to the frame (the title, the
+        pool, the Spark flying left, each Blaze's reel landing and its prize at 10.57 s on both,
+        the Grand Ember's reel, the crown and the same fireworks in the same places, "And you won
+        a ..." for each viewer, their own row ringed in gold, the next fire after it) and the same
+        sounds (the boom, the Spark's coin, each Blaze's reel spinning and stopping, the wheel,
+        the jackpot and my win, each 0.13.28's own file at the same gain, within 40 ms of it);
+        only 0.13.28's boom 136 ms later, as its window stood still for 0.27 s while the show
+        came up (its picture being loaded, no frames drawn), and the names rushing past on the
+        reels in another order (each reel landing on the same winner at the same moment).
+        Not heard, so by the rule: Ember Dragon's jackpots, a slot's All or
         Nothing win. Ember Dragon's big win, heard on both (Nov 14, 200 spins each with "a big
         win stops it"): an Ember Respins' 72 times on 0.13.28 (EPIC WIN), 15 times on the rebuild
         (BIG WIN): the respins' jackpot, coins and ticks, their winbig, then the big win's tier-up,
