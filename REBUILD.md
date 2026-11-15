@@ -982,7 +982,7 @@ How (decided while starting it):
         first MMR 1,075), Expert, Shark; their wire names stay rookie, regular, hard, shark,
         genius, and so do the ratings' ids (`bot:shark:…` is an Expert, as 0.13.28 keeps them).
         Tags EASY/MEDIUM/HARD/EXPERT/SHARK BOT; an Expert has no fin, a Shark a violet ring
-        (168,122,255) (its crown and star still to match). Apps without `casino_0_13_7` (0.13.28's
+        (168,122,255) and its star (above: Bot faces). Apps without `casino_0_13_7` (0.13.28's
         cap) are told a Hard bot is a Medium one, as 0.13.28's server tells them; the rebuilt app
         sends it. New tournament: the five levels (Hard where the server has it).
 - [x] Keys for every game (0.13.26): a Keys button on every game's top bar (lit while open, where
