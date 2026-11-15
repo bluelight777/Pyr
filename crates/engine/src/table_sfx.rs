@@ -592,38 +592,40 @@ pub fn all_in_parts(rng: &mut Rng) -> (Vec<f32>, Vec<(usize, Vec<f32>)>, Vec<f32
 /// the chips' are: the shove and its thump there (R/L 5.1 dB from a side seat), each chip poured
 /// somewhere about there (0.39 either way: 0.13.28's pour is 17-18 dB wider than its shove), the
 /// swell in the middle but for its lean left (0.13.28's two tones 0.55 and 0.68 dB stronger on the
-/// left, from the middle seat or a side one: `SWELL_PAN`); the rest in the room (`place`'s), fed
+/// left, from the middle seat or a side one: `SWELL_PAN`); all of it in the room (`place`'s), fed
 /// 4 dB hotter than the cards.
 pub fn all_in_stereo(pan: f32, rng: &mut Rng) -> Vec<f32> {
     let (shove, chips, swell) = all_in_parts(rng);
     let n = shove.len();
     let (mut l, mut r, mut feed) = (vec![0.0f32; n], vec![0.0f32; n], vec![0.0f32; n]);
+    let mut feed_swell = vec![0.0f32; n];
     let p0 = pan.clamp(-1.0, 1.0);
-    let mut put = |x: &[f32], at: usize, p: f32, roomed: bool| {
+    let mut put = |x: &[f32], at: usize, p: f32, swell: bool| {
         let (gl, gr) = (((1.0 - p) / 2.0).sqrt(), ((1.0 + p) / 2.0).sqrt());
         for (i, v) in x.iter().enumerate() {
             if let Some(j) = (at + i < n).then_some(at + i) {
                 l[j] += v * gl;
                 r[j] += v * gr;
-                if roomed {
-                    feed[j] += v * (gl + gr) / 2.0 * ALLIN_ROOM;
-                }
+                let fed = if swell { &mut feed_swell } else { &mut feed };
+                fed[j] += v * (gl + gr) / 2.0 * ALLIN_ROOM;
             }
         }
     };
-    put(&shove, 0, p0, true);
+    put(&shove, 0, p0, false);
     for (at, c) in &chips {
-        put(c, *at, (p0 + rng.range(-0.39, 0.39)).clamp(-1.0, 1.0), true);
+        put(c, *at, (p0 + rng.range(-0.39, 0.39)).clamp(-1.0, 1.0), false);
     }
-    // (Not the swell: 0.13.28's leans the same from a side seat as from the middle, where the
-    // room, louder on the far side, would lean it more.)
-    put(&swell, 0, SWELL_PAN, false);
+    put(&swell, 0, SWELL_PAN, true);
     let [wl, wr] = room(&feed);
+    // (The swell's room as loud on both sides wherever the all-in is: 0.13.28's swell leans the
+    // same from a side seat as from the middle, where the room louder on the far side would lean
+    // it more; its room rings on after it's cut off, 45 dB under it.)
+    let [sl, sr] = room(&feed_swell);
     let (kl, kr) = (1.0 + 0.34 * p0, 1.0 - 0.34 * p0);
     let mut out = vec![0.0f32; wl.len() * 2];
     for i in 0..wl.len() {
-        out[2 * i] = l.get(i).copied().unwrap_or(0.0) + wl[i] * kl;
-        out[2 * i + 1] = r.get(i).copied().unwrap_or(0.0) + wr[i] * kr;
+        out[2 * i] = l.get(i).copied().unwrap_or(0.0) + wl[i] * kl + sl[i];
+        out[2 * i + 1] = r.get(i).copied().unwrap_or(0.0) + wr[i] * kr + sr[i];
     }
     out
 }
