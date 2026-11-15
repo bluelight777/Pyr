@@ -820,7 +820,8 @@ How (decided while starting it):
         9-14 dB too bright over 1 kHz from 5 ms on (what had looked like 0.13.28's first 10 ms
         being brighter was a check with another sound under it), now its tap, rings and rustle
         fitted band by band over the first 40 ms (within 3.6 dB, most within 2) with the knock's
-        strength, so it's at the table's most as often (two times in three from the sides).
+        strength, so it's at the table's most as often (two times in three from the sides); in the
+        app after, side by side, from 5 to 40 ms within 4 dB a band but 700 Hz early (+5.4).
         Not matched: the all-in's swell's 0.6 dB lean left and its
         tail after the pour (all room on 0.13.28), and the clock's own room: on 0.13.28 a tick's tail goes wide 15 ms on (the rebuild's a faint
         echo in the middle) and the bank's bells drift right after 50 ms, the same at every seat
