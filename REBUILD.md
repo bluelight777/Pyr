@@ -653,9 +653,10 @@ How (decided while starting it):
         Not the same: the table's own sounds' tails (0.13.28's differ between the two sides
         after the first 25 ms), and its all-in's shove is brighter than the rebuild's (the
         poker table's sounds: to look at). (Since: the all-in rebuilt, in the room, and 0.13.28's
-        soft clipping found, `measured/cardsounds.md`. The table sounds' 0.4 here was read
-        before it was known: a knock at the ceiling placed 0.5 reads 0.4 at its loudest samples.
-        To hear again at a dominó table.)
+        soft clipping found, `measured/cardsounds.md`. The table sounds' 0.4 here, read before
+        it was known, heard again by their quiet samples at a game the probe played with three
+        bots, both apps watching: passes from the side seats 0.395 on 0.13.28, 0.398 on the
+        rebuild.)
   - [x] A ¡Doblo! from both sides, side by side with 0.13.28 (Olive and Reba doubling against
         each other): the doubling side's banner on the felt, the answering side's panel, their
         words lit orange; the cube's ring gold only when it's my side's (watching, teal).
