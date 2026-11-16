@@ -520,6 +520,10 @@ How (decided while starting it):
       count; no toast with it) and a new tier's (6.5 s: the old crest fading under the new one
       popping out a quarter bigger, darker, 28 rays, fourteen sparkles flying off it, "FLAME!",
       what the tier gives, the chips; rays and sparkles turn with the app's clock, as 0.13.28's).
+      Both in an area of their own over the page, as 0.13.28's: it takes the page's clicks (a
+      click on Roll rolls nothing), a click from 0.7 s in sends it away, keys go through, and a
+      toast already up is under its shade while the ones that come with it are over it; the
+      day's chest toast before the mission's, so the mission's is on top (filmed both ways).
       Fixed on the way: past 100, the card says how far the
       next star is (0.13.28 always said 0); "1 more level", not "levels"; the VIP tiers' perks fit
       their cards.

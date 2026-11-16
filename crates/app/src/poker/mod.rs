@@ -260,11 +260,13 @@ impl PyrApp {
                         self.poker.burst = Some(crate::casino::levels::Burst { level: l, tier_up: g.tier_up.is_some(), chips: paid, since: Instant::now() });
                     }
                 }
-                for m in &g.missions {
-                    acts.push(Act::Toast(format!("Mission done: {m}"), false));
-                }
+                // (The day's chest first, then the mission that finished it: 0.13.28's order, the
+                // mission's toast on top.)
                 if g.all_missions {
                     acts.push(Act::Toast("All three of today's missions done: the day's chest is yours.".into(), false));
+                }
+                for m in &g.missions {
+                    acts.push(Act::Toast(format!("Mission done: {m}"), false));
                 }
                 if let Some(n) = g.star {
                     acts.push(Act::Toast(format!("Ember Star {n}! +{}", chips_text(pyr_poker::levels::STAR_PAYS)), false));

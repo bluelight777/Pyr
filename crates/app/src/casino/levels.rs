@@ -262,11 +262,24 @@ impl PyrApp {
         }
         let tier = levels::tier(b.level);
         let col = tier_color(tier);
-        let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("level-burst")));
-        if b.tier_up {
-            tier_up_burst(&p, ctx, area, b, t, tier, col);
-        } else {
-            level_up_burst(&p, ctx, area, b, t, tier, col);
+        // Over the page in an area of its own, as 0.13.28's (filmed): it takes the page's clicks
+        // while it shows (a click on Roll rolls nothing; the keys still go through), a click from
+        // 0.7 s in sends it away, and it's over what was showing when it came (the toasts already
+        // up are under its shade; a toast coming after it is over it).
+        let mut gone = false;
+        egui::Area::new(egui::Id::new("level-burst")).order(egui::Order::Foreground).fixed_pos(area.min).show(ctx, |ui| {
+            if ui.allocate_rect(area, Sense::click()).clicked() && t > 0.7 {
+                gone = true;
+            }
+            let p = ui.painter_at(area);
+            if b.tier_up {
+                tier_up_burst(&p, ctx, area, b, t, tier, col);
+            } else {
+                level_up_burst(&p, ctx, area, b, t, tier, col);
+            }
+        });
+        if gone {
+            self.poker.burst = None;
         }
         ctx.request_repaint();
     }
