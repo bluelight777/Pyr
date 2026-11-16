@@ -1036,13 +1036,9 @@ impl PyrApp {
         let my_turn = h.to_act == v.my_seat && h.over.is_none() && h.offer.is_none();
         let plays: Vec<Move> = h.allowed.iter().copied().filter(|m| matches!(m, Move::Play { .. })).collect();
         if my_turn && h.offer.is_none() {
-            let words = if plays.is_empty() {
-                "Nothing fits"
-            } else if self.poker.casino.domt.picked.is_some() {
-                "Now pick its end, on the line"
-            } else {
-                "Your turn: pick a tile"
-            };
+            // (0.13.28 says no more than these two: a tile picked, its ends lit on the line say
+            // the rest.)
+            let words = if plays.is_empty() { "Nothing fits" } else { "Your turn: pick a tile" };
             p.text(pos2(rack.right() - 16.0, rack.top() + 9.0), Align2::RIGHT_TOP, words, theme::bold_font(12.5), col::GOLD2);
         }
         let (w, ht) = (46.0, 92.0);
