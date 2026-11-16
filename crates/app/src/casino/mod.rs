@@ -785,7 +785,8 @@ impl PyrApp {
     /// Hands a finished round to its game's table to animate. The balance shows the bet taken
     /// but not the win until the round settles on the table (each game says when).
     fn casino_round(&mut self, r: &RoundView, page: Game) {
-        if r.outcome.game() == page {
+        // (Not Plinko's: 0.13.28's balance goes to what a ball pays as it's dropped.)
+        if r.outcome.game() == page && page != Game::Plinko {
             let before_win = r.chips.saturating_sub(r.outcome.paid());
             self.poker.casino.hold = Some((before_win, Instant::now() + Duration::from_secs(40)));
         }

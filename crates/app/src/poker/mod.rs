@@ -248,9 +248,11 @@ impl PyrApp {
                 }
                 if let Some(l) = g.level_up {
                     self.poker.banner = Some((format!("Level {l}!"), Instant::now()));
-                    acts.push(Act::Toast(format!("You reached level {l}. New looks may be waiting in your profile."), false));
-                    // (0.13.5: the crest bursts onto the screen with the chips it paid.)
-                    if s.poker.me.as_ref().is_some_and(crate::casino::levels::has_levels) {
+                    // (0.13.5: the crest bursts onto the screen with the chips it paid, in place of
+                    // the toast: 0.13.28 shows no toast with it, filmed in the casino.)
+                    if !s.poker.me.as_ref().is_some_and(crate::casino::levels::has_levels) {
+                        acts.push(Act::Toast(format!("You reached level {l}. New looks may be waiting in your profile."), false));
+                    } else {
                         let missions: u64 = g.missions.iter().filter_map(|t| s.poker.me.as_ref()?.missions.iter().find(|m| &m.text == t).map(|m| m.chips)).sum();
                         let chest = if g.all_missions { pyr_poker::levels::MISSIONS_CHEST_CHIPS } else { 0 };
                         let star = if g.star.is_some() { pyr_poker::levels::STAR_PAYS } else { 0 };

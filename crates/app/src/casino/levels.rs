@@ -24,8 +24,13 @@ pub fn has_levels(me: &RecordView) -> bool {
 
 /// A tier's crest (0, Spark, to 9, Eternal Flame) in `r`.
 pub fn crest(p: &egui::Painter, ctx: &egui::Context, tier: usize, r: Rect) -> bool {
+    crest_tinted(p, ctx, tier, r, Color32::WHITE)
+}
+
+/// A tier's crest drawn through `tint` (white at an alpha: faded).
+fn crest_tinted(p: &egui::Painter, ctx: &egui::Context, tier: usize, r: Rect, tint: Color32) -> bool {
     let i = tier.min(9) as f32;
-    pics::part(p, ctx, "tier-crests", Rect::from_min_max(pos2(i / 10.0, 0.0), pos2((i + 1.0) / 10.0, 1.0)), r, 1920, Color32::WHITE)
+    pics::part(p, ctx, "tier-crests", Rect::from_min_max(pos2(i / 10.0, 0.0), pos2((i + 1.0) / 10.0, 1.0)), r, 1920, tint)
 }
 
 /// A tier's color (its title, its ring).
@@ -258,6 +263,11 @@ impl PyrApp {
         let tier = levels::tier(b.level);
         let col = tier_color(tier);
         let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("level-burst")));
+        if !b.tier_up {
+            level_up_burst(&p, ctx, area, b, t, tier, col);
+            ctx.request_repaint();
+            return;
+        }
         let fade = if t < 0.2 { t / 0.2 } else if t > life - 0.6 { (life - t) / 0.6 } else { 1.0 };
         let c = area.center() - vec2(0.0, if b.tier_up { 60.0 } else { 40.0 });
         // The room darkens around it (more for a tier), and rays turn slowly behind.
@@ -314,6 +324,70 @@ impl PyrApp {
             outlined(&p, pos2(c.x, sub_y + 22.0 + size * 0.5), &format!("+{} chips", chips_text(shown)), theme::bold_font(size), Color32::from_rgb(0xff, 0xe8, 0xb8).gamma_multiply(fade * (0.6 + 0.4 * k)), outline);
         }
         ctx.request_repaint();
+    }
+}
+
+/// Back-out easing: 0 at 0, past 1 a little (by about 5% at c1 1.2), 1 at 1.
+fn ease_out_back(x: f32, c1: f32) -> f32 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    if x >= 1.0 {
+        return 1.0;
+    }
+    let c3 = c1 + 1.0;
+    1.0 + c3 * (x - 1.0).powi(3) + c1 * (x - 1.0).powi(2)
+}
+
+/// A level reached (not a new tier), as 0.13.28 shows it: measured off its screen, filmed at 30 a
+/// second at 1280 by 800 and at 700, 900 and 1000 high (`rebuild/measured/levels.md`). Everything
+/// sized by the page's height (to 1000 high: the crest 0.264 of it, 242 at most), the crest's
+/// middle 0.44 of the way down.
+fn level_up_burst(p: &egui::Painter, ctx: &egui::Context, area: Rect, b: &Burst, t: f32, tier: usize, col: Color32) {
+    // (Over the casino's page only: 0.13.28 draws nothing on the sidebar, rays neither.)
+    let p = &p.with_clip_rect(area);
+    let k = (area.height() / 800.0).min(242.0 / 211.2);
+    let c = pos2(area.center().x, area.top() + area.height() * 0.44);
+    // In over 0.23 s, out over the last 0.6 s.
+    let fade = (t / 0.23).min(1.0).min(((BURST_SECS - t) / 0.6).clamp(0.0, 1.0));
+    // The page darkens; eighteen rays of the tier's color, 6° each, turn slowly behind.
+    p.rect_filled(area, 0.0, Color32::from_black_alpha((139.0 * fade).round() as u8));
+    let rays = 18;
+    let reach = area.width().hypot(area.height());
+    for i in 0..rays {
+        let a0 = i as f32 / rays as f32 * std::f32::consts::TAU + t * 0.254;
+        let a1 = a0 + std::f32::consts::TAU / rays as f32 * 0.3;
+        let pts = vec![c, c + vec2(a0.cos(), a0.sin()) * reach, c + vec2(a1.cos(), a1.sin()) * reach];
+        p.add(egui::Shape::convex_polygon(pts, col.gamma_multiply(0.05 * fade), Stroke::NONE));
+    }
+    // A ring goes out from it, thinning and fading (whole from the start: it doesn't fade in).
+    let u = t / 0.93;
+    if u < 1.0 {
+        let w = 8.5 * (1.0 - u) * k;
+        let mid = (100.0 + 250.0 * (1.0 - (1.0 - u).powi(3))) * k;
+        // (egui strokes a circle outside its radius.)
+        p.circle_stroke(c, mid - w / 2.0, Stroke::new(w, col.gamma_multiply(0.95 * (1.0 - u))));
+    }
+    // The crest pops in, past its size and back; four faint discs of the tier's color round it.
+    let size = 211.2 * k * ease_out_back((t - 0.09) / 0.57, 1.2);
+    if size > 0.0 {
+        for i in (0..4).rev() {
+            p.circle_filled(c, size * (0.4835 + 0.0812 * i as f32), col.gamma_multiply(0.05 * fade));
+        }
+        crest_tinted(p, ctx, tier, Rect::from_center_size(c, vec2(size, size)), Color32::WHITE.gamma_multiply(fade));
+    }
+    // "LEVEL 11" pops in after it, white edged in the tier's color.
+    let pop = ease_out_back((t - 0.42) / 0.43, 1.2);
+    if pop > 0.0 {
+        outlined(p, pos2(c.x, c.y + 129.6 * k), &format!("LEVEL {}", b.level), theme::bold_font(59.5 * k * pop), Color32::WHITE.gamma_multiply(fade), col.gamma_multiply(fade));
+    }
+    // The level's title (its size doesn't grow with the page, its place does).
+    p.text(pos2(c.x, c.y + 182.5 * k), Align2::CENTER_CENTER, levels::title(b.level), theme::bold_font(16.0), col.gamma_multiply(fade));
+    // The chips it paid, counting up from 0.78 s, over a second.
+    if b.chips > 0 && t >= 0.78 {
+        let x = (t - 0.78).min(1.0);
+        let shown = (b.chips as f64 * (1.0 - (1.0 - x as f64).powi(3))).round() as u64;
+        outlined(p, pos2(c.x, c.y + 230.4 * k), &format!("+{} chips", chips_text(shown)), theme::bold_font(36.5 * k), crate::casino::col::GOLD2.gamma_multiply(fade), Color32::from_black_alpha((200.0 * fade) as u8));
     }
 }
 

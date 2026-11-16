@@ -390,13 +390,8 @@ impl PyrApp {
                 self.poker.casino.plinko.next_at = None;
             }
         }
-        // The balance: the chips with the balls still falling not yet won.
-        let falling: u64 = self.poker.casino.plinko.balls.iter().filter(|b| !b.landed).map(|b| b.o.paid).sum();
-        if falling > 0 {
-            self.poker.casino.hold = Some((super::chips_now(s).saturating_sub(falling), now + Duration::from_secs(10)));
-        } else if self.poker.casino.hold.is_some() && self.poker.casino.plinko.balls.iter().all(|b| b.landed) {
-            self.poker.casino.settle_balance();
-        }
+        // (The balance isn't held while a ball falls: it counts to what the ball pays as it's
+        // dropped, and a level reached shows at once, as 0.13.28's do, filmed side by side.)
         // The last buckets, newest at the top of the column on the right, in their buckets'
         // colors (the older ones dimmer).
         let mut y = board_r.top() + 35.0;
