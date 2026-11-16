@@ -1137,6 +1137,19 @@ How (decided while starting it):
         it" and it's a big one (0.13.4). Unverified: the waits at a real PC's frame rate (here a
         frame is about 80 ms, so the rebuild's came 0.05 to 0.1 s late, as anything timed by
         frames does here).
+- [~] 0.13.28's words, all of them (2026-11-16, `rebuild/measured/strings-gaps.md`, tools in
+      `rebuild/tools/strdiff`): its strings set beside every literal of the rebuild's, both ways.
+      Done, each pointed at or filmed in 0.13.28 and matched in the rebuild: the poker table's
+      tips (bar, menu with its "…", pre-action boxes, Rebuy, Add chips, Fill the seats), the
+      casino's (menu bar and game bar Keys, Ember Back, Plinko's Drop a ball and Start
+      autoplay, the lobby's Close), dominó ("Pulling up a chair…", the Havana regulars, its
+      refusals as 0.13.28's server words them), a game's invite card (pixel for pixel), the
+      attach button in direct messages; tips the rebuild made up are gone; Plinko's buttons
+      don't light when pointed at. Left in the list: slot and craps words seen only in rounds
+      that have to be set up (the remastered machines' callouts, "Buys off on come-out"),
+      a tournament's ordinals and "Table in", the bot picker's words in New table, the
+      settings search words, the add-on template and skin guide texts, the server setup
+      script's words.
 
 ### New in the rebuild
 - [x] Prop bets in chat, shared: one market per prop for everyone in the channel, Pyr Casino
