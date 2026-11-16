@@ -129,14 +129,18 @@ pub fn picture(ui: &mut egui::Ui, area: Rect, bots: &[Option<Pick>], title: &str
             p.text(at, Align2::CENTER_CENTER, "You", theme::bold_font(12.0), Color32::WHITE);
             continue;
         }
-        let r = Rect::from_center_size(at, vec2(SEAT_R * 2.0, SEAT_R * 2.0));
+        // (Pointed at 4 past the seat's edge, as 0.13.28's: its words come 4 lower and further left.)
+        let r = Rect::from_center_size(at, vec2(SEAT_R * 2.0 + 8.0, SEAT_R * 2.0 + 8.0));
         let resp = ui.interact(r, ui.id().with(("new-table-seat", i)), Sense::click());
         match &bots[i] {
             None => {
-                p.circle_filled(at, SEAT_R, Color32::from_black_alpha(90));
-                super::table::dashed_circle(&p, at, SEAT_R, Stroke::new(1.5f32, theme::DIM()));
-                crate::icons::plus(&p, Rect::from_center_size(at, vec2(14.0, 14.0)), theme::DIM().gamma_multiply(0.8), 2.0);
-                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                // (Pointed at: darker inside, its ring and + light, as 0.13.28's.)
+                let hot = resp.hovered();
+                p.circle_filled(at, SEAT_R, Color32::from_black_alpha(if hot { 140 } else { 90 }));
+                super::table::dashed_circle(&p, at, SEAT_R, Stroke::new(1.5f32, if hot { theme::TEXT() } else { theme::DIM() }));
+                crate::icons::plus(&p, Rect::from_center_size(at, vec2(14.0, 14.0)), if hot { theme::TEXT() } else { theme::DIM().gamma_multiply(0.8) }, 2.0);
+                // (0.13.28's words on an empty seat, pointed at.)
+                if resp.on_hover_text("Put a bot here").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                     click = Some(Click::Seat(i));
                 }
             }
@@ -151,11 +155,13 @@ pub fn picture(ui: &mut egui::Ui, area: Rect, bots: &[Option<Pick>], title: &str
                 let x = at + vec2(18.0, -18.0);
                 let xr = Rect::from_center_size(x, vec2(16.0, 16.0));
                 let xresp = ui.interact(xr, ui.id().with(("new-table-remove", i)), Sense::click());
-                p.circle_filled(x, 8.0, BADGE);
+                // (Red when pointed at, with its words; the seat's own words elsewhere on it:
+                // 0.13.28's, pointed at.)
+                p.circle_filled(x, 8.0, if xresp.hovered() { Color32::from_rgb(208, 48, 58) } else { BADGE });
                 crate::icons::close(&p, Rect::from_center_size(x, vec2(8.0, 8.0)), Color32::from_gray(210));
-                if xresp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                if xresp.on_hover_text("Empty this seat").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                     click = Some(Click::Remove(i));
-                } else if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                } else if resp.on_hover_text("Change this bot").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                     click = Some(Click::Seat(i));
                 }
             }
