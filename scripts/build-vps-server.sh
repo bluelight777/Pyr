@@ -34,8 +34,8 @@ for ARCH in "${ARCHES[@]}"; do
     UPPER=$(echo "$TARGET" | tr 'a-z-' 'A-Z_')
     export "CARGO_TARGET_${UPPER}_RUSTFLAGS=-C link-self-contained=no"
   fi
-  cargo zigbuild --release -p pyr-server -p pyr-directory --target "$TARGET" "${EXTRA[@]}" --target-dir "$ROOT/target-musl"
-  for BIN in pyr-server pyr-directory; do
+  cargo zigbuild --release -p pyr-server -p pyr-directory -p pyr-keeper --target "$TARGET" "${EXTRA[@]}" --target-dir "$ROOT/target-musl"
+  for BIN in pyr-server pyr-directory pyr-keeper; do
     cp "$ROOT/target-musl/$TARGET/release/$BIN" "$ROOT/dist/vps/$BIN-linux-$ARCH"
     echo "built dist/vps/$BIN-linux-$ARCH"
   done

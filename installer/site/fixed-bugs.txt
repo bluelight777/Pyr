@@ -1,22 +1,2 @@
-125 My voice went up and down for the others (0.11.0). Fixed in 0.12.0 (echo cancellation stands aside with headphones, and only takes out what's left of the echo where it's as loud as your voice); in 0.13.0 voice isolation keeps it on, so nothing echoes.
-126 My voice went up and down for the others (0.11.0). Fixed in 0.12.0 (echo cancellation stands aside with headphones, and only takes out what's left of the echo where it's as loud as your voice); in 0.13.0 voice isolation keeps it on, so nothing echoes.
-127 My voice went up and down for the others (0.11.0). Fixed in 0.12.0 (echo cancellation stands aside with headphones, and only takes out what's left of the echo where it's as loud as your voice); in 0.13.0 voice isolation keeps it on, so nothing echoes.
-128 My voice went up and down for the others (0.11.0). Fixed in 0.12.0 (echo cancellation stands aside with headphones, and only takes out what's left of the echo where it's as loud as your voice); in 0.13.0 voice isolation keeps it on, so nothing echoes.
-134 My voice went up and down for the others (0.11.0). Fixed in 0.12.0 (echo cancellation stands aside with headphones, and only takes out what's left of the echo where it's as loud as your voice); in 0.13.0 voice isolation keeps it on, so nothing echoes.
-135 My voice went up and down for the others (0.11.0). Fixed in 0.12.0 (echo cancellation stands aside with headphones, and only takes out what's left of the echo where it's as loud as your voice); in 0.13.0 voice isolation keeps it on, so nothing echoes.
-136 My voice went up and down for the others (0.11.0). Fixed in 0.12.0 (echo cancellation stands aside with headphones, and only takes out what's left of the echo where it's as loud as your voice); in 0.13.0 voice isolation keeps it on, so nothing echoes.
-137 My voice went up and down for the others (0.11.0). Fixed in 0.12.0 (echo cancellation stands aside with headphones, and only takes out what's left of the echo where it's as loud as your voice); in 0.13.0 voice isolation keeps it on, so nothing echoes.
-129 "There's a prize box on this table already". Fixed in 0.13.0: the prize box's Drop button turns off once the table has one; and a prize box goes to whoever wins the hand, a bot included, so it never sits there.
-130 "Ember Crown isn't yours yet" for a look won from a prize box. Fixed in 0.12.0's server: a prize box's or a Game Master's look is yours once given.
-131 "Ember Crown isn't yours yet" for a look won from a prize box. Fixed in 0.12.0's server: a prize box's or a Game Master's look is yours once given.
-132 "Ember Crown isn't yours yet" for a look won from a prize box. Fixed in 0.12.0's server: a prize box's or a Game Master's look is yours once given.
-133 "... has no skin.json" when trying a skin. Fixed in 0.13.0: a skin a level or two inside the folder you pick is found, and picking a folder with none says so without sending a report.
-138 "Not connected right now" just as the server restarted for an update. Fixed in 0.13.0: what's asked in the second or two a server takes to restart waits for it to come back.
-139 "Banker here is 10 to 1000" at baccarat. Fixed in 0.13.0: bets are fitted to the table's limits before they go (a small chip, or a rebet from another table).
-140 "Banker here is 10 to 1000" at baccarat. Fixed in 0.13.0: bets are fitted to the table's limits before they go (a small chip, or a rebet from another table).
-141 "Banker here is 10 to 1000" at baccarat. Fixed in 0.13.0: bets are fitted to the table's limits before they go (a small chip, or a rebet from another table).
-142 "Player here is ... to ..." at baccarat. Fixed in 0.13.0: bets are fitted to the table's limits before they go.
-143 "Player here is ... to ..." at baccarat. Fixed in 0.13.0: bets are fitted to the table's limits before they go.
-144 "Player here is ... to ..." at baccarat. Fixed in 0.13.0: bets are fitted to the table's limits before they go.
-145 "Player here is ... to ..." at baccarat. Fixed in 0.13.0: bets are fitted to the table's limits before they go.
-146 "The pass line here is 10 to 1000" at craps. Fixed in 0.13.0: bets are fitted to the table's limits before they go.
+668 Pyr stopped responding (as it closed to update). Fixed in 0.14.0: the update's installer is no longer checked on the window's thread as Pyr quits, and a pause it quits out of isn't reported.
+670 Pyr stopped responding (the window opened again after the graphics card went away). Fixed in 0.14.0: that moment isn't watched, so it isn't reported.

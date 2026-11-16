@@ -194,6 +194,19 @@ HARDEN
     if [ -z "$NEW_V" ]; then
       echo "The new guild server program won't run on this VPS; left the old one alone." >&2
     elif ! cmp -s "$NEW" "$BIN" || [ -n "$NEW_DROPIN" ]; then
+      # The database as the program before left it, kept beside it before the new program
+      # opens it (the service stopped while it's copied). To go back: stop the service, copy
+      # these files back over pyr.db*, put $BIN.previous back as $BIN and start it.
+      DATA=$(systemctl show -p ExecStart "$SVC" 2>/dev/null | sed -n 's/.*--data \([^ ;]*\).*/\1/p' | head -n 1)
+      if [ -n "$DATA" ] && [ -f "$DATA/pyr.db" ] && ! cmp -s "$NEW" "$BIN"; then
+        KEEP="$DATA/before-$(printf %s "$NEW_V" | tr -c 'A-Za-z0-9.' '-' | cut -c1-40)-$(date +%Y%m%d-%H%M%S)"
+        systemctl stop "$SVC" || true
+        mkdir -p "$KEEP"
+        for X in pyr.db pyr.db-wal pyr.db-shm; do
+          if [ -e "$DATA/$X" ]; then cp -a "$DATA/$X" "$KEEP/"; fi
+        done
+        echo "The guild server's database as it was is kept in $KEEP"
+      fi
       cp -f "$BIN" "$BIN.previous"
       install -m 0755 "$NEW" "$BIN.new"
       mv -f "$BIN.new" "$BIN"
