@@ -27,6 +27,8 @@ const ROW_S: f32 = 0.1;
 const LAND_S: f32 = 0.1;
 /// How long a struck peg stays lit (0.13.28's, filmed).
 const LIT_S: f32 = 0.4;
+/// How long a landing's multiple floats over its bucket (0.13.28's, filmed: it fades to nothing).
+const FLOAT_S: f32 = 1.4;
 
 /// The column on the board's right for the last results, and how many it shows.
 const RESULTS_W: f32 = 70.0;
@@ -295,7 +297,7 @@ impl PyrApp {
                     r = r.translate(vec2(0.0, (std::f32::consts::PI * t / 0.42).sin() * b.dx * 0.2));
                 }
                 flash = (1.0 - t / 0.65).max(0.0) * 0.34;
-                if t < 1.3 {
+                if t < FLOAT_S {
                     floats.push((b.bucket(k), *m, t));
                 }
             }
@@ -316,13 +318,16 @@ impl PyrApp {
             let size = (b.dx * per).clamp(7.5, 16.0);
             p.text(r.center(), Align2::CENTER_CENTER, text, theme::bold_font(size), Color32::from_rgb(0x2a, 0x08, 0x04));
         }
+        // The multiple floating up from the bucket a ball landed in (0.13.28's, filmed at 8 and 16
+        // rows and caught at 3x): bold 15, light gold for a win and salmon for a loss, with a
+        // black edge (glow_text's, at 160); from 11.4 over the bucket it rises 40.65 in its first
+        // second, easing out, the same at every size, and fades from the landing to nothing.
         for (r, m, t) in floats {
-            let a = if t < 0.35 { 1.0 } else { (1.0 - (t - 0.35) / 0.95).max(0.0) };
-            let rise = 1.0 - (1.0 - (t / 1.3).min(1.0)).powi(3);
-            let at = r.center_top() - vec2(0.0, b.dx * 0.45 + b.dx * 0.7 * rise);
-            let font = theme::bold_font((b.dx * 0.32).clamp(12.0, 16.0));
-            p.text(at + vec2(1.0, 1.5), Align2::CENTER_BOTTOM, label(m), font.clone(), Color32::from_rgba_unmultiplied(0x1a, 0x08, 0x08, (170.0 * a) as u8));
-            p.text(at, Align2::CENTER_BOTTOM, label(m), font, Color32::from_rgb(0xf0, 0x94, 0x7c).gamma_multiply(a));
+            let a = (1.0 - t / FLOAT_S).max(0.0);
+            let rise = 1.0 - (1.0 - t.min(1.0)).powi(3);
+            let at = pos2(r.center().x, r.top() - 11.4 - 40.65 * rise);
+            let c = if m >= 100 { col::GOLD2 } else { Color32::from_rgb(0xff, 0x9a, 0x6a) };
+            super::glow_text(&p, at, Align2::CENTER_CENTER, &label(m), theme::bold_font(15.0), c.gamma_multiply(a), Color32::from_black_alpha((160.0 * a) as u8));
         }
         // The balls, falling.
         let mut struck: Vec<(u8, u8)> = Vec::new();
@@ -355,7 +360,7 @@ impl PyrApp {
             pu.lit.insert(k, now);
         }
         pu.lit.retain(|_, t| (now - *t).as_secs_f32() < LIT_S + 0.05);
-        pu.bounced.retain(|_, t| (now - *t).as_secs_f32() < 1.4);
+        pu.bounced.retain(|_, t| (now - *t).as_secs_f32() < FLOAT_S);
         pu.balls.retain(|b| !b.landed || (now - b.start).as_secs_f32() < fall_s(b.o.path.len()) + 0.2);
         // Each peg its row's note; a bucket its own, louder when it pays more than the ball cost
         // (and no other win sound), as 0.13.28's.
