@@ -893,6 +893,27 @@ fn fall(u: f32) -> f32 {
     if u < 0.78 { (u / 0.78).powi(2) } else { 1.0 - 0.07 * ((u - 0.78) / 0.22 * std::f32::consts::PI).sin() }
 }
 
+/// What the tag under screen `k`'s win says, `since` seconds into the `dur` it's lit (0.13.28's):
+/// "WIN n", or a tumble's "TUMBLE WIN n" (a tumbling chain's win so far). A win of two symbols or
+/// more (a tumble's aside) then says what each paid, in turn: "WIN 46", "Moon × 3 · 2 ways ·
+/// 21", "Ringed planet × 4 · 1 way · 25", each for an equal share of the time it's lit.
+fn lit_text(o: &rm::Outcome, th: &Theme, k: usize, since: f32, dur: f32) -> String {
+    let s = &o.steps[k];
+    let tumble = rm::family(o.machine) == Family::Tumble;
+    let total = match (tumble, k) {
+        (true, 0) => format!("WIN {}", chips_text(chain_won(o, 0))),
+        (true, _) => return format!("TUMBLE WIN {}", chips_text(chain_won(o, k))),
+        _ => format!("WIN {}", chips_text(s.wins.iter().map(|w| w.pay).sum())),
+    };
+    let n = s.wins.len();
+    let i = ((since / dur.max(0.01)).clamp(0.0, 1.0) * (n + 1) as f32) as usize;
+    if n < 2 || i == 0 {
+        return total;
+    }
+    let w = &s.wins[(i - 1).min(n - 1)];
+    format!("{} × {} · {} way{} · {}", th.symbols[w.symbol as usize], w.count, w.ways, if w.ways == 1 { "" } else { "s" }, chips_text(w.pay))
+}
+
 /// A tumbling chain's win to screen `k` (0.13.28's tags count it up: "WIN 25", "TUMBLE WIN 46",
 /// "TUMBLE WIN 71"...).
 fn chain_won(o: &rm::Outcome, k: usize) -> u64 {
@@ -1078,13 +1099,7 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
             lit = l;
             draw_cells(&clip, ctx, b, m, o.bet, s, 0, lit, &ys, accent, time);
             if let Some((r, row)) = at {
-                let won: u64 = s.wins.iter().map(|w| w.pay).sum();
-                // (A tumbling chain's: what it's won so far, a tumble's "TUMBLE WIN".)
-                let text = match (fam, k) {
-                    (Family::Tumble, 0) => format!("WIN {}", chips_text(chain_won(o, 0))),
-                    (Family::Tumble, _) => format!("TUMBLE WIN {}", chips_text(chain_won(o, k))),
-                    _ => format!("WIN {}", chips_text(won)),
-                };
+                let text = lit_text(o, th, k, since, dur);
                 let c = b.cell_at(r as f32, row as f32);
                 // (Its foot on the winner's.)
                 let size = (b.cell * 0.147).clamp(12.0, 26.0);
@@ -1868,6 +1883,60 @@ mod tests {
             }).collect();
             assert_eq!(ticks, (0..order.len() as i16).map(|j| 150 * j).collect::<Vec<_>>());
         }
+    }
+
+    /// The tag under a win, as 0.13.28's: a win of two symbols or more says its total, then what
+    /// each paid, an equal share of the time each; a tumble's says the chain's win so far, and
+    /// only that; a respin's (here the Spotlight's) is broken down like a first screen's.
+    #[test]
+    fn a_win_of_two_symbols_or_more_says_what_each_paid() {
+        use pyr_poker::casino::feature::Feature;
+        use pyr_poker::fair::{Stream, seed_from};
+        let texts = |o: &rm::Outcome, k: usize, dur: f32| -> Vec<String> {
+            let th = theme(o.machine);
+            let mut out: Vec<String> = Vec::new();
+            for i in 0..100 {
+                let t = lit_text(o, th, k, dur * i as f32 / 100.0, dur);
+                if out.last() != Some(&t) {
+                    out.push(t);
+                }
+            }
+            out
+        };
+        let (mut first, mut tumble, mut respin) = (false, false, false);
+        for seed in 0..4000u64 {
+            let cosmic = rm::play(2, 100, Feature::Spin, false, &mut Stream::new(seed_from(seed)));
+            for (k, s) in cosmic.steps.iter().enumerate().filter(|(_, s)| s.wins.len() >= 2) {
+                let t = texts(&cosmic, k, 0.75);
+                if k == 0 {
+                    first = true;
+                    let total: u64 = s.wins.iter().map(|w| w.pay).sum();
+                    assert_eq!(t.len(), s.wins.len() + 1, "{t:?}");
+                    assert_eq!(t[0], format!("WIN {}", chips_text(total)));
+                    let w = &s.wins[0];
+                    let ways = if w.ways == 1 { "1 way".to_string() } else { format!("{} ways", w.ways) };
+                    assert_eq!(t[1], format!("{} × {} · {ways} · {}", theme(2).symbols[w.symbol as usize], w.count, chips_text(w.pay)));
+                    // Each an equal share: the second text from a third of the way (two symbols).
+                    if s.wins.len() == 2 {
+                        assert!(lit_text(&cosmic, theme(2), k, 0.24, 0.75).starts_with("WIN"));
+                        assert!(lit_text(&cosmic, theme(2), k, 0.26, 0.75).contains(" × "));
+                        assert!(lit_text(&cosmic, theme(2), k, 0.51, 0.75).contains(theme(2).symbols[s.wins[1].symbol as usize]));
+                    }
+                } else {
+                    tumble = true;
+                    assert_eq!(t, vec![format!("TUMBLE WIN {}", chips_text(chain_won(&cosmic, k)))]);
+                }
+            }
+            let starlight = rm::play(11, 100, Feature::Spin, false, &mut Stream::new(seed_from(seed)));
+            for (k, s) in starlight.steps.iter().enumerate().skip(1).filter(|(_, s)| s.wins.len() >= 2) {
+                respin = true;
+                assert_eq!(texts(&starlight, k, 1.0).len(), s.wins.len() + 1);
+            }
+            if first && tumble && respin {
+                return;
+            }
+        }
+        panic!("not found: first {first}, tumble {tumble}, respin {respin}");
     }
 
     /// Each machine's stops climb its own scale, as heard off 0.13.28 (Reel Row's order).

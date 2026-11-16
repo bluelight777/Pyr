@@ -465,7 +465,11 @@ How (decided while starting it):
       at six page sizes each): "SPIN n / 10  ·  TUMBLE k" in a pill over the reels' top left,
       "TUMBLE k" in an ordinary spin's tumbles (lettering 0.18 of a cell, at most 26; its foot
       the same height over the reels whatever the lettering's; corners of 14, an edge of 1.5);
-      "WIN n", "TUMBLE WIN n" under the reels; a Bomb Spin's bombs over a dimmed board,
+      "WIN n", "TUMBLE WIN n" under the reels (a win of two symbols or more then says what
+      each paid, in the symbols' order, each an equal share of the time it's lit: "WIN 46",
+      "Moon × 3 · 2 ways · 21", "Ringed planet × 4 · 1 way · 25"; a respin's too, a tumble's
+      never: filmed on Cosmic Jackpot, Scoville Slots and Starlight Cabaret, Nov 16, at 30
+      frames a second); a Bomb Spin's bombs over a dimmed board,
       "MULTIPLIER ×N AND BUILDING" counting as each is added, "W × M = T" at its end, and no
       badge of the rebuild's own. The MULTIPLIER panel right of the reels (the machine's bomb
       with what the multiplier stands at, "STAYS ALL SPINS"): no bigger than a cell of 124
