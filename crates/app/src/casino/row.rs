@@ -75,6 +75,9 @@ pub struct RowUi {
     tease: Option<usize>,
     /// Bomb Spins being played on screen, a free spin after another.
     free: Option<FreePlay>,
+    /// Bomb Spins over: its count and what it built, shown till the next round (0.13.28's
+    /// "SPIN 10 / 10" and multiplier stay up).
+    free_last: Option<(usize, u32)>,
     /// A Remastered machine's bonus, bought or won: its splash's start, its name and its line
     /// (0.13.28's, over the whole page before the mini game).
     splash: Option<(Instant, String, String)>,
@@ -126,6 +129,7 @@ impl Default for RowUi {
             tease: None,
             free: None,
             splash: None,
+            free_last: None,
         }
     }
 }
@@ -257,6 +261,7 @@ impl PyrApp {
             ui.showing = None;
             ui.mini = None;
             ui.splash = None;
+            ui.free_last = None;
             ui.all_in = None;
             ui.auto.stop();
             ui.counted = None;
@@ -626,6 +631,7 @@ impl PyrApp {
             return;
         }
         let fp = self.poker.casino.row.free.take().unwrap();
+        self.poker.casino.row.free_last = Some((fp.o.free.len(), fp.o.free.last().map(|f| f.mult).unwrap_or(0)));
         let o = fp.o;
         self.poker.casino.row.counted = Some(now);
         self.poker.casino.row.win = o.paid;
@@ -678,6 +684,7 @@ impl PyrApp {
         ui.showing = None;
         ui.mini = None;
         ui.splash = None;
+        ui.free_last = None;
         ui.all_in = None;
         ui.counted = None;
         ui.stopped_at = None;
@@ -803,17 +810,29 @@ impl PyrApp {
                 let i = fp.next.saturating_sub(1);
                 let shown = fp.o.free.len().min(fp.next.max(1));
                 let total = remaster::FREE_SPINS + remaster::MORE_SPINS * fp.o.free[..shown].iter().filter(|f| f.more).count();
-                rmshow::free_counter(&p, &board, i, total.max(i + 1), st.font, th.accent);
-                let landed = self.poker.casino.row.rm.as_ref().is_some_and(|r| now >= r.landed);
-                if !landed && i > 0 {
-                    rmshow::free_badge(&p, &ctx, &board, m, fp.o.free[i - 1].mult);
-                }
+                let tumble = self.poker.casino.row.rm.as_ref().and_then(|r| r.tumble(now));
+                rmshow::free_counter(&p, &board, i, total.max(i + 1), tumble, st.font, th.accent);
+                // The multiplier beside the reels: as it stood, as it builds.
+                let mult = match self.poker.casino.row.rm.as_ref().filter(|r| r.free.is_some()) {
+                    Some(show) => show.free_mult(now).unwrap_or(0),
+                    None => i.checked_sub(1).map(|j| fp.o.free[j].mult).unwrap_or(0),
+                };
+                rmshow::mult_panel(&p, &ctx, &board, m, st.font, th.accent, mult);
                 if let Some(ended) = fp.ended {
                     let a = (now.saturating_duration_since(ended).as_secs_f32() / 0.3).min(1.0);
                     let built = fp.o.free.last().map(|f| f.mult).unwrap_or(0);
                     rmshow::free_summary(&p, &board, fp.o.free.len(), built, fp.o.paid, st.font, th.accent, a);
                 }
             }
+        }
+        // Bomb Spins just over: its count and its multiplier stay up till the next round.
+        if self.poker.casino.row.free.is_none()
+            && let Some((spins, built)) = self.poker.casino.row.free_last
+            && !in_mini
+        {
+            let board = rmshow::Board { reels: lay.reels, cell: lay.cell, gap: lay.gap, area };
+            rmshow::free_counter(&p, &board, spins.saturating_sub(1), spins, None, st.font, th.accent);
+            rmshow::mult_panel(&p, &ctx, &board, m, st.font, th.accent, built);
         }
         // Its top prize, top middle: a progressive jackpot's pool, counting, or how far it goes.
         if !in_mini && !in_all_in && !holding {

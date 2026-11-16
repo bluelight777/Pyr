@@ -119,6 +119,39 @@ impl RmShow {
         matches!(self.at(now), Some((_, Ev::HoldSplash | Ev::Hold(_) | Ev::HoldCount | Ev::HoldEnd | Ev::Grand, ..)))
     }
 
+    /// The tumble showing, from the chain's second screen (0.13.28's pill: "TUMBLE 2", "SPIN 8 /
+    /// 10  ·  TUMBLE 2"): while a screen after the first lights its win, bursts and drops.
+    pub fn tumble(&self, now: Instant) -> Option<usize> {
+        match self.at(now) {
+            Some((_, Ev::Lit(k) | Ev::Burst(k) | Ev::Drop(k), ..)) if k >= 1 && rm::family(self.o.machine) == Family::Tumble => Some(k + 1),
+            _ => None,
+        }
+    }
+
+    /// Bomb Spins' multiplier as it stands during this free spin: what it was, counting up as
+    /// this spin's bombs are added, then what it came to.
+    pub fn free_mult(&self, now: Instant) -> Option<u32> {
+        let f = self.free?;
+        let add = self.events.iter().position(|e| e.1 == Ev::FreeAdd);
+        Some(match (self.at(now), add) {
+            (None, _) => f.before,
+            (Some((_, Ev::FreeAdd, since, _)), _) => {
+                let k = if self.turbo { 0.5 } else { 1.0 };
+                let mut sum = f.before;
+                if let Some(s) = self.o.steps.last() {
+                    for (j, (.., v)) in bombs(s).iter().enumerate() {
+                        if since >= 0.25 * k + (j + 1) as f32 * 0.28 * k {
+                            sum += v;
+                        }
+                    }
+                }
+                sum.min(f.after)
+            }
+            (Some((i, ..)), Some(a)) if i < a => f.before,
+            _ => f.after,
+        })
+    }
+
     /// When the reels' part is over (from the landing).
     pub fn done_at(&self) -> Instant {
         self.landed + Duration::from_secs_f32(self.events.last().map(|e| e.0).unwrap_or(0.0))
@@ -706,7 +739,6 @@ impl Board {
     }
 }
 
-/// A Hot Wild's reel (Scoville's pepper in flames, 0.13.28's), `grow` of the way filled from
 /// A Hot Wild's reel (Scoville's pepper in flames, 0.13.28's): the picture rising from the
 /// reel's foot over what landed (`t` seconds into its filling; infinite once filled), "HOT
 /// WILDS ×N" at its foot while it fills, then its multiplier on top and "HOT WILD" at its foot.
@@ -851,6 +883,17 @@ fn drops(a: &rm::Step, r: usize) -> ([f32; ROWS], usize) {
 fn fall(u: f32) -> f32 {
     let u = u.clamp(0.0, 1.0);
     if u < 0.78 { (u / 0.78).powi(2) } else { 1.0 - 0.07 * ((u - 0.78) / 0.22 * std::f32::consts::PI).sin() }
+}
+
+/// A tumbling chain's win to screen `k` (0.13.28's tags count it up: "WIN 25", "TUMBLE WIN 46",
+/// "TUMBLE WIN 71"...).
+fn chain_won(o: &rm::Outcome, k: usize) -> u64 {
+    o.steps.iter().take(k + 1).flat_map(|s| s.wins.iter()).map(|w| w.pay).sum()
+}
+
+/// The bombs on a screen, as cells lit (the board dimmed round them).
+fn bomb_cells(s: &rm::Step) -> u16 {
+    bombs(s).iter().fold(0u16, |m, &(r, row, _)| m | 1 << (r * ROWS + row))
 }
 
 /// Every bomb on a screen, with what it's worth.
@@ -1023,10 +1066,16 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
             draw_cells(&clip, ctx, b, m, o.bet, s, 0, lit, &ys, accent, time);
             if let Some((r, row)) = at {
                 let won: u64 = s.wins.iter().map(|w| w.pay).sum();
+                // (A tumbling chain's: what it's won so far, a tumble's "TUMBLE WIN".)
+                let text = match (fam, k) {
+                    (Family::Tumble, 0) => format!("WIN {}", chips_text(chain_won(o, 0))),
+                    (Family::Tumble, _) => format!("TUMBLE WIN {}", chips_text(chain_won(o, k))),
+                    _ => format!("WIN {}", chips_text(won)),
+                };
                 let c = b.cell_at(r as f32, row as f32);
                 // (Its foot on the winner's.)
                 let size = (b.cell * 0.147).clamp(12.0, 26.0);
-                win_tag(p, pos2(c.center().x, c.bottom() - size), &format!("WIN {}", chips_text(won)), st.font, size, accent);
+                win_tag(p, pos2(c.center().x, c.bottom() - size), &text, st.font, size, accent);
             }
             return;
         }
@@ -1146,13 +1195,16 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
         }
         Ev::FreeAdd | Ev::FreeWin | Ev::FreeMore if show.free.is_some() => {
             let f = show.free.unwrap();
-            draw_cells(&clip, ctx, b, m, o.bet, s, 0, 0, &ys, accent, time);
-            let badge_at = pos2(b.reels.right() - b.cell * 0.15, b.reels.top() - b.cell * 0.28);
-            // (0.13.28's notes during Bomb Spins: a little higher and bigger than a win's tag.)
-            let fs = (b.cell * 0.147).clamp(12.0, 26.0);
-            let foot = pos2(b.reels.center().x, b.reels.bottom() - b.cell * 0.23);
+            // (0.13.28's: no badge in Bomb Spins; the board dimmed, this spin's bombs aglow where
+            // they are, the multiplier counted in the note.)
+            let lit = if ev == Ev::FreeMore { 0 } else { bomb_cells(s) };
+            draw_cells(&clip, ctx, b, m, o.bet, s, 0, lit, &ys, accent, time);
+            // (0.13.28's notes and tags during Bomb Spins: the machine's lettering at 24 where the
+            // reels are 161 a cell, their middle 2 lower than the rebuild had them.)
+            let fs = (b.cell * 0.15).clamp(12.0, 24.0);
+            let foot = pos2(b.reels.center().x, b.reels.bottom() - b.cell * 0.218);
             let note = |text: &str, a: f32| {
-                let g = p.layout_no_wrap(text.to_string(), theme::display_font(st.font, (b.cell * 0.127).clamp(12.0, 26.0)), faded(col::GOLD2, a));
+                let g = p.layout_no_wrap(text.to_string(), theme::display_font(st.font, fs), faded(col::GOLD2, a));
                 let r = Rect::from_center_size(foot, g.size() + vec2(32.0, 12.0));
                 p.rect_filled(r, theme::r((r.height() / 2.0) as u8), Color32::from_black_alpha((215.0 * a) as u8));
                 p.rect_stroke(r, theme::r((r.height() / 2.0) as u8), Stroke::new(1.0f32, faded(accent, 0.8 * a)), StrokeKind::Inside);
@@ -1160,45 +1212,36 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
             };
             match ev {
                 Ev::FreeAdd => {
-                    // This spin's bombs flying up into the multiplier, which counts up.
+                    // The multiplier counting up as each of this spin's bombs is added (from what
+                    // it was: "MULTIPLIER ×0 AND BUILDING" first, as 0.13.28's), each bomb flaring.
                     let per = 0.28 * if show.turbo { 0.5 } else { 1.0 };
-                    let mut sum = f.before;
-                    for (j, (r, row, v)) in bombs(s).iter().enumerate() {
+                    for (j, (r, row, _)) in bombs(s).iter().enumerate() {
                         let t0 = 0.25 * if show.turbo { 0.5 } else { 1.0 } + j as f32 * per;
-                        let rect = b.cell_at(*r as f32, *row as f32);
-                        if since >= t0 + per {
-                            sum += v;
-                            continue;
-                        }
-                        if since >= t0 {
+                        if since >= t0 && since < t0 + per {
                             let q = ((since - t0) / per).clamp(0.0, 1.0);
-                            let at = rect.center() + (badge_at - rect.center()) * ease_out(q);
-                            radial(p, rect.center(), b.cell * 0.6, faded(accent, 0.5 * (1.0 - q)), Color32::TRANSPARENT);
-                            label(p, at, &format!("{v}×"), theme::bold_font((b.cell * 0.2).clamp(12.0, 30.0)), Color32::WHITE);
+                            radial(p, b.cell_at(*r as f32, *row as f32).center(), b.cell * 0.7, faded(accent, 0.6 * (1.0 - q)), Color32::TRANSPARENT);
                         }
                     }
-                    if sum >= 2 {
-                        mult_badge(p, ctx, b, m, sum.min(f.after), 1.0);
-                    }
-                    if since > 0.25 {
-                        note(&format!("MULTIPLIER ×{} AND BUILDING", f.after), ((since - 0.25) * 5.0).min(1.0));
-                    }
+                    let sum = show.free_mult(now).unwrap_or(f.after);
+                    note(&format!("MULTIPLIER ×{sum} AND BUILDING"), (since * 5.0).min(1.0));
                 }
                 Ev::FreeWin => {
-                    mult_badge(p, ctx, b, m, f.after, (since / 0.35).min(1.0));
                     win_tag(p, foot, &format!("{} × {} = {}", chips_text(f.base), f.after, chips_text(f.paid)), st.font, fs, accent);
                 }
                 _ => {
-                    if f.after >= 2 {
-                        mult_badge(p, ctx, b, m, f.after, 1.0);
-                    }
                     note("3 SCATTERS: 5 MORE SPINS", (since * 5.0).min(1.0));
                 }
             }
             return;
         }
         Ev::Bombs | Ev::Multiply => {
-            draw_cells(&clip, ctx, b, m, o.bet, s, 0, 0, &ys, accent, time);
+            // (0.13.28's: the board dimmed round the bombs; the chain's win at the foot, the
+            // bombs' total beside it as they add up, then "92 × 12 = 1,104".)
+            draw_cells(&clip, ctx, b, m, o.bet, s, 0, bomb_cells(s), &ys, accent, time);
+            let chain = chain_won(o, o.steps.len().saturating_sub(1));
+            // (Where Bomb Spins' go, and their size: 0.13.28's are one.)
+            let tag_at = pos2(b.reels.center().x, b.reels.bottom() - b.cell * 0.218);
+            let tag_size = (b.cell * 0.15).clamp(12.0, 24.0);
             let bs = bombs(s);
             let total: u32 = bs.iter().map(|x| x.2).sum();
             let per = 0.28 * if show.turbo { 0.5 } else { 1.0 };
@@ -1223,10 +1266,11 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
                 if sum > 0 {
                     mult_badge(p, ctx, b, m, sum, 1.0);
                 }
+                let text = if sum > 0 { format!("WIN {}  ×{sum}", chips_text(chain)) } else { format!("WIN {}", chips_text(chain)) };
+                win_tag(p, tag_at, &text, st.font, tag_size, accent);
             } else {
                 mult_badge(p, ctx, b, m, total, (since / 0.35).min(1.0));
-                let won = o.ways_paid;
-                win_tag(p, pos2(b.reels.center().x, b.reels.bottom() - b.cell * 0.2), &format!("×{total}  WIN {}", chips_text(won)), st.font, (b.cell * 0.147).clamp(12.0, 26.0), accent);
+                win_tag(p, tag_at, &format!("{} × {total} = {}", chips_text(chain), chips_text(o.ways_paid)), st.font, tag_size, accent);
             }
             return;
         }
@@ -1255,33 +1299,71 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
     // At rest (and as the reels' part ends).
     let fill_skip = 0;
     draw_cells(&clip, ctx, b, m, o.bet, s, fill_skip, lit, &ys, accent, time);
-    if matches!(ev, Ev::Done) && o.mult > 1 {
+    if matches!(ev, Ev::Done) && o.mult > 1 && show.free.is_none() {
         mult_badge(p, ctx, b, m, o.mult, 1.0);
     }
-    if let Some(f) = &show.free {
-        let x = if matches!(ev, Ev::Done) { f.after } else { f.before };
-        if x >= 2 {
-            mult_badge(p, ctx, b, m, x, 1.0);
-        }
+    // A tumble's pill over the reels' top left (a spin's; Bomb Spins' is its counter's).
+    if show.free.is_none()
+        && let Some(n) = show.tumble(now)
+    {
+        counter_pill(p, b, &format!("TUMBLE {n}"), st.font, accent);
     }
 }
 
-/// Bomb Spins' multiplier up top while the reels spin between free spins.
-pub fn free_badge(p: &egui::Painter, ctx: &egui::Context, b: &Board, machine: u8, n: u32) {
-    if n >= 2 {
-        mult_badge(p, ctx, b, machine, n, 1.0);
-    }
+/// Bomb Spins' count, over the reels' top left (0.13.28's: "SPIN 6 / 10", and "SPIN 8 / 10  ·
+/// TUMBLE 2" while a tumble shows).
+pub fn free_counter(p: &egui::Painter, b: &Board, index: usize, total: usize, tumble: Option<usize>, font: &str, accent: Color32) {
+    let tumble = tumble.map(|n| format!("  ·  TUMBLE {n}")).unwrap_or_default();
+    counter_pill(p, b, &format!("SPIN {} / {}{tumble}", index + 1, total), font, accent);
 }
 
-/// Bomb Spins' count, over the reels' top left (0.13.28's: "SPIN 6 / 10").
-pub fn free_counter(p: &egui::Painter, b: &Board, index: usize, total: usize, font: &str, accent: Color32) {
-    let fs = (b.cell * 0.15).clamp(12.0, 24.0);
-    let g = p.layout_no_wrap(format!("SPIN {} / {}", index + 1, total), theme::display_font(font, fs), col::GOLD2);
-    let size = g.size() + vec2(fs * 1.4, fs * 0.5);
-    let r = Rect::from_min_size(pos2(b.reels.left(), b.reels.top() - b.cell * 0.36 - size.y / 2.0), size);
-    p.rect_filled(r, theme::r((r.height() / 2.0) as u8), Color32::from_black_alpha(225));
-    p.rect_stroke(r, theme::r((r.height() / 2.0) as u8), Stroke::new(1.8f32, accent), StrokeKind::Inside);
+/// A pill over the reels' top left: Bomb Spins' count, a spin's tumble. (0.13.28's, measured on
+/// Cosmic Jackpot, Neon Nights and Sugar Rush, Sugar Rush at six page sizes: the lettering 0.18
+/// of a cell, at most 26; 12 either side of it and 4 over and under; its foot 0.2116 of a cell
+/// less 9.4 over the reels, whatever the lettering's height; corners of 14, an edge of 1.5.)
+fn counter_pill(p: &egui::Painter, b: &Board, text: &str, font: &str, accent: Color32) {
+    let fs = (b.cell * 0.18).clamp(12.0, 26.0);
+    let g = p.layout_no_wrap(text.to_string(), theme::display_font(font, fs), col::GOLD2);
+    let size = g.size() + vec2(24.0, 8.0);
+    let foot = b.reels.top() - b.cell * 0.2116 + 9.4;
+    let r = Rect::from_min_size(pos2(b.reels.left(), foot - size.y), size);
+    p.rect_filled(r, theme::r(14), Color32::from_black_alpha(200));
+    p.rect_stroke(r, theme::r(14), Stroke::new(1.5f32, accent), StrokeKind::Inside);
     p.galley(r.center() - g.size() / 2.0, g, col::GOLD2);
+}
+
+/// Bomb Spins' multiplier beside the reels, right of them, cut off where the page ends (0.13.28's,
+/// measured on Cosmic Jackpot, Neon Nights and Sugar Rush at six page sizes: "MULTIPLIER", the
+/// machine's bomb with what the multiplier stands at, "STAYS ALL SPINS"; the panel no bigger than
+/// a cell of 124 makes it, and moved down as the cells grow past that).
+pub fn mult_panel(p: &egui::Painter, ctx: &egui::Context, b: &Board, machine: u8, font: &str, accent: Color32, n: u32) {
+    let c = b.cell.min(124.0);
+    let r = Rect::from_min_size(pos2(b.reels.right() + b.cell * 0.18, b.reels.top() + b.cell * 0.95 - c * 0.65), vec2(c * 1.254, c * 1.652));
+    if r.left() >= b.area.right() {
+        return;
+    }
+    let p = p.with_clip_rect(b.area);
+    // Its edge breathing (0.7 to full, every 1.3 s), and the bomb's light over the panel and round
+    // it, breathing a little with it.
+    let breath = (ctx.input(|i| i.time) as f32 * 2.4).sin().abs();
+    p.rect_filled(r, theme::r(10), Color32::from_black_alpha(215));
+    let edge = super::mix(accent, col::GOLD2, 0.4).gamma_multiply(0.7 + 0.3 * breath);
+    p.rect_stroke(r, theme::r(10), Stroke::new(2.0f32, edge), StrokeKind::Inside);
+    // The bomb a little over the middle of its number (0.13.28's: the number at 0.675 of a cell
+    // down the panel, the bomb's middle at 0.648).
+    let mid = pos2(r.center().x, r.top() + c * 0.675);
+    let orb = pos2(r.center().x, r.top() + c * 0.648);
+    super::radial(&p, orb, c * 0.95, accent.gamma_multiply(0.45 * (0.9 + 0.1 * breath)), Color32::TRANSPARENT);
+    let title = super::mix(col::GOLD2, accent, 0.15);
+    p.text(pos2(r.center().x, r.top() + c * 0.138), Align2::CENTER_CENTER, "MULTIPLIER", theme::bold_font(c * 0.12), title);
+    sheet(&p, ctx, "rr-bombs", 2, 2, bomb_cell(machine), Rect::from_center_size(orb, vec2(c * 0.85, c * 0.85)), Color32::WHITE);
+    let text = format!("×{}", n.max(1));
+    let big = theme::display_font(font, c * 0.38);
+    for (dx, dy) in [(-2.0, 0.0), (2.0, 0.0), (0.0, -2.0), (0.0, 2.0), (-1.5, -1.5), (1.5, 1.5), (-1.5, 1.5), (1.5, -1.5)] {
+        p.text(mid + vec2(dx, dy), Align2::CENTER_CENTER, &text, big.clone(), Color32::BLACK);
+    }
+    p.text(mid, Align2::CENTER_CENTER, &text, big, Color32::WHITE);
+    p.text(pos2(r.center().x, r.bottom() - c * 0.155), Align2::CENTER_CENTER, "STAYS ALL SPINS", theme::bold_font(c * 0.084), col::MUTED);
 }
 
 /// Bomb Spins over: its tag in the middle of the reels (0.13.28's: "BOMB SPINS / 10 spins · ×6

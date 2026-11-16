@@ -458,6 +458,26 @@ How (decided while starting it):
       reels, gathered again whenever something new lands: 0.13.28's, seen in two rounds of ten)
       tuned on forty-million-round samples. A
       free spin lands at Turbo's pace (as 0.13.28's do), and its tumbles show at the player's.
+      Bomb Spins and tumbles as 0.13.28 shows them (filmed beside it on Cosmic Jackpot, Neon
+      Nights and Sugar Rush, Nov 16; the pill and the panel measured on 0.13.28 and the rebuild
+      at six page sizes each): "SPIN n / 10  ·  TUMBLE k" in a pill over the reels' top left,
+      "TUMBLE k" in an ordinary spin's tumbles (lettering 0.18 of a cell, at most 26; its foot
+      the same height over the reels whatever the lettering's; corners of 14, an edge of 1.5);
+      "WIN n", "TUMBLE WIN n" under the reels; a Bomb Spin's bombs over a dimmed board,
+      "MULTIPLIER ×N AND BUILDING" counting as each is added, "W × M = T" at its end, and no
+      badge of the rebuild's own. The MULTIPLIER panel right of the reels (the machine's bomb
+      with what the multiplier stands at, "STAYS ALL SPINS"): no bigger than a cell of 124
+      makes it, cut off where the page ends rather than hidden (0.13.28 shows its edge on Cosmic
+      Jackpot at 1280x800), its edge breathing from 0.7 to full every 1.3 s and the bomb's light
+      over the panel and round it, the bomb a little over its number. Side by side at six page
+      sizes on Sugar Rush: the pill the same to the pixel, the bomb within a pixel, the light
+      round the panel within 2 levels, the words within a pixel; the edge's breath filmed at 20
+      frames a second on both, the same to a hundredth. The pill and the panel stay after the
+      round until the next spin or another machine, as 0.13.28's. Not changed,
+      for Blue: 0.13.28's "W × M = T" always multiplied out in every round filmed ("92 × 12 =
+      1,104", "234 × 3 = 702"); the rebuild's once showed "42 × 26 = 1,087". Most likely W is
+      shown rounded and T paid on a win with a fraction of a chip in it, which would be a
+      difference in how a round is paid, not in the picture: not checked further, not changed.
 - [x] Big wins: Big, Mega, Epic, Legendary, Mythic with fireworks (0.13.2/4). Measured on
       0.13.28's own rounds, chosen: a test server with a fixed house seed (a scratch build, kept
       out of the repository) let its app play rounds whose seeds were searched for in advance:
