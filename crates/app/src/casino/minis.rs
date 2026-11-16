@@ -185,9 +185,10 @@ impl PyrApp {
         p.galley(pos2(r.center().x - g.size().x / 2.0, r.top() + 56.0), g, Color32::WHITE);
         let so_far = won_after(&bonus.game, o.bet, step, bonus.won);
         let shown = if step_at.is_some() && k < 1.0 { won_after(&bonus.game, o.bet, step.saturating_sub(1), bonus.won) } else { so_far };
-        // (Before the first step, with nothing won: good luck, as 0.13.28 wishes it.)
+        // (Before the first step, with nothing won: good luck, as 0.13.28 wishes it; a Super's
+        // what it's worth.)
         let won_text = if shown == 0 && step == 0 {
-            "GOOD LUCK".to_string()
+            if sup { "SUPER: EVERY PRIZE ×3".to_string() } else { "GOOD LUCK".to_string() }
         } else if sup {
             format!("WON {}  ×3 = {}", chips_text(shown), chips_text(shown * bonus.times))
         } else {

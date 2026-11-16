@@ -75,6 +75,9 @@ pub struct RowUi {
     tease: Option<usize>,
     /// Bomb Spins being played on screen, a free spin after another.
     free: Option<FreePlay>,
+    /// A Remastered machine's bonus, bought or won: its splash's start, its name and its line
+    /// (0.13.28's, over the whole page before the mini game).
+    splash: Option<(Instant, String, String)>,
 }
 
 /// Bomb Spins on screen: the round, its splash's start, the next free spin to land, what the
@@ -91,6 +94,9 @@ struct FreePlay {
 /// How long Bomb Spins' splash and its tag at the end show.
 const FREE_SPLASH: f32 = 3.2;
 const FREE_END: f32 = 3.0;
+/// How long a bonus's splash shows before its mini game (0.13.28's, as Hold & Win's; a click on
+/// it starts the game sooner).
+const SPLASH: f32 = rmshow::hold::SPLASH;
 
 impl Default for RowUi {
     fn default() -> Self {
@@ -119,6 +125,7 @@ impl Default for RowUi {
             banner: None,
             tease: None,
             free: None,
+            splash: None,
         }
     }
 }
@@ -249,6 +256,7 @@ impl PyrApp {
             ui.machine = machine;
             ui.showing = None;
             ui.mini = None;
+            ui.splash = None;
             ui.all_in = None;
             ui.auto.stop();
             ui.counted = None;
@@ -351,18 +359,27 @@ impl PyrApp {
                 return;
             }
             Feature::Bonus | Feature::Super | Feature::Mystery => {
+                // (0.13.28's: the reels emptied, and over the whole page the machine's splash
+                // with the bonus's name and its line; then the mini game.)
                 ui.stopped_at = Some(now);
-                ui.mini = Some(MiniPlay::new(as_row(round), now + Duration::from_millis(1_500)));
+                ui.mini = Some(MiniPlay::new(as_row(round), now + Duration::from_secs_f32(SPLASH)));
+                for r in 0..REELS {
+                    let base = ui.reels[r].pos(now).round().rem_euclid(STRIP as f32) as usize;
+                    for row in 0..ROWS {
+                        ui.strips[r][(base + row) % STRIP] = rr::BLANK;
+                        ui.strip_vals[r][(base + row) % STRIP] = 0;
+                    }
+                }
                 let th = theme(machine);
                 let (bonus, sup) = SlotKind::Rm(machine).bonus_name();
                 let title = if o.bonus.as_ref().is_some_and(|b| b.times > 1) { sup } else { bonus };
-                let sub = match o.feature {
-                    Feature::Mystery if o.lucky => "the Mystery Bonus turned out SUPER: every prize ×3".to_string(),
-                    Feature::Mystery => "the Mystery Bonus".to_string(),
-                    Feature::Super => "every prize ×3".to_string(),
+                let line = match o.feature {
+                    Feature::Mystery if o.lucky => "The Mystery Bonus turned out SUPER: every prize ×3".to_string(),
+                    Feature::Mystery => "The Mystery Bonus".to_string(),
+                    Feature::Super => "Every prize ×3".to_string(),
                     _ => th.tagline.to_string(),
                 };
-                self.poker.casino.announce(title.to_uppercase(), sub, th.accent, (0.5, 0.42), 0.0);
+                ui.splash = Some((now, title.to_uppercase(), line));
                 self.poker.casino.sound_in(0.0, Cue::Jackpot, 0.0, 0.6);
                 return;
             }
@@ -535,11 +552,14 @@ impl PyrApp {
         }
         match &o.bonus {
             Some(_) => {
+                // (0.13.28's: the splash over the page as the reels land, "3 scrolls!" and what
+                // the game is; then the game.)
                 let (bonus, _) = SlotKind::Rm(o.machine).bonus_name();
-                self.poker.casino.announce(format!("{}!", bonus.to_uppercase()), format!("{} {}", o.scatters, th.scatters), th.accent, (0.5, 0.42), 0.3);
+                let what = reelrow::GAMES[(o.machine as usize).min(11)].1;
+                self.poker.casino.row.splash = Some((now, bonus.to_uppercase(), format!("{} {}! {what}", o.scatters, th.scatters)));
                 let cue = rmshow::band(o.machine, "trigger").unwrap_or(Cue::Jackpot);
                 self.poker.casino.sound_in(0.3, cue, 0.0, rmshow::vol::TRIGGER);
-                self.poker.casino.row.mini = Some(MiniPlay::new(as_row(&round), now + Duration::from_millis(1_900)));
+                self.poker.casino.row.mini = Some(MiniPlay::new(as_row(&round), now + Duration::from_secs_f32(SPLASH)));
             }
             None => {
                 let round = as_row(&round);
@@ -657,6 +677,7 @@ impl PyrApp {
         ui.free = None;
         ui.showing = None;
         ui.mini = None;
+        ui.splash = None;
         ui.all_in = None;
         ui.counted = None;
         ui.stopped_at = None;
@@ -815,6 +836,23 @@ impl PyrApp {
             p.rect_stroke(pill, theme::r(24), Stroke::new(1.5f32, th.accent.gamma_multiply(glow)), StrokeKind::Inside);
             p.galley(pos2(pill.center().x - g.size().x / 2.0, pill.top() + 5.0), g, col::GOLD2);
             p.text(pos2(pill.center().x, pill.bottom() - 10.0), Align2::CENTER_CENTER, sub, theme::bold_font(10.5), col::MUTED);
+        }
+        // A bonus's splash, over everything (its top prize too); a click on it starts the game.
+        if let Some((at, title, line)) = self.poker.casino.row.splash.clone() {
+            let since = now.saturating_duration_since(at).as_secs_f32();
+            if since < SPLASH {
+                rmshow::splash_with(&p, &ctx, th, st, area, &title, &line, since, SPLASH, time);
+                if ui.interact(area, ui.id().with("rm-bonus-splash"), Sense::click()).clicked() {
+                    let ui = &mut self.poker.casino.row;
+                    ui.splash = None;
+                    if let Some(mini) = ui.mini.as_mut() {
+                        mini.started = now;
+                    }
+                }
+                ctx.request_repaint();
+            } else {
+                self.poker.casino.row.splash = None;
+            }
         }
         // Play Feature and Fairness, over everything.
         let (bet, spin_cost) = (self.poker.casino.row.bet, self.poker.casino.row.bet);
@@ -1097,6 +1135,7 @@ impl PyrApp {
                 // A Remastered machine's: its own bombs, coins and wilds, with their numbers.
                 if r.remastered {
                     let v = r.strip_vals[i][idx];
+                    let sym = rmshow::strip_sym(r.machine, sym);
                     if blurred {
                         rmshow::draw_cell(&clip, ctx, r.machine, sym, v, r.bet, sr.translate(vec2(0.0, -cell * 0.14)), 0.27, th.accent);
                         rmshow::draw_cell(&clip, ctx, r.machine, sym, v, r.bet, sr, 0.75, th.accent);

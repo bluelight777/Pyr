@@ -38,6 +38,9 @@ pub enum Ev {
     Respin(usize),
     /// Walking wilds stepping a reel left, into screen `k`.
     Walk(usize),
+    /// Frozen Wilds: the screen's new wilds freezing (turned to ice, "FROZEN! THE REST SPINS
+    /// AGAIN"), before the rest spins again.
+    Freeze(usize),
     /// The bombs adding up; the chain's win multiplied by them.
     Bombs,
     Multiply,
@@ -157,6 +160,12 @@ impl RmShow {
 /// The reels a screen's Hot Wilds or Espresso Shots newly fill.
 /// How long a Hot Wild's or an Espresso Shot's reel takes to fill, its words settling.
 const FILL_SECS: f32 = 0.95;
+/// Frozen Wilds: how long the new wilds take to freeze before the respin (0.13.28's: 0.33 to
+/// 0.63 s filmed at 30 frames a second, its own frames about 0.13 s apart).
+const FREEZE_SECS: f32 = 0.5;
+/// How a wild that hasn't frozen yet is drawn: the machine's own wild, as it lands (0.13.28's:
+/// Frostbite's snowman, iced only once it freezes). For the show only, never in a round.
+const PLAIN_WILD: u8 = 0xf0;
 
 fn filled(fam: Family, s: &rm::Step) -> Vec<usize> {
     match fam {
@@ -253,6 +262,9 @@ pub fn timeline(o: &rm::Outcome, turbo: bool, free: Option<&FreeCtx>) -> Vec<(f3
             let tumbles = fam == Family::Tumble && i + 1 < o.steps.len();
             if !s.wins.is_empty() {
                 push(Ev::Lit(i), if tumbles { 0.75 } else { 1.0 });
+            }
+            if fam == Family::Frozen && i + 1 < o.steps.len() {
+                push(Ev::Freeze(i), FREEZE_SECS);
             }
             if tumbles {
                 push(Ev::Burst(i), 0.5);
@@ -658,6 +670,9 @@ pub fn draw_cell(p: &egui::Painter, ctx: &egui::Context, machine: u8, sym: u8, v
                 worth_pill(p, pos2(r.center().x, r.bottom() - r.height() * 0.17), &coin_text(value, bet), num * 0.8, Color32::WHITE, a);
             }
         }
+        PLAIN_WILD => {
+            pics::cell_inset(p, ctx, &format!("reels-{}-symbols", th.id), WILD as usize, r, (r.width() * 3.0) as u32, tint, 0.04);
+        }
         WILD if wild_cell(machine).is_some() => {
             if !sheet(p, ctx, "rr-wilds", 2, 2, wild_cell(machine).unwrap(), r.shrink(r.width() * 0.06), tint) {
                 return;
@@ -870,6 +885,25 @@ fn lit_cells(s: &rm::Step) -> (u16, Option<(usize, usize)>) {
 /// when any are), `y` each cell's row (falling), `a` each one's brightness.
 #[allow(clippy::too_many_arguments)]
 fn draw_cells(p: &egui::Painter, ctx: &egui::Context, b: &Board, machine: u8, bet: u64, s: &rm::Step, skip: u16, lit: u16, y: &[[f32; ROWS]; REELS], accent: Color32, time: f32) {
+    draw_cells_frozen(p, ctx, b, machine, bet, s, skip, lit, y, accent, time, None);
+}
+
+/// What a cell shows: a Frozen Wilds wild that hasn't frozen yet (not held from the screen
+/// before, and not freezing now) as the machine's own wild.
+fn shown_sym(s: &rm::Step, machine: u8, r: usize, row: usize, freezing: bool) -> u8 {
+    let sym = s.grid[r][row];
+    if sym == WILD && rm::family(machine) == Family::Frozen && !freezing && s.held & (1 << (r * ROWS + row)) == 0 { PLAIN_WILD } else { sym }
+}
+
+/// What a spinning or landing reel shows for a symbol: a Frozen Wilds wild as the machine's own
+/// (it freezes only once the reels have landed).
+pub fn strip_sym(machine: u8, sym: u8) -> u8 {
+    if sym == WILD && rm::family(machine) == Family::Frozen { PLAIN_WILD } else { sym }
+}
+
+/// [`draw_cells`], the screen's new wilds freezing (`Some(since)`: popping in as ice).
+#[allow(clippy::too_many_arguments)]
+fn draw_cells_frozen(p: &egui::Painter, ctx: &egui::Context, b: &Board, machine: u8, bet: u64, s: &rm::Step, skip: u16, lit: u16, y: &[[f32; ROWS]; REELS], accent: Color32, time: f32, freezing: Option<f32>) {
     let fam = rm::family(machine);
     for r in 0..REELS {
         // A whole reel of Hot Wilds or Espresso Shots: drawn as one.
@@ -894,7 +928,14 @@ fn draw_cells(p: &egui::Painter, ctx: &egui::Context, b: &Board, machine: u8, be
             if s.grid[r][row] == WILD && fam == Family::Spotlight {
                 spotlight(p, b, rect, a);
             }
-            draw_cell(p, ctx, machine, s.grid[r][row], s.values[r][row], bet, rect, a, accent);
+            // (A wild freezing: in as ice in a flash of frost that fades in a third of a second.
+            // Not drawn bigger: its picture's texture would change size as it settled.)
+            let new_ice = freezing.filter(|_| s.grid[r][row] == WILD && fam == Family::Frozen && s.held & bit == 0);
+            draw_cell(p, ctx, machine, shown_sym(s, machine, r, row, freezing.is_some()), s.values[r][row], bet, rect, a, accent);
+            if let Some(t) = new_ice {
+                let k = (t / 0.3).clamp(0.0, 1.0);
+                radial(p, rect.center(), b.cell * 0.62, Color32::from_white_alpha((150.0 * (1.0 - k)) as u8), Color32::TRANSPARENT);
+            }
         }
     }
 }
@@ -920,7 +961,7 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
     // The screen showing, and what's done to it.
     let (k, mut skip, mut lit, mut ys) = (
         match ev {
-            Ev::Screen(k) | Ev::Fill(k) | Ev::Lit(k) | Ev::Burst(k) | Ev::Respin(k) | Ev::Walk(k) => k,
+            Ev::Screen(k) | Ev::Fill(k) | Ev::Lit(k) | Ev::Burst(k) | Ev::Respin(k) | Ev::Walk(k) | Ev::Freeze(k) => k,
             Ev::Drop(k) => k + 1,
             _ => last,
         },
@@ -971,6 +1012,11 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
         reel_note(p, b, "ESPRESSO SHOT! IT STAYS A SPIN", st.font, accent, (since * 6.0).min(1.0));
     }
     match ev {
+        Ev::Freeze(_) => {
+            draw_cells_frozen(&clip, ctx, b, m, o.bet, s, 0, 0, &ys, accent, time, Some(since));
+            reel_note(p, b, "FROZEN! THE REST SPINS AGAIN", st.font, accent, 1.0);
+            return;
+        }
         Ev::Lit(_) => {
             let (l, at) = lit_cells(s);
             lit = l;
@@ -1071,7 +1117,7 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
                     } else {
                         let k2 = ((u - stop(r)) / 0.12).min(1.0);
                         let bounce = (1.0 - ease_back(k2)) * b.cell * 0.12;
-                        draw_cell(&clip, ctx, m, s.grid[r][row], s.values[r][row], o.bet, rect.translate(vec2(0.0, -bounce)), 1.0, accent);
+                        draw_cell(&clip, ctx, m, shown_sym(s, m, r, row, false), s.values[r][row], o.bet, rect.translate(vec2(0.0, -bounce)), 1.0, accent);
                     }
                 }
             }
@@ -1488,40 +1534,78 @@ pub fn splash(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, ar
 }
 
 /// A feature's splash over the page: the machine's splash picture under turning rays, the
-/// feature's name in the machine's lettering, its line, "click to start".
+/// feature's name in the machine's lettering, its line, "click to start". As 0.13.28 draws it
+/// (measured over the bare picture on four pages: windows of 1280x800, 1280x1000 and
+/// 1600x1000, and the casino full screen; `rebuild/measured/splash.md`).
 #[allow(clippy::too_many_arguments)]
 pub fn splash_with(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, area: Rect, title: &str, line: &str, since: f32, dur: f32, time: f32) {
     let r = area;
-    let a = (since / 0.4).min(1.0) * (1.0 - ((since - dur + 0.4) / 0.4).clamp(0.0, 1.0));
+    // (In at once, out over its last 0.4 s.)
+    let a = (since / 0.12).min(1.0) * (1.0 - ((since - dur + 0.4) / 0.4).clamp(0.0, 1.0));
     if a <= 0.0 {
         return;
     }
     let p = p.with_clip_rect(r);
     p.rect_filled(r, 0, Color32::from_black_alpha((235.0 * a) as u8));
-    pics::cover(&p, ctx, &format!("rr-{}-splash", th.id), r, 1376, Color32::from_gray((255.0 * a) as u8));
-    // Rays, turning slowly, from behind the title.
-    let title_c = pos2(r.center().x, r.top() + r.height() * 0.217);
-    let reach = r.width().max(r.height()) * 1.2;
-    for i in 0..24 {
-        if i % 2 == 1 {
-            continue;
-        }
-        let a0 = (i as f32 / 24.0) * std::f32::consts::TAU + time * 0.08;
-        let a1 = a0 + std::f32::consts::TAU / 24.0;
-        let pts = vec![title_c, title_c + vec2(a0.cos(), a0.sin()) * reach, title_c + vec2(a1.cos(), a1.sin()) * reach];
-        p.add(Shape::convex_polygon(pts, Color32::from_white_alpha((16.0 * a) as u8), Stroke::NONE));
+    // The picture, slowly closing in (about 2% over a splash, from the page's middle).
+    let zoom = 1.0 + 0.008 * since;
+    pics::cover(&p, ctx, &format!("rr-{}-splash", th.id), Rect::from_center_size(r.center(), r.size() * zoom), 1376, Color32::from_gray((255.0 * a) as u8));
+    // (Debug builds only: PYR_DEV_SPLASH=bare shows the picture alone, to measure 0.13.28's
+    // splash against.)
+    #[cfg(debug_assertions)]
+    if std::env::var("PYR_DEV_SPLASH").is_ok_and(|v| v == "bare") {
+        return;
     }
-    let size = (r.height() * 0.118).clamp(32.0, 96.0);
-    glow_text(&p, title_c + vec2(0.0, size * 0.04), Align2::CENTER_CENTER, title, theme::display_font(st.font, size), faded(Color32::BLACK, 0.7 * a), Color32::TRANSPARENT);
-    glow_text(&p, title_c, Align2::CENTER_CENTER, title, theme::display_font(st.font, size), faded(col::GOLD2, a), faded(th.accent, 0.6 * a));
+    // The picture darkened toward the top (the top 45% of the page, from black at 0.66) and the
+    // foot (the bottom 30%, to black at 0.78).
+    super::vgrad(&p, Rect::from_min_max(r.min, pos2(r.right(), r.top() + r.height() * 0.45)), Color32::from_black_alpha((168.0 * a) as u8), Color32::TRANSPARENT);
+    super::vgrad(&p, Rect::from_min_max(pos2(r.left(), r.bottom() - r.height() * 0.3), r.max), Color32::TRANSPARENT, Color32::from_black_alpha((198.0 * a) as u8));
+    // Sixteen rays from the title's middle, turning (a quarter of a radian a second): each 9°
+    // wide, in the machine's colour at 0.3 there, fading to nothing 0.565 of the page's width
+    // out.
+    let title_c = pos2(r.center().x, r.top() + r.height() * 0.22);
+    let reach = r.width() * 0.565;
+    let mut rays = egui::Mesh::default();
+    for i in 0..16 {
+        let a0 = (i as f32 / 16.0) * std::f32::consts::TAU + time * 0.25;
+        let a1 = a0 + std::f32::consts::TAU / 16.0 * 0.4;
+        let k = rays.vertices.len() as u32;
+        rays.colored_vertex(title_c, th.accent.gamma_multiply(0.3 * a));
+        rays.colored_vertex(title_c + vec2(a0.cos(), a0.sin()) * reach, Color32::TRANSPARENT);
+        rays.colored_vertex(title_c + vec2(a1.cos(), a1.sin()) * reach, Color32::TRANSPARENT);
+        rays.add_triangle(k, k + 1, k + 2);
+    }
+    p.add(Shape::mesh(rays));
+    // Motes of light rising from the foot of the page, each at its own pace.
+    for i in 0..28u64 {
+        let h = (i + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        let unit = |k: u32| ((h >> k) & 0xffff) as f32 / 65535.0;
+        let x = r.left() + r.width() * unit(0);
+        let speed = 160.0 + 90.0 * unit(16);
+        let span = r.height() * 0.85;
+        let life = span / speed;
+        let k = ((since + unit(32) * life) / life).fract();
+        let y = r.bottom() + 6.0 - k * span;
+        let glow = (k * std::f32::consts::PI).sin();
+        let rad = 2.4 + 1.6 * unit(48);
+        p.circle_filled(pos2(x, y), rad, col::GOLD2.gamma_multiply(0.75 * glow * a));
+    }
+    // The title: its size goes with the page's width, to 110 (a narrow page's title runs off
+    // its sides, as 0.13.28's does); a black shadow 6 under it, a rim in the machine's colour.
+    let size = (r.width() * 0.091).clamp(32.0, 110.0);
+    let font = theme::display_font(st.font, size);
+    p.text(title_c + vec2(0.0, 6.0), Align2::CENTER_CENTER, title, font.clone(), Color32::from_black_alpha((220.0 * a) as u8));
+    glow_text(&p, title_c, Align2::CENTER_CENTER, title, font, faded(col::GOLD2, a), faded(th.accent, a));
+    // The line, its first row just under the title, on a dark rounded box.
     let line = line.to_string();
     let fs = (r.height() * 0.0242).clamp(12.0, 18.0);
     let g = p.layout(line, theme::bold_font(fs), faded(Color32::WHITE, a), (r.width() - 120.0).min(fs * 45.0));
-    let box_c = pos2(r.center().x, r.top() + r.height() * 0.323);
-    let at = box_c - g.size() / 2.0;
-    p.rect_filled(Rect::from_min_size(at, g.size()).expand2(vec2(fs, fs * 0.6)), theme::r(10), Color32::from_black_alpha((175.0 * a) as u8));
+    let at = pos2(r.center().x - g.size().x / 2.0, title_c.y + size * 0.6446 - 2.5);
+    p.rect_filled(Rect::from_min_size(at, g.size()).expand2(vec2(fs, fs * 0.45)), theme::r(10), Color32::from_black_alpha((170.0 * a) as u8));
     p.galley(at, g, Color32::WHITE);
-    p.text(pos2(r.center().x, r.bottom() - 28.0), Align2::CENTER_CENTER, "click to start", theme::font(13.0), faded(col::MUTED, a));
+    // "click to start", breathing.
+    let breath = 0.5 + 0.5 * (since * 3.0).sin();
+    p.text(pos2(r.center().x, r.bottom() - 40.0), Align2::CENTER_CENTER, "click to start", theme::bold_font(15.0), faded(col::GOLD2, breath * a));
 }
 
 /// What a filler cell spinning past shows for a machine (bombs and coins with a made-up worth).

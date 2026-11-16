@@ -429,6 +429,23 @@ How (decided while starting it):
       the other's), every scroll position: the same pixels but the pools and the game behind,
       now that Ante and the feature spin are one paragraph, Super Hold & Win's price is said to
       the hundredth (63.00×), and no "Funny" tag (0.13.28 has none on either).
+      Frozen Wilds freezing as 0.13.28's (filmed at 30 frames a second, three Frozen Spins on
+      each, Nov 16): a wild lands as Frostbite's snowman, its win lights so, then it turns to
+      ice with "FROZEN! THE REST SPINS AGAIN" across the reels' foot for half a second (0.13.28
+      0.33 to 0.63 s, its own frames about 0.13 s apart) before the rest spins again; the
+      rebuild had them as ice from the start and no note. A bonus bought or won: 0.13.28's
+      splash over the whole page (the reels emptied for a bought one), measured over the bare
+      picture at four page sizes (`rebuild/measured/splash.md`): the picture closing in, the
+      top and the foot darkened, sixteen rays in the machine's colour from the title turning a
+      quarter of a radian a second, the title 0.091 of the page's width (at most 110, running
+      off a narrow page as 0.13.28's) with its black shadow 6 under it, the line under it on its
+      box, "click to start" breathing, motes rising; the board 2.55 s after, or at a click. The
+      title's letters within a pixel of 0.13.28's, the line to its pixel. Its words: the
+      tagline, "The Mystery Bonus", "The Mystery Bonus turned out SUPER: every prize ×3",
+      "Every prize ×3", "3 scrolls! " and the game's own; a Super's board opens "SUPER: EVERY
+      PRIZE ×3". (The rebuild showed a toast over the reels for a moment.) Better than 0.13.28:
+      the line fades in and out with the rest (0.13.28's shows alone over the reels before the
+      splash, for a frame bought and 0.4 s won, and lingers as it fades).
 - [x] Bonus rounds that build: Bomb Spins, Super Hold & Win (0.13.6). Play Feature's seventh
       card at 0.13.28's prices (Bomb Spins 102.80× / 97.80× / 98.60× / 98.20×, Super Hold & Win
       66.70× / 62.70× / 66.80× / 63.00×), words and order; 0.13.28's splash, "SPIN n / 10",
