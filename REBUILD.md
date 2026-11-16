@@ -470,8 +470,15 @@ How (decided while starting it):
       "Moon × 3 · 2 ways · 21", "Ringed planet × 4 · 1 way · 25"; a respin's too, a tumble's
       never: filmed on Cosmic Jackpot, Scoville Slots and Starlight Cabaret, Nov 16, at 30
       frames a second); a Bomb Spin's bombs over a dimmed board,
-      "MULTIPLIER ×N AND BUILDING" counting as each is added, "W × M = T" at its end, and no
-      badge of the rebuild's own. The MULTIPLIER panel right of the reels (the machine's bomb
+      "MULTIPLIER ×N AND BUILDING" counting as each is added, "W × M = T" at its end ("WIN n"
+      for half a second when the spin paid with no multiplier yet), and no badge of the
+      rebuild's own. A tumble's moments as 0.13.28 times them (both filmed over the whole reels
+      at 30 frames a second, Nov 16, each cell's light frame by frame; rebuild/measured/
+      wintags.md): the win lit 0.875 s, the burst 0.45 (the winners gone by 0.7 of it), the cells
+      falling in 0.32 and the board still till 0.51 after it; a free spin's quicker (0.79, 0.405,
+      0.29 and 0.43); each within a frame of 0.13.28's. The bombs adding up, an ordinary spin's
+      and a free spin's alike: the first bomb's worth 0.31 s in, each next 0.45 s after, the total
+      0.11 s after the last; then "W × M = T" 1.4 s (a free spin's 1.2). The MULTIPLIER panel right of the reels (the machine's bomb
       with what the multiplier stands at, "STAYS ALL SPINS"): no bigger than a cell of 124
       makes it, cut off where the page ends rather than hidden (0.13.28 shows its edge on Cosmic
       Jackpot at 1280x800), its edge breathing from 0.7 to full every 1.3 s and the bomb's light

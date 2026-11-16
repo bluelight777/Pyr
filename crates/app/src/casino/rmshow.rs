@@ -140,7 +140,7 @@ impl RmShow {
                 let mut sum = f.before;
                 if let Some(s) = self.o.steps.last() {
                     for (j, (.., v)) in bombs(s).iter().enumerate() {
-                        if since >= 0.25 * k + (j + 1) as f32 * 0.28 * k {
+                        if since >= bomb_added(j) * k {
                             sum += v;
                         }
                     }
@@ -195,6 +195,41 @@ impl RmShow {
         }
         sum
     }
+}
+
+/// A tumbling chain's moments, 0.13.28's (Cosmic Jackpot filmed at 30 frames a second at 900x600
+/// beside the rebuild, Nov 16; rebuild/measured/wintags.md), in seconds: a screen's win lit; its
+/// winners bursting (gone by 0.7 of it); the cells dropping, falling into their places in the
+/// first part, then the board still. A free spin's (Bomb Spins') a little quicker.
+struct Tumbling {
+    lit: f32,
+    burst: f32,
+    drop: f32,
+    fall: f32,
+}
+const TUMBLING: Tumbling = Tumbling { lit: 0.875, burst: 0.45, drop: 0.51, fall: 0.32 };
+const TUMBLING_FREE: Tumbling = Tumbling { lit: 0.79, burst: 0.405, drop: 0.43, fall: 0.29 };
+
+/// The bombs' worth added up (0.13.28's, in an ordinary spin and in Bomb Spins alike): the first
+/// bomb's 0.31 s in, each next 0.45 s after, the total 0.11 s after the last.
+const BOMB_FIRST: f32 = 0.31;
+const BOMB_NEXT: f32 = 0.45;
+/// How long a bomb's worth flies (it's added as it arrives).
+const BOMB_FLY: f32 = 0.28;
+
+/// How long a dropping screen's cells take to fall into their places (Turbo twice as quick).
+fn fall_secs(show: &RmShow) -> f32 {
+    (if show.turbo { 0.5 } else { 1.0 }) * if show.free.is_some() { TUMBLING_FREE.fall } else { TUMBLING.fall }
+}
+
+/// When bomb `j`'s worth is added (unscaled seconds).
+fn bomb_added(j: usize) -> f32 {
+    BOMB_FIRST + BOMB_NEXT * j as f32
+}
+
+/// How long the bombs take to add up (unscaled seconds).
+fn bombs_secs(n: usize) -> f32 {
+    bomb_added(n.max(1) - 1) + 0.11
 }
 
 /// The reels a screen's Hot Wilds or Espresso Shots newly fill.
@@ -275,6 +310,7 @@ fn landing_order(o: &rm::Outcome) -> Vec<(usize, usize)> {
 /// The round's moments, from the landing (Turbo: twice as quick).
 pub fn timeline(o: &rm::Outcome, turbo: bool, free: Option<&FreeCtx>) -> Vec<(f32, Ev)> {
     let k = if turbo { 0.5 } else { 1.0 };
+    let tb = if free.is_some() { &TUMBLING_FREE } else { &TUMBLING };
     let fam = rm::family(o.machine);
     let mut out = Vec::new();
     let mut t = 0.0f32;
@@ -301,31 +337,32 @@ pub fn timeline(o: &rm::Outcome, turbo: bool, free: Option<&FreeCtx>) -> Vec<(f3
             }
             let tumbles = fam == Family::Tumble && i + 1 < o.steps.len();
             if !s.wins.is_empty() {
-                push(Ev::Lit(i), if tumbles { 0.75 } else { 1.0 });
+                push(Ev::Lit(i), if tumbles { tb.lit } else { 1.0 });
             }
             if fam == Family::Frozen && i + 1 < o.steps.len() {
                 push(Ev::Freeze(i), FREEZE_SECS);
             }
             if tumbles {
-                push(Ev::Burst(i), 0.5);
-                push(Ev::Drop(i), 0.32);
+                push(Ev::Burst(i), tb.burst);
+                push(Ev::Drop(i), tb.drop);
             }
         }
+        let bombs = o.steps.last().map(|s| s.grid.iter().flatten().filter(|&&c| c == BOMB).count()).unwrap_or(0);
         if let Some(f) = free {
             if f.after > f.before {
-                push(Ev::FreeAdd, 1.3);
+                push(Ev::FreeAdd, bombs_secs(bombs));
             }
-            if f.paid > 0 && f.after >= 2 {
-                push(Ev::FreeWin, 1.3);
+            // (0.13.28's: "W × M = T" for 1.2 s; with no multiplier yet, "WIN n" for 0.5.)
+            if f.paid > 0 {
+                push(Ev::FreeWin, if f.after >= 2 { 1.2 } else { 0.5 });
             }
             if f.more {
                 // (0.13.28's, filmed twice: the next spin sets off 1.6 to 1.8 s after its box.)
                 push(Ev::FreeMore, 1.7);
             }
         } else if fam == Family::Tumble && o.mult > 1 {
-            let bombs = o.steps.last().map(|s| s.grid.iter().flatten().filter(|&&c| c == BOMB).count()).unwrap_or(0);
-            push(Ev::Bombs, 0.5 + 0.28 * bombs as f32);
-            push(Ev::Multiply, 1.1);
+            push(Ev::Bombs, bombs_secs(bombs));
+            push(Ev::Multiply, 1.4);
         }
         if o.collected > 0 {
             push(Ev::Collect, 1.4);
@@ -476,20 +513,16 @@ fn sounds_of(o: &rm::Outcome, events: &[(f32, Ev)], turbo: bool) -> Vec<(f32, Cu
                 }
             }
             Ev::Walk(_) => add(t, "step", vol::STEP),
-            Ev::Bombs => {
+            Ev::Bombs | Ev::FreeAdd => {
+                // (Each as its worth is added.)
                 let n = o.steps.last().map(|s| s.grid.iter().flatten().filter(|&&c| c == BOMB).count()).unwrap_or(0);
                 for j in 0..n {
-                    add(t + 0.25 + j as f32 * 0.28 * k, "bombadd", vol::BOMBADD);
+                    add(t + bomb_added(j) * k, "bombadd", vol::BOMBADD);
                 }
             }
             Ev::Multiply => add(t, "multiply", vol::MULTIPLY),
-            Ev::FreeAdd => {
-                let n = o.steps.last().map(|s| s.grid.iter().flatten().filter(|&&c| c == BOMB).count()).unwrap_or(0);
-                for j in 0..n {
-                    add(t + 0.25 + j as f32 * 0.28 * k, "bombadd", vol::BOMBADD);
-                }
-            }
-            Ev::FreeWin => add(t, "multiply", vol::MULTIPLY),
+            // ("W × M = T"; a Bomb Spin's plain "WIN n", with no multiplier yet, quietly.)
+            Ev::FreeWin if next - t > 0.8 * k => add(t, "multiply", vol::MULTIPLY),
             Ev::FreeMore => add(t, "trigger", 0.8),
             Ev::Collect => add(t, "collect", 0.85),
             Ev::HoldSplash => add(t, "trigger", 0.9),
@@ -1121,12 +1154,14 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
                 let (r, row) = (c / ROWS, c % ROWS);
                 let rect = b.cell_at(r as f32, row as f32);
                 let ctr = rect.center();
-                // The winner: aglow, swelling, fading.
-                let fade = 1.0 - ((u - 0.5) / 0.2).clamp(0.0, 1.0);
+                // The winner: aglow, swelling at once, then fading till it's gone at 0.7 of the
+                // burst (0.13.28's, filmed at 30 frames a second: brightest a frame in, then
+                // steadily less).
+                let fade = 1.0 - ((u - 0.07) / 0.63).clamp(0.0, 1.0);
                 if fade > 0.0 {
-                    let swell = 1.0 + 0.12 * ((u - 0.16) / 0.2).clamp(0.0, 1.0);
+                    let swell = 1.0 + 0.12 * (u / 0.07).clamp(0.0, 1.0);
                     if u < 0.5 {
-                        radial(&clip, ctr, b.cell * 0.62, faded(accent, 0.45), Color32::TRANSPARENT);
+                        radial(&clip, ctr, b.cell * 0.62, faded(accent, 0.45 * fade), Color32::TRANSPARENT);
                     }
                     draw_cell(&clip, ctx, m, s.grid[r][row], s.values[r][row], o.bet, Rect::from_center_size(ctr, rect.size() * swell), fade, accent);
                 }
@@ -1147,11 +1182,13 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
             return;
         }
         Ev::Drop(j) => {
+            // (The cells fall into their places, then the board's still till the next moment.)
             let a = &o.steps[j];
+            let q = since / fall_secs(show).max(0.01);
             for r in 0..REELS {
                 let (from, _) = drops(a, r);
                 for row in 0..ROWS {
-                    ys[r][row] = from[row] + (row as f32 - from[row]) * fall(u);
+                    ys[r][row] = from[row] + (row as f32 - from[row]) * fall(q);
                 }
             }
             draw_cells(&clip, ctx, b, m, o.bet, s, 0, 0, &ys, accent, time);
@@ -1243,19 +1280,23 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
                 Ev::FreeAdd => {
                     // The multiplier counting up as each of this spin's bombs is added (from what
                     // it was: "MULTIPLIER ×0 AND BUILDING" first, as 0.13.28's), each bomb flaring.
-                    let per = 0.28 * if show.turbo { 0.5 } else { 1.0 };
+                    let tk = if show.turbo { 0.5 } else { 1.0 };
+                    let per = BOMB_FLY * tk;
                     for (j, (r, row, _)) in bombs(s).iter().enumerate() {
-                        let t0 = 0.25 * if show.turbo { 0.5 } else { 1.0 } + j as f32 * per;
+                        let t0 = bomb_added(j) * tk - per;
                         if since >= t0 && since < t0 + per {
                             let q = ((since - t0) / per).clamp(0.0, 1.0);
                             radial(p, b.cell_at(*r as f32, *row as f32).center(), b.cell * 0.7, faded(accent, 0.6 * (1.0 - q)), Color32::TRANSPARENT);
                         }
                     }
                     let sum = show.free_mult(now).unwrap_or(f.after);
-                    note(&format!("MULTIPLIER ×{sum} AND BUILDING"), (since * 5.0).min(1.0));
+                    // (At once, as 0.13.28's: its words there the frame the board dims.)
+                    note(&format!("MULTIPLIER ×{sum} AND BUILDING"), 1.0);
                 }
                 Ev::FreeWin => {
-                    win_tag(p, foot, &format!("{} × {} = {}", chips_text(f.base), f.after, chips_text(f.paid)), st.font, fs, accent);
+                    // (With no multiplier yet, 0.13.28's says the spin's win, a moment.)
+                    let text = if f.after >= 2 { format!("{} × {} = {}", chips_text(f.base), f.after, chips_text(f.paid)) } else { format!("WIN {}", chips_text(f.paid)) };
+                    win_tag(p, foot, &text, st.font, fs, accent);
                 }
                 _ => {}
             }
@@ -1271,12 +1312,13 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
             let tag_size = (b.cell * 0.15).clamp(12.0, 24.0);
             let bs = bombs(s);
             let total: u32 = bs.iter().map(|x| x.2).sum();
-            let per = 0.28 * if show.turbo { 0.5 } else { 1.0 };
+            let tk = if show.turbo { 0.5 } else { 1.0 };
+            let per = BOMB_FLY * tk;
             let badge_at = pos2(b.reels.right() - b.cell * 0.15, b.reels.top() - b.cell * 0.28);
             if ev == Ev::Bombs {
                 let mut sum = 0;
                 for (j, (r, row, v)) in bs.iter().enumerate() {
-                    let t0 = 0.25 * if show.turbo { 0.5 } else { 1.0 } + j as f32 * per;
+                    let t0 = bomb_added(j) * tk - per;
                     let rect = b.cell_at(*r as f32, *row as f32);
                     if since >= t0 + per {
                         sum += v;
