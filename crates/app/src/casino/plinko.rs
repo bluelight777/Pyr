@@ -27,6 +27,8 @@ const ROW_S: f32 = 0.1;
 const LAND_S: f32 = 0.1;
 /// How long a struck peg stays lit (0.13.28's, filmed).
 const LIT_S: f32 = 0.4;
+/// How long a ball stays in its bucket's middle after landing before it's gone (0.13.28's, filmed).
+const REST_S: f32 = 0.1;
 /// How long a landing's multiple floats over its bucket (0.13.28's, filmed: it fades to nothing).
 const FLOAT_S: f32 = 1.4;
 
@@ -201,8 +203,10 @@ impl Board {
         }
         let rights = path.iter().filter(|r| **r).count();
         let b = self.bucket(rights);
+        // (Into the bucket's middle, where it rests a moment after landing: 0.13.28's, filmed.)
         let u = ((t - n as f32 * ROW_S) / LAND_S).min(1.0);
-        (pos2(b.center().x, b.top() - self.ball_r * 0.3 + (b.height() * 0.45) * u), n)
+        let from = b.top() - self.ball_r * 0.3;
+        (pos2(b.center().x, from + (b.center().y - from) * u), n)
     }
 }
 
@@ -293,10 +297,12 @@ impl PyrApp {
             let since = self.poker.casino.plinko.bounced.get(&(k as u8)).map(|t| (now - *t).as_secs_f32());
             let mut flash = 0.0;
             if let Some(t) = since {
-                if t < 0.42 {
-                    r = r.translate(vec2(0.0, (std::f32::consts::PI * t / 0.42).sin() * b.dx * 0.2));
+                // (0.13.28's, filmed at 8 and 16 rows: down 0.19 dx and back in 0.35 s; half white
+                // at the landing, its own color again 0.6 s later.)
+                if t < 0.35 {
+                    r = r.translate(vec2(0.0, (std::f32::consts::PI * t / 0.35).sin() * b.dx * 0.19));
                 }
-                flash = (1.0 - t / 0.65).max(0.0) * 0.34;
+                flash = (1.0 - t / 0.6).max(0.0) * 0.5;
                 if t < FLOAT_S {
                     floats.push((b.bucket(k), *m, t));
                 }
@@ -347,7 +353,7 @@ impl PyrApp {
                 ball.landed = true;
                 landed.push((ball.o.bucket, ball.o.rows, ball.o.multiplier_x100, ball.o.paid, ball.o.chips));
             }
-            if !ball.landed {
+            if t < fall_s(ball.o.path.len()) + REST_S {
                 // (0.13.28's, filmed and at 6x: one wide warm disc round it, the ball, its shine.)
                 p.circle_filled(pos, b.ball_r * 2.2, Color32::from_rgba_unmultiplied(0xff, 0x92, 0x28, 49));
                 p.circle_filled(pos, b.ball_r, Color32::from_rgb(0xff, 0xb0, 0x4a));
