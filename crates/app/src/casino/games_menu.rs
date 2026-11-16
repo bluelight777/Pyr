@@ -289,11 +289,12 @@ impl PyrApp {
             p.rect_filled(Rect::from_center_size(pos2(r.left() + 1.5, r.center().y), vec2(3.0, 28.6)), CornerRadius::same(1), color);
         }
         let thumb = Rect::from_min_size(pos2(r.left() + 6.0, r.top() + 4.0), vec2(56.0, LINE));
-        // (A little dimmed, full bright when pointed at.)
+        // (A little dimmed, full bright when pointed at; from a picture made 256 across at most,
+        // as 0.13.28's, read off its thumbnails.)
         if e.art == BOUNTY_ART {
             crate::poker::bounty::thumb(p, thumb, THUMB_R, ui.ctx().input(|i| i.time) as f32);
             ui.ctx().request_repaint();
-        } else if !pics::cover_rounded(p, ui.ctx(), &e.art, thumb, THUMB_R as f32, (e.focus, 0.5), 112, Color32::from_gray(if hot { 255 } else { 215 })) {
+        } else if !pics::cover_rounded(p, ui.ctx(), &e.art, thumb, THUMB_R as f32, (e.focus, 0.5), 224, Color32::from_gray(if hot { 255 } else { 215 })) {
             p.rect_filled(thumb, CornerRadius::same(THUMB_R), Color32::from_rgb(0x1e, 0x1a, 0x28));
         }
         p.rect_stroke(thumb, CornerRadius::same(THUMB_R), Stroke::new(1.0f32, if hot { color } else { Color32::from_white_alpha(30) }), StrokeKind::Inside);
