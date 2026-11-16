@@ -542,8 +542,9 @@ How (decided while starting it):
       one pays back 99%), its round (a ball's path from the round's seed, bit for bit: 900 of
       0.13.28's own rounds replayed), its limits and words, the Edge of the Board achievement
       and the play's XP. The page as 0.13.28 draws it, measured off its screen and filmed: the
-      board's size and place at three sizes, the temple as bright, pegs, ball, buckets and their
-      colors, a tenth of a second a row, the bucket pressed and lit as a ball lands and its
+      board's size and place at three sizes, the temple as bright, pegs, ball (its warm glow and
+      the faint ghost it leaves a frame behind, filmed 2026-11-16), buckets and their colors, a
+      tenth of a second a row, the bucket pressed and lit as a ball lands and its
       multiple floating up, the last ten buckets down the right. The peg and bucket sounds are
       made here. Its panel as 0.13.28's to the pixel (both tabs, measured off its screen at 1280
       by 800 and checked by a pixel difference): its rows' places, the Difficulty buttons' widths

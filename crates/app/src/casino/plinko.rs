@@ -54,6 +54,8 @@ struct Ball {
     /// Pegs struck so far (each rings once), and whether it's in its bucket.
     struck: usize,
     landed: bool,
+    /// Where it was drawn the frame before (its streak runs from there).
+    last: Option<Pos2>,
 }
 
 pub struct PlinkoUi {
@@ -218,7 +220,7 @@ fn fall_s(rows: usize) -> f32 {
 impl PyrApp {
     pub(super) fn plinko_round(&mut self, r: &RoundView) {
         let Outcome::Plinko(o) = &r.outcome else { return };
-        self.poker.casino.plinko.balls.push(Ball { o: o.clone(), start: Instant::now(), struck: 0, landed: false });
+        self.poker.casino.plinko.balls.push(Ball { o: o.clone(), start: Instant::now(), struck: 0, landed: false, last: None });
     }
 
     fn plinko_drop(&mut self, s: &ServerView) {
@@ -354,10 +356,21 @@ impl PyrApp {
                 landed.push((ball.o.bucket, ball.o.rows, ball.o.multiplier_x100, ball.o.paid, ball.o.chips));
             }
             if t < fall_s(ball.o.path.len()) + REST_S {
-                // (0.13.28's, filmed and at 6x: one wide warm disc round it, the ball, its shine.)
-                p.circle_filled(pos, b.ball_r * 2.2, Color32::from_rgba_unmultiplied(0xff, 0x92, 0x28, 49));
+                // A faint ghost of it a little past where it was drawn the frame before (0.13.28's:
+                // how far back is a frame's travel, so it shows on a slow machine and hardly at
+                // all at 60 a second): warm, 1.2 r round, a pale gold half r round in its middle;
+                // then one wide warm disc round the ball, the ball, its shine.
+                if let Some(last) = ball.last {
+                    let ghost = last + (pos - last) * 0.23;
+                    if (pos - ghost).length() > 0.5 {
+                        p.circle_filled(ghost, b.ball_r * 1.2, Color32::from_rgba_unmultiplied(0xff, 0x92, 0x28, 30));
+                        p.circle_filled(ghost, b.ball_r * 0.5, Color32::from_rgba_unmultiplied(0xff, 0xd2, 0x78, 26));
+                    }
+                }
+                p.circle_filled(pos, b.ball_r * 2.2, Color32::from_rgba_unmultiplied(0xff, 0x92, 0x28, 40));
                 p.circle_filled(pos, b.ball_r, Color32::from_rgb(0xff, 0xb0, 0x4a));
                 p.circle_filled(pos - vec2(b.ball_r * 0.3, b.ball_r * 0.35), b.ball_r * 0.45, Color32::from_rgb(0xff, 0xf6, 0xd8));
+                ball.last = Some(pos);
             }
         }
         let rings: Vec<u8> = struck.iter().take(sounds.min(2)).map(|s| s.0).collect();
