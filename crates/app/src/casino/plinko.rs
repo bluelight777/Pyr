@@ -136,17 +136,19 @@ struct Board {
 }
 
 impl Board {
-    /// 0.13.28's layout, measured at three sizes: the results take a column on the right; the
-    /// pegs are as wide as the rest allows (or as tall as the panel does), a little below the
-    /// panel's middle.
+    /// 0.13.28's layout (its pegs found and fitted at 1280 by 800, 1600 by 1000 and 1600 by 700,
+    /// 8 to 16 rows, to a tenth of a pixel): the results take a column on the right; the rest
+    /// less 24 each side holds the pegs, n + 2 spacings across (or the pegs are as tall as the
+    /// panel allows), a little below the panel's middle.
     fn new(panel: Rect, rows: u8) -> Board {
         let n = rows as f32;
         let room = panel.width() - RESULTS_W;
-        let dx = (room * 0.92 / (n + 2.0)).min((panel.height() - 77.5) / (2.28 + 0.88 * (n - 1.0))).max(4.0);
+        let dx = ((room - 48.0) / (n + 2.0)).min((panel.height() - 77.76) / (2.288 + 0.88 * (n - 1.0))).max(4.0);
         let dy = dx * 0.88;
-        let mid = panel.top() + 5.0 + panel.height() / 2.0 - 0.36 * dx;
+        let mid = panel.top() + 4.9 + panel.height() / 2.0 - 0.35 * dx;
         let top = pos2(panel.left() + room / 2.0, mid - dy * (n - 1.0) / 2.0);
-        Board { top, dx, dy, peg_r: (dx * 0.125).clamp(2.0, 6.0), ball_r: (dx * 0.27).clamp(4.0, 11.0), ring_r: (dx * 0.47).clamp(8.0, 15.0), rows: rows as usize }
+        // (Pegs and ring as 0.13.28's, at 6x and at each size: the ring no wider than 14.)
+        Board { top, dx, dy, peg_r: (dx * 0.12).clamp(2.0, 6.0), ball_r: (dx * 0.27).clamp(4.0, 11.0), ring_r: (dx * 0.43).clamp(8.0, 14.0), rows: rows as usize }
     }
 
     /// Peg `j` (0 to `row + 2`) of row `row`.
@@ -154,10 +156,10 @@ impl Board {
         pos2(self.top.x + (j as f32 - (row as f32 + 2.0) / 2.0) * self.dx, self.top.y + row as f32 * self.dy)
     }
 
-    /// Bucket `k`'s rectangle.
+    /// Bucket `k`'s face (its foot shows 3 under it): 0.13.28's, measured at 6x at 8 and 16 rows.
     fn bucket(&self, k: usize) -> Rect {
-        let c = pos2(self.top.x + (k as f32 - self.rows as f32 / 2.0) * self.dx, self.top.y + (self.rows as f32 - 1.0) * self.dy + self.dx * 0.85);
-        Rect::from_center_size(c, vec2(self.dx * 0.9, self.dx * 0.82))
+        let c = pos2(self.top.x + (k as f32 - self.rows as f32 / 2.0) * self.dx, self.top.y + (self.rows as f32 - 1.0) * self.dy + self.dx * 0.835);
+        Rect::from_center_size(c, vec2(self.dx * 0.9, self.dx * 0.79))
     }
 
     fn ring(&self) -> Pos2 {
@@ -228,28 +230,41 @@ impl PyrApp {
         let now = Instant::now();
         let ctx = ui.ctx().clone();
         let p = ui.painter().clone();
-        // The temple behind everything (as bright as 0.13.28 showed it: three quarters, and
-        // darker behind the board).
-        super::pics::cover(&p, &ctx, "plinko-back", area, 1376, Color32::from_gray(190));
+        // The temple behind everything, darkening down the page (0.13.28's: the picture at full
+        // brightness under a shade from 39 of 255 at the top to 127 at the foot; fitted on its
+        // screen at three sizes).
+        super::pics::cover(&p, &ctx, "plinko-back", area, 1376, Color32::WHITE);
+        super::vgrad(&p, area, Color32::from_black_alpha(39), Color32::from_black_alpha(127));
         let left = Rect::from_min_size(area.min + vec2(18.0, 18.0), vec2(300.0, area.height() - 36.0));
-        let board_r = Rect::from_min_max(pos2(left.right() + 20.0, area.top() + 18.0), area.max - vec2(18.0, 18.0));
+        let board_r = Rect::from_min_max(pos2(left.right() + 18.0, area.top() + 18.0), area.max - vec2(18.0, 18.0));
         self.plinko_controls(ui, s, left, now);
-        // The board.
-        p.rect_filled(board_r, theme::r(18), Color32::from_rgba_unmultiplied(0x09, 0x07, 0x12, 118));
-        p.rect_stroke(board_r, theme::r(18), Stroke::new(1.2_f32, Color32::from_rgb(0x9a, 0x76, 0x3c)), StrokeKind::Inside);
         let pk_ui = &self.poker.casino.plinko;
         let (risk, rows) = (pk_ui.risk, pk_ui.rows);
         // (Balls still falling keep the board they were dropped on.)
         let shown_rows = pk_ui.balls.last().map(|b| b.o.rows).unwrap_or(rows);
         let shown_risk = pk_ui.balls.last().map(|b| b.o.risk).unwrap_or(risk);
-        p.text(board_r.left_top() + vec2(26.0, 26.0), Align2::LEFT_CENTER, format!("PLINKO · {} · {} ROWS", shown_risk.name().to_uppercase(), shown_rows), theme::bold_font(14.0), Color32::from_rgb(0xff, 0xec, 0xc8));
         let b = Board::new(board_r, shown_rows);
         let n = shown_rows as usize;
+        // The board: dark glass, two glows behind the pegs (a warm one that swells every 4.8 s,
+        // a wide violet one), a thin gold edge, its name in gold edged in black. (0.13.28's,
+        // fitted on its screen at rest and at the swell's height, at three sizes and 8 to 16
+        // rows: the glows go with the pegs, and past the board's edge.)
+        p.rect_filled(board_r, theme::r(22), Color32::from_rgba_unmultiplied(11, 8, 19, 96));
+        // (The swell, filmed: 31 of 255 at rest to 38 at its height, in seven steps up over 0.7 s,
+        // held 0.8 s, seven down; 2.6 s at rest between.)
+        let t = ctx.input(|i| i.time) as f32;
+        let swell = ((t * 1.3).sin() * 1.2 - 0.1).clamp(0.0, 1.0);
+        let rn = n as f32;
+        super::radial(&p, pos2(b.top.x, b.top.y + b.dx * (0.3098 * rn + 0.1584)), b.dx * (0.6103 * rn + 0.37), Color32::from_rgba_unmultiplied(255, 146, 43, (31.0 + 7.0 * swell).round() as u8), Color32::TRANSPARENT);
+        super::radial(&p, pos2(b.top.x, b.top.y + b.dx * (0.3943 * rn + 0.2238)), b.dx * (0.7538 * rn + 0.4552), Color32::from_rgba_unmultiplied(132, 72, 220, 31), Color32::TRANSPARENT);
+        p.rect_stroke(board_r, theme::r(22), Stroke::new(1.5_f32, col::GOLD.gamma_multiply(0.45)), StrokeKind::Inside);
+        super::glow_text(&p, board_r.left_top() + vec2(26.0, 26.0), Align2::LEFT_CENTER, &format!("PLINKO · {} · {} ROWS", shown_risk.name().to_uppercase(), shown_rows), theme::bold_font(14.0), col::GOLD2, Color32::from_black_alpha(160));
         // The ring the balls drop from, in a warm glow.
         let ring = b.ring();
-        super::radial(&p, ring, b.dx * 1.1, Color32::from_rgba_unmultiplied(0xff, 0xac, 0x37, 80), Color32::TRANSPARENT);
-        p.circle_filled(ring, b.ring_r, Color32::from_rgba_unmultiplied(0xff, 0xb0, 0x50, 18));
-        p.circle_stroke(ring, b.ring_r, Stroke::new(1.5_f32, Color32::from_rgb(0xd0, 0xa2, 0x4a)));
+        // (0.13.28's, filmed: its glow beats, 70 of 255 to 109 and back every 1.4 s; the ring gold
+        // at 0.7.)
+        super::radial(&p, ring, b.dx * 1.1, Color32::from_rgba_unmultiplied(255, 174, 74, (70.0 + 39.0 * (t * 2.2).sin().abs()).round() as u8), Color32::TRANSPARENT);
+        p.circle_stroke(ring, b.ring_r, Stroke::new(1.5_f32, col::GOLD.gamma_multiply(0.7)));
         // Pegs: gold, lit pale with a soft disc around them for a moment when a ball strikes.
         let lit_peg = Color32::from_rgb(0xf2, 0xda, 0x91);
         for row in 0..n {
@@ -259,9 +274,10 @@ impl PyrApp {
                 if glow > 0.0 {
                     p.circle_filled(c, b.dx * 0.45, Color32::from_rgba_unmultiplied(0xff, 0xd2, 0x78, (66.0 * glow) as u8));
                 }
-                p.circle_filled(c + vec2(0.0, b.peg_r * 0.25), b.peg_r * 1.05, Color32::from_black_alpha(90));
+                // (0.13.28's, at 6x: a shadow a third of the peg under it, the shine white at 170.)
+                p.circle_filled(c + vec2(0.0, b.peg_r * 0.35), b.peg_r, Color32::from_black_alpha(135));
                 p.circle_filled(c, b.peg_r, mix(PEG, lit_peg, glow));
-                p.circle_filled(c - vec2(b.peg_r * 0.33, b.peg_r * 0.4), b.peg_r * 0.38, mix(Color32::from_rgb(0xe7, 0xd0, 0xa4), Color32::from_rgb(0xff, 0xf6, 0xe0), glow));
+                p.circle_filled(c - vec2(b.peg_r * 0.3, b.peg_r * 0.35), b.peg_r * 0.38, Color32::from_white_alpha(170));
             }
         }
         // Buckets: pressed down and lit when a ball lands, their multiple floating up above.
@@ -281,15 +297,21 @@ impl PyrApp {
                 }
             }
             let c = bucket_color(k, n);
-            let face = theme::r(4);
-            p.rect_filled(r, face, whiter(c, flash));
-            // (The top two fifths a little lighter.)
+            // Its foot (its color at 0.45, 3 under the face), the face, a shine over its top two
+            // fifths (white at 40): 0.13.28's, at 6x.
+            p.rect_filled(r.translate(vec2(0.0, 3.0)), theme::r(6), c.gamma_multiply(0.45));
+            p.rect_filled(r, theme::r(6), whiter(c, flash));
             let upper = Rect::from_min_max(r.min, pos2(r.right(), r.top() + r.height() * 0.4));
-            p.rect_filled(upper, egui::CornerRadius { nw: face.nw, ne: face.ne, sw: 0, se: 0 }, whiter(c, 0.16 + flash));
-            let size = (b.dx * 0.27).clamp(7.5, 12.0);
+            p.rect_filled(upper, theme::r(4), Color32::from_white_alpha(40));
+            // Its multiple, the shorter the bigger (0.13.28's: by how many letters, 7.5 to 16).
             let text = label(*m);
-            let size = if text.len() > 5 { size * 0.85 } else { size };
-            p.text(r.center(), Align2::CENTER_CENTER, text, theme::bold_font(size), Color32::from_rgb(0x2f, 0x0c, 0x05));
+            let per = match text.chars().count() {
+                0..=3 => 0.306,
+                4 => 0.248,
+                _ => 0.208,
+            };
+            let size = (b.dx * per).clamp(7.5, 16.0);
+            p.text(r.center(), Align2::CENTER_CENTER, text, theme::bold_font(size), Color32::from_rgb(0x2a, 0x08, 0x04));
         }
         for (r, m, t) in floats {
             let a = if t < 0.35 { 1.0 } else { (1.0 - (t - 0.35) / 0.95).max(0.0) };
@@ -386,8 +408,9 @@ impl PyrApp {
     /// place, the sizes of its words and its colours; the panel's always 300 wide).
     fn plinko_controls(&mut self, ui: &mut egui::Ui, s: &ServerView, r: Rect, _now: Instant) {
         let p = ui.painter().clone();
-        p.rect_filled(r, theme::r(18), PANEL.gamma_multiply(0.94));
-        p.rect_stroke(r, theme::r(18), Stroke::new(1.0_f32, Color32::from_rgb(0x3a, 0x2a, 0x4e)), StrokeKind::Inside);
+        // (0.13.28's: its purple at 235 of 255 over the temple, edged in white at 28.)
+        p.rect_filled(r, theme::r(18), Color32::from_rgba_unmultiplied(PANEL.r(), PANEL.g(), PANEL.b(), 235));
+        p.rect_stroke(r, theme::r(18), Stroke::new(1.0_f32, Color32::from_white_alpha(28)), StrokeKind::Inside);
         let x = r.left() + 18.0;
         // (The rows run to three from the right edge: 0.13.28's.)
         let w = r.width() - 21.0;
