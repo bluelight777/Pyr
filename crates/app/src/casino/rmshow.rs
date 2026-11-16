@@ -870,10 +870,18 @@ fn spinning_sym(machine: u8, seed: u64) -> (u8, u32) {
     }
 }
 
-/// A "WIN 25" tag at the foot of a win.
+/// The lettering of the tags and notes under a win ("WIN 25", "MULTIPLIER ×4 AND BUILDING", "25 × 4
+/// = 100"): 0.13.28's, measured on Cosmic Jackpot at five page sizes (cells of 86 to 168: 15,
+/// 16.8, 20, 24, 24).
+fn tag_size(b: &Board) -> f32 {
+    (b.cell * 0.16).clamp(15.0, 24.0)
+}
+
+/// A "WIN 25" tag at the foot of a win (0.13.28's pill: 15 either side of the words, 6 over and
+/// under them).
 fn win_tag(p: &egui::Painter, at: Pos2, text: &str, font: &str, size: f32, accent: Color32) {
     let g = p.layout_no_wrap(text.to_string(), theme::display_font(font, size), col::GOLD2);
-    let r = Rect::from_center_size(at, g.size() + vec2(30.0, 8.0));
+    let r = Rect::from_center_size(at, g.size() + vec2(30.0, 12.0));
     p.rect_filled(r, theme::r((r.height() / 2.0) as u8), Color32::from_black_alpha(215));
     p.rect_stroke(r, theme::r((r.height() / 2.0) as u8), Stroke::new(1.0f32, faded(accent, 0.8)), StrokeKind::Inside);
     p.galley(r.center() - g.size() / 2.0, g, col::GOLD2);
@@ -1134,9 +1142,9 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
             if let Some((r, row)) = at {
                 let text = lit_text(o, th, k, since, dur);
                 let c = b.cell_at(r as f32, row as f32);
-                // (Its foot on the winner's.)
-                let size = (b.cell * 0.147).clamp(12.0, 26.0);
-                win_tag(p, pos2(c.center().x, c.bottom() - size), &text, st.font, size, accent);
+                // (Its middle 0.147 of a cell over the winner's foot, as 0.13.28's at five page
+                // sizes, whatever its lettering's size.)
+                win_tag(p, pos2(c.center().x, c.bottom() - (b.cell * 0.147).clamp(12.0, 26.0)), &text, st.font, tag_size(b), accent);
             }
             return;
         }
@@ -1267,11 +1275,11 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
             draw_cells(&clip, ctx, b, m, o.bet, s, 0, lit, &ys, accent, time);
             // (0.13.28's notes and tags during Bomb Spins: the machine's lettering at 24 where the
             // reels are 161 a cell, their middle 2 lower than the rebuild had them.)
-            let fs = (b.cell * 0.15).clamp(12.0, 24.0);
+            let fs = tag_size(b);
             let foot = pos2(b.reels.center().x, b.reels.bottom() - b.cell * 0.218);
             let note = |text: &str, a: f32| {
                 let g = p.layout_no_wrap(text.to_string(), theme::display_font(st.font, fs), faded(col::GOLD2, a));
-                let r = Rect::from_center_size(foot, g.size() + vec2(32.0, 12.0));
+                let r = Rect::from_center_size(foot, g.size() + vec2(30.0, 12.0));
                 p.rect_filled(r, theme::r((r.height() / 2.0) as u8), Color32::from_black_alpha((215.0 * a) as u8));
                 p.rect_stroke(r, theme::r((r.height() / 2.0) as u8), Stroke::new(1.0f32, faded(accent, 0.8 * a)), StrokeKind::Inside);
                 p.galley(r.center() - g.size() / 2.0, g, faded(col::GOLD2, a));
@@ -1309,7 +1317,7 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
             let chain = chain_won(o, o.steps.len().saturating_sub(1));
             // (Where Bomb Spins' go, and their size: 0.13.28's are one.)
             let tag_at = pos2(b.reels.center().x, b.reels.bottom() - b.cell * 0.218);
-            let tag_size = (b.cell * 0.15).clamp(12.0, 24.0);
+            let tag_size = tag_size(b);
             let bs = bombs(s);
             let total: u32 = bs.iter().map(|x| x.2).sum();
             let tk = if show.turbo { 0.5 } else { 1.0 };
@@ -1359,7 +1367,7 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
                 }
             }
             if u > 0.7 {
-                win_tag(p, pos2(b.reels.center().x, b.reels.bottom() - b.cell * 0.2), &format!("COLLECTED {}", chips_text(o.collected)), st.font, (b.cell * 0.147).clamp(12.0, 26.0), accent);
+                win_tag(p, pos2(b.reels.center().x, b.reels.bottom() - b.cell * 0.2), &format!("COLLECTED {}", chips_text(o.collected)), st.font, tag_size(b), accent);
             }
             return;
         }

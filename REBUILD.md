@@ -478,7 +478,10 @@ How (decided while starting it):
       falling in 0.32 and the board still till 0.51 after it; a free spin's quicker (0.79, 0.405,
       0.29 and 0.43); each within a frame of 0.13.28's. The bombs adding up, an ordinary spin's
       and a free spin's alike: the first bomb's worth 0.31 s in, each next 0.45 s after, the total
-      0.11 s after the last; then "W × M = T" 1.4 s (a free spin's 1.2). The MULTIPLIER panel right of the reels (the machine's bomb
+      0.11 s after the last; then "W × M = T" 1.4 s (a free spin's 1.2). The tags' and
+      words' lettering 0.16 of a cell between 15 and 24, their pill 15 either side of the words
+      and 6 over and under, a win's tag 0.147 of a cell over its winner's foot (0.13.28's at five
+      page sizes; the same to the pixel at 900x600, within a pixel at the others). The MULTIPLIER panel right of the reels (the machine's bomb
       with what the multiplier stands at, "STAYS ALL SPINS"): no bigger than a cell of 124
       makes it, cut off where the page ends rather than hidden (0.13.28 shows its edge on Cosmic
       Jackpot at 1280x800), its edge breathing from 0.7 to full every 1.3 s and the bomb's light
