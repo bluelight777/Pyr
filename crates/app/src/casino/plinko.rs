@@ -392,9 +392,10 @@ impl PyrApp {
         for (i, (bucket, rows, m, at)) in self.poker.casino.plinko.results.iter().enumerate() {
             let fresh = (now - *at).as_secs_f32();
             let a = (fresh / 0.15).min(1.0) * if i == 0 { 1.0 } else { 0.77 };
-            let r = Rect::from_min_size(pos2(board_r.right() - 15.0 - 56.0, y), vec2(56.0, 30.0));
+            // (17 in from the board's right, as 0.13.28's at 1280 and 1600 wide.)
+            let r = Rect::from_min_size(pos2(board_r.right() - 17.0 - 56.0, y), vec2(56.0, 30.0));
             p.rect_filled(r, theme::r(7), bucket_color(*bucket as usize, *rows as usize).gamma_multiply(a));
-            p.text(r.center(), Align2::CENTER_CENTER, label(*m), theme::bold_font(12.5), Color32::from_rgb(0x2f, 0x0c, 0x05).gamma_multiply(a));
+            p.text(r.center(), Align2::CENTER_CENTER, label(*m), theme::bold_font(12.5), Color32::from_rgb(0x2a, 0x08, 0x04).gamma_multiply(a));
             y += 36.0;
         }
         // Auto play's next ball.
