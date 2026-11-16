@@ -530,7 +530,7 @@ impl PyrApp {
             let levels = crate::casino::levels::has_levels(&me);
             if levels {
                 // My tier's crest, the level's progress around it, the level under it (0.13.5).
-                crate::casino::levels::crest_badge(p, ui.ctx(), &me, lc, 33.0);
+                crate::casino::levels::crest_badge(p, ui.ctx(), &me, lc, 32.0, 32.0, false);
             } else {
                 // Level badge.
                 p.circle_filled(lc, 30.0, theme::ELEV2());
@@ -557,7 +557,9 @@ impl PyrApp {
                 let tg = p.layout_no_wrap(title, theme::bold_font(13.5), crate::casino::levels::tier_color(me.tier as usize));
                 let tw = tg.size().x;
                 p.galley(pos2(x, r.top() + 46.0 - tg.size().y / 2.0), tg, Color32::WHITE);
-                p.text(pos2(x + tw + 6.0, r.top() + 46.0), egui::Align2::LEFT_CENTER, format!("·  {next}"), theme::font(12.5), theme::MUTED());
+                // (Lit up in a level's last stretch, "almost there", as 0.13.28's.)
+                let near = next.starts_with("almost there");
+                p.text(pos2(x + tw + 7.0, r.top() + 46.0), egui::Align2::LEFT_CENTER, format!("·  {next}"), theme::font(12.5), if near { theme::TEXT() } else { theme::MUTED() });
             } else {
                 p.text(pos2(x, r.top() + 46.0), egui::Align2::LEFT_CENTER, format!("{} XP to level {}", chips_text(me.level_to.saturating_sub(me.xp)), me.level + 1), theme::font(12.5), theme::MUTED());
             }

@@ -78,8 +78,12 @@ pub struct Bar {
 /// whose menu is open (warmed, an orange line under it).
 pub fn bar(ui: &mut egui::Ui, bar: Rect, left: &[Item], right: &[Item], on: Option<Item>, open: Option<Item>) -> Bar {
     let p = ui.painter().clone();
-    // Its dark, down from (28,16,16) to (14,8,10).
-    super::vgrad(&p, bar, Color32::from_rgb(28, 16, 16), Color32::from_rgb(14, 8, 10));
+    // Its dark, down from (28,16,16) to (14,8,10). (Over dark gold, the dark ending half a point above the foot, on the screen's pixels: a
+    // hairline of gold along it on a screen scaled past 1, none at 1, as 0.13.28's.)
+    let ppp = ui.ctx().pixels_per_point();
+    p.rect_filled(Rect::from_min_max(pos2(bar.left(), bar.bottom() - 1.0), bar.max), CornerRadius::ZERO, col::GOLD_DARK);
+    let dark = Rect::from_min_max(bar.min, pos2(bar.right(), ((bar.bottom() - 0.5) * ppp).round() / ppp));
+    super::vgrad(&p, dark, Color32::from_rgb(28, 16, 16), Color32::from_rgb(14, 8, 10));
     // The mark and the name.
     let (l, t) = (bar.left(), bar.top());
     p.circle_filled(pos2(l + 30.5, t + 28.5), 16.5, Color32::from_rgb(34, 25, 26));
@@ -87,7 +91,7 @@ pub fn bar(ui: &mut egui::Ui, bar: Rect, left: &[Item], right: &[Item], on: Opti
     // (Under 761 wide the name gives way, and the buttons move up into its place.)
     let titled = bar.width() > TITLED;
     if titled {
-        p.text(pos2(l + 54.0, t + 28.5), Align2::LEFT_CENTER, "PYR CASINO", theme::display_font("anton", 21.0), col::GOLD2);
+        p.text(pos2(l + 54.0, t + 29.0), Align2::LEFT_CENTER, "PYR CASINO", theme::display_font("anton", 21.0), col::GOLD2);
     }
     let wide = bar.width() > WIDE;
     let name_font = theme::bold_font(13.5);

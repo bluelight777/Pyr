@@ -520,6 +520,19 @@ How (decided while starting it):
       their cards.
 - [x] VIP Club: Ember Back, daily chips by tier, weekly bonus, VIP page (0.13.5) (a tab until the
       menu bar comes with the floor)
+- [x] The levels' look, matched at 6x and at 1x with the same account in both (2026-11-16,
+      `rebuild/measured/vip.md`): today's missions (a card like the player's, the day's color down
+      its left edge, done ones a quarter of it, the reward in gold); Ember Back (an ember's dark
+      edged in the tier's color, the amount in gold, Claim in the accent with dark letters or grey);
+      the crest with its level (a faint glow of the tier's color, the dark disc and its ring, the
+      progress round it, the level on a pill); the VIP card in the tier's color (0.13.28 colors it
+      by the tier: silver at Flame, gold at Blaze; the rebuild had it orange at every tier), its
+      wide soft glow over everything round it, the weekly box; the tiers' cards (reached ones a
+      little of their color, mine edged thicker, the next edged in its color, its crest breathing,
+      the rest plain with their crests dimmed). The player card's next-level line lights up in a
+      level's last stretch. The casino bar's hairline of dark gold along its foot (shows only on a
+      screen scaled past 1). Kept as fixes: Ember Back's line under the amount stays inside its
+      card, and the tiers' cards stay tall enough for every perk (0.13.28's ran past both).
 - [x] Plinko (0.13.5): the four difficulties' tables for 8 to 16 rows as 0.13.28 has them (every
       one pays back 99%), its round (a ball's path from the round's seed, bit for bit: 900 of
       0.13.28's own rounds replayed), its limits and words, the Edge of the Board achievement
