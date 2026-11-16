@@ -25,6 +25,8 @@ use crate::theme;
 const DROP_S: f32 = 0.22;
 const ROW_S: f32 = 0.1;
 const LAND_S: f32 = 0.1;
+/// How long a struck peg stays lit (0.13.28's, filmed).
+const LIT_S: f32 = 0.4;
 
 /// The column on the board's right for the last results, and how many it shows.
 const RESULTS_W: f32 = 70.0;
@@ -148,7 +150,7 @@ impl Board {
         let mid = panel.top() + 4.9 + panel.height() / 2.0 - 0.35 * dx;
         let top = pos2(panel.left() + room / 2.0, mid - dy * (n - 1.0) / 2.0);
         // (Pegs and ring as 0.13.28's, at 6x and at each size: the ring no wider than 14.)
-        Board { top, dx, dy, peg_r: (dx * 0.12).clamp(2.0, 6.0), ball_r: (dx * 0.27).clamp(4.0, 11.0), ring_r: (dx * 0.43).clamp(8.0, 14.0), rows: rows as usize }
+        Board { top, dx, dy, peg_r: (dx * 0.12).clamp(2.0, 6.0), ball_r: (dx * 0.32).clamp(4.0, 11.0), ring_r: (dx * 0.43).clamp(8.0, 14.0), rows: rows as usize }
     }
 
     /// Peg `j` (0 to `row + 2`) of row `row`.
@@ -265,14 +267,15 @@ impl PyrApp {
         // at 0.7.)
         super::radial(&p, ring, b.dx * 1.1, Color32::from_rgba_unmultiplied(255, 174, 74, (70.0 + 39.0 * (t * 2.2).sin().abs()).round() as u8), Color32::TRANSPARENT);
         p.circle_stroke(ring, b.ring_r, Stroke::new(1.5_f32, col::GOLD.gamma_multiply(0.7)));
-        // Pegs: gold, lit pale with a soft disc around them for a moment when a ball strikes.
+        // Pegs: gold, lit pale with a soft disc around them for a moment when a ball strikes (0.13.28's,
+        // filmed: 0.4 s, the disc shrinking to half as it fades).
         let lit_peg = Color32::from_rgb(0xf2, 0xda, 0x91);
         for row in 0..n {
             for j in 0..row + 3 {
                 let c = b.peg(row, j);
-                let glow = self.poker.casino.plinko.lit.get(&(row as u8, j as u8)).map(|t| (1.0 - (now - *t).as_secs_f32() / 0.45).max(0.0)).unwrap_or(0.0);
+                let glow = self.poker.casino.plinko.lit.get(&(row as u8, j as u8)).map(|t| (1.0 - (now - *t).as_secs_f32() / LIT_S).max(0.0)).unwrap_or(0.0);
                 if glow > 0.0 {
-                    p.circle_filled(c, b.dx * 0.45, Color32::from_rgba_unmultiplied(0xff, 0xd2, 0x78, (66.0 * glow) as u8));
+                    p.circle_filled(c, b.dx * 0.5 * (0.5 + 0.5 * glow), Color32::from_rgba_unmultiplied(0xff, 0xd2, 0x78, (81.0 * glow) as u8));
                 }
                 // (0.13.28's, at 6x: a shadow a third of the peg under it, the shine white at 170.)
                 p.circle_filled(c + vec2(0.0, b.peg_r * 0.35), b.peg_r, Color32::from_black_alpha(135));
@@ -340,10 +343,10 @@ impl PyrApp {
                 landed.push((ball.o.bucket, ball.o.rows, ball.o.multiplier_x100, ball.o.paid, ball.o.chips));
             }
             if !ball.landed {
-                p.circle_filled(pos, b.ball_r * 1.6, Color32::from_rgba_unmultiplied(0xff, 0x8a, 0x3a, 30));
-                p.circle_filled(pos, b.ball_r * 1.25, Color32::from_rgba_unmultiplied(0xff, 0x9a, 0x3a, 44));
+                // (0.13.28's, filmed and at 6x: one wide warm disc round it, the ball, its shine.)
+                p.circle_filled(pos, b.ball_r * 2.2, Color32::from_rgba_unmultiplied(0xff, 0x92, 0x28, 49));
                 p.circle_filled(pos, b.ball_r, Color32::from_rgb(0xff, 0xb0, 0x4a));
-                p.circle_filled(pos - vec2(b.ball_r * 0.36, b.ball_r * 0.4), b.ball_r * 0.36, Color32::from_rgb(0xff, 0xf6, 0xd8));
+                p.circle_filled(pos - vec2(b.ball_r * 0.3, b.ball_r * 0.35), b.ball_r * 0.45, Color32::from_rgb(0xff, 0xf6, 0xd8));
             }
         }
         let rings: Vec<u8> = struck.iter().take(sounds.min(2)).map(|s| s.0).collect();
@@ -351,7 +354,7 @@ impl PyrApp {
         for k in struck {
             pu.lit.insert(k, now);
         }
-        pu.lit.retain(|_, t| (now - *t).as_secs_f32() < 0.5);
+        pu.lit.retain(|_, t| (now - *t).as_secs_f32() < LIT_S + 0.05);
         pu.bounced.retain(|_, t| (now - *t).as_secs_f32() < 1.4);
         pu.balls.retain(|b| !b.landed || (now - b.start).as_secs_f32() < fall_s(b.o.path.len()) + 0.2);
         // Each peg its row's note; a bucket its own, louder when it pays more than the ball cost
