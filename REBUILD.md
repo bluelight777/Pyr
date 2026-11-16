@@ -361,7 +361,9 @@ Version in brackets: where 0.13.x first had it.
       the list is next put up ("programs Pyr does itself now taken off the list"): the same
       lists, the same log lines, the same state.
 - [x] One-click update of open programs, programs can ask, invites update first, list fetched
-      again, every ten minutes (0.13.27)
+      again, every ten minutes (0.13.27). Joining from an invite to a game that has an update:
+      "Updating <game> first, then into the room." as it starts (0.13.28's words, Nov 16; not
+      seen on its screen, which needs a game with a newer version in the Library).
 
 ### Pyr Casino
 

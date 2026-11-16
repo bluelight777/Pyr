@@ -175,6 +175,8 @@ impl PyrApp {
         match installed {
             Some(p) => {
                 if self.plugins.update_for(&p).is_some() {
+                    // (0.13.28's words, as it goes.)
+                    acts.push(Act::Toast(format!("Updating {} first, then into the room.", p.name), false));
                     self.update_program(game, Some(room.to_string()));
                 } else {
                     acts.push(Act::OpenProgram { id: game.to_string(), room: Some(room.to_string()) });
