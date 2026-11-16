@@ -45,7 +45,8 @@ const PAGES: &[Page] = &[
         name: "Voice & Video",
         group: "App settings",
         words: "voice video audio microphone mic input output device speakers headphones headset volume loudness test check push talk ptt key \
-                shortcut activity sensitivity threshold automatic noise suppression isolation echo cancellation gain quality bitrate kbps qos \
+                shortcut keybind hotkey mute unmute activity sensitivity threshold automatic noise suppression isolation echo cancellation gain \
+                quality bitrate kbps qos \
                 priority meter meters visualizer soundboard sounds join camera webcam screen share stream quality devices",
     },
     Page {
