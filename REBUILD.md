@@ -754,6 +754,9 @@ How (decided while starting it):
 - [x] Dominó Cubano tables in the casino, to 10,000,000, El Presidente (0.13.11/12). The five
       standing tables (El Presidente the fifth: at 1280 wide neither app's strip shows it, nor
       scrolls), every page and sound checked side by side with 0.13.28 (`measured/domino.md`).
+      Its line in the casino as 0.13.28's: "Double-nine Cuban dominoes for chips: play in pairs
+      or on your own, double the stake, and win big on a Capicúa." (seen on its page at
+      1600x1000, Nov 16).
   - [x] The game and the server as 0.13.28's (`casino_domino`): Pairs and Solo, double-nine,
         ten tiles each (Solo two to four, drawing from what's left), capicúa half again (never
         on a double), chiva double, ¡Doblo! to ×8 within what everyone covers (answered by the

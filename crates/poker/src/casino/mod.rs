@@ -115,7 +115,7 @@ impl Game {
             Game::Reels => "Twelve machines, 243 ways, wilds, a pick-and-dodge bonus or a prize wheel.",
             Game::Dragon => "243 ways. Feed the dragon eggs to grow its wins to 5×; six fireballs for Ember Respins and four jackpots.",
             Game::Plinko => "Drop a ball through the pegs. Pick the difficulty and the rows: up to 10,000 times the bet on Expert.",
-            Game::Domino => "Double-nine Cuban dominoes for chips, at tables of four: in pairs or each for yourself.",
+            Game::Domino => "Double-nine Cuban dominoes for chips: play in pairs or on your own, double the stake, and win big on a Capicúa.",
         }
     }
 
