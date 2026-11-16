@@ -92,6 +92,8 @@ struct FreePlay {
     next: usize,
     paid: u64,
     ended: Option<Instant>,
+    /// When the last "+5 SPINS" came up (it stays into the next spin).
+    more_at: Option<Instant>,
 }
 
 /// How long Bomb Spins' splash and its tag at the end show.
@@ -397,7 +399,7 @@ impl PyrApp {
             }
             let ui = &mut self.poker.casino.row;
             ui.stopped_at = Some(now);
-            ui.free = Some(FreePlay { round: round.clone(), o, splash: now, next: 0, paid: 0, ended: None });
+            ui.free = Some(FreePlay { round: round.clone(), o, splash: now, next: 0, paid: 0, ended: None, more_at: None });
             return;
         }
         // Buy Hold & Win: no spin, its board straight away.
@@ -800,6 +802,10 @@ impl PyrApp {
             rmshow::splash(&p, &ctx, th, st, area, show, now, time);
         }
         // Bomb Spins: its count, its multiplier, its splash, its tag at the end.
+        let more_now = self.poker.casino.row.rm.as_ref().filter(|r| r.free.is_some()).and_then(|r| r.more_at(now));
+        if let (Some(t), Some(fp)) = (more_now, self.poker.casino.row.free.as_mut()) {
+            fp.more_at = Some(t);
+        }
         if let Some(fp) = self.poker.casino.row.free.as_ref() {
             let board = rmshow::Board { reels: lay.reels, cell: lay.cell, gap: lay.gap, area };
             let since = now.saturating_duration_since(fp.splash).as_secs_f32();
@@ -808,8 +814,10 @@ impl PyrApp {
                 rmshow::splash_with(&p, &ctx, th, st, area, &name.to_uppercase(), &line, since, FREE_SPLASH, time);
             } else {
                 let i = fp.next.saturating_sub(1);
-                let shown = fp.o.free.len().min(fp.next.max(1));
-                let total = remaster::FREE_SPINS + remaster::MORE_SPINS * fp.o.free[..shown].iter().filter(|f| f.more).count();
+                // (Three scatters' five more counted 0.7 s after their box comes up, as 0.13.28's.)
+                let done = fp.o.free.len().min(i);
+                let this = more_now.is_some_and(|t| now >= t + Duration::from_secs_f32(0.7));
+                let total = remaster::FREE_SPINS + remaster::MORE_SPINS * (fp.o.free[..done].iter().filter(|f| f.more).count() + usize::from(this));
                 let tumble = self.poker.casino.row.rm.as_ref().and_then(|r| r.tumble(now));
                 rmshow::free_counter(&p, &board, i, total.max(i + 1), tumble, st.font, th.accent);
                 // The multiplier beside the reels: as it stood, as it builds.
@@ -818,6 +826,9 @@ impl PyrApp {
                     None => i.checked_sub(1).map(|j| fp.o.free[j].mult).unwrap_or(0),
                 };
                 rmshow::mult_panel(&p, &ctx, &board, m, st.font, th.accent, mult);
+                if let Some(t) = fp.more_at {
+                    rmshow::more_box(&p, &board, th.accent, now.saturating_duration_since(t).as_secs_f32());
+                }
                 if let Some(ended) = fp.ended {
                     let a = (now.saturating_duration_since(ended).as_secs_f32() / 0.3).min(1.0);
                     let built = fp.o.free.last().map(|f| f.mult).unwrap_or(0);
@@ -833,6 +844,12 @@ impl PyrApp {
             let board = rmshow::Board { reels: lay.reels, cell: lay.cell, gap: lay.gap, area };
             rmshow::free_counter(&p, &board, spins.saturating_sub(1), spins, None, st.font, th.accent);
             rmshow::mult_panel(&p, &ctx, &board, m, st.font, th.accent, built);
+            // (Debug builds only: PYR_DEV_MOREBOX=<seconds> shows "+5 SPINS" as it stands that
+            // long after it came up, to measure against 0.13.28's.)
+            #[cfg(debug_assertions)]
+            if let Some(t) = std::env::var("PYR_DEV_MOREBOX").ok().and_then(|v| v.parse::<f32>().ok()) {
+                rmshow::more_box(&p, &board, th.accent, t);
+            }
         }
         // Its top prize, top middle: a progressive jackpot's pool, counting, or how far it goes.
         if !in_mini && !in_all_in && !holding {

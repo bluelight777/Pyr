@@ -480,6 +480,14 @@ How (decided while starting it):
       1,104", "234 × 3 = 702"); the rebuild's once showed "42 × 26 = 1,087". Most likely W is
       shown rounded and T paid on a win with a fraction of a chip in it, which would be a
       difference in how a round is paid, not in the picture: not checked further, not changed.
+      Three scatters in Bomb Spins as 0.13.28's (a round of 20 spins filmed at 5 frames a
+      second, Nov 16, two in it): the board dimmed but the scatters, "+5 SPINS" in the machine's
+      colour and "Three scatters: more Bomb Spins, the multiplier and all" in white on a box
+      over the reels' top two rows (popping up over 0.35 s; up 2.75 s, into the next spin, its
+      last 0.45 s fading); the count's five more 0.7 s after it comes up, the next spin 1.7 s
+      after (the rebuild had "3 SCATTERS: 5 MORE SPINS" at the foot and the count up from the
+      spin's start). Its sizes are from one machine at one page size (Cosmic Jackpot, a cell of
+      161.6): taken as a cell's, not seen at others.
       Play Feature's card and Buy box for a round that builds as 0.13.28's (both side by side on
       Cosmic Jackpot and Gold Rush, Nov 16): a medallion, a thin gold ring with an ember glow
       inside, the machine's three bombs or coins in a row, the middle one in front and the two

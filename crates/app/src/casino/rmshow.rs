@@ -153,6 +153,13 @@ impl RmShow {
     }
 
     /// When the reels' part is over (from the landing).
+    /// When this free spin's three scatters put up their "+5 SPINS" (once that's come).
+    pub fn more_at(&self, now: Instant) -> Option<Instant> {
+        let at = self.events.iter().find(|e| e.1 == Ev::FreeMore)?.0;
+        let t = self.landed + Duration::from_secs_f32(at);
+        (now >= t).then_some(t)
+    }
+
     pub fn done_at(&self) -> Instant {
         self.landed + Duration::from_secs_f32(self.events.last().map(|e| e.0).unwrap_or(0.0))
     }
@@ -312,7 +319,8 @@ pub fn timeline(o: &rm::Outcome, turbo: bool, free: Option<&FreeCtx>) -> Vec<(f3
                 push(Ev::FreeWin, 1.3);
             }
             if f.more {
-                push(Ev::FreeMore, 1.4);
+                // (0.13.28's, filmed twice: the next spin sets off 1.6 to 1.8 s after its box.)
+                push(Ev::FreeMore, 1.7);
             }
         } else if fam == Family::Tumble && o.mult > 1 {
             let bombs = o.steps.last().map(|s| s.grid.iter().flatten().filter(|&&c| c == BOMB).count()).unwrap_or(0);
@@ -896,6 +904,11 @@ fn bomb_cells(s: &rm::Step) -> u16 {
     bombs(s).iter().fold(0u16, |m, &(r, row, _)| m | 1 << (r * ROWS + row))
 }
 
+/// The screen's scatters, as `draw_cells`' lit cells.
+fn scatter_cells(s: &rm::Step) -> u16 {
+    (0..REELS).flat_map(|r| (0..ROWS).map(move |row| (r, row))).filter(|&(r, row)| s.grid[r][row] == SCATTER).fold(0u16, |m, (r, row)| m | 1 << (r * ROWS + row))
+}
+
 /// Every bomb on a screen, with what it's worth.
 fn bombs(s: &rm::Step) -> Vec<(usize, usize, u32)> {
     (0..REELS).flat_map(|r| (0..ROWS).map(move |row| (r, row))).filter(|&(r, row)| s.grid[r][row] == BOMB).map(|(r, row)| (r, row, s.values[r][row])).collect()
@@ -1197,7 +1210,8 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
             let f = show.free.unwrap();
             // (0.13.28's: no badge in Bomb Spins; the board dimmed, this spin's bombs aglow where
             // they are, the multiplier counted in the note.)
-            let lit = if ev == Ev::FreeMore { 0 } else { bomb_cells(s) };
+            // (Three scatters: the board dimmed but them, their box over it from the page.)
+            let lit = if ev == Ev::FreeMore { scatter_cells(s) } else { bomb_cells(s) };
             draw_cells(&clip, ctx, b, m, o.bet, s, 0, lit, &ys, accent, time);
             // (0.13.28's notes and tags during Bomb Spins: the machine's lettering at 24 where the
             // reels are 161 a cell, their middle 2 lower than the rebuild had them.)
@@ -1228,9 +1242,7 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
                 Ev::FreeWin => {
                     win_tag(p, foot, &format!("{} × {} = {}", chips_text(f.base), f.after, chips_text(f.paid)), st.font, fs, accent);
                 }
-                _ => {
-                    note("3 SCATTERS: 5 MORE SPINS", (since * 5.0).min(1.0));
-                }
+                _ => {}
             }
             return;
         }
@@ -1364,6 +1376,35 @@ pub fn mult_panel(p: &egui::Painter, ctx: &egui::Context, b: &Board, machine: u8
     }
     p.text(mid, Align2::CENTER_CENTER, &text, big, Color32::WHITE);
     p.text(pos2(r.center().x, r.bottom() - c * 0.155), Align2::CENTER_CENTER, "STAYS ALL SPINS", theme::bold_font(c * 0.084), col::MUTED);
+}
+
+/// How long Bomb Spins' "+5 SPINS" stays up: into the next spin, fading at the end.
+pub const MORE_BOX: f32 = 2.75;
+
+/// Three scatters in Bomb Spins: "+5 SPINS" and its line on a box over the reels' top two rows,
+/// `since` seconds after it came up. (0.13.28's, filmed at 5 frames a second on Cosmic Jackpot,
+/// twice in one round: popping up over 0.35 s about its middle, gone 2.75 s after, its last
+/// 0.45 s fading; the box 494 by 93 where a cell is 161.6, the words in the machine's colour
+/// and white, its fill the machine's colour at 0.12, its edge the colour 2.5 wide.)
+pub fn more_box(p: &egui::Painter, b: &Board, accent: Color32, since: f32) {
+    if !(0.0..MORE_BOX).contains(&since) {
+        return;
+    }
+    let k = super::ease_back(since / 0.35);
+    let a = ((MORE_BOX - since) / 0.45).clamp(0.0, 1.0);
+    if k < 0.05 || a <= 0.0 {
+        return;
+    }
+    let c = b.cell;
+    let tg = p.layout_no_wrap(format!("+{} SPINS", rm::MORE_SPINS), theme::bold_font(c * 0.233 * k), faded(accent, a));
+    let lg = p.layout_no_wrap("Three scatters: more Bomb Spins, the multiplier and all".to_string(), theme::bold_font(c * 0.1038 * k), faded(Color32::WHITE, a));
+    let size = vec2(tg.size().x.max(lg.size().x) + c * 0.316 * k, c * 0.5755 * k);
+    let r = Rect::from_center_size(pos2(b.reels.center().x, b.reels.top() + c * 0.965), size);
+    let round = theme::r((c * 0.1362 * k).round() as u8);
+    p.rect_filled(r, round, faded(super::mix(accent, Color32::BLACK, 0.88), a));
+    p.rect_stroke(r, round, Stroke::new(2.5f32, faded(accent, a)), StrokeKind::Inside);
+    p.galley(pos2(r.center().x - tg.size().x / 2.0, r.top() + c * 0.094 * k), tg, faded(accent, a));
+    p.galley(pos2(r.center().x - lg.size().x / 2.0, r.top() + c * 0.376 * k), lg, faded(Color32::WHITE, a));
 }
 
 /// Bomb Spins over: its tag in the middle of the reels (0.13.28's: "BOMB SPINS / 10 spins · ×6
