@@ -119,15 +119,19 @@ that the rebuild doesn't know yet must come through untouched:
 
 ## Releasing the rebuild (what's left, in order)
 
-1. On Blue's PC, side by side with 0.13.28 (`Downloads\pyr-test`, README.txt there; the test copy
-   built again on Nov 16 from d82712d, with everything above): programs
+1. On Blue's PC, side by side with 0.13.28 (`Downloads\pyr-test`, README.txt there): programs
    inside Pyr (Torch & Conquer, Pyropoly on the NVIDIA card, Chimbrowser); the echo test with
-   speakers; a screen share's encoder. What differs gets fixed or said before going on.
-2. Blue's say: the version (0.14.0, say: past 0.13.28, a new key) and the release notes (what
-   to tell people: install this one by hand once from pyr.gg, everything comes with them; what's
-   new: prop bets in chat, the Updating screen, Reel Row Remastered on the rebuild's own
-   numbers, the fixes found on the way; whether the voice fix for headphones, `PYR_FIX=pcgate`,
-   goes in after the echo test).
+   speakers; a screen share's encoder. What differs gets fixed or said before going on. The
+   test copy is built with the `test-old-library` feature (`build-windows.sh -p pyr --features
+   test-old-library`), so it reads the Library 0.13.28 reads (`index3.json`, the key before):
+   without it, it reads only the new key's lists, which aren't up before the release ("the
+   plugin list isn't signed by Firelit Games", Nov 16). `installer/windows/build.sh` refuses a
+   pyr.exe built with it.
+2. Blue's say (Nov 16): the version is **0.14.0**. The release notes say what's new and how to
+   get it (install this one by hand once from pyr.gg, everything comes with them); they don't
+   mention the wipe or the rebuild. What's new: prop bets in chat, the Updating screen, Reel
+   Row Remastered on the rebuild's own numbers, the fixes found on the way. Still his: whether
+   the voice fix for headphones, `PYR_FIX=pcgate`, goes in after the echo test.
 3. The builds (keys by path): Windows (`scripts/build-windows.sh`, then
    `installer/windows/build.sh`: makensis is here), Linux (.deb), the VPS's server for x86-64
    and ARM64 (`scripts/build-vps-server.sh`, with cargo-zigbuild and Zig installed here and the

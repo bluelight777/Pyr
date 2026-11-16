@@ -10,6 +10,12 @@ description = "Pyr desktop app."
 name = "pyr"
 path = "src/main.rs"
 
+[features]
+# A test copy for Blue's PC before the release: it reads the Library 0.13.28 reads (index3.json,
+# the release key before), so programs install before the new key's list is up. Never in a
+# release: installer/windows/build.sh refuses a pyr.exe built with it.
+test-old-library = []
+
 [dependencies]
 pyr-proto = { path = "../proto" }
 pyr-poker = { path = "../poker" }

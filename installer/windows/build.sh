@@ -5,6 +5,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 REL=${REL:-target-win/x86_64-pc-windows-gnu/release}
+# A test copy (built with the test-old-library feature: it reads 0.13.28's Library) never ships.
+if grep -q "pyr.gg/library/index3.json" "$REL/pyr.exe"; then
+  echo "$REL/pyr.exe is a test copy (test-old-library): build it again without the feature" >&2
+  exit 1
+fi
 mkdir -p dist/windows
 cp "$REL/pyr.exe" "$REL/pyr-mcp.exe" "$REL/pyr-server.exe" dist/windows/
 cp "$REL/examples/bot.exe" dist/windows/pyr-bot.exe

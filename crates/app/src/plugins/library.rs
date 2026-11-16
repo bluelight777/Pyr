@@ -20,9 +20,22 @@ const SEEN_FILE: &str = "library-seen.json";
 /// The last list believed, as signed (shown when the website can't be reached).
 const CACHE_FILE: &str = "library.json";
 
+/// A test copy built with the `test-old-library` feature reads the list 0.13.28 reads
+/// (`index3.json`, believed with the release key before: its public half), so it can install
+/// from the live Library before the new key's list is up. Never in a release.
+#[cfg(feature = "test-old-library")]
+const OLD_LIBRARY: Option<(&str, &str)> = Some(("https://pyr.gg/library/index3.json", "J0EGQDSoDplSzp3aFrK7EA8C5Of4w4D40kaO-g7iJcE"));
+#[cfg(not(feature = "test-old-library"))]
+const OLD_LIBRARY: Option<(&str, &str)> = None;
+
+/// The key the list is believed with.
+fn list_key() -> &'static str {
+    OLD_LIBRARY.map(|o| o.1).unwrap_or(crate::update::RELEASE_KEY)
+}
+
 /// Where the list is (`PYR_LIBRARY_URL` overrides it, for testing).
 pub fn index_url() -> String {
-    pyr_proto::env_var("LIBRARY_URL").unwrap_or_else(|| DEFAULT_URL.to_string())
+    pyr_proto::env_var("LIBRARY_URL").unwrap_or_else(|| OLD_LIBRARY.map(|o| o.0).unwrap_or(DEFAULT_URL).to_string())
 }
 
 /// Where a file in the list is: its address is relative to the list's own.
@@ -48,7 +61,7 @@ fn now_secs() -> i64 {
 /// Opens a signed list and checks its dates against what's been seen in `dir`; believed, it
 /// becomes the newest seen.
 pub fn believe(text: &str, dir: &Path, now: i64) -> Result<Library, String> {
-    believe_with(text, crate::update::RELEASE_KEY, dir, now)
+    believe_with(text, list_key(), dir, now)
 }
 
 /// `believe`, with the key to check it against (tests sign with a key of their own).
@@ -94,7 +107,7 @@ pub fn fetch(dir: &Path) -> Result<Library, String> {
 /// The last list believed, if it still is (for showing before, or without, a fetch).
 pub fn cached(dir: &Path) -> Option<Library> {
     let text = std::fs::read_to_string(dir.join(CACHE_FILE)).ok()?;
-    let lib = library::open(&text, crate::update::RELEASE_KEY).ok()?;
+    let lib = library::open(&text, list_key()).ok()?;
     let seen: Seen = std::fs::read(dir.join(SEEN_FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
     lib.fresh(now_secs(), seen.issued).ok()?;
     Some(lib)
