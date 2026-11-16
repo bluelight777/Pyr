@@ -515,7 +515,12 @@ How (decided while starting it):
       the house edges Ember Back is a share of, the missions and their rewards, the stars (one
       star's pay however many a round crosses, as 0.13.28). Missions are the day's, the same for
       everyone. The card's "almost there" in a level's last 15%; the burst as 0.13.28's ("LEVEL
-      13", "EMBER!", the chips counting up). Fixed on the way: past 100, the card says how far the
+      13", "EMBER!", the chips counting up), filmed beside it frame by frame (2026-11-16,
+      `measured/levels.md`): a level's (3.6 s; its crest, ring, rays, six glow discs, words and
+      count; no toast with it) and a new tier's (6.5 s: the old crest fading under the new one
+      popping out a quarter bigger, darker, 28 rays, fourteen sparkles flying off it, "FLAME!",
+      what the tier gives, the chips; rays and sparkles turn with the app's clock, as 0.13.28's).
+      Fixed on the way: past 100, the card says how far the
       next star is (0.13.28 always said 0); "1 more level", not "levels"; the VIP tiers' perks fit
       their cards.
 - [x] VIP Club: Ember Back, daily chips by tier, weekly bonus, VIP page (0.13.5) (a tab until the

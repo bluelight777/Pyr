@@ -255,7 +255,7 @@ impl PyrApp {
     pub(crate) fn level_burst(&mut self, ctx: &egui::Context, area: Rect) {
         let Some(b) = &self.poker.burst else { return };
         let t = b.since.elapsed().as_secs_f32();
-        let life = if b.tier_up { BURST_SECS + 1.0 } else { BURST_SECS };
+        let life = if b.tier_up { TIER_UP_SECS } else { BURST_SECS };
         if t > life {
             self.poker.burst = None;
             return;
@@ -263,67 +263,107 @@ impl PyrApp {
         let tier = levels::tier(b.level);
         let col = tier_color(tier);
         let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("level-burst")));
-        if !b.tier_up {
-            level_up_burst(&p, ctx, area, b, t, tier, col);
-            ctx.request_repaint();
-            return;
-        }
-        let fade = if t < 0.2 { t / 0.2 } else if t > life - 0.6 { (life - t) / 0.6 } else { 1.0 };
-        let c = area.center() - vec2(0.0, if b.tier_up { 60.0 } else { 40.0 });
-        // The room darkens around it (more for a tier), and rays turn slowly behind.
-        let dark = if b.tier_up { 170.0 } else { 110.0 };
-        p.rect_filled(area, 0.0, Color32::from_black_alpha((dark * fade) as u8));
-        let rays = 24;
-        let reach = area.width().max(area.height());
-        for k in 0..rays {
-            let a0 = (k as f32 / rays as f32) * std::f32::consts::TAU + t * 0.15;
-            let a1 = a0 + std::f32::consts::TAU / rays as f32 * 0.5;
-            let pts = vec![c, c + vec2(a0.cos(), a0.sin()) * reach, c + vec2(a1.cos(), a1.sin()) * reach];
-            p.add(egui::Shape::convex_polygon(pts, Color32::from_white_alpha((if b.tier_up { 9.0 } else { 6.0 } * fade) as u8), Stroke::NONE));
-        }
-        // A ring goes out from it as it lands.
-        let ring_t = (t / 0.9).min(1.0);
-        if ring_t < 1.0 {
-            p.circle_stroke(c, 60.0 + ring_t * 260.0, Stroke::new(2.0f32, col.gamma_multiply((1.0 - ring_t) * 0.8 * fade)));
-        }
-        // The crest pops in (over-shooting a little).
-        let k = (t / 0.45).min(1.0);
-        let pop = 1.0 + 0.16 * (k * std::f32::consts::PI).sin() * (1.0 - k * 0.5);
-        let grow = (t / 0.25).min(1.0);
-        let size = if b.tier_up { 250.0 } else { 112.0 } * grow * pop;
-        p.circle_filled(c, size * 0.45, col.gamma_multiply(0.16 * fade));
-        // (Embers rising round a new tier's crest.)
         if b.tier_up {
-            for i in 0..14 {
-                let seed = i as f32 * 1.618;
-                let life_i = (t * 0.6 + seed).fract();
-                let x = c.x + ((seed * 7.3).sin()) * size * 0.55;
-                let y = c.y + size * 0.4 - life_i * size * 1.1;
-                p.circle_filled(pos2(x, y), 2.5, Color32::from_rgb(0xff, 0x9a, 0x3a).gamma_multiply((1.0 - life_i) * fade));
-            }
-        }
-        crest(&p, ctx, tier, Rect::from_center_size(c, vec2(size, size)));
-        let white = Color32::WHITE.gamma_multiply(fade);
-        let outline = Color32::from_black_alpha((200.0 * fade) as u8);
-        let (big, big_size) = if b.tier_up { (format!("{}!", levels::TIERS[tier].0.to_uppercase()), 64.0) } else { (format!("LEVEL {}", b.level), 44.0) };
-        let y = c.y + size * 0.5 + if b.tier_up { 40.0 } else { 26.0 };
-        outlined(&p, pos2(c.x, y), &big, theme::bold_font(big_size), white, outline);
-        let sub = if b.tier_up {
-            let felt = matches!(tier, 3 | 5 | 8);
-            format!("Level {} · a new tier: its frame{} yours", b.level, if felt { " and felt are" } else { " is" })
+            tier_up_burst(&p, ctx, area, b, t, tier, col);
         } else {
-            levels::title(b.level)
-        };
-        let sub_y = y + big_size * 0.5 + 16.0;
-        p.text(pos2(c.x, sub_y), Align2::CENTER_CENTER, sub, theme::bold_font(if b.tier_up { 15.0 } else { 13.0 }), col.gamma_multiply(fade));
-        // The chips it paid, counting up.
-        if b.chips > 0 && t > 0.6 {
-            let k = ((t - 0.6) / 1.0).min(1.0);
-            let shown = (b.chips as f64 * (1.0 - (1.0 - k as f64).powi(3))).round() as u64;
-            let size = if b.tier_up { 40.0 } else { 28.0 };
-            outlined(&p, pos2(c.x, sub_y + 22.0 + size * 0.5), &format!("+{} chips", chips_text(shown)), theme::bold_font(size), Color32::from_rgb(0xff, 0xe8, 0xb8).gamma_multiply(fade * (0.6 + 0.4 * k)), outline);
+            level_up_burst(&p, ctx, area, b, t, tier, col);
         }
         ctx.request_repaint();
+    }
+}
+
+/// A new tier's burst lasts longer.
+const TIER_UP_SECS: f32 = 6.5;
+
+/// A new tier reached, as 0.13.28 shows it: measured off its screen, filmed at 1280 by 800 (four
+/// times) and at 1600 by 1000 (`rebuild/measured/levels.md`). A level's burst a quarter bigger,
+/// darker, longer, with more rays and sparkles flying off the crest: the old tier's crest shown
+/// first, the new one bursting out in front of it as the old one fades.
+fn tier_up_burst(p: &egui::Painter, ctx: &egui::Context, area: Rect, b: &Burst, t: f32, tier: usize, col: Color32) {
+    let p = &p.with_clip_rect(area);
+    let k = (area.height() / 800.0).min(242.0 / 211.2);
+    let c = pos2(area.center().x, area.top() + area.height() * 0.44);
+    let full = 264.0 * k;
+    // In over 0.25 s, out over the last 0.6 s.
+    let fade = (t / 0.25).min(1.0).min(((TIER_UP_SECS - t) / 0.6).clamp(0.0, 1.0));
+    // The page darkens (black at 200).
+    p.rect_filled(area, 0.0, Color32::from_black_alpha((200.0 * fade).round() as u8));
+    // Twenty-eight rays of the tier's color, turning slowly behind (with the app's clock, as
+    // 0.13.28's: where they are when it comes is where they'd got to).
+    let now = ctx.input(|i| i.time);
+    burst_rays(p, c, area, 28, 0.5, k, ((now * 0.2508) % std::f64::consts::TAU) as f32, col.gamma_multiply(0.05 * fade));
+    // A ring goes out from it, thinning and fading (whole from the start): a level's path, a
+    // quarter farther, its stroke a little thinner (7.9 at first).
+    let u = t / 0.93;
+    if u < 1.0 {
+        let w = 7.9 * (1.0 - u) * k;
+        let mid = 1.25 * (75.0 + 275.0 * (1.0 - (1.0 - u).powi(3))) * k;
+        p.circle_stroke(c, mid - w / 2.0, Stroke::new(w, col.gamma_multiply(0.95 * (1.0 - u))));
+    }
+    // Six faint discs of the tier's color, the new crest's whole size from the start.
+    glow_discs(p, c, full, col.gamma_multiply(0.05 * fade));
+    // Fourteen sparkles fly off it, each its own way round (2.399 rad apart), one after another
+    // (with the app's clock too): born on the old crest's rim (120 out), gone at 192, shrinking
+    // and fading as they go.
+    for i in 0..14 {
+        let life = ((now * 0.7 + 0.37 * i as f64).fract()) as f32;
+        let a = i as f32 * 2.399;
+        let at = c + vec2(a.cos(), a.sin()) * (120.0 + 72.0 * life) * k;
+        p.circle_filled(at, 3.1 * (1.0 - life) * k, col.gamma_multiply((1.0 - life) * fade));
+    }
+    // The old tier's crest, smaller, fading as the new one comes.
+    let old = (0.5 + 6.0 * t).min((1.0 - t / 0.65).max(0.0).powf(1.3)).clamp(0.0, 1.0);
+    if old > 0.0 && tier > 0 {
+        let s = 240.0 * k;
+        crest_tinted(p, ctx, tier - 1, Rect::from_center_size(c, vec2(s, s)), Color32::WHITE.gamma_multiply(old));
+    }
+    // The new one pops in, past its size and back (as a level's).
+    let size = full * ease_out_back((t - 0.09) / 0.57, 1.2);
+    if size > 0.0 {
+        crest_tinted(p, ctx, tier, Rect::from_center_size(c, vec2(size, size)), Color32::WHITE.gamma_multiply(fade));
+    }
+    // "FLAME!" pops in after it, white edged in the tier's color.
+    let pop = ease_out_back((t - 0.45) / 0.43, 1.2);
+    if pop > 0.0 {
+        let big = format!("{}!", levels::TIERS[tier].0.to_uppercase());
+        outlined(p, pos2(c.x, c.y + 162.0 * k), &big, theme::bold_font(74.375 * k * pop), Color32::WHITE.gamma_multiply(fade), col.gamma_multiply(fade));
+    }
+    // What the tier gives (its size doesn't grow with the page, its place does).
+    let felt = matches!(tier, 3 | 5 | 8);
+    let sub = format!("Level {} · a new tier: its frame{} yours", b.level, if felt { " and felt are" } else { " is" });
+    p.text(pos2(c.x, c.y + 228.0 * k), Align2::CENTER_CENTER, sub, theme::bold_font(16.0), col.gamma_multiply(fade));
+    // The chips it paid, counting up from 0.8 s, over a second.
+    if b.chips > 0 && t >= 0.8 {
+        let x = (t - 0.8).min(1.0);
+        let shown = (b.chips as f64 * (1.0 - (1.0 - x as f64).powi(3))).round() as u64;
+        outlined(p, pos2(c.x, c.y + 288.0 * k), &format!("+{} chips", chips_text(shown)), theme::bold_font(45.6 * k), crate::casino::col::GOLD2.gamma_multiply(fade), Color32::from_black_alpha((200.0 * fade) as u8));
+    }
+}
+
+/// A burst's rays round `c`: `n` of them from `turn` (radians), each `share` of its part of the
+/// turn wide (as an angle, at 800 high: narrower in angle on a bigger page, as 0.13.28's) and 6 px
+/// wider than that (3 either side, a page's height over 800 times).
+fn burst_rays(p: &egui::Painter, c: Pos2, area: Rect, n: usize, share: f32, k: f32, turn: f32, color: Color32) {
+    use std::f32::consts::TAU;
+    let reach = area.width().hypot(area.height());
+    // Each side widens by this much for every pixel out.
+    let spread = (TAU / n as f32 * share / 2.0).tan() / k;
+    let base = 3.0 * k;
+    for i in 0..n {
+        let a = i as f32 / n as f32 * TAU + turn;
+        let dir = vec2(a.cos(), a.sin());
+        let side = vec2(-dir.y, dir.x);
+        let far = c + dir * reach;
+        let w = base + spread * reach;
+        let pts = vec![c - side * base, far - side * w, far + side * w, c + side * base];
+        p.add(egui::Shape::convex_polygon(pts, color, Stroke::NONE));
+    }
+}
+
+/// A burst's glow: six faint discs round its crest (`size` its whole size), a step apart.
+fn glow_discs(p: &egui::Painter, c: Pos2, size: f32, color: Color32) {
+    for i in (0..6).rev() {
+        p.circle_filled(c, size * (0.3211 + 0.0812 * i as f32), color);
     }
 }
 
@@ -350,30 +390,24 @@ fn level_up_burst(p: &egui::Painter, ctx: &egui::Context, area: Rect, b: &Burst,
     let c = pos2(area.center().x, area.top() + area.height() * 0.44);
     // In over 0.23 s, out over the last 0.6 s.
     let fade = (t / 0.23).min(1.0).min(((BURST_SECS - t) / 0.6).clamp(0.0, 1.0));
-    // The page darkens; eighteen rays of the tier's color, 6° each, turn slowly behind.
+    // The page darkens; eighteen rays of the tier's color turn slowly behind (with the app's
+    // clock, as 0.13.28's).
     p.rect_filled(area, 0.0, Color32::from_black_alpha((139.0 * fade).round() as u8));
-    let rays = 18;
-    let reach = area.width().hypot(area.height());
-    for i in 0..rays {
-        let a0 = i as f32 / rays as f32 * std::f32::consts::TAU + t * 0.254;
-        let a1 = a0 + std::f32::consts::TAU / rays as f32 * 0.3;
-        let pts = vec![c, c + vec2(a0.cos(), a0.sin()) * reach, c + vec2(a1.cos(), a1.sin()) * reach];
-        p.add(egui::Shape::convex_polygon(pts, col.gamma_multiply(0.05 * fade), Stroke::NONE));
-    }
+    let now = ctx.input(|i| i.time);
+    burst_rays(p, c, area, 18, 0.25, k, ((now * 0.254) % std::f64::consts::TAU) as f32, col.gamma_multiply(0.05 * fade));
     // A ring goes out from it, thinning and fading (whole from the start: it doesn't fade in).
     let u = t / 0.93;
     if u < 1.0 {
         let w = 8.5 * (1.0 - u) * k;
-        let mid = (100.0 + 250.0 * (1.0 - (1.0 - u).powi(3))) * k;
+        let mid = (75.0 + 275.0 * (1.0 - (1.0 - u).powi(3))) * k;
         // (egui strokes a circle outside its radius.)
         p.circle_stroke(c, mid - w / 2.0, Stroke::new(w, col.gamma_multiply(0.95 * (1.0 - u))));
     }
-    // The crest pops in, past its size and back; four faint discs of the tier's color round it.
+    // Six faint discs of the tier's color, the crest's whole size from the start; the crest pops
+    // in over them, past its size and back.
+    glow_discs(p, c, 211.2 * k, col.gamma_multiply(0.05 * fade));
     let size = 211.2 * k * ease_out_back((t - 0.09) / 0.57, 1.2);
     if size > 0.0 {
-        for i in (0..4).rev() {
-            p.circle_filled(c, size * (0.4835 + 0.0812 * i as f32), col.gamma_multiply(0.05 * fade));
-        }
         crest_tinted(p, ctx, tier, Rect::from_center_size(c, vec2(size, size)), Color32::WHITE.gamma_multiply(fade));
     }
     // "LEVEL 11" pops in after it, white edged in the tier's color.
