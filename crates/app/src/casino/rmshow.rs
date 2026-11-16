@@ -889,8 +889,11 @@ fn win_tag(p: &egui::Painter, at: Pos2, text: &str, font: &str, size: f32, accen
 
 /// A message across the foot of the reels ("ENCORE! A STEP TO THE LEFT").
 fn reel_note(p: &egui::Painter, b: &Board, text: &str, font: &str, accent: Color32, a: f32) {
-    let g = p.layout_no_wrap(text.to_string(), theme::display_font(font, (b.cell * 0.13).clamp(12.0, 20.0)), faded(col::GOLD2, a));
-    let r = Rect::from_center_size(pos2(b.reels.center().x, b.reels.bottom() - b.cell * 0.16), g.size() + vec2(28.0, 10.0));
+    // (0.13.28's, measured on Starlight Cabaret at 1280x800 and 900x600: the lettering as its win
+    // tags' (17.6 and 15), the pill as theirs, its middle 0.218 of a cell over the reels' foot as
+    // Bomb Spins' words.)
+    let g = p.layout_no_wrap(text.to_string(), theme::display_font(font, tag_size(b)), faded(col::GOLD2, a));
+    let r = Rect::from_center_size(pos2(b.reels.center().x, b.reels.bottom() - b.cell * 0.218), g.size() + vec2(30.0, 12.0));
     p.rect_filled(r, theme::r((r.height() / 2.0) as u8), Color32::from_black_alpha((215.0 * a) as u8));
     p.rect_stroke(r, theme::r((r.height() / 2.0) as u8), Stroke::new(1.0f32, faded(accent, 0.8 * a)), StrokeKind::Inside);
     p.galley(r.center() - g.size() / 2.0, g, faded(col::GOLD2, a));
