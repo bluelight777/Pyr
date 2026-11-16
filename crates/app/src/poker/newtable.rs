@@ -177,7 +177,8 @@ pub fn bots_line(ui: &mut egui::Ui, area: Rect, count: usize) -> (bool, bool) {
     // (A child of its own: the picture's room is taken already.)
     let mut ui = ui.new_child(UiBuilder::new().max_rect(row).layout(Layout::right_to_left(Align::Min)));
     let clear = ui.small_button("Clear").clicked();
-    let fill = ui.small_button("Fill the seats").clicked();
+    // (0.13.28's words on it, seen pointed at.)
+    let fill = ui.small_button("Fill the seats").on_hover_text("Bots in every empty seat (who'll be picked for you)").clicked();
     (fill, clear)
 }
 

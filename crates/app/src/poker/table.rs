@@ -377,7 +377,7 @@ impl PyrApp {
             self.poker.casino.fullscreen = !fs;
         }
         // (The games' volume, under it: 0.13.4's Volume at poker tables.)
-        let (sound, ir) = icon(ui, &mut x, "sound", "");
+        let (sound, ir) = icon(ui, &mut x, "sound", "The table's sounds: cards, chips, your turn");
         if self.poker.casino.mute {
             crate::icons::speaker_off(&p, ir, ink(&sound));
         } else {
@@ -385,17 +385,17 @@ impl PyrApp {
         }
         self.games_volume_menu(&sound);
         // The hand log and the last hand.
-        let (log, ir) = icon(ui, &mut x, "log", "");
+        let (log, ir) = icon(ui, &mut x, "log", "Hand log and the last hand");
         crate::icons::clock(&p, ir, ink(&log));
         let mut log_toggled = false;
         let mut last = false;
         egui::Popup::menu(&log).gap(0.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
             crate::menu::style(ui);
-            if crate::menu::check(ui, self.poker.log_open, "Hand log", false).clicked() {
+            if crate::menu::check(ui, self.poker.log_open, "Hand log", false).on_hover_text("What's happened at the table, beside it").clicked() {
                 log_toggled = true;
                 ui.close();
             }
-            if ui.add_enabled(!v.recent.is_empty(), egui::Button::new("Last hand")).clicked() {
+            if ui.add_enabled(!v.recent.is_empty(), egui::Button::new("Last hand")).on_hover_text("The whole hand just played, as it went").clicked() {
                 last = true;
                 ui.close();
             }
@@ -426,13 +426,15 @@ impl PyrApp {
         if mine.is_some() {
             // (Gold when I'm out of chips, as 0.13.28's.)
             let broke = mine.is_some_and(|x| x.stack == 0 && x.pending == 0 && !x.in_hand);
-            if !tourney && (anytime || !in_hand) && text_button(ui, 104.0, "+ Add chips", "", broke).clicked() {
+            if !tourney && (anytime || !in_hand) && text_button(ui, 104.0, "+ Add chips", "Top up your stack from your chips", broke).clicked() {
                 self.poker.top_up = Some((v.id, 0));
             }
-            let (label, tip) = match (tourney, out) {
-                (_, true) => ("I'm back", "Deal me in again"),
-                (true, false) => ("Away", "Folded for (and blinded) until you're back"),
-                (false, false) => ("Sit out", "Not dealt in until you're back"),
+            // (The words on it are the sitting out's, on I'm back too: 0.13.28's, pointed at.)
+            let tip = if tourney { "Folded for (and blinded) until you're back" } else { "Not dealt in until you're back" };
+            let label = match (tourney, out) {
+                (_, true) => "I'm back",
+                (true, false) => "Away",
+                (false, false) => "Sit out",
             };
             if text_button(ui, 86.0, label, tip, false).clicked() {
                 self.engine.poker(&s.key, ToServer::SitOut { table: v.id, out: !out });
@@ -442,10 +444,6 @@ impl PyrApp {
         // What's in the menu (0.13.28's, in its order).
         let v13 = s.has(pyr_proto::control::CASINO_013_FEATURE);
         let staff = s.poker.me.as_ref().is_some_and(|m| m.role.is_some()) || super::staff::prize_limit(s).is_some();
-        let stream_tip = match crate::casino::keys::first_key(crate::casino::keys::Move::PokerPeek) {
-            Some(k) => format!("Streamer mode is on: your cards stay face down until you peek (hold {k}). Click for the table's layout on a stream."),
-            None => "Streamer mode is on: your cards stay face down until you peek (point at them). Click for the table's layout on a stream.".to_string(),
-        };
         let mut clicked: Option<&str> = None;
         let straddling = self.poker.straddle.contains(&(s.key.clone(), v.id));
         let auto_top_up = self.engine.auto_top_up();
@@ -457,14 +455,20 @@ impl PyrApp {
             let mut any = false;
             // Auto top-up and Straddle (0.13.22, 0.13.4), where the server has them.
             if mine.is_some() && !tourney && anytime {
-                if crate::menu::check(ui, auto_top_up, "Auto top-up", false).clicked() {
+                if crate::menu::check(ui, auto_top_up, "Auto top-up", false)
+                    .on_hover_text("Keep your stack at the table's most: chips go on from yours whenever it's lower (after the hand, if you're in one), and you're bought back in if it's gone.")
+                    .clicked()
+                {
                     clicked = Some("auto top-up");
                     ui.close();
                 }
                 any = true;
             }
             if mine.is_some() && !tourney && can_straddle {
-                if crate::menu::check(ui, straddling, "Straddle", false).clicked() {
+                if crate::menu::check(ui, straddling, "Straddle", false)
+                    .on_hover_text("When you're under the gun (three or more at the table), put in twice the big blind before the cards and act last before the flop.")
+                    .clicked()
+                {
                     clicked = Some("straddle");
                     ui.close();
                 }
@@ -473,7 +477,7 @@ impl PyrApp {
             if mine.is_some() && v13 {
                 let auto = self.engine.auto_muck();
                 if crate::menu::check(ui, auto, "Auto-muck", false)
-                    .on_hover_text(if auto { "A hand of yours that can't win goes in face down at a showdown (you can still show it after). Click to show every hand." } else { "Every hand you take to a showdown is shown. Click to muck the ones that can't win." })
+                    .on_hover_text("A hand of yours that can't win goes in face down at a showdown (you can still show it after).")
                     .clicked()
                 {
                     clicked = Some("muck");
@@ -483,7 +487,10 @@ impl PyrApp {
             }
             // (0.13.6: staff may keep their title off their seat.)
             if staff && hide_title_here {
-                if crate::menu::check(ui, !title_hidden, "Show my title", false).clicked() {
+                if crate::menu::check(ui, !title_hidden, "Show my title", false)
+                    .on_hover_text("Your title (Game Master, Ambassador) on your seat for everyone to see; off, you look like anyone else at the tables.")
+                    .clicked()
+                {
                     clicked = Some("title");
                     ui.close();
                 }
@@ -496,11 +503,16 @@ impl PyrApp {
                 clicked = Some("prize");
                 ui.close();
             }
-            if ui.button("Streamer mode...").on_hover_text(if streamer { stream_tip.as_str() } else { "For when you're live: your cards stay face down until you peek" }).clicked() {
+            let (stream_label, stream_tip) = if streamer {
+                ("Streamer mode (on)…", "Your cards stay face down until you peek. Click for the table's layout on a stream.")
+            } else {
+                ("Streamer mode…", "For when you're live: set it up")
+            };
+            if ui.button(stream_label).on_hover_text(stream_tip).clicked() {
                 clicked = Some("stream");
                 ui.close();
             }
-            if ui.button("Keys...").on_hover_text("Every game's moves and their keys, yours to change").clicked() {
+            if ui.button("Keys…").on_hover_text("Fold, call, raise and the rest on keys of your own").clicked() {
                 clicked = Some("keys");
                 ui.close();
             }
@@ -508,12 +520,12 @@ impl PyrApp {
             if leave || (owner && !tourney) {
                 ui.separator();
             }
-            if leave && crate::menu::danger(ui, "Leave seat").clicked() {
+            if leave && crate::menu::danger(ui, "Leave seat").on_hover_text("Stand up: your chips go back to you (after the hand, if you're in one)").clicked() {
                 clicked = Some("leave");
                 ui.close();
             }
             // (0.13.24: for everyone at once, a hand being played called off.)
-            if owner && !tourney && crate::menu::danger(ui, "Close this table...").clicked() {
+            if owner && !tourney && crate::menu::danger(ui, "Close this table…").on_hover_text("Close it for everyone: the chips at it go back to whoever had them").clicked() {
                 clicked = Some("close");
                 ui.close();
             }
@@ -1151,7 +1163,9 @@ impl PyrApp {
             p.rect_stroke(r, theme::r(14), Stroke::new(1.0f32, Color32::from_rgb(138, 106, 42)), StrokeKind::Inside);
             let mid = r.center().y;
             p.text(pos2(r.left() + 20.0, mid - 23.0), Align2::LEFT_TOP, "Out of chips", theme::bold_font(18.0), Color32::from_rgb(255, 226, 154));
-            p.text(pos2(r.left() + 20.0, mid + 5.0), Align2::LEFT_TOP, format!("You have {} chips.", chips_text(bank)), theme::font(13.0), Color32::from_rgb(168, 153, 140));
+            // (None left: where to get more, as 0.13.28 says it.)
+            let have = if bank == 0 { "You have none left: take the daily chips in the lobby.".to_string() } else { format!("You have {} chips.", chips_text(bank)) };
+            p.text(pos2(r.left() + 20.0, mid + 5.0), Align2::LEFT_TOP, have, theme::font(13.0), Color32::from_rgb(168, 153, 140));
             let leave = Rect::from_min_size(pos2(r.right() - 12.0 - 120.0, mid - 27.0), vec2(120.0, 54.0));
             if ui.put(leave, egui::Button::new(RichText::new("Leave seat").font(theme::bold_font(15.0)).color(theme::TEXT())).fill(theme::ELEV()).corner_radius(theme::r(10))).clicked() {
                 self.engine.poker(&s.key, ToServer::Stand { table: v.id });
@@ -1159,7 +1173,14 @@ impl PyrApp {
             if rebuy > 0 {
                 let at = Rect::from_min_size(pos2(leave.left() - 10.0 - 190.0, mid - 27.0), vec2(190.0, 54.0));
                 let b = egui::Button::new(RichText::new(format!("Rebuy {}", chips_text(rebuy))).font(theme::bold_font(16.0)).color(Color32::from_rgb(42, 28, 5))).fill(Color32::from_rgb(242, 194, 76)).corner_radius(theme::r(10));
-                if ui.put(at, b).clicked() {
+                // (0.13.28's words on it: short of the table's usual buy-in it still plays.)
+                let usual = v.rules.big_blind.saturating_mul(v.buy_in.min_bb);
+                let tip = if rebuy < usual {
+                    format!("Less than this table's usual {} to sit down, but it plays", chips_text(usual))
+                } else {
+                    "Turn on Auto top-up (in the table's menu) to be bought back in by itself".to_string()
+                };
+                if ui.put(at, b).on_hover_text(tip).clicked() {
                     self.engine.poker(&s.key, ToServer::TopUp { table: v.id, chips: rebuy });
                 }
             }
@@ -1203,10 +1224,19 @@ impl PyrApp {
                     PreAction::Call(n) if n != to_call => self.poker.pre = PreAction::None,
                     _ => {}
                 }
-                let opts: [(PreAction, String); 3] = if to_call == 0 {
-                    [(PreAction::CheckFold, "Check / Fold".into()), (PreAction::Check, "Check".into()), (PreAction::CallAny, "Call any".into())]
+                // (Each with 0.13.28's words on it.)
+                let opts: [(PreAction, String, &str); 3] = if to_call == 0 {
+                    [
+                        (PreAction::CheckFold, "Check / Fold".into(), "Check if nobody bets; fold if they do"),
+                        (PreAction::Check, "Check".into(), "Check if nobody bets (if they do, you choose)"),
+                        (PreAction::CallAny, "Call any".into(), "Check, or call whatever's bet"),
+                    ]
                 } else {
-                    [(PreAction::CheckFold, "Fold".into()), (PreAction::Call(to_call), format!("Call {}", chips_text(to_call))), (PreAction::CallAny, "Call any".into())]
+                    [
+                        (PreAction::CheckFold, "Fold".into(), "Fold when it's your turn"),
+                        (PreAction::Call(to_call), format!("Call {}", chips_text(to_call)), "Call this much; if someone raises, you choose again"),
+                        (PreAction::CallAny, "Call any".into(), "Call whatever it costs when it's your turn"),
+                    ]
                 };
                 // 176 by 54.5 (k), 10 apart, the bar's 16 from the right; 41 under its top; the
                 // words over them 12 (MUTED), right-aligned.
@@ -1214,11 +1244,11 @@ impl PyrApp {
                 let top_y = bar.top() + 41.0 * z;
                 p.text(pos2(right, bar.top() + 22.0 * z), Align2::RIGHT_CENTER, "Before your turn: tick one and it plays itself", theme::font(12.0 * z), theme::MUTED());
                 let mut x = right - 3.0 * bw - 2.0 * gap;
-                for (pa, label) in opts {
+                for (pa, label, tip) in opts {
                     let r = Rect::from_min_size(pos2(x, top_y), vec2(bw, bh));
                     x += bw + gap;
                     let on = self.poker.pre == pa;
-                    let resp = ui.interact(r, ui.id().with(("pre", label.as_str())), Sense::click());
+                    let resp = ui.interact(r, ui.id().with(("pre", label.as_str())), Sense::click()).on_hover_text(tip);
                     if on {
                         p.rect_filled(r, theme::r(12), Color32::from_rgb(42, 138, 74));
                         p.rect_stroke(r, theme::r(12), Stroke::new(2.0f32, Color32::from_rgb(159, 202, 173)), StrokeKind::Inside);
@@ -1586,7 +1616,7 @@ impl PyrApp {
                 } else if have >= hi {
                     ui.label(RichText::new("You have as many chips here as the table allows.").color(theme::MUTED()));
                 } else {
-                    ui.label(RichText::new("You have no chips left to add. Take the daily chips in the lobby.").color(theme::MUTED()));
+                    ui.label(RichText::new("You have no chips left to add: take the daily chips in the lobby.").color(theme::MUTED()));
                 }
                 if in_hand {
                     ui.add_space(4.0);
@@ -1595,7 +1625,8 @@ impl PyrApp {
                 // (Spaced as 0.13.28's, measured.)
                 ui.add_space(10.0);
                 ui.separator();
-                ui.checkbox(&mut auto, "Auto top-up: keep me at the table's most");
+                ui.checkbox(&mut auto, "Auto top-up: keep me at the table's most")
+                    .on_hover_text("Chips go on from yours whenever your stack is lower (after the hand, if you're in one), and you're bought back in if it's gone.");
             });
             if auto != auto_was {
                 self.engine.set_auto_top_up(auto);
