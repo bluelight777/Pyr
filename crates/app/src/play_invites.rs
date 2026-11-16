@@ -54,34 +54,39 @@ pub fn invite_text(me: &str, game_name: &str, game: &str, room: &str) -> String 
 }
 
 impl PyrApp {
-    /// A game's invite in a message: the game's card with Join (like a server invite's).
-    pub(crate) fn play_invite_embed(&mut self, ui: &mut egui::Ui, _st: &AppState, game: &str, room: &str, acts: &mut Vec<Act>) {
+    /// A game's invite in a message, as 0.13.28's card has it (seen in it, pointed at): "YOU SENT
+    /// A GAME INVITE" on mine, "GAME INVITE" on others'; the game's name (its first letter made a
+    /// capital where Pyr doesn't know it) and "Room BDFPA"; Copy code, and Join or Get it.
+    pub(crate) fn play_invite_embed(&mut self, ui: &mut egui::Ui, _st: &AppState, game: &str, room: &str, mine: bool, acts: &mut Vec<Act>) {
         let entry = self.plugins.library.as_ref().and_then(|l| l.find(game)).cloned();
         let installed = self.plugins.installed.get(game).cloned();
-        let name = entry.as_ref().map(|e| e.name.clone()).or_else(|| installed.as_ref().map(|p| p.name.clone())).unwrap_or_else(|| game.to_string());
-        egui::Frame::new().fill(theme::ELEV()).stroke(Stroke::new(1.0_f32, theme::LINE())).corner_radius(10).inner_margin(egui::Margin::symmetric(14, 12)).show(ui, |ui| {
+        let name = entry.as_ref().map(|e| e.name.clone()).or_else(|| installed.as_ref().map(|p| p.name.clone())).unwrap_or_else(|| {
+            let mut c = game.chars();
+            c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+        });
+        // (386 by 86 at 1280x800: 360 inside, 12 round it, corners 12, a line of the ember at a little over half.)
+        egui::Frame::new().fill(theme::ELEV()).stroke(Stroke::new(1.0_f32, theme::EMBER().gamma_multiply(0.55))).corner_radius(12).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
             ui.set_width(360.0_f32.min(ui.available_width()));
-            ui.label(RichText::new("YOU'RE INVITED TO PLAY").size(11.0).strong().color(theme::DIM()));
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                self.plugin_icon(ui, game, pyr_proto::library::Kind::Program, 44.0);
-                ui.add_space(6.0);
-                ui.vertical(|ui| {
-                    ui.label(RichText::new(&name).font(theme::bold_font(16.0)).color(theme::TEXT()));
-                    let what = match (&installed, &entry) {
-                        (Some(_), _) => format!("Room {room}"),
-                        (None, Some(_)) => format!("Room {room} · Install it from the Pyr Library to play"),
-                        (None, None) => format!("Room {room} · not in the Pyr Library here"),
-                    };
-                    ui.label(RichText::new(what).size(12.5).color(theme::MUTED()));
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let label = if installed.is_some() { "Join" } else { "Get it" };
-                    if ui.add(theme::primary_button(label).min_size(vec2(72.0, 30.0))).clicked() {
-                        acts.push(Act::PlayInvite { game: game.to_string(), room: room.to_string() });
-                    }
-                });
-            });
+            let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 60.0), egui::Sense::hover());
+            let p = ui.painter();
+            p.text(r.left_top() + vec2(0.0, 1.0), egui::Align2::LEFT_TOP, if mine { "YOU SENT A GAME INVITE" } else { "GAME INVITE" }, theme::bold_font(11.0), theme::DIM());
+            p.text(r.left_top() + vec2(0.0, 19.0), egui::Align2::LEFT_TOP, &name, theme::bold_font(16.0), theme::TEXT());
+            p.text(r.left_top() + vec2(0.0, 43.5), egui::Align2::LEFT_TOP, format!("Room {room}"), theme::font(13.0), theme::MUTED());
+            // Join (or Get it) at the right, Copy code beside it (its frame only when pointed at).
+            let go = egui::Rect::from_min_size(egui::pos2(r.right() - 84.0, r.center().y - 17.0), vec2(84.0, 34.0));
+            let (label, tip) = if installed.is_some() {
+                ("Join", format!("Open {name} in room {room}"))
+            } else {
+                ("Get it", format!("{name} isn't installed: see it in the Pyr Library"))
+            };
+            if ui.put(go, theme::primary_button(label)).on_hover_text(tip).clicked() {
+                acts.push(Act::PlayInvite { game: game.to_string(), room: room.to_string() });
+            }
+            let copy = egui::Rect::from_min_size(egui::pos2(go.left() - 7.0 - 98.0, r.center().y - 16.0), vec2(98.0, 32.0));
+            let b = egui::Button::new(RichText::new("Copy code").color(theme::TEXT())).frame_when_inactive(false);
+            if ui.put(copy, b).on_hover_text("Copy the room code").clicked() {
+                ui.ctx().copy_text(room.to_string());
+            }
         });
     }
 }

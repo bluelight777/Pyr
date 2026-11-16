@@ -1043,7 +1043,7 @@ impl PyrApp {
             p.rect_filled(r, theme::r(14), Color32::from_rgba_unmultiplied(0x14, 0x10, 0x0a, 225));
             let how = match crate::casino::keys::first_key(crate::casino::keys::Move::PokerPeek) {
                 Some(k) => format!("Streamer mode · hold {k} to peek"),
-                None => "Streamer mode · point at them to peek".to_string(),
+                None => "Streamer mode · point at your cards to peek".to_string(),
             };
             p.text(r.center(), Align2::CENTER_CENTER, how, theme::bold_font(12.5 * z), Color32::from_rgb(0xff, 0xe2, 0x9a));
             return;

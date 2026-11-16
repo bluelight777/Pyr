@@ -906,7 +906,7 @@ impl PyrApp {
                         }
                         // And games' invites: the game's card with Join (0.13.18).
                         for (game, room) in crate::play_invites::links_in(&content).into_iter().take(2) {
-                            self.play_invite_embed(ui, st, &game, &room, acts);
+                            self.play_invite_embed(ui, st, &game, &room, mine, acts);
                         }
                         // And prop bets: the prop's card (the server keeps it).
                         if s.has(pyr_proto::control::PROPS_FEATURE) {
@@ -1341,7 +1341,7 @@ impl PyrApp {
                 if files_go_here(s, ch.id) {
                     // Direct messages and groups: files of any kind (pictures that fit still go
                     // with the message).
-                    if icon_button(ui, 30.0, "Send files (or drop them here): pictures go with your message, anything else on its own, up to 2 GB", false, |p, r, c| {
+                    if icon_button(ui, 30.0, "Attach images or files, up to 2 GB (or drop them here)", false, |p, r, c| {
                         icons::plus(p, r, c, 2.0)
                     })
                     .clicked()
