@@ -688,7 +688,7 @@ fn every_way_to_play_pays_back_99_percent() {
 fn the_numbers_on_the_info_pages() {
     let points = [267, 300, 209, 222, 304, 223, 300, 387, 223, 308, 234, 227];
     let specials = [753, 3_650, 175, 169, 3_585, 169, 3_650, 563, 170, 3_587, 1_597, 511];
-    let caps = [10_000, 50_000, 500_000, 5_000, 0, 20_000, 50_000, 7_500, 10_000, 0, 5_000, 25_000];
+    let caps = [10_000, 50_000, 500_000, 5_000, 25_000, 20_000, 50_000, 7_500, 10_000, 25_000, 5_000, 25_000];
     for machine in 0..12u8 {
         let m = &MACHINES[machine as usize];
         assert_eq!(m.point, points[machine as usize]);
@@ -721,6 +721,19 @@ fn the_numbers_on_the_info_pages() {
     assert_eq!(GRAND_X, 1_000);
 }
 
+/// A round pays up to its machine's most, a progressive jackpot on top of it.
+#[test]
+fn the_most_a_round_pays() {
+    let most = 100 * 25_000;
+    assert_eq!(settle(most - 1, 0, most), (most - 1, false));
+    assert_eq!(settle(most + 7, 0, most), (most, true));
+    // Dragon's Hoard: 30,000× and the Hoard's 5,000,000 is 25,000× and the 5,000,000.
+    assert_eq!(settle(100 * 30_000 + 5_000_000, 5_000_000, most), (most + 5_000_000, true));
+    assert_eq!(settle(100 * 2_000 + 5_000_000, 5_000_000, most), (100 * 2_000 + 5_000_000, false));
+    assert_eq!(settle(u64::MAX, 0, crate::casino::MAX_PAYOUT), (crate::casino::MAX_PAYOUT, true));
+    assert_eq!([MACHINES[4].cap_x, MACHINES[9].cap_x], [25_000, 25_000]);
+}
+
 /// Rounds played out by the rules: tumbles burst their wins and drop, bombs add up; Hold & Win
 /// holds coins for three respins, back to three with each new one, collectors gathering what's
 /// held; Hot Wilds fill their reel with a multiplier; frozen wilds stay; spotlight wilds walk;
@@ -746,11 +759,12 @@ fn rounds_play_out_by_the_rules() {
         // Written and read back: the same.
         let json = serde_json::to_string(&o).unwrap();
         assert_eq!(serde_json::from_str::<Outcome>(&json).unwrap(), o);
-        // Pays what its parts add up to (up to the machine's most).
+        // Pays what its parts add up to (up to the machine's most, a progressive jackpot on top).
         let parts = o.ways_paid + o.collected + o.hold_paid + o.grand + o.bonus.as_ref().map(|b| b.paid()).unwrap_or(0);
         let cap = if m.cap_x > 0 { bet * m.cap_x } else { crate::casino::MAX_PAYOUT };
-        assert_eq!(o.paid, parts.min(cap), "{o:?}");
-        assert_eq!(o.capped, parts > cap);
+        let jackpot = o.pool_won();
+        assert_eq!(o.paid, (parts - jackpot).min(cap) + jackpot, "{o:?}");
+        assert_eq!(o.capped, parts - jackpot > cap);
         assert_eq!(o.bonus.is_some(), o.scatters >= 3);
         // Every screen's wins are its ways.
         for st in &o.steps {
@@ -1165,7 +1179,8 @@ fn the_rounds_that_build_play_by_the_rules() {
         assert!(o.bonus.is_none() && o.steps.is_empty());
         let cap = if m.cap_x > 0 { bet * m.cap_x } else { crate::casino::MAX_PAYOUT };
         let parts = o.hold_paid + o.grand + o.free_paid();
-        assert_eq!(o.paid, parts.min(cap));
+        let jackpot = o.pool_won();
+        assert_eq!(o.paid, (parts - jackpot).min(cap) + jackpot);
         if m.family == Tumble {
             // Ten spins, and five more for every three scatters.
             let more = o.free.iter().filter(|f| f.more).count();

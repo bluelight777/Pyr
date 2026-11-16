@@ -1533,9 +1533,9 @@ pub fn filler_value(sym: u8, seed: u64) -> u32 {
     }
 }
 
-/// What a price is, said: "2", "1.75" (hundredths of the bet).
+/// A feature's price as the Info page says it, hundredths of the bet: "1.75", "63.00".
 fn times(h: u64) -> String {
-    if h % 100 == 0 { format!("{}", h / 100) } else { format!("{:.2}", h as f64 / 100.0) }
+    format!("{}.{:02}", h / 100, h % 100)
 }
 
 /// A machine's feature in a few words (its floor tile's tooltip and the start of its Info
@@ -1607,15 +1607,22 @@ pub fn info_paragraphs(machine: u8) -> Vec<String> {
     let m = &rm::MACHINES[(machine as usize).min(11)];
     let (short, rest) = feature_words(machine);
     let mut out = vec![format!("{short} {rest}")];
-    out.push(format!("Ante, beside the bet: each spin a quarter more, and the bonus about {} times as likely.", if m.family == Family::Tumble { "1.5" } else { "1.7" }));
+    // (Ante and the feature spin one paragraph, as 0.13.28's; its prices always to the
+    // hundredth there, Super Hold & Win's "63.00×".)
     let (_, what) = super::stake::SlotKind::Rm(machine).describe(pyr_poker::casino::feature::Feature::Wild);
-    out.push(format!("Or buy the feature straight away with Play Feature: the {}, {}× the bet. {what}", m.special_name, times(m.special_price)));
+    out.push(format!(
+        "Ante, beside the bet: each spin a quarter more, and the bonus about {} times as likely. Or buy the feature straight away with Play Feature: the {}, {}× the bet. {what}",
+        if m.family == Family::Tumble { "1.5" } else { "1.7" },
+        m.special_name,
+        times(m.special_price)
+    ));
     if m.builds_price > 0 {
         let (name, what) = super::stake::SlotKind::Rm(machine).describe(pyr_poker::casino::feature::Feature::Builds);
         out.push(format!("{name}, from Play Feature at {}× the bet: {what}", times(m.builds_price)));
     }
     if m.cap_x > 0 {
-        out.push(format!("A round pays up to {}× the bet.", chips_text(m.cap_x)));
+        let on_top = if reelrow::progressive(machine) { " (the progressive jackpot on top)" } else { "" };
+        out.push(format!("A round pays up to {}× the bet{on_top}.", chips_text(m.cap_x)));
     }
     out
 }

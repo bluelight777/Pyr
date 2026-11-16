@@ -420,6 +420,15 @@ How (decided while starting it):
       then the win sound (the middle one to 14 times the bet, the big one from 21) and the board
       gives way. Each step within a few hundredths of a second of 0.13.28's. Better than 0.13.28:
       at 1280 wide its jackpot plaques cover RESPINS (only "NS" shows); the rebuild's shows.
+      The most a round pays, as 0.13.28's Info pages say (read again Nov 16: on Gold Rush,
+      Dragon's Hoard, Cosmic Jackpot and Tomb of Ra the line had fallen between two
+      screenshots): a fixed-top machine's top prize; Gold Rush and Dragon's Hoard 25,000× the
+      bet with the progressive jackpot on top (they had no cap; three million Super and bought
+      Hold & Win rounds on each never came past 3,400×, so the 99% stands). All twelve Info
+      pages beside 0.13.28's, remastered (each on its own server) and 0.13.0's Reel Row (each on
+      the other's), every scroll position: the same pixels but the pools and the game behind,
+      now that Ante and the feature spin are one paragraph, Super Hold & Win's price is said to
+      the hundredth (63.00×), and no "Funny" tag (0.13.28 has none on either).
 - [x] Bonus rounds that build: Bomb Spins, Super Hold & Win (0.13.6). Play Feature's seventh
       card at 0.13.28's prices (Bomb Spins 102.80× / 97.80× / 98.60× / 98.20×, Super Hold & Win
       66.70× / 62.70× / 66.80× / 63.00×), words and order; 0.13.28's splash, "SPIN n / 10",

@@ -225,12 +225,12 @@ pub const MACHINES: [Machine; 12] = [
     machine(Hold, "Pearl Hold & Win", "Buy Hold & Win", 300, 200, 3_650, 50_000).coins(12_110, 600, 4_077, 1_200).scatters(2_500, 3_053).super_hold(6_670, 1_949, 365, 240),
     machine(Tumble, "Cosmic Tumbles", "Bomb Spin", 209, 189, 175, 500_000).bombs(1_430, &COSMIC_BOMBS, &COSMIC_START).scatters(2_473, 2_904).bomb_spins(10_280, 1_150, 6_700, &COSMIC_FREE),
     machine(Tumble, "Candy Tumbles", "Bomb Spin", 222, 189, 169, 5_000).bombs(1_430, &SUGAR_BOMBS, &SUGAR_START).scatters(2_471, 2_903).bomb_spins(9_780, 1_150, 6_700, &SUGAR_FREE),
-    machine(Hold, "Nugget Hold & Win", "Buy Hold & Win", 304, 200, 3_585, 0).coins(12_113, 600, 4_077, 1_200).scatters(2_500, 3_054).super_hold(6_270, 2_246, 421, 240),
+    machine(Hold, "Nugget Hold & Win", "Buy Hold & Win", 304, 200, 3_585,25_000).coins(12_113, 600, 4_077, 1_200).scatters(2_500, 3_054).super_hold(6_270, 2_246, 421, 240),
     machine(Tumble, "Neon Tumbles", "Bomb Spin", 223, 189, 169, 20_000).bombs(1_430, &NEON_BOMBS, &NEON_START).scatters(2_470, 2_902).bomb_spins(9_860, 1_150, 6_700, &NEON_FREE),
     machine(Hold, "Scarab Hold & Win", "Buy Hold & Win", 300, 200, 3_650, 50_000).coins(12_111, 600, 4_077, 1_200).scatters(2_500, 3_053).super_hold(6_680, 1_952, 366, 240),
     machine(Frozen, "Frozen Wilds", "Frozen Spin", 387, 200, 563, 7_500).wilds(2_027, 2_584).scatters(2_500, 3_054).chance(22_392),
     machine(Tumble, "Bubbling Tumbles", "Bomb Spin", 223, 189, 170, 10_000).bombs(1_430, &MOONLIT_BOMBS, &MOONLIT_START).scatters(2_474, 2_906).bomb_spins(9_820, 1_150, 6_700, &MOONLIT_FREE),
-    machine(Hold, "Hoard Hold & Win", "Buy Hold & Win", 308, 200, 3_587, 0).coins(12_072, 600, 4_077, 1_200).scatters(2_500, 3_054).super_hold(6_300, 2_270, 425, 240),
+    machine(Hold, "Hoard Hold & Win", "Buy Hold & Win", 308, 200, 3_587,25_000).coins(12_072, 600, 4_077, 1_200).scatters(2_500, 3_054).super_hold(6_300, 2_270, 425, 240),
     machine(Espresso, "Espresso Shots", "Double Shot", 234, 200, 1_597, 5_000).wilds(1_804, 1_948).scatters(2_500, 3_077).chance(22_156),
     machine(Spotlight, "Spotlight Wilds", "Encore Spin", 227, 200, 511, 25_000).wilds(2_234, 2_431).scatters(2_500, 3_053).chance(22_352),
 ];
@@ -1068,9 +1068,16 @@ pub fn play_with(machine: u8, bet: u64, feature: Feature, ante: bool, s: &mut St
     }
     let total = o.ways_paid.saturating_add(o.collected).saturating_add(o.hold_paid).saturating_add(o.grand).saturating_add(o.free_paid()).saturating_add(o.bonus.as_ref().map(|b| b.paid()).unwrap_or(0));
     let cap = if m.cap_x > 0 { bet.saturating_mul(m.cap_x) } else { super::MAX_PAYOUT };
-    o.capped = total > cap.min(super::MAX_PAYOUT);
-    o.paid = total.min(cap).min(super::MAX_PAYOUT);
+    (o.paid, o.capped) = settle(total, o.pool_won(), cap);
     o
+}
+
+/// What a round pays out of what its parts add up to, and whether its most cut it: up to the
+/// machine's most, a progressive machine's jackpot on top (as 0.13.28's Info pages say: Gold
+/// Rush and Dragon's Hoard pay up to 25,000× the bet, the progressive jackpot on top).
+fn settle(total: u64, jackpot: u64, cap: u64) -> (u64, bool) {
+    let rest = total.saturating_sub(jackpot);
+    (rest.min(cap).saturating_add(jackpot).min(super::MAX_PAYOUT), rest > cap || total > super::MAX_PAYOUT)
 }
 
 #[cfg(test)]

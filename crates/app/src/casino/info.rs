@@ -177,9 +177,7 @@ fn about(game: Game, machine: u8, v13: bool, remastered: bool) -> Option<About> 
             if remastered {
                 tags.push("Ante".into());
             }
-            if th.humor.is_some() {
-                tags.push("Funny".into());
-            }
+            // (No "Funny" here: 0.13.28 has none, remastered or not.)
             tags.extend(["Provably fair".to_string(), "Only on Pyr".to_string()]);
             let wild = plain(th.symbols[rr::WILD as usize]);
             let mut paragraphs = vec![format!(
