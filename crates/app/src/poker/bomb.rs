@@ -15,7 +15,7 @@ use pyr_poker::tourney::{BOMB_BUY_INS, BOMB_FUSE_MS, BOMB_SEATS, BOMB_WAIT_MS, S
 
 use super::cards::chips_text;
 use crate::app::PyrApp;
-use crate::casino::{col, ease_out, glow_text, hgrad, mix, pics, radial, round_fill_with};
+use crate::casino::{col, ease_out, glow_text, hgrad, pics, radial};
 use crate::theme;
 
 const TAU: f32 = std::f32::consts::TAU;
@@ -26,10 +26,9 @@ const WHEEL: [u32; 16] = [3, 5, 3, 8, 3, 15, 3, 5, 3, 40, 3, 8, 3, 150, 5, 1000]
 /// it comes in for this long first.
 const SPIN_S: f32 = 3.2;
 const INTRO_S: f32 = 0.55;
-/// The Bomb Pot card's colors (0.13.28's): the card, the glow at its left, its edge, the line
-/// over its name, and the words on a gold button.
+/// The Bomb Pot card's colors (0.13.28's): the card, its edge, the line over its name, and the
+/// words on a gold button.
 const CARD_BASE: Color32 = Color32::from_rgb(0x10, 0x05, 0x07);
-const CARD_GLOW: Color32 = Color32::from_rgb(0x34, 0x12, 0x08);
 const CARD_EDGE: Color32 = Color32::from_rgb(0xb8, 0x4a, 0x24);
 const KICKER: Color32 = Color32::from_rgb(0xff, 0xa8, 0x6a);
 const ON_GOLD: Color32 = Color32::from_rgb(0x2a, 0x10, 0x04);
@@ -319,8 +318,14 @@ impl PyrApp {
             // Its shadow; the card, an ember glow at its left; the bomb on the right 60% of it,
             // melting into the dark over its first 45%; its edge.
             p.rect_filled(r.translate(vec2(0.0, 8.0)), theme::r(16), Color32::from_black_alpha(115));
-            let glow = pos2(r.left() + 60.5, r.center().y - 29.5);
-            round_fill_with(&p, r, 16.0, |q| mix(CARD_GLOW, CARD_BASE, q.distance(glow) / 220.0));
+            p.rect_filled(r, theme::r(16), CARD_BASE);
+            // (The glow as 0.13.28's: over the card and past its edges onto the page round it,
+            // breathing, a breath every 1.85 s. Filmed on it: its middle 60 in and 30 over the
+            // card's, 221 out, (255, 88, 18) at 26 to 43 of 255, 26 + 18 x |sin 1.7t|.)
+            let t = ui.ctx().input(|i| i.time) as f32;
+            let a = (26.0 + 18.0 * (t * 1.7).sin().abs()) as u8;
+            radial(&p, pos2(r.left() + 60.0, r.center().y - 30.0), 221.0, Color32::from_rgba_unmultiplied(0xff, 0x58, 0x12, a), Color32::TRANSPARENT);
+            ui.ctx().request_repaint();
             let art = Rect::from_min_max(pos2(r.right() - w * 0.6, r.top()), r.max);
             // (From the picture as it is, 1376 across: 0.13.28 draws it from no smaller.)
             pics::cover_rounded(&p, &ctx, "tile-bombpot", art, 16.0, (0.5, 0.42), 2048, Color32::WHITE);
