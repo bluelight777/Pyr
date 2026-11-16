@@ -488,7 +488,15 @@ How (decided while starting it):
       page sizes; the same to the pixel at 900x600, within a pixel at the others). The words
       across the reels' foot ("ENCORE! A STEP TO THE LEFT", "FROZEN! THE REST SPINS AGAIN"):
       the same lettering and pill, their middle 0.218 of a cell over the reels' foot (Starlight
-      Cabaret at 1280x800: the same to the pixel). The MULTIPLIER panel right of the reels (the machine's bomb
+      Cabaret at 1280x800: the same to the pixel). A Hot Wild as 0.13.28's (Scoville's Hot
+      Spin filmed at 30 frames a second on both, Nov 16): its flames spread from where the wild
+      landed, up and down, over 0.6 s (they rose from the foot in 0.2), edged in the machine's
+      colour mixed with gold, breathing from 0.6 to full every 0.8 s; "HOT WILDS ×N" across the
+      reels' foot as the other notes (it was at the reel's foot), for 0.81 s, then the win;
+      "HOT WILD" at the reel's foot from the start, in gold (0.15 of a cell, white before); the
+      ×N popping in 0.6 s on, 0.367 of a cell. The ×N's and the label's letters on the same rows
+      and columns as 0.13.28's; each moment within a frame. Two Hot Wilds landing at once: the
+      note's ×N is the two multiplied (not seen on 0.13.28). The MULTIPLIER panel right of the reels (the machine's bomb
       with what the multiplier stands at, "STAYS ALL SPINS"): no bigger than a cell of 124
       makes it, cut off where the page ends rather than hidden (0.13.28 shows its edge on Cosmic
       Jackpot at 1280x800), its edge breathing from 0.7 to full every 1.3 s and the bomb's light

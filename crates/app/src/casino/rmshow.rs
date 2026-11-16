@@ -17,7 +17,7 @@ use pyr_poker::net::RoundView;
 
 use super::reel_themes::{Theme, theme};
 use super::row_styles::Style;
-use super::{col, ease_back, ease_out, glow_text, pics, radial};
+use super::{col, ease_back, ease_out, glow_text, mix, pics, radial};
 use crate::poker::cards::chips_text;
 use crate::theme;
 
@@ -232,6 +232,15 @@ fn bombs_secs(n: usize) -> f32 {
     bomb_added(n.max(1) - 1) + 0.11
 }
 
+/// A Hot Wild's reel (0.13.28's, filmed at 30 frames a second): the flames take 0.6 s to spread
+/// from where the wild landed to the whole reel, its multiplier pops in 0.6 s after it began, and
+/// its note stays across the reels' foot for 0.81 s, the win lit after it. The multiplier's edge
+/// as read off its frames.
+const HOT_GROW: f32 = 0.6;
+const HOT_X_AT: f32 = 0.6;
+const HOT_FILL: f32 = 0.81;
+const HOT_X_EDGE: Color32 = Color32::from_rgb(0x8a, 0x20, 0x08);
+
 /// The reels a screen's Hot Wilds or Espresso Shots newly fill.
 /// How long a Hot Wild's or an Espresso Shot's reel takes to fill, its words settling.
 const FILL_SECS: f32 = 0.95;
@@ -333,7 +342,7 @@ pub fn timeline(o: &rm::Outcome, turbo: bool, free: Option<&FreeCtx>) -> Vec<(f3
                 }
             }
             if !filled(fam, s).is_empty() {
-                push(Ev::Fill(i), FILL_SECS);
+                push(Ev::Fill(i), if fam == Family::Hot { HOT_FILL } else { FILL_SECS });
             }
             let tumbles = fam == Family::Tumble && i + 1 < o.steps.len();
             if !s.wins.is_empty() {
@@ -780,33 +789,29 @@ impl Board {
     }
 }
 
-/// A Hot Wild's reel (Scoville's pepper in flames, 0.13.28's): the picture rising from the
-/// reel's foot over what landed (`t` seconds into its filling; infinite once filled), "HOT
-/// WILDS ×N" at its foot while it fills, then its multiplier on top and "HOT WILD" at its foot.
+/// A Hot Wild's reel, 0.13.28's (Scoville filmed at 30 frames a second at 1280x800 and 900x600,
+/// Nov 16; rebuild/measured/wintags.md): the pepper in flames spreading from where the wild
+/// landed (`rows`) up and down to fill the reel (`t` seconds into its filling; infinite once
+/// filled), edged in gold; "HOT WILD" at its foot from the start, its multiplier popping in on
+/// top a little after it's filled. ("HOT WILDS ×N" goes across the reels' foot meanwhile:
+/// [`reel_note`].)
 #[allow(clippy::too_many_arguments)]
-fn hot_reel(p: &egui::Painter, ctx: &egui::Context, b: &Board, r: usize, x: u8, t: f32, font: &str, time: f32) {
+fn hot_reel(p: &egui::Painter, ctx: &egui::Context, b: &Board, r: usize, rows: (usize, usize), x: u8, t: f32, font: &str, accent: Color32, time: f32) {
     let full = b.reel(r);
-    let rise = ease_out((t / 0.2).clamp(0.0, 1.0));
-    let shown = Rect::from_min_max(pos2(full.left(), full.bottom() - full.height() * rise), full.max);
-    let clip = p.with_clip_rect(shown);
+    let grow = ease_out((t / HOT_GROW).clamp(0.0, 1.0));
+    let from = Rect::from_min_max(pos2(full.left(), full.top() + rows.0 as f32 * b.cell), pos2(full.right(), full.top() + (rows.1 + 1) as f32 * b.cell));
+    let shown = Rect::from_min_max(pos2(full.left(), from.top() + (full.top() - from.top()) * grow), pos2(full.right(), from.bottom() + (full.bottom() - from.bottom()) * grow));
+    let clip = p.with_clip_rect(shown.intersect(p.clip_rect()));
     pics::cover(&clip, ctx, "rr-reel-hot", full, 640, Color32::WHITE);
     radial(&clip, full.center(), full.width() * (0.9 + 0.08 * (time * 5.0).sin()), Color32::from_rgba_unmultiplied(0xff, 0x80, 0x20, 40), Color32::TRANSPARENT);
-    p.rect_stroke(shown, theme::r(6), Stroke::new(2.5f32, col::GOLD), StrokeKind::Inside);
-    if t >= 0.5 {
-        let pop = ease_back(((t - 0.5) / 0.15).clamp(0.0, 1.0));
-        glow_text(p, pos2(full.center().x, full.top() + b.cell * 0.32), Align2::CENTER_CENTER, &format!("×{x}"), theme::display_font(font, (b.cell * 0.3).clamp(16.0, 44.0) * (0.6 + 0.4 * pop)), col::GOLD2, Color32::from_rgba_unmultiplied(0xff, 0x60, 0x10, 160));
+    // (Its edge breathing: the machine's colour and gold, from 0.6 to full every 0.8 s.)
+    let breath = (time * 3.93).sin().abs();
+    p.rect_stroke(shown, theme::r(6), Stroke::new(3.0f32, mix(accent, col::GOLD2, 0.5).gamma_multiply(0.6 + 0.4 * breath)), StrokeKind::Inside);
+    if t >= HOT_X_AT {
+        let pop = ease_back(((t - HOT_X_AT) / 0.15).clamp(0.0, 1.0));
+        glow_text(p, pos2(full.center().x, full.top() + b.cell * 0.312), Align2::CENTER_CENTER, &format!("×{x}"), theme::display_font(font, b.cell * 0.367 * (0.6 + 0.4 * pop)), col::GOLD2, HOT_X_EDGE);
     }
-    let foot = pos2(full.center().x, full.bottom() - b.cell * 0.16);
-    if t < 0.85 {
-        let fs = (b.cell * 0.13).clamp(10.0, 18.0);
-        let g = p.layout_no_wrap(format!("HOT WILDS ×{x}"), theme::display_font(font, fs), col::GOLD2);
-        let pill = Rect::from_center_size(foot, g.size() + vec2(fs * 1.2, fs * 0.45));
-        p.rect_filled(pill, theme::r((pill.height() / 2.0) as u8), Color32::from_black_alpha(220));
-        p.rect_stroke(pill, theme::r((pill.height() / 2.0) as u8), Stroke::new(1.5f32, col::GOLD), StrokeKind::Inside);
-        p.galley(pill.center() - g.size() / 2.0, g, col::GOLD2);
-    } else {
-        label(p, foot, "HOT WILD", theme::bold_font((b.cell * 0.13).clamp(10.0, 18.0)), Color32::WHITE);
-    }
+    label(p, pos2(full.center().x, full.bottom() - b.cell * 0.1835), "HOT WILD", theme::bold_font(b.cell * 0.150), col::GOLD2);
 }
 
 /// An Espresso Shot's reel (the Daily Grind's pour, 0.13.28's): the picture rising from the
@@ -1115,7 +1120,9 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
         } else {
             f32::INFINITY
         };
-        if t < 0.2 {
+        // (What landed shows till the reel's filled over it: a Hot Wild's flames spread from
+        // the wild over the rest.)
+        if t < if fam == Family::Hot { HOT_GROW } else { 0.2 } {
             for row in 0..ROWS {
                 draw_cell(&clip, ctx, m, landed[r][row], 0, o.bet, b.cell_at(r as f32, row as f32), 1.0, accent);
             }
@@ -1124,13 +1131,22 @@ pub fn draw(p: &egui::Painter, ctx: &egui::Context, th: &Theme, st: &Style, b: &
             continue;
         }
         match fam {
-            Family::Hot => hot_reel(&clip, ctx, b, r, s.x[r], t, st.font, time),
+            Family::Hot => {
+                let wild: Vec<usize> = (0..ROWS).filter(|&row| landed[r][row] == WILD).collect();
+                let rows = (wild.first().copied().unwrap_or(0), wild.last().copied().unwrap_or(ROWS - 1));
+                hot_reel(&clip, ctx, b, r, rows, s.x[r], t, st.font, accent, time)
+            }
             _ => shot_reel(&clip, ctx, b, r, t, s.held & (0b111 << (r * ROWS)) != 0),
         }
     }
     // (New shots: their note across the foot while they fill, 0.13.28's.)
     if filling && fam == Family::Espresso {
         reel_note(p, b, "ESPRESSO SHOT! IT STAYS A SPIN", st.font, accent, (since * 6.0).min(1.0));
+    }
+    // (New Hot Wilds: theirs, at once: what they multiply a win through them all by.)
+    if filling && fam == Family::Hot {
+        let times: u32 = new_full.iter().map(|&r| s.x[r].max(1) as u32).product();
+        reel_note(p, b, &format!("HOT WILDS ×{times}"), st.font, accent, 1.0);
     }
     match ev {
         Ev::Freeze(_) => {
@@ -1427,14 +1443,14 @@ pub fn mult_panel(p: &egui::Painter, ctx: &egui::Context, b: &Board, machine: u8
     // it, breathing a little with it.
     let breath = (ctx.input(|i| i.time) as f32 * 2.4).sin().abs();
     p.rect_filled(r, theme::r(10), Color32::from_black_alpha(215));
-    let edge = super::mix(accent, col::GOLD2, 0.4).gamma_multiply(0.7 + 0.3 * breath);
+    let edge = mix(accent, col::GOLD2, 0.4).gamma_multiply(0.7 + 0.3 * breath);
     p.rect_stroke(r, theme::r(10), Stroke::new(2.0f32, edge), StrokeKind::Inside);
     // The bomb a little over the middle of its number (0.13.28's: the number at 0.675 of a cell
     // down the panel, the bomb's middle at 0.648).
     let mid = pos2(r.center().x, r.top() + c * 0.675);
     let orb = pos2(r.center().x, r.top() + c * 0.648);
     super::radial(&p, orb, c * 0.95, accent.gamma_multiply(0.45 * (0.9 + 0.1 * breath)), Color32::TRANSPARENT);
-    let title = super::mix(col::GOLD2, accent, 0.15);
+    let title = mix(col::GOLD2, accent, 0.15);
     p.text(pos2(r.center().x, r.top() + c * 0.138), Align2::CENTER_CENTER, "MULTIPLIER", theme::bold_font(c * 0.12), title);
     sheet(&p, ctx, "rr-bombs", 2, 2, bomb_cell(machine), Rect::from_center_size(orb, vec2(c * 0.85, c * 0.85)), Color32::WHITE);
     let text = format!("×{}", n.max(1));
@@ -1469,7 +1485,7 @@ pub fn more_box(p: &egui::Painter, b: &Board, accent: Color32, since: f32) {
     let size = vec2(tg.size().x.max(lg.size().x) + c * 0.316 * k, c * 0.5755 * k);
     let r = Rect::from_center_size(pos2(b.reels.center().x, b.reels.top() + c * 0.965), size);
     let round = theme::r((c * 0.1362 * k).round() as u8);
-    p.rect_filled(r, round, faded(super::mix(accent, Color32::BLACK, 0.88), a));
+    p.rect_filled(r, round, faded(mix(accent, Color32::BLACK, 0.88), a));
     p.rect_stroke(r, round, Stroke::new(2.5f32, faded(accent, a)), StrokeKind::Inside);
     p.galley(pos2(r.center().x - tg.size().x / 2.0, r.top() + c * 0.094 * k), tg, faded(accent, a));
     p.galley(pos2(r.center().x - lg.size().x / 2.0, r.top() + c * 0.376 * k), lg, faded(Color32::WHITE, a));
