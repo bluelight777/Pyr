@@ -547,6 +547,15 @@ How (decided while starting it):
       its track; Auto play's words ("Number of games (0: until you stop it)", "Stop on a big win
       (10× or more)" by its switch on the left, "Start autoplay", a red "Stop autoplay (∞
       left)"), the field and switch dimmed while it runs.
+      The page measured again on 0.13.28 (2026-11-16, `rebuild/measured/plinko.md`; at 1280x800,
+      1600x1000 and 1600x700, 8 to 16 rows, at rest, filmed and at 6x): the temple at full
+      brightness under a shade darkening down the page; the panel and board's glass, edges and
+      corners; the pegs' layout (it was up to 2.8% off at 1600 wide); two glows over the board and
+      past it that go with the pegs, the warm one swelling every 4.8 s (filmed: the same steps at
+      the same times); the ring smaller, its glow beating every 1.4 s; the pegs' shadow and shine;
+      the buckets' foot, shine, corners and multiples sized by their letters; the title in gold
+      edged in black. At rest only the ring's beat, words a fraction of a pixel apart in the panel
+      and the version line differ.
 - [x] The control room (0.13.5); GMs give/take chips, staff log and download (0.13.4). As 0.13.28
       has it, measured off its screen page by page: Overview (eight numbers, the VIP Club's
       players at each tier, the big wins, the latest in the log), Players (look one up, give or
@@ -573,7 +582,9 @@ How (decided while starting it):
       out, the laurel, the crown dropping and swaying (2.25° and 3.5 px, 4.8 s and 3.9 s), the
       words where 0.13.28 has them (held frames match to the pixel), the count over 3 s, 12.4 s
       in all; its art read before it's wanted. The wheel, fuse, bang and "ALL IN EVERY HAND"
-      unchanged from 0.13.0 (side by side, by eye). The Games menu's jumps land where 0.13.28's
+      unchanged from 0.13.0 (side by side, by eye). The card's ember glow as 0.13.28 draws it
+      (2026-11-16): over the card and past its edges, breathing every 1.85 s (filmed on both:
+      the same curve, frames at the same moment within 2 levels). The Games menu's jumps land where 0.13.28's
       do (6 higher); a debug build no longer panics at a tournament's table (buy-in sums
       saturate). A filled seat's gold ring and "PLAY" (a lighter brown than the amount) as
       0.13.28's (found side by side with Bounty Poker's). Not matched: 0.13.28's finale starts
