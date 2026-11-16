@@ -168,7 +168,8 @@ impl PyrApp {
             let b = Rect::from_min_size(pos2(c.right() - 86.0, c.top() + 24.0), vec2(74.0, 32.0));
             let ready = me.ember_back > 0;
             let resp = ui.put(b, claim_button(ready, 13.5));
-            if resp.on_hover_text("Ember Back pays you back a share of the house's edge on everything you play (and of the rake you pay at poker). Claim it any time.").clicked() && ready {
+            // (0.13.28's words on Claim, pointed at.)
+            if resp.on_hover_text("Ember Back builds with every hand and spin: the higher your tier, the bigger your share. Claim it any time.").clicked() && ready {
                 self.engine.poker(&s.key, ToServer::ClaimEmber);
             }
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
@@ -220,7 +221,8 @@ impl PyrApp {
             let b = Rect::from_min_size(pos2(wb.right() - 78.0, wb.top() + 26.0), vec2(66.0, 30.0));
             let ready = me.weekly_ready > 0;
             let resp = ui.put(b, claim_button(ready, 13.0));
-            if resp.on_hover_text("From Ember tier up: 20% on top of everything your Ember Back earned last week, ready when the week turns (Mondays).").clicked() && ready {
+            // (No words on it: 0.13.28 has none, pointed at.)
+            if resp.clicked() && ready {
                 self.engine.poker(&s.key, ToServer::ClaimWeekly);
             }
         });

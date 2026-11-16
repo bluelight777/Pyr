@@ -2440,7 +2440,7 @@ impl PyrApp {
         // 0.13.28 has it.
         if let Some((cid, cname)) = Self::my_voice_channel(st, s).filter(|_| !me && !s.is_bot(uid) && s.has(pyr_proto::control::VOICE_INVITE_FEATURE)) {
             let there = s.voice_in(cid).iter().any(|p| p.user_id == uid);
-            if !there && s.status.is_connected() && ui.button(format!("Invite to 🔊 {cname}")).on_hover_text(format!("{name} gets a card in the corner of their Pyr with Join")).clicked() {
+            if !there && s.status.is_connected() && ui.button(format!("Invite to 🔊 {cname}")).clicked() {
                 acts.push(Act::InviteToVoice { key: s.key.clone(), uid: uid.to_string() });
                 chose = true;
             }

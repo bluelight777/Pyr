@@ -560,7 +560,9 @@ impl PyrApp {
             }
             y += 23.0;
             let text = if running { format!("Stop autoplay ({} left)", self.poker.casino.plinko.auto.left_text()) } else { "Start autoplay".to_string() };
-            if big_button(ui, Rect::from_min_size(at(x, y), vec2(w, 48.0)), &text, running || ok, running) {
+            // (0.13.28's words on Start autoplay, pointed at; none while it runs.)
+            let tip = if running { "" } else { "Wins never stop it, unless you tick the box above" };
+            if big_button(ui, Rect::from_min_size(at(x, y), vec2(w, 48.0)), &text, running || ok, running, tip) {
                 if running {
                     self.poker.casino.plinko.auto.stop();
                 } else {
@@ -573,7 +575,12 @@ impl PyrApp {
         } else {
             y += 23.0;
             let space = super::keys::pressed(ui.ctx(), super::keys::Move::PlinkoDrop);
-            if big_button(ui, Rect::from_min_size(at(x, y), vec2(w, 48.0)), "Drop a ball", ok, false) || (space && ok) {
+            // (0.13.28's words on it, with the key it has.)
+            let tip = match super::keys::first_key(super::keys::Move::PlinkoDrop) {
+                Some(k) => format!("Click as fast as you like: every ball falls at once ({k} too)"),
+                None => "Click as fast as you like: every ball falls at once".to_string(),
+            };
+            if big_button(ui, Rect::from_min_size(at(x, y), vec2(w, 48.0)), "Drop a ball", ok, false, &tip) || (space && ok) {
                 self.plinko_drop(s);
             }
             y += 74.0;
@@ -583,14 +590,14 @@ impl PyrApp {
 }
 
 /// The panel's big button: gold (red with white words to stop Auto play, `stop`).
-fn big_button(ui: &mut egui::Ui, r: Rect, text: &str, enabled: bool, stop: bool) -> bool {
+fn big_button(ui: &mut egui::Ui, r: Rect, text: &str, enabled: bool, stop: bool, tip: &str) -> bool {
     let resp = ui.interact(r, ui.id().with(("pk-big", stop)), if enabled { Sense::click() } else { Sense::hover() });
+    let resp = if tip.is_empty() { resp } else { resp.on_hover_text(tip) };
+    // (The same pointed at or not: 0.13.28's, gold and red alike.)
     let fill = if stop {
-        if resp.hovered() { Color32::from_rgb(0xc4, 0x2a, 0x34) } else { STOP_RED }
+        STOP_RED
     } else if !enabled {
         Color32::from_rgb(0x5a, 0x4a, 0x2c)
-    } else if resp.hovered() {
-        Color32::from_rgb(0xff, 0xd6, 0x66)
     } else {
         GOLD
     };

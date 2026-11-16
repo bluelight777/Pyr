@@ -569,7 +569,7 @@ fn move_row(ui: &mut egui::Ui, w: &mut KeysWindow, changed: &mut BTreeMap<String
         let r = Rect::from_center_size(pos2(x0 + 251.0, row.center().y + 1.0), vec2(22.0, 26.0));
         let resp = ui.interact(r, ui.id().with(("casino-key-back", mv.id())), Sense::click());
         p.text(r.center(), Align2::CENTER_CENTER, "↺", theme::bold_font(15.0), if resp.hovered() { theme::TEXT() } else { theme::MUTED() });
-        if resp.on_hover_text("Put it back as it was").clicked() {
+        if resp.on_hover_text("Back to the keys it started on").clicked() {
             changed.remove(mv.id());
             w.said = Some(format!("{}: as it was ({}).", mv.label(), mv.defaults().join(", ")));
             w.waiting = None;

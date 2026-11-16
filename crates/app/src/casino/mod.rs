@@ -855,7 +855,7 @@ impl PyrApp {
         }
         self.games_volume_menu(&resp);
         let keys_open = matches!(self.ui.dialog, Some(crate::app::Dialog::CasinoKeys(_)));
-        let (resp, r) = button(ui, 38.0, keys_open, "Keys: every game's moves and their keys, yours to change");
+        let (resp, r) = button(ui, 38.0, keys_open, "Keys: this game's (and every game's), set as you like");
         menubar::top_bar_keyboard_icon(&p, r.center(), if keys_open { col::NIGHT } else { col::TEXT });
         if resp.clicked() {
             self.ui.dialog = Some(crate::app::Dialog::CasinoKeys(keys::KeysWindow::new(Some(keys::Section::of(game)))));

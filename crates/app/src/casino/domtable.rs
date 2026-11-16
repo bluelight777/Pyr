@@ -459,7 +459,7 @@ impl PyrApp {
         p.rect_filled(rack, theme::r(18), Color32::from_black_alpha(128));
         self.dom_strip(ui, s, strip, &tables, at);
         let Some(live) = live else {
-            p.text(table.center(), Align2::CENTER_CENTER, if s.poker.dom_tables.is_none() { "Setting out the tables…" } else { "Sitting you at the table…" }, theme::bold_font(16.0), col::MUTED);
+            p.text(table.center(), Align2::CENTER_CENTER, if s.poker.dom_tables.is_none() { "Setting out the tables…" } else { "Pulling up a chair…" }, theme::bold_font(16.0), col::MUTED);
             return;
         };
         let v = live.view.clone();
@@ -802,21 +802,22 @@ impl PyrApp {
                 p.rect_filled(sit, theme::r(8), Color32::from_black_alpha(if resp.hovered() { 120 } else { 200 }));
                 p.rect_stroke(sit, theme::r(8), Stroke::new(1.0f32, col::GOLD.gamma_multiply(0.8)), StrokeKind::Inside);
                 p.text(sit.center(), Align2::CENTER_CENTER, "SIT", theme::bold_font(11.5), col::GOLD2);
-                if resp.on_hover_text("Sit here").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                // (No words on SIT: 0.13.28 has none, pointed at.)
+                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                     self.engine.poker(&s.key, ToServer::DomSit { table: v.id, seat });
                 }
             }
             let resp = ui.interact(bot, ui.id().with(("dom-bot", seat)), Sense::click());
             p.rect_filled(bot, theme::r(8), if resp.hovered() { Color32::from_rgb(0x3d, 0x5f, 0xc4) } else { Color32::from_white_alpha(22) });
             p.text(bot.center(), Align2::CENTER_CENTER, "+ BOT", theme::bold_font(11.5), Color32::WHITE);
-            if resp.on_hover_text("Seat a bot here: it plays with the house's chips").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+            if resp.on_hover_text("Seat a Havana regular here: they play with the house's chips").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                 self.engine.poker(&s.key, ToServer::DomBot { table: v.id, seat, add: true });
             }
             return;
         };
         if x.bot {
             crate::poker::table::bot_face(&p, face_c, fr, &x.name, pyr_poker::bots::Level::Regular);
-            let resp = ui.interact(plate, ui.id().with(("dom-botplate", seat)), Sense::click()).on_hover_text(format!("{}: a bot. It plays with the house's chips.", x.name));
+            let resp = ui.interact(plate, ui.id().with(("dom-botplate", seat)), Sense::click()).on_hover_text(format!("{}: a Havana regular, playing with the house's chips. Right-click to ask them to leave.", x.name));
             if v.stage != DomStage::Playing {
                 resp.context_menu(|ui| {
                     crate::menu::style(ui);

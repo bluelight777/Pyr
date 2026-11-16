@@ -143,7 +143,7 @@ pub struct Hand {
 }
 
 /// Why a move can't be made.
-pub const NOT_OPEN: &str = "it isn't your turn, or that move isn't open";
+pub const NOT_OPEN: &str = "it isn't your turn";
 
 impl Hand {
     /// Deals a hand to `seats` (in turn order) from `seed`: each in turn a tile, ten each.
@@ -283,10 +283,25 @@ impl Hand {
         self.two_sides() && !self.chain.is_empty() && self.offer.is_none() && self.cube.is_none_or(|c| c == self.side(place)) && self.mult < MAX_MULT
     }
 
-    /// Makes a move for `seat` (checked: `NOT_OPEN` if it can't).
+    /// Why `seat` can't make the move, in 0.13.28's words (its server's: one for each case).
+    fn refusal(&self, seat: u8, m: Move) -> &'static str {
+        let Some(place) = self.place(seat) else { return "it isn't your turn" };
+        match m {
+            Move::Accept | Move::Fold if self.offer.is_none() => "nobody has doubled",
+            Move::Accept | Move::Fold => "it isn't your turn",
+            _ if self.offer.is_some() || self.to_act != Some(place) => "it isn't your turn",
+            Move::Play { tile, .. } if !self.hands[place].contains(&tile) => "you don't hold that tile",
+            Move::Play { .. } => "that tile doesn't fit there",
+            Move::Draw => "there's nothing to draw, or you have a tile to play",
+            Move::Pass => "you have a tile to play",
+            Move::Double => "the stake can't be doubled now",
+        }
+    }
+
+    /// Makes a move for `seat` (checked: `refusal`'s words if it can't).
     pub fn act(&mut self, seat: u8, m: Move) -> Result<(), String> {
         if !self.allowed(seat).contains(&m) {
-            return Err(NOT_OPEN.into());
+            return Err(self.refusal(seat, m).into());
         }
         let place = self.place(seat).ok_or(NOT_OPEN)?;
         self.moves.push((seat, m));

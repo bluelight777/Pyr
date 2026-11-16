@@ -727,7 +727,7 @@ impl PyrApp {
                 } else {
                     egui::Button::new(RichText::new("Close").font(theme::bold_font(13.0)).color(theme::TEXT())).fill(theme::ELEV2()).corner_radius(theme::r(6))
                 };
-                if ui.put(c, button).on_hover_text("Close this table for everyone: the chips at it go back to whoever had them").clicked() {
+                if ui.put(c, button).on_hover_text("Close this table: everyone sitting gets their chips back").clicked() {
                     if sure {
                         self.engine.poker(&s.key, ToServer::Close { table: t.id });
                         self.poker.lobby_close = None;

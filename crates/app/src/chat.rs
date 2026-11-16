@@ -3316,7 +3316,7 @@ fn dm_file_card(ui: &mut egui::Ui, s: &ServerView, a: &Attachment, acts: &mut Ve
                     }
                     _ => {
                         let label = if saving.is_some() { "Try again" } else { "Save" };
-                        if ui.add(theme::primary_button(label)).on_hover_text("Pick where it goes: it's written there as it comes").clicked() {
+                        if ui.add(theme::primary_button(label)).clicked() {
                             crate::images::save_file_async(s.key.clone(), a.id.clone(), a.name.clone(), ui.ctx());
                         }
                     }

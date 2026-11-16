@@ -111,6 +111,11 @@ pub fn bar(ui: &mut egui::Ui, bar: Rect, left: &[Item], right: &[Item], on: Opti
         if !wide {
             resp = resp.on_hover_text(item.tip());
         }
+        // (Keys says what it's for as well, named or not: under its name when that's a tip too,
+        // as 0.13.28 shows it.)
+        if item == Item::Keys {
+            resp = resp.on_hover_text("Every game's keys: set them as you like");
+        }
         let lit = on == Some(item);
         let opened = open == Some(item);
         let hot = resp.hovered() || opened;
