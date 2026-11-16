@@ -415,40 +415,8 @@ impl PyrApp {
             // (Taken out of it: back to the lobby.)
             self.poker.tab = Tab::Floor;
         }
-        let mut pui = ui.new_child(egui::UiBuilder::new().max_rect(page));
-        let mut scroll = egui::ScrollArea::vertical().id_salt(("casino-page", self.poker.tab as u8)).auto_shrink([false, false]);
-        if self.poker.casino.jump == Some(crate::casino::games_menu::Jump::Top) {
-            // (The Games menu's way back: the lobby from its top.)
-            self.poker.casino.jump = None;
-            scroll = scroll.vertical_scroll_offset(0.0);
-        }
-        scroll.show(&mut pui, |ui| {
-            // (The page's own width, kept for what's under today's missions: on a narrow window
-            // they run past its edge, as 0.13.28's do, and mustn't widen the page with them.)
-            let page_w = ui.available_width();
-            ui.add_space(30.0);
-            if let Some(me) = &s.poker.me {
-                self.me_card(ui, s, me.clone());
-                // (Today's missions and Ember Back on every page, as 0.13.28 has them.)
-                ui.add_space(10.0);
-                self.levels_row(ui, s, &me.clone());
-            }
-            ui.add_space(18.0);
-            let page = Rect::from_min_size(ui.cursor().min, vec2(page_w, f32::INFINITY));
-            ui.scope_builder(egui::UiBuilder::new().max_rect(page).layout(*ui.layout()), |ui| match self.poker.tab {
-                Tab::Floor => self.casino_floor(ui, s),
-                Tab::Vip => match s.poker.me.clone() {
-                    Some(me) => self.vip_page(ui, s, &me),
-                    None => self.casino_floor(ui, s),
-                },
-                Tab::Leaderboard => self.leaderboard(ui, s),
-                Tab::Me => self.profile(ui, s),
-                Tab::Staff => self.staff_tab(ui, s),
-                Tab::Cms => self.cms_page(ui, s),
-            });
-            ui.add_space(30.0);
-        });
-        // The bar, over the page's top.
+        // The bar, first: the page is drawn over its foot (egui keeps 3 points past a scrolled
+        // area's edge for what's in it, so a tile scrolled up reaches 3 into the bar), as 0.13.28's.
         let mut left = vec![Item::Lobby, Item::Games];
         if levels {
             left.push(Item::Vip);
@@ -508,6 +476,39 @@ impl PyrApp {
                 }
             }
         }
+        let mut pui = ui.new_child(egui::UiBuilder::new().max_rect(page));
+        let mut scroll = egui::ScrollArea::vertical().id_salt(("casino-page", self.poker.tab as u8)).auto_shrink([false, false]);
+        if self.poker.casino.jump == Some(crate::casino::games_menu::Jump::Top) {
+            // (The Games menu's way back: the lobby from its top.)
+            self.poker.casino.jump = None;
+            scroll = scroll.vertical_scroll_offset(0.0);
+        }
+        scroll.show(&mut pui, |ui| {
+            // (The page's own width, kept for what's under today's missions: on a narrow window
+            // they run past its edge, as 0.13.28's do, and mustn't widen the page with them.)
+            let page_w = ui.available_width();
+            ui.add_space(30.0);
+            if let Some(me) = &s.poker.me {
+                self.me_card(ui, s, me.clone());
+                // (Today's missions and Ember Back on every page, as 0.13.28 has them.)
+                ui.add_space(10.0);
+                self.levels_row(ui, s, &me.clone());
+            }
+            ui.add_space(18.0);
+            let page = Rect::from_min_size(ui.cursor().min, vec2(page_w, f32::INFINITY));
+            ui.scope_builder(egui::UiBuilder::new().max_rect(page).layout(*ui.layout()), |ui| match self.poker.tab {
+                Tab::Floor => self.casino_floor(ui, s),
+                Tab::Vip => match s.poker.me.clone() {
+                    Some(me) => self.vip_page(ui, s, &me),
+                    None => self.casino_floor(ui, s),
+                },
+                Tab::Leaderboard => self.leaderboard(ui, s),
+                Tab::Me => self.profile(ui, s),
+                Tab::Staff => self.staff_tab(ui, s),
+                Tab::Cms => self.cms_page(ui, s),
+            });
+            ui.add_space(30.0);
+        });
         // Someone's big win, at the bar's foot (3 points higher than on a game's page under its
         // own bar, as 0.13.28's: y 61 to 97 at the top of a window).
         self.big_win_banner(ui, s, Rect::from_min_max(pos2(page.left(), page.top() - 3.0), page.max));

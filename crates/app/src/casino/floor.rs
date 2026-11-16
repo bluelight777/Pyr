@@ -462,35 +462,31 @@ impl PyrApp {
     }
 }
 
-/// A tile darkened toward its foot, for its name: black from nothing 11% of the way down to
-/// 80% at the foot, and over the last 13% another, to 52% (0.13.28's two, read off its tiles
-/// against their pictures), in bands that follow the rounded corners.
+/// A tile darkened toward its foot, for its name, as 0.13.28 darkens it: a fan of black from the
+/// tile's middle (5% there) to its outline (nothing round the top corners, 81% where the foot's
+/// corners begin to 92% at the foot), straight between, so its sides darken evenly down them and
+/// the middle stays light longest. (Read off fourteen of its tiles against the same tiles here,
+/// at two window widths: the X of the fan's triangles shows in their difference.)
 fn foot_shade(p: &egui::Painter, r: Rect, radius: f32) {
     let rad = radius.min(r.width() / 2.0).min(r.height() / 2.0).max(0.0);
-    let alpha = |y: f32| {
-        let t = ((y - r.top()) / r.height()).clamp(0.0, 1.0);
-        let a = 0.9 * (t - 0.11).max(0.0);
-        let b = 4.0 * (t - 0.87).max(0.0);
-        1.0 - (1.0 - a) * (1.0 - b)
-    };
-    let inset = |y: f32| {
-        let d = y - (r.bottom() - rad);
-        if d <= 0.0 { 0.0 } else { rad - (rad * rad - d * d).max(0.0).sqrt() }
-    };
-    let mut ys: Vec<f32> = [0.11, 0.87, 0.89, 0.91, 0.93].into_iter().map(|t| r.top() + r.height() * t).filter(|&y| y < r.bottom() - rad).collect();
-    let n = (rad.ceil() as usize * 2).max(1);
-    ys.extend((0..=n).map(|i| r.bottom() - rad + rad * i as f32 / n as f32));
+    // Black's alpha (of 255) at a point of the outline `t` of the way down.
+    let edge = |t: f32| if t < 0.5 { 0.0 } else { (234.5 - 495.7 * (1.0 - t)).clamp(0.0, 255.0) };
     let mut m = egui::Mesh::default();
-    for (k, &y) in ys.iter().enumerate() {
-        let c = Color32::from_black_alpha((alpha(y) * 255.0).round() as u8);
-        let i = inset(y);
-        m.colored_vertex(pos2(r.left() + i, y), c);
-        m.colored_vertex(pos2(r.right() - i, y), c);
-        if k > 0 {
-            let b = (2 * k) as u32;
-            m.add_triangle(b - 2, b - 1, b);
-            m.add_triangle(b - 1, b + 1, b);
+    m.colored_vertex(r.center(), Color32::from_black_alpha(13));
+    let seg = 10;
+    // Clockwise from the bottom right (y grows downwards).
+    let corners = [(pos2(r.right() - rad, r.bottom() - rad), 0.0f32), (pos2(r.left() + rad, r.bottom() - rad), 90.0), (pos2(r.left() + rad, r.top() + rad), 180.0), (pos2(r.right() - rad, r.top() + rad), 270.0)];
+    for (cc, a0) in corners {
+        for i in 0..=seg {
+            let a = (a0 + 90.0 * i as f32 / seg as f32).to_radians();
+            let q = cc + vec2(a.cos(), a.sin()) * rad;
+            let t = ((q.y - r.top()) / r.height().max(1.0)).clamp(0.0, 1.0);
+            m.colored_vertex(q, Color32::from_black_alpha(edge(t).round() as u8));
         }
+    }
+    let n = 4 * (seg + 1) as u32;
+    for i in 1..=n {
+        m.add_triangle(0, i, if i == n { 1 } else { i + 1 });
     }
     p.add(Shape::mesh(m));
 }
