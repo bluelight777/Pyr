@@ -958,7 +958,8 @@ impl PyrApp {
     fn dom_welcome(&self, p: &egui::Painter, v: &DomView, table: Rect, k: f32) {
         let c = pos2(table.center().x, table.center().y + 7.0 * k);
         let box_r = Rect::from_center_size(c, vec2(274.0, 95.0));
-        p.rect_filled(box_r, theme::r(12), Color32::from_black_alpha(130));
+        // (0.13.28's box is darker: black at 170, measured against the felt beside it.)
+        p.rect_filled(box_r, theme::r(12), Color32::from_black_alpha(170));
         // (A hand's coming: 0.13.28 says so while it gathers.)
         let title = if v.stage == DomStage::Gathering { "Next hand: put up your chips" } else { "Sit down and put up the ante to play" };
         super::glow_text(p, c - vec2(0.0, 21.0), Align2::CENTER_CENTER, title, theme::bold_font(20.0), col::GOLD2, Color32::from_black_alpha(200));
