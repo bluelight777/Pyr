@@ -860,9 +860,11 @@ impl PyrApp {
             (chips_text(seat.stack), Color32::from_rgb(0xff, 0xd2, 0x5e))
         };
         p.text(plate.center() + vec2(0.0, 11.0 * k), Align2::CENTER_CENTER, stack, theme::bold_font(15.5 * k), stack_col.gamma_multiply(fade.max(0.7)));
-        // Chips added in this hand, waiting (0.13.22): small and green at the plate's right.
+        // Chips added in this hand, waiting (0.13.22): small and green at the plate's right; what
+        // they are when pointed at (0.13.28's words).
         if seat.pending > 0 {
-            p.text(pos2(plate.right() - 7.0 * k, plate.center().y + 12.0 * k), Align2::RIGHT_CENTER, format!("+{}", chips_text(seat.pending)), theme::bold_font(10.0 * k), Color32::from_rgb(0x5f, 0xd3, 0x7e));
+            let r = p.text(pos2(plate.right() - 7.0 * k, plate.center().y + 12.0 * k), Align2::RIGHT_CENTER, format!("+{}", chips_text(seat.pending)), theme::bold_font(10.0 * k), Color32::from_rgb(0x5f, 0xd3, 0x7e));
+            ui.interact(r, ui.id().with(("pending", i)), Sense::hover()).on_hover_text("Chips on their way: they join the stack when this hand is over.");
         }
         // Level, on the picture's edge; and for bots, how good they are. (Not while their cards
         // are shown over the picture, as 0.13.28.)

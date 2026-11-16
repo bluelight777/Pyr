@@ -1077,7 +1077,8 @@ How (decided while starting it):
         hunted by …", then small in a panel when the next hand's dealt, gone 14 s after (its
         last second fading): filmed beside 0.13.28's at 30 fps, the same frames to one or
         two. `top_up` in a hand: kept on the seat (`pending`, "+400" green at the plate's
-        right, for everyone), on the stack when the hand's over; the window as 0.13.28's
+        right, for everyone; pointed at, 0.13.28's "Chips on their way: they join the stack
+        when this hand is over."), on the stack when the hand's over; the window as 0.13.28's
         (stack · most · chips, Top up to …, +20/+50/+100 big blinds that fit, the slider and
         Add, the in-a-hand line, Auto top-up). Auto top-up (`poker_auto_top_up`, 0.13.28's
         setting) tops up to the most whenever I'm not in a hand. `close` → `closed` to
