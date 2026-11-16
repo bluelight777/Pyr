@@ -568,32 +568,32 @@ pub(super) fn sheet(p: &egui::Painter, ctx: &egui::Context, name: &str, cols: us
     pics::part(p, ctx, name, uv, r, (r.width() * cols as f32 * 1.4) as u32 + 1, tint)
 }
 
-/// A machine's round that builds' picture (Play Feature): three of its bombs, or its coin
-/// glowing with a Payer's ring.
+/// A machine's round that builds' picture (Play Feature): 0.13.28's medallion, a thin gold ring
+/// with an ember glow inside, and three of the machine's bombs (or coins) in a row, the middle
+/// one in front and the two behind it a little smaller and darker. (Measured on 0.13.28's Cosmic
+/// Jackpot and Gold Rush cards: the same ring and glow on both.)
 pub fn builds_icon(p: &egui::Painter, ctx: &egui::Context, machine: u8, r: Rect, tint: Color32) {
-    let s = r.width() * 0.62;
-    match rm::family(machine) {
-        Family::Tumble => {
-            for (dx, dy) in [(-0.2f32, 0.12f32), (0.2, 0.12), (0.0, -0.1)] {
-                let c = r.center() + vec2(dx * r.width(), dy * r.height());
-                sheet(p, ctx, "rr-bombs", 2, 2, bomb_cell(machine), Rect::from_center_size(c, vec2(s, s)), tint);
-            }
-        }
-        _ => {
-            radial(p, r.center(), r.width() * 0.5, Color32::from_rgba_unmultiplied(0xb0, 0x60, 0xff, 90), Color32::TRANSPARENT);
-            for (dx, dy) in [(-0.18f32, 0.1f32), (0.18, 0.1), (0.0, -0.1)] {
-                let c = r.center() + vec2(dx * r.width(), dy * r.height());
-                sheet(p, ctx, "rr-coins", 4, 2, coin_cells(machine).0, Rect::from_center_size(c, vec2(s, s)), tint);
-            }
-        }
+    let s = r.width();
+    let c = r.center() + vec2(0.0, s * 0.02);
+    let lit = tint.r() as f32 / 255.0;
+    radial(p, c, s * 0.525, col::EMBER.gamma_multiply(0.29 * lit), Color32::TRANSPARENT);
+    p.circle_stroke(c, s * 0.5, Stroke::new(1.5f32, Color32::from_rgb(0xd8, 0x96, 0x40).gamma_multiply(lit)));
+    let (name, cols, cell) = match rm::family(machine) {
+        Family::Tumble => ("rr-bombs", 2, bomb_cell(machine)),
+        _ => ("rr-coins", 4, coin_cells(machine).0),
+    };
+    let behind = Color32::from_gray((204.0 * lit) as u8);
+    for dx in [-0.24f32, 0.24] {
+        sheet(p, ctx, name, cols, 2, cell, Rect::from_center_size(c + vec2(dx * s, 0.07 * s), vec2(s * 0.5, s * 0.5)), behind);
     }
+    sheet(p, ctx, name, cols, 2, cell, Rect::from_center_size(c + vec2(0.0, 0.02 * s), vec2(s * 0.62, s * 0.62)), tint);
 }
 
 /// A machine's feature spin's picture (Play Feature): its bomb, its coin, its wild.
 pub fn feature_icon(p: &egui::Painter, ctx: &egui::Context, machine: u8, r: Rect, tint: Color32) {
     match rm::family(machine) {
-        Family::Tumble => _ = sheet(p, ctx, "rr-bombs", 2, 2, bomb_cell(machine), r.shrink(r.width() * 0.1), tint),
-        Family::Hold => _ = sheet(p, ctx, "rr-coins", 4, 2, coin_cells(machine).0, r.shrink(r.width() * 0.1), tint),
+        Family::Tumble => _ = sheet(p, ctx, "rr-bombs", 2, 2, bomb_cell(machine), r.shrink(r.width() * 0.06), tint),
+        Family::Hold => _ = sheet(p, ctx, "rr-coins", 4, 2, coin_cells(machine).0, r.shrink(r.width() * 0.06), tint),
         _ => _ = sheet(p, ctx, "rr-wilds", 2, 2, wild_cell(machine).unwrap_or(0), r.shrink(r.width() * 0.08), tint),
     }
 }

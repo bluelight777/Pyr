@@ -478,6 +478,12 @@ How (decided while starting it):
       1,104", "234 × 3 = 702"); the rebuild's once showed "42 × 26 = 1,087". Most likely W is
       shown rounded and T paid on a win with a fraction of a chip in it, which would be a
       difference in how a round is paid, not in the picture: not checked further, not changed.
+      Play Feature's card and Buy box for a round that builds as 0.13.28's (both side by side on
+      Cosmic Jackpot and Gold Rush, Nov 16): a medallion, a thin gold ring with an ember glow
+      inside, the machine's three bombs or coins in a row, the middle one in front and the two
+      behind smaller and darker (the rebuild had three in a pile, no ring); the feature spin's
+      bomb or coin 0.88 of its badge (it was 0.8). Within a pixel; 0.13.28's are a little softer
+      (a smaller picture drawn bigger), not copied.
 - [x] Big wins: Big, Mega, Epic, Legendary, Mythic with fireworks (0.13.2/4). Measured on
       0.13.28's own rounds, chosen: a test server with a fixed house seed (a scratch build, kept
       out of the repository) let its app play rounds whose seeds were searched for in advance:
