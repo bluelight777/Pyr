@@ -880,9 +880,17 @@ impl PyrApp {
                         // of the text).
                         let (rest, server_gifs) = crate::server_gifs::split(&m.content);
                         let content = if server_gifs.is_empty() { m.content.clone() } else { rest };
-                        // A prop's message is its card: its lines aren't shown as text too.
+                        // A prop's message is its card (with Prop Bets installed): its lines aren't
+                        // shown as text too. Without it, its line and Install.
                         let props_here = s.has(pyr_proto::control::PROPS_FEATURE) && !crate::props::ids_in(&content).is_empty();
-                        let shown_text = if props_here { crate::props::without_links(&content) } else { content.clone() };
+                        let cards = props_here && self.prop_bets_installed();
+                        let shown_text = if cards {
+                            crate::props::without_links(&content)
+                        } else if props_here {
+                            crate::props::without_link_lines(&content)
+                        } else {
+                            content.clone()
+                        };
                         let gifs = crate::giphy::gif_links(&content);
                         let only_gif = self.only_gif(&content, &gifs);
                         if !shown_text.is_empty() && !only_gif {
@@ -908,11 +916,13 @@ impl PyrApp {
                         for (game, room) in crate::play_invites::links_in(&content).into_iter().take(2) {
                             self.play_invite_embed(ui, st, &game, &room, mine, acts);
                         }
-                        // And prop bets: the prop's card (the server keeps it).
-                        if s.has(pyr_proto::control::PROPS_FEATURE) {
+                        // And prop bets: the prop's card (the server keeps it), or Install.
+                        if cards {
                             for id in crate::props::ids_in(&content).into_iter().take(2) {
                                 self.prop_card(ui, st, s, id, acts);
                             }
+                        } else if props_here {
+                            self.prop_install_line(ui, acts);
                         }
                         if m.edited_at.is_some() {
                             ui.label(RichText::new("(edited)").size(10.5).color(theme::DIM()));
@@ -1214,7 +1224,7 @@ impl PyrApp {
             // Typing "/": add-ons' commands (Tab fills in the first, a click any).
             if let Some(partial) = draft.strip_prefix('/').filter(|p| !p.contains(char::is_whitespace)) {
                 let mut cmds = self.plugins.commands_like(partial);
-                if s.has(pyr_proto::control::PROPS_FEATURE) && "prop".starts_with(&partial.to_lowercase()) {
+                if s.has(pyr_proto::control::PROPS_FEATURE) && self.prop_bets_installed() && "prop".starts_with(&partial.to_lowercase()) {
                     cmds.insert(0, ("prop".into(), "Open a prop bet for everyone here, with Pyr Casino chips: /prop Will it rain? | Yes | No".into()));
                 }
                 if !cmds.is_empty() {
@@ -1581,8 +1591,14 @@ impl PyrApp {
                 // "/prop Will it rain? | Yes | No": the New prop bet window, filled in.
                 let prop_command = s.has(pyr_proto::control::PROPS_FEATURE).then(|| prop_query(draft.trim())).flatten();
                 if send && let Some((question, outcomes)) = prop_command {
-                    acts.push(Act::NewProp { key: key.clone(), channel: ch.id, question, outcomes });
-                    draft.clear();
+                    if self.prop_bets_installed() {
+                        acts.push(Act::NewProp { key: key.clone(), channel: ch.id, question, outcomes });
+                        draft.clear();
+                    } else {
+                        // (Kept in the box, to send once it's installed.)
+                        acts.push(Act::Toast("Prop bets come with Prop Bets, from the Pyr Library: install it there.".into(), false));
+                        self.show_prop_bets_in_library(acts);
+                    }
                 } else if send && let Some((addon, name, args)) = addon_command {
                     let reply_to = self.ui.reply.take().map(|(id, _)| id);
                     acts.push(Act::AddonCommand { addon, name, args, key: key.clone(), channel: ch.id, reply_to });
