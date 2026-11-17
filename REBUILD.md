@@ -196,6 +196,34 @@ settings serve that folder as they are (v7: a file with a dot in its name is the
 checked against the invite patterns). Prop Bets in the Library is 0.2.0 (its listing and
 `make-prop-bets.sh` take the version from `crates/prop-bets/Cargo.toml`).
 
+0.15.0 as built (Nov 17, 23:15 UTC) and checked. The tests first, each package the way it's
+built: the app and the window (148 and 7), the server (99), `pyr-props` (42), the protocol
+(65), poker (182), the directory (16 and 2). Then the release itself, against the release key
+Pyr is built with (31 checks; the scripts are kept with the rebuild's notes and tools, in
+`rebuild/tools/release-0.15.0`): `latest2.json` signed, 0.15.0, its released list ending
+0.14.1, 0.14.2, 0.15.0, its notes, both downloads the files it describes (the Windows setup
+104,896,829 bytes, the .deb 106,179,952); the page; the VPS's programs there, its x86-64 server
+and `pyr-props` running here and saying 0.15.0; the Keeper's certificate (for the Keeper on the
+VPS, until 2027-12-22); Prop Bets' listing signed and endorsed, 0.2.0, its two programs and its
+icon in `library.tar` as listed; the feed key's certificate (the release key's, for the feed
+key in the keys folder, until 2027-12-22), and `pyr-props verify` taking the key and
+certificate that go up. The chain of keys with the release's own programs: the VPS's
+`pyr-props` made a feed with the real feed key (one round of its Gallery Draw alone, which asks
+nothing of the network the first time), and the VPS's `pyr-server`, believing only the release
+key it's built with, followed it ("followed the props feed opened=2"). The Linux release (Pyr,
+its server, Prop Bets' window) started on a test screen. On Blue's PC in
+`Downloads\pyr-release-0.15.0`: 51 files, read back from his PC and compared byte for byte with
+the release made here; he publishes it with `publish.cmd`. The folder holds the feed key this
+once (`upload\props\feed-key.txt`): the set-up moves it to `/etc/pyr-props` on the VPS and
+removes what came up; the spare is with the other keys.
+
+Not tried, and only the VPS can say: the real sources from the VPS's address (ESPN may answer
+a datacenter differently; api.weather.gov's forecast, Steam's and NASA's picture API are
+written from their documented shapes), `setup-props.sh` on the real machine (its user, the way
+through the website's folders, the service's limits), Prop Bets 0.2 inside Pyr's window on
+Windows and the Windows setup, and a busy server holding some two thousand props. The set-up
+prints each source's state as it ends; `https://pyr.gg/props/status.json` has it after.
+
 0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
 Blue's pyr.log, Nov 17, "couldn't find the server "SERVER2.24.121.231": No such host is known".
 The bug server's address in `release-env.sh` had been read out of 0.13.28's program with the
