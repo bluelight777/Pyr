@@ -1367,8 +1367,15 @@ How (decided while starting it):
       files into `dist/library/files/prop-bets/`, which `make-release.sh` carries as
       `library.tar`; its listing signed and endorsed in `dist/keeper/add/`, which
       `setup-keeper.sh` takes in every time, the Keeper stopped meanwhile). Its description says
-      which Pyr it needs (the workspace's version, filled in). Left: (6), the release, with Pyr's
-      side (the cards follow the install, so both go up together); Blue's go-ahead first.
+      which Pyr it needs (the workspace's version, filled in). Then end to end on a test screen
+      (a test server, a test Library on localhost, a local-only Pyr build trusting a test key,
+      never committed): /prop without it opens its Library page, Install, /prop and its card,
+      Open (the window with the server's props, chips, channels), New prop and Settle from the
+      window, a refusal said there, Close and Remove (each prop a line with Install), Install
+      from that line (the cards back). Fixed from it: Install before the list came was "Something
+      went wrong" (now its page waits for the list), and Close on Linux was "closed by mistake".
+      Left: (6), the release, with Pyr's side (the cards follow the install, so both go up
+      together); Blue's go-ahead first.
 - [ ] Approved bug reports 657 to 675 (voice up and down; stopped responding), without
       touching the echo canceller
 - [ ] The key change (above): built and tried with test keys; the day's steps there
