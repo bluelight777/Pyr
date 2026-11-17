@@ -164,6 +164,14 @@ notice ("There's a new Pyr…") as its red error card. Blue asked (Nov 17) for 0
 by itself: it can't (only the lost key's signature makes it install anything); the way over is
 a link in chat (`https://pyr.gg/Pyr-Setup.exe`, `https://pyr.gg/pyr_amd64.deb`).
 
+0.14.1 (built Nov 17, Blue's notes approved): no more automatic voice reports, approved bug
+reports always in the owner's list, pyr.gg's page and the invite directory with games' invites
+(the directory ships again: the rebuild's, answer for answer 0.13.28's) and settings v7, Pyr no
+longer freezing as a program opens, and bug reports sent again (the address fixed). Checked:
+`latest2.json` signed with the new key, both downloads' hashes, the page 0.13.28's with 0.14.1
+filled in, the address in both programs, the Linux build starting on a test screen. On Blue's
+PC in `Downloads\pyr-release-0.14.1`; he publishes it with `publish.cmd`.
+
 0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
 Blue's pyr.log, Nov 17, "couldn't find the server "SERVER2.24.121.231": No such host is known".
 The bug server's address in `release-env.sh` had been read out of 0.13.28's program with the
