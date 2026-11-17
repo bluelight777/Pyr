@@ -31,8 +31,8 @@ const SHALLOWER: u64 = 10;
 const SHALLOWEST: u64 = 2_500;
 /// Nothing's offered about a casino nobody has played in for this many days.
 const QUIET_DAYS: u64 = 7;
-/// Whose numbers these are.
-const SOURCE: &str = "This casino";
+/// Whose numbers these are (as in "settled from …").
+const SOURCE: &str = "this server's casino";
 const ANOTHER: &str = "Another game";
 
 /// A day of the casino, over all its games.
@@ -143,8 +143,12 @@ fn for_day(day: u64, before: &[&Day], pool: u64) -> Vec<FeedProp> {
     house.q = format!("Does the house come out ahead on {on}?");
     house.outcomes = yes_no();
     house.prior = vec![chance, 1.0 - chance];
-    house.detail = format!("It did on {} of the last {} days it was played", ahead as u64, played as u64);
-    house.rules = "Yes if, over every round finished in this server's casino that day (UTC), more chips were bet than were paid back. Called off if nobody plays, or if it comes out exactly even.".into();
+    house.detail = match (ahead as u64, played as u64) {
+        (1, 1) => "It did on the one day it was played lately".into(),
+        (_, 1) => "It didn't on the one day it was played lately".into(),
+        (a, n) => format!("It did on {a} of the last {n} days it was played"),
+    };
+    house.rules = "Yes if more chips were bet than were paid back, over every round finished in the casino that day (UTC). Called off if nobody plays, or if it comes out exactly even.".into();
     out.push(house);
 
     // Which game takes the most in bets: the week's four biggest, or another.
@@ -170,7 +174,7 @@ fn for_day(day: u64, before: &[&Day], pool: u64) -> Vec<FeedProp> {
         busiest.outcomes = named.iter().map(|g| g.0.to_string()).chain([ANOTHER.to_string()]).collect();
         busiest.prior = prior.into_iter().map(|x| x / sum).collect();
         busiest.detail = format!("The last week's: {}", named[0].0);
-        busiest.rules = "The game the most chips are bet on, over every round finished in this server's casino that day (UTC); Reel Row's machines count together. Called off if nobody plays, or if two games tie.".into();
+        busiest.rules = "The game the most chips are bet on, over every round finished in the casino that day (UTC); Reel Row's machines count together. Called off if nobody plays, or if two games tie.".into();
         out.push(busiest);
     }
 
@@ -182,7 +186,7 @@ fn for_day(day: u64, before: &[&Day], pool: u64) -> Vec<FeedProp> {
     jackpot.outcomes = yes_no();
     jackpot.prior = vec![chance, 1.0 - chance];
     jackpot.detail = format!("The Phoenix Jackpot stands at {} chips", progress_chips(pool));
-    jackpot.rules = "Yes if the Phoenix Jackpot, a Reel Row progressive or an Ember Dragon jackpot is won in this server's casino that day (UTC). Called off if nobody plays.".into();
+    jackpot.rules = "Yes if the Phoenix Jackpot, a Reel Row progressive or an Ember Dragon jackpot is won in the casino that day (UTC). Called off if nobody plays.".into();
     out.push(jackpot);
     out
 }
@@ -378,7 +382,10 @@ mod tests {
         assert!(all(&hub, "bob").is_empty());
         turn_on(&hub, &[]);
         look(&hub, noon(TODAY));
-        assert_eq!(all(&hub, "bob").len(), 2, "the house and the jackpot (one game only: no busiest)");
+        let two = all(&hub, "bob");
+        assert_eq!(two.len(), 2, "the house and the jackpot (one game only: no busiest)");
+        // (Two days of play in the last four weeks, the house ahead on both.)
+        assert!(two.iter().any(|x| x.detail == "It did on 2 of the last 2 days it was played"), "{:?}", two.iter().map(|x| x.detail.clone()).collect::<Vec<_>>());
     }
 
     #[test]
@@ -404,7 +411,7 @@ mod tests {
         assert_eq!((house.category.as_str(), house.house, house.event_name.clone()), ("casino", true, format!("The casino on {on}")));
         assert_eq!((house.closes_at, house.starts_at), ((TODAY as i64 + 1) * DAY_MS, (TODAY as i64 + 1) * DAY_MS));
         assert_eq!(house.detail, "It did on 2 of the last 3 days it was played");
-        assert_eq!(house.source, "This casino");
+        assert_eq!(house.source, "this server's casino");
         // (Two of three, drawn toward six in ten: 5.6 of 9.)
         assert!((house.prices()[0] - 5.6 / 9.0).abs() < 1e-6, "{:?}", house.prices());
         // A tenth as deep as the feed's.
