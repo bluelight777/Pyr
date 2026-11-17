@@ -88,6 +88,29 @@ impl App {
             self.holdings(ui, &prop, now);
             self.admin(ui, &prop);
         });
+        // The other props of its game (or its day, its coin): a click away.
+        let mut others: Vec<PropView> = match prop.event.is_empty() {
+            true => Vec::new(),
+            false => self.m.props.values().filter(|x| x.event == prop.event && x.id != prop.id && Model::live(x)).cloned().collect(),
+        };
+        others.sort_by_key(|x| (std::cmp::Reverse(x.featured), x.id));
+        others.truncate(12);
+        if !others.is_empty() {
+            ui.add_space(8.0);
+            let sport = SPORTS.contains(&cat.as_str());
+            card().show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                let heading = match (sport, prop.event_name.is_empty()) {
+                    (true, _) => "MORE ON THIS GAME".to_string(),
+                    (false, false) => format!("MORE ON {}", prop.event_name.to_uppercase()),
+                    (false, true) => "MORE LIKE IT".to_string(),
+                };
+                ui.label(RichText::new(heading).size(10.5).strong().color(DIM));
+                for other in &others {
+                    self.prop_row(ui, other, crate::model::row_label(other), sport, !sport, !sport, now);
+                }
+            });
+        }
         ui.add_space(8.0);
         // How it settles, and what's on it.
         card().show(ui, |ui| {
@@ -223,10 +246,12 @@ impl App {
         let mut done = false;
         egui::Frame::new().fill(Color32::from_black_alpha(110)).stroke(Stroke::new(1.0_f32, col.gamma_multiply(0.55))).corner_radius(10).inner_margin(egui::Margin::symmetric(14, 12)).show(ui, |ui| {
             ui.set_width(ui.available_width());
+            // (Enter in the box places the bet.)
+            let mut entered = false;
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
                 let field = egui::TextEdit::singleline(&mut bt.amount).desired_width(124.0).font(bold_font(17.0)).margin(egui::Margin::symmetric(10, 6)).hint_text("chips");
-                ui.add(field);
+                entered = ui.add(field).lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 ui.add_space(4.0);
                 for (label, n) in [("100", 100u64), ("1K", 1_000), ("10K", 10_000), ("100K", 100_000), ("1M", 1_000_000)] {
                     if ui.add(egui::Button::new(RichText::new(label).font(bold_font(12.5))).corner_radius(14)).clicked() {
@@ -272,7 +297,7 @@ impl App {
             ui.add_space(2.0);
             ui.horizontal_wrapped(|ui| {
                 let label = if ok { format!("Bet {} on {name}", chips_text(chips)) } else { "Place bet".to_string() };
-                if ui.add_enabled(ok, primary_button(&label)).clicked() {
+                if ui.add_enabled(ok, primary_button(&label)).clicked() || (entered && ok) {
                     // (What it was shown to pay, less a little: if the odds moved more than
                     // that, the server says so instead.)
                     ask(asks::bet(prop.id, outcome, chips, shares * 0.98));

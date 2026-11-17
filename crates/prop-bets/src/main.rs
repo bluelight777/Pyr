@@ -92,6 +92,8 @@ pub enum View {
     Mine,
     Leaders,
     Results,
+    /// What the search box found for these words.
+    Search(String),
 }
 
 /// A bet being picked: the prop, the outcome, how much (as typed).
@@ -141,12 +143,14 @@ pub struct App {
     pub shown_chips: f64,
     /// When the page showing came (it fades in).
     pub came: Instant,
+    /// What's typed in the search box.
+    pub search: String,
 }
 
 impl App {
     fn new(ctx: &egui::Context, rx: mpsc::Receiver<Value>, bridge: bool) -> App {
         style(ctx);
-        App { rx, bridge, started: Instant::now(), m: Model::default(), art: Art::load(ctx), view: View::Home, back: Vec::new(), betting: None, new_prop: None, setting: None, days: 7, stats_asked: None, looked: None, shown_chips: 0.0, came: Instant::now() }
+        App { rx, bridge, started: Instant::now(), m: Model::default(), art: Art::load(ctx), view: View::Home, back: Vec::new(), betting: None, new_prop: None, setting: None, days: 7, stats_asked: None, looked: None, shown_chips: 0.0, came: Instant::now(), search: String::new() }
     }
 
     /// Goes to a page (the one showing can be come back to).
@@ -160,6 +164,7 @@ impl App {
                 self.back.clear();
             }
             self.betting = None;
+            self.search.clear();
             self.came = Instant::now();
         }
     }
@@ -167,7 +172,37 @@ impl App {
     pub fn go_back(&mut self) {
         self.view = self.back.pop().unwrap_or(View::Home);
         self.betting = None;
+        // (Back to what was found: the words are in the box again.)
+        self.search = match &self.view {
+            View::Search(q) => q.clone(),
+            _ => String::new(),
+        };
         self.came = Instant::now();
+    }
+
+    /// The search box changed: what's typed is looked for (a page of its own, which Back
+    /// leaves), and with nothing typed it's back to where the looking started.
+    pub fn searched(&mut self) {
+        let q = self.search.trim().to_string();
+        let searching = matches!(self.view, View::Search(_));
+        match (searching, q.is_empty()) {
+            (true, true) => self.view = self.back.pop().unwrap_or(View::Home),
+            (true, false) => self.view = View::Search(q),
+            (false, false) => {
+                let from = std::mem::replace(&mut self.view, View::Search(q));
+                self.back.push(from);
+                self.betting = None;
+            }
+            (false, true) => {}
+        }
+    }
+
+    /// The search box: every prop here with those words in it.
+    pub fn search_box(&mut self, ui: &mut egui::Ui, width: f32) {
+        let field = egui::TextEdit::singleline(&mut self.search).desired_width(width).hint_text("Search props").margin(egui::Margin::symmetric(10, 6));
+        if ui.add(field).changed() {
+            self.searched();
+        }
     }
 }
 
@@ -185,6 +220,7 @@ impl eframe::App for App {
             self.stats_asked = None;
             self.looked = None;
             self.back.clear();
+            self.search.clear();
             self.view = View::Home;
         }
         if self.m.gone {
@@ -198,8 +234,8 @@ impl eframe::App for App {
             }
         }
         // Escape closes what's open over the page: a window, the bet being picked, then a
-        // prop's own page. The mouse's back button goes back.
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && self.new_prop.take().is_none() && self.setting.take().is_none() && self.betting.take().is_none() && matches!(self.view, View::Prop(_)) {
+        // prop's own page or what the search found. The mouse's back button goes back.
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && self.new_prop.take().is_none() && self.setting.take().is_none() && self.betting.take().is_none() && matches!(self.view, View::Prop(_) | View::Search(_)) {
             self.go_back();
         }
         if ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Extra1)) && matches!(self.view, View::Prop(_)) {

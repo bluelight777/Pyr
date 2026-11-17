@@ -187,6 +187,27 @@ impl Model {
         out
     }
 
+    /// The props with every word of `q` in what they ask, their outcomes, what they're about
+    /// or their category: those to come out (the most featured and the most bet on first),
+    /// and those that are over (the latest first).
+    pub fn search(&self, q: &str, most: usize, most_over: usize) -> (Vec<&PropView>, Vec<&PropView>) {
+        let words: Vec<String> = q.split_whitespace().map(|w| w.to_lowercase()).collect();
+        if words.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+        let has = |x: &PropView| {
+            let text = format!("{} {} {} {} {}", x.question, x.outcomes.join(" "), x.event_name, p::category_name(&x.category_id()), x.detail).to_lowercase();
+            words.iter().all(|w| text.contains(w.as_str()))
+        };
+        let mut live: Vec<&PropView> = self.props.values().filter(|x| Self::live(x) && has(x)).collect();
+        live.sort_by_key(|x| (std::cmp::Reverse(x.featured), std::cmp::Reverse(x.pool), if x.closes_at == 0 { i64::MAX } else { x.closes_at }, x.id));
+        live.truncate(most);
+        let mut over: Vec<&PropView> = self.props.values().filter(|x| !Self::live(x) && has(x)).collect();
+        over.sort_by_key(|x| (std::cmp::Reverse(x.settled_at), std::cmp::Reverse(x.id)));
+        over.truncate(most_over);
+        (live, over)
+    }
+
     /// The props closing within `within` ms, the soonest first.
     pub fn closing_soon(&self, now: i64, within: i64, most: usize) -> Vec<&PropView> {
         let mut v: Vec<&PropView> = self.props.values().filter(|x| x.open_at(now) && x.closes_at > 0 && x.closes_at - now < within).collect();
@@ -430,6 +451,13 @@ mod tests {
         assert_eq!(m.featured(now, 5).iter().map(|x| x.id).collect::<Vec<_>>(), vec![11, 20, 30, 13]);
         assert_eq!(m.featured(now, 2).iter().map(|x| x.id).collect::<Vec<_>>(), vec![11, 20]);
         assert_eq!(m.closing_soon(now, 200_000_000_000, 5).iter().map(|x| x.id).collect::<Vec<_>>(), vec![20]);
+        // Looked for by their words: every word, anywhere in what a prop says (its category too).
+        let found = |q: &str| m.search(q, 9, 9).0.iter().map(|x| x.id).collect::<Vec<_>>();
+        assert_eq!(found("chargers TOTAL"), vec![10]);
+        assert_eq!(found("ravens"), vec![11, 13, 10, 12], "the most featured first, then the soonest");
+        assert_eq!(found("weather"), vec![20]);
+        assert_eq!(found("giants cowboys who"), vec![13]);
+        assert!(found("zebra").is_empty() && found("  ").is_empty());
         // A category Pyr doesn't know yet comes after the ones it does.
         let mut odd = prop(40, PropState::Open, false);
         odd.category = "chess".into();

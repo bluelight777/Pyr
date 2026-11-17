@@ -101,6 +101,7 @@ impl App {
                         View::Mine => self.mine_page(ui, now),
                         View::Leaders => self.leaders(ui),
                         View::Results => self.results(ui, now),
+                        View::Search(q) => self.search_page(ui, &q, now),
                     }
                     ui.add_space(28.0);
                 });
@@ -110,8 +111,9 @@ impl App {
 
     /// Whether a page is the one showing (a prop's page counts as the page it was opened from).
     fn at(&self, view: &View) -> bool {
+        // (A prop reached from another prop of its game: the page that one was opened from.)
         let showing = match &self.view {
-            View::Prop(_) => self.back.last().unwrap_or(&View::Home),
+            View::Prop(_) => self.back.iter().rev().find(|v| !matches!(v, View::Prop(_))).unwrap_or(&View::Home),
             v => v,
         };
         showing == view
@@ -122,6 +124,8 @@ impl App {
     pub fn rail(&mut self, ui: &mut egui::Ui) {
         ui.spacing_mut().item_spacing.y = 2.0;
         ui.add_space(6.0);
+        self.search_box(ui, ui.available_width() - 22.0);
+        ui.add_space(8.0);
         let mine = self.m.mine_live().len();
         for (view, m, name, n) in [(View::Home, Mark::Home, "Front page", None), (View::Mine, Mark::Mine, "My bets", (mine > 0).then_some(mine)), (View::Leaders, Mark::Leaders, "Best at props", None), (View::Results, Mark::Results, "Results", None)] {
             self.rail_item(ui, view, Some(m), name, n);
@@ -172,6 +176,8 @@ impl App {
 
     /// The pages along the top, when the window's too narrow for them down the side.
     pub fn strip(&mut self, ui: &mut egui::Ui) {
+        self.search_box(ui, ui.available_width() - 22.0);
+        ui.add_space(6.0);
         egui::ScrollArea::horizontal().id_salt("strip").auto_shrink([false, true]).scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
             ui.horizontal(|ui| {
                 let mine = self.m.mine_live().len();
@@ -409,6 +415,33 @@ impl App {
         }
     }
 
+    // ------------------------------------------------------------ what the search found
+
+    /// The props with the words typed: those to come out, then some that are over.
+    fn search_page(&mut self, ui: &mut egui::Ui, q: &str, now: i64) {
+        let (live, over) = self.m.search(q, 60, 18);
+        let (live, over): (Vec<PropView>, Vec<PropView>) = (live.into_iter().cloned().collect(), over.into_iter().cloned().collect());
+        ui.add_space(4.0);
+        ui.label(RichText::new(format!("\u{201c}{q}\u{201d}")).font(bold_font(23.0)).color(TEXT));
+        if live.is_empty() && over.is_empty() {
+            return note(ui, "Nothing found", "No prop here has those words in what it asks, its outcomes or what it's about.");
+        }
+        let found = match (live.len(), over.len()) {
+            (n, 0) => format!("{} to come out", count(n as u64, "prop", "props")),
+            (0, n) => format!("{} that {} over", count(n as u64, "prop", "props"), if n == 1 { "is" } else { "are" }),
+            (n, m) => format!("{} to come out, and {} over", count(n as u64, "prop", "props"), m),
+        };
+        ui.label(RichText::new(found).size(13.0).color(MUTED));
+        ui.add_space(8.0);
+        if !live.is_empty() {
+            self.cards(ui, &live, now);
+        }
+        if !over.is_empty() {
+            section(ui, "Over");
+            self.cards(ui, &over, now);
+        }
+    }
+
     // ------------------------------------------------------------ a category
 
     /// A category's banner: its picture, its emblem and name, a word about it, and how many
@@ -520,7 +553,7 @@ impl App {
     /// goes over the buttons, with the prop's own word (`detail`) and how long it's open
     /// (`when`: where the props above and below close at other times).
     #[allow(clippy::too_many_arguments)]
-    fn prop_row(&mut self, ui: &mut egui::Ui, prop: &PropView, label: String, beside: bool, detail: bool, when: bool, now: i64) {
+    pub(crate) fn prop_row(&mut self, ui: &mut egui::Ui, prop: &PropView, label: String, beside: bool, detail: bool, when: bool, now: i64) {
         let buttons = |ui: &mut egui::Ui, me: &mut App| {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
