@@ -153,6 +153,17 @@ not in the release: the invite directory (`pyr-directory`: 0.13.18's game invite
 `pyr.gg/<game>/<ROOM>`, aren't in the rebuild's), its nginx settings (v6: `install-site.sh`
 leaves v5 to v9 as they are), and the game relays. Rebuilding those comes next.
 
+Published (Nov 17, 01:07 UTC), checked on the live site from Blue's Chrome: `latest2.json` says
+0.14.0, signed with the new key; `latest.json` is still 0.13.28's (the key before; it runs out
+2027-05-09, after which 0.13.28's update check finds it stale); the Keeper (the rebuild's) put
+up `index4.json` (its certificate from the new key, its programs endorsed by the new key) and
+signed `index3.json` again for 0.13.28 (the key before's certificate, until 2027-12-15, its
+programs as the key before endorsed them): the same 4 plugins and 21 skins in both; the
+downloads are the release's (both names, both sizes). Blue's 0.13.28 showed the new server's
+notice ("There's a new Pyr…") as its red error card. Blue asked (Nov 17) for 0.13.28 to update
+by itself: it can't (only the lost key's signature makes it install anything); the way over is
+a link in chat (`https://pyr.gg/Pyr-Setup.exe`, `https://pyr.gg/pyr_amd64.deb`).
+
 ## Checklist
 
 Version in brackets: where 0.13.x first had it.
