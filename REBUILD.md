@@ -1376,6 +1376,21 @@ How (decided while starting it):
       went wrong" (now its page waits for the list), and Close on Linux was "closed by mistake".
       Left: (6), the release, with Pyr's side (the cards follow the install, so both go up
       together); Blue's go-ahead first.
+- [x] Voice isolation keeps a TV across the room out (Blue, Nov 17: "I don't want to hear
+      Mag's mother's TV coming through his mic, it's spanish television in the background,
+      remove it please"; Mag has voice isolation on). Isolation went by level only, and a TV
+      talking on 15 dB under your voice at the mic went out most of the time you were quiet
+      (`examples/tv_eval.rs`: a TV through a room, six minutes, you now and then): its louder
+      syllables started "yours", stayed yours as long as it talked, and taught isolation its level
+      as yours. Now it also listens for a near voice's deep dips between syllables (a voice at
+      the mic 30 to 45 dB, one across a room 13 to 19), measured on the microphone's own sound
+      (DeepFilterNet takes the room's echo out of the TV too: cleaned, it dipped as deep as you).
+      Back to back, only `PYR_AB=tvgate` flipped: the TV 15 dB under you 217 -> 15 s of 289 (10
+      dB under: 252 -> 21); your own talking alone the same or nearly (6 of 381 when you get
+      12 dB quieter); with the TV going on under you, more of your softest words go with it (30
+      -> 42 of 243, 37 -> 54 of 255); `aec_eval`'s isolation scenes: echo the same or better, the
+      dips in your talking the same ones (none from isolation). Mag needs the release with it.
+      Not tried yet: a real room and a real TV (Blue's or Mag's PC); `PYR_AB=tvgate` puts it back.
 - [ ] Approved bug reports 657 to 675 (voice up and down; stopped responding), without
       touching the echo canceller
 - [ ] The key change (above): built and tried with test keys; the day's steps there

@@ -153,14 +153,16 @@ const ISO_FLOOR: f32 = 0.03;
 /// starts as yours when it's within `ISO_SURE_DB` of your level, or within `ISO_START_DB` and
 /// sounding near; its quieter parts stay yours only within `ISO_ALIVE_MS` of the last such
 /// moment; your level is learned from speech within `ISO_LEARN_DB` of it, or within
-/// `ISO_START_DB` and sounding near (before it's known, sounding near); and only near-sounding
-/// speech counts toward taking a quieter voice as yours now. Measured, as before -> now: the TV
-/// 15 dB under you went out 217 -> 15 s of 289 (10 dB under: 252 -> 21; 20 dB under: 2 -> 0);
-/// your talking turned down 10 dB or more with nothing else going on, in four long scenes
-/// (louder moments, a loud voice from a speaker, you 12 dB quieter, someone across the room):
-/// 0 -> 1, 0 -> 1, 0 -> 6 and 0 -> 1 of 542, 542, 381 and 188 stretches of 200 ms; with the TV
-/// going on under you, 30 -> 43 of 243 (15 dB under) and 37 -> 63 of 255 (10 dB under): your
-/// softer words, nearly as quiet as the TV, go with it. (`PYR_AB=tvgate`: as before.)
+/// `ISO_START_DB` and sounding near (before it's known, from near-sounding speech only); only
+/// near-sounding speech counts toward taking a quieter
+/// voice as yours now; and before your level is known, any speech goes through, as before.
+/// Measured, as before -> now: the TV 15 dB under you went out 217 -> 15 s of 289 (10 dB under:
+/// 252 -> 21; 20 dB under: 2 -> 0); your talking turned down 10 dB or more with nothing else
+/// going on, in four long scenes (louder moments, a loud voice from a speaker, you 12 dB
+/// quieter, someone across the room): 0 -> 0, 0 -> 0, 0 -> 6 and 0 -> 0 of 542, 542, 381 and 188
+/// stretches of 200 ms; with the TV going on under you, 30 -> 42 of 243 (15 dB under) and 37 ->
+/// 54 of 255 (10 dB under): your softer words, nearly as quiet as the TV, go with it. Echo:
+/// `aec_eval`'s scenes with isolation the same. (`PYR_AB=tvgate`: as before.)
 const ISO_SURE_DB: f32 = 3.0;
 const ISO_LEARN_DB: f32 = 6.0;
 const ISO_ALIVE_MS: u64 = 2000;
