@@ -5227,6 +5227,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyr-props"
+version = "0.14.2"
+dependencies = [
+ "clap",
+ "pyr-proto",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "ureq",
+]
+
+[[package]]
 name = "pyr-proto"
 version = "0.14.2"
 dependencies = [

@@ -32,7 +32,7 @@ const CONTEXT: &[u8] = b"pyr props feed v1\n";
 const CERT_CONTEXT: &[u8] = b"pyr props feed key v1\n";
 /// The most props a feed carries, and the longest a text in it.
 pub const MAX_PROPS: usize = 4000;
-const MAX_TEXT: usize = 400;
+const MAX_TEXT: usize = 700;
 
 /// Everything the feed knows now: the props taking bets, the ones waiting for their result,
 /// and the ones that came out lately (kept a week, so a server that was off catches up).

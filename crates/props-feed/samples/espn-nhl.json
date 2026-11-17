@@ -1,0 +1,101 @@
+{
+  "leagues": [
+    {
+      "id": "90", "uid": "s:70~l:90", "name": "National Hockey League", "abbreviation": "NHL", "slug": "nhl",
+      "season": {"year": 2027, "startDate": "2026-09-15T07:00Z", "endDate": "2027-07-01T06:59Z", "displayName": "2026-27", "type": {"id": "2", "type": 2, "name": "Regular Season", "abbreviation": "reg"}},
+      "calendarType": "day",
+      "calendar": ["2026-09-19T07:00Z"]
+    }
+  ],
+  "events": [
+    {
+      "id": "401892726",
+      "uid": "s:70~l:90~e:401892726",
+      "date": "2026-11-17T00:30Z",
+      "name": "Montreal Canadiens at New York Rangers",
+      "shortName": "MTL @ NYR",
+      "season": {"year": 2027, "type": 2, "slug": "regular-season"},
+      "status": {"clock": 0.0, "displayClock": "0:00", "period": 0, "type": {"id": "1", "name": "STATUS_SCHEDULED", "state": "pre", "completed": false, "description": "Scheduled", "detail": "Mon, November 16th at 7:30 PM EST", "shortDetail": "11/16 - 7:30 PM EST"}},
+      "competitions": [
+        {
+          "id": "401892726",
+          "date": "2026-11-17T00:30Z",
+          "timeValid": true,
+          "neutralSite": false,
+          "venue": {"fullName": "Madison Square Garden", "address": {"city": "New York", "state": "NY", "country": "USA"}},
+          "competitors": [
+            {
+              "id": "13", "homeAway": "home", "score": "0", "curatedRank": {"current": 99},
+              "probables": [{"name": "probableStartingGoalie", "athlete": {"id": "3069266", "fullName": "Joonas Korpisalo"}}],
+              "records": [{"name": "overall", "abbreviation": "TOTAL", "type": "total", "summary": "12-8-1"}, {"name": "Home", "type": "home", "summary": "8-2-0"}],
+              "team": {"id": "13", "location": "New York", "name": "Rangers", "abbreviation": "NYR", "displayName": "New York Rangers", "shortDisplayName": "Rangers"}
+            },
+            {
+              "id": "10", "homeAway": "away", "score": "0", "curatedRank": {"current": 99},
+              "records": [{"name": "overall", "abbreviation": "TOTAL", "type": "total", "summary": "12-4-4"}],
+              "team": {"id": "10", "location": "Montreal", "name": "Canadiens", "abbreviation": "MTL", "displayName": "Montreal Canadiens", "shortDisplayName": "Canadiens"}
+            }
+          ],
+          "status": {"clock": 0.0, "displayClock": "0:00", "period": 0, "type": {"id": "1", "name": "STATUS_SCHEDULED", "state": "pre", "completed": false, "description": "Scheduled", "detail": "Mon, November 16th at 7:30 PM EST", "shortDetail": "11/16 - 7:30 PM EST"}},
+          "broadcasts": [{"market": "national", "names": ["TNT", "truTV"]}],
+          "odds": [
+            {
+              "provider": {"id": "100", "name": "DraftKings", "priority": 1},
+              "details": "MTL -115",
+              "overUnder": 6.5,
+              "spread": 1.5,
+              "awayTeamOdds": {"favorite": true, "underdog": false, "favoriteAtOpen": true},
+              "homeTeamOdds": {"favorite": false, "underdog": true},
+              "moneyline": {"home": {"close": {"odds": "-105"}, "open": {"odds": "-105"}}, "away": {"close": {"odds": "-115"}, "open": {"odds": "-115"}}},
+              "pointSpread": {"home": {"close": {"line": "+1.5", "odds": "-278"}, "open": {"line": "+1.5", "odds": "-250"}}, "away": {"close": {"line": "-1.5", "odds": "+225"}, "open": {"line": "-1.5", "odds": "+205"}}},
+              "total": {"over": {"close": {"line": "o6.5", "odds": "+114"}, "open": {"line": "o6.5", "odds": "+114"}}, "under": {"close": {"line": "u6.5", "odds": "-135"}, "open": {"line": "u6.5", "odds": "-135"}}}
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "401892727",
+      "date": "2026-11-17T02:30Z",
+      "name": "Vancouver Canucks at Utah Mammoth",
+      "shortName": "VAN @ UTA",
+      "status": {"clock": 0.0, "displayClock": "0:00", "period": 0, "type": {"id": "1", "name": "STATUS_SCHEDULED", "state": "pre", "completed": false, "description": "Scheduled", "detail": "Mon, November 16th at 9:30 PM EST", "shortDetail": "11/16 - 9:30 PM EST"}},
+      "competitions": [
+        {
+          "id": "401892727",
+          "date": "2026-11-17T02:30Z",
+          "timeValid": true,
+          "neutralSite": false,
+          "venue": {"fullName": "Delta Center", "address": {"city": "Salt Lake City", "state": "UT", "country": "USA"}},
+          "competitors": [
+            {
+              "id": "129764", "homeAway": "home", "score": "0",
+              "records": [{"name": "overall", "abbreviation": "TOTAL", "type": "total", "summary": "10-8-3"}],
+              "team": {"id": "129764", "location": "Utah", "name": "Mammoth", "abbreviation": "UTA", "displayName": "Utah Mammoth", "shortDisplayName": "Mammoth"}
+            },
+            {
+              "id": "22", "homeAway": "away", "score": "0",
+              "records": [{"name": "overall", "abbreviation": "TOTAL", "type": "total", "summary": "4-17-1"}],
+              "team": {"id": "22", "location": "Vancouver", "name": "Canucks", "abbreviation": "VAN", "displayName": "Vancouver Canucks", "shortDisplayName": "Canucks"}
+            }
+          ],
+          "status": {"period": 0, "type": {"id": "1", "name": "STATUS_SCHEDULED", "state": "pre", "completed": false, "description": "Scheduled", "detail": "Mon, November 16th at 9:30 PM EST", "shortDetail": "11/16 - 9:30 PM EST"}},
+          "broadcasts": [{"market": "national", "names": ["ESPN+"]}, {"market": "home", "names": ["Utah 16", "Mammoth+"]}],
+          "odds": [
+            {
+              "provider": {"id": "100", "name": "DraftKings", "priority": 1},
+              "details": "UTAH -355",
+              "overUnder": 6.5,
+              "spread": -1.5,
+              "homeTeamOdds": {"favorite": true, "favoriteAtOpen": true},
+              "moneyline": {"home": {"close": {"odds": "-355"}, "open": {"odds": "-360"}}, "away": {"close": {"odds": "+280"}, "open": {"odds": "+285"}}},
+              "pointSpread": {"home": {"close": {"line": "-1.5", "odds": "-135"}, "open": {"line": "-1.5", "odds": "-142"}}, "away": {"close": {"line": "+1.5", "odds": "+114"}}},
+              "total": {"over": {"close": {"line": "o6.5", "odds": "-118"}, "open": {"line": "o6.5", "odds": "-105"}}, "under": {"close": {"line": "u6.5", "odds": "-102"}, "open": {"line": "u6.5", "odds": "-115"}}}
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "provider": {"id": "100", "name": "DraftKings"}
+}
