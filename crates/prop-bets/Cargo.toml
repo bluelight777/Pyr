@@ -1,10 +1,10 @@
 [package]
 name = "prop-bets"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Prop Bets, in the Pyr Library: every prop bet on your Pyr server in its own window, with your Pyr Casino chips."
+description = "Prop Bets, in the Pyr Library: every prop bet on your Pyr server in its own window, by category, with your Pyr Casino chips."
 
 [[bin]]
 name = "prop-bets"
@@ -16,3 +16,5 @@ eframe = { version = "0.33.3", features = ["wgpu"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 pyr-poker = { path = "../poker" }
 serde_json = "1.0.152"
+# (Game times in the viewer's own time.)
+chrono = "0.4.45"
