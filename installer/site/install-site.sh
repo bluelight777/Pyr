@@ -297,8 +297,10 @@ fi
 # before the invite directory could read the page (v5; every invite was a blank page): set up
 # again
 # (it checks every other site on this server before and after, and leaves the certificate).
+# Settings newer than this script's (v6, 0.13.28's: games' invites, pyr.gg/<game>/<ROOM>, which
+# the rebuild's directory and settings don't have yet) are left as they are.
 if [ -f "$HERE/setup-pyr-gg.sh" ] && [ -f /etc/systemd/system/pyr-directory.service ] \
-   && nginx -T 2>/dev/null | grep -q "server_name pyr.gg;" && ! nginx -T 2>/dev/null | grep -q "pyr.gg settings v5"; then
+   && nginx -T 2>/dev/null | grep -q "server_name pyr.gg;" && ! nginx -T 2>/dev/null | grep -Eq "pyr.gg settings v[5-9]"; then
   echo "Updating pyr.gg's settings"
   bash "$HERE/setup-pyr-gg.sh" || echo "pyr.gg's settings stay as they were (above); the release itself is published." >&2
 fi

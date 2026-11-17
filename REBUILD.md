@@ -141,6 +141,18 @@ that the rebuild doesn't know yet must come through untouched:
    Keeper's second certificate and list (`setup-keeper.sh`, run by the release), then
    `publish.ps1` from Blue's PC. 0.13.28's apps are told to get the new Pyr as they log in.
 
+Where it stands (Nov 16): 0.14.0 built and checked (`latest2.json`, `index4-signed.json` and
+`keeper-cert-2.json` verified against the new key, the programs' endorsements too; the
+installers' hashes), and on Blue's PC in `Downloads\pyr-release-0.14.0`, published with
+`publish.cmd`. Blue's say on the rest: the voice stays 0.13.28's ("the voice is working good in
+0.13.28, don't worry about the voice bugs, just ship it": `pcgate` stays off, so this release
+changes nothing the echo test covers); the GPU encoder goes in, on by default, falling back to
+the processor's (not tried on a real card); the programs-inside-Pyr test skipped. `releases.txt`
+is 0.13.28's `released` list (from its `latest.json`) and 0.14.0. Left as 0.13.28's on the VPS,
+not in the release: the invite directory (`pyr-directory`: 0.13.18's game invites,
+`pyr.gg/<game>/<ROOM>`, aren't in the rebuild's), its nginx settings (v6: `install-site.sh`
+leaves v5 to v9 as they are), and the game relays. Rebuilding those comes next.
+
 ## Checklist
 
 Version in brackets: where 0.13.x first had it.
