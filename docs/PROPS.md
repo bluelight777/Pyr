@@ -29,7 +29,13 @@ fun: the odds as a line over time, what you hold and what it's worth, the best b
    certificate, and follows it: opens a house prop for each prop there, moves what changed,
    settles or calls off what came out. House props belong to no channel; the casino backs them
    (the most it can lose on one: `b ln(1/p)` of its least likely outcome).
-3. **Pyr Casino's props** are each server's own (from its casino's numbers), never the feed's.
+3. **Pyr Casino's props** are each server's own, never the feed's
+   (`crates/server/src/poker/props/own.rs`): made from its casino's own count of rounds, a day
+   (UTC) at a time. Tomorrow's open today (once someone has played there in the last week),
+   close as the day starts, say how the day is going while it's on, and settle by themselves
+   two minutes after it ends. Whoever plays moves these numbers, so the casino stakes a
+   quarter as much on them as on the feed's, and nothing is asked that one bet decides (the
+   day's biggest win, how many rounds are played).
 4. **The app** relays to Prop Bets' window (the bridge: `game_bridge.rs`); the window
    (`crates/prop-bets`) shows categories, events, a prop's page, what I hold, the best at props.
 
@@ -55,7 +61,7 @@ fun: the odds as a line over time, what you hold and what it's worth, the best b
 | topical | Treasury (10-year yield, debt to the penny), ECB rates (Frankfurter), the Federal Register | the 10-year on Friday, up or down tomorrow; the debt over its next $0.1 trillion by the month's end; the euro, the yen and the pound on Friday; executive orders next week |
 | entertainment | Steam's player counts | the biggest games at 18:00 UTC: over or under; which of two has more on Saturday |
 | art | drand (the League of Entropy's public randomness), NASA's Astronomy Picture of the Day | the Gallery Draw: which of six masterpieces is drawn tomorrow; what tomorrow's picture shows |
-| casino | each server's own casino | (see `poker/props_casino.rs`) |
+| casino | each server's own casino (its rounds by the day) | tomorrow: does the house come out ahead; which game takes the most in bets (the week's four biggest, or another); is a jackpot won |
 | community | members | their own, in any category |
 
 ## What's checked and what isn't (Nov 17 2026)

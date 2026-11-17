@@ -745,7 +745,7 @@ impl App {
         egui::Window::new(RichText::new("The casino's own props").font(bold_font(17.0))).id(egui::Id::new("props-auto")).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).frame(egui::Frame::window(&ctx.style()).inner_margin(16)).open(&mut open).show(ctx, |ui| {
             let w = 460.0_f32.min(ctx.content_rect().width() - 56.0);
             ui.set_width(w);
-            ui.add(egui::Label::new(RichText::new("Props that open, close and settle by themselves, from public sources: games, crypto, the weather, science and more. The casino backs them, so winners are always paid; nobody on the server settles anything.").size(12.5).color(MUTED)).wrap());
+            ui.add(egui::Label::new(RichText::new("Props that open, close and settle by themselves, from public sources: games, crypto, the weather, science and more (Pyr Casino's, from this server's own casino). The casino backs them, so winners are always paid; nobody on the server settles anything.").size(12.5).color(MUTED)).wrap());
             ui.add_space(8.0);
             ui.checkbox(&mut s.on, RichText::new("On, on this server").font(bold_font(14.0)));
             ui.add_space(6.0);
@@ -753,8 +753,9 @@ impl App {
                 ui.label(RichText::new("CATEGORIES").size(11.0).strong().color(DIM));
                 let across = if w >= 400.0 { 3 } else { 2 };
                 egui::Grid::new("props-auto-categories").num_columns(across).spacing([22.0, 4.0]).show(ui, |ui| {
-                    // (Members' own props and the ones about this casino aren't the feed's.)
-                    for (k, (id, name)) in p::CATEGORIES.iter().filter(|c| c.0 != p::COMMUNITY && c.0 != p::CASINO).enumerate() {
+                    // (Members' own aren't the casino's. Pyr Casino's are each server's own,
+                    // made from its casino's numbers.)
+                    for (k, (id, name)) in p::CATEGORIES.iter().filter(|c| c.0 != p::COMMUNITY).enumerate() {
                         let mut on = !s.off.iter().any(|c| c == id);
                         if ui.checkbox(&mut on, *name).changed() {
                             s.off.retain(|c| c != id);

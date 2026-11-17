@@ -452,7 +452,8 @@ impl App {
             let on = self.m.house_here && self.m.auto.as_ref().is_some_and(|a| a.on && !a.off.iter().any(|c| c == cat));
             let words = match (cat, on) {
                 ("community", _) => "Nothing of the members' is open. Open one with New prop, or with /prop in a channel.".to_string(),
-                ("casino", _) => "Nothing about the casino is open. Open one with New prop: who wins Friday's tournament?".to_string(),
+                ("casino", true) => "Nothing about the casino is open right now. Tomorrow's come by themselves once someone has played in it this week; or open one with New prop: who wins Friday's tournament?".to_string(),
+                ("casino", false) => "Nothing about the casino is open. Open one with New prop: who wins Friday's tournament?".to_string(),
                 (_, true) if SPORTS.contains(&cat) => "No games on the board right now. They come by themselves as they're scheduled, and in the off-season there are none.".to_string(),
                 (_, true) => "Nothing open right now. More come by themselves.".to_string(),
                 (_, false) => "The casino's own props aren't on for this category here. A member can still open one of their own with New prop.".to_string(),

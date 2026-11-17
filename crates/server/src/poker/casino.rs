@@ -27,7 +27,10 @@ const WINS_KEEP: usize = 30;
 /// Each game's statistics (by its statistics key): its rounds by the hour (the last 24) and by
 /// the day (the last 28), all time, and its biggest and luckiest wins.
 const HOURS: &str = "casino_hours:";
-const DAYS: &str = "casino_days:";
+pub(super) const DAYS: &str = "casino_days:";
+/// How many jackpots were won, by the day (the last 28): the casino's props about itself ask
+/// whether one falls (`props::own`).
+pub(super) const JACKPOT_DAYS: &str = "casino_jackpot_days";
 pub(crate) const ALL_TIME: &str = "casino_all:";
 const BIG: &str = "casino_big:";
 const LUCKY: &str = "casino_lucky:";
@@ -139,6 +142,16 @@ impl Poker {
         if let Ok(j) = serde_json::to_string(v) {
             let _ = hub.db.set_meta(key, &j);
         }
+    }
+
+    /// A jackpot was won (the Phoenix, a Reel Row progressive, one of Ember Dragon's): counted
+    /// for its day.
+    fn note_jackpot(hub: &Hub) {
+        let day = wall() / 86_400_000;
+        let mut by: BTreeMap<u64, u32> = Self::meta_json(hub, JACKPOT_DAYS);
+        *by.entry(day).or_default() += 1;
+        by.retain(|d, _| d + 28 > day);
+        Self::set_meta_json(hub, JACKPOT_DAYS, &by);
     }
 
     /// A round, counted in its game's statistics; and its win on the game's lists of biggest and
@@ -341,6 +354,7 @@ impl Poker {
                 if won > 0 {
                     pools[j.index()] = pools[j.index()].saturating_sub(won).max(j.seed());
                     info!(chips = won, jackpot = j.name(), "casino: an Ember Dragon jackpot was won");
+                    Self::note_jackpot(hub);
                 }
             }
         }
@@ -495,6 +509,7 @@ impl Poker {
             Self::set_row_pool(hub, machine, rp);
             if won > 0 {
                 info!(chips = won, machine, "casino: a Reel Row progressive jackpot was won");
+                Self::note_jackpot(hub);
             }
         }
         if let Outcome::Slots(so) = &o {
@@ -506,6 +521,7 @@ impl Poker {
             Self::set_jackpot(hub, pool);
             if so.jackpot_won > 0 {
                 info!(chips = so.jackpot_won, "casino: the Phoenix Jackpot was won");
+                Self::note_jackpot(hub);
             }
         }
         let r = self.finish_round(hub, st, uid, rec, o, server, seed, nonce, None)?;

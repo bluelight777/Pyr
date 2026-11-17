@@ -320,7 +320,7 @@ pub fn category_look(id: &str) -> (Color32, &'static str) {
         "cfb" => (Color32::from_rgb(0xc9, 0x9a, 0x45), "The Top 25's games"),
         "cbb" => (Color32::from_rgb(0xe8, 0x6f, 0x51), "The Top 25's games"),
         "topical" => (Color32::from_rgb(0x4f, 0xc4, 0xb8), "The world's numbers: rates, money, the debt"),
-        "casino" => (Color32::from_rgb(0xf2, 0xc1, 0x4e), "This server's own casino"),
+        "casino" => (Color32::from_rgb(0xf2, 0xc1, 0x4e), "This casino tomorrow: the house, the busiest game, a jackpot"),
         "crypto" => (Color32::from_rgb(0xf7, 0x93, 0x1a), "Bitcoin, Ether and the rest, at midnight UTC"),
         "weather" => (Color32::from_rgb(0x6c, 0xb8, 0xf0), "Tomorrow's high, and rain, in ten cities"),
         "entertainment" => (Color32::from_rgb(0xb9, 0x7c, 0xe8), "What everyone's playing"),

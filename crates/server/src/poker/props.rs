@@ -22,6 +22,8 @@ use tracing::{debug, info};
 use super::{Poker, progress_chips};
 use crate::hub::{ConnId, Hub};
 
+mod own;
+
 /// How many of the latest bets a prop shows.
 const LATEST: usize = 8;
 /// How long an app that asked for every prop hears of the casino's own as they change (Prop
@@ -745,6 +747,8 @@ impl Poker {
             }
         }
         tell_house(hub, &told);
+        // The casino's props about itself: made here, from its own count of rounds.
+        self.props_about_casino(hub, st, now);
         for (id, j) in hub.db.props_house_unbet_over(4000) {
             let Ok(prop) = serde_json::from_str::<Prop>(&j) else { continue };
             if now - prop.settled_at > FORGET_AFTER_MS {
