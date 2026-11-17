@@ -78,7 +78,28 @@ pub const EMBLEM: &[u8] = include_bytes!("../../app/assets/props/emblem.webp");
 const WON: &[u8] = include_bytes!("../../app/assets/props/won.webp");
 const LOCK: &[u8] = include_bytes!("../../app/assets/props/lock.webp");
 
+/// A picture a category, made for Prop Bets (a ball, a puck, a pile of coins: no league's or
+/// team's marks), and where in it its subject is (across, down: 0 to 1).
+const CATEGORY_ART: [(&str, &[u8], (f32, f32)); 14] = [
+    ("nfl", include_bytes!("../assets/cat/nfl.webp"), (0.72, 0.58)),
+    ("nba", include_bytes!("../assets/cat/nba.webp"), (0.76, 0.52)),
+    ("nhl", include_bytes!("../assets/cat/nhl.webp"), (0.72, 0.60)),
+    ("mlb", include_bytes!("../assets/cat/mlb.webp"), (0.82, 0.54)),
+    ("cfb", include_bytes!("../assets/cat/cfb.webp"), (0.73, 0.62)),
+    ("cbb", include_bytes!("../assets/cat/cbb.webp"), (0.83, 0.42)),
+    ("topical", include_bytes!("../assets/cat/topical.webp"), (0.70, 0.40)),
+    ("casino", include_bytes!("../assets/cat/casino.webp"), (0.74, 0.58)),
+    ("crypto", include_bytes!("../assets/cat/crypto.webp"), (0.68, 0.56)),
+    ("weather", include_bytes!("../assets/cat/weather.webp"), (0.80, 0.60)),
+    ("entertainment", include_bytes!("../assets/cat/entertainment.webp"), (0.78, 0.42)),
+    ("science", include_bytes!("../assets/cat/science.webp"), (0.84, 0.46)),
+    ("art", include_bytes!("../assets/cat/art.webp"), (0.78, 0.50)),
+    ("community", include_bytes!("../assets/cat/community.webp"), (0.84, 0.72)),
+];
+
 pub struct Art {
+    /// The categories' pictures, with where each one's subject is.
+    cats: Vec<(&'static str, egui::TextureHandle, (f32, f32))>,
     pub chips: Vec<egui::TextureHandle>,
     pub banner: Option<egui::TextureHandle>,
     pub card_bg: Option<egui::TextureHandle>,
@@ -95,6 +116,7 @@ impl Art {
             Some(ctx.load_texture(name, egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw()), egui::TextureOptions::LINEAR))
         };
         Art {
+            cats: CATEGORY_ART.iter().filter_map(|(id, bytes, focus)| Some((*id, t(&format!("cat-{id}"), bytes)?, *focus))).collect(),
             chips: CHIPS.iter().enumerate().filter_map(|(i, b)| t(&format!("chip-{i}"), b)).collect(),
             banner: t("banner", BANNER),
             card_bg: t("card-bg", CARD_BG),
@@ -102,6 +124,13 @@ impl Art {
             won: t("won", WON),
             lock: t("lock", LOCK),
         }
+    }
+}
+
+impl Art {
+    /// A category's picture, and where its subject is.
+    pub fn category(&self, id: &str) -> Option<(&egui::TextureHandle, (f32, f32))> {
+        self.cats.iter().find(|c| c.0 == id).map(|c| (&c.1, c.2))
     }
 }
 
@@ -182,6 +211,11 @@ fn gradient_by(r: Rect, radius: f32, from: Color32, to: Color32, how_far: impl F
 /// A rounded box that goes from one color at the left to another at the right.
 pub fn gradient(r: Rect, radius: f32, left: Color32, right: Color32) -> Shape {
     gradient_by(r, radius, left, right, |q| (q.x - r.left()) / r.width().max(1.0))
+}
+
+/// A rounded box that goes from one color at the top to another at the bottom.
+pub fn gradient_down(r: Rect, radius: f32, top: Color32, bottom: Color32) -> Shape {
+    gradient_by(r, radius, top, bottom, |q| (q.y - r.top()) / r.height().max(1.0))
 }
 
 /// A rounded box that goes from one color at its top-left corner to another by its middle (and

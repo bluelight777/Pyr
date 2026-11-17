@@ -37,20 +37,30 @@ impl App {
                 self.back.clear();
                 self.go(View::Category(cat.clone()));
             }
-            if !prop.event_name.is_empty() {
-                ui.label(RichText::new(format!("· {}", prop.event_name)).size(12.5).color(MUTED));
-            } else if let Some(c) = self.m.channel_name(prop.channel_id) {
-                ui.label(RichText::new(format!("· #{c}")).size(12.5).color(MUTED));
-            }
+            let of = if !prop.event_name.is_empty() { format!("· {}", prop.event_name) } else { self.m.channel_name(prop.channel_id).map(|c| format!("· #{c}")).unwrap_or_default() };
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("Share").on_hover_text("Post its card in the channel showing in Pyr").clicked() {
                     ask(asks::share(prop.id));
                 }
+                // (What it's of, in the room that's left.)
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.add(egui::Label::new(RichText::new(of).size(12.5).color(MUTED)).truncate());
+                });
             });
         });
         ui.add_space(6.0);
         card().inner_margin(egui::Margin::symmetric(20, 16)).show(ui, |ui| {
             ui.set_width(ui.available_width());
+            // Its category's picture across the top of the card, falling away to the left
+            // (where the question is) and down.
+            if let Some((t, focus)) = self.art.category(&cat) {
+                let m = ui.max_rect();
+                let pic = Rect::from_min_max(pos2(m.left() - 19.0, m.top() - 15.0), pos2(m.right() + 19.0, m.top() + 124.0));
+                let pnt = ui.painter().with_clip_rect(pic);
+                pnt.add(cover_rounded(t, pic, 11.0, focus, Color32::from_gray(170)));
+                pnt.add(gradient(pic, 11.0, CARD, CARD.gamma_multiply(0.12)));
+                pnt.add(gradient_down(pic, 11.0, Color32::TRANSPARENT, CARD));
+            }
             ui.add(egui::Label::new(RichText::new(&prop.question).font(bold_font(22.0)).color(Color32::WHITE)).wrap());
             ui.add_space(2.0);
             ui.horizontal_wrapped(|ui| {
@@ -161,9 +171,11 @@ impl App {
             }
             let x = row.left() + 46.0;
             let bar_w = (row.width() - 46.0 - 100.0).max(60.0);
-            pnt.text(pos2(x, row.top() + 13.0), Align2::LEFT_CENTER, name, bold_font(15.0), if faded { DIM } else { TEXT });
+            // (Its name in the room its odds leave it.)
+            let named = lines(pnt, name, bold_font(15.0), if faded { DIM } else { TEXT }, bar_w - if bar_w > 260.0 { 112.0 } else { 62.0 }, 1);
+            pnt.galley(pos2(x, row.top() + 13.0 - named.size().y / 2.0), named, TEXT);
             // Odds that just moved: an arrow beside them for a moment.
-            let mut pct_col = if faded { DIM } else { col };
+            let mut pct_col = if faded { DIM } else if won { GOLD } else { col };
             if let Some(m) = self.m.moved.get(&(prop.id, i)) {
                 let left = fading(m.at, 2.0);
                 if left > 0.0 {
@@ -248,10 +260,10 @@ impl App {
                 let w = ((ui.available_width() - 16.0) / 3.0).clamp(84.0, 190.0);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
-                    for (label, value, c) in [("PAYS IF IT WINS", chips_text(pays), GOLD), ("PROFIT", signed(profit), if profit >= 0 { UP } else { DOWN }), ("ITS ODDS", format!("{} → {}", pct(before), pct(after)), TEXT)] {
+                    for (label, short, value, c) in [("PAYS IF IT WINS", "PAYS", chips_text(pays), GOLD), ("PROFIT", "PROFIT", signed(profit), if profit >= 0 { UP } else { DOWN }), ("ITS ODDS", "ODDS", format!("{} → {}", pct(before), pct(after)), TEXT)] {
                         let (r, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
                         let pnt = ui.painter();
-                        pnt.text(pos2(r.left(), r.top() + 8.0), Align2::LEFT_CENTER, if w < 110.0 { label.split(' ').next().unwrap_or(label) } else { label }, bold_font(10.0), DIM);
+                        pnt.text(pos2(r.left(), r.top() + 8.0), Align2::LEFT_CENTER, if w < 110.0 { short } else { label }, bold_font(10.0), DIM);
                         pnt.text(pos2(r.left(), r.top() + 27.0), Align2::LEFT_CENTER, value, bold_font(16.5), c);
                     }
                 });

@@ -83,6 +83,13 @@ impl App {
         egui::ScrollArea::vertical().id_salt(format!("{:?}", self.view)).auto_shrink([false, false]).show(ui, |ui| {
             let w = ui.available_width().min(940.0);
             let pad = ((ui.available_width() - w) / 2.0).max(0.0);
+            // A page comes in: up a little, out of nothing, in a moment.
+            let came = (self.came.elapsed().as_secs_f32() / 0.16).min(1.0);
+            if came < 1.0 {
+                ui.ctx().request_repaint();
+                ui.set_opacity(came);
+                ui.add_space((1.0 - came) * 10.0);
+            }
             ui.horizontal_top(|ui| {
                 ui.add_space(pad);
                 ui.vertical(|ui| {
@@ -240,21 +247,24 @@ impl App {
             }
         }
         pnt.add(gradient(r, 14.0, Color32::from_black_alpha(225), Color32::from_black_alpha(40)));
-        let x = r.left() + 22.0;
-        pnt.text(pos2(x, r.top() + 20.0), Align2::LEFT_TOP, "Bet on what happens next", bold_font(25.0), Color32::WHITE);
+        let narrow = r.width() < 470.0;
+        let x = r.left() + if narrow { 16.0 } else { 22.0 };
+        pnt.text(pos2(x, r.top() + if narrow { 16.0 } else { 20.0 }), Align2::LEFT_TOP, "Bet on what happens next", bold_font(if narrow { 20.0 } else { 25.0 }), Color32::WHITE);
         let under = if self.m.house_here && self.m.auto.as_ref().is_some_and(|a| a.on) {
             "Games, prices, the weather: props that open, close and settle by themselves."
         } else {
             "Props your server's members open, with Pyr Casino chips. A winning share pays a chip."
         };
-        pnt.text(pos2(x, r.top() + 54.0), Align2::LEFT_TOP, under, FontId::proportional(13.5), Color32::from_rgb(0xe8, 0xdc, 0xcc));
+        let pale = Color32::from_rgb(0xe8, 0xdc, 0xcc);
+        pnt.galley(pos2(x, r.top() + if narrow { 44.0 } else { 54.0 }), lines(&pnt, under, FontId::proportional(13.5), pale, r.right() - x - 16.0, 2), pale);
         let open: Vec<&PropView> = self.m.props.values().filter(|x| x.open_at(now)).collect();
         let in_play: u64 = self.m.props.values().filter(|x| Model::live(x)).map(|x| x.pool).sum();
         let mine = self.m.mine_live().len();
-        let mut at = pos2(x, r.bottom() - 40.0);
-        for (text, col) in [(count(open.len() as u64, "prop open", "props open"), GOLD), (format!("{} chips in play", short_chips(in_play)), Color32::from_rgb(0xe8, 0xdc, 0xcc)), (count(mine as u64, "bet of yours", "bets of yours"), Color32::from_rgb(0xe8, 0xdc, 0xcc))] {
-            let pr = pill(&pnt, at, &text, col, Color32::from_black_alpha(150), 12.0);
-            at.x = pr.right() + 8.0;
+        let mut at = pos2(x, r.bottom() - if narrow { 34.0 } else { 40.0 });
+        let size = if narrow { 11.0 } else { 12.0 };
+        for (text, col) in [(count(open.len() as u64, "prop open", "props open"), GOLD), (format!("{} chips in play", short_chips(in_play)), pale), (count(mine as u64, "bet of yours", "bets of yours"), pale)] {
+            let pr = pill(&pnt, at, &text, col, Color32::from_black_alpha(150), size);
+            at.x = pr.right() + if narrow { 5.0 } else { 8.0 };
         }
     }
 
@@ -367,16 +377,27 @@ impl App {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = gap;
                 for (cat, n) in row {
-                    let (r, resp) = ui.allocate_exact_size(vec2(w, 66.0), Sense::click());
+                    let (r, resp) = ui.allocate_exact_size(vec2(w.floor(), 70.0), Sense::click());
                     let (col, _) = category_look(cat);
-                    let pnt = ui.painter();
+                    let pnt = ui.painter().with_clip_rect(r);
                     let lift = ui.ctx().animate_bool_with_time(ui.id().with(("tile", cat)), resp.hovered(), 0.12);
-                    pnt.add(gradient(r, 12.0, mix(CARD, col, 0.20 + 0.14 * lift), CARD));
-                    pnt.rect_stroke(r, CornerRadius::same(12), Stroke::new(1.0_f32, mix(CARD_EDGE, col, 0.25 + 0.5 * lift)), egui::StrokeKind::Inside);
-                    emblem(pnt, cat, Rect::from_center_size(pos2(r.left() + 33.0, r.center().y), vec2(40.0, 40.0)), &self.art);
-                    pnt.text(pos2(r.left() + 62.0, r.center().y - 9.0), Align2::LEFT_CENTER, p::category_name(cat), bold_font(14.0), TEXT);
-                    let under = if *n == 0 { "Nothing open".to_string() } else { format!("{n} open") };
-                    pnt.text(pos2(r.left() + 62.0, r.center().y + 9.0), Align2::LEFT_CENTER, under, FontId::proportional(12.0), if *n == 0 { DIM } else { MUTED });
+                    let empty = *n == 0;
+                    // Its picture, in the dark at the left where its name goes (darker still
+                    // when it has nothing open).
+                    match self.art.category(cat) {
+                        Some((t, focus)) => {
+                            pnt.add(cover_rounded(t, r, 12.0, focus, Color32::from_gray(if empty { 70 } else { 150 + (60.0 * lift) as u8 })));
+                            pnt.add(gradient(r, 12.0, Color32::from_black_alpha(225), Color32::from_black_alpha(if empty { 120 } else { 40 })));
+                        }
+                        None => {
+                            pnt.add(gradient(r, 12.0, mix(CARD, col, 0.20 + 0.14 * lift), CARD));
+                        }
+                    }
+                    pnt.rect_stroke(r, CornerRadius::same(12), Stroke::new(1.0_f32, mix(CARD_EDGE, col, 0.25 + 0.6 * lift)), egui::StrokeKind::Inside);
+                    emblem(&pnt, cat, Rect::from_center_size(pos2(r.left() + 33.0, r.center().y), vec2(40.0, 40.0)), &self.art);
+                    pnt.text(pos2(r.left() + 62.0, r.center().y - 9.0), Align2::LEFT_CENTER, p::category_name(cat), bold_font(14.0), if empty { MUTED } else { Color32::WHITE });
+                    let under = if empty { "Nothing open".to_string() } else { format!("{n} open") };
+                    pnt.text(pos2(r.left() + 62.0, r.center().y + 9.0), Align2::LEFT_CENTER, under, FontId::proportional(12.0), if empty { DIM } else { mix(col, Color32::WHITE, 0.6) });
                     if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                         self.back.clear();
                         self.go(View::Category(cat.clone()));
@@ -389,27 +410,43 @@ impl App {
 
     // ------------------------------------------------------------ a category
 
-    fn category(&mut self, ui: &mut egui::Ui, cat: &str, now: i64) {
+    /// A category's banner: its picture, its emblem and name, a word about it, and how many
+    /// props it has to come out.
+    fn category_banner(&mut self, ui: &mut egui::Ui, cat: &str, n: usize) {
         let (col, blurb) = category_look(cat);
+        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 126.0), Sense::hover());
+        let pnt = ui.painter().with_clip_rect(r);
+        match self.art.category(cat) {
+            Some((t, focus)) => {
+                pnt.add(cover_rounded(t, r, 14.0, focus, Color32::from_gray(215)));
+                pnt.add(gradient(r, 14.0, Color32::from_black_alpha(235), Color32::from_black_alpha(20)));
+            }
+            None => {
+                pnt.add(gradient(r, 14.0, mix(CARD, col, 0.35), CARD));
+            }
+        }
+        pnt.rect_stroke(r, CornerRadius::same(14), Stroke::new(1.0_f32, mix(CARD_EDGE, col, 0.3)), egui::StrokeKind::Inside);
+        let narrow = r.width() < 470.0;
+        let e = if narrow { 42.0 } else { 54.0 };
+        let em = Rect::from_min_size(pos2(r.left() + if narrow { 14.0 } else { 22.0 }, r.center().y - e / 2.0), vec2(e, e));
+        emblem(&pnt, cat, em, &self.art);
+        let x = em.right() + 14.0;
+        pnt.text(pos2(x, r.center().y - 14.0), Align2::LEFT_CENTER, p::category_name(cat), bold_font(if narrow { 20.0 } else { 25.0 }), Color32::WHITE);
+        let pale = mix(col, Color32::WHITE, 0.55);
+        pnt.galley(pos2(x, r.center().y + 3.0), lines(&pnt, blurb, FontId::proportional(13.0), pale, r.right() - x - 16.0, 2), pale);
+        if n > 0 && !narrow {
+            let text = count(n as u64, "prop", "props");
+            let wide = pnt.layout_no_wrap(text.clone(), bold_font(12.0), TEXT).size().x + 14.4;
+            pill(&pnt, pos2(r.right() - 16.0 - wide, r.top() + 14.0), &text, TEXT, Color32::from_black_alpha(150), 12.0);
+        }
+    }
+
+    fn category(&mut self, ui: &mut egui::Ui, cat: &str, now: i64) {
         // (Owned: what's drawn changes the window.)
         let events: Vec<(String, i64, Vec<PropView>)> = self.m.events(cat).into_iter().map(|e| (e.name, e.starts, e.props.into_iter().cloned().collect())).collect();
         let n: usize = events.iter().map(|e| e.2.len()).sum();
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            let (r, _) = ui.allocate_exact_size(vec2(54.0, 54.0), Sense::hover());
-            emblem(ui.painter(), cat, r, &self.art);
-            ui.add_space(4.0);
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                ui.label(RichText::new(p::category_name(cat)).font(bold_font(23.0)).color(TEXT));
-                ui.label(RichText::new(blurb).size(13.0).color(mix(col, Color32::WHITE, 0.35)));
-            });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if n > 0 {
-                    ui.label(RichText::new(count(n as u64, "prop", "props")).font(bold_font(13.0)).color(MUTED));
-                }
-            });
-        });
+        ui.add_space(2.0);
+        self.category_banner(ui, cat, n);
         ui.add_space(10.0);
         if events.is_empty() {
             let on = self.m.house_here && self.m.auto.as_ref().is_some_and(|a| a.on && !a.off.iter().any(|c| c == cat));

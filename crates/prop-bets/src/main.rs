@@ -139,12 +139,14 @@ pub struct App {
     pub looked: Option<(u64, Instant)>,
     /// My chips as shown (they run up or down to what they are).
     pub shown_chips: f64,
+    /// When the page showing came (it fades in).
+    pub came: Instant,
 }
 
 impl App {
     fn new(ctx: &egui::Context, rx: mpsc::Receiver<Value>, bridge: bool) -> App {
         style(ctx);
-        App { rx, bridge, started: Instant::now(), m: Model::default(), art: Art::load(ctx), view: View::Home, back: Vec::new(), betting: None, new_prop: None, setting: None, days: 7, stats_asked: None, looked: None, shown_chips: 0.0 }
+        App { rx, bridge, started: Instant::now(), m: Model::default(), art: Art::load(ctx), view: View::Home, back: Vec::new(), betting: None, new_prop: None, setting: None, days: 7, stats_asked: None, looked: None, shown_chips: 0.0, came: Instant::now() }
     }
 
     /// Goes to a page (the one showing can be come back to).
@@ -158,12 +160,14 @@ impl App {
                 self.back.clear();
             }
             self.betting = None;
+            self.came = Instant::now();
         }
     }
 
     pub fn go_back(&mut self) {
         self.view = self.back.pop().unwrap_or(View::Home);
         self.betting = None;
+        self.came = Instant::now();
     }
 }
 
@@ -274,22 +278,27 @@ impl App {
     /// Its emblem and name, the server's name, my chips; New prop, and the casino's own props
     /// (for whoever manages the server).
     fn head(&mut self, ui: &mut egui::Ui) {
+        let ready = self.bridge && self.m.server.is_some() && self.m.props_here;
+        // (A narrow window keeps its room for my chips and the buttons.)
+        let narrow = ready && ui.available_width() < 540.0;
         ui.horizontal(|ui| {
             let (r, resp) = ui.allocate_exact_size(vec2(38.0, 38.0), Sense::click());
             cover(ui.painter(), self.art.emblem.as_ref(), r, Color32::WHITE);
-            if resp.on_hover_text("The front page").clicked() {
+            if resp.on_hover_text("The front page").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                 self.go(View::Home);
             }
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 1.0;
-                ui.label(RichText::new("Prop Bets").font(bold_font(18.0)).color(GOLD));
-                let under = match &self.m.server {
-                    Some(s) => s.clone(),
-                    None => "Bets with your Pyr Casino chips".into(),
-                };
-                ui.label(RichText::new(under).size(12.5).color(MUTED));
-            });
-            if !(self.bridge && self.m.server.is_some() && self.m.props_here) {
+            if !narrow {
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 1.0;
+                    ui.label(RichText::new("Prop Bets").font(bold_font(18.0)).color(GOLD));
+                    let under = match &self.m.server {
+                        Some(s) => s.clone(),
+                        None => "Bets with your Pyr Casino chips".into(),
+                    };
+                    ui.label(RichText::new(under).size(12.5).color(MUTED));
+                });
+            }
+            if !ready {
                 return;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
