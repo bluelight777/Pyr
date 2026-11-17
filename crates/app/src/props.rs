@@ -93,12 +93,14 @@ pub struct NewProp {
     pub outcomes: Vec<String>,
     pub depth: u64,
     pub closes_in: u64,
+    /// One of `pyr_poker::props::CATEGORIES` (servers with the casino's own props).
+    pub category: String,
 }
 
 impl NewProp {
     pub fn new(key: String, channel: i64, question: String, outcomes: Vec<String>) -> NewProp {
         let outcomes = if outcomes.len() >= 2 { outcomes } else { vec!["Yes".into(), "No".into()] };
-        NewProp { key, channel, question, outcomes, depth: p::DEPTHS[0].0, closes_in: 0 }
+        NewProp { key, channel, question, outcomes, depth: p::DEPTHS[0].0, closes_in: 0, category: p::COMMUNITY.to_string() }
     }
 }
 
@@ -141,6 +143,16 @@ impl PyrApp {
             return;
         };
         let now = pyr_proto::now_ms();
+        // One of the casino's own changes without this Pyr hearing of it (unless Prop Bets'
+        // window is open, or I've something on it): its card asks how it stands every half
+        // minute while it shows.
+        if prop.house && !matches!(prop.state, PropState::Settled | PropState::Void) {
+            let asked = self.ui.prop_card_asked.entry((s.key.clone(), id)).or_insert_with(std::time::Instant::now);
+            if asked.elapsed() > std::time::Duration::from_secs(30) {
+                *asked = std::time::Instant::now();
+                acts.push(Act::PropGet { key: s.key.clone(), ids: vec![id] });
+            }
+        }
         let w = 440.0_f32.min(ui.available_width());
         let ctx = ui.ctx().clone();
         egui::Frame::new().fill(Color32::from_rgb(0x14, 0x0f, 0x0d)).stroke(Stroke::new(1.0_f32, Color32::from_rgb(0x5a, 0x40, 0x22))).corner_radius(12).show(ui, |ui| {
@@ -163,7 +175,13 @@ impl PyrApp {
                 PropState::Settled => "SETTLED".into(),
                 PropState::Void => "CALLED OFF".into(),
             };
-            p.text(emblem.right_center() + vec2(8.0, -7.0), Align2::LEFT_CENTER, format!("PROP BET #{}", prop.id), theme::bold_font(11.5), Color32::from_rgb(0xff, 0xd3, 0x7a));
+            // (One of the casino's own says so, and every prop its category once it has one.)
+            let title = match (prop.house, prop.category.is_empty() || prop.category == p::COMMUNITY) {
+                (true, _) => format!("PYR CASINO · {}", p::category_name(&prop.category).to_uppercase()),
+                (false, true) => format!("PROP BET #{}", prop.id),
+                (false, false) => format!("PROP BET #{} · {}", prop.id, p::category_name(&prop.category).to_uppercase()),
+            };
+            p.text(emblem.right_center() + vec2(8.0, -7.0), Align2::LEFT_CENTER, title, theme::bold_font(11.5), Color32::from_rgb(0xff, 0xd3, 0x7a));
             p.text(emblem.right_center() + vec2(8.0, 8.0), Align2::LEFT_CENTER, state, theme::bold_font(10.5), Color32::from_rgb(0xd8, 0xc8, 0xb0));
             let q = ui.fonts_mut(|f| f.layout(prop.question.clone(), theme::bold_font(16.0), Color32::WHITE, w - 56.0));
             let qh = q.size().y;
@@ -200,6 +218,9 @@ impl PyrApp {
                 ui.vertical(|ui| {
                     let won = prop.winner.and_then(|w| prop.outcomes.get(w)).cloned().unwrap_or_default();
                     ui.label(RichText::new(format!("Settled: {won}")).font(theme::bold_font(17.0)).color(Color32::from_rgb(0xff, 0xd3, 0x7a)));
+                    if !prop.note.is_empty() {
+                        ui.label(RichText::new(&prop.note).size(12.5).color(theme::TEXT()));
+                    }
                     let who = if prop.winners.is_empty() {
                         "Nobody had chips on it.".to_string()
                     } else {
@@ -210,13 +231,15 @@ impl PyrApp {
             });
             ui.add_space(6.0);
         } else if prop.state == PropState::Void {
-            ui.label(RichText::new("Called off: everyone's chips went back to them.").italics().color(theme::MUTED()));
+            let why = if prop.note.is_empty() { String::new() } else { format!(" ({})", prop.note) };
+            ui.label(RichText::new(format!("Called off{why}: everyone's chips went back to them.")).italics().color(theme::MUTED()));
             ui.add_space(6.0);
         } else if !open {
             ui.horizontal(|ui| {
                 let (r, _) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::hover());
                 crate::casino::pics::cover(ui.painter(), &ctx, "props-lock", r, 64, Color32::WHITE);
-                ui.label(RichText::new("Betting has closed: it pays out when it's settled.").color(theme::MUTED()));
+                let when = if prop.house && !prop.source.is_empty() { format!("Betting has closed: it settles by itself, from {}.", prop.source) } else { "Betting has closed: it pays out when it's settled.".to_string() };
+                ui.label(RichText::new(when).color(theme::MUTED()));
             });
             ui.add_space(4.0);
         }
@@ -330,17 +353,22 @@ impl PyrApp {
         }
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.menu_button(RichText::new("Settle…").font(theme::bold_font(13.0)), |ui| {
-                crate::menu::style(ui);
-                ui.label(RichText::new("What happened? Winners are paid a chip a share.").size(12.0).color(theme::DIM()));
-                for (i, o) in prop.outcomes.iter().enumerate() {
-                    if ui.button(o).clicked() {
-                        acts.push(Act::PropSettle { key: s.key.clone(), id: prop.id, outcome: i });
-                        ui.close();
+            // (One of the casino's own settles by itself: whoever manages the server may only
+            // call it off.)
+            if !prop.house {
+                ui.menu_button(RichText::new("Settle…").font(theme::bold_font(13.0)), |ui| {
+                    crate::menu::style(ui);
+                    ui.label(RichText::new("What happened? Winners are paid a chip a share.").size(12.0).color(theme::DIM()));
+                    for (i, o) in prop.outcomes.iter().enumerate() {
+                        if ui.button(o).clicked() {
+                            acts.push(Act::PropSettle { key: s.key.clone(), id: prop.id, outcome: i });
+                            ui.close();
+                        }
                     }
-                }
-            });
-            if ui.small_button("Call off").on_hover_text("Everyone gets back what they put in (once others have bet, only a moderator can)").clicked() {
+                });
+            }
+            let hint = if prop.house { "Everyone gets back what they put in" } else { "Everyone gets back what they put in (once others have bet, only a moderator can)" };
+            if ui.small_button("Call off").on_hover_text(hint).clicked() {
                 acts.push(Act::PropVoid { key: s.key.clone(), id: prop.id });
             }
         });
@@ -399,6 +427,15 @@ impl PyrApp {
                 if np.outcomes.len() < p::MAX_OUTCOMES && ui.small_button("+ Outcome").clicked() {
                     np.outcomes.push(String::new());
                 }
+                if st.server(&np.key).is_some_and(|s| s.has(pyr_proto::control::PROPS_HOUSE_FEATURE)) {
+                    ui.add_space(6.0);
+                    ui.label(RichText::new("CATEGORY").size(11.0).strong().color(theme::DIM()));
+                    egui::ComboBox::from_id_salt("new-prop-category").selected_text(p::category_name(&np.category)).show_ui(ui, |ui| {
+                        for (id, name) in p::CATEGORIES {
+                            ui.selectable_value(&mut np.category, id.to_string(), name);
+                        }
+                    });
+                }
                 ui.add_space(6.0);
                 ui.label(RichText::new("HOW MUCH THE ODDS MOVE").size(11.0).strong().color(theme::DIM()));
                 let n = np.outcomes.iter().filter(|o| !o.trim().is_empty()).count().max(2);
@@ -441,7 +478,7 @@ impl PyrApp {
                 ui.horizontal(|ui| {
                     if ui.add_enabled(check.is_ok() && !short, theme::primary_button("Open the prop")).clicked() {
                         if let Ok((q, outcomes)) = check {
-                            acts.push(Act::PropOpen { key: np.key.clone(), channel: np.channel, question: q, outcomes, depth: np.depth, closes_in: np.closes_in });
+                            acts.push(Act::PropOpen { key: np.key.clone(), channel: np.channel, question: q, outcomes, depth: np.depth, closes_in: np.closes_in, category: np.category.clone() });
                             done = true;
                         }
                     }
@@ -457,11 +494,17 @@ impl PyrApp {
 /// How much is in, how many bets, who opened it, and the latest bets.
 fn prop_footer(ui: &mut egui::Ui, prop: &PropView) {
     ui.add_space(6.0);
-    ui.label(
-        RichText::new(format!("{} chips in · {} · opened and backed by {} ({} chips)", chips_text(prop.pool), crate::poker::cards::count(prop.bets as u64, "bet", "bets"), prop.author_name, chips_text(prop.backing)))
-            .size(12.0)
-            .color(theme::DIM()),
-    );
+    let by = if prop.house {
+        // The casino's own: what it's about and whose numbers settle it (how, on hover).
+        let from = if prop.source.is_empty() { "the casino's own".to_string() } else { format!("the casino's own, settled from {}", prop.source) };
+        if prop.detail.is_empty() { from } else { format!("{} · {from}", prop.detail) }
+    } else {
+        format!("opened and backed by {} ({} chips)", prop.author_name, chips_text(prop.backing))
+    };
+    let line = ui.label(RichText::new(format!("{} chips in · {} · {by}", chips_text(prop.pool), crate::poker::cards::count(prop.bets as u64, "bet", "bets"))).size(12.0).color(theme::DIM()));
+    if !prop.rules.is_empty() {
+        line.on_hover_text(&prop.rules);
+    }
     if !prop.latest.is_empty() {
         let lines: Vec<String> = prop
             .latest

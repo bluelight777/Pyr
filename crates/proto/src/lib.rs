@@ -6,6 +6,7 @@
 //! * `crypto` – identities (Ed25519), login proof, and end-to-end media encryption.
 //! * `invite` – invite links that pin the server's TLS certificate.
 //! * `directory` – short invite links (`https://pyr.gg/<code>`) and the directory behind them.
+//! * `props_feed` – the signed feed of prop bets that open and settle by themselves.
 //! * `udp` (feature `quic`) – QUIC endpoints with a plain-UDP fallback.
 
 pub mod ab;
@@ -19,6 +20,7 @@ pub mod invite;
 pub mod legacy;
 pub mod library;
 pub mod media;
+pub mod props_feed;
 pub mod release;
 pub mod sealed;
 pub mod skin;

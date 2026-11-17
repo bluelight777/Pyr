@@ -141,7 +141,7 @@ pub fn announcement(db: &Db, files_dir: &std::path::Path, host: &str, port: u16,
     }
 }
 
-fn agent(base: &str) -> ureq::Agent {
+pub(crate) fn agent(base: &str) -> ureq::Agent {
     let mut cfg = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(20)))
         .http_status_as_error(false)

@@ -166,7 +166,7 @@ pub enum Act {
     /// Prop bets (see `props`): look props up, open one, bet, cash out, settle, call off, and
     /// the New prop bet window (prefilled from `/prop`).
     PropGet { key: String, ids: Vec<u64> },
-    PropOpen { key: String, channel: ChannelId, question: String, outcomes: Vec<String>, depth: u64, closes_in: u64 },
+    PropOpen { key: String, channel: ChannelId, question: String, outcomes: Vec<String>, depth: u64, closes_in: u64, category: String },
     PropBet { key: String, id: u64, outcome: usize, chips: u64, min_shares: f64 },
     PropCashOut { key: String, id: u64, outcome: usize },
     PropSettle { key: String, id: u64, outcome: usize },
@@ -560,6 +560,15 @@ pub struct UiState {
     /// server showing (`None`: none), its props' version, my chips and whether it has prop bets.
     /// It's told again when any of it changes.
     pub prop_bets_told: Option<Option<(String, u64, Option<u64>, bool)>>,
+    /// How Prop Bets' window said it's told of props (`props_hello`: 2, only what changed each
+    /// time; 0 until it says: every prop each time, as 0.14's window is), and when every prop
+    /// was last asked of the server for it (asked again every few minutes while it's open: the
+    /// server tells of the casino's own props as they change only for a while after).
+    pub prop_bets_v: u32,
+    pub prop_bets_listed: Option<Instant>,
+    /// When a prop's card in chat last asked how one of the casino's own props stands (those
+    /// change without this Pyr hearing, unless Prop Bets' window is open).
+    pub prop_card_asked: HashMap<(String, u64), Instant>,
     /// Prop bets: the bet being picked on a card, and the New prop bet window.
     pub prop_betting: Option<crate::props::Betting>,
     pub new_prop: Option<crate::props::NewProp>,
@@ -937,7 +946,7 @@ impl PyrApp {
             }
             Act::UpdateProgram(id) => self.update_program(&id, None),
             Act::PropGet { key, ids } => e.prop_get(&key, &ids),
-            Act::PropOpen { key, channel, question, outcomes, depth, closes_in } => e.prop_open(&key, channel, &question, outcomes, depth, closes_in),
+            Act::PropOpen { key, channel, question, outcomes, depth, closes_in, category } => e.prop_open(&key, channel, &question, outcomes, depth, closes_in, &category),
             Act::PropBet { key, id, outcome, chips, min_shares } => e.prop_bet(&key, id, outcome, chips, min_shares),
             Act::PropCashOut { key, id, outcome } => e.prop_cash_out(&key, id, outcome),
             Act::PropSettle { key, id, outcome } => e.prop_settle(&key, id, outcome),

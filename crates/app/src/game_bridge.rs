@@ -73,12 +73,14 @@ impl PyrApp {
             self.tell_prop_bets(st);
         } else {
             self.ui.prop_bets_told = None;
+            self.ui.prop_bets_v = 0;
+            self.ui.prop_bets_listed = None;
         }
         for (id, a) in self.plugins.programs.take_asked() {
             match a {
                 Asked::Invite { uid, room } => self.invite_to_game(st, &id, uid, room),
                 Asked::Update { room } => self.update_program(&id, room),
-                Asked::Prop(ask) if id == crate::props::PROP_BETS => self.prop_bets_asked(ask, acts),
+                Asked::Prop(ask) if id == crate::props::PROP_BETS => self.prop_bets_asked(st, ask, acts),
                 Asked::Prop(_) => tracing::warn!(program = %id, "a program other than Prop Bets asked about prop bets: not done"),
             }
         }
@@ -86,21 +88,37 @@ impl PyrApp {
     }
 
     /// Tells Prop Bets' own window the props of the server showing in Pyr (every channel I can
-    /// read: asked for when it opens or the server changes), my chips, its text channels: when
-    /// any of it changed since it was last told.
+    /// read, and the casino's own: asked for when it opens or the server changes, and again
+    /// every few minutes), my chips, its text channels, the best at props and how the casino's
+    /// own props stand there: when any of it changed since it was last told. A window that
+    /// said so (`props_hello`) is told only the props that changed; one that didn't, every
+    /// prop each time.
     fn tell_prop_bets(&mut self, st: &AppState) {
+        use pyr_proto::control::{PROPS_FEATURE, PROPS_HOUSE_FEATURE};
         let s = self.ui.server.as_deref().and_then(|k| st.server(k));
-        let now = s.map(|s| (s.key.clone(), s.poker.props_version, s.poker.me.as_ref().map(|m| m.chips), s.has(pyr_proto::control::PROPS_FEATURE)));
+        let now = s.map(|s| (s.key.clone(), s.poker.props_version, s.poker.me.as_ref().map(|m| m.chips), s.has(PROPS_FEATURE)));
+        // (The server tells this Pyr of the casino's own props as they change only for a
+        // quarter of an hour after it asked for them all.)
+        if let Some(s) = s.filter(|s| s.has(PROPS_HOUSE_FEATURE))
+            && self.ui.prop_bets_listed.is_some_and(|t| t.elapsed() > Duration::from_secs(300))
+        {
+            self.engine.prop_list_all(&s.key);
+            self.ui.prop_bets_listed = Some(Instant::now());
+        }
         if self.ui.prop_bets_told.as_ref() == Some(&now) {
             return;
         }
+        let first = self.ui.prop_bets_told.is_none();
         let before = self.ui.prop_bets_told.replace(now).flatten();
-        // A server it hasn't seen yet: every prop, and my chips.
-        if let Some(s) = s.filter(|s| before.as_ref().map(|t| &t.0) != Some(&s.key)) {
+        // A server it hasn't seen yet: every prop, my chips, and how the casino's own stand.
+        let new_server = s.filter(|s| before.as_ref().map(|t| &t.0) != Some(&s.key));
+        if let Some(s) = new_server {
             self.engine.prop_list_all(&s.key);
-            if s.poker.me.is_none() && s.has(pyr_proto::control::PROPS_FEATURE) {
+            self.ui.prop_bets_listed = Some(Instant::now());
+            if s.poker.me.is_none() && s.has(PROPS_FEATURE) {
                 self.engine.poker(&s.key, pyr_poker::net::ToServer::Lobby);
             }
+            self.engine.prop_auto(&s.key, None);
         }
         let line = match s {
             Some(s) => {
@@ -110,35 +128,79 @@ impl PyrApp {
                     .filter(|c| c.kind == pyr_proto::control::ChannelKind::Text)
                     .map(|c| json!({"id": c.id, "name": c.name}))
                     .collect();
-                let props: Vec<&pyr_poker::props::PropView> = s.poker.props.values().rev().collect();
+                let full = self.ui.prop_bets_v < 2 || first || new_server.is_some();
+                let since = before.as_ref().map_or(0, |t| t.1);
+                let props: Vec<&pyr_poker::props::PropView> = if full {
+                    s.poker.props.values().rev().collect()
+                } else {
+                    s.poker.props.iter().rev().filter(|(id, _)| s.poker.props_at.get(id).is_some_and(|at| *at > since)).map(|(_, p)| p).collect()
+                };
                 json!({
                     "op": "props",
+                    "full": full,
                     "server": {"key": s.key, "name": s.info.name},
-                    "props_here": s.has(pyr_proto::control::PROPS_FEATURE),
+                    "props_here": s.has(PROPS_FEATURE),
+                    "house_here": s.has(PROPS_HOUSE_FEATURE),
                     "me": st.my_uid,
                     "chips": s.poker.me.as_ref().map(|m| m.chips),
                     "channels": channels,
+                    "channel": self.ui.channel.get(&s.key),
                     "list": props,
+                    "stats": s.poker.prop_stats,
+                    "auto": s.poker.prop_auto,
                 })
             }
-            None => json!({"op": "props", "server": null, "props_here": false, "list": []}),
+            None => json!({"op": "props", "full": true, "server": null, "props_here": false, "list": []}),
         };
         self.plugins.programs.tell(crate::props::PROP_BETS, line);
     }
 
     /// What Prop Bets' own window asked: done on the server it was last told about, as a
     /// prop's card in chat does it (the server checks it all).
-    fn prop_bets_asked(&mut self, ask: crate::plugins::programs::PropAsk, acts: &mut Vec<Act>) {
+    fn prop_bets_asked(&mut self, st: &AppState, ask: crate::plugins::programs::PropAsk, acts: &mut Vec<Act>) {
         use crate::plugins::programs::PropAsk;
+        if let PropAsk::Hello { v } = ask {
+            self.ui.prop_bets_v = v;
+            return;
+        }
         let Some(key) = self.ui.prop_bets_told.as_ref().and_then(|t| t.as_ref()).map(|t| t.0.clone()) else { return };
         acts.push(match ask {
             PropAsk::Bet { id, outcome, chips, min_shares } => Act::PropBet { key, id, outcome, chips, min_shares },
             PropAsk::CashOut { id, outcome } => Act::PropCashOut { key, id, outcome },
-            PropAsk::Open { channel, question, outcomes, depth, closes_in } => Act::PropOpen { key, channel, question, outcomes, depth, closes_in },
+            PropAsk::Open { channel, question, outcomes, depth, closes_in, category } => Act::PropOpen { key, channel, question, outcomes, depth, closes_in, category },
             PropAsk::Settle { id, outcome } => Act::PropSettle { key, id, outcome },
             PropAsk::Void { id } => Act::PropVoid { key, id },
             PropAsk::Refresh => {
                 self.engine.prop_list_all(&key);
+                self.ui.prop_bets_listed = Some(Instant::now());
+                return;
+            }
+            PropAsk::Hello { .. } => return,
+            PropAsk::Look { id } => {
+                self.engine.prop_look(&key, id);
+                return;
+            }
+            PropAsk::Stats { days } => {
+                self.engine.prop_stats(&key, days);
+                return;
+            }
+            PropAsk::Auto { set } => {
+                self.engine.prop_auto(&key, set);
+                return;
+            }
+            PropAsk::Share { id } => {
+                // Its card, in the text channel showing in Pyr.
+                let Some(s) = st.server(&key) else { return };
+                let Some(prop) = s.poker.props.get(&id) else { return };
+                let showing = self.ui.channel.get(&key).and_then(|c| s.channels.iter().find(|ch| ch.id == *c && ch.kind == pyr_proto::control::ChannelKind::Text));
+                let said = match showing {
+                    Some(ch) => {
+                        acts.push(Act::Send { key: key.clone(), channel: ch.id, text: crate::props::message_for(prop), reply_to: None, files: Vec::new() });
+                        json!({"op": "said", "text": format!("Shared in #{}.", ch.name), "error": false})
+                    }
+                    None => json!({"op": "said", "text": "Go to a text channel in Pyr first: it's shared there.", "error": true}),
+                };
+                self.plugins.programs.tell(crate::props::PROP_BETS, said);
                 return;
             }
         });

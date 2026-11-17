@@ -14,6 +14,11 @@ use crate::crypto::{self, Identity};
 /// Signed messages start with this, so a release signature can't be mistaken for anything else.
 const CONTEXT: &[u8] = b"ingle release manifest v1\n";
 
+/// Public half of the Firelit release key (the one since the rebuild), for what isn't the app's
+/// updater: a server checking the props feed's certificate (`props_feed`). The updater has it
+/// too (`update::RELEASE_KEY` in the app), and a test there holds the two the same.
+pub const RELEASE_KEY: &str = "O_eZ7ZYewM395zMS-dFgHOFypniuEnfr02SCJAqtwJY";
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Asset {
     pub url: String,

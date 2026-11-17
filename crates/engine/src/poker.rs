@@ -152,6 +152,13 @@ pub struct PokerState {
     /// each was last asked for, ones I just opened (for their message in chat), and what
     /// happened to me on them (to say: text, chips in or out).
     pub props: BTreeMap<u64, pyr_poker::props::PropView>,
+    /// When each prop was last heard of (`props_version` as it was then): Prop Bets' window is
+    /// told only of the ones heard of since it was last told.
+    pub props_at: BTreeMap<u64, u64>,
+    /// The server's best at props, and the casino's own props here (servers with
+    /// `PROPS_HOUSE_FEATURE`), as last told; `props_version` goes up with them too.
+    pub prop_stats: Option<pyr_poker::props::PropStats>,
+    pub prop_auto: Option<pyr_poker::props::PropAuto>,
     pub props_asked: BTreeMap<u64, Instant>,
     pub props_opened: Vec<pyr_poker::props::PropView>,
     pub prop_notes: Vec<(u64, String, i64)>,
@@ -562,19 +569,73 @@ impl PokerState {
                 self.tourney.insert(view.id, view);
             }
             ToApp::Props { props } => {
-                for p in props {
-                    self.props.insert(p.id, p);
-                }
                 self.props_version += 1;
+                for p in props {
+                    self.prop_heard(p);
+                }
+                self.props_forget();
             }
             ToApp::PropOpened { prop } => {
-                self.props.insert(prop.id, prop.clone());
-                self.props_opened.push(prop);
                 self.props_version += 1;
+                self.prop_heard(prop.clone());
+                self.props_opened.push(prop);
             }
             ToApp::PropNote { id, text, chips } => self.prop_notes.push((id, text, chips)),
+            ToApp::PropStats { stats } => {
+                self.prop_stats = Some(stats);
+                self.props_version += 1;
+            }
+            ToApp::PropAuto { auto } => {
+                self.prop_auto = Some(auto);
+                self.props_version += 1;
+            }
         }
         None
+    }
+
+    /// A prop as the server just said it is. How its odds went comes only when one prop is
+    /// looked up: what's known of that is kept through the changes that come without, and the
+    /// odds as they are now are added to it.
+    fn prop_heard(&mut self, mut p: pyr_poker::props::PropView) {
+        use pyr_poker::props::{HISTORY, PricePoint};
+        if p.history.is_empty()
+            && let Some(old) = self.props.get_mut(&p.id)
+        {
+            p.history = std::mem::take(&mut old.history);
+        }
+        if !p.history.is_empty() {
+            let now: Vec<f32> = p.prices().into_iter().map(|x| x as f32).collect();
+            if p.history.last().is_some_and(|l| l.p.len() == now.len() && l.p.iter().zip(&now).any(|(a, b)| (a - b).abs() > 1e-6)) {
+                p.history.push(PricePoint { at: pyr_proto::now_ms(), p: now });
+                let n = p.history.len();
+                if n > HISTORY * 2 {
+                    p.history.drain(1..=n - HISTORY * 2);
+                }
+            }
+        }
+        self.props_at.insert(p.id, self.props_version);
+        self.props.insert(p.id, p);
+    }
+
+    /// Props that are over and that I had nothing on are forgotten once there are thousands
+    /// (a day of the casino's own is a few hundred), the oldest first.
+    fn props_forget(&mut self) {
+        const MANY: usize = 4000;
+        if self.props.len() <= MANY {
+            return;
+        }
+        let over: Vec<u64> = self
+            .props
+            .values()
+            .filter(|p| matches!(p.state, pyr_poker::props::PropState::Settled | pyr_poker::props::PropState::Void) && p.mine.is_empty())
+            .map(|p| p.id)
+            .take(self.props.len() - MANY * 3 / 4)
+            .collect();
+        for id in over {
+            self.props.remove(&id);
+            self.props_at.remove(&id);
+            self.props_asked.remove(&id);
+        }
     }
 
     /// A blackjack table as it is now. A round just over is played again here from its seeds

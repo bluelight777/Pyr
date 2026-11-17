@@ -1479,9 +1479,59 @@ impl Engine {
     }
 
     /// Opens a prop in a channel: a question, its outcomes (Yes and No when none), how deep
-    /// (`pyr_poker::props::DEPTHS`) and when betting closes (`CLOSES_IN`, seconds).
-    pub fn prop_open(&self, key: &str, channel_id: ChannelId, question: &str, outcomes: Vec<String>, depth: u64, closes_in: u64) {
-        self.prop_request(key, pyr_poker::net::ToServer::PropOpen { channel_id, question: question.to_string(), outcomes, depth, closes_in });
+    /// (`pyr_poker::props::DEPTHS`), when betting closes (`CLOSES_IN`, seconds), and its
+    /// category (`pyr_poker::props::CATEGORIES`; none: `community`. A server from before
+    /// categories isn't told one).
+    pub fn prop_open(&self, key: &str, channel_id: ChannelId, question: &str, outcomes: Vec<String>, depth: u64, closes_in: u64, category: &str) {
+        let knows = self.shared.state.read_recursive().server(key).is_some_and(|s| s.has(pyr_proto::control::PROPS_HOUSE_FEATURE));
+        let category = if knows { category.to_string() } else { String::new() };
+        self.prop_request(key, pyr_poker::net::ToServer::PropOpen { channel_id, question: question.to_string(), outcomes, depth, closes_in, category });
+    }
+
+    /// Whether a server has the casino's own props at all (0.15 servers).
+    fn props_house(&self, key: &str) -> bool {
+        self.shared.state.read_recursive().server(key).is_some_and(|s| s.has(pyr_proto::control::PROPS_HOUSE_FEATURE))
+    }
+
+    /// Asks the server's best at props over `days` (0: since ever), and me among them: kept
+    /// as `PokerState::prop_stats` when it comes. Quietly nothing on a server from before.
+    pub fn prop_stats(&self, key: &str, days: u32) {
+        if self.props_house(key) {
+            self.prop_ask_later(key, pyr_poker::net::ToServer::PropStats { days });
+        }
+    }
+
+    /// Asks how the casino's own props stand on a server (`PokerState::prop_auto` when it
+    /// comes), or sets them (`set`: whoever manages the server; a refusal is said).
+    pub fn prop_auto(&self, key: &str, set: Option<pyr_poker::props::PropAutoSet>) {
+        if !self.props_house(key) {
+            return;
+        }
+        match set {
+            Some(_) => self.prop_request(key, pyr_poker::net::ToServer::PropAuto { set }),
+            None => self.prop_ask_later(key, pyr_poker::net::ToServer::PropAuto { set: None }),
+        }
+    }
+
+    /// A prop bets question asked on the connection as it is now and answered later, never at
+    /// once (the app asks holding the state, which the answer takes); what comes back is kept,
+    /// and a refusal only logged.
+    fn prop_ask_later(&self, key: &str, msg: pyr_poker::net::ToServer) {
+        let Some(h) = self.handle(key) else { return };
+        let reply = h.request(Request::Poker { msg });
+        let (shared, k) = (self.shared.clone(), key.to_string());
+        self.shared.rt.spawn(async move {
+            match reply.await {
+                Ok(Event::Poker { msg }) => {
+                    if let Some(s) = shared.state.write().server_mut(&k) {
+                        s.poker.apply(msg, std::time::Instant::now());
+                    }
+                    (shared.repaint)();
+                }
+                Ok(Event::Error { message, .. }) => tracing::info!("a prop bets question wasn't answered: {message}"),
+                _ => {}
+            }
+        });
     }
 
     /// Bets `chips` on an outcome (`min_shares`: what it was shown to pay, less a little).
@@ -1537,6 +1587,15 @@ impl Engine {
                     _ => {}
                 }
             });
+        }
+    }
+
+    /// Looks one prop up now, whenever it was last asked for: how its odds went comes with it
+    /// (Prop Bets' window, showing one prop).
+    pub fn prop_look(&self, key: &str, id: u64) {
+        let has = self.shared.state.read_recursive().server(key).is_some_and(|s| s.has(pyr_proto::control::PROPS_FEATURE));
+        if has {
+            self.prop_ask_later(key, pyr_poker::net::ToServer::PropGet { ids: vec![id] });
         }
     }
 

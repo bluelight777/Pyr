@@ -11,6 +11,14 @@
 //! at most `b ln n` on a prop, whatever's bet: whoever opens the prop puts that up (its
 //! backing), and gets back what's left of it when it's settled. So a prop never makes chips
 //! out of nothing: what winners get comes from the bets and the backing.
+//!
+//! **The casino's own props (0.15).** Props that open, close and settle by themselves: from
+//! the props feed (`pyr_proto::props_feed`: games, prices, the weather, each settled from the
+//! source it names) and from the casino's own numbers. Nobody opens or settles those, so the
+//! casino backs them (`house`): their odds start where the feed says ([`q_from_prior`]), and
+//! the most the casino can lose on one is `b ln(1 / p)` of its least likely outcome
+//! ([`house_backing`]). Every prop has a category ([`CATEGORIES`]); members' own are
+//! `community` unless they say.
 
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +40,96 @@ pub const MAX_LISTED: usize = 100;
 pub const MAX_OPEN_DAYS: i64 = 30;
 /// When betting can close: in an hour, a day, a week, or when it's settled (0).
 pub const CLOSES_IN: [u64; 4] = [0, 3600, 86_400, 7 * 86_400];
+
+/// The categories props come in (id, name), in the order they're shown. A category the feed
+/// brings that isn't here yet shows under its own name ([`category_name`]).
+pub const CATEGORIES: [(&str, &str); 14] = [
+    ("nfl", "NFL"),
+    ("nba", "NBA"),
+    ("nhl", "NHL"),
+    ("mlb", "MLB"),
+    ("cfb", "College Football"),
+    ("cbb", "College Basketball"),
+    ("topical", "Topical"),
+    ("casino", "Pyr Casino"),
+    ("crypto", "Crypto"),
+    ("weather", "Weather"),
+    ("entertainment", "Entertainment"),
+    ("science", "Science"),
+    ("art", "Art"),
+    ("community", "Community"),
+];
+/// Members' own props, unless they say another.
+pub const COMMUNITY: &str = "community";
+/// The casino's props about itself: made by each server from its own numbers, not the feed.
+pub const CASINO: &str = "casino";
+
+/// A category's id as kept: a known one, a new one from the feed as it is, `community` for
+/// none (props from before 0.15) or one that isn't a name.
+pub fn category_id(id: &str) -> String {
+    let id = id.trim().to_ascii_lowercase();
+    if !id.is_empty() && id.len() <= 24 && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-') { id } else { COMMUNITY.to_string() }
+}
+
+/// A category's name: "College Football"; one that isn't known yet, its id with a capital.
+pub fn category_name(id: &str) -> String {
+    let id = category_id(id);
+    match CATEGORIES.iter().find(|c| c.0 == id) {
+        Some(c) => c.1.to_string(),
+        None => {
+            let mut name = id.replace(['_', '-'], " ");
+            if let Some(first) = name.get_mut(..1) {
+                first.make_ascii_uppercase();
+            }
+            name
+        }
+    }
+}
+
+/// The least chance a house prop's outcome starts at (what bounds the casino's risk on it:
+/// [`house_backing`]).
+pub const MIN_PRIOR: f64 = 0.02;
+/// How long after betting closed a house prop waits for its result before it's called off.
+pub const HOUSE_WAIT_DAYS: i64 = 10;
+/// How many price points a prop keeps of how its odds went.
+pub const HISTORY: usize = 96;
+/// How deep a house prop's market is unless the server's owner says (one of [`DEPTHS`]).
+pub const HOUSE_DEPTH: u64 = 100_000;
+
+/// Starting odds, tidied: none under [`MIN_PRIOR`], adding up to 1 (even odds for ones that
+/// make no sense).
+pub fn tidy_prior(prior: &[f64], n: usize) -> Vec<f64> {
+    let n = n.max(2);
+    if prior.len() != n || prior.iter().any(|p| !p.is_finite() || *p <= 0.0) {
+        return vec![1.0 / n as f64; n];
+    }
+    let sum: f64 = prior.iter().sum();
+    let mut p: Vec<f64> = prior.iter().map(|x| x / sum).collect();
+    // (Raised to the least, the rest scaled down to make room: a few rounds settle it.)
+    for _ in 0..8 {
+        let low: f64 = p.iter().filter(|x| **x < MIN_PRIOR).map(|x| MIN_PRIOR - x).sum();
+        if low <= 1e-12 {
+            break;
+        }
+        let room: f64 = p.iter().filter(|x| **x > MIN_PRIOR).map(|x| x - MIN_PRIOR).sum();
+        p = p.iter().map(|x| if *x <= MIN_PRIOR { MIN_PRIOR } else { MIN_PRIOR + (x - MIN_PRIOR) * (1.0 - low / room) }).collect();
+    }
+    p
+}
+
+/// Where a house prop's market starts so its odds read `prior`: `q_i = b ln(p_i / p_max)`
+/// (the likeliest outcome at 0; nobody holds these shares, so nobody is paid for them).
+pub fn q_from_prior(prior: &[f64], b: f64) -> Vec<f64> {
+    let max = prior.iter().cloned().fold(f64::MIN_POSITIVE, f64::max);
+    prior.iter().map(|p| b * (p.max(1e-12) / max).ln()).collect()
+}
+
+/// The most the casino can lose on a house prop that starts at `prior`: `b ln(1 / p)` of its
+/// least likely outcome (what the bets bring in covers the rest, whatever's bet).
+pub fn house_backing(prior: &[f64], b: f64) -> u64 {
+    let min = prior.iter().cloned().fold(1.0, f64::min).max(1e-12);
+    (b * (1.0 / min).ln()).ceil() as u64
+}
 
 /// Each outcome's price (its chance): the softmax of `q / b`.
 pub fn prices(q: &[f64], b: f64) -> Vec<f64> {
@@ -101,8 +199,17 @@ pub struct BetLine {
     pub at: i64,
 }
 
+/// The odds at a moment: each outcome's chance.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct PricePoint {
+    pub at: i64,
+    pub p: Vec<f32>,
+}
+
 /// A prop, as one person sees it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct PropView {
     pub id: u64,
     pub channel_id: i64,
@@ -132,6 +239,85 @@ pub struct PropView {
     /// Who settled it, and the biggest winners (name, chips paid), once it's settled.
     pub settled_by: String,
     pub winners: Vec<(String, u64)>,
+    /// Its category (0.15, see [`CATEGORIES`]; none from an older server: `community`).
+    pub category: String,
+    /// The casino's own (0.15): it opened by itself, the casino backs it, and it settles by
+    /// itself from `source`. Nobody here settles it (`can_settle`: a manager may call it off).
+    pub house: bool,
+    /// What it's about, shared by the props of one game or one day, that's name ("Chiefs at
+    /// Bills"), and when that starts (ms; 0: not said).
+    pub event: String,
+    pub event_name: String,
+    pub starts_at: i64,
+    /// A line about it as it stands: "Sunday 4:25 PM ET", "Q3 5:21 · 17-20".
+    pub detail: String,
+    /// Whose numbers settle it, and how.
+    pub source: String,
+    pub rules: String,
+    /// What happened, once it's settled or called off: "Bills 27, Chiefs 24".
+    pub note: String,
+    pub settled_at: i64,
+    /// How much it's worth showing first (0: not especially).
+    pub featured: u8,
+    /// How many people have something on it.
+    pub bettors: u32,
+    /// How its odds went (oldest first), when one prop is looked up (`PropGet`); a list of
+    /// props comes without.
+    pub history: Vec<PricePoint>,
+}
+
+/// How someone did on props over some days: what they won less what they put in, on props
+/// settled and bets cashed out in that time.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct PropLeader {
+    pub uid: String,
+    pub name: String,
+    pub net: i64,
+    /// Chips put in, props bet on, the ones that paid, and the biggest single win.
+    pub staked: u64,
+    pub props: u32,
+    pub wins: u32,
+    pub biggest: i64,
+}
+
+/// The server's best at props over `days` (0: since ever), and me among them (`rank`: 0 when
+/// I've nothing settled in that time).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct PropStats {
+    pub days: u32,
+    pub leaders: Vec<PropLeader>,
+    pub me: PropLeader,
+    pub rank: u32,
+    pub players: u32,
+}
+
+/// The casino's own props on a server: off until whoever manages the server turns them on.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct PropAuto {
+    pub on: bool,
+    /// The categories turned off (the rest are on, new ones the feed brings too).
+    pub off: Vec<String>,
+    /// How deep their markets are (one of [`DEPTHS`]).
+    pub depth: u64,
+    /// I may change it (Manage server).
+    pub can_set: bool,
+    /// The feed as this server last read it: when (ms; 0: not yet), how many props it had, and
+    /// what went wrong if something did.
+    pub feed_at: i64,
+    pub feed_props: u32,
+    pub feed_error: String,
+}
+
+/// What to set of [`PropAuto`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct PropAutoSet {
+    pub on: bool,
+    pub off: Vec<String>,
+    pub depth: u64,
 }
 
 impl PropView {
@@ -147,6 +333,11 @@ impl PropView {
     /// What my shares of each outcome are worth if sold now.
     pub fn worth(&self, h: &Holding) -> f64 {
         proceeds_for(&self.q, self.b, h.outcome, h.shares)
+    }
+
+    /// Its category's id (`community` for a prop from before categories).
+    pub fn category_id(&self) -> String {
+        category_id(&self.category)
     }
 }
 
@@ -275,6 +466,54 @@ mod tests {
         assert!(check_new("Who wins tonight?", &["A".into(), "a".into()]).is_err());
         assert!(check_new("Who wins tonight?", &(0..7).map(|i| i.to_string()).collect::<Vec<_>>()).is_err());
         assert_eq!(parse_command("Will Maanix hit a billion? | Yes | No | Maybe "), ("Will Maanix hit a billion?".to_string(), vec!["Yes".to_string(), "No".into(), "Maybe".into()]));
+    }
+
+    #[test]
+    fn a_house_prop_starts_at_the_feed_s_odds_and_its_risk_is_bounded() {
+        let b = 100_000.0;
+        let prior = tidy_prior(&[0.42, 0.58], 2);
+        let q = q_from_prior(&prior, b);
+        let p = prices(&q, b);
+        assert!((p[0] - 0.42).abs() < 1e-9 && (p[1] - 0.58).abs() < 1e-9, "{p:?}");
+        // Whatever's bet and whichever way it goes, the bets and the backing cover every share
+        // sold (the shares the market starts with are nobody's).
+        for prior in [vec![0.42, 0.58], vec![0.02, 0.98], vec![0.1, 0.2, 0.3, 0.4], vec![0.5, 0.5]] {
+            let n = prior.len();
+            let start = q_from_prior(&prior, b);
+            let mut q = start.clone();
+            let mut taken = 0.0;
+            for (k, chips) in [5_000.0, 120_000.0, 30.0, 9_000_000.0, 777.0, 40_000_000.0].iter().enumerate() {
+                let i = (k * 5 + 1) % n;
+                q[i] += shares_for(&q, b, i, *chips);
+                taken += chips;
+            }
+            for w in 0..n {
+                let owed = q[w] - start[w];
+                assert!(owed <= taken + house_backing(&prior, b) as f64 + 1e-6, "{prior:?}, {w} wins: owed {owed}, held {}", taken + house_backing(&prior, b) as f64);
+            }
+        }
+        assert_eq!(house_backing(&[0.5, 0.5], 10_000.0), backing(2, 10_000.0), "even odds: what a member's prop puts up");
+        // Odds that make no sense, or too long: tidied.
+        assert_eq!(tidy_prior(&[0.0, 1.0], 2), vec![0.5, 0.5]);
+        assert_eq!(tidy_prior(&[0.3], 2), vec![0.5, 0.5]);
+        let t = tidy_prior(&[0.001, 0.999], 2);
+        assert!((t[0] - MIN_PRIOR).abs() < 1e-9 && (t.iter().sum::<f64>() - 1.0).abs() < 1e-9, "{t:?}");
+        let t = tidy_prior(&[0.001, 0.002, 0.497, 0.5], 4);
+        assert!(t.iter().all(|p| *p >= MIN_PRIOR - 1e-9) && (t.iter().sum::<f64>() - 1.0).abs() < 1e-9, "{t:?}");
+        let t = tidy_prior(&[2.0, 6.0], 2);
+        assert_eq!(t, vec![0.25, 0.75]);
+    }
+
+    #[test]
+    fn categories_have_names_and_new_ones_show_under_their_own() {
+        assert_eq!(category_name("cfb"), "College Football");
+        assert_eq!(category_name(""), "Community");
+        assert_eq!(category_name("space_news"), "Space news");
+        assert_eq!(category_id("NFL"), "nfl");
+        assert_eq!(category_id("not a name!"), COMMUNITY);
+        // A prop from an older server (no category, no house): read as it was.
+        let old: PropView = serde_json::from_str(r#"{"id":3,"channel_id":1,"author":"a","author_name":"A","question":"Rain?","outcomes":["Yes","No"],"b":10000.0,"q":[0.0,0.0],"state":"open","winner":null,"created_at":1,"closes_at":0,"pool":0,"bets":0,"latest":[],"mine":[],"can_settle":true,"backing":6932,"settled_by":"","winners":[]}"#).unwrap();
+        assert_eq!((old.category_id().as_str(), old.house, old.history.len()), ("community", false, 0));
     }
 
     #[test]

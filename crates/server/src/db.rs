@@ -70,6 +70,17 @@ CREATE TABLE IF NOT EXISTS prop_bets (
 );
 CREATE INDEX IF NOT EXISTS prop_bets_by_prop ON prop_bets(prop_id);
 CREATE INDEX IF NOT EXISTS prop_bets_by_uid ON prop_bets(uid);
+CREATE TABLE IF NOT EXISTS prop_feed (feed_id TEXT PRIMARY KEY, prop_id INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS prop_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    prop_id INTEGER NOT NULL,
+    net INTEGER NOT NULL,
+    staked INTEGER NOT NULL,
+    won INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS prop_results_by_at ON prop_results(at);
 CREATE TABLE IF NOT EXISTS poker_records (
     uid TEXT PRIMARY KEY,
     record TEXT NOT NULL,
@@ -622,10 +633,21 @@ impl Db {
         st.query_map(params![limit as i64], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
     }
 
-    /// Open props (to close the ones whose time came, and call off forgotten ones).
+    /// The newest props members opened in channels, in these states (the casino's own, which
+    /// are in no channel, left out: for an app that doesn't know them).
+    pub fn props_recent_in_channels(&self, states: &[&str], limit: usize) -> Vec<String> {
+        let c = self.conn.lock();
+        let marks = states.iter().map(|s| format!("'{s}'")).collect::<Vec<_>>().join(",");
+        let sql = format!("SELECT data FROM props WHERE channel_id != 0 AND state IN ({marks}) ORDER BY id DESC LIMIT ?1");
+        let Ok(mut st) = c.prepare(&sql) else { return Vec::new() };
+        st.query_map(params![limit as i64], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
+    }
+
+    /// Open props, oldest first (to close the ones whose time came, and call off forgotten
+    /// ones).
     pub fn props_open(&self) -> Vec<String> {
         let c = self.conn.lock();
-        let Ok(mut st) = c.prepare("SELECT data FROM props WHERE state IN ('open', 'closed')") else { return Vec::new() };
+        let Ok(mut st) = c.prepare("SELECT data FROM props WHERE state IN ('open', 'closed') ORDER BY id") else { return Vec::new() };
         st.query_map([], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
     }
 
@@ -652,6 +674,75 @@ impl Db {
         let c = self.conn.lock();
         let Ok(mut st) = c.prepare("SELECT uid, outcome, chips, shares, kind, at FROM prop_bets WHERE prop_id = ?1 ORDER BY id") else { return Vec::new() };
         st.query_map([prop_id as i64], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as usize, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
+    // ---- the casino's own props (0.15): which prop here is which of the feed's, the props
+    // someone has something on, and how everyone did.
+
+    /// The props here that came from the feed: the feed's name for each, and its number here.
+    pub fn prop_feed_map(&self) -> HashMap<String, u64> {
+        let c = self.conn.lock();
+        let Ok(mut st) = c.prepare("SELECT feed_id, prop_id FROM prop_feed") else { return HashMap::new() };
+        st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))).map(|rows| rows.flatten().collect()).unwrap_or_default()
+    }
+
+    pub fn prop_feed_set(&self, feed_id: &str, prop_id: u64) -> Result<()> {
+        self.conn.lock().execute("INSERT INTO prop_feed(feed_id, prop_id) VALUES (?1, ?2) ON CONFLICT(feed_id) DO UPDATE SET prop_id = excluded.prop_id", params![feed_id, prop_id as i64])?;
+        Ok(())
+    }
+
+    /// A prop nobody bet on, gone for good (the casino's own, once they're over).
+    pub fn prop_delete(&self, id: u64) -> Result<()> {
+        let c = self.conn.lock();
+        c.execute("DELETE FROM props WHERE id = ?1", [id as i64])?;
+        c.execute("DELETE FROM prop_feed WHERE prop_id = ?1", [id as i64])?;
+        c.execute("DELETE FROM prop_bets WHERE prop_id = ?1", [id as i64])?;
+        Ok(())
+    }
+
+    /// The casino's own props that are over (settled or called off) and that nobody ever bet
+    /// on, oldest first: their numbers and what's kept of them.
+    pub fn props_house_unbet_over(&self, limit: usize) -> Vec<(u64, String)> {
+        let c = self.conn.lock();
+        let sql = "SELECT id, data FROM props WHERE channel_id = 0 AND author = '' AND state IN ('settled', 'void') AND NOT EXISTS (SELECT 1 FROM prop_bets b WHERE b.prop_id = props.id) ORDER BY id LIMIT ?1";
+        let Ok(mut st) = c.prepare(sql) else { return Vec::new() };
+        st.query_map([limit as i64], |r| Ok((r.get::<_, i64>(0)? as u64, r.get(1)?))).map(|rows| rows.flatten().collect()).unwrap_or_default()
+    }
+
+    /// How many of the casino's own props are open or waiting for their result.
+    pub fn props_house_open(&self) -> usize {
+        self.conn
+            .lock()
+            .query_row("SELECT COUNT(*) FROM props WHERE channel_id = 0 AND author = '' AND state IN ('open', 'closed')", [], |r| r.get::<_, i64>(0))
+            .unwrap_or(0) as usize
+    }
+
+    /// The props someone has (or had) something on, newest first.
+    pub fn props_of(&self, uid: &str, limit: usize) -> Vec<String> {
+        let c = self.conn.lock();
+        let Ok(mut st) = c.prepare("SELECT data FROM props WHERE id IN (SELECT DISTINCT prop_id FROM prop_bets WHERE uid = ?1) ORDER BY id DESC LIMIT ?2") else { return Vec::new() };
+        st.query_map(params![uid, limit as i64], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
+    }
+
+    /// How someone came out of a prop (settled, or a bet cashed out): what they got less what
+    /// they'd put in.
+    pub fn prop_result_record(&self, uid: &str, at: i64, prop_id: u64, net: i64, staked: u64, won: bool) -> Result<()> {
+        self.conn.lock().execute(
+            "INSERT INTO prop_results(uid, at, prop_id, net, staked, won) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![uid, at, prop_id as i64, net, staked as i64, won as i64],
+        )?;
+        Ok(())
+    }
+
+    /// How everyone did on props since `since` (ms), best first: (uid, net, staked, props,
+    /// wins, biggest win).
+    pub fn prop_leaders(&self, since: i64) -> Vec<(String, i64, u64, u32, u32, i64)> {
+        let c = self.conn.lock();
+        let sql = "SELECT uid, SUM(net), SUM(staked), COUNT(DISTINCT prop_id), SUM(won), MAX(net) FROM prop_results WHERE at >= ?1 GROUP BY uid ORDER BY SUM(net) DESC, uid";
+        let Ok(mut st) = c.prepare(sql) else { return Vec::new() };
+        st.query_map([since], |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)?.max(0) as u64, r.get::<_, i64>(3)? as u32, r.get::<_, i64>(4)? as u32, r.get::<_, i64>(5)?.max(0))))
             .map(|rows| rows.flatten().collect())
             .unwrap_or_default()
     }

@@ -350,7 +350,9 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
     let groups = caps.iter().any(|c| c == GROUPS_CAP);
     let feedback = caps.iter().any(|c| c == VIDEO_FEEDBACK_CAP);
     let movable = caps.iter().any(|c| c == MOVE_CAP);
-    let casino = if caps.iter().any(|c| c == PROPS_CAP) {
+    let casino = if caps.iter().any(|c| c == PROPS2_CAP) {
+        pyr_poker::net::CASINO_PROPS2
+    } else if caps.iter().any(|c| c == PROPS_CAP) {
         pyr_poker::net::CASINO_PROPS
     } else if caps.iter().any(|c| c == CASINO_01311_CAP) {
         pyr_poker::net::CASINO_01311
@@ -2116,7 +2118,9 @@ impl Ctx<'_> {
                     | pyr_poker::net::ToServer::PropSettle { .. }
                     | pyr_poker::net::ToServer::PropVoid { .. }
                     | pyr_poker::net::ToServer::PropGet { .. }
-                    | pyr_poker::net::ToServer::PropList { .. }),
+                    | pyr_poker::net::ToServer::PropList { .. }
+                    | pyr_poker::net::ToServer::PropStats { .. }
+                    | pyr_poker::net::ToServer::PropAuto { .. }),
             } => {
                 if !self.prop_tokens.take(1.0) {
                     return Err((ErrorCode::RateLimited, "Slow down a little.".into()));
@@ -2124,9 +2128,15 @@ impl Ctx<'_> {
                 if let pyr_poker::net::ToServer::PropOpen { channel_id, .. } = &msg {
                     self.can_post(*channel_id)?;
                 }
+                // An app that knows the casino's own props and asks for every prop (Prop Bets'
+                // window, open): it hears of them as they change for a while.
+                let house = self.casino >= pyr_poker::net::CASINO_PROPS2;
+                if house && matches!(msg, pyr_poker::net::ToServer::PropList { channel_id: 0 }) {
+                    hub.watch_props(self.conn_id, crate::poker::props::WATCH_SECS);
+                }
                 let sees = |ch: i64| self.can_see(ch).is_ok();
                 let moderates = |ch: i64| hub.moderates(&self.uid, ch);
-                let who = crate::poker::props::Asker { uid: &self.uid, sees: &sees, moderates: &moderates };
+                let who = crate::poker::props::Asker { uid: &self.uid, sees: &sees, moderates: &moderates, manages: self.can(perm::MANAGE_SERVER), house, conn: Some(self.conn_id) };
                 match hub.poker.props(hub, &who, msg) {
                     Ok(Some(msg)) => match msg.for_app(self.casino) {
                         Some(msg) => Ok(Event::Poker { msg }),
@@ -2889,12 +2899,13 @@ mod tests {
             Ok(Event::Bugs { reports }) => reports,
             other => panic!("{other:?}"),
         };
-        // It fits in one reply, with what's waiting first.
+        // It fits in one reply, with the approved ones first (they're what gets fixed, and the
+        // owner's Pyr saves them from this list: see `Db::bugs`).
         assert!(!reports.is_empty());
         let b = frame(1, Event::Bugs { reports: reports.clone() });
         assert!(b.len() <= pyr_proto::MAX_CONTROL_FRAME, "{} bytes", b.len());
-        assert!(reports.iter().all(|r| r.status == BugStatus::New), "the new ones come first");
-        assert_eq!(reports[0].report.title, "report 59", "newest first");
+        assert!(reports.iter().all(|r| r.status == BugStatus::Approved), "the approved ones come first");
+        assert_eq!(reports[0].report.title, "report 58", "newest first");
     }
 
     #[test]

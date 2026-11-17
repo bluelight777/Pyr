@@ -485,6 +485,13 @@ pub const PROPS_CAP: &str = "prop_bets";
 /// The server lists every prop in the channels I can read, settled ones too (`PropList` for
 /// channel 0: Prop Bets' own window). Without it, the window asks each channel for its open ones.
 pub const PROPS_LIST_FEATURE: &str = "prop_bets_list";
+/// The casino's own props (0.15): props in categories that open, close and settle by
+/// themselves (from the props feed, `props_feed`, and the casino's own numbers), once whoever
+/// manages the server turns them on; the best at props; a member's prop in a category. Apps
+/// say [`PROPS2_CAP`] to be told about them (an app without is told of members' props only, as
+/// before).
+pub const PROPS_HOUSE_FEATURE: &str = "prop_bets_house";
+pub const PROPS2_CAP: &str = "prop_bets_2";
 /// In `Login::caps`: this app updates with the new release key (the rebuild's: the one before
 /// was lost). A server tells an app without it, as it logs in, that a new Pyr is out and where
 /// to get it ([`NEW_PYR_NOTE`]): its Update button can't offer it.

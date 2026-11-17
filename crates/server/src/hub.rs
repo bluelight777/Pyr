@@ -220,6 +220,8 @@ pub struct Hub {
     /// The invite directory at pyr.gg, while short links can work here (see
     /// [`crate::directory`]).
     pub directory: std::sync::OnceLock<crate::directory::Directory>,
+    /// The props feed's reader, while it runs (see `props_feed`).
+    pub props_feed: std::sync::OnceLock<crate::props_feed::Follower>,
     /// Why short links can't work here (the server's address only works on its own PC, or it
     /// was started without them).
     pub short_links_off_why: std::sync::OnceLock<String>,
@@ -289,6 +291,9 @@ struct Client {
     away_since: Option<Instant>,
     /// Its person said Do Not Disturb there (`SetDnd`).
     dnd: bool,
+    /// Until when it hears of the casino's own props as they change (Prop Bets' window asked
+    /// for them all: `ToServer::PropList` for channel 0, from an app with `PROPS2_CAP`).
+    props_watch: Option<Instant>,
 }
 
 struct Voice {
@@ -567,6 +572,7 @@ impl Hub {
             submission_asks: Mutex::new(HashMap::new()),
             uploads: Mutex::new(HashMap::new()),
             directory: std::sync::OnceLock::new(),
+            props_feed: std::sync::OnceLock::new(),
             short_links_off_why: std::sync::OnceLock::new(),
             signing: std::sync::OnceLock::new(),
             vanity_change: tokio::sync::Mutex::new(()),
@@ -1194,6 +1200,42 @@ impl Hub {
         }
     }
 
+    /// A poker message to one connection (as its app can read it).
+    pub fn send_poker_to(&self, conn_id: ConnId, msg: pyr_poker::net::ToApp) {
+        if let Some(c) = self.inner.lock().clients.get(&conn_id)
+            && let Some(m) = msg.for_app(c.casino)
+        {
+            let _ = c.tx.send(frame(0, Event::Poker { msg: m }));
+        }
+    }
+
+    /// This connection hears of the casino's own props as they change, for `secs` from now.
+    pub fn watch_props(&self, conn_id: ConnId, secs: u64) {
+        if let Some(c) = self.inner.lock().clients.get_mut(&conn_id) {
+            c.props_watch = Some(Instant::now() + std::time::Duration::from_secs(secs));
+        }
+    }
+
+    /// The casino's own props (anyone's to see) as they change, to the apps watching them
+    /// (`watch_props`) and to `also` (who have something on them), each their own view.
+    pub fn send_props_house(&self, also: &dyn Fn(&str) -> bool, view: &dyn Fn(&str) -> Option<pyr_poker::net::ToApp>) {
+        let now = Instant::now();
+        let targets: Vec<(UserId, Outbox)> = self
+            .inner
+            .lock()
+            .clients
+            .values()
+            .filter(|c| c.casino >= pyr_poker::net::CASINO_PROPS2 && (c.props_watch.is_some_and(|t| t > now) || also(&c.user_id)))
+            .map(|c| (c.user_id.clone(), c.tx.clone()))
+            .collect();
+        let mut made: HashMap<UserId, Option<Bytes>> = HashMap::new();
+        for (uid, tx) in targets {
+            if let Some(b) = made.entry(uid.clone()).or_insert_with(|| view(&uid).map(|msg| frame(0, Event::Poker { msg }))) {
+                let _ = tx.send(b.clone());
+            }
+        }
+    }
+
     /// A poker message to everyone online whose app knows Pyr Casino from `min` on (the casino's
     /// chat, from 0.13.0).
     pub fn broadcast_poker_from(&self, min: u8, msg: pyr_poker::net::ToApp) {
@@ -1237,6 +1279,12 @@ impl Hub {
             return perm::ALL;
         }
         self.db.roles().iter().filter(|r| mine.contains(&r.id)).fold(0, |acc, r| acc | r.perms)
+    }
+
+    /// Whether someone manages the server (Manage server: the casino's own props are theirs
+    /// to turn on, and to call off).
+    pub fn manages(&self, uid: &str) -> bool {
+        self.perms_of(uid) & perm::MANAGE_SERVER != 0
     }
 
     /// Whether someone moderates a channel's messages (Manage messages; nobody does in a
@@ -1508,6 +1556,7 @@ impl Hub {
                 idle: false,
                 away_since: None,
                 dnd: false,
+                props_watch: None,
             },
         );
         let mut members = self.db.members();
@@ -1532,7 +1581,7 @@ impl Hub {
             // (Private conversations' calls only for their own people.)
             voice: inner.voice.values().filter(|v| v.audience.as_ref().is_none_or(|who| who.iter().any(|w| w == uid))).map(|v| v.p.clone()).collect(),
             roles: self.db.roles(),
-            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, AWAY_FEATURE, DND_FEATURE, BIG_FILES_FEATURE, GIFS_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE, VOUCHES_FOR_ME_FEATURE, PRIVATE_CHANNELS_FEATURE, BOTS_FEATURE, INVITES_FEATURE, POKER_FEATURE, SEALED_FEATURE, CHANNEL_ORDER_FEATURE, MOVE_FEATURE, AFK_FEATURE, VOICE_INVITE_FEATURE, CASINO_012_FEATURE, CASINO_013_FEATURE, LEVELS_FEATURE, PLINKO_FEATURE, CMS_FEATURE, GM_UNLIMITED_FEATURE, DM_FILES_FEATURE, PROPS_FEATURE, PROPS_LIST_FEATURE, CASINO_100K_FEATURE, BIG_SLOT_BETS_FEATURE, SLOTS_100K_FEATURE, HIGH_TABLES_FEATURE, CRAPS_BUY_LAY_FEATURE, REMASTER_FEATURE, BIG_BOMB_POTS_FEATURE, BOUNTY_POKER_FEATURE, POKER_PICK_BOT_FEATURE, HARD_BOTS_FEATURE, POKER_RABBIT_FEATURE, POKER_STRADDLE_FEATURE, POKER_TOP_UP_ANYTIME_FEATURE, HIDE_TITLE_FEATURE, DOMINO_FEATURE].iter().map(|s| s.to_string()).chain(dev_features()).collect(),
+            features: [ROLES_FEATURE, FILES_FEATURE, AVATARS_FEATURE, DMS_FEATURE, ICONS_FEATURE, EMOJI_FEATURE, FRIENDS_FEATURE, BACKUP_FEATURE, GIPHY_FEATURE, BUGS_FEATURE, CHANNEL_NEWEST_FEATURE, SOUNDBOARD_FEATURE, VOICE_MOD_FEATURE, KLIPY_FEATURE, PLUGINS_FEATURE, DM_CALLS_FEATURE, GROUPS_FEATURE, IDLE_FEATURE, AWAY_FEATURE, DND_FEATURE, BIG_FILES_FEATURE, GIFS_FEATURE, HANDSHAKE_FEATURE, VOUCHES_FEATURE, VOUCHES_FOR_ME_FEATURE, PRIVATE_CHANNELS_FEATURE, BOTS_FEATURE, INVITES_FEATURE, POKER_FEATURE, SEALED_FEATURE, CHANNEL_ORDER_FEATURE, MOVE_FEATURE, AFK_FEATURE, VOICE_INVITE_FEATURE, CASINO_012_FEATURE, CASINO_013_FEATURE, LEVELS_FEATURE, PLINKO_FEATURE, CMS_FEATURE, GM_UNLIMITED_FEATURE, DM_FILES_FEATURE, PROPS_FEATURE, PROPS_LIST_FEATURE, PROPS_HOUSE_FEATURE, CASINO_100K_FEATURE, BIG_SLOT_BETS_FEATURE, SLOTS_100K_FEATURE, HIGH_TABLES_FEATURE, CRAPS_BUY_LAY_FEATURE, REMASTER_FEATURE, BIG_BOMB_POTS_FEATURE, BOUNTY_POKER_FEATURE, POKER_PICK_BOT_FEATURE, HARD_BOTS_FEATURE, POKER_RABBIT_FEATURE, POKER_STRADDLE_FEATURE, POKER_TOP_UP_ANYTIME_FEATURE, HIDE_TITLE_FEATURE, DOMINO_FEATURE].iter().map(|s| s.to_string()).chain(dev_features()).collect(),
             dms: self.db.dms_of(uid),
             relations: self.db.relations_of(uid),
             groups: if groups { self.db.groups_of(uid) } else { Vec::new() },

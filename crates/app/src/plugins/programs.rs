@@ -35,11 +35,23 @@ pub enum Asked {
 pub enum PropAsk {
     Bet { id: u64, outcome: usize, chips: u64, min_shares: f64 },
     CashOut { id: u64, outcome: usize },
-    Open { channel: i64, question: String, outcomes: Vec<String>, depth: u64, closes_in: u64 },
+    Open { channel: i64, question: String, outcomes: Vec<String>, depth: u64, closes_in: u64, category: String },
     Settle { id: u64, outcome: usize },
     Void { id: u64 },
     /// Every prop again (the window's Refresh).
     Refresh,
+    /// The window says which way it's told of props (0.15's: 2, only what changed each time;
+    /// one that never says is told every prop each time, as 0.14's is).
+    Hello { v: u32 },
+    /// One prop looked up now, with how its odds went (the window showing it).
+    Look { id: u64 },
+    /// The server's best at props over so many days (0: since ever).
+    Stats { days: u32 },
+    /// How the casino's own props stand on the server, or (`set`) turning them on or off
+    /// there: which categories, how deep.
+    Auto { set: Option<pyr_poker::props::PropAutoSet> },
+    /// A prop's card posted in the channel showing in Pyr.
+    Share { id: u64 },
 }
 
 /// A line from a program, if it asks Pyr for something.
@@ -62,11 +74,26 @@ pub fn asked(line: &str) -> Option<Asked> {
             if outcomes.len() > pyr_poker::props::MAX_OUTCOMES {
                 return None;
             }
-            Some(Asked::Prop(PropAsk::Open { channel: v["channel"].as_i64()?, question, outcomes, depth: num("depth")?, closes_in: num("closes_in").unwrap_or(0) }))
+            let category = text("category").map(|c| pyr_poker::props::category_id(&c)).unwrap_or_default();
+            Some(Asked::Prop(PropAsk::Open { channel: v["channel"].as_i64()?, question, outcomes, depth: num("depth")?, closes_in: num("closes_in").unwrap_or(0), category }))
         }
         "prop_settle" => Some(Asked::Prop(PropAsk::Settle { id: num("id")?, outcome: outcome()? })),
         "prop_void" => Some(Asked::Prop(PropAsk::Void { id: num("id")? })),
         "props_refresh" => Some(Asked::Prop(PropAsk::Refresh)),
+        "props_hello" => Some(Asked::Prop(PropAsk::Hello { v: num("v").filter(|v| *v <= 1000)? as u32 })),
+        "prop_look" => Some(Asked::Prop(PropAsk::Look { id: num("id")? })),
+        "prop_stats" => Some(Asked::Prop(PropAsk::Stats { days: num("days").unwrap_or(0).min(3650) as u32 })),
+        "prop_auto" => {
+            let set = match &v["set"] {
+                Value::Null => None,
+                set => {
+                    let off: Vec<String> = set["off"].as_array().map(|a| a.iter().filter_map(|c| c.as_str()).take(64).map(pyr_poker::props::category_id).collect()).unwrap_or_default();
+                    Some(pyr_poker::props::PropAutoSet { on: set["on"].as_bool()?, off, depth: set["depth"].as_u64().unwrap_or(0) })
+                }
+            };
+            Some(Asked::Prop(PropAsk::Auto { set }))
+        }
+        "prop_share" => Some(Asked::Prop(PropAsk::Share { id: num("id")? })),
         _ => None,
     }
 }
@@ -1160,8 +1187,23 @@ mod tests {
         assert_eq!(asked(r#"@pyr {"op":"prop_cash_out","id":12,"outcome":0}"#), Some(Asked::Prop(PropAsk::CashOut { id: 12, outcome: 0 })));
         assert_eq!(
             asked(r#"@pyr {"op":"prop_open","channel":3,"question":" Rain? ","outcomes":["Yes","No"],"depth":10000,"closes_in":3600}"#),
-            Some(Asked::Prop(PropAsk::Open { channel: 3, question: "Rain?".into(), outcomes: vec!["Yes".into(), "No".into()], depth: 10_000, closes_in: 3600 }))
+            Some(Asked::Prop(PropAsk::Open { channel: 3, question: "Rain?".into(), outcomes: vec!["Yes".into(), "No".into()], depth: 10_000, closes_in: 3600, category: String::new() }))
         );
+        // 0.15's window: a category, one prop looked up, the best at props, the casino's own.
+        assert_eq!(
+            asked(r#"@pyr {"op":"prop_open","channel":3,"question":"Who wins Friday's tourney?","outcomes":["Blue","Maanix"],"depth":10000,"category":"Casino"}"#),
+            Some(Asked::Prop(PropAsk::Open { channel: 3, question: "Who wins Friday's tourney?".into(), outcomes: vec!["Blue".into(), "Maanix".into()], depth: 10_000, closes_in: 0, category: "casino".into() }))
+        );
+        assert_eq!(asked(r#"@pyr {"op":"props_hello","v":2}"#), Some(Asked::Prop(PropAsk::Hello { v: 2 })));
+        assert_eq!(asked(r#"@pyr {"op":"prop_look","id":7}"#), Some(Asked::Prop(PropAsk::Look { id: 7 })));
+        assert_eq!(asked(r#"@pyr {"op":"prop_stats","days":7}"#), Some(Asked::Prop(PropAsk::Stats { days: 7 })));
+        assert_eq!(asked(r#"@pyr {"op":"prop_auto"}"#), Some(Asked::Prop(PropAsk::Auto { set: None })));
+        assert_eq!(
+            asked(r#"@pyr {"op":"prop_auto","set":{"on":true,"off":["Weather","art"],"depth":100000}}"#),
+            Some(Asked::Prop(PropAsk::Auto { set: Some(pyr_poker::props::PropAutoSet { on: true, off: vec!["weather".into(), "art".into()], depth: 100_000 }) }))
+        );
+        assert_eq!(asked(r#"@pyr {"op":"prop_auto","set":{"off":[]}}"#), None, "on or off has to be said");
+        assert_eq!(asked(r#"@pyr {"op":"prop_share","id":7}"#), Some(Asked::Prop(PropAsk::Share { id: 7 })));
         assert_eq!(asked(r#"@pyr {"op":"prop_settle","id":12,"outcome":0}"#), Some(Asked::Prop(PropAsk::Settle { id: 12, outcome: 0 })));
         assert_eq!(asked(r#"@pyr {"op":"prop_void","id":12}"#), Some(Asked::Prop(PropAsk::Void { id: 12 })));
         assert_eq!(asked(r#"@pyr {"op":"props_refresh"}"#), Some(Asked::Prop(PropAsk::Refresh)));

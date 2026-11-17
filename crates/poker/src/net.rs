@@ -283,7 +283,17 @@ pub enum ToServer {
     /// an outcome (`min_shares`: what the app said it pays, less a little: the odds may move),
     /// sell an outcome's shares back, settle it or call it off (its author or a moderator),
     /// and look props up.
-    PropOpen { channel_id: i64, question: String, outcomes: Vec<String>, depth: u64, closes_in: u64 },
+    /// (`category`, servers with `PROPS_HOUSE_FEATURE`: one of `props::CATEGORIES`, or none
+    /// for `community`.)
+    PropOpen {
+        channel_id: i64,
+        question: String,
+        outcomes: Vec<String>,
+        depth: u64,
+        closes_in: u64,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        category: String,
+    },
     PropBet { id: u64, outcome: usize, chips: u64, min_shares: f64 },
     PropCashOut { id: u64, outcome: usize },
     PropSettle { id: u64, outcome: usize },
@@ -291,7 +301,20 @@ pub enum ToServer {
     PropGet { ids: Vec<u64> },
     /// The props open in a channel (newest first); channel 0: every prop in the channels I can
     /// read, open or not (Prop Bets' own window: newest first, at most `props::MAX_LISTED`).
+    /// From an app that knows the casino's own props (`PROPS2_CAP`), channel 0 is those too:
+    /// every open prop, the ones I've something on, and the latest settled, a hundred a
+    /// message; and the app hears of the casino's props as they change for a while after
+    /// (asked again every few minutes while Prop Bets' window is open).
     PropList { channel_id: i64 },
+    /// The casino's own props (servers with `PROPS_HOUSE_FEATURE`). The server's best at
+    /// props over `days` (0: since ever), and me among them.
+    PropStats { days: u32 },
+    /// Whether the casino's own props are on here, and which (`set`: whoever manages the
+    /// server turns them on or off; without: just asking).
+    PropAuto {
+        #[serde(default)]
+        set: Option<crate::props::PropAutoSet>,
+    },
 }
 
 /// The home of Pyr Casino's Game Masters: Brethren of Blood, by its server's fingerprint
@@ -693,12 +716,21 @@ pub enum ToApp {
     PropOpened { prop: crate::props::PropView },
     /// What happened to me on a prop: a bet taken, a payout, chips back.
     PropNote { id: u64, text: String, chips: i64 },
+    /// The server's best at props, as asked (`ToServer::PropStats`).
+    PropStats { stats: crate::props::PropStats },
+    /// The casino's own props here, as asked or as just set (`ToServer::PropAuto`).
+    PropAuto { auto: crate::props::PropAuto },
 }
 
 impl ToApp {
     /// A prop bets message: only for apps that say they read them (`PROPS_CAP`).
     pub fn is_props(&self) -> bool {
-        matches!(self, ToApp::Props { .. } | ToApp::PropOpened { .. } | ToApp::PropNote { .. })
+        matches!(self, ToApp::Props { .. } | ToApp::PropOpened { .. } | ToApp::PropNote { .. } | ToApp::PropStats { .. } | ToApp::PropAuto { .. })
+    }
+
+    /// One only an app that knows the casino's own props reads (`PROPS2_CAP`).
+    pub fn is_props2(&self) -> bool {
+        matches!(self, ToApp::PropStats { .. } | ToApp::PropAuto { .. })
     }
 }
 
@@ -714,12 +746,15 @@ pub const CASINO_01311: u8 = 30;
 /// An app that also reads prop bets (`PROPS_CAP`, the rebuild's): above every 0.13 level (an
 /// app that says it knows everything that came before).
 pub const CASINO_PROPS: u8 = 100;
+/// An app that also knows the casino's own props (`PROPS2_CAP`, 0.15): categories, props that
+/// open and settle by themselves, the best at props.
+pub const CASINO_PROPS2: u8 = 110;
 
 impl ToApp {
     /// This message as an app that knows Pyr Casino up to `casino` can read it (`None`: one it
     /// can't, left unsent).
     pub fn for_app(self, casino: u8) -> Option<ToApp> {
-        if self.is_props() && casino < CASINO_PROPS {
+        if self.is_props() && casino < CASINO_PROPS || self.is_props2() && casino < CASINO_PROPS2 {
             return None;
         }
         // (Dominó's tables only to apps that know them.)

@@ -10,6 +10,7 @@ pub mod db;
 pub mod directory;
 pub mod hub;
 pub mod poker;
+pub mod props_feed;
 pub mod tls;
 
 use std::net::SocketAddr;
@@ -220,6 +221,11 @@ pub async fn start_with(cfg: ServerConfig, invite_directory: Option<String>) -> 
         None => {
             let _ = hub.short_links_off_why.set("This server was started with short links off (--directory off).".into());
         }
+    }
+
+    // The casino's own props: the feed they come from is read while they're on here.
+    if let Some(url) = props_feed::feed_url() {
+        let _ = hub.props_feed.set(props_feed::start(&hub, url));
     }
 
     // How everyone's viewers are getting on with their camera or screen share.

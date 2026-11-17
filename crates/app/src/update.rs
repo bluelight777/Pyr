@@ -658,6 +658,13 @@ const LINUX_HELPER: &str = "/usr/lib/pyr/install-update";
 mod tests {
     use super::*;
 
+    /// The one release key, wherever it's written down (servers check the props feed with
+    /// `pyr_proto::release::RELEASE_KEY`).
+    #[test]
+    fn the_release_key_is_the_same_everywhere() {
+        assert_eq!(RELEASE_KEY, pyr_proto::release::RELEASE_KEY);
+    }
+
     #[cfg(unix)]
     #[test]
     fn linux_install_checks_the_copy_it_installs() {
