@@ -174,6 +174,16 @@ longer freezing as a program opens, and bug reports sent again (the address fixe
 filled in, the address in both programs, the Linux build starting on a test screen. On Blue's
 PC in `Downloads\pyr-release-0.14.1`; he publishes it with `publish.cmd`.
 
+0.14.2 (built Nov 17): Prop Bets in the Pyr Library with Pyr's side of it, voice isolation
+keeping a TV across the room out (Mag's mother's TV), Linux's "closed by mistake", and all of
+0.14.1 (which wasn't published: 0.14.2's notes carry its lines too). Checked: `latest2.json`
+signed with the new key (0.14.1 and 0.14.2 in its released list), both downloads' hashes, the
+page with 0.14.2, the bug server's address in both programs, the Linux build starting on a test
+screen, Prop Bets' release builds (its listing signed and endorsed, its files' hashes; the
+Linux one tried with a stand-in for Pyr). On Blue's PC in `Downloads\pyr-release-0.14.2`; he
+publishes it with `publish.cmd`. Not tried: Prop Bets inside Pyr's window on Windows, and
+isolation with a real TV.
+
 0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
 Blue's pyr.log, Nov 17, "couldn't find the server "SERVER2.24.121.231": No such host is known".
 The bug server's address in `release-env.sh` had been read out of 0.13.28's program with the
