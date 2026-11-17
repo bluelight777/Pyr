@@ -556,6 +556,9 @@ pub struct UiState {
     pub program_updates: Vec<crate::game_bridge::ProgramUpdate>,
     /// A game invited to and being installed: opened in that room once it is (game, room).
     pub pending_play: Option<(String, String)>,
+    /// What Prop Bets' own window was last told: the server, its props' version, my chips and
+    /// whether it has prop bets (it's told again when any of it changes).
+    pub prop_bets_told: Option<(String, u64, Option<u64>, bool)>,
     /// Prop bets: the bet being picked on a card, and the New prop bet window.
     pub prop_betting: Option<crate::props::Betting>,
     pub new_prop: Option<crate::props::NewProp>,

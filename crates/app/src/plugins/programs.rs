@@ -26,15 +26,47 @@ pub enum Asked {
     Invite { uid: String, room: String },
     /// Close it, update it from the Library and open it again, in `room` (0.13.27).
     Update { room: Option<String> },
+    /// Prop Bets' own window, on the server showing in Pyr (answered for that program only).
+    Prop(PropAsk),
+}
+
+/// What Prop Bets' own window asks of the server showing in Pyr: as a prop's card in chat does.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PropAsk {
+    Bet { id: u64, outcome: usize, chips: u64, min_shares: f64 },
+    CashOut { id: u64, outcome: usize },
+    Open { channel: i64, question: String, outcomes: Vec<String>, depth: u64, closes_in: u64 },
+    Settle { id: u64, outcome: usize },
+    Void { id: u64 },
+    /// Every prop again (the window's Refresh).
+    Refresh,
 }
 
 /// A line from a program, if it asks Pyr for something.
 pub fn asked(line: &str) -> Option<Asked> {
     let v: Value = serde_json::from_str(line.trim_end().strip_prefix("@pyr ")?).ok()?;
     let text = |k: &str| v[k].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s.len() <= 64);
+    let num = |k: &str| v[k].as_u64();
+    let outcome = || num("outcome").filter(|o| (*o as usize) < pyr_poker::props::MAX_OUTCOMES).map(|o| o as usize);
     match v["op"].as_str()? {
         "invite" => Some(Asked::Invite { uid: text("uid")?, room: text("room")? }),
         "update" => Some(Asked::Update { room: text("room") }),
+        "prop_bet" => {
+            let min_shares = v["min_shares"].as_f64().filter(|s| s.is_finite() && *s >= 0.0)?;
+            Some(Asked::Prop(PropAsk::Bet { id: num("id")?, outcome: outcome()?, chips: num("chips")?, min_shares }))
+        }
+        "prop_cash_out" => Some(Asked::Prop(PropAsk::CashOut { id: num("id")?, outcome: outcome()? })),
+        "prop_open" => {
+            let question = v["question"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s.chars().count() <= 300)?;
+            let outcomes: Vec<String> = v["outcomes"].as_array()?.iter().filter_map(|o| o.as_str()).map(|o| o.trim().chars().take(80).collect()).collect();
+            if outcomes.len() > pyr_poker::props::MAX_OUTCOMES {
+                return None;
+            }
+            Some(Asked::Prop(PropAsk::Open { channel: v["channel"].as_i64()?, question, outcomes, depth: num("depth")?, closes_in: num("closes_in").unwrap_or(0) }))
+        }
+        "prop_settle" => Some(Asked::Prop(PropAsk::Settle { id: num("id")?, outcome: outcome()? })),
+        "prop_void" => Some(Asked::Prop(PropAsk::Void { id: num("id")? })),
+        "props_refresh" => Some(Asked::Prop(PropAsk::Refresh)),
         _ => None,
     }
 }
@@ -1111,6 +1143,29 @@ mod tests {
         assert_eq!(asked(r#"@pyr {"op":"invite","uid":"u1"}"#), None, "an invite needs a room");
         assert_eq!(asked_line("loading models"), None, "not for Pyr");
         assert_eq!(asked_line(r#"@pyr {"op":"dance"}"#), Some(None), "for Pyr, but not something it does");
+    }
+
+    #[test]
+    fn prop_bets_window_asks_for_bets_and_props() {
+        assert_eq!(
+            asked(r#"@pyr {"op":"prop_bet","id":12,"outcome":1,"chips":500,"min_shares":980.5}"#),
+            Some(Asked::Prop(PropAsk::Bet { id: 12, outcome: 1, chips: 500, min_shares: 980.5 }))
+        );
+        assert_eq!(asked(r#"@pyr {"op":"prop_cash_out","id":12,"outcome":0}"#), Some(Asked::Prop(PropAsk::CashOut { id: 12, outcome: 0 })));
+        assert_eq!(
+            asked(r#"@pyr {"op":"prop_open","channel":3,"question":" Rain? ","outcomes":["Yes","No"],"depth":10000,"closes_in":3600}"#),
+            Some(Asked::Prop(PropAsk::Open { channel: 3, question: "Rain?".into(), outcomes: vec!["Yes".into(), "No".into()], depth: 10_000, closes_in: 3600 }))
+        );
+        assert_eq!(asked(r#"@pyr {"op":"prop_settle","id":12,"outcome":0}"#), Some(Asked::Prop(PropAsk::Settle { id: 12, outcome: 0 })));
+        assert_eq!(asked(r#"@pyr {"op":"prop_void","id":12}"#), Some(Asked::Prop(PropAsk::Void { id: 12 })));
+        assert_eq!(asked(r#"@pyr {"op":"props_refresh"}"#), Some(Asked::Prop(PropAsk::Refresh)));
+        // Nothing half-said or out of range is done.
+        assert_eq!(asked(r#"@pyr {"op":"prop_bet","id":12,"outcome":9,"chips":500,"min_shares":1}"#), None, "no such outcome");
+        assert_eq!(asked(r#"@pyr {"op":"prop_bet","id":12,"outcome":0,"chips":-5,"min_shares":1}"#), None);
+        assert_eq!(asked(r#"@pyr {"op":"prop_bet","id":12,"outcome":0,"chips":5}"#), None, "what it was shown to pay");
+        assert_eq!(asked(r#"@pyr {"op":"prop_open","channel":3,"question":"","outcomes":[],"depth":10000}"#), None);
+        let seven = r#"["a","b","c","d","e","f","g"]"#;
+        assert_eq!(asked(&format!(r#"@pyr {{"op":"prop_open","channel":3,"question":"Q","outcomes":{seven},"depth":10000}}"#)), None);
     }
 
     #[test]

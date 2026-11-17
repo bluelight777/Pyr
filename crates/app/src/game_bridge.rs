@@ -68,13 +68,80 @@ impl PyrApp {
             self.plugins.programs.tell_newest(&|id: &str| newest.get(id).cloned());
             self.plugins.refresh(false);
         }
+        // Prop Bets' own window: the props of the server showing in Pyr, as they change.
+        if self.plugins.programs.get(crate::props::PROP_BETS).is_some() {
+            self.tell_prop_bets(st);
+        } else {
+            self.ui.prop_bets_told = None;
+        }
         for (id, a) in self.plugins.programs.take_asked() {
             match a {
                 Asked::Invite { uid, room } => self.invite_to_game(st, &id, uid, room),
                 Asked::Update { room } => self.update_program(&id, room),
+                Asked::Prop(ask) if id == crate::props::PROP_BETS => self.prop_bets_asked(ask, acts),
+                Asked::Prop(_) => tracing::warn!(program = %id, "a program other than Prop Bets asked about prop bets: not done"),
             }
         }
         self.updates_step(acts);
+    }
+
+    /// Tells Prop Bets' own window the props of the server showing in Pyr (every channel I can
+    /// read: asked for when it opens or the server changes), my chips, its text channels: when
+    /// any of it changed since it was last told.
+    fn tell_prop_bets(&mut self, st: &AppState) {
+        let s = self.ui.server.as_deref().and_then(|k| st.server(k));
+        let now = s.map(|s| (s.key.clone(), s.poker.props_version, s.poker.me.as_ref().map(|m| m.chips), s.has(pyr_proto::control::PROPS_FEATURE)));
+        if now == self.ui.prop_bets_told {
+            return;
+        }
+        // A server it hasn't seen yet: every prop, and my chips.
+        if let Some(s) = s.filter(|s| self.ui.prop_bets_told.as_ref().map(|t| &t.0) != Some(&s.key)) {
+            self.engine.prop_list_all(&s.key);
+            if s.poker.me.is_none() && s.has(pyr_proto::control::PROPS_FEATURE) {
+                self.engine.poker(&s.key, pyr_poker::net::ToServer::Lobby);
+            }
+        }
+        self.ui.prop_bets_told = now;
+        let line = match s {
+            Some(s) => {
+                let channels: Vec<serde_json::Value> = s
+                    .channels
+                    .iter()
+                    .filter(|c| c.kind == pyr_proto::control::ChannelKind::Text)
+                    .map(|c| json!({"id": c.id, "name": c.name}))
+                    .collect();
+                let props: Vec<&pyr_poker::props::PropView> = s.poker.props.values().rev().collect();
+                json!({
+                    "op": "props",
+                    "server": {"key": s.key, "name": s.info.name},
+                    "props_here": s.has(pyr_proto::control::PROPS_FEATURE),
+                    "me": st.my_uid,
+                    "chips": s.poker.me.as_ref().map(|m| m.chips),
+                    "channels": channels,
+                    "list": props,
+                })
+            }
+            None => json!({"op": "props", "server": null, "props_here": false, "list": []}),
+        };
+        self.plugins.programs.tell(crate::props::PROP_BETS, line);
+    }
+
+    /// What Prop Bets' own window asked: done on the server it was last told about, as a
+    /// prop's card in chat does it (the server checks it all).
+    fn prop_bets_asked(&mut self, ask: crate::plugins::programs::PropAsk, acts: &mut Vec<Act>) {
+        use crate::plugins::programs::PropAsk;
+        let Some(key) = self.ui.prop_bets_told.as_ref().map(|t| t.0.clone()) else { return };
+        acts.push(match ask {
+            PropAsk::Bet { id, outcome, chips, min_shares } => Act::PropBet { key, id, outcome, chips, min_shares },
+            PropAsk::CashOut { id, outcome } => Act::PropCashOut { key, id, outcome },
+            PropAsk::Open { channel, question, outcomes, depth, closes_in } => Act::PropOpen { key, channel, question, outcomes, depth, closes_in },
+            PropAsk::Settle { id, outcome } => Act::PropSettle { key, id, outcome },
+            PropAsk::Void { id } => Act::PropVoid { key, id },
+            PropAsk::Refresh => {
+                self.engine.prop_list_all(&key);
+                return;
+            }
+        });
     }
 
     /// A friend invited to a game's room: a direct message from me with its link (shown to

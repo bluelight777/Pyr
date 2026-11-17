@@ -155,6 +155,8 @@ pub struct PokerState {
     pub props_asked: BTreeMap<u64, Instant>,
     pub props_opened: Vec<pyr_poker::props::PropView>,
     pub prop_notes: Vec<(u64, String, i64)>,
+    /// Goes up whenever a prop is heard of or changes (Prop Bets' own window is told then).
+    pub props_version: u64,
     /// Invites to a table (0.13.6): the table, who from, its name, when it came. (Not from
     /// someone I've blocked; the newest last.)
     pub table_invites: Vec<(pyr_poker::net::TableRef, String, String, Instant)>,
@@ -561,10 +563,12 @@ impl PokerState {
                 for p in props {
                     self.props.insert(p.id, p);
                 }
+                self.props_version += 1;
             }
             ToApp::PropOpened { prop } => {
                 self.props.insert(prop.id, prop.clone());
                 self.props_opened.push(prop);
+                self.props_version += 1;
             }
             ToApp::PropNote { id, text, chips } => self.prop_notes.push((id, text, chips)),
         }

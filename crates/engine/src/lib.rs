@@ -1482,6 +1482,15 @@ impl Engine {
         self.prop_request(key, pyr_poker::net::ToServer::PropVoid { id });
     }
 
+    /// Every prop in the channels I can read (Prop Bets' own window; changes come by
+    /// themselves after).
+    pub fn prop_list_all(&self, key: &str) {
+        let has = self.shared.state.read_recursive().server(key).is_some_and(|s| s.has(pyr_proto::control::PROPS_FEATURE));
+        if has {
+            self.prop_request(key, pyr_poker::net::ToServer::PropList { channel_id: 0 });
+        }
+    }
+
     /// Looks props up (once every half a minute each at most: changes come by themselves).
     pub fn prop_get(&self, key: &str, ids: &[u64]) {
         let want: Vec<u64> = {

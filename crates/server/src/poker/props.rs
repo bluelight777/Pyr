@@ -370,6 +370,19 @@ impl Poker {
                     .collect();
                 Ok(Some(ToApp::Props { props }))
             }
+            ToServer::PropList { channel_id: 0 } => {
+                // Every channel I can read: open and closed ones, and settled or called off.
+                let props = hub
+                    .db
+                    .props_recent(&["open", "closed", "settled", "void"], p::MAX_LISTED * 4)
+                    .into_iter()
+                    .filter_map(|j| serde_json::from_str::<Prop>(&j).ok())
+                    .filter(|prop| (who.sees)(prop.channel_id))
+                    .take(p::MAX_LISTED)
+                    .map(|prop| prop.view(hub, uid, (who.moderates)(prop.channel_id)))
+                    .collect();
+                Ok(Some(ToApp::Props { props }))
+            }
             ToServer::PropList { channel_id } => {
                 if !(who.sees)(channel_id) {
                     return Err("No such channel.".into());
@@ -486,6 +499,25 @@ mod tests {
             Some(ToApp::Props { mut props }) => props.remove(0),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn every_channel_s_props_for_prop_bets_window_only_the_ones_i_can_read() {
+        let hub = hub();
+        let mine = open(&hub, "alice", "Rain on Saturday?", &[], 0);
+        let theirs = match ask(&hub, "alice", ToServer::PropOpen { channel_id: 2, question: "Staff only?".into(), outcomes: vec![], depth: 10_000, closes_in: 0 }).unwrap() {
+            Some(ToApp::PropOpened { prop }) => prop,
+            other => panic!("{other:?}"),
+        };
+        // Settled ones come too (what I won or lost).
+        let done = open(&hub, "alice", "Snow?", &[], 0);
+        ask(&hub, "alice", ToServer::PropSettle { id: done.id, outcome: 1 }).unwrap();
+        let only_one = Asker { uid: "bob", sees: &|c| c == 1, moderates: &|_| false };
+        let Some(ToApp::Props { props }) = hub.poker.props(&hub, &only_one, ToServer::PropList { channel_id: 0 }).unwrap() else { panic!() };
+        let ids: Vec<u64> = props.iter().map(|p| p.id).collect();
+        assert_eq!(ids, vec![done.id, mine.id], "newest first, channel 1's only");
+        assert!(!ids.contains(&theirs.id));
+        assert_eq!(props[0].state, PropState::Settled);
     }
 
     #[test]

@@ -612,6 +612,16 @@ impl Db {
         st.query_map(params![channel_id, limit as i64], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
     }
 
+    /// The newest props in any channel, in these states (for a list of every channel's: the
+    /// asker's own channels are picked from them).
+    pub fn props_recent(&self, states: &[&str], limit: usize) -> Vec<String> {
+        let c = self.conn.lock();
+        let marks = states.iter().map(|s| format!("'{s}'")).collect::<Vec<_>>().join(",");
+        let sql = format!("SELECT data FROM props WHERE state IN ({marks}) ORDER BY id DESC LIMIT ?1");
+        let Ok(mut st) = c.prepare(&sql) else { return Vec::new() };
+        st.query_map(params![limit as i64], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
+    }
+
     /// Open props (to close the ones whose time came, and call off forgotten ones).
     pub fn props_open(&self) -> Vec<String> {
         let c = self.conn.lock();

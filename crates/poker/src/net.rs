@@ -289,7 +289,8 @@ pub enum ToServer {
     PropSettle { id: u64, outcome: usize },
     PropVoid { id: u64 },
     PropGet { ids: Vec<u64> },
-    /// The props open in a channel (newest first).
+    /// The props open in a channel (newest first); channel 0: every prop in the channels I can
+    /// read, open or not (Prop Bets' own window: newest first, at most `props::MAX_LISTED`).
     PropList { channel_id: i64 },
 }
 
