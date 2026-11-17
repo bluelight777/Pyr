@@ -8,7 +8,8 @@
 //!   cargo run -p pyr-engine --example tv_eval -- you.wav tv.wav [TV level dBFS] [mode]
 //!
 //! Both 48 kHz mono 16-bit; `tv.wav` is the TV as it reaches the microphone across the room
-//! (speech with music under it, through a room's echo), six minutes or more. The TV is played
+//! (speech with music under it, through a room's echo), six minutes or more:
+//! `tools/make-tv-room.py` makes one. The TV is played
 //! at -45 dBFS unless told (your voice is at -25: a TV 20 dB under you). `mode`: strong or
 //! isolation (both, unless told). `PYR_AB` and `PYR_FIX` work as in Pyr.
 
