@@ -566,6 +566,9 @@ pub struct UiState {
     /// server tells of the casino's own props as they change only for a while after).
     pub prop_bets_v: u32,
     pub prop_bets_listed: Option<Instant>,
+    /// Prop Bets' window just said how it's told: it's told everything again, its way (what it
+    /// was told before it said so was an older window's fill: no props of the casino's own).
+    pub prop_bets_again: bool,
     /// When a prop's card in chat last asked how one of the casino's own props stands (those
     /// change without this Pyr hearing, unless Prop Bets' window is open).
     pub prop_card_asked: HashMap<(String, u64), Instant>,

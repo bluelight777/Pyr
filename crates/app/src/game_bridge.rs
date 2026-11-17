@@ -75,6 +75,7 @@ impl PyrApp {
             self.ui.prop_bets_told = None;
             self.ui.prop_bets_v = 0;
             self.ui.prop_bets_listed = None;
+            self.ui.prop_bets_again = false;
         }
         for (id, a) in self.plugins.programs.take_asked() {
             match a {
@@ -91,8 +92,9 @@ impl PyrApp {
     /// read, and the casino's own: asked for when it opens or the server changes, and again
     /// every few minutes), my chips, its text channels, the best at props and how the casino's
     /// own props stand there: when any of it changed since it was last told. A window that
-    /// said so (`props_hello`) is told only the props that changed; one that didn't, every
-    /// prop each time.
+    /// said so (`props_hello`) is told only the props that changed; one that didn't (0.14's)
+    /// is told every prop each time, the members' only: it knows nothing of the casino's own,
+    /// and those can be thousands.
     fn tell_prop_bets(&mut self, st: &AppState) {
         use pyr_proto::control::{PROPS_FEATURE, PROPS_HOUSE_FEATURE};
         let s = self.ui.server.as_deref().and_then(|k| st.server(k));
@@ -105,7 +107,8 @@ impl PyrApp {
             self.engine.prop_list_all(&s.key);
             self.ui.prop_bets_listed = Some(Instant::now());
         }
-        if self.ui.prop_bets_told.as_ref() == Some(&now) {
+        let again = std::mem::take(&mut self.ui.prop_bets_again);
+        if !again && self.ui.prop_bets_told.as_ref() == Some(&now) {
             return;
         }
         let first = self.ui.prop_bets_told.is_none();
@@ -128,10 +131,11 @@ impl PyrApp {
                     .filter(|c| c.kind == pyr_proto::control::ChannelKind::Text)
                     .map(|c| json!({"id": c.id, "name": c.name}))
                     .collect();
-                let full = self.ui.prop_bets_v < 2 || first || new_server.is_some();
+                let knows = self.ui.prop_bets_v >= 2;
+                let full = !knows || again || first || new_server.is_some();
                 let since = before.as_ref().map_or(0, |t| t.1);
                 let props: Vec<&pyr_poker::props::PropView> = if full {
-                    s.poker.props.values().rev().collect()
+                    s.poker.props.values().rev().filter(|p| knows || !p.house).collect()
                 } else {
                     s.poker.props.iter().rev().filter(|(id, _)| s.poker.props_at.get(id).is_some_and(|at| *at > since)).map(|(_, p)| p).collect()
                 };
@@ -160,7 +164,10 @@ impl PyrApp {
     fn prop_bets_asked(&mut self, st: &AppState, ask: crate::plugins::programs::PropAsk, acts: &mut Vec<Act>) {
         use crate::plugins::programs::PropAsk;
         if let PropAsk::Hello { v } = ask {
-            self.ui.prop_bets_v = v;
+            if v != self.ui.prop_bets_v {
+                self.ui.prop_bets_v = v;
+                self.ui.prop_bets_again = true;
+            }
             return;
         }
         let Some(key) = self.ui.prop_bets_told.as_ref().and_then(|t| t.as_ref()).map(|t| t.0.clone()) else { return };
