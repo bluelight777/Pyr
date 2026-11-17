@@ -39,7 +39,8 @@ impl App {
             }
             let of = if !prop.event_name.is_empty() { format!("· {}", prop.event_name) } else { self.m.channel_name(prop.channel_id).map(|c| format!("· #{c}")).unwrap_or_default() };
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Share").on_hover_text("Post its card in the channel showing in Pyr").clicked() {
+                // (A Pyr from before 0.15 doesn't know how.)
+                if !self.m.old_pyr && ui.button("Share").on_hover_text("Post its card in the channel showing in Pyr").clicked() {
                     ask(asks::share(prop.id));
                 }
                 // (What it's of, in the room that's left.)
@@ -101,7 +102,7 @@ impl App {
                 ui.add(egui::Label::new(RichText::new(format!("{} opened it, put up {} chips to back its odds, and settles it (or a moderator does). A winning share pays a chip.", prop.author_name, chips_text(prop.backing))).size(13.0).color(BODY)).wrap());
                 ui.add_space(6.0);
             }
-            ui.label(RichText::new(format!("{} chips in · {} · {}", chips_text(prop.pool), count(prop.bets as u64, "bet", "bets"), count(prop.bettors as u64, "person", "people"))).size(12.5).color(MUTED));
+            ui.label(RichText::new(format!("{} · {} · {}", count(prop.pool, "chip in", "chips in"), count(prop.bets as u64, "bet", "bets"), count(prop.bettors as u64, "person", "people"))).size(12.5).color(MUTED));
             if prop.state == PropState::Settled && !prop.winners.is_empty() {
                 ui.label(RichText::new(format!("Paid: {}", prop.winners.iter().map(|(n, c)| format!("{n} +{}", chips_text(*c))).collect::<Vec<_>>().join(" · "))).size(12.5).color(GOLD));
             }
@@ -406,7 +407,10 @@ impl App {
     fn mine_row(&mut self, ui: &mut egui::Ui, prop: &PropView, now: i64) {
         let (cost, worth) = stake_and_worth(prop);
         let net = worth as i64 - cost as i64;
-        let inner = card().inner_margin(egui::Margin::symmetric(14, 9)).show(ui, |ui| {
+        // (The row takes clicks from the start, so that Cash out, drawn in it after, is over
+        // it and takes its own.)
+        let row = ui.scope_builder(egui::UiBuilder::new().id_salt(("mine", prop.id)).sense(Sense::click()), |ui| {
+            card().inner_margin(egui::Margin::symmetric(14, 9)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
@@ -458,9 +462,9 @@ impl App {
                     });
                 });
             });
+            });
         });
-        let resp = ui.interact(inner.response.rect, ui.id().with(("mine", prop.id)), Sense::click());
-        if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+        if row.response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
             self.go(View::Prop(prop.id));
         }
         ui.add_space(4.0);
@@ -473,6 +477,9 @@ impl App {
         ui.label(RichText::new("Best at props").font(bold_font(23.0)).color(TEXT));
         ui.label(RichText::new("What everyone won less what they put in, on props that are over.").size(13.0).color(MUTED));
         ui.add_space(8.0);
+        if self.m.old_pyr {
+            return note(ui, "Update Pyr for this", "The board of the best at props came with Pyr 0.15.");
+        }
         if !self.m.house_here {
             return note(ui, "Not on this server yet", "Its Pyr is older than the board of the best at props (Pyr 0.15).");
         }
@@ -657,7 +664,8 @@ impl App {
                 if self.m.house_here {
                     ui.vertical(|ui| {
                         ui.label(RichText::new("CATEGORY").size(11.0).strong().color(DIM));
-                        egui::ComboBox::from_id_salt("new-prop-category").selected_text(p::category_name(&np.category)).show_ui(ui, |ui| {
+                        // (All of them at once: no hunting down a little list.)
+                        egui::ComboBox::from_id_salt("new-prop-category").selected_text(p::category_name(&np.category)).height(520.0).show_ui(ui, |ui| {
                             for (id, name) in p::CATEGORIES {
                                 ui.selectable_value(&mut np.category, id.to_string(), name);
                             }

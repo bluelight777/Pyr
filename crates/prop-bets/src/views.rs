@@ -271,6 +271,7 @@ impl App {
     /// How the casino's own props stand here, when they aren't simply on and working.
     fn house_note(&mut self, ui: &mut egui::Ui) {
         let (words, action): (String, Option<&str>) = match (&self.m.auto, self.m.house_here) {
+            (_, false) if self.m.old_pyr => ("Update Pyr for the casino's own props: games, crypto, the weather and more, opening and settling by themselves (Pyr 0.15). Until then, your server's members' props are here.".into(), None),
             (_, false) => ("This server's Pyr is older than the casino's own props (Pyr 0.15), so only its members' props are here.".into(), None),
             (Some(a), true) if !a.on && a.can_set => ("The casino's own props are off on this server: games, crypto, the weather and more, opening and settling by themselves. You manage it, so they're yours to turn on.".into(), Some("Turn them on…")),
             (Some(a), true) if !a.on => ("The casino's own props are off on this server. Whoever manages it can turn them on: games, crypto, the weather and more, opening and settling by themselves.".into(), None),

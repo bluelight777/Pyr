@@ -138,7 +138,8 @@ that the rebuild doesn't know yet must come through untouched:
    Rust source in /home/claude/rustsrc for -Zbuild-std: both built and the x86-64 one run),
    the Keeper (`make-keeper.sh` with KEEPER_PUB and LIVE, above), `make-release.sh`. Since
    Prop Bets (0.14.2 on): `-p prop-bets` among the packages in the Windows and Linux builds,
-   and `make-prop-bets.sh` after `make-keeper.sh`.
+   and `make-prop-bets.sh` after `make-keeper.sh`. Since 0.15.0: `make-props-feed.sh` after
+   that (the props feed's maker for the VPS).
 4. The swap, Blue at the VPS: the rebuilt server onto 0.13.28's data (backed up first), the
    Keeper's second certificate and list (`setup-keeper.sh`, run by the release), then
    `publish.ps1` from Blue's PC. 0.13.28's apps are told to get the new Pyr as they log in.
@@ -183,6 +184,17 @@ screen, Prop Bets' release builds (its listing signed and endorsed, its files' h
 Linux one tried with a stand-in for Pyr). On Blue's PC in `Downloads\pyr-release-0.14.2`; he
 publishes it with `publish.cmd`. Not tried: Prop Bets inside Pyr's window on Windows, and
 isolation with a real TV.
+
+0.15.0 (Nov 17): Prop Bets for everything (the checklist's "Prop Bets for everything, by
+itself", `docs/PROPS.md`). New in a release: `pyr-props` among the VPS builds
+(`build-vps-server.sh`), `KEY=… PROPS_KEY=… scripts/make-props-feed.sh` after
+`make-prop-bets.sh` (the feed key made the first time, kept with the other keys; it goes up
+once, then lives on the VPS: later releases take `PROPS_PUB` instead and bring only a fresh
+certificate), and `setup-props.sh` on the VPS, which `install-site.sh` runs: the service
+`pyr-props` as a user of its own, shut in, writing `<the website>/pyr/props/`. pyr.gg's nginx
+settings serve that folder as they are (v7: a file with a dot in its name is the site's own;
+checked against the invite patterns). Prop Bets in the Library is 0.2.0 (its listing and
+`make-prop-bets.sh` take the version from `crates/prop-bets/Cargo.toml`).
 
 0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
 Blue's pyr.log, Nov 17, "couldn't find the server "SERVER2.24.121.231": No such host is known".
@@ -1401,6 +1413,36 @@ How (decided while starting it):
       -> 42 of 243, 37 -> 54 of 255); `aec_eval`'s isolation scenes: echo the same or better, the
       dips in your talking the same ones (none from isolation). Mag needs the release with it.
       Not tried yet: a real room and a real TV (Blue's or Mag's PC); `PYR_AB=tvgate` puts it back.
+- [x] Prop Bets for everything, by itself (Blue, Nov 17: "add the full features of Prop bets
+      ... NFL, NBA, NHL, MLB, College Football, College Basketball, Topical (ie. world events),
+      even allow prop bets for Pyr Casino ... Crypto ... weather, entertainment, science, art.
+      It should update itself regularly ... without requiring human intervention"; "Make it
+      beautiful and impressive"; "make it mostly automated"). His choices: public data only (no
+      paid sources, no model writing props), ESPN's public scoreboard for the leagues, and off
+      on a server until whoever manages it turns them on. The plan and what's checked is
+      `docs/PROPS.md`. In short:
+      the feed's maker, `crates/props-feed` (`pyr-props`, a service on the VPS: eighteen sources
+      on their own clocks, one signed file, `https://pyr.gg/props/feed.json`, and
+      `status.json`); the server follows it (`props_feed.rs`, `poker/props.rs`: house props,
+      backed by the casino, opened, moved, settled and called off as the feed says; the feed's
+      key certified by the release key); Pyr Casino's own, made by each server from its count
+      of rounds (`poker/props/own.rs`); categories on every prop; who's best at props; Pyr's
+      bridge tells the window only what changed (`props_hello`, v2); and Prop Bets 0.2's window,
+      rebuilt (`crates/prop-bets`: a front page, a board a category, a page a prop with how its
+      odds went, my bets, the best, results, the setting for whoever manages the server; a
+      picture a category, made with Meshy: balls and coins, no league's or team's marks).
+      Tried end to end on a test screen (Nov 17), nothing of it on the network: a made-up feed
+      (`cargo run -p pyr-props --example demo_feed`) signed with test keys and served on
+      localhost, the test server following it (`PYR_PROPS_FEED`, `PYR_PROPS_FEED_KEY`), Pyr and
+      the window: turned on from the window (65 props open within a second), bets, a cash-out,
+      a member's prop in the Pyr Casino category, Share (its card in chat), the casino's own
+      three for tomorrow from the test server's real rounds, and the quick ones coming out
+      (winners paid, one called off and its chips back). Fixed from it: Cash out in My bets
+      opened the prop's page instead (the row took the click), and a card in chat with a
+      two-line question sat on its own heading.
+      Not tried: the real sources from the VPS (`pyr-props check` there says how each reads:
+      the weather's, Steam's and NASA's picture were written from their documented shapes, as
+      the fetch tool here is refused by them), Windows, and a real server's load of props.
 - [ ] Approved bug reports 657 to 675 (voice up and down; stopped responding), without
       touching the echo canceller
 - [ ] The key change (above): built and tried with test keys; the day's steps there

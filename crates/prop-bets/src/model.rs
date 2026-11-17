@@ -25,6 +25,9 @@ pub struct Model {
     pub server: Option<String>,
     pub props_here: bool,
     pub house_here: bool,
+    /// This Pyr is from before 0.15: it knows nothing of categories, the casino's own props,
+    /// how a prop's odds went, the best at props, or Share.
+    pub old_pyr: bool,
     /// Me (my id), my chips (once the casino said), the server's text channels, and the one
     /// showing in Pyr (where Share posts).
     pub me: String,
@@ -60,6 +63,7 @@ impl Model {
                 let key = v["server"]["key"].as_str().map(String::from);
                 // (A Pyr from before 0.15 tells every prop each time and doesn't say so.)
                 let full = v["full"].as_bool().unwrap_or(true) || key != self.server_key;
+                self.old_pyr = v["full"].is_null();
                 self.server_key = key;
                 self.server = v["server"]["name"].as_str().map(String::from);
                 self.props_here = v["props_here"].as_bool().unwrap_or(false);
@@ -431,6 +435,12 @@ mod tests {
         odd.category = "chess".into();
         m.hear(&told(vec![odd], Some(false)));
         assert_eq!(m.categories().last().map(|c| (c.0.as_str(), c.1)), Some(("chess", 1)));
+        // (A Pyr that says "full" or not is one that knows the casino's own props.)
+        assert!(!m.old_pyr);
+        let mut old = told(vec![], Some(true));
+        old.as_object_mut().unwrap().remove("full");
+        m.hear(&old);
+        assert!(m.old_pyr);
     }
 
     #[test]
