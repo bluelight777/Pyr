@@ -556,9 +556,10 @@ pub struct UiState {
     pub program_updates: Vec<crate::game_bridge::ProgramUpdate>,
     /// A game invited to and being installed: opened in that room once it is (game, room).
     pub pending_play: Option<(String, String)>,
-    /// What Prop Bets' own window was last told: the server, its props' version, my chips and
-    /// whether it has prop bets (it's told again when any of it changes).
-    pub prop_bets_told: Option<(String, u64, Option<u64>, bool)>,
+    /// What Prop Bets' own window was last told (`None`: nothing yet, since it opened): the
+    /// server showing (`None`: none), its props' version, my chips and whether it has prop bets.
+    /// It's told again when any of it changes.
+    pub prop_bets_told: Option<Option<(String, u64, Option<u64>, bool)>>,
     /// Prop bets: the bet being picked on a card, and the New prop bet window.
     pub prop_betting: Option<crate::props::Betting>,
     pub new_prop: Option<crate::props::NewProp>,
@@ -1451,15 +1452,31 @@ impl eframe::App for PyrApp {
             }
         }
         // Prop bets: one I just opened goes in its channel as its message (the card); what
-        // happened to me on props is said.
-        let prop_news: Vec<String> = engine.state().servers.iter().filter(|s| !s.poker.props_opened.is_empty() || !s.poker.prop_notes.is_empty()).map(|s| s.key.clone()).collect();
+        // happened to me on props is said (in Prop Bets' own window too, when it's showing that
+        // server's, with what the server said no to).
+        let prop_news: Vec<String> = engine
+            .state()
+            .servers
+            .iter()
+            .filter(|s| !s.poker.props_opened.is_empty() || !s.poker.prop_notes.is_empty() || !s.poker.prop_refusals.is_empty())
+            .map(|s| s.key.clone())
+            .collect();
         for key in prop_news {
-            let (opened, notes) = engine.take_prop_news(&key);
-            for prop in opened {
+            let news = engine.take_prop_news(&key);
+            let window = self.ui.prop_bets_told.as_ref().and_then(|t| t.as_ref()).is_some_and(|t| t.0 == key);
+            for prop in news.opened {
                 acts.push(Act::Send { key: key.clone(), channel: prop.channel_id, text: crate::props::message_for(&prop), reply_to: None, files: Vec::new() });
             }
-            for (_, text, _) in notes {
+            for (_, text, _) in news.notes {
+                if window {
+                    self.plugins.programs.tell(crate::props::PROP_BETS, serde_json::json!({"op": "said", "text": text, "error": false}));
+                }
                 acts.push(Act::Toast(text, false));
+            }
+            if window {
+                for text in news.refused {
+                    self.plugins.programs.tell(crate::props::PROP_BETS, serde_json::json!({"op": "said", "text": text, "error": true}));
+                }
             }
         }
         // A skin taken out of the Pyr Library comes off (back to Campfire), like a plugin.

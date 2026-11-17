@@ -787,6 +787,17 @@ pub fn claude_inbox(config_dir: &std::path::Path) -> PathBuf {
 /// reads the connector's identity itself).
 pub const CLAUDE_MEMBER_ID: &str = "member-id";
 
+/// What came on a server's props since it was last asked ([`Engine::take_prop_news`]).
+#[derive(Default)]
+pub struct PropNews {
+    /// Props I just opened (their message goes in their channel).
+    pub opened: Vec<pyr_poker::props::PropView>,
+    /// What happened to me on props: the prop, what to say, chips in or out.
+    pub notes: Vec<(u64, String, i64)>,
+    /// What the server said no to (Pyr has said it already).
+    pub refused: Vec<String>,
+}
+
 pub struct Engine {
     pub shared: Arc<Shared>,
     _rt: Option<tokio::runtime::Runtime>,
@@ -1452,7 +1463,15 @@ impl Engine {
                     }
                 }
                 Ok(_) => {}
-                Err(e) => st.refused(e),
+                Err(e) => {
+                    // (Said in Prop Bets' own window too, as Pyr says it.)
+                    if let Some(s) = st.server_mut(&k) {
+                        s.poker.prop_refusals.push(e.clone());
+                        let n = s.poker.prop_refusals.len();
+                        s.poker.prop_refusals.drain(..n.saturating_sub(5));
+                    }
+                    st.refused(e)
+                }
             }
             drop(st);
             (shared.repaint)();
@@ -1483,11 +1502,41 @@ impl Engine {
     }
 
     /// Every prop in the channels I can read (Prop Bets' own window; changes come by
-    /// themselves after).
+    /// themselves after). A server from before that list (0.14.0 and 0.14.1) is asked each
+    /// text channel's open ones instead, quietly (a channel it won't say isn't an error here).
     pub fn prop_list_all(&self, key: &str) {
-        let has = self.shared.state.read_recursive().server(key).is_some_and(|s| s.has(pyr_proto::control::PROPS_FEATURE));
-        if has {
-            self.prop_request(key, pyr_poker::net::ToServer::PropList { channel_id: 0 });
+        use pyr_proto::control::{ChannelKind, PROPS_FEATURE, PROPS_LIST_FEATURE};
+        let (has, all, channels) = {
+            let st = self.shared.state.read_recursive();
+            match st.server(key) {
+                Some(s) => (
+                    s.has(PROPS_FEATURE),
+                    s.has(PROPS_LIST_FEATURE),
+                    s.channels.iter().filter(|c| c.kind == ChannelKind::Text).map(|c| c.id).take(40).collect::<Vec<_>>(),
+                ),
+                None => (false, false, Vec::new()),
+            }
+        };
+        // Asked on the connection as it is now, and answered later, never at once: the app
+        // calls this holding the state, which the answer takes. (Not connected: nothing to ask.)
+        let Some(h) = self.handle(key).filter(|_| has) else { return };
+        let asks = if all { vec![0] } else { channels };
+        for channel_id in asks {
+            let reply = h.request(Request::Poker { msg: pyr_poker::net::ToServer::PropList { channel_id } });
+            let (shared, k) = (self.shared.clone(), key.to_string());
+            self.shared.rt.spawn(async move {
+                match reply.await {
+                    Ok(Event::Poker { msg }) => {
+                        if let Some(s) = shared.state.write().server_mut(&k) {
+                            s.poker.apply(msg, std::time::Instant::now());
+                        }
+                        (shared.repaint)();
+                    }
+                    // (Quietly: a channel an older server won't say, say.)
+                    Ok(Event::Error { message, .. }) => tracing::info!(channel_id, "props not listed: {message}"),
+                    _ => {}
+                }
+            });
         }
     }
 
@@ -1511,12 +1560,17 @@ impl Engine {
         }
     }
 
-    /// Props I just opened (for their message in chat), and what happened to me on props.
-    pub fn take_prop_news(&self, key: &str) -> (Vec<pyr_poker::props::PropView>, Vec<(u64, String, i64)>) {
+    /// Props I just opened (for their message in chat), what happened to me on props, and what
+    /// the server said no to (Pyr has said that already: for Prop Bets' own window).
+    pub fn take_prop_news(&self, key: &str) -> PropNews {
         let mut st = self.shared.state.write();
         match st.server_mut(key) {
-            Some(s) => (std::mem::take(&mut s.poker.props_opened), std::mem::take(&mut s.poker.prop_notes)),
-            None => (Vec::new(), Vec::new()),
+            Some(s) => PropNews {
+                opened: std::mem::take(&mut s.poker.props_opened),
+                notes: std::mem::take(&mut s.poker.prop_notes),
+                refused: std::mem::take(&mut s.poker.prop_refusals),
+            },
+            None => PropNews::default(),
         }
     }
 

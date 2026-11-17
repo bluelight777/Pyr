@@ -157,6 +157,8 @@ pub struct PokerState {
     pub prop_notes: Vec<(u64, String, i64)>,
     /// Goes up whenever a prop is heard of or changes (Prop Bets' own window is told then).
     pub props_version: u64,
+    /// What the server said no to on props lately (the last five), for Prop Bets' own window.
+    pub prop_refusals: Vec<String>,
     /// Invites to a table (0.13.6): the table, who from, its name, when it came. (Not from
     /// someone I've blocked; the newest last.)
     pub table_invites: Vec<(pyr_poker::net::TableRef, String, String, Instant)>,

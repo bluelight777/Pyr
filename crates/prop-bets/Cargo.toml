@@ -1,0 +1,18 @@
+[package]
+name = "prop-bets"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Prop Bets, in the Pyr Library: every prop bet on your Pyr server in its own window, with your Pyr Casino chips."
+
+[[bin]]
+name = "prop-bets"
+path = "src/main.rs"
+
+[dependencies]
+# (As Pyr has them, so they're built once for both.)
+eframe = { version = "0.33.3", features = ["wgpu"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+pyr-poker = { path = "../poker" }
+serde_json = "1.0.152"

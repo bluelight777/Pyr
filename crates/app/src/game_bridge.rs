@@ -91,17 +91,17 @@ impl PyrApp {
     fn tell_prop_bets(&mut self, st: &AppState) {
         let s = self.ui.server.as_deref().and_then(|k| st.server(k));
         let now = s.map(|s| (s.key.clone(), s.poker.props_version, s.poker.me.as_ref().map(|m| m.chips), s.has(pyr_proto::control::PROPS_FEATURE)));
-        if now == self.ui.prop_bets_told {
+        if self.ui.prop_bets_told.as_ref() == Some(&now) {
             return;
         }
+        let before = self.ui.prop_bets_told.replace(now).flatten();
         // A server it hasn't seen yet: every prop, and my chips.
-        if let Some(s) = s.filter(|s| self.ui.prop_bets_told.as_ref().map(|t| &t.0) != Some(&s.key)) {
+        if let Some(s) = s.filter(|s| before.as_ref().map(|t| &t.0) != Some(&s.key)) {
             self.engine.prop_list_all(&s.key);
             if s.poker.me.is_none() && s.has(pyr_proto::control::PROPS_FEATURE) {
                 self.engine.poker(&s.key, pyr_poker::net::ToServer::Lobby);
             }
         }
-        self.ui.prop_bets_told = now;
         let line = match s {
             Some(s) => {
                 let channels: Vec<serde_json::Value> = s
@@ -130,7 +130,7 @@ impl PyrApp {
     /// prop's card in chat does it (the server checks it all).
     fn prop_bets_asked(&mut self, ask: crate::plugins::programs::PropAsk, acts: &mut Vec<Act>) {
         use crate::plugins::programs::PropAsk;
-        let Some(key) = self.ui.prop_bets_told.as_ref().map(|t| t.0.clone()) else { return };
+        let Some(key) = self.ui.prop_bets_told.as_ref().and_then(|t| t.as_ref()).map(|t| t.0.clone()) else { return };
         acts.push(match ask {
             PropAsk::Bet { id, outcome, chips, min_shares } => Act::PropBet { key, id, outcome, chips, min_shares },
             PropAsk::CashOut { id, outcome } => Act::PropCashOut { key, id, outcome },
