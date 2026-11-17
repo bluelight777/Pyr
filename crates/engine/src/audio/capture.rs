@@ -90,6 +90,17 @@ pub struct CapturePipeline {
     iso_below: u32,
     iso_gain: f32,
     mine_until: Instant,
+    /// Voice isolation: the microphone's own level, 10 ms at a time, while speech went on in
+    /// the last second (NaN where it didn't), and whether it has a near voice's deep dips
+    /// between syllables (see `NEAR_DIPS_DB`).
+    raw_hist: [f32; 100],
+    raw_hist_at: usize,
+    near_like: bool,
+    /// (The dips' depth itself, dB, for measuring tools.)
+    dips_db: f32,
+    /// When speech last came as loud as yours (or close-sounding and nearly as loud): the
+    /// quieter parts of your sentences stay yours only for a while after (see `ISO_ALIVE_MS`).
+    iso_sure_at: Option<Instant>,
     settings: Settings,
     pub stream_delay_ms: i32,
     pub sent: u64,
@@ -132,6 +143,32 @@ const AEC_LATENCY: usize = 384;
 /// Voice isolation: how much is let through of other people's voices, and of other sounds.
 const ISO_OTHER_VOICE: f32 = 0.05;
 const ISO_FLOOR: f32 = 0.03;
+/// Voice isolation and a TV (Blue, Nov 17: "I don't want to hear Mag's mother's TV coming
+/// through his mic", with voice isolation on): a TV across the room talking the whole time, 15
+/// dB under your voice at the mic, went out for 217 of 289 s while you were quiet
+/// (`examples/tv_eval.rs`): its louder syllables came within `ISO_START_DB` of your level,
+/// started "yours" and stayed yours (`ISO_KEEP_DB`) as long as it talked, and isolation learned
+/// its level as yours. A voice at the microphone dips 30 to 45 dB between syllables, loud or
+/// quiet; one across a room only 13 to 19 (the room's echo fills the gaps). So now: speech
+/// starts as yours when it's within `ISO_SURE_DB` of your level, or within `ISO_START_DB` and
+/// sounding near; its quieter parts stay yours only within `ISO_ALIVE_MS` of the last such
+/// moment; your level is learned from speech within `ISO_LEARN_DB` of it, or within
+/// `ISO_START_DB` and sounding near (before it's known, sounding near); and only near-sounding
+/// speech counts toward taking a quieter voice as yours now. Measured, as before -> now: the TV
+/// 15 dB under you went out 217 -> 15 s of 289 (10 dB under: 252 -> 21; 20 dB under: 2 -> 0);
+/// your talking turned down 10 dB or more with nothing else going on, in four long scenes
+/// (louder moments, a loud voice from a speaker, you 12 dB quieter, someone across the room):
+/// 0 -> 1, 0 -> 1, 0 -> 6 and 0 -> 1 of 542, 542, 381 and 188 stretches of 200 ms; with the TV
+/// going on under you, 30 -> 43 of 243 (15 dB under) and 37 -> 63 of 255 (10 dB under): your
+/// softer words, nearly as quiet as the TV, go with it. (`PYR_AB=tvgate`: as before.)
+const ISO_SURE_DB: f32 = 3.0;
+const ISO_LEARN_DB: f32 = 6.0;
+const ISO_ALIVE_MS: u64 = 2000;
+/// A near voice's dips between syllables: the microphone's level over the speech in the last
+/// second, its 90th and 10th percentiles at least this far apart (dB). (Measured on the
+/// microphone's own sound: DeepFilterNet takes a room's echo out of a far voice too, and the TV
+/// cleaned dipped as deep as you.)
+const NEAR_DIPS_DB: f32 = 25.0;
 
 fn rms_db(x: &[f32]) -> f32 {
     let s = x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32;
@@ -336,6 +373,11 @@ impl CapturePipeline {
             iso_below: 0,
             iso_gain: 1.0,
             mine_until: now,
+            raw_hist: [f32::NAN; 100],
+            raw_hist_at: 0,
+            near_like: false,
+            dips_db: 0.0,
+            iso_sure_at: None,
             settings: settings.clone(),
             stream_delay_ms: 60,
             sent: 0,
@@ -355,6 +397,13 @@ impl CapturePipeline {
         self.iso_vad_on_clean = vad_on_clean;
         self.iso_start_lsnr = start_lsnr;
         self.iso_delay = std::iter::repeat_n(0.0, lookahead_frames * 480).collect();
+    }
+
+    /// For measuring tools: voice isolation's view of the voice going on: how deep its dips
+    /// between syllables are (dB; 0 until there's enough speech), your usual level, and
+    /// whether it's taken as yours.
+    pub fn isolation_view(&self, now: Instant) -> (f32, f32, bool) {
+        (self.dips_db, self.iso_ref_db, now < self.mine_until)
     }
 
     /// For measuring tools: voice isolation as it was before DeepFilterNet.
@@ -565,6 +614,28 @@ impl CapturePipeline {
         if starts || (going && self.voice_prob > 0.2) {
             self.speech_until = now + Duration::from_millis(SPEECH_HOLD_MS);
         }
+        // Voice isolation: how deep the cleaned sound's dips between syllables are, over the
+        // speech (and the gaps the hold bridges) in the last second; the silence before speech
+        // starts doesn't count (it would make anything look near). Known from 300 ms of speech.
+        if self.dfn.is_some() {
+            self.raw_hist[self.raw_hist_at] = if now < self.speech_until { raw_db } else { f32::NAN };
+            self.raw_hist_at = (self.raw_hist_at + 1) % self.raw_hist.len();
+            let mut heard = [0.0f32; 100];
+            let mut n = 0;
+            for v in self.raw_hist.iter().filter(|v| !v.is_nan()) {
+                heard[n] = *v;
+                n += 1;
+            }
+            self.dips_db = if n >= 30 {
+                let heard = &mut heard[..n];
+                heard.sort_unstable_by(|a, b| a.total_cmp(b));
+                let at = |q: f32| heard[((n - 1) as f32 * q).round() as usize];
+                at(0.9) - at(0.1)
+            } else {
+                0.0
+            };
+            self.near_like = self.dips_db >= NEAR_DIPS_DB;
+        }
     }
 
     /// Voice isolation: keep your voice and turn everything else far down. A voice across the
@@ -574,6 +645,7 @@ impl CapturePipeline {
     /// through whole.
     fn isolate(&mut self, now: Instant, frame: &mut [f32]) {
         let speech = now < self.speech_until;
+        let tv_old = pyr_proto::ab::old("tvgate");
         let e = self.raw_recent.iter().sum::<f32>() / self.raw_recent.len() as f32;
         let level = if e > 1e-10 { 10.0 * e.log10() } else { -100.0 };
         // Learn your level from confident speech: the level three quarters of your speech is
@@ -594,7 +666,15 @@ impl CapturePipeline {
             // back from them, quieter than yours, was taken for yours after half a minute of
             // you listening, and went out at full strength, lifted by the automatic gain, till
             // echo cancellation was switched off and on: Chimbita's echo, 0.13.0.)
-            if self.iso_ref_db < -90.0 || level > self.iso_ref_db - ISO_START_DB {
+            // (Nor from a voice across the room: a TV's, see `ISO_SURE_DB`.)
+            let learn = if tv_old {
+                self.iso_ref_db < -90.0 || level > self.iso_ref_db - ISO_START_DB
+            } else if self.iso_ref_db < -90.0 {
+                self.near_like
+            } else {
+                level > self.iso_ref_db - ISO_LEARN_DB || (self.near_like && level > self.iso_ref_db - ISO_START_DB)
+            };
+            if learn {
                 self.iso_levels.add(level);
                 self.iso_below = 0;
                 match self.iso_levels.usual() {
@@ -602,9 +682,10 @@ impl CapturePipeline {
                     // (Not enough yet: the loudest so far, as a start.)
                     None => self.iso_ref_db = self.iso_ref_db.max(level),
                 }
-            } else {
+            } else if tv_old || self.near_like {
                 // Only quieter speech for a long while: that's you now (further from the
-                // microphone, or it was turned down), not someone across the room.
+                // microphone, or it was turned down), not someone across the room. (Only
+                // speech that sounds near counts: a TV talking on for half a minute isn't you.)
                 self.iso_below += 1;
                 if self.iso_below >= ISO_RELEARN_FRAMES {
                     self.iso_levels = Levels::default();
@@ -616,9 +697,24 @@ impl CapturePipeline {
         // Becoming "you" takes speech nearly as loud as you; staying "you" through the softer
         // parts of your sentences takes much less (and the hold bridges the gaps).
         let mine = now < self.mine_until;
-        let near = level > self.iso_ref_db - if mine { ISO_KEEP_DB } else { ISO_START_DB };
-        if speech && near && (self.voice_prob > 0.5 || mine) {
-            self.mine_until = now + Duration::from_millis(SPEECH_HOLD_MS);
+        if tv_old {
+            let near = level > self.iso_ref_db - if mine { ISO_KEEP_DB } else { ISO_START_DB };
+            if speech && near && (self.voice_prob > 0.5 || mine) {
+                self.mine_until = now + Duration::from_millis(SPEECH_HOLD_MS);
+            }
+        } else {
+            // As loud as you, nearly; or quieter but sounding near. (Before your level is known,
+            // any speech, as before: while the others' sound plays on, it isn't learned, and
+            // asking for near-sounding speech then cut a quiet microphone's words.)
+            let known = self.iso_ref_db > -90.0;
+            let sure = !known || level > self.iso_ref_db - ISO_SURE_DB || (self.near_like && level > self.iso_ref_db - ISO_START_DB);
+            let alive = self.iso_sure_at.is_some_and(|t| now.saturating_duration_since(t) < Duration::from_millis(ISO_ALIVE_MS));
+            if speech && sure && (self.voice_prob > 0.5 || mine) {
+                self.iso_sure_at = Some(now);
+                self.mine_until = now + Duration::from_millis(SPEECH_HOLD_MS);
+            } else if speech && mine && alive && level > self.iso_ref_db - ISO_KEEP_DB {
+                self.mine_until = now + Duration::from_millis(SPEECH_HOLD_MS);
+            }
         }
         let target: f32 = if now < self.mine_until {
             1.0
@@ -934,11 +1030,13 @@ mod tests {
     /// Voice isolation learns your level from your speech, never from what the speakers could
     /// account for: half a minute of someone else's voice coming back from them, quieter than
     /// yours, doesn't make it "you" (it did: their own voice went back to them as an echo).
-    /// A quieter voice with nothing playing still does (you moved away from the microphone).
+    /// Nor from a voice across the room (a TV: it doesn't dip between syllables as one at the
+    /// microphone does). A quieter voice that sounds near, with nothing playing, still does
+    /// (you moved away from the microphone).
     #[test]
-    fn isolation_never_takes_the_speakers_for_you() {
+    fn isolation_never_takes_the_speakers_or_a_tv_for_you() {
         let settings = Settings { noise_suppression: NoiseSuppression::Isolation, ..Settings::default() };
-        for (far, relearns) in [(true, false), (false, true)] {
+        for (far, near, relearns) in [(true, true, false), (false, true, true), (false, false, false)] {
             let mut cap = CapturePipeline::new(&settings).unwrap();
             let now = Instant::now();
             cap.iso_ref_db = -25.0;
@@ -949,14 +1047,17 @@ mod tests {
             cap.speech_until = now + Duration::from_secs(3600);
             cap.far = far;
             cap.playing = far;
+            cap.near_like = near;
             let mut frame = vec![0.01f32; 480];
             for _ in 0..4_000 {
                 cap.isolate(now, &mut frame);
             }
             if relearns {
-                assert!((cap.iso_ref_db + 45.0).abs() < 1.0, "a quieter voice, nothing playing: you, now ({})", cap.iso_ref_db);
+                assert!((cap.iso_ref_db + 45.0).abs() < 1.0, "a quieter voice that sounds near, nothing playing: you, now ({})", cap.iso_ref_db);
             } else {
-                assert_eq!(cap.iso_ref_db, -25.0, "what the speakers could account for isn't you");
+                assert_eq!(cap.iso_ref_db, -25.0, "what the speakers could account for, or a voice across the room, isn't you (far {far}, near {near})");
+                // (And it isn't let through as yours meanwhile.)
+                assert!(cap.iso_gain < 0.1, "turned far down ({})", cap.iso_gain);
             }
         }
     }
