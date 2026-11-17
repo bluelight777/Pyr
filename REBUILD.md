@@ -164,6 +164,14 @@ notice ("There's a new Pyr…") as its red error card. Blue asked (Nov 17) for 0
 by itself: it can't (only the lost key's signature makes it install anything); the way over is
 a link in chat (`https://pyr.gg/Pyr-Setup.exe`, `https://pyr.gg/pyr_amd64.deb`).
 
+0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
+Blue's pyr.log, Nov 17, "couldn't find the server "SERVER2.24.121.231": No such host is known".
+The bug server's address in `release-env.sh` had been read out of 0.13.28's program with the
+end of the string before it ("…BUG_SERVER") stuck on its front. Fixed in the outputs' copy, the
+workspace's and Blue's `Downloads\pyr-keys` (by path, never printed); 0.14.1 is built with it.
+(The release script's check that the address is in the program couldn't catch it: the right
+address is inside the wrong one.)
+
 ## Checklist
 
 Version in brackets: where 0.13.x first had it.
