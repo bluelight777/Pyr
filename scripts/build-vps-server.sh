@@ -11,7 +11,8 @@
 #   ./scripts/build-vps-server.sh x86_64     # one
 #
 # Output: dist/vps/pyr-server-linux-x86_64, dist/vps/pyr-server-linux-aarch64, and the same for
-# pyr-directory (the invite directory behind short links, which runs on pyr.gg's VPS only).
+# pyr-directory (the invite directory behind short links, which runs on pyr.gg's VPS only),
+# pyr-keeper (the Library's Keeper) and pyr-props (the props feed's maker), there too.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
@@ -34,8 +35,8 @@ for ARCH in "${ARCHES[@]}"; do
     UPPER=$(echo "$TARGET" | tr 'a-z-' 'A-Z_')
     export "CARGO_TARGET_${UPPER}_RUSTFLAGS=-C link-self-contained=no"
   fi
-  cargo zigbuild --release -p pyr-server -p pyr-directory -p pyr-keeper --target "$TARGET" "${EXTRA[@]}" --target-dir "$ROOT/target-musl"
-  for BIN in pyr-server pyr-directory pyr-keeper; do
+  cargo zigbuild --release -p pyr-server -p pyr-directory -p pyr-keeper -p pyr-props --target "$TARGET" "${EXTRA[@]}" --target-dir "$ROOT/target-musl"
+  for BIN in pyr-server pyr-directory pyr-keeper pyr-props; do
     cp "$ROOT/target-musl/$TARGET/release/$BIN" "$ROOT/dist/vps/$BIN-linux-$ARCH"
     echo "built dist/vps/$BIN-linux-$ARCH"
   done

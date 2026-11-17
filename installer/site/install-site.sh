@@ -321,6 +321,17 @@ if [ -d "$HERE/keeper" ] && [ -f "$HERE/setup-keeper.sh" ]; then
     echo
   fi
 fi
+# The props feed's maker (setup-props.sh; Pyr 0.15): the prop bets servers' casinos open by
+# themselves come from the file it writes, https://pyr.gg/props/feed.json. Kept in
+# /root/pyr-props-setup (only root can read it: the first time it holds the feed's key until
+# it's set up). Each release brings the new program and a fresh certificate for its key; the
+# key and what it has opened stay. It never holds up the release.
+if [ -d "$HERE/props" ] && [ -f "$HERE/setup-props.sh" ]; then
+  PS=/root/pyr-props-setup
+  rm -rf "$PS" && mkdir -m 700 "$PS" && cp -r "$HERE/props" "$HERE/setup-props.sh" "$PS/"
+  echo "Setting up the props feed"
+  bash "$PS/setup-props.sh" || echo "The props feed wasn't set up (above); the release itself is published. To try again: ssh -t root@2.24.121.231 bash /root/pyr-props-setup/setup-props.sh" >&2
+fi
 # Firelit Poker is part of Pyr now (Pyr Casino, 0.12.0): off the Library, once. The Keeper's
 # list (index3.json, what Pyr 0.9 and newer read) loses it here, the Keeper stopped meanwhile;
 # the release's own lists (index2.json and index.json, for older Pyrs) already have.

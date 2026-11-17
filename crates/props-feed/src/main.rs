@@ -9,9 +9,16 @@
 //!       couldn't read. Writes nothing. For setting up, and for when a source changes shape.
 //!   pyr-props keygen --out FILE
 //!       A new feed key (prints its public half).
+//!   pyr-props pubkey --key FILE
+//!       A feed key's public half.
 //!   pyr-props certify --release-key FILE --key PUBLIC --days N --out FILE
 //!       The release key's certificate for a feed key (done where the release key is kept,
 //!       never on the server).
+//!   pyr-props verify --key FILE --cert FILE [--release-key PUBLIC]
+//!       Whether a certificate is for that feed key, signed by the release key, and how long
+//!       it has left (before the service is started with them).
+//!   pyr-props status FILE
+//!       A status.json, for people: each source, whether it reads, and what it has open.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -68,6 +75,23 @@ enum Cmd {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Says a feed key's public half.
+    Pubkey {
+        #[arg(long)]
+        key: PathBuf,
+    },
+    /// Checks a feed key's certificate.
+    Verify {
+        #[arg(long)]
+        key: PathBuf,
+        #[arg(long)]
+        cert: PathBuf,
+        /// The release key's public half (Pyr's own, unless said).
+        #[arg(long)]
+        release_key: Option<String>,
+    },
+    /// Says what a status.json says, for people.
+    Status { file: PathBuf },
     /// Certifies a feed key with the release key.
     Certify {
         #[arg(long)]
@@ -94,6 +118,9 @@ fn main() {
         Cmd::Check { only, contact } => check(&only, &contact),
         Cmd::Keygen { out } => keygen(&out),
         Cmd::Certify { release_key, key, days, out } => certify(&release_key, &key, days, &out),
+        Cmd::Verify { key, cert, release_key } => verify(&key, &cert, release_key.as_deref()),
+        Cmd::Status { file } => status(&file),
+        Cmd::Pubkey { key } => load_key(&key).map(|k| println!("{}", k.user_id())),
     } {
         eprintln!("pyr-props: {e}");
         std::process::exit(1);
@@ -125,6 +152,55 @@ fn certify(release_key: &Path, key: &str, days: i64, out: &Path) -> Result<(), S
     std::fs::write(out, serde_json::to_string_pretty(&cert).map_err(|e| e.to_string())?).map_err(|e| format!("writing {}: {e}", out.display()))?;
     println!("certified by {} until {}", release.user_id(), when::iso_date(not_after * 1000));
     Ok(())
+}
+
+fn load_cert(path: &Path) -> Result<FeedCert, String> {
+    serde_json::from_str(&std::fs::read_to_string(path).map_err(|e| format!("reading {}: {e}", path.display()))?).map_err(|e| format!("{} isn't a certificate: {e}", path.display()))
+}
+
+fn verify(key: &Path, cert: &Path, release_key: Option<&str>) -> Result<(), String> {
+    let key = load_key(key)?;
+    let cert = load_cert(cert)?;
+    if cert.key != key.user_id() {
+        return Err("the certificate is for another key".into());
+    }
+    let release = release_key.unwrap_or(pyr_proto::release::RELEASE_KEY);
+    if !props_feed::cert_ok(&cert, release) {
+        return Err("the certificate isn't signed by the release key".into());
+    }
+    let left = cert.not_after - pyr_proto::now_ms() / 1000;
+    if left <= 0 {
+        return Err(format!("the certificate ran out on {}", when::iso_date(cert.not_after * 1000)));
+    }
+    println!("the feed key {} is certified until {} ({} days)", key.user_id(), when::iso_date(cert.not_after * 1000), left / 86_400);
+    Ok(())
+}
+
+fn status(file: &Path) -> Result<(), String> {
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(file).map_err(|e| format!("reading {}: {e}", file.display()))?).map_err(|e| format!("{} isn't a status file: {e}", file.display()))?;
+    let text = |v: &serde_json::Value| v.as_str().unwrap_or("").to_string();
+    println!("made {} by pyr-props {}", text(&v["made"]), text(&v["version"]));
+    let mut bad = 0;
+    for (name, s) in v["sources"].as_object().into_iter().flatten() {
+        let (ok, error) = (s["ok"].as_bool().unwrap_or(false), text(&s["error"]));
+        let never = s["last_run"].is_null();
+        let word = if never { "not read yet".to_string() } else if ok { "ok".to_string() } else { format!("FAILED: {error}") };
+        if !ok && !never {
+            bad += 1;
+        }
+        println!("  {name:<10} {word}  ({} not over, {} opened, {} settled; last read well {})", s["not_over"].as_u64().unwrap_or(0), s["opened"].as_u64().unwrap_or(0), s["settled"].as_u64().unwrap_or(0), s["last_ok"].as_str().unwrap_or("never"));
+        for t in s["trouble"].as_array().into_iter().flatten().take(3) {
+            println!("             couldn't: {}", text(t));
+        }
+    }
+    for (cat, c) in v["categories"].as_object().into_iter().flatten() {
+        println!("  {cat:<14} {} open, {} waiting for their results, {} over", c["open"].as_u64().unwrap_or(0), c["waiting"].as_u64().unwrap_or(0), c["over"].as_u64().unwrap_or(0));
+    }
+    match bad {
+        0 => Ok(()),
+        1 => Err("1 source isn't reading".into()),
+        n => Err(format!("{n} sources aren't reading")),
+    }
 }
 
 fn check(only: &[String], contact: &str) -> Result<(), String> {
@@ -161,7 +237,7 @@ fn check(only: &[String], contact: &str) -> Result<(), String> {
 
 fn run(state_dir: &Path, out: &Path, key: &Path, cert: &Path, contact: &str, only: &[String], once: bool) -> Result<(), String> {
     let key = load_key(key)?;
-    let cert: FeedCert = serde_json::from_str(&std::fs::read_to_string(cert).map_err(|e| format!("reading {}: {e}", cert.display()))?).map_err(|e| format!("{} isn't a certificate: {e}", cert.display()))?;
+    let cert = load_cert(cert)?;
     if cert.key != key.user_id() {
         return Err("the certificate is for another key".into());
     }

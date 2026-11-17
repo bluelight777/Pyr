@@ -157,8 +157,11 @@ impl PyrApp {
         let ctx = ui.ctx().clone();
         egui::Frame::new().fill(Color32::from_rgb(0x14, 0x0f, 0x0d)).stroke(Stroke::new(1.0_f32, Color32::from_rgb(0x5a, 0x40, 0x22))).corner_radius(12).show(ui, |ui| {
             ui.set_width(w);
-            // The board: its art behind the question.
-            let (top, _) = ui.allocate_exact_size(vec2(w, 96.0), Sense::hover());
+            // The board: its art behind the question (as tall as the question needs: one of the
+            // casino's own often takes two lines, under what it is and how it stands).
+            let q = ui.fonts_mut(|f| f.layout(prop.question.clone(), theme::bold_font(16.0), Color32::WHITE, w - 56.0));
+            let qh = q.size().y;
+            let (top, _) = ui.allocate_exact_size(vec2(w, (58.0 + qh + 14.0).max(96.0)), Sense::hover());
             let p = ui.painter();
             if !crate::casino::pics::cover_rounded(p, &ctx, "props-banner", top, 12.0, (0.42, 0.38), 640, Color32::from_gray(150)) {
                 p.rect_filled(top, CornerRadius::same(12), Color32::from_rgb(0x2a, 0x18, 0x10));
@@ -183,8 +186,6 @@ impl PyrApp {
             };
             p.text(emblem.right_center() + vec2(8.0, -7.0), Align2::LEFT_CENTER, title, theme::bold_font(11.5), Color32::from_rgb(0xff, 0xd3, 0x7a));
             p.text(emblem.right_center() + vec2(8.0, 8.0), Align2::LEFT_CENTER, state, theme::bold_font(10.5), Color32::from_rgb(0xd8, 0xc8, 0xb0));
-            let q = ui.fonts_mut(|f| f.layout(prop.question.clone(), theme::bold_font(16.0), Color32::WHITE, w - 56.0));
-            let qh = q.size().y;
             ui.painter().galley(pos2(top.left() + 26.0, top.bottom() - 14.0 - qh), q, Color32::WHITE);
             // The rest, on the card's velvet (its place kept before what's drawn over it).
             let body_top = ui.cursor().top();

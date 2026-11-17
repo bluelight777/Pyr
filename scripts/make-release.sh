@@ -101,5 +101,13 @@ if [ -f dist/keeper/keeper-cert-2.json ]; then
 else
   echo "no dist/keeper: the Library Keeper isn't in this release" >&2
 fi
+# The props feed's maker (dist/props, from scripts/make-props-feed.sh): install-site.sh sets it
+# up on the VPS (setup-props.sh), where it makes https://pyr.gg/props/feed.json.
+if [ -f dist/props/feed-cert.json ]; then
+  mkdir -p "$OUT/upload/props" && cp -r dist/props/. "$OUT/upload/props/"
+  cp installer/site/setup-props.sh "$OUT/upload/"
+else
+  echo "no dist/props: the props feed's maker isn't in this release" >&2
+fi
 cp installer/site/publish.ps1 installer/site/publish.cmd "$OUT/"
 ls -la "$SITE"

@@ -239,6 +239,12 @@ pub fn stake_and_worth(prop: &PropView) -> (u64, u64) {
 /// high?" is "Wednesday's high").
 pub fn row_label(prop: &PropView) -> String {
     let q = prop.question.trim().trim_end_matches('?');
+    // (The day its card's title already says: "… on Wednesday, November 18" under "The casino
+    // on Wednesday, November 18".)
+    let q = match prop.event_name.rsplit_once(" on ") {
+        Some((_, day)) if day.len() >= 6 => q.strip_suffix(&format!(" on {day}")).unwrap_or(q),
+        _ => q,
+    };
     let Some((head, tail)) = q.split_once(": ") else { return q.to_string() };
     // The half that names the event goes; the other is the label.
     let names: Vec<String> = prop.event_name.split([',', ' ']).filter(|w| w.chars().count() > 2).map(|w| w.to_lowercase()).collect();
@@ -411,6 +417,10 @@ mod tests {
         assert_eq!(row_label(&other), "Up or down on Wednesday, November 18");
         other.question = "Bitcoin's price at 00:00 UTC on Thursday, November 19?".into();
         assert_eq!(row_label(&other), "Bitcoin's price at 00:00 UTC on Thursday, November 19");
+        // (One about the casino's day: the day is in its card's title.)
+        other.event_name = "The casino on Wednesday, November 18".into();
+        other.question = "Does the house come out ahead on Wednesday, November 18?".into();
+        assert_eq!(row_label(&other), "Does the house come out ahead");
         // The front page: one of a game, the most featured first, a category at a time.
         let now = 1_800_000_000_000;
         assert_eq!(m.featured(now, 5).iter().map(|x| x.id).collect::<Vec<_>>(), vec![11, 20, 30, 13]);
