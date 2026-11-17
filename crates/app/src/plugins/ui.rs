@@ -1065,6 +1065,15 @@ impl PyrApp {
 
     fn plugin_detail(&mut self, ui: &mut egui::Ui, id: &str, st: &AppState, acts: &mut Vec<Act>) {
         let Some(e) = self.plugins.library.as_ref().and_then(|l| l.find(id)).cloned() else {
+            // The list on its way (a plugin's page asked for before it came: Install Prop Bets
+            // under a prop, say): its page once it's here.
+            if self.plugins.fetching() || (self.plugins.library.is_none() && self.plugins.library_error.is_none()) {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(RichText::new("Getting the Pyr Library…").color(theme::MUTED()));
+                });
+                return;
+            }
             self.plugins.detail = None;
             return;
         };

@@ -109,24 +109,23 @@ impl PyrApp {
     }
 
     /// Prop Bets' page in the Library (Install is there), or a word that it isn't listed here.
-    pub(crate) fn show_prop_bets_in_library(&mut self, acts: &mut Vec<Act>) {
-        if self.plugins.library.as_ref().and_then(|l| l.find(PROP_BETS)).is_some() {
-            self.plugins.detail = Some(PROP_BETS.to_string());
-            self.ui.plugins_open = true;
-            self.ui.home = false;
-            self.plugins.program_page = None;
-        } else {
+    pub(crate) fn show_prop_bets_in_library(&mut self) {
+        // (A list from before it was listed is fetched again. One not fetched yet is on its way:
+        // its page shows as the list comes.)
+        if self.plugins.library.as_ref().is_some_and(|l| l.find(PROP_BETS).is_none()) && !self.plugins.fetching() {
             self.plugins.refetch();
-            acts.push(Act::Toast("Prop Bets isn't in the Pyr Library here (yet): try again in a moment.".into(), true));
         }
+        self.open_place(crate::plugins::Page::Plugins);
+        self.plugins.tab = crate::plugins::Tab::Library;
+        self.plugins.detail = Some(PROP_BETS.to_string());
     }
 
     /// A prop's message without Prop Bets: its line stays as text, and under it, Install.
-    pub(crate) fn prop_install_line(&mut self, ui: &mut egui::Ui, acts: &mut Vec<Act>) {
+    pub(crate) fn prop_install_line(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(RichText::new("Bet on it with Prop Bets, from the Pyr Library.").size(12.5).color(theme::MUTED()));
             if ui.add(egui::Button::new(RichText::new("Install Prop Bets").size(12.5).strong())).on_hover_text("Its page in the Library: install it there, and props show here with their odds and Bet").clicked() {
-                self.show_prop_bets_in_library(acts);
+                self.show_prop_bets_in_library();
             }
         });
     }

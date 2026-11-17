@@ -922,7 +922,7 @@ impl PyrApp {
                                 self.prop_card(ui, st, s, id, acts);
                             }
                         } else if props_here {
-                            self.prop_install_line(ui, acts);
+                            self.prop_install_line(ui);
                         }
                         if m.edited_at.is_some() {
                             ui.label(RichText::new("(edited)").size(10.5).color(theme::DIM()));
@@ -1597,7 +1597,7 @@ impl PyrApp {
                     } else {
                         // (Kept in the box, to send once it's installed.)
                         acts.push(Act::Toast("Prop bets come with Prop Bets, from the Pyr Library: install it there.".into(), false));
-                        self.show_prop_bets_in_library(acts);
+                        self.show_prop_bets_in_library();
                     }
                 } else if send && let Some((addon, name, args)) = addon_command {
                     let reply_to = self.ui.reply.take().map(|(id, _)| id);

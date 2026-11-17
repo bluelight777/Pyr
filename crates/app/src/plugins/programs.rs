@@ -149,6 +149,9 @@ pub struct Program {
     told_pyr: Option<(Instant, String)>,
     /// Closing to be updated (0.13.27): opened again after, in this room.
     pub updating: Option<Option<String>>,
+    /// Closed from Pyr (its Close in the rail): not by mistake, however it ends (on Linux it's
+    /// ended outright).
+    closing: bool,
     #[cfg(windows)]
     win: win::Embedded,
 }
@@ -218,6 +221,7 @@ impl Programs {
             told_friends: None,
             told_pyr: None,
             updating: None,
+            closing: false,
             #[cfg(windows)]
             win: win::Embedded::new(child.id()),
             child,
@@ -289,12 +293,13 @@ impl Programs {
                 let ok = exit.is_some_and(|s| s.success());
                 let code = exit.and_then(|s| s.code());
                 let errors: Vec<String> = p.bridge.errors.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect();
-                if ok || p.updating.is_some() {
+                let fine = ok || p.updating.is_some() || p.closing;
+                if fine {
                     tracing::info!(program = %p.id, "{} closed", p.name);
                 } else {
                     tracing::warn!(program = %p.id, ?code, "{} closed by mistake after {} s; its last errors: {}", p.name, p.started.elapsed().as_secs(), errors.join(" | "));
                 }
-                closed.push(Closed { id: p.id.clone(), name: p.name.clone(), mistake: !ok && p.updating.is_none(), code, errors, updating: p.updating.clone() });
+                closed.push(Closed { id: p.id.clone(), name: p.name.clone(), mistake: !fine, code, errors, updating: p.updating.clone() });
                 false
             }
         });
@@ -352,6 +357,7 @@ impl Programs {
     /// Closes a program (asks it to, like its own close button would; it goes once it has).
     pub fn close(&mut self, id: &str) {
         if let Some(p) = self.open.iter_mut().find(|p| p.id == id) {
+            p.closing = true;
             #[cfg(windows)]
             p.win.close();
             #[cfg(not(windows))]
