@@ -11,6 +11,13 @@
   // rename find their updates there). People who come to it go on to pyr.gg, an invite after
   // the # included.
   if (/(^|\.)firelitgames\.com$/i.test(location.hostname)) location.replace("https://pyr.gg/" + location.hash);
+  // A game's invite (pyr.gg/<game>/<ROOM>) is a folder deeper than this page's own files
+  // (its pictures, fonts and downloads): they're found from the top of the site.
+  else if (/^\/[^\/]+\/[^\/]+\/?$/.test(location.pathname) && !document.querySelector("base")) {
+    var base = document.createElement("base");
+    base.href = "/";
+    document.head.appendChild(base);
+  }
 </script>
 <title>Pyr: voice, video and chat for your group, on your own server</title>
 <meta name="description" content="Pyr is a free app for your group: voice channels, webcams, 1080p60 screen sharing and Discord-style chat. No account to make, and a server your group owns.">
@@ -138,6 +145,7 @@ em.serif, .serif { font-family: var(--serif); font-style: italic; font-weight: 4
 .join-counts { color: var(--muted); font-size: 14px; display: flex; justify-content: center; gap: 16px; }
 .join-counts i { display: inline-block; width: 9px; height: 9px; margin-right: 6px; border-radius: 50%; background: var(--online); }
 .join-counts i.all { background: var(--dim); }
+.join-counts .room b { color: var(--text); font: 700 15px/1 ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; letter-spacing: .12em; margin-left: 4px; }
 .join-step { margin-top: 24px; }
 .join-step[hidden] { display: none; }
 .join-step .btn { width: 100%; }
@@ -560,7 +568,7 @@ dialog[open] { animation: pop .35s var(--ease); }
     <div class="join-step" id="step-opened" hidden>
       <div class="join-ok" aria-hidden="true"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></div>
       <p class="join-status">Opened in Pyr</p>
-      <p class="join-note">Carry on there: Pyr shows you the server and asks before joining. You can close this tab.</p>
+      <p class="join-note" id="opened-note">Carry on there: Pyr shows you the server and asks before joining. You can close this tab.</p>
       <a class="btn btn-small" id="join-open-again" href="#" style="margin-top:16px">Didn't open? Try again</a>
     </div>
 
@@ -588,16 +596,18 @@ dialog[open] { animation: pop .35s var(--ease); }
 
     <!-- Not an invite any more -->
     <div class="join-step" id="step-bad" hidden>
-      <p class="join-note" style="margin-top:0">It may have run out, or been taken back. Ask whoever sent it for a new one.</p>
+      <p class="join-note" id="bad-note" style="margin-top:0">It may have run out, or been taken back. Ask whoever sent it for a new one.</p>
     </div>
 
     <details class="join-safe" id="join-safe">
       <summary><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4.5 6v5.5c0 4.6 3.2 8.4 7.5 9.5 4.3-1.1 7.5-4.9 7.5-9.5V6L12 3z"/><path d="m8.8 12.2 2.3 2.3 4.2-4.6"/></svg>How this stays safe</summary>
       <ul>
         <li>Nothing downloads or installs unless you click. Pyr comes only from <b>pyr.gg</b>, over HTTPS.</li>
-        <li>Pyr always asks before joining, and shows you the server's name and address first.</li>
-        <li>The invite carries the server's fingerprint: Pyr checks it's really this server, so nobody in between can pose as it.</li>
-        <li>Joining shares your IP address and your Pyr identity with that server (no email, no account). Only join servers from people you trust.</li>
+        <li class="srv">Pyr always asks before joining, and shows you the server's name and address first.</li>
+        <li class="srv">The invite carries the server's fingerprint: Pyr checks it's really this server, so nobody in between can pose as it.</li>
+        <li class="srv">Joining shares your IP address and your Pyr identity with that server (no email, no account). Only join servers from people you trust.</li>
+        <li class="game" hidden>Pyr opens games only from the Pyr Library. They run on your PC like any app: Firelit Games reads each one's source and builds it from that source, and Pyr checks it's that build before opening it.</li>
+        <li class="game" hidden>If the game isn't on this PC yet, Pyr shows you its page in the Library first: nothing installs until you click Install.</li>
         <li>Pyr checks every update against Firelit Games' signature before installing it.</li>
         <li id="join-hash-row" hidden>The download's SHA-256: <span class="hash" id="join-hash"></span></li>
       </ul>
@@ -879,25 +889,16 @@ dialog[open] { animation: pop .35s var(--ease); }
     <div class="head" data-reveal>
       <span class="eyebrow">Pyr Casino, all new in 0.12</span>
       <h2 id="casino-title">A casino your friends can't cheat. <span class="serif fire-text">Neither can the house.</span></h2>
-      <p>Poker with the people on your server and bots, Flash Pots, fourteen slot machines and the table games, for play chips. Before every round the house commits to a secret seed, your Pyr adds its own, and afterwards your Pyr plays the round again to check every card, reel, ball and die. Live with it? Streamer mode gives the game the window, keeps room for your camera, and calls every result out big enough to read on stream.</p>
+      <p>Poker with the people on your server and bots, fourteen slot machines and the table games, for play chips. Before every round the house commits to a secret seed, your Pyr adds its own, and afterwards your Pyr plays the round again to check every card, reel, ball and die. Live with it? Streamer mode gives the game the window, keeps room for your camera, and calls every result out big enough to read on stream.</p>
     </div>
     <article class="card casino-row" data-reveal>
       <div class="casino-text">
         <span class="kind">Slots · fourteen machines</span>
         <h3>Ember Dragon, Pyr Sevens and Reel Row's twelve</h3>
-        <p>In Ember Dragon every egg that lands feeds your dragon, until it's an Elder that multiplies wins by five; fill the reels with fireballs for the Grand. Pyr Sevens has the Phoenix Jackpot, which grows with every spin anyone makes on your server. The twelve from Chimbita's Reel Row have bonuses to pick through and prize wheels, and four of them are funny on purpose. Every one pays back about 99%, and shows how everyone's done at it.</p>
+        <p>In Ember Dragon every egg that lands feeds your dragon, until it's an Elder that multiplies wins by five; fill the reels with fireballs for the Grand. Pyr Sevens has the Phoenix Jackpot, which grows with every spin anyone makes on your server. The twelve from Chimbita's Reel Row are Remastered: tumbles and multiplier bombs up to 500×, Hold & Win with its Mini, Minor, Major and Grand, wilds that grow, freeze, walk and stay, Ante and a feature to buy on every one, each with its own mini game and its own band of sounds. Every one pays back about 99%, and shows how everyone's done at it.</p>
         <div class="tags"><span class="tag">About 99% paid back</span><span class="tag">Four jackpots</span><span class="tag">Auto, up to 1,000 spins</span></div>
       </div>
       <div class="shot"><img src="assets/img/casino-slots.webp" width="1100" height="926" alt="Pyr Casino's fourteen slot machines, each paying back 99%: Pyr Sevens, Ember Dragon, Scoville Slots, Deep Sea Treasure, Cosmic Jackpot, Sugar Rush, Gold Rush, Neon Nights, Tomb of Ra, Frostbite Fortune, Moonlit Cauldron, Dragon's Hoard, The Daily Grind and Starlight Cabaret." loading="lazy"></div>
-    </article>
-    <article class="card casino-row" data-reveal>
-      <div class="casino-text">
-        <span class="kind">Sit &amp; go · up to 1,000× the buy-in</span>
-        <h3>Flash Pot</h3>
-        <p>Five players, 500 chips each, blinds up every minute. A wheel picks the prize the moment the table fills, and the winner takes it all. Take the chip lead while you can: when the fuse burns down, the Flash Pot goes off and every hand is all in.</p>
-        <div class="tags"><span class="tag">3-minute fuse</span><span class="tag">Prize wheel</span><span class="tag">Bots fill empty seats</span></div>
-      </div>
-      <div class="shot"><img src="assets/img/casino-flash-pot.webp" width="1128" height="900" alt="A Flash Pot's table is full, and the prize wheel spins for the prize: 3 to 1,000 times the buy-in." loading="lazy"></div>
     </article>
     <article class="card casino-row" data-reveal>
       <div class="casino-text">
@@ -1177,6 +1178,8 @@ dialog[open] { animation: pop .35s var(--ease); }
         $$(".last-step").forEach(function (el) {
           el.querySelector("p").textContent = carried
             ? "When setup finishes, leave \"Start Pyr\" ticked: Pyr opens and asks to join " + nm + "."
+            : invited.game
+            ? "Come back to this page and click \"I have Pyr: open it\" to play " + nm + " in room " + invited.room + "."
             : "Come back to this page and click \"I have Pyr: open it\" to join " + nm + ".";
         });
       }
@@ -1192,7 +1195,7 @@ dialog[open] { animation: pop .35s var(--ease); }
   }
 
   // ---- phones: send the page to a computer
-  var here = "https://pyr.gg" + (shortCodePath() || "/") + (location.hash || "");
+  var here = "https://pyr.gg" + (shortCodePath() || playPath() || "/") + (location.hash || "");
   function shortCodePath() { var m = location.pathname.match(/^\/(?:invite[\/-])?[a-z0-9][a-z0-9-]{1,30}[a-z0-9]\/?$/i); return m ? location.pathname : ""; }
   function sendToPc(btn) {
     if (navigator.share) {
@@ -1240,6 +1243,38 @@ dialog[open] { animation: pop .35s var(--ease); }
       icon: d.invite.icon === true && d.invite.code ? "/api/v1/icons/" + encodeURIComponent(String(d.invite.code)) + ".png" : ""
     };
   }
+  // ---- a game's invite, https://pyr.gg/<program>/<ROOM> (Pyr 0.13.18): Pyr opens the game in
+  // that room (pyr://play/<program>/<ROOM>). pyr.gg puts the game in this page (#pyr-invite);
+  // when it couldn't (its directory down), the address says which game and room.
+  function playFromPath() {
+    var m = location.pathname.match(/^\/([a-z0-9][a-z0-9-]{0,38}[a-z0-9])\/([a-z0-9]{4,8})\/?$/i);
+    if (!m) return null;
+    var program = m[1].toLowerCase();
+    if (/^(invite.*|join|play|api|assets|library|download|downloads)$/.test(program)) return null;
+    return { program: program, room: m[2].toUpperCase() };
+  }
+  function playPath() { var p = playFromPath(); return p ? "/" + p.program + "/" + p.room : ""; }
+  function nameFromId(id) {
+    return id.split("-").filter(Boolean).map(function (w) { return w.charAt(0).toUpperCase() + w.slice(1); }).join(" ");
+  }
+  function fromPlay(d) {
+    var g = d.play;
+    if (!g) return { invalid: true, game: true };
+    var program = String(g.program || ""), room = String(g.room || "").toUpperCase(), link = String(g.link || "");
+    if (!/^pyr:\/\/play\/[a-z0-9-]{2,40}\/[A-Z0-9]{4,8}$/i.test(link)) return { invalid: true, game: true };
+    var icon = String(g.icon || "");
+    return {
+      game: true, link: link, program: program, room: room, share: d.url || location.href,
+      name: String(g.name || nameFromId(program)).slice(0, 60),
+      // (The Library's copy of its icon, from this site.)
+      icon: /^https:\/\/pyr\.gg\/library\/files\/[A-Za-z0-9._\/-]+$/.test(icon) && icon.indexOf("..") < 0 ? icon.slice("https://pyr.gg".length) : ""
+    };
+  }
+  function playGuess() {
+    var p = playFromPath();
+    return p && { game: true, link: "pyr://play/" + p.program + "/" + p.room, program: p.program, room: p.room,
+                  share: "https://pyr.gg/" + p.program + "/" + p.room, name: nameFromId(p.program), icon: "" };
+  }
   // The invite's own screen. Pyr is tried first (if it's here, it opens on this server);
   // if nothing answers, the download (with the invite riding along in its file name, for
   // Windows' setup to hand to Pyr when it starts).
@@ -1270,16 +1305,20 @@ dialog[open] { animation: pop .35s var(--ease); }
   function showInvite(inv) {
     root.classList.add("inviting");
     window.scrollTo(0, 0);
+    var game = !!inv.game;
+    $$(".join-safe .srv").forEach(function (li) { li.hidden = game; });
+    $$(".join-safe .game").forEach(function (li) { li.hidden = !game; });
     if (inv.invalid) {
       $("#join-badge").textContent = "?";
       $("#join-lead").textContent = "Sorry,";
-      $("#join-name").textContent = "this invite isn't valid";
+      $("#join-name").textContent = game ? "this game isn't in the Pyr Library" : "this invite isn't valid";
+      if (game) $("#bad-note").textContent = "Ask whoever sent it which game it is.";
       step("bad");
-      doc.title = "Pyr: this invite isn't valid";
+      doc.title = game ? "Pyr: this game isn't in the Pyr Library" : "Pyr: this invite isn't valid";
       return;
     }
-    var name = inv.name || "a Pyr server";
-    $("#join-lead").textContent = inv.inviter ? inv.inviter + " invited you to join" : "You've been invited to join";
+    var name = inv.name || (game ? "a game" : "a Pyr server");
+    $("#join-lead").textContent = game ? "You're invited to play" : inv.inviter ? inv.inviter + " invited you to join" : "You've been invited to join";
     $("#join-name").textContent = name;
     var first = (inv.name || "P").replace(/^[^A-Za-z0-9À-￿]+/, "").charAt(0) || "P";
     $("#join-badge").textContent = first.toUpperCase();
@@ -1289,14 +1328,21 @@ dialog[open] { animation: pop .35s var(--ease); }
       img.onload = function () { var b = $("#join-badge"); b.textContent = ""; b.appendChild(img); b.classList.add("has-icon"); };
     }
     var has = function (x) { return x !== null && x !== undefined; };
-    if (has(inv.online) || has(inv.members)) {
+    if (game) {
+      // The room's code, and where Pyr takes you.
+      var rc = $("#join-counts"); rc.textContent = "";
+      var sp = doc.createElement("span"), b = doc.createElement("b");
+      sp.className = "room"; sp.appendChild(doc.createTextNode("Room")); b.textContent = inv.room; sp.appendChild(b);
+      rc.appendChild(sp); rc.hidden = false;
+      $("#opened-note").textContent = "Carry on there: Pyr opens " + name + " in room " + inv.room + ". You can close this tab.";
+    } else if (has(inv.online) || has(inv.members)) {
       var c = $("#join-counts"); c.textContent = "";
       var add = function (cls, text) { var sp = doc.createElement("span"); var i = doc.createElement("i"); if (cls) i.className = cls; sp.appendChild(i); sp.appendChild(doc.createTextNode(text)); c.appendChild(sp); };
       if (has(inv.online)) add("", inv.online + " online");
       if (has(inv.members)) add("all", inv.members + (inv.members === 1 ? " member" : " members"));
       c.hidden = false;
     }
-    doc.title = "Join " + name + " on Pyr";
+    doc.title = game ? "Join a game of " + name + " on Pyr" : "Join " + name + " on Pyr";
     ["#join-open", "#join-open-again", "#join-open-2"].forEach(function (id) {
       var a = $(id); a.href = inv.link;
       a.addEventListener("click", function (e) { e.preventDefault(); launch(inv.link); });
@@ -1333,8 +1379,10 @@ dialog[open] { animation: pop .35s var(--ease); }
   // (`{"none":true}`: pyr.gg says this address is no invite at all.)
   var inv = null, made = $("#pyr-invite"), said = null;
   if (made) { try { said = JSON.parse(made.textContent); } catch (e) {} }
-  if (said && !said.none) inv = fromDirectory(said);
+  if (said && said.play !== undefined) inv = fromPlay(said);
+  else if (said && !said.none) inv = fromDirectory(said);
   if (!inv) inv = readInvite();
+  if (!inv) inv = playGuess();
   if (inv) showInvite(inv);
   else if (!made && shortCode() && window.fetch) {
     var code = shortCode();

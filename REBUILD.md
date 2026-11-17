@@ -192,6 +192,19 @@ Version in brackets: where 0.13.x first had it.
       `rebuild/ref28/dm-call-intro-0.13.28.png`.
 - [x] Plugins sent in with big files: parts (0.13.14)
 - [x] Game invites to friends from programs (0.13.15/16), as links pyr.gg/<game>/<code> (0.13.18)
+      In Pyr; pyr.gg's side was missed until after 0.14.0 went up (Nov 17): its page was still
+      0.13.0's (`installer/site/index.html` had none of 0.13.x's changes), so a game's invite
+      opened in a browser said "this invite isn't valid", and the casino showed Flash Pots and
+      the Reel Row before Remastered. The page is now 0.13.28's with the key change
+      (`latest2.json`): filled in, it differs from 0.13.28's in the release's version, size and
+      day and that file's name only. Seen through 0.13.28's own invite directory (run here,
+      `--site` a copy of the website): a game's invite (`/pyropoly/CHECK`) as 0.13.28's page
+      shows it ("You're invited to play", Room, Open in Pyr), and the home page's words as
+      0.13.28's but for the release. A page goes up between releases with
+      `scripts/make-page.sh` (VERSION, WIN_MB, DATE) and `publish-page.cmd` (`install-page.sh`:
+      the page alone, the one before kept in /root; run on a stand-in VPS here). Still the
+      rebuild's to do: the directory's games' invites, and pyr.gg's settings v6 (0.13.28's,
+      up on the VPS, stay till then).
 
 ### Voice, video, sounds
 - [~] Voice isolation takes the PC's own sound out of the microphone (0.13.2); headphones dips
