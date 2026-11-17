@@ -202,7 +202,8 @@ struct Model {
     /// Heard from Pyr yet, and Pyr's gone (closed).
     heard: bool,
     gone: bool,
-    /// The server showing in Pyr (its name), and whether it has prop bets.
+    /// The server showing in Pyr (its key and name), and whether it has prop bets.
+    server_key: Option<String>,
     server: Option<String>,
     props_here: bool,
     /// Me (my id), my chips (once the casino said), the server's text channels.
@@ -220,6 +221,7 @@ impl Model {
         match v["op"].as_str() {
             Some("props") => {
                 self.heard = true;
+                self.server_key = v["server"]["key"].as_str().map(String::from);
                 self.server = v["server"]["name"].as_str().map(String::from);
                 self.props_here = v["props_here"].as_bool().unwrap_or(false);
                 self.me = v["me"].as_str().unwrap_or_default().to_string();
@@ -449,8 +451,14 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let was = self.m.server_key.clone();
         while let Ok(v) = self.rx.try_recv() {
             self.m.hear(&v);
+        }
+        // Another server showing in Pyr: a bet or a new prop being made was for the one before.
+        if self.m.server_key != was {
+            self.betting = None;
+            self.new_prop = None;
         }
         if self.m.gone {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -973,6 +981,7 @@ mod tests {
         m.hear(&serde_json::from_str(&line.to_string()).unwrap());
         assert!(m.heard && m.props_here);
         assert_eq!(m.server.as_deref(), Some("Brethren of Blood"));
+        assert_eq!(m.server_key.as_deref(), Some("k"));
         assert_eq!(m.chips, Some(25_000));
         assert_eq!(m.channel_name(4), Some("casino"));
         assert_eq!(m.props.iter().map(|p| p.id).collect::<Vec<_>>(), vec![9, 7, 4, 2], "newest first");
@@ -982,7 +991,7 @@ mod tests {
         assert_eq!(ids(Tab::Done), vec![4, 2]);
         // No server showing in Pyr; then what Pyr said; then Pyr closing.
         m.hear(&json!({"op": "props", "server": null, "props_here": false, "list": []}));
-        assert!(m.server.is_none() && m.props.is_empty() && m.chips.is_none());
+        assert!(m.server.is_none() && m.server_key.is_none() && m.props.is_empty() && m.chips.is_none());
         m.hear(&json!({"op": "said", "text": "The odds moved: try again.", "error": true}));
         assert!(m.said.as_ref().is_some_and(|s| s.1 && s.0.starts_with("The odds")));
         m.hear(&json!({"op": "something new"}));
