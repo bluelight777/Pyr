@@ -857,10 +857,13 @@ fn chart(ui: &mut egui::Ui, prop: &PropView, now: i64) {
     let first = prop.history[0].at;
     // (Up to now while it's to come out; to when it was settled once it is.)
     let last = if live { now } else { prop.settled_at.max(prop.history.last().map_or(first, |h| h.at)) }.max(first + 1);
-    // Every point there is and, while it's to come out, the odds as they stand.
+    // Every point there is, and where they stand (or stood when it came out).
     let mut points: Vec<(i64, Vec<f32>)> = prop.history.iter().map(|h| (h.at, h.p.clone())).collect();
     if live {
         points.push((last, prop.prices().iter().map(|x| *x as f32).collect()));
+    } else if let Some(end) = points.last().map(|p| p.1.clone()) {
+        // (Over: they stood as the last bet left them until it came out.)
+        points.push((last, end));
     }
     let n = prop.outcomes.len();
     // As high as they got, to the next line up.

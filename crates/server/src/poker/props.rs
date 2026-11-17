@@ -315,6 +315,16 @@ fn move_chips(hub: &Hub, st: &super::State, uid: &str, chips: i64) -> Result<(),
     Ok(())
 }
 
+/// What of a feed's prop a server acts on once it's open here (its times, its line, how it
+/// came out), as one number: the same number as last time means nothing to do.
+fn what_counts(fp: &FeedProp) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (fp.closes, fp.starts, &fp.detail, fp.featured, &fp.event_name).hash(&mut h);
+    fp.result.as_ref().map(|r| (r.winner, &r.note)).hash(&mut h);
+    h.finish()
+}
+
 fn outcome_name(prop: &Prop, i: usize) -> String {
     prop.outcomes.get(i).cloned().unwrap_or_default()
 }
@@ -819,6 +829,10 @@ impl Poker {
         let map = hub.db.prop_feed_map();
         let mut did = Followed::default();
         let mut told: Vec<Prop> = Vec::new();
+        // (The feed is a couple of thousand props, most of them the same as two minutes ago:
+        // those are passed over here, so following it holds the casino up for no time.)
+        let mut followed = self.props_followed.lock();
+        followed.retain(|id, _| map.contains_key(id));
         for fp in &feed.props {
             let category = p::category_id(&fp.cat);
             // (The casino's props about itself are each server's own: never the feed's.)
@@ -827,8 +841,13 @@ impl Poker {
             }
             match map.get(&fp.id) {
                 Some(&id) => {
+                    let counts = what_counts(fp);
+                    if followed.get(&fp.id) == Some(&counts) {
+                        continue;
+                    }
                     let Ok(mut prop) = Prop::load(hub, id) else { continue };
                     if prop.over() || !prop.house {
+                        followed.insert(fp.id.clone(), counts);
                         continue;
                     }
                     match &fp.result {
@@ -838,12 +857,15 @@ impl Poker {
                                 _ => Self::void(hub, st, &mut prop, "", &r.note, now).map(|()| did.voided += 1),
                             };
                             if let Err(e) = done {
+                                // (Tried again the next time.)
                                 debug!(prop = id, "a prop of the feed's couldn't be settled: {e}");
                                 continue;
                             }
+                            followed.insert(fp.id.clone(), counts);
                         }
                         None => {
                             if prop.closes_at == fp.closes && prop.starts_at == fp.starts && prop.detail == fp.detail && prop.featured == fp.featured && prop.event_name == fp.event_name {
+                                followed.insert(fp.id.clone(), counts);
                                 continue;
                             }
                             // (Put back: bets are taken again until its new time.)
@@ -859,6 +881,7 @@ impl Poker {
                             if prop.save(hub).is_err() {
                                 continue;
                             }
+                            followed.insert(fp.id.clone(), counts);
                             did.changed += 1;
                         }
                     }

@@ -138,11 +138,14 @@ pub struct Poker {
     props_swept: AtomicU64,
     /// The props feed as it was last read (see `props::FeedSeen`).
     props_feed: Mutex<props::FeedSeen>,
+    /// The feed's props as they were when last followed here (each one's `props::what_counts`):
+    /// one that says nothing new is passed over without a look at the database.
+    props_followed: Mutex<HashMap<String, u64>>,
 }
 
 impl Default for Poker {
     fn default() -> Self {
-        Poker { state: Mutex::new(State::default()), next_tourney: AtomicU64::new(1), next_id: AtomicU64::new(1), start: Instant::now(), last_people: Mutex::new(HashMap::new()), gm_proofs: Mutex::new(HashMap::new()), home_for_tests: std::sync::OnceLock::new(), props_swept: AtomicU64::new(0), props_feed: Mutex::new(props::FeedSeen::default()) }
+        Poker { state: Mutex::new(State::default()), next_tourney: AtomicU64::new(1), next_id: AtomicU64::new(1), start: Instant::now(), last_people: Mutex::new(HashMap::new()), gm_proofs: Mutex::new(HashMap::new()), home_for_tests: std::sync::OnceLock::new(), props_swept: AtomicU64::new(0), props_feed: Mutex::new(props::FeedSeen::default()), props_followed: Mutex::new(HashMap::new()) }
     }
 }
 

@@ -71,9 +71,21 @@ NHL, college basketball), Coinbase ticker and candles, Kraken ticker and OHLC, U
 count), SWPC flares and Kp, Launch Library 2, JPL, Treasury (both), Frankfurter, the Federal
 Register, drand.
 
+The Weather Service's daily climate report (forecast.weather.gov's product page, what settles
+the weather's props): its layout asked of the fetch tool line by line (the heading's "CLIMATE
+SUMMARY FOR NOVEMBER 9 2026", "TEMPERATURE (F)" then "YESTERDAY" then "MAXIMUM 58 …",
+"PRECIPITATION (IN)" then "YESTERDAY 0.00 …", version 1 the newest): as `weather::climate`
+reads it. (The copy the tool had was a week old: its cache, by the page's own dates.)
+
 Not readable from here (the fetch tool is refused by their robots rules, so nothing here was
-tried another way): api.weather.gov, Steam's API, BLS. Written from their documented shapes;
-`pyr-props check` on the VPS says whether they read, and `status.json` after.
+tried another way): api.weather.gov (the forecast the weather's props open from), Steam's API,
+NASA's picture API, BLS. Written from their documented shapes; `pyr-props check` on the VPS
+says whether they read, and `status.json` after (`pyr-props status <file>` for people).
+
+Tried end to end with no network at all: `cargo run -p pyr-props --example demo_feed` makes a
+signed, made-up feed in every category (a few props close in minutes; `--results` has them
+come out), a test server follows it (`PYR_PROPS_FEED`, `PYR_PROPS_FEED_KEY`), and Pyr with
+Prop Bets' window shows, bets, cashes out and is paid.
 
 Not used: CoinGecko (its terms forbid gambling use by name), Netflix Top 10 and Billboard
 (automated collection forbidden), Wikipedia's pageviews (its API answered "not found" to every
