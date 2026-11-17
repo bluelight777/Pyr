@@ -59,7 +59,8 @@ pub struct Controls {
     /// release delay, voice quality): the microphone takes them up within 10 ms, without
     /// starting the sound again (see `CapturePipeline::retune`).
     pub retune: Mutex<Option<Settings>>,
-    /// My voice went up and down for the others just now, and why (see `swells`).
+    /// My voice went up and down for the others just now, and why (see `swells`): for the
+    /// measuring tools (`examples/aec_eval.rs`); a call doesn't report it.
     pub swelled: Mutex<Option<String>>,
     /// Whether what's played reaches my microphone, and so whether echo cancellation is on,
     /// in words for Voice & Video (see `mic_echo`); `None` with echo cancellation off.

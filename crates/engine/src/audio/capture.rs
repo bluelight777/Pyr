@@ -771,6 +771,9 @@ impl CapturePipeline {
 
         let open = self.gate(now, ctl);
         self.stages = [raw_db, self.apm_db, db, rms_db(&frame[..480])];
+        // (In the log, for a report someone sends about what they heard, and for the measuring
+        // tools: Pyr no longer sends it as a bug report by itself. Blue, Nov 17: "If I can hear a
+        // problem, don't report it as a voice bug.")
         if let Some(what) = self.swells.feed(self.stages, open, self.far) {
             let what = format!("{what} ({})", self.echo_words());
             tracing::warn!("{what}");

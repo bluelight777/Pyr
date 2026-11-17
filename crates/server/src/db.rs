@@ -919,9 +919,11 @@ impl Db {
     pub fn bugs(&self, limit: usize) -> Vec<pyr_proto::control::BugEntry> {
         use pyr_proto::control::{BugEntry, BugReport, BugStatus};
         let c = self.conn.lock();
+        // (Approved ones first: they're what gets fixed, and the owner's Pyr saves them for that
+        // from this list; then what's waiting; then what's done with.)
         let Ok(mut q) = c.prepare(
             "SELECT id, created_at, status, title, body, app_version, os, log, kind, asked FROM bug_reports \
-             ORDER BY (status = 'new') DESC, id DESC LIMIT ?1",
+             ORDER BY CASE status WHEN 'approved' THEN 0 WHEN 'new' THEN 1 ELSE 2 END, id DESC LIMIT ?1",
         )
         else {
             return Vec::new();
@@ -944,6 +946,30 @@ impl Db {
         })
         .map(|rows| rows.filter_map(|r| r.ok()).collect())
         .unwrap_or_default()
+    }
+
+    /// The owner's list of reports, as much as fits in `max_bytes`: every approved one and what's
+    /// waiting, whole; the ones done with (fixed, rejected) without their logs. (Before, the list
+    /// was what's waiting first, logs and all: fifteen new reports with long logs filled it, the
+    /// approved ones never came, and the owner's Pyr took them off the PC as if none were.)
+    pub fn bug_list(&self, max_bytes: usize) -> Vec<pyr_proto::control::BugEntry> {
+        use pyr_proto::control::BugStatus;
+        let mut reports = self.bugs(500);
+        for b in reports.iter_mut().filter(|b| matches!(b.status, BugStatus::Fixed | BugStatus::Rejected)) {
+            b.report.log.clear();
+        }
+        let size = |b: &pyr_proto::control::BugEntry| b.report.title.len() + b.report.body.len() + b.report.log.len() + b.report.os.len() + 300;
+        let mut total = 0usize;
+        let mut keep = 0usize;
+        for b in &reports {
+            total += size(b);
+            if total > max_bytes && keep > 0 {
+                break;
+            }
+            keep += 1;
+        }
+        reports.truncate(keep);
+        reports
     }
 
     /// An idea already here that `r` is the same as (waiting, or approved): its id and title.
@@ -2528,6 +2554,41 @@ mod tests {
         assert_eq!(got.reactions[0].users, vec!["a", "b"]);
         db.set_reaction(m.id, "🔥", "a", false).unwrap();
         assert_eq!(db.get_message(m.id).unwrap().reactions[0].users, vec!["b"]);
+    }
+
+    #[test]
+    fn the_owner_s_list_never_loses_the_approved_reports() {
+        use pyr_proto::control::{BugReport, BugStatus};
+        let db = Db::open_in_memory().unwrap();
+        let report = |title: &str| BugReport { title: title.into(), body: "b".into(), log: "x".repeat(pyr_proto::control::BUG_LOG_MAX - 100), ..Default::default() };
+        // Approved long ago, one fixed and one rejected, then twenty new ones with long logs.
+        let approved: Vec<i64> = (0..3).map(|i| db.add_bug(&report(&format!("approved {i}"))).unwrap()).collect();
+        for id in &approved {
+            db.set_bug_status(*id, BugStatus::Approved).unwrap();
+        }
+        let fixed = db.add_bug(&report("fixed")).unwrap();
+        db.set_bug_status(fixed, BugStatus::Fixed).unwrap();
+        let rejected = db.add_bug(&report("rejected")).unwrap();
+        db.set_bug_status(rejected, BugStatus::Rejected).unwrap();
+        for i in 0..20 {
+            db.add_bug(&report(&format!("new {i}"))).unwrap();
+        }
+        let list = db.bug_list(700 * 1024);
+        let ids: Vec<i64> = list.iter().filter(|b| b.status == BugStatus::Approved).map(|b| b.id).collect();
+        assert_eq!(ids.len(), 3, "every approved one, whole");
+        assert!(list.iter().filter(|b| b.status == BugStatus::Approved).all(|b| b.report.log.len() > 1000));
+        assert!(list.iter().any(|b| b.status == BugStatus::New), "and what's waiting, as many as fit");
+        let size: usize = list.iter().map(|b| b.report.log.len() + b.report.body.len() + b.report.title.len()).sum();
+        assert!(size <= 700 * 1024);
+        // A short list has everything, the ones done with without their logs.
+        let db = Db::open_in_memory().unwrap();
+        let a = db.add_bug(&report("a")).unwrap();
+        db.set_bug_status(a, BugStatus::Fixed).unwrap();
+        db.add_bug(&report("b")).unwrap();
+        let list = db.bug_list(700 * 1024);
+        assert_eq!(list.len(), 2);
+        assert!(list.iter().find(|b| b.id == a).unwrap().report.log.is_empty());
+        assert!(!list.iter().find(|b| b.id != a).unwrap().report.log.is_empty());
     }
 
     #[test]

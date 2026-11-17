@@ -324,6 +324,18 @@ Version in brackets: where 0.13.x first had it.
       sent in by itself (0.13.24: it was a reported error toast, now a refusal).
 
 ### The approved bug reports (657 to 675)
+Blue, Nov 17, on the voice ones: "If I can't hear a problem, with voice don't report it as a bug"
+... "you've never fixed it, because it's working as designed" ... "stop reporting the same bug,
+volume goes up, then down then up ... What actually happens is you introduce old bugs and it
+just starts echoing again." So: the voice stays 0.13.28's, the held-back `pcgate` stays off for
+good, and Pyr no longer sends "my voice went up and down for the others" by itself (the detector,
+`audio/swells.rs`, only logs it now, for a report someone sends about what they heard, and for
+`examples/aec_eval.rs`). Seen in Blue's Pyr the same day: the Bug reports list showed Approved
+(0), Fixed (0), Rejected (0) under 15 new ones, and his PC's `approved-bug-reports` folder was
+empty: the owner's list was what's waiting first, logs and all, cut at 700 KB, so fifteen new
+reports with long logs filled it, the approved ones never came, and his Pyr took their file off
+the PC as if there were none. The server now sends the approved ones first, then what's waiting,
+then the rest without their logs (`Db::bug_list`).
 - [x] 668, 670 (stopped responding): false. 668 was the update's installer being checked on the
       window's thread just before quitting (now: quitting is marked first; a freeze the window
       came out of by quitting isn't reported); 670 was the window being opened again after the
@@ -332,7 +344,9 @@ Version in brackets: where 0.13.x first had it.
       memory 92 to 94% in use. Now: the log says what the window was showing and at how many
       frames a second; casino pictures not drawn for 90 s are let go. Look again when it comes
       back with that.
-- [ ] 657 to 667, 671 to 675 (voice down and back up, voice isolation, headphones): all with
+- [x] 657 to 667, 671 to 675: working as designed (Blue, above): not reported any more, nothing
+      changed in the voice. What was looked at before that, for the record (voice down and back
+      up, voice isolation, headphones): all with
       isolation, echo cancellation on, automatic gain on; 0.13.11's note says it's while
       something plays on the PC (a game's music) with headphones. Plan, keeping what the echo
       canceller does with others' voices as it is:

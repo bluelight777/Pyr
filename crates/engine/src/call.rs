@@ -491,23 +491,8 @@ async fn status_loop(shared: Arc<Shared>) {
     let mut tick = tokio::time::interval(Duration::from_millis(120));
     loop {
         tick.tick().await;
-        let swelled = {
-            let guard = shared.call.lock();
-            let Some(c) = guard.as_ref() else { break };
-            c.audio.as_ref().and_then(|a| a.controls.swelled.lock().take())
-        };
-        if let Some(what) = swelled {
-            // (Into the bug reports, for the owner to look at, when automatic reports are on.)
-            let settings = shared.state.read_recursive().settings.clone();
-            let detail = format!(
-                "{what}.\n\nVoice settings: noise suppression {:?}, echo cancellation {}, automatic gain {}, {:?}, {} kbps.",
-                settings.noise_suppression,
-                if settings.echo_cancellation { "on" } else { "off" },
-                if settings.auto_gain { "on" } else { "off" },
-                settings.input_mode,
-                settings.voice_bitrate_kbps
-            );
-            crate::bugs::auto_report(&shared, "my voice went up and down for the others", &detail);
+        if shared.call.lock().is_none() {
+            break;
         }
         shared.refresh_call_view();
     }

@@ -2184,21 +2184,9 @@ impl Ctx<'_> {
                 if self.role() != Role::Owner {
                     return Err((ErrorCode::Forbidden, "Only the server's owner can read bug reports.".into()));
                 }
-                // As many as fit in one reply (logs make them big), what's waiting first: a pile
-                // of reports (even a flood from strangers) never stops the list loading.
-                let mut reports = db.bugs(500);
-                let size = |b: &BugEntry| b.report.title.len() + b.report.body.len() + b.report.log.len() + b.report.os.len() + 300;
-                let mut total = 0usize;
-                let mut keep = 0usize;
-                for b in &reports {
-                    total += size(b);
-                    if total > HISTORY_PAGE_BYTES && keep > 0 {
-                        break;
-                    }
-                    keep += 1;
-                }
-                reports.truncate(keep);
-                Ok(Event::Bugs { reports })
+                // As many as fit in one reply (logs make them big): a pile of reports (even a flood
+                // from strangers) never stops the list loading, and never hides the approved ones.
+                Ok(Event::Bugs { reports: db.bug_list(HISTORY_PAGE_BYTES) })
             }
             Request::SetBugStatus { id, status } => {
                 if self.role() != Role::Owner {
