@@ -33,9 +33,11 @@ fun: the odds as a line over time, what you hold and what it's worth, the best b
    (`crates/server/src/poker/props/own.rs`): made from its casino's own count of rounds, a day
    (UTC) at a time. Tomorrow's open today (once someone has played there in the last week),
    close as the day starts, say how the day is going while it's on, and settle by themselves
-   two minutes after it ends. Whoever plays moves these numbers, so the casino stakes a
-   quarter as much on them as on the feed's, and nothing is asked that one bet decides (the
-   day's biggest win, how many rounds are played).
+   two minutes after it ends. Whoever plays moves these numbers (someone set on it can put
+   the house ahead by losing on purpose, or make a game the busiest by betting both sides
+   over and over), so the casino stakes a tenth as much on them as on the feed's, which bounds
+   what that can take; and nothing is asked that one bet decides (the day's biggest win, how
+   many rounds are played).
 4. **The app** relays to Prop Bets' window (the bridge: `game_bridge.rs`); the window
    (`crates/prop-bets`) shows categories, events, a prop's page, what I hold, the best at props.
 

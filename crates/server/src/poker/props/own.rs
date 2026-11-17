@@ -4,9 +4,12 @@
 //! a day (UTC) at a time: tomorrow's open today, close as the day starts, say how it's going
 //! while it's on, and settle by themselves once it's over. Nobody settles anything.
 //!
-//! Whoever plays moves these numbers. So the casino stakes less on them than on the feed's
-//! (`SHALLOWER`), and nothing is asked that one bet decides (the day's biggest win, how many
-//! rounds are played): what's asked takes chips at the tables to push about.
+//! Whoever plays moves these numbers, and someone set on it can push two of them where they
+//! like by playing for it (losing on purpose puts the house ahead; betting red and black over
+//! and over makes roulette the busiest, for a few chips in a hundred). So the casino stakes a
+//! tenth on them of what it stakes on the feed's (`SHALLOWER`: what such a player can take
+//! from a prop is bounded by its depth, and that's kept small), and nothing is asked that one
+//! bet decides (the day's biggest win, how many rounds are played).
 
 use std::collections::BTreeMap;
 
@@ -23,8 +26,9 @@ use crate::hub::Hub;
 const DAY_MS: i64 = 86_400_000;
 /// A day's numbers are final this long after it ends (a round is counted as it finishes).
 const FINAL_AFTER_MS: i64 = 2 * 60_000;
-/// How much less deep a prop about the casino is than one of the feed's.
-const SHALLOWER: u64 = 4;
+/// How much less deep a prop about the casino is than one of the feed's, and the least deep.
+const SHALLOWER: u64 = 10;
+const SHALLOWEST: u64 = 2_500;
 /// Nothing's offered about a casino nobody has played in for this many days.
 const QUIET_DAYS: u64 = 7;
 /// Whose numbers these are.
@@ -274,7 +278,7 @@ impl Poker {
                 if known.contains_key(&fp.id) || fp.closes < now + WORTH_OPENING_MS {
                     continue;
                 }
-                match Self::house_open(hub, &fp, (kept.depth() / SHALLOWER).max(1), now) {
+                match Self::house_open(hub, &fp, (kept.depth() / SHALLOWER).max(SHALLOWEST), now) {
                     Ok(prop) => told.push(prop),
                     Err(e) => tracing::debug!(prop = %fp.id, "a prop about the casino wasn't opened: {e}"),
                 }
@@ -403,8 +407,8 @@ mod tests {
         assert_eq!(house.source, "This casino");
         // (Two of three, drawn toward six in ten: 5.6 of 9.)
         assert!((house.prices()[0] - 5.6 / 9.0).abs() < 1e-6, "{:?}", house.prices());
-        // A quarter as deep as the feed's.
-        assert_eq!(house.b, 25_000.0);
+        // A tenth as deep as the feed's.
+        assert_eq!(house.b, 10_000.0);
         let busiest = of("Which game");
         assert_eq!(busiest.outcomes, vec!["Blackjack", "Reel Row", "Pyr Sevens", "Another game"]);
         let odds = busiest.prices();

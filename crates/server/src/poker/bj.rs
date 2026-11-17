@@ -298,7 +298,9 @@ mod tests {
         assert_eq!(held, 0);
         let last = view(&hub, "ann", id).last.unwrap();
         let o = pyr_poker::casino::bjtable::replay(&last.bets, pyr_poker::fair::Stream::new(pyr_poker::bjroom::round_seed(&last.house, &last.seeds.iter().map(|(s, h)| (*s, pyr_poker::net::hex32::parse(h).unwrap())).collect::<Vec<_>>(), last.round)), &last.actions).unwrap();
-        assert_eq!(rec.chips, start - 100 + o.paid(3));
+        // (A natural's experience can take someone new up a level, and levels pay.)
+        let levels: u64 = (2..=rec.level()).map(pyr_poker::levels::pays).sum();
+        assert_eq!(rec.chips, start - 100 + o.paid(3) + levels);
         assert_eq!(rec.casino.get("blackjack").map(|c| c.rounds), Some(1));
     }
 

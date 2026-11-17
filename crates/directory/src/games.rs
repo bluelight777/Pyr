@@ -39,6 +39,8 @@ const RESERVED: &[&str] = &[
     "app", "apps", "dev", "test", "beta", "alpha", "status", "get", "icons", "og", "legal", "security", "faq", "team",
     "windows", "linux", "mac", "macos", "android", "ios", "setup", "install", "signin", "null", "undefined", "root", "owner",
     "mod", "mods", "moderator", "staff", "official", "bot", "bots", "claude", "anthropic",
+    // (The website's folder for the props feed, since Pyr 0.15: pyr.gg/props/.)
+    "props",
 ];
 
 fn reserved(program: &str) -> bool {

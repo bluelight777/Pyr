@@ -104,7 +104,7 @@ const RESERVED: &[&str] = &[
     "claude", "css", "dev", "discord", "doc", "docs", "download", "downloads", "faq", "favicon", "firelit", "fonts", "get",
     "help", "home", "icons", "images", "img", "index", crate::legacy::APP_ID, "install", "invite", "invites", "ios", "js", "latest", "legal",
     "library", "linux", "login", "mac", "macos", "mail", "mod", "moderator", "mods", "news", "null", "official", "og",
-    "owner", "plugin", "plugins", "privacy", "pyr", "register", "release", "releases", "robots", "root", "security", "server",
+    "owner", "plugin", "plugins", "privacy", "props", "pyr", "register", "release", "releases", "robots", "root", "security", "server",
     "servers", "settings", "setup", "signin", "signup", "sitemap", "skin", "skins", "staff", "static", "status", "support",
     "team", "terms", "test", "undefined", "update", "updates", "vps", "windows", "www",
 ];
