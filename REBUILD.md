@@ -217,12 +217,30 @@ the release made here; he publishes it with `publish.cmd`. The folder holds the 
 once (`upload\props\feed-key.txt`): the set-up moves it to `/etc/pyr-props` on the VPS and
 removes what came up; the spare is with the other keys.
 
+`setup-props.sh` dry-run here (`rebuild/tools/release-0.15.0/dryprops`, its two logs beside
+it), as the VPS runs it but in a place of its own: a private mount namespace with no network
+at all, its own `/etc`, `/usr/local/bin` and `/var/lib`, a made-up website, stand-ins for
+nginx, curl and systemctl, and the real useradd, runuser and setfacl with the release's own
+`pyr-props`, key and certificate. The stand-in systemctl starts the unit's ExecStart as its
+user with everything read-only but the unit's two ReadWritePaths. The first time (the key
+installed, closed to everyone else and gone from what came up; the service up as `pyr-props`;
+the feed written, readable by the web server's user and signed down from the release key; the
+status printed with 14 sources not reading, as they can't there), a second time (the key and
+the state kept, the program before kept beside), a certificate for another key (it stops and
+says so; the good one and the service untouched), and no key at all (it says so): all as
+meant, with the website open and with it under a folder only the web server may enter (it's
+let through that folder and no more).
+
 Not tried, and only the VPS can say: the real sources from the VPS's address (ESPN may answer
 a datacenter differently; api.weather.gov's forecast, Steam's and NASA's picture API are
-written from their documented shapes), `setup-props.sh` on the real machine (its user, the way
-through the website's folders, the service's limits), Prop Bets 0.2 inside Pyr's window on
-Windows and the Windows setup, and a busy server holding some two thousand props. The set-up
-prints each source's state as it ends; `https://pyr.gg/props/status.json` has it after.
+written from their documented shapes), `setup-props.sh` on the real machine (the real nginx
+and website folders, and the service's limits as systemd itself applies them: the address
+families, the memory cap), Prop Bets 0.2 inside Pyr's window on Windows and the Windows setup,
+and a busy server holding some two thousand props. The first round asks its sources one at a
+time, 1.2 seconds apart to each host: a few minutes with all of them answering, and the set-up
+waits five for the first feed before it says there's none yet (the release is published all
+the same; the feed comes by itself). The set-up prints each source's state as it ends;
+`https://pyr.gg/props/status.json` has it after.
 
 0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
 Blue's pyr.log, Nov 17, "couldn't find the server "SERVER2.24.121.231": No such host is known".

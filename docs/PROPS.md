@@ -89,6 +89,16 @@ signed, made-up feed in every category (a few props close in minutes; `--results
 come out), a test server follows it (`PYR_PROPS_FEED`, `PYR_PROPS_FEED_KEY`), and Pyr with
 Prop Bets' window shows, bets, cashes out and is paid.
 
+The VPS's set-up (`installer/site/setup-props.sh`) dry-run with no network and stand-ins for
+nginx, curl and systemctl, the rest real (its user, the key's and the website's permissions,
+the release's own program, key and certificate; the service started as its user with
+everything read-only but its two folders): the first time, again, a wrong certificate, no
+key. What it found is in `REBUILD.md` (0.15.0). A source that can't be reached (all of them,
+there) is said in `status.json` and asked again in two minutes, then less and less often (a
+half hour at most) until it answers; a request is given 25 seconds. The others carry on, and
+props that open without asking anyone (the Gallery Draw, the picture of the day, the coins' up
+or down) still open.
+
 Not used: CoinGecko (its terms forbid gambling use by name), Netflix Top 10 and Billboard
 (automated collection forbidden), Wikipedia's pageviews (its API answered "not found" to every
 try from here: not verified), Apple's chart feeds (terms unread), BLS (unread), the New York
