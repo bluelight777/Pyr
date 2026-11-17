@@ -15,6 +15,11 @@ OUT=dist/release
 # a bug button, no error reports) isn't released.
 . scripts/release-env.sh
 BUGS=${PYR_BUG_SERVER%%/*}
+# (0.14.0 shipped "SERVER2.24.121.231:7766": a word stuck to the address, so no report went.)
+if ! printf '%s' "${BUGS%:*}" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$|^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'; then
+  echo "The bug server's address in release-env.sh isn't an address (${BUGS%:*})." >&2
+  exit 1
+fi
 for B in target-win/x86_64-pc-windows-gnu/release/pyr.exe target/release/pyr; do
   if [ -f "$B" ] && ! grep -qaF "$BUGS" "$B"; then
     echo "$B has no bug report server built in: build it with scripts/release-env.sh sourced." >&2
