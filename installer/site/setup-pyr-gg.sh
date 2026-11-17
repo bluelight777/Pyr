@@ -480,9 +480,10 @@ $TLS
     add_header X-Content-Type-Options nosniff always;
     # Browsers check for a newer page and pictures every time (answered "not changed" when
     # nothing is), so a new release shows right away instead of an old copy for hours.
-    # (pyr.gg settings v5: install-site.sh runs this script again for servers set up before.
+    # (pyr.gg settings v7: install-site.sh runs this script again for servers set up before.
     # v2: check for a newer page every time; v3: downloads that carry an invite; v4: the
-    # website's folder is pyr/; v5: the invite directory can read the page.)
+    # website's folder is pyr/; v5: the invite directory can read the page; v6: games'
+    # invites, pyr.gg/<game>/<ROOM>; v7: the rebuilt Pyrs' release file, latest2.json.)
     add_header Cache-Control "no-cache" always;
     root $SITE_ROOT;
     index index.html;
@@ -513,6 +514,12 @@ $TLS
         proxy_read_timeout 20s;
     }
     location ~ "^/(?:invite[/-])?[A-Za-z0-9][A-Za-z0-9-]{1,30}[A-Za-z0-9]/?\$" {
+        try_files \$uri \$uri/ @invite;
+    }
+    # Games' invites (https://$DOMAIN/<game>/<ROOM>, Pyr 0.13.18): the directory's page for
+    # them, with the game's name and icon in link previews (the plain page while it's down,
+    # which still shows the game). After the short links above, so /invite/<code> stays theirs.
+    location ~ "^/[A-Za-z0-9][A-Za-z0-9-]{0,38}[A-Za-z0-9]/[A-Za-z0-9]{4,8}/?\$" {
         try_files \$uri \$uri/ @invite;
     }
     location @invite {
@@ -566,6 +573,11 @@ if [ -f /etc/systemd/system/pyr-directory.service ]; then
   # (The website's own page, with its invite screen: not the directory's bare stand-in.)
   check "an address that's no invite gets the page, saying so" "404 yes" \
     "$(curl -s --noproxy '*' --max-time 10 -o "$WORK/inv.html" -w '%{http_code}' --resolve "$DOMAIN:443:$CONNECT" "https://$DOMAIN/zzzzzzzz" 2>/dev/null || true) $(grep -q 'id="pyr-invite"' "$WORK/inv.html" 2>/dev/null && grep -q 'id="join-name"' "$WORK/inv.html" 2>/dev/null && echo yes || echo no)"
+fi
+if [ -f /etc/systemd/system/pyr-directory.service ]; then
+  # (A game's invite: its page, with the game in it for the page's script.)
+  check "a game's invite gets the page, with the game" "200 yes" \
+    "$(curl -s --noproxy '*' --max-time 10 -o "$WORK/play.html" -w '%{http_code}' --resolve "$DOMAIN:443:$CONNECT" "https://$DOMAIN/pyropoly/CHECK" 2>/dev/null || true) $(grep -q '"link":"pyr://play/pyropoly/CHECK"' "$WORK/play.html" 2>/dev/null && echo yes || echo no)"
 fi
 check "the site's own files still come first" yes \
   "$(curl -s --noproxy '*' --max-time 10 --resolve "$DOMAIN:443:$CONNECT" "https://$DOMAIN/latest.json" 2>/dev/null | grep -q '"manifest"' && echo yes || echo no)"

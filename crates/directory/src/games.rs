@@ -28,9 +28,21 @@ pub struct Game {
 const NAME_MAX: usize = 60;
 const SUMMARY_MAX: usize = 300;
 
-/// What's never a game: pyr.gg's own folders, and server invites' words.
+/// What's never a game: pyr.gg's own folders and pages, server invites' words, and names that
+/// would pass for Pyr's own or its staff's (0.13.28's, found by asking its directory some 1,000
+/// likely words).
+const RESERVED: &[&str] = &[
+    "join", "play", "api", "assets", "library", "download", "downloads", "skins", "skin", "pyr", "ingle", "latest", "index",
+    "static", "img", "images", "fonts", "css", "js", "favicon", "robots", "sitemap", "help", "about", "privacy", "terms",
+    "support", "docs", "doc", "blog", "news", "admin", "login", "signup", "register", "account", "settings", "server",
+    "servers", "update", "updates", "release", "releases", "plugin", "plugins", "firelit", "discord", "home", "www", "mail",
+    "app", "apps", "dev", "test", "beta", "alpha", "status", "get", "icons", "og", "legal", "security", "faq", "team",
+    "windows", "linux", "mac", "macos", "android", "ios", "setup", "install", "signin", "null", "undefined", "root", "owner",
+    "mod", "mods", "moderator", "staff", "official", "bot", "bots", "claude", "anthropic",
+];
+
 fn reserved(program: &str) -> bool {
-    program.starts_with("invite") || matches!(program, "join" | "play" | "api" | "assets" | "library" | "download" | "downloads")
+    program.starts_with("invite") || RESERVED.contains(&program)
 }
 
 /// The game's id (2 to 40 letters, digits and hyphens, not starting or ending with a hyphen)
@@ -81,11 +93,10 @@ pub fn name_from_id(id: &str) -> String {
         .join(" ")
 }
 
-/// Words from the list as a page shows them: no control characters, no spaces at either end,
-/// at most `max` characters.
+/// Words from the list as a page shows them: no control characters, at most `max` characters,
+/// then no spaces at either end.
 fn clean(s: &str, max: usize) -> String {
-    let s: String = s.chars().filter(|c| !c.is_control()).collect();
-    s.trim().chars().take(max).collect::<String>().trim_end().to_string()
+    s.chars().filter(|c| !c.is_control()).take(max).collect::<String>().trim().to_string()
 }
 
 /// An icon's place in the list (`files/<plugin>/icon.png`, under the site's `library/`) as its
@@ -111,25 +122,20 @@ fn programs(text: &str) -> Option<Vec<Listed>> {
     let signed: serde_json::Value = serde_json::from_str(text).ok()?;
     let index: serde_json::Value = serde_json::from_str(signed.get("index")?.as_str()?).ok()?;
     let s = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string();
+    let plugins = index.get("plugins")?.as_array()?;
     Some(
-        index
-            .get("plugins")
-            .and_then(|p| p.as_array())
-            .map(|plugins| {
-                plugins
-                    .iter()
-                    .filter(|p| p.get("kind").and_then(|k| k.as_str()) == Some("program"))
-                    .filter_map(|p| {
-                        Some(Listed {
-                            id: p.get("id")?.as_str()?.to_string(),
-                            name: s(p, "name"),
-                            summary: s(p, "summary"),
-                            icon: p.get("icon").and_then(|i| i.get("url")).and_then(|u| u.as_str()).and_then(icon_url),
-                        })
-                    })
-                    .collect()
+        plugins
+            .iter()
+            .filter(|p| p.get("kind").and_then(|k| k.as_str()) == Some("program"))
+            .filter_map(|p| {
+                Some(Listed {
+                    id: p.get("id")?.as_str()?.to_string(),
+                    name: s(p, "name"),
+                    summary: s(p, "summary"),
+                    icon: p.get("icon").and_then(|i| i.get("url")).and_then(|u| u.as_str()).and_then(icon_url),
+                })
             })
-            .unwrap_or_default(),
+            .collect(),
     )
 }
 
@@ -209,7 +215,7 @@ mod tests {
             "/pyropoly/ABC", "/pyropoly/ABCD12345", "/pyropoly/AB-CD", "/pyropoly/ABCD/x", "/p/ABCD", "/a-/ABCD", "/-a/ABCD",
             "/pyropoly/CHECK%20", "/pyr%6Fpoly/CHECK", "/pyropoly", "/", "/invite/ABCD", "/invites/ABCD", "/inviteX/ABCD",
             "/join/ABCD", "/play/ABCD", "/api/ABCD", "/assets/ABCD", "/library/ABCD", "/download/ABCD", "/downloads/ABCD",
-            "/pyropoly/CHECK//",
+            "/pyropoly/CHECK//", "/skins/ABCD", "/linux/ABCD", "/Staff/ABCD", "/claude/ABCD",
         ] {
             assert_eq!(parse(no), None, "{no}");
         }
@@ -226,6 +232,8 @@ mod tests {
     #[test]
     fn words_from_the_list_are_trimmed_and_cut() {
         assert_eq!(clean("  One  two\nthree\tfour  ", 300), "One  twothreefour");
+        // (Cut first: spaces in front count.)
+        assert_eq!(clean(&format!("   {}", "n".repeat(70)), 60), "n".repeat(57));
         assert_eq!(clean(&"é".repeat(70), 60).chars().count(), 60);
         // (Cut where a space falls: the space goes too.)
         assert_eq!(clean("abc def", 4), "abc");
@@ -289,5 +297,13 @@ mod tests {
         assert_eq!(lib.game("torch-and-conquer"), Some(Game { name: "Torch And Conquer".into(), summary: String::new(), icon: None }));
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(Library::new(None).game("nosuch").map(|g| g.name), Some("Nosuch".into()));
+        // A list with no plugins in it at all isn't one; an empty one is.
+        let no_plugins = serde_json::json!({ "index": serde_json::json!({ "issued": 0, "skins": [] }).to_string(), "sig": "x" }).to_string();
+        let (dir, lib) = site_with(Some(&no_plugins));
+        assert_eq!(lib.game("pyropoly").map(|g| g.name), Some("Pyropoly".into()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (dir, lib) = site_with(Some(&list(serde_json::json!([]))));
+        assert_eq!(lib.game("pyropoly"), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
