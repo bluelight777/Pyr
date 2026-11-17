@@ -7,11 +7,14 @@
 //! * `GET /api/v1/invites/<code>`: what a code opens (the app and the page ask).
 //! * `GET /<code>`: pyr.gg's page with the invite in it, and the community's name in the link
 //!   preview chat apps show. (`/invite/<code>` and `/invite-<code>` go there too.)
+//! * `GET /<game>/<ROOM>`: a game's invite (0.13.18), pyr.gg's page with the game in it, and the
+//!   game's name and icon (from the Pyr Library's list on the site) in the link preview.
 //!
 //! It never sees a community's messages or members: only its name, its address, how many
 //! members it has and how many are online, and the codes it lists.
 
 pub mod db;
+pub mod games;
 pub mod page;
 
 use std::collections::HashMap;
@@ -71,6 +74,7 @@ pub async fn start(cfg: Config) -> Result<Running> {
     let state = Arc::new(State {
         db: db.clone(),
         site: page::Site::new(cfg.site_dir.clone()),
+        library: games::Library::new(cfg.site_dir.clone()),
         behind_proxy: cfg.behind_proxy,
         limits: Mutex::new(HashMap::new()),
     });
@@ -131,6 +135,8 @@ impl Drop for AbortOnDrop {
 struct State {
     db: Arc<db::Db>,
     site: page::Site,
+    /// The Pyr Library's list on the site, for games' invites.
+    library: games::Library,
     behind_proxy: bool,
     /// Requests per place (an address, a /64 for IPv6) and kind.
     limits: Mutex<HashMap<(IpAddr, Kind), Bucket>>,
@@ -263,8 +269,11 @@ impl State {
     }
 
     /// The page for a short link's path (`/qrslmnov`; `/invite/…` and `/invite-…` are sent to
-    /// that).
+    /// that), or a game's invite (`/pyropoly/K7QX`).
     fn page(&self, path: &str) -> Reply {
+        if let Some((program, room)) = games::parse(path) {
+            return self.game_page(path, program, room);
+        }
         let code = short_code(&format!("{}{path}", pyr_proto::directory::DIRECTORY));
         let Some(code) = code else {
             // No code at all: the plain page.
@@ -288,6 +297,29 @@ impl State {
         r.headers_mut().insert(CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
         // (Short: online counts change, and a taken-back invite should stop showing soon.)
         r.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("public, max-age=60"));
+        r
+    }
+
+    /// A game's invite: the game, from the Library's list, in pyr.gg's page (`/<game>/<ROOM>`;
+    /// written any other way, it's sent there).
+    fn game_page(&self, path: &str, program: &str, room: &str) -> Reply {
+        let canonical = games::canonical(program, room);
+        if path != canonical {
+            let mut r = Response::new(Full::new(Bytes::new()));
+            *r.status_mut() = StatusCode::MOVED_PERMANENTLY;
+            r.headers_mut().insert(LOCATION, HeaderValue::from_str(&canonical).unwrap_or(HeaderValue::from_static("/")));
+            return r;
+        }
+        let (program, room) = (program.to_ascii_lowercase(), room.to_ascii_uppercase());
+        let game = self.library.game(&program);
+        let html = page::render_game(&self.site.index(), &program, &room, game.as_ref());
+        let mut r = Response::new(Full::new(Bytes::from(html)));
+        if game.is_none() {
+            *r.status_mut() = StatusCode::NOT_FOUND;
+        }
+        r.headers_mut().insert(CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
+        // (Games and their names change less often than a community's counts.)
+        r.headers_mut().insert(CACHE_CONTROL, HeaderValue::from_static("public, max-age=300"));
         r
     }
 

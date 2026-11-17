@@ -1294,6 +1294,13 @@ How (decided while starting it):
       (renamed) instead of waiting for it to quit; the new Pyr deletes pyr.exe.old. Linux: the
       password's asked for while Pyr carries on (cancelled: nothing changes). `PYR_DEV_UPDATING`
       shows the screen's stages without updating. Seen first on the update after the rebuild's.
+- [ ] Prop Bets as its own install (Blue, Nov 17: "I want Prop betting to have it's own app
+      but also be an addon for Pyr. I want to choose to install Prop bets or not."). His
+      choices: a program in the Pyr Library, its own window opened from Pyr like Pyropoly (or
+      popped out) with every prop on the server, your bets and the odds moving live, with your
+      Pyr chips; one Install gives both that window and props in chat (the cards, `/prop`),
+      and uninstalling takes both; without it, a prop in chat is a line ("Blue opened a prop")
+      with Install, which installs it from the Library.
 - [ ] Approved bug reports 657 to 675 (voice up and down; stopped responding), without
       touching the echo canceller
 - [ ] The key change (above): built and tried with test keys; the day's steps there

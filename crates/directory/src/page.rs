@@ -62,6 +62,18 @@ a.plain { background: #2b211a; color: #f3ece6; border: 1px solid #3a2c22; }
   try { d = el ? JSON.parse(el.textContent) : null; } catch (e) {}
   var $ = function (id) { return document.getElementById(id); };
   if (!d || d.none) return;
+  if ("play" in d) {
+    var g = d.play;
+    if (!g) { $("lead").textContent = "Sorry,"; $("name").textContent = "this game isn't in the Pyr Library"; $("open").remove(); $("note").textContent = "Ask whoever sent it which game it is."; return; }
+    $("lead").textContent = "You're invited to play";
+    $("name").textContent = g.name || "a game";
+    $("counts").textContent = "Room " + g.room;
+    $("badge").textContent = ((g.name || "P").charAt(0) || "P").toUpperCase();
+    if (g.icon) { var gi = new Image(); gi.alt = ""; gi.onload = function () { $("badge").textContent = ""; $("badge").appendChild(gi); }; gi.src = g.icon; }
+    if (/^pyr:\/\/play\//i.test(g.link || "")) $("open").href = g.link;
+    $("note").textContent = "Pyr opens " + (g.name || "the game") + " in room " + g.room + ". New to Pyr? Get it, then open this link again.";
+    return;
+  }
   var inv = d.invite;
   if (!inv) { $("lead").textContent = "Sorry,"; $("name").textContent = "this invite isn't valid"; $("open").remove(); $("note").textContent = "It may have expired, or been taken back. Ask for a new one."; return; }
   $("lead").textContent = inv.inviter ? inv.inviter + " invited you to join" : "You've been invited to join";
@@ -208,6 +220,73 @@ pub fn render(index: &str, code: &str, invite: Option<&Lookup>) -> String {
     }
     // The invite itself, for the page's script (a data block: never run, only read).
     let data = serde_json::json!({ "code": code, "url": url, "invite": invite });
+    let block = format!(
+        "<meta name=\"robots\" content=\"noindex\">\n<script type=\"application/json\" id=\"pyr-invite\">{}</script>\n",
+        script_json(&data)
+    );
+    match html.find("</head>") {
+        Some(at) => html.insert_str(at, &block),
+        None => html.push_str(&block),
+    }
+    html
+}
+
+/// The page for a game's invite (`/<program>/<ROOM>`, as [`crate::games::canonical`] writes
+/// them): the game it opens, or (None) that the Library has no such game.
+pub fn render_game(index: &str, program: &str, room: &str, game: Option<&crate::games::Game>) -> String {
+    let mut html = index.to_string();
+    let url = crate::games::url(program, room);
+    // (The page is a folder deeper than its pictures and fonts: they're found from the top.)
+    if let Some(at) = html.find("<head>") {
+        html.insert_str(at + "<head>".len(), "\n<base href=\"/\">");
+    }
+    let (title, description) = match game {
+        Some(g) => {
+            let about = if g.summary.is_empty() { String::new() } else { format!("{} ", g.summary) };
+            (
+                format!("Join a game of {} on Pyr", g.name),
+                format!("Room {room}. {about}{} opens inside Pyr: free for Windows, with no account to make.", g.name),
+            )
+        }
+        None => ("Pyr: this game isn't in the Pyr Library".to_string(), "Ask whoever sent it which game it is.".to_string()),
+    };
+    if let (Some(a), Some(b)) = (html.find("<title>"), html.find("</title>")) {
+        if a < b {
+            html.replace_range(a + "<title>".len()..b, &escape_html(&title));
+        }
+    }
+    set_meta(&mut html, "name", "description", &description);
+    set_meta(&mut html, "property", "og:title", &title);
+    set_meta(&mut html, "property", "og:description", &description);
+    set_meta(&mut html, "property", "og:url", &url);
+    set_meta(&mut html, "name", "twitter:title", &title);
+    set_meta(&mut html, "name", "twitter:description", &description);
+    // The game's icon in link previews: a square picture, so the small card.
+    if let Some((g, icon)) = game.and_then(|g| g.icon.as_ref().map(|i| (g, i))) {
+        set_meta(&mut html, "property", "og:image", icon);
+        set_meta(&mut html, "name", "twitter:image", icon);
+        set_meta(&mut html, "name", "twitter:card", "summary");
+        for gone in ["<meta property=\"og:image:width\"", "<meta property=\"og:image:height\""] {
+            if let Some(at) = html.find(gone) {
+                if let Some(len) = html[at..].find('>') {
+                    html.replace_range(at..at + len + 1, "");
+                }
+            }
+        }
+        set_meta(&mut html, "property", "og:image:alt", &g.name);
+    }
+    // The game, for the page's script (a data block: never run, only read).
+    let play = game.map(|g| {
+        serde_json::json!({
+            "icon": g.icon,
+            "link": crate::games::link(program, room),
+            "name": g.name,
+            "program": program,
+            "room": room,
+            "summary": g.summary,
+        })
+    });
+    let data = serde_json::json!({ "play": play, "url": url });
     let block = format!(
         "<meta name=\"robots\" content=\"noindex\">\n<script type=\"application/json\" id=\"pyr-invite\">{}</script>\n",
         script_json(&data)
