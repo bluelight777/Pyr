@@ -24,6 +24,8 @@
 //!
 //! The tool reads every file, puts its SHA-256 and size in the list, and signs the list with
 //! the release key (with the library's own context), good for `--valid-days` (180 unless told).
+//! With `--endorse`, it endorses each program with the key too: a list for the Keeper to take in
+//! (`keeper/add/` in a release: a new program listed, like Prop Bets).
 //!
 //!   cargo run -p pyr-proto --example library -- endorse --key release-key-2.txt \
 //!       --trust <the key before's public half> --in index3.json --out for-key-2.json
@@ -199,7 +201,14 @@ fn main() -> Result<()> {
                     endorsement: String::new(),
                 };
                 e.check().map_err(anyhow::Error::msg)?;
-                println!("{} {} ({}): {} bytes", e.id, e.version, e.kind.label(), e.windows.iter().chain(&e.linux).chain(&e.wasm).map(|f| f.size).sum::<u64>());
+                // (`--endorse`: each program endorsed by the key too, for a list the Keeper takes
+                // in: its own lists only carry programs the release key endorsed.)
+                let mut e = e;
+                if args.iter().any(|a| a == "--endorse") && e.kind == Kind::Program {
+                    e.endorsement = library::endorse(&key, &e);
+                    anyhow::ensure!(library::endorsed(&e, &key.user_id()), "{}: its endorsement doesn't check", e.id);
+                }
+                println!("{} {} ({}): {} bytes{}", e.id, e.version, e.kind.label(), e.windows.iter().chain(&e.linux).chain(&e.wasm).map(|f| f.size).sum::<u64>(), if e.endorsement.is_empty() { "" } else { ", endorsed" });
                 plugins.push(e);
             }
             let mut skins = Vec::new();

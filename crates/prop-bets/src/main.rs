@@ -64,6 +64,9 @@ const LOCK: &[u8] = include_bytes!("../../app/assets/props/lock.webp");
 
 /// How long something Pyr said shows at the top.
 const SAID_FOR: Duration = Duration::from_secs(8);
+/// Nothing from Pyr by then: it's a Pyr from before Prop Bets (one that knows it tells it at
+/// once).
+const TOO_OLD_AFTER: Duration = Duration::from_secs(6);
 
 fn main() -> eframe::Result<()> {
     let bridge = std::env::var_os("PYR_BRIDGE").is_some();
@@ -429,6 +432,7 @@ struct NewProp {
 struct App {
     rx: mpsc::Receiver<Value>,
     bridge: bool,
+    started: Instant,
     m: Model,
     tab: Tab,
     betting: Option<Betting>,
@@ -439,7 +443,7 @@ struct App {
 impl App {
     fn new(ctx: &egui::Context, rx: mpsc::Receiver<Value>, bridge: bool) -> App {
         style(ctx);
-        App { rx, bridge, m: Model::default(), tab: Tab::Open, betting: None, new_prop: None, art: Art::load(ctx) }
+        App { rx, bridge, started: Instant::now(), m: Model::default(), tab: Tab::Open, betting: None, new_prop: None, art: Art::load(ctx) }
     }
 }
 
@@ -505,6 +509,11 @@ impl App {
             return note(ui, "Open Prop Bets from Pyr", "It bets your Pyr Casino chips on your Pyr server's props, so it opens from Pyr: in Plugins, Prop Bets, then Open.");
         }
         if !self.m.heard {
+            // (A Pyr from before Prop Bets opens it as any program, and never tells it the props.)
+            if self.started.elapsed() > TOO_OLD_AFTER {
+                return note(ui, "Update Pyr for Prop Bets", "This Pyr is older than Prop Bets, so it doesn't tell it the props: update Pyr, then open Prop Bets again.");
+            }
+            ui.ctx().request_repaint_after(Duration::from_millis(500));
             ui.add_space(48.0);
             ui.vertical_centered(|ui| {
                 ui.spinner();

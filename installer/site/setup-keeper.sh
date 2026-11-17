@@ -207,6 +207,23 @@ if [ ! -f "$STATE/state.json" ] || [ ! -f "$LIB/index4.json" ] || [ "${1:-}" = "
   runuser -u "$RUN_AS" -- /usr/local/bin/pyr-keeper import "$STATE/import.json" --config "$ETC/keeper.json"
   rm -f "$STATE/import.json"
 fi
+# Programs listed with this release (keeper/add/: lists signed with the release key, each
+# program endorsed by it, like Prop Bets), taken in each time: the same again changes nothing,
+# and one taken off the Library stays off. The Keeper is stopped meanwhile (so it can't put its
+# list up over them); it starts again below.
+ADDS=$(ls "$HERE"/keeper/add/*.json 2>/dev/null || true)
+if [ -n "$ADDS" ]; then
+  systemctl stop pyr-keeper.service >/dev/null 2>&1 || true
+  for A in $ADDS; do
+    install -m 644 -o "$RUN_AS" "$A" "$STATE/import.json"
+    if runuser -u "$RUN_AS" -- /usr/local/bin/pyr-keeper import "$STATE/import.json" --config "$ETC/keeper.json"; then
+      note "listed: $(basename "$A" .json)"
+    else
+      echo "Couldn't list $(basename "$A" .json) (above): the rest goes on." >&2
+    fi
+    rm -f "$STATE/import.json"
+  done
+fi
 
 cat > /etc/systemd/system/pyr-keeper.service <<EOF
 [Unit]

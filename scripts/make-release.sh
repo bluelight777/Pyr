@@ -69,8 +69,13 @@ cargo run -q -p pyr-proto --example release -- sign --key "$KEY" --version "$VER
 if [ -f dist/library/index.json ]; then
   # (index2.json: the list Pyr 0.8.1 and newer read; index.json: older Pyrs'.)
   tar --owner=0 --group=0 --numeric-owner -cf "$OUT/upload/library.tar" -C dist library/index.json $( [ -f dist/library/index2.json ] && echo library/index2.json ) library/files
+elif [ -d dist/library/files ]; then
+  # (Since the rebuild the Keeper keeps the lists: only files go up, for programs listed with
+  # this release (keeper/add/, from make-prop-bets.sh).)
+  tar --owner=0 --group=0 --numeric-owner -cf "$OUT/upload/library.tar" -C dist library/files
+  echo "library.tar: the files only ($(cd dist/library/files && find . -type f | sed 's|^\./||' | paste -sd' '))"
 else
-  echo "no dist/library/index.json: the website keeps the library it has" >&2
+  echo "no dist/library: the website keeps the library it has" >&2
 fi
 cp installer/site/install-site.sh "$OUT/upload/"
 # The bug reports this release fixes (installer/site/fixed-bugs.txt, a number first on each

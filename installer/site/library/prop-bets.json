@@ -1,0 +1,19 @@
+{
+  "plugins": [
+    {
+      "id": "prop-bets",
+      "name": "Prop Bets",
+      "kind": "program",
+      "version": "0.1.0",
+      "summary": "Prop bets on your Pyr server: bet your Pyr Casino chips on what happens, watch the odds move, cash out, and open props of your own.",
+      "description": "Anyone opens a prop: a question with two to six outcomes (Will it rain on Saturday?), and everyone in the channel bets Pyr Casino chips on it. The odds move with every bet, from a market maker the server keeps (a logarithmic market scoring rule, as in Maanix's PlayProps), and every winning share pays a chip. Whoever opens a prop backs it and settles it. Prop Bets' window, inside Pyr or popped out, shows every prop on the server you're on: the open ones, your bets with what they're worth now (Cash out sells them back), and the settled ones. With it installed, props show in chat as cards with their odds and Bet, and /prop opens one. Needs Pyr {{PYR}} or newer.",
+      "author": "Firelit Games",
+      "license": "MIT OR Apache-2.0",
+      "review": "Made by Firelit Games, from Pyr's own source. It only shows props and asks Pyr to bet: the server checks every bet.",
+      "icon": "prop-bets/icon.png",
+      "windows": ["prop-bets/0.1.0/windows/prop-bets.exe"],
+      "linux": ["prop-bets/0.1.0/linux/prop-bets.exe"],
+      "run": "prop-bets.exe"
+    }
+  ]
+}

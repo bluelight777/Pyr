@@ -136,7 +136,9 @@ that the rebuild doesn't know yet must come through untouched:
    `installer/windows/build.sh`: makensis is here), Linux (.deb), the VPS's server for x86-64
    and ARM64 (`scripts/build-vps-server.sh`, with cargo-zigbuild and Zig installed here and the
    Rust source in /home/claude/rustsrc for -Zbuild-std: both built and the x86-64 one run),
-   the Keeper (`make-keeper.sh` with KEEPER_PUB and LIVE, above), `make-release.sh`.
+   the Keeper (`make-keeper.sh` with KEEPER_PUB and LIVE, above), `make-release.sh`. Since
+   Prop Bets (0.14.2 on): `-p prop-bets` among the packages in the Windows and Linux builds,
+   and `make-prop-bets.sh` after `make-keeper.sh`.
 4. The swap, Blue at the VPS: the rebuilt server onto 0.13.28's data (backed up first), the
    Keeper's second certificate and list (`setup-keeper.sh`, run by the release), then
    `publish.ps1` from Blue's PC. 0.13.28's apps are told to get the new Pyr as they log in.
@@ -1350,6 +1352,23 @@ How (decided while starting it):
       channel I can read at once; (5) in the Library: built for Windows and Linux, endorsed with
       the new release key, published (`make-library-upload.sh`, the Keeper takes it in); (6) a
       release with the Pyr side.
+      Done (Nov 17): 1 to 5. The program is `crates/prop-bets` (in the workspace, so it shares
+      Pyr's builds of eframe; build it with the rest, `-p prop-bets`): Pyr's chat cards to the
+      letter (art, words, odds) under Open, My bets and Settled, New prop with a channel picker,
+      what Pyr said (a win, or what the server said no to) along the top; started by itself it
+      says to open it from Pyr, and from a Pyr older than it (nothing heard in 6 s) to update
+      Pyr. Pyr's side: told at once when it opens (before: never, with no server showing), the
+      list asked for without ever answering on the drawing thread (the 0.14.0 freeze's kind), and
+      a server without `prop_bets_list` (0.14.0, 0.14.1) asked each text channel's open ones,
+      quietly. Checked on a test screen with a stand-in for Pyr (cards, tabs, a refusal, New
+      prop; every ask read back as Pyr reads it) and the Keeper's import with test keys (Prop
+      Bets in `index4.json`, endorsed; not in `index3.json`; taken in twice, listed once).
+      Listing it, in a release, after `make-keeper.sh`: `KEY=… scripts/make-prop-bets.sh` (its
+      files into `dist/library/files/prop-bets/`, which `make-release.sh` carries as
+      `library.tar`; its listing signed and endorsed in `dist/keeper/add/`, which
+      `setup-keeper.sh` takes in every time, the Keeper stopped meanwhile). Its description says
+      which Pyr it needs (the workspace's version, filled in). Left: (6), the release, with Pyr's
+      side (the cards follow the install, so both go up together); Blue's go-ahead first.
 - [ ] Approved bug reports 657 to 675 (voice up and down; stopped responding), without
       touching the echo canceller
 - [ ] The key change (above): built and tried with test keys; the day's steps there
