@@ -285,8 +285,10 @@ impl PyrApp {
     /// in the form on Make your own.
     pub(crate) fn plugin_chosen(&mut self, path: &std::path::Path) {
         let gathered = source::gather(path);
+        // (Also called while a frame reads the state, for a folder dropped on the page: a second
+        // plain read there would wait behind a writer that waits for the first.)
         let (author, sends_before) = {
-            let st = self.engine.state();
+            let st = self.engine.shared.state.read_recursive();
             (st.my_name.clone(), st.plugin_sends_done)
         };
         self.plugins.form = Some(SubmitForm { gathered, author, contact: String::new(), agree: false, sends_before, scroll: true });

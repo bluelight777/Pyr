@@ -1634,7 +1634,6 @@ impl eframe::App for PyrApp {
             self.ui.overlay_rects.clear();
             crate::casino::keys::sync(&st.settings.casino_keys);
             self.frame_ui(ctx, &st, &mut acts);
-            self.place_programs(ctx);
             // The title (on the taskbar button and in Alt+Tab) says when something's unread.
             let title = crate::unread::Unread::of(&st).title(&self.title);
             if title != self.title_shown {
@@ -1643,6 +1642,11 @@ impl eframe::App for PyrApp {
             }
             chimes
         };
+        // Programs open inside Pyr, placed once the state is let go: talking to them reads it
+        // again, and a second read while an engine thread waits to write never comes (Pyr's
+        // window stopped responding seconds after Pyropoly opened, a call going on, Nov 17).
+        crate::watchdog::step("placing programs");
+        self.place_programs(ctx);
         crate::watchdog::step("playing sounds");
         // Only now that the state is let go (see Engine::state).
         for c in chimes {

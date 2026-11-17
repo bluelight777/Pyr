@@ -1,2 +1,0 @@
-668 Pyr stopped responding (as it closed to update). Fixed in 0.14.0: the update's installer is no longer checked on the window's thread as Pyr quits, and a pause it quits out of isn't reported.
-670 Pyr stopped responding (the window opened again after the graphics card went away). Fixed in 0.14.0: that moment isn't watched, so it isn't reported.

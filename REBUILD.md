@@ -402,6 +402,15 @@ then the rest without their logs (`Db::bug_list`).
       ("taking a program's window in", "a program shows a window of its own outside Pyr: taking
       that one in", "a program's window closed: looking for its next one"). Windows only:
       **to A/B on Blue's PC** (Torch & Conquer, Pyropoly, Chimbrowser against 0.13.28).
+      Found on Blue's PC (0.14.0, Nov 17: "Pyropoly won't start a game without crashing"): his
+      pyr.log has Pyropoly's window taken in, then five seconds later "Pyr's window stopped
+      responding (it was drawing the window; shared state being written, ...)", in a call, and
+      the run before ended the same way. The rebuild's 0.13.15 bridge (`programs_talk`) had
+      `place_programs` read the state again while the frame still held it: parking_lot's read
+      waits behind a waiting writer, and that writer waits for the frame's read, for good (and
+      what the programs asked for was done under the frame's read too). Pyr froze, and closing
+      it closed the program with it. Now the programs are placed after the frame lets the state
+      go (0.14.1), and a folder dropped on Make your own reads it with `read_recursive`.
 - [x] Programs know your Pyr name and friends; PYR_BRIDGE; invite friends (0.13.15)
 - [x] Library shows plugins added since setup (0.13.7); Dominó program removed and never listed
       (0.13.12, 0.13.25). Pyr: `domino-cubano` taken off the PC as Pyr starts (its files, data
@@ -1315,6 +1324,16 @@ How (decided while starting it):
       Pyr chips; one Install gives both that window and props in chat (the cards, `/prop`),
       and uninstalling takes both; without it, a prop in chat is a line ("Blue opened a prop")
       with Install, which installs it from the Library.
+      The plan: (1) Pyr shows prop cards and `/prop` only with `prop-bets` installed; without
+      it, the message's line and Install (the card follows the install); (2) the program bridge
+      gets props: Pyr tells the program the shown server's props, my chips and its channels, as
+      they change; the program asks Pyr to bet, cash out, open, settle and call off
+      (`@pyr {"op":"prop_bet",…}`), sent to the server as the card does, answered only for the
+      program installed as `prop-bets`; (3) the program, `plugins/prop-bets` (Rust, egui, its own
+      window in Pyr's page or popped out, the card's art); (4) the server lists the props of every
+      channel I can read at once; (5) in the Library: built for Windows and Linux, endorsed with
+      the new release key, published (`make-library-upload.sh`, the Keeper takes it in); (6) a
+      release with the Pyr side.
 - [ ] Approved bug reports 657 to 675 (voice up and down; stopped responding), without
       touching the echo canceller
 - [ ] The key change (above): built and tried with test keys; the day's steps there
