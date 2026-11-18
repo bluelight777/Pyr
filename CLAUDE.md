@@ -19,7 +19,11 @@ lives only in it, ever:
    device_commit_files it to `Downloads\pyr-source\pyr-rebuild.bundle` (force). His PC pushes it
    to GitHub (`bluelight777/Pyr`) every hour (`Downloads\pyr-source\push-pyr.ps1`, run by the
    scheduled task "Pyr backup to GitHub"; it only ever fast-forwards, and writes `push-pyr.log`).
-   This session can't push to GitHub itself.
+   This session can't push to GitHub itself (the proxy refuses the repository), so **every
+   time a bundle goes to his PC, give Blue the commands to push it** (his say, Nov 18:
+   "always give me the command to push to github"), in PowerShell, no double quotes:
+   `cd $HOME\Downloads\pyr-source\pyr-push`, then `git pull ..\pyr-rebuild.bundle main`,
+   then `git push https://github.com/bluelight777/Pyr.git main`.
 5. **Keys never in the repository, and never only in the workspace.** They live in
    `Downloads\pyr-keys` on Blue's PC (and the outputs folder). Use them by path; never print them.
    The pre-commit hook refuses anything that looks like a key.

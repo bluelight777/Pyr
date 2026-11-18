@@ -246,16 +246,44 @@ which is a board of 375; under 2 ms on its other pages; all 1,500 told to it in 
 a game under way draws some twenty times a second for its LIVE dot: most of a core with this
 machine's software drawing, little with a graphics card's.
 
-Not tried, and only the VPS can say: the real sources from the VPS's address (ESPN may answer a
-datacenter differently; api.weather.gov's forecast, Steam's and NASA's picture API are written
-from their documented shapes), `setup-props.sh` on the real machine (the real nginx and website
-folders, and the service's limits as systemd itself applies them: the address families, the
-memory cap), Prop Bets 0.2 inside Pyr's window on Windows and the Windows setup, and many
-members betting at once. The first round asks its sources one at a time, 1.2 seconds apart to
-each host: a few minutes with all of them answering, and the set-up waits five for the first
-feed before it says there's none yet (the release is published all the same; the feed comes by
-itself). The set-up prints each source's state as it ends; `https://pyr.gg/props/status.json`
-has it after.
+0.15.0 changed before it was published (Nov 18, Blue's two asks; `docs/PROPS.md`, "The games'
+sites"). Prop Bets in the Library says "by Maanix" (its listing's author; its review line
+"Built by Firelit Games from Pyr's own source"). And the games no longer come from ESPN, whose
+terms forbid it: Blue chose, of what was put to him, three free sites with a key each:
+balldontlie (NFL, NBA, MLB), CollegeFootballData with its CollegeBasketballData (the two
+college sports), The Odds API (NHL). Each is a `Scoreboard` written from its documentation
+(none answers without a key), asked at the pace its free plan allows, its calls counted out
+over the month. The keys are Blue's to get and to give, on the VPS, with `pyr-props-key <site>`
+(asked for unseen, kept in `/etc/pyr-props/keys`); until a site has its key its leagues open
+nothing and say so, and the rest of the feed doesn't care. What that changed in the release:
+`pyr-props` for the VPS (both), `setup-props.sh`, `pyr-props-key` beside it, Prop Bets' window
+(the NFL's and the NHL's words: no spread from these sites, no overtime prop for hockey; a
+total against what's usual in a league where there's no bookmaker's line) and so its listing
+and `library.tar`; the certificates and the signed lists were made again with it (until
+2027-12-23). Pyr itself, its setups and the server are byte for byte what they were (built
+again, they came out the same). On Blue's PC the ten files that changed were put in
+`Downloads\pyr-release-0.15.0` (52 files now) and read back the same. Checked again: the tests
+(`pyr-props` 53, the window 7, the app 148), the release's 35 checks, and the set-up's dry run
+in both cases with the key helper added: a key given through it lands in its own closed file,
+the maker starts again and says which sites have their keys, and the key is in nothing else
+that's written or said. A night of hockey as the maker would run it, a look every five minutes
+for twelve hours: the scores asked for five times, both games settled (the test that found a
+final game's five-minute wait was being forgotten between looks, which would have left it
+unsettled for good).
+
+Not tried, and only the VPS can say: every source from the VPS's address; the three games'
+sites at all (no answer of theirs has been read: whether balldontlie's free key reads all
+three of its leagues, how soon CollegeFootballData calls a game completed, which way
+CollegeBasketballData's spread is signed); api.weather.gov's forecast, Steam's and NASA's
+picture API (written from their documented shapes); `setup-props.sh` on the real machine (the
+real nginx and website folders, and the service's limits as systemd itself applies them: the
+address families, the memory cap); Prop Bets 0.2 inside Pyr's window on Windows and the
+Windows setup; and many members betting at once. The first round asks its sources one at a
+time, 1.2 seconds apart to each host: a few minutes with all of them answering, and the
+set-up waits five for the first feed before it says there's none yet (the release is
+published all the same; the feed comes by itself). The set-up prints each source's state as
+it ends, and which sites wait for their keys; `https://pyr.gg/props/status.json` has it
+after, and `pyr-props-key` says what a site's leagues read the moment its key is given.
 
 0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
 Blue's pyr.log, Nov 17, "couldn't find the server "SERVER2.24.121.231": No such host is known".
