@@ -26,6 +26,7 @@ use crate::when::{self, DAY, HOUR, MIN};
 const FOOTBALL: &str = "https://api.collegefootballdata.com";
 const BASKETBALL: &str = "https://api.collegebasketballdata.com";
 const NAME: &str = "CollegeFootballData";
+const HOOPS_NAME: &str = "CollegeBasketballData";
 const FOOTBALL_CALLS: Budget = Budget { month: 440, ahead: 90 };
 const BASKETBALL_CALLS: Budget = Budget { month: 480, ahead: 60 };
 /// How often the lines and the Top 25 are asked for again.
@@ -95,6 +96,11 @@ impl Cfbd {
 impl Scoreboard for Cfbd {
     fn name(&self) -> &'static str {
         NAME
+    }
+
+    /// (Basketball's numbers are its sister site's.)
+    fn credit(&self, league: &League) -> &'static str {
+        if league.cat == "cfb" { NAME } else { HOOPS_NAME }
     }
 
     fn coming(&self, web: &dyn Fetch, league: &League, now: i64, notes: &mut Value) -> Result<Vec<Game>, String> {

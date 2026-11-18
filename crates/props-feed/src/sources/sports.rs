@@ -86,6 +86,11 @@ pub struct Game {
 pub trait Scoreboard: Send + Sync {
     /// Its name, as the props say whose numbers settle them.
     fn name(&self) -> &'static str;
+    /// Whose numbers a league's props say settle them: its name, unless that league's come
+    /// from a sister site under another name.
+    fn credit(&self, _league: &League) -> &'static str {
+        self.name()
+    }
     /// The games coming up in a league (this week's, or today's and tomorrow's). `notes`:
     /// whatever it wants kept between looks (what it has spent of a month's calls, say).
     fn coming(&self, web: &dyn Fetch, league: &League, now: i64, notes: &mut Value) -> Result<Vec<Game>, String>;
@@ -529,7 +534,7 @@ impl Source for Sports {
                 continue;
             }
             *n += 1;
-            for (prop, m) in plan(l, b.name(), g) {
+            for (prop, m) in plan(l, b.credit(l), g) {
                 // (Only what this scoreboard can say the outcome of.)
                 if b.settles(l, m["kind"].as_str().unwrap_or("")) {
                     out.open(prop, m);
@@ -941,6 +946,7 @@ mod tests {
         // The bookmaker's lines: the spread and the total are his.
         assert_eq!(m.feed(t0).props.iter().map(|p| p.id.rsplit(':').next().unwrap().to_string()).collect::<Vec<_>>(), vec!["half", "spread", "total", "win"]);
         assert_eq!(m.feed(t0).props[2].outcomes, vec!["Over 47.5".to_string(), "Under 47.5".into()]);
+        assert!(m.feed(t0).props.iter().all(|p| p.source == "CollegeFootballData" && p.rules.contains("CollegeFootballData")));
         // Three days of it never being called over: asked about every quarter of an hour
         // from when it could have ended, for eight hours, then four times a day.
         let (mut about, mut all) = (0, 3);
@@ -1033,6 +1039,8 @@ mod tests {
         m.step(t0 + 13 * HOUR, &web, false);
         let feed = m.feed(t0 + 13 * HOUR);
         assert!(!feed.props.is_empty() && feed.props.iter().all(|p| p.event == "cbb:c372836" && p.event_name == "UNLV vs #11 Kansas"), "{:?}", feed.props.iter().map(|p| p.id.as_str()).collect::<Vec<_>>());
+        // (Basketball's numbers are the sister site's, and its props say so.)
+        assert!(feed.props.iter().all(|p| p.source == "CollegeBasketballData" && p.rules.contains("CollegeBasketballData") && !p.rules.contains("Football")), "{}", feed.props[0].rules);
         // One that an earlier maker opened: called off the next time its league is looked at.
         let mut odd = feed.props[0].clone();
         odd.id = "cbb:c378682:win".into();
