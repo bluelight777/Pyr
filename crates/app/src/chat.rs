@@ -880,7 +880,7 @@ impl PyrApp {
                         // of the text).
                         let (rest, server_gifs) = crate::server_gifs::split(&m.content);
                         let content = if server_gifs.is_empty() { m.content.clone() } else { rest };
-                        // A prop's message is its card (with Prop Bets installed): its lines aren't
+                        // A prop's message is its card (with Pyr Prop Bets installed): its lines aren't
                         // shown as text too. Without it, its line and Install.
                         let props_here = s.has(pyr_proto::control::PROPS_FEATURE) && !crate::props::ids_in(&content).is_empty();
                         let cards = props_here && self.prop_bets_installed();
@@ -1596,7 +1596,7 @@ impl PyrApp {
                         draft.clear();
                     } else {
                         // (Kept in the box, to send once it's installed.)
-                        acts.push(Act::Toast("Prop bets come with Prop Bets, from the Pyr Library: install it there.".into(), false));
+                        acts.push(Act::Toast("Prop bets come with Pyr Prop Bets, from the Pyr Library: install it there.".into(), false));
                         self.show_prop_bets_in_library();
                     }
                 } else if send && let Some((addon, name, args)) = addon_command {

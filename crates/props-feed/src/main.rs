@@ -192,7 +192,8 @@ fn verify(key: &Path, cert: &Path, release_key: Option<&str>) -> Result<(), Stri
 fn status(file: &Path) -> Result<(), String> {
     let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(file).map_err(|e| format!("reading {}: {e}", file.display()))?).map_err(|e| format!("{} isn't a status file: {e}", file.display()))?;
     let text = |v: &serde_json::Value| v.as_str().unwrap_or("").to_string();
-    println!("made {} by pyr-props {}", text(&v["made"]), text(&v["version"]));
+    let built = text(&v["built"]);
+    println!("made {} by pyr-props {}{}", text(&v["made"]), text(&v["version"]), if built.is_empty() { String::new() } else { format!(" (built {built})") });
     let mut bad = 0;
     for (name, s) in v["sources"].as_object().into_iter().flatten() {
         let (ok, error) = (s["ok"].as_bool().unwrap_or(false), text(&s["error"]));

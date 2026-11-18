@@ -1464,7 +1464,7 @@ impl Engine {
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    // (Said in Prop Bets' own window too, as Pyr says it.)
+                    // (Said in Pyr Prop Bets' own window too, as Pyr says it.)
                     if let Some(s) = st.server_mut(&k) {
                         s.poker.prop_refusals.push(e.clone());
                         let n = s.poker.prop_refusals.len();
@@ -1551,7 +1551,7 @@ impl Engine {
         self.prop_request(key, pyr_poker::net::ToServer::PropVoid { id });
     }
 
-    /// Every prop in the channels I can read (Prop Bets' own window; changes come by
+    /// Every prop in the channels I can read (Pyr Prop Bets' own window; changes come by
     /// themselves after). A server from before that list (0.14.0 and 0.14.1) is asked each
     /// text channel's open ones instead, quietly (a channel it won't say isn't an error here).
     pub fn prop_list_all(&self, key: &str) {
@@ -1591,7 +1591,7 @@ impl Engine {
     }
 
     /// Looks one prop up now, whenever it was last asked for: how its odds went comes with it
-    /// (Prop Bets' window, showing one prop).
+    /// (Pyr Prop Bets' window, showing one prop).
     pub fn prop_look(&self, key: &str, id: u64) {
         let has = self.shared.state.read_recursive().server(key).is_some_and(|s| s.has(pyr_proto::control::PROPS_FEATURE));
         if has {
@@ -1620,7 +1620,7 @@ impl Engine {
     }
 
     /// Props I just opened (for their message in chat), what happened to me on props, and what
-    /// the server said no to (Pyr has said that already: for Prop Bets' own window).
+    /// the server said no to (Pyr has said that already: for Pyr Prop Bets' own window).
     pub fn take_prop_news(&self, key: &str) -> PropNews {
         let mut st = self.shared.state.write();
         match st.server_mut(key) {

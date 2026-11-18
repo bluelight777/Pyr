@@ -19,4 +19,4 @@ ssh $server "bash ~/$folder/setup-props.sh; code=`$?; rm -rf ~/$folder; exit `$c
 if ($LASTEXITCODE -ne 0) { throw "Setting the props feed's maker up didn't work (what it said is above)." }
 $status = Invoke-RestMethod -Uri "https://pyr.gg/props/status.json" -Headers @{ "Cache-Control" = "no-cache" }
 Write-Host ""
-Write-Host "Done: the props feed is made by pyr-props $($status.version). What each source reads is above, and at https://pyr.gg/props/status.json."
+Write-Host "Done: the props feed is made by pyr-props $($status.version), built $($status.built). What each source reads is above, and at https://pyr.gg/props/status.json."

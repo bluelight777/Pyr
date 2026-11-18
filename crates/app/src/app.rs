@@ -556,21 +556,21 @@ pub struct UiState {
     pub program_updates: Vec<crate::game_bridge::ProgramUpdate>,
     /// A game invited to and being installed: opened in that room once it is (game, room).
     pub pending_play: Option<(String, String)>,
-    /// What Prop Bets' own window was last told (`None`: nothing yet, since it opened): the
+    /// What Pyr Prop Bets' own window was last told (`None`: nothing yet, since it opened): the
     /// server showing (`None`: none), its props' version, my chips and whether it has prop bets.
     /// It's told again when any of it changes.
     pub prop_bets_told: Option<Option<(String, u64, Option<u64>, bool)>>,
-    /// How Prop Bets' window said it's told of props (`props_hello`: 2, only what changed each
+    /// How Pyr Prop Bets' window said it's told of props (`props_hello`: 2, only what changed each
     /// time; 0 until it says: every prop each time, as 0.14's window is), and when every prop
     /// was last asked of the server for it (asked again every few minutes while it's open: the
     /// server tells of the casino's own props as they change only for a while after).
     pub prop_bets_v: u32,
     pub prop_bets_listed: Option<Instant>,
-    /// Prop Bets' window just said how it's told: it's told everything again, its way (what it
+    /// Pyr Prop Bets' window just said how it's told: it's told everything again, its way (what it
     /// was told before it said so was an older window's fill: no props of the casino's own).
     pub prop_bets_again: bool,
     /// When a prop's card in chat last asked how one of the casino's own props stands (those
-    /// change without this Pyr hearing, unless Prop Bets' window is open).
+    /// change without this Pyr hearing, unless Pyr Prop Bets' window is open).
     pub prop_card_asked: HashMap<(String, u64), Instant>,
     /// Prop bets: the bet being picked on a card, and the New prop bet window.
     pub prop_betting: Option<crate::props::Betting>,
@@ -1464,7 +1464,7 @@ impl eframe::App for PyrApp {
             }
         }
         // Prop bets: one I just opened goes in its channel as its message (the card); what
-        // happened to me on props is said (in Prop Bets' own window too, when it's showing that
+        // happened to me on props is said (in Pyr Prop Bets' own window too, when it's showing that
         // server's, with what the server said no to).
         let prop_news: Vec<String> = engine
             .state()

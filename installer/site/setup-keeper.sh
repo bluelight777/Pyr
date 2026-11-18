@@ -208,7 +208,7 @@ if [ ! -f "$STATE/state.json" ] || [ ! -f "$LIB/index4.json" ] || [ "${1:-}" = "
   rm -f "$STATE/import.json"
 fi
 # Programs listed with this release (keeper/add/: lists signed with the release key, each
-# program endorsed by it, like Prop Bets), taken in each time: the same again changes nothing,
+# program endorsed by it, like Pyr Prop Bets), taken in each time: the same again changes nothing,
 # and one taken off the Library stays off. The Keeper is stopped meanwhile (so it can't put its
 # list up over them); it starts again below.
 ADDS=$(ls "$HERE"/keeper/add/*.json 2>/dev/null || true)

@@ -34,7 +34,7 @@ pub const DEPTHS: [(u64, &str); 3] = [(10_000, "Friendly"), (100_000, "Big"), (1
 /// The most props open at once: one person's, and one channel's.
 pub const MAX_OPEN_EACH: usize = 5;
 pub const MAX_OPEN_IN_CHANNEL: usize = 20;
-/// The most props a list of every channel's gives (Prop Bets' own window).
+/// The most props a list of every channel's gives (Pyr Prop Bets' own window).
 pub const MAX_LISTED: usize = 100;
 /// How long a prop can stay open unsettled before it's called off (everyone's chips back).
 pub const MAX_OPEN_DAYS: i64 = 30;

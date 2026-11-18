@@ -483,7 +483,7 @@ pub const GM_UNLIMITED_FEATURE: &str = "poker_gm_unlimited";
 pub const PROPS_FEATURE: &str = "prop_bets";
 pub const PROPS_CAP: &str = "prop_bets";
 /// The server lists every prop in the channels I can read, settled ones too (`PropList` for
-/// channel 0: Prop Bets' own window). Without it, the window asks each channel for its open ones.
+/// channel 0: Pyr Prop Bets' own window). Without it, the window asks each channel for its open ones.
 pub const PROPS_LIST_FEATURE: &str = "prop_bets_list";
 /// The casino's own props (0.15): props in categories that open, close and settle by
 /// themselves (from the props feed, `props_feed`, and the casino's own numbers), once whoever

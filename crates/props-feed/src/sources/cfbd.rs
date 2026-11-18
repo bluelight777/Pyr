@@ -229,6 +229,13 @@ fn game(g: &Value, now: i64, notes: &Value) -> Option<Game> {
     };
     // (Over with no score isn't a result yet.)
     let stage = if stage == Stage::Final && (home.score.is_none() || away.score.is_none()) { Stage::During } else { stage };
+    // A start a minute before the hour is a day with no time yet, whatever the game says of
+    // itself ("West Virginia vs Auburn", Nov 18: 04:59 UTC, a minute before midnight Eastern,
+    // "startTimeTbd" false; it was opened, closed at that minute and shown under way at 0-0
+    // with the game still hours off). Such a game hasn't started until it has a point.
+    let time_set = !(g["startTimeTBD"].as_bool().or_else(|| g["startTimeTbd"].as_bool()).unwrap_or(false)) && start.div_euclid(60_000).rem_euclid(60) != 59;
+    let pointless = home.score.unwrap_or(0) == 0 && away.score.unwrap_or(0) == 0;
+    let stage = if stage == Stage::During && !time_set && pointless { Stage::Before } else { stage };
     if stage == Stage::Before {
         (home.score, away.score) = (None, None);
     }
@@ -245,7 +252,7 @@ fn game(g: &Value, now: i64, notes: &Value) -> Option<Game> {
         id: format!("c{id}"),
         day: league_day(start),
         start,
-        time_set: !(g["startTimeTBD"].as_bool().or_else(|| g["startTimeTbd"].as_bool()).unwrap_or(false)),
+        time_set,
         stage,
         status: String::new(),
         off_why: if stage == Stage::Off { status.replace("cancelled", "canceled") } else { String::new() },

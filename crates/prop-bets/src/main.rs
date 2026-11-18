@@ -1,4 +1,4 @@
-//! Prop Bets, in the Pyr Library: every prop bet on the Pyr server showing in Pyr, in a window of
+//! Pyr Prop Bets, in the Pyr Library: every prop bet on the Pyr server showing in Pyr, in a window of
 //! its own (in Pyr's, or popped out), with your Pyr Casino chips. Pyr starts it and the two talk a
 //! JSON object a line (see `crates/app/src/game_bridge.rs`): Pyr tells it the props as they
 //! change, my chips and the server's text channels, and says what happened (a win, or what the
@@ -33,7 +33,7 @@ use model::Model;
 
 /// How long something Pyr said shows at the top.
 const SAID_FOR: Duration = Duration::from_secs(8);
-/// Nothing from Pyr by then: it's a Pyr from before Prop Bets (one that knows it tells it at
+/// Nothing from Pyr by then: it's a Pyr from before Pyr Prop Bets (one that knows it tells it at
 /// once).
 const TOO_OLD_AFTER: Duration = Duration::from_secs(6);
 /// The window is wide enough for the categories down its side from this width.
@@ -44,7 +44,7 @@ fn main() -> eframe::Result<()> {
     // (Inside Pyr's window, Pyr shows it once it's in its place.)
     let hidden = std::env::var_os("PYR_EMBED").is_some();
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("Prop Bets")
+        .with_title("Pyr Prop Bets")
         .with_app_id("prop-bets")
         .with_inner_size([1100.0, 780.0])
         .with_min_inner_size([340.0, 320.0])
@@ -55,7 +55,7 @@ fn main() -> eframe::Result<()> {
     }
     let options = eframe::NativeOptions { viewport, ..Default::default() };
     eframe::run_native(
-        "Prop Bets",
+        "Pyr Prop Bets",
         options,
         Box::new(move |cc| {
             let (tx, rx) = mpsc::channel();
@@ -290,12 +290,12 @@ impl App {
     /// Why there's nothing to show yet.
     fn not_ready(&mut self, ui: &mut egui::Ui) {
         if !self.bridge {
-            return note(ui, "Open Prop Bets from Pyr", "It bets your Pyr Casino chips on your Pyr server's props, so it opens from Pyr: in Plugins, Prop Bets, then Open.");
+            return note(ui, "Open Pyr Prop Bets from Pyr", "It bets your Pyr Casino chips on your Pyr server's props, so it opens from Pyr: in Plugins, Pyr Prop Bets, then Open.");
         }
         if !self.m.heard {
-            // (A Pyr from before Prop Bets opens it as any program, and never tells it the props.)
+            // (A Pyr from before Pyr Prop Bets opens it as any program, and never tells it the props.)
             if self.started.elapsed() > TOO_OLD_AFTER {
-                return note(ui, "Update Pyr for Prop Bets", "This Pyr is older than Prop Bets, so it doesn't tell it the props: update Pyr, then open Prop Bets again.");
+                return note(ui, "Update Pyr to use Pyr Prop Bets", "This Pyr is older than Pyr Prop Bets, so it doesn't tell it the props: update Pyr, then open Pyr Prop Bets again.");
             }
             ui.ctx().request_repaint_after(Duration::from_millis(500));
             ui.add_space(48.0);
@@ -306,7 +306,7 @@ impl App {
             return;
         }
         if self.m.server.is_none() {
-            return note(ui, "Go to a server in Pyr", "Prop Bets shows the props of the server you were last on in Pyr: go to one, then come back here.");
+            return note(ui, "Go to a server in Pyr", "Pyr Prop Bets shows the props of the server you were last on in Pyr: go to one, then come back here.");
         }
         note(ui, "No prop bets on this server", "Its owner's Pyr server needs Pyr 0.14.0 or newer for prop bets.")
     }
@@ -326,7 +326,7 @@ impl App {
             if !narrow {
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 1.0;
-                    ui.label(RichText::new("Prop Bets").font(bold_font(18.0)).color(GOLD));
+                    ui.label(RichText::new("Pyr Prop Bets").font(bold_font(18.0)).color(GOLD));
                     let under = match &self.m.server {
                         Some(s) => s.clone(),
                         None => "Bets with your Pyr Casino chips".into(),

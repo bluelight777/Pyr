@@ -78,7 +78,7 @@ pub const EMBLEM: &[u8] = include_bytes!("../../app/assets/props/emblem.webp");
 const WON: &[u8] = include_bytes!("../../app/assets/props/won.webp");
 const LOCK: &[u8] = include_bytes!("../../app/assets/props/lock.webp");
 
-/// A picture a category, made for Prop Bets (a ball, a puck, a pile of coins: no league's or
+/// A picture a category, made for Pyr Prop Bets (a ball, a puck, a pile of coins: no league's or
 /// team's marks), and where in it its subject is (across, down: 0 to 1).
 const CATEGORY_ART: [(&str, &[u8], (f32, f32)); 14] = [
     ("nfl", include_bytes!("../assets/cat/nfl.webp"), (0.72, 0.58)),

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prop Bets for the Pyr Library (the program Pyr opens for prop bets: crates/prop-bets), for a
+# Pyr Prop Bets for the Pyr Library (the program Pyr opens for prop bets: crates/prop-bets), for a
 # release, after make-keeper.sh (which empties dist/keeper):
 #   KEY=path/to/pyr-release-key-2.txt scripts/make-prop-bets.sh
 # Takes its release builds (Windows: target-win, built by scripts/build-windows.sh with the rest,
@@ -17,11 +17,11 @@ cd "$(dirname "$0")/.."
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/prop-bets/Cargo.toml | head -n 1)
 PYR=$(sed -n '/^\[workspace.package\]/,/^\[/ s/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
 LIST=installer/site/library/prop-bets.json
-grep -q "\"version\": \"$VERSION\"" "$LIST" || { echo "$LIST isn't for Prop Bets $VERSION (crates/prop-bets/Cargo.toml)." >&2; exit 1; }
+grep -q "\"version\": \"$VERSION\"" "$LIST" || { echo "$LIST isn't for Pyr Prop Bets $VERSION (crates/prop-bets/Cargo.toml)." >&2; exit 1; }
 WIN=target-win/x86_64-pc-windows-gnu/release/prop-bets.exe
 LIN=target/release/prop-bets
 for B in "$WIN" "$LIN"; do
-  [ -f "$B" ] || { echo "No $B: build Prop Bets for release first (with the rest)." >&2; exit 1; }
+  [ -f "$B" ] || { echo "No $B: build Pyr Prop Bets for release first (with the rest)." >&2; exit 1; }
   # (Built from its source as it is now.)
   NEWER=$(find crates/prop-bets crates/poker/src -newer "$B" -type f | head -n 1)
   [ -z "$NEWER" ] || { echo "$B is older than $NEWER: build it again." >&2; exit 1; }

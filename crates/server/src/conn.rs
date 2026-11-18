@@ -2128,7 +2128,7 @@ impl Ctx<'_> {
                 if let pyr_poker::net::ToServer::PropOpen { channel_id, .. } = &msg {
                     self.can_post(*channel_id)?;
                 }
-                // An app that knows the casino's own props and asks for every prop (Prop Bets'
+                // An app that knows the casino's own props and asks for every prop (Pyr Prop Bets'
                 // window, open): it hears of them as they change for a while.
                 let house = self.casino >= pyr_poker::net::CASINO_PROPS2;
                 if house && matches!(msg, pyr_poker::net::ToServer::PropList { channel_id: 0 }) {

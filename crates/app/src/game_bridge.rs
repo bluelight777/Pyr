@@ -68,7 +68,7 @@ impl PyrApp {
             self.plugins.programs.tell_newest(&|id: &str| newest.get(id).cloned());
             self.plugins.refresh(false);
         }
-        // Prop Bets' own window: the props of the server showing in Pyr, as they change.
+        // Pyr Prop Bets' own window: the props of the server showing in Pyr, as they change.
         if self.plugins.programs.get(crate::props::PROP_BETS).is_some() {
             self.tell_prop_bets(st);
         } else {
@@ -82,13 +82,13 @@ impl PyrApp {
                 Asked::Invite { uid, room } => self.invite_to_game(st, &id, uid, room),
                 Asked::Update { room } => self.update_program(&id, room),
                 Asked::Prop(ask) if id == crate::props::PROP_BETS => self.prop_bets_asked(st, ask, acts),
-                Asked::Prop(_) => tracing::warn!(program = %id, "a program other than Prop Bets asked about prop bets: not done"),
+                Asked::Prop(_) => tracing::warn!(program = %id, "a program other than Pyr Prop Bets asked about prop bets: not done"),
             }
         }
         self.updates_step(acts);
     }
 
-    /// Tells Prop Bets' own window the props of the server showing in Pyr (every channel I can
+    /// Tells Pyr Prop Bets' own window the props of the server showing in Pyr (every channel I can
     /// read, and the casino's own: asked for when it opens or the server changes, and again
     /// every few minutes), my chips, its text channels, the best at props and how the casino's
     /// own props stand there: when any of it changed since it was last told. A window that
@@ -159,7 +159,7 @@ impl PyrApp {
         self.plugins.programs.tell(crate::props::PROP_BETS, line);
     }
 
-    /// What Prop Bets' own window asked: done on the server it was last told about, as a
+    /// What Pyr Prop Bets' own window asked: done on the server it was last told about, as a
     /// prop's card in chat does it (the server checks it all).
     fn prop_bets_asked(&mut self, st: &AppState, ask: crate::plugins::programs::PropAsk, acts: &mut Vec<Act>) {
         use crate::plugins::programs::PropAsk;

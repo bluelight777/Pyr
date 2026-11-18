@@ -67,6 +67,11 @@ impl Out {
     }
 }
 
+/// When this maker was built (see `build.rs`): "2026-11-18T08:30:00Z".
+pub fn built() -> String {
+    when::iso(env!("PYR_PROPS_BUILT").parse::<i64>().unwrap_or(0) * 1000)
+}
+
 /// One kind of props: where they come from and how they come out.
 pub trait Source: Send + Sync {
     /// Its name (in the state file and the status file).
@@ -298,7 +303,7 @@ impl Maker {
                 (s.name(), json!({"ok": st.error.is_empty() && st.last_ok > 0, "last_run": time(st.last_run), "last_ok": time(st.last_ok), "next_run": time(st.next_run), "error": st.error, "trouble": st.trouble, "not_over": open, "opened": st.opened, "settled": st.settled}))
             })
             .collect();
-        json!({"made": when::iso(now), "version": env!("CARGO_PKG_VERSION"), "categories": cats, "sources": sources})
+        json!({"made": when::iso(now), "version": env!("CARGO_PKG_VERSION"), "built": built(), "categories": cats, "sources": sources})
     }
 }
 

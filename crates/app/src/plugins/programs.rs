@@ -26,11 +26,11 @@ pub enum Asked {
     Invite { uid: String, room: String },
     /// Close it, update it from the Library and open it again, in `room` (0.13.27).
     Update { room: Option<String> },
-    /// Prop Bets' own window, on the server showing in Pyr (answered for that program only).
+    /// Pyr Prop Bets' own window, on the server showing in Pyr (answered for that program only).
     Prop(PropAsk),
 }
 
-/// What Prop Bets' own window asks of the server showing in Pyr: as a prop's card in chat does.
+/// What Pyr Prop Bets' own window asks of the server showing in Pyr: as a prop's card in chat does.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PropAsk {
     Bet { id: u64, outcome: usize, chips: u64, min_shares: f64 },

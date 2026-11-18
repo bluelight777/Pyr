@@ -1,4 +1,4 @@
-# Prop Bets, the big version (Pyr 0.15)
+# Pyr Prop Bets, the big version (Pyr 0.15)
 
 Blue, Nov 17 2026: "add the full features of Prop bets… NFL, NBA, NHL, MLB, College Football,
 College Basketball, Topical (world events), even allow prop bets for Pyr Casino. Create a
@@ -41,7 +41,7 @@ fun: the odds as a line over time, what you hold and what it's worth, the best b
    over and over), so the casino stakes a tenth as much on them as on the feed's, which bounds
    what that can take; and nothing is asked that one bet decides (the day's biggest win, how
    many rounds are played).
-4. **The app** relays to Prop Bets' window (the bridge: `game_bridge.rs`); the window
+4. **The app** relays to Pyr Prop Bets' window (the bridge: `game_bridge.rs`); the window
    (`crates/prop-bets`) shows categories, events, a prop's page, what I hold, the best at props.
 
 ## Rules every automatic prop keeps
@@ -155,7 +155,7 @@ says whether they read, and `status.json` after (`pyr-props status <file>` for p
 Tried end to end with no network at all: `cargo run -p pyr-props --example demo_feed` makes a
 signed, made-up feed in every category (a few props close in minutes; `--results` has them
 come out), a test server follows it (`PYR_PROPS_FEED`, `PYR_PROPS_FEED_KEY`), and Pyr with
-Prop Bets' window shows, bets, cashes out and is paid.
+Pyr Prop Bets' window shows, bets, cashes out and is paid.
 
 The VPS's set-up (`installer/site/setup-props.sh`) dry-run with no network and stand-ins for
 nginx, curl and systemctl, the rest real (its user, the key's and the website's permissions,
@@ -169,10 +169,32 @@ or down) still open.
 
 What a full feed asks (`demo_feed --many 1500`: the real one runs to several hundred props,
 1,500 is the most a server lists to an app): a server opens them all in 0.2 s the first time
-and looks at them all again in 0.03 s after a restart, on 16 to 26 MB; Prop Bets' window does
+and looks at them all again in 0.03 s after a restart, on 16 to 26 MB; Pyr Prop Bets' window does
 5.5 ms of its own work a frame on a board of 375 props; and the three together (the server,
 Pyr, the window inside it) show them, take a bet and pay for it. The numbers are in
 `REBUILD.md` (0.15.0).
+
+## The first night, and 0.15.1 (Nov 18 2026)
+
+Read from the live feed the morning after 0.15.0 went up: games settled from all three sites
+(the NBA with its quarters, the NHL, college basketball with its halves, spreads and totals),
+all eighteen sources reading, and the game against "TBD" called off once the update for it
+was put up. What it showed wrong, fixed in 0.15.1:
+
+- **A bet far past a market's depth** (100,000,000 on a 76% favourite, a million deep) read
+  "worth 18,446,744,073,709,551,615 now": the sum for selling shares back came out infinite
+  once the outcome's chance was nearer 1 than a number can say, and a cash-out then took the
+  bet for nothing. `proceeds_for` is worked out in logarithms now, exact however far a
+  market is pushed, and the server refuses any cash-out whose sum isn't between nothing and
+  a chip a share.
+- **A start a minute before the hour** (04:59 UTC: a minute to midnight Eastern) is a day with
+  no time yet: such a game isn't opened, and one that was says "Start time to be announced"
+  and takes bets again once its time is set.
+- **Called off by hand** stays off: a house prop a manager calls off is remembered until its
+  betting would have closed (the feed lists it open till then).
+- College basketball's props name CollegeBasketballData; the status file says when the maker
+  was built (`built`).
+- The program is **Pyr Prop Bets** now (its id stays `prop-bets`).
 
 Not used: CoinGecko (its terms forbid gambling use by name), Netflix Top 10 and Billboard
 (automated collection forbidden), Wikipedia's pageviews (its API answered "not found" to every

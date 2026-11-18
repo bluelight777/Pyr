@@ -300,11 +300,11 @@ pub enum ToServer {
     PropVoid { id: u64 },
     PropGet { ids: Vec<u64> },
     /// The props open in a channel (newest first); channel 0: every prop in the channels I can
-    /// read, open or not (Prop Bets' own window: newest first, at most `props::MAX_LISTED`).
+    /// read, open or not (Pyr Prop Bets' own window: newest first, at most `props::MAX_LISTED`).
     /// From an app that knows the casino's own props (`PROPS2_CAP`), channel 0 is those too:
     /// every open prop, the ones I've something on, and the latest settled, a hundred a
     /// message; and the app hears of the casino's props as they change for a while after
-    /// (asked again every few minutes while Prop Bets' window is open).
+    /// (asked again every few minutes while Pyr Prop Bets' window is open).
     PropList { channel_id: i64 },
     /// The casino's own props (servers with `PROPS_HOUSE_FEATURE`). The server's best at
     /// props over `days` (0: since ever), and me among them.

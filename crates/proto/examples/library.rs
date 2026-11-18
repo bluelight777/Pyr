@@ -25,7 +25,7 @@
 //! The tool reads every file, puts its SHA-256 and size in the list, and signs the list with
 //! the release key (with the library's own context), good for `--valid-days` (180 unless told).
 //! With `--endorse`, it endorses each program with the key too: a list for the Keeper to take in
-//! (`keeper/add/` in a release: a new program listed, like Prop Bets).
+//! (`keeper/add/` in a release: a new program listed, like Pyr Prop Bets).
 //!
 //!   cargo run -p pyr-proto --example library -- endorse --key release-key-2.txt \
 //!       --trust <the key before's public half> --in index3.json --out for-key-2.json

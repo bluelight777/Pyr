@@ -316,6 +316,58 @@ certificate, no key), and `publish-props.cmd` on Blue's PC puts it on the VPS. N
 a game of any of them settling (tonight's are the first), and how soon CollegeFootballData
 calls one completed.
 
+The first night (read from the live feed in Blue's Chrome, Nov 18, 07:50 UTC; all eighteen
+sources well, nothing they couldn't read). Blue had run `publish-props.cmd` (its first time on
+Windows): the three "Houston vs TBD" props stood called off, "one of its teams wasn't known
+yet". Games settled from all three sites, 26 props in all. The NBA from balldontlie, its
+quarters too: "Jazz 132, Clippers 107", "UTA 35, LAC 29 after one", "239 in all". The NHL from
+The Odds API: "Stars 4, Golden Knights 3: 7 in all", "Flames 5, Sharks 2". College basketball
+from CollegeBasketballData, four games with their halves, spreads and totals: "UNLV 35, Kansas
+55 at the half", "Kansas -16.5", "Stanford 65, UC Irvine 61: 126 in all", "Seattle U 83,
+California Baptist 54" (Blue's own bet, paid). One thing wrong: "West Virginia vs Auburn" came
+with a start of 04:59 UTC, a minute before midnight Eastern and "startTimeTbd" false; it was
+opened, closed at that minute and shown "Under way · West Virginia 0, Auburn 0" with the game
+hours off. A start a minute before the hour is now a day with no time yet (not opened; one
+opened already says "Start time to be announced" and takes bets again once its time is set).
+Not seen yet: the NFL (Thursday), college football (the week's first games), the weather's
+first highs (16 props waiting for theirs).
+
+0.15.1 (Nov 18), what Blue found on 0.15.0's first night:
+- "why this number?": a bet of 100,000,000 on a 76% favourite, in a market a million deep,
+  read "worth 18,446,744,073,709,551,615 now". Its chance was nearer 1 than a number can say,
+  the sum for selling shares back (`pyr_poker::props::proceeds_for`) lost what was left of the
+  other side and came out infinite: the largest number there is on the page, and on the
+  server a cash-out that took one chip and the whole bet (he had no chip left, so his was
+  refused). The sum is worked out in logarithms from how the other outcomes stand against the
+  one sold (exact however far a market is pushed: his bet sells back for 100,000,000 to the
+  chip), and the server refuses a cash-out whose sum isn't between nothing and a chip a share.
+- "Mag doesn't sound very clear, and I can hear myself echo through his mic": in the lab
+  (`examples/mag_eval.rs`: voice isolation, a TV across the room 10 dB under you, the others
+  out of speakers 10 dB down at the microphone), while the others talked and you were quiet
+  something went out in 78 of 196 s on 0.15.0 (the TV alone: 9 of 89 s; 0.13.28's isolation:
+  156 and 79). Isolation took the microphone's whole level for "as loud as you", the speakers'
+  sound in it too: with a TV talking on (so there's speech in what the echo canceller
+  leaves) each of the others' louder syllables opened the microphone, on the TV and on what
+  was left of their own voices. Isolation now goes by the level less what the speakers
+  account for (`mic_echo`'s estimate, once it's known that they come back): 18 of 196 s, your
+  own talking as it was (11 of 159 stretches turned down, over the others 13 -> 14 of 55),
+  and `aec_eval`'s thirteen isolation scenes the same line for line (echo the same or 3 dB
+  better). The echo canceller itself isn't touched, and the microphone can only open less
+  than before. A louder TV (5 dB under you) still comes through, either way (72 of 89 s): by
+  level and by its dips it's you. Not tried: a real room (Mag's). `PYR_AB=isoecho` puts it
+  back. "Not very clear" couldn't be measured here: his talking comes out the same in every
+  scene; what's left is the TV coming and going with his words, which isolation can't take
+  out from under a voice.
+- Prop Bets is Pyr Prop Bets (Blue: "rename it to Pyr Prop Bets"): the listing's name, the
+  window's title and headings, Pyr's own words for it. Its id stays `prop-bets`, so installed
+  copies update in place (0.2.1).
+- A house prop a manager calls off, nobody having bet on it, was forgotten after two days and
+  opened again by the feed: it's remembered until its betting would have closed.
+- The feed maker: college basketball's props say CollegeBasketballData (they said
+  CollegeFootballData), the placeholder start above, and its status file says when the maker
+  was built (`built`: an update between releases keeps its version).
+Still to come, asked the same night: parlays ("add the ability to parlay").
+
 0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
 Blue's pyr.log, Nov 17, "couldn't find the server "SERVER2.24.121.231": No such host is known".
 The bug server's address in `release-env.sh` had been read out of 0.13.28's program with the

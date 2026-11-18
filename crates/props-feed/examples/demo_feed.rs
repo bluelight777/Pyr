@@ -8,7 +8,7 @@
 //! props close `--quick` minutes after that first run (6 unless said): with `--results` those
 //! have come out (one of them called off), as the feed says it when a game is final.
 //! `--many N`: more invented games until the feed has N props (the real one runs to several
-//! hundred), to see what a full feed asks of a server and of Prop Bets' window.
+//! hundred), to see what a full feed asks of a server and of Pyr Prop Bets' window.
 //!
 //! A server follows it with `PYR_PROPS_FEED=<its address>` and `PYR_PROPS_FEED_KEY=<the public
 //! half of the key that certified --key>` (see `crates/server/src/props_feed.rs`).

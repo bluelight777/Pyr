@@ -152,7 +152,7 @@ pub struct PokerState {
     /// each was last asked for, ones I just opened (for their message in chat), and what
     /// happened to me on them (to say: text, chips in or out).
     pub props: BTreeMap<u64, pyr_poker::props::PropView>,
-    /// When each prop was last heard of (`props_version` as it was then): Prop Bets' window is
+    /// When each prop was last heard of (`props_version` as it was then): Pyr Prop Bets' window is
     /// told only of the ones heard of since it was last told.
     pub props_at: BTreeMap<u64, u64>,
     /// The server's best at props, and the casino's own props here (servers with
@@ -162,9 +162,9 @@ pub struct PokerState {
     pub props_asked: BTreeMap<u64, Instant>,
     pub props_opened: Vec<pyr_poker::props::PropView>,
     pub prop_notes: Vec<(u64, String, i64)>,
-    /// Goes up whenever a prop is heard of or changes (Prop Bets' own window is told then).
+    /// Goes up whenever a prop is heard of or changes (Pyr Prop Bets' own window is told then).
     pub props_version: u64,
-    /// What the server said no to on props lately (the last five), for Prop Bets' own window.
+    /// What the server said no to on props lately (the last five), for Pyr Prop Bets' own window.
     pub prop_refusals: Vec<String>,
     /// Invites to a table (0.13.6): the table, who from, its name, when it came. (Not from
     /// someone I've blocked; the newest last.)

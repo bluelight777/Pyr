@@ -293,15 +293,24 @@ fn signed(x: f64) -> String {
     if x > 0.0 { format!("+{x}") } else { format!("{x}") }
 }
 
+/// The line of a game that was taken to have started and has no time yet.
+const NO_TIME: &str = "Start time to be announced";
+
+/// A game's line before it starts: where it's played, and who shows it.
+fn place(g: &Game) -> String {
+    match (g.venue.is_empty(), g.tv.is_empty()) {
+        (_, true) => g.venue.clone(),
+        (true, false) => g.tv.clone(),
+        (false, false) => format!("{} · {}", g.venue, g.tv),
+    }
+}
+
 /// The props of a game that hasn't started.
 pub fn plan(l: &League, board: &str, g: &Game) -> Vec<(FeedProp, Value)> {
     let (away, home) = names(g);
     let event = format!("{}:{}", l.cat, g.id);
     let ph = win_home(l, g);
-    let mut detail = g.venue.clone();
-    if !g.tv.is_empty() {
-        detail = if detail.is_empty() { g.tv.clone() } else { format!("{detail} · {}", g.tv) };
-    }
+    let detail = place(g);
     let ranked = g.home.rank.is_some() as u8 + g.away.rank.is_some() as u8;
     let base = FeedProp {
         cat: l.cat.to_string(),
@@ -561,8 +570,13 @@ impl Source for Sports {
             match g.stage {
                 Stage::Off => out.call_off(id, if g.off_why.is_empty() { "postponed".to_string() } else { g.off_why.clone() }),
                 Stage::Before => {
+                    // (One taken to have started that hadn't: a start that was no time at
+                    // all. Its line says so until it has one, then where it's played again.)
+                    let stale = k.prop.detail.starts_with("Under way") || k.prop.detail == NO_TIME;
                     if g.time_set && g.start != k.prop.starts {
-                        out.moved.push(Moved { id: id.clone(), closes: Some(g.start), starts: Some(g.start), detail: None });
+                        out.moved.push(Moved { id: id.clone(), closes: Some(g.start), starts: Some(g.start), detail: stale.then(|| place(g)) });
+                    } else if stale && (g.time_set || k.prop.detail != NO_TIME) {
+                        out.moved.push(Moved { id: id.clone(), detail: Some(if g.time_set { place(g) } else { NO_TIME.to_string() }), ..Default::default() });
                     }
                 }
                 Stage::During => {
@@ -1018,6 +1032,59 @@ mod tests {
         m.step(t1 + 3 * HOUR + 5 * MIN, &web(&game(true, "")), false);
         let half = m.feed(t1 + 4 * HOUR).props.into_iter().find(|p| p.id.ends_with(":half")).unwrap();
         assert_eq!((half.result.as_ref().unwrap().winner, half.result.as_ref().unwrap().note.as_str()), (None, "no line score"));
+    }
+
+    /// A start a minute before the hour is no time at all. The first night (Nov 18): "West
+    /// Virginia vs Auburn" came as 04:59 UTC, was opened, closed at that minute, and shown
+    /// "Under way" at 0-0 with the game hours off.
+    #[test]
+    fn a_game_with_no_time_yet_isn_t_opened_and_one_that_was_waits_for_its_time() {
+        use crate::sources::cfbd::Cfbd;
+        let game = |start: &str, status: &str, points: &str| {
+            format!(
+                r#"[{{"id": 375087, "season": 2027, "startDate": "{start}", "startTimeTbd": false, "neutralSite": true, "status": "{status}", "homeTeam": "Auburn", "homePoints": {points}, "awayTeam": "West Virginia", "awayPoints": {points}, "venue": "Imperial Arena"}}]"#
+            )
+        };
+        // (Auburn ranked: college opens the ranked and the lined.)
+        let ranks = r#"[{"season": 2027, "seasonType": "regular", "week": 3, "pollType": "ap", "team": "Auburn", "ranking": 20}]"#;
+        let web = |games: &str| Canned::new(&[("/rankings", ranks), ("/lines", "[]"), ("/games", games)]);
+        let t0 = when::at(2026, 11, 17, 20, 0);
+        // (Two looks, half a day apart, as the maker would: the Top 25 is there for the second.)
+        let looked = |games: &str| {
+            let mut m = Maker::new(State::default(), vec![Box::new(Sports::with("cbb", Box::new(Cfbd { key: Some("K".into()) })))]);
+            m.step(t0 - 12 * HOUR, &web(games), false);
+            m.step(t0, &web(games), false);
+            m
+        };
+        // Not opened while its start is that minute; a minute later it would be.
+        assert!(looked(&game("2026-11-18T04:59:00.000Z", "scheduled", "null")).feed(t0).props.is_empty());
+        // Opened by the maker before this one, at that minute, and shown under way since.
+        let mut m = looked(&game("2026-11-18T05:00:00.000Z", "scheduled", "null"));
+        assert!(!m.feed(t0).props.is_empty() && m.feed(t0).props.iter().all(|p| p.event_name == "West Virginia vs #20 Auburn"));
+        let no_time = when::at(2026, 11, 18, 4, 59);
+        for k in m.state.props.values_mut() {
+            (k.prop.starts, k.prop.closes, k.prop.detail) = (no_time, no_time, "Under way · West Virginia 0, Auburn 0".into());
+            k.memo["day"] = json!("2026-11-17");
+        }
+        // "In progress", says the site, with no point scored: it hasn't started. Its line says so.
+        let t1 = when::at(2026, 11, 18, 8, 0);
+        m.step(t1, &web(&game("2026-11-18T04:59:00.000Z", "in_progress", "0")), true);
+        let feed = m.feed(t1);
+        assert!(feed.props.iter().all(|p| p.result.is_none() && p.detail == NO_TIME && p.closes == no_time), "{:?}", feed.props[0].detail);
+        // Its time is set: betting opens again until then, and its line is where it's played.
+        let t2 = t1 + 2 * HOUR;
+        m.step(t2, &web(&game("2026-11-19T00:30:00.000Z", "scheduled", "null")), true);
+        let feed = m.feed(t2);
+        let tip = when::at(2026, 11, 19, 0, 30);
+        assert!(feed.props.iter().all(|p| p.result.is_none() && p.detail == "Imperial Arena" && (p.closes, p.starts) == (tip, tip)), "{:?}", (feed.props[0].detail.as_str(), feed.props[0].closes));
+        // And one really under way at a minute like that (a point on the board) is under way.
+        let mut m = looked(&game("2026-11-18T05:00:00.000Z", "scheduled", "null"));
+        for k in m.state.props.values_mut() {
+            (k.prop.starts, k.prop.closes) = (no_time, no_time);
+            k.memo["day"] = json!("2026-11-17");
+        }
+        m.step(t1, &web(&game("2026-11-18T04:59:00.000Z", "in_progress", "12")), true);
+        assert!(m.feed(t1).props.iter().all(|p| p.detail == "Under way · West Virginia 12, Auburn 12"), "{:?}", m.feed(t1).props[0].detail);
     }
 
     #[test]

@@ -291,7 +291,7 @@ struct Client {
     away_since: Option<Instant>,
     /// Its person said Do Not Disturb there (`SetDnd`).
     dnd: bool,
-    /// Until when it hears of the casino's own props as they change (Prop Bets' window asked
+    /// Until when it hears of the casino's own props as they change (Pyr Prop Bets' window asked
     /// for them all: `ToServer::PropList` for channel 0, from an app with `PROPS2_CAP`).
     props_watch: Option<Instant>,
 }

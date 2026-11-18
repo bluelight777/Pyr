@@ -16,7 +16,9 @@
 //! loud as your voice, before 0.12.0), `cabac` (screen shares in H.264's Baseline profile with
 //! CAVLC, before 0.13.21), `sharp` (text made smaller with a bilinear filter, before 0.13.21),
 //! `ladder` (a share sent smaller when the road can't carry it, before 0.13.22: since, it keeps
-//! its size and lowers its frame rate).
+//! its size and lowers its frame rate), `tvgate` (voice isolation told you from a voice across
+//! the room by level only, before 0.14.2), `isoecho` (it went by the microphone's whole level,
+//! the speakers' sound in it too, before 0.15.1).
 //!
 //! `PYR_CC=cubic` puts back QUIC's CUBIC congestion control instead of BBR (see [`bbr`]).
 //!

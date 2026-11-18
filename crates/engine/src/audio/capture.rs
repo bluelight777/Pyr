@@ -78,6 +78,10 @@ pub struct CapturePipeline {
     /// syllable-to-syllable loudness, which tells near from far better than its peaks.
     raw_recent: [f32; 5],
     raw_recent_at: usize,
+    /// Over the same 50 ms: how loud the speakers' sound could be in the microphone, once
+    /// it's known that it comes back and how much weaker (see `isolate`); and this frame's.
+    echo_recent: [f32; 5],
+    could: f32,
     /// Voice isolation hears 30 ms ahead: the sound waits here while its fate is decided, so
     /// the start of your first word isn't clipped while it's being recognized.
     iso_delay: std::collections::VecDeque<f32>,
@@ -369,6 +373,8 @@ impl CapturePipeline {
             raw_env_db: -100.0,
             raw_recent: [0.0; 5],
             raw_recent_at: 0,
+            echo_recent: [0.0; 5],
+            could: 0.0,
             iso_delay: std::iter::repeat_n(0.0, iso_lookahead * 480).collect(),
             iso_ref_db: -100.0,
             iso_levels: Levels::default(),
@@ -610,6 +616,7 @@ impl CapturePipeline {
         self.env_db = if db > self.env_db { db } else { (self.env_db - 0.6).max(db) };
         self.raw_env_db = if raw_db > self.raw_env_db { raw_db } else { (self.raw_env_db - 0.6).max(raw_db) };
         self.raw_recent[self.raw_recent_at] = 10f32.powf(raw_db / 10.0);
+        self.echo_recent[self.raw_recent_at] = self.could;
         self.raw_recent_at = (self.raw_recent_at + 1) % self.raw_recent.len();
         let going = now < self.speech_until;
         let starts = self.voice_prob > 0.6 && (self.dfn.is_none() || self.lsnr > self.iso_start_lsnr);
@@ -650,6 +657,26 @@ impl CapturePipeline {
         let tv_old = pyr_proto::ab::old("tvgate");
         let e = self.raw_recent.iter().sum::<f32>() / self.raw_recent.len() as f32;
         let level = if e > 1e-10 { 10.0 * e.log10() } else { -100.0 };
+        // What's taken as you goes by how loud the microphone's sound is less what the speakers
+        // account for (Blue, Nov 18, on 0.15.0: "Mag doesn't sound very clear, and I can hear
+        // myself echo through his mic"). The others' voices out of speakers by the microphone
+        // are as loud there as you are, and with a TV talking on behind you (so there's
+        // speech in what the echo canceller leaves) each of their louder syllables started
+        // "yours": the microphone opened on the TV, and on what was left of their own voices.
+        // `examples/mag_eval.rs`, the TV 10 dB under you, speakers 10 dB down at the
+        // microphone, seconds something went out while they talked and you were quiet: 78 of
+        // 196 -> 18 (the TV alone: 9 of 89 either way; isolation as 0.13.28's: 156); your own
+        // talking the same (11 of 159 stretches turned down, over them 13 -> 14 of 55). Twice
+        // the speakers' part taken off: 10 of 196, and 16 of 55 of your talking over them.
+        // Your level is learned as before (never while the speakers play). `PYR_AB=isoecho`:
+        // the microphone's whole level, as before.
+        let own = if pyr_proto::ab::old("isoecho") {
+            level
+        } else {
+            let c = self.echo_recent.iter().sum::<f32>() / self.echo_recent.len() as f32;
+            let e = (e - c).max(e * 1e-3);
+            if e > 1e-10 { 10.0 * e.log10() } else { -100.0 }
+        };
         // Learn your level from confident speech: the level three quarters of your speech is
         // at or under (recent speech counting most). A laugh, a shout or a loud moment from a
         // game or a speaker doesn't move it: those used to raise it quickly and for good, and
@@ -700,7 +727,7 @@ impl CapturePipeline {
         // parts of your sentences takes much less (and the hold bridges the gaps).
         let mine = now < self.mine_until;
         if tv_old {
-            let near = level > self.iso_ref_db - if mine { ISO_KEEP_DB } else { ISO_START_DB };
+            let near = own > self.iso_ref_db - if mine { ISO_KEEP_DB } else { ISO_START_DB };
             if speech && near && (self.voice_prob > 0.5 || mine) {
                 self.mine_until = now + Duration::from_millis(SPEECH_HOLD_MS);
             }
@@ -709,12 +736,12 @@ impl CapturePipeline {
             // any speech, as before: while the others' sound plays on, it isn't learned, and
             // asking for near-sounding speech then cut a quiet microphone's words.)
             let known = self.iso_ref_db > -90.0;
-            let sure = !known || level > self.iso_ref_db - ISO_SURE_DB || (self.near_like && level > self.iso_ref_db - ISO_START_DB);
+            let sure = !known || own > self.iso_ref_db - ISO_SURE_DB || (self.near_like && own > self.iso_ref_db - ISO_START_DB);
             let alive = self.iso_sure_at.is_some_and(|t| now.saturating_duration_since(t) < Duration::from_millis(ISO_ALIVE_MS));
             if speech && sure && (self.voice_prob > 0.5 || mine) {
                 self.iso_sure_at = Some(now);
                 self.mine_until = now + Duration::from_millis(SPEECH_HOLD_MS);
-            } else if speech && mine && alive && level > self.iso_ref_db - ISO_KEEP_DB {
+            } else if speech && mine && alive && own > self.iso_ref_db - ISO_KEEP_DB {
                 self.mine_until = now + Duration::from_millis(SPEECH_HOLD_MS);
             }
         }
@@ -777,6 +804,7 @@ impl CapturePipeline {
         let _ = self.apm.process_capture_f32(&[&self.scratch], &mut [&mut frame[..480]]);
         self.far = false;
         self.playing = false;
+        self.could = 0.0;
         if let (Some(plain), Some(echo)) = (self.plain.as_mut(), self.echo.as_mut()) {
             use super::mic_echo::Echo;
             let _ = plain.process_capture_f32(&[&self.scratch], &mut [&mut self.plain_out]);
@@ -815,6 +843,12 @@ impl CapturePipeline {
             // (Echo the processing took out isn't my voice turned down.)
             self.far = could * 10.0 > heard;
             self.playing = echo.playing();
+            // (Voice isolation: what the speakers account for of the microphone's level, once
+            // it's known how much weaker they come back. Not before: till then "could" is
+            // everything played, and with headphones none of it is in the microphone.)
+            if matches!(echo.state(), Echo::Found(_)) {
+                self.could = could;
+            }
             // Voice & Video says what's going on.
             let now_told = (match echo.state() {
                 Echo::Unknown => 0,
@@ -1060,6 +1094,41 @@ mod tests {
                 assert_eq!(cap.iso_ref_db, -25.0, "what the speakers could account for, or a voice across the room, isn't you (far {far}, near {near})");
                 // (And it isn't let through as yours meanwhile.)
                 assert!(cap.iso_gain < 0.1, "turned far down ({})", cap.iso_gain);
+            }
+        }
+    }
+
+    /// The others' voices out of loud speakers by the microphone are as loud there as you are:
+    /// that doesn't make the sound going on yours (0.15.0: with a TV on behind you, each of
+    /// their louder syllables opened the microphone on the TV and on what was left of them).
+    /// Your own voice over them still does.
+    #[test]
+    fn isolation_goes_by_what_the_speakers_don_t_account_for() {
+        let settings = Settings { noise_suppression: NoiseSuppression::Isolation, ..Settings::default() };
+        // (How loud the speakers could be in the microphone, dBFS; whether what's heard is you.)
+        for (speakers_db, yours) in [(-25.5f32, false), (-30.0, true), (-100.0, true)] {
+            let mut cap = CapturePipeline::new(&settings).unwrap();
+            let now = Instant::now();
+            cap.iso_ref_db = -25.0;
+            // As loud as you at the microphone, and speech (the TV's, say).
+            cap.raw_recent = [10f32.powf(-2.5); 5];
+            cap.echo_recent = [10f32.powf(speakers_db / 10.0); 5];
+            cap.voice_prob = 0.95;
+            cap.speech_until = now + Duration::from_secs(3600);
+            cap.far = speakers_db > -90.0;
+            cap.playing = cap.far;
+            let mut frame = vec![0.01f32; 480];
+            for _ in 0..200 {
+                cap.isolate(now, &mut frame);
+            }
+            if yours {
+                assert_eq!(cap.iso_gain, 1.0, "you, over speakers at {speakers_db} dBFS in the microphone");
+            } else {
+                assert!(cap.iso_gain < 0.1, "the speakers alone at {speakers_db} dBFS aren't you ({})", cap.iso_gain);
+            }
+            // (And what the speakers play teaches nothing about your level.)
+            if cap.far {
+                assert_eq!(cap.iso_ref_db, -25.0);
             }
         }
     }

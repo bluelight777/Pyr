@@ -1,10 +1,10 @@
 [package]
 name = "prop-bets"
-version = "0.2.0"
+version = "0.2.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Prop Bets, in the Pyr Library: every prop bet on your Pyr server in its own window, by category, with your Pyr Casino chips."
+description = "Pyr Prop Bets, in the Pyr Library: every prop bet on your Pyr server in its own window, by category, with your Pyr Casino chips."
 
 [[bin]]
 name = "prop-bets"

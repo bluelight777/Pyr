@@ -13,7 +13,7 @@ use crate::app::{Act, PyrApp};
 use crate::poker::cards::chips_text;
 use crate::theme;
 
-/// Prop Bets in the Pyr Library (Blue, Nov 17: "I want to choose to install Prop bets or not"):
+/// Pyr Prop Bets in the Pyr Library (Blue, Nov 17: "I want to choose to install Prop bets or not"):
 /// installed, a prop's message is its card and `/prop` opens one; without it, the message's line
 /// and Install (its page in the Library, where it's installed).
 pub const PROP_BETS: &str = "prop-bets";
@@ -52,7 +52,7 @@ pub fn without_links(text: &str) -> String {
     text.lines().filter(|l| p::id_in_link(l.trim()).is_none() && !l.starts_with("📊 Prop bet:")).collect::<Vec<_>>().join("\n").trim().to_string()
 }
 
-/// A message's text with only its props' links left out (without Prop Bets: the "📊 Prop bet:"
+/// A message's text with only its props' links left out (without Pyr Prop Bets: the "📊 Prop bet:"
 /// line stays, the question in it).
 pub fn without_link_lines(text: &str) -> String {
     text.lines().filter(|l| p::id_in_link(l.trim()).is_none()).collect::<Vec<_>>().join("\n").trim().to_string()
@@ -105,12 +105,12 @@ impl NewProp {
 }
 
 impl PyrApp {
-    /// Whether Prop Bets is installed (props show as cards, `/prop` opens one).
+    /// Whether Pyr Prop Bets is installed (props show as cards, `/prop` opens one).
     pub(crate) fn prop_bets_installed(&self) -> bool {
         self.plugins.installed.get(PROP_BETS).is_some()
     }
 
-    /// Prop Bets' page in the Library (Install is there), or a word that it isn't listed here.
+    /// Pyr Prop Bets' page in the Library (Install is there), or a word that it isn't listed here.
     pub(crate) fn show_prop_bets_in_library(&mut self) {
         // (A list from before it was listed is fetched again. One not fetched yet is on its way:
         // its page shows as the list comes.)
@@ -122,11 +122,11 @@ impl PyrApp {
         self.plugins.detail = Some(PROP_BETS.to_string());
     }
 
-    /// A prop's message without Prop Bets: its line stays as text, and under it, Install.
+    /// A prop's message without Pyr Prop Bets: its line stays as text, and under it, Install.
     pub(crate) fn prop_install_line(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Bet on it with Prop Bets, from the Pyr Library.").size(12.5).color(theme::MUTED()));
-            if ui.add(egui::Button::new(RichText::new("Install Prop Bets").size(12.5).strong())).on_hover_text("Its page in the Library: install it there, and props show here with their odds and Bet").clicked() {
+            ui.label(RichText::new("Bet on it with Pyr Prop Bets, from the Pyr Library.").size(12.5).color(theme::MUTED()));
+            if ui.add(egui::Button::new(RichText::new("Install Pyr Prop Bets").size(12.5).strong())).on_hover_text("Its page in the Library: install it there, and props show here with their odds and Bet").clicked() {
                 self.show_prop_bets_in_library();
             }
         });
@@ -143,7 +143,7 @@ impl PyrApp {
             return;
         };
         let now = pyr_proto::now_ms();
-        // One of the casino's own changes without this Pyr hearing of it (unless Prop Bets'
+        // One of the casino's own changes without this Pyr hearing of it (unless Pyr Prop Bets'
         // window is open, or I've something on it): its card asks how it stands every half
         // minute while it shows.
         if prop.house && !matches!(prop.state, PropState::Settled | PropState::Void) {
@@ -532,7 +532,7 @@ mod tests {
         assert_eq!(without_links(&text), "");
         assert_eq!(without_links("look at this\npyr://prop/3"), "look at this");
         assert!(ids_in("nothing here").is_empty());
-        // Without Prop Bets: the question's line stays, the link goes.
+        // Without Pyr Prop Bets: the question's line stays, the link goes.
         assert_eq!(without_link_lines(&text), "📊 Prop bet: Will it rain on Saturday?");
     }
 
