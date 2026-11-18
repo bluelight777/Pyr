@@ -313,9 +313,9 @@ pub fn style(ctx: &egui::Context) {
 /// A category's color and a word about it.
 pub fn category_look(id: &str) -> (Color32, &'static str) {
     match id {
-        "nfl" => (Color32::from_rgb(0x4c, 0xa3, 0x55), "Every game: the winner, the spread, the total"),
+        "nfl" => (Color32::from_rgb(0x4c, 0xa3, 0x55), "Every game: the winner, the total, the margin"),
         "nba" => (Color32::from_rgb(0xf0, 0x86, 0x3a), "Tonight's games and tomorrow's"),
-        "nhl" => (Color32::from_rgb(0x58, 0xb4, 0xe8), "Winners, totals, and overtime"),
+        "nhl" => (Color32::from_rgb(0x58, 0xb4, 0xe8), "Tonight's games: winners and totals"),
         "mlb" => (Color32::from_rgb(0xe0, 0x56, 0x4f), "Winners, totals, and the first inning"),
         "cfb" => (Color32::from_rgb(0xc9, 0x9a, 0x45), "The Top 25's games"),
         "cbb" => (Color32::from_rgb(0xe8, 0x6f, 0x51), "The Top 25's games"),

@@ -422,7 +422,7 @@ impl Source for Sports {
     /// settled; else every half hour.
     fn every(&self, now: i64, mine: &[&Kept]) -> i64 {
         let wait = self.board.first_look(self.league);
-        if mine.iter().any(|k| k.prop.starts + wait <= now + 10 * MIN && now < k.prop.starts + wait + LONG) { self.board.day_every(self.league).min(30 * MIN) } else { 30 * MIN }
+        if mine.iter().any(|k| k.prop.starts + wait <= now + 10 * MIN && now < k.prop.starts + wait + LONG) { self.board.day_every(self.league) } else { 30 * MIN }
     }
 
     fn run(&self, now: i64, web: &dyn Fetch, mine: &[&Kept], memo: &mut Value) -> Result<Out, String> {
@@ -503,11 +503,16 @@ impl Source for Sports {
             }
         }
         // And what's open: moved, under way, final, or off.
+        // (Since when each game has been seen final: kept while its props aren't settled,
+        // through the looks that don't ask about its day.)
         let finals = memo["finals"].as_object().cloned().unwrap_or_default();
-        let mut still: serde_json::Map<String, Value> = serde_json::Map::new();
+        let mut still: serde_json::Map<String, Value> = finals.iter().filter(|(id, _)| mine.iter().any(|k| k.memo["event"] == id.as_str())).map(|(id, at)| (id.clone(), at.clone())).collect();
         for k in mine {
             let Some(g) = k.memo["event"].as_str().and_then(|id| games.iter().find(|g| g.id == id)) else { continue };
             let id = &k.prop.id;
+            if g.stage != Stage::Final {
+                still.remove(&g.id);
+            }
             match g.stage {
                 Stage::Off => out.call_off(id, if g.off_why.is_empty() { "postponed".to_string() } else { g.off_why.clone() }),
                 Stage::Before => {
@@ -767,5 +772,159 @@ mod tests {
         assert_eq!(feed.props[2].event_name, "Montreal Canadiens at #7 New York Rangers");
         assert!(feed.props[2].featured > feed.props[0].featured);
         assert_eq!(feed.props[1].outcomes, vec!["Over 144.5".to_string(), "Under 144.5".into()]);
+    }
+
+    // ---- the leagues from the sites that allow it (their answers as their documentation
+    // shows them: see `bdl`, `cfbd`, `odds`).
+
+    fn bdl_nfl(status: &str, state: &str, scores: &str) -> String {
+        format!(
+            r#"{{"data": [{{"id": 7002, "visitor_team": {{"location": "Dallas", "name": "Cowboys", "full_name": "Dallas Cowboys", "abbreviation": "DAL"}},
+            "home_team": {{"location": "Philadelphia", "name": "Eagles", "full_name": "Philadelphia Eagles", "abbreviation": "PHI"}},
+            "venue": "Lincoln Financial Field", "week": 11, "date": "2026-11-22T18:00:00.000Z", "season": 2026, "status": "{status}", "status_state": "{state}"{scores}}}], "meta": {{"per_page": 100}}}}"#
+        )
+    }
+
+    #[test]
+    fn the_nfl_from_balldontlie_opens_what_it_can_settle_and_settles_it() {
+        use crate::sources::bdl::Bdl;
+        let kickoff = when::at(2026, 11, 22, 18, 0);
+        let mut m = Maker::new(State::default(), vec![Box::new(Sports::with("nfl", Box::new(Bdl { key: Some("K".into()) })))]);
+        let t0 = kickoff - 2 * DAY;
+        let before = bdl_nfl("11/22 - 1:00 PM EST", "scheduled", r#", "home_team_score": null, "visitor_team_score": null"#);
+        assert!(m.step(t0, &Canned::new(&[("/nfl/v1/games", before.as_str())]), false));
+        let feed = m.feed(t0);
+        // Who wins, the total against the league's usual (no bookmaker's line), the margin, the half.
+        assert_eq!(feed.props.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), vec!["nfl:b7002:half", "nfl:b7002:margin", "nfl:b7002:total", "nfl:b7002:win"]);
+        let win = &feed.props[3];
+        assert_eq!((win.q.as_str(), win.source.as_str(), win.detail.as_str(), win.closes), ("Who wins: Dallas Cowboys at Philadelphia Eagles?", "balldontlie", "Lincoln Financial Field", kickoff));
+        assert!(win.rules.contains("as balldontlie reports it"), "{}", win.rules);
+        assert_eq!(feed.props[2].outcomes, vec!["Over 44.5".to_string(), "Under 44.5".into()]);
+        // Under way: how it stands, in the props' detail.
+        let live = bdl_nfl("3rd Qtr", "in_progress", r#", "home_team_score": 17, "visitor_team_score": 10, "home_team_q1": 7, "home_team_q2": 10, "visitor_team_q1": 3, "visitor_team_q2": 7"#);
+        let t1 = kickoff + 2 * HOUR;
+        assert!(m.step(t1, &Canned::new(&[("/nfl/v1/games", live.as_str())]), false));
+        assert!(m.feed(t1).props.iter().all(|p| p.detail == "3rd Qtr · DAL 10, PHI 17" && p.result.is_none()));
+        // Final, and five minutes on: each prop comes out by itself.
+        let done = bdl_nfl("Final", "final", r#", "home_team_score": 27, "visitor_team_score": 24, "home_team_q1": 7, "home_team_q2": 10, "home_team_q3": 3, "home_team_q4": 7, "home_team_ot": null, "visitor_team_q1": 3, "visitor_team_q2": 7, "visitor_team_q3": 7, "visitor_team_q4": 7, "visitor_team_ot": null"#);
+        let web = Canned::new(&[("/nfl/v1/games", done.as_str())]);
+        let t2 = kickoff + 3 * HOUR + 20 * MIN;
+        m.step(t2, &web, false);
+        assert!(m.feed(t2).props.iter().all(|p| p.result.is_none() && p.detail == "Final: Eagles 27, Cowboys 24"));
+        m.step(t2 + 6 * MIN, &web, false);
+        let feed = m.feed(t2 + 6 * MIN);
+        let came: Vec<(&str, Option<usize>, &str)> = feed.props.iter().map(|p| (p.id.rsplit(':').next().unwrap(), p.result.as_ref().unwrap().winner, p.result.as_ref().unwrap().note.as_str())).collect();
+        assert_eq!(came, vec![("half", Some(1), "DAL 10, PHI 17 at the half"), ("margin", Some(0), "Eagles 27, Cowboys 24"), ("total", Some(0), "Eagles 27, Cowboys 24: 51 in all"), ("win", Some(1), "Eagles 27, Cowboys 24")]);
+        // With no key it asks nothing and says how to give it one.
+        let mut none = Maker::new(State::default(), vec![Box::new(Sports::with("nfl", Box::new(Bdl { key: None })))]);
+        let web = Canned::new(&[("/nfl/v1/games", done.as_str())]);
+        assert!(!none.step(t0, &web, false));
+        assert!(web.asked().is_empty());
+        assert!(none.state.sources["nfl"].error.contains("no key yet"), "{}", none.state.sources["nfl"].error);
+    }
+
+    /// The Odds API's two answers at a moment of a hockey night: the list of games, and the
+    /// scores (the Rangers' game over at 02:50, Utah's at 05:05).
+    fn hockey_night(now: i64) -> Canned {
+        let (a, b) = (when::at(2026, 11, 19, 0, 0), when::at(2026, 11, 19, 2, 30));
+        let events = r#"[{"id": "a512", "commence_time": "2026-11-19T00:00:00Z", "home_team": "New York Rangers", "away_team": "Montréal Canadiens"},
+            {"id": "b612", "commence_time": "2026-11-19T02:30:00Z", "home_team": "Utah Mammoth", "away_team": "Toronto Maple Leafs"}]"#;
+        let item = |id: &str, at: &str, home: &str, away: &str, start: i64, end: i64, score: (u32, u32)| {
+            let scores = if now < start { "null".to_string() } else { format!(r#"[{{"name": "{home}", "score": "{}"}}, {{"name": "{away}", "score": "{}"}}]"#, score.0, score.1) };
+            format!(r#"{{"id": "{id}", "commence_time": "{at}", "completed": {}, "home_team": "{home}", "away_team": "{away}", "scores": {scores}}}"#, now >= end)
+        };
+        let scores = format!(
+            "[{}, {}]",
+            item("a512", "2026-11-19T00:00:00Z", "New York Rangers", "Montréal Canadiens", a, a + 170 * MIN, (3, 2)),
+            item("b612", "2026-11-19T02:30:00Z", "Utah Mammoth", "Toronto Maple Leafs", b, b + 155 * MIN, (1, 4))
+        );
+        Canned::new(&[("/events", events), ("/scores", scores.as_str())])
+    }
+
+    #[test]
+    fn hockey_from_the_odds_api_is_asked_about_a_few_times_a_night() {
+        use crate::sources::odds::Odds;
+        let mut m = Maker::new(State::default(), vec![Box::new(Sports::with("nhl", Box::new(Odds { key: Some("K".into()) })))]);
+        let t0 = when::at(2026, 11, 18, 20, 0);
+        assert!(m.step(t0, &hockey_night(t0), false));
+        let feed = m.feed(t0);
+        // Who wins and the total: what a final score can settle. No overtime prop from it.
+        assert_eq!(feed.props.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), vec!["nhl:oa512:total", "nhl:oa512:win", "nhl:ob612:total", "nhl:ob612:win"]);
+        assert_eq!((feed.props[1].outcomes.clone(), feed.props[1].source.as_str()), (vec!["Canadiens".to_string(), "Rangers".into()], "The Odds API"));
+        assert_eq!(feed.props[2].outcomes, vec!["Over 5.5".to_string(), "Under 5.5".into()]);
+        // The night, a look every five minutes as the service runs: the scores are asked for
+        // only once a game could be over, and then every fifty minutes.
+        let (mut scores, mut lists) = (Vec::new(), 0);
+        let mut now = t0;
+        while now < t0 + 12 * HOUR {
+            now += 5 * MIN;
+            let web = hockey_night(now);
+            m.step(now, &web, false);
+            for a in web.asked() {
+                if a.contains("/scores") { scores.push(when::hhmm_utc(now)) } else { lists += 1 }
+            }
+        }
+        assert_eq!(scores, vec!["02:30 UTC", "03:20 UTC", "04:10 UTC", "05:10 UTC", "06:00 UTC"], "five looks for a night of two games");
+        assert!(lists <= 3, "{lists} lists (they cost nothing, but aren't needed often)");
+        let feed = m.feed(now);
+        let came: Vec<(&str, Option<usize>, &str)> = feed.props.iter().map(|p| (p.id.as_str(), p.result.as_ref().unwrap().winner, p.result.as_ref().unwrap().note.as_str())).collect();
+        assert_eq!(
+            came,
+            vec![
+                ("nhl:oa512:total", Some(1), "Rangers 3, Canadiens 2: 5 in all"),
+                ("nhl:oa512:win", Some(1), "Rangers 3, Canadiens 2"),
+                ("nhl:ob612:total", Some(1), "Maple Leafs 4, Mammoth 1: 5 in all"),
+                ("nhl:ob612:win", Some(0), "Maple Leafs 4, Mammoth 1")
+            ]
+        );
+        // Ten of the month's credits (two a look).
+        assert_eq!(Budget::used(&m.state.sources["nhl"].memo["board"], now), 5);
+    }
+
+    #[test]
+    fn a_game_that_never_ends_in_the_scoreboard_s_eyes_doesn_t_use_the_month_up() {
+        use crate::sources::cfbd::Cfbd;
+        let games = r#"[{"id": 401752900, "season": 2026, "week": 13, "seasonType": "regular", "startDate": "2026-11-21T17:00:00.000Z", "startTimeTBD": false, "completed": false,
+            "venue": "Bryant-Denny Stadium", "homeTeam": "Alabama", "homePoints": null, "awayTeam": "Auburn", "awayPoints": null}]"#;
+        let lines = r#"[{"id": 401752900, "lines": [{"provider": "consensus", "spread": -9.5, "overUnder": 47.5, "homeMoneyline": -350, "awayMoneyline": 275}]}]"#;
+        let web = || Canned::new(&[("/rankings", "[]"), ("/lines", lines), ("/games", games)]);
+        let mut m = Maker::new(State::default(), vec![Box::new(Sports::with("cfb", Box::new(Cfbd { key: Some("K".into()) })))]);
+        let t0 = when::at(2026, 11, 20, 12, 0);
+        let first_web = web();
+        assert!(m.step(t0, &first_web, false));
+        // (The season's games, the week's lines, the Top 25.)
+        assert_eq!(first_web.asked().len(), 3);
+        // The bookmaker's lines: the spread and the total are his.
+        assert_eq!(m.feed(t0).props.iter().map(|p| p.id.rsplit(':').next().unwrap().to_string()).collect::<Vec<_>>(), vec!["half", "spread", "total", "win"]);
+        assert_eq!(m.feed(t0).props[2].outcomes, vec!["Over 47.5".to_string(), "Under 47.5".into()]);
+        // Three days of it never being called over: asked about every quarter of an hour
+        // from when it could have ended, for eight hours, then four times a day.
+        let (mut about, mut all) = (0, 3);
+        let mut now = t0;
+        let (mut first, mut last_often) = (0, 0);
+        while now < t0 + 4 * DAY {
+            now += 5 * MIN;
+            let w = web();
+            m.step(now, &w, false);
+            for a in w.asked() {
+                all += 1;
+                if a.contains("&week=13&classification") {
+                    about += 1;
+                    if first == 0 {
+                        first = now;
+                    }
+                    if now < when::at(2026, 11, 22, 4, 0) {
+                        last_often = now;
+                    }
+                }
+            }
+        }
+        let kickoff = when::at(2026, 11, 21, 17, 0);
+        assert!(first >= kickoff + 170 * MIN && first <= kickoff + 3 * HOUR + 30 * MIN, "first asked at {}", when::iso(first));
+        assert!(last_often > kickoff + 10 * HOUR, "{}", when::iso(last_often));
+        assert!((30..=48).contains(&about), "{about} looks at its day");
+        assert!(all < 75, "{all} calls in four days");
+        assert_eq!(Budget::used(&m.state.sources["cfb"].memo["board"], now), all as i64);
+        assert!(m.feed(now).props.iter().all(|p| p.result.is_none()));
     }
 }

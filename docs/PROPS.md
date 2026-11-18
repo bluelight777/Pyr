@@ -6,8 +6,11 @@ Crypto category, weather, entertainment, science, art. It should update itself r
 only play money from Pyr Casino… automatically update without requiring human intervention."
 "Make it beautiful and impressive." "Make it mostly automated."
 
-His choices: **public data only, $0** (no Claude API); **ESPN's public feed** for sports;
-**a server's owner turns the casino's own props on** (off until then).
+His choices: **public data only, $0** (no Claude API); **a server's owner turns the casino's
+own props on** (off until then); and for sports, first ESPN's public feed (Nov 17), then, told
+its terms forbid automated access, "use another site that would work other than ESPN if we
+can't use it" (Nov 18): of what was put to him (one paid site for everything, three free ones
+with a key each, or staying on ESPN), **the three free sites**. See "The games' sites".
 
 ## How the big sites do it (what's copied)
 
@@ -56,7 +59,9 @@ fun: the odds as a line over time, what you hold and what it's worth, the best b
 
 | Category | Source | Props |
 |---|---|---|
-| nfl, nba, nhl, mlb, cfb, cbb | ESPN's scoreboard (`site.api.espn.com/apis/site/v2/sports/…/scoreboard`) | per game: winner; spread and total when the scoreboard has odds; one game prop (NFL: margin and first-half leader; CFB, CBB: halftime leader; NBA: first-quarter leader; NHL: overtime or shootout; MLB: a run in the first) |
+| nfl, nba, mlb | balldontlie's games (`api.balldontlie.io`; a key) | per game: winner; the total against what's usual in the league (no bookmaker's lines on its free plan); NFL: margin and first-half leader; NBA: first-quarter leader; MLB: a run in the first |
+| cfb, cbb | CollegeFootballData and CollegeBasketballData (`api.collegefootballdata.com`, `api.collegebasketballdata.com`; one key) | the Top 25's games and those with lines: winner, spread and total at the bookmakers' lines, halftime leader |
+| nhl | The Odds API (`api.the-odds-api.com`; a key) | per game: winner, and the total against what's usual (5.5 goals): what a final score settles (it says nothing of overtime) |
 | crypto | Coinbase's public candles, Kraken's as the spare | BTC, ETH, SOL, XRP, DOGE: up or down each day; BTC, ETH: where it is in two days (five ranges); BTC, ETH, SOL: where it is next Monday |
 | weather | National Weather Service: the forecast (api.weather.gov) for the ranges, the daily climate report (CLI) to settle | ten cities: tomorrow's high (five ranges around the forecast), rain or snow |
 | science | USGS earthquakes, NOAA SWPC (flares, Kp), Launch Library 2, JPL close approaches | next week: an M6.5+, how many M6+, an X flare, a G2 storm, how many launches, how many asteroids inside the Moon's orbit; each launch: off the pad on time? |
@@ -66,12 +71,67 @@ fun: the odds as a line over time, what you hold and what it's worth, the best b
 | casino | each server's own casino (its rounds by the day) | tomorrow: does the house come out ahead; which game takes the most in bets (the week's four biggest, or another); is a jackpot won |
 | community | members | their own, in any category |
 
+## The games' sites (Nov 18 2026)
+
+Each league has its own `sports::Scoreboard`, and each of the three sites wants a key of the
+account's own, which lives only on the VPS (`/etc/pyr-props/keys/<site>`, readable by the
+maker's user alone; it goes as a request header, never in an address or an error). Blue makes
+the three free accounts and gives each key on the server, where it's asked for unseen:
+
+    ssh -t root@2.24.121.231 pyr-props-key balldontlie
+    ssh -t root@2.24.121.231 pyr-props-key collegefootballdata
+    ssh -t root@2.24.121.231 pyr-props-key the-odds-api
+
+(`installer/site/pyr-props-key`: keeps the key, starts the maker again, and asks the site once
+so what its leagues read is said there and then.) A league whose site has no key opens nothing
+and says so in `status.json`; everything else in the feed needs no key.
+
+| Site | Leagues | Its free plan | How it's asked |
+|---|---|---|---|
+| balldontlie (app.balldontlie.io) | NFL, NBA, MLB | 5 requests a minute; games with scores by quarter or inning; no lines | a request per league every 5 minutes while its games are on (13 s between two requests), every half hour else |
+| CollegeFootballData (collegefootballdata.com/key; the same key at CollegeBasketballData) | college football, college basketball | 1,000 calls a month for both; results, line scores, lines, rankings; no games under way | what's coming twice a day, lines and the Top 25 with it; a day's games once the first could be over (3 h, 1 h 55 min), then every 15 and 30 minutes; football keeps to 440 calls a month, basketball to 480 |
+| The Odds API (the-odds-api.com) | NHL | 500 credits a month; the list of games free, the scores 2 a look | the list every 6 hours; the scores once a game could be over (2 h 25 min), then every 50 minutes: 230 looks a month at most |
+
+A month's calls are counted out as the month goes by (`sports::Budget`, kept in the state
+file), so a busy day can't spend what the month's end needs; a game the site never calls over
+is asked about for eight hours and then four times a day until it's called off. With no
+bookmaker's line a game's total is against what's usual in its league (44.5 points in the NFL,
+227.5 in the NBA, 5.5 goals, 8.5 runs), and its rules say so.
+
+Their terms, as read on their own pages (the-odds-api.com/terms-and-conditions.html of Aug 31
+2026, balldontlie.io/terms of Oct 20 2026, collegefootballdata.com/terms of Aug 12 2026): all
+three allow showing their data in an app, commercial or not, and keeping it; all three forbid
+passing it on as a data product or standing in for their API (the feed carries props made
+from the games, with who settles them named: not their answers). CollegeFootballData allows
+betting-related uses in so many words. balldontlie adds two things Blue was told before he
+chose it: its data mustn't be called the leagues' official data (the props say "as
+balldontlie reports it"), and it says not to settle wagers on it alone without checking
+elsewhere; these are play chips, and nothing here checks its scores against a second source.
+
+What was looked at and not taken: TheSportsDB (one site for all six leagues with a clear yes
+to apps and services, but its free key gives three games a day and a published app needs its
+$9 a month); the leagues' own feeds (MLB's, the NHL's, the NFL's: personal, non-commercial use
+only) and theScore's (the same); the open data sets on GitHub (nflverse, sportsdataverse:
+theirs to give, but updated daily at best, and last published in August or September);
+SportsBlaze (no terms to read). ESPN's adapter is still in the tree (`sources/espn.rs`, its
+tests with it) behind `pyr-props run --espn`, which nothing sets.
+
 ## What's checked and what isn't (Nov 17 2026)
 
 Read live through the fetch tool, shapes as in `crates/props-feed/samples/`: ESPN (NFL, NBA,
-NHL, college basketball), Coinbase ticker and candles, Kraken ticker and OHLC, USGS (query and
-count), SWPC flares and Kp, Launch Library 2, JPL, Treasury (both), Frankfurter, the Federal
-Register, drand.
+NHL, college basketball: no longer used), Coinbase ticker and candles, Kraken ticker and OHLC,
+USGS (query and count), SWPC flares and Kp, Launch Library 2, JPL, Treasury (both),
+Frankfurter, the Federal Register, drand.
+
+**The three games' sites (Nov 18): written from their documentation alone.** None answers
+without a key, so no answer of theirs has been read: the tests' answers are made to the field
+names and values their documentation shows. Each adapter takes everything as optional but a
+game's id, start and teams, says so when games are there and none can be read (rather than
+opening nothing quietly), and `pyr-props-key` shows what a site's leagues read the moment its
+key is given. Not known until then: whether balldontlie's free key reads all three of its
+leagues; how soon CollegeFootballData marks a game completed and fills its line scores; which
+way CollegeBasketballData's spread is signed (taken as the football one's: negative, the home
+team favored).
 
 The Weather Service's daily climate report (forecast.weather.gov's product page, what settles
 the weather's props): its layout asked of the fetch tool line by line (the heading's "CLIMATE
@@ -111,8 +171,8 @@ Not used: CoinGecko (its terms forbid gambling use by name), Netflix Top 10 and 
 try from here: not verified), Apple's chart feeds (terms unread), BLS (unread), the New York
 Fed's rates (its newest was three weeks old).
 
-Terms: ESPN's (Disney's) forbid automated access outright; Blue was told so (Nov 17) and the
-sports source sits behind one trait (`sports::Scoreboard`) so another can take its place.
+Terms: ESPN's (Disney's) forbid automated access outright; Blue was told so (Nov 17), and on
+Nov 18 had the games moved to sites that allow it ("The games' sites" above).
 Coinbase's and Kraken's market-data terms couldn't be read. Steam's API terms (read) have no
 word against this use, ask for Valve's name beside its data, and allow 100,000 calls a day.
 Launch Library 2: fifteen calls an hour without a key. NWS, USGS, NOAA, NASA, Treasury, the

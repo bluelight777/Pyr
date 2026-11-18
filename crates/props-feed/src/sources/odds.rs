@@ -113,7 +113,11 @@ fn league_day(start: i64) -> String {
 pub fn games(text: &str, now: i64) -> Result<Vec<Game>, String> {
     let v = super::json(text, NAME)?;
     let list = v.as_array().ok_or_else(|| format!("{NAME}'s answer isn't a list of games"))?;
-    Ok(list.iter().filter_map(|g| game(g, now)).collect())
+    let got: Vec<Game> = list.iter().filter_map(|g| game(g, now)).collect();
+    if got.is_empty() && !list.is_empty() {
+        return Err(format!("{NAME}'s games aren't as this expects them ({} there, none read)", list.len()));
+    }
+    Ok(got)
 }
 
 fn game(g: &Value, now: i64) -> Option<Game> {

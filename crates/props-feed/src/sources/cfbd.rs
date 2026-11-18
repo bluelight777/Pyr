@@ -104,7 +104,11 @@ impl Scoreboard for Cfbd {
             // ask about a day by its week.
             let season = season_of(now);
             let v = self.ask(web, league, &format!("{FOOTBALL}/games?year={season}&seasonType=both&classification=fbs"), now, notes)?;
-            let list: Vec<&Value> = v.as_array().ok_or_else(|| format!("{NAME}'s answer isn't a list of games"))?.iter().filter(|g| start_of(g).is_some_and(|s| s >= from && s <= to)).collect();
+            let every = v.as_array().ok_or_else(|| format!("{NAME}'s answer isn't a list of games"))?;
+            if !every.is_empty() && every.iter().all(|g| start_of(g).is_none()) {
+                return Err(format!("{NAME}'s games aren't as this expects them ({} there, none with a start)", every.len()));
+            }
+            let list: Vec<&Value> = every.iter().filter(|g| start_of(g).is_some_and(|s| s >= from && s <= to)).collect();
             let mut weeks = serde_json::Map::new();
             let mut ahead: Vec<(String, i64)> = Vec::new();
             for g in &list {
@@ -117,7 +121,7 @@ impl Scoreboard for Cfbd {
             notes["weeks"] = Value::Object(weeks);
             let lines: Vec<String> = ahead.iter().take(2).map(|(kind, week)| format!("{FOOTBALL}/lines?year={season}&seasonType={kind}&week={week}")).collect();
             self.extras(web, league, now, notes, &lines, Some(format!("{FOOTBALL}/rankings?year={season}")));
-            Ok(list.into_iter().filter_map(|g| game(g, now, notes)).collect())
+            read(&list, now, notes)
         } else {
             let range = format!("startDateRange={}&endDateRange={}", stamp(from), stamp(to));
             let v = self.ask(web, league, &format!("{BASKETBALL}/games?{range}"), now, notes)?;
@@ -125,7 +129,7 @@ impl Scoreboard for Cfbd {
             let season = list.iter().find_map(|g| g["season"].as_i64());
             let lines = vec![format!("{BASKETBALL}/lines?startDateRange={}&endDateRange={}", stamp(now), stamp(to))];
             self.extras(web, league, now, notes, &lines, season.map(|s| format!("{BASKETBALL}/rankings?season={s}&pollType=ap")));
-            Ok(list.iter().filter_map(|g| game(g, now, notes)).collect())
+            read(&list.iter().collect::<Vec<_>>(), now, notes)
         }
     }
 
@@ -142,7 +146,7 @@ impl Scoreboard for Cfbd {
             format!("{BASKETBALL}/games?startDateRange={}&endDateRange={}", stamp(at + 4 * HOUR), stamp(at + 31 * HOUR))
         };
         let v = self.ask(web, league, &url, now, notes)?;
-        Ok(v.as_array().ok_or_else(|| format!("{NAME}'s answer isn't a list of games"))?.iter().filter_map(|g| game(g, now, notes)).collect())
+        read(&v.as_array().ok_or_else(|| format!("{NAME}'s answer isn't a list of games"))?.iter().collect::<Vec<_>>(), now, notes)
     }
 
     /// Twice a day: what's coming changes slowly, and every call counts.
@@ -162,6 +166,16 @@ impl Scoreboard for Cfbd {
 
 fn start_of(g: &Value) -> Option<i64> {
     when::parse_iso(g["startDate"].as_str()?)
+}
+
+/// An answer's games; ones that are there and can't be read are a failure, not a quiet
+/// nothing.
+fn read(list: &[&Value], now: i64, notes: &Value) -> Result<Vec<Game>, String> {
+    let got: Vec<Game> = list.iter().filter_map(|g| game(g, now, notes)).collect();
+    if got.is_empty() && !list.is_empty() {
+        return Err(format!("{NAME}'s games aren't as this expects them ({} there, none read)", list.len()));
+    }
+    Ok(got)
 }
 
 /// What a side scored each period ("homeLineScores" in football, "homePeriodPoints" in

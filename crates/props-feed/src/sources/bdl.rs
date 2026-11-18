@@ -84,8 +84,12 @@ fn league_day(start: i64) -> String {
 /// An answer's games.
 pub fn games(league: &League, text: &str, now: i64) -> Result<Vec<Game>, String> {
     let v = super::json(text, "balldontlie")?;
-    let data = v["data"].as_array().ok_or("balldontlie's answer has no games in it")?;
-    Ok(data.iter().filter_map(|g| game(league, g, now)).collect())
+    let data = v["data"].as_array().ok_or("balldontlie's answer has no list of games in it")?;
+    let got: Vec<Game> = data.iter().filter_map(|g| game(league, g, now)).collect();
+    if got.is_empty() && !data.is_empty() {
+        return Err(format!("balldontlie's games aren't as this expects them ({} there, none read)", data.len()));
+    }
+    Ok(got)
 }
 
 fn text(v: &Value) -> String {

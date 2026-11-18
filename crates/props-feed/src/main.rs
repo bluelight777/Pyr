@@ -263,6 +263,11 @@ fn run(state_dir: &Path, out: &Path, key: &Path, cert: &Path, contact: &str, onl
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => State::default(),
         Err(e) => return Err(format!("reading {}: {e}", state_file.display())),
     };
+    // (What had failed is asked again at once: a start is what follows a key being given.)
+    let mut state = state;
+    for s in state.sources.values_mut().filter(|s| !s.error.is_empty()) {
+        s.next_run = 0;
+    }
     let web = Web::new(contact);
     let mut m = Maker::new(state, sources::all(only, keys, espn));
     eprintln!("{} pyr-props {}: {} sources, {} props kept, the feed signed by {}", when::iso(pyr_proto::now_ms()), env!("CARGO_PKG_VERSION"), m.sources.len(), m.state.props.len(), key.user_id());

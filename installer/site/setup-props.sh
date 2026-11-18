@@ -11,6 +11,10 @@
 #   /etc/pyr-props/                 its key (feed-key.txt: it signs the feed and nothing else;
 #                                   only its user can read it) and the release key's
 #                                   certificate for that key (feed-cert.json, new each release)
+#   /etc/pyr-props/keys/            the keys of the sites the games come from, a file each
+#                                   (balldontlie, collegefootballdata, the-odds-api): put
+#                                   there by pyr-props-key, never by a release
+#   /usr/local/bin/pyr-props-key    asks for one of those keys and keeps it there
 #   /var/lib/pyr-props/             what it has opened (state.json): a restart loses nothing
 #   <the website>/pyr/props/        feed.json and status.json: the one part of the website it
 #                                   may write
@@ -62,7 +66,8 @@ RUN_AS=pyr-props
 id "$RUN_AS" >/dev/null 2>&1 || useradd --system --no-create-home --home-dir /var/lib/pyr-props --shell /usr/sbin/nologin "$RUN_AS"
 ETC=/etc/pyr-props
 STATE=/var/lib/pyr-props
-mkdir -p "$ETC" "$STATE" "$OUT"
+KEYS="$ETC/keys"
+mkdir -p "$ETC" "$KEYS" "$STATE" "$OUT"
 if [ ! -f "$ETC/feed-key.txt" ]; then
   [ -f "$HERE/props/feed-key.txt" ] || { echo "pyr-props has no key here yet, and none came with this release (make-props-feed.sh with PROPS_KEY)." >&2; exit 1; }
   install -m 600 "$HERE/props/feed-key.txt" "$ETC/feed-key.txt"
@@ -72,7 +77,11 @@ fi
 rm -f "$HERE/props/feed-key.txt"
 install -m 644 "$HERE/props/feed-cert.json" "$ETC/feed-cert.json.new"
 chown -R "$RUN_AS": "$ETC" "$STATE"
-chmod 700 "$ETC"
+chmod 700 "$ETC" "$KEYS"
+# (The games' sites' keys: Blue's own, typed in on this server. This puts each where it goes.)
+if [ -f "$HERE/props/pyr-props-key" ]; then
+  install -m 755 "$HERE/props/pyr-props-key" /usr/local/bin/pyr-props-key
+fi
 # The certificate has to be for the key that's here, from the release key Pyr servers believe.
 if ! "$NEW" verify --key "$ETC/feed-key.txt" --cert "$ETC/feed-cert.json.new"; then
   rm -f "$ETC/feed-cert.json.new"
@@ -111,7 +120,7 @@ Wants=network-online.target
 
 [Service]
 User=$RUN_AS
-ExecStart=/usr/local/bin/pyr-props run --state $STATE --out $OUT --key $ETC/feed-key.txt --cert $ETC/feed-cert.json
+ExecStart=/usr/local/bin/pyr-props run --state $STATE --out $OUT --key $ETC/feed-key.txt --cert $ETC/feed-cert.json --keys $KEYS
 Restart=always
 RestartSec=20
 # Shut in: it reads the network and writes its state and the feed's folder, nothing else.
@@ -162,4 +171,17 @@ if [ -f "$OUT/status.json" ]; then
   fi
 else
   note "No feed yet after five minutes. See: journalctl -u pyr-props -n 50"
+fi
+
+# The games come from three sites, each with a free key of Blue's own: a league whose site
+# has no key yet opens nothing (and counts above as not reading) until it's given one.
+WAITING=""
+for SITE in "balldontlie:the NFL, the NBA and MLB" "collegefootballdata:college football and college basketball" "the-odds-api:the NHL"; do
+  [ -s "$KEYS/${SITE%%:*}" ] || WAITING="$WAITING
+   ${SITE#*:}: ssh -t root@2.24.121.231 pyr-props-key ${SITE%%:*}"
+done
+if [ -n "$WAITING" ]; then
+  say "The games wait for their sites' keys"
+  note "Each of these asks for a key and keeps it here (docs/PROPS.md says where each key comes from):$WAITING"
+  note "Everything else in the feed needs no key."
 fi

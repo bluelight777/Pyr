@@ -20,6 +20,8 @@ for A in x86_64 aarch64; do
 done
 rm -rf "$OUT" && mkdir -p "$OUT"
 cp dist/vps/pyr-props-linux-x86_64 dist/vps/pyr-props-linux-aarch64 "$OUT/"
+# (What Blue gives the games' sites' keys with, on the VPS: setup-props.sh installs it.)
+install -m 755 installer/site/pyr-props-key "$OUT/pyr-props-key"
 # (This machine's own build does the signing: the same code.)
 PROPS="cargo run -q -p pyr-props --"
 if [ -n "${PROPS_KEY:-}" ]; then

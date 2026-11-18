@@ -1,0 +1,68 @@
+#!/bin/bash
+# pyr-props-key SITE
+#
+# Gives the props feed's maker (pyr-props, docs/PROPS.md) the key of one of the sites its
+# games come from:
+#   balldontlie           the NFL, the NBA and MLB
+#   collegefootballdata   college football and college basketball
+#   the-odds-api          the NHL
+# Each is a free plan with a key of the account's own. This asks for the key without showing
+# it, keeps it where only the maker's own user can read it (/etc/pyr-props/keys/SITE), starts
+# the maker again, and asks the site once to say what its leagues read. A league whose site
+# has no key opens nothing; everything else in the feed doesn't need one.
+#
+# setup-props.sh puts this in /usr/local/bin. Run as root, on the server:
+#   ssh -t root@<the server> pyr-props-key balldontlie
+set -euo pipefail
+[ "$(id -u)" = 0 ] || { echo "Run as root." >&2; exit 1; }
+SITE=${1:-}
+case "$SITE" in
+  balldontlie)
+    LEAGUES=nfl,nba,mlb
+    WHERE="https://app.balldontlie.io (a free account: the key is in its settings)" ;;
+  collegefootballdata)
+    LEAGUES=cfb,cbb
+    WHERE="https://collegefootballdata.com/key (it sends the key to your email address)" ;;
+  the-odds-api)
+    LEAGUES=nhl
+    WHERE="https://the-odds-api.com (the free plan: it sends the key to your email address)" ;;
+  *)
+    echo "Which site's key? One of:" >&2
+    echo "  pyr-props-key balldontlie           (the NFL, the NBA and MLB)" >&2
+    echo "  pyr-props-key collegefootballdata   (college football and college basketball)" >&2
+    echo "  pyr-props-key the-odds-api          (the NHL)" >&2
+    exit 1 ;;
+esac
+RUN_AS=pyr-props
+KEYS=/etc/pyr-props/keys
+id "$RUN_AS" >/dev/null 2>&1 || { echo "The props feed's maker isn't set up on this server yet (publish a Pyr release first)." >&2; exit 1; }
+echo "The key for $SITE comes from $WHERE"
+read -r -s -p "Paste it here and press Enter (it isn't shown): " KEY
+echo
+KEY=$(printf '%s' "$KEY" | tr -d '[:space:]')
+if [ "${#KEY}" -lt 8 ] || [ "${#KEY}" -gt 200 ]; then
+  echo "That isn't a key (too short or too long): nothing changed." >&2
+  exit 1
+fi
+install -d -m 700 -o "$RUN_AS" -g "$RUN_AS" "$KEYS"
+( umask 077 && printf '%s\n' "$KEY" > "$KEYS/$SITE.new" )
+unset KEY
+chown "$RUN_AS": "$KEYS/$SITE.new"
+chmod 600 "$KEYS/$SITE.new"
+mv -f "$KEYS/$SITE.new" "$KEYS/$SITE"
+echo "Kept in $KEYS/$SITE (only $RUN_AS can read it)."
+if systemctl restart pyr-props.service; then
+  echo "The props feed's maker is started again with it."
+else
+  echo "pyr-props.service didn't start again: journalctl -u pyr-props -n 30" >&2
+fi
+echo
+echo "Asking $SITE once, as the maker will (a moment: it's unhurried)..."
+if runuser -u "$RUN_AS" -- /usr/local/bin/pyr-props check --keys "$KEYS" --only "$LEAGUES"; then
+  echo
+  echo "It reads. Its props open by themselves within the half hour (a league with no games soon opens none)."
+else
+  echo
+  echo "Something above didn't read. If it says the site doesn't take the key, run this again with the right one;"
+  echo "anything else: send those lines to whoever looks after Pyr's props. https://pyr.gg/props/status.json says how each league is doing."
+fi
