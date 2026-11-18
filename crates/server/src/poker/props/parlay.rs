@@ -129,8 +129,10 @@ impl Parlay {
     }
 }
 
-/// One of the casino's own props is over (settled or called off): every parlay still riding
-/// with a leg on it hears. (What goes wrong with one parlay is logged, and the rest go on.)
+/// One of the casino's own props is over (settled or called off): every parlay with a leg on
+/// it hears. One still riding goes a step on; one that's lost already (at an earlier leg)
+/// only has it written on its ticket, how that leg came out. (What goes wrong with one
+/// parlay is logged, and the rest go on.)
 pub(super) fn prop_over(hub: &Hub, st: &State, prop: &Prop, now: i64) {
     for j in hub.db.parlays_on_prop(prop.id) {
         let Ok(mut t) = serde_json::from_str::<Parlay>(&j) else { continue };
@@ -141,7 +143,12 @@ pub(super) fn prop_over(hub: &Hub, st: &State, prop: &Prop, now: i64) {
             _ => LegState::Void,
         };
         t.legs[i].note = prop.note.clone();
-        if let Err(e) = t.step(hub, st, i, now) {
+        let done = if t.state == ParlayState::Open {
+            t.step(hub, st, i, now)
+        } else {
+            t.save(hub).map(|()| t.tell(hub))
+        };
+        if let Err(e) = done {
             warn!(parlay = t.id, prop = prop.id, "a parlay's leg came out and it couldn't be settled: {e}");
         }
     }
@@ -398,10 +405,13 @@ mod tests {
         settle(&hub, &[("nfl:2:win", Some(0), "Jets 9, Dolphins 6")]);
         let t = mine(&hub, "bob").remove(0);
         assert_eq!((t.state, t.paid, t.legs[1].state, t.legs[0].state, chips(&hub, "bob")), (ParlayState::Lost, 0, LegState::Lost, LegState::Pending, 8_000));
-        // The legs that come out after change nothing.
-        settle(&hub, &[("nfl:2:win", Some(0), ""), ("nfl:1:win", Some(1), ""), ("nba:7:win", Some(0), "")]);
-        assert_eq!((mine(&hub, "bob")[0].state, chips(&hub, "bob")), (ParlayState::Lost, 8_000));
+        // The legs that come out after change nothing but what its ticket says of them.
+        settle(&hub, &[("nfl:2:win", Some(0), ""), ("nfl:1:win", Some(1), "Bills 27, Chiefs 24"), ("nba:7:win", None, "postponed")]);
+        let t = mine(&hub, "bob").remove(0);
+        assert_eq!((t.state, t.paid, chips(&hub, "bob")), (ParlayState::Lost, 0, 8_000));
+        assert_eq!((t.legs[0].state, t.legs[0].note.as_str(), t.legs[1].state, t.legs[2].state), (LegState::Won, "Bills 27, Chiefs 24", LegState::Lost, LegState::Void));
         assert_eq!(hub.db.prop_leaders(0)[0].1, -2_000);
+        assert_eq!(hub.db.prop_leaders(0)[0].3, 1, "counted once, when it lost");
     }
 
     /// A leg whose prop is called off counts as 1.00: the parlay goes on with the legs left,

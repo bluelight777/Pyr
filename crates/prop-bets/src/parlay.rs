@@ -44,6 +44,9 @@ pub struct Priced {
     pub room: f64,
     /// Its prop still takes bets.
     pub open: bool,
+    /// Its odds here are the ones its prop opened at: bets since have left the pick longer
+    /// on the board, and a parlay pays the less of the two (`pyr_poker::props::leg_price`).
+    pub as_opened: bool,
 }
 
 /// The slip priced: each pick, what the stake is times, what it pays, and whether what it
@@ -131,6 +134,8 @@ impl App {
     pub fn pick_from_afar(&mut self, prop: &PropView, outcome: usize, now: i64) {
         let was = self.picked(prop.id);
         let changed = self.pick(prop, outcome, now);
+        // (The Parlays page opens on the slip it went on.)
+        self.parlay_mine &= !changed;
         let name = prop.outcomes.get(outcome).cloned().unwrap_or_default();
         let text = match (changed, was, self.slip.refused.as_ref()) {
             (false, _, Some((why, _))) => (why.clone(), true),
@@ -150,7 +155,8 @@ impl App {
             .filter_map(|(id, outcome)| {
                 let prop = self.m.props.get(id)?;
                 let q = prop.leg(*outcome, stake);
-                Some(Priced { prop: *id, outcome: *outcome, odds: q.odds, room: q.room, open: prop.open_at(now) })
+                let on_the_board = p::leg_quote(&prop.parlay_book(), prop.b, *outcome, stake).odds;
+                Some(Priced { prop: *id, outcome: *outcome, odds: q.odds, room: q.room, open: prop.open_at(now), as_opened: q.odds < on_the_board * 0.99 })
             })
             .collect();
         let whole: f64 = legs.iter().map(|l| l.odds).product::<f64>() * stake as f64;
@@ -185,9 +191,31 @@ impl App {
         if !self.m.parlays_here {
             return note(ui, "No parlays on this server yet", "Its owner's Pyr server needs Pyr 0.16 or newer for parlays. Single bets work as ever.");
         }
-        self.slip_card(ui, now);
-        self.pick_from(ui, now);
+        // Two sides to it: a new parlay (the slip, and what there is to pick from), and mine
+        // as tickets.
         let (riding, over): (Vec<ParlayView>, Vec<ParlayView>) = self.m.parlays.iter().cloned().partition(|t| t.state == ParlayState::Open);
+        let picks = self.slip.legs.len();
+        let new_one = if picks > 0 { format!("New parlay  {picks}") } else { "New parlay".to_string() };
+        let mine = if riding.is_empty() { "Your parlays".to_string() } else { format!("Your parlays  {} riding", riding.len()) };
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for (label, side) in [(new_one, false), (mine, true)] {
+                let on = self.parlay_mine == side;
+                let text = RichText::new(label).font(bold_font(13.5)).color(if on { ON_EMBER } else { TEXT });
+                if ui.add(egui::Button::new(text).fill(if on { EMBER2 } else { ELEV }).corner_radius(15).min_size(vec2(0.0, 30.0))).clicked() {
+                    self.parlay_mine = side;
+                }
+            }
+        });
+        ui.add_space(10.0);
+        if !self.parlay_mine {
+            self.slip_card(ui, now);
+            self.pick_from(ui, now);
+            return;
+        }
+        if riding.is_empty() && over.is_empty() {
+            return note(ui, "No parlays of yours yet", "Put two or more picks on a slip under New parlay. Once it's placed, its ticket is here, each pick ticked off as it comes in.");
+        }
         if !riding.is_empty() {
             section(ui, "Riding");
             for t in &riding {
@@ -311,7 +339,11 @@ impl App {
                 let room = (right - 12.0 - odds.size().x - x).max(60.0);
                 let pick = lines(pnt, &prop.outcomes[leg.outcome.min(prop.outcomes.len().saturating_sub(1))], bold_font(14.5), TEXT, room, 1);
                 pnt.galley(pos2(x, r.top() + 5.0), pick, TEXT);
-                let under = if leg.open { prop.question.clone() } else { format!("Betting closed: take it out · {}", prop.question) };
+                let under = match (leg.open, leg.as_opened) {
+                    (false, _) => format!("Betting closed: take it out · {}", prop.question),
+                    (true, true) => format!("At the odds it opened at · {}", prop.question),
+                    (true, false) => prop.question.clone(),
+                };
                 let q = lines(pnt, &under, FontId::proportional(11.5), if leg.open { MUTED } else { LIVE }, room, 1);
                 pnt.galley(pos2(x, r.top() + 25.0), q, MUTED);
                 pnt.galley(pos2(right - odds.size().x, r.center().y - odds.size().y / 2.0), odds, GOLD);
@@ -328,7 +360,7 @@ impl App {
                 pnt.line_segment([c + vec2(-3.6, 3.6), c + vec2(3.6, -3.6)], s);
                 if x_resp.on_hover_text("Take it out of the parlay").clicked() {
                     out = Some(leg.prop);
-                } else if resp.on_hover_text(p::american(leg.odds)).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                } else if resp.on_hover_text(if leg.as_opened { format!("{} · In a parlay a pick pays the less of its odds now and the odds its prop opened at: bets since have left this one longer on the board.", p::american(leg.odds)) } else { p::american(leg.odds) }).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                     open_prop = Some(leg.prop);
                 }
             }
@@ -524,7 +556,7 @@ impl App {
                 let room = (r.right() - 10.0 - odds.size().x - x).max(60.0);
                 let pick = lines(pnt, &leg.pick, bold_font(13.5), if gone { MUTED } else { TEXT }, room, 1);
                 pnt.galley(pos2(x, r.top() + 2.0), pick, TEXT);
-                let under = leg_words(leg, now);
+                let under = leg_words(leg, now, t.state != ParlayState::Open);
                 let q = lines(pnt, &under, FontId::proportional(11.5), MUTED, room, 1);
                 pnt.galley(pos2(x, r.top() + 20.0), q, MUTED);
                 pnt.galley(pos2(r.right() - 4.0 - odds.size().x, r.center().y - odds.size().y / 2.0), odds, GOLD);
@@ -584,16 +616,19 @@ impl App {
         for t in riding.iter().take(6) {
             self.ticket(ui, t, now);
         }
-        if ui.link(RichText::new("All your parlays, and the slip for a new one").size(12.5)).clicked() {
+        if ui.link(RichText::new("All your parlays").size(12.5)).clicked() {
             self.back.clear();
+            self.parlay_mine = true;
             self.go(View::Parlay);
         }
     }
 }
 
-/// What's under a ticket's pick: its question, and how it came out once it has.
-fn leg_words(leg: &ParlayLeg, now: i64) -> String {
+/// What's under a ticket's pick: its question, and how it came out once it has (`over`: the
+/// parlay itself is over, lost at another leg: a pick still to come out no longer counts).
+fn leg_words(leg: &ParlayLeg, now: i64, over: bool) -> String {
     let what = match leg.state {
+        LegState::Pending if over => "still to come out, and no longer counted".to_string(),
         LegState::Pending if leg.closes_at > 0 && now < leg.closes_at => format!("closes in {}", words::countdown(leg.closes_at - now)),
         LegState::Pending => "waiting for its result".to_string(),
         LegState::Won => "won".to_string(),
@@ -640,5 +675,12 @@ mod tests {
         assert_eq!((odds_both(2.5).as_str(), odds_both(1.0 + 100.0 / 110.0).as_str(), odds_both(1.0).as_str()), ("×2.50 (+150)", "×1.91 (-110)", "×1.00"));
         let t = ParlayView { legs: vec![ParlayLeg::default(); 3], ..Default::default() };
         assert_eq!(title(&t), "3-leg parlay");
+        // A ticket's pick: waiting, in, and on a ticket that's lost already.
+        let mut leg = ParlayLeg { question: "Who wins: Jets at Dolphins?".into(), closes_at: 10_000, ..Default::default() };
+        assert!(leg_words(&leg, 20_000, false).ends_with("waiting for its result"));
+        assert!(leg_words(&leg, 20_000, true).ends_with("no longer counted"));
+        leg.state = LegState::Won;
+        leg.note = "Dolphins 20, Jets 3".into();
+        assert!(leg_words(&leg, 20_000, true).ends_with("won: Dolphins 20, Jets 3"));
     }
 }

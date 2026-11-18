@@ -264,6 +264,18 @@ impl Model {
     }
 }
 
+/// My parlays in sums: the chips on the ones riding, and over the ones that are over, what
+/// was won and what was lost (one called off: neither).
+pub fn parlay_sums(parlays: &[pyr_poker::props::ParlayView]) -> (u64, i64, i64) {
+    use pyr_poker::props::ParlayState;
+    parlays.iter().fold((0, 0, 0), |a, t| match t.state {
+        ParlayState::Open => (a.0 + t.chips, a.1, a.2),
+        ParlayState::Won => (a.0, a.1 + (t.paid as i64 - t.chips as i64).max(0), a.2),
+        ParlayState::Lost => (a.0, a.1, a.2 + t.chips as i64),
+        ParlayState::Void => a,
+    })
+}
+
 /// What I put into a prop, and what it's worth: sold back now for one still taking bets;
 /// what it paid for one that's settled; what came back for one called off.
 pub fn stake_and_worth(prop: &PropView) -> (u64, u64) {
@@ -348,6 +360,9 @@ mod tests {
         line["server"]["key"] = json!("other");
         m.hear(&line);
         assert_eq!((m.parlays_here, m.parlays.len()), (false, 0));
+        // In sums, for My bets: the stakes riding, what was won, what was lost.
+        let t = |chips: u64, state: ParlayState, paid: u64| ParlayView { chips, state, paid, ..Default::default() };
+        assert_eq!(parlay_sums(&[t(1_000, ParlayState::Open, 0), t(500, ParlayState::Open, 0), t(1_000, ParlayState::Won, 17_375), t(2_000, ParlayState::Lost, 0), t(300, ParlayState::Void, 300)]), (1_500, 16_375, 2_000));
         assert_eq!(question_short(" Who wins: Chiefs at Bills? "), "Who wins: Chiefs at Bills");
     }
 

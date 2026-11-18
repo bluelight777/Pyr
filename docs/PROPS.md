@@ -257,7 +257,9 @@ whatever's bet; a parlay is a bet against the casino itself, so it needs its own
 **How it settles.** The server keeps each parlay with its legs as they were (question, pick,
 odds, room) and finds it by its legs' props when one is settled or called off (`prop_over`,
 from the same place a prop pays its bets): lost at the first leg that loses; a leg called off
-counts as 1.00 and what it pays is worked out again; paid when the last leg left wins. A
+counts as 1.00 and what it pays is worked out again; paid when the last leg left wins. One
+that's lost goes on hearing of its other legs, for its ticket only: how each came out is
+written on it, nothing is paid and nothing said. A
 parlay's result counts among the server's best at props, like a prop's. A prop with a parlay's
 leg on it plays out even when its category is turned off, as one with bets on it does.
 
@@ -267,9 +269,13 @@ the window, so the slip shows what the server would pay. The server: `poker/prop
 `parlays` and `parlay_legs`. Messages: `ToServer::ParlayPlace` and `ParlayList`,
 `ToApp::Parlays`; servers say `prop_parlays` and apps that read parlays say it back. Pyr tells
 the window `parlays_here` and my parlays (whole, when they change); the window asks
-`parlay_place`. The window: `crates/prop-bets/src/parlay.rs` (the slip, its page, the tickets);
-an outcome is picked on the Parlays page with a click, anywhere else with Shift and a click,
-or with Add to parlay on a prop's page.
+`parlay_place`. The window: `crates/prop-bets/src/parlay.rs` (the slip, its page, the tickets).
+The Parlays page has two sides: New parlay (the slip, and what there is to pick from: a click
+on an outcome puts it on the slip) and Your parlays (tickets, riding then settled), which it
+turns to when a parlay is placed. Anywhere else an outcome goes on the slip with Shift and a
+click, or with Add to parlay on a prop's page. A pick that's on the slip at its opening odds
+(the line, above) says so under its name. My bets counts parlays in its sums: one riding is in
+play for its stake, one that's over is what it won or lost.
 
 Not used: CoinGecko (its terms forbid gambling use by name), Netflix Top 10 and Billboard
 (automated collection forbidden), Wikipedia's pageviews (its API answered "not found" to every

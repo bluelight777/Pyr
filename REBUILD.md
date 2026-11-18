@@ -1648,6 +1648,24 @@ How (decided while starting it):
       a pick that can't go in said why, the parlay placed and back as a ticket, tickets
       riding, won, lost and with a leg called off, the last leg coming in (gold falls), a
       Shift-click pick from a board, Add to parlay on a prop's page, the narrow window.
+      And the whole line, twice, with no network (`rebuild/tools/release-0.16.0/e2e`: a
+      made-up signed feed, the server following it, Riley's Pyr on the test screen with the
+      window installed): parlays placed from the window for what the slip said to the chip
+      (17,375; 6,071; 3,970; 2,011), the feed's results settling them (won and paid, lost at
+      its first leg, a leg called off and what it pays worked out again, one riding on with
+      one of two in), the chips right after each, gold falling in the window. The line rule
+      on the real thing: 300,000 on Ether's Up left Down at 2% on the board (x40) and x1.99
+      on the slip, "At the odds it opened at"; the server placed it for the slip's 5,952; the
+      300,000 cashed out for 300,000. A database as 0.15 left it (1,523 of the casino's
+      props, none with a line) started under this server: the tables made, every open prop
+      the feed lists with its line after the first read, nothing wrong in the log.
+      What the first run showed and the second had put right: the tickets were at the foot
+      of the page, under everything there is to pick from (the page has two sides now, New
+      parlay and Your parlays, and shows the ticket once one is placed); a lost ticket's
+      other legs read "closes in 11:08" for good (the server writes on a lost ticket how its
+      later legs come out, and until then they read "still to come out, and no longer
+      counted"); My bets' sums left parlays out (in play, and won so far, count them).
+      Not tried: Windows; more than one person's parlays on the same props at once.
 - [ ] Approved bug reports 657 to 675 (voice up and down; stopped responding), without
       touching the echo canceller
 - [ ] The key change (above): built and tried with test keys; the day's steps there

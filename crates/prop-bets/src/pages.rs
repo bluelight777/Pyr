@@ -9,7 +9,7 @@ use pyr_poker::props::{self as p, PropState, PropView};
 
 use crate::asks::{self, ask};
 use crate::look::*;
-use crate::model::{Model, stake_and_worth};
+use crate::model::{Model, parlay_sums, stake_and_worth};
 use crate::views::{card, lines, section, standing};
 use crate::words::{self, chips_text, count, local_when, mid_sentence, pct, signed, times};
 use crate::{App, Betting, View, note};
@@ -332,6 +332,7 @@ impl App {
         }
         if see_slip {
             self.back.clear();
+            self.parlay_mine = false;
             self.go(View::Parlay);
         }
         ui.add_space(4.0);
@@ -411,6 +412,10 @@ impl App {
         ui.add_space(8.0);
         let (cost, worth) = live.iter().map(stake_and_worth).fold((0u64, 0u64), |a, b| (a.0 + b.0, a.1 + b.1));
         let (won, lost) = over.iter().map(stake_and_worth).fold((0i64, 0i64), |a, (c, w)| if w >= c { (a.0 + (w - c) as i64, a.1) } else { (a.0, a.1 + (c - w) as i64) });
+        // (Parlays with them: one that's riding is in play for its stake, and worth that,
+        // as it can't be cashed out; one that's over, what it won or lost.)
+        let (riding, p_won, p_lost) = parlay_sums(&self.m.parlays);
+        let (cost, worth, won, lost) = (cost + riding, worth + riding, won + p_won, lost + p_lost);
         let tiles = [
             ("IN PLAY", chips_text(cost), TEXT),
             ("WORTH NOW", chips_text(worth), TEXT),
@@ -527,7 +532,7 @@ impl App {
     pub fn leaders(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
         ui.label(RichText::new("Best at props").font(bold_font(23.0)).color(TEXT));
-        ui.label(RichText::new("What everyone won less what they put in, on props that are over.").size(13.0).color(MUTED));
+        ui.label(RichText::new("What everyone won less what they put in, on props and parlays that are over.").size(13.0).color(MUTED));
         ui.add_space(8.0);
         if self.m.old_pyr {
             return note(ui, "Update Pyr for this", "The board of the best at props came with Pyr 0.15.");

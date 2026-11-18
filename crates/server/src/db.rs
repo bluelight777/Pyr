@@ -773,10 +773,11 @@ impl Db {
         Ok(())
     }
 
-    /// The parlays still riding that have a leg on a prop.
+    /// The parlays that have a leg on a prop: the ones riding, and the ones that are over (a
+    /// lost one's ticket still shows how its other legs came out).
     pub fn parlays_on_prop(&self, prop_id: u64) -> Vec<String> {
         let c = self.conn.lock();
-        let sql = "SELECT data FROM parlays WHERE state = 'open' AND id IN (SELECT parlay_id FROM parlay_legs WHERE prop_id = ?1) ORDER BY id";
+        let sql = "SELECT data FROM parlays WHERE id IN (SELECT parlay_id FROM parlay_legs WHERE prop_id = ?1) ORDER BY id";
         let Ok(mut st) = c.prepare(sql) else { return Vec::new() };
         st.query_map([prop_id as i64], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
     }

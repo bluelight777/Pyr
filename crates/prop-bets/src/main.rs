@@ -156,12 +156,15 @@ pub struct App {
     pub slip: parlay::Slip,
     pub slip_cat: Option<String>,
     pub picking: bool,
+    /// The Parlays page shows its other side: my parlays as tickets (not the slip and what
+    /// there is to pick from).
+    pub parlay_mine: bool,
 }
 
 impl App {
     fn new(ctx: &egui::Context, rx: mpsc::Receiver<Value>, bridge: bool) -> App {
         style(ctx);
-        App { rx, bridge, started: Instant::now(), m: Model::default(), art: Art::load(ctx), view: View::Home, back: Vec::new(), betting: None, new_prop: None, setting: None, days: 7, stats_asked: None, looked: None, shown_chips: 0.0, came: Instant::now(), search: String::new(), slip: parlay::Slip::default(), slip_cat: None, picking: false }
+        App { rx, bridge, started: Instant::now(), m: Model::default(), art: Art::load(ctx), view: View::Home, back: Vec::new(), betting: None, new_prop: None, setting: None, days: 7, stats_asked: None, looked: None, shown_chips: 0.0, came: Instant::now(), search: String::new(), slip: parlay::Slip::default(), slip_cat: None, picking: false, parlay_mine: false }
     }
 
     /// Goes to a page (the one showing can be come back to).
@@ -235,15 +238,17 @@ impl eframe::App for App {
             self.view = View::Home;
             self.slip = parlay::Slip::default();
             self.slip_cat = None;
+            self.parlay_mine = false;
         }
-        // The parlay on the slip was placed: the slip is done with. And what's no longer a
-        // pick goes from it.
+        // The parlay on the slip was placed: the slip is done with, and its ticket is there
+        // to see. And what's no longer a pick goes from the slip.
         if std::mem::take(&mut self.m.parlay_on) {
             self.slip.legs.clear();
             self.slip.placing = None;
+            self.parlay_mine = true;
         }
         self.slip_tidy();
-        self.picking = self.view == View::Parlay;
+        self.picking = self.view == View::Parlay && !self.parlay_mine;
         if self.m.gone {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
