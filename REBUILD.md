@@ -366,6 +366,13 @@ first highs (16 props waiting for theirs).
 - The feed maker: college basketball's props say CollegeBasketballData (they said
   CollegeFootballData), the placeholder start above, and its status file says when the maker
   was built (`built`: an update between releases keeps its version).
+Built, packed and checked (35 checks, all good; app 148 and window 7, server 101, props feed
+56, proto 65, engine audio 44 tests), and the VPS's set-up run dry as it will really go: a
+machine set up by 0.15.0, then this release over it, whose props folder has no key in it
+(`rebuild/tools/release-0.15.1/dryprops`: 45 and 46 checks, an open and a closed website
+folder; the key from before stays, the new certificate is for it, the maker is the new one and
+started again with what it had opened). On Blue's PC as `Downloads\pyr-release-0.15.1` (51
+files, read back and compared; `publish.cmd` there). Not tried: Windows, and Mag's room.
 Still to come, asked the same night: parlays ("add the ability to parlay").
 
 0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
