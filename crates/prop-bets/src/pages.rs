@@ -242,6 +242,11 @@ impl App {
     fn bet_panel(&mut self, ui: &mut egui::Ui, prop: &PropView, outcome: usize) {
         let have = self.m.chips;
         let col = color_of(&prop.outcomes, outcome);
+        // (Whether it can be a parlay's pick, and whether it is one.)
+        let parlays = self.m.parlays_here && p::parlay_kind(prop.house, &prop.category);
+        let in_slip = self.picked(prop.id) == Some(outcome);
+        let slip_len = self.slip.legs.len();
+        let (mut to_slip, mut see_slip) = (false, false);
         let Some(bt) = self.betting.as_mut() else { return };
         let mut done = false;
         egui::Frame::new().fill(Color32::from_black_alpha(110)).stroke(Stroke::new(1.0_f32, col.gamma_multiply(0.55))).corner_radius(10).inner_margin(egui::Margin::symmetric(14, 12)).show(ui, |ui| {
@@ -306,10 +311,28 @@ impl App {
                 if ui.button("Cancel").clicked() {
                     done = true;
                 }
+                // Or one pick of several: onto the parlay's slip.
+                if parlays {
+                    let label = if in_slip { "In your parlay" } else { "Add to parlay" };
+                    let hint = if in_slip { "It's a pick of the parlay on your slip: click to take it out" } else { "Link it with other picks into one bet: every one has to win, and their odds multiply" };
+                    if ui.button(RichText::new(label).color(if in_slip { EMBER2 } else { TEXT })).on_hover_text(hint).clicked() {
+                        to_slip = true;
+                    }
+                    if slip_len > 0 && ui.link(RichText::new(format!("The slip ({})", count(slip_len as u64, "pick", "picks"))).size(12.5)).clicked() {
+                        see_slip = true;
+                    }
+                }
             });
         });
+        if to_slip {
+            self.pick_from_afar(prop, outcome, words::now_ms());
+        }
         if done {
             self.betting = None;
+        }
+        if see_slip {
+            self.back.clear();
+            self.go(View::Parlay);
         }
         ui.add_space(4.0);
     }
@@ -411,7 +434,11 @@ impl App {
             });
             ui.add_space(gap - 6.0);
         }
+        self.parlays_in_mine(ui, now);
         if live.is_empty() && over.is_empty() {
+            if self.riding() > 0 {
+                return;
+            }
             return note(ui, "No bets of yours yet", "Bet on a prop and it shows here, with what it's worth now.");
         }
         if !live.is_empty() {

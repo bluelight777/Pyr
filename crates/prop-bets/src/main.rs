@@ -11,6 +11,9 @@
 //! settle by themselves (games, prices, the weather: `docs/PROPS.md`). So the window is a
 //! place to look around in: a front page, a page a category with each game's props together,
 //! a page a prop with how its odds went, what I hold and what it's worth, and the server's best.
+//!
+//! 0.3 (Pyr 0.16): parlays (`parlay.rs`): a slip that picks go on from anywhere, its page, and
+//! my parlays as tickets.
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
@@ -18,6 +21,7 @@ mod asks;
 mod look;
 mod model;
 mod pages;
+mod parlay;
 mod views;
 mod words;
 
@@ -90,6 +94,8 @@ pub enum View {
     Category(String),
     Prop(u64),
     Mine,
+    /// The parlay slip, what there is to pick from, and my parlays.
+    Parlay,
     Leaders,
     Results,
     /// What the search box found for these words.
@@ -145,12 +151,17 @@ pub struct App {
     pub came: Instant,
     /// What's typed in the search box.
     pub search: String,
+    /// The parlay being put together, the category its page shows to pick from, and whether
+    /// the page showing is that one (there a click on an outcome is a pick).
+    pub slip: parlay::Slip,
+    pub slip_cat: Option<String>,
+    pub picking: bool,
 }
 
 impl App {
     fn new(ctx: &egui::Context, rx: mpsc::Receiver<Value>, bridge: bool) -> App {
         style(ctx);
-        App { rx, bridge, started: Instant::now(), m: Model::default(), art: Art::load(ctx), view: View::Home, back: Vec::new(), betting: None, new_prop: None, setting: None, days: 7, stats_asked: None, looked: None, shown_chips: 0.0, came: Instant::now(), search: String::new() }
+        App { rx, bridge, started: Instant::now(), m: Model::default(), art: Art::load(ctx), view: View::Home, back: Vec::new(), betting: None, new_prop: None, setting: None, days: 7, stats_asked: None, looked: None, shown_chips: 0.0, came: Instant::now(), search: String::new(), slip: parlay::Slip::default(), slip_cat: None, picking: false }
     }
 
     /// Goes to a page (the one showing can be come back to).
@@ -222,7 +233,17 @@ impl eframe::App for App {
             self.back.clear();
             self.search.clear();
             self.view = View::Home;
+            self.slip = parlay::Slip::default();
+            self.slip_cat = None;
         }
+        // The parlay on the slip was placed: the slip is done with. And what's no longer a
+        // pick goes from it.
+        if std::mem::take(&mut self.m.parlay_on) {
+            self.slip.legs.clear();
+            self.slip.placing = None;
+        }
+        self.slip_tidy();
+        self.picking = self.view == View::Parlay;
         if self.m.gone {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;

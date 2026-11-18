@@ -44,6 +44,7 @@ pub fn standing(prop: &PropView, now: i64) -> (String, Color32) {
 enum Mark {
     Home,
     Mine,
+    Parlay,
     Leaders,
     Results,
 }
@@ -63,6 +64,11 @@ fn mark(p: &egui::Painter, m: Mark, r: Rect, col: Color32) {
             for dy in [-3.0, 0.0, 3.0] {
                 p.line_segment([c + vec2(-3.0 * u, dy * u), c + vec2(3.0 * u, dy * u)], Stroke::new(1.2 * u, col));
             }
+        }
+        Mark::Parlay => {
+            // Two links of a chain.
+            p.add(Shape::ellipse_stroke(c + vec2(-3.4 * u, 0.0), vec2(5.2 * u, 3.6 * u), s));
+            p.add(Shape::ellipse_stroke(c + vec2(3.4 * u, 0.0), vec2(5.2 * u, 3.6 * u), s));
         }
         Mark::Leaders => {
             for (dx, h) in [(-5.0, 6.0), (0.0, 12.0), (5.0, 8.5)] {
@@ -99,6 +105,7 @@ impl App {
                         View::Category(c) => self.category(ui, &c, now),
                         View::Prop(id) => self.prop_page(ui, id, now),
                         View::Mine => self.mine_page(ui, now),
+                        View::Parlay => self.parlay_page(ui, now),
                         View::Leaders => self.leaders(ui),
                         View::Results => self.results(ui, now),
                         View::Search(q) => self.search_page(ui, &q, now),
@@ -126,8 +133,15 @@ impl App {
         ui.add_space(6.0);
         self.search_box(ui, ui.available_width() - 22.0);
         ui.add_space(8.0);
-        let mine = self.m.mine_live().len();
-        for (view, m, name, n) in [(View::Home, Mark::Home, "Front page", None), (View::Mine, Mark::Mine, "My bets", (mine > 0).then_some(mine)), (View::Leaders, Mark::Leaders, "Best at props", None), (View::Results, Mark::Results, "Results", None)] {
+        let mine = self.m.mine_live().len() + self.riding();
+        // (Parlays: how many picks are on the slip, or how many of mine are riding.)
+        let slip = if self.slip.legs.is_empty() { self.riding() } else { self.slip.legs.len() };
+        let mut pages = vec![(View::Home, Mark::Home, "Front page", None), (View::Mine, Mark::Mine, "My bets", (mine > 0).then_some(mine))];
+        if self.m.parlays_here {
+            pages.push((View::Parlay, Mark::Parlay, "Parlays", (slip > 0).then_some(slip)));
+        }
+        pages.extend([(View::Leaders, Mark::Leaders, "Best at props", None), (View::Results, Mark::Results, "Results", None)]);
+        for (view, m, name, n) in pages {
             self.rail_item(ui, view, Some(m), name, n);
         }
         ui.add_space(12.0);
@@ -180,8 +194,13 @@ impl App {
         ui.add_space(6.0);
         egui::ScrollArea::horizontal().id_salt("strip").auto_shrink([false, true]).scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
             ui.horizontal(|ui| {
-                let mine = self.m.mine_live().len();
-                let mut pages: Vec<(View, String)> = vec![(View::Home, "Front page".into()), (View::Mine, if mine > 0 { format!("My bets  {mine}") } else { "My bets".into() }), (View::Leaders, "Best".into()), (View::Results, "Results".into())];
+                let mine = self.m.mine_live().len() + self.riding();
+                let mut pages: Vec<(View, String)> = vec![(View::Home, "Front page".into()), (View::Mine, if mine > 0 { format!("My bets  {mine}") } else { "My bets".into() })];
+                if self.m.parlays_here {
+                    let slip = if self.slip.legs.is_empty() { self.riding() } else { self.slip.legs.len() };
+                    pages.push((View::Parlay, if slip > 0 { format!("Parlays  {slip}") } else { "Parlays".into() }));
+                }
+                pages.extend([(View::Leaders, "Best".into()), (View::Results, "Results".into())]);
                 pages.extend(self.m.categories().into_iter().filter(|c| c.1 > 0).map(|(c, n)| (View::Category(c.clone()), format!("{}  {n}", p::category_name(&c)))));
                 for (view, name) in pages {
                     let on = self.at(&view);
@@ -503,7 +522,7 @@ impl App {
     /// A game's (or a day's) props together: what it is and when, then a row a prop, each
     /// outcome a button with its odds. A game's rows are named down the left, as on a
     /// sportsbook's board; anything else says what it asks over its outcomes.
-    fn event_card(&mut self, ui: &mut egui::Ui, cat: &str, name: &str, starts: i64, props: &[PropView], now: i64) {
+    pub(crate) fn event_card(&mut self, ui: &mut egui::Ui, cat: &str, name: &str, starts: i64, props: &[PropView], now: i64) {
         let Some(first) = props.first() else { return };
         let sport = SPORTS.contains(&cat);
         let lone = name.is_empty();
@@ -613,9 +632,13 @@ impl App {
         let pc = ui.painter().layout_no_wrap(odds, bold_font(13.0), if won { GOLD } else { col });
         let w = 12.0 + name.size().x + if pc.size().x > 0.0 { 10.0 + pc.size().x } else { 0.0 } + 12.0;
         let (r, resp) = ui.allocate_exact_size(vec2(w.max(64.0), 30.0), Sense::click());
-        let pnt = ui.painter();
         let open = prop.open_at(now);
-        let fill = if won { Color32::from_rgb(0x3a, 0x2f, 0x14) } else if resp.hovered() { ELEV2 } else { ELEV };
+        // On a parlay's slip, or on its way to one: the pick on this prop, and (on the
+        // parlay's own page) why this one can't go in beside the others, if it can't.
+        let leg = self.picked(prop.id) == Some(i);
+        let blocked = if self.picking && !leg { self.pick_blocked(prop, now) } else { None };
+        let pnt = ui.painter();
+        let fill = if won { Color32::from_rgb(0x3a, 0x2f, 0x14) } else if leg { Color32::from_rgb(0x3d, 0x2b, 0x12) } else if resp.hovered() && blocked.is_none() { ELEV2 } else { ELEV };
         pnt.rect_filled(r, CornerRadius::same(8), fill);
         // Odds that just moved: lit in green or red, fading.
         if let Some(m) = self.m.moved.get(&(prop.id, i)) {
@@ -635,19 +658,45 @@ impl App {
         if mine {
             pnt.rect_stroke(r, CornerRadius::same(8), Stroke::new(1.5_f32, GOLD), egui::StrokeKind::Inside);
         }
+        if leg {
+            // (A pick of the parlay: ringed in ember, a link of the chain at its corner.)
+            pnt.rect_stroke(r, CornerRadius::same(8), Stroke::new(2.0_f32, EMBER), egui::StrokeKind::Inside);
+            let c = r.right_top() + vec2(-3.0, 3.0);
+            pnt.circle_filled(c, 6.5, EMBER);
+            pnt.add(Shape::ellipse_stroke(c, vec2(3.4, 2.2), Stroke::new(1.3_f32, ON_EMBER)));
+        }
         pnt.galley(pos2(r.left() + 12.0, r.center().y - name.size().y / 2.0 - 1.0), name, TEXT);
         pnt.galley(pos2(r.right() - 12.0 - pc.size().x, r.center().y - pc.size().y / 2.0 - 1.0), pc, col);
-        let hint = if over {
+        if blocked.is_some() {
+            pnt.rect_filled(r, CornerRadius::same(8), CARD.gamma_multiply(0.55));
+        }
+        let can_pick = self.m.parlays_here && open && p::parlay_kind(prop.house, &prop.category);
+        let hint = if self.picking {
+            match (&blocked, leg) {
+                (Some(why), _) => why.clone(),
+                (None, true) => format!("{}: in your parlay. Click to take it out.", prop.question),
+                (None, false) => format!("{}: click to put {} in your parlay", prop.question, prop.outcomes[i]),
+            }
+        } else if over {
             prop.question.clone()
         } else if mine {
             format!("{}: you've chips on {}", prop.question, prop.outcomes[i])
+        } else if can_pick {
+            format!("{}\nShift and click: into your parlay", prop.question)
         } else {
             prop.question.clone()
         };
         if resp.on_hover_text(hint).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
-            self.go(View::Prop(prop.id));
-            if open && (prop.house || prop.author != self.m.me) {
-                self.betting = Some(Betting { id: prop.id, outcome: i, amount: "1000".into() });
+            let shift = ui.input(|inp| inp.modifiers.shift);
+            if self.picking {
+                self.pick(prop, i, now);
+            } else if shift && can_pick {
+                self.pick_from_afar(prop, i, now);
+            } else {
+                self.go(View::Prop(prop.id));
+                if open && (prop.house || prop.author != self.m.me) {
+                    self.betting = Some(Betting { id: prop.id, outcome: i, amount: "1000".into() });
+                }
             }
         }
     }

@@ -196,6 +196,81 @@ was put up. What it showed wrong, fixed in 0.15.1:
   was built (`built`).
 - The program is **Pyr Prop Bets** now (its id stays `prop-bets`).
 
+## Parlays (Pyr 0.16, Pyr Prop Bets 0.3)
+
+Blue, Nov 18: "add the ability to parlay", with how sportsbooks do it: two or more picks
+linked into one bet, every one to win; each leg's odds as a decimal, multiplied; a leg that's
+pushed or canceled counts as 1.00 and the parlay goes on with the legs left.
+
+**What a parlay is here.** Two to ten picks, each an outcome of one of the casino's own props
+that settle from the world's numbers. One stake on all of them. It pays the stake times every
+leg's odds if they all win, nothing if one loses, and a leg whose prop is called off counts as
+1.00 (with every leg called off, the stake comes back). The casino is the other side: the stake
+goes to it and what a parlay pays comes from it, as in every other game of Pyr Casino.
+
+**A leg's odds** are what the stake would get on that prop by itself, a chip in: the shares the
+stake buys in that prop's market, over the stake (`leg_quote`; in which market exactly: "The
+line", below). So a 1,000 chip parlay reads
+the same odds a 1,000 chip bet would, and a stake that's big for a market gets shorter odds
+on it, as a bet does. They're fixed when the parlay is placed, and shown the decimal way with
+the American way beside it ("×2.50 (+150)").
+
+**What keeps the casino's risk in hand** (a prop's own market can lose at most its backing,
+whatever's bet; a parlay is a bet against the casino itself, so it needs its own bounds):
+
+- *The cap.* A parlay never pays more than its stake and its legs' rooms together
+  (`parlay_pays`). A leg's room is the most the casino can lose to that pick on its own prop,
+  `b ln(1 / p)`. So no parlay wins more than betting through its legs' markets one after
+  another could, however small the stake and however long the shots: ten 50-to-1 shots for ten
+  chips would be 50 to the tenth, and pays 3.9 million at a depth of 100,000. The slip says so
+  when the cap holds a parlay down.
+- *The parlay book.* Each prop has a second set of shares, `pq`: what parlays have taken of
+  each outcome. A leg is priced in the prop's shares with those on top (`parlay_book`), and
+  every parlay adds to it what a bet of its stake would have bought. The tenth parlay on the
+  same pick gets shorter odds than the first, and the other side longer ones, as with bets;
+  the prop's own odds, which single bets go by, don't move. (Moving the book by the stake and
+  not by all that rides on a leg matters: a ride is only real if the legs before it win, and
+  priced as if it were certain, a few chips on a long shot would move a sure thing's parlay
+  odds for nothing.)
+- *The line.* A single bet cashes out for exactly what it cost (the market maker gives a
+  round trip for nothing). So if a parlay's odds went by a prop's odds as they stand alone,
+  anyone could put a fortune on one side, take the other side into a parlay at the odds that
+  leaves (50 to 1 on an even game), and cash the fortune out: a free long shot, as often as
+  they liked. So each of the casino's own props keeps the odds it opened at (`line`: the
+  feed's, which the feed never changes once a prop is listed), and a leg is priced twice, with
+  the parlay book on top of the odds as they stand and on top of the line, and gets whichever
+  pays less (`leg_price`). Single bets can shorten a parlay's odds and never lengthen them;
+  only parlays, which don't cash out, move the book both are under. An app is sent a prop's
+  line only when bets have moved its odds off it. A prop opened by a server before 0.16 gets
+  its line the first time the feed is followed after the server starts, and is no leg until
+  then.
+- *Picks that don't hang together.* One pick to a game (`legs_clash`: the same `event`), and
+  outside the games one pick to a category: two coins rise and fall together, two cities'
+  weather too, and multiplied as if they didn't they'd pay too much. A parlay can still be
+  three games, a coin, a city and an earthquake count.
+- *Props nobody here can move.* Not the casino's props about itself (whoever plays there
+  moves them), not members' own (their author settles them).
+- *No cash out.* A prop's odds can be pushed up and let back down for nothing in its own
+  market, so a parlay cashed out at today's odds would be free chips. It rides until its legs
+  come out.
+
+**How it settles.** The server keeps each parlay with its legs as they were (question, pick,
+odds, room) and finds it by its legs' props when one is settled or called off (`prop_over`,
+from the same place a prop pays its bets): lost at the first leg that loses; a leg called off
+counts as 1.00 and what it pays is worked out again; paid when the last leg left wins. A
+parlay's result counts among the server's best at props, like a prop's. A prop with a parlay's
+leg on it plays out even when its category is turned off, as one with bets on it does.
+
+**Where it is.** The rules and sums: `pyr_poker::props` (`leg_price`, `leg_quote`,
+`parlay_pays`, `parlay_takes`, `legs_clash`, `ParlayView`), the same code in the server and in
+the window, so the slip shows what the server would pay. The server: `poker/props/parlay.rs`, tables
+`parlays` and `parlay_legs`. Messages: `ToServer::ParlayPlace` and `ParlayList`,
+`ToApp::Parlays`; servers say `prop_parlays` and apps that read parlays say it back. Pyr tells
+the window `parlays_here` and my parlays (whole, when they change); the window asks
+`parlay_place`. The window: `crates/prop-bets/src/parlay.rs` (the slip, its page, the tickets);
+an outcome is picked on the Parlays page with a click, anywhere else with Shift and a click,
+or with Add to parlay on a prop's page.
+
 Not used: CoinGecko (its terms forbid gambling use by name), Netflix Top 10 and Billboard
 (automated collection forbidden), Wikipedia's pageviews (its API answered "not found" to every
 try from here: not verified), Apple's chart feeds (terms unread), BLS (unread), the New York

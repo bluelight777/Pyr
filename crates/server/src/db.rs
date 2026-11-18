@@ -71,6 +71,16 @@ CREATE TABLE IF NOT EXISTS prop_bets (
 CREATE INDEX IF NOT EXISTS prop_bets_by_prop ON prop_bets(prop_id);
 CREATE INDEX IF NOT EXISTS prop_bets_by_uid ON prop_bets(uid);
 CREATE TABLE IF NOT EXISTS prop_feed (feed_id TEXT PRIMARY KEY, prop_id INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS parlays (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid TEXT NOT NULL,
+    state TEXT NOT NULL,
+    placed_at INTEGER NOT NULL,
+    data TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS parlays_by_uid ON parlays(uid, id);
+CREATE TABLE IF NOT EXISTS parlay_legs (parlay_id INTEGER NOT NULL, prop_id INTEGER NOT NULL, PRIMARY KEY (parlay_id, prop_id));
+CREATE INDEX IF NOT EXISTS parlay_legs_by_prop ON parlay_legs(prop_id);
 CREATE TABLE IF NOT EXISTS prop_results (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     uid TEXT NOT NULL,
@@ -734,6 +744,69 @@ impl Db {
             params![uid, at, prop_id as i64, net, staked as i64, won as i64],
         )?;
         Ok(())
+    }
+
+    /// How someone came out of a parlay: among the props' results, under a number of its own
+    /// (the parlay's, below nothing: no prop has it).
+    pub fn parlay_result_record(&self, uid: &str, at: i64, parlay_id: u64, net: i64, staked: u64, won: bool) -> Result<()> {
+        self.conn.lock().execute(
+            "INSERT INTO prop_results(uid, at, prop_id, net, staked, won) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![uid, at, -(parlay_id as i64), net, staked as i64, won as i64],
+        )?;
+        Ok(())
+    }
+
+    /// A new parlay, riding: its number. `props`: its legs' props (it's found by them when
+    /// one is settled).
+    pub fn parlay_insert(&self, uid: &str, placed_at: i64, data: &str, props: &[u64]) -> Result<u64> {
+        let c = self.conn.lock();
+        c.execute("INSERT INTO parlays(uid, state, placed_at, data) VALUES (?1, 'open', ?2, ?3)", params![uid, placed_at, data])?;
+        let id = c.last_insert_rowid();
+        for prop in props {
+            c.execute("INSERT OR IGNORE INTO parlay_legs(parlay_id, prop_id) VALUES (?1, ?2)", params![id, *prop as i64])?;
+        }
+        Ok(id as u64)
+    }
+
+    pub fn parlay_save(&self, id: u64, state: &str, data: &str) -> Result<()> {
+        self.conn.lock().execute("UPDATE parlays SET state = ?2, data = ?3 WHERE id = ?1", params![id as i64, state, data])?;
+        Ok(())
+    }
+
+    /// The parlays still riding that have a leg on a prop.
+    pub fn parlays_on_prop(&self, prop_id: u64) -> Vec<String> {
+        let c = self.conn.lock();
+        let sql = "SELECT data FROM parlays WHERE state = 'open' AND id IN (SELECT parlay_id FROM parlay_legs WHERE prop_id = ?1) ORDER BY id";
+        let Ok(mut st) = c.prepare(sql) else { return Vec::new() };
+        st.query_map([prop_id as i64], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
+    }
+
+    /// Someone's parlays: the ones riding (newest first), then the latest that are over.
+    pub fn parlays_of(&self, uid: &str, riding: usize, over: usize) -> Vec<String> {
+        let c = self.conn.lock();
+        let mut out = Vec::new();
+        for (sql, limit) in [
+            ("SELECT data FROM parlays WHERE uid = ?1 AND state = 'open' ORDER BY id DESC LIMIT ?2", riding),
+            ("SELECT data FROM parlays WHERE uid = ?1 AND state != 'open' ORDER BY id DESC LIMIT ?2", over),
+        ] {
+            let Ok(mut st) = c.prepare(sql) else { continue };
+            out.extend(st.query_map(params![uid, limit as i64], |r| r.get::<_, String>(0)).map(|rows| rows.flatten().collect::<Vec<_>>()).unwrap_or_default());
+        }
+        out
+    }
+
+    /// How many parlays someone has riding.
+    pub fn parlays_riding(&self, uid: &str) -> usize {
+        self.conn.lock().query_row("SELECT COUNT(*) FROM parlays WHERE uid = ?1 AND state = 'open'", [uid], |r| r.get::<_, i64>(0)).unwrap_or(0) as usize
+    }
+
+    /// Whether any parlay still riding has a leg on a prop (one that has isn't forgotten).
+    pub fn prop_in_parlays(&self, prop_id: u64) -> bool {
+        self.conn
+            .lock()
+            .query_row("SELECT EXISTS (SELECT 1 FROM parlay_legs l JOIN parlays p ON p.id = l.parlay_id WHERE l.prop_id = ?1 AND p.state = 'open')", [prop_id as i64], |r| r.get::<_, i64>(0))
+            .unwrap_or(0)
+            != 0
     }
 
     /// How everyone did on props since `since` (ms), best first: (uid, net, staked, props,

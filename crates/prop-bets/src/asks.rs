@@ -50,6 +50,11 @@ pub fn auto(on: bool, off: &[String], depth: u64) -> Value {
 pub fn share(id: u64) -> Value {
     json!({"op": "prop_share", "id": id})
 }
+/// A parlay placed: its legs (each prop and the outcome picked), the stake, and what it was
+/// shown to pay, less a little.
+pub fn parlay(legs: &[(u64, usize)], chips: u64, min_pays: f64) -> Value {
+    json!({"op": "parlay_place", "legs": legs.iter().map(|l| json!([l.0, l.1])).collect::<Vec<_>>(), "chips": chips, "min_pays": min_pays})
+}
 
 #[cfg(test)]
 mod tests {
@@ -70,5 +75,6 @@ mod tests {
         assert_eq!(stats(7), json!({"op": "prop_stats", "days": 7}));
         assert_eq!(auto(true, &["weather".into()], 100_000), json!({"op": "prop_auto", "set": {"on": true, "off": ["weather"], "depth": 100_000}}));
         assert_eq!(share(7), json!({"op": "prop_share", "id": 7}));
+        assert_eq!(parlay(&[(12, 1), (14, 0), (30, 3)], 500, 3890.5).to_string(), r#"{"chips":500,"legs":[[12,1],[14,0],[30,3]],"min_pays":3890.5,"op":"parlay_place"}"#);
     }
 }

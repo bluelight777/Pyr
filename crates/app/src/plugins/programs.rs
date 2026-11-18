@@ -52,6 +52,9 @@ pub enum PropAsk {
     Auto { set: Option<pyr_poker::props::PropAutoSet> },
     /// A prop's card posted in the channel showing in Pyr.
     Share { id: u64 },
+    /// A parlay placed (0.16): its legs (each prop and the outcome picked), the stake, and
+    /// what the window showed it to pay, less a little.
+    Parlay { legs: Vec<(u64, usize)>, chips: u64, min_pays: f64 },
 }
 
 /// A line from a program, if it asks Pyr for something.
@@ -94,6 +97,19 @@ pub fn asked(line: &str) -> Option<Asked> {
             Some(Asked::Prop(PropAsk::Auto { set }))
         }
         "prop_share" => Some(Asked::Prop(PropAsk::Share { id: num("id")? })),
+        "parlay_place" => {
+            // (Each leg as [prop, outcome]; one that's half-said undoes the lot.)
+            let legs: Vec<(u64, usize)> = v["legs"]
+                .as_array()?
+                .iter()
+                .map(|l| Some((l.get(0)?.as_u64()?, l.get(1)?.as_u64().filter(|o| (*o as usize) < pyr_poker::props::MAX_OUTCOMES)? as usize)))
+                .collect::<Option<_>>()?;
+            if !(pyr_poker::props::PARLAY_MIN_LEGS..=pyr_poker::props::PARLAY_MAX_LEGS).contains(&legs.len()) {
+                return None;
+            }
+            let min_pays = v["min_pays"].as_f64().filter(|s| s.is_finite() && *s >= 0.0)?;
+            Some(Asked::Prop(PropAsk::Parlay { legs, chips: num("chips")?, min_pays }))
+        }
         _ => None,
     }
 }
@@ -1207,6 +1223,15 @@ mod tests {
         assert_eq!(asked(r#"@pyr {"op":"prop_settle","id":12,"outcome":0}"#), Some(Asked::Prop(PropAsk::Settle { id: 12, outcome: 0 })));
         assert_eq!(asked(r#"@pyr {"op":"prop_void","id":12}"#), Some(Asked::Prop(PropAsk::Void { id: 12 })));
         assert_eq!(asked(r#"@pyr {"op":"props_refresh"}"#), Some(Asked::Prop(PropAsk::Refresh)));
+        // 0.16's window: a parlay, two to ten legs.
+        assert_eq!(
+            asked(r#"@pyr {"op":"parlay_place","legs":[[12,1],[14,0],[30,3]],"chips":500,"min_pays":3890.5}"#),
+            Some(Asked::Prop(PropAsk::Parlay { legs: vec![(12, 1), (14, 0), (30, 3)], chips: 500, min_pays: 3890.5 }))
+        );
+        assert_eq!(asked(r#"@pyr {"op":"parlay_place","legs":[[12,1]],"chips":500,"min_pays":1}"#), None, "one leg is a bet");
+        assert_eq!(asked(r#"@pyr {"op":"parlay_place","legs":[[12,1],[14]],"chips":500,"min_pays":1}"#), None, "a leg half-said");
+        assert_eq!(asked(r#"@pyr {"op":"parlay_place","legs":[[12,1],[14,9]],"chips":500,"min_pays":1}"#), None, "no such outcome");
+        assert_eq!(asked(r#"@pyr {"op":"parlay_place","legs":[[12,1],[14,0]],"chips":500}"#), None, "what it was shown to pay");
         // Nothing half-said or out of range is done.
         assert_eq!(asked(r#"@pyr {"op":"prop_bet","id":12,"outcome":9,"chips":500,"min_shares":1}"#), None, "no such outcome");
         assert_eq!(asked(r#"@pyr {"op":"prop_bet","id":12,"outcome":0,"chips":-5,"min_shares":1}"#), None);

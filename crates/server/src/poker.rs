@@ -1236,7 +1236,9 @@ impl Poker {
             | ToServer::PropGet { .. }
             | ToServer::PropList { .. }
             | ToServer::PropStats { .. }
-            | ToServer::PropAuto { .. } => Err("prop bets come another way".into()),
+            | ToServer::PropAuto { .. }
+            | ToServer::ParlayPlace { .. }
+            | ToServer::ParlayList => Err("prop bets come another way".into()),
         }
     }
 

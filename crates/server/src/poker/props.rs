@@ -23,6 +23,7 @@ use super::{Poker, progress_chips};
 use crate::hub::{ConnId, Hub};
 
 mod own;
+pub mod parlay;
 
 /// How many of the latest bets a prop shows.
 const LATEST: usize = 8;
@@ -90,6 +91,12 @@ pub struct Prop {
     pub featured: u8,
     /// How its odds went (oldest first, `pyr_poker::props::HISTORY` points at most).
     pub history: Vec<PricePoint>,
+    /// What parlays have taken of each outcome (0.16; see `parlay`): its parlay book.
+    pub pq: Vec<f64>,
+    /// The casino's own: the odds it opened at (the feed's), as shares like `q`. A parlay's
+    /// leg is priced against these as well as `q` (`pyr_poker::props::leg_price`). One opened
+    /// before 0.16 has none until the feed is next followed, and is no leg till then.
+    pub line: Vec<f64>,
 }
 
 fn state_name(s: PropState) -> &'static str {
@@ -272,7 +279,16 @@ impl Prop {
             featured: self.featured,
             bettors: self.holdings.values().filter(|h| h.iter().any(|(s, c)| *s > 1e-9 || *c > 0)).count() as u32,
             history: if history { self.history.clone() } else { Vec::new() },
+            // (While it takes bets: what a parlay's leg on it is priced with. Its line, only
+            // when bets have moved its odds from it.)
+            pq: if self.over() || self.pq.iter().all(|x| *x == 0.0) { Vec::new() } else { self.pq.clone() },
+            line: if self.over() || self.line == self.q { Vec::new() } else { self.line.clone() },
         }
+    }
+
+    /// The odds one of the casino's own opened at, from the feed's prop (`line`).
+    fn line_from(&self, fp: &FeedProp) -> Vec<f64> {
+        p::q_from_prior(&p::tidy_prior(&fp.prior, self.outcomes.len()), self.b)
     }
 
     fn view_for(&self, hub: &Hub, who: &Asker, history: bool) -> PropView {
@@ -694,6 +710,10 @@ impl Poker {
         prop.winners = paid;
         prop.save(hub)?;
         info!(prop = id, outcome, house = prop.house, "prop settled");
+        // (The parlays riding on it hear.)
+        if prop.house {
+            parlay::prop_over(hub, st, prop, now);
+        }
         Ok(())
     }
 
@@ -723,6 +743,10 @@ impl Poker {
         prop.note = note.to_string();
         prop.save(hub)?;
         info!(prop = prop.id, house = prop.house, "prop called off");
+        // (A parlay's leg on it counts as 1.00 from here.)
+        if prop.house {
+            parlay::prop_over(hub, st, prop, now);
+        }
         Ok(())
     }
 
@@ -784,7 +808,8 @@ impl Poker {
         let mut gone: Vec<Prop> = Vec::new();
         for j in hub.db.props_open() {
             let Ok(mut prop) = serde_json::from_str::<Prop>(&j) else { continue };
-            if !prop.house || kept.takes(&p::category_id(&prop.category)) || !prop.holdings.is_empty() {
+            // (A parlay's leg counts as a bet on it: it plays out.)
+            if !prop.house || kept.takes(&p::category_id(&prop.category)) || !prop.holdings.is_empty() || hub.db.prop_in_parlays(prop.id) {
                 continue;
             }
             prop.state = PropState::Void;
@@ -821,6 +846,7 @@ impl Poker {
             featured: fp.featured,
             ..Default::default()
         };
+        prop.line = prop.q.clone();
         prop.mark(now);
         prop.insert(hub)?;
         hub.db.prop_feed_set(&fp.id, prop.id).map_err(|e| e.to_string())?;
@@ -874,8 +900,22 @@ impl Poker {
                             followed.insert(fp.id.clone(), counts);
                         }
                         None => {
+                            // (One opened before parlays gets its line here, the first time
+                            // the feed is followed after: the feed's odds for a prop are the
+                            // ones it opened with, for as long as it lists it.)
+                            let lined = prop.line.is_empty() && {
+                                prop.line = prop.line_from(fp);
+                                true
+                            };
                             if prop.closes_at == fp.closes && prop.starts_at == fp.starts && prop.detail == fp.detail && prop.featured == fp.featured && prop.event_name == fp.event_name {
+                                if lined && prop.save(hub).is_err() {
+                                    continue;
+                                }
                                 followed.insert(fp.id.clone(), counts);
+                                // (Apps hear of it only if its odds have moved from it.)
+                                if lined && prop.line != prop.q {
+                                    told.push(prop);
+                                }
                                 continue;
                             }
                             // (Put back: bets are taken again until its new time.)

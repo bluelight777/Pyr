@@ -1622,6 +1622,32 @@ How (decided while starting it):
       Not tried: the real sources from the VPS (`pyr-props check` there says how each reads:
       the weather's, Steam's and NASA's picture were written from their documented shapes, as
       the fetch tool here is refused by them), Windows, and a real server's load of props.
+- [x] Parlays, and the name Pyr Prop Bets (Blue, Nov 18, with how sportsbooks do parlays: "add
+      the ability to parlay into and rename it to Pyr Prop Bets"). Pyr 0.16.0, the window 0.3.0;
+      `docs/PROPS.md`, "Parlays", has the rules and why. Two to ten of the casino's own props
+      in one bet, every one to win; each leg's odds what the stake would get on that prop by
+      itself, multiplied; a leg called off counts as 1.00. The casino is the other side, so:
+      a parlay never pays more than its stake and its legs' rooms; every parlay moves a
+      parlay book of its own on each leg's prop, as a bet of its stake would; one pick to a
+      game, and outside the games one to a category; no cash out. And a leg pays the less of
+      what its prop's odds say now and what they opened at (`line`, `leg_price`): found on
+      reading it all again before the end-to-end run, a single bet cashes out for what it
+      cost, so with a leg priced by the odds as they stand alone, a fortune put on one side
+      and cashed out again bought the other side at 50 to 1 in a parlay for nothing. In the
+      window: a Parlays page (the slip, what there is to pick from, my parlays as tickets),
+      Shift and a click on an outcome anywhere else, Add to parlay on a prop's page.
+      Checked: the sums (`pyr-poker`: what it pays, the cap whatever the stake and the odds,
+      the book moving as a bet of the stake would, which picks clash, single bets shortening
+      a leg's odds and never lengthening them); the server (9 tests: paid when every leg wins,
+      lost at the first that loses, a leg called off down to none left, what can be a leg,
+      the parlay book moving and the props' own odds not, the cap, a prop with a leg on it
+      playing out when its category is turned off, nobody pushing a prop's odds to parlay the
+      other side, a prop from before parlays getting its line from the feed); what the window
+      asks is what Pyr reads; and the window on a test screen with a stand-in for Pyr
+      (`rebuild/tools/release-0.16.0/harness4.py`): picks from three categories onto the slip,
+      a pick that can't go in said why, the parlay placed and back as a ticket, tickets
+      riding, won, lost and with a leg called off, the last leg coming in (gold falls), a
+      Shift-click pick from a board, Add to parlay on a prop's page, the narrow window.
 - [ ] Approved bug reports 657 to 675 (voice up and down; stopped responding), without
       touching the echo canceller
 - [ ] The key change (above): built and tried with test keys; the day's steps there

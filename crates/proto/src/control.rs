@@ -492,6 +492,10 @@ pub const PROPS_LIST_FEATURE: &str = "prop_bets_list";
 /// before).
 pub const PROPS_HOUSE_FEATURE: &str = "prop_bets_house";
 pub const PROPS2_CAP: &str = "prop_bets_2";
+/// Parlays (0.16): two to ten of the casino's own props linked into one bet, every leg to
+/// win. Apps say [`PARLAYS_CAP`] to be told about theirs.
+pub const PARLAYS_FEATURE: &str = "prop_parlays";
+pub const PARLAYS_CAP: &str = "prop_parlays";
 /// In `Login::caps`: this app updates with the new release key (the rebuild's: the one before
 /// was lost). A server tells an app without it, as it logs in, that a new Pyr is out and where
 /// to get it ([`NEW_PYR_NOTE`]): its Update button can't offer it.

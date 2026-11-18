@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 
-use pyr_poker::props::{self as p, PropAuto, PropState, PropStats, PropView};
+use pyr_poker::props::{self as p, ParlayView, PropAuto, PropState, PropStats, PropView};
 use serde_json::Value;
 
 /// A change in an outcome's odds, lately: what it was, and when it changed (it flashes).
@@ -45,6 +45,12 @@ pub struct Model {
     pub moved: HashMap<(u64, usize), Moved>,
     /// When I last won something (the window celebrates a moment).
     pub won_at: Option<Instant>,
+    /// Parlays (0.16 servers): whether this server takes them, and mine (the ones riding
+    /// first, then the latest that are over).
+    pub parlays_here: bool,
+    pub parlays: Vec<ParlayView>,
+    /// The server just said a parlay of mine is on (the slip it was made on is done with).
+    pub parlay_on: bool,
 }
 
 /// The props of one game or one day, together.
@@ -62,12 +68,20 @@ impl Model {
                 self.heard = true;
                 let key = v["server"]["key"].as_str().map(String::from);
                 // (A Pyr from before 0.15 tells every prop each time and doesn't say so.)
-                let full = v["full"].as_bool().unwrap_or(true) || key != self.server_key;
+                let key_changed = key != self.server_key;
+                let full = v["full"].as_bool().unwrap_or(true) || key_changed;
                 self.old_pyr = v["full"].is_null();
                 self.server_key = key;
                 self.server = v["server"]["name"].as_str().map(String::from);
                 self.props_here = v["props_here"].as_bool().unwrap_or(false);
                 self.house_here = v["house_here"].as_bool().unwrap_or(false);
+                self.parlays_here = v["parlays_here"].as_bool().unwrap_or(false);
+                // (My parlays come whole, when they changed.)
+                if let Some(list) = v["parlays"].as_array() {
+                    self.parlays = list.iter().filter_map(|x| serde_json::from_value(x.clone()).ok()).collect();
+                } else if full && key_changed {
+                    self.parlays.clear();
+                }
                 self.me = v["me"].as_str().unwrap_or_default().to_string();
                 self.chips = v["chips"].as_u64();
                 self.channel = v["channel"].as_i64();
@@ -99,8 +113,11 @@ impl Model {
             Some("said") => {
                 if let Some(text) = v["text"].as_str().filter(|t| !t.trim().is_empty()) {
                     let error = v["error"].as_bool().unwrap_or(false);
-                    if !error && text.contains("You won") {
+                    if !error && (text.contains("You won") || text.starts_with("Your parlay came in")) {
                         self.won_at = Some(Instant::now());
+                    }
+                    if !error && text.starts_with("Your parlay is on") {
+                        self.parlay_on = true;
                     }
                     self.said = Some((text.to_string(), error, Instant::now()));
                 }
@@ -259,6 +276,11 @@ pub fn stake_and_worth(prop: &PropView) -> (u64, u64) {
     (cost, worth)
 }
 
+/// A question as it goes in a line with other things: without its question mark.
+pub fn question_short(q: &str) -> &str {
+    q.trim().trim_end_matches('?')
+}
+
 /// What a row of an event's card calls a prop: the part of its question that isn't the
 /// event's name ("Who wins: Chargers at Ravens?" is "Who wins"; "New York: Wednesday's
 /// high?" is "Wednesday's high").
@@ -298,6 +320,36 @@ mod tests {
     use super::*;
     use pyr_poker::props::Holding;
     use serde_json::json;
+
+    /// My parlays come whole when they changed, stay as they were told when a line comes
+    /// without them, and go with the server they were on.
+    #[test]
+    fn parlays_are_told_whole_when_they_change() {
+        use pyr_poker::props::{ParlayLeg, ParlayState};
+        let mut m = Model::default();
+        let ticket = ParlayView { id: 4, chips: 1_000, pays: 3_960, legs: vec![ParlayLeg { prop: 1, outcome: 0, pick: "Bills".into(), odds: 1.99, ..Default::default() }, ParlayLeg { prop: 2, outcome: 1, pick: "Jazz".into(), odds: 1.99, ..Default::default() }], ..Default::default() };
+        let mut line = told(vec![prop(1, PropState::Open, false)], Some(true));
+        line["parlays_here"] = json!(true);
+        line["parlays"] = json!([ticket]);
+        m.hear(&line);
+        assert_eq!((m.parlays_here, m.parlays.len(), m.parlays[0].legs[1].pick.as_str(), m.parlays[0].state), (true, 1, "Jazz", ParlayState::Open));
+        // A prop changed: the line has no parlays, and mine are as they were.
+        let mut line = told(vec![prop(1, PropState::Open, true)], Some(false));
+        line["parlays_here"] = json!(true);
+        m.hear(&line);
+        assert_eq!(m.parlays.len(), 1);
+        // What the server says of a parlay placed or paid: the slip is done with; gold falls.
+        m.hear(&json!({"op": "said", "text": "Your parlay is on: 2 legs, 1,000 chips to win 3,960.", "error": false}));
+        assert!(m.parlay_on && m.won_at.is_none());
+        m.hear(&json!({"op": "said", "text": "Your parlay came in: all 2 legs won. You're paid 3,960 chips (+2,960).", "error": false}));
+        assert!(m.won_at.is_some());
+        // Another server, from a Pyr or a server that knows nothing of parlays.
+        let mut line = told(vec![], Some(true));
+        line["server"]["key"] = json!("other");
+        m.hear(&line);
+        assert_eq!((m.parlays_here, m.parlays.len()), (false, 0));
+        assert_eq!(question_short(" Who wins: Chiefs at Bills? "), "Who wins: Chiefs at Bills");
+    }
 
     fn prop(id: u64, state: PropState, mine: bool) -> PropView {
         PropView {

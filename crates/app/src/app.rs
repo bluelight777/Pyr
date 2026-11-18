@@ -569,6 +569,9 @@ pub struct UiState {
     /// Pyr Prop Bets' window just said how it's told: it's told everything again, its way (what it
     /// was told before it said so was an older window's fill: no props of the casino's own).
     pub prop_bets_again: bool,
+    /// My parlays as Pyr Prop Bets' window was last told them (the engine's `parlays_version`):
+    /// they're told again whole when they change, not with every prop that does.
+    pub prop_bets_parlays: u64,
     /// When a prop's card in chat last asked how one of the casino's own props stands (those
     /// change without this Pyr hearing, unless Pyr Prop Bets' window is open).
     pub prop_card_asked: HashMap<(String, u64), Instant>,

@@ -77,6 +77,8 @@ const CARD_BG: &[u8] = include_bytes!("../../app/assets/props/card-bg.webp");
 pub const EMBLEM: &[u8] = include_bytes!("../../app/assets/props/emblem.webp");
 const WON: &[u8] = include_bytes!("../../app/assets/props/won.webp");
 const LOCK: &[u8] = include_bytes!("../../app/assets/props/lock.webp");
+/// The parlays' picture, made for Pyr Prop Bets: a chain of gold rings on the felt, and a ticket.
+const PARLAY: &[u8] = include_bytes!("../assets/parlay.webp");
 
 /// A picture a category, made for Pyr Prop Bets (a ball, a puck, a pile of coins: no league's or
 /// team's marks), and where in it its subject is (across, down: 0 to 1).
@@ -106,6 +108,7 @@ pub struct Art {
     pub emblem: Option<egui::TextureHandle>,
     pub won: Option<egui::TextureHandle>,
     pub lock: Option<egui::TextureHandle>,
+    pub parlay: Option<egui::TextureHandle>,
 }
 
 impl Art {
@@ -123,6 +126,7 @@ impl Art {
             emblem: t("emblem", EMBLEM),
             won: t("won", WON),
             lock: t("lock", LOCK),
+            parlay: t("parlay", PARLAY),
         }
     }
 }

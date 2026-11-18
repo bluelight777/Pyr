@@ -350,7 +350,9 @@ async fn session(hub: Arc<Hub>, conn: quinn::Connection, slot: &mut ConnSlot, de
     let groups = caps.iter().any(|c| c == GROUPS_CAP);
     let feedback = caps.iter().any(|c| c == VIDEO_FEEDBACK_CAP);
     let movable = caps.iter().any(|c| c == MOVE_CAP);
-    let casino = if caps.iter().any(|c| c == PROPS2_CAP) {
+    let casino = if caps.iter().any(|c| c == PARLAYS_CAP) {
+        pyr_poker::net::CASINO_PARLAYS
+    } else if caps.iter().any(|c| c == PROPS2_CAP) {
         pyr_poker::net::CASINO_PROPS2
     } else if caps.iter().any(|c| c == PROPS_CAP) {
         pyr_poker::net::CASINO_PROPS
@@ -2120,7 +2122,9 @@ impl Ctx<'_> {
                     | pyr_poker::net::ToServer::PropGet { .. }
                     | pyr_poker::net::ToServer::PropList { .. }
                     | pyr_poker::net::ToServer::PropStats { .. }
-                    | pyr_poker::net::ToServer::PropAuto { .. }),
+                    | pyr_poker::net::ToServer::PropAuto { .. }
+                    | pyr_poker::net::ToServer::ParlayPlace { .. }
+                    | pyr_poker::net::ToServer::ParlayList),
             } => {
                 if !self.prop_tokens.take(1.0) {
                     return Err((ErrorCode::RateLimited, "Slow down a little.".into()));
@@ -2137,7 +2141,11 @@ impl Ctx<'_> {
                 let sees = |ch: i64| self.can_see(ch).is_ok();
                 let moderates = |ch: i64| hub.moderates(&self.uid, ch);
                 let who = crate::poker::props::Asker { uid: &self.uid, sees: &sees, moderates: &moderates, manages: self.can(perm::MANAGE_SERVER), house, conn: Some(self.conn_id) };
-                match hub.poker.props(hub, &who, msg) {
+                let done = match msg {
+                    msg @ (pyr_poker::net::ToServer::ParlayPlace { .. } | pyr_poker::net::ToServer::ParlayList) => hub.poker.parlays(hub, &who, msg),
+                    msg => hub.poker.props(hub, &who, msg),
+                };
+                match done {
                     Ok(Some(msg)) => match msg.for_app(self.casino) {
                         Some(msg) => Ok(Event::Poker { msg }),
                         None => Ok(Event::Ok),

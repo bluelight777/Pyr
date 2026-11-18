@@ -96,7 +96,7 @@ impl PyrApp {
     /// is told every prop each time, the members' only: it knows nothing of the casino's own,
     /// and those can be thousands.
     fn tell_prop_bets(&mut self, st: &AppState) {
-        use pyr_proto::control::{PROPS_FEATURE, PROPS_HOUSE_FEATURE};
+        use pyr_proto::control::{PARLAYS_FEATURE, PROPS_FEATURE, PROPS_HOUSE_FEATURE};
         let s = self.ui.server.as_deref().and_then(|k| st.server(k));
         let now = s.map(|s| (s.key.clone(), s.poker.props_version, s.poker.me.as_ref().map(|m| m.chips), s.has(PROPS_FEATURE)));
         // (The server tells this Pyr of the casino's own props as they change only for a
@@ -105,6 +105,8 @@ impl PyrApp {
             && self.ui.prop_bets_listed.is_some_and(|t| t.elapsed() > Duration::from_secs(300))
         {
             self.engine.prop_list_all(&s.key);
+            // (My parlays with them: whatever a dropped connection missed is caught up on.)
+            self.engine.parlay_list(&s.key);
             self.ui.prop_bets_listed = Some(Instant::now());
         }
         let again = std::mem::take(&mut self.ui.prop_bets_again);
@@ -117,6 +119,7 @@ impl PyrApp {
         let new_server = s.filter(|s| before.as_ref().map(|t| &t.0) != Some(&s.key));
         if let Some(s) = new_server {
             self.engine.prop_list_all(&s.key);
+            self.engine.parlay_list(&s.key);
             self.ui.prop_bets_listed = Some(Instant::now());
             if s.poker.me.is_none() && s.has(PROPS_FEATURE) {
                 self.engine.poker(&s.key, pyr_poker::net::ToServer::Lobby);
@@ -139,12 +142,13 @@ impl PyrApp {
                 } else {
                     s.poker.props.iter().rev().filter(|(id, _)| s.poker.props_at.get(id).is_some_and(|at| *at > since)).map(|(_, p)| p).collect()
                 };
-                json!({
+                let mut line = json!({
                     "op": "props",
                     "full": full,
                     "server": {"key": s.key, "name": s.info.name},
                     "props_here": s.has(PROPS_FEATURE),
                     "house_here": s.has(PROPS_HOUSE_FEATURE),
+                    "parlays_here": s.has(PARLAYS_FEATURE),
                     "me": st.my_uid,
                     "chips": s.poker.me.as_ref().map(|m| m.chips),
                     "channels": channels,
@@ -152,7 +156,13 @@ impl PyrApp {
                     "list": props,
                     "stats": s.poker.prop_stats,
                     "auto": s.poker.prop_auto,
-                })
+                });
+                // (My parlays, whole, when they changed: not with every prop that does.)
+                if full || self.ui.prop_bets_parlays != s.poker.parlays_version {
+                    self.ui.prop_bets_parlays = s.poker.parlays_version;
+                    line["parlays"] = json!(s.poker.parlays);
+                }
+                line
             }
             None => json!({"op": "props", "full": true, "server": null, "props_here": false, "list": []}),
         };
@@ -179,7 +189,12 @@ impl PyrApp {
             PropAsk::Void { id } => Act::PropVoid { key, id },
             PropAsk::Refresh => {
                 self.engine.prop_list_all(&key);
+                self.engine.parlay_list(&key);
                 self.ui.prop_bets_listed = Some(Instant::now());
+                return;
+            }
+            PropAsk::Parlay { legs, chips, min_pays } => {
+                self.engine.parlay_place(&key, legs, chips, min_pays);
                 return;
             }
             PropAsk::Hello { .. } => return,

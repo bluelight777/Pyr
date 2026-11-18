@@ -1539,6 +1539,19 @@ impl Engine {
         self.prop_request(key, pyr_poker::net::ToServer::PropBet { id, outcome, chips, min_shares });
     }
 
+    /// Places a parlay: `legs` (each prop and the outcome picked), `chips` on all of them at
+    /// once (`min_pays`: what it was shown to pay, less a little).
+    pub fn parlay_place(&self, key: &str, legs: Vec<(u64, usize)>, chips: u64, min_pays: f64) {
+        self.prop_request(key, pyr_poker::net::ToServer::ParlayPlace { legs, chips, min_pays });
+    }
+
+    /// My parlays on a server that takes them (what changes after comes by itself).
+    pub fn parlay_list(&self, key: &str) {
+        if self.shared.state.read_recursive().server(key).is_some_and(|s| s.has(pyr_proto::control::PARLAYS_FEATURE)) {
+            self.prop_ask_later(key, pyr_poker::net::ToServer::ParlayList);
+        }
+    }
+
     pub fn prop_cash_out(&self, key: &str, id: u64, outcome: usize) {
         self.prop_request(key, pyr_poker::net::ToServer::PropCashOut { id, outcome });
     }

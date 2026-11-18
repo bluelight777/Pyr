@@ -19,6 +19,25 @@
 //! the most the casino can lose on one is `b ln(1 / p)` of its least likely outcome
 //! ([`house_backing`]). Every prop has a category ([`CATEGORIES`]); members' own are
 //! `community` unless they say.
+//!
+//! **Parlays (0.16).** Two to ten of the casino's own props linked into one bet
+//! ([`ParlayView`]): every leg has to win for it to pay, and it pays the stake times each
+//! leg's odds. A leg's odds are what the stake would get on that prop by itself, a chip in
+//! ([`leg_quote`]), fixed when the parlay is placed. A leg whose prop is called off counts as
+//! 1.00, and the parlay goes on with the legs left ([`parlay_pays`]). The casino is the other
+//! side of every parlay, and two things keep what it can lose in hand. A parlay never pays
+//! more than its stake and each leg's room together (a leg's room: the most the casino can
+//! lose to that pick on its prop, `b ln(1 / p)`), so no parlay wins more than betting through
+//! its legs' markets one after another could. And parlays have a book of their own on each
+//! prop (`pq`), which every parlay moves as a bet of its stake would: the tenth parlay on
+//! the same pick gets shorter odds than the first, as the tenth bet does. A leg is priced
+//! twice, with that book on top of the prop's odds as they stand and on top of the odds it
+//! opened at (`line`), and gets whichever pays less ([`leg_price`]): single bets can be cashed
+//! out for what they cost, so odds that single bets could lengthen would be anyone's to
+//! push (a big bet on one side, the other side into a parlay at the odds that leaves, the bet
+//! cashed out). Legs are picks that don't hang together ([`parlay_clash`]): one to a game,
+//! and outside the games one to a category (coins rise and fall together; so do two cities'
+//! weather).
 
 use serde::{Deserialize, Serialize};
 
@@ -280,6 +299,14 @@ pub struct PropView {
     /// How its odds went (oldest first), when one prop is looked up (`PropGet`); a list of
     /// props comes without.
     pub history: Vec<PricePoint>,
+    /// What parlays have taken of each outcome (0.16; none: empty): with `q`, the market a
+    /// parlay's leg is priced in ([`parlay_book`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pq: Vec<f64>,
+    /// The odds it opened at, as shares like `q` (0.16; empty: the same as `q`, nobody's bets
+    /// having moved it): a parlay's leg is priced against these too ([`leg_price`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub line: Vec<f64>,
 }
 
 /// How someone did on props over some days: what they won less what they put in, on props
@@ -336,7 +363,206 @@ pub struct PropAutoSet {
     pub depth: u64,
 }
 
+/// The fewest and the most legs a parlay has.
+pub const PARLAY_MIN_LEGS: usize = 2;
+pub const PARLAY_MAX_LEGS: usize = 10;
+/// The most parlays one person has riding at once.
+pub const PARLAY_MAX_OPEN: usize = 40;
+/// The categories that are games: each its own, so a parlay takes a pick from as many of
+/// them as it likes (one to a game). Outside them, one pick to a category.
+pub const LEAGUES: [&str; 6] = ["nfl", "nba", "nhl", "mlb", "cfb", "cbb"];
+
+/// How a leg stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LegState {
+    /// Its prop isn't settled yet.
+    #[default]
+    Pending,
+    Won,
+    Lost,
+    /// Its prop was called off: it counts as 1.00.
+    Void,
+}
+
+/// One pick of a parlay, as it was when the parlay was placed and as it stands.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ParlayLeg {
+    pub prop: u64,
+    pub outcome: usize,
+    pub question: String,
+    /// The outcome picked, by name.
+    pub pick: String,
+    pub category: String,
+    pub event_name: String,
+    pub closes_at: i64,
+    /// Its odds in the parlay: what a chip of the stake pays on it (1.91).
+    pub odds: f64,
+    pub state: LegState,
+    /// What happened, once its prop is over ("Bills 27, Chiefs 24").
+    pub note: String,
+}
+
+/// Where a parlay stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ParlayState {
+    /// Riding: no leg has lost, and some aren't settled.
+    #[default]
+    Open,
+    /// Every leg left in it won: paid.
+    Won,
+    /// A leg lost.
+    Lost,
+    /// Every leg was called off: the stake came back.
+    Void,
+}
+
+/// A parlay of mine.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ParlayView {
+    pub id: u64,
+    /// The stake.
+    pub chips: u64,
+    pub legs: Vec<ParlayLeg>,
+    /// What it pays if every leg left in it wins (less than it was, once a leg is called off).
+    pub pays: u64,
+    pub state: ParlayState,
+    pub placed_at: i64,
+    pub settled_at: i64,
+    /// What it paid, once it's over (the stake itself, called off).
+    pub paid: u64,
+}
+
+impl ParlayView {
+    /// The odds of the legs left in it, multiplied (what the stake is times, before the cap).
+    pub fn times(&self) -> f64 {
+        self.legs.iter().filter(|l| l.state != LegState::Void).map(|l| l.odds.max(1.0)).product()
+    }
+
+    /// How many legs have won, and how many are left in (not called off).
+    pub fn won_of(&self) -> (usize, usize) {
+        (self.legs.iter().filter(|l| l.state == LegState::Won).count(), self.legs.iter().filter(|l| l.state != LegState::Void).count())
+    }
+}
+
+/// A prop's market as a parlay sees it: its shares with the parlay book's on top.
+pub fn parlay_book(q: &[f64], pq: &[f64]) -> Vec<f64> {
+    q.iter().enumerate().map(|(i, x)| x + pq.get(i).copied().unwrap_or(0.0)).collect()
+}
+
+/// What a leg is to a parlay of some stake.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LegQuote {
+    /// Its odds: what the stake would get on that prop by itself, a chip in (1.0 or more).
+    pub odds: f64,
+    /// The shares that is: what the parlay book takes of the pick when the parlay is placed.
+    pub shares: f64,
+    /// Its room: the most the casino can lose to that pick on that prop, `b ln(1 / p)`.
+    pub room: f64,
+}
+
+/// A leg priced for a parlay of `chips`, in its prop's parlay book (`book`: [`parlay_book`]).
+pub fn leg_quote(book: &[f64], b: f64, outcome: usize, chips: u64) -> LegQuote {
+    let c = chips.max(1) as f64;
+    let shares = shares_for(book, b, outcome, c);
+    // (`ln(1 / p)` from how the others stand against the pick: exact however long the shot.)
+    let l = ln_sum_exp(book.iter().enumerate().filter(|(j, _)| *j != outcome).map(|(_, x)| (x - book[outcome]) / b));
+    LegQuote { odds: (shares / c).max(1.0), shares, room: (b * ln_add_exp(0.0, l)).max(0.0) }
+}
+
+/// A leg priced for a parlay of `chips` on a prop: with the parlay book (`pq`) on top of the
+/// prop's odds as they stand (`q`) and on top of the odds it opened at (`line`; none: `q`
+/// alone), whichever pays less. So what single bets do to a prop's odds can shorten a
+/// parlay's and never lengthen them.
+pub fn leg_price(q: &[f64], line: &[f64], pq: &[f64], b: f64, outcome: usize, chips: u64) -> LegQuote {
+    let now = leg_quote(&parlay_book(q, pq), b, outcome, chips);
+    if line.len() != q.len() {
+        return now;
+    }
+    let opened = leg_quote(&parlay_book(line, pq), b, outcome, chips);
+    LegQuote { odds: now.odds.min(opened.odds), shares: now.shares.min(opened.shares), room: now.room.min(opened.room) }
+}
+
+/// What a parlay of `chips` pays if every leg left in it wins (`legs`: each one's odds and
+/// room; a leg called off is left out): the stake times every leg's odds, and never more than
+/// the stake and the legs' rooms together.
+pub fn parlay_pays(chips: u64, legs: impl IntoIterator<Item = (f64, f64)>) -> f64 {
+    let c = chips as f64;
+    let (mut times, mut room) = (1.0f64, 0.0f64);
+    for (odds, r) in legs {
+        times *= odds.max(1.0);
+        room += r.max(0.0);
+    }
+    (c * times).min(c + room).max(c)
+}
+
+/// Odds the American way, for people who read them so: 2.5 is +150, 1.91 is -110 (even money
+/// and longer with a plus; nothing for odds that pay nothing).
+pub fn american(odds: f64) -> String {
+    if !odds.is_finite() || odds <= 1.0 + 1e-9 {
+        String::new()
+    } else if odds >= 2.0 {
+        format!("+{:.0}", ((odds - 1.0) * 100.0).round().min(9_999_999.0))
+    } else {
+        format!("-{:.0}", (100.0 / (odds - 1.0)).round().min(9_999_999.0))
+    }
+}
+
+/// Whether a prop can be a parlay's leg at all: one of the casino's own that settles from the
+/// world's numbers, still taking bets. (The casino's props about itself can't: whoever plays
+/// there moves them. Nor members' own: their author settles them.)
+pub fn parlay_takes(v: &PropView, now: i64) -> Result<(), &'static str> {
+    if !parlay_kind(v.house, &v.category) {
+        Err(PARLAY_KIND)
+    } else if !v.open_at(now) {
+        Err("Betting on that prop has closed.")
+    } else {
+        Ok(())
+    }
+}
+
+/// What's said of a prop that's no kind of leg.
+pub const PARLAY_KIND: &str = "A parlay takes the props that settle by themselves: games, crypto, the weather and the like.";
+
+/// Whether a prop is the kind a parlay takes (see [`parlay_takes`]), whatever its state.
+pub fn parlay_kind(house: bool, category: &str) -> bool {
+    house && category_id(category) != CASINO
+}
+
+/// Why two props can't be legs of the same parlay, if they can't: picks that hang together
+/// would pay as if they didn't.
+pub fn parlay_clash(a: &PropView, b: &PropView) -> Option<&'static str> {
+    legs_clash((a.id, &a.event, &a.category), (b.id, &b.event, &b.category))
+}
+
+/// [`parlay_clash`] from what it goes by: each prop's number, what it's about and its category.
+pub fn legs_clash(a: (u64, &str, &str), b: (u64, &str, &str)) -> Option<&'static str> {
+    let (ca, cb) = (category_id(a.2), category_id(b.2));
+    if a.0 == b.0 {
+        Some("That prop is in your parlay already.")
+    } else if !a.1.is_empty() && a.1 == b.1 {
+        Some(if LEAGUES.contains(&ca.as_str()) { "One pick to a game: two from the same game can't go in one parlay." } else { "Those two are about the same thing: one of them to a parlay." })
+    } else if ca == cb && !LEAGUES.contains(&ca.as_str()) {
+        Some("One pick to a category outside the games: its props move together.")
+    } else {
+        None
+    }
+}
+
 impl PropView {
+    /// The market a parlay's leg on this prop is priced in, as its odds stand.
+    pub fn parlay_book(&self) -> Vec<f64> {
+        parlay_book(&self.q, &self.pq)
+    }
+
+    /// What a pick of this prop is to a parlay of `chips` ([`leg_price`]).
+    pub fn leg(&self, outcome: usize, chips: u64) -> LegQuote {
+        leg_price(&self.q, &self.line, &self.pq, self.b, outcome, chips)
+    }
+
     pub fn prices(&self) -> Vec<f64> {
         prices(&self.q, self.b)
     }
@@ -572,6 +798,148 @@ mod tests {
         // A prop from an older server (no category, no house): read as it was.
         let old: PropView = serde_json::from_str(r#"{"id":3,"channel_id":1,"author":"a","author_name":"A","question":"Rain?","outcomes":["Yes","No"],"b":10000.0,"q":[0.0,0.0],"state":"open","winner":null,"created_at":1,"closes_at":0,"pool":0,"bets":0,"latest":[],"mine":[],"can_settle":true,"backing":6932,"settled_by":"","winners":[]}"#).unwrap();
         assert_eq!((old.category_id().as_str(), old.house, old.history.len()), ("community", false, 0));
+    }
+
+    fn view(id: u64, cat: &str, event: &str, prior: &[f64], b: f64) -> PropView {
+        PropView { id, category: cat.into(), event: event.into(), house: true, b, q: q_from_prior(prior, b), outcomes: prior.iter().enumerate().map(|(i, _)| format!("o{i}")).collect(), closes_at: 1_000, ..Default::default() }
+    }
+
+    #[test]
+    fn a_parlay_pays_its_stake_times_its_legs_odds() {
+        let b = 100_000.0;
+        // Two even-money picks, a small stake: nearly four times it (each leg's odds are what
+        // the stake would get on that prop alone).
+        let even = q_from_prior(&[0.5, 0.5], b);
+        let l = leg_quote(&even, b, 0, 1_000);
+        assert!((l.odds - shares_for(&even, b, 0, 1_000.0) / 1_000.0).abs() < 1e-12 && l.odds > 1.98 && l.odds < 2.0, "{}", l.odds);
+        assert!((l.room - b * 2f64.ln()).abs() < 1e-6);
+        let pays = parlay_pays(1_000, [(l.odds, l.room), (l.odds, l.room)]);
+        assert!((pays - 1_000.0 * l.odds * l.odds).abs() < 1e-6 && pays > 3_900.0);
+        // As the sportsbooks have it: -110 and -110 is about +264.
+        let (a, c) = (1.0 + 100.0 / 110.0, 2.5);
+        assert_eq!((american(a).as_str(), american(c).as_str(), american(a * a).as_str(), american(1.0).as_str(), american(2.0).as_str()), ("-110", "+150", "+264", "", "+100"));
+        // A leg called off counts as 1.00: the parlay goes on with the one left, and with
+        // none left the stake comes back.
+        assert!((parlay_pays(1_000, [(l.odds, l.room)]) - 1_000.0 * l.odds).abs() < 1e-6);
+        assert_eq!(parlay_pays(1_000, []), 1_000.0);
+        // A long shot's odds, and a favourite's.
+        let long = leg_quote(&q_from_prior(&[0.02, 0.98], b), b, 0, 100);
+        let short = leg_quote(&q_from_prior(&[0.02, 0.98], b), b, 1, 100);
+        assert!(long.odds > 48.0 && long.odds < 50.0 && short.odds > 1.02 && short.odds < 1.0205, "{} {}", long.odds, short.odds);
+        assert!((long.room - b * 50f64.ln()).abs() < 1e-3 && (short.room - b * (1.0f64 / 0.98).ln()).abs() < 1e-3);
+    }
+
+    /// Whatever the stake and however long the shots, a parlay wins no more than its legs'
+    /// rooms together: what the casino could lose to those picks on their own props.
+    #[test]
+    fn a_parlay_never_wins_more_than_its_legs_rooms() {
+        for b in [10_000.0, 100_000.0, 1_000_000.0] {
+            for prior in [vec![0.5, 0.5], vec![0.02, 0.98], vec![0.25, 0.25, 0.25, 0.25]] {
+                for n in [2usize, 5, 10] {
+                    for chips in [10u64, 1_000, 250_000, 100_000_000] {
+                        let book = q_from_prior(&prior, b);
+                        let l = leg_quote(&book, b, 0, chips);
+                        let pays = parlay_pays(chips, (0..n).map(|_| (l.odds, l.room)));
+                        assert!(pays.is_finite() && pays >= chips as f64 && pays - chips as f64 <= n as f64 * l.room + 1e-6, "b {b}, {prior:?}, {n} legs, {chips}: pays {pays}");
+                        // (And never more than the odds say.)
+                        assert!(pays <= chips as f64 * l.odds.powi(n as i32) * (1.0 + 1e-12));
+                    }
+                }
+            }
+        }
+        // Ten long shots for ten chips: capped by the rooms, not 50 to the tenth.
+        let b = 100_000.0;
+        let l = leg_quote(&q_from_prior(&[0.02, 0.98], b), b, 0, 10);
+        let pays = parlay_pays(10, (0..10).map(|_| (l.odds, l.room)));
+        assert!((pays - (10.0 + 10.0 * b * 50f64.ln())).abs() < 1.0, "{pays}");
+    }
+
+    /// Every parlay moves the parlay book of each of its legs as a bet of its stake would: the
+    /// same pick again gets shorter odds, the other side longer ones, and the prop's own odds
+    /// (what single bets go by) stay where they were.
+    #[test]
+    fn parlays_move_their_own_book() {
+        let b = 100_000.0;
+        let mut v = view(1, "nfl", "nfl:1", &[0.5, 0.5], b);
+        let first = leg_quote(&v.parlay_book(), v.b, 0, 50_000);
+        v.pq = vec![first.shares, 0.0];
+        let again = leg_quote(&v.parlay_book(), v.b, 0, 50_000);
+        let other = leg_quote(&v.parlay_book(), v.b, 1, 50_000);
+        assert!(again.odds < first.odds - 0.2 && other.odds > first.odds + 0.2, "{} then {}, the other side {}", first.odds, again.odds, other.odds);
+        assert_eq!(v.prices(), vec![0.5, 0.5]);
+        // (As a bet of the stake moves a market: what it costs to take the book there.)
+        let cost = |q: &[f64]| {
+            let max = q.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            max + b * q.iter().map(|x| ((x - max) / b).exp()).sum::<f64>().ln()
+        };
+        assert!((cost(&v.parlay_book()) - cost(&v.q) - 50_000.0).abs() < 1e-6);
+        // An app from before parlays reads a prop with a parlay book, and one without is as it was.
+        let j = serde_json::to_string(&v).unwrap();
+        assert!(j.contains("\"pq\":["));
+        assert!(!serde_json::to_string(&view(2, "nfl", "nfl:2", &[0.5, 0.5], b)).unwrap().contains("pq"));
+        assert_eq!(serde_json::from_str::<PropView>(&j).unwrap(), v);
+    }
+
+    /// A single bet can be cashed out for what it cost, so it mustn't be able to lengthen a
+    /// parlay's odds: a leg pays the less of what the prop's odds say now and what they
+    /// opened at. Pushed one way, the other side's parlay odds stay where they opened; the
+    /// side that was pushed gets the shorter odds it has now.
+    #[test]
+    fn single_bets_shorten_a_parlay_s_odds_and_never_lengthen_them() {
+        let b = 100_000.0;
+        let mut v = view(1, "nfl", "nfl:1", &[0.5, 0.5], b);
+        let opened = (v.leg(0, 1_000), v.leg(1, 1_000));
+        assert_eq!(opened.0, leg_quote(&v.q, b, 0, 1_000));
+        // Someone puts 400,000 on the first outcome: it's all but sure by its odds, and the
+        // other side reads 50 to 1.
+        v.line = v.q.clone();
+        v.q[0] += shares_for(&v.q, b, 0, 400_000.0);
+        assert!(v.prices()[1] < 0.02);
+        let pushed = (v.leg(0, 1_000), v.leg(1, 1_000));
+        assert!(pushed.0.odds < 1.02 && pushed.0.odds < opened.0.odds && pushed.0.room < opened.0.room, "{:?}", pushed.0);
+        assert_eq!(pushed.1, opened.1, "the other side: as it opened, not 50 to 1");
+        // With the parlay book on top of both, and whatever the stake.
+        v.pq = vec![30_000.0, 80_000.0];
+        for chips in [10u64, 5_000, 2_000_000] {
+            for i in 0..2 {
+                let (now, then, got) = (leg_quote(&parlay_book(&v.q, &v.pq), b, i, chips), leg_quote(&parlay_book(&v.line, &v.pq), b, i, chips), v.leg(i, chips));
+                assert!(got.odds <= now.odds && got.odds <= then.odds && got.room <= now.room && got.room <= then.room && got.shares <= now.shares.min(then.shares));
+                assert!(got == now || got == then, "one or the other, whole");
+            }
+        }
+        // No line (an app's view of a prop nobody's bets have moved): the odds as they stand.
+        v.line.clear();
+        assert_eq!(v.leg(1, 1_000), leg_quote(&v.parlay_book(), b, 1, 1_000));
+        // It goes over the wire only when there's one.
+        let mut w = view(2, "nfl", "nfl:2", &[0.5, 0.5], b);
+        assert!(!serde_json::to_string(&w).unwrap().contains("line"));
+        w.line = vec![1.0, 2.0];
+        assert_eq!(serde_json::from_str::<PropView>(&serde_json::to_string(&w).unwrap()).unwrap().line, vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn a_parlay_takes_picks_that_don_t_hang_together() {
+        let b = 100_000.0;
+        let (win, total) = (view(1, "nfl", "nfl:1", &[0.5, 0.5], b), view(2, "nfl", "nfl:1", &[0.5, 0.5], b));
+        let (other_game, hoops) = (view(3, "nfl", "nfl:2", &[0.5, 0.5], b), view(4, "nba", "nba:9", &[0.5, 0.5], b));
+        let (btc, eth, rain) = (view(5, "crypto", "crypto:btc:1", &[0.5, 0.5], b), view(6, "crypto", "crypto:eth:1", &[0.5, 0.5], b), view(7, "weather", "weather:nyc:1", &[0.5, 0.5], b));
+        assert!(parlay_clash(&win, &win).unwrap().contains("already"));
+        assert!(parlay_clash(&win, &total).unwrap().contains("same game"));
+        assert_eq!((parlay_clash(&win, &other_game), parlay_clash(&win, &hoops), parlay_clash(&win, &btc), parlay_clash(&btc, &rain)), (None, None, None, None));
+        assert!(parlay_clash(&btc, &eth).unwrap().contains("One pick to a category"));
+        let btc_range = view(9, "crypto", "crypto:btc:1", &[0.2, 0.3, 0.5], b);
+        assert!(parlay_clash(&btc, &btc_range).unwrap().contains("about the same thing"));
+        // Only the casino's own that settle from the world's numbers, while they take bets.
+        assert_eq!(parlay_takes(&win, 500), Ok(()));
+        assert!(parlay_takes(&win, 1_000).unwrap_err().contains("closed"));
+        let mut mine = win.clone();
+        mine.house = false;
+        assert!(parlay_takes(&mine, 500).unwrap_err().contains("settle by themselves"));
+        assert!(parlay_takes(&view(8, "casino", "casino:1", &[0.5, 0.5], b), 500).is_err());
+        // How a parlay of mine reads: its odds multiplied, the legs left in.
+        let leg = |odds: f64, state| ParlayLeg { odds, state, ..Default::default() };
+        let p = ParlayView { chips: 100, legs: vec![leg(2.0, LegState::Won), leg(1.5, LegState::Pending), leg(3.0, LegState::Void)], ..Default::default() };
+        assert_eq!((p.times(), p.won_of()), (3.0, (1, 2)));
     }
 
     #[test]

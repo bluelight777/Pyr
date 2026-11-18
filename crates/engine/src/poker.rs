@@ -166,6 +166,11 @@ pub struct PokerState {
     pub props_version: u64,
     /// What the server said no to on props lately (the last five), for Pyr Prop Bets' own window.
     pub prop_refusals: Vec<String>,
+    /// My parlays (servers with `PARLAYS_FEATURE`): the ones riding and the latest that are
+    /// over, newest first; `props_version` goes up with them too.
+    pub parlays: Vec<pyr_poker::props::ParlayView>,
+    /// Goes up whenever they change (Pyr Prop Bets' own window is told them again then).
+    pub parlays_version: u64,
     /// Invites to a table (0.13.6): the table, who from, its name, when it came. (Not from
     /// someone I've blocked; the newest last.)
     pub table_invites: Vec<(pyr_poker::net::TableRef, String, String, Instant)>,
@@ -587,6 +592,23 @@ impl PokerState {
             }
             ToApp::PropAuto { auto } => {
                 self.prop_auto = Some(auto);
+                self.props_version += 1;
+            }
+            ToApp::Parlays { parlays, all } => {
+                if all {
+                    self.parlays = parlays;
+                } else {
+                    for t in parlays {
+                        match self.parlays.iter_mut().find(|mine| mine.id == t.id) {
+                            Some(mine) => *mine = t,
+                            None => self.parlays.push(t),
+                        }
+                    }
+                }
+                // (The ones riding first, then the latest over; newest first in each.)
+                self.parlays.sort_by_key(|t| (t.state != pyr_poker::props::ParlayState::Open, std::cmp::Reverse(t.id)));
+                self.parlays.truncate(200);
+                self.parlays_version += 1;
                 self.props_version += 1;
             }
         }

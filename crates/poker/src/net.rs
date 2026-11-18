@@ -315,6 +315,12 @@ pub enum ToServer {
         #[serde(default)]
         set: Option<crate::props::PropAutoSet>,
     },
+    /// Parlays (servers with `PARLAYS_FEATURE`; see `props`): two to ten of the casino's own
+    /// props in one bet. `legs`: each prop and the outcome picked; `min_pays`: what the app
+    /// said it pays, less a little (the odds may move).
+    ParlayPlace { legs: Vec<(u64, usize)>, chips: u64, min_pays: f64 },
+    /// My parlays: the ones riding, and the latest that are over.
+    ParlayList,
 }
 
 /// The home of Pyr Casino's Game Masters: Brethren of Blood, by its server's fingerprint
@@ -720,6 +726,13 @@ pub enum ToApp {
     PropStats { stats: crate::props::PropStats },
     /// The casino's own props here, as asked or as just set (`ToServer::PropAuto`).
     PropAuto { auto: crate::props::PropAuto },
+    /// Parlays of mine (0.16): every one worth showing, as asked (`all`), or the ones that just
+    /// changed (placed, a leg settled, paid).
+    Parlays {
+        parlays: Vec<crate::props::ParlayView>,
+        #[serde(default)]
+        all: bool,
+    },
 }
 
 impl ToApp {
@@ -731,6 +744,11 @@ impl ToApp {
     /// One only an app that knows the casino's own props reads (`PROPS2_CAP`).
     pub fn is_props2(&self) -> bool {
         matches!(self, ToApp::PropStats { .. } | ToApp::PropAuto { .. })
+    }
+
+    /// One only an app that knows parlays reads (`PARLAYS_CAP`).
+    pub fn is_parlays(&self) -> bool {
+        matches!(self, ToApp::Parlays { .. })
     }
 }
 
@@ -749,12 +767,14 @@ pub const CASINO_PROPS: u8 = 100;
 /// An app that also knows the casino's own props (`PROPS2_CAP`, 0.15): categories, props that
 /// open and settle by themselves, the best at props.
 pub const CASINO_PROPS2: u8 = 110;
+/// An app that also knows parlays (`PARLAYS_CAP`, 0.16).
+pub const CASINO_PARLAYS: u8 = 120;
 
 impl ToApp {
     /// This message as an app that knows Pyr Casino up to `casino` can read it (`None`: one it
     /// can't, left unsent).
     pub fn for_app(self, casino: u8) -> Option<ToApp> {
-        if self.is_props() && casino < CASINO_PROPS || self.is_props2() && casino < CASINO_PROPS2 {
+        if self.is_props() && casino < CASINO_PROPS || self.is_props2() && casino < CASINO_PROPS2 || self.is_parlays() && casino < CASINO_PARLAYS {
             return None;
         }
         // (Dominó's tables only to apps that know them.)
