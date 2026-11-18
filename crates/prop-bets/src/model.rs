@@ -353,7 +353,7 @@ mod tests {
         // What the server says of a parlay placed or paid: the slip is done with; gold falls.
         m.hear(&json!({"op": "said", "text": "Your parlay is on: 2 legs, 1,000 chips to win 3,960.", "error": false}));
         assert!(m.parlay_on && m.won_at.is_none());
-        m.hear(&json!({"op": "said", "text": "Your parlay came in: all 2 legs won. You're paid 3,960 chips (+2,960).", "error": false}));
+        m.hear(&json!({"op": "said", "text": "Your parlay came in: both legs won. You're paid 3,960 chips (+2,960).", "error": false}));
         assert!(m.won_at.is_some());
         // Another server, from a Pyr or a server that knows nothing of parlays.
         let mut line = told(vec![], Some(true));

@@ -99,7 +99,7 @@ impl Parlay {
             let won = self.legs.iter().filter(|l| l.state == LegState::Won).count();
             text = match l.state {
                 LegState::Void => Some(format!("A leg of your parlay was called off{what}: it counts as 1.00, and the parlay now pays {} chips.", progress_chips(self.pays()))),
-                _ if to_go == 1 => Some(format!("{won} legs of your parlay are in, one to go: {} won{what}.", l.pick)),
+                _ if to_go == 1 => Some(format!("{}, one to go: {} won{what}.", in_so_far(won), l.pick)),
                 _ => None,
             };
         } else if self.legs.iter().all(|l| l.state == LegState::Void) {
@@ -118,7 +118,8 @@ impl Parlay {
             chips = pay as i64;
             let net = pay as i64 - self.chips as i64;
             let _ = hub.db.parlay_result_record(&self.uid, now, self.id, net, self.chips, true);
-            text = Some(format!("Your parlay came in: all {} won. You're paid {} chips (+{}).", self.legs_word(), progress_chips(pay), progress_chips(net.max(0) as u64)));
+            let left = self.legs.iter().filter(|l| l.state != LegState::Void).count();
+            text = Some(format!("Your parlay came in: {}. You're paid {} chips (+{}).", all_won(left), progress_chips(pay), progress_chips(net.max(0) as u64)));
         }
         self.save(hub)?;
         self.tell(hub);
@@ -129,6 +130,21 @@ impl Parlay {
             info!(parlay = self.id, state = state_name(self.state), paid = self.paid, "parlay over");
         }
         Ok(())
+    }
+}
+
+/// "2 legs of your parlay are in" (one: "One leg of your parlay is in").
+fn in_so_far(won: usize) -> String {
+    if won == 1 { "One leg of your parlay is in".to_string() } else { format!("{won} legs of your parlay are in") }
+}
+
+/// "all 3 legs won", of the legs left in a parlay that came in (two: both; one, the others
+/// called off: the one left).
+fn all_won(left: usize) -> String {
+    match left {
+        1 => "the one leg left in it won".to_string(),
+        2 => "both legs won".to_string(),
+        n => format!("all {n} legs won"),
     }
 }
 
@@ -660,6 +676,9 @@ mod tests {
         // questions and results a feed can carry: twenty are well inside what a message holds.)
         let all = mine(&hub, "bob");
         assert_eq!((all.len(), all[0].id > all[39].id), (p::PARLAY_MAX_OPEN, true));
+        // (What's said of legs, by how many.)
+        assert_eq!((in_so_far(1).as_str(), in_so_far(2).as_str()), ("One leg of your parlay is in", "2 legs of your parlay are in"));
+        assert_eq!((all_won(1).as_str(), all_won(2).as_str(), all_won(3).as_str()), ("the one leg left in it won", "both legs won", "all 3 legs won"));
         let msgs = in_messages(all.clone());
         let shape: Vec<(usize, bool)> = msgs.iter().map(|m| match m { ToApp::Parlays { parlays, all } => (parlays.len(), *all), other => panic!("{other:?}") }).collect();
         assert_eq!(shape, vec![(20, true), (20, false)]);
