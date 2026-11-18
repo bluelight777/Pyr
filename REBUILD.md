@@ -388,6 +388,13 @@ release builds themselves, gold falling). The VPS's set-up run dry over an earli
 compared; `publish.cmd` there). Its notes carry 0.15.1's lines after its own, for copies that
 come to it from 0.15.0 or before. Not tried: Windows; more than one person's parlays on the
 same props at once; Mag's real room (0.15.1's isolation).
+Published the same day (Blue, with `publish.cmd`; read from the live site at 18:30 UTC):
+`latest2.json` says 0.16.0 with the parlays' notes (released: 0.15.0, 0.15.1, 0.16.0); the
+props maker on the VPS is 0.16.0 and all 18 of its sources read, with no trouble (Steam's
+props are there now: 6); the Library's `index4.json` lists Pyr Prop Bets 0.3.0, its Linux
+file the size of the build that was tried on the test screen. The weather's first props (20,
+Wednesday's) were closed and waiting, as they should be: a day's betting closes at its
+midnight there and its report comes an hour or two after the day ends.
 
 0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
 Blue's pyr.log, Nov 17, "couldn't find the server "SERVER2.24.121.231": No such host is known".
@@ -1550,7 +1557,7 @@ How (decided while starting it):
       (renamed) instead of waiting for it to quit; the new Pyr deletes pyr.exe.old. Linux: the
       password's asked for while Pyr carries on (cancelled: nothing changes). `PYR_DEV_UPDATING`
       shows the screen's stages without updating. Seen first on the update after the rebuild's.
-- [ ] Prop Bets as its own install (Blue, Nov 17: "I want Prop betting to have it's own app
+- [x] Prop Bets as its own install (Blue, Nov 17: "I want Prop betting to have it's own app
       but also be an addon for Pyr. I want to choose to install Prop bets or not."). His
       choices: a program in the Pyr Library, its own window opened from Pyr like Pyropoly (or
       popped out) with every prop on the server, your bets and the odds moving live, with your
@@ -1590,7 +1597,8 @@ How (decided while starting it):
       from that line (the cards back). Fixed from it: Install before the list came was "Something
       went wrong" (now its page waits for the list), and Close on Linux was "closed by mistake".
       Left: (6), the release, with Pyr's side (the cards follow the install, so both go up
-      together); Blue's go-ahead first.
+      together); Blue's go-ahead first. Done: built into 0.14.2, and up with 0.15.0 (published
+      Nov 18), where Blue bet with it the first night; Pyr Prop Bets since 0.15.1.
 - [x] Voice isolation keeps a TV across the room out (Blue, Nov 17: "I don't want to hear
       Mag's mother's TV coming through his mic, it's spanish television in the background,
       remove it please"; Mag has voice isolation on). Isolation went by level only, and a TV
@@ -1682,8 +1690,12 @@ How (decided while starting it):
       counted"); My bets' sums left parlays out (in play, and won so far, count them).
       Not tried: Windows; more than one person's parlays on the same props at once.
 - [ ] Approved bug reports 657 to 675 (voice up and down; stopped responding), without
-      touching the echo canceller
-- [ ] The key change (above): built and tried with test keys; the day's steps there
+      touching the echo canceller. All but one are closed above (the voice ones: working as
+      designed, by Blue's say; 668 and 670: false); 669 waits to happen again, with the log
+      lines added for it.
+- [x] The key change (above): built and tried with test keys; the day's steps there. The swap
+      itself happened as 0.14.0 was published (Nov 17, 01:07 UTC): `latest2.json` and the
+      Keeper's `index4.json` under the new key, 0.13.28's lists left as they were.
 
 ## Talking to 0.13.28 (how its messages were found)
 
