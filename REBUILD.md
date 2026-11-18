@@ -231,16 +231,31 @@ says so; the good one and the service untouched), and no key at all (it says so)
 meant, with the website open and with it under a folder only the web server may enter (it's
 let through that folder and no more).
 
-Not tried, and only the VPS can say: the real sources from the VPS's address (ESPN may answer
-a datacenter differently; api.weather.gov's forecast, Steam's and NASA's picture API are
-written from their documented shapes), `setup-props.sh` on the real machine (the real nginx
-and website folders, and the service's limits as systemd itself applies them: the address
-families, the memory cap), Prop Bets 0.2 inside Pyr's window on Windows and the Windows setup,
-and a busy server holding some two thousand props. The first round asks its sources one at a
-time, 1.2 seconds apart to each host: a few minutes with all of them answering, and the set-up
-waits five for the first feed before it says there's none yet (the release is published all
-the same; the feed comes by itself). The set-up prints each source's state as it ends;
-`https://pyr.gg/props/status.json` has it after.
+What a full feed asks, tried here (Nov 18, no network; `rebuild/tools/release-0.15.0/load`).
+The real feed runs to several hundred props (the leagues' most a day, the cities, the coins);
+the made-up one here had 1,500 (`demo_feed --many`), the most a server lists to an app. The
+Linux release of `pyr-server`: the first follow, every prop opened, took 0.2 s (the casino
+waits that long, the once, when its props are turned on); standing still, a quarter of a
+second of processor in 150 s; a round with results 0.13 s; after a restart, every prop looked
+at again, 0.03 s; 16 to 26 MB. Prop Bets' window (the release's, with a frame timer added for
+the measuring and taken out again: the rebuild came out bit for bit the shipped one), its own
+work a frame: 2.5 ms on its busiest board with 600 props, 5.5 ms (10.6 at worst) with 1,500,
+which is a board of 375; under 2 ms on its other pages; all 1,500 told to it in one line of
+1.2 MB. The whole line at that size (that server, Pyr's Linux release, the window inside it):
+1,483 open props on the front page, the board of 375, a bet placed and paid for. A board with
+a game under way draws some twenty times a second for its LIVE dot: most of a core with this
+machine's software drawing, little with a graphics card's.
+
+Not tried, and only the VPS can say: the real sources from the VPS's address (ESPN may answer a
+datacenter differently; api.weather.gov's forecast, Steam's and NASA's picture API are written
+from their documented shapes), `setup-props.sh` on the real machine (the real nginx and website
+folders, and the service's limits as systemd itself applies them: the address families, the
+memory cap), Prop Bets 0.2 inside Pyr's window on Windows and the Windows setup, and many
+members betting at once. The first round asks its sources one at a time, 1.2 seconds apart to
+each host: a few minutes with all of them answering, and the set-up waits five for the first
+feed before it says there's none yet (the release is published all the same; the feed comes by
+itself). The set-up prints each source's state as it ends; `https://pyr.gg/props/status.json`
+has it after.
 
 0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
 Blue's pyr.log, Nov 17, "couldn't find the server "SERVER2.24.121.231": No such host is known".

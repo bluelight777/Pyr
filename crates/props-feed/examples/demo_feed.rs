@@ -2,11 +2,13 @@
 //! feed: props in every category, as the sources word them, at times counted from its first
 //! run. Nothing in it is real: the games, the prices and the results are invented.
 //!
-//!   cargo run -p pyr-props --example demo_feed -- --out DIR --key FILE --cert FILE [--results] [--quick MINUTES]
+//!   cargo run -p pyr-props --example demo_feed -- --out DIR --key FILE --cert FILE [--results] [--quick MINUTES] [--many N]
 //!
 //! The first run notes its time in DIR/demo.json; later runs keep the props' times. A few
 //! props close `--quick` minutes after that first run (6 unless said): with `--results` those
 //! have come out (one of them called off), as the feed says it when a game is final.
+//! `--many N`: more invented games until the feed has N props (the real one runs to several
+//! hundred), to see what a full feed asks of a server and of Prop Bets' window.
 //!
 //! A server follows it with `PYR_PROPS_FEED=<its address>` and `PYR_PROPS_FEED_KEY=<the public
 //! half of the key that certified --key>` (see `crates/server/src/props_feed.rs`).
@@ -14,7 +16,7 @@
 use std::path::PathBuf;
 
 use pyr_proto::crypto::Identity;
-use pyr_proto::props_feed::{Feed, FeedCert, FeedProp, FeedResult, VERSION};
+use pyr_proto::props_feed::{Feed, FeedCert, FeedProp, FeedResult, MAX_PROPS, VERSION};
 use pyr_props::engine;
 use pyr_props::when::{self, DAY, HOUR, MIN};
 
@@ -91,7 +93,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let arg = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     let (Some(out), Some(key), Some(cert)) = (arg("--out"), arg("--key"), arg("--cert")) else {
-        eprintln!("demo_feed --out DIR --key FILE --cert FILE [--results] [--quick MINUTES]");
+        eprintln!("demo_feed --out DIR --key FILE --cert FILE [--results] [--quick MINUTES] [--many N]");
         std::process::exit(2);
     };
     let out = PathBuf::from(out);
@@ -201,6 +203,24 @@ fn main() {
     );
     d.add(&format!("art:apod:{}", when::yyyymmdd(tomorrow)), "art", "art:apod", "Astronomy Picture of the Day", &format!("What does NASA's Astronomy Picture of the Day show on {day}?"), &["A galaxy", "A nebula", "The Sun, Moon or a planet", "Something else"], &[0.12, 0.14, 0.24, 0.50], tomorrow, tomorrow, "Going by the words in its title", "NASA", "By the words in the picture's title, in this order: galaxy, nebula, the Sun, Moon or a planet; else something else.", 1);
     d.came_out(&format!("art:draw:{}", when::yyyymmdd(t0)), Some(2), "Round 6650112 drew The Great Wave off Kanagawa");
+
+    // --many: more games, a few days out, until there are that many props.
+    if let Some(many) = arg("--many").and_then(|m| m.parse::<usize>().ok()) {
+        const TEAMS: [&str; 24] = [
+            "Hawks", "Nets", "Hornets", "Mavericks", "Nuggets", "Pistons", "Rockets", "Pacers", "Clippers", "Grizzlies", "Heat", "Bucks", "Timberwolves", "Pelicans", "Knicks", "Thunder", "Sixers", "Suns", "Blazers", "Kings", "Spurs", "Raptors",
+            "Jazz", "Wizards",
+        ];
+        let leagues = [("nba", 221.5, 3u8), ("nhl", 6.5, 3), ("cfb", 48.5, 3), ("cbb", 148.5, 2), ("nfl", 44.5, 5)];
+        let mut k = 0usize;
+        while d.props.len() < many.min(MAX_PROPS) {
+            let (cat, total, featured) = leagues[k % leagues.len()];
+            // (Never the same team twice: 4k + 5 is odd.)
+            let (a, h) = (TEAMS[(k * 7 + 3) % TEAMS.len()], TEAMS[(k * 11 + 8) % TEAMS.len()]);
+            let start = t0 + (3 + (k as i64 * 37) % 150) * HOUR + (k as i64 % 4) * 15 * MIN;
+            d.game(cat, 100 + k as u32, (&format!("The {a}"), a), (&format!("The {h}"), h), start, 0.35 + ((k * 17) % 40) as f64 / 100.0, -(1.5 + (k % 9) as f64), total + (k % 7) as f64, "The Arena · ESPN", if k % 9 == 0 { featured } else { 1 });
+            k += 1;
+        }
+    }
 
     let bad: Vec<String> = d.props.iter().filter_map(|p| p.check().err().map(|e| format!("{}: {e}", p.id))).collect();
     assert!(bad.is_empty(), "props the feed wouldn't take: {bad:?}");

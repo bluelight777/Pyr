@@ -99,6 +99,13 @@ half hour at most) until it answers; a request is given 25 seconds. The others c
 props that open without asking anyone (the Gallery Draw, the picture of the day, the coins' up
 or down) still open.
 
+What a full feed asks (`demo_feed --many 1500`: the real one runs to several hundred props,
+1,500 is the most a server lists to an app): a server opens them all in 0.2 s the first time
+and looks at them all again in 0.03 s after a restart, on 16 to 26 MB; Prop Bets' window does
+5.5 ms of its own work a frame on a board of 375 props; and the three together (the server,
+Pyr, the window inside it) show them, take a bet and pay for it. The numbers are in
+`REBUILD.md` (0.15.0).
+
 Not used: CoinGecko (its terms forbid gambling use by name), Netflix Top 10 and Billboard
 (automated collection forbidden), Wikipedia's pageviews (its API answered "not found" to every
 try from here: not verified), Apple's chart feeds (terms unread), BLS (unread), the New York
