@@ -789,6 +789,10 @@ impl Poker {
             }
         }
         tell_house(hub, &told);
+        // Parlays left behind their props go on from where they were.
+        if self.parlays_behind.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            parlay::catch_up(hub, st, now);
+        }
         // The casino's props about itself: made here, from its own count of rounds.
         self.props_about_casino(hub, st, now);
         // (One called off here by hand is remembered until its betting would have closed:

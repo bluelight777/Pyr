@@ -161,7 +161,36 @@ pub(super) fn prop_over(hub: &Hub, st: &State, prop: &Prop, now: i64) {
             t.save(hub).map(|()| t.tell(hub))
         };
         if let Err(e) = done {
+            // (Nothing of it was kept: `catch_up` takes it from here, at the next sweep.)
             warn!(parlay = t.id, prop = prop.id, "a parlay's leg came out and it couldn't be settled: {e}");
+            hub.poker.parlays_behind.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+/// Parlays left behind their props go on from where they were: one still riding with a leg
+/// waiting on a prop that's over (its step failed when the prop came out, or the server
+/// stopped in the middle of them), or on a prop that's no longer kept at all (that leg is
+/// called off). Looked for when the server starts and after a step fails, at the minute's
+/// sweep; the ones that are where they should be are passed over.
+pub(super) fn catch_up(hub: &Hub, st: &State, now: i64) {
+    for id in hub.db.props_over_under_parlays() {
+        if let Ok(prop) = Prop::load(hub, id)
+            && prop.over()
+        {
+            prop_over(hub, st, &prop, now);
+        }
+    }
+    for j in hub.db.parlays_on_props_gone() {
+        let Ok(mut t) = serde_json::from_str::<Parlay>(&j) else { continue };
+        // (One leg a look: its next one, if there is one, at the next sweep.)
+        let Some(i) = t.legs.iter().position(|l| l.state == LegState::Pending && hub.db.prop(l.prop).is_none()) else { continue };
+        t.legs[i].state = LegState::Void;
+        t.legs[i].note = "its prop is gone".into();
+        warn!(parlay = t.id, prop = t.legs[i].prop, "a parlay's leg was on a prop that's gone: called off");
+        hub.poker.parlays_behind.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Err(e) = t.step(hub, st, i, now) {
+            warn!(parlay = t.id, "and it couldn't be settled: {e}");
         }
     }
 }
@@ -640,6 +669,52 @@ mod tests {
         let big = ParlayView { legs: vec![leg; p::PARLAY_MAX_LEGS], ..Default::default() };
         let most = serde_json::to_string(&ToApp::Parlays { parlays: vec![big; A_MESSAGE], all: true }).unwrap().len();
         assert!(most < pyr_proto::MAX_CONTROL_FRAME * 3 / 4, "{most} bytes");
+    }
+
+    /// A parlay that was left behind (the server stopped as its leg's prop came out, or its
+    /// step failed) goes on at the next sweep; so does one whose leg's prop is gone.
+    #[test]
+    fn a_parlay_left_behind_its_props_goes_on() {
+        let hub = hub();
+        give(&hub, "bob", 10_000);
+        let ids = open(&hub);
+        let (bills, jets, jazz) = (ids["nfl:1:win"], ids["nfl:2:win"], ids["nba:7:win"]);
+        place(&hub, "bob", &[(bills, 1), (jets, 1), (jazz, 0)], 1_000).unwrap();
+        let sweep = |hub: &Hub| {
+            let guard = hub.poker.state.lock();
+            hub.poker.props_sweep(hub, &guard);
+        };
+        // (The first sweep after the server starts looks, and finds nothing to do.)
+        assert!(hub.poker.parlays_behind.load(std::sync::atomic::Ordering::Relaxed));
+        sweep(&hub);
+        assert!(!hub.poker.parlays_behind.load(std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(mine(&hub, "bob")[0].won_of(), (0, 3));
+        // The Bills' prop is settled as kept, and the parlay never heard.
+        let mut kept: Prop = serde_json::from_str(&hub.db.prop(bills).unwrap()).unwrap();
+        (kept.state, kept.winner, kept.note) = (PropState::Settled, Some(1), "Bills 27, Chiefs 24".into());
+        kept.save(&hub).unwrap();
+        sweep(&hub);
+        assert_eq!(mine(&hub, "bob")[0].won_of(), (0, 3), "nothing says to look");
+        // The server starts again: it looks, and the leg is in.
+        hub.poker.parlays_behind.store(true, std::sync::atomic::Ordering::Relaxed);
+        sweep(&hub);
+        let t = mine(&hub, "bob").remove(0);
+        assert_eq!((t.state, t.won_of(), t.legs[0].state, t.legs[0].note.as_str()), (ParlayState::Open, (1, 3), LegState::Won, "Bills 27, Chiefs 24"));
+        // Twice over changes nothing.
+        hub.poker.parlays_behind.store(true, std::sync::atomic::Ordering::Relaxed);
+        sweep(&hub);
+        assert_eq!(mine(&hub, "bob")[0].won_of(), (1, 3));
+        // The Jets' prop is gone altogether: that leg is called off, and the parlay is down
+        // to the Jazz, who win.
+        hub.db.prop_delete(jets).unwrap();
+        hub.poker.parlays_behind.store(true, std::sync::atomic::Ordering::Relaxed);
+        sweep(&hub);
+        let t = mine(&hub, "bob").remove(0);
+        assert_eq!((t.state, t.won_of(), t.legs[1].state), (ParlayState::Open, (1, 2), LegState::Void));
+        settle(&hub, &[("nba:7:win", Some(0), "Jazz 132, Clippers 107")]);
+        let t = mine(&hub, "bob").remove(0);
+        assert_eq!((t.state, chips(&hub, "bob")), (ParlayState::Won, 9_000 + t.paid));
+        assert!((t.paid as f64 - 1_000.0 * t.legs[0].odds * t.legs[2].odds).abs() < 1.0);
     }
 
     /// A prop nobody bet on by itself, with a parlay's leg on it, plays out when its category

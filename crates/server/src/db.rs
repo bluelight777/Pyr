@@ -782,6 +782,25 @@ impl Db {
         st.query_map([prop_id as i64], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
     }
 
+    /// The props that are over with a leg of a parlay still riding on them (a leg that's
+    /// come out, or one that was missed: `props::parlay::catch_up` tells which).
+    pub fn props_over_under_parlays(&self) -> Vec<u64> {
+        let c = self.conn.lock();
+        let sql = "SELECT DISTINCT l.prop_id FROM parlay_legs l JOIN parlays p ON p.id = l.parlay_id JOIN props pr ON pr.id = l.prop_id \
+                   WHERE p.state = 'open' AND pr.state IN ('settled', 'void') ORDER BY l.prop_id";
+        let Ok(mut st) = c.prepare(sql) else { return Vec::new() };
+        st.query_map([], |r| r.get::<_, i64>(0)).map(|rows| rows.flatten().map(|id| id as u64).collect()).unwrap_or_default()
+    }
+
+    /// The parlays still riding with a leg on a prop that's no longer kept at all.
+    pub fn parlays_on_props_gone(&self) -> Vec<String> {
+        let c = self.conn.lock();
+        let sql = "SELECT DISTINCT p.data FROM parlays p JOIN parlay_legs l ON l.parlay_id = p.id LEFT JOIN props pr ON pr.id = l.prop_id \
+                   WHERE p.state = 'open' AND pr.id IS NULL ORDER BY p.id";
+        let Ok(mut st) = c.prepare(sql) else { return Vec::new() };
+        st.query_map([], |r| r.get(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
+    }
+
     /// Someone's parlays: the ones riding (newest first), then the latest that are over.
     pub fn parlays_of(&self, uid: &str, riding: usize, over: usize) -> Vec<String> {
         let c = self.conn.lock();

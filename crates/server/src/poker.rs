@@ -141,11 +141,14 @@ pub struct Poker {
     /// The feed's props as they were when last followed here (each one's `props::what_counts`):
     /// one that says nothing new is passed over without a look at the database.
     props_followed: Mutex<HashMap<String, u64>>,
+    /// Some parlay may be behind its props (`props::parlay::catch_up` looks at the next
+    /// sweep): when the server starts, and after a parlay's step failed.
+    parlays_behind: std::sync::atomic::AtomicBool,
 }
 
 impl Default for Poker {
     fn default() -> Self {
-        Poker { state: Mutex::new(State::default()), next_tourney: AtomicU64::new(1), next_id: AtomicU64::new(1), start: Instant::now(), last_people: Mutex::new(HashMap::new()), gm_proofs: Mutex::new(HashMap::new()), home_for_tests: std::sync::OnceLock::new(), props_swept: AtomicU64::new(0), props_feed: Mutex::new(props::FeedSeen::default()), props_followed: Mutex::new(HashMap::new()) }
+        Poker { state: Mutex::new(State::default()), next_tourney: AtomicU64::new(1), next_id: AtomicU64::new(1), start: Instant::now(), last_people: Mutex::new(HashMap::new()), gm_proofs: Mutex::new(HashMap::new()), home_for_tests: std::sync::OnceLock::new(), props_swept: AtomicU64::new(0), props_feed: Mutex::new(props::FeedSeen::default()), props_followed: Mutex::new(HashMap::new()), parlays_behind: std::sync::atomic::AtomicBool::new(true) }
     }
 }
 

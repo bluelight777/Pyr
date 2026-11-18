@@ -259,7 +259,10 @@ odds, room) and finds it by its legs' props when one is settled or called off (`
 from the same place a prop pays its bets): lost at the first leg that loses; a leg called off
 counts as 1.00 and what it pays is worked out again; paid when the last leg left wins. One
 that's lost goes on hearing of its other legs, for its ticket only: how each came out is
-written on it, nothing is paid and nothing said. A
+written on it, nothing is paid and nothing said. A parlay left behind its props (the server
+stopped as a prop came out, or a parlay's step failed) goes on from where it was at the next
+minute's sweep (`catch_up`: looked for when the server starts and after a step fails), and a
+leg on a prop that's no longer kept at all is called off. A
 parlay's result counts among the server's best at props, like a prop's. A prop with a parlay's
 leg on it plays out even when its category is turned off, as one with bets on it does.
 

@@ -1638,11 +1638,12 @@ How (decided while starting it):
       Shift and a click on an outcome anywhere else, Add to parlay on a prop's page.
       Checked: the sums (`pyr-poker`: what it pays, the cap whatever the stake and the odds,
       the book moving as a bet of the stake would, which picks clash, single bets shortening
-      a leg's odds and never lengthening them); the server (9 tests: paid when every leg wins,
+      a leg's odds and never lengthening them); the server (10 tests: paid when every leg wins,
       lost at the first that loses, a leg called off down to none left, what can be a leg,
       the parlay book moving and the props' own odds not, the cap, a prop with a leg on it
       playing out when its category is turned off, nobody pushing a prop's odds to parlay the
-      other side, a prop from before parlays getting its line from the feed); what the window
+      other side, a prop from before parlays getting its line from the feed, a parlay left
+      behind its props going on at the next sweep, and a list of forty in two messages); what the window
       asks is what Pyr reads; and the window on a test screen with a stand-in for Pyr
       (`rebuild/tools/release-0.16.0/harness4.py`): picks from three categories onto the slip,
       a pick that can't go in said why, the parlay placed and back as a ticket, tickets

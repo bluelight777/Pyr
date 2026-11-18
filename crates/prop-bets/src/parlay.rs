@@ -556,7 +556,10 @@ impl App {
                 let room = (r.right() - 10.0 - odds.size().x - x).max(60.0);
                 let pick = lines(pnt, &leg.pick, bold_font(13.5), if gone { MUTED } else { TEXT }, room, 1);
                 pnt.galley(pos2(x, r.top() + 2.0), pick, TEXT);
-                let under = leg_words(leg, now, t.state != ParlayState::Open);
+                // (Its prop's time as it is now, where this window has the prop: a game
+                // that's put back takes its picks' times with it.)
+                let closes = self.m.props.get(&leg.prop).map(|x| x.closes_at).unwrap_or(leg.closes_at);
+                let under = leg_words(leg, closes, now, t.state != ParlayState::Open);
                 let q = lines(pnt, &under, FontId::proportional(11.5), MUTED, room, 1);
                 pnt.galley(pos2(x, r.top() + 20.0), q, MUTED);
                 pnt.galley(pos2(r.right() - 4.0 - odds.size().x, r.center().y - odds.size().y / 2.0), odds, GOLD);
@@ -624,12 +627,13 @@ impl App {
     }
 }
 
-/// What's under a ticket's pick: its question, and how it came out once it has (`over`: the
-/// parlay itself is over, lost at another leg: a pick still to come out no longer counts).
-fn leg_words(leg: &ParlayLeg, now: i64, over: bool) -> String {
+/// What's under a ticket's pick: its question, and how it came out once it has (`closes_at`:
+/// when its prop stops taking bets; `over`: the parlay itself is over, lost at another leg: a
+/// pick still to come out no longer counts).
+fn leg_words(leg: &ParlayLeg, closes_at: i64, now: i64, over: bool) -> String {
     let what = match leg.state {
         LegState::Pending if over => "still to come out, and no longer counted".to_string(),
-        LegState::Pending if leg.closes_at > 0 && now < leg.closes_at => format!("closes in {}", words::countdown(leg.closes_at - now)),
+        LegState::Pending if closes_at > 0 && now < closes_at => format!("closes in {}", words::countdown(closes_at - now)),
         LegState::Pending => "waiting for its result".to_string(),
         LegState::Won => "won".to_string(),
         LegState::Lost => "lost".to_string(),
@@ -677,10 +681,11 @@ mod tests {
         assert_eq!(title(&t), "3-leg parlay");
         // A ticket's pick: waiting, in, and on a ticket that's lost already.
         let mut leg = ParlayLeg { question: "Who wins: Jets at Dolphins?".into(), closes_at: 10_000, ..Default::default() };
-        assert!(leg_words(&leg, 20_000, false).ends_with("waiting for its result"));
-        assert!(leg_words(&leg, 20_000, true).ends_with("no longer counted"));
+        assert!(leg_words(&leg, leg.closes_at, 20_000, false).ends_with("waiting for its result"));
+        assert!(leg_words(&leg, 20_000 + 90_000, 20_000, false).contains("closes in"), "the game was put back");
+        assert!(leg_words(&leg, leg.closes_at, 20_000, true).ends_with("no longer counted"));
         leg.state = LegState::Won;
         leg.note = "Dolphins 20, Jets 3".into();
-        assert!(leg_words(&leg, 20_000, true).ends_with("won: Dolphins 20, Jets 3"));
+        assert!(leg_words(&leg, leg.closes_at, 20_000, true).ends_with("won: Dolphins 20, Jets 3"));
     }
 }
