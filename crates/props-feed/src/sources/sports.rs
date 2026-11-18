@@ -224,6 +224,27 @@ const LINE_SCORE_WAIT: i64 = 3 * HOUR;
 /// A game has to have been final this long before it's settled (a score put right).
 const FINAL_FOR: i64 = 5 * MIN;
 
+/// A team that isn't one yet: a bracket's "TBD", "Winner of Game 3". (Found in the first
+/// real feed, Nov 18: "#8 Houston vs TBD", a tournament game whose other side the night
+/// before would decide.)
+pub fn unnamed(team: &str) -> bool {
+    let n = team.trim().to_lowercase();
+    n.is_empty()
+        || ["tbd", "tba", "to be determined", "to be announced", "unknown", "opponent tbd"].contains(&n.as_str())
+        || n.starts_with("tbd ")
+        || n.ends_with(" tbd")
+        || n.starts_with("winner ")
+        || n.starts_with("loser ")
+        || n.contains("winner of")
+        || n.contains("loser of")
+}
+
+/// The two sides of an event's name ("#8 Houston vs TBD": "Houston", "TBD").
+fn sides(event_name: &str) -> Vec<&str> {
+    let (a, h) = event_name.split_once(" at ").or_else(|| event_name.split_once(" vs ")).unwrap_or((event_name, ""));
+    [a, h].into_iter().map(|s| s.trim()).map(|s| if s.starts_with('#') { s.split_once(' ').map_or(s, |(_, rest)| rest) } else { s }).collect()
+}
+
 /// A team in a line of score: its letters ("BAL"), or its name where the scoreboard has none.
 fn letters(t: &Team) -> &str {
     if t.abbr.is_empty() { &t.name } else { &t.abbr }
@@ -495,6 +516,8 @@ impl Source for Sports {
             .filter(|g| g.stage == Stage::Before && g.time_set && g.start > now + NOT_AFTER && g.start < now + l.ahead)
             .filter(|g| !l.picky || g.home.rank.is_some() || g.away.rank.is_some() || g.line.is_some())
             .filter(|g| !mine.iter().any(|k| k.memo["event"] == g.id.as_str()))
+            // (Both teams known: not a bracket's game against whoever wins tonight.)
+            .filter(|g| ![&g.home.name, &g.home.full, &g.away.name, &g.away.full].into_iter().any(|n| unnamed(n)))
             .collect();
         // (The most of a day: ranked teams first, then games with lines, then the soonest.)
         fresh.sort_by_key(|g| (std::cmp::Reverse(g.home.rank.is_some() as u8 + g.away.rank.is_some() as u8), g.line.is_none(), g.start));
@@ -519,8 +542,14 @@ impl Source for Sports {
         let finals = memo["finals"].as_object().cloned().unwrap_or_default();
         let mut still: serde_json::Map<String, Value> = finals.iter().filter(|(id, _)| mine.iter().any(|k| k.memo["event"] == id.as_str())).map(|(id, at)| (id.clone(), at.clone())).collect();
         for k in mine {
-            let Some(g) = k.memo["event"].as_str().and_then(|id| games.iter().find(|g| g.id == id)) else { continue };
             let id = &k.prop.id;
+            // (One opened before both its teams were known is called off, whoever turns up:
+            // nobody could have known what they were betting on.)
+            if sides(&k.prop.event_name).into_iter().any(unnamed) {
+                out.call_off(id, "one of its teams wasn't known yet");
+                continue;
+            }
+            let Some(g) = k.memo["event"].as_str().and_then(|id| games.iter().find(|g| g.id == id)) else { continue };
             if g.stage != Stage::Final {
                 still.remove(&g.id);
             }
@@ -983,5 +1012,39 @@ mod tests {
         m.step(t1 + 3 * HOUR + 5 * MIN, &web(&game(true, "")), false);
         let half = m.feed(t1 + 4 * HOUR).props.into_iter().find(|p| p.id.ends_with(":half")).unwrap();
         assert_eq!((half.result.as_ref().unwrap().winner, half.result.as_ref().unwrap().note.as_str()), (None, "no line score"));
+    }
+
+    #[test]
+    fn a_game_against_nobody_yet_isn_t_opened_and_one_that_was_is_called_off() {
+        use crate::sources::cfbd::Cfbd;
+        assert!(unnamed("TBD") && unnamed(" tbd ") && unnamed("Winner of Game 3") && unnamed("") && unnamed("TBA"));
+        assert!(!unnamed("Houston") && !unnamed("Texas Tech") && !unnamed("Toledo") && !unnamed("St. John's"));
+        assert_eq!((sides("#8 Houston vs TBD"), sides("Akron at Massachusetts"), sides("UNLV vs #11 Kansas")), (vec!["Houston", "TBD"], vec!["Akron", "Massachusetts"], vec!["UNLV", "Kansas"]));
+        // As the first real feed had it (Nov 18): a tournament game whose other side isn't decided.
+        let games = r#"[
+          {"id": 378682, "season": 2027, "startDate": "2026-11-18T21:30:00.000Z", "startTimeTbd": false, "neutralSite": true, "status": "scheduled", "homeTeam": "TBD", "awayTeam": "Houston"},
+          {"id": 372836, "season": 2027, "startDate": "2026-11-19T02:30:00.000Z", "startTimeTbd": false, "neutralSite": true, "status": "scheduled", "homeTeam": "Kansas", "awayTeam": "UNLV", "venue": "Michelob ULTRA Arena"}]"#;
+        let ranks = r#"[{"season": 2027, "seasonType": "regular", "week": 3, "pollType": "ap", "team": "Houston", "ranking": 8}, {"season": 2027, "seasonType": "regular", "week": 3, "pollType": "ap", "team": "Kansas", "ranking": 11}]"#;
+        let web = Canned::new(&[("/rankings", ranks), ("/lines", "[]"), ("/games", games)]);
+        let mut m = Maker::new(State::default(), vec![Box::new(Sports::with("cbb", Box::new(Cfbd { key: Some("K".into()) })))]);
+        let t0 = when::at(2026, 11, 18, 2, 0);
+        // (Two looks, half a day apart, as the maker would.)
+        m.step(t0, &web, false);
+        m.step(t0 + 13 * HOUR, &web, false);
+        let feed = m.feed(t0 + 13 * HOUR);
+        assert!(!feed.props.is_empty() && feed.props.iter().all(|p| p.event == "cbb:c372836" && p.event_name == "UNLV vs #11 Kansas"), "{:?}", feed.props.iter().map(|p| p.id.as_str()).collect::<Vec<_>>());
+        // One that an earlier maker opened: called off the next time its league is looked at.
+        let mut odd = feed.props[0].clone();
+        odd.id = "cbb:c378682:win".into();
+        odd.event = "cbb:c378682".into();
+        odd.event_name = "#8 Houston vs TBD".into();
+        odd.q = "Who wins: #8 Houston vs TBD?".into();
+        odd.outcomes = vec!["Houston".into(), "TBD".into()];
+        m.state.props.insert(odd.id.clone(), Kept { prop: odd, by: "cbb".into(), memo: json!({"kind": "win", "league": "cbb", "event": "c378682", "day": "2026-11-18"}), done_at: 0 });
+        m.step(t0 + 14 * HOUR, &web, true);
+        let feed = m.feed(t0 + 14 * HOUR);
+        let off = feed.props.iter().find(|p| p.id == "cbb:c378682:win").unwrap().result.as_ref().unwrap();
+        assert_eq!((off.winner, off.note.as_str()), (None, "one of its teams wasn't known yet"));
+        assert!(feed.props.iter().filter(|p| p.event == "cbb:c372836").all(|p| p.result.is_none()));
     }
 }

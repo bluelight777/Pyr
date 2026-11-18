@@ -296,6 +296,26 @@ steam, sun, treasury, weather: the Weather Service's forecast, Steam and NASA's 
 them, which had never been read for real), and the six leagues each saying it has no key yet,
 as they should until Blue gives the three sites' keys with `pyr-props-key`.
 
+The three games' sites, read for real (Nov 18, 02:02 UTC, once Blue had given the three keys
+with `pyr-props-key`): all six leagues read at the first try, with nothing they couldn't read.
+From the feed itself, read in Blue's Chrome: 359 props, every one well formed (questions and
+outcomes within their lengths, chances adding up, a source and rules on each). The NFL: 14
+games (Colts at Texans on Thursday night to Packers at Rams the Wednesday after), each with
+its winner, total against 44.5, margin and halftime leader. The NBA: 13 games, winner, total
+and first-quarter leader. The NHL: 5 games (the ones The Odds API lists so far), winner and
+total, "Golden Knights", "Red Wings" and "Montréal Canadiens" named right. MLB: reads, no
+games (November). College football: 25 games with the bookmakers' spreads and totals. College
+basketball: 15 games, 27 of the two sports' with a ranked team ("UNLV vs #11 Kansas", "#3
+UConn at #12 Arizona"), Kansas favored by 16.5 as it should be (the spread's sign is as
+football's). So balldontlie's free key does read all three of its leagues. One thing wrong:
+"#8 Houston vs TBD", a tournament game whose other side wasn't decided, was opened with "TBD"
+for an outcome. A game with a side that isn't a team yet is no longer opened, and one that
+was is called off (`sports::unnamed`). That fix goes up by itself, without a Pyr release:
+`scripts/make-props-upload.sh` makes `dist/props-upload` (the maker, the set-up, a fresh
+certificate, no key), and `publish-props.cmd` on Blue's PC puts it on the VPS. Not seen yet:
+a game of any of them settling (tonight's are the first), and how soon CollegeFootballData
+calls one completed.
+
 0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
 Blue's pyr.log, Nov 17, "couldn't find the server "SERVER2.24.121.231": No such host is known".
 The bug server's address in `release-env.sh` had been read out of 0.13.28's program with the

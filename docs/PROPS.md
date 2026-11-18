@@ -123,15 +123,23 @@ NHL, college basketball: no longer used), Coinbase ticker and candles, Kraken ti
 USGS (query and count), SWPC flares and Kp, Launch Library 2, JPL, Treasury (both),
 Frankfurter, the Federal Register, drand.
 
-**The three games' sites (Nov 18): written from their documentation alone.** None answers
-without a key, so no answer of theirs has been read: the tests' answers are made to the field
-names and values their documentation shows. Each adapter takes everything as optional but a
+**The three games' sites (Nov 18): written from their documentation alone, then read for
+real the same night** once Blue had given their keys: all six leagues read at the first try
+(359 props in the feed, each well formed; `REBUILD.md` has what was in it). What that found:
+a tournament game against "TBD" had been opened; a game with a side that isn't a team yet is
+left alone now, and one already open is called off. Before the keys, no answer of theirs had
+been read: the tests' answers are made to the field names and values their documentation
+shows. Each adapter takes everything as optional but a
 game's id, start and teams, says so when games are there and none can be read (rather than
 opening nothing quietly), and `pyr-props-key` shows what a site's leagues read the moment its
-key is given. Not known until then: whether balldontlie's free key reads all three of its
-leagues; how soon CollegeFootballData marks a game completed and fills its line scores; which
-way CollegeBasketballData's spread is signed (taken as the football one's: negative, the home
-team favored).
+key is given. Known since: balldontlie's free key reads all three of its leagues, and
+CollegeBasketballData's spread is signed as football's (negative: the home team favored). Not
+seen yet: a game settling from any of the three, and how soon CollegeFootballData marks one
+completed and fills its line scores.
+
+A newer maker goes up without a Pyr release: `scripts/make-props-upload.sh` (the maker, the
+set-up and a fresh certificate in `dist/props-upload`; no key in it) and, on Blue's PC,
+`publish-props.cmd`.
 
 The Weather Service's daily climate report (forecast.weather.gov's product page, what settles
 the weather's props): its layout asked of the fetch tool line by line (the heading's "CLIMATE
