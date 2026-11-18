@@ -451,7 +451,15 @@ impl Poker {
                 if shares <= 1e-9 {
                     return Err(format!("You have nothing on {}.", outcome_name(&prop, outcome)));
                 }
-                let got = p::proceeds_for(&prop.q, prop.b, outcome, shares).max(0.0).floor() as u64;
+                // (A share never sells for more than a chip, nor for less than nothing: a sum
+                // that says otherwise has gone wrong, and nothing is done. 0.15.0's came out
+                // infinite on a bet far past the depth, and took the bet for a chip.)
+                let got = p::proceeds_for(&prop.q, prop.b, outcome, shares);
+                if !got.is_finite() || got < -1e-6 || got > shares + 1.0 {
+                    tracing::warn!(prop = id, outcome, shares, got, "a cash-out's sum went wrong");
+                    return Err("That can't be cashed out just now: it still pays out when it's settled.".into());
+                }
+                let got = got.max(0.0).floor() as u64;
                 prop.q[outcome] -= shares;
                 prop.holding(uid)[outcome] = (0.0, 0);
                 prop.pool = prop.pool.saturating_sub(got);
@@ -759,9 +767,11 @@ impl Poker {
         tell_house(hub, &told);
         // The casino's props about itself: made here, from its own count of rounds.
         self.props_about_casino(hub, st, now);
+        // (One called off here by hand is remembered until its betting would have closed:
+        // the feed lists it open till then, and forgotten sooner it would open again.)
         for (id, j) in hub.db.props_house_unbet_over(4000) {
             let Ok(prop) = serde_json::from_str::<Prop>(&j) else { continue };
-            if now - prop.settled_at > FORGET_AFTER_MS {
+            if now - prop.settled_at.max(prop.closes_at) > FORGET_AFTER_MS {
                 let _ = hub.db.prop_delete(id);
             }
         }
@@ -1406,6 +1416,67 @@ mod tests {
         let left: Vec<u64> = all.iter().filter(|v| hub.db.prop(v.id).is_some()).map(|v| v.id).collect();
         assert_eq!(left, vec![nfl.id]);
         assert_eq!(hub.db.prop_feed_map().len(), 1);
+    }
+
+    /// A manager calls one of the casino's own off, nobody having bet on it: it stays off
+    /// while the feed still lists it open (0.15.0 forgot it after two days, and the feed
+    /// opened it again).
+    #[test]
+    fn a_house_prop_called_off_by_hand_stays_off_while_the_feed_still_lists_it() {
+        let hub = hub();
+        auto(&hub, true, &[], 0);
+        let mut f = three();
+        for p in f.iter_mut() {
+            p.closes += 20 * 86_400_000;
+            p.starts = p.closes;
+        }
+        assert_eq!(hub.poker.props_follow(&hub, &feed(f.clone())).opened, 3);
+        let btc = list2(&hub, "bob").into_iter().find(|v| v.category == "crypto").unwrap();
+        ask2(&hub, "owner", true, ToServer::PropVoid { id: btc.id }).unwrap();
+        // Three days on: still in the book, and the feed doesn't open it again.
+        let mut kept: Prop = serde_json::from_str(&hub.db.prop(btc.id).unwrap()).unwrap();
+        kept.settled_at = pyr_proto::now_ms() - 3 * 86_400_000;
+        kept.save(&hub).unwrap();
+        {
+            let guard = hub.poker.state.lock();
+            hub.poker.props_sweep(&hub, &guard);
+        }
+        assert!(hub.db.prop(btc.id).is_some());
+        assert_eq!(hub.poker.props_follow(&hub, &feed(f.clone())), Followed::default());
+        assert_eq!(list2(&hub, "bob").iter().filter(|v| v.category == "crypto" && v.state == PropState::Open).count(), 0);
+        // Once its betting would have been closed for two days, it's forgotten like the rest.
+        kept.closes_at = pyr_proto::now_ms() - 3 * 86_400_000;
+        kept.save(&hub).unwrap();
+        {
+            let guard = hub.poker.state.lock();
+            hub.poker.props_sweep(&hub, &guard);
+        }
+        assert!(hub.db.prop(btc.id).is_none());
+    }
+
+    /// As it happened on 0.15.0 (Nov 18): everything on a 76% favourite, a hundred times the
+    /// market's depth. Its cash-out came out infinite ("worth 18,446,744,073,709,551,615"),
+    /// which took a chip and the whole bet from anyone who had a chip left.
+    #[test]
+    fn a_bet_far_past_the_depth_cashes_out_for_what_it_cost() {
+        let hub = hub();
+        give(&hub, "bob", 100_000_001);
+        auto(&hub, true, &[], 1_000_000);
+        let f = feed(vec![fp("cbb:1:win", "cbb", "Who wins: Seattle U at California Baptist?", &["Seattle U", "California Baptist"], &[0.76, 0.24])]);
+        assert_eq!(hub.poker.props_follow(&hub, &f).opened, 1);
+        let prop = list2(&hub, "bob").remove(0);
+        let Some(ToApp::PropNote { text, .. }) = ask2(&hub, "bob", false, ToServer::PropBet { id: prop.id, outcome: 0, chips: 100_000_000, min_shares: 0.0 }).unwrap() else { panic!() };
+        assert!(text.contains("it pays 100,274,436 if it wins"), "{text}");
+        assert_eq!(chips(&hub, "bob"), 1);
+        // What it's worth, as the window works it out: what it cost (nobody else has bet).
+        let mine = get2(&hub, "bob", prop.id);
+        let worth = mine.worth(&mine.mine[0]);
+        assert!((worth - 100_000_000.0).abs() < 1.0, "{worth}");
+        let Some(ToApp::PropNote { chips: back, .. }) = ask2(&hub, "bob", false, ToServer::PropCashOut { id: prop.id, outcome: 0 }).unwrap() else { panic!() };
+        assert!((99_999_999..=100_000_000).contains(&back), "{back}");
+        assert_eq!(chips(&hub, "bob") as i64, 1 + back);
+        let after = get2(&hub, "bob", prop.id);
+        assert!(after.mine.is_empty() && (after.prices()[0] - 0.76).abs() < 1e-6, "{:?}", after.prices());
     }
 
     fn get2(hub: &Hub, uid: &str, id: u64) -> PropView {

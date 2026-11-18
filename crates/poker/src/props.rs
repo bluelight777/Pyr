@@ -147,10 +147,26 @@ pub fn shares_for(q: &[f64], b: f64, i: usize, chips: f64) -> f64 {
     b * (x - p.ln() + (-(1.0 - p) * (-x).exp()).ln_1p())
 }
 
-/// Chips that selling `shares` of outcome `i` back brings: `-b ln(1 + p_i (e^(-s/b) - 1))`.
+/// Chips that selling `shares` of outcome `i` back brings: `-b ln(1 + p_i (e^(-s/b) - 1))`,
+/// worked out from how the other outcomes stand against this one (`L = ln Σ e^((q_j - q_i)/b)`
+/// over the others: `b (ln(1 + e^L) - ln(e^L + e^(-s/b)))`). Written from the price it loses
+/// what's left of the others once this one's chance is nearer 1 than a number can say (a bet
+/// a hundred times the depth), and 0.15.0 came out with infinity there: a cash-out "worth
+/// 18,446,744,073,709,551,615".
 pub fn proceeds_for(q: &[f64], b: f64, i: usize, shares: f64) -> f64 {
-    let p = prices(q, b)[i];
-    -b * (p * (-shares / b).exp_m1()).ln_1p()
+    let l = ln_sum_exp(q.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, x)| (x - q[i]) / b));
+    b * (ln_add_exp(0.0, l) - ln_add_exp(l, -shares / b))
+}
+
+/// `ln(e^a + e^b)`, without leaving the logarithms (either may be minus infinity).
+fn ln_add_exp(a: f64, b: f64) -> f64 {
+    let (hi, lo) = if a >= b { (a, b) } else { (b, a) };
+    if lo == f64::NEG_INFINITY { hi } else { hi + (lo - hi).exp().ln_1p() }
+}
+
+/// `ln Σ e^x` (minus infinity for none).
+fn ln_sum_exp(xs: impl Iterator<Item = f64>) -> f64 {
+    xs.fold(f64::NEG_INFINITY, ln_add_exp)
 }
 
 /// The most the market maker can lose on a prop of `n` outcomes and depth `b`.
@@ -420,6 +436,48 @@ mod tests {
         let s = shares_for(&q, b, 0, 4_000.0);
         q[0] += s;
         assert!((proceeds_for(&q, b, 0, s) - 4_000.0).abs() < 1e-6);
+    }
+
+    /// As it happened on 0.15.0 (Nov 18): 100,000,000 on a 76% favourite, in a market a million
+    /// deep. It pays 100,274,436 if it wins, and it's worth what it cost: not infinity.
+    #[test]
+    fn a_bet_far_past_the_depth_sells_back_for_what_it_cost() {
+        let b = 1_000_000.0;
+        let mut q = q_from_prior(&[0.76, 0.24], b);
+        let s = shares_for(&q, b, 0, 100_000_000.0);
+        assert_eq!(s.floor(), 100_274_436.0);
+        q[0] += s;
+        assert_eq!(prices(&q, b)[0], 1.0, "its chance is nearer 1 than a number can say");
+        let back = proceeds_for(&q, b, 0, s);
+        assert!((back - 100_000_000.0).abs() < 1e-3, "{back}");
+        // Half of it now, the rest after: the same in all.
+        let first = proceeds_for(&q, b, 0, s / 2.0);
+        q[0] -= s / 2.0;
+        let rest = proceeds_for(&q, b, 0, s / 2.0);
+        assert!((first + rest - 100_000_000.0).abs() < 1e-3, "{first} + {rest}");
+        // Whatever the odds and however big the bet: what was paid comes back, a share never
+        // sells for more than a chip, and nothing sells for less than nothing.
+        for prior in [vec![0.5, 0.5], vec![0.02, 0.98], vec![0.98, 0.02], vec![0.1, 0.2, 0.3, 0.4], vec![0.02, 0.02, 0.02, 0.02, 0.02, 0.9]] {
+            for b in [10_000.0, 100_000.0, 1_000_000.0] {
+                for chips in [10.0, 777.0, 40_000.0, 5_000_000.0, 100_000_000.0] {
+                    for i in 0..prior.len() {
+                        let mut q = q_from_prior(&prior, b);
+                        let s = shares_for(&q, b, i, chips);
+                        q[i] += s;
+                        let back = proceeds_for(&q, b, i, s);
+                        assert!(back.is_finite() && (back - chips).abs() <= chips * 1e-9 + 1e-6, "{prior:?}, b {b}, {chips} on {i}: {back} back");
+                        for part in [s * 0.001, s * 0.5, s] {
+                            let got = proceeds_for(&q, b, i, part);
+                            assert!(got >= 0.0 && got <= part + 1e-6, "{prior:?}, b {b}, {chips} on {i}: {part} shares sell for {got}");
+                        }
+                        // (And someone else's shares of another outcome, on a market pushed that far.)
+                        let j = (i + 1) % prior.len();
+                        let got = proceeds_for(&q, b, j, 5_000.0);
+                        assert!(got.is_finite() && got >= 0.0 && got <= 5_000.0, "{got}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
