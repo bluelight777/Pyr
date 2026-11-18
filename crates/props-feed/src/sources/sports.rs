@@ -110,6 +110,12 @@ pub trait Scoreboard: Send + Sync {
     fn settles(&self, _league: &League, _kind: &str) -> bool {
         true
     }
+    /// How long a game has to have been final before it's settled: a few minutes where
+    /// games are followed as they're played (a score put right); none where the scoreboard
+    /// only ever says how a game ended.
+    fn final_for(&self, _league: &League) -> i64 {
+        FINAL_FOR
+    }
 }
 
 /// So many calls a month, spent no faster than the month goes by (with `ahead` to start
@@ -203,6 +209,8 @@ pub fn league(cat: &str) -> Option<&'static League> {
     LEAGUES.iter().find(|l| l.cat == cat)
 }
 
+/// Why a prop that needs a game's line score can't be settled without one.
+const NO_LINE_SCORE: &str = "no line score";
 /// A game is opened only this long before it starts at least.
 const NOT_AFTER: i64 = 20 * MIN;
 /// A game that hasn't ended this long after it first could have is asked about a few times
@@ -210,6 +218,9 @@ const NOT_AFTER: i64 = 20 * MIN;
 /// use a month's calls up.
 const LONG: i64 = 8 * HOUR;
 const SELDOM: i64 = 6 * HOUR;
+/// A final game's line score that isn't in yet is waited for this long before the props
+/// that need it are called off.
+const LINE_SCORE_WAIT: i64 = 3 * HOUR;
 /// A game has to have been final this long before it's settled (a score put right).
 const FINAL_FOR: i64 = 5 * MIN;
 
@@ -361,7 +372,7 @@ pub fn settle(l: &League, memo: &Value, g: &Game) -> Result<(usize, String), Str
     // What each side scored in the first `n` periods.
     let first = |n: usize| -> Option<(i64, i64)> { (g.away.periods.len() >= n && g.home.periods.len() >= n && n > 0).then(|| (g.away.periods[..n].iter().sum(), g.home.periods[..n].iter().sum())) };
     let lead = |x: Option<(i64, i64)>, what: &str| match x {
-        None => Err("no line score".to_string()),
+        None => Err(NO_LINE_SCORE.to_string()),
         Some((a, h)) => Ok((if a > h { 0 } else if h > a { 1 } else { 2 }, format!("{} {a}, {} {h} {what}", letters(&g.away), letters(&g.home)))),
     };
     match memo["kind"].as_str().unwrap_or("") {
@@ -390,7 +401,7 @@ pub fn settle(l: &League, memo: &Value, g: &Game) -> Result<(usize, String), Str
         "half" => lead(first((l.periods / 2) as usize), "at the half"),
         "q1" => lead(first(1), "after one"),
         "ot" => Ok((if g.period > l.periods { 0 } else { 1 }, score)),
-        "first" => first(1).map(|(a, h)| (if a + h > 0 { 0 } else { 1 }, format!("{} {a}, {} {h} after one inning", letters(&g.away), letters(&g.home)))).ok_or_else(|| "no line score".to_string()),
+        "first" => first(1).map(|(a, h)| (if a + h > 0 { 0 } else { 1 }, format!("{} {a}, {} {h} after one inning", letters(&g.away), letters(&g.home)))).ok_or_else(|| NO_LINE_SCORE.to_string()),
         other => Err(format!("a kind of prop this doesn't know ({other})")),
     }
 }
@@ -533,12 +544,16 @@ impl Source for Sports {
                 Stage::Final => {
                     let since = finals.get(&g.id).and_then(|v| v.as_i64()).unwrap_or(now);
                     still.insert(g.id.clone(), json!(since));
-                    if now - since < FINAL_FOR {
+                    if now - since < b.final_for(l) {
                         out.moved.push(Moved { id: id.clone(), detail: Some(format!("Final: {}", final_score(l, g))), ..Default::default() });
                         continue;
                     }
                     match settle(l, &k.memo, g) {
                         Ok((winner, note)) => out.settle(id, winner, note),
+                        // (It may yet come: the score is in before the quarters, some places.)
+                        Err(why) if why == NO_LINE_SCORE && now - since < LINE_SCORE_WAIT => {
+                            out.moved.push(Moved { id: id.clone(), detail: Some(format!("Final: {}", final_score(l, g))), ..Default::default() });
+                        }
                         Err(why) => out.call_off(id, why),
                     }
                 }
@@ -853,7 +868,7 @@ mod tests {
         assert_eq!((feed.props[1].outcomes.clone(), feed.props[1].source.as_str()), (vec!["Canadiens".to_string(), "Rangers".into()], "The Odds API"));
         assert_eq!(feed.props[2].outcomes, vec!["Over 5.5".to_string(), "Under 5.5".into()]);
         // The night, a look every five minutes as the service runs: the scores are asked for
-        // only once a game could be over, and then every fifty minutes.
+        // only once a game should be over (and every fifty minutes after, were it not).
         let (mut scores, mut lists) = (Vec::new(), 0);
         let mut now = t0;
         while now < t0 + 12 * HOUR {
@@ -864,7 +879,7 @@ mod tests {
                 if a.contains("/scores") { scores.push(when::hhmm_utc(now)) } else { lists += 1 }
             }
         }
-        assert_eq!(scores, vec!["02:30 UTC", "03:20 UTC", "04:10 UTC", "05:10 UTC", "06:00 UTC"], "five looks for a night of two games");
+        assert_eq!(scores, vec!["03:00 UTC", "05:30 UTC"], "two looks for a night of two games: each once it should be over, settled as it's seen");
         assert!(lists <= 3, "{lists} lists (they cost nothing, but aren't needed often)");
         let feed = m.feed(now);
         let came: Vec<(&str, Option<usize>, &str)> = feed.props.iter().map(|p| (p.id.as_str(), p.result.as_ref().unwrap().winner, p.result.as_ref().unwrap().note.as_str())).collect();
@@ -877,8 +892,8 @@ mod tests {
                 ("nhl:ob612:win", Some(0), "Maple Leafs 4, Mammoth 1")
             ]
         );
-        // Ten of the month's credits (two a look).
-        assert_eq!(Budget::used(&m.state.sources["nhl"].memo["board"], now), 5);
+        // Four of the month's credits (two a look).
+        assert_eq!(Budget::used(&m.state.sources["nhl"].memo["board"], now), 2);
     }
 
     #[test]
@@ -920,11 +935,53 @@ mod tests {
             }
         }
         let kickoff = when::at(2026, 11, 21, 17, 0);
-        assert!(first >= kickoff + 170 * MIN && first <= kickoff + 3 * HOUR + 30 * MIN, "first asked at {}", when::iso(first));
+        assert!(first >= kickoff + 185 * MIN && first <= kickoff + 225 * MIN, "first asked at {}", when::iso(first));
         assert!(last_often > kickoff + 10 * HOUR, "{}", when::iso(last_often));
         assert!((30..=48).contains(&about), "{about} looks at its day");
         assert!(all < 75, "{all} calls in four days");
         assert_eq!(Budget::used(&m.state.sources["cfb"].memo["board"], now), all as i64);
         assert!(m.feed(now).props.iter().all(|p| p.result.is_none()));
+    }
+
+    #[test]
+    fn a_line_score_that_comes_late_is_waited_for_before_its_prop_is_called_off() {
+        use crate::sources::cfbd::Cfbd;
+        let game = |done: bool, quarters: &str| {
+            format!(
+                r#"[{{"id": 401752900, "season": 2026, "week": 13, "seasonType": "regular", "startDate": "2026-11-21T17:00:00.000Z", "startTimeTBD": false, "completed": {done},
+                "homeTeam": "Alabama", "homePoints": {}, "homeLineScores": {}, "awayTeam": "Auburn", "awayPoints": {}, "awayLineScores": {}}}]"#,
+                if done { "27" } else { "null" },
+                if quarters.is_empty() { "null" } else { "[7, 3, 10, 7]" },
+                if done { "20" } else { "null" },
+                if quarters.is_empty() { "null" } else { "[0, 10, 3, 7]" }
+            )
+        };
+        let lines = r#"[{"id": 401752900, "lines": [{"provider": "consensus", "spread": -9.5, "overUnder": 47.5}]}]"#;
+        let web = |games: &str| Canned::new(&[("/rankings", "[]"), ("/lines", lines), ("/games", games)]);
+        let mut m = Maker::new(State::default(), vec![Box::new(Sports::with("cfb", Box::new(Cfbd { key: Some("K".into()) })))]);
+        let t0 = when::at(2026, 11, 20, 12, 0);
+        assert!(m.step(t0, &web(&game(false, "")), false));
+        // Over, the score in and the quarters not: what the score settles comes out as it's
+        // seen (no wait where nothing is said until a game is over); the half waits.
+        let t1 = when::at(2026, 11, 21, 20, 30);
+        m.step(t1, &web(&game(true, "")), false);
+        let feed = m.feed(t1);
+        let came = |f: &pyr_proto::props_feed::Feed| -> Vec<(String, Option<Option<usize>>)> { f.props.iter().map(|p| (p.id.rsplit(':').next().unwrap().to_string(), p.result.as_ref().map(|r| r.winner))).collect() };
+        assert_eq!(came(&feed), vec![("half".to_string(), None), ("spread".into(), Some(Some(0))), ("total".into(), Some(Some(1))), ("win".into(), Some(Some(1)))]);
+        assert_eq!(feed.props[0].detail, "Final: Alabama 27, Auburn 20");
+        // The quarters come an hour on: Auburn 10, Alabama 10 at the half.
+        let t2 = t1 + HOUR;
+        m.step(t2, &web(&game(true, "q")), false);
+        let half = m.feed(t2).props.into_iter().find(|p| p.id.ends_with(":half")).unwrap();
+        assert_eq!((half.result.as_ref().unwrap().winner, half.result.as_ref().unwrap().note.as_str()), (Some(2), "Auburn 10, Alabama 10 at the half"));
+        // And where they never come, it's called off after three hours, not before.
+        let mut m = Maker::new(State::default(), vec![Box::new(Sports::with("cfb", Box::new(Cfbd { key: Some("K".into()) })))]);
+        m.step(t0, &web(&game(false, "")), false);
+        m.step(t1, &web(&game(true, "")), false);
+        m.step(t1 + 2 * HOUR, &web(&game(true, "")), false);
+        assert!(m.feed(t1 + 2 * HOUR).props.iter().find(|p| p.id.ends_with(":half")).unwrap().result.is_none());
+        m.step(t1 + 3 * HOUR + 5 * MIN, &web(&game(true, "")), false);
+        let half = m.feed(t1 + 4 * HOUR).props.into_iter().find(|p| p.id.ends_with(":half")).unwrap();
+        assert_eq!((half.result.as_ref().unwrap().winner, half.result.as_ref().unwrap().note.as_str()), (None, "no line score"));
     }
 }

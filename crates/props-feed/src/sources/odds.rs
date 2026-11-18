@@ -7,7 +7,8 @@
 //!
 //! Its free plan: 500 credits a month. The list of games to come costs none; the scores,
 //! with the last three days' results, cost two a look: 230 looks a month ([`Budget`]), so a
-//! night's games are asked about every fifty minutes once the first could be over. It says
+//! game is asked about once it should be over (two hours and three quarters after it
+//! starts), every fifty minutes after that until it is, and settled as it's seen. It says
 //! who scored what and nothing of how (no periods, no overtime): props that need those
 //! aren't opened from it. Its terms (Aug 31 2026) allow showing its data in an app,
 //! commercial or not, and forbid passing it on as a data product of its own. The key goes
@@ -77,9 +78,15 @@ impl Scoreboard for Odds {
         50 * MIN
     }
 
-    /// It says how a game ended: asked once a game could be over.
+    /// It says how a game ended: asked once a game should be over (a hockey game is two and
+    /// a half hours, a little more with overtime).
     fn first_look(&self, _league: &League) -> i64 {
-        145 * MIN
+        165 * MIN
+    }
+
+    /// Over is over, where nothing is said until then.
+    fn final_for(&self, _league: &League) -> i64 {
+        0
     }
 
     /// The final score is all it gives: who won, the total, the margin.

@@ -158,9 +158,15 @@ impl Scoreboard for Cfbd {
         if league.cat == "cfb" { 15 * MIN } else { 30 * MIN }
     }
 
-    /// It says how a game ended, not how it's going: asked once a game could be over.
+    /// It says how a game ended, not how it's going: asked once a game should be over
+    /// (football's run to three hours and a half, basketball's to a little over two).
     fn first_look(&self, league: &League) -> i64 {
-        if league.cat == "cfb" { 3 * HOUR } else { 115 * MIN }
+        if league.cat == "cfb" { 200 * MIN } else { 125 * MIN }
+    }
+
+    /// Over is over, where nothing is said until then.
+    fn final_for(&self, _league: &League) -> i64 {
+        0
     }
 }
 

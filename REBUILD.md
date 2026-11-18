@@ -267,9 +267,11 @@ again, they came out the same). On Blue's PC the ten files that changed were put
 in both cases with the key helper added: a key given through it lands in its own closed file,
 the maker starts again and says which sites have their keys, and the key is in nothing else
 that's written or said. A night of hockey as the maker would run it, a look every five minutes
-for twelve hours: the scores asked for five times, both games settled (the test that found a
-final game's five-minute wait was being forgotten between looks, which would have left it
-unsettled for good).
+for twelve hours: the scores asked for twice, each game once it should be over, and settled as
+it's seen (where a scoreboard only says how games ended there's no five-minute wait; the first
+pace tried asked five times, and its test found a final game's wait being forgotten between
+looks, which would have left it unsettled for good). A line score that comes after the score is
+waited for three hours before the halftime leader is called off for want of it.
 
 Not tried, and only the VPS can say: every source from the VPS's address; the three games'
 sites at all (no answer of theirs has been read: whether balldontlie's free key reads all

@@ -89,8 +89,8 @@ and says so in `status.json`; everything else in the feed needs no key.
 | Site | Leagues | Its free plan | How it's asked |
 |---|---|---|---|
 | balldontlie (app.balldontlie.io) | NFL, NBA, MLB | 5 requests a minute; games with scores by quarter or inning; no lines | a request per league every 5 minutes while its games are on (13 s between two requests), every half hour else |
-| CollegeFootballData (collegefootballdata.com/key; the same key at CollegeBasketballData) | college football, college basketball | 1,000 calls a month for both; results, line scores, lines, rankings; no games under way | what's coming twice a day, lines and the Top 25 with it; a day's games once the first could be over (3 h, 1 h 55 min), then every 15 and 30 minutes; football keeps to 440 calls a month, basketball to 480 |
-| The Odds API (the-odds-api.com) | NHL | 500 credits a month; the list of games free, the scores 2 a look | the list every 6 hours; the scores once a game could be over (2 h 25 min), then every 50 minutes: 230 looks a month at most |
+| CollegeFootballData (collegefootballdata.com/key; the same key at CollegeBasketballData) | college football, college basketball | 1,000 calls a month for both; results, line scores, lines, rankings; no games under way | what's coming twice a day, lines and the Top 25 with it; a day's games once the first should be over (3 h 20 min after it starts, 2 h 5 min), then every 15 and 30 minutes until they are, each settled as it's seen (the halftime leader waits up to three hours for a line score); football keeps to 440 calls a month, basketball to 480 |
+| The Odds API (the-odds-api.com) | NHL | 500 credits a month; the list of games free, the scores 2 a look | the list every 6 hours; the scores once a game should be over (2 h 45 min after it starts), then every 50 minutes until it is, settled as it's seen: two looks for a night of two games in the test, 230 a month at most |
 
 A month's calls are counted out as the month goes by (`sports::Budget`, kept in the state
 file), so a busy day can't spend what the month's end needs; a game the site never calls over
