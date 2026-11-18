@@ -1,10 +1,13 @@
 //! `pyr-props`: the props feed's maker (see the library's notes and `docs/PROPS.md`).
 //!
-//!   pyr-props run --state DIR --out DIR --key FILE --cert FILE
+//!   pyr-props run --state DIR --out DIR --key FILE --cert FILE [--keys DIR]
 //!       The service: asks each source on its own clock, and writes `feed.json` (signed) and
 //!       `status.json` into `--out` whenever something changed (and every twenty minutes
 //!       anyway). What it has opened is kept in `--state`, so a restart loses nothing.
-//!   pyr-props check [--only nfl,crypto]
+//!       `--keys`: the folder with the keys of the sites the games come from (a file each:
+//!       balldontlie, collegefootballdata, the-odds-api); a league whose site has no key
+//!       yet says so and opens nothing.
+//!   pyr-props check [--only nfl,crypto] [--keys DIR]
 //!       Asks every source once, from nothing, and says what each would open and what it
 //!       couldn't read. Writes nothing. For setting up, and for when a source changes shape.
 //!   pyr-props keygen --out FILE
@@ -62,6 +65,12 @@ enum Cmd {
         /// One look at every source, the files written, and done.
         #[arg(long)]
         once: bool,
+        /// The folder of the games' sites' keys (a file each, named for its site).
+        #[arg(long)]
+        keys: Option<PathBuf>,
+        /// The games from ESPN's scoreboard instead (its terms forbid it: only on Blue's say).
+        #[arg(long)]
+        espn: bool,
     },
     /// Asks every source once and says what it would open. Writes nothing.
     Check {
@@ -69,6 +78,10 @@ enum Cmd {
         only: Vec<String>,
         #[arg(long, default_value = "")]
         contact: String,
+        #[arg(long)]
+        keys: Option<PathBuf>,
+        #[arg(long)]
+        espn: bool,
     },
     /// Makes a feed key.
     Keygen {
@@ -114,8 +127,8 @@ fn load_key(path: &Path) -> Result<Identity, String> {
 fn main() {
     let cli = Cli::parse();
     if let Err(e) = match cli.cmd {
-        Cmd::Run { state, out, key, cert, contact, only, once } => run(&state, &out, &key, &cert, &contact, &only, once),
-        Cmd::Check { only, contact } => check(&only, &contact),
+        Cmd::Run { state, out, key, cert, contact, only, once, keys, espn } => run(&state, &out, &key, &cert, &contact, &only, once, &sources::Keys::load(keys.as_deref()), espn),
+        Cmd::Check { only, contact, keys, espn } => check(&only, &contact, &sources::Keys::load(keys.as_deref()), espn),
         Cmd::Keygen { out } => keygen(&out),
         Cmd::Certify { release_key, key, days, out } => certify(&release_key, &key, days, &out),
         Cmd::Verify { key, cert, release_key } => verify(&key, &cert, release_key.as_deref()),
@@ -203,10 +216,10 @@ fn status(file: &Path) -> Result<(), String> {
     }
 }
 
-fn check(only: &[String], contact: &str) -> Result<(), String> {
+fn check(only: &[String], contact: &str, keys: &sources::Keys, espn: bool) -> Result<(), String> {
     let web = Web::new(contact);
     let now = pyr_proto::now_ms();
-    let mut m = Maker::new(State::default(), sources::all(only));
+    let mut m = Maker::new(State::default(), sources::all(only, keys, espn));
     if m.sources.is_empty() {
         return Err("no such source".into());
     }
@@ -235,7 +248,8 @@ fn check(only: &[String], contact: &str) -> Result<(), String> {
     if bad > 0 { Err(format!("{bad} of {} sources couldn't be read", m.sources.len())) } else { Ok(()) }
 }
 
-fn run(state_dir: &Path, out: &Path, key: &Path, cert: &Path, contact: &str, only: &[String], once: bool) -> Result<(), String> {
+#[allow(clippy::too_many_arguments)]
+fn run(state_dir: &Path, out: &Path, key: &Path, cert: &Path, contact: &str, only: &[String], once: bool, keys: &sources::Keys, espn: bool) -> Result<(), String> {
     let key = load_key(key)?;
     let cert = load_cert(cert)?;
     if cert.key != key.user_id() {
@@ -250,8 +264,16 @@ fn run(state_dir: &Path, out: &Path, key: &Path, cert: &Path, contact: &str, onl
         Err(e) => return Err(format!("reading {}: {e}", state_file.display())),
     };
     let web = Web::new(contact);
-    let mut m = Maker::new(state, sources::all(only));
+    let mut m = Maker::new(state, sources::all(only, keys, espn));
     eprintln!("{} pyr-props {}: {} sources, {} props kept, the feed signed by {}", when::iso(pyr_proto::now_ms()), env!("CARGO_PKG_VERSION"), m.sources.len(), m.state.props.len(), key.user_id());
+    // (Which sites have their keys: never the keys.)
+    let have = [("balldontlie", keys.balldontlie.is_some()), ("collegefootballdata", keys.collegefootballdata.is_some()), ("the-odds-api", keys.the_odds_api.is_some())];
+    if espn {
+        eprintln!("{} the games: from ESPN's scoreboard (--espn)", when::iso(pyr_proto::now_ms()));
+    } else {
+        let words: Vec<String> = have.iter().map(|(site, has)| format!("{site} {}", if *has { "has its key" } else { "has no key yet" })).collect();
+        eprintln!("{} the games' sites: {}", when::iso(pyr_proto::now_ms()), words.join(", "));
+    }
     let mut written = 0i64;
     let mut warned = 0i64;
     loop {

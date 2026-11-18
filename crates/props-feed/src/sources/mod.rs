@@ -5,23 +5,66 @@ use serde_json::Value;
 use crate::engine::Source;
 
 pub mod art;
+pub mod bdl;
+pub mod cfbd;
 pub mod crypto;
 pub mod espn;
+pub mod odds;
 pub mod science;
 pub mod sports;
 pub mod steam;
 pub mod topical;
 pub mod weather;
 
-/// Every source, as the service runs them (`only`: just the ones named, for `check`).
-pub fn all(only: &[String]) -> Vec<Box<dyn Source>> {
+/// The keys of the sites the games come from: each a file of its site's name in the keys
+/// folder (`pyr-props-key` on the server puts them there), holding the key and nothing
+/// else. A site with no key yet is asked nothing, and its leagues say so.
+#[derive(Clone, Default)]
+pub struct Keys {
+    pub balldontlie: Option<String>,
+    pub collegefootballdata: Option<String>,
+    pub the_odds_api: Option<String>,
+}
+
+/// The sites' names (their keys' file names), with the leagues each is for.
+pub const KEYED: [(&str, &str); 3] = [("balldontlie", "nfl,nba,mlb"), ("collegefootballdata", "cfb,cbb"), ("the-odds-api", "nhl")];
+
+impl Keys {
+    /// The keys in a folder (none for a file that isn't there, or holds something that
+    /// can't be a key).
+    pub fn load(dir: Option<&std::path::Path>) -> Keys {
+        let read = |name: &str| -> Option<String> {
+            let text = std::fs::read_to_string(dir?.join(name)).ok()?;
+            let key = text.trim();
+            (key.len() >= 8 && key.len() <= 200 && key.bytes().all(|b| b.is_ascii_graphic())).then(|| key.to_string())
+        };
+        Keys { balldontlie: read("balldontlie"), collegefootballdata: read("collegefootballdata"), the_odds_api: read("the-odds-api") }
+    }
+}
+
+/// Every source, as the service runs them (`only`: just the ones named, for `check`). The
+/// games come from the sites `keys` are for; `espn`: from ESPN's scoreboard instead, which
+/// nothing asks for unless that's said (see `sports`).
+pub fn all(only: &[String], keys: &Keys, espn: bool) -> Vec<Box<dyn Source>> {
+    use sports::{Scoreboard, Sports};
+    let league = |cat: &str| -> Box<dyn Source> {
+        if espn {
+            return Box::new(Sports::new(cat));
+        }
+        let board: Box<dyn Scoreboard> = match cat {
+            "nfl" | "nba" | "mlb" => Box::new(bdl::Bdl { key: keys.balldontlie.clone() }),
+            "cfb" | "cbb" => Box::new(cfbd::Cfbd { key: keys.collegefootballdata.clone() }),
+            _ => Box::new(odds::Odds { key: keys.the_odds_api.clone() }),
+        };
+        Box::new(Sports::with(cat, board))
+    };
     let every: Vec<Box<dyn Source>> = vec![
-        Box::new(sports::Sports::new("nfl")),
-        Box::new(sports::Sports::new("nba")),
-        Box::new(sports::Sports::new("nhl")),
-        Box::new(sports::Sports::new("mlb")),
-        Box::new(sports::Sports::new("cfb")),
-        Box::new(sports::Sports::new("cbb")),
+        league("nfl"),
+        league("nba"),
+        league("nhl"),
+        league("mlb"),
+        league("cfb"),
+        league("cbb"),
         Box::new(crypto::Crypto),
         Box::new(weather::Weather),
         Box::new(science::Quakes),
@@ -156,11 +199,15 @@ mod tests {
         assert_eq!(dollars(65_231.19), "$65,231");
         assert_eq!(dollars(2.31), "$2.31");
         assert_eq!(dollars(0.1523), "$0.1523");
-        let names: Vec<&str> = all(&[]).iter().map(|s| s.name()).collect();
+        let names: Vec<&str> = all(&[], &Keys::default(), false).iter().map(|s| s.name()).collect();
         let mut unique = names.clone();
         unique.sort();
         unique.dedup();
         assert_eq!(unique.len(), names.len(), "every source has its own name");
-        assert_eq!(all(&["crypto".to_string()]).len(), 1);
+        assert_eq!(all(&["crypto".to_string()], &Keys::default(), false).len(), 1);
+        // The leagues each key is for are leagues there are.
+        for (_, leagues) in KEYED {
+            assert!(leagues.split(',').all(|l| names.contains(&l)), "{leagues}");
+        }
     }
 }

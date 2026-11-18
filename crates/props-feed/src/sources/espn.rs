@@ -3,8 +3,9 @@
 //! (`samples/espn-*.json`); everything in it is taken as optional but a game's id, its start
 //! and its two teams.
 //!
-//! Blue chose this feed (Nov 17) knowing Disney's terms of use forbid automated access. It's
-//! behind `sports::Scoreboard` so another source can take its place without touching the rest.
+//! Not used unless `--espn` is said (Blue, Nov 18 2026: other sites that allow it, since
+//! Disney's terms of use forbid automated access). It's one `sports::Scoreboard` among the
+//! others, kept for its tests and should Blue ever say otherwise.
 
 use serde_json::Value;
 
@@ -36,7 +37,7 @@ impl Scoreboard for Espn {
         "ESPN"
     }
 
-    fn coming(&self, web: &dyn Fetch, league: &League, now: i64) -> Result<Vec<Game>, String> {
+    fn coming(&self, web: &dyn Fetch, league: &League, now: i64, _notes: &mut Value) -> Result<Vec<Game>, String> {
         if league.by_week {
             // (A football scoreboard with no date is the week's games.)
             return games(&web.get(&Self::url(league, None))?);
@@ -57,7 +58,7 @@ impl Scoreboard for Espn {
         }
     }
 
-    fn day(&self, web: &dyn Fetch, league: &League, day: &str) -> Result<Vec<Game>, String> {
+    fn day(&self, web: &dyn Fetch, league: &League, day: &str, _now: i64, _notes: &mut Value) -> Result<Vec<Game>, String> {
         games(&web.get(&Self::url(league, Some(day)))?)
     }
 }

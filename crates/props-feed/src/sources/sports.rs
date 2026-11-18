@@ -1,10 +1,15 @@
 //! Games: NFL, NBA, NHL, MLB, college football and college basketball. Each game on the
-//! schedule gets a few props (who wins; against the spread and the total when the scoreboard
-//! carries a bookmaker's lines; one game prop of the league's own), all closing as it starts
-//! and settled from its final score.
+//! schedule gets a few props (who wins; against the spread when the scoreboard carries a
+//! bookmaker's lines; the total, against the bookmaker's or else what's usual in the league;
+//! one game prop of the league's own), all closing as it starts and settled from its final
+//! score.
 //!
-//! The scoreboard itself is behind [`Scoreboard`] (ESPN's: `espn`), so another source of
-//! games can take its place.
+//! The scoreboard itself is behind [`Scoreboard`], and each league has its own: balldontlie
+//! for the NFL, the NBA and MLB (`bdl`), CollegeFootballData for the two college sports
+//! (`cfbd`), The Odds API for the NHL (`odds`): free plans whose terms allow this, each
+//! with a key of Blue's (Nov 18 2026: "use another site that would work other than ESPN if
+//! we can't use it"; ESPN's terms forbid automated access). ESPN's (`espn`) is still here,
+//! behind `--espn`, and nothing uses it unless that's said.
 
 use serde_json::{Value, json};
 
@@ -81,10 +86,75 @@ pub struct Game {
 pub trait Scoreboard: Send + Sync {
     /// Its name, as the props say whose numbers settle them.
     fn name(&self) -> &'static str;
-    /// The games coming up in a league (this week's, or today's and tomorrow's).
-    fn coming(&self, web: &dyn Fetch, league: &League, now: i64) -> Result<Vec<Game>, String>;
-    /// The games of one day of a league.
-    fn day(&self, web: &dyn Fetch, league: &League, day: &str) -> Result<Vec<Game>, String>;
+    /// The games coming up in a league (this week's, or today's and tomorrow's). `notes`:
+    /// whatever it wants kept between looks (what it has spent of a month's calls, say).
+    fn coming(&self, web: &dyn Fetch, league: &League, now: i64, notes: &mut Value) -> Result<Vec<Game>, String>;
+    /// The games of one day of a league (`day`: a game's own [`Game::day`]).
+    fn day(&self, web: &dyn Fetch, league: &League, day: &str, now: i64, notes: &mut Value) -> Result<Vec<Game>, String>;
+    /// How often what's coming is asked for.
+    fn coming_every(&self, _league: &League) -> i64 {
+        25 * MIN
+    }
+    /// How often a day is asked about while games of it are on, or over and not settled.
+    fn day_every(&self, _league: &League) -> i64 {
+        5 * MIN
+    }
+    /// How long after a game starts its day is first asked about: nothing for a scoreboard
+    /// that follows a game as it's played; one that only says how it ended is asked once
+    /// it could have.
+    fn first_look(&self, _league: &League) -> i64 {
+        0
+    }
+    /// Whether a kind of prop can be settled from what it tells (one with no line scores
+    /// can't say who led at the half).
+    fn settles(&self, _league: &League, _kind: &str) -> bool {
+        true
+    }
+}
+
+/// So many calls a month, spent no faster than the month goes by (with `ahead` to start
+/// on): a free plan's allowance lasts the month, whatever a busy day would like. Kept in a
+/// scoreboard's notes as the month and what's used of it.
+pub struct Budget {
+    pub month: i64,
+    pub ahead: i64,
+}
+
+impl Budget {
+    fn month_of(now: i64) -> (String, i64, i64) {
+        let (y, m, _) = crate::when::ymd(now);
+        let (ny, nm) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
+        (format!("{y}-{m:02}"), crate::when::at(y, m, 1, 0, 0), crate::when::at(ny, nm, 1, 0, 0))
+    }
+
+    /// What's used of this month's.
+    pub fn used(notes: &Value, now: i64) -> i64 {
+        let (month, _, _) = Self::month_of(now);
+        if notes["month"] == month.as_str() { notes["used"].as_i64().unwrap_or(0) } else { 0 }
+    }
+
+    /// Whether another call may be made now.
+    pub fn left(&self, notes: &Value, now: i64) -> bool {
+        let (_, start, end) = Self::month_of(now);
+        let earned = self.ahead + (self.month - self.ahead) * (now - start) / (end - start);
+        Self::used(notes, now) < earned.min(self.month)
+    }
+
+    /// A call made.
+    pub fn spend(&self, notes: &mut Value, now: i64) {
+        let used = Self::used(notes, now) + 1;
+        notes["month"] = json!(Self::month_of(now).0);
+        notes["used"] = json!(used);
+    }
+
+    /// Takes a call out of the month's, or says there's none to take just now.
+    pub fn take(&self, notes: &mut Value, now: i64, whose: &str) -> Result<(), String> {
+        if !self.left(notes, now) {
+            return Err(format!("{whose}: as many calls as its free plan allows for now ({} of {} used this month)", Self::used(notes, now), self.month));
+        }
+        self.spend(notes, now);
+        Ok(())
+    }
 }
 
 /// A league: where its games are, and how its props are made.
@@ -114,15 +184,19 @@ pub struct League {
     pub extras: &'static [&'static str],
     /// How much its props are worth showing first.
     pub featured: u8,
+    /// What two teams score between them, usually (a half number, so it's never met), and
+    /// the chance a game goes over it: the total's line when no bookmaker's is to be had.
+    pub usual: f64,
+    pub usual_over: f64,
 }
 
 const LEAGUES: [League; 6] = [
-    League { cat: "nfl", name: "NFL", path: "football/nfl", query: "", by_week: true, scoring: "points", sd: 13.5, home_edge: 0.04, periods: 4, picky: false, most: 20, ahead: 8 * DAY, extras: &["margin", "half"], featured: 5 },
-    League { cat: "nba", name: "NBA", path: "basketball/nba", query: "", by_week: false, scoring: "points", sd: 12.0, home_edge: 0.06, periods: 4, picky: false, most: 16, ahead: 40 * HOUR, extras: &["q1"], featured: 3 },
-    League { cat: "nhl", name: "NHL", path: "hockey/nhl", query: "", by_week: false, scoring: "goals", sd: 2.4, home_edge: 0.04, periods: 3, picky: false, most: 16, ahead: 40 * HOUR, extras: &["ot"], featured: 3 },
-    League { cat: "mlb", name: "MLB", path: "baseball/mlb", query: "", by_week: false, scoring: "runs", sd: 4.3, home_edge: 0.035, periods: 9, picky: false, most: 16, ahead: 40 * HOUR, extras: &["first"], featured: 3 },
-    League { cat: "cfb", name: "College Football", path: "football/college-football", query: "groups=80&limit=300", by_week: true, scoring: "points", sd: 16.0, home_edge: 0.06, periods: 4, picky: true, most: 16, ahead: 8 * DAY, extras: &["half"], featured: 3 },
-    League { cat: "cbb", name: "College Basketball", path: "basketball/mens-college-basketball", query: "groups=50&limit=300", by_week: false, scoring: "points", sd: 11.0, home_edge: 0.08, periods: 2, picky: true, most: 10, ahead: 40 * HOUR, extras: &["half"], featured: 2 },
+    League { cat: "nfl", name: "NFL", path: "football/nfl", query: "", by_week: true, scoring: "points", sd: 13.5, home_edge: 0.04, periods: 4, picky: false, most: 20, ahead: 8 * DAY, extras: &["margin", "half"], featured: 5, usual: 44.5, usual_over: 0.52 },
+    League { cat: "nba", name: "NBA", path: "basketball/nba", query: "", by_week: false, scoring: "points", sd: 12.0, home_edge: 0.06, periods: 4, picky: false, most: 16, ahead: 40 * HOUR, extras: &["q1"], featured: 3, usual: 227.5, usual_over: 0.5 },
+    League { cat: "nhl", name: "NHL", path: "hockey/nhl", query: "", by_week: false, scoring: "goals", sd: 2.4, home_edge: 0.04, periods: 3, picky: false, most: 16, ahead: 40 * HOUR, extras: &["ot"], featured: 3, usual: 5.5, usual_over: 0.56 },
+    League { cat: "mlb", name: "MLB", path: "baseball/mlb", query: "", by_week: false, scoring: "runs", sd: 4.3, home_edge: 0.035, periods: 9, picky: false, most: 16, ahead: 40 * HOUR, extras: &["first"], featured: 3, usual: 8.5, usual_over: 0.48 },
+    League { cat: "cfb", name: "College Football", path: "football/college-football", query: "groups=80&limit=300", by_week: true, scoring: "points", sd: 16.0, home_edge: 0.06, periods: 4, picky: true, most: 16, ahead: 8 * DAY, extras: &["half"], featured: 3, usual: 51.5, usual_over: 0.5 },
+    League { cat: "cbb", name: "College Basketball", path: "basketball/mens-college-basketball", query: "groups=50&limit=300", by_week: false, scoring: "points", sd: 11.0, home_edge: 0.08, periods: 2, picky: true, most: 10, ahead: 40 * HOUR, extras: &["half"], featured: 2, usual: 144.5, usual_over: 0.5 },
 ];
 
 pub fn league(cat: &str) -> Option<&'static League> {
@@ -131,8 +205,18 @@ pub fn league(cat: &str) -> Option<&'static League> {
 
 /// A game is opened only this long before it starts at least.
 const NOT_AFTER: i64 = 20 * MIN;
+/// A game that hasn't ended this long after it first could have is asked about a few times
+/// a day only: one the scoreboard never calls over (called off, and it doesn't say) mustn't
+/// use a month's calls up.
+const LONG: i64 = 8 * HOUR;
+const SELDOM: i64 = 6 * HOUR;
 /// A game has to have been final this long before it's settled (a score put right).
 const FINAL_FOR: i64 = 5 * MIN;
+
+/// A team in a line of score: its letters ("BAL"), or its name where the scoreboard has none.
+fn letters(t: &Team) -> &str {
+    if t.abbr.is_empty() { &t.name } else { &t.abbr }
+}
 
 /// The two teams' names as outcomes (their full names when the short ones are the same).
 fn names(g: &Game) -> (String, String) {
@@ -216,6 +300,11 @@ pub fn plan(l: &League, board: &str, g: &Game) -> Vec<(FeedProp, Value)> {
             add("total", format!("Total {}: {vs}?", l.scoring), vec![format!("Over {t}"), format!("Under {t}")], vec![p, 1.0 - p], rules, 1, json!({"line": t}));
         }
     }
+    if g.line.as_ref().and_then(|x| x.total).is_none() && l.usual > 0.0 {
+        let t = l.usual;
+        let rules = format!("Both teams' {} added up, against {t}: what's usual in this league, not a bookmaker's line for this game. {over}.", l.scoring);
+        add("total", format!("Total {}: {vs}?", l.scoring), vec![format!("Over {t}"), format!("Under {t}")], vec![l.usual_over, 1.0 - l.usual_over], rules, 0, json!({"line": t}));
+    }
     for kind in l.extras {
         match *kind {
             "margin" => {
@@ -273,7 +362,7 @@ pub fn settle(l: &League, memo: &Value, g: &Game) -> Result<(usize, String), Str
     let first = |n: usize| -> Option<(i64, i64)> { (g.away.periods.len() >= n && g.home.periods.len() >= n && n > 0).then(|| (g.away.periods[..n].iter().sum(), g.home.periods[..n].iter().sum())) };
     let lead = |x: Option<(i64, i64)>, what: &str| match x {
         None => Err("no line score".to_string()),
-        Some((a, h)) => Ok((if a > h { 0 } else if h > a { 1 } else { 2 }, format!("{} {a}, {} {h} {what}", g.away.abbr, g.home.abbr))),
+        Some((a, h)) => Ok((if a > h { 0 } else if h > a { 1 } else { 2 }, format!("{} {a}, {} {h} {what}", letters(&g.away), letters(&g.home)))),
     };
     match memo["kind"].as_str().unwrap_or("") {
         "win" => match a.cmp(&h) {
@@ -301,7 +390,7 @@ pub fn settle(l: &League, memo: &Value, g: &Game) -> Result<(usize, String), Str
         "half" => lead(first((l.periods / 2) as usize), "at the half"),
         "q1" => lead(first(1), "after one"),
         "ot" => Ok((if g.period > l.periods { 0 } else { 1 }, score)),
-        "first" => first(1).map(|(a, h)| (if a + h > 0 { 0 } else { 1 }, format!("{} {a}, {} {h} after one inning", g.away.abbr, g.home.abbr))).ok_or_else(|| "no line score".to_string()),
+        "first" => first(1).map(|(a, h)| (if a + h > 0 { 0 } else { 1 }, format!("{} {a}, {} {h} after one inning", letters(&g.away), letters(&g.home)))).ok_or_else(|| "no line score".to_string()),
         other => Err(format!("a kind of prop this doesn't know ({other})")),
     }
 }
@@ -313,6 +402,7 @@ pub struct Sports {
 }
 
 impl Sports {
+    /// A league from ESPN's scoreboard (only with `--espn`, and in the tests).
     pub fn new(cat: &str) -> Sports {
         Sports { league: league(cat).expect("a league Pyr knows"), board: Box::new(super::espn::Espn) }
     }
@@ -327,20 +417,26 @@ impl Source for Sports {
         self.league.cat
     }
 
-    /// Every five minutes while a game of its is on or about to start; else every half hour.
+    /// As often as its scoreboard is asked about a day (every five minutes, one that follows
+    /// games as they're played) while a game of its is on, about to start, or over and not
+    /// settled; else every half hour.
     fn every(&self, now: i64, mine: &[&Kept]) -> i64 {
-        if mine.iter().any(|k| k.prop.starts <= now + 10 * MIN) { 5 * MIN } else { 30 * MIN }
+        let wait = self.board.first_look(self.league);
+        if mine.iter().any(|k| k.prop.starts + wait <= now + 10 * MIN && now < k.prop.starts + wait + LONG) { self.board.day_every(self.league).min(30 * MIN) } else { 30 * MIN }
     }
 
     fn run(&self, now: i64, web: &dyn Fetch, mine: &[&Kept], memo: &mut Value) -> Result<Out, String> {
         let l = self.league;
+        let b = &*self.board;
         let mut out = Out::default();
         let mut games: Vec<Game> = Vec::new();
-        // What's coming (every half hour is plenty), to open.
+        // (The scoreboard's own notes.)
+        let mut notes = memo["board"].take();
+        // What's coming (every half hour is plenty, where asking is free), to open.
         let listed = memo["listed"].as_i64().unwrap_or(0);
         let mut coming_failed = None;
-        if now - listed >= 25 * MIN {
-            match self.board.coming(web, l, now) {
+        if now - listed >= b.coming_every(l) {
+            match b.coming(web, l, now, &mut notes) {
                 Ok(g) => {
                     memo["listed"] = json!(now);
                     games.extend(g);
@@ -348,20 +444,34 @@ impl Source for Sports {
                 Err(e) => coming_failed = Some(e),
             }
         }
-        // The days of the games that have started and aren't settled, to settle from.
-        let mut days: Vec<String> = mine.iter().filter(|k| k.prop.starts <= now + 10 * MIN).filter_map(|k| k.memo["day"].as_str().map(|d| d.to_string())).collect();
+        // The days of the games that have started (and could be over, where that's all the
+        // scoreboard says) and aren't settled, to settle from: each asked about at the
+        // scoreboard's pace, and seldom once its games should all be long over.
+        let wait = b.first_look(l);
+        let due = |k: &&&Kept| k.prop.starts + wait <= now + 10 * MIN;
+        let mut days: Vec<String> = mine.iter().filter(due).filter_map(|k| k.memo["day"].as_str().map(|d| d.to_string())).collect();
         days.sort();
         days.dedup();
+        let mut asked = memo["asked"].as_object().cloned().unwrap_or_default();
+        asked.retain(|d, _| days.contains(d));
         for day in days.iter().take(6) {
-            match self.board.day(web, l, day) {
+            let fresh = mine.iter().filter(due).any(|k| k.memo["day"] == day.as_str() && now < k.prop.starts + wait + LONG);
+            let every = if fresh { b.day_every(l) } else { SELDOM };
+            if now - asked.get(day).and_then(|v| v.as_i64()).unwrap_or(0) < every - MIN {
+                continue;
+            }
+            match b.day(web, l, day, now, &mut notes) {
                 // (A day's own scoreboard is the newer word on its games.)
                 Ok(g) => {
+                    asked.insert(day.clone(), json!(now));
                     games.retain(|old| !g.iter().any(|n| n.id == old.id));
                     games.extend(g);
                 }
                 Err(e) => out.trouble.push(format!("{day}: {e}")),
             }
         }
+        memo["asked"] = Value::Object(asked);
+        memo["board"] = notes;
         if let Some(e) = coming_failed {
             if games.is_empty() {
                 return Err(e);
@@ -385,8 +495,11 @@ impl Source for Sports {
                 continue;
             }
             *n += 1;
-            for (prop, m) in plan(l, self.board.name(), g) {
-                out.open(prop, m);
+            for (prop, m) in plan(l, b.name(), g) {
+                // (Only what this scoreboard can say the outcome of.)
+                if b.settles(l, m["kind"].as_str().unwrap_or("")) {
+                    out.open(prop, m);
+                }
             }
         }
         // And what's open: moved, under way, final, or off.
@@ -403,7 +516,13 @@ impl Source for Sports {
                     }
                 }
                 Stage::During => {
-                    let line = format!("{} · {} {}, {} {}", g.status, g.away.abbr, g.away.score.unwrap_or(0), g.home.abbr, g.home.score.unwrap_or(0));
+                    let score = format!("{} {}, {} {}", letters(&g.away), g.away.score.unwrap_or(0), letters(&g.home), g.home.score.unwrap_or(0));
+                    // (A scoreboard that doesn't say how far along it is: that it's on, and the score if it has one.)
+                    let line = match (g.status.is_empty(), g.away.score.is_some() || g.home.score.is_some()) {
+                        (false, _) => format!("{} · {score}", g.status),
+                        (true, true) => format!("Under way · {score}"),
+                        (true, false) => "Under way".to_string(),
+                    };
                     out.moved.push(Moved { id: id.clone(), detail: Some(line), ..Default::default() });
                 }
                 Stage::Final => {
@@ -481,7 +600,16 @@ mod tests {
         // 0-8 at 4-5: the home team well ahead, but not as a bookmaker would have it.
         let p = win_home(l, &g);
         assert!(p > 0.62 && p < 0.80, "{p}");
-        assert_eq!(plan(l, "ESPN", &g).len(), 3, "no spread or total without lines");
+        // No spread without a bookmaker's line; the total is against what's usual in the league.
+        let bare = plan(l, "ESPN", &g);
+        assert_eq!(bare.iter().map(|p| p.1["kind"].as_str().unwrap()).collect::<Vec<_>>(), vec!["win", "total", "margin", "half"]);
+        assert_eq!((bare[1].0.outcomes.clone(), bare[1].1["line"].as_f64(), bare[1].0.prior.clone()), (vec!["Over 44.5".to_string(), "Under 44.5".into()], Some(44.5), vec![0.52, 0.48]));
+        assert!(bare[1].0.rules.contains("against 44.5: what's usual in this league, not a bookmaker's line"), "{}", bare[1].0.rules);
+        assert!(bare[1].0.featured < bare[0].0.featured);
+        // (And it settles as any total does: 24 and 21 are 45, over.)
+        let mut done = nfl_game(0);
+        done.line = None;
+        assert_eq!(settle(l, &bare[1].1, &done).unwrap().0, 0);
         // Hockey: its own prop, and its lines in goals.
         let h = league("nhl").unwrap();
         let g = espn::games(NHL).unwrap().remove(0);
@@ -635,8 +763,9 @@ mod tests {
         let w = Canned::new(&[("dates=20261116", ranked.as_str()), ("dates=20261117", r#"{"events":[]}"#)]);
         assert!(m.step(now + HOUR, &w, false));
         let feed = m.feed(now + HOUR);
-        assert_eq!(feed.props.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), vec!["cbb:401892726:half", "cbb:401892726:win"]);
-        assert_eq!(feed.props[1].event_name, "Montreal Canadiens at #7 New York Rangers");
-        assert!(feed.props[1].featured > feed.props[0].featured);
+        assert_eq!(feed.props.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), vec!["cbb:401892726:half", "cbb:401892726:total", "cbb:401892726:win"]);
+        assert_eq!(feed.props[2].event_name, "Montreal Canadiens at #7 New York Rangers");
+        assert!(feed.props[2].featured > feed.props[0].featured);
+        assert_eq!(feed.props[1].outcomes, vec!["Over 144.5".to_string(), "Under 144.5".into()]);
     }
 }
