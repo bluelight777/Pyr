@@ -22,6 +22,9 @@ use crate::poker::{Poker, State, progress_chips};
 
 /// How many of someone's parlays that are over are listed with the ones riding.
 const OVER_LISTED: usize = 60;
+/// How many parlays go in one message (a ten-leg one with long questions and results is
+/// some twenty thousand bytes, and a message is a million at most).
+const A_MESSAGE: usize = 20;
 
 /// A parlay as the server keeps it.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -129,6 +132,15 @@ impl Parlay {
     }
 }
 
+/// A list of someone's parlays as the messages it goes in, in order: `A_MESSAGE` to each, the
+/// first saying it's the list from its start (what the app had goes), the rest adding to it.
+fn in_messages(parlays: Vec<ParlayView>) -> Vec<ToApp> {
+    if parlays.is_empty() {
+        return vec![ToApp::Parlays { parlays, all: true }];
+    }
+    parlays.chunks(A_MESSAGE).enumerate().map(|(i, part)| ToApp::Parlays { parlays: part.to_vec(), all: i == 0 }).collect()
+}
+
 /// One of the casino's own props is over (settled or called off): every parlay with a leg on
 /// it hears. One still riding goes a step on; one that's lost already (at an earlier leg)
 /// only has it written on its ticket, how that leg came out. (What goes wrong with one
@@ -163,8 +175,20 @@ impl Poker {
         let uid = who.uid;
         match msg {
             ToServer::ParlayList => {
-                let parlays = hub.db.parlays_of(uid, p::PARLAY_MAX_OPEN, OVER_LISTED).iter().filter_map(|j| serde_json::from_str::<Parlay>(j).ok()).map(|t| t.view()).collect();
-                Ok(Some(ToApp::Parlays { parlays, all: true }))
+                let parlays: Vec<ParlayView> = hub.db.parlays_of(uid, p::PARLAY_MAX_OPEN, OVER_LISTED).iter().filter_map(|j| serde_json::from_str::<Parlay>(j).ok()).map(|t| t.view()).collect();
+                // Twenty a message: all but the last straight to the app that asked.
+                match who.conn {
+                    Some(conn) => {
+                        let mut msgs = in_messages(parlays);
+                        let last = msgs.pop();
+                        for m in msgs {
+                            hub.send_poker_to(conn, m);
+                        }
+                        Ok(last)
+                    }
+                    // (No connection to send the rest to: all at once.)
+                    None => Ok(Some(ToApp::Parlays { parlays, all: true })),
+                }
             }
             ToServer::ParlayPlace { legs, chips, min_pays } => {
                 if !who.house {
@@ -602,6 +626,20 @@ mod tests {
             place(&hub, "bob", &[(ids["nfl:1:win"], 0), (ids["nfl:2:win"], 0)], 10).unwrap();
         }
         assert!(place(&hub, "bob", &[(ids["nfl:1:win"], 0), (ids["nfl:2:win"], 0)], 10).unwrap_err().contains("riding"));
+        // (All forty are listed, the newest first; to an app, twenty a message, the first
+        // of them saying it's the list from its start. A ten-leg parlay with the longest
+        // questions and results a feed can carry: twenty are well inside what a message holds.)
+        let all = mine(&hub, "bob");
+        assert_eq!((all.len(), all[0].id > all[39].id), (p::PARLAY_MAX_OPEN, true));
+        let msgs = in_messages(all.clone());
+        let shape: Vec<(usize, bool)> = msgs.iter().map(|m| match m { ToApp::Parlays { parlays, all } => (parlays.len(), *all), other => panic!("{other:?}") }).collect();
+        assert_eq!(shape, vec![(20, true), (20, false)]);
+        assert!(matches!(in_messages(Vec::new()).as_slice(), [ToApp::Parlays { parlays, all: true }] if parlays.is_empty()));
+        let long = "x".repeat(700);
+        let leg = ParlayLeg { question: long.clone(), pick: long.clone(), event_name: long.clone(), note: long.clone(), category: "entertainment".into(), odds: 1.0 / 3.0, ..Default::default() };
+        let big = ParlayView { legs: vec![leg; p::PARLAY_MAX_LEGS], ..Default::default() };
+        let most = serde_json::to_string(&ToApp::Parlays { parlays: vec![big; A_MESSAGE], all: true }).unwrap().len();
+        assert!(most < pyr_proto::MAX_CONTROL_FRAME * 3 / 4, "{most} bytes");
     }
 
     /// A prop nobody bet on by itself, with a parlay's leg on it, plays out when its category

@@ -1293,4 +1293,27 @@ mod tests {
         assert_eq!(stacks(&t.view), stacks(&room.view(Some("alice"))));
         assert_eq!(pyr_poker::room::runout_ms(3), RUNOUT_FIRST_MS + 2 * RUNOUT_STREET_MS + RUNOUT_WIN_MS);
     }
+
+    /// My parlays as the server tells them: a list from its start replaces what was here,
+    /// what comes after (the rest of a long list, or one that changed) is put among them;
+    /// the ones riding first, the newest first in each.
+    #[test]
+    fn my_parlays_come_whole_and_then_as_they_change() {
+        use pyr_poker::props::{ParlayState, ParlayView};
+        let t = |id: u64, state: ParlayState| ParlayView { id, state, chips: 100, ..Default::default() };
+        let ids = |ps: &PokerState| ps.parlays.iter().map(|t| t.id).collect::<Vec<_>>();
+        let mut ps = PokerState::default();
+        let now = Instant::now();
+        ps.apply(ToApp::Parlays { parlays: vec![t(9, ParlayState::Open), t(7, ParlayState::Open)], all: true }, now);
+        ps.apply(ToApp::Parlays { parlays: vec![t(5, ParlayState::Lost), t(4, ParlayState::Won)], all: false }, now);
+        assert_eq!((ids(&ps), ps.parlays_version), (vec![9, 7, 5, 4], 2));
+        // One of them is paid, and a new one placed.
+        ps.apply(ToApp::Parlays { parlays: vec![t(7, ParlayState::Won)], all: false }, now);
+        ps.apply(ToApp::Parlays { parlays: vec![t(10, ParlayState::Open)], all: false }, now);
+        assert_eq!(ids(&ps), vec![10, 9, 7, 5, 4]);
+        assert_eq!(ps.parlays[2].state, ParlayState::Won);
+        // Asked again (another server's list would be another PokerState): from its start.
+        ps.apply(ToApp::Parlays { parlays: vec![t(10, ParlayState::Open)], all: true }, now);
+        assert_eq!(ids(&ps), vec![10]);
+    }
 }
