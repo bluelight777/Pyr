@@ -287,6 +287,15 @@ published all the same; the feed comes by itself). The set-up prints each source
 it ends, and which sites wait for their keys; `https://pyr.gg/props/status.json` has it
 after, and `pyr-props-key` says what a site's leagues read the moment its key is given.
 
+0.15.0 published (Nov 18, Blue with `publish.cmd`; read from the live site at about 01:50
+UTC): `latest2.json` says 0.15.0 (released: 0.14.1, 0.14.2, 0.15.0), and the props feed's
+maker is up on the VPS as `setup-props.sh` set it (its first time on the real machine):
+`https://pyr.gg/props/status.json` made by pyr-props 0.15.0, twelve sources reading well
+from the VPS's address (asteroids, crypto, gallery, launches, money, orders, picture, quakes,
+steam, sun, treasury, weather: the Weather Service's forecast, Steam and NASA's picture among
+them, which had never been read for real), and the six leagues each saying it has no key yet,
+as they should until Blue gives the three sites' keys with `pyr-props-key`.
+
 0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
 Blue's pyr.log, Nov 17, "couldn't find the server "SERVER2.24.121.231": No such host is known".
 The bug server's address in `release-env.sh` had been read out of 0.13.28's program with the
