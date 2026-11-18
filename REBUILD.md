@@ -373,7 +373,21 @@ machine set up by 0.15.0, then this release over it, whose props folder has no k
 folder; the key from before stays, the new certificate is for it, the maker is the new one and
 started again with what it had opened). On Blue's PC as `Downloads\pyr-release-0.15.1` (51
 files, read back and compared; `publish.cmd` there). Not tried: Windows, and Mag's room.
-Still to come, asked the same night: parlays ("add the ability to parlay").
+Blue published it the same morning (pyr.gg's latest2.json and the props maker's status both
+said 0.15.1 by 10:50 UTC, every source reading).
+
+0.16.0 (Nov 18), asked the same night: parlays ("add the ability to parlay into and rename it
+to Pyr Prop Bets"). What they are, how they were checked and what the runs on the test screen
+turned up is in the list below ("Parlays, and the name Pyr Prop Bets") and in `docs/PROPS.md`.
+Built, packed and checked (35 checks, all good; app 148 and window 9, server 111, props feed
+56, proto 65, poker 188, engine audio and casino 48 tests), twice: the first set of release
+builds, tried on the test screen, said "1 legs of your parlay are in", and the second has
+that right ("One leg of your parlay is in", "both legs won"; seen on the screen with the
+release builds themselves, gold falling). The VPS's set-up run dry over an earlier release's
+(45 and 46 checks). On Blue's PC as `Downloads\pyr-release-0.16.0` (51 files, read back and
+compared; `publish.cmd` there). Its notes carry 0.15.1's lines after its own, for copies that
+come to it from 0.15.0 or before. Not tried: Windows; more than one person's parlays on the
+same props at once; Mag's real room (0.15.1's isolation).
 
 0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
 Blue's pyr.log, Nov 17, "couldn't find the server "SERVER2.24.121.231": No such host is known".
