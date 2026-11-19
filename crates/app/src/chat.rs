@@ -1023,10 +1023,11 @@ impl PyrApp {
                 }
             }
             if self.ui.react_picker == Some(m.id) {
-                let area = egui::Area::new(ui.id().with(("react", m.id)))
+                let id = ui.id().with(("react", m.id));
+                let area = egui::Area::new(id)
                     .order(egui::Order::Foreground)
                     .pivot(egui::Align2::RIGHT_TOP)
-                    .fixed_pos(pos2(tools.right(), tools.bottom() + 4.0))
+                    .fixed_pos(kept_inside(ui.ctx(), id, egui::Align2::RIGHT_TOP, pos2(tools.right(), tools.bottom() + 4.0)))
                     .constrain(true)
                     .show(ui.ctx(), |ui| {
                         egui::Frame::popup(ui.style()).fill(theme::SIDE()).inner_margin(10).show(ui, |ui| {
@@ -1618,10 +1619,11 @@ impl PyrApp {
                     self.ui.reply = None;
                 }
                 if self.ui.gif_picker {
-                    let area = egui::Area::new(egui::Id::new(("composer-gif", &key, ch.id)))
+                    let id = egui::Id::new(("composer-gif", &key, ch.id));
+                    let area = egui::Area::new(id)
                         .order(egui::Order::Foreground)
                         .pivot(egui::Align2::RIGHT_BOTTOM)
-                        .fixed_pos(pos2(sb.rect.right() + 6.0, gb.rect.top() - 12.0))
+                        .fixed_pos(kept_inside(ui.ctx(), id, egui::Align2::RIGHT_BOTTOM, pos2(sb.rect.right() + 6.0, gb.rect.top() - 12.0)))
                         .constrain(true)
                         .show(ui.ctx(), |ui| egui::Frame::popup(ui.style()).fill(theme::SIDE()).inner_margin(10).show(ui, |ui| self.gif_picker(ui, st, s, acts)).inner);
                     if let Some(url) = area.inner {
@@ -1644,10 +1646,11 @@ impl PyrApp {
                     }
                 }
                 if self.ui.composer_emoji {
-                    let area = egui::Area::new(egui::Id::new(("composer-emoji", &key, ch.id)))
+                    let id = egui::Id::new(("composer-emoji", &key, ch.id));
+                    let area = egui::Area::new(id)
                         .order(egui::Order::Foreground)
                         .pivot(egui::Align2::RIGHT_BOTTOM)
-                        .fixed_pos(pos2(sb.rect.right() + 6.0, eb.rect.top() - 12.0))
+                        .fixed_pos(kept_inside(ui.ctx(), id, egui::Align2::RIGHT_BOTTOM, pos2(sb.rect.right() + 6.0, eb.rect.top() - 12.0)))
                         .constrain(true)
                         .show(ui.ctx(), |ui| {
                             egui::Frame::popup(ui.style()).fill(theme::SIDE()).inner_margin(10).show(ui, |ui| self.emoji_picker(ui, st, Some(&key), acts)).inner
@@ -2266,6 +2269,21 @@ pub fn human_size(n: u64) -> String {
 /// closed it instead of reacting.)
 fn pressed_outside(ui: &egui::Ui, area: &egui::Response, opener: Rect) -> bool {
     ui.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !area.rect.contains(p) && !opener.contains(p)))
+}
+
+/// Where to ask egui for a pop-up (the `Area` `id`, its `pivot` corner at `at`) so that it's
+/// inside the window as it is: `at`, moved by as much as the pop-up would stick out at the size
+/// it had last frame (the first time it shows there's none: `at` itself, and egui moves it in).
+/// Asked for where it ends up, egui's note of it is right (see `pressed_outside`), so what's
+/// under the part that would have been moved in can't be pointed at or pressed through it.
+fn kept_inside(ctx: &egui::Context, id: egui::Id, pivot: egui::Align2, at: egui::Pos2) -> egui::Pos2 {
+    let Some(size) = ctx.memory(|m| m.area_rect(id)).map(|r| r.size()) else { return at };
+    let (within, rect) = (ctx.content_rect(), pivot.anchor_size(at, size));
+    // (As egui does it: inside, unless it's bigger than the window.)
+    let over = ((size.x - within.width()).max(0.0), (size.y - within.height()).max(0.0));
+    let x = rect.left().min(within.right() + over.0 - size.x).max(within.left() - over.0);
+    let y = rect.top().min(within.bottom() + over.1 - size.y).max(within.top() - over.1);
+    at + (pos2(x, y) - rect.min)
 }
 
 /// Discord's red "NEW" line: where the messages you hadn't seen start.
@@ -3144,53 +3162,80 @@ mod pop_up_tests {
     /// a message near the bottom: a press on the part of it that was moved in is inside it.
     #[test]
     fn a_press_on_the_part_of_a_pop_up_that_was_moved_in_is_inside_it() {
-        let ctx = egui::Context::default();
         let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
         let opener = Rect::from_min_size(pos2(700.0, 500.0), vec2(30.0, 30.0));
-        // A frame: the pop-up, 300 high, asked for from 534 down (so it's moved up to end at
-        // the window's bottom). Where it is, whether a press this frame was outside it, and
-        // what egui's own `contains_pointer` says.
-        let frame = |events: Vec<egui::Event>| {
-            let mut out = None;
-            let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
-            let _ = ctx.run(input, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let area = egui::Area::new(egui::Id::new("pop-up"))
-                        .order(egui::Order::Foreground)
-                        .pivot(egui::Align2::RIGHT_TOP)
-                        .fixed_pos(pos2(730.0, 534.0))
-                        .constrain(true)
-                        .show(ui.ctx(), |ui| {
-                            ui.allocate_exact_size(vec2(200.0, 300.0), Sense::click());
-                        });
-                    out = Some((area.response.rect, pressed_outside(ui, &area.response, opener), area.response.contains_pointer()));
-                });
-            });
-            out.unwrap()
-        };
-        frame(vec![]);
-        let (rect, _, _) = frame(vec![]);
-        assert!(rect.bottom() <= 600.5 && rect.top() < 320.0 && rect.height() >= 300.0, "{rect:?}: moved up to fit");
+        let (pivot, at) = (egui::Align2::RIGHT_TOP, pos2(730.0, 534.0));
         let press = |p: egui::Pos2| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() };
         let release = |p: egui::Pos2| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() };
-        let pressed_at = |p: egui::Pos2| {
-            frame(vec![egui::Event::PointerMoved(p)]);
-            let got = frame(vec![press(p)]);
-            frame(vec![release(p)]);
+        // `kept`: asked for where it fits (`kept_inside`), as the pickers are; or where it was
+        // wanted, left to egui to move in.
+        for kept in [false, true] {
+            let ctx = egui::Context::default();
+            // A frame: the pop-up, 300 high, wanted from 534 down (so it has to be 234 higher
+            // to end at the window's bottom). Where it is, whether a press this frame was
+            // outside it, and what egui's own `contains_pointer` says.
+            let frame = |events: Vec<egui::Event>| {
+                let mut out = None;
+                let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+                let _ = ctx.run(input, |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let id = egui::Id::new("pop-up");
+                        let pos = if kept { kept_inside(ui.ctx(), id, pivot, at) } else { at };
+                        let area = egui::Area::new(id).order(egui::Order::Foreground).pivot(pivot).fixed_pos(pos).constrain(true).show(ui.ctx(), |ui| {
+                            ui.allocate_exact_size(vec2(200.0, 300.0), Sense::click());
+                        });
+                        out = Some((area.response.rect, pressed_outside(ui, &area.response, opener), area.response.contains_pointer()));
+                    });
+                });
+                out.unwrap()
+            };
+            frame(vec![]);
+            frame(vec![]);
+            let (rect, _, _) = frame(vec![]);
+            assert!((rect.bottom() - 600.0).abs() < 1.0 && (rect.top() - 300.0).abs() < 1.0 && (rect.right() - 730.0).abs() < 1.0, "{rect:?}: moved up to fit");
+            let pressed_at = |p: egui::Pos2| {
+                frame(vec![egui::Event::PointerMoved(p)]);
+                let got = frame(vec![press(p)]);
+                frame(vec![release(p)]);
+                got
+            };
+            // In its top, above where it was wanted: inside. (Left to egui to move in, egui's
+            // own answer there is no, which is what closed the picker; asked for where it
+            // fits, egui's is right too.)
+            let (_, outside, egui_says) = pressed_at(pos2(650.0, rect.top() + 20.0));
+            assert!(!outside, "a press at the top of it is inside it");
+            assert_eq!(egui_says, kept, "egui's own note of the pop-up (if this fails for false, egui changed: its answer may do)");
+            // In its bottom: inside. On what opens it: not outside. Anywhere else: outside.
+            let (_, outside, egui_says) = pressed_at(pos2(650.0, 590.0));
+            assert!(!outside && egui_says);
+            assert!(!pressed_at(opener.center()).1);
+            assert!(pressed_at(pos2(100.0, 100.0)).1);
+            assert!(pressed_at(pos2(650.0, rect.top() - 20.0)).1);
+            // No press: nothing to close it.
+            assert!(!frame(vec![egui::Event::PointerMoved(pos2(100.0, 100.0))]).1);
+        }
+        // Where it's asked for: as wanted when it fits or its size isn't known yet; moved in by
+        // what would stick out, from whichever corner it hangs; left alone when it can't fit.
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("other");
+        let show = |size: egui::Vec2, pivot: egui::Align2, at: egui::Pos2| {
+            let mut got = at;
+            for _ in 0..3 {
+                let _ = ctx.run(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ctx| {
+                    got = kept_inside(ctx, id, pivot, at);
+                    egui::Area::new(id).pivot(pivot).fixed_pos(got).constrain(true).show(ctx, |ui| {
+                        ui.allocate_exact_size(size, Sense::hover());
+                    });
+                });
+            }
             got
         };
-        // In its top, above where it was asked for: inside (egui's own answer there is no,
-        // which is what closed the picker).
-        let (_, outside, egui_says) = pressed_at(pos2(650.0, rect.top() + 20.0));
-        assert!(!outside, "a press at the top of it is inside it");
-        assert!(!egui_says, "egui has the area where it was asked for: if this fails, egui changed and its own answer may do");
-        // In its bottom: inside. On what opens it: not outside. Anywhere else: outside.
-        assert!(!pressed_at(pos2(650.0, 590.0)).1);
-        assert!(!pressed_at(opener.center()).1);
-        assert!(pressed_at(pos2(100.0, 100.0)).1);
-        assert!(pressed_at(pos2(650.0, rect.top() - 20.0)).1);
-        // No press: nothing to close it.
-        assert!(!frame(vec![egui::Event::PointerMoved(pos2(100.0, 100.0))]).1);
+        let near = |a: egui::Pos2, b: egui::Pos2| (a - b).length() < 1.0;
+        assert!(near(show(vec2(200.0, 300.0), egui::Align2::RIGHT_TOP, pos2(730.0, 100.0)), pos2(730.0, 100.0)), "it fits: as wanted");
+        assert!(near(show(vec2(200.0, 300.0), egui::Align2::RIGHT_TOP, pos2(730.0, 534.0)), pos2(730.0, 300.0)), "up by what would stick out");
+        assert!(near(show(vec2(200.0, 300.0), egui::Align2::RIGHT_BOTTOM, pos2(730.0, 120.0)), pos2(730.0, 300.0)), "down, hung from its bottom corner");
+        assert!(near(show(vec2(200.0, 300.0), egui::Align2::RIGHT_TOP, pos2(120.0, 100.0)), pos2(200.0, 100.0)), "right, when it would go off the left");
+        assert!(near(show(vec2(200.0, 700.0), egui::Align2::RIGHT_TOP, pos2(730.0, 534.0)), pos2(730.0, -100.0)) || near(show(vec2(200.0, 700.0), egui::Align2::RIGHT_TOP, pos2(730.0, 534.0)), pos2(730.0, 0.0)), "taller than the window: as egui places it");
     }
 }
 

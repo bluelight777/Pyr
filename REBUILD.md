@@ -445,7 +445,12 @@ clicks, at first: which is why it took a press, a wait and a release to see it e
 person's never do. Taking the reaction off makes the last message shorter and so lower, and
 the strip bigger: the same emoji that worked is then in it. Now the three pickers that closed
 that way (reactions, and the emoji and GIF pickers by the message box, which are moved down in
-a short window) go by where the pop-up is (`chat::pressed_outside`), as the others already did.
+a short window) go by where the pop-up is (`chat::pressed_outside`), as the others already did;
+and they're asked for where they fit (`chat::kept_inside`, from the size they had the frame
+before), so egui's note of them is right too and nothing under the part that would have been
+moved can be pressed through its gaps. (The app's other pop-ups that are given a place and
+kept inside the window close by where they are already; egui's note of them can still be off
+while they're moved in.)
 
 0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
 Blue's pyr.log, Nov 17, "couldn't find the server "SERVER2.24.121.231": No such host is known".
