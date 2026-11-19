@@ -451,6 +451,29 @@ before), so egui's note of them is right too and nothing under the part that wou
 moved can be pressed through its gaps. (The app's other pop-ups that are given a place and
 kept inside the window close by where they are already; egui's note of them can still be off
 while they're moved in.)
+Built, packed and checked (37 checks, all good; app 150 and window 9, server 114, props feed
+56, proto 65, poker 188, engine audio, casino and bug reports 50, and a bug report sent from
+one Pyr to the owner's, end to end), the whole line twice: the second time with the pickers'
+fix in. Seen on the test screen with the release builds (`rebuild/tools/release-0.16.1`):
+- The list. A server holding sixteen approved reports with logs the sizes Blue's were and one
+  new one. 0.16.0's server and Pyr: the count 1, and New (0), Approved (16), as on his. Only
+  the server changed to 0.16.1: New (1). Both 0.16.1: New (1); approved, the PC's file has all
+  seventeen whole. 0.16.0's server with 0.16.1's Pyr: after a few seconds "1 more report
+  waiting on the server didn't fit in this list...", and marking a long approved one fixed
+  brought the list, and the new report, by itself. A report sent while the window was open
+  (`examples/send_report`) was in it six seconds later with nothing pressed. With twenty-four
+  approved (more than fit) each long log came as its last 39 KB, saying so, the new report's
+  log left out, saying so; approved, its last 37 KB came by itself. (On 0.16.0, marking one
+  long approved report fixed and pressing Refresh shows the new one: what Blue was told.)
+- Reactions. A press, a moment, a release on one of the server's own emoji in the picker's
+  top row, the picker moved up for the last message: with the published 0.16.0 Pyr (out of
+  its .deb) not added and the picker shut, three times of three; with 0.16.1 added, three of
+  three. The search box in that part takes a click and typing; a press outside still shuts
+  the picker; the picker by the message box in a window 420 high still picks.
+The VPS's set-up run dry over an earlier release's (45 and 46 checks); Pyr Prop Bets' listing
+and files are 0.16.0's, byte for byte (the Keeper takes a listing in only when its version is
+newer, so the same again changes nothing). On Blue's PC as `Downloads\pyr-release-0.16.1` (51
+files, read back and compared; `publish.cmd` there). Not tried: Windows.
 
 0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
 Blue's pyr.log, Nov 17, "couldn't find the server "SERVER2.24.121.231": No such host is known".
