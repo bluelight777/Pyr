@@ -1109,17 +1109,15 @@ impl Db {
         self.conn.lock().query_row("SELECT COUNT(*) FROM bug_reports WHERE status = 'new'", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as u64
     }
 
-    /// The ones waiting to be looked at first, then the rest; newest first in each.
-    pub fn bugs(&self, limit: usize) -> Vec<pyr_proto::control::BugEntry> {
+    /// The newest `limit` reports of one kind (`which`: a condition on `status`, one of this
+    /// file's own), newest first; `logs`: with their logs.
+    fn bugs_of(&self, which: &str, limit: usize, logs: bool) -> Vec<pyr_proto::control::BugEntry> {
         use pyr_proto::control::{BugEntry, BugReport, BugStatus};
         let c = self.conn.lock();
-        // (Approved ones first: they're what gets fixed, and the owner's Pyr saves them for that
-        // from this list; then what's waiting; then what's done with.)
-        let Ok(mut q) = c.prepare(
-            "SELECT id, created_at, status, title, body, app_version, os, log, kind, asked FROM bug_reports \
-             ORDER BY CASE status WHEN 'approved' THEN 0 WHEN 'new' THEN 1 ELSE 2 END, id DESC LIMIT ?1",
-        )
-        else {
+        let log = if logs { "log" } else { "''" };
+        let Ok(mut q) = c.prepare(&format!(
+            "SELECT id, created_at, status, title, body, app_version, os, {log}, kind, asked FROM bug_reports WHERE {which} ORDER BY id DESC LIMIT ?1"
+        )) else {
             return Vec::new();
         };
         q.query_map([limit as i64], |r| {
@@ -1136,34 +1134,75 @@ impl Db {
                     kind: if r.get::<_, String>(8)? == "idea" { pyr_proto::control::ReportKind::Idea } else { Default::default() },
                 },
                 asked: r.get::<_, i64>(9)? as u32,
+                log_whole: 0,
             })
         })
         .map(|rows| rows.filter_map(|r| r.ok()).collect())
         .unwrap_or_default()
     }
 
-    /// The owner's list of reports, as much as fits in `max_bytes`: every approved one and what's
-    /// waiting, whole; the ones done with (fixed, rejected) without their logs. (Before, the list
-    /// was what's waiting first, logs and all: fifteen new reports with long logs filled it, the
-    /// approved ones never came, and the owner's Pyr took them off the PC as if none were.)
+    /// The owner's list of reports, in one reply of `max_bytes`, counted as the reply sends
+    /// them ([`wire`]): the approved ones, then the ones waiting, then the ones done with
+    /// (fixed, rejected), newest first in each. Neither of the first two ever hides the other.
+    /// What gives way when they don't fit whole is their logs, not the reports: the approved
+    /// ones' logs come first (they're what gets fixed from: the owner's Pyr saves them from
+    /// this list), then the waiting ones' in what's left. Logs that don't fit are cut to their
+    /// ends, one length for all, the short ones whole; a log that's cut or left out says so in
+    /// its first line, and its report's `log_whole`. The ones done with come without their
+    /// logs.
+    /// With more reports than their words alone fit (hundreds), the newest of each kind are
+    /// the ones listed, and each kind is sure of its share of the reply: the waiting ones of a
+    /// quarter for their words, the ones done with of a sixteenth, the approved ones' logs of
+    /// half before any more waiting or done with than that. (The owner's Pyr says how many
+    /// more are waiting than it was sent: the server counts them all.)
+    /// (Before 0.14.1 the list was what's waiting first, logs and all: fifteen new reports
+    /// with long logs filled it and the approved ones never came. From 0.14.1 to 0.16.0 it was
+    /// the approved ones first, whole: sixteen of them filled it to within 30 KB, and a new
+    /// report waited behind them unseen while the channel list counted it.)
     pub fn bug_list(&self, max_bytes: usize) -> Vec<pyr_proto::control::BugEntry> {
-        use pyr_proto::control::BugStatus;
-        let mut reports = self.bugs(500);
-        for b in reports.iter_mut().filter(|b| matches!(b.status, BugStatus::Fixed | BugStatus::Rejected)) {
-            b.report.log.clear();
-        }
-        let size = |b: &pyr_proto::control::BugEntry| b.report.title.len() + b.report.body.len() + b.report.log.len() + b.report.os.len() + 300;
-        let mut total = 0usize;
-        let mut keep = 0usize;
-        for b in &reports {
-            total += size(b);
-            if total > max_bytes && keep > 0 {
-                break;
+        use pyr_proto::control::BugEntry;
+        // (Each kind is read by itself: however many there are of one, the others are read.)
+        let mut approved = self.bugs_of("status = 'approved'", 300, true);
+        let mut waiting = self.bugs_of("status = 'new'", 300, true);
+        let mut done = self.bugs_of("status IN ('fixed', 'rejected')", 300, false);
+        // What a report takes before its log: its words, what goes with them in the reply, and
+        // the start of its log (or the line that says the log is cut or left out).
+        let words = |b: &BugEntry| {
+            let r = &b.report;
+            wire(&r.title) + wire(&r.body) + wire(&r.os) + wire(&r.app_version) + 300 + if r.log.len() >= LOG_SAID { LOG_SAID } else { wire(&r.log).min(LOG_SAID) }
+        };
+        // How many of `list`, from its first, have their words fit in `room`, `kept` of it left
+        // alone; they're taken out of `room`.
+        let fits = |list: &[BugEntry], room: &mut usize, kept: usize| {
+            let mut n = 0;
+            for b in list {
+                if words(b) + kept > *room {
+                    break;
+                }
+                *room -= words(b);
+                n += 1;
             }
-            keep += 1;
-        }
-        reports.truncate(keep);
-        reports
+            n
+        };
+        let need = |list: &[BugEntry]| list.iter().map(words).sum::<usize>();
+        let (theirs, past) = (need(&waiting).min(max_bytes / 4), need(&done).min(max_bytes / 16));
+        let mut room = max_bytes;
+        let n = fits(&approved, &mut room, theirs + past);
+        approved.truncate(n);
+        let logs: usize = approved.iter().map(|b| wire(&b.report.log).saturating_sub(LOG_SAID)).sum();
+        let kept = logs.min(max_bytes / 2).min(room.saturating_sub(theirs + past));
+        let n = fits(&waiting, &mut room, kept + past);
+        waiting.truncate(n);
+        // The ones done with: the newest in their share now, more after the logs if there's room.
+        let mut share = past.min(room);
+        room -= share;
+        let first = fits(&done, &mut share, 0);
+        room += share;
+        room = room.saturating_sub(fit_logs(&mut approved, room, false));
+        room = room.saturating_sub(fit_logs(&mut waiting, room, true));
+        let more = fits(&done[first..], &mut room, 0);
+        done.truncate(first + more);
+        approved.into_iter().chain(waiting).chain(done).collect()
     }
 
     /// An idea already here that `r` is the same as (waiting, or approved): its id and title.
@@ -2663,6 +2702,105 @@ pub fn user_is_member(db: &Db, id: &UserId) -> bool {
     db.get_user(id).map(|u| !u.banned).unwrap_or(false)
 }
 
+/// What the owner's list of reports may take in its reply ([`Db::bug_list`] counts reports as
+/// they're sent, so this is all of the reply but its few bytes around the list): under the
+/// control stream's megabyte for one message, with room to spare.
+pub const BUG_LIST_BYTES: usize = 900 * 1024;
+
+/// What `s` takes in a reply on the control stream: JSON, where a quote, a backslash and a
+/// line's end are two bytes each (serde_json's escapes).
+fn wire(s: &str) -> usize {
+    s.bytes().map(wire_byte).sum()
+}
+
+fn wire_byte(b: u8) -> usize {
+    match b {
+        b'"' | b'\\' | b'\n' | b'\t' | b'\r' | 0x08 | 0x0c => 2,
+        0..=0x1f => 6,
+        _ => 1,
+    }
+}
+
+/// What the line that says a report's log is cut or left out takes in the reply, at most
+/// ([`log_said`]). A report's words are counted with this much of its log ([`Db::bug_list`]).
+const LOG_SAID: usize = 300;
+
+/// The first line of a log that isn't whole in the owner's list: `end` bytes of its end are
+/// there (0: none of it), of `whole`; `waiting`: its report isn't approved yet.
+fn log_said(end: usize, whole: usize, waiting: bool) -> String {
+    let kb = |n: usize| n.div_ceil(1024);
+    let comes = if waiting { "as reports that are dealt with are marked fixed or rejected, or once this one is approved" } else { "as reports that are dealt with are marked fixed or rejected" };
+    if end == 0 {
+        format!("(This report's log isn't here, {} KB of it: the list of reports had no room for it. It comes {comes}.)", kb(whole))
+    } else {
+        format!("(Only the last {} KB of this report's log are here, of {} KB: the list of reports had no room for more. More comes {comes}.)\n", kb(end), kb(whole))
+    }
+}
+
+/// The end of `log` that takes `most` in the reply at most, from the start of a line if one
+/// starts soon.
+fn log_end(log: &str, most: usize) -> &str {
+    let (mut at, mut took) = (log.len(), 0);
+    for (i, b) in log.bytes().enumerate().rev() {
+        took += wire_byte(b);
+        if took > most {
+            break;
+        }
+        at = i;
+    }
+    while !log.is_char_boundary(at) {
+        at += 1;
+    }
+    if at == 0 || log.as_bytes()[at - 1] == b'\n' {
+        return &log[at..];
+    }
+    match log[at..].find('\n') {
+        Some(n) if n < 400 => &log[at + n + 1..],
+        _ => &log[at..],
+    }
+}
+
+/// Makes the logs of `list` fit the reply: `room` is what there is for them past the first
+/// [`LOG_SAID`] of each (those are counted with the reports' words). Whole if they fit;
+/// otherwise each cut to its end (where what went wrong is), no longer than a length that makes
+/// them fit, the short ones whole. A log that's cut or left out says so in its first line, and
+/// its report's `log_whole` is what it was (`waiting`: these reports aren't approved yet).
+/// What they take of `room` after it.
+fn fit_logs(list: &mut [pyr_proto::control::BugEntry], room: usize, waiting: bool) -> usize {
+    let more: Vec<usize> = list.iter().map(|b| wire(&b.report.log).saturating_sub(LOG_SAID)).collect();
+    let total: usize = more.iter().sum();
+    if total <= room {
+        return total;
+    }
+    // The most a log may take: the shortest ones first, each taking its share of what's left
+    // or less; the first that would take more sets the length for it and the rest.
+    let mut lens: Vec<usize> = more.iter().copied().filter(|m| *m > 0).collect();
+    lens.sort_unstable();
+    let (mut left, mut most) = (room, 0);
+    for (i, l) in lens.iter().enumerate() {
+        let share = left / (lens.len() - i);
+        if *l > share {
+            most = share;
+            break;
+        }
+        left -= l;
+    }
+    let mut used = 0;
+    for (b, more) in list.iter_mut().zip(more) {
+        if more <= most {
+            used += more;
+            continue;
+        }
+        let log = &b.report.log;
+        // (A few lines of a log say nothing: under a thousand bytes, it's left out.)
+        let end = if most < 1000 { "" } else { log_end(log, most) };
+        used += wire(end);
+        b.log_whole = log.len() as u32;
+        b.report.log = format!("{}{end}", log_said(end.len(), log.len(), waiting));
+    }
+    used
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2770,10 +2908,15 @@ mod tests {
         let list = db.bug_list(700 * 1024);
         let ids: Vec<i64> = list.iter().filter(|b| b.status == BugStatus::Approved).map(|b| b.id).collect();
         assert_eq!(ids.len(), 3, "every approved one, whole");
-        assert!(list.iter().filter(|b| b.status == BugStatus::Approved).all(|b| b.report.log.len() > 1000));
-        assert!(list.iter().any(|b| b.status == BugStatus::New), "and what's waiting, as many as fit");
+        assert!(list.iter().filter(|b| b.status == BugStatus::Approved).all(|b| b.report.log.len() == pyr_proto::control::BUG_LOG_MAX - 100));
+        assert_eq!(list.iter().filter(|b| b.status == BugStatus::New).count(), 20, "and every one that's waiting");
+        assert_eq!(list.iter().filter(|b| matches!(b.status, BugStatus::Fixed | BugStatus::Rejected)).count(), 2);
         let size: usize = list.iter().map(|b| b.report.log.len() + b.report.body.len() + b.report.title.len()).sum();
         assert!(size <= 700 * 1024);
+        // (The waiting ones' logs share what the approved ones' left: each its end, and saying so.)
+        let new: Vec<&pyr_proto::control::BugEntry> = list.iter().filter(|b| b.status == BugStatus::New).collect();
+        assert!(new.iter().all(|b| b.report.log.starts_with("(Only the last ") && b.report.log.ends_with("xxxx") && b.report.log.len() > 20_000 && b.report.log.len() < 30_000), "{}", new[0].report.log.len());
+        assert!(new.iter().all(|b| b.log_whole as usize == pyr_proto::control::BUG_LOG_MAX - 100) && list.iter().filter(|b| b.status != BugStatus::New).all(|b| b.log_whole == 0));
         // A short list has everything, the ones done with without their logs.
         let db = Db::open_in_memory().unwrap();
         let a = db.add_bug(&report("a")).unwrap();
@@ -2783,6 +2926,175 @@ mod tests {
         assert_eq!(list.len(), 2);
         assert!(list.iter().find(|b| b.id == a).unwrap().report.log.is_empty());
         assert!(!list.iter().find(|b| b.id != a).unwrap().report.log.is_empty());
+    }
+
+    /// What Blue's list was on Nov 19: sixteen approved reports whose logs filled the reply to
+    /// within 30 KB, and one new report behind them that the list never showed (the channel
+    /// list counted it: "1"). Every approved and waiting report is in the list whatever their
+    /// logs come to; the logs give way.
+    #[test]
+    fn approved_reports_never_hide_a_new_one() {
+        use pyr_proto::control::{BugEntry, BugReport, BugStatus};
+        let line = "2026-11-16T05:49:00.000000Z  INFO pyr::audio: something happened here\n";
+        let log = |bytes: usize| line.repeat(bytes / line.len() + 1)[..bytes].to_string();
+        let report = |title: &str, bytes: usize| BugReport { title: title.into(), body: "b".repeat(420), os: "windows (x86_64)".into(), app_version: "0.13.28".into(), log: log(bytes), ..Default::default() };
+        let count = |list: &[BugEntry], s: BugStatus| list.iter().filter(|b| b.status == s).count();
+        // (What the reply's reports take as they're sent.)
+        let sent = |list: &[BugEntry]| serde_json::to_string(list).unwrap().len();
+        // As his were: fourteen of about 46.9 KB, one of 17 KB, one of 1 KB.
+        let his: Vec<usize> = std::iter::repeat_n(46_850, 14).chain([16_982, 960]).collect();
+        let db = Db::open_in_memory().unwrap();
+        for (i, bytes) in his.iter().enumerate() {
+            let id = db.add_bug(&report(&format!("approved {i}"), *bytes)).unwrap();
+            db.set_bug_status(id, BugStatus::Approved).unwrap();
+        }
+        let new = db.add_bug(&report("the new one", 47_000)).unwrap();
+        assert_eq!(db.new_bug_count(), 1);
+        // In the size the list was (0.14.1 to 0.16.0: 700 KB): the new one is there, after the
+        // approved ones, whole; its log is its end, from the start of a line, and says so.
+        let list = db.bug_list(700 * 1024);
+        assert_eq!((count(&list, BugStatus::Approved), count(&list, BugStatus::New), list.last().unwrap().id), (16, 1, new), "the new one is there");
+        assert!(sent(&list) <= 700 * 1024, "{}", sent(&list));
+        for (b, whole) in list.iter().zip(his.iter().rev()) {
+            assert_eq!((b.report.log.len(), b.log_whole), (*whole, 0));
+        }
+        let got = list.last().unwrap();
+        let (said, rest) = got.report.log.split_once('\n').unwrap();
+        assert!(said.starts_with("(Only the last ") && said.contains(" KB of this report's log are here, of 46 KB: ") && said.ends_with("or once this one is approved.)"), "{said}");
+        assert!(rest.starts_with("2026-11-16T05:49:00") && rest.len() > 10_000 && rest.len() < 30_000 && log(47_000).ends_with(rest), "{} bytes", rest.len());
+        assert_eq!(got.log_whole, 47_000);
+        // In the size it is now, all seventeen are whole.
+        let list = db.bug_list(BUG_LIST_BYTES);
+        assert_eq!(list.len(), 17);
+        assert!(list.iter().all(|b| b.log_whole == 0 && !b.report.log.starts_with('(')) && list.last().unwrap().report.log.len() == 47_000);
+        // More approved than fit whole (twenty-one): every one is still there, the long ones'
+        // logs each cut to the same length and saying so, the short ones' whole.
+        db.set_bug_status(new, BugStatus::Approved).unwrap();
+        for i in 0..4 {
+            let id = db.add_bug(&report(&format!("more {i}"), 47_000)).unwrap();
+            db.set_bug_status(id, BugStatus::Approved).unwrap();
+        }
+        let list = db.bug_list(BUG_LIST_BYTES);
+        assert_eq!((list.len(), count(&list, BugStatus::Approved)), (21, 21));
+        assert!(sent(&list) <= BUG_LIST_BYTES && sent(&list) > BUG_LIST_BYTES - 20_000, "{}", sent(&list));
+        let lens: Vec<usize> = list.iter().map(|b| b.report.log.len()).collect();
+        assert!(lens.contains(&960) && lens.contains(&16_982), "{lens:?}");
+        let long: Vec<&BugEntry> = list.iter().filter(|b| b.report.log.len() > 20_000).collect();
+        let (most, least) = (long.iter().map(|b| b.report.log.len()).max().unwrap(), long.iter().map(|b| b.report.log.len()).min().unwrap());
+        assert!(long.len() == 19 && least > 44_000 && most < 46_850 && most - least < 500, "{lens:?}");
+        assert!(long.iter().all(|b| b.report.log.starts_with("(Only the last ") && b.report.log.contains("fixed or rejected.)\n2026-11-16") && matches!(b.log_whole, 46_850 | 47_000)));
+        // One of them marked fixed: its log goes, and the rest are whole again.
+        db.set_bug_status(list[3].id, BugStatus::Fixed).unwrap();
+        let list = db.bug_list(BUG_LIST_BYTES);
+        assert_eq!((list.len(), count(&list, BugStatus::Approved), count(&list, BugStatus::Fixed)), (21, 20, 1));
+        assert!(list.iter().all(|b| b.log_whole == 0 && !b.report.log.starts_with('(')));
+        assert!(list.last().unwrap().status == BugStatus::Fixed && list.last().unwrap().report.log.is_empty());
+    }
+
+    /// A great many reports, as long as reports can be: the list still comes in one reply, with
+    /// both kinds in it.
+    #[test]
+    fn a_flood_of_reports_still_lists_both_kinds() {
+        use pyr_proto::control::{BUG_BODY_MAX, BUG_LOG_MAX, BugEntry, BugReport, BugStatus};
+        let line = "2026-11-16T05:49:00.000000Z  INFO pyr::audio: something happened here\n";
+        let log = line.repeat(BUG_LOG_MAX / line.len() + 1)[..BUG_LOG_MAX].to_string();
+        let big = |title: &str| BugReport { title: title.into(), body: "b".repeat(BUG_BODY_MAX), log: log.clone(), ..Default::default() };
+        let of = |list: &[BugEntry], s: BugStatus| list.iter().filter(|b| b.status == s).cloned().collect::<Vec<BugEntry>>();
+        let sent = |list: &[BugEntry]| serde_json::to_string(list).unwrap().len();
+        // Ten approved and three hundred new: the approved ones keep their words and half the
+        // reply for their logs; of the new ones, the newest whose words fit in the rest, their
+        // logs left out and saying so.
+        let db = Db::open_in_memory().unwrap();
+        for i in 0..10 {
+            let id = db.add_bug(&big(&format!("approved {i}"))).unwrap();
+            db.set_bug_status(id, BugStatus::Approved).unwrap();
+        }
+        for i in 0..300 {
+            db.add_bug(&big(&format!("new {i}"))).unwrap();
+        }
+        let list = db.bug_list(BUG_LIST_BYTES);
+        assert!(sent(&list) <= BUG_LIST_BYTES && sent(&list) < pyr_proto::MAX_CONTROL_FRAME, "{}", sent(&list));
+        let approved = of(&list, BugStatus::Approved);
+        assert_eq!(approved.len(), 10);
+        let logs: usize = approved.iter().map(|b| b.report.log.len()).sum();
+        assert!(logs > BUG_LIST_BYTES / 2 - 12_000 && logs <= BUG_LIST_BYTES / 2 + 12_000, "{logs}");
+        assert!(approved.iter().all(|b| b.log_whole as usize == BUG_LOG_MAX && b.report.log.starts_with("(Only the last ")));
+        let new = of(&list, BugStatus::New);
+        assert!(new.len() > 35 && new.len() < 50 && new[0].report.title == "new 299", "{} new, the newest first", new.len());
+        assert!(new.iter().all(|b| b.report.log.starts_with("(This report's log isn't here, 47 KB of it: ") && b.report.log.ends_with("or once this one is approved.)") && b.log_whole as usize == BUG_LOG_MAX));
+        // More approved than their words alone fit, and three new: the new ones are all there
+        // (a quarter of the reply is theirs before any approved one's words past it).
+        let db = Db::open_in_memory().unwrap();
+        for i in 0..120 {
+            let id = db.add_bug(&big(&format!("approved {i}"))).unwrap();
+            db.set_bug_status(id, BugStatus::Approved).unwrap();
+        }
+        for i in 0..3 {
+            db.add_bug(&big(&format!("new {i}"))).unwrap();
+        }
+        let list = db.bug_list(BUG_LIST_BYTES);
+        assert!(sent(&list) <= BUG_LIST_BYTES, "{}", sent(&list));
+        let (approved, new) = (of(&list, BugStatus::Approved), of(&list, BugStatus::New));
+        assert!(approved.len() > 95 && approved.len() < 110 && approved[0].report.title == "approved 119", "{} approved, the newest first", approved.len());
+        assert_eq!(new.len(), 3);
+        assert!(list.iter().all(|b| b.report.body.len() == BUG_BODY_MAX && b.report.log.starts_with("(This report's log isn't here")));
+        // And more new ones than fit beside them: a quarter of the reply's worth are listed.
+        for i in 3..200 {
+            db.add_bug(&big(&format!("new {i}"))).unwrap();
+        }
+        let list = db.bug_list(BUG_LIST_BYTES);
+        assert!(sent(&list) <= BUG_LIST_BYTES, "{}", sent(&list));
+        let (approved, new) = (of(&list, BugStatus::Approved), of(&list, BugStatus::New));
+        assert!(approved.len() > 70 && approved.len() < 85 && new.len() > 20 && new.len() < 30 && new[0].report.title == "new 199", "{} approved, {} new", approved.len(), new.len());
+        // Reports made to be as big as they can be when they're sent (every byte one that JSON
+        // doubles): what the list counts is what's sent, so it still comes in one reply.
+        let db = Db::open_in_memory().unwrap();
+        for i in 0..40 {
+            let id = db.add_bug(&BugReport { title: format!("\"{i}\""), body: "\\".repeat(BUG_BODY_MAX), log: "\"\n".repeat(BUG_LOG_MAX / 2), ..Default::default() }).unwrap();
+            if i < 8 {
+                db.set_bug_status(id, BugStatus::Approved).unwrap();
+            }
+        }
+        let list = db.bug_list(BUG_LIST_BYTES);
+        assert!(sent(&list) <= BUG_LIST_BYTES && sent(&list) > BUG_LIST_BYTES - 40_000, "{}", sent(&list));
+        let (approved, new) = (of(&list, BugStatus::Approved), of(&list, BugStatus::New));
+        assert!(approved.len() == 8 && new.len() > 15 && new.len() < 25 && new[0].report.title == "\"39\"", "{} approved, {} new", approved.len(), new.len());
+        assert!(list.iter().all(|b| b.log_whole as usize == BUG_LOG_MAX));
+        assert!(approved.iter().all(|b| b.report.log.len() > 25_000 && b.report.log.ends_with("\"\n")), "{}", approved[0].report.log.len());
+        // The ones done with keep a place too, whatever the others' logs come to: the newest
+        // of them, without their logs.
+        for b in new.iter().take(5) {
+            db.set_bug_status(b.id, BugStatus::Rejected).unwrap();
+        }
+        let list = db.bug_list(BUG_LIST_BYTES);
+        assert!(sent(&list) <= BUG_LIST_BYTES, "{}", sent(&list));
+        let done = of(&list, BugStatus::Rejected);
+        assert!(done.len() >= 3 && done[0].report.title == "\"39\"" && done.iter().all(|b| b.report.log.is_empty() && b.log_whole == 0), "{} done with", done.len());
+        assert!(of(&list, BugStatus::Approved).len() == 8 && of(&list, BugStatus::New).len() > 15);
+    }
+
+    /// What the list counts a report's text as is what serde_json sends it as.
+    #[test]
+    fn a_report_is_counted_as_it_s_sent() {
+        for s in ["", "plain words", "a \"quoted\" C:\\Users\\someone\\AppData path\n\tand a tab\r\n", "caf\u{e9} \u{1f525} \u{7f} \u{1} \u{8} \u{c} \u{1f}", &"\"\\\n".repeat(1000)] {
+            assert_eq!(wire(s), serde_json::to_string(s).unwrap().len() - 2, "{s:?}");
+        }
+        // The line a cut log starts with fits in what's kept for it, whatever the numbers.
+        for waiting in [false, true] {
+            for (end, whole) in [(0, 48_000), (47_999, 48_000), (1_000, 1_024_000)] {
+                assert!(wire(&log_said(end, whole, waiting)) <= LOG_SAID, "{}", log_said(end, whole, waiting));
+            }
+        }
+        // A log's end: no more than asked for as it's sent, from the start of a line when one
+        // starts soon, and never from the middle of a letter.
+        let log = "first line\nsecond \"line\"\nthird line, the last\n";
+        assert_eq!(log_end(log, 30), "third line, the last\n");
+        assert_eq!(log_end(log, 22), "third line, the last\n");
+        assert_eq!(log_end(log, 21), "");
+        assert_eq!(log_end(log, 1000), log);
+        let long = format!("{}\u{e9}{}", "x".repeat(500), "y".repeat(500));
+        assert_eq!(log_end(&long, 501), "y".repeat(500));
+        assert_eq!(log_end(&long, 502), format!("\u{e9}{}", "y".repeat(500)));
     }
 
     #[test]

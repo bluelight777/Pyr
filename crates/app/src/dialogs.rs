@@ -1,5 +1,7 @@
 //! Modal dialogs: join server, invites, channels, the screen picker (Settings is in settings.rs).
 
+use std::time::{Duration, Instant};
+
 use eframe::egui::{self, Align, Color32, Layout, RichText, Sense, pos2, vec2};
 use pyr_engine::state::{AppState, BugSend, ConnStatus};
 use pyr_proto::control::{ChannelKind, ROLES_FEATURE, perm};
@@ -74,6 +76,13 @@ pub(crate) fn open_invite(dialog: &mut Option<Dialog>, key: &str) -> Vec<Act> {
 pub(crate) fn title(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).font(theme::bold_font(20.0)).color(theme::TEXT()));
     ui.add_space(4.0);
+}
+
+/// What the owner's Bug reports window says of reports the server counts as waiting and its
+/// list hasn't got (`more` of them), with what brings them.
+pub(crate) fn unlisted_words(more: u64) -> String {
+    let which = if more == 1 { "1 more report waiting on the server didn't fit in this list. It comes".to_string() } else { format!("{more} more reports waiting on the server didn't fit in this list. They come") };
+    format!("{which} as room is made: approve or reject the new ones here, and mark approved ones that are dealt with as fixed or rejected.")
 }
 
 /// A field's name over it, in capitals (0.13.14: 12 high, spaced out, and brightened where a
@@ -1100,6 +1109,37 @@ impl PyrApp {
                             }
                         }
                     });
+                    // More waiting on the server than the list has (the channel list's count is
+                    // the server's own): a report came in since, so the list is asked for again,
+                    // once for each count. (After a moment: approving or rejecting one here
+                    // changes this list before the server's count follows, and the list asked
+                    // for on opening may still be on its way.) Still short after that, the list
+                    // had no room for the rest (a flood's oldest; on a server before 0.16.1,
+                    // whatever came after the approved reports' logs), which is said, with what
+                    // brings them.
+                    let listed = st.bugs.get(&key).map(|v| v.iter().filter(|b| b.status == BugStatus::New).count() as u64);
+                    let waiting = st.server(&key).map(|s| s.info.new_bug_reports).unwrap_or(0);
+                    let short = listed.is_some_and(|l| waiting > l);
+                    if short {
+                        let mut s = self.ui.bugs_short.unwrap_or(crate::app::BugsShort { since: Instant::now(), asked: None, said: false });
+                        if s.asked.map(|a| a.0) != Some(waiting) && s.since.elapsed() >= Duration::from_millis(2500) {
+                            acts.push(Act::ListBugs(key.clone()));
+                            s.asked = Some((waiting, Instant::now()));
+                        }
+                        s.said |= s.asked.is_some_and(|(n, at)| n == waiting && at.elapsed() >= Duration::from_secs(3));
+                        if s.said {
+                            ui.add_space(2.0);
+                            ui.label(RichText::new(unlisted_words(waiting - listed.unwrap_or(0))).size(12.5).color(theme::LIVE()));
+                        } else {
+                            ui.ctx().request_repaint_after(Duration::from_millis(500));
+                        }
+                        self.ui.bugs_short = Some(s);
+                    } else {
+                        self.ui.bugs_short = None;
+                    }
+                    // (A list that isn't whole is asked for again when a report's status changes:
+                    // there's room it didn't have, for a log that was cut or a report left out.)
+                    let whole = !short && st.bugs.get(&key).is_none_or(|v| v.iter().all(|b| b.log_whole == 0));
                     ui.separator();
                     let want = tabs[((filter % 10) as usize).min(3)].0;
                     let mut shown: Vec<_> = all.iter().filter(|b| b.status == want).collect();
@@ -1149,6 +1189,11 @@ impl PyrApp {
                                             let btn = if primary { theme::primary_button(label) } else { egui::Button::new(label) };
                                             if ui.add(btn).clicked() {
                                                 acts.push(Act::SetBugStatus { key: key.clone(), id: b.id, status: s });
+                                                // (Short of waiting reports, a change to how
+                                                // many wait brings the list by itself, above.)
+                                                if !whole && !(short && (b.status == BugStatus::New || s == BugStatus::New)) {
+                                                    acts.push(Act::ListBugs(key.clone()));
+                                                }
                                             }
                                         }
                                     };

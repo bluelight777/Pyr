@@ -10,6 +10,11 @@
 # the Keeper's list for rebuilt Pyrs (index4.json; 0.13.28's index3.json leaves it out, as the
 # key before can't endorse it). One name to start on both systems (the Library's `run`):
 # prop-bets.exe, the Linux one too.
+# Only for a version of it that isn't up yet: the Keeper never takes the same version twice, so
+# a file made again under a version that's up would no longer be the one its listing describes
+# (and nobody could install it). PUBLISHED (the last release's upload folder) makes this refuse
+# that. A release that leaves Pyr Prop Bets as it is carries the published files and listing
+# instead, as 0.16.1 did (rebuild/tools/release-0.16.1/pack-0161.sh).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 : "${KEY:?the release key file}"
@@ -18,6 +23,10 @@ VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/prop-bets/Cargo.toml | head
 PYR=$(sed -n '/^\[workspace.package\]/,/^\[/ s/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
 LIST=installer/site/library/prop-bets.json
 grep -q "\"version\": \"$VERSION\"" "$LIST" || { echo "$LIST isn't for Pyr Prop Bets $VERSION (crates/prop-bets/Cargo.toml)." >&2; exit 1; }
+if [ -n "${PUBLISHED:-}" ] && [ -f "$PUBLISHED/keeper/add/prop-bets.json" ]; then
+  UP=$(python3 -c 'import json, sys; print(next((p["version"] for p in json.loads(json.load(open(sys.argv[1]))["index"])["plugins"] if p["id"] == "prop-bets"), ""))' "$PUBLISHED/keeper/add/prop-bets.json")
+  [ "$UP" != "$VERSION" ] || { echo "Pyr Prop Bets $VERSION is up already ($PUBLISHED): give it a new version (crates/prop-bets/Cargo.toml and $LIST), or carry the published files instead." >&2; exit 1; }
+fi
 WIN=target-win/x86_64-pc-windows-gnu/release/prop-bets.exe
 LIN=target/release/prop-bets
 for B in "$WIN" "$LIN"; do
@@ -41,6 +50,8 @@ from PIL import Image
 Image.open(sys.argv[1]).convert("RGBA").resize((256, 256), Image.LANCZOS).save(sys.argv[2], optimize=True)
 PY
 mkdir -p dist/keeper/add
+# ({{PYR}} in the listing's words, when it's there, is this release's Pyr: for what this very
+# release adds. Parlays' line says 0.16.0 outright.)
 sed "s/{{PYR}}/$PYR/g" "$LIST" > dist/prop-bets-list.json
 cargo run -q -p pyr-proto --example library -- sign --endorse --key "$KEY" --in dist/prop-bets-list.json --files "$FILES" --out dist/keeper/add/prop-bets.json
 rm -f dist/prop-bets-list.json

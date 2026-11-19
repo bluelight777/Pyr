@@ -396,6 +396,42 @@ file the size of the build that was tried on the test screen. The weather's firs
 Wednesday's) were closed and waiting, as they should be: a day's betting closes at its
 midnight there and its report comes an hour or two after the day ends.
 
+0.16.1 (Nov 19): Blue, with two pictures of his Pyr: "it seems that bugs are not being reported
+anymore. It says there is one bug, but when I look I don't see any to approve." The channel
+list said 1; the Bug reports window said New (0), Approved (16). Reports were arriving: one was
+waiting on the server. The window's list had no room for it. Since 0.14.1 the owner's list was
+the approved reports first, whole, then what's waiting, in one reply of 700 KB; his sixteen
+approved ones (733 to 748, Nov 15 to 17, all sent by 0.13.28 by itself: fifteen "my voice went
+up and down for the others" with logs of 47 KB, one "Pyr stopped responding for a while") came
+to 685,990 of its 716,800 bytes, so a new report with a log of its own was cut off the end,
+while the count beside the channel list, which is the server's own, counted it. (The same
+failure as Nov 17's the other way round: then it was the new ones that hid the approved.) What
+it is now (`Db::bug_list`, `fit_logs`):
+- Both kinds are always in the list, the approved ones first. What gives way is the logs: the
+  approved ones' logs come first, then the waiting ones' in what's left; logs that don't fit
+  are cut to their ends (where what went wrong is), one length for all, the short ones whole,
+  from the start of a line. A log that's cut or left out says so in its first line, with what
+  brings the rest, and its report says how long it was (`BugEntry::log_whole`, new; older Pyrs
+  don't read it).
+- Reports are counted as they're sent (JSON: a quote, a backslash and a line's end are two
+  bytes each), which the list never did: seven hundred kilobytes of reports made of quotes was
+  a reply of 1.4 MB, over the megabyte one message may be, and the list wouldn't have loaded at
+  all ("That reply was too big to send"). Counted that way the reply can be 900 KB, so his
+  seventeen come whole.
+- Each kind is read from the database by itself (the newest 300), and when there are more than
+  even their words fit, each is sure of its share: the waiting ones of a quarter of the reply,
+  the ones done with of a sixteenth, the approved ones' logs of half.
+- The owner's window: when the server counts more waiting than the list has (a report came in
+  while it's open), it asks for the list again by itself; if the list still hasn't got them,
+  it says how many didn't fit and what makes room. A change of status brings the list again
+  when it wasn't whole.
+- Pyr Prop Bets stays 0.3.0 and isn't built again for the Library: the Keeper never takes the
+  same version twice, so the release carries the files and the signed listing 0.16.0 published,
+  byte for byte (`make-prop-bets.sh` now refuses to remake a version that's up). Its listing in
+  the repository says "Parlays need Pyr 0.16.0 or newer" outright.
+Until 0.16.1 is on the VPS: marking one or two of the old approved reports fixed or rejected
+makes the room (Blue was told; the sixteen are his to close, not Claude's).
+
 0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
 Blue's pyr.log, Nov 17, "couldn't find the server "SERVER2.24.121.231": No such host is known".
 The bug server's address in `release-env.sh` had been read out of 0.13.28's program with the
@@ -576,6 +612,8 @@ empty: the owner's list was what's waiting first, logs and all, cut at 700 KB, s
 reports with long logs filled it, the approved ones never came, and his Pyr took their file off
 the PC as if there were none. The server now sends the approved ones first, then what's waiting,
 then the rest without their logs (`Db::bug_list`).
+And the other way round on Nov 19 (0.16.1, above): sixteen approved reports with long logs
+filled the list and hid a new one. Neither kind can hide the other now: the logs give way.
 - [x] 668, 670 (stopped responding): false. 668 was the update's installer being checked on the
       window's thread just before quitting (now: quitting is marked first; a freeze the window
       came out of by quitting isn't reported); 670 was the window being opened again after the

@@ -657,6 +657,11 @@ pub struct BugEntry {
     /// For an idea: how many asked for it (the first and everyone whose idea was the same).
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub asked: u32,
+    /// The whole log's bytes, when the log here isn't all of it: the owner's list had no room
+    /// (servers since 0.16.1 cut a log to its end, or leave it out, rather than leave a report
+    /// out; the log's first line then says so too). 0: the log is whole.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub log_whole: u32,
 }
 
 fn is_zero(n: &u64) -> bool {

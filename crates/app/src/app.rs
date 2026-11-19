@@ -382,6 +382,19 @@ impl VoiceMark {
     }
 }
 
+/// The owner's Bug reports window with fewer waiting reports in its list than the server
+/// counts: a report that comes in while the window is open brings the list again by itself,
+/// and ones still missing after that are said to be.
+#[derive(Clone, Copy)]
+pub struct BugsShort {
+    /// Since when it's been short.
+    pub since: Instant,
+    /// The server's count the list was last asked for again at, and when.
+    pub asked: Option<(u64, Instant)>,
+    /// It's been said that the list had no room for the rest (and stays said while that's so).
+    pub said: bool,
+}
+
 #[derive(Default)]
 pub struct UiState {
     pub server: Option<String>,
@@ -572,6 +585,9 @@ pub struct UiState {
     /// My parlays as Pyr Prop Bets' window was last told them (the engine's `parlays_version`):
     /// they're told again whole when they change, not with every prop that does.
     pub prop_bets_parlays: u64,
+    /// The owner's Bug reports window, while the server counts more reports waiting than its
+    /// list has (None: the list has them all).
+    pub bugs_short: Option<BugsShort>,
     /// When a prop's card in chat last asked how one of the casino's own props stands (those
     /// change without this Pyr hearing, unless Pyr Prop Bets' window is open).
     pub prop_card_asked: HashMap<(String, u64), Instant>,
@@ -2928,6 +2944,7 @@ impl PyrApp {
                 }
                 if resp.on_hover_text("Pyr bug reports people sent here. Only you see this.").clicked() {
                     acts.push(Act::ListBugs(s.key.clone()));
+                    self.ui.bugs_short = None;
                     self.ui.dialog = Some(Dialog::BugReports { key: s.key.clone(), filter: 0 });
                 }
                 ui.add_space(6.0);
@@ -4164,6 +4181,15 @@ pub(crate) fn person_menu(ui: &mut egui::Ui, st: &AppState, uid: &str, acts: &mu
 
 #[cfg(test)]
 mod tests {
+    /// The owner's Bug reports window, of reports the server counts and its list hasn't got.
+    #[test]
+    fn reports_the_list_has_no_room_for_are_said() {
+        let one = crate::dialogs::unlisted_words(1);
+        assert!(one.starts_with("1 more report waiting on the server didn't fit in this list. It comes as room is made: "), "{one}");
+        assert!(one.ends_with("approve or reject the new ones here, and mark approved ones that are dealt with as fixed or rejected."));
+        assert!(crate::dialogs::unlisted_words(3).starts_with("3 more reports waiting on the server didn't fit in this list. They come as room is made: "));
+    }
+
     #[test]
     fn invite_links_are_told_apart_from_other_links() {
         let fp = pyr_proto::b64::encode(&[7u8; 9]);

@@ -2202,9 +2202,11 @@ impl Ctx<'_> {
                 if self.role() != Role::Owner {
                     return Err((ErrorCode::Forbidden, "Only the server's owner can read bug reports.".into()));
                 }
-                // As many as fit in one reply (logs make them big): a pile of reports (even a flood
-                // from strangers) never stops the list loading, and never hides the approved ones.
-                Ok(Event::Bugs { reports: db.bug_list(HISTORY_PAGE_BYTES) })
+                // One reply, whatever there is (logs make reports big): every approved report and
+                // every one that's waiting, their logs cut to fit if they must be. A pile of
+                // reports (even a flood from strangers) never stops the list loading, and neither
+                // kind hides the other (see `Db::bug_list`).
+                Ok(Event::Bugs { reports: db.bug_list(crate::db::BUG_LIST_BYTES) })
             }
             Request::SetBugStatus { id, status } => {
                 if self.role() != Role::Owner {
@@ -2908,12 +2910,17 @@ mod tests {
             other => panic!("{other:?}"),
         };
         // It fits in one reply, with the approved ones first (they're what gets fixed, and the
-        // owner's Pyr saves them from this list: see `Db::bugs`).
+        // owner's Pyr saves them from this list), every one of them; and the waiting ones
+        // after, the newest that fit, logs giving way (see `Db::bug_list`).
         assert!(!reports.is_empty());
         let b = frame(1, Event::Bugs { reports: reports.clone() });
-        assert!(b.len() <= pyr_proto::MAX_CONTROL_FRAME, "{} bytes", b.len());
-        assert!(reports.iter().all(|r| r.status == BugStatus::Approved), "the approved ones come first");
+        assert!(b.len() <= crate::db::BUG_LIST_BYTES + 100 && b.len() < pyr_proto::MAX_CONTROL_FRAME, "{} bytes", b.len());
+        let approved = reports.iter().take_while(|r| r.status == BugStatus::Approved).count();
+        assert_eq!(approved, 30, "the approved ones come first, all of them");
         assert_eq!(reports[0].report.title, "report 58", "newest first");
+        let waiting: Vec<&pyr_proto::control::BugEntry> = reports.iter().filter(|r| r.status == BugStatus::New).collect();
+        assert!(waiting.len() >= 10 && waiting[0].report.title == "report 59", "{} waiting", waiting.len());
+        assert!(reports.iter().all(|r| r.report.log.len() < BUG_LOG_MAX && r.report.log.starts_with('(') && r.log_whole as usize == BUG_LOG_MAX), "their logs cut or left out, and saying so");
     }
 
     #[test]
