@@ -470,6 +470,10 @@ fix in. Seen on the test screen with the release builds (`rebuild/tools/release-
   its .deb) not added and the picker shut, three times of three; with 0.16.1 added, three of
   three. The search box in that part takes a click and typing; a press outside still shuts
   the picker; the picker by the message box in a window 420 high still picks.
+  (Twice early on, once with each build, a press on the reaction button just after a reaction
+  had been taken off left no picker showing a second and a half later. Twelve tries to see it
+  again, eight of them in a row with 0.16.1 (`e2e/smile-loop.sh`), all showed it. Not
+  explained; Blue was told.)
 The VPS's set-up run dry over an earlier release's (45 and 46 checks); Pyr Prop Bets' listing
 and files are 0.16.0's, byte for byte (the Keeper takes a listing in only when its version is
 newer, so the same again changes nothing). On Blue's PC as `Downloads\pyr-release-0.16.1` (51
