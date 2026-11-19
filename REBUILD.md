@@ -414,8 +414,8 @@ it is now (`Db::bug_list`, `fit_logs`):
   brings the rest, and its report says how long it was (`BugEntry::log_whole`, new; older Pyrs
   don't read it).
 - Reports are counted as they're sent (JSON: a quote, a backslash and a line's end are two
-  bytes each), which the list never did: seven hundred kilobytes of reports made of quotes was
-  a reply of 1.4 MB, over the megabyte one message may be, and the list wouldn't have loaded at
+  bytes each), which the list never did: seven hundred kilobytes of reports made of quotes
+  would be sent as 1.4 MB, over the megabyte one message may be, and the list wouldn't load at
   all ("That reply was too big to send"). Counted that way the reply can be 900 KB, so his
   seventeen come whole.
 - Each kind is read from the database by itself (the newest 300), and when there are more than
@@ -429,8 +429,23 @@ it is now (`Db::bug_list`, `fit_logs`):
   same version twice, so the release carries the files and the signed listing 0.16.0 published,
   byte for byte (`make-prop-bets.sh` now refuses to remake a version that's up). Its listing in
   the repository says "Parlays need Pyr 0.16.0 or newer" outright.
-Until 0.16.1 is on the VPS: marking one or two of the old approved reports fixed or rejected
-makes the room (Blue was told; the sixteen are his to close, not Claude's).
+Until 0.16.1 is on the VPS: marking one of the old approved reports with a long log fixed or
+rejected makes the room (Blue was told; the sixteen are his to close, not Claude's).
+And the same day, while it was building: "In a message from Gonz, I tried to react to an image.
+It worked the first time. I removed it and tried to re-add it it won't allow me to add an emote
+as a reaction to his image." Found on the test screen (a second member, the bot as Gonz,
+posting pictures; two emoji of the server's own put in its data): for a message low in the
+window the reactions' picker is moved up to fit, and a press on the part of it above where it
+would have started (the search box, the server's own emoji, sometimes Frequently used) closed
+the picker and added nothing; further down it worked. The picker closes on a press outside it,
+and asked egui whether the pointer was in its `Area`; egui notes an `Area` that's given a place
+(`fixed_pos`) and kept inside the window (`constrain`) at the place it was given, not where it
+ended up. A click whose press and release come in one frame got through (the test screen's
+clicks, at first: which is why it took a press, a wait and a release to see it every time); a
+person's never do. Taking the reaction off makes the last message shorter and so lower, and
+the strip bigger: the same emoji that worked is then in it. Now the three pickers that closed
+that way (reactions, and the emoji and GIF pickers by the message box, which are moved down in
+a short window) go by where the pop-up is (`chat::pressed_outside`), as the others already did.
 
 0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
 Blue's pyr.log, Nov 17, "couldn't find the server "SERVER2.24.121.231": No such host is known".

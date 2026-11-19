@@ -1037,10 +1037,7 @@ impl PyrApp {
                             }
                         });
                     });
-                let clicked_outside = ui.input(|i| i.pointer.any_pressed())
-                    && !area.response.contains_pointer()
-                    && !tools.contains(ui.input(|i| i.pointer.interact_pos()).unwrap_or_default());
-                if clicked_outside || ui.input(|i| i.key_pressed(Key::Escape)) {
+                if pressed_outside(ui, &area.response, tools) || ui.input(|i| i.key_pressed(Key::Escape)) {
                     self.ui.react_picker = None;
                 }
             }
@@ -1641,10 +1638,7 @@ impl PyrApp {
                         self.ui.gif_picker = false;
                         ui.ctx().memory_mut(|m| m.request_focus(composer_id));
                     }
-                    let clicked_outside = ui.input(|i| i.pointer.any_pressed())
-                        && !area.response.contains_pointer()
-                        && !gb.rect.contains(ui.input(|i| i.pointer.interact_pos()).unwrap_or_default());
-                    if clicked_outside || ui.input(|i| i.key_pressed(Key::Escape)) {
+                    if pressed_outside(ui, &area.response, gb.rect) || ui.input(|i| i.key_pressed(Key::Escape)) {
                         self.ui.gif_picker = false;
                         ui.ctx().memory_mut(|m| m.request_focus(composer_id));
                     }
@@ -1672,10 +1666,7 @@ impl PyrApp {
                         }
                         ui.ctx().memory_mut(|m| m.request_focus(composer_id));
                     }
-                    let clicked_outside = ui.input(|i| i.pointer.any_pressed())
-                        && !area.response.contains_pointer()
-                        && !eb.rect.contains(ui.input(|i| i.pointer.interact_pos()).unwrap_or_default());
-                    if clicked_outside || ui.input(|i| i.key_pressed(Key::Escape)) {
+                    if pressed_outside(ui, &area.response, eb.rect) || ui.input(|i| i.key_pressed(Key::Escape)) {
                         self.ui.composer_emoji = false;
                     }
                 }
@@ -2264,6 +2255,17 @@ pub fn human_size(n: u64) -> String {
     } else {
         format!("{} KB", (n / 1024).max(1))
     }
+}
+
+/// A press this frame that's outside a pop-up (`area`: what showing its `Area` gave back) and
+/// outside what opens it (`opener`), by where the pop-up really is. Not by the area's own
+/// `contains_pointer`: egui notes an `Area` that's given a place and kept inside the window at
+/// the place it was given, not where it ended up, so a press on the part that was moved in
+/// counted as outside. (Blue, Nov 19: for a message low in the window the reactions' picker is
+/// moved up to fit, and pressing one of the emoji in its top, the server's own among them,
+/// closed it instead of reacting.)
+fn pressed_outside(ui: &egui::Ui, area: &egui::Response, opener: Rect) -> bool {
+    ui.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !area.rect.contains(p) && !opener.contains(p)))
 }
 
 /// Discord's red "NEW" line: where the messages you hadn't seen start.
@@ -3131,6 +3133,64 @@ mod delete_tests {
         assert!(said.ends_with("The 2 replies to it will say it was deleted."), "{said}");
         let just_reactions = Message { reactions: vec![Reaction { emoji: "👍".into(), users: vec!["b".into()] }], ..msg(9, None) };
         assert_eq!(goes_with_it(&just_reactions, &log).as_deref(), Some("1 reaction goes with it."));
+    }
+}
+
+#[cfg(test)]
+mod pop_up_tests {
+    use super::*;
+
+    /// A pop-up asked for low in the window and kept inside it, as the reactions' picker is for
+    /// a message near the bottom: a press on the part of it that was moved in is inside it.
+    #[test]
+    fn a_press_on_the_part_of_a_pop_up_that_was_moved_in_is_inside_it() {
+        let ctx = egui::Context::default();
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let opener = Rect::from_min_size(pos2(700.0, 500.0), vec2(30.0, 30.0));
+        // A frame: the pop-up, 300 high, asked for from 534 down (so it's moved up to end at
+        // the window's bottom). Where it is, whether a press this frame was outside it, and
+        // what egui's own `contains_pointer` says.
+        let frame = |events: Vec<egui::Event>| {
+            let mut out = None;
+            let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let area = egui::Area::new(egui::Id::new("pop-up"))
+                        .order(egui::Order::Foreground)
+                        .pivot(egui::Align2::RIGHT_TOP)
+                        .fixed_pos(pos2(730.0, 534.0))
+                        .constrain(true)
+                        .show(ui.ctx(), |ui| {
+                            ui.allocate_exact_size(vec2(200.0, 300.0), Sense::click());
+                        });
+                    out = Some((area.response.rect, pressed_outside(ui, &area.response, opener), area.response.contains_pointer()));
+                });
+            });
+            out.unwrap()
+        };
+        frame(vec![]);
+        let (rect, _, _) = frame(vec![]);
+        assert!(rect.bottom() <= 600.5 && rect.top() < 320.0 && rect.height() >= 300.0, "{rect:?}: moved up to fit");
+        let press = |p: egui::Pos2| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() };
+        let release = |p: egui::Pos2| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() };
+        let pressed_at = |p: egui::Pos2| {
+            frame(vec![egui::Event::PointerMoved(p)]);
+            let got = frame(vec![press(p)]);
+            frame(vec![release(p)]);
+            got
+        };
+        // In its top, above where it was asked for: inside (egui's own answer there is no,
+        // which is what closed the picker).
+        let (_, outside, egui_says) = pressed_at(pos2(650.0, rect.top() + 20.0));
+        assert!(!outside, "a press at the top of it is inside it");
+        assert!(!egui_says, "egui has the area where it was asked for: if this fails, egui changed and its own answer may do");
+        // In its bottom: inside. On what opens it: not outside. Anywhere else: outside.
+        assert!(!pressed_at(pos2(650.0, 590.0)).1);
+        assert!(!pressed_at(opener.center()).1);
+        assert!(pressed_at(pos2(100.0, 100.0)).1);
+        assert!(pressed_at(pos2(650.0, rect.top() - 20.0)).1);
+        // No press: nothing to close it.
+        assert!(!frame(vec![egui::Event::PointerMoved(pos2(100.0, 100.0))]).1);
     }
 }
 
