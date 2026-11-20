@@ -712,12 +712,14 @@ mod win {
                 // off again.
                 let style = GetWindowLongPtrW(w, GWL_STYLE) as u32;
                 let ex = GetWindowLongPtrW(w, GWL_EXSTYLE) as u32;
+                let mut stripped = false;
                 if style & FRAME != 0 || ex & WS_EX_TOOLWINDOW.0 == 0 || ex & WS_EX_APPWINDOW.0 != 0 {
                     if self.frame_back % 100 == 0 {
                         tracing::info!(pid = self.pid, times = self.frame_back + 1, style = format!("{style:#x}"), ex = format!("{ex:#x}"), "a program put its frame or taskbar button back: off again");
                     }
                     self.frame_back += 1;
                     strip(w);
+                    stripped = true;
                 }
                 match place {
                     Some(r) => {
@@ -737,9 +739,22 @@ mod win {
                         }
                         let at = self.inset.around(target);
                         follow(Some((main, w, (r.min.x.round() as i32, r.min.y.round() as i32, target.2, target.3), self.inset)));
+                        // Its frame taken off, the part of its window it draws in is bigger, and a
+                        // program may only hear that when its window's size changes: Pyr Prop Bets
+                        // (Blue, Nov 20, 0.16.2: "it's just frozen on this screen, buttons do not
+                        // work") put its frame back as it showed itself, Pyr took it off, and it
+                        // drew on at the size it had with its frame (a strip of black along its
+                        // bottom and right, as wide as a frame), then not at all. So the first
+                        // time it's put in its place, and each of the first few times its frame
+                        // comes off again, its size is changed and changed back.
+                        let nudge = self.placed.is_none() || (stripped && self.frame_back <= 5);
                         // (Put again when it moved itself, too: 0.13.8.)
-                        if self.placed != Some(at) || now != Some((at.0, at.1, at.0 + at.2, at.1 + at.3)) {
-                            let _ = SetWindowPos(w, None, at.0, at.1, at.2, at.3, SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS);
+                        if nudge || self.placed != Some(at) || now != Some((at.0, at.1, at.0 + at.2, at.1 + at.3)) {
+                            let flags = SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS;
+                            if nudge {
+                                let _ = SetWindowPos(w, None, at.0, at.1, at.2, (at.3 - 1).max(1), flags);
+                            }
+                            let _ = SetWindowPos(w, None, at.0, at.1, at.2, at.3, flags);
                             self.placed = Some(at);
                         }
                         self.clip(w, (!self.inset.is_none()).then_some((self.inset, target.2, target.3)));

@@ -16,7 +16,8 @@
 //! my parlays as tickets.
 //!
 //! 0.3.1: a frame that can't be shown no longer leaves what it drew waiting on the graphics card
-//! (see `surface_error`).
+//! (see `surface_error`). 0.3.2: frames that keep failing (its size changed without it hearing)
+//! put themselves right (see `unshown`).
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
@@ -90,6 +91,12 @@ fn main() -> eframe::Result<()> {
                 // (Only what changed each time, from a Pyr that knows how.)
                 asks::ask(asks::hello());
             }
+            // (`PROP_BETS_TRY_UNSHOWN`, for trying `unshown` on a test screen: as if the last
+            // three frames, over two seconds, couldn't be shown.)
+            if std::env::var_os("PROP_BETS_TRY_UNSHOWN").is_some() {
+                let now = Instant::now();
+                *UNSHOWN.lock().unwrap_or_else(|e| e.into_inner()) = Some((now - Duration::from_secs(2), 3, now, "pretend"));
+            }
             Ok(Box::new(App::new(&cc.egui_ctx, rx, bridge)))
         }),
     )
@@ -111,16 +118,62 @@ fn surface_error(err: eframe::wgpu::SurfaceError) -> eframe::egui_wgpu::SurfaceE
     if let Some(q) = GPU_QUEUE.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
         q.submit(std::iter::empty());
     }
-    // (Minimized on Windows, every frame is "outdated": not worth a line each.)
-    if err != eframe::wgpu::SurfaceError::Outdated {
-        static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
-        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
-        if last.is_none_or(|t| t.elapsed() >= Duration::from_secs(10)) {
-            *last = Some(Instant::now());
-            eprintln!("a frame couldn't be shown: {err}");
-        }
+    // (Each kind, "outdated" too: see `unshown`.)
+    static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    if last.is_none_or(|t| t.elapsed() >= Duration::from_secs(10)) {
+        *last = Some(Instant::now());
+        eprintln!("a frame couldn't be shown: {err}");
     }
+    use eframe::wgpu::SurfaceError as E;
+    let kind = match err {
+        E::Outdated => "outdated",
+        E::Timeout => "timed out",
+        E::Lost => "lost",
+        E::OutOfMemory => "out of memory",
+        _ => "other",
+    };
+    let mut u = UNSHOWN.lock().unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    *u = match *u {
+        Some((first, n, at, _)) if now - at < UNSHOWN_GAP => Some((first, n + 1, now, kind)),
+        _ => Some((now, 1, now, kind)),
+    };
     eframe::egui_wgpu::SurfaceErrorAction::SkipFrame
+}
+
+/// Frames that couldn't be shown, one after another (none more than `UNSHOWN_GAP` apart): since
+/// when, how many, the last, and why the last couldn't.
+static UNSHOWN: std::sync::Mutex<Option<(Instant, u32, Instant, &'static str)>> = std::sync::Mutex::new(None);
+const UNSHOWN_GAP: Duration = Duration::from_secs(3);
+
+/// Frames that keep failing ("outdated": the window's size changed without this hearing of it,
+/// which egui only puts right on the next change of size): Blue, Nov 20, inside Pyr 0.16.2, "it's
+/// just frozen on this screen, buttons do not work". Pyr took the frame off this window just
+/// after it showed itself, and it drew on at the size it had with its frame (a black strip along
+/// its bottom and right as wide as a frame), then not at all. So after three in a row, a second
+/// or more apart in all, its size is changed and changed back (once every 5 s at most, never
+/// minimized), and it hears its size again. Says so on its errors (Pyr keeps them in pyr.log).
+fn unshown(ctx: &egui::Context, nudged: &mut Option<Instant>, back: &mut Option<egui::Vec2>) {
+    if let Some(size) = back.take() {
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+        return;
+    }
+    let Some((first, n, at, kind)) = *UNSHOWN.lock().unwrap_or_else(|e| e.into_inner()) else { return };
+    if at.elapsed() >= UNSHOWN_GAP {
+        return;
+    }
+    // (While frames fail, the next comes soon: one a second otherwise.)
+    ctx.request_repaint_after(Duration::from_millis(250));
+    let minimized = ctx.input(|i| i.viewport().minimized) == Some(true);
+    if n < 3 || first.elapsed() < Duration::from_secs(1) || minimized || nudged.is_some_and(|t| t.elapsed() < Duration::from_secs(5)) {
+        return;
+    }
+    let Some(size) = ctx.input(|i| i.viewport().inner_rect.map(|r| r.size())) else { return };
+    eprintln!("{n} frames in a row couldn't be shown ({kind}), over {:.1} s: changing the window's size and back", first.elapsed().as_secs_f32());
+    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size + vec2(0.0, 1.0)));
+    *nudged = Some(Instant::now());
+    *back = Some(size);
 }
 
 /// The page showing.
@@ -195,12 +248,16 @@ pub struct App {
     /// The Parlays page shows its other side: my parlays as tickets (not the slip and what
     /// there is to pick from).
     pub parlay_mine: bool,
+    /// When the window's size was last changed and back (see `unshown`), and the size it goes
+    /// back to on the next frame.
+    nudged: Option<Instant>,
+    nudge_back: Option<egui::Vec2>,
 }
 
 impl App {
     fn new(ctx: &egui::Context, rx: mpsc::Receiver<Value>, bridge: bool) -> App {
         style(ctx);
-        App { rx, bridge, started: Instant::now(), m: Model::default(), art: Art::load(ctx), view: View::Home, back: Vec::new(), betting: None, new_prop: None, setting: None, days: 7, stats_asked: None, looked: None, shown_chips: 0.0, came: Instant::now(), search: String::new(), slip: parlay::Slip::default(), slip_cat: None, picking: false, parlay_mine: false }
+        App { rx, bridge, started: Instant::now(), m: Model::default(), art: Art::load(ctx), view: View::Home, back: Vec::new(), betting: None, new_prop: None, setting: None, days: 7, stats_asked: None, looked: None, shown_chips: 0.0, came: Instant::now(), search: String::new(), slip: parlay::Slip::default(), slip_cat: None, picking: false, parlay_mine: false, nudged: None, nudge_back: None }
     }
 
     /// Goes to a page (the one showing can be come back to).
@@ -258,6 +315,7 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        unshown(ctx, &mut self.nudged, &mut self.nudge_back);
         let was = self.m.server_key.clone();
         while let Ok(v) = self.rx.try_recv() {
             self.m.hear(&v);
