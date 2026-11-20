@@ -535,6 +535,16 @@ page drawn, a black strip along its bottom, Pyr 0.16.1).
   from the button (its left 24 left of the button's), moved left only as far as the bar's right
   needs. Seen on a test screen 2560 wide, 0.16.1 then 0.16.2 (`release-0.16.2/shots`), and at
   1100 wide (the panel across the window, as before, the caret under the Games icon).
+Built, packed and checked (44 checks, all good: among them Pyr Prop Bets 0.3.1's listing signed
+and endorsed, its two programs in library.tar with the frame fix in them, 0.3.0 the one up now
+so the Keeper takes 0.3.1, both Pyrs with this release's changes in them); every test (app 150
+and window 9, again after the Games menu; server 114, props feed 56, proto 65, poker 188,
+engine audio, casino and bug reports 51 with the new phrase-start test, which fails on 0.16.1's
+rules, and a bug report end to end). Prop Bets 0.3.1's release build on a test screen with the
+stand-in for Pyr: drawing and answering. The VPS's set-up wasn't run dry again: nothing it runs
+changed since 0.16.1 but versions. On Blue's PC as `Downloads\pyr-release-0.16.2` (51 files,
+read back and compared; `publish.cmd` there). Not tried: Windows (the programs' new handling is
+Windows only), voice in a real call.
 
 0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
 Blue's pyr.log, Nov 17, "couldn't find the server "SERVER2.24.121.231": No such host is known".
