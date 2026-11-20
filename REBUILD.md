@@ -546,6 +546,61 @@ changed since 0.16.1 but versions. On Blue's PC as `Downloads\pyr-release-0.16.2
 read back and compared; `publish.cmd` there). Not tried: Windows (the programs' new handling is
 Windows only), voice in a real call.
 
+0.16.3 (Nov 20), 0.16.2 being live:
+- "Prop bets is frozen again, after the update. it's just frozen on this screen, buttons do not
+  work" (a picture: Pyr 0.16.2, Prop Bets' page drawn, a black strip along its bottom and right as
+  wide as a window frame). His pyr.log: it froze within seconds every time it opened, just after
+  Pyr took its frame off again (it put it back as it showed itself: "a program put its frame or
+  taskbar button back", once), never "not responding", no frame errors (0.3.1 didn't say the
+  "outdated" ones). The likeliest reading, not confirmed on Windows: the window's inside grew when
+  its frame came off, and egui went on drawing at the size it had with its frame; the graphics
+  card calls such frames outdated and egui skips them until the size changes again, which never
+  happens inside Pyr. Pyr Prop Bets 0.3.2: after three frames in a row couldn't be shown, a
+  second or more apart in all, it changes its window's size by a pixel and back (at most every
+  5 s, never minimized) and says why on its errors (every kind, at most every 10 s; Pyr keeps
+  them in pyr.log). Pyr: the first time a program's window is put in its place, and the first
+  five times its frame comes off again, its size is changed and changed back (Windows only).
+  Tried: `PROP_BETS_TRY_UNSHOWN` on a test screen (1100x780 -> 1100x781 -> 1100x780 in X's own
+  events, drawing on: `release-0.16.3/after-nudge.png`). Not tried on Windows; Blue was asked to
+  resize Pyr while it's frozen, to tell (no answer yet).
+- The control room's Access page (a picture: "Take out" by "Someone", and "Something went wrong:
+  there's nobody by that id here"): someone let in who had since left the server (a member's
+  record goes when they leave or are removed). Taken out now all the same; the list says
+  "Someone who's left the server" (their name and "no longer on the server" when a ban kept it);
+  letting someone in still needs them here. In the control room's test.
+- "change the by line in Pyr Prop bets to by Firelit Games instead of Maanix", then "remove that
+  credit too": the Library listing's author is Firelit Games, and its description no longer says
+  the odds are "as in Maanix's PlayProps" (the code's own notes still say where the market maker
+  came from).
+- "The push to talk keys don't really work on my friends version of linux, Omarchy. please get
+  the push to talk buttons working." Omarchy is Hyprland (Wayland): push to talk read keys the X11
+  way, which there sees keys only while an X11 program has them. Now on Wayland (`hotkey::wayland`):
+  the desktop's global shortcut "Push to talk (Pyr)" (the XDG GlobalShortcuts portal, ashpd on the
+  engine's runtime), down and up with Activated and Deactivated; KDE and GNOME ask for its key (Pyr
+  suggests yours); on Hyprland Pyr binds your key to it itself while push to talk's on (`hyprctl
+  keyword bindnip ,<key>,global,<its name>`, falling back to bindni and bindn), again when Hyprland
+  reads its config again, moved with the key, taken away when it's off or Pyr closes. In Pyr's own
+  window the key works anyway (the app says each frame). And on X11, "Mouse button 4 (back)" and
+  "5 (forward)" were the wheel (device_query's 4 and 5 on Linux); now X11's 8 and 9 through
+  XInput 2. Tried against stand-ins for the portal (answering as Hyprland's does) and Hyprland's
+  socket on a session bus of its own (`release-0.16.3/ptt`), and on the X11 test screen. Not tried
+  on a real Hyprland, KDE or GNOME.
+- Seen meanwhile, not changed: in Blue's pyr.log (0.16.2, a GoXLR's chat mic, headphones) voice
+  isolation heard "a voice across the room" 15 times in two hours of a call, 12 of them 4.0 to
+  6.7 dB under his level: most likely his own softer speech in a room with some noise (his dips
+  shallow, so it isn't taken as near), which puts 0.16.1's strict starts back for a minute each
+  time. Needs measuring before anything changes (Blue was asked whether his starts are still cut).
+Built, packed and checked (49 checks, all good: among them Pyr Prop Bets 0.3.2's listing signed
+and endorsed, by Firelit Games with no other credit, its two programs in library.tar with the
+frame fix and the size change in them, 0.3.1 the one up now so the Keeper takes 0.3.2; the Linux
+Pyr with push to talk's shortcut and Hyprland's bind, pyr.exe without them; the VPS's server
+taking out someone who's left); every test (app 150 and window 9, server 114, props feed 56,
+proto 65, poker 188, engine audio, casino, bug reports and push to talk 57, a bug report end to
+end). The Windows build compiles the program size change. Prop Bets 0.3.2's release build on the
+test screen with the stand-in for Pyr and the pretend failed frames: put right, drawing. On
+Blue's PC as `Downloads\pyr-release-0.16.3` (51 files, read back and compared; `publish.cmd`
+there). Not tried: Windows (the freeze), a real Hyprland, KDE or GNOME.
+
 0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
 Blue's pyr.log, Nov 17, "couldn't find the server "SERVER2.24.121.231": No such host is known".
 The bug server's address in `release-env.sh` had been read out of 0.13.28's program with the
