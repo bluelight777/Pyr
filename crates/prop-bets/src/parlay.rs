@@ -572,7 +572,8 @@ impl App {
             let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
             tear = r.center().y;
             let mut x = r.left();
-            while x < r.right() {
+            // (However wide it's given: a line of at most a few hundred dashes.)
+            while x < r.right().min(r.left() + 4000.0) {
                 ui.painter().line_segment([pos2(x, r.center().y), pos2((x + 5.0).min(r.right()), r.center().y)], Stroke::new(1.0_f32, LINE));
                 x += 9.0;
             }
