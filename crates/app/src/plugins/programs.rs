@@ -114,6 +114,9 @@ pub fn asked(line: &str) -> Option<Asked> {
     }
 }
 
+/// Lines a program writes to its errors that go into pyr.log, a minute at most.
+const ERRORS_LOGGED: u32 = 20;
+
 /// Pyr's side of talking to a program (0.13.15): lines for its input, what it asked, and the
 /// last things it wrote to its errors (said if it closes by mistake).
 struct Bridge {
@@ -155,10 +158,23 @@ impl Bridge {
             });
         }
         if let Some(err) = child.stderr.take() {
-            let errors = errors.clone();
+            let (errors, id) = (errors.clone(), id.to_string());
             let _ = std::thread::Builder::new().name("program-errors".into()).spawn(move || {
+                // (Into pyr.log too, a few a minute: what a program said before it stopped
+                // responding goes along with a bug report.)
+                let mut minute = (Instant::now(), 0u32);
                 for line in std::io::BufReader::new(err).lines() {
                     let Ok(line) = line else { break };
+                    if minute.0.elapsed() >= Duration::from_secs(60) {
+                        if minute.1 > ERRORS_LOGGED {
+                            tracing::info!(program = %id, "it said {} more lines in that minute", minute.1 - ERRORS_LOGGED);
+                        }
+                        minute = (Instant::now(), 0);
+                    }
+                    minute.1 += 1;
+                    if minute.1 <= ERRORS_LOGGED {
+                        tracing::info!(program = %id, "it says: {}", line.chars().take(300).collect::<String>());
+                    }
                     let mut e = errors.lock().unwrap_or_else(|e| e.into_inner());
                     if e.len() >= 12 {
                         e.pop_front();
@@ -209,6 +225,19 @@ impl Program {
         #[cfg(not(windows))]
         {
             true
+        }
+    }
+
+    /// Its window in Pyr's isn't responding (Windows' own test: nothing taken from its
+    /// messages for 5 seconds).
+    pub fn hung(&self) -> bool {
+        #[cfg(windows)]
+        {
+            !self.popped && self.win.hung()
+        }
+        #[cfg(not(windows))]
+        {
+            false
         }
     }
 
@@ -398,11 +427,18 @@ impl Programs {
     }
 
     /// Closes a program (asks it to, like its own close button would; it goes once it has).
+    /// One that isn't responding can't hear that: it's ended (Blue, Nov 19: "Pyr Prop bets is
+    /// just frozen", and its Close did nothing).
     pub fn close(&mut self, id: &str) {
         if let Some(p) = self.open.iter_mut().find(|p| p.id == id) {
             p.closing = true;
             #[cfg(windows)]
-            p.win.close();
+            if p.win.hung() {
+                tracing::warn!(program = %p.id, "{} isn't responding: Close ends it", p.name);
+                let _ = p.child.kill();
+            } else {
+                p.win.close();
+            }
             #[cfg(not(windows))]
             let _ = p.child.kill();
         }
@@ -603,6 +639,8 @@ mod win {
         taken_at: Option<std::time::Instant>,
         /// The window it had before it showed another, and when (see `let_go_of_old`).
         let_go: Option<(isize, std::time::Instant)>,
+        /// Since when its window hasn't been responding (said in pyr.log as it starts and ends).
+        hung_since: Option<std::time::Instant>,
     }
 
     impl Drop for Embedded {
@@ -613,7 +651,7 @@ mod win {
 
     impl Embedded {
         pub fn new(pid: u32) -> Embedded {
-            Embedded { pid, hwnd: None, styles: None, placed: None, showing: false, inset: Insets::default(), clipped: None, hook: 0, shown_once: false, taken_hidden: false, taken_at: None, let_go: None }
+            Embedded { pid, hwnd: None, styles: None, placed: None, showing: false, inset: Insets::default(), clipped: None, hook: 0, shown_once: false, taken_hidden: false, taken_at: None, let_go: None, hung_since: None }
         }
 
         /// `place`: where it goes (physical pixels in Pyr's window), or hidden.
@@ -652,7 +690,14 @@ mod win {
             // whole meanwhile). Before Pyr has put it anywhere, a window as big as the screen
             // is only how it started (on a small screen, say): it goes in its page.
             if hung(w) {
+                if self.hung_since.is_none() {
+                    self.hung_since = Some(std::time::Instant::now());
+                    tracing::warn!(pid = self.pid, "a program's window isn't responding ({}): {}", memory_of(self.pid), describe(w));
+                }
                 return;
+            }
+            if let Some(t) = self.hung_since.take() {
+                tracing::info!(pid = self.pid, "a program's window is responding again, after {} s ({})", t.elapsed().as_secs() + 5, memory_of(self.pid));
             }
             if self.placed.is_some() && fullscreen(w) {
                 self.clip(w, None);
@@ -884,6 +929,29 @@ mod win {
             }
         }
         Insets::measured(outer, (o.x, o.y, o.x + c.right, o.y + c.bottom))
+    }
+
+    /// A program's memory and the PC's, for pyr.log: "its memory 512 MB (working set 300 MB),
+    /// the PC's 64% in use".
+    fn memory_of(pid: u32) -> String {
+        use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX};
+        use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+        use windows::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION;
+        unsafe {
+            let mut its = String::from("its memory unknown");
+            if let Ok(h) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+                let mut pmc = PROCESS_MEMORY_COUNTERS_EX { cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32, ..Default::default() };
+                if GetProcessMemoryInfo(h, &mut pmc as *mut PROCESS_MEMORY_COUNTERS_EX as *mut PROCESS_MEMORY_COUNTERS, pmc.cb).is_ok() {
+                    its = format!("its memory {} MB (working set {} MB)", pmc.PrivateUsage >> 20, pmc.WorkingSetSize >> 20);
+                }
+                let _ = CloseHandle(h);
+            }
+            let mut ms = MEMORYSTATUSEX { dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32, ..Default::default() };
+            if GlobalMemoryStatusEx(&mut ms).is_ok() {
+                its.push_str(&format!(", the PC's {}% in use", ms.dwMemoryLoad));
+            }
+            its
+        }
     }
 
     /// Not responding (Windows' own test: nothing taken from its messages for 5 seconds).

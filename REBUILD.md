@@ -479,6 +479,55 @@ and files are 0.16.0's, byte for byte (the Keeper takes a listing in only when i
 newer, so the same again changes nothing). On Blue's PC as `Downloads\pyr-release-0.16.1` (51
 files, read back and compared; `publish.cmd` there). Not tried: Windows.
 
+0.16.2 (Nov 19), asked the same night, 0.16.1 being live: "It seems like it's cutting off the
+beginning of each of my words and sometimes I don't see the voice visualizer moving when I
+speak", then "it's also cutting off the beginning of some of Mag's words too" (both on voice
+isolation), and "Pyr Prop bets is just frozen, please fix for next version" (a picture: its
+page drawn, a black strip along its bottom, Pyr 0.16.1).
+- The words' beginnings were 0.14.2's (the TV across the room): speech not quite as loud as
+  your usual level started as yours only once it sounded near, which takes 300 ms of speech in
+  the last second to tell, so every phrase after a pause started strict. A soft one, or the
+  softer start of one, waited for a louder syllable or never went out (the voice meter moves
+  only while the microphone is open). The voice going in and coming out was never touched:
+  nothing on the hearing side has changed since 0.13.28. Measured with `examples/onset_eval.rs`
+  (new): unscripted speech, phrases with pauses between them (EARS, 48 kHz, two speakers,
+  `tools/make-talk.py`), through the whole of the microphone's processing; a phrase's start is
+  lost until its loud moments go out near full. Thirty phrases, quiet room, 0.13.28's isolation
+  (`PYR_AB=tvgate,isoecho`) / 0.16.1's (`PYR_AB=isostart`) / now: starts cut by more than
+  100 ms 1 / 10 / 1, never sent 0 / 2 / 0, loud moments lost 2.0 / 13.2 / 2.4%. Others in
+  headphones 2 / 10 / 2; out of speakers by the microphone 8 / 15 / 8 (0 / 1 / 0 never sent); a
+  fan 25 dB under your voice 1 / 11 / 6 (never sent 0 / 3 / 1), 20 dB under 1 / 10 / 8 (never
+  sent 0 / 8 / 1): noise still makes a voice's dips shallow, better than 0.16.1, not 0.13.28.
+  The second speaker the same way (quiet 2 / 8 / 2). Now (`capture::track_speech`): a phrase
+  after a pause goes by the voice heard last (the last 3 s of speech, however long ago); dips
+  are measured after echo cancellation, and what the speakers account for isn't in the 3 s;
+  a voice across the room heard in the last minute (its 3 s far-sounding, 4 to 18 dB under
+  yours, not taken as yours) puts 0.16.1's rules back (`FAR_VOICE_MS`), and so does the
+  speakers playing while it isn't known yet whether they're heard in the microphone (the
+  others' first words came out for 2 s in the Mag room without a TV until that was there).
+  The TV and echo the same as 0.16.1: `tv_eval` (the TV 10 and 15 dB under you) identical;
+  `mag_eval`, speakers 10 dB down: no TV, the others' voices back 0 of 196 s either way; with
+  the TV 10 dB under, 18 either way, the TV alone 9 -> 12 of 89 s (the first time it's heard
+  after you've talked, before it counts as a voice across the room: seconds 20 to 22, the rest
+  the same seconds); `aec_eval`'s isolation scenes: your talking turned down as much or less in
+  every one, the echo that got through within 2 dB of 0.16.1's (all under -70 dB) and lower in
+  one (speakers, others talking, a game on: -68 -> -80 dB).
+  With a TV on (Mag's), new phrases start as 0.16.1's did: his starts are clipped about as much
+  as before, which can only be traded against letting the TV through (Blue was told).
+- Prop Bets frozen: not seen here (the release build on a test screen with 449 props like his
+  server's, two changes a second from a stand-in for Pyr, every page, hidden and shown, resized:
+  it kept drawing). Found meanwhile: when a frame can't be shown (a game full screen over Pyr,
+  the screen off), egui's frame has already been handed to the graphics card's queue and waits
+  there for the next frame that can; Pyr's own window piled up gigabytes of them that way (bug
+  report 35) and has sent them on since 0.11.0, but Prop Bets (0.14.2) never got that. 0.3.1
+  sends them on (`surface_error`, as Pyr's) and says so on its errors. Whether that was his
+  freeze isn't known. Pyr now says in pyr.log when a program's window stops responding and
+  starts again, with the program's memory and the PC's (a big number would say it was this),
+  puts the first twenty lines a minute a program writes to its errors in pyr.log, and in the
+  program's bar says "isn't responding · Close ends it": Close on a frozen program ends it
+  (before, Close asked it to close, which a frozen program can't hear, and nothing happened).
+  Windows only, and not tried there.
+
 0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
 Blue's pyr.log, Nov 17, "couldn't find the server "SERVER2.24.121.231": No such host is known".
 The bug server's address in `release-env.sh` had been read out of 0.13.28's program with the

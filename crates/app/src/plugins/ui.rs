@@ -223,7 +223,7 @@ impl PyrApp {
     /// A program's page: its name and buttons along the top, and the program itself under them
     /// (its own window, kept right there: see `programs`).
     pub(crate) fn program_page(&mut self, ctx: &egui::Context, id: &str) {
-        let Some((name, ready, slow, popped)) = self.plugins.programs.get(id).map(|p| (p.name.clone(), p.ready(), p.slow(), p.popped)) else {
+        let Some((name, ready, slow, popped, hung)) = self.plugins.programs.get(id).map(|p| (p.name.clone(), p.ready(), p.slow(), p.popped, p.hung())) else {
             self.plugins.program_page = None;
             return;
         };
@@ -237,8 +237,14 @@ impl PyrApp {
                         self.plugin_icon(ui, id, Kind::Program, 26.0);
                         ui.add_space(4.0);
                         ui.label(RichText::new(&name).font(theme::bold_font(15.5)).color(theme::TEXT()));
+                        // (Its window over the page can't say so itself.)
+                        if hung {
+                            ui.add_space(6.0);
+                            ui.label(RichText::new("isn't responding · Close ends it").size(13.0).color(theme::LIVE()));
+                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("Close").on_hover_text(format!("Close {name}")).clicked() {
+                            let close = if hung { format!("End {name}: it isn't responding") } else { format!("Close {name}") };
+                            if ui.button("Close").on_hover_text(close).clicked() {
                                 self.plugins.programs.close(id);
                             }
                             if cfg!(windows) {

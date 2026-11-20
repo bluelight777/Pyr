@@ -31,6 +31,9 @@ pub struct CapturePipeline {
     /// Something's been playing from the speakers in the last moment (voice isolation doesn't
     /// learn your level then).
     playing: bool,
+    /// ... and whether it's not known yet if the speakers can be heard in the microphone (see
+    /// `mic_echo`): till it is, what they account for can't be taken off.
+    echo_unknown: bool,
     /// What Voice & Video was last told about the echo canceller (see `Controls::echo`).
     told_echo: Option<(u8, bool)>,
     /// The PC's own sound for the frame `render` hands the echo canceller next (see `pc_sound`),
@@ -408,6 +411,7 @@ impl CapturePipeline {
             pc_handed: None,
             far: false,
             playing: false,
+            echo_unknown: false,
             told_echo: None,
             denoise,
             dfn,
@@ -711,7 +715,9 @@ impl CapturePipeline {
                 self.speech_at = (self.speech_at + 1) % SPEECH_HIST;
                 self.speech_n = (self.speech_n + 1).min(SPEECH_HIST);
             }
-            if self.far_voice(now) {
+            // (While the speakers play and it isn't known yet whether they're heard in the
+            // microphone, nothing of theirs can be taken off what it hears: as 0.16.1 too.)
+            if self.far_voice(now) || (self.playing && self.echo_unknown) {
                 // A voice across the room lately: as 0.14.2 and 0.15.1 had it (see `FAR_VOICE_MS`).
                 let (n, dips, _) = spread(&self.raw_hist);
                 self.dips_db = if n >= 30 { dips } else { 0.0 };
@@ -914,6 +920,7 @@ impl CapturePipeline {
         let _ = self.apm.process_capture_f32(&[&self.scratch], &mut [&mut frame[..480]]);
         self.far = false;
         self.playing = false;
+        self.echo_unknown = false;
         self.could = 0.0;
         if let (Some(plain), Some(echo)) = (self.plain.as_mut(), self.echo.as_mut()) {
             use super::mic_echo::Echo;
@@ -953,6 +960,7 @@ impl CapturePipeline {
             // (Echo the processing took out isn't my voice turned down.)
             self.far = could * 10.0 > heard;
             self.playing = echo.playing();
+            self.echo_unknown = matches!(echo.state(), Echo::Unknown);
             // (Voice isolation: what the speakers account for of the microphone's level, once
             // it's known how much weaker they come back. Not before: till then "could" is
             // everything played, and with headphones none of it is in the microphone.)
@@ -1193,7 +1201,9 @@ mod tests {
             cap.speech_until = now + Duration::from_secs(3600);
             cap.far = far;
             cap.playing = far;
+            // (Told by the speech going on: see `track_speech`.)
             cap.near_like = near;
+            cap.near_fresh = near;
             let mut frame = vec![0.01f32; 480];
             for _ in 0..4_000 {
                 cap.isolate(now, &mut frame);
@@ -1204,6 +1214,49 @@ mod tests {
                 assert_eq!(cap.iso_ref_db, -25.0, "what the speakers could account for, or a voice across the room, isn't you (far {far}, near {near})");
                 // (And it isn't let through as yours meanwhile.)
                 assert!(cap.iso_gain < 0.1, "turned far down ({})", cap.iso_gain);
+            }
+        }
+    }
+
+    /// A phrase after a pause, a little softer than your usual, starts as yours at once when the
+    /// voice heard last was yours, as 0.13.28's did (Blue, Nov 19: "it's cutting off the
+    /// beginning of each of my words"); with a voice across the room heard in the last minute it
+    /// waits, as 0.16.1 did, to be nearly as loud as you or to sound near.
+    #[test]
+    fn a_phrase_after_a_pause_starts_as_yours_unless_a_tv_was_heard() {
+        let settings = Settings { noise_suppression: NoiseSuppression::Isolation, ..Settings::default() };
+        for tv in [false, true] {
+            let mut cap = CapturePipeline::new(&settings).unwrap();
+            assert!(cap.has_dfn(), "voice isolation's noise remover");
+            let t0 = Instant::now();
+            cap.iso_ref_db = -25.0;
+            // The last 3 s of speech heard: yours, syllables at -22 dBFS and the gaps at -60.
+            for i in 0..SPEECH_HIST {
+                cap.speech_hist[i] = if i % 3 == 0 { -60.0 } else { -22.0 };
+                cap.speech_mine[i] = true;
+            }
+            cap.speech_n = SPEECH_HIST;
+            if tv {
+                cap.far_voice_at = Some(t0);
+            }
+            // Five seconds' pause, then a phrase 8 dB under your usual level.
+            let mut started = None;
+            for k in 0..30u64 {
+                let now = t0 + Duration::from_secs(5) + Duration::from_millis(10 * k);
+                cap.voice_prob = 0.95;
+                cap.lsnr = 20.0;
+                cap.apm_db = -33.0;
+                cap.track_speech(now, -33.0, -33.0);
+                let mut frame = vec![0.01f32; 480];
+                cap.isolate(now, &mut frame);
+                if started.is_none() && now < cap.mine_until {
+                    started = Some(k);
+                }
+            }
+            if tv {
+                assert_eq!(started, None, "a TV heard lately: a softer phrase waits");
+            } else {
+                assert!(started.is_some_and(|k| k <= 3), "yours at once, as its 50 ms level comes within 12 dB of yours ({started:?})");
             }
         }
     }

@@ -14,6 +14,9 @@
 //!
 //! 0.3 (Pyr 0.16): parlays (`parlay.rs`): a slip that picks go on from anywhere, its page, and
 //! my parlays as tickets.
+//!
+//! 0.3.1: a frame that can't be shown no longer leaves what it drew waiting on the graphics card
+//! (see `surface_error`).
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
@@ -57,11 +60,16 @@ fn main() -> eframe::Result<()> {
         let img = img.to_rgba8();
         viewport = viewport.with_icon(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() });
     }
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    let mut options = eframe::NativeOptions { viewport, ..Default::default() };
+    options.wgpu_options.on_surface_error = std::sync::Arc::new(surface_error);
     eframe::run_native(
         "Pyr Prop Bets",
         options,
         Box::new(move |cc| {
+            // (For `surface_error`: the graphics card's queue.)
+            if let Some(rs) = &cc.wgpu_render_state {
+                *GPU_QUEUE.lock().unwrap_or_else(|e| e.into_inner()) = Some(rs.queue.clone());
+            }
             let (tx, rx) = mpsc::channel();
             if bridge {
                 let ctx = cc.egui_ctx.clone();
@@ -85,6 +93,34 @@ fn main() -> eframe::Result<()> {
             Ok(Box::new(App::new(&cc.egui_ctx, rx, bridge)))
         }),
     )
+}
+
+/// The graphics card's queue (wgpu), for `surface_error`.
+static GPU_QUEUE: std::sync::Mutex<Option<eframe::wgpu::Queue>> = std::sync::Mutex::new(None);
+
+/// A frame that couldn't be shown (Blue, Nov 19, on Pyr 0.16.1: "Pyr Prop bets is just frozen"):
+/// the window covered by a game full screen, hidden or minimized with Pyr, the screen off or
+/// locked, the graphics card busy. egui has handed the frame's shapes and pictures to the
+/// graphics card's queue by then, and there they waited for the next frame that could be shown:
+/// this window draws every second and whenever Pyr tells it something, so in an hour of that
+/// they'd come to gigabytes, and the next frame shown had all of it to get through first (Pyr's
+/// own window had the same, bug report 35, and has been sending them on since 0.11.0). Sent on
+/// now, they're done with at once. Said on its errors (Pyr keeps the last of them), at most
+/// every 10 s.
+fn surface_error(err: eframe::wgpu::SurfaceError) -> eframe::egui_wgpu::SurfaceErrorAction {
+    if let Some(q) = GPU_QUEUE.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        q.submit(std::iter::empty());
+    }
+    // (Minimized on Windows, every frame is "outdated": not worth a line each.)
+    if err != eframe::wgpu::SurfaceError::Outdated {
+        static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        if last.is_none_or(|t| t.elapsed() >= Duration::from_secs(10)) {
+            *last = Some(Instant::now());
+            eprintln!("a frame couldn't be shown: {err}");
+        }
+    }
+    eframe::egui_wgpu::SurfaceErrorAction::SkipFrame
 }
 
 /// The page showing.
