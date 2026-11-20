@@ -123,8 +123,6 @@ fn key_cap(ui: &mut egui::Ui, label: &str) {
     p.galley(cap.center() - g.size() / 2.0, g, theme::TEXT());
 }
 
-/// The mute shortcut being set: why the keys pressed can't be it, when they can't.
-#[derive(Default)]
 /// What push to talk's key does on Wayland (0.16.3; Blue's friend on Omarchy, Hyprland, Nov 20:
 /// "The push to talk keys don't really work"): see `hotkey::wayland`.
 fn wayland_ptt_text(note: &pyr_engine::hotkey::WaylandNote) -> String {
@@ -140,6 +138,8 @@ fn wayland_ptt_text(note: &pyr_engine::hotkey::WaylandNote) -> String {
     }
 }
 
+/// The mute shortcut being set: why the keys pressed can't be it, when they can't.
+#[derive(Default)]
 pub struct MuteRec {
     pub error: Option<String>,
 }
