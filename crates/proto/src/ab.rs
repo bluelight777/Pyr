@@ -18,7 +18,8 @@
 //! `ladder` (a share sent smaller when the road can't carry it, before 0.13.22: since, it keeps
 //! its size and lowers its frame rate), `tvgate` (voice isolation told you from a voice across
 //! the room by level only, before 0.14.2), `isoecho` (it went by the microphone's whole level,
-//! the speakers' sound in it too, before 0.15.1).
+//! the speakers' sound in it too, before 0.15.1), `isostart` (every phrase after a pause
+//! started strict, as if a TV were on, before 0.16.2).
 //!
 //! `PYR_CC=cubic` puts back QUIC's CUBIC congestion control instead of BBR (see [`bbr`]).
 //!

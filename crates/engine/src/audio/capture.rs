@@ -100,6 +100,19 @@ pub struct CapturePipeline {
     raw_hist: [f32; 100],
     raw_hist_at: usize,
     near_like: bool,
+    /// The same, after echo cancellation (see `SPEECH_HIST`); whether `near_like` was told
+    /// by the speech going on now (rather than by the speech before a pause); and the last 3 s
+    /// of speech heard, after echo cancellation, however long ago (not what the speakers
+    /// account for), with how many there are.
+    aec_hist: [f32; 100],
+    near_fresh: bool,
+    speech_hist: Vec<f32>,
+    /// (And whether each was taken as yours.)
+    speech_mine: Vec<bool>,
+    speech_at: usize,
+    speech_n: usize,
+    /// When a voice across the room (a TV) was last heard (see `FAR_VOICE_MS`).
+    far_voice_at: Option<Instant>,
     /// (The dips' depth itself, dB, for measuring tools.)
     dips_db: f32,
     /// When speech last came as loud as yours (or close-sounding and nearly as loud): the
@@ -175,6 +188,52 @@ const ISO_ALIVE_MS: u64 = 2000;
 /// microphone's own sound: DeepFilterNet takes a room's echo out of a far voice too, and the TV
 /// cleaned dipped as deep as you.)
 const NEAR_DIPS_DB: f32 = 25.0;
+/// Voice isolation and your words' beginnings (Blue, Nov 19, on 0.16.1: "It seems like it's
+/// cutting off the beginning of each of my words and sometimes I don't see the voice visualizer
+/// moving when I speak", and "it's also cutting off the beginning of some of Mag's words too").
+/// Since 0.14.2, speech that wasn't quite as loud as your usual level started as yours only
+/// once it sounded near (`NEAR_DIPS_DB`), and that takes 300 ms of speech in the last second
+/// to tell: every phrase after a pause started strict, and a soft one or the softer start of
+/// one waited, or never went out (the meter, which moves only while the microphone is open,
+/// stayed still). Measured with `examples/onset_eval.rs`, phrases of unscripted speech with
+/// pauses between them (`tools/make-talk.py`), 30 of them, 0.13.28's isolation against 0.16.1's:
+/// a quiet room, phrases never sent 0 -> 2, starts cut by more than 100 ms 1 -> 10; others
+/// talking in headphones 0 -> 2 and 2 -> 10; out of speakers 0 -> 1 and 8 -> 15; a fan 25 dB
+/// under your voice 0 -> 3 and 1 -> 11. Now:
+///
+/// - When a phrase starts after a pause, whether it sounds near goes by how the last 3 s of
+///   speech heard sounded, however long ago (`SPEECH_HIST`): the voice heard last. Yours, in a
+///   room with nobody else talking: a phrase of yours starts as 0.13.28's did, within
+///   `ISO_START_DB` of your level.
+/// - The dips are measured after echo cancellation (the speakers' sound in the microphone made
+///   your speech's dips shallow while others talked), and what the speakers account for isn't
+///   in the 3 s.
+/// - A voice across the room (a TV), heard in the last minute (`FAR_VOICE_MS`), puts it all
+///   back as 0.14.2 and 0.15.1 had it: new speech starts as yours only nearly as loud as you,
+///   or sounding near. Measured: with a TV 15 dB under your voice talking all along, as
+///   0.16.1 (5 of 99 s of it went out while you were quiet; carrying on from the voice heard
+///   last there let 14 s out).
+///
+/// (`PYR_AB=isostart`: always as 0.16.1.)
+const SPEECH_HIST: usize = 300;
+const FAR_VOICE_MS: u64 = 60_000;
+/// A voice across the room: its loudest (the 90th percentile of the last 3 s of speech, after
+/// echo cancellation) this much under your level at least, and at most (one further under
+/// than that never comes near starting as you).
+const FAR_VOICE_UNDER_DB: (f32, f32) = (4.0, 18.0);
+
+/// Speech levels heard (NaN: none): how many, their spread (the 90th percentile less the 10th,
+/// dB) and their 90th percentile.
+fn spread(levels: &[f32]) -> (usize, f32, f32) {
+    let mut heard: Vec<f32> = levels.iter().copied().filter(|v| !v.is_nan()).collect();
+    let n = heard.len();
+    if n == 0 {
+        return (0, 0.0, -100.0);
+    }
+    heard.sort_unstable_by(|a, b| a.total_cmp(b));
+    let at = |q: f32| heard[((n - 1) as f32 * q).round() as usize];
+    (n, at(0.9) - at(0.1), at(0.9))
+}
 
 fn rms_db(x: &[f32]) -> f32 {
     let s = x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32;
@@ -384,6 +443,13 @@ impl CapturePipeline {
             raw_hist: [f32::NAN; 100],
             raw_hist_at: 0,
             near_like: false,
+            aec_hist: [f32::NAN; 100],
+            near_fresh: false,
+            speech_hist: vec![0.0; SPEECH_HIST],
+            speech_mine: vec![false; SPEECH_HIST],
+            speech_at: 0,
+            speech_n: 0,
+            far_voice_at: None,
             dips_db: 0.0,
             iso_sure_at: None,
             settings: settings.clone(),
@@ -412,6 +478,13 @@ impl CapturePipeline {
     /// whether it's taken as yours.
     pub fn isolation_view(&self, now: Instant) -> (f32, f32, bool) {
         (self.dips_db, self.iso_ref_db, now < self.mine_until)
+    }
+
+    /// For measuring tools: whether voice isolation has heard a voice across the room lately
+    /// (see `FAR_VOICE_MS`).
+    #[doc(hidden)]
+    pub fn far_voice_heard(&self, now: Instant) -> bool {
+        self.far_voice(now)
     }
 
     /// For measuring tools: voice isolation as it was before DeepFilterNet.
@@ -623,28 +696,64 @@ impl CapturePipeline {
         if starts || (going && self.voice_prob > 0.2) {
             self.speech_until = now + Duration::from_millis(SPEECH_HOLD_MS);
         }
-        // Voice isolation: how deep the cleaned sound's dips between syllables are, over the
+        // Voice isolation: how deep the microphone's dips between syllables are, over the
         // speech (and the gaps the hold bridges) in the last second; the silence before speech
         // starts doesn't count (it would make anything look near). Known from 300 ms of speech.
         if self.dfn.is_some() {
-            self.raw_hist[self.raw_hist_at] = if now < self.speech_until { raw_db } else { f32::NAN };
+            let going = now < self.speech_until;
+            self.raw_hist[self.raw_hist_at] = if going { raw_db } else { f32::NAN };
+            self.aec_hist[self.raw_hist_at] = if going { self.apm_db } else { f32::NAN };
             self.raw_hist_at = (self.raw_hist_at + 1) % self.raw_hist.len();
-            let mut heard = [0.0f32; 100];
-            let mut n = 0;
-            for v in self.raw_hist.iter().filter(|v| !v.is_nan()) {
-                heard[n] = *v;
-                n += 1;
+            // (What the speakers account for isn't anyone in the room.)
+            if going && !self.far {
+                self.speech_hist[self.speech_at] = self.apm_db;
+                self.speech_mine[self.speech_at] = now < self.mine_until;
+                self.speech_at = (self.speech_at + 1) % SPEECH_HIST;
+                self.speech_n = (self.speech_n + 1).min(SPEECH_HIST);
             }
-            self.dips_db = if n >= 30 {
-                let heard = &mut heard[..n];
-                heard.sort_unstable_by(|a, b| a.total_cmp(b));
-                let at = |q: f32| heard[((n - 1) as f32 * q).round() as usize];
-                at(0.9) - at(0.1)
+            if self.far_voice(now) {
+                // A voice across the room lately: as 0.14.2 and 0.15.1 had it (see `FAR_VOICE_MS`).
+                let (n, dips, _) = spread(&self.raw_hist);
+                self.dips_db = if n >= 30 { dips } else { 0.0 };
+                self.near_like = self.dips_db >= NEAR_DIPS_DB;
+                self.near_fresh = n >= 30;
             } else {
-                0.0
-            };
-            self.near_like = self.dips_db >= NEAR_DIPS_DB;
+                let (n, dips, _) = spread(&self.aec_hist);
+                if n >= 30 && self.voice_prob > 0.5 {
+                    self.dips_db = dips;
+                    self.near_like = dips >= NEAR_DIPS_DB;
+                    self.near_fresh = true;
+                } else if n < 30 {
+                    // After a pause: the voice heard last, as its last 3 s of speech sounded
+                    // (see `SPEECH_HIST`).
+                    let (m, dips, _) = spread(&self.speech_hist[..self.speech_n]);
+                    self.dips_db = if m >= 30 { dips } else { 0.0 };
+                    self.near_like = m >= 30 && dips >= NEAR_DIPS_DB;
+                    self.near_fresh = false;
+                } else {
+                    // (Between syllables: as it was.)
+                    self.near_fresh = false;
+                }
+            }
+            // A voice across the room: the last 3 s of speech sound far, are quieter than yours
+            // but not by much (see `FAR_VOICE_UNDER_DB`), and weren't taken as yours (a fan's
+            // hum makes yours sound far too).
+            if going && self.voice_prob > 0.5 && !self.far && self.iso_ref_db > -90.0 && self.speech_n >= 100 {
+                let (_, dips, top) = spread(&self.speech_hist[..self.speech_n]);
+                let others = self.speech_mine[..self.speech_n].iter().filter(|m| !**m).count();
+                if dips < NEAR_DIPS_DB && top <= self.iso_ref_db - FAR_VOICE_UNDER_DB.0 && top >= self.iso_ref_db - FAR_VOICE_UNDER_DB.1 && others * 5 >= self.speech_n * 4 {
+                    if !self.far_voice(now) {
+                        tracing::info!(level_db = top - self.iso_ref_db, "voice isolation hears a voice across the room (a TV, say): new voices start as yours only nearly as loud as you");
+                    }
+                    self.far_voice_at = Some(now);
+                }
+            }
         }
+    }
+
+    /// A voice across the room (a TV) heard lately, or `PYR_AB=isostart` (see `FAR_VOICE_MS`).
+    fn far_voice(&self, now: Instant) -> bool {
+        pyr_proto::ab::old("isostart") || self.far_voice_at.is_some_and(|t| now.saturating_duration_since(t) < Duration::from_millis(FAR_VOICE_MS))
     }
 
     /// Voice isolation: keep your voice and turn everything else far down. A voice across the
@@ -696,12 +805,13 @@ impl CapturePipeline {
             // you listening, and went out at full strength, lifted by the automatic gain, till
             // echo cancellation was switched off and on: Chimbita's echo, 0.13.0.)
             // (Nor from a voice across the room: a TV's, see `ISO_SURE_DB`.)
+            let near_now = self.near_like && self.near_fresh;
             let learn = if tv_old {
                 self.iso_ref_db < -90.0 || level > self.iso_ref_db - ISO_START_DB
             } else if self.iso_ref_db < -90.0 {
-                self.near_like
+                near_now
             } else {
-                level > self.iso_ref_db - ISO_LEARN_DB || (self.near_like && level > self.iso_ref_db - ISO_START_DB)
+                level > self.iso_ref_db - ISO_LEARN_DB || (near_now && level > self.iso_ref_db - ISO_START_DB)
             };
             if learn {
                 self.iso_levels.add(level);
@@ -711,7 +821,7 @@ impl CapturePipeline {
                     // (Not enough yet: the loudest so far, as a start.)
                     None => self.iso_ref_db = self.iso_ref_db.max(level),
                 }
-            } else if tv_old || self.near_like {
+            } else if tv_old || near_now {
                 // Only quieter speech for a long while: that's you now (further from the
                 // microphone, or it was turned down), not someone across the room. (Only
                 // speech that sounds near counts: a TV talking on for half a minute isn't you.)
