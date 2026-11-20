@@ -125,6 +125,21 @@ fn key_cap(ui: &mut egui::Ui, label: &str) {
 
 /// The mute shortcut being set: why the keys pressed can't be it, when they can't.
 #[derive(Default)]
+/// What push to talk's key does on Wayland (0.16.3; Blue's friend on Omarchy, Hyprland, Nov 20:
+/// "The push to talk keys don't really work"): see `hotkey::wayland`.
+fn wayland_ptt_text(note: &pyr_engine::hotkey::WaylandNote) -> String {
+    use pyr_engine::hotkey::WaylandNote as N;
+    match note {
+        N::Asking => "Pyr asks your desktop to pass this key on to it while other apps are in front.".into(),
+        N::Hyprland(_) => "Works while other apps are focused: Hyprland passes it on to Pyr (Pyr binds it there while it's open), and your game still gets it.".into(),
+        N::Desktop(says) if !says.trim().is_empty() => {
+            format!("Works while other apps are focused, through your desktop's shortcut for Pyr: {} (change it in your desktop's shortcut settings). In Pyr's window, this key works too.", says.trim())
+        }
+        N::Desktop(_) => "Works while other apps are focused, through your desktop's shortcut for Pyr (its key is set in your desktop's shortcut settings). In Pyr's window, this key works too.".into(),
+        N::Without(why) => format!("Works while Pyr's window is in front. Not in other apps: {why}."),
+    }
+}
+
 pub struct MuteRec {
     pub error: Option<String>,
 }
@@ -1123,7 +1138,10 @@ impl PyrApp {
                         ui.selectable_value(&mut draft.ptt_key, k.to_string(), hotkey::key_label(k));
                     }
                 });
-                fine(ui, "Works while other apps are focused, and doesn't block the key in your game.");
+                match self.engine.ptt_wayland_note() {
+                    Some(note) => fine(ui, &wayland_ptt_text(&note)),
+                    None => fine(ui, "Works while other apps are focused, and doesn't block the key in your game."),
+                }
                 heading(ui, "Release delay");
                 if let Slid::Done(v) = slide(ui, "ptt-delay", draft.ptt_release_ms as f32, 0.0..=1000.0, 10.0, None, |v| format!("{v:.0} ms")) {
                     draft.ptt_release_ms = v as u32;

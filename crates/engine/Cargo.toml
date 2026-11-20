@@ -99,6 +99,11 @@ wasapi = "0.25.0"
 nokhwa = { version = "0.10.11", features = ["input-avfoundation"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# (screensaver: how long since the last key or mouse move, for idle.)
-x11rb = { version = "0.13", features = ["screensaver"] }
+# (screensaver: how long since the last key or mouse move, for idle; xinput: the mouse's side
+# buttons held, for push to talk.)
+x11rb = { version = "0.13", features = ["screensaver", "xinput"] }
+# Push to talk on Wayland: the desktop's global shortcuts (the XDG GlobalShortcuts portal), on the
+# engine's own runtime (tokio, as rfd has it in the app).
+ashpd = { version = "0.11.1", default-features = false, features = ["tokio"] }
+futures-util = "0.3.34"
 nokhwa = { version = "0.10.11", features = ["input-v4l"] }

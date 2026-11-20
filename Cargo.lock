@@ -5120,6 +5120,7 @@ version = "0.16.2"
 dependencies = [
  "ab_glyph",
  "anyhow",
+ "ashpd",
  "base64 0.22.1",
  "bytes",
  "chrono",
@@ -5129,6 +5130,7 @@ dependencies = [
  "device_query",
  "directories",
  "fast_image_resize",
+ "futures-util",
  "getrandom 0.2.17",
  "ndarray",
  "nnnoiseless",

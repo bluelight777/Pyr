@@ -957,7 +957,8 @@ impl Engine {
             server::spawn(shared.clone(), e.clone());
         }
         let ptt = if opts.push_to_talk {
-            Some(hotkey::PttWatcher::start(ptt_key, ptt_down, opts.repaint.clone()))
+            let on = shared.state.read_recursive().settings.input_mode == config::InputMode::PushToTalk;
+            Some(hotkey::PttWatcher::start(ptt_key, on, ptt_down, Some(shared.rt.clone()), opts.profile.as_deref(), opts.repaint.clone()))
         } else {
             None
         };
@@ -2554,6 +2555,20 @@ impl Engine {
         self.shared.typing.store(typing, Ordering::Relaxed);
     }
 
+    /// Push to talk's key held in Pyr's own window (the app says, each frame): heard on Wayland,
+    /// where nothing else sees it there (see `hotkey::wayland`).
+    pub fn set_window_ptt(&self, held: bool) {
+        if let Some(p) = &self._ptt {
+            p.window.store(held, Ordering::Relaxed);
+        }
+    }
+
+    /// On Wayland, what the desktop does with push to talk's key (for the settings); None
+    /// elsewhere.
+    pub fn ptt_wayland_note(&self) -> Option<hotkey::WaylandNote> {
+        self._ptt.as_ref().and_then(|p| p.wayland_note())
+    }
+
     /// Whether the window is in front (see `Shared::window_focused`).
     pub fn set_window_focused(&self, focused: bool) {
         self.shared.window_focused.store(focused, Ordering::Relaxed);
@@ -3911,7 +3926,7 @@ impl Engine {
             || old.ptt_key != settings.ptt_key
             || old.ptt_release_ms != settings.ptt_release_ms;
         if let Some(p) = self._ptt.as_ref() {
-            p.set_key(&settings.ptt_key);
+            p.set(&settings.ptt_key, settings.input_mode == config::InputMode::PushToTalk);
         }
         if old.sound_keys != settings.sound_keys || old.mute_key != settings.mute_key {
             if let Some(k) = &self._keys {

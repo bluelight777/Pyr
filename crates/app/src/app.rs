@@ -1705,6 +1705,17 @@ impl eframe::App for PyrApp {
         }
         let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true) && !i.viewport().minimized.unwrap_or(false));
         engine.set_window_focused(focused);
+        // Push to talk's key held in Pyr's own window: on Wayland nothing else sees it there
+        // (0.16.3, see `hotkey::wayland`).
+        #[cfg(target_os = "linux")]
+        {
+            let key = {
+                let st = engine.state();
+                (st.settings.input_mode == pyr_engine::config::InputMode::PushToTalk).then(|| st.settings.ptt_key.clone())
+            };
+            let held = focused && key.is_some_and(|k| ctx.input(|i| ptt_held_here(i, &k)));
+            engine.set_window_ptt(held);
+        }
         // (A shortcut that's a key on its own just types in Pyr's own boxes, 0.13.22.)
         engine.set_typing(ctx.wants_keyboard_input());
         crate::watchdog::step("doing what was clicked");
@@ -4206,5 +4217,33 @@ mod tests {
         // Short links, like Discord's (pyr.gg's own pages aren't invites).
         assert!(super::is_invite("https://pyr.gg/qrslmnov") && super::is_invite("pyr.gg/invite/brethren"));
         assert!(!super::is_invite("https://pyr.gg/download") && !super::is_invite("https://pyr.gg/latest.json"));
+    }
+}
+
+/// Push to talk's key (`hotkey::KEY_CHOICES`' names) held, as Pyr's own window has it. egui knows
+/// Ctrl, Alt and Shift but not which side, and not Caps Lock.
+#[cfg(target_os = "linux")]
+fn ptt_held_here(i: &egui::InputState, key: &str) -> bool {
+    use egui::{Key, PointerButton};
+    let k = |k: Key| i.key_down(k);
+    match key {
+        "Grave" => k(Key::Backtick),
+        "Space" => k(Key::Space),
+        "Tab" => k(Key::Tab),
+        "V" => k(Key::V),
+        "B" => k(Key::B),
+        "T" => k(Key::T),
+        "F8" => k(Key::F8),
+        "F9" => k(Key::F9),
+        "F10" => k(Key::F10),
+        "F13" => k(Key::F13),
+        "F14" => k(Key::F14),
+        "F15" => k(Key::F15),
+        "LControl" | "RControl" => i.modifiers.ctrl,
+        "LAlt" | "RAlt" => i.modifiers.alt,
+        "LShift" | "RShift" => i.modifiers.shift,
+        "Mouse4" => i.pointer.button_down(PointerButton::Extra1),
+        "Mouse5" => i.pointer.button_down(PointerButton::Extra2),
+        _ => false,
     }
 }

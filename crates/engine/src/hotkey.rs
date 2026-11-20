@@ -1,6 +1,7 @@
 //! Global push-to-talk: polls the key/mouse state without grabbing the key, so the key
 //! still works in your game or other apps (Discord-style). Works on Windows, macOS
-//! (needs Accessibility permission) and X11. Wayland needs the GlobalShortcuts portal (roadmap).
+//! (needs Accessibility permission) and X11; on Wayland through the desktop's global shortcuts
+//! and in Pyr's own window (`wayland`, 0.16.3).
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -9,9 +10,18 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 
+#[cfg(target_os = "linux")]
+pub mod wayland;
+
 pub struct PttWatcher {
     stop: Arc<AtomicBool>,
     pub key: Arc<Mutex<String>>,
+    /// The key held in Pyr's own window (the app says, each frame). Heard on Wayland only, where
+    /// nothing else sees keys while Pyr's window has them unless the desktop passes them on (X11,
+    /// Windows and macOS see them there already).
+    pub window: Arc<AtomicBool>,
+    #[cfg(target_os = "linux")]
+    wayland: Option<wayland::WaylandPtt>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -37,31 +47,59 @@ pub fn key_label(name: &str) -> String {
 }
 
 impl PttWatcher {
-    /// Start polling. `down` follows the key state; returns None if no input backend
-    /// is available (e.g. no X display).
-    pub fn start(key: String, down: Arc<AtomicBool>, on_change: Arc<dyn Fn() + Send + Sync>) -> PttWatcher {
+    /// Start polling. `down` follows the key state (`on`: push to talk's the input mode now; on
+    /// Wayland the desktop's asked for its shortcut only then). `rt` and `profile`: for the
+    /// desktop's shortcut on Wayland.
+    pub fn start(key: String, on: bool, down: Arc<AtomicBool>, rt: Option<tokio::runtime::Handle>, profile: Option<&str>, on_change: Arc<dyn Fn() + Send + Sync>) -> PttWatcher {
         let stop = Arc::new(AtomicBool::new(false));
+        let window = Arc::new(AtomicBool::new(false));
+        #[cfg(target_os = "linux")]
+        let wayland = rt.filter(|_| wayland::is_wayland()).map(|rt| wayland::WaylandPtt::new(rt, profile, on_change.clone()));
+        #[cfg(not(target_os = "linux"))]
+        let _ = (rt, profile);
+        // What else holds it down: on Wayland, the desktop's shortcut and Pyr's own window.
+        #[allow(unused_mut)]
+        let mut also: Vec<Arc<AtomicBool>> = Vec::new();
+        #[cfg(target_os = "linux")]
+        if let Some(w) = &wayland {
+            also.push(w.down.clone());
+            also.push(window.clone());
+        }
+        let first = key.clone();
         let key = Arc::new(Mutex::new(key));
         let (st, k) = (stop.clone(), key.clone());
         let thread = std::thread::Builder::new()
             .name("pyr-ptt".into())
             .spawn(move || {
                 use device_query::{DeviceQuery, DeviceState, Keycode};
-                let Some(state) = DeviceState::checked_new() else {
-                    tracing::warn!("push-to-talk unavailable: can't read keyboard state");
-                    return;
-                };
+                let state = DeviceState::checked_new();
+                if state.is_none() {
+                    if also.is_empty() {
+                        tracing::warn!("push-to-talk unavailable: can't read keyboard state");
+                        return;
+                    }
+                    tracing::info!("push-to-talk: no X display: the desktop's shortcut and Pyr's own window only");
+                }
+                // (Linux: the mouse's side buttons, through XInput 2.)
+                #[cfg(target_os = "linux")]
+                let side = state.as_ref().and_then(|_| x11_side::Side::new());
+                #[cfg(not(target_os = "linux"))]
+                let side = ();
                 let mut was = false;
                 while !st.load(Ordering::Relaxed) {
                     let name = k.lock().clone();
-                    let pressed = match name.as_str() {
-                        "Mouse4" => state.get_mouse().button_pressed.get(4).copied().unwrap_or(false),
-                        "Mouse5" => state.get_mouse().button_pressed.get(5).copied().unwrap_or(false),
-                        other => match Keycode::from_str(other) {
-                            Ok(code) => state.get_keys().contains(&code),
-                            Err(_) => false,
+                    let here = match &state {
+                        None => false,
+                        Some(state) => match name.as_str() {
+                            "Mouse4" => mouse_side(state, &side, false),
+                            "Mouse5" => mouse_side(state, &side, true),
+                            other => match Keycode::from_str(other) {
+                                Ok(code) => state.get_keys().contains(&code),
+                                Err(_) => false,
+                            },
                         },
                     };
+                    let pressed = here || also.iter().any(|a| a.load(Ordering::Relaxed));
                     if pressed != was {
                         was = pressed;
                         down.store(pressed, Ordering::Relaxed);
@@ -71,11 +109,105 @@ impl PttWatcher {
                 }
             })
             .ok();
-        PttWatcher { stop, key, thread }
+        let w = PttWatcher {
+            stop,
+            key,
+            window,
+            #[cfg(target_os = "linux")]
+            wayland,
+            thread,
+        };
+        w.set(&first, on);
+        w
     }
 
     pub fn set_key(&self, key: &str) {
         *self.key.lock() = key.to_string();
+    }
+
+    /// The key, and whether push to talk's the input mode (on Wayland the desktop's shortcut is
+    /// bound only then).
+    pub fn set(&self, key: &str, on: bool) {
+        self.set_key(key);
+        #[cfg(target_os = "linux")]
+        if let Some(w) = &self.wayland {
+            w.set(on.then_some(key));
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = on;
+    }
+
+    /// On Wayland, what the desktop does with the key, for the settings (None elsewhere).
+    pub fn wayland_note(&self) -> Option<WaylandNote> {
+        #[cfg(target_os = "linux")]
+        if let Some(w) = &self.wayland {
+            return Some(match w.note() {
+                wayland::Note::Idle | wayland::Note::Asking => WaylandNote::Asking,
+                wayland::Note::Desktop(says) => WaylandNote::Desktop(says),
+                wayland::Note::Hyprland(key) => WaylandNote::Hyprland(key),
+                wayland::Note::Without(why) => WaylandNote::Without(why),
+            });
+        }
+        None
+    }
+}
+
+/// What the desktop does with push to talk's key, on Wayland (see `wayland`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum WaylandNote {
+    /// Asking the desktop for its shortcut.
+    Asking,
+    /// The desktop has it (KDE, GNOME): what it says sets it off, if it says.
+    Desktop(String),
+    /// Hyprland: Pyr bound it (Hyprland's name for the key).
+    Hyprland(String),
+    /// No shortcut from the desktop (why): the key works in Pyr's own window only.
+    Without(String),
+}
+
+/// A mouse side button held: X11's buttons 8 (back) and 9 (forward) on Linux (what device_query
+/// calls 4 and 5 there are the wheel's), Windows' and macOS's 4 and 5 elsewhere.
+#[cfg(target_os = "linux")]
+fn mouse_side(_state: &device_query::DeviceState, side: &Option<x11_side::Side>, forward: bool) -> bool {
+    side.as_ref().is_some_and(|s| s.held(if forward { 9 } else { 8 }))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn mouse_side(state: &device_query::DeviceState, _side: &(), forward: bool) -> bool {
+    use device_query::DeviceQuery;
+    state.get_mouse().button_pressed.get(if forward { 5 } else { 4 }).copied().unwrap_or(false)
+}
+
+/// The mouse's buttons past 5 held, on X11 (XInput 2: the core protocol only knows 1 to 5, and
+/// 4 and 5 are the wheel). Before 0.16.3 "Mouse button 4 (back)" on Linux was the wheel turning.
+#[cfg(target_os = "linux")]
+mod x11_side {
+    use x11rb::connection::Connection as _;
+    use x11rb::protocol::xinput::ConnectionExt as _;
+
+    pub struct Side {
+        c: x11rb::rust_connection::RustConnection,
+        root: u32,
+        pointer: u16,
+    }
+
+    impl Side {
+        pub fn new() -> Option<Side> {
+            let (c, screen) = x11rb::connect(None).ok()?;
+            let root = c.setup().roots.get(screen)?.root;
+            let v = c.xinput_xi_query_version(2, 0).ok()?.reply().ok()?;
+            if v.major_version < 2 {
+                return None;
+            }
+            let pointer = c.xinput_xi_get_client_pointer(x11rb::NONE).ok()?.reply().ok().map(|r| r.deviceid).filter(|d| *d != 0).unwrap_or(2);
+            Some(Side { c, root, pointer })
+        }
+
+        pub fn held(&self, button: usize) -> bool {
+            let Ok(cookie) = self.c.xinput_xi_query_pointer(self.root, self.pointer) else { return false };
+            let Ok(r) = cookie.reply() else { return false };
+            r.buttons.get(button / 32).is_some_and(|w| w & (1 << (button % 32)) != 0)
+        }
     }
 }
 
