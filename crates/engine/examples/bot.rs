@@ -18,7 +18,8 @@
 //! For measuring shares over slow or far-away networks (with the `pathsim` example between the
 //! bot and the server): `--source motion|text` shares a synthetic screen (a busy moving picture,
 //! or a page of text that scrolls now and then) whose frames carry the time they were made, and
-//! `--preset saver|standard|smooth|sharp` picks the share's quality. `--beeps` makes the bot's
+//! `--preset saver|standard|smooth|sharp` picks the share's quality. `--source <id>` shares any
+//! other source by its id (a real screen: `wl:HEADLESS-1` on a test Wayland desktop, say). `--beeps` makes the bot's
 //! voice a short beep every 2 s of the clock. A watching bot with `--measure FILE` writes a line
 //! for every new picture it sees (`v <time ms> <latency ms> <width> <height>`), for every beep it
 //! hears (`a <time ms> <latency ms>`), and its call stats twice a second (`s ...`).
@@ -43,6 +44,8 @@ fn main() -> anyhow::Result<()> {
     let mut voice: Option<String> = None;
     let mut camera = false;
     let mut screen = false;
+    // A watching bot's last screen picture, written there (a PPM).
+    let mut dump: Option<std::path::PathBuf> = None;
     // What to send, in order: (text, a picture to attach).
     let mut say: Vec<(String, Option<std::path::PathBuf>)> = Vec::new();
     let mut channel = "general".to_string();
@@ -86,10 +89,14 @@ fn main() -> anyhow::Result<()> {
             "--gap" => gap = args.next().and_then(|t| t.parse().ok()).unwrap_or(gap),
             "--avatar" => avatar = args.next().map(std::path::PathBuf::from),
             "--amp" => amp = args.next().and_then(|t| t.parse().ok()).unwrap_or(amp),
+            "--dump" => dump = args.next().map(std::path::PathBuf::from),
             "--source" => {
                 source = match args.next().as_deref() {
                     Some("motion") => testsrc::MOTION_ID.to_string(),
                     Some("text") => testsrc::TEXT_ID.to_string(),
+                    // (Any other source by its id: a real screen, "wl:HEADLESS-1" on a test
+                    // Wayland desktop, say.)
+                    Some(id) if id != "pattern" => id.to_string(),
                     _ => pyr_engine::video::capture::TEST_PATTERN_ID.to_string(),
                 }
             }
@@ -365,6 +372,14 @@ fn main() -> anyhow::Result<()> {
                     let key = pyr_engine::state::VideoKey { session: *s, track: pyr_proto::media::track::SCREEN };
                     if let Some(f) = engine.video_frame(key) {
                         println!("{name}: screen from {s}: {}x{} (frame #{})", f.width, f.height, f.generation);
+                        // (`--dump FILE`: the picture as decoded, a PPM, for looking at.)
+                        if let Some(path) = &dump {
+                            let mut ppm = format!("P6\n{} {}\n255\n", f.width, f.height).into_bytes();
+                            for px in f.rgba.chunks_exact(4) {
+                                ppm.extend_from_slice(&px[..3]);
+                            }
+                            let _ = std::fs::write(path, ppm);
+                        }
                     }
                 }
             }
