@@ -546,6 +546,32 @@ changed since 0.16.1 but versions. On Blue's PC as `Downloads\pyr-release-0.16.2
 read back and compared; `publish.cmd` there). Not tried: Windows (the programs' new handling is
 Windows only), voice in a real call.
 
+0.16.4 (Nov 20), 0.16.3 built and on Blue's PC, not yet published (0.16.4 has it all):
+- "make Pyropoly work in Omarchy/linux" and "make Torch and Conquer work in Omarchy/linux." Blue
+  chose "Both: Wine now, rebuild later". On Linux the Library's programs made only for Windows
+  (Torch & Conquer, Pyropoly, Chimbrowser) install and open through Wine when it's installed
+  (`plugins::wine`: a Wine folder of Pyr's own in its plugins folder, readied once with wineboot,
+  `WINEDLLOVERRIDES=mscoree=;mshtml=`, `WINEDEBUG=-all`; `PYR_WINE` for another wine); without it
+  the Library card says it's Windows only here and how to install Wine (`sudo pacman -S wine` on
+  Arch and Omarchy, and the others' commands). Tried with a stand-in for wine on the X11 test
+  screen, with the Library's real signed list and Torch & Conquer 0.5.1's files: Install, "Plays
+  through Wine", opening it; the plugin tests. Real Wine crashed in this workspace (its
+  wineserver), so not tried with real Wine. The native builds come later (Pyropoly first, 0.2.5).
+- "Prognostic is sharing his screen on Omarchy/linux and when I click watch stream it doesn't
+  work." On Wayland the sharer's Pyr took the screen the X11 way, which there sees only X11
+  programs' windows: nothing to watch. Now (`video::wl_capture`) each monitor through
+  wlr-screencopy (Hyprland, Sway, river and the like), listed as monitors ("wl:<name>"); KDE and
+  GNOME still the X11 way (their screen cast portal isn't done). Tried on a headless Sway: the
+  frame the same as grim's; a bot sharing wl:HEADLESS-1 and another watching decoded it right
+  (1280x720), where sharing X11's screen there showed nothing in 15 s. Not tried on a real
+  Hyprland.
+Built, packed and checked (50 checks, all good; the Wayland capture's first check looked for its
+thread's name, too short to stay in an optimised program as text: it looks for the protocol's
+name and its message now, and that pyr.exe has neither); every test (app 153 and window 9, server
+114, props feed 56, proto 65, poker 188, engine audio, casino, bug reports, push to talk and the
+Wayland capture 58, a bug report end to end). On Blue's PC as `Downloads\pyr-release-0.16.4`
+(51 files, read back and compared; `publish.cmd` there). Not tried: real Wine, a real Hyprland.
+
 0.16.3 (Nov 20), 0.16.2 being live:
 - "Prop bets is frozen again, after the update. it's just frozen on this screen, buttons do not
   work" (a picture: Pyr 0.16.2, Prop Bets' page drawn, a black strip along its bottom and right as
