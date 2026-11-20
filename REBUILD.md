@@ -546,6 +546,22 @@ changed since 0.16.1 but versions. On Blue's PC as `Downloads\pyr-release-0.16.2
 read back and compared; `publish.cmd` there). Not tried: Windows (the programs' new handling is
 Windows only), voice in a real call.
 
+Pyropoly 0.2.5 (Nov 20, a Library-only update, between releases): the Free Parking pot Blue
+asked for ("all fees paid go towards the middle pot, and when someone hits free parking they
+collect all the fees that people have paid, along with drawing a card which they normally would
+have drawn"), a Linux build, and 0.2.1 to 0.2.4 again on 0.2.0's source (the wipe took theirs;
+its own repository and PLAN.md say how). A Library-only update since the rebuild goes through the
+Keeper as a release's Pyr Prop Bets does: `scripts/make-library-upload.sh` (KEY, LIST: one
+program's listing, FILES) signs it with the release key, the program endorsed, and makes
+`dist/library-upload/` (library.tar with only its files, keeper/add/<id>.json, the new
+`installer/site/install-library.sh`, which puts the files up first and then has the Keeper take the
+listing in, and publish-library.cmd/.ps1, which says what index4.json lists after). The library
+tool kept only a file's name as its path in the program's folder: a program's files now keep their
+places (what follows <id>/<version>/<system>/: Pyropoly's assets/...), as 0.2.4's listing had them;
+Pyr Prop Bets' listing comes out the same. Checked: the listing opens, is endorsed, 78 files each
+for Windows and Linux as library.tar has them, the Linux program runnable. The Keeper's import of
+it wasn't run here (it's the code every release's Prop Bets goes through).
+
 0.16.4 (Nov 20), 0.16.3 built and on Blue's PC, not yet published (0.16.4 has it all):
 - "make Pyropoly work in Omarchy/linux" and "make Torch and Conquer work in Omarchy/linux." Blue
   chose "Both: Wine now, rebuild later". On Linux the Library's programs made only for Windows

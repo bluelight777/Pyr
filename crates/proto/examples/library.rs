@@ -179,10 +179,23 @@ fn main() -> Result<()> {
             let days: i64 = get("--valid-days").map(|d| d.parse()).transpose()?.unwrap_or(library::VALID_DAYS);
             let mut plugins = Vec::new();
             for d in described.plugins {
-                let list = |l: &[String]| l.iter().map(|r| file(&files, r)).collect::<Result<Vec<_>>>();
+                // A program's files keep their places in its folder: what follows
+                // <id>/<version>/<system>/ (Pyropoly's assets/fonts/OFL.txt), else their names.
+                let list = |l: &[String], system: &str| {
+                    let prefix = format!("{}/{}/{system}/", d.id, d.version);
+                    l.iter()
+                        .map(|r| {
+                            let mut f = file(&files, r)?;
+                            if let Some(inner) = r.strip_prefix(&prefix) {
+                                f.path = inner.to_string();
+                            }
+                            Ok(f)
+                        })
+                        .collect::<Result<Vec<_>>>()
+                };
                 let e = Entry {
-                    windows: list(&d.windows)?,
-                    linux: list(&d.linux)?,
+                    windows: list(&d.windows, "windows")?,
+                    linux: list(&d.linux, "linux")?,
                     wasm: d.wasm.as_deref().map(|r| file(&files, r)).transpose()?,
                     icon: d.icon.as_deref().map(|r| file(&files, r)).transpose()?,
                     id: d.id,
