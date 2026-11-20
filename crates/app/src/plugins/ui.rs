@@ -642,8 +642,14 @@ impl PyrApp {
             }
             None if wine => {
                 ui.vertical(|ui| {
-                    ui.label(RichText::new("Windows only: it plays here through Wine").color(theme::DIM()));
-                    ui.label(RichText::new(format!("Install Wine ({}), then come back to install it.", super::wine::how_to_install())).size(11.5).color(theme::DIM()));
+                    ui.label(RichText::new("Windows only: needs Wine here").color(theme::DIM()));
+                    let how = super::wine::how_to_install();
+                    // ("Install Wine: sudo pacman -S wine", or "Install Wine with your system's package manager".)
+                    let how = match how.strip_prefix("install Wine") {
+                        Some(rest) => format!("Install Wine{rest}"),
+                        None => format!("Install Wine: {how}"),
+                    };
+                    ui.label(RichText::new(how).size(11.5).color(theme::DIM()));
                 });
             }
             None if !available => {
