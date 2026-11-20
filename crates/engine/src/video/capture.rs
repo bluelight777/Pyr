@@ -1,7 +1,9 @@
 //! Frame sources: screen capture, webcams and a synthetic test pattern.
 //!
 //! * Windows: Windows Graphics Capture (monitors and individual windows), Media Foundation webcams.
-//! * Linux: X11 screen capture, V4L2 webcams. (Wayland portal capture is on the roadmap.)
+//! * Linux: X11 screen capture, and on Wayland its monitors through wlr-screencopy (Hyprland,
+//!   Sway and their like: `wl_capture`, 0.16.4); V4L2 webcams. (KDE's and GNOME's, through the
+//!   desktop portal and PipeWire, are on the roadmap.)
 //! * macOS: webcams via AVFoundation; screen capture is on the roadmap.
 
 use std::sync::Arc;
@@ -631,6 +633,14 @@ fn start_wgc<T: TryInto<windows_capture::settings::GraphicsCaptureItemType> + Se
 #[cfg(target_os = "linux")]
 fn platform_screens() -> Vec<ScreenSource> {
     use x11rb::connection::Connection;
+    // Wayland: its monitors, when the compositor lets programs copy them (0.16.4: X11's screen is
+    // only XWayland's there, its X11 programs' windows on black).
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        let v = super::wl_capture::screens();
+        if !v.is_empty() {
+            return v;
+        }
+    }
     let Ok((conn, screen_num)) = x11rb::connect(None) else { return Vec::new() };
     let screen = &conn.setup().roots[screen_num];
     vec![ScreenSource {
@@ -646,6 +656,9 @@ fn platform_screens() -> Vec<ScreenSource> {
 fn platform_start_screen(id: &str, fps: u32, slot: Arc<FrameSlot>) -> Result<CaptureHandle> {
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{ConnectionExt, ImageFormat};
+    if id.starts_with("wl:") {
+        return super::wl_capture::start(id, fps, slot);
+    }
     if id != "x11:root" {
         return Err(anyhow!("unknown capture source"));
     }

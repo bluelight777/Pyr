@@ -106,4 +106,9 @@ x11rb = { version = "0.13", features = ["screensaver", "xinput"] }
 # engine's own runtime (tokio, as rfd has it in the app).
 ashpd = { version = "0.11.1", default-features = false, features = ["tokio"] }
 futures-util = "0.3.34"
+# Screen sharing on Wayland (Hyprland, Sway…): the wlr-screencopy protocol, into shared memory.
+wayland-client = "0.31.15"
+wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
+memmap2 = "0.9.11"
+libc = "0.2.190"
 nokhwa = { version = "0.10.11", features = ["input-v4l"] }

@@ -9,6 +9,8 @@ pub mod codec;
 #[cfg(windows)]
 pub mod hw;
 pub mod testsrc;
+#[cfg(target_os = "linux")]
+pub mod wl_capture;
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
