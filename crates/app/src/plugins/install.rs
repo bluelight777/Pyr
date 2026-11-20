@@ -56,6 +56,13 @@ pub struct InstalledPlugin {
     /// An add-on that's switched on (its commands work).
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// (Linux) A Windows program, opened through Wine (see `wine`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub wine: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn yes() -> bool {
@@ -135,7 +142,15 @@ pub(crate) fn download(url: &str, size: u64, sha256: &str, mut progress: impl Fn
 /// each, then swaps the whole folder in. `progress(done, total)` in bytes.
 pub fn install(dir: &Path, index_url: &str, entry: &Entry, mut progress: impl FnMut(u64, u64)) -> Result<InstalledPlugin, String> {
     entry.check()?;
-    let files = entry.files_for(os());
+    let mut files = entry.files_for(os());
+    // (Linux) A Windows program with no Linux files: its Windows ones, opened through Wine.
+    let wine = files.is_empty() && through_wine(entry);
+    if wine {
+        if super::wine::find().is_none() {
+            return Err(format!("{} is made for Windows: on Linux it plays through Wine, which isn't installed here. Install it ({}), then install {} again.", entry.name, super::wine::how_to_install(), entry.name));
+        }
+        files = entry.files_for("windows");
+    }
     if files.is_empty() {
         return Err(format!("{} isn't available for this system yet.", entry.name));
     }
@@ -184,6 +199,10 @@ pub fn install(dir: &Path, index_url: &str, entry: &Entry, mut progress: impl Fn
         return Err(format!("couldn't install it: {e}"));
     }
     let _ = std::fs::remove_dir_all(&old);
+    // (Wine's own C: drive for Pyr's programs, set up now the first time: it takes a while.)
+    if wine && let Some(w) = super::wine::find() {
+        super::wine::prepare(&w, dir);
+    }
     let run = match entry.kind {
         Kind::Program => entry.run.clone(),
         Kind::Addon => entry.wasm.as_ref().map(|w| w.path.clone()).unwrap_or_default(),
@@ -198,7 +217,14 @@ pub fn install(dir: &Path, index_url: &str, entry: &Entry, mut progress: impl Fn
         permissions: entry.permissions.clone(),
         installed_at: now(),
         enabled: true,
+        wine,
     })
+}
+
+/// Whether `entry` installs here as a Windows program opened through Wine: on Linux, a program
+/// with Windows files and none for Linux.
+pub fn through_wine(entry: &Entry) -> bool {
+    cfg!(target_os = "linux") && entry.kind == Kind::Program && entry.linux.is_empty() && !entry.windows.is_empty()
 }
 
 /// The plugin's files are still the ones that were checked when it was installed.
@@ -250,7 +276,14 @@ pub fn spawn(dir: &Path, p: &InstalledPlugin, launch: &Launch) -> Result<std::pr
     }
     verify(dir, p)?;
     let home = dir.join(&p.id);
-    let mut cmd = std::process::Command::new(home.join(&p.run));
+    let mut cmd = if p.wine {
+        let Some(w) = super::wine::find() else {
+            return Err(format!("{} plays through Wine, which isn't installed here any more. Install it ({}) and open {} again.", p.name, super::wine::how_to_install(), p.name));
+        };
+        super::wine::command(&w, dir, &home.join(&p.run))
+    } else {
+        std::process::Command::new(home.join(&p.run))
+    };
     cmd.current_dir(&home);
     if cfg!(windows) {
         cmd.env("PYR_EMBED", "1");
@@ -341,6 +374,50 @@ mod tests {
         }
     }
 
+    /// (Linux, 0.16.4) A program made for Windows only installs its Windows files and opens
+    /// through Wine, with Pyr's own prefix (set up as it installs) and nothing asking to install
+    /// Wine's .NET or browser, told what any program is told and not that it opens inside Pyr;
+    /// with no Wine, it says how to get it. Against a stand-in for Wine that says what it was
+    /// asked.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_windows_program_installs_and_opens_through_wine() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = super::super::library::temp_dir("wine");
+        let exe = b"MZ a program for Windows".to_vec();
+        let url = serve(vec![("/library/files/tool/tool.exe".into(), exe.clone())]);
+        let mut entry = program(vec![file("tool.exe", &exe)]);
+        entry.linux.clear();
+        assert!(through_wine(&entry) && !through_wine(&program(vec![file("tool.exe", &exe)])));
+        let fake = dir.join("fake-wine");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\necho \"$*|$WINEPREFIX|$WINEDLLOVERRIDES|$WINEDEBUG|$PYR_NAME|$PYR_BRIDGE|${PYR_EMBED:-not embedded}\" >> \"$(dirname \"$0\")/wine-said.txt\"\n[ \"$1\" = wineboot ] && mkdir -p \"$WINEPREFIX\" && touch \"$WINEPREFIX/system.reg\"\nexit 0\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // (No other test asks for Wine.)
+        unsafe { std::env::set_var("PYR_WINE", dir.join("no-wine-here")) };
+        let no = install(&dir, &url, &entry, |_, _| {}).unwrap_err();
+        assert!(no.contains("plays through Wine, which isn't installed here") && no.contains("then install Tool again"), "{no}");
+        unsafe { std::env::set_var("PYR_WINE", &fake) };
+        let p = install(&dir, &url, &entry, |_, _| {}).unwrap();
+        assert!(p.wine && p.run == "tool.exe");
+        assert_eq!(std::fs::read(dir.join("tool/tool.exe")).unwrap(), exe);
+        assert!(dir.join("wine/system.reg").exists());
+        let mut child = spawn(&dir, &p, &Launch { name: "Blue".into(), join: None }).unwrap();
+        child.wait().unwrap();
+        let said = std::fs::read_to_string(dir.join("wine-said.txt")).unwrap();
+        let pfx = dir.join("wine");
+        let lines: Vec<&str> = said.lines().collect();
+        assert_eq!(lines, [format!("wineboot --init|{}|mscoree=;mshtml=|-all|||not embedded", pfx.display()), format!("{}|{}|mscoree=;mshtml=|-all|Blue|1|not embedded", dir.join("tool/tool.exe").display(), pfx.display())]);
+        // Wine gone since: it says so as it's opened.
+        unsafe { std::env::set_var("PYR_WINE", dir.join("no-wine-here")) };
+        assert!(spawn(&dir, &p, &Launch::default()).unwrap_err().contains("isn't installed here any more"));
+        unsafe { std::env::remove_var("PYR_WINE") };
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn installs_checked_files_and_refuses_changed_ones() {
         let dir = super::super::library::temp_dir("install");
@@ -390,9 +467,16 @@ mod tests {
             permissions: vec![Permission::Commands],
             installed_at: 1,
             enabled: true,
+            wine: false,
         });
         l.save(&dir).unwrap();
         assert_eq!(Installed::load(&dir).get("dice").unwrap().permissions, vec![Permission::Commands]);
+        // (A program opened through Wine says so; one that isn't, as before, says nothing.)
+        assert!(!std::fs::read_to_string(dir.join(INSTALLED_FILE)).unwrap().contains("wine"));
+        let mut l = Installed::load(&dir);
+        l.put(InstalledPlugin { id: "tc".into(), name: "TC".into(), kind: Kind::Program, version: "1".into(), run: "tc.exe".into(), files: vec![], permissions: vec![], installed_at: 1, enabled: true, wine: true });
+        l.save(&dir).unwrap();
+        assert!(Installed::load(&dir).get("tc").unwrap().wine && !Installed::load(&dir).get("dice").unwrap().wine);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

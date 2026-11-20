@@ -15,6 +15,7 @@ pub mod programs;
 pub mod skins;
 pub mod source;
 pub mod ui;
+pub mod wine;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -276,7 +277,9 @@ impl Plugins {
     /// The library's entry for an installed plugin, if it has a newer version.
     pub fn update_for(&self, p: &InstalledPlugin) -> Option<&Entry> {
         let e = self.library.as_ref()?.find(&p.id)?;
-        (e.version != p.version && !e.files_for(install::os()).is_empty()).then_some(e)
+        // (A Windows program through Wine on Linux is updated the same way, 0.16.4; given a
+        // Linux build, it updates to that.)
+        (e.version != p.version && (!e.files_for(install::os()).is_empty() || install::through_wine(e))).then_some(e)
     }
 
     /// The library's entry for an installed skin, if it has a newer version.
@@ -752,6 +755,7 @@ mod tests {
             permissions: vec![],
             installed_at: 0,
             enabled: true,
+            wine: false,
         };
         Installed { plugins: vec![program("domino-cubano"), program("torch-conquer")] }.save(&dir).unwrap();
         for id in ["domino-cubano", "torch-conquer"] {

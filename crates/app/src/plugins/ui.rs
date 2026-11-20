@@ -628,7 +628,24 @@ impl PyrApp {
         }
         let installed = self.plugins.installed.get(&e.id).cloned();
         let available = !e.files_for(super::install::os()).is_empty();
+        // (Linux) A Windows program: it plays through Wine (0.16.4, see `wine`).
+        let wine = !available && super::install::through_wine(e);
         match installed {
+            None if wine && super::wine::find().is_some() => {
+                ui.vertical(|ui| {
+                    let tip = format!("{} is made for Windows: on Linux it plays through Wine, in its own window.", e.name);
+                    if ui.add(theme::primary_button("Install").min_size(vec2(92.0, 30.0))).on_hover_text(tip).clicked() {
+                        self.plugins.install(e);
+                    }
+                    ui.label(RichText::new("Plays through Wine").size(11.5).color(theme::DIM()));
+                });
+            }
+            None if wine => {
+                ui.vertical(|ui| {
+                    ui.label(RichText::new("Windows only: it plays here through Wine").color(theme::DIM()));
+                    ui.label(RichText::new(format!("Install Wine ({}), then come back to install it.", super::wine::how_to_install())).size(11.5).color(theme::DIM()));
+                });
+            }
             None if !available => {
                 let only = match (e.windows.is_empty(), e.linux.is_empty()) {
                     (false, true) => "Windows only for now",
