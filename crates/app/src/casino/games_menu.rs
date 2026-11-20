@@ -1,5 +1,5 @@
 //! The Games menu (0.13.6): every game on one panel, hanging from the casino bar's Games button
-//! as 0.13.28 draws it. The slots in two columns, then poker, the table games and Pyr's own,
+//! as 0.13.28 draws it (but under the button, wherever it is: 0.16.2). The slots in two columns, then poker, the table games and Pyr's own,
 //! each with its picture, a word on it and its badge; a game opens from its line, a column's
 //! "See all" goes to its part of the lobby, "The whole lobby" to the lobby. Every size and color
 //! is 0.13.28's, measured off its screen: the panel, its glows and shadow, the caret pointing at
@@ -89,6 +89,8 @@ const THUMB_R: u8 = 8;
 /// Bounty Poker's line has no picture: its crosshair is drawn.
 const BOUNTY_ART: &str = "drawn:bounty";
 const PANEL_W: f32 = 1198.0;
+/// How far left of the Games button's left edge the panel starts.
+const HANG_IN: f32 = 24.0;
 const PAD: f32 = 26.0;
 /// A line's height, and from one to the next.
 const LINE: f32 = 38.0;
@@ -157,11 +159,16 @@ impl PyrApp {
         let cols = columns(s);
         let slot_rows = cols[0].1.len().div_ceil(2);
         let rows = cols.iter().skip(1).map(|c| c.1.len()).max().unwrap_or(0).max(slot_rows).max(1);
-        // 1198 wide (less in a narrower window, 16 in from its left), 16 in from the bar's right,
-        // its top a pixel up the bar.
-        let right = bar.right() - 16.0;
-        let w = PANEL_W.min(right - screen.left() - 16.0).max(400.0);
-        let panel = Rect::from_min_size(pos2(right - w, bar.bottom() - 1.0), vec2(w, 152.0 + PITCH * rows as f32));
+        // 1198 wide (less in a narrower window), its top a pixel up the bar, hanging from the
+        // Games button: its left a little left of the button's, unless that would take it past
+        // the bar's right (16 in from either side). (0.13.28 put it 16 in from the bar's right:
+        // in a wide window that left it far off to the right of the button, its caret outside
+        // it. Blue, Nov 20: "this menu needs to come off the games button, right now it's not
+        // connected".)
+        let (most_left, most_right) = (screen.left() + 16.0, bar.right() - 16.0);
+        let w = PANEL_W.min(most_right - most_left).max(400.0);
+        let left = (button.left() - HANG_IN).min(most_right - w).max(most_left);
+        let panel = Rect::from_min_size(pos2(left, bar.bottom() - 1.0), vec2(w, 152.0 + PITCH * rows as f32));
         let mut close = false;
         let mut go: Option<Opens> = None;
         let mut lobby = false;
@@ -176,8 +183,8 @@ impl PyrApp {
             radial(&p, pos2(r - 218.0, b - 4.0), 488.0, Chapter::Originals.color().gamma_multiply(0.086), Color32::TRANSPARENT);
             p.rect_stroke(panel, CornerRadius::same(16), Stroke::new(1.5f32, col::GOLD_DARK), StrokeKind::Inside);
             p.line_segment([pos2(l + 40.0, t + 1.0), pos2(r - 40.0, t + 1.0)], Stroke::new(2.0f32, col::GOLD.gamma_multiply(0.42)));
-            // The caret, pointing up at the button.
-            let cx = button.center().x;
+            // The caret, pointing up at the button (kept clear of the panel's corners).
+            let cx = button.center().x.clamp(l + 28.0, r - 28.0);
             let caret = vec![pos2(cx - 9.0, t + 0.5), pos2(cx, t - 8.5), pos2(cx + 9.0, t + 0.5)];
             p.add(Shape::convex_polygon(caret.clone(), TOP, Stroke::NONE));
             p.add(Shape::line(caret, Stroke::new(1.5f32, col::GOLD_DARK)));
