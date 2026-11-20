@@ -130,7 +130,11 @@ impl Poker {
                 if !Self::is_game_owner(hub, uid) {
                     return Err("only the Owner of the Game lets people into the control room".into());
                 }
-                if hub.db.get_user(&them).is_none() {
+                // (Let in: someone here. Taken out: anyone let in, someone who's left the server
+                // since too. Blue, Nov 20: "Take out" on "Someone" said "there's nobody by that id
+                // here", and they stayed.)
+                let here = hub.db.get_user(&them).is_some_and(|u| !u.banned);
+                if on && !here {
                     return Err("there's nobody by that id here".into());
                 }
                 let mut people = Self::cms_people(hub);
@@ -142,7 +146,7 @@ impl Poker {
                         people.retain(|p| *p != them);
                     }
                     hub.db.set_meta(ACCESS, &serde_json::to_string(&people).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-                    let name = Self::name_of(hub, &them);
+                    let name = if here { Self::name_of(hub, &them) } else { Self::gone_name(hub, &them, "someone who's left the server") };
                     self.log_staff(hub, uid, if on { format!("let {name} into the control room") } else { format!("took {name} out of the control room") });
                     // (Their Pyr learns it at once: the control room shows, or goes.)
                     hub.send_poker(&them, ToApp::Staff { view: Self::staff_view(hub, &them, false) });
@@ -153,7 +157,20 @@ impl Poker {
     }
 
     fn cms_access_view(hub: &Hub, uid: &str) -> CmsRes {
-        CmsRes::Access { owner: Self::is_game_owner(hub, uid), people: Self::cms_people(hub).into_iter().map(|p| (Self::name_of(hub, &p), p)).collect() }
+        let name = |p: &str| match hub.db.get_user(p) {
+            Some(u) if !u.banned => u.name,
+            _ => Self::gone_name(hub, p, "Someone who's left the server"),
+        };
+        CmsRes::Access { owner: Self::is_game_owner(hub, uid), people: Self::cms_people(hub).into_iter().map(|p| (name(&p), p)).collect() }
+    }
+
+    /// Someone let in who's no longer on the server (left, removed or banned): their name if it's
+    /// still known (a ban keeps it) and that they're gone, or `someone`.
+    fn gone_name(hub: &Hub, uid: &str, someone: &str) -> String {
+        match hub.db.get_user(uid).map(|u| u.name).filter(|n| !n.is_empty()) {
+            Some(n) => format!("{n} (no longer on the server)"),
+            None => someone.into(),
+        }
     }
 
     fn cms_overview(hub: &Hub, st: &State) -> CmsOverview {

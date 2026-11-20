@@ -1728,6 +1728,27 @@ mod tests {
         assert!(cms("car", CmsReq::Overview).is_err());
         let Some(ToApp::StaffLogAll { log }) = p.handle(&hub, "blue", false, ToServer::StaffLogAll).unwrap() else { panic!() };
         assert_eq!(log[0].what, "took Carol out of the control room");
+        // Someone let in who's left the server since (Blue, Nov 20: "Take out" on "Someone" said
+        // "there's nobody by that id here"): named as gone, and taken out all the same. Nobody
+        // gone is let in.
+        cms("blue", CmsReq::SetAccess { uid: "pro".into(), on: true }).unwrap();
+        hub.db.remove_user("pro", false).unwrap();
+        let Some(ToApp::Cms { res: CmsRes::Access { people, .. } }) = cms("blue", CmsReq::Access).unwrap() else { panic!() };
+        assert_eq!(people, [("Someone who's left the server".to_string(), "pro".to_string())]);
+        let Some(ToApp::Cms { res: CmsRes::Access { people, .. } }) = cms("blue", CmsReq::SetAccess { uid: "pro".into(), on: false }).unwrap() else { panic!() };
+        assert!(people.is_empty());
+        assert!(cms("pro", CmsReq::Overview).is_err());
+        let Some(ToApp::StaffLogAll { log }) = p.handle(&hub, "blue", false, ToServer::StaffLogAll).unwrap() else { panic!() };
+        assert_eq!(log[0].what, "took someone who's left the server out of the control room");
+        assert_eq!(cms("blue", CmsReq::SetAccess { uid: "pro".into(), on: true }).unwrap_err(), "there's nobody by that id here");
+        // A ban keeps their name.
+        cms("blue", CmsReq::SetAccess { uid: "car".into(), on: true }).unwrap();
+        hub.db.remove_user("car", true).unwrap();
+        let Some(ToApp::Cms { res: CmsRes::Access { people, .. } }) = cms("blue", CmsReq::Access).unwrap() else { panic!() };
+        assert_eq!(people, [("Carol (no longer on the server)".to_string(), "car".to_string())]);
+        cms("blue", CmsReq::SetAccess { uid: "car".into(), on: false }).unwrap();
+        let Some(ToApp::StaffLogAll { log }) = p.handle(&hub, "blue", false, ToServer::StaffLogAll).unwrap() else { panic!() };
+        assert_eq!(log[0].what, "took Carol (no longer on the server) out of the control room");
     }
 
     /// Game Masters are named on the home server only, and are Game Masters everywhere by its
