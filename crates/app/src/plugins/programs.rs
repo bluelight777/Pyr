@@ -641,6 +641,10 @@ mod win {
         let_go: Option<(isize, std::time::Instant)>,
         /// Since when its window hasn't been responding (said in pyr.log as it starts and ends).
         hung_since: Option<std::time::Instant>,
+        /// How many times it put its frame back since it was taken in (said in pyr.log the first
+        /// time and every hundredth: each time it's taken off, the program is made to wait for
+        /// Pyr, and its window to change size).
+        frame_back: u32,
     }
 
     impl Drop for Embedded {
@@ -651,7 +655,7 @@ mod win {
 
     impl Embedded {
         pub fn new(pid: u32) -> Embedded {
-            Embedded { pid, hwnd: None, styles: None, placed: None, showing: false, inset: Insets::default(), clipped: None, hook: 0, shown_once: false, taken_hidden: false, taken_at: None, let_go: None, hung_since: None }
+            Embedded { pid, hwnd: None, styles: None, placed: None, showing: false, inset: Insets::default(), clipped: None, hook: 0, shown_once: false, taken_hidden: false, taken_at: None, let_go: None, hung_since: None, frame_back: 0 }
         }
 
         /// `place`: where it goes (physical pixels in Pyr's window), or hidden.
@@ -709,6 +713,10 @@ mod win {
                 let style = GetWindowLongPtrW(w, GWL_STYLE) as u32;
                 let ex = GetWindowLongPtrW(w, GWL_EXSTYLE) as u32;
                 if style & FRAME != 0 || ex & WS_EX_TOOLWINDOW.0 == 0 || ex & WS_EX_APPWINDOW.0 != 0 {
+                    if self.frame_back % 100 == 0 {
+                        tracing::info!(pid = self.pid, times = self.frame_back + 1, style = format!("{style:#x}"), ex = format!("{ex:#x}"), "a program put its frame or taskbar button back: off again");
+                    }
+                    self.frame_back += 1;
                     strip(w);
                 }
                 match place {
