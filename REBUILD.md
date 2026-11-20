@@ -526,7 +526,15 @@ page drawn, a black strip along its bottom, Pyr 0.16.1).
   puts the first twenty lines a minute a program writes to its errors in pyr.log, and in the
   program's bar says "isn't responding · Close ends it": Close on a frozen program ends it
   (before, Close asked it to close, which a frozen program can't hear, and nothing happened).
-  Windows only, and not tried there.
+  Windows only, and not tried there. pyr.log also says when a program keeps putting its frame
+  back (Pyr takes it off each step, and the program waits on Pyr each time).
+- And at midnight, with a picture of the casino's Games menu open at the right of his window
+  and an arrow from the Games button to it: "this menu needs to come off the games button,
+  right now it's not connected." 0.13.28 put the panel 16 in from the bar's right; his window
+  is 2576 wide, so it hung far to the right of the button, its caret outside it. Now it hangs
+  from the button (its left 24 left of the button's), moved left only as far as the bar's right
+  needs. Seen on a test screen 2560 wide, 0.16.1 then 0.16.2 (`release-0.16.2/shots`), and at
+  1100 wide (the panel across the window, as before, the caret under the Games icon).
 
 0.14.0 couldn't send bug reports at all (Report a bug, Suggest a feature, the automatic ones):
 Blue's pyr.log, Nov 17, "couldn't find the server "SERVER2.24.121.231": No such host is known".
