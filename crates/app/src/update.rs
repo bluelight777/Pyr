@@ -199,6 +199,16 @@ impl Updater {
     /// Download and check the new version in the background.
     pub fn download(&self, manifest: Manifest) {
         let Some(asset) = platform_asset(&manifest).cloned() else { return };
+        // (Linux: say now, before 100 MB and a password, when this Pyr can't be updated by a
+        // Debian package: a system without apt, or a Pyr run from a source build.)
+        #[cfg(target_os = "linux")]
+        if asset.url != "pretend"
+            && let Some(why) = linux_install_blocker(&manifest.version)
+        {
+            *self.status.lock() = Status::Failed(why);
+            (self.repaint)();
+            return;
+        }
         *self.status.lock() = Status::Downloading(0, asset.size);
         let (s, r) = (self.status.clone(), self.repaint.clone());
         // (Development builds: a pretend update's pretend download; see dev_pretend_check.)
@@ -587,8 +597,49 @@ pub fn install(path: &Path, sha256: &str) -> Result<Installing, String> {
     }
 }
 
+/// Why the Debian package can't update this Pyr, if it can't: the package is installed with
+/// apt-get, and it replaces the packaged program (/usr/bin/pyr), so a system without apt-get
+/// (Arch, Fedora and the like) or a Pyr run from a source build would ask for the password and
+/// then fail (or install a second Pyr beside the one running).
+#[cfg(target_os = "linux")]
+fn linux_install_blocker(version: &str) -> Option<String> {
+    let exe = std::env::current_exe().ok().and_then(|p| p.canonicalize().ok());
+    let packaged = Path::new("/usr/bin/pyr").canonicalize().ok();
+    linux_blocker_for(exe.as_deref(), packaged.as_deref(), has_apt_get(), version)
+}
+
+#[cfg(target_os = "linux")]
+fn has_apt_get() -> bool {
+    std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).chain([PathBuf::from("/usr/bin")]).any(|d| d.join("apt-get").is_file()))
+        .unwrap_or(false)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_blocker_for(exe: Option<&Path>, packaged: Option<&Path>, apt: bool, version: &str) -> Option<String> {
+    let from_package = matches!((exe, packaged), (Some(e), Some(p)) if e == p);
+    if !from_package {
+        let at = exe.map(|e| format!(" ({})", e.display())).unwrap_or_default();
+        return Some(format!(
+            "this Pyr wasn't installed from Pyr's package{at}, so the update can't replace it: \
+             to get {version}, build it from source again, or install Pyr's package"
+        ));
+    }
+    if !apt {
+        return Some(format!(
+            "Pyr {version} comes as a Debian package and this system has no apt-get to install it: \
+             build {version} from source, or install it with your system's own tools"
+        ));
+    }
+    None
+}
+
 #[cfg(not(windows))]
 fn install_linux(path: &Path, sha256: &str) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if let Some(why) = linux_install_blocker("this version") {
+        return Err(why);
+    }
     // As root: copy the package somewhere only root can write, check it there, and install
     // that copy. (Checking it here and then having apt read it from a folder we own would
     // leave a moment for something running as us to swap it.) The package's own copy of the
@@ -606,6 +657,9 @@ fn install_linux(path: &Path, sha256: &str) -> Result<(), String> {
         .map_err(|e| format!("couldn't ask for permission to install (pkexec): {e}"))?;
     if status.code() == Some(3) {
         return Err("the downloaded update changed on disk, so it wasn't installed".into());
+    }
+    if status.code() == Some(127) {
+        return Err("the update wasn't installed: this system has no apt-get to install Pyr's Debian package".into());
     }
     if !status.success() {
         return Err("the update wasn't installed (cancelled, or the package manager is busy)".into());
@@ -657,6 +711,25 @@ const LINUX_HELPER: &str = "/usr/lib/pyr/install-update";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Linux: a Pyr the Debian package can't update says why before the download and the
+    /// password prompt.
+    #[test]
+    fn linux_update_says_why_before_asking_for_a_password() {
+        let pkg = Path::new("/usr/bin/pyr");
+        let src = Path::new("/home/someone/pyr/target/release/pyr");
+        // The packaged Pyr on a system with apt-get: the update goes ahead.
+        assert_eq!(linux_blocker_for(Some(pkg), Some(pkg), true, "1.0"), None);
+        // Run from a source build (packaged or not): refused, saying which program it is.
+        let why = linux_blocker_for(Some(src), Some(pkg), true, "1.0").unwrap();
+        assert!(why.contains("target/release/pyr") && why.contains("from source"), "{why}");
+        assert!(linux_blocker_for(Some(src), None, true, "1.0").is_some());
+        // The packaged program but no apt-get (Arch and the like): refused, naming apt-get.
+        let why = linux_blocker_for(Some(pkg), Some(pkg), false, "1.0").unwrap();
+        assert!(why.contains("apt-get"), "{why}");
+        // Nothing known about the running program: refused, not guessed.
+        assert!(linux_blocker_for(None, Some(pkg), true, "1.0").is_some());
+    }
 
     /// The one release key, wherever it's written down (servers check the props feed with
     /// `pyr_proto::release::RELEASE_KEY`).

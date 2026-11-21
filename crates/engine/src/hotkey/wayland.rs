@@ -200,6 +200,19 @@ fn rebind(inner: &Mutex<Inner>, ipc: &Option<hyprland::Ipc>) {
     inner.lock().note = Note::Without(format!("Hyprland wouldn't bind {key}: {why}"));
 }
 
+/// What a portal signal does to the key: Activated holds it, Deactivated lets go, and only for
+/// Pyr's own shortcut; anything else leaves it as it is.
+fn edge(member: Option<&str>, which: &str, ours: &str) -> Option<bool> {
+    if which != ours {
+        return None;
+    }
+    match member {
+        Some("Activated") => Some(true),
+        Some("Deactivated") => Some(false),
+        _ => None,
+    }
+}
+
 async fn portal(inner: Arc<Mutex<Inner>>, down: Arc<AtomicBool>, id: String, trigger: Option<String>, on_change: Arc<dyn Fn() + Send + Sync>) {
     use ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut};
     use futures_util::StreamExt;
@@ -212,7 +225,7 @@ async fn portal(inner: Arc<Mutex<Inner>>, down: Arc<AtomicBool>, id: String, tri
     const NONE: &str = "your desktop has no global shortcuts for programs";
     // (A name of its own with the desktop however Pyr was started, so KDE keeps the key you gave
     // it. An older portal can't: then it goes by how Pyr was started.)
-    if let Ok(app) = ashpd::AppID::try_from("com.firelitgames.pyr")
+    if let Ok(app) = ashpd::AppID::try_from(pyr_proto::DESKTOP_ID)
         && let Err(e) = ashpd::register_host_app(app).await
     {
         tracing::debug!("push to talk: the portal didn't take Pyr's app id: {e}");
@@ -225,11 +238,14 @@ async fn portal(inner: Arc<Mutex<Inner>>, down: Arc<AtomicBool>, id: String, tri
         Ok(s) => s,
         Err(e) => return without(NONE, e.to_string()),
     };
-    // (Listening first: a key held as it's bound isn't missed.)
-    let (Ok(on), Ok(off)) = (gs.receive_activated().await, gs.receive_deactivated().await) else {
+    // (Listening first: a key held as it's bound isn't missed.) One ordered stream for both
+    // edges: with Activated and Deactivated on two streams, a quick tap that has both waiting
+    // when this wakes could be read release-first, leaving the key held (an open mic). And the
+    // portal going away (restarted, say) lets go of the key.
+    let (Ok(events), Ok(owner)) = (gs.receive_all_signals().await, gs.receive_owner_changed().await) else {
         return without(NONE, "couldn't listen to its shortcuts".into());
     };
-    let (mut on, mut off) = (Box::pin(on), Box::pin(off));
+    let (mut events, mut owner) = (Box::pin(events), Box::pin(owner));
     let mut shortcut = NewShortcut::new(id.as_str(), "Push to talk (Pyr)");
     if let Some(t) = &trigger {
         shortcut = shortcut.preferred_trigger(t.as_str());
@@ -287,19 +303,34 @@ async fn portal(inner: Arc<Mutex<Inner>>, down: Arc<AtomicBool>, id: String, tri
     on_change();
     // (The portal sends a session's shortcuts to whoever has the session only; the id's Pyr's.)
     loop {
-        let (held, which) = tokio::select! {
-            a = on.next() => (true, a.map(|a| a.shortcut_id().to_string())),
-            d = off.next() => (false, d.map(|d| d.shortcut_id().to_string())),
-        };
-        let Some(which) = which else { break };
-        if which == id {
-            down.store(held, Ordering::Relaxed);
-            on_change();
+        tokio::select! {
+            _ = owner.next() => {
+                tracing::info!("push to talk: the desktop's portal restarted or went away");
+                break;
+            }
+            event = events.next() => {
+                let Some(event) = event else { break };
+                let header = event.header();
+                let member = header.member().map(|m| m.as_str().to_string());
+                // (Activated and Deactivated: session path, shortcut id, timestamp, options.)
+                let Ok((_session, which, _at, _options)) = event
+                    .body()
+                    .deserialize::<(ashpd::zvariant::OwnedObjectPath, String, u64, std::collections::HashMap<String, ashpd::zvariant::OwnedValue>)>()
+                else {
+                    continue;
+                };
+                if let Some(held) = edge(member.as_deref(), &which, &id) {
+                    down.store(held, Ordering::Relaxed);
+                    on_change();
+                }
+            }
         }
     }
-    // (The session's kept until then: closed, the desktop drops the shortcut.)
-    drop(session);
+    // (The session's kept until then: closed, the desktop drops the shortcut.) Let go of the
+    // key first, so nothing ending here leaves the mic open.
     down.store(false, Ordering::Relaxed);
+    on_change();
+    let _ = tokio::time::timeout(Duration::from_secs(1), session.close()).await;
     tracing::info!("push to talk: the desktop's shortcuts went away");
 }
 
@@ -371,6 +402,22 @@ pub mod hyprland {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signals_in_order_hold_and_let_go_of_our_key_only() {
+        // A quick tap arrives as Activated then Deactivated on the one ordered stream: read in
+        // that order, the key ends up let go (two streams could hand them over the other way).
+        let mut held = false;
+        for (member, which) in [("Activated", "pyr-push-to-talk"), ("Deactivated", "pyr-push-to-talk")] {
+            if let Some(h) = edge(Some(member), which, "pyr-push-to-talk") {
+                held = h;
+            }
+        }
+        assert!(!held);
+        assert_eq!(edge(Some("Activated"), "someone-else", "pyr-push-to-talk"), None);
+        assert_eq!(edge(Some("ShortcutsChanged"), "pyr-push-to-talk", "pyr-push-to-talk"), None);
+        assert_eq!(edge(None, "pyr-push-to-talk", "pyr-push-to-talk"), None);
+    }
 
     #[test]
     fn keys_as_hyprland_and_the_desktop_name_them() {

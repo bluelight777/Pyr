@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Pyr
+Comment=Gives Pyr its name with the desktop portal, so push to talk works outside Pyr's window
+Exec=pyr %u
+Icon=pyr
+Terminal=false
+NoDisplay=true
+StartupWMClass=pyr

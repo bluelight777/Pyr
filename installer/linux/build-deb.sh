@@ -35,6 +35,9 @@ done
 install -Dm644 $L/pyr.desktop "$PKG/usr/share/applications/pyr.desktop"
 # (Invite links from before the rename open Pyr too.)
 sed -i "s|^MimeType=.*|&x-scheme-handler/$OLD;|" "$PKG/usr/share/applications/pyr.desktop"
+# (Hidden. The desktop portal gives global shortcuts only to a program with an entry under its
+# reverse-DNS name; without it push to talk works only in Pyr's own window on Wayland.)
+install -Dm644 $L/com.firelitgames.pyr.desktop "$PKG/usr/share/applications/com.firelitgames.pyr.desktop"
 for n in 16 32 48 64 128 256 512; do
   install -Dm644 crates/app/assets/icon/pyr-$n.png "$PKG/usr/share/icons/hicolor/${n}x${n}/apps/pyr.png"
 done

@@ -800,10 +800,12 @@ pub struct PropNews {
 
 pub struct Engine {
     pub shared: Arc<Shared>,
-    _rt: Option<tokio::runtime::Runtime>,
     _ptt: Option<hotkey::PttWatcher>,
     /// Keys that play soundboard sounds.
     _keys: Option<hotkey::ComboWatcher>,
+    // (Last: fields drop in this order, so push to talk lets go of the key and closes its
+    // desktop session while the runtime it runs on is still there.)
+    _rt: Option<tokio::runtime::Runtime>,
 }
 
 impl Engine {
