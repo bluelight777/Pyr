@@ -27,6 +27,7 @@ mod images;
 mod titlebar;
 mod instance;
 mod invites;
+mod launcher;
 mod updating;
 mod looks;
 mod markdown;
@@ -140,6 +141,8 @@ fn main() -> eframe::Result<()> {
     let handoff = match instance::start(&config_dir, join.as_deref()) {
         instance::Start::First { lock, handoff } => {
             instance::hold(lock);
+            // (Linux source builds: show up in the app launcher; see launcher.rs.)
+            launcher::ensure();
             handoff
         }
         instance::Start::AlreadyRunning => {
