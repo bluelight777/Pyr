@@ -13,22 +13,30 @@ pub fn ensure() {
     }
     let Some(data) = data_home() else { return };
     let apps = data.join("applications");
-    let entry_path = apps.join(format!("{}.desktop", pyr_proto::APP_ID));
-    let existing = std::fs::read_to_string(&entry_path).ok();
-    let want = entry(&exe);
-    match &existing {
-        Some(text) if text == &want => return,
-        Some(text) if !text.lines().any(|l| l.trim() == MARK) => return,
-        _ => {}
+    // The visible entry, and the hidden one that gives Pyr its name with the desktop portal
+    // (push to talk outside Pyr's window; see pyr_proto::DESKTOP_ID).
+    let wanted = [
+        (apps.join(format!("{}.desktop", pyr_proto::APP_ID)), entry(&exe)),
+        (apps.join(format!("{}.desktop", pyr_proto::DESKTOP_ID)), portal_entry(&exe)),
+    ];
+    let stale: Vec<_> = wanted
+        .iter()
+        .filter(|(path, want)| match std::fs::read_to_string(path) {
+            Ok(text) => &text != want && text.lines().any(|l| l.trim() == MARK),
+            Err(_) => true,
+        })
+        .collect();
+    if stale.is_empty() {
+        return;
     }
     let icon_dir = data.join("icons/hicolor/256x256/apps");
     let wrote = std::fs::create_dir_all(&icon_dir)
         .and_then(|_| std::fs::write(icon_dir.join(format!("{}.png", pyr_proto::APP_ID)), ICON))
         .and_then(|_| std::fs::create_dir_all(&apps))
-        .and_then(|_| write_atomic(&entry_path, &want));
+        .and_then(|_| stale.iter().try_for_each(|(path, want)| write_atomic(path, want)));
     match wrote {
         Ok(()) => {
-            tracing::info!("app launcher entry for this source build: {}", entry_path.display());
+            tracing::info!("app launcher entries for this source build in {}", apps.display());
             // Lets the desktop see the new entry and the pyr:// handler now (best effort).
             let _ = std::process::Command::new("update-desktop-database")
                 .arg(&apps)
@@ -60,10 +68,9 @@ fn data_home() -> Option<PathBuf> {
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
 }
 
-/// The package's entry (installer/linux/pyr.desktop), pointing at this program.
+/// Desktop entry Exec quoting: the path in double quotes, with ", `, $ and \ escaped.
 #[cfg(any(target_os = "linux", test))]
-fn entry(exe: &std::path::Path) -> String {
-    // Desktop entry Exec quoting: the path in double quotes, with ", `, $ and \ escaped.
+fn quoted_exec(exe: &std::path::Path) -> String {
     let mut quoted = String::from("\"");
     for c in exe.display().to_string().chars() {
         if matches!(c, '"' | '`' | '$' | '\\') {
@@ -72,6 +79,25 @@ fn entry(exe: &std::path::Path) -> String {
         quoted.push(c);
     }
     quoted.push('"');
+    quoted
+}
+
+/// The package's hidden entry (installer/linux/com.firelitgames.pyr.desktop), pointing at this program.
+#[cfg(any(target_os = "linux", test))]
+fn portal_entry(exe: &std::path::Path) -> String {
+    format!(
+        "[Desktop Entry]\nType=Application\nName=Pyr\n\
+         Comment=Gives Pyr its name with the desktop portal, so push to talk works outside Pyr's window\n\
+         Exec={} %u\nIcon={id}\nTerminal=false\nNoDisplay=true\nStartupWMClass={id}\nX-Pyr-Source-Build=true\n",
+        quoted_exec(exe),
+        id = pyr_proto::APP_ID
+    )
+}
+
+/// The package's entry (installer/linux/pyr.desktop), pointing at this program.
+#[cfg(any(target_os = "linux", test))]
+fn entry(exe: &std::path::Path) -> String {
+    let quoted = quoted_exec(exe);
     format!(
         "[Desktop Entry]\nType=Application\nName=Pyr\nGenericName=Voice and Video Chat\n\
          Comment=Voice, webcams, screen sharing and text channels for your group\n\
@@ -99,6 +125,15 @@ mod tests {
         assert!(e.contains("Exec=\"/home/someone/pyr/target/release/pyr\" %u\n"), "{e}");
         assert!(e.contains("MimeType=x-scheme-handler/pyr;"), "{e}");
         assert!(e.lines().any(|l| l == "X-Pyr-Source-Build=true"), "{e}");
+    }
+
+    #[test]
+    fn hidden_portal_entry_matches_the_package_one() {
+        let e = portal_entry(std::path::Path::new("/usr/bin/pyr"));
+        let package = include_str!("../../../installer/linux/com.firelitgames.pyr.desktop")
+            .replace("Exec=pyr %u", "Exec=\"/usr/bin/pyr\" %u");
+        assert_eq!(e, format!("{package}X-Pyr-Source-Build=true\n"));
+        assert!(e.lines().any(|l| l == "NoDisplay=true"), "{e}");
     }
 
     #[test]

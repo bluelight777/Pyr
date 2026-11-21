@@ -33,6 +33,10 @@ pub mod words;
 pub const APP_NAME: &str = "Pyr";
 /// Lower-case identifier used for the URL scheme and config directories.
 pub const APP_ID: &str = "pyr";
+/// Reverse-DNS name Pyr gives the desktop portal (Linux global shortcuts). The portal only takes
+/// it when an app launcher entry of that name exists, so Pyr ships a hidden
+/// `com.firelitgames.pyr.desktop` beside the visible `pyr.desktop`.
+pub const DESKTOP_ID: &str = "com.firelitgames.pyr";
 /// QUIC application protocol identifier. It keeps the name from before 0.8.0 for good:
 /// every Pyr and every server speaks it (see [`legacy`], with the other labels like it).
 pub const ALPN: &[u8] = b"ingle/1";

@@ -225,7 +225,7 @@ async fn portal(inner: Arc<Mutex<Inner>>, down: Arc<AtomicBool>, id: String, tri
     const NONE: &str = "your desktop has no global shortcuts for programs";
     // (A name of its own with the desktop however Pyr was started, so KDE keeps the key you gave
     // it. An older portal can't: then it goes by how Pyr was started.)
-    if let Ok(app) = ashpd::AppID::try_from("com.firelitgames.pyr")
+    if let Ok(app) = ashpd::AppID::try_from(pyr_proto::DESKTOP_ID)
         && let Err(e) = ashpd::register_host_app(app).await
     {
         tracing::debug!("push to talk: the portal didn't take Pyr's app id: {e}");
