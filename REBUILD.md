@@ -589,9 +589,9 @@ only the version), so 0.16.4's builds go up again, byte for byte (`pyr-server --
 0.16.4). Tests in release mode with the release settings (the debug build folder went for room):
 app 158 (the five YouTube ones among them), engine 63 (settings, audio, the casino, bug reports,
 push to talk, the Wayland capture); server, proto, poker and the props feed unchanged since
-0.16.4's run. In the outputs folder as `pyr-release-0.16.5` (51 files, compared after the copy);
-Blue's PC wasn't connected when it was ready (twice, 02:54 and 03:15 UTC), so it isn't in his
-`Downloads\pyr-release-0.16.5` yet.
+0.16.4's run. On Blue's PC as `Downloads\pyr-release-0.16.5` (51 files, once his PC was back:
+every size compared, 49 read back and compared, the two installers checked by publish.ps1
+itself against latest2.json; he ran `publish.cmd` as they landed).
 
 0.16.4 (Nov 20), 0.16.3 built and on Blue's PC, not yet published (0.16.4 has it all):
 - "make Pyropoly work in Omarchy/linux" and "make Torch and Conquer work in Omarchy/linux." Blue
