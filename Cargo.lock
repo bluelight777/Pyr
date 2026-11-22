@@ -5054,7 +5054,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
 name = "pyr"
-version = "0.16.4"
+version = "0.16.5"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -5090,7 +5090,7 @@ dependencies = [
 
 [[package]]
 name = "pyr-directory"
-version = "0.16.4"
+version = "0.16.5"
 dependencies = [
  "anyhow",
  "bytes",
@@ -5116,7 +5116,7 @@ dependencies = [
 
 [[package]]
 name = "pyr-engine"
-version = "0.16.4"
+version = "0.16.5"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -5174,7 +5174,7 @@ dependencies = [
 
 [[package]]
 name = "pyr-host"
-version = "0.16.4"
+version = "0.16.5"
 dependencies = [
  "anyhow",
  "getrandom 0.2.17",
@@ -5193,7 +5193,7 @@ dependencies = [
 
 [[package]]
 name = "pyr-keeper"
-version = "0.16.4"
+version = "0.16.5"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5212,7 +5212,7 @@ dependencies = [
 
 [[package]]
 name = "pyr-mcp"
-version = "0.16.4"
+version = "0.16.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5226,7 +5226,7 @@ dependencies = [
 
 [[package]]
 name = "pyr-poker"
-version = "0.16.4"
+version = "0.16.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -5235,7 +5235,7 @@ dependencies = [
 
 [[package]]
 name = "pyr-props"
-version = "0.16.4"
+version = "0.16.5"
 dependencies = [
  "clap",
  "pyr-proto",
@@ -5247,7 +5247,7 @@ dependencies = [
 
 [[package]]
 name = "pyr-proto"
-version = "0.16.4"
+version = "0.16.5"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5271,7 +5271,7 @@ dependencies = [
 
 [[package]]
 name = "pyr-server"
-version = "0.16.4"
+version = "0.16.5"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

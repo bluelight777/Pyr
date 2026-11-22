@@ -1450,6 +1450,16 @@ fn moving_pictures(ui: &mut egui::Ui, draft: &mut Settings) {
         "Either way they wait while Pyr's in the background, and clicking one opens it to play, pause or step through. Profile pictures \
          move while their person talks, and server icons when you point at them.",
     );
+    // (0.16.5)
+    divider(ui);
+    heading(ui, "Links");
+    toggle_row(
+        ui,
+        &mut draft.youtube_previews,
+        "Show previews of YouTube links",
+        "A YouTube link in chat shows the video's picture, title and channel under its message; click it to watch on YouTube. Pyr \
+         asks YouTube for them, so YouTube sees your PC's address asking.",
+    );
 }
 
 /// Windows: the icon by the clock, starting with Windows, and quitting.

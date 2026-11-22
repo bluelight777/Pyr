@@ -912,6 +912,12 @@ impl PyrApp {
                         for link in crate::invites::links_in(&content) {
                             self.invite_embed(ui, st, &link, acts);
                         }
+                        // (0.16.5) And YouTube links, the video's preview (unless turned off).
+                        if self.ui.youtube_previews {
+                            for v in crate::youtube::links_in(&content) {
+                                self.youtube_embed(ui, &v);
+                            }
+                        }
                         // And games' invites: the game's card with Join (0.13.18).
                         for (game, room) in crate::play_invites::links_in(&content).into_iter().take(2) {
                             self.play_invite_embed(ui, st, &game, &room, mine, acts);

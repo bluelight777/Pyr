@@ -37,6 +37,10 @@ a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
   the **+** button, drag them in, or paste them with Ctrl+V. Animated GIFs play.
 - **GIF search**: type `/giphy` or `/klipy`, or click the GIF button (powered by GIPHY and
   KLIPY, each in its own tab; each server's owner turns them on with a free key).
+- **YouTube previews**, like Discord's: a YouTube link in chat shows the video's picture,
+  title and channel under its message; click it to watch on YouTube. A link written
+  `<like this>` shows none, as in Discord. They come straight from YouTube (only its own
+  addresses), and Settings → Appearance turns them off.
 - **Favorites**, like Discord's, for GIFs from GIPHY and KLIPY and for pictures people post
   (memes): point at one, in chat or in the GIF picker, and click the star in its corner.
   They wait in the GIF picker's first tab, ready to send on any server (a favorite picture is

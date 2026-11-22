@@ -223,6 +223,9 @@ pub struct Settings {
     /// When moving pictures in chat (GIFs, animated WebP and PNG) play: "" always, "hover"
     /// while pointed at, "never" (they show still, marked GIF).
     pub play_gifs: String,
+    /// (0.16.5) YouTube links in chat show the video's preview (its picture, title and
+    /// channel, from YouTube) under their message.
+    pub youtube_previews: bool,
     /// Pyr Casino's keys as changed from each move's own (0.13.26, 0.13.28's names): a move
     /// ("slots.spin", "bj.hit"...) and its keys ("Space", "Ctrl+Shift+W"), two at most, none
     /// for a move whose keys were taken off. A move left as it was isn't in it.
@@ -355,6 +358,7 @@ impl Default for Settings {
             ringtone: None,
             ringtones: Default::default(),
             play_gifs: String::new(),
+            youtube_previews: true,
             casino_keys: Default::default(),
             mute_key: String::new(),
             extra: Default::default(),

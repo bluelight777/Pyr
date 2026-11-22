@@ -71,6 +71,7 @@ mod unread;
 mod update;
 mod update_chip;
 mod watchdog;
+mod youtube;
 
 use std::sync::Arc;
 

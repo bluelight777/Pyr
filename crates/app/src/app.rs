@@ -540,6 +540,10 @@ pub struct UiState {
     pub menu_picture: Option<(String, bool)>,
     /// GIFs from GIPHY being shown.
     pub gifs: crate::giphy::Downloads,
+    /// (0.16.5) YouTube links' previews being shown, and whether they're shown at all
+    /// (`Settings::youtube_previews`, as of this frame).
+    pub youtube: crate::youtube::Previews,
+    pub youtube_previews: bool,
     /// Folded runs of blocked messages that were opened (by their first message).
     pub shown_blocked: std::collections::HashSet<MessageId>,
     /// Friends page tab: 0 online, 1 all, 2 pending, 3 blocked, 4 add friend.
@@ -1388,6 +1392,7 @@ impl eframe::App for PyrApp {
             self.ui.anim_last = Some(now);
             self.ui.anim_on = front;
             self.ui.play_gifs = engine.state().settings.play_gifs.clone();
+            self.ui.youtube_previews = engine.state().settings.youtube_previews;
         }
         for e in pyr_engine::errors::take() {
             engine.shared.state.write().toast(e, true);
