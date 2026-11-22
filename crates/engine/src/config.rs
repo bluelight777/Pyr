@@ -754,6 +754,8 @@ mod from_0_13_28 {
         assert_eq!(cfg2.settings.casino_keys.len(), 1);
         assert_eq!(cfg2.servers.len(), 1);
         assert_eq!(Settings::default().games_volume, 1.0);
+        // YouTube previews (0.16.5): on, for a config from before them too.
+        assert!(cfg.settings.youtube_previews && Settings::default().youtube_previews);
         // (As written to the file: an f32 as it was typed, 0.7 not 0.699999988.)
         let back: serde_json::Value = serde_json::from_slice(&serde_json::to_vec(&cfg).unwrap()).unwrap();
         let old: serde_json::Value = serde_json::from_str(old).unwrap();
