@@ -5,7 +5,8 @@
 //! What's shown comes straight from YouTube: the title and channel from its oEmbed address
 //! (no key needed), the picture from its picture server. Only YouTube's own addresses are
 //! asked, only for links in messages that are on the screen (or about to be), a few at a
-//! time, and each video once. Settings → Appearance turns previews off.
+//! time, and each video once (again two minutes later if YouTube couldn't be reached).
+//! Settings → Appearance turns previews off.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -23,6 +24,8 @@ const KEEP: usize = 300;
 /// The biggest answers taken: oEmbed's few lines, and a picture (YouTube's are about 30 kB).
 const MAX_INFO: u64 = 64 * 1024;
 const MAX_PICTURE: u64 = 2 << 20;
+/// How long after YouTube couldn't be reached a video's asked about again.
+const AGAIN: Duration = Duration::from_secs(120);
 
 /// A link to a YouTube video in a message: the video, and the link as it was written (it's
 /// what's opened, so a time in it is kept).
@@ -156,8 +159,11 @@ pub enum Preview {
     /// What could be had: the title and channel, the picture (either may be missing), and
     /// whether the picture is still coming (the title shows as soon as it's in).
     Ready { info: Option<Info>, picture: Option<Arc<Vec<u8>>>, coming: bool },
-    /// YouTube doesn't know it (taken down, private), or couldn't be reached at all.
-    Failed,
+    /// YouTube says there's no such video (taken down, private, never was): a small card says
+    /// so.
+    Gone,
+    /// YouTube couldn't be reached (or didn't say): no card; asked again in a while.
+    Unreachable,
 }
 
 struct Entry {
@@ -176,21 +182,34 @@ impl Previews {
     /// The preview of video `id`, asked for the first time it's wanted (`repaint` when it's in).
     pub fn get(&self, id: &str, repaint: impl Fn() + Send + 'static) -> Preview {
         if !is_id(id) {
-            return Preview::Failed;
+            return Preview::Gone;
         }
         let mut m = self.map.lock();
-        if let Some(e) = m.get(id) {
-            return e.preview.clone();
-        }
-        if self.running.load(std::sync::atomic::Ordering::Relaxed) >= AT_ONCE {
-            return Preview::Loading;
-        }
-        if m.len() >= KEEP {
-            if let Some(oldest) = m.iter().filter(|(_, e)| !matches!(e.preview, Preview::Loading)).min_by_key(|(_, e)| e.asked).map(|(k, _)| k.clone()) {
-                m.remove(&oldest);
+        // (One YouTube couldn't be reached about is asked again a while later, showing nothing
+        // meanwhile.)
+        let again = match m.get_mut(id) {
+            Some(e) if matches!(e.preview, Preview::Unreachable) && e.asked.elapsed() >= AGAIN => {
+                if self.running.load(std::sync::atomic::Ordering::Relaxed) >= AT_ONCE {
+                    return Preview::Unreachable;
+                }
+                e.asked = Instant::now();
+                true
             }
+            Some(e) => return e.preview.clone(),
+            None => false,
+        };
+        if !again {
+            if self.running.load(std::sync::atomic::Ordering::Relaxed) >= AT_ONCE {
+                return Preview::Loading;
+            }
+            if m.len() >= KEEP {
+                if let Some(oldest) = m.iter().filter(|(_, e)| !matches!(e.preview, Preview::Loading)).min_by_key(|(_, e)| e.asked).map(|(k, _)| k.clone()) {
+                    m.remove(&oldest);
+                }
+            }
+            m.insert(id.to_string(), Entry { preview: Preview::Loading, asked: Instant::now() });
         }
-        m.insert(id.to_string(), Entry { preview: Preview::Loading, asked: Instant::now() });
+        let now = m.get(id).map(|e| e.preview.clone()).unwrap_or(Preview::Loading);
         drop(m);
         self.running.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let (map, running, id) = (self.map.clone(), self.running.clone(), id.to_string());
@@ -203,7 +222,7 @@ impl Previews {
             });
             running.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         });
-        Preview::Loading
+        now
     }
 }
 
@@ -234,11 +253,17 @@ fn fetch(id: &str, tell: &dyn Fn(Preview)) {
     use std::io::Read;
     let (info_base, picture_base) = bases();
     let watch = format!("https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3D{id}");
+    // 404 (or 400): no such video. 401 or 403: one that mayn't be shown on other sites, or a
+    // private one; its picture says which.
+    let mut refused = false;
     let info = match agent(&info_base).get(&format!("{info_base}/oembed?format=json&url={watch}")).call() {
         Ok(mut r) if r.status().as_u16() == 200 => r.body_mut().with_config().limit(MAX_INFO).read_to_string().ok().and_then(|s| parse_info(&s)),
-        // Taken down or private (YouTube answers 401, 403 or 404): no preview.
-        Ok(r) if matches!(r.status().as_u16(), 400 | 401 | 403 | 404) => return tell(Preview::Failed),
-        Ok(_) => None,
+        Ok(r) if matches!(r.status().as_u16(), 400 | 404) => return tell(Preview::Gone),
+        Ok(r) => {
+            refused = matches!(r.status().as_u16(), 401 | 403);
+            tracing::debug!("youtube: {id}: {}", r.status());
+            None
+        }
         Err(e) => {
             tracing::debug!("youtube: couldn't ask about {id}: {e}");
             None
@@ -248,12 +273,24 @@ fn fetch(id: &str, tell: &dyn Fn(Preview)) {
         tell(Preview::Ready { info: info.clone(), picture: None, coming: true });
     }
     // (hqdefault is there for every video: 480x360, a 16:9 video in a band across it.)
-    let picture = agent(&picture_base).get(&format!("{picture_base}/vi/{id}/hqdefault.jpg")).call().ok().filter(|r| r.status().as_u16() == 200).and_then(|mut r| {
-        let mut out = Vec::new();
-        r.body_mut().as_reader().take(MAX_PICTURE + 1).read_to_end(&mut out).ok()?;
-        (out.len() as u64 <= MAX_PICTURE && !out.is_empty()).then(|| Arc::new(out))
+    let mut no_picture = false;
+    let picture = match agent(&picture_base).get(&format!("{picture_base}/vi/{id}/hqdefault.jpg")).call() {
+        Ok(mut r) if r.status().as_u16() == 200 => {
+            let mut out = Vec::new();
+            r.body_mut().as_reader().take(MAX_PICTURE + 1).read_to_end(&mut out).ok();
+            (out.len() as u64 <= MAX_PICTURE && !out.is_empty()).then(|| Arc::new(out))
+        }
+        Ok(r) => {
+            no_picture = r.status().as_u16() == 404;
+            None
+        }
+        Err(_) => None,
+    };
+    tell(match (info, picture) {
+        (None, None) if refused && no_picture => Preview::Gone,
+        (None, None) => Preview::Unreachable,
+        (info, picture) => Preview::Ready { info, picture, coming: false },
     });
-    tell(if info.is_none() && picture.is_none() { Preview::Failed } else { Preview::Ready { info, picture, coming: false } });
 }
 
 /// YouTube's red, for the card's edge (as Discord's YouTube cards have).
@@ -265,7 +302,8 @@ impl crate::app::PyrApp {
     /// A YouTube link's preview under its message: a card with "YouTube", the channel, the
     /// title (click it, or the picture, to open the video in the browser) and the picture with a
     /// play button. It's that size from the start (nothing in the chat moves when it comes in),
-    /// unless YouTube says the video's gone: then it's a small card that says so.
+    /// unless YouTube says the video's gone (then it's a small card that says so), won't say
+    /// what it's called (no channel line) or can't be reached (no card).
     pub(crate) fn youtube_embed(&mut self, ui: &mut egui::Ui, v: &Video) {
         use crate::theme;
         use egui::{Color32, CursorIcon, Rect, Sense, Stroke, pos2, vec2};
@@ -282,10 +320,26 @@ impl crate::app::PyrApp {
             let ctx = ui.ctx().clone();
             self.ui.youtube.get(&v.id, move || ctx.request_repaint())
         };
-        let gone = matches!(preview, Preview::Failed);
-        // Its height: 12 + "YouTube" 16 + 2 + channel 18 + 4 + title 21 + 8 + picture + 12; gone,
-        // 12 + "YouTube" 16 + 4 + the line 21 + 12.
-        let h = if gone { 65.0 } else { 93.0 + pic_h };
+        if matches!(preview, Preview::Unreachable) {
+            return;
+        }
+        let gone = matches!(preview, Preview::Gone);
+        let (info, picture, coming) = match &preview {
+            Preview::Ready { info, picture, coming } => (info.clone(), picture.clone(), *coming),
+            _ => (None, None, true),
+        };
+        let ready = matches!(preview, Preview::Ready { .. });
+        // (Only a picture: YouTube wouldn't say what it's called or whose it is.)
+        let channel_line = !ready || info.is_some();
+        // Its height: 12 + "YouTube" 16 + 2 + channel 18 + 4 + title 21 + 8 + picture + 12 (the
+        // channel's 22 less without it); gone, 12 + "YouTube" 16 + 4 + the line 21 + 12.
+        let h = if gone {
+            65.0
+        } else if channel_line {
+            93.0 + pic_h
+        } else {
+            71.0 + pic_h
+        };
         let (card, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
         let p = ui.painter_at(card.expand(1.0));
         p.rect_filled(card, theme::r(8), theme::ELEV());
@@ -299,11 +353,6 @@ impl crate::app::PyrApp {
             return;
         }
         y += 18.0;
-        let (info, picture, coming) = match &preview {
-            Preview::Ready { info, picture, coming } => (info.clone(), picture.clone(), *coming),
-            _ => (None, None, true),
-        };
-        let ready = matches!(preview, Preview::Ready { .. });
         // The channel (its page opens when it's clicked).
         if let Some(i) = &info {
             let mut job = egui::text::LayoutJob::simple_singleline(i.channel.clone(), theme::font(13.0), theme::TEXT());
@@ -321,12 +370,13 @@ impl crate::app::PyrApp {
                 }
             }
         }
-        y += 22.0;
-        // The title, on one line (all of it when pointed at); the link itself if YouTube didn't
-        // say.
+        if channel_line {
+            y += 22.0;
+        }
+        // The title, on one line (all of it when pointed at).
         let title = match &info {
             Some(i) => i.title.clone(),
-            None if ready => v.url.clone(),
+            None if ready => "Watch on YouTube".to_string(),
             None => "Loading video…".to_string(),
         };
         let color = if ready { theme::LINK() } else { theme::MUTED() };
@@ -336,7 +386,8 @@ impl crate::app::PyrApp {
         let title_r = Rect::from_min_size(pos2(x, y), vec2(g.size().x.min(inner), 21.0));
         p.galley(pos2(x, y), g, color);
         if ready {
-            let resp = ui.interact(title_r, ui.id().with(("yt-title", &v.id, top.y as i32)), Sense::click()).on_hover_cursor(CursorIcon::PointingHand).on_hover_text(&title);
+            let tip = if info.is_some() { title.clone() } else { v.url.clone() };
+            let resp = ui.interact(title_r, ui.id().with(("yt-title", &v.id, top.y as i32)), Sense::click()).on_hover_cursor(CursorIcon::PointingHand).on_hover_text(tip);
             if resp.hovered() {
                 p.line_segment([pos2(title_r.left(), title_r.bottom() - 1.0), pos2(title_r.right(), title_r.bottom() - 1.0)], Stroke::new(1.0f32, color));
             }
@@ -460,7 +511,7 @@ mod tests {
     #[test]
     fn only_videos_are_asked_about() {
         let p = Previews::default();
-        assert!(matches!(p.get("../../etc/pa", || {}), Preview::Failed));
-        assert!(matches!(p.get("a b c d e f", || {}), Preview::Failed));
+        assert!(matches!(p.get("../../etc/pa", || {}), Preview::Gone));
+        assert!(matches!(p.get("a b c d e f", || {}), Preview::Gone));
     }
 }
