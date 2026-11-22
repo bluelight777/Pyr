@@ -562,6 +562,35 @@ Pyr Prop Bets' listing comes out the same. Checked: the listing opens, is endors
 for Windows and Linux as library.tar has them, the Linux program runnable. The Keeper's import of
 it wasn't run here (it's the code every release's Prop Bets goes through).
 
+0.16.5 (Nov 22), 0.16.4 built and on Blue's PC:
+- "I want to see a youtube preview when someone links youtube." (A picture of his Pyr 0.16.4: a
+  YouTube link in Brethren of Blood's #General Chat, a plain link.) Like Discord's: under a
+  message with a YouTube link (youtube.com's watch, shorts, live and embed pages, www., m. and
+  music. too, and youtu.be; three a message, each video once) a card: "YouTube", the channel (its
+  page opens), the title (one line, "…" when long; the link opens, a time in it kept) and the
+  picture (the 16:9 band of YouTube's hqdefault) with a play button (the link opens).
+  `crates/app/src/youtube.rs`: title and channel from YouTube's oEmbed address (no key), the
+  picture from i.ytimg.com; only YouTube's own addresses, three videos at a time, each once, only
+  for messages on the screen; the card is its size from the start, its title in before its
+  picture. oEmbed's 404 (or 400): a small "This video isn't available" card. 401 or 403 (a video
+  that mayn't be shown on other sites, or a private one): its picture says which: a card with the
+  picture and "Watch on YouTube", or gone. Nothing to show otherwise (no network, YouTube down):
+  no card, asked again two minutes later. Only links chat shows as links get one: not
+  `<like this>` (Discord's "no preview"), not in code. Settings → Appearance → Links → "Show
+  previews of YouTube links" (on; `Settings::youtube_previews`). `PYR_YOUTUBE` points it at a
+  stand-in for tests (`tools/release-0.16.5/fake_youtube.py`, `pipe-yt.sh`). Tried on the X11
+  test screen against the stand-in: every state (the title before a slow picture, gone, private,
+  no-embed, unreachable and asked again, a long title and channel, narrow and wide), the setting,
+  and what each click opens (a stand-in browser wrote it down). Not tried against the real
+  YouTube from here.
+Built, packed and checked (65 checks, all good). The VPS's programs weren't built again: their
+code is 0.16.4's (the check: no change in their crates since fb762c0, the lock file's changes
+only the version), so 0.16.4's builds go up again, byte for byte (`pyr-server --version` says
+0.16.4). Tests in release mode with the release settings (the debug build folder went for room):
+app 158 (the five YouTube ones among them), engine 63 (settings, audio, the casino, bug reports,
+push to talk, the Wayland capture); server, proto, poker and the props feed unchanged since
+0.16.4's run. On Blue's PC as `Downloads\pyr-release-0.16.5` (51 files).
+
 0.16.4 (Nov 20), 0.16.3 built and on Blue's PC, not yet published (0.16.4 has it all):
 - "make Pyropoly work in Omarchy/linux" and "make Torch and Conquer work in Omarchy/linux." Blue
   chose "Both: Wine now, rebuild later". On Linux the Library's programs made only for Windows
