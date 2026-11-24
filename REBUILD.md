@@ -602,7 +602,14 @@ it wasn't run here (it's the code every release's Prop Bets goes through).
 - (Pyropoly 0.2.11, the same night, a Library-only update: the districts' glyphs on the deal
   table, the deal's Total that could land on the other side's first line, and the offers'
   buttons cut off under a deed's card; see its PLAN.md.)
-Being built and checked.
+Built, packed and checked (71 checks, all good: among them both Pyrs with this release's
+changes in them, the TV part and Settings' new line; 0.16.5's YouTube previews still in; the VPS's
+programs 0.16.4's again, byte for byte, their code unchanged since). Tests in release mode with
+the release settings, each test program run with `PYR_BUG_SERVER=off`: app 158, engine 139 (the
+new `a_tv_heard_lately_doesn_t_teach_isolation_your_level` among them). On Blue's PC as
+`Downloads\pyr-release-0.16.6` (51 files: every size compared, the 48 small ones read back and
+compared; the installers checked by publish.ps1 itself against latest2.json). Not tried: a real
+call with a TV in the room.
 
 0.16.5 (Nov 22), 0.16.4 built and on Blue's PC:
 - "I want to see a youtube preview when someone links youtube." (A picture of his Pyr 0.16.4: a
