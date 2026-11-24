@@ -562,6 +562,48 @@ Pyr Prop Bets' listing comes out the same. Checked: the listing opens, is endors
 for Windows and Linux as library.tar has them, the Linux program runnable. The Keeper's import of
 it wasn't run here (it's the code every release's Prop Bets goes through).
 
+0.16.6 (Nov 24), 0.16.5 live:
+- "Chimbita/Maggpul aka Mag's mic allows his mother's TV to bleed through the mic, but when he
+  goes and reselects the input and output it seems to fix it, please look into this and solve
+  this mic issue. I don't want to hear TV's playing through the mic, also I don't want my Star
+  Trek on my end to bleed through the mic". Voice isolation learned your level from any speech
+  within 6 dB of it, a TV's louder syllables too. Over a call where you mostly listen they came
+  to outnumber your own speech in what was learned, and your level crept down toward the TV's;
+  the TV went out more and more, and once it was within a few dB of your level it wasn't heard as
+  a voice across the room any more and went out most of the time. Choosing the microphone again
+  started it all afresh. Now, while a voice across the room has been heard in the last minute,
+  only speech 6 dB louder than its loudest (as the microphone hears it), or that sounds near, is
+  learned from (`FAR_LEARN_DB`; `PYR_AB=tvlearn`: as before). Measured A/B in one build, one
+  switch flipped (`examples/tv_drift.rs`, new: a twenty-minute call, you talking 30 s and then
+  10 s every five minutes, a TV through a room all along; `tools/make-tv-room.py` makes TVs of
+  any length now): the TV 10 dB under you went out 524 -> 82 of 1,129 s while you were quiet (4
+  s a minute all along; before, from the eighth minute on, 22 to 48 s a minute, your level down
+  4 dB), 6 dB under 905 -> 762, 15 dB under 61 -> 61; your talking turned down 10 dB or more 30
+  -> 31 of 247, 38 -> 39, 28 -> 28. A TV of fifteen minutes of other talk 15 and 20 dB under, the
+  PC's own sound out of speakers, `tv_eval`'s six minutes, `iso_ref_eval`, `mag_eval`,
+  `aec_eval`: the same either way. The cost, `onset_eval` (phrases with pauses, the TV on all
+  along) with the TV 10 dB under: it went out 42 -> 6 of 61 s of the pauses (another voice: 58
+  -> 5 of 87), and the softer phrases, as quiet as its louder words, now wait as they're meant
+  to while a TV is heard (0.16.2's rule, which the creeping level had undone): phrases never sent
+  0 -> 3 of 31 (0 -> 6 of 26), loud moments lost 14% -> 33% (16% -> 36%); with the TV 15 dB
+  under, the TV 5 -> 2 of 61 s, phrases never sent 1 -> 1, loud moments lost 16% -> 23%; a quiet
+  room the same. Tried and not kept: the TV's level against yours before the automatic gain
+  (it's compared after it, and the gain moves 3 to 6 dB): the same everywhere, a little worse
+  with the TV 15 dB under; new speech starting as yours only within 1 dB of your level while a TV
+  is heard: more of a TV 6 dB under kept out (791 -> 623 s) but more of your phrases lost; and
+  down to 6 dB under your level when 7 dB over the TV's loudest: a phrase or two back, but the TV
+  out 82 -> 296 s. Not changed: what the echo canceller does.
+- His Star Trek: Pyr hands the echo canceller what the PC plays (WASAPI process loopback,
+  Windows 11) only with voice isolation; with Strong, the default, it doesn't hear it at all.
+  `tv_drift`'s `pc` (the PC's sound out of speakers into the microphone, 16 dB down): with voice
+  isolation none of it went out in twenty minutes; with Strong, 995 of 1,129 s. Settings says so
+  now under Voice isolation, and the README. Handing it to the canceller with the other modes too
+  would change what the canceller does for everyone: that waits for the echo test (ground rules).
+- (Pyropoly 0.2.11, the same night, a Library-only update: the districts' glyphs on the deal
+  table, the deal's Total that could land on the other side's first line, and the offers'
+  buttons cut off under a deed's card; see its PLAN.md.)
+Being built and checked.
+
 0.16.5 (Nov 22), 0.16.4 built and on Blue's PC:
 - "I want to see a youtube preview when someone links youtube." (A picture of his Pyr 0.16.4: a
   YouTube link in Brethren of Blood's #General Chat, a plain link.) Like Discord's: under a

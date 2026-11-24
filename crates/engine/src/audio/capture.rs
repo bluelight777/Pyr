@@ -238,7 +238,21 @@ const FAR_VOICE_UNDER_DB: (f32, f32) = (4.0, 18.0);
 /// microphone again started it all afresh, which is why that seemed to fix it. Now, while a
 /// voice across the room has been heard lately (`FAR_VOICE_MS`), only speech this much louder
 /// than its loudest (`far_voice_db`, as the microphone hears it), or that sounds near, is learned
-/// from. MEASURED: see REBUILD.md. (`PYR_AB=tvlearn`: as before.)
+/// from: isolation stays as it is after choosing the microphone again, all call long.
+///
+/// Measured, as before -> now (`PYR_AB=tvlearn`: as before). `examples/tv_drift.rs`, you talking
+/// 30 s and then 10 s every five minutes for twenty minutes, a TV talking all along; seconds of
+/// it that went out while you were quiet, of 1,129: 10 dB under you 524 -> 82 (4 s a minute all
+/// along; before, from the eighth minute on, 22 to 48), 6 dB under 905 -> 762, 15 dB under 61 ->
+/// 61; your talking turned down 10 dB or more 30 -> 31 of 247, 38 -> 39 of 254, 28 -> 28 of 234.
+/// Another TV (fifteen minutes of other talk, louder and quieter) 15 and 20 dB under, and the
+/// PC's own sound out of speakers: the same either way. `examples/onset_eval.rs` (phrases with
+/// pauses, five minutes, the TV on all along) with the TV 10 dB under: it went out 42 -> 6 of 61
+/// s of your pauses (another voice: 58 -> 5 of 87), and your softer phrases, as quiet as its
+/// louder words, now wait as they're meant to while a TV is heard (`SPEECH_HIST`): phrases never
+/// sent 0 -> 3 of 31 (0 -> 6 of 26), loud moments lost 14% -> 33% (16% -> 36%); 15 dB under: the
+/// TV 5 -> 2 of 61 s, phrases never sent 1 -> 1, loud moments lost 16% -> 23%; a quiet room the
+/// same. `tv_eval`, `iso_ref_eval`, `mag_eval` and `aec_eval`: the same.
 const FAR_LEARN_DB: f32 = 6.0;
 
 /// Speech levels heard (NaN: none): how many, their spread (the 90th percentile less the 10th,
