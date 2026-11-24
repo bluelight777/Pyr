@@ -1166,7 +1166,8 @@ impl PyrApp {
                 NoiseSuppression::Strong => "An AI model (RNNoise) takes out most of the noise around your voice, typing and clicks too.",
                 NoiseSuppression::Isolation => {
                     "Only your voice gets through: typing, mouse clicks, fans, machines, TVs, people talking in the room and sounds between \
-                     your words are cut. Someone talking right next to you as loudly as you can still be heard. Try it with Let's check."
+                     your words are cut, and on Windows 11 what your PC itself plays out of your speakers (a game, a show). Someone talking \
+                     right next to you as loudly as you can still be heard. Try it with Let's check."
                 }
             },
         );

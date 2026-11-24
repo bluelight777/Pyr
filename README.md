@@ -615,7 +615,8 @@ Open them with the gear next to your name:
   sensitivity slider) or push-to-talk (the backtick key by default; mouse buttons 4/5 work
   too) with a release delay, and noise suppression: *Strong (AI)* (RNNoise, the default),
   *Standard* (WebRTC), off, or *Voice isolation* (DeepFilterNet3 cleans the sound and only
-  the close voice at your mic gets through: no TV, no people across the room; about 1.5 ms of
+  the close voice at your mic gets through: no TV, no people across the room, however long
+  the call, and on Windows 11 none of what your PC plays out of its speakers; about 1.5 ms of
   CPU per 10 ms of audio and 30 ms more delay). Also echo cancellation, automatic gain,
   voice quality (24–192 kbps), voice priority, the camera and its quality, and the
   screen-share quality.
