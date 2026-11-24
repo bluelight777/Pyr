@@ -110,12 +110,16 @@ pub struct CapturePipeline {
     aec_hist: [f32; 100],
     near_fresh: bool,
     speech_hist: Vec<f32>,
-    /// (And whether each was taken as yours.)
+    /// (And each one's level at the microphone, before echo cancellation and the automatic
+    /// gain: as your level is learned; and whether each was taken as yours.)
+    speech_raw: Vec<f32>,
     speech_mine: Vec<bool>,
     speech_at: usize,
     speech_n: usize,
-    /// When a voice across the room (a TV) was last heard (see `FAR_VOICE_MS`).
+    /// When a voice across the room (a TV) was last heard (see `FAR_VOICE_MS`), and its
+    /// loudest then (as `speech_raw`; see `FAR_LEARN_DB`).
     far_voice_at: Option<Instant>,
+    far_voice_db: f32,
     /// (The dips' depth itself, dB, for measuring tools.)
     dips_db: f32,
     /// When speech last came as loud as yours (or close-sounding and nearly as loud): the
@@ -224,6 +228,18 @@ const FAR_VOICE_MS: u64 = 60_000;
 /// echo cancellation) this much under your level at least, and at most (one further under
 /// than that never comes near starting as you).
 const FAR_VOICE_UNDER_DB: (f32, f32) = (4.0, 18.0);
+/// Voice isolation over a long call with a TV on (Blue, Nov 24: "Chimbita/Maggpul aka Mag's mic
+/// allows his mother's TV to bleed through the mic, but when he goes and reselects the input and
+/// output it seems to fix it"). Your level was learned from any speech within `ISO_LEARN_DB` of
+/// it, the TV's louder syllables too. Over a call where you mostly listen, they came to outnumber
+/// your own speech in what was learned, and your level crept down toward the TV's; the TV went
+/// out more and more, and once your level was within a few dB of it, it wasn't heard as a voice
+/// across the room any more (`FAR_VOICE_UNDER_DB`) and went out most of the time. Choosing the
+/// microphone again started it all afresh, which is why that seemed to fix it. Now, while a
+/// voice across the room has been heard lately (`FAR_VOICE_MS`), only speech this much louder
+/// than its loudest (`far_voice_db`, as the microphone hears it), or that sounds near, is learned
+/// from. MEASURED: see REBUILD.md. (`PYR_AB=tvlearn`: as before.)
+const FAR_LEARN_DB: f32 = 6.0;
 
 /// Speech levels heard (NaN: none): how many, their spread (the 90th percentile less the 10th,
 /// dB) and their 90th percentile.
@@ -450,10 +466,12 @@ impl CapturePipeline {
             aec_hist: [f32::NAN; 100],
             near_fresh: false,
             speech_hist: vec![0.0; SPEECH_HIST],
+            speech_raw: vec![0.0; SPEECH_HIST],
             speech_mine: vec![false; SPEECH_HIST],
             speech_at: 0,
             speech_n: 0,
             far_voice_at: None,
+            far_voice_db: -100.0,
             dips_db: 0.0,
             iso_sure_at: None,
             settings: settings.clone(),
@@ -711,6 +729,7 @@ impl CapturePipeline {
             // (What the speakers account for isn't anyone in the room.)
             if going && !self.far {
                 self.speech_hist[self.speech_at] = self.apm_db;
+                self.speech_raw[self.speech_at] = raw_db;
                 self.speech_mine[self.speech_at] = now < self.mine_until;
                 self.speech_at = (self.speech_at + 1) % SPEECH_HIST;
                 self.speech_n = (self.speech_n + 1).min(SPEECH_HIST);
@@ -752,6 +771,9 @@ impl CapturePipeline {
                         tracing::info!(level_db = top - self.iso_ref_db, "voice isolation hears a voice across the room (a TV, say): new voices start as yours only nearly as loud as you");
                     }
                     self.far_voice_at = Some(now);
+                    // (Its loudest as the microphone hears it, as your level is learned: see
+                    // `FAR_LEARN_DB`.)
+                    self.far_voice_db = spread(&self.speech_raw[..self.speech_n]).2;
                 }
             }
         }
@@ -816,6 +838,10 @@ impl CapturePipeline {
                 self.iso_ref_db < -90.0 || level > self.iso_ref_db - ISO_START_DB
             } else if self.iso_ref_db < -90.0 {
                 near_now
+            } else if self.far_voice(now) && !pyr_proto::ab::old("tvlearn") {
+                // (A voice across the room lately: only speech clearly louder than it, or that
+                // sounds near. See `FAR_LEARN_DB`.)
+                (level > self.iso_ref_db - ISO_LEARN_DB && level > self.far_voice_db + FAR_LEARN_DB) || (near_now && level > self.iso_ref_db - ISO_START_DB)
             } else {
                 level > self.iso_ref_db - ISO_LEARN_DB || (near_now && level > self.iso_ref_db - ISO_START_DB)
             };
@@ -1214,6 +1240,44 @@ mod tests {
                 assert_eq!(cap.iso_ref_db, -25.0, "what the speakers could account for, or a voice across the room, isn't you (far {far}, near {near})");
                 // (And it isn't let through as yours meanwhile.)
                 assert!(cap.iso_gain < 0.1, "turned far down ({})", cap.iso_gain);
+            }
+        }
+    }
+
+    /// A long call with a TV on (Blue, Nov 24: Mag's mother's TV came through more and more,
+    /// till he chose his microphone again): while a voice across the room has been heard lately,
+    /// speech a few dB under your level, sounding far and no louder than that voice (the TV's
+    /// louder syllables), teaches nothing about your level. It used to, and your level crept
+    /// down to the TV's. Speech that close to your level and clearly louder than the TV still
+    /// does (you, a little quieter), as with no voice across the room heard.
+    #[test]
+    fn a_tv_heard_lately_doesn_t_teach_isolation_your_level() {
+        let settings = Settings { noise_suppression: NoiseSuppression::Isolation, ..Settings::default() };
+        // (The voice across the room's loudest, if one was heard lately; whether it's learned.)
+        for (tv_db, learned) in [(Some(-28.5f32), false), (Some(-37.0), true), (None, true)] {
+            let mut cap = CapturePipeline::new(&settings).unwrap();
+            let now = Instant::now();
+            cap.iso_ref_db = -25.0;
+            cap.iso_levels = Levels::default();
+            if let Some(d) = tv_db {
+                cap.far_voice_at = Some(now);
+                cap.far_voice_db = d;
+            }
+            // Speech 3.5 dB under yours, sounding far, for 40 s.
+            cap.raw_recent = [10f32.powf(-2.85); 5];
+            cap.voice_prob = 0.95;
+            cap.speech_until = now + Duration::from_secs(3600);
+            cap.near_like = false;
+            cap.near_fresh = false;
+            let mut frame = vec![0.01f32; 480];
+            for _ in 0..4_000 {
+                cap.isolate(now, &mut frame);
+            }
+            if learned {
+                assert!((cap.iso_ref_db + 28.5).abs() < 1.0, "you, a little quieter (a TV's loudest {tv_db:?}): {}", cap.iso_ref_db);
+            } else {
+                assert_eq!(cap.iso_ref_db, -25.0, "a TV heard lately: its louder syllables aren't your level");
+                assert!(cap.iso_gain < 0.1, "nor let through as yours ({})", cap.iso_gain);
             }
         }
     }
