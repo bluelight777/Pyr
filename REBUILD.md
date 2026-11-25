@@ -613,7 +613,9 @@ reading the keys without Xlib and with its last words; the VPS's programs 0.16.4
 unchanged but for the release file's new field, which 0.16.4's reader passes over). Tests in release
 mode with the release settings (each test program run with `PYR_BUG_SERVER=off`): app 164, engine
 142 (3 new), proto 66. pyr.exe was built before the crash fix, which is Linux's code only: nothing in
-it differs in what it does on Windows.
+it differs in what it does on Windows. On Blue's PC (`Downloads\pyr-release-0.16.7`): 54 files, the
+sizes compared, 51 read back byte for byte (all but the three installers); publish.ps1 checks those
+three against latest2.json's SHA-256 before it uploads anything.
 - (Pyropoly 0.2.12, the same day, a Library-only update: a player's box finds their piece, and a
   storm no longer darkens the night nor the haze covers the board; see its PLAN.md.)
 
