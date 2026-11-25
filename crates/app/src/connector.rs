@@ -15,6 +15,10 @@ pub const NAME: &str = "pyr";
 pub fn connector() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let p = exe.with_file_name(if cfg!(windows) { "pyr-mcp.exe" } else { "pyr-mcp" });
+    // (0.16.7: Pyr in your home folder: `current`'s copy, which outlasts this version's folder,
+    // so Claude's settings still find it two updates from now.)
+    #[cfg(target_os = "linux")]
+    let p = crate::home_install::lasting(&p);
     p.is_file().then_some(p)
 }
 

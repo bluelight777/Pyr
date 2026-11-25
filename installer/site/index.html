@@ -1001,7 +1001,7 @@ dialog[open] { animation: pop .35s var(--ease); }
       </details>
       <details>
         <summary>Can I use Pyr on a Mac or my phone?</summary>
-        <div class="a"><p>Not yet. Pyr runs on Windows 10 and 11, and on Linux (Ubuntu 22.04 or newer, Linux Mint 21+, Pop!_OS, Debian 12+).</p></div>
+        <div class="a"><p>Not yet. Pyr runs on Windows 10 and 11, and on Linux: the .deb for Ubuntu 22.04 or newer, Linux Mint 21+, Pop!_OS and Debian 12+, and for Arch, Omarchy, Fedora and the rest, <code>curl -fsSL https://pyr.gg/install.sh | sh</code> in a terminal (Pyr in your home folder, updating itself with no password).</p></div>
       </details>
       <details>
         <summary>Can we move our server later?</summary>
@@ -1013,7 +1013,7 @@ dialog[open] { animation: pop .35s var(--ease); }
       </details>
       <details>
         <summary>How do I uninstall it?</summary>
-        <div class="a"><p>On Windows, use Settings → Apps → Pyr → Uninstall. Your identity and settings stay in <code>%APPDATA%\Pyr</code>, in case you come back. On Linux, run <code>sudo apt remove pyr</code>.</p></div>
+        <div class="a"><p>On Windows, use Settings → Apps → Pyr → Uninstall. Your identity and settings stay in <code>%APPDATA%\Pyr</code>, in case you come back. On Linux, run <code>sudo apt remove pyr</code>, or for Pyr in your home folder, <code>rm -r ~/.local/share/pyr/app ~/.local/share/applications/pyr.desktop ~/.local/bin/pyr</code>.</p></div>
       </details>
     </div>
   </div>
@@ -1071,7 +1071,9 @@ dialog[open] { animation: pop .35s var(--ease); }
     </ol>
     <ol class="only-linux">
       <li><div><b>Open pyr_amd64.deb with your software installer</b><p>Or install it from a terminal:</p>
-        <div class="cmd"><code id="apt">sudo apt install ./pyr_amd64.deb</code><button class="copy" type="button" data-copy="#apt">Copy</button></div></div></li>
+        <div class="cmd"><code id="apt">sudo apt install ./pyr_amd64.deb</code><button class="copy" type="button" data-copy="#apt">Copy</button></div>
+        <p>On Arch, Omarchy, Fedora or any other Linux, paste this in a terminal instead. Pyr goes in your home folder and updates itself, no password:</p>
+        <div class="cmd"><code id="sh">curl -fsSL https://pyr.gg/install.sh | sh</code><button class="copy" type="button" data-copy="#sh">Copy</button></div></div></li>
       <li class="last-step"><div><b>Open Pyr from your apps menu</b><p>Got an invite? Click <b>Join a server</b> and paste it. Starting your own group? Click <b>Create a server</b>.</p></div></li>
     </ol>
     <div class="foot-row">

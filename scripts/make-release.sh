@@ -58,11 +58,25 @@ else
   rm -f "$SITE/pyr_amd64.deb"
   DEB=()
 fi
+# (0.16.7) Pyr for your home folder, on any Linux (installer/linux/build-tar.sh): Pyr's own
+# updates there (signed as `linux`), and install.sh, which downloads it under the name that never
+# changes and checks it against the checksum beside it (`curl -fsSL https://pyr.gg/install.sh | sh`).
+TAR=dist/pyr-$VERSION-linux-x86_64.tar.gz
+if [ -f "$TAR" ]; then
+  cp "$TAR" "$SITE/" && cp "$TAR" "$SITE/pyr-linux-x86_64.tar.gz"
+  echo "$(sha256sum < "$TAR" | cut -d' ' -f1)  pyr-linux-x86_64.tar.gz" > "$SITE/pyr-linux-x86_64.tar.gz.sha256"
+  cp installer/site/install.sh "$SITE/install.sh"
+  HOME_TAR=(--linux "$SITE/pyr-$VERSION-linux-x86_64.tar.gz")
+else
+  echo "no $TAR: Pyr in the home folder keeps the last one" >&2
+  rm -f "$SITE/pyr-linux-x86_64.tar.gz" "$SITE/pyr-linux-x86_64.tar.gz.sha256"
+  HOME_TAR=()
+fi
 # Every version released so far (apps show how many updates they're behind).
 grep -qx "$VERSION" installer/site/releases.txt || echo "$VERSION" >> installer/site/releases.txt
 RELEASED=$(paste -sd, installer/site/releases.txt)
 cargo run -q -p pyr-proto --example release -- sign --key "$KEY" --version "$VERSION" --notes "$NOTES" --released "$RELEASED" \
-  --base-url "$BASE" --windows "$SITE/Pyr-Setup-$VERSION.exe" "${DEB[@]}" --out "$SITE/latest2.json"
+  --base-url "$BASE" --windows "$SITE/Pyr-Setup-$VERSION.exe" "${DEB[@]}" "${HOME_TAR[@]}" --out "$SITE/latest2.json"
 # The Pyr Library (scripts/make-library.sh): its signed list and the plugins' files, in one
 # tar file (its folders are too deep to copy onto a PC one by one); install-site.sh puts them at
 # /library/ on the website.

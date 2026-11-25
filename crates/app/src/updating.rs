@@ -43,13 +43,15 @@ pub struct Updating {
     /// Still running everything else (Linux, while the password is asked for: this Pyr hasn't let
     /// go of anything yet, and carries on as it was if the update's cancelled).
     pub holding_on: bool,
+    /// The update asks for the password (the Debian package; Pyr in your home folder doesn't).
+    pub password: bool,
     /// Development builds' preview (`PYR_DEV_UPDATING`): nothing's installed and nothing closes.
     preview: bool,
 }
 
 impl Updating {
-    pub fn new(version: String, installing: Installing, dir: PathBuf, holding_on: bool) -> Updating {
-        Updating { version, installing: Some(installing), since: Instant::now(), stage: Stage::Installing, dir, holding_on, preview: false }
+    pub fn new(version: String, installing: Installing, dir: PathBuf, holding_on: bool, password: bool) -> Updating {
+        Updating { version, installing: Some(installing), since: Instant::now(), stage: Stage::Installing, dir, holding_on, password, preview: false }
     }
 
     /// Development: `PYR_DEV_UPDATING=installing|password|opening|late|failed` shows the screen
@@ -63,7 +65,7 @@ impl Updating {
         if v == "handoff" {
             crate::update::mark_updating(&dir, "0.14.1");
             let installing = Installing::pretend(Duration::from_secs(3));
-            return Some(Updating::new("0.14.1".into(), installing, dir, true));
+            return Some(Updating::new("0.14.1".into(), installing, dir, true, true));
         }
         let (stage, holding_on) = match v.as_str() {
             "password" => (Stage::Installing, true),
@@ -72,7 +74,7 @@ impl Updating {
             "failed" => (Stage::Failed("the installer stopped with code 2".into()), false),
             _ => (Stage::Installing, false),
         };
-        Some(Updating { version: "0.14.1".into(), installing: None, since: now, stage, dir, holding_on, preview: true })
+        Some(Updating { version: "0.14.1".into(), installing: None, since: now, stage, dir, holding_on, password: holding_on, preview: true })
     }
 }
 
@@ -137,6 +139,7 @@ impl PyrApp {
         crate::titlebar::show(ctx, pyr_proto::APP_NAME, |_, x, _| x);
         let stage = self.updating.as_ref().map(|u| u.stage.clone()).unwrap_or(Stage::Installing);
         let holding_on = self.updating.as_ref().is_some_and(|u| u.holding_on);
+        let password = self.updating.as_ref().is_some_and(|u| u.password);
         let version = self.updating.as_ref().map(|u| u.version.clone()).unwrap_or_default();
         let since = self.updating.as_ref().map(|u| u.since).unwrap_or(now);
         let mut open_pyr = false;
@@ -166,7 +169,7 @@ impl PyrApp {
             let y = tile.bottom() + 40.0;
             p.text(pos2(c.x, y), Align2::CENTER_CENTER, title, theme::bold_font(26.0), theme::TEXT());
             let line = match &stage {
-                Stage::Installing if holding_on => "Your PC asks for your password to install it.".to_string(),
+                Stage::Installing if holding_on && password => "Your PC asks for your password to install it.".to_string(),
                 Stage::Installing => format!("{} opens again by itself in a moment, back where you were.", pyr_proto::APP_NAME),
                 Stage::Opening(_) | Stage::Done(_) => format!("Opening the new {}…", pyr_proto::APP_NAME),
                 Stage::Late => format!("But the new {} hasn't opened yet. Open it yourself:", pyr_proto::APP_NAME),

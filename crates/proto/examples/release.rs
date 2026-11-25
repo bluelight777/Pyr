@@ -3,7 +3,8 @@
 //!   cargo run -p pyr-proto --example release -- keygen release-key.txt
 //!   cargo run -p pyr-proto --example release -- sign --key release-key.txt --version 0.2.0 \
 //!       --notes "What's new" --base-url https://pyr.gg \
-//!       --windows dist/Pyr-Setup-0.2.0.exe --deb dist/pyr_0.2.0_amd64.deb --out latest.json
+//!       --windows dist/Pyr-Setup-0.2.0.exe --deb dist/pyr_0.2.0_amd64.deb \
+//!       --linux dist/pyr-0.2.0-linux-x86_64.tar.gz --out latest.json
 //!
 //!   cargo run -p pyr-proto --example release -- refresh --key release-key.txt --in latest.json --out latest.json
 //!
@@ -75,6 +76,7 @@ fn main() -> Result<()> {
                 released: get("--released").map(|r| r.split(',').map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).collect()).unwrap_or_default(),
                 windows: get("--windows").map(|p| asset(&p, &base)).transpose()?,
                 linux_deb: get("--deb").map(|p| asset(&p, &base)).transpose()?,
+                linux: get("--linux").map(|p| asset(&p, &base)).transpose()?,
             };
             let out = get("--out").unwrap_or_else(|| "latest.json".into());
             std::fs::write(&out, serde_json::to_string_pretty(&release::sign(&key, &manifest))?)?;
@@ -95,7 +97,7 @@ fn main() -> Result<()> {
             println!("wrote {out}: {} signed again, good for {days} days", manifest.version);
         }
         _ => bail!(
-            "usage: release keygen <file> | release sign --key FILE --version V --base-url URL [--notes T] [--windows EXE] [--deb DEB] \
+            "usage: release keygen <file> | release sign --key FILE --version V --base-url URL [--notes T] [--windows EXE] [--deb DEB] [--linux TAR.GZ] \
              [--valid-days N] [--out FILE] | release refresh --key FILE --in latest.json [--valid-days N] [--out FILE]"
         ),
     }

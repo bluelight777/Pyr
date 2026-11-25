@@ -69,6 +69,9 @@ mod tray {
 }
 mod unread;
 mod update;
+// (0.16.7) Pyr in your home folder on Linux, updating itself without a password.
+#[cfg(target_os = "linux")]
+mod home_install;
 mod update_chip;
 mod watchdog;
 mod youtube;
@@ -111,6 +114,20 @@ fn main() -> eframe::Result<()> {
             // Started again after the graphics card went away under the window (how many
             // times in a row), see `relaunch`.
             "--reopened" => reopened = args.next().and_then(|n| n.parse().ok()).unwrap_or(1),
+            // (0.16.7) install.sh, once Pyr is in your home folder: the apps menu's entry, its
+            // icon, pyr:// invite links and `pyr` in a terminal (the updater does the same after
+            // every update). Never opens a window; that it runs at all says Pyr can start here.
+            #[cfg(target_os = "linux")]
+            "--integrate" => {
+                let Some(root) = home_install::running() else {
+                    eprintln!("This Pyr isn't in your home folder (install.sh puts it there).");
+                    std::process::exit(2);
+                };
+                for note in home_install::integrate(&root) {
+                    eprintln!("Couldn't set up {note}");
+                }
+                return Ok(());
+            }
             "--help" | "-h" => {
                 println!("{} — voice, video, screen share and chat\n", pyr_proto::APP_NAME);
                 println!("  --profile NAME   use a separate identity (run two copies on one PC)");

@@ -304,7 +304,7 @@ fn dev_pretend_check() -> Option<Result<Option<Manifest>, Check>> {
         v => {
             let asset = Some(Asset { url: "pretend".into(), sha256: String::new(), size: 55_000_000 });
             let released = vec![current_version().to_string(), v.to_string()];
-            Ok(Some(Manifest { version: v.into(), notes: String::new(), windows: asset.clone(), linux_deb: asset, released, issued: 0, expires: 0 }))
+            Ok(Some(Manifest { version: v.into(), notes: String::new(), windows: asset.clone(), linux_deb: asset.clone(), linux: asset, released, issued: 0, expires: 0 }))
         }
     })
 }
@@ -321,13 +321,52 @@ fn believe(m: &Manifest, dir: &Path, now: i64) -> Result<(), String> {
     Ok(())
 }
 
-pub fn platform_asset(m: &Manifest) -> Option<&Asset> {
+/// How this Pyr updates itself, by how it was installed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum How {
+    /// Windows: the setup, silently (no question asked).
+    Windows,
+    /// Linux, the Debian package: apt installs it, with the system's password prompt.
+    Deb,
+    /// (0.16.7) Linux, Pyr in your home folder (`home_install`): its folder put in place, no
+    /// password. A Pyr installed some other way, on a PC without the Debian package (Arch and
+    /// Omarchy, Fedora; a package converted from the .deb, or the .deb unpacked by hand), comes
+    /// to the home folder this way the next time it updates: before, it couldn't update at all
+    /// (there's no apt there).
+    Home,
+    /// Anywhere else: no updates.
+    None,
+}
+
+pub fn how() -> How {
     if cfg!(windows) {
-        m.windows.as_ref()
-    } else if cfg!(target_os = "linux") {
-        m.linux_deb.as_ref()
-    } else {
-        None
+        return How::Windows;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if crate::home_install::running().is_some() {
+            return How::Home;
+        }
+        if crate::home_install::by_dpkg() {
+            return How::Deb;
+        }
+        return How::Home;
+    }
+    #[allow(unreachable_code)]
+    How::None
+}
+
+/// The update asks for your password (the Debian package's way).
+pub fn asks_for_password() -> bool {
+    how() == How::Deb
+}
+
+pub fn platform_asset(m: &Manifest) -> Option<&Asset> {
+    match how() {
+        How::Windows => m.windows.as_ref(),
+        How::Deb => m.linux_deb.as_ref(),
+        How::Home => m.linux.as_ref(),
+        How::None => None,
     }
 }
 
@@ -390,7 +429,11 @@ fn file_sha256(path: &Path) -> Option<String> {
 }
 
 fn fetch(asset: &Asset, version: &str, mut progress: impl FnMut(u64)) -> Result<PathBuf, String> {
-    let ext = if cfg!(windows) { "exe" } else { "deb" };
+    let ext = match how() {
+        How::Windows => "exe",
+        How::Home => "tar.gz",
+        _ => "deb",
+    };
     let version: String = version.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-')).take(32).collect();
     let mut resp = agent_with_body_time(download_time(asset.size))
         .get(&asset.url)
@@ -554,8 +597,9 @@ impl Installing {
 /// program file aside instead of waiting for it to close (/STAYOPEN: renamed, which Windows
 /// allows while it runs, and the new one put in its place) and opens the new Pyr when it's done
 /// (/RELAUNCH). On Linux the package is installed with the system's password prompt (pkexec),
-/// and Pyr then opens the new one itself (`reopen`).
-pub fn install(path: &Path, sha256: &str) -> Result<Installing, String> {
+/// or (0.16.7) Pyr in your home folder puts the new version's folder in place, no password; Pyr
+/// then opens the new one itself (`reopen`).
+pub fn install(path: &Path, sha256: &str, version: &str) -> Result<Installing, String> {
     // The very file about to run must still be the one that was checked.
     if file_sha256(path).as_deref() != Some(sha256) {
         return Err("the downloaded update changed on disk, so it wasn't installed".into());
@@ -576,14 +620,42 @@ pub fn install(path: &Path, sha256: &str) -> Result<Installing, String> {
     #[cfg(not(windows))]
     {
         let (tx, done) = std::sync::mpsc::channel();
-        let (path, sha256) = (path.to_path_buf(), sha256.to_string());
+        let (path, sha256, version) = (path.to_path_buf(), sha256.to_string(), version.to_string());
+        let home = how() == How::Home;
         std::thread::Builder::new()
             .name("pyr-update-install".into())
             .spawn(move || {
-                let _ = tx.send(install_linux(&path, &sha256));
+                let _ = tx.send(if home { install_home(&path, &sha256, &version) } else { install_linux(&path, &sha256) });
             })
             .map_err(|e| format!("couldn't start installing: {e}"))?;
         Ok(Installing { done })
+    }
+}
+
+/// (0.16.7) Pyr in your home folder: the new version's folder in place and `current` pointing at
+/// it, the apps menu's entry and the rest put right (`home_install`). Moving here from a Pyr
+/// installed for the whole PC on a PC without the Debian package, that one stays where it is
+/// (taking it away needs the password); the apps menu opens this one from now on.
+#[cfg(not(windows))]
+fn install_home(path: &Path, sha256: &str, version: &str) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let root = crate::home_install::root().ok_or("there's no home folder to put Pyr in")?;
+        let moving = crate::home_install::running().is_none();
+        let dir = crate::home_install::install(path, sha256, version, &root)?;
+        for note in crate::home_install::integrate(&root) {
+            tracing::warn!("Pyr in the home folder: {note}");
+        }
+        match std::env::current_exe() {
+            Ok(old) if moving => tracing::info!("Pyr {version} is in {} now; the apps menu opens it from there (the one in {} stays as it was)", dir.display(), old.display()),
+            _ => tracing::info!("Pyr {version} is in {}", dir.display()),
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (path, sha256, version);
+        Err("there's no update for this system".into())
     }
 }
 
@@ -635,6 +707,15 @@ pub fn reopen() -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
+        // (0.16.7) Pyr in your home folder: the version `current` points at (the new one, once
+        // it's in; this one, if it isn't).
+        #[cfg(target_os = "linux")]
+        if how() == How::Home
+            && let Some(new) = crate::home_install::root().map(|r| crate::home_install::program(&r)).filter(|p| p.is_file())
+        {
+            std::process::Command::new(&new).env_remove("PYR_DEV_UPDATING").spawn().map_err(|e| format!("installed, but couldn't open Pyr again: {e}"))?;
+            return Ok(());
+        }
         // The package replaced our program file, so /proc/self/exe now reads "... (deleted)".
         let exe = std::env::current_exe()
             .ok()
@@ -738,6 +819,7 @@ mod tests {
             notes: String::new(),
             windows: None,
             linux_deb: None,
+            linux: None,
             released: Vec::new(),
             issued,
             expires,
@@ -769,7 +851,7 @@ mod tests {
         std::fs::write(&f, b"real").unwrap();
         let good = release::sha256_hex(b"real");
         std::fs::write(&f, b"evil").unwrap();
-        assert!(install(&f, &good).unwrap_err().contains("changed"));
+        assert!(install(&f, &good, "9.9.9").unwrap_err().contains("changed"));
         let _ = std::fs::remove_dir_all(a);
         let _ = std::fs::remove_dir_all(b);
     }

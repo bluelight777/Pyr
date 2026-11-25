@@ -35,7 +35,8 @@ $downloads = @(
     @{ Item = $manifest.windows; Stable = "Pyr-Setup.exe" },
     @{ Item = $manifest.windows; Stable = "$((Get-Culture).TextInfo.ToTitleCase($old))-Setup.exe" },
     @{ Item = $manifest.linux_deb; Stable = "pyr_amd64.deb" },
-    @{ Item = $manifest.linux_deb; Stable = "$($old)_amd64.deb" }
+    @{ Item = $manifest.linux_deb; Stable = "$($old)_amd64.deb" },
+    @{ Item = $manifest.linux; Stable = "pyr-linux-x86_64.tar.gz" }
 )
 foreach ($d in $downloads) {
     if ($null -eq $d.Item) { continue }

@@ -39,6 +39,11 @@ pub struct Manifest {
     /// The Linux package (.deb).
     #[serde(default)]
     pub linux_deb: Option<Asset>,
+    /// (0.16.7) Pyr for your home folder on any Linux (.tar.gz of its folder): what a Pyr
+    /// installed there (`install.sh`), or on a PC without the Debian package, updates itself
+    /// with, no password asked. Pyrs before 0.16.7 don't know it and take no notice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linux: Option<Asset>,
     /// Every version released so far (so an app can tell how many updates it's behind).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub released: Vec<String>,
@@ -135,6 +140,7 @@ mod tests {
             released: vec!["0.1.0".into(), "0.2.0".into(), "0.3.0".into()],
             windows: Some(Asset { url: "https://example.org/a.exe".into(), sha256: sha256_hex(b"x"), size: 1 }),
             linux_deb: None,
+            linux: None,
             issued: 1_000,
             expires: 2_000,
         };
@@ -146,6 +152,54 @@ mod tests {
         assert!(open(&evil, &key.user_id()).is_err());
     }
 
+    /// (0.16.7) The home folder's Linux download: in the signed manifest, and a Pyr from before
+    /// it (whose manifest has no such field) still reads the manifest; a manifest from before it
+    /// reads with none.
+    #[test]
+    fn the_home_folder_download_is_signed_and_old_pyrs_still_read_the_manifest() {
+        let key = Identity::generate();
+        let tar = Asset { url: "https://example.org/pyr-0.16.7-linux-x86_64.tar.gz".into(), sha256: sha256_hex(b"t"), size: 1 };
+        let m = Manifest {
+            version: "0.16.7".into(),
+            notes: String::new(),
+            windows: None,
+            linux_deb: Some(Asset { url: "https://example.org/pyr_0.16.7_amd64.deb".into(), sha256: sha256_hex(b"d"), size: 1 }),
+            linux: Some(tar.clone()),
+            released: vec![],
+            issued: 1_000,
+            expires: 2_000,
+        };
+        let signed = serde_json::to_string(&sign(&key, &m)).unwrap();
+        assert_eq!(open(&signed, &key.user_id()).unwrap().linux, Some(tar));
+        assert!(open(&signed.replace("linux-x86_64", "linux-evil"), &key.user_id()).is_err());
+        // 0.16.6's manifest, field for field.
+        #[derive(Deserialize)]
+        #[allow(dead_code)]
+        struct Before {
+            version: String,
+            #[serde(default)]
+            notes: String,
+            #[serde(default)]
+            windows: Option<Asset>,
+            #[serde(default)]
+            linux_deb: Option<Asset>,
+            #[serde(default)]
+            released: Vec<String>,
+            #[serde(default)]
+            issued: i64,
+            #[serde(default)]
+            expires: i64,
+        }
+        let inner: Signed = serde_json::from_str(&signed).unwrap();
+        let old: Before = serde_json::from_str(&inner.manifest).unwrap();
+        assert_eq!((old.version.as_str(), old.linux_deb.is_some()), ("0.16.7", true));
+        // And the other way: no field, no home folder download.
+        let before = r#"{"version":"0.16.6","linux_deb":{"url":"u","sha256":"s","size":1}}"#;
+        assert_eq!(serde_json::from_str::<Manifest>(before).unwrap().linux, None);
+        // (Not written at all when there's none, as the manifests before.)
+        assert!(!serde_json::to_string(&Manifest { linux: None, ..m }).unwrap().contains("\"linux\""));
+    }
+
     #[test]
     fn old_or_stale_manifests_are_refused() {
         let m = |issued, expires| Manifest {
@@ -153,6 +207,7 @@ mod tests {
             notes: String::new(),
             windows: None,
             linux_deb: None,
+            linux: None,
             released: Vec::new(),
             issued,
             expires,
@@ -190,6 +245,7 @@ mod tests {
             notes: String::new(),
             windows: None,
             linux_deb: None,
+            linux: None,
             released: ["0.5.0", "0.6.0", "0.6.2", "0.6.3"].iter().map(|s| s.to_string()).collect(),
             issued: 0,
             expires: 0,

@@ -500,6 +500,7 @@ mod tests {
             notes: String::new(),
             windows: None,
             linux_deb: None,
+            linux: None,
             released: vec![],
             issued: 1,
             expires: 2,

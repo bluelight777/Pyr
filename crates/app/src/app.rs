@@ -1886,17 +1886,22 @@ impl PyrApp {
                 // (Quitting from here on: the installer's checked and started first, which on a
                 // busy PC can take the window a few seconds.)
                 crate::watchdog::quitting();
-                match crate::update::install(&path, &sha256) {
+                match crate::update::install(&path, &sha256, &version) {
                     Ok(installing) => {
                         // Windows: the installer puts this Pyr's program aside and opens the new
                         // one once it's in, so everything's let go of now. Linux: the password is
-                        // asked for first, and if that's cancelled Pyr carries on as it was.
+                        // asked for first (the Debian package; Pyr in your home folder asks
+                        // nothing), and if the update doesn't go in Pyr carries on as it was.
                         let holding_on = cfg!(not(windows));
-                        tracing::info!("installing the update{}", if holding_on { " (asking for the password)" } else { ": letting go for the new Pyr" });
+                        let password = crate::update::asks_for_password();
+                        tracing::info!(
+                            "installing the update{}",
+                            if !holding_on { ": letting go for the new Pyr" } else if password { " (asking for the password)" } else { " (in the home folder)" }
+                        );
                         if !holding_on {
                             self.leave_for_update();
                         }
-                        self.updating = Some(crate::updating::Updating::new(version, installing, config_dir, holding_on));
+                        self.updating = Some(crate::updating::Updating::new(version, installing, config_dir, holding_on, password));
                     }
                     Err(e) => {
                         crate::update::not_updating(&config_dir);
