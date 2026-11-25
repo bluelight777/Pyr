@@ -562,6 +562,61 @@ Pyr Prop Bets' listing comes out the same. Checked: the listing opens, is endors
 for Windows and Linux as library.tar has them, the Linux program runnable. The Keeper's import of
 it wasn't run here (it's the code every release's Prop Bets goes through).
 
+0.16.7 (Nov 25), 0.16.6 on Blue's PC:
+- "make it so when Prog updates his Pyr on Omarchy it does it fast and automatically like windows
+  does it. Make it super easy to update." Pyr's Linux updater knew only the .deb (apt through
+  pkexec, with the password), and Omarchy (Arch) has no apt: Prognostic's Pyr couldn't update
+  itself at all. Now Pyr can live in your home folder (`home_install.rs`):
+  `~/.local/share/pyr/app/<version>/`, `current` naming the one in use. An update there is the
+  release's new `linux` download (a .tar.gz of a version's folder, signed in latest2.json beside
+  the others; Pyrs before 0.16.7 read past the field): checked against its SHA-256, unpacked beside
+  the others (folders and plain files only, nothing outside its folder, a size cap), `current`
+  switched in one rename, the apps menu's entry (pyr:// and ingle:// links), the icon and
+  `~/.local/bin/pyr` put right, and the new one opened, back in the call; the version before stays,
+  older ones go. No password: nothing outside the home folder. `update::how`: the Debian package
+  (dpkg's record of it) updates through apt as before; Pyr in the home folder, or a Pyr put on a
+  PC without the Debian package any other way, updates into the home folder. The first time, one
+  line: `curl -fsSL https://pyr.gg/install.sh | sh` (installer/site/install.sh: as yourself, never
+  with sudo; the download checked against the checksum beside it; missing libraries named with the
+  pacman, dnf, zypper or apt line for them; a version that can't start taken back out; asks
+  before closing a Pyr that's open). The release: installer/linux/build-tar.sh, make-release.sh
+  (`--linux`, install.sh and the checksum), publish.ps1 (the name that never changes), the website's
+  Linux steps and FAQ, README. Checked: unit tests (6 new); install.sh as an ordinary user against
+  a local server with the real download, 26 checks (the first time, again, an upgrade, one that
+  can't start put back, a broken download, a missing library, root refused); the update's last
+  step with the real Pyr in a window (`PYR_DEV_UPDATING=handoff`), from the home folder to the
+  version `current` names, and from a PC-wide copy with no Debian package to the home folder's;
+  install.sh with Pyr open (n leaves it, y closes it and opens the new one). Not tried here: Pyr
+  downloading and installing a signed `linux` release itself (only a release signed with the
+  release key would do, and test files never are): its pieces are tested; the first is 0.16.7 to
+  0.16.8. Prognostic's 0.16.6 can't move itself: he runs the line once.
+- "while Prog is connected to Pyropoly, his Pyr loses connection however Pyropoly keeps working.
+  something is bugging out making him leave the call on Omarchy" / "Pyr is silently crashing for
+  him". No log from his PC yet. Found reading what Pyr does on Linux all the time: push to talk and
+  the shortcut keys read the keys (two threads, 200 times a second) with device_query, which (1)
+  has Xlib's `XQueryKeymap` write into an array that's already gone (`[0; 32].as_mut_ptr()`:
+  undefined, an optimized build may keep anything there), and (2) is Xlib, which ends the whole
+  program when its connection to the X server breaks: XWayland going away under a Wayland desktop.
+  (2) reproduced with the new `examples/x11_keys.rs`, the X server killed and started again under
+  each reader: device_query's was ended by Xlib (exit code 1, "X connection to :91 broken" on
+  stderr only, which nobody sees), the new one said it lost the server, carried on and read the
+  keys from the next one. Now `hotkey::x11keys` (x11rb: no Xlib, the keymap in memory of its own;
+  connected again every 3 s), the paste check too; `pyr` no longer needs libX11 at all. And
+  `last_words.rs` (Linux): a signal (SEGV, BUS, ILL, FPE, ABRT), or `exit` called from a thread
+  other than the window's, writes "Pyr was ended by …" and the thread's name (for `exit` a
+  backtrace) into pyr.log, and the next start reports it as a crash (`bugs::last_run_trouble`).
+  Whether (1), (2) or something else ended Prognostic's isn't known: his pyr.log, `coredumpctl
+  info pyr` and the kernel's log would say (Blue has the three commands for him).
+Built, packed and checked (95 checks, all good: among them the home folder download whole and its
+Pyr the .deb's byte for byte, install.sh as in the source and plain sh, the notes, the Linux program
+reading the keys without Xlib and with its last words; the VPS's programs 0.16.4's again, their code
+unchanged but for the release file's new field, which 0.16.4's reader passes over). Tests in release
+mode with the release settings (each test program run with `PYR_BUG_SERVER=off`): app 164, engine
+142 (3 new), proto 66. pyr.exe was built before the crash fix, which is Linux's code only: nothing in
+it differs in what it does on Windows.
+- (Pyropoly 0.2.12, the same day, a Library-only update: a player's box finds their piece, and a
+  storm no longer darkens the night nor the haze covers the board; see its PLAN.md.)
+
 0.16.6 (Nov 24), 0.16.5 live:
 - "Chimbita/Maggpul aka Mag's mic allows his mother's TV to bleed through the mic, but when he
   goes and reselects the input and output it seems to fix it, please look into this and solve

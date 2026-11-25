@@ -449,6 +449,13 @@ fn init_logging(profile: Option<&str>) -> Option<std::path::PathBuf> {
     let file = std::fs::create_dir_all(&dir).ok().and_then(|_| std::fs::File::create(&path).ok());
     match file {
         Some(f) => {
+            // (Linux, 0.16.7) What ends Pyr from under it goes in this log too: a signal, or a
+            // library's `exit` (see `pyr_engine::last_words`). Its own descriptor, kept open.
+            #[cfg(target_os = "linux")]
+            if let Ok(dup) = f.try_clone() {
+                use std::os::fd::IntoRawFd;
+                pyr_engine::last_words::install(dup.into_raw_fd());
+            }
             let writer = std::sync::Mutex::new(f).and(std::io::stderr);
             tracing_subscriber::fmt().with_env_filter(filter()).with_ansi(false).with_writer(writer).init();
             Some(path)

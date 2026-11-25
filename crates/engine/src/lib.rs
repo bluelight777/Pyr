@@ -14,6 +14,8 @@ pub mod config;
 pub mod dmfiles;
 pub mod e2ee;
 pub mod hotkey;
+#[cfg(target_os = "linux")]
+pub mod last_words;
 pub mod idle;
 pub mod qos;
 pub mod ring;

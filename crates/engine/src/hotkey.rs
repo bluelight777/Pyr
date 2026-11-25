@@ -12,6 +12,8 @@ use parking_lot::Mutex;
 
 #[cfg(target_os = "linux")]
 pub mod wayland;
+#[cfg(target_os = "linux")]
+pub mod x11keys;
 
 pub struct PttWatcher {
     stop: Arc<AtomicBool>,
@@ -71,30 +73,45 @@ impl PttWatcher {
         let thread = std::thread::Builder::new()
             .name("pyr-ptt".into())
             .spawn(move || {
-                use device_query::{DeviceQuery, DeviceState, Keycode};
-                let state = DeviceState::checked_new();
-                if state.is_none() {
+                use device_query::Keycode;
+                // (Linux, 0.16.7: X11 asked through x11rb, see `x11keys`; reconnected if the X
+                // server goes away, where Xlib ended Pyr.)
+                #[cfg(target_os = "linux")]
+                let mut state = x11keys::X11Input::new();
+                #[cfg(target_os = "linux")]
+                let here_at_all = state.here();
+                #[cfg(not(target_os = "linux"))]
+                let state = device_query::DeviceState::checked_new();
+                #[cfg(not(target_os = "linux"))]
+                let here_at_all = state.is_some();
+                if !here_at_all {
                     if also.is_empty() {
                         tracing::warn!("push-to-talk unavailable: can't read keyboard state");
                         return;
                     }
                     tracing::info!("push-to-talk: no X display: the desktop's shortcut and Pyr's own window only");
                 }
-                // (Linux: the mouse's side buttons, through XInput 2.)
-                #[cfg(target_os = "linux")]
-                let side = state.as_ref().and_then(|_| x11_side::Side::new());
-                #[cfg(not(target_os = "linux"))]
-                let side = ();
                 let mut was = false;
                 while !st.load(Ordering::Relaxed) {
                     let name = k.lock().clone();
+                    #[cfg(target_os = "linux")]
+                    let here = match name.as_str() {
+                        // (The mouse's side buttons, through XInput 2.)
+                        "Mouse4" => state.button(8),
+                        "Mouse5" => state.button(9),
+                        other => Keycode::from_str(other).is_ok_and(|code| state.keys().contains(&code)),
+                    };
+                    #[cfg(not(target_os = "linux"))]
                     let here = match &state {
                         None => false,
                         Some(state) => match name.as_str() {
-                            "Mouse4" => mouse_side(state, &side, false),
-                            "Mouse5" => mouse_side(state, &side, true),
+                            "Mouse4" => mouse_side(state, false),
+                            "Mouse5" => mouse_side(state, true),
                             other => match Keycode::from_str(other) {
-                                Ok(code) => state.get_keys().contains(&code),
+                                Ok(code) => {
+                                    use device_query::DeviceQuery;
+                                    state.get_keys().contains(&code)
+                                }
                                 Err(_) => false,
                             },
                         },
@@ -165,50 +182,12 @@ pub enum WaylandNote {
     Without(String),
 }
 
-/// A mouse side button held: X11's buttons 8 (back) and 9 (forward) on Linux (what device_query
-/// calls 4 and 5 there are the wheel's), Windows' and macOS's 4 and 5 elsewhere.
-#[cfg(target_os = "linux")]
-fn mouse_side(_state: &device_query::DeviceState, side: &Option<x11_side::Side>, forward: bool) -> bool {
-    side.as_ref().is_some_and(|s| s.held(if forward { 9 } else { 8 }))
-}
-
+/// A mouse side button held: Windows' and macOS's 4 and 5 (on Linux X11's 8 and 9, see `x11keys`:
+/// what device_query calls 4 and 5 there are the wheel's).
 #[cfg(not(target_os = "linux"))]
-fn mouse_side(state: &device_query::DeviceState, _side: &(), forward: bool) -> bool {
+fn mouse_side(state: &device_query::DeviceState, forward: bool) -> bool {
     use device_query::DeviceQuery;
     state.get_mouse().button_pressed.get(if forward { 5 } else { 4 }).copied().unwrap_or(false)
-}
-
-/// The mouse's buttons past 5 held, on X11 (XInput 2: the core protocol only knows 1 to 5, and
-/// 4 and 5 are the wheel). Before 0.16.3 "Mouse button 4 (back)" on Linux was the wheel turning.
-#[cfg(target_os = "linux")]
-mod x11_side {
-    use x11rb::connection::Connection as _;
-    use x11rb::protocol::xinput::ConnectionExt as _;
-
-    pub struct Side {
-        c: x11rb::rust_connection::RustConnection,
-        root: u32,
-        pointer: u16,
-    }
-
-    impl Side {
-        pub fn new() -> Option<Side> {
-            let (c, screen) = x11rb::connect(None).ok()?;
-            let root = c.setup().roots.get(screen)?.root;
-            let v = c.xinput_xi_query_version(2, 0).ok()?.reply().ok()?;
-            if v.major_version < 2 {
-                return None;
-            }
-            let pointer = c.xinput_xi_get_client_pointer(x11rb::NONE).ok()?.reply().ok().map(|r| r.deviceid).filter(|d| *d != 0).unwrap_or(2);
-            Some(Side { c, root, pointer })
-        }
-
-        pub fn held(&self, button: usize) -> bool {
-            let Ok(cookie) = self.c.xinput_xi_query_pointer(self.root, self.pointer) else { return false };
-            let Ok(r) = cookie.reply() else { return false };
-            r.buttons.get(button / 32).is_some_and(|w| w & (1 << (button % 32)) != 0)
-        }
-    }
 }
 
 impl Drop for PttWatcher {
@@ -339,14 +318,31 @@ impl ComboWatcher {
         let thread = std::thread::Builder::new()
             .name("pyr-sound-keys".into())
             .spawn(move || {
-                use device_query::{DeviceQuery, DeviceState};
-                let Some(state) = DeviceState::checked_new() else {
+                // (Linux, 0.16.7: X11 asked through x11rb, see `x11keys`; reconnected if the X
+                // server goes away, where Xlib ended Pyr.)
+                #[cfg(target_os = "linux")]
+                let mut state = {
+                    let s = x11keys::X11Input::new();
+                    if !s.here() {
+                        tracing::warn!("the mute shortcut and soundboard keys are unavailable: can't read keyboard state");
+                        return;
+                    }
+                    s
+                };
+                #[cfg(not(target_os = "linux"))]
+                let Some(state) = device_query::DeviceState::checked_new() else {
                     tracing::warn!("the mute shortcut and soundboard keys are unavailable: can't read keyboard state");
                     return;
                 };
                 let mut was: Vec<device_query::Keycode> = Vec::new();
                 while !st.load(Ordering::Relaxed) {
-                    let now = state.get_keys();
+                    #[cfg(target_os = "linux")]
+                    let now = state.keys();
+                    #[cfg(not(target_os = "linux"))]
+                    let now = {
+                        use device_query::DeviceQuery;
+                        state.get_keys()
+                    };
                     let new: Vec<_> = now.iter().filter(|k| !was.contains(k)).cloned().collect();
                     if !new.is_empty() {
                         if rec.load(Ordering::Relaxed) {

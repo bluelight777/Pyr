@@ -255,6 +255,11 @@ pub fn last_run_trouble(previous_log: &str) -> Option<(&'static str, String)> {
         let at = line.find("crash in thread").unwrap_or(0);
         return Some(("Pyr crashed", line[at..].chars().take(600).collect()));
     }
+    // (0.16.7, Linux) Ended from under it (a signal, or a library's `exit`): `last_words`. With
+    // what followed it (a backtrace, for `exit`).
+    if let Some(at) = previous_log.rfind("Pyr was ended by") {
+        return Some(("Pyr crashed", previous_log[at..].chars().take(1500).collect()));
+    }
     let lines: Vec<&str> = previous_log.lines().collect();
     let hung = lines.iter().rposition(|l| l.contains("Pyr's window stopped responding"));
     // The window came back: it said so, or it went on to quit to install an update itself

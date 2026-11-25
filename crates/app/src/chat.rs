@@ -1799,8 +1799,16 @@ fn paste_files(app: &mut PyrApp, draft: &(String, ChannelId), limit: u64, ctx: &
 
 /// V and Ctrl (or Cmd) are held right now.
 fn paste_keys_down() -> bool {
-    use device_query::{DeviceQuery, DeviceState, Keycode};
-    let keys = DeviceState::new().get_keys();
+    use device_query::Keycode;
+    // (Linux, 0.16.7: through x11rb, never Xlib's; none held without an X server, where
+    // `DeviceState::new` ended Pyr.)
+    #[cfg(target_os = "linux")]
+    let keys = pyr_engine::hotkey::x11keys::keys_now();
+    #[cfg(not(target_os = "linux"))]
+    let keys = {
+        use device_query::{DeviceQuery, DeviceState};
+        DeviceState::new().get_keys()
+    };
     keys.contains(&Keycode::V)
 }
 
