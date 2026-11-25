@@ -8,7 +8,8 @@ you own, on any VPS from any provider: Pyr sets it up for you in a few minutes.*
 gathers around.
 
 **Download: [pyr.gg](https://pyr.gg)** (Windows 10 and 11;
-a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian). Made by
+a `.deb` for Ubuntu, Linux Mint, Pop!_OS and Debian; any other 64-bit Linux with
+`curl -fsSL https://pyr.gg/install.sh | sh`). Made by
 [Firelit Games](https://firelitgames.com/).
 
 ![Text channels: pictures, reactions, replies, mentions and roles](docs/screenshots/chat.png)
@@ -345,6 +346,20 @@ newer, Linux Mint 21+, Pop!_OS 22.04+ and Debian 12+. Linux packages are built l
 than the Windows app, so the Linux version can be a little behind. On Wayland desktops,
 screen sharing and push-to-talk outside the window don't work yet; pick the Xorg session at
 the login screen (for example "Ubuntu on Xorg") to use them.
+
+**Any other Linux (Arch, Omarchy, Fedora and the rest, 64-bit), 0.16.7:** run
+`curl -fsSL https://pyr.gg/install.sh | sh` in a terminal (as yourself, not with sudo). Pyr
+goes in your home folder (`~/.local/share/pyr/app/<version>`, with `current` pointing at the
+one in use: nothing outside your home folder, so no password), into your apps menu with its
+icon and `pyr://` links, and `pyr` in a terminal through `~/.local/bin`; then it opens (if
+Pyr was open, it asks first). From then on it updates itself as it does on Windows: click
+Update and it's done, no password, back where you were. The version before stays beside it.
+Running the line again puts the newest Pyr in. A Pyr put on a PC without the Debian package
+some other way (a package made from the .deb, or the .deb unpacked by hand) moves to your
+home folder by itself the first time it updates, from 0.16.7 on (an older one can't: run the
+line once). To take it away: `rm -r ~/.local/share/pyr/app
+~/.local/share/applications/pyr.desktop ~/.local/bin/pyr`; your identity and settings stay in
+`~/.config/pyr`.
 
 Only one copy of the app runs per profile: opening it again, or clicking an invite link
 while it's open, brings the open window forward, even from the tray (and joins the server
@@ -709,6 +724,7 @@ cargo build --release -p pyr-engine --example bot
 scripts/build-vps-server.sh            # dist/vps/pyr-server-linux-{x86_64,aarch64} (static)
 cargo test --workspace                 # unit tests + end-to-end tests over real QUIC
 installer/linux/build-deb.sh           # dist/pyr_<version>_amd64.deb (needs dpkg-dev)
+installer/linux/build-tar.sh           # dist/pyr-<version>-linux-x86_64.tar.gz (Pyr for your home folder)
 installer/windows/build.sh             # dist/Pyr-Setup-<version>.exe (needs NSIS)
 ```
 
