@@ -526,15 +526,16 @@ impl Shared {
             let st = self.state.read_recursive();
             ring::ringtone_for(&st, st.incoming_calls.first().map(|c| c.from.as_str()))
         };
-        if let Some(t) = tone {
-            let clip = self.ring_clips.lock().get(&t.key()).cloned();
+        if !tone.is_pyr_ring() {
+            let t = tone;
+            let clip = self.ring_clips.lock().get(&t.key()).cloned().or_else(|| ring::built_in_now(self, &t));
             match clip {
                 Some(pcm) => {
                     let secs = pcm.len() as f32 / 96_000.0;
                     self.play_ring_clip(pcm, t.sound.as_ref().map(|s| s.volume).unwrap_or(1.0));
                     return ring::RING_EVERY.max(std::time::Duration::from_secs_f32(secs + 1.0));
                 }
-                // Not ready yet: Pyr's ring this time.
+                // Not ready yet (a server's sound, or a file): Pyr's ring this time.
                 None => ring::warm(self, &t),
             }
         }
@@ -2850,17 +2851,23 @@ impl Engine {
         });
     }
 
-    /// Hear a ringtone once (none: Pyr's own ring), whatever Do Not Disturb says.
+    /// Hear a ringtone once (none: the default, Sunrise), whatever Do Not Disturb says.
     pub fn preview_ringtone(&self, tone: Option<config::Ringtone>) {
         let Some(sfx) = self.shared.sfx.as_ref() else { return };
         let (ember, device, volume) = {
             let st = self.shared.state.read_recursive();
             (st.settings.ember_sounds(), st.settings.output_device.clone(), st.settings.sound_volume)
         };
-        let Some(t) = tone else {
+        // (None: the default, Sunrise.)
+        let t = tone.unwrap_or_else(ring::default_ringtone);
+        if t.is_pyr_ring() {
             sfx.play(sfx::Sound::Ring, ember, device, volume);
             return;
-        };
+        }
+        if let Some(pcm) = ring::built_in_now(&self.shared, &t) {
+            sfx.play_ring_clip(pcm, device, volume * t.sound.as_ref().map(|s| s.volume).unwrap_or(1.0));
+            return;
+        }
         let shared = self.shared.clone();
         ring::warm(&shared, &t);
         self.shared.rt.spawn(async move {

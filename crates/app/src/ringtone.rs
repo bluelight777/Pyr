@@ -1,7 +1,8 @@
 //! Ringtones: what calls ring with (Settings → Notifications), and someone's own (right-click
-//! them → Ringtone): Pyr's own ring, one of the ten ringtones (0.13.2), any soundboard sound
-//! (built in, or one of your servers'), or a sound file from this PC, picked and cut like a
-//! soundboard sound. The engine plays them (`pyr_engine::ring`).
+//! them → Ringtone): one of the ten ringtones (0.13.2; Sunrise unless another's chosen, since
+//! 0.16.8), Pyr's own ring, any soundboard sound (built in, or one of your servers'), or a
+//! sound file from this PC, picked and cut like a soundboard sound. The engine plays them
+//! (`pyr_engine::ring`).
 
 use eframe::egui::{self, Align, Layout, Rect, RichText, Sense, vec2};
 use pyr_engine::config::Ringtone;
@@ -11,9 +12,9 @@ use pyr_engine::state::AppState;
 use crate::app::{Act, Dialog, PyrApp};
 use crate::theme;
 
-/// What a ringtone's called (none: Pyr's own ring).
+/// What a ringtone's called (none: the default, Sunrise).
 pub fn name_of(t: Option<&Ringtone>) -> String {
-    t.map(|t| t.name.clone()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "Pyr ring".into())
+    t.map(|t| t.name.clone()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| pyr_engine::ring::default_ringtone().name)
 }
 
 impl PyrApp {
@@ -37,18 +38,30 @@ impl PyrApp {
                 chose = true;
             }
         };
-        match for_uid {
-            Some(_) => pick(ui, &format!("Same as everyone ({})", name_of(st.settings.ringtone.as_ref())), None, current.is_none(), acts),
-            None => pick(ui, "Pyr ring", None, current.is_none(), acts),
+        if for_uid.is_some() {
+            pick(ui, &format!("Same as everyone ({})", name_of(st.settings.ringtone.as_ref())), None, current.is_none(), acts);
+            ui.separator();
         }
         let is = |r: &SoundRef| current.and_then(|c| c.sound.as_ref()).is_some_and(|s| s.same(r));
-        ui.separator();
         ui.label(RichText::new("RINGTONES").font(theme::bold_font(11.0)).color(theme::DIM()));
-        for b in sb::RINGS {
+        // (0.16.8) Sunrise first, the default: for everyone, choosing it is choosing nothing
+        // (calls ring with the default); for someone, it's theirs.
+        let default_first = sb::RINGS.iter().filter(|b| b.id == pyr_engine::ring::DEFAULT_RING).chain(sb::RINGS.iter().filter(|b| b.id != pyr_engine::ring::DEFAULT_RING));
+        for b in default_first {
             let r = b.sound_ref();
-            let on = is(&r);
-            pick(ui, b.name, Some(Ringtone { name: b.name.to_string(), sound: Some(r), file: String::new() }), on, acts);
+            let tone = Some(Ringtone { name: b.name.to_string(), sound: Some(r.clone()), file: String::new() });
+            if b.id == pyr_engine::ring::DEFAULT_RING {
+                let label = format!("{} (default)", b.name);
+                match for_uid {
+                    None => pick(ui, &label, None, current.is_none() || is(&r), acts),
+                    Some(_) => pick(ui, &label, tone, is(&r), acts),
+                }
+            } else {
+                pick(ui, b.name, tone, is(&r), acts);
+            }
         }
+        // Pyr's own ring (calls rang with it until 0.16.8).
+        pick(ui, "Pyr ring", Some(Ringtone::pyr_ring()), current.is_some_and(Ringtone::is_pyr_ring), acts);
         ui.separator();
         ui.label(RichText::new("SOUNDS").font(theme::bold_font(11.0)).color(theme::DIM()));
         for b in sb::BUILTINS {

@@ -216,8 +216,9 @@ pub struct Settings {
     /// Do Not Disturb, like Discord's: no message sounds, calls don't ring or pop up a Windows
     /// notice, and everyone sees a red dot on my picture (see `idle`, which tells servers).
     pub dnd: bool,
-    /// What calls ring with (none: Pyr's own ring; see `ring`), and someone's own ringtone,
-    /// by their id (in place of that).
+    /// What calls ring with (none: the default, Sunrise, since 0.16.8: `ring::DEFAULT_RING`;
+    /// Pyr's own ring is `Ringtone::pyr_ring`), and someone's own ringtone, by their id (in
+    /// place of that).
     pub ringtone: Option<Ringtone>,
     pub ringtones: std::collections::BTreeMap<UserId, Ringtone>,
     /// When moving pictures in chat (GIFs, animated WebP and PNG) play: "" always, "hover"
@@ -269,6 +270,17 @@ impl Settings {
 }
 
 impl Ringtone {
+    /// (0.16.8) Pyr's own ring (made in Pyr's code; it was what calls rang with until Sunrise
+    /// became the default), chosen as a ringtone: no sound, no file.
+    pub fn pyr_ring() -> Ringtone {
+        Ringtone { name: "Pyr ring".into(), sound: None, file: String::new() }
+    }
+
+    /// Whether this is Pyr's own ring.
+    pub fn is_pyr_ring(&self) -> bool {
+        self.sound.is_none() && self.file.is_empty()
+    }
+
     /// Which sound it is (two ringtones with the same key sound the same).
     pub fn key(&self) -> String {
         match &self.sound {

@@ -94,10 +94,10 @@ pub enum Act {
     SetIdleByHand(bool),
     /// Do Not Disturb, on or off.
     SetDnd(bool),
-    /// The ringtone for everyone (`uid` none) or someone (`tone` none: Pyr's ring, or the
-    /// same as everyone's).
+    /// The ringtone for everyone (`uid` none) or someone (`tone` none: the default, Sunrise,
+    /// or the same as everyone's).
     SetRingtone { uid: Option<String>, tone: Option<pyr_engine::config::Ringtone> },
-    /// Hear a ringtone (none: Pyr's ring).
+    /// Hear a ringtone (none: the default, Sunrise).
     PreviewRingtone(Option<pyr_engine::config::Ringtone>),
     /// A picture added as one of a server's own GIFs, for everyone there.
     AddServerGif { key: String, name: String, bytes: Vec<u8> },

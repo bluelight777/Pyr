@@ -45,14 +45,47 @@ fn busy(shared: &Shared) -> bool {
     !st.incoming_calls.is_empty() || st.outgoing_call.as_ref().is_some_and(|o| o.state == RingState::Ringing)
 }
 
-/// The ringtone for a call from `from`: their own, or the one for everyone (`None`: Pyr's
-/// own ring).
-pub fn ringtone_for(st: &AppState, from: Option<&str>) -> Option<Ringtone> {
-    from.and_then(|u| st.settings.ringtones.get(u).cloned()).or_else(|| st.settings.ringtone.clone())
+/// (0.16.8) The ringtone calls ring with when none's been chosen: Sunrise, one of the ten
+/// ringtones every Pyr has (Blue, Nov 26: "make the sunrise ringtone the default ringtone on
+/// Pyr"). Until 0.16.8 it was Pyr's own ring, which is still there to choose.
+pub const DEFAULT_RING: &str = "ring-sunrise";
+
+/// The default ringtone (see `DEFAULT_RING`).
+pub fn default_ringtone() -> Ringtone {
+    crate::soundboard::RINGS
+        .iter()
+        .find(|b| b.id == DEFAULT_RING)
+        .map(|b| Ringtone { name: b.name.to_string(), sound: Some(b.sound_ref()), file: String::new() })
+        .unwrap_or_else(Ringtone::pyr_ring)
+}
+
+/// The ringtone for a call from `from`: their own, or the one for everyone, or the default.
+pub fn ringtone_for(st: &AppState, from: Option<&str>) -> Ringtone {
+    from.and_then(|u| st.settings.ringtones.get(u).cloned())
+        .or_else(|| st.settings.ringtone.clone())
+        .unwrap_or_else(default_ringtone)
+}
+
+/// A ringtone that's one of the sounds every Pyr has (the ten ringtones, the soundboard's),
+/// decoded right here if it isn't yet: so a call's very first ring is its own ringtone, not
+/// Pyr's ring while it gets ready (the default's first of all). None for anything else.
+pub(crate) fn built_in_now(shared: &Shared, tone: &Ringtone) -> Option<Arc<Vec<f32>>> {
+    let snd = tone.sound.as_ref().filter(|s| s.server.is_empty())?;
+    let key = tone.key();
+    if let Some(p) = shared.ring_clips.lock().get(&key) {
+        return Some(p.clone());
+    }
+    let pcm = Arc::new(crate::soundboard::decode(crate::soundboard::builtin_file(&snd.id)?).ok()?);
+    shared.ring_clips.lock().insert(key, pcm.clone());
+    Some(pcm)
 }
 
 /// Gets a ringtone's sound ready to play (fetched and decoded in the background, once).
 pub(crate) fn warm(shared: &Arc<Shared>, tone: &Ringtone) {
+    // (Pyr's own ring is made in its code: nothing to get.)
+    if tone.is_pyr_ring() {
+        return;
+    }
     let key = tone.key();
     if shared.ring_clips.lock().contains_key(&key) {
         return;
@@ -197,21 +230,46 @@ mod tests {
     }
 
     #[test]
+    fn settings_from_before_ring_with_sunrise() {
+        // (0.16.7 and before saved no choice as null; Pyr's ring was what that meant then.)
+        let old: crate::config::Settings = serde_json::from_str(r#"{"ring": true, "ringtone": null, "ringtones": {}}"#).unwrap();
+        let mut st = AppState::default();
+        st.settings = old;
+        let t = ringtone_for(&st, Some("anyone"));
+        assert_eq!(t.name, "Sunrise");
+        // Its sound is built in, and decodes: about seven seconds of 48 kHz stereo.
+        let file = crate::soundboard::builtin_file(DEFAULT_RING).expect("Sunrise is built in");
+        let pcm = crate::soundboard::decode(file).unwrap();
+        let secs = pcm.len() as f32 / 96_000.0;
+        assert!((2.0..=10.5).contains(&secs), "{secs} s");
+    }
+
+    #[test]
     fn a_call_rings_with_their_own_ringtone_or_everyones() {
         let tone = |name: &str| Ringtone { name: name.into(), sound: None, file: format!("{name}.ings") };
-        let name = |t: Option<Ringtone>| t.map(|t| t.name);
+        let name = |t: Ringtone| Some(t.name);
         let mut st = AppState::default();
-        assert_eq!(ringtone_for(&st, Some("mara")), None, "Pyr's own ring");
+        // (0.16.8) None chosen: Sunrise, the default.
+        assert_eq!(ringtone_for(&st, Some("mara")), default_ringtone());
+        assert_eq!(default_ringtone().name, "Sunrise");
+        assert_eq!(default_ringtone().sound.map(|s| (s.server, s.id)), Some((String::new(), DEFAULT_RING.to_string())));
         st.settings.ringtone = Some(tone("bells"));
         assert_eq!(name(ringtone_for(&st, Some("mara"))).as_deref(), Some("bells"));
         assert_eq!(name(ringtone_for(&st, None)).as_deref(), Some("bells"));
         st.settings.ringtones.insert("mara".into(), tone("harp"));
         assert_eq!(name(ringtone_for(&st, Some("mara"))).as_deref(), Some("harp"));
         assert_eq!(name(ringtone_for(&st, Some("bob"))).as_deref(), Some("bells"));
-        // Hers still, with everyone else back to Pyr's own ring.
+        // Hers still, with everyone else back to the default.
         st.settings.ringtone = None;
         assert_eq!(name(ringtone_for(&st, Some("mara"))).as_deref(), Some("harp"));
-        assert_eq!(ringtone_for(&st, Some("bob")), None);
+        assert_eq!(ringtone_for(&st, Some("bob")), default_ringtone());
+        // Pyr's own ring, chosen: kept as that (not the default) between runs.
+        st.settings.ringtone = Some(Ringtone::pyr_ring());
+        assert!(ringtone_for(&st, Some("bob")).is_pyr_ring());
+        let back: crate::config::Settings = serde_json::from_str(&serde_json::to_string(&st.settings).unwrap()).unwrap();
+        assert_eq!(back.ringtone, Some(Ringtone::pyr_ring()));
+        assert!(!default_ringtone().is_pyr_ring());
+        st.settings.ringtone = None;
         // Kept between runs.
         let json = serde_json::to_string(&st.settings).unwrap();
         let back: crate::config::Settings = serde_json::from_str(&json).unwrap();
