@@ -11,7 +11,8 @@
 //!
 //! `--dm NAME` sends the `--say` lines as direct messages to that member instead, after
 //! `--wait SECONDS` (time to switch windows), `--gap SECONDS` apart. `--image PATH` sends a
-//! picture (in order with the `--say` lines).
+//! picture (in order with the `--say` lines). `--call` (with `--dm`) then calls them there: it
+//! rings on their side (to hear their ringtone, say).
 //!
 //! `--check-isolation` only loads voice isolation's model and times it on this PC, then exits.
 //!
@@ -55,6 +56,8 @@ fn main() -> anyhow::Result<()> {
     let mut watch = false;
     let mut stream_sound = true;
     let mut dm_to: Option<String> = None;
+    // Call the `--dm` member (it rings on their side).
+    let mut call = false;
     let mut wait = 0.0f32;
     let mut gap = 0.9f32;
     // A profile picture (a square PNG or GIF) to wear.
@@ -85,6 +88,7 @@ fn main() -> anyhow::Result<()> {
             "--watch" => watch = true,
             "--no-sound" => stream_sound = false,
             "--dm" => dm_to = args.next(),
+            "--call" => call = true,
             "--wait" => wait = args.next().and_then(|t| t.parse().ok()).unwrap_or(wait),
             "--gap" => gap = args.next().and_then(|t| t.parse().ok()).unwrap_or(gap),
             "--avatar" => avatar = args.next().map(std::path::PathBuf::from),
@@ -281,6 +285,10 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             std::thread::sleep(Duration::from_secs_f32(gap));
+        }
+        if call && dm_to.is_some() {
+            engine.start_dm_call(&key, ch, false);
+            println!("{name}: calling {}", dm_to.as_deref().unwrap_or_default());
         }
     }
     if let Some(v) = &voice {

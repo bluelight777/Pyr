@@ -528,7 +528,10 @@ impl Shared {
         };
         if !tone.is_pyr_ring() {
             let t = tone;
-            let clip = self.ring_clips.lock().get(&t.key()).cloned().or_else(|| ring::built_in_now(self, &t));
+            // (The cache's lock let go first: built_in_now takes it, and a lock still held to the
+            // end of this statement would wait on itself forever, the ringer with it.)
+            let cached = self.ring_clips.lock().get(&t.key()).cloned();
+            let clip = cached.or_else(|| ring::built_in_now(self, &t));
             match clip {
                 Some(pcm) => {
                     let secs = pcm.len() as f32 / 96_000.0;

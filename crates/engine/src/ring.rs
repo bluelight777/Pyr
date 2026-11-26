@@ -72,8 +72,10 @@ pub fn ringtone_for(st: &AppState, from: Option<&str>) -> Ringtone {
 pub(crate) fn built_in_now(shared: &Shared, tone: &Ringtone) -> Option<Arc<Vec<f32>>> {
     let snd = tone.sound.as_ref().filter(|s| s.server.is_empty())?;
     let key = tone.key();
-    if let Some(p) = shared.ring_clips.lock().get(&key) {
-        return Some(p.clone());
+    // (Never called with the cache's lock held: it takes it, here and below.)
+    let cached = shared.ring_clips.lock().get(&key).cloned();
+    if cached.is_some() {
+        return cached;
     }
     let pcm = Arc::new(crate::soundboard::decode(crate::soundboard::builtin_file(&snd.id)?).ok()?);
     shared.ring_clips.lock().insert(key, pcm.clone());
