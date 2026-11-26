@@ -562,6 +562,30 @@ Pyr Prop Bets' listing comes out the same. Checked: the listing opens, is endors
 for Windows and Linux as library.tar has them, the Linux program runnable. The Keeper's import of
 it wasn't run here (it's the code every release's Prop Bets goes through).
 
+0.16.8 (Nov 26), 0.16.7 on Blue's PC:
+- "make the sunrise ringtone the default ringtone on Pyr": calls with no ringtone chosen ring with
+  Sunrise (one of the ten ringtones every Pyr has, 0.13.2) instead of Pyr's own ring. No choice is
+  still saved as none (`ringtone: null`), so everyone who never chose one hears Sunrise, and what
+  the default is stays Pyr's to change (`ring::DEFAULT_RING`). Pyr's own ring is a choice of its
+  own now (`Ringtone::pyr_ring`, saved as `{"name": "Pyr ring"}`; a Pyr before 0.16.8 reads that
+  as a file ringtone with no file, and rings with its own ring, as it would have). In the menus
+  (Settings, Notifications, Change...; and right-click someone, Ringtone) Sunrise comes first,
+  "(default)", and Pyr ring after the ten. A built-in ringtone is decoded the moment it's needed
+  (`ring::built_in_now`), so a call's first ring is its own ringtone (until now a chosen
+  ringtone's first ring was Pyr's while it got ready). Checked: tests (the default, Pyr ring
+  chosen and kept, settings saved by 0.16.7 ringing with Sunrise, Sunrise's sound decoding: 4.02
+  s); a real call on the test screen (the bot's new `--call`: Mara calls Riley in a direct
+  message), what Riley's Pyr played recorded through a PulseAudio of the test's own, 0.16.7's
+  released Pyr and this build back to back with the same account and settings: 0.16.7 rang with
+  Pyr's ring (two short tones every 2 s; against Sunrise 0.117), 0.16.8 with Sunrise (4 s every
+  5 s; against Sunrise's own samples 1.000). That test found a hang first: the ringtones' cache
+  locked twice in one statement in `play_ringtone`, so the ringer waited on itself (no sound, and
+  anything else wanting the cache would have waited with it); fixed before the release was built.
+  Seen on the test screen: Settings says Sunrise for an account that chose nothing; Pyr ring
+  chosen is saved and shown, Sunrise (default) chosen is saved as none; the per-person menu has
+  Same as everyone (Sunrise) first. (`rebuild/tools/release-0.16.8`: ring-ab.sh,
+  ring-compare.py, ui.sh.)
+
 0.16.7 (Nov 25), 0.16.6 on Blue's PC:
 - "make it so when Prog updates his Pyr on Omarchy it does it fast and automatically like windows
   does it. Make it super easy to update." Pyr's Linux updater knew only the .deb (apt through
