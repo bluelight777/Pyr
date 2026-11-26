@@ -585,6 +585,16 @@ it wasn't run here (it's the code every release's Prop Bets goes through).
   chosen is saved and shown, Sunrise (default) chosen is saved as none; the per-person menu has
   Same as everyone (Sunrise) first. (`rebuild/tools/release-0.16.8`: ring-ab.sh,
   ring-compare.py, ui.sh.)
+Built, packed and checked (98 checks, all good: among them the notes, both programs marking the
+default ringtone and 0.16.7's released Pyr not (the control), 0.16.7's home folder download whole
+as before, the VPS's programs 0.16.4's byte for byte, their code unchanged). The release check's
+line for pyr.exe looks for what writes "Pyr was ended by" (the signals' names, the exit hook:
+Linux's alone), not the text itself, which the bug reports' code reads for on every system and
+which pyr.exe has since this release (0.16.7's pyr.exe was built before that fix). Tests in
+release mode with the release settings (each run with `PYR_BUG_SERVER=off`): engine 143 (1 new),
+app 164. On Blue's PC (`Downloads\pyr-release-0.16.8`): 54 files, the sizes compared, 51 read
+back byte for byte (all but the three installers, which publish.ps1 checks against latest2.json's
+SHA-256 before it uploads anything).
 
 0.16.7 (Nov 25), 0.16.6 on Blue's PC:
 - "make it so when Prog updates his Pyr on Omarchy it does it fast and automatically like windows
