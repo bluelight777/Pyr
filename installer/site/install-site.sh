@@ -295,11 +295,12 @@ fi
 # v2; browsers kept showing the old page and pictures for hours after 0.8.0), before invite
 # pages' downloads carried the invite (v3), before the website's folder was pyr/ (v4), or
 # before the invite directory could read the page (v5; every invite was a blank page), before
-# games' invites, pyr.gg/<game>/<ROOM> (v6, 0.13.28's), or before the rebuilt Pyrs' release file
-# was kept from caches (v7, latest2.json): set up again
+# games' invites, pyr.gg/<game>/<ROOM> (v6, 0.13.28's), before the rebuilt Pyrs' release file
+# was kept from caches (v7, latest2.json), or before games' own servers (v8, /etc/nginx/pyr-gg.d,
+# Hearthbound's): set up again
 # (it checks every other site on this server before and after, and leaves the certificate).
 if [ -f "$HERE/setup-pyr-gg.sh" ] && [ -f /etc/systemd/system/pyr-directory.service ] \
-   && nginx -T 2>/dev/null | grep -q "server_name pyr.gg;" && ! nginx -T 2>/dev/null | grep -Eq "pyr.gg settings v[7-9]"; then
+   && nginx -T 2>/dev/null | grep -q "server_name pyr.gg;" && ! nginx -T 2>/dev/null | grep -Eq "pyr.gg settings v([8-9]|[1-9][0-9])"; then
   echo "Updating pyr.gg's settings"
   bash "$HERE/setup-pyr-gg.sh" || echo "pyr.gg's settings stay as they were (above); the release itself is published." >&2
 fi

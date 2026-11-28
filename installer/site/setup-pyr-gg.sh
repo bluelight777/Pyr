@@ -12,6 +12,10 @@
 # a release brings it) or named with --directory=<program>, it's set up (or updated) too: its
 # own user and folder, a systemd service listening only on 127.0.0.1:7781.
 #
+# Games with servers of their own on this VPS (Hearthbound's, 127.0.0.1:7790) are reached
+# through pyr.gg too: each puts its own addresses in a file of /etc/nginx/pyr-gg.d/ (its own
+# install script writes it), which pyr.gg's settings take in (v8).
+#
 # Safe to run again. It leaves the other sites alone: it notes how each of them answers before
 # it changes anything and again after every change, and takes its own change back out if
 # anything else answers differently or nginx won't take it.
@@ -270,6 +274,7 @@ BEFORE=$(snapshot)
 note "$(printf '%s\n' "$BEFORE" | wc -l) answers noted"
 
 install -d -m 0755 "$ACME_DIR/.well-known/acme-challenge"
+install -d -m 0755 /etc/nginx/pyr-gg.d
 
 listen_lines() { # port [what follows the address]
   local a extra=${2:-}
@@ -480,10 +485,11 @@ $TLS
     add_header X-Content-Type-Options nosniff always;
     # Browsers check for a newer page and pictures every time (answered "not changed" when
     # nothing is), so a new release shows right away instead of an old copy for hours.
-    # (pyr.gg settings v7: install-site.sh runs this script again for servers set up before.
+    # (pyr.gg settings v8: install-site.sh runs this script again for servers set up before.
     # v2: check for a newer page every time; v3: downloads that carry an invite; v4: the
     # website's folder is pyr/; v5: the invite directory can read the page; v6: games'
-    # invites, pyr.gg/<game>/<ROOM>; v7: the rebuilt Pyrs' release file, latest2.json.)
+    # invites, pyr.gg/<game>/<ROOM>; v7: the rebuilt Pyrs' release file, latest2.json; v8:
+    # games' own servers, from /etc/nginx/pyr-gg.d/.)
     add_header Cache-Control "no-cache" always;
     root $SITE_ROOT;
     index index.html;
@@ -491,6 +497,9 @@ $TLS
     location / {
         try_files \$uri \$uri/ =404;
     }
+    # Games' own servers (Hearthbound's wss://$DOMAIN/hearthbound/ws, ...): each game's install
+    # script puts its addresses in a file here.
+    include /etc/nginx/pyr-gg.d/*.conf;
     # The app's update check and the Library's list: never kept by caches.
     location = /latest.json {
         expires -1;
